@@ -137,7 +137,7 @@ void monte_carlo_worker(const ParsedGcgPostMove& pos, const Dictionary& dict, in
 }
 
 // A flat row-major 15x15 count plane as a nested [row][col] JSON array (board
-// frame; no model-input flip applied).
+// frame; no symmetry transpose applied).
 boost::json::array plane_to_json(const std::array<int, PlacementCounts::kCells>& plane) {
   boost::json::array rows;
   for (int r = 0; r < BOARD_SIZE; ++r) {

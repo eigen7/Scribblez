@@ -34,21 +34,21 @@ class BlockDecoder {
       : task_(task), row_floats_(row_floats_for(task, spec)), pos_(spec) {}
 
   // One row per game: each game's eval-only `sampled_turn`, for tests and
-  // one-position-per-game callers. `flips[i] != 0` selects diagonal-symmetry
+  // one-position-per-game callers. `transposes[i] != 0` selects diagonal-symmetry
   // augmentation for output row (output_row_start + i), and `path` appears only
   // in diagnostics. Training instead uses decode_one, which addresses an
   // explicit turn.
   void decode(const char* buf, const std::string& path, int64_t local_start, int64_t n_rows,
-              const uint8_t* flips, bool post_move, int64_t output_row_start, float* output);
+              const uint8_t* transposes, bool post_move, int64_t output_row_start, float* output);
 
   // The training entry point: the DataLoader expands each game into one
   // position per eligible turn and calls this per row.
   void decode_one(const char* buf, const std::string& path, uint32_t game_idx, uint32_t turn_idx,
-                  bool flip, bool post_move, int64_t output_row, float* output);
+                  bool transpose, bool post_move, int64_t output_row, float* output);
 
   // Replay to the game's sampled position, then encode it once per integer
   // score differential in [diff_lo, diff_hi], writing that many input tensors
-  // (no targets, no flip) contiguously to `out`.
+  // (no targets, natural frame) contiguously to `out`.
   void encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move, int diff_lo,
                                int diff_hi, float* out);
 

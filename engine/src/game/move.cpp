@@ -1,5 +1,7 @@
 #include "game/move.h"
 
+#include "util/assert.h"
+
 namespace scribblez {
 
 namespace {
@@ -10,6 +12,7 @@ Step step_of(const Move& m) { return m.horizontal() ? Step{0, 1} : Step{1, 0}; }
 }  // namespace
 
 std::pair<int, int> Move::word_origin(const Board& board) const {
+  DEBUG_ASSERT(board.transposed() == transposed_);
   // The lowest set bit of the absolute mask is the first newly placed lane
   // cell; the word may extend left of it through pre-existing tiles.
   int along = 0;
@@ -60,15 +63,23 @@ int append_sorted(std::array<Glyph, RACK_SIZE>& glyphs, int j, const TileCounts&
 }  // namespace
 
 Move Move::play(bool horizontal, int start, uint16_t square_mask, uint16_t score,
-                const Glyph* played, int num_played) {
+                const Glyph* played, int num_played, bool transposed) {
   Move m;
   m.type_ = MoveType::PLAY;
+  m.transposed_ = transposed;
   m.horizontal_ = horizontal;
   m.start_ = start;
   m.num_played_ = num_played;
   m.square_mask_ = square_mask;
   m.score_ = score;
   for (int i = 0; i < num_played; ++i) m.glyphs_[i] = played[i];
+  return m;
+}
+
+Move Move::transpose() const {
+  Move m = *this;
+  m.transposed_ = !transposed_;
+  if (type_ == MoveType::PLAY) m.horizontal_ = !horizontal_;
   return m;
 }
 

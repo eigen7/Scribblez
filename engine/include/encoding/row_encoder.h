@@ -24,7 +24,7 @@ class RowEncoder {
   // slot is claimed, so a dropped game never holds one.
   virtual int pick_turn(const GameLog& view, std::mt19937_64& rng) = 0;
 
-  virtual void encode(const GameLog& view, int turn, bool flip, float* dest) = 0;
+  virtual void encode(const GameLog& view, int turn, bool transpose, float* dest) = 0;
 };
 
 // The streaming producer calls this once per thread.

@@ -138,19 +138,16 @@ void encode_lane_occupancy(const LaneBest& lane, float* out) {
 
 }  // namespace
 
-void encode_lane_targets(const LaneTargets& t, bool flip, float* out) {
+void encode_lane_targets(const LaneTargets& t, float* out) {
   float* occ = out;
   float* score = out + kLaneOccupancyFloats;
   float* mask = score + kLaneScoreFloats;
 
   // Flat lane id `axis * 15 + lane`: axis 0 = horizontal lanes, axis 1 = vertical
-  // lanes. A diagonal flip swaps the two axes (see header).
-  const auto& horizontal = flip ? t.cols : t.rows;
-  const auto& vertical = flip ? t.rows : t.cols;
-
+  // lanes.
   for (int lane = 0; lane < kLanesPerAxis; ++lane) {
-    const LaneBest& h = horizontal[lane];
-    const LaneBest& v = vertical[lane];
+    const LaneBest& h = t.rows[lane];
+    const LaneBest& v = t.cols[lane];
     const int h_id = lane;
     const int v_id = kLanesPerAxis + lane;
 

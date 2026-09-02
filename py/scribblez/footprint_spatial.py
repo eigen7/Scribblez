@@ -10,11 +10,11 @@ heads' not-win/dummy. Because an anchored class factors as ``(cell, slot)`` with
 the representation the footprint-native placement path shares across the teacher
 target, the sim observation, the student head, and the evidence fusion.
 
-FRAME INVARIANT: every placement path is pinned to the unflipped (``flip=false``)
-frame. A diagonal transpose swaps rows↔cols AND the horizontal↔vertical slot
-channels (footprint.h), so the SLOT axis -- not only the spatial axes -- permutes
-under a flip. Any future flipped consumer must permute the 13 channels too, not
-just H/W.
+FRAME INVARIANT: every placement path is pinned to the game's natural frame (no
+symmetry transpose). A diagonal transpose swaps rows↔cols AND the
+horizontal↔vertical slot channels (footprint.h), so the SLOT axis -- not only the
+spatial axes -- permutes under a transpose. Any future transposed consumer must
+permute the 13 channels too, not just H/W.
 
 The sparse codec keeps the top-k classes of a per-head distribution as fixed
 padded ``(index, value)`` pairs. Both on-disk formats (``.mset``, ``.sobs``)
@@ -46,7 +46,7 @@ def to_spatial(dense):
     """Split a ``(..., NUM_CLASSES)`` array into a ``(..., SIDE, SIDE, SLOTS)``
     anchored block and a ``(..., CATCH_ALL)`` catch-all block. Inverse of
     ``from_spatial``. The anchored reshape is cell-major, slot-minor -- matching
-    ``footprint_class = (r*side + c)*slots + slot`` in the unflipped frame."""
+    ``footprint_class = (r*side + c)*slots + slot`` in the natural frame."""
     dense = np.asarray(dense)
     lead = dense.shape[:-1]
     anchored = dense[..., :ANCHORED].reshape(*lead, SIDE, SIDE, SLOTS_PER_CELL)

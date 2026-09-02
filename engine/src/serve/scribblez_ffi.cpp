@@ -349,7 +349,7 @@ int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
   const int64_t row_floats = scribblez::input_floats(spec) + scribblez::kLabelFloats;
   for (int64_t j = 0; j < n; ++j) {
     decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
-                       /*flip=*/false, post_move,
+                       /*transpose=*/false, post_move,
                        /*output_row=*/0, out + j * row_floats);
   }
   return 0;
@@ -430,8 +430,7 @@ int ScribblezSession::max_move_per_lane_analyze_gcg(const char* gcg_text, char* 
     scribblez::GcgAnalysisPosition pos;
     std::string error;
     if (!scribblez::parse_gcg_analysis_position(gcg_text, &pos, &error)) return -1;
-    if (out_input)
-      scribblez::MaxMovePerLaneInputEncoder::encode(pos.board, pos.rack, /*flip=*/false, out_input);
+    if (out_input) scribblez::MaxMovePerLaneInputEncoder::encode(pos.board, pos.rack, out_input);
     return emit_string(scribblez::lane_analysis_json(pos.board, pos.rack, pos.on_move, *spec.dict),
                        out_json, out_cap);
   } catch (const std::exception&) {

@@ -38,8 +38,8 @@ class RingBufferGameSink : public GameSink {
     }
     const uint64_t r = ring_.claim_row();
     if (r == StreamingRowBuffer::kNoRow) return;  // buffer stopped
-    const bool flip = apply_symmetry_ && (rng_() & 1ULL);
-    encoder_->encode(view, turn, flip, ring_.row_dest(r));
+    const bool transpose = apply_symmetry_ && (rng_() & 1ULL);
+    encoder_->encode(view, turn, transpose, ring_.row_dest(r));
     ring_.commit_row(r);
     games_played_->fetch_add(1, std::memory_order_relaxed);
   }

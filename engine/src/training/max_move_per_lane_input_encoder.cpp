@@ -7,11 +7,10 @@
 
 namespace scribblez {
 
-void MaxMovePerLaneInputEncoder::encode(const Board& board, const Rack& rack, bool flip,
-                                        float* out) {
+void MaxMovePerLaneInputEncoder::encode(const Board& board, const Rack& rack, float* out) {
   std::memset(out, 0, sizeof(float) * size_t(kInputFloats));
 
-  BoardPlanes::encode(board, flip, out);
+  BoardPlanes::encode(board, out);
 
   // Rack as raw per-tile counts; Tile::index() maps the blank to slot 26.
   float* counts = out + kSpatialFloats;

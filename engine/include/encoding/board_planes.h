@@ -15,12 +15,11 @@ struct BoardPlanes {
   static constexpr int kPremiumPlanes = 4;
   static constexpr int kPlanes = kPremiumPlane0 + kPremiumPlanes;  // 31
 
-  // Into the channel-major `planes_out`, each plane row-major (or diagonally
-  // transposed when `flip`). Letter plane L is 1.0 where that letter sits, a
-  // designated blank rendering its letter and also setting the blank-marker
-  // plane; the premium planes mark the canonical Board::PREMIUM pattern, still
-  // reporting the premium under a played tile.
-  static void encode(const Board& board, bool flip, float* planes_out);
+  // Into the channel-major `planes_out`, each plane row-major. Letter plane L is 1.0 where that
+  // letter sits, a designated blank rendering its letter and also setting the blank-marker plane;
+  // the premium planes mark the canonical Board::PREMIUM pattern, still reporting the premium under
+  // a played tile.
+  static void encode(const Board& board, float* planes_out);
 };
 
 }  // namespace scribblez

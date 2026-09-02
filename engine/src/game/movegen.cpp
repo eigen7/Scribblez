@@ -140,7 +140,8 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
 
   int score = main_letter_sum * word_mult + cross_total;
   if (n_placed == RACK_SIZE) score += 50;  // bingo
-  return Move::play(!view.transposed, row, square_mask, uint16_t(score), played.data(), n_placed);
+  return Move::play(!view.transposed, row, square_mask, uint16_t(score), played.data(), n_placed,
+                    view.board.transposed());
 }
 
 struct GenState {

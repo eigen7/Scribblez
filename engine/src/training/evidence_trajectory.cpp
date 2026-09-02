@@ -85,9 +85,9 @@ const std::vector<float>& TrajectoryRunner::win_equities(const DecisionPoint& dp
   // building them here (a no-op once valid) keeps them lexicon-accurate.
   enc.board().ensure_movegen_caches(*spec_.dict);
   if (spec_.opp_leave_input) {
-    enc.encode_input(mover, dp.pos.rack, visible_opp, /*apply_flip=*/false, board_row_.data());
+    enc.encode_input(mover, dp.pos.rack, visible_opp, board_row_.data());
   } else {
-    enc.encode_input(mover, dp.pos.rack, /*apply_flip=*/false, board_row_.data());
+    enc.encode_input(mover, dp.pos.rack, board_row_.data());
   }
   const int score_diff = enc.score(mover) - enc.score(1 - mover);
   move_features_.encode(ranked.data(), n, score_diff);

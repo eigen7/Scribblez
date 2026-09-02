@@ -31,9 +31,8 @@ struct MaxMovePerLaneInputEncoder {
   static constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 7002
 
   // Encode `board` plus the POV player's `rack` into the kInputFloats-long `out`
-  // (spatial planes, then rack scalars). `flip` applies the diagonal symmetry
-  // (r,c) -> (c,r) to the spatial planes; the rack scalars are flip-invariant.
-  static void encode(const Board& board, const Rack& rack, bool flip, float* out);
+  // (spatial planes, then rack scalars).
+  static void encode(const Board& board, const Rack& rack, float* out);
 };
 
 }  // namespace scribblez

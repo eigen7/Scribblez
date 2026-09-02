@@ -39,6 +39,7 @@
 #include "training/training_targets.h"
 #include "training/training_task.h"
 #include "training/trajectory_position.h"
+#include "util/assert.h"
 #include "util/io.h"
 #include "util/math.h"
 #include "util/metaprogramming.h"
@@ -500,7 +501,7 @@ TEST(Encoder, BasicLayout) {
   active_rack.add(BLANK);
 
   std::vector<float> out(kInputFloats, -1.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, out.data());
 
   // Letter planes A..Z occupy [0..25].
   const int c_plane = Tile::from_char('C');
@@ -605,8 +606,8 @@ TEST(Encoder, MidGameSeedMatchesFullHistory) {
   active_rack.add(Tile::from_char('Q'));
   std::vector<float> full_row(kInputFloats, -1.0f);
   std::vector<float> seeded_row(kInputFloats, -2.0f);
-  full.encode_input(full.active_player(), active_rack, /*apply_flip=*/false, full_row.data());
-  seeded.encode_input(seeded.active_player(), active_rack, /*apply_flip=*/false, seeded_row.data());
+  full.encode_input(full.active_player(), active_rack, full_row.data());
+  seeded.encode_input(seeded.active_player(), active_rack, seeded_row.data());
   ASSERT_EQ(0, std::memcmp(full_row.data(), seeded_row.data(), sizeof(float) * kInputFloats));
 }
 
@@ -630,7 +631,7 @@ TEST(Encoder, LastOppPlaneMask) {
 
   Rack active_rack;
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, out.data());
 
   const float* plane = out.data() + kOppPlacementPlane * 225;
   for (int r = 0; r < 15; ++r) {
@@ -644,7 +645,81 @@ TEST(Encoder, LastOppPlaneMask) {
   ASSERT_EQ(opp_meta[kMoveMetaTypeFloats], 2.0f);
 }
 
-TEST(Encoder, FlipSymmetry) {
+// Two glyphs denote the same square content: both empty, or the same letter
+// with the same blank designation.
+static bool same_glyph(Glyph a, Glyph b) {
+  if (a.is_empty() || b.is_empty()) return a.is_empty() == b.is_empty();
+  return a.letter().index() == b.letter().index() && a.is_blank() == b.is_blank();
+}
+
+// Board::transpose reflects the squares across the diagonal, toggles the frame
+// bit, and carries the move-generation caches over by swapping their view
+// orientations -- entry for entry what a rebuild on the transposed board gives.
+TEST(Board, Transpose) {
+  Dictionary d = medium_dict();
+  Board b;
+  const Glyph ax[2] = {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('X'))};
+  b.apply(Move::play(/*horizontal=*/true, 3, (1u << 5) | (1u << 6), 0, ax, 2));
+  b.ensure_movegen_caches(d);
+  ASSERT_FALSE(b.transposed());
+
+  const Board t = b.transpose();
+  ASSERT_TRUE(t.transposed());
+  ASSERT_EQ(t.num_tiles(), b.num_tiles());
+  for (int r = 0; r < BOARD_SIZE; ++r)
+    for (int c = 0; c < BOARD_SIZE; ++c) ASSERT_TRUE(same_glyph(t.at(r, c), b.at(c, r)));
+
+  Board rebuilt;
+  for (int r = 0; r < BOARD_SIZE; ++r)
+    for (int c = 0; c < BOARD_SIZE; ++c) rebuilt.set(c, r, b.at(r, c));
+  rebuilt.ensure_movegen_caches(d);
+  for (int view = 0; view < 2; ++view) {
+    for (int i = 0; i < BOARD_SIZE * BOARD_SIZE; ++i) {
+      const CrossCheck& x = t.cross_checks(view)[i];
+      const CrossCheck& y = rebuilt.cross_checks(view)[i];
+      ASSERT_TRUE(x.mask == y.mask && x.score == y.score && x.has_neighbor == y.has_neighbor);
+      ASSERT_EQ(t.gaddag_anchors(view)[i], rebuilt.gaddag_anchors(view)[i]);
+    }
+  }
+
+  // An involution.
+  const Board back = t.transpose();
+  ASSERT_FALSE(back.transposed());
+  for (int r = 0; r < BOARD_SIZE; ++r)
+    for (int c = 0; c < BOARD_SIZE; ++c) ASSERT_TRUE(same_glyph(back.at(r, c), b.at(r, c)));
+}
+
+// Move::transpose swaps a PLAY's orientation, keeps its lane-relative start and
+// mask, toggles the frame bit for every move type, and is an involution. A
+// board refuses a move from the other frame.
+TEST(Move, Transpose) {
+  const Glyph ax[2] = {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('X'))};
+  const Move m = Move::play(/*horizontal=*/true, 3, (1u << 5) | (1u << 6), 30, ax, 2);
+  ASSERT_FALSE(m.transposed());
+  const Move t = m.transpose();
+  ASSERT_TRUE(t.transposed());
+  ASSERT_FALSE(t.horizontal());
+  ASSERT_EQ(t.start(), m.start());
+  ASSERT_EQ(t.square_mask(), m.square_mask());
+  ASSERT_EQ(t.score(), m.score());
+  ASSERT_EQ(t.num_glyphs(), m.num_glyphs());
+  ASSERT_TRUE(t != m);  // the frame bit is part of the value
+  ASSERT_TRUE(t.transpose() == m);
+
+  const Move p = Move::pass().transpose();
+  ASSERT_EQ(p.type(), MoveType::PASS);
+  ASSERT_TRUE(p.transposed());
+
+  if (scribblez::util::kDebugBuild) {
+    Board b;
+    ASSERT_THROW(b.apply(t), scribblez::util::AssertionError);
+  }
+}
+
+// Encoding the transposed state (Board::transpose plus both last moves) is the
+// transpose of encoding the state: every spatial plane transposes, the
+// cross-check halves exchange, and the scalars are untouched.
+TEST(Encoder, TransposeSymmetry) {
   using namespace scribblez::binlog;
 
   // p0 single 'B' at (3,5); p1 vertical "AX" at (0,4) (mask=0b11).
@@ -665,10 +740,10 @@ TEST(Encoder, FlipSymmetry) {
 
   std::vector<float> normal(kInputFloats, 0.0f);
   std::vector<float> flipped(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, normal.data());
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/true, flipped.data());
+  enc.encode_input(enc.active_player(), active_rack, normal.data());
+  enc.transpose().encode_input(enc.active_player(), active_rack, flipped.data());
 
-  // Scalars are flip-invariant.
+  // Scalars are transpose-invariant.
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
     ASSERT_EQ(normal[i], flipped[i]);
   }
@@ -680,8 +755,8 @@ TEST(Encoder, FlipSymmetry) {
   }
   ASSERT_TRUE(halves_differ);
 
-  // Every spatial plane (including both placement planes) is transposed under
-  // the flip, and the cross-check halves also exchange.
+  // Every spatial plane (including both placement planes) is transposed, and
+  // the cross-check halves also exchange.
   for (int p = 0; p < kSpatialPlanes; ++p) {
     int src = p;
     if (p >= kHorizontalCrossCheckPlane0 && p < kVerticalCrossCheckPlane0) {
@@ -718,7 +793,7 @@ TEST(Encoder, ReachabilityPlanes) {
 
   Rack active_rack = rack_from("QESTUV");
   std::vector<float> out(kInputFloats, -1.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, out.data());
 
   // Independently compute the two planes from the same board and pools.
   Board board = enc.board();
@@ -729,9 +804,8 @@ TEST(Encoder, ReachabilityPlanes) {
   compute_unseen_pool(self_pool, board, empty);  // S - (nothing) = S, the hidden-arm S - O
 
   std::vector<float> opp_expected(225), self_expected(225);
-  footprint_reachable_cells(board, opp_pool, kMaskTileBudget, /*flip=*/false, opp_expected.data());
-  footprint_reachable_cells(board, self_pool, kMaskTileBudget, /*flip=*/false,
-                            self_expected.data());
+  footprint_reachable_cells(board, opp_pool, kMaskTileBudget, opp_expected.data());
+  footprint_reachable_cells(board, self_pool, kMaskTileBudget, self_expected.data());
 
   float opp_sum = 0.0f, self_sum = 0.0f;
   for (int i = 0; i < 225; ++i) {
@@ -791,7 +865,7 @@ TEST(Encoder, CrossCheckPlanesQi) {
 
   Rack active_rack;  // p1 rack is irrelevant for the cross-check plane checks
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, out.data());
 
   auto plane_value = [&out](int plane, int r, int c) { return out[plane * 225 + r * 15 + c]; };
   auto h_cross_check = [&plane_value](Tile letter, int r, int c) {
@@ -889,7 +963,7 @@ TEST(Encoder, CrossCheckSetIsNotOneTileLegality) {
 
   Rack active_rack;
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, out.data());
 
   const auto at = [&out](int plane0, char ch) {
     return out[(plane0 + Tile::from_char(ch).index()) * 225 + 7 * 15 + 8];
@@ -923,7 +997,7 @@ TEST(PositionEncoder, CrossCheckPlanesLexical) {
   PositionEncoder enc(InputEncodingSpec{&d});
   std::vector<float> row(kRowFloats, 0.0f);
   enc.encode_row<PositionEvalTask>(storage.view(), /*sampled_turn=*/0, /*post_move=*/true,
-                                   /*flip=*/false, row.data());
+                                   /*transpose=*/false, row.data());
 
   auto v_cross_check = [&row](char ch, int r, int c) {
     return row[(kVerticalCrossCheckPlane0 + Tile::from_char(ch).index()) * 225 + r * 15 + c];
@@ -955,9 +1029,9 @@ TEST(Encoder, ForcedScoreDiffIsolation) {
 
   std::vector<float> normal(kInputFloats, 0.0f);
   std::vector<float> forced(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, normal.data());
+  enc.encode_input(enc.active_player(), active_rack, normal.data());
   enc.encode_input_with_score_diff(enc.active_player(), active_rack,
-                                   /*score_diff=*/123, /*apply_flip=*/false, forced.data());
+                                   /*score_diff=*/123, forced.data());
 
   const int score_lo = kSpatialFloats + kScoreDiffOffset;
   const int score_hi = score_lo + kScoreDiffInputFloats;
@@ -988,7 +1062,7 @@ TEST(Encoder, NonplayLastMoveMetadata) {
 
   Rack active_rack;
   std::vector<float> out(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, /*apply_flip=*/false, out.data());
+  enc.encode_input(enc.active_player(), active_rack, out.data());
 
   const float* scalars = out.data() + kSpatialFloats;
   const float* self_meta = scalars + kMoveMetaOffset;
@@ -1206,8 +1280,8 @@ TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
 
   std::vector<float> base_row(input_floats(base), -1.0f);
   std::vector<float> open_row(input_floats(open), -1.0f);
-  base_enc.encode_input(base_enc.active_player(), rack, /*apply_flip=*/false, base_row.data());
-  open_enc.encode_input(open_enc.active_player(), rack, opp, /*apply_flip=*/false, open_row.data());
+  base_enc.encode_input(base_enc.active_player(), rack, base_row.data());
+  open_enc.encode_input(open_enc.active_player(), rack, opp, open_row.data());
 
   // Identical prefix; the tail is the opponent rack's counts.
   ASSERT_EQ(
@@ -2375,15 +2449,13 @@ constexpr int kMaskBase = kClassBase + 4 * kPlacementClassFloats;
 // masks read the sampled board and dictionary through. The next moves stay
 // unset -- a caller that wants the placement class targets exercised sets them.
 scribblez::EncodeContext scores_view(const GameStateEncoder& enc, const InputEncodingSpec& spec,
-                                     int fs_active, int fs_opp, int active_player,
-                                     bool flip = false) {
+                                     int fs_active, int fs_opp, int active_player) {
   scribblez::EncodeContext v{};
   v.enc = &enc;
   v.spec = spec;
   v.active_player = active_player;
   v.final_score_p0 = active_player == 0 ? fs_active : fs_opp;
   v.final_score_p1 = active_player == 0 ? fs_opp : fs_active;
-  v.apply_flip = flip;
   return v;
 }
 
@@ -2397,8 +2469,8 @@ struct LabelFixture {
   InputEncodingSpec spec{&dict};
   GameStateEncoder enc{spec, Board{}, std::array<int, 2>{0, 0}, 0};
 
-  scribblez::EncodeContext view(int fs_active, int fs_opp, int active_player, bool flip = false) {
-    return scores_view(enc, spec, fs_active, fs_opp, active_player, flip);
+  scribblez::EncodeContext view(int fs_active, int fs_opp, int active_player) {
+    return scores_view(enc, spec, fs_active, fs_opp, active_player);
   }
 };
 
@@ -2481,22 +2553,25 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   v.has_opp_next_move = true;
   encode_labels_flat(v, flat.data());
   const int cls = int(flat[opp_next]);
-  ASSERT_EQ(cls, footprint_class(next_play, /*flip=*/false));
+  ASSERT_EQ(cls, footprint_class(next_play));
   ASSERT_LT(cls, kAnchoredFootprints);
   ASSERT_EQ(opp_mask[cls], 1.0f);
   std::array<std::pair<int, int>, kFootprintMaxK> cells;
-  const int n = footprint_cells(cls, fx.enc.board(), /*flip=*/false, cells);
+  const int n = footprint_cells(cls, fx.enc.board(), cells);
   ASSERT_EQ(n, 3);
   ASSERT_EQ(cells[0], std::make_pair(4, 2));
   ASSERT_EQ(cells[1], std::make_pair(4, 3));
   ASSERT_EQ(cells[2], std::make_pair(4, 4));
 
-  // apply_flip transposes the class into the flipped frame (anchor and
-  // orientation both swap), matching footprint_class under the same flip.
-  v.apply_flip = true;
+  // In the transposed frame (board and next move transposed together) the class
+  // transposes with the move: anchor (4,2) -> (2,4), horizontal -> vertical.
+  const GameStateEncoder enc_t = fx.enc.transpose();
+  v.enc = &enc_t;
+  v.opp_next_move = next_play.transpose();
   encode_labels_flat(v, flat.data());
-  ASSERT_EQ(int(flat[opp_next]), footprint_class(next_play, /*flip=*/true));
-  v.apply_flip = false;
+  ASSERT_EQ(int(flat[opp_next]), (2 * 15 + 4) * kSlotsPerCell + (kFootprintMaxK + (3 - 2)));
+  v.enc = &fx.enc;
+  v.opp_next_move = next_play;
 
   // EXCHANGE next move -> kPassClass.
   TileCounts xch_tiles;
@@ -2528,17 +2603,17 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   v.has_self_next_move = true;
 
   encode_labels_flat(v, flat.data());  // mover (0) losing
-  ASSERT_EQ(int(flat[self_next]), footprint_class(self_play, /*flip=*/false));
+  ASSERT_EQ(int(flat[self_next]), footprint_class(self_play));
   ASSERT_EQ(int(flat[self_win]), kExtraClass);
   // The self side mask keeps the played footprint legal (the -log(0) property);
   // kExtraClass stays illegal here -- the loss opens it for the self_win head.
-  ASSERT_EQ(self_mask[footprint_class(self_play, /*flip=*/false)], 1.0f);
+  ASSERT_EQ(self_mask[footprint_class(self_play)], 1.0f);
   ASSERT_EQ(self_mask[kExtraClass], 0.0f);
 
   v.final_score_p0 = 100;
   v.final_score_p1 = 80;  // mover wins
   encode_labels_flat(v, flat.data());
-  ASSERT_EQ(int(flat[self_next]), footprint_class(self_play, /*flip=*/false));
+  ASSERT_EQ(int(flat[self_next]), footprint_class(self_play));
   ASSERT_EQ(int(flat[self_win]), int(flat[self_next]));
 
   // A draw counts as not winning for both conjunctions; the marginals hold.
@@ -2547,12 +2622,12 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   encode_labels_flat(v, flat.data());
   ASSERT_EQ(int(flat[opp_win]), kExtraClass);
   ASSERT_EQ(int(flat[self_win]), kExtraClass);
-  ASSERT_EQ(int(flat[opp_next]), footprint_class(next_play, /*flip=*/false));
-  ASSERT_EQ(int(flat[self_next]), footprint_class(self_play, /*flip=*/false));
+  ASSERT_EQ(int(flat[opp_next]), footprint_class(next_play));
+  ASSERT_EQ(int(flat[self_next]), footprint_class(self_play));
 }
 
 // ===========================================================================
-// DataLoader: per-row diagonal-flip symmetry
+// DataLoader: per-row diagonal-transpose symmetry
 // ===========================================================================
 
 // Build a one-game .slog file under `dir` whose 2-turn game is:
@@ -2670,10 +2745,8 @@ TEST(DataLoader, PerRowSymmetry) {
     // The POV is the mover (p0), encoded with its post-play leave (6 As).
     GameStateEncoder ref_enc{InputEncodingSpec{&dict}};
     ref_enc.apply_move(fix.self_move);
-    ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/false,
-                         ref_normal.data());
-    ref_enc.encode_input(fix.active_player, fix.active_rack, /*apply_flip=*/true,
-                         ref_flipped.data());
+    ref_enc.encode_input(fix.active_player, fix.active_rack, ref_normal.data());
+    ref_enc.transpose().encode_input(fix.active_player, fix.active_rack, ref_flipped.data());
   }
   // Sanity: the two encodings differ (asymmetric Q placement).
   ASSERT_NE(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)), 0);
@@ -2681,21 +2754,22 @@ TEST(DataLoader, PerRowSymmetry) {
   // Expected labels for active=p0 (final p0=350 vs p1=200 -> active wins by
   // 150). The move after turn 0 is p1's PASS and the game has no turn 2, so the
   // placement class targets are all pass/not-win; but the legality masks read
-  // the (asymmetric) sampled board, so the label tail is NOT flip-invariant --
+  // the (asymmetric) sampled board, so the label tail is NOT transpose-invariant --
   // a flipped row carries the transposed masks. Build both frames from an
   // encoder in the turn-0 post-move state (the Q applied).
   GameStateEncoder label_enc{InputEncodingSpec{&dict}};
   label_enc.apply_move(fix.self_move);
+  const GameStateEncoder label_enc_t = label_enc.transpose();
   const InputEncodingSpec label_spec{&dict};
   float ref_labels[kLabelFloats];
   float ref_labels_flipped[kLabelFloats];
-  encode_labels_flat(scores_view(label_enc, label_spec, fix.final_score_p0, fix.final_score_p1,
-                                 fix.active_player, /*flip=*/false),
-                     ref_labels);
-  encode_labels_flat(scores_view(label_enc, label_spec, fix.final_score_p0, fix.final_score_p1,
-                                 fix.active_player, /*flip=*/true),
-                     ref_labels_flipped);
-  // The masks make the two frames differ, so the flip actually reaches labels.
+  encode_labels_flat(
+    scores_view(label_enc, label_spec, fix.final_score_p0, fix.final_score_p1, fix.active_player),
+    ref_labels);
+  encode_labels_flat(
+    scores_view(label_enc_t, label_spec, fix.final_score_p0, fix.final_score_p1, fix.active_player),
+    ref_labels_flipped);
+  // The masks make the two frames differ, so the transpose actually reaches labels.
   ASSERT_NE(std::memcmp(ref_labels, ref_labels_flipped, kLabelFloats * sizeof(float)), 0);
 
   DataLoader::Params params;
@@ -2723,7 +2797,7 @@ TEST(DataLoader, PerRowSymmetry) {
   }
 
   // apply_symmetry=true: each epoch uses a different seed, producing a
-  // different flip decision. Over many seeds we expect both buckets.
+  // different transpose decision. Over many seeds we expect both buckets.
   {
     constexpr int n = 200;
     std::vector<float> row(kRowFloats, 0.0f);
@@ -2837,7 +2911,7 @@ TEST(DataLoader, EligibleBeginOffset) {
     ref_enc.apply_move(c_play);
     Rack leave;
     for (int i = 0; i < 6; ++i) leave.add(Tile::from_char('A'));
-    ref_enc.encode_input(/*active_player=*/1, leave, /*apply_flip=*/false, ref_row.data());
+    ref_enc.encode_input(/*active_player=*/1, leave, ref_row.data());
   }
   // Labels for POV p1 (final 200 vs 350); turn 1 is the last turn, so the
   // placement class targets are all pass/not-win. The legality masks read the
@@ -3521,7 +3595,7 @@ TEST(Streaming, DiskEncodeEquivalence) {
 
       std::vector<float> row_stream(row_floats, 0.0f);
       PositionEncoder enc(InputEncodingSpec{&dict});
-      enc.encode_row<PositionEvalTask>(storage.view(), sampled, post_move, /*flip=*/false,
+      enc.encode_row<PositionEvalTask>(storage.view(), sampled, post_move, /*transpose=*/false,
                                        row_stream.data());
 
       for (int i = 0; i < row_floats; ++i) ASSERT_EQ(row_disk[i], row_stream[i]);
@@ -3917,11 +3991,6 @@ TEST(Util, Helpers) {
   ASSERT_EQ(util::align_up(9, 8), 16);
   ASSERT_EQ(util::align_up(7, 1), 7);
 
-  // plane_index: row-major vs transpose across the diagonal.
-  ASSERT_EQ(util::plane_index(2, 3, 15, false), 2 * 15 + 3);
-  ASSERT_EQ(util::plane_index(2, 3, 15, true), 3 * 15 + 2);
-  ASSERT_EQ(util::plane_index(4, 4, 15, false), util::plane_index(4, 4, 15, true));
-
   // The four orthogonal neighbor deltas are unit steps with zero net sum.
   int sum_dr = 0, sum_dc = 0;
   for (const auto& [dr, dc] : util::kFourNeighborDeltas) {
@@ -4251,8 +4320,8 @@ TEST(SimRunner, Basic) {
   fs::remove_all(tmp);
 }
 
-// accumulate_rollout buckets each rollout move at footprint_class(move,
-// flip=false) in the right histogram: opp_reply in the opp counts weighted by
+// accumulate_rollout buckets each rollout move at footprint_class(move), in
+// the natural frame, in the right histogram: opp_reply in the opp counts weighted by
 // p_loss, self_next in the self counts weighted by p_win, a PASS in the pass
 // catch-all. This pins the field routing, frame, and slot encoding exactly --
 // the per-class invariants the SimRunner tests assert (win <= next <= n,
@@ -5564,7 +5633,7 @@ TEST(Lane, Targets) {
                        Glyph::of(Tile::from_char('T'))}));
     const LaneTargets t = compute_lane_targets(b, rack_from("S"), d);
     std::vector<float> row(kLaneLabelFloats, -1.0f);
-    encode_lane_targets(t, /*flip=*/false, row.data());
+    encode_lane_targets(t, row.data());
 
     const float* occ = row.data();
     const float* score = occ + kLaneOccupancyFloats;
@@ -5586,10 +5655,10 @@ TEST(Lane, Targets) {
     ASSERT_EQ(score[0], 0.0f);
     for (int i = 0; i < kLaneLen * kLaneTileKinds; ++i) ASSERT_EQ(occ[i], 0.0f);
 
-    // Flip is a rows<->cols swap: the horizontal CATS play that lived in axis-0
+    // On the transposed board the same play is vertical: what lived in axis-0
     // lane CENTER now lives in axis-1 (vertical) lane CENTER, same cell.
     std::vector<float> frow(kLaneLabelFloats, -1.0f);
-    encode_lane_targets(t, /*flip=*/true, frow.data());
+    encode_lane_targets(compute_lane_targets(b.transpose(), rack_from("S"), d), frow.data());
     const float* focc = frow.data();
     const float* v_lane = focc + (kLanesPerAxis + CENTER) * kLaneLen * kLaneTileKinds;
     const float* h_lane = focc + CENTER * kLaneLen * kLaneTileKinds;
@@ -5721,7 +5790,7 @@ TEST(Lane, Analysis) {
 
 // The max-move-per-lane model's input encoder: 31 board planes (letters, blank-marker,
 // premiums) + 27 raw rack counts, with NO cross-check planes. Pins the plane
-// contents, premium consistency, rack counts, and the flip transpose.
+// contents, premium consistency, rack counts, and the transposed board.
 static int prem_plane_offset(Premium p) {
   if (p == Premium::DLS) return 0;
   if (p == Premium::TLS) return 1;
@@ -5747,7 +5816,7 @@ TEST(MaxMovePerLane, InputEncoder) {
   auto cell = [](int r, int c) { return r * BOARD_SIZE + c; };
 
   std::vector<float> out(Enc::kInputFloats, -1.0f);
-  Enc::encode(b, rack, /*flip=*/false, out.data());
+  Enc::encode(b, rack, out.data());
 
   // Letter planes (a designated blank still sets its letter plane).
   ASSERT_EQ(out[C * cells + cell(7, 7)], 1.0f);
@@ -5778,9 +5847,9 @@ TEST(MaxMovePerLane, InputEncoder) {
   ASSERT_EQ(counts[26], 1.0f);  // blank
   ASSERT_EQ(counts[C], 0.0f);
 
-  // Flip transposes the spatial planes but leaves rack scalars untouched.
+  // The transposed board's planes transpose; the rack scalars are untouched.
   std::vector<float> flipped(Enc::kInputFloats, -1.0f);
-  Enc::encode(b, rack, /*flip=*/true, flipped.data());
+  Enc::encode(b.transpose(), rack, flipped.data());
   ASSERT_EQ(flipped[A * cells + cell(8, 7)], 1.0f);  // (7,8) -> (8,7)
   ASSERT_EQ(flipped[A * cells + cell(7, 8)], 0.0f);
   ASSERT_EQ(flipped[C * cells + cell(7, 7)], 1.0f);  // on the diagonal, unchanged
@@ -5801,20 +5870,20 @@ TEST(MaxMovePerLane, TaskRow) {
                             Glyph::of(Tile::from_char('T'))}));
   const Rack rack = rack_from("S");
 
-  for (bool flip : {false, true}) {
+  for (bool transposed : {false, true}) {
+    const GameStateEncoder enc = transposed ? gse.transpose() : gse;
     EncodeContext ctx{};
-    ctx.enc = &gse;
+    ctx.enc = &enc;
     ctx.pov_rack = &rack;
-    ctx.apply_flip = flip;
     ctx.spec = {&d};
 
     std::vector<float> row(MaxMovePerLaneTask::kRowFloats, -1.0f);
     MaxMovePerLaneTask::encode_row(ctx, row.data());
 
     std::vector<float> ref_in(MaxMovePerLaneInputEncoder::kInputFloats);
-    MaxMovePerLaneInputEncoder::encode(gse.board(), rack, flip, ref_in.data());
+    MaxMovePerLaneInputEncoder::encode(enc.board(), rack, ref_in.data());
     std::vector<float> ref_lab(kLaneLabelFloats);
-    encode_lane_targets(compute_lane_targets(gse.board(), rack, d), flip, ref_lab.data());
+    encode_lane_targets(compute_lane_targets(enc.board(), rack, d), ref_lab.data());
 
     ASSERT_EQ(MaxMovePerLaneTask::kInputFloats, int(ref_in.size()));
     ASSERT_EQ(MaxMovePerLaneTask::kLabelFloats, int(ref_lab.size()));

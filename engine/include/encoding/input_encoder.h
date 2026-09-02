@@ -55,10 +55,11 @@
 // arms (e.g. a dashboard running a base model on open-leaves rows) rely on that
 // prefix property.
 //
-// The board is invariant under the diagonal flip (r,c) -> (c,r), so
-// `apply_flip` transposes every spatial plane and leaves the scalars alone.
-// The flip also exchanges the axes, so the kCrossChecks halves swap as they
-// transpose -- the only block whose contents name an axis.
+// The board is invariant under the diagonal transpose (r,c) -> (c,r), the
+// training symmetry augmentation. The encoder knows nothing of it: an augmented
+// row is the encode of a transposed position (Board::transpose), whose spatial
+// planes come out transposed -- with the kCrossChecks halves swapped, the one
+// block whose contents name an axis -- and whose scalars are unchanged.
 
 namespace scribblez {
 

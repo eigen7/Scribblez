@@ -66,6 +66,12 @@ class GameStateEncoder {
   // takes no draw information, an outside observer seeing none.
   void apply_move(const Move& move);
 
+  // This state in the diagonally transposed frame: the board and both last
+  // moves transposed together (see Board::transpose), so an encode of the
+  // result is the transpose of an encode of this. Any move applied afterwards
+  // must be in the transposed frame too.
+  GameStateEncoder transpose() const;
+
   // --- inspectors ---------------------------------------------------------
   const InputEncodingSpec& spec() const { return spec_; }
   int active_player() const { return active_; }
@@ -83,24 +89,23 @@ class GameStateEncoder {
   // (that player, before any draw and before the opponent responds) goes:
   //     enc.apply_move(my_play);
   //     enc.encode_input(the_player_who_just_played, rack_after_play_pre_draw, ...);
-  // where active_player() is now the opponent, so passing the pre-flip player
+  // where active_player() is now the opponent, so passing the just-moved player
   // keeps the encode anchored to their POV and both labels and last_opp_move
   // attach to them.
   //
   // Aborts if the spec demands an opponent leave; use the overload.
-  void encode_input(int player, const Rack& my_rack, bool apply_flip, float* out) const;
+  void encode_input(int player, const Rack& my_rack, float* out) const;
 
   // Additionally encodes `opp_leave` into the kOppLeaveCounts block, for a spec
   // under the open-leaves condition. An empty leave (opponent has not acted, or
   // bingoed) is legitimate and encodes as zeros.
-  void encode_input(int player, const Rack& my_rack, const Rack& opp_leave, bool apply_flip,
-                    float* out) const;
+  void encode_input(int player, const Rack& my_rack, const Rack& opp_leave, float* out) const;
 
   // As encode_input(), but forcing the score differential to `score_diff` and
   // leaving every other feature identical -- isolating it for the structural
   // monotonicity probes that sweep a fixed position's score advantage.
   void encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
-                                    bool apply_flip, float* out) const;
+                                    float* out) const;
 
   // Rewrite an already-encoded row's score differential in place, so a sweep
   // encodes the position once instead of re-running the move-generating encode
@@ -118,8 +123,8 @@ class GameStateEncoder {
 
 // The row for the state `mv` leads to, from `mover`'s POV: `mv` applied to a
 // copy of `pre` and encoded with `my_rack` (their rack before the move) reduced
-// to the leave, no symmetry flip. `opp_leave` is read only under an open-leaves
-// spec, which the mover's own move leaves unchanged.
+// to the leave. `opp_leave` is read only under an open-leaves spec, which the
+// mover's own move leaves unchanged.
 //
 // The one place a candidate move's row is formed, so the serving agent and the
 // offline target generator cannot drift on which input arm they encode.

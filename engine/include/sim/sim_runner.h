@@ -80,7 +80,7 @@ struct SimPosition {
 struct SimObservation {
   // Placement is a histogram over the kFootprintClasses footprint classes
   // (training/footprint.h), not per-cell occupancy: each rollout's reply / next
-  // move contributes to exactly one class (its footprint), in the unflipped
+  // move contributes to exactly one class (its footprint), in the natural
   // frame. Stored dense; the anchored classes reshape to (15, 15, slots).
   static constexpr int kClasses = kFootprintClasses;
 
@@ -140,7 +140,7 @@ struct RolloutResult {
 };
 
 // Fold one rollout into the candidate's observation: outcome and delta
-// moments accumulate, and each move's footprint class (unflipped frame)
+// moments accumulate, and each move's footprint class (natural frame)
 // buckets the placement histograms -- opp_reply into the opp counts weighted
 // by p_loss (the opponent wins iff the mover loses), self_next into the self
 // counts weighted by p_win.

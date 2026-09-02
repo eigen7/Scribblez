@@ -38,23 +38,19 @@ inline constexpr int kPlacementHeads = 4;
 // distribution directly). The self heads never take availability (two plies out,
 // post-redraw).
 //
-// `board` gets its movegen caches bound from `dict` on demand. `flip` is the
-// frame the logits were produced in (the generator encodes unflipped); the
-// output planes are in that same frame.
+// `board` gets its movegen caches bound from `dict` on demand. `raw` must come
+// from an encode of this same board, so the output planes share its frame.
 void collapse_footprint_planes(const Board& board, const Dictionary& dict,
-                               const uint8_t* available_counts, bool flip, const float* raw,
-                               float* out);
+                               const uint8_t* available_counts, const float* raw, float* out);
 
 // The four heads' MASKED footprint distributions -- the same mask + masked-softmax
-// collapse_footprint_planes applies (identical `available_counts`/`flip`
-// semantics), but written per class instead of scattered onto cells. `raw` is
-// kPlacementHeads x kFootprintClasses; `out` is kPlacementHeads x
-// kFootprintClasses, each head a distribution over the 2927 classes with illegal
+// collapse_footprint_planes applies (identical `available_counts` semantics), but written per class
+// instead of scattered onto cells. `raw` is kPlacementHeads x kFootprintClasses; `out` is
+// kPlacementHeads x kFootprintClasses, each head a distribution over the 2927 classes with illegal
 // footprints at zero. This is the exact target the student distills against,
 // exposed so its per-footprint sparsity/fidelity can be measured (the per-cell
 // collapse hides the footprint distribution).
 void masked_placement_distributions(const Board& board, const Dictionary& dict,
-                                    const uint8_t* available_counts, bool flip, const float* raw,
-                                    float* out);
+                                    const uint8_t* available_counts, const float* raw, float* out);
 
 }  // namespace scribblez

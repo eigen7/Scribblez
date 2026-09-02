@@ -512,7 +512,7 @@ def decode_rows(
 
     Row j is the position at (game_idx[j], turn_idx[j]), encoded exactly like a
     DataLoader training row (input floats followed by the label block) with no
-    symmetry flip. Returns a (n, row_size_floats()) float32 array. Serves
+    symmetry transpose. Returns a (n, row_size_floats()) float32 array. Serves
     consumers that pair rows with per-position sidecar data (the .sobs sim
     observations) and so must address positions by identity rather than stream
     them shuffled.

@@ -14,23 +14,22 @@ namespace scribblez {
 namespace {
 
 // Mark the legal footprint classes given a multi-tile per-cell predicate
-// `cell_ok(board_horizontal, r, c)`, a lone-tile predicate `lone_ok(r, c)`, and
+// `cell_ok(horizontal, r, c)`, a lone-tile predicate `lone_ok(r, c)`, and
 // the tile-count cap `kmax`. Shared by the opp and self masks, which differ only
 // in those predicates and the cap.
 template <typename CellOk, typename LoneOk>
-void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, FootprintMask& mask,
+void mark_footprints(const Board& board, int kmax, bool win_head, FootprintMask& mask,
                      CellOk cell_ok, LoneOk lone_ok) {
   mask.fill(false);
   for (int cell = 0; cell < kFootprintCells; ++cell) {
-    int anchor_r = cell / kFootprintSide;
-    int anchor_c = cell % kFootprintSide;
-    if (flip) std::swap(anchor_r, anchor_c);  // un-flip the anchor into board coords
+    const int anchor_r = cell / kFootprintSide;
+    const int anchor_c = cell % kFootprintSide;
     if (!board.at(anchor_r, anchor_c).is_empty()) continue;
 
     for (int slot = 0; slot < kSlotsPerCell; ++slot) {
       bool horizontal;
       int k;
-      footprint_slot_decode(slot, horizontal, k);  // orientation in the flip frame
+      footprint_slot_decode(slot, horizontal, k);
       if (k > kmax) continue;
       const int cls = cell * kSlotsPerCell + slot;
 
@@ -39,20 +38,19 @@ void mark_footprints(const Board& board, int kmax, bool flip, bool win_head, Foo
         continue;
       }
 
-      const bool board_horizontal = flip ? !horizontal : horizontal;
       int count = 0;
       int r = anchor_r;
       int c = anchor_c;
       bool ok = true;
       while (r < kFootprintSide && c < kFootprintSide && count < k) {
         if (board.at(r, c).is_empty()) {
-          if (!cell_ok(board_horizontal, r, c)) {
+          if (!cell_ok(horizontal, r, c)) {
             ok = false;
             break;
           }
           ++count;
         }
-        if (board_horizontal) {
+        if (horizontal) {
           ++c;
         } else {
           ++r;
@@ -146,19 +144,19 @@ std::array<int, kFootprintCells> tiles_to_reach(const Board& board) {
 }  // namespace
 
 void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int tile_budget,
-                        bool flip, bool win_head, FootprintMask& mask) {
+                        bool win_head, FootprintMask& mask) {
   const int kmax = tile_budget < kFootprintMaxK ? tile_budget : kFootprintMaxK;
   const tile_set_t avail = available_tiles(available_counts);
   mark_footprints(
-    board, kmax, flip, win_head, mask,
+    board, kmax, win_head, mask,
     [&](bool horizontal, int r, int c) {
       return cell_admits_letter(board, avail, horizontal, r, c);
     },
     [&](int r, int c) { return lone_tile_admits_letter(board, avail, r, c); });
 }
 
-void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool flip,
-                         bool win_head, FootprintMask& mask) {
+void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool win_head,
+                         FootprintMask& mask) {
   const std::array<int, kFootprintCells> dist = tiles_to_reach(board);
   const int reach = opp_budget + self_budget;  // opp bridges, then the mover finishes
   const int kmax = self_budget < kFootprintMaxK ? self_budget : kFootprintMaxK;
@@ -166,21 +164,20 @@ void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bo
   // the lone-tile test coincides with the multi-tile per-cell one.
   const auto reachable = [&](int r, int c) { return dist[r * kFootprintSide + c] <= reach; };
   mark_footprints(
-    board, kmax, flip, win_head, mask, [&](bool, int r, int c) { return reachable(r, c); },
-    reachable);
+    board, kmax, win_head, mask, [&](bool, int r, int c) { return reachable(r, c); }, reachable);
 }
 
 void footprint_reachable_cells(const Board& board, const uint8_t* available_counts, int tile_budget,
-                               bool flip, float* out) {
+                               float* out) {
   FootprintMask mask;
-  opp_footprint_mask(board, available_counts, tile_budget, flip, /*win_head=*/false, mask);
+  opp_footprint_mask(board, available_counts, tile_budget, /*win_head=*/false, mask);
   std::fill(out, out + kFootprintCells, 0.0f);
-  // OR every legal footprint's covered cells (flip-frame, as footprint_cells
-  // emits them) onto the plane -- a cell is reachable iff some legal play touches it.
+  // OR every legal footprint's covered cells onto the plane -- a cell is reachable iff some legal
+  // play touches it.
   std::array<std::pair<int, int>, kFootprintMaxK> cells;
   for (int cls = 0; cls < kAnchoredFootprints; ++cls) {
     if (!mask[cls]) continue;
-    const int n = footprint_cells(cls, board, flip, cells);
+    const int n = footprint_cells(cls, board, cells);
     for (int i = 0; i < n; ++i) out[cells[i].first * kFootprintSide + cells[i].second] = 1.0f;
   }
 }

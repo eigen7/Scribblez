@@ -210,7 +210,7 @@ def move_footprint(move: np.void) -> np.ndarray:
 
 
 def move_footprint_class(move: np.void) -> int:
-    """The footprint class of a MOVE_DTYPE record in the unflipped frame --
+    """The footprint class of a MOVE_DTYPE record in the natural frame --
     the numpy mirror of the C++ footprint_class (training/footprint.h):
     (anchor cell) * SLOTS_PER_CELL + slot, where slot 0 is the
     orientation-free k==1 footprint, 1..6 horizontal k=2..7, 7..12 vertical.

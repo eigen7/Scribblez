@@ -8,7 +8,7 @@
 
 namespace scribblez {
 
-// Per-class legality over the footprint classes, in the `flip` frame:
+// Per-class legality over the footprint classes, in the board's frame:
 // mask[cls] == true iff the masked softmax should keep that class. Illegal
 // classes are driven to -inf before the softmax, so their probability (and
 // gradient) is zero. Computed from the current board (and, for the opp mask, the
@@ -55,7 +55,7 @@ inline constexpr int kMaskTileBudget = RACK_SIZE;
 // legal; kExtraClass is legal iff `win_head` (the win heads' "not-win" outcome),
 // an unused masked-off dummy for a plays head.
 void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int tile_budget,
-                        bool flip, bool win_head, FootprintMask& mask);
+                        bool win_head, FootprintMask& mask);
 
 // Legality for a SELF placement head (self_next / self_win): the mover plays two
 // plies out, after the opponent moves, so the board is unknown. This is an
@@ -71,10 +71,10 @@ void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int
 // budget and the mover finishes within its own. Sound because the BFS is a lower
 // bound on the true tile cost. A tile-less board treats every cell as reachable
 // (game-start guard). kPassClass is always legal; kExtraClass iff `win_head`.
-void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool flip,
-                         bool win_head, FootprintMask& mask);
+void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool win_head,
+                         FootprintMask& mask);
 
-// Per-cell reachability plane in the `flip` frame: out[r*kFootprintSide + c] == 1
+// Per-cell reachability plane: out[r*kFootprintSide + c] == 1
 // iff some legal "who moves next" footprint covers that cell, else 0. It is the
 // opp_footprint_mask (with `available_counts` as the stock and `tile_budget` as
 // the cap -- nullptr counts being board legality only) reduced to the board
@@ -82,6 +82,6 @@ void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bo
 // the current board." The input-feature view of the mask; `board` must have
 // movegen caches built. Writes exactly kFootprintCells floats.
 void footprint_reachable_cells(const Board& board, const uint8_t* available_counts, int tile_budget,
-                               bool flip, float* out);
+                               float* out);
 
 }  // namespace scribblez

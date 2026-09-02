@@ -17,8 +17,8 @@ namespace {
 
 inline constexpr int kBoardCells = kFootprintSide * kFootprintSide;
 
-// One anchored footprint's covered cells as flat plane indices (r*side + c, in
-// the flip frame footprint_cells reports), precomputed once per board and reused
+// One anchored footprint's covered cells as flat plane indices (r*side + c),
+// precomputed once per board and reused
 // across the four heads.
 struct CellList {
   uint8_t n = 0;
@@ -28,11 +28,11 @@ struct CellList {
 // footprint_cells for every anchored class on `board`, into `cells`. An
 // impossible class on this board reports zero cells and simply never receives
 // probability.
-void compute_cells(const Board& board, bool flip, std::vector<CellList>& cells) {
+void compute_cells(const Board& board, std::vector<CellList>& cells) {
   cells.assign(kAnchoredFootprints, CellList{});
   std::array<std::pair<int, int>, kFootprintMaxK> rc;
   for (int cls = 0; cls < kAnchoredFootprints; ++cls) {
-    const int n = footprint_cells(cls, board, flip, rc);
+    const int n = footprint_cells(cls, board, rc);
     CellList& cl = cells[cls];
     cl.n = uint8_t(n);
     for (int i = 0; i < n; ++i) cl.cell[i] = uint16_t(rc[i].first * kFootprintSide + rc[i].second);
@@ -76,10 +76,10 @@ void scatter(const std::vector<float>& prob, const std::vector<CellList>& cells,
 // variant. win_head toggles only kExtraClass (the not-win outcome). Availability
 // (`available_counts`) gates the opp heads only; the self heads never take it
 // (see footprint_mask.h).
-void fill_head_masks(const Board& board, const uint8_t* available_counts, bool flip,
+void fill_head_masks(const Board& board, const uint8_t* available_counts,
                      std::array<FootprintMask, kPlacementHeads>& masks) {
-  opp_footprint_mask(board, available_counts, kMaskTileBudget, flip, /*win_head=*/false, masks[0]);
-  self_footprint_mask(board, kMaskTileBudget, kMaskTileBudget, flip, /*win_head=*/false, masks[1]);
+  opp_footprint_mask(board, available_counts, kMaskTileBudget, /*win_head=*/false, masks[0]);
+  self_footprint_mask(board, kMaskTileBudget, kMaskTileBudget, /*win_head=*/false, masks[1]);
   masks[2] = masks[0];
   masks[3] = masks[1];
   masks[2][kExtraClass] = true;  // opp_win opens the not-win class
@@ -89,11 +89,10 @@ void fill_head_masks(const Board& board, const uint8_t* available_counts, bool f
 }  // namespace
 
 void collapse_footprint_planes(const Board& board, const Dictionary& dict,
-                               const uint8_t* available_counts, bool flip, const float* raw,
-                               float* out) {
+                               const uint8_t* available_counts, const float* raw, float* out) {
   board.ensure_movegen_caches(dict);
   std::array<FootprintMask, kPlacementHeads> masks;
-  fill_head_masks(board, available_counts, flip, masks);
+  fill_head_masks(board, available_counts, masks);
 
   // win_head toggles only kExtraClass, which carries no cells -- so it changes
   // the softmax denominator (P[covers & win] <= P[covers]) but not which cells
@@ -103,7 +102,7 @@ void collapse_footprint_planes(const Board& board, const Dictionary& dict,
   // allocated once and refilled, not per candidate.
   thread_local std::vector<CellList> cells;
   thread_local std::vector<float> prob;
-  compute_cells(board, flip, cells);
+  compute_cells(board, cells);
   for (int h = 0; h < kPlacementHeads; ++h) {
     masked_softmax(raw + size_t(h) * kFootprintClasses, masks[h], prob);
     scatter(prob, cells, out + size_t(h) * kBoardCells);
@@ -111,11 +110,10 @@ void collapse_footprint_planes(const Board& board, const Dictionary& dict,
 }
 
 void masked_placement_distributions(const Board& board, const Dictionary& dict,
-                                    const uint8_t* available_counts, bool flip, const float* raw,
-                                    float* out) {
+                                    const uint8_t* available_counts, const float* raw, float* out) {
   board.ensure_movegen_caches(dict);
   std::array<FootprintMask, kPlacementHeads> masks;
-  fill_head_masks(board, available_counts, flip, masks);
+  fill_head_masks(board, available_counts, masks);
 
   thread_local std::vector<float> prob;
   for (int h = 0; h < kPlacementHeads; ++h) {
