@@ -16,7 +16,10 @@ unmasked proxy. The win heads carry not-win mass in kExtraClass, reported per he
 
 Usage:
     ./py/scripts/position_eval/footprint_topk_fidelity.py \
-        --model /workspace/mount/tags/position_eval/footprints-official/models/model_epoch_XXXX.onnx
+        --model /workspace/mount/tags/position_eval/<tag>/models/model_epoch_XXXX.onnx
+
+The row is split into its spatial / scalar halves by the session's InputArm, so
+the plane count tracks the encoder registry rather than a constant here.
 """
 
 import argparse
@@ -29,10 +32,8 @@ from scribblez import ffi
 from scribblez import footprint_spatial as fs
 from scribblez.paths import REPO_ROOT
 
-N_PLANES = 85
 HEADS = tuple(ffi.format_layout()["constants"]["placement_head_names"])
 DEFAULT_GCG_DIR = REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset"
-DEFAULT_MODEL_GLOB = "/workspace/mount/tags/position_eval/footprints-official/models/*.onnx"
 
 
 def head_distributions(sess, gcg_text, arm):
@@ -40,8 +41,9 @@ def head_distributions(sess, gcg_text, arm):
     one position: run the teacher for raw logits, then apply the same mask +
     masked-softmax the .mset target uses."""
     row = ffi.analyze_position_eval_gcg(gcg_text, arm)
-    sp = row[: N_PLANES * 225].reshape(N_PLANES, 15, 15)[None].astype(np.float32)
-    sc = row[N_PLANES * 225 :][None].astype(np.float32)
+    spatial, scalar = arm.split(row)  # the arm's own widths, never a hardcoded plane count
+    sp = spatial[None].astype(np.float32)
+    sc = scalar[None].astype(np.float32)
     inames = [i.name for i in sess.get_inputs()]
     onames = [o.name for o in sess.get_outputs()]
     outs = sess.run(None, {inames[0]: sp, inames[1]: sc})
@@ -52,15 +54,17 @@ def head_distributions(sess, gcg_text, arm):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--model", help="teacher ONNX (default: latest footprints-official)")
+    ap.add_argument(
+        "--model",
+        required=True,
+        help="teacher ONNX: a position_eval export with the placement heads",
+    )
     ap.add_argument("--gcg-dir", default=str(DEFAULT_GCG_DIR))
     ap.add_argument("--k", type=int, nargs="+", default=[8, 16, 32, 48, 64, 96, 128])
     ap.add_argument("--target", type=float, default=0.99, help="p10 mass fraction to clear")
     args = ap.parse_args()
 
-    model = args.model or (sorted(glob.glob(DEFAULT_MODEL_GLOB)) or [None])[-1]
-    if not model:
-        sys.exit("error: no --model and no footprints-official checkpoint found")
+    model = args.model
     gcgs = sorted(glob.glob(f"{args.gcg_dir}/*.gcg"))
     if not gcgs:
         sys.exit(f"error: no .gcg positions under {args.gcg_dir}")
