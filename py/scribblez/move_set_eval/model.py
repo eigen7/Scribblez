@@ -383,16 +383,35 @@ def footprint_cell_marginal(plane_logits: torch.Tensor) -> torch.Tensor:
     drop the two catch-all classes, and sum the SLOTS_PER_CELL slots at each cell
     -> (..., num_planes, SIDE, SIDE).
 
-    The transitional per-cell view the evidence fusion consumes while it is still
-    per-cell (the student head is footprint-native but the fusion is migrated
-    separately). It is the anchor marginal (Pr the move is anchored at a cell),
-    not the covered-cell occupancy the retired collapse produced -- a cheap,
-    board-independent per-cell signal that keeps the unchanged fusion running; the
-    fusion moves to footprint space in its own change.
+    A display-only reduction (Pr the move is anchored at a cell): the
+    Trajectories pane draws it beside the observed histogram's own anchor
+    marginal. The evidence path consumes footprint_slot_planes instead --
+    feeding it this marginal would be a collapse.
     """
     probs = F.softmax(plane_logits, dim=-1)[..., :ANCHORED]
     per_cell = probs.reshape(*probs.shape[:-1], SIDE * SIDE, SLOTS_PER_CELL).sum(-1)
     return per_cell.reshape(*per_cell.shape[:-1], SIDE, SIDE)
+
+
+def footprint_slot_planes(plane_logits: torch.Tensor) -> torch.Tensor:
+    """Footprint logits (..., num_planes, NUM_CLASSES) -> probabilities as
+    per-slot board channels (..., num_planes * SLOTS_PER_CELL, SIDE, SIDE):
+    softmax over all classes, drop the two catch-alls (no renormalization),
+    anchored class (cell, slot) at channel (head * SLOTS_PER_CELL + slot).
+
+    The predicted half of the evidence-plane layout
+    (evidence_fusion.EVIDENCE_PLANE_NAMES), and -- flattened to (..., channels,
+    SIDE*SIDE) -- the `planes` output the proposal graphs serve. Traced by the
+    ONNX export, so it must stay plain reshape/permute arithmetic.
+    """
+    probs = F.softmax(plane_logits, dim=-1)[..., :ANCHORED]
+    spatial = probs.reshape(*probs.shape[:-1], SIDE, SIDE, SLOTS_PER_CELL)
+    # (..., H, R, C, S) -> (..., H, S, R, C), as an explicit non-negative
+    # permutation: a negative axis in the traced Transpose is rejected by
+    # ONNXRuntime's type inference.
+    d = spatial.dim()
+    perm = list(range(d - 4)) + [d - 4, d - 1, d - 3, d - 2]
+    return spatial.permute(perm).flatten(-4, -3)
 
 
 def compute_loss(

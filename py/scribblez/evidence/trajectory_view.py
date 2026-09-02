@@ -30,7 +30,8 @@ import torch
 
 from scribblez.evidence.checkpoints import EvidenceCheckpoint
 from scribblez.ffi import GcgPositionInputs, gcg_position_inputs
-from scribblez.move_set_eval.evidence import build_evidence_inputs, observed_planes
+from scribblez.footprint_spatial import SLOTS_PER_CELL
+from scribblez.move_set_eval.evidence import build_evidence_inputs
 from scribblez.move_set_eval.model import footprint_cell_marginal, win_equity
 from scribblez.move_set_eval.moves import encode_moves
 from scribblez.move_set_eval.targets import PLANE_NAMES
@@ -39,6 +40,7 @@ from scribblez.sim_evidence.sobs import (
     ROLE_OFF_POLICY,
     SobsPosition,
     glyph_char,
+    observed_slot_planes,
 )
 
 
@@ -94,7 +96,8 @@ def move_lane(move: np.void) -> dict | None:
 class ScoredPass:
     """A pass's per-legal-move readouts as numpy: value (N,), gain (N,) and
     the per-cell placement planes (N, 4, 15, 15) -- the footprint head's anchor
-    marginal, the same per-cell view the evidence path consumes."""
+    marginal, a display-only reduction (the evidence path consumes the full
+    footprint distribution)."""
 
     value: np.ndarray
     gain: np.ndarray
@@ -216,8 +219,12 @@ class DecisionAnalysis:
         return np.array([_sim_stats(o)["value"] for o in self.sobs.obs], dtype=np.float64)
 
     def observed_planes(self) -> np.ndarray:
-        """(K, 4, 15, 15): the count planes normalized by rollouts."""
-        return observed_planes(self.sobs.moves, self.sobs.obs)[:, :4]
+        """(K, 4, 15, 15): each head's observed anchor marginal for display --
+        the footprint histogram normalized by rollouts, summed over slots, the
+        counterpart of the prediction's footprint_cell_marginal."""
+        planes = observed_slot_planes(self.sobs.obs)  # (K, 4*slots, 15, 15)
+        k = len(self.sobs.obs)
+        return planes.reshape(k, 4, SLOTS_PER_CELL, *planes.shape[-2:]).sum(axis=2)
 
 
 def _round_planes(planes: np.ndarray) -> list:
@@ -313,9 +320,10 @@ def payload(
 
 def _planes_block(analysis: DecisionAnalysis, cond: ScoredPass, slot: int | None) -> dict | None:
     """The overlay's plane pair for one simmed candidate (its trajectory slot):
-    per placement head the sim count plane normalized by rollouts and the
-    conditioned pass's predicted per-cell marginal at this prefix (the plain one
-    at prefix 0, where the two passes coincide). None without a candidate."""
+    per placement head the observed anchor marginal (the sim's footprint
+    histogram collapsed for display) and the conditioned pass's predicted
+    per-cell marginal at this prefix (the plain one at prefix 0, where the two
+    passes coincide). None without a candidate."""
     if slot is None or not 0 <= slot < len(analysis.sim_index):
         return None
     observed = analysis.observed_planes()

@@ -14,7 +14,7 @@ from scribblez.evidence_fusion import (
     NUM_EVIDENCE_SCALARS,
     EvidenceInputs,
 )
-from scribblez.footprint_spatial import NUM_CLASSES
+from scribblez.footprint_spatial import NUM_CLASSES, SLOTS_PER_CELL
 from scribblez.move_set_eval import moves as move_enc
 from test_move_set_eval_train import _FORWARD_KEYS, _MOVE_KEYS, _ragged_batch
 
@@ -214,7 +214,7 @@ def _synthetic_sobs(k: int):
         obs["wins"], obs["draws"], obs["losses"] = 25, 5, 10
         obs["delta_sum"] = 40 * 12
         obs["delta_sq_sum"] = 40 * (12**2 + 25)
-        obs["opp_next_count"][:] = np.arange(225) % 41
+        obs["opp_next_count"][:] = np.arange(NUM_CLASSES) % 41
         obs["self_next_count"][:] = 3
     return rec["move"], rec["obs"]
 
@@ -230,7 +230,6 @@ def _first_pass(k: int, seed: int = 5):
 
 def test_builder_assembles_both_halves():
     from scribblez.move_set_eval.evidence import build_evidence_inputs
-    from scribblez.sim_evidence.sobs import move_footprint
 
     k, max_e = 2, 4
     moves, obs = _synthetic_sobs(k)
@@ -242,20 +241,28 @@ def test_builder_assembles_both_halves():
     assert ev.obs_planes.shape == (1, max_e, NUM_EVIDENCE_PLANES, 15, 15)
     assert ev.obs_scalars.shape == (1, max_e, NUM_EVIDENCE_SCALARS)
 
-    # Observed planes are counts normalized by the rollout count...
-    expected = (np.arange(225) % 41).reshape(15, 15) / 40.0
-    np.testing.assert_allclose(ev.obs_planes[0, 0, 0].numpy(), expected, atol=1e-6)
-    # ...the prediction half is the first pass's footprint logits reduced to the
-    # per-cell anchor marginal...
-    from scribblez.move_set_eval.model import footprint_cell_marginal
+    # Observed channels are histogram counts normalized by the rollout count:
+    # anchored class (cell, slot) on channel (head*SLOTS_PER_CELL + slot) at
+    # the cell. Hand-check one opp_next class: cell (0, 5), slot 2.
+    cls = 5 * SLOTS_PER_CELL + 2
+    assert ev.obs_planes[0, 0, 2, 0, 5].item() == pytest.approx((cls % 41) / 40.0)
+    # self_next (head 1) counts are a constant 3 across all classes.
+    assert ev.obs_planes[0, 0, SLOTS_PER_CELL, 3, 3].item() == pytest.approx(3 / 40.0)
+    # ...the prediction half is the first pass's footprint logits softmaxed
+    # into the same slot-channel layout (catch-all dropped, no renorm)...
+    from scribblez.move_set_eval.model import footprint_slot_planes
 
+    obs_end, pred_end = 4 * SLOTS_PER_CELL, 8 * SLOTS_PER_CELL
     np.testing.assert_allclose(
-        ev.obs_planes[0, 0, 4:8].numpy(),
-        footprint_cell_marginal(first_pass["planes"][0]).numpy(),
+        ev.obs_planes[0, 0, obs_end:pred_end].numpy(),
+        footprint_slot_planes(first_pass["planes"][0]).numpy(),
         atol=1e-6,
     )
-    # ...and the last channel is the candidate's own footprint.
-    np.testing.assert_array_equal(ev.obs_planes[0, 1, 8].numpy(), move_footprint(moves[1]))
+    # ...and the last block is the candidate's own footprint one-hot: a 2-tile
+    # horizontal play (slot 1) anchored at (7, 3 + i).
+    footprint = ev.obs_planes[0, 1, pred_end:].numpy()
+    assert footprint.sum() == 1.0
+    assert footprint[1, 7, 4] == 1.0
 
     np.testing.assert_allclose(
         ev.obs_scalars[0, 0, :3].numpy(), [25 / 40, 5 / 40, 10 / 40], atol=1e-6

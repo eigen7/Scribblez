@@ -4215,7 +4215,7 @@ TEST(SimRunner, Basic) {
     ASSERT_EQ(o.wins + o.draws + o.losses, o.n);
     // Cauchy-Schwarz on the delta moments: (sum d)^2 <= n * sum d^2.
     ASSERT_LE(o.delta_sum * o.delta_sum, int64_t(o.n) * o.delta_sq_sum);
-    for (int i = 0; i < SimObservation::kCells; ++i) {
+    for (int i = 0; i < SimObservation::kClasses; ++i) {
       ASSERT_LE(o.opp_win_count[i], o.opp_next_count[i]);
       ASSERT_LE(o.self_win_count[i], o.self_next_count[i]);
       ASSERT_LE(o.opp_next_count[i], o.n);
@@ -4224,9 +4224,10 @@ TEST(SimRunner, Basic) {
   }
 
   // The dictionary is rich in 2-letter words, so sampled opponent racks have
-  // replies on the (near-)open board: the reply plane must have fired.
+  // replies on the (near-)open board: some ANCHORED class (a real placement,
+  // not the pass catch-all) must have fired.
   int64_t total_opp = 0;
-  for (int i = 0; i < SimObservation::kCells; ++i) total_opp += obs[0].opp_next_count[i];
+  for (int i = 0; i < kAnchoredFootprints; ++i) total_opp += obs[0].opp_next_count[i];
   ASSERT_GT(total_opp, 0);
 
   // Determinism and thread-independence: a single-threaded run is identical.
@@ -4248,6 +4249,61 @@ TEST(SimRunner, Basic) {
   }
 
   fs::remove_all(tmp);
+}
+
+// accumulate_rollout buckets each rollout move at footprint_class(move,
+// flip=false) in the right histogram: opp_reply in the opp counts weighted by
+// p_loss, self_next in the self counts weighted by p_win, a PASS in the pass
+// catch-all. This pins the field routing, frame, and slot encoding exactly --
+// the per-class invariants the SimRunner tests assert (win <= next <= n,
+// 0-or-n) would also hold under a swapped opp/self wiring or a flipped frame,
+// so only a hand-computed class can catch those.
+TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
+  const Glyph g[3] = {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
+                      Glyph::of(Tile::from_char('C'))};
+  RolloutResult r;
+  // Opp reply: horizontal, 2 tiles at row 3, cols 6-7 -> anchor (3,6), slot 1.
+  r.opp_reply = Move::play(/*horizontal=*/true, /*start=*/3,
+                           /*square_mask=*/uint16_t((1 << 6) | (1 << 7)), /*score=*/10, g, 2);
+  // Self next: vertical, 3 tiles at col 5, rows 2-4 -> anchor (2,5), slot
+  // kFootprintMaxK + (3 - 2).
+  r.self_next = Move::play(/*horizontal=*/false, /*start=*/5,
+                           /*square_mask=*/uint16_t((1 << 2) | (1 << 3) | (1 << 4)),
+                           /*score=*/15, g, 3);
+  r.p_win = 0.25;
+  r.p_draw = 0.25;
+  r.p_loss = 0.5;
+  r.delta = 7.0;
+  r.delta_sq = 53.0;
+
+  SimObservation obs;
+  accumulate_rollout(r, &obs);
+  const int opp_cls = (3 * BOARD_SIZE + 6) * kSlotsPerCell + 1;
+  const int self_cls = (2 * BOARD_SIZE + 5) * kSlotsPerCell + (kFootprintMaxK + 1);
+  EXPECT_EQ(obs.opp_next_count[opp_cls], 1);
+  EXPECT_FLOAT_EQ(obs.opp_win_count[opp_cls], 0.5f);  // the p_loss side
+  EXPECT_EQ(obs.self_next_count[self_cls], 1);
+  EXPECT_FLOAT_EQ(obs.self_win_count[self_cls], 0.25f);  // the p_win side
+  // Exactly one class fired per histogram.
+  int64_t opp_total = 0, self_total = 0;
+  for (int i = 0; i < SimObservation::kClasses; ++i) {
+    opp_total += obs.opp_next_count[i];
+    self_total += obs.self_next_count[i];
+  }
+  EXPECT_EQ(opp_total, 1);
+  EXPECT_EQ(self_total, 1);
+
+  // A 1-tile play is the orientation-free slot 0 whichever axis it declares,
+  // and a missing move (default Move = PASS) buckets into the pass catch-all.
+  RolloutResult r2;
+  r2.opp_reply = Move::play(/*horizontal=*/false, /*start=*/9,
+                            /*square_mask=*/uint16_t(1 << 4), /*score=*/4, g, 1);
+  r2.p_win = 1.0;
+  accumulate_rollout(r2, &obs);
+  EXPECT_EQ(obs.opp_next_count[(4 * BOARD_SIZE + 9) * kSlotsPerCell + 0], 1);
+  EXPECT_EQ(obs.self_next_count[kPassClass], 1);
+  EXPECT_EQ(int(obs.n), 2);
+  EXPECT_DOUBLE_EQ(obs.wins, 1.25);
 }
 
 // Constant-output leaf stub for value-truncation tests: every horizon row
@@ -4387,8 +4443,8 @@ TEST(SimRunner, TruncatedPovParity) {
       // The stub predicts sigma = 5, so the second moment carries mean^2 +
       // sigma^2 whichever POV the mean was flipped from.
       ASSERT_DOUBLE_EQ(o.delta_sq_sum, o.n * (100.0 * 100.0 + 5.0 * 5.0));
-      // The win-conjoined planes carry the leaf probabilities per placement.
-      for (int i = 0; i < SimObservation::kCells; ++i) {
+      // The win-conjoined histograms carry the leaf probabilities per class.
+      for (int i = 0; i < SimObservation::kClasses; ++i) {
         ASSERT_NEAR(o.opp_win_count[i], p_loss * o.opp_next_count[i], 1e-3);
         ASSERT_NEAR(o.self_win_count[i], p_win * o.self_next_count[i], 1e-3);
       }
@@ -4600,10 +4656,14 @@ TEST(SimRunner, KnownOppRack) {
   bool any_reply = false;
   for (const SimObservation& o : obs) {
     ASSERT_EQ(int(o.n), params.rollouts);
-    for (int i = 0; i < SimObservation::kCells; ++i) {
+    // With the opponent's whole rack known the reply is deterministic, so every
+    // rollout lands in one footprint class: each class holds 0 or n.
+    for (int i = 0; i < SimObservation::kClasses; ++i)
       ASSERT_TRUE(o.opp_next_count[i] == 0 || o.opp_next_count[i] == o.n);
+    // ...and for some candidate that class is an anchored one (a real
+    // placement, not the pass catch-all).
+    for (int i = 0; i < kAnchoredFootprints; ++i)
       if (o.opp_next_count[i] == o.n) any_reply = true;
-    }
   }
   ASSERT_TRUE(any_reply);
 
@@ -4651,7 +4711,7 @@ TEST(SimRunner, PartialLeave) {
     SimRunner(d, params).run(pos, {plays.front()}, /*base_seed=*/4);
   ASSERT_EQ(int(obs[0].n), params.rollouts);
   ASSERT_EQ(obs[0].wins + obs[0].draws + obs[0].losses, obs[0].n);
-  for (int i = 0; i < SimObservation::kCells; ++i) {
+  for (int i = 0; i < SimObservation::kClasses; ++i) {
     ASSERT_LE(obs[0].opp_win_count[i], obs[0].opp_next_count[i]);
   }
 
@@ -4742,19 +4802,19 @@ TEST(FormatLayout, DescribesTheSidecarStructs) {
   EXPECT_EQ(rec_fields.at(2).at("dtype").as_string(), "u1");
 
   // A subarray field carries its element code and shape. The next-move
-  // planes are integer counts; the win-conjoined planes and the outcome
-  // accumulators are fractional under value truncation.
+  // histograms are integer counts; the win-conjoined histograms and the
+  // outcome accumulators are fractional under value truncation.
   const bj::array& obs_fields = structs.at("SimObservation").at("fields").as_array();
   bool found_counts = false, found_win = false, found_wins = false;
   for (const bj::value& f : obs_fields) {
     if (f.at("name").as_string() == "opp_next_count") {
       found_counts = true;
       EXPECT_EQ(f.at("dtype").as_string(), "<u2");
-      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kCells);
+      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kClasses);
     } else if (f.at("name").as_string() == "opp_win_count") {
       found_win = true;
       EXPECT_EQ(f.at("dtype").as_string(), "<f4");
-      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kCells);
+      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kClasses);
     } else if (f.at("name").as_string() == "wins") {
       found_wins = true;
       EXPECT_EQ(f.at("dtype").as_string(), "<f8");
@@ -5819,9 +5879,10 @@ TEST(TrajectoryPosition, ExhibitDecisionPoint) {
 // build_evidence_inputs. Hand-computed against a two-candidate evidence set over
 // three scored candidates, so a drift from the Python normalization -- a
 // missing /rollouts, an unscaled delta, a wrong softmax/sigmoid, a mis-gathered
-// move encoding, or a footprint on the wrong square -- is caught here; no engine
-// test cross-checks this against the Python fusion stage yet (the runtime's
-// end-to-end parity test, item 3's next slice, will).
+// move encoding, or a footprint class on the wrong (slot, cell) channel -- is
+// caught here; the runtime's end-to-end parity test
+// (test_proposal_inference_parity) cross-checks the whole path against the
+// Python fusion stage.
 TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   using namespace evidence;
   constexpr int kChannels = 2;
@@ -5834,13 +5895,14 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   std::vector<float> wld_logits = {0.0f, 0.0f, 0.0f, 5.0f, 5.0f, 5.0f, 2.0f, 0.0f, 0.0f};
   std::vector<float> score_diff = {-50.0f, 10.0f, 0.0f, 0.0f, 30.0f, 5.0f};  // [mean,std] rows
   std::vector<float> plane_probs(size_t(kScored) * kNumPredictedPlanes * kCells, 0.0f);
-  // Scored candidate 2, predicted plane 2, cell 7: a non-default probability.
+  // Scored candidate 2, predicted channel 2, cell 7: a non-default probability.
   plane_probs[(2 * kNumPredictedPlanes + 2) * kCells + 7] = 0.7f;
   const CachePredictions pred{move_enc.data(), wld_logits.data(), score_diff.data(),
                               plane_probs.data(), kChannels};
 
-  // Evidence candidate 0 == scored 2: a horizontal play at (7,7); observations
-  // with rollouts n=4.
+  // Evidence candidate 0 == scored 2: a one-tile horizontal play at (7,7);
+  // observations with rollouts n=4. Histogram classes are (cell, slot) pairs:
+  // opp replies at (cell 5, slot 2), self next moves at (cell 10, slot 0).
   SimObservation obs0;
   obs0.n = 4;
   obs0.wins = 3.0;
@@ -5848,10 +5910,10 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   obs0.losses = 1.0;
   obs0.delta_sum = 40.0;      // mean 10
   obs0.delta_sq_sum = 800.0;  // var = 800/4 - 100 = 100, std 10
-  obs0.opp_next_count[5] = 2;
-  obs0.self_next_count[10] = 4;
-  obs0.opp_win_count[5] = 1.0f;
-  obs0.self_win_count[10] = 2.0f;
+  obs0.opp_next_count[5 * kSlotsPerCell + 2] = 2;
+  obs0.self_next_count[10 * kSlotsPerCell + 0] = 4;
+  obs0.opp_win_count[5 * kSlotsPerCell + 2] = 1.0f;
+  obs0.self_win_count[10 * kSlotsPerCell + 0] = 2.0f;
   const Glyph g = Glyph::of(Tile::from_char('A'));
   const Move play = Move::play(/*horizontal=*/true, /*start=*/7, /*square_mask=*/uint16_t(1 << 7),
                                /*score=*/20, &g, /*num_played=*/1);
@@ -5889,7 +5951,7 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   for (int row = 2; row < kMaxE; ++row) {
     const float* pad_planes = ev_planes.data() + size_t(row) * kNumEvidencePlanes * kCells;
     const float* pad_scalars = ev_scalars.data() + size_t(row) * kNumEvidenceScalars;
-    EXPECT_FLOAT_EQ(pad_planes[6 * kCells + 7], 0.0f);  // a predicted-plane cell, else 0.5
+    EXPECT_FLOAT_EQ(pad_planes[(kNumObservedPlanes + 2) * kCells + 7], 0.0f);  // a predicted cell
     EXPECT_FLOAT_EQ(pad_planes[0], 0.0f);
     EXPECT_FLOAT_EQ(pad_scalars[0], 0.0f);
     EXPECT_FLOAT_EQ(pad_scalars[kNumEvidenceScalars - 1], 0.0f);
@@ -5903,22 +5965,29 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   EXPECT_FLOAT_EQ(ev_move_enc[4], 0.0f);
   EXPECT_FLOAT_EQ(ev_move_enc[7], 0.0f);
 
-  // Candidate 0 planes: observed counts / rollouts, predicted probs copied
-  // through, footprint.
+  // Candidate 0 planes: observed histogram counts / rollouts on channel
+  // (head * kSlotsPerCell + slot) at the class's cell, predicted probs copied
+  // through, footprint one-hot at (slot channel, anchor cell).
   const float* p0 = ev_planes.data();
-  EXPECT_FLOAT_EQ(p0[0 * kCells + 5], 0.5f);   // opp_next 2/4
-  EXPECT_FLOAT_EQ(p0[1 * kCells + 10], 1.0f);  // self_next 4/4
-  EXPECT_FLOAT_EQ(p0[2 * kCells + 5], 0.25f);  // opp_win 1/4
-  EXPECT_FLOAT_EQ(p0[3 * kCells + 10], 0.5f);  // self_win 2/4
-  EXPECT_FLOAT_EQ(p0[6 * kCells + 7], 0.7f);   // pred plane 2, cell 7 (prob, not re-squashed)
-  EXPECT_FLOAT_EQ(p0[4 * kCells + 0], 0.0f);   // pred plane 0, default 0
-  EXPECT_FLOAT_EQ(p0[8 * kCells + (7 * BOARD_SIZE + 7)], 1.0f);  // footprint at (7,7)
-  EXPECT_FLOAT_EQ(p0[8 * kCells + 0], 0.0f);
+  constexpr int kPredBase = kNumObservedPlanes;
+  constexpr int kFootBase = kNumObservedPlanes + kNumPredictedPlanes;
+  EXPECT_FLOAT_EQ(p0[(0 * kSlotsPerCell + 2) * kCells + 5], 0.5f);   // opp_next 2/4
+  EXPECT_FLOAT_EQ(p0[(1 * kSlotsPerCell + 0) * kCells + 10], 1.0f);  // self_next 4/4
+  EXPECT_FLOAT_EQ(p0[(2 * kSlotsPerCell + 2) * kCells + 5], 0.25f);  // opp_win 1/4
+  EXPECT_FLOAT_EQ(p0[(3 * kSlotsPerCell + 0) * kCells + 10], 0.5f);  // self_win 2/4
+  EXPECT_FLOAT_EQ(p0[(0 * kSlotsPerCell + 0) * kCells + 5], 0.0f);   // slot 0 empty at cell 5
+  EXPECT_FLOAT_EQ(p0[(kPredBase + 2) * kCells + 7], 0.7f);  // pred channel 2 (not re-squashed)
+  EXPECT_FLOAT_EQ(p0[(kPredBase + 0) * kCells + 0], 0.0f);  // pred channel 0, default 0
+  // The 1-tile play at (7,7) is slot 0 at its anchor cell.
+  EXPECT_FLOAT_EQ(p0[(kFootBase + 0) * kCells + (7 * BOARD_SIZE + 7)], 1.0f);
+  EXPECT_FLOAT_EQ(p0[(kFootBase + 0) * kCells + 0], 0.0f);
+  EXPECT_FLOAT_EQ(p0[(kFootBase + 1) * kCells + (7 * BOARD_SIZE + 7)], 0.0f);
 
-  // Candidate 1 (PASS): observed planes empty, footprint empty.
+  // Candidate 1 (PASS): observed planes empty (the pass catch-all class is
+  // dropped), footprint block empty.
   const float* p1 = ev_planes.data() + size_t(kNumEvidencePlanes) * kCells;
-  EXPECT_FLOAT_EQ(p1[0 * kCells + 5], 0.0f);
-  EXPECT_FLOAT_EQ(p1[8 * kCells + (7 * BOARD_SIZE + 7)], 0.0f);
+  EXPECT_FLOAT_EQ(p1[(0 * kSlotsPerCell + 2) * kCells + 5], 0.0f);
+  EXPECT_FLOAT_EQ(p1[(kFootBase + 0) * kCells + (7 * BOARD_SIZE + 7)], 0.0f);
 
   // Candidate 0 scalars.
   const float* s0 = ev_scalars.data();

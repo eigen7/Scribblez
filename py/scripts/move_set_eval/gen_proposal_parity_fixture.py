@@ -39,7 +39,8 @@ Files written into --out-dir:
   * cases.txt -- one line per evidence case: "<name> <num_evidence>".
   * case_<name>_indices.bin -- int32 scored indices (empty file for the empty
     case); case_<name>_scalars.bin -- M x 6 f32 [p_win, p_draw, p_loss, sd_mean,
-    sd_std, gain]; case_<name>_planes.bin -- M x 4 x 225 f32 per-cell marginal.
+    sd_std, gain]; case_<name>_planes.bin -- M x 52 x 225 f32 footprint
+    slot-channel planes (what the graphs serve).
 
 Random weights are deliberate: this checks numerical fidelity of the inference
 stack, not any trained model, and keeps the fixture hermetic.
@@ -51,8 +52,9 @@ from pathlib import Path
 import numpy as np
 import torch
 from scribblez.ffi import encode_moves, get_input_shapes
+from scribblez.footprint_spatial import NUM_CLASSES
 from scribblez.move_set_eval.evidence import build_evidence_inputs
-from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_cell_marginal
+from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_slot_planes
 from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.move_set_eval.proposal_export import (
     DEFAULT_MAX_EVIDENCE,
@@ -150,10 +152,10 @@ def synthetic_observations(num_moves: int, seed: int) -> np.ndarray:
         mean = float(rng.integers(-40, 41))
         o["delta_sum"] = mean * n
         o["delta_sq_sum"] = (mean**2 + float(rng.integers(0, 60))) * n
-        o["opp_next_count"][:] = rng.integers(0, n + 1, size=BOARD * BOARD).astype(np.uint16)
-        o["self_next_count"][:] = rng.integers(0, n + 1, size=BOARD * BOARD).astype(np.uint16)
-        o["opp_win_count"][:] = rng.random(BOARD * BOARD).astype(np.float32) * n
-        o["self_win_count"][:] = rng.random(BOARD * BOARD).astype(np.float32) * n
+        o["opp_next_count"][:] = rng.integers(0, n + 1, size=NUM_CLASSES).astype(np.uint16)
+        o["self_next_count"][:] = rng.integers(0, n + 1, size=NUM_CLASSES).astype(np.uint16)
+        o["opp_win_count"][:] = rng.random(NUM_CLASSES).astype(np.float32) * n
+        o["self_win_count"][:] = rng.random(NUM_CLASSES).astype(np.float32) * n
     return obs
 
 
@@ -187,13 +189,13 @@ def forward(model, spatial, scalar, enc, num_moves: int, evidence=None) -> dict[
 
 def decode(out: dict[str, torch.Tensor]) -> tuple[np.ndarray, np.ndarray]:
     """forward() outputs -> (scalars M x 6 [p_win, p_draw, p_loss, sd_mean,
-    sd_std, gain], planes M x 4 x 225 -- the footprint head's per-cell anchor
-    marginal, what the proposal graphs serve)."""
+    sd_std, gain], planes M x 52 x 225 -- the footprint heads' slot-channel
+    probabilities, what the proposal graphs serve)."""
     wld = torch.softmax(out["wld"], dim=1).numpy()
     sd = out["score_diff"].numpy()
     gain = out["gain"].numpy()
     scalars = np.concatenate([wld, sd, gain[:, None]], axis=1).astype(np.float32)
-    planes = footprint_cell_marginal(out["planes"]).flatten(2).numpy().astype(np.float32)
+    planes = footprint_slot_planes(out["planes"]).flatten(2).numpy().astype(np.float32)
     return scalars, planes
 
 

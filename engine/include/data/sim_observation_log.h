@@ -16,7 +16,7 @@
 //   [SimObsFileHeader                       144 B]
 //   For each position p in [0, num_positions):
 //     [SimObsPositionHeader                  32 B]
-//     [SimObsRecord   num_candidates(p)    2761 B each]
+//     [SimObsRecord   num_candidates(p)   35185 B each]
 //
 // A position is identified by (game_index, turn_index) within the companion
 // .slog file. Records store the exact Move alongside its observation, the
@@ -44,7 +44,7 @@ namespace scribblez {
 
 // "SOBS" in little-endian (bytes 'S','O','B','S' on disk).
 inline constexpr uint32_t kSimObsMagic = 0x53424F53u;
-inline constexpr uint16_t kSimObsVersion = 4;
+inline constexpr uint16_t kSimObsVersion = 5;
 
 // SimObsFileHeader::flags bits. Bit 0x1 is RETIRED (it marked sims that used
 // the opponent's entire true rack, an information condition no consumer

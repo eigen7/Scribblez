@@ -50,9 +50,10 @@ using scribblez::agent::MoveProposalRuntime;
 namespace {
 
 // The fixture's per-candidate reference scalars: [p_win, p_draw, p_loss,
-// sd_mean, sd_std, gain]. The plane reference is a separate M x 4 x 225 file.
+// sd_mean, sd_std, gain]. The plane reference is a separate M x 52 x 225 file
+// (the graphs' footprint slot-channel planes output).
 constexpr int kScalarFields = 6;
-constexpr int kPlaneFloats = scribblez::nn::kNumPlacementPlanes * scribblez::kBoardCells;
+constexpr int kPlaneFloats = scribblez::nn::PlanesOutput::kRowElems;
 
 // How far a TensorRT run may deviate from the PyTorch FP32 reference. Set from
 // the measured noise floor, not loosely: on this fixture the observed worst

@@ -31,11 +31,17 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
-from scribblez.evidence_fusion import NUM_EVIDENCE_PLANES, NUM_EVIDENCE_SCALARS, EvidenceInputs
+from scribblez.evidence_fusion import (
+    NUM_EVIDENCE_PLANES,
+    NUM_EVIDENCE_SCALARS,
+    NUM_OBSERVED_PLANES,
+    NUM_PREDICTED_PLANES,
+    EvidenceInputs,
+)
 from scribblez.move_set_eval import train_loop as mset_train_loop
-from scribblez.move_set_eval.evidence import observed_planes, observed_scalars
-from scribblez.move_set_eval.model import footprint_cell_marginal, win_equity
-from scribblez.sim_evidence.sobs import BOARD
+from scribblez.move_set_eval.evidence import observed_scalars
+from scribblez.move_set_eval.model import footprint_slot_planes, win_equity
+from scribblez.sim_evidence.sobs import BOARD, candidate_slot_planes, observed_slot_planes
 
 # The sim-outcome loss terms every epoch reports; a joint (unfrozen) epoch adds
 # DISTILL_LOSS_KEYS.
@@ -138,13 +144,15 @@ def batch_evidence_inputs(
     sel_np = in_evidence.numpy()
     moves_np = batch["all_moves"][sel_np]
     obs_np = batch["all_obs"][sel_np]
-    observed_p = torch.from_numpy(observed_planes(moves_np, obs_np)).to(device=device, dtype=dtype)
+    observed_p = torch.from_numpy(observed_slot_planes(obs_np)).to(device=device, dtype=dtype)
+    candidate_p = torch.from_numpy(candidate_slot_planes(moves_np)).to(device=device, dtype=dtype)
     observed_s = torch.from_numpy(observed_scalars(obs_np)).to(device=device, dtype=dtype)
 
+    pred_end = NUM_OBSERVED_PLANES + NUM_PREDICTED_PLANES
     planes = observed_p.new_zeros((int(sel.sum()), NUM_EVIDENCE_PLANES, BOARD, BOARD))
-    planes[:, :4] = observed_p[:, :4]
-    planes[:, 4:8] = footprint_cell_marginal(plain["planes"][sel]).to(dtype)
-    planes[:, 8] = observed_p[:, 4]
+    planes[:, :NUM_OBSERVED_PLANES] = observed_p
+    planes[:, NUM_OBSERVED_PLANES:pred_end] = footprint_slot_planes(plain["planes"][sel]).to(dtype)
+    planes[:, pred_end:] = candidate_p
     predicted_s = torch.cat(
         [torch.softmax(plain["wld"][sel], dim=1), plain["score_diff"][sel] / 100.0], dim=1
     ).to(dtype)

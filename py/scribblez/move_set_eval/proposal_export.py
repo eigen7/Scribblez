@@ -62,7 +62,7 @@ from scribblez.onnx_export_util import (
 )
 from scribblez.spatial_trunk import mean_max_pool
 
-from .model import MoveSetEvalModel, footprint_cell_marginal
+from .model import MoveSetEvalModel, footprint_slot_planes
 from .moves import move_encoding_dims
 from .targets import PLANE_NAMES
 
@@ -151,10 +151,11 @@ class _ScoringHeads(nn.Module):
         self, board: torch.Tensor, g: torch.Tensor, e: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """board (1, 225, C), g (1, 3C), e (M, C) -> attended (M, C) and the
-        (wld (M, 3), score_diff (M, 2), planes (M, num_planes, 225)) heads. The
-        plane head builds the full footprint distribution, then reduces it to the
-        per-cell anchor marginal the evidence path consumes (footprint_cell_
-        marginal), so the served planes stay (M, num_planes, 225)."""
+        (wld (M, 3), score_diff (M, 2), planes (M, num_planes*SLOTS_PER_CELL,
+        225)) heads. The plane head builds the full footprint distribution and
+        serves it softmaxed in the evidence-channel layout (footprint_slot_
+        planes, catch-all dropped) -- exactly what the C++ staging copies into
+        the predicted half of every evidence token."""
         attended = self._cross_attention(e, board[0])
         hidden = F.relu(self.head_attended(attended) + self.head_g(g))
         out = self.head_out(hidden)  # (M, 5)
@@ -168,7 +169,7 @@ class _ScoringHeads(nn.Module):
             -1, self.num_planes, CATCH_ALL
         )
         footprint_logits = torch.cat([anchored, catch], dim=-1)  # (M, num_planes, NUM_CLASSES)
-        planes = footprint_cell_marginal(footprint_logits).flatten(2)  # (M, num_planes, 225)
+        planes = footprint_slot_planes(footprint_logits).flatten(2)  # (M, planes*slots, 225)
         return attended, wld, score_diff, planes
 
     def gain(self, attended: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
@@ -308,7 +309,7 @@ class ProposalStepExportModel(nn.Module):
         g: torch.Tensor,  # (1, 3C) f32
         move_enc: torch.Tensor,  # (M, C) f32
         ev_move_enc: torch.Tensor,  # (1, E, C) f32
-        ev_obs_planes: torch.Tensor,  # (1, E, 9, 15, 15) f32
+        ev_obs_planes: torch.Tensor,  # (1, E, NUM_EVIDENCE_PLANES, 15, 15) f32
         ev_obs_scalars: torch.Tensor,  # (1, E, 11) f32
         ev_mask: torch.Tensor,  # (1, E) u8
     ) -> tuple[torch.Tensor, ...]:

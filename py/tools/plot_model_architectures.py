@@ -610,8 +610,8 @@ def evidence_fusion() -> Diagram:
         26,
         [
             title("obs_planes"),
-            sub("4 observed ‖ 4 predicted ‖ footprint"),
-            mono("(P, E, 9, 15, 15)"),
+            sub("52 observed ‖ 52 predicted ‖ 13 footprint"),
+            mono("(P, E, 117, 15, 15)"),
         ],
         "input",
     )

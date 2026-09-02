@@ -14,6 +14,13 @@ from pathlib import Path
 import numpy as np
 
 from scribblez.ffi import format_layout, struct_dtype
+from scribblez.footprint_spatial import (
+    ANCHORED,
+    MAX_K,
+    PASS_CLASS,
+    SLOTS_PER_CELL,
+    to_slot_planes,
+)
 
 _CONST = format_layout()["constants"]
 
@@ -202,6 +209,56 @@ def move_footprint(move: np.void) -> np.ndarray:
     return plane
 
 
+def move_footprint_class(move: np.void) -> int:
+    """The footprint class of a MOVE_DTYPE record in the unflipped frame --
+    the numpy mirror of the C++ footprint_class (training/footprint.h):
+    (anchor cell) * SLOTS_PER_CELL + slot, where slot 0 is the
+    orientation-free k==1 footprint, 1..6 horizontal k=2..7, 7..12 vertical.
+    A non-PLAY record maps to PASS_CLASS."""
+    if move["type"] != MOVE_PLAY:
+        return PASS_CLASS
+    k = int(move["num_played"])
+    mask = int(move["square_mask"])
+    along0 = (mask & -mask).bit_length() - 1  # first placed lane cell
+    horizontal = bool(move["horizontal"])
+    r, c = (int(move["start"]), along0) if horizontal else (along0, int(move["start"]))
+    if k <= 1:
+        slot = 0
+    else:
+        slot = (1 if horizontal else MAX_K) + (k - 2)
+    return (r * BOARD + c) * SLOTS_PER_CELL + slot
+
+
+# SimObservation's histogram fields, in the placement-head order the observed
+# half of evidence_fusion.EVIDENCE_PLANE_NAMES mirrors.
+COUNT_HEADS = ("opp_next_count", "self_next_count", "opp_win_count", "self_win_count")
+
+
+def observed_slot_planes(obs: np.ndarray) -> np.ndarray:
+    """(K,) .sobs records -> (K, 4*SLOTS_PER_CELL, 15, 15) float32: each
+    head's footprint histogram as per-slot board channels, normalized by the
+    candidate's rollout count. The catch-all classes are dropped -- a pass
+    rollout vanishes from the planes (the rollout-count scalar still carries
+    it) -- and nothing is renormalized: raw per-class frequencies."""
+    k = len(obs)
+    n = np.maximum(obs["n"].astype(np.float32), 1.0).reshape(k, 1, 1, 1)
+    heads = [to_slot_planes(obs[name].astype(np.float32)) for name in COUNT_HEADS]
+    return np.concatenate(heads, axis=-3).reshape(k, -1, BOARD, BOARD) / n
+
+
+def candidate_slot_planes(moves: np.ndarray) -> np.ndarray:
+    """(K,) MOVE_DTYPE records -> (K, SLOTS_PER_CELL, 15, 15) float32: each
+    candidate's own footprint as a one-hot at (slot channel, anchor cell);
+    all zeros for a pass/exchange (its class is the dropped catch-all)."""
+    planes = np.zeros((len(moves), SLOTS_PER_CELL, BOARD, BOARD), dtype=np.float32)
+    for i in range(len(moves)):
+        cls = move_footprint_class(moves[i])
+        if cls < ANCHORED:
+            cell, slot = divmod(cls, SLOTS_PER_CELL)
+            planes[i, slot, cell // BOARD, cell % BOARD] = 1.0
+    return planes
+
+
 # Per-candidate scalar evidence features, in order. Frequencies are over the
 # candidate's rollouts; delta moments are in score points (scaled to ~unit
 # range); rank is the candidate's HastyBot-equity rank within the evidence set.
@@ -226,25 +283,24 @@ def evidence_features(pos: SobsPosition, max_k: int) -> tuple[np.ndarray, np.nda
     """Encode one position's evidence set into fixed-size model inputs.
 
     Returns (planes, scalars, mask):
-      planes  (max_k, 5, 15, 15) float16 -- the four count planes normalized
-              by the rollout count, plus the candidate's own footprint;
+      planes  (max_k, 5 * SLOTS_PER_CELL, 15, 15) float16 -- the four
+              footprint histograms as per-slot channels normalized by the
+              rollout count (observed_slot_planes), plus the candidate's own
+              footprint one-hot block (candidate_slot_planes);
       scalars (max_k, NUM_EVIDENCE_SCALARS) float32;
       mask    (max_k,) bool -- True for real candidates, False for padding.
     """
     k = min(len(pos.moves), max_k)
-    planes = np.zeros((max_k, 5, BOARD, BOARD), dtype=np.float16)
+    planes = np.zeros((max_k, 5 * SLOTS_PER_CELL, BOARD, BOARD), dtype=np.float16)
     scalars = np.zeros((max_k, NUM_EVIDENCE_SCALARS), dtype=np.float32)
     mask = np.zeros(max_k, dtype=bool)
+    if k:
+        planes[:k, : 4 * SLOTS_PER_CELL] = observed_slot_planes(pos.obs[:k])
+        planes[:k, 4 * SLOTS_PER_CELL :] = candidate_slot_planes(pos.moves[:k])
 
     for i in range(k):
         move, obs = pos.moves[i], pos.obs[i]
         n = max(int(obs["n"]), 1)
-        for j, plane_name in enumerate(
-            ("opp_next_count", "self_next_count", "opp_win_count", "self_win_count")
-        ):
-            planes[i, j] = (obs[plane_name].astype(np.float32) / n).reshape(BOARD, BOARD)
-        planes[i, 4] = move_footprint(move)
-
         delta_mean = float(obs["delta_sum"]) / n
         delta_var = max(float(obs["delta_sq_sum"]) / n - delta_mean**2, 0.0)
         mtype = int(move["type"])

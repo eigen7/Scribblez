@@ -76,9 +76,9 @@ SimObservation synthetic_observation(int j) {
   obs.losses = obs.n - obs.wins - obs.draws;
   obs.delta_sum = 12.0 * obs.n;
   obs.delta_sq_sum = (12.0 * 12.0 + 25.0) * obs.n;
-  for (int cell = 0; cell < SimObservation::kCells; ++cell) {
-    obs.opp_next_count[cell] = uint16_t(cell % 7);
-    obs.self_next_count[cell] = uint16_t(cell % 3);
+  for (int cls = 0; cls < SimObservation::kClasses; ++cls) {
+    obs.opp_next_count[cls] = uint16_t(cls % 7);
+    obs.self_next_count[cls] = uint16_t(cls % 3);
   }
   return obs;
 }

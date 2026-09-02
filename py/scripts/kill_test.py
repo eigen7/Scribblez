@@ -69,7 +69,7 @@ import torch
 import torch.nn.functional as F
 from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows, get_input_shapes, set_opp_leave_input
-from scribblez.sim_evidence.model import EvidencePositionEvalModel
+from scribblez.sim_evidence.model import NUM_EVIDENCE_PLANES, EvidencePositionEvalModel
 from scribblez.sim_evidence.slog_meta import position_meta
 from scribblez.sim_evidence.sobs import (
     NUM_EVIDENCE_SCALARS,
@@ -102,7 +102,7 @@ def build_shard(slog: Path, sobs: Path, max_k: int) -> dict[str, np.ndarray]:
     spatial_floats = int(np.prod(spatial_shape))
 
     n = len(positions)
-    ev_planes = np.zeros((n, max_k, 5, 15, 15), dtype=np.float16)
+    ev_planes = np.zeros((n, max_k, NUM_EVIDENCE_PLANES, 15, 15), dtype=np.float16)
     ev_scalars = np.zeros((n, max_k, NUM_EVIDENCE_SCALARS), dtype=np.float32)
     ev_mask = np.zeros((n, max_k), dtype=bool)
     for i, pos in enumerate(positions):

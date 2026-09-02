@@ -228,16 +228,19 @@ struct MoveEncHandoff {
   static constexpr bool kDynamic = true;
 };
 
-// planes (M, 4, 225): the four placement-plane heads' per-cell probabilities
-// (the footprint head's anchor marginal, already softmaxed in the graph), a raw
-// output of both graphs. No kDecode: unlike the mask/wld/score_diff descriptors,
-// these two are read only by the orchestrator (which copies the planes through
-// and reads the softplus'd gain as is), never by TrtEvalService's RowDecode path,
-// so a decode field here would be dead metadata.
+// planes (M, 4 * kSlotsPerCell, 225): the four placement heads' footprint
+// probabilities (already softmaxed in the graph, catch-all dropped), each head
+// as kSlotsPerCell board-shaped channels -- anchored class (cell, slot) at
+// channel (head * kSlotsPerCell + slot), evidence_staging.h's predicted-channel
+// layout. A raw output of both graphs. No kDecode: unlike the
+// mask/wld/score_diff descriptors, these two are read only by the orchestrator
+// (which copies the planes through and reads the softplus'd gain as is), never
+// by TrtEvalService's RowDecode path, so a decode field here would be dead
+// metadata.
 struct PlanesOutput {
   static constexpr const char* kName = "planes";
   using Elem = float;
-  static constexpr int kRowElems = kNumPlacementPlanes * kBoardCells;
+  static constexpr int kRowElems = kNumPlacementPlanes * kSlotsPerCell * kBoardCells;
   static constexpr bool kDynamic = true;
 };
 
@@ -258,7 +261,9 @@ struct GainOutput {
 // move_proposal_runtime.cpp static_asserts the two agree, and the loader's
 // tensor-width check fails loudly on any drift against the exported graph.
 inline constexpr int kMaxEvidence = 64;
-inline constexpr int kEvidencePlanes = 9;
+// 117: observed + predicted footprint channels (4 heads x kSlotsPerCell each)
+// plus the candidate's own kSlotsPerCell-channel footprint one-hot.
+inline constexpr int kEvidencePlanes = (2 * kNumPlacementPlanes + 1) * kSlotsPerCell;
 inline constexpr int kEvidenceScalars = 11;
 
 // The evidence inputs are fixed-width leading-1 batches (1, E, ...): E folded

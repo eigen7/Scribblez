@@ -7,27 +7,27 @@
 // those cached tensors plus the evidence set this code stages. Each simmed
 // candidate becomes one evidence token carrying three things the fusion stage
 // reads side by side: the candidate's move encoding (gathered from the cache
-// graph's own per-move output), its raw sim observation (the four rollout count
-// planes and the outcome moments), and the model's own evidence-free prediction
-// for that candidate (its four placement planes and its value). Feeding
-// observation and prediction in together is what lets the fusion stage form the
-// residual `k*(obs - prior)` rather than an observation-marginal correction
-// (docs/sim_residual_feedback.md).
+// graph's own per-move output), its raw sim observation (the four rollout
+// footprint histograms and the outcome moments), and the model's own
+// evidence-free prediction for that candidate (its footprint planes and its
+// value). Feeding observation and prediction in together is what lets the
+// fusion stage form the residual `k*(obs - prior)` rather than an
+// observation-marginal correction (docs/sim_residual_feedback.md).
 //
 // This is the C++ port of py/scribblez/move_set_eval/evidence.py's
-// build_evidence_inputs: the SAME normalization (count planes / rollouts, delta
-// moments in score points, log1p rollouts, softmax'd WLD, the model's already-
-// decoded predicted planes) into the SAME padded (max_evidence, ...) layout the step graph's
-// leading-1 evidence inputs expect. The layout constants below mirror
-// evidence_fusion.py's EVIDENCE_PLANE_NAMES / EVIDENCE_SCALAR_NAMES; a change on
-// either side must be mirrored on the other. No engine test cross-checks this
-// against the Python fusion stage yet -- MatchesHandComputedNormalization is the
-// only numeric check today; the runtime's end-to-end parity test (item 3's next
-// slice) is what will tie the two together.
+// build_evidence_inputs: the SAME normalization (histogram counts / rollouts,
+// delta moments in score points, log1p rollouts, softmax'd WLD, the model's
+// already-decoded predicted planes) into the SAME padded (max_evidence, ...)
+// layout the step graph's leading-1 evidence inputs expect. The layout constants
+// below mirror evidence_fusion.py's EVIDENCE_PLANE_NAMES / EVIDENCE_SCALAR_NAMES;
+// a change on either side must be mirrored on the other. The runtime's
+// end-to-end parity test (test_proposal_inference_parity) ties the two sides
+// together; MatchesHandComputedNormalization is the direct numeric check.
 
 #include "game/board.h"
 #include "game/move.h"
 #include "sim/sim_runner.h"
+#include "training/footprint.h"
 
 #include <cstdint>
 #include <span>
@@ -35,13 +35,18 @@
 namespace scribblez {
 namespace evidence {
 
-// Per-token spatial channels, in EVIDENCE_PLANE_NAMES order: the four observed
-// rollout-frequency planes (SimObservation's count planes, normalized by the
-// rollout count), the model's four evidence-free predicted planes, and the
-// candidate's own footprint.
-inline constexpr int kNumObservedPlanes = 4;
-inline constexpr int kNumPredictedPlanes = 4;
-inline constexpr int kNumEvidencePlanes = kNumObservedPlanes + kNumPredictedPlanes + 1;
+// Per-token spatial channels, in EVIDENCE_PLANE_NAMES order. Placement is
+// footprint-categorical: each of the four heads (observed rollout-frequency
+// histograms, then the model's predicted footprint distributions) contributes
+// kSlotsPerCell channels -- anchored class (cell, slot) lands on channel
+// (head * kSlotsPerCell + slot) at that cell -- and the candidate's own
+// footprint is a one-hot in a final kSlotsPerCell-channel block. The two
+// catch-all classes (pass / not-win) are dropped, and nothing is renormalized:
+// the fusion conv sees the raw per-class frequencies/probabilities.
+inline constexpr int kNumPlacementHeads = 4;  // opp/self next, opp/self win
+inline constexpr int kNumObservedPlanes = kNumPlacementHeads * kSlotsPerCell;
+inline constexpr int kNumPredictedPlanes = kNumPlacementHeads * kSlotsPerCell;
+inline constexpr int kNumEvidencePlanes = kNumObservedPlanes + kNumPredictedPlanes + kSlotsPerCell;
 inline constexpr int kEvidencePlaneCells = BOARD_SIZE * BOARD_SIZE;
 
 // Per-token scalars, in EVIDENCE_SCALAR_NAMES order: six observed (win/draw/loss
@@ -55,13 +60,14 @@ inline constexpr int kNumEvidenceScalars = kNumObservedScalars + kNumPredictedSc
 // The cache graph's raw per-candidate outputs, one row per SCORED candidate --
 // the evidence-free half of every token. `move_enc` rows are gathered by a
 // candidate's scored index; the WLD logits are decoded here (softmax), while the
-// plane values arrive already decoded as per-cell probabilities, exactly as
-// evidence.py handles the first pass.
+// plane values arrive already decoded -- softmaxed footprint probabilities in
+// the (head*slot, cell) channel layout above, catch-all dropped in the graph --
+// exactly as evidence.py handles the first pass.
 struct CachePredictions {
   const float* move_enc;    // (num_scored, channels), row-major
   const float* wld_logits;  // (num_scored, 3)
   const float* score_diff;  // (num_scored, 2) = [mean, std]
-  // per-cell probabilities already (the footprint head's anchor marginal), not logits:
+  // footprint probabilities already in evidence-channel layout, not logits:
   const float* plane_probs;  // (num_scored, kNumPredictedPlanes, kEvidencePlaneCells)
   int channels;
 };

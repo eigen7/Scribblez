@@ -24,7 +24,8 @@ def test_struct_dtypes_pin_known_layouts():
 
     record = struct_dtype("SobsRecord")
     assert record.fields["move"][0] == move  # nested reference resolves
-    assert record.fields["obs"][0].fields["opp_next_count"][0].shape == (225,)
+    # The sim observation is a dense footprint-class histogram (.sobs v5).
+    assert record.fields["obs"][0].fields["opp_next_count"][0].shape == (2927,)
 
     assert struct_dtype("MsetFileHeader").fields["model_hash"][0] == np.dtype("S64")
     assert struct_dtype("SlogTurnBlob").itemsize == 24

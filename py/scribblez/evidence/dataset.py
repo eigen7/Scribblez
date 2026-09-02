@@ -41,6 +41,7 @@ condition throughout; mixing is refused.
 
 from __future__ import annotations
 
+import dataclasses
 from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
@@ -52,6 +53,8 @@ from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows, set_opp_leave_input
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.sim_evidence.sobs import (
+    COUNT_HEADS,
+    RECORD_DTYPE,
     ROLE_ANCHOR,
     ROLE_ON_POLICY,
     SOBS_FLAG_OPEN_LEAVES,
@@ -162,15 +165,63 @@ def _compact_index(mask: np.ndarray) -> np.ndarray:
     return idx
 
 
-class _TrajPosition:
-    """One trajectory position: where to reconstruct its input, and its sims."""
+_OBS_DTYPE = RECORD_DTYPE["obs"]
+_OBS_SCALAR_FIELDS = tuple(name for name in _OBS_DTYPE.names if name not in COUNT_HEADS)
 
-    __slots__ = ("file_id", "sobs", "wld", "delta", "value")
+
+class _PackedObs:
+    """A position's (K,) observation records with the four footprint
+    histograms held sparse. A dense .sobs v5 record is ~35 KB and near-empty
+    (~200 rollouts touch at most 200 of the 2927 classes per head), so
+    retaining a full corpus dense in RAM is ~58 GiB at the precedent
+    trajectory corpus's scale, on a 62 GB trainer host. The dataset therefore
+    holds the sparse form and rebuilds the verbatim rows per batch (densify);
+    the on-disk format stays dense."""
+
+    __slots__ = ("k", "scalars", "hists")
+
+    def __init__(self, obs: np.ndarray):
+        self.k = len(obs)
+        self.scalars = {name: obs[name].copy() for name in _OBS_SCALAR_FIELDS}
+        self.hists = {}
+        for name in COUNT_HEADS:
+            dense = obs[name]
+            rows, cls = np.nonzero(dense)
+            self.hists[name] = (rows.astype(np.int32), cls.astype(np.int32), dense[rows, cls])
+
+    def densify(self) -> np.ndarray:
+        """The original (K,) structured records, rebuilt exactly."""
+        out = np.zeros(self.k, dtype=_OBS_DTYPE)
+        for name, col in self.scalars.items():
+            out[name] = col
+        for name, (rows, cls, vals) in self.hists.items():
+            out[name][rows, cls] = vals
+        return out
+
+
+class _TrajPosition:
+    """One trajectory position: where to reconstruct its input, and its sims.
+
+    `sobs.obs` is emptied on ingest -- the records are retained in `obs`
+    (a _PackedObs) and re-materialized per batch; every other SobsPosition
+    field (moves, roles, indices) stays resident as is."""
+
+    __slots__ = ("file_id", "sobs", "obs", "wld", "delta", "value")
 
     def __init__(self, file_id: int, sobs: SobsPosition):
         self.file_id = file_id
-        self.sobs = sobs
         self.wld, self.delta, self.value = sim_targets(sobs.obs)
+        self.obs = _PackedObs(sobs.obs)
+        # moves/roles arrive as field VIEWS whose .base is the position's full
+        # dense record buffer -- retaining them as is would pin every 35 KB
+        # record despite the emptied obs. Copy them into owning arrays so the
+        # buffer is actually released.
+        self.sobs = dataclasses.replace(
+            sobs,
+            moves=sobs.moves.copy(),
+            roles=sobs.roles.copy(),
+            obs=np.empty(0, dtype=_OBS_DTYPE),
+        )
 
 
 class TrajectoryDataset:
@@ -316,7 +367,8 @@ class TrajectoryDataset:
         masks = [mask for _, mask in units]
         spatial, scalar = self._board_inputs(positions)
         all_moves = np.concatenate([pos.sobs.moves for pos in positions])
-        all_obs = np.concatenate([pos.sobs.obs for pos in positions])
+        dense_obs = [pos.obs.densify() for pos in positions]
+        all_obs = np.concatenate(dense_obs)
         counts = [len(pos.sobs.moves) for pos in positions]
         pos_id = np.repeat(np.arange(len(units), dtype=np.int64), counts)
         slot = np.concatenate([np.arange(k, dtype=np.int64) for k in counts])
@@ -347,5 +399,10 @@ class TrajectoryDataset:
             "all_moves": all_moves,
             "all_obs": all_obs,
             "pre_move_diff": pre_diff_points,
-            "positions": [pos.sobs for pos in positions],
+            # Full SobsPositions, their obs re-attached from this batch's
+            # densified records (the retained sobs holds an emptied obs).
+            "positions": [
+                dataclasses.replace(pos.sobs, obs=obs)
+                for pos, obs in zip(positions, dense_obs, strict=True)
+            ],
         }
