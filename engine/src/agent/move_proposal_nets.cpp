@@ -1,14 +1,13 @@
-#include "agent/move_proposal_runtime.h"
+#include "agent/move_proposal_nets.h"
 
 #include "agent/evidence_staging.h"
 #include "encoding/input_encoder.h"
-#include "game/move.h"
 #include "nn/onnx_metadata.h"
-#include "sim/sim_runner.h"
 #include "util/exception.h"
 
-#include <cmath>
+#include <algorithm>
 #include <cstring>
+#include <utility>
 
 namespace scribblez {
 namespace agent {
@@ -54,22 +53,6 @@ void copy_rows(const float* src, int rows, int width, float* dst) {
   std::memcpy(dst, src, sizeof(float) * size_t(rows) * width);
 }
 
-// `rows` of a raw output head, softmax'd across each row's `width` floats.
-void softmax_rows(const float* src, int rows, int width, float* dst) {
-  for (int r = 0; r < rows; ++r) {
-    const float* in = src + size_t(r) * width;
-    float* out = dst + size_t(r) * width;
-    float m = in[0];
-    for (int i = 1; i < width; ++i) m = std::max(m, in[i]);
-    double sum = 0.0;
-    for (int i = 0; i < width; ++i) {
-      out[i] = std::exp(in[i] - m);
-      sum += out[i];
-    }
-    for (int i = 0; i < width; ++i) out[i] = float(out[i] / sum);
-  }
-}
-
 // The proposal_export_id metadata the exporter stamps into `onnx_path`, or ""
 // if the file carries none -- the fingerprint tying a cache graph to the step
 // graph exported from the same in-memory model.
@@ -83,7 +66,7 @@ std::string read_proposal_export_id(const std::string& onnx_path) {
 // movable, so its params must be built before the member init list runs).
 template <typename Spec>
 nn::NeuralNetParams<Spec> net_params_from(const std::string& onnx_path,
-                                          const MoveProposalRuntime::Params& p) {
+                                          const MoveProposalNets::Params& p) {
   nn::NeuralNetParams<Spec> np;
   np.onnx_path = onnx_path;
   np.cuda_device_id = p.cuda_device_id;
@@ -96,12 +79,44 @@ nn::NeuralNetParams<Spec> net_params_from(const std::string& onnx_path,
 
 }  // namespace
 
-MoveProposalRuntime::MoveProposalRuntime(const Params& params)
+void EvidenceSet::clear() {
+  moves.clear();
+  observations.clear();
+  scored_indices.clear();
+}
+
+void EvidenceSet::add(const Move& move, const SimObservation& observation, int scored_index) {
+  moves.push_back(move);
+  observations.push_back(observation);
+  scored_indices.push_back(scored_index);
+}
+
+MoveProposalNets::MoveProposalNets(const Params& params)
     : params_(params),
       cache_net_(net_params_from<MoveProposalCacheSpec>(params.cache_onnx_path, params)),
       step_net_(net_params_from<MoveProposalStepSpec>(params.step_onnx_path, params)) {}
 
-void MoveProposalRuntime::load() {
+std::shared_ptr<MoveProposalNets> MoveProposalNets::create(const Params& params) {
+  // Process-wide registry of the live shared pairs, keyed on the full
+  // engine-determining params. Held weakly, so a pair is freed once its last
+  // holder (a run's sessions) drops it; a later run rebuilds.
+  static std::mutex mutex;
+  static std::vector<std::pair<Params, std::weak_ptr<MoveProposalNets>>> registry;
+
+  std::lock_guard<std::mutex> lock(mutex);
+  std::erase_if(registry, [](const auto& entry) { return entry.second.expired(); });
+  for (const auto& [key, weak] : registry) {
+    if (key == params) {
+      if (std::shared_ptr<MoveProposalNets> live = weak.lock()) return live;
+    }
+  }
+  std::shared_ptr<MoveProposalNets> nets(new MoveProposalNets(params));
+  nets->load();
+  registry.emplace_back(params, nets);
+  return nets;
+}
+
+void MoveProposalNets::load() {
   cache_net_.load();
   step_net_.load();
 
@@ -130,20 +145,21 @@ void MoveProposalRuntime::load() {
   }
 }
 
-const MoveProposalPredictions& MoveProposalRuntime::encode(
-  const float* board_row, const move_set::MoveFeatureArrays& moves) {
+void MoveProposalNets::run_cache(const float* board_row, const move_set::MoveFeatureArrays& moves,
+                                 MoveProposalCache* cache) {
   const int m = moves.count;
-  if (m < 1) throw util::CleanException("MoveProposalRuntime::encode: empty candidate set");
+  if (m < 1) throw util::CleanException("MoveProposalNets::run_cache: empty candidate set");
+  std::lock_guard<std::mutex> lock(mutex_);
   const int c = cache_net_.channels();
   const int max_rows = cache_net_.max_rows();
 
-  num_moves_ = m;
-  cache_move_enc_.resize(size_t(m) * c);
-  cache_wld_.resize(size_t(m) * WldOutput::kRowElems);
-  cache_score_diff_.resize(size_t(m) * ScoreDiffOutput::kRowElems);
-  cache_planes_.resize(size_t(m) * PlanesOutput::kRowElems);
-  cache_board_.resize(size_t(kBoardCells) * c);
-  cache_g_.resize(size_t(3) * c);
+  cache->num_moves = m;
+  cache->move_enc.resize(size_t(m) * c);
+  cache->wld.resize(size_t(m) * WldOutput::kRowElems);
+  cache->score_diff.resize(size_t(m) * ScoreDiffOutput::kRowElems);
+  cache->planes.resize(size_t(m) * PlanesOutput::kRowElems);
+  cache->board.resize(size_t(kBoardCells) * c);
+  cache->g.resize(size_t(3) * c);
 
   // The board row splits into the two static board inputs once; the move
   // candidates ride the dynamic axis and are re-staged per chunk.
@@ -161,79 +177,64 @@ const MoveProposalPredictions& MoveProposalRuntime::encode(
     // board/g are static (one row, position-level): identical every chunk, so
     // retain them once. The M-indexed tensors are retained at the chunk offset.
     if (start == 0) {
-      copy_rows(cache_net_.host<nn::BoardHandoff>(), 1, kBoardCells * c, cache_board_.data());
-      copy_rows(cache_net_.host<nn::GHandoff>(), 1, 3 * c, cache_g_.data());
+      copy_rows(cache_net_.host<nn::BoardHandoff>(), 1, kBoardCells * c, cache->board.data());
+      copy_rows(cache_net_.host<nn::GHandoff>(), 1, 3 * c, cache->g.data());
     }
     copy_rows(cache_net_.host<nn::MoveEncHandoff>(), chunk, c,
-              cache_move_enc_.data() + size_t(start) * c);
+              cache->move_enc.data() + size_t(start) * c);
     copy_rows(cache_net_.host<WldOutput>(), chunk, WldOutput::kRowElems,
-              cache_wld_.data() + size_t(start) * WldOutput::kRowElems);
+              cache->wld.data() + size_t(start) * WldOutput::kRowElems);
     copy_rows(cache_net_.host<ScoreDiffOutput>(), chunk, ScoreDiffOutput::kRowElems,
-              cache_score_diff_.data() + size_t(start) * ScoreDiffOutput::kRowElems);
+              cache->score_diff.data() + size_t(start) * ScoreDiffOutput::kRowElems);
     copy_rows(cache_net_.host<PlanesOutput>(), chunk, PlanesOutput::kRowElems,
-              cache_planes_.data() + size_t(start) * PlanesOutput::kRowElems);
+              cache->planes.data() + size_t(start) * PlanesOutput::kRowElems);
   }
-
-  // The evidence-free predictions, decoded from the retained raw logits.
-  plain_.num_moves = m;
-  plain_.wld.resize(size_t(m) * WldOutput::kRowElems);
-  plain_.score_diff.resize(size_t(m) * ScoreDiffOutput::kRowElems);
-  plain_.planes.resize(size_t(m) * PlanesOutput::kRowElems);
-  plain_.gain.clear();  // the cache graph emits no gain head
-  softmax_rows(cache_wld_.data(), m, WldOutput::kRowElems, plain_.wld.data());
-  copy_rows(cache_score_diff_.data(), m, ScoreDiffOutput::kRowElems, plain_.score_diff.data());
-  // The graph already emits footprint probabilities (softmaxed slot-channel
-  // planes), so they pass through -- no sigmoid.
-  copy_rows(cache_planes_.data(), m, PlanesOutput::kRowElems, plain_.planes.data());
-  return plain_;
 }
 
-const MoveProposalPredictions& MoveProposalRuntime::condition(
-  std::span<const Move> moves, std::span<const SimObservation> observations,
-  std::span<const int> scored_indices) {
-  if (num_moves_ < 1) throw util::CleanException("MoveProposalRuntime::condition before encode");
-  const int m = num_moves_;
+void MoveProposalNets::run_step(const MoveProposalCache& cache, const EvidenceSet& evidence,
+                                MoveProposalPredictions* out) {
+  if (cache.num_moves < 1) {
+    throw util::CleanException("MoveProposalNets::run_step over an un-encoded position");
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  const int m = cache.num_moves;
   const int c = cache_net_.channels();
   const int max_rows = step_net_.max_rows();
 
   // Stage the evidence directly into the step graph's input buffers. The cache
   // predictions it gathers from are the retained full-M raw outputs.
-  const evidence::CachePredictions predictions{cache_move_enc_.data(), cache_wld_.data(),
-                                               cache_score_diff_.data(), cache_planes_.data(), c};
+  const evidence::CachePredictions predictions{cache.move_enc.data(), cache.wld.data(),
+                                               cache.score_diff.data(), cache.planes.data(), c};
   const evidence::EvidenceStagingOutputs staged{
     step_net_.host<nn::EvMoveEncInput>(), step_net_.host<nn::EvObsPlanesInput>(),
     step_net_.host<nn::EvObsScalarsInput>(), step_net_.host<nn::EvMaskInput>()};
-  evidence::stage_evidence(moves, observations, scored_indices, predictions, nn::kMaxEvidence,
-                           staged);
+  evidence::stage_evidence(evidence.moves, evidence.observations, evidence.scored_indices,
+                           predictions, nn::kMaxEvidence, staged);
 
   // The board/g handoff and the evidence set are position-level (static across
   // the candidate axis): staged once, re-sent with each chunk. move_enc rides
   // the dynamic axis, re-staged per chunk.
-  copy_rows(cache_board_.data(), 1, kBoardCells * c, step_net_.host<nn::BoardHandoff>());
-  copy_rows(cache_g_.data(), 1, 3 * c, step_net_.host<nn::GHandoff>());
+  copy_rows(cache.board.data(), 1, kBoardCells * c, step_net_.host<nn::BoardHandoff>());
+  copy_rows(cache.g.data(), 1, 3 * c, step_net_.host<nn::GHandoff>());
 
-  conditioned_.num_moves = m;
-  conditioned_.wld.resize(size_t(m) * WldOutput::kRowElems);
-  conditioned_.score_diff.resize(size_t(m) * ScoreDiffOutput::kRowElems);
-  conditioned_.planes.resize(size_t(m) * PlanesOutput::kRowElems);
-  conditioned_.gain.resize(size_t(m) * GainOutput::kRowElems);
+  out->num_moves = m;
+  out->wld.resize(size_t(m) * WldOutput::kRowElems);
+  out->score_diff.resize(size_t(m) * ScoreDiffOutput::kRowElems);
+  out->gain.resize(size_t(m) * GainOutput::kRowElems);
 
   for (int start = 0; start < m; start += max_rows) {
     const int chunk = std::min(max_rows, m - start);
-    copy_rows(cache_move_enc_.data() + size_t(start) * c, chunk, c,
+    copy_rows(cache.move_enc.data() + size_t(start) * c, chunk, c,
               step_net_.host<nn::MoveEncHandoff>());
     step_net_.predict(chunk);
 
-    softmax_rows(step_net_.host<WldOutput>(), chunk, WldOutput::kRowElems,
-                 conditioned_.wld.data() + size_t(start) * WldOutput::kRowElems);
+    copy_rows(step_net_.host<WldOutput>(), chunk, WldOutput::kRowElems,
+              out->wld.data() + size_t(start) * WldOutput::kRowElems);
     copy_rows(step_net_.host<ScoreDiffOutput>(), chunk, ScoreDiffOutput::kRowElems,
-              conditioned_.score_diff.data() + size_t(start) * ScoreDiffOutput::kRowElems);
-    copy_rows(step_net_.host<PlanesOutput>(), chunk, PlanesOutput::kRowElems,
-              conditioned_.planes.data() + size_t(start) * PlanesOutput::kRowElems);
+              out->score_diff.data() + size_t(start) * ScoreDiffOutput::kRowElems);
     copy_rows(step_net_.host<GainOutput>(), chunk, GainOutput::kRowElems,
-              conditioned_.gain.data() + size_t(start) * GainOutput::kRowElems);
+              out->gain.data() + size_t(start) * GainOutput::kRowElems);
   }
-  return conditioned_;
 }
 
 }  // namespace agent

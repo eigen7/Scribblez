@@ -1,11 +1,15 @@
 // Standalone sanity-check for the move proposal model's two-graph evidence-path
 // runtime (roadmap item 3) -- mset_infer_smoke's counterpart for the split
-// cache/step graphs. Loads a cache/step ONNX pair, runs the cache over a
-// synthetic candidate set, conditions on one synthetic evidence set, and prints
-// the plain and conditioned predictions.
+// cache/step graphs. Loads a cache/step ONNX pair as the shared
+// MoveProposalNets, opens `sessions` sessions over it, runs each over a
+// synthetic candidate set, conditions each on one synthetic evidence set, and
+// prints the plain and conditioned predictions plus what the whole thing cost:
+// the device memory the loaded pair took, and the host memory the sessions'
+// retained caches took.
 //
 // Usage:
-//   proposal_infer_smoke <cache.onnx> <step.onnx> [num_moves] [num_evidence] [FP32|FP16]
+//   proposal_infer_smoke <cache.onnx> <step.onnx> [num_moves] [num_evidence]
+//                        [FP32|FP16] [sessions] [max_rows]
 //
 // A successful run confirms the whole path end to end on a real checkpoint:
 // both ONNX parses and the cache/step compatibility check, two engine builds +
@@ -14,12 +18,16 @@
 // precision; FP16 is available as a spot check, with the fusion-graph caveat in
 // docs/fp16_safe_serving.md. The moves and observations are synthetic -- what a
 // Move/SimObservation encodes to has its own tests; this tool is about the
-// engine path.
+// engine path. The memory readouts are the numbers roadmap item 6's runtime
+// restructure was sized by: run at sessions=12 and the deployment num_moves to
+// see what a 12-thread match costs.
 
-#include "agent/move_proposal_runtime.h"
+#include "agent/move_proposal_nets.h"
+#include "agent/move_proposal_session.h"
 #include "game/glyph.h"
 #include "game/move.h"
 #include "game/tile.h"
+#include "nn/cuda_util.h"
 #include "nn/trt_util.h"
 #include "sim/sim_runner.h"
 #include "training/move_set_encoder.h"
@@ -27,14 +35,21 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
 
 using scribblez::Move;
 using scribblez::SimObservation;
+using scribblez::agent::EvidenceSet;
+using scribblez::agent::MoveProposalNets;
+using scribblez::agent::MoveProposalPredictions;
+using scribblez::agent::MoveProposalSession;
 
 // A candidate set spanning the shapes the model sees: plays of 1..7 tiles, and
 // every fifth candidate an exchange (tiles, no squares). Mirrors
@@ -83,55 +98,80 @@ SimObservation synthetic_observation(int j) {
   return obs;
 }
 
+// Evidence over the first `num_evidence` candidates (scattered indices would
+// do too; the parity test covers those).
+EvidenceSet synthetic_evidence(int num_evidence) {
+  EvidenceSet evidence;
+  for (int j = 0; j < num_evidence; ++j) {
+    const scribblez::Glyph g0 = scribblez::Glyph::of(scribblez::Tile::from_char('A'));
+    const scribblez::Glyph g1 = scribblez::Glyph::of(scribblez::Tile::from_char('B'));
+    const scribblez::Glyph played[] = {g0, g1};
+    evidence.add(Move::play(/*horizontal=*/true, /*start=*/7,
+                            /*square_mask=*/uint16_t((1 << 7) | (1 << 8)),
+                            /*score=*/uint16_t(20 + j), played, /*num_played=*/2),
+                 synthetic_observation(j), j);
+  }
+  return evidence;
+}
+
+// This process's resident set, in bytes, off /proc/self/statm.
+size_t resident_bytes() {
+  std::ifstream statm("/proc/self/statm");
+  size_t pages = 0, resident = 0;
+  statm >> pages >> resident;
+  return resident * size_t(sysconf(_SC_PAGESIZE));
+}
+
+double mib(size_t bytes) { return double(bytes) / (1024.0 * 1024.0); }
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::cerr << "Usage: " << argv[0]
-              << " <cache.onnx> <step.onnx> [num_moves] [num_evidence] [FP32|FP16]\n";
+              << " <cache.onnx> <step.onnx> [num_moves] [num_evidence] [FP32|FP16] [sessions] "
+                 "[max_rows]\n";
     return 1;
   }
 
   const int num_moves = std::max(argc > 3 ? std::atoi(argv[3]) : 12, 1);
   const int num_evidence = std::clamp(argc > 4 ? std::atoi(argv[4]) : 3, 0, num_moves);
   const std::string precision = argc > 5 ? argv[5] : "FP32";
+  const int num_sessions = std::max(argc > 6 ? std::atoi(argv[6]) : 1, 1);
 
   try {
-    scribblez::agent::MoveProposalRuntime::Params params;
+    MoveProposalNets::Params params;
     params.cache_onnx_path = argv[1];
     params.step_onnx_path = argv[2];
     params.precision = scribblez::nn::parse_precision(precision);
-    scribblez::agent::MoveProposalRuntime runtime(params);
-    runtime.load();
+    if (argc > 7) params.max_rows = std::max(std::atoi(argv[7]), 1);
+
+    const size_t device_before = scribblez::nn::device_memory_used();
+    std::shared_ptr<MoveProposalNets> nets = MoveProposalNets::create(params);
+    std::cout << "loaded pair (C=" << nets->channels() << ", E=" << nets->max_evidence()
+              << ", max_rows=" << nets->max_rows() << "): device memory +"
+              << mib(scribblez::nn::device_memory_used() - device_before) << " MiB\n";
 
     // An all-zero board row at the model's own width; the candidates are what
     // this tool varies.
     const size_t row_floats =
-      size_t(runtime.spatial_planes()) * scribblez::kBoardCells + runtime.scalar_floats();
+      size_t(nets->spatial_planes()) * scribblez::kBoardCells + nets->scalar_floats();
     const std::vector<float> board(row_floats, 0.0f);
     const scribblez::move_set::MoveFeatureArrays moves = synthetic_candidates(num_moves);
+    const EvidenceSet evidence = synthetic_evidence(num_evidence);
 
-    const auto& plain = runtime.encode(board.data(), moves);
-    std::cout << "encoded " << plain.num_moves << " candidates (C=" << runtime.channels()
-              << ", E=" << runtime.max_evidence() << ")\n";
-
-    // Evidence over the first `num_evidence` candidates (scattered indices would
-    // do too; the parity test covers those).
-    std::vector<Move> ev_moves;
-    std::vector<SimObservation> ev_obs;
-    std::vector<int> scored_indices;
-    for (int j = 0; j < num_evidence; ++j) {
-      const scribblez::Glyph g0 = scribblez::Glyph::of(scribblez::Tile::from_char('A'));
-      const scribblez::Glyph g1 = scribblez::Glyph::of(scribblez::Tile::from_char('B'));
-      const scribblez::Glyph played[] = {g0, g1};
-      ev_moves.push_back(Move::play(/*horizontal=*/true, /*start=*/7,
-                                    /*square_mask=*/uint16_t((1 << 7) | (1 << 8)),
-                                    /*score=*/uint16_t(20 + j), played, /*num_played=*/2));
-      ev_obs.push_back(synthetic_observation(j));
-      scored_indices.push_back(j);
+    const size_t host_before = resident_bytes();
+    std::vector<std::unique_ptr<MoveProposalSession>> sessions;
+    for (int s = 0; s < num_sessions; ++s) {
+      sessions.push_back(std::make_unique<MoveProposalSession>(nets));
+      sessions.back()->encode(board.data(), moves);
+      sessions.back()->condition(evidence);
     }
-    const auto& conditioned = runtime.condition(ev_moves, ev_obs, scored_indices);
+    std::cout << num_sessions << " session(s) x " << num_moves << " candidates: host memory +"
+              << mib(resident_bytes() - host_before) << " MiB\n";
 
+    const MoveProposalPredictions& plain = sessions.front()->encode(board.data(), moves);
+    const MoveProposalPredictions& conditioned = sessions.front()->condition(evidence);
     for (int m = 0; m < std::min(num_moves, 8); ++m) {
       const float* pw = plain.wld.data() + size_t(m) * 3;
       const float* cw = conditioned.wld.data() + size_t(m) * 3;

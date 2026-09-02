@@ -29,6 +29,10 @@ stream_t create_stream();
 void destroy_stream(stream_t stream);
 void synchronize_stream(stream_t stream);
 
+// Bytes of device memory in use on the current device (total minus free), for
+// a tool reporting what a loaded engine costs.
+size_t device_memory_used();
+
 void* device_malloc(size_t n_bytes);
 void device_free(void* ptr);
 

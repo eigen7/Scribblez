@@ -377,9 +377,18 @@ proves-best `gain` that the plain graph omits:
 | graph | run | inputs | outputs |
 |-------|-----|--------|---------|
 | `move_proposal_cache` | once per turn | board + `M` candidates | `board (1,225,C)`, `g (1,3C)`, `move_enc (M,C)`, plain `wld`, `score_diff`, `planes` |
-| `move_proposal_step` | per evidence-loop iteration | the cache tensors + a padded width-`E` evidence set | evidence-conditioned `wld`, `score_diff`, `planes`, `gain` |
+| `move_proposal_step` | per evidence-loop iteration | the cache tensors + a padded width-`E` evidence set | evidence-conditioned `wld`, `score_diff`, `gain` |
 
-The engine runtime for these graphs is `agent/move_proposal_runtime.h`
-(`NeuralNet<MoveProposalCacheSpec>` + `NeuralNet<MoveProposalStepSpec>`), served
+The step graph emits no `planes`: the predicted planes a simmed candidate's
+evidence token carries are the evidence-free ones, gathered from the cache
+graph's output, and nothing reads a conditioned plane — dropping the output
+saves an `M × 11,700`-float buffer per engine.
+
+The engine runtime for these graphs is `agent/move_proposal_nets.h` (the
+shared, serialized `NeuralNet<MoveProposalCacheSpec>` +
+`NeuralNet<MoveProposalStepSpec>` pair, one per run through
+`MoveProposalNets::create()`) driven through `agent/move_proposal_session.h`
+(one per consumer, holding the retained position), behind the GPU-free
+`agent/move_proposal_service.h` seam the loop consumers program against. Served
 at FP32 for item 3 and verified against `MoveSetEvalModel.forward` by
 `test_proposal_inference_parity.cpp`.
