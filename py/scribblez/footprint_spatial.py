@@ -32,6 +32,7 @@ from scribblez.ffi import format_layout
 _F = format_layout()["constants"]["footprint"]
 SIDE = _F["side"]  # 15
 SLOTS_PER_CELL = _F["slots_per_cell"]  # 13
+MAX_K = _F["max_k"]  # 7 (kFootprintMaxK: the largest tile count a slot encodes)
 ANCHORED = _F["anchored"]  # 2925
 NUM_CLASSES = _F["num_classes"]  # 2927
 PASS_CLASS = _F["pass_class"]  # 2925

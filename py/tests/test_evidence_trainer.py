@@ -33,6 +33,36 @@ from test_evidence_trajectories import traj_corpus  # noqa: F401  (fixture)
 from test_move_set_eval_evidence import _synthetic_sobs
 
 
+def test_packed_obs_round_trips_records_exactly():
+    """The dataset's sparse retention (_PackedObs) must rebuild the verbatim
+    .sobs records: retaining the near-empty 2927-wide histograms dense is what
+    would blow trainer RAM at corpus scale, and any lossy repack would corrupt
+    the observed half of every evidence token."""
+    _, obs = _synthetic_sobs(3)
+    rng = np.random.default_rng(0)
+    for name in ("opp_next_count", "self_next_count"):
+        obs[name][:] = 0
+        obs[name][rng.random(obs[name].shape) < 0.02] = 7
+    obs["opp_win_count"][:] = obs["opp_next_count"] * 0.5
+    obs["self_win_count"][:] = 0.0
+    dense = ED._PackedObs(obs).densify()
+    assert dense.dtype == obs.dtype
+    assert dense.tobytes() == obs.tobytes()
+
+
+def test_dataset_retains_obs_sparse_but_batches_carry_dense_records(traj_datasets):
+    """_TrajPosition empties its SobsPosition's dense records (the RAM guard),
+    while every batch's `positions` re-attach obs rows identical to `all_obs`."""
+    train, _ = traj_datasets
+    assert all(len(pos.sobs.obs) == 0 for pos in train._positions)
+    batch = next(train.iter_batches(4, seed=0))
+    offset = 0
+    for pos in batch["positions"]:
+        k = len(pos.moves)
+        assert pos.obs.tobytes() == batch["all_obs"][offset : offset + k].tobytes()
+        offset += k
+
+
 def test_sim_targets_and_gain():
     _, obs = _synthetic_sobs(4)
     obs["wins"][:] = [20, 30, 10, 30]

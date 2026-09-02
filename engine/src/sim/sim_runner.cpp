@@ -131,26 +131,6 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
   stage_horizon_leaf(pos, candidate, log, game, *leaf_spec, batcher, slot);
 }
 
-// Fold one rollout into the candidate's observation. Terminal rollouts
-// contribute exact integers; truncated rollouts contribute fractional values,
-// which run() reduces in a fixed order (see there for why order matters).
-void accumulate(const RolloutResult& o, SimObservation* obs) {
-  ++obs->n;
-  obs->wins += o.p_win;
-  obs->draws += o.p_draw;
-  obs->losses += o.p_loss;
-  obs->delta_sum += o.delta;
-  obs->delta_sq_sum += o.delta_sq;
-
-  // One footprint class per move (the opponent wins iff the mover loses).
-  const int opp_cls = footprint_class(o.opp_reply, /*flip=*/false);
-  ++obs->opp_next_count[opp_cls];
-  obs->opp_win_count[opp_cls] += float(o.p_loss);
-  const int self_cls = footprint_class(o.self_next, /*flip=*/false);
-  ++obs->self_next_count[self_cls];
-  obs->self_win_count[self_cls] += float(o.p_win);
-}
-
 // Worker t: plays rollout indices {t, t+threads, ...} of EVERY candidate (the
 // per-index seed is shared across candidates -- the CRN scheme) into the flat
 // results array at slot = candidate * rollouts + index. Owns its rollout
@@ -196,6 +176,26 @@ void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& app
 }
 
 }  // namespace
+
+// Terminal rollouts contribute exact integers; truncated rollouts contribute
+// fractional values, which run() reduces in a fixed order (see there for why
+// order matters).
+void accumulate_rollout(const RolloutResult& o, SimObservation* obs) {
+  ++obs->n;
+  obs->wins += o.p_win;
+  obs->draws += o.p_draw;
+  obs->losses += o.p_loss;
+  obs->delta_sum += o.delta;
+  obs->delta_sq_sum += o.delta_sq;
+
+  // One footprint class per move (the opponent wins iff the mover loses).
+  const int opp_cls = footprint_class(o.opp_reply, /*flip=*/false);
+  ++obs->opp_next_count[opp_cls];
+  obs->opp_win_count[opp_cls] += float(o.p_loss);
+  const int self_cls = footprint_class(o.self_next, /*flip=*/false);
+  ++obs->self_next_count[self_cls];
+  obs->self_win_count[self_cls] += float(o.p_win);
+}
 
 void LeafBatcher::add(size_t slot, bool root_pov) {
   pending_.push_back({slot, root_pov});
@@ -398,7 +398,7 @@ std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
   std::vector<SimObservation> out(candidates.size());
   for (size_t c = 0; c < out.size(); ++c)
     for (int i = 0; i < params.rollouts; ++i)
-      accumulate(results[c * size_t(params.rollouts) + size_t(i)], &out[c]);
+      accumulate_rollout(results[c * size_t(params.rollouts) + size_t(i)], &out[c]);
   return out;
 }
 

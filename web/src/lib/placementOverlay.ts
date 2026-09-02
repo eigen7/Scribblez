@@ -5,9 +5,8 @@
 // for the Positions tab's collapsed view, "is anchored at this square" for the
 // Trajectories pane's marginals. Monte-Carlo rollouts give an empirical
 // ground-truth probability for the same event. This module turns one head's
-// (truth, pred) pair, plus
-// a display mode, into a per-cell "halo" -- a ring color plus a hover
-// tooltip -- that a caller hands to <Board cellHalos=... />.
+// (truth, pred) pair, plus a display mode, into a per-cell "halo" -- a ring
+// color plus a hover tooltip -- that a caller hands to <Board cellHalos=... />.
 //
 // Every mode uses a fixed, absolute color scale: a cell's color depth (an
 // opaque white-to-hue blend) is a function of its raw value and a fixed cap,

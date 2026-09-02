@@ -4201,6 +4201,61 @@ TEST(SimRunner, Basic) {
   fs::remove_all(tmp);
 }
 
+// accumulate_rollout buckets each rollout move at footprint_class(move,
+// flip=false) in the right histogram: opp_reply in the opp counts weighted by
+// p_loss, self_next in the self counts weighted by p_win, a PASS in the pass
+// catch-all. This pins the field routing, frame, and slot encoding exactly --
+// the per-class invariants the SimRunner tests assert (win <= next <= n,
+// 0-or-n) would also hold under a swapped opp/self wiring or a flipped frame,
+// so only a hand-computed class can catch those.
+TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
+  const Glyph g[3] = {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
+                      Glyph::of(Tile::from_char('C'))};
+  RolloutResult r;
+  // Opp reply: horizontal, 2 tiles at row 3, cols 6-7 -> anchor (3,6), slot 1.
+  r.opp_reply = Move::play(/*horizontal=*/true, /*start=*/3,
+                           /*square_mask=*/uint16_t((1 << 6) | (1 << 7)), /*score=*/10, g, 2);
+  // Self next: vertical, 3 tiles at col 5, rows 2-4 -> anchor (2,5), slot
+  // kFootprintMaxK + (3 - 2).
+  r.self_next = Move::play(/*horizontal=*/false, /*start=*/5,
+                           /*square_mask=*/uint16_t((1 << 2) | (1 << 3) | (1 << 4)),
+                           /*score=*/15, g, 3);
+  r.p_win = 0.25;
+  r.p_draw = 0.25;
+  r.p_loss = 0.5;
+  r.delta = 7.0;
+  r.delta_sq = 53.0;
+
+  SimObservation obs;
+  accumulate_rollout(r, &obs);
+  const int opp_cls = (3 * BOARD_SIZE + 6) * kSlotsPerCell + 1;
+  const int self_cls = (2 * BOARD_SIZE + 5) * kSlotsPerCell + (kFootprintMaxK + 1);
+  EXPECT_EQ(obs.opp_next_count[opp_cls], 1);
+  EXPECT_FLOAT_EQ(obs.opp_win_count[opp_cls], 0.5f);  // the p_loss side
+  EXPECT_EQ(obs.self_next_count[self_cls], 1);
+  EXPECT_FLOAT_EQ(obs.self_win_count[self_cls], 0.25f);  // the p_win side
+  // Exactly one class fired per histogram.
+  int64_t opp_total = 0, self_total = 0;
+  for (int i = 0; i < SimObservation::kClasses; ++i) {
+    opp_total += obs.opp_next_count[i];
+    self_total += obs.self_next_count[i];
+  }
+  EXPECT_EQ(opp_total, 1);
+  EXPECT_EQ(self_total, 1);
+
+  // A 1-tile play is the orientation-free slot 0 whichever axis it declares,
+  // and a missing move (default Move = PASS) buckets into the pass catch-all.
+  RolloutResult r2;
+  r2.opp_reply = Move::play(/*horizontal=*/false, /*start=*/9,
+                            /*square_mask=*/uint16_t(1 << 4), /*score=*/4, g, 1);
+  r2.p_win = 1.0;
+  accumulate_rollout(r2, &obs);
+  EXPECT_EQ(obs.opp_next_count[(4 * BOARD_SIZE + 9) * kSlotsPerCell + 0], 1);
+  EXPECT_EQ(obs.self_next_count[kPassClass], 1);
+  EXPECT_EQ(int(obs.n), 2);
+  EXPECT_DOUBLE_EQ(obs.wins, 1.25);
+}
+
 // Constant-output leaf stub for value-truncation tests: every horizon row
 // reads WLD (0.7, 0.1, 0.2) and predicted final delta +100 from the horizon
 // MOVER's POV, so the root-POV flip at odd horizons is exactly checkable.

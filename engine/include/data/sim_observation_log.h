@@ -16,7 +16,7 @@
 //   [SimObsFileHeader                       144 B]
 //   For each position p in [0, num_positions):
 //     [SimObsPositionHeader                  32 B]
-//     [SimObsRecord   num_candidates(p)    2761 B each]
+//     [SimObsRecord   num_candidates(p)   35185 B each]
 //
 // A position is identified by (game_index, turn_index) within the companion
 // .slog file. Records store the exact Move alongside its observation, the

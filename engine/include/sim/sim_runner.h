@@ -139,6 +139,13 @@ struct RolloutResult {
   double delta_sq = 0;  // (predicted) second moment of the final delta
 };
 
+// Fold one rollout into the candidate's observation: outcome and delta
+// moments accumulate, and each move's footprint class (unflipped frame)
+// buckets the placement histograms -- opp_reply into the opp counts weighted
+// by p_loss (the opponent wins iff the mover loses), self_next into the self
+// counts weighted by p_win.
+void accumulate_rollout(const RolloutResult& o, SimObservation* obs);
+
 // One rollout worker's staging for horizon leaf evaluations: encoded rows
 // are buffered, flushed through the (shared) leaf service in chunks, and the
 // decoded scoring heads written back into the pending slots' results,

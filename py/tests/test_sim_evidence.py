@@ -14,12 +14,15 @@ import torch
 from scribblez.dataset import row_layout
 from scribblez.evidence.dataset import TrajectoryDataset
 from scribblez.ffi import decode_rows, get_input_shapes, row_size_floats
-from scribblez.footprint_spatial import SLOTS_PER_CELL
+from scribblez.footprint_spatial import PASS_CLASS, SLOTS_PER_CELL
 from scribblez.sim_evidence.model import NUM_EVIDENCE_PLANES, EvidencePositionEvalModel
 from scribblez.sim_evidence.sobs import (
     _FILE_HEADER,
+    MOVE_EXCHANGE,
+    MOVE_PASS,
     MOVE_PLAY,
     NUM_EVIDENCE_SCALARS,
+    RECORD_DTYPE,
     SOBS_FLAG_TRAJECTORY,
     SOBS_MAGIC,
     SOBS_VERSION,
@@ -128,6 +131,48 @@ def test_sobs_positions_decode_as_training_rows(sobs_dir):
     start, end = next((s, e) for name, s, e, _ in targets if name == "wld")
     wld = rows[:, start:end]
     assert np.all(wld.sum(axis=1) == 1.0)
+
+
+def _play_record(horizontal: bool, start: int, along0: int, k: int) -> np.void:
+    """One MOVE_DTYPE play of `k` contiguous tiles: lane `start`, first placed
+    lane cell `along0`."""
+    move = np.zeros(1, dtype=RECORD_DTYPE["move"])[0]
+    move["type"] = MOVE_PLAY
+    move["horizontal"] = int(horizontal)
+    move["start"] = start
+    move["square_mask"] = sum(1 << (along0 + t) for t in range(k))
+    move["num_played"] = k
+    move["glyphs"][:k] = 1
+    return move
+
+
+def test_move_footprint_class_matches_the_footprint_layout():
+    """Hand-computed classes across orientations and tile counts, pinning the
+    numpy mirror of the C++ footprint_class: slot 0 is the orientation-free
+    k==1 footprint, 1..6 horizontal k=2..7, 7..12 vertical k=2..7, and
+    class = (r*15 + c)*13 + slot at the anchor (first placed square). The
+    C++/Python parity test crosses the two implementations end to end; this
+    pins the layout directly, case by case."""
+    max_k = (SLOTS_PER_CELL + 1) // 2  # 7
+    cases = [
+        # (horizontal, start, along0, k) -> (anchor r, anchor c, slot)
+        (True, 3, 6, 1, 3, 6, 0),
+        (False, 6, 3, 1, 3, 6, 0),  # k==1 is orientation-free: same class
+        (True, 3, 6, 2, 3, 6, 1),
+        (True, 0, 0, 7, 0, 0, 6),  # horizontal slots run 1..6
+        (False, 5, 2, 2, 2, 5, max_k),  # vertical base
+        (False, 5, 2, 3, 2, 5, max_k + 1),
+        (False, 14, 8, 7, 8, 14, 2 * max_k - 2),  # last slot, 12
+    ]
+    for horizontal, start, along0, k, r, c, slot in cases:
+        move = _play_record(horizontal, start, along0, k)
+        expected = (r * 15 + c) * SLOTS_PER_CELL + slot
+        assert move_footprint_class(move) == expected, (horizontal, start, along0, k)
+    # Non-plays map to the pass catch-all.
+    for mtype in (MOVE_EXCHANGE, MOVE_PASS):
+        move = np.zeros(1, dtype=RECORD_DTYPE["move"])[0]
+        move["type"] = mtype
+        assert move_footprint_class(move) == PASS_CLASS
 
 
 def test_move_footprint_and_features(sobs_dir):

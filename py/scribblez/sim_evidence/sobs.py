@@ -16,6 +16,7 @@ import numpy as np
 from scribblez.ffi import format_layout, struct_dtype
 from scribblez.footprint_spatial import (
     ANCHORED,
+    MAX_K,
     PASS_CLASS,
     SLOTS_PER_CELL,
     to_slot_planes,
@@ -208,10 +209,6 @@ def move_footprint(move: np.void) -> np.ndarray:
     return plane
 
 
-# kFootprintMaxK: the largest tile count a footprint slot encodes (RACK_SIZE).
-_FOOTPRINT_MAX_K = (SLOTS_PER_CELL + 1) // 2
-
-
 def move_footprint_class(move: np.void) -> int:
     """The footprint class of a MOVE_DTYPE record in the unflipped frame --
     the numpy mirror of the C++ footprint_class (training/footprint.h):
@@ -228,7 +225,7 @@ def move_footprint_class(move: np.void) -> int:
     if k <= 1:
         slot = 0
     else:
-        slot = (1 if horizontal else _FOOTPRINT_MAX_K) + (k - 2)
+        slot = (1 if horizontal else MAX_K) + (k - 2)
     return (r * BOARD + c) * SLOTS_PER_CELL + slot
 
 

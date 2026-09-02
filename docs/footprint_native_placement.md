@@ -63,8 +63,11 @@ for one of them:
   against a real histogram when `.sobs` v5 exists (BC2).
   *[BC2 deviation: stored **dense** after all. Keeping `SimObservation` a
   verbatim fixed-stride POD avoids the format rewrite entirely (a version bump
-  over the same layout machinery); the ~13× size is accepted, and a sparse
-  re-encode stays open as a later, purely mechanical change.]*
+  over the same layout machinery); the ~13× size is accepted on disk, and a
+  sparse re-encode stays open as a later, purely mechanical change. The 13×
+  must NOT reach trainer-resident RAM, though — a precedent-scale corpus held
+  dense is ~58 GiB on a 62 GB host — so `TrajectoryDataset` repacks the four
+  histograms sparse at absorb and densifies per batch (`_PackedObs`).]*
 
 `k` (where used) is a **format constant**, not a runtime tunable. The project
 carries no backwards-compatibility burden, so each format commits to one encoding
@@ -102,13 +105,12 @@ path.]*
 
 ## Predicted placement at serving is unmasked
 
-Today the evidence path feeds `footprint_cell_marginal(plane_logits)` — pure
-arithmetic, no Board or Dictionary in `evidence_staging`. The footprint-native path feeds the
-**unmasked** footprint softmax (or raw logits), **not** a board-legality-masked
-distribution, so staging stays free of the masking machinery and there is no
-per-candidate mask on the serving hot path. The board-legality mask remains a
-**training-target** concern only (the teacher target and the student's masked
-softmax-CE), exactly where it lives today.
+The evidence path feeds the **unmasked** footprint softmax
+(`footprint_slot_planes`: softmax over all classes, catch-all dropped, reshaped
+to slot channels) — pure arithmetic, no Board or Dictionary in
+`evidence_staging`, and no per-candidate mask on the serving hot path. The
+board-legality mask remains a **training-target** concern only (the teacher
+target and the student's masked softmax-CE), exactly where it lives today.
 
 ## The evidence path: one design fork
 
