@@ -120,10 +120,8 @@ inline constexpr int kLaneLabelFloats =
 // Flatten `t` into the kLaneLabelFloats-long label region at `out`, zero-filling
 // the occupancy of empty lanes.
 //
-// `flip` applies the diagonal symmetry, keeping the labels aligned with a
-// flipped input. A transpose turns each horizontal lane into the vertical lane
-// of the same index and back, preserving the along-lane cell position, so it is
-// exactly a rows<->cols swap.
-void encode_lane_targets(const LaneTargets& t, bool flip, float* out);
+// The targets of a transposed board (Board::transpose) come out with rows and
+// cols exchanged, so the symmetry augmentation needs nothing here.
+void encode_lane_targets(const LaneTargets& t, float* out);
 
 }  // namespace scribblez

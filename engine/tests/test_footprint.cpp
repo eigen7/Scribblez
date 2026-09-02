@@ -46,21 +46,19 @@ std::array<uint8_t, 27> available_of(const std::string& letters) {
 
 bool opp_admits(const Board& b, const std::array<uint8_t, 27>& available_counts, int cls) {
   FootprintMask m;
-  opp_footprint_mask(b, available_counts.data(), RACK_SIZE, /*flip=*/false, /*win_head=*/false, m);
+  opp_footprint_mask(b, available_counts.data(), RACK_SIZE, /*win_head=*/false, m);
   return m[cls];
 }
 
-// A move's placed squares (board frame), transposed when `flip`.
-CellSet placed_set(const Move& m, bool flip) {
+CellSet placed_set(const Move& m) {
   CellSet s;
-  visit_placed_squares(m,
-                       [&](int r, int c) { s.insert(flip ? std::pair{c, r} : std::pair{r, c}); });
+  visit_placed_squares(m, [&](int r, int c) { s.insert({r, c}); });
   return s;
 }
 
-CellSet cells_set(int cls, const Board& b, bool flip) {
+CellSet cells_set(int cls, const Board& b) {
   std::array<std::pair<int, int>, kFootprintMaxK> cells{};
-  const int n = footprint_cells(cls, b, flip, cells);
+  const int n = footprint_cells(cls, b, cells);
   return CellSet(cells.begin(), cells.begin() + n);
 }
 
@@ -73,18 +71,19 @@ TEST(Footprint, ClassCountAndCatchAlls) {
 }
 
 TEST(Footprint, NonPlayIsPassClass) {
-  EXPECT_EQ(footprint_class(Move::pass(), false), kPassClass);
-  EXPECT_EQ(footprint_class(Move::pass(), true), kPassClass);
+  EXPECT_EQ(footprint_class(Move::pass()), kPassClass);
+  EXPECT_EQ(footprint_class(Move::pass().transpose()), kPassClass);
 }
 
-TEST(Footprint, RoundTripEmptyBoardBothFlips) {
+TEST(Footprint, RoundTripEmptyBoardBothFrames) {
   Board b;
   Glyph played[3] = {G(0), G(1), G(2)};
   const uint16_t mask = (1u << 5) | (1u << 6) | (1u << 7);  // cols 5,6,7 of row 7
   const Move m = Move::play(true, 7, mask, 0, played, 3);
-  for (bool flip : {false, true}) {
-    const int cls = footprint_class(m, flip);
-    EXPECT_EQ(cells_set(cls, b, flip), placed_set(m, flip)) << "flip=" << flip;
+  for (bool transposed : {false, true}) {
+    const Board bt = transposed ? b.transpose() : b;
+    const Move mt = transposed ? m.transpose() : m;
+    EXPECT_EQ(cells_set(footprint_class(mt), bt), placed_set(mt)) << "transposed=" << transposed;
   }
 }
 
@@ -92,8 +91,8 @@ TEST(Footprint, SingleTileIsOrientationFree) {
   Glyph played[1] = {G(0)};
   const Move horiz = Move::play(true, 7, (1u << 5), 0, played, 1);  // lone tile at (7,5)
   const Move vert = Move::play(false, 5, (1u << 7), 0, played, 1);  // same square, other axis
-  EXPECT_EQ(footprint_class(horiz, false), footprint_class(vert, false));
-  EXPECT_EQ(footprint_class(horiz, false), (7 * 15 + 5) * kSlotsPerCell + 0);
+  EXPECT_EQ(footprint_class(horiz), footprint_class(vert));
+  EXPECT_EQ(footprint_class(horiz), (7 * 15 + 5) * kSlotsPerCell + 0);
 }
 
 TEST(Footprint, ThroughTileSkipped) {
@@ -102,16 +101,17 @@ TEST(Footprint, ThroughTileSkipped) {
   Glyph played[2] = {G(0), G(1)};
   const Move m = Move::play(true, 7, (1u << 5) | (1u << 7), 0, played, 2);  // threads col 6
   const CellSet expect = {{7, 5}, {7, 7}};
-  EXPECT_EQ(cells_set(footprint_class(m, false), b, false), expect);
+  EXPECT_EQ(cells_set(footprint_class(m), b), expect);
 }
 
-TEST(Footprint, FlipSwapsOrientation) {
+TEST(Footprint, TransposeSwapsOrientation) {
   Glyph played[3] = {G(0), G(1), G(2)};
   const Move m = Move::play(true, 7, (1u << 5) | (1u << 6) | (1u << 7), 0, played, 3);
-  // Unflipped: anchor (7,5), horizontal, k=3.
-  EXPECT_EQ(footprint_class(m, false), (7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2)));
-  // Flipped: anchor transposes to (5,7), orientation becomes vertical.
-  EXPECT_EQ(footprint_class(m, true), (5 * 15 + 7) * kSlotsPerCell + (kFootprintMaxK + (3 - 2)));
+  // Natural frame: anchor (7,5), horizontal, k=3.
+  EXPECT_EQ(footprint_class(m), (7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2)));
+  // Transposed: the anchor moves to (5,7) and the orientation becomes vertical.
+  EXPECT_EQ(footprint_class(m.transpose()),
+            (5 * 15 + 7) * kSlotsPerCell + (kFootprintMaxK + (3 - 2)));
 }
 
 TEST(Footprint, ImpossibleClassOnBoardReturnsZero) {
@@ -119,13 +119,13 @@ TEST(Footprint, ImpossibleClassOnBoardReturnsZero) {
   b.set(7, 5, G(4));  // occupy the anchor
   std::array<std::pair<int, int>, kFootprintMaxK> cells{};
   const int occupied_anchor = (7 * 15 + 5) * kSlotsPerCell + 0;
-  EXPECT_EQ(footprint_cells(occupied_anchor, b, false, cells), 0);
+  EXPECT_EQ(footprint_cells(occupied_anchor, b, cells), 0);
   // A horizontal k=7 anchored too close to the right edge cannot fit.
   const int off_edge = (7 * 15 + 12) * kSlotsPerCell + (1 + (7 - 2));
-  EXPECT_EQ(footprint_cells(off_edge, b, false, cells), 0);
+  EXPECT_EQ(footprint_cells(off_edge, b, cells), 0);
   // Catch-all classes cover no cells.
-  EXPECT_EQ(footprint_cells(kPassClass, b, false, cells), 0);
-  EXPECT_EQ(footprint_cells(kExtraClass, b, false, cells), 0);
+  EXPECT_EQ(footprint_cells(kPassClass, b, cells), 0);
+  EXPECT_EQ(footprint_cells(kExtraClass, b, cells), 0);
 }
 
 int count_true(const FootprintMask& m) {
@@ -141,7 +141,7 @@ int count_true(const FootprintMask& m) {
 TEST(FootprintMask, EmptyBoardGeometryAndBudget) {
   Board b;
   FootprintMask m;
-  opp_footprint_mask(b, /*available_counts=*/nullptr, /*tile_budget=*/7, /*flip=*/false,
+  opp_footprint_mask(b, /*available_counts=*/nullptr, /*tile_budget=*/7,
                      /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);    // horizontal k=3 fits
   EXPECT_FALSE(m[(7 * 15 + 12) * kSlotsPerCell + (1 + (7 - 2))]);  // horizontal k=7 off the edge
@@ -153,7 +153,7 @@ TEST(FootprintMask, EmptyBoardGeometryAndBudget) {
 TEST(FootprintMask, WinHeadKeepsNotWinSlot) {
   Board b;
   FootprintMask m;
-  opp_footprint_mask(b, /*available_counts=*/nullptr, 7, false, /*win_head=*/true, m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, 7, /*win_head=*/true, m);
   EXPECT_TRUE(m[kExtraClass]);
   EXPECT_EQ(count_true(m), 2295 + 2);  // + pass + not-win
 }
@@ -161,17 +161,46 @@ TEST(FootprintMask, WinHeadKeepsNotWinSlot) {
 TEST(FootprintMask, BudgetCapsK) {
   Board b;
   FootprintMask m;
-  opp_footprint_mask(b, /*available_counts=*/nullptr, /*tile_budget=*/2, false, false, m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, /*tile_budget=*/2, /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (2 - 2))]);   // k=2 within budget
   EXPECT_FALSE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);  // k=3 over budget
 }
 
-TEST(FootprintMask, FlipMarksFlippedClassLegal) {
+// The class of a footprint's transpose: the anchor cell transposes and a
+// multi-tile slot moves between the horizontal and vertical blocks.
+int transposed_class(int cls) {
+  const int cell = cls / kSlotsPerCell;
+  const int slot = cls % kSlotsPerCell;
+  int tslot = slot;
+  if (slot >= kFootprintMaxK) {
+    tslot = slot - (kFootprintMaxK - 1);
+  } else if (slot >= 1) {
+    tslot = slot + (kFootprintMaxK - 1);
+  }
+  const int r = cell / kFootprintSide;
+  const int c = cell % kFootprintSide;
+  return (c * kFootprintSide + r) * kSlotsPerCell + tslot;
+}
+
+// The mask of the transposed board is the transposed mask, class for class --
+// through the cross-check caches Board::transpose hands over.
+TEST(FootprintMask, TransposedBoardMaskIsTheTransposedMask) {
   Board b;
-  FootprintMask m;
-  opp_footprint_mask(b, /*available_counts=*/nullptr, 7, /*flip=*/true, false, m);
-  // The flip image of horizontal k=3 at (7,5) is vertical k=3 at (5,7).
-  EXPECT_TRUE(m[(5 * 15 + 7) * kSlotsPerCell + (kFootprintMaxK + (3 - 2))]);
+  b.set(6, 7, G(0));  // 'A' above (7,7): a hook constraint that breaks the symmetry
+  b.set(9, 2, G(2));
+  const Dictionary d = Dictionary::build_from_words({"AX", "AY", "CAT"});
+  b.ensure_movegen_caches(d);
+  const std::array<uint8_t, 27> avail = available_of("CATXY");
+  FootprintMask m, mt;
+  opp_footprint_mask(b, avail.data(), 7, /*win_head=*/false, m);
+  opp_footprint_mask(b.transpose(), avail.data(), 7, /*win_head=*/false, mt);
+  int legal = 0;
+  for (int cls = 0; cls < kAnchoredFootprints; ++cls) {
+    legal += m[cls];
+    EXPECT_EQ(mt[transposed_class(cls)], m[cls]) << "cls=" << cls;
+  }
+  EXPECT_GT(legal, 0);
+  EXPECT_LT(legal, kAnchoredFootprints);
 }
 
 // The opp mask gates a covered square's hook letters by availability: a footprint
@@ -188,7 +217,7 @@ TEST(FootprintMask, AvailabilityGatesHookLetters) {
   // Horizontal 2-tile footprint covering (7,7) [hook {X,Y}] and (7,8) [free].
   Glyph played[2] = {G(23), G(23)};  // placed letters are irrelevant to the mask
   const uint16_t sq = (1u << 7) | (1u << 8);
-  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 2), /*flip=*/false);
+  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 2));
 
   EXPECT_TRUE(opp_admits(b, available_of("XY"), cls));    // both hooks in stock
   EXPECT_TRUE(opp_admits(b, available_of("YE"), cls));    // one legal hook (Y) suffices
@@ -200,7 +229,7 @@ TEST(FootprintMask, AvailabilityGatesHookLetters) {
 
   // Null availability disables the gate -- pure board legality readmits it.
   FootprintMask m;
-  opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, false, false, m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, /*win_head=*/false, m);
   EXPECT_TRUE(m[cls]);
 }
 
@@ -214,7 +243,7 @@ TEST(FootprintMask, AvailabilityEmptyMasksEverything) {
   b.ensure_movegen_caches(d);
   Glyph played[2] = {G(23), G(23)};
   const uint16_t sq = (1u << 7) | (1u << 8);
-  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 2), /*flip=*/false);
+  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 2));
   EXPECT_FALSE(opp_admits(b, available_of(""), cls));  // nothing to place at all
 }
 
@@ -238,7 +267,7 @@ TEST(FootprintMask, AvailabilityGatesLoneTileHook) {
 
   // Board legality only (null availability) still admits it -- some letter (X/Y) exists.
   FootprintMask m;
-  opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, false, false, m);
+  opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, /*win_head=*/false, m);
   EXPECT_TRUE(m[lone]);
 }
 
@@ -276,7 +305,7 @@ TEST(SelfFootprintMask, ReachabilityFromStructure) {
   b.set(7, 7, G(4));  // a lone tile: the only structure to bridge from
   FootprintMask m;
   // opp_budget=1, self_budget=1 -> combined reach 2 tiles.
-  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, /*flip=*/false, /*win=*/false, m);
+  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, /*win=*/false, m);
   // (7,8) is one empty step from the tile: d=1 <= 2 -> a k=1 footprint is legal.
   EXPECT_TRUE(m[(7 * 15 + 8) * kSlotsPerCell + 0]);
   // (7,10) is three empty steps away: d=3 > 2 -> unreachable.
@@ -291,9 +320,9 @@ TEST(SelfFootprintMask, CombinedBudgetWidensReach) {
   b.set(7, 7, G(4));
   FootprintMask m;
   const int far = (7 * 15 + 10) * kSlotsPerCell + 0;  // d=3 from the tile
-  self_footprint_mask(b, 1, 1, false, false, m);      // reach 2 -> out
+  self_footprint_mask(b, 1, 1, /*win_head=*/false, m);      // reach 2 -> out
   EXPECT_FALSE(m[far]);
-  self_footprint_mask(b, 2, 1, false, false, m);  // reach 3 -> in
+  self_footprint_mask(b, 2, 1, /*win_head=*/false, m);  // reach 3 -> in
   EXPECT_TRUE(m[far]);
 }
 
@@ -301,7 +330,7 @@ TEST(SelfFootprintMask, BudgetCapsK) {
   Board b;
   b.set(7, 4, G(4));  // structure so nearby cells are reachable
   FootprintMask m;
-  self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/7, false, false, m);
+  self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/7, /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (2 - 2))]);   // k=2 within budget
   EXPECT_FALSE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);  // k=3 over budget
 }
@@ -309,7 +338,7 @@ TEST(SelfFootprintMask, BudgetCapsK) {
 TEST(SelfFootprintMask, EmptyBoardTreatsAllReachable) {
   Board b;  // no structure -> game-start guard marks everything reachable
   FootprintMask m;
-  self_footprint_mask(b, 7, 7, false, false, m);
+  self_footprint_mask(b, 7, 7, /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 7) * kSlotsPerCell + 0]);
   EXPECT_EQ(count_true(m), 2295 + 1);  // every fitting footprint reachable + pass
 }
@@ -334,7 +363,7 @@ void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
   for (const ParsedGcgTurn& turn : game.turns) {
     const Move& m = turn.record.move;
     if (m.type() == MoveType::PLAY) {
-      const int cls = footprint_class(m, /*flip=*/false);
+      const int cls = footprint_class(m);
       if (dict) {
         // Availability the mover of `m` could draw from: everything off the board
         // (the loosest sound pool -- a superset of any one rack, so it can never
@@ -343,13 +372,12 @@ void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
         uint8_t available_counts[27];
         compute_unseen_pool(available_counts, board, Rack{});
         FootprintMask opp;
-        opp_footprint_mask(board, available_counts, RACK_SIZE, /*flip=*/false, /*win_head=*/false,
-                           opp);
+        opp_footprint_mask(board, available_counts, RACK_SIZE, /*win_head=*/false, opp);
         EXPECT_TRUE(opp[cls]) << "opp mask excluded a real move (class " << cls << ")";
       }
       if (two_plies_ago) {
         FootprintMask self;
-        self_footprint_mask(*two_plies_ago, RACK_SIZE, RACK_SIZE, false, false, self);
+        self_footprint_mask(*two_plies_ago, RACK_SIZE, RACK_SIZE, /*win_head=*/false, self);
         EXPECT_TRUE(self[cls]) << "self mask excluded a real move (class " << cls << ")";
       }
     }
@@ -393,13 +421,12 @@ TEST(FootprintCollapse, MassLandsOnCoveredCells) {
   // target -- covers (7,5), (7,6), (7,7).
   Glyph played[3] = {G(0), G(1), G(2)};
   const uint16_t sq = (1u << 5) | (1u << 6) | (1u << 7);
-  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 3), /*flip=*/false);
+  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 3));
 
   std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
   raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next); dwarfs the rest
   std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
-  collapse_footprint_planes(b, d, /*available_counts=*/nullptr, /*flip=*/false, raw.data(),
-                            out.data());
+  collapse_footprint_planes(b, d, /*available_counts=*/nullptr, raw.data(), out.data());
 
   const float* plane = out.data();  // head 0
   const auto cell = [&](int r, int c) { return plane[r * kFootprintSide + c]; };
@@ -425,14 +452,13 @@ TEST(FootprintCollapse, IllegalFootprintGetsNoMass) {
 
   Glyph played[3] = {G(0), G(1), G(2)};
   const uint16_t sq = (1u << 12) | (1u << 13) | (1u << 14);
-  const int illegal = footprint_class(Move::play(true, 14, sq, 0, played, 3), /*flip=*/false);
+  const int illegal = footprint_class(Move::play(true, 14, sq, 0, played, 3));
   ASSERT_LT(illegal, kAnchoredFootprints);
 
   std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
   raw[1 * kFootprintClasses + illegal] = 20.0f;  // head 1 (self_next); would dominate unmasked
   std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
-  collapse_footprint_planes(b, d, /*available_counts=*/nullptr, /*flip=*/false, raw.data(),
-                            out.data());
+  collapse_footprint_planes(b, d, /*available_counts=*/nullptr, raw.data(), out.data());
 
   const float* self_plane = out.data() + 1 * kFootprintSide * kFootprintSide;
   EXPECT_LT(self_plane[14 * kFootprintSide + 12], 0.01f);
@@ -461,19 +487,19 @@ TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
 
   Glyph played[2] = {G(23), G(23)};
   const uint16_t sq = (1u << 7) | (1u << 8);
-  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 2), /*flip=*/false);
+  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 2));
 
   std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
   raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next); dwarfs the rest
   std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
 
   const std::array<uint8_t, 27> with_y = available_of("YE");
-  collapse_footprint_planes(b, d, with_y.data(), /*flip=*/false, raw.data(), out.data());
+  collapse_footprint_planes(b, d, with_y.data(), raw.data(), out.data());
   const float lit = out[7 * kFootprintSide + 7];
   EXPECT_GT(lit, 0.9f);  // Y available -> the dominant hook lands on (7,7)
 
   const std::array<uint8_t, 27> no_y = available_of("EIO");  // letters, but no Y, no blank
-  collapse_footprint_planes(b, d, no_y.data(), /*flip=*/false, raw.data(), out.data());
+  collapse_footprint_planes(b, d, no_y.data(), raw.data(), out.data());
   const float gated = out[7 * kFootprintSide + 7];
   EXPECT_LT(gated, 0.05f);       // the 20-logit footprint no longer reaches (7,7)
   EXPECT_LT(gated, lit * 0.1f);  // ... a >10x drop vs. when its hook was available
@@ -489,13 +515,12 @@ TEST(FootprintCollapse, MaskedDistributionsAreLegalSoftmaxes) {
   const Dictionary d = Dictionary::build_from_words({"CAT"});
   Glyph played[3] = {G(0), G(1), G(2)};
   const uint16_t sq = (1u << 5) | (1u << 6) | (1u << 7);
-  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 3), /*flip=*/false);
+  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 3));
 
   std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
   raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next) dominant
   std::vector<float> dist(kPlacementHeads * kFootprintClasses, 0.0f);
-  masked_placement_distributions(b, d, /*available_counts=*/nullptr, /*flip=*/false, raw.data(),
-                                 dist.data());
+  masked_placement_distributions(b, d, /*available_counts=*/nullptr, raw.data(), dist.data());
 
   EXPECT_GT(dist[cls], 0.99f);  // the dominant legal footprint takes ~all head 0's mass
   for (int h = 0; h < kPlacementHeads; ++h) {  // each head is a legal-class distribution
@@ -516,15 +541,14 @@ TEST(FootprintReachable, EmptyBoardCoversEverythingAndNullIsFullStock) {
   b.ensure_movegen_caches(d);
 
   std::vector<float> null_pool(kFootprintCells, -1.0f);
-  footprint_reachable_cells(b, /*available_counts=*/nullptr, kMaskTileBudget, /*flip=*/false,
-                            null_pool.data());
+  footprint_reachable_cells(b, /*available_counts=*/nullptr, kMaskTileBudget, null_pool.data());
   for (int i = 0; i < kFootprintCells; ++i) EXPECT_EQ(null_pool[i], 1.0f) << "cell " << i;
 
   // A null pool is "everything in stock" -> identical to a full-count array.
   std::array<uint8_t, 27> all_stock;
   all_stock.fill(9);
   std::vector<float> full_pool(kFootprintCells, -1.0f);
-  footprint_reachable_cells(b, all_stock.data(), kMaskTileBudget, /*flip=*/false, full_pool.data());
+  footprint_reachable_cells(b, all_stock.data(), kMaskTileBudget, full_pool.data());
   EXPECT_EQ(null_pool, full_pool);
 }
 
@@ -544,7 +568,7 @@ TEST(FootprintReachable, OccupancyAndAvailabilityGateCells) {
 
   const auto reach_at = [&](const std::array<uint8_t, 27>& pool, int r, int c) {
     std::vector<float> plane(kFootprintCells, -1.0f);
-    footprint_reachable_cells(b, pool.data(), kMaskTileBudget, /*flip=*/false, plane.data());
+    footprint_reachable_cells(b, pool.data(), kMaskTileBudget, plane.data());
     return plane[r * kFootprintSide + c];
   };
 
@@ -558,10 +582,10 @@ TEST(FootprintReachable, OccupancyAndAvailabilityGateCells) {
   EXPECT_EQ(reach_at(no_y, 14, 14), 1.0f);  // ... but the corner, needing no specific letter, stays
 }
 
-// The plane is expressed in the flip frame, so reachability under the diagonal
-// flip is the transpose of reachability without it -- the invariant the input
-// encoder's spatial planes all share.
-TEST(FootprintReachable, FlipIsTheTranspose) {
+// Reachability on the transposed board is the transpose of reachability on the
+// board -- the invariant the input encoder's spatial planes all share. The caches
+// were built on `b`, so this also exercises Board::transpose's cache hand-over.
+TEST(FootprintReachable, TransposedBoardIsTheTranspose) {
   Board b;
   b.set(3, 5, G(1));  // an asymmetric bit of structure so the transpose is non-trivial
   b.set(9, 2, G(2));
@@ -570,8 +594,8 @@ TEST(FootprintReachable, FlipIsTheTranspose) {
   const std::array<uint8_t, 27> pool = available_of("CATY");
 
   std::vector<float> normal(kFootprintCells, 0.0f), flipped(kFootprintCells, 0.0f);
-  footprint_reachable_cells(b, pool.data(), kMaskTileBudget, /*flip=*/false, normal.data());
-  footprint_reachable_cells(b, pool.data(), kMaskTileBudget, /*flip=*/true, flipped.data());
+  footprint_reachable_cells(b, pool.data(), kMaskTileBudget, normal.data());
+  footprint_reachable_cells(b.transpose(), pool.data(), kMaskTileBudget, flipped.data());
   for (int r = 0; r < kFootprintSide; ++r)
     for (int c = 0; c < kFootprintSide; ++c)
       EXPECT_EQ(flipped[r * kFootprintSide + c], normal[c * kFootprintSide + r]) << r << "," << c;

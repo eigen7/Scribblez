@@ -359,7 +359,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
   ref.board().ensure_movegen_caches(dict);
   GameStateEncoder post = ref;
   post.apply_move(candidate);
-  post.encode_input(my_seat, leave_after(my_rack, candidate), /*apply_flip=*/false, ref_row.data());
+  post.encode_input(my_seat, leave_after(my_rack, candidate), ref_row.data());
 
   for (size_t i = 0; i < agent_row.size(); ++i)
     ASSERT_EQ(agent_row[i], ref_row[i]) << "input float " << i;
@@ -396,7 +396,7 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
 
   std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn, initial_scores);
 
-  // Training path: decode the post-move sampled row (no symmetry flip). The
+  // Training path: decode the post-move sampled row (no symmetry transpose). The
   // same dictionary drives both paths' cross-check planes.
   Dictionary dict = medium_dict();
   binlog::BlockDecoder dec(InputEncodingSpec{&dict});

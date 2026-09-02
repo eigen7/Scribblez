@@ -81,9 +81,9 @@ void MsetSimAgent::encode_board_row(const MoveRequest& req, float* dst) const {
   // prior move, and this is its turn.
   const int me = encoder_.active_player();
   if (spec_.opp_leave_input) {
-    encoder_.encode_input(me, req.my_rack, req.opp_rack, /*apply_flip=*/false, dst);
+    encoder_.encode_input(me, req.my_rack, req.opp_rack, dst);
   } else {
-    encoder_.encode_input(me, req.my_rack, /*apply_flip=*/false, dst);
+    encoder_.encode_input(me, req.my_rack, dst);
   }
 }
 

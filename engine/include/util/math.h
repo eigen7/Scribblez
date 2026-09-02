@@ -39,12 +39,6 @@ class SoftmaxSampler {
   std::vector<double> weights_;
 };
 
-// Linear index of cell (r, c) in a row-major side x side grid, reflected
-// across the main diagonal when `transpose`.
-constexpr int plane_index(int r, int c, int side, bool transpose) {
-  return transpose ? (c * side + r) : (r * side + c);
-}
-
 // Row/column deltas of the four orthogonal neighbors: up, down, left, right.
 constexpr std::array<std::pair<int, int>, 4> kFourNeighborDeltas = {
   {{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};

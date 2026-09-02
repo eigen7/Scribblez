@@ -434,7 +434,7 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
 
   const std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn, initial_scores);
 
-  // Training path: decode the PRE-move sampled row (no symmetry flip). The same
+  // Training path: decode the PRE-move sampled row (no symmetry transpose). The same
   // dictionary drives both paths' cross-check planes.
   Dictionary dict = opening_dict();
   binlog::BlockDecoder dec(InputEncodingSpec{&dict});

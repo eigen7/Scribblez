@@ -4,6 +4,7 @@
 #include "game/tile.h"
 #include "game/tile_counts.h"
 #include "lexicon/dictionary.h"
+#include "util/assert.h"
 #include "util/exception.h"
 #include "util/math.h"
 
@@ -64,6 +65,7 @@ Board::Board() {
 void Board::apply(const Move& move) { apply(move, nullptr); }
 
 void Board::apply(const Move& move, BoardUndo* undo) {
+  DEBUG_ASSERT(move.transposed() == transposed_);
   if (undo) {
     undo->clear();
     undo->prev_caches_valid = caches_valid_;
@@ -113,6 +115,20 @@ void Board::unapply(const BoardUndo& undo) {
     sq = it->old;
   }
   caches_valid_ = undo.prev_caches_valid;
+}
+
+Board Board::transpose() const {
+  Board out = *this;
+  for (int r = 0; r < BOARD_SIZE; ++r)
+    for (int c = 0; c < BOARD_SIZE; ++c) out.squares_[c * BOARD_SIZE + r] = at(r, c);
+  // A cache entry in this board's transposed view is the same entry in the
+  // transposed board's natural view, and vice versa.
+  out.cross_[0] = cross_[1];
+  out.cross_[1] = cross_[0];
+  out.ganchor_[0] = ganchor_[1];
+  out.ganchor_[1] = ganchor_[0];
+  out.transposed_ = !transposed_;
+  return out;
 }
 
 void Board::set_cross_(int transposed, int idx, const CrossCheck& cc) const {

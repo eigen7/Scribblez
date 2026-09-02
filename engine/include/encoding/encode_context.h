@@ -21,12 +21,12 @@ struct EncodeContext {
   const Rack* pov_rack = nullptr;
   Rack opp_known_leave{};
   int active_player = 0;
-  bool apply_flip = false;  // transpose spatial planes/labels across the diagonal
 
   InputEncodingSpec spec{nullptr};
 
-  // Each player's next move from the sampled snapshot onward, and the game's
-  // final scores. A move past the end of the game leaves its has_* flag false.
+  // Each player's next move from the sampled snapshot onward, in `enc`'s board
+  // frame (see Board::transpose), and the game's final scores. A move past the
+  // end of the game leaves its has_* flag false.
   Move opp_next_move{};
   bool has_opp_next_move = false;
   Move self_next_move{};

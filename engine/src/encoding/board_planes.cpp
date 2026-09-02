@@ -1,7 +1,6 @@
 #include "encoding/board_planes.h"
 
 #include "game/glyph.h"
-#include "util/math.h"
 
 namespace scribblez {
 
@@ -21,10 +20,10 @@ int premium_offset(Premium p) {
 
 }  // namespace
 
-void BoardPlanes::encode(const Board& board, bool flip, float* planes_out) {
+void BoardPlanes::encode(const Board& board, float* planes_out) {
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
-      const int idx = util::plane_index(r, c, BOARD_SIZE, flip);
+      const int idx = r * BOARD_SIZE + c;
 
       const Glyph g = board.at(r, c);
       if (!g.is_empty()) {

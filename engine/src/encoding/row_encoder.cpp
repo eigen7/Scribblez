@@ -22,8 +22,8 @@ class PositionEvalRowEncoder : public RowEncoder {
     return pick_sampled_turn(view, rng);
   }
 
-  void encode(const GameLog& view, int turn, bool flip, float* dest) override {
-    pos_.encode_row<PositionEvalTask>(view, turn, post_move_, flip, dest);
+  void encode(const GameLog& view, int turn, bool transpose, float* dest) override {
+    pos_.encode_row<PositionEvalTask>(view, turn, post_move_, transpose, dest);
   }
 
  private:
@@ -44,8 +44,8 @@ class MaxMovePerLaneRowEncoder : public RowEncoder {
     return pick_any_turn(view, rng);
   }
 
-  void encode(const GameLog& view, int turn, bool flip, float* dest) override {
-    pos_.encode_row<MaxMovePerLaneTask>(view, turn, /*post_move=*/false, flip, dest);
+  void encode(const GameLog& view, int turn, bool transpose, float* dest) override {
+    pos_.encode_row<MaxMovePerLaneTask>(view, turn, /*post_move=*/false, transpose, dest);
   }
 
  private:

@@ -313,8 +313,7 @@ void plane_worker(const std::vector<PlaneJob>* jobs, const Dictionary* dict,
     // -> board-legality only), matching the retired per-cell collapse's regime, so
     // no per-candidate unseen pool is plumbed here; the student learns the
     // availability belief from the teacher's zeros, and serving is unmasked anyway.
-    masked_placement_distributions(post.board(), *dict, /*available_counts=*/nullptr,
-                                   /*flip=*/false, j.raw, j.out);
+    masked_placement_distributions(post.board(), *dict, /*available_counts=*/nullptr, j.raw, j.out);
   }
 }
 
@@ -438,7 +437,7 @@ void InferenceLoop::flush() {
   }
   // Mask-softmax every candidate's raw footprint logits into the per-head footprint
   // distribution the .mset stores (the post-move board is rebuilt in the frame the
-  // row was encoded in, unflipped), parallelized off this thread.
+  // row was encoded in, the natural frame), parallelized off this thread.
   run_plane_jobs(jobs, dict_, plane_threads_);
   for (CandidateSlice& p : pending_) {
     // Free the encoded rows now that they are consumed; done_ accumulates a

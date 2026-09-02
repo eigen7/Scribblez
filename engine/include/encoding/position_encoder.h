@@ -41,14 +41,18 @@ class PositionEncoder {
   int replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move);
 
   // Replay and write one full training row for `Task` -- Task::kInputFloats
-  // input floats then Task::kLabelFloats label floats. `flip` applies the
-  // diagonal symmetry. Replay and context are task-independent, only the final
-  // encode differs, so one encoder serves every task.
+  // input floats then Task::kLabelFloats label floats. `transpose` applies the
+  // diagonal symmetry: the replayed state is transposed as a whole (board, last
+  // moves, next moves) and then encoded like any other position, so no encoder
+  // or target knows about the augmentation. Replay and context are
+  // task-independent, only the final encode differs, so one encoder serves
+  // every task.
   template <typename Task>
-  void encode_row(const GameLog& g, int sampled_turn, bool post_move, bool flip, float* out_row);
+  void encode_row(const GameLog& g, int sampled_turn, bool post_move, bool transpose,
+                  float* out_row);
 
   // Replay, then encode the input once per integer score differential in
-  // [diff_lo, diff_hi], writing that many input tensors (no labels, no flip)
+  // [diff_lo, diff_hi], writing that many input tensors (no labels, natural frame)
   // contiguously to `out`. Post-move task only.
   void encode_score_diff_sweep(const GameLog& g, int sampled_turn, bool post_move, int diff_lo,
                                int diff_hi, float* out);
@@ -63,9 +67,9 @@ class PositionEncoder {
  private:
   // The replayed state plus the game-outcome fields and the lexicon; a task
   // reads only what it needs. `post_move` must match the replay's snapshot
-  // kind, selecting which upcoming turn is the mover's own next move.
-  EncodeContext make_context(const GameLog& g, int sampled_turn, int mover, bool post_move,
-                             bool flip) const;
+  // kind, selecting which upcoming turn is the mover's own next move. The next
+  // moves are brought into the replayed board's frame.
+  EncodeContext make_context(const GameLog& g, int sampled_turn, int mover, bool post_move) const;
 
   InputEncodingSpec spec_;
   GameStateEncoder enc_;

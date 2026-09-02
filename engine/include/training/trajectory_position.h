@@ -31,7 +31,7 @@ bool read_trajectory_decision(const std::string& gcg_text, const Dictionary& dic
                               TrajectoryDecision* out, std::string* error);
 
 // The mover's pre-move board input row under `spec` (input_floats(spec) floats
-// into `out`, no symmetry flip) and the pre-move score differential. Replays
+// into `out`, no symmetry transpose) and the pre-move score differential. Replays
 // the recorded moves into a fresh GameStateEncoder, as the generator does, so
 // the row is the one the student was trained on for this position.
 // spec.opp_leave_input must agree with the open_leaves the decision was read

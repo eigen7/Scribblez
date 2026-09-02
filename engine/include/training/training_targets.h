@@ -43,9 +43,9 @@ struct ScoreDiffTarget {
 // The four placement targets are the FOOTPRINT CLASS INDEX of a next move (see
 // training/footprint.h) -- a single class in [0, kFootprintClasses), stored as a
 // float and read back as the label for a masked softmax-CE head, replacing the
-// former per-cell Bernoulli maps. Emitted in the (optionally diagonally flipped)
-// `apply_flip` frame the input encoder used, so the class stays aligned with the
-// spatial planes. Each is paired with a legality mask target below.
+// former per-cell Bernoulli maps. The next move must be in the sampled board's
+// frame (asserted), so the class stays aligned with the spatial planes. Each is
+// paired with a legality mask target below.
 //
 // PLAYS heads (opp_next, self_next): the played footprint, or kPassClass for an
 // absent / EXCHANGE / PASS move. WIN heads (opp_win, self_win): the conjunction
@@ -54,7 +54,7 @@ struct ScoreDiffTarget {
 // the head is a proper distribution over {footprints} u {pass} u {not-win}.
 
 struct OppNextPlacementTarget {
-  // The opponent's next move as a footprint class, in the `apply_flip` frame.
+  // The opponent's next move as a footprint class.
   static constexpr const char* kName = "opp_next_placement";
   static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);

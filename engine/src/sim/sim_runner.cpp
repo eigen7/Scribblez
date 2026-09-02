@@ -86,10 +86,9 @@ void stage_horizon_leaf(const SimPosition& pos, const Move& candidate, const Gam
   const int horizon_mover = log.records[log.num_records - 1].player;
   float* row = batcher->next_row();
   if (leaf_spec.opp_leave_input) {
-    enc.encode_input(horizon_mover, game.leave(horizon_mover), game.leave(1 - horizon_mover),
-                     /*apply_flip=*/false, row);
+    enc.encode_input(horizon_mover, game.leave(horizon_mover), game.leave(1 - horizon_mover), row);
   } else {
-    enc.encode_input(horizon_mover, game.leave(horizon_mover), /*apply_flip=*/false, row);
+    enc.encode_input(horizon_mover, game.leave(horizon_mover), row);
   }
   batcher->add(slot, horizon_mover == pos.mover);
 }
@@ -188,10 +187,10 @@ void accumulate_rollout(const RolloutResult& o, SimObservation* obs) {
   obs->delta_sum += o.delta;
   obs->delta_sq_sum += o.delta_sq;
 
-  const int opp_cls = footprint_class(o.opp_reply, /*flip=*/false);
+  const int opp_cls = footprint_class(o.opp_reply);
   ++obs->opp_next_count[opp_cls];
   obs->opp_win_count[opp_cls] += float(o.p_loss);
-  const int self_cls = footprint_class(o.self_next, /*flip=*/false);
+  const int self_cls = footprint_class(o.self_next);
   ++obs->self_next_count[self_cls];
   obs->self_win_count[self_cls] += float(o.p_win);
 }

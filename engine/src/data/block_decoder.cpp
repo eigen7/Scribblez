@@ -56,7 +56,7 @@ GameLog BlockDecoder::game_view(const char* buf, uint32_t game_idx, uint32_t* sa
 }
 
 void BlockDecoder::decode(const char* buf, const std::string& path, int64_t local_start,
-                          int64_t n_rows, const uint8_t* flips, bool post_move,
+                          int64_t n_rows, const uint8_t* transposes, bool post_move,
                           int64_t output_row_start, float* output) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf);
   if (hdr->magic != kMagic) {
@@ -73,13 +73,13 @@ void BlockDecoder::decode(const char* buf, const std::string& path, int64_t loca
     const uint32_t game_idx = local_start + i;
     uint32_t sampled = 0;
     const GameLog g = game_view(buf, game_idx, &sampled);
-    pos_.encode_row<PositionEvalTask>(g, int(sampled), post_move, flips[i] != 0,
+    pos_.encode_row<PositionEvalTask>(g, int(sampled), post_move, transposes[i] != 0,
                                       output + (output_row_start + i) * row_floats_);
   }
 }
 
 void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t game_idx,
-                              uint32_t turn_idx, bool flip, bool post_move, int64_t output_row,
+                              uint32_t turn_idx, bool transpose, bool post_move, int64_t output_row,
                               float* output) {
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf);
   if (hdr->magic != kMagic) {
@@ -96,9 +96,9 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
   // The lane task encodes the pre-move position (its labels come from enumerating
   // legal moves at the position), so it ignores the caller's post_move flag.
   if (task_ == DecodeTask::kMaxMovePerLane) {
-    pos_.encode_row<MaxMovePerLaneTask>(g, int(turn_idx), /*post_move=*/false, flip, out);
+    pos_.encode_row<MaxMovePerLaneTask>(g, int(turn_idx), /*post_move=*/false, transpose, out);
   } else {
-    pos_.encode_row<PositionEvalTask>(g, int(turn_idx), post_move, flip, out);
+    pos_.encode_row<PositionEvalTask>(g, int(turn_idx), post_move, transpose, out);
   }
 }
 

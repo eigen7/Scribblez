@@ -103,10 +103,24 @@ class Board {
   // Placed tiles currently on the board; every square write maintains it.
   int num_tiles() const { return num_tiles_; }
 
+  // The frame this board is expressed in: the game's natural frame (false) or
+  // its diagonal transpose (true). Not to be confused with the `transposed`
+  // VIEW argument of the move-generation caches below, which picks a scanning
+  // orientation within whichever frame the board is in.
+  bool transposed() const { return transposed_; }
+
+  // This board reflected across the main diagonal, (r,c) -> (c,r), with the
+  // frame bit toggled -- the training symmetry augmentation. The premium
+  // layout is diagonally symmetric, so the result is a legal position that
+  // scores identically. The move-generation caches carry over by swapping
+  // their two view orientations, so nothing is recomputed.
+  Board transpose() const;
+
   Premium premium_at(int r, int c) const { return PREMIUM[r * BOARD_SIZE + c]; }
 
-  // Place the move's new tiles. Valid move-generation caches are updated
-  // incrementally; stale ones are left for a later ensure_movegen_caches().
+  // Place the move's new tiles; the move must be in this board's frame
+  // (asserted). Valid move-generation caches are updated incrementally; stale
+  // ones are left for a later ensure_movegen_caches().
   void apply(const Move& move);
 
   // As apply(move), but recording enough in `undo` for unapply() to restore the
@@ -174,6 +188,7 @@ class Board {
 
   std::array<Glyph, BOARD_SIZE * BOARD_SIZE> squares_{};
   int num_tiles_ = 0;
+  bool transposed_ = false;
 
   // Mutable so const accessors can lazily build the caches; `dict_` is
   // non-owning and outlives the board.

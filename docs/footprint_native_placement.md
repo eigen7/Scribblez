@@ -30,10 +30,11 @@ their spatial shape and gain a 13-slot channel axis. The shared primitive is
 `py/scribblez/footprint_spatial.py` (`to_spatial`/`from_spatial`, the sparse
 codec); the C++ mirror lands with its first writer.
 
-**Frame invariant (load-bearing):** every placement path is pinned to the
-unflipped (`flip=false`) frame. A diagonal transpose swaps rows↔cols **and** the
-horizontal↔vertical slot channels, so the *slot axis* — not only H/W — permutes
-under a flip. Any future flipped consumer must permute the 13 channels too.
+**Frame invariant (load-bearing):** every placement path is pinned to the game's
+natural frame (no symmetry transpose). A diagonal transpose swaps rows↔cols
+**and** the horizontal↔vertical slot channels, so the *slot axis* — not only H/W
+— permutes under a transpose. Any future transposed consumer must permute the 13
+channels too.
 
 ## Storage: sparse vs. dense, per format
 

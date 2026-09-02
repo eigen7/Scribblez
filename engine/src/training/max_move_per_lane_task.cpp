@@ -6,10 +6,10 @@ namespace scribblez {
 
 void MaxMovePerLaneTask::encode_row(const EncodeContext& ctx, float* out_row) {
   const Board& board = ctx.enc->board();
-  MaxMovePerLaneInputEncoder::encode(board, *ctx.pov_rack, ctx.apply_flip, out_row);
+  MaxMovePerLaneInputEncoder::encode(board, *ctx.pov_rack, out_row);
 
   const LaneTargets targets = compute_lane_targets(board, *ctx.pov_rack, *ctx.spec.dict);
-  encode_lane_targets(targets, ctx.apply_flip, out_row + kInputFloats);
+  encode_lane_targets(targets, out_row + kInputFloats);
 }
 
 }  // namespace scribblez

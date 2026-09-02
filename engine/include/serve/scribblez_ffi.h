@@ -104,7 +104,7 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
                                int* played_rank);
 
 // Row j is the position at (game_idx[j], turn_idx[j]), encoded exactly like a
-// DataLoader training row but with no symmetry flip; `out` takes n rows of
+// DataLoader training row but with no symmetry transpose; `out` takes n rows of
 // scribblez_row_size_floats(). Returns 0 on success, -1 on an I/O / header
 // error.
 //
@@ -165,7 +165,7 @@ int scribblez_dump_position_json(ScribblezSession* s, const char* path, int64_t 
 // Parse a GCG file's text into its max-move-per-lane analysis position (the board
 // after all recorded moves, the on-move player, and that player's #Rack), then:
 //   - if `out_input` is non-null, fill it with the model input tensor
-//     (MaxMovePerLaneInputEncoder, no flip): scribblez_max_move_per_lane_input_floats()
+//     (MaxMovePerLaneInputEncoder): scribblez_max_move_per_lane_input_floats()
 //     floats;
 //   - emit the lane-analysis JSON (board + ground-truth per-lane targets and
 //     maximal plays) into `out_json` (NUL-terminated, truncated to out_cap).

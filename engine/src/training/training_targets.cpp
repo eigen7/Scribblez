@@ -2,6 +2,7 @@
 
 #include "encoding/game_state_encoder.h"
 #include "training/footprint_mask.h"
+#include "util/assert.h"
 
 #include <cstdint>
 
@@ -27,38 +28,41 @@ void ScoreDiffTarget::encode(const EncodeContext& v, float* out) {
 
 namespace {
 
-// A plays head's target: the footprint class of `m` in the flip frame, or
-// kPassClass when the move is absent (footprint_class already maps EXCHANGE /
-// PASS to kPassClass).
-float plays_class(const Move& m, bool has_move, bool flip) {
-  return float(has_move ? footprint_class(m, flip) : kPassClass);
+// A plays head's target: the footprint class of `m`, or kPassClass when the
+// move is absent (footprint_class already maps EXCHANGE / PASS to kPassClass).
+// `m` must be in the sampled board's frame, or the class would name the
+// transposed square.
+float plays_class(const EncodeContext& v, const Move& m, bool has_move) {
+  if (!has_move) return float(kPassClass);
+  DEBUG_ASSERT(m.transposed() == v.enc->board().transposed());
+  return float(footprint_class(m));
 }
 
 // A win head's target: the played footprint class if `seat_won` (the same class
 // the plays head would emit), else kExtraClass -- the "not-win" outcome that
 // makes {footprints} u {pass} u {not-win} a proper distribution.
-float win_class(const Move& m, bool has_move, bool seat_won, bool flip) {
-  return seat_won ? plays_class(m, has_move, flip) : float(kExtraClass);
+float win_class(const EncodeContext& v, const Move& m, bool has_move, bool seat_won) {
+  return seat_won ? plays_class(v, m, has_move) : float(kExtraClass);
 }
 
 }  // namespace
 
 void OppNextPlacementTarget::encode(const EncodeContext& v, float* out) {
-  out[0] = plays_class(v.opp_next_move, v.has_opp_next_move, v.apply_flip);
+  out[0] = plays_class(v, v.opp_next_move, v.has_opp_next_move);
 }
 
 void SelfNextPlacementTarget::encode(const EncodeContext& v, float* out) {
-  out[0] = plays_class(v.self_next_move, v.has_self_next_move, v.apply_flip);
+  out[0] = plays_class(v, v.self_next_move, v.has_self_next_move);
 }
 
 void OppWinPlacementTarget::encode(const EncodeContext& v, float* out) {
   const bool opp_won = v.final_opp() > v.final_active();
-  out[0] = win_class(v.opp_next_move, v.has_opp_next_move, opp_won, v.apply_flip);
+  out[0] = win_class(v, v.opp_next_move, v.has_opp_next_move, opp_won);
 }
 
 void SelfWinPlacementTarget::encode(const EncodeContext& v, float* out) {
   const bool self_won = v.final_active() > v.final_opp();
-  out[0] = win_class(v.self_next_move, v.has_self_next_move, self_won, v.apply_flip);
+  out[0] = win_class(v, v.self_next_move, v.has_self_next_move, self_won);
 }
 
 // ---------- placement legality-mask targets -----------------------------
@@ -97,7 +101,7 @@ void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
     available_ptr = available_counts;
   }
   FootprintMask mask;
-  opp_footprint_mask(board, available_ptr, kMaskTileBudget, v.apply_flip, /*win_head=*/false, mask);
+  opp_footprint_mask(board, available_ptr, kMaskTileBudget, /*win_head=*/false, mask);
   write_mask(mask, out);
 }
 
@@ -106,8 +110,7 @@ void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
 // over-approximation from the sampled board.
 void SelfPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
   FootprintMask mask;
-  self_footprint_mask(v.enc->board(), kMaskTileBudget, kMaskTileBudget, v.apply_flip,
-                      /*win_head=*/false, mask);
+  self_footprint_mask(v.enc->board(), kMaskTileBudget, kMaskTileBudget, /*win_head=*/false, mask);
   write_mask(mask, out);
 }
 

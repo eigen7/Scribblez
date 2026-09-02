@@ -75,6 +75,7 @@ void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
   append_bytes(&buffer_, &ph, sizeof(ph));
   std::array<uint8_t, kPlaneWidth> quantized;
   for (size_t c = 0; c < candidates.size(); ++c) {
+    DEBUG_ASSERT(!candidates[c].transposed());  // on-disk moves are natural-frame
     append_bytes(&buffer_, &candidates[c], sizeof(Move));
     append_bytes(&buffer_, targets.data() + c * record_floats_, sizeof(float) * record_floats_);
     // Scales first, then the quantized planes, so each stays a contiguous

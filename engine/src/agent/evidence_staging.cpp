@@ -56,7 +56,7 @@ void stage_planes(const SimObservation& obs, const Move& move, const float* plan
               sizeof(float) * kNumPredictedPlanes * kCells);
   // The candidate's own footprint, one-hot at (slot channel, anchor cell);
   // a PASS/EXCHANGE maps to a catch-all class and leaves the block zero.
-  const int cls = footprint_class(move, /*flip=*/false);
+  const int cls = footprint_class(move);
   if (cls < kAnchoredFootprints) {
     float* footprint = out + (kNumObservedPlanes + kNumPredictedPlanes) * kCells;
     footprint[(cls % kSlotsPerCell) * kCells + cls / kSlotsPerCell] = 1.0f;

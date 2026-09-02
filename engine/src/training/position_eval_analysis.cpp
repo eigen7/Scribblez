@@ -38,9 +38,9 @@ void replay_and_encode(const ParsedGcgPostMove& pos, const Rack& leave, const Ra
     // Open-leaves arm: an empty opponent leave (the penultimate-bingo
     // datasets, whose to-act player kept nothing) is legitimate and encodes
     // as zeros.
-    enc.encode_input(pos.start_player, leave, opp_leave, /*apply_flip=*/false, out);
+    enc.encode_input(pos.start_player, leave, opp_leave, out);
   } else {
-    enc.encode_input(pos.start_player, leave, /*apply_flip=*/false, out);
+    enc.encode_input(pos.start_player, leave, out);
   }
 }
 
@@ -144,9 +144,7 @@ bool collapse_position_eval_analysis_placement(const std::string& gcg_text,
   // no Y unseen collapses to a hard zero here.
   uint8_t available_counts[27];
   compute_unseen_pool(available_counts, pos.board, pos.leave);
-  // The analysis encoder never flips, so the model's planes -- and this collapse
-  // -- are in the board's own frame.
-  collapse_footprint_planes(pos.board, *spec.dict, available_counts, /*flip=*/false, raw, out);
+  collapse_footprint_planes(pos.board, *spec.dict, available_counts, raw, out);
   return true;
 }
 
@@ -157,7 +155,7 @@ bool masked_position_eval_analysis_placement(const std::string& gcg_text,
   if (!read_gcg_post_move(gcg_text, &pos, error)) return false;
   uint8_t available_counts[27];
   compute_unseen_pool(available_counts, pos.board, pos.leave);
-  masked_placement_distributions(pos.board, *spec.dict, available_counts, /*flip=*/false, raw, out);
+  masked_placement_distributions(pos.board, *spec.dict, available_counts, raw, out);
   return true;
 }
 

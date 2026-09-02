@@ -34,6 +34,12 @@ enum class MoveType : uint8_t { PLAY, EXCHANGE, PASS };
 // EXCHANGE: `glyphs` holds the surrendered tiles (an unassigned blank is
 //           Glyph::blank()); square_mask() is unused.
 // PASS:     no glyphs; square_mask() is unused.
+//
+// Every move carries a FRAME bit: the natural frame of the game it came from
+// (false), or that frame's diagonal transpose (true) -- the training symmetry
+// augmentation. A Move is only meaningful against a Board of the same frame,
+// which the Board and encoder entry points assert in debug builds; transpose()
+// moves between the two.
 class Move {
  public:
   Move() = default;  // a PASS
@@ -41,9 +47,10 @@ class Move {
   // The factories are the only places that populate the representation.
   //
   // `played[0, num_played)` are the placed glyphs in word order, so their count
-  // equals popcount(square_mask).
+  // equals popcount(square_mask). `transposed` is the frame of the board the
+  // play was built against.
   static Move play(bool horizontal, int start, uint16_t square_mask, uint16_t score,
-                   const Glyph* played, int num_played);
+                   const Glyph* played, int num_played, bool transposed = false);
   static Move exchange(const TileCounts& tiles);
   static Move pass() { return Move{}; }
 
@@ -52,6 +59,12 @@ class Move {
   int start() const { return start_; }
   uint16_t square_mask() const { return square_mask_; }
   uint16_t score() const { return score_; }
+  bool transposed() const { return transposed_; }
+
+  // This move in the other frame, (r,c) -> (c,r): a PLAY's orientation swaps
+  // while its lane-relative `start` and `square_mask` stay put, and the frame
+  // bit toggles for every move type. An involution.
+  Move transpose() const;
 
   int num_glyphs() const { return num_played_; }
 
@@ -67,17 +80,18 @@ class Move {
   int8_t start_ = 0;                       // 1 B; cross-axis coord (PLAY only)
   uint8_t num_played_ = 0;                 // 1 B
   std::array<Glyph, RACK_SIZE> glyphs_{};  // 7 B
-  uint8_t reserved_ = 0;                   // 1 B; zeroed padding, so serialized Moves
-                                           // (.slog / .sobs) are byte-deterministic
+  bool transposed_ = false;                // 1 B; the frame bit. Serialized Moves
+                                           // (.slog / .mset / .sobs) are always
+                                           // natural-frame, so on disk it is 0.
   uint16_t square_mask_ = 0;               // 2 B; PLAY only; see class comment
   uint16_t score_ = 0;                     // 2 B; a play's max is well under 2^16
 };
 
 static_assert(sizeof(Move) == 16, "Move should pack into 16 bytes");
 
-// Byte-wise equality is exact: every Move byte is meaningful or explicitly
-// zeroed (reserved_), and the factories produce canonical orderings (play
-// glyphs in lane order, exchange tiles sorted).
+// Byte-wise equality is exact: every Move byte is meaningful (the frame bit
+// included, so a move and its transpose differ), and the factories produce
+// canonical orderings (play glyphs in lane order, exchange tiles sorted).
 inline bool operator==(const Move& a, const Move& b) { return std::memcmp(&a, &b, 16) == 0; }
 inline bool operator!=(const Move& a, const Move& b) { return !(a == b); }
 

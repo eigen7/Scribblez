@@ -23,9 +23,10 @@ namespace scribblez {
 // classes: kPassClass (no placement -- EXCHANGE, PASS, or an absent move) and
 // kExtraClass (the win heads' "not-win"; an unused dummy for the plays heads).
 //
-// Frame: a class is expressed in the (optionally diagonally flipped) frame the
-// model sees. A diagonal transpose swaps rows<->cols AND horizontal<->vertical,
-// so both calls take the same `flip` the input encoder used for the row.
+// Frame: a class is expressed in the frame of the move / board it came from
+// (see Board::transpose). A diagonal transpose swaps rows<->cols AND
+// horizontal<->vertical, so the class of a transposed move is not a plain cell
+// transpose: its slot also moves between the H and V blocks.
 
 inline constexpr int kFootprintSide = BOARD_SIZE;                            // 15
 inline constexpr int kFootprintMaxK = RACK_SIZE;                             // 7
@@ -36,26 +37,22 @@ inline constexpr int kPassClass = kAnchoredFootprints;                       // 
 inline constexpr int kExtraClass = kAnchoredFootprints + 1;                  // 2926
 inline constexpr int kFootprintClasses = kAnchoredFootprints + 2;            // 2927
 
-// The footprint class of a played move, in the `flip` frame. A non-PLAY move
+// The footprint class of a played move, in the move's frame. A non-PLAY move
 // (EXCHANGE / PASS) maps to kPassClass.
-int footprint_class(const Move& m, bool flip);
+int footprint_class(const Move& m);
 
-// Decode a per-cell slot [0, kSlotsPerCell) into its orientation (in the same
-// frame the slot was encoded -- flipped if the class is a flipped-frame class)
-// and tile count k. Slot 0 is the orientation-free k==1 footprint (horizontal
-// reported by convention); the caller un-flips the orientation if it needs board
-// coordinates.
+// Decode a per-cell slot [0, kSlotsPerCell) into its orientation and tile count
+// k. Slot 0 is the orientation-free k==1 footprint (horizontal reported by
+// convention).
 void footprint_slot_decode(int slot, bool& horizontal, int& k);
 
-// The covered board cells of a footprint class, in the `flip` frame: the first
-// k empty cells from the anchor along the orientation on `board` (the state
-// BEFORE the move). Writes the (row, col) pairs into `cells` and returns their
-// count. Returns 0 for kPassClass / kExtraClass, and for a structurally
-// impossible class on this board -- anchor not empty, or fewer than k empty
-// cells before the board edge (such classes never occur as targets and are
-// masked out). This inverts footprint_class: the covered cells of
-// footprint_class(m, flip) on m's pre-move board are exactly m's placed squares.
-int footprint_cells(int cls, const Board& board, bool flip,
+// The covered board cells of a footprint class: the first k empty cells from the anchor along the
+// orientation on `board` (the state BEFORE the move). Writes the (row, col) pairs into `cells` and
+// returns their count. Returns 0 for kPassClass / kExtraClass, and for a structurally impossible
+// class on this board -- anchor not empty, or fewer than k empty cells before the board edge (such
+// classes never occur as targets and are masked out). This inverts footprint_class: the covered
+// cells of footprint_class(m) on m's pre-move board are exactly m's placed squares.
+int footprint_cells(int cls, const Board& board,
                     std::array<std::pair<int, int>, kFootprintMaxK>& cells);
 
 }  // namespace scribblez

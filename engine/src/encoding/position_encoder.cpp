@@ -21,6 +21,10 @@ void remove_played_or_exchanged(Rack& rack, const Move& m) {
   }
 }
 
+// `m`, a natural-frame move from the game log, in the frame of a board that is
+// transposed iff `transposed`.
+Move in_frame(const Move& m, bool transposed) { return transposed ? m.transpose() : m; }
+
 }  // namespace
 
 Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_rack_now) {
@@ -95,13 +99,13 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
 }
 
 EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, int mover,
-                                            bool post_move, bool flip) const {
+                                            bool post_move) const {
+  const bool transposed = enc_.board().transposed();
   EncodeContext ctx{};
   ctx.enc = &enc_;
   ctx.pov_rack = &racks_[mover];
   ctx.opp_known_leave = opp_leave_from_replay(g, sampled_turn, racks_[1 - mover]);
   ctx.active_player = mover;
-  ctx.apply_flip = flip;
   ctx.spec = spec_;
 
   // Each player's next move from the sampled snapshot. The opponent's is turn
@@ -112,12 +116,12 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
   // turn after the opponent's reply for a post-move one.
   const int opp_idx = sampled_turn + 1;
   if (opp_idx < g.num_records) {
-    ctx.opp_next_move = g.records[opp_idx].move;
+    ctx.opp_next_move = in_frame(g.records[opp_idx].move, transposed);
     ctx.has_opp_next_move = true;
   }
   const int self_idx = post_move ? sampled_turn + 2 : sampled_turn;
   if (self_idx < g.num_records) {
-    ctx.self_next_move = g.records[self_idx].move;
+    ctx.self_next_move = in_frame(g.records[self_idx].move, transposed);
     ctx.has_self_next_move = true;
   }
   ctx.final_score_p0 = g.final_scores[0];
@@ -132,7 +136,7 @@ void PositionEncoder::encode_score_diff_sweep(const GameLog& g, int sampled_turn
   // is fully encoded once (the expensive, move-generating part) and each
   // swept differential is stamped into a copy of that row.
   const int64_t row_floats = input_floats(spec_);
-  enc_.encode_input_with_score_diff(mover, racks_[mover], diff_lo, /*apply_flip=*/false, out);
+  enc_.encode_input_with_score_diff(mover, racks_[mover], diff_lo, out);
   for (int64_t i = 1; i <= diff_hi - diff_lo; ++i) {
     float* row = out + i * row_floats;
     std::memcpy(row, out, sizeof(float) * size_t(row_floats));
