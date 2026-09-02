@@ -29,14 +29,14 @@ inline constexpr int kPlacementHeads = 4;
 // footprint distribution.
 //
 // `available_counts` is the opponent's 27-count tile availability (the unseen
-// pool; see opp_footprint_mask), applied to the two OPP heads so a footprint
-// whose hooks no available tile can satisfy is masked out and its mass
-// renormalizes onto viable footprints. `available_counts == nullptr` disables
-// availability (board legality only) -- now exercised only by tests; the sole
-// production caller (the dashboard occupancy viz) passes real counts, and the
-// .mset generator no longer collapses at all (it stores the masked footprint
-// distribution directly). The self heads never take availability (two plies out,
-// post-redraw).
+// pool; see footprint_mask.h). It gates the two OPP heads directly -- a
+// footprint whose hooks no available tile can satisfy is masked out and its
+// mass renormalizes onto viable footprints -- and the two SELF heads through
+// the opponent's stage, whose reach seeds theirs. `available_counts == nullptr`
+// disables availability (board legality only) -- now exercised only by tests;
+// the sole production caller (the dashboard occupancy viz) passes real counts,
+// and the .mset generator no longer collapses at all (it stores the masked
+// footprint distribution directly).
 //
 // `board` gets its movegen caches bound from `dict` on demand. `raw` must come
 // from an encode of this same board, so the output planes share its frame.

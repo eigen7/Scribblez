@@ -11,9 +11,24 @@ namespace scribblez {
 // Per-class legality over the footprint classes, in the board's frame:
 // mask[cls] == true iff the masked softmax should keep that class. Illegal
 // classes are driven to -inf before the softmax, so their probability (and
-// gradient) is zero. Computed from the current board (and, for the opp mask, the
-// opponent's available tiles) -- no move-gen, no dictionary lookup on the main
-// word, no joint multi-cell tile contention.
+// gradient) is zero.
+//
+// Every mask is built from one primitive, expand(): one ply of play from a seed
+// set of cells, kept as the footprints that abut the seed. The seed is what a
+// stage starts from -- the occupied squares S for a move on this board, or the
+// squares a prior stage reached for a move on the board that stage will have
+// extended. So:
+//
+//   opp_this_turn  = expand(S, cross-checks on, the opponent's pool)
+//   self_this_turn = expand(S, cross-checks on, the mover's pool)   [input plane]
+//   self_next_turn = expand(opp_this_turn.reach, cross-checks off)
+//
+// The first ply happens on the known board, so its cross-checks and tile
+// availability apply. The second happens after an unknown opponent move, which
+// can rewrite every cross-check and draws from a separate rack, so it is
+// cross-check-free: it must never mask a footprint some opponent move makes
+// legal. No move-gen, no main-word dictionary lookup, no joint multi-cell tile
+// contention -- each stage is a sound over-approximation of its ply.
 
 using FootprintMask = std::array<bool, kFootprintClasses>;
 
@@ -24,48 +39,60 @@ using FootprintMask = std::array<bool, kFootprintClasses>;
 // dashboard collapse cannot drift.
 inline constexpr int kMaskTileBudget = RACK_SIZE;
 
-// Per-class legality for an OPPONENT placement head (opp_next / opp_win): the
-// opponent moves next, so the current board is exact. A footprint is legal iff it
-// fits, connects to the board (a covered cell abuts an occupied tile), every
-// covered cell admits an available letter (its cross-check permits one in stock),
-// and k <= tile_budget; the test still omits the main-word dictionary check and
-// multi-cell tile contention, so it can admit footprints no real move realizes
-// (the model learns those toward zero).
-//   - available_counts: the opponent's unseen pool as a 27-count array (A..Z then
-//     blank), intersected with each cell's cross-check (a blank is a wildcard);
-//     nullptr treats every tile as in stock (pure board legality). SOUND -- never
-//     masks a tile the opponent could draw and play.
-//   - tile_budget: cap on tiles placed in one move (k).
-//   - win_head: keep kExtraClass (the win heads' not-win slot); false for a plays
-//     head. kPassClass is always legal.
-// `board` must have movegen caches built.
+// Per-cell tiles-to-reach: 0 on a seed cell, k on a cell some legal k-tile
+// footprint of the stage covers (the fewest of any that do), kUnreachable
+// otherwise. One stage's output is the next stage's seed, and the occupied
+// squares are a seed too (occupied_reach), so every stage speaks this type.
+struct Reach {
+  static constexpr uint8_t kUnreachable = 0xFF;
+  std::array<uint8_t, kFootprintCells> tiles;
+
+  bool reachable(int idx) const { return tiles[idx] != kUnreachable; }
+  bool reachable(int r, int c) const { return reachable(r * kFootprintSide + c); }
+  bool empty() const;  // no reachable cell at all
+};
+
+// S: the occupied squares at depth 0, everything else unreachable.
+Reach occupied_reach(const Board& board);
+
+struct Expansion {
+  FootprintMask mask;  // the stage's legal footprint classes
+  Reach reach;         // `seed` plus every cell those footprints cover
+};
+
+// One ply from `seed`: the footprints of k <= budget tiles on empty squares
+// that abut a seed cell. With no seed at all (the opener's empty board) there is
+// nothing to abut, so every fitting footprint is kept.
+//   - use_cross_checks: gate each covered cell on its cross-check -- some
+//     letter must be legal there and, given available_counts, in stock. Off
+//     for a ply on a board an unknown move will first rewrite.
+//   - available_counts: the mover's pool as a 27-count array (A..Z then blank),
+//     a blank being a wildcard; nullptr treats every tile as in stock. Ignored
+//     when cross-checks are off. Sound -- never masks a tile the mover could
+//     draw and play.
+//   - win_head: keep kExtraClass (the win heads' not-win slot); false for a
+//     plays head. kPassClass is always legal.
+// `board` needs movegen caches only when cross-checks are on.
+Expansion expand(const Board& board, const Reach& seed, int budget, bool use_cross_checks,
+                 const uint8_t* available_counts, bool win_head);
+
+// Legality for an OPPONENT placement head (opp_next / opp_win): the opponent
+// moves next on `board`. expand(S, cross-checks on, available_counts).
 void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int tile_budget,
                         bool win_head, FootprintMask& mask);
 
-// Legality for a SELF placement head (self_next / self_win): the mover plays two
-// plies out, after the opponent moves, so the board is unknown. This is an
-// opp-move-INVARIANT over-approximation from the current board -- it must never
-// mask a footprint that could become legal under some opponent move, so it is
-// cross-check-oblivious (the opponent's move can change every cross-check).
-//
-// A class is legal iff its covered cells fit the board, each is self-reachable,
-// and k <= self_budget. Self-reachability uses a tiles-to-reach distance
-// transform d(Z) = fewest tiles to bridge to empty Z from the current structure
-// (multi-source 4-neighbour BFS, occupied = 0): Z is reachable iff
-// d(Z) <= opp_budget + self_budget -- the opponent extends toward Z within its
-// budget and the mover finishes within its own. Sound because the BFS is a lower
-// bound on the true tile cost. A tile-less board treats every cell as reachable
-// (game-start guard). kPassClass is always legal; kExtraClass iff `win_head`.
-void self_footprint_mask(const Board& board, int self_budget, int opp_budget, bool win_head,
-                         FootprintMask& mask);
+// Legality for a SELF placement head (self_next / self_win): the mover plays
+// after the opponent. The opponent's this-turn expansion (opp_budget,
+// opp_available_counts -- the pool it draws from) becomes the seed of the
+// mover's cross-check-free one (self_budget).
+void self_footprint_mask(const Board& board, int self_budget, int opp_budget,
+                         const uint8_t* opp_available_counts, bool win_head, FootprintMask& mask);
 
-// Per-cell reachability plane: out[r*kFootprintSide + c] == 1
-// iff some legal "who moves next" footprint covers that cell, else 0. It is the
-// opp_footprint_mask (with `available_counts` as the stock and `tile_budget` as
-// the cap -- nullptr counts being board legality only) reduced to the board
-// squares its legal footprints touch, i.e. "which squares this pool can reach on
-// the current board." The input-feature view of the mask; `board` must have
-// movegen caches built. Writes exactly kFootprintCells floats.
+// Per-cell reachability plane: out[r*kFootprintSide + c] == 1 iff some legal
+// this-turn footprint under `available_counts` covers that cell, else 0
+// (occupied squares are never covered). The input-feature view of
+// expand(S, cross-checks on, available_counts); `board` must have movegen
+// caches built. Writes exactly kFootprintCells floats.
 void footprint_reachable_cells(const Board& board, const uint8_t* available_counts, int tile_budget,
                                float* out);
 

@@ -105,12 +105,22 @@ void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
   write_mask(mask, out);
 }
 
-// The self side's plays-head legality: the mover plays two plies out on an
-// unknown board, so this is the opp-move-invariant (cross-check-oblivious)
-// over-approximation from the sampled board.
+// The self side's plays-head legality: the mover plays after the opponent, so
+// the opponent's this-turn reach (under the same unseen pool the opp mask uses)
+// seeds a cross-check-free expansion for the mover -- an over-approximation
+// invariant to whichever move the opponent actually makes.
 void SelfPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
+  const Board& board = v.enc->board();
+  board.ensure_movegen_caches(*v.spec.dict);
+  uint8_t available_counts[27];
+  const uint8_t* available_ptr = nullptr;
+  if (v.pov_rack != nullptr) {
+    compute_unseen_pool(available_counts, board, *v.pov_rack);
+    available_ptr = available_counts;
+  }
   FootprintMask mask;
-  self_footprint_mask(v.enc->board(), kMaskTileBudget, kMaskTileBudget, /*win_head=*/false, mask);
+  self_footprint_mask(board, kMaskTileBudget, kMaskTileBudget, available_ptr, /*win_head=*/false,
+                      mask);
   write_mask(mask, out);
 }
 

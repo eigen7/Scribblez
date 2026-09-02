@@ -335,49 +335,101 @@ TEST(FootprintMask, ConnectivityMasksFloatingPlacements) {
   EXPECT_TRUE(m[abutting2]);
 }
 
-// The self mask is cross-check-oblivious (pure geometry + BFS), so it is fully
-// testable without a dictionary.
+// The self mask is two expansions: the opponent's this-turn reach, then the
+// mover's footprints abutting that extended board. Without a dictionary every
+// cross-check reads as unconstrained, so these run on geometry alone.
 TEST(SelfFootprintMask, ReachabilityFromStructure) {
   Board b;
   b.set(7, 7, G(4));  // a lone tile: the only structure to bridge from
   FootprintMask m;
-  // opp_budget=1, self_budget=1 -> combined reach 2 tiles.
-  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, /*win=*/false, m);
-  // (7,8) is one empty step from the tile: d=1 <= 2 -> a k=1 footprint is legal.
+  // opp_budget=1: the opponent can put one tile against (7,7). self_budget=1.
+  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, /*opp_available_counts=*/nullptr,
+                      /*win_head=*/false, m);
+  // (7,8) abuts the tile itself -> a lone self tile there is legal.
   EXPECT_TRUE(m[(7 * 15 + 8) * kSlotsPerCell + 0]);
-  // (7,10) is three empty steps away: d=3 > 2 -> unreachable.
+  // (7,10): the opponent's one tile reaches at most (7,8), so a lone tile at
+  // (7,10) abuts nothing on any board the opponent can leave -> it floats.
   EXPECT_FALSE(m[(7 * 15 + 10) * kSlotsPerCell + 0]);
   // A far corner is well beyond reach.
   EXPECT_FALSE(m[(0 * 15 + 0) * kSlotsPerCell + 0]);
   EXPECT_TRUE(m[kPassClass]);
 }
 
-TEST(SelfFootprintMask, CombinedBudgetWidensReach) {
+// A larger self budget widens reach only through footprints that still abut the
+// opponent's reach: with the opponent able to fill (7,8), the mover's 2-tile word
+// at (7,9)-(7,10) connects, but a lone tile at (7,10) never does -- the cell is
+// coverable, the floating footprint is not (the self-side twin of the A1 case).
+TEST(SelfFootprintMask, WiderBudgetReachesThroughConnectedFootprints) {
   Board b;
   b.set(7, 7, G(4));
   FootprintMask m;
-  const int far = (7 * 15 + 10) * kSlotsPerCell + 0;    // d=3 from the tile
-  self_footprint_mask(b, 1, 1, /*win_head=*/false, m);  // reach 2 -> out
-  EXPECT_FALSE(m[far]);
-  self_footprint_mask(b, 2, 1, /*win_head=*/false, m);  // reach 3 -> in
-  EXPECT_TRUE(m[far]);
+  const int lone_7_10 = (7 * 15 + 10) * kSlotsPerCell + 0;
+  const int pair_7_9 = (7 * 15 + 9) * kSlotsPerCell + (1 + (2 - 2));  // horiz k=2: (7,9),(7,10)
+  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, nullptr, /*win_head=*/false, m);
+  EXPECT_FALSE(m[lone_7_10]);
+  EXPECT_FALSE(m[pair_7_9]);  // k=2 exceeds self_budget=1
+  self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/1, nullptr, /*win_head=*/false, m);
+  EXPECT_TRUE(m[pair_7_9]);    // (7,9) abuts the opponent's (7,8) -> the pair connects
+  EXPECT_FALSE(m[lone_7_10]);  // ... but the lone tile at (7,10) still abuts nothing
 }
 
 TEST(SelfFootprintMask, BudgetCapsK) {
   Board b;
   b.set(7, 4, G(4));  // structure so nearby cells are reachable
   FootprintMask m;
-  self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/7, /*win_head=*/false, m);
+  self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/7, nullptr, /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (2 - 2))]);   // k=2 within budget
   EXPECT_FALSE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);  // k=3 over budget
 }
 
 TEST(SelfFootprintMask, EmptyBoardTreatsAllReachable) {
-  Board b;  // no structure -> game-start guard marks everything reachable
+  Board b;  // no structure -> nothing to abut, so every fitting footprint is kept
   FootprintMask m;
-  self_footprint_mask(b, 7, 7, /*win_head=*/false, m);
+  self_footprint_mask(b, 7, 7, nullptr, /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 7) * kSlotsPerCell + 0]);
   EXPECT_EQ(count_true(m), 2295 + 1);  // every fitting footprint reachable + pass
+}
+
+// The opponent's stage carries cross-checks and its pool; the mover's does not.
+// 'A' at (6,7): the square below it, (7,7), hooks the down-word "A_" -> only Y.
+TEST(SelfFootprintMask, OppStageGatesReachTheMoverStageDoesNot) {
+  Board b;
+  b.set(6, 7, G(0));
+  const Dictionary d = Dictionary::build_from_words({"AY"});
+  b.ensure_movegen_caches(d);
+  const int lone_7_7 = (7 * 15 + 7) * kSlotsPerCell + 0;  // the hook square itself
+  const int lone_8_7 = (8 * 15 + 7) * kSlotsPerCell + 0;  // two below 'A'
+  FootprintMask m;
+
+  // Y in the opponent's pool: it can fill (7,7), so a mover tile at (8,7) abuts it.
+  const std::array<uint8_t, 27> with_y = available_of("YE");
+  self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, with_y.data(), false, m);
+  EXPECT_TRUE(m[lone_8_7]);
+
+  // No Y: the opponent cannot reach (7,7), so (8,7) abuts nothing -> masked.
+  const std::array<uint8_t, 27> no_y = available_of("EIO");
+  self_footprint_mask(b, 1, 1, no_y.data(), false, m);
+  EXPECT_FALSE(m[lone_8_7]);
+  // Yet the mover's own tile at (7,7) stays legal: it abuts 'A' directly, and the
+  // mover's stage is cross-check-free -- its rack is separate from the pool, so
+  // it may hold the Y the pool lacks.
+  EXPECT_TRUE(m[lone_7_7]);
+}
+
+// expand records, per newly reached cell, the fewest tiles of any legal
+// footprint covering it; seed cells keep depth 0 and are never covered.
+TEST(FootprintExpand, ReachRecordsFewestTiles) {
+  Board b;
+  b.set(7, 7, G(4));
+  const Expansion e = expand(b, occupied_reach(b), /*budget=*/7, /*use_cross_checks=*/false,
+                             nullptr, /*win_head=*/false);
+  EXPECT_EQ(e.reach.tiles[7 * 15 + 7], 0);           // the seed
+  EXPECT_EQ(e.reach.tiles[7 * 15 + 8], 1);           // a lone tile abuts it
+  EXPECT_EQ(e.reach.tiles[7 * 15 + 9], 2);           // needs the 2-tile word from (7,8)
+  EXPECT_EQ(e.reach.tiles[7 * 15 + 14], 7);          // the row's end: a 7-tile word
+  EXPECT_EQ(e.reach.tiles[0], Reach::kUnreachable);  // the far corner
+  EXPECT_TRUE(occupied_reach(Board{}).empty());      // the opener has no seed
+  EXPECT_FALSE(occupied_reach(b).empty());
 }
 
 std::string slurp(const std::string& path) {
@@ -392,7 +444,8 @@ std::string slurp(const std::string& path) {
 // each real game; for every played move assert its footprint class is in the opp
 // mask on the pre-move board (one ply ahead -- needs the lexicon for cross-checks)
 // and in the self mask on the board two plies earlier (the self head's context;
-// cross-check-oblivious, so it runs with or without the lexicon).
+// its opponent stage takes the same loosest pool, and without the lexicon every
+// cross-check reads as unconstrained, so it runs either way).
 void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
   Board board;
   if (dict) board.ensure_movegen_caches(*dict);
@@ -413,8 +466,11 @@ void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
         EXPECT_TRUE(opp[cls]) << "opp mask excluded a real move (class " << cls << ")";
       }
       if (two_plies_ago) {
+        uint8_t opp_available_counts[27];
+        compute_unseen_pool(opp_available_counts, *two_plies_ago, Rack{});
         FootprintMask self;
-        self_footprint_mask(*two_plies_ago, RACK_SIZE, RACK_SIZE, /*win_head=*/false, self);
+        self_footprint_mask(*two_plies_ago, RACK_SIZE, RACK_SIZE, opp_available_counts,
+                            /*win_head=*/false, self);
         EXPECT_TRUE(self[cls]) << "self mask excluded a real move (class " << cls << ")";
       }
     }
