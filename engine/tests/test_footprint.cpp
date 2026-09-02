@@ -298,6 +298,43 @@ TEST(FootprintMask, AvailabilityLoneTileNeedsBothCrossWords) {
   EXPECT_FALSE(opp_admits(overlap, available_of("XY"), lone));  // only E fits; X/Y satisfy neither
 }
 
+// The opp mask requires a placement to CONNECT to the board: a footprint that
+// floats free of every tile is masked even though its cells are individually
+// playable. This is the reported A1-corner bug in miniature -- an isolated empty
+// corner has unconstrained cross-checks, so the per-cell letter test admits it,
+// yet no legal move (after the opener) can reach it. Footprints touching the lone
+// 'A' at (7,7) are kept; ones adrift in the empty expanse are not. Independent of
+// the availability gate, so it also shows under null (board-legality-only) counts.
+TEST(FootprintMask, ConnectivityMasksFloatingPlacements) {
+  Board b;
+  b.set(7, 7, G(0));  // 'A': the sole structure everything must connect to
+  const Dictionary d = Dictionary::build_from_words({"AB"});
+  b.ensure_movegen_caches(d);
+
+  const int corner_lone = (0 * 15 + 0) * kSlotsPerCell + 0;            // lone tile at (0,0)
+  const int floating2 = (0 * 15 + 3) * kSlotsPerCell + (1 + (2 - 2));  // horiz k=2 in empty row 0
+  const int hook_lone = (7 * 15 + 8) * kSlotsPerCell + 0;              // lone tile right of 'A'
+  const int abutting2 = (7 * 15 + 8) * kSlotsPerCell + (1 + (2 - 2));  // horiz k=2 abutting 'A'
+
+  // Disconnected placements: floated free of the board -> masked (the fix).
+  EXPECT_FALSE(opp_admits(b, available_of("AB"), corner_lone));
+  EXPECT_FALSE(opp_admits(b, available_of("AB"), floating2));
+  // Connected placements: the covered cell at (7,8) abuts 'A'. The lone tile forms
+  // the across-word "A_" (legal "AB"), so B both connects and hooks; the k=2 covers
+  // (7,8),(7,9) whose vertical cross-checks are free -> both kept.
+  EXPECT_TRUE(opp_admits(b, available_of("B"), hook_lone));
+  EXPECT_TRUE(opp_admits(b, available_of("AB"), abutting2));
+
+  // Connectivity holds independently of availability -- null (pure board legality)
+  // still masks the floating corner and keeps the abutting footprint.
+  FootprintMask m;
+  opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, /*win_head=*/false, m);
+  EXPECT_FALSE(m[corner_lone]);
+  EXPECT_FALSE(m[floating2]);
+  EXPECT_TRUE(m[hook_lone]);
+  EXPECT_TRUE(m[abutting2]);
+}
+
 // The self mask is cross-check-oblivious (pure geometry + BFS), so it is fully
 // testable without a dictionary.
 TEST(SelfFootprintMask, ReachabilityFromStructure) {
@@ -474,11 +511,13 @@ TEST(FootprintCollapse, IllegalFootprintGetsNoMass) {
 // The collapse threads availability into the OPP heads: a dominant logit on an
 // opp footprint whose only hook is unavailable contributes NO plane mass -- the
 // mask drops it, so its 20-logit probability renormalizes away and (7,7) keeps
-// only the faint uniform share of the other footprints that still cover it (a
-// lone tile, verticals). With the hook letter supplied, the dominant footprint
-// lights (7,7) instead. This is the inference-time "no Y unseen -> the I13 Y-hook
-// carries no belief" behaviour in miniature (the real I13 collapses all the way
-// because every footprint covering it needs the same unavailable hook).
+// only the uniform share of the other footprints that still cover it. With the
+// hook letter supplied, the dominant footprint lights (7,7) (~1.0) instead. This
+// is the inference-time "no Y unseen -> the I13 Y-hook carries no belief"
+// behaviour in miniature. The residual share is not vanishing here: connectivity
+// confines the legal set to footprints abutting the lone 'A', and (7,7) sits
+// against it, so its uniform share is a modest fraction rather than the near-zero
+// of a board-wide legal set -- the point is the loss of the DOMINANT spike.
 TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
   Board b;
   b.set(6, 7, G(0));  // 'A' above (7,7): a horizontal hook there needs a "A_" word
@@ -501,8 +540,8 @@ TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
   const std::array<uint8_t, 27> no_y = available_of("EIO");  // letters, but no Y, no blank
   collapse_footprint_planes(b, d, no_y.data(), raw.data(), out.data());
   const float gated = out[7 * kFootprintSide + 7];
-  EXPECT_LT(gated, 0.05f);       // the 20-logit footprint no longer reaches (7,7)
-  EXPECT_LT(gated, lit * 0.1f);  // ... a >10x drop vs. when its hook was available
+  EXPECT_LT(gated, 0.5f);        // the dominant 20-logit hook is gone -> only the uniform share
+  EXPECT_LT(gated, lit * 0.5f);  // ... a clear drop vs. the near-1.0 it held with the hook in stock
 }
 
 // masked_placement_distributions returns the same mask + masked-softmax the
@@ -575,11 +614,11 @@ TEST(FootprintReachable, OccupancyAndAvailabilityGateCells) {
   const std::array<uint8_t, 27> with_y = available_of("YE");
   EXPECT_EQ(reach_at(with_y, 7, 7), 1.0f);    // Y in stock -> the boxed cell is reachable
   EXPECT_EQ(reach_at(with_y, 6, 7), 0.0f);    // occupied square is never covered
-  EXPECT_EQ(reach_at(with_y, 14, 14), 1.0f);  // an unconstrained far corner still reachable
+  EXPECT_EQ(reach_at(with_y, 14, 14), 0.0f);  // the far corner floats free -> unreachable
 
   const std::array<uint8_t, 27> no_y = available_of("EIO");  // letters, no Y, no blank
   EXPECT_EQ(reach_at(no_y, 7, 7), 0.0f);    // every footprint covering (7,7) needs Y -> gated off
-  EXPECT_EQ(reach_at(no_y, 14, 14), 1.0f);  // ... but the corner, needing no specific letter, stays
+  EXPECT_EQ(reach_at(no_y, 14, 14), 0.0f);  // ... and the disconnected corner stays unreachable
 }
 
 // Reachability on the transposed board is the transpose of reachability on the

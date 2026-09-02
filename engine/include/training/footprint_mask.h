@@ -27,12 +27,17 @@ inline constexpr int kMaskTileBudget = RACK_SIZE;
 // Legality for an OPPONENT placement head (opp_next / opp_win): the opponent
 // moves next on `board`, so the current-board test is exact for them. A class
 // (anchor, orientation, k) is legal iff its covered cells (the first k empty
-// cells from the anchor) fit the board AND every covered cell admits some
-// AVAILABLE letter in the play orientation -- a letter both legal at the square
-// (its perpendicular cross-check permits it, or the square is unconstrained) and
-// in stock -- AND k <= tile_budget. A lone tile (k==1) is
-// orientation-free and legal iff at least one available letter is admissible in
-// both orientations at once.
+// cells from the anchor) fit the board AND the footprint CONNECTS to the board
+// -- at least one covered cell is orthogonally adjacent to an occupied square,
+// the legal-Scrabble rule that a play must abut existing structure (extend,
+// hook, or thread a tile) -- AND every covered cell admits some AVAILABLE letter
+// in the play orientation -- a letter both legal at the square (its
+// perpendicular cross-check permits it, or the square is unconstrained) and in
+// stock -- AND k <= tile_budget. A lone tile (k==1) is orientation-free and
+// legal iff it connects and at least one available letter is admissible in both
+// orientations at once. On an empty board the connectivity rule is vacuous
+// (nothing to abut; the opener covers the centre) and is disabled, so the mask
+// there reduces to geometry + availability + budget.
 //
 // `available_counts` is the opponent's availability as a 27-count array (A..Z
 // then blank), the unseen pool the opponent draws from or holds -- 100 tiles
