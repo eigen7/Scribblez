@@ -166,9 +166,10 @@ int encode_move_meta(const Move& self_move, const Move& opp_move, float* out) {
   return kMoveMetaFloats;
 }
 
-// One reachability plane at `out`: the squares `pool` can reach on the current
-// board, "who moves next" semantics reduced to per-cell coverage. The mover
-// holds at most a full rack, so kMaskTileBudget caps k.
+// One reachability plane at `out`: the squares covered by
+// footprint_ply(S, cross-checks on, `pool`) -- a this-turn move from the current
+// occupied set, gated by cross-checks and the pool -- as per-cell coverage. The
+// mover holds at most a full rack, so kMaskTileBudget caps k.
 int encode_reach_plane(const Board& board, const uint8_t* pool, float* out) {
   footprint_reachable_cells(board, pool, kMaskTileBudget, out);
   return 1;
