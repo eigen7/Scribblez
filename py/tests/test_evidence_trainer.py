@@ -52,9 +52,14 @@ def test_packed_obs_round_trips_records_exactly():
 
 def test_dataset_retains_obs_sparse_but_batches_carry_dense_records(traj_datasets):
     """_TrajPosition empties its SobsPosition's dense records (the RAM guard),
-    while every batch's `positions` re-attach obs rows identical to `all_obs`."""
+    while every batch's `positions` re-attach obs rows identical to `all_obs`.
+    The retained moves/roles must OWN their data: as read_sobs field views
+    their .base would silently pin the whole dense record buffer."""
     train, _ = traj_datasets
-    assert all(len(pos.sobs.obs) == 0 for pos in train._positions)
+    for pos in train._positions:
+        assert len(pos.sobs.obs) == 0
+        assert pos.sobs.moves.base is None
+        assert pos.sobs.roles.base is None
     batch = next(train.iter_batches(4, seed=0))
     offset = 0
     for pos in batch["positions"]:

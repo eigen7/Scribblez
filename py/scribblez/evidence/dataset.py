@@ -173,10 +173,10 @@ class _PackedObs:
     """A position's (K,) observation records with the four footprint
     histograms held sparse. A dense .sobs v5 record is ~35 KB and near-empty
     (~200 rollouts touch at most 200 of the 2927 classes per head), so
-    retaining a full corpus dense would put ~13x the on-disk bytes in trainer
-    RAM -- ~58 GiB at the precedent trajectory corpus's scale, on a 62 GB
-    host. The dataset therefore holds the sparse form and rebuilds the
-    verbatim rows per batch (densify); the on-disk format stays dense."""
+    retaining a full corpus dense in RAM is ~58 GiB at the precedent
+    trajectory corpus's scale, on a 62 GB trainer host. The dataset therefore
+    holds the sparse form and rebuilds the verbatim rows per batch (densify);
+    the on-disk format stays dense."""
 
     __slots__ = ("k", "scalars", "hists")
 
@@ -212,7 +212,16 @@ class _TrajPosition:
         self.file_id = file_id
         self.wld, self.delta, self.value = sim_targets(sobs.obs)
         self.obs = _PackedObs(sobs.obs)
-        self.sobs = dataclasses.replace(sobs, obs=np.empty(0, dtype=_OBS_DTYPE))
+        # moves/roles arrive as field VIEWS whose .base is the position's full
+        # dense record buffer -- retaining them as is would pin every 35 KB
+        # record despite the emptied obs. Copy them into owning arrays so the
+        # buffer is actually released.
+        self.sobs = dataclasses.replace(
+            sobs,
+            moves=sobs.moves.copy(),
+            roles=sobs.roles.copy(),
+            obs=np.empty(0, dtype=_OBS_DTYPE),
+        )
 
 
 class TrajectoryDataset:

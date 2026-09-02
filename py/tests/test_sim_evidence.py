@@ -14,7 +14,7 @@ import torch
 from scribblez.dataset import row_layout
 from scribblez.evidence.dataset import TrajectoryDataset
 from scribblez.ffi import decode_rows, get_input_shapes, row_size_floats
-from scribblez.footprint_spatial import PASS_CLASS, SLOTS_PER_CELL
+from scribblez.footprint_spatial import MAX_K, PASS_CLASS, SLOTS_PER_CELL
 from scribblez.sim_evidence.model import NUM_EVIDENCE_PLANES, EvidencePositionEvalModel
 from scribblez.sim_evidence.sobs import (
     _FILE_HEADER,
@@ -153,16 +153,15 @@ def test_move_footprint_class_matches_the_footprint_layout():
     class = (r*15 + c)*13 + slot at the anchor (first placed square). The
     C++/Python parity test crosses the two implementations end to end; this
     pins the layout directly, case by case."""
-    max_k = (SLOTS_PER_CELL + 1) // 2  # 7
     cases = [
         # (horizontal, start, along0, k) -> (anchor r, anchor c, slot)
         (True, 3, 6, 1, 3, 6, 0),
         (False, 6, 3, 1, 3, 6, 0),  # k==1 is orientation-free: same class
         (True, 3, 6, 2, 3, 6, 1),
         (True, 0, 0, 7, 0, 0, 6),  # horizontal slots run 1..6
-        (False, 5, 2, 2, 2, 5, max_k),  # vertical base
-        (False, 5, 2, 3, 2, 5, max_k + 1),
-        (False, 14, 8, 7, 8, 14, 2 * max_k - 2),  # last slot, 12
+        (False, 5, 2, 2, 2, 5, MAX_K),  # vertical base
+        (False, 5, 2, 3, 2, 5, MAX_K + 1),
+        (False, 14, 8, 7, 8, 14, 2 * MAX_K - 2),  # last slot, 12
     ]
     for horizontal, start, along0, k, r, c, slot in cases:
         move = _play_record(horizontal, start, along0, k)

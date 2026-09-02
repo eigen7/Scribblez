@@ -188,7 +188,6 @@ void accumulate_rollout(const RolloutResult& o, SimObservation* obs) {
   obs->delta_sum += o.delta;
   obs->delta_sq_sum += o.delta_sq;
 
-  // One footprint class per move (the opponent wins iff the mover loses).
   const int opp_cls = footprint_class(o.opp_reply, /*flip=*/false);
   ++obs->opp_next_count[opp_cls];
   obs->opp_win_count[opp_cls] += float(o.p_loss);
