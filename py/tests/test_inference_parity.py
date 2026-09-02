@@ -27,6 +27,7 @@ from scribblez.position_eval.model import (
     PositionEvalModel,
 )
 from scribblez.position_eval.onnx_export import export_onnx
+from scribblez.transformer_tower import TransformerConfig
 
 # Input contract (single source of truth: engine/include/scribblez/input_encoder.h,
 # surfaced through the FFI). The export is numerically agnostic to these, but
@@ -41,8 +42,15 @@ SCALAR_SIZE = _input_shapes["input_scalar"][0]
 # reordering here would scramble which head the agent reads -- assert it.
 OUTPUT_NAMES = ["wld", "score_diff", *PLACEMENT_HEAD_NAMES]
 
+# Both trunk towers export, so both are checked: the conv tower (None) and a tiny
+# transformer tower (attention, RoPE, RMSNorm, SwiGLU, register tokens).
+TRUNKS = {
+    "conv": None,
+    "transformer": TransformerConfig(mid_channels=8, num_heads=2, ffn_channels=16),
+}
 
-def _random_model(seed: int = 0) -> PositionEvalModel:
+
+def _random_model(trunk: str, seed: int = 0) -> PositionEvalModel:
     """A small randomly-initialized model in eval mode (BatchNorm uses its
     default running stats, so the forward pass is deterministic)."""
     torch.manual_seed(seed)
@@ -50,8 +58,9 @@ def _random_model(seed: int = 0) -> PositionEvalModel:
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
         trunk_channels=16,  # tiny: this test checks numerics, not capacity
-        num_blocks=3,  # 3 -> includes one global-pooling block (covers its ops)
+        num_blocks=3,  # conv: 3 -> includes one global-pooling block (covers its ops)
         board_size=BOARD_SIZE,
+        transformer=TRUNKS[trunk],
     )
     model.eval()
     return model
@@ -64,12 +73,13 @@ def _random_inputs(batch: int, seed: int = 1):
     return spatial, scalar
 
 
+@pytest.mark.parametrize("trunk", TRUNKS)
 @pytest.mark.parametrize("batch", [1, 4])
-def test_pytorch_matches_onnxruntime(tmp_path, batch):
+def test_pytorch_matches_onnxruntime(tmp_path, trunk, batch):
     """Exported ONNX run under ONNXRuntime matches PyTorch on every head."""
     ort = pytest.importorskip("onnxruntime")
 
-    model = _random_model()
+    model = _random_model(trunk)
     onnx_path = tmp_path / "model.onnx"
     export_onnx(
         model,
@@ -96,15 +106,16 @@ def test_pytorch_matches_onnxruntime(tmp_path, batch):
             torch_out[name].numpy(),
             atol=1e-4,
             rtol=1e-4,
-            err_msg=f"PyTorch vs ONNXRuntime mismatch on head '{name}' (batch={batch})",
+            err_msg=f"PyTorch vs ONNXRuntime mismatch on head '{name}' ({trunk}, batch={batch})",
         )
 
 
-def test_dynamic_batch_axis(tmp_path):
+@pytest.mark.parametrize("trunk", TRUNKS)
+def test_dynamic_batch_axis(tmp_path, trunk):
     """One exported graph serves both single-position and batched inference."""
     ort = pytest.importorskip("onnxruntime")
 
-    model = _random_model()
+    model = _random_model(trunk)
     onnx_path = tmp_path / "model.onnx"
     export_onnx(
         model,

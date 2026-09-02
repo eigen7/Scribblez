@@ -16,8 +16,10 @@ Symbols used throughout:
 | Symbol | Meaning | Default |
 |--------|---------|---------|
 | `C` | `trunk_channels` | 192 |
-| `N` | `num_blocks` in the residual tower | 10 |
-| `P_in` / `S_in` | spatial planes / scalar width of the board input | 85 / 936; 85 / 963 under the open-leaves arm |
+| `N` | `num_blocks` in the tower | 10 |
+| `C_mid` | `transformer_mid_channels`, the width inside a transformer-tower block | 192 |
+| `R` | register tokens appended to the transformer tower's cell sequence (the 27 tile-supply tokens) | 27 |
+| `P_in` / `S_in` | spatial planes / scalar width of the board input | 87 / 136; 87 / 163 under the open-leaves arm |
 | `B` | batch of board positions (`P` in move-set code) | — |
 | `M` | candidate moves in a batch, flattened across positions | — |
 | `T` | placed-tile slots per move (`kMoveMaxPlaced` = `RACK_SIZE`) | 7 |
@@ -66,6 +68,41 @@ The returned scalar projection `s` is the `β` half, unchanged for the heads.
 concatenates the channel-wise mean and max over the board: `(B, C, H, W)` →
 `(B, 2C)`.
 
+### Transformer tower (`trunk = transformer`)
+
+![TransformerTower: nested-bottleneck blocks of attention + SwiGLU pairs over the cell and register tokens](images/arch_transformer_tower.svg)
+
+The conv tower reasons spatially through stacked 3×3 convolutions and
+re-broadcasts board-global context through its global-pooling blocks. The
+transformer tower ([transformer_tower.py](../py/scribblez/transformer_tower.py))
+replaces both, mirroring the trunk of KataGo's released transformer nets (its
+`NestedBottleneckTransformerBlock`). The stem is unchanged, but after the scalar
+injection the `15×15` feature map becomes a sequence of 225 cell tokens, and
+each of the `N` blocks projects the trunk stream down to `C_mid`
+(`RMSNorm → ReLU → Linear`), runs two (self-attention, SwiGLU FFN) pairs there,
+each on its own residual, and projects back up (`RMSNorm → ReLU → Linear`,
+**zero-initialised**, so every block starts as the identity on the trunk
+stream). A final RMSNorm, the cells laid back onto the board, and a ReLU give
+the heads the same `(B, C, 15, 15)` map the conv tower does. There are no
+global-pooling blocks: attention already sees the whole board.
+
+Position enters through 2D rotary embeddings on the attention queries and keys:
+each channel pair of a head is rotated by `ω_x·x + ω_y·y` with per-head,
+per-pair **learnable** frequencies (initialised log-uniform between one radian
+per cell and one per fifty cells), so a head can be as local or as global as it
+learns to be. The board is always fully on-board, so none of KataGo's off-board
+masking is needed.
+
+The sequence may carry **register tokens** after the cells: `R` extra tokens
+the model supplies, with learnable 2D positions initialised just off the
+board's left edge, which every attention layer sees alongside the cells.
+`PositionEvalModel` fills them with the tile-supply tokens of §2.
+
+`trunk_channels` / `num_blocks` keep their meaning (`C` and `N`);
+`transformer_mid_channels`, `transformer_heads` and `transformer_ffn_channels`
+size the inside of a block. Off by default and wired only through
+`PositionEvalModel`; the other models build the conv tower.
+
 ---
 
 ## 2. `PositionEvalModel`
@@ -105,31 +142,26 @@ space), and the **dashboard** collapse alone reduces each head to the per-cell
 `(15, 15)` marginal (`Σ` footprint probability over covered cells) for the human
 occupancy view.
 
-### Tile-supply cross-attention (`use_supply_attention`)
+### Tile-supply register tokens (transformer trunk)
 
 The placement heads need to gate a square's cross-check letters on whether those
 tiles are actually *available* — in the bag, the opponent's known leave, or the
-mover's own rack. The convolutional trunk learns this poorly: cross-checks are a
+mover's own rack. The conv trunk learns this poorly: cross-checks are a
 per-square, per-letter **spatial** signal while availability is a global
 per-letter **scalar**, and the two meet only through the trunk's per-channel
-bias/FiLM injection. That composition is sample-expensive, so the model gates
+bias/FiLM injection. That composition is sample-expensive, so a conv model gates
 common tiles on availability but falls back to a fixed frequency prior for rare
 ones (e.g. a ~0.17 hook belief for a letter with zero copies unseen).
 
-`use_supply_attention` inserts one cross-attention block on the post-trunk
-feature map (`supply_attention.py`). Each of the 27 tiles becomes a **supply
-token** carrying its per-seat availability (mover rack / unseen pool / opp
-leave); every board square attends to the supply tokens, its **query** built
-from the square's trunk features *and* its raw 52-plane cross-check vector, so
-"which letters are legal here" is explicit and matches the tokens' learned
-letter identities. A square hooking on S/Y then reads S- and Y-supply directly
-and gates its placement belief on the graded counts — distinguishing
-"available to me" from "available to the opponent", which a single gated input
-plane cannot. The output projection is **zero-initialised**, so the block is
-inert at init: a strict superset of the no-attention model, matching the
-`use_film` convention. Off by default and wired only through `PositionEvalModel`;
-requires the open-leaves arm (`face_up_leaves`), which supplies the opp-leave
-block.
+Under the transformer trunk each of the 27 tiles becomes a **register token**
+([supply_registers.py](../py/scribblez/position_eval/supply_registers.py)): a
+learned per-tile identity embedding plus a projection of that tile's per-seat
+availability counts (mover rack; unseen pool, decoded from the thermometer; and,
+under the open-leaves arm, the opponent's known leave), appended to the 225 cell
+tokens the tower attends over. A square hooking on S/Y then reads S- and
+Y-supply directly in every attention layer, graded by the actual counts and
+distinguishing "available to me" from "available to the opponent", which a
+single gated input plane cannot. The conv trunk carries no such tokens.
 
 ### Losses
 
