@@ -28,7 +28,7 @@ const Dictionary& require_dict(const Dictionary* dict) {
 }  // namespace
 
 MsetSimAgent::MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service,
-                           std::unique_ptr<nn::PositionEvalService> leaf_service)
+                           std::shared_ptr<nn::PositionEvalService> leaf_service)
     : Agent(params.thread_id, params.name),
       shortlist_(params.shortlist),
       sim_top_k_(params.sim_top_k),

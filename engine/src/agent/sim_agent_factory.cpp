@@ -97,7 +97,7 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
 
-  std::unique_ptr<nn::PositionEvalService> leaf = nn::load_leaf_position_service(opts.leaf_model);
+  std::shared_ptr<nn::PositionEvalService> leaf = nn::load_leaf_position_service(opts.leaf_model);
   return std::make_unique<SimAgent>(params, std::move(leaf));
 }
 

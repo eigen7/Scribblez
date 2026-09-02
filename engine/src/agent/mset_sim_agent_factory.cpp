@@ -123,7 +123,7 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
   SimRunner::validate_horizon("mset-sim agent", opts.sim_horizon, !opts.leaf_model.empty());
   // The leaf net shares the service's device; its per-call ceiling is the
   // position family's own (the runner batches to it).
-  std::unique_ptr<nn::PositionEvalService> leaf =
+  std::shared_ptr<nn::PositionEvalService> leaf =
     nn::load_leaf_position_service(opts.leaf_model, opts.service.cuda_device);
 
   // Raising the per-pass ceiling to the shortlist just lets the whole shortlist
