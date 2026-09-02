@@ -54,7 +54,17 @@ def test_straight_through_is_exact_and_differentiable():
     assert mod(feats, _board("CAT", gaps=(1,))).cell_signals[0, 2, 0].item() == pytest.approx(0.0)
 
     # Straight-through still routes gradient to the query head (nonzero features).
+    # On an all-empty board, every cell's hard commitment is drawn from the same
+    # unconstrained query; with the default random init it can land on a letter
+    # that is illegal from the root at *every* cell, killing the whole lane
+    # (masked to a dead state with no gradient) and making this assertion
+    # nondeterministic. Anchor the query to a legal start letter ("C") so the
+    # commit always survives -- weight.grad is still exercised for real, since
+    # the STE backward term flows through the pre-hardening softmax regardless
+    # of where the bias pins the argmax.
     mod2 = StraightThroughLexicon(channels=16, compiled=_lexicon(), topk=8)
+    with torch.no_grad():
+        mod2.query.bias[ord("C") - ord("A")] += 8.0
     rfeats = torch.randn(2, 15, 16, requires_grad=True)
     mod2(rfeats, torch.zeros(2, 15, N_LETTERS)).cell_residual.sum().backward()
     assert mod2.query.weight.grad.abs().sum() > 0
