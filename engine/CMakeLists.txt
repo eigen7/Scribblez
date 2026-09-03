@@ -198,11 +198,14 @@ add_library(scribblez_neural_agents STATIC
   src/agent/neural_agent_factory.cpp
   src/agent/neural_service_options.cpp
   src/agent/neural_sim_agent.cpp
-  src/agent/neural_sim_agent_factory.cpp)
+  src/agent/neural_sim_agent_factory.cpp
+  src/agent/ultimate_bot_agent.cpp
+  src/agent/ultimate_bot_agent_factory.cpp)
 set_target_properties(scribblez_neural_agents PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_neural_agents PUBLIC
   scribblez_core
   scribblez_nn
+  scribblez_evidence_select
   Boost::program_options)
 
 add_executable(play_game
@@ -409,6 +412,22 @@ if(SCRIBBLEZ_BUILD_TESTS)
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_mset_sim_agent)
 
+  # The evidence loop and UltimateBotAgent: that the anchor is simmed first
+  # regardless of the model, that each later sim is the scripted proves-best
+  # argmax over the UNSIMMED candidates, that the budget and the gain threshold
+  # stop the loop, that the sequential sims pair with (and equal) one batched
+  # SimRunner::run, and that the pre-move board row matches the training
+  # decoder's. Compiles the decision TU (not the factory), so like
+  # test_mset_sim_agent it links neither scribblez_nn nor CUDA/TensorRT: the
+  # tests inject a scripted MoveProposalService stub.
+  add_executable(test_ultimate_bot_agent
+    tests/test_ultimate_bot_agent.cpp
+    src/agent/ultimate_bot_agent.cpp)
+  target_link_libraries(test_ultimate_bot_agent PRIVATE
+    scribblez_core scribblez_evidence_select Boost::json Boost::program_options Threads::Threads
+    GTest::gtest_main)
+  gtest_discover_tests(test_ultimate_bot_agent)
+
   # WeirdBotAgent: the diagnostic leave-forcing self-play bot. Checks the
   # forcing path (T lands on its best cross-check square), the fallback path
   # (no legal forcing placement -> HastyBot's argmax), own-leave tracking across
@@ -560,10 +579,15 @@ target_link_libraries(move_set_eval_target_generator PRIVATE
   Boost::system
   Threads::Threads)
 
-# The NN-free trajectory selection core (which candidates get simmed, in what
-# order): vectors in, indices out, so it links without the TensorRT runtime the
-# scoring front-end carries and is unit-tested directly in scribblez_tests.
-add_library(scribblez_evidence_select STATIC src/training/evidence_trajectory_select.cpp)
+# The NN-free evidence-selection core: which candidates get simmed, in what
+# order -- the trajectory generator's one-shot recipe (vectors in, indices out)
+# and the sequential evidence loop UltimateBot plays (agent/evidence_loop.h,
+# driving a MoveProposalService and a CandidateSimmer it is handed). Links
+# without the TensorRT runtime the scoring front-ends carry, so both are
+# unit-tested with scripted stubs.
+add_library(scribblez_evidence_select STATIC
+  src/training/evidence_trajectory_select.cpp
+  src/agent/evidence_loop.cpp)
 set_target_properties(scribblez_evidence_select PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_evidence_select PUBLIC scribblez_core)
 

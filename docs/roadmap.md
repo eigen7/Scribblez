@@ -371,11 +371,19 @@ best-so-far in directly.)
 
 ### 6. The sequential agent
 
-The loop from [the destination](#the-destination), as a new `--player
---type=`. Reuses `mset_sim_agent`'s candidate generation, encoding, and
-endgame handoff, and shares its loop machinery with item 4's generator (the
-generator's on-policy side is this loop); what is left here is the
-packaging, the budget, and the stopping rule.
+**Built** — `--player "--type=ultimatebot"` (UltimateBot,
+[ultimate_bot_agent.h](../engine/include/agent/ultimate_bot_agent.h)): the
+loop from [the destination](#the-destination) as a playing agent, over the
+item-3 runtime. It reuses `mset_sim_agent`'s candidate generation, encoding,
+and endgame handoff; the loop itself is
+[evidence_loop.h](../engine/include/agent/evidence_loop.h), NN-free and
+sim-free by construction (it drives a `MoveProposalService` and a
+`CandidateSimmer` it is handed) with the pick rule as a policy, so item 4's
+generator can run its gen-1+ on-policy side through the same loop with a
+tempered pick once a trained gain head exists to justify that build. What
+remains for the agent is what the plan deferred behind a trained model: the
+per-pass cache/step export from the evidence trainer and a match role, then
+the budget/threshold measurements of [evaluation_plan.md](evaluation_plan.md).
 
 - **First sim: the greedy anchor** — the highest-raw-score candidate, taken
   straight off the generated move list, not from the model's ranking. It is
@@ -383,9 +391,14 @@ packaging, the budget, and the stopping rule.
 - **Every later sim**: argmax of the proves-best head over the unsimmed
   candidates, conditioned on the evidence so far.
 - **Early stopping**: halt when no unsimmed candidate's predicted gain
-  clears a threshold. At ~1,000 rollouts per sim this is where a budget
-  saving turns directly into strength per second.
-- **Final pick**: best simmed candidate by simulation value.
+  clears a threshold (`--gain-threshold`, in the gain head's win-probability
+  units; 0 never stops early). At ~1,000 rollouts per sim this is where a
+  budget saving turns directly into strength per second.
+- **Final pick**: best simmed candidate by simulation value (win rate — the
+  value the gain head is trained in, so the pick and the stopping rule agree;
+  the agent has no spread objective). `--max-sims` (default 10, the anchor
+  included, `mset-sim`'s `--sim-top-k`) bounds the loop; 1 plays the anchor
+  unsimmed.
 
 ### 7. Self-model plies and the endgame solver (D2, D3)
 
