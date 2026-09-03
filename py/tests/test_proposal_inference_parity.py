@@ -220,6 +220,7 @@ def test_wrappers_match_training_forward(kind):
     # An empty set still runs the step wrapper (its all-empty-mask gate must
     # reproduce the plain forward -- the deployment loop's first iteration).
     ref = _reference(model, spatial, scalar, moves, ev)
+    plain_ref = _reference(model, spatial, scalar, moves, None)
 
     letters, blanks, squares, tile_mask, scalars = moves
     with torch.no_grad():
@@ -233,7 +234,7 @@ def test_wrappers_match_training_forward(kind):
             torch.from_numpy(scalars),
         )
         ev_move_enc = _gather_ev_move_enc(move_enc.numpy(), indices)
-        s_wld, s_sd, s_planes, s_gain = step(
+        s_wld, s_sd, s_gain = step(
             board,
             g,
             move_enc,
@@ -242,13 +243,14 @@ def test_wrappers_match_training_forward(kind):
             torch.from_numpy(obs_scalars),
             torch.from_numpy(mask),
         )
-    outputs = {"wld": s_wld, "score_diff": s_sd, "planes": s_planes, "gain": s_gain}
+    # The cache graph's heads are the plain forward's, its planes included (the
+    # evidence-free planes every evidence token's predicted half is gathered
+    # from); the step graph's are the conditioned forward's, planes-free.
+    _assert_close({"wld": c_wld, "score_diff": c_sd, "planes": c_planes}, plain_ref)
+    outputs = {"wld": s_wld, "score_diff": s_sd, "gain": s_gain}
     _assert_close(outputs, ref)
     if kind == "empty":  # and the empty step equals the cache's plain heads, finite
-        _assert_close(
-            {"wld": s_wld, "score_diff": s_sd, "planes": s_planes},
-            {"wld": c_wld, "score_diff": c_sd, "planes": c_planes},
-        )
+        _assert_close({"wld": s_wld, "score_diff": s_sd}, {"wld": c_wld, "score_diff": c_sd})
         assert all(torch.isfinite(v).all() for v in outputs.values())
 
 
@@ -297,6 +299,7 @@ def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, kind):
         indices = _evidence_indices(m, kind, seed=5 + m)
         ev, obs_planes, obs_scalars, mask = _evidence_inputs(moves, indices, seed=7 + m)
         ref = _reference(model, spatial, scalar, moves, ev)
+        plain_ref = _reference(model, spatial, scalar, moves, None)
         letters, blanks, squares, tile_mask, scalars = moves
 
         cache_out = cache_sess.run(
@@ -313,6 +316,11 @@ def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, kind):
         )
         cache = dict(zip(CACHE_OUTPUT_NAMES, cache_out, strict=True))
         move_enc = cache["move_enc"]
+        for name in ("wld", "score_diff", "planes"):
+            assert cache[name].shape[0] == m, name
+            np.testing.assert_allclose(
+                cache[name], plain_ref[name].numpy(), atol=1e-5, rtol=1e-4, err_msg=name
+            )
         # Always run the step graph -- including the empty-mask case, which must
         # reproduce the plain forward through the graph itself, not a shortcut.
         step_out = step_sess.run(
@@ -397,13 +405,17 @@ def test_exported_file_contract(tmp_path):
     # initializers, no Identity aliasing left.
     for graph in (cache, step):
         init_names = {i.name for i in graph.graph.initializer}
-        for stem in ("head_attended", "head_g", "plane_attended", "plane_g", "q_proj", "k_proj"):
+        for stem in ("head_attended", "head_g", "q_proj", "k_proj"):
             assert any(stem in n for n in init_names), stem
         aliased = [
             n for n in graph.graph.node if n.op_type == "Identity" and n.input[0] in init_names
         ]
         assert not aliased
+    cache_inits = {i.name for i in cache.graph.initializer}
     step_inits = {i.name for i in step.graph.initializer}
+    for stem in ("plane_attended", "plane_g"):  # the plane head: cache graph only
+        assert any(stem in n for n in cache_inits), stem
+        assert not any(stem in n for n in step_inits), stem
     for stem in ("sa_q", "sa_k", "sa_v", "pb_attended", "pb_g"):  # the fusion self-attn + gain
         assert any(stem in n for n in step_inits), stem
 

@@ -57,6 +57,12 @@ void synchronize_stream(stream_t stream) {
   check(cudaStreamSynchronize(stream), "cudaStreamSynchronize");
 }
 
+size_t device_memory_used() {
+  size_t free_bytes = 0, total_bytes = 0;
+  check(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
+  return total_bytes - free_bytes;
+}
+
 void* device_malloc(size_t n_bytes) {
   void* ptr = nullptr;
   check(cudaMalloc(&ptr, n_bytes), "cudaMalloc");

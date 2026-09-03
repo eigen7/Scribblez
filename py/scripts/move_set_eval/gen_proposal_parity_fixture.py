@@ -4,7 +4,7 @@
 The engine runs the move proposal model as two graphs -- a per-turn
 `move_proposal_cache` and a per-evidence-iteration `move_proposal_step`
 (py/scribblez/move_set_eval/proposal_export.py) -- driven by
-agent/move_proposal_runtime.h and staged by agent/evidence_staging.h. This
+agent/move_proposal_nets.h and staged by agent/evidence_staging.h. This
 script captures the PyTorch side as ground truth so the C++ test can confirm the
 whole path -- two engine builds, the board/g/move_enc host handoff, the C++
 evidence staging, and the decode -- reproduces `MoveSetEvalModel.forward`.
@@ -36,11 +36,13 @@ Files written into --out-dir:
     the C++ Move footprint; obs.bin -- their SimObservation records (verbatim
     layout), for the C++ SimObservation. M is recovered C++-side from board /
     scalars sizes and obs.bin.
+  * plain_planes.bin -- M x 52 x 225 f32 footprint slot-channel planes of the
+    evidence-free pass (what the cache graph serves, and what every evidence
+    token's predicted half is gathered from).
   * cases.txt -- one line per evidence case: "<name> <num_evidence>".
   * case_<name>_indices.bin -- int32 scored indices (empty file for the empty
     case); case_<name>_scalars.bin -- M x 6 f32 [p_win, p_draw, p_loss, sd_mean,
-    sd_std, gain]; case_<name>_planes.bin -- M x 52 x 225 f32 footprint
-    slot-channel planes (what the graphs serve).
+    sd_std, gain]. No conditioned planes: the step graph emits none.
 
 Random weights are deliberate: this checks numerical fidelity of the inference
 stack, not any trained model, and keeps the fixture hermetic.
@@ -187,16 +189,19 @@ def forward(model, spatial, scalar, enc, num_moves: int, evidence=None) -> dict[
     )
 
 
-def decode(out: dict[str, torch.Tensor]) -> tuple[np.ndarray, np.ndarray]:
-    """forward() outputs -> (scalars M x 6 [p_win, p_draw, p_loss, sd_mean,
-    sd_std, gain], planes M x 52 x 225 -- the footprint heads' slot-channel
-    probabilities, what the proposal graphs serve)."""
+def decode_scalars(out: dict[str, torch.Tensor]) -> np.ndarray:
+    """forward() outputs -> scalars M x 6 [p_win, p_draw, p_loss, sd_mean,
+    sd_std, gain]."""
     wld = torch.softmax(out["wld"], dim=1).numpy()
     sd = out["score_diff"].numpy()
     gain = out["gain"].numpy()
-    scalars = np.concatenate([wld, sd, gain[:, None]], axis=1).astype(np.float32)
-    planes = footprint_slot_planes(out["planes"]).flatten(2).numpy().astype(np.float32)
-    return scalars, planes
+    return np.concatenate([wld, sd, gain[:, None]], axis=1).astype(np.float32)
+
+
+def decode_planes(out: dict[str, torch.Tensor]) -> np.ndarray:
+    """forward() outputs -> planes M x 52 x 225, the footprint heads'
+    slot-channel probabilities (what the cache graph serves)."""
+    return footprint_slot_planes(out["planes"]).flatten(2).numpy().astype(np.float32)
 
 
 def main() -> int:
@@ -278,6 +283,7 @@ def main() -> int:
         (args.out_dir / f"{name}.bin").write_bytes(np.ascontiguousarray(array).tobytes())
     (args.out_dir / "moves_sobs.bin").write_bytes(np.ascontiguousarray(moves).tobytes())
     (args.out_dir / "obs.bin").write_bytes(np.ascontiguousarray(obs).tobytes())
+    (args.out_dir / "plain_planes.bin").write_bytes(decode_planes(first_pass).tobytes())
 
     cases = evidence_indices(args.num_moves)
     with (args.out_dir / "cases.txt").open("w") as f:
@@ -296,12 +302,10 @@ def main() -> int:
                 moves[idx], obs[idx], PRE_MOVE_DIFF, {key: fp[key][idx] for key in fp}, max_e=MAX_E
             )
         out = forward(model, spatial, scalar, enc, args.num_moves, evidence)
-        scalars, planes = decode(out)
         (args.out_dir / f"case_{name}_indices.bin").write_bytes(
             np.asarray(indices, dtype=np.int32).tobytes()
         )
-        (args.out_dir / f"case_{name}_scalars.bin").write_bytes(scalars.tobytes())
-        (args.out_dir / f"case_{name}_planes.bin").write_bytes(planes.tobytes())
+        (args.out_dir / f"case_{name}_scalars.bin").write_bytes(decode_scalars(out).tobytes())
 
     print(f"Wrote proposal parity fixture to {args.out_dir}:")
     print(f"  cache/step graphs (move-encoding version {version}, E={MAX_E})")

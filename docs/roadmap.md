@@ -236,12 +236,17 @@ graphs, delivered over three PRs:
   `SimObservation` + `Move` + the cache's per-candidate predictions →
   the fusion stage's padded `(1, E, …)` inputs.
 - **Two specs beside `MoveSetEvaluationSpec`** (`MoveProposalCacheSpec` /
-  `MoveProposalStepSpec`) driven by a shared `agent/move_proposal_runtime.h`
-  helper — served at FP32, driving `NeuralNet<Spec>` directly (the handoff
-  tensors do not fit `TrtEvalService`'s row-uniform decode). Verified against
-  the PyTorch reference over empty/partial/full evidence sets by
+  `MoveProposalStepSpec`) driven by `agent/move_proposal_nets.h` (one shared,
+  serialized engine pair per run) through per-consumer
+  `agent/move_proposal_session.h` sessions, behind the GPU-free
+  `agent/move_proposal_service.h` seam — served at FP32, driving
+  `NeuralNet<Spec>` directly (the handoff tensors do not fit
+  `TrtEvalService`'s row-uniform decode). Verified against the PyTorch
+  reference over empty/partial/full evidence sets by
   `test_proposal_inference_parity.cpp`, with `proposal_infer_smoke` for GPU
-  liveness.
+  liveness. The step graph emits no planes (nothing reads a conditioned
+  plane), and the cache graph bounds its chunks at 1024 rows — the restructure
+  item 6 needed before a per-thread agent could fit a 4 GiB match GPU.
 
 The sequential *playing* agent that drives this loop is item 6.
 

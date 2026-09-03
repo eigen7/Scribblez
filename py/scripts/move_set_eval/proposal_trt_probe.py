@@ -285,7 +285,6 @@ def main() -> int:
         lambda m: {
             "wld": (m, 3),
             "score_diff": (m, 2),
-            "planes": (m, len(PLANE_NAMES), BOARD * BOARD),
             "gain": (m,),
         },
         {"move_enc": channels},

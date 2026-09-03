@@ -15,9 +15,13 @@ score_moves vs. evidence_fusion + conditioned score_moves):
     axis.
   * `move_proposal_step` (per loop iteration): the cache tensors plus a padded
     evidence set of fixed width E -> the evidence-conditioned wld, score_diff,
-    planes, and the proves-best gain. M rides the dynamic axis; the evidence
-    inputs are fixed-width (leading-1 batch), so the graph keeps ONE dynamic
-    axis exactly as the plain move-set graph does.
+    and the proves-best gain. M rides the dynamic axis; the evidence inputs are
+    fixed-width (leading-1 batch), so the graph keeps ONE dynamic axis exactly
+    as the plain move-set graph does. No planes: an evidence token carries the
+    EVIDENCE-FREE predicted planes of its candidate (from the cache graph), and
+    nothing reads a conditioned plane, so the step graph does not compute one
+    -- at (M, 4 * SLOTS_PER_CELL, 225) floats it would be the graph's largest
+    output by far, allocated at the engine's row ceiling for nobody.
 
 Refitter discipline (shared with onnx_export.py's MoveSetEvalExportModel, via
 the helpers in onnx_export_util.py): `dynamo=False` and
@@ -103,7 +107,7 @@ STEP_INPUT_NAMES = (
     "ev_obs_scalars",
     "ev_mask",
 )
-STEP_OUTPUT_NAMES = ("wld", "score_diff", "planes", "gain")
+STEP_OUTPUT_NAMES = ("wld", "score_diff", "gain")
 
 
 class _ScoringHeads(nn.Module):
@@ -113,8 +117,8 @@ class _ScoringHeads(nn.Module):
     plain (over the trunk map, in the cache graph) or evidence-conditioned (over
     the fused map, in the step graph); the math is identical, only the board/g
     it reads differ. `value` returns the attended embeddings alongside the WLD /
-    score-diff / plane heads; `gain` reads the same attended embedding for the
-    proves-best output.
+    score-diff heads; `planes` and `gain` read the same attended embedding for
+    the footprint and proves-best outputs.
     """
 
     def __init__(self, model: MoveSetEvalModel):
@@ -149,18 +153,22 @@ class _ScoringHeads(nn.Module):
 
     def value(
         self, board: torch.Tensor, g: torch.Tensor, e: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """board (1, 225, C), g (1, 3C), e (M, C) -> attended (M, C) and the
-        (wld (M, 3), score_diff (M, 2), planes (M, num_planes*SLOTS_PER_CELL,
-        225)) heads. The plane head builds the full footprint distribution and
-        serves it softmaxed in the evidence-channel layout (footprint_slot_
-        planes, catch-all dropped) -- exactly what the C++ staging copies into
-        the predicted half of every evidence token."""
+        (wld (M, 3), score_diff (M, 2)) heads."""
         attended = self._cross_attention(e, board[0])
         hidden = F.relu(self.head_attended(attended) + self.head_g(g))
         out = self.head_out(hidden)  # (M, 5)
         wld = out[:, :3]
         score_diff = torch.cat([out[:, 3:4], F.softplus(out[:, 4:5]) + 1e-3], dim=1)
+        return attended, wld, score_diff
+
+    def planes(self, attended: torch.Tensor, g: torch.Tensor, board: torch.Tensor) -> torch.Tensor:
+        """The plane head off the attended embeddings: the full footprint
+        distribution, served softmaxed in the evidence-channel layout
+        (footprint_slot_planes, catch-all dropped) as (M, num_planes*SLOTS_PER_CELL,
+        225) -- exactly what the C++ staging copies into the predicted half of
+        every evidence token. Cache graph only."""
         plane_q = self.plane_attended(attended) + self.plane_g(g)  # (M, num_planes*slots*C)
         plane_q = plane_q.view(-1, self.num_planes, SLOTS_PER_CELL, self.c)
         anchored = torch.einsum("mhsc,nc->mhns", plane_q, board[0])  # (M, num_planes, N, slots)
@@ -169,8 +177,7 @@ class _ScoringHeads(nn.Module):
             -1, self.num_planes, CATCH_ALL
         )
         footprint_logits = torch.cat([anchored, catch], dim=-1)  # (M, num_planes, NUM_CLASSES)
-        planes = footprint_slot_planes(footprint_logits).flatten(2)  # (M, planes*slots, 225)
-        return attended, wld, score_diff, planes
+        return footprint_slot_planes(footprint_logits).flatten(2)  # (M, planes*slots, 225)
 
     def gain(self, attended: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
         """The proves-best expected gain (M,) >= 0 off the same fused vector."""
@@ -216,7 +223,8 @@ class ProposalCacheExportModel(nn.Module):
         tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)  # is_play gate
         move_enc = self.move_encoder(letters, move_blanks, tile_mask, move_scalars, tile_board)
 
-        _, wld, score_diff, planes = self.heads.value(board, g, move_enc)
+        attended, wld, score_diff = self.heads.value(board, g, move_enc)
+        planes = self.heads.planes(attended, g, board)
         return board, g, move_enc, wld, score_diff, planes
 
 
@@ -319,9 +327,9 @@ class ProposalStepExportModel(nn.Module):
         m = ev_mask.float()  # (1, E) in {0, 1}
         has_ev = m.amax(dim=1, keepdim=True)  # (1, 1)
         board_c, g_c = self._fuse(board, g, tokens, spatial_feats, m, has_ev)
-        attended, wld, score_diff, planes = self.heads.value(board_c, g_c, move_enc)
+        attended, wld, score_diff = self.heads.value(board_c, g_c, move_enc)
         gain = self.heads.gain(attended, g_c)
-        return wld, score_diff, planes, gain
+        return wld, score_diff, gain
 
 
 def _export(
@@ -447,8 +455,8 @@ def export_proposal_step(
 ):
     """Trace and write the `move_proposal_step` graph: the cache tensors plus a
     padded width-`max_evidence` evidence set -> the conditioned wld / score_diff
-    / planes and the proves-best gain. M ("moves") is the single dynamic axis;
-    the evidence inputs are fixed-width leading-1 batches."""
+    and the proves-best gain. M ("moves") is the single dynamic axis; the
+    evidence inputs are fixed-width leading-1 batches."""
     path = Path(path)
     was_training = model.training
     model.eval()

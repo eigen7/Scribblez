@@ -155,11 +155,13 @@ add_library(scribblez_nn STATIC
   src/nn/onnx_metadata.cpp
   src/nn/neural_net.cpp
   src/nn/trt_eval_service.cpp
-  # The move-proposal two-graph runtime (roadmap item 3): drives the cache and
-  # step NeuralNet<Spec>s and marshals the handoff between them. Lives with the
+  # The move-proposal two-graph runtime (roadmap item 3): the shared engine
+  # pair and the per-consumer session that drive the cache and step
+  # NeuralNet<Spec>s and marshal the handoff between them. Lives with the
   # TensorRT layer (it drives two nets and stages evidence); scribblez_nn
   # already links scribblez_core for the evidence staging + game types.
-  src/agent/move_proposal_runtime.cpp)
+  src/agent/move_proposal_nets.cpp
+  src/agent/move_proposal_session.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_nn
   PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}
