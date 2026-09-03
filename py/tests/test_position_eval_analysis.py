@@ -18,6 +18,7 @@ from scribblez.ffi import (
     analyze_position_eval_gcg_leaves,
     collapse_position_eval_placement,
     format_layout,
+    legal_position_eval_placement,
     position_eval_board_json,
     session_input_arm,
 )
@@ -121,6 +122,37 @@ def test_collapse_placement_bad_gcg_is_os_error():
     raw = np.zeros((heads, classes), dtype=np.float32)
     with pytest.raises(OSError):
         collapse_position_eval_placement("#character-encoding UTF-8\n", raw)
+
+
+def test_legal_placement_covers_all_probability_mass():
+    """legal_position_eval_placement's plane is model-independent (unlike
+    collapse_position_eval_placement, it takes no `raw`), but must still be a
+    superset of wherever a masked-softmax collapse can ever land mass: a
+    masked softmax puts zero probability on an illegal class, so a cell with
+    nonzero collapsed probability under ANY logits must be legal. An occupied
+    board square is never legal (no footprint covers a square with a tile on
+    it already)."""
+    text = _text()
+    heads, classes = _placement_shape()
+    legal = legal_position_eval_placement(text)
+    assert legal.shape == (heads, 15, 15)
+    assert legal.dtype == bool
+
+    raw = np.random.default_rng(0).standard_normal((heads, classes)).astype(np.float32)
+    planes = collapse_position_eval_placement(text, raw)
+    assert np.all(legal[planes > 1e-6])
+
+    board = position_eval_board_json(text)["board"]
+    occupied = [(r, c) for r in range(15) for c in range(15) if board[r][c] is not None]
+    assert occupied  # the fixture has moves recorded
+    for r, c in occupied:
+        assert not legal[:, r, c].any(), (r, c)
+
+
+def test_legal_placement_bad_gcg_is_os_error():
+    _text()
+    with pytest.raises(OSError):
+        legal_position_eval_placement("#character-encoding UTF-8\n")
 
 
 def test_ground_truth_is_per_condition():

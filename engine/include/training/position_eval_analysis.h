@@ -51,6 +51,17 @@ bool masked_position_eval_analysis_placement(const std::string& gcg_text,
                                              const InputEncodingSpec& spec, const float* raw,
                                              float* out, std::string* error);
 
+// Which board cells the four placement heads can legally reach at this
+// analysis position (training/footprint_collapse.h collapse_footprint_legal_cells):
+// `out` receives kPlacementHeads * (side*side) floats, each 1.0f/0.0f. Needs no
+// model output -- only board legality and the unseen-pool tile availability --
+// so it lets a caller tell a square no legal placement reaches apart from one
+// the model/rollouts simply assign low probability. False (with *error) on a
+// parse error.
+bool legal_position_eval_analysis_placement(const std::string& gcg_text,
+                                            const InputEncodingSpec& spec, float* out,
+                                            std::string* error);
+
 // The web-render bundle for the same analysis position: the GameState JSON plus
 // "start_player", "last_move", and "opp_leave" (the opponent's retained leave,
 // '?' = a blank), with the final mover's leave as the shown rack. It goes

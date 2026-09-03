@@ -211,6 +211,16 @@ int scribblez_position_eval_masked_placement(ScribblezSession* s, const char* gc
                                              const float* raw, int raw_cap, float* out, int out_cap,
                                              char* out_err, int err_cap);
 
+// Which board cells the four placement heads can legally reach at a dataset
+// GCG's post-move position: `out` receives kPlacementHeads * 225 floats, each
+// 1.0f/0.0f. Needs no model output -- only board legality and the opponent's
+// unseen-pool tile availability -- so it lets a caller tell a square no legal
+// placement reaches apart from one the model/rollouts simply assign low
+// probability. Returns the floats written, or -1 with a reason in `out_err`:
+// a parse error or a buffer too small.
+int scribblez_position_eval_legal_placement(ScribblezSession* s, const char* gcg_text, float* out,
+                                            int out_cap, char* out_err, int err_cap);
+
 // Emit the web-render board bundle (GameState JSON: board / bonuses / rack /
 // tile_scores, plus "start_player", "last_move", and "opp_leave" fields) for
 // a dataset GCG's post-move position, from the POV of the player that made the

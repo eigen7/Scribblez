@@ -129,4 +129,23 @@ void masked_placement_distributions(const Board& board, const Dictionary& dict,
   }
 }
 
+void collapse_footprint_legal_cells(const Board& board, const Dictionary& dict,
+                                    const uint8_t* available_counts, float* out) {
+  board.ensure_movegen_caches(dict);
+  std::array<FootprintMask, kPlacementHeads> masks;
+  fill_head_masks(board, available_counts, masks);
+
+  thread_local std::vector<CellList> cells;
+  compute_cells(board, cells);
+  for (int h = 0; h < kPlacementHeads; ++h) {
+    float* head_out = out + size_t(h) * kBoardCells;
+    std::fill_n(head_out, kBoardCells, 0.0f);
+    for (int cls = 0; cls < kAnchoredFootprints; ++cls) {
+      if (!masks[h][cls]) continue;
+      const CellList& cl = cells[cls];
+      for (int i = 0; i < cl.n; ++i) head_out[cl.cell[i]] = 1.0f;
+    }
+  }
+}
+
 }  // namespace scribblez
