@@ -7,6 +7,7 @@ import UnseenTiles from './UnseenTiles';
 import { TileInfo } from '../types';
 import { getJSON } from '../lib/api';
 import { oppRackTiles } from '../lib/oppRack';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { buildPlacementOverlay, OverlayMode, PlacementData } from '../lib/placementOverlay';
 import {
   HeadSelection,
@@ -299,17 +300,25 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
 
   const effIdx = Math.min(genIdx, Math.max(0, genCount - 1));
   const effGen = generations[effIdx]?.generation ?? null;
+  // Dragging the slider passes through every intermediate generation; only
+  // fetch once it settles, and drop a response if a newer request superseded
+  // it while in flight.
+  const debouncedGen = useDebouncedValue(effGen, 150);
 
   useEffect(() => {
     if (!tag || positions.length === 0) {
       setPayload(null);
       return;
     }
-    const g = effGen == null ? 'latest' : String(effGen);
+    let cancelled = false;
+    const g = debouncedGen == null ? 'latest' : String(debouncedGen);
     getJSON(`/api/position_eval/position?task=${task}&tag=${tag}&position=${posIdx}&generation=${g}`)
-      .then(setPayload)
-      .catch(() => setPayload(null));
-  }, [task, tag, positions.length, posIdx, effGen]);
+      .then((d) => { if (!cancelled) setPayload(d); })
+      .catch(() => { if (!cancelled) setPayload(null); });
+    return () => {
+      cancelled = true;
+    };
+  }, [task, tag, positions.length, posIdx, debouncedGen]);
 
   // An alternate-leave result is tied to a specific position + generation, so drop it
   // when either changes (the entered text is kept so it can be re-submitted).
