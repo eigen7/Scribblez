@@ -153,7 +153,9 @@ int main(int argc, char** argv) {
     params.cache_onnx_path = argv[1];
     params.step_onnx_path = argv[2];
     params.precision = scribblez::nn::parse_precision(precision);
-    if (argc > 7) params.max_rows = std::max(std::atoi(argv[7]), 1);  // the cache graph's
+    // The cache graph's row bound only; the step graph keeps its own default
+    // (step_max_rows), which the memory question is not about.
+    if (argc > 7) params.max_rows = std::max(std::atoi(argv[7]), 1);
 
     const size_t device_before = scribblez::nn::device_memory_used();
     std::shared_ptr<MoveProposalNets> nets = MoveProposalNets::create(params);
