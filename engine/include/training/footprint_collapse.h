@@ -53,15 +53,10 @@ void collapse_footprint_planes(const Board& board, const Dictionary& dict,
 void masked_placement_distributions(const Board& board, const Dictionary& dict,
                                     const uint8_t* available_counts, const float* raw, float* out);
 
-// Which board cells the four heads can legally reach -- the same legality
-// collapse_footprint_planes's masked softmax applies (identical
-// `available_counts` semantics), exposed per cell instead of folded into a
-// probability. `out` is kPlacementHeads x (kFootprintSide*kFootprintSide),
-// each entry 1.0f if some anchored footprint covering that cell is legal
-// under that head's mask, else 0.0f. Needs no model output: unlike
-// collapse_footprint_planes, this depends only on board legality and tile
-// availability, so it can tell "no legal placement reaches this square" apart
-// from "the model/rollouts just assign this square low probability".
+// Computes each head's per-cell legality -- the same mask
+// collapse_footprint_planes applies, exposed per cell instead of folded into a
+// probability -- and writes it to `out` (kPlacementHeads x
+// (kFootprintSide*kFootprintSide), 1.0f/0.0f).
 void collapse_footprint_legal_cells(const Board& board, const Dictionary& dict,
                                     const uint8_t* available_counts, float* out);
 

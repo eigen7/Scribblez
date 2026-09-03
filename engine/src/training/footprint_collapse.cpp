@@ -135,11 +135,14 @@ void collapse_footprint_legal_cells(const Board& board, const Dictionary& dict,
   std::array<FootprintMask, kPlacementHeads> masks;
   fill_head_masks(board, available_counts, masks);
 
-  thread_local std::vector<CellList> cells;
+  // Called once per position (no per-candidate hot loop like the siblings
+  // above), so a plain local vector is enough -- no thread_local reuse to pay
+  // for.
+  std::vector<CellList> cells;
   compute_cells(board, cells);
+  std::fill_n(out, size_t(kPlacementHeads) * kBoardCells, 0.0f);
   for (int h = 0; h < kPlacementHeads; ++h) {
     float* head_out = out + size_t(h) * kBoardCells;
-    std::fill_n(head_out, kBoardCells, 0.0f);
     for (int cls = 0; cls < kAnchoredFootprints; ++cls) {
       if (!masks[h][cls]) continue;
       const CellList& cl = cells[cls];

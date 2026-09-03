@@ -51,13 +51,9 @@ bool masked_position_eval_analysis_placement(const std::string& gcg_text,
                                              const InputEncodingSpec& spec, const float* raw,
                                              float* out, std::string* error);
 
-// Which board cells the four placement heads can legally reach at this
-// analysis position (training/footprint_collapse.h collapse_footprint_legal_cells):
-// `out` receives kPlacementHeads * (side*side) floats, each 1.0f/0.0f. Needs no
-// model output -- only board legality and the unseen-pool tile availability --
-// so it lets a caller tell a square no legal placement reaches apart from one
-// the model/rollouts simply assign low probability. False (with *error) on a
-// parse error.
+// Computes the four placement heads' per-cell legality at this analysis
+// position (training/footprint_collapse.h collapse_footprint_legal_cells) and
+// writes it to `out`. False (with *error) on a parse error.
 bool legal_position_eval_analysis_placement(const std::string& gcg_text,
                                             const InputEncodingSpec& spec, float* out,
                                             std::string* error);

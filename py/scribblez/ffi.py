@@ -846,17 +846,10 @@ def masked_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarray
 
 
 def legal_position_eval_placement(gcg_text: str) -> np.ndarray:
-    """Which board cells some legal placement can reach, for each of the four
-    placement heads, at a dataset GCG's post-move position.
-
-    Result is (4, 15, 15) bool: True where at least one legal anchored
-    footprint under that head's mask (board legality + the opponent's
-    unseen-pool availability; see collapse_position_eval_placement) covers the
-    cell. Exposes the same legality collapse_position_eval_placement's masked
-    softmax applies, directly, so a caller can distinguish "no legal placement
-    reaches here" from "the model/rollouts just assign this cell low
-    probability". Independent of any model output. OSError on a parse error or
-    a non-PLAY final move.
+    """Computes each of the four placement heads' per-cell legality for a dataset
+    GCG's post-move position: (4, 15, 15) bool, True where some legal anchored
+    footprint (see collapse_position_eval_placement) covers the cell. OSError on
+    a parse error or a non-PLAY final move.
     """
     consts = format_layout()["constants"]
     heads = len(consts["placement_head_names"])
