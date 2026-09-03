@@ -3,11 +3,11 @@
 #include "agent/evidence_staging.h"
 #include "encoding/input_encoder.h"
 #include "nn/onnx_metadata.h"
+#include "nn/shared_registry.h"
 #include "util/exception.h"
 
 #include <algorithm>
 #include <cstring>
-#include <utility>
 
 namespace scribblez {
 namespace agent {
@@ -65,12 +65,12 @@ std::string read_proposal_export_id(const std::string& onnx_path) {
 // One net's params from the shared Params (NeuralNet is neither copyable nor
 // movable, so its params must be built before the member init list runs).
 template <typename Spec>
-nn::NeuralNetParams<Spec> net_params_from(const std::string& onnx_path,
+nn::NeuralNetParams<Spec> net_params_from(const std::string& onnx_path, int max_rows,
                                           const MoveProposalNets::Params& p) {
   nn::NeuralNetParams<Spec> np;
   np.onnx_path = onnx_path;
   np.cuda_device_id = p.cuda_device_id;
-  np.max_rows = p.max_rows;
+  np.max_rows = max_rows;
   np.precision = p.precision;
   np.fast_build = p.fast_build;
   np.mount_root = p.mount_root;
@@ -79,41 +79,20 @@ nn::NeuralNetParams<Spec> net_params_from(const std::string& onnx_path,
 
 }  // namespace
 
-void EvidenceSet::clear() {
-  moves.clear();
-  observations.clear();
-  scored_indices.clear();
-}
-
-void EvidenceSet::add(const Move& move, const SimObservation& observation, int scored_index) {
-  moves.push_back(move);
-  observations.push_back(observation);
-  scored_indices.push_back(scored_index);
-}
-
 MoveProposalNets::MoveProposalNets(const Params& params)
     : params_(params),
-      cache_net_(net_params_from<MoveProposalCacheSpec>(params.cache_onnx_path, params)),
-      step_net_(net_params_from<MoveProposalStepSpec>(params.step_onnx_path, params)) {}
+      cache_net_(
+        net_params_from<MoveProposalCacheSpec>(params.cache_onnx_path, params.max_rows, params)),
+      step_net_(net_params_from<MoveProposalStepSpec>(params.step_onnx_path, params.step_max_rows,
+                                                      params)) {}
 
 std::shared_ptr<MoveProposalNets> MoveProposalNets::create(const Params& params) {
-  // Process-wide registry of the live shared pairs, keyed on the full
-  // engine-determining params. Held weakly, so a pair is freed once its last
-  // holder (a run's sessions) drops it; a later run rebuilds.
-  static std::mutex mutex;
-  static std::vector<std::pair<Params, std::weak_ptr<MoveProposalNets>>> registry;
-
-  std::lock_guard<std::mutex> lock(mutex);
-  std::erase_if(registry, [](const auto& entry) { return entry.second.expired(); });
-  for (const auto& [key, weak] : registry) {
-    if (key == params) {
-      if (std::shared_ptr<MoveProposalNets> live = weak.lock()) return live;
-    }
-  }
-  std::shared_ptr<MoveProposalNets> nets(new MoveProposalNets(params));
-  nets->load();
-  registry.emplace_back(params, nets);
-  return nets;
+  static nn::SharedRegistry<Params, MoveProposalNets> registry;
+  return registry.get_or_create(params, [&] {
+    std::shared_ptr<MoveProposalNets> nets(new MoveProposalNets(params));
+    nets->load();
+    return nets;
+  });
 }
 
 void MoveProposalNets::load() {

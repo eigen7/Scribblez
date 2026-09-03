@@ -2,6 +2,7 @@
 
 #include "encoding/input_encoder.h"
 #include "nn/batching_position_eval_service.h"
+#include "nn/shared_registry.h"
 
 #include <Eigen/Core>
 
@@ -182,23 +183,13 @@ template std::unique_ptr<EvalService<MoveSetEvaluationSpec>> make_loaded_service
 template <>
 std::shared_ptr<PositionEvalService> EvalService<PositionEvaluationSpec>::create(
   const NeuralNetParams<PositionEvaluationSpec>& params) {
-  // Process-wide registry of the live shared services, keyed on the full
-  // engine-determining params. Held weakly, so a service is freed once its last
-  // holder (a run's agents) drops it; a later run rebuilds.
-  static std::mutex mutex;
-  static std::vector<std::pair<NeuralNetParamsBase, std::weak_ptr<PositionEvalService>>> registry;
-
-  std::lock_guard<std::mutex> lock(mutex);
-  std::erase_if(registry, [](const auto& entry) { return entry.second.expired(); });
-  for (const auto& [key, weak] : registry) {
-    if (key == params) {
-      if (std::shared_ptr<PositionEvalService> live = weak.lock()) return live;
-    }
-  }
-  auto service = std::make_shared<BatchingPositionEvalService>(
-    make_loaded_service<PositionEvaluationSpec>(params));
-  registry.emplace_back(params, service);
-  return service;
+  // Keyed on the full engine-determining params (NeuralNetParamsBase's
+  // defaulted equality).
+  static SharedRegistry<NeuralNetParamsBase, PositionEvalService> registry;
+  return registry.get_or_create(params, [&] {
+    return std::make_shared<BatchingPositionEvalService>(
+      make_loaded_service<PositionEvaluationSpec>(params));
+  });
 }
 
 std::unique_ptr<PositionEvalService> load_leaf_position_service(const std::string& onnx_path,

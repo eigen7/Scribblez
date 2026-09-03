@@ -245,7 +245,7 @@ graphs, delivered over three PRs:
   reference over empty/partial/full evidence sets by
   `test_proposal_inference_parity.cpp`, with `proposal_infer_smoke` for GPU
   liveness. The step graph emits no planes (nothing reads a conditioned
-  plane), and both graphs bound their chunks at 1024 rows — the restructure
+  plane), and the cache graph bounds its chunks at 1024 rows — the restructure
   item 6 needed before a per-thread agent could fit a 4 GiB match GPU.
 
 The sequential *playing* agent that drives this loop is item 6.

@@ -5,7 +5,10 @@
 // synthetic candidate set, conditions each on one synthetic evidence set, and
 // prints the plain and conditioned predictions plus what the whole thing cost:
 // the device memory the loaded pair took, and the host memory the sessions'
-// retained caches took.
+// retained caches took -- both as the exact sum of their vectors and as the
+// resident-set delta, measured after the pair has been warmed on a throwaway
+// session so its first-use footprint (first-touched pinned buffers, lazily
+// loaded CUDA modules) is not charged to the sessions.
 //
 // Usage:
 //   proposal_infer_smoke <cache.onnx> <step.onnx> [num_moves] [num_evidence]
@@ -124,6 +127,12 @@ size_t resident_bytes() {
 
 double mib(size_t bytes) { return double(bytes) / (1024.0 * 1024.0); }
 
+// The bytes one session's retained cache holds.
+size_t cache_bytes(const scribblez::agent::MoveProposalCache& c) {
+  return sizeof(float) * (c.move_enc.size() + c.wld.size() + c.score_diff.size() + c.planes.size() +
+                          c.board.size() + c.g.size());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -144,13 +153,14 @@ int main(int argc, char** argv) {
     params.cache_onnx_path = argv[1];
     params.step_onnx_path = argv[2];
     params.precision = scribblez::nn::parse_precision(precision);
-    if (argc > 7) params.max_rows = std::max(std::atoi(argv[7]), 1);
+    if (argc > 7) params.max_rows = std::max(std::atoi(argv[7]), 1);  // the cache graph's
 
     const size_t device_before = scribblez::nn::device_memory_used();
     std::shared_ptr<MoveProposalNets> nets = MoveProposalNets::create(params);
     std::cout << "loaded pair (C=" << nets->channels() << ", E=" << nets->max_evidence()
-              << ", max_rows=" << nets->max_rows() << "): device memory +"
-              << mib(scribblez::nn::device_memory_used() - device_before) << " MiB\n";
+              << ", max_rows=" << nets->max_rows() << "/" << nets->step_max_rows()
+              << "): device memory +" << mib(scribblez::nn::device_memory_used() - device_before)
+              << " MiB\n";
 
     // An all-zero board row at the model's own width; the candidates are what
     // this tool varies.
@@ -160,24 +170,36 @@ int main(int argc, char** argv) {
     const scribblez::move_set::MoveFeatureArrays moves = synthetic_candidates(num_moves);
     const EvidenceSet evidence = synthetic_evidence(num_evidence);
 
+    {
+      MoveProposalSession warmup(nets);
+      warmup.encode(board.data(), moves);
+      warmup.condition(evidence);
+    }
     const size_t host_before = resident_bytes();
     std::vector<std::unique_ptr<MoveProposalSession>> sessions;
+    const MoveProposalPredictions* plain = nullptr;
+    const MoveProposalPredictions* conditioned = nullptr;
+    size_t sessions_bytes = 0;
     for (int s = 0; s < num_sessions; ++s) {
       sessions.push_back(std::make_unique<MoveProposalSession>(nets));
-      sessions.back()->encode(board.data(), moves);
-      sessions.back()->condition(evidence);
+      const MoveProposalPredictions& p = sessions.back()->encode(board.data(), moves);
+      const MoveProposalPredictions& c = sessions.back()->condition(evidence);
+      if (s == 0) {
+        plain = &p;
+        conditioned = &c;
+      }
+      sessions_bytes += cache_bytes(sessions.back()->cache());
     }
-    std::cout << num_sessions << " session(s) x " << num_moves << " candidates: host memory +"
-              << mib(resident_bytes() - host_before) << " MiB\n";
+    std::cout << num_sessions << " session(s) x " << num_moves << " candidates: retained caches "
+              << mib(sessions_bytes) << " MiB (resident set +"
+              << mib(resident_bytes() - host_before) << " MiB)\n";
 
-    const MoveProposalPredictions& plain = sessions.front()->encode(board.data(), moves);
-    const MoveProposalPredictions& conditioned = sessions.front()->condition(evidence);
     for (int m = 0; m < std::min(num_moves, 8); ++m) {
-      const float* pw = plain.wld.data() + size_t(m) * 3;
-      const float* cw = conditioned.wld.data() + size_t(m) * 3;
+      const float* pw = plain->wld.data() + size_t(m) * 3;
+      const float* cw = conditioned->wld.data() + size_t(m) * 3;
       std::cout << "move " << m << ": plain win_prob=" << pw[0] + 0.5f * pw[1]
                 << "  conditioned win_prob=" << cw[0] + 0.5f * cw[1]
-                << "  gain=" << conditioned.gain[m] << "\n";
+                << "  gain=" << conditioned->gain[m] << "\n";
     }
     return 0;
   } catch (...) {

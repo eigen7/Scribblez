@@ -443,12 +443,14 @@ class MoveSetEvaluationSpec {
 // (the nets default their params so); the fusion graph's masked_fill / 4D
 // einsum make FP16 a later, separately gated optimization.
 //
-// Both default max_rows to 1024, not the move-set graph's 4096: the cache
-// graph's planes output is 11,700 floats per candidate, allocated at max_rows
-// on device and pinned host, so the move-set spec's "chunks cost more than they
-// save" arithmetic inverts here (192 MB per side at 4096 against 48 MB at
-// 1024), and a chunk launch on a rare > 1024-candidate turn is nothing beside
-// the sim each evidence-loop iteration schedules.
+// The cache spec defaults max_rows to 1024, not the move-set graph's 4096: its
+// planes output is 11,700 floats per candidate, allocated at max_rows on device
+// and pinned host, so the move-set spec's "chunks cost more than they save"
+// arithmetic inverts (192 MB per side at 4096 against 48 MB at 1024), and one
+// extra chunk launch per turn past 1024 candidates is nothing beside the sims
+// that turn schedules. The step spec keeps 4096: planes-free, its per-row
+// buffers are a few C-wide floats, and its chunks are paid per evidence-loop
+// iteration, not per turn.
 
 // The cache graph: one position's board row plus M candidates -> the reusable
 // cache (board/g/move_enc) and the evidence-free predictions (wld/score_diff/
@@ -489,7 +491,7 @@ class MoveProposalStepSpec {
   static constexpr const char* kGraph = kGraphMoveProposalStep;
   static constexpr bool kAcceptUntaggedGraph = false;
   static constexpr const char* kAxisTag = "moves";
-  static constexpr int kDefaultMaxRows = 1024;
+  static constexpr int kDefaultMaxRows = 4096;
   static constexpr int kOptRows = 512;
 
   static constexpr const char* kChannelsTensor = MoveEncHandoff::kName;

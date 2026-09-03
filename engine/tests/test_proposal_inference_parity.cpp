@@ -46,6 +46,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 using scribblez::Move;
@@ -243,6 +244,7 @@ MoveProposalNets::Params ProposalInferenceParityTest::nets_params(int max_rows) 
   params.step_onnx_path = model("step.onnx");
   params.precision = scribblez::nn::Precision::kFP32;  // item-3 serving precision
   params.max_rows = max_rows;
+  params.step_max_rows = max_rows;  // so a bound below M chunks BOTH graphs
   params.mount_root = cache_root_.string();
   // The parity check validates the inference stack, not kernel-tactic quality,
   // so build at optimization level 0 to keep cold builds to a few seconds.
@@ -350,57 +352,120 @@ TEST_F(ProposalInferenceParityTest, ChunksACandidateSetLargerThanTheEngines) {
   }
 }
 
-// Two sessions over ONE shared pair, their encode/condition calls interleaved
-// over different candidate sets and evidence, each reproduce what they produce
+// One consumer's worth of work over a shared pair: a candidate subset and the
+// evidence that fits it, with what that consumer produces when nothing else
+// touches the nets.
+struct ConsumerCase {
+  scribblez::move_set::MoveFeatureArrays moves;
+  EvidenceSet evidence;
+  MoveProposalPredictions want_plain;
+  MoveProposalPredictions want_conditioned;
+};
+
+// The worst deviation over one consumer's outputs from its solo reference,
+// across `iterations` rounds of encode / condition(empty) / condition -- run on
+// its own thread, so it reports rather than asserts.
+struct ConsumerRun {
+  const ConsumerCase* c;
+  Worst worst;
+  void run(std::shared_ptr<MoveProposalNets> nets, const float* board, int iterations);
+};
+
+void ConsumerRun::run(std::shared_ptr<MoveProposalNets> nets, const float* board, int iterations) {
+  MoveProposalSession session(std::move(nets));
+  for (int i = 0; i < iterations; ++i) {
+    const MoveProposalPredictions& plain = session.encode(board, c->moves);
+    for (size_t k = 0; k < plain.wld.size(); ++k)
+      worst.prob = std::max(worst.prob, std::abs(plain.wld[k] - c->want_plain.wld[k]));
+    session.condition(EvidenceSet{});
+    const MoveProposalPredictions& got = session.condition(c->evidence);
+    for (size_t k = 0; k < got.wld.size(); ++k)
+      worst.prob = std::max(worst.prob, std::abs(got.wld[k] - c->want_conditioned.wld[k]));
+    for (size_t k = 0; k < got.score_diff.size(); ++k)
+      worst.score_diff =
+        std::max(worst.score_diff, std::abs(got.score_diff[k] - c->want_conditioned.score_diff[k]));
+    for (size_t k = 0; k < got.gain.size(); ++k)
+      worst.gain = std::max(worst.gain, std::abs(got.gain[k] - c->want_conditioned.gain[k]));
+  }
+}
+
+// Sessions over ONE shared pair, their encode/condition calls interleaved over
+// different candidate sets and evidence, each reproduce what they produce
 // alone: the nets hold no per-position state, and the mutex spans a whole
-// call. A leak of one session's cache into the other's step (a shared handoff
-// buffer read after the other session re-staged it) moves outputs by far more
-// than the parity tolerance.
+// call. First interleaved on one thread (the sequencing), then from real
+// concurrent threads (the locking): a leak of one session's cache into
+// another's step -- a shared handoff or staging buffer read after another
+// session re-staged it, which a critical section narrowed to predict() alone
+// would allow -- moves outputs by far more than the parity tolerance.
 TEST_F(ProposalInferenceParityTest, SessionsOnOneSharedPairDoNotCrosstalk) {
-  const int subset = 40;
-  ASSERT_GT(num_moves_, subset);
-  const scribblez::move_set::MoveFeatureArrays fewer = truncate_moves(moves_, subset);
-  // Evidence for the subset session: the partial case's indices that fit it.
   const EvidenceCase* partial = nullptr;
   for (const EvidenceCase& c : cases_)
     if (c.name == "partial") partial = &c;
   ASSERT_NE(partial, nullptr);
-  EvidenceSet subset_evidence;
-  for (int idx : partial->indices)
-    if (idx < subset) subset_evidence.add(sobs_moves_[idx], obs_[idx], idx);
-  const EvidenceSet full_evidence = evidence_of(*partial);
 
-  // Each session alone.
+  // Four consumers over nested candidate subsets (the full set first), each
+  // with the partial case's evidence that fits its subset, and their solo
+  // references.
   std::shared_ptr<MoveProposalNets> nets = MoveProposalNets::create(nets_params(num_moves_));
-  MoveProposalSession solo_a(nets);
-  solo_a.encode(board_.data(), moves_);
-  const MoveProposalPredictions want_a = solo_a.condition(full_evidence);
-  MoveProposalSession solo_b(nets);
-  const MoveProposalPredictions want_b_plain = solo_b.encode(board_.data(), fewer);
-  const MoveProposalPredictions want_b = solo_b.condition(subset_evidence);
+  const int subsets[] = {num_moves_, 40, 25, 10};
+  std::vector<ConsumerCase> consumers;
+  for (int subset : subsets) {
+    ASSERT_LE(subset, num_moves_);
+    ConsumerCase c;
+    c.moves = truncate_moves(moves_, subset);
+    for (int idx : partial->indices)
+      if (idx < subset) c.evidence.add(sobs_moves_[idx], obs_[idx], idx);
+    MoveProposalSession solo(nets);
+    c.want_plain = solo.encode(board_.data(), c.moves);
+    c.want_conditioned = solo.condition(c.evidence);
+    consumers.push_back(std::move(c));
+  }
 
-  // Interleaved.
+  // Interleaved on one thread.
   MoveProposalSession a(nets);
   MoveProposalSession b(nets);
-  a.encode(board_.data(), moves_);
-  const MoveProposalPredictions got_b_plain = b.encode(board_.data(), fewer);
+  a.encode(board_.data(), consumers[0].moves);
+  const MoveProposalPredictions got_b_plain = b.encode(board_.data(), consumers[1].moves);
   a.condition(EvidenceSet{});
-  const MoveProposalPredictions got_b = b.condition(subset_evidence);
-  const MoveProposalPredictions got_a = a.condition(full_evidence);
+  const MoveProposalPredictions got_b = b.condition(consumers[1].evidence);
+  const MoveProposalPredictions got_a = a.condition(consumers[0].evidence);
+  expect_same_predictions(got_a, consumers[0].want_conditioned, kFp32Tol, "session a");
+  expect_same_predictions(got_b_plain, consumers[1].want_plain, kFp32Tol, "session b plain");
+  expect_same_predictions(got_b, consumers[1].want_conditioned, kFp32Tol, "session b");
 
-  expect_same_predictions(got_a, want_a, kFp32Tol, "session a");
-  expect_same_predictions(got_b_plain, want_b_plain, kFp32Tol, "session b plain");
-  expect_same_predictions(got_b, want_b, kFp32Tol, "session b");
+  // Concurrently: one thread per consumer, each its own session, hammering the
+  // shared pair.
+  const int iterations = 8;
+  std::vector<ConsumerRun> runs;
+  for (const ConsumerCase& c : consumers) runs.push_back(ConsumerRun{&c, {}});
+  std::vector<std::thread> threads;
+  for (ConsumerRun& r : runs)
+    threads.emplace_back(&ConsumerRun::run, &r, nets, board_.data(), iterations);
+  for (std::thread& t : threads) t.join();
+  for (size_t i = 0; i < runs.size(); ++i) {
+    std::cout << "  [thread " << i << ", M=" << subsets[i] << "] worst prob " << runs[i].worst.prob
+              << ", sd " << runs[i].worst.score_diff << ", gain " << runs[i].worst.gain << "\n";
+    EXPECT_LE(runs[i].worst.prob, kFp32Tol.prob) << "thread " << i;
+    EXPECT_LE(runs[i].worst.score_diff, kFp32Tol.score_diff) << "thread " << i;
+    EXPECT_LE(runs[i].worst.gain, kFp32Tol.gain) << "thread " << i;
+  }
 }
 
 // create() dedupes on the full engine-determining params: equal params share
-// one live pair, a differing row bound gets its own.
+// one live pair -- also when the callers race, the second waiting out the
+// first's build -- and a differing row bound gets its own.
 TEST_F(ProposalInferenceParityTest, CreateSharesAPairAcrossEqualParams) {
-  std::shared_ptr<MoveProposalNets> first = MoveProposalNets::create(nets_params(num_moves_));
+  std::vector<std::shared_ptr<MoveProposalNets>> racers(6);
+  std::vector<std::thread> threads;
+  for (std::shared_ptr<MoveProposalNets>& slot : racers) {
+    threads.emplace_back([&] { slot = MoveProposalNets::create(nets_params(num_moves_)); });
+  }
+  for (std::thread& t : threads) t.join();
+  for (const std::shared_ptr<MoveProposalNets>& r : racers) EXPECT_EQ(r.get(), racers[0].get());
   std::shared_ptr<MoveProposalNets> again = MoveProposalNets::create(nets_params(num_moves_));
-  EXPECT_EQ(first.get(), again.get());
+  EXPECT_EQ(again.get(), racers[0].get());
   std::shared_ptr<MoveProposalNets> other = MoveProposalNets::create(nets_params(32));
-  EXPECT_NE(first.get(), other.get());
+  EXPECT_NE(other.get(), racers[0].get());
 }
 
 // A cache and step graph exported from different checkpoints (same architecture,

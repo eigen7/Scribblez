@@ -54,8 +54,12 @@ struct EvidenceSet {
   std::vector<int> scored_indices;
 
   int size() const { return int(moves.size()); }
-  void clear();
-  void add(const Move& move, const SimObservation& observation, int scored_index);
+  void clear() { *this = EvidenceSet{}; }
+  void add(const Move& move, const SimObservation& observation, int scored_index) {
+    moves.push_back(move);
+    observations.push_back(observation);
+    scored_indices.push_back(scored_index);
+  }
 };
 
 class MoveProposalService : public nn::ServedModelInputs {

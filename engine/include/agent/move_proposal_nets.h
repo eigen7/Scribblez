@@ -22,11 +22,13 @@
 // engine pair per run instead of one per agent.
 //
 // Memory: the cache graph's `planes` output is (M, 4 * kSlotsPerCell, 225)
-// floats per candidate, allocated at max_rows on device and pinned host, which
-// is why the proposal specs default max_rows to 1024 rather than the move-set
-// graph's 4096 (a few extra chunk launches on a rare > 1024-candidate turn cost
-// nothing next to the sim each loop iteration schedules). The step graph emits
-// no planes at all: nothing reads a conditioned plane.
+// floats per candidate, allocated at its row bound on device and pinned host,
+// which is why the cache spec defaults max_rows to 1024 rather than the
+// move-set graph's 4096 (one extra chunk launch per turn past 1024 candidates,
+// paid once per turn). The step graph emits no planes at all -- nothing reads a
+// conditioned plane -- so its per-row buffers are a few C-wide floats, and it
+// keeps the 4096 bound: a step chunk is paid per evidence-loop ITERATION, under
+// the shared mutex, and re-runs the position-level fusion each time.
 
 #include "agent/move_proposal_service.h"
 #include "nn/model_specs.h"
@@ -65,8 +67,11 @@ class MoveProposalNets {
     std::string cache_onnx_path;
     std::string step_onnx_path;
     int cuda_device_id = 0;
-    // The candidate ceiling per predict(); candidate sets above it are chunked.
+    // The candidate ceiling per predict() of each graph; candidate sets above
+    // it are chunked. Separate bounds because the two graphs' per-row costs
+    // differ by orders of magnitude (see the file comment).
     int max_rows = nn::MoveProposalCacheSpec::kDefaultMaxRows;
+    int step_max_rows = nn::MoveProposalStepSpec::kDefaultMaxRows;
     // FP32: correctness and the parity contract, not FP16 speed -- the fusion
     // graph's masked_fill / 4D einsum are FP16 hazards gated separately
     // (docs/fp16_safe_serving.md). Callers may override, with that caveat.
@@ -92,12 +97,13 @@ class MoveProposalNets {
   MoveProposalNets& operator=(const MoveProposalNets&) = delete;
 
   // The trunk channel width C, the padded evidence width E the step graph is
-  // specialized to, the per-predict() row ceiling, and the cache graph's
-  // board-row widths and input arm (for a caller sizing the encoder row it
-  // passes to run_cache).
+  // specialized to, each graph's per-predict() row ceiling, and the cache
+  // graph's board-row widths and input arm (for a caller sizing the encoder
+  // row it passes to run_cache).
   int channels() const { return cache_net_.channels(); }
   int max_evidence() const { return nn::kMaxEvidence; }
   int max_rows() const { return cache_net_.max_rows(); }
+  int step_max_rows() const { return step_net_.max_rows(); }
   int spatial_planes() const { return cache_net_.spatial_planes(); }
   int scalar_floats() const { return cache_net_.scalar_floats(); }
   bool opp_leave_input() const { return cache_net_.opp_leave_input(); }
