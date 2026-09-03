@@ -18,6 +18,7 @@ import Rack from './Rack';
 import UnseenTiles from './UnseenTiles';
 import { PlacedTile, TileInfo } from '../types';
 import { getJSON } from '../lib/api';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 import {
   buildPlacementOverlay,
   OverlayMode,
@@ -289,6 +290,9 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
   }, [latest, genCount]);
   const effIdx = Math.min(genIdx, Math.max(0, genCount - 1));
   const effGen = generations[effIdx]?.generation ?? null;
+  // Dragging the slider passes through every intermediate generation; only
+  // fetch (and re-sim sidecars) once it settles.
+  const debouncedGen = useDebouncedValue(effGen, 150);
 
   // A new position resets the prefix (to the largest) and the selected
   // candidate (to the prefix's last); a new prefix resets the candidate.
@@ -301,7 +305,7 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
   }, [prefix]);
 
   useEffect(() => {
-    if (!tag || !setName || positions.length === 0 || effGen == null) {
+    if (!tag || !setName || positions.length === 0 || debouncedGen == null) {
       setPayload(null);
       return;
     }
@@ -309,7 +313,7 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
     setLoading(true);
     const q =
       `/api/evidence_trajectories/position?task=${task}&tag=${tag}&set=${encodeURIComponent(setName)}` +
-      `&position=${posIdx}&generation=${effGen}` +
+      `&position=${posIdx}&generation=${debouncedGen}` +
       (prefix == null ? '' : `&prefix=${prefix}`) +
       (slot == null ? '' : `&slot=${slot}`);
     // Raw fetch (not getJSON) so a 4xx/5xx reason reaches the UI: the first
@@ -334,7 +338,7 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
     return () => {
       cancelled = true;
     };
-  }, [task, tag, setName, positions.length, posIdx, effGen, prefix, slot]);
+  }, [task, tag, setName, positions.length, posIdx, debouncedGen, prefix, slot]);
 
   const selectedCard = useMemo(() => {
     if (!payload) return null;

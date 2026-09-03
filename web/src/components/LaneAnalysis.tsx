@@ -5,6 +5,7 @@ import GenerationSlider from './GenerationSlider';
 import Rack from './Rack';
 import { TileInfo } from '../types';
 import { getJSON } from '../lib/api';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 
 // The score head has 100 bins; the top bin is the catch-all for scores >= 99.
 const TOP_SCORE_BIN = 99;
@@ -202,6 +203,10 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
 
   const effIdx = Math.min(genIdx, Math.max(0, genCount - 1));
   const effGen = generations[effIdx]?.generation ?? null;
+  // Dragging the slider passes through every intermediate generation; only
+  // fetch once it settles, and drop a response if a newer request superseded
+  // it while in flight.
+  const debouncedGen = useDebouncedValue(effGen, 150);
 
   // Fetch the merged board + ground-truth + prediction payload.
   useEffect(() => {
@@ -209,11 +214,15 @@ export default function LaneAnalysis({ task, tag }: { task: string; tag: string 
       setPayload(null);
       return;
     }
-    const g = effGen == null ? 'latest' : String(effGen);
+    let cancelled = false;
+    const g = debouncedGen == null ? 'latest' : String(debouncedGen);
     getJSON(`/api/lane/position?task=${task}&tag=${tag}&position=${posIdx}&generation=${g}`)
-      .then(setPayload)
-      .catch(() => setPayload(null));
-  }, [task, tag, positions.length, posIdx, effGen]);
+      .then((d) => { if (!cancelled) setPayload(d); })
+      .catch(() => { if (!cancelled) setPayload(null); });
+    return () => {
+      cancelled = true;
+    };
+  }, [task, tag, positions.length, posIdx, debouncedGen]);
 
   // Default the selected lane to the globally highest-scoring one (the lane holding
   // the position's best move) -- but ONLY once per position. The ref guard makes
