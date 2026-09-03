@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
     // The truncation leaf service, shared by every position worker (the
     // runners are single-threaded, but many run at once; EvalService
     // serializes their calls).
-    std::unique_ptr<nn::PositionEvalService> leaf_eval_service =
+    std::shared_ptr<nn::PositionEvalService> leaf_eval_service =
       nn::load_leaf_position_service(opt.leaf_model);
     std::string leaf_hash;
     if (!opt.leaf_model.empty())

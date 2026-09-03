@@ -54,10 +54,10 @@ class SimAgent : public Agent {
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  // `leaf_service` is the value-truncation leaf evaluator (real or a
-  // scripted stub); give it iff params.sim_horizon is set.
+  // `leaf_service` is the value-truncation leaf evaluator (the run's shared
+  // service, or a scripted stub); give it iff params.sim_horizon is set.
   explicit SimAgent(const Params& params,
-                    std::unique_ptr<nn::PositionEvalService> leaf_service = nullptr);
+                    std::shared_ptr<nn::PositionEvalService> leaf_service = nullptr);
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
@@ -79,7 +79,7 @@ class SimAgent : public Agent {
   int top_k_;
   SimObjective objective_;
   uint64_t seed_;
-  std::unique_ptr<nn::PositionEvalService> leaf_service_;  // null = terminal sims
+  std::shared_ptr<nn::PositionEvalService> leaf_service_;  // null = terminal sims
   SimRunner runner_;
   EndgameTurnPolicy endgame_;
   int ply_ = 0;  // moves observed this game, by either seat

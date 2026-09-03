@@ -24,7 +24,7 @@ const Dictionary& require_dict(const Dictionary* dict) {
 
 }  // namespace
 
-SimAgent::SimAgent(const Params& params, std::unique_ptr<nn::PositionEvalService> leaf_service)
+SimAgent::SimAgent(const Params& params, std::shared_ptr<nn::PositionEvalService> leaf_service)
     : Agent(params.thread_id, params.name),
       top_k_(params.top_k),
       objective_(params.objective),

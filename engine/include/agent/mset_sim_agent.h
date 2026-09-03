@@ -71,9 +71,10 @@ class MsetSimAgent : public Agent {
 
   // Takes already-loaded services (real or scripted stubs), loading no model
   // and touching no GPU. `leaf_service` is the value-truncation leaf
-  // evaluator; give it iff params.sim_horizon is set.
+  // evaluator (the run's shared service); give it iff params.sim_horizon is
+  // set.
   MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service,
-               std::unique_ptr<nn::PositionEvalService> leaf_service = nullptr);
+               std::shared_ptr<nn::PositionEvalService> leaf_service = nullptr);
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
@@ -121,7 +122,7 @@ class MsetSimAgent : public Agent {
   std::unique_ptr<nn::MoveSetEvalService> service_;
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;  // mirrors the live game, both seats' moves
-  std::unique_ptr<nn::PositionEvalService> leaf_service_;  // null = terminal sims
+  std::shared_ptr<nn::PositionEvalService> leaf_service_;  // null = terminal sims
   SimRunner runner_;
   EndgameTurnPolicy endgame_;
   int ply_ = 0;  // moves observed this game, by either seat

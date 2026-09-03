@@ -201,7 +201,7 @@ std::shared_ptr<PositionEvalService> EvalService<PositionEvaluationSpec>::create
   return service;
 }
 
-std::unique_ptr<PositionEvalService> load_leaf_position_service(const std::string& onnx_path,
+std::shared_ptr<PositionEvalService> load_leaf_position_service(const std::string& onnx_path,
                                                                 int cuda_device_id) {
   if (onnx_path.empty()) return nullptr;
   NeuralNetParams<PositionEvaluationSpec> params;
@@ -211,7 +211,7 @@ std::unique_ptr<PositionEvalService> load_leaf_position_service(const std::strin
   // extreme-advantage rollout leaves (its exponent range is FP32's), at a
   // mantissa cost far below the model's own error against Monte-Carlo truth.
   params.precision = Precision::kBF16;
-  return make_loaded_service(params);
+  return PositionEvalService::create(params);
 }
 
 template class TrtEvalService<PositionEvaluationSpec>;

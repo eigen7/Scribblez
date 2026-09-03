@@ -242,7 +242,7 @@ TEST_F(SimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
 TEST_F(SimAgentTest, TruncatedRolloutsReproduceThroughSimRunner) {
   SimAgent::Params p = params();
   p.sim_horizon = 4;
-  SimAgent agent(p, std::make_unique<LeafStub>());
+  SimAgent agent(p, std::make_shared<LeafStub>());
   agent.begin_game({});
   const Move played = agent.make_move(request()).move;
 

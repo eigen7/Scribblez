@@ -68,12 +68,14 @@ class TrtEvalService : public EvalService<Spec> {
 template <typename Spec>
 std::unique_ptr<EvalService<Spec>> make_loaded_service(const NeuralNetParams<Spec>& params);
 
-// Loads a position-evaluation leaf service from an .onnx path for value
-// truncation, or returns null for an empty path. The one place the sim
-// agents and the offline generators stand up their leaf model, so they
-// cannot drift on how it is served (BF16, whose FP32-range exponent serves
-// the trunk's activation magnitudes without FP16 overflow).
-std::unique_ptr<PositionEvalService> load_leaf_position_service(const std::string& onnx_path,
+// The position-evaluation leaf service for value truncation, from an .onnx
+// path, or null for an empty path. The one place the sim agents and the
+// offline generators stand up their leaf model, so they cannot drift on how
+// it is served (BF16, whose FP32-range exponent serves the trunk's activation
+// magnitudes without FP16 overflow). Shared through PositionEvalService::
+// create(): the agents of every game thread of a run resolve the same leaf
+// path to one loaded engine, instead of one apiece.
+std::shared_ptr<PositionEvalService> load_leaf_position_service(const std::string& onnx_path,
                                                                 int cuda_device_id = 0);
 
 extern template class TrtEvalService<PositionEvaluationSpec>;

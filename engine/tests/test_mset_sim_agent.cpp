@@ -133,11 +133,11 @@ TEST_F(MsetSimAgentTest, TruncationHorizonIsWiredToTheRunner) {
   EXPECT_THROW(MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>()), std::runtime_error);
   p.sim_horizon = SimRunner::kMinHorizonPlies - 1;  // below the minimum, even with a leaf
   EXPECT_THROW(MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>(),
-                            std::make_unique<StubEvalService>()),
+                            std::make_shared<StubEvalService>()),
                std::runtime_error);
   p.sim_horizon = SimRunner::kMinHorizonPlies;  // a valid horizon with a leaf
   EXPECT_NO_THROW(MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>(),
-                               std::make_unique<StubEvalService>()));
+                               std::make_shared<StubEvalService>()));
 }
 
 TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
