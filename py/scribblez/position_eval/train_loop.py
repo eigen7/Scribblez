@@ -14,6 +14,8 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+import torch
+
 # The loss config and the loss itself live with the head registry in model.py:
 # the model owns compute_loss(), and the per-head loss keys and batch target keys
 # are derived from its heads (model.loss_keys() / model.target_keys()), so a new
@@ -81,7 +83,12 @@ def run_epoch(
             for group in optimizer.param_groups:
                 group["lr"] = lr
 
-        outputs = model(input_spatial, input_scalar)
+        # bf16 mixed precision for the network only: the loss below runs on
+        # fp32-upcast outputs, so its arithmetic (masked softmax-CE, Huber) is
+        # untouched. Precision regime rationale: position_eval/trainer.py.
+        with torch.autocast(device.type, dtype=torch.bfloat16):
+            outputs = model(input_spatial, input_scalar)
+        outputs = {k: v.float() for k, v in outputs.items()}
         losses = model.compute_loss(
             outputs,
             targets,

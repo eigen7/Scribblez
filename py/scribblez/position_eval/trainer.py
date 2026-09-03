@@ -23,6 +23,20 @@ the run's `optimizer` arm (generational/optim.py); the CPU thread pools
 (DataLoader workers, torch intra-op threads) are live controls in the per-tag
 dashboard.db, adopted at the next generation.
 
+Training-step regime. The network forward runs under bf16 autocast, with the
+loss on fp32-upcast outputs and fp32 master weights / optimizer state (bf16
+keeps fp32's exponent range, so the overflow that ruled out fp16 serving in
+docs/fp16_safe_serving.md cannot occur); the fp32 matmuls that remain use
+TF32, which cuDNN's convolutions already did by default. The training forward
+is torch.compile'd; every other pass -- BatchNorm recalibration, the
+per-checkpoint evals, ONNX export, the saved checkpoint -- goes through the
+eager module, so state-dict keys and the exported graph are unchanged. Epochs
+drop the trailing partial batch so the compiled graph is one static shape,
+compiled once per process. Measured on the transformer trunk at batch 256,
+these compound to ~5x on the isolated step (1453 -> 286 ms) and ~4x in the
+full loop (0.2k -> 0.8k rows/s); the conv trunk gains ~2.6x, nearly all of it
+from bf16. See the PR that introduced them for the per-component table.
+
 Runs as the singleton `train` worker of the position_eval workload (launched
 by the worker entrypoint with SCZ_ROLE=train), or directly via the
 scripts/position_eval/train.py CLI for headless debugging.
@@ -184,10 +198,11 @@ def _transformer_config(params) -> TransformerConfig | None:
 
 
 def train_one_generation(
-    model, optimizer, conn, paths, device, params, state, loss_cfg, optim_arm, cpu, ctx
+    model, train_model, optimizer, conn, paths, device, params, state, loss_cfg, optim_arm, cpu, ctx
 ):
-    """Train one epoch over the window ending at the cursor generation, then
-    checkpoint under that generation's index and advance the cursor.
+    """Train one epoch (through `train_model`, the compiled forward over
+    `model`'s parameters) over the window ending at the cursor generation, then
+    checkpoint `model` under that generation's index and advance the cursor.
 
     The optimizer arm is switched to training weights around the epoch and to
     deployable ones around the checkpoint, so everything the checkpoint step
@@ -204,18 +219,20 @@ def train_one_generation(
     )
     # The generation index seeds the shuffle and the per-game turn rotation, so
     # each of the `window` passes a game gets over its residency shuffles
-    # differently and draws distinct turns.
+    # differently and draws distinct turns. The trailing short batch is dropped
+    # (one static shape for the compiled forward); generation is cheap.
     batches = ds.iter_batches(
         params.batch_size,
         seed=gen * 1000003,
         turns_per_game=params.turns_per_game,
         epoch_index=gen,
+        drop_last=True,
     )
     t0 = time.time()
     rows_before = state.rows_trained
     optim_arm.train_mode()
     result = run_epoch(
-        model,
+        train_model,
         optimizer,
         batches,
         device,
@@ -251,7 +268,9 @@ def train_one_generation(
         )
 
 
-def run_generational_training(model, optimizer, conn, paths, device, params, state, ctx):
+def run_generational_training(
+    model, train_model, optimizer, conn, paths, device, params, state, ctx
+):
     """The wait->train->advance loop, from the resumed cursor onward."""
     loss_cfg = LossConfig.from_args(params)
     optim_arm = build_optim_arm(conn, params, optimizer, state.rows_trained)
@@ -260,7 +279,18 @@ def run_generational_training(model, optimizer, conn, paths, device, params, sta
         cpu.refresh(state.rows_trained)
         wait_for_generation(paths, state.generation_index)
         train_one_generation(
-            model, optimizer, conn, paths, device, params, state, loss_cfg, optim_arm, cpu, ctx
+            model,
+            train_model,
+            optimizer,
+            conn,
+            paths,
+            device,
+            params,
+            state,
+            loss_cfg,
+            optim_arm,
+            cpu,
+            ctx,
         )
         evicted = lifecycle.evict_beyond_window(paths, state.generation_index - 1, params.window)
         if evicted:
@@ -365,6 +395,12 @@ def run(ctx: WorkerContext) -> int:
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
     optimizer = build_optimizer(model, params)
+    # The training-step regime (module docstring): TF32 for the fp32 matmuls,
+    # and the compiled training forward. `train_model` shares `model`'s
+    # parameters and is used for the epoch only; `model` stays the module that
+    # is recalibrated, evaluated, exported, and checkpointed.
+    torch.set_float32_matmul_precision("high")
+    train_model = torch.compile(model)
 
     conn = db.connect(paths.dashboard_db)
     db.write_meta(conn, ctx.tag, asdict(params), n_params)
@@ -393,7 +429,9 @@ def run(ctx: WorkerContext) -> int:
     state = checkpoint.resume(paths, model, optimizer, device)
     _publish_train_state(paths, state)
     try:
-        run_generational_training(model, optimizer, conn, paths, device, params, state, run_ctx)
+        run_generational_training(
+            model, train_model, optimizer, conn, paths, device, params, state, run_ctx
+        )
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")
     return 0

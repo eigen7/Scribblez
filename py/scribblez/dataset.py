@@ -142,6 +142,7 @@ class SlogDataset:
         apply_symmetry: bool | None = None,
         turns_per_game: int = 0,
         epoch_index: int = 0,
+        drop_last: bool = False,
     ):
         """Yield batch dicts for one epoch, streaming from disk.
 
@@ -152,6 +153,9 @@ class SlogDataset:
         k > 0 draws k turns per game this epoch; pass a distinct epoch_index per
         epoch so successive epochs cover distinct turns (k == 1 makes every row
         in the epoch come from a different game).
+        drop_last: skip the epoch's trailing short batch (the rows left over
+        once the epoch no longer fills batch_size), so every yielded batch has
+        the same shape.
         """
         pm = post_move if post_move is not None else self.post_move
         sym = apply_symmetry if apply_symmetry is not None else self.apply_symmetry
@@ -160,6 +164,8 @@ class SlogDataset:
             batch_data = self._loader.load_batch()
             if batch_data is None:
                 return
+            if drop_last and batch_data.shape[0] < batch_size:
+                continue
             yield self._slice_batch(batch_data)
 
     def _slice_batch(self, batch_data: np.ndarray) -> dict[str, torch.Tensor]:
