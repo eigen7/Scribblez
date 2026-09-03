@@ -696,6 +696,29 @@ def test_a_reused_worker_id_does_not_inherit_a_backlog(manager, spec, task, monk
     assert fresh.undelivered is None
 
 
+def test_a_reused_worker_id_does_not_inherit_a_stale_exit_reason(manager, spec, task, monkeypatch):
+    """A stale exit reason or restart backoff pinned to a freed id -- or to a
+    tag deleted and recreated under the same name, which reproduces the same
+    key -- would narrate a fresh container's death before it has ever run."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    monkeypatch.setattr(_RecordingSshMachine, "state", "stopped")
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    manager.worker_status(spec, task, observe=True)
+    key = workers_mod._key(spec, task.tag, w.worker_id)
+    assert key in manager._exits
+    manager._restarts[key] = (5, time.time() + 300)
+
+    manager.remove_worker(spec, task, w.worker_id)
+    assert key not in manager._exits
+    assert key not in manager._restarts
+
+    fresh = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    assert fresh.worker_id == w.worker_id  # the id came back
+    monkeypatch.setattr(_RecordingSshMachine, "state", "missing")
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert "exit_reason" not in info
+
+
 def test_creating_a_container_records_that_it_holds_nothing(manager, spec, task, monkeypatch):
     """What makes a container that never came up replaceable rather than
     restarted forever: it is known empty from the moment it exists."""
