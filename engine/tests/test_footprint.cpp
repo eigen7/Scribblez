@@ -626,6 +626,57 @@ TEST(FootprintCollapse, MaskedDistributionsAreLegalSoftmaxes) {
   EXPECT_EQ(dist[off_edge], 0.0f);  // structurally illegal -> masked to zero
 }
 
+// collapse_footprint_legal_cells: a cell collapse_footprint_planes lands
+// nonzero probability mass on must be legal (a masked-softmax can only ever
+// put mass on a legal class) -- checked against MassLandsOnCoveredCells'
+// board/logit setup, where (7,5)/(7,6)/(7,7) take ~all of head 0's mass.
+TEST(FootprintCollapse, LegalCellsCoverAllProbabilityMass) {
+  Board b;  // empty: every square unconstrained, so the opp mask is dict-free
+  const Dictionary d = Dictionary::build_from_words({"CAT"});
+
+  Glyph played[3] = {G(0), G(1), G(2)};
+  const uint16_t sq = (1u << 5) | (1u << 6) | (1u << 7);
+  const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 3));
+
+  std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
+  raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next); dwarfs the rest
+  std::vector<float> prob(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
+  collapse_footprint_planes(b, d, /*available_counts=*/nullptr, raw.data(), prob.data());
+
+  std::vector<float> legal(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
+  collapse_footprint_legal_cells(b, d, /*available_counts=*/nullptr, legal.data());
+
+  for (int h = 0; h < kPlacementHeads; ++h) {
+    for (int i = 0; i < kFootprintSide * kFootprintSide; ++i) {
+      const size_t idx = size_t(h) * kFootprintSide * kFootprintSide + i;
+      if (prob[idx] > 1e-6f) EXPECT_GT(legal[idx], 0.5f) << "head " << h << " cell " << i;
+    }
+  }
+  EXPECT_GT(legal[7 * kFootprintSide + 7], 0.5f);  // sanity: the covered cell is indeed legal
+}
+
+// collapse_footprint_legal_cells: a cell the SELF head's reach can never touch
+// (too far from the board's only tile for footprint_ply's tile-budget-bounded
+// reach, per IllegalFootprintGetsNoMass) is illegal regardless of any single
+// class's logits -- the same reach bound that drove that test's near-zero
+// probability, read directly off the legal plane instead. A near cell, by
+// contrast, is legal.
+TEST(FootprintCollapse, LegalCellsRespectReachBound) {
+  Board b;
+  b.set(0, 0, G(0));  // the only structure; the far corner is unreachable from it
+  const Dictionary d = Dictionary::build_from_words({"CAT"});
+
+  std::vector<float> legal(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
+  collapse_footprint_legal_cells(b, d, /*available_counts=*/nullptr, legal.data());
+
+  const float* self_legal =
+    legal.data() + 1 * kFootprintSide * kFootprintSide;  // head 1: self_next
+  EXPECT_EQ(self_legal[14 * kFootprintSide + 12], 0.0f);
+  EXPECT_EQ(self_legal[14 * kFootprintSide + 13], 0.0f);
+  EXPECT_EQ(self_legal[14 * kFootprintSide + 14], 0.0f);
+  EXPECT_GT(self_legal[0 * kFootprintSide + 1], 0.5f);  // right next to the seed tile: reachable
+}
+
 // footprint_reachable_cells: on an empty board every square is coverable (a lone
 // tile fits anywhere), a null pool is board-legality-only, and it equals the
 // same reduction when the pool holds every tile.

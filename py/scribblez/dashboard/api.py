@@ -39,6 +39,7 @@ from scribblez.ffi import (
     analyze_position_eval_gcg,
     analyze_position_eval_gcg_leaves,
     collapse_position_eval_placement,
+    legal_position_eval_placement,
     position_eval_board_json,
 )
 from scribblez.paths import TagPaths
@@ -311,10 +312,23 @@ def _mc_payload(name: str, face_up_leaves: bool) -> dict:
     }
 
 
-def _placement_block(name: str, face_up_leaves: bool, pred) -> dict | None:
+@lru_cache(maxsize=64)
+def _position_eval_legal(position: int) -> np.ndarray:
+    """Which board cells each of the four placement heads can legally reach at a
+    dataset position -- (4, 15, 15) bool. Cached: like _position_eval_board, this
+    depends only on the position (board legality + unseen-pool availability), not
+    the selected generation."""
+    gcg = _position_eval_dataset_files()[position]
+    return legal_position_eval_placement(gcg.read_text())
+
+
+def _placement_block(name: str, face_up_leaves: bool, pred, legal: np.ndarray) -> dict | None:
     """The Positions tab's residual-heat-map payload: for each of the four placement
     heads, the Monte-Carlo truth (per-square rollout fraction count/n, board frame)
-    paired with the model's on-demand placement prediction (`pred`, or None).
+    paired with the model's on-demand placement prediction (`pred`, or None) and
+    which squares that head can legally reach at all (`legal`), so the frontend can
+    tell a square with no legal placement apart from one the model/rollouts just
+    assign low probability.
 
     None when the ground-truth file carries no per-square planes (an older
     results file), so the frontend can hide the overlay."""
@@ -325,9 +339,13 @@ def _placement_block(name: str, face_up_leaves: bool, pred) -> dict | None:
     n = gt.get("n", 0)
     denom = n or 1
     heads = {}
-    for head in PLACEMENT_HEAD_NAMES:
+    for i, head in enumerate(PLACEMENT_HEAD_NAMES):
         truth = (np.asarray(planes[head], dtype=np.float64) / denom).tolist()
-        heads[head] = {"truth": truth, "pred": None if pred is None else pred[head].tolist()}
+        heads[head] = {
+            "truth": truth,
+            "pred": None if pred is None else pred[head].tolist(),
+            "legal": legal[i].tolist(),
+        }
     return {"n": n, "heads": heads}
 
 
@@ -377,7 +395,9 @@ def position_eval_position_payload(conn, position: int, generation, tag, task, m
         "has_prediction": pred is not None,
         "mc": _mc_payload(name, face_up_leaves),
         "model": model,
-        "placement": _placement_block(name, face_up_leaves, placement_pred),
+        "placement": _placement_block(
+            name, face_up_leaves, placement_pred, _position_eval_legal(position)
+        ),
     }
 
 

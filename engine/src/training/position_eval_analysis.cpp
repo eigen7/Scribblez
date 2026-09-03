@@ -159,6 +159,17 @@ bool masked_position_eval_analysis_placement(const std::string& gcg_text,
   return true;
 }
 
+bool legal_position_eval_analysis_placement(const std::string& gcg_text,
+                                            const InputEncodingSpec& spec, float* out,
+                                            std::string* error) {
+  ParsedGcgPostMove pos;
+  if (!read_gcg_post_move(gcg_text, &pos, error)) return false;
+  uint8_t available_counts[27];
+  compute_unseen_pool(available_counts, pos.board, pos.leave);
+  collapse_footprint_legal_cells(pos.board, *spec.dict, available_counts, out);
+  return true;
+}
+
 std::string position_eval_analysis_board_json(const std::string& gcg_text, std::string* error) {
   ParsedGcgPostMove pos;
   if (!read_gcg_post_move(gcg_text, &pos, error)) return "";

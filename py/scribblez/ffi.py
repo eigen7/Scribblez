@@ -136,6 +136,16 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # err_cap
     ]
 
+    lib.scribblez_position_eval_legal_placement.restype = ctypes.c_int
+    lib.scribblez_position_eval_legal_placement.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # gcg_text
+        ctypes.POINTER(ctypes.c_float),  # out (kPlacementHeads * 225)
+        ctypes.c_int,  # out_cap
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
+
     lib.scribblez_position_eval_board_json.restype = ctypes.c_int
     lib.scribblez_position_eval_board_json.argtypes = [
         ctypes.c_char_p,  # gcg_text
@@ -833,6 +843,31 @@ def masked_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarray
     if n < 0:
         _raise_analysis_error(err.value.decode("utf-8"))
     return out.reshape(heads, classes)
+
+
+def legal_position_eval_placement(gcg_text: str) -> np.ndarray:
+    """Computes each of the four placement heads' per-cell legality for a dataset
+    GCG's post-move position: (4, 15, 15) bool, True where some legal anchored
+    footprint (see collapse_position_eval_placement) covers the cell. OSError on
+    a parse error or a non-PLAY final move.
+    """
+    consts = format_layout()["constants"]
+    heads = len(consts["placement_head_names"])
+    side = consts["footprint"]["side"]
+    lib = _lib()
+    out = np.zeros(heads * side * side, dtype=np.float32)
+    err = ctypes.create_string_buffer(256)
+    n = lib.scribblez_position_eval_legal_placement(
+        _session(),
+        gcg_text.encode("utf-8"),
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        len(out),
+        err,
+        len(err),
+    )
+    if n < 0:
+        _raise_analysis_error(err.value.decode("utf-8"))
+    return out.reshape(heads, side, side).astype(bool)
 
 
 def _raise_analysis_error(reason: str):

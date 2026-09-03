@@ -53,4 +53,11 @@ void collapse_footprint_planes(const Board& board, const Dictionary& dict,
 void masked_placement_distributions(const Board& board, const Dictionary& dict,
                                     const uint8_t* available_counts, const float* raw, float* out);
 
+// Computes each head's per-cell legality -- the same mask
+// collapse_footprint_planes applies, exposed per cell instead of folded into a
+// probability -- and writes it to `out` (kPlacementHeads x
+// (kFootprintSide*kFootprintSide), 1.0f/0.0f).
+void collapse_footprint_legal_cells(const Board& board, const Dictionary& dict,
+                                    const uint8_t* available_counts, float* out);
+
 }  // namespace scribblez

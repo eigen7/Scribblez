@@ -211,6 +211,12 @@ int scribblez_position_eval_masked_placement(ScribblezSession* s, const char* gc
                                              const float* raw, int raw_cap, float* out, int out_cap,
                                              char* out_err, int err_cap);
 
+// Computes the four placement heads' per-cell legality (kPlacementHeads * 225
+// floats, 1.0f/0.0f) and writes it to `out`. Returns the floats written, or -1
+// with a reason in `out_err`.
+int scribblez_position_eval_legal_placement(ScribblezSession* s, const char* gcg_text, float* out,
+                                            int out_cap, char* out_err, int err_cap);
+
 // Emit the web-render board bundle (GameState JSON: board / bonuses / rack /
 // tile_scores, plus "start_player", "last_move", and "opp_leave" fields) for
 // a dataset GCG's post-move position, from the POV of the player that made the

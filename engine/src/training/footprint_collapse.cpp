@@ -129,4 +129,26 @@ void masked_placement_distributions(const Board& board, const Dictionary& dict,
   }
 }
 
+void collapse_footprint_legal_cells(const Board& board, const Dictionary& dict,
+                                    const uint8_t* available_counts, float* out) {
+  board.ensure_movegen_caches(dict);
+  std::array<FootprintMask, kPlacementHeads> masks;
+  fill_head_masks(board, available_counts, masks);
+
+  // Called once per position (no per-candidate hot loop like the siblings
+  // above), so a plain local vector is enough -- no thread_local reuse to pay
+  // for.
+  std::vector<CellList> cells;
+  compute_cells(board, cells);
+  std::fill_n(out, size_t(kPlacementHeads) * kBoardCells, 0.0f);
+  for (int h = 0; h < kPlacementHeads; ++h) {
+    float* head_out = out + size_t(h) * kBoardCells;
+    for (int cls = 0; cls < kAnchoredFootprints; ++cls) {
+      if (!masks[h][cls]) continue;
+      const CellList& cl = cells[cls];
+      for (int i = 0; i < cl.n; ++i) head_out[cl.cell[i]] = 1.0f;
+    }
+  }
+}
+
 }  // namespace scribblez

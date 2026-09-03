@@ -51,6 +51,13 @@ bool masked_position_eval_analysis_placement(const std::string& gcg_text,
                                              const InputEncodingSpec& spec, const float* raw,
                                              float* out, std::string* error);
 
+// Computes the four placement heads' per-cell legality at this analysis
+// position (training/footprint_collapse.h collapse_footprint_legal_cells) and
+// writes it to `out`. False (with *error) on a parse error.
+bool legal_position_eval_analysis_placement(const std::string& gcg_text,
+                                            const InputEncodingSpec& spec, float* out,
+                                            std::string* error);
+
 // The web-render bundle for the same analysis position: the GameState JSON plus
 // "start_player", "last_move", and "opp_leave" (the opponent's retained leave,
 // '?' = a blank), with the final mover's leave as the shown rack. It goes
