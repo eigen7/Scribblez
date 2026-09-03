@@ -179,6 +179,20 @@ class TestStreamingDataset:
             for key in b1:
                 np.testing.assert_array_equal(b1[key].numpy(), b2[key].numpy())
 
+    def test_drop_last_yields_only_full_batches(self, tmp_path):
+        """With a batch size that does not divide the epoch's row count, the
+        default epoch ends in a short batch and drop_last omits exactly that
+        batch, leaving every yielded batch at batch_size rows."""
+        generate_test_slogs(tmp_path)  # 12 games; one row per game below
+        ds = SlogDataset(
+            tmp_path, post_move=True, apply_symmetry=False, memory_budget=256 * 1024 * 1024
+        )
+        kw = dict(batch_size=5, seed=9, turns_per_game=1)
+        sizes = [b["wld"].shape[0] for b in ds.iter_batches(**kw)]
+        assert sizes == [5, 5, 2]
+        kept = [b["wld"].shape[0] for b in ds.iter_batches(**kw, drop_last=True)]
+        assert kept == [5, 5]
+
 
 class TestUnreadableFile:
     def test_deleted_file_raises_not_hangs(self, tmp_path):
