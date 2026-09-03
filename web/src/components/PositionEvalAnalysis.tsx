@@ -385,6 +385,17 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
     return buildPlacementOverlay(payload.placement?.heads, headSel, overlayMode, payload.board);
   }, [headSel, payload, overlayMode]);
 
+  // Empty squares the selected head's legal plane marks unreachable -- shown as
+  // a lightened veil so it's clear which squares placementOverlay will never
+  // annotate with a tooltip. Independent of overlayMode: legality is a
+  // board-geometry property, not a display choice.
+  const cellMasked = useMemo(() => {
+    if (headSel === NONE_HEAD || !payload) return undefined;
+    const legal = payload.placement?.heads[headSel]?.legal;
+    if (!legal) return undefined;
+    return legal.map((row, r) => row.map((cellLegal, c) => !cellLegal && payload.board[r][c] == null));
+  }, [headSel, payload]);
+
   if (!tag) return <div className="muted" style={{ padding: 20 }}>Select a tag.</div>;
   if (positions.length === 0) {
     return <div className="muted" style={{ padding: 20 }}>No position-evaluation dataset available.</div>;
@@ -452,6 +463,7 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
                 onCellClick={() => {}}
                 onCellDrop={() => {}}
                 cellHalos={placementOverlay?.halos}
+                cellMasked={cellMasked}
               />
             </div>
             {/* The pool hidden from the POV: 100 tiles minus the board, the POV's

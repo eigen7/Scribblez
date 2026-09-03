@@ -25,6 +25,15 @@ export type PlacementHeadKey =
 export interface PlacementHeadData {
   truth: number[][];
   pred: number[][] | null;
+  // Which cells this head can legally reach at all -- true where some legal
+  // anchored footprint (board legality + tile availability) covers the cell,
+  // independent of the model/rollouts. A false cell is masked to a hard zero
+  // server-side, so it gets neither a ring nor a tooltip, unlike a legal cell
+  // that's merely below FLOOR. Optional: only the Positions tab's payload
+  // carries it today (the Trajectories tab's move_set_eval pipeline has no
+  // masked-softmax legality step to export). Absent, buildPlacementOverlay
+  // falls back to its pre-`legal` behavior -- FLOOR alone gates the halo.
+  legal?: boolean[][];
 }
 
 export interface PlacementData {
@@ -64,9 +73,11 @@ export const SIM_HUE = '#e74c3c';
 
 const BOARD_DIM = 15;
 
-// A cell's raw value must reach this floor before it gets a halo at all, in
+// A cell's raw value must reach this floor before it gets a colored ring, in
 // every mode -- below it the ring is omitted rather than drawn faint, so the
 // overlay doesn't turn the whole board into a haze of near-invisible rings.
+// It gates the ring only, not the tooltip: a legal cell below FLOOR still
+// gets a halo entry (title, no color) so it can be hovered.
 export const FLOOR = 0.02;
 
 // The value at which a 'residual' cell reaches full intensity (MAX_BLEND).
@@ -90,7 +101,9 @@ export const MIN_BLEND = 0.25;
 export const MAX_BLEND = 0.95;
 
 export interface CellHalo {
-  color: string;
+  // null when the cell's value is below FLOOR: the cell still gets a tooltip
+  // (via `title`) but no visible ring.
+  color: string | null;
   title: string;
 }
 
@@ -144,6 +157,17 @@ export function overlayGradient(hue: string, cap: number): string {
 // probability on an occupied square isn't a meaningful prediction. 'sim'
 // mode has no such gate -- a square with model mass that no rollout ever
 // played on is exactly the kind of mismatch this mode is for showing.
+//
+// When the head carries a `legal` plane (the Positions tab), every other
+// unoccupied cell gets a halo entry -- and so a hover tooltip -- as long as
+// `legal` says some placement can reach it: a colored ring is drawn only
+// once the value clears FLOOR, but the tooltip doesn't wait for that. A cell
+// `legal` marks unreachable gets neither: an occupied cell's `legal` entry
+// is always false (no footprint covers a tile that's already there), which
+// is why the legal check only applies to unoccupied cells -- it must never
+// suppress sim mode's deliberate occupied-square halos above. Without a
+// `legal` plane (the Trajectories tab), FLOOR alone gates the halo, exactly
+// as before `legal` existed.
 export function buildPlacementOverlay(
   heads: Record<PlacementHeadKey, PlacementHeadData> | undefined | null,
   key: PlacementHeadKey,
@@ -153,14 +177,16 @@ export function buildPlacementOverlay(
   if (!heads) return null;
   const head = heads[key];
   if (mode !== 'sim' && !head.pred) return null;
-  const { truth, pred } = head;
+  const { truth, pred, legal } = head;
 
   const halos: (CellHalo | null)[][] = Array.from({ length: BOARD_DIM }, () =>
     new Array(BOARD_DIM).fill(null),
   );
   for (let r = 0; r < BOARD_DIM; r++) {
     for (let c = 0; c < BOARD_DIM; c++) {
-      if (mode !== 'sim' && board[r][c] != null) continue;
+      const occupied = board[r][c] != null;
+      if (mode !== 'sim' && occupied) continue;
+      if (legal && !occupied && !legal[r][c]) continue;
 
       const truthV = truth[r][c];
       const predV = pred ? pred[r][c] : null;
@@ -182,14 +208,18 @@ export function buildPlacementOverlay(
         hue = SIM_HUE;
         cap = RAW_CAP;
       }
-      if (v < FLOOR) continue;
 
       const title =
         residual != null
           ? `pred ${predV!.toFixed(3)} / sim ${truthV.toFixed(3)} / residual ${residual >= 0 ? '+' : ''}${residual.toFixed(3)}`
           : `sim ${truthV.toFixed(3)}`;
 
-      halos[r][c] = { color: overlayColor(hue, v, cap), title };
+      if (!legal) {
+        if (v < FLOOR) continue;
+        halos[r][c] = { color: overlayColor(hue, v, cap), title };
+      } else {
+        halos[r][c] = { color: v >= FLOOR ? overlayColor(hue, v, cap) : null, title };
+      }
     }
   }
   return { halos };

@@ -20,15 +20,21 @@ interface BoardProps {
   highlightLane?: { horizontal: boolean; index: number } | null;
   // Per-cell colored ring overlay, indexed [row][col]. A cell with a non-null
   // entry gets an inset-ring "halo" div drawn over it (see .board-cell-halo);
-  // `title` becomes that div's hover tooltip. Board renders whatever is given
-  // here without judging occupancy or meaning -- the caller decides which
-  // cells (if any) get an entry and what the ring color and tooltip mean.
-  cellHalos?: ({ color: string; title: string } | null)[][];
+  // `title` becomes that div's hover tooltip, shown whenever the entry is
+  // non-null even if `color` is null (a ringless, tooltip-only cell). Board
+  // renders whatever is given here without judging occupancy or meaning --
+  // the caller decides which cells (if any) get an entry and what the ring
+  // color and tooltip mean.
+  cellHalos?: ({ color: string | null; title: string } | null)[][];
   // Per-cell solid-fill overlay, indexed [row][col], for marking squares a play
   // could go to without placing any tile there. A non-null entry tints the cell
   // with `color`; an optional `label` (e.g. "+98") is drawn as a badge anchored
   // on that cell, overflowing it, to annotate the highlighted region.
   cellHighlights?: ({ color: string; label?: string } | null)[][];
+  // Per-cell veil, indexed [row][col]: true lightens the square (bonus-colored
+  // or plain green alike) with a translucent white wash. The caller uses this
+  // to mark squares a cellHalos overlay will never annotate.
+  cellMasked?: (boolean | null)[][];
 }
 
 const BONUS_COLORS: Record<string, { bg: string; text: string }> = {
@@ -48,7 +54,7 @@ const BONUS_LABELS: Record<string, string> = {
 const Board: React.FC<BoardProps> = ({
   board, bonuses, candidateTiles, tileScores, cursorRow, cursorCol, cursorDir,
   interactive, onCellClick, onCellDrop, lastMoveCells, highlightLane, cellHalos,
-  cellHighlights,
+  cellHighlights, cellMasked,
 }) => {
   const dim = 15;
 
@@ -172,18 +178,25 @@ const Board: React.FC<BoardProps> = ({
                       )}
                     </div>
                   )}
+                  {cellMasked?.[r]?.[c] && <div className="board-cell-masked" />}
                   {cellHalos?.[r]?.[c] && (
                     <div
                       className="board-cell-halo"
                       // A thin white fringe on both sides of the colored ring keeps
                       // it visible on any square background, including bonus squares
-                      // whose color matches the ring's own hue.
-                      style={{
-                        boxShadow:
-                          `inset 0 0 0 1px rgba(255, 255, 255, 0.95), ` +
-                          `inset 0 0 0 4px ${cellHalos[r][c]!.color}, ` +
-                          `inset 0 0 0 5px rgba(255, 255, 255, 0.95)`,
-                      }}
+                      // whose color matches the ring's own hue. No color at all (a
+                      // legal cell below the display floor) still renders the div,
+                      // bare, so its `title` still shows a tooltip on hover.
+                      style={
+                        cellHalos[r][c]!.color
+                          ? {
+                              boxShadow:
+                                `inset 0 0 0 1px rgba(255, 255, 255, 0.95), ` +
+                                `inset 0 0 0 4px ${cellHalos[r][c]!.color}, ` +
+                                `inset 0 0 0 5px rgba(255, 255, 255, 0.95)`,
+                            }
+                          : undefined
+                      }
                       title={cellHalos[r][c]!.title}
                     />
                   )}

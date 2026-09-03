@@ -27,7 +27,8 @@ interface RenderOptions {
   interactive?: boolean;
   onCellClick?: (row: number, col: number) => void;
   onCellDrop?: (row: number, col: number, payload: { letter: string; isBlank: boolean }) => void;
-  cellHalos?: ({ color: string; title: string } | null)[][];
+  cellHalos?: ({ color: string | null; title: string } | null)[][];
+  cellMasked?: (boolean | null)[][];
 }
 
 function renderBoard(opts: RenderOptions = {}) {
@@ -43,6 +44,7 @@ function renderBoard(opts: RenderOptions = {}) {
     onCellClick: opts.onCellClick ?? vi.fn(),
     onCellDrop: opts.onCellDrop ?? vi.fn(),
     cellHalos: opts.cellHalos,
+    cellMasked: opts.cellMasked,
   };
   return { ...render(<Board {...props} />), props };
 }
@@ -211,6 +213,29 @@ describe('Board', () => {
 
     const { container: noHalos } = renderBoard();
     expect(noHalos.querySelectorAll('.board-cell-halo')).toHaveLength(0);
+  });
+
+  it('renders a bare halo div (no boxShadow) but keeps the tooltip when color is null', () => {
+    const cellHalos = emptyBoard().map((row) => row.map(() => null)) as ({ color: string | null; title: string } | null)[][];
+    cellHalos[7][7] = { color: null, title: 'sim 0.010' };
+    const { container } = renderBoard({ cellHalos });
+    const halo = cellAt(container, 8, 'H').querySelector('.board-cell-halo');
+    expect(halo).not.toBeNull();
+    expect(halo).toHaveAttribute('title', 'sim 0.010');
+    expect((halo as HTMLElement).style.boxShadow).toBe('');
+  });
+
+  it('renders a masked veil on cells cellMasked marks true', () => {
+    const cellMasked = emptyBoard().map((row) => row.map(() => false)) as (boolean | null)[][];
+    cellMasked[7][7] = true;
+    const { container } = renderBoard({ cellMasked });
+    expect(cellAt(container, 8, 'H').querySelector('.board-cell-masked')).not.toBeNull();
+    expect(cellAt(container, 1, 'A').querySelector('.board-cell-masked')).toBeNull();
+  });
+
+  it('renders no masked veil when the prop is absent', () => {
+    const { container } = renderBoard();
+    expect(container.querySelectorAll('.board-cell-masked')).toHaveLength(0);
   });
 });
 

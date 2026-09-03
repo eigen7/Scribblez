@@ -175,6 +175,16 @@ h1 {
   inset: 0;
 }
 
+/* A veil over an empty square no legal placement under the currently selected
+   placement head can reach -- lightens the square (premium or plain green
+   alike) so it's visually clear which squares carry no mouse-over tooltip. */
+.board-cell-masked {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+}
+
 /* Solid-fill overlay marking a square a play could reach, drawn with no tile on
    it. The color (with its own alpha) comes inline; a `has-highlight` cell is
    lifted so an overflowing label reads above neighboring squares. */
