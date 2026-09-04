@@ -11,7 +11,6 @@
 
 #include "agent/move_proposal_service.h"
 #include "encoding/input_encoder.h"
-#include "nn/model_specs.h"
 #include "training/move_set_encoder.h"
 
 #include <vector>
@@ -34,7 +33,6 @@ class StubMoveProposalService : public agent::MoveProposalService {
   bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes(); }
   int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
-  int max_evidence() const override { return nn::kMaxEvidence; }
 
   const agent::MoveProposalPredictions& encode(const float* board_row,
                                                const move_set::MoveFeatureArrays& moves) override {

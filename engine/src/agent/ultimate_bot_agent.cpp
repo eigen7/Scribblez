@@ -42,13 +42,6 @@ UltimateBotAgent::UltimateBotAgent(const Params& params,
               make_runner_params(params.sim, params.sim_horizon, leaf_service_.get())),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
-  // validate() bounded the budget by the padded width every step graph shares;
-  // the service's own width can only be narrower (a scripted stub's, or a
-  // trained-width stamp to come).
-  if (params.max_sims > service_->max_evidence()) {
-    throw util::CleanException("ultimatebot: --max-sims must be <= the model's evidence width {}",
-                               service_->max_evidence());
-  }
   board_row_.resize(size_t(input_floats(spec_)));
 }
 
