@@ -62,8 +62,12 @@ function discardWarning(workers: WorkerInfo[]): string | null {
 // A slot mid-transition: its process/pod has not yet caught up to the operator's
 // intent, so its Start/Pause control is disabled and shows a spinner.
 const IN_FLIGHT = new Set(['starting', 'stopping']);
+type ProfileChange = { name: string; profile: number | boolean | string; task: number | boolean | string };
 type TaskInfo = {
   workload: string; tag: string; has_task: boolean; params: Record<string, number | boolean | string> | null;
+  // The parameter profile the params were resolved from ('' if none), and how
+  // the frozen params depart from it -- provenance, not live configuration.
+  profile: string; profile_diff: ProfileChange[];
   created_at: number | null; progress: [string, string | number][]; gates: Record<string, string>;
   data_dir: string; workers: WorkerInfo[]; spend: number;
   bundle_id: string | null; bundle_drift: boolean;
@@ -719,6 +723,18 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           ]} />
         </Card>
         <Card title="Parameters (frozen)">
+          {info.params && (
+            <div style={{ fontSize: 13, color: '#556070', marginBottom: 8 }}>
+              {info.profile ? <>profile <b>{info.profile}</b></> : 'no profile'}
+              {info.profile_diff.length > 0
+                ? <>, changed: {info.profile_diff.map((c) => (
+                    <span key={c.name} style={{ marginLeft: 6 }}>
+                      <b>{c.name}</b> {String(c.profile)} → {String(c.task)}
+                    </span>
+                  ))}</>
+                : info.profile ? ', unchanged' : ''}
+            </div>
+          )}
           {info.params
             ? <KV items={Object.entries(info.params).map(([k, v]) => [k, String(v)])} />
             : <span style={{ color: '#556070' }}>unknown (pre-dashboard tag)</span>}

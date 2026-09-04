@@ -17,9 +17,15 @@ export type Role = {
   gpu: boolean;
   stats: { unit: string; phases: Record<string, string> } | null;
 };
+export type ParamValue = number | boolean | string;
 export type Workload = {
   name: string; title: string; params: ParamField[]; roles: Role[];
   primary_params: string[];  // shown up front by the new-tag form; the rest are advanced
+  // Parameter profiles: name -> the values it sets over the schema defaults
+  // (scribblez/params.py). The form starts from default_profile; an empty map
+  // means the workload has one recipe and no selector.
+  profiles: Record<string, Record<string, ParamValue>>;
+  default_profile: string;
 };
 type TagRow = {
   tag: string; has_task: boolean; created_at: number | null;
@@ -63,7 +69,10 @@ function ParamInput({ p, value, bad, onChange }: {
 }) {
   if (p.kind === 'bool') {
     return (
-      <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
+      <input
+        type="checkbox" aria-label={p.name} checked={Boolean(value)}
+        onChange={(e) => onChange(e.target.checked)}
+      />
     );
   }
   const style = {
@@ -72,13 +81,19 @@ function ParamInput({ p, value, bad, onChange }: {
   };
   if (p.choices) {
     return (
-      <select style={style} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
+      <select
+        style={style} aria-label={p.name} value={String(value ?? '')}
+        onChange={(e) => onChange(e.target.value)}
+      >
         {p.choices.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
     );
   }
   return (
-    <input style={style} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} />
+    <input
+      style={style} aria-label={p.name} value={String(value ?? '')}
+      onChange={(e) => onChange(e.target.value)}
+    />
   );
 }
 
@@ -86,18 +101,41 @@ const paramRowStyle = {
   display: 'flex', gap: 22, flexWrap: 'wrap', alignItems: 'flex-end',
 } as const;
 
-// One labelled control per field, hovering its help text.
-function ParamFields({ params, values, bad, onChange }: {
+// Where a field's shown value comes from: the schema default, the selected
+// profile, or an edit the operator made under that profile.
+type ValueSource = 'default' | 'profile' | 'edited';
+
+// One labelled control per field, hovering its help text. A field the profile
+// sets is marked ◆; one the operator edited is marked ✎ and can be reset to
+// what the profile (or schema) would give it.
+function ParamFields({ params, values, sources, profile, bad, onChange, onReset }: {
   params: ParamField[];
   values: Record<string, string | boolean>;
+  sources: Record<string, ValueSource>;
+  profile: string;
   bad: ParamField[];
   onChange: (name: string, v: string | boolean) => void;
+  onReset: (name: string) => void;
 }) {
   return (
     <>
       {params.map((p) => (
         <label key={p.name} style={{ fontSize: 13 }} title={p.help}>
-          {p.name}<br />
+          {p.name}
+          {sources[p.name] === 'profile' && (
+            <span title={`set by the ${profile} profile`} style={{ color: '#1f77b4', marginLeft: 4 }}>◆</span>
+          )}
+          {sources[p.name] === 'edited' && (
+            <span
+              role="button"
+              title={`edited; click to reset to the ${profile ? `${profile} profile` : 'default'}`}
+              onClick={(e) => { e.preventDefault(); onReset(p.name); }}
+              style={{ color: '#a05a00', marginLeft: 4, cursor: 'pointer' }}
+            >
+              ✎
+            </span>
+          )}
+          <br />
           <ParamInput
             p={p}
             value={values[p.name] ?? ''}
@@ -108,6 +146,51 @@ function ParamFields({ params, values, bad, onChange }: {
       ))}
     </>
   );
+}
+
+type FormValues = Record<string, string | boolean>;
+
+// A field's value as the form holds it: a bool as a bool, everything else as text.
+const asFormValue = (p: ParamField, v: ParamValue): string | boolean =>
+  p.kind === 'bool' ? Boolean(v) : String(v);
+
+// Every field's value under `profile` alone: the schema defaults where it is silent.
+function profileValues(workload: Workload, profile: string): FormValues {
+  const overrides = workload.profiles[profile] ?? {};
+  return Object.fromEntries(workload.params.map(
+    (p) => [p.name, asFormValue(p, p.name in overrides ? overrides[p.name] : p.default)],
+  ));
+}
+
+// The operator's in-progress edits, per profile, kept across profile switches
+// and -- for a workload with profiles, where tuning a recipe spans sessions --
+// page reloads (per-browser, best effort: storage may be unavailable). A
+// workload without profiles keeps the plain form: a reload starts it afresh.
+type Drafts = Record<string, FormValues>;
+const hasProfiles = (workload: Workload) => Object.keys(workload.profiles).length > 0;
+const draftsKey = (workload: Workload) => `scribblez.newTag.${workload.name}`;
+
+function loadDrafts(workload: Workload): { profile: string; drafts: Drafts } {
+  const fallback = { profile: workload.default_profile, drafts: {} };
+  if (!hasProfiles(workload)) return fallback;
+  try {
+    const raw = window.localStorage.getItem(draftsKey(workload));
+    if (!raw) return fallback;
+    const saved = JSON.parse(raw) as { profile?: string; drafts?: Drafts };
+    const profile = saved.profile && saved.profile in workload.profiles ? saved.profile : workload.default_profile;
+    return { profile, drafts: saved.drafts ?? {} };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveDrafts(workload: Workload, profile: string, drafts: Drafts) {
+  if (!hasProfiles(workload)) return;
+  try {
+    window.localStorage.setItem(draftsKey(workload), JSON.stringify({ profile, drafts }));
+  } catch {
+    // storage unavailable: drafts live for the page only
+  }
 }
 
 // The fields the workload names as its up-front ones, in the order it names
@@ -128,21 +211,37 @@ function splitParams(workload: Workload): [ParamField[], ParamField[]] {
 // endpoint re-validates and reports errors verbatim).
 //
 // Only the workload's up-front fields — the handful that decide what a run
-// is — are shown; the long tail sits behind the "Advanced" disclosure at its
-// schema defaults. A field left invalid inside the collapsed section forces it
-// open, so Create is never disabled by something the operator cannot see.
+// is — are shown; the long tail sits behind the "Advanced" disclosure. A field
+// left invalid inside the collapsed section forces it open, so Create is never
+// disabled by something the operator cannot see.
+//
+// Values start from the selected profile (the workload's default one), and an
+// edit belongs to the profile it was made under: switching profiles shows the
+// other recipe with its own edits, switching back restores these. Create
+// freezes the selected profile's current values and records the profile name.
 export function NewTagForm({ workload, onCreated }: { workload: Workload; onCreated: (tag: string) => void }) {
   const [tag, setTag] = useState('');
-  const [values, setValues] = useState<Record<string, string | boolean>>({});
+  const [profile, setProfile] = useState(workload.default_profile);
+  const [drafts, setDrafts] = useState<Drafts>({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
-    setValues(Object.fromEntries(workload.params.map(
-      (p) => [p.name, p.kind === 'bool' ? Boolean(p.default) : String(p.default)],
-    )));
+    const saved = loadDrafts(workload);
+    setProfile(saved.profile);
+    setDrafts(saved.drafts);
   }, [workload]);
+  useEffect(() => { saveDrafts(workload, profile, drafts); }, [workload, profile, drafts]);
+
+  const base = profileValues(workload, profile);
+  const edits = drafts[profile] ?? {};
+  const values: FormValues = { ...base, ...edits };
+  const setBy = workload.profiles[profile] ?? {};
+  const sources: Record<string, ValueSource> = Object.fromEntries(workload.params.map(
+    (p) => [p.name, p.name in edits ? 'edited' : p.name in setBy ? 'profile' : 'default'],
+  ));
+  const profileNames = hasProfiles(workload) ? Object.keys(workload.profiles) : [];
 
   const [primary, advanced] = splitParams(workload);
   const numberOk = (p: ParamField, raw: string) =>
@@ -156,8 +255,20 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
     (p) => badNumbers.some((b) => b.name === p.name),
   );
 
+  // An edit that lands back on the profile's own value is no edit at all.
   const setValue = (name: string, v: string | boolean) =>
-    setValues((s) => ({ ...s, [name]: v }));
+    setDrafts((d) => {
+      const mine = { ...(d[profile] ?? {}) };
+      if (v === base[name]) delete mine[name];
+      else mine[name] = v;
+      return { ...d, [profile]: mine };
+    });
+  const resetValue = (name: string) =>
+    setDrafts((d) => {
+      const mine = { ...(d[profile] ?? {}) };
+      delete mine[name];
+      return { ...d, [profile]: mine };
+    });
 
   const coerce = (p: ParamField) => {
     const raw = values[p.name];
@@ -171,8 +282,9 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
     setBusy(true);
     setError('');
     const params = Object.fromEntries(workload.params.map((p) => [p.name, coerce(p)]));
+    const body = { workload: workload.name, tag, params, ...(hasProfiles(workload) ? { profile } : {}) };
     try {
-      await postJSON('/api/tasks', { workload: workload.name, tag, params });
+      await postJSON('/api/tasks', body);
       onCreated(tag);
     } catch (e) {
       setError(String(e));
@@ -181,6 +293,7 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
     }
   };
 
+  const fieldProps = { values, sources, profile, bad: badNumbers, onChange: setValue, onReset: resetValue };
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <b style={{ fontSize: 15 }}>New tag</b>
@@ -194,7 +307,18 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
             placeholder="e.g. exp42"
           />
         </label>
-        <ParamFields params={primary} values={values} bad={badNumbers} onChange={setValue} />
+        {profileNames.length > 0 && (
+          <label style={{ fontSize: 13 }} title="a named set of defaults; edits belong to the profile they are made under">
+            Profile<br />
+            <select
+              style={inputStyle} aria-label="profile" value={profile}
+              onChange={(e) => setProfile(e.target.value)}
+            >
+              {profileNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+        )}
+        <ParamFields params={primary} {...fieldProps} />
         <Button label={busy ? 'Creating…' : 'Create'} onClick={create} disabled={!canCreate} />
       </div>
       {advanced.length > 0 && (
@@ -207,14 +331,14 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
           </span>
           {showAdvanced && (
             <div style={{ ...paramRowStyle, marginTop: 10 }}>
-              <ParamFields params={advanced} values={values} bad={badNumbers} onChange={setValue} />
+              <ParamFields params={advanced} {...fieldProps} />
             </div>
           )}
         </div>
       )}
       <div style={{ fontSize: 12, color: '#556070', marginTop: 8 }}>
         Parameters are frozen at creation: every worker on a tag generates with identical settings.
-        Hover a field for its meaning.
+        Hover a field for its meaning{profileNames.length > 0 ? '; ◆ marks a value the profile sets, ✎ one you edited (click to reset)' : ''}.
       </div>
       {error && <div style={{ color: '#b23b3b', fontSize: 13, marginTop: 8 }}>{error}</div>}
     </div>

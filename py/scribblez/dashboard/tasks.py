@@ -11,7 +11,6 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from scribblez import params as params_mod
 from scribblez.dashboard.worker_stats_figures import read_stats
 from scribblez.workloads import WorkloadSpec, resolve
 
@@ -85,6 +84,11 @@ class TaskRecord:
     # comparison (see WorkerManager.bundle_drift) rather than a bucket read.
     bundle_id: str | None = None
     bundle_source_hash: str = ""
+    # The parameter profile the params were resolved from (WorkloadSpec
+    # .profiles) -- provenance only: the params above are the frozen truth, and
+    # the task view shows how they depart from the profile. "" for a workload
+    # without profiles, or a record from before they existed.
+    profile: str = ""
 
     def worker(self, worker_id: str) -> WorkerRecord:
         for w in self.workers:
@@ -112,9 +116,13 @@ def save_task(spec: WorkloadSpec, task: TaskRecord):
     path.write_text(json.dumps(asdict(task), indent=2) + "\n")
 
 
-def create_task(spec: WorkloadSpec, tag: str, raw_params: dict) -> TaskRecord:
-    """Validate params against the workload's schema and persist a fresh task.
-    Raises params.ParamsError on bad values, AssertionError on a taken tag.
+def create_task(
+    spec: WorkloadSpec, tag: str, raw_params: dict, profile: str | None = None
+) -> TaskRecord:
+    """Resolve params -- the workload's defaults under `profile` (its default
+    profile when None) under `raw_params` -- validate them against the schema,
+    and persist a fresh task. Raises params.ParamsError on bad values,
+    AssertionError on a taken tag or unknown profile.
 
     A workload's `finalize` hook (WorkloadSpec.finalize) runs after validation,
     on the typed params: its last chance to resolve derived fields before they
@@ -122,10 +130,16 @@ def create_task(spec: WorkloadSpec, tag: str, raw_params: dict) -> TaskRecord:
     no dynamic step."""
     assert tag and all(c.isalnum() or c in "._-" for c in tag), f"invalid tag name '{tag}'"
     assert load_task(spec, tag) is None, f"tag '{tag}' already has a task"
-    validated = params_mod.validate(spec.params_cls, raw_params)
+    profile_name, validated = spec.resolve_params(profile, raw_params)
     if spec.finalize:
         validated = resolve(spec.finalize)(spec, tag, validated)
-    task = TaskRecord(workload=spec.name, tag=tag, params=asdict(validated), created_at=time.time())
+    task = TaskRecord(
+        workload=spec.name,
+        tag=tag,
+        params=asdict(validated),
+        created_at=time.time(),
+        profile=profile_name,
+    )
     save_task(spec, task)
     return task
 

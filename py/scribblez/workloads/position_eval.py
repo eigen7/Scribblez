@@ -38,6 +38,18 @@ TRUNKS = (TRUNK_CONV, TRUNK_TRANSFORMER)
 
 TRAINER_STATS = StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"})
 
+# Parameter profiles (WorkloadSpec.profiles): one recipe per trunk, the values
+# the new-tag form and the CLI's --profile start from. Each is a partial
+# override of the dataclass defaults below, so a knob no profile names has the
+# same value under both. The transformer recipe is where a tuning result is
+# promoted once an A/B has shown it (gradient clipping is the standard
+# transformer safeguard the conv tower never needed); the conv recipe is the
+# settings its runs have trained under.
+PROFILES = {
+    TRUNK_TRANSFORMER: {"trunk": TRUNK_TRANSFORMER, "grad_clip": 1.0},
+    TRUNK_CONV: {"trunk": TRUNK_CONV},
+}
+
 
 @dataclass(frozen=True)
 class PositionEvalParams:
@@ -108,6 +120,9 @@ class PositionEvalParams:
         "unused by the schedule_free arm, which has no cycle",
     )
     weight_decay: float = param(1e-4, "AdamW weight decay")
+    grad_clip: float = param(
+        0.0, "clip each step's gradient to this global norm (clip_grad_norm_); 0 = no clipping"
+    )
     # Model.
     num_blocks: int = param(10, "residual blocks")
     trunk_channels: int = param(192, "trunk width")
@@ -180,6 +195,8 @@ SPEC = WorkloadSpec(
     progress="scribblez.generational.scheduler:progress",
     sync_data_dirs=(STAGING_DIR,),
     local_data_dirs=(MATCH_RESULTS_DIR,),
+    profiles=PROFILES,
+    default_profile=TRUNK_TRANSFORMER,
     primary_params=(
         "face_up_leaves",
         "games_per_generation",

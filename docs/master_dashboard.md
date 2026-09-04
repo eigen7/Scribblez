@@ -17,6 +17,12 @@ and workload-specific analysis — all from the browser.
   rather than a text box. A spec may also name `primary_params` — the handful
   of fields that decide what a run is, in the order the form shows them; the
   rest sit behind the form's collapsed **Advanced** section at their defaults.
+  A spec may declare **profiles** — named partial value sets over the
+  dataclass defaults, e.g. one recipe per trunk — with a default profile.
+  Values resolve as defaults ← profile ← what the operator set, in the form
+  and the CLI (`--profile`) alike, and a task records the profile it came
+  from. Profiles are code: tuning results are promoted into them by PR, and
+  changing one never touches an existing task's frozen params.
 - **Task** — one (workload, tag) pair with a fixed parameter set, recorded in
   `task.json` at the tag's root (`<mount>/tags/<workload>/<tag>/`). Parameters
   freeze at task creation because every worker on a tag must run identical
@@ -71,9 +77,15 @@ and workload-specific analysis — all from the browser.
 Home page: workload selector → tag list with progress counters and
 running-worker counts; **New tag** opens the schema-generated params form
 (the workload's `primary_params` up front, everything else under **Advanced**).
+With profiles, the form starts from the default one; ◆ marks a value the
+selected profile sets and ✎ one you edited. Edits belong to the profile they
+were made under — switching profiles shows the other recipe with its own
+edits, switching back restores yours — and survive a reload (per browser).
+Create freezes the selected profile's current values.
 Selecting a tag opens its task view, with tabs:
 
-- **Overview** — the frozen params, progress, live cloud $/hr, the workers
+- **Overview** — the frozen params (with the profile they came from and how
+  they depart from it), progress, live cloud $/hr, the workers
   table, one add-worker form per role (cloud forms offer a live instance
   selector fed by the cached Runpod catalog), and per-worker plus task-level
   start/pause/remove. Adding a worker records it paused — review the slot,

@@ -55,6 +55,7 @@ def run_epoch(
     lr_fn: Callable[[int], float] | None = None,
     rows_trained: int = 0,
     on_batch: Callable[[int, int, float, int], None] | None = None,
+    grad_clip: float = 0.0,
 ) -> EpochResult:
     """Run one training pass over `batches` (already seeded/ordered by the caller).
 
@@ -66,6 +67,8 @@ def run_epoch(
         carries it forward across epochs and generations.
     on_batch: optional progress callback (done_batches, samples, elapsed_s,
         rows_trained), invoked at most ~once per second.
+    grad_clip: when > 0, each step's gradient is clipped to this global norm
+        before the optimizer step.
     """
     model.train()
     target_keys = model.target_keys()
@@ -101,6 +104,8 @@ def run_epoch(
         )
         optimizer.zero_grad()
         losses["total"].backward()
+        if grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
 
         bs = input_spatial.shape[0]

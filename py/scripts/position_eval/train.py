@@ -22,7 +22,6 @@ import socket
 import sys
 
 from cloud.sinks import LocalSink
-from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.workloads.base import WorkerContext
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
@@ -33,9 +32,9 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
     p.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
-    params_mod.add_arguments(p, spec.params_cls)
+    spec.add_cli_arguments(p)
     args = p.parse_args()
-    params = params_mod.from_args(spec.params_cls, args)
+    params = spec.params_from_args(args)
 
     os.environ["SCZ_DEVICE"] = args.device
     role = spec.role("train")

@@ -36,7 +36,6 @@ from cloud.bundles import deploy_current_tree, resolve_bundle_id
 from cloud.credentials import CloudCredentials, load_credentials
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient
-from scribblez import params as params_mod
 from scribblez import workloads
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -157,7 +156,7 @@ def resolve_launch_bundle(creds: CloudCredentials, ref: str) -> str:
 
 def cmd_up(creds: CloudCredentials, client: RunpodClient, args) -> int:
     spec = workloads.get(args.workload)
-    params = params_mod.from_args(spec.params_cls, args)
+    params = spec.params_from_args(args)
     bundle_id = resolve_launch_bundle(creds, args.bundle)
     print(f"Launching {args.num_workers} worker(s) on bundle {bundle_id} ...")
     for _ in range(args.num_workers):
@@ -262,7 +261,7 @@ def main() -> int:
         help='"current" (build+push this tree), "latest" (whatever was pushed last), '
         "or a concrete bundle_id",
     )
-    params_mod.add_arguments(up, spec.params_cls)
+    spec.add_cli_arguments(up)
     up.set_defaults(func=cmd_up)
 
     status = sub.add_parser("status", help="list fleet pods")
