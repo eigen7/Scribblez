@@ -1,8 +1,9 @@
 # Plan: the trainer on rented GPU pods
 
 Status: plan-reviewed draft (critique profile, codex rival seat), revised
-after review, then extended with the machines/slots discussion. PR 2 in
-progress. The review record is at the end.
+after review, then extended with the machines/slots discussion. PR 2 (the
+trainer I/O contract) is implemented in the PR that carries this document.
+The review record is at the end.
 
 ## Goal
 

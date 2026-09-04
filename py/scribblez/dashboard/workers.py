@@ -942,7 +942,8 @@ class WorkerManager:
         It is also where the controller's half of a dispatch-driven role runs
         (RoleSpec.dispatch): assigning those slots their next piece of work and
         ingesting what they have delivered, once the pass knows which of them
-        are really running.
+        are really running -- and where a role's ingest tick (RoleSpec.ingest)
+        takes a trainer's delivered records into dashboard.db.
 
         This pass is the only observer: it refreshes the container probes and
         pod listing everything else reads, which also makes it the spend-accrual
@@ -975,12 +976,16 @@ class WorkerManager:
                 except Exception as e:  # noqa: BLE001 -- enforcement must keep ticking
                     print(f"reconcile {spec.name}/{task.tag}/{w.worker_id}: {e}")
             for role in spec.roles:
-                if not role.dispatch:
-                    continue
-                try:
-                    await self.offload(self._dispatch_role, spec, task, role, status)
-                except Exception as e:  # noqa: BLE001 -- one role must not stop the pass
-                    print(f"dispatch {spec.name}/{task.tag}/{role.name}: {e}")
+                if role.dispatch:
+                    try:
+                        await self.offload(self._dispatch_role, spec, task, role, status)
+                    except Exception as e:  # noqa: BLE001 -- one role must not stop the pass
+                        print(f"dispatch {spec.name}/{task.tag}/{role.name}: {e}")
+                if role.ingest:
+                    try:
+                        await self.offload(workloads.resolve(role.ingest), spec, task.tag)
+                    except Exception as e:  # noqa: BLE001 -- one role must not stop the pass
+                        print(f"ingest {spec.name}/{task.tag}/{role.name}: {e}")
             self._ensure_sync(spec, task)
 
     def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):

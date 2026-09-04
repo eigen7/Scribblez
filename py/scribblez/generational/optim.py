@@ -89,9 +89,9 @@ class WsdArm:
     #: Nothing beyond `current`: the rate is the whole story for this arm.
     metrics = staticmethod(dict)
 
-    def __init__(self, conn, params, rows_trained: int):
+    def __init__(self, recorder, params, rows_trained: int):
         schedule = WsdSchedule(arm_lr(params), params.lr_warmup_rows, params.lr_cycle_rows)
-        self._controller = WsdLrController(conn, schedule, rows_trained)
+        self._controller = WsdLrController(recorder, schedule, rows_trained)
         self.lr_fn = self._controller.lr_fn
 
     @property
@@ -183,8 +183,9 @@ def recalibrate_batchnorm(model, batches, forward_fn=_model_forward):
         m.momentum = momentum
 
 
-def build_optim_arm(conn, params, optimizer, rows_trained: int):
-    """The arm driving `optimizer`, picking up at `rows_trained`."""
+def build_optim_arm(recorder, params, optimizer, rows_trained: int):
+    """The arm driving `optimizer`, picking up at `rows_trained`. `recorder`
+    (generational/records.py) takes the WSD schedule's phase-boundary events."""
     if params.optimizer == OPTIMIZER_SCHEDULE_FREE:
         return ScheduleFreeArm(params, optimizer)
-    return WsdArm(conn, params, rows_trained)
+    return WsdArm(recorder, params, rows_trained)

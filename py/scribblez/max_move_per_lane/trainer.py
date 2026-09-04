@@ -13,7 +13,9 @@ is a training row.
 There is no held-out probe/calibration eval or ONNX export -- this is a
 representation-learning probe. Eval is the per-lane train accuracy, recorded
 alongside the losses, plus a per-checkpoint lane-analysis pass over a frozen
-GCG dataset for the dashboard's Lane-analysis tab.
+GCG dataset for the dashboard's Lane-analysis tab. Like its sibling it never
+writes dashboard.db: each generation leaves as a record through the worker's
+sink (generational/records.py) for the dashboard's ingest tick.
 
 Runs as the singleton `train` worker of the max_move_per_lane workload, or
 directly via the scripts/max_move_per_lane/train.py CLI.
@@ -28,7 +30,6 @@ from dataclasses import asdict
 import torch
 
 from scribblez import lane_analysis
-from scribblez.dashboard import db
 from scribblez.dataset import SlogDataset
 from scribblez.ffi import get_max_move_per_lane_input_shapes
 from scribblez.generational import checkpoint, lifecycle
@@ -37,9 +38,10 @@ from scribblez.generational.controls import (
     CpuController,
     WsdLrController,
     WsdSchedule,
-    init_controls,
+    default_controls,
     progress_line,
 )
+from scribblez.generational.records import TrainRecorder, read_controls
 from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.max_move_per_lane.model import MaxMovePerLaneModel
 from scribblez.max_move_per_lane.train_loop import LossConfig, run_epoch
@@ -54,11 +56,13 @@ def _rows_left(params, state: GenerationalState) -> bool:
 
 
 def _checkpoint_and_eval(
-    model, optimizer, conn, paths, device, params, state, gen, result, elapsed, lr_now, ctx
+    model, optimizer, recorder, paths, device, params, state, gen, result, elapsed, lr_now, ctx
 ):
-    """Record the trained generation's metrics + lane accuracies (keyed on the
-    generation index `gen`, with the rows-clock stored as `positions`), run the
-    lane-analysis eval, save the rolling checkpoint, and publish the cursor."""
+    """Run the lane-analysis eval, save the rolling checkpoint, publish the
+    cursor, and last deliver the generation's record (metrics + lane
+    accuracies keyed on the generation index `gen`, with the rows-clock stored
+    as `positions`, plus the eval's predictions) -- last, so the dashboard
+    sees the generation only once everything it produced is on disk."""
     sys.stdout.write("\n")
     avg = result.losses
     ci = gen
@@ -79,17 +83,18 @@ def _checkpoint_and_eval(
         "lr": lr_now,
         "elapsed_s": elapsed,
     }
-    db.write_metrics(conn, ci, record)
     t_eval = time.time()
+    preds = None
     if ctx["lane_eval"] is not None:
-        eval_lane_analysis(model, ctx["lane_eval"], device, conn, ci, state.rows_trained)
+        preds = {"lane_pred": eval_lane_analysis(model, ctx["lane_eval"], device)}
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     lifecycle.write_train_state(paths, asdict(state))
+    recorder.commit_generation(ci, state.rows_trained, record, preds)
     return time.time() - t_eval
 
 
 def train_one_generation(
-    model, optimizer, conn, paths, device, params, state, loss_cfg, lr_controller, cpu, ctx
+    model, optimizer, recorder, paths, device, params, state, loss_cfg, lr_controller, cpu, ctx
 ):
     """Train one epoch over the window ending at the cursor generation, then
     checkpoint under that generation's index and advance the cursor."""
@@ -129,7 +134,7 @@ def train_one_generation(
     eval_seconds = _checkpoint_and_eval(
         model,
         optimizer,
-        conn,
+        recorder,
         paths,
         device,
         params,
@@ -148,16 +153,26 @@ def train_one_generation(
         )
 
 
-def run_generational_training(model, optimizer, conn, paths, device, params, state, ctx):
+def run_generational_training(model, optimizer, recorder, paths, device, params, state, ctx):
     """The wait->train->advance loop, from the resumed cursor onward."""
     loss_cfg = LossConfig.from_args(params)
-    lr_controller = WsdLrController(conn, WsdSchedule.from_params(params), state.rows_trained)
-    cpu = CpuController(conn)
+    lr_controller = WsdLrController(recorder, WsdSchedule.from_params(params), state.rows_trained)
+    cpu = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
         wait_for_generation(paths, state.generation_index)
         train_one_generation(
-            model, optimizer, conn, paths, device, params, state, loss_cfg, lr_controller, cpu, ctx
+            model,
+            optimizer,
+            recorder,
+            paths,
+            device,
+            params,
+            state,
+            loss_cfg,
+            lr_controller,
+            cpu,
+            ctx,
         )
         evicted = lifecycle.evict_beyond_window(paths, state.generation_index - 1, params.window)
         if evicted:
@@ -184,12 +199,11 @@ def load_lane_eval(params, spatial_planes: int) -> dict | None:
     return {"inputs": inputs, "spatial_planes": spatial_planes}
 
 
-def eval_lane_analysis(model, lane_eval: dict, device, conn, generation: int, positions: int):
-    """Run the model over the frozen lane-analysis set and store this checkpoint's
-    per-(position, lane) predictions for the dashboard."""
+def eval_lane_analysis(model, lane_eval: dict, device) -> dict:
+    """Run the model over the frozen lane-analysis set and return this
+    checkpoint's per-(position, lane) predictions for the generation's record."""
     model.eval()
-    preds = lane_analysis.predict(model, lane_eval["inputs"], lane_eval["spatial_planes"], device)
-    db.write_lane_preds(conn, generation, positions, preds)
+    return lane_analysis.predict(model, lane_eval["inputs"], lane_eval["spatial_planes"], device)
 
 
 def run(ctx: WorkerContext) -> int:
@@ -229,23 +243,25 @@ def run(ctx: WorkerContext) -> int:
         model.parameters(), lr=params.lr, weight_decay=params.weight_decay
     )
 
-    conn = db.connect(paths.dashboard_db)
-    db.write_meta(conn, ctx.tag, asdict(params), n_params)
+    recorder = TrainRecorder(ctx.sink)
     # Coefficients of each loss term in compute_loss's total (PDF has weight 1),
     # so the dashboard can stack the weighted contributions.
-    db.write_loss_weights(
-        conn,
+    recorder.publish_run(
+        ctx.tag,
+        asdict(params),
+        n_params,
         {
             "loss_score_pdf": 1.0,
             "loss_score_cdf": params.lambda_cdf,
             "loss_move": params.lambda_occ,
             "loss_has_move": params.lambda_has_move,
         },
+        default_controls(),
     )
-    init_controls(conn)
 
     run_ctx = {
         "config": asdict(params),
+        "read_controls": functools.partial(read_controls, ctx.sink),
         "lane_eval": load_lane_eval(params, spatial_planes),
         "stats": WorkerStats(ctx),
     }
@@ -253,7 +269,7 @@ def run(ctx: WorkerContext) -> int:
     state = checkpoint.resume(paths, model, optimizer, device)
     lifecycle.write_train_state(paths, asdict(state))
     try:
-        run_generational_training(model, optimizer, conn, paths, device, params, state, run_ctx)
+        run_generational_training(model, optimizer, recorder, paths, device, params, state, run_ctx)
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")
     return 0

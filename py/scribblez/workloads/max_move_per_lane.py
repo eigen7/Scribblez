@@ -80,6 +80,7 @@ SPEC = WorkloadSpec(
             name="train",
             title="Trainer (GPU)",
             runner="scribblez.max_move_per_lane.trainer:run",
+            ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
             kinds=("local",),
             gpu=True,

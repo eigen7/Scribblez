@@ -42,6 +42,7 @@ from scribblez.ffi import (
     legal_position_eval_placement,
     position_eval_board_json,
 )
+from scribblez.generational.records import write_controls_file
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
@@ -584,7 +585,9 @@ class ControlsHandler(_Base):
     """Live operator controls (e.g. dataloader_workers). GET returns the current
     values and the rows-clock change events (which also carry the LR schedule's
     phase boundaries); POST {name, value} sets one, which the trainer adopts at
-    its next generation. Values persist in the tag's dashboard.db."""
+    its next generation. Values persist in the tag's dashboard.db, and every
+    set republishes them all in the tag's controls file, which is what the
+    trainer reads (generational/records.py)."""
 
     def get(self):
         conn = self._open_conn()
@@ -609,17 +612,17 @@ class ControlsHandler(_Base):
             return
         # Open (creating if needed) directly rather than via the exists-gated
         # _open_conn, so a control can be set before the first training run.
-        path = Path(
-            TagPaths(
-                self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
-            ).dashboard_db
+        paths = TagPaths(
+            self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
         )
-        conn = db.connect(path)
+        conn = db.connect(paths.dashboard_db)
         try:
             db.write_control(conn, name, float(value))
-            self.write({"controls": db.read_controls(conn)})
+            controls = db.read_controls(conn)
         finally:
             conn.close()
+        write_controls_file(paths, controls)
+        self.write({"controls": controls})
 
 
 class FigureHandler(_Base):

@@ -65,7 +65,8 @@ ground truth over a GCG dataset
   `face_up_leaves` param (read from its task.json).
 - **Predictions**: an FFI replays the GCG into an input tensor byte-identical
   to a training row; the trainer's checkpoint hook evaluates the dataset
-  batch per generation and writes WLD + score-delta mean/std into the tag's
+  batch per generation and delivers WLD + score-delta mean/std in the
+  generation's record, which the dashboard ingests into the tag's
   `dashboard.db`.
 - **UI**: generation slider, position picker, board + both racks (the POV's
   leave; the opponent's leave -- spelled out under face-up leaves, "?" under
@@ -124,7 +125,8 @@ dataset (`positions/NWL23/max-move-per-lane-test-dataset/`).
   word/coords/score).
 - **Predictions**: a one-time FFI builder caches the dataset's input batch
   under the tag; the checkpoint hook decodes per-lane predictions (occupancy
-  union, score PMF, has-move) into `dashboard.db` per generation.
+  union, score PMF, has-move) into the generation's record, ingested into
+  `dashboard.db` by the dashboard.
 - **UI**: generation slider, position picker, orientation radio;
   `Board.tsx` with per-lane pass/fail badges and lane highlighting; a
   lane-detail pane showing the true best move(s) and the true-vs-predicted

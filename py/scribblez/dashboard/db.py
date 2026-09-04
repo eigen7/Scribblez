@@ -1,13 +1,17 @@
 """SQLite store for training metrics and eval artifacts.
 
 A single per-tag database (``tags/<tag>/dashboard.db``) holds everything the
-dashboard renders, so training writes data (never PNGs) and the Bokeh app
-renders on the fly. WAL mode lets the dashboard read while training writes.
+dashboard renders, so training produces data (never PNGs) and the Bokeh app
+renders on the fly. The dashboard server is its only writer: a trainer's
+metrics and predictions arrive as records the server's ingest tick writes
+(generational/train_ingest.py), as do match-eval results
+(match_eval/dispatch.py). WAL mode lets requests read while a tick writes.
 
 Tables:
   meta            one row of run config (args, model size, timestamps)
   metrics         long-format scalar series: (epoch, name) -> value
   match_eval      per-generation match-play result vs a fixed opponent
+  train_record    the ingest ledger: which trainer records have been written
 
 NumPy arrays are stored as ``np.save`` BLOBs (shape + dtype preserved).
 """
@@ -16,6 +20,7 @@ import io
 import json
 import sqlite3
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -103,6 +108,11 @@ CREATE TABLE IF NOT EXISTS control_event (
   name      TEXT,               -- which control changed
   value     REAL,               -- the new value
   t         REAL                -- wall-clock of the change
+);
+CREATE TABLE IF NOT EXISTS train_record (
+  name     TEXT PRIMARY KEY,    -- a trainer record's file name under records/
+  mtime_ns INTEGER,             -- the file as last ingested: its mtime ...
+  size     INTEGER              -- ... and size, so a rewrite is ingested again
 );
 """
 
@@ -207,12 +217,16 @@ def read_controls(conn: sqlite3.Connection) -> dict:
     return {r["name"]: r["value"] for r in conn.execute("SELECT name, value FROM control")}
 
 
-def write_control_event(conn: sqlite3.Connection, positions: int, name: str, value: float):
+def write_control_event(
+    conn: sqlite3.Connection, positions: int, name: str, value: float, t: float | None = None
+):
     """Record that a control changed to `value` at `positions` rows trained, so the
-    dashboard can annotate the metric curves where the operator intervened."""
+    dashboard can annotate the metric curves where the operator intervened. `t`
+    is when it happened -- now, unless the event is being ingested from a
+    trainer's record, which carries its own."""
     conn.execute(
         "INSERT INTO control_event (positions, name, value, t) VALUES (?, ?, ?, ?)",
-        (int(positions), name, float(value), time.time()),
+        (int(positions), name, float(value), time.time() if t is None else float(t)),
     )
     conn.commit()
 
@@ -328,6 +342,43 @@ def read_position_eval_pred(
         "sd_mean": r["sd_mean"],
         "sd_std": r["sd_std"],
     }
+
+
+@dataclass(frozen=True)
+class PredTable:
+    """A per-checkpoint prediction table: the arrays a generation's row set
+    is built from (each stacked over dataset positions) and the writer that
+    stores them."""
+
+    arrays: tuple[str, ...]
+    write: object  # callable(conn, generation, positions, {array name: ndarray})
+
+
+# The prediction tables a trainer's generation record may carry, by table
+# name (generational/records.py packs the arrays; train_ingest.py unpacks
+# them through `write`).
+PRED_TABLES = {
+    "position_eval_pred": PredTable(("wld", "sd_mean", "sd_std"), write_position_eval_preds),
+    "lane_pred": PredTable(("occ", "score_pmf", "has_move"), write_lane_preds),
+}
+
+
+def read_record_ledger(conn: sqlite3.Connection) -> dict[str, tuple[int, int]]:
+    """Every ingested trainer record, name -> (mtime_ns, size) as ingested."""
+    return {
+        r["name"]: (r["mtime_ns"], r["size"])
+        for r in conn.execute("SELECT name, mtime_ns, size FROM train_record")
+    }
+
+
+def write_record_ledger(conn: sqlite3.Connection, name: str, mtime_ns: int, size: int):
+    """Mark a trainer record as ingested at the given file identity."""
+    conn.execute(
+        "INSERT INTO train_record (name, mtime_ns, size) VALUES (?, ?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET mtime_ns=excluded.mtime_ns, size=excluded.size",
+        (name, int(mtime_ns), int(size)),
+    )
+    conn.commit()
 
 
 def write_match_eval(conn: sqlite3.Connection, epoch: int, record: dict):

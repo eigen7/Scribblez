@@ -369,6 +369,7 @@ SPEC = WorkloadSpec(
             name="train",
             title="Fusion + proves-best trainer (GPU)",
             runner="scribblez.evidence.trainer:run",
+            ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
             kinds=("local",),
             gpu=True,
