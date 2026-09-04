@@ -9,6 +9,9 @@ to a tag lives under a single per-tag root, `<mount_root>/tags/<task>/<tag>/`:
       logs/                       per-worker process logs
       stats/                      per-worker stats records (the Stats tab)
       params/                     per-worker provenance manifests
+      records/                    the trainer's run + per-generation records,
+                                  ingested into dashboard.db by the controller
+      controls.json               the operator's live controls, read by the trainer
       train_state.json            the trainer's published cursor (tiny, atomic)
       data/
         staging/                  generator chunks awaiting generation assignment
@@ -26,8 +29,10 @@ data/slogs/; only the training workloads have checkpoints or a dashboard DB).
 This module is the single source of truth for the layout: scripts derive every
 path from a `TagPaths` rather than reassembling subdirectories.
 
-All training/eval results are written to dashboard.db (a SQLite store); the
-dashboard renders every plot on the fly from it -- no PNG artifacts.
+All training/eval results end up in dashboard.db (a SQLite store); the
+dashboard renders every plot on the fly from it -- no PNG artifacts. The
+trainer never writes that database itself: it delivers records under records/
+and the dashboard's ingest tick writes them (generational/records.py).
 """
 
 from pathlib import Path
@@ -59,6 +64,23 @@ MATCH_RESULTS_DIR = "match_results"
 # Filename stem prefix of a per-generation ONNX export, which is what tells one
 # apart from the shared blobs beside it in models/ (see onnx_sidecars).
 ONNX_PREFIX = "model_epoch_"
+
+# The trainer's record stream (generational/records.py): where it lives
+# relative to the tag root, and how a generation's record is named. Relative
+# paths because the trainer addresses them through its results sink, which
+# maps them under the tag root locally and under the tag prefix in the bucket.
+RECORDS_DIR = "records"
+RUN_RECORD_REL = f"{RECORDS_DIR}/run.json"
+CONTROLS_REL = "controls.json"
+
+
+def generation_record_rel(generation: int) -> str:
+    return f"{RECORDS_DIR}/gen_{generation:06d}.json"
+
+
+def generation_preds_rel(generation: int) -> str:
+    return f"{RECORDS_DIR}/gen_{generation:06d}.npz"
+
 
 # Appended to an assigned model by the worker that has finished playing it.
 # Part of the inbox protocol rather than a detail of either side: the worker
@@ -123,6 +145,25 @@ class TagPaths:
     @property
     def stats_dir(self) -> Path:
         return self.root / "stats"
+
+    @property
+    def records_dir(self) -> Path:
+        """The trainer's delivered records, awaiting (or after) the
+        controller's ingest into dashboard.db (generational/train_ingest.py)."""
+        return self.root / RECORDS_DIR
+
+    @property
+    def run_record_path(self) -> Path:
+        return self.root / RUN_RECORD_REL
+
+    def generation_record_path(self, generation: int) -> Path:
+        return self.root / generation_record_rel(generation)
+
+    @property
+    def controls_path(self) -> Path:
+        """The operator's live controls as the trainer reads them: written by
+        the dashboard whenever a control is set (generational/records.py)."""
+        return self.root / CONTROLS_REL
 
     @property
     def train_state_path(self) -> Path:

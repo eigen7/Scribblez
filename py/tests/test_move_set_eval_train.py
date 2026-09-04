@@ -518,13 +518,19 @@ def test_publish_config_records_params_before_the_model_exists(tmp_path):
     does -- rather than staying blank until training starts."""
     import json
 
+    from cloud.sinks import LocalSink
     from scribblez.dashboard import db
+    from scribblez.generational import train_ingest
+    from scribblez.generational.records import TrainRecorder
     from scribblez.move_set_eval import trainer
+    from scribblez.paths import MOVE_SET_EVAL, TagPaths
     from scribblez.workloads.move_set_eval import MoveSetEvalParams
 
-    conn = db.connect(tmp_path / "dashboard.db")
+    paths = TagPaths("tag1", MOVE_SET_EVAL, mount_root=tmp_path)
     params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3, lambda_sd=0.01)
-    trainer.publish_config(conn, "tag1", params)
+    trainer.publish_config(TrainRecorder(LocalSink(paths.root)), "tag1", params)
+    conn = db.connect(paths.dashboard_db)
+    train_ingest.ingest(paths, conn)
 
     meta = db.read_meta(conn)
     assert meta is not None  # the row exists before any model or training pass

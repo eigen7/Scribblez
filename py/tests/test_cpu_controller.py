@@ -1,7 +1,6 @@
 """Test the generational trainer's live CPU-thread controller."""
 
 import torch
-from scribblez.dashboard import db
 from scribblez.generational.controls import (
     CONTROL_DATALOADER_WORKERS,
     CONTROL_TORCH_THREADS,
@@ -9,24 +8,29 @@ from scribblez.generational.controls import (
 )
 
 
-def test_cpu_controller_serves_threads_and_logs_changes(tmp_path):
-    conn = db.connect(tmp_path / "dashboard.db")
+class _Recorder:
+    def __init__(self):
+        self.events = []
+
+    def control_event(self, positions, name, value):
+        self.events.append((name, positions, float(value)))
+
+
+def test_cpu_controller_serves_threads_and_logs_changes():
+    recorder = _Recorder()
+    controls = {}  # nothing set by the operator yet: the defaults apply
     default_torch = torch.get_num_threads()
-    db.init_control(
-        conn,
-        {
-            CONTROL_DATALOADER_WORKERS: 4,
-            CONTROL_TORCH_THREADS: default_torch,
-        },
-    )
-    cpu = CpuController(conn)
+    cpu = CpuController(recorder, lambda: controls)
     assert cpu.dataloader_workers == 4
     assert torch.get_num_threads() == default_torch  # applied, unchanged here
 
     # Construction logs no events; a later change does, at the given rows-clock.
-    assert db.read_control_events(conn) == []
-    db.write_control(conn, CONTROL_DATALOADER_WORKERS, 2)
+    assert recorder.events == []
+    controls[CONTROL_DATALOADER_WORKERS] = 2
     cpu.refresh(500)
     assert cpu.dataloader_workers == 2
-    events = {(e["name"], e["positions"], e["value"]) for e in db.read_control_events(conn)}
-    assert (CONTROL_DATALOADER_WORKERS, 500, 2.0) in events
+    assert recorder.events == [(CONTROL_DATALOADER_WORKERS, 500, 2.0)]
+    # A control the file carries as a float (json) is applied as a count.
+    controls[CONTROL_TORCH_THREADS] = float(default_torch)
+    cpu.refresh(600)
+    assert recorder.events == [(CONTROL_DATALOADER_WORKERS, 500, 2.0)]

@@ -7,6 +7,10 @@ way to run training; this CLI invokes the same train-role runner
 consumes complete generations under the tag, so something must be filling them
 (the dashboard server with generator workers attached to the same tag).
 
+The trainer delivers its metrics as records under the tag (records/), which
+the dashboard server ingests into dashboard.db as it runs; with no server up,
+run scripts/ingest_train_records.py afterwards.
+
 Usage:
     ./py/scripts/max_move_per_lane/train.py -t mytag
 """

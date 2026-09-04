@@ -21,9 +21,10 @@ referenced by dotted path and imported only when it runs, so cloud CPU pods
 import the registry without torch.
 
 Knobs split uniformly across workloads: **task params** (frozen at creation;
-define the corpus and the model), **live controls** (per-tag dashboard.db
-control table, adopted by the trainer at its natural cadence), and
-**worker-slot resources** (threads/vcpus, per slot, never frozen).
+define the corpus and the model), **live controls** (the tag's
+`controls.json`, written by the dashboard and adopted by the trainer at its
+natural cadence), and **worker-slot resources** (threads/vcpus, per slot,
+never frozen).
 
 The scheduler tick runs inside the dashboard server's reconcile loop (the one
 always-on controller-host process) and gets `SchedulerHooks`:
@@ -45,7 +46,7 @@ pairs to the tag's data store.
 | Role | Cardinality | Kinds | Interruptible | Does |
 |---|---|---|---|---|
 | `generate` | N, interchangeable | local + cloud | yes | one cycle = one whole `.slog` chunk of self-play games, delivered to the staging area |
-| `train` | singleton | local (the GPU box) | — | consume complete generations: train, checkpoint, export ONNX, write dashboard.db |
+| `train` | singleton | local (the GPU box) | — | consume complete generations: train, checkpoint, export ONNX, deliver the generation's record |
 | `match_eval` | singleton | local + ssh (needs a GPU) | — | play eval matches against fixed opponent (position_eval only; docs/roadmap.md A1) |
 
 The trainer never generates and the generators never train; match_eval only
@@ -115,16 +116,31 @@ an open generation like any other games.
 orchestration: resume from the rolling checkpoint; wait for the cursor's
 generation to complete (sleep-poll on manifests — GPU idle here *is* the
 "generation is the bottleneck" signal, visible in Stats); train one epoch
-over the window; checkpoint + ONNX export + metrics + `train_state.json`
-under the generation's index; evict generations beyond the window; advance
-the cursor.
+over the window; checkpoint + ONNX export + `train_state.json` + the
+generation's record under the generation's index; evict generations beyond
+the window; advance the cursor.
+
+The trainer never writes `dashboard.db`. Its metrics, eval predictions and
+control events leave as generation-keyed records through the worker's
+results sink (`records/` under the tag; `scribblez/generational/records.py`),
+and the dashboard's reconcile loop ingests them into the database
+(`RoleSpec.ingest` -> `scribblez/generational/train_ingest.py`) -- the
+match-eval split applied to training, so the database has one writer and the
+trainer is the same process wherever it runs. A generation's record is
+written last of its outputs, after the ONNX export and the checkpoint, so its
+existence is the commit: the dashboard lists a generation only once
+everything it stands for is on disk. Live controls travel the other way as
+one file: the Controls tab writes every control's value to the tag's
+`controls.json`, which the trainer reads through the same sink at each
+generation.
 
 Launched as a local worker slot like any other; the runner lives with the
 training code (referenced by dotted path) so generator bundles never import
 torch. `scripts/position_eval/train.py` remains a thin CLI over the same
-runner for headless debugging. SIGTERM pauses; resume repeats at most one
-generation from the last checkpoint. Live controls (LR, loader threads) come from
-dashboard.db. A fresh start is a fresh tag; there is no in-place run reset.
+runner for headless debugging (with no server ingesting,
+`scripts/ingest_train_records.py` does it by hand). SIGTERM pauses; resume
+repeats at most one generation from the last checkpoint. A fresh start is a
+fresh tag; there is no in-place run reset.
 
 ## The match_eval roundtrip
 

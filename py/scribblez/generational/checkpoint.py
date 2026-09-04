@@ -7,6 +7,7 @@ loads this and continues exactly where it left off.
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, fields
 
 import torch
@@ -38,6 +39,9 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
     `config` is the run's frozen task params, recorded for later inspection."""
     path = paths.rolling_checkpoint
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Written beside and renamed over: a crash (or a copy taken) mid-write
+    # must never leave the one file a resume depends on torn.
+    tmp = path.with_name(path.name + ".tmp")
     torch.save(
         {
             **asdict(state),
@@ -45,8 +49,9 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
             "optimizer_state_dict": optimizer.state_dict(),
             "config": config,
         },
-        path,
+        tmp,
     )
+    os.replace(tmp, path)
 
 
 def resume(

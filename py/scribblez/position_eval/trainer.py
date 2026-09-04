@@ -20,8 +20,11 @@ so pausing and restarting the worker continues exactly where it left off;
 SIGTERM stops at the next batch boundary, losing at most the current
 (uncheckpointed) generation. The optimizer and its learning-rate policy are
 the run's `optimizer` arm (generational/optim.py); the CPU thread pools
-(DataLoader workers, torch intra-op threads) are live controls in the per-tag
-dashboard.db, adopted at the next generation.
+(DataLoader workers, torch intra-op threads) are live controls the dashboard
+publishes in the tag's controls file, adopted at the next generation. Nothing
+here writes dashboard.db: metrics, predictions and control events leave as
+records through the worker's sink (generational/records.py) and the
+dashboard's ingest tick turns them into rows.
 
 Training-step regime. The network forward runs under bf16 autocast, with the
 loss on fp32-upcast outputs and fp32 master weights / optimizer state (bf16
@@ -51,7 +54,6 @@ from dataclasses import asdict
 
 import torch
 
-from scribblez.dashboard import db
 from scribblez.dataset import SlogDataset
 from scribblez.ffi import (
     get_input_shapes,
@@ -60,8 +62,9 @@ from scribblez.ffi import (
 )
 from scribblez.generational import checkpoint, lifecycle
 from scribblez.generational.checkpoint import GenerationalState
-from scribblez.generational.controls import CpuController, init_controls, progress_line
+from scribblez.generational.controls import CpuController, default_controls, progress_line
 from scribblez.generational.optim import build_optim_arm, build_optimizer
+from scribblez.generational.records import TrainRecorder, read_controls
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
 from scribblez.position_eval.model import PositionEvalModel
@@ -100,18 +103,17 @@ def _rows_left(params, state: GenerationalState) -> bool:
 
 
 def _checkpoint_and_eval(
-    model, optimizer, conn, paths, device, params, state, gen, result, elapsed, optim_arm, ctx
+    model, optimizer, recorder, paths, device, params, state, gen, result, elapsed, optim_arm, ctx
 ):
-    """Export ONNX, record the trained generation's metrics + eval (keyed on
-    the generation index `gen`, with the rows-clock stored as `positions`),
-    save the rolling checkpoint, and publish the cursor.
+    """Export ONNX, evaluate, save the rolling checkpoint, publish the cursor,
+    and last of all deliver the generation's record (its metrics + eval, keyed
+    on the generation index `gen`, with the rows-clock stored as `positions`).
 
-    ONNX export runs first because the eval step below is what makes this
-    generation visible to the dashboard's Positions tab (it writes the row
-    `db.read_position_eval_generations` reads): a dashboard request landing
-    between that write and a later export would see the generation listed but
-    find no ONNX file yet, so the placement-overlay prediction would come back
-    null."""
+    The record goes last because it is what makes this generation visible to
+    the dashboard -- the Loss tab's rows and the Positions tab's generation
+    list come from it -- so everything it stands for (the ONNX file the
+    placement overlay will load, the checkpoint a restart resumes from) is on
+    disk before anything can ask for it."""
     sys.stdout.write("\n")
     avg = result.losses
     lr_now = optim_arm.current
@@ -162,11 +164,12 @@ def _checkpoint_and_eval(
         ctx["scalar_size"],
         opp_leave_input=params.face_up_leaves,
     )
-    db.write_metrics(conn, ci, record)
+    preds = None
     if ctx["position_eval"] is not None:
-        eval_position_eval(model, ctx["position_eval"], device, conn, ci, state.rows_trained)
+        preds = {"position_eval_pred": eval_position_eval(model, ctx["position_eval"], device)}
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     _publish_train_state(paths, state)
+    recorder.commit_generation(ci, state.rows_trained, record, preds)
     return time.time() - t_eval
 
 
@@ -204,7 +207,18 @@ def _transformer_config(params) -> TransformerConfig | None:
 
 
 def train_one_generation(
-    model, train_model, optimizer, conn, paths, device, params, state, loss_cfg, optim_arm, cpu, ctx
+    model,
+    train_model,
+    optimizer,
+    recorder,
+    paths,
+    device,
+    params,
+    state,
+    loss_cfg,
+    optim_arm,
+    cpu,
+    ctx,
 ):
     """Train one epoch (through `train_model`, the compiled forward over
     `model`'s parameters) over the window ending at the cursor generation, then
@@ -255,7 +269,7 @@ def train_one_generation(
     eval_seconds = _checkpoint_and_eval(
         model,
         optimizer,
-        conn,
+        recorder,
         paths,
         device,
         params,
@@ -276,12 +290,12 @@ def train_one_generation(
 
 
 def run_generational_training(
-    model, train_model, optimizer, conn, paths, device, params, state, ctx
+    model, train_model, optimizer, recorder, paths, device, params, state, ctx
 ):
     """The wait->train->advance loop, from the resumed cursor onward."""
     loss_cfg = LossConfig.from_args(params)
-    optim_arm = build_optim_arm(conn, params, optimizer, state.rows_trained)
-    cpu = CpuController(conn)
+    optim_arm = build_optim_arm(recorder, params, optimizer, state.rows_trained)
+    cpu = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
         wait_for_generation(paths, state.generation_index)
@@ -289,7 +303,7 @@ def run_generational_training(
             model,
             train_model,
             optimizer,
-            conn,
+            recorder,
             paths,
             device,
             params,
@@ -328,14 +342,14 @@ def load_position_eval(spatial_planes: int) -> dict | None:
     return {"inputs": inputs, "spatial_planes": spatial_planes}
 
 
-def eval_position_eval(model, position_eval: dict, device, conn, generation: int, positions: int):
-    """Run the model over the frozen position-evaluation set and store this checkpoint's
-    per-position predictions (WLD probabilities + score-delta mean/std)."""
+def eval_position_eval(model, position_eval: dict, device) -> dict:
+    """Run the model over the frozen position-evaluation set and return this
+    checkpoint's per-position predictions (WLD probabilities + score-delta
+    mean/std) for the generation's record."""
     model.eval()
-    preds = position_eval_analysis.predict(
+    return position_eval_analysis.predict(
         model, position_eval["inputs"], position_eval["spatial_planes"], device
     )
-    db.write_position_eval_preds(conn, generation, positions, preds)
 
 
 def load_position_eval_quality(spatial_planes: int, face_up_leaves: bool) -> dict | None:
@@ -428,10 +442,11 @@ def run(ctx: WorkerContext) -> int:
     torch.set_float32_matmul_precision("high")
     train_model = torch.compile(model)
 
-    conn = db.connect(paths.dashboard_db)
-    db.write_meta(conn, ctx.tag, asdict(params), n_params)
-    db.write_loss_weights(
-        conn,
+    recorder = TrainRecorder(ctx.sink)
+    recorder.publish_run(
+        ctx.tag,
+        asdict(params),
+        n_params,
         {
             "loss_wld": params.lambda_wld,
             "loss_score_diff": params.lambda_sd,
@@ -440,11 +455,12 @@ def run(ctx: WorkerContext) -> int:
             "loss_opp_win_placement": params.lambda_win_placement,
             "loss_self_win_placement": params.lambda_win_placement,
         },
+        default_controls(),
     )
-    init_controls(conn)
 
     run_ctx = {
         "config": asdict(params),
+        "read_controls": functools.partial(read_controls, ctx.sink),
         "spatial_planes": spatial_planes,
         "scalar_size": scalar_size,
         "position_eval": load_position_eval(spatial_planes),
@@ -456,7 +472,7 @@ def run(ctx: WorkerContext) -> int:
     _publish_train_state(paths, state)
     try:
         run_generational_training(
-            model, train_model, optimizer, conn, paths, device, params, state, run_ctx
+            model, train_model, optimizer, recorder, paths, device, params, state, run_ctx
         )
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")
