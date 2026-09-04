@@ -258,7 +258,32 @@ POST_MOVE_QUALITY = [
         "Value quality vs Monte-Carlo — score diff (points)",
         ["eval_sd_mean_mae", "eval_sd_std_mae"],
     ),
+    # The placement heads' collapsed per-cell planes against the rollouts'
+    # planes on the same positions (position_eval/analysis.placement_metrics --
+    # the Positions tab's residual heat map, aggregated): the misplaced coverage
+    # in tiles (lower is better) and how often the model's most covered cell is
+    # the rollouts' (higher is better), one curve per head.
+    (
+        "Placement vs Monte-Carlo — misplaced coverage (tiles)",
+        [
+            "eval_place_l1_opp_next",
+            "eval_place_l1_self_next",
+            "eval_place_l1_opp_win",
+            "eval_place_l1_self_win",
+        ],
+    ),
+    (
+        "Placement vs Monte-Carlo — top-cell agreement",
+        [
+            "eval_place_top1_opp_next",
+            "eval_place_top1_self_next",
+            "eval_place_top1_opp_win",
+            "eval_place_top1_self_win",
+        ],
+    ),
 ]
+# Figures per row of the value-quality panel.
+QUALITY_NCOLS = 2
 
 
 def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
@@ -304,14 +329,14 @@ def _variant_rows(builders):
 
 
 def _quality_row(sources, smooth, log_x):
-    """One x-axis variant of the value-quality row: a figure per POST_MOVE_QUALITY
-    group that any source has data for."""
+    """One x-axis variant of the value-quality panel: a figure per
+    POST_MOVE_QUALITY group that any source has data for, QUALITY_NCOLS to a row."""
     figs = [
         f
         for title, group in POST_MOVE_QUALITY
         if (f := _series_figure(sources, title, group, smooth=smooth, log_x=log_x))
     ]
-    return row(*figs)
+    return column(*(row(*figs[i : i + QUALITY_NCOLS]) for i in range(0, len(figs), QUALITY_NCOLS)))
 
 
 def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
