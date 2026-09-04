@@ -67,9 +67,12 @@ po::options_description make_options_description(UltimateBotOptions& o) {
     ("cuda-device,d", po::value<int>(&o.cuda_device)->default_value(o.cuda_device),
      "GPU index")  //
     ("precision,p", po::value<std::string>(&o.precision)->default_value(o.precision),
-     "TensorRT precision: FP32|BF16|FP16")  //
+     "TensorRT precision: FP32|BF16|FP16; only FP32 is validated -- the fusion graph "
+     "carries FP16 hazards no export gate yet covers")  //
     ("max-sims", po::value<int>(&o.max_sims)->default_value(o.max_sims),
-     "sims per turn at most, the anchor included; 1 plays the anchor unsimmed")  //
+     ("sims per turn at most, the anchor included, up to the evidence width " +
+      std::to_string(nn::kMaxEvidence) + "; 1 plays the anchor unsimmed")
+       .c_str())  //
     ("gain-threshold", po::value<float>(&o.gain_threshold)->default_value(o.gain_threshold),
      "stop simming once no unsimmed candidate's predicted gain (win probability) reaches "
      "this; 0 never stops early")  //

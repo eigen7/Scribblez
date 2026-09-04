@@ -1,6 +1,7 @@
 #include "agent/ultimate_bot_agent.h"
 
 #include "encoding/input_encoder.h"
+#include "nn/model_specs.h"
 #include "training/evidence_trajectory_select.h"
 #include "util/exception.h"
 #include "util/math.h"
@@ -41,8 +42,9 @@ UltimateBotAgent::UltimateBotAgent(const Params& params,
               make_runner_params(params.sim, params.sim_horizon, leaf_service_.get())),
       endgame_(params.thread_id, params.endgame) {
   validate(params);
-  // The step graph pads its evidence to a fixed width; a budget past it could
-  // never be staged.
+  // validate() bounded the budget by the padded width every step graph shares;
+  // the service's own width can only be narrower (a scripted stub's, or a
+  // trained-width stamp to come).
   if (params.max_sims > service_->max_evidence()) {
     throw util::CleanException("ultimatebot: --max-sims must be <= the model's evidence width {}",
                                service_->max_evidence());
@@ -52,6 +54,12 @@ UltimateBotAgent::UltimateBotAgent(const Params& params,
 
 void UltimateBotAgent::validate(const Params& params) {
   if (params.max_sims < 1) throw util::CleanException("ultimatebot: --max-sims must be >= 1");
+  // The step graph pads its evidence to a fixed width; a budget past it could
+  // never be staged.
+  if (params.max_sims > nn::kMaxEvidence) {
+    throw util::CleanException("ultimatebot: --max-sims must be <= the evidence width {}",
+                               nn::kMaxEvidence);
+  }
   if (params.gain_threshold < 0.0f) {
     throw util::CleanException("ultimatebot: --gain-threshold must be >= 0");
   }
@@ -106,6 +114,22 @@ MoveDecision UltimateBotAgent::make_move(const MoveRequest& req) {
   // it without rollouts or a model pass (the greedy agent's move).
   if (max_sims_ == 1) return candidates[evidence::anchor_index(candidates)];
 
+  encode_candidates(req, candidates);
+
+  const SimPosition pos = sim_position_from(req);
+  agent::SimRunnerCandidateSimmer simmer(runner_, pos, sim_seed(ply_));
+  const agent::EvidenceSet evidence =
+    agent::run_evidence_loop(candidates, *service_, simmer, policy_, max_sims_);
+  // Win rate is the objective the gain head is trained in, so the pick and the
+  // stopping rule agree; this agent has no spread objective. Ties in the
+  // observations go to the earlier sim -- the anchor first, then the earlier
+  // pick, this agent's own ordering.
+  return evidence
+    .moves[size_t(best_observation_index(evidence.observations, SimObjective::kWinRate))];
+}
+
+void UltimateBotAgent::encode_candidates(const MoveRequest& req,
+                                         const std::vector<Move>& candidates) {
   encode_board_row(req, board_row_.data());
   // The differential the moves resolve is read off the same mirrored encoder
   // that wrote the board row's score-diff feature, so a candidate's resultant
@@ -115,15 +139,6 @@ MoveDecision UltimateBotAgent::make_move(const MoveRequest& req) {
   move_features_.encode(candidates.data(), int(candidates.size()),
                         encoder_.score(me) - encoder_.score(1 - me));
   service_->encode(board_row_.data(), move_features_);
-
-  const SimPosition pos = sim_position_from(req);
-  agent::SimRunnerCandidateSimmer simmer(runner_, pos, sim_seed(ply_));
-  const agent::EvidenceSet evidence =
-    agent::run_evidence_loop(candidates, *service_, simmer, policy_, max_sims_);
-  // Ties in the observations go to the earlier sim -- the anchor first, then
-  // the earlier pick, this agent's own ordering.
-  return evidence
-    .moves[size_t(best_observation_index(evidence.observations, SimObjective::kWinRate))];
 }
 
 }  // namespace scribblez

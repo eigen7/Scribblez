@@ -52,7 +52,8 @@ class UltimateBotAgent : public Agent {
     std::string name;
     const Dictionary* dict = nullptr;
     // The sim budget per turn, the anchor included; 1 plays the anchor
-    // unsimmed. Bounded above by the model's padded evidence width. 10 matches
+    // unsimmed. Bounded above by the padded evidence width nn::kMaxEvidence.
+    // 10 matches
     // MsetSimAgent's --sim-top-k, so the equal-budget comparison against it
     // is the configuration-free default.
     int max_sims = 10;
@@ -102,11 +103,14 @@ class UltimateBotAgent : public Agent {
   void encode_board_row(const MoveRequest& req, float* dst) const;
 
  private:
-  // Throws on out-of-range scalar params, the rollout ones included. from_spec
-  // runs it BEFORE the production constructor, so a bad flag fails fast instead
-  // of after the TensorRT engine build; the evidence-width bound needs the
-  // loaded service and is checked by the constructor.
+  // Throws on out-of-range scalar params, the rollout ones and the evidence
+  // width bound included. from_spec runs it BEFORE the production constructor,
+  // so a bad flag fails fast instead of after the TensorRT engine build.
   static void validate(const Params& params);
+
+  // The model's one pass of the turn: the board row and the whole candidate
+  // set, encoded and handed to the service.
+  void encode_candidates(const MoveRequest& req, const std::vector<Move>& candidates);
 
   int max_sims_;
   agent::ArgmaxGainPolicy policy_;

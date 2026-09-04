@@ -2,6 +2,9 @@
 
 #include "training/evidence_trajectory_select.h"
 #include "util/assert.h"
+#include "util/exception.h"
+
+#include <cmath>
 
 namespace scribblez {
 namespace agent {
@@ -15,6 +18,15 @@ std::optional<int> ArgmaxGainPolicy::pick(const MoveProposalPredictions& conditi
   int best = -1;
   for (int i = 0; i < conditioned.num_moves; ++i) {
     if (simmed[size_t(i)]) continue;
+    // A non-finite gain compares false against everything: a NaN at the
+    // lowest unsimmed index would win every pick and slip past the threshold.
+    // As for the leaf readout (sim_runner.cpp), a broken model output is a
+    // hard error, not a silent decision.
+    if (!std::isfinite(conditioned.gain[size_t(i)])) {
+      throw util::Exception(
+        "evidence loop: the move proposal model returned a non-finite gain (off-distribution "
+        "input, or a broken model)");
+    }
     // Strict: the first (lowest-index, equity-preferred) maximum wins a tie.
     if (best < 0 || conditioned.gain[size_t(i)] > conditioned.gain[size_t(best)]) best = i;
   }

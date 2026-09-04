@@ -271,6 +271,35 @@ TEST_F(UltimateBotAgentTest, TheGainThresholdStopsTheLoop) {
   agent2.begin_game({});
   agent2.make_move(request());
   EXPECT_EQ(sp2->condition_calls, p.max_sims - 1);
+
+  // A gain exactly at the threshold "reaches" it (the flag's words): the loop
+  // continues, so the bound is inclusive and cannot silently tighten.
+  p.gain_threshold = 0.5f;
+  auto stub3 = std::make_unique<StubMoveProposalService>();
+  StubMoveProposalService* sp3 = stub3.get();
+  sp3->scripted_gains = {std::vector<float>(size_t(n), 0.5f), std::vector<float>(size_t(n), 0.1f)};
+  UltimateBotAgent agent3(p, std::move(stub3));
+  agent3.begin_game({});
+  agent3.make_move(request());
+  EXPECT_EQ(sp3->condition_calls, 2);
+}
+
+// A non-finite gain is a broken model output, not a candidate: it would win
+// every argmax (NaN compares false) and defeat the threshold.
+TEST_F(UltimateBotAgentTest, ANonFiniteGainIsAHardError) {
+  const std::vector<Move> cands = candidates(request());
+  const int n = int(cands.size());
+  ASSERT_GE(n, 3);
+  UltimateBotAgent::Params p = params();
+  p.gain_threshold = 0.5f;
+  auto stub = std::make_unique<StubMoveProposalService>();
+  std::vector<float> gains(size_t(n), 0.9f);
+  // On an unsimmed candidate: the anchor's own gain is never read.
+  gains[(evidence::anchor_index(cands) + 1) % size_t(n)] = std::numeric_limits<float>::quiet_NaN();
+  stub->scripted_gains = {gains};
+  UltimateBotAgent agent(p, std::move(stub));
+  agent.begin_game({});
+  EXPECT_THROW(agent.make_move(request()), std::runtime_error);
 }
 
 TEST_F(UltimateBotAgentTest, ABudgetPastTheCandidateCountSimsThemAll) {
