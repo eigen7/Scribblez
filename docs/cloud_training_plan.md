@@ -1,7 +1,8 @@
 # Plan: the trainer on rented GPU pods
 
 Status: plan-reviewed draft (critique profile, codex rival seat), revised
-after review. Not yet implemented. The review record is at the end.
+after review, then extended with the machines/slots discussion. PR 2 in
+progress. The review record is at the end.
 
 ## Goal
 
@@ -235,17 +236,93 @@ runtime, so the ssh machine's image does not grow.
    commit markers. Acceptance test: a short run through the new path
    produces a `dashboard.db` identical to the old direct-write path.
    Reviewable on its own; no cloud code.
-3. **PR 3 -- cloud train role.** Generation publish on completion, trainer
-   input adapter (poll, pull, restore), output delivery through the sink,
-   sync watcher prefixes, controls push, `"cloud"` in kinds. Verified end
-   to end by one real pod run of ~20 generations on the flavor chosen in
-   step 0 against a local run of the same params: identical metric
-   schema, wait fraction under the acceptance line, restore after a
-   deliberate pod stop.
-4. **Later, separately:** an always-on controller host if unattended runs
-   become a goal (the controller is one Tornado process plus the mount;
-   moving it is deployment, not code); interruptible trainer pods once
-   restore is proven cheap.
+3. **PR 3 -- the trainer on a pod.** Generation publish on completion,
+   trainer input adapter (poll, pull, restore), output delivery through
+   the sink, sync watcher prefixes, controls push. Two shapes for the slot
+   model, decided before PR 3 starts (see "Machines, slots and
+   utilization" below): the narrow one adds `"cloud"` to the train role's
+   kinds, one pod per slot; the general one makes a GPU pod a *machine*
+   that hosts slots, which subsumes the companion-generator case. Either
+   way, verified end to end by one real pod run of ~20 generations on the
+   flavor chosen in step 0 against a local run of the same params:
+   identical metric schema, wait fraction under the acceptance line,
+   restore after a deliberate pod stop.
+4. **Later, separately:** a per-tag generator autoscaler (below); an
+   always-on controller host if unattended runs become a goal (the
+   controller is one Tornado process plus the mount; moving it is
+   deployment, not code); interruptible trainer pods once restore is
+   proven cheap.
+
+## Machines, slots and utilization
+
+Added after discussion of where the money goes and how independently
+launched tags should share hardware.
+
+**Where the cost is in the hasty regime.** Per 20 000-game generation, with
+cloud vCPUs taken as half the laptop's per-thread speed and a desktop 4090
+as twice its GPU:
+
+| Resource | Per generation | Cost |
+|---|---|---|
+| Generation, hasty-vs-hasty | ~1400 vCPU-s | ~$0.023 at $0.06 per vCPU-hour |
+| Training, 4090 fully busy | ~50 GPU-s | ~$0.010 at $0.74/h |
+| Training, 4090 alone with its 8 vCPUs (GPU ~30% busy) | | ~$0.037 |
+
+Generation is already the larger cost, and the GPU idle problem is bounded
+(perfect sharing saves about $25 on a 1000-generation run). Sharing one GPU
+pod between two hasty tags buys nothing: the pod's binding resource is its
+vCPUs, so two generation-bound tags on one 4090 produce the same
+generations per hour in total, at the same cost each. The GPU becomes
+shareable only once generation comes from elsewhere. The lever is
+therefore per tag and local: feed each trainer enough generation. The
+signals exist already -- the scheduler's gate (generation ahead) and the
+trainer's cycle time minus `train_s`+`eval_s` (generation behind) -- and
+generators are stateless spot pods the reconcile loop already restarts, so
+a **per-tag generator autoscaler** that holds the trainer's wait fraction
+near zero is the cheap form of utilization control. No coupling between
+tags is needed.
+
+**The neural-generation regime inverts this.** Once self-play runs neural
+agents, inference dominates GPU time by a wide margin and the trainer is
+the small consumer. Colocating a tag's generator with its trainer is then
+natural: inference fills the GPU between epochs, and the model handoff is
+a local file. Cross-tag sharing is still unnecessary, since one tag's
+self-play saturates a GPU on its own; the knob is how many GPU machines a
+tag gets, and utilization within a machine is the batching evaluation
+service's job.
+
+**The abstraction that serves both: machines are resources, tags are work,
+slots bind the two.** The ssh kind already models this exactly (one
+machine, many containers, from any tags); the cloud kind conflates them
+(one pod is one slot of one tag). If a GPU pod became a *machine* -- a
+pod-side agent reconciling slot processes against an assignment record it
+polls from the bucket, the one channel that reaches a pod -- then:
+
+- a companion generator is a generate slot placed on the trainer's machine
+  (the bundled vCPUs are the cheapest generation compute there is: a
+  16-vCPU CPU pod costs more per hour than a 4090 pod);
+- two trainers on one GPU are two train slots on one machine, shared by
+  process co-residency and CUDA time-slicing with no new abstraction (a
+  trainer's wait is a sleep-poll that releases the GPU; at ~5 GiB each a
+  24 GB card holds several);
+- gates and pauses become per-slot process control rather than pod
+  stop/start, so a paused slot no longer idles a whole pod;
+- the neural-generation future is a placement choice, not an architecture
+  change.
+
+Placement stays manual (with two to four parallel runs an operator beats
+any bin-packer); pacing between tags is the existing per-tag generational
+gate; the one automated dimension is the generator autoscaler. What is
+deliberately not built: a work-queue scheduler time-slicing one trainer
+process across tags -- trainer state (optimizer, window, compiled model,
+checkpoint) makes switching expensive, and the OS shares processes better
+than we would.
+
+PR 1 and PR 2 are unchanged under either shape of PR 3. The machine shape
+costs a pod-side agent plus the assignment channel, roughly what a
+companion-generator option on a one-pod-per-slot design would cost, and
+subsumes both that option and the original standalone-pod idea. It is the
+recommended shape for PR 3.
 
 ## Review record
 
