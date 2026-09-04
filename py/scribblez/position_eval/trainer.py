@@ -246,6 +246,7 @@ def train_one_generation(
         lr_fn=optim_arm.lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, gen),
+        grad_clip=params.grad_clip,
     )
     state.rows_trained = result.rows_trained
     state.generation_index = gen + 1

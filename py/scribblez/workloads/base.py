@@ -17,7 +17,7 @@ importable on machines without torch or a GPU (cloud CPU pods).
 """
 
 import importlib
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from scribblez import params as params_mod
@@ -102,6 +102,13 @@ class WorkloadSpec:
     # ordering is the form's, not the dataclass's, which groups fields by
     # subject instead. Empty means every parameter is shown up front.
     primary_params: tuple[str, ...] = ()
+    # Parameter profiles (scribblez/params.py): name -> the values it sets over
+    # the dataclass defaults. The new-tag form starts from `default_profile`
+    # and lets the operator switch; the CLI takes --profile. A profile may set
+    # any subset of the params, and its values must validate. Empty for a
+    # workload with one recipe.
+    profiles: dict[str, dict] = field(default_factory=dict, hash=False)
+    default_profile: str = ""
 
     def __post_init__(self):
         names = {f.name for f in params_mod.schema(self.params_cls)}
@@ -110,6 +117,55 @@ class WorkloadSpec:
         assert len(set(self.primary_params)) == len(self.primary_params), (
             f"workload '{self.name}': duplicate primary_params"
         )
+        for profile, values in self.profiles.items():
+            try:
+                params_mod.validate(self.params_cls, values)
+            except params_mod.ParamsError as e:
+                reasons = "; ".join(str(a) for a in e.args)
+                raise AssertionError(
+                    f"workload '{self.name}': profile '{profile}': {reasons}"
+                ) from None
+        if self.profiles:
+            assert self.default_profile in self.profiles, (
+                f"workload '{self.name}': default_profile {self.default_profile!r} is not a profile"
+            )
+        else:
+            assert not self.default_profile, (
+                f"workload '{self.name}': default_profile without profiles"
+            )
+
+    def add_cli_arguments(self, parser):
+        """The params' argparse flags, plus --profile when the workload has profiles."""
+        params_mod.add_arguments(parser, self.params_cls, self.profiles, self.default_profile)
+
+    def params_from_args(self, args):
+        """Params from `add_cli_arguments` flags: defaults under the chosen
+        profile under the flags given."""
+        return params_mod.from_args(self.params_cls, args, self.profiles)
+
+    def resolve_params(self, profile: str | None, raw: dict):
+        """(profile name, params): the dataclass defaults under the named
+        profile's values -- the default profile when `profile` is None, none
+        when the workload has none -- under `raw`, validated. What a new tag
+        freezes."""
+        name = self.default_profile if profile is None else profile
+        assert not name or name in self.profiles, f"workload '{self.name}': no profile {name!r}"
+        return name, params_mod.validate(self.params_cls, raw, base=self.profiles.get(name, {}))
+
+    def profile_defaults(self, profile: str) -> dict:
+        """Every param's value under `profile` alone (the dataclass defaults
+        where it is silent) -- what the new-tag form shows before any edit."""
+        return asdict(params_mod.validate(self.params_cls, {}, base=self.profiles.get(profile, {})))
+
+    def profile_diff(self, profile: str, params: dict) -> list[dict]:
+        """How a tag's frozen `params` depart from `profile`'s defaults, as
+        [{name, profile, task}] -- the provenance the task view shows."""
+        defaults = self.profile_defaults(profile)
+        return [
+            {"name": name, "profile": value, "task": params[name]}
+            for name, value in defaults.items()
+            if name in params and params[name] != value
+        ]
 
     @property
     def collected_dirs(self) -> tuple[str, ...]:

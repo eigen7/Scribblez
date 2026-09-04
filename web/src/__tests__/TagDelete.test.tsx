@@ -15,7 +15,7 @@ vi.mock('../components/master/TaskView', () => ({ default: () => null }));
 
 const workload: Workload = {
   name: 'position_eval', title: 'Train position evaluation',
-  roles: [], primary_params: [], params: [],
+  roles: [], primary_params: [], params: [], profiles: {}, default_profile: '',
 };
 
 const row = (tag: string, workers: number, active_workers: number) => ({

@@ -18,6 +18,14 @@ A field may also declare `choices`, closing its value set. Validation then
 rejects anything outside it -- so a bad value is refused where it is entered
 rather than surfacing later as a worker crash -- argparse enforces the same
 set, and the dashboard form renders a selector rather than a text box.
+
+A workload may layer *profiles* over the dataclass defaults (WorkloadSpec
+.profiles): named partial value sets -- "the transformer recipe", "the conv
+recipe" -- that the new-tag form and the CLI's --profile start from. Values
+resolve as dataclass defaults, under the profile's values, under whatever the
+operator set explicitly (validate's `base`, from_args); a tag freezes the
+result and records the profile name as provenance. Profiles live here rather
+than in the form so the CLI cannot drift from it.
 """
 
 import argparse
@@ -71,22 +79,61 @@ def public_schema(params_cls: type) -> list[dict]:
     return [dataclasses.asdict(f) for f in schema(params_cls)]
 
 
-def add_arguments(parser, params_cls: type):
-    """Register one argparse option per field (--snake-case-name)."""
+def _flag_help(f: ParamField, profiles: dict | None) -> str:
+    """The flag's help: the field's, its dataclass default, and each profile's
+    override of it -- since the flag itself carries no default (add_arguments)."""
+    overrides = [
+        f"{name}={values[f.name]}" for name, values in (profiles or {}).items() if f.name in values
+    ]
+    note = f"; profile {', '.join(overrides)}" if overrides else ""
+    return f"{f.help} (default: {f.default}{note})"
+
+
+def add_arguments(
+    parser, params_cls: type, profiles: dict | None = None, default_profile: str = ""
+):
+    """Register one argparse option per field (--snake-case-name), plus
+    `--profile` over `profiles` when the caller has any.
+
+    The flags carry no argparse default (SUPPRESS): from_args layers the flags
+    actually given over the profile's values over the dataclass defaults, which
+    a per-flag default would make indistinguishable from a typed value. The
+    help text shows the defaults instead."""
+    if profiles:
+        parser.add_argument(
+            "--profile",
+            choices=list(profiles),
+            default=default_profile,
+            help="parameter profile: named defaults the flags below override",
+        )
     for f in schema(params_cls):
         flag = "--" + f.name.replace("_", "-")
+        help_text = _flag_help(f, profiles)
         if f.kind == "bool":
             parser.add_argument(
-                flag, action=argparse.BooleanOptionalAction, default=f.default, help=f.help
+                flag,
+                action=argparse.BooleanOptionalAction,
+                default=argparse.SUPPRESS,
+                help=help_text,
             )
         else:
             py_type = {"int": int, "float": float, "str": str}[f.kind]
             choices = list(f.choices) if f.choices else None
-            parser.add_argument(flag, type=py_type, default=f.default, help=f.help, choices=choices)
+            parser.add_argument(
+                flag, type=py_type, default=argparse.SUPPRESS, help=help_text, choices=choices
+            )
 
 
-def from_args(params_cls: type, args):
-    return params_cls(**{f.name: getattr(args, f.name) for f in schema(params_cls)})
+def from_args(params_cls: type, args, profiles: dict | None = None):
+    """Params from parsed args: the dataclass defaults, under the chosen
+    profile's values (args.profile, when add_arguments registered `profiles`),
+    under every flag actually given."""
+    chosen = getattr(args, "profile", "") if profiles else ""
+    values = dict(profiles[chosen]) if chosen else {}
+    for f in schema(params_cls):
+        if hasattr(args, f.name):
+            values[f.name] = getattr(args, f.name)
+    return params_cls(**values)
 
 
 def to_env(params) -> dict[str, str]:
@@ -155,17 +202,19 @@ def _check_choice(f: ParamField, value):
     return value
 
 
-def validate(params_cls: type, raw: dict):
+def validate(params_cls: type, raw: dict, base: dict | None = None):
     """Build params from a JSON-ish dict, raising ParamsError naming every
-    unknown field and type mismatch; absent fields keep their defaults."""
+    unknown field and type mismatch. A field `raw` omits takes `base`'s value
+    (a profile's), and one both omit keeps its default."""
     fields = {f.name: f for f in schema(params_cls)}
-    errors = [f"unknown parameter '{k}'" for k in raw if k not in fields]
+    merged = {**(base or {}), **raw}
+    errors = [f"unknown parameter '{k}'" for k in merged if k not in fields]
     kwargs = {}
     for name, f in fields.items():
-        if name not in raw:
+        if name not in merged:
             continue
         try:
-            kwargs[name] = _check_choice(f, _coerce(f, raw[name]))
+            kwargs[name] = _check_choice(f, _coerce(f, merged[name]))
         except ValueError as e:
             errors.append(str(e))
     if errors:

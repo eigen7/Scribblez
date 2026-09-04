@@ -124,6 +124,8 @@ class WorkloadsHandler(_MasterBase):
                         "title": spec.title,
                         "params": params_mod.public_schema(spec.params_cls),
                         "primary_params": list(spec.primary_params),
+                        "profiles": spec.profiles,
+                        "default_profile": spec.default_profile,
                         "roles": [_role_payload(r) for r in spec.roles],
                     }
                     for spec in workloads.WORKLOADS.values()
@@ -142,7 +144,9 @@ class TaskCreateHandler(_MasterBase):
         body = self.body()
 
         def create():
-            task = tasks.create_task(self.spec(body), body.get("tag", ""), body.get("params", {}))
+            task = tasks.create_task(
+                self.spec(body), body.get("tag", ""), body.get("params", {}), body.get("profile")
+            )
             return {"tag": task.tag}
 
         self.guarded(create)
@@ -162,6 +166,8 @@ class TaskHandler(_MasterBase):
                 "tag": tag,
                 "has_task": task is not None,
                 "params": task.params if task else None,
+                "profile": task.profile if task else "",
+                "profile_diff": spec.profile_diff(task.profile, task.params) if task else [],
                 "created_at": task.created_at if task else None,
                 "progress": tasks.progress(spec, tag),
                 "gates": task.gates if task else {},
