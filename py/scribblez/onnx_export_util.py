@@ -18,6 +18,7 @@ import onnx
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from onnx import numpy_helper
 
 from scribblez.ffi import DEFAULT_LEXICON, format_layout
 
@@ -48,6 +49,32 @@ def undo_initializer_dedup(path: Path):
         model.graph.initializer.append(dup)
         model.graph.node.remove(node)
     onnx.save(model, str(path))
+
+
+def load_onnx_initializers(model: nn.Module, path: Path):
+    """Load an export's initializers back into `model`'s parameters and buffers.
+
+    The inverse of the export discipline: every parameter and buffer leaves as
+    an initializer under its state-dict name (undo_initializer_dedup keeps that
+    true for byte-identical tensors), so a checkpoint the trainer never kept --
+    only its per-generation ONNX export survives -- can be rebuilt as the torch
+    module for offline evaluation. Only BatchNorm's `num_batches_tracked`
+    counter is absent from a graph (it plays no part in inference); anything
+    else missing or unexpected is an architecture mismatch and raises."""
+    graph = onnx.load(str(path)).graph
+    weights = {
+        init.name: torch.from_numpy(numpy_helper.to_array(init).copy())
+        for init in graph.initializer
+    }
+    expected = {k for k in model.state_dict() if not k.endswith("num_batches_tracked")}
+    if set(weights) != expected:
+        missing = sorted(expected - set(weights))
+        unexpected = sorted(set(weights) - expected)
+        raise ValueError(
+            f"{path}: initializers do not match the model -- "
+            f"missing {missing[:5]}, unexpected {unexpected[:5]}"
+        )
+    model.load_state_dict(weights, strict=False)
 
 
 def architecture_signature(model: torch.nn.Module, opset: int) -> str:

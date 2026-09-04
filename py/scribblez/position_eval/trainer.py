@@ -148,6 +148,12 @@ def _checkpoint_and_eval(
         timed_print(
             f"  quality: win_mae={record['eval_win_mae']:.4f} "
             f"sd_mean_mae={record['eval_sd_mean_mae']:.1f}"
+            + (
+                f" place_l1 opp_next={record['eval_place_l1_opp_next']:.3f}"
+                f" self_next={record['eval_place_l1_self_next']:.3f}"
+                if "eval_place_l1_opp_next" in record
+                else ""
+            )
         )
     export_onnx(
         model,
@@ -340,6 +346,7 @@ def load_position_eval_quality(spatial_planes: int, face_up_leaves: bool) -> dic
     try:
         names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
         gt = position_eval_analysis.load_ground_truth(dataset, names, face_up_leaves)
+        texts, legal = position_eval_analysis.load_placement_frame(dataset)
     except Exception as e:  # missing lexicon / dataset / ground truth
         timed_print(f"position-evaluation quality eval disabled: {e}")
         return None
@@ -347,17 +354,35 @@ def load_position_eval_quality(spatial_planes: int, face_up_leaves: bool) -> dic
         timed_print(f"position-evaluation quality eval disabled: no positions in {dataset}")
         return None
     timed_print(f"position-evaluation quality eval: {len(names)} positions from {dataset}")
-    return {"inputs": inputs, "spatial_planes": spatial_planes, "gt": gt}
+    return {
+        "inputs": inputs,
+        "spatial_planes": spatial_planes,
+        "gt": gt,
+        "texts": texts,
+        "legal": legal,
+    }
 
 
 def eval_position_eval_quality(model, quality_eval: dict, device) -> dict:
     """Run the model over the large quality set and return the aggregate
-    model-vs-Monte-Carlo quality scalars (win-equity/WLD + score-delta mean/std MAE)."""
+    model-vs-Monte-Carlo quality scalars: win-equity/WLD + score-delta mean/std
+    MAE, and the placement heads' collapsed planes against the rollouts' planes
+    (when the ground truth carries them)."""
     model.eval()
     preds = position_eval_analysis.predict(
         model, quality_eval["inputs"], quality_eval["spatial_planes"], device
     )
-    return position_eval_analysis.quality_metrics(preds, quality_eval["gt"])
+    record = position_eval_analysis.quality_metrics(preds, quality_eval["gt"])
+    if quality_eval["gt"]["placement"] is not None:
+        planes = position_eval_analysis.collapse_placement(
+            preds["placement_logits"], quality_eval["texts"]
+        )
+        record.update(
+            position_eval_analysis.placement_metrics(
+                planes, quality_eval["gt"]["placement"], quality_eval["legal"]
+            )
+        )
+    return record
 
 
 # ---------------------------------------------------------------------------

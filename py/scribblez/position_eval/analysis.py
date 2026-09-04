@@ -22,8 +22,14 @@ import numpy as np
 import torch
 from natsort import natsorted
 
-from scribblez.ffi import InputArm, analyze_position_eval_gcg
+from scribblez.ffi import (
+    InputArm,
+    analyze_position_eval_gcg,
+    collapse_position_eval_placement,
+    legal_position_eval_placement,
+)
 from scribblez.paths import REPO_ROOT
+from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
 
 # The frozen evaluation sets: post-move positions (the final recorded move is
 # the evaluated player's) whose Monte-Carlo ground truth lives next to the GCGs.
@@ -113,14 +119,18 @@ def split_input(inputs: np.ndarray, spatial_planes: int) -> tuple[np.ndarray, np
 
 @torch.no_grad()
 def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
-    """Run `model` over the dataset inputs and decode each position's value outputs:
+    """Run `model` over the dataset inputs and decode each position's outputs:
 
-        wld      (N, 3) float32   softmax win/draw/loss probabilities (in that order)
-        sd_mean  (N,)   float32   predicted final-score-delta mean (points)
-        sd_std   (N,)   float32   predicted final-score-delta std (points, a Gaussian)
+        wld               (N, 3) float32   softmax win/draw/loss probabilities (in that order)
+        sd_mean           (N,)   float32   predicted final-score-delta mean (points)
+        sd_std            (N,)   float32   predicted final-score-delta std (points, a Gaussian)
+        placement_logits  (N, 4, C) float32  the placement heads' raw footprint logits,
+                                             in PLACEMENT_HEAD_NAMES order
 
-    These are exactly what the dashboard pairs against the Monte-Carlo ground truth:
-    the WLD bars and the score-delta Gaussian overlaid on the MC histogram.
+    The value outputs are exactly what the dashboard pairs against the Monte-Carlo
+    ground truth: the WLD bars and the score-delta Gaussian overlaid on the MC
+    histogram. The placement logits are raw because masking and collapsing them
+    to per-cell planes is the engine's job (collapse_placement).
     """
     spatial, scalar = split_input(inputs, spatial_planes)
     sp = torch.from_numpy(np.ascontiguousarray(spatial)).to(device)
@@ -128,7 +138,40 @@ def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
     out = model(sp, sc)
     wld = torch.softmax(out["wld"], dim=-1).cpu().numpy().astype(np.float32)
     sd = out["score_diff"].cpu().numpy().astype(np.float32)
-    return {"wld": wld, "sd_mean": sd[:, 0], "sd_std": sd[:, 1]}
+    logits = torch.stack([out[head] for head in PLACEMENT_HEAD_NAMES], dim=1)
+    return {
+        "wld": wld,
+        "sd_mean": sd[:, 0],
+        "sd_std": sd[:, 1],
+        "placement_logits": logits.cpu().numpy().astype(np.float32),
+    }
+
+
+def load_placement_frame(dataset_dir: str | Path) -> tuple[list[str], np.ndarray]:
+    """What collapsing and scoring a dataset's placement predictions needs beyond
+    the model inputs: each position's GCG text (the engine re-derives the board
+    from it to mask and scatter the footprints) and its per-head cell legality,
+    (N, 4, 15, 15) bool -- the cells some legal footprint of that head covers, the
+    only cells a residual can live on."""
+    items = _dataset_items(dataset_dir)
+    texts = [text for _, text in items]
+    legal = np.stack([legal_position_eval_placement(text) for text in texts])
+    return texts, legal
+
+
+def collapse_placement(logits: np.ndarray, texts: list[str]) -> np.ndarray:
+    """The per-cell occupancy planes, (N, 4, 15, 15), of the placement logits
+    (N, 4, C) over the positions' GCG `texts`: per position, the engine masks the
+    illegal footprints, softmaxes, and scatters each footprint's probability onto
+    the cells it covers -- Pr[the next move covers cell] for the plays heads,
+    Pr[covers cell AND that seat wins] for the win heads. The same collapse the
+    Positions tab draws and the Monte-Carlo planes count."""
+    return np.stack(
+        [
+            collapse_position_eval_placement(text, raw)
+            for raw, text in zip(logits, texts, strict=True)
+        ]
+    )
 
 
 def load_ground_truth(dataset_dir: str | Path, names: list[str], face_up_leaves: bool) -> dict:
@@ -136,10 +179,14 @@ def load_ground_truth(dataset_dir: str | Path, names: list[str], face_up_leaves:
     aligned to `names`.
 
     Reads the condition's results file and returns arrays over the positions:
-        win_eq (N,)   empirical win equity (win + 0.5*draw)
-        wld    (N, 3) empirical [win, draw, loss] fractions (model output order)
-        mean   (N,)   final-score-delta mean (points)
-        std    (N,)   final-score-delta std (points)
+        win_eq    (N,)   empirical win equity (win + 0.5*draw)
+        wld       (N, 3) empirical [win, draw, loss] fractions (model output order)
+        mean      (N,)   final-score-delta mean (points)
+        std       (N,)   final-score-delta std (points)
+        placement (N, 4, 15, 15) per-cell rollout fractions, PLACEMENT_HEAD_NAMES
+                  order (the sim's PlacementCounts / n: how often that seat's
+                  first move covered the cell, and did so in a rollout it won);
+                  None when the results file predates the planes
     """
     gt = json.loads(ground_truth_path(dataset_dir, face_up_leaves).read_text())
     n = len(names)
@@ -147,6 +194,8 @@ def load_ground_truth(dataset_dir: str | Path, names: list[str], face_up_leaves:
     wld = np.empty((n, 3), np.float32)
     mean = np.empty(n, np.float32)
     std = np.empty(n, np.float32)
+    placement = np.empty((n, len(PLACEMENT_HEAD_NAMES), BOARD_SIZE, BOARD_SIZE), np.float32)
+    has_placement = True
     for i, name in enumerate(names):
         entry = gt[name]
         total = entry["n"]
@@ -160,7 +209,18 @@ def load_ground_truth(dataset_dir: str | Path, names: list[str], face_up_leaves:
         var = sum(c * (d - m) ** 2 for d, c in hist.items()) / count
         mean[i] = m
         std[i] = math.sqrt(max(var, 0.0))
-    return {"win_eq": win_eq, "wld": wld, "mean": mean, "std": std}
+        planes = entry.get("placement")
+        has_placement = has_placement and planes is not None
+        if has_placement:
+            for h, head in enumerate(PLACEMENT_HEAD_NAMES):
+                placement[i, h] = np.asarray(planes[head], np.float32) / (total or 1)
+    return {
+        "win_eq": win_eq,
+        "wld": wld,
+        "mean": mean,
+        "std": std,
+        "placement": placement if has_placement else None,
+    }
 
 
 def quality_metrics(preds: dict, gt: dict) -> dict:
@@ -174,3 +234,54 @@ def quality_metrics(preds: dict, gt: dict) -> dict:
         "eval_sd_mean_mae": float(np.mean(np.abs(preds["sd_mean"] - gt["mean"]))),
         "eval_sd_std_mae": float(np.mean(np.abs(preds["sd_std"] - gt["std"]))),
     }
+
+
+def placement_head_short(head: str) -> str:
+    """'opp_next_placement' -> 'opp_next' (the metric-name suffix)."""
+    return head.removesuffix("_placement")
+
+
+def placement_metric_names() -> list[str]:
+    """Every scalar `placement_metrics` records, grouped by statistic."""
+    return [
+        f"eval_place_{stat}_{placement_head_short(head)}"
+        for stat in ("l1", "top1")
+        for head in PLACEMENT_HEAD_NAMES
+    ]
+
+
+def placement_metrics(planes: np.ndarray, truth: np.ndarray, legal: np.ndarray) -> dict:
+    """Aggregate placement quality vs Monte-Carlo over the dataset, per head, from
+    the model's collapsed planes and the MC planes (both (N, 4, 15, 15)) over the
+    head's legal cells (N, 4, 15, 15) bool -- the systematic form of the Positions
+    tab's residual heat map:
+
+        eval_place_l1_<head>    misplaced coverage, in tiles: sum |model - MC| over
+                                the legal cells, per position, averaged (lower is
+                                better). A plane sums to the expected number of
+                                tiles the move places (times the win probability
+                                for a win head), so this is how many tiles' worth
+                                of coverage sit on the wrong cells. Absolute
+                                rather than relative to the MC mass, which is
+                                near zero for a win head wherever that seat
+                                rarely wins and would blow the ratio up.
+        eval_place_top1_<head>  fraction of positions where the model's most
+                                covered cell is the rollouts' most covered cell
+
+    Positions where the MC plane is empty for a head (the win heads, when that
+    seat never won a rollout) contribute to neither statistic for that head; a
+    head empty on every position records nothing.
+    """
+    record = {}
+    for h, head in enumerate(PLACEMENT_HEAD_NAMES):
+        short = placement_head_short(head)
+        p = np.where(legal[:, h], planes[:, h], 0.0).reshape(len(planes), -1)
+        t = np.where(legal[:, h], truth[:, h], 0.0).reshape(len(truth), -1)
+        scored = t.sum(axis=1) > 0
+        if not scored.any():
+            continue
+        l1 = np.abs(p - t).sum(axis=1)[scored]
+        top1 = p.argmax(axis=1)[scored] == t.argmax(axis=1)[scored]
+        record[f"eval_place_l1_{short}"] = float(l1.mean())
+        record[f"eval_place_top1_{short}"] = float(top1.mean())
+    return record
