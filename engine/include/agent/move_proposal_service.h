@@ -64,10 +64,6 @@ struct EvidenceSet {
 
 class MoveProposalService : public nn::ServedModelInputs {
  public:
-  // The padded evidence width the model is specialized to: the most simmed
-  // candidates one condition() call may carry.
-  virtual int max_evidence() const = 0;
-
   // Encode one position: `board_row` is [spatial | scalar] floats as
   // GameStateEncoder::encode_input writes them; `moves` its candidate set.
   // Returns the evidence-free predictions and retains the position for
@@ -77,7 +73,8 @@ class MoveProposalService : public nn::ServedModelInputs {
 
   // Re-score the encoded candidate set conditioned on `evidence`. Must follow
   // encode(). An empty set returns the plain predictions (plus the plain gain)
-  // within tolerance; a set larger than max_evidence() throws.
+  // within tolerance; a set larger than the padded evidence width
+  // nn::kMaxEvidence (the most simmed candidates one call may carry) throws.
   virtual const MoveProposalPredictions& condition(const EvidenceSet& evidence) = 0;
 };
 

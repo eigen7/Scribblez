@@ -14,7 +14,8 @@
 //
 // This is selection only -- vectors in, indices and roles out -- so it links
 // without the TensorRT runtime the scoring front-end (evidence_trajectory.h)
-// carries, and is unit-tested directly.
+// carries, and is unit-tested directly. The anchor rule is also the sequential
+// evidence loop's (agent/evidence_loop.h, item 6): both sim the anchor first.
 #pragma once
 
 #include "data/sim_obs_role.h"

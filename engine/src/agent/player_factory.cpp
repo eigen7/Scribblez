@@ -9,6 +9,7 @@
 #include "agent/neural_agent.h"
 #include "agent/neural_sim_agent.h"
 #include "agent/sim_agent.h"
+#include "agent/ultimate_bot_agent.h"
 #include "agent/weird_bot.h"
 #include "util/exception.h"
 
@@ -39,7 +40,7 @@ struct PlayerType {
                                   const std::string& name, const std::string& opp_name);
 };
 
-// Adapter for the eight agents whose from_spec is the uniform three-arg form:
+// Adapter for the nine agents whose from_spec is the uniform three-arg form:
 // drop opp_name, forward the rest. from_spec is a non-type template argument,
 // so one template covers them all and each returns its own unique_ptr subtype
 // (implicitly converted to unique_ptr<Agent>).
@@ -57,7 +58,7 @@ std::unique_ptr<Agent> build_human(const std::vector<std::string>& tokens, int t
 }
 
 // The single source of per-type knowledge. Adding a player type is one new row.
-constexpr std::array<PlayerType, 9> kPlayerTypes{{
+constexpr std::array<PlayerType, 10> kPlayerTypes{{
   {"greedy", "Greedy", &GreedyAgent::options_help, &build_agent<&GreedyAgent::from_spec>},
   {"human", "You", &HumanWebAgent::options_help, &build_human},
   {"hastybot", "HastyBot", &HastyBotAgent::options_help, &build_agent<&HastyBotAgent::from_spec>},
@@ -68,6 +69,8 @@ constexpr std::array<PlayerType, 9> kPlayerTypes{{
   {"neural-sim", "NeuralSim", &NeuralSimAgent::options_help,
    &build_agent<&NeuralSimAgent::from_spec>},
   {"sim", "SimBot", &SimAgent::options_help, &build_agent<&SimAgent::from_spec>},
+  {"ultimatebot", "UltimateBot", &UltimateBotAgent::options_help,
+   &build_agent<&UltimateBotAgent::from_spec>},
   {"weirdbot", "WeirdBot", &WeirdBotAgent::options_help, &build_agent<&WeirdBotAgent::from_spec>},
 }};
 

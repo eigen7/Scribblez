@@ -29,7 +29,6 @@ class MoveProposalSession : public MoveProposalService {
   bool opp_leave_input() const override { return nets_->opp_leave_input(); }
   int spatial_planes() const override { return nets_->spatial_planes(); }
   int scalar_floats() const override { return nets_->scalar_floats(); }
-  int max_evidence() const override { return nets_->max_evidence(); }
 
   const MoveProposalPredictions& encode(const float* board_row,
                                         const move_set::MoveFeatureArrays& moves) override;
