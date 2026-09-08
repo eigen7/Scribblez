@@ -244,6 +244,11 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
   const profileNames = hasProfiles(workload) ? Object.keys(workload.profiles) : [];
 
   const [primary, advanced] = splitParams(workload);
+  // Split the up-front fields into the profile's own (shown alongside its
+  // selector, regardless of which profile is currently picked) and the rest.
+  const profileParamNames = new Set(Object.values(workload.profiles).flatMap((p) => Object.keys(p)));
+  const standardPrimary = primary.filter((p) => !profileParamNames.has(p.name));
+  const profilePrimary = primary.filter((p) => profileParamNames.has(p.name));
   const numberOk = (p: ParamField, raw: string) =>
     p.kind === 'int' ? /^-?\d+$/.test(raw) : !Number.isNaN(parseFloat(raw));
   const tagOk = /^[A-Za-z0-9._-]+$/.test(tag);
@@ -307,7 +312,11 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
             placeholder="e.g. exp42"
           />
         </label>
-        {profileNames.length > 0 && (
+        <ParamFields params={standardPrimary} {...fieldProps} />
+        <Button label={busy ? 'Creating…' : 'Create'} onClick={create} disabled={!canCreate} />
+      </div>
+      {profileNames.length > 0 && (
+        <div style={{ ...paramRowStyle, marginTop: 10 }}>
           <label style={{ fontSize: 13 }} title="a named set of defaults; edits belong to the profile they are made under">
             Profile<br />
             <select
@@ -317,10 +326,9 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
               {profileNames.map((name) => <option key={name} value={name}>{name}</option>)}
             </select>
           </label>
-        )}
-        <ParamFields params={primary} {...fieldProps} />
-        <Button label={busy ? 'Creating…' : 'Create'} onClick={create} disabled={!canCreate} />
-      </div>
+          <ParamFields params={profilePrimary} {...fieldProps} />
+        </div>
+      )}
       {advanced.length > 0 && (
         <div style={{ marginTop: 12 }}>
           <span
