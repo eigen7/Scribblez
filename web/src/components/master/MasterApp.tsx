@@ -243,12 +243,13 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
   ));
   const profileNames = hasProfiles(workload) ? Object.keys(workload.profiles) : [];
 
-  const [primary, advanced] = splitParams(workload);
-  // Split the up-front fields into the profile's own (shown alongside its
-  // selector, regardless of which profile is currently picked) and the rest.
+  const [primary, restAdvanced] = splitParams(workload);
+  // Fields some profile sets go on the profile's own row, whether or not the
+  // workload also names them a primary field -- pulled out of both lists.
   const profileParamNames = new Set(Object.values(workload.profiles).flatMap((p) => Object.keys(p)));
   const standardPrimary = primary.filter((p) => !profileParamNames.has(p.name));
-  const profilePrimary = primary.filter((p) => profileParamNames.has(p.name));
+  const advanced = restAdvanced.filter((p) => !profileParamNames.has(p.name));
+  const profilePrimary = workload.params.filter((p) => profileParamNames.has(p.name));
   const numberOk = (p: ParamField, raw: string) =>
     p.kind === 'int' ? /^-?\d+$/.test(raw) : !Number.isNaN(parseFloat(raw));
   const tagOk = /^[A-Za-z0-9._-]+$/.test(tag);
