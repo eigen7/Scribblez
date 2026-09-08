@@ -28,7 +28,7 @@ from scribblez.ffi import (
     collapse_position_eval_placement,
     legal_position_eval_placement,
 )
-from scribblez.paths import REPO_ROOT
+from scribblez.paths import EVAL_POSITIONS_DIRS
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
 
 # The frozen evaluation sets: post-move positions (the final recorded move is
@@ -36,9 +36,9 @@ from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
 # DEFAULT_DATASET is the small hand-built set (loose .gcg files) the Positions
 # tab scrubs; LARGE_DATASET is the machine-harvested penultimate-bingo set
 # (committed as part-*.gcgs bundles) the Loss tab's aggregate quality curves are
-# measured over.
-DEFAULT_DATASET = REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset"
-LARGE_DATASET = REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset-large"
+# measured over. Located by paths.py, which is what a bundle-run worker's
+# fetch of them keys on.
+DEFAULT_DATASET, LARGE_DATASET = EVAL_POSITIONS_DIRS
 
 # The record boundary in a part-*.gcgs bundle: every GCG block starts with this line.
 GCG_MARKER = "#character-encoding UTF-8"

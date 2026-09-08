@@ -53,6 +53,8 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from cloud.runtime_abi import RUNTIME_TORCH
+
 from scribblez import params as params_mod
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
@@ -432,6 +434,7 @@ SPEC = WorkloadSpec(
             name="train",
             title="Student trainer (GPU)",
             runner="scribblez.move_set_eval.trainer:run",
+            runtime=RUNTIME_TORCH,
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
             kinds=("local",),

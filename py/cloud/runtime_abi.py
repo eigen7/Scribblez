@@ -1,20 +1,29 @@
-"""The runtime ABI a compiled bundle needs from the machine that runs it.
+"""The runtime a compiled bundle needs from the machine that runs it: which
+worker image a role takes, and the ABI that image provides.
 
-Bundles carry code and binaries; the worker image carries the libraries they
+Bundles carry code and binaries; the worker images carry the libraries they
 link against. Those libraries come from the dev image -- copied out of it
-(libstdc++, the NVIDIA runtime) or apt-installed to match it -- so the two
-images are a matched pair, and rebuilding one without the other produces
-binaries no worker can load:
+(libstdc++, the NVIDIA runtime) or apt-installed to match it -- so the images
+are a matched set, and rebuilding one without the other produces binaries no
+worker can load:
 
     OSError: /lib/x86_64-linux-gnu/libstdc++.so.6: version `GLIBCXX_3.4.35'
     not found (required by .../libscribblez_ffi.so)
 
-which is what a gcc upgrade in the dev image did in August 2026. The pair is
-kept in step by build_docker_image.py, which builds both; this module is the
-check for when something bypasses that. The worker image's versions are
+which is what a gcc upgrade in the dev image did in August 2026. The set is
+kept in step by build_docker_image.py, which builds all of them; this module
+is the check for when something bypasses that. Each image's versions are
 recorded at push time (build_and_push_worker_image.py) into the shared mount,
 where the dev container can compare them against its own before deploying a
 bundle built there.
+
+There are two images, one per *runtime* a role declares (RoleSpec.runtime):
+
+  engine  the engine binaries and the ctypes FFI: numpy, the C++ and NVIDIA
+          runtime libraries, TensorRT's builder. Generators, match eval.
+  torch   the engine runtime plus PyTorch and the training stack, for the
+          train roles. A further stage on the same Dockerfile, so it provides
+          every library the engine image does, at the same versions.
 
 Versions are read as the file behind each soname symlink ("libstdc++.so.6" ->
 "libstdc++.so.6.0.35"), which is available on both sides without a compiler,
@@ -23,6 +32,16 @@ a package manager, or docker.
 
 import json
 from pathlib import Path
+
+RUNTIME_ENGINE = "engine"
+RUNTIME_TORCH = "torch"
+RUNTIMES = (RUNTIME_ENGINE, RUNTIME_TORCH)
+
+# The Dockerfile stage (docker-setup/worker/Dockerfile) that builds each
+# runtime's image, and the tag suffix that names the torch image beside the
+# engine one (cloud/credentials.py RegistryConfig.image_for).
+DOCKER_TARGET = {RUNTIME_ENGINE: "worker", RUNTIME_TORCH: "worker-torch"}
+TORCH_TAG_SUFFIX = "-torch"
 
 # Where a tracked library may live. The CUDA runtime sits under the toolkit in
 # the dev image and beside the rest in the worker image (which copies it
@@ -36,7 +55,8 @@ LIB_DIRS = (Path("/usr/lib/x86_64-linux-gnu"), Path("/usr/local/cuda/lib64"))
 AT_LEAST = ("libstdc++.so.6", "libgcc_s.so.1")
 EXACTLY = ("libnvinfer.so.10", "libcudart.so.12")
 
-# Where the push records what it built, under the shared mount root.
+# Where the push records what it built, under the shared mount root: one
+# entry per runtime, {"images": {runtime: {"image": name, "versions": {...}}}}.
 RECORD_REL = "cloud/worker_image.json"
 
 
@@ -99,17 +119,21 @@ def record_path(mount_root: Path) -> Path:
     return Path(mount_root) / RECORD_REL
 
 
-def write_record(mount_root: Path, image: str, versions: dict[str, str]):
-    """Record what the worker image now published provides."""
+def write_record(mount_root: Path, runtime: str, image: str, versions: dict[str, str]):
+    """Record what the `runtime` image now published provides, keeping the
+    other runtimes' entries."""
+    assert runtime in RUNTIMES, runtime
     path = record_path(mount_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"image": image, "versions": versions}, indent=2) + "\n")
+    images = (read_records(mount_root) or {}) | {runtime: {"image": image, "versions": versions}}
+    path.write_text(json.dumps({"images": images}, indent=2) + "\n")
 
 
-def read_record(mount_root: Path) -> dict | None:
-    """The last push's record, or None if no push has written one yet (in
-    which case nothing can be said about the image and nothing is claimed)."""
+def read_records(mount_root: Path) -> dict[str, dict] | None:
+    """Every runtime's last push, runtime -> {image, versions}, or None if no
+    push has written a record (in which case nothing can be said about the
+    images and nothing is claimed)."""
     try:
-        return json.loads(record_path(mount_root).read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
+        return json.loads(record_path(mount_root).read_text())["images"]
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):
         return None

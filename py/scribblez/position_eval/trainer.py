@@ -144,18 +144,17 @@ def _checkpoint_and_eval(
     # folded into the same metrics record so the Loss tab plots it alongside the
     # training curves.
     t_eval = time.time()
-    if ctx["position_eval_quality"] is not None:
-        record.update(eval_position_eval_quality(model, ctx["position_eval_quality"], device))
-        timed_print(
-            f"  quality: win_mae={record['eval_win_mae']:.4f} "
-            f"sd_mean_mae={record['eval_sd_mean_mae']:.1f}"
-            + (
-                f" place_l1 opp_next={record['eval_place_l1_opp_next']:.3f}"
-                f" self_next={record['eval_place_l1_self_next']:.3f}"
-                if "eval_place_l1_opp_next" in record
-                else ""
-            )
+    record.update(eval_position_eval_quality(model, ctx["position_eval_quality"], device))
+    timed_print(
+        f"  quality: win_mae={record['eval_win_mae']:.4f} "
+        f"sd_mean_mae={record['eval_sd_mean_mae']:.1f}"
+        + (
+            f" place_l1 opp_next={record['eval_place_l1_opp_next']:.3f}"
+            f" self_next={record['eval_place_l1_self_next']:.3f}"
+            if "eval_place_l1_opp_next" in record
+            else ""
         )
+    )
     export_onnx(
         model,
         paths.onnx_path(ci),
@@ -163,9 +162,7 @@ def _checkpoint_and_eval(
         ctx["scalar_size"],
         opp_leave_input=params.face_up_leaves,
     )
-    preds = None
-    if ctx["position_eval"] is not None:
-        preds = {"position_eval_pred": eval_position_eval(model, ctx["position_eval"], device)}
+    preds = {"position_eval_pred": eval_position_eval(model, ctx["position_eval"], device)}
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     _publish_train_state(paths, state)
     recorder.commit_generation(ci, state.rows_trained, record, preds)
@@ -311,20 +308,17 @@ def run_generational_training(
 # ---------------------------------------------------------------------------
 
 
-def load_position_eval(spatial_planes: int) -> dict | None:
-    """Build the frozen position-evaluation input batch once (or None if the
-    dataset is empty / the lexicon is unavailable). At each checkpoint the model is
-    run over it and the predictions are written to the dashboard DB, where the
-    Positions tab pairs them with the Monte-Carlo ground truth."""
+def load_position_eval(spatial_planes: int) -> dict:
+    """Build the frozen position-evaluation input batch once. At each
+    checkpoint the model is run over it and the predictions go into the
+    generation's record, where the Positions tab pairs them with the
+    Monte-Carlo ground truth. A missing or empty dataset is an error: a run
+    without its eval is not the run anyone asked for, least of all one on a
+    rented machine that would otherwise train for hours before anyone saw
+    the curves were absent."""
     dataset = str(position_eval_analysis.DEFAULT_DATASET)
-    try:
-        names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
-    except Exception as e:  # missing lexicon / unreadable dataset
-        timed_print(f"position-evaluation eval disabled: {e}")
-        return None
-    if not names:
-        timed_print(f"position-evaluation eval disabled: no GCG positions in {dataset}")
-        return None
+    names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
+    assert names, f"no GCG positions in {dataset}"
     timed_print(f"position-evaluation eval: {len(names)} positions from {dataset}")
     return {"inputs": inputs, "spatial_planes": spatial_planes}
 
@@ -339,22 +333,17 @@ def eval_position_eval(model, position_eval: dict, device) -> dict:
     )
 
 
-def load_position_eval_quality(spatial_planes: int, face_up_leaves: bool) -> dict | None:
-    """Build the large-dataset quality-eval batch and its Monte-Carlo ground truth
-    (the run's information condition) once, or None if the dataset or its ground
-    truth is unavailable. At each checkpoint the model is run over it and
-    aggregate quality scalars are recorded for the Loss tab."""
+def load_position_eval_quality(spatial_planes: int, face_up_leaves: bool) -> dict:
+    """Build the large-dataset quality-eval batch and its Monte-Carlo ground
+    truth (the run's information condition) once. At each checkpoint the
+    model is run over it and aggregate quality scalars are recorded for the
+    Loss tab. A missing dataset or ground truth is an error, as for
+    load_position_eval."""
     dataset = str(position_eval_analysis.LARGE_DATASET)
-    try:
-        names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
-        gt = position_eval_analysis.load_ground_truth(dataset, names, face_up_leaves)
-        texts, legal = position_eval_analysis.load_placement_frame(dataset)
-    except Exception as e:  # missing lexicon / dataset / ground truth
-        timed_print(f"position-evaluation quality eval disabled: {e}")
-        return None
-    if not names:
-        timed_print(f"position-evaluation quality eval disabled: no positions in {dataset}")
-        return None
+    names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
+    assert names, f"no positions in {dataset}"
+    gt = position_eval_analysis.load_ground_truth(dataset, names, face_up_leaves)
+    texts, legal = position_eval_analysis.load_placement_frame(dataset)
     timed_print(f"position-evaluation quality eval: {len(names)} positions from {dataset}")
     return {
         "inputs": inputs,

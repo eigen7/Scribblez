@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cloud.credentials import RegistryConfig
 from cloud.ssh_machine import SshMachineError
 from scribblez import workloads
 from scribblez.dashboard import db, tasks
@@ -251,7 +252,7 @@ def test_bundle_drift_compares_tree_against_pinned_bundle(manager, spec, task, m
 
 
 # Enough of a credentials object for the container-creation path.
-_CREDS = SimpleNamespace(registry=SimpleNamespace(worker_image="repo/worker"), r2=None)
+_CREDS = SimpleNamespace(registry=RegistryConfig(worker_image="repo/worker"), r2=None)
 
 
 class _RecordingSshMachine(_FakeSshMachine):
@@ -542,10 +543,8 @@ def test_resuming_a_parked_worker_is_not_a_restart(manager, spec, task, monkeypa
 def test_deploy_refuses_a_worker_image_that_cannot_load_this_tree(manager, spec, task, monkeypatch):
     """Deploying a bundle onto an image whose libraries are older than the
     ones it was compiled against just crash-loops every worker."""
-    monkeypatch.setattr(
-        workers_mod.runtime_abi, "read_record",
-        lambda root: {"image": "w", "versions": {"libstdc++.so.6": "libstdc++.so.6.0.33"}},
-    )  # fmt: skip
+    stale = {"image": "w", "versions": {"libstdc++.so.6": "libstdc++.so.6.0.33"}}
+    monkeypatch.setattr(workers_mod.runtime_abi, "read_records", lambda root: {"engine": stale})
     monkeypatch.setattr(
         workers_mod.runtime_abi, "local_versions",
         lambda: {"libstdc++.so.6": "libstdc++.so.6.0.35"},
@@ -557,7 +556,7 @@ def test_deploy_refuses_a_worker_image_that_cannot_load_this_tree(manager, spec,
 def test_deploy_says_nothing_about_an_image_no_push_has_described(manager, spec, task, monkeypatch):
     """The record only exists once a push has written one; its absence is not
     evidence of a stale image."""
-    monkeypatch.setattr(workers_mod.runtime_abi, "read_record", lambda root: None)
+    monkeypatch.setattr(workers_mod.runtime_abi, "read_records", lambda root: None)
     # _cloud is the fixture's tripwire: reaching it means the check passed.
     with pytest.raises(AssertionError, match="launched compute"):
         manager.deploy(spec, task)

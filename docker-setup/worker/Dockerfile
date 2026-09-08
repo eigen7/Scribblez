@@ -16,10 +16,15 @@
 # The image serves GPU roles too (match eval on an operator's own machine, run
 # with `docker run --gpus all`), so it carries what building a TensorRT engine
 # needs as well as what running one does -- see the builder-resource section.
+#
+# Two images come out of this file, one per runtime a role declares
+# (py/cloud/runtime_abi.py): the `worker` stage is the engine runtime every
+# worker has, and `worker-torch` layers the training stack on top of it for
+# the train roles. build_and_push_worker_image.py builds and pushes both.
 ARG DEV_IMAGE=scribblez
 FROM ${DEV_IMAGE} AS devlibs
 
-FROM ubuntu:24.04
+FROM ubuntu:24.04 AS worker
 
 # Runtime deps:
 #   - boost/protobuf/numpy: shared libraries the engine binaries and the
@@ -115,3 +120,27 @@ RUN mkdir -p /etc/apt/keyrings && \
     apt-get update && \
     apt-get install -y --no-install-recommends libstdc++6 libgcc-s1 && \
     rm -rf /var/lib/apt/lists/*
+
+
+# The torch runtime: the engine image plus what a train role imports. Ubuntu
+# 24.04 marks its interpreter externally managed, so the stack goes into a
+# venv that sees the system packages (the apt numpy the FFI wrapper uses) and
+# is put first on PATH, which is what makes the entrypoint's `python3` -- and
+# the `sys.executable` bootstrap hands the bundle to -- the one with torch.
+# python3-dev is for torch.compile, which builds its C++ wrappers against the
+# headers at run time (the compiler is already here for the arch probe).
+#
+# TORCH_SPEC pins torch to the dev image's own version (the build script asks
+# it), matched pair doctrine again: the trainer's checkpoints and ONNX exports
+# should not depend on which machine produced them. The rest of the stack is
+# taken unpinned, as the dev image takes it.
+FROM worker AS worker-torch
+ARG TORCH_SPEC=torch
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3-venv python3-dev && \
+    rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv --system-site-packages /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cu129 "${TORCH_SPEC}" && \
+    /opt/venv/bin/pip install --no-cache-dir onnx onnxscript natsort schedulefree tqdm
+ENV PATH=/opt/venv/bin:$PATH

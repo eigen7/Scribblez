@@ -45,6 +45,16 @@ DEFAULT_MOUNT_ROOT = Path("/workspace/mount")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENGINE_DIR = REPO_ROOT / "target" / "engine"
 
+# The position-evaluation eval datasets, git-tracked under the repo root: the
+# small hand-built set the Positions tab scrubs, and the machine-harvested
+# penultimate-bingo set the Loss tab's aggregate quality curves are measured
+# over (position_eval/analysis.py). A worker that runs from a bundle rather
+# than a checkout fetches them separately (cloud/worker_deps.py).
+EVAL_POSITIONS_DIRS = (
+    REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset",
+    REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset-large",
+)
+
 # Workload identifiers: the `<task>` level of the tags/ tree, the workload
 # registry keys, and the dashboard's task slugs. The single source of truth.
 POSITION_EVAL = "position_eval"

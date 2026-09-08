@@ -20,6 +20,8 @@ import importlib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from cloud.runtime_abi import RUNTIME_ENGINE, RUNTIMES
+
 from scribblez import params as params_mod
 from scribblez.paths import TagPaths
 
@@ -56,6 +58,11 @@ class RoleSpec:
     # GPU instance (a gpuTypeId + gpu count) rather than a CPU flavor, and the
     # dashboard's add-worker form offers GPU instances instead of CPU flavors.
     gpu: bool = False
+    # Which worker image a remote slot of this role runs on
+    # (cloud/runtime_abi.py): "engine" for anything the binaries and the FFI
+    # cover, "torch" for a role that imports the training stack. Independent
+    # of `gpu`: match eval runs a GPU on the engine runtime.
+    runtime: str = RUNTIME_ENGINE
     # Whether cloud pods for this role are rented interruptible (spot):
     # cheaper, but Runpod may stop them at any time. Only for roles that
     # tolerate preemption (the reconcile loop restarts reclaimed pods).
@@ -118,6 +125,10 @@ class WorkloadSpec:
     default_profile: str = ""
 
     def __post_init__(self):
+        for role in self.roles:
+            assert role.runtime in RUNTIMES, (
+                f"workload '{self.name}': role '{role.name}' names no such runtime {role.runtime!r}"
+            )
         names = {f.name for f in params_mod.schema(self.params_cls)}
         unknown = [n for n in self.primary_params if n not in names]
         assert not unknown, f"workload '{self.name}': primary_params names no such param {unknown}"
