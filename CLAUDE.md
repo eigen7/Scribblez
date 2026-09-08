@@ -53,10 +53,10 @@ Scribblez specifics for that workflow:
 
 # Human-review-friendly Pull Requests
 
-Try to organize changes into PR's that can be reviewed easily by humans. For example,
-instead of bundling logical changes with mechanical bulk renaming changes into one PR,
-separate them into two: one PR containing only the logical changes, to be reviewed
-carefully by a human, and then a follow-up PR containing the mechanical bulk renaming
+Try to organize changes into commits that can be reviewed easily by humans. For example,
+instead of bundling logical changes with mechanical bulk renaming changes into one commit,
+separate them into two: one commit containing only the logical changes, to be reviewed
+carefully by a human, and then a follow-up commit containing the mechanical bulk renaming
 changes, which can just be skimmed by a human.
 
 # Sycophancy
