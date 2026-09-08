@@ -146,8 +146,18 @@ std::unique_ptr<UltimateBotAgent> UltimateBotAgent::from_spec(
   // The leaf shares the nets' device; the run's agents share the leaf.
   std::shared_ptr<nn::PositionEvalService> leaf =
     nn::load_leaf_position_service(opts.leaf_model, opts.cuda_device);
+  std::shared_ptr<agent::MoveProposalNets> nets = load_nets(opts);
+  // The last conditioned pass of a turn reads max_sims - 1 sims; the fusion
+  // stage has never seen a set wider than it trained at, so a budget past
+  // that is refused rather than run off-distribution.
+  if (params.max_sims - 1 > nets->trained_max_evidence()) {
+    throw util::CleanException(
+      "--max-sims={} conditions on up to {} sims, but this model was trained on evidence sets "
+      "of at most {}; lower --max-sims or train at a wider on_policy_max",
+      params.max_sims, params.max_sims - 1, nets->trained_max_evidence());
+  }
   return std::make_unique<UltimateBotAgent>(
-    params, std::make_unique<agent::MoveProposalSession>(load_nets(opts)), std::move(leaf));
+    params, std::make_unique<agent::MoveProposalSession>(std::move(nets)), std::move(leaf));
 }
 
 std::string UltimateBotAgent::options_help() {

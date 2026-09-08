@@ -805,8 +805,22 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     assert trainer.run(scratch.ctx) == 0
     assert (scratch.paths.checkpoints_dir / "model_epoch_0000.pt").exists()
     assert (scratch.paths.checkpoints_dir / "model_epoch_0001.pt").exists()
-    # Frozen: the plain model is the student, so no per-pass ONNX.
-    assert not scratch.paths.onnx_dir.exists()
+    # Every pass exports the engine's cache/step pair, stamped with the arm,
+    # the version, and the evidence width the fusion stage trained at
+    # (1 + on_policy_max). Frozen, the plain model is the student, so no
+    # plain-student export.
+    import onnx
+
+    for epoch in (0, 1):
+        pair = (scratch.paths.onnx_path(epoch), scratch.paths.proposal_step_path(epoch))
+        metas = [{e.key: e.value for e in onnx.load(str(p)).metadata_props} for p in pair]
+        assert [m["graph"] for m in metas] == ["move_proposal_cache", "move_proposal_step"]
+        for m in metas:
+            assert m["opp_leave_input"] == "false", m
+            assert m["move_encoding_version"] == str(move_encoding_version()), m
+            assert m["trained_max_evidence"] == str(1 + params.on_policy_max), m
+        assert metas[0]["proposal_export_id"] == metas[1]["proposal_export_id"]
+        assert not scratch.paths.plain_onnx_path(epoch).exists()
     conn = _ingested_db(scratch.paths)
     epochs = {r[0] for r in conn.execute("select epoch from metrics")}
     names = {r[0] for r in conn.execute("select name from metrics")}
@@ -827,14 +841,15 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     for f in store_u.iterdir():
         os.utime(f, (stale, stale))
     assert trainer.run(scratch_u.ctx) == 0
-    import onnx
-
     for epoch in (0, 1):
         assert (scratch_u.paths.checkpoints_dir / f"model_epoch_{epoch:04d}.pt").exists()
-        # The export is stamped with the student's arm and version, not the
-        # session's or a default's.
+        assert scratch_u.paths.proposal_step_path(epoch).exists()
+        # Unfrozen, the moving plain student is exported too, under plain/,
+        # stamped with the student's arm and version, not the session's or a
+        # default's.
         meta = {
-            e.key: e.value for e in onnx.load(str(scratch_u.paths.onnx_path(epoch))).metadata_props
+            e.key: e.value
+            for e in onnx.load(str(scratch_u.paths.plain_onnx_path(epoch))).metadata_props
         }
         assert meta["graph"] == "move_set_eval", meta
         assert meta["opp_leave_input"] == "false", meta
@@ -964,3 +979,59 @@ def test_the_staged_best_so_far_is_the_gain_targets_baseline(traj_datasets):
             seen_empty |= not rows.any()
             seen_full |= rows.any()
     assert seen_empty and seen_full
+
+
+class _RecordingDataset:
+    """Stands in for TrajectoryDataset: records what iter_batches was asked."""
+
+    def __init__(self):
+        self.calls = []
+
+    def iter_batches(self, positions_per_batch, **kw):
+        self.calls.append((positions_per_batch, kw))
+        return iter(())
+
+
+def test_training_batches_carry_the_subset_assembly_knobs():
+    """The tag's subsets_per_pool / empty_fraction reach the sampler, the
+    evidence width caps the subset, and an unpinned empty_fraction (0) is
+    the sampler's uniform default (None), not 'never empty'."""
+    from scribblez.evidence.trainer import training_batches
+
+    ds = _RecordingDataset()
+    training_batches(ds, _params(batch_positions=7, subsets_per_pool=3, empty_fraction=0.25), 9, 4)
+    training_batches(ds, _params(batch_positions=7), 9, 5)
+    assert ds.calls == [
+        (
+            7,
+            {
+                "seed": 0,
+                "epoch_index": 4,
+                "subsets_per_pool": 3,
+                "max_evidence_width": 9,
+                "empty_fraction": 0.25,
+            },
+        ),
+        (
+            7,
+            {
+                "seed": 0,
+                "epoch_index": 5,
+                "subsets_per_pool": 1,
+                "max_evidence_width": 9,
+                "empty_fraction": None,
+            },
+        ),
+    ]
+
+
+def test_run_refuses_out_of_range_subset_knobs(tmp_path, traj_datasets):
+    """A tag with a nonsensical subset recipe is refused before any training."""
+    from scribblez.evidence import trainer
+
+    train, _ = traj_datasets
+    ckpt = tmp_path / "student.pt"
+    _student_checkpoint(ckpt, train, open_leaves=False)
+    for bad in ({"subsets_per_pool": 0}, {"empty_fraction": 1.0}, {"empty_fraction": -0.1}):
+        params = _params(student_checkpoint=str(ckpt), **bad)
+        assert trainer.run(_ctx(tmp_path, f"zz-bad-{len(bad)}", params).ctx) == 1

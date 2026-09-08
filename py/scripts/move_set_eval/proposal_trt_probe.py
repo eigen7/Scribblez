@@ -242,6 +242,7 @@ def main() -> int:
             opp_leave_input=False,
             move_encoding_version=1,
             proposal_export_id=proposal_export_id(model_a),
+            trained_max_evidence=16,
         ),
         lambda p: export_proposal_cache(
             model_b,
@@ -251,6 +252,7 @@ def main() -> int:
             opp_leave_input=False,
             move_encoding_version=1,
             proposal_export_id=proposal_export_id(model_b),
+            trained_max_evidence=16,
         ),
         lambda m: _cache_inputs(m, spatial_planes, scalar_size, 100 + m),
         lambda m: {
@@ -273,6 +275,7 @@ def main() -> int:
             opp_leave_input=False,
             move_encoding_version=1,
             proposal_export_id=proposal_export_id(model_a),
+            trained_max_evidence=16,
         ),
         lambda p: export_proposal_step(
             model_b,
@@ -280,6 +283,7 @@ def main() -> int:
             opp_leave_input=False,
             move_encoding_version=1,
             proposal_export_id=proposal_export_id(model_b),
+            trained_max_evidence=16,
         ),
         lambda m: _step_inputs(m, channels, 200 + m),
         lambda m: {
