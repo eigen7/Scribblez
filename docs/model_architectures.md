@@ -298,50 +298,44 @@ the `move_proposal_step` graph of the evidence path (roadmap item 3, §4 below).
 
 ### Training the evidence path (`scribblez.evidence`)
 
-> **Plan status.** The modes below are what the code implements today. The
-> gen-1 frozen-mode trial over the 200-rollout trajectory corpus is the
-> recorded floor (conditioned − plain soft-CE −0.0008; acquisition hit rate
-> 0.57 vs the plain value's 0.61). Item 5 revises this into the **move
-> proposal model**: a student copy with a **trainable backbone**, trained
-> gain-first (best-so-far fed as a head input) with the sim-outcome conditioned
-> auxiliaries and **no self-distillation anchor** — the `.mset` distillation
-> stream is dropped — over a deployment-rollout-count corpus of
-> subset-assembled evidence sets ([roadmap.md](roadmap.md) items 2–5).
+This is the **move proposal model** of [roadmap.md](roadmap.md) item 5: a
+student copy trained on sim outcomes — gain-first, best-so-far fed as a head
+input, the conditioned value heads as auxiliaries, and **no distillation
+anchor** — over subset-assembled evidence sets. The gen-1 frozen-mode trial
+over the 200-rollout trajectory corpus is the recorded floor (conditioned −
+plain soft-CE −0.0008; acquisition hit rate 0.57 vs the plain value's 0.61).
 
-The fusion stage and the proves-best head train over the student. In the
-default **frozen** mode (`freeze_backbone`: everything outside
-`evidence_fusion` / `proves_best` is `requires_grad=False` and pinned to eval
-mode, so the trunk's BatchNorm keeps its student statistics) they are all
-that learns. Rows are (position, evidence prefix, held-out simmed candidate)
-from trajectory `.sobs`; the targets are the held-out candidate's sim
-outcomes, not teacher readouts (docs/roadmap.md item 5 explains why):
+The model trains over the student. In the default **frozen** mode
+(`freeze_backbone`: everything outside `evidence_fusion` / `proves_best` is
+`requires_grad=False` and pinned to eval mode, so the trunk's BatchNorm keeps
+its student statistics — the recorded floor's diagnostic) only the fusion
+stage and the proves-best head learn. Rows are (position, evidence subset,
+held-out simmed candidate) from trajectory `.sobs`; the targets are the
+held-out candidate's sim outcomes, not teacher readouts (docs/roadmap.md
+item 5 explains why):
 
 | Head | Target | Loss | Weight |
 |------|--------|------|--------|
 | `wld` (conditioned) | sim W/D/L frequencies | soft cross-entropy | 1 |
 | `score_diff` (conditioned) | sim delta mean / std | Huber (δ=10) | `lambda_sd` = 0.004 |
-| `gain` | `max(0, v_c − max prefix v)`, CRN-paired | Huber (δ=0.05) | `lambda_gain` = 1 |
+| `gain` | `max(0, v_c − max subset v)`, CRN-paired | Huber (δ=0.05) | `lambda_gain` = 1 |
 
-In the **unfrozen** mode (`unfreeze_backbone`) the whole model trains and
-every step is joint: the rows above (their total weighted by `lambda_sim`,
-default 1) plus one batch of the same games' `.mset` teacher labels through
-the plain pass — the student's own distillation objective, which anchors the
-plain pass while the sim rows train the conditioned one:
-
-| Head | Target | Loss | Weight |
-|------|--------|------|--------|
-| `wld` (plain) | teacher W/D/L | soft cross-entropy | 1 |
-| `score_diff` (plain) | teacher mean / std | Huber (δ=10) | `lambda_sd` = 0.004 |
-| `planes` (plain) | teacher placement planes | per-cell BCE | `lambda_planes` = 1 |
-
-Two AdamW groups: the evidence path (fusion + proves-best head, from
-zero-init / random) at `lr`, the backbone at `lr × backbone_lr_mult`
-(default 0.1) — the WSD schedule scales both. BatchNorm runs in train mode.
-The plain first pass that feeds the evidence tokens is read without
-gradients in either mode (it is an input, not a training path); prefix-0
-exactness holds between the current plain and conditioned passes since the
-fusion's gate is structural. The plain student is exported per pass as ONNX
-in this mode only.
+In the **unfrozen** mode (`unfreeze_backbone`) — the move proposal model
+proper — the whole model trains on the same loss: trunk, move encoder, and
+value heads follow the sim signal, with two AdamW groups: the evidence path
+(fusion + proves-best head, from zero-init / random) at `lr`, the backbone at
+`lr × backbone_lr_mult` (default 0.1) — the WSD schedule scales both. The
+placement heads are the exception: no sim loss reads planes, so they receive
+no gradient and stay the student's (the predicted half of every evidence
+token is still what the trunk now under them produces).
+BatchNorm runs in train mode. There is no distillation anchor: the
+empty-subset rows keep the plain pass calibrated on the simmed candidates,
+and the frozen student's held-out soft-CE is recorded as the flat reference
+the moving plain pass's drift is read against. The plain first pass that
+feeds the evidence tokens is read without gradients in either mode (it is an
+input, not a training path); prefix-0 exactness holds between the current
+plain and conditioned passes since the fusion's gate is structural. The plain
+student is exported per pass as ONNX in this mode only.
 
 Gradients over the trainable params are clipped to `grad_clip` (default 1)
 per step; a batch with a non-finite loss or gradient takes no step and is
