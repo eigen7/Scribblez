@@ -1,4 +1,4 @@
-"""Tile-supply register tokens for the position-evaluation model's transformer trunk.
+"""Tile-supply register tokens for the transformer trunk (spatial_trunk.py).
 
 The placement heads must gate a square's cross-check letters by whether those
 letters are actually *available* -- present in the bag, the opponent's known

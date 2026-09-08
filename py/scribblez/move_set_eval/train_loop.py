@@ -13,6 +13,8 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+import torch
+
 from .model import compute_loss
 
 # Per-head loss keys accumulated each epoch ("total" is the optimized
@@ -105,6 +107,7 @@ def run_epoch(
     lr_fn: Callable[[int], float] | None = None,
     rows_trained: int = 0,
     on_batch: Callable[[int, int, float, int], None] | None = None,
+    grad_clip: float = 0.0,
 ) -> EpochResult:
     """Run one training pass over `batches` (already ordered by the caller).
 
@@ -113,6 +116,8 @@ def run_epoch(
         before each step (the rows-clock learning rate).
     on_batch: optional progress callback (done_batches, candidates, elapsed_s,
         rows_trained), invoked at most ~once per second.
+    grad_clip: when > 0, each step's gradient is clipped to this global norm
+        before the optimizer step.
     """
     model.train()
     sums = {k: 0.0 for k in LOSS_KEYS}
@@ -131,6 +136,8 @@ def run_epoch(
         losses = batch_loss(model, batch, device, loss_cfg)
         optimizer.zero_grad()
         losses["total"].backward()
+        if grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
 
         m = batch["target_wld"].shape[0]

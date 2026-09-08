@@ -27,14 +27,9 @@ from dataclasses import dataclass
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR
+from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR
-
-# The trunk-tower arms (spatial_trunk.py); strings so this torch-free module can
-# declare the param's choices.
-TRUNK_CONV = "conv"
-TRUNK_TRANSFORMER = "transformer"
-TRUNKS = (TRUNK_CONV, TRUNK_TRANSFORMER)
 
 TRAINER_STATS = StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"})
 
