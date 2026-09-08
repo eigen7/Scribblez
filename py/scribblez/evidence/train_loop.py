@@ -37,6 +37,7 @@ from scribblez.evidence_fusion import (
     NUM_OBSERVED_PLANES,
     NUM_PREDICTED_PLANES,
     EvidenceInputs,
+    best_so_far,
 )
 from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.evidence import observed_scalars
@@ -194,7 +195,10 @@ def conditioned_forward(
     evidence = batch_evidence_inputs(batch, move_args, plain, max_e, device)
     tokens, spatial_feats = model.encode_evidence(board, evidence)
     board_c, g_c = model.evidence_fusion(board, g, tokens, spatial_feats, evidence.mask)
-    return plain, model.score_moves(board_c, g_c, e, pos_id)
+    # The gain head's best-so-far is read off the staged evidence tokens -- the
+    # same observed values gain_targets took its max over.
+    best = best_so_far(evidence.obs_scalars, evidence.mask)
+    return plain, model.score_moves(board_c, g_c, e, pos_id, best)
 
 
 def compute_loss(

@@ -1003,3 +1003,36 @@ def test_gradients_are_clipped_to_the_configured_norm(traj_datasets, mset_datase
         )
     run_epoch(model, opt, train.iter_batches(4, seed=0), device, cfg, max_e=8, distill=distill)
     assert seen and max(seen) <= 0.01 * (1 + 1e-4)
+
+
+def test_the_staged_best_so_far_is_the_gain_targets_baseline(traj_datasets):
+    """conditioned_forward's best-so-far -- read off the staged evidence
+    tokens -- is the max sim value over each unit's subset, the very baseline
+    gain_targets subtracted; 0 for an empty subset."""
+    from scribblez.evidence.train_loop import _INPUT_KEYS, _MOVE_KEYS, batch_evidence_inputs
+    from scribblez.evidence_fusion import best_so_far
+
+    train, _ = traj_datasets
+    device = torch.device("cuda")
+    model = MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device).eval()
+    max_e = 8
+    seen_empty = seen_full = False
+    for batch in train.iter_batches(4, seed=5, subsets_per_pool=3):
+        move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
+        spatial, scalar = (batch[k].to(device) for k in _INPUT_KEYS)
+        pos_id = move_args[-1]
+        with torch.no_grad():
+            board, g = model.encode_board(spatial, scalar)
+            plain = model.score_moves(board, g, model.encode_moves(board, *move_args), pos_id)
+            ev = batch_evidence_inputs(batch, move_args, plain, max_e, device)
+            best = best_so_far(ev.obs_scalars, ev.mask).cpu().numpy()
+        value = batch["sim_value"].numpy()
+        members = batch["in_evidence"].numpy()
+        unit = batch["move_pos_id"].numpy()
+        for u in range(len(batch["positions"])):
+            rows = (unit == u) & members
+            want = float(value[rows].max()) if rows.any() else 0.0
+            assert best[u] == pytest.approx(want, abs=1e-6)
+            seen_empty |= not rows.any()
+            seen_full |= rows.any()
+    assert seen_empty and seen_full

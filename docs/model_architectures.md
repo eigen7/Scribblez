@@ -288,15 +288,19 @@ first-pass predictions, roadmap item 4).
 ### The proves-best head (roadmap item 5)
 
 `proves_best`: a small softplus MLP off the same fused per-move vector as
-`head` and `plane_proj`, taking additionally the scalar **best-so-far** (the
-max sim value over the evidence set gathered so far — a known input at
-inference), output `gain` (M,) ≥ 0 — the expected improvement
-`E[max(0, v − best-so-far)]` a sim of that candidate would contribute over the
-best simmed so far. Feeding best-so-far in directly is what lets the head
-compare against it, rather than reconstructing a max from the mean-pooled
-evidence summary. Meaningful only under evidence (at the empty set it collapses
-to the value itself); exported by the `move_proposal_step` graph of the
-evidence path (roadmap item 3, §4 below).
+`head` and `plane_proj` (4C) plus the scalar **best-so-far** (4C + 1 in): the
+max sim value over the evidence set gathered so far, output `gain` (M,) ≥ 0 —
+the expected improvement `E[max(0, v − best-so-far)]` a sim of that candidate
+would contribute over the best simmed so far. Feeding best-so-far in directly
+is what lets the head compare against it, rather than reconstructing a max
+from the mean-pooled evidence summary. It is not a separate input: each
+evidence token already carries its candidate's observed win and draw
+frequencies, so `evidence_fusion.best_so_far` takes the max of the observed
+win value over the set's real tokens (0 for the empty set, the floor the
+training target is measured from), and the `move_proposal_step` graph computes
+it the same way in-graph — the engine stages nothing for it. Meaningful only
+under evidence (at the empty set it collapses to the value itself); exported by
+the `move_proposal_step` graph of the evidence path (roadmap item 3, §4 below).
 
 ### Training the evidence path (`scribblez.evidence`)
 
