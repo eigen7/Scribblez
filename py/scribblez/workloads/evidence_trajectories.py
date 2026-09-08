@@ -162,11 +162,27 @@ class EvidenceTrajectoriesParams:
         10, "hold out every Nth pair (file-level, by stem hash) for the metrics; 0 = on-train"
     )
     batch_positions: int = param(32, "positions per training batch")
+    # Subset assembly (evidence.dataset.assemble_subset): how many evidence
+    # subsets each simmed pool yields per pass, and how often a subset is
+    # empty. Both move the held-out rows-clock the LR schedule runs on, so
+    # they are pinned per run like the recipe.
+    subsets_per_pool: int = param(
+        1,
+        "evidence subsets drawn per simmed pool per pass, each a training unit over the pool's "
+        "held-out candidates; multiplies the rows-clock, so pin it per run",
+    )
+    empty_fraction: float = param(
+        0.0,
+        "probability that a drawn evidence subset is empty (the prefix-0 rows that keep the "
+        "plain pass calibrated); 0 = unpinned, the subset size uniform over 0..cap (empty at "
+        "~1/(cap+1)). An empty subset holds every candidate out, so this moves the rows-clock",
+    )
     lr: float = param(1e-3, "peak learning rate of the warmup-stable-decay schedule")
     lr_warmup_rows: int = param(
         800_000,
         "linear LR warmup length, in held-out candidate rows trained (this trainer's "
-        "rows-clock: ~4.5 per position per pass, so ~half a pass over a 350k-position corpus)",
+        "rows-clock: ~4.5 per position per pass at subsets_per_pool 1, so ~half a pass over "
+        "a 350k-position corpus)",
     )
     lr_cycle_rows: int = param(
         16_000_000,

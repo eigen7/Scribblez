@@ -316,9 +316,12 @@ The model trains over the student. In the default **frozen** mode
 `requires_grad=False` and pinned to eval mode, so the trunk's BatchNorm keeps
 its student statistics — the recorded floor's diagnostic) only the fusion
 stage and the proves-best head learn. Rows are (position, evidence subset,
-held-out simmed candidate) from trajectory `.sobs`; the targets are the
-held-out candidate's sim outcomes, not teacher readouts (docs/roadmap.md
-item 5 explains why):
+held-out simmed candidate) from trajectory `.sobs` — each pool drawn
+`subsets_per_pool` times per pass, the subset empty at `empty_fraction` (or
+uniform over sizes when unpinned), both tag parameters because they set the
+held-out rows-clock the LR schedule runs on; the targets are the held-out
+candidate's sim outcomes, not teacher readouts (docs/roadmap.md item 5
+explains why):
 
 | Head | Target | Loss | Weight |
 |------|--------|------|--------|

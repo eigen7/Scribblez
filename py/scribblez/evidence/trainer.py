@@ -348,9 +348,24 @@ def _pass_line(epoch, state, params, result, m, lr_now, train_s, settled, ctx) -
     )
 
 
+def training_batches(train_ds, params, max_e: int, epoch: int):
+    """One pass's batches under the tag's subset-assembly knobs: each pool
+    yields `subsets_per_pool` subsets, empty at `empty_fraction` (0 = the
+    sampler's uniform-size default), capped at the evidence width `max_e` the
+    model conditions on. Deterministic for a given pass."""
+    return train_ds.iter_batches(
+        params.batch_positions,
+        seed=0,
+        epoch_index=epoch,
+        subsets_per_pool=params.subsets_per_pool,
+        max_evidence_width=max_e,
+        empty_fraction=params.empty_fraction or None,
+    )
+
+
 def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ctx, settled: bool):
     epoch = state.generation_index
-    batches = ctx["train_ds"].iter_batches(params.batch_positions, seed=0, epoch_index=epoch)
+    batches = training_batches(ctx["train_ds"], params, ctx["max_e"], epoch)
     t0 = time.time()
     rows_before = state.rows_trained
     result = run_epoch(
@@ -424,6 +439,12 @@ def run(ctx: WorkerContext) -> int:
     print(f"Tag root: {paths.root}\nDevice: {device}")
     if not params.student_checkpoint or not os.path.isfile(params.student_checkpoint):
         print(f"error: student_checkpoint {params.student_checkpoint!r} is not a readable file")
+        return 1
+    if params.subsets_per_pool < 1 or not 0.0 <= params.empty_fraction < 1.0:
+        print(
+            f"error: subsets_per_pool must be >= 1 and empty_fraction in [0, 1), got "
+            f"{params.subsets_per_pool} / {params.empty_fraction}"
+        )
         return 1
 
     model, student_cfg = load_student(
