@@ -38,7 +38,6 @@ from dataclasses import asdict, dataclass
 
 import torch
 
-from scribblez.dashboard import db
 from scribblez.evidence.checkpoints import STUDENT_CONFIG_KEYS, EvidenceCheckpoint, load_student
 from scribblez.evidence.dataset import (
     TrajectoryDataset,
@@ -53,9 +52,10 @@ from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
     WsdLrController,
     WsdSchedule,
-    init_controls,
+    default_controls,
     progress_line,
 )
+from scribblez.generational.records import TrainRecorder
 from scribblez.move_set_eval.onnx_export import export_onnx
 from scribblez.sim_evidence.position_sets import DEFAULT_SET, POSITIONS_ROOT, ensure_sobs, set_gcgs
 from scribblez.sim_evidence.sobs import read_sobs
@@ -349,7 +349,7 @@ def _pass_line(epoch, state, params, result, m, lr_now, train_s, settled, ctx) -
     )
 
 
-def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, settled: bool):
+def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ctx, settled: bool):
     epoch = state.generation_index
     batches = ctx["train_ds"].iter_batches(params.batch_positions, seed=0, epoch_index=epoch)
     t0 = time.time()
@@ -377,13 +377,15 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     lr_now = ctx["lr_controller"].current
     timed_print(_pass_line(epoch, state, params, result, m, lr_now, train_s, settled, ctx))
     record = _metrics_record(epoch, state, settled, result.losses, m, lr_now, result.skipped)
-    db.write_metrics(conn, epoch, record)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     save_epoch_checkpoint(paths, model, epoch, ctx["config"])
     if params.unfreeze_backbone:
         # Frozen, the plain model is the student byte for byte; only an
         # unfrozen pass has a new plain student to export.
         export_student(paths, model, epoch, ctx["config"]["student"])
+    # Delivered last: the record is what makes the pass visible, and every
+    # artifact it stands for is now on disk.
+    recorder.commit_generation(epoch, state.rows_trained, record)
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
         units=state.rows_trained - rows_before,
@@ -466,10 +468,10 @@ def run(ctx: WorkerContext) -> int:
     n_train = _report_model(model, params)
     optimizer = build_optimizer(model, params)
 
-    conn = db.connect(paths.dashboard_db)
-    db.write_meta(conn, ctx.tag, asdict(params), n_train)
-    db.write_loss_weights(conn, _loss_weights(params))
-    init_controls(conn)
+    recorder = TrainRecorder(ctx.sink)
+    recorder.publish_run(
+        ctx.tag, asdict(params), n_train, _loss_weights(params), default_controls()
+    )
     run_ctx = {
         "config": {
             **asdict(params),
@@ -488,7 +490,7 @@ def run(ctx: WorkerContext) -> int:
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=EvidenceTrainState)
     run_ctx["lr_controller"] = WsdLrController(
-        conn, WsdSchedule.from_params(params), state.rows_trained
+        recorder, WsdSchedule.from_params(params), state.rows_trained
     )
     try:
         clock = pair_store.CorpusClock(store, params.target_pairs, ".sobs")
@@ -496,7 +498,9 @@ def run(ctx: WorkerContext) -> int:
             settled = clock.is_final(
                 absorb_new_pairs(store, params, run_ctx["train_ds"], run_ctx["holdout_ds"])
             )
-            train_one_epoch(model, optimizer, conn, paths, device, params, state, run_ctx, settled)
+            train_one_epoch(
+                model, optimizer, recorder, paths, device, params, state, run_ctx, settled
+            )
         timed_print(
             f"Training complete: {state.settled_epochs} epochs over the finished corpus "
             f"({state.generation_index} passes, {state.rows_trained} rows). Pause the worker."

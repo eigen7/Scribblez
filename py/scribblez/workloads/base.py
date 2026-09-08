@@ -68,6 +68,13 @@ class RoleSpec:
     # since a rented pod has no such handle, such a role's kinds are local and
     # ssh. "" for the self-directing roles (a generator picks its own work).
     dispatch: str = ""
+    # Dotted path to a controller-side ingest tick for this role,
+    # ingest(spec, tag): takes in what the role's worker has delivered under
+    # the tag -- a trainer's records (generational/train_ingest.py) into
+    # dashboard.db. Unlike dispatch it needs no way into the worker, only the
+    # tag on the controller's mount, so it serves a slot of any kind. "" for
+    # roles that deliver nothing the controller has to write.
+    ingest: str = ""
     stats: StatsSpec | None = None
 
 

@@ -4,7 +4,6 @@ controller that serves it as a per-batch lr_fn and logs its phase boundaries."""
 import math
 
 import pytest
-from scribblez.dashboard import db
 from scribblez.generational.controls import (
     LR_DECAY_FRAC,
     LR_EVENT,
@@ -78,47 +77,61 @@ def test_degenerate_config_still_defines_every_row():
         assert 0.0 <= s.value(rows) <= LR
 
 
-def _controller(tmp_path, rows_trained):
-    conn = db.connect(tmp_path / "dashboard.db")
-    return conn, WsdLrController(conn, WsdSchedule(LR, W, C), rows_trained)
+class _Recorder:
+    """Collects the controller's phase-boundary events as the trainer's
+    recorder would."""
+
+    def __init__(self):
+        self.events = []
+
+    def control_event(self, positions, name, value):
+        self.events.append({"positions": positions, "name": name, "value": value})
+
+    def lr_events(self):
+        return [e for e in self.events if e["name"] == LR_EVENT]
 
 
-def test_controller_tracks_current_and_logs_boundaries(tmp_path):
-    conn, ctrl = _controller(tmp_path, 0)
+def _controller(rows_trained):
+    recorder = _Recorder()
+    return recorder, WsdLrController(recorder, WsdSchedule(LR, W, C), rows_trained)
+
+
+def test_controller_tracks_current_and_logs_boundaries():
+    recorder, ctrl = _controller(0)
     assert ctrl.current == 0.0
 
     # Batches inside warmup: values follow the ramp, no events yet.
     assert ctrl.lr_fn(500) == pytest.approx(LR / 2)
     assert ctrl.current == pytest.approx(LR / 2)
-    assert db.read_control_events(conn, LR_EVENT) == []
+    assert recorder.lr_events() == []
 
     # A generation-sized jump straight across the warmup end lands on the
     # plateau: one event, stamped at the batch's rows position.
     assert ctrl.lr_fn(W + 300) == LR
-    events = db.read_control_events(conn, LR_EVENT)
+    events = recorder.lr_events()
     assert [(e["positions"], e["value"]) for e in events] == [(W + 300, LR)]
 
     # More plateau batches add nothing.
     ctrl.lr_fn(W + 5000)
-    assert len(db.read_control_events(conn, LR_EVENT)) == 1
+    assert len(recorder.lr_events()) == 1
 
     # Decay start and restart each log once, at their crossing.
     ctrl.lr_fn(W + DECAY_START + 10)
     ctrl.lr_fn(W + DECAY_START + 500)
     ctrl.lr_fn(W + C + 5)
-    events = db.read_control_events(conn, LR_EVENT)
+    events = recorder.lr_events()
     assert [e["positions"] for e in events] == [W + 300, W + DECAY_START + 10, W + C + 5]
     assert events[-1]["value"] == pytest.approx(ctrl.schedule.value(W + C + 5))
     assert ctrl.current == pytest.approx(ctrl.schedule.value(W + C + 5))
 
 
-def test_controller_resumed_mid_phase_logs_nothing_spurious(tmp_path):
+def test_controller_resumed_mid_phase_logs_nothing_spurious():
     resume_at = W + DECAY_START + 100
-    conn, ctrl = _controller(tmp_path, resume_at)
+    recorder, ctrl = _controller(resume_at)
     assert ctrl.current == pytest.approx(ctrl.schedule.value(resume_at))
     ctrl.lr_fn(resume_at)
     ctrl.lr_fn(resume_at + 50)
-    assert db.read_control_events(conn, LR_EVENT) == []
+    assert recorder.lr_events() == []
     # The next real crossing (the restart) is still logged.
     ctrl.lr_fn(W + C)
-    assert [e["positions"] for e in db.read_control_events(conn, LR_EVENT)] == [W + C]
+    assert [e["positions"] for e in recorder.lr_events()] == [W + C]

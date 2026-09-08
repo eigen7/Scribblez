@@ -12,6 +12,10 @@ them (the dashboard server with generator workers attached to the same tag).
 The flags are generated from the workload's params dataclass, so this CLI
 cannot drift from the dashboard's task form.
 
+The trainer delivers its metrics as records under the tag (records/), which
+the dashboard server ingests into dashboard.db as it runs; with no server up,
+run scripts/ingest_train_records.py afterwards.
+
 Usage:
     ./py/scripts/position_eval/train.py -t mytag
 """

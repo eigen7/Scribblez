@@ -458,19 +458,19 @@ def match_arms_grid(conn):
 
 
 # ---------------------------------------------------------------------------
-# Loss / accuracy (per-checkpoint metrics over positions trained)
+# Loss / accuracy (per-checkpoint metrics over epoch)
 # ---------------------------------------------------------------------------
 
 
-def _positions_figure(title: str, x, y_label: str, log_x: bool):
-    """The Loss tab's square figure shell over the positions-trained x-axis `x`:
-    `log_x` draws that axis logarithmically, with an explicit positive range so
-    the auto-range does not degrade on a positions=0 first checkpoint."""
+def _epoch_figure(title: str, x, y_label: str, log_x: bool):
+    """The Loss tab's square figure shell over the epoch x-axis `x`: `log_x` draws
+    that axis logarithmically, with an explicit positive range so the auto-range
+    does not degrade on an epoch-0 first checkpoint."""
     fig = figure(
         width=SERIES_SIZE,
         height=SERIES_SIZE,
         title=title,
-        x_axis_label="positions",
+        x_axis_label="epoch",
         y_axis_label=y_label,
         x_axis_type="log" if log_x else "linear",
         tools="pan,box_zoom,wheel_zoom,reset,save",
@@ -481,8 +481,8 @@ def _positions_figure(title: str, x, y_label: str, log_x: bool):
 
 
 def _step_figure(title: str, x, series, y_label: str, log_x: bool = False):
-    fig = _positions_figure(title, x, y_label, log_x)
-    fig.add_tools(HoverTool(tooltips=[("positions", "@x"), ("value", "@y{0.0000}")], mode="vline"))
+    fig = _epoch_figure(title, x, y_label, log_x)
+    fig.add_tools(HoverTool(tooltips=[("epoch", "@x"), ("value", "@y{0.0000}")], mode="vline"))
     palette = Category10[10]
     xs = list(x)
     for i, (y, label) in enumerate(series):
@@ -504,7 +504,7 @@ def _stacked_loss_figure(x, bands, title: str, y_label: str, log_x: bool):
     """Stacked area of per-component losses, `bands` = (label, y) bottom-to-top.
     Click a legend entry to hide it -- hide all but one to read a single
     component's own curve (from zero)."""
-    fig = _positions_figure(title, x, y_label, log_x)
+    fig = _epoch_figure(title, x, y_label, log_x)
     palette = Category10[10]
     xs = list(x)
     cum = np.zeros(len(xs), dtype=np.float64)
@@ -547,13 +547,13 @@ def _loss_bands(series, weights, normalized):
     return bands
 
 
-def _loss_accuracy_row(x, series, weights, normalized, conn, log_x):
+def _loss_accuracy_row(x, series, weights, normalized, conn, pos_by_epoch, log_x):
     """The Loss tab's figure row over aligned per-point `series` (name -> y-array)
     and x-axis `x`: a stacked area of the WEIGHTED per-component losses -- band
     heights show each term's share of the optimized total, and `normalized`
     rescales every column to sum to 1 -- when loss coefficients (`weights`) were
     recorded, else overlaid loss lines; plus an Accuracy panel for every '<x>_acc'
-    series. Both panels share the positions x-axis, logarithmic when `log_x`.
+    series. Both panels share the epoch x-axis, logarithmic when `log_x`.
     LR-change markers overlay the loss panel."""
     if weights:
         title, y_label = (
@@ -571,7 +571,7 @@ def _loss_accuracy_row(x, series, weights, normalized, conn, log_x):
         loss_fig = _step_figure(
             "Train loss", x, [(series[k], k) for k in loss_names], "loss", log_x
         )
-    add_control_markers(loss_fig, conn)
+    add_control_markers(loss_fig, conn, x, pos_by_epoch)
     figs = [loss_fig]
     acc_names = sorted(k for k in series if k.endswith("_acc"))
     if acc_names:
@@ -581,15 +581,23 @@ def _loss_accuracy_row(x, series, weights, normalized, conn, log_x):
     return row(*figs)
 
 
-def add_control_markers(fig, conn):
-    """Overlay dashed vertical markers on a positions-axis figure at each LR-schedule
+def add_control_markers(fig, conn, epochs, pos_by_epoch):
+    """Overlay dashed vertical markers on the epoch-axis figure at each LR-schedule
     phase boundary (from the control_event table), labeled with the rate there, so
-    the loss curve shows where a decay started or a restart landed. A no-op when the
-    run recorded none."""
-    for e in db.read_control_events(conn, "lr"):
+    the loss curve shows where a decay started or a restart landed. control_event
+    records the change in positions trained, not epoch, so each event's location
+    is interpolated onto the epoch axis against this run's positions-per-epoch
+    curve (`pos_by_epoch`, keyed like `epochs`). A no-op when the run recorded
+    none."""
+    events = db.read_control_events(conn, "lr")
+    if not events:
+        return
+    positions = np.array([pos_by_epoch[e] for e in epochs], dtype=np.float64)
+    for e in events:
+        loc = float(np.interp(e["positions"], positions, epochs))
         fig.add_layout(
             Span(
-                location=e["positions"],
+                location=loc,
                 dimension="height",
                 line_color="#a05a00",
                 line_dash="dashed",
@@ -598,7 +606,7 @@ def add_control_markers(fig, conn):
         )
         fig.add_layout(
             Label(
-                x=e["positions"],
+                x=loc,
                 y=6,
                 y_units="screen",
                 text=f"{e['value']:.0e}",
@@ -611,37 +619,47 @@ def add_control_markers(fig, conn):
 
 def _metrics_series(conn):
     """The metrics table's loss and accuracy series as an aligned {name: y-array}
-    dict over a shared positions x-axis. Only 'loss', 'loss_<head>', and '<x>_acc'
-    metrics are collected; they are co-written per checkpoint, so all share the
-    metrics table's epoch index. Returns (x, series) -- (None, {}) when nothing is
+    dict over the epoch x-axis, plus the positions-per-epoch map (epoch ->
+    positions trained) needed to place control-change markers, which are
+    recorded in positions rather than epoch. Only 'loss', 'loss_<head>', and
+    '<x>_acc' metrics are collected; they are co-written per checkpoint
+    alongside 'positions', so all share the metrics table's epoch index.
+    Returns (x, series, pos_by_epoch) -- (None, {}, {}) when nothing is
     recorded, and NaN for any epoch a series happens to miss."""
     pos_by_epoch = dict(zip(*db.read_metric_series(conn, "positions"), strict=True))
     if not pos_by_epoch:
-        return None, {}
+        return None, {}, {}
     epochs = sorted(pos_by_epoch)
-    x = np.array([pos_by_epoch[e] for e in epochs], dtype=np.float64)
+    x = np.array(epochs, dtype=np.float64)
     series = {}
     for name in db.read_metric_names(conn):
         if name == "loss" or name.startswith("loss_") or name.endswith("_acc"):
             by_epoch = dict(zip(*db.read_metric_series(conn, name), strict=True))
             series[name] = np.array([by_epoch.get(e, np.nan) for e in epochs], dtype=np.float64)
-    return x, series
+    return x, series, pos_by_epoch
 
 
 def metrics_loss_grid(conn):
     """The Loss tab's stacked-loss + accuracy grid built from the per-checkpoint
-    `metrics` table vs positions trained, in all four knob variants
-    ("<x axis>|<norm>", see `_variant_rows`): stacked weighted per-component
-    losses (the percent variants -> per-column fractions), an accuracy panel,
-    control-change markers. None when no loss metric exists."""
-    x, series = _metrics_series(conn)
+    `metrics` table vs epoch, in all four knob variants ("<x axis>|<norm>", see
+    `_variant_rows`): stacked weighted per-component losses (the percent
+    variants -> per-column fractions), an accuracy panel, control-change
+    markers. None when no loss metric exists."""
+    x, series, pos_by_epoch = _metrics_series(conn)
     if not any(k == "loss" or k.startswith("loss_") for k in series):
         return None
     weights = db.read_loss_weights(conn)
     return _variant_rows(
         {
             f"{x_name}|{norm}": partial(
-                _loss_accuracy_row, x, series, weights, norm == NORM_PERCENT, conn, log_x
+                _loss_accuracy_row,
+                x,
+                series,
+                weights,
+                norm == NORM_PERCENT,
+                conn,
+                pos_by_epoch,
+                log_x,
             )
             for norm in (NORM_ABSOLUTE, NORM_PERCENT)
             for x_name, log_x in ((X_AXIS_LINEAR, False), (X_AXIS_LOG, True))

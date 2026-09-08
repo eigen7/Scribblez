@@ -46,8 +46,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.ffi import format_layout
-from scribblez.position_eval.supply_registers import TileSupplyRegisters
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
+from scribblez.supply_registers import TileSupplyRegisters
 from scribblez.transformer_tower import TransformerConfig
 
 # For r ~ N(0, sigma), E|r| = sqrt(2/pi)*sigma. Regressing the std against the

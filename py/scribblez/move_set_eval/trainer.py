@@ -33,11 +33,11 @@ from dataclasses import asdict, dataclass
 
 import torch
 
-from scribblez.dashboard import db
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import progress_line
 from scribblez.generational.optim import build_optim_arm, build_optimizer
+from scribblez.generational.records import TrainRecorder
 from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.eval import eval_slice_line, evaluate
 from scribblez.move_set_eval.model import MoveSetEvalModel
@@ -45,6 +45,7 @@ from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.move_set_eval.onnx_export import export_onnx
 from scribblez.move_set_eval.targets import complete_pairs, read_mset_flags
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
+from scribblez.spatial_trunk import transformer_config
 from scribblez.train_common import timed_print
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
@@ -212,7 +213,7 @@ def _recalibration_batches(train_ds: MsetDataset, params, epoch: int, device):
         yield batch["input_spatial"].to(device), batch["input_scalar"].to(device)
 
 
-def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, settled: bool):
+def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ctx, settled: bool):
     """One pass over the training pairs, then held-out metrics, the dashboard
     metric record, the rolling checkpoint, and a stats sample. `settled` says
     whether the corpus was final for this pass, which is what decides if the
@@ -237,6 +238,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         lr_fn=optim_arm.lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, epoch),
+        grad_clip=params.grad_clip,
     )
     state.rows_trained = result.rows_trained
     state.generation_index = epoch + 1
@@ -314,7 +316,8 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     # metrics record uses -- the artifact the engine runtime loads and any
     # match-eval consumer keys on. The config's recorded arm/version stamp the
     # metadata, so the export can never claim an encoding its rows didn't use.
-    # Exported before the metrics write so the recorded pass always has its ONNX.
+    # Exported, and checkpointed, before the pass's record is delivered, so a
+    # recorded pass always has its ONNX and its resume point.
     cfg = ctx["config"]
     export_onnx(
         model,
@@ -324,8 +327,8 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         opp_leave_input=cfg["open_leaves"],
         move_encoding_version=cfg["move_encoding_version"],
     )
-    db.write_metrics(conn, epoch, record)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
+    recorder.commit_generation(epoch, state.rows_trained, record)
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
         units=state.rows_trained - rows_before,
@@ -334,21 +337,24 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
     optim_arm.train_mode()
 
 
-def publish_config(conn, tag: str, params, model_params: int = 0):
+def publish_config(recorder, tag: str, params, model_params: int = 0):
     """Record the run's config for the dashboard: the frozen params (the Info
     tab) and each loss term's weight in the optimized total (WLD has weight 1),
     so the Loss tab can stack the weighted contributions. Called before the
     warmup wait so the Info tab shows the params immediately, the way
     position_eval's does; `model_params` is 0 until the model is built and the
-    row is re-stamped with the real count."""
-    db.write_meta(conn, tag, asdict(params), model_params)
-    db.write_loss_weights(
-        conn,
+    record is re-published with the real count. This trainer has no live
+    controls, so it publishes none."""
+    recorder.publish_run(
+        tag,
+        asdict(params),
+        model_params,
         {
             "loss_wld": 1.0,
             "loss_score_diff": params.lambda_sd,
             "loss_planes": params.lambda_planes,
         },
+        {},
     )
 
 
@@ -363,8 +369,8 @@ def run(ctx: WorkerContext) -> int:
     # Before the warmup wait, so the dashboard's Info tab shows the params while
     # the trainer is still filling the store rather than staying blank until it
     # reaches warmup_pairs and training starts.
-    conn = db.connect(paths.dashboard_db)
-    publish_config(conn, ctx.tag, params)
+    recorder = TrainRecorder(ctx.sink)
+    publish_config(recorder, ctx.tag, params)
 
     wait_for_store(paths.data_dir / SLOGS_DIR, params)
     train_ds, holdout_ds = load_datasets(paths, params)
@@ -381,10 +387,11 @@ def run(ctx: WorkerContext) -> int:
         trunk_channels=params.trunk_channels,
         num_blocks=params.num_blocks,
         num_heads=params.num_heads,
+        transformer=transformer_config(asdict(params)),
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
-    db.write_meta(conn, ctx.tag, asdict(params), n_params)  # re-stamp with the parameter count
+    publish_config(recorder, ctx.tag, params, n_params)  # re-stamp with the parameter count
     optimizer = build_optimizer(model, params, _rows_per_step(train_ds, params))
 
     # Beyond the frozen task params, the checkpoint config records what the
@@ -407,7 +414,7 @@ def run(ctx: WorkerContext) -> int:
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=MsetTrainState)
-    run_ctx["optim_arm"] = build_optim_arm(conn, params, optimizer, state.rows_trained)
+    run_ctx["optim_arm"] = build_optim_arm(recorder, params, optimizer, state.rows_trained)
     try:
         clock = corpus_clock(paths.data_dir / SLOGS_DIR, params)
         while epochs_left(params, state):
@@ -415,7 +422,9 @@ def run(ctx: WorkerContext) -> int:
             # before deciding whether this one is over a finished corpus.
             absorbed = absorb_new_pairs(paths, params, train_ds, holdout_ds)
             settled = clock.is_final(absorbed)
-            train_one_epoch(model, optimizer, conn, paths, device, params, state, run_ctx, settled)
+            train_one_epoch(
+                model, optimizer, recorder, paths, device, params, state, run_ctx, settled
+            )
         timed_print(
             f"Training complete: {state.settled_epochs} epochs over the finished corpus "
             f"({state.generation_index} passes, {state.rows_trained} rows, "

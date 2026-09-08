@@ -96,12 +96,15 @@ masking is needed.
 The sequence may carry **register tokens** after the cells: `R` extra tokens
 the model supplies, with learnable 2D positions initialised just off the
 board's left edge, which every attention layer sees alongside the cells.
-`PositionEvalModel` fills them with the tile-supply tokens of §2.
+`PositionEvalModel` and `MoveSetEvalModel` fill them with the tile-supply
+tokens of §2.
 
 `trunk_channels` / `num_blocks` keep their meaning (`C` and `N`);
 `transformer_mid_channels`, `transformer_heads` and `transformer_ffn_channels`
-size the inside of a block. Off by default and wired only through
-`PositionEvalModel`; the other models build the conv tower.
+size the inside of a block. Wired through `PositionEvalModel` and
+`MoveSetEvalModel`, each behind its workload's `trunk` param (the
+`transformer` and `conv` parameter profiles select an arm); the per-lane
+model builds the conv tower.
 
 ---
 
@@ -154,7 +157,7 @@ common tiles on availability but falls back to a fixed frequency prior for rare
 ones (e.g. a ~0.17 hook belief for a letter with zero copies unseen).
 
 Under the transformer trunk each of the 27 tiles becomes a **register token**
-([supply_registers.py](../py/scribblez/position_eval/supply_registers.py)): a
+([supply_registers.py](../py/scribblez/supply_registers.py)): a
 learned per-tile identity embedding plus a projection of that tile's per-seat
 availability counts (mover rack; unseen pool, decoded from the thermometer; and,
 under the open-leaves arm, the opponent's known leave), appended to the 225 cell
@@ -162,6 +165,9 @@ tokens the tower attends over. A square hooking on S/Y then reads S- and
 Y-supply directly in every attention layer, graded by the actual counts and
 distinguishing "available to me" from "available to the opponent", which a
 single gated input plane cannot. The conv trunk carries no such tokens.
+`MoveSetEvalModel`'s transformer arm carries the same tokens: its
+placement-plane readout (§3) distills these heads, so it has the same gating
+to learn.
 
 ### Losses
 
