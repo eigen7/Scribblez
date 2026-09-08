@@ -8,15 +8,18 @@ A role runner produces files in a private work dir and hands them to the sink:
                 <workload>/<tag>/ and the local copy deleted (the bucket is the
                 destination; the pod disk is scratch)
 
-Both expose the same three calls: `deliver(src, data_rel)` for data files
-(relative to the tag's data/ tree, mirrored as the bucket prefix),
-`push_json(rel, obj)` for small records (stats, provenance manifests, relative
-to the tag root / bucket prefix), and `read_json(rel)` to read one back -- how
-a restarted worker recovers the counters it published before.
+Both expose the same calls: `deliver(src, data_rel)` for data files (relative
+to the tag's data/ tree, mirrored as the bucket prefix), `push_file(src, rel)`
+for a file addressed from the tag root (a trainer's prediction arrays),
+`push_json(rel, obj)` for small records (stats, provenance manifests, the
+trainer's records; relative to the tag root / bucket prefix), and
+`read_json(rel)` to read one back -- how a restarted worker recovers the
+counters it published before, and how a trainer reads its controls.
 """
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 from cloud.credentials import R2Credentials
@@ -30,9 +33,13 @@ class LocalSink:
         self._root = tag_root
 
     def push_json(self, rel_path: str, obj: dict):
+        """Write the record atomically: a reader on this machine (the
+        dashboard's ingest tick) must never see a half-written one."""
         path = self._root / rel_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(obj, indent=2) + "\n")
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(obj, indent=2) + "\n")
+        os.replace(tmp, path)
 
     def read_json(self, rel_path: str) -> dict | None:
         try:
@@ -46,6 +53,16 @@ class LocalSink:
         dest = self._root / "data" / data_rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         os.replace(src, dest)
+        return 0
+
+    def push_file(self, src: Path, rel_path: str) -> int:
+        """Move `src` to <tag>/<rel_path>. A rename when `src` is on the
+        mount's filesystem, a copy otherwise (a temp file elsewhere): the
+        record that names the file is pushed after this returns, so nothing
+        reads it before it is whole either way. Returns 0 as deliver does."""
+        dest = self._root / rel_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(src, dest)
         return 0
 
 
@@ -89,6 +106,11 @@ class R2Sink:
         assert res.returncode == 0, f"upload of {src.name} failed: {res.stderr}"
         src.unlink()
         return nbytes
+
+    # The bucket prefix flattens the tag root and its data/ tree (stats/ and
+    # staging/ sit side by side), so a root-addressed file uploads exactly as
+    # a data file does.
+    push_file = deliver
 
 
 def r2_from_env() -> R2Credentials:

@@ -693,23 +693,15 @@ def _student_checkpoint(path, train, *, open_leaves: bool, version=None):
     )
 
 
-class _Sink:
-    kind = "local"
-
-    def push_json(self, rel, obj):
-        pass
-
-    def read_json(self, rel):
-        return None
-
-
 def _ctx(tmp_path, tag, params):
     from types import SimpleNamespace
 
+    from cloud.sinks import LocalSink
     from scribblez import workloads
     from scribblez.workloads.base import WorkerContext
 
     spec = workloads.get("evidence_trajectories")
+    paths = spec.paths(tag, tmp_path)  # a scratch mount root
     ctx = WorkerContext(
         spec=spec,
         role=spec.role("train"),
@@ -718,10 +710,24 @@ def _ctx(tmp_path, tag, params):
         worker_id="local-0",
         threads=2,
         max_cycles=0,
-        sink=_Sink(),
+        sink=LocalSink(paths.root),
     )
-    ctx.tag_paths = lambda: spec.paths(tag, tmp_path)  # a scratch mount root
-    return SimpleNamespace(ctx=ctx, paths=spec.paths(tag, tmp_path))
+    ctx.tag_paths = lambda: paths
+    return SimpleNamespace(ctx=ctx, paths=paths)
+
+
+def _ingested_db(paths):
+    """The tag's dashboard.db once the trainer's records are in it -- the
+    dashboard's ingest tick, run by hand."""
+    import sqlite3
+
+    from scribblez.dashboard import db
+    from scribblez.generational import train_ingest
+
+    conn = db.connect(paths.dashboard_db)
+    train_ingest.ingest(paths, conn)
+    conn.close()
+    return sqlite3.connect(paths.dashboard_db)
 
 
 def test_batched_evidence_builder_matches_the_per_position_one(traj_datasets):
@@ -847,9 +853,7 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     assert (scratch.paths.checkpoints_dir / "model_epoch_0001.pt").exists()
     # Frozen: the plain model is the student, so no per-pass ONNX.
     assert not scratch.paths.onnx_dir.exists()
-    import sqlite3
-
-    conn = sqlite3.connect(scratch.paths.dashboard_db)
+    conn = _ingested_db(scratch.paths)
     epochs = {r[0] for r in conn.execute("select epoch from metrics")}
     names = {r[0] for r in conn.execute("select name from metrics")}
     assert epochs == {0, 1}
@@ -881,7 +885,7 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
         assert meta["graph"] == "move_set_eval", meta
         assert meta["opp_leave_input"] == "false", meta
         assert meta["move_encoding_version"] == str(move_encoding_version()), meta
-    conn = sqlite3.connect(scratch_u.paths.dashboard_db)
+    conn = _ingested_db(scratch_u.paths)
     rows = {}
     for epoch, name, value in conn.execute("select epoch, name, value from metrics"):
         rows.setdefault(name, {})[epoch] = value

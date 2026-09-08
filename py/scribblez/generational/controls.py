@@ -4,15 +4,18 @@ trainers.
 Every generational trainer (position evaluation, move-set evaluation,
 max-move-per-lane) drives its learning rate from the same rows-clock schedule
 (WsdLrController) and exposes the same dashboard-tunable CPU knobs -- C++
-DataLoader workers and torch intra-op threads -- persisted in the per-tag
-dashboard DB's control table and restored on restart. Game-generation capacity
-is deliberately not a control here: generation belongs to the generator worker
-fleet, sized per worker slot from the master dashboard.
+DataLoader workers and torch intra-op threads -- read from the tag's controls
+file (generational/records.py), which the dashboard keeps across restarts.
+Game-generation capacity is deliberately not a control here: generation
+belongs to the generator worker fleet, sized per worker slot from the master
+dashboard.
 
 The CPU controller reads its controls once per generation, applies them, and
 logs each change as a rows-clock control event so the metric plots can annotate
-where a knob moved; the LR schedule logs its phase boundaries the same way. The
-task-specific trainers own only their model, loss, and evaluation.
+where a knob moved; the LR schedule logs its phase boundaries the same way.
+Events go to the trainer's recorder, which delivers them with the next
+generation's record. The task-specific trainers own only their model, loss,
+and evaluation.
 """
 
 from __future__ import annotations
@@ -22,7 +25,6 @@ import sys
 
 import torch
 
-from ..dashboard import db
 from ..train_common import timed_print
 
 # Names of the live controls (dashboard Controls tab / DB).
@@ -124,8 +126,8 @@ class WsdLrController:
     the exact rows position; the phase is initialised from the resume cursor so
     a restart mid-phase logs nothing spurious."""
 
-    def __init__(self, conn, schedule: WsdSchedule, rows_trained: int):
-        self._conn = conn
+    def __init__(self, recorder, schedule: WsdSchedule, rows_trained: int):
+        self._recorder = recorder
         self.schedule = schedule
         self._phase = schedule.phase(rows_trained)
         self.current = schedule.value(rows_trained)
@@ -136,7 +138,7 @@ class WsdLrController:
         phase = self.schedule.phase(rows_trained)
         self.current = self.schedule.value(rows_trained)
         if phase != self._phase:
-            db.write_control_event(self._conn, rows_trained, LR_EVENT, self.current)
+            self._recorder.control_event(rows_trained, LR_EVENT, self.current)
             timed_print(
                 f"LR schedule {self._phase} -> {phase} ({self.current:.2e}) at {rows_trained} rows"
             )
@@ -144,33 +146,42 @@ class WsdLrController:
         return self.current
 
 
+def default_controls() -> dict[str, int]:
+    """The CPU-thread controls' starting values on this machine: what a run
+    publishes for the Controls tab to show until the operator moves them."""
+    return {
+        CONTROL_DATALOADER_WORKERS: DEFAULT_DATALOADER_WORKERS,
+        CONTROL_TORCH_THREADS: torch.get_num_threads(),
+    }
+
+
 class CpuController:
     """Serves the live CPU-thread controls -- C++ DataLoader workers and PyTorch
-    intra-op threads -- from the control table, refreshed once per generation
-    (the natural point to retune, since the dataset is rebuilt there). torch's
-    thread count is applied here; the DataLoader count is read by the dataset
-    builder via the property. Changes are recorded as rows-clock control events.
-    """
+    intra-op threads -- refreshed once per generation (the natural point to
+    retune, since the dataset is rebuilt there). `read_controls()` returns the
+    operator's current values (records.read_controls over the trainer's sink);
+    a control it lacks is at its default. torch's thread count is applied
+    here; the DataLoader count is read by the dataset builder via the
+    property. Changes are recorded as rows-clock control events."""
 
-    def __init__(self, conn):
-        self._conn = conn
-        self._defaults = {
-            CONTROL_DATALOADER_WORKERS: DEFAULT_DATALOADER_WORKERS,
-            CONTROL_TORCH_THREADS: torch.get_num_threads(),
-        }
+    def __init__(self, recorder, read_controls):
+        self._recorder = recorder
+        self._read_controls = read_controls
+        self._defaults = default_controls()
         self._vals: dict = {}
         self.refresh(0)
 
     def refresh(self, rows_trained: int):
         """Re-read the thread controls, apply torch's count, and log any changes.
         Call once per generation."""
+        current = self._read_controls()
         vals = {
-            name: max(1, int(db.read_control(self._conn, name, default=default)))
+            name: max(1, int(current.get(name, default)))
             for name, default in self._defaults.items()
         }
         for name, v in vals.items():
             if self._vals and self._vals.get(name) != v:
-                db.write_control_event(self._conn, rows_trained, name, v)
+                self._recorder.control_event(rows_trained, name, v)
                 timed_print(f"{name} {self._vals[name]} -> {v} at {rows_trained} rows")
         self._vals = vals
         torch.set_num_threads(vals[CONTROL_TORCH_THREADS])
@@ -178,18 +189,6 @@ class CpuController:
     @property
     def dataloader_workers(self) -> int:
         return self._vals[CONTROL_DATALOADER_WORKERS]
-
-
-def init_controls(conn):
-    """Seed the live controls with their starting values (kept across restarts;
-    retuned from the Controls tab)."""
-    db.init_control(
-        conn,
-        {
-            CONTROL_DATALOADER_WORKERS: DEFAULT_DATALOADER_WORKERS,
-            CONTROL_TORCH_THREADS: torch.get_num_threads(),
-        },
-    )
 
 
 def progress_line(generation_index, done_batches, samples, elapsed, rows):

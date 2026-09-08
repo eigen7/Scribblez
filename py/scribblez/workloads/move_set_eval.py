@@ -400,6 +400,7 @@ SPEC = WorkloadSpec(
             name="train",
             title="Student trainer (GPU)",
             runner="scribblez.move_set_eval.trainer:run",
+            ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
             kinds=("local",),
             gpu=True,

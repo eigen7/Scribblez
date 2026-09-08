@@ -90,8 +90,11 @@ migrated: resumed under the schedule, its cursor lands mid-cycle at whatever
 rate the clock says.
 
 **Live controls** (DataLoader workers, torch threads) share one
-mechanism: a per-tag control table the trainer polls at its natural cadence —
-no IPC into the hot loop — with values persisted and restored on restart.
+mechanism: a per-tag controls file the dashboard writes and the trainer reads
+at its natural cadence — no IPC into the hot loop — with values persisted in
+the dashboard's database and restored on restart. The trainer's own output
+takes the mirror path: it delivers records, the dashboard ingests them
+(position_eval_workload.md, "The trainer role").
 
 ## Why a window, not a wipe
 
