@@ -16,11 +16,14 @@ docs/model_architectures.md diagrams this trunk; any change to the architecture
 belongs in the same commit as the corresponding change there.
 """
 
+from collections.abc import Mapping
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.transformer_tower import TransformerConfig, TransformerTower
+from scribblez.trunk_arms import TRUNK_TRANSFORMER
 
 # The board's letter planes lead the spatial input (BoardPlanes lays the 26 letter
 # one-hots first), so input_spatial[:, :N_LETTERS] is the per-cell one-hot a lexicon
@@ -243,3 +246,17 @@ class SpatialTrunk(nn.Module):
         tokens = self.tower(tokens)
         cells = tokens[:, : self.num_cells].transpose(1, 2).reshape(b, c, h, w)
         return F.relu(cells)
+
+
+def transformer_config(cfg: Mapping) -> TransformerConfig | None:
+    """The tower a workload's trunk params ask for: None under the conv arm,
+    else the transformer shape its `transformer_*` params size. `cfg` is the
+    frozen params (asdict) or a checkpoint's config, which records them, so
+    every trainer and every checkpoint rebuild agree on the mapping."""
+    if cfg["trunk"] != TRUNK_TRANSFORMER:
+        return None
+    return TransformerConfig(
+        mid_channels=cfg["transformer_mid_channels"],
+        num_heads=cfg["transformer_heads"],
+        ffn_channels=cfg["transformer_ffn_channels"],
+    )

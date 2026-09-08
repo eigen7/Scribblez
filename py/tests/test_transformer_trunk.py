@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES, PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
-from scribblez.position_eval.supply_registers import (
+from scribblez.supply_registers import (
     N_TILES,
     OPP_LEAVE0,
     SCALAR_SIZE_HIDDEN_LEAVES,

@@ -12,8 +12,9 @@ import pytest
 from scribblez import params as params_mod
 from scribblez.dashboard import tasks
 from scribblez.params import param
+from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER
 from scribblez.workloads import WorkloadSpec
-from scribblez.workloads.position_eval import PROFILES, TRUNK_CONV, TRUNK_TRANSFORMER
+from scribblez.workloads.position_eval import PROFILES
 
 
 @dataclass(frozen=True)

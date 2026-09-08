@@ -30,7 +30,7 @@ from scribblez.ffi import get_input_shapes
 from scribblez.position_eval.model import PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.transformer_tower import TransformerConfig
-from scribblez.workloads.position_eval import TRUNK_CONV, TRUNK_TRANSFORMER
+from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER
 
 # Input contract is owned by the C++ encoder
 # (engine/include/scribblez/input_encoder.h) and surfaced through the FFI, so the
