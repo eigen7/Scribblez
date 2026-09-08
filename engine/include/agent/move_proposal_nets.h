@@ -89,19 +89,23 @@ class MoveProposalNets {
   // the same still-live instance, so the agents of every game thread of a run
   // drive one engine pair. Builds or loads both graphs' engines, then validates
   // the pair came from one model: they must share the proposal_export_id
-  // fingerprint and agree on the trunk channel width C. Throws otherwise. The
-  // instance lives as long as its shared_ptr holders.
+  // fingerprint and the trained_max_evidence stamp, and agree on the trunk
+  // channel width C. Throws otherwise. The instance lives as long as its
+  // shared_ptr holders.
   static std::shared_ptr<MoveProposalNets> create(const Params& params);
 
   MoveProposalNets(const MoveProposalNets&) = delete;
   MoveProposalNets& operator=(const MoveProposalNets&) = delete;
 
   // The trunk channel width C, the padded evidence width E the step graph is
-  // specialized to, each graph's per-predict() row ceiling, and the cache
-  // graph's board-row widths and input arm (for a caller sizing the encoder
-  // row it passes to run_cache).
+  // specialized to, the widest evidence set the fusion stage was TRAINED on
+  // (the pair's trained_max_evidence stamp -- a consumer's budget must not
+  // condition on a wider set than the model has ever seen), each graph's
+  // per-predict() row ceiling, and the cache graph's board-row widths and
+  // input arm (for a caller sizing the encoder row it passes to run_cache).
   int channels() const { return cache_net_.channels(); }
   int max_evidence() const { return nn::kMaxEvidence; }
+  int trained_max_evidence() const { return trained_max_evidence_; }
   int max_rows() const { return cache_net_.max_rows(); }
   int step_max_rows() const { return step_net_.max_rows(); }
   int spatial_planes() const { return cache_net_.spatial_planes(); }
@@ -132,6 +136,7 @@ class MoveProposalNets {
   Params params_;
   nn::NeuralNet<nn::MoveProposalCacheSpec> cache_net_;
   nn::NeuralNet<nn::MoveProposalStepSpec> step_net_;
+  int trained_max_evidence_ = 0;
   // Held across a whole run_cache / run_step: staging, every chunk's predict,
   // and the copy-out -- the nets' host buffers are the shared state.
   std::mutex mutex_;

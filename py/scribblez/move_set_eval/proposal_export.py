@@ -353,13 +353,18 @@ def _export(
     opp_leave_input: bool,
     move_encoding_version: int,
     proposal_export_id: str,
+    trained_max_evidence: int,
     opset: int,
 ):
     """Trace `wrapper` to `path` atomically and stamp its metadata: the shared
     common keys, the per-graph architecture signature (the engine-plan cache
-    key), the graph kind, the move-encoding version gate, and the
+    key), the graph kind, the move-encoding version gate, the
     proposal_export_id that ties a cache graph to the step graph exported from
-    the same model. `dynamo=False`/`do_constant_folding=False` keep every weight
+    the same model, and trained_max_evidence -- the widest evidence set the
+    fusion stage was trained on (1 + the corpus recipe's on_policy_max), which
+    the deployed agent's sim budget must respect: the step graph pads to
+    DEFAULT_MAX_EVIDENCE, but a set wider than the training width is one the
+    model has never seen. `dynamo=False`/`do_constant_folding=False` keep every weight
     a plain named initializer for the refitter (see the plain exporter)."""
     with atomic_output(path) as tmp_path, warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
@@ -383,6 +388,7 @@ def _export(
                 "graph": graph,
                 "move_encoding_version": str(move_encoding_version),
                 "proposal_export_id": proposal_export_id,
+                "trained_max_evidence": str(trained_max_evidence),
             },
         )
 
@@ -396,6 +402,7 @@ def export_proposal_cache(
     opp_leave_input: bool,
     move_encoding_version: int,
     proposal_export_id: str,
+    trained_max_evidence: int,
     board_size: int = 15,
     opset: int = 17,
 ):
@@ -445,6 +452,7 @@ def export_proposal_cache(
         opp_leave_input=opp_leave_input,
         move_encoding_version=move_encoding_version,
         proposal_export_id=proposal_export_id,
+        trained_max_evidence=trained_max_evidence,
         opset=opset,
     )
     if was_training:
@@ -458,6 +466,7 @@ def export_proposal_step(
     opp_leave_input: bool,
     move_encoding_version: int,
     proposal_export_id: str,
+    trained_max_evidence: int,
     max_evidence: int = DEFAULT_MAX_EVIDENCE,
     board_size: int = 15,
     opset: int = 17,
@@ -498,10 +507,50 @@ def export_proposal_step(
         opp_leave_input=opp_leave_input,
         move_encoding_version=move_encoding_version,
         proposal_export_id=proposal_export_id,
+        trained_max_evidence=trained_max_evidence,
         opset=opset,
     )
     if was_training:
         model.train()
+
+
+def export_proposal_pair(
+    model: MoveSetEvalModel,
+    cache_path: str | Path,
+    step_path: str | Path,
+    spatial_planes: int,
+    scalar_size: int,
+    *,
+    opp_leave_input: bool,
+    move_encoding_version: int,
+    trained_max_evidence: int,
+    max_evidence: int = DEFAULT_MAX_EVIDENCE,
+    board_size: int = 15,
+):
+    """Both graphs of one model, tied by one proposal_export_id -- what a
+    trainer exports per pass and what the engine loads as a pair."""
+    xid = proposal_export_id(model)
+    export_proposal_cache(
+        model,
+        cache_path,
+        spatial_planes,
+        scalar_size,
+        opp_leave_input=opp_leave_input,
+        move_encoding_version=move_encoding_version,
+        proposal_export_id=xid,
+        trained_max_evidence=trained_max_evidence,
+        board_size=board_size,
+    )
+    export_proposal_step(
+        model,
+        step_path,
+        opp_leave_input=opp_leave_input,
+        move_encoding_version=move_encoding_version,
+        proposal_export_id=xid,
+        trained_max_evidence=trained_max_evidence,
+        max_evidence=max_evidence,
+        board_size=board_size,
+    )
 
 
 def proposal_export_id(model: MoveSetEvalModel) -> str:

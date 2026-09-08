@@ -160,6 +160,7 @@ int main(int argc, char** argv) {
     const size_t device_before = scribblez::nn::device_memory_used();
     std::shared_ptr<MoveProposalNets> nets = MoveProposalNets::create(params);
     std::cout << "loaded pair (C=" << nets->channels() << ", E=" << nets->max_evidence()
+              << ", trained width " << nets->trained_max_evidence()
               << ", max_rows=" << nets->max_rows() << "/" << nets->step_max_rows()
               << "): device memory +" << mib(scribblez::nn::device_memory_used() - device_before)
               << " MiB\n";

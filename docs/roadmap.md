@@ -382,10 +382,12 @@ and endgame handoff; the loop itself is
 sim-free by construction (it drives a `MoveProposalService` and a
 `CandidateSimmer` it is handed) with the pick rule as a policy, so item 4's
 generator can run its gen-1+ on-policy side through the same loop with a
-tempered pick once a trained gain head exists to justify that build. What
-remains for the agent is what the plan deferred behind a trained model: the
-per-pass cache/step export from the evidence trainer and a match role, then
-the budget/threshold measurements of [evaluation_plan.md](evaluation_plan.md).
+tempered pick once a trained gain head exists to justify that build. The
+evidence trainer exports the cache/step pair every pass, stamped with the
+evidence width it trained at, which the agent's `--max-sims` is checked
+against at load. What remains is a match role for the evidence workload,
+then the budget/threshold measurements of
+[evaluation_plan.md](evaluation_plan.md).
 
 - **First sim: the greedy anchor** — the highest-raw-score candidate, taken
   straight off the generated move list, not from the model's ranking. It is

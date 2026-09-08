@@ -53,13 +53,20 @@ void copy_rows(const float* src, int rows, int width, float* dst) {
   std::memcpy(dst, src, sizeof(float) * size_t(rows) * width);
 }
 
-// The proposal_export_id metadata the exporter stamps into `onnx_path`, or ""
-// if the file carries none -- the fingerprint tying a cache graph to the step
-// graph exported from the same in-memory model.
-std::string read_proposal_export_id(const std::string& onnx_path) {
+// What the exporter stamps into one graph of a pair beyond the loader's own
+// gates: the proposal_export_id fingerprint tying a cache graph to the step
+// graph exported from the same in-memory model ("" if absent), and the
+// evidence width the fusion stage trained at (0 if absent).
+struct PairStamp {
+  std::string export_id;
+  int trained_max_evidence;
+};
+
+PairStamp read_pair_stamp(const std::string& onnx_path) {
   const nn::OnnxMetadata meta = nn::parse_onnx_metadata(nn::read_file_bytes(onnx_path));
   const auto it = meta.entries.find("proposal_export_id");
-  return it == meta.entries.end() ? std::string() : it->second;
+  return {it == meta.entries.end() ? std::string() : it->second,
+          meta.int_entry("trained_max_evidence", 0)};
 }
 
 // One net's params from the shared Params (NeuralNet is neither copyable nor
@@ -108,20 +115,35 @@ void MoveProposalNets::load() {
       "move proposal cache/step graphs disagree on trunk channels: cache {} vs step {}",
       cache_net_.channels(), step_net_.channels());
   }
-  const std::string cache_id = read_proposal_export_id(params_.cache_onnx_path);
-  const std::string step_id = read_proposal_export_id(params_.step_onnx_path);
-  if (cache_id.empty() || step_id.empty()) {
+  const PairStamp cache = read_pair_stamp(params_.cache_onnx_path);
+  const PairStamp step = read_pair_stamp(params_.step_onnx_path);
+  if (cache.export_id.empty() || step.export_id.empty()) {
     throw util::CleanException(
       "move proposal graphs carry no proposal_export_id; re-export the pair with "
       "proposal_export.py (cache '{}', step '{}')",
       params_.cache_onnx_path, params_.step_onnx_path);
   }
-  if (cache_id != step_id) {
+  if (cache.export_id != step.export_id) {
     throw util::CleanException(
       "move proposal cache/step graphs are from different models (proposal_export_id {} vs {}); "
       "export both from one checkpoint",
-      cache_id, step_id);
+      cache.export_id, step.export_id);
   }
+  // The width the fusion stage trained at: stamped on both, agreeing, within
+  // the step graph's padding. An export predating the stamp is refused rather
+  // than trusted to the padded width.
+  if (cache.trained_max_evidence != step.trained_max_evidence) {
+    throw util::CleanException(
+      "move proposal cache/step graphs disagree on trained_max_evidence ({} vs {})",
+      cache.trained_max_evidence, step.trained_max_evidence);
+  }
+  if (cache.trained_max_evidence < 1 || cache.trained_max_evidence > nn::kMaxEvidence) {
+    throw util::CleanException(
+      "move proposal graphs carry no usable trained_max_evidence ({}; the step graph pads to "
+      "{}); re-export the pair with proposal_export.py",
+      cache.trained_max_evidence, nn::kMaxEvidence);
+  }
+  trained_max_evidence_ = cache.trained_max_evidence;
 }
 
 void MoveProposalNets::run_cache(const float* board_row, const move_set::MoveFeatureArrays& moves,

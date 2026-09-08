@@ -25,7 +25,8 @@ up new .sobs pairs each pass into a file-level split by stem hash
 finished corpus (pair_store.CorpusClock), record metrics, checkpoint. Every
 pass also writes its own checkpoint under checkpoints/model_epoch_NNNN.pt
 (model weights + config), which is what the dashboard's trajectory pane loads
-per generation.
+per generation, and exports the model as the engine's cache/step graph pair
+(export_proposal_graphs), what UltimateBot plays.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ from scribblez.generational.controls import (
 )
 from scribblez.generational.records import TrainRecorder
 from scribblez.move_set_eval.onnx_export import export_onnx
+from scribblez.move_set_eval.proposal_export import export_proposal_pair
 from scribblez.sim_evidence.position_sets import DEFAULT_SET, POSITIONS_ROOT, ensure_sobs, set_gcgs
 from scribblez.sim_evidence.sobs import read_sobs
 from scribblez.train_common import timed_print
@@ -251,14 +253,38 @@ def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
     torch.save({"model_state_dict": model.state_dict(), "config": config}, path)
 
 
-def export_student(paths, model, epoch: int, student_cfg: dict):
-    """The unfrozen mode's per-pass plain-student ONNX (models/
-    model_epoch_NNNN.onnx), stamped with the student's arm and version as the
-    mset trainer stamps its own. The plain path only; the evidence path's
-    cache/step pair is exported separately."""
-    export_onnx(
+def export_proposal_graphs(paths, model, epoch: int, student_cfg: dict, max_e: int):
+    """The pass's move proposal model as the engine serves it: the
+    move_proposal_cache graph at models/model_epoch_NNNN.onnx and its step
+    graph at models/step/model_epoch_NNNN.onnx (TagPaths.proposal_step_path),
+    stamped with the student's arm and version and with the evidence width
+    `max_e` the fusion stage trained at -- the bound UltimateBot's sim budget
+    is checked against. Every pass, in both modes: the fusion stage and the
+    gain head move even when the backbone is frozen."""
+    step = paths.proposal_step_path(epoch)
+    step.parent.mkdir(parents=True, exist_ok=True)
+    export_proposal_pair(
         model,
         paths.onnx_path(epoch),
+        step,
+        student_cfg["spatial_planes"],
+        student_cfg["scalar_size"],
+        opp_leave_input=student_cfg["open_leaves"],
+        move_encoding_version=student_cfg["move_encoding_version"],
+        trained_max_evidence=max_e,
+    )
+
+
+def export_student(paths, model, epoch: int, student_cfg: dict):
+    """The unfrozen mode's per-pass plain-student ONNX (models/plain/
+    model_epoch_NNNN.onnx), stamped with the student's arm and version as the
+    mset trainer stamps its own -- the plain path alone, a move-set-eval
+    graph a later generation's proposer can be taken from."""
+    path = paths.plain_onnx_path(epoch)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    export_onnx(
+        model,
+        path,
         student_cfg["spatial_planes"],
         student_cfg["scalar_size"],
         opp_leave_input=student_cfg["open_leaves"],
@@ -393,6 +419,7 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
     record = _metrics_record(epoch, state, settled, result.losses, m, lr_now, result.skipped)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     save_epoch_checkpoint(paths, model, epoch, ctx["config"])
+    export_proposal_graphs(paths, model, epoch, ctx["config"]["student"], ctx["max_e"])
     if params.unfreeze_backbone:
         # Frozen, the plain model is the student byte for byte; only an
         # unfrozen pass has a new plain student to export.
