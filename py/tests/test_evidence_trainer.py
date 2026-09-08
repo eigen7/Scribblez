@@ -964,3 +964,59 @@ def test_the_staged_best_so_far_is_the_gain_targets_baseline(traj_datasets):
             seen_empty |= not rows.any()
             seen_full |= rows.any()
     assert seen_empty and seen_full
+
+
+class _RecordingDataset:
+    """Stands in for TrajectoryDataset: records what iter_batches was asked."""
+
+    def __init__(self):
+        self.calls = []
+
+    def iter_batches(self, positions_per_batch, **kw):
+        self.calls.append((positions_per_batch, kw))
+        return iter(())
+
+
+def test_training_batches_carry_the_subset_assembly_knobs():
+    """The tag's subsets_per_pool / empty_fraction reach the sampler, the
+    evidence width caps the subset, and an unpinned empty_fraction (0) is
+    the sampler's uniform default (None), not 'never empty'."""
+    from scribblez.evidence.trainer import training_batches
+
+    ds = _RecordingDataset()
+    training_batches(ds, _params(batch_positions=7, subsets_per_pool=3, empty_fraction=0.25), 9, 4)
+    training_batches(ds, _params(batch_positions=7), 9, 5)
+    assert ds.calls == [
+        (
+            7,
+            {
+                "seed": 0,
+                "epoch_index": 4,
+                "subsets_per_pool": 3,
+                "max_evidence_width": 9,
+                "empty_fraction": 0.25,
+            },
+        ),
+        (
+            7,
+            {
+                "seed": 0,
+                "epoch_index": 5,
+                "subsets_per_pool": 1,
+                "max_evidence_width": 9,
+                "empty_fraction": None,
+            },
+        ),
+    ]
+
+
+def test_run_refuses_out_of_range_subset_knobs(tmp_path, traj_datasets):
+    """A tag with a nonsensical subset recipe is refused before any training."""
+    from scribblez.evidence import trainer
+
+    train, _ = traj_datasets
+    ckpt = tmp_path / "student.pt"
+    _student_checkpoint(ckpt, train, open_leaves=False)
+    for bad in ({"subsets_per_pool": 0}, {"empty_fraction": 1.0}, {"empty_fraction": -0.1}):
+        params = _params(student_checkpoint=str(ckpt), **bad)
+        assert trainer.run(_ctx(tmp_path, f"zz-bad-{len(bad)}", params).ctx) == 1
