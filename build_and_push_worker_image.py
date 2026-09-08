@@ -68,14 +68,17 @@ def probe_versions(image: str) -> dict[str, str]:
 
 def dev_torch_spec(dev_image: str) -> str:
     """The pip requirement pinning torch to the dev image's version, e.g.
-    "torch==2.9.0+cu129"."""
+    "torch==2.9.0+cu129". Asked with the image's entrypoint bypassed, as
+    probe_versions does: the dev image's entrypoint sets up the user and
+    says so on stdout, which would land in the requirement."""
     res = subprocess.run(
         [
             "docker",
             "run",
             "--rm",
-            dev_image,
+            "--entrypoint",
             "python3",
+            dev_image,
             "-c",
             "import torch; print(torch.__version__)",
         ],
