@@ -332,8 +332,8 @@ value heads follow the sim signal, with two AdamW groups: the evidence path
 (fusion + proves-best head, from zero-init / random) at `lr`, the backbone at
 `lr × backbone_lr_mult` (default 0.1) — the WSD schedule scales both. The
 placement heads are the exception: no sim loss reads planes, so they receive
-no gradient and stay the student's (the predicted half of every evidence
-token is still what the trunk now under them produces).
+no gradient and stay the student's, now reading a trunk that trains under
+them — the predicted half of every evidence token is still their output.
 BatchNorm runs in train mode. There is no distillation anchor: the
 empty-subset rows keep the plain pass calibrated on the simmed candidates,
 and the frozen student's held-out soft-CE is recorded as the flat reference
@@ -353,9 +353,8 @@ rows (soft-CE, value MAE), report the gain error and the acquisition hit rate
 (argmax gain over a position's held-out candidates vs. the one that simmed
 best; the plain value's argmax is the baseline), and read prefix-0 rows as the
 exactness check. Unfrozen, the frozen student's soft-CE on the same rows is
-added as a flat reference (`student_wld_ce`), and the `.mset` holdout's
-recall@1 / Spearman / plane BCE / distillation loss (`distill_*`) watch the
-plain pass for drift.
+added as a flat reference (`student_wld_ce`) the moving plain pass's drift is
+read against.
 
 ---
 

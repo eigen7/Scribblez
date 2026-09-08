@@ -20,13 +20,12 @@ information-condition arm must be the corpus's -- the trainer refuses a
 hidden-leaves student on an open-leaves corpus and vice versa.
 
 The loop is the mset trainer's growing-corpus loop: wait for the store, take
-up new pairs each pass into a file-level split shared by the .sobs and .mset
-sides (a stem is train or held-out on both), spend the epoch budget only on
-passes over a finished corpus (pair_store.CorpusClock), record metrics to the
-dashboard DB, checkpoint. Every pass also writes its own checkpoint under
-checkpoints/model_epoch_NNNN.pt (model weights + config): the evidence path
-has no ONNX export yet (roadmap item 3), so the torch checkpoint is what the
-dashboard's trajectory pane loads per generation.
+up new .sobs pairs each pass into a file-level split by stem hash
+(pair_store.split_pair_stems), spend the epoch budget only on passes over a
+finished corpus (pair_store.CorpusClock), record metrics, checkpoint. Every
+pass also writes its own checkpoint under checkpoints/model_epoch_NNNN.pt
+(model weights + config), which is what the dashboard's trajectory pane loads
+per generation.
 """
 
 from __future__ import annotations
