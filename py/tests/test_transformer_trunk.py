@@ -1,5 +1,5 @@
-"""The transformer trunk tower (transformer_tower.py) in PositionEvalModel, with
-its tile-supply register tokens (supply_registers.py).
+"""The transformer trunk tower (transformer_tower.py) in PositionEvalModel and
+MoveSetEvalModel, with its tile-supply register tokens (supply_registers.py).
 
 Pins the contracts the tower is built on: every block starts as the identity on
 the trunk stream (zero-initialised up-projections), the register tokens are built
@@ -14,8 +14,10 @@ import onnxruntime as ort
 import pytest
 import torch
 import torch.nn.functional as F
+from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES, PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
+from scribblez.spatial_trunk import transformer_config
 from scribblez.supply_registers import (
     N_TILES,
     OPP_LEAVE0,
@@ -27,6 +29,7 @@ from scribblez.supply_registers import (
     _thermometer_to_count_matrix,
 )
 from scribblez.transformer_tower import TransformerConfig
+from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER
 
 P = 87
 C = 32
@@ -63,6 +66,27 @@ def test_forward_shapes_under_both_arms(scalar_size):
 def test_conv_trunk_has_no_registers():
     model = PositionEvalModel(P, SCALAR_SIZE_OPEN_LEAVES, trunk_channels=C, num_blocks=2)
     assert model.trunk.tower is None and model.trunk.registers is None
+
+
+def test_move_set_model_takes_the_same_tower_from_its_params():
+    """The move-set model's transformer arm builds the tower and the registers
+    from the same trunk params (a frozen task's, or a checkpoint config's)
+    through transformer_config; its conv arm is the plain conv tower."""
+    cfg = {
+        "trunk": TRUNK_TRANSFORMER,
+        "transformer_mid_channels": CFG.mid_channels,
+        "transformer_heads": CFG.num_heads,
+        "transformer_ffn_channels": CFG.ffn_channels,
+    }
+    assert transformer_config(cfg) == CFG
+    assert transformer_config({**cfg, "trunk": TRUNK_CONV}) is None
+    torch.manual_seed(0)
+    model = MoveSetEvalModel(
+        P, SCALAR_SIZE_OPEN_LEAVES, trunk_channels=C, num_blocks=2, transformer=CFG
+    ).eval()
+    assert model.trunk.tower is not None and model.trunk.registers.has_opp_leave
+    x, s = model.trunk(*_inputs(2))
+    assert x.shape == (2, C, 15, 15) and s.shape == (2, C)
 
 
 def test_blocks_start_as_identity():

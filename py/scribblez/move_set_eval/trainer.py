@@ -45,6 +45,7 @@ from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.move_set_eval.onnx_export import export_onnx
 from scribblez.move_set_eval.targets import complete_pairs, read_mset_flags
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
+from scribblez.spatial_trunk import transformer_config
 from scribblez.train_common import timed_print
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
@@ -237,6 +238,7 @@ def train_one_epoch(model, optimizer, conn, paths, device, params, state, ctx, s
         lr_fn=optim_arm.lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, epoch),
+        grad_clip=params.grad_clip,
     )
     state.rows_trained = result.rows_trained
     state.generation_index = epoch + 1
@@ -381,6 +383,7 @@ def run(ctx: WorkerContext) -> int:
         trunk_channels=params.trunk_channels,
         num_blocks=params.num_blocks,
         num_heads=params.num_heads,
+        transformer=transformer_config(asdict(params)),
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")

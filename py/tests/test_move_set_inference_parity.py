@@ -36,22 +36,37 @@ from scribblez.move_set_eval.onnx_export import (
     MoveSetEvalExportModel,
     export_onnx,
 )
+from scribblez.transformer_tower import TransformerConfig
 
 _input_shapes = {s.name: s.dims for s in get_input_shapes()}
 SPATIAL_PLANES, BOARD_SIZE, _ = _input_shapes["input_spatial"]
 SCALAR_SIZE = _input_shapes["input_scalar"][0]
 MAX_PLACED, NUM_SCALARS, LETTER_VOCAB, CELLS = move_encoding_dims()
 
+# Both trunk towers export, so both are checked: the conv tower (None) and a tiny
+# transformer tower (attention, RoPE, RMSNorm, SwiGLU, register tokens).
+TRUNKS = {
+    "conv": None,
+    "transformer": TransformerConfig(mid_channels=8, num_heads=2, ffn_channels=16),
+}
 
-def _random_model(seed: int = 0) -> MoveSetEvalModel:
+
+def _random_model(trunk: str = "conv", seed: int = 0) -> MoveSetEvalModel:
     torch.manual_seed(seed)
     model = MoveSetEvalModel(
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
         trunk_channels=16,  # tiny: numerics, not capacity
-        num_blocks=3,  # includes one global-pooling block (covers its ops)
+        num_blocks=3,  # conv: includes one global-pooling block (covers its ops)
         num_heads=2,
+        transformer=TRUNKS[trunk],
     )
+    # The tower's blocks start as the identity (zero-init up-projections), so
+    # move them off it: the parity check must see attention, not a bypass.
+    if model.trunk.tower is not None:
+        with torch.no_grad():
+            for block in model.trunk.tower.blocks:
+                block.up.weight.normal_(std=0.1)
     model.eval()
     return model
 
@@ -104,10 +119,11 @@ def _torch_move_args(letters, blanks, squares, tile_mask, scalars):
     )
 
 
-def test_export_wrapper_matches_training_forward_on_ragged_batches():
+@pytest.mark.parametrize("trunk", TRUNKS)
+def test_export_wrapper_matches_training_forward_on_ragged_batches(trunk):
     counts = [1, 5, 12, 3]
     spatial, scalar, per_pos, moves, pos_id = _training_batch(counts)
-    model = _random_model()
+    model = _random_model(trunk)
     wrapper = MoveSetEvalExportModel(model)
     wrapper.eval()
 
@@ -155,9 +171,10 @@ def _export(tmp_path, model, move_encoding_version=1):
     return path
 
 
-def test_onnx_runtime_matches_torch_at_other_ms(tmp_path):
+@pytest.mark.parametrize("trunk", TRUNKS)
+def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, trunk):
     ort = pytest.importorskip("onnxruntime")
-    model = _random_model()
+    model = _random_model(trunk)
     wrapper = MoveSetEvalExportModel(model)
     wrapper.eval()
     path = _export(tmp_path, model)  # traced at M=5 inside export_onnx

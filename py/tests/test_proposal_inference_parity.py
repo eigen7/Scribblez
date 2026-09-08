@@ -53,6 +53,7 @@ from scribblez.move_set_eval.proposal_export import (
     export_proposal_step,
     proposal_export_id,
 )
+from scribblez.transformer_tower import TransformerConfig
 
 _input_shapes = {s.name: s.dims for s in get_input_shapes()}
 SPATIAL_PLANES, BOARD_SIZE, _ = _input_shapes["input_spatial"]
@@ -60,17 +61,30 @@ SCALAR_SIZE = _input_shapes["input_scalar"][0]
 MAX_PLACED, NUM_SCALARS, LETTER_VOCAB, CELLS = move_encoding_dims()
 CHANNELS = 16
 MAX_E = 6
+# Both trunk towers export, so both are checked: the conv tower (None) and a tiny
+# transformer tower (attention, RoPE, RMSNorm, SwiGLU, register tokens).
+TRUNKS = {
+    "conv": None,
+    "transformer": TransformerConfig(mid_channels=8, num_heads=2, ffn_channels=16),
+}
 
 
-def _random_model(seed: int = 0) -> MoveSetEvalModel:
+def _random_model(trunk: str = "conv", seed: int = 0) -> MoveSetEvalModel:
     torch.manual_seed(seed)
     model = MoveSetEvalModel(
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
         trunk_channels=CHANNELS,  # tiny: numerics, not capacity
-        num_blocks=3,  # includes one global-pooling block (covers its ops)
+        num_blocks=3,  # conv: includes one global-pooling block (covers its ops)
         num_heads=2,
+        transformer=TRUNKS[trunk],
     )
+    # The tower's blocks start as the identity (zero-init up-projections), so
+    # move them off it: the parity check must see attention, not a bypass.
+    if model.trunk.tower is not None:
+        with torch.no_grad():
+            for block in model.trunk.tower.blocks:
+                block.up.weight.normal_(std=0.1)
     # The fusion projections and proves-best head are zero-init, which would make
     # every conditioned pass equal the plain one -- perturb them so a populated
     # evidence set genuinely exercises the fusion + gain path.
@@ -206,9 +220,10 @@ def _reference(model, spatial, scalar, moves, ev):
     return out
 
 
+@pytest.mark.parametrize("trunk", TRUNKS)
 @pytest.mark.parametrize("kind", ["empty", "partial", "full"])
-def test_wrappers_match_training_forward(kind):
-    model = _random_model()
+def test_wrappers_match_training_forward(kind, trunk):
+    model = _random_model(trunk)
     cache = ProposalCacheExportModel(model).eval()
     step = ProposalStepExportModel(model).eval()
 
@@ -285,10 +300,11 @@ def _export_pair(tmp_path, model):
     return cache_path, step_path
 
 
+@pytest.mark.parametrize("trunk", TRUNKS)
 @pytest.mark.parametrize("kind", ["empty", "partial", "full"])
-def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, kind):
+def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, kind, trunk):
     ort = pytest.importorskip("onnxruntime")
-    model = _random_model()
+    model = _random_model(trunk)
     cache_path, step_path = _export_pair(tmp_path, model)  # both traced at M=5
     cache_sess = ort.InferenceSession(str(cache_path), providers=["CPUExecutionProvider"])
     step_sess = ort.InferenceSession(str(step_path), providers=["CPUExecutionProvider"])

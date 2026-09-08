@@ -27,6 +27,7 @@ from scribblez import paths as paths_mod
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.onnx_export import export_onnx, legacy_checkpoint_condition
 from scribblez.paths import TagPaths
+from scribblez.spatial_trunk import transformer_config
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
@@ -55,6 +56,7 @@ def main() -> int:
         trunk_channels=config["trunk_channels"],
         num_blocks=config["num_blocks"],
         num_heads=config["num_heads"],
+        transformer=transformer_config(config),
     )
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()

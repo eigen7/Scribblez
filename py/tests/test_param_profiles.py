@@ -10,11 +10,11 @@ from dataclasses import dataclass
 
 import pytest
 from scribblez import params as params_mod
+from scribblez import workloads
 from scribblez.dashboard import tasks
 from scribblez.params import param
 from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER
 from scribblez.workloads import WorkloadSpec
-from scribblez.workloads.position_eval import PROFILES
 
 
 @dataclass(frozen=True)
@@ -122,19 +122,16 @@ def test_create_task_resolves_and_records_the_profile(tmp_path, monkeypatch):
         tasks.create_task(spec, "t3", {}, profile="huge")
 
 
-def test_position_eval_profiles_are_one_per_trunk():
-    """The registered recipes: each sets its trunk, the transformer's turns on
-    gradient clipping (the conv one trains as its runs always have), and the
-    default is the transformer."""
-    from scribblez import workloads
-
-    spec = workloads.get("position_eval")
-    assert (
-        set(PROFILES) == {TRUNK_TRANSFORMER, TRUNK_CONV}
-        and spec.default_profile == TRUNK_TRANSFORMER
-    )
+@pytest.mark.parametrize("workload", ["position_eval", "move_set_eval"])
+def test_trainer_profiles_are_one_per_trunk(workload):
+    """The recipes both trainers register: each sets its trunk, the
+    transformer's turns on gradient clipping (the conv one trains as its runs
+    always have), and the default is the transformer."""
+    spec = workloads.get(workload)
+    assert set(spec.profiles) == {TRUNK_TRANSFORMER, TRUNK_CONV}
+    assert spec.default_profile == TRUNK_TRANSFORMER
     tf = spec.profile_defaults(TRUNK_TRANSFORMER)
     cnn = spec.profile_defaults(TRUNK_CONV)
     assert tf["trunk"] == TRUNK_TRANSFORMER and cnn["trunk"] == TRUNK_CONV
     assert tf["grad_clip"] > 0 and cnn["grad_clip"] == 0
-    assert tf["batch_size"] == cnn["batch_size"]  # a knob no profile names agrees
+    assert tf["num_blocks"] == cnn["num_blocks"]  # a knob no profile names agrees

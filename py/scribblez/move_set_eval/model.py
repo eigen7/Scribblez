@@ -51,6 +51,8 @@ import torch.nn.functional as F
 from scribblez.evidence_fusion import EvidenceFusion, EvidenceInputs
 from scribblez.footprint_spatial import ANCHORED, CATCH_ALL, SIDE, SLOTS_PER_CELL
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
+from scribblez.supply_registers import TileSupplyRegisters
+from scribblez.transformer_tower import TransformerConfig
 
 from .moves import move_encoding_dims
 from .targets import PLANE_NAMES
@@ -125,12 +127,24 @@ class MoveSetEvalModel(nn.Module):
         num_heads: int = 4,
         board_size: int = 15,
         lexicon_module: nn.Module | None = None,
+        transformer: TransformerConfig | None = None,
     ):
         super().__init__()
         self.board_size = board_size
         self._backbone_frozen = False
+        # Shared trunk: stem + scalar injection + tower. Under the transformer
+        # tower it carries the tile-supply register tokens, so the placement-plane
+        # readout can gate a square's cross-checks on whether those tiles are
+        # available, the way the teacher's placement heads do (supply_registers.py).
         self.trunk = SpatialTrunk(
-            spatial_planes, scalar_size, trunk_channels, num_blocks, lexicon_module=lexicon_module
+            spatial_planes,
+            scalar_size,
+            trunk_channels,
+            num_blocks,
+            lexicon_module=lexicon_module,
+            transformer=transformer,
+            registers=(TileSupplyRegisters(trunk_channels, scalar_size) if transformer else None),
+            board_size=board_size,
         )
         _, num_scalars, letter_vocab, cells = move_encoding_dims()
         # The flattened board tokens lose their grid identity; a learned

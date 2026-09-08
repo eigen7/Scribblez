@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import torch
 
 from scribblez.move_set_eval.model import MoveSetEvalModel
+from scribblez.spatial_trunk import transformer_config
 
 # What the model needs from the student's config to be rebuilt without it.
 STUDENT_CONFIG_KEYS = (
@@ -21,6 +22,10 @@ STUDENT_CONFIG_KEYS = (
     "trunk_channels",
     "num_blocks",
     "num_heads",
+    "trunk",
+    "transformer_mid_channels",
+    "transformer_heads",
+    "transformer_ffn_channels",
     "open_leaves",
     "move_encoding_version",
 )
@@ -33,6 +38,7 @@ def build_model(student_cfg: dict) -> MoveSetEvalModel:
         trunk_channels=student_cfg["trunk_channels"],
         num_blocks=student_cfg["num_blocks"],
         num_heads=student_cfg["num_heads"],
+        transformer=transformer_config(student_cfg),
     )
 
 

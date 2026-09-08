@@ -59,11 +59,24 @@ from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
 from scribblez.params import param
 from scribblez.paths import POSITION_EVAL, TagPaths
 from scribblez.selfplay import hasty_player_spec, run_games
+from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
 from scribblez.workloads import mset_targets, pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
 
 # The tag's pair store, under the tag's data/ dir (locally and in the bucket).
 SLOGS_DIR = "slogs"
+
+
+# Parameter profiles (WorkloadSpec.profiles): one recipe per trunk, the values
+# the new-tag form and the CLI's --profile start from -- position_eval's
+# recipes, carried over: the transformer arm trains under gradient clipping
+# (the standard transformer safeguard the conv tower never needed), the conv
+# arm as its runs have. Each is a partial override of the dataclass defaults
+# below, so a knob no profile names has the same value under both.
+PROFILES = {
+    TRUNK_TRANSFORMER: {"trunk": TRUNK_TRANSFORMER, "grad_clip": 1.0},
+    TRUNK_CONV: {"trunk": TRUNK_CONV},
+}
 
 
 @dataclass(frozen=True)
@@ -190,8 +203,27 @@ class MoveSetEvalParams:
         "unused by the schedule_free arm, which has no cycle",
     )
     weight_decay: float = param(1e-4, "AdamW weight decay")
+    grad_clip: float = param(
+        0.0, "clip each step's gradient to this global norm (clip_grad_norm_); 0 = no clipping"
+    )
     num_blocks: int = param(10, "board-trunk residual blocks")
     trunk_channels: int = param(192, "board-trunk width")
+    trunk: str = param(
+        TRUNK_CONV,
+        "board-trunk tower (scribblez/spatial_trunk.py): 'conv' is the residual conv tower; "
+        "'transformer' is the KataGo-style nested-bottleneck transformer tower over the "
+        "cells as tokens plus 27 tile-supply register tokens (rack / unseen pool / opp "
+        "leave), so the placement-plane readout can gate a square's cross-checks on "
+        "whether those tiles are available",
+        choices=TRUNKS,
+    )
+    transformer_mid_channels: int = param(
+        192, "transformer trunk: width inside each nested-bottleneck block"
+    )
+    transformer_heads: int = param(
+        6, "transformer trunk: attention heads per layer (head dim = mid channels / heads)"
+    )
+    transformer_ffn_channels: int = param(512, "transformer trunk: SwiGLU FFN hidden width")
     num_heads: int = param(4, "cross-attention heads")
     lambda_sd: float = param(0.004, "score-diff loss weight")
     lambda_planes: float = param(1.0, "placement-plane softmax-CE weight (roadmap item 1 readouts)")
@@ -410,6 +442,8 @@ SPEC = WorkloadSpec(
     sync_data_dirs=(SLOGS_DIR,),
     # Pin the teacher's generation before the params are frozen into task.json.
     finalize="scribblez.workloads.move_set_eval:finalize",
+    profiles=PROFILES,
+    default_profile=TRUNK_TRANSFORMER,
     # Shown up front by the new-tag form; the rest are advanced. The required
     # teacher first, then the run's shape -- its information condition, epoch
     # budget (a fixed horizon, unlike position_eval's open-ended run), corpus
