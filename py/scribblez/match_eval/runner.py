@@ -49,9 +49,9 @@ def _assigned_model(paths: TagPaths, worker_id: str) -> Path | None:
 
 def _step_companion(onnx_path: Path) -> Path:
     """Where a move-proposal export's step graph sits beside the cache graph
-    the ledger names -- in the inbox as in the tag's models/ (TagPaths.
-    proposal_step_path): a step/ subdirectory the model_epoch_* glob never
-    sees."""
+    the ledger names -- in the inbox as in the tag's models/
+    (TagPaths.proposal_step_path): a step/ subdirectory the model_epoch_* glob
+    never sees."""
     return onnx_path.parent / "step" / onnx_path.name
 
 

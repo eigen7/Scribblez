@@ -244,6 +244,19 @@ def test_trajectory_width_formulas():
     assert max_pool_width(params) > max_evidence_width(params)
 
 
+def test_match_sim_budget_is_refused_past_the_trained_width():
+    """UltimateBot's last conditioned pass reads max_sims - 1 sims, and the
+    model trains on at most 1 + on_policy_max, so the widest budget is
+    2 + on_policy_max: the factory refuses one past it at load, and the params
+    refuse it at creation so no match role crash-loops on it."""
+    assert EvidenceTrajectoriesParams(on_policy_max=8, match_max_sims=10)
+    assert EvidenceTrajectoriesParams(on_policy_max=4, match_max_sims=6)
+    with pytest.raises(params_mod.ParamsError, match=r"\[1, 6\], got 7"):
+        EvidenceTrajectoriesParams(on_policy_max=4, match_max_sims=7)
+    with pytest.raises(params_mod.ParamsError):
+        EvidenceTrajectoriesParams(match_max_sims=0)
+
+
 # --- the e2e path (GPU) ---
 
 

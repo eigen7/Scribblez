@@ -57,7 +57,7 @@ from pathlib import Path
 
 from cloud.runtime_abi import RUNTIME_TORCH
 
-from scribblez.params import param
+from scribblez.params import ParamsError, param
 from scribblez.paths import ENGINE_DIR, MATCH_RESULTS_DIR
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.sim_evidence.position_sets import TrajectoryRecipe
@@ -222,9 +222,22 @@ class EvidenceTrajectoriesParams:
     )
     match_max_sims: int = param(
         10,
-        "UltimateBot's sim budget per turn in match play, the anchor included; at most 1 + "
-        "on_policy_max (the evidence width the model trained at, which its export stamps)",
+        "UltimateBot's sim budget per turn in match play, the anchor included; at most 2 + "
+        "on_policy_max (its last conditioned pass reads one sim fewer than the budget, and "
+        "the model trained on evidence sets of at most 1 + on_policy_max, which its export "
+        "stamps)",
     )
+
+    # Validated where the params are created (task creation, CLI), the bound
+    # the UltimateBot factory enforces at load: a budget past it would crash
+    # every match instead of one tag-creation form.
+    def __post_init__(self):
+        widest = 2 + self.on_policy_max
+        if not 1 <= self.match_max_sims <= widest:
+            raise ParamsError(
+                f"match_max_sims must be in [1, 2 + on_policy_max] = [1, {widest}], got "
+                f"{self.match_max_sims}"
+            )
 
 
 def recipe_of(params: EvidenceTrajectoriesParams) -> TrajectoryRecipe:

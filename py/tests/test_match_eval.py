@@ -11,6 +11,7 @@ from scribblez.match_eval import harness, runner
 from scribblez.match_eval.harness import RoundResult
 from scribblez.paths import DONE_SUFFIX, POSITION_EVAL, TagPaths
 from scribblez.workloads.base import WorkerContext
+from scribblez.workloads.evidence_trajectories import EvidenceTrajectoriesParams
 from scribblez.workloads.position_eval import SPEC, PositionEvalParams
 
 
@@ -218,8 +219,6 @@ def test_a_move_proposal_export_plays_as_ultimatebot(tmp_path):
     agent; a model with its step graph beside it (delivered under step/, as
     the evidence trainer exports it) is UltimateBot at the tag's own sim
     configuration, truncation included only when the tag sims truncated."""
-    from scribblez.workloads.evidence_trajectories import EvidenceTrajectoriesParams
-
     model = tmp_path / "model_epoch_0004.onnx"
     model.touch()
     plain = runner._model_player_spec(model, PositionEvalParams())
@@ -238,5 +237,8 @@ def test_a_move_proposal_export_plays_as_ultimatebot(tmp_path):
         rollouts=1000, horizon=3, leaf_model="/tags/pe/models/model_epoch_0863.onnx"
     )
     spec = runner._model_player_spec(model, truncated)
-    assert "--sim-horizon=3 --leaf-model=/tags/pe/models/model_epoch_0863.onnx" in spec
-    assert spec.startswith("--type=ultimatebot")
+    assert spec == (
+        f"--type=ultimatebot --cache-model={model} --step-model={step} "
+        "--rollouts=1000 --max-sims=10 --sim-horizon=3 "
+        "--leaf-model=/tags/pe/models/model_epoch_0863.onnx --name=model"
+    )
