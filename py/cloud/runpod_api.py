@@ -12,11 +12,16 @@ import urllib.request
 API_BASE = "https://rest.runpod.io/v1"
 
 # The public GraphQL endpoint. Unlike the REST API it needs no API key for the
-# read-only discovery queries below, but it rejects requests without a
-# User-Agent header. It is the only Runpod surface that exposes instance
-# catalog, live pricing, and stock; the REST API (RunpodClient) has no
-# discovery endpoints.
+# read-only discovery queries below. It is the only Runpod surface that
+# exposes instance catalog, live pricing, and stock; the REST API
+# (RunpodClient) has no discovery endpoints.
 GRAPHQL_URL = "https://api.runpod.io/graphql"
+
+# Sent on every request to either endpoint. Both sit behind Cloudflare, which
+# refuses urllib's default "Python-urllib/3.x" signature outright (HTTP 403,
+# "error code: 1010") -- the REST API included, where that read as a pod that
+# could never be created: every reconcile pass failed at POST /pods and the
+# slot sat in `starting` for good (September 2026). Any other name passes.
 _USER_AGENT = "scribblez-dashboard"
 
 
@@ -143,6 +148,7 @@ class RunpodClient:
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": _USER_AGENT,
             },
         )
         try:

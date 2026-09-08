@@ -97,3 +97,21 @@ def test_fetch_cloud_offers_shape(monkeypatch):
     assert set(offers) == {"cpu", "gpu"}
     assert len(offers["cpu"]) == 2
     assert len(offers["gpu"]) == 2
+
+
+def test_rest_requests_carry_a_user_agent(monkeypatch):
+    """Cloudflare in front of the REST API refuses urllib's default signature
+    with a 403; without this header no pod can be created or listed."""
+    import io
+    import urllib.request
+
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["ua"] = req.get_header("User-agent")
+        seen["auth"] = req.get_header("Authorization")
+        return io.BytesIO(b"[]")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert runpod_api.RunpodClient("k").list_pods() == []
+    assert seen == {"ua": runpod_api._USER_AGENT, "auth": "Bearer k"}
