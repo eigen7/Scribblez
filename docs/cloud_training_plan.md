@@ -2,8 +2,8 @@
 
 Status: plan-reviewed draft (critique profile, codex rival seat), revised
 after review, then extended with the machines/slots discussion. PR 2 (the
-trainer I/O contract) is implemented in the PR that carries this document.
-The review record is at the end.
+trainer I/O contract) and PR 1 (the runtime) have landed; PR 3 is next. The
+review record is at the end.
 
 ## Goal
 

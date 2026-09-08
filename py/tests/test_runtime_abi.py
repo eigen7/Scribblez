@@ -45,14 +45,26 @@ def test_a_library_the_dev_container_lacks_is_not_judged():
     assert runtime_abi.stale_libraries(worker, dev) == []
 
 
-def test_the_record_round_trips(tmp_path):
-    runtime_abi.write_record(tmp_path, "repo/worker", DEV)
-    record = runtime_abi.read_record(tmp_path)
-    assert record == {"image": "repo/worker", "versions": DEV}
+def test_the_record_round_trips_per_runtime(tmp_path):
+    """One record per image: a push of one runtime's image keeps what the
+    other's push recorded."""
+    runtime_abi.write_record(tmp_path, "engine", "repo/worker", DEV)
+    torch_versions = DEV | {"libstdc++.so.6": "libstdc++.so.6.0.36"}
+    runtime_abi.write_record(tmp_path, "torch", "repo/worker:latest-torch", torch_versions)
+    assert runtime_abi.read_records(tmp_path) == {
+        "engine": {"image": "repo/worker", "versions": DEV},
+        "torch": {"image": "repo/worker:latest-torch", "versions": torch_versions},
+    }
+    runtime_abi.write_record(tmp_path, "engine", "repo/worker", torch_versions)
+    assert runtime_abi.read_records(tmp_path)["engine"]["versions"] == torch_versions
 
 
 def test_no_record_is_no_claim(tmp_path):
-    assert runtime_abi.read_record(tmp_path) is None
+    assert runtime_abi.read_records(tmp_path) is None
+    # A record from before images were keyed by runtime says nothing either.
+    runtime_abi.record_path(tmp_path).parent.mkdir(parents=True)
+    runtime_abi.record_path(tmp_path).write_text('{"image": "w", "versions": {}}')
+    assert runtime_abi.read_records(tmp_path) is None
 
 
 def test_the_image_probe_agrees_with_reading_the_filesystem():

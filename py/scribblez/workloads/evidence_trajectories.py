@@ -48,6 +48,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from cloud.runtime_abi import RUNTIME_TORCH
+
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR
 from scribblez.selfplay import hasty_player_spec, run_games
@@ -361,6 +363,7 @@ SPEC = WorkloadSpec(
             name="train",
             title="Fusion + proves-best trainer (GPU)",
             runner="scribblez.evidence.trainer:run",
+            runtime=RUNTIME_TORCH,
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
             kinds=("local",),

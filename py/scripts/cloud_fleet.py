@@ -137,7 +137,7 @@ def pod_create_spec(
     )
     return {
         "name": name,
-        "imageName": creds.registry.worker_image,
+        "imageName": creds.registry.image_for(spec.role(role).runtime),
         **_compute_fields(resources),
         "containerDiskInGb": container_disk_gb,
         "containerRegistryAuthId": creds.runpod.container_registry_auth_id,

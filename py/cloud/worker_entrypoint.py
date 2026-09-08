@@ -34,6 +34,8 @@ Configuration is entirely via environment variables:
                                           "ssh" or "cloud" (default: the sink's)
     SCZ_BUNDLE_ID, SCZ_HOST_ARCH,         set by the cloud bootstrap; recorded
     SCZ_BUNDLE_ARCH                       in the manifest and stats
+    SCZ_DEVICE                            torch device for a train role
+                                          (default "cuda"; read by the trainers)
 """
 
 import os
@@ -65,6 +67,7 @@ WORKER_ENV_VARS = (
     "SCZ_BUNDLE_ID",
     "SCZ_HOST_ARCH",
     "SCZ_BUNDLE_ARCH",
+    "SCZ_DEVICE",
 )
 
 

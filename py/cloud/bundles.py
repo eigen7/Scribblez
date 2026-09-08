@@ -13,6 +13,14 @@ Bucket layout:
     bundles/LATEST                        text file holding the newest bundle_id
     bundles/<bundle_id>/manifest.json     git provenance (sha, dirty flag) + arch list
     bundles/<bundle_id>/bundle-<arch>.tar.gz   one per arch in SUPPORTED_ARCHS
+    deps/positions-<digest>.tar.gz        the eval datasets a train role needs
+
+The eval datasets (scribblez/paths.py EVAL_POSITIONS_DIRS, 40 MB) are not in
+the tarballs: five per-arch copies on every deploy would be the dominant cost
+of deploying. They travel once per content version under deps/, the manifest
+names the version a bundle was deployed with, and a train role's dependency
+fetch (cloud/worker_deps.py) takes them from there. A manifest never names a
+version the bucket lacks: the deps object is uploaded before the manifest.
 
 The bundle_id is "<git-sha-12>[-dirty]-<content-hash-8>"; the content hash
 makes successive pushes from the same (possibly dirty) tree distinct.
@@ -36,7 +44,7 @@ from pathlib import Path
 
 from build import SUPPORTED_ARCHS, arch_build_dir, build_all_archs, detect_host_arch
 from scribblez.hardware import default_thread_count
-from scribblez.paths import REPO_ROOT
+from scribblez.paths import EVAL_POSITIONS_DIRS, REPO_ROOT
 
 from cloud.credentials import R2Credentials
 from cloud.r2 import bucket_path, rclone
@@ -58,6 +66,7 @@ GENERIC_ARCH = "x86-64"
 
 BUNDLES_PREFIX = "bundles"
 LATEST_NAME = "LATEST"
+DEPS_PREFIX = "deps"
 
 _TAR_EXCLUDE_DIRS = {"__pycache__", ".pytest_cache", ".ruff_cache"}
 
@@ -72,6 +81,10 @@ class BundleManifest:
     # bundles pushed before the field existed, which therefore never match a
     # local tree -- the first deployment against one pushes.
     source_hash: str = ""
+    # Digest of the eval datasets this bundle was deployed with, naming their
+    # deps/ object (eval_positions_object). Empty for bundles that predate it,
+    # on which a train role cannot run.
+    eval_positions: str = ""
 
 
 def _git(*args: str) -> str:
@@ -104,8 +117,9 @@ def _create_arch_tarball(arch: str, out_dir: Path) -> Path:
 
 
 def _shipped_files() -> list[tuple[str, Path]]:
-    """Every file a bundle ships, as (identity, path): each supported arch's
-    binaries plus the shared py/ tree, named as they appear inside a tarball."""
+    """Every file a deploy ships, as (identity, path): each supported arch's
+    binaries plus the shared py/ tree, named as they appear inside a tarball,
+    and the eval datasets, named as they appear under the repo root."""
     files = [
         (f"{arch}/{name}", Path(arch_build_dir(arch)) / "engine" / name)
         for arch in SUPPORTED_ARCHS
@@ -116,7 +130,53 @@ def _shipped_files() -> list[tuple[str, Path]]:
         for path in (REPO_ROOT / "py").rglob("*")
         if path.is_file() and not set(path.parts) & _TAR_EXCLUDE_DIRS
     ]
-    return sorted(files)
+    return sorted(files + eval_positions_files())
+
+
+def eval_positions_files() -> list[tuple[str, Path]]:
+    """The eval datasets' files as (path under the repo root, path)."""
+    return sorted(
+        (str(path.relative_to(REPO_ROOT)), path)
+        for root in EVAL_POSITIONS_DIRS
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+
+
+def eval_positions_digest(files=None) -> str:
+    """A content digest of the eval datasets (their files' names and bytes);
+    what names their deps/ object and what a worker checks its copy against."""
+    digest = hashlib.sha256()
+    for identity, path in eval_positions_files() if files is None else files:
+        digest.update(f"{identity}:{hashlib.sha256(path.read_bytes()).hexdigest()}\n".encode())
+    return digest.hexdigest()[:16]
+
+
+def eval_positions_object(digest: str) -> str:
+    """The deps/ object holding the eval datasets at `digest`."""
+    return f"{DEPS_PREFIX}/positions-{digest}.tar.gz"
+
+
+def create_eval_positions_tarball(out_dir: Path) -> Path:
+    """The eval datasets as a tarball that unpacks under a repo root."""
+    tar_path = out_dir / "positions.tar.gz"
+    with tarfile.open(tar_path, "w:gz") as tar:
+        for identity, path in eval_positions_files():
+            tar.add(path, arcname=identity)
+    return tar_path
+
+
+def push_eval_positions(r2: R2Credentials, digest: str):
+    """Upload the eval datasets under their digest, unless the bucket has that
+    version already (it is content-addressed, so an existing object is the
+    same bytes)."""
+    dest = bucket_path(r2, eval_positions_object(digest))
+    if rclone(r2, "lsf", dest, capture=True).stdout.strip():
+        return
+    with tempfile.TemporaryDirectory(prefix="scribblez-positions-") as tmp:
+        tar_path = create_eval_positions_tarball(Path(tmp))
+        res = rclone(r2, "copyto", str(tar_path), dest)
+        assert res.returncode == 0, "upload of the eval datasets failed"
 
 
 def source_hash(cache: dict | None = None) -> str | None:
@@ -162,6 +222,7 @@ def create_bundle(out_dir: Path) -> tuple[list[Path], BundleManifest]:
         git_dirty=dirty,
         archs=list(SUPPORTED_ARCHS),
         source_hash=source_hash(),
+        eval_positions=eval_positions_digest(),
     )
     (out_dir / "manifest.json").write_text(json.dumps(asdict(manifest), indent=2) + "\n")
     return tarballs, manifest
@@ -172,6 +233,7 @@ def push_bundle(r2: R2Credentials) -> BundleManifest:
     with tempfile.TemporaryDirectory(prefix="scribblez-bundle-") as tmp:
         tmp_dir = Path(tmp)
         tarballs, manifest = create_bundle(tmp_dir)
+        push_eval_positions(r2, manifest.eval_positions)
         dest = bucket_path(r2, BUNDLES_PREFIX, manifest.bundle_id)
         for path in [*tarballs, tmp_dir / "manifest.json"]:
             res = rclone(r2, "copyto", str(path), f"{dest}/{path.name}")

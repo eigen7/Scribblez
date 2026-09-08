@@ -7,13 +7,16 @@ private registry repo named in <mount>/cloud/credentials.json
 (registry.worker_image); `docker login` for that registry must have been run
 beforehand.
 
-The worker image contains dependencies only -- code and binaries reach workers
+Two images come out of one Dockerfile, one per runtime a role declares
+(py/cloud/runtime_abi.py): the engine runtime, and the torch runtime layered
+on it for the train roles, pushed under the engine image's tag with "-torch"
+appended. Both contain dependencies only -- code and binaries reach workers
 through R2 bundles (py/scripts/cloud_push_binaries.py) -- but those
-dependencies are the dev image's, so the two are a matched pair: bundles built
-in a dev image whose libraries have moved cannot load on a worker image built
-before they did. build_docker_image.py therefore runs this too, and each push
-records what the image provides (cloud/runtime_abi.py) so the dev container can
-refuse to deploy a bundle the published image cannot run.
+dependencies are the dev image's, so the images are a matched set: bundles
+built in a dev image whose libraries have moved cannot load on a worker image
+built before they did. build_docker_image.py therefore runs this too, and
+each push records what its image provides (cloud/runtime_abi.py) so the dev
+container can refuse to deploy a bundle a published image cannot run.
 """
 
 import argparse
@@ -40,12 +43,11 @@ def mount_dir(config) -> Path:
     return Path(path)
 
 
-def load_worker_image_name(config) -> str:
+def load_registry(config):
     _repo_py_on_path()
     from cloud.credentials import load_credentials
 
-    creds = load_credentials(mount_dir(config) / "cloud" / "credentials.json")
-    return creds.registry.worker_image
+    return load_credentials(mount_dir(config) / "cloud" / "credentials.json").registry
 
 
 def probe_versions(image: str) -> dict[str, str]:
@@ -64,24 +66,50 @@ def probe_versions(image: str) -> dict[str, str]:
     return runtime_abi.parse_versions(res.stdout)
 
 
-def build_and_push(config) -> str:
-    """Build the worker image from the dev image, push it, and record what it
-    provides. Returns the image name."""
+def dev_torch_spec(dev_image: str) -> str:
+    """The pip requirement pinning torch to the dev image's version, e.g.
+    "torch==2.9.0+cu129"."""
+    res = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            dev_image,
+            "python3",
+            "-c",
+            "import torch; print(torch.__version__)",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return f"torch=={res.stdout.strip()}"
+
+
+def build_and_push(config) -> list[str]:
+    """Build both worker images from the dev image, push them, and record what
+    each provides. Returns the image names."""
     _repo_py_on_path()
     from cloud import runtime_abi
 
-    image = load_worker_image_name(config)
-    for cmd in (
-        ["docker", "build", "-t", image,
-         "--build-arg", f"DEV_IMAGE={config.image}", str(WORKER_CONTEXT)],
-        ["docker", "push", image],
-    ):  # fmt: skip
-        print(f"$ {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
-    versions = probe_versions(image)
-    runtime_abi.write_record(mount_dir(config), image, versions)
-    print(f"Pushed {image}, providing {json.dumps(versions)}.")
-    return image
+    registry = load_registry(config)
+    torch_spec = dev_torch_spec(config.image)
+    images = []
+    for runtime in runtime_abi.RUNTIMES:
+        image = registry.image_for(runtime)
+        for cmd in (
+            ["docker", "build", "-t", image, "--target", runtime_abi.DOCKER_TARGET[runtime],
+             "--build-arg", f"DEV_IMAGE={config.image}", "--build-arg", f"TORCH_SPEC={torch_spec}",
+             str(WORKER_CONTEXT)],
+            ["docker", "push", image],
+        ):  # fmt: skip
+            print(f"$ {' '.join(cmd)}")
+            subprocess.run(cmd, check=True)
+        versions = probe_versions(image)
+        runtime_abi.write_record(mount_dir(config), runtime, image, versions)
+        print(f"Pushed {image} ({runtime} runtime), providing {json.dumps(versions)}.")
+        images.append(image)
+    return images
 
 
 def main():

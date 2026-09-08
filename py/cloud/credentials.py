@@ -16,6 +16,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from cloud.runtime_abi import RUNTIME_ENGINE, RUNTIMES, TORCH_TAG_SUFFIX
+
 CREDENTIALS_PATH = Path("/workspace/mount/cloud/credentials.json")
 
 # Value a human still needs to replace. Any field left equal to this (or
@@ -58,7 +60,27 @@ class RunpodCredentials:
 
 @dataclass(frozen=True)
 class RegistryConfig:
+    # The engine-runtime worker image, "<repo>[:<tag>]"; the torch-runtime
+    # image is the same repo under the tag with TORCH_TAG_SUFFIX appended
+    # ("latest" when none is given), so one credential names both.
     worker_image: str
+
+    def image_for(self, runtime: str) -> str:
+        """The image a role of `runtime` (cloud/runtime_abi.py) runs on."""
+        assert runtime in RUNTIMES, runtime
+        if runtime == RUNTIME_ENGINE:
+            return self.worker_image
+        repo, tag = _split_tag(self.worker_image)
+        return f"{repo}:{tag}{TORCH_TAG_SUFFIX}"
+
+
+def _split_tag(image: str) -> tuple[str, str]:
+    """("<repo>", "<tag>") of an image name, the tag "latest" when it carries
+    none. A colon before the last slash belongs to a registry port."""
+    head, _, last = image.rpartition("/")
+    repo_last, colon, tag = last.partition(":")
+    repo = f"{head}/{repo_last}" if head else repo_last
+    return repo, (tag if colon else "latest")
 
 
 @dataclass(frozen=True)

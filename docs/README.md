@@ -65,6 +65,10 @@
   rented cloud CPUs (Runpod): the stable dependency-only worker image, per-arch
   code bundles through R2, the fleet CLI, and results syncing back to the
   local mount for unchanged analysis.
+- **[cloud_training_plan.md](cloud_training_plan.md)** — plan-reviewed design
+  for running the trainers on rented GPU pods, several tags in parallel: the
+  trainer's record/controls contract (landed), the runtime (landed), and the
+  pod-as-machine shape for the slot model.
 - **[master_dashboard.md](master_dashboard.md)** — the React dashboard as the
   single entrypoint for all work: the workload registry, the job-control
   plane (launch/stop local and cloud workers from the browser), and

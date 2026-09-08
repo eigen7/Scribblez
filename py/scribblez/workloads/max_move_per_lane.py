@@ -7,6 +7,8 @@ eval is train accuracy plus the frozen lane-analysis GCG dataset).
 
 from dataclasses import dataclass
 
+from cloud.runtime_abi import RUNTIME_TORCH
+
 from scribblez.params import param
 from scribblez.workloads.base import RoleSpec, WorkloadSpec
 from scribblez.workloads.position_eval import TRAINER_STATS
@@ -80,6 +82,7 @@ SPEC = WorkloadSpec(
             name="train",
             title="Trainer (GPU)",
             runner="scribblez.max_move_per_lane.trainer:run",
+            runtime=RUNTIME_TORCH,
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
             kinds=("local",),

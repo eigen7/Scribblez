@@ -137,7 +137,7 @@ def main() -> int:
     torch.set_float32_matmul_precision("high")
     model, spatial_planes = _build_model(params, device)
     quality = load_position_eval_quality(spatial_planes, params.face_up_leaves)
-    if quality is None or quality["gt"]["placement"] is None:
+    if quality["gt"]["placement"] is None:
         timed_print("no quality dataset with placement planes: nothing to backfill")
         return 1
     conn = db.connect(paths.dashboard_db)

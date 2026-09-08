@@ -49,24 +49,32 @@ Principles:
 
 ## The pieces
 
-- **Worker image** (`docker-setup/worker/`,
-  `./build_and_push_worker_image.py`): dependency-only runtime image with the
-  baked-in `bootstrap.py` entrypoint — no repo code, binaries, or lexica.
-  It supplies the runtime every bundle links against, so it is a matched pair
-  with the dev image: a compiler upgrade there (gcc-16's newer libstdc++, say)
-  leaves every bundle unable to load until it is rebuilt. Keeping up with that
-  is not anyone's job to remember — `build_docker_image.py` builds and pushes
-  it right after the dev image, ssh machines pull it when the dashboard next
-  creates a container, and every push records what the image provides
-  (`py/cloud/runtime_abi.py`) so a deploy from a dev container the image has
-  fallen behind refuses instead of shipping binaries no worker can start. The dashboard's ssh
-  worker slots ([master_dashboard.md](master_dashboard.md)) run this same
-  image on operator-owned machines, GPU roles included: it carries TensorRT's
-  2 GB builder resource so a worker can turn an ONNX export into an engine
-  plan, which a machine with its own GPU must do for itself -- a plan is valid
-  only for the compute capability it was built on, so the controller cannot
-  build one for it. Such a container is run with `--gpus all`, which needs the
-  NVIDIA container toolkit installed on that machine.
+- **Worker images** (`docker-setup/worker/`,
+  `./build_and_push_worker_image.py`): dependency-only runtime images with
+  the baked-in `bootstrap.py` entrypoint — no repo code, binaries, or lexica.
+  Two come out of the one Dockerfile, one per *runtime* a role declares
+  (`RoleSpec.runtime`, `py/cloud/runtime_abi.py`): the **engine** image
+  (numpy, the C++ and NVIDIA runtime libraries) every generator and match-eval
+  slot runs, and the **torch** image, a further stage adding PyTorch and the
+  training stack in a venv, for the train roles; it is pushed under the
+  engine image's tag with `-torch` appended, so one credential names both.
+  They supply the runtime every bundle links against, so they are a matched
+  set with the dev image: a compiler upgrade there (gcc-16's newer libstdc++,
+  say) leaves every bundle unable to load until they are rebuilt, and torch
+  is pinned to the dev image's own version. Keeping up with that is not
+  anyone's job to remember — `build_docker_image.py` builds and pushes both
+  right after the dev image, ssh machines pull the one their slot's role
+  needs when the dashboard next creates a container, and every push records
+  what its image provides so a deploy from a dev container an image has
+  fallen behind refuses instead of shipping binaries no worker can start. The
+  dashboard's ssh worker slots ([master_dashboard.md](master_dashboard.md))
+  run these same images on operator-owned machines, GPU roles included: the
+  engine image carries TensorRT's 2 GB builder resource so a worker can turn
+  an ONNX export into an engine plan, which a machine with its own GPU must
+  do for itself -- a plan is valid only for the compute capability it was
+  built on, so the controller cannot build one for it. Such a container is
+  run with `--gpus all`, which needs the NVIDIA container toolkit installed
+  on that machine.
 - **Bundles** (`py/cloud/bundles.py`, `./py/scripts/cloud_push_binaries.py`):
   the engine builds once per supported CPU microarchitecture
   (`py/build.py --build-for-all-archs`); a push uploads one tarball per arch
@@ -87,10 +95,14 @@ Principles:
   a bundle behind the controller would otherwise ignore the parameter and
   deliver data silently unlike its fleetmates'. Dispatches to the (workload,
   role) runner from the workload registry, fetches the runner's declared data
-  deps from public upstreams, writes a provenance manifest to the bucket, and
-  loops the runner's cycle, delivering whole output files through the results
-  sink (`py/cloud/sinks.py`, which orders uploads so the bucket only ever
-  presents complete outputs). SIGTERM flushes completed output and exits.
+  deps (`py/cloud/worker_deps.py`: lexica and Macondo tables from their public
+  upstreams; for a train role also the eval datasets, from the bucket's
+  `deps/` prefix at the content version its bundle's manifest names, which
+  the deploy uploads once per version rather than 40 MB into every per-arch
+  tarball), writes a provenance manifest to the bucket, and loops the
+  runner's cycle, delivering whole output files through the results sink
+  (`py/cloud/sinks.py`, which orders uploads so the bucket only ever presents
+  complete outputs). SIGTERM flushes completed output and exits.
 - **Fleet control** (`./py/scripts/cloud_fleet.py`): `up` / `status` / `down`
   over the Runpod REST API. `--bundle latest` resolves to a concrete bundle id
   at launch, so one fleet is homogeneous even if newer bundles land meanwhile.
@@ -115,9 +127,11 @@ Principles:
   `GET /api/cloud/offers` to drive its instance selector.
 - **GPU pod specs** (`pod_create_spec` in cloud_fleet.py): builds either a CPU
   or a GPU pod spec; a `RoleSpec` declares `gpu=True` for roles that need GPU
-  hardware, and the dashboard offers instance types accordingly.
-  Forward-looking: no cloud role declares `gpu` today, and the worker image is
-  CPU-only.
+  hardware, and the dashboard offers instance types accordingly. The pod's
+  image follows the role's runtime. Forward-looking: no cloud role declares
+  `gpu` today; the train roles run on the torch image but are still local-only
+  slots -- [cloud_training_plan.md](cloud_training_plan.md) is the plan for
+  putting them on pods.
 
 ## The daily loop
 

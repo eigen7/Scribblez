@@ -24,6 +24,8 @@ resources (threads/vcpus) live on the worker slots.
 
 from dataclasses import dataclass
 
+from cloud.runtime_abi import RUNTIME_TORCH
+
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR
@@ -152,6 +154,17 @@ class PositionEvalParams:
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
 
 
+def fetch_train_deps(params):
+    """Runtime data the trainer needs beyond the bundle: the engine's default
+    lexicon (the FFI session loads it before the model is built) and the
+    position-evaluation eval datasets. Macondo's strategy tables it does not
+    need -- nothing here plays a move."""
+    from cloud import worker_deps
+
+    worker_deps.fetch_lexicon(worker_deps.DEFAULT_LEXICON)
+    worker_deps.fetch_eval_positions()
+
+
 SPEC = WorkloadSpec(
     name="position_eval",
     title="Train position evaluation",
@@ -169,6 +182,8 @@ SPEC = WorkloadSpec(
             name="train",
             title="Trainer (GPU)",
             runner="scribblez.position_eval.trainer:run",
+            runtime=RUNTIME_TORCH,
+            deps="scribblez.workloads.position_eval:fetch_train_deps",
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
             kinds=("local",),

@@ -139,27 +139,31 @@ def _intent(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> str:
     return PARK if w.role in task.gates else RUN
 
 
-def check_worker_image_current():
-    """Refuse to deploy a bundle the published worker image cannot load.
+def check_worker_images_current():
+    """Refuse to deploy a bundle a published worker image cannot load.
 
     Bundles are compiled here, in the dev container, and run there, against
-    the worker image's libraries -- so a dev image whose toolchain moved
+    the worker images' libraries -- so a dev image whose toolchain moved
     produces binaries no worker can start (August 2026: gcc-16's libstdc++,
     which crash-looped every ssh worker at import). build_docker_image.py
-    keeps the two in step; this catches the case where something did not.
+    keeps them in step; this catches the case where something did not.
 
-    Says nothing when no push has recorded what the image provides, which is
-    all that can honestly be said about it.
+    Every recorded image is checked, whichever runtime this deploy's slots
+    will use: a task's slots can run either, and both are rebuilt together.
+    Says nothing when no push has recorded what the images provide, which is
+    all that can honestly be said about them.
     """
-    record = runtime_abi.read_record(DEFAULT_MOUNT_ROOT)
-    if record is None:
+    records = runtime_abi.read_records(DEFAULT_MOUNT_ROOT)
+    if records is None:
         return
-    stale = runtime_abi.stale_libraries(record.get("versions", {}), runtime_abi.local_versions())
-    assert not stale, (
-        f"the worker image ({record.get('image')}) is older than this dev container on "
-        f"{', '.join(stale)}; bundles built here will not load on it. Rebuild it from the "
-        "host: ./build_and_push_worker_image.py"
-    )
+    local = runtime_abi.local_versions()
+    for record in records.values():
+        stale = runtime_abi.stale_libraries(record.get("versions", {}), local)
+        assert not stale, (
+            f"the worker image ({record.get('image')}) is older than this dev container on "
+            f"{', '.join(stale)}; bundles built here will not load on it. Rebuild it from the "
+            "host: ./build_and_push_worker_image.py"
+        )
 
 
 def _key(spec: workloads.WorkloadSpec, tag: str, worker_id: str = "") -> str:
@@ -342,7 +346,7 @@ class WorkerManager:
     def deploy(self, spec, task: tasks.TaskRecord) -> str:
         """Build the controller's tree, push it unless the bucket already has
         it, and pin the task to the result. Returns the bundle id."""
-        check_worker_image_current()
+        check_worker_images_current()
         creds, _ = self._cloud()
         manifest = deploy_current_tree(creds.r2, cache=self._source_digests)
         task.bundle_id = manifest.bundle_id
@@ -556,12 +560,11 @@ class WorkerManager:
             # Creating a container is the moment to take a rebuilt worker
             # image; `docker run --pull=never` below then fails fast rather
             # than pulling under the dashboard.
-            machine.pull_image(creds.registry.worker_image)
+            role = spec.role(w.role)
+            image = creds.registry.image_for(role.runtime)
+            machine.pull_image(image)
             machine.run_container(
-                _container_name(spec, task.tag, w.worker_id),
-                creds.registry.worker_image,
-                env,
-                gpus=spec.role(w.role).gpu,
+                _container_name(spec, task.tag, w.worker_id), image, env, gpus=role.gpu
             )
         except SshMachineError as e:
             # The slot will read `starting` until this succeeds, since nothing

@@ -6,17 +6,31 @@ fetches them from the public Woogles/liwords URL, exactly as setup_wizard.py
 does for the dev machine) and no Macondo data (fetched from the public Macondo
 repo at the tag pinned in py/build.py).
 
+The eval datasets a train role scores every checkpoint against are
+git-tracked, so a checkout has them; a worker running from a bundle takes them
+from the bucket's deps/ prefix, at the version its bundle's manifest names
+(cloud/bundles.py).
+
 Every fetch is idempotent and short-circuits when the target files already
 exist -- so worker restarts skip it, and running the worker entrypoint inside
 the dev container (whose mount dir setup_wizard.py/build.py already populated)
 touches nothing.
 """
 
+import os
+import shutil
 import subprocess
+import tarfile
+import tempfile
 import urllib.request
 from pathlib import Path
 
 from build import MACONDO_REPO_URL, MACONDO_TAG
+from scribblez.paths import EVAL_POSITIONS_DIRS, REPO_ROOT
+
+from cloud import bundles
+from cloud.r2 import bucket_path, rclone
+from cloud.sinks import r2_from_env
 
 MOUNT_ROOT = Path("/workspace/mount")
 LEXICA_DIR = MOUNT_ROOT / "lexica"
@@ -96,6 +110,43 @@ def fetch_macondo_strategy(lexicon: str):
     assert leaves.is_file() and peg.is_file(), (
         f"Macondo strategy data for {lexicon} missing after sparse checkout"
     )
+
+
+def fetch_eval_positions():
+    """Ensure the eval datasets (EVAL_POSITIONS_DIRS) are under the repo root
+    at the version this worker's bundle was deployed with.
+
+    On a machine running the checkout itself -- a local slot, a CLI -- there
+    is no bundle and the datasets are the checkout's; they are required to
+    be there. A bundle-run worker (SCZ_BUNDLE_ID set) compares its copy's
+    digest against the manifest's and replaces it from the bucket when they
+    differ, which also covers a redeploy that changed the datasets."""
+    bundle_id = os.environ.get("SCZ_BUNDLE_ID")
+    if not bundle_id:
+        missing = [d for d in EVAL_POSITIONS_DIRS if not d.is_dir()]
+        assert not missing, f"eval datasets missing from the checkout: {missing}"
+        return
+    r2 = r2_from_env()
+    manifest = bundles.read_manifest(r2, bundle_id)
+    assert manifest is not None and manifest.eval_positions, (
+        f"bundle {bundle_id} names no eval datasets; it predates them. Redeploy."
+    )
+    want = manifest.eval_positions
+    if all(d.is_dir() for d in EVAL_POSITIONS_DIRS) and bundles.eval_positions_digest() == want:
+        return
+    print(f"fetching eval datasets {want} from the bucket")
+    with tempfile.TemporaryDirectory(prefix="scribblez-positions-") as tmp:
+        tar_path = Path(tmp) / "positions.tar.gz"
+        res = rclone(
+            r2, "copyto", bucket_path(r2, bundles.eval_positions_object(want)), str(tar_path)
+        )
+        assert res.returncode == 0, f"download of the eval datasets {want} failed"
+        for d in EVAL_POSITIONS_DIRS:
+            shutil.rmtree(d, ignore_errors=True)
+        with tarfile.open(tar_path) as tar:
+            tar.extractall(REPO_ROOT, filter="data")
+    got = bundles.eval_positions_digest()
+    assert got == want, f"eval datasets unpacked at {got}, manifest names {want}"
 
 
 def fetch_kill_test_deps():
