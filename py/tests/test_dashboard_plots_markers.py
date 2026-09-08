@@ -25,11 +25,14 @@ def test_metrics_loss_grid_adds_control_markers(tmp_path):
     grid = plots.metrics_loss_grid(conn)
     assert grid is not None
     # The grid stacks every knob-variant row; each row's loss figure carries its
-    # own markers, so select recursively within a row.
+    # own markers, so select recursively within a row. Events are recorded in
+    # positions (150, 250) but the axis is now epoch, so their markers land at
+    # the interpolated epoch between the seeded (epoch, positions) checkpoints
+    # (1, 100), (2, 200), (3, 300): 1.5 and 2.5.
     for axis_row in _rows_by_name(grid, LOSS_ROW_NAMES).values():
         spans = list(axis_row.select({"type": Span}))
         labels = list(axis_row.select({"type": Label}))
-        assert {int(s.location) for s in spans} == {150, 250}
+        assert {round(s.location, 6) for s in spans} == {1.5, 2.5}
         assert len(labels) == 2
 
 
@@ -47,7 +50,7 @@ def test_db_loss_weights_drive_stacked_plot(tmp_path):
     assert type(plots.metrics_loss_grid(conn)).__name__ == "Column"  # stacked variants
 
     # Normalized bands are each point's share of the weighted column total.
-    _, series = plots._metrics_series(conn)
+    _, series, _ = plots._metrics_series(conn)
     bands = plots._loss_bands(series, db.read_loss_weights(conn), normalized=True)
     assert [lbl for lbl, _ in bands] == ["loss_a", "0.5 x loss_b"]  # weight-1 label omits factor
     total = sum(y for _, y in bands)  # 0.6*1 + 0.4*0.5 = 0.8 -> shares 0.75, 0.25
@@ -92,10 +95,13 @@ def test_metrics_loss_grid_knob_variants(tmp_path):
         db.write_metrics(
             conn, epoch, {"positions": pos, "loss": 1.0, "loss_a": 0.6, "top1_acc": 0.5}
         )
-    _assert_x_axis_variants(plots.metrics_loss_grid(conn), LOSS_ROW_NAMES, 2, 100, 10000)  # lines
+    # The x-axis is epoch (0..3), not positions; the log variant's padded range
+    # still drops the epoch-0 point (log excludes non-positive values), so its
+    # covered span is the positive epochs 1..3.
+    _assert_x_axis_variants(plots.metrics_loss_grid(conn), LOSS_ROW_NAMES, 2, 1, 3)  # lines
     db.write_loss_weights(conn, {"loss_a": 1.0})
     grid = plots.metrics_loss_grid(conn)
-    _assert_x_axis_variants(grid, LOSS_ROW_NAMES, 2, 100, 10000)  # stack
+    _assert_x_axis_variants(grid, LOSS_ROW_NAMES, 2, 1, 3)  # stack
     rows = _rows_by_name(grid, LOSS_ROW_NAMES)
     for name, row in rows.items():
         titles = {f.title.text for f in row.select({"type": Plot})}
