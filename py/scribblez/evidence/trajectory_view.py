@@ -29,6 +29,7 @@ import numpy as np
 import torch
 
 from scribblez.evidence.checkpoints import EvidenceCheckpoint
+from scribblez.evidence_fusion import best_so_far
 from scribblez.ffi import GcgPositionInputs, gcg_position_inputs
 from scribblez.footprint_spatial import SLOTS_PER_CELL
 from scribblez.move_set_eval.evidence import build_evidence_inputs
@@ -212,7 +213,8 @@ class DecisionAnalysis:
         board_c, g_c = model.evidence_fusion(
             self._board, self._g, tokens, spatial_feats, evidence.mask
         )
-        return model.score_moves(board_c, g_c, self._e, self._pos_id)
+        best = best_so_far(evidence.obs_scalars, evidence.mask)
+        return model.score_moves(board_c, g_c, self._e, self._pos_id, best)
 
     def sim_values(self) -> np.ndarray:
         """Each trajectory candidate's sim win value, trajectory order."""

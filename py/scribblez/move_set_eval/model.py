@@ -48,7 +48,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scribblez.evidence_fusion import EvidenceFusion, EvidenceInputs
+from scribblez.evidence_fusion import EvidenceFusion, EvidenceInputs, best_so_far
 from scribblez.footprint_spatial import ANCHORED, CATCH_ALL, SIDE, SLOTS_PER_CELL
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 
@@ -165,9 +165,13 @@ class MoveSetEvalModel(nn.Module):
         self.plane_catch = nn.Linear(head_in, self.num_planes * CATCH_ALL)
 
         self.evidence_fusion = EvidenceFusion(trunk_channels, num_heads=num_heads)
-        # The proves-best head: gain >= 0 through a softplus.
+        # The proves-best head: gain >= 0 through a softplus, off the fused
+        # per-move vector plus the scalar best-so-far -- the max sim value over
+        # the evidence set (evidence_fusion.best_so_far), the known quantity the
+        # gain target is measured from, fed in directly rather than left for
+        # the head to reconstruct from the mean-pooled evidence summary.
         self.proves_best = nn.Sequential(
-            nn.Linear(head_in, trunk_channels),
+            nn.Linear(head_in + 1, trunk_channels),
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, 1),
         )
@@ -215,9 +219,12 @@ class MoveSetEvalModel(nn.Module):
 
     def load_student(self, state_dict: dict):
         """Initialize from a distilled student's state dict. The student may
-        predate the fusion stage and never has the proves-best head; those stay
-        at their fresh (zero-init / random) values. Anything else missing, or
-        anything unexpected, is a real mismatch and fails."""
+        predate the fusion stage, and its proves-best head is never taken
+        (nothing trains it there, and a student checkpoint may carry the head
+        at a width without the best-so-far input); those stay at their fresh
+        (zero-init / random) values. Anything else missing, or anything
+        unexpected, is a real mismatch and fails."""
+        state_dict = {k: v for k, v in state_dict.items() if not k.startswith("proves_best.")}
         missing, unexpected = self.load_state_dict(state_dict, strict=False)
         stray = [k for k in missing if not self._is_evidence_param(k)]
         if stray or unexpected:
@@ -283,10 +290,17 @@ class MoveSetEvalModel(nn.Module):
         )
 
     def score_moves(
-        self, board: torch.Tensor, g: torch.Tensor, e: torch.Tensor, pos_id: torch.Tensor
+        self,
+        board: torch.Tensor,
+        g: torch.Tensor,
+        e: torch.Tensor,
+        pos_id: torch.Tensor,
+        best_so_far: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Score M encoded moves (M, C) against the board map and summary --
-        plain or evidence-conditioned, the machinery is identical.
+        plain or evidence-conditioned, the machinery is identical. `best_so_far`
+        (P,) is each position's evidence-set best (evidence_fusion.best_so_far),
+        read by the proves-best head alone; None is the empty set's 0.
 
         Returns {"wld": (M,3) logits, "score_diff": (M,2) = [mean, std>0],
         "planes": (M, num_planes, NUM_CLASSES) footprint logits, PLANE_NAMES order,
@@ -329,11 +343,14 @@ class MoveSetEvalModel(nn.Module):
         catch = self.plane_catch(head_in).view(-1, self.num_planes, CATCH_ALL)
         planes = torch.cat([anchored, catch], dim=-1)  # (M, num_planes, NUM_CLASSES)
 
+        if best_so_far is None:
+            best_so_far = g.new_zeros(p)
+        gain_in = torch.cat([head_in, best_so_far[pos_id].to(head_in.dtype).unsqueeze(1)], dim=1)
         return {
             "wld": out[:, :3],
             "score_diff": torch.cat([sd_mean, sd_std], dim=1),
             "planes": planes,
-            "gain": F.softplus(self.proves_best(head_in)).squeeze(1),
+            "gain": F.softplus(self.proves_best(gain_in)).squeeze(1),
         }
 
     def forward(
@@ -363,10 +380,12 @@ class MoveSetEvalModel(nn.Module):
             move_scalars,
             move_pos_id,
         )
+        best = None
         if evidence is not None:
             tokens, spatial_feats = self.encode_evidence(board, evidence)
             board, g = self.evidence_fusion(board, g, tokens, spatial_feats, evidence.mask)
-        return self.score_moves(board, g, e, move_pos_id)
+            best = best_so_far(evidence.obs_scalars, evidence.mask)
+        return self.score_moves(board, g, e, move_pos_id, best)
 
 
 def win_equity(probs: torch.Tensor) -> torch.Tensor:

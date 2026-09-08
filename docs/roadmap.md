@@ -331,7 +331,9 @@ Trained on item 4's assembled rows, two loss components:
   is a **known scalar at inference** — the max sim value over the evidence set
   gathered so far — so it is fed to the head as an **input**, not left to be
   reconstructed from the pooled evidence (a mean pool cannot carry the max the
-  target rides on).
+  target rides on). Built: the head reads it off the evidence tokens' own
+  observed win values (`evidence_fusion.best_so_far`), in training, in the
+  dashboard's Trajectories pane, and inside the exported step graph alike.
 - **Conditioned WLD / score-diff** (auxiliary): soft-CE / Huber against the
   held-out candidate's own sim outcome, on the same rows. Sim outcomes and
   never the plain teacher, whose readout is a function of the board alone —

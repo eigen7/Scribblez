@@ -13,6 +13,7 @@ from scribblez.evidence_fusion import (
     NUM_EVIDENCE_PLANES,
     NUM_EVIDENCE_SCALARS,
     EvidenceInputs,
+    best_so_far,
 )
 from scribblez.footprint_spatial import NUM_CLASSES, SLOTS_PER_CELL
 from scribblez.move_set_eval import moves as move_enc
@@ -78,11 +79,23 @@ def _assert_equal(a: dict, b: dict, moves=slice(None), atol=0.0):
 
 def test_zero_initialized_fusion_is_the_plain_model():
     """A fresh model with a full evidence set computes exactly the plain
-    one-pass model: every fusion output projection starts at zero."""
+    one-pass model's value heads: every fusion output projection starts at
+    zero. The gain is the one head that reads the evidence set directly (its
+    best-so-far), so it matches the plain pass exactly when that best is the
+    empty set's 0 -- observed win and draw frequencies all zero -- and only
+    then."""
     counts = [2, 3]
     batch = _ragged_batch([4, 6])
     model = _model(batch)
-    _assert_equal(_forward(model, batch), _forward(model, batch, _random_evidence(2, counts)))
+    plain = _forward(model, batch)
+    evidence = _random_evidence(2, counts)
+    evidence.obs_scalars[..., :2] = torch.rand(2, evidence.mask.shape[1], 2, dtype=torch.float64)
+    conditioned = _forward(model, batch, evidence)
+    for name in ("wld", "score_diff", "planes"):
+        torch.testing.assert_close(conditioned[name], plain[name], rtol=0, atol=0)
+    assert not torch.allclose(conditioned["gain"], plain["gain"])
+    evidence.obs_scalars[..., :2] = 0.0
+    _assert_equal(plain, _forward(model, batch, evidence))
 
 
 def test_empty_evidence_passes_through_at_any_weights():
@@ -165,7 +178,9 @@ def test_staged_path_matches_the_monolithic_forward():
         tokens = torch.cat(token_parts, dim=1)
         feats = torch.cat(feat_parts, dim=1)
         board_c, g_c = model.evidence_fusion(board, g, tokens, feats, evidence.mask)
-        staged = model.score_moves(board_c, g_c, e, batch["move_pos_id"])
+        staged = model.score_moves(
+            board_c, g_c, e, batch["move_pos_id"], best_so_far(evidence.obs_scalars, evidence.mask)
+        )
 
     for name in full:
         torch.testing.assert_close(staged[name], full[name], rtol=0, atol=1e-12)
@@ -313,3 +328,63 @@ def test_collated_builder_output_drives_the_model():
     out = _forward(model, batch, evidence)
     assert out["wld"].shape == (sum(counts), 3)
     assert not torch.equal(out["wld"], _forward(model, batch)["wld"])
+
+
+def test_best_so_far_is_the_masked_max_observed_win_value():
+    """The gain head's best-so-far: the max over a set's REAL tokens of the
+    observed win value (win + draw/2, the first two observed scalars); a
+    masked-out token never counts, and an empty set is the floor 0 whatever
+    its padding holds."""
+    obs = torch.zeros(2, 3, NUM_EVIDENCE_SCALARS, dtype=torch.float64)
+    obs[0, 0, :2] = torch.tensor([0.5, 0.2])  # value 0.6
+    obs[0, 1, :2] = torch.tensor([0.9, 0.0])  # 0.9, but masked out
+    obs[0, 2, :2] = torch.tensor([0.1, 0.4])  # 0.3
+    obs[1, :, :2] = 0.9  # an empty set: padding garbage
+    mask = torch.tensor([[True, False, True], [False, False, False]])
+    assert best_so_far(obs, mask).tolist() == pytest.approx([0.6, 0.0])
+
+
+def test_best_so_far_reaches_the_gain_head_alone():
+    """score_moves' best-so-far moves the gain and nothing else; leaving it
+    out is the empty set's 0 exactly."""
+    batch = _ragged_batch([4, 6])
+    model = _model(batch)
+    with torch.no_grad():
+        board, g = model.encode_board(batch["input_spatial"], batch["input_scalar"])
+        pos_id = batch["move_pos_id"]
+        e = model.encode_moves(board, *(batch[k] for k in _MOVE_KEYS), pos_id)
+        p = board.shape[0]
+        omitted = model.score_moves(board, g, e, pos_id)
+        zero = model.score_moves(board, g, e, pos_id, torch.zeros(p, dtype=torch.float64))
+        lifted = model.score_moves(board, g, e, pos_id, torch.full((p,), 0.5, dtype=torch.float64))
+    _assert_equal(omitted, zero)
+    for name in ("wld", "score_diff", "planes"):
+        torch.testing.assert_close(lifted[name], zero[name], rtol=0, atol=0)
+    assert not torch.allclose(lifted["gain"], zero["gain"])
+
+
+def test_forward_feeds_the_evidence_sets_best_so_far_to_the_head():
+    """The monolithic forward's gain equals the staged path's with the set's
+    best-so-far handed to score_moves -- and differs from the staged path
+    that forgets it (at a non-zero best)."""
+    batch = _ragged_batch([4, 6])
+    model = _model(batch)
+    counts = [2, 1]
+    evidence = _random_evidence(2, counts)
+    # Observed win/draw frequencies in range, so best-so-far is a real value.
+    evidence.obs_scalars[..., :2] = (
+        torch.rand(2, evidence.mask.shape[1], 2, dtype=torch.float64) / 2
+    )
+    full = _forward(model, batch, evidence)
+    with torch.no_grad():
+        board, g = model.encode_board(batch["input_spatial"], batch["input_scalar"])
+        pos_id = batch["move_pos_id"]
+        e = model.encode_moves(board, *(batch[k] for k in _MOVE_KEYS), pos_id)
+        tokens, feats = model.encode_evidence(board, evidence)
+        board_c, g_c = model.evidence_fusion(board, g, tokens, feats, evidence.mask)
+        best = best_so_far(evidence.obs_scalars, evidence.mask)
+        assert bool((best > 0).all())
+        staged = model.score_moves(board_c, g_c, e, pos_id, best)
+        forgotten = model.score_moves(board_c, g_c, e, pos_id)
+    _assert_equal(full, staged)
+    assert not torch.allclose(full["gain"], forgotten["gain"])

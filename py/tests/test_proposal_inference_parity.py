@@ -416,7 +416,7 @@ def test_exported_file_contract(tmp_path):
     for stem in ("plane_attended", "plane_g"):  # the plane head: cache graph only
         assert any(stem in n for n in cache_inits), stem
         assert not any(stem in n for n in step_inits), stem
-    for stem in ("sa_q", "sa_k", "sa_v", "pb_attended", "pb_g"):  # the fusion self-attn + gain
+    for stem in ("sa_q", "sa_k", "sa_v", "pb_attended", "pb_rest"):  # the fusion self-attn + gain
         assert any(stem in n for n in step_inits), stem
 
 

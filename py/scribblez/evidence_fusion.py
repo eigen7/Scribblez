@@ -113,6 +113,20 @@ class EvidenceInputs:
     mask: torch.Tensor
 
 
+def best_so_far(obs_scalars: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """The best simmed value in each position's evidence set: the max over its
+    real tokens of the observed win value (win frequency + draw frequency / 2,
+    the first two observed scalars), 0 for an empty set -- the floor the
+    proves-best target is measured from (evidence.dataset.gain_targets), so the
+    gain head is fed the very quantity its label subtracts. Float ops only
+    (values are >= 0, so a multiplicative mask is an exact select), the step
+    graph computing it in-graph from the same inputs.
+
+    obs_scalars (P, E, NUM_EVIDENCE_SCALARS), mask (P, E) -> (P,)."""
+    value = obs_scalars[..., 0] + 0.5 * obs_scalars[..., 1]  # (P, E)
+    return (value * mask.to(value.dtype)).amax(dim=1)
+
+
 def _zero_init(linear: nn.Linear) -> nn.Linear:
     nn.init.zeros_(linear.weight)
     if linear.bias is not None:

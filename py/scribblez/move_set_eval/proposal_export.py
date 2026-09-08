@@ -21,7 +21,10 @@ score_moves vs. evidence_fusion + conditioned score_moves):
     EVIDENCE-FREE predicted planes of its candidate (from the cache graph), and
     nothing reads a conditioned plane, so the step graph does not compute one
     -- at (M, 4 * SLOTS_PER_CELL, 225) floats it would be the graph's largest
-    output by far, allocated at the engine's row ceiling for nobody.
+    output by far, allocated at the engine's row ceiling for nobody. The gain
+    head's best-so-far input is computed in-graph from the evidence tokens'
+    observed win values (evidence_fusion.best_so_far), so the engine stages
+    nothing for it.
 
 Refitter discipline (shared with onnx_export.py's MoveSetEvalExportModel, via
 the helpers in onnx_export_util.py): `dynamo=False` and
@@ -51,7 +54,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scribblez.evidence_fusion import NUM_EVIDENCE_PLANES, NUM_EVIDENCE_SCALARS
+from scribblez.evidence_fusion import NUM_EVIDENCE_PLANES, NUM_EVIDENCE_SCALARS, best_so_far
 from scribblez.footprint_spatial import CATCH_ALL, SLOTS_PER_CELL
 from scribblez.onnx_export_util import (
     architecture_signature,
@@ -140,8 +143,9 @@ class _ScoringHeads(nn.Module):
         self.num_planes = len(PLANE_NAMES)
         self.plane_attended, self.plane_g = split_concat_linear(model.plane_proj, c)
         self.plane_catch_attended, self.plane_catch_g = split_concat_linear(model.plane_catch, c)
-        # Proves-best head Linear(4C, C) -> attended/g split, then Linear(C, 1).
-        self.pb_attended, self.pb_g = split_concat_linear(model.proves_best[0], c)
+        # Proves-best head Linear(4C + 1, C) over cat([attended, g, best-so-far])
+        # -> attended / [g, best] split, then Linear(C, 1).
+        self.pb_attended, self.pb_rest = split_concat_linear(model.proves_best[0], c)
         self.pb_out = model.proves_best[2]
 
     def _cross_attention(self, e: torch.Tensor, board0: torch.Tensor) -> torch.Tensor:
@@ -179,9 +183,11 @@ class _ScoringHeads(nn.Module):
         footprint_logits = torch.cat([anchored, catch], dim=-1)  # (M, num_planes, NUM_CLASSES)
         return footprint_slot_planes(footprint_logits).flatten(2)  # (M, planes*slots, 225)
 
-    def gain(self, attended: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
-        """The proves-best expected gain (M,) >= 0 off the same fused vector."""
-        hidden = F.relu(self.pb_attended(attended) + self.pb_g(g))
+    def gain(self, attended: torch.Tensor, g: torch.Tensor, best: torch.Tensor) -> torch.Tensor:
+        """The proves-best expected gain (M,) >= 0 off the same fused vector,
+        `g` (1, 3C) and the evidence set's best-so-far `best` (1, 1) entering
+        together through the split's position-level half."""
+        hidden = F.relu(self.pb_attended(attended) + self.pb_rest(torch.cat([g, best], dim=1)))
         return F.softplus(self.pb_out(hidden)).squeeze(1)
 
 
@@ -328,7 +334,10 @@ class ProposalStepExportModel(nn.Module):
         has_ev = m.amax(dim=1, keepdim=True)  # (1, 1)
         board_c, g_c = self._fuse(board, g, tokens, spatial_feats, m, has_ev)
         attended, wld, score_diff = self.heads.value(board_c, g_c, move_enc)
-        gain = self.heads.gain(attended, g_c)
+        # Best-so-far off the evidence tokens' observed win values (the shared
+        # definition, float ops only), no extra graph input.
+        best = best_so_far(ev_obs_scalars, m).unsqueeze(1)  # (1, 1)
+        gain = self.heads.gain(attended, g_c, best)
         return wld, score_diff, gain
 
 
