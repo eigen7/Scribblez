@@ -38,6 +38,7 @@ from scribblez.evidence_fusion import (
     EvidenceInputs,
 )
 from scribblez.ffi import get_input_shapes
+from scribblez.move_set_eval import proposal_export
 from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_slot_planes
 from scribblez.move_set_eval.moves import move_encoding_dims
 from scribblez.move_set_eval.proposal_export import (
@@ -50,6 +51,7 @@ from scribblez.move_set_eval.proposal_export import (
     ProposalCacheExportModel,
     ProposalStepExportModel,
     export_proposal_cache,
+    export_proposal_pair,
     export_proposal_step,
     proposal_export_id,
 )
@@ -439,6 +441,35 @@ def test_exported_file_contract(tmp_path):
         assert not any(stem in n for n in step_inits), stem
     for stem in ("sa_q", "sa_k", "sa_v", "pb_attended", "pb_rest"):  # the fusion self-attn + gain
         assert any(stem in n for n in step_inits), stem
+
+
+def test_pair_export_lands_the_step_graph_first(tmp_path, monkeypatch):
+    """A tag's ledger and its match dispatch key on the cache graph alone, so
+    a pair export writes the step graph before it: a dispatch tick between the
+    two writes would otherwise deliver a cache-only export that plays as the
+    wrong agent and wedges the inbox."""
+    cache_path = tmp_path / "cache.onnx"
+    step_path = tmp_path / "step" / "cache.onnx"
+    step_path.parent.mkdir()
+    real_cache_export = proposal_export.export_proposal_cache
+
+    def cache_after_step(model, path, *args, **kwargs):
+        assert step_path.exists(), "cache graph written before its step graph"
+        real_cache_export(model, path, *args, **kwargs)
+
+    monkeypatch.setattr(proposal_export, "export_proposal_cache", cache_after_step)
+    export_proposal_pair(
+        _random_model(),
+        cache_path,
+        step_path,
+        SPATIAL_PLANES,
+        SCALAR_SIZE,
+        opp_leave_input=False,
+        move_encoding_version=1,
+        trained_max_evidence=9,
+        max_evidence=MAX_E,
+    )
+    assert cache_path.exists()
 
 
 def test_proposal_export_id_discriminates_models():

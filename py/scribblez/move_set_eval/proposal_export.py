@@ -528,8 +528,21 @@ def export_proposal_pair(
     board_size: int = 15,
 ):
     """Both graphs of one model, tied by one proposal_export_id -- what a
-    trainer exports per pass and what the engine loads as a pair."""
+    trainer exports per pass and what the engine loads as a pair. The step
+    graph lands first: the cache graph is the file a tag's ledger and match
+    dispatch key on, and each write is atomic, so the pair is whole the moment
+    the cache graph is visible."""
     xid = proposal_export_id(model)
+    export_proposal_step(
+        model,
+        step_path,
+        opp_leave_input=opp_leave_input,
+        move_encoding_version=move_encoding_version,
+        proposal_export_id=xid,
+        trained_max_evidence=trained_max_evidence,
+        max_evidence=max_evidence,
+        board_size=board_size,
+    )
     export_proposal_cache(
         model,
         cache_path,
@@ -539,16 +552,6 @@ def export_proposal_pair(
         move_encoding_version=move_encoding_version,
         proposal_export_id=xid,
         trained_max_evidence=trained_max_evidence,
-        board_size=board_size,
-    )
-    export_proposal_step(
-        model,
-        step_path,
-        opp_leave_input=opp_leave_input,
-        move_encoding_version=move_encoding_version,
-        proposal_export_id=xid,
-        trained_max_evidence=trained_max_evidence,
-        max_evidence=max_evidence,
         board_size=board_size,
     )
 
