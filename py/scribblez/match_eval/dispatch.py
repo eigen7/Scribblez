@@ -188,6 +188,9 @@ def _assign(paths: TagPaths, conn, every: int, slot):
     spent = _spent_marks(held, recorded | _quarantined_generations(paths))
     for name in spent:
         slot.remove(f"{inbox}/{name}")
+        # A move-proposal generation's step graph rode along under step/; the
+        # worker marks only the cache graph, so its companion is cleared here.
+        slot.remove(f"{inbox}/step/{name.removesuffix(DONE_SUFFIX)}")
     if any(name.startswith(ONNX_PREFIX) and name not in spent for name in held):
         return  # an unplayed export, or one whose result is still on its way
     # The shared external-data blobs go first and stay: a model does not load
@@ -195,7 +198,13 @@ def _assign(paths: TagPaths, conn, every: int, slot):
     for sidecar in paths.onnx_sidecars:
         if sidecar.name not in held:
             slot.put(sidecar, f"{inbox}/{sidecar.name}")
+    # A move-proposal export is a pair: its step graph goes under step/ before
+    # the cache graph, whose arrival is what the worker polls for
+    # (match_eval/runner.py), so the pair is whole when it is seen.
     model = paths.onnx_path(gen)
+    step = paths.proposal_step_path(gen)
+    if step.exists():
+        slot.put(step, f"{inbox}/step/{step.name}")
     slot.put(model, f"{inbox}/{model.name}")
 
 

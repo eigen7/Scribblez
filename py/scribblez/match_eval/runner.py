@@ -47,8 +47,31 @@ def _assigned_model(paths: TagPaths, worker_id: str) -> Path | None:
     return models[-1] if models else None
 
 
-def _model_player_spec(onnx_path: Path) -> str:
-    return f"--type=neural --model={onnx_path} --name=model"
+def _step_companion(onnx_path: Path) -> Path:
+    """Where a move-proposal export's step graph sits beside the cache graph
+    the ledger names -- in the inbox as in the tag's models/
+    (TagPaths.proposal_step_path): a step/ subdirectory the model_epoch_* glob
+    never sees."""
+    return onnx_path.parent / "step" / onnx_path.name
+
+
+def _model_player_spec(onnx_path: Path, params) -> str:
+    """The --player spec that plays the assigned export. Two shapes of
+    generation exist: a position-evaluation export plays as the neural agent,
+    and a move-proposal export -- recognized by the step graph delivered beside
+    it -- plays as UltimateBot at the tag's own sim configuration (rollouts,
+    truncation, and the match sim budget), the deployment loop the evidence
+    corpus was made for."""
+    step = _step_companion(onnx_path)
+    if not step.exists():
+        return f"--type=neural --model={onnx_path} --name=model"
+    spec = (
+        f"--type=ultimatebot --cache-model={onnx_path} --step-model={step} "
+        f"--rollouts={params.rollouts} --max-sims={params.match_max_sims}"
+    )
+    if params.horizon:
+        spec += f" --sim-horizon={params.horizon} --leaf-model={params.leaf_model}"
+    return spec + " --name=model"
 
 
 @dataclass(frozen=True)
@@ -71,7 +94,7 @@ def _play_match(ctx: WorkerContext, model: Path) -> MatchOutcome:
     base seed."""
     p = ctx.params
     result = harness.play_round(
-        _model_player_spec(model),
+        _model_player_spec(model, p),
         p.match_opponent,
         num_pairs=p.match_pairs,
         threads=ctx.threads,

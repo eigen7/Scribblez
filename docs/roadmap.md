@@ -385,8 +385,10 @@ generator can run its gen-1+ on-policy side through the same loop with a
 tempered pick once a trained gain head exists to justify that build. The
 evidence trainer exports the cache/step pair every pass, stamped with the
 evidence width it trained at, which the agent's `--max-sims` is checked
-against at load. What remains is a match role for the evidence workload,
-then the budget/threshold measurements of
+against at load, and the workload's `match_eval` role plays every Nth pair
+as UltimateBot against a fixed opponent (local only until the truncation
+leaf can be shipped to an ssh worker). What remains is the compute: a
+trained head, then the budget/threshold measurements of
 [evaluation_plan.md](evaluation_plan.md).
 
 - **First sim: the greedy anchor** — the highest-raw-score candidate, taken

@@ -280,3 +280,29 @@ def test_tick_leaves_an_idle_tag_alone(tmp_path):
 
     dispatch.tick(_Spec(tmp_path), "t", PositionEvalParams(), [])
     assert not list(paths.root.glob("dashboard.db-*"))
+
+
+def test_assign_delivers_a_move_proposal_pair_and_clears_it_when_spent(tmp_path):
+    """A generation exported as a cache/step pair (the evidence trainer's)
+    reaches the slot whole -- the step graph under step/ before the cache
+    graph the worker polls for -- and the companion goes when the mark does."""
+    paths = _paths(tmp_path)
+    conn = db.connect(paths.dashboard_db)
+    paths.onnx_path(5).write_bytes(b"cache")
+    paths.proposal_step_path(5).parent.mkdir()
+    paths.proposal_step_path(5).write_bytes(b"step")
+
+    dispatch._assign(paths, conn, 5, _slot(paths))
+    inbox = paths.match_inbox_dir("w0")
+    assert sorted(p.name for p in inbox.iterdir()) == [paths.onnx_path(5).name, "step"]
+    assert (inbox / "step" / paths.onnx_path(5).name).read_bytes() == b"step"
+
+    # Played and recorded: the mark and its companion are cleared together
+    # before the next assignment; the plain (pair-less) generation 10 brings
+    # nothing under step/.
+    _mark_played(inbox, paths.onnx_path(5).name)
+    db.write_match_eval(conn, 5, {**_result(5), "positions": 0})
+    paths.onnx_path(10).write_bytes(b"cache")
+    dispatch._assign(paths, conn, 5, _slot(paths))
+    assert sorted(p.name for p in inbox.iterdir()) == [paths.onnx_path(10).name, "step"]
+    assert list((inbox / "step").iterdir()) == []
