@@ -39,7 +39,14 @@ student named by `student_checkpoint` -- its backbone frozen by default (the
 recorded-floor diagnostic), or (`unfreeze_backbone`) the whole copy trained
 on the sim signal -- with the mset trainer's growing-corpus pacing: it
 absorbs each pass's new pairs and spends its epoch budget only once the
-store is final.
+store is final, exporting the model's cache/step graph pair every pass.
+
+The singleton match_eval role plays every Nth exported pair as UltimateBot
+(the sequential evidence loop, docs/roadmap.md item 6) at this tag's rollout
+and truncation configuration against a fixed opponent, through the same
+controller-assigned inbox as position_eval's match role
+(scribblez/match_eval/), so the tag's Match tab reads the agent's strength as
+it trains.
 """
 
 import subprocess
@@ -51,7 +58,7 @@ from pathlib import Path
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez.params import param
-from scribblez.paths import ENGINE_DIR
+from scribblez.paths import ENGINE_DIR, MATCH_RESULTS_DIR
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.sim_evidence.position_sets import TrajectoryRecipe
 from scribblez.workloads import mset_targets, pair_store
@@ -199,6 +206,24 @@ class EvidenceTrajectoriesParams:
     huber_delta_gain: float = param(0.05, "Huber delta, proves-best gain (win-probability units)")
     grad_clip: float = param(
         1.0, "max gradient norm over all trainable params per step (0 = no clipping)"
+    )
+    # Match eval (the match_eval role): UltimateBot over each exported
+    # cache/step pair, at this tag's sim configuration, against a fixed
+    # opponent (docs/evaluation_plan.md).
+    match_every_generations: int = param(
+        5, "match-eval cadence: play a match for every Nth exported generation; 0 disables"
+    )
+    match_pairs: int = param(200, "mirrored game pairs per match (games = 2x)")
+    match_opponent: str = param(
+        "--type=hastybot-endgame", "the fixed opponent's --player spec, e.g. --type=mset-sim ..."
+    )
+    match_seed: int = param(
+        1, "base seed of the match deals; every generation plays the same pairs (nonzero)"
+    )
+    match_max_sims: int = param(
+        10,
+        "UltimateBot's sim budget per turn in match play, the anchor included; at most 1 + "
+        "on_policy_max (the evidence width the model trained at, which its export stamps)",
     )
 
 
@@ -386,7 +411,22 @@ SPEC = WorkloadSpec(
             gpu=True,
             stats=StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"}),
         ),
+        # Local only: the match plays at the tag's truncation configuration,
+        # and --leaf-model is an absolute path into another tag's models/ that
+        # the one-file inbox delivery never ships to an ssh container.
+        RoleSpec(
+            name="match_eval",
+            title="Match eval (GPU)",
+            runner="scribblez.match_eval.runner:run",
+            deps="scribblez.workloads.selfplay_gen:fetch_deps",
+            dispatch="scribblez.match_eval.dispatch:tick",
+            singleton=True,
+            kinds=("local",),
+            gpu=True,
+            stats=StatsSpec(unit="games", phases={"match_s": "match play"}),
+        ),
     ),
     progress="scribblez.workloads.evidence_trajectories:progress",
     sync_data_dirs=(SLOGS_DIR,),
+    local_data_dirs=(MATCH_RESULTS_DIR,),
 )

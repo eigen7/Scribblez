@@ -57,6 +57,7 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
   evidence_trajectories: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
     { name: 'Trajectories', render: (w, t) => <EvidenceTrajectories task={w} tag={t} /> },
+    figureTab('Match', 'match_eval', 'match_eval', 'No match results yet.'),
     trainingTab('evidence_metrics', 'metrics', 'No per-epoch training metrics yet.'),
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
