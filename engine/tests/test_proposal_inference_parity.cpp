@@ -312,6 +312,8 @@ void expect_same_predictions(const MoveProposalPredictions& a, const MoveProposa
 // graph.
 TEST_F(ProposalInferenceParityTest, MatchesPyTorchReferenceForEveryEvidenceCase) {
   MoveProposalSession session(MoveProposalNets::create(nets_params(num_moves_)));
+  // The fixture stamps its pair as trained at the full padded width.
+  EXPECT_EQ(session.nets().trained_max_evidence(), scribblez::nn::kMaxEvidence);
   const MoveProposalPredictions plain = session.encode(board_.data(), moves_);
   ASSERT_TRUE(plain.gain.empty()) << "the cache graph emits no gain head";
   expect_planes_match(session.cache().planes, plain_planes_, num_moves_, kFp32Tol);

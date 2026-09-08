@@ -60,7 +60,7 @@ from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_slot_plane
 from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.move_set_eval.proposal_export import (
     DEFAULT_MAX_EVIDENCE,
-    export_proposal_cache,
+    export_proposal_pair,
     export_proposal_step,
     proposal_export_id,
 )
@@ -217,23 +217,17 @@ def main() -> int:
     version = move_encoding_version()
     model = build_model(args.seed, spatial_planes, scalar_size, board_size)
 
-    xid = proposal_export_id(model)
-    export_proposal_cache(
+    # Stamped as trained at the full padded width, so the fixture pair serves
+    # any --max-sims an agent smoke test asks for.
+    export_proposal_pair(
         model,
         args.out_dir / "cache.onnx",
+        args.out_dir / "step.onnx",
         spatial_planes,
         scalar_size,
         opp_leave_input=False,
         move_encoding_version=version,
-        proposal_export_id=xid,
-        board_size=board_size,
-    )
-    export_proposal_step(
-        model,
-        args.out_dir / "step.onnx",
-        opp_leave_input=False,
-        move_encoding_version=version,
-        proposal_export_id=xid,
+        trained_max_evidence=MAX_E,
         max_evidence=MAX_E,
         board_size=board_size,
     )
@@ -247,6 +241,7 @@ def main() -> int:
         opp_leave_input=False,
         move_encoding_version=version,
         proposal_export_id=proposal_export_id(alt),
+        trained_max_evidence=MAX_E,
         max_evidence=MAX_E,
         board_size=board_size,
     )

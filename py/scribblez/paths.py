@@ -205,6 +205,18 @@ class TagPaths:
     def onnx_path(self, epoch: int) -> Path:
         return self.onnx_dir / f"{ONNX_PREFIX}{epoch:04d}.onnx"
 
+    # The evidence trainer exports a pair per pass: the move_proposal_cache
+    # graph at onnx_path (the ledger's model: exported_generations, the match
+    # inbox) and its move_proposal_step companion under step/ -- a
+    # subdirectory, so neither the model_epoch_* glob nor onnx_sidecars' file
+    # filter sees it. Its unfrozen mode's plain-student export lives under
+    # plain/ for the same reason.
+    def proposal_step_path(self, epoch: int) -> Path:
+        return self.onnx_dir / "step" / f"{ONNX_PREFIX}{epoch:04d}.onnx"
+
+    def plain_onnx_path(self, epoch: int) -> Path:
+        return self.onnx_dir / "plain" / f"{ONNX_PREFIX}{epoch:04d}.onnx"
+
     @staticmethod
     def onnx_epoch(path: Path) -> int:
         """The epoch an export's filename encodes -- the inverse of onnx_path."""

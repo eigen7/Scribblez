@@ -288,6 +288,7 @@ def _export_pair(tmp_path, model):
         opp_leave_input=False,
         move_encoding_version=1,
         proposal_export_id=xid,
+        trained_max_evidence=9,
     )
     export_proposal_step(
         model,
@@ -295,6 +296,7 @@ def _export_pair(tmp_path, model):
         opp_leave_input=False,
         move_encoding_version=1,
         proposal_export_id=xid,
+        trained_max_evidence=9,
         max_evidence=MAX_E,
     )
     return cache_path, step_path
@@ -375,6 +377,9 @@ def test_exported_file_contract(tmp_path):
     # Both graphs of one exported pair share the fingerprint (its discriminating
     # power -- rejecting a mismatched pair -- is tested separately below).
     assert cmeta["proposal_export_id"] == smeta["proposal_export_id"]
+    # The trained evidence width rides both graphs too: the engine refuses a
+    # sim budget past it.
+    assert cmeta["trained_max_evidence"] == smeta["trained_max_evidence"] == "9"
 
     assert [o.name for o in cache.graph.output] == list(CACHE_OUTPUT_NAMES)
     assert [o.name for o in step.graph.output] == list(STEP_OUTPUT_NAMES)
