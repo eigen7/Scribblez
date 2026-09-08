@@ -9,9 +9,7 @@ held-out simmed candidate): the subset is what the model conditions on, and the
 held-out candidate's own sim outcome is the target -- its win value for the
 value heads, and its CRN-paired gain over the subset's best-so-far for the
 proves-best head. No teacher label is read here -- docs/roadmap.md item 5
-says why sim outcomes and not the teacher; the trainer's unfrozen mode reads
-the same games' .mset sidecars through MsetDataset, as distillation rows for
-the plain pass, never as targets for these.
+says why sim outcomes and not the teacher.
 
 The evidence set is order-free -- the fusion stage is permutation-invariant and
 the gain label is a max over the set -- so a row's evidence is an arbitrary
@@ -80,15 +78,6 @@ def adopt_information_condition(sobs_files: Iterable[str | Path]):
     baked into the process-wide session at its creation)."""
     first = next(iter(sobs_files))
     set_opp_leave_input(bool(read_sobs_flags(first) & SOBS_FLAG_OPEN_LEAVES))
-
-
-def trajectory_positions(sobs_path: str | Path) -> set[tuple[int, int]]:
-    """The (game_index, turn_index) positions a trajectory .sobs holds -- the
-    unfrozen trainer's selection of the same stem's .mset labels (the .mset
-    labels many more positions per game than were simmed; the distillation
-    anchor reads the simmed ones, which keeps it the size of the trajectory
-    side and puts it on the positions the sim loss pulls on)."""
-    return {(p.game_index, p.turn_index) for p in read_sobs(sobs_path)}
 
 
 def sim_targets(obs: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

@@ -4,12 +4,13 @@ The forward is the model's staged path: board trunk, move encodings, the
 evidence-free first pass (which supplies the predicted half of every evidence
 token, and is never a training path itself), then the fusion stage and the
 conditioned re-score. Loss is taken on the held-out simmed candidates
-(outside the prefix), against their own sim outcomes. With the backbone
-frozen the trunk and move encodings run under no_grad and only EvidenceFusion
-and the proves-best head learn; unfrozen, they carry gradients from the
-conditioned loss, and each step is joint with a distillation batch over the
-same games' .mset labels (Distillation) -- the ordinary student objective
-anchoring the plain pass while the sim loss trains the conditioned one.
+(outside the subset), against their own sim outcomes -- the only loss there
+is. With the backbone frozen the trunk and move encodings run under no_grad
+and only EvidenceFusion and the proves-best head learn; unfrozen (the move
+proposal model, docs/roadmap.md item 5), the whole model follows the sim
+signal, the backbone at its own learning rate, with the empty-subset rows
+keeping the plain pass calibrated on the simmed candidates and no
+distillation anchor.
 
 Metrics compare the conditioned pass with the plain one on the same held-out
 rows, so "does conditioning learn anything from sim outcomes" is read directly:
@@ -25,7 +26,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import torch
@@ -39,21 +40,12 @@ from scribblez.evidence_fusion import (
     EvidenceInputs,
     best_so_far,
 )
-from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.evidence import observed_scalars
 from scribblez.move_set_eval.model import footprint_slot_planes, win_equity
 from scribblez.sim_evidence.sobs import BOARD, candidate_slot_planes, observed_slot_planes
 
-# The sim-outcome loss terms every epoch reports; a joint (unfrozen) epoch adds
-# DISTILL_LOSS_KEYS.
+# The sim-outcome loss terms every epoch reports.
 LOSS_KEYS = ("total", "wld", "score_diff", "gain")
-DISTILL_LOSS_KEYS = (
-    "sim",
-    "distill",
-    "distill_wld",
-    "distill_score_diff",
-    "distill_planes",
-)
 
 _INPUT_KEYS = ("input_spatial", "input_scalar")
 _MOVE_KEYS = (
@@ -86,18 +78,6 @@ class LossConfig:
             args.huber_delta_gain,
             args.grad_clip,
         )
-
-
-@dataclass
-class Distillation:
-    """The joint step's distillation side (backbone unfrozen): an endless
-    stream of .mset batches -- one is consumed per trajectory batch -- and
-    the student objective over each (move_set_eval's LossConfig). The step's
-    total is distill + lambda_sim * sim."""
-
-    batches: Iterator[dict]
-    cfg: mset_train_loop.LossConfig
-    lambda_sim: float
 
 
 @dataclass
@@ -226,23 +206,6 @@ def _targets(batch: dict, device) -> dict[str, torch.Tensor]:
     return {k: batch[k].to(device) for k in _TARGET_KEYS}
 
 
-def joint_loss(
-    sim: dict[str, torch.Tensor], distill: dict[str, torch.Tensor], lambda_sim: float
-) -> dict[str, torch.Tensor]:
-    """The unfrozen step's losses: the sim-outcome terms as reported by
-    compute_loss, the distillation terms under DISTILL_LOSS_KEYS, and the
-    optimized total distill + lambda_sim * sim."""
-    return {
-        **sim,
-        "total": distill["total"] + lambda_sim * sim["total"],
-        "sim": sim["total"],
-        "distill": distill["total"],
-        "distill_wld": distill["wld"],
-        "distill_score_diff": distill["score_diff"],
-        "distill_planes": distill["planes"],
-    }
-
-
 def set_lr(optimizer, lr: float):
     """Apply the schedule's rate to every param group, times the group's own
     `lr_mult` when it carries one (the unfrozen backbone's group runs at a
@@ -259,21 +222,17 @@ def run_epoch(
     cfg: LossConfig,
     max_e: int,
     *,
-    distill: Distillation | None = None,
     lr_fn: Callable[[int], float] | None = None,
     rows_trained: int = 0,
     on_batch: Callable[[int, int, float, int], None] | None = None,
 ) -> EpochResult:
     """One training pass. rows_trained counts held-out rows (the rows that
-    carry loss) and keys the rows-clock learning rate. With `distill` each
-    step is joint (joint_loss) over the trajectory batch and one distillation
-    batch: one backward, one step. Gradients are clipped to cfg.grad_clip
-    over the optimizer's params; a batch with a non-finite loss is skipped
-    (see below)."""
+    carry loss) and keys the rows-clock learning rate. Gradients are clipped
+    to cfg.grad_clip over the optimizer's params; a batch with a non-finite
+    loss is skipped (see below)."""
     model.train()
     trainable = [p for group in optimizer.param_groups for p in group["params"]]
-    keys = LOSS_KEYS if distill is None else LOSS_KEYS + DISTILL_LOSS_KEYS
-    sums = {k: 0.0 for k in keys}
+    sums = {k: 0.0 for k in LOSS_KEYS}
     n_batches = rows = skipped = 0
     t0 = last_progress = time.time()
     for batch in batches:
@@ -285,9 +244,6 @@ def run_epoch(
             set_lr(optimizer, lr_fn(rows_trained))
         _, cond = conditioned_forward(model, batch, device, max_e)
         losses = compute_loss(cond, targets, cfg)
-        if distill is not None:
-            d = mset_train_loop.batch_loss(model, next(distill.batches), device, distill.cfg)
-            losses = joint_loss(losses, d, distill.lambda_sim)
         # A non-finite loss must not reach the optimizer: one such step
         # poisons Adam's moments and every weight after it. Skip the batch
         # and count it; the pass reports the count and the trainer stops the

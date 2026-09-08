@@ -193,8 +193,8 @@ class MoveSetEvalModel(nn.Module):
     # The evidence path's own parameters -- the fusion stage and the proves-best
     # head -- against the backbone, everything else: the distilled student's.
     # The evidence trainer either freezes the backbone at the student's
-    # checkpoint (freeze_backbone) or trains it jointly under a distillation
-    # anchor at its own learning rate (backbone_parameters).
+    # checkpoint (freeze_backbone) or trains it on the sim-outcome loss at its
+    # own learning rate (backbone_parameters), no distillation anchor.
     EVIDENCE_MODULES = ("evidence_fusion", "proves_best")
 
     @classmethod

@@ -200,10 +200,9 @@ TRAINING = [
 # conditioned pass against the plain one on the same held-out rows, overall
 # and on the evidence-bearing (prefix > 0) rows, plus the proves-best head's
 # gain error. The gain hit rates ride the Loss tab's Accuracy panel. An
-# unfrozen run (the backbone trained jointly under the .mset distillation
-# anchor) adds the frozen student's soft-CE as the flat reference its moving
-# plain pass is read against, and the plain pass's distillation health on
-# the .mset holdout; a frozen run records neither and those panels are absent.
+# unfrozen run (the whole model following the sim signal) adds the frozen
+# student's soft-CE as the flat reference its moving plain pass is read
+# against; a frozen run records no such line.
 EVIDENCE_QUALITY = [
     (
         "Held-out WLD soft-CE: student reference vs plain vs conditioned",
@@ -215,14 +214,6 @@ EVIDENCE_QUALITY = [
     ),
     ("Held-out value MAE: conditioned vs plain", ["cond_value_mae", "plain_value_mae"]),
     ("Proves-best gain MAE", ["gain_mae", "gain_mae_ev"]),
-    (
-        "Distillation health: held-out recall@1 / Spearman vs the teacher",
-        ["distill_recall1", "distill_recall1_baseline", "distill_spearman"],
-    ),
-    (
-        "Distillation health: held-out loss",
-        ["distill_loss", "distill_loss_wld", "distill_plane_ce"],
-    ),
     # The hand-maintained position set (positions/NWL23/face-up-trajectory-set,
     # what the Trajectories tab shows): over every position and evidence
     # prefix, the rank of the sim-best simmed candidate under the conditioned

@@ -24,8 +24,7 @@ The .mset labeling still runs, with the simmed candidates force-included: it
 is cheap next to the sims, and both tools sample positions from the same seed
 stream, so its coverage of the simmed positions is a property of this cycle
 rather than something a later task could add. It gives the dashboard the
-teacher's value per simmed candidate and keeps the corpus usable for joint
-(backbone-unfrozen) training later.
+teacher's value per simmed candidate; the trainer reads no .mset label.
 
 The proposer is frozen like the teacher: every .sobs stamps its content hash,
 and a corpus of mixed proposers is refused downstream. Point it at a write-once
@@ -34,12 +33,13 @@ export (a move_set_eval tag's models/model_epoch_NNNN.onnx).
 The generate role is GPU and local-only: proposer and teacher both run under
 TensorRT (see move_set_eval).
 
-The singleton train role (scribblez/evidence/trainer.py) trains the fusion
-stage and the proves-best head over the tag's pair store, on top of the
-student named by `student_checkpoint` -- its backbone frozen by default, or
-(`unfreeze_backbone`) trained jointly under the .mset distillation
-anchor -- with the mset trainer's growing-corpus pacing: it absorbs each
-pass's new pairs and spends its epoch budget only once the store is final.
+The singleton train role (scribblez/evidence/trainer.py) trains the move
+proposal model over the tag's pair store's sim outcomes, on top of the
+student named by `student_checkpoint` -- its backbone frozen by default (the
+recorded-floor diagnostic), or (`unfreeze_backbone`) the whole copy trained
+on the sim signal -- with the mset trainer's growing-corpus pacing: it
+absorbs each pass's new pairs and spends its epoch budget only once the
+store is final.
 """
 
 import subprocess
@@ -141,8 +141,8 @@ class EvidenceTrajectoriesParams:
     )
     unfreeze_backbone: bool = param(
         False,
-        "train the whole model jointly -- the conditioned pass on sim outcomes plus the plain "
-        "pass on the tag's .mset teacher labels (the distillation anchor) -- and export the "
+        "train the whole model on the sim-outcome loss (the move proposal model: trunk, move "
+        "encoder, and heads follow the sim signal, no distillation anchor) and export the "
         "plain student per pass; off, the student's backbone is held at its checkpoint and "
         "only the fusion stage and proves-best head train",
     )
@@ -151,14 +151,6 @@ class EvidenceTrajectoriesParams:
         "unfrozen mode: the backbone's learning rate as a fraction of lr (the fusion stage "
         "and head start from zero-init/random and want the full rate; the distilled trunk "
         "should not be shaken at it)",
-    )
-    lambda_sim: float = param(
-        1.0,
-        "unfrozen mode: weight of the sim-outcome (conditioned) loss against the "
-        "distillation loss in the joint step's total (0 = plain distillation only)",
-    )
-    lambda_planes: float = param(
-        1.0, "unfrozen mode: placement-plane softmax-CE weight in the distillation loss"
     )
     train_epochs: int = param(
         20,

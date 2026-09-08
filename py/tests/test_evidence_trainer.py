@@ -4,14 +4,13 @@ membership tensor threading its five seams, the batched evidence builder), the
 frozen-backbone model surface (proves-best head, freeze, student init), and --
 on the GPU e2e corpus of test_evidence_trajectories -- a training pass with the
 plain-vs-conditioned metrics and the empty-subset exactness they rest on, in
-both the frozen mode and the unfrozen (joint distillation + sim-outcome) one."""
+both the frozen mode and the unfrozen (whole-model, sim-outcome) one."""
 
 import numpy as np
 import pytest
 import torch
 from scribblez.evidence import dataset as ED
 from scribblez.evidence.train_loop import (
-    Distillation,
     LossConfig,
     batch_evidence_inputs,
     conditioned_forward,
@@ -295,27 +294,13 @@ def traj_datasets(traj_corpus):  # noqa: F811
 
 
 @pytest.fixture(scope="module")
-def mset_datasets(traj_datasets):
-    """The same corpus's .mset side (the unfrozen mode's distillation rows),
-    split the same way as traj_datasets."""
-    from scribblez.evidence import trainer
-    from scribblez.workloads import pair_store
-
-    train, hold = traj_datasets
-
-    def msets(ds):
-        return [f.with_suffix(".mset") for f in ds.files]
-
-    assert all(f.exists() for f in msets(train) + msets(hold))
-    assert pair_store.complete_pairs(train.files[0].parent, ".mset")
-    select = trainer._simmed_positions
-    mset_train = MsetDataset(mset_files=msets(train), select=select)
-    mset_hold = MsetDataset(mset_files=msets(hold), select=select)
-    # The .mset labels more positions per game than were simmed (the fixture
-    # labels 4 vs 2 simmed); the distillation side keeps the simmed ones only.
-    assert 0 < mset_train.num_positions == train.num_positions
-    assert MsetDataset(mset_files=msets(train)).num_positions > train.num_positions
-    return mset_train, mset_hold
+def mset_holdout(traj_datasets):
+    """The corpus's .mset side over the held-out stems -- the move-set
+    evaluator's own input, used here only to check that evaluator."""
+    _, hold = traj_datasets
+    files = [f.with_suffix(".mset") for f in hold.files]
+    assert all(f.exists() for f in files)
+    return MsetDataset(mset_files=files)
 
 
 def test_dataset_rows_follow_the_subset(traj_datasets):
@@ -394,7 +379,7 @@ def test_training_pass_moves_only_the_evidence_path(traj_datasets):
         assert not torch.allclose(plain["wld"][with_ev], cond["wld"][with_ev])
 
 
-# --- the unfrozen mode: joint distillation + sim-outcome step ---
+# --- the unfrozen mode: the whole model on the sim-outcome step ---
 
 
 def _unfrozen_model(train, device):
@@ -410,42 +395,37 @@ def _unfrozen_params(**kw):
     return _params(unfreeze_backbone=True, **kw)
 
 
-def _joint_epoch(model, opt, train, mset_train, device, lambda_sim=1.0, lr_fn=None):
-    from scribblez.evidence import trainer
-
+def _unfrozen_epoch(model, opt, train, device, lr_fn=None):
     cfg = LossConfig(0.004, 1.0, 10.0, 10.0, 0.05, grad_clip=1.0)
-    distill = Distillation(
-        trainer.cycle_batches(mset_train, 4, epoch=0),
-        mset_train_loop.LossConfig(0.004, 10.0, 10.0, 1.0),
-        lambda_sim,
-    )
-    return run_epoch(
-        model,
-        opt,
-        train.iter_batches(4, seed=0),
-        device,
-        cfg,
-        max_e=8,
-        distill=distill,
-        lr_fn=lr_fn,
-    )
+    return run_epoch(model, opt, train.iter_batches(4, seed=0), device, cfg, max_e=8, lr_fn=lr_fn)
 
 
-def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets, mset_datasets):
-    """The joint step: backbone params receive gradients and move (so the
-    plain pass changes), the optimizer runs two groups at lr and
-    lr * backbone_lr_mult under the schedule, the joint losses are reported,
+def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets):
+    """The move proposal model's step: backbone params receive gradients from
+    the sim loss and move (so the plain pass changes) -- all but the placement
+    heads, which no sim loss reads and which therefore stay the student's,
+    bit for bit -- the optimizer runs two groups at lr and lr *
+    backbone_lr_mult under the schedule, only the sim losses are reported,
     and prefix-0 rows stay exact between the current plain and conditioned
     passes."""
     from scribblez.evidence import trainer
+    from scribblez.evidence.train_loop import LOSS_KEYS
 
     train, hold = traj_datasets
-    mset_train, _ = mset_datasets
     device = torch.device("cuda")
     model = _unfrozen_model(train, device)
     assert not model.backbone_frozen
     before = evaluate(model, hold, device, positions_per_batch=4, max_e=8)
-    backbone_before = [p.detach().clone() for p in model.backbone_parameters()]
+    plane_heads = ("plane_proj.", "plane_catch.")
+    backbone = [
+        (n, p)
+        for n, p in model.named_parameters()
+        if not model._is_evidence_param(n) and not n.startswith(plane_heads)
+    ]
+    planes = [(n, p) for n, p in model.named_parameters() if n.startswith(plane_heads)]
+    assert backbone and planes
+    backbone_before = [p.detach().clone() for _, p in backbone]
+    planes_before = [p.detach().clone() for _, p in planes]
     params = _unfrozen_params(lr=1e-2, backbone_lr_mult=0.1)
     opt = trainer.build_optimizer(model, params)
     assert len(opt.param_groups) == 2
@@ -454,52 +434,33 @@ def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets
 
     def recording_step(*a, **k):
         seen_lrs.append(tuple(g["lr"] for g in opt.param_groups))
-        assert all(p.grad is not None for p in model.backbone_parameters())
+        assert all(p.grad is not None for _, p in backbone)
+        assert all(p.grad is None for _, p in planes)
         return real_step(*a, **k)
 
     opt.step = recording_step
-    result = _joint_epoch(model, opt, train, mset_train, device, lr_fn=lambda rows: 1e-2)
+    result = _unfrozen_epoch(model, opt, train, device, lr_fn=lambda rows: 1e-2)
     assert result.rows > 0 and np.isfinite(result.losses["total"])
-    assert {"sim", "distill", "distill_wld", "distill_planes"} <= set(result.losses)
-    assert result.losses["total"] == pytest.approx(
-        result.losses["distill"] + result.losses["sim"], rel=1e-4
-    )
+    assert set(result.losses) == set(LOSS_KEYS)
     assert seen_lrs and all(lrs == (1e-2, pytest.approx(1e-3)) for lrs in seen_lrs)
-    pairs = zip(backbone_before, model.backbone_parameters(), strict=True)
+    pairs = zip(backbone_before, [p for _, p in backbone], strict=True)
     assert all(not torch.equal(a, b.detach()) for a, b in pairs if b.numel() > 1)
+    # No gradient means no step, weight decay included (AdamW skips them).
+    assert all(
+        torch.equal(a, b.detach())
+        for a, b in zip(planes_before, [p for _, p in planes], strict=True)
+    )
     after = evaluate(model, hold, device, positions_per_batch=4, max_e=8)
     assert after["plain_wld_ce"] != pytest.approx(before["plain_wld_ce"], abs=1e-6)
     assert after["exact_p0_maxdiff"] == 0.0
 
 
-def test_lambda_sim_zero_reduces_the_joint_step_to_distillation(traj_datasets, mset_datasets):
-    """With lambda_sim=0 the sim loss carries no gradient: the plain outputs
-    move under the distillation rows, while the proves-best head -- reached
-    only through the sim loss -- stays put."""
-    from scribblez.evidence import trainer
-
-    train, hold = traj_datasets
-    mset_train, _ = mset_datasets
-    device = torch.device("cuda")
-    model = _unfrozen_model(train, device)
-    before = evaluate(model, hold, device, positions_per_batch=4, max_e=8)
-    head_before = [p.detach().clone() for p in model.proves_best.parameters()]
-    # No weight decay: AdamW would otherwise move a zero-gradient head too.
-    opt = trainer.build_optimizer(model, _unfrozen_params(lr=1e-2, weight_decay=0.0))
-    result = _joint_epoch(model, opt, train, mset_train, device, lambda_sim=0.0)
-    assert result.losses["total"] == pytest.approx(result.losses["distill"], rel=1e-4)
-    after = evaluate(model, hold, device, positions_per_batch=4, max_e=8)
-    assert after["plain_wld_ce"] != pytest.approx(before["plain_wld_ce"], abs=1e-6)
-    pairs = zip(head_before, model.proves_best.parameters(), strict=True)
-    assert all(torch.equal(a, b.detach()) for a, b in pairs)
-
-
-def test_mset_evaluate_loss_is_the_candidate_weighted_distillation_loss(mset_datasets):
+def test_mset_evaluate_loss_is_the_candidate_weighted_distillation_loss(mset_holdout):
     """evaluate(loss_cfg=...) reports the same candidate-weighted mean the
     training epoch would: recomputed here batch by batch via batch_loss."""
     from scribblez.move_set_eval import eval as mset_eval
 
-    _, hold = mset_datasets
+    hold = mset_holdout
     device = torch.device("cuda")
     model = MoveSetEvalModel(hold.spatial_planes, hold.scalar_size, 8, 1, 2).to(device).eval()
     cfg = mset_train_loop.LossConfig(0.004, 10.0, 10.0, 1.0)
@@ -518,17 +479,6 @@ def test_mset_evaluate_loss_is_the_candidate_weighted_distillation_loss(mset_dat
     assert n > 3  # more than one batch, so the weighting is exercised
     assert got["loss"] == pytest.approx(total / n, rel=1e-5)
     assert got["loss_wld"] == pytest.approx(wld / n, rel=1e-5)
-
-
-def test_distill_datasets_refuse_an_empty_selection(traj_datasets, monkeypatch):
-    """A .sobs/.mset pairing whose selection matches nothing fails at load
-    (a starved joint step would otherwise hang on its first batch)."""
-    from scribblez.evidence import trainer
-
-    train, _ = traj_datasets
-    monkeypatch.setattr(trainer, "_simmed_positions", lambda path: set())
-    with pytest.raises(ValueError, match="no trajectory position"):
-        trainer._simmed_mset([f.with_suffix(".mset") for f in train.files])
 
 
 def test_frozen_optimizer_has_one_group_and_no_backbone(traj_datasets):
@@ -868,8 +818,8 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     assert not (scratch.paths.checkpoints_dir / "model_epoch_0002.pt").exists()
 
     # The unfrozen mode over the same store, as its own tag: per-pass ONNX,
-    # the joint losses, the flat student reference, the distillation health
-    # series, prefix-0 exactness, and the mode recorded in the checkpoint.
+    # the flat student reference, prefix-0 exactness, and the mode recorded in
+    # the checkpoint.
     tag_u = "zz-evidence-run-unfrozen"
     scratch_u = _ctx(tmp_path, tag_u, _params(train_epochs=2, unfreeze_backbone=True, **base))
     store_u = scratch_u.paths.data_dir / "slogs"
@@ -893,16 +843,8 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     rows = {}
     for epoch, name, value in conn.execute("select epoch, name, value from metrics"):
         rows.setdefault(name, {})[epoch] = value
-    assert {
-        "loss_sim",
-        "loss_distill",
-        "loss_distill_wld",
-        "student_wld_ce",
-        "distill_recall1",
-        "distill_spearman",
-        "distill_loss",
-        "exact_p0_maxdiff",
-    } <= set(rows)
+    assert {"loss", "loss_gain", "student_wld_ce", "exact_p0_maxdiff"} <= set(rows)
+    assert not set(rows) & {"loss_sim", "loss_distill", "distill_recall1"}
     assert rows["student_wld_ce"][0] == rows["student_wld_ce"][1]
     assert rows["plain_wld_ce"][0] != rows["plain_wld_ce"][1]
     assert all(v == 0.0 for v in rows["exact_p0_maxdiff"].values())
@@ -915,12 +857,9 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
 
 
 @pytest.mark.parametrize("frozen", [True, False])
-def test_non_finite_batches_are_skipped_without_a_step(
-    traj_datasets, mset_datasets, monkeypatch, frozen
-):
+def test_non_finite_batches_are_skipped_without_a_step(traj_datasets, monkeypatch, frozen):
     """A batch whose loss is non-finite takes no optimizer step and is counted;
-    the pass otherwise proceeds -- in both modes (the unfrozen step is joint,
-    and a poisoned sim loss poisons its total)."""
+    the pass otherwise proceeds -- in both modes."""
     from scribblez.evidence import train_loop, trainer
 
     train, _ = traj_datasets
@@ -941,11 +880,7 @@ def test_non_finite_batches_are_skipped_without_a_step(
     monkeypatch.setattr(train_loop, "compute_loss", poison_every_other)
     before = [p.detach().clone() for p in model.parameters()]
     opt = trainer.build_optimizer(model, _params(unfreeze_backbone=not frozen, lr=1e-2))
-    if frozen:
-        cfg = LossConfig(0.004, 1.0, 10.0, 10.0, 0.05, grad_clip=1.0)
-        result = run_epoch(model, opt, train.iter_batches(4, seed=0), device, cfg, max_e=8)
-    else:
-        result = _joint_epoch(model, opt, train, mset_datasets[0], device)
+    result = _unfrozen_epoch(model, opt, train, device)
     assert result.skipped >= 1 and result.n_batches >= 1
     assert result.skipped + result.n_batches == calls["n"]
     assert np.isfinite(result.losses["total"])
@@ -970,7 +905,7 @@ def test_check_finite_stops_a_diverged_pass():
 
 
 @pytest.mark.parametrize("frozen", [True, False])
-def test_gradients_are_clipped_to_the_configured_norm(traj_datasets, mset_datasets, frozen):
+def test_gradients_are_clipped_to_the_configured_norm(traj_datasets, frozen):
     """With clipping on, the total gradient norm handed to the optimizer never
     exceeds grad_clip (checked by wrapping optimizer.step) -- over the
     evidence params when frozen, over every param when unfrozen."""
@@ -994,14 +929,7 @@ def test_gradients_are_clipped_to_the_configured_norm(traj_datasets, mset_datase
 
     opt.step = recording_step
     cfg = LossConfig(0.004, 1.0, 10.0, 10.0, 0.05, grad_clip=0.01)
-    distill = None
-    if not frozen:
-        distill = Distillation(
-            trainer.cycle_batches(mset_datasets[0], 4, epoch=0),
-            mset_train_loop.LossConfig(0.004, 10.0, 10.0, 1.0),
-            1.0,
-        )
-    run_epoch(model, opt, train.iter_batches(4, seed=0), device, cfg, max_e=8, distill=distill)
+    run_epoch(model, opt, train.iter_batches(4, seed=0), device, cfg, max_e=8)
     assert seen and max(seen) <= 0.01 * (1 + 1e-4)
 
 

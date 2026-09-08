@@ -1,31 +1,31 @@
-"""The evidence_trajectories workload's train role: the fusion stage and the
-proves-best head, trained on the tag's trajectory pair store over the
-student backbone -- frozen, or jointly trained under a distillation anchor.
+"""The evidence_trajectories workload's train role: the move proposal model
+(docs/roadmap.md item 5) -- the fusion stage and the proves-best head, and
+with the backbone unfrozen the whole student copy -- trained on the tag's
+trajectory pair store's sim outcomes.
 
 The model is the move set evaluation student named by `student_checkpoint`
 (a move_set_eval tag's rolling checkpoint: weights plus the config it was
-built against). Frozen mode (the default) holds its trunk,
-move encoder and distillation heads at the checkpoint; EvidenceFusion and the
-proves-best head are what learn (model.freeze_backbone). Unfrozen mode trains
-everything: each step is joint over a trajectory batch (the sim-outcome loss
-on the conditioned pass) and a batch of the same games' .mset teacher labels
-(the ordinary student objective on the plain pass, which anchors it), the
-backbone at `backbone_lr_mult` times the evidence path's rate. The plain
-student then changes each pass, so it is exported per pass as ONNX -- what a
-later generation's proposer is taken from -- and the frozen student's held-out
-sim soft-CE is reported as the flat reference the moving plain pass is read
-against (StudentReference). The student's information-condition arm must be
-the corpus's -- the trainer refuses a hidden-leaves student on an open-leaves
-corpus and vice versa.
+built against). Frozen mode (the default, the recorded-floor diagnostic)
+holds its trunk, move encoder and value heads at the checkpoint;
+EvidenceFusion and the proves-best head are what learn
+(model.freeze_backbone). Unfrozen mode -- the move proposal model proper --
+trains everything on the same sim-outcome loss, the backbone at
+`backbone_lr_mult` times the evidence path's rate and no distillation anchor
+(the empty-subset rows keep the plain pass calibrated on the simmed
+candidates; docs/roadmap.md item 5 says why no anchor). The plain student
+then changes each pass, so it is exported per pass as ONNX, and the frozen
+student's held-out sim soft-CE is reported as the flat reference the moving
+plain pass's drift is read against (StudentReference). The student's
+information-condition arm must be the corpus's -- the trainer refuses a
+hidden-leaves student on an open-leaves corpus and vice versa.
 
 The loop is the mset trainer's growing-corpus loop: wait for the store, take
-up new pairs each pass into a file-level split shared by the .sobs and .mset
-sides (a stem is train or held-out on both), spend the epoch budget only on
-passes over a finished corpus (pair_store.CorpusClock), record metrics to the
-dashboard DB, checkpoint. Every pass also writes its own checkpoint under
-checkpoints/model_epoch_NNNN.pt (model weights + config): the evidence path
-has no ONNX export yet (roadmap item 3), so the torch checkpoint is what the
-dashboard's trajectory pane loads per generation.
+up new .sobs pairs each pass into a file-level split by stem hash
+(pair_store.split_pair_stems), spend the epoch budget only on passes over a
+finished corpus (pair_store.CorpusClock), record metrics, checkpoint. Every
+pass also writes its own checkpoint under checkpoints/model_epoch_NNNN.pt
+(model weights + config), which is what the dashboard's trajectory pane loads
+per generation.
 """
 
 from __future__ import annotations
@@ -42,15 +42,8 @@ from scribblez.evidence.dataset import (
     TrajectoryDataset,
     adopt_information_condition,
     complete_pairs,
-    trajectory_positions,
 )
-from scribblez.evidence.train_loop import (
-    DISTILL_LOSS_KEYS,
-    Distillation,
-    LossConfig,
-    evaluate,
-    run_epoch,
-)
+from scribblez.evidence.train_loop import LossConfig, evaluate, run_epoch
 from scribblez.evidence.trajectory_view import DecisionAnalysis, position_set_metrics
 from scribblez.ffi import move_encoding_version
 from scribblez.generational import checkpoint
@@ -62,9 +55,6 @@ from scribblez.generational.controls import (
     progress_line,
 )
 from scribblez.generational.records import TrainRecorder
-from scribblez.move_set_eval import eval as mset_eval
-from scribblez.move_set_eval import train_loop as mset_train_loop
-from scribblez.move_set_eval.dataset import MsetDataset
 from scribblez.move_set_eval.onnx_export import export_onnx
 from scribblez.sim_evidence.position_sets import DEFAULT_SET, POSITIONS_ROOT, ensure_sobs, set_gcgs
 from scribblez.sim_evidence.sobs import read_sobs
@@ -92,10 +82,8 @@ class EvidenceTrainState(GenerationalState):
 
 def split_pairs(store, holdout_every: int, ext: str = ".sobs") -> tuple[list, list]:
     """(train, holdout) `ext` sidecar paths of the store's complete pairs,
-    split at file level by stem hash (pair_store.split_pair_stems). The split
-    is of stems, so the .sobs side (the trajectory rows) and the .mset side
-    (the distillation rows) hold a game on the same side; a stem is listed
-    for `ext` only where that sidecar exists."""
+    split at file level by stem hash (pair_store.split_pair_stems); a stem is
+    listed for `ext` only where that sidecar exists."""
     train, holdout = pair_store.split_pair_stems(
         [f.stem for f in complete_pairs(store)], holdout_every
     )
@@ -163,29 +151,6 @@ def load_datasets(store, params) -> tuple[TrajectoryDataset, TrajectoryDataset]:
     return train_ds, holdout_ds
 
 
-def _simmed_positions(mset_path) -> set[tuple[int, int]]:
-    """MsetDataset's `select` for the distillation side: the stem's trajectory
-    positions (evidence.dataset.trajectory_positions says why only those)."""
-    return trajectory_positions(mset_path.with_suffix(".sobs"))
-
-
-def _simmed_mset(files) -> MsetDataset:
-    """An .mset dataset restricted to the stems' trajectory positions; a
-    selection that matches nothing is a broken .sobs/.mset pairing and fails
-    here rather than starving the joint step (cycle_batches would spin)."""
-    ds = MsetDataset(mset_files=files, select=_simmed_positions)
-    if ds.num_positions == 0:
-        raise ValueError(f"no trajectory position found in the .mset labels of {files[0].parent}")
-    return ds
-
-
-def load_distill_datasets(store, params) -> tuple[MsetDataset, MsetDataset]:
-    """The unfrozen mode's .mset side of the same split, restricted to the
-    trajectory positions (the corpus's arm was adopted from the .sobs side;
-    the .mset labels were made under it)."""
-    return _load_split(store, params, ".mset", _simmed_mset, "model_hash")
-
-
 def absorb_new_pairs(store, params, train_ds, holdout_ds, ext: str = ".sobs") -> int:
     """Ingest every `ext` pair delivered since the last pass into the side the
     split assigns it (a pair's side is fixed the first time it is seen)."""
@@ -209,16 +174,6 @@ def build_optimizer(model, params) -> torch.optim.AdamW:
     if params.unfreeze_backbone:
         groups.append({"params": model.backbone_parameters(), "lr_mult": params.backbone_lr_mult})
     return torch.optim.AdamW(groups, lr=params.lr, weight_decay=params.weight_decay)
-
-
-def cycle_batches(dataset: MsetDataset, positions_per_batch: int, epoch: int):
-    """An endless stream of distillation batches for one pass: the dataset's
-    epoch under a pass-specific shuffle, restarted (reshuffled) whenever it
-    runs dry, so the trajectory side alone paces the pass."""
-    cycle = 0
-    while True:
-        yield from dataset.iter_batches(positions_per_batch, seed=cycle, epoch_index=epoch)
-        cycle += 1
 
 
 class PositionSetProbe:
@@ -289,26 +244,6 @@ class StudentReference:
         return dict(self._metrics)
 
 
-def distill_metrics(model, holdout_ds: MsetDataset, device, batch_positions: int, cfg) -> dict:
-    """The plain pass's distillation health on the .mset holdout, as
-    `distill_*` series: the student trainer's ranking metrics against the
-    teacher (recall@1 with the incumbent baseline, Spearman), the plane CE,
-    and the distillation loss itself."""
-    m = mset_eval.evaluate(
-        model, holdout_ds, device, positions_per_batch=batch_positions, loss_cfg=cfg
-    )
-    out = {
-        "distill_recall1": m["recall@1"],
-        "distill_recall1_baseline": m["recall@1_baseline"],
-        "distill_spearman": m["spearman"],
-        "distill_loss": m["loss"],
-        "distill_loss_wld": m["loss_wld"],
-    }
-    if "plane_ce" in m:
-        out["distill_plane_ce"] = m["plane_ce"]
-    return out
-
-
 def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
     """The per-pass checkpoint the trajectory pane loads: weights + config."""
     path = paths.checkpoint_path(epoch)
@@ -319,8 +254,8 @@ def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
 def export_student(paths, model, epoch: int, student_cfg: dict):
     """The unfrozen mode's per-pass plain-student ONNX (models/
     model_epoch_NNNN.onnx), stamped with the student's arm and version as the
-    mset trainer stamps its own. The export covers the plain path only (the
-    evidence path's ONNX is roadmap item 3)."""
+    mset trainer stamps its own. The plain path only; the evidence path's
+    cache/step pair is exported separately."""
     export_onnx(
         model,
         paths.onnx_path(epoch),
@@ -353,8 +288,7 @@ def _metrics_record(
 ) -> dict:
     """The dashboard row: losses, and the plain-vs-conditioned metrics as
     *_acc series (the Loss tab's Accuracy panel) with the rest in the table.
-    An unfrozen pass adds its joint-step terms (loss_sim, loss_distill_*) and
-    the student-reference / distill_* holdout series."""
+    An unfrozen pass adds the student-reference holdout series."""
     record = {
         "epoch": epoch,
         "positions": state.rows_trained,
@@ -366,9 +300,6 @@ def _metrics_record(
         "lr": lr,
         "skipped_batches": skipped,
     }
-    for k in DISTILL_LOSS_KEYS:
-        if k in losses:
-            record[f"loss_{k}"] = losses[k]
     for k in ("cond_wld_ce", "plain_wld_ce", "cond_wld_ce_ev", "plain_wld_ce_ev"):
         if k in m:
             record[k] = m[k]
@@ -381,35 +312,18 @@ def _metrics_record(
     record["exact_p0_maxdiff"] = m["exact_p0_maxdiff"]
     record["eval_rows"] = m["rows"]
     record["eval_rows_ev"] = m["rows_ev"]
-    record.update({k: v for k, v in m.items() if k.startswith(("posset_", "student_", "distill_"))})
+    record.update({k: v for k, v in m.items() if k.startswith(("posset_", "student_"))})
     return record
-
-
-def _distillation(params, ctx, epoch: int) -> Distillation | None:
-    """The joint step's distillation side for pass `epoch`; None in frozen mode."""
-    if ctx["distill_train_ds"] is None:
-        return None
-    batches = cycle_batches(ctx["distill_train_ds"], params.batch_positions, epoch)
-    return Distillation(batches, ctx["distill_loss_cfg"], params.lambda_sim)
 
 
 def _holdout_metrics(model, device, params, ctx) -> dict:
     """The pass's held-out readout: plain vs conditioned on the trajectory
-    holdout and the position set; unfrozen, also the student reference and
-    the plain pass's distillation health."""
+    holdout and the position set; unfrozen, also the student reference the
+    moving plain pass is read against."""
     m = evaluate(model, ctx["holdout_ds"], device, params.batch_positions, ctx["max_e"])
     m.update(ctx["posset"].metrics(model, device))
-    if ctx["distill_holdout_ds"] is not None:
+    if ctx["student_ref"] is not None:
         m.update(ctx["student_ref"].metrics(ctx["holdout_ds"]))
-        m.update(
-            distill_metrics(
-                model,
-                ctx["distill_holdout_ds"],
-                device,
-                params.batch_positions,
-                ctx["distill_loss_cfg"],
-            )
-        )
     return m
 
 
@@ -419,18 +333,13 @@ def _pass_line(epoch, state, params, result, m, lr_now, train_s, settled, ctx) -
         if settled
         else f"corpus still growing, {ctx['train_ds'].num_positions} positions"
     )
-    distill = ""
-    if "distill_recall1" in m:
-        distill = (
-            f"student={m.get('student_wld_ce', float('nan')):.4f} "
-            f"distill r@1={m['distill_recall1']:.3f} loss={m['distill_loss']:.4f} "
-        )
+    student = f"student={m['student_wld_ce']:.4f} " if "student_wld_ce" in m else ""
     return (
         f"[pass {epoch}] rows={state.rows_trained} loss={result.losses['total']:.4f} "
         f"wld_ce cond={m.get('cond_wld_ce', float('nan')):.4f} "
         f"plain={m.get('plain_wld_ce', float('nan')):.4f} "
         f"(ev rows: cond={m.get('cond_wld_ce_ev', float('nan')):.4f} "
-        f"plain={m.get('plain_wld_ce_ev', float('nan')):.4f}) {distill}"
+        f"plain={m.get('plain_wld_ce_ev', float('nan')):.4f}) {student}"
         f"gain_mae={m.get('gain_mae', float('nan')):.4f} "
         f"gain_hit={m.get('gain_hit', float('nan')):.3f} "
         f"(base {m.get('gain_hit_baseline', float('nan')):.3f}) "
@@ -451,7 +360,6 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
         device,
         ctx["loss_cfg"],
         ctx["max_e"],
-        distill=_distillation(params, ctx, epoch),
         lr_fn=ctx["lr_controller"].lr_fn,
         rows_trained=state.rows_trained,
         on_batch=functools.partial(progress_line, epoch),
@@ -486,17 +394,8 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
 
 def _loss_weights(params) -> dict:
     """Each recorded loss series' coefficient in the optimized total, for the
-    dashboard's stacked loss panel: the sim terms (times lambda_sim in the
-    joint total), plus the distillation terms when unfrozen."""
-    sim = {"loss_wld": 1.0, "loss_score_diff": params.lambda_sd, "loss_gain": params.lambda_gain}
-    if not params.unfreeze_backbone:
-        return sim
-    return {
-        "loss_distill_wld": 1.0,
-        "loss_distill_score_diff": params.lambda_sd,
-        "loss_distill_planes": params.lambda_planes,
-        **{k: params.lambda_sim * w for k, w in sim.items()},
-    }
+    dashboard's stacked loss panel."""
+    return {"loss_wld": 1.0, "loss_score_diff": params.lambda_sd, "loss_gain": params.lambda_gain}
 
 
 def _report_model(model, params) -> int:
@@ -507,32 +406,13 @@ def _report_model(model, params) -> int:
     return n_train
 
 
-def _distill_ctx(store, params, device, max_e) -> dict:
-    """The unfrozen mode's run-context entries; None in frozen mode."""
+def _student_reference(params, device, max_e) -> StudentReference | None:
+    """The frozen student's reference metrics -- only meaningful when the
+    plain pass can move (unfrozen); None in frozen mode, where the plain pass
+    IS the student."""
     if not params.unfreeze_backbone:
-        return {"distill_train_ds": None, "distill_holdout_ds": None}
-    train_ds, holdout_ds = load_distill_datasets(store, params)
-    print(
-        f"distill: {train_ds.num_positions} positions / {train_ds.num_candidates} candidates; "
-        f"eval: {holdout_ds.num_positions} positions / {holdout_ds.num_candidates} candidates"
-    )
-    return {
-        "distill_train_ds": train_ds,
-        "distill_holdout_ds": holdout_ds,
-        "distill_loss_cfg": mset_train_loop.LossConfig.from_args(params),
-        "student_ref": StudentReference(
-            params.student_checkpoint, device, params.batch_positions, max_e
-        ),
-    }
-
-
-def _absorb(store, params, ctx) -> int:
-    """Take up the store's new pairs on both sides of the split; the count is
-    the .sobs side's, which paces the corpus clock."""
-    absorbed = absorb_new_pairs(store, params, ctx["train_ds"], ctx["holdout_ds"])
-    if ctx["distill_train_ds"] is not None:
-        absorb_new_pairs(store, params, ctx["distill_train_ds"], ctx["distill_holdout_ds"], ".mset")
-    return absorbed
+        return None
+    return StudentReference(params.student_checkpoint, device, params.batch_positions, max_e)
 
 
 def run(ctx: WorkerContext) -> int:
@@ -604,7 +484,7 @@ def run(ctx: WorkerContext) -> int:
         "max_e": max_e,
         "stats": WorkerStats(ctx),
         "posset": PositionSetProbe(params, student_cfg, threads=ctx.threads),
-        **_distill_ctx(store, params, device, max_e),
+        "student_ref": _student_reference(params, device, max_e),
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=EvidenceTrainState)
@@ -614,7 +494,9 @@ def run(ctx: WorkerContext) -> int:
     try:
         clock = pair_store.CorpusClock(store, params.target_pairs, ".sobs")
         while epochs_left(params, state):
-            settled = clock.is_final(_absorb(store, params, run_ctx))
+            settled = clock.is_final(
+                absorb_new_pairs(store, params, run_ctx["train_ds"], run_ctx["holdout_ds"])
+            )
             train_one_epoch(
                 model, optimizer, recorder, paths, device, params, state, run_ctx, settled
             )
