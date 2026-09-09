@@ -1081,3 +1081,22 @@ def test_controls_are_pushed_once_per_change_for_a_bucket_trainer(manager, tmp_p
     # A local trainer reads the file where it is: nothing to push.
     manager._push_controls(spec, _train_task(tag="u", kinds=("local",)))
     assert len(rc.calls) == 2
+
+
+def test_a_cloud_train_slot_takes_a_gpu_instance(manager):
+    """position_eval's trainer can be a cloud slot now: a GPU pod, singleton,
+    paused until started like any cloud slot; a CPU flavor is refused."""
+    spec = workloads.get("position_eval")
+    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
+    with pytest.raises(AssertionError, match="GPU"):
+        manager.add_cloud(spec, task, "train", 1, CpuResources(vcpus=8, flavor="cpu3c"))
+    (w,) = manager.add_cloud(
+        spec, task, "train", 1, GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1)
+    )
+    assert (w.role, w.kind, w.desired_state, w.gpu_type_id, w.pod_id) == (
+        "train", "cloud", "paused", "NVIDIA GeForce RTX 4090", None
+    )  # fmt: skip
+    with pytest.raises(AssertionError, match="already has"):
+        manager.add_cloud(
+            spec, task, "train", 1, GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1)
+        )
