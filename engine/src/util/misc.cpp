@@ -4,13 +4,44 @@
 
 #include <boost/program_options.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <fstream>
 #include <iostream>
+#include <optional>
 #include <sched.h>
 #include <sstream>
 
 namespace scribblez::util {
+
+namespace {
+
+// CPU count implied by a cgroup CPU quota (ceil(quota / period)), or
+// std::nullopt when no quota is in force: cgroup v2's "max", cgroup v1's
+// quota of -1, or neither version's files present (not running under Linux
+// cgroups at all). v2 is tried first; v1 is only consulted when v2's file is
+// absent, since Runpod hosts may run either.
+std::optional<int> cgroup_quota_cpus() {
+  if (std::ifstream v2("/sys/fs/cgroup/cpu.max"); v2) {
+    std::string quota_str;
+    long period = 0;
+    v2 >> quota_str >> period;
+    if (quota_str == "max") return std::nullopt;
+    return static_cast<int>((std::stol(quota_str) + period - 1) / period);
+  }
+
+  std::ifstream quota_file("/sys/fs/cgroup/cpu/cpu.cfs_quota_us");
+  std::ifstream period_file("/sys/fs/cgroup/cpu/cpu.cfs_period_us");
+  if (!quota_file || !period_file) return std::nullopt;
+  long quota = 0, period = 0;
+  quota_file >> quota;
+  period_file >> period;
+  if (quota < 0) return std::nullopt;
+  return static_cast<int>((quota + period - 1) / period);
+}
+
+}  // namespace
 
 void parse_command_line(int argc, char** argv, boost::program_options::options_description& desc,
                         const std::string& help_epilog) {
@@ -53,7 +84,10 @@ int default_thread_count() {
   cpu_set_t set;
   CPU_ZERO(&set);
   sched_getaffinity(0, sizeof(set), &set);
-  return CPU_COUNT(&set);
+  int affinity = CPU_COUNT(&set);
+  std::optional<int> quota_cpus = cgroup_quota_cpus();
+  if (!quota_cpus) return affinity;
+  return std::max(1, std::min(affinity, *quota_cpus));
 }
 
 uint64_t get_unique_id() {
