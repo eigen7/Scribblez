@@ -136,6 +136,18 @@ def fetch_cloud_offers() -> dict:
     return {"cpu": _cpu_offers(), "gpu": _gpu_offers()}
 
 
+def _error_text(e: urllib.error.HTTPError) -> str:
+    """What the REST API said went wrong: its JSON envelope's `error` when it
+    sent one (the text an operator needs, e.g. "create pod: There are no
+    longer any instances available with the requested specifications"), the
+    raw body otherwise."""
+    body = e.read().decode(errors="replace").strip()
+    try:
+        return str(json.loads(body)["error"])
+    except (ValueError, KeyError, TypeError):
+        return body
+
+
 class RunpodClient:
     def __init__(self, api_key: str):
         self._api_key = api_key
@@ -155,8 +167,7 @@ class RunpodClient:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 payload = resp.read()
         except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace").strip()
-            raise RunpodError(f"{method} {path} -> HTTP {e.code}: {detail}") from e
+            raise RunpodError(f"{method} {path} -> HTTP {e.code}: {_error_text(e)}") from e
         except urllib.error.URLError as e:
             raise RunpodError(f"{method} {path} -> {e.reason}") from e
         return json.loads(payload) if payload else None

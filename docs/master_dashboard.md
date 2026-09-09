@@ -60,7 +60,13 @@ and workload-specific analysis — all from the browser.
   a machine that has never run one. A container that is not running carries its
   reason — exit code and last log line, or why its creation failed — into the
   workers table, and one that keeps dying is retried with a growing delay
-  rather than every pass.
+  rather than every pass. A cloud slot whose pod Runpod will not create (no
+  instance of the requested kind available, say) is treated the same way: it
+  reads `starting` with Runpod's reason beside it, and the next attempt is
+  backed off, doubling up to a few minutes, so an out-of-stock GPU costs one
+  API call every few minutes -- and the dashboard's other requests, which
+  queue behind the reconcile pass's blocking steps, stop waiting on a
+  creation that was never going to succeed.
 - **Gates** — a workload's scheduler can *park* a role without touching the
   operator's desired state (e.g. the training workloads' generators once they
   are a generation ahead of the trainer). Gated workers show as

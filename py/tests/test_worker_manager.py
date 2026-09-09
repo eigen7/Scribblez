@@ -1100,3 +1100,46 @@ def test_a_cloud_train_slot_takes_a_gpu_instance(manager):
         manager.add_cloud(
             spec, task, "train", 1, GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1)
         )
+
+
+def test_a_pod_runpod_will_not_create_is_retried_with_backoff_and_a_reason(manager, monkeypatch):
+    """Out of stock: the slot keeps reading `starting`, says why, and the
+    next attempt waits -- not one create per pass, each a stall for the
+    dashboard's other requests."""
+    from cloud.runpod_api import RunpodError
+
+    spec = workloads.get("position_eval")
+    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
+    (w,) = manager.add_cloud(
+        spec, task, "train", 1, GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1)
+    )
+    w.desired_state = "running"
+    attempts = []
+
+    def no_capacity(self, spec, task, w):
+        attempts.append(1)
+        raise RunpodError("POST /pods -> HTTP 500: create pod: There are no longer any instances")
+
+    monkeypatch.setattr(WorkerManager, "_create_pod", no_capacity)
+    info = {"observed_running": False, "state": "starting"}
+    with pytest.raises(RunpodError):
+        manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
+    manager._reconcile_worker(
+        spec, task, w, workers_mod.RUN, info
+    )  # within the backoff: no attempt
+    assert len(attempts) == 1
+    (status,) = manager.worker_status(spec, task)
+    assert status["state"] == "starting"
+    # The reason names the instance asked for: the pod name does not.
+    assert status["exit_reason"].startswith("NVIDIA GeForce RTX 4090 x1: ")
+    assert "no longer any instances" in status["exit_reason"]
+
+    # The backoff elapses; a creation that succeeds clears the reason.
+    manager._restarts.clear()
+
+    def created(self, spec, task, w):
+        w.pod_id = "p1"
+
+    monkeypatch.setattr(WorkerManager, "_create_pod", created)
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
+    assert w.pod_id == "p1" and not manager._exits and not manager._restarts
