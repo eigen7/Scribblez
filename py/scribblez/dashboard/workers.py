@@ -404,6 +404,19 @@ class WorkerManager:
             self._client = RunpodClient(self._creds.runpod.api_key)
         return self._creds, self._client
 
+    def _replace_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Terminate slot `w`'s pod and create one on the task's bundle. The
+        record forgets the old pod before the new one is asked for, so a
+        creation that fails (out of stock) leaves a slot with no pod -- the
+        state the backoff and the workers table already handle -- rather
+        than one still pointing at a pod that is gone."""
+        _, client = self._cloud()
+        client.delete_pod(w.pod_id)
+        w.pod_id = None
+        w.bundle_id = None
+        tasks.save_task(spec, task)
+        self._try_create_pod(spec, task, w)
+
     def _try_create_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Create slot `w`'s pod, and when Runpod will not -- no instance of
         the requested kind available, an API outage -- keep the reason where
@@ -1188,7 +1201,18 @@ class WorkerManager:
             self._reconcile_ssh(spec, task, w, intent, info["ssh_probe"])
         else:
             # Parking a pod has to stop it: an idle pod bills like a busy one.
-            if intent == RUN and w.pod_id is None:
+            if intent == RUN and w.pod_id is not None and w.bundle_id != task.bundle_id:
+                # A pod's bundle is fixed at creation (its bootstrap fetches
+                # it once), so a slot joins the bundle the task has moved to
+                # by being replaced: this pod goes, and one on the task's
+                # bundle is created in its place. A generator loses its
+                # in-flight chunk; a trainer its in-flight generation, and
+                # comes back on the bucket's last committed checkpoint
+                # (position_eval/trainer.py restore_from_sink). Both are what
+                # the operator asked for by redeploying, or by starting a
+                # slot the task moved on from while it was paused.
+                self._replace_pod(spec, task, w)
+            elif intent == RUN and w.pod_id is None:
                 # A should-run slot with no pod: its creation failed on start,
                 # or a gate released it before its first start. Create it now
                 # -- unless a recent attempt failed, in which case wait it out.

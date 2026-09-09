@@ -165,7 +165,11 @@ the controller's tree when its first remote worker starts, and pins the
 result, so every worker of one task runs identical code and editing code
 mid-run does not change what the fleet is executing. The Overview badges the
 tree having moved on and offers Redeploy, which repins the task and replaces
-its containers (a pod's or container's bundle is fixed at creation). A machine that is off the network shows `unreachable`; the server
+its containers and pods (a pod's or container's bundle is fixed at creation).
+A pod is replaced outright: its outputs are already in the bucket, so a
+generator loses only its in-flight chunk and a trainer its in-flight
+generation, coming back on the bucket's last committed checkpoint. A paused
+slot the task moved on from is replaced the same way when next started. A machine that is off the network shows `unreachable`; the server
 leaves it alone — its worker may well still be running — and resumes control
 when SSH works again. Keep the machine from sleeping on lid-close if it is a
 laptop.
