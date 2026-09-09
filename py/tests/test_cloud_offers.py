@@ -133,3 +133,36 @@ def test_rest_errors_carry_the_apis_own_message(monkeypatch):
         match=r"POST /pods -> HTTP 500: create pod: no longer any instances$",
     ):
         runpod_api.RunpodClient("k").create_pod({})
+
+
+def test_pod_listing_takes_its_runtime_from_graphql(monkeypatch):
+    """The REST listing says what a pod should be doing, not whether its
+    container is up; that comes from GraphQL, as the account."""
+    import io
+    import json
+    import urllib.request
+
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        if req.full_url == runpod_api.GRAPHQL_URL:
+            seen["auth"] = req.get_header("Authorization")
+            seen["query"] = json.loads(req.data)["query"]
+            body = {"data": {"myself": {"pods": [
+                {"id": "up", "runtime": {"uptimeInSeconds": 42}},
+                {"id": "down", "runtime": None},
+            ]}}}  # fmt: skip
+        else:
+            body = [
+                {"id": "up", "desiredStatus": "RUNNING"},
+                {"id": "down", "desiredStatus": "EXITED"},
+                {"id": "unlisted", "desiredStatus": "RUNNING"},
+            ]
+        return io.BytesIO(json.dumps(body).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    pods = {p["id"]: p for p in runpod_api.RunpodClient("k").list_pods()}
+    assert pods["up"]["runtime"] == {"uptimeInSeconds": 42}
+    assert pods["down"]["runtime"] is None
+    assert pods["unlisted"]["runtime"] is None
+    assert seen["auth"] == "Bearer k" and "runtime" in seen["query"]

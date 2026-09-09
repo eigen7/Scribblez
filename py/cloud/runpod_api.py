@@ -11,11 +11,18 @@ import urllib.request
 
 API_BASE = "https://rest.runpod.io/v1"
 
-# The public GraphQL endpoint. Unlike the REST API it needs no API key for the
-# read-only discovery queries below. It is the only Runpod surface that
-# exposes instance catalog, live pricing, and stock; the REST API
-# (RunpodClient) has no discovery endpoints.
+# The GraphQL endpoint. It needs no API key for the read-only discovery
+# queries below, and it is the only Runpod surface that exposes the instance
+# catalog, live pricing, and stock -- and, with the key, a pod's *runtime*:
+# whether its container is actually up, which the REST API (RunpodClient) does
+# not report at all. Its pod listing carries a desiredStatus and nothing
+# about reality, so read on its own it made every running pod look like one
+# still starting, and every stopped one like one Runpod had reclaimed
+# (September 2026, the first real trainer pod).
 GRAPHQL_URL = "https://api.runpod.io/graphql"
+
+# The account's pods with their runtime, keyed the way the REST listing is.
+_PODS_RUNTIME_QUERY = "query { myself { pods { id runtime { uptimeInSeconds } } } }"
 
 # Sent on every request to either endpoint. Both sit behind Cloudflare, which
 # refuses urllib's default "Python-urllib/3.x" signature outright (HTTP 403,
@@ -29,13 +36,15 @@ class RunpodError(Exception):
     """An HTTP or transport failure talking to the Runpod API."""
 
 
-def _graphql(query: str) -> dict:
-    """POST a query to the unauthenticated GraphQL endpoint and return its
-    `data` object. Raises RunpodError on transport, HTTP, or GraphQL errors."""
+def _graphql(query: str, api_key: str | None = None) -> dict:
+    """POST a query to the GraphQL endpoint -- as the account when `api_key`
+    is given, anonymously otherwise -- and return its `data` object. Raises
+    RunpodError on transport, HTTP, or GraphQL errors."""
+    headers = {"Content-Type": "application/json", "User-Agent": _USER_AGENT}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(
-        GRAPHQL_URL,
-        data=json.dumps({"query": query}).encode(),
-        headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT},
+        GRAPHQL_URL, data=json.dumps({"query": query}).encode(), headers=headers
     )
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -173,7 +182,16 @@ class RunpodClient:
         return json.loads(payload) if payload else None
 
     def list_pods(self) -> list[dict]:
-        return self._request("GET", "/pods")
+        """Every pod as the REST API lists it, plus its `runtime`: an object
+        (uptime) while the pod's container is up, None while it is stopped,
+        booting, or reclaimed. The runtime is the liveness the dashboard keys
+        on and only GraphQL reports it, so a listing is one call to each."""
+        pods = self._request("GET", "/pods")
+        listed = _graphql(_PODS_RUNTIME_QUERY, self._api_key)["myself"]["pods"]
+        runtimes = {p["id"]: p.get("runtime") for p in listed}
+        for pod in pods:
+            pod["runtime"] = runtimes.get(pod["id"])
+        return pods
 
     def get_pod(self, pod_id: str) -> dict:
         return self._request("GET", f"/pods/{pod_id}")
