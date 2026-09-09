@@ -259,6 +259,10 @@ class WorkerContext:
     # are local by construction; only a launcher of remote workers overrides it.
     kind: str = "local"
     provenance: dict = field(default_factory=dict)
+    # Where the tag tree this worker reads and writes lives; the mount dir
+    # unless a launcher points a worker elsewhere (a trainer speaking to the
+    # bucket from a machine whose mount dir the controller owns).
+    mount_root: Path | None = None
 
     def tag_paths(self) -> TagPaths:
-        return self.spec.paths(self.tag)
+        return self.spec.paths(self.tag, self.mount_root)

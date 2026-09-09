@@ -26,6 +26,16 @@ here writes dashboard.db: metrics, predictions and control events leave as
 records through the worker's sink (generational/records.py) and the
 dashboard's ingest tick turns them into rows.
 
+Every other artifact crosses the same sink, which is what lets this one
+trainer run on the controller's machine or on a rented one: a generation to
+train over is fetched through it before the wait on its manifest (a pull from
+the bucket, or nothing, when the sink is the mount dir it is already in), and
+each generation's outputs -- the ONNX export, the rolling checkpoint, the
+cursor -- are delivered through it after they are written, the record last.
+A fresh start restores the checkpoint and cursor the same way, then the
+window's generations, so the first epoch after a replacement is the epoch a
+local resume would run.
+
 Training-step regime. The network forward runs under bf16 autocast, with the
 loss on fp32-upcast outputs and fp32 master weights / optimizer state (bf16
 keeps fp32's exponent range, so the overflow that ruled out fp16 serving in
@@ -84,17 +94,50 @@ def _publish_train_state(paths: TagPaths, state: GenerationalState):
     lifecycle.write_train_state(paths, asdict(state))
 
 
-def wait_for_generation(paths: TagPaths, index: int):
-    """Block until generation `index` is complete on disk. The GPU idling here
-    is the generation-is-the-bottleneck signal, visible in the Stats tab."""
+def _generation_ready(paths: TagPaths, sink, index: int) -> bool:
+    """Whether generation `index` is complete under `paths`, fetching it
+    through `sink` when it is not there yet (a published generation arrives
+    whole, manifest last, so complete on arrival)."""
+    gen_dir = paths.generation_dir(index)
+    if lifecycle.is_complete(gen_dir):
+        return True
+    return sink.fetch_data_dir(f"generations/{gen_dir.name}", gen_dir) and lifecycle.is_complete(
+        gen_dir
+    )
+
+
+def wait_for_generation(paths: TagPaths, index: int, sink):
+    """Block until generation `index` is complete on disk, pulling it through
+    the sink as it becomes available. The GPU idling here is the
+    generation-is-the-bottleneck signal, visible in the Stats tab."""
     announced = False
-    while not lifecycle.is_complete(paths.generation_dir(index)):
+    while not _generation_ready(paths, sink, index):
         if not announced:
             timed_print(f"waiting for generation {index} to complete ...")
             announced = True
         time.sleep(POLL_SECONDS)
     if announced:
         timed_print(f"generation {index} is complete")
+
+
+def restore_from_sink(paths: TagPaths, sink):
+    """A fresh start on a machine that has none of the tag: take the rolling
+    checkpoint and the cursor from wherever the sink delivers to, if they are
+    there. A machine that has a checkpoint resumes from its own."""
+    if paths.rolling_checkpoint.exists():
+        return
+    if sink.fetch_file("checkpoints/model.pt", paths.rolling_checkpoint):
+        sink.fetch_file("train_state.json", paths.train_state_path)
+        timed_print(f"restored the rolling checkpoint through the {sink.kind} sink")
+
+
+def ensure_window(paths: TagPaths, sink, cursor: int, window: int):
+    """Fetch the complete generations the window ending before `cursor` would
+    train over and this machine lacks, so a restored trainer's first epoch is
+    the one a local resume would run. One that is not there to fetch (evicted
+    before it was ever published) just leaves the window shorter."""
+    for index in range(max(0, cursor - window), cursor):
+        _generation_ready(paths, sink, index)
 
 
 def _rows_left(params, state: GenerationalState) -> bool:
@@ -162,9 +205,15 @@ def _checkpoint_and_eval(
         ctx["scalar_size"],
         opp_leave_input=params.face_up_leaves,
     )
+    sink = ctx["sink"]
+    for sidecar in paths.onnx_sidecars:
+        sink.deliver_output(sidecar, f"models/{sidecar.name}", keep=True)
+    sink.deliver_output(paths.onnx_path(ci), f"models/{paths.onnx_path(ci).name}")
     preds = {"position_eval_pred": eval_position_eval(model, ctx["position_eval"], device)}
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
+    sink.deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
     _publish_train_state(paths, state)
+    sink.deliver_output(paths.train_state_path, "train_state.json", keep=True)
     recorder.commit_generation(ci, state.rows_trained, record, preds)
     return time.time() - t_eval
 
@@ -282,7 +331,7 @@ def run_generational_training(
     cpu = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
-        wait_for_generation(paths, state.generation_index)
+        wait_for_generation(paths, state.generation_index, ctx["sink"])
         train_one_generation(
             model,
             train_model,
@@ -436,6 +485,7 @@ def run(ctx: WorkerContext) -> int:
 
     run_ctx = {
         "config": asdict(params),
+        "sink": ctx.sink,
         "read_controls": functools.partial(read_controls, ctx.sink),
         "spatial_planes": spatial_planes,
         "scalar_size": scalar_size,
@@ -444,7 +494,9 @@ def run(ctx: WorkerContext) -> int:
         "stats": WorkerStats(ctx),
     }
 
+    restore_from_sink(paths, ctx.sink)
     state = checkpoint.resume(paths, model, optimizer, device)
+    ensure_window(paths, ctx.sink, state.generation_index, params.window)
     _publish_train_state(paths, state)
     try:
         run_generational_training(

@@ -15,6 +15,17 @@ for a file addressed from the tag root (a trainer's prediction arrays),
 trainer's records; relative to the tag root / bucket prefix), and
 `read_json(rel)` to read one back -- how a restarted worker recovers the
 counters it published before, and how a trainer reads its controls.
+
+A trainer also consumes and produces whole artifacts at the tag root -- the
+generations it trains over, its exports, its rolling checkpoint and cursor --
+and those take three more calls, which is what lets one trainer run wherever
+its sink points: `fetch_data_dir(data_rel, dest)` and `fetch_file(rel, dest)`
+bring an artifact the controller published to where the trainer reads it
+(nothing to do under the local sink, whose mount dir is where it already
+is), and `deliver_output(src, rel, keep)` sends one the trainer wrote back
+(again nothing to do locally). Under the R2 sink the fetches are pulls from
+the tag prefix, the delivery an upload -- unlinked afterwards unless kept,
+since the pod disk is scratch and the bucket is where outputs live.
 """
 
 import json
@@ -24,6 +35,11 @@ from pathlib import Path
 
 from cloud.credentials import R2Credentials
 from cloud.r2 import bucket_path, rclone
+
+# A published generation's last object (scribblez/generational/lifecycle.py);
+# named here rather than imported so the sinks stay free of the training
+# package.
+MANIFEST_NAME = "manifest.json"
 
 
 class LocalSink:
@@ -64,6 +80,21 @@ class LocalSink:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(src, dest)
         return 0
+
+    def fetch_data_dir(self, data_rel: str, dest: Path) -> bool:
+        """Whether <tag>/data/<data_rel> exists -- it is `dest` itself."""
+        assert dest == self._root / "data" / data_rel, (dest, data_rel)
+        return dest.is_dir()
+
+    def fetch_file(self, rel_path: str, dest: Path) -> bool:
+        """Whether <tag>/<rel_path> exists -- it is `dest` itself."""
+        assert dest == self._root / rel_path, (dest, rel_path)
+        return dest.is_file()
+
+    def deliver_output(self, src: Path, rel_path: str, *, keep: bool = False):
+        """An output written at its place under the tag root is already
+        delivered."""
+        assert src == self._root / rel_path, (src, rel_path)
 
 
 class R2Sink:
@@ -112,6 +143,37 @@ class R2Sink:
     # a data file does.
     push_file = deliver
 
+    def fetch_data_dir(self, data_rel: str, dest: Path) -> bool:
+        """Pull <workload>/<tag>/<data_rel> into `dest`, whole, if the bucket
+        has it: a generation is published chunks-first and manifest-last, so
+        the manifest's presence is the test, and its objects never change,
+        so what `dest` already holds is skipped by size. False when the
+        bucket has no such directory yet."""
+        prefix = self._path(*data_rel.split("/"))
+        if not rclone(self._r2, "lsf", f"{prefix}/{MANIFEST_NAME}", capture=True).stdout.strip():
+            return False
+        res = rclone(self._r2, "copy", "--size-only", prefix, str(dest), capture=True)
+        assert res.returncode == 0, f"pull of {data_rel} failed: {res.stderr}"
+        return True
+
+    def fetch_file(self, rel_path: str, dest: Path) -> bool:
+        """Pull <workload>/<tag>/<rel_path> to `dest` if the bucket has it."""
+        src = self._path(*rel_path.split("/"))
+        if not rclone(self._r2, "lsf", src, capture=True).stdout.strip():
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        res = rclone(self._r2, "copyto", src, str(dest), capture=True)
+        assert res.returncode == 0, f"pull of {rel_path} failed: {res.stderr}"
+        return True
+
+    def deliver_output(self, src: Path, rel_path: str, *, keep: bool = False):
+        """Upload `src` to <workload>/<tag>/<rel_path>; the local copy goes
+        unless `keep` (the checkpoint a resume needs, the cursor)."""
+        res = rclone(self._r2, "copyto", str(src), self._path(*rel_path.split("/")), capture=True)
+        assert res.returncode == 0, f"upload of {rel_path} failed: {res.stderr}"
+        if not keep:
+            src.unlink()
+
 
 def r2_from_env() -> R2Credentials:
     return R2Credentials(
@@ -122,8 +184,9 @@ def r2_from_env() -> R2Credentials:
     )
 
 
-def make_sink(spec, tag: str):
-    """The sink selected by SCZ_SINK ("r2", the default, or "local")."""
+def make_sink(spec, tag: str, mount_root=None):
+    """The sink selected by SCZ_SINK ("r2", the default, or "local"); a local
+    sink's root is the tag's under `mount_root` (the mount dir by default)."""
     if os.environ.get("SCZ_SINK", "r2") == "local":
-        return LocalSink(spec.data_dir(tag))
+        return LocalSink(spec.paths(tag, mount_root).root)
     return R2Sink(r2_from_env(), spec.name, tag)

@@ -4,9 +4,10 @@ Status: plan-reviewed draft (critique profile, codex rival seat), revised
 after review, then extended with the machines/slots discussion. PR 2 (the
 trainer I/O contract) and PR 1 (the runtime) have landed; PR 3 is in
 progress as three slices -- 3a the controller's bucket legs (generation
-publish, trainer-output pull, controls push), 3b the trainer's cloud kind,
-3c the cloud train slot -- with the machine model (below) as 3d, designed
-against the experience of real runs. The review record is at the end.
+publish, trainer-output pull, controls push), 3b the trainer's artifacts
+through its sink (its cloud contract), 3c the cloud train slot -- with the
+machine model (below) as 3d, designed against the experience of real runs.
+The review record is at the end.
 
 ## Goal
 

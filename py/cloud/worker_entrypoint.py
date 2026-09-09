@@ -36,6 +36,10 @@ Configuration is entirely via environment variables:
     SCZ_BUNDLE_ARCH                       in the manifest and stats
     SCZ_DEVICE                            torch device for a train role
                                           (default "cuda"; read by the trainers)
+    SCZ_MOUNT_ROOT                        where the tag tree lives (default: the
+                                          mount dir); a trainer run against the
+                                          bucket from a machine whose mount dir
+                                          the controller owns needs its own
 """
 
 import os
@@ -43,6 +47,7 @@ import signal
 import socket
 import sys
 from dataclasses import asdict
+from pathlib import Path
 
 from scribblez import params as params_mod
 from scribblez import workloads
@@ -68,6 +73,7 @@ WORKER_ENV_VARS = (
     "SCZ_HOST_ARCH",
     "SCZ_BUNDLE_ARCH",
     "SCZ_DEVICE",
+    "SCZ_MOUNT_ROOT",
 )
 
 
@@ -117,7 +123,8 @@ def main() -> int:
         tag = os.environ["SCZ_TAG"]
         params = params_mod.from_env(spec.params_cls)
         threads = int(os.environ.get("SCZ_THREADS", 0)) or default_thread_count()
-        sink = make_sink(spec, tag)
+        mount_root = Path(os.environ["SCZ_MOUNT_ROOT"]) if "SCZ_MOUNT_ROOT" in os.environ else None
+        sink = make_sink(spec, tag, mount_root)
         kind = os.environ.get("SCZ_WORKER_KIND") or sink.kind
         if role.deps:
             workloads.resolve(role.deps)(params)
@@ -146,6 +153,7 @@ def main() -> int:
             max_cycles=int(os.environ.get("SCZ_MAX_CYCLES", 0)),
             sink=sink,
             provenance=provenance(),
+            mount_root=mount_root,
         )
         return workloads.resolve(role.runner)(ctx)
     except WorkerStopped:
