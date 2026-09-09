@@ -404,6 +404,21 @@ class WorkerManager:
             self._client = RunpodClient(self._creds.runpod.api_key)
         return self._creds, self._client
 
+    def _start_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Start slot `w`'s stopped pod -- or replace it when Runpod cannot.
+        A stopped pod stays pinned to its host, and a host that has filled
+        since ("not enough free memory on the host machine") never frees for
+        it; retrying the start would fail forever, one API error per pass.
+        Replacement costs nothing that matters: a generator's finished chunks
+        are already in the bucket, a trainer restores from its last committed
+        checkpoint, and a fresh pod lands wherever there is room."""
+        _, client = self._cloud()
+        try:
+            client.start_pod(w.pod_id)
+        except RunpodError as e:
+            print(f"start {spec.name}/{task.tag}/{w.worker_id}: {e}; replacing the pod")
+            self._replace_pod(spec, task, w)
+
     def _replace_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Terminate slot `w`'s pod and create one on the task's bundle. The
         record forgets the old pod before the new one is asked for, so a
@@ -760,8 +775,7 @@ class WorkerManager:
             if start and w.pod_id is None:
                 self._create_pod(spec, task, w)
             elif start:
-                _, client = self._cloud()
-                client.start_pod(w.pod_id)
+                self._start_pod(spec, task, w)
             elif not run and w.pod_id is not None:
                 _, client = self._cloud()
                 client.stop_pod(w.pod_id)
@@ -1219,8 +1233,7 @@ class WorkerManager:
                 if self._restart_allowed(_key(spec, task.tag, w.worker_id)):
                     self._try_create_pod(spec, task, w)
             elif intent == RUN and info["state"] == "interrupted":
-                _, client = self._cloud()
-                client.start_pod(w.pod_id)
+                self._start_pod(spec, task, w)
             elif intent != RUN and alive:
                 _, client = self._cloud()
                 client.stop_pod(w.pod_id)

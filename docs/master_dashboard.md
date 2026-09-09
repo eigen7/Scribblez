@@ -169,7 +169,10 @@ its containers and pods (a pod's or container's bundle is fixed at creation).
 A pod is replaced outright: its outputs are already in the bucket, so a
 generator loses only its in-flight chunk and a trainer its in-flight
 generation, coming back on the bucket's last committed checkpoint. A paused
-slot the task moved on from is replaced the same way when next started. A machine that is off the network shows `unreachable`; the server
+slot the task moved on from is replaced the same way when next started -- as
+is any stopped pod Runpod cannot start again (a stopped pod is pinned to its
+host, which may have filled meanwhile), whether the start is the operator's
+or the reconcile pass resuming a parked or reclaimed slot. A machine that is off the network shows `unreachable`; the server
 leaves it alone — its worker may well still be running — and resumes control
 when SSH works again. Keep the machine from sleeping on lid-close if it is a
 laptop.

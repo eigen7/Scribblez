@@ -1186,3 +1186,39 @@ def test_a_pod_on_an_old_bundle_is_replaced_when_it_should_run(manager, monkeypa
     assert deleted == ["p-old", "p-new"] and w.pod_id is None
     (status,) = manager.worker_status(spec, task)
     assert status["state"] == "starting" and "no longer any instances" in status["exit_reason"]
+
+
+def test_a_stopped_pod_that_will_not_start_is_replaced(manager, monkeypatch):
+    """A stopped pod is pinned to its host; when the host has filled, Runpod
+    refuses the start for good. The slot gets a fresh pod instead of an
+    error per pass."""
+    from cloud.runpod_api import RunpodError
+
+    spec = workloads.get("position_eval")
+    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
+    task.bundle_id = "b"
+    (w,) = manager.add_cloud(spec, task, "generate", 1, CpuResources(vcpus=8, flavor="cpu3c"))
+    w.desired_state, w.pod_id, w.bundle_id = "running", "p-stuck", "b"
+    calls = []
+
+    def start_pod(pod_id):
+        calls.append(("start", pod_id))
+        raise RunpodError("POST /pods/p-stuck/start -> HTTP 500: not enough free memory")
+
+    client = SimpleNamespace(
+        start_pod=start_pod, delete_pod=lambda pid: calls.append(("delete", pid))
+    )
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (None, client))
+
+    def created(self, spec, task, w):
+        w.pod_id, w.bundle_id = "p-fresh", task.bundle_id
+
+    monkeypatch.setattr(WorkerManager, "_create_pod", created)
+    info = {"observed_running": False, "state": "interrupted"}
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
+    assert calls == [("start", "p-stuck"), ("delete", "p-stuck")] and w.pod_id == "p-fresh"
+    # An operator's Start of a paused pod takes the same road.
+    w.desired_state, w.pod_id = "paused", "p-stuck"
+    calls.clear()
+    manager.set_worker_state(spec, task, w.worker_id, run=True)
+    assert calls == [("start", "p-stuck"), ("delete", "p-stuck")] and w.pod_id == "p-fresh"
