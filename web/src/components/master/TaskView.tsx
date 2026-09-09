@@ -17,7 +17,7 @@ type WorkerInfo = {
   threads: number | null; vcpus: number | null; flavor: string | null;
   gpu_type_id: string | null; gpu_count: number | null;
   pod_id: string | null; host: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
-  gate_reason?: string; bundle_id: string | null; exit_reason?: string;
+  gate_reason?: string; bundle_id: string | null; exit_reason?: string; retry_in_s?: number;
   undelivered: number | null; launched: boolean;
 };
 
@@ -616,6 +616,13 @@ function WorkersTable({ workers, taskBundle, onAction }: {
                     title={w.exit_reason}
                   >
                     {w.exit_reason}
+                    {/* A slot in a long backoff should not read as one nobody
+                        is retrying: say when. */}
+                    {w.retry_in_s != null && (
+                      <span style={{ color: '#6b7280' }}>
+                        {' '}{w.retry_in_s > 0 ? `Next attempt in ${w.retry_in_s} s.` : 'Retrying now.'}
+                      </span>
+                    )}
                   </div>
                 )}
               </td>

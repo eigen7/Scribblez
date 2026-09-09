@@ -1130,9 +1130,12 @@ def test_a_pod_runpod_will_not_create_is_retried_with_backoff_and_a_reason(manag
     assert len(attempts) == 1
     (status,) = manager.worker_status(spec, task)
     assert status["state"] == "starting"
-    # The reason names the instance asked for: the pod name does not.
-    assert status["exit_reason"].startswith("NVIDIA GeForce RTX 4090 x1: ")
+    # The reason names the instance asked for (the pod name does not), says
+    # what to do, keeps Runpod's words, and says when the next attempt is.
+    assert status["exit_reason"].startswith("No NVIDIA GeForce RTX 4090 x1 available on Runpod")
+    assert "remove this slot and add it again" in status["exit_reason"]
     assert "no longer any instances" in status["exit_reason"]
+    assert 0 < status["retry_in_s"] <= workers_mod.OBSERVATION_TTL_SECONDS
 
     # The backoff elapses; a creation that succeeds clears the reason.
     manager._restarts.clear()
@@ -1222,3 +1225,11 @@ def test_a_stopped_pod_that_will_not_start_is_replaced(manager, monkeypatch):
     calls.clear()
     manager.set_worker_state(spec, task, w.worker_id, run=True)
     assert calls == [("start", "p-stuck"), ("delete", "p-stuck")] and w.pod_id == "p-fresh"
+
+
+def test_a_refusal_that_is_not_stock_says_what_runpod_said():
+    reason = workers_mod._refusal_reason("cpu3c 8 vCPU", "create pod: invalid registry auth")
+    assert reason == (
+        "Runpod would not create a cpu3c 8 vCPU pod: create pod: invalid registry auth. "
+        "Retrying automatically."
+    )

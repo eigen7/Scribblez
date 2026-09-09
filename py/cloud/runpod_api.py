@@ -33,7 +33,13 @@ _USER_AGENT = "scribblez-dashboard"
 
 
 class RunpodError(Exception):
-    """An HTTP or transport failure talking to the Runpod API."""
+    """An HTTP or transport failure talking to the Runpod API. `detail` is
+    what Runpod itself said, without the request it was said about -- the
+    part an operator's message wants."""
+
+    def __init__(self, message: str, detail: str | None = None):
+        super().__init__(message)
+        self.detail = detail if detail is not None else message
 
 
 def _graphql(query: str, api_key: str | None = None) -> dict:
@@ -176,7 +182,8 @@ class RunpodClient:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 payload = resp.read()
         except urllib.error.HTTPError as e:
-            raise RunpodError(f"{method} {path} -> HTTP {e.code}: {_error_text(e)}") from e
+            detail = _error_text(e)
+            raise RunpodError(f"{method} {path} -> HTTP {e.code}: {detail}", detail) from e
         except urllib.error.URLError as e:
             raise RunpodError(f"{method} {path} -> {e.reason}") from e
         return json.loads(payload) if payload else None
