@@ -72,8 +72,27 @@ def tick_for_task(spec, task, hooks):
 
 def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn = _header_games):
     """One scheduling pass: drain staging into fill targets as far as pacing
-    allows, updating manifests and the generate-role gate."""
+    allows, updating manifests and the generate-role gate; then put any
+    complete generation not yet in the bucket there."""
     paths.staging_dir.mkdir(parents=True, exist_ok=True)
+    _drain(paths, cfg, hooks, chunk_games)
+    if hooks.publish:
+        _publish_complete(paths, hooks)
+
+
+def _publish_complete(paths: TagPaths, hooks):
+    """Call the publish hook for every complete generation the manifest does
+    not yet record as published, marking each only once the call returned:
+    a failed upload is retried next tick, and a controller restart picks up
+    where it left off. Window eviction bounds what the scan can find."""
+    for index in lifecycle.list_generation_indices(paths):
+        gen_dir = paths.generation_dir(index)
+        if lifecycle.is_complete(gen_dir) and not lifecycle.is_published(gen_dir):
+            hooks.publish(f"generations/{gen_dir.name}")
+            lifecycle.mark_published(gen_dir)
+
+
+def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn):
     staged = _staged_chunks(paths)
 
     cursor = lifecycle.read_train_state(paths).get("generation_index", 0)

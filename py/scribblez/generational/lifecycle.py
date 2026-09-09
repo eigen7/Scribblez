@@ -11,8 +11,10 @@ trainer) coordinate entirely through these files.
 
 The manifest is the authority for a directory's status: completeness is a
 recorded fact (status + committed game count), never inferred from a file
-glob. Everything here reads manifests only (no .slog header I/O), so it stays
-cheap and free of the C++ loader.
+glob -- and so is a complete generation's publication to the results bucket
+(the scheduler's publish hook, for a trainer running elsewhere). Everything
+here reads manifests only (no .slog header I/O), so it stays cheap and free
+of the C++ loader.
 
 See docs/position_eval_workload.md for the surrounding protocol.
 """
@@ -31,6 +33,9 @@ MANIFEST_NAME = "manifest.json"
 # Manifest status values.
 GENERATING = "generating"
 COMPLETE = "complete"
+
+# Manifest key set once the generation is in the results bucket.
+PUBLISHED = "published"
 
 # The gen_<NNNNNN> directory-name prefix produced by TagPaths.generation_dir.
 _DIR_PREFIX = "gen_"
@@ -111,6 +116,20 @@ def mark_complete(gen_dir: Path, committed_games: int):
 def is_complete(gen_dir: Path) -> bool:
     manifest = read_manifest(gen_dir)
     return manifest is not None and manifest.get("status") == COMPLETE
+
+
+def mark_published(gen_dir: Path):
+    """Record that the complete generation is in the results bucket, whole."""
+    manifest = read_manifest(gen_dir)
+    if manifest is None:
+        raise FileNotFoundError(f"no manifest to mark published in {gen_dir}")
+    manifest[PUBLISHED] = True
+    write_manifest(gen_dir, manifest)
+
+
+def is_published(gen_dir: Path) -> bool:
+    manifest = read_manifest(gen_dir)
+    return manifest is not None and bool(manifest.get(PUBLISHED))
 
 
 # ---------------------------------------------------------------------------

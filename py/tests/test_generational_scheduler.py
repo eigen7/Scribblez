@@ -30,13 +30,21 @@ def _stage(paths: TagPaths, name: str, games: int):
 
 
 class Hooks(SchedulerHooks):
-    def __init__(self):
+    def __init__(self, publish: bool = False):
         self.gates: dict[str, str | None] = {}
         self.mirrored: list[tuple[str, str]] = []
+        self.published: list[str] = []
+        self.publish_fails = False
         super().__init__(
             gate=lambda role, reason: self.gates.__setitem__(role, reason),
             mirror=lambda name, dest: self.mirrored.append((name, dest)),
+            publish=self._publish if publish else None,
         )
+
+    def _publish(self, dest_rel: str):
+        if self.publish_fails:
+            raise RuntimeError("bucket unreachable")
+        self.published.append(dest_rel)
 
 
 def _tick(paths, hooks, *, games=100, ahead=1):
@@ -124,3 +132,38 @@ def test_committed_count_self_heals(paths):
     _tick(paths, hooks)
     assert lifecycle.is_complete(gen0)
     assert lifecycle.read_manifest(gen0)["committed_games"] == 100
+
+
+def test_a_complete_generation_is_published_once(paths):
+    hooks = Hooks(publish=True)
+    _stage(paths, "a", 100)
+    _tick(paths, hooks)
+    gen0 = paths.generation_dir(0)
+    assert lifecycle.is_complete(gen0) and lifecycle.is_published(gen0)
+    assert hooks.published == ["generations/gen_000000"]
+    _tick(paths, hooks)  # the open gen 1 is not complete: nothing more to publish
+    assert hooks.published == ["generations/gen_000000"]
+    assert not lifecycle.is_published(paths.generation_dir(1))
+
+
+def test_a_failed_publish_is_retried_next_tick(paths):
+    """The manifest records publication only once the hook returned, so an
+    upload that failed (or a controller that died mid-way) is redone."""
+    hooks = Hooks(publish=True)
+    hooks.publish_fails = True
+    _stage(paths, "a", 100)
+    with pytest.raises(RuntimeError):
+        _tick(paths, hooks)
+    gen0 = paths.generation_dir(0)
+    assert lifecycle.is_complete(gen0) and not lifecycle.is_published(gen0)
+    hooks.publish_fails = False
+    _tick(paths, hooks)
+    assert lifecycle.is_published(gen0)
+    assert hooks.published == ["generations/gen_000000"]
+
+
+def test_without_a_publish_hook_nothing_is_marked(paths):
+    hooks = Hooks()
+    _stage(paths, "a", 100)
+    _tick(paths, hooks)
+    assert not lifecycle.is_published(paths.generation_dir(0))

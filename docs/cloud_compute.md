@@ -111,7 +111,9 @@ Principles:
   pod-spec path, so pods are identical however launched.
 - **Results sync** (`./py/scripts/cloud_sync.py`): pulls the workload's
   inbound bucket prefixes into `<mount>/tags/<workload>/<tag>/`, merging with
-  locally generated data for the same tag. Cloud pods only -- an ssh worker's
+  locally generated data for the same tag; for a tag whose trainer delivers
+  through the bucket, its outputs too (`--trainer-outputs`, which the
+  dashboard passes for such a tag). Cloud pods only -- an ssh worker's
   results are read straight out of its container over the control link
   (`py/cloud/ssh_transfer.py`), which is both faster and one fewer place for
   them to be. Prefixes the controller host itself
