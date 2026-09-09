@@ -1130,6 +1130,8 @@ def test_a_pod_runpod_will_not_create_is_retried_with_backoff_and_a_reason(manag
     assert len(attempts) == 1
     (status,) = manager.worker_status(spec, task)
     assert status["state"] == "starting"
+    # The reason names the instance asked for: the pod name does not.
+    assert status["exit_reason"].startswith("NVIDIA GeForce RTX 4090 x1: ")
     assert "no longer any instances" in status["exit_reason"]
 
     # The backoff elapses; a creation that succeeds clears the reason.

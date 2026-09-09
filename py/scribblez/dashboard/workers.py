@@ -292,6 +292,13 @@ def _cloud_state(desired: str, alive: bool, gated: bool, desired_status: str | N
     return "starting" if desired_status is None or desired_status == "RUNNING" else "interrupted"
 
 
+def _describe_resources(resources: CpuResources | GpuResources) -> str:
+    """The instance a slot asks Runpod for, as an operator would name it."""
+    if isinstance(resources, GpuResources):
+        return f"{resources.gpu_type_id} x{resources.gpu_count}"
+    return f"{resources.flavor} {resources.vcpus} vCPU"
+
+
 def _resource_record_fields(resources: CpuResources | GpuResources) -> dict:
     """The WorkerRecord cloud-resource fields for a pod's hardware selection."""
     if isinstance(resources, GpuResources):
@@ -410,9 +417,12 @@ class WorkerManager:
         try:
             self._create_pod(spec, task, w)
         except RunpodError as e:
-            self._exits[key] = str(e)
+            # Name the instance asked for: the pod name says nothing about
+            # it, and which kind is out of stock is the whole question.
+            reason = f"{_describe_resources(_worker_resources(w))}: {e}"
+            self._exits[key] = reason
             self._note_restart(key)
-            raise
+            raise RunpodError(reason) from e
         self._exits.pop(key, None)
         self._restarts.pop(key, None)
 
