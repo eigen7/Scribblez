@@ -130,10 +130,10 @@ Principles:
 - **GPU pod specs** (`pod_create_spec` in cloud_fleet.py): builds either a CPU
   or a GPU pod spec; a `RoleSpec` declares `gpu=True` for roles that need GPU
   hardware, and the dashboard offers instance types accordingly. The pod's
-  image follows the role's runtime. Forward-looking: no cloud role declares
-  `gpu` today; the train roles run on the torch image but are still local-only
-  slots -- [cloud_training_plan.md](cloud_training_plan.md) is the plan for
-  putting them on pods.
+  image follows the role's runtime. position_eval's train role is the first
+  GPU cloud role: a GPU pod on the torch image, taking its generations from
+  the bucket and delivering its outputs there
+  ([cloud_training_plan.md](cloud_training_plan.md)).
 
 ## The daily loop
 

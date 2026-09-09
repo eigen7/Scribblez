@@ -196,3 +196,27 @@ def test_the_trainer_refuses_to_start_without_its_eval_datasets(tmp_path, monkey
         trainer.load_position_eval(87)
     with pytest.raises(Exception, match="absent"):
         trainer.load_position_eval_quality(87, face_up_leaves=True)
+
+
+def test_a_cloud_train_slot_is_a_gpu_pod_on_the_torch_image():
+    from cloud.credentials import CloudCredentials, R2Credentials, RunpodCredentials
+    from scribblez import params as params_mod
+    from scripts.cloud_fleet import GpuResources, pod_create_spec
+
+    spec = workloads.get("position_eval")
+    assert "cloud" in spec.role("train").kinds
+    creds = CloudCredentials(
+        runpod=RunpodCredentials(api_key="k", container_registry_auth_id="a"),
+        registry=RegistryConfig(worker_image="docker.io/u/scribblez"),
+        r2=R2Credentials(account_id="acct", access_key_id="ak", secret_access_key="sk", bucket="b"),
+    )
+    params = params_mod.validate(spec.params_cls, {})
+    body = pod_create_spec(
+        creds, spec, "t", params, name="scz-t-1", role="train", bundle_id="bid",
+        resources=GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1),
+    )  # fmt: skip
+    assert body["imageName"] == "docker.io/u/scribblez:latest-torch"
+    assert body["computeType"] == "GPU" and body["gpuTypeIds"] == ["NVIDIA GeForce RTX 4090"]
+    assert body["interruptible"] is False  # the singleton the run waits on
+    assert body["env"]["SCZ_ROLE"] == "train" and body["env"]["SCZ_WORKER_KIND"] == "cloud"
+    assert "SCZ_SINK" not in body["env"]  # the bucket, the default

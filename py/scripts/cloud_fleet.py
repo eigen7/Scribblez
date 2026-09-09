@@ -158,6 +158,11 @@ def cmd_up(creds: CloudCredentials, client: RunpodClient, args) -> int:
     spec = workloads.get(args.workload)
     params = spec.params_from_args(args)
     bundle_id = resolve_launch_bundle(creds, args.bundle)
+    if spec.role(args.role).gpu:
+        assert args.gpu_type_id, f"role '{args.role}' runs on a GPU: pass --gpu-type-id"
+        resources = GpuResources(gpu_type_id=args.gpu_type_id, gpu_count=1)
+    else:
+        resources = CpuResources(vcpus=args.vcpus, flavor=args.flavor)
     print(f"Launching {args.num_workers} worker(s) on bundle {bundle_id} ...")
     for _ in range(args.num_workers):
         name = new_pod_name(args.tag)
@@ -169,7 +174,7 @@ def cmd_up(creds: CloudCredentials, client: RunpodClient, args) -> int:
             name=name,
             role=args.role,
             bundle_id=bundle_id,
-            resources=CpuResources(vcpus=args.vcpus, flavor=args.flavor),
+            resources=resources,
             container_disk_gb=args.container_disk_gb,
         )
         pod = client.create_pod(body)
@@ -252,8 +257,13 @@ def main() -> int:
     up.add_argument("-n", "--num-workers", type=int, default=1)
     up.add_argument("-t", "--tag", required=True, help="run tag (the workload's data tag)")
     up.add_argument("--role", choices=cloud_roles, default=cloud_roles[0], help="worker role")
-    up.add_argument("--vcpus", type=int, default=16, help="vCPUs per worker pod")
-    up.add_argument("--flavor", default="cpu3c", help="Runpod CPU flavor id")
+    up.add_argument("--vcpus", type=int, default=16, help="vCPUs per worker pod (CPU roles)")
+    up.add_argument("--flavor", default="cpu3c", help="Runpod CPU flavor id (CPU roles)")
+    up.add_argument(
+        "--gpu-type-id",
+        default=None,
+        help="Runpod gpuTypeId for a GPU role (required for one; see the dashboard's catalog)",
+    )
     up.add_argument("--container-disk-gb", type=int, default=20)
     up.add_argument(
         "--bundle",

@@ -41,18 +41,23 @@ kill_test under the contract: one parallel, interruptible `generate` role and
 no scheduler; each worker cycles in a private work dir and delivers complete
 pairs to the tag's data store.
 
-A trainer slot that delivers through the bucket (kind `cloud`; the
-train roles do not offer it yet) gets two more legs from the controller: the
+A trainer slot that delivers through the bucket (kind `cloud`: a GPU pod
+on the torch worker image) gets two more legs from the controller: the
 per-task sync watcher also pulls its outputs (`records/`, `models/`,
 `checkpoints/`, `train_state.json`), and the reconcile pass pushes the tag's
-`controls.json` up whenever the Controls tab rewrites it.
+`controls.json` up whenever the Controls tab rewrites it. Everything else
+about such a tag is unchanged: the scheduler assembles generations here and
+publishes them, match eval stays a local or ssh slot working off the pulled
+exports, and the Loss / Positions / Stats tabs read what the sync brought
+down. Several tags with cloud trainers run side by side from this one
+dashboard, which is the point of it ([cloud_training_plan.md](cloud_training_plan.md)).
 
 ## Roles
 
 | Role | Cardinality | Kinds | Interruptible | Does |
 |---|---|---|---|---|
 | `generate` | N, interchangeable | local + cloud | yes | one cycle = one whole `.slog` chunk of self-play games, delivered to the staging area |
-| `train` | singleton | local (the GPU box) | — | consume complete generations: train, checkpoint, export ONNX, deliver the generation's record |
+| `train` | singleton | local (the GPU box) + cloud (a GPU pod) | — | consume complete generations: train, checkpoint, export ONNX, deliver the generation's record |
 | `match_eval` | singleton | local + ssh (needs a GPU) | — | play eval matches against fixed opponent (position_eval only; docs/roadmap.md A1) |
 
 The trainer never generates and the generators never train; match_eval only

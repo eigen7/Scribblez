@@ -29,8 +29,8 @@ and workload-specific analysis — all from the browser.
   settings for the data to be analyzable as one corpus. Tags created outside
   the dashboard appear in the tag list, read-only.
 - **Role** — which of the workload's worker kinds a slot runs (`RoleSpec`):
-  parallel interchangeable generators, or a singleton trainer restricted to
-  the local GPU box. Each role declares its runner, runtime deps, allowed
+  parallel interchangeable generators, or a singleton trainer on the local
+  GPU box or a rented GPU pod. Each role declares its runner, runtime deps, allowed
   kinds (local/cloud), whether its pods rent interruptible, whether it needs
   GPU hardware, and its stats schema.
 - **Worker** — a durable *slot* attached to a task: role, kind, resource
