@@ -146,6 +146,18 @@ one file: the Controls tab writes every control's value to the tag's
 `controls.json`, which the trainer reads through the same sink at each
 generation.
 
+Every other artifact crosses the same sink, which is what lets the one
+trainer run on the controller's machine or on a rented one: a generation is
+fetched through the sink before the wait on its manifest (a pull of the
+published generation from the bucket, or nothing under the local sink, whose
+mount dir already holds it), and each generation's outputs -- the ONNX
+export, the rolling checkpoint, the cursor -- are delivered through it after
+they are written, the record last. A fresh start on a machine that has none
+of the tag restores the checkpoint and cursor the same way, then the window's
+generations. Under the local sink all of this is a no-op; under the bucket
+sink it is the trainer's whole cloud contract, and the controller's legs
+above are its other half.
+
 Launched as a local worker slot like any other; the runner lives with the
 training code (referenced by dotted path) so generator bundles never import
 torch. `scripts/position_eval/train.py` remains a thin CLI over the same
