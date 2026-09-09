@@ -75,6 +75,15 @@ MATCH_RESULTS_DIR = "match_results"
 # apart from the shared blobs beside it in models/ (see onnx_sidecars).
 ONNX_PREFIX = "model_epoch_"
 
+# What a trainer running elsewhere delivers through the results bucket,
+# relative to the tag root, and the controller's sync pulls back
+# (scripts/cloud_sync.py): the record stream and the exports never change
+# once written, so they are pulled by size alone; the rolling checkpoint and
+# the cursor are rewritten in place.
+TRAINER_OUTPUT_DIRS = ("records", "models", "checkpoints")
+TRAINER_OUTPUT_IMMUTABLE = ("records", "models")
+TRAINER_OUTPUT_FILES = ("train_state.json",)
+
 # The trainer's record stream (generational/records.py): where it lives
 # relative to the tag root, and how a generation's record is named. Relative
 # paths because the trainer addresses them through its results sink, which

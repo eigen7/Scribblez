@@ -32,6 +32,7 @@ from scripts.cloud_fleet import CpuResources, GpuResources
 # The fixture below replaces the launch paths with _fail; a test that wants to
 # exercise one for real puts this back.
 _REAL_RUN_SSH_CONTAINER = WorkerManager._run_ssh_container
+_REAL_ENSURE_SYNC = WorkerManager._ensure_sync
 # ... and redirects task.json out of the tag dir; the deletion tests, which
 # care where the record lives, put this back too.
 _REAL_TASK_PATH = tasks.task_path
@@ -955,3 +956,128 @@ def test_a_restart_does_not_inherit_a_zero_it_cannot_vouch_for(manager, spec, ta
     tasks.save_task(spec, reloaded)
     again = next(t for _, t in fresh._all_tasks() if t.tag == "t")
     assert again.worker(drained.worker_id).undelivered == 0
+
+
+# --- the bucket legs for a trainer running elsewhere --------------------------
+
+_R2 = SimpleNamespace(bucket="b")
+_BUCKET_CREDS = SimpleNamespace(registry=RegistryConfig(worker_image="repo/worker"), r2=_R2)
+
+
+class _Rclone:
+    """Records rclone invocations; every call succeeds."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def __call__(self, r2, *args, capture=False, input_text=None):
+        self.calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def _train_task(tag="t", kinds=("cloud",)):
+    """A position_eval task with a cloud generator and a train slot of the
+    given kind."""
+    task = tasks.TaskRecord(workload="position_eval", tag=tag, params={}, created_at=0.0)
+    task.workers.append(
+        tasks.WorkerRecord(worker_id="g", role="generate", kind="cloud", desired_state="running")
+    )
+    for kind in kinds:
+        task.workers.append(
+            tasks.WorkerRecord(
+                worker_id=f"tr-{kind}", role="train", kind=kind, desired_state="running"
+            )
+        )
+    return task
+
+
+def test_publish_copies_the_chunks_by_size_and_then_the_manifest(manager, tmp_path, monkeypatch):
+    spec = workloads.get("position_eval")
+    monkeypatch.setattr(
+        workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
+    )
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_BUCKET_CREDS, None))
+    rc = _Rclone()
+    monkeypatch.setattr(workers_mod, "rclone", rc)
+    task = _train_task()
+    publish = manager._make_publish(spec, task)
+    gen_dir = spec.paths("t").generation_dir(3)
+    publish("generations/gen_000003")
+    assert rc.calls == [
+        ("copy", "--size-only", "--exclude", "manifest.json", str(gen_dir),
+         "r2:b/position_eval/t/generations/gen_000003"),
+        ("copyto", str(gen_dir / "manifest.json"),
+         "r2:b/position_eval/t/generations/gen_000003/manifest.json"),
+    ]  # fmt: skip
+    # No bucket-delivering slot: no hook at all, as for the mirror.
+    local = tasks.TaskRecord(workload="position_eval", tag="l", params={}, created_at=0.0)
+    assert manager._make_publish(spec, local) is None
+
+
+class _FakeWatcher:
+    def __init__(self, argv):
+        self.argv = argv
+        self.terminated = False
+
+    def poll(self):
+        return 1 if self.terminated else None
+
+    def terminate(self):
+        self.terminated = True
+
+
+def test_sync_watcher_pulls_trainer_outputs_only_for_a_bucket_trainer(
+    manager, tmp_path, monkeypatch
+):
+    """A watcher is one process per task with cloud slots; when a trainer
+    slot that delivers through the bucket appears, it is replaced by one
+    that also pulls what the trainer delivers."""
+    spec = workloads.get("position_eval")
+    monkeypatch.setattr(
+        workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
+    )
+    monkeypatch.setattr(WorkerManager, "_ensure_sync", _REAL_ENSURE_SYNC)
+    spawned = []
+    monkeypatch.setattr(
+        workers_mod.subprocess,
+        "Popen",
+        lambda argv, **k: spawned.append(_FakeWatcher(argv)) or spawned[-1],
+    )
+    task = _train_task(kinds=("local",))
+    manager._ensure_sync(spec, task)
+    assert len(spawned) == 1 and "--trainer-outputs" not in spawned[0].argv
+    manager._ensure_sync(spec, task)
+    assert len(spawned) == 1  # alive and current: kept
+    task.workers[-1].kind = "cloud"
+    manager._ensure_sync(spec, task)
+    assert spawned[0].terminated and len(spawned) == 2
+    assert "--trainer-outputs" in spawned[1].argv
+    task.workers.clear()
+    manager._ensure_sync(spec, task)
+    assert spawned[1].terminated and len(spawned) == 2
+
+
+def test_controls_are_pushed_once_per_change_for_a_bucket_trainer(manager, tmp_path, monkeypatch):
+    spec = workloads.get("position_eval")
+    monkeypatch.setattr(
+        workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
+    )
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_BUCKET_CREDS, None))
+    rc = _Rclone()
+    monkeypatch.setattr(workers_mod, "rclone", rc)
+    task = _train_task()
+    manager._push_controls(spec, task)  # no file yet: nothing to push
+    path = spec.paths("t").controls_path
+    path.parent.mkdir(parents=True)
+    path.write_text("{}")
+    manager._push_controls(spec, task)
+    manager._push_controls(spec, task)
+    assert rc.calls == [("copyto", str(path), "r2:b/position_eval/t/controls.json")]
+    import os
+
+    os.utime(path, ns=(1, 1))  # a later set rewrites the file
+    manager._push_controls(spec, task)
+    assert len(rc.calls) == 2
+    # A local trainer reads the file where it is: nothing to push.
+    manager._push_controls(spec, _train_task(tag="u", kinds=("local",)))
+    assert len(rc.calls) == 2

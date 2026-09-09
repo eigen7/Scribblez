@@ -231,10 +231,16 @@ class SchedulerHooks:
     it. mirror(chunk_name, dest_rel), when present, replays a local staging
     ingest in the results bucket so the bucket layout keeps mirroring the local
     corpus and the sync watcher never re-downloads an ingested chunk.
+    publish(dest_rel), when present, puts a complete generation in the bucket
+    whole -- chunks, then manifest -- for a trainer that runs elsewhere and
+    reads it there; the scheduler calls it once per generation, after
+    completion, and records the fact in the manifest so a failed call is
+    retried on the next tick.
     """
 
     gate: object  # callable(role: str, reason: str | None)
     mirror: object = None  # callable(chunk_name: str, dest_rel: str) | None
+    publish: object = None  # callable(dest_rel: str) | None
 
 
 @dataclass

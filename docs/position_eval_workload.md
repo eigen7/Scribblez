@@ -41,6 +41,12 @@ kill_test under the contract: one parallel, interruptible `generate` role and
 no scheduler; each worker cycles in a private work dir and delivers complete
 pairs to the tag's data store.
 
+A trainer slot that delivers through the bucket (kind `cloud`; the
+train roles do not offer it yet) gets two more legs from the controller: the
+per-task sync watcher also pulls its outputs (`records/`, `models/`,
+`checkpoints/`, `train_state.json`), and the reconcile pass pushes the tag's
+`controls.json` up whenever the Controls tab rewrites it.
+
 ## Roles
 
 | Role | Cardinality | Kinds | Interruptible | Does |
@@ -95,7 +101,13 @@ For cloud chunks the scheduler mirrors the assignment in the bucket
 (server-side move via the `mirror` hook), so the bucket remains the durable
 archive with the same layout as the local corpus — disaster recovery is an
 `rclone copy` of the tag prefix — and the sync watcher never re-downloads an
-ingested chunk.
+ingested chunk. On completion, for any tag with bucket-delivering slots, the
+scheduler also *publishes* the generation (the `publish` hook): the chunks
+that are not there yet (local- and ssh-origin ones), then the manifest last,
+so a manifest in the bucket means the whole generation is. That is what a
+trainer running elsewhere reads ([cloud_training_plan.md](cloud_training_plan.md)),
+and it makes the archive complete rather than cloud-chunks-only. The manifest
+records publication, so a failed upload is retried on the next tick.
 
 ## Generation lifecycle and pacing
 

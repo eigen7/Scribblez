@@ -61,8 +61,9 @@ from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard import tasks
 from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
+from scribblez.generational.lifecycle import MANIFEST_NAME
 from scribblez.hardware import default_thread_count
-from scribblez.paths import DEFAULT_MOUNT_ROOT, REPO_ROOT
+from scribblez.paths import CONTROLS_REL, DEFAULT_MOUNT_ROOT, REPO_ROOT
 from scribblez.workloads.base import SchedulerHooks
 
 CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
@@ -73,6 +74,14 @@ SYNC_INTERVAL_SECONDS = 30
 # not: it delivers into its own container and the reconcile pass reads its
 # output back over the control link (cloud/ssh_transfer.py).
 BUCKET_KINDS = ("cloud",)
+
+
+def _bucket_trainer(spec: workloads.WorkloadSpec, task) -> bool:
+    """Whether a slot whose role delivers records the controller ingests (a
+    trainer) runs through the bucket -- the case that has the sync pull its
+    outputs and the controls file pushed up for it."""
+    return any(w.kind in BUCKET_KINDS and spec.role(w.role).ingest for w in task.workers)
+
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
 # before probing again -- so a powered-off machine costs one connect timeout
@@ -316,7 +325,11 @@ def _accrue(w: tasks.WorkerRecord, running: bool, cost_per_hr: float | None):
 class WorkerManager:
     def __init__(self):
         self._local: dict[str, subprocess.Popen] = {}  # slot key -> live process
-        self._sync: dict[str, subprocess.Popen] = {}  # task key -> sync watcher
+        # task key -> (sync watcher, the argv it runs): a watcher is replaced
+        # when what it should pull changes.
+        self._sync: dict[str, tuple[subprocess.Popen, list[str]]] = {}
+        # task key -> controls.json mtime as last pushed to the bucket.
+        self._controls_pushed: dict[str, int] = {}
         self._creds: CloudCredentials | None = None
         self._client: RunpodClient | None = None
         self._ssh_down: dict[str, float] = {}  # host -> time of last failed probe
@@ -402,23 +415,49 @@ class WorkerManager:
 
     def _ensure_sync(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
         """Keep exactly one sync watcher alive per task with bucket-delivering
-        slots."""
+        slots, pulling what those slots deliver: a watcher whose argv no
+        longer matches (a trainer slot appeared) is replaced."""
         key = _key(spec, task.tag)
         has_bucket = any(w.kind in BUCKET_KINDS for w in task.workers)
-        proc = self._sync.get(key)
-        if has_bucket and (proc is None or proc.poll() is not None):
-            log = self._log_file(spec, task.tag, "cloud_sync")
-            self._sync[key] = subprocess.Popen(
-                [
-                    sys.executable, str(CLOUD_SYNC),
-                    "--workload", spec.name, "-t", task.tag,
-                    "--watch", "--interval", str(SYNC_INTERVAL_SECONDS),
-                ],
-                stdout=log, stderr=subprocess.STDOUT,
-            )  # fmt: skip
-        elif not has_bucket and proc is not None:
-            proc.terminate()
+        argv = [
+            sys.executable, str(CLOUD_SYNC),
+            "--workload", spec.name, "-t", task.tag,
+            "--watch", "--interval", str(SYNC_INTERVAL_SECONDS),
+            *(["--trainer-outputs"] if _bucket_trainer(spec, task) else []),
+        ]  # fmt: skip
+        entry = self._sync.get(key)
+        if entry is not None and (
+            not has_bucket or entry[0].poll() is not None or entry[1] != argv
+        ):
+            if entry[0].poll() is None:
+                entry[0].terminate()
             del self._sync[key]
+            entry = None
+        if has_bucket and entry is None:
+            log = self._log_file(spec, task.tag, "cloud_sync")
+            proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+            self._sync[key] = (proc, argv)
+
+    def _push_controls(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
+        """Put the operator's controls file in the bucket for a trainer that
+        runs through it, whenever the file changed: the trainer reads it
+        there (generational/records.py) as a local one reads the file. One
+        copy per set, none per quiet pass."""
+        if not _bucket_trainer(spec, task):
+            return
+        path = spec.paths(task.tag).controls_path
+        try:
+            stamp = path.stat().st_mtime_ns
+        except FileNotFoundError:
+            return
+        key = _key(spec, task.tag)
+        if self._controls_pushed.get(key) == stamp:
+            return
+        creds, _ = self._cloud()
+        dest = bucket_path(creds.r2, spec.name, task.tag, CONTROLS_REL)
+        res = rclone(creds.r2, "copyto", str(path), dest, capture=True)
+        assert res.returncode == 0, f"pushing {CONTROLS_REL} failed: {res.stderr}"
+        self._controls_pushed[key] = stamp
 
     # ---- local plumbing --------------------------------------------------
 
@@ -855,7 +894,44 @@ class WorkerManager:
             if changed:
                 tasks.save_task(spec, task)
 
-        return SchedulerHooks(gate=gate, mirror=self._make_mirror(spec, task))
+        return SchedulerHooks(
+            gate=gate,
+            mirror=self._make_mirror(spec, task),
+            publish=self._make_publish(spec, task),
+        )
+
+    def _make_publish(self, spec, task: tasks.TaskRecord):
+        """Bucket-side copy of a completed generation (the scheduler's publish
+        hook): its chunks -- the cloud-origin ones are there already after the
+        mirror move and are skipped by size, the local- and ssh-origin ones
+        upload -- and then its manifest, last, so a manifest in the bucket
+        means the whole generation is. What a trainer running elsewhere reads
+        (docs/cloud_training_plan.md); and with it the bucket holds every
+        generation of a cloud-fed tag complete, not just its cloud chunks.
+        None for tasks without bucket-delivering slots, as for the mirror."""
+        if not any(w.kind in BUCKET_KINDS for w in task.workers):
+            return None
+        try:
+            creds, _ = self._cloud()
+        except (CredentialsError, FileNotFoundError):
+            return None
+        r2 = creds.r2
+        paths = spec.paths(task.tag)
+
+        def publish(dest_rel: str):
+            gen_dir = paths.data_dir / dest_rel
+            dest = bucket_path(r2, spec.name, task.tag, *dest_rel.split("/"))
+            res = rclone(
+                r2, "copy", "--size-only", "--exclude", MANIFEST_NAME, str(gen_dir), dest,
+                capture=True,
+            )  # fmt: skip
+            assert res.returncode == 0, f"publishing {dest_rel} failed: {res.stderr}"
+            res = rclone(
+                r2, "copyto", str(gen_dir / MANIFEST_NAME), f"{dest}/{MANIFEST_NAME}", capture=True
+            )
+            assert res.returncode == 0, f"publishing {dest_rel}'s manifest failed: {res.stderr}"
+
+        return publish
 
     def _make_mirror(self, spec, task: tasks.TaskRecord):
         """Bucket-side replay of staging ingests: when the scheduler assigns a
@@ -990,6 +1066,10 @@ class WorkerManager:
                     except Exception as e:  # noqa: BLE001 -- one role must not stop the pass
                         print(f"ingest {spec.name}/{task.tag}/{role.name}: {e}")
             self._ensure_sync(spec, task)
+            try:
+                await self.offload(self._push_controls, spec, task)
+            except Exception as e:  # noqa: BLE001 -- one task must not stop the pass
+                print(f"controls push {spec.name}/{task.tag}: {e}")
 
     def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Read a batch of slot `w`'s finished outputs out of its container
@@ -1161,6 +1241,6 @@ class WorkerManager:
         pods and ssh containers are unaffected -- their work continues across
         dashboard restarts."""
         self._blocking.shutdown(wait=False, cancel_futures=True)
-        for proc in [*self._local.values(), *self._sync.values()]:
+        for proc in [*self._local.values(), *(p for p, _ in self._sync.values())]:
             if proc.poll() is None:
                 proc.send_signal(signal.SIGTERM)
