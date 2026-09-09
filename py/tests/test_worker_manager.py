@@ -1143,3 +1143,46 @@ def test_a_pod_runpod_will_not_create_is_retried_with_backoff_and_a_reason(manag
     monkeypatch.setattr(WorkerManager, "_create_pod", created)
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
     assert w.pod_id == "p1" and not manager._exits and not manager._restarts
+
+
+def test_a_pod_on_an_old_bundle_is_replaced_when_it_should_run(manager, monkeypatch):
+    """A pod's bundle is fixed at creation, so a redeploy (or a start after
+    one) replaces the pod: the old one is terminated and a new one created
+    on the task's bundle. A creation that then fails leaves a pod-less slot,
+    not a record pointing at a pod that is gone."""
+    from cloud.runpod_api import RunpodError
+
+    spec = workloads.get("position_eval")
+    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
+    task.bundle_id = "new"
+    (w,) = manager.add_cloud(
+        spec, task, "train", 1, GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1)
+    )
+    w.desired_state, w.pod_id, w.bundle_id = "running", "p-old", "old"
+    deleted = []
+    client = SimpleNamespace(delete_pod=deleted.append)
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (None, client))
+
+    def created(self, spec, task, w):
+        w.pod_id, w.bundle_id = "p-new", task.bundle_id
+
+    monkeypatch.setattr(WorkerManager, "_create_pod", created)
+    info = {"observed_running": True, "state": "running"}
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
+    assert deleted == ["p-old"] and (w.pod_id, w.bundle_id) == ("p-new", "new")
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)  # current: left alone
+    assert deleted == ["p-old"]
+
+    # The replacement's creation fails: the slot is pod-less with the reason,
+    # and the record no longer names the terminated pod.
+    task.bundle_id = "newer"
+
+    def refused(self, spec, task, w):
+        raise RunpodError("POST /pods -> HTTP 500: create pod: no longer any instances")
+
+    monkeypatch.setattr(WorkerManager, "_create_pod", refused)
+    with pytest.raises(RunpodError):
+        manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
+    assert deleted == ["p-old", "p-new"] and w.pod_id is None
+    (status,) = manager.worker_status(spec, task)
+    assert status["state"] == "starting" and "no longer any instances" in status["exit_reason"]
