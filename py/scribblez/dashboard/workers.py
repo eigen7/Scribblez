@@ -45,7 +45,7 @@ from cloud import runtime_abi
 from cloud.bundles import deploy_current_tree, source_hash
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
 from cloud.r2 import bucket_path, rclone
-from cloud.runpod_api import RunpodClient
+from cloud.runpod_api import RunpodClient, RunpodError
 from cloud.ssh_machine import SshMachine, SshMachineError
 from cloud.ssh_transfer import pull_results, sweep_stopped
 from scripts.cloud_fleet import (
@@ -396,6 +396,25 @@ class WorkerManager:
             self._creds = load_credentials()
             self._client = RunpodClient(self._creds.runpod.api_key)
         return self._creds, self._client
+
+    def _try_create_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Create slot `w`'s pod, and when Runpod will not -- no instance of
+        the requested kind available, an API outage -- keep the reason where
+        the workers table shows it and back the next attempt off, doubling up
+        to a few minutes. A pod that cannot be had costs one API call every
+        few minutes rather than one per pass, and every pass's call was also
+        a stall the dashboard's other requests queued behind (the blocking
+        steps run one at a time). The reason is cleared the moment a pod
+        exists."""
+        key = _key(spec, task.tag, w.worker_id)
+        try:
+            self._create_pod(spec, task, w)
+        except RunpodError as e:
+            self._exits[key] = str(e)
+            self._note_restart(key)
+            raise
+        self._exits.pop(key, None)
+        self._restarts.pop(key, None)
 
     def _create_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Create slot `w`'s backing pod (first start), on the latest bundle,
@@ -849,6 +868,9 @@ class WorkerManager:
             elif w.pod_id is None:  # not yet started, so no pod to observe
                 alive = False
                 info["state"] = _cloud_state(w.desired_state, False, gated, None)
+                reason = self._exits.get(_key(spec, task.tag, w.worker_id))
+                if reason:
+                    info["exit_reason"] = reason  # why the last creation failed
                 _accrue(w, False, None)
             else:
                 pod = self._pod_index(observe).get(w.pod_id)
@@ -1158,8 +1180,10 @@ class WorkerManager:
             # Parking a pod has to stop it: an idle pod bills like a busy one.
             if intent == RUN and w.pod_id is None:
                 # A should-run slot with no pod: its creation failed on start,
-                # or a gate released it before its first start. Create it now.
-                self._create_pod(spec, task, w)
+                # or a gate released it before its first start. Create it now
+                # -- unless a recent attempt failed, in which case wait it out.
+                if self._restart_allowed(_key(spec, task.tag, w.worker_id)):
+                    self._try_create_pod(spec, task, w)
             elif intent == RUN and info["state"] == "interrupted":
                 _, client = self._cloud()
                 client.start_pod(w.pod_id)

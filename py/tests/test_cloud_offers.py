@@ -4,6 +4,7 @@ The GraphQL endpoint is mocked with canned responses, so these exercise the
 field mapping and the GPU availability/pricing filtering without a network call.
 """
 
+import pytest
 from cloud import runpod_api
 
 _CPU_FLAVORS = [
@@ -115,3 +116,20 @@ def test_rest_requests_carry_a_user_agent(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     assert runpod_api.RunpodClient("k").list_pods() == []
     assert seen == {"ua": runpod_api._USER_AGENT, "auth": "Bearer k"}
+
+
+def test_rest_errors_carry_the_apis_own_message(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    def fail(req, timeout=None):
+        body = io.BytesIO(b'{"error":"create pod: no longer any instances","status":500}')
+        raise urllib.error.HTTPError(req.full_url, 500, "Internal Server Error", {}, body)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    with pytest.raises(
+        runpod_api.RunpodError,
+        match=r"POST /pods -> HTTP 500: create pod: no longer any instances$",
+    ):
+        runpod_api.RunpodClient("k").create_pod({})
