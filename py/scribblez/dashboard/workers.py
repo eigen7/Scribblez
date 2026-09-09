@@ -292,6 +292,24 @@ def _cloud_state(desired: str, alive: bool, gated: bool, desired_status: str | N
     return "starting" if desired_status is None or desired_status == "RUNNING" else "interrupted"
 
 
+# What Runpod says when it has nothing of the requested kind to rent.
+_OUT_OF_STOCK = "no longer any instances"
+
+
+def _refusal_reason(instance: str, detail: str) -> str:
+    """The workers-table line for a pod Runpod would not create: which
+    instance was asked for (the pod name says nothing about it), what to do
+    -- wait, since the dashboard retries with a growing delay, or change the
+    instance -- and Runpod's own words for anyone who wants them."""
+    if _OUT_OF_STOCK in detail:
+        return (
+            f"No {instance} available on Runpod right now. Retrying automatically; "
+            f"remove this slot and add it again to try another flavor or size. "
+            f"(Runpod: {detail})"
+        )
+    return f"Runpod would not create a {instance} pod: {detail}. Retrying automatically."
+
+
 def _describe_resources(resources: CpuResources | GpuResources) -> str:
     """The instance a slot asks Runpod for, as an operator would name it."""
     if isinstance(resources, GpuResources):
@@ -445,9 +463,7 @@ class WorkerManager:
         try:
             self._create_pod(spec, task, w)
         except RunpodError as e:
-            # Name the instance asked for: the pod name says nothing about
-            # it, and which kind is out of stock is the whole question.
-            reason = f"{_describe_resources(_worker_resources(w))}: {e}"
+            reason = _refusal_reason(_describe_resources(_worker_resources(w)), e.detail)
             self._exits[key] = reason
             self._note_restart(key)
             raise RunpodError(reason) from e
@@ -905,9 +921,14 @@ class WorkerManager:
             elif w.pod_id is None:  # not yet started, so no pod to observe
                 alive = False
                 info["state"] = _cloud_state(w.desired_state, False, gated, None)
-                reason = self._exits.get(_key(spec, task.tag, w.worker_id))
+                key = _key(spec, task.tag, w.worker_id)
+                reason = self._exits.get(key)
                 if reason:
                     info["exit_reason"] = reason  # why the last creation failed
+                    # ... and when it is tried again, so a slot in a long
+                    # backoff does not read as one nobody is retrying.
+                    _, next_at = self._restarts.get(key, (0, 0.0))
+                    info["retry_in_s"] = max(0, int(next_at - time.time()))
                 _accrue(w, False, None)
             else:
                 pod = self._pod_index(observe).get(w.pod_id)
