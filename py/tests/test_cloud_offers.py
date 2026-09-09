@@ -109,6 +109,8 @@ def test_rest_requests_carry_a_user_agent(monkeypatch):
     seen = {}
 
     def fake_urlopen(req, timeout=None):
+        if req.full_url == runpod_api.GRAPHQL_URL:  # the runtime query the listing adds
+            return io.BytesIO(b'{"data": {"myself": {"pods": []}}}')
         seen["ua"] = req.get_header("User-agent")
         seen["auth"] = req.get_header("Authorization")
         return io.BytesIO(b"[]")
