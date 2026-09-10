@@ -68,7 +68,11 @@
 - **[cloud_training_plan.md](cloud_training_plan.md)** — plan-reviewed design
   for running the trainers on rented GPU pods, several tags in parallel: the
   trainer's record/controls contract (landed), the runtime (landed), and the
-  pod-as-machine shape for the slot model.
+  Runpod cloud slot (landed, being retired).
+- **[cloud_machines_plan.md](cloud_machines_plan.md)** — plan-reviewed design
+  for rented machines: AWS instances as task-scoped ssh machines the
+  dashboard launches, idles and terminates; the trainer on the ssh kind;
+  Runpod's removal.
 - **[master_dashboard.md](master_dashboard.md)** — the React dashboard as the
   single entrypoint for all work: the workload registry, the job-control
   plane (launch/stop local and cloud workers from the browser), and
