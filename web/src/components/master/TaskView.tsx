@@ -19,6 +19,16 @@ type WorkerInfo = {
   pod_id: string | null; host: string | null; cost_per_hr?: number; public_ip?: string; ssh?: string;
   gate_reason?: string; bundle_id: string | null; exit_reason?: string; retry_in_s?: number;
   undelivered: number | null; launched: boolean;
+  // ssh: the task's machine the slot runs on (null for a bare host string).
+  machine: string | null;
+};
+
+// One of the task's machines (registered by the operator, or rented for the
+// task): where its ssh slots run. `state` is the reconcile pass's probe.
+type MachineInfo = {
+  name: string; provider: string; host: string; gpu_count: number | null;
+  instance_type: string | null; cost_per_hr: number | null; spend: number;
+  state: string; slots: string[];
 };
 
 // A slot still on the bundle the task has moved off. It joins the task's bundle
@@ -36,7 +46,7 @@ function Note({ text, title }: { text: string; title: string }) {
 
 function workerResources(w: WorkerInfo): string {
   if (w.kind === 'local') return `${w.threads} threads`;
-  if (w.kind === 'ssh') return `${w.host}${w.threads ? ` (${w.threads} threads)` : ''}`;
+  if (w.kind === 'ssh') return `${w.machine ?? w.host}${w.threads ? ` (${w.threads} threads)` : ''}`;
   if (w.gpu_type_id) return `${w.gpu_count}× ${w.gpu_type_id}`;
   return `${w.vcpus} vcpu ${w.flavor}`;
 }
@@ -69,12 +79,13 @@ type TaskInfo = {
   // the frozen params depart from it -- provenance, not live configuration.
   profile: string; profile_diff: ProfileChange[];
   created_at: number | null; progress: [string, string | number][]; gates: Record<string, string>;
-  data_dir: string; workers: WorkerInfo[]; spend: number;
+  data_dir: string; workers: WorkerInfo[]; machines: MachineInfo[]; spend: number;
   bundle_id: string | null; bundle_drift: boolean;
 };
 
 const stateColors: Record<string, string> = {
-  running: '#2a7a2a', paused: '#8494a5', exited: '#b23b3b',
+  running: '#2a7a2a', paused: '#8494a5', exited: '#b23b3b', finished: '#446e9b',
+  up: '#2a7a2a', 'no docker': '#b23b3b',
   interrupted: '#a05a00', terminated: '#b23b3b', waiting: '#a05a00',
   unreachable: '#a05a00',
   starting: '#1f77b4', stopping: '#1f77b4',
@@ -240,21 +251,39 @@ function LocalForm({ add, busy, disabled }: { add: AddWorker; busy: Busy; disabl
   );
 }
 
-// The ssh (operator-owned machine) add-worker form: an SSH destination
-// ("user@host" or an ~/.ssh/config alias, passed to ssh verbatim) plus an
-// optional thread count. Machine prerequisites: docs/master_dashboard.md.
-function SshForm({ add, busy, disabled }: { add: AddWorker; busy: Busy; disabled: boolean }) {
+// The ssh add-worker form: one of the task's machines, or a bare SSH
+// destination ("user@host" or an ~/.ssh/config alias, passed to ssh verbatim),
+// plus an optional thread count. Machine prerequisites: docs/master_dashboard.md.
+function SshForm({ machines, add, busy, disabled }: {
+  machines: MachineInfo[]; add: AddWorker; busy: Busy; disabled: boolean;
+}) {
+  // '' selects the free host field; otherwise a machine name.
+  const [machine, setMachine] = useState(machines[0]?.name ?? '');
   const [host, setHost] = useState('');
   const [threads, setThreads] = useState('');
+  const target = machines.some((m) => m.name === machine) ? machine : '';
+  const ready = target ? true : host.trim() !== '';
   return (
     <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
       <label style={{ fontSize: 13 }}>
-        SSH — host<br />
-        <input
-          style={{ ...numInput, width: 160 }} value={host} placeholder="user@host"
-          onChange={(e) => setHost(e.target.value)}
-        />
+        SSH — machine<br />
+        <select
+          style={{ ...numInput, width: 160 }} value={target}
+          onChange={(e) => setMachine(e.target.value)}
+        >
+          {machines.map((m) => <option key={m.name} value={m.name}>{m.name}</option>)}
+          <option value="">a host by address…</option>
+        </select>
       </label>
+      {!target && (
+        <label style={{ fontSize: 13 }}>
+          host<br />
+          <input
+            style={{ ...numInput, width: 160 }} value={host} placeholder="user@host"
+            onChange={(e) => setHost(e.target.value)}
+          />
+        </label>
+      )}
       <label style={{ fontSize: 13 }}>
         threads<br />
         <input
@@ -264,12 +293,110 @@ function SshForm({ add, busy, disabled }: { add: AddWorker; busy: Busy; disabled
       </label>
       <Button
         label={busy === 'ssh' ? 'Adding…' : 'Add ssh'}
-        disabled={disabled || !host.trim()}
+        disabled={disabled || !ready}
         onClick={() => add('ssh', {
-          host: host.trim(), threads: threads ? parseInt(threads, 10) : null,
+          ...(target ? { machine: target } : { host: host.trim() }),
+          threads: threads ? parseInt(threads, 10) : null,
         })}
       />
     </div>
+  );
+}
+
+// The task's machines: what its ssh slots run on. Registering one records
+// its address and key; the reconcile pass probes it (ssh + Docker) like it
+// probes the slots. Removing a machine removes the slots on it, under the
+// slot rule (nothing running, nothing unreachable, output discards confirmed).
+function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: {
+  workload: Workload; tag: string; machines: MachineInfo[]; workers: WorkerInfo[];
+  onError: (e: string) => void; onChanged: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [host, setHost] = useState('');
+  const [key, setKey] = useState('');
+  const [gpus, setGpus] = useState('');
+  const [busy, setBusy] = useState(false);
+  const post = async (path: string, body: Record<string, unknown>) => {
+    setBusy(true);
+    onError('');
+    try {
+      await postJSON(path, { workload: workload.name, tag, ...body });
+      onChanged();
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = (m: MachineInfo) => {
+    const warning = discardWarning(workers.filter((w) => w.machine === m.name));
+    if (warning && !window.confirm(warning)) return;
+    post('/api/task/machine_action', { name: m.name, action: 'remove' });
+  };
+  return (
+    <Card title="Machines">
+      {machines.length > 0 && (
+        <table style={{ borderCollapse: 'collapse', fontSize: 14, width: '100%', marginBottom: 10 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: '#445063' }}>
+              {['machine', 'host', 'provider', 'GPUs', 'state', 'slots', '$/hr', ''].map((h) => (
+                <th key={h} style={{ padding: '4px 14px 4px 0' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {machines.map((m) => {
+              const busySlots = workers.some((w) => w.machine === m.name && (w.observed_running || IN_FLIGHT.has(w.state)));
+              return (
+                <tr key={m.name} style={{ borderTop: '1px solid #e2e8ee' }}>
+                  <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{m.name}</td>
+                  <td style={{ padding: '6px 14px 6px 0', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{m.host}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{m.instance_type ? `${m.provider} ${m.instance_type}` : m.provider}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{m.gpu_count ?? '?'}</td>
+                  <td style={{ padding: '6px 14px 6px 0', color: stateColors[m.state] ?? '#1a1f28', fontWeight: 600 }}>{m.state}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{m.slots.length ? m.slots.join(', ') : '—'}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{m.cost_per_hr != null ? `$${m.cost_per_hr}` : '—'}</td>
+                  <td style={{ padding: '6px 0' }}>
+                    <span title={busySlots ? 'pause the slots on it before removing the machine' : undefined}>
+                      <Button label="Remove" tone="danger" disabled={busy || busySlots} onClick={() => remove(m)} />
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 13 }}>
+          Register — name<br />
+          <input style={{ ...numInput, width: 120 }} value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          host<br />
+          <input style={{ ...numInput, width: 160 }} value={host} placeholder="user@host" onChange={(e) => setHost(e.target.value)} />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          key file (optional)<br />
+          <input style={{ ...numInput, width: 220 }} value={key} placeholder="container's own identity" onChange={(e) => setKey(e.target.value)} />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          GPUs<br />
+          <input style={numInput} value={gpus} placeholder="unknown" onChange={(e) => setGpus(e.target.value)} />
+        </label>
+        <Button
+          label={busy ? 'Working…' : 'Register'}
+          disabled={busy || !name.trim() || !host.trim()}
+          onClick={() => post('/api/task/machines', {
+            name: name.trim(), host: host.trim(), identity_file: key.trim() || null,
+            gpu_count: gpus.trim() ? parseInt(gpus, 10) : null,
+          })}
+        />
+      </div>
+      <div style={helpText}>
+        a machine you prepared (ssh key, Docker, the worker image pulled): docs/master_dashboard.md.
+      </div>
+    </Card>
   );
 }
 
@@ -519,8 +646,8 @@ function CloudForm({ role, add, busy, disabled }: {
 // per the role's declared kinds. A singleton role's forms disable once it has
 // a slot. Adding only records a paused slot; nothing launches (and no pod is
 // created) until the operator starts it from the workers table.
-function AddWorkerForms({ workload, role, tag, taken, onError, onChanged }: {
-  workload: Workload; role: Role; tag: string; taken: boolean;
+function AddWorkerForms({ workload, role, tag, taken, machines, onError, onChanged }: {
+  workload: Workload; role: Role; tag: string; taken: boolean; machines: MachineInfo[];
   onError: (e: string) => void; onChanged: () => void;
 }) {
   // Which form is mid-request ('local' | 'cloud' | 'ssh' | null): its button
@@ -549,7 +676,7 @@ function AddWorkerForms({ workload, role, tag, taken, onError, onChanged }: {
         {role.title}{role.singleton ? ' (singleton)' : ''}
       </span>
       {role.kinds.includes('local') && <LocalForm add={add} busy={busy} disabled={disabled} />}
-      {role.kinds.includes('ssh') && <SshForm add={add} busy={busy} disabled={disabled} />}
+      {role.kinds.includes('ssh') && <SshForm machines={machines} add={add} busy={busy} disabled={disabled} />}
       {role.kinds.includes('cloud') && <CloudForm role={role} add={add} busy={busy} disabled={disabled} />}
     </div>
   );
@@ -780,11 +907,17 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           {workload.roles.map((role) => (
             <AddWorkerForms
               key={role.name} workload={workload} role={role} tag={tag}
-              taken={info.workers.some((w) => w.role === role.name)}
+              taken={info.workers.some((w) => w.role === role.name)} machines={info.machines}
               onError={setError} onChanged={refresh}
             />
           ))}
         </Card>
+      )}
+      {info.has_task && workload.roles.some((r) => r.kinds.includes('ssh')) && (
+        <MachinesCard
+          workload={workload} tag={tag} machines={info.machines} workers={info.workers}
+          onError={setError} onChanged={refresh}
+        />
       )}
       {error && <div style={{ color: '#b23b3b', fontSize: 13 }}>{error}</div>}
     </>
