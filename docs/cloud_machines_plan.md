@@ -1,50 +1,38 @@
-# Plan: rented machines -- AWS instances as ssh machines, Runpod retired
+# Plan: rented machines -- AWS instances as ssh machines
 
-Status: plan-reviewed draft (critique profile, codex rival seat), revised
-after review; not yet implemented. Supersedes the "companions" draft that
-stood under this name on an unmerged branch (a pod supervisor hosting a
-generator beside the trainer), which the decision below makes unnecessary.
-Follows [cloud_training_plan.md](cloud_training_plan.md), whose trainer I/O
-contract and bucket legs (3a-3c) this plan keeps whole. The review record
-is at the end.
+Status: plan-reviewed, not yet implemented. Follows
+[cloud_training_plan.md](cloud_training_plan.md), whose trainer I/O
+contract and bucket legs (3a-3c) this plan keeps whole; it replaces that
+plan's Runpod cloud slot.
 
 ## Why
 
-The first real cloud run (tag `test`, a 4090 pod and a 16-vCPU pod on
-Runpod) trained with quality parity to the local run, and showed the
-Runpod-shaped kind to be the wrong long-term shape, for reasons that are
-structural rather than bugs:
+Runpod pods have properties that make them the wrong long-term shape for
+the worker fleet, independently of any bug:
 
-- **A stopped pod is pinned to its host.** It bills for its disk, and its
-  start fails once the host has filled ("not enough free memory on the
-  host machine to start this pod"), so pause had to become stop-and-replace
-  (#194), which is how an operator pause rented a fresh pod during the
-  2026-09-10 incident (the race that made it do so is fixed in #197; the
-  replace-on-failed-start path is what turned a lost update into money).
-- **Stock.** On 2026-09-09 every CPU flavor was unavailable for an hour.
-- **Hosts of unknown arch.** The 4090 hosts are `skylake-avx512`, which no
-  bundle targeted until #196; the trainer ran the generic build at half
-  speed for a day before anyone noticed.
-- **No Docker inside a pod.** A pod is one container, so colocating the
-  generator with the trainer -- the ~40% saving the previous draft was
-  after -- needed a process supervisor, intent and status records in the
-  bucket, and a deps-fetch lock: a control plane that routes through the
-  bucket and lags by construction.
+- A stopped pod is pinned to its host, bills for its disk, and cannot
+  start again once the host has filled -- so a pause has to be a
+  stop-and-replace, and any error in that path rents a fresh pod.
+- Whole instance flavors go out of stock for hours at a time.
+- A host's CPU family is unknown until a pod lands on it, so a bundle may
+  run the generic build for a day before anyone notices.
+- A pod cannot run Docker, so colocating a generator with the trainer
+  needs a process supervisor and a control plane routed through the
+  bucket, which lags by construction.
 
 An AWS instance has none of these properties: it stops and starts on any
-host (its disk survives, and costs cents while stopped), its CPU family is
-known from the instance type, and it is a machine -- ssh-reachable, running
-Docker -- which is exactly what the `ssh` kind already drives. The ssh kind
-has been the calm one: pause is a Docker pause, a scheduler gate parks a
-container, redeploy replaces a container once it has drained, and liveness
-is a probe over the link rather than a listing through a vendor API.
+host (its disk survives, and costs cents while stopped), its CPU family
+follows from the instance type, and it is a machine -- ssh-reachable,
+running Docker -- which is exactly what the `ssh` kind already drives:
+pause is a Docker pause, a scheduler gate parks a container, redeploy
+replaces a container once it has drained, and liveness is a probe over the
+link rather than a listing through a vendor API.
 
-The operator has no AWS experience and would rather not manage instances by
-hand. The dashboard therefore owns the lifecycle, which is also what lets
-it enforce the properties that keep money safe: every instance is tagged
-and listed each pass, an idle machine is stopped, an unknown instance is
-shown rather than silently billed, spend is per machine and rolls into the
-task's total when the machine goes.
+The dashboard owns the instance lifecycle rather than the operator. That
+is what lets it enforce the properties that keep money safe: every
+instance is tagged and listed each pass, an idle machine is stopped, an
+unknown instance is shown rather than silently billed, and spend is per
+machine and rolls into the task's total when the machine goes.
 
 ## What changes, in one sentence
 
@@ -54,31 +42,26 @@ kind -- and the `cloud` kind, Runpod and the pod-side bootstrap go.
 
 ## Concepts
 
-- **Machine.** A record *in the task's task.json* (`task.machines`), not a
-  second registry: a machine is rented by one task for its own slots, and
-  the record lives and dies with the task the way its slots do (the review
-  showed a task-independent registry buys cross-task sharing the analysis
-  in cloud_training_plan.md assigns no value, at the price of two files
-  that must agree). Fields: `name`, `provider` (`aws` | `manual`), `host`
-  (`user@address`, what ssh is given), `identity_file` and
-  `known_hosts_file` (both under `/workspace/mount/cloud/machines/<name>/`
-  for a rented machine; a manual one may leave both unset and use the
-  container's own identity as today), `arch`, `gpu`, and for a rented
-  machine `instance_id`, `instance_type`, `region`, `cost_per_hr`,
-  `launched_at`, `spend`. A **manual** machine is one the operator
-  launched or owns themself and registered by name and host (a console
-  launch for the measurement step below; asus-laptop if wanted). Slots on
-  today's host-string form (`WorkerRecord.host`) stay as they are: nothing
-  is migrated.
-- **Slot.** The `ssh` kind, unchanged in behavior. A slot on a rented or
-  registered machine carries `machine` (the name) instead of `host`; the
-  add-worker form's host text box becomes a selector over the task's
-  machines plus the free host string.
-- **One ssh helper.** `WorkerManager._ssh(task, w) -> SshMachine`, the only
-  place an `SshMachine` is built (nine sites dial `w.host` today, plus
-  `SshSlotFiles`), resolving a slot's machine to host, identity file and
-  known-hosts file. `SshMachine` takes those three; the manual host-string
-  slot passes the host alone and keeps today's defaults.
+- **Machine.** A record in the task's task.json (`task.machines`): a
+  machine is rented by one task for its own slots, and the record lives
+  and dies with the task the way its slots do. Fields: `name`, `provider`
+  (`aws` | `manual`), `host` (`user@address`, what ssh is given),
+  `identity_file` and `known_hosts_file` (both under
+  `/workspace/mount/cloud/machines/<name>/` for a rented machine; a manual
+  one may leave both unset and use the container's own identity), `arch`,
+  `gpu`, and for a rented machine `instance_id`, `instance_type`,
+  `region`, `cost_per_hr`, `launched_at`, `spend`. A **manual** machine is
+  one the operator launched or owns and registered by name and host.
+  Slots on today's host-string form (`WorkerRecord.host`) stay as they
+  are; nothing is migrated.
+- **Slot.** The `ssh` kind, unchanged in behavior. A slot on a machine
+  carries `machine` (the name) instead of `host`; the add-worker form's
+  host text box becomes a selector over the task's machines plus the free
+  host string.
+- **One ssh helper.** `WorkerManager._ssh(task, w) -> SshMachine` is the
+  only place an `SshMachine` is built, resolving a slot's machine to host,
+  identity file and known-hosts file. `SshMachine` takes those three; a
+  host-string slot passes the host alone and keeps today's defaults.
 - **Host keys.** A rented machine's key is unknown at launch, and AWS
   reuses addresses, so the global known_hosts is wrong twice over. Each
   rented machine gets its own known-hosts file with
@@ -87,17 +70,17 @@ kind -- and the `cloud` kind, Runpod and the pod-side bootstrap go.
 - **Provider.** `py/cloud/providers/aws.py` behind a small protocol in
   `base.py`: `catalog()`, `launch(request) -> instance`, `describe(ids)`,
   `stop`, `start`, `terminate`, and `refusal(error)` (the operator-facing
-  sentence for a refused launch, as #195 did for Runpod). The protocol is
-  the seam a second provider plugs into as one module plus a credentials
-  section; it is written for AWS and the manual case, and its shape will
-  be corrected by the second provider, not anticipated for it.
+  sentence for a refused launch). The protocol is the seam a second
+  provider plugs into as one module plus a credentials section; it is
+  sized for AWS and the manual case, and corrected by the second provider
+  rather than designed for it.
 - **Machine state**, observed each reconcile pass from one `describe` per
-  provider (cached for `OBSERVATION_TTL_SECONDS`, as the pod listing was)
-  plus the ssh probes the slots already do: `launching` (instance
-  requested; becomes `up` when ssh answers, cloud-init has finished -- a
-  marker file its script writes last -- and both worker images are
-  present), `up`, `stopping` / `stopped` (suspended; disk kept), `gone`
-  (terminated, by us). A manual machine is `up` or `unreachable`, as now.
+  provider (cached for `OBSERVATION_TTL_SECONDS`) plus the ssh probes the
+  slots already do: `launching` (instance requested; becomes `up` when ssh
+  answers, cloud-init has finished -- a marker file its script writes last
+  -- and both worker images are present), `up`, `stopping` / `stopped`
+  (suspended; disk kept), `gone` (terminated). A manual machine is `up`
+  or `unreachable`.
 
 ## Lifecycle rules
 
@@ -111,30 +94,26 @@ kind -- and the `cloud` kind, Runpod and the pod-side bootstrap go.
 - **Launch.** From the task's add-worker form ("rent a machine": instance
   type from the catalog). The provider launches on the region's current
   AWS Deep Learning Base GPU AMI (Ubuntu; NVIDIA driver, Docker and the
-  container toolkit preinstalled -- looked up through its public SSM
+  container toolkit preinstalled, looked up through its public SSM
   parameter, so there is no image of ours to build), with our key pair and
   security group, tagged `scribblez=<task>/<machine>`, and a cloud-init
   script that logs Docker in to the image registry with a read-only token
   from the credentials file, pulls both worker images, and writes the
-  ready marker. The pull happens on the machine, during `launching`,
-  rather than on the controller's one blocking thread at the first slot
-  start (where `pull_image` would stall every task for the minutes a
-  multi-gigabyte image takes); at slot start it is a no-op.
+  ready marker. The pull happens on the machine during `launching`, not on
+  the controller's blocking thread at the first slot start; at slot start
+  it is a no-op.
 - **Slots on it.** Exactly the ssh kind: the container per slot, the
   bundle by the machine's arch, gates as pauses, redeploy as drained
   replacement, results collected over ssh -- except the trainer, below.
-  `_check_role` consults the machine's catalog entry for ssh slots on a
+  `_check_role` consults the machine's catalog entry for slots on a
   rented machine: a GPU role on a CPU type, or a second GPU role on a
   one-GPU type, is refused at add time rather than at `docker run` on the
-  remote. A GPU machine hosts the trainer and a generator on its vCPUs,
-  which is the colocation the companions draft wanted.
+  remote. A GPU machine hosts the trainer and a generator on its vCPUs.
 - **Finished slots.** A container that exits 0 has reached its role's
   terminal condition (the trainer's `max_rows`, a generator's cycle cap);
   reconcile marks the slot `finished` (desired state `paused`, shown as
-  such) instead of restarting it every backoff period forever. The worker
-  entrypoint's SIGTERM flush exits non-zero so a machine reboot is not
-  mistaken for completion; m2 fixes that exit code where it is not already
-  so.
+  such) instead of restarting it. The worker entrypoint's SIGTERM flush
+  exits non-zero so a machine reboot is not mistaken for completion.
 - **Idle policy.** A machine none of whose containers has been observed
   running for `IDLE_STOP_SECONDS` (10 minutes), with no slot in a pending
   start (restart backoff), is stopped. A gated generator is a paused
@@ -146,10 +125,10 @@ kind -- and the `cloud` kind, Runpod and the pod-side bootstrap go.
   month, prorated).
 - **Terminate** is explicit: Remove on the machine's row in the workers
   table. On an `up` or `stopped` machine it is refused while a slot is
-  running or still holding output (the rule for removing an ssh slot
-  today); on a `gone` machine the slots are removable unconditionally, and
-  the dialog says their undelivered output went with the disk. Removing a
-  machine removes its slots. On terminate the machine's spend rolls into
+  running or still holding output (the rule for removing an ssh slot); on
+  a `gone` machine the slots are removable unconditionally, and the dialog
+  says their undelivered output went with the disk. Removing a machine
+  removes its slots. On terminate the machine's spend rolls into
   `task.retired_spend`, as a removed slot's does.
 - **Orphans.** Each pass lists the region's instances tagged `scribblez`;
   one no task's machines name is listed on the Overview as an orphan with
@@ -157,38 +136,37 @@ kind -- and the `cloud` kind, Runpod and the pod-side bootstrap go.
   automatically: a task.json restored from an older copy must not kill a
   running experiment, and one click is cheap.
 - **Spend.** Per machine: `cost_per_hr` from the catalog row, accrued
-  while `launching` or `up`, kept across dashboard restarts as slot spend
-  is today. The workers table shows each machine's rate, uptime and spend
-  as a row above its slots; the task's spend line adds its machines, and
-  its retired spend after they go.
+  while `launching` or `up`, kept across dashboard restarts. The workers
+  table shows each machine's rate, uptime and spend as a row above its
+  slots; the task's spend line adds its machines, and its retired spend
+  after they go.
 - **Refusals.** A launch AWS refuses -- the on-demand vCPU quota for the G
   family (zero on a new account), no capacity for the type in the zone, a
   bad credential -- is shown as a sentence saying what to do, with the
-  console link for a quota; the backoff of #190 applies.
+  console link for a quota, under the existing launch backoff.
 
 ## The trainer on an ssh machine
 
 The trainer is the one role with inputs. Generations reach it, and its
-exports, checkpoint and records leave it, through its sink -- the contract
-3b built for the pod. On an ssh machine that stays the R2 sink: R2 egress
-is free, the machine has a datacenter link, and the controller's bucket
-legs (publish, `--trainer-outputs` sync, controls push) already exist and
-are exercised. `train` gains `ssh` in its kinds and loses `cloud`. Nothing
-in the trainer changes; `cloud_sync` and the ingest tick do not know which
-machine the records came from.
+exports, checkpoint and records leave it, through its sink. On an ssh
+machine that is the R2 sink: R2 egress is free, the machine has a
+datacenter link, and the controller's bucket legs (publish,
+`--trainer-outputs` sync, controls push) already exist. `train` gains
+`ssh` in its kinds and loses `cloud`. Nothing in the trainer changes;
+`cloud_sync` and the ingest tick do not know which machine the records
+came from.
 
-What the controller changes is one predicate, in four places. Today
+The controller changes one predicate, in four places. Today
 `BUCKET_KINDS = ("cloud",)` gates the sync watcher's existence
 (`_ensure_sync`), the `--trainer-outputs` flag and the controls push
 (`_bucket_trainer`), and the scheduler's publish and mirror hooks
 (`_make_publish`, `_make_mirror`). All four become one predicate, **a
 remote trainer**: a slot of a non-local kind whose role has `ingest`.
-Written in terms of roles rather than kinds, it survives m4's deletion of
-`cloud`; left as four literals it would go silently false with it, and
-already reads false for the all-ssh task m3 verifies with. The ssh
-container's environment gets `SCZ_SINK=r2` for a role with `ingest` (every
-other role keeps `local`, collected over ssh), and `_collect_ssh` skips
-such a slot, whose outputs are not on the machine to collect.
+Written in terms of roles rather than kinds, it survives the deletion of
+`cloud`. The ssh container's environment gets `SCZ_SINK=r2` for a role
+with `ingest` (every other role keeps `local`, collected over ssh), and
+`_collect_ssh` skips such a slot, whose outputs are not on the machine to
+collect.
 
 ## One-time setup (the operator, once)
 
@@ -201,8 +179,7 @@ such a slot, whose outputs are not on the machine to collect.
    file under a new `aws` section with the region.
 2. Quotas, on day one, since the grant takes a day or two: "Running
    On-Demand G and VT instances" (zero on a new account; request 64
-   vCPUs), and "All G and VT Spot Instance Requests" at the same time,
-   for m3b.
+   vCPUs), and "All G and VT Spot Instance Requests" at the same time.
 3. A budget alert in the AWS console: belt-and-braces against any bug of
    ours.
 4. A read-only Docker Hub access token for the worker image repo, in a new
@@ -216,20 +193,17 @@ such a slot, whose outputs are not on the machine to collect.
 
 ## Catalog
 
-Curated, in code, with the price beside the type (on-demand list price,
-dated; changed by PR when AWS reprices -- the spend figure is an estimate
-and the Pricing API is a region-pinned, string-embedded-JSON tar pit that
-eight rows do not justify), and the CPU family that picks the bundle
-arch:
+Curated, in code, with the on-demand list price beside the type (dated;
+changed by PR when AWS reprices -- the spend figure is an estimate), and
+the CPU family that picks the bundle arch:
 
 | Type | vCPU | GPU | Family (arch) |
 |---|---|---|---|
 | c7a.4xlarge / 8xlarge | 16 / 32 | -- | Genoa (`znver4`) |
 | g6.2xlarge / 4xlarge / 8xlarge | 8 / 16 / 32 | L4 24 GB | Milan (`znver3`) |
 
-The two types the plan's own runs use. `znver3` joins `SUPPORTED_ARCHS`.
-Other types (g5's A10G, g6e's L40S) are one row each when a run wants
-them.
+`znver3` joins `SUPPORTED_ARCHS`. Other types (g5's A10G, g6e's L40S)
+are one row each when a run wants them.
 
 ## Not in this slice
 
@@ -239,11 +213,10 @@ them.
 - A custom AMI with the images baked in (cloud-init's pull is a few
   minutes of `launching` per fresh machine; a stopped machine keeps them).
 - Automatic relaunch after a spot interruption; automatic placement or an
-  autoscaler for generators; cross-task machines.
+  autoscaler for generators; machines shared across tasks.
 - A trainer chunk cache on the machine (its companion generator's chunks
   go to the controller over ssh and come back through the bucket; ~12 MB a
-  generation, hidden by `open_ahead`, as the previous draft's review
-  established).
+  generation, hidden by `open_ahead`).
 - Any provider beyond AWS.
 
 ## Sequence
@@ -272,13 +245,12 @@ them.
    says), register it as a manual machine of a test tag, and run a trainer
    and a generator on it through m1+m2. Outputs: the trainer's step on an
    L4 against the 4090's (the transformer trainer is launch/bandwidth
-   bound, and an L4 has about a third of a 4090's memory bandwidth -- the
-   cost case in "Why" is not proven until this number is in), its wait
-   fraction, the generator's per-chunk time on the shared cores, and the
-   cost line. Whether the stock AMI runs the `-torch` image under `--gpus
-   all` and whether the dev container reaches a public address with the
-   ssh options we hardcode are learned here too, before the provider
-   exists. Terminate it from the console afterwards.
+   bound, and an L4 has about a third of a 4090's memory bandwidth), its
+   wait fraction, the generator's per-chunk time on the shared cores, and
+   the cost line. Whether the stock AMI runs the `-torch` image under
+   `--gpus all` and whether the dev container reaches a public address
+   with the ssh options we hardcode are learned here too, before the
+   provider exists. Terminate it from the console afterwards.
 4. **PR m3 -- the AWS provider.** boto3, the credentials sections and the
    check script, `aws_setup.py`, `providers/base.py` and `aws.py`, the
    catalog, launch with the cloud-init script and readiness marker,
@@ -294,68 +266,6 @@ them.
    `cloud` kind, `runpod_api.py`, `cloud_fleet.py`'s pod commands, the pod
    paths in the worker image's bootstrap (the container flow stays; it is
    what ssh containers run), the Runpod credential section and check, the
-   GPU/CPU pod forms, and the Runpod paragraphs of the docs. The repo
-   carries no compatibility burden, so this is a deletion, not a
-   deprecation period.
+   GPU/CPU pod forms, and the Runpod paragraphs of the docs.
 
 m1 < m2 < 3 < m3 < m3b; m4 after m3's run.
-
-## Review record
-
-Panel on the first draft: hidden-complexity (session tier), rival-designer
-(codex), scope (sonnet), integration (sonnet), each blind to the others.
-
-Revised on:
-
-- **Rival-designer (serious, two critiques, converging):** a
-  task-independent `machines.json` registry is a second mutable database
-  that must agree with every task.json, serving cross-task sharing the
-  plan's own analysis assigns no value; and a machine hosting slots of any
-  task makes capacity, idle and spend emergent across unrelated slots.
-  Adopted: machines are task-scoped records in task.json, spend rolls into
-  `retired_spend`, manual host-string slots are untouched, and the GPU fit
-  check is the slice of the proposed placement manifest that one trainer
-  and one generator need. Rejected: a full placement manifest at lease
-  creation (slots are added one at a time with the fit check; the
-  measurement run is under exactly this placement), and dropping the
-  provider protocol until a second provider exists -- the seam is the
-  user's explicit requirement, so it exists, sized for AWS and corrected
-  by the second provider rather than designed for it (which also answers
-  the scope panelist's minor critique on hypothetical providers).
-- **Integration (blocking):** the "bucket-kind trainer" condition is four
-  literals on `BUCKET_KINDS`, three of them unmentioned; m4's deletion of
-  `cloud` would turn them silently false, and the all-ssh task m3 verifies
-  with already reads false. Adopted as the predicate section and m2's
-  named tests. Its serious critique on the `w.host` call sites is adopted
-  as the single `_ssh` helper and the frontend type change in m1; the
-  migration question is moot (nothing migrates).
-- **Hidden-complexity (blocking):** every platform risk was deferred to
-  the end of the largest PR, though m1+m2 suffice to measure it by hand.
-  Adopted as step 3, with the quota grant and the dev-image rebuild as
-  day-one prerequisites, and the L4 bandwidth question stated. Its
-  serious critiques are all adopted: a finished trainer would be restarted
-  every five minutes forever and never idle the machine (the `finished`
-  state and the container-observed idle rule); `SshMachine` cannot reach
-  a rented host as written (identity, per-machine known-hosts,
-  `ubuntu@`); the first-start image pull would hold the controller's
-  blocking thread for minutes (cloud-init pulls, readiness requires the
-  images); `gone`/`stopped` collide with the slot removal and start
-  invariants (the machine step ahead of the slot loop, the intent rules by
-  machine state). Minor ones too: readiness is cloud-init's marker, the
-  registry pull token is a credentials section and a setup step, the fit
-  check at add time.
-- **Scope (serious):** spot and live pricing are independently provable
-  features m3's own run never exercises. Adopted: m3 is on-demand only,
-  spot is m3b, prices sit in the catalog table (the hidden-complexity
-  panelist reached the same conclusion), the catalog is the two families
-  the runs use. Rejected: trimming the day-one quota ask to on-demand --
-  the two requests are the same form, and the delay is the cost.
-
-Open -- human call: step 3 asks the operator to launch one instance from
-the console, once, which is the by-hand management they would rather not
-do. The panel's argument is that it turns m3 from the largest PR verified
-last into automation of a target known to work, and puts the L4 number in
-hand before the provider is written. The alternative is to build m3 blind
-and take the measurements on its first run, accepting that a failing
-premise (the L4 step, the AMI's toolkit, ssh reachability) is discovered
-after the provider exists.

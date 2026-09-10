@@ -5,10 +5,9 @@ after review, then extended with the machines/slots discussion. PR 2 (the
 trainer I/O contract), PR 1 (the runtime), 3a (the controller's bucket
 legs: generation publish, trainer-output pull, controls push), 3b (the
 trainer's artifacts through its sink) and 3c (the cloud train slot) have
-landed. The machine model (3d, below) was designed against the experience of
-real runs and is superseded: Runpod is being retired for AWS instances as
-ssh machines, see [cloud_machines_plan.md](cloud_machines_plan.md). The
-review record is at the end.
+landed. The cloud slot and the machine model (3d, below) are superseded by
+[cloud_machines_plan.md](cloud_machines_plan.md): Runpod is retired for AWS
+instances as ssh machines. The review record is at the end.
 
 ## Goal
 
