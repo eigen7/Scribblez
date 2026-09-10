@@ -116,7 +116,26 @@ preserving the stem-based pair matching downstream tools rely on.
 
 ## SSH worker machines
 
-An ssh slot's machine is prepared once, by hand:
+An ssh slot runs on a machine named two ways: a bare host string typed into
+the slot's form, or one of the task's **machines** -- a record in its task.json
+(`task.machines`) carrying the address, an optional private key and its own
+known_hosts file, and what the machine has (GPUs). A machine is registered on
+the Overview's Machines card (name, host, key file, GPUs) and hosts any number
+of the task's slots; the reconcile pass probes it (ssh, then Docker) ahead of
+its slots, and slots on a machine that is not `up` are left alone until it is.
+Removing a machine removes its slots, under the slot rule below. Renting a
+machine from a cloud provider produces the same record
+([cloud_machines_plan.md](cloud_machines_plan.md)). A GPU role is refused at
+add time on a machine whose GPUs are all taken or absent, when the count is
+known; a bare host is unchecked.
+
+A slot's worker that exits 0 has reached its role's terminal condition (the
+trainer's `max_rows`, a generator's cycle cap): the slot flips to paused and
+reads `finished`, rather than being restarted every backoff period forever;
+Start clears it. The worker entrypoint exits non-zero when SIGTERM ended the
+run, so a stop or a machine reboot never reads as completion.
+
+Either way the machine is prepared once, by hand:
 
 - **SSH**: reachable non-interactively from the dev container — key-based
   auth, no prompts. The key to authorize is the container's own

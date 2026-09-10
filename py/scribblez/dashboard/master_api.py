@@ -177,6 +177,7 @@ class TaskHandler(_MasterBase):
                 "gates": task.gates if task else {},
                 "data_dir": str(spec.data_dir(tag)),
                 "workers": workers,
+                "machines": self.manager.machine_status(spec, task) if task else [],
                 "spend": spend,
                 "bundle_id": task.bundle_id if task else None,
                 "bundle_drift": self.manager.bundle_drift(task) if task else False,
@@ -227,9 +228,14 @@ class WorkerAddHandler(_MasterBase):
             if body.get("kind") == "local":
                 added = [self.manager.add_local(spec, task, role, body.get("threads"))]
             elif body.get("kind") == "ssh":
-                host = (body.get("host") or "").strip()
-                assert host, "ssh worker needs a host"
-                added = [self.manager.add_ssh(spec, task, role, host, body.get("threads"))]
+                host = (body.get("host") or "").strip() or None
+                machine = body.get("machine") or None
+                assert host or machine, "ssh worker needs a host or a machine"
+                added = [
+                    self.manager.add_ssh(
+                        spec, task, role, host=host, machine=machine, threads=body.get("threads")
+                    )
+                ]
             else:
                 added = self.manager.add_cloud(
                     spec,
@@ -241,6 +247,45 @@ class WorkerAddHandler(_MasterBase):
             return {"added": [w.worker_id for w in added]}
 
         self.guarded(add)
+
+
+class MachineAddHandler(_MasterBase):
+    """Register a machine the operator prepared, for the task's ssh slots."""
+
+    def post(self):
+        body = self.body()
+        spec = self.spec(body)
+
+        def add():
+            task = self.task_or_fail(spec, body["tag"])
+            m = self.manager.add_machine(
+                spec,
+                task,
+                (body.get("name") or "").strip(),
+                (body.get("host") or "").strip(),
+                (body.get("identity_file") or "").strip() or None,
+                int(body["gpu_count"]) if body.get("gpu_count") not in (None, "") else None,
+            )
+            return {"name": m.name}
+
+        self.guarded(add)
+
+
+class MachineActionHandler(_MasterBase):
+    """Remove a machine and its slots -- seconds of ssh to check and clean
+    each slot's container, hence the offload."""
+
+    async def post(self):
+        body = self.body()
+        spec = self.spec(body)
+
+        def act():
+            task = self.task_or_fail(spec, body["tag"])
+            assert body["action"] == "remove", f"unknown action '{body['action']}'"
+            self.manager.remove_machine(spec, task, body["name"])
+            return {"ok": True}
+
+        await self.guarded_offload(act)
 
 
 class WorkerActionHandler(_MasterBase):
@@ -322,6 +367,8 @@ MASTER_ROUTES = [
     (r"/api/task/deploy", TaskDeployHandler),
     (r"/api/task/workers", WorkerAddHandler),
     (r"/api/task/worker_action", WorkerActionHandler),
+    (r"/api/task/machines", MachineAddHandler),
+    (r"/api/task/machine_action", MachineActionHandler),
     (r"/api/cloud/offers", CloudOffersHandler),
     (r"/api/task/stats", TaskStatsHandler),
     (r"/api/task/figure/([a-z_]+)", TaskFigureHandler),

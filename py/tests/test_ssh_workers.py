@@ -20,7 +20,7 @@ from cloud.ssh_machine import (
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard.tasks import TaskRecord, WorkerRecord
-from scribblez.dashboard.workers import _container_name, _next_worker_id, _ssh_state
+from scribblez.dashboard.workers import _container_name, _local_state, _next_worker_id, _ssh_state
 from scripts.cloud_fleet import bundle_worker_env
 
 
@@ -69,6 +69,38 @@ def test_ssh_argv_quotes_remote_command():
     # The remote side runs a shell: the whole command is one argument with
     # shell metacharacters quoted.
     assert argv[-1] == "docker inspect -f '{{.State.Running}}' c"
+
+
+def test_ssh_argv_carries_a_rented_machines_key_and_known_hosts():
+    """A rented machine dials with its own key and its own known_hosts file
+    (accept-new: its host key is unknown until first contact); a bare host
+    keeps the container's defaults."""
+    argv = SshMachine("ubuntu@1.2.3.4", "/keys/m.pem", "/keys/m.known_hosts").argv(["true"])
+    assert argv[argv.index("-i") + 1] == "/keys/m.pem"
+    assert "IdentitiesOnly=yes" in argv
+    assert "UserKnownHostsFile=/keys/m.known_hosts" in argv
+    assert "StrictHostKeyChecking=accept-new" in argv
+    plain = SshMachine("dev@laptop2").argv(["true"])
+    assert "-i" not in plain and not any(o.startswith("UserKnownHostsFile") for o in plain)
+
+
+def test_machine_probe_distinguishes_no_docker_from_unreachable(monkeypatch):
+    answers = iter([(0, "29.0.1"), (127, ""), (255, "")])
+
+    def fake_run(argv, **kwargs):
+        code, out = next(answers)
+        return subprocess.CompletedProcess(argv, code, out, "")
+
+    monkeypatch.setattr(ssh_machine.subprocess, "run", fake_run)
+    m = SshMachine("dev@laptop2")
+    assert [m.probe(), m.probe(), m.probe()] == ["up", "no docker", "unreachable"]
+
+
+def test_a_finished_slot_reads_finished_not_paused():
+    assert _ssh_state("paused", "stopped", gated=False, finished=True) == "finished"
+    assert _ssh_state("paused", "missing", gated=False, finished=True) == "paused"
+    assert _local_state("paused", False, gated=False, finished=True) == "finished"
+    assert _local_state("paused", True, gated=False, finished=True) == "stopping"
 
 
 def test_env_file_format():

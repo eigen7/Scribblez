@@ -107,14 +107,43 @@ def env_file(env: dict[str, str]) -> str:
 
 
 class SshMachine:
-    def __init__(self, host: str):
+    def __init__(
+        self, host: str, identity_file: str | None = None, known_hosts_file: str | None = None
+    ):
+        """`host` goes to ssh verbatim. A machine the dashboard rented has its
+        own key and its own known_hosts file (its host key is unknown until
+        first contact, and providers reuse addresses, so the global file would
+        be wrong twice over); an operator's own machine leaves both None and
+        uses the container's identity and known_hosts as ever."""
         self.host = host
+        self.identity_file = identity_file
+        self.known_hosts_file = known_hosts_file
 
     def argv(self, command: list[str]) -> list[str]:
         """The local ssh invocation for `command` on the machine. The remote
         side runs a shell, so each argument is quoted for it."""
         remote = " ".join(shlex.quote(a) for a in command)
-        return ["ssh", *_SSH_OPTIONS, self.host, remote]
+        options = list(_SSH_OPTIONS)
+        if self.identity_file:
+            options += ["-i", self.identity_file, "-o", "IdentitiesOnly=yes"]
+        if self.known_hosts_file:
+            options += [
+                "-o", f"UserKnownHostsFile={self.known_hosts_file}",
+                "-o", "StrictHostKeyChecking=accept-new",
+            ]  # fmt: skip
+        return ["ssh", *options, self.host, remote]
+
+    def probe(self) -> str:
+        """Whether the machine can host containers right now: "up" (ssh
+        answers and Docker serves), "no docker" (ssh answers, Docker does not
+        -- not installed, or the user is not in the docker group), or
+        "unreachable"."""
+        res = self._run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"], timeout=_PROBE_TIMEOUT
+        )
+        if res.returncode == _SSH_FAILED:
+            return "unreachable"
+        return "up" if res.returncode == 0 else "no docker"
 
     def _run(self, command: list[str], *, timeout: int, stdin_text: str | None = None):
         try:

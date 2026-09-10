@@ -10,6 +10,7 @@ import asyncio
 import json
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +24,7 @@ from scribblez.dashboard.workers import (
     WorkerManager,
     _cloud_state,
     _container_name,
+    _key,
     _resource_record_fields,
     _worker_resources,
 )
@@ -97,9 +99,15 @@ class _FakeSshMachine:
 
     state = "unreachable"
     exit_reason = "exit 1: something went wrong"
+    machine_state = "up"
+    built: list[tuple] = []  # every (host, identity_file, known_hosts_file) constructed
 
-    def __init__(self, host):
+    def __init__(self, host, identity_file=None, known_hosts_file=None):
         self.host = host
+        _FakeSshMachine.built.append((host, identity_file, known_hosts_file))
+
+    def probe(self) -> str:
+        return self.machine_state
 
     def container_state(self, name: str) -> str:
         return self.state
@@ -223,6 +231,7 @@ def test_a_status_poll_accrues_in_memory_and_writes_nothing(manager, spec, task)
     manager.worker_status(spec, task)
     assert w.observed_at is not None
     assert path.stat().st_mtime_ns == before
+    time.sleep(0.02)  # file mtimes tick coarsely; a save within the tick reads equal
     manager.worker_status(spec, task, observe=True)
     assert path.stat().st_mtime_ns != before
 
@@ -265,6 +274,158 @@ def test_redeploy_builds_off_the_blocking_thread_then_pins(manager, spec, task, 
     assert seen["thread"].startswith("scz-build")
     assert seen["blocking_free"]
     assert tasks.load_task(spec, "t").bundle_id == "b2"
+
+
+# ---- machines ----------------------------------------------------------------
+
+
+def _fake_ssh(monkeypatch, state="unreachable", machine_state="up"):
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(_FakeSshMachine, "state", state)
+    monkeypatch.setattr(_FakeSshMachine, "machine_state", machine_state)
+    monkeypatch.setattr(_FakeSshMachine, "built", [])
+
+
+def test_a_slot_on_a_machine_dials_with_the_machines_key(manager, spec, task, monkeypatch):
+    """The slot names the machine; the machine record carries the address
+    and the key material every link is built from."""
+    _fake_ssh(monkeypatch, state="running")
+    manager.add_machine(spec, task, "m1", "ubuntu@1.2.3.4", identity_file="/k/m1.pem")
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=4)
+    assert w.host is None and w.machine == "m1"
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert info["host"] == "ubuntu@1.2.3.4"
+    assert info["ssh"] == "ssh ubuntu@1.2.3.4"
+    assert ("ubuntu@1.2.3.4", "/k/m1.pem", None) in _FakeSshMachine.built
+    assert tasks.load_task(spec, "t").worker(w.worker_id).machine == "m1"
+
+
+def test_an_ssh_slot_names_exactly_one_of_host_and_machine(manager, spec, task):
+    with pytest.raises(AssertionError, match="host or a machine"):
+        manager.add_ssh(spec, task, "generate", threads=None)
+    with pytest.raises(KeyError, match="no machine"):
+        manager.add_ssh(spec, task, "generate", machine="nope", threads=None)
+
+
+class _GpuRoles:
+    """Two non-singleton GPU roles that allow ssh slots: what the machine fit
+    check sees, without the singleton rule speaking first."""
+
+    name = "position_eval"
+    _roles = {
+        r.name: r
+        for r in (
+            replace(POSITION_EVAL_SPEC.role("match_eval"), singleton=False),
+            replace(POSITION_EVAL_SPEC.role("match_eval"), name="match_b", singleton=False),
+        )
+    }
+
+    def role(self, name: str):
+        return self._roles[name]
+
+
+def test_a_gpu_role_is_refused_on_a_machine_without_a_free_gpu(manager, monkeypatch):
+    """Refused at add time by the machine's known shape, not at `docker run`
+    on the remote after a deploy. An unknown count is not checked."""
+    spec = _GpuRoles()
+    task = tasks.TaskRecord(workload=spec.name, tag="t", params={}, created_at=0.0)
+    manager.add_machine(spec, task, "cpu", "u@h", gpu_count=0)
+    manager.add_machine(spec, task, "gpu1", "u@g", gpu_count=1)
+    manager.add_machine(spec, task, "unknown", "u@x")
+    with pytest.raises(AssertionError, match="has 0 GPU"):
+        manager.add_ssh(spec, task, "match_eval", machine="cpu", threads=None)
+    first = manager.add_ssh(spec, task, "match_eval", machine="gpu1", threads=None)
+    with pytest.raises(AssertionError, match=f"already taken by {first.worker_id}"):
+        manager.add_ssh(spec, task, "match_b", machine="gpu1", threads=None)
+    manager.add_ssh(spec, task, "match_b", machine="unknown", threads=None)
+
+
+def test_machine_status_is_observed_by_the_pass_and_read_by_everyone_else(
+    manager, spec, task, monkeypatch
+):
+    _fake_ssh(monkeypatch, machine_state="no docker")
+    manager.add_machine(spec, task, "m1", "u@h")
+    (m,) = manager.machine_status(spec, task)
+    assert m["state"] == "checking"  # no pass has reached it
+    (m,) = manager.machine_status(spec, task, observe=True)
+    assert m["state"] == "no docker"
+    monkeypatch.setattr(_FakeSshMachine, "machine_state", "up")
+    (m,) = manager.machine_status(spec, task)
+    assert m["state"] == "no docker"  # a read, not a probe
+
+
+def test_removing_a_machine_removes_its_slots_under_the_slot_rule(manager, spec, task, monkeypatch):
+    _fake_ssh(monkeypatch, state="running")
+    manager.add_machine(spec, task, "m1", "u@h")
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    with pytest.raises(AssertionError, match="running; pause it first"):
+        manager.remove_machine(spec, task, "m1")
+    assert task.machines and task.workers  # nothing half-done
+    monkeypatch.setattr(_FakeSshMachine, "state", "missing")
+    manager._probes.clear()
+    manager.remove_machine(spec, task, "m1")
+    assert task.machines == [] and task.workers == []
+    assert tasks.load_task(spec, "t").find(w.worker_id) is None
+
+
+def test_reconcile_leaves_slots_on_a_machine_that_is_not_up_alone(manager, spec, task, monkeypatch):
+    _fake_ssh(monkeypatch, state="missing", machine_state="unreachable")
+    manager.add_machine(spec, task, "m1", "u@h")
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.desired_state = "running"
+    enforced = []
+    monkeypatch.setattr(
+        WorkerManager, "_reconcile_worker", lambda self, spec, task, w, *a: enforced.append(w)
+    )
+    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    asyncio.run(manager.reconcile())
+    assert enforced == []
+    monkeypatch.setattr(_FakeSshMachine, "machine_state", "up")
+    manager._machine_probes.clear()
+    manager._ssh_down.clear()  # past the negative cache
+    asyncio.run(manager.reconcile())
+    assert enforced == [w]
+
+
+# ---- finished slots ----------------------------------------------------------
+
+
+def test_an_ssh_worker_that_exits_zero_is_finished_not_restarted(manager, spec, task, monkeypatch):
+    """The trainer at max_rows exits 0; restarting it every backoff period
+    forever would keep its machine from ever idling."""
+    _fake_ssh(monkeypatch, state="stopped")
+    monkeypatch.setattr(_FakeSshMachine, "exit_reason", "exit 0: Stopped at 1000 rows")
+    w = manager.add_ssh(spec, task, "generate", host="u@h", threads=None)
+    w.desired_state, w.launched = "running", True
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert info["state"] == "finished"
+    assert w.desired_state == "paused" and w.finished
+    assert tasks.load_task(spec, "t").worker(w.worker_id).finished
+    # Start is the way back: it clears the mark and runs the slot again.
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", lambda *a: None)
+    manager._probes.clear()
+    monkeypatch.setattr(_FakeSshMachine, "state", "missing")
+    manager.set_worker_state(spec, task, w.worker_id, run=True)
+    assert not w.finished and w.desired_state == "running"
+
+
+def test_an_ssh_worker_that_died_is_exited_and_restarted(manager, spec, task, monkeypatch):
+    _fake_ssh(monkeypatch, state="stopped")
+    monkeypatch.setattr(_FakeSshMachine, "exit_reason", "exit 143: SIGTERM: drained")
+    w = manager.add_ssh(spec, task, "generate", host="u@h", threads=None)
+    w.desired_state, w.launched = "running", True
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert info["state"] == "exited"
+    assert w.desired_state == "running" and not w.finished
+
+
+def test_a_local_child_that_exits_zero_is_finished(manager, spec, task, monkeypatch):
+    w = manager.add_local(spec, task, "generate", threads=1)
+    w.desired_state = "running"
+    manager._local[_key(spec, "t", w.worker_id)] = SimpleNamespace(poll=lambda: 0, returncode=0)
+    (info,) = manager.worker_status(spec, task)
+    assert info["state"] == "finished"
+    assert w.desired_state == "paused"
 
 
 def test_status_of_slot_without_a_pod(manager, spec, task):

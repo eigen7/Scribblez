@@ -77,7 +77,17 @@ WORKER_ENV_VARS = (
 )
 
 
+# What the process exits with when SIGTERM ended it, whatever the runner
+# returned after draining: the dashboard reads exit 0 as the role's terminal
+# condition reached (a finished slot, not restarted) and anything else as a
+# worker that did not finish. Docker's own code for a SIGTERM death.
+EXIT_INTERRUPTED = 143
+_interrupted = False
+
+
 def _on_sigterm(signum, frame):
+    global _interrupted
+    _interrupted = True
     raise WorkerStopped
 
 
@@ -155,10 +165,11 @@ def main() -> int:
             provenance=provenance(),
             mount_root=mount_root,
         )
-        return workloads.resolve(role.runner)(ctx)
+        code = workloads.resolve(role.runner)(ctx)
     except WorkerStopped:
         print("SIGTERM during startup; exiting")
-        return 0
+        return EXIT_INTERRUPTED
+    return EXIT_INTERRUPTED if _interrupted else code
 
 
 if __name__ == "__main__":
