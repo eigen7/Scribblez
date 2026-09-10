@@ -7,6 +7,8 @@ fail, so a regression back toward launch-on-add breaks loudly.
 """
 
 import asyncio
+import json
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -189,6 +191,80 @@ def test_reconcile_contains_per_slot_failures(manager, spec, task, monkeypatch):
     monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
     asyncio.run(manager.reconcile())
     assert attempted == [w.worker_id for w in added]
+
+
+def test_a_pause_survives_a_pass_that_looked_at_the_task_before_it(manager, spec, task):
+    """The incident: "Pause all" landed in the handler's copy of the task,
+    and the reconcile pass -- which had loaded its own copy, reading
+    "running", before the click -- saved that copy back over it a step later.
+    The next pass then honored "running" with a fresh pod. Both now hold the
+    one record, so the pass saves the pause it did not know about."""
+    w = manager.add_local(spec, task, "generate", threads=1)
+    w.desired_state = "running"
+    tasks.save_task(spec, task)
+
+    in_pass = tasks.load_task(spec, "t")
+    clicked = tasks.load_task(spec, "t")
+    manager.set_worker_state(spec, clicked, w.worker_id, run=False)
+    manager.worker_status(spec, in_pass, observe=True)  # the pass's later save
+
+    assert tasks.load_task(spec, "t").worker(w.worker_id).desired_state == "paused"
+    raw = json.loads(tasks.task_path(spec, "t").read_text())
+    assert raw["workers"][0]["desired_state"] == "paused"
+
+
+def test_a_status_poll_accrues_in_memory_and_writes_nothing(manager, spec, task):
+    """The browser polls every second on the request thread; those reads
+    must not race the pass's saves on the file. What they accrue is on the
+    shared record, saved by the next observing pass."""
+    (w,) = _add_cloud(manager, spec, task)
+    path = tasks.task_path(spec, "t")
+    before = path.stat().st_mtime_ns
+    manager.worker_status(spec, task)
+    assert w.observed_at is not None
+    assert path.stat().st_mtime_ns == before
+    manager.worker_status(spec, task, observe=True)
+    assert path.stat().st_mtime_ns != before
+
+
+def test_reconcile_skips_a_slot_removed_between_its_steps(manager, spec, task, monkeypatch):
+    """A Remove clicked while the pass was observing runs between its steps
+    (same serialized thread). The slot it removed is neither enforced nor a
+    reason for the pass to fall over."""
+    kept, gone = _add_cloud(manager, spec, task, count=2)
+    real_status = WorkerManager.worker_status
+
+    def status_then_remove(self, spec, task, *, observe=False):
+        out = real_status(self, spec, task, observe=observe)
+        task.workers.remove(gone)  # the handler, between this step and the next
+        return out
+
+    enforced = []
+    monkeypatch.setattr(WorkerManager, "worker_status", status_then_remove)
+    monkeypatch.setattr(
+        WorkerManager, "_reconcile_worker", lambda self, spec, task, w, *a: enforced.append(w)
+    )
+    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    asyncio.run(manager.reconcile())
+    assert enforced == [kept]
+
+
+def test_redeploy_builds_off_the_blocking_thread_then_pins(manager, spec, task, monkeypatch):
+    """A build is minutes; on the blocking thread it held up every Pause and
+    Remove clicked meanwhile. The build runs on its own thread -- the blocking
+    one answers during it -- and only the repin is serialized."""
+    seen = {}
+
+    def build(self):
+        seen["thread"] = threading.current_thread().name
+        seen["blocking_free"] = manager._blocking.submit(lambda: True).result(timeout=5)
+        return SimpleNamespace(bundle_id="b2", source_hash="h2")
+
+    monkeypatch.setattr(WorkerManager, "_build_bundle", build)
+    assert asyncio.run(manager.redeploy(spec, task)) == "b2"
+    assert seen["thread"].startswith("scz-build")
+    assert seen["blocking_free"]
+    assert tasks.load_task(spec, "t").bundle_id == "b2"
 
 
 def test_status_of_slot_without_a_pod(manager, spec, task):

@@ -3,10 +3,22 @@
 A task is one (workload, tag) pair with a frozen parameter set and a list of
 worker slots, persisted as task.json in the tag's root dir. Tags that predate
 the dashboard (no task.json) still appear in listings, read-only.
+
+A process holds one TaskRecord per task: load_task returns the same object
+every time until the file changes under it, and save_task writes that object.
+The dashboard reads and mutates a task from several places at once -- the
+reconcile pass across its blocking steps, request handlers, status polls --
+and when each of those held its own copy, the last save won: an operator's
+pause, saved by its handler, was overwritten seconds later by the pass's copy
+that had loaded "running" before the click (and a pod was rented again to
+honor it). With one object there is nothing stale to save.
 """
 
 import json
+import os
 import shutil
+import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -91,29 +103,64 @@ class TaskRecord:
     profile: str = ""
 
     def worker(self, worker_id: str) -> WorkerRecord:
+        w = self.find(worker_id)
+        if w is None:
+            raise KeyError(f"no worker '{worker_id}'")
+        return w
+
+    def find(self, worker_id: str) -> WorkerRecord | None:
+        """The slot, or None once it has been removed -- what a step that
+        planned its work from an earlier look at the slot list checks."""
         for w in self.workers:
             if w.worker_id == worker_id:
                 return w
-        raise KeyError(f"no worker '{worker_id}'")
+        return None
 
 
 def task_path(spec: WorkloadSpec, tag: str) -> Path:
     return spec.data_dir(tag) / "task.json"
 
 
-def load_task(spec: WorkloadSpec, tag: str) -> TaskRecord | None:
-    path = task_path(spec, tag)
-    if not path.is_file():
-        return None
+# The process's records, by path, each with the file mtime it matches (see
+# the module docstring). A file whose mtime moved away from that was written
+# by someone else -- a CLI tool migrating params -- and is read afresh.
+_records: dict[Path, tuple[TaskRecord, int]] = {}
+_records_lock = threading.Lock()
+
+
+def _read_task(path: Path) -> TaskRecord:
     raw = json.loads(path.read_text())
     raw["workers"] = [WorkerRecord(**w) for w in raw.get("workers", [])]
     return TaskRecord(**raw)
 
 
+def load_task(spec: WorkloadSpec, tag: str) -> TaskRecord | None:
+    path = task_path(spec, tag)
+    with _records_lock:
+        try:
+            stamp = path.stat().st_mtime_ns
+        except FileNotFoundError:
+            _records.pop(path, None)
+            return None
+        held = _records.get(path)
+        if held is not None and held[1] == stamp:
+            return held[0]
+        task = _read_task(path)
+        _records[path] = (task, stamp)
+        return task
+
+
 def save_task(spec: WorkloadSpec, task: TaskRecord):
+    """Write the record, atomically: two threads saving at once (the pass and
+    a handler) each replace the file whole, never interleave in it."""
     path = task_path(spec, task.tag)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(task), indent=2) + "\n")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".task.", suffix=".json")
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(asdict(task), indent=2) + "\n")
+    with _records_lock:
+        os.replace(tmp, path)
+        _records[path] = (task, path.stat().st_mtime_ns)
 
 
 def create_task(
@@ -159,6 +206,8 @@ def delete_tag(spec: WorkloadSpec, tag: str):
     tag_dir = spec.data_dir(tag)
     assert tag_dir.is_dir(), f"no such tag '{tag}'"
     shutil.rmtree(tag_dir)
+    with _records_lock:
+        _records.pop(task_path(spec, tag), None)
 
 
 def progress(spec: WorkloadSpec, tag: str) -> list:

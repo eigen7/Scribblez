@@ -99,11 +99,15 @@ class _MasterBase(tornado.web.RequestHandler):
 
     async def guarded_offload(self, fn):
         """`guarded`, with `fn` run off the event loop in the worker manager's
-        executor. Launching, removing and deploying are seconds of ssh, cloud
-        API and build work; the loop has to stay free to serve the status polls
-        the operator is watching while they happen."""
+        executor. Launching and removing are seconds of ssh and cloud API
+        work; the loop has to stay free to serve the status polls the operator
+        is watching while they happen."""
+        await self.guarded_await(self.manager.offload(fn))
+
+    async def guarded_await(self, awaitable):
+        """`guarded` for a result that is awaited rather than computed here."""
         try:
-            self.write(await self.manager.offload(fn))
+            self.write(await awaitable)
         except _CLIENT_ERRORS as e:
             self.set_status(400)
             self.write({"error": "; ".join(str(a) for a in e.args) or repr(e)})
@@ -205,11 +209,11 @@ class TaskDeployHandler(_MasterBase):
         body = self.body()
         spec = self.spec(body)
 
-        def deploy():
+        async def deploy():
             task = self.task_or_fail(spec, body["tag"])
-            return {"bundle_id": self.manager.deploy(spec, task)}
+            return {"bundle_id": await self.manager.redeploy(spec, task)}
 
-        await self.guarded_offload(deploy)
+        await self.guarded_await(deploy())
 
 
 class WorkerAddHandler(_MasterBase):
