@@ -32,8 +32,10 @@ ARCHS_DIR = os.path.join(TARGET_DIR, "archs")
 # bundles for, e.g. for cloud tooling to upload one binary bundle per arch and
 # have each worker fetch the one matching its CPU. Grows by hand: when
 # building on a host whose arch isn't listed here, build_engine() below warns
-# so the operator can add it and commit.
-SUPPORTED_ARCHS = ["alderlake", "tigerlake", "x86-64", "znver2", "znver4"]
+# so the operator can add it and commit. skylake-avx512 is what Runpod's 4090
+# hosts reported (September 2026); a trainer pod on the generic x86-64 build
+# there took twice as long per generation in its C++ data loader.
+SUPPORTED_ARCHS = ["alderlake", "skylake-avx512", "tigerlake", "x86-64", "znver2", "znver4"]
 
 # Pinned Macondo release. build.py will clone this tag if the repo is absent,
 # and will move an existing checkout onto it if it is at a different tag
