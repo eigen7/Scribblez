@@ -36,13 +36,14 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
 from cloud import runtime_abi
-from cloud.bundles import deploy_current_tree, source_hash
+from cloud.bundles import BundleManifest, deploy_current_tree, source_hash
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient, RunpodError
@@ -332,19 +333,25 @@ def _worker_resources(w: tasks.WorkerRecord) -> CpuResources | GpuResources:
     return CpuResources(vcpus=w.vcpus, flavor=w.flavor)
 
 
+_ACCRUE_LOCK = threading.Lock()
+
+
 def _accrue(w: tasks.WorkerRecord, running: bool, cost_per_hr: float | None):
     """Advance a slot's spend estimate to now: if it was running at its last
     observation, the elapsed interval is charged at the last observed rate.
     Every observation point (status polls, the reconcile tick, state changes)
     calls this, so the estimate only drifts across dashboard-server downtime.
+    The record is one object shared by the request thread and the blocking
+    one (dashboard/tasks.py), so the read-add-write is locked.
     """
-    now = time.time()
-    if w.observed_running and w.observed_at is not None:
-        w.spend += (now - w.observed_at) / 3600 * (w.cost_per_hr or 0.0)
-    w.observed_at = now
-    w.observed_running = running
-    if cost_per_hr is not None:
-        w.cost_per_hr = cost_per_hr
+    with _ACCRUE_LOCK:
+        now = time.time()
+        if w.observed_running and w.observed_at is not None:
+            w.spend += (now - w.observed_at) / 3600 * (w.cost_per_hr or 0.0)
+        w.observed_at = now
+        w.observed_running = running
+        if cost_per_hr is not None:
+            w.cost_per_hr = cost_per_hr
 
 
 class WorkerManager:
@@ -375,6 +382,9 @@ class WorkerManager:
         # Where every blocking step runs (see _offload). One thread: the point
         # is to keep the event loop free, not to do two of these at once.
         self._blocking = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-blocking")
+        # Where a redeploy's build runs (see redeploy): off the blocking
+        # thread, which it would otherwise hold for minutes.
+        self._builds = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-build")
         # Per-file digests behind source_hash, so the drift check every status
         # poll makes costs a stat walk rather than 20 MB of hashing.
         self._source_digests: dict = {}
@@ -384,9 +394,25 @@ class WorkerManager:
     def deploy(self, spec, task: tasks.TaskRecord) -> str:
         """Build the controller's tree, push it unless the bucket already has
         it, and pin the task to the result. Returns the bundle id."""
+        return self._pin_bundle(spec, task, self._build_bundle())
+
+    async def redeploy(self, spec, task: tasks.TaskRecord) -> str:
+        """The operator's Redeploy: `deploy`, with the build on its own thread.
+
+        Building every arch and pushing takes minutes and touches no record;
+        run through `offload` it held the one blocking thread that long, and
+        every Pause and Remove clicked meanwhile landed after it -- on pods
+        that had gone on billing. Only the repin is a serialized step.
+        """
+        manifest = await IOLoop.current().run_in_executor(self._builds, self._build_bundle)
+        return await self.offload(self._pin_bundle, spec, task, manifest)
+
+    def _build_bundle(self) -> BundleManifest:
         check_worker_images_current()
         creds, _ = self._cloud()
-        manifest = deploy_current_tree(creds.r2, cache=self._source_digests)
+        return deploy_current_tree(creds.r2, cache=self._source_digests)
+
+    def _pin_bundle(self, spec, task: tasks.TaskRecord, manifest: BundleManifest) -> str:
         task.bundle_id = manifest.bundle_id
         task.bundle_source_hash = manifest.source_hash
         tasks.save_task(spec, task)
@@ -874,12 +900,14 @@ class WorkerManager:
 
     def worker_status(self, spec, task: tasks.TaskRecord, *, observe: bool = False) -> list[dict]:
         """One dict per slot: the durable record plus observed live state.
-        Every call is also a spend-accrual observation point (persisted).
+        Every call is also a spend-accrual observation point.
 
         `observe` is the reconcile pass's privilege: it goes to the machines
-        and the cloud API, and leaves what it learns behind. Every other caller
-        -- every status request a browser makes -- reads those observations, so
-        serving the dashboard never waits on ssh or Runpod.
+        and the cloud API, and leaves what it learns behind -- persisted, the
+        only save here. Every other caller -- every status request a browser
+        makes -- reads those observations, so serving the dashboard never
+        waits on ssh or Runpod, and accrues in memory only: the record is the
+        pass's own object, so the next pass saves what the polls accrued.
         """
         out = []
         for w in task.workers:
@@ -956,7 +984,7 @@ class WorkerManager:
             info["observed_running"] = alive
             info["spend"] = w.spend
             out.append(info)
-        if task.workers:
+        if observe and task.workers:
             tasks.save_task(spec, task)
         return out
 
@@ -1115,7 +1143,12 @@ class WorkerManager:
                 except Exception as e:  # noqa: BLE001 -- scheduling must keep ticking
                     print(f"scheduler {spec.name}/{task.tag}: {e}")
             status = await self.offload(self.worker_status, spec, task, observe=True)
-            for w, info in zip(task.workers, status, strict=True):
+            for info in status:
+                # A handler runs between this pass's steps; the slot it removed
+                # is not enforced.
+                w = task.find(info["worker_id"])
+                if w is None:
+                    continue
                 # Collect before enforcing: this slot may be about to be
                 # parked, and a pull needs its container running.
                 if w.kind == "ssh" and info["ssh_probe"] == "running":
@@ -1193,8 +1226,10 @@ class WorkerManager:
         """
         slots = [
             self._slot_files(spec, task, w)
-            for w, info in zip(task.workers, status, strict=True)
-            if w.role == role.name and info["observed_running"]
+            for info in status
+            if (w := task.find(info["worker_id"])) is not None
+            and w.role == role.name
+            and info["observed_running"]
         ]
         params = params_mod.validate(spec.params_cls, task.params)
         workloads.resolve(role.dispatch)(spec, task.tag, params, slots)
@@ -1333,6 +1368,7 @@ class WorkerManager:
         pods and ssh containers are unaffected -- their work continues across
         dashboard restarts."""
         self._blocking.shutdown(wait=False, cancel_futures=True)
+        self._builds.shutdown(wait=False, cancel_futures=True)
         for proc in [*self._local.values(), *(p for p, _ in self._sync.values())]:
             if proc.poll() is None:
                 proc.send_signal(signal.SIGTERM)
