@@ -199,7 +199,7 @@ def test_the_trainer_refuses_to_start_without_its_eval_datasets(tmp_path, monkey
 
 
 def test_a_cloud_train_slot_is_a_gpu_pod_on_the_torch_image():
-    from cloud.credentials import CloudCredentials, R2Credentials, RunpodCredentials
+    from cloud.credentials import AwsCredentials, CloudCredentials, R2Credentials, RunpodCredentials
     from scribblez import params as params_mod
     from scripts.cloud_fleet import GpuResources, pod_create_spec
 
@@ -209,6 +209,7 @@ def test_a_cloud_train_slot_is_a_gpu_pod_on_the_torch_image():
         runpod=RunpodCredentials(api_key="k", container_registry_auth_id="a"),
         registry=RegistryConfig(worker_image="docker.io/u/scribblez"),
         r2=R2Credentials(account_id="acct", access_key_id="ak", secret_access_key="sk", bucket="b"),
+        aws=AwsCredentials(region="us-east-1", access_key_id="ak", secret_access_key="sk"),
     )
     params = params_mod.validate(spec.params_cls, {})
     body = pod_create_spec(

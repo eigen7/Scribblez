@@ -9,6 +9,9 @@ checks each credential by exercising it:
   - R2: writes, reads back, and deletes a probe object in the bucket.
   - Worker image name: shape check only (a private repo's existence can't be
     probed without pulling; the first image push exercises it).
+  - Registry pull token: asks Docker Hub's token service for pull access to
+    the worker image repo with it.
+  - AWS: the access key's identity, and a listing of the instances it can see.
 
 Exits nonzero if any check fails.
 
@@ -16,6 +19,7 @@ Usage:
     ./py/scripts/cloud_check_credentials.py
 """
 
+import base64
 import json
 import shutil
 import sys
@@ -29,6 +33,8 @@ from cloud.credentials import (
     load_credentials,
     write_template,
 )
+from cloud.providers.aws import AwsProvider
+from cloud.providers.base import ProviderError
 from cloud.r2 import bucket_path, rclone
 
 RUNPOD_API_BASE = "https://rest.runpod.io/v1"
@@ -100,6 +106,39 @@ def check_worker_image_name(creds: CloudCredentials) -> bool:
     return report(True, "registry.worker_image", image)
 
 
+def check_registry_pull_token(creds: CloudCredentials) -> bool:
+    """Docker Hub's token service grants a pull scope on the repo to a
+    credential that can pull it -- the same exchange `docker pull` makes."""
+    repo = creds.registry.worker_image.removeprefix("docker.io/").split(":")[0]
+    basic = base64.b64encode(
+        f"{creds.registry.username}:{creds.registry.pull_token}".encode()
+    ).decode()
+    req = urllib.request.Request(
+        f"https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull",
+        headers={"Authorization": f"Basic {basic}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return report(False, "registry.pull_token", f"token service -> HTTP {e.code}")
+    except urllib.error.URLError as e:
+        return report(False, "registry.pull_token", str(e.reason))
+    if not body.get("token"):
+        return report(False, "registry.pull_token", "no token granted")
+    return report(True, "registry.pull_token", f"pull access to {repo}")
+
+
+def check_aws(creds: CloudCredentials) -> bool:
+    provider = AwsProvider(creds.aws, creds.registry)
+    try:
+        arn = provider.identity()
+        instances = provider.describe()
+    except ProviderError as e:
+        return report(False, "aws", f"{e}: {e.detail}")
+    return report(True, "aws", f"{arn} in {creds.aws.region}, {len(instances)} instance(s) ours")
+
+
 def main() -> int:
     if not CREDENTIALS_PATH.is_file():
         write_template()
@@ -119,6 +158,8 @@ def main() -> int:
         check_runpod_registry_auth(creds),
         check_r2_round_trip(creds),
         check_worker_image_name(creds),
+        check_registry_pull_token(creds),
+        check_aws(creds),
     ]
     if all(results):
         print("All checks passed.")

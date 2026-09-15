@@ -6,6 +6,7 @@ import subprocess
 import pytest
 from cloud import ssh_machine
 from cloud.credentials import (
+    AwsCredentials,
     CloudCredentials,
     R2Credentials,
     RegistryConfig,
@@ -138,6 +139,7 @@ def test_bundle_worker_env_composition():
         runpod=RunpodCredentials(api_key="k", container_registry_auth_id="a"),
         registry=RegistryConfig(worker_image="docker.io/u/scribblez-worker"),
         r2=R2Credentials(account_id="acct", access_key_id="ak", secret_access_key="sk", bucket="b"),
+        aws=AwsCredentials(region="us-east-1", access_key_id="ak", secret_access_key="sk"),
     )
     spec = workloads.get("kill_test")
     params = params_mod.validate(spec.params_cls, {})
