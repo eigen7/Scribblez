@@ -1320,6 +1320,120 @@ def test_controls_are_pushed_once_per_change_for_a_bucket_trainer(manager, tmp_p
     assert len(rc.calls) == 2
 
 
+def _all_ssh_task(tag="t"):
+    """A position_eval task with an ssh generator and an ssh trainer and no
+    cloud slot: the shape a rented machine hosts (docs/cloud_machines_plan.md),
+    and one the bucket legs used to read as having nothing to do."""
+    task = tasks.TaskRecord(workload="position_eval", tag=tag, params={}, created_at=0.0)
+    for wid, role in (("g", "generate"), ("tr", "train")):
+        task.workers.append(
+            tasks.WorkerRecord(
+                worker_id=wid, role=role, kind="ssh", desired_state="running", host="u@h"
+            )
+        )
+    return task
+
+
+def test_an_ssh_trainer_delivers_through_the_bucket_and_a_generator_does_not():
+    """The sink is the role's, not the kind's: a trainer has inputs as well
+    as outputs and takes them from the bucket wherever it runs; a generator
+    on the same machine hands its chunks over the control link."""
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    assert workers_mod._slot_sink(spec, task.worker("g")) == "local"
+    assert workers_mod._slot_sink(spec, task.worker("tr")) == "r2"
+    assert workers_mod._bucket_trainer(spec, task)
+    assert not workers_mod._bucket_trainer(spec, _train_task(kinds=("local",)))
+
+
+def test_an_all_ssh_task_with_a_trainer_gets_every_bucket_leg(manager, tmp_path, monkeypatch):
+    """No cloud slot anywhere: the watcher (with the trainer's outputs), the
+    scheduler's publish and mirror hooks and the controls push all exist for
+    the ssh trainer -- and none of them for a task whose slots are local."""
+    spec = workloads.get("position_eval")
+    monkeypatch.setattr(
+        workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
+    )
+    monkeypatch.setattr(WorkerManager, "_ensure_sync", _REAL_ENSURE_SYNC)
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_BUCKET_CREDS, None))
+    spawned = []
+    monkeypatch.setattr(
+        workers_mod.subprocess,
+        "Popen",
+        lambda argv, **k: spawned.append(_FakeWatcher(argv)) or spawned[-1],
+    )
+    rc = _Rclone()
+    monkeypatch.setattr(workers_mod, "rclone", rc)
+
+    task = _all_ssh_task()
+    manager._ensure_sync(spec, task)
+    assert len(spawned) == 1 and "--trainer-outputs" in spawned[0].argv
+    assert manager._make_publish(spec, task) is not None
+    assert manager._make_mirror(spec, task) is not None
+    path = spec.paths("t").controls_path
+    path.parent.mkdir(parents=True, exist_ok=True)  # the watcher's log dir made it
+    path.write_text("{}")
+    manager._push_controls(spec, task)
+    assert rc.calls == [("copyto", str(path), "r2:b/position_eval/t/controls.json")]
+
+    local = tasks.TaskRecord(workload="position_eval", tag="u", params={}, created_at=0.0)
+    local.workers.append(
+        tasks.WorkerRecord(worker_id="tr", role="train", kind="local", desired_state="running")
+    )
+    manager._ensure_sync(spec, local)
+    assert len(spawned) == 1
+    assert manager._make_publish(spec, local) is None
+    assert manager._make_mirror(spec, local) is None
+
+
+def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
+    manager, tmp_path, monkeypatch
+):
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    task.bundle_id = "b1"
+    envs = {}
+
+    class _Recording(_FakeSshMachine):
+        def pull_image(self, image):
+            pass
+
+        def run_container(self, name, image, env, *, gpus=False):
+            envs[name] = (image, env["SCZ_SINK"], gpus)
+
+    monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_BUCKET_CREDS, None))
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    for w in task.workers:
+        manager._run_ssh_container(spec, task, w)
+    by_role = {k.rsplit("-", 1)[-1]: v for k, v in envs.items()}
+    assert by_role["tr"] == ("repo/worker:latest-torch", "r2", True)
+    assert by_role["g"] == ("repo/worker", "local", False)
+
+
+def test_reconcile_collects_from_the_generator_but_not_the_trainer(manager, tmp_path, monkeypatch):
+    """The trainer's outputs are in the bucket, not its container; pulling
+    from it would find nothing, and a count of "never collected from" would
+    stand in the Remove dialog for a slot that holds nothing by design."""
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(_FakeSshMachine, "state", "running")
+    collected = []
+    monkeypatch.setattr(
+        WorkerManager, "_collect_ssh", lambda self, spec, task, w: collected.append(w.worker_id)
+    )
+    monkeypatch.setattr(WorkerManager, "_reconcile_worker", lambda *a, **k: None)
+    monkeypatch.setattr(WorkerManager, "_ensure_sync", lambda *a: None)
+    monkeypatch.setattr(WorkerManager, "_push_controls", lambda *a: None)
+    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    asyncio.run(manager.reconcile())
+    assert collected == ["g"]
+    (_, tr) = manager.worker_status(spec, task)
+    assert tr["undelivered"] == 0
+
+
 def test_a_cloud_train_slot_takes_a_gpu_instance(manager):
     """position_eval's trainer can be a cloud slot now: a GPU pod, singleton,
     paused until started like any cloud slot; a CPU flavor is refused."""
