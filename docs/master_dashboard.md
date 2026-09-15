@@ -123,11 +123,34 @@ known_hosts file, and what the machine has (GPUs). A machine is registered on
 the Overview's Machines card (name, host, key file, GPUs) and hosts any number
 of the task's slots; the reconcile pass probes it (ssh, then Docker) ahead of
 its slots, and slots on a machine that is not `up` are left alone until it is.
-Removing a machine removes its slots, under the slot rule below. Renting a
-machine from a cloud provider produces the same record
-([cloud_machines_plan.md](cloud_machines_plan.md)). A GPU role is refused at
-add time on a machine whose GPUs are all taken or absent, when the count is
-known; a bare host is unchecked.
+Removing a machine removes its slots, under the slot rule below. A GPU role
+is refused at add time on a machine whose GPUs are all taken or absent, when
+the count is known; a bare host is unchecked.
+
+**Renting a machine** (the Machines card's Rent form) launches an AWS
+instance for the task and records it as a machine of the same kind
+([cloud_machines_plan.md](cloud_machines_plan.md)): a type from the curated
+catalog (`py/cloud/providers/aws.py`, with its vCPUs, GPU, bundle arch and
+on-demand price), on AWS's stock Deep Learning GPU image, tagged as the
+task's, with a first-boot script that logs in to the image registry and
+pulls both worker images before writing a readiness marker. The machine reads
+`launching` until ssh answers, `preparing` until that script is done, then
+`up`; slot starts on it are then ordinary ssh starts with the image already
+there. A rented machine on which nothing has run for ten minutes is
+**stopped** (its disk kept, its hourly rate no longer charged; a gated
+generator is a paused container and a finished trainer an exited one, so a
+run that ends stops its machine), and **started** again when a slot on it is
+started, reading `launching` until it answers on its possibly new address. A
+launch or start AWS refuses -- the account's vCPU quota for the family, no
+capacity in the zone -- shows its reason and what to do on the machine's row
+and is retried with a growing delay. Remove **terminates** the instance and
+rolls its spend into the task's total; a machine whose instance is gone
+(terminated in the console, a spot interruption) reads `gone` and its slots
+are removable outright, since their containers went with the disk. Every pass
+lists the instances tagged ours; one that no task's machines name is shown
+in the Machines card as an orphan with a Terminate button, never terminated on
+its own. The one-time account setup (IAM user, quotas, the key pair and
+security group `py/scripts/aws_setup.py` creates) is in the plan.
 
 A slot's worker that exits 0 has reached its role's terminal condition (the
 trainer's `max_rows`, a generator's cycle cap): the slot flips to paused and
