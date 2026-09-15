@@ -70,18 +70,33 @@ from scribblez.workloads.base import SchedulerHooks
 CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
 SYNC_INTERVAL_SECONDS = 30
 
-# Worker kinds that deliver through the results bucket, and so need the
-# per-task sync watcher and the scheduler's bucket mirror. An ssh worker does
-# not: it delivers into its own container and the reconcile pass reads its
-# output back over the control link (cloud/ssh_transfer.py).
-BUCKET_KINDS = ("cloud",)
+
+def _slot_sink(spec: workloads.WorkloadSpec, w: tasks.WorkerRecord) -> str:
+    """Where slot `w`'s worker delivers (cloud/sinks.py's SCZ_SINK): "local"
+    for a local subprocess, and for an ssh container whose output the
+    reconcile pass reads back over the control link (cloud/ssh_transfer.py);
+    "r2" for a pod, and for an ssh container running a role with inputs as
+    well as outputs -- a trainer, whose generations arrive and whose
+    exports, checkpoint and records leave through the bucket
+    (docs/cloud_machines_plan.md). Everything the controller does for a
+    bucket-delivering slot -- the sync watcher, the scheduler's publish and
+    mirror hooks, the controls push -- keys off this, not off the kind."""
+    if w.kind == "local":
+        return "local"
+    if w.kind == "ssh" and not spec.role(w.role).ingest:
+        return "local"
+    return "r2"
+
+
+def _has_bucket_slots(spec: workloads.WorkloadSpec, task) -> bool:
+    return any(_slot_sink(spec, w) == "r2" for w in task.workers)
 
 
 def _bucket_trainer(spec: workloads.WorkloadSpec, task) -> bool:
     """Whether a slot whose role delivers records the controller ingests (a
     trainer) runs through the bucket -- the case that has the sync pull its
     outputs and the controls file pushed up for it."""
-    return any(w.kind in BUCKET_KINDS and spec.role(w.role).ingest for w in task.workers)
+    return any(_slot_sink(spec, w) == "r2" and spec.role(w.role).ingest for w in task.workers)
 
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
@@ -148,6 +163,14 @@ def _forget_empty(w: tasks.WorkerRecord):
     """
     if w.undelivered == 0:
         w.undelivered = None
+
+
+def _holds_nothing(spec: workloads.WorkloadSpec, w: tasks.WorkerRecord):
+    """An ssh slot delivering through the bucket keeps nothing in its
+    container for the controller to collect, so its count is always zero:
+    what the replace rule and the Remove dialog read."""
+    if w.kind == "ssh" and _slot_sink(spec, w) == "r2":
+        w.undelivered = 0
 
 
 def _note_finished(w: tasks.WorkerRecord):
@@ -552,7 +575,7 @@ class WorkerManager:
         slots, pulling what those slots deliver: a watcher whose argv no
         longer matches (a trainer slot appeared) is replaced."""
         key = _key(spec, task.tag)
-        has_bucket = any(w.kind in BUCKET_KINDS for w in task.workers)
+        has_bucket = _has_bucket_slots(spec, task)
         argv = [
             sys.executable, str(CLOUD_SYNC),
             "--workload", spec.name, "-t", task.tag,
@@ -735,7 +758,7 @@ class WorkerManager:
             creds, spec, task.tag, params,
             role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id, kind="ssh",
         )  # fmt: skip
-        env["SCZ_SINK"] = "local"  # collected over ssh, not uploaded (ssh_transfer.py)
+        env["SCZ_SINK"] = _slot_sink(spec, w)
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
         machine = _ssh_machine(task, w)
@@ -1097,6 +1120,7 @@ class WorkerManager:
                 info["state"] = _local_state(w.desired_state, alive, gated, w.finished)
                 _accrue(w, alive, None)
             elif w.kind == "ssh":
+                _holds_nothing(spec, w)
                 probe = self._probe_container(spec, task, w, observe=observe)
                 alive = probe == "running"
                 info["state"] = _ssh_state(w.desired_state, probe, gated, w.finished)
@@ -1177,7 +1201,7 @@ class WorkerManager:
         (docs/cloud_training_plan.md); and with it the bucket holds every
         generation of a cloud-fed tag complete, not just its cloud chunks.
         None for tasks without bucket-delivering slots, as for the mirror."""
-        if not any(w.kind in BUCKET_KINDS for w in task.workers):
+        if not _has_bucket_slots(spec, task):
             return None
         try:
             creds, _ = self._cloud()
@@ -1208,7 +1232,7 @@ class WorkerManager:
         keeps mirroring the local corpus and the sync watcher never
         re-downloads an ingested chunk. None for tasks without
         bucket-delivering slots."""
-        if not any(w.kind in BUCKET_KINDS for w in task.workers):
+        if not _has_bucket_slots(spec, task):
             return None
         try:
             creds, _ = self._cloud()
@@ -1315,7 +1339,11 @@ class WorkerManager:
                     continue  # nothing on a machine that is not up can be acted on
                 # Collect before enforcing: this slot may be about to be
                 # parked, and a pull needs its container running.
-                if w.kind == "ssh" and info["ssh_probe"] == "running":
+                if (
+                    w.kind == "ssh"
+                    and info["ssh_probe"] == "running"
+                    and _slot_sink(spec, w) == "local"
+                ):
                     try:
                         await self.offload(self._collect_ssh, spec, task, w)
                     except Exception as e:  # noqa: BLE001 -- one slot must not stop the pass

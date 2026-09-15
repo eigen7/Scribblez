@@ -202,6 +202,11 @@ the CPU family that picks the bundle arch:
 | c7a.4xlarge / 8xlarge | 16 / 32 | -- | Genoa (`znver4`) |
 | g6.2xlarge / 4xlarge / 8xlarge | 8 / 16 / 32 | L4 24 GB | Milan (`znver3`) |
 
+The account's on-demand G-family quota is 8 vCPUs (a request for 64 is an
+open support case), so the first runs train on a g6.2xlarge with a
+generator on a separate c7a; the 16-vCPU sizes that colocate both wait for
+the grant.
+
 `znver3` joins `SUPPORTED_ARCHS`. Other types (g5's A10G, g6e's L40S)
 are one row each when a run wants them.
 
@@ -238,34 +243,27 @@ are one row each when a run wants them.
    kind and no `cloud` slot gets its sync watcher with
    `--trainer-outputs`, its publish and mirror hooks, and its controls
    push; a local-only task gets none.
-3. **The premise, measured by hand (operator + agent).** After the quota
-   grant: launch one g6.4xlarge from the console following a recipe
-   written for the purpose (the Deep Learning Base GPU AMI, the key pair,
-   port 22; prepare it as master_dashboard.md's "SSH worker machines"
-   says), register it as a manual machine of a test tag, and run a trainer
-   and a generator on it through m1+m2. Outputs: the trainer's step on an
-   L4 against the 4090's (the transformer trainer is launch/bandwidth
-   bound, and an L4 has about a third of a 4090's memory bandwidth), its
-   wait fraction, the generator's per-chunk time on the shared cores, and
-   the cost line. Whether the stock AMI runs the `-torch` image under
-   `--gpus all` and whether the dev container reaches a public address
-   with the ssh options we hardcode are learned here too, before the
-   provider exists. Terminate it from the console afterwards.
-4. **PR m3 -- the AWS provider.** boto3, the credentials sections and the
+3. **PR m3 -- the AWS provider.** boto3, the credentials sections and the
    check script, `aws_setup.py`, `providers/base.py` and `aws.py`, the
    catalog, launch with the cloud-init script and readiness marker,
    machine states and the idle policy in the reconcile pass, orphans,
    spend and its roll-up, refusals, the rent form. On-demand only.
-   Verified by the first dashboard-rented run: the same trainer-plus-
-   generator shape as step 3, now launched, idled and terminated by the
-   dashboard.
-5. **PR m3b -- spot.** Offered when every role being placed is
+   Verified by the first dashboard-rented run, which is also where the
+   premise is measured: a trainer on a g6.2xlarge (the account's GPU
+   quota is 8 vCPUs) and a generator on a c7a, launched, idled and
+   terminated by the dashboard. Outputs: the trainer's step on an L4
+   against the 4090's (the transformer trainer is launch/bandwidth bound,
+   and an L4 has about a third of a 4090's memory bandwidth), its wait
+   fraction, and the cost line; whether the stock AMI runs the `-torch`
+   image under `--gpus all`, and whether the dev container reaches a
+   public address with the ssh options it uses, are learned here too.
+4. **PR m3b -- spot.** Offered when every role being placed is
    interruptible; the price at launch from the instance's zone; `gone` by
    interruption, with the slots' removal rule above.
-6. **PR m4 -- Runpod out.** After m3's run has trained a generation: the
+5. **PR m4 -- Runpod out.** After m3's run has trained a generation: the
    `cloud` kind, `runpod_api.py`, `cloud_fleet.py`'s pod commands, the pod
    paths in the worker image's bootstrap (the container flow stays; it is
    what ssh containers run), the Runpod credential section and check, the
    GPU/CPU pod forms, and the Runpod paragraphs of the docs.
 
-m1 < m2 < 3 < m3 < m3b; m4 after m3's run.
+m1 < m2 < m3 < m3b; m4 after m3's run.

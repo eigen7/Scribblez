@@ -188,7 +188,7 @@ SPEC = WorkloadSpec(
             deps="scribblez.workloads.position_eval:fetch_train_deps",
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
-            kinds=("local", "cloud"),
+            kinds=("local", "ssh", "cloud"),
             gpu=True,
             stats=TRAINER_STATS,
         ),
