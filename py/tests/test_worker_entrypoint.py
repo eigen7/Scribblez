@@ -30,3 +30,14 @@ def test_every_worker_env_var_is_documented():
     undocumented one would surface as a stale-bundle failure at startup."""
     for name in worker_entrypoint.WORKER_ENV_VARS:
         assert name in worker_entrypoint.__doc__
+
+
+def test_a_sigterm_ended_run_exits_interrupted_whatever_the_runner_returned(monkeypatch):
+    """The dashboard reads exit 0 as the role's terminal condition reached (a
+    finished slot); a run SIGTERM cut short, which runners drain and return 0
+    from, must not read as that."""
+    monkeypatch.setattr(worker_entrypoint, "_interrupted", False)
+    with pytest.raises(worker_entrypoint.WorkerStopped):
+        worker_entrypoint._on_sigterm(15, None)
+    assert worker_entrypoint._interrupted
+    monkeypatch.setattr(worker_entrypoint, "_interrupted", False)

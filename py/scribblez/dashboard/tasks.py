@@ -41,6 +41,15 @@ class WorkerRecord:
     desired_state: str  # "running" | "paused"
     threads: int | None = None  # local/ssh: engine thread count (None: all cores)
     host: str | None = None  # ssh: SSH destination ("user@host" or an ssh-config alias)
+    # ssh: the task's machine (TaskRecord.machines, by name) the slot runs on,
+    # instead of a bare host: the machine record carries the address and the
+    # key material. Exactly one of `host` and `machine` is set.
+    machine: str | None = None
+    # The slot's worker exited having reached its role's terminal condition
+    # (a trainer's max_rows, a generator's cycle cap): desired state was
+    # flipped to paused so reconcile does not restart it forever, and the
+    # slot reads `finished` rather than `paused`. Cleared by a Start.
+    finished: bool = False
     # ssh: whether the slot's container is known to have been created. False
     # from add until a start confirms it -- or until a probe finds a container
     # an in-doubt start (ssh link lost mid-command) did create. While False, an
@@ -76,12 +85,41 @@ class WorkerRecord:
 
 
 @dataclass
+class MachineRecord:
+    """A machine the task's ssh slots run on: registered by the operator
+    (`manual`) or rented for the task by a cloud provider (`aws`). It is the
+    task's own -- it hosts this task's slots and its record lives and dies
+    with the task, the way a slot's does -- so nothing outside task.json has
+    to agree with it. The address and key material are what the ssh link is
+    built from (dashboard/workers.py); the rental fields describe what a
+    provider launched and what it costs."""
+
+    name: str
+    provider: str  # "manual" | "aws"
+    host: str  # SSH destination ("user@address"), refreshed by the provider if it moves
+    identity_file: str | None = None  # private key for ssh; None: the container's own identity
+    # Per-machine known_hosts with StrictHostKeyChecking=accept-new: a rented
+    # machine's key is unknown at launch, and providers reuse addresses.
+    known_hosts_file: str | None = None
+    gpu_count: int | None = None  # GPUs on the machine; None: unknown (unchecked at add time)
+    instance_id: str | None = None  # rented: the provider's instance
+    instance_type: str | None = None  # rented: the catalog type
+    region: str | None = None
+    cost_per_hr: float | None = None  # rented: the catalog rate
+    launched_at: float | None = None
+    spend: float = 0.0  # estimated dollars this machine has cost so far
+    observed_at: float | None = None  # spend accrual: when it was last observed
+    observed_up: bool = False  # ... and whether it was billing then
+
+
+@dataclass
 class TaskRecord:
     workload: str
     tag: str
     params: dict  # raw param values (validated against the workload's schema)
     created_at: float
     workers: list[WorkerRecord] = field(default_factory=list)
+    machines: list[MachineRecord] = field(default_factory=list)
     # Roles the workload's scheduler has parked (role -> reason). Distinct from
     # operator pause: a gated worker keeps desired_state="running" and resumes
     # automatically when the scheduler releases the gate.
@@ -116,6 +154,15 @@ class TaskRecord:
                 return w
         return None
 
+    def machine(self, name: str) -> MachineRecord:
+        for m in self.machines:
+            if m.name == name:
+                return m
+        raise KeyError(f"no machine '{name}'")
+
+    def slots_on(self, machine: str) -> list[WorkerRecord]:
+        return [w for w in self.workers if w.machine == machine]
+
 
 def task_path(spec: WorkloadSpec, tag: str) -> Path:
     return spec.data_dir(tag) / "task.json"
@@ -131,6 +178,7 @@ _records_lock = threading.Lock()
 def _read_task(path: Path) -> TaskRecord:
     raw = json.loads(path.read_text())
     raw["workers"] = [WorkerRecord(**w) for w in raw.get("workers", [])]
+    raw["machines"] = [MachineRecord(**m) for m in raw.get("machines", [])]
     return TaskRecord(**raw)
 
 

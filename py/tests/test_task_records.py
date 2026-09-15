@@ -61,3 +61,16 @@ def test_a_deleted_tag_is_forgotten(spec):
     tasks.delete_tag(spec, "t")
     assert tasks.load_task(spec, "t") is None
     assert _save(spec) is not task
+
+
+def test_machines_round_trip(spec):
+    task = _save(spec)
+    task.machines.append(
+        tasks.MachineRecord(name="m1", provider="manual", host="ubuntu@1.2.3.4", gpu_count=1)
+    )
+    tasks.save_task(spec, task)
+    tasks._records.clear()  # force a re-read
+    loaded = tasks.load_task(spec, "t")
+    assert loaded.machine("m1").host == "ubuntu@1.2.3.4"
+    assert loaded.machine("m1").gpu_count == 1
+    assert loaded.slots_on("m1") == []

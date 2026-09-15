@@ -120,6 +120,23 @@ def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dic
     }
 
 
+def _ssh_machine(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> SshMachine:
+    """The link to slot `w`'s machine -- the only place one is built. A slot
+    on one of the task's machines (TaskRecord.machines) takes the record's
+    address and key material; a bare-host slot dials its host string."""
+    if w.machine is None:
+        return SshMachine(w.host)
+    return _machine_link(task.machine(w.machine))
+
+
+def _machine_link(m: tasks.MachineRecord) -> SshMachine:
+    return SshMachine(m.host, m.identity_file, m.known_hosts_file)
+
+
+def _ssh_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
+    return w.host if w.machine is None else task.machine(w.machine).host
+
+
 def _forget_empty(w: tasks.WorkerRecord):
     """Give up a count of zero, keeping any other.
 
@@ -131,6 +148,16 @@ def _forget_empty(w: tasks.WorkerRecord):
     """
     if w.undelivered == 0:
         w.undelivered = None
+
+
+def _note_finished(w: tasks.WorkerRecord):
+    """Slot `w`'s worker exited 0: its role's terminal condition (a trainer's
+    max_rows, a generator's cycle cap) is reached. Flip it to paused so
+    reconcile does not restart it every backoff period forever -- a machine
+    whose trainer finished would otherwise never idle -- and remember why."""
+    if w.desired_state == "running":
+        w.desired_state = "paused"
+        w.finished = True
 
 
 def _replaceable(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> bool:
@@ -227,20 +254,22 @@ def worker_pid_alive(pid: int | None, worker_id: str, tag: str) -> bool:
     return env.get(b"SCZ_WORKER_ID") == worker_id.encode() and env.get(b"SCZ_TAG") == tag.encode()
 
 
-def _local_state(desired: str, alive: bool, gated: bool) -> str:
+def _local_state(desired: str, alive: bool, gated: bool, finished: bool = False) -> str:
     """The honest display state of a local slot from the two observed axes
     (operator intent + real liveness) plus scheduler gating. `stopping` is the
     in-flight state where a paused slot's process has not yet exited; `exited`
     is an unexpected death of a slot that should be running (reconcile respawns
-    it)."""
+    it); `finished` is the exit that reached the role's terminal condition."""
     if gated:
         return "waiting"
     if desired == "paused":
+        if finished and not alive:
+            return "finished"
         return "stopping" if alive else "paused"
     return "running" if alive else "exited"
 
 
-def _ssh_state(desired: str, probe: str, gated: bool) -> str:
+def _ssh_state(desired: str, probe: str, gated: bool, finished: bool = False) -> str:
     """The honest display state of an ssh slot from its container probe
     (cloud/ssh_machine.py's probe states, plus "unknown" for a slot the
     reconcile pass has not observed yet). `unreachable` is its own display
@@ -264,6 +293,8 @@ def _ssh_state(desired: str, probe: str, gated: bool) -> str:
     if probe == "unreachable":
         return "unreachable"
     if desired == "paused":
+        if finished and probe == "stopped":
+            return "finished"
         return "stopping" if probe in ("running", "paused") else "paused"
     if probe == "missing":
         return "starting"
@@ -379,6 +410,10 @@ class WorkerManager:
         self._restarts: dict[str, tuple[int, float]] = {}
         # (pods by id, when listed), the cloud counterpart of _probes.
         self._pods: tuple[dict, float] = ({}, 0.0)
+        # Machine key -> (probe state, when observed): SshMachine.probe for
+        # each of a task's machines, refreshed by the reconcile pass ahead of
+        # its slots (see machine_status).
+        self._machine_probes: dict[str, tuple[str, float]] = {}
         # Where every blocking step runs (see _offload). One thread: the point
         # is to keep the event loop free, not to do two of these at once.
         self._blocking = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-blocking")
@@ -594,6 +629,12 @@ class WorkerManager:
             proc.poll()
         return worker_pid_alive(w.pid, w.worker_id, task.tag)
 
+    def _local_exit_code(self, spec, task: tasks.TaskRecord, w) -> int | None:
+        """How slot `w`'s worker exited, when it was this process's child and
+        has; None otherwise (still running, or spawned by another instance)."""
+        proc = self._local.get(_key(spec, task.tag, w.worker_id))
+        return None if proc is None else proc.returncode
+
     def _stop_local(self, spec, task: tasks.TaskRecord, w):
         """SIGTERM slot `w`'s worker by durable pid (workers flush completed
         output and exit cleanly on SIGTERM). No-op if it is not running."""
@@ -605,7 +646,7 @@ class WorkerManager:
 
     # ---- ssh plumbing ----------------------------------------------------
 
-    def _observe_container(self, spec, tag: str, w: tasks.WorkerRecord) -> str:
+    def _observe_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
         """Probe slot `w`'s container over ssh and remember the answer.
 
         Negative caching stands: after a failed probe the host is assumed
@@ -616,23 +657,26 @@ class WorkerManager:
         start (the ssh link dying after `docker run` was dispatched) may have
         left a live container, and a probe that finds one flips the slot to
         launched."""
-        down_since = self._ssh_down.get(w.host)
+        tag, host = task.tag, _ssh_host(task, w)
+        down_since = self._ssh_down.get(host)
         if down_since is not None and time.time() - down_since < SSH_REPROBE_SECONDS:
             probe = "unreachable"
         else:
-            probe = SshMachine(w.host).container_state(_container_name(spec, tag, w.worker_id))
+            probe = _ssh_machine(task, w).container_state(_container_name(spec, tag, w.worker_id))
             if probe == "unreachable":
-                self._ssh_down[w.host] = time.time()
+                self._ssh_down[host] = time.time()
             else:
-                self._ssh_down.pop(w.host, None)
+                self._ssh_down.pop(host, None)
         if not w.launched and probe not in ("unreachable", "missing"):
             w.launched = True  # the in-doubt start did create the container
         key = _key(spec, tag, w.worker_id)
         self._probes[key] = (probe, time.time())
         if probe == "stopped":
-            self._exits[key] = SshMachine(w.host).container_exit(
+            self._exits[key] = _ssh_machine(task, w).container_exit(
                 _container_name(spec, tag, w.worker_id)
             )
+            if self._exits[key].startswith("exit 0:"):
+                _note_finished(w)
         elif probe in ("running", "paused"):
             self._exits.pop(key, None)
         # A probe that finds no container clears nothing: what it is likely to
@@ -644,7 +688,9 @@ class WorkerManager:
             _forget_empty(w)
         return probe
 
-    def _probe_container(self, spec, tag: str, w: tasks.WorkerRecord, *, observe: bool) -> str:
+    def _probe_container(
+        self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, *, observe: bool
+    ) -> str:
         """Slot `w`'s container probe state, freshly observed or remembered.
 
         Only the reconcile pass observes (`observe=True`); a status request
@@ -656,10 +702,10 @@ class WorkerManager:
         An unlaunched slot's `unreachable` maps to `missing`: with no container
         confirmed to exist, the slot must stay manageable (in particular,
         removable) even when the host is bogus or offline."""
-        key = _key(spec, tag, w.worker_id)
+        key = _key(spec, task.tag, w.worker_id)
         remembered, at = self._probes.get(key, ("unknown", 0.0))
         if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
-            probe = self._observe_container(spec, tag, w)
+            probe = self._observe_container(spec, task, w)
         else:
             probe = remembered
         if not w.launched and probe == "unreachable":
@@ -692,7 +738,7 @@ class WorkerManager:
         env["SCZ_SINK"] = "local"  # collected over ssh, not uploaded (ssh_transfer.py)
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
-        machine = SshMachine(w.host)
+        machine = _ssh_machine(task, w)
         key = _key(spec, task.tag, w.worker_id)
         try:
             # Creating a container is the moment to take a rebuilt worker
@@ -718,12 +764,30 @@ class WorkerManager:
 
     # ---- slot operations -------------------------------------------------
 
-    def _check_role(self, spec, task: tasks.TaskRecord, role: str, kind: str, gpu: bool = False):
+    def _check_role(
+        self,
+        spec,
+        task: tasks.TaskRecord,
+        role: str,
+        kind: str,
+        gpu: bool = False,
+        machine: tasks.MachineRecord | None = None,
+    ):
         role_spec = spec.role(role)
         assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
         if kind == "cloud":
             want = "GPU" if role_spec.gpu else "CPU"
             assert gpu == role_spec.gpu, f"role '{role}' requires {want} instances"
+        if machine is not None and role_spec.gpu and machine.gpu_count is not None:
+            # Refused here rather than by `docker run --gpus all` on the
+            # remote, after a bundle deploy: a machine of known shape says
+            # what it can host. An unknown count (a manual machine) is not
+            # checked, as a bare host never was.
+            taking = [w.worker_id for w in task.slots_on(machine.name) if spec.role(w.role).gpu]
+            assert len(taking) < machine.gpu_count, (
+                f"machine '{machine.name}' has {machine.gpu_count} GPU(s), "
+                f"{'already taken by ' + ', '.join(taking) if taking else 'none for'} role '{role}'"
+            )
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
@@ -745,15 +809,27 @@ class WorkerManager:
         return w
 
     def add_ssh(
-        self, spec, task: tasks.TaskRecord, role: str, host: str, threads: int | None
+        self,
+        spec,
+        task: tasks.TaskRecord,
+        role: str,
+        *,
+        host: str | None = None,
+        machine: str | None = None,
+        threads: int | None,
     ) -> tasks.WorkerRecord:
-        self._check_role(spec, task, role, "ssh")
+        """An ssh slot on a bare host string, or on one of the task's
+        machines by name (exactly one of the two)."""
+        assert (host is None) != (machine is None), "an ssh slot names a host or a machine"
+        record = task.machine(machine) if machine is not None else None
+        self._check_role(spec, task, role, "ssh", machine=record)
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "ssh"),
             role=role,
             kind="ssh",
             desired_state="paused",
             host=host,
+            machine=machine,
             launched=False,
             threads=threads,
         )
@@ -761,6 +837,85 @@ class WorkerManager:
         tasks.save_task(spec, task)
         self._ensure_sync(spec, task)
         return w
+
+    # ---- machines ----------------------------------------------------------
+
+    def add_machine(
+        self,
+        spec,
+        task: tasks.TaskRecord,
+        name: str,
+        host: str,
+        identity_file: str | None = None,
+        gpu_count: int | None = None,
+    ) -> tasks.MachineRecord:
+        """Register a machine the operator owns or launched themself, for the
+        task's ssh slots to run on. Prepared by hand as docs/master_dashboard.md
+        says; nothing here touches it."""
+        assert name and host, "a machine needs a name and a host"
+        assert all(m.name != name for m in task.machines), f"machine '{name}' exists"
+        m = tasks.MachineRecord(
+            name=name,
+            provider="manual",
+            host=host,
+            identity_file=identity_file or None,
+            gpu_count=gpu_count,
+        )
+        task.machines.append(m)
+        tasks.save_task(spec, task)
+        return m
+
+    def remove_machine(self, spec, task: tasks.TaskRecord, name: str):
+        """Remove a machine and the slots on it -- each under the slot rule
+        (not running, reachable, and the operator warned of what it holds),
+        so a machine is never dropped out from under a working container."""
+        m = task.machine(name)
+        for w in task.slots_on(name):
+            self.remove_worker(spec, task, w.worker_id)
+        self._machine_probes.pop(_key(spec, task.tag, name), None)
+        task.retired_spend += m.spend
+        task.machines.remove(m)
+        tasks.save_task(spec, task)
+
+    def machine_status(self, spec, task: tasks.TaskRecord, *, observe: bool = False) -> list[dict]:
+        """One dict per machine: the record plus its probe state (`up`,
+        `no docker`, `unreachable`; `checking` before the first pass). Like
+        the slot probes, only the reconcile pass observes; a status request
+        reads what it left."""
+        out = []
+        for m in task.machines:
+            key = _key(spec, task.tag, m.name)
+            state, at = self._machine_probes.get(key, ("checking", 0.0))
+            if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
+                state = self._observe_machine(m)
+                self._machine_probes[key] = (state, time.time())
+            out.append(
+                {
+                    "name": m.name,
+                    "provider": m.provider,
+                    "host": m.host,
+                    "gpu_count": m.gpu_count,
+                    "instance_type": m.instance_type,
+                    "cost_per_hr": m.cost_per_hr,
+                    "spend": m.spend,
+                    "state": state,
+                    "slots": [w.worker_id for w in task.slots_on(m.name)],
+                }
+            )
+        return out
+
+    def _observe_machine(self, m: tasks.MachineRecord) -> str:
+        """Probe a machine, under the same negative cache as its slots: a
+        host that just failed is not dialed again for SSH_REPROBE_SECONDS."""
+        down_since = self._ssh_down.get(m.host)
+        if down_since is not None and time.time() - down_since < SSH_REPROBE_SECONDS:
+            return "unreachable"
+        state = _machine_link(m).probe()
+        if state == "unreachable":
+            self._ssh_down[m.host] = time.time()
+        else:
+            self._ssh_down.pop(m.host, None)
+        return state
 
     def add_cloud(
         self,
@@ -791,6 +946,8 @@ class WorkerManager:
     def set_worker_state(self, spec, task: tasks.TaskRecord, worker_id: str, run: bool):
         w = task.worker(worker_id)
         w.desired_state = "running" if run else "paused"
+        if run:
+            w.finished = False
         _accrue(w, run, None)
         tasks.save_task(spec, task)
         start = run and w.role not in task.gates  # a gated slot starts when released
@@ -805,14 +962,14 @@ class WorkerManager:
             # reached yet, none at all). An unreachable machine gets no action
             # either way: the desired state is saved, and reconcile enforces it
             # once probes succeed.
-            probe = self._probe_container(spec, task.tag, w, observe=True)
+            probe = self._probe_container(spec, task, w, observe=True)
             name = _container_name(spec, task.tag, w.worker_id)
             if start and probe == "stopped":
-                SshMachine(w.host).start_container(name)
+                _ssh_machine(task, w).start_container(name)
             elif start and probe == "missing":
                 self._run_ssh_container(spec, task, w)
             elif not run and probe == "running":
-                SshMachine(w.host).stop_container(name)
+                _ssh_machine(task, w).stop_container(name)
         else:
             if start and w.pod_id is None:
                 self._create_pod(spec, task, w)
@@ -831,16 +988,16 @@ class WorkerManager:
             self._local.pop(_key(spec, task.tag, worker_id), None)
         elif w.kind == "ssh":
             # Freshly observed: a removal must not act on a remembered state.
-            probe = self._probe_container(spec, task.tag, w, observe=True)
+            probe = self._probe_container(spec, task, w, observe=True)
             assert probe not in ("running", "paused"), f"{worker_id} is running; pause it first"
             # Removing while unreachable would orphan a possibly-live container
             # that keeps generating into the tag with nothing tracking it.
             assert probe != "unreachable", (
-                f"{w.host} is unreachable; bring it online (or clean up its container "
-                f"by hand) before removing {worker_id}"
+                f"{_ssh_host(task, w)} is unreachable; bring it online (or clean up its "
+                f"container by hand) before removing {worker_id}"
             )
             if probe == "stopped":
-                SshMachine(w.host).remove_container(_container_name(spec, task.tag, w.worker_id))
+                _ssh_machine(task, w).remove_container(_container_name(spec, task.tag, w.worker_id))
             # A future slot may be assigned this same worker_id (a freed id is
             # the first one _next_worker_id hands out again), and a deleted
             # tag can be recreated under the same name -- both reproduce this
@@ -923,7 +1080,8 @@ class WorkerManager:
                 "gpu_type_id": w.gpu_type_id,
                 "gpu_count": w.gpu_count,
                 "pod_id": w.pod_id,
-                "host": w.host,
+                "host": _ssh_host(task, w) if w.kind == "ssh" else None,
+                "machine": w.machine,
                 "bundle_id": w.bundle_id,
                 "launched": w.launched,
                 # Zero and None differ to anyone about to remove the slot:
@@ -934,14 +1092,16 @@ class WorkerManager:
                 info["gate_reason"] = task.gates[w.role]
             if w.kind == "local":
                 alive = self._local_alive(spec, task, w)
-                info["state"] = _local_state(w.desired_state, alive, gated)
+                if not alive and self._local_exit_code(spec, task, w) == 0:
+                    _note_finished(w)
+                info["state"] = _local_state(w.desired_state, alive, gated, w.finished)
                 _accrue(w, alive, None)
             elif w.kind == "ssh":
-                probe = self._probe_container(spec, task.tag, w, observe=observe)
+                probe = self._probe_container(spec, task, w, observe=observe)
                 alive = probe == "running"
-                info["state"] = _ssh_state(w.desired_state, probe, gated)
+                info["state"] = _ssh_state(w.desired_state, probe, gated, w.finished)
                 info["ssh_probe"] = probe  # reconcile keys its enforcement off this
-                info["ssh"] = f"ssh {w.host}"
+                info["ssh"] = f"ssh {_ssh_host(task, w)}"
                 reason = self._exits.get(_key(spec, task.tag, w.worker_id))
                 if reason and not alive:
                     info["exit_reason"] = reason
@@ -1142,6 +1302,8 @@ class WorkerManager:
                     await self.offload(self._tick_scheduler, spec, task)
                 except Exception as e:  # noqa: BLE001 -- scheduling must keep ticking
                     print(f"scheduler {spec.name}/{task.tag}: {e}")
+            machines = await self.offload(self.machine_status, spec, task, observe=True)
+            down = {m["name"] for m in machines if m["state"] != "up"}
             status = await self.offload(self.worker_status, spec, task, observe=True)
             for info in status:
                 # A handler runs between this pass's steps; the slot it removed
@@ -1149,6 +1311,8 @@ class WorkerManager:
                 w = task.find(info["worker_id"])
                 if w is None:
                     continue
+                if w.machine is not None and w.machine in down:
+                    continue  # nothing on a machine that is not up can be acted on
                 # Collect before enforcing: this slot may be about to be
                 # parked, and a pull needs its container running.
                 if w.kind == "ssh" and info["ssh_probe"] == "running":
@@ -1197,7 +1361,7 @@ class WorkerManager:
         precedes a replacement) to take it. Any other failure -- a slow link
         timing out while the container is still up, an unreachable host -- is
         real, and propagates."""
-        machine = SshMachine(w.host)
+        machine = _ssh_machine(task, w)
         # Unknown until this pull says otherwise. A collection that fails --
         # a link slow enough to keep hitting the transfer timeout, say, while
         # the far cheaper probe still reports the container running -- must not
@@ -1244,7 +1408,7 @@ class WorkerManager:
         if w.kind == "ssh":
             return SshSlotFiles(
                 w.worker_id,
-                SshMachine(w.host),
+                _ssh_machine(task, w),
                 _container_name(spec, task.tag, w.worker_id),
                 str(paths.root),
             )
@@ -1304,7 +1468,7 @@ class WorkerManager:
         third of the machine's duty cycle. A pause is instant in both
         directions and resumes the work mid-chunk.
         """
-        machine = SshMachine(w.host)
+        machine = _ssh_machine(task, w)
         name = _container_name(spec, task.tag, w.worker_id)
         key = _key(spec, task.tag, w.worker_id)
         if intent == RUN:
