@@ -69,15 +69,6 @@ CREATE TABLE IF NOT EXISTS lane_pred (
   has_move   BLOB,              -- (30,) float32: predicted per-lane has-move probability
   PRIMARY KEY (generation, position)
 );
-CREATE TABLE IF NOT EXISTS position_eval_pred (
-  generation INTEGER,           -- checkpoint index this prediction was made at
-  positions  INTEGER,           -- positions trained at that checkpoint (display label)
-  position   INTEGER,           -- position evaluation dataset position index
-  wld        BLOB,              -- (3,) float32: model win/draw/loss probabilities
-  sd_mean    REAL,              -- predicted final-score-delta mean (points)
-  sd_std     REAL,              -- predicted final-score-delta std (points, Gaussian)
-  PRIMARY KEY (generation, position)
-);
 CREATE TABLE IF NOT EXISTS match_eval (
   epoch INTEGER PRIMARY KEY,    -- generation index of the model under test
   positions INTEGER,            -- rows trained at that checkpoint (display label)
@@ -114,6 +105,9 @@ CREATE TABLE IF NOT EXISTS train_record (
   mtime_ns INTEGER,             -- the file as last ingested: its mtime ...
   size     INTEGER              -- ... and size, so a rewrite is ingested again
 );
+-- Retired: the Positions tab computes its predictions from the generation's
+-- export on demand (dashboard/api.py). Sheds the rows older databases carry.
+DROP TABLE IF EXISTS position_eval_pred;
 """
 
 
@@ -291,59 +285,6 @@ def read_lane_pred(conn: sqlite3.Connection, generation: int, position: int) -> 
     }
 
 
-def write_position_eval_preds(
-    conn: sqlite3.Connection, generation: int, positions: int, preds: dict
-):
-    """Store one model generation's position evaluation predictions over the dataset.
-
-    `preds` holds per-position-stacked arrays: wld (N,3) float32, sd_mean (N,)
-    float32, sd_std (N,) float32. One row per dataset position; re-recording a
-    generation replaces it (idempotent on resume)."""
-    wld, sd_mean, sd_std = preds["wld"], preds["sd_mean"], preds["sd_std"]
-    rows = [
-        (generation, positions, i, to_blob(wld[i]), float(sd_mean[i]), float(sd_std[i]))
-        for i in range(wld.shape[0])
-    ]
-    conn.executemany(
-        "INSERT INTO position_eval_pred (generation, positions, position, wld, sd_mean, sd_std) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(generation, position) DO UPDATE SET positions=excluded.positions, "
-        "wld=excluded.wld, sd_mean=excluded.sd_mean, sd_std=excluded.sd_std",
-        rows,
-    )
-    conn.commit()
-
-
-def read_position_eval_generations(conn: sqlite3.Connection) -> list[dict]:
-    """The recorded generations (checkpoints), each {generation, positions}, oldest
-    first -- the dashboard's model slider scrubs over these."""
-    return [
-        {"generation": r["generation"], "positions": r["positions"]}
-        for r in conn.execute(
-            "SELECT generation, MAX(positions) AS positions FROM position_eval_pred "
-            "GROUP BY generation ORDER BY generation"
-        )
-    ]
-
-
-def read_position_eval_pred(
-    conn: sqlite3.Connection, generation: int, position: int
-) -> dict | None:
-    """One generation's prediction for one dataset position (wld / sd_mean / sd_std),
-    or None if absent."""
-    r = conn.execute(
-        "SELECT wld, sd_mean, sd_std FROM position_eval_pred WHERE generation=? AND position=?",
-        (generation, position),
-    ).fetchone()
-    if r is None:
-        return None
-    return {
-        "wld": from_blob(r["wld"]),
-        "sd_mean": r["sd_mean"],
-        "sd_std": r["sd_std"],
-    }
-
-
 @dataclass(frozen=True)
 class PredTable:
     """A per-checkpoint prediction table: the arrays a generation's row set
@@ -358,7 +299,6 @@ class PredTable:
 # name (generational/records.py packs the arrays; train_ingest.py unpacks
 # them through `write`).
 PRED_TABLES = {
-    "position_eval_pred": PredTable(("wld", "sd_mean", "sd_std"), write_position_eval_preds),
     "lane_pred": PredTable(("occ", "score_pmf", "has_move"), write_lane_preds),
 }
 

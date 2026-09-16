@@ -51,16 +51,11 @@ def _metrics(gen: int) -> dict:
 def _preds(gen: int, n: int = 3) -> dict:
     rng = np.random.default_rng(gen)
     return {
-        "position_eval_pred": {
-            "wld": rng.random((n, 3), dtype=np.float32),
-            "sd_mean": rng.random(n, dtype=np.float32),
-            "sd_std": rng.random(n, dtype=np.float32),
-            "placement_logits": rng.random((n, 4, 5), dtype=np.float32),  # not a column
-        },
         "lane_pred": {
             "occ": (rng.random((n, 30, 15, 27)) > 0.5).astype(np.uint8),
             "score_pmf": rng.random((n, 30, 100), dtype=np.float32),
             "has_move": rng.random((n, 30), dtype=np.float32),
+            "extra": rng.random((n, 4, 5), dtype=np.float32),  # not a column
         },
     }
 
@@ -112,9 +107,7 @@ def test_records_ingest_exactly_as_direct_writes_would(paths, tmp_path):
         db.write_metrics(direct, g, {**_metrics(g), "wld_acc": 0.5})
         for e in evs:
             db.write_control_event(direct, e["positions"], e["name"], e["value"], t=e["t"])
-        p = _preds(g)
-        db.write_position_eval_preds(direct, g, 1000 * (g + 1), p["position_eval_pred"])
-        db.write_lane_preds(direct, g, 1000 * (g + 1), p["lane_pred"])
+        db.write_lane_preds(direct, g, 1000 * (g + 1), _preds(g)["lane_pred"])
 
     got, want = _dump(conn), _dump(direct)
     assert set(got) == set(want)
@@ -140,6 +133,24 @@ def test_ingest_is_incremental_and_follows_a_rewritten_run_record(paths):
     assert db.read_meta(conn)["model_params"] == 456
     assert db.read_control(conn, "dataloader_workers") == 2
     assert list(db.read_metric_series(conn, "loss")[0]) == [0, 1]
+
+
+def test_a_retired_prediction_table_is_left_unread(paths):
+    """A trainer on an older bundle may still deliver a prediction table this
+    controller no longer keeps; the record's other contents land and it is
+    ledgered, not retried forever."""
+    recorder = TrainRecorder(LocalSink(paths.root))
+    recorder.publish_run("t", PARAMS, 0, LOSS_WEIGHTS, CONTROLS)
+    recorder.commit_generation(0, 1000, _metrics(0), _preds(0))
+    path = paths.generation_record_path(0)
+    record = json.loads(path.read_text())
+    record["preds"] = ["lane_pred", "position_eval_pred"]
+    path.write_text(json.dumps(record))
+    conn = db.connect(paths.dashboard_db)
+    assert train_ingest.ingest(paths, conn) == ["run.json", "gen_000000.json"]
+    assert train_ingest.ingest(paths, conn) == []
+    assert list(db.read_metric_series(conn, "loss")[0]) == [0]
+    assert db.read_lane_generations(conn) == [{"generation": 0, "positions": 1000}]
 
 
 def test_unreadable_record_is_skipped_and_retried(paths):
