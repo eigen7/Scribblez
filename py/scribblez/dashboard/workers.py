@@ -998,13 +998,13 @@ class WorkerManager:
         assert all(m.name != name for m in task.machines), f"machine '{name}' exists"
         mtype = next((t for t in provider.catalog() if t.id == type_id), None)
         assert mtype is not None, f"no machine type '{type_id}'"
-        known_hosts = MACHINES_DIR / name / "known_hosts"
-        known_hosts.parent.mkdir(parents=True, exist_ok=True)
-        known_hosts.write_text("")  # a relaunch is a new name, so never a stale key
         try:
             inst = provider.launch(LaunchRequest(type_id, _owner(spec, task.tag, name)))
         except ProviderError as e:
             raise AssertionError(provider.refusal(e, type_id)) from e
+        known_hosts = MACHINES_DIR / name / "known_hosts"
+        known_hosts.parent.mkdir(parents=True, exist_ok=True)
+        known_hosts.write_text("")  # a relaunch is a new name, so never a stale key
         m = tasks.MachineRecord(
             name=name,
             provider=provider.name,

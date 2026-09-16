@@ -506,6 +506,7 @@ def test_a_refused_launch_reaches_the_form_and_records_nothing(
     with pytest.raises(AssertionError, match="refused g6.2xlarge: VcpuLimitExceeded"):
         manager.rent_machine(spec, task, "m1", "g6.2xlarge")
     assert task.machines == []
+    assert not (tmp_path / "machines" / "m1").exists()  # nothing left behind
 
 
 def test_a_rented_machine_reads_launching_then_preparing_then_up(
