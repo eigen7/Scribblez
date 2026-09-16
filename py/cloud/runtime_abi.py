@@ -10,10 +10,10 @@ worker can load:
     OSError: /lib/x86_64-linux-gnu/libstdc++.so.6: version `GLIBCXX_3.4.35'
     not found (required by .../libscribblez_ffi.so)
 
-which is what a gcc upgrade in the dev image did in August 2026. The set is
-kept in step by build_docker_image.py, which builds all of them; this module
-is the check for when something bypasses that. Each image's versions are
-recorded at push time (build_and_push_worker_image.py) into the shared mount,
+which is what a gcc upgrade in the dev image did in August 2026. The worker
+images are rebuilt by hand after such a dev-image change
+(build_and_push_worker_image.py); this module is the check that it was
+done. Each image's versions are recorded at push time into the shared mount,
 where the dev container can compare them against its own before deploying a
 bundle built there.
 

@@ -258,8 +258,9 @@ def check_worker_images_current():
     Bundles are compiled here, in the dev container, and run there, against
     the worker images' libraries -- so a dev image whose toolchain moved
     produces binaries no worker can start (August 2026: gcc-16's libstdc++,
-    which crash-looped every ssh worker at import). build_docker_image.py
-    keeps them in step; this catches the case where something did not.
+    which crash-looped every ssh worker at import). The worker images are
+    rebuilt by hand after such a change; this catches the case where they
+    were not.
 
     Every recorded image is checked, whichever runtime this deploy's slots
     will use: a task's slots can run either, and both are rebuilt together.
