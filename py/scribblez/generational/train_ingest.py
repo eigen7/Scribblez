@@ -18,11 +18,12 @@ database's own ledger table -- a rewritten run.json is re-ingested, an
 unchanged generation record is not touched again.
 
 Records are ingested in generation order, oldest first, so the metrics rows
-and the Positions-tab generations appear in the order they were trained. A
-record that cannot be read is skipped and retried on later passes: unlike a
-match result it cannot have arrived torn (the sink writes it atomically), so
-an unreadable one means a trainer ahead of this controller's code, which a
-redeploy fixes.
+appear in the order they were trained. A record that cannot be read is
+skipped and retried on later passes: unlike a match result it cannot have
+arrived torn (the sink writes it atomically), so an unreadable one means a
+trainer ahead of this controller's code, which a redeploy fixes. The reverse
+skew -- a trainer on an older bundle still delivering a prediction table this
+controller no longer keeps -- is not an error: the table is left unread.
 """
 
 import json
@@ -76,9 +77,10 @@ def _ingest_generation(conn, paths: TagPaths, record: dict):
     db.write_metrics(conn, gen, record["metrics"])
     for e in record["control_events"]:
         db.write_control_event(conn, e["positions"], e["name"], e["value"], t=e["t"])
-    if record["preds"]:
+    tables = [t for t in record["preds"] if t in db.PRED_TABLES]  # retired ones left unread
+    if tables:
         with np.load(paths.records_dir / f"gen_{gen:06d}.npz") as npz:
-            for table in record["preds"]:
+            for table in tables:
                 arrays = {name: npz[f"{table}/{name}"] for name in db.PRED_TABLES[table].arrays}
                 db.PRED_TABLES[table].write(conn, gen, positions, arrays)
 

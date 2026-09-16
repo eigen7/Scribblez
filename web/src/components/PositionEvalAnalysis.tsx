@@ -101,7 +101,9 @@ interface Payload {
 
 interface Generation {
   generation: number;
-  positions: number;
+  // The rows-clock of the generation's ingested record; null while the record
+  // still trails the export the slider listed it from.
+  positions: number | null;
 }
 
 // One model-vs-MC pair of bars for a win/loss/draw outcome.
@@ -401,10 +403,13 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
     return <div className="muted" style={{ padding: 20 }}>No position-evaluation dataset available.</div>;
   }
 
+  const genPositions = generations[effIdx]?.positions;
   const genLabel =
     effGen == null
       ? 'no checkpoints yet'
-      : `gen ${effGen} (${generations[effIdx]?.positions.toLocaleString()} positions)`;
+      : genPositions == null
+        ? `gen ${effGen}`
+        : `gen ${effGen} (${genPositions.toLocaleString()} positions)`;
 
   return (
     <div className="lane-analysis">

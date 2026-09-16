@@ -193,8 +193,6 @@ def test_the_trainer_refuses_to_start_without_its_eval_datasets(tmp_path, monkey
     monkeypatch.setattr(analysis, "DEFAULT_DATASET", tmp_path / "absent")
     monkeypatch.setattr(analysis, "LARGE_DATASET", tmp_path / "absent-large")
     with pytest.raises(Exception, match="absent"):
-        trainer.load_position_eval(87)
-    with pytest.raises(Exception, match="absent"):
         trainer.load_position_eval_quality(87, face_up_leaves=True)
 
 

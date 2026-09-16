@@ -262,16 +262,30 @@ def lane_position_payload(conn, position: int, generation) -> dict:
     }
 
 
-@lru_cache(maxsize=1)
 def _position_eval_dataset_files() -> tuple:
+    """The dataset's GCG files in natural order. Listed afresh on every call:
+    the set is hand-maintained and reshaped in place (files added, renamed,
+    rewritten), and a running dashboard follows it without a restart."""
     return tuple(position_eval_analysis.dataset_gcgs(position_eval_analysis.DEFAULT_DATASET))
 
 
-@lru_cache(maxsize=64)
-def _position_eval_board(position: int) -> tuple:
-    """(name, board_bundle) for a position evaluation dataset position -- board / bonuses / leave
-    rack for rendering. Cached: it is fixed for the dataset."""
+def _position_eval_gcg_key(position: int) -> tuple[str, int]:
+    """A dataset position's identity for the per-position memos below: its
+    file's path and mtime, so a file rewritten in place is a miss, never a
+    stale hit."""
     gcg = _position_eval_dataset_files()[position]
+    return str(gcg), gcg.stat().st_mtime_ns
+
+
+def _position_eval_board(position: int) -> tuple:
+    return _position_eval_board_for(_position_eval_gcg_key(position))
+
+
+@lru_cache(maxsize=64)
+def _position_eval_board_for(gcg_key: tuple[str, int]) -> tuple:
+    """(name, board_bundle) for a dataset GCG (a _position_eval_gcg_key) --
+    board / bonuses / leave rack for rendering."""
+    gcg = Path(gcg_key[0])
     return gcg.stem, position_eval_board_json(gcg.read_text())
 
 
@@ -313,14 +327,17 @@ def _mc_payload(name: str, face_up_leaves: bool) -> dict:
     }
 
 
-@lru_cache(maxsize=64)
 def _position_eval_legal(position: int) -> np.ndarray:
+    return _position_eval_legal_for(_position_eval_gcg_key(position))
+
+
+@lru_cache(maxsize=64)
+def _position_eval_legal_for(gcg_key: tuple[str, int]) -> np.ndarray:
     """Which board cells each of the four placement heads can legally reach at a
-    dataset position -- (4, 15, 15) bool. Cached: like _position_eval_board, this
-    depends only on the position (board legality + unseen-pool availability), not
-    the selected generation."""
-    gcg = _position_eval_dataset_files()[position]
-    return legal_position_eval_placement(gcg.read_text())
+    dataset GCG (a _position_eval_gcg_key) -- (4, 15, 15) bool. Like the board,
+    this depends only on the position (board legality + unseen-pool
+    availability), not the selected generation."""
+    return legal_position_eval_placement(Path(gcg_key[0]).read_text())
 
 
 def _placement_block(name: str, face_up_leaves: bool, pred, legal: np.ndarray) -> dict | None:
@@ -350,13 +367,13 @@ def _placement_block(name: str, face_up_leaves: bool, pred, legal: np.ndarray) -
     return {"n": n, "heads": heads}
 
 
-def position_eval_position_payload(conn, position: int, generation, tag, task, mount_root) -> dict:
+def position_eval_position_payload(position: int, generation, tag, task, mount_root) -> dict:
     """The full per-position view: board + both racks for rendering, the Monte-Carlo
     ground truth of the tag's information condition, and the selected generation's
-    model prediction (WLD + score-delta Gaussian) -- or None when no prediction
-    exists for this generation/position. The `placement` block pairs the per-square
-    Monte-Carlo truth with the model's on-demand placement-head predictions for the
-    residual heat-map overlay.
+    model prediction (WLD + score-delta Gaussian), computed on demand from its
+    exported ONNX -- None when the generation has no usable export. The
+    `placement` block pairs the per-square Monte-Carlo truth with the same run's
+    placement-head predictions for the residual heat-map overlay.
 
     The opponent's rack is their retained leave plus hidden draws: `opp_leave_size`
     tiles of leave, spelled out in `opp_leave` under face-up leaves and withheld
@@ -364,20 +381,7 @@ def position_eval_position_payload(conn, position: int, generation, tag, task, m
     says it cannot see -- and the rest of `opponent_rack_count` drawn since."""
     face_up_leaves = _position_eval_face_up_leaves(task, tag)
     name, bundle = _position_eval_board(position)
-    pred = (
-        db.read_position_eval_pred(conn, generation, position)
-        if (conn is not None and generation is not None)
-        else None
-    )
-    model = None
-    if pred is not None:
-        w = pred["wld"]  # (3,) in [win, draw, loss] order
-        model = {
-            "wld": {"win": float(w[0]), "draw": float(w[1]), "loss": float(w[2])},
-            "sd_mean": float(pred["sd_mean"]),
-            "sd_std": float(pred["sd_std"]),
-        }
-    placement_pred = _position_eval_placement_pred(tag, task, mount_root, generation, position)
+    pred = _position_eval_prediction(tag, task, mount_root, generation, position)
     return {
         "name": name,
         "start_player": bundle["start_player"],
@@ -395,25 +399,41 @@ def position_eval_position_payload(conn, position: int, generation, tag, task, m
         "generation": generation,
         "has_prediction": pred is not None,
         "mc": _mc_payload(name, face_up_leaves),
-        "model": model,
+        "model": pred["model"] if pred else None,
         "placement": _placement_block(
-            name, face_up_leaves, placement_pred, _position_eval_legal(position)
+            name,
+            face_up_leaves,
+            pred["placement"] if pred else None,
+            _position_eval_legal(position),
         ),
     }
 
 
-def _resolve_position_eval_generation(conn, arg: str):
-    """Resolve a generation query arg: a specific index, or the newest recorded one for
-    '', 'latest', or None (or None when nothing is recorded)."""
-    if conn is not None and arg in ("", "latest"):
-        gens = db.read_position_eval_generations(conn)
-        return gens[-1]["generation"] if gens else None
-    return int(arg) if arg not in ("", "latest") else None
+def position_eval_generations(conn, tag, task, mount_root) -> list[dict]:
+    """The generations the Positions tab scrubs over -- those with an exported
+    ONNX, ascending, each {generation, positions}. The export is what every
+    prediction is computed from, so its existence is what makes a generation
+    selectable; `positions` is the rows-clock of the generation's ingested
+    record, None while the record still trails the export by an ingest tick."""
+    clock = db.read_rows_clock(conn) if conn is not None else {}
+    return [
+        {"generation": g, "positions": clock.get(g)}
+        for g in TagPaths(tag, task, mount_root).exported_generations()
+    ]
 
 
-# Per-(file, mtime) ONNX session cache. The alternate-leave what-if runs the selected
-# generation's exported model on demand; fp32 onnxruntime reproduces the torch model
-# the stored predictions came from, so the two are directly comparable.
+def _resolve_position_eval_generation(tag, task, mount_root, arg: str):
+    """Resolve a generation query arg: a specific index, or the newest exported
+    one for '' or 'latest' (None when nothing is exported yet)."""
+    if arg in ("", "latest"):
+        exported = TagPaths(tag, task, mount_root).exported_generations()
+        return exported[-1] if exported else None
+    return int(arg)
+
+
+# Per-(file, mtime) ONNX session cache. Every prediction the Positions tab shows is
+# the selected generation's exported model run on demand under fp32 onnxruntime,
+# which reproduces the torch model it was exported from.
 _ONNX_SESSIONS: dict = {}
 
 
@@ -450,74 +470,89 @@ def _position_eval_onnx_feed(arm: InputArm, flat_input: np.ndarray) -> dict:
     }
 
 
-def _run_position_eval_onnx(sess, arm: InputArm, flat_input: np.ndarray) -> dict:
-    """Run an exported post-move model on one flat input row (encoded under the
-    model's `arm`) and decode the value outputs: W/L/D probabilities and the
-    score-delta mean/std."""
-    wld, sd = sess.run(["wld", "score_diff"], _position_eval_onnx_feed(arm, flat_input))
-    probs = np.exp(wld[0] - wld[0].max())
+def _decode_value_outputs(wld: np.ndarray, sd: np.ndarray) -> dict:
+    """One row's value outputs as the UI's model block: the (3,) W/L/D logits
+    softmaxed, and the score-delta (mean, std) pair."""
+    probs = np.exp(wld - wld.max())
     probs /= probs.sum()
     return {
         "wld": {"win": float(probs[0]), "draw": float(probs[1]), "loss": float(probs[2])},
-        "sd_mean": float(sd[0, 0]),
-        "sd_std": float(sd[0, 1]),
+        "sd_mean": float(sd[0]),
+        "sd_std": float(sd[1]),
     }
 
 
-def _run_position_eval_masks(sess, arm: InputArm, flat_input: np.ndarray, gcg_text: str) -> dict:
-    """The exported model's four placement heads for one dataset position, as
-    board-frame (15, 15) per-cell occupancy marginals keyed by head name.
+def _collapse_placement_outputs(outs: list, gcg_text: str) -> dict:
+    """The four placement heads' outputs for one row (a (1, C) raw footprint
+    logit array per head, in PLACEMENT_HEAD_NAMES order) as board-frame
+    (15, 15) per-cell occupancy marginals keyed by head name.
 
-    The heads emit raw footprint logits; the engine collapse masks the illegal
-    footprints, softmaxes, and scatters each footprint's probability onto the
-    cells it covers -- reproducing the (15, 15) marginal the old per-cell heads
-    emitted (and the frame the Monte-Carlo ground-truth planes use). The analysis
-    encoder never flips the board, so the planes need no transpose."""
-    outs = sess.run(list(PLACEMENT_HEAD_NAMES), _position_eval_onnx_feed(arm, flat_input))
+    The engine collapse masks the illegal footprints, softmaxes, and scatters
+    each footprint's probability onto the cells it covers -- reproducing the
+    (15, 15) marginal the old per-cell heads emitted (and the frame the
+    Monte-Carlo ground-truth planes use). The analysis encoder never flips the
+    board, so the planes need no transpose."""
     raw = np.stack([out[0] for out in outs], axis=0)  # (4, FOOTPRINT_CLASSES)
     planes = collapse_position_eval_placement(gcg_text, raw)  # (4, 15, 15)
     return dict(zip(PLACEMENT_HEAD_NAMES, planes, strict=True))
 
 
-@lru_cache(maxsize=256)
-def _position_eval_placement_pred_for_path(onnx_path_str: str, position: int):
-    """The placement predictions for one on-disk ONNX file + dataset position:
-    board-frame (15, 15) per-cell occupancy marginals keyed by head name (the
-    footprint heads' raw logits collapsed by the engine), or None when the engine
-    does not encode the model's declared input widths (an earlier, differently
-    sized encoding era).
+def _run_position_eval_onnx(sess, arm: InputArm, flat_input: np.ndarray) -> dict:
+    """Run an exported post-move model on one flat input row (encoded under the
+    model's `arm`) and decode its value outputs (the what-if's model block)."""
+    wld, sd = sess.run(["wld", "score_diff"], _position_eval_onnx_feed(arm, flat_input))
+    return _decode_value_outputs(wld[0], sd[0])
 
-    Cached per (onnx_path, position): an ONNX export is atomic (a temp file renamed
-    into place), so a path that exists is always complete and its content never
-    changes -- the memoized planes never go stale. The cannot-encode result is
-    likewise permanent for that path, so caching it is fine too."""
+
+def _run_position_eval_prediction(
+    sess, arm: InputArm, flat_input: np.ndarray, gcg_text: str
+) -> dict:
+    """One forward pass of an exported model on a dataset position, every head
+    at once, decoded as the Positions tab's prediction: {"model": the value
+    block, "placement": the per-head planes}."""
+    outs = sess.run(
+        ["wld", "score_diff", *PLACEMENT_HEAD_NAMES], _position_eval_onnx_feed(arm, flat_input)
+    )
+    return {
+        "model": _decode_value_outputs(outs[0][0], outs[1][0]),
+        "placement": _collapse_placement_outputs(outs[2:], gcg_text),
+    }
+
+
+@lru_cache(maxsize=256)
+def _position_eval_prediction_for(onnx_path_str: str, gcg_key: tuple[str, int]) -> dict | None:
+    """One export's prediction on one dataset GCG (_run_position_eval_prediction),
+    or None when the engine does not encode the model's declared input widths
+    (an earlier, differently sized encoding era).
+
+    Memoized per (export path, GCG path + mtime): an export is atomic (a temp
+    file renamed into place) and never rewritten, and a GCG rewritten in place
+    changes its mtime, so a hit is never stale. The cannot-encode result is
+    likewise permanent for the pair."""
     sess = _position_eval_onnx_session(Path(onnx_path_str))
     arm = _position_eval_model_arm(sess)
-    gcg = _position_eval_dataset_files()[position]
-    gcg_text = gcg.read_text()
+    gcg_text = Path(gcg_key[0]).read_text()
     try:
         flat = analyze_position_eval_gcg(gcg_text, arm)
     except ValueError:  # the model's widths are not today's layout
         return None
-    return _run_position_eval_masks(sess, arm, flat, gcg_text)
+    return _run_position_eval_prediction(sess, arm, flat, gcg_text)
 
 
-def _position_eval_placement_pred(tag, task, mount_root, generation, position):
-    """The selected generation's ONNX placement predictions for a dataset
-    position: board-frame (15, 15) per-cell occupancy marginals keyed by head
-    name, or None when the generation has no exported ONNX (or one from an
-    incompatible encoding era).
+def _position_eval_prediction(tag, task, mount_root, generation, position) -> dict | None:
+    """The selected generation's prediction on a dataset position (see
+    _position_eval_prediction_for), or None when the generation has no exported
+    ONNX or one from an incompatible encoding era.
 
-    File existence is checked uncached on every call: memoizing a miss would pin a
-    null prediction to the generation even if its export appears later. Only once
-    the file exists is the (cacheable) lookup in
-    `_position_eval_placement_pred_for_path` consulted."""
+    File existence is checked uncached on every call: memoizing a miss would pin
+    a null prediction to the generation even if its export appears later. Only
+    once the file exists is the memoized lookup consulted."""
     if generation is None:
         return None
     onnx_path = TagPaths(tag, task, mount_root).onnx_path(generation)
     if not onnx_path.exists():
         return None
-    return _position_eval_placement_pred_for_path(str(onnx_path), position)
+    return _position_eval_prediction_for(str(onnx_path), _position_eval_gcg_key(position))
 
 
 class _Base(tornado.web.RequestHandler):
@@ -737,22 +772,29 @@ class PositionEvalPositionsHandler(_Base):
 
 
 class PositionEvalGenerationsHandler(_Base):
-    """The model generations a tag has position evaluation predictions for (the slider)."""
+    """The model generations a tag has exported (the slider)."""
 
     def get(self):
         conn = self._open_conn()
-        if conn is None:
-            self.write({"generations": []})
-            return
         try:
-            self.write({"generations": db.read_position_eval_generations(conn)})
+            self.write(
+                {
+                    "generations": position_eval_generations(
+                        conn,
+                        self.get_query_argument("tag"),
+                        self.get_query_argument("task"),
+                        self.mount_root,
+                    )
+                }
+            )
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
 
 class PositionEvalPositionHandler(_Base):
     """Board + Monte-Carlo ground truth merged with one generation's prediction.
-    `generation` may be omitted or 'latest' to use the newest recorded one."""
+    `generation` may be omitted or 'latest' to use the newest exported one."""
 
     def get(self):
         files = _position_eval_dataset_files()
@@ -761,20 +803,13 @@ class PositionEvalPositionHandler(_Base):
             self.set_status(404)
             self.write({"error": "position out of range"})
             return
-        conn = self._open_conn()
+        tag, task = self.get_query_argument("tag"), self.get_query_argument("task")
         try:
             generation = _resolve_position_eval_generation(
-                conn, self.get_query_argument("generation", "latest")
+                tag, task, self.mount_root, self.get_query_argument("generation", "latest")
             )
             self.write(
-                position_eval_position_payload(
-                    conn,
-                    position,
-                    generation,
-                    self.get_query_argument("tag"),
-                    self.get_query_argument("task"),
-                    self.mount_root,
-                )
+                position_eval_position_payload(position, generation, tag, task, self.mount_root)
             )
         except KeyError as e:  # a tag with no task.json: its condition is unknown
             self.set_status(404)
@@ -782,9 +817,6 @@ class PositionEvalPositionHandler(_Base):
         except OSError:  # engine unavailable -> can't build the board
             self.set_status(503)
             self.write({"error": "engine unavailable; cannot build board"})
-        finally:
-            if conn is not None:
-                conn.close()
 
 
 class PositionEvalAltLeaveHandler(_Base):

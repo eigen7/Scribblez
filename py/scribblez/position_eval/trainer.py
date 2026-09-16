@@ -152,10 +152,9 @@ def _checkpoint_and_eval(
     on the generation index `gen`, with the rows-clock stored as `positions`).
 
     The record goes last because it is what makes this generation visible to
-    the dashboard -- the Loss tab's rows and the Positions tab's generation
-    list come from it -- so everything it stands for (the ONNX file the
-    placement overlay will load, the checkpoint a restart resumes from) is on
-    disk before anything can ask for it."""
+    the Loss tab, so everything it stands for (the ONNX export the Positions
+    tab runs on demand, the checkpoint a restart resumes from) is on disk
+    before anything can ask for it."""
     sys.stdout.write("\n")
     avg = result.losses
     lr_now = optim_arm.current
@@ -209,12 +208,11 @@ def _checkpoint_and_eval(
     for sidecar in paths.onnx_sidecars:
         sink.deliver_output(sidecar, f"models/{sidecar.name}", keep=True)
     sink.deliver_output(paths.onnx_path(ci), f"models/{paths.onnx_path(ci).name}")
-    preds = {"position_eval_pred": eval_position_eval(model, ctx["position_eval"], device)}
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     sink.deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
     _publish_train_state(paths, state)
     sink.deliver_output(paths.train_state_path, "train_state.json", keep=True)
-    recorder.commit_generation(ci, state.rows_trained, record, preds)
+    recorder.commit_generation(ci, state.rows_trained, record)
     return time.time() - t_eval
 
 
@@ -357,37 +355,14 @@ def run_generational_training(
 # ---------------------------------------------------------------------------
 
 
-def load_position_eval(spatial_planes: int) -> dict:
-    """Build the frozen position-evaluation input batch once. At each
-    checkpoint the model is run over it and the predictions go into the
-    generation's record, where the Positions tab pairs them with the
-    Monte-Carlo ground truth. A missing or empty dataset is an error: a run
-    without its eval is not the run anyone asked for, least of all one on a
-    rented machine that would otherwise train for hours before anyone saw
-    the curves were absent."""
-    dataset = str(position_eval_analysis.DEFAULT_DATASET)
-    names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
-    assert names, f"no GCG positions in {dataset}"
-    timed_print(f"position-evaluation eval: {len(names)} positions from {dataset}")
-    return {"inputs": inputs, "spatial_planes": spatial_planes}
-
-
-def eval_position_eval(model, position_eval: dict, device) -> dict:
-    """Run the model over the frozen position-evaluation set and return this
-    checkpoint's per-position predictions (WLD probabilities + score-delta
-    mean/std) for the generation's record."""
-    model.eval()
-    return position_eval_analysis.predict(
-        model, position_eval["inputs"], position_eval["spatial_planes"], device
-    )
-
-
 def load_position_eval_quality(spatial_planes: int, face_up_leaves: bool) -> dict:
     """Build the large-dataset quality-eval batch and its Monte-Carlo ground
     truth (the run's information condition) once. At each checkpoint the
     model is run over it and aggregate quality scalars are recorded for the
-    Loss tab. A missing dataset or ground truth is an error, as for
-    load_position_eval."""
+    Loss tab. A missing dataset or ground truth is an error: a run without
+    its eval is not the run anyone asked for, least of all one on a rented
+    machine that would otherwise train for hours before anyone saw the
+    curves were absent."""
     dataset = str(position_eval_analysis.LARGE_DATASET)
     names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
     assert names, f"no positions in {dataset}"
@@ -489,7 +464,6 @@ def run(ctx: WorkerContext) -> int:
         "read_controls": functools.partial(read_controls, ctx.sink),
         "spatial_planes": spatial_planes,
         "scalar_size": scalar_size,
-        "position_eval": load_position_eval(spatial_planes),
         "position_eval_quality": load_position_eval_quality(spatial_planes, params.face_up_leaves),
         "stats": WorkerStats(ctx),
     }
