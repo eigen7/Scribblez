@@ -3,6 +3,7 @@
 #include "belief/rack_inference.h"
 #include "data/gcg_post_move.h"
 #include "game/board.h"
+#include "game/move.h"
 #include "lexicon/dictionary.h"
 
 #include <boost/json.hpp>
@@ -33,10 +34,13 @@ const char* leave_condition_name(LeaveCondition condition);
 
 // Per-square placement counts over the rollouts, from `start_player`'s POV, in
 // board frame. Mirrors the position-evaluation model's four placement heads: in
-// how many rollouts that seat's first move placed a tile on the square, and (the
-// `*_win` planes) did so in a rollout it strictly won. "opp" is the seat to move
-// first in the rollout; "self" is start_player. Each `*_win` plane is
-// elementwise at most its `*_next` plane, and occupied board squares stay zero.
+// how many rollouts that seat's first move covered the square, and (the `*_win`
+// planes) did so in a rollout it strictly won. "opp" is the seat to move first
+// in the rollout; "self" is start_player. Each `*_win` plane is elementwise at
+// most its `*_next` plane, and occupied board squares stay zero.
+//
+// "Covered" is literal for the opp planes and PROJECTED for the self planes:
+// see accumulate_rollout_placement.
 struct PlacementCounts {
   static constexpr int kCells = BOARD_SIZE * BOARD_SIZE;
   std::array<int, kCells> opp_next{};
@@ -44,6 +48,21 @@ struct PlacementCounts {
   std::array<int, kCells> opp_win{};
   std::array<int, kCells> self_win{};
 };
+
+// Fold one rollout's two first moves into `out`: each seat's move into its
+// `*_next` plane and, when that seat strictly won, its `*_win` plane. A
+// non-PLAY move covers nothing.
+//
+// `opp_first` is credited with its literal placed squares. `self_first`, the
+// reply to an opponent move the model never sees, is credited with its
+// footprint (training/footprint.h) decoded on `board`, the position's board
+// before that reply -- as if the opponent had passed. That is the decode the
+// placement heads' collapse applies (collapse_footprint_planes), so truth and
+// prediction are the same function of a footprint distribution; literal
+// squares would leave a model-independent residual on every reply that
+// threads through the opponent's fresh tiles.
+void accumulate_rollout_placement(const Board& board, const Move& opp_first, bool opp_won,
+                                  const Move& self_first, bool self_won, PlacementCounts& out);
 
 // A Monte-Carlo ground-truth result for one position, from `start_player`'s
 // POV, whose delta is start_player_final - opponent_final.

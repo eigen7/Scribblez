@@ -124,8 +124,10 @@ function LegendValues({ cap }: { cap: number }) {
 // mode, stacked below the mode control whenever an overlay is rendered.
 // Every mode's ramp is built from the same fixed caps/floor the board
 // overlay uses (see placementOverlay.ts), so nothing here depends on the
-// position on screen.
-export function PlacementLegend({ mode }: { mode: OverlayMode }) {
+// position on screen. `note` is an optional caveat line the caller appends
+// (the Positions tab's self-head projection caveat, SELF_HEAD_NOTE).
+export function PlacementLegend({ mode, note }: { mode: OverlayMode; note?: string }) {
+  const noteLine = note ? <div className="placement-legend-floor">{note}</div> : null;
   if (mode === 'residual') {
     return (
       <div className="legend vertical placement-legend">
@@ -133,6 +135,7 @@ export function PlacementLegend({ mode }: { mode: OverlayMode }) {
         <LegendRamp hue={SIM_HUE} cap={RESIDUAL_CAP} label="model low (pred < sim)" />
         <LegendValues cap={RESIDUAL_CAP} />
         <div className="placement-legend-floor">|residual| &lt; {FLOOR.toFixed(2)} not shown</div>
+        {noteLine}
       </div>
     );
   }
@@ -143,6 +146,20 @@ export function PlacementLegend({ mode }: { mode: OverlayMode }) {
       <LegendRamp hue={hue} cap={RAW_CAP} label={label} />
       <LegendValues cap={RAW_CAP} />
       <div className="placement-legend-floor">&lt; {FLOOR.toFixed(2)} not shown</div>
+      {noteLine}
     </div>
   );
+}
+
+// The Positions tab's caveat for the two self heads: a self footprint's
+// squares depend on where the opponent's unseen reply lands, so both the
+// model's collapse and the Monte-Carlo truth draw each footprint on the
+// current board, as if the opponent passed (see accumulate_rollout_placement
+// in engine/include/sim/monte_carlo_sim.h). The residual is therefore honest,
+// but a square's value is not literally "the mover plays here."
+export const SELF_HEAD_NOTE =
+  'self footprints drawn as if the opponent passes (model and sim alike)';
+
+export function isSelfHead(key: PlacementHeadKey): boolean {
+  return key === 'self_next_placement' || key === 'self_win_placement';
 }

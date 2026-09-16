@@ -55,8 +55,9 @@ ground truth over a GCG dataset
   `read_gcg_post_move` in `data/gcg_post_move.h`, shared by the truth and
   the encoder.
 - **Ground truth**: `monte_carlo_sim_tool` plays each position out ~10k
-  times and commits exact W/L/D plus the final-score-delta histogram beside
-  the GCGs -- once per **information condition**, since the truth depends on
+  times and commits exact W/L/D, the final-score-delta histogram, and the
+  four placement planes beside the GCGs -- once per **information
+  condition**, since the truth depends on
   what a rollout knows of the opponent's leave
   (`monte-carlo-sim-results.face-up-leaves.json`: the leave is seated every
   rollout; `monte-carlo-sim-results.hidden-leaves.json`: it is inferred from

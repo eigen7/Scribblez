@@ -3,6 +3,10 @@
 // HastyBot-driven tests.
 
 #include "data/gcg_post_move.h"
+#include "game/board.h"
+#include "game/glyph.h"
+#include "game/move.h"
+#include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "sim/monte_carlo_sim.h"
@@ -10,6 +14,8 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -18,6 +24,49 @@ namespace scribblez {
 namespace {
 
 namespace fs = std::filesystem;
+
+Glyph G(int letter_index) { return Glyph::of(Tile::of(letter_index)); }
+
+int cell(int r, int c) { return r * BOARD_SIZE + c; }
+
+// The self planes credit a reply's footprint decoded on the pre-reply board,
+// not its literal squares. The opponent's reply is a lone tile at (7,8); self
+// then plays vertically down column 8 THROUGH it -- tiles at (5,8), (6,8),
+// (8,8), threading (7,8). On the pre-reply board (7,8) is still empty, so the
+// footprint (anchor (5,8), vertical, k=3) decodes to (5,8), (6,8), (7,8): the
+// tail moves from the square past the opponent's tile onto the opponent's
+// tile, exactly as the placement heads' collapse would decode it.
+TEST(PlacementPlanes, SelfReplyIsProjectedOntoThePreReplyBoard) {
+  Board board;
+  board.set(7, 7, G(4));  // the position's one tile
+  Glyph one[1] = {G(0)};
+  const Move opp = Move::play(true, 7, uint16_t(1u << 8), 0, one, 1);  // (7,8)
+  Glyph three[3] = {G(1), G(2), G(3)};
+  const Move self = Move::play(false, 8, uint16_t((1u << 5) | (1u << 6) | (1u << 8)), 0, three, 3);
+
+  PlacementCounts out;
+  accumulate_rollout_placement(board, opp, /*opp_won=*/false, self, /*self_won=*/true, out);
+
+  std::array<int, PlacementCounts::kCells> opp_next{}, self_next{};
+  opp_next[cell(7, 8)] = 1;
+  self_next[cell(5, 8)] = 1;
+  self_next[cell(6, 8)] = 1;
+  self_next[cell(7, 8)] = 1;  // projected: not (8,8)
+  EXPECT_EQ(out.opp_next, opp_next);
+  EXPECT_EQ(out.self_next, self_next);
+  EXPECT_EQ(out.opp_win, (std::array<int, PlacementCounts::kCells>{}));
+  EXPECT_EQ(out.self_win, self_next);
+}
+
+// A pass, an exchange, or a rollout that ended before a seat moved covers
+// nothing on either plane.
+TEST(PlacementPlanes, NonPlaysCoverNothing) {
+  Board board;
+  PlacementCounts out;
+  accumulate_rollout_placement(board, Move::pass(), true, Move::pass(), false, out);
+  EXPECT_EQ(out.opp_next, (std::array<int, PlacementCounts::kCells>{}));
+  EXPECT_EQ(out.self_next, (std::array<int, PlacementCounts::kCells>{}));
+}
 
 class MonteCarloSimTest : public ::testing::Test {
  protected:

@@ -8,11 +8,14 @@
 #include "game/move.h"
 #include "game/tile.h"
 #include "sim/sim_runner.h"
+#include "training/footprint.h"
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <random>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -90,21 +93,32 @@ RolloutResult rollout(const ParsedGcgPostMove& pos, const Dictionary& dict, Agen
   return r;
 }
 
-// Add one seat's placed squares to its marginal `next` plane, and to its `win`
-// plane when `won` (that seat strictly won the rollout).
-void accumulate_placement(const Move& move, bool won,
-                          std::array<int, PlacementCounts::kCells>* next,
-                          std::array<int, PlacementCounts::kCells>* win) {
-  visit_placed_squares(move, [&](int r, int c) {
-    const int cell = r * BOARD_SIZE + c;
-    ++(*next)[cell];
-    if (won) ++(*win)[cell];
-  });
+// Credit one square to a seat's `next` plane, and to its `win` plane when `won`.
+void credit_cell(int r, int c, bool won, std::array<int, PlacementCounts::kCells>& next,
+                 std::array<int, PlacementCounts::kCells>& win) {
+  const int cell = r * BOARD_SIZE + c;
+  ++next[cell];
+  if (won) ++win[cell];
+}
+
+// The opponent's literal placed squares.
+void accumulate_opp_placement(const Move& move, bool won, PlacementCounts& out) {
+  visit_placed_squares(move,
+                       [&](int r, int c) { credit_cell(r, c, won, out.opp_next, out.opp_win); });
+}
+
+// The self reply's footprint decoded on the pre-reply board (see the header).
+void accumulate_self_placement(const Move& move, const Board& board, bool won,
+                               PlacementCounts& out) {
+  std::array<std::pair<int, int>, kFootprintMaxK> cells;
+  const int n = footprint_cells(footprint_class(move), board, cells);
+  for (int i = 0; i < n; ++i)
+    credit_cell(cells[i].first, cells[i].second, won, out.self_next, out.self_win);
 }
 
 // Fold one rollout's outcome into `out`: W/L/D, the exact delta histogram, and
 // both seats' placement planes.
-void accumulate_rollout(const RolloutResult& r, MonteCarloResult* out) {
+void accumulate_rollout(const Board& board, const RolloutResult& r, MonteCarloResult* out) {
   ++out->n;
   if (r.delta > 0)
     ++out->wins;
@@ -113,9 +127,8 @@ void accumulate_rollout(const RolloutResult& r, MonteCarloResult* out) {
   else
     ++out->draws;
   ++out->delta_hist[r.delta];
-  accumulate_placement(r.opp_first, r.delta < 0, &out->placement.opp_next, &out->placement.opp_win);
-  accumulate_placement(r.self_first, r.delta > 0, &out->placement.self_next,
-                       &out->placement.self_win);
+  accumulate_rollout_placement(board, r.opp_first, r.delta < 0, r.self_first, r.delta > 0,
+                               out->placement);
 }
 
 // Worker: plays games {t+1, t+1+threads, ...} (each seeded by its own g, so the
@@ -133,7 +146,7 @@ void monte_carlo_worker(const ParsedGcgPostMove& pos, const Dictionary& dict, in
   p1.hasty.name = "H1";
   EndgameHastyBotAgent a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
   for (int g = t + 1; g <= n; g += threads)
-    accumulate_rollout(rollout(pos, dict, a0, a1, sampler, face_up, uint64_t(g)), out);
+    accumulate_rollout(pos.board, rollout(pos, dict, a0, a1, sampler, face_up, uint64_t(g)), out);
 }
 
 // A flat row-major 15x15 count plane as a nested [row][col] JSON array (board
@@ -149,6 +162,12 @@ boost::json::array plane_to_json(const std::array<int, PlacementCounts::kCells>&
 }
 
 }  // namespace
+
+void accumulate_rollout_placement(const Board& board, const Move& opp_first, bool opp_won,
+                                  const Move& self_first, bool self_won, PlacementCounts& out) {
+  accumulate_opp_placement(opp_first, opp_won, out);
+  accumulate_self_placement(self_first, board, self_won, out);
+}
 
 boost::json::object MonteCarloResult::to_json() const {
   boost::json::object hist;
