@@ -486,3 +486,10 @@ def read_metric_series(conn: sqlite3.Connection, name: str):
         "SELECT epoch, value FROM metrics WHERE name = ? ORDER BY epoch", (name,)
     ).fetchall()
     return np.array([r["epoch"] for r in rows]), np.array([r["value"] for r in rows])
+
+
+def read_rows_clock(conn: sqlite3.Connection) -> dict[int, int]:
+    """Each recorded generation's rows-trained clock (its `positions` metric),
+    by generation index."""
+    epochs, values = read_metric_series(conn, "positions")
+    return {int(e): int(v) for e, v in zip(epochs, values, strict=True)}

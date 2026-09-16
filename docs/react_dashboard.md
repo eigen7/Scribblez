@@ -63,11 +63,14 @@ ground truth over a GCG dataset
   their last move with `belief::RackInferrer` and sampled per rollout,
   uniform after a bingo). A tag is measured against the truth of its own
   `face_up_leaves` param (read from its task.json).
-- **Predictions**: an FFI replays the GCG into an input tensor byte-identical
-  to a training row; the trainer's checkpoint hook evaluates the dataset
-  batch per generation and delivers WLD + score-delta mean/std in the
-  generation's record, which the dashboard ingests into the tag's
-  `dashboard.db`.
+- **Predictions**: computed on demand, never stored. An FFI replays the GCG
+  into an input tensor byte-identical to a training row and the selected
+  generation's exported ONNX is run on it (fp32 onnxruntime; one forward pass
+  yields the WLD + score-delta heads and the placement planes alike). The
+  slider lists the generations with an export. Nothing is keyed to the
+  dataset's shape, so its files can be added, renamed, or rewritten freely;
+  the per-position memos key on each file's mtime and a running dashboard
+  follows the change.
 - **UI**: generation slider, position picker, board + both racks (the POV's
   leave; the opponent's leave -- spelled out under face-up leaves, "?" under
   hidden -- plus their green-shaded hidden draws); paired model-vs-MC WLD
