@@ -308,6 +308,15 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
   // fetch once it settles, and drop a response if a newer request superseded
   // it while in flight.
   const debouncedGen = useDebouncedValue(effGen, 150);
+  const posName = positions[posIdx];
+  // The slider runs ahead of the payload: while the debounce settles and the
+  // backend runs the newly selected generation's export, the loaded model
+  // outputs belong to another generation. Withhold them rather than show them
+  // under the new label; the board and the Monte-Carlo truth are the position's
+  // and stay.
+  const modelPending = payload != null && payload.generation !== effGen;
+  const model = modelPending ? null : (payload?.model ?? null);
+  const placement = modelPending ? null : (payload?.placement ?? null);
 
   useEffect(() => {
     if (!tag || positions.length === 0) {
@@ -386,8 +395,8 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
 
   const placementOverlay = useMemo(() => {
     if (headSel === NONE_HEAD || !payload) return null;
-    return buildPlacementOverlay(payload.placement?.heads, headSel, overlayMode, payload.board);
-  }, [headSel, payload, overlayMode]);
+    return buildPlacementOverlay(placement?.heads, headSel, overlayMode, payload.board);
+  }, [headSel, payload, placement, overlayMode]);
 
   // Empty squares the selected head's legal plane marks unreachable -- shown as
   // a lightened veil so it's clear which squares placementOverlay will never
@@ -441,7 +450,7 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
         </label>
       </div>
 
-      {!payload ? (
+      {!payload || payload.name !== posName ? (
         <div className="muted" style={{ padding: 20 }}>Loading position…</div>
       ) : (
         <>
@@ -450,8 +459,15 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
             <b>{payload.scores[0]}</b>–{payload.scores[1]}
             {' · '}
             {payload.face_up_leaves ? 'face-up leaves' : 'hidden leaves'}
-            {!payload.has_prediction && (
-              <span style={{ color: '#a05a00', marginLeft: 10 }}>· no model prediction yet</span>
+            {modelPending ? (
+              <span style={{ color: '#445063', marginLeft: 10 }}>
+                · <span className="scz-spinner" style={{ verticalAlign: 'middle' }} /> evaluating gen{' '}
+                {effGen}…
+              </span>
+            ) : (
+              !payload.has_prediction && (
+                <span style={{ color: '#a05a00', marginLeft: 10 }}>· no model prediction yet</span>
+              )
             )}
           </div>
 
@@ -604,20 +620,20 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
 
           <div className="lane-detail">
             <h3>Win / Loss / Draw — model vs Monte-Carlo</h3>
-            <WldChart mc={payload.mc} model={payload.model} />
+            <WldChart mc={payload.mc} model={model} />
 
             <h3 style={{ marginTop: 18 }}>Final score-delta — Monte-Carlo vs model Gaussian</h3>
             <div style={{ fontSize: 12, color: '#445063', marginBottom: 4 }}>
               MC mean <b style={{ color: MC_COLOR }}>{payload.mc.score_delta_mean.toFixed(1)}</b>
               {' '}(σ {mcStd(payload.mc).toFixed(1)})
-              {payload.model && (
+              {model && (
                 <>
-                  {' · '}model mean <b style={{ color: MODEL_COLOR }}>{payload.model.sd_mean.toFixed(1)}</b>
-                  {' '}(σ {payload.model.sd_std.toFixed(1)})
+                  {' · '}model mean <b style={{ color: MODEL_COLOR }}>{model.sd_mean.toFixed(1)}</b>
+                  {' '}(σ {model.sd_std.toFixed(1)})
                 </>
               )}
             </div>
-            <ScoreDeltaChart mc={payload.mc} model={payload.model} />
+            <ScoreDeltaChart mc={payload.mc} model={model} />
           </div>
         </>
       )}
