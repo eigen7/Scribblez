@@ -14,9 +14,12 @@ appended. Both contain dependencies only -- code and binaries reach workers
 through R2 bundles (py/scripts/cloud_push_binaries.py) -- but those
 dependencies are the dev image's, so the images are a matched set: bundles
 built in a dev image whose libraries have moved cannot load on a worker image
-built before they did. build_docker_image.py therefore runs this too, and
-each push records what its image provides (cloud/runtime_abi.py) so the dev
-container can refuse to deploy a bundle a published image cannot run.
+built before they did. So rerun this after every dev-image rebuild that
+moves a runtime library; each push records what its image provides
+(cloud/runtime_abi.py), and the dev container refuses to deploy a bundle a
+published image cannot run, naming this script. It is not part of
+build_docker_image.py: that is every collaborator's local build, and only
+the registry's owner pushes.
 """
 
 import argparse

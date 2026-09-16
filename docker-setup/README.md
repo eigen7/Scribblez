@@ -21,8 +21,11 @@ from the dev container by `py/scripts/cloud_push_binaries.py`) from the R2 bucke
 it at `/workspace/repo`, and hands off to the bundle's worker entrypoint, which fetches the
 remaining runtime data (lexica, Macondo strategy files) from their public upstreams.
 
-Built and pushed by `./build_and_push_worker_image.py`. Rebuild only when the worker's runtime
-dependencies change. See docs/cloud_compute.md for the full architecture.
+Built and pushed by `./build_and_push_worker_image.py`, by the registry's owner only (it is
+deliberately not part of `build_docker_image.py`, which every collaborator runs). Rebuild
+after a dev-image rebuild that moves a runtime library, and when the worker's own
+dependencies change; the dashboard refuses to deploy a bundle a published image cannot
+load and says so. See docs/cloud_compute.md for the full architecture.
 
 Shared shell scripts (`entrypoint.sh`, `devuser-setup.sh`) referenced by the local
 Dockerfile are overlaid into the build context from `subtrees/devenv_utils/docker/` at
