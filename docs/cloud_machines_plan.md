@@ -1,6 +1,7 @@
 # Plan: rented machines -- AWS instances as ssh machines
 
-Status: plan-reviewed, not yet implemented. Follows
+Status: plan-reviewed; m1-m3 implemented (machines on the ssh kind, the
+trainer on ssh, the AWS provider), m3b and m4 pending. Follows
 [cloud_training_plan.md](cloud_training_plan.md), whose trainer I/O
 contract and bucket legs (3a-3c) this plan keeps whole; it replaces that
 plan's Runpod cloud slot.

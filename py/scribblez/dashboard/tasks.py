@@ -102,6 +102,7 @@ class MachineRecord:
     # machine's key is unknown at launch, and providers reuse addresses.
     known_hosts_file: str | None = None
     gpu_count: int | None = None  # GPUs on the machine; None: unknown (unchecked at add time)
+    arch: str | None = None  # rented: the bundle arch its type's CPU family builds for
     instance_id: str | None = None  # rented: the provider's instance
     instance_type: str | None = None  # rented: the catalog type
     region: str | None = None

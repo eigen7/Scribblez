@@ -42,6 +42,8 @@ _SSH_OPTIONS = [
 # ssh(1) reserves exit status 255 for its own failures (unreachable host, auth
 # refused); anything else is the remote command's own status.
 _SSH_FAILED = 255
+# probe()'s own status for "the readiness marker is not there yet".
+_NOT_READY = 3
 
 _PROBE_TIMEOUT = 15
 # Long enough for `docker stop`'s in-container SIGTERM grace (below) plus the
@@ -133,16 +135,28 @@ class SshMachine:
             ]  # fmt: skip
         return ["ssh", *options, self.host, remote]
 
-    def probe(self) -> str:
+    def probe(self, ready_file: str | None = None) -> str:
         """Whether the machine can host containers right now: "up" (ssh
         answers and Docker serves), "no docker" (ssh answers, Docker does not
         -- not installed, or the user is not in the docker group), or
-        "unreachable"."""
-        res = self._run(
-            ["docker", "info", "--format", "{{.ServerVersion}}"], timeout=_PROBE_TIMEOUT
-        )
+        "unreachable". With `ready_file`, the marker a rented machine's
+        first-boot script writes last (after pulling the worker images): its
+        absence is "preparing" -- sshd is up well before that script is done.
+        """
+        if ready_file is None:
+            command = ["docker", "info", "--format", "{{.ServerVersion}}"]
+        else:
+            command = [
+                "sh",
+                "-c",
+                f"test -f {shlex.quote(ready_file)} || exit {_NOT_READY}; "
+                "docker info --format '{{.ServerVersion}}'",
+            ]
+        res = self._run(command, timeout=_PROBE_TIMEOUT)
         if res.returncode == _SSH_FAILED:
             return "unreachable"
+        if res.returncode == _NOT_READY:
+            return "preparing"
         return "up" if res.returncode == 0 else "no docker"
 
     def _run(self, command: list[str], *, timeout: int, stdin_text: str | None = None):

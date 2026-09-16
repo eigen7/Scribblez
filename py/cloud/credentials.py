@@ -35,6 +35,19 @@ TEMPLATE = {
     "registry": {
         # Private worker-image repo, e.g. "docker.io/someuser/scribblez-worker".
         "worker_image": PLACEHOLDER,
+        # Docker Hub account and a read-only personal access token for it
+        # (Account settings -> Personal access tokens): what a rented machine
+        # logs in with to pull the worker images.
+        "username": PLACEHOLDER,
+        "pull_token": PLACEHOLDER,
+    },
+    "aws": {
+        # An IAM user's access key (never the root account's), with the EC2,
+        # SSM and Service Quotas actions docs/cloud_machines_plan.md lists,
+        # and the region machines are rented in.
+        "region": "us-east-1",
+        "access_key_id": PLACEHOLDER,
+        "secret_access_key": PLACEHOLDER,
     },
     "r2": {
         # Cloudflare dashboard -> R2; the account ID appears in the bucket
@@ -64,6 +77,13 @@ class RegistryConfig:
     # image is the same repo under the tag with TORCH_TAG_SUFFIX appended
     # ("latest" when none is given), so one credential names both.
     worker_image: str
+    # A read-only pull credential for that repo, for rented machines.
+    username: str = ""
+    pull_token: str = ""
+
+    @property
+    def images(self) -> list[str]:
+        return [self.image_for(runtime) for runtime in RUNTIMES]
 
     def image_for(self, runtime: str) -> str:
         """The image a role of `runtime` (cloud/runtime_abi.py) runs on."""
@@ -96,10 +116,18 @@ class R2Credentials:
 
 
 @dataclass(frozen=True)
+class AwsCredentials:
+    region: str
+    access_key_id: str
+    secret_access_key: str
+
+
+@dataclass(frozen=True)
 class CloudCredentials:
     runpod: RunpodCredentials
     registry: RegistryConfig
     r2: R2Credentials
+    aws: AwsCredentials
 
 
 def write_template(path: Path = CREDENTIALS_PATH):
@@ -145,6 +173,13 @@ def load_credentials(path: Path = CREDENTIALS_PATH) -> CloudCredentials:
         ),
         registry=RegistryConfig(
             worker_image=_collect(raw, "registry", "worker_image", problems),
+            username=_collect(raw, "registry", "username", problems),
+            pull_token=_collect(raw, "registry", "pull_token", problems),
+        ),
+        aws=AwsCredentials(
+            region=_collect(raw, "aws", "region", problems),
+            access_key_id=_collect(raw, "aws", "access_key_id", problems),
+            secret_access_key=_collect(raw, "aws", "secret_access_key", problems),
         ),
         r2=R2Credentials(
             account_id=_collect(raw, "r2", "account_id", problems),

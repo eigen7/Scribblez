@@ -39,12 +39,15 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 
 from cloud import runtime_abi
 from cloud.bundles import BundleManifest, deploy_current_tree, source_hash
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
+from cloud.providers.aws import AwsProvider
+from cloud.providers.base import Instance, LaunchRequest, Provider, ProviderError
 from cloud.r2 import bucket_path, rclone
 from cloud.runpod_api import RunpodClient, RunpodError
 from cloud.ssh_machine import SshMachine, SshMachineError
@@ -114,6 +117,16 @@ MAX_RESTART_BACKOFF_SECONDS = 300.0
 # browser polling every 3 seconds costs no ssh round trips at all.
 OBSERVATION_TTL_SECONDS = 5.0
 
+# A rented machine on which nothing has run for this long is stopped (its
+# disk kept, its rate no longer charged): the "Pause all" and the finished
+# run that cost money on a provider without a real suspend.
+IDLE_STOP_SECONDS = 600.0
+# Per-machine key material for rented machines (known_hosts files).
+MACHINES_DIR = Path("/workspace/mount/cloud/machines")
+# A rented instance whose ssh does not answer is still coming up for this
+# long after its launch or start before it reads as unreachable.
+BOOT_GRACE_SECONDS = 300.0
+
 
 # What a slot should be doing, from operator intent plus scheduler gating.
 # "park" and "stop" both mean not-working; they differ in how much of the
@@ -146,6 +159,46 @@ def _ssh_machine(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> SshMachine:
 
 def _machine_link(m: tasks.MachineRecord) -> SshMachine:
     return SshMachine(m.host, m.identity_file, m.known_hosts_file)
+
+
+def _machine_key(spec: workloads.WorkloadSpec, tag: str, name: str) -> str:
+    return _key(spec, tag, f"machine:{name}")
+
+
+def _owner(spec: workloads.WorkloadSpec, tag: str, name: str) -> str:
+    """The ownership tag a rented instance carries: which task's machine it
+    is. One no task's machines name is an orphan."""
+    return f"{spec.name}/{tag}/{name}"
+
+
+def _accrue_machine(m: tasks.MachineRecord, billing: bool):
+    """Advance a rented machine's spend to now, as _accrue does a slot's:
+    the interval since the last observation is charged if it was billing
+    then (an instance bills while pending or running, not while stopped)."""
+    with _ACCRUE_LOCK:
+        now = time.time()
+        if m.observed_up and m.observed_at is not None:
+            m.spend += (now - m.observed_at) / 3600 * (m.cost_per_hr or 0.0)
+        m.observed_at = now
+        m.observed_up = billing
+
+
+def _rented_state(m: tasks.MachineRecord, inst: Instance | None, probe: str | None) -> str:
+    """A rented machine's display state from what its provider says and,
+    when the instance is running, what its ssh probe found: `launching`
+    while the instance is pending or freshly running and not yet answering,
+    `preparing` while its first-boot script is still pulling the images,
+    `up` when it can host containers, `stopping` / `stopped` when
+    suspended, `gone` once terminated -- or listed by nobody, which after a
+    real listing means the same."""
+    if inst is None or inst.state == "terminated":
+        return "gone"
+    if inst.state in ("pending", "stopping", "stopped"):
+        return {"pending": "launching"}.get(inst.state, inst.state)
+    if probe == "unreachable":
+        since = m.launched_at or 0.0
+        return "launching" if time.time() - since < BOOT_GRACE_SECONDS else "unreachable"
+    return probe or "checking"
 
 
 def _ssh_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
@@ -437,6 +490,16 @@ class WorkerManager:
         # each of a task's machines, refreshed by the reconcile pass ahead of
         # its slots (see machine_status).
         self._machine_probes: dict[str, tuple[str, float]] = {}
+        # Machine key -> its last composite state (machine_status), read by
+        # the slot rules (a slot on a gone machine is removable outright).
+        self._machine_states: dict[str, str] = {}
+        # Machine key -> when it was first seen idle (see _reconcile_machines).
+        self._idle_since: dict[str, float] = {}
+        # (instances by id, when listed): the provider's view of every
+        # instance it tagged ours, refreshed by the reconcile pass like the
+        # pod listing was.
+        self._instances: tuple[dict[str, Instance], float] = ({}, 0.0)
+        self._provider_client: Provider | None = None
         # Where every blocking step runs (see _offload). One thread: the point
         # is to keep the event loop free, not to do two of these at once.
         self._blocking = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-blocking")
@@ -505,6 +568,20 @@ class WorkerManager:
             self._creds = load_credentials()
             self._client = RunpodClient(self._creds.runpod.api_key)
         return self._creds, self._client
+
+    def _provider(self) -> Provider:
+        if self._provider_client is None:
+            creds, _ = self._cloud()
+            self._provider_client = AwsProvider(creds.aws, creds.registry)
+        return self._provider_client
+
+    def _instance_index(self, observe: bool) -> dict[str, Instance]:
+        """The provider's instances by id, listed at most once per
+        OBSERVATION_TTL_SECONDS and only by the reconcile pass."""
+        instances, at = self._instances
+        if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
+            self._instances = instances, _ = (self._provider().describe(), time.time())
+        return instances
 
     def _start_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Start slot `w`'s stopped pod -- or replace it when Runpod cannot.
@@ -888,17 +965,97 @@ class WorkerManager:
         tasks.save_task(spec, task)
         return m
 
+    def machine_types(self) -> list[dict]:
+        return [asdict(t) for t in self._provider().catalog()]
+
+    def rent_machine(self, spec, task: tasks.TaskRecord, name: str, type_id: str):
+        """Launch an instance of `type_id` for the task and record it as one
+        of its machines. A refusal (a quota of 0, no capacity) reaches the
+        form as the provider's sentence; nothing is recorded for it."""
+        assert name, "a machine needs a name"
+        assert all(m.name != name for m in task.machines), f"machine '{name}' exists"
+        provider = self._provider()
+        mtype = next((t for t in provider.catalog() if t.id == type_id), None)
+        assert mtype is not None, f"no machine type '{type_id}'"
+        known_hosts = MACHINES_DIR / name / "known_hosts"
+        known_hosts.parent.mkdir(parents=True, exist_ok=True)
+        known_hosts.write_text("")  # a relaunch is a new name, so never a stale key
+        try:
+            inst = provider.launch(LaunchRequest(type_id, _owner(spec, task.tag, name)))
+        except ProviderError as e:
+            raise AssertionError(provider.refusal(e, type_id)) from e
+        m = tasks.MachineRecord(
+            name=name,
+            provider=provider.name,
+            host=f"{provider.ssh_user}@{inst.address or 'pending'}",
+            identity_file=provider.identity_file,
+            known_hosts_file=str(known_hosts),
+            arch=mtype.arch,
+            gpu_count=mtype.gpu_count,
+            instance_id=inst.id,
+            instance_type=mtype.id,
+            region=getattr(provider, "region", None),
+            cost_per_hr=mtype.cost_per_hr,
+            launched_at=inst.launched_at or time.time(),
+        )
+        _accrue_machine(m, True)
+        task.machines.append(m)
+        tasks.save_task(spec, task)
+        return m
+
     def remove_machine(self, spec, task: tasks.TaskRecord, name: str):
         """Remove a machine and the slots on it -- each under the slot rule
         (not running, reachable, and the operator warned of what it holds),
-        so a machine is never dropped out from under a working container."""
+        so a machine is never dropped out from under a working container --
+        and terminate it if it was rented. A gone instance's slots are
+        removable outright: their containers went with its disk."""
         m = task.machine(name)
+        key = _machine_key(spec, task.tag, name)
         for w in task.slots_on(name):
             self.remove_worker(spec, task, w.worker_id)
-        self._machine_probes.pop(_key(spec, task.tag, name), None)
+        if m.instance_id is not None and self._machine_states.get(key) != "gone":
+            self._provider().terminate(m.instance_id)
+        for cache in (self._machine_probes, self._machine_states, self._idle_since, self._exits):
+            cache.pop(key, None)
+        self._restarts.pop(key, None)
+        _accrue_machine(m, False)
         task.retired_spend += m.spend
         task.machines.remove(m)
         tasks.save_task(spec, task)
+
+    def _machine_gone(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
+        return (
+            w.machine is not None
+            and self._machine_states.get(_machine_key(spec, task.tag, w.machine)) == "gone"
+        )
+
+    def orphans(self, observe: bool = False) -> list[dict]:
+        """Instances the provider tagged ours that no task's machines name:
+        shown with a Terminate button, never terminated on their own (a
+        task.json restored from an older copy must not kill a running
+        experiment)."""
+        owned = {
+            _owner(spec, task.tag, m.name)
+            for spec, task in self._all_tasks()
+            for m in task.machines
+        }
+        return [
+            {
+                "instance_id": inst.id,
+                "type_id": inst.type_id,
+                "state": inst.state,
+                "owner": inst.owner,
+                "uptime_s": int(time.time() - inst.launched_at) if inst.launched_at else None,
+            }
+            for inst in self._instance_index(observe).values()
+            if inst.state != "terminated" and inst.owner not in owned
+        ]
+
+    def terminate_orphan(self, instance_id: str):
+        inst = self._instance_index(False).get(instance_id)
+        assert inst is not None, f"no instance {instance_id} in the last listing"
+        self._provider().terminate(instance_id)
+        self._instances = ({}, 0.0)  # relisted next pass
 
     def machine_status(self, spec, task: tasks.TaskRecord, *, observe: bool = False) -> list[dict]:
         """One dict per machine: the record plus its probe state (`up`,
@@ -906,26 +1063,102 @@ class WorkerManager:
         the slot probes, only the reconcile pass observes; a status request
         reads what it left."""
         out = []
+        rented = any(m.instance_id is not None for m in task.machines)
+        index = self._instance_index(observe) if rented else {}
         for m in task.machines:
-            key = _key(spec, task.tag, m.name)
-            state, at = self._machine_probes.get(key, ("checking", 0.0))
+            key = _machine_key(spec, task.tag, m.name)
+            inst = index.get(m.instance_id) if m.instance_id is not None else None
+            if (
+                inst is not None
+                and inst.address
+                and m.host != f"{m.host.split('@')[0]}@{inst.address}"
+            ):
+                m.host = f"{m.host.split('@')[0]}@{inst.address}"  # it moved on a stop/start
+            probe, at = self._machine_probes.get(key, (None, 0.0))
             if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
-                state = self._observe_machine(m)
-                self._machine_probes[key] = (state, time.time())
-            out.append(
-                {
-                    "name": m.name,
-                    "provider": m.provider,
-                    "host": m.host,
-                    "gpu_count": m.gpu_count,
-                    "instance_type": m.instance_type,
-                    "cost_per_hr": m.cost_per_hr,
-                    "spend": m.spend,
-                    "state": state,
-                    "slots": [w.worker_id for w in task.slots_on(m.name)],
-                }
-            )
+                # A probe is worth making only on a machine that can answer.
+                probe = (
+                    self._observe_machine(m) if inst is None or inst.state == "running" else None
+                )
+                self._machine_probes[key] = (probe, time.time())
+            if m.instance_id is None:
+                state = probe or "checking"
+            else:
+                state = _rented_state(m, inst, probe)
+                _accrue_machine(m, inst is not None and inst.state in ("pending", "running"))
+            self._machine_states[key] = state
+            info = {
+                "name": m.name,
+                "provider": m.provider,
+                "host": m.host,
+                "gpu_count": m.gpu_count,
+                "instance_type": m.instance_type,
+                "instance_id": m.instance_id,
+                "cost_per_hr": m.cost_per_hr,
+                "spend": m.spend,
+                "state": state,
+                "slots": [w.worker_id for w in task.slots_on(m.name)],
+            }
+            reason = self._exits.get(key)
+            if reason:
+                info["exit_reason"] = reason  # why the last start was refused
+                _, next_at = self._restarts.get(key, (0, 0.0))
+                info["retry_in_s"] = max(0, int(next_at - time.time()))
+            out.append(info)
+        if observe and rented:
+            tasks.save_task(spec, task)
         return out
+
+    def _reconcile_machines(self, spec, task: tasks.TaskRecord, status: list[dict]):
+        """Drive each rented machine toward what its slots want: start a
+        stopped instance that a slot wants running (with the growing backoff
+        a refused start gets, and its reason on the machine's row), and stop
+        one on which nothing has run for IDLE_STOP_SECONDS. Idle is read
+        from the slots' remembered probes: a gated generator is a paused
+        container and a finished trainer an exited one, so a run that ends
+        stops its machine; a slot that wants running and has no container
+        yet is a pending start, not idleness."""
+        provider = None
+        for info in status:
+            m = next((x for x in task.machines if x.name == info["name"]), None)
+            if m is None or m.instance_id is None:
+                continue
+            key = _machine_key(spec, task.tag, m.name)
+            slots = task.slots_on(m.name)
+            wanted = [w for w in slots if w.desired_state == "running"]
+            if info["state"] == "stopped":
+                self._idle_since.pop(key, None)
+                if wanted and self._restart_allowed(key):
+                    provider = provider or self._provider()
+                    try:
+                        provider.start(m.instance_id)
+                    except ProviderError as e:
+                        self._exits[key] = provider.refusal(e, m.instance_type or "")
+                        self._note_restart(key)
+                        raise
+                    self._exits.pop(key, None)
+                    self._restarts.pop(key, None)
+                    m.launched_at = time.time()
+                    self._instances = ({}, 0.0)  # relisted next pass
+                    tasks.save_task(spec, task)
+                continue
+            if info["state"] != "up":
+                self._idle_since.pop(key, None)
+                continue
+            busy = any(
+                self._probes.get(_key(spec, task.tag, w.worker_id), ("unknown", 0.0))[0]
+                in ("running", "unknown")
+                for w in slots
+            ) or any(w in wanted for w in slots)
+            if busy:
+                self._idle_since.pop(key, None)
+                continue
+            since = self._idle_since.setdefault(key, time.time())
+            if time.time() - since >= IDLE_STOP_SECONDS:
+                provider = provider or self._provider()
+                provider.stop(m.instance_id)
+                self._idle_since.pop(key, None)
+                self._instances = ({}, 0.0)
 
     def _observe_machine(self, m: tasks.MachineRecord) -> str:
         """Probe a machine, under the same negative cache as its slots: a
@@ -933,7 +1166,8 @@ class WorkerManager:
         down_since = self._ssh_down.get(m.host)
         if down_since is not None and time.time() - down_since < SSH_REPROBE_SECONDS:
             return "unreachable"
-        state = _machine_link(m).probe()
+        ready = self._provider().ready_file if m.instance_id is not None else None
+        state = _machine_link(m).probe(ready)
         if state == "unreachable":
             self._ssh_down[m.host] = time.time()
         else:
@@ -1009,6 +1243,8 @@ class WorkerManager:
         if w.kind == "local":
             assert not self._local_alive(spec, task, w), f"{worker_id} is running; pause it first"
             self._local.pop(_key(spec, task.tag, worker_id), None)
+        elif w.kind == "ssh" and self._machine_gone(spec, task, w):
+            pass  # its container went with the instance's disk; nothing to check or clean
         elif w.kind == "ssh":
             # Freshly observed: a removal must not act on a remembered state.
             probe = self._probe_container(spec, task, w, observe=True)
@@ -1327,6 +1563,10 @@ class WorkerManager:
                 except Exception as e:  # noqa: BLE001 -- scheduling must keep ticking
                     print(f"scheduler {spec.name}/{task.tag}: {e}")
             machines = await self.offload(self.machine_status, spec, task, observe=True)
+            try:
+                await self.offload(self._reconcile_machines, spec, task, machines)
+            except Exception as e:  # noqa: BLE001 -- one task's machines must not stop the pass
+                print(f"machines {spec.name}/{task.tag}: {e}")
             down = {m["name"] for m in machines if m["state"] != "up"}
             status = await self.offload(self.worker_status, spec, task, observe=True)
             for info in status:

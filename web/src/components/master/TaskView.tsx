@@ -27,9 +27,17 @@ type WorkerInfo = {
 // task): where its ssh slots run. `state` is the reconcile pass's probe.
 type MachineInfo = {
   name: string; provider: string; host: string; gpu_count: number | null;
-  instance_type: string | null; cost_per_hr: number | null; spend: number;
-  state: string; slots: string[];
+  instance_type: string | null; instance_id: string | null; cost_per_hr: number | null; spend: number;
+  state: string; slots: string[]; exit_reason?: string; retry_in_s?: number;
 };
+
+// One row of the provider's catalog (GET /api/cloud/machine_types).
+type MachineType = {
+  id: string; vcpus: number; gpu_count: number; gpu: string; arch: string; cost_per_hr: number;
+};
+
+// An instance the provider tagged ours that no task names (GET /api/cloud/orphans).
+type Orphan = { instance_id: string; type_id: string; state: string; owner: string | null; uptime_s: number | null };
 
 // A slot still on the bundle the task has moved off. It joins the task's bundle
 // by being replaced, which reconcile does once the slot is stopped and has
@@ -72,6 +80,8 @@ function discardWarning(workers: WorkerInfo[]): string | null {
 // A slot mid-transition: its process/pod has not yet caught up to the operator's
 // intent, so its Start/Pause control is disabled and shows a spinner.
 const IN_FLIGHT = new Set(['starting', 'stopping']);
+// Mirrors IDLE_STOP_SECONDS in py/scribblez/dashboard/workers.py.
+const IDLE_STOP_MINUTES = 10;
 type ProfileChange = { name: string; profile: number | boolean | string; task: number | boolean | string };
 type TaskInfo = {
   workload: string; tag: string; has_task: boolean; params: Record<string, number | boolean | string> | null;
@@ -85,7 +95,8 @@ type TaskInfo = {
 
 const stateColors: Record<string, string> = {
   running: '#2a7a2a', paused: '#8494a5', exited: '#b23b3b', finished: '#446e9b',
-  up: '#2a7a2a', 'no docker': '#b23b3b',
+  up: '#2a7a2a', 'no docker': '#b23b3b', launching: '#1f77b4', preparing: '#1f77b4',
+  stopped: '#8494a5', gone: '#b23b3b',
   interrupted: '#a05a00', terminated: '#b23b3b', waiting: '#a05a00',
   unreachable: '#a05a00',
   starting: '#1f77b4', stopping: '#1f77b4',
@@ -307,15 +318,79 @@ function SshForm({ machines, add, busy, disabled }: {
 // its address and key; the reconcile pass probes it (ssh + Docker) like it
 // probes the slots. Removing a machine removes the slots on it, under the
 // slot rule (nothing running, nothing unreachable, output discards confirmed).
+// The provider's catalog, fetched once per page load and shared by every
+// task's rent form; a failed fetch (no aws credentials yet) leaves the form
+// out rather than broken, with the reason shown once.
+let typesPromise: Promise<MachineType[]> | null = null;
+function loadMachineTypes(): Promise<MachineType[]> {
+  if (!typesPromise) {
+    typesPromise = getJSON('/api/cloud/machine_types').then((d) => d.types).catch((e) => {
+      typesPromise = null;
+      throw e;
+    });
+  }
+  return typesPromise;
+}
+
+// Renting: pick a type from the catalog; the machine appears as `launching`
+// and reads `up` once its first-boot script has pulled the worker images.
+function RentForm({ types, busy, onRent }: {
+  types: MachineType[]; busy: boolean; onRent: (name: string, typeId: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [typeId, setTypeId] = useState(types[0]?.id ?? '');
+  const t = types.find((x) => x.id === typeId) ?? types[0];
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 10 }}>
+      <label style={{ fontSize: 13 }}>
+        Rent — name<br />
+        <input style={{ ...numInput, width: 120 }} value={name} onChange={(e) => setName(e.target.value)} />
+      </label>
+      <label style={{ fontSize: 13 }}>
+        type<br />
+        <select style={{ ...numInput, width: 300 }} value={t?.id ?? ''} onChange={(e) => setTypeId(e.target.value)}>
+          {types.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.id} — {x.vcpus} vCPU{x.gpu ? `, ${x.gpu_count}× ${x.gpu}` : ''} — ${x.cost_per_hr.toFixed(3)}/hr
+            </option>
+          ))}
+        </select>
+      </label>
+      <Button
+        label={busy ? 'Working…' : 'Rent'} disabled={busy || !name.trim() || !t}
+        onClick={() => onRent(name.trim(), t.id)}
+      />
+    </div>
+  );
+}
+
 function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: {
   workload: Workload; tag: string; machines: MachineInfo[]; workers: WorkerInfo[];
   onError: (e: string) => void; onChanged: () => void;
 }) {
+  const tabActive = useContext(TabActiveContext);
   const [name, setName] = useState('');
   const [host, setHost] = useState('');
   const [key, setKey] = useState('');
   const [gpus, setGpus] = useState('');
   const [busy, setBusy] = useState(false);
+  const [types, setTypes] = useState<MachineType[] | null>(null);
+  const [typesError, setTypesError] = useState('');
+  const [orphans, setOrphans] = useState<Orphan[]>([]);
+  useEffect(() => {
+    let alive = true;
+    loadMachineTypes()
+      .then((t) => { if (alive) setTypes(t); })
+      .catch((e) => { if (alive) setTypesError(String(e)); });
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    if (!tabActive || !types) return;
+    const poll = () => getJSON('/api/cloud/orphans').then((d) => setOrphans(d.orphans)).catch(() => {});
+    poll();
+    const id = setInterval(poll, 15000);
+    return () => clearInterval(id);
+  }, [tabActive, types]);
   const post = async (path: string, body: Record<string, unknown>) => {
     setBusy(true);
     onError('');
@@ -331,7 +406,13 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
   const remove = (m: MachineInfo) => {
     const warning = discardWarning(workers.filter((w) => w.machine === m.name));
     if (warning && !window.confirm(warning)) return;
+    if (m.instance_id && m.state !== 'gone'
+      && !window.confirm(`Terminate ${m.name} (${m.instance_type})? Its disk goes with it.`)) return;
     post('/api/task/machine_action', { name: m.name, action: 'remove' });
+  };
+  const terminateOrphan = (o: Orphan) => {
+    if (!window.confirm(`Terminate ${o.instance_id} (${o.type_id})? No task tracks it.`)) return;
+    post('/api/cloud/orphan_action', { instance_id: o.instance_id, action: 'terminate' });
   };
   return (
     <Card title="Machines">
@@ -339,7 +420,7 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
         <table style={{ borderCollapse: 'collapse', fontSize: 14, width: '100%', marginBottom: 10 }}>
           <thead>
             <tr style={{ textAlign: 'left', color: '#445063' }}>
-              {['machine', 'host', 'provider', 'GPUs', 'state', 'slots', '$/hr', ''].map((h) => (
+              {['machine', 'host', 'provider', 'GPUs', 'state', 'slots', '$/hr', 'spend', ''].map((h) => (
                 <th key={h} style={{ padding: '4px 14px 4px 0' }}>{h}</th>
               ))}
             </tr>
@@ -353,9 +434,22 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
                   <td style={{ padding: '6px 14px 6px 0', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{m.host}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{m.instance_type ? `${m.provider} ${m.instance_type}` : m.provider}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{m.gpu_count ?? '?'}</td>
-                  <td style={{ padding: '6px 14px 6px 0', color: stateColors[m.state] ?? '#1a1f28', fontWeight: 600 }}>{m.state}</td>
+                  <td style={{ padding: '6px 14px 6px 0', color: stateColors[m.state] ?? '#1a1f28', fontWeight: 600 }}>
+                    {m.state}
+                    {m.exit_reason && (
+                      <div style={{ fontWeight: 400, fontSize: 12, color: '#a05a00', maxWidth: 460 }} title={m.exit_reason}>
+                        {m.exit_reason}
+                        {m.retry_in_s != null && (
+                          <span style={{ color: '#6b7280' }}>
+                            {' '}{m.retry_in_s > 0 ? `Next attempt in ${m.retry_in_s} s.` : 'Retrying now.'}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{m.slots.length ? m.slots.join(', ') : '—'}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{m.cost_per_hr != null ? `$${m.cost_per_hr}` : '—'}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{m.instance_id ? `$${m.spend.toFixed(2)}` : '—'}</td>
                   <td style={{ padding: '6px 0' }}>
                     <span title={busySlots ? 'pause the slots on it before removing the machine' : undefined}>
                       <Button label="Remove" tone="danger" disabled={busy || busySlots} onClick={() => remove(m)} />
@@ -396,6 +490,38 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
       <div style={helpText}>
         a machine you prepared (ssh key, Docker, the worker image pulled): docs/master_dashboard.md.
       </div>
+      {types && types.length > 0 && (
+        <RentForm
+          types={types} busy={busy}
+          onRent={(n, typeId) => post('/api/task/machines', { name: n, type_id: typeId })}
+        />
+      )}
+      {types && (
+        <div style={helpText}>
+          a rented machine is stopped after {IDLE_STOP_MINUTES} idle minutes (disk kept, no hourly charge)
+          and started again when a slot on it is started; Remove terminates it.
+        </div>
+      )}
+      {typesError && <div style={{ ...helpText, color: '#a05a00' }}>renting unavailable: {typesError}</div>}
+      {orphans.length > 0 && (
+        <div style={{ marginTop: 10, color: '#a05a00', fontSize: 13 }}>
+          <b>Instances tagged ours that no task tracks</b> (billing until terminated):
+          <table style={{ borderCollapse: 'collapse', fontSize: 13, marginTop: 4 }}>
+            <tbody>
+              {orphans.map((o) => (
+                <tr key={o.instance_id}>
+                  <td style={{ padding: '3px 14px 3px 0', fontFamily: 'ui-monospace, monospace' }}>{o.instance_id}</td>
+                  <td style={{ padding: '3px 14px 3px 0' }}>{o.type_id}</td>
+                  <td style={{ padding: '3px 14px 3px 0' }}>{o.state}</td>
+                  <td style={{ padding: '3px 14px 3px 0' }}>{o.owner ?? 'no owner tag'}</td>
+                  <td style={{ padding: '3px 14px 3px 0' }}>{o.uptime_s != null ? `${Math.round(o.uptime_s / 60)} min` : '—'}</td>
+                  <td><Button label="Terminate" tone="danger" disabled={busy} onClick={() => terminateOrphan(o)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Card>
   );
 }

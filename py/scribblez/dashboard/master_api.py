@@ -17,6 +17,7 @@ import time
 import tornado.web
 from bokeh.embed import json_item
 from cloud.credentials import CredentialsError
+from cloud.providers.base import ProviderError
 from cloud.runpod_api import RunpodError, fetch_cloud_offers
 from cloud.ssh_machine import SshMachineError
 from scripts.cloud_fleet import CpuResources, GpuResources
@@ -32,6 +33,7 @@ _CLIENT_ERRORS = (
     KeyError,
     params_mod.ParamsError,
     CredentialsError,
+    ProviderError,
     RunpodError,
     SshMachineError,
 )
@@ -250,25 +252,57 @@ class WorkerAddHandler(_MasterBase):
 
 
 class MachineAddHandler(_MasterBase):
-    """Register a machine the operator prepared, for the task's ssh slots."""
+    """Register a machine the operator prepared for the task's ssh slots, or
+    rent one from the provider (`type_id` given) -- seconds of API work,
+    hence the offload."""
 
-    def post(self):
+    async def post(self):
         body = self.body()
         spec = self.spec(body)
 
         def add():
             task = self.task_or_fail(spec, body["tag"])
-            m = self.manager.add_machine(
-                spec,
-                task,
-                (body.get("name") or "").strip(),
-                (body.get("host") or "").strip(),
-                (body.get("identity_file") or "").strip() or None,
-                int(body["gpu_count"]) if body.get("gpu_count") not in (None, "") else None,
-            )
+            name = (body.get("name") or "").strip()
+            if body.get("type_id"):
+                m = self.manager.rent_machine(spec, task, name, body["type_id"])
+            else:
+                m = self.manager.add_machine(
+                    spec,
+                    task,
+                    name,
+                    (body.get("host") or "").strip(),
+                    (body.get("identity_file") or "").strip() or None,
+                    int(body["gpu_count"]) if body.get("gpu_count") not in (None, "") else None,
+                )
             return {"name": m.name}
 
-        self.guarded(add)
+        await self.guarded_offload(add)
+
+
+class MachineTypesHandler(_MasterBase):
+    """The provider's catalog, for the rent form."""
+
+    def get(self):
+        self.guarded(lambda: {"types": self.manager.machine_types()})
+
+
+class OrphansHandler(_MasterBase):
+    """Instances the provider tagged ours that no task names."""
+
+    def get(self):
+        self.guarded(lambda: {"orphans": self.manager.orphans()})
+
+
+class OrphanActionHandler(_MasterBase):
+    async def post(self):
+        body = self.body()
+
+        def act():
+            assert body["action"] == "terminate", f"unknown action '{body['action']}'"
+            self.manager.terminate_orphan(body["instance_id"])
+            return {"ok": True}
+
+        await self.guarded_offload(act)
 
 
 class MachineActionHandler(_MasterBase):
@@ -369,6 +403,9 @@ MASTER_ROUTES = [
     (r"/api/task/worker_action", WorkerActionHandler),
     (r"/api/task/machines", MachineAddHandler),
     (r"/api/task/machine_action", MachineActionHandler),
+    (r"/api/cloud/machine_types", MachineTypesHandler),
+    (r"/api/cloud/orphans", OrphansHandler),
+    (r"/api/cloud/orphan_action", OrphanActionHandler),
     (r"/api/cloud/offers", CloudOffersHandler),
     (r"/api/task/stats", TaskStatsHandler),
     (r"/api/task/figure/([a-z_]+)", TaskFigureHandler),

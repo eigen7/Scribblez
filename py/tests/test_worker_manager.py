@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from cloud.credentials import RegistryConfig
+from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
 from scribblez import workloads
 from scribblez.dashboard import db, tasks
@@ -106,7 +107,7 @@ class _FakeSshMachine:
         self.host = host
         _FakeSshMachine.built.append((host, identity_file, known_hosts_file))
 
-    def probe(self) -> str:
+    def probe(self, ready_file=None) -> str:
         return self.machine_state
 
     def container_state(self, name: str) -> str:
@@ -385,6 +386,272 @@ def test_reconcile_leaves_slots_on_a_machine_that_is_not_up_alone(manager, spec,
     manager._ssh_down.clear()  # past the negative cache
     asyncio.run(manager.reconcile())
     assert enforced == [w]
+
+
+# ---- rented machines ---------------------------------------------------------
+
+
+class _FakeProvider:
+    """A provider whose instances the test moves through their states."""
+
+    name = "aws"
+    ssh_user = "ubuntu"
+    identity_file = "/k/scribblez.pem"
+    ready_file = "/var/lib/scribblez/ready"
+    region = "us-east-1"
+
+    def __init__(self):
+        self.instances: dict[str, Instance] = {}
+        self.calls: list[tuple] = []
+        self.refuse: ProviderError | None = None
+
+    def catalog(self):
+        return [
+            MachineType("g6.2xlarge", 8, 1, "L4", "znver3", 1.0),
+            MachineType("c7a.4xlarge", 16, 0, "", "znver4", 0.5),
+        ]
+
+    def prepare(self):
+        pass
+
+    def launch(self, request):
+        if self.refuse is not None:
+            raise self.refuse
+        inst = Instance(
+            id=f"i-{len(self.instances) + 1}", state="pending", type_id=request.type_id,
+            owner=request.owner, address=None, launched_at=time.time(),
+        )  # fmt: skip
+        self.instances[inst.id] = inst
+        self.calls.append(("launch", request.type_id))
+        return inst
+
+    def describe(self):
+        return dict(self.instances)
+
+    def stop(self, instance_id):
+        self.calls.append(("stop", instance_id))
+        self.instances[instance_id].state = "stopping"
+
+    def start(self, instance_id):
+        if self.refuse is not None:
+            raise self.refuse
+        self.calls.append(("start", instance_id))
+        self.instances[instance_id].state = "pending"
+
+    def terminate(self, instance_id):
+        self.calls.append(("terminate", instance_id))
+        self.instances[instance_id].state = "terminated"
+
+    def refusal(self, error, type_id):
+        return f"refused {type_id}: {error}"
+
+
+@pytest.fixture
+def rented(manager, spec, task, monkeypatch, tmp_path):
+    """A task with one rented machine, its instance pending, the provider
+    faked, ssh faked `up`."""
+    provider = _FakeProvider()
+    monkeypatch.setattr(manager, "_provider", lambda: provider)
+    monkeypatch.setattr(workers_mod, "MACHINES_DIR", tmp_path / "machines")
+    _fake_ssh(monkeypatch, state="missing", machine_state="up")
+    m = manager.rent_machine(spec, task, "m1", "g6.2xlarge")
+    return provider, m
+
+
+def _observe(manager, spec, task):
+    """A pass's machine step: fresh listing and probes. The slot probes the
+    machine step reads are the previous pass's; observing the slots first
+    stands in for that pass."""
+    manager._probes.clear()
+    manager.worker_status(spec, task, observe=True)
+    manager._instances = ({}, 0.0)
+    manager._machine_probes.clear()
+    manager._ssh_down.clear()
+    status = manager.machine_status(spec, task, observe=True)
+    manager._reconcile_machines(spec, task, status)
+    return status
+
+
+def test_renting_records_the_instance_and_its_key_material(rented, spec, task, tmp_path):
+    provider, m = rented
+    assert provider.calls == [("launch", "g6.2xlarge")]
+    assert m.instance_id == "i-1" and m.instance_type == "g6.2xlarge"
+    assert m.host == "ubuntu@pending" and m.identity_file == "/k/scribblez.pem"
+    assert m.known_hosts_file == str(tmp_path / "machines" / "m1" / "known_hosts")
+    assert (tmp_path / "machines" / "m1" / "known_hosts").read_text() == ""
+    assert m.gpu_count == 1 and m.arch == "znver3" and m.cost_per_hr == 1.0
+    assert tasks.load_task(spec, "t").machine("m1").instance_id == "i-1"
+    assert provider.instances["i-1"].owner == f"{spec.name}/t/m1"
+
+
+def test_a_refused_launch_reaches_the_form_and_records_nothing(
+    manager, spec, task, monkeypatch, tmp_path
+):
+    provider = _FakeProvider()
+    provider.refuse = ProviderError("VcpuLimitExceeded", "quota")
+    monkeypatch.setattr(manager, "_provider", lambda: provider)
+    monkeypatch.setattr(workers_mod, "MACHINES_DIR", tmp_path / "machines")
+    with pytest.raises(AssertionError, match="refused g6.2xlarge: VcpuLimitExceeded"):
+        manager.rent_machine(spec, task, "m1", "g6.2xlarge")
+    assert task.machines == []
+
+
+def test_a_rented_machine_reads_launching_then_preparing_then_up(
+    rented, manager, spec, task, monkeypatch
+):
+    provider, m = rented
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "launching"  # pending: not probed
+    provider.instances["i-1"].state = "running"
+    provider.instances["i-1"].address = "1.2.3.4"
+    monkeypatch.setattr(_FakeSshMachine, "machine_state", "preparing")
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "preparing" and m.host == "ubuntu@1.2.3.4"
+    monkeypatch.setattr(_FakeSshMachine, "machine_state", "up")
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "up"
+    # Running but not answering: still booting inside the grace, unreachable after.
+    monkeypatch.setattr(_FakeSshMachine, "machine_state", "unreachable")
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "launching"
+    m.launched_at = time.time() - workers_mod.BOOT_GRACE_SECONDS - 1
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "unreachable"
+
+
+def test_the_rented_probe_asks_for_the_ready_marker(rented, manager, spec, task, monkeypatch):
+    provider, m = rented
+    provider.instances["i-1"].state = "running"
+    asked = []
+    monkeypatch.setattr(
+        _FakeSshMachine, "probe", lambda self, ready_file=None: asked.append(ready_file) or "up"
+    )
+    _observe(manager, spec, task)
+    assert asked == ["/var/lib/scribblez/ready"]
+
+
+def test_spend_accrues_while_the_instance_bills(rented, manager, spec, task, monkeypatch):
+    provider, m = rented
+    m.observed_at = time.time() - 3600
+    _observe(manager, spec, task)  # pending: billing
+    assert 0.99 < m.spend < 1.01
+    provider.instances["i-1"].state = "stopped"
+    _observe(manager, spec, task)
+    m.observed_at = time.time() - 3600
+    _observe(manager, spec, task)  # stopped: not billing
+    assert m.spend < 1.02
+    assert tasks.load_task(spec, "t").machine("m1").spend == m.spend
+
+
+def test_an_idle_machine_is_stopped_after_the_timeout(rented, manager, spec, task, monkeypatch):
+    """Nothing running on it: a finished trainer (exited) and a gated
+    generator (paused) both count. A slot that wants running and has no
+    container is a pending start, so the machine stays."""
+    provider, m = rented
+    provider.instances["i-1"].state = "running"
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.desired_state = "running"
+    _observe(manager, spec, task)
+    assert manager._idle_since == {}  # a pending start
+    w.desired_state = "paused"
+    monkeypatch.setattr(_FakeSshMachine, "state", "stopped")
+    _observe(manager, spec, task)
+    key = workers_mod._machine_key(spec, "t", "m1")
+    assert key in manager._idle_since and ("stop", "i-1") not in provider.calls
+    manager._idle_since[key] -= workers_mod.IDLE_STOP_SECONDS + 1
+    _observe(manager, spec, task)
+    assert ("stop", "i-1") in provider.calls
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "stopping"
+
+
+def test_a_running_container_keeps_the_machine_up(rented, manager, spec, task, monkeypatch):
+    provider, m = rented
+    provider.instances["i-1"].state = "running"
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.desired_state = "paused"
+    monkeypatch.setattr(_FakeSshMachine, "state", "running")
+    manager.worker_status(spec, task, observe=True)  # remembers the container running
+    _observe(manager, spec, task)
+    assert manager._idle_since == {}
+
+
+def test_a_stopped_machine_is_started_when_a_slot_wants_running(
+    rented, manager, spec, task, monkeypatch
+):
+    provider, m = rented
+    provider.instances["i-1"].state = "stopped"
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "stopped" and ("start", "i-1") not in provider.calls
+    w.desired_state = "running"
+    _observe(manager, spec, task)
+    assert ("start", "i-1") in provider.calls
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "launching"
+
+
+def test_a_refused_start_is_shown_and_backed_off(rented, manager, spec, task, monkeypatch):
+    provider, m = rented
+    provider.instances["i-1"].state = "stopped"
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.desired_state = "running"
+    provider.refuse = ProviderError("InsufficientInstanceCapacity", "none")
+    with pytest.raises(ProviderError):
+        _observe(manager, spec, task)
+    (info,) = manager.machine_status(spec, task)
+    assert info["exit_reason"] == "refused g6.2xlarge: InsufficientInstanceCapacity"
+    assert info["retry_in_s"] > 0
+    _observe(manager, spec, task)  # inside the backoff: not tried again
+    assert provider.calls.count(("start", "i-1")) == 0
+
+
+def test_removing_a_rented_machine_terminates_it_and_retires_its_spend(rented, manager, spec, task):
+    provider, m = rented
+    m.spend = 2.5
+    manager.remove_machine(spec, task, "m1")
+    assert ("terminate", "i-1") in provider.calls
+    assert task.machines == [] and task.retired_spend == pytest.approx(2.5, abs=1e-3)
+
+
+def test_a_gone_machines_slots_are_removable_outright(rented, manager, spec, task, monkeypatch):
+    """The instance is terminated (by a spot interruption, or in the console):
+    its containers went with its disk. The unreachable rule would refuse
+    forever; instead the slots go, and the provider is not asked to
+    terminate again."""
+    provider, m = rented
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.launched = True
+    provider.instances["i-1"].state = "terminated"
+    monkeypatch.setattr(_FakeSshMachine, "state", "unreachable")
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "gone"
+    manager.remove_machine(spec, task, "m1")
+    assert task.workers == [] and task.machines == []
+    assert ("terminate", "i-1") not in provider.calls
+
+
+def test_orphans_are_our_instances_no_task_names(rented, manager, spec, task, monkeypatch):
+    provider, m = rented
+    provider.instances["i-7"] = Instance(
+        id="i-7", state="running", type_id="c7a.4xlarge", owner="position_eval/old/g",
+        address=None, launched_at=time.time() - 120,
+    )  # fmt: skip
+    provider.instances["i-8"] = Instance(
+        id="i-8",
+        state="terminated",
+        type_id="c7a.4xlarge",
+        owner=None,
+        address=None,
+        launched_at=None,
+    )
+    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    manager._instances = ({}, 0.0)
+    orphans = manager.orphans(observe=True)
+    assert [o["instance_id"] for o in orphans] == ["i-7"]
+    assert orphans[0]["owner"] == "position_eval/old/g" and orphans[0]["uptime_s"] >= 120
+    manager.terminate_orphan("i-7")
+    assert ("terminate", "i-7") in provider.calls
 
 
 # ---- finished slots ----------------------------------------------------------

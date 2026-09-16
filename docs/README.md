@@ -72,7 +72,7 @@
 - **[cloud_machines_plan.md](cloud_machines_plan.md)** — plan-reviewed design
   for rented machines: AWS instances as task-scoped ssh machines the
   dashboard launches, idles and terminates; the trainer on the ssh kind;
-  Runpod's removal.
+  Runpod's removal. The provider lives in `py/cloud/providers/`.
 - **[master_dashboard.md](master_dashboard.md)** — the React dashboard as the
   single entrypoint for all work: the workload registry, the job-control
   plane (launch/stop local and cloud workers from the browser), and
