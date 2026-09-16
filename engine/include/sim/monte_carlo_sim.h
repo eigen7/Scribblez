@@ -49,28 +49,18 @@ struct PlacementCounts {
   std::array<int, kCells> self_win{};
 };
 
-// Fold one rollout's two first moves into `out`, each seat's move into its
+// Fold one rollout's two first moves into `out`: each seat's move into its
 // `*_next` plane and, when that seat strictly won, its `*_win` plane. A
-// non-PLAY move (pass, exchange, or a rollout that ended first) covers nothing.
+// non-PLAY move covers nothing.
 //
-// The opponent moves on the known board, so `opp_first` is credited with its
-// literal placed squares. `self_first` is the reply to an opponent move the
-// model never sees, and it is credited with its FOOTPRINT (anchor,
-// orientation, tile count -- training/footprint.h) decoded on `board`, the
-// position's board before that reply: the first k empty squares from the
-// anchor, as if the opponent had passed. That is exactly the decode the
-// placement heads' collapse applies to every self footprint
-// (collapse_footprint_planes), which has no way to know where the opponent's
-// tiles landed either. Crediting the literal squares instead would put a
-// systematic, model-independent residual on every reply that threads through
-// the opponent's fresh tiles: model mass on the squares the opponent filled,
-// none on the tail of the span past them. With the projection, truth and
-// prediction are the same function of a footprint distribution, so a model
-// that matched the rollouts' self footprints exactly shows zero residual.
-// Squares before the first opponent tile in the span coincide with the literal
-// ones; only the tail moves. The decode always succeeds: the anchor is empty
-// on `board` (it was empty after the opponent moved) and `board` has at least
-// as many empty squares past it.
+// `opp_first` is credited with its literal placed squares. `self_first`, the
+// reply to an opponent move the model never sees, is credited with its
+// footprint (training/footprint.h) decoded on `board`, the position's board
+// before that reply -- as if the opponent had passed. That is the decode the
+// placement heads' collapse applies (collapse_footprint_planes), so truth and
+// prediction are the same function of a footprint distribution; literal
+// squares would leave a model-independent residual on every reply that
+// threads through the opponent's fresh tiles.
 void accumulate_rollout_placement(const Board& board, const Move& opp_first, bool opp_won,
                                   const Move& self_first, bool self_won, PlacementCounts& out);
 
