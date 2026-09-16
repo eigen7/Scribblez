@@ -26,7 +26,10 @@ inline constexpr int kPlacementHeads = 4;
 // covers (footprint_cells). So out[h][cell] is Pr[the next move covers cell] for
 // a plays head and Pr[covers cell AND that seat wins] for a win head -- the same
 // per-cell marginal the old Bernoulli heads emitted, now derived from the
-// footprint distribution.
+// footprint distribution. A self footprint is decoded on `board` too, i.e. as
+// if the opponent passed: the Monte-Carlo truth credits self replies the same
+// way (accumulate_rollout_placement, sim/monte_carlo_sim.h), which is what
+// makes the two comparable per cell.
 //
 // `available_counts` is the opponent's 27-count tile availability (the unseen
 // pool; see footprint_mask.h). It gates the two OPP heads directly -- a

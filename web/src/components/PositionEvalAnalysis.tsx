@@ -15,6 +15,8 @@ import {
   PlacementHeadRadios,
   PlacementLegend,
   PlacementModeControl,
+  SELF_HEAD_NOTE,
+  isSelfHead,
 } from './PlacementOverlayControls';
 
 const NO_USED: Set<number> = new Set();
@@ -496,7 +498,12 @@ export default function PositionEvalAnalysis({ task, tag }: { task: string; tag:
                   onChange={setOverlayMode}
                 />
               )}
-              {placementOverlay && <PlacementLegend mode={overlayMode} />}
+              {placementOverlay && (
+                <PlacementLegend
+                  mode={overlayMode}
+                  note={headSel !== NONE_HEAD && isSelfHead(headSel) ? SELF_HEAD_NOTE : undefined}
+                />
+              )}
             </div>
           </div>
 

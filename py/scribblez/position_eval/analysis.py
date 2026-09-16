@@ -271,6 +271,11 @@ def placement_metrics(planes: np.ndarray, truth: np.ndarray, legal: np.ndarray) 
     Positions where the MC plane is empty for a head (the win heads, when that
     seat never won a rollout) contribute to neither statistic for that head; a
     head empty on every position records nothing.
+
+    The two sides are comparable for the self heads only because the MC planes
+    credit each reply's footprint decoded on the position's board, as the
+    collapse does -- not its literal squares (accumulate_rollout_placement,
+    engine/include/sim/monte_carlo_sim.h).
     """
     record = {}
     for h, head in enumerate(PLACEMENT_HEAD_NAMES):

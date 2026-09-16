@@ -4,7 +4,10 @@
 // probability of some event -- "the opponent's next move covers this square"
 // for the Positions tab's collapsed view, "is anchored at this square" for the
 // Trajectories pane's marginals. Monte-Carlo rollouts give an empirical
-// ground-truth probability for the same event. This module turns one head's
+// ground-truth probability for the same event. (For the Positions tab's two
+// self heads the event is "the mover's reply's footprint, drawn on the current
+// board as if the opponent passed, covers this square", on both sides -- see
+// SELF_HEAD_NOTE in PlacementOverlayControls.tsx.) This module turns one head's
 // (truth, pred) pair, plus a display mode, into a per-cell "halo" -- a ring
 // color plus a hover tooltip -- that a caller hands to <Board cellHalos=... />.
 //
