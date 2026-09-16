@@ -136,7 +136,7 @@ task's, with a first-boot script that logs in to the image registry and
 pulls both worker images before writing a readiness marker. The machine reads
 `launching` until ssh answers, `preparing` until that script is done, then
 `up`; slot starts on it are then ordinary ssh starts with the image already
-there. A rented machine on which nothing has run for ten minutes is
+there. Its root volume is 100 GB (the image's own snapshot is 75 GB). A rented machine on which nothing has run for ten minutes is
 **stopped** (its disk kept, its hourly rate no longer charged; a gated
 generator is a paused container and a finished trainer an exited one, so a
 run that ends stops its machine), and **started** again when a slot on it is

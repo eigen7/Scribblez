@@ -35,7 +35,10 @@ AMI_PARAMETER = (
 )
 SSH_USER = "ubuntu"
 READY_FILE = "/var/lib/scribblez/ready"
-ROOT_VOLUME_GB = 60
+# The Deep Learning AMI's root snapshot is 75 GB (2026-09), and a launch that
+# asks for less is refused (InvalidBlockDeviceMapping). Above that, room for
+# the two worker images, a bundle, and a trainer's generation window.
+ROOT_VOLUME_GB = 100
 
 # us-east-1 on-demand list prices, checked 2026-09-15.
 CATALOG = [
@@ -291,6 +294,11 @@ class AwsProvider:
             return (
                 "AWS is still verifying the account; new accounts cannot launch instances "
                 f"for up to a day. (AWS: {error.detail})"
+            )
+        if code == "InvalidBlockDeviceMapping":
+            return (
+                f"AWS refused the root volume for a {type_id}: the image's snapshot has "
+                f"outgrown ROOT_VOLUME_GB in cloud/providers/aws.py. (AWS: {error.detail})"
             )
         if code == "IncorrectInstanceState":
             return (

@@ -122,8 +122,8 @@ kind -- and the `cloud` kind, Runpod and the pod-side bootstrap go.
   its machine; a scheduler gate on a machine whose trainer is running does
   not. A Start on a slot of a stopped machine starts the instance (its
   address may change; `describe` refreshes `host`) and proceeds when it is
-  `up`. Stopped costs the volume only (a 60 GB gp3 root: about $5 a
-  month, prorated).
+  `up`. Stopped costs the volume only (a 100 GB gp3 root, the image's
+  snapshot being 75 GB: about $8 a month, prorated).
 - **Terminate** is explicit: Remove on the machine's row in the workers
   table. On an `up` or `stopped` machine it is refused while a slot is
   running or still holding output (the rule for removing an ssh slot); on

@@ -133,6 +133,8 @@ def test_launch_tags_the_owner_and_boots_with_the_pull_script(provider):
     run = next(kw for op, kw in provider.ec2.calls if op == "run")
     assert run["ImageId"] == "ami-123" and run["InstanceType"] == "g6.2xlarge"
     assert run["KeyName"] == "scribblez" and run["SecurityGroupIds"] == ["sg-1"]
+    root = run["BlockDeviceMappings"][0]["Ebs"]
+    assert root["VolumeSize"] == aws.ROOT_VOLUME_GB >= 75  # the AMI snapshot's size
     assert run["TagSpecifications"][0]["Tags"] == [
         {"Key": "scribblez", "Value": "position_eval/t/m1"}
     ]
