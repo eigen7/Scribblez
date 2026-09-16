@@ -64,6 +64,8 @@ class Provider(Protocol):
 
     def catalog(self) -> list[MachineType]: ...
 
+    def account(self) -> str: ...  # who and where machines are rented as, for the form
+
     def prepare(self): ...  # the account-side one-time setup, idempotent
 
     def launch(self, request: LaunchRequest) -> Instance: ...

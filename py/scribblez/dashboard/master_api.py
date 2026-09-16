@@ -279,11 +279,12 @@ class MachineAddHandler(_MasterBase):
         await self.guarded_offload(add)
 
 
-class MachineTypesHandler(_MasterBase):
-    """The provider's catalog, for the rent form."""
+class RentalOfferHandler(_MasterBase):
+    """The provider, its account and its catalog, for the rent form -- a
+    provider API call the first time, hence the offload."""
 
-    def get(self):
-        self.guarded(lambda: {"types": self.manager.machine_types()})
+    async def get(self):
+        await self.guarded_offload(self.manager.rental_offer)
 
 
 class OrphansHandler(_MasterBase):
@@ -403,7 +404,7 @@ MASTER_ROUTES = [
     (r"/api/task/worker_action", WorkerActionHandler),
     (r"/api/task/machines", MachineAddHandler),
     (r"/api/task/machine_action", MachineActionHandler),
-    (r"/api/cloud/machine_types", MachineTypesHandler),
+    (r"/api/cloud/rental_offer", RentalOfferHandler),
     (r"/api/cloud/orphans", OrphansHandler),
     (r"/api/cloud/orphan_action", OrphanActionHandler),
     (r"/api/cloud/offers", CloudOffersHandler),

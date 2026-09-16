@@ -165,6 +165,15 @@ def _machine_key(spec: workloads.WorkloadSpec, tag: str, name: str) -> str:
     return _key(spec, tag, f"machine:{name}")
 
 
+def _next_machine_name(task: tasks.TaskRecord, provider: str) -> str:
+    """`<provider>-N`, the first N no machine of the task has."""
+    taken = {m.name for m in task.machines}
+    n = 1
+    while f"{provider}-{n}" in taken:
+        n += 1
+    return f"{provider}-{n}"
+
+
 def _owner(spec: workloads.WorkloadSpec, tag: str, name: str) -> str:
     """The ownership tag a rented instance carries: which task's machine it
     is. One no task's machines name is an orphan."""
@@ -501,6 +510,7 @@ class WorkerManager:
         # pod listing was.
         self._instances: tuple[dict[str, Instance], float] = ({}, 0.0)
         self._provider_client: Provider | None = None
+        self._account: str | None = None  # the provider's account line, once asked
         # Where every blocking step runs (see _offload). One thread: the point
         # is to keep the event loop free, not to do two of these at once.
         self._blocking = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-blocking")
@@ -966,16 +976,26 @@ class WorkerManager:
         tasks.save_task(spec, task)
         return m
 
-    def machine_types(self) -> list[dict]:
-        return [asdict(t) for t in self._provider().catalog()]
+    def rental_offer(self) -> dict:
+        """What the rent form shows: the provider, the account it rents as
+        (asked once per process), and the catalog."""
+        provider = self._provider()
+        if self._account is None:
+            self._account = provider.account()
+        return {
+            "provider": provider.name,
+            "account": self._account,
+            "types": [asdict(t) for t in provider.catalog()],
+        }
 
     def rent_machine(self, spec, task: tasks.TaskRecord, name: str, type_id: str):
         """Launch an instance of `type_id` for the task and record it as one
-        of its machines. A refusal (a quota of 0, no capacity) reaches the
-        form as the provider's sentence; nothing is recorded for it."""
-        assert name, "a machine needs a name"
-        assert all(m.name != name for m in task.machines), f"machine '{name}' exists"
+        of its machines, under `name` or a generated one. A refusal (a quota
+        of 0, no capacity) reaches the form as the provider's sentence;
+        nothing is recorded for it."""
         provider = self._provider()
+        name = name or _next_machine_name(task, provider.name)
+        assert all(m.name != name for m in task.machines), f"machine '{name}' exists"
         mtype = next((t for t in provider.catalog() if t.id == type_id), None)
         assert mtype is not None, f"no machine type '{type_id}'"
         known_hosts = MACHINES_DIR / name / "known_hosts"

@@ -405,6 +405,9 @@ class _FakeProvider:
         self.calls: list[tuple] = []
         self.refuse: ProviderError | None = None
 
+    def account(self):
+        return "AWS account 1 as user scribblez, us-east-1"
+
     def catalog(self):
         return [
             MachineType("g6.2xlarge", 8, 1, "L4", "znver3", 1.0),
@@ -482,6 +485,15 @@ def test_renting_records_the_instance_and_its_key_material(rented, spec, task, t
     assert m.gpu_count == 1 and m.arch == "znver3" and m.cost_per_hr == 1.0
     assert tasks.load_task(spec, "t").machine("m1").instance_id == "i-1"
     assert provider.instances["i-1"].owner == f"{spec.name}/t/m1"
+
+
+def test_a_rented_machine_without_a_name_gets_one(rented, manager, spec, task):
+    provider, m = rented
+    second = manager.rent_machine(spec, task, "", "c7a.4xlarge")
+    third = manager.rent_machine(spec, task, "", "c7a.4xlarge")
+    assert (second.name, third.name) == ("aws-1", "aws-2")
+    assert manager.rental_offer()["account"].startswith("AWS account 1")
+    assert [t["id"] for t in manager.rental_offer()["types"]] == ["g6.2xlarge", "c7a.4xlarge"]
 
 
 def test_a_refused_launch_reaches_the_form_and_records_nothing(

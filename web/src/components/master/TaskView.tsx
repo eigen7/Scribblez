@@ -31,10 +31,11 @@ type MachineInfo = {
   state: string; slots: string[]; exit_reason?: string; retry_in_s?: number;
 };
 
-// One row of the provider's catalog (GET /api/cloud/machine_types).
+// The provider, the account it rents as, and its catalog (GET /api/cloud/rental_offer).
 type MachineType = {
   id: string; vcpus: number; gpu_count: number; gpu: string; arch: string; cost_per_hr: number;
 };
+type RentalOffer = { provider: string; account: string; types: MachineType[] };
 
 // An instance the provider tagged ours that no task names (GET /api/cloud/orphans).
 type Orphan = { instance_id: string; type_id: string; state: string; owner: string | null; uptime_s: number | null };
@@ -318,48 +319,60 @@ function SshForm({ machines, add, busy, disabled }: {
 // its address and key; the reconcile pass probes it (ssh + Docker) like it
 // probes the slots. Removing a machine removes the slots on it, under the
 // slot rule (nothing running, nothing unreachable, output discards confirmed).
-// The provider's catalog, fetched once per page load and shared by every
-// task's rent form; a failed fetch (no aws credentials yet) leaves the form
-// out rather than broken, with the reason shown once.
-let typesPromise: Promise<MachineType[]> | null = null;
-function loadMachineTypes(): Promise<MachineType[]> {
-  if (!typesPromise) {
-    typesPromise = getJSON('/api/cloud/machine_types').then((d) => d.types).catch((e) => {
-      typesPromise = null;
+// The rental offer, fetched once per page load and shared by every task's
+// rent form; a failed fetch (no aws credentials yet) leaves the form out
+// rather than broken, with the reason shown once.
+let offerPromise: Promise<RentalOffer> | null = null;
+function loadRentalOffer(): Promise<RentalOffer> {
+  if (!offerPromise) {
+    offerPromise = getJSON('/api/cloud/rental_offer').catch((e) => {
+      offerPromise = null;
       throw e;
     });
   }
-  return typesPromise;
+  return offerPromise;
 }
 
 // Renting: pick a type from the catalog; the machine appears as `launching`
 // and reads `up` once its first-boot script has pulled the worker images.
-function RentForm({ types, busy, onRent }: {
-  types: MachineType[]; busy: boolean; onRent: (name: string, typeId: string) => void;
+// The name is an alias for the tables and the instance's ownership tag;
+// left empty, the server picks one.
+function RentForm({ offer, busy, onRent }: {
+  offer: RentalOffer; busy: boolean; onRent: (name: string, typeId: string) => void;
 }) {
+  const types = offer.types;
   const [name, setName] = useState('');
   const [typeId, setTypeId] = useState(types[0]?.id ?? '');
   const t = types.find((x) => x.id === typeId) ?? types[0];
   return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 10 }}>
-      <label style={{ fontSize: 13 }}>
-        Rent — name<br />
-        <input style={{ ...numInput, width: 120 }} value={name} onChange={(e) => setName(e.target.value)} />
-      </label>
-      <label style={{ fontSize: 13 }}>
-        type<br />
-        <select style={{ ...numInput, width: 300 }} value={t?.id ?? ''} onChange={(e) => setTypeId(e.target.value)}>
-          {types.map((x) => (
-            <option key={x.id} value={x.id}>
-              {x.id} — {x.vcpus} vCPU{x.gpu ? `, ${x.gpu_count}× ${x.gpu}` : ''} — ${x.cost_per_hr.toFixed(3)}/hr
-            </option>
-          ))}
-        </select>
-      </label>
-      <Button
-        label={busy ? 'Working…' : 'Rent'} disabled={busy || !name.trim() || !t}
-        onClick={() => onRent(name.trim(), t.id)}
-      />
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 600 }}>
+        Rent on {offer.provider.toUpperCase()}
+        <span style={{ fontWeight: 400, color: '#556070' }}> — {offer.account}</span>
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 4 }}>
+        <label style={{ fontSize: 13 }}>
+          name (optional)<br />
+          <input
+            style={{ ...numInput, width: 120 }} value={name} placeholder={`${offer.provider}-1`}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </label>
+        <label style={{ fontSize: 13 }}>
+          type<br />
+          <select style={{ ...numInput, width: 'auto', minWidth: 300 }} value={t?.id ?? ''} onChange={(e) => setTypeId(e.target.value)}>
+            {types.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.id} — {x.vcpus} vCPU{x.gpu ? `, ${x.gpu_count}× ${x.gpu}` : ''} — ${x.cost_per_hr.toFixed(3)}/hr
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button
+          label={busy ? 'Working…' : 'Rent'} disabled={busy || !t}
+          onClick={() => onRent(name.trim(), t.id)}
+        />
+      </div>
     </div>
   );
 }
@@ -374,23 +387,23 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
   const [key, setKey] = useState('');
   const [gpus, setGpus] = useState('');
   const [busy, setBusy] = useState(false);
-  const [types, setTypes] = useState<MachineType[] | null>(null);
-  const [typesError, setTypesError] = useState('');
+  const [offer, setOffer] = useState<RentalOffer | null>(null);
+  const [offerError, setOfferError] = useState('');
   const [orphans, setOrphans] = useState<Orphan[]>([]);
   useEffect(() => {
     let alive = true;
-    loadMachineTypes()
-      .then((t) => { if (alive) setTypes(t); })
-      .catch((e) => { if (alive) setTypesError(String(e)); });
+    loadRentalOffer()
+      .then((o) => { if (alive) setOffer(o); })
+      .catch((e) => { if (alive) setOfferError(String(e)); });
     return () => { alive = false; };
   }, []);
   useEffect(() => {
-    if (!tabActive || !types) return;
+    if (!tabActive || !offer) return;
     const poll = () => getJSON('/api/cloud/orphans').then((d) => setOrphans(d.orphans)).catch(() => {});
     poll();
     const id = setInterval(poll, 15000);
     return () => clearInterval(id);
-  }, [tabActive, types]);
+  }, [tabActive, offer]);
   const post = async (path: string, body: Record<string, unknown>) => {
     setBusy(true);
     onError('');
@@ -490,22 +503,22 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
       <div style={helpText}>
         a machine you prepared (ssh key, Docker, the worker image pulled): docs/master_dashboard.md.
       </div>
-      {types && types.length > 0 && (
+      {offer && offer.types.length > 0 && (
         <RentForm
-          types={types} busy={busy}
+          offer={offer} busy={busy}
           onRent={(n, typeId) => post('/api/task/machines', { name: n, type_id: typeId })}
         />
       )}
-      {types && (
+      {offer && (
         <div style={helpText}>
           a rented machine is stopped after {IDLE_STOP_MINUTES} idle minutes (disk kept, no hourly charge)
           and started again when a slot on it is started; Remove terminates it.
         </div>
       )}
-      {typesError && <div style={{ ...helpText, color: '#a05a00' }}>renting unavailable: {typesError}</div>}
-      {orphans.length > 0 && (
+      {offerError && <div style={{ ...helpText, color: '#a05a00' }}>renting unavailable: {offerError}</div>}
+      {orphans.length > 0 && offer && (
         <div style={{ marginTop: 10, color: '#a05a00', fontSize: 13 }}>
-          <b>Instances tagged ours that no task tracks</b> (billing until terminated):
+          <b>{offer.provider.toUpperCase()} instances tagged ours that no task tracks</b> (billing until terminated):
           <table style={{ borderCollapse: 'collapse', fontSize: 13, marginTop: 4 }}>
             <tbody>
               {orphans.map((o) => (
