@@ -139,9 +139,11 @@ def test_launch_tags_the_owner_and_boots_with_the_pull_script(provider):
         {"Key": "scribblez", "Value": "position_eval/t/m1"}
     ]
     script = run["UserData"]
-    assert "docker login --username u" in script and "tok" in script
-    assert "docker pull docker.io/u/scribblez\n" in script
-    assert "docker pull docker.io/u/scribblez:latest-torch\n" in script
+    # As the ssh user: the dashboard's later pulls run as that user, and
+    # Docker credentials are per user.
+    assert "sudo -u ubuntu -H docker login --username u" in script and "tok" in script
+    assert "sudo -u ubuntu -H docker pull docker.io/u/scribblez\n" in script
+    assert "sudo -u ubuntu -H docker pull docker.io/u/scribblez:latest-torch\n" in script
     assert script.rstrip().endswith(f"touch {aws.READY_FILE}")
     assert inst.id == "i-1" and inst.state == "pending" and inst.owner == "position_eval/t/m1"
     assert inst.launched_at == _LAUNCHED.timestamp()

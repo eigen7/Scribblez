@@ -64,11 +64,18 @@ QUOTA_CONSOLE = "https://console.aws.amazon.com/servicequotas/home/services/ec2/
 def user_data(registry: RegistryConfig) -> str:
     """The first-boot script. The registry token travels in the instance's
     user data, readable by the instance's own metadata service and by our
-    IAM user; it is a read-only pull token, which is the reason it is one."""
-    pulls = "\n".join(f"docker pull {image}" for image in registry.images)
+    IAM user; it is a read-only pull token, which is the reason it is one.
+
+    cloud-init runs this as root, but the login has to be the ssh user's:
+    the dashboard pulls as that user before every container it creates (a
+    rebuilt image reaches the machine that way), and Docker credentials are
+    per user. The first launch pulled as root and every later pull as
+    ubuntu was "access denied" with the images sitting right there."""
+    as_user = f"sudo -u {SSH_USER} -H"
+    pulls = "\n".join(f"{as_user} docker pull {image}" for image in registry.images)
     return f"""#!/bin/bash
 set -e
-echo {registry.pull_token} | docker login --username {registry.username} --password-stdin
+echo {registry.pull_token} | {as_user} docker login --username {registry.username} --password-stdin
 {pulls}
 mkdir -p {Path(READY_FILE).parent}
 touch {READY_FILE}
