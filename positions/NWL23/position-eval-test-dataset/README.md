@@ -26,7 +26,12 @@ under `engine/tests/data/` instead.
 `monte-carlo-sim-results.<condition>.json`, written by `monte_carlo_sim_tool`
 (~10k EndgameHastyBot rollouts per position; W/L/D, the exact score-delta
 histogram, and the placement planes), one file per information condition
-(`engine/include/sim/monte_carlo_sim.h`):
+(`engine/include/sim/monte_carlo_sim.h`). The self placement planes credit
+each reply's footprint decoded on the position's board, as if the opponent
+had passed, not its literal squares -- the same decode the placement heads'
+collapse applies, so the two are comparable (see
+`accumulate_rollout_placement` there). Regenerate the truth whenever that
+crediting changes.
 
 - `face-up-leaves` -- every rollout seats the opponent with their retained
   leave;
