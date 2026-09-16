@@ -86,12 +86,17 @@ class _Ssm:
         return {"Parameter": {"Value": "ami-123"}}
 
 
+class _Sts:
+    def get_caller_identity(self):
+        return {"Arn": "arn:aws:iam::832300492506:user/scribblez"}
+
+
 class _Session:
     def __init__(self, ec2):
         self._ec2 = ec2
 
     def client(self, name):
-        return {"ec2": self._ec2, "ssm": _Ssm()}.get(name, object())
+        return {"ec2": self._ec2, "ssm": _Ssm(), "sts": _Sts()}.get(name, object())
 
 
 @pytest.fixture
@@ -176,3 +181,7 @@ def test_catalog_types_name_built_arches():
 
     for t in aws.CATALOG:
         assert t.arch in SUPPORTED_ARCHS, t
+
+
+def test_the_account_line_names_account_user_and_region(provider):
+    assert provider.account() == "AWS account 832300492506 as user scribblez, us-east-1"

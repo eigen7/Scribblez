@@ -124,6 +124,13 @@ class AwsProvider:
     def identity(self) -> str:
         return _call(self._sts.get_caller_identity)["Arn"]
 
+    def account(self) -> str:
+        """E.g. "AWS account 832300492506 as user scribblez, us-east-1"."""
+        arn = self.identity()
+        account_id = arn.split(":")[4]
+        user = arn.rsplit("/", 1)[-1]
+        return f"AWS account {account_id} as user {user}, {self.region}"
+
     def prepare(self):
         """The account-side setup, idempotent: the key pair (its private key
         saved beside the credentials file), the security group that admits
