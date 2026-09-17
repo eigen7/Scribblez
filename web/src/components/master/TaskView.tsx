@@ -500,8 +500,11 @@ function AddWorkerForms({ workload, role, tag, taken, machines, onError, onChang
   };
 
   return (
-    <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap', marginTop: 12, alignItems: 'flex-start' }}>
-      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 90, marginTop: 4 }} title={role.singleton ? 'at most one worker' : undefined}>
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12, alignItems: 'flex-start' }}>
+      <span
+        style={{ fontSize: 13, fontWeight: 600, width: 210, flexShrink: 0, marginTop: 4 }}
+        title={role.singleton ? 'at most one worker' : undefined}
+      >
         {role.title}{role.singleton ? ' (singleton)' : ''}
       </span>
       {role.kinds.includes('local') && <LocalForm add={add} busy={busy} disabled={disabled} />}
