@@ -98,7 +98,7 @@ class LocalSink:
 
 
 class R2Sink:
-    kind = "cloud"
+    kind = "ssh"  # the bucket delivers for ssh slots only
 
     def __init__(self, r2: R2Credentials, workload: str, tag: str):
         self._r2 = r2

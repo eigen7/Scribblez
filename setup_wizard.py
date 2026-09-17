@@ -58,10 +58,6 @@ PHONY_LEXICA_DIR = Path(__file__).resolve().parent / "phonies"
 # path (it only lands on PYTHONPATH inside the Docker container), so the
 # host-side wizard can't import the container-side cloud.credentials module.
 CLOUD_CREDENTIALS_TEMPLATE = {
-    "runpod": {
-        "api_key": "FILL_ME",
-        "container_registry_auth_id": "FILL_ME",
-    },
     "registry": {
         "worker_image": "FILL_ME",
     },

@@ -118,7 +118,7 @@ class _FakeSink:
     """A sink whose bucket holds complete generations and, optionally, a
     checkpoint; records what was asked of it."""
 
-    kind = "cloud"
+    kind = "ssh"
 
     def __init__(self, generations=(), checkpoint=False):
         self.generations = set(generations)

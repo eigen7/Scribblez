@@ -143,7 +143,6 @@ def test_bundle_worker_env_composition():
     params = params_mod.validate(spec.params_cls, {})
     env = bundle_worker_env(
         creds, spec, "run1", params, role="generate", bundle_id="bid", worker_id="ssh-0",
-        kind="ssh",
     )  # fmt: skip
     assert env["R2_ACCESS_KEY_ID"] == "ak"
     assert env["SCZ_WORKLOAD"] == "kill_test"

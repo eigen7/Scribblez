@@ -25,16 +25,16 @@ def bundle_worker_env(
     role: str,
     bundle_id: str,
     worker_id: str,
-    kind: str,
 ) -> dict[str, str]:
     """The full environment for a worker that boots the image + bundle flow:
     bucket credentials, the workload's SCZ_* definition, the bundle to run,
-    and the slot identity. `kind` travels because the worker cannot infer it
-    from its surroundings; the launcher knows what it started."""
+    and the slot identity. The kind travels because the worker cannot infer
+    it from its surroundings (its sink may be local or the bucket), and every
+    slot booted this way is an ssh one."""
     return {
         **r2_env(creds),
         **spec.worker_env(tag, params, role),
         "SCZ_BUNDLE": bundle_id,
         "SCZ_WORKER_ID": worker_id,
-        "SCZ_WORKER_KIND": kind,
+        "SCZ_WORKER_KIND": "ssh",
     }

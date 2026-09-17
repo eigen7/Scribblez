@@ -705,7 +705,7 @@ class WorkerManager:
         w.bundle_id = self.task_bundle_id(spec, task)
         env = bundle_worker_env(
             creds, spec, task.tag, params,
-            role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id, kind="ssh",
+            role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id,
         )  # fmt: skip
         env["SCZ_SINK"] = _slot_sink(spec, task, w)
         if w.threads:
