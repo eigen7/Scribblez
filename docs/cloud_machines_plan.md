@@ -161,13 +161,16 @@ The controller changes one predicate, in four places. Today
 `BUCKET_KINDS = ("cloud",)` gates the sync watcher's existence
 (`_ensure_sync`), the `--trainer-outputs` flag and the controls push
 (`_bucket_trainer`), and the scheduler's publish and mirror hooks
-(`_make_publish`, `_make_mirror`). All four become one predicate, **a
-remote trainer**: a slot of a non-local kind whose role has `ingest`.
-Written in terms of roles rather than kinds, it survives the deletion of
-`cloud`. The ssh container's environment gets `SCZ_SINK=r2` for a role
-with `ingest` (every other role keeps `local`, collected over ssh), and
-`_collect_ssh` skips such a slot, whose outputs are not on the machine to
-collect.
+(`_make_publish`, `_make_mirror`). All four become one predicate over
+**where a slot delivers** (`_slot_sink`): through the bucket for a slot
+whose role has `ingest` wherever it runs, and for every slot on a rented
+machine -- a datacenter link to the bucket, where collection over ssh
+would haul each chunk to the controller and publish it back up from a home
+uplink; over the control link only for a slot on the operator's own
+machine. Written in terms of roles and machines rather than kinds, it
+survives the deletion of `cloud`. The ssh container's environment gets
+`SCZ_SINK` from the same predicate, and `_collect_ssh` skips a
+bucket-delivering slot, whose outputs are not on the machine to collect.
 
 ## One-time setup (the operator, once)
 
@@ -200,13 +203,15 @@ the CPU family that picks the bundle arch:
 
 | Type | vCPU | GPU | Family (arch) |
 |---|---|---|---|
-| c7a.4xlarge / 8xlarge | 16 / 32 | -- | Genoa (`znver4`) |
+| c7a.xlarge / 2xlarge / 4xlarge / 8xlarge | 4 / 8 / 16 / 32 | -- | Genoa (`znver4`) |
 | g6.2xlarge / 4xlarge / 8xlarge | 8 / 16 / 32 | L4 24 GB | Milan (`znver3`) |
 
 The account's on-demand G-family quota is 8 vCPUs (a request for 64 is an
 open support case), so the first runs train on a g6.2xlarge with a
 generator on a separate c7a; the 16-vCPU sizes that colocate both wait for
-the grant.
+the grant. Measured on the first run (2026-09-16): the L4 trains ~560
+rows/s against a 4090's ~800, and a full-window generation consumes
+~120 games/s, which a c7a.xlarge's 4 vCPUs supply at ~45 games/s each.
 
 `znver3` joins `SUPPORTED_ARCHS`. Other types (g5's A10G, g6e's L40S)
 are one row each when a run wants them.

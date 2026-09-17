@@ -1620,10 +1620,23 @@ def test_an_ssh_trainer_delivers_through_the_bucket_and_a_generator_does_not():
     on the same machine hands its chunks over the control link."""
     spec = workloads.get("position_eval")
     task = _all_ssh_task()
-    assert workers_mod._slot_sink(spec, task.worker("g")) == "local"
-    assert workers_mod._slot_sink(spec, task.worker("tr")) == "r2"
+    assert workers_mod._slot_sink(spec, task, task.worker("g")) == "local"
+    assert workers_mod._slot_sink(spec, task, task.worker("tr")) == "r2"
     assert workers_mod._bucket_trainer(spec, task)
     assert not workers_mod._bucket_trainer(spec, _train_task(kinds=("local",)))
+
+
+def test_a_generator_on_a_rented_machine_delivers_through_the_bucket(rented, manager, spec, task):
+    """A rented machine has a datacenter link to the bucket; collecting its
+    chunks over ssh would haul them to the controller and publish them back
+    up from a home uplink. A registered machine keeps the control link."""
+    provider, m = rented
+    manager.add_machine(spec, task, "laptop", "u@h")
+    on_rented = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    on_laptop = manager.add_ssh(spec, task, "generate", machine="laptop", threads=None)
+    assert workers_mod._slot_sink(spec, task, on_rented) == "r2"
+    assert workers_mod._slot_sink(spec, task, on_laptop) == "local"
+    assert workers_mod._has_bucket_slots(spec, task)
 
 
 def test_an_all_ssh_task_with_a_trainer_gets_every_bucket_leg(manager, tmp_path, monkeypatch):
