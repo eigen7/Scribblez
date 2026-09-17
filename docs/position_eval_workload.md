@@ -2,7 +2,7 @@
 
 How the training pipelines run as first-class workloads of the master
 dashboard ([master_dashboard.md](master_dashboard.md)): self-play generation
-farmed out to any number of interchangeable local/cloud workers, the GPU
+farmed out to any number of interchangeable local/remote workers, the GPU
 trainer running as a distinguished singleton worker consuming the shared data,
 and the whole run driven from the one web shell. Both training workloads
 (position_eval and max_move_per_lane) share this shape; position_eval is
@@ -54,11 +54,11 @@ dashboard, which is the point of it ([cloud_training_plan.md](cloud_training_pla
 
 ## Roles
 
-| Role | Cardinality | Kinds | Interruptible | Does |
-|---|---|---|---|---|
-| `generate` | N, interchangeable | local + cloud | yes | one cycle = one whole `.slog` chunk of self-play games, delivered to the staging area |
-| `train` | singleton | local (the GPU box) + ssh (a rented GPU machine) | — | consume complete generations: train, checkpoint, export ONNX, deliver the generation's record |
-| `match_eval` | singleton | local + ssh (needs a GPU) | — | play eval matches against fixed opponent (position_eval only; docs/roadmap.md A1) |
+| Role | Cardinality | Kinds | Does |
+|---|---|---|---|
+| `generate` | N, interchangeable | local + ssh | one cycle = one whole `.slog` chunk of self-play games, delivered to the staging area |
+| `train` | singleton | local (the GPU box) + ssh (a rented GPU machine) | consume complete generations: train, checkpoint, export ONNX, deliver the generation's record |
+| `match_eval` | singleton | local + ssh (needs a GPU) | play eval matches against fixed opponent (position_eval only; docs/roadmap.md A1) |
 
 The trainer never generates and the generators never train; match_eval only
 consumes exported ONNX checkpoints, so the training loop is never blocked. A
