@@ -74,32 +74,39 @@ CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
 SYNC_INTERVAL_SECONDS = 30
 
 
-def _slot_sink(spec: workloads.WorkloadSpec, w: tasks.WorkerRecord) -> str:
+def _slot_sink(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
     """Where slot `w`'s worker delivers (cloud/sinks.py's SCZ_SINK): "local"
-    for a local subprocess, and for an ssh container whose output the
-    reconcile pass reads back over the control link (cloud/ssh_transfer.py);
-    "r2" for a pod, and for an ssh container running a role with inputs as
-    well as outputs -- a trainer, whose generations arrive and whose
+    for a local subprocess, and for an ssh container on the operator's own
+    machine whose output the reconcile pass reads back over the control link
+    (cloud/ssh_transfer.py); "r2" for a pod, for an ssh container on a rented
+    machine (a datacenter link to the bucket, where collection over ssh would
+    haul every chunk to the controller and publish it back up from a home
+    uplink), and for an ssh container running a role with inputs as well as
+    outputs anywhere -- a trainer, whose generations arrive and whose
     exports, checkpoint and records leave through the bucket
     (docs/cloud_machines_plan.md). Everything the controller does for a
     bucket-delivering slot -- the sync watcher, the scheduler's publish and
     mirror hooks, the controls push -- keys off this, not off the kind."""
     if w.kind == "local":
         return "local"
-    if w.kind == "ssh" and not spec.role(w.role).ingest:
+    if w.kind == "ssh" and not spec.role(w.role).ingest and not _rented(task, w):
         return "local"
     return "r2"
 
 
+def _rented(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
+    return w.machine is not None and task.machine(w.machine).instance_id is not None
+
+
 def _has_bucket_slots(spec: workloads.WorkloadSpec, task) -> bool:
-    return any(_slot_sink(spec, w) == "r2" for w in task.workers)
+    return any(_slot_sink(spec, task, w) == "r2" for w in task.workers)
 
 
 def _bucket_trainer(spec: workloads.WorkloadSpec, task) -> bool:
     """Whether a slot whose role delivers records the controller ingests (a
     trainer) runs through the bucket -- the case that has the sync pull its
     outputs and the controls file pushed up for it."""
-    return any(_slot_sink(spec, w) == "r2" and spec.role(w.role).ingest for w in task.workers)
+    return any(_slot_sink(spec, task, w) == "r2" and spec.role(w.role).ingest for w in task.workers)
 
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
@@ -227,11 +234,11 @@ def _forget_empty(w: tasks.WorkerRecord):
         w.undelivered = None
 
 
-def _holds_nothing(spec: workloads.WorkloadSpec, w: tasks.WorkerRecord):
+def _holds_nothing(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
     """An ssh slot delivering through the bucket keeps nothing in its
     container for the controller to collect, so its count is always zero:
     what the replace rule and the Remove dialog read."""
-    if w.kind == "ssh" and _slot_sink(spec, w) == "r2":
+    if w.kind == "ssh" and _slot_sink(spec, task, w) == "r2":
         w.undelivered = 0
 
 
@@ -846,7 +853,7 @@ class WorkerManager:
             creds, spec, task.tag, params,
             role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id, kind="ssh",
         )  # fmt: skip
-        env["SCZ_SINK"] = _slot_sink(spec, w)
+        env["SCZ_SINK"] = _slot_sink(spec, task, w)
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
         machine = _ssh_machine(task, w)
@@ -1377,7 +1384,7 @@ class WorkerManager:
                 info["state"] = _local_state(w.desired_state, alive, gated, w.finished)
                 _accrue(w, alive, None)
             elif w.kind == "ssh":
-                _holds_nothing(spec, w)
+                _holds_nothing(spec, task, w)
                 probe = self._probe_container(spec, task, w, observe=observe)
                 alive = probe == "running"
                 info["state"] = _ssh_state(w.desired_state, probe, gated, w.finished)
@@ -1603,7 +1610,7 @@ class WorkerManager:
                 if (
                     w.kind == "ssh"
                     and info["ssh_probe"] == "running"
-                    and _slot_sink(spec, w) == "local"
+                    and _slot_sink(spec, task, w) == "local"
                 ):
                     try:
                         await self.offload(self._collect_ssh, spec, task, w)

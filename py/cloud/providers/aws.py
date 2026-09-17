@@ -42,6 +42,8 @@ ROOT_VOLUME_GB = 100
 
 # us-east-1 on-demand list prices, checked 2026-09-15.
 CATALOG = [
+    MachineType("c7a.xlarge", 4, 0, "", "znver4", 0.205),
+    MachineType("c7a.2xlarge", 8, 0, "", "znver4", 0.411),
     MachineType("c7a.4xlarge", 16, 0, "", "znver4", 0.821),
     MachineType("c7a.8xlarge", 32, 0, "", "znver4", 1.642),
     MachineType("g6.2xlarge", 8, 1, "L4 24 GB", "znver3", 0.978),
