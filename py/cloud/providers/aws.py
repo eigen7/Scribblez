@@ -15,6 +15,7 @@ and the on-demand list price beside each. Prices are an estimate's input;
 they are changed here by PR when AWS reprices.
 """
 
+import datetime
 import time
 from pathlib import Path
 
@@ -94,7 +95,23 @@ def _instance(raw: dict) -> Instance:
         owner=tags.get(OWNER_TAG),
         address=raw.get("PublicIpAddress") or None,
         launched_at=launched.timestamp() if launched is not None else None,
+        spot=raw.get("InstanceLifecycle") == "spot",
     )
+
+
+# A spot instance is asked for as a *persistent* request that *stops* the
+# instance on interruption: its disk survives, AWS starts it again when the
+# capacity is back, and it can be stopped and started by us like any other --
+# so the idle policy and a Start on its slots work unchanged, and a trainer
+# on it loses at most its in-flight generation, resuming from its own
+# checkpoint. (A one-time request would terminate on interruption and could
+# not be stopped at all.) The price of persistence is that the request
+# outlives the instance: terminating means cancelling the request first, or
+# it launches a replacement.
+SPOT_OPTIONS = {
+    "MarketType": "spot",
+    "SpotOptions": {"SpotInstanceType": "persistent", "InstanceInterruptionBehavior": "stop"},
+}
 
 
 def _call(fn, *args, **kwargs):
@@ -236,6 +253,7 @@ class AwsProvider:
             SecurityGroupIds=[self._security_group_id()],
             MinCount=1,
             MaxCount=1,
+            **({"InstanceMarketOptions": SPOT_OPTIONS} if request.spot else {}),
             UserData=user_data(self._registry),
             BlockDeviceMappings=[
                 {
@@ -255,7 +273,38 @@ class AwsProvider:
         instance = _instance(raw)
         instance.owner = request.owner  # tags are not always echoed on the run response
         instance.launched_at = instance.launched_at or time.time()
+        instance.spot = request.spot
+        if request.spot:
+            zone = raw.get("Placement", {}).get("AvailabilityZone")
+            instance.cost_per_hr = self._spot_price(request.type_id, zone)
         return instance
+
+    def _spot_price(self, type_id: str, zone: str | None) -> float | None:
+        """The current spot rate for `type_id` in `zone` (the region's lowest
+        when no zone is given); None when the history cannot be read, and the
+        catalog's rate stands in."""
+        try:
+            history = _call(
+                self._ec2.describe_spot_price_history,
+                InstanceTypes=[type_id],
+                ProductDescriptions=["Linux/UNIX"],
+                **({"AvailabilityZone": zone} if zone else {}),
+                StartTime=datetime.datetime.now(datetime.UTC),
+            )["SpotPriceHistory"]
+        except ProviderError:
+            return None
+        prices = [float(h["SpotPrice"]) for h in history]
+        return min(prices) if prices else None
+
+    def spot_prices(self) -> dict[str, float]:
+        """The region's lowest current spot rate per catalog type, for the
+        rent form; a type whose history cannot be read is left out."""
+        out = {}
+        for t in self.catalog():
+            price = self._spot_price(t.id, None)
+            if price is not None:
+                out[t.id] = price
+        return out
 
     def describe(self) -> dict[str, Instance]:
         pages = self._ec2.get_paginator("describe_instances").paginate(
@@ -276,6 +325,13 @@ class AwsProvider:
         _call(self._ec2.start_instances, InstanceIds=[instance_id])
 
     def terminate(self, instance_id: str):
+        """Terminate, cancelling a spot instance's persistent request first
+        (else the request launches a replacement)."""
+        found = _call(self._ec2.describe_instances, InstanceIds=[instance_id])["Reservations"]
+        raw = found[0]["Instances"][0] if found and found[0]["Instances"] else {}
+        request_id = raw.get("SpotInstanceRequestId")
+        if request_id:
+            _call(self._ec2.cancel_spot_instance_requests, SpotInstanceRequestIds=[request_id])
         _call(self._ec2.terminate_instances, InstanceIds=[instance_id])
 
     def refusal(self, error: ProviderError, type_id: str) -> str:
@@ -287,6 +343,12 @@ class AwsProvider:
                 f"AWS refused a {type_id}: the account's vCPU quota for that instance family "
                 f"is used up or still 0. Request an increase at {QUOTA_CONSOLE} (grants take a "
                 f"day or two), or pick a smaller type. (AWS: {error.detail})"
+            )
+        if code in ("MaxSpotInstanceCountExceeded", "SpotMaxPriceTooLow"):
+            return (
+                f"AWS refused a spot {type_id}: the account's spot vCPU quota for that family is "
+                f"used up or still 0, or spare capacity is priced above list. Request the quota "
+                f"at {QUOTA_CONSOLE}, or rent on-demand. (AWS: {error.detail})"
             )
         if code in ("InsufficientInstanceCapacity", "Unsupported"):
             return (

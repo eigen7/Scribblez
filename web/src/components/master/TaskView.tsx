@@ -27,7 +27,8 @@ type WorkerInfo = {
 // task): where its ssh slots run. `state` is the reconcile pass's probe.
 type MachineInfo = {
   name: string; provider: string; host: string; gpu_count: number | null;
-  instance_type: string | null; instance_id: string | null; cost_per_hr: number | null; spend: number;
+  instance_type: string | null; instance_id: string | null; spot: boolean;
+  cost_per_hr: number | null; spend: number;
   state: string; slots: string[]; exit_reason?: string; retry_in_s?: number;
 };
 
@@ -35,7 +36,10 @@ type MachineInfo = {
 type MachineType = {
   id: string; vcpus: number; gpu_count: number; gpu: string; arch: string; cost_per_hr: number;
 };
-type RentalOffer = { provider: string; account: string; types: MachineType[] };
+type RentalOffer = {
+  provider: string; account: string; types: MachineType[];
+  spot_prices: Record<string, number>;  // current spot rate by type id, where readable
+};
 
 // An instance the provider tagged ours that no task names (GET /api/cloud/orphans).
 type Orphan = { instance_id: string; type_id: string; state: string; owner: string | null; uptime_s: number | null };
@@ -338,12 +342,14 @@ function loadRentalOffer(): Promise<RentalOffer> {
 // The name is an alias for the tables and the instance's ownership tag;
 // left empty, the server picks one.
 function RentForm({ offer, busy, onRent }: {
-  offer: RentalOffer; busy: boolean; onRent: (name: string, typeId: string) => void;
+  offer: RentalOffer; busy: boolean; onRent: (name: string, typeId: string, spot: boolean) => void;
 }) {
   const types = offer.types;
   const [name, setName] = useState('');
   const [typeId, setTypeId] = useState(types[0]?.id ?? '');
+  const [spot, setSpot] = useState(false);
   const t = types.find((x) => x.id === typeId) ?? types[0];
+  const spotOf = (x: MachineType) => offer.spot_prices[x.id];
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ fontSize: 13, fontWeight: 600 }}>
@@ -364,13 +370,19 @@ function RentForm({ offer, busy, onRent }: {
             {types.map((x) => (
               <option key={x.id} value={x.id}>
                 {x.id} — {x.vcpus} vCPU{x.gpu ? `, ${x.gpu_count}× ${x.gpu}` : ''} — ${x.cost_per_hr.toFixed(3)}/hr
+                {spotOf(x) != null ? ` (spot $${spotOf(x).toFixed(3)})` : ''}
               </option>
             ))}
           </select>
         </label>
+        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4, paddingBottom: 6 }}
+          title="spare capacity at its market rate; AWS may stop the machine when it wants the capacity back, and starts it again when it is free (a trainer resumes from its checkpoint)">
+          <input type="checkbox" checked={spot} onChange={(e) => setSpot(e.target.checked)} />
+          spot{t && spotOf(t) != null ? ` ($${spotOf(t).toFixed(3)}/hr now)` : ''}
+        </label>
         <Button
           label={busy ? 'Working…' : 'Rent'} disabled={busy || !t}
-          onClick={() => onRent(name.trim(), t.id)}
+          onClick={() => onRent(name.trim(), t.id, spot)}
         />
       </div>
     </div>
@@ -445,7 +457,7 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
                 <tr key={m.name} style={{ borderTop: '1px solid #e2e8ee' }}>
                   <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{m.name}</td>
                   <td style={{ padding: '6px 14px 6px 0', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{m.host}</td>
-                  <td style={{ padding: '6px 14px 6px 0' }}>{m.instance_type ? `${m.provider} ${m.instance_type}` : m.provider}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}>{m.instance_type ? `${m.provider} ${m.instance_type}${m.spot ? ' spot' : ''}` : m.provider}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{m.gpu_count ?? '?'}</td>
                   <td style={{ padding: '6px 14px 6px 0', color: stateColors[m.state] ?? '#1a1f28', fontWeight: 600 }}>
                     {m.state}
@@ -506,7 +518,7 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
       {offer && offer.types.length > 0 && (
         <RentForm
           offer={offer} busy={busy}
-          onRent={(n, typeId) => post('/api/task/machines', { name: n, type_id: typeId })}
+          onRent={(n, typeId, spot) => post('/api/task/machines', { name: n, type_id: typeId, spot })}
         />
       )}
       {offer && (

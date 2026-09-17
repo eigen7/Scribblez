@@ -146,7 +146,13 @@ run that ends stops its machine), and **started** again when a slot on it is
 started, reading `launching` until it answers on its possibly new address. A
 launch or start AWS refuses -- the account's vCPU quota for the family, no
 capacity in the zone -- shows its reason and what to do on the machine's row
-and is retried with a growing delay. Remove **terminates** the instance and
+and is retried with a growing delay. The **spot** box rents spare capacity at
+its market rate (shown beside each type, and recorded as the machine's rate):
+AWS may stop such a machine when it wants the capacity back and starts it
+again when it is free, so it behaves like an on-demand machine that was
+stopped and started -- a trainer on it resumes from its own checkpoint,
+losing at most the generation in flight -- and Remove cancels the request
+before terminating. Remove **terminates** the instance and
 rolls its spend into the task's total; a machine whose instance is gone
 (terminated in the console, a spot interruption) reads `gone` and its slots
 are removable outright, since their containers went with the disk. Every pass

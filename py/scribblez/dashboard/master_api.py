@@ -264,7 +264,9 @@ class MachineAddHandler(_MasterBase):
             task = self.task_or_fail(spec, body["tag"])
             name = (body.get("name") or "").strip()
             if body.get("type_id"):
-                m = self.manager.rent_machine(spec, task, name, body["type_id"])
+                m = self.manager.rent_machine(
+                    spec, task, name, body["type_id"], spot=bool(body.get("spot"))
+                )
             else:
                 m = self.manager.add_machine(
                     spec,

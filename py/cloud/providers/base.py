@@ -40,6 +40,9 @@ class LaunchRequest:
     # the dashboard recognizes an instance by. An instance tagged with a value
     # no task's machines carry is an orphan.
     owner: str
+    # Rent spare capacity at its market rate, with the provider free to
+    # interrupt (stop) the instance when it wants the capacity back.
+    spot: bool = False
 
 
 @dataclass
@@ -54,6 +57,8 @@ class Instance:
     owner: str | None  # the ownership tag, None on an instance that lacks it
     address: str | None  # public address while it has one
     launched_at: float | None
+    spot: bool = False
+    cost_per_hr: float | None = None  # a spot instance's rate at launch; None: the catalog's
 
 
 class Provider(Protocol):
@@ -63,6 +68,8 @@ class Provider(Protocol):
     ready_file: str  # the marker the first-boot script writes last
 
     def catalog(self) -> list[MachineType]: ...
+
+    def spot_prices(self) -> dict[str, float]: ...  # current spot rate by catalog type id
 
     def account(self) -> str: ...  # who and where machines are rented as, for the form
 

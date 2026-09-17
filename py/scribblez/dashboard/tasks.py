@@ -105,6 +105,9 @@ class MachineRecord:
     arch: str | None = None  # rented: the bundle arch its type's CPU family builds for
     instance_id: str | None = None  # rented: the provider's instance
     instance_type: str | None = None  # rented: the catalog type
+    spot: bool = (
+        False  # rented: spare capacity at market rate, interruptible (stopped) by the provider
+    )
     region: str | None = None
     cost_per_hr: float | None = None  # rented: the catalog rate
     launched_at: float | None = None
