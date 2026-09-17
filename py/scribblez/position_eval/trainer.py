@@ -58,9 +58,12 @@ scripts/position_eval/train.py CLI for headless debugging.
 import functools
 import itertools
 import os
+import queue
 import sys
+import threading
 import time
 from dataclasses import asdict
+from pathlib import Path
 
 import torch
 
@@ -144,17 +147,119 @@ def _rows_left(params, state: GenerationalState) -> bool:
     return params.max_rows == 0 or state.rows_trained < params.max_rows
 
 
+# How many generations' deliveries may wait behind the one in flight before
+# the training thread blocks on submitting the next: a bucket that has fallen
+# this far behind is a problem to stop for, not to keep piling onto.
+MAX_PENDING_DELIVERIES = 2
+
+
+class OutputDeliverer:
+    """Delivers a generation's outputs off the training critical path.
+
+    One background thread drains a FIFO of delivery steps submitted by the
+    training thread, so the ~150 MB a remote trainer sends per generation
+    (export, checkpoint, record) uploads while the next generation trains
+    instead of holding it up -- and so the steps still complete in
+    submission order, which is what lets a record be the marker that
+    everything before it is in place. The queue is bounded: submitting past
+    MAX_PENDING_DELIVERIES blocks. A failed step stops the thread and is
+    raised from the next `submit` or from `drain`, as the runner's own
+    failure rather than a silent loss in the background.
+    """
+
+    def __init__(self, max_pending: int = MAX_PENDING_DELIVERIES):
+        self._pending: queue.Queue = queue.Queue(maxsize=max_pending)
+        self._done: queue.Queue = queue.Queue()
+        self._error: Exception | None = None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def submit(self, what: str, fn):
+        """Queue `fn` (called with no arguments on the delivery thread);
+        blocks while the queue is full."""
+        while True:
+            self._raise_failure()
+            try:
+                self._pending.put((what, fn), timeout=1.0)
+                return
+            except queue.Full:
+                continue
+
+    def collect(self) -> list[tuple[str, float]]:
+        """(what, seconds) for every step finished since the last call."""
+        out = []
+        while True:
+            try:
+                out.append(self._done.get_nowait())
+            except queue.Empty:
+                break
+        self._raise_failure()
+        return out
+
+    def drain(self):
+        """Block until everything submitted has been delivered. Call before
+        the runner exits, on SIGTERM too, so nothing submitted is lost."""
+        self._pending.put(None)
+        self._thread.join()
+        self._raise_failure()
+
+    def _raise_failure(self):
+        if self._error is not None:
+            raise self._error
+
+    def _run(self):
+        while True:
+            item = self._pending.get()
+            if item is None:
+                return
+            what, fn = item
+            t0 = time.monotonic()
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001 -- re-raised by submit()/drain(), not lost
+                self._error = RuntimeError(f"delivering {what} failed: {e}")
+                return
+            self._done.put((what, time.monotonic() - t0))
+
+
+def _snapshot(path: Path, gen: int) -> Path:
+    """A hard link to `path` as it is now, for a delivery that runs while the
+    trainer goes on rewriting `path` (the rolling checkpoint, the cursor):
+    a later rewrite replaces the name, so the link keeps this version."""
+    snap = path.with_name(f"{path.name}.gen{gen}")
+    snap.unlink(missing_ok=True)
+    os.link(path, snap)
+    return snap
+
+
+def _deliver_generation(
+    sink, paths: TagPaths, gen: int, checkpoint_snap, state_snap, recorder, staged
+):
+    """One generation's deliveries, in the order their meaning requires: the
+    export (and what it loads beside), the checkpoint a restart resumes
+    from, the cursor, and last the record that says the rest is there."""
+    for sidecar in paths.onnx_sidecars:
+        sink.deliver_output(sidecar, f"models/{sidecar.name}", keep=True)
+    sink.deliver_output(paths.onnx_path(gen), f"models/{paths.onnx_path(gen).name}")
+    sink.deliver_output(checkpoint_snap, "checkpoints/model.pt")
+    sink.deliver_output(state_snap, "train_state.json")
+    recorder.deliver_staged(staged)
+
+
 def _checkpoint_and_eval(
     model, optimizer, recorder, paths, device, params, state, gen, result, elapsed, optim_arm, ctx
 ):
     """Export ONNX, evaluate, save the rolling checkpoint, publish the cursor,
-    and last of all deliver the generation's record (its metrics + eval, keyed
-    on the generation index `gen`, with the rows-clock stored as `positions`).
+    and hand the generation's deliveries -- ending with its record (its
+    metrics + eval, keyed on the generation index `gen`, with the rows-clock
+    stored as `positions`) -- to the delivery thread.
 
     The record goes last because it is what makes this generation visible to
     the Loss tab, so everything it stands for (the ONNX export the Positions
-    tab runs on demand, the checkpoint a restart resumes from) is on disk
-    before anything can ask for it."""
+    tab runs on demand, the checkpoint a restart resumes from) is in place
+    before anything can ask for it. Everything delivered is written here
+    first, on this thread; the checkpoint and the cursor, which the next
+    generation rewrites, go as snapshots."""
     sys.stdout.write("\n")
     avg = result.losses
     lr_now = optim_arm.current
@@ -204,15 +309,22 @@ def _checkpoint_and_eval(
         ctx["scalar_size"],
         opp_leave_input=params.face_up_leaves,
     )
-    sink = ctx["sink"]
-    for sidecar in paths.onnx_sidecars:
-        sink.deliver_output(sidecar, f"models/{sidecar.name}", keep=True)
-    sink.deliver_output(paths.onnx_path(ci), f"models/{paths.onnx_path(ci).name}")
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
-    sink.deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
     _publish_train_state(paths, state)
-    sink.deliver_output(paths.train_state_path, "train_state.json", keep=True)
-    recorder.commit_generation(ci, state.rows_trained, record)
+    staged = recorder.stage_generation(ci, state.rows_trained, record)
+    ctx["deliverer"].submit(
+        f"generation {ci}",
+        functools.partial(
+            _deliver_generation,
+            ctx["sink"],
+            paths,
+            ci,
+            _snapshot(paths.rolling_checkpoint, ci),
+            _snapshot(paths.train_state_path, ci),
+            recorder,
+            staged,
+        ),
+    )
     return time.time() - t_eval
 
 
@@ -313,8 +425,15 @@ def train_one_generation(
     )
     optim_arm.train_mode()
     if ctx["stats"] is not None:
+        # The upload time reported is the last delivery to have finished --
+        # usually the previous generation's, since this one's is under way.
+        finished = ctx["deliverer"].collect()
         ctx["stats"].cycle_done(
-            {"train_s": elapsed, "eval_s": eval_seconds},
+            {
+                "train_s": elapsed,
+                "eval_s": eval_seconds,
+                "upload_s": finished[-1][1] if finished else 0.0,
+            },
             units=state.rows_trained - rows_before,
             nbytes=0,
         )
@@ -466,6 +585,7 @@ def run(ctx: WorkerContext) -> int:
         "scalar_size": scalar_size,
         "position_eval_quality": load_position_eval_quality(spatial_planes, params.face_up_leaves),
         "stats": WorkerStats(ctx),
+        "deliverer": OutputDeliverer(),
     }
 
     restore_from_sink(paths, ctx.sink)
@@ -478,4 +598,8 @@ def run(ctx: WorkerContext) -> int:
         )
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")
+    finally:
+        # Whatever is still uploading goes before the process does: a stop
+        # (docker's SIGTERM grace) is long enough for a generation's outputs.
+        run_ctx["deliverer"].drain()
     return 0

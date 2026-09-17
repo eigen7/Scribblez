@@ -35,7 +35,9 @@ from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR
 
-TRAINER_STATS = StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"})
+TRAINER_STATS = StatsSpec(
+    unit="rows", phases={"train_s": "train", "eval_s": "eval", "upload_s": "upload"}
+)
 
 # Parameter profiles (WorkloadSpec.profiles): one recipe per trunk, the values
 # the new-tag form and the CLI's --profile start from. Each is a partial

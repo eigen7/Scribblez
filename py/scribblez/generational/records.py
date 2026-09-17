@@ -38,6 +38,7 @@ import json
 import os
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -97,30 +98,52 @@ class TrainRecorder:
         `positions` rows-clock included), `preds` maps a PRED_TABLES name to
         that table's arrays. Call once the generation's other outputs are in
         place -- this record is what says they are."""
+        self.deliver_staged(self.stage_generation(generation, positions, metrics, preds))
+
+    def stage_generation(
+        self, generation: int, positions: int, metrics: dict, preds: dict | None = None
+    ) -> "StagedGeneration":
+        """The first half of commit_generation, for a trainer that delivers
+        off its training thread: take the record and the prediction arrays
+        as they are now (the control events held so far go with this
+        generation and are cleared), leaving only the pushes for
+        deliver_staged."""
         record = {
             "generation": int(generation),
             "positions": int(positions),
             "metrics": {k: _jsonable(v) for k, v in metrics.items()},
             "control_events": self._events,
-            "preds": [],
+            "preds": sorted(preds) if preds else [],
         }
-        if preds:
-            self._push_preds(generation, preds)
-            record["preds"] = sorted(preds)
-        self._sink.push_json(generation_record_rel(generation), record)
         self._events = []
+        return StagedGeneration(generation, record, _preds_file(preds) if preds else None)
 
-    def _push_preds(self, generation: int, preds: dict):
-        arrays = {
-            f"{table}/{name}": np.ascontiguousarray(preds[table][name])
-            for table in preds
-            for name in PRED_TABLES[table].arrays
-        }
-        fd, tmp = tempfile.mkstemp(suffix=".npz")
-        with os.fdopen(fd, "wb") as f:
-            np.savez(f, **arrays)
-        os.chmod(tmp, 0o644)  # mkstemp's private mode would follow the file into the tag
-        self._sink.push_file(Path(tmp), generation_preds_rel(generation))
+    def deliver_staged(self, staged: "StagedGeneration"):
+        """The pushes: the prediction arrays, then the record that names
+        them."""
+        if staged.preds_file is not None:
+            self._sink.push_file(staged.preds_file, generation_preds_rel(staged.generation))
+        self._sink.push_json(generation_record_rel(staged.generation), staged.record)
+
+
+@dataclass
+class StagedGeneration:
+    generation: int
+    record: dict
+    preds_file: Path | None  # a temp file, moved into the tag by the push
+
+
+def _preds_file(preds: dict) -> Path:
+    arrays = {
+        f"{table}/{name}": np.ascontiguousarray(preds[table][name])
+        for table in preds
+        for name in PRED_TABLES[table].arrays
+    }
+    fd, tmp = tempfile.mkstemp(suffix=".npz")
+    with os.fdopen(fd, "wb") as f:
+        np.savez(f, **arrays)
+    os.chmod(tmp, 0o644)  # mkstemp's private mode would follow the file into the tag
+    return Path(tmp)
 
 
 def read_controls(sink) -> dict[str, float]:
