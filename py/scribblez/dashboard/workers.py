@@ -433,6 +433,10 @@ class WorkerManager:
         # instance it tagged ours, refreshed by the reconcile pass like the
         # container probes above.
         self._instances: tuple[dict[str, Instance], float] = ({}, 0.0)
+        # Why the pass's last fleet listing failed (no credentials, a provider
+        # error), shown by the burn strip in place of a listing; None when
+        # the last one succeeded.
+        self._fleet_error: str | None = None
         self._provider_client: Provider | None = None
         self._account: str | None = None  # the provider's account line, once asked
         # (spot rate by type, when fetched): the rent form's, refreshed lazily.
@@ -913,16 +917,77 @@ class WorkerManager:
             and self._machine_states.get(_machine_key(spec, task.tag, w.machine)) == "gone"
         )
 
+    def _list_fleet(self):
+        """The pass's fleet step: list every instance the provider tagged
+        ours, whether or not any task names one. The per-task machine step
+        lists only for tasks with rented machines, so without this a
+        task.json that lost its machines would leave their instances
+        unlisted -- billing, and invisible. A failure (no credentials, the
+        provider unreachable) is kept for the burn strip to show, and
+        printed once per change rather than every pass."""
+        try:
+            self._instance_index(observe=True)
+            error = None
+        except Exception as e:  # noqa: BLE001 -- the fleet step must not stop the pass
+            error = str(e)
+        if error != self._fleet_error and error is not None:
+            print(f"fleet listing: {error}")
+        self._fleet_error = error
+
+    def fleet(self) -> dict:
+        """What the burn strip shows: every non-terminated instance tagged
+        ours with its hourly rate, and the rate they add up to right now
+        (those pending or running -- what _accrue_machine charges for).
+        Read from the last listing, like orphans and machine_status;
+        `observed_at` lets the strip flag a listing that has stopped
+        refreshing."""
+        instances, at = self._instances
+        owned = self._owned()
+        rows = [
+            {
+                "instance_id": inst.id,
+                "type_id": inst.type_id,
+                "state": inst.state,
+                "owner": inst.owner,
+                "tracked": inst.owner in owned,
+                "spot": inst.spot,
+                "cost_per_hr": self._rate(inst),
+                "uptime_s": int(time.time() - inst.launched_at) if inst.launched_at else None,
+            }
+            for inst in instances.values()
+            if inst.state != "terminated"
+        ]
+        return {
+            "observed_at": at or None,
+            "error": self._fleet_error,
+            "instances": rows,
+            "burn_per_hr": sum(
+                r["cost_per_hr"] or 0.0 for r in rows if r["state"] in ("pending", "running")
+            ),
+        }
+
+    def _rate(self, inst: Instance) -> float | None:
+        """An instance's hourly rate: a spot instance's own, else its type's
+        catalog rate (None for a type the catalog no longer lists)."""
+        if inst.cost_per_hr is not None:
+            return inst.cost_per_hr
+        mtype = next((t for t in self._provider().catalog() if t.id == inst.type_id), None)
+        return mtype.cost_per_hr if mtype is not None else None
+
+    def _owned(self) -> set[str]:
+        """The ownership tags every task's machines carry."""
+        return {
+            _owner(spec, task.tag, m.name)
+            for spec, task in self._all_tasks()
+            for m in task.machines
+        }
+
     def orphans(self, observe: bool = False) -> list[dict]:
         """Instances the provider tagged ours that no task's machines name:
         shown with a Terminate button, never terminated on their own (a
         task.json restored from an older copy must not kill a running
         experiment)."""
-        owned = {
-            _owner(spec, task.tag, m.name)
-            for spec, task in self._all_tasks()
-            for m in task.machines
-        }
+        owned = self._owned()
         return [
             {
                 "instance_id": inst.id,
@@ -1345,6 +1410,7 @@ class WorkerManager:
         the provider's instance listing everything else reads, which also
         makes it the spend-accrual heartbeat when no browser is polling.
         """
+        await self.offload(self._list_fleet)
         for spec, task in self._all_tasks():
             if spec.scheduler:
                 try:

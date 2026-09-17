@@ -26,6 +26,7 @@ from scribblez.dashboard.workers import (
     WorkerManager,
     _container_name,
     _key,
+    _owner,
 )
 from scribblez.paths import TagPaths
 from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
@@ -631,6 +632,62 @@ def test_orphans_are_our_instances_no_task_names(rented, manager, spec, task, mo
     assert orphans[0]["owner"] == "position_eval/old/g" and orphans[0]["uptime_s"] >= 120
     manager.terminate_orphan("i-7")
     assert ("terminate", "i-7") in provider.calls
+
+
+def test_fleet_adds_up_what_bills_whoever_tracks_it(rented, manager, spec, task, monkeypatch):
+    """The burn strip's view: every instance tagged ours, the task's own and
+    an orphan alike, each at its rate -- the catalog's for on-demand, its own
+    for spot -- with only pending/running ones in the sum."""
+    provider, m = rented
+    provider.instances["i-7"] = Instance(
+        id="i-7", state="running", type_id="c7a.4xlarge", owner="position_eval/old/g",
+        address=None, launched_at=time.time() - 120,
+    )  # fmt: skip
+    provider.instances["i-8"] = Instance(
+        id="i-8", state="stopped", type_id="g6.2xlarge", owner=_owner(spec, "t", "m1"),
+        address=None, launched_at=None, spot=True, cost_per_hr=0.4,
+    )  # fmt: skip
+    provider.instances["i-9"] = Instance(
+        id="i-9", state="terminated", type_id="c7a.4xlarge", owner=None, address=None,
+        launched_at=None,
+    )  # fmt: skip
+    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    manager._instances = ({}, 0.0)
+    manager._list_fleet()
+    fleet = manager.fleet()
+    assert fleet["error"] is None and fleet["observed_at"] is not None
+    by_id = {r["instance_id"]: r for r in fleet["instances"]}
+    assert set(by_id) == {"i-1", "i-7", "i-8"}
+    assert by_id["i-1"]["tracked"] and by_id["i-1"]["cost_per_hr"] == 1.0
+    assert not by_id["i-7"]["tracked"] and by_id["i-7"]["uptime_s"] >= 120
+    assert by_id["i-8"]["spot"] and by_id["i-8"]["cost_per_hr"] == 0.4
+    assert fleet["burn_per_hr"] == pytest.approx(1.5)
+
+
+def test_fleet_step_lists_without_rented_machines_and_keeps_a_failure(manager, monkeypatch):
+    """The step runs whether or not any task names a machine (a task.json
+    that lost its machines must not hide their instances), and a listing
+    that fails leaves its reason for the strip rather than a stale zero."""
+    provider = _FakeProvider()
+    provider.instances["i-3"] = Instance(
+        id="i-3", state="running", type_id="c7a.4xlarge", owner="position_eval/lost/g",
+        address=None, launched_at=time.time(),
+    )  # fmt: skip
+    monkeypatch.setattr(manager, "_provider", lambda: provider)
+    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([]))
+    manager._list_fleet()
+    fleet = manager.fleet()
+    assert [r["instance_id"] for r in fleet["instances"]] == ["i-3"]
+    assert fleet["burn_per_hr"] == 0.5 and not fleet["instances"][0]["tracked"]
+
+    def broken():
+        raise ProviderError("RequestExpired", "the clock is off")
+
+    monkeypatch.setattr(manager, "_provider", broken)
+    manager._instances = ({}, 0.0)
+    manager._list_fleet()
+    fleet = manager.fleet()
+    assert fleet["error"] == "RequestExpired" and fleet["observed_at"] is None
 
 
 # ---- finished slots ----------------------------------------------------------
