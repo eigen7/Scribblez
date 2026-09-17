@@ -417,12 +417,16 @@ class _FakeProvider:
     def prepare(self):
         pass
 
+    def spot_prices(self):
+        return {"g6.2xlarge": 0.4}
+
     def launch(self, request):
         if self.refuse is not None:
             raise self.refuse
         inst = Instance(
             id=f"i-{len(self.instances) + 1}", state="pending", type_id=request.type_id,
             owner=request.owner, address=None, launched_at=time.time(),
+            spot=request.spot, cost_per_hr=0.4 if request.spot else None,
         )  # fmt: skip
         self.instances[inst.id] = inst
         self.calls.append(("launch", request.type_id))
@@ -494,6 +498,17 @@ def test_a_rented_machine_without_a_name_gets_one(rented, manager, spec, task):
     assert (second.name, third.name) == ("aws-1", "aws-2")
     assert manager.rental_offer()["account"].startswith("AWS account 1")
     assert [t["id"] for t in manager.rental_offer()["types"]] == ["g6.2xlarge", "c7a.4xlarge"]
+
+
+def test_a_spot_machine_records_its_market_rate(rented, manager, spec, task):
+    provider, m = rented
+    s = manager.rent_machine(spec, task, "", "g6.2xlarge", spot=True)
+    assert s.spot and s.cost_per_hr == 0.4 and provider.instances[s.instance_id].spot
+    assert not m.spot and m.cost_per_hr == 1.0
+    offer = manager.rental_offer()
+    assert offer["spot_prices"] == {"g6.2xlarge": 0.4}
+    (_, info) = manager.machine_status(spec, task)
+    assert info["spot"] and info["cost_per_hr"] == 0.4
 
 
 def test_a_refused_launch_reaches_the_form_and_records_nothing(

@@ -1,7 +1,7 @@
 # Plan: rented machines -- AWS instances as ssh machines
 
-Status: plan-reviewed; m1-m3 implemented (machines on the ssh kind, the
-trainer on ssh, the AWS provider), m3b and m4 pending. Follows
+Status: plan-reviewed; m1-m3b implemented (machines on the ssh kind, the
+trainer on ssh, the AWS provider, spot), m4 pending. Follows
 [cloud_training_plan.md](cloud_training_plan.md), whose trainer I/O
 contract and bucket legs (3a-3c) this plan keeps whole; it replaces that
 plan's Runpod cloud slot.
@@ -178,7 +178,8 @@ bucket-delivering slot, whose outputs are not on the machine to collect.
    policy: `ec2:RunInstances, DescribeInstances, DescribeInstanceTypes,
    StartInstances, StopInstances, TerminateInstances, CreateTags,
    CreateKeyPair, DescribeKeyPairs, CreateSecurityGroup,
-   AuthorizeSecurityGroupIngress, DescribeSecurityGroups` and
+   AuthorizeSecurityGroupIngress, DescribeSecurityGroups,
+   DescribeSpotPriceHistory, CancelSpotInstanceRequests` and
    `ssm:GetParameter` (the AMI lookup). The key goes in the credentials
    file under a new `aws` section with the region.
 2. Quotas, on day one, since the grant takes a day or two: "Running
@@ -218,9 +219,11 @@ are one row each when a run wants them.
 
 ## Not in this slice
 
-- Spot (m3b, below): the price at launch from the instance's actual zone,
-  the `gone`-by-interruption state, offering it only for interruptible
-  roles.
+- (Spot landed in m3b as a *persistent, stop-on-interruption* request: the
+  instance's disk survives an interruption, AWS restarts it when capacity
+  returns, and stop/start/idle work as for on-demand -- so it is offered
+  for any role; a trainer loses at most its in-flight generation. The rate
+  at launch is the zone's spot price.)
 - A custom AMI with the images baked in (cloud-init's pull is a few
   minutes of `launching` per fresh machine; a stopped machine keeps them).
 - Automatic relaunch after a spot interruption; automatic placement or an
@@ -263,9 +266,9 @@ are one row each when a run wants them.
    fraction, and the cost line; whether the stock AMI runs the `-torch`
    image under `--gpus all`, and whether the dev container reaches a
    public address with the ssh options it uses, are learned here too.
-4. **PR m3b -- spot.** Offered when every role being placed is
-   interruptible; the price at launch from the instance's zone; `gone` by
-   interruption, with the slots' removal rule above.
+4. **PR m3b -- spot.** A persistent stop-on-interruption request, so the
+   machine model is unchanged; the rate at launch from the instance's
+   zone; current rates on the rent form.
 5. **PR m4 -- Runpod out.** After m3's run has trained a generation: the
    `cloud` kind, `runpod_api.py`, `cloud_fleet.py`'s pod commands, the pod
    paths in the worker image's bootstrap (the container flow stays; it is

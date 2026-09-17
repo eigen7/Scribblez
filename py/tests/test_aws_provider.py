@@ -64,12 +64,28 @@ class _Ec2:
             "State": {"Name": "pending"},
             "InstanceType": kw["InstanceType"],
             "LaunchTime": _LAUNCHED,
+            "Placement": {"AvailabilityZone": "us-east-1c"},
         }
+        if "InstanceMarketOptions" in kw:
+            raw["InstanceLifecycle"] = "spot"
+            raw["SpotInstanceRequestId"] = "sir-1"
         self.instances.append({**raw, "Tags": kw["TagSpecifications"][0]["Tags"]})
         return {"Instances": [raw]}
 
     def get_paginator(self, name):
         return _Paginator([{"Reservations": [{"Instances": list(self.instances)}]}])
+
+    def describe_instances(self, **kw):
+        wanted = set(kw.get("InstanceIds", []))
+        found = [i for i in self.instances if i["InstanceId"] in wanted]
+        return {"Reservations": [{"Instances": found}] if found else []}
+
+    def describe_spot_price_history(self, **kw):
+        self.calls.append(("spot_history", kw["InstanceTypes"][0], kw.get("AvailabilityZone")))
+        return {"SpotPriceHistory": [{"SpotPrice": "0.4123"}, {"SpotPrice": "0.3900"}]}
+
+    def cancel_spot_instance_requests(self, **kw):
+        self.calls.append(("cancel_spot", kw["SpotInstanceRequestIds"]))
 
     def stop_instances(self, **kw):
         self.calls.append(("stop", kw["InstanceIds"]))
@@ -189,3 +205,49 @@ def test_catalog_types_name_built_arches():
 
 def test_the_account_line_names_account_user_and_region(provider):
     assert provider.account() == "AWS account 832300492506 as user scribblez, us-east-1"
+
+
+def test_a_spot_launch_is_a_persistent_stop_on_interruption_request(provider):
+    """So the instance's disk survives an interruption, AWS restarts it, and
+    stop/start/idle work as for on-demand; the rate at launch is the zone's."""
+    inst = provider.launch(LaunchRequest("g6.2xlarge", "position_eval/t/m1", spot=True))
+    run = next(kw for op, kw in provider.ec2.calls if op == "run")
+    assert run["InstanceMarketOptions"] == {
+        "MarketType": "spot",
+        "SpotOptions": {"SpotInstanceType": "persistent", "InstanceInterruptionBehavior": "stop"},
+    }
+    assert inst.spot and inst.cost_per_hr == 0.39
+    assert ("spot_history", "g6.2xlarge", "us-east-1c") in provider.ec2.calls
+    listed = provider.describe()["i-1"]
+    assert listed.spot
+
+
+def test_an_on_demand_launch_carries_no_market_options_and_no_rate(provider):
+    inst = provider.launch(LaunchRequest("g6.2xlarge", "x"))
+    run = next(kw for op, kw in provider.ec2.calls if op == "run")
+    assert "InstanceMarketOptions" not in run
+    assert not inst.spot and inst.cost_per_hr is None
+
+
+def test_terminating_a_spot_instance_cancels_its_request_first(provider):
+    """A persistent request outlives its instance and would launch a
+    replacement."""
+    provider.launch(LaunchRequest("g6.2xlarge", "x", spot=True))
+    provider.ec2.calls.clear()
+    provider.terminate("i-1")
+    assert provider.ec2.calls == [("cancel_spot", ["sir-1"]), ("terminate", ["i-1"])]
+    provider.ec2.instances.clear()
+    provider.launch(LaunchRequest("g6.2xlarge", "x"))
+    provider.ec2.calls.clear()
+    provider.terminate("i-1")
+    assert provider.ec2.calls == [("terminate", ["i-1"])]
+
+
+def test_spot_prices_cover_the_catalog(provider):
+    prices = provider.spot_prices()
+    assert set(prices) == {t.id for t in aws.CATALOG}
+    assert all(p == 0.39 for p in prices.values())
+
+
+def test_spot_refusals_name_the_spot_quota(provider):
+    assert "spot" in provider.refusal(ProviderError("MaxSpotInstanceCountExceeded"), "g6")

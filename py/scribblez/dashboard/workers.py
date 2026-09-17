@@ -130,6 +130,8 @@ OBSERVATION_TTL_SECONDS = 5.0
 IDLE_STOP_SECONDS = 600.0
 # Per-machine key material for rented machines (known_hosts files).
 MACHINES_DIR = Path("/workspace/mount/cloud/machines")
+# How long the rent form's spot rates are served from the last fetch.
+SPOT_PRICES_TTL_SECONDS = 300.0
 # A rented instance whose ssh does not answer is still coming up for this
 # long after its launch or start before it reads as unreachable.
 BOOT_GRACE_SECONDS = 300.0
@@ -518,6 +520,8 @@ class WorkerManager:
         self._instances: tuple[dict[str, Instance], float] = ({}, 0.0)
         self._provider_client: Provider | None = None
         self._account: str | None = None  # the provider's account line, once asked
+        # (spot rate by type, when fetched): the rent form's, refreshed lazily.
+        self._spot_prices: tuple[dict[str, float], float] = ({}, 0.0)
         # Where every blocking step runs (see _offload). One thread: the point
         # is to keep the event loop free, not to do two of these at once.
         self._blocking = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-blocking")
@@ -989,13 +993,18 @@ class WorkerManager:
         provider = self._provider()
         if self._account is None:
             self._account = provider.account()
+        if time.time() - self._spot_prices[1] >= SPOT_PRICES_TTL_SECONDS:
+            self._spot_prices = (provider.spot_prices(), time.time())
         return {
             "provider": provider.name,
             "account": self._account,
             "types": [asdict(t) for t in provider.catalog()],
+            "spot_prices": self._spot_prices[0],
         }
 
-    def rent_machine(self, spec, task: tasks.TaskRecord, name: str, type_id: str):
+    def rent_machine(
+        self, spec, task: tasks.TaskRecord, name: str, type_id: str, *, spot: bool = False
+    ):
         """Launch an instance of `type_id` for the task and record it as one
         of its machines, under `name` or a generated one. A refusal (a quota
         of 0, no capacity) reaches the form as the provider's sentence;
@@ -1006,7 +1015,7 @@ class WorkerManager:
         mtype = next((t for t in provider.catalog() if t.id == type_id), None)
         assert mtype is not None, f"no machine type '{type_id}'"
         try:
-            inst = provider.launch(LaunchRequest(type_id, _owner(spec, task.tag, name)))
+            inst = provider.launch(LaunchRequest(type_id, _owner(spec, task.tag, name), spot=spot))
         except ProviderError as e:
             raise AssertionError(provider.refusal(e, type_id)) from e
         known_hosts = MACHINES_DIR / name / "known_hosts"
@@ -1022,8 +1031,9 @@ class WorkerManager:
             gpu_count=mtype.gpu_count,
             instance_id=inst.id,
             instance_type=mtype.id,
+            spot=spot,
             region=getattr(provider, "region", None),
-            cost_per_hr=mtype.cost_per_hr,
+            cost_per_hr=inst.cost_per_hr if inst.cost_per_hr is not None else mtype.cost_per_hr,
             launched_at=inst.launched_at or time.time(),
         )
         _accrue_machine(m, True)
@@ -1122,6 +1132,7 @@ class WorkerManager:
                 "gpu_count": m.gpu_count,
                 "instance_type": m.instance_type,
                 "instance_id": m.instance_id,
+                "spot": m.spot,
                 "cost_per_hr": m.cost_per_hr,
                 "spend": m.spend,
                 "state": state,
