@@ -93,8 +93,14 @@ class LocalSink:
 
     def deliver_output(self, src: Path, rel_path: str, *, keep: bool = False):
         """An output written at its place under the tag root is already
-        delivered."""
-        assert src == self._root / rel_path, (src, rel_path)
+        delivered. `src` may instead be a snapshot of it taken beside it (a
+        trainer delivering off its training thread links one so the file it
+        keeps rewriting is not the one in flight); with nothing to send, the
+        snapshot is just dropped unless `keep`."""
+        dest = self._root / rel_path
+        assert dest.is_file(), (src, rel_path)
+        if src != dest and not keep:
+            src.unlink()
 
 
 class R2Sink:
