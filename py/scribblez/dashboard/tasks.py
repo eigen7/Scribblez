@@ -20,7 +20,7 @@ import shutil
 import tempfile
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from scribblez.dashboard.worker_stats_figures import read_stats
@@ -167,10 +167,22 @@ _records: dict[Path, tuple[TaskRecord, int]] = {}
 _records_lock = threading.Lock()
 
 
+def _declared(cls, raw: dict) -> dict:
+    """`raw` restricted to `cls`'s fields: a stored record keeps every field
+    its writer had, so a field removed since is dropped on read (and gone from
+    the file on the next save) rather than failing the whole load."""
+    names = {f.name for f in fields(cls)}
+    return {k: v for k, v in raw.items() if k in names}
+
+
+def _from_stored(cls, raw: dict):
+    return cls(**_declared(cls, raw))
+
+
 def _read_task(path: Path) -> TaskRecord:
-    raw = json.loads(path.read_text())
-    raw["workers"] = [WorkerRecord(**w) for w in raw.get("workers", [])]
-    raw["machines"] = [MachineRecord(**m) for m in raw.get("machines", [])]
+    raw = _declared(TaskRecord, json.loads(path.read_text()))
+    raw["workers"] = [_from_stored(WorkerRecord, w) for w in raw.get("workers", [])]
+    raw["machines"] = [_from_stored(MachineRecord, m) for m in raw.get("machines", [])]
     return TaskRecord(**raw)
 
 

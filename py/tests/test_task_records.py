@@ -74,3 +74,27 @@ def test_machines_round_trip(spec):
     assert loaded.machine("m1").host == "ubuntu@1.2.3.4"
     assert loaded.machine("m1").gpu_count == 1
     assert loaded.slots_on("m1") == []
+
+
+def test_fields_a_record_no_longer_declares_are_dropped_on_read(spec):
+    """A task.json written before a record field was removed still loads:
+    the stale keys are dropped, and the next save writes the file without
+    them."""
+    task = _save(spec)
+    task.workers.append(
+        tasks.WorkerRecord(worker_id="w0", role="generate", kind="local", desired_state="paused")
+    )
+    tasks.save_task(spec, task)
+    path = tasks.task_path(spec, "t")
+    raw = json.loads(path.read_text())
+    raw["workers"][0]["pod_id"] = "abc"
+    raw["workers"][0]["spend"] = 1.5
+    raw["gone"] = True
+    path.write_text(json.dumps(raw))
+    stamp = path.stat().st_mtime_ns + 1_000_000
+    os.utime(path, ns=(stamp, stamp))
+    loaded = tasks.load_task(spec, "t")
+    assert loaded.workers[0].worker_id == "w0"
+    tasks.save_task(spec, loaded)
+    raw = json.loads(path.read_text())
+    assert "gone" not in raw and "pod_id" not in raw["workers"][0]
