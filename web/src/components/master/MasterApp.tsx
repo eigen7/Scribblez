@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getJSON, postJSON } from '../../lib/api';
+import BurnStrip from './BurnStrip';
 import TaskView from './TaskView';
 
 // The master dashboard: the entrypoint for all work. Pick a workload, then a
@@ -482,6 +483,7 @@ export default function MasterApp() {
       background: '#f4f6f8', minHeight: '100vh',
     }}>
       <div className="page-cap">
+        <BurnStrip onOpen={(w, tag) => { setWorkloadName(w); setOpenTag(tag); }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
           <strong style={{ fontSize: 19 }}>Scribblez</strong>
           <label style={{ fontSize: 15 }}>
