@@ -8,19 +8,16 @@ the generic per-role worker Stats data. Registered alongside the data plane by
 api.make_app().
 
 Expected client errors (bad params, unknown tags, missing cloud credentials,
-Runpod failures) return 400 with {"error": ...} rather than a stack trace.
+provider refusals) return 400 with {"error": ...} rather than a stack trace.
 """
 
 import json
-import time
 
 import tornado.web
 from bokeh.embed import json_item
 from cloud.credentials import CredentialsError
 from cloud.providers.base import ProviderError
-from cloud.runpod_api import RunpodError, fetch_cloud_offers
 from cloud.ssh_machine import SshMachineError
-from scripts.cloud_fleet import CpuResources, GpuResources
 
 from scribblez import params as params_mod
 from scribblez import workloads
@@ -34,7 +31,6 @@ _CLIENT_ERRORS = (
     params_mod.ParamsError,
     CredentialsError,
     ProviderError,
-    RunpodError,
     SshMachineError,
 )
 
@@ -45,19 +41,9 @@ def _role_payload(role: workloads.RoleSpec) -> dict:
         "title": role.title,
         "singleton": role.singleton,
         "kinds": list(role.kinds),
-        "interruptible": role.interruptible,
         "gpu": role.gpu,
         "stats": ({"unit": role.stats.unit, "phases": role.stats.phases} if role.stats else None),
     }
-
-
-def _cloud_resources(body: dict) -> CpuResources | GpuResources:
-    """The pod hardware selection from an add-worker request body: a GPU type +
-    count when the form posted a gpu_type_id, otherwise a CPU flavor + vCPUs."""
-    if body.get("gpu_type_id"):
-        gpu_count = int(body.get("gpu_count", 1))
-        return GpuResources(gpu_type_id=body["gpu_type_id"], gpu_count=gpu_count)
-    return CpuResources(vcpus=int(body.get("vcpus", 16)), flavor=body.get("flavor", "cpu3c"))
 
 
 def _stats_by_role(spec: workloads.WorkloadSpec, tag: str) -> dict:
@@ -166,7 +152,7 @@ class TaskHandler(_MasterBase):
         def info():
             task = tasks.load_task(spec, tag)
             workers = self.manager.worker_status(spec, task) if task else []
-            spend = task.retired_spend + sum(w.spend for w in task.workers) if task else 0.0
+            spend = task.retired_spend + sum(m.spend for m in task.machines) if task else 0.0
             return {
                 "workload": spec.name,
                 "tag": tag,
@@ -239,13 +225,7 @@ class WorkerAddHandler(_MasterBase):
                     )
                 ]
             else:
-                added = self.manager.add_cloud(
-                    spec,
-                    task,
-                    role,
-                    count=int(body.get("count", 1)),
-                    resources=_cloud_resources(body),
-                )
+                raise AssertionError(f"unknown worker kind '{body.get('kind')}'")
             return {"added": [w.worker_id for w in added]}
 
         self.guarded(add)
@@ -347,25 +327,6 @@ class WorkerActionHandler(_MasterBase):
         await self.guarded_offload(act)
 
 
-class CloudOffersHandler(_MasterBase):
-    """The live Runpod instance catalog (CPU flavors + GPU types with pricing
-    and stock) backing the add-worker form. Cached in-process for a few minutes
-    so repeatedly opening forms does not hammer the GraphQL endpoint; a fetch
-    failure surfaces as a 400 the form can fall back on."""
-
-    _CACHE_TTL = 300.0
-    _cache: tuple[float, dict] | None = None
-
-    def get(self):
-        self.guarded(self._offers)
-
-    def _offers(self) -> dict:
-        cached = CloudOffersHandler._cache
-        if cached is None or time.time() - cached[0] > CloudOffersHandler._CACHE_TTL:
-            CloudOffersHandler._cache = (time.time(), fetch_cloud_offers())
-        return CloudOffersHandler._cache[1]
-
-
 class TaskStatsHandler(_MasterBase):
     def get(self):
         spec = self.spec()
@@ -409,7 +370,6 @@ MASTER_ROUTES = [
     (r"/api/cloud/rental_offer", RentalOfferHandler),
     (r"/api/cloud/orphans", OrphansHandler),
     (r"/api/cloud/orphan_action", OrphanActionHandler),
-    (r"/api/cloud/offers", CloudOffersHandler),
     (r"/api/task/stats", TaskStatsHandler),
     (r"/api/task/figure/([a-z_]+)", TaskFigureHandler),
 ]

@@ -23,16 +23,12 @@ from scribblez.dashboard import db, tasks
 from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.workers import (
     WorkerManager,
-    _cloud_state,
     _container_name,
     _key,
-    _resource_record_fields,
-    _worker_resources,
 )
 from scribblez.paths import TagPaths
 from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
 from scribblez.workloads.position_eval import PositionEvalParams
-from scripts.cloud_fleet import CpuResources, GpuResources
 
 # The fixture below replaces the launch paths with _fail; a test that wants to
 # exercise one for real puts this back.
@@ -61,7 +57,7 @@ def task() -> tasks.TaskRecord:
 def manager(tmp_path, monkeypatch) -> WorkerManager:
     monkeypatch.setattr(tasks, "task_path", lambda spec, tag: tmp_path / f"{tag}.task.json")
     monkeypatch.setattr(WorkerManager, "_ensure_sync", lambda self, spec, task: None)
-    for name in ("_spawn_local", "_run_ssh_container", "_create_pod", "_cloud"):
+    for name in ("_spawn_local", "_run_ssh_container", "_creds"):
         monkeypatch.setattr(WorkerManager, name, _fail)
     return WorkerManager()
 
@@ -74,12 +70,6 @@ def tags_root(manager, tmp_path, monkeypatch) -> Path:
     monkeypatch.setattr(workloads.WorkloadSpec, "data_dir", lambda self, tag: root / tag)
     monkeypatch.setattr(tasks, "task_path", _REAL_TASK_PATH)
     return root
-
-
-def _add_cloud(manager, spec, task, count=1):
-    return manager.add_cloud(
-        spec, task, "generate", count=count, resources=CpuResources(vcpus=8, flavor="cpu3c")
-    )
 
 
 def test_add_local_is_paused_and_not_spawned(manager, spec, task):
@@ -143,60 +133,21 @@ def test_probe_heals_launched_after_in_doubt_start(manager, spec, task, monkeypa
     assert w.launched
 
 
-def test_add_cloud_is_paused_with_no_pod(manager, spec, task):
-    added = _add_cloud(manager, spec, task, count=2)
-    assert [w.desired_state for w in added] == ["paused", "paused"]
-    assert all(w.pod_id is None for w in added)
-    assert all(w.worker_id.startswith("scz-t-") for w in added)
-    assert {(w.vcpus, w.flavor) for w in added} == {(8, "cpu3c")}
-
-
-def test_first_start_creates_the_pod(manager, spec, task, monkeypatch):
-    (w,) = _add_cloud(manager, spec, task)
-    created = []
-    monkeypatch.setattr(
-        WorkerManager, "_create_pod", lambda self, spec, task, w: created.append(w.worker_id)
-    )
-    manager.set_worker_state(spec, task, w.worker_id, run=True)
-    assert created == [w.worker_id]
-    assert w.desired_state == "running"
-
-
-def test_pause_and_remove_before_first_start_need_no_cloud(manager, spec, task):
-    (w,) = _add_cloud(manager, spec, task)
-    manager.set_worker_state(spec, task, w.worker_id, run=False)
-    manager.remove_worker(spec, task, w.worker_id)
-    assert task.workers == []
-
-
-def test_reconcile_creates_the_missing_pod(manager, spec, task, monkeypatch):
-    """A should-run slot with no pod (its creation failed on start, or a gate
-    released it before its first start) gets its pod created by reconcile."""
-    (w,) = _add_cloud(manager, spec, task)
-    w.desired_state = "running"
-    created = []
-    monkeypatch.setattr(
-        WorkerManager, "_create_pod", lambda self, spec, task, w: created.append(w.worker_id)
-    )
-    (info,) = manager.worker_status(spec, task, observe=True)
-    manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
-    assert created == [w.worker_id]
-
-
 def test_reconcile_contains_per_slot_failures(manager, spec, task, monkeypatch):
-    """One slot's persistently failing enforcement (e.g. pod creation on an
-    out-of-stock flavor) must not abort the pass: later slots still get
+    """One slot's persistently failing enforcement (a machine that keeps
+    refusing the container) must not abort the pass: later slots still get
     their tick."""
-    added = _add_cloud(manager, spec, task, count=2)
+    _fake_ssh(monkeypatch, state="missing")
+    added = [manager.add_ssh(spec, task, "generate", host="u@h", threads=None) for _ in range(2)]
     for w in added:
         w.desired_state = "running"
     attempted = []
 
-    def boom(self, spec, task, w):
+    def boom(self, spec, task, w, intent, probe):
         attempted.append(w.worker_id)
-        raise RuntimeError("no capacity for flavor cpu3c")
+        raise RuntimeError("docker: no such image")
 
-    monkeypatch.setattr(WorkerManager, "_create_pod", boom)
+    monkeypatch.setattr(WorkerManager, "_reconcile_ssh", boom)
     monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
     asyncio.run(manager.reconcile())
     assert attempted == [w.worker_id for w in added]
@@ -222,15 +173,14 @@ def test_a_pause_survives_a_pass_that_looked_at_the_task_before_it(manager, spec
     assert raw["workers"][0]["desired_state"] == "paused"
 
 
-def test_a_status_poll_accrues_in_memory_and_writes_nothing(manager, spec, task):
+def test_a_status_poll_writes_nothing(manager, spec, task):
     """The browser polls every second on the request thread; those reads
-    must not race the pass's saves on the file. What they accrue is on the
-    shared record, saved by the next observing pass."""
-    (w,) = _add_cloud(manager, spec, task)
+    must not race the pass's saves on the file. Only the observing pass
+    saves."""
+    manager.add_local(spec, task, "generate", threads=1)
     path = tasks.task_path(spec, "t")
     before = path.stat().st_mtime_ns
     manager.worker_status(spec, task)
-    assert w.observed_at is not None
     assert path.stat().st_mtime_ns == before
     time.sleep(0.02)  # file mtimes tick coarsely; a save within the tick reads equal
     manager.worker_status(spec, task, observe=True)
@@ -241,7 +191,7 @@ def test_reconcile_skips_a_slot_removed_between_its_steps(manager, spec, task, m
     """A Remove clicked while the pass was observing runs between its steps
     (same serialized thread). The slot it removed is neither enforced nor a
     reason for the pass to fall over."""
-    kept, gone = _add_cloud(manager, spec, task, count=2)
+    kept, gone = (manager.add_local(spec, task, "generate", threads=1) for _ in range(2))
     real_status = WorkerManager.worker_status
 
     def status_then_remove(self, spec, task, *, observe=False):
@@ -723,40 +673,6 @@ def test_a_local_child_that_exits_zero_is_finished(manager, spec, task, monkeypa
     assert w.desired_state == "paused"
 
 
-def test_status_of_slot_without_a_pod(manager, spec, task):
-    (w,) = _add_cloud(manager, spec, task)
-    (info,) = manager.worker_status(spec, task)
-    assert info["state"] == "paused"
-    w.desired_state = "running"  # e.g. pod creation failed after Start
-    (info,) = manager.worker_status(spec, task)
-    assert info["state"] == "starting"
-
-
-def test_worker_resources_roundtrip():
-    for res in (
-        CpuResources(vcpus=8, flavor="cpu3c"),
-        GpuResources(gpu_type_id="A100", gpu_count=2),
-    ):
-        w = tasks.WorkerRecord(
-            worker_id="x", role="generate", kind="cloud", desired_state="paused",
-            **_resource_record_fields(res),
-        )  # fmt: skip
-        assert _worker_resources(w) == res
-
-
-def test_cloud_state_mapping():
-    assert _cloud_state("running", True, gated=True, desired_status="RUNNING") == "waiting"
-    assert _cloud_state("running", True, gated=False, desired_status="RUNNING") == "running"
-    assert _cloud_state("running", False, gated=False, desired_status="RUNNING") == "starting"
-    assert _cloud_state("running", False, gated=False, desired_status="EXITED") == "interrupted"
-    assert _cloud_state("paused", True, gated=False, desired_status="RUNNING") == "stopping"
-    assert _cloud_state("paused", False, gated=False, desired_status="EXITED") == "paused"
-    # No pod yet: pods are created on first start.
-    assert _cloud_state("paused", False, gated=False, desired_status=None) == "paused"
-    assert _cloud_state("running", False, gated=False, desired_status=None) == "starting"
-    assert _cloud_state("running", False, gated=True, desired_status=None) == "waiting"
-
-
 def test_first_remote_worker_deploys_and_pins_the_task(manager, spec, task, monkeypatch):
     """Deployment is not an operator step: the task pins a bundle the first
     time a bucket-delivering worker needs one, and every later worker joins
@@ -1181,9 +1097,10 @@ def test_an_unreachable_machine_is_not_acted_on(manager, spec, task, monkeypatch
 
 
 def test_deleting_a_tag_takes_its_idle_slots_with_it(manager, spec, task, tags_root):
-    """The task record is what tracks a slot's pod; releasing the slots is
-    part of deleting the tag, not a chore to be done first."""
-    _add_cloud(manager, spec, task, count=2)
+    """The task record is what tracks a slot; releasing the slots is part of
+    deleting the tag, not a chore to be done first."""
+    for _ in range(2):
+        manager.add_local(spec, task, "generate", threads=1)
     assert (tags_root / "t" / "task.json").is_file()
 
     manager.delete_task(spec, "t")
@@ -1203,7 +1120,7 @@ def test_deleting_a_tag_releases_its_ssh_container(manager, spec, task, tags_roo
 def test_deleting_a_tag_refuses_while_a_worker_is_meant_to_run(manager, spec, task, tags_root):
     """Including a gated one: the scheduler resumes it on its own, so it is
     the operator's intent that decides, not whether it happens to be parked."""
-    (w,) = _add_cloud(manager, spec, task)
+    w = manager.add_local(spec, task, "generate", threads=1)
     w.desired_state = "running"
     task.gates = {"generate": "waiting for data"}
     tasks.save_task(spec, task)
@@ -1256,7 +1173,7 @@ def test_creating_a_container_records_that_it_holds_nothing(manager, spec, task,
     restarted forever: it is known empty from the moment it exists."""
     monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
-    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
     monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
@@ -1329,7 +1246,7 @@ def test_a_creation_that_failed_says_why(manager, spec, task, monkeypatch):
     of that, so a probe finding no container must not wipe it."""
     monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
-    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
     monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     _FakeSshMachine.state = "missing"
@@ -1356,7 +1273,7 @@ def test_a_gpu_role_gets_the_machines_gpus(manager, monkeypatch):
     task = tasks.TaskRecord(workload=spec.name, tag="t", params={}, created_at=0.0)
     monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
-    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
     monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     _RecordingSshMachine.ops = []
@@ -1479,7 +1396,7 @@ def test_a_restart_does_not_inherit_a_zero_it_cannot_vouch_for(manager, spec, ta
     # there.
     monkeypatch.setattr(tasks, "list_tags", lambda spec: [{"tag": "t", "has_task": True}])
     fresh = WorkerManager()  # the dashboard comes back up
-    monkeypatch.setattr(fresh, "_cloud", _fail)
+    monkeypatch.setattr(fresh, "_creds", _fail)
     reloaded = next(t for _, t in fresh._all_tasks() if t.tag == "t")
     assert reloaded.worker(drained.worker_id).undelivered is None
     assert reloaded.worker(holding.worker_id).undelivered == 900
@@ -1507,19 +1424,22 @@ class _Rclone:
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
-def _train_task(tag="t", kinds=("cloud",)):
-    """A position_eval task with a cloud generator and a train slot of the
+def _train_task(tag="t", kinds=("ssh",)):
+    """A position_eval task with an ssh generator and a train slot of the
     given kind."""
     task = tasks.TaskRecord(workload="position_eval", tag=tag, params={}, created_at=0.0)
     task.workers.append(
-        tasks.WorkerRecord(worker_id="g", role="generate", kind="cloud", desired_state="running")
+        tasks.WorkerRecord(
+            worker_id="g", role="generate", kind="ssh", desired_state="running", host="u@h"
+        )
     )
     for kind in kinds:
         task.workers.append(
             tasks.WorkerRecord(
-                worker_id=f"tr-{kind}", role="train", kind=kind, desired_state="running"
+                worker_id=f"tr-{kind}", role="train", kind=kind, desired_state="running",
+                host="u@h" if kind == "ssh" else None,
             )
-        )
+        )  # fmt: skip
     return task
 
 
@@ -1528,7 +1448,7 @@ def test_publish_copies_the_chunks_by_size_and_then_the_manifest(manager, tmp_pa
     monkeypatch.setattr(
         workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
     )
-    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_BUCKET_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
     rc = _Rclone()
     monkeypatch.setattr(workers_mod, "rclone", rc)
     task = _train_task()
@@ -1556,63 +1476,6 @@ class _FakeWatcher:
 
     def terminate(self):
         self.terminated = True
-
-
-def test_sync_watcher_pulls_trainer_outputs_only_for_a_bucket_trainer(
-    manager, tmp_path, monkeypatch
-):
-    """A watcher is one process per task with cloud slots; when a trainer
-    slot that delivers through the bucket appears, it is replaced by one
-    that also pulls what the trainer delivers."""
-    spec = workloads.get("position_eval")
-    monkeypatch.setattr(
-        workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
-    )
-    monkeypatch.setattr(WorkerManager, "_ensure_sync", _REAL_ENSURE_SYNC)
-    spawned = []
-    monkeypatch.setattr(
-        workers_mod.subprocess,
-        "Popen",
-        lambda argv, **k: spawned.append(_FakeWatcher(argv)) or spawned[-1],
-    )
-    task = _train_task(kinds=("local",))
-    manager._ensure_sync(spec, task)
-    assert len(spawned) == 1 and "--trainer-outputs" not in spawned[0].argv
-    manager._ensure_sync(spec, task)
-    assert len(spawned) == 1  # alive and current: kept
-    task.workers[-1].kind = "cloud"
-    manager._ensure_sync(spec, task)
-    assert spawned[0].terminated and len(spawned) == 2
-    assert "--trainer-outputs" in spawned[1].argv
-    task.workers.clear()
-    manager._ensure_sync(spec, task)
-    assert spawned[1].terminated and len(spawned) == 2
-
-
-def test_controls_are_pushed_once_per_change_for_a_bucket_trainer(manager, tmp_path, monkeypatch):
-    spec = workloads.get("position_eval")
-    monkeypatch.setattr(
-        workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
-    )
-    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_BUCKET_CREDS, None))
-    rc = _Rclone()
-    monkeypatch.setattr(workers_mod, "rclone", rc)
-    task = _train_task()
-    manager._push_controls(spec, task)  # no file yet: nothing to push
-    path = spec.paths("t").controls_path
-    path.parent.mkdir(parents=True)
-    path.write_text("{}")
-    manager._push_controls(spec, task)
-    manager._push_controls(spec, task)
-    assert rc.calls == [("copyto", str(path), "r2:b/position_eval/t/controls.json")]
-    import os
-
-    os.utime(path, ns=(1, 1))  # a later set rewrites the file
-    manager._push_controls(spec, task)
-    assert len(rc.calls) == 2
-    # A local trainer reads the file where it is: nothing to push.
-    manager._push_controls(spec, _train_task(tag="u", kinds=("local",)))
-    assert len(rc.calls) == 2
 
 
 def _all_ssh_task(tag="t"):
@@ -1663,7 +1526,7 @@ def test_an_all_ssh_task_with_a_trainer_gets_every_bucket_leg(manager, tmp_path,
         workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
     )
     monkeypatch.setattr(WorkerManager, "_ensure_sync", _REAL_ENSURE_SYNC)
-    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_BUCKET_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
     spawned = []
     monkeypatch.setattr(
         workers_mod.subprocess,
@@ -1711,7 +1574,7 @@ def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
-    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (_BUCKET_CREDS, None))
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     for w in task.workers:
         manager._run_ssh_container(spec, task, w)
@@ -1740,155 +1603,3 @@ def test_reconcile_collects_from_the_generator_but_not_the_trainer(manager, tmp_
     assert collected == ["g"]
     (_, tr) = manager.worker_status(spec, task)
     assert tr["undelivered"] == 0
-
-
-def test_a_cloud_train_slot_takes_a_gpu_instance(manager):
-    """position_eval's trainer can be a cloud slot now: a GPU pod, singleton,
-    paused until started like any cloud slot; a CPU flavor is refused."""
-    spec = workloads.get("position_eval")
-    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
-    with pytest.raises(AssertionError, match="GPU"):
-        manager.add_cloud(spec, task, "train", 1, CpuResources(vcpus=8, flavor="cpu3c"))
-    (w,) = manager.add_cloud(
-        spec, task, "train", 1, GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1)
-    )
-    assert (w.role, w.kind, w.desired_state, w.gpu_type_id, w.pod_id) == (
-        "train", "cloud", "paused", "NVIDIA GeForce RTX 4090", None
-    )  # fmt: skip
-    with pytest.raises(AssertionError, match="already has"):
-        manager.add_cloud(
-            spec, task, "train", 1, GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1)
-        )
-
-
-def test_a_pod_runpod_will_not_create_is_retried_with_backoff_and_a_reason(manager, monkeypatch):
-    """Out of stock: the slot keeps reading `starting`, says why, and the
-    next attempt waits -- not one create per pass, each a stall for the
-    dashboard's other requests."""
-    from cloud.runpod_api import RunpodError
-
-    spec = workloads.get("position_eval")
-    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
-    (w,) = manager.add_cloud(
-        spec, task, "train", 1, GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1)
-    )
-    w.desired_state = "running"
-    attempts = []
-
-    def no_capacity(self, spec, task, w):
-        attempts.append(1)
-        raise RunpodError("POST /pods -> HTTP 500: create pod: There are no longer any instances")
-
-    monkeypatch.setattr(WorkerManager, "_create_pod", no_capacity)
-    info = {"observed_running": False, "state": "starting"}
-    with pytest.raises(RunpodError):
-        manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
-    manager._reconcile_worker(
-        spec, task, w, workers_mod.RUN, info
-    )  # within the backoff: no attempt
-    assert len(attempts) == 1
-    (status,) = manager.worker_status(spec, task)
-    assert status["state"] == "starting"
-    # The reason names the instance asked for (the pod name does not), says
-    # what to do, keeps Runpod's words, and says when the next attempt is.
-    assert status["exit_reason"].startswith("No NVIDIA GeForce RTX 4090 x1 available on Runpod")
-    assert "remove this slot and add it again" in status["exit_reason"]
-    assert "no longer any instances" in status["exit_reason"]
-    assert 0 < status["retry_in_s"] <= workers_mod.OBSERVATION_TTL_SECONDS
-
-    # The backoff elapses; a creation that succeeds clears the reason.
-    manager._restarts.clear()
-
-    def created(self, spec, task, w):
-        w.pod_id = "p1"
-
-    monkeypatch.setattr(WorkerManager, "_create_pod", created)
-    manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
-    assert w.pod_id == "p1" and not manager._exits and not manager._restarts
-
-
-def test_a_pod_on_an_old_bundle_is_replaced_when_it_should_run(manager, monkeypatch):
-    """A pod's bundle is fixed at creation, so a redeploy (or a start after
-    one) replaces the pod: the old one is terminated and a new one created
-    on the task's bundle. A creation that then fails leaves a pod-less slot,
-    not a record pointing at a pod that is gone."""
-    from cloud.runpod_api import RunpodError
-
-    spec = workloads.get("position_eval")
-    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
-    task.bundle_id = "new"
-    (w,) = manager.add_cloud(
-        spec, task, "train", 1, GpuResources(gpu_type_id="NVIDIA GeForce RTX 4090", gpu_count=1)
-    )
-    w.desired_state, w.pod_id, w.bundle_id = "running", "p-old", "old"
-    deleted = []
-    client = SimpleNamespace(delete_pod=deleted.append)
-    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (None, client))
-
-    def created(self, spec, task, w):
-        w.pod_id, w.bundle_id = "p-new", task.bundle_id
-
-    monkeypatch.setattr(WorkerManager, "_create_pod", created)
-    info = {"observed_running": True, "state": "running"}
-    manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
-    assert deleted == ["p-old"] and (w.pod_id, w.bundle_id) == ("p-new", "new")
-    manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)  # current: left alone
-    assert deleted == ["p-old"]
-
-    # The replacement's creation fails: the slot is pod-less with the reason,
-    # and the record no longer names the terminated pod.
-    task.bundle_id = "newer"
-
-    def refused(self, spec, task, w):
-        raise RunpodError("POST /pods -> HTTP 500: create pod: no longer any instances")
-
-    monkeypatch.setattr(WorkerManager, "_create_pod", refused)
-    with pytest.raises(RunpodError):
-        manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
-    assert deleted == ["p-old", "p-new"] and w.pod_id is None
-    (status,) = manager.worker_status(spec, task)
-    assert status["state"] == "starting" and "no longer any instances" in status["exit_reason"]
-
-
-def test_a_stopped_pod_that_will_not_start_is_replaced(manager, monkeypatch):
-    """A stopped pod is pinned to its host; when the host has filled, Runpod
-    refuses the start for good. The slot gets a fresh pod instead of an
-    error per pass."""
-    from cloud.runpod_api import RunpodError
-
-    spec = workloads.get("position_eval")
-    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
-    task.bundle_id = "b"
-    (w,) = manager.add_cloud(spec, task, "generate", 1, CpuResources(vcpus=8, flavor="cpu3c"))
-    w.desired_state, w.pod_id, w.bundle_id = "running", "p-stuck", "b"
-    calls = []
-
-    def start_pod(pod_id):
-        calls.append(("start", pod_id))
-        raise RunpodError("POST /pods/p-stuck/start -> HTTP 500: not enough free memory")
-
-    client = SimpleNamespace(
-        start_pod=start_pod, delete_pod=lambda pid: calls.append(("delete", pid))
-    )
-    monkeypatch.setattr(WorkerManager, "_cloud", lambda self: (None, client))
-
-    def created(self, spec, task, w):
-        w.pod_id, w.bundle_id = "p-fresh", task.bundle_id
-
-    monkeypatch.setattr(WorkerManager, "_create_pod", created)
-    info = {"observed_running": False, "state": "interrupted"}
-    manager._reconcile_worker(spec, task, w, workers_mod.RUN, info)
-    assert calls == [("start", "p-stuck"), ("delete", "p-stuck")] and w.pod_id == "p-fresh"
-    # An operator's Start of a paused pod takes the same road.
-    w.desired_state, w.pod_id = "paused", "p-stuck"
-    calls.clear()
-    manager.set_worker_state(spec, task, w.worker_id, run=True)
-    assert calls == [("start", "p-stuck"), ("delete", "p-stuck")] and w.pod_id == "p-fresh"
-
-
-def test_a_refusal_that_is_not_stock_says_what_runpod_said():
-    reason = workers_mod._refusal_reason("cpu3c 8 vCPU", "create pod: invalid registry auth")
-    assert reason == (
-        "Runpod would not create a cpu3c 8 vCPU pod: create pod: invalid registry auth. "
-        "Retrying automatically."
-    )

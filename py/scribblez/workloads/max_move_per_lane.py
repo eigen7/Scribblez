@@ -75,7 +75,6 @@ SPEC = WorkloadSpec(
             title="Generator",
             runner="scribblez.workloads.selfplay_gen:run_generate",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
-            interruptible=True,
             stats=GENERATOR_STATS,
         ),
         RoleSpec(

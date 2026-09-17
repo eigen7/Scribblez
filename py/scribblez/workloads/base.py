@@ -51,29 +51,24 @@ class RoleSpec:
     runner: str  # dotted path to run(ctx: WorkerContext) -> int
     deps: str = ""  # dotted path to a fetch-runtime-deps callable, or ""
     singleton: bool = False  # at most one slot per task (the trainer)
-    # Worker kinds this role's slots may run as: a "local" subprocess, a
-    # "cloud" pod, an "ssh" container on an operator-owned machine.
-    kinds: tuple[str, ...] = ("local", "cloud", "ssh")
-    # Whether this role runs on GPU hardware. Cloud pods for a GPU role rent a
-    # GPU instance (a gpuTypeId + gpu count) rather than a CPU flavor, and the
-    # dashboard's add-worker form offers GPU instances instead of CPU flavors.
+    # Worker kinds this role's slots may run as: a "local" subprocess, an
+    # "ssh" container on a machine reached over ssh (the operator's own, or
+    # one rented for the task).
+    kinds: tuple[str, ...] = ("local", "ssh")
+    # Whether this role runs on GPU hardware: its container gets the machine's
+    # GPUs, and a machine of known shape refuses it when it has none free.
     gpu: bool = False
     # Which worker image a remote slot of this role runs on
     # (cloud/runtime_abi.py): "engine" for anything the binaries and the FFI
     # cover, "torch" for a role that imports the training stack. Independent
     # of `gpu`: match eval runs a GPU on the engine runtime.
     runtime: str = RUNTIME_ENGINE
-    # Whether cloud pods for this role are rented interruptible (spot):
-    # cheaper, but Runpod may stop them at any time. Only for roles that
-    # tolerate preemption (the reconcile loop restarts reclaimed pods).
-    interruptible: bool = False
     # Dotted path to a controller-side tick for this role,
     # dispatch(spec, tag, params, slots) -- for a role whose work the
     # controller assigns rather than the worker choosing it, and whose results
     # it ingests. `slots` holds one scribblez/dashboard/slot_files.py handle
     # per running slot of the role, the only way into a worker's filesystem;
-    # since a rented pod has no such handle, such a role's kinds are local and
-    # ssh. "" for the self-directing roles (a generator picks its own work).
+    # "" for the self-directing roles (a generator picks its own work).
     dispatch: str = ""
     # Dotted path to a controller-side ingest tick for this role,
     # ingest(spec, tag): takes in what the role's worker has delivered under

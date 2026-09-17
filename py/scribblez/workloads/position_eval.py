@@ -177,7 +177,6 @@ SPEC = WorkloadSpec(
             title="Generator",
             runner="scribblez.workloads.selfplay_gen:run_generate",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
-            interruptible=True,
             stats=GENERATOR_STATS,
         ),
         RoleSpec(
@@ -188,7 +187,7 @@ SPEC = WorkloadSpec(
             deps="scribblez.workloads.position_eval:fetch_train_deps",
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
-            kinds=("local", "ssh", "cloud"),
+            kinds=("local", "ssh"),
             gpu=True,
             stats=TRAINER_STATS,
         ),

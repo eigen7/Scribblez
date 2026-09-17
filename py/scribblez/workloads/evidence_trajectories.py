@@ -402,7 +402,6 @@ SPEC = WorkloadSpec(
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
             kinds=("local",),
             gpu=True,
-            interruptible=True,
             stats=StatsSpec(
                 unit="pairs",
                 phases={

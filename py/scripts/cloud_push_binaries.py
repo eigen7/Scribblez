@@ -5,7 +5,7 @@ Packages target/engine/{play_game,sim_obs_tool,libscribblez_ffi.so} and the
 py/ tree into a git-SHA-stamped bundle under bundles/<bundle_id>/ in R2, and
 points bundles/LATEST at it. Cloud worker pods download the bundle at startup,
 so this -- not a Docker push -- is the code-deployment step: build with
-py/build.py, push with this, launch with scripts/cloud_fleet.py.
+py/build.py, push with this; the dashboard pins tasks to what it deploys.
 
 The bundle contains exactly what was last built: uncommitted local changes are
 included (and flagged in the manifest via the -dirty bundle_id), so what runs

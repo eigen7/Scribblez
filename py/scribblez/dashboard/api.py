@@ -951,12 +951,12 @@ def run(port: int, mount_root: str):
     Refuses to start if another dashboard already manages this mount root
     (a single control plane owns the local workers). The WorkerManager
     reconciles worker slots at boot (relaunching local workers that should be
-    running) and every RECONCILE_SECONDS thereafter (restarting interruptible
-    pods Runpod reclaimed). Its blocking work runs in the manager's executor,
-    so serving the dashboard never waits on ssh, the cloud API or a build; a
-    pass that overruns simply delays the next one (PeriodicCallback awaits it).
-    On shutdown, owned local workers get SIGTERM (they flush and exit); cloud
-    pods keep running.
+    running) and every RECONCILE_SECONDS thereafter (starting and stopping
+    rented machines as their slots want). Its blocking work runs in the
+    manager's executor, so serving the dashboard never waits on ssh, the
+    provider's API or a build; a pass that overruns simply delays the next
+    one (PeriodicCallback awaits it). On shutdown, owned local workers get
+    SIGTERM (they flush and exit); machines and their containers keep running.
     """
     _acquire_control_lock(mount_root)
     manager = WorkerManager()

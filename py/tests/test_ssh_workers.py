@@ -10,7 +10,6 @@ from cloud.credentials import (
     CloudCredentials,
     R2Credentials,
     RegistryConfig,
-    RunpodCredentials,
 )
 from cloud.ssh_machine import (
     SshMachine,
@@ -18,11 +17,11 @@ from cloud.ssh_machine import (
     classify_probe,
     env_file,
 )
+from cloud.worker_env import bundle_worker_env
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard.tasks import TaskRecord, WorkerRecord
 from scribblez.dashboard.workers import _container_name, _local_state, _next_worker_id, _ssh_state
-from scripts.cloud_fleet import bundle_worker_env
 
 
 def test_classify_probe():
@@ -136,7 +135,6 @@ def test_container_name_qualified_by_workload_and_tag():
 
 def test_bundle_worker_env_composition():
     creds = CloudCredentials(
-        runpod=RunpodCredentials(api_key="k", container_registry_auth_id="a"),
         registry=RegistryConfig(worker_image="docker.io/u/scribblez-worker"),
         r2=R2Credentials(account_id="acct", access_key_id="ak", secret_access_key="sk", bucket="b"),
         aws=AwsCredentials(region="us-east-1", access_key_id="ak", secret_access_key="sk"),

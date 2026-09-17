@@ -42,7 +42,7 @@ def default_thread_count() -> int:
     the cgroup CPU quota when one is set.
 
     The quota cap matters on hosts that limit CPU by cgroup quota rather than
-    cpuset -- Runpod pods, notably: a 12-vCPU pod on a 96-core host reports an
+    cpuset -- a rented container, notably: a 12-vCPU one on a 96-core host reports an
     affinity mask of 96, and without the quota cap a thread pool sized from
     that oversubscribes the pod by 8x.
 

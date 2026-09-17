@@ -125,7 +125,6 @@ SPEC = WorkloadSpec(
             title="Generator",
             runner="scribblez.workloads.kill_test:run_generate",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
-            interruptible=True,
             stats=StatsSpec(
                 unit="pairs",
                 phases={"gen_s": "self-play", "sim_s": "sim", "upload_s": "upload"},

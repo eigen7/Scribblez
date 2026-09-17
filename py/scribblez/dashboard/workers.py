@@ -1,28 +1,28 @@
-"""The WorkerManager: reconciles worker slots with real processes, pods, and
-ssh machines.
+"""The WorkerManager: reconciles worker slots with real processes and
+containers, and the task's machines with rented instances.
 
 Owned by the dashboard API process. Local worker slots are backed by
 subprocesses of this process running the worker entrypoint with the local
-results sink; cloud slots are backed by Runpod pods (one pod per slot),
-created through the same pod spec as the fleet CLI; ssh slots are backed by
-worker-image containers on operator-owned machines (cloud/ssh_machine.py),
-booting the same image + bundle flow as a pod. Cloud and ssh slots both
-deliver through the results bucket, so while a task has any, a cloud_sync
+results sink; ssh slots are backed by worker-image containers on machines
+reached over ssh (cloud/ssh_machine.py) -- the operator's own, or ones the
+dashboard rents from a provider (cloud/providers/) and records as the task's
+machines. A slot on a rented machine, and a trainer anywhere remote, delivers
+through the results bucket, so while a task has any such slot, a cloud_sync
 --watch subprocess streams that tag's bucket results into the local mount.
 
 Adding a slot only records it, paused: nothing launches until the operator
-starts it. For local and ssh slots the first start spawns the process /
-container; for cloud slots it creates the backing pod itself (a Runpod pod
-boots on creation), so an added-but-never-started slot costs nothing.
+starts it; the first start spawns the process / container. Renting a machine
+launches its instance at once, which bills from then on.
 
 Desired state lives in task.json (dashboard/tasks.py); actual state is observed
 live -- local workers by their durable pid (worker_pid_alive reads /proc, so a
 worker is observable and stoppable no matter which dashboard instance spawned
-it, even across a restart), cloud slots by pod runtime, ssh slots by a docker
-probe over ssh. reconcile() drives
+it, even across a restart), ssh slots by a docker probe over ssh, rented
+machines by the provider's listing plus that probe. reconcile() drives
 observed toward desired in both directions: it relaunches local workers that
-should be running (e.g. after a dashboard restart), restarts interruptible pods
-Runpod reclaimed, and stops workers that are running but should not be. It also
+should be running (e.g. after a dashboard restart), starts a stopped machine a
+slot wants, stops one nothing has run on, and stops workers that are running
+but should not be. It also
 runs each workload's scheduler tick (generation lifecycle + fleet pacing): a
 scheduler may *gate* a role -- park its workers without touching the operator's
 desired state -- and reconcile stops a gated worker just as it stops a paused
@@ -49,16 +49,9 @@ from cloud.credentials import CloudCredentials, CredentialsError, load_credentia
 from cloud.providers.aws import AwsProvider
 from cloud.providers.base import Instance, LaunchRequest, Provider, ProviderError
 from cloud.r2 import bucket_path, rclone
-from cloud.runpod_api import RunpodClient, RunpodError
 from cloud.ssh_machine import SshMachine, SshMachineError
 from cloud.ssh_transfer import pull_results, sweep_stopped
-from scripts.cloud_fleet import (
-    CpuResources,
-    GpuResources,
-    bundle_worker_env,
-    new_pod_name,
-    pod_create_spec,
-)
+from cloud.worker_env import bundle_worker_env
 from tornado.ioloop import IOLoop
 
 from scribblez import params as params_mod
@@ -78,7 +71,7 @@ def _slot_sink(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.Wo
     """Where slot `w`'s worker delivers (cloud/sinks.py's SCZ_SINK): "local"
     for a local subprocess, and for an ssh container on the operator's own
     machine whose output the reconcile pass reads back over the control link
-    (cloud/ssh_transfer.py); "r2" for a pod, for an ssh container on a rented
+    (cloud/ssh_transfer.py); "r2" for an ssh container on a rented
     machine (a datacenter link to the bucket, where collection over ssh would
     haul every chunk to the controller and publish it back up from a home
     uplink), and for an ssh container running a role with inputs as well as
@@ -119,7 +112,7 @@ SSH_REPROBE_SECONDS = 30.0
 # reset the moment one is observed running.
 MAX_RESTART_BACKOFF_SECONDS = 300.0
 
-# How long an observation of a container or pod stands in for a fresh one.
+# How long an observation of a container or machine stands in for a fresh one.
 # Only the reconcile pass observes; status requests read what it left, so a
 # browser polling every 3 seconds costs no ssh round trips at all.
 OBSERVATION_TTL_SECONDS = 5.0
@@ -402,82 +395,7 @@ def _ssh_state(desired: str, probe: str, gated: bool, finished: bool = False) ->
     return "starting" if probe == "paused" else "exited"
 
 
-def _cloud_state(desired: str, alive: bool, gated: bool, desired_status: str | None) -> str:
-    """The honest display state of a cloud slot. `alive` is real pod liveness
-    (a running runtime), independent of the pod's own desiredStatus. `stopping`
-    / `starting` are the in-flight states where intent and reality disagree;
-    `interrupted` is a pod Runpod reclaimed out from under a should-run slot.
-    `desired_status` is None for a slot whose pod has not been created yet
-    (pods are created on first start): such a slot is `paused` until started,
-    then `starting` while reconcile creates its pod."""
-    if gated:
-        return "waiting"
-    if desired == "paused":
-        return "stopping" if alive else "paused"
-    if alive:
-        return "running"
-    return "starting" if desired_status is None or desired_status == "RUNNING" else "interrupted"
-
-
-# What Runpod says when it has nothing of the requested kind to rent.
-_OUT_OF_STOCK = "no longer any instances"
-
-
-def _refusal_reason(instance: str, detail: str) -> str:
-    """The workers-table line for a pod Runpod would not create: which
-    instance was asked for (the pod name says nothing about it), what to do
-    -- wait, since the dashboard retries with a growing delay, or change the
-    instance -- and Runpod's own words for anyone who wants them."""
-    if _OUT_OF_STOCK in detail:
-        return (
-            f"No {instance} available on Runpod right now. Retrying automatically; "
-            f"remove this slot and add it again to try another flavor or size. "
-            f"(Runpod: {detail})"
-        )
-    return f"Runpod would not create a {instance} pod: {detail}. Retrying automatically."
-
-
-def _describe_resources(resources: CpuResources | GpuResources) -> str:
-    """The instance a slot asks Runpod for, as an operator would name it."""
-    if isinstance(resources, GpuResources):
-        return f"{resources.gpu_type_id} x{resources.gpu_count}"
-    return f"{resources.flavor} {resources.vcpus} vCPU"
-
-
-def _resource_record_fields(resources: CpuResources | GpuResources) -> dict:
-    """The WorkerRecord cloud-resource fields for a pod's hardware selection."""
-    if isinstance(resources, GpuResources):
-        return {"gpu_type_id": resources.gpu_type_id, "gpu_count": resources.gpu_count}
-    return {"vcpus": resources.vcpus, "flavor": resources.flavor}
-
-
-def _worker_resources(w: tasks.WorkerRecord) -> CpuResources | GpuResources:
-    """The inverse of _resource_record_fields: the slot's recorded hardware
-    selection, for creating its pod at start time."""
-    if w.gpu_type_id:
-        return GpuResources(gpu_type_id=w.gpu_type_id, gpu_count=w.gpu_count)
-    return CpuResources(vcpus=w.vcpus, flavor=w.flavor)
-
-
 _ACCRUE_LOCK = threading.Lock()
-
-
-def _accrue(w: tasks.WorkerRecord, running: bool, cost_per_hr: float | None):
-    """Advance a slot's spend estimate to now: if it was running at its last
-    observation, the elapsed interval is charged at the last observed rate.
-    Every observation point (status polls, the reconcile tick, state changes)
-    calls this, so the estimate only drifts across dashboard-server downtime.
-    The record is one object shared by the request thread and the blocking
-    one (dashboard/tasks.py), so the read-add-write is locked.
-    """
-    with _ACCRUE_LOCK:
-        now = time.time()
-        if w.observed_running and w.observed_at is not None:
-            w.spend += (now - w.observed_at) / 3600 * (w.cost_per_hr or 0.0)
-        w.observed_at = now
-        w.observed_running = running
-        if cost_per_hr is not None:
-            w.cost_per_hr = cost_per_hr
 
 
 class WorkerManager:
@@ -488,8 +406,7 @@ class WorkerManager:
         self._sync: dict[str, tuple[subprocess.Popen, list[str]]] = {}
         # task key -> controls.json mtime as last pushed to the bucket.
         self._controls_pushed: dict[str, int] = {}
-        self._creds: CloudCredentials | None = None
-        self._client: RunpodClient | None = None
+        self._creds_cache: CloudCredentials | None = None
         self._ssh_down: dict[str, float] = {}  # host -> time of last failed probe
         # Slot key -> (probe state, when observed). Written by the reconcile
         # pass, read by everything else (see _probe_container).
@@ -503,8 +420,6 @@ class WorkerManager:
         self._exits: dict[str, str] = {}
         # Slot key -> (consecutive restarts, when the next one is allowed).
         self._restarts: dict[str, tuple[int, float]] = {}
-        # (pods by id, when listed), the cloud counterpart of _probes.
-        self._pods: tuple[dict, float] = ({}, 0.0)
         # Machine key -> (probe state, when observed): SshMachine.probe for
         # each of a task's machines, refreshed by the reconcile pass ahead of
         # its slots (see machine_status).
@@ -516,7 +431,7 @@ class WorkerManager:
         self._idle_since: dict[str, float] = {}
         # (instances by id, when listed): the provider's view of every
         # instance it tagged ours, refreshed by the reconcile pass like the
-        # pod listing was.
+        # pod listing used to be.
         self._instances: tuple[dict[str, Instance], float] = ({}, 0.0)
         self._provider_client: Provider | None = None
         self._account: str | None = None  # the provider's account line, once asked
@@ -544,7 +459,7 @@ class WorkerManager:
 
         Building every arch and pushing takes minutes and touches no record;
         run through `offload` it held the one blocking thread that long, and
-        every Pause and Remove clicked meanwhile landed after it -- on pods
+        every Pause and Remove clicked meanwhile landed after it -- on machines
         that had gone on billing. Only the repin is a serialized step.
         """
         manifest = await IOLoop.current().run_in_executor(self._builds, self._build_bundle)
@@ -552,7 +467,7 @@ class WorkerManager:
 
     def _build_bundle(self) -> BundleManifest:
         check_worker_images_current()
-        creds, _ = self._cloud()
+        creds = self._creds()
         return deploy_current_tree(creds.r2, cache=self._source_digests)
 
     def _pin_bundle(self, spec, task: tasks.TaskRecord, manifest: BundleManifest) -> str:
@@ -585,15 +500,14 @@ class WorkerManager:
 
     # ---- cloud plumbing --------------------------------------------------
 
-    def _cloud(self) -> tuple[CloudCredentials, RunpodClient]:
-        if self._client is None:
-            self._creds = load_credentials()
-            self._client = RunpodClient(self._creds.runpod.api_key)
-        return self._creds, self._client
+    def _creds(self) -> CloudCredentials:
+        if self._creds_cache is None:
+            self._creds_cache = load_credentials()
+        return self._creds_cache
 
     def _provider(self) -> Provider:
         if self._provider_client is None:
-            creds, _ = self._cloud()
+            creds = self._creds()
             self._provider_client = AwsProvider(creds.aws, creds.registry)
         return self._provider_client
 
@@ -604,70 +518,6 @@ class WorkerManager:
         if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
             self._instances = instances, _ = (self._provider().describe(), time.time())
         return instances
-
-    def _start_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Start slot `w`'s stopped pod -- or replace it when Runpod cannot.
-        A stopped pod stays pinned to its host, and a host that has filled
-        since ("not enough free memory on the host machine") never frees for
-        it; retrying the start would fail forever, one API error per pass.
-        Replacement costs nothing that matters: a generator's finished chunks
-        are already in the bucket, a trainer restores from its last committed
-        checkpoint, and a fresh pod lands wherever there is room."""
-        _, client = self._cloud()
-        try:
-            client.start_pod(w.pod_id)
-        except RunpodError as e:
-            print(f"start {spec.name}/{task.tag}/{w.worker_id}: {e}; replacing the pod")
-            self._replace_pod(spec, task, w)
-
-    def _replace_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Terminate slot `w`'s pod and create one on the task's bundle. The
-        record forgets the old pod before the new one is asked for, so a
-        creation that fails (out of stock) leaves a slot with no pod -- the
-        state the backoff and the workers table already handle -- rather
-        than one still pointing at a pod that is gone."""
-        _, client = self._cloud()
-        client.delete_pod(w.pod_id)
-        w.pod_id = None
-        w.bundle_id = None
-        tasks.save_task(spec, task)
-        self._try_create_pod(spec, task, w)
-
-    def _try_create_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Create slot `w`'s pod, and when Runpod will not -- no instance of
-        the requested kind available, an API outage -- keep the reason where
-        the workers table shows it and back the next attempt off, doubling up
-        to a few minutes. A pod that cannot be had costs one API call every
-        few minutes rather than one per pass, and every pass's call was also
-        a stall the dashboard's other requests queued behind (the blocking
-        steps run one at a time). The reason is cleared the moment a pod
-        exists."""
-        key = _key(spec, task.tag, w.worker_id)
-        try:
-            self._create_pod(spec, task, w)
-        except RunpodError as e:
-            reason = _refusal_reason(_describe_resources(_worker_resources(w)), e.detail)
-            self._exits[key] = reason
-            self._note_restart(key)
-            raise RunpodError(reason) from e
-        self._exits.pop(key, None)
-        self._restarts.pop(key, None)
-
-    def _create_pod(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Create slot `w`'s backing pod (first start), on the latest bundle,
-        under the slot's recorded name and hardware. The pod boots and runs on
-        creation."""
-        creds, client = self._cloud()
-        params = params_mod.validate(spec.params_cls, task.params)
-        w.bundle_id = self.task_bundle_id(spec, task)
-        body = pod_create_spec(
-            creds, spec, task.tag, params,
-            name=w.worker_id, role=w.role,
-            bundle_id=w.bundle_id,
-            resources=_worker_resources(w),
-        )  # fmt: skip
-        w.pod_id = client.create_pod(body)["id"]
-        tasks.save_task(spec, task)
 
     def _ensure_sync(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
         """Keep exactly one sync watcher alive per task with bucket-delivering
@@ -709,7 +559,7 @@ class WorkerManager:
         key = _key(spec, task.tag)
         if self._controls_pushed.get(key) == stamp:
             return
-        creds, _ = self._cloud()
+        creds = self._creds()
         dest = bucket_path(creds.r2, spec.name, task.tag, CONTROLS_REL)
         res = rclone(creds.r2, "copyto", str(path), dest, capture=True)
         assert res.returncode == 0, f"pushing {CONTROLS_REL} failed: {res.stderr}"
@@ -849,8 +699,8 @@ class WorkerManager:
 
     def _run_ssh_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Create + start slot `w`'s container on its machine, on the task's
-        bundle (matching what a fresh pod would run)."""
-        creds, _ = self._cloud()
+        bundle."""
+        creds = self._creds()
         params = params_mod.validate(spec.params_cls, task.params)
         w.bundle_id = self.task_bundle_id(spec, task)
         env = bundle_worker_env(
@@ -892,14 +742,10 @@ class WorkerManager:
         task: tasks.TaskRecord,
         role: str,
         kind: str,
-        gpu: bool = False,
         machine: tasks.MachineRecord | None = None,
     ):
         role_spec = spec.role(role)
         assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
-        if kind == "cloud":
-            want = "GPU" if role_spec.gpu else "CPU"
-            assert gpu == role_spec.gpu, f"role '{role}' requires {want} instances"
         if machine is not None and role_spec.gpu and machine.gpu_count is not None:
             # Refused here rather than by `docker run --gpus all` on the
             # remote, after a bundle deploy: a machine of known shape says
@@ -1213,38 +1059,11 @@ class WorkerManager:
             self._ssh_down.pop(m.host, None)
         return state
 
-    def add_cloud(
-        self,
-        spec,
-        task: tasks.TaskRecord,
-        role: str,
-        count: int,
-        resources: CpuResources | GpuResources,
-    ) -> list[tasks.WorkerRecord]:
-        gpu = isinstance(resources, GpuResources)
-        role_spec = self._check_role(spec, task, role, "cloud", gpu=gpu)
-        assert not (role_spec.singleton and count > 1), f"role '{role}' allows one worker"
-        added = []
-        for _ in range(count):
-            w = tasks.WorkerRecord(
-                worker_id=new_pod_name(task.tag),
-                role=role,
-                kind="cloud",
-                desired_state="paused",
-                **_resource_record_fields(resources),
-            )
-            task.workers.append(w)
-            added.append(w)
-        tasks.save_task(spec, task)
-        self._ensure_sync(spec, task)
-        return added
-
     def set_worker_state(self, spec, task: tasks.TaskRecord, worker_id: str, run: bool):
         w = task.worker(worker_id)
         w.desired_state = "running" if run else "paused"
         if run:
             w.finished = False
-        _accrue(w, run, None)
         tasks.save_task(spec, task)
         start = run and w.role not in task.gates  # a gated slot starts when released
         if w.kind == "local":
@@ -1252,7 +1071,7 @@ class WorkerManager:
                 self._spawn_local(spec, task, w)
             elif not run:
                 self._stop_local(spec, task, w)
-        elif w.kind == "ssh":
+        else:
             # Freshly observed: dispatching a start or stop off a remembered
             # state would send the wrong command (or, for a slot no pass has
             # reached yet, none at all). An unreachable machine gets no action
@@ -1266,14 +1085,6 @@ class WorkerManager:
                 self._run_ssh_container(spec, task, w)
             elif not run and probe == "running":
                 _ssh_machine(task, w).stop_container(name)
-        else:
-            if start and w.pod_id is None:
-                self._create_pod(spec, task, w)
-            elif start:
-                self._start_pod(spec, task, w)
-            elif not run and w.pod_id is not None:
-                _, client = self._cloud()
-                client.stop_pod(w.pod_id)
 
     def remove_worker(self, spec, task: tasks.TaskRecord, worker_id: str):
         """Remove a slot. Only non-running workers may be removed (pause
@@ -1304,16 +1115,6 @@ class WorkerManager:
             key = _key(spec, task.tag, worker_id)
             self._exits.pop(key, None)
             self._restarts.pop(key, None)
-        elif w.pod_id is not None:  # a never-started cloud slot has no pod to delete
-            _, client = self._cloud()
-            pod = next((p for p in client.list_pods() if p["id"] == w.pod_id), None)
-            assert pod is None or pod.get("runtime") is None, (
-                f"{worker_id} is running; pause it first"
-            )
-            if pod is not None:
-                client.delete_pod(w.pod_id)
-        _accrue(w, False, None)
-        task.retired_spend += w.spend
         task.workers.remove(w)
         tasks.save_task(spec, task)
         self._ensure_sync(spec, task)
@@ -1322,7 +1123,7 @@ class WorkerManager:
         """Delete a tag: tear its worker slots down, then delete its local dir.
 
         Idle slots are removed on the operator's behalf rather than refused --
-        they are how a pod or container gets released, and the task record
+        they are how a container gets released, and the task record
         about to be deleted is the only thing tracking it. A slot that is
         still running refuses, so a fleet at work is never deleted out from
         under itself.
@@ -1343,16 +1144,6 @@ class WorkerManager:
 
     # ---- observation -----------------------------------------------------
 
-    def _pod_index(self, observe: bool) -> dict:
-        """Runpod's pods by id, listed at most once per OBSERVATION_TTL_SECONDS
-        and only by the reconcile pass -- the cloud counterpart of the container
-        probe cache."""
-        pods, at = self._pods
-        if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
-            _, client = self._cloud()
-            self._pods = pods, _ = ({p["id"]: p for p in client.list_pods()}, time.time())
-        return pods
-
     def worker_status(self, spec, task: tasks.TaskRecord, *, observe: bool = False) -> list[dict]:
         """One dict per slot: the durable record plus observed live state.
         Every call is also a spend-accrual observation point.
@@ -1361,7 +1152,7 @@ class WorkerManager:
         and the cloud API, and leaves what it learns behind -- persisted, the
         only save here. Every other caller -- every status request a browser
         makes -- reads those observations, so serving the dashboard never
-        waits on ssh or Runpod, and accrues in memory only: the record is the
+        waits on ssh or the provider, and accrues in memory only: the record is the
         pass's own object, so the next pass saves what the polls accrued.
         """
         out = []
@@ -1373,11 +1164,6 @@ class WorkerManager:
                 "kind": w.kind,
                 "desired_state": w.desired_state,
                 "threads": w.threads,
-                "vcpus": w.vcpus,
-                "flavor": w.flavor,
-                "gpu_type_id": w.gpu_type_id,
-                "gpu_count": w.gpu_count,
-                "pod_id": w.pod_id,
                 "host": _ssh_host(task, w) if w.kind == "ssh" else None,
                 "machine": w.machine,
                 "bundle_id": w.bundle_id,
@@ -1393,8 +1179,7 @@ class WorkerManager:
                 if not alive and self._local_exit_code(spec, task, w) == 0:
                     _note_finished(w)
                 info["state"] = _local_state(w.desired_state, alive, gated, w.finished)
-                _accrue(w, alive, None)
-            elif w.kind == "ssh":
+            else:
                 _holds_nothing(spec, task, w)
                 probe = self._probe_container(spec, task, w, observe=observe)
                 alive = probe == "running"
@@ -1404,44 +1189,8 @@ class WorkerManager:
                 reason = self._exits.get(_key(spec, task.tag, w.worker_id))
                 if reason and not alive:
                     info["exit_reason"] = reason
-                _accrue(w, alive, None)
-            elif w.pod_id is None:  # not yet started, so no pod to observe
-                alive = False
-                info["state"] = _cloud_state(w.desired_state, False, gated, None)
-                key = _key(spec, task.tag, w.worker_id)
-                reason = self._exits.get(key)
-                if reason:
-                    info["exit_reason"] = reason  # why the last creation failed
-                    # ... and when it is tried again, so a slot in a long
-                    # backoff does not read as one nobody is retrying.
-                    _, next_at = self._restarts.get(key, (0, 0.0))
-                    info["retry_in_s"] = max(0, int(next_at - time.time()))
-                _accrue(w, False, None)
-            else:
-                pod = self._pod_index(observe).get(w.pod_id)
-                if pod is None:
-                    # Nothing listed for this pod: terminated if we just
-                    # looked, merely unobserved if we are reading a listing
-                    # that has not covered it yet.
-                    alive = False if observe else w.observed_running
-                    info["state"] = (
-                        "terminated" if observe else _cloud_state(
-                            w.desired_state, alive, gated, None
-                        )
-                    )  # fmt: skip
-                    _accrue(w, alive, None)
-                else:
-                    alive = pod.get("runtime") is not None  # real liveness, not desiredStatus
-                    info["state"] = _cloud_state(
-                        w.desired_state, alive, gated, pod.get("desiredStatus", "")
-                    )
-                    info["cost_per_hr"] = pod.get("costPerHr")
-                    info["public_ip"] = pod.get("publicIp")
-                    info["ssh"] = f"ssh {w.pod_id}@ssh.runpod.io"
-                    _accrue(w, alive, pod.get("costPerHr"))
             # Real liveness, for reconcile's desired-vs-observed enforcement.
             info["observed_running"] = alive
-            info["spend"] = w.spend
             out.append(info)
         if observe and task.workers:
             tasks.save_task(spec, task)
@@ -1479,7 +1228,7 @@ class WorkerManager:
         if not _has_bucket_slots(spec, task):
             return None
         try:
-            creds, _ = self._cloud()
+            creds = self._creds()
         except (CredentialsError, FileNotFoundError):
             return None
         r2 = creds.r2
@@ -1510,7 +1259,7 @@ class WorkerManager:
         if not _has_bucket_slots(spec, task):
             return None
         try:
-            creds, _ = self._cloud()
+            creds = self._creds()
         except (CredentialsError, FileNotFoundError):
             return None
         r2 = creds.r2
@@ -1567,7 +1316,7 @@ class WorkerManager:
         """Run one blocking step off the event loop, one at a time.
 
         Everything reconcile does is blocking IO measured in seconds: ssh to a
-        laptop, rclone to R2, the Runpod API, a build. Run inline it froze the
+        laptop, rclone to R2, the provider's API, a build. Run inline it froze the
         whole dashboard -- an 8-second stall at every scheduler gate flip, with
         the UI hanging on requests it could otherwise have served. The executor
         holds a single thread, so these steps stay serialized with each other
@@ -1579,11 +1328,12 @@ class WorkerManager:
         """One pass over every task: run the workload's scheduler tick, then
         drive each worker's observed state toward its desired state -- respawn
         local workers that should be running but are not (dashboard restart,
-        crashed process), restart interruptible pods Runpod reclaimed, and park
-        or stop workers that are running but should not be (a scheduler gate or
-        an operator pause). Enforcement keys off real liveness by durable
-        pid/pod runtime, so it holds a paused worker down even across a
-        dashboard restart or a second dashboard instance.
+        crashed process), start and stop rented machines as their slots want,
+        and park or stop workers that are running but should not be (a
+        scheduler gate or an operator pause). Enforcement keys off real
+        liveness by durable pid or container probe, so it holds a paused
+        worker down even across a dashboard restart or a second dashboard
+        instance.
 
         It is also where the controller's half of a dispatch-driven role runs
         (RoleSpec.dispatch): assigning those slots their next piece of work and
@@ -1592,8 +1342,8 @@ class WorkerManager:
         takes a trainer's delivered records into dashboard.db.
 
         This pass is the only observer: it refreshes the container probes and
-        pod listing everything else reads, which also makes it the spend-accrual
-        heartbeat when no browser is polling.
+        the provider's instance listing everything else reads, which also
+        makes it the spend-accrual heartbeat when no browser is polling.
         """
         for spec, task in self._all_tasks():
             if spec.scheduler:
@@ -1738,32 +1488,8 @@ class WorkerManager:
                 self._spawn_local(spec, task, w)
             elif intent != RUN and alive:
                 self._stop_local(spec, task, w)
-        elif w.kind == "ssh":
-            self._reconcile_ssh(spec, task, w, intent, info["ssh_probe"])
         else:
-            # Parking a pod has to stop it: an idle pod bills like a busy one.
-            if intent == RUN and w.pod_id is not None and w.bundle_id != task.bundle_id:
-                # A pod's bundle is fixed at creation (its bootstrap fetches
-                # it once), so a slot joins the bundle the task has moved to
-                # by being replaced: this pod goes, and one on the task's
-                # bundle is created in its place. A generator loses its
-                # in-flight chunk; a trainer its in-flight generation, and
-                # comes back on the bucket's last committed checkpoint
-                # (position_eval/trainer.py restore_from_sink). Both are what
-                # the operator asked for by redeploying, or by starting a
-                # slot the task moved on from while it was paused.
-                self._replace_pod(spec, task, w)
-            elif intent == RUN and w.pod_id is None:
-                # A should-run slot with no pod: its creation failed on start,
-                # or a gate released it before its first start. Create it now
-                # -- unless a recent attempt failed, in which case wait it out.
-                if self._restart_allowed(_key(spec, task.tag, w.worker_id)):
-                    self._try_create_pod(spec, task, w)
-            elif intent == RUN and info["state"] == "interrupted":
-                self._start_pod(spec, task, w)
-            elif intent != RUN and alive:
-                _, client = self._cloud()
-                client.stop_pod(w.pod_id)
+            self._reconcile_ssh(spec, task, w, intent, info["ssh_probe"])
 
     def _reconcile_ssh(self, spec, task: tasks.TaskRecord, w, intent: str, probe: str):
         """Enforce one ssh slot's intent.
