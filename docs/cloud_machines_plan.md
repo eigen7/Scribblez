@@ -185,6 +185,10 @@ bucket-delivering slot, whose outputs are not on the machine to collect.
 2. Quotas, on day one, since the grant takes a day or two: "Running
    On-Demand G and VT instances" (zero on a new account; request 64
    vCPUs), and "All G and VT Spot Instance Requests" at the same time.
+   Also for spot, once, as an admin identity (the scribblez user is not
+   allowed to): `aws iam create-service-linked-role --aws-service-name
+   spot.amazonaws.com` -- AWS creates that role on the account's first
+   spot request and refuses the request when the caller cannot.
 3. A budget alert in the AWS console: belt-and-braces against any bug of
    ours.
 4. A read-only Docker Hub access token for the worker image repo, in a new

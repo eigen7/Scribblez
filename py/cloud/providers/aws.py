@@ -355,6 +355,13 @@ class AwsProvider:
                 f"No {type_id} capacity in the zone right now. Try again in a few minutes, or "
                 f"another type. (AWS: {error.detail})"
             )
+        if code == "AuthFailure.ServiceLinkedRoleCreationNotPermitted":
+            return (
+                "The account's first spot request needs the EC2 Spot service-linked role, which "
+                "the scribblez user may not create. Once, as an admin: `aws iam "
+                "create-service-linked-role --aws-service-name spot.amazonaws.com` (console "
+                f"CloudShell works), then rent again. (AWS: {error.detail})"
+            )
         if code in ("UnauthorizedOperation", "AuthFailure", "InvalidClientTokenId"):
             return (
                 f"AWS rejected the credentials or the IAM policy for this action: check the "
