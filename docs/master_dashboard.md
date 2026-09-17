@@ -2,7 +2,8 @@
 
 The React dashboard is the single web entrypoint for Scribblez work: pick a
 workload, pick or create a tag, configure its parameters, attach workers (the
-local machine and/or rented cloud pods), start/pause them, and watch progress
+local machine, your own machines over ssh, and machines rented from a cloud
+provider), start/pause them, and watch progress
 and workload-specific analysis — all from the browser.
 
 ## Concepts
@@ -30,53 +31,42 @@ and workload-specific analysis — all from the browser.
   the dashboard appear in the tag list, read-only.
 - **Role** — which of the workload's worker kinds a slot runs (`RoleSpec`):
   parallel interchangeable generators, or a singleton trainer on the local
-  GPU box or a rented GPU pod. Each role declares its runner, runtime deps, allowed
-  kinds (local/cloud), whether its pods rent interruptible, whether it needs
-  GPU hardware, and its stats schema.
-- **Worker** — a durable *slot* attached to a task: role, kind, resource
-  allocation, and a **desired state** (running/paused). A slot is added
-  paused: nothing launches until its first start, which for a cloud slot is
-  the moment the backing pod is created (a pod boots on creation), so an
-  added-but-never-started slot costs nothing. A local slot is a
-  subprocess of the dashboard server running the same worker loop as the
-  cloud, with a local results sink; a cloud slot is exactly one Runpod pod
-  running the image + bundle flow of [cloud_compute.md](cloud_compute.md); an
-  ssh slot is that same image + bundle flow as a Docker container on a machine
-  the operator owns (a spare laptop on the LAN, a home server), driven over
-  SSH. Cloud slots deliver through the results bucket, and while a task has
-  any, the server keeps a sync watcher running so their results stream into
-  the local mount. An ssh slot skips the bucket entirely: it delivers into its
-  own container and the reconcile pass reads finished output back over the
-  control link (`py/cloud/ssh_transfer.py`), so a cycle on an operator's own
-  machine contains no network at all. A slot's *actual* state can diverge from
-  desired (an operator-stopped pod, a dead subprocess, a reclaimed
-  interruptible pod, an ssh machine that is off the network); the UI shows
-  both, and the server reconciles desired vs. actual on startup and every few
-  seconds. That pass is the only thing that talks to a machine or the cloud
-  API, and it does so off the event loop; every status request is served from
-  what it last observed, so no slow host can stall the dashboard. A slot the
-  pass has not reached yet reads `checking`, and one whose container does not
-  exist yet reads `starting` — which lasts as long as taking the image does on
-  a machine that has never run one. A container that is not running carries its
-  reason — exit code and last log line, or why its creation failed — into the
-  workers table, and one that keeps dying is retried with a growing delay
-  rather than every pass. A cloud slot whose pod Runpod will not create (no
-  instance of the requested kind available, say) is treated the same way: it
-  reads `starting` with Runpod's reason beside it, and the next attempt is
-  backed off, doubling up to a few minutes, so an out-of-stock GPU costs one
-  API call every few minutes -- and the dashboard's other requests, which
-  queue behind the reconcile pass's blocking steps, stop waiting on a
-  creation that was never going to succeed.
+  GPU box or a rented GPU machine. Each role declares its runner, runtime
+  deps, allowed kinds (local/ssh), whether it needs GPU hardware, and its
+  stats schema.
+- **Worker** — a durable *slot* attached to a task: role, kind, and a
+  **desired state** (running/paused). A slot is added paused: nothing
+  launches until its first start. A local slot is a subprocess of the
+  dashboard server running the worker loop with a local results sink; an
+  ssh slot is the image + bundle flow of [cloud_compute.md](cloud_compute.md)
+  as a Docker container on a machine reached over SSH -- one the operator
+  owns (a spare laptop on the LAN, a home server) or one the dashboard rented
+  for the task (see "SSH worker machines"). A slot on the operator's own
+  machine skips the bucket: it delivers into its own container and the
+  reconcile pass reads finished output back over the control link
+  (`py/cloud/ssh_transfer.py`), so a cycle there contains no network at all.
+  A slot on a rented machine, and a trainer anywhere remote, delivers through
+  the results bucket, and while a task has any such slot the server keeps a
+  sync watcher running so their results stream into the local mount. A
+  slot's *actual* state can diverge from desired (a dead subprocess, an ssh
+  machine that is off the network, a rented machine that is stopped); the UI
+  shows both, and the server reconciles desired vs. actual on startup and
+  every few seconds. That pass is the only thing that talks to a machine or
+  the provider's API, and it does so off the event loop; every status request
+  is served from what it last observed, so no slow host can stall the
+  dashboard. A slot the pass has not reached yet reads `checking`, and one
+  whose container does not exist yet reads `starting` — which lasts as long
+  as taking the image does on a machine that has never run one. A container
+  that is not running carries its reason — exit code and last log line, or
+  why its creation failed — into the workers table, and one that keeps dying
+  is retried with a growing delay rather than every pass.
 - **Gates** — a workload's scheduler can *park* a role without touching the
   operator's desired state (e.g. the training workloads' generators once they
   are a generation ahead of the trainer). Gated workers show as
   `waiting (<reason>)` and resume automatically when released. Parking suspends
   what it cheaply can (an ssh container is paused, keeping its unpacked bundle
   and in-flight chunk) and stops what it must: a local worker, which restarts
-  in a second, and a cloud pod, which bills while it idles.
-- **Interruptible rentals** — roles that tolerate preemption (the generators:
-  at most one in-flight cycle lost) rent interruptible pods for the discount;
-  preemption is handled by the reconcile loop, not a human.
+  in a second.
 
 ## The web flow
 
@@ -91,12 +81,11 @@ Create freezes the selected profile's current values.
 Selecting a tag opens its task view, with tabs:
 
 - **Overview** — the frozen params (with the profile they came from and how
-  they depart from it), progress, live cloud $/hr, the workers
-  table, one add-worker form per role (cloud forms offer a live instance
-  selector fed by the cached Runpod catalog), and per-worker plus task-level
+  they depart from it), progress, what its rented machines bill right now,
+  the workers table, one add-worker form per role, the Machines card
+  (register your own, or rent one), and per-worker plus task-level
   start/pause/remove. Adding a worker records it paused — review the slot,
-  then start it. Pausing a cloud worker stops the pod (billing drops to
-  disk-only); only a non-running worker can be removed, so removal never
+  then start it. Only a non-running worker can be removed, so removal never
   silently discards an in-flight cycle. Tag deletion (local data dir only —
   the bucket archive is kept) is refused while the tag has workers.
 - **Stats** — generic per-role worker statistics: fleet-aggregate tiles
@@ -189,12 +178,12 @@ Either way the machine is prepared once, by hand:
   minutes: the image is several gigabytes, and doing this pull by hand
   beforehand is what turns that into a fast start.
 
-Slots then behave like pods: the machine's CPU arch picks its bundle (generic
-`x86-64` fallback), which the machine still fetches from the bucket at
-startup, and the reconcile loop restarts a container that died (e.g. the
-machine rebooted); the machine pulls the current worker image as part of
-creating one, so a rebuilt image reaches it without anyone logging in.
-Results go the other way -- collected over ssh rather than
+Slots on it: the machine's CPU arch picks its bundle (generic `x86-64`
+fallback), which the machine fetches from the bucket at startup, and the
+reconcile loop restarts a container that died (e.g. the machine rebooted);
+the machine pulls the current worker image as part of creating one, so a
+rebuilt image reaches it without anyone logging in. On the operator's own
+machine, results go the other way -- collected over ssh rather than
 uploaded -- so nothing but the bundle fetch touches R2. Each pass collects a
 bounded batch, so a backlog drains at a steady rate instead of each attempt
 having to move everything that has piled up; the workers table shows what a
@@ -216,14 +205,12 @@ the controller's tree when its first remote worker starts, and pins the
 result, so every worker of one task runs identical code and editing code
 mid-run does not change what the fleet is executing. The Overview badges the
 tree having moved on and offers Redeploy, which repins the task and replaces
-its containers and pods (a pod's or container's bundle is fixed at creation).
-A pod is replaced outright: its outputs are already in the bucket, so a
-generator loses only its in-flight chunk and a trainer its in-flight
-generation, coming back on the bucket's last committed checkpoint. A paused
-slot the task moved on from is replaced the same way when next started -- as
-is any stopped pod Runpod cannot start again (a stopped pod is pinned to its
-host, which may have filled meanwhile), whether the start is the operator's
-or the reconcile pass resuming a parked or reclaimed slot. A machine that is off the network shows `unreachable`; the server
+its containers (a container's bundle is fixed at creation). A
+bucket-delivering container is replaced outright: its outputs are already in
+the bucket, so a generator loses only its in-flight chunk and a trainer its
+in-flight generation, coming back on the bucket's last committed checkpoint.
+A paused slot the task moved on from is replaced the same way when next
+started. A machine that is off the network shows `unreachable`; the server
 leaves it alone — its worker may well still be running — and resumes control
 when SSH works again. Keep the machine from sleeping on lid-close if it is a
 laptop.

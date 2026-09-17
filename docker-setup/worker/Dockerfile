@@ -1,6 +1,6 @@
 # Scribblez cloud worker image.
 #
-# Slim headless runtime for rented cloud machines (Runpod CPU pods). Contains
+# Slim headless runtime for machines the dashboard drives over ssh. Contains
 # dependencies ONLY -- no repo code, no compiled binaries, no lexica -- so the
 # registry image stays stable and code iteration never requires an image
 # rebuild or re-pull. At pod start the baked-in bootstrap.py downloads a

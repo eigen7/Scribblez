@@ -61,14 +61,14 @@
 - **[react_dashboard.md](react_dashboard.md)** — the training dashboard: React
   shell + Python data API, embedded Bokeh metric figures, and the interactive
   lane-analysis and Positions tabs.
-- **[cloud_compute.md](cloud_compute.md)** — distributed data generation on
-  rented cloud CPUs (Runpod): the stable dependency-only worker image, per-arch
-  code bundles through R2, the fleet CLI, and results syncing back to the
-  local mount for unchanged analysis.
+- **[cloud_compute.md](cloud_compute.md)** — how work runs on rented
+  machines: the stable dependency-only worker image, per-arch code bundles
+  through R2, and results syncing back to the local mount for unchanged
+  analysis.
 - **[cloud_training_plan.md](cloud_training_plan.md)** — plan-reviewed design
   for running the trainers on rented GPU pods, several tags in parallel: the
   trainer's record/controls contract (landed), the runtime (landed), and the
-  Runpod cloud slot (landed, being retired).
+  Runpod cloud slot (landed, since removed).
 - **[cloud_machines_plan.md](cloud_machines_plan.md)** — plan-reviewed design
   for rented machines: AWS instances as task-scoped ssh machines the
   dashboard launches, idles and terminates; the trainer on the ssh kind;
