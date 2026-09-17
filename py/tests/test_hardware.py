@@ -30,7 +30,7 @@ def _affinity(monkeypatch, n: int):
 
 
 def test_v2_quota_caps_a_wider_affinity_mask(tmp_path, monkeypatch):
-    """The reported Runpod case: a 96-core affinity mask, a 12-vCPU quota."""
+    """The reported rented-container case: a 96-core affinity mask, a 12-vCPU quota."""
     _affinity(monkeypatch, 96)
     _v2(tmp_path, monkeypatch, "1200000 100000\n")  # 12 vCPUs
     assert hardware.default_thread_count() == 12

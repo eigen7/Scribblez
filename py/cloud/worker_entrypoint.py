@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Long-running entrypoint for a worker (cloud pod or local subprocess).
+"""Long-running entrypoint for a worker (remote container or local subprocess).
 
-On a cloud pod this is launched by the worker image's bootstrap
+In a container this is launched by the worker image's bootstrap
 (docker-setup/worker/bootstrap.py) after it unpacks a code+binary bundle; the
 master dashboard launches the same entrypoint as a local subprocess. It owns
 the process concerns -- env parsing, the results sink, the SIGTERM handler, a
 provenance manifest -- then dispatches to the runner of the requested workload
-role (the workload registry, scribblez/workloads/). SIGTERM (pod stop /
+role (the workload registry, scribblez/workloads/). SIGTERM (container stop /
 preemption / dashboard pause) raises WorkerStopped out of the runner's loop;
 runners flush completed output and exit cleanly, losing at most the in-flight
 cycle.
@@ -29,9 +29,9 @@ Configuration is entirely via environment variables:
     SCZ_MAX_CYCLES                        stop after N cycles (default 0 = run
                                           until stopped)
     SCZ_WORKER_ID                         manifest/stats identity (default: the
-                                          Runpod pod id, else hostname)
-    SCZ_WORKER_KIND                       slot kind reported in stats: "local",
-                                          "ssh" or "cloud" (default: the sink's)
+                                          hostname)
+    SCZ_WORKER_KIND                       slot kind reported in stats: "local"
+                                          or "ssh" (default: the sink's)
     SCZ_BUNDLE_ID, SCZ_HOST_ARCH,         set by the cloud bootstrap; recorded
     SCZ_BUNDLE_ARCH                       in the manifest and stats
     SCZ_DEVICE                            torch device for a train role
@@ -111,9 +111,7 @@ def check_params_understood(spec, env):
 
 
 def worker_id() -> str:
-    return (
-        os.environ.get("SCZ_WORKER_ID") or os.environ.get("RUNPOD_POD_ID") or socket.gethostname()
-    )
+    return os.environ.get("SCZ_WORKER_ID") or socket.gethostname()
 
 
 def provenance() -> dict:

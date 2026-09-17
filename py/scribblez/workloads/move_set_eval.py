@@ -20,7 +20,7 @@ resolving a different model and splitting the corpus's teacher hash.
 The generate role is GPU and local-only for now: the teacher runs under
 TensorRT, which the cloud worker image cannot host yet (the GPU-workloads item
 in docs/cloud_compute.md -- a CUDA worker image plus a way to ship the teacher
-to pods). The generator binary already rides in the worker bundle so that
+to remote machines). The generator binary already rides in the worker bundle so that
 enablement is config, not code, on this side.
 
 Every `sweep_every`-th pair is labeled in the generator's full-sweep mode
@@ -420,7 +420,6 @@ SPEC = WorkloadSpec(
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
             kinds=("local",),
             gpu=True,
-            interruptible=True,
             stats=StatsSpec(
                 unit="pairs",
                 phases={

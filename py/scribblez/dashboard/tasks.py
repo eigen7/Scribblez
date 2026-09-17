@@ -10,8 +10,8 @@ The dashboard reads and mutates a task from several places at once -- the
 reconcile pass across its blocking steps, request handlers, status polls --
 and when each of those held its own copy, the last save won: an operator's
 pause, saved by its handler, was overwritten seconds later by the pass's copy
-that had loaded "running" before the click (and a pod was rented again to
-honor it). With one object there is nothing stale to save.
+that had loaded "running" before the click (and a worker was started again
+to honor it). With one object there is nothing stale to save.
 """
 
 import json
@@ -20,7 +20,7 @@ import shutil
 import tempfile
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from scribblez.dashboard.worker_stats_figures import read_stats
@@ -30,14 +30,11 @@ from scribblez.workloads import WorkloadSpec, resolve
 @dataclass
 class WorkerRecord:
     """One worker slot: durable identity + desired state. The backing process
-    or pod's actual state is observed live by the WorkerManager, which also
-    accrues the spend estimate here (observed running time x the pod's rate;
-    Runpod's billing API returns nothing for CPU pods, so spend is estimated
-    from our own observations)."""
+    or container's actual state is observed live by the WorkerManager."""
 
     worker_id: str
     role: str  # which of the workload's roles this slot runs
-    kind: str  # "local" | "cloud" | "ssh"
+    kind: str  # "local" | "ssh"
     desired_state: str  # "running" | "paused"
     threads: int | None = None  # local/ssh: engine thread count (None: all cores)
     host: str | None = None  # ssh: SSH destination ("user@host" or an ssh-config alias)
@@ -60,14 +57,9 @@ class WorkerRecord:
     # unreachable handling.
     launched: bool = True
     pid: int | None = None  # local: OS pid of the backing subprocess, if spawned
-    vcpus: int | None = None  # cloud CPU pod: vCPU count
-    flavor: str | None = None  # cloud CPU pod: Runpod CPU flavor
-    gpu_type_id: str | None = None  # cloud GPU pod: Runpod gpuTypeId
-    gpu_count: int | None = None  # cloud GPU pod: number of GPUs
-    pod_id: str | None = None  # cloud: the backing pod, created on first start (None until then)
-    # cloud/ssh: the bundle the pod/container was created with. A pod's or
-    # container's environment fixes its bundle at creation, so a slot whose id
-    # no longer matches its task's is replaced rather than restarted.
+    # ssh: the bundle the container was created with. A container's
+    # environment fixes its bundle at creation, so a slot whose id no longer
+    # matches its task's is replaced rather than restarted.
     bundle_id: str | None = None
     # ssh: delivered files the container still holds. Zero from the moment the
     # container is created (it cannot hold anything yet, which is what lets one
@@ -78,10 +70,6 @@ class WorkerRecord:
     # replacing the container is safe, and a dashboard restart must not turn
     # "holding six hours of work" into "nothing known, go ahead".
     undelivered: int | None = None
-    cost_per_hr: float | None = None  # cloud: last observed rental rate
-    spend: float = 0.0  # estimated dollars spent by this slot so far
-    observed_at: float | None = None  # when the slot was last observed
-    observed_running: bool = False  # whether it was running then
 
 
 @dataclass
@@ -128,7 +116,7 @@ class TaskRecord:
     # operator pause: a gated worker keeps desired_state="running" and resumes
     # automatically when the scheduler releases the gate.
     gates: dict = field(default_factory=dict)
-    # Estimated spend of worker slots that have since been removed, so the
+    # Estimated spend of machines that have since been removed, so the
     # task's cumulative total survives slot removal.
     retired_spend: float = 0.0
     # The bundle every bucket-delivering worker of this task runs, pinned when
@@ -179,10 +167,22 @@ _records: dict[Path, tuple[TaskRecord, int]] = {}
 _records_lock = threading.Lock()
 
 
+def _declared(cls, raw: dict) -> dict:
+    """`raw` restricted to `cls`'s fields: a stored record keeps every field
+    its writer had, so a field removed since is dropped on read (and gone from
+    the file on the next save) rather than failing the whole load."""
+    names = {f.name for f in fields(cls)}
+    return {k: v for k, v in raw.items() if k in names}
+
+
+def _from_stored(cls, raw: dict):
+    return cls(**_declared(cls, raw))
+
+
 def _read_task(path: Path) -> TaskRecord:
-    raw = json.loads(path.read_text())
-    raw["workers"] = [WorkerRecord(**w) for w in raw.get("workers", [])]
-    raw["machines"] = [MachineRecord(**m) for m in raw.get("machines", [])]
+    raw = _declared(TaskRecord, json.loads(path.read_text()))
+    raw["workers"] = [_from_stored(WorkerRecord, w) for w in raw.get("workers", [])]
+    raw["machines"] = [_from_stored(MachineRecord, m) for m in raw.get("machines", [])]
     return TaskRecord(**raw)
 
 
@@ -249,8 +249,8 @@ def delete_tag(spec: WorkloadSpec, tag: str):
     purge it manually if truly done with it.
 
     The tag must have no worker slots left: this deletes the task record that
-    tracks their pods and containers, so deleting past one would orphan the
-    thing it was renting. Callers go through WorkerManager.delete_task, which
+    tracks their containers and machines, so deleting past one would orphan
+    the thing it was renting. Callers go through WorkerManager.delete_task, which
     tears the slots down first.
     """
     task = load_task(spec, tag)

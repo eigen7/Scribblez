@@ -6,7 +6,7 @@ and the controller's ingest tick (train_ingest.py) writes them into the tag's
 dashboard.db -- the split match eval already uses for its results
 (match_eval/dispatch.py), applied to training. The trainer is then the same
 process wherever it runs: on this machine the sink is a rename into the tag
-root, on a pod it is an upload; and the database has exactly one writer, the
+root, on a rented machine it is an upload; and the database has exactly one writer, the
 dashboard server.
 
 Records, under the tag's records/ directory (paths.py names them):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Worker-pod bootstrap: fetch a code+binary bundle and hand off to it.
+"""Worker bootstrap: fetch a code+binary bundle and hand off to it.
 
 Baked into the worker Docker image as its entrypoint, so it must stay
 dependency-free (stdlib + the image's rclone/g++) and stable -- all iterable

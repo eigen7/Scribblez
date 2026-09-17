@@ -13,9 +13,8 @@ Paths are relative to the tag root, the one layout both sides share: the
 container runs the controller's own tree under the same mount root, so a
 relative path names the same thing on either machine.
 
-A cloud pod has no such surface -- nothing can reach into a rented pod's
-filesystem, only the bucket it uploads to -- so a dispatch-driven role is
-local or ssh, and its RoleSpec says so.
+A container on a rented machine delivers through the bucket instead, and a
+dispatch-driven role's RoleSpec says which machines it can run on.
 """
 
 import os

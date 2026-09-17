@@ -4,7 +4,7 @@ Three roles on one tag: any number of interchangeable generate workers
 (local/cloud) producing self-play chunks into the tag's staging area, a
 singleton train worker consuming complete generations (sliding window, one
 epoch per generation, per-checkpoint ONNX + dashboard records) -- on this
-machine's GPU, or on a rented GPU pod, where it takes its generations from
+machine's GPU, or on a rented GPU machine, where it takes its generations from
 the bucket and delivers its outputs there (docs/cloud_training_plan.md) --
 and a singleton match_eval worker turning exported checkpoints into
 match-play readouts against a fixed opponent (scribblez/match_eval/runner.py).
@@ -179,7 +179,6 @@ SPEC = WorkloadSpec(
             title="Generator",
             runner="scribblez.workloads.selfplay_gen:run_generate",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
-            interruptible=True,
             stats=GENERATOR_STATS,
         ),
         RoleSpec(
@@ -190,7 +189,7 @@ SPEC = WorkloadSpec(
             deps="scribblez.workloads.position_eval:fetch_train_deps",
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
-            kinds=("local", "ssh", "cloud"),
+            kinds=("local", "ssh"),
             gpu=True,
             stats=TRAINER_STATS,
         ),

@@ -7,9 +7,9 @@ reads its secrets from a single JSON file in the mount directory:
 
 The file is filled in by hand (scripts/cloud_check_credentials.py writes a
 placeholder template when it is absent, and validates a filled-in one against
-the live services). It never leaves the machine: workers on rented pods
-receive only the narrow subset they need -- the R2 object credentials -- via
-pod environment variables at launch.
+the live services). It never leaves the machine: workers on rented machines
+receive only the narrow subset they need -- the R2 object credentials, and a
+read-only registry pull token -- through their environment at launch.
 """
 
 import json
@@ -25,13 +25,6 @@ CREDENTIALS_PATH = Path("/workspace/mount/cloud/credentials.json")
 PLACEHOLDER = "FILL_ME"
 
 TEMPLATE = {
-    "runpod": {
-        # Runpod console -> Settings -> API Keys.
-        "api_key": PLACEHOLDER,
-        # Runpod console -> Settings -> Container Registry Auth; the ID of the
-        # entry holding the Docker Hub credentials for the worker image.
-        "container_registry_auth_id": PLACEHOLDER,
-    },
     "registry": {
         # Private worker-image repo, e.g. "docker.io/someuser/scribblez-worker".
         "worker_image": PLACEHOLDER,
@@ -63,12 +56,6 @@ TEMPLATE = {
 
 class CredentialsError(Exception):
     """The credentials file is missing, malformed, or not fully filled in."""
-
-
-@dataclass(frozen=True)
-class RunpodCredentials:
-    api_key: str
-    container_registry_auth_id: str
 
 
 @dataclass(frozen=True)
@@ -124,7 +111,6 @@ class AwsCredentials:
 
 @dataclass(frozen=True)
 class CloudCredentials:
-    runpod: RunpodCredentials
     registry: RegistryConfig
     r2: R2Credentials
     aws: AwsCredentials
@@ -165,12 +151,6 @@ def load_credentials(path: Path = CREDENTIALS_PATH) -> CloudCredentials:
 
     problems: list[str] = []
     creds = CloudCredentials(
-        runpod=RunpodCredentials(
-            api_key=_collect(raw, "runpod", "api_key", problems),
-            container_registry_auth_id=_collect(
-                raw, "runpod", "container_registry_auth_id", problems
-            ),
-        ),
         registry=RegistryConfig(
             worker_image=_collect(raw, "registry", "worker_image", problems),
             username=_collect(raw, "registry", "username", problems),

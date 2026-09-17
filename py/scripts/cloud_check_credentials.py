@@ -4,8 +4,6 @@
 If the file is absent, writes a placeholder template and exits. Otherwise
 checks each credential by exercising it:
 
-  - Runpod API key: lists the account's pods.
-  - Runpod registry auth ID: fetches that container-registry-auth entry.
   - R2: writes, reads back, and deletes a probe object in the bucket.
   - Worker image name: shape check only (a private repo's existence can't be
     probed without pulling; the first image push exercises it).
@@ -37,7 +35,6 @@ from cloud.providers.aws import AwsProvider
 from cloud.providers.base import ProviderError
 from cloud.r2 import bucket_path, rclone
 
-RUNPOD_API_BASE = "https://rest.runpod.io/v1"
 PROBE_OBJECT = "_credentials_check/probe.txt"
 PROBE_CONTENT = "scribblez credentials probe\n"
 
@@ -45,41 +42,6 @@ PROBE_CONTENT = "scribblez credentials probe\n"
 def report(ok: bool, what: str, detail: str = "") -> bool:
     print(f"  {'ok  ' if ok else 'FAIL'}  {what}{f': {detail}' if detail else ''}")
     return ok
-
-
-def runpod_get(api_key: str, path: str):
-    """GET a Runpod REST endpoint, returning the parsed JSON body."""
-    req = urllib.request.Request(
-        f"{RUNPOD_API_BASE}{path}",
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
-
-
-def check_runpod_api_key(creds: CloudCredentials) -> bool:
-    try:
-        pods = runpod_get(creds.runpod.api_key, "/pods")
-    except urllib.error.HTTPError as e:
-        return report(False, "runpod.api_key", f"GET /pods -> HTTP {e.code}")
-    except urllib.error.URLError as e:
-        return report(False, "runpod.api_key", f"GET /pods -> {e.reason}")
-    return report(True, "runpod.api_key", f"account has {len(pods)} pod(s)")
-
-
-def check_runpod_registry_auth(creds: CloudCredentials) -> bool:
-    auth_id = creds.runpod.container_registry_auth_id
-    try:
-        auth = runpod_get(creds.runpod.api_key, f"/containerregistryauth/{auth_id}")
-    except urllib.error.HTTPError as e:
-        return report(
-            False,
-            "runpod.container_registry_auth_id",
-            f"GET /containerregistryauth/{auth_id} -> HTTP {e.code}",
-        )
-    except urllib.error.URLError as e:
-        return report(False, "runpod.container_registry_auth_id", str(e.reason))
-    return report(True, "runpod.container_registry_auth_id", f"entry '{auth.get('name')}'")
 
 
 def check_r2_round_trip(creds: CloudCredentials) -> bool:
@@ -154,8 +116,6 @@ def main() -> int:
 
     print(f"Checking credentials from {CREDENTIALS_PATH} ...")
     results = [
-        check_runpod_api_key(creds),
-        check_runpod_registry_auth(creds),
         check_r2_round_trip(creds),
         check_worker_image_name(creds),
         check_registry_pull_token(creds),

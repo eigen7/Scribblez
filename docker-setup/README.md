@@ -13,10 +13,10 @@ registry.
 
 ## `worker/` — the cloud worker image
 
-A slim, headless runtime for rented cloud machines (Runpod CPU pods). Deliberately contains
+A slim, headless runtime for machines the dashboard drives over ssh, rented or the operator's own. Deliberately contains
 **dependencies only** — no repo code, no compiled binaries, no lexica — so that the image
 pushed to the registry is stable and code iteration never requires an image rebuild or
-re-pull. At pod start its baked-in `bootstrap.py` downloads a code+binary bundle (uploaded
+re-pull. At container start its baked-in `bootstrap.py` downloads a code+binary bundle (uploaded
 from the dev container by `py/scripts/cloud_push_binaries.py`) from the R2 bucket, unpacks
 it at `/workspace/repo`, and hands off to the bundle's worker entrypoint, which fetches the
 remaining runtime data (lexica, Macondo strategy files) from their public upstreams.

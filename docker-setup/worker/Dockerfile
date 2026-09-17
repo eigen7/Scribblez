@@ -1,9 +1,9 @@
 # Scribblez cloud worker image.
 #
-# Slim headless runtime for rented cloud machines (Runpod CPU pods). Contains
+# Slim headless runtime for machines the dashboard drives over ssh. Contains
 # dependencies ONLY -- no repo code, no compiled binaries, no lexica -- so the
 # registry image stays stable and code iteration never requires an image
-# rebuild or re-pull. At pod start the baked-in bootstrap.py downloads a
+# rebuild or re-pull. At container start the baked-in bootstrap.py downloads a
 # code+binary bundle (pushed by py/scripts/cloud_push_binaries.py) from the R2
 # bucket into /workspace/repo and hands off to the bundle's worker entrypoint.
 # See docker-setup/README.md and docs/cloud_compute.md.
@@ -73,7 +73,7 @@ COPY --from=devlibs /usr/local/cuda/lib64/libcudart.so.12.9.79 /usr/lib/x86_64-l
 #
 # It sits in the one image deliberately, rather than in a `-gpu` tag layered
 # on top of it. The cost of that choice is ~1.4 GB of extra pull on every CPU
-# pod that will never dlopen it, against which one image is one thing to
+# worker that will never dlopen it, against which one image is one thing to
 # build, push, record an ABI for, and reason about when a worker will not
 # start. Splitting is a one-line change here plus an image choice at the
 # container-creation sites, should the pull cost of a large fleet ever

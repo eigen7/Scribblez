@@ -13,7 +13,7 @@ export type ParamField = {
   choices: string[] | null;  // the closed set of accepted values; null if open
 };
 export type Role = {
-  name: string; title: string; singleton: boolean; kinds: string[]; interruptible: boolean;
+  name: string; title: string; singleton: boolean; kinds: string[];
   gpu: boolean;
   stats: { unit: string; phases: Record<string, string> } | null;
 };

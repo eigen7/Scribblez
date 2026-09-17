@@ -3,7 +3,7 @@
 A bundle is one tarball per supported CPU microarchitecture (the engine is
 compiled per-arch under target/archs/<arch>/; see py/build.py), each holding
 that arch's binaries plus the arch-independent py/ tree, uploaded to the
-results bucket under bundles/<bundle_id>/. A worker pod downloads and unpacks
+results bucket under bundles/<bundle_id>/. A worker container downloads and unpacks
 the tarball matching its CPU at startup (docker-setup/worker/bootstrap.py),
 falling back to the generic-x86-64 tarball, so code iteration never requires
 rebuilding or re-pushing the worker Docker image.

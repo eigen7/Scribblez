@@ -1,10 +1,10 @@
 """Moving files between the controller and a worker's container, over the
 control ssh link.
 
-An ssh worker runs on a machine the operator owns, one the controller already
+An ssh worker on a machine the operator owns is one the controller already
 reaches over ssh to manage its container. Its outputs used to travel the same
-way a cloud pod's do -- uploaded to the results bucket and pulled back down --
-which put two R2 round trips on every cycle of a job whose actual work took
+way a rented machine's do -- uploaded to the results bucket and pulled back
+down -- which put two R2 round trips on every cycle of a job whose actual work took
 1.5 seconds, and made a home network's hiccups the throughput ceiling.
 
 So the worker delivers locally, into its own container (SCZ_SINK=local), and

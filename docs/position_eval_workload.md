@@ -2,7 +2,7 @@
 
 How the training pipelines run as first-class workloads of the master
 dashboard ([master_dashboard.md](master_dashboard.md)): self-play generation
-farmed out to any number of interchangeable local/cloud workers, the GPU
+farmed out to any number of interchangeable local/remote workers, the GPU
 trainer running as a distinguished singleton worker consuming the shared data,
 and the whole run driven from the one web shell. Both training workloads
 (position_eval and max_move_per_lane) share this shape; position_eval is
@@ -17,8 +17,8 @@ params dataclass, the roles (`RoleSpec`: runner and deps as dotted paths,
 singleton or parallel, allowed kinds, interruptible, stats schema), an
 optional controller-side scheduler, a progress callable, and the bucket
 prefixes cloud_sync pulls. Registry modules stay import-light — heavy code is
-referenced by dotted path and imported only when it runs, so cloud CPU pods
-import the registry without torch.
+referenced by dotted path and imported only when it runs, so a CPU-only
+worker container imports the registry without torch.
 
 Knobs split uniformly across workloads: **task params** (frozen at creation;
 define the corpus and the model), **live controls** (the tag's
@@ -41,8 +41,8 @@ kill_test under the contract: one parallel, interruptible `generate` role and
 no scheduler; each worker cycles in a private work dir and delivers complete
 pairs to the tag's data store.
 
-A trainer slot that delivers through the bucket (kind `cloud`: a GPU pod
-on the torch worker image) gets two more legs from the controller: the
+A trainer slot that delivers through the bucket (an ssh slot on a rented
+GPU machine, on the torch worker image) gets two more legs from the controller: the
 per-task sync watcher also pulls its outputs (`records/`, `models/`,
 `checkpoints/`, `train_state.json`), and the reconcile pass pushes the tag's
 `controls.json` up whenever the Controls tab rewrites it. Everything else
@@ -54,11 +54,11 @@ dashboard, which is the point of it ([cloud_training_plan.md](cloud_training_pla
 
 ## Roles
 
-| Role | Cardinality | Kinds | Interruptible | Does |
-|---|---|---|---|---|
-| `generate` | N, interchangeable | local + cloud | yes | one cycle = one whole `.slog` chunk of self-play games, delivered to the staging area |
-| `train` | singleton | local (the GPU box) + cloud (a GPU pod) | — | consume complete generations: train, checkpoint, export ONNX, deliver the generation's record |
-| `match_eval` | singleton | local + ssh (needs a GPU) | — | play eval matches against fixed opponent (position_eval only; docs/roadmap.md A1) |
+| Role | Cardinality | Kinds | Does |
+|---|---|---|---|
+| `generate` | N, interchangeable | local + ssh | one cycle = one whole `.slog` chunk of self-play games, delivered to the staging area |
+| `train` | singleton | local (the GPU box) + ssh (a rented GPU machine) | consume complete generations: train, checkpoint, export ONNX, deliver the generation's record |
+| `match_eval` | singleton | local + ssh (needs a GPU) | play eval matches against fixed opponent (position_eval only; docs/roadmap.md A1) |
 
 The trainer never generates and the generators never train; match_eval only
 consumes exported ONNX checkpoints, so the training loop is never blocked. A
@@ -119,7 +119,7 @@ records publication, so a failed upload is retried on the next tick.
 At most one generation is open at a time. The scheduler opens generation `M`
 when `M ≤ trainer_cursor + open_ahead` (task param), closes it at
 `target_games`, and when nothing is open **gates** the generate role — local
-processes parked, pods stopped, shown as `waiting (ahead of trainer)` —
+processes parked, containers stopped, shown as `waiting (ahead of trainer)` —
 ungating when the trainer advances. `trainer_cursor` comes from a small
 `train_state.json` the trainer writes atomically at every checkpoint; nobody
 outside the trainer parses the torch checkpoint. Before a trainer has ever
@@ -234,8 +234,8 @@ needed, `generate_data.py` still exists.
 
 | Failure | Effect | Recovery |
 |---|---|---|
-| generator crash / pod preemption | loses at most the in-flight chunk | reconcile respawns/restarts it |
-| dashboard server down | no ingest, no gating; local workers die; pods keep producing into bucket staging | on restart: reconcile respawns locals, ingest drains staging |
+| generator crash / machine loss | loses at most the in-flight chunk | reconcile respawns/restarts it |
+| dashboard server down | no ingest, no gating; local workers die; remote containers keep producing into bucket staging | on restart: reconcile respawns locals, ingest drains staging |
 | trainer crash | training halts; generation continues to the ahead-limit gate | respawn resumes from the rolling checkpoint |
 | sync lag | chunks arrive late to staging | ingest is idempotent; late chunks join the open generation |
 | corrupt staged chunk | quarantined as `.bad`, never assigned | — |

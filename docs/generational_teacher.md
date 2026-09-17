@@ -61,7 +61,7 @@ controller-owned, written atomically:
   without dangling this tag's teachers), and every teacher version stays
   resolvable for as long as its generations exist.
 - `object_key` is set when the cloud leg exists (below): the same bytes as
-  a content-addressed bucket object, so pods can fetch digest-verified.
+  a content-addressed bucket object, so remote workers can fetch digest-verified.
 - Task creation seeds epoch 0 through a workload **creation hook** (a small
   WorkloadSpec extension: validated params → side effects). The seed params
   are two ordinary strings — source position_eval tag + checkpoint
