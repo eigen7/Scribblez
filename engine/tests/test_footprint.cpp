@@ -649,7 +649,9 @@ TEST(FootprintCollapse, LegalCellsCoverAllProbabilityMass) {
   for (int h = 0; h < kPlacementHeads; ++h) {
     for (int i = 0; i < kFootprintSide * kFootprintSide; ++i) {
       const size_t idx = size_t(h) * kFootprintSide * kFootprintSide + i;
-      if (prob[idx] > 1e-6f) EXPECT_GT(legal[idx], 0.5f) << "head " << h << " cell " << i;
+      if (prob[idx] > 1e-6f) {
+        EXPECT_GT(legal[idx], 0.5f) << "head " << h << " cell " << i;
+      }
     }
   }
   EXPECT_GT(legal[7 * kFootprintSide + 7], 0.5f);  // sanity: the covered cell is indeed legal
