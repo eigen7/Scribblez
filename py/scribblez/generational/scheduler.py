@@ -1,7 +1,7 @@
 """The generation scheduler: controller-side ingest, lifecycle, and pacing.
 
 Generators are generation-agnostic -- they deliver whole .slog chunks into the
-tag's staging area (directly for local workers, via cloud sync for pods). The
+tag's staging area (directly for local workers, via cloud sync for bucket-delivering ones). The
 scheduler, ticked per task by the dashboard server's reconcile loop, is the
 single writer of generation structure:
 

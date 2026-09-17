@@ -4,7 +4,7 @@ rclone is configured entirely through environment variables (no config file):
 the `r2:` remote is an S3-compatible endpoint pointed at the operator's
 Cloudflare R2 account. The same helpers serve the laptop-side tools (which get
 their R2Credentials from the credentials file) and the worker entrypoint
-(which gets them from pod environment variables).
+(which gets them from its container's environment).
 """
 
 import os

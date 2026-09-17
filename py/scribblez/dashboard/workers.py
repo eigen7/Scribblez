@@ -431,7 +431,7 @@ class WorkerManager:
         self._idle_since: dict[str, float] = {}
         # (instances by id, when listed): the provider's view of every
         # instance it tagged ours, refreshed by the reconcile pass like the
-        # pod listing used to be.
+        # container probes above.
         self._instances: tuple[dict[str, Instance], float] = ({}, 0.0)
         self._provider_client: Provider | None = None
         self._account: str | None = None  # the provider's account line, once asked

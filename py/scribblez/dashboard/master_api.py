@@ -176,7 +176,7 @@ class TaskHandler(_MasterBase):
 
 class TaskDeleteHandler(_MasterBase):
     """Delete a tag and its local data. The tag's idle worker slots go with
-    it -- tearing their containers and pods down is seconds of ssh and cloud
+    it -- tearing their containers and machines down is seconds of ssh and cloud
     work, hence the offload."""
 
     async def post(self):

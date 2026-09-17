@@ -93,7 +93,7 @@ Selecting a tag opens its task view, with tabs:
   over time, per-phase cycle-time breakdown), and a per-worker detail table,
   driven by the role's declared stats schema. Each worker maintains a stats
   JSON under the tag (cumulative counters plus a bounded window of per-cycle
-  samples); cloud workers upload it every cycle and it rides the normal sync,
+  samples); bucket-delivering workers upload it every cycle and it rides the normal sync,
   so the dashboard reads only the local mount.
 - **Workload tabs** from the client registry (`web/src/workloads.tsx`): the
   training workloads add the training-analysis views of
@@ -222,8 +222,8 @@ alongside the read-only training data plane:
 
 - `py/scribblez/dashboard/tasks.py` — task records, tag enumeration, progress.
 - `py/scribblez/dashboard/workers.py` — the WorkerManager: local subprocesses
-  (spawn/interrupt/respawn; logs under the tag's `logs/`), cloud pods via
-  `py/cloud`, the per-task sync watcher, scheduler ticks, and gate
+  (spawn/interrupt/respawn; logs under the tag's `logs/`), ssh containers and
+  rented machines via `py/cloud`, the per-task sync watcher, scheduler ticks, and gate
   enforcement.
 - `py/scribblez/dashboard/worker_stats_figures.py` — the schema-driven Stats
   figures.

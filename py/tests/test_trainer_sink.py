@@ -97,7 +97,7 @@ def test_the_r2_sink_fetches_and_delivers_root_files(paths, monkeypatch):
     export.parent.mkdir(parents=True)
     export.write_bytes(b"onnx")
     sink.deliver_output(export, "models/model_epoch_0003.onnx")
-    assert not export.exists()  # the bucket is where exports live; the pod disk is scratch
+    assert not export.exists()  # the bucket is where exports live; the machine's disk is scratch
     paths.checkpoints_dir.mkdir()
     paths.rolling_checkpoint.write_bytes(b"pt")
     sink.deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)

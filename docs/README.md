@@ -75,7 +75,7 @@
   Runpod's removal. The provider lives in `py/cloud/providers/`.
 - **[master_dashboard.md](master_dashboard.md)** — the React dashboard as the
   single entrypoint for all work: the workload registry, the job-control
-  plane (launch/stop local and cloud workers from the browser), and
+  plane (launch/stop local and ssh workers from the browser), and
   workload-specific analysis tabs.
 - **[position_eval_workload.md](position_eval_workload.md)** — the training
   workloads on the master dashboard: the workload-spec contract (roles, params,

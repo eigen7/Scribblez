@@ -1,6 +1,7 @@
 """Unit tests for the WorkerManager's slot lifecycle policy: slots are added
-paused and nothing launches at add time, a cloud slot's pod is created on its
-first start, and the cloud display-state mapping covers the no-pod-yet case.
+paused and nothing launches at add time, local and ssh slots share one
+reconcile pass that contains each slot's failures, and a status poll observes
+without writing.
 
 Every path that would launch compute or touch cloud credentials is patched to
 fail, so a regression back toward launch-on-add breaks loudly.
@@ -157,7 +158,7 @@ def test_a_pause_survives_a_pass_that_looked_at_the_task_before_it(manager, spec
     """The incident: "Pause all" landed in the handler's copy of the task,
     and the reconcile pass -- which had loaded its own copy, reading
     "running", before the click -- saved that copy back over it a step later.
-    The next pass then honored "running" with a fresh pod. Both now hold the
+    The next pass then honored "running" with a fresh process. Both now hold the
     one record, so the pass saves the pause it did not know about."""
     w = manager.add_local(spec, task, "generate", threads=1)
     w.desired_state = "running"

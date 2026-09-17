@@ -10,8 +10,8 @@ The dashboard reads and mutates a task from several places at once -- the
 reconcile pass across its blocking steps, request handlers, status polls --
 and when each of those held its own copy, the last save won: an operator's
 pause, saved by its handler, was overwritten seconds later by the pass's copy
-that had loaded "running" before the click (and a pod was rented again to
-honor it). With one object there is nothing stale to save.
+that had loaded "running" before the click (and a worker was started again
+to honor it). With one object there is nothing stale to save.
 """
 
 import json
@@ -249,8 +249,8 @@ def delete_tag(spec: WorkloadSpec, tag: str):
     purge it manually if truly done with it.
 
     The tag must have no worker slots left: this deletes the task record that
-    tracks their pods and containers, so deleting past one would orphan the
-    thing it was renting. Callers go through WorkerManager.delete_task, which
+    tracks their containers and machines, so deleting past one would orphan
+    the thing it was renting. Callers go through WorkerManager.delete_task, which
     tears the slots down first.
     """
     task = load_task(spec, tag)

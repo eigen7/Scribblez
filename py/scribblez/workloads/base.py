@@ -7,13 +7,12 @@ worker roles (parallel generators, a singleton trainer, ...), an optional
 controller-side scheduler, and how to summarize a tag's progress. Consumers:
 
   - the master dashboard (task creation, worker slots, the Stats tab, progress)
-  - the cloud fleet CLI (scripts/cloud_fleet.py)
   - the worker entrypoint (py/cloud/worker_entrypoint.py), which reads
     SCZ_WORKLOAD + SCZ_ROLE and dispatches to the role's runner
 
 Heavy code -- runners, deps fetchers, schedulers -- is referenced by dotted
 path ("pkg.module:attr") and imported only when it runs, so the registry stays
-importable on machines without torch or a GPU (cloud CPU pods).
+importable on machines without torch or a GPU (a CPU-only worker container).
 """
 
 import importlib

@@ -44,7 +44,7 @@ def default_thread_count() -> int:
     The quota cap matters on hosts that limit CPU by cgroup quota rather than
     cpuset -- a rented container, notably: a 12-vCPU one on a 96-core host reports an
     affinity mask of 96, and without the quota cap a thread pool sized from
-    that oversubscribes the pod by 8x.
+    that oversubscribes the container by 8x.
 
     This is the project-wide default for worker-thread counts: compute-bound
     pools (self-play game generation, Monte Carlo workers) default to using
