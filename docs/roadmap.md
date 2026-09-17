@@ -433,7 +433,7 @@ payoff; D3 is the largest port with the most localized payoff.
 
 The generate role is GPU and local-only until the cloud fleet can host TensorRT
 — the GPU-workloads item in [cloud_compute.md](cloud_compute.md), which also
-needs a way to ship the teacher model to pods. Both corpus regenerations above
+needs a way to ship the teacher model to remote machines. Both corpus regenerations above
 want it.
 
 ## Models and how they are trained

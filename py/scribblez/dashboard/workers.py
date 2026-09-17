@@ -1378,10 +1378,10 @@ class WorkerManager:
                     except Exception as e:  # noqa: BLE001 -- one slot must not stop the pass
                         print(f"collect {spec.name}/{task.tag}/{w.worker_id}: {e}")
                 # Contained per slot: one slot's failing enforcement (an ssh
-                # machine vanishing mid-action, a pod creation that keeps
-                # failing on an out-of-stock flavor) must not starve the rest
+                # machine vanishing mid-action, an instance launch that keeps
+                # failing on an out-of-stock type) must not starve the rest
                 # of the pass -- reconcile is the only enforcement some slots
-                # get (e.g. stopping gated pods that are still billing).
+                # get (e.g. stopping gated machines that are still billing).
                 try:
                     await self.offload(
                         self._reconcile_worker, spec, task, w, _intent(w, task), info
@@ -1475,7 +1475,7 @@ class WorkerManager:
         workloads.resolve(spec.scheduler)(spec, task, self._scheduler_hooks(spec, task))
 
     def _reconcile_worker(self, spec, task: tasks.TaskRecord, w, intent: str, info: dict):
-        """Close one slot's desired-vs-observed gap. A cloud pod that is booting
+        """Close one slot's desired-vs-observed gap. A rented machine that is booting
         (`starting`) is left alone -- it is already on its way up. An
         unreachable or not-yet-observed ssh machine is left alone too. A failure
         here only skips this slot's tick (the caller contains it): enforcement
@@ -1562,7 +1562,7 @@ class WorkerManager:
 
     def shutdown(self):
         """Stop owned subprocesses (workers flush completed output on SIGTERM);
-        pods and ssh containers are unaffected -- their work continues across
+        ssh containers are unaffected -- their work continues across
         dashboard restarts."""
         self._blocking.shutdown(wait=False, cancel_futures=True)
         self._builds.shutdown(wait=False, cancel_futures=True)

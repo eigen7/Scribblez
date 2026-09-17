@@ -56,7 +56,7 @@ _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
 # per-tab ``watch()``.
 # How often the WorkerManager closes desired-vs-actual worker-slot gaps.
 # How often the reconcile pass runs. It is the only observer of ssh containers
-# and cloud pods, and the only thing that acts on a scheduler gate, so its
+# and rented machines, and the only thing that acts on a scheduler gate, so its
 # period is also how long a released worker waits before resuming. Every step
 # runs off the event loop (WorkerManager.offload), which is what makes a period
 # this short affordable.

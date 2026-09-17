@@ -6,7 +6,7 @@ A role runner produces files in a private work dir and hands them to the sink:
                 the tag's data/ tree, records written as plain files
     R2Sink      each file is uploaded to the results bucket under
                 <workload>/<tag>/ and the local copy deleted (the bucket is the
-                destination; the pod disk is scratch)
+                destination; the machine's disk is scratch)
 
 Both expose the same calls: `deliver(src, data_rel)` for data files (relative
 to the tag's data/ tree, mirrored as the bucket prefix), `push_file(src, rel)`
@@ -25,7 +25,7 @@ bring an artifact the controller published to where the trainer reads it
 is), and `deliver_output(src, rel, keep)` sends one the trainer wrote back
 (again nothing to do locally). Under the R2 sink the fetches are pulls from
 the tag prefix, the delivery an upload -- unlinked afterwards unless kept,
-since the pod disk is scratch and the bucket is where outputs live.
+since the machine's disk is scratch and the bucket is where outputs live.
 """
 
 import json

@@ -126,7 +126,7 @@ pulls both worker images before writing a readiness marker. The machine reads
 `launching` until ssh answers, `preparing` until that script is done, then
 `up`; slot starts on it are then ordinary ssh starts with the image already
 there, except that every slot on a rented machine delivers through the bucket
-(as a pod did) rather than being collected over ssh: the machine has a
+rather than being collected over ssh: the machine has a
 datacenter link to the bucket, and the controller downloads each chunk once
 instead of hauling it home and publishing it back up. Its root volume is 100 GB (the image's own snapshot is 75 GB). A rented machine on which nothing has run for ten minutes is
 **stopped** (its disk kept, its hourly rate no longer charged; a gated

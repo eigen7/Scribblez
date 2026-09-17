@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Long-running entrypoint for a worker (cloud pod or local subprocess).
+"""Long-running entrypoint for a worker (remote container or local subprocess).
 
-On a cloud pod this is launched by the worker image's bootstrap
+In a container this is launched by the worker image's bootstrap
 (docker-setup/worker/bootstrap.py) after it unpacks a code+binary bundle; the
 master dashboard launches the same entrypoint as a local subprocess. It owns
 the process concerns -- env parsing, the results sink, the SIGTERM handler, a
 provenance manifest -- then dispatches to the runner of the requested workload
-role (the workload registry, scribblez/workloads/). SIGTERM (pod stop /
+role (the workload registry, scribblez/workloads/). SIGTERM (container stop /
 preemption / dashboard pause) raises WorkerStopped out of the runner's loop;
 runners flush completed output and exit cleanly, losing at most the in-flight
 cycle.

@@ -9,7 +9,7 @@ artifacts land atomically, so cycles can be interrupted and resumed freely and
 any number of workers can generate into the same tag.
 
 Shared by every driver: the local CLI (scripts/generate_kill_test_data.py) and
-the worker entrypoint that the master dashboard and cloud pods run.
+the worker entrypoint that the master dashboard and remote containers run.
 """
 
 import subprocess
