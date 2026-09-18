@@ -114,16 +114,23 @@ phase 1 subsumes.
 ### Candidate set
 
 The equity top-K is the gate on coverage: a rank-62 setup is invisible to
-K=10 or 20 under any selection rule. Use the stratified recipe the trajectory
-selector already defines (`evidence_trajectory_select.h`, workload params
+K=10 or 20 under any selection rule. Use the model-free stratified recipe the
+`.mset` generator already has (`move_set_eval::stratified_candidates` /
+`StratumQuotas`, training/move_set_eval_candidates.h; workload params
 `quota_top / quota_mid / quota_tail / quota_exchange`, `mid_rank_limit`): the
 head, a sample from the contention zone, a sample from the tail, exchanges.
 The tail sample is what reaches setups; the disagreement rate below says how
-much of it to buy. `sim_obs_tool` (the generation-0, no-model tool) grows the
-quota selection; the trajectory generator keeps its proposer-driven recipe.
-A cheap semantic stratum to add later if the uniform tail is too coarse: the
-plays with the highest score the mover's leave can make next turn if the
-opponent passes -- a hook-setup detector from one move generation.
+much of it to buy. This is new work in `sim_obs_tool`, not reuse: today it
+takes a flat equity top-K prefix, and its `--positions-per-game` is an integer
+applied to every game. It gains a call into `stratified_candidates` and a
+games-fraction option (2000 positions from 20,000 games is one game in ten).
+The trajectory selector (`evidence_trajectory_select.h`) is a different,
+model-dependent recipe and is untouched. `quota_exchange` is 0 for this stream
+until the exchange encoding question below is settled.
+
+`sim_obs_tool` skips a `.slog` whose sidecar exists, whatever options produced
+it. The teacher stream's sidecars therefore live in directories no evidence
+tag labels, so a sidecar's candidate recipe is a property of its directory.
 
 ### Rollouts and their condition
 
@@ -135,7 +142,7 @@ constraint for this stream). At about ten thread-milliseconds per rollout
 they are affordable at the counts below. Sims run under the corpus's
 information condition (face-up for the current teacher).
 
-### Generation
+### Generation (built only after the offline experiment, PR 2, is positive)
 
 Extend the position_eval workload's `generate` role the way
 `evidence_trajectories` already composes its cycle: `play_game` writes the
@@ -147,19 +154,73 @@ params: `sim_positions_per_game`, `sim_rollouts`, the four quotas,
 `mid_rank_limit`. Sims dominate the cycle's wall-clock, so the generate role's
 thread count sizes them; ssh workers scale it like any other chunk producer.
 
+Three things this section must settle before its PR is written, none of which
+the offline experiment needs:
+
+- **Pairs are new to this scheduler.** position_eval runs on
+  generational/scheduler.py, not `pair_store`, and that scheduler is built on
+  one rename per whole `.slog` by a single process (`_staged_chunks` globs
+  `*.slog`; the ledger line precedes the rename; `selfplay_gen.deliver` ships
+  `*.slog` only). With a sidecar the rules become: the sidecar is delivered
+  first and the `.slog`'s arrival is the commit point; the scheduler moves the
+  sidecar before the `.slog`; mirror and ledger entries are keyed by stem; a
+  duplicate delete and a `.bad` quarantine take both members; staging sweeps
+  orphan sidecars. The alternative that avoids all of it is a separate
+  labeling role over committed generations, which leaves generator delivery
+  untouched and keeps generation cadence from becoming sim-bound (hasty
+  self-play fills a generation far faster than 2.2 machine-hours of sims); its
+  cost is a trainer that must accept a generation whose sidecars are still
+  arriving. **Open -- human call**; the labeling role is the recommendation.
+- **Sidecar size.** A `SimObsRecord` is 35,185 B (dense 2927-class histograms),
+  so K = 16 x 2000 positions is about 1.1 GB per generation, 4.5 GB in a
+  window of 4, through staging, the bucket mirror and rented-trainer delivery,
+  and `SimObsReader` loads a file whole. Generators ship a compact
+  teacher-target sidecar instead (sparse histograms: at 300 rollouts a head
+  has at most 300 nonzero classes), in the format PR 2 defines for the
+  loader. The offline experiment uses today's dense `.sobs` locally.
+- **Params.** New task params land with defaults that turn the stream off, in
+  the generation PR; migrating live tags that should turn it on is its own
+  follow-up PR.
+
 ### Training: the second row source
 
-The C++ `DataLoader` learns a second row kind. For each labeled position it
-replays to the decision point (as now) and, per selected candidate, applies
-the move and encodes the post-move row (`encode_post_move_row`, the encoder
-path the `.mset` generator and the agent share). The label block gains a
-soft-target variant: WLD as a 3-vector, score-diff (mean, variance), each
-placement head as a distribution over footprint classes (histogram / n; the
-extra class carries the pass and not-win mass as the hard targets do), plus a
-row weight. The trainer's losses become soft cross-entropy for WLD and the
-placement heads and the existing Gaussian score-diff loss against the
-predictive variance; a hard target is the one-hot special case, so one loss
-serves both kinds.
+The C++ `DataLoader` learns a second row kind, delivered as its own batch
+stream with its own row width; game rows keep today's layout and cost. (Rows
+are fixed-width from the single `AllTargets` list, and a placement target is
+one float class index today; four dense 2927-class distributions would add
+about 11.7k floats to every row, game rows included.) For each labeled
+position the loader replays to the decision point (as now) and, per selected
+candidate, applies the move and encodes the post-move row
+(`encode_post_move_row`, the encoder path the `.mset` generator and the agent
+share). The sim row's label block: WLD as a 3-vector, score-diff (mean,
+variance), each placement head as a sparse list of up to m (class, probability)
+pairs from histogram / n, densified on the GPU (the extra class carries the
+pass and not-win mass as the hard targets do), plus a row weight. The
+trainer's sim-stream losses are soft cross-entropy for WLD and the placement
+heads and the Gaussian score-diff loss against the predictive variance; the
+game stream's hard-label losses are unchanged.
+
+Pieces of this that are deliverables of their own, each with tests:
+
+- **A footprint-class transpose table.** The loader applies a per-row diagonal
+  symmetry, the sidecar histograms are in the natural frame, and a transposed
+  class is not a cell transpose (its slot moves between the H and V blocks,
+  footprint.h). Today the code only transposes a `Move` and classifies it, so
+  a class permutation is new. The candidate `Move` is transposed before
+  `encode_post_move_row` as well.
+- **Masks for an unplayed candidate.** `encode_post_move_row` writes inputs
+  only; masks come from `TargetList::encode_all` over an `EncodeContext` bound
+  to the game's replay. The decoder needs a route that builds the context from
+  the candidate's post-move encoder and leave.
+- **The soft-target mask rule.** The loss force-keeps the target class in the
+  mask (model.py); with soft targets the whole target support is OR-ed into
+  the mask, or a rollout footprint the over-approximate mask missed gives
+  -inf x p.
+- **The sim-row index.** The loader picks game-row turns at train time
+  (`EpochConfig`), independently of the turns the sim tool labeled, so sim
+  rows get their own index over (file, labeled position, candidate), with the
+  per-epoch sibling draw, the row weight and the file-stem held-out split
+  inside the shuffle.
 
 Why in the loader and not Python: the row's input is the replay's job (the
 replay-reconstruction invariant), and the epoch shuffle across files is what
@@ -171,10 +232,15 @@ K siblings share almost all their input planes. The July reuse collapse
 (40 samples per game memorized WLD; 4 per game is the regime) is the hazard.
 Controls, all in the loader's epoch plan:
 
-- **Subsample siblings per epoch**: each pool contributes the anchor
-  (the played or equity-argmax move) plus `siblings_per_epoch` (default 3)
-  drawn fresh each epoch. Every pass sees a different subset: augmentation,
-  not repetition.
+- **Subsample siblings per epoch**: each pool contributes its anchor (the
+  pool's first `.sobs` record, the equity argmax -- at temperature 0 also the
+  played move) plus `siblings_per_epoch` (default 3) drawn fresh each epoch,
+  stratum-balanced so a pool's tail candidates are drawn as often as its head
+  ones. Every pass sees a different subset: augmentation, not repetition.
+  `siblings_per_epoch` = K turns the control off, which is the ablation that
+  says whether it is needed. A labeled turn that is also the epoch's game-row
+  turn keeps its game row: the anchor's sim row and the hard-outcome row are
+  different targets for the same input, and the board weight covers both.
 - **Weight per board**: a pool's rows carry weight so its total gradient
   share is near one game row's.
 - **Budget by boards**: games per generation are not reduced by K.
@@ -193,7 +259,11 @@ rollouts, about 4 s wall on 16 threads. Labeling 2000 positions per generation
 is then about 2.2 machine-hours per generation on one 16-thread box and yields
 32,000 sim rows against the 20,000 game rows a generation carries today. That
 is the starting point; the fleet scales it, and the disagreement measurement
-below sets K.
+below sets K. It is also more than the self-play that fills a generation, so
+labeling inline makes generation cadence sim-bound (see Generation).
+
+PR 0 at K = 64, 300 rollouts, 300 positions is 5.8 million rollouts: about an
+hour on 16 threads and about 0.7 GB of dense `.sobs`.
 
 ## Measurements
 
@@ -203,19 +273,23 @@ where the sim's best candidate lies outside the hasty top 10. That is the
 share of positions where the cut costs something, and it prices K and the
 tail quota.
 
-**Acceptance for phase 1:**
+**Acceptance for phase 1** (the arms compare at equal generations and equal
+game rows; the offline experiment fine-tunes both arms from the same
+checkpoint):
 
-- `neural_rank_tool` on the ACETA position: K6 AC.TA within 2 points of its
-  sim truth (44%) and in the top three; J6 AC.TA still near 36. The
-  `ACETA-no-F-leave.gcg` variant should move the model by about what it moves
-  the sim (under a point), not by 4.6.
+- A held-out sim-labeled slice (file-stem split) on which the model's ranking
+  of candidates is scored against the sim's: rank correlation and top-1
+  agreement, overall and on the pools whose sim-best lies outside the hasty
+  top 10, reported per generation. This is the gate.
+- ACETA is a probe, not a gate: a uniform tail draw reaches a rank-62 play at
+  one position with probability near quota_tail / 105, so one position can
+  pass or fail for reasons unrelated to the mechanism. Report
+  `neural_rank_tool` on it: K6 AC.TA's distance from its sim truth (44%) and
+  its rank, J6 AC.TA still near 36, and the `ACETA-no-F-leave.gcg` variant's
+  shift against the sim's (under a point, where the model moves 4.6 today).
 - Held-out eval win MAE on the Monte-Carlo position sets not worse than the
   same recipe without sim rows; the win/placement metrics of the Positions
   tab unchanged or better.
-- A held-out sim-labeled slice (file-stem split) on which the model's ranking
-  of candidates is scored against the sim's: rank correlation and top-1
-  agreement, reported per generation. This is the general form of the ACETA
-  check.
 - Match eval against the fixed opponent not worse.
 
 **Gate for phase 2:** phase 1 lands and the ranking metric above plateaus
@@ -224,24 +298,55 @@ with the tail quota still finding disagreements, i.e. coverage of the
 
 ## PR slicing
 
-0. **Measurement.** `sim_obs_tool` gains the quota strata; a script runs it at
-   K = 64 over sampled positions and reports the disagreement rate and the
-   rank distribution of the sim's best. Also lands the ACETA reproduction as
-   a documented recipe.
-1. **Generation.** The position_eval generate role composes `play_game` +
-   `sim_obs_tool`, delivers pairs, the scheduler ingests pairs; new task
-   params with a migration for live tags (`migrate_tag_params.py`).
-2. **Loader + trainer.** The sim row kind in `DataLoader` / `BlockDecoder`,
-   the soft label block, the losses, sibling subsampling and weights, the
-   held-out sim slice and its metrics.
-3. **Run.** A tag from the transformer profile with sim rows on, against the
+The order puts the evidence before the plumbing: `sim_obs_tool` already labels
+an existing `.slog` directory post hoc, so the loader, the losses and a
+fine-tune can be tried on an existing tag's generations with no scheduler
+change. The generation role, the hard step to back out (delivery, task
+params, an ssh bundle redeploy), is built only on a positive result.
+
+0. **Measurement.** `sim_obs_tool` gains the quota strata and the
+   games-fraction option; a script runs it at K = 64 over sampled positions
+   and reports the disagreement rate and the rank distribution of the sim's
+   best. Also lands the ACETA reproduction as a documented recipe.
+1. **Loader.** The footprint-class transpose table, the post-candidate
+   `EncodeContext` and masks, the sim-row stream with its sparse label block
+   and index (sibling subsampling, weights, the held-out split).
+2. **Trainer + offline experiment.** The soft losses and mask rule, the
+   held-out ranking metrics; sidecars generated offline over an existing
+   tag's generations; a fine-tune from the epoch-2500 teacher with and
+   without sim rows, and the `siblings_per_epoch` = K ablation. Go / no-go for
+   the rest.
+3. **Generation.** Per the Generation section, after its open call is made;
+   the compact sidecar format; params default-off. Live-tag migration
+   (`migrate_tag_params.py`) is a follow-up PR of its own.
+4. **Run.** A tag from the transformer profile with sim rows on, against the
    same profile without; the acceptance checks above.
-4. **Phase 2 (optional).** A `play_game` agent that plays HastyBot except at
+5. **Phase 2 (optional).** A `play_game` agent that plays HastyBot except at
    its pre-chosen sampled turns, where it sims the quota set and picks by a
    temperature softmax over sim win%, writing the `.sobs` record inline; the
    eligible-region rule for the perturbed game-outcome targets.
 
 ## Open questions
+
+- **Absolute soft rows or a listwise ranking loss (open -- human call).** A
+  rival design from the plan review: keep each pool together as one sampling
+  unit and train a board-normalized listwise KL (or pairwise) loss on sim win
+  equity plus a small absolute soft-WLD term, mining pools with the current
+  model between generations, adding sim placement losses only if ranking alone
+  does not repair ACETA. For it: the acceptance metric is a ranking metric,
+  reuse control becomes structural, every hard candidate trains every epoch.
+  Against, and why this plan keeps absolute rows: the measured fault is an
+  absolute one located in a placement head (self-next 0.34 against 0.57), which
+  the histograms supervise directly; model-driven mining makes the corpus
+  model-dependent, which the rollout choice above exists to avoid; and
+  `NeuralAgent` compares absolute win% across candidates, so calibrated
+  siblings are already a ranking signal. Once PR 1 groups sim rows by pool, a
+  listwise arm in PR 2's offline experiment is a modest addition; whether to
+  buy it is the call.
+- **A semantic tail stratum.** If PR 0 shows the uniform tail is too coarse:
+  the plays with the highest score the mover's leave can make next turn if
+  the opponent passes -- a hook-setup detector from one move generation. Not
+  built before that measurement asks for it.
 
 - **Exchanges as sim rows.** `encode_post_move_row` reduces the rack by the
   move's glyphs, which is right for placements; a post-exchange row needs the
