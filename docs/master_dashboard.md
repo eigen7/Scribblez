@@ -118,7 +118,7 @@ the count is known; a bare host is unchecked.
 
 **Renting a machine** (the Machines card's Rent form) launches an AWS
 instance for the task and records it as a machine of the same kind
-([cloud_machines_plan.md](cloud_machines_plan.md)): a type from the curated
+([cloud_machines.md](plans/cloud_machines.md)): a type from the curated
 catalog (`py/cloud/providers/aws.py`, with its vCPUs, GPU, bundle arch and
 on-demand price), on AWS's stock Deep Learning GPU image, tagged as the
 task's, with a first-boot script that logs in to the image registry and

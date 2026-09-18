@@ -181,7 +181,7 @@ to learn.
 
 `MAD_TO_STD = sqrt(π/2)` rescales the absolute-residual target so its optimum is
 a Gaussian σ. The recipe carries no activation-magnitude restoring forces: BF16
-serving ([fp16_safe_serving.md](fp16_safe_serving.md)) has FP32's exponent
+serving ([fp16_safe_serving.md](plans/fp16_safe_serving.md)) has FP32's exponent
 range, so the trunk's activations are free to grow without any FP16 overflow to
 guard against.
 
@@ -234,7 +234,7 @@ semantics. Layout owned by
 | `planes` | teacher footprint distributions, dequantized (M, 4, 2927) | soft softmax cross-entropy | `lambda_planes` = 1 |
 
 Like the position-eval model, this recipe carries no activation-magnitude
-restoring forces: BF16 serving ([fp16_safe_serving.md](fp16_safe_serving.md))
+restoring forces: BF16 serving ([fp16_safe_serving.md](plans/fp16_safe_serving.md))
 has FP32's exponent range, so nothing opposes the trunk's activation growth.
 
 Plane targets exist only in stratified (training) records; the full-sweep
@@ -377,7 +377,7 @@ The move set evaluation model has two ONNX export paths. The plain graph
 (`onnx_export.py`, `move_set_eval`) emits `wld` and `score_diff` for the
 one-pass agent. The evidence path (`proposal_export.py`, roadmap item 3) splits
 the move proposal model into two graphs the engine runs incrementally
-(docs/sim_residual_feedback.md), and these emit the placement `planes` and the
+(docs/plans/sim_residual_feedback.md), and these emit the placement `planes` and the
 proves-best `gain` that the plain graph omits:
 
 | graph | run | inputs | outputs |

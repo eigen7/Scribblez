@@ -85,7 +85,7 @@ constexpr Tolerance kFp16Tol{5e-3f, 0.2f};
 // than FP16 here: TensorRT serves this fixture's BF16 request with FP32 tactics
 // (the BF16 run reproduces the FP32 run bit for bit, unlike FP16 at ~6e-05), so
 // this case is a build/bind/decode smoke test of the BF16 path, not a check of
-// BF16 arithmetic. That is validated on real models in docs/fp16_safe_serving.md.
+// BF16 arithmetic. That is validated on real models in docs/plans/fp16_safe_serving.md.
 constexpr Tolerance kBf16Tol{1e-2f, 0.5f};
 
 // Fixture directory given on the command line (first non-gtest argument);

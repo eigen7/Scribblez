@@ -1,6 +1,6 @@
 // Offline generator of Monte-Carlo sim observations (.sobs sidecars) for
 // .slog self-play data -- the sim-evidence inputs of
-// docs/sim_residual_feedback.md and the data source for its kill-test.
+// docs/plans/sim_residual_feedback.md and the data source for its kill-test.
 //
 // For a sampled subset of each game's training-eligible turns, the tool
 // replays the game to the pre-move decision point, ranks the legal candidates
@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
 
     // Games played face up must be simmed face up. The reverse is fine and
     // deliberate: open-leaves sims over a standard corpus are the
-    // information-condition instrument (docs/sim_residual_feedback.md), which
+    // information-condition instrument (docs/plans/sim_residual_feedback.md), which
     // hands the sims more than the players had. Sims that know LESS than the
     // players did are the incoherent direction -- the evidence would describe
     // a game nobody played.

@@ -359,7 +359,7 @@ class AwsProvider:
             return (
                 "The account's first spot request creates the EC2 Spot service-linked role, "
                 "which the scribblez user's policy does not allow: give it the "
-                "iam:CreateServiceLinkedRole statement from docs/cloud_machines_plan.md, then "
+                "iam:CreateServiceLinkedRole statement from docs/plans/cloud_machines.md, then "
                 f"rent again. (AWS: {error.detail})"
             )
         if code in ("UnauthorizedOperation", "AuthFailure", "InvalidClientTokenId"):

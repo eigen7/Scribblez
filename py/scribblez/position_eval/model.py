@@ -16,7 +16,7 @@ Architecture:
       predict each player's next-move footprint; the win heads OppWinPlacement /
       SelfWinPlacement predict Pr[footprint AND that player wins], carrying
       not-win on the extra class -- the "opponent danger" / "self opportunity"
-      signals of docs/sim_residual_feedback.md over move footprints. The (15,15)
+      signals of docs/plans/sim_residual_feedback.md over move footprints. The (15,15)
       per-cell marginal the dashboard shows is recovered downstream by summing
       footprint probability over the cells each footprint covers.
 

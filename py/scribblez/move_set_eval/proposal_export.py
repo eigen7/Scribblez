@@ -2,7 +2,7 @@
 
 The move proposal model is a MoveSetEvalModel carrying the evidence fusion stage
 and the proves-best head. Its deployment loop
-(docs/sim_residual_feedback.md, docs/roadmap.md) runs it incrementally: encode
+(docs/plans/sim_residual_feedback.md, docs/roadmap.md) runs it incrementally: encode
 the board, moves, and evidence-free predictions ONCE per turn, then -- after
 each sim -- condition on the growing evidence set and re-score every candidate,
 without recomputing the trunk. This module emits that split as two ONNX graphs,
@@ -44,7 +44,7 @@ The evidence tokens are re-encoded inside the step graph (encode_tokens is
 folded into ProposalStepExportModel rather than split into a third graph):
 re-encoding the <=E tokens each iteration is negligible beside the rollouts each
 step schedules, and the finer per-candidate-encode / device-resident split is
-deferred to the engine runtime (see docs/sim_residual_feedback.md).
+deferred to the engine runtime (see docs/plans/sim_residual_feedback.md).
 """
 
 import warnings

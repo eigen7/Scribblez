@@ -10,7 +10,7 @@
 // kOnPolicy); the off-policy draws are labels-only (kOffPolicy) -- simmed for
 // their proves-best gain but never placed in an evidence set, because deployed
 // evidence holds only the anchor and the proposer's picks. See
-// docs/sim_residual_feedback.md, "Evidence-trajectory generation".
+// docs/plans/sim_residual_feedback.md, "Evidence-trajectory generation".
 //
 // This is selection only -- vectors in, indices and roles out -- so it links
 // without the TensorRT runtime the scoring front-end (evidence_trajectory.h)

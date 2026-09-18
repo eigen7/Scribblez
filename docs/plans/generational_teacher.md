@@ -9,7 +9,7 @@ proposal — not yet built; the implementation plan is at the end.
 
 ## Motivation
 
-The distillation pipeline ([roadmap.md](roadmap.md) A2/A3) freezes its teacher
+The distillation pipeline ([roadmap.md](../roadmap.md) A2/A3) freezes its teacher
 (the `teacher_tag`/`teacher_generation` params) per tag, and the roadmap's
 original stance was that refreshing the teacher means a new tag and a full
 corpus regeneration. That
@@ -24,7 +24,7 @@ Stated honestly, this design closes the **inner** loop only: position_eval
 → teacher → student. position_eval today trains on HastyBot self-play — a
 fixed policy — so the student does not yet feed back into its data. The
 outer arc closes with neural self-play
-([generational_training.md](generational_training.md) steps 3–4, roadmap
+([generational_training.md](../generational_training.md) steps 3–4, roadmap
 A4/D2). The broadcast machinery here — content-addressed model artifacts, a
 versioned pointer, digest-stamped outputs — is exactly the "model
 distribution to generators" that step 4 names, built once and reused there.
@@ -34,7 +34,7 @@ Two facts make teacher refresh cheap enough to do routinely:
 - The engine's TRT plan cache is keyed on the ONNX's architecture signature
   (weights excluded); on a cache hit the engine *refits* the cached plan
   with the new checkpoint's weights
-  ([neural_net.cpp](../engine/src/nn/neural_net.cpp)) — far cheaper than an
+  ([neural_net.cpp](../../engine/src/nn/neural_net.cpp)) — far cheaper than an
   engine build. Only an architecture change forces a cold build.
 - A move_set_eval cycle invokes the target generator as a subprocess taking
   `--model`; nothing holds the model across cycles, so swapping teachers at
@@ -116,7 +116,7 @@ open generation's and acts:
 ## Teacher-bound generations
 
 move_set_eval adopts the generational structure
-([generational_training.md](generational_training.md)): staging delivery,
+([generational_training.md](../generational_training.md)): staging delivery,
 `data/generations/gen_NNNNNN/` with manifests, scheduler assignment,
 trainer cursor pacing — replacing the flat `slogs/` pair store.
 
@@ -197,7 +197,7 @@ promotions.
 ## The cloud leg
 
 Cloud/ssh workers additionally need the GPU-workloads substrate tracked in
-[cloud_compute.md](cloud_compute.md) (the CUDA-capable worker image and
+[cloud_compute.md](../cloud_compute.md) (the CUDA-capable worker image and
 content-addressed artifact fetch). On top of that, promotion uploads the
 model as a content-addressed bucket object and mirrors `teacher.json` to a
 controller-maintained prefix (outside cloud_sync's pull set). The upload

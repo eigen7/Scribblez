@@ -1,5 +1,5 @@
 // Offline generator of evidence trajectories (.sobs sidecars stamped
-// kSimObsFlagTrajectory) -- the training data of docs/sim_residual_feedback.md's
+// kSimObsFlagTrajectory) -- the training data of docs/plans/sim_residual_feedback.md's
 // evidence conditioning and proves-best head (docs/roadmap.md, item 4). The
 // per-position recipe (anchor, on-policy student proposals, a uniform
 // off-policy floor, all under common random numbers) is

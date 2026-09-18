@@ -75,7 +75,7 @@ class Dictionary;
 // a player KEPT from their last move are public while their replenishment draws
 // stay hidden. The leave is the Bayesian-inferable part of a rack, so this
 // hands the model a perfect belief posterior (see
-// docs/sim_residual_feedback.md); such models are research instruments and are
+// docs/plans/sim_residual_feedback.md); such models are research instruments and are
 // never exported for serving.
 struct InputEncodingSpec {
   const Dictionary* dict;

@@ -24,9 +24,9 @@ table values `ZIN` identically on every board; a context-aware net fixes this
 only if it can *see* that `ZEIN` is reachable here.
 
 The network cannot be trusted to derive this itself: the lexical-NN probe
-track ([lexical_nn.md](lexical_nn.md),
-[word_validity_experiments.md](word_validity_experiments.md),
-[rack_best_experiments.md](rack_best_experiments.md)) showed that a plain
+track ([lexical_nn.md](../lexical_nn.md),
+[word_validity_experiments.md](../word_validity_experiments.md),
+[rack_best_experiments.md](../rack_best_experiments.md)) showed that a plain
 network recovers a play's score and anchor geometry but fails to fill the
 interior letters — precisely the part requiring dictionary membership — and
 that lexicon *tools* help only when their structure matches the task's shape.
@@ -124,10 +124,10 @@ the shared board encoding, the delta to the per-move half.
   tier-3-correct feature, and the 27 per-tile passes collapse into a single
   generation over `rack ∪ {blank}` (a play consuming the extra blank
   designated `L`, rescored at `L`'s face value, is the "drew `L`" play).
-  [input_encoder.h](../engine/include/encoding/input_encoder.h) owns the row
+  [input_encoder.h](../../engine/include/encoding/input_encoder.h) owns the row
   layout it was encoded into.
-- [roadmap.md](roadmap.md) — the value models and the candidate-selection
-  pipeline; [architecture.md](architecture.md) — the data pipeline where
+- [roadmap.md](../roadmap.md) — the value models and the candidate-selection
+  pipeline; [architecture.md](../architecture.md) — the data pipeline where
   precomputed features are stored.
-- [lexical_nn.md](lexical_nn.md) and the experiment docs — the probe-track
+- [lexical_nn.md](../lexical_nn.md) and the experiment docs — the probe-track
   findings that justify computing lexical facts externally.

@@ -2,7 +2,7 @@
 
 Status: plan-reviewed; implemented in full (m1-m4: machines on the ssh
 kind, the trainer on ssh, the AWS provider, spot, Runpod removed). Follows
-[cloud_training_plan.md](cloud_training_plan.md), whose trainer I/O
+[cloud_training.md](cloud_training.md), whose trainer I/O
 contract and bucket legs (3a-3c) this plan keeps whole; it replaces that
 plan's Runpod cloud slot.
 

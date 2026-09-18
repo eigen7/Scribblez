@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The one-time AWS setup the dashboard's provider needs, idempotent
-(docs/cloud_machines_plan.md): the key pair (private key saved under
+(docs/plans/cloud_machines.md): the key pair (private key saved under
 /workspace/mount/cloud/aws/), the security group admitting ssh, and the
 Deep Learning GPU AMI lookup -- then a report of the account's vCPU quotas
 and any pending quota requests, since a quota of 0 is the usual reason a

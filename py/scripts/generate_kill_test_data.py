@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Data generator for the sim-evidence kill-test (docs/sim_residual_feedback.md).
+"""Data generator for the sim-evidence kill-test (docs/plans/sim_residual_feedback.md).
 
 Runs generation cycles until stopped (Ctrl-C), accumulating .slog/.sobs pairs
 in the tag's pair store (<mount>/tags/kill_test/<tag>/data/slogs). The cycle

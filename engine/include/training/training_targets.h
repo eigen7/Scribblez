@@ -64,7 +64,7 @@ struct SelfNextPlacementTarget {
   // OppNextPlacementTarget's mover-side sibling, over the mover's own next move
   // from the sampled snapshot. The marginal-occupancy partner of
   // SelfWinPlacementTarget, letting the network separate "plays there often"
-  // from "wins when playing there" (see docs/sim_residual_feedback.md).
+  // from "wins when playing there" (see docs/plans/sim_residual_feedback.md).
   static constexpr const char* kName = "self_next_placement";
   static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);
@@ -74,7 +74,7 @@ struct OppWinPlacementTarget {
   // OppNextPlacementTarget conjoined with the opponent going on to win: the
   // footprint class if the opponent won, else kExtraClass. An "opponent danger"
   // signal over move footprints whose occurrence is associated with losing (see
-  // docs/sim_residual_feedback.md).
+  // docs/plans/sim_residual_feedback.md).
   static constexpr const char* kName = "opp_win_placement";
   static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);
@@ -83,7 +83,7 @@ struct OppWinPlacementTarget {
 struct SelfWinPlacementTarget {
   // OppWinPlacementTarget's mover-side sibling -- a "self opportunity" signal
   // over the footprints of the mover's winning follow-ups (see
-  // docs/sim_residual_feedback.md).
+  // docs/plans/sim_residual_feedback.md).
   static constexpr const char* kName = "self_win_placement";
   static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);

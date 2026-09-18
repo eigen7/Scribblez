@@ -74,7 +74,7 @@ class MoveProposalNets {
     int step_max_rows = nn::MoveProposalStepSpec::kDefaultMaxRows;
     // FP32: correctness and the parity contract, not FP16 speed -- the fusion
     // graph's masked_fill / 4D einsum are FP16 hazards gated separately
-    // (docs/fp16_safe_serving.md). Callers may override, with that caveat.
+    // (docs/plans/fp16_safe_serving.md). Callers may override, with that caveat.
     nn::Precision precision = nn::Precision::kFP32;
     bool fast_build = false;
     std::string mount_root = "/workspace/mount";

@@ -12,7 +12,7 @@
 // evidence-free prediction for that candidate (its footprint planes and its
 // value). Feeding observation and prediction in together is what lets the
 // fusion stage form the residual `k*(obs - prior)` rather than an
-// observation-marginal correction (docs/sim_residual_feedback.md).
+// observation-marginal correction (docs/plans/sim_residual_feedback.md).
 //
 // This is the C++ port of py/scribblez/move_set_eval/evidence.py's
 // build_evidence_inputs: the SAME normalization (histogram counts / rollouts,

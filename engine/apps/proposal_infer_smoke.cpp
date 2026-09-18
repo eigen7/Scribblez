@@ -19,7 +19,7 @@
 // plan caches, the board/g/move_enc host handoff, the evidence staging
 // (agent/evidence_staging.h), and the decode. FP32 is the item-3 serving
 // precision; FP16 is available as a spot check, with the fusion-graph caveat in
-// docs/fp16_safe_serving.md. The moves and observations are synthetic -- what a
+// docs/plans/fp16_safe_serving.md. The moves and observations are synthetic -- what a
 // Move/SimObservation encodes to has its own tests; this tool is about the
 // engine path. The memory readouts are the numbers roadmap item 6's runtime
 // restructure was sized by: run at sessions=12 and the deployment num_moves to

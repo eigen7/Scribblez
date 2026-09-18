@@ -39,7 +39,7 @@ local resume would run.
 Training-step regime. The network forward runs under bf16 autocast, with the
 loss on fp32-upcast outputs and fp32 master weights / optimizer state (bf16
 keeps fp32's exponent range, so the overflow that ruled out fp16 serving in
-docs/fp16_safe_serving.md cannot occur); the fp32 matmuls that remain use
+docs/plans/fp16_safe_serving.md cannot occur); the fp32 matmuls that remain use
 TF32, which cuDNN's convolutions already did by default. The training forward
 is torch.compile'd; every other pass -- BatchNorm recalibration, the
 per-checkpoint evals, ONNX export, the saved checkpoint -- goes through the

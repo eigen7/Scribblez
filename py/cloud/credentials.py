@@ -36,7 +36,7 @@ TEMPLATE = {
     },
     "aws": {
         # An IAM user's access key (never the root account's), with the EC2,
-        # SSM and Service Quotas actions docs/cloud_machines_plan.md lists,
+        # SSM and Service Quotas actions docs/plans/cloud_machines.md lists,
         # and the region machines are rented in.
         "region": "us-east-1",
         "access_key_id": PLACEHOLDER,

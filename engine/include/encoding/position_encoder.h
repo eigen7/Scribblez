@@ -29,7 +29,7 @@ namespace binlog {
 // when the opponent has not acted, their whole rack then being an unseen draw.
 // Identical for a turn's pre- and post-move snapshots, the mover's move not
 // touching the opponent's rack. Serves the open-leaves information condition
-// (docs/sim_residual_feedback.md).
+// (docs/plans/sim_residual_feedback.md).
 Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_rack_now);
 
 class PositionEncoder {

@@ -20,11 +20,11 @@ own first-pass predictions.
 
 ## Where this sits
 
-- **Roadmap track A** ([roadmap.md](roadmap.md)): wraps the one-round
+- **Roadmap track A** ([roadmap.md](../roadmap.md)): wraps the one-round
   pipeline in an iteration.
-- **[design.md](design.md) §8.1 (search-derived knowledge buffers)**: the
+- **[design.md](../design.md) §8.1 (search-derived knowledge buffers)**: the
   evidence set is a concrete instantiation, with a natural training story.
-- **The belief system's iterative particle generation** ([design.md](design.md)
+- **The belief system's iterative particle generation** ([design.md](../design.md)
   §3.5) follows the same propose/observe/condition idiom. At its sequential
   extreme the loop is a learned, amortized root search.
 - **Engineered lexical features**
@@ -40,9 +40,9 @@ own first-pass predictions.
 
 Two 15×15 per-square Bernoulli heads on the value models (implemented:
 `OppWinPlacementTarget` / `SelfWinPlacementTarget` in
-[training_targets.h](../engine/include/training/training_targets.h), served
+[training_targets.h](../../engine/include/training/training_targets.h), served
 by the shared `mask_conv` stack in
-[model.py](../py/scribblez/position_eval/model.py)):
+[model.py](../../py/scribblez/position_eval/model.py)):
 
 - **Opponent danger**: `Pr[opponent's next move occupies S AND opponent wins]`.
 - **Self opportunity**: `Pr[our next move occupies S AND we win]`.
@@ -91,7 +91,7 @@ mismatch erases exactly the signal the loop hunts for. This is what the
 Sims across candidates at one position share their random draws (the same
 sampled opponent racks; a fixed shuffled bag order consumed as needed) —
 **common random numbers (CRN)**, implemented in
-[sim_runner.h](../engine/include/sim/sim_runner.h). Rack and draw luck
+[sim_runner.h](../../engine/include/sim/sim_runner.h). Rack and draw luck
 then cancel in *comparisons* between candidates, which is what the final
 pick and the stopping rule ride on.
 
@@ -124,7 +124,7 @@ attentive-neural-process shape):
 
 **The predictions have to be inputs; the network cannot recover them.** An
 evidence encoder that reads observations alone (the kill-test's
-[model.py](../py/scribblez/sim_evidence/model.py), whose fusion is a plain
+[model.py](../../py/scribblez/sim_evidence/model.py), whose fusion is a plain
 additive `x + ev_spatial` with the encoder blind to `x`) can express
 `posterior = prior + g(observation)` but not
 `posterior = prior + k·(observation − prior)`: the second needs a term that
@@ -366,7 +366,7 @@ The deployed evidence consumer is a separate model: a **copy** of the move
 set evaluation student — trunk, move encoder, heads, fusion stage — plus the
 proves-best head. The student itself stays a pure distillation model (and,
 under D2, the rollout policy); the copy is what trains on evidence. Two
-loss components ([roadmap.md](roadmap.md) item 5 is the spec):
+loss components ([roadmap.md](../roadmap.md) item 5 is the spec):
 
 - **The proves-best gain** (primary): Huber against the CRN-paired gain of a
   held-out simmed candidate over its evidence set's best
@@ -408,7 +408,7 @@ teacher on real outcomes.
 The training pools come from running sims at ordinary self-play positions;
 the concrete recipe — the greedy anchor, `A` on-policy picks, `B` uniform
 off-policy draws, all at the deployment rollout configuration — is
-[roadmap.md](roadmap.md) item 4. Two structural facts shape it.
+[roadmap.md](../roadmap.md) item 4. Two structural facts shape it.
 
 **Exploration is cheap in exactly the way AlphaZero's is not.** Which
 candidates get simmed never alters the played move or the game outcome —
@@ -480,7 +480,7 @@ evidence, per the kill-test's phase gradient); **subset assembly**
 (combinatorially many rows per pool, so every rollout feeds many training
 rows); labeling a sparse subset of positions (the rest train with empty
 evidence, needed anyway); and the generational pipeline
-([generational_training.md](generational_training.md)), which exists for
+([generational_training.md](../generational_training.md)), which exists for
 exactly this reuse pattern. Deliberately no longer on the list: small `S`.
 The counts input makes mixed-`S` corpora degrade softly, but the corpus must
 include deployment-quality maps — a head trained only on noisy evidence has
@@ -514,13 +514,13 @@ on held-out WLD loss and calibration.
 **Status: done — passed.** Evidence gain of −0.0063 CE at 5.7 SE with clean
 controls; magnitude bounded by root-readout saturation, and an 8×
 late-vs-early phase gradient supports the mechanism. Full numbers and
-conclusions: [sim_obs_experiment_results.md](sim_obs_experiment_results.md).
+conclusions: [sim_obs_experiment_results.md](../sim_obs_experiment_results.md).
 
-The pipeline is [sim_obs_tool](../engine/apps/sim_obs_tool.cpp) (candidates
+The pipeline is [sim_obs_tool](../../engine/apps/sim_obs_tool.cpp) (candidates
 are the HastyBot-equity top-K, so each position's evidence contains the
-played move's own sim) feeding [kill_test.py](../py/scripts/kill_test.py);
+played move's own sim) feeding [kill_test.py](../../py/scripts/kill_test.py);
 the evidence-conditioned model is
-[sim_evidence/model.py](../py/scribblez/sim_evidence/model.py), a
+[sim_evidence/model.py](../../py/scribblez/sim_evidence/model.py), a
 zero-initialized fusion stage on the regular post-move model, so the arms
 are parameter-identical and differ only in their inputs.
 
@@ -554,7 +554,7 @@ decision metric is best held-out `wld_ce`):
 `--open-leaves` on both commands (under a dedicated tag) runs the same
 experiment in **face-up-leaves Scrabble**: the tiles a player retained from
 their last move are public, replenishment draws stay hidden. This is the
-variant the project now develops in ([roadmap.md](roadmap.md)), so it is the
+variant the project now develops in ([roadmap.md](../roadmap.md)), so it is the
 mainline mode rather than an instrument; the hidden arm remains runnable and
 the gap between the two is what belief would have to close. Compare arm deltas
 within a mode only.
@@ -574,11 +574,11 @@ the condition, so mixing modes within a tag fails loudly.
 | Step | Build | Depends on | Status |
 |------|-------|-----------|--------|
 | 1 | Conjunction heads on the position evaluation model (targets from logs; per-square BCE). Independent value as probes even if the loop is never built. | — | **Done** — `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` marginal so both conjunctions have an occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads + BCE losses, ONNX export, TensorRT binding, dashboard loss series). |
-| 2 | Sim machinery emits per-square empirical maps + value estimates + counts; **common random numbers across candidates at a position**; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../engine/include/sim/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../engine/include/data/sim_observation_log.h) (the versioned `.sobs` sidecar). |
+| 2 | Sim machinery emits per-square empirical maps + value estimates + counts; **common random numbers across candidates at a position**; storage format for sim observations alongside `.slog`. | 1 | **Done** — [sim_runner.h](../../engine/include/sim/sim_runner.h) (CRN rollouts over PLAY/EXCHANGE/PASS candidates, count planes mirroring the placement-mask targets, W/D/L + delta moments) and [sim_observation_log.h](../../engine/include/data/sim_observation_log.h) (the versioned `.sobs` sidecar). |
 | 3 | **Kill-test** (above): evidence-conditioned position evaluation model vs. baseline. **Go/no-go gate for everything below.** | 2, the eval machinery | **Done — passed** (see above). |
-| 4 | Evidence encoder + fusion stage reading the shared trunk, with tokens carrying the model's post-move placement planes beside the observed maps; multi-size evidence-set training. | 3 | **Built on the student side** — the fusion stage and its exactness tests ([evidence_fusion.py](../py/scribblez/evidence_fusion.py)) plus the multi-prefix trainer (`py/scribblez/evidence/`). The position evaluation model's own evidence training stays deferred with the conditioned-teacher variant. |
+| 4 | Evidence encoder + fusion stage reading the shared trunk, with tokens carrying the model's post-move placement planes beside the observed maps; multi-size evidence-set training. | 3 | **Built on the student side** — the fusion stage and its exactness tests ([evidence_fusion.py](../../py/scribblez/evidence_fusion.py)) plus the multi-prefix trainer (`py/scribblez/evidence/`). The position evaluation model's own evidence training stays deferred with the conditioned-teacher variant. |
 | 5 | The **move proposal model** ([above](#the-move-proposal-model)): the student copy with the proves-best head (best-so-far fed as an input), trained gain-first with the sim-outcome auxiliaries — no self-distillation anchor — on subset-assembled rows from the hybrid pools. | 4, roadmap items 2–4 | **Regime settled; training waits on the deployment-quality corpus.** The gen-1 frozen-backbone trial over the 200-rollout v1 corpus is the recorded floor: conditioned − plain soft-CE −0.0008, acquisition hit rate 0.57 vs the plain value's 0.61. |
-| 6 | The sequential agent (the decision procedure above at `B = 1, R = K`) and the proves-best acquisition head that drives it; budget tuning and the early-stopping threshold. Batched multi-round scheduling is the fallback, not a step on the way ([roadmap.md](roadmap.md)). | 5 | — |
+| 6 | The sequential agent (the decision procedure above at `B = 1, R = K`) and the proves-best acquisition head that drives it; budget tuning and the early-stopping threshold. Batched multi-round scheduling is the fallback, not a step on the way ([roadmap.md](../roadmap.md)). | 5 | — |
 
 ## Open questions
 
@@ -601,14 +601,14 @@ the condition, so mixing modes within a tag fails loudly.
 - **Whether the spatial machinery pays at all.** Settled against the cheap
   option so far: the kill-test's `full` arm matched its `scalar` arm to
   ±0.0003, so at a root-WLD readout the planes are inert
-  ([sim_obs_experiment_results.md](sim_obs_experiment_results.md)) — as
+  ([sim_obs_experiment_results.md](../sim_obs_experiment_results.md)) — as
   expected, since a position-level scalar has no use for per-move spatial
   discrimination. The plan above nonetheless commits to spatial, per-move,
   prediction-paired evidence, because the effect it is built for is
   *promotion* — a move no earlier round ranked highly rising once a hot
   square is exposed — which the root readout structurally cannot exhibit.
   That commitment is a bet. It is settled after the build, by the
-  placement-plane ablation in [evaluation_plan.md](evaluation_plan.md) —
+  placement-plane ablation in [evaluation_plan.md](../evaluation_plan.md) —
   evidence tokens with and without the model's predicted planes, read at
   promotion rather than at root WLD; a null there sends the loop back to the
   scalar rung, not just back a step.

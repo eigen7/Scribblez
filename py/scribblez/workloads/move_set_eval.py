@@ -42,7 +42,7 @@ absorbing each pass's new pairs and holding its epoch budget until the store
 reaches `target_pairs` -- so a tag with a worker of each type started together
 grows its corpus, trains on all of it, and stops, unattended. It is the lean
 growing-corpus loop (roadmap A3 slice 1); the generational consume->train
-lifecycle is docs/generational_teacher.md.
+lifecycle is docs/plans/generational_teacher.md.
 """
 
 import dataclasses

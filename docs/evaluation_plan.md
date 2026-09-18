@@ -62,7 +62,7 @@ results comparable.
 
 The sim-evidence kill-test
 ([sim_obs_experiment_results.md](sim_obs_experiment_results.md),
-[sim_residual_feedback.md](sim_residual_feedback.md)) passed, and its numbers
+[sim_residual_feedback.md](plans/sim_residual_feedback.md)) passed, and its numbers
 shaped the design:
 
 - **The mechanism is real.** Conditioning the position evaluation model on sim
@@ -147,7 +147,7 @@ In rough order of what each answers.
 2. **The finished agent against `--type=mset-sim`** — the same stack with the
    evidence loop removed. This isolates what evidence conditioning and adaptive
    scheduling buy, which is the central claim of
-   [sim_residual_feedback.md](sim_residual_feedback.md).
+   [sim_residual_feedback.md](plans/sim_residual_feedback.md).
 3. **Budget curves.** Decision quality at a fixed rollout budget, and budget
    required for fixed decision quality, against a fixed-top-K schedule. Sims
    dominate think time, so a 2× budget saving is a 2× stronger agent per second

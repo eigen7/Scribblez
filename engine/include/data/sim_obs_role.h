@@ -10,7 +10,7 @@
 //     labeled held-out row against the sets it is not in.
 //   * off_policy -- labels-only. Simmed for its proves-best gain, but never
 //     placed in an evidence set, because deployed evidence holds only the anchor
-//     and the proposer's picks (docs/sim_residual_feedback.md).
+//     and the proposer's picks (docs/plans/sim_residual_feedback.md).
 //
 // The one-byte enum lives in its own header so the NN-free trajectory selection
 // core (training/evidence_trajectory_select.h) can name it without pulling in
