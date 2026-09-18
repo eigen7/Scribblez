@@ -3,7 +3,7 @@ and launch / describe / stop / start / terminate of instances it tags as its
 own. A provider is one module implementing `Provider` plus a section in the
 credentials file; the dashboard names none of them outside the machine forms.
 
-An instance here is a machine in the sense of docs/cloud_machines_plan.md:
+An instance here is a machine in the sense of docs/plans/cloud_machines.md:
 ssh-reachable, running Docker, hosting the existing ssh-kind slots. The
 provider's job ends at the address; everything after is the ssh kind's.
 """

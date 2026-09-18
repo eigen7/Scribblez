@@ -6,7 +6,7 @@ trainer I/O contract), PR 1 (the runtime), 3a (the controller's bucket
 legs: generation publish, trainer-output pull, controls push), 3b (the
 trainer's artifacts through its sink) and 3c (the cloud train slot) have
 landed. The cloud slot and the machine model (3d, below) are superseded by
-[cloud_machines_plan.md](cloud_machines_plan.md): Runpod is retired for AWS
+[cloud_machines.md](cloud_machines.md): Runpod is retired for AWS
 instances as ssh machines, and the Runpod client, the `cloud` kind and the
 pod forms this plan describes have been deleted. The review record is at the
 end.

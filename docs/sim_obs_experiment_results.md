@@ -1,6 +1,6 @@
 # Sim-evidence kill-test: results and conclusions
 
-Results of the [sim_residual_feedback.md](sim_residual_feedback.md) kill-test
+Results of the [sim_residual_feedback.md](plans/sim_residual_feedback.md) kill-test
 (roadmap step 3) — the go/no-go gate for the sim-evidence loop, testing its
 load-bearing hypothesis in isolation: *does conditioning the position evaluation model on
 Monte-Carlo sim evidence improve its outcome prediction?*

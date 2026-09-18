@@ -1,7 +1,7 @@
 # FiLM conditioning: results and post-mortem
 
 Context: [model_architectures.md](model_architectures.md) (the `use_film` trunk
-option) and [sim_residual_feedback.md](sim_residual_feedback.md). The motivating
+option) and [sim_residual_feedback.md](plans/sim_residual_feedback.md). The motivating
 defect is that the face-up-leaves position-eval model does not bind a square's
 cross-check letters to the opponent's face-up leave: it reads the letter masks
 through a fixed tile-frequency prior and ignores which letters the opponent

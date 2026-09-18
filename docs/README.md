@@ -24,10 +24,7 @@
 - **[model_architectures.md](model_architectures.md)** — wiring diagrams for the
   two trained networks and the spatial trunk they share: layer-by-layer shapes,
   the head fan-out of each, and their loss tables.
-- **[footprint_native_placement.md](footprint_native_placement.md)** — the plan to
-  make placement footprint-categorical end to end (removing the per-cell collapse
-  outside visualization): the (15,15,13) spatial reshape, sparse top-k storage,
-  the PR slicing, and the plan-review dissent it resolved.
+
 - **[generational_training.md](generational_training.md)** — the generate→train
   lifecycle (rows-clock, sliding window, reuse-driven epochs, live controls),
   plus the forward-looking game-pool producer, resource-contention manager, and
@@ -48,21 +45,13 @@
   roadmap item 1 close-out: the first `.mset` v2 (planar) corpus and the
   student trained with the placement-plane readouts, against the v1 curves
   and the incumbent.
+- **[sim_obs_experiment_results.md](sim_obs_experiment_results.md)** — the
+  kill-test's numbers, controls, and conclusions.
 - **[film_conditioning_results.md](film_conditioning_results.md)** — the
   `use_film` post-mortem: FiLM makes the leave↔cross-check binding expressible
   (and the gate engages), but does not close the pos-09 M7 gap; why (learned
   frequency prior, placement objective at ~1% of the trunk gradient), with
   BatchNorm noise ruled out, and the two experiments that follow.
-- **[pov_calibration_bias.md](pov_calibration_bias.md)** — the teacher's
-  measured POV calibration bias (+0.8% win-prob / +2.6 pts toward the POV
-  player): the evidence chain, its decomposition into a structural
-  score-diff under-correction plus a training-drifting offset, and the
-  phased fix plan with reproduction recipes and acceptance criteria.
-- **[sim_labeled_candidates_plan.md](sim_labeled_candidates_plan.md)** — plan
-  for the teacher's second target stream: sim outcomes over every simmed
-  candidate at sampled self-play positions (K post-move rows per position,
-  soft targets, sibling subsampling), motivated by the ACETA setup-play blind
-  spot in `positions/NWL23/interesting-positions/`.
 - **[react_dashboard.md](react_dashboard.md)** — the training dashboard: React
   shell + Python data API, embedded Bokeh metric figures, and the interactive
   lane-analysis and Positions tabs.
@@ -70,14 +59,7 @@
   machines: the stable dependency-only worker image, per-arch code bundles
   through R2, and results syncing back to the local mount for unchanged
   analysis.
-- **[cloud_training_plan.md](cloud_training_plan.md)** — plan-reviewed design
-  for running the trainers on rented GPU pods, several tags in parallel: the
-  trainer's record/controls contract (landed), the runtime (landed), and the
-  Runpod cloud slot (landed, since removed).
-- **[cloud_machines_plan.md](cloud_machines_plan.md)** — plan-reviewed design
-  for rented machines: AWS instances as task-scoped ssh machines the
-  dashboard launches, idles and terminates; the trainer on the ssh kind;
-  Runpod's removal. The provider lives in `py/cloud/providers/`.
+
 - **[master_dashboard.md](master_dashboard.md)** — the React dashboard as the
   single entrypoint for all work: the workload registry, the job-control
   plane (launch/stop local and ssh workers from the browser), and
@@ -87,31 +69,12 @@
   stats, tabs), distributed self-play generation via staging + controller-side
   ingest, and the trainer as a singleton consumer worker.
 
-## Design proposals
-- **[fp16_safe_serving.md](fp16_safe_serving.md)** — the FP16 activation-overflow
-  incident and its **resolution: serve BF16.** Records the measured monotone
-  activation growth, why the model-side containment program (magnitude
-  penalties + export gate + FP32 pins) was tried and then retired, and the
-  bf16-vs-fp16-vs-fp32 measurement that justified switching the serving format
-  instead.
-- **[generational_teacher.md](generational_teacher.md)** — AlphaZero-style
-  teacher broadcast for the distillation pipeline: the teacher as versioned
-  per-tag state advanced by one-click (later automatic) promotion,
-  teacher-bound corpus generations on a pair-aware ingest protocol, and the
-  student training over a sliding window.
-- **[sim_residual_feedback.md](sim_residual_feedback.md)** — feeding Monte-Carlo
-  rollout evidence back into the value models for evidence-conditioned
-  re-evaluation, and picking the next candidate to sim via a learned
-  expected-gain (proves-best) head. Steps 1–4 of its implementation roadmap
-  are done (the kill-test passed; the fusion stage is built), and the gen-1
-  frozen trial is recorded as the floor the move proposal model replaces.
-- **[sim_obs_experiment_results.md](sim_obs_experiment_results.md)** — the
-  kill-test's numbers, controls, and conclusions.
-- **[lexical_features_for_value.md](lexical_features_for_value.md)** — giving
-  the value models lexical foresight through engineered GADDAG-computed input
-  features (the contingent-draw potential map, the cross-check delta) instead
-  of network-internal lexical knowledge. The potential map was built and has
-  since been removed; the doc keeps the rationale.
+## Plans and design proposals
+
+Plan-reviewed designs, incident write-ups with their fix plans, and the
+proposals behind landed or deferred work live in **[plans/](plans/README.md)**,
+whose index describes each one and says whether it has landed. A plan is the
+record of a decision; the documents above describe the system as it is.
 
 ## The lexical-NN experiment track
 

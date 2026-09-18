@@ -77,7 +77,7 @@ def _slot_sink(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.Wo
     uplink), and for an ssh container running a role with inputs as well as
     outputs anywhere -- a trainer, whose generations arrive and whose
     exports, checkpoint and records leave through the bucket
-    (docs/cloud_machines_plan.md). Everything the controller does for a
+    (docs/plans/cloud_machines.md). Everything the controller does for a
     bucket-delivering slot -- the sync watcher, the scheduler's publish and
     mirror hooks, the controls push -- keys off this, not off the kind."""
     if w.kind == "local":
@@ -1308,7 +1308,7 @@ class WorkerManager:
         mirror move and are skipped by size, the local- and ssh-origin ones
         upload -- and then its manifest, last, so a manifest in the bucket
         means the whole generation is. What a trainer running elsewhere reads
-        (docs/cloud_training_plan.md); and with it the bucket holds every
+        (docs/plans/cloud_training.md); and with it the bucket holds every
         generation of a cloud-fed tag complete, not just its cloud chunks.
         None for tasks without bucket-delivering slots, as for the mirror."""
         if not _has_bucket_slots(spec, task):

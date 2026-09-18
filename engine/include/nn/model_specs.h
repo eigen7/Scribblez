@@ -432,7 +432,7 @@ class MoveSetEvaluationSpec {
 
 // ---------- the move-proposal (evidence-path) families -------------------
 //
-// The move proposal model's deployment loop (docs/sim_residual_feedback.md)
+// The move proposal model's deployment loop (docs/plans/sim_residual_feedback.md)
 // runs it incrementally as two graphs, so it is served as two specs, not one:
 // a per-turn `cache` graph and a per-evidence-iteration `step` graph, tied by
 // the shared proposal_export_id fingerprint the orchestrator validates. Both

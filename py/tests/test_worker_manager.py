@@ -1574,7 +1574,7 @@ class _FakeWatcher:
 
 def _all_ssh_task(tag="t"):
     """A position_eval task with an ssh generator and an ssh trainer and no
-    cloud slot: the shape a rented machine hosts (docs/cloud_machines_plan.md),
+    cloud slot: the shape a rented machine hosts (docs/plans/cloud_machines.md),
     and one the bucket legs used to read as having nothing to do."""
     task = tasks.TaskRecord(workload="position_eval", tag=tag, params={}, created_at=0.0)
     for wid, role in (("g", "generate"), ("tr", "train")):

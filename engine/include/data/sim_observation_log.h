@@ -4,7 +4,7 @@
 // accompanies one .slog file (binary_log.h) and holds, for a subset of that
 // file's positions, the candidate moves simmed at the position and each
 // candidate's SimObservation (sim_runner.h). Training reads these as the
-// sim-evidence inputs of docs/sim_residual_feedback.md; positions carry raw
+// sim-evidence inputs of docs/plans/sim_residual_feedback.md; positions carry raw
 // observations (counts and moments, never model-relative residuals) so the
 // file stays valid as the proposer model trains. Value-truncated sims
 // (docs/roadmap.md item 2) ARE a function of one model -- the leaf evaluator

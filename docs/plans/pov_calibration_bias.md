@@ -268,7 +268,7 @@ raw score-diff scalar is `rows[:, 85*225 + 127] * 100`).
 - `face-up-official`, `face-up-leaves-fixed2` (WSD control), `sd-mean-mse`,
   `score-diff-basis` under /workspace/mount/tags/position_eval/ — the four
   runs whose checkpoints carry all of the above.
-- [position_eval/trainer.py](../py/scribblez/position_eval/trainer.py) —
+- [position_eval/trainer.py](../../py/scribblez/position_eval/trainer.py) —
   post_move=True training; where the future gates land.
 - [generational_teacher.md](generational_teacher.md) — where the coherence
   gate becomes a promotion gate.

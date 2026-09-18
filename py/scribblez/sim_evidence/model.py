@@ -1,4 +1,4 @@
-"""Evidence-conditioned position evaluation model (docs/sim_residual_feedback.md).
+"""Evidence-conditioned position evaluation model (docs/plans/sim_residual_feedback.md).
 
 The model is PositionEvalModel with a fusion stage inserted between the trunk
 and the heads. Each simmed candidate contributes one evidence token (its

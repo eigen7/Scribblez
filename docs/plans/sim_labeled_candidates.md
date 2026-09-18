@@ -6,7 +6,7 @@ outcomes for every simmed candidate at a sampled position, each candidate's
 post-move state becoming a training row -- and, as a later phase, lets the
 sim's pick steer the self-play game past the sampled turn. The roadmap has
 carried the first half as a "planned second target stream" for the teacher
-([roadmap.md](roadmap.md), *The position evaluation model*); this is the
+([roadmap.md](../roadmap.md), *The position evaluation model*); this is the
 concrete route to it, motivated by one position.
 
 ## The finding
@@ -60,7 +60,7 @@ it falls back to "7 points, weak leave, hooks open".
 Two facts argue against capacity: the model binds the opponent's F to the FA
 hook and the premium (the same rack x cross-check x premium conjunction it
 fails on for its own side), and the synthetic cross-check binding tests passed
-([film_conditioning_results.md](film_conditioning_results.md)). A bigger
+([film_conditioning_results.md](../film_conditioning_results.md)). A bigger
 trunk or more games of the same kind sharpen the on-distribution numbers and
 leave the hole intact.
 
@@ -68,7 +68,7 @@ leave the hole intact.
 
 - The teacher trains on `.slog` rows only: one row per sampled eligible turn,
   value targets from the game's final scores, the four placement targets from
-  the moves actually played next ([architecture.md](architecture.md)). No sim
+  the moves actually played next ([architecture.md](../architecture.md)). No sim
   is in the teacher's loop.
 - Monte-Carlo sims exist in two places: the frozen eval sets' ground truth
   (`monte_carlo_sim_tool`), and `.sobs` sidecars for the evidence track

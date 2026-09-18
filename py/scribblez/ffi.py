@@ -403,7 +403,7 @@ def set_opp_leave_input(enabled: bool):
     """Choose the open-leaves experiment arm before any dictionary-dependent
     FFI call: whether the input layout includes the opponent-leave counts
     block (the open-leaves information condition of
-    docs/sim_residual_feedback.md -- the opponent's retained leave is public,
+    docs/plans/sim_residual_feedback.md -- the opponent's retained leave is public,
     their replenishment draws stay hidden). The session's shape/size queries
     report whichever layout it encodes, so no downstream code branches on this.
     The flag is baked into the process-wide session at creation, so flipping it

@@ -2,7 +2,7 @@
 
 // Monte-Carlo evaluation of candidate moves at one decision point, producing
 // the per-candidate observations the sim-evidence loop consumes
-// (docs/sim_residual_feedback.md).
+// (docs/plans/sim_residual_feedback.md).
 //
 // Common random numbers: rollout index i uses the same seed for every
 // candidate. The unseen pool is a function of the pre-move board and the

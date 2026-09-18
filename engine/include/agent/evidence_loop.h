@@ -1,7 +1,7 @@
 #pragma once
 
 // The sequential evidence loop (docs/roadmap.md "The destination", item 6): the
-// decision procedure of docs/sim_residual_feedback.md at B = 1, R = K. One
+// decision procedure of docs/plans/sim_residual_feedback.md at B = 1, R = K. One
 // candidate is simmed at a time; after each sim the move proposal model is
 // conditioned on every sim so far and re-scores every candidate, and the next
 // sim is whichever unsimmed candidate the pick policy chooses off that

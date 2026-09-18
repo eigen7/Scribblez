@@ -17,7 +17,7 @@ the tag's dashboard DB (the Loss tab's curves), publishes a stats sample (the
 Stats tab), and saves the rolling checkpoint -- pausing and restarting the
 worker resumes at the next pass. The optimizer and its learning-rate policy are
 the run's `optimizer` arm (generational/optim.py), the same as position_eval's.
-The generational consume->train lifecycle (docs/generational_teacher.md)
+The generational consume->train lifecycle (docs/plans/generational_teacher.md)
 replaces this loop when it lands.
 
 Runs as the singleton `train` worker of the move_set_eval workload (launched

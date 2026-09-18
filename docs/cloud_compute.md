@@ -5,7 +5,7 @@ scribblez/workloads/) on machines it does not own -- rented from a cloud
 provider by the dashboard, or an operator's own reached over ssh -- with
 results flowing back to the local mount where analysis runs unchanged. The
 machine model itself (renting, idling, terminating, the provider seam) is
-[cloud_machines_plan.md](cloud_machines_plan.md); this document is the
+[cloud_machines.md](plans/cloud_machines.md); this document is the
 plumbing every remote worker shares: the image, the bundles, the bucket.
 
 Generation-style roles distribute trivially: cycles are embarrassingly
@@ -14,7 +14,7 @@ any number of machines merge by copy, and a killed worker loses at most its
 in-flight cycle), data volumes are small, and runtime deps are light and
 fetched from public upstreams. The trainer distributes too, through the
 bucket: generations in, exports and checkpoints out
-([cloud_training_plan.md](cloud_training_plan.md)).
+([cloud_training.md](plans/cloud_training.md)).
 
 ## Architecture
 
@@ -135,7 +135,7 @@ R2 storage and transfer cost is noise (zero egress fees). Compute is the
 machine's hourly rate for as long as it is up; the dashboard stops a machine
 nothing has run on for ten minutes and shows what a task's machines bill.
 The first measured run (2026-09-16) is recorded in
-[cloud_machines_plan.md](cloud_machines_plan.md).
+[cloud_machines.md](plans/cloud_machines.md).
 
 ## Futures
 

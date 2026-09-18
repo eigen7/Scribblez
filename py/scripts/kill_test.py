@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The 4-armed sim-evidence kill-test (docs/sim_residual_feedback.md, step 3).
+"""The 4-armed sim-evidence kill-test (docs/plans/sim_residual_feedback.md, step 3).
 
 Tests the load-bearing hypothesis of the sim-evidence loop in isolation: does
 conditioning the position evaluation model on Monte-Carlo sim evidence improve
@@ -491,7 +491,7 @@ def print_summary(results: list[dict]):
             f"{b['brier']:8.4f} {b['wld_acc']:7.4f} {b['epoch']:6d}"
         )
     print(
-        "\nDecision rubric (docs/sim_residual_feedback.md): the hypothesis survives if\n"
+        "\nDecision rubric (docs/plans/sim_residual_feedback.md): the hypothesis survives if\n"
         "`full` beats `none` by a margin that (a) dwarfs seed noise and (b) holds up\n"
         "against `shuffled` (which bounds what evidence marginals alone provide).\n"
         "`scalar` vs `full` locates how much of the win needs the spatial planes."

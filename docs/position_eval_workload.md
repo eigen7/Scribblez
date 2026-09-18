@@ -50,7 +50,7 @@ about such a tag is unchanged: the scheduler assembles generations here and
 publishes them, match eval stays a local or ssh slot working off the pulled
 exports, and the Loss / Positions / Stats tabs read what the sync brought
 down. Several tags with cloud trainers run side by side from this one
-dashboard, which is the point of it ([cloud_training_plan.md](cloud_training_plan.md)).
+dashboard, which is the point of it ([cloud_training.md](plans/cloud_training.md)).
 
 ## Roles
 
@@ -110,7 +110,7 @@ ingested chunk. On completion, for any tag with bucket-delivering slots, the
 scheduler also *publishes* the generation (the `publish` hook): the chunks
 that are not there yet (local- and ssh-origin ones), then the manifest last,
 so a manifest in the bucket means the whole generation is. That is what a
-trainer running elsewhere reads ([cloud_training_plan.md](cloud_training_plan.md)),
+trainer running elsewhere reads ([cloud_training.md](plans/cloud_training.md)),
 and it makes the archive complete rather than cloud-chunks-only. The manifest
 records publication, so a failed upload is retried on the next tick.
 

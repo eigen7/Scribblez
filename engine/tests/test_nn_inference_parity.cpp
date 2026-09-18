@@ -18,7 +18,7 @@
 // for BF16 -- the BF16 run matches the FP32 reference to ~1e-5, tighter than
 // its own tolerance, even at full optimization. So the BF16 case is a
 // build/bind/decode smoke test, not a check of BF16 arithmetic; that is
-// validated on real models in docs/fp16_safe_serving.md, where the format's
+// validated on real models in docs/plans/fp16_safe_serving.md, where the format's
 // exponent range and mantissa cost are what matter. Fails if any field drifts
 // beyond tolerance.
 //

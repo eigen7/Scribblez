@@ -5,7 +5,7 @@ hand-built positions), scaled up for gauging the impact of features on the
 position evaluation model: post-move positions sampled from HastyBot self-play
 (`harvest_positions_tool`: one training-eligible tile placement per game,
 uniformly), each with a Monte-Carlo ground truth. The dataset contract is the
-small set's (see its README). See `docs/lexical_features_for_value.md` for
+small set's (see its README). See `docs/plans/lexical_features_for_value.md` for
 why this set matters and its caveats.
 
 ## Contents

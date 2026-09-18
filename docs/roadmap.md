@@ -75,7 +75,7 @@ plies, then the endgame solver once the bag empties.
 **The first sim is a mechanical anchor**, not a model choice: the
 highest-raw-score move, as the greedy agent would pick it, regardless of how the
 model ranks it. Two reasons, both from
-[sim_residual_feedback.md](sim_residual_feedback.md). It is cheap insurance
+[sim_residual_feedback.md](plans/sim_residual_feedback.md). It is cheap insurance
 against model blind spots — the one candidate guaranteed to be simmed is chosen
 by a rule the model cannot be wrong about. And its sim is unusually informative
 evidence: the residual on the obvious move calibrates the rest of the evidence
@@ -85,7 +85,7 @@ set, which a pick correlated with the model's own errors would not do.
 evidence, and if the agent sims `N` candidates it queries the proves-best head
 `N − 1` times — the anchor needs no query, and every pick after it is
 evidence-conditioned. This is `(B = 1, R = K)` in
-[sim_residual_feedback.md](sim_residual_feedback.md)'s schedule spectrum, which
+[sim_residual_feedback.md](plans/sim_residual_feedback.md)'s schedule spectrum, which
 that document already identifies as the design center; batched multi-round
 variants are a fallback, not a step on the way.
 
@@ -285,7 +285,7 @@ rollout configuration (truncated per item 2, CRN across the pool):
   at their natural frequency, so no stratum has to be hand-specified.
   Stratified or semantic draws (contention zone, high-leave, setups) are a
   later refinement if the floor proves too coarse; the rationale is in
-  [sim_residual_feedback.md](sim_residual_feedback.md).
+  [sim_residual_feedback.md](plans/sim_residual_feedback.md).
 
 Training rows are **assembled from the pool, not replayed from it**: the
 evidence set is permutation-invariant and the gain label is a max over the
@@ -317,7 +317,7 @@ the expected improvement `E[max(0, v − best-so-far)]` a candidate's sim
 would contribute over the best simmed so far. This is the acquisition
 function that drives the loop; the expected-gain form (not probability), its
 CRN pairing, and the truncation caveat are settled in
-[sim_residual_feedback.md](sim_residual_feedback.md#candidate-selection).
+[sim_residual_feedback.md](plans/sim_residual_feedback.md#candidate-selection).
 
 A separate model rather than new heads on the student, so that each keeps
 one job and one lifecycle: the student stays a pure distillation vessel (the
@@ -460,7 +460,7 @@ the one above it.
   better sims → better labels).
 - **Status**: trained and in use. Advancing it by promotion rather than by a
   new tag and full regeneration is
-  [generational_teacher.md](generational_teacher.md), still deferred.
+  [generational_teacher.md](plans/generational_teacher.md), still deferred.
 
 ### The move set evaluation model (student)
 

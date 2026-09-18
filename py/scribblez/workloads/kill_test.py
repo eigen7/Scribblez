@@ -1,4 +1,4 @@
-"""The kill-test data-generation workload (docs/sim_residual_feedback.md).
+"""The kill-test data-generation workload (docs/plans/sim_residual_feedback.md).
 
 One cycle = one HastyBot self-play batch into a fresh timestamp-named .slog
 file in the worker's private work dir, then sim_obs_tool over every .slog

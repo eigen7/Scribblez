@@ -5,7 +5,7 @@ Three roles on one tag: any number of interchangeable generate workers
 singleton train worker consuming complete generations (sliding window, one
 epoch per generation, per-checkpoint ONNX + dashboard records) -- on this
 machine's GPU, or on a rented GPU machine, where it takes its generations from
-the bucket and delivers its outputs there (docs/cloud_training_plan.md) --
+the bucket and delivers its outputs there (docs/plans/cloud_training.md) --
 and a singleton match_eval worker turning exported checkpoints into
 match-play readouts against a fixed opponent (scribblez/match_eval/runner.py).
 The generation scheduler (scribblez/generational/scheduler.py) assigns staged
