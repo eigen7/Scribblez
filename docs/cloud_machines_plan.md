@@ -175,13 +175,18 @@ bucket-delivering slot, whose outputs are not on the machine to collect.
 ## One-time setup (the operator, once)
 
 1. An AWS account. In IAM, a user `scribblez` with an access key and one
-   policy: `ec2:RunInstances, DescribeInstances, DescribeInstanceTypes,
+   policy allowing exactly what cloud/providers/aws.py and
+   py/scripts/aws_setup.py call: `ec2:RunInstances, DescribeInstances,
    StartInstances, StopInstances, TerminateInstances, CreateTags,
    CreateKeyPair, DescribeKeyPairs, CreateSecurityGroup,
    AuthorizeSecurityGroupIngress, DescribeSecurityGroups,
-   DescribeSpotPriceHistory, CancelSpotInstanceRequests` and
-   `ssm:GetParameter` (the AMI lookup). The key goes in the credentials
-   file under a new `aws` section with the region.
+   DescribeSpotPriceHistory, CancelSpotInstanceRequests`,
+   `ssm:GetParameter` (the AMI lookup), and `servicequotas:GetServiceQuota,
+   ListRequestedServiceQuotaChangeHistory` (the setup script's quota
+   report). A missing spot action does not always fail loudly: a spot
+   price the user may not read is silently the catalog's on-demand rate.
+   The key goes in the credentials file under a new `aws` section with the
+   region.
 2. Quotas, on day one, since the grant takes a day or two: "Running
    On-Demand G and VT instances" (zero on a new account; request 64
    vCPUs), and "All G and VT Spot Instance Requests" at the same time.
