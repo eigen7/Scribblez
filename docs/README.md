@@ -58,6 +58,11 @@
   player): the evidence chain, its decomposition into a structural
   score-diff under-correction plus a training-drifting offset, and the
   phased fix plan with reproduction recipes and acceptance criteria.
+- **[sim_labeled_candidates_plan.md](sim_labeled_candidates_plan.md)** — plan
+  for the teacher's second target stream: sim outcomes over every simmed
+  candidate at sampled self-play positions (K post-move rows per position,
+  soft targets, sibling subsampling), motivated by the ACETA setup-play blind
+  spot in `positions/NWL23/interesting-positions/`.
 - **[react_dashboard.md](react_dashboard.md)** — the training dashboard: React
   shell + Python data API, embedded Bokeh metric figures, and the interactive
   lane-analysis and Positions tabs.
