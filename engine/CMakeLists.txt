@@ -282,6 +282,16 @@ target_link_libraries(sim_obs_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+# The sim-labeled-candidates measurement (docs/plans/sim_labeled_candidates.md):
+# stratified candidates per sampled .slog position, simmed, one CSV row each.
+add_executable(sim_candidate_survey_tool apps/sim_candidate_survey_tool.cpp)
+target_link_libraries(sim_candidate_survey_tool PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
 # Rank every legal placement at one GCG position by the position evaluation
 # model, through the CandidateEvaluator NeuralAgent drives.
 add_executable(neural_rank_tool apps/neural_rank_tool.cpp)
