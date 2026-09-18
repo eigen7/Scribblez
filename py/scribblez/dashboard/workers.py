@@ -868,6 +868,9 @@ class WorkerManager:
             inst = provider.launch(LaunchRequest(type_id, _owner(spec, task.tag, name), spot=spot))
         except ProviderError as e:
             raise AssertionError(provider.refusal(e, type_id)) from e
+        # Into the listing now: the record names an instance the last listing
+        # predates, which would read `gone` until the next pass relists.
+        self._instances[0][inst.id] = inst
         known_hosts = MACHINES_DIR / name / "known_hosts"
         known_hosts.parent.mkdir(parents=True, exist_ok=True)
         known_hosts.write_text("")  # a relaunch is a new name, so never a stale key
@@ -1018,6 +1021,11 @@ class WorkerManager:
             provider.terminate(instance_id)
         except ProviderError as e:
             raise AssertionError(provider.refusal(e, type_id or "instance")) from e
+        # Out of the listing now, as the next pass will find it: until then
+        # a terminated machine's instance would read as a running orphan.
+        cached = self._instances[0].get(instance_id)
+        if cached is not None:
+            cached.state = "terminated"
 
     def machine_status(self, spec, task: tasks.TaskRecord, *, observe: bool = False) -> list[dict]:
         """One dict per machine: the record plus its probe state (`up`,

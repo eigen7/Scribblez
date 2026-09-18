@@ -593,6 +593,22 @@ def test_removing_a_rented_machine_terminates_it_and_retires_its_spend(rented, m
     assert task.machines == [] and task.retired_spend == pytest.approx(2.5, abs=1e-3)
 
 
+def test_the_listing_follows_a_rent_and_a_remove_without_waiting_for_a_pass(
+    rented, manager, spec, task, monkeypatch
+):
+    """Between an action and the next pass's listing, a status poll reads
+    the cached listing: a just-rented machine must not read `gone` for
+    want of its instance there, and a just-removed one's instance must not
+    show on the burn strip as a running orphan."""
+    provider, m = rented
+    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    (info,) = manager.machine_status(spec, task)  # no observation: the listing as cached
+    assert info["state"] == "launching"
+    provider.instances["i-1"].state = "running"
+    manager.remove_machine(spec, task, "m1")
+    assert manager.fleet()["instances"] == []
+
+
 def test_a_refused_terminate_keeps_the_machine_and_says_why(
     rented, manager, spec, task, monkeypatch
 ):
