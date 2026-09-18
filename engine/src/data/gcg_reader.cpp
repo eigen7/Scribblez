@@ -12,12 +12,22 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <istream>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace scribblez {
 namespace {
+
+// std::getline with a CRLF line ending stripped whole: GCG files from Windows
+// tools and web exports carry \r\n, and a kept \r would end up inside the
+// last token of the line (a player's name, a rack, a score).
+bool getline_lf_or_crlf(std::istream& in, std::string& line) {
+  if (!std::getline(in, line)) return false;
+  if (!line.empty() && line.back() == '\r') line.pop_back();
+  return true;
+}
 
 char upper_ch(char c) {
   if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
@@ -101,7 +111,7 @@ class GcgReader {
 
     std::istringstream in(gcg_text);
     std::string raw;
-    while (std::getline(in, raw)) {
+    while (getline_lf_or_crlf(in, raw)) {
       if (raw.empty()) continue;
       if (TryParsePlayerDecl(raw)) continue;
       if (TryParseRackPragma(raw)) continue;
@@ -540,7 +550,7 @@ std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
   const std::string want = std::format("#rack{}", player + 1);
   std::istringstream lines(gcg_text);
   std::string line;
-  while (std::getline(lines, line)) {
+  while (getline_lf_or_crlf(lines, line)) {
     if (line.size() < want.size() + 1) continue;
     std::string head = line.substr(0, want.size());
     for (char& c : head) c = char(std::tolower(uint8_t(c)));
@@ -548,7 +558,7 @@ std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
     Rack rack;
     for (size_t i = want.size() + 1; i < line.size(); ++i) {
       const char c = line[i];
-      if (c == ' ' || c == '\r') continue;
+      if (c == ' ') continue;
       rack.add(c == '?' ? BLANK : Tile::from_char(c));
     }
     return rack;

@@ -154,6 +154,23 @@ TEST(GcgPositionTest, AnyRecordedTurnOfACompleteGame) {
   EXPECT_NE(error.find("out of range"), std::string::npos);
 }
 
+TEST(GcgReaderTest, CrlfLineEndingsLeaveNoCarriageReturnInTokens) {
+  const std::string gcg =
+    "#player1 Alice Alice Smith\r\n"
+    "#player2 Bob Bob\r\n"
+    "#Rack1 CCCDEEE\r\n"
+    ">Alice: AAAAAAA 8D AAA +6 6\r\n"
+    ">Bob: BBBBBBB 9D BBB +8 8\r\n";
+  ParsedGcgPosition p;
+  std::string error;
+  ASSERT_TRUE(read_gcg_position(gcg, true, &p, &error)) << error;
+  EXPECT_EQ(p.game.player_names[0], "Alice Smith");
+  EXPECT_EQ(p.game.player_names[1], "Bob");
+  EXPECT_EQ(p.rack.to_string(), "CCCDEEE");
+  EXPECT_EQ(p.scores[1], 8);
+  EXPECT_EQ(p.opp_leave.to_string(), "BBBB");
+}
+
 TEST(GcgPositionTest, RefusesAMissingRackPragma) {
   const std::string gcg =
     "#player1 Alice Alice\n"
