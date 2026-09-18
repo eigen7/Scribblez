@@ -52,7 +52,6 @@
   (and the gate engages), but does not close the pos-09 M7 gap; why (learned
   frequency prior, placement objective at ~1% of the trunk gradient), with
   BatchNorm noise ruled out, and the two experiments that follow.
-
 - **[react_dashboard.md](react_dashboard.md)** — the training dashboard: React
   shell + Python data API, embedded Bokeh metric figures, and the interactive
   lane-analysis and Positions tabs.
