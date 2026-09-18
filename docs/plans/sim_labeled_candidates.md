@@ -103,6 +103,12 @@ play. This needs the sim in-game rather than post hoc, and it perturbs the
 game-outcome targets of the positions before it the way random openings do,
 so it waits for phase 1's measurements.
 
+**Not doing:** a listwise or pairwise ranking loss over each pool (a rival
+design from the plan review). The measured fault is an absolute one located
+in a placement head (self-next 0.34 against 0.57), which the histograms
+supervise directly, and `NeuralAgent` compares absolute win% across
+candidates, so calibrated siblings are already the ranking signal.
+
 **Not doing:** BestBot-vs-BestBot self-play. Simming every move at K
 candidates multiplies sim spend by the moves-per-game over
 positions-labeled-per-game ratio, best play *after* the labeled turn is
@@ -165,12 +171,13 @@ the offline experiment needs:
   first and the `.slog`'s arrival is the commit point; the scheduler moves the
   sidecar before the `.slog`; mirror and ledger entries are keyed by stem; a
   duplicate delete and a `.bad` quarantine take both members; staging sweeps
-  orphan sidecars. The alternative that avoids all of it is a separate
-  labeling role over committed generations, which leaves generator delivery
-  untouched and keeps generation cadence from becoming sim-bound (hasty
-  self-play fills a generation far faster than 2.2 machine-hours of sims); its
-  cost is a trainer that must accept a generation whose sidecars are still
-  arriving. **Open -- human call**; the labeling role is the recommendation.
+  orphan sidecars. Labeling stays in the generator: one producer, and a chunk
+  is either complete or absent, so a generation's training rows are fixed when
+  it closes. (Rejected: a separate labeling role over committed generations.
+  It spares the delivery change but adds a role, a work-assignment mechanism,
+  and a trainer whose rows for a generation depend on when it looked.) Sims
+  make generation cadence sim-bound; `sim_positions_per_game` and the fleet
+  size are the levers.
 - **Sidecar size.** A `SimObsRecord` is 35,185 B (dense 2927-class histograms),
   so K = 16 x 2000 positions is about 1.1 GB per generation, 4.5 GB in a
   window of 4, through staging, the bucket mirror and rented-trainer delivery,
@@ -316,8 +323,7 @@ params, an ssh bundle redeploy), is built only on a positive result.
    tag's generations; a fine-tune from the epoch-2500 teacher with and
    without sim rows, and the `siblings_per_epoch` = K ablation. Go / no-go for
    the rest.
-3. **Generation.** Per the Generation section, after its open call is made;
-   the compact sidecar format; params default-off. Live-tag migration
+3. **Generation.** Per the Generation section; the compact sidecar format; params default-off. Live-tag migration
    (`migrate_tag_params.py`) is a follow-up PR of its own.
 4. **Run.** A tag from the transformer profile with sim rows on, against the
    same profile without; the acceptance checks above.
@@ -328,21 +334,6 @@ params, an ssh bundle redeploy), is built only on a positive result.
 
 ## Open questions
 
-- **Absolute soft rows or a listwise ranking loss (open -- human call).** A
-  rival design from the plan review: keep each pool together as one sampling
-  unit and train a board-normalized listwise KL (or pairwise) loss on sim win
-  equity plus a small absolute soft-WLD term, mining pools with the current
-  model between generations, adding sim placement losses only if ranking alone
-  does not repair ACETA. For it: the acceptance metric is a ranking metric,
-  reuse control becomes structural, every hard candidate trains every epoch.
-  Against, and why this plan keeps absolute rows: the measured fault is an
-  absolute one located in a placement head (self-next 0.34 against 0.57), which
-  the histograms supervise directly; model-driven mining makes the corpus
-  model-dependent, which the rollout choice above exists to avoid; and
-  `NeuralAgent` compares absolute win% across candidates, so calibrated
-  siblings are already a ranking signal. Once PR 1 groups sim rows by pool, a
-  listwise arm in PR 2's offline experiment is a modest addition; whether to
-  buy it is the call.
 - **A semantic tail stratum.** If PR 0 shows the uniform tail is too coarse:
   the plays with the highest score the mover's leave can make next turn if
   the opponent passes -- a hook-setup detector from one move generation. Not
