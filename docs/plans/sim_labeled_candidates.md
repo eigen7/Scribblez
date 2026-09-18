@@ -45,7 +45,8 @@ neural_rank_tool --gcg positions/NWL23/interesting-positions/ACETA.gcg --turn 2 
 ```
 
 (the committed file records the whole game, so `--turn 2` selects the
-position; the K6 line is the played move).
+position; the K6 line is the played move). Add `--sim` for the sim win rate
+and rank of every scored move beside the model's.
 
 ## Diagnosis: coverage, not capacity
 
@@ -350,10 +351,6 @@ params, an ssh bundle redeploy) is built only on a positive result.
   the opponent passes -- a hook-setup detector from one move generation. Not
   built before that measurement asks for it.
 
-- **Exchanges as sim rows.** `encode_post_move_row` reduces the rack by the
-  move's glyphs, which is right for placements; a post-exchange row needs the
-  exchanged tiles removed instead. Either fix the encoder for exchanges or
-  keep the exchange stratum labels-only until it is.
 - **Score-diff variance target.** The stored second moment gives a
   predictive variance per candidate; whether the std head trains on it or
   keeps its current loss is a small experiment.
