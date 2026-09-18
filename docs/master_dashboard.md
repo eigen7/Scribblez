@@ -147,7 +147,14 @@ rolls its spend into the task's total; a machine whose instance is gone
 are removable outright, since their containers went with the disk. Every pass
 lists the instances tagged ours; one that no task's machines name is shown
 in the Machines card as an orphan with a Terminate button, never terminated on
-its own. The one-time account setup (IAM user, quotas, the key pair and
+its own. That same listing feeds the **burn strip** pinned to the top of
+every dashboard page: what the fleet bills per hour right now, each
+instance with its type, state, uptime, rate and a link to the task that owns
+it (or "orphan"), whichever tag you are looking at -- so a machine left
+running under a tag you moved on from stays in view. It is quiet when
+nothing bills, and turns amber when the listing itself has stopped
+refreshing or failed, rather than showing a zero it cannot vouch for. The
+one-time account setup (IAM user, quotas, the key pair and
 security group `py/scripts/aws_setup.py` creates) is in the plan.
 
 A slot's worker that exits 0 has reached its role's terminal condition (the

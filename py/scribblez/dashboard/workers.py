@@ -433,6 +433,10 @@ class WorkerManager:
         # instance it tagged ours, refreshed by the reconcile pass like the
         # container probes above.
         self._instances: tuple[dict[str, Instance], float] = ({}, 0.0)
+        # Why the pass's last fleet listing failed (no credentials, a provider
+        # error), shown by the burn strip in place of a listing; None when
+        # the last one succeeded.
+        self._fleet_error: str | None = None
         self._provider_client: Provider | None = None
         self._account: str | None = None  # the provider's account line, once asked
         # (spot rate by type, when fetched): the rent form's, refreshed lazily.
@@ -864,6 +868,9 @@ class WorkerManager:
             inst = provider.launch(LaunchRequest(type_id, _owner(spec, task.tag, name), spot=spot))
         except ProviderError as e:
             raise AssertionError(provider.refusal(e, type_id)) from e
+        # Into the listing now: the record names an instance the last listing
+        # predates, which would read `gone` until the next pass relists.
+        self._instances[0][inst.id] = inst
         known_hosts = MACHINES_DIR / name / "known_hosts"
         known_hosts.parent.mkdir(parents=True, exist_ok=True)
         known_hosts.write_text("")  # a relaunch is a new name, so never a stale key
@@ -898,7 +905,7 @@ class WorkerManager:
         for w in task.slots_on(name):
             self.remove_worker(spec, task, w.worker_id)
         if m.instance_id is not None and self._machine_states.get(key) != "gone":
-            self._provider().terminate(m.instance_id)
+            self._terminate(m.instance_id, m.instance_type)
         for cache in (self._machine_probes, self._machine_states, self._idle_since, self._exits):
             cache.pop(key, None)
         self._restarts.pop(key, None)
@@ -913,16 +920,81 @@ class WorkerManager:
             and self._machine_states.get(_machine_key(spec, task.tag, w.machine)) == "gone"
         )
 
+    def _list_fleet(self):
+        """The pass's fleet step: list every instance the provider tagged
+        ours, whether or not any task names one. The per-task machine step
+        lists only for tasks with rented machines, so without this a
+        task.json that lost its machines would leave their instances
+        unlisted -- billing, and invisible. A failure (no credentials, the
+        provider unreachable) is kept for the burn strip to show, and
+        printed once per change rather than every pass."""
+        try:
+            self._instance_index(observe=True)
+            error = None
+        except Exception as e:  # noqa: BLE001 -- the fleet step must not stop the pass
+            error = str(e)
+        if error != self._fleet_error and error is not None:
+            print(f"fleet listing: {error}")
+        self._fleet_error = error
+
+    def fleet(self) -> dict:
+        """What the burn strip shows: every non-terminated instance tagged
+        ours with its hourly rate, and the rate they add up to right now
+        (those pending or running -- what _accrue_machine charges for).
+        Read from the last listing, like orphans and machine_status;
+        `observed_at` lets the strip flag a listing that has stopped
+        refreshing."""
+        instances, at = self._instances
+        owned = self._owned()
+        rows = [
+            {
+                "instance_id": inst.id,
+                "type_id": inst.type_id,
+                "state": inst.state,
+                "owner": inst.owner,
+                "tracked": inst.owner in owned,
+                "spot": inst.spot,
+                "cost_per_hr": self._rate(inst, owned.get(inst.owner)),
+                "uptime_s": int(time.time() - inst.launched_at) if inst.launched_at else None,
+            }
+            for inst in instances.values()
+            if inst.state != "terminated"
+        ]
+        return {
+            "observed_at": at or None,
+            "error": self._fleet_error,
+            "instances": rows,
+            "burn_per_hr": sum(
+                r["cost_per_hr"] or 0.0 for r in rows if r["state"] in ("pending", "running")
+            ),
+        }
+
+    def _rate(self, inst: Instance, record: tasks.MachineRecord | None) -> float | None:
+        """An instance's hourly rate: the task's record of it (a spot
+        instance's rate is known only at launch, and lives there), else the
+        listing's own, else its type's catalog rate (None for a type the
+        catalog no longer lists)."""
+        if record is not None and record.cost_per_hr is not None:
+            return record.cost_per_hr
+        if inst.cost_per_hr is not None:
+            return inst.cost_per_hr
+        mtype = next((t for t in self._provider().catalog() if t.id == inst.type_id), None)
+        return mtype.cost_per_hr if mtype is not None else None
+
+    def _owned(self) -> dict[str, tasks.MachineRecord]:
+        """Every task's machines by the ownership tag each carries."""
+        return {
+            _owner(spec, task.tag, m.name): m
+            for spec, task in self._all_tasks()
+            for m in task.machines
+        }
+
     def orphans(self, observe: bool = False) -> list[dict]:
         """Instances the provider tagged ours that no task's machines name:
         shown with a Terminate button, never terminated on their own (a
         task.json restored from an older copy must not kill a running
         experiment)."""
-        owned = {
-            _owner(spec, task.tag, m.name)
-            for spec, task in self._all_tasks()
-            for m in task.machines
-        }
+        owned = self._owned()
         return [
             {
                 "instance_id": inst.id,
@@ -938,8 +1010,22 @@ class WorkerManager:
     def terminate_orphan(self, instance_id: str):
         inst = self._instance_index(False).get(instance_id)
         assert inst is not None, f"no instance {instance_id} in the last listing"
-        self._provider().terminate(instance_id)
+        self._terminate(instance_id, inst.type_id)
         self._instances = ({}, 0.0)  # relisted next pass
+
+    def _terminate(self, instance_id: str, type_id: str | None):
+        """Terminate through the provider, a refusal reaching the operator as
+        its sentence (what happened, what to do), as a launch's does."""
+        provider = self._provider()
+        try:
+            provider.terminate(instance_id)
+        except ProviderError as e:
+            raise AssertionError(provider.refusal(e, type_id or "instance")) from e
+        # Out of the listing now, as the next pass will find it: until then
+        # a terminated machine's instance would read as a running orphan.
+        cached = self._instances[0].get(instance_id)
+        if cached is not None:
+            cached.state = "terminated"
 
     def machine_status(self, spec, task: tasks.TaskRecord, *, observe: bool = False) -> list[dict]:
         """One dict per machine: the record plus its probe state (`up`,
@@ -1345,6 +1431,7 @@ class WorkerManager:
         the provider's instance listing everything else reads, which also
         makes it the spend-accrual heartbeat when no browser is polling.
         """
+        await self.offload(self._list_fleet)
         for spec, task in self._all_tasks():
             if spec.scheduler:
                 try:

@@ -269,6 +269,14 @@ class RentalOfferHandler(_MasterBase):
         await self.guarded_offload(self.manager.rental_offer)
 
 
+class FleetHandler(_MasterBase):
+    """Every instance the provider tagged ours and what they bill per hour,
+    for the burn strip: the last listing, so a poll costs no provider call."""
+
+    def get(self):
+        self.guarded(self.manager.fleet)
+
+
 class OrphansHandler(_MasterBase):
     """Instances the provider tagged ours that no task names."""
 
@@ -368,6 +376,7 @@ MASTER_ROUTES = [
     (r"/api/task/machines", MachineAddHandler),
     (r"/api/task/machine_action", MachineActionHandler),
     (r"/api/cloud/rental_offer", RentalOfferHandler),
+    (r"/api/cloud/fleet", FleetHandler),
     (r"/api/cloud/orphans", OrphansHandler),
     (r"/api/cloud/orphan_action", OrphanActionHandler),
     (r"/api/task/stats", TaskStatsHandler),

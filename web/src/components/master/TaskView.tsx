@@ -267,9 +267,15 @@ function RentForm({ offer, busy, onRent }: {
   const types = offer.types;
   const [name, setName] = useState('');
   const [typeId, setTypeId] = useState(types[0]?.id ?? '');
-  const [spot, setSpot] = useState(false);
+  const [market, setMarket] = useState<'on-demand' | 'spot'>('on-demand');
+  const spot = market === 'spot';
   const t = types.find((x) => x.id === typeId) ?? types[0];
-  const spotOf = (x: MachineType) => offer.spot_prices[x.id];
+  // The type's rate under the chosen market; a spot rate the account may
+  // not read (or the region has none of) is unknown, not the list price.
+  const priceOf = (x: MachineType): string => {
+    const rate = spot ? offer.spot_prices[x.id] : x.cost_per_hr;
+    return rate != null ? `$${rate.toFixed(3)}/hr` : 'rate unknown';
+  };
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ fontSize: 13, fontWeight: 600 }}>
@@ -284,21 +290,23 @@ function RentForm({ offer, busy, onRent }: {
             onChange={(e) => setName(e.target.value)}
           />
         </label>
+        <label style={{ fontSize: 13 }}
+          title="spot: spare capacity at its market rate; AWS may stop the machine when it wants the capacity back, and starts it again when it is free (a trainer resumes from its checkpoint)">
+          pricing<br />
+          <select style={{ ...numInput, width: 'auto' }} value={market} onChange={(e) => setMarket(e.target.value as 'on-demand' | 'spot')}>
+            <option value="on-demand">on-demand</option>
+            <option value="spot">spot</option>
+          </select>
+        </label>
         <label style={{ fontSize: 13 }}>
           type<br />
           <select style={{ ...numInput, width: 'auto', minWidth: 300 }} value={t?.id ?? ''} onChange={(e) => setTypeId(e.target.value)}>
             {types.map((x) => (
               <option key={x.id} value={x.id}>
-                {x.id} — {x.vcpus} vCPU{x.gpu ? `, ${x.gpu_count}× ${x.gpu}` : ''} — ${x.cost_per_hr.toFixed(3)}/hr
-                {spotOf(x) != null ? ` (spot $${spotOf(x).toFixed(3)})` : ''}
+                {x.id} — {x.vcpus} vCPU{x.gpu ? `, ${x.gpu_count}× ${x.gpu}` : ''} — {priceOf(x)}
               </option>
             ))}
           </select>
-        </label>
-        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4, paddingBottom: 6 }}
-          title="spare capacity at its market rate; AWS may stop the machine when it wants the capacity back, and starts it again when it is free (a trainer resumes from its checkpoint)">
-          <input type="checkbox" checked={spot} onChange={(e) => setSpot(e.target.checked)} />
-          spot{t && spotOf(t) != null ? ` ($${spotOf(t).toFixed(3)}/hr now)` : ''}
         </label>
         <Button
           label={busy ? 'Working…' : 'Rent'} disabled={busy || !t}

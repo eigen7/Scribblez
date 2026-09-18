@@ -174,14 +174,54 @@ bucket-delivering slot, whose outputs are not on the machine to collect.
 
 ## One-time setup (the operator, once)
 
-1. An AWS account. In IAM, a user `scribblez` with an access key and one
-   policy: `ec2:RunInstances, DescribeInstances, DescribeInstanceTypes,
-   StartInstances, StopInstances, TerminateInstances, CreateTags,
-   CreateKeyPair, DescribeKeyPairs, CreateSecurityGroup,
-   AuthorizeSecurityGroupIngress, DescribeSecurityGroups,
-   DescribeSpotPriceHistory, CancelSpotInstanceRequests` and
-   `ssm:GetParameter` (the AMI lookup). The key goes in the credentials
-   file under a new `aws` section with the region.
+1. An AWS account. In IAM, a user `scribblez` with an access key and this
+   one policy, pasted as is into the console's policy editor -- exactly
+   what cloud/providers/aws.py and py/scripts/aws_setup.py call, plus the
+   right to create the EC2 Spot service-linked role, which AWS does on
+   the account's first spot request and refuses when the caller cannot.
+   A missing action does not always fail loudly: a spot price the user
+   may not read is silently the catalog's on-demand rate.
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "ec2:RunInstances",
+           "ec2:DescribeInstances",
+           "ec2:StartInstances",
+           "ec2:StopInstances",
+           "ec2:TerminateInstances",
+           "ec2:CreateTags",
+           "ec2:CreateKeyPair",
+           "ec2:DescribeKeyPairs",
+           "ec2:CreateSecurityGroup",
+           "ec2:AuthorizeSecurityGroupIngress",
+           "ec2:DescribeSecurityGroups",
+           "ec2:DescribeSpotPriceHistory",
+           "ec2:CancelSpotInstanceRequests",
+           "ssm:GetParameter",
+           "servicequotas:GetServiceQuota",
+           "servicequotas:ListRequestedServiceQuotaChangeHistory"
+         ],
+         "Resource": "*"
+       },
+       {
+         "Effect": "Allow",
+         "Action": "iam:CreateServiceLinkedRole",
+         "Resource": "*",
+         "Condition": {
+           "StringEquals": { "iam:AWSServiceName": "spot.amazonaws.com" }
+         }
+       }
+     ]
+   }
+   ```
+
+   The key goes in the credentials file under a new `aws` section with the
+   region.
 2. Quotas, on day one, since the grant takes a day or two: "Running
    On-Demand G and VT instances" (zero on a new account; request 64
    vCPUs), and "All G and VT Spot Instance Requests" at the same time.
