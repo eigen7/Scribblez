@@ -134,60 +134,69 @@ The trajectory selector (`evidence_trajectory_select.h`) is a different,
 model-dependent recipe and is untouched. `quota_exchange` is 0 for this stream
 until the exchange encoding question below is settled.
 
-`sim_obs_tool` skips a `.slog` whose sidecar exists, whatever options produced
-it. The teacher stream's sidecars therefore live in directories no evidence
-tag labels, so a sidecar's candidate recipe is a property of its directory.
+The selection and the sim loop are a library both callers share: `sim_obs_tool`
+(PR 0's measurement, which keeps writing `.sobs` for analysis) and the labeler
+below.
 
 ### Rollouts and their condition
 
 Terminal HastyBot rollouts, not value-truncated ones. Terminal sims are
-model-independent, so the sidecars never go stale and need no model-version
+model-independent, so the labels never go stale and need no model-version
 stamping (the open question the workload doc defers to "the neural phase"),
 and the teacher never trains on its own leaf readouts (the roadmap's stated
 constraint for this stream). At about ten thread-milliseconds per rollout
 they are affordable at the counts below. Sims run under the corpus's
 information condition (face-up for the current teacher).
 
-### Generation (built only after the offline experiment, PR 2, is positive)
+### Where the labels live: in the `.slog`
 
-Extend the position_eval workload's `generate` role the way
-`evidence_trajectories` already composes its cycle: `play_game` writes the
-chunk, then `sim_obs_tool` labels a sampled subset of its positions into a
-same-stem `.sobs`, and the pair is delivered together (`pair_store` semantics:
-a chunk is a `.slog` plus its sidecar). The scheduler ingests pairs into the
-generation directory; a `.slog` without its sidecar is not complete. New task
-params: `sim_positions_per_game`, `sim_rollouts`, the four quotas,
-`mid_rank_limit`. Sims dominate the cycle's wall-clock, so the generate role's
-thread count sizes them; ssh workers scale it like any other chunk producer.
+The evidence track keeps its sim records in a `.sobs` sidecar because they
+depend on a model (the proposer, a truncation leaf) and are regenerated while
+the games stay fixed, and because several tags label the same games
+differently. Neither holds here: terminal HastyBot labels are as permanent a
+fact about a game as its final scores, and there is one recipe. So they are
+stored where the final scores are. A new `.slog` version (`kVersion`,
+binary_log.h) gains an optional sim-label section, located from the
+`FileHeader` and indexed by (game, turn): per labeled turn its candidates, each
+a move plus the sparse soft targets (WLD counts, delta sum and second moment,
+up to 300 nonzero (class, count) entries per placement head at 300 rollouts).
+That is the loader's label format on disk, so nothing is converted at train
+time, and it replaces the dense 35,185 B `SimObsRecord` (about 1.1 GB per
+generation at K = 16 x 2000 positions) with a few KB per candidate. A file
+with no labels has an empty section; the game blobs are unchanged.
 
-Three things this section must settle before its PR is written, none of which
-the offline experiment needs:
+What this buys is that a chunk stays one file. The generational scheduler's
+one-rename-per-whole-`.slog` invariant, `selfplay_gen.deliver`, the ledger,
+quarantine, the bucket mirror and rented-trainer delivery are all untouched,
+and a generation's training rows are fixed when it closes. (Rejected: a
+same-stem sidecar delivered as a pair, which needs delivery ordering, stem
+keying, two-member quarantine and an orphan sweep in a scheduler built for
+single files; and a separate labeling role over committed generations, which
+adds a role and a trainer whose rows depend on when it looked.)
 
-- **Pairs are new to this scheduler.** position_eval runs on
-  generational/scheduler.py, not `pair_store`, and that scheduler is built on
-  one rename per whole `.slog` by a single process (`_staged_chunks` globs
-  `*.slog`; the ledger line precedes the rename; `selfplay_gen.deliver` ships
-  `*.slog` only). With a sidecar the rules become: the sidecar is delivered
-  first and the `.slog`'s arrival is the commit point; the scheduler moves the
-  sidecar before the `.slog`; mirror and ledger entries are keyed by stem; a
-  duplicate delete and a `.bad` quarantine take both members; staging sweeps
-  orphan sidecars. Labeling stays in the generator: one producer, and a chunk
-  is either complete or absent, so a generation's training rows are fixed when
-  it closes. (Rejected: a separate labeling role over committed generations.
-  It spares the delivery change but adds a role, a work-assignment mechanism,
-  and a trainer whose rows for a generation depend on when it looked.) Sims
-  make generation cadence sim-bound; `sim_positions_per_game` and the fleet
-  size are the levers.
-- **Sidecar size.** A `SimObsRecord` is 35,185 B (dense 2927-class histograms),
-  so K = 16 x 2000 positions is about 1.1 GB per generation, 4.5 GB in a
-  window of 4, through staging, the bucket mirror and rented-trainer delivery,
-  and `SimObsReader` loads a file whole. Generators ship a compact
-  teacher-target sidecar instead (sparse histograms: at 300 rollouts a head
-  has at most 300 nonzero classes), in the format PR 2 defines for the
-  loader. The offline experiment uses today's dense `.sobs` locally.
-- **Params.** New task params land with defaults that turn the stream off, in
-  the generation PR; migrating live tags that should turn it on is its own
-  follow-up PR.
+The version bump makes existing corpora unreadable, as any does. The labeling
+tool below is also the converter: it reads an old-version `.slog` and writes a
+new-version one, labeled or not.
+
+### Generation
+
+One labeler, two callers:
+
+- **Post hoc, for the offline experiment (PR 1):** a tool that rewrites an
+  existing tag's `.slog` files into labeled new-version ones, skipping files
+  already at the new version so an interrupted run resumes.
+- **In the generator (PR 3, built only after the offline experiment is
+  positive):** `play_game` sims the sampled turns of each finished game
+  in-process before the writer flushes it, so one process produces the whole
+  chunk in one go. Phase 2 needs the sim in the game loop anyway; this puts
+  it there once.
+
+New task params: `sim_positions_per_game` (fractional), `sim_rollouts`, the
+four quotas, `mid_rank_limit`, landing with defaults that turn the stream off;
+migrating live tags that should turn it on is its own follow-up PR. Sims
+dominate the generator's wall-clock and make generation cadence sim-bound;
+`sim_positions_per_game` and the fleet size are the levers, and ssh workers
+scale it like any other chunk producer.
 
 ### Training: the second row source
 
@@ -210,7 +219,7 @@ game stream's hard-label losses are unchanged.
 Pieces of this that are deliverables of their own, each with tests:
 
 - **A footprint-class transpose table.** The loader applies a per-row diagonal
-  symmetry, the sidecar histograms are in the natural frame, and a transposed
+  symmetry, the stored histograms are in the natural frame, and a transposed
   class is not a cell transpose (its slot moves between the H and V blocks,
   footprint.h). Today the code only transposes a `Move` and classifies it, so
   a class permutation is new. The candidate `Move` is transposed before
@@ -240,7 +249,7 @@ K siblings share almost all their input planes. The July reuse collapse
 Controls, all in the loader's epoch plan:
 
 - **Subsample siblings per epoch**: each pool contributes its anchor (the
-  pool's first `.sobs` record, the equity argmax -- at temperature 0 also the
+  pool's first stored candidate, the equity argmax -- at temperature 0 also the
   played move) plus `siblings_per_epoch` (default 3) drawn fresh each epoch,
   stratum-balanced so a pool's tail candidates are drawn as often as its head
   ones. Every pass sees a different subset: augmentation, not repetition.
@@ -253,7 +262,7 @@ Controls, all in the loader's epoch plan:
 - **Budget by boards**: games per generation are not reduced by K.
 - **Watch the collapse's signature**: held-out eval win MAE on the
   Monte-Carlo position sets, and a train/held-out split of the sim rows by
-  file stem (as the pair store splits) reporting sim-target soft-CE on both.
+  file stem reporting sim-target soft-CE on both.
 
 The redundancy is in the inputs, not the information: the differences between
 siblings are exactly the quantity `NeuralAgent` consumes, so the sibling rows
@@ -270,7 +279,8 @@ below sets K. It is also more than the self-play that fills a generation, so
 labeling inline makes generation cadence sim-bound (see Generation).
 
 PR 0 at K = 64, 300 rollouts, 300 positions is 5.8 million rollouts: about an
-hour on 16 threads and about 0.7 GB of dense `.sobs`.
+hour on 16 threads and about 0.7 GB of dense `.sobs`, analysis-only output
+that is not shipped or trained on.
 
 ## Measurements
 
@@ -305,32 +315,33 @@ with the tail quota still finding disagreements, i.e. coverage of the
 
 ## PR slicing
 
-The order puts the evidence before the plumbing: `sim_obs_tool` already labels
-an existing `.slog` directory post hoc, so the loader, the losses and a
-fine-tune can be tried on an existing tag's generations with no scheduler
-change. The generation role, the hard step to back out (delivery, task
-params, an ssh bundle redeploy), is built only on a positive result.
+The order puts the evidence before the plumbing: labels can be written post
+hoc into an existing tag's games, so the loader, the losses and a fine-tune
+can be tried with no generator or workload change. The generator step (task
+params, an ssh bundle redeploy) is built only on a positive result.
 
-0. **Measurement.** `sim_obs_tool` gains the quota strata and the
-   games-fraction option; a script runs it at K = 64 over sampled positions
-   and reports the disagreement rate and the rank distribution of the sim's
-   best. Also lands the ACETA reproduction as a documented recipe.
-1. **Loader.** The footprint-class transpose table, the post-candidate
-   `EncodeContext` and masks, the sim-row stream with its sparse label block
-   and index (sibling subsampling, weights, the held-out split).
+0. **Measurement.** The quota selection and sim loop become a shared library;
+   `sim_obs_tool` gains the strata and a games-fraction option; a script runs
+   it at K = 64 over sampled positions and reports the disagreement rate and
+   the rank distribution of the sim's best. Also lands the ACETA reproduction
+   as a documented recipe.
+1. **Format + loader.** The `.slog` version with the sim-label section, the
+   post hoc labeling / converting tool, the footprint-class transpose table,
+   the post-candidate `EncodeContext` and masks, the sim-row stream and its
+   index (sibling subsampling, weights, the held-out split). The version bump
+   itself is a mechanical commit apart from the rest.
 2. **Trainer + offline experiment.** The soft losses and mask rule, the
-   held-out ranking metrics; sidecars generated offline over an existing
-   tag's generations; a fine-tune from the epoch-2500 teacher with and
-   without sim rows, and the `siblings_per_epoch` = K ablation. Go / no-go for
-   the rest.
-3. **Generation.** Per the Generation section; the compact sidecar format; params default-off. Live-tag migration
-   (`migrate_tag_params.py`) is a follow-up PR of its own.
+   held-out ranking metrics; an existing tag's generations labeled post hoc;
+   a fine-tune from the epoch-2500 teacher with and without sim rows, and the
+   `siblings_per_epoch` = K ablation. Go / no-go for the rest.
+3. **Generation.** `play_game` labels in-process; params default-off.
+   Live-tag migration (`migrate_tag_params.py`) is a follow-up PR of its own.
 4. **Run.** A tag from the transformer profile with sim rows on, against the
    same profile without; the acceptance checks above.
 5. **Phase 2 (optional).** A `play_game` agent that plays HastyBot except at
-   its pre-chosen sampled turns, where it sims the quota set and picks by a
-   temperature softmax over sim win%, writing the `.sobs` record inline; the
-   eligible-region rule for the perturbed game-outcome targets.
+   its pre-chosen sampled turns, where it sims the quota set (the labels it
+   would have written anyway) and picks by a temperature softmax over sim
+   win%; the eligible-region rule for the perturbed game-outcome targets.
 
 ## Open questions
 
@@ -343,7 +354,7 @@ params, an ssh bundle redeploy), is built only on a positive result.
   move's glyphs, which is right for placements; a post-exchange row needs the
   exchanged tiles removed instead. Either fix the encoder for exchanges or
   keep the exchange stratum labels-only until it is.
-- **Score-diff variance target.** The sidecar's second moment gives a
+- **Score-diff variance target.** The stored second moment gives a
   predictive variance per candidate; whether the std head trains on it or
   keeps its current loss is a small experiment.
 - **Placement extra-class mass.** The sim histograms count footprints of the
