@@ -306,8 +306,10 @@ int main(int argc, char** argv) {
     desc.add_options()(
       "objective,o", po::value<std::string>(&opt.objective)->default_value(opt.objective),
       "ranking head: winprob = P(win)+0.5*P(draw); scorediff = expected final spread");
-    desc.add_options()("exchanges", po::value<bool>(&opt.exchanges)->default_value(opt.exchanges),
-                       "rank the legal exchanges beside the placements (0|1)");
+    desc.add_options()(
+      "exchanges", po::value<bool>(&opt.exchanges)->default_value(opt.exchanges),
+      "include the legal exchanges in the one ranking, interleaved with the placements by "
+      "value (0|1); 0 ranks placements only");
     desc.add_options()("sim", po::bool_switch(&opt.sim),
                        "also Monte-Carlo sim every scored move (HastyBot rollouts to a natural "
                        "end) and print its sim win rate and rank");
