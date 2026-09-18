@@ -1,23 +1,34 @@
-// neural_rank_tool: rank every legal placement at one GCG position by the
-// position evaluation model, the way NeuralAgent ranks its candidates.
+// neural_rank_tool: rank every legal move at one GCG position by the position
+// evaluation model, the way NeuralAgent ranks its candidates, optionally
+// beside a Monte-Carlo sim of the same moves.
 //
 // The position is either the file's final recorded state, with the mover's
 // rack taken from its #RackN pragma (read_gcg_position), or -- for a complete
 // annotated game -- the position before recorded turn N, with the rack that
-// turn line records (--turn N, read_gcg_position_at). Every legal placement is
-// applied (or, with --top-k K, the K best by HastyBot static equity, the
-// agent's own candidate cut), its post-move position encoded from the mover's
-// POV and scored by the model through the same CandidateEvaluator the agent
-// drives, and the scored plays are printed best-first by the chosen objective
-// with the model's win/draw/loss probabilities, its predicted final spread,
-// and HastyBot static equity for comparison. Whether the opponent's retained
-// leave is known to the mover follows the input arm the model declares, as it
-// does for the agent. Exchanges and passes are not ranked: the model trains on
-// post-placement positions only, which is also why NeuralAgent scores none.
+// turn line records (--turn N, read_gcg_position_at). Every legal placement
+// and (unless --exchanges 0) exchange is applied -- or, with --top-k K, the K
+// best by HastyBot static equity, the agent's own candidate cut -- its
+// post-move position encoded from the mover's POV and scored by the model
+// through the same CandidateEvaluator the agent drives, and the scored moves
+// are printed best-first by the chosen objective with the model's win rate
+// (P(win) + 0.5 P(draw)), its predicted final spread, and HastyBot static
+// equity for comparison. Whether the opponent's retained leave is known to the
+// mover follows the input arm the model declares, as it does for the agent. A
+// post-exchange position is an ordinary training row of the model (the mover
+// holding the tiles it kept), so exchanges rank on the same footing as
+// placements; a pass is never ranked.
+//
+// --sim adds the ground the model is judged against: every scored move is
+// simmed by SimRunner (HastyBot rollouts to a natural end under common random
+// numbers, the opponent's known leave honoured), and its sim win rate and its
+// rank by it are printed beside the model's. Sims cost rollouts x scored
+// moves, so --top-k bounds them; they need tiles in the bag.
 //
 // Usage:
 //   neural_rank_tool --gcg PATH --model PATH.onnx [--turn N] [--top-k K]
 //                    [--rows N] [--objective winprob|scorediff]
+//                    [--exchanges 0|1] [--sim] [--sim-rollouts R]
+//                    [--sim-threads T] [--sim-seed S]
 //                    [--batch-size B] [--cuda-device D] [--precision P]
 //                    [--lexicon NAME]
 
@@ -33,6 +44,7 @@
 #include "lexicon/lexicon.h"
 #include "nn/eval_service.h"
 #include "nn/model_specs.h"
+#include "sim/sim_runner.h"
 #include "util/assert.h"
 #include "util/exception.h"
 #include "util/misc.h"
@@ -40,6 +52,7 @@
 #include <boost/program_options.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
@@ -55,20 +68,27 @@ namespace {
 struct Options {
   std::string gcg_path;
   int turn = 0;   // 1-based recorded turn; 0 = the file's final state
-  int top_k = 0;  // placements scored: K>0 = top-K by static equity; 0 = all
-  int rows = -1;  // rows printed; -1 = top_k (so 0 = every scored play)
+  int top_k = 0;  // moves scored: K>0 = top-K by static equity; 0 = all
+  int rows = -1;  // rows printed; -1 = top_k (so 0 = every scored move)
   std::string objective = "winprob";
+  bool exchanges = true;
+  bool sim = false;
+  SimRunner::Params sim_params{.rollouts = 300, .threads = util::default_thread_count()};
+  uint64_t sim_seed = 1;
   NeuralServiceOptions service;
 };
 
-// One legal placement's model verdict, alongside its static equity.
-struct RankedPlay {
-  int index;  // into the legal-play list
-  float win, draw, loss;
+// One legal move's model verdict, alongside its static equity and -- when
+// sims ran -- its Monte-Carlo win rate.
+struct RankedMove {
+  int index;         // into the legal-move list
+  float win_rate;    // the WLD head's P(win) + 0.5 P(draw)
   float score_diff;  // the ScoreDiff head's predicted mean final spread
   float objective;   // the value the ranking sorts on
   double equity;
-  int equity_rank = 0;  // 1 = HastyBot's greedy choice
+  int equity_rank;  // 1 = HastyBot's greedy choice
+  double sim_win_rate = 0;
+  int sim_rank = 0;  // 1 = the sim's best among the scored moves
 };
 
 std::string read_file(const std::string& path) {
@@ -107,7 +127,16 @@ CandidateEvaluator replayed_evaluator(const Dictionary& dict,
   return evaluator;
 }
 
-// Every play's index, best static equity first -- the order NeuralAgent's
+// Every legal placement, then (when asked for) every legal exchange.
+std::vector<Move> legal_moves(const MoveRequest& req, bool exchanges) {
+  std::vector<Move> moves = generate_legal_plays(req);
+  if (!exchanges) return moves;
+  const std::vector<Move> swaps = generate_legal_exchanges(req);
+  moves.insert(moves.end(), swaps.begin(), swaps.end());
+  return moves;
+}
+
+// Every move's index, best static equity first -- the order NeuralAgent's
 // top-K candidate cut keeps the head of.
 std::vector<int> equity_order(const std::vector<double>& equities) {
   std::vector<int> order(equities.size());
@@ -117,37 +146,66 @@ std::vector<int> equity_order(const std::vector<double>& equities) {
   return order;
 }
 
-// The top_k (0 = all) plays by static equity scored by the model, in one
+// The top_k (0 = all) moves by static equity scored by the model, in one
 // chunked batch as the agent scores its candidates, sorted best-first by
 // `objective`.
-std::vector<RankedPlay> rank_plays(CandidateEvaluator& evaluator, const MoveRequest& req,
-                                   const std::vector<Move>& plays, int top_k,
+std::vector<RankedMove> rank_moves(CandidateEvaluator& evaluator, const MoveRequest& req,
+                                   const std::vector<Move>& moves, int top_k,
                                    EvalObjective objective) {
   const std::vector<double> equities =
-    HastyEquity::instance().equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
+    HastyEquity::instance().equities(moves, req.board, req.bag_size, req.opp_rack, req.my_rack);
   std::vector<int> idx = equity_order(equities);
   if (top_k > 0 && top_k < int(idx.size())) idx.resize(size_t(top_k));
   const int k = idx.size();
-  evaluator.evaluate(req, plays, idx, k);
+  evaluator.evaluate(req, moves, idx, k);
 
-  std::vector<RankedPlay> ranked;
+  std::vector<RankedMove> ranked;
   ranked.reserve(size_t(k));
   for (int i = 0; i < k; ++i) {
     const float* wld = evaluator.wld_row(i);
     const float* sd = evaluator.score_diff_row(i);
     ranked.push_back({.index = idx[size_t(i)],
-                      .win = wld[0],
-                      .draw = wld[1],
-                      .loss = wld[2],
+                      .win_rate = objective_value(wld, sd, EvalObjective::kWinProb),
                       .score_diff = sd[0],
                       .objective = objective_value(wld, sd, objective),
                       .equity = equities[size_t(idx[size_t(i)])],
                       .equity_rank = i + 1});
   }
-  std::stable_sort(ranked.begin(), ranked.end(), [](const RankedPlay& a, const RankedPlay& b) {
+  std::stable_sort(ranked.begin(), ranked.end(), [](const RankedMove& a, const RankedMove& b) {
     return a.objective > b.objective;
   });
   return ranked;
+}
+
+// 1-based rank of each ranked move by sim win rate, ties going to the better
+// model rank.
+void assign_sim_ranks(std::vector<RankedMove>& ranked) {
+  std::vector<int> order(ranked.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+    return ranked[size_t(a)].sim_win_rate > ranked[size_t(b)].sim_win_rate;
+  });
+  for (size_t r = 0; r < order.size(); ++r) ranked[size_t(order[r])].sim_rank = int(r) + 1;
+}
+
+// Sim every ranked move from `pos` and fill in its sim win rate and rank.
+void sim_ranked_moves(const Dictionary& dict, const ParsedGcgPosition& pos,
+                      const std::vector<Move>& moves, const Options& opt,
+                      std::vector<RankedMove>& ranked) {
+  if (pos.bag_size == 0) throw util::CleanException("--sim needs tiles in the bag");
+  std::vector<Move> candidates;
+  candidates.reserve(ranked.size());
+  for (const RankedMove& r : ranked) candidates.push_back(moves[size_t(r.index)]);
+
+  std::cout << "simming " << candidates.size() << " moves x " << opt.sim_params.rollouts
+            << " rollouts on " << opt.sim_params.threads << " threads...\n";
+  const SimRunner runner(dict, opt.sim_params);
+  const std::vector<SimObservation> observations = runner.run(
+    {pos.board, pos.scores, pos.mover, pos.rack, pos.opp_leave}, candidates, opt.sim_seed);
+  for (size_t i = 0; i < ranked.size(); ++i) {
+    ranked[i].sim_win_rate = sim_objective_value(observations[i], SimObjective::kWinRate);
+  }
+  assign_sim_ranks(ranked);
 }
 
 void print_position(const ParsedGcgPosition& pos) {
@@ -167,25 +225,34 @@ void print_position(const ParsedGcgPosition& pos) {
   std::cout << "\n";
 }
 
-// The first `rows` (0 = all) of `ranked`.
-void print_table(const Board& board, const std::vector<Move>& plays,
-                 const std::vector<RankedPlay>& ranked, int rows) {
+// The first `rows` (0 = all) of `ranked`; the sim columns only when sims ran.
+void print_table(const Board& board, const std::vector<Move>& moves,
+                 const std::vector<RankedMove>& ranked, int rows, bool sim) {
   const int shown = rows == 0 ? int(ranked.size()) : std::min<int>(rows, ranked.size());
-  std::printf("%5s  %-28s %5s  %6s %6s %6s  %7s  %12s %10s\n", "rank", "play", "score", "win%",
-              "draw%", "loss%", "spread", "hasty_equity", "hasty_rank");
+  std::printf("%5s  %-28s %5s  %6s  %7s  %12s %10s", "rank", "move", "score", "win%", "spread",
+              "hasty_equity", "hasty_rank");
+  if (sim) std::printf("  %8s %8s", "sim_win%", "sim_rank");
+  std::printf("\n");
   for (int r = 0; r < shown; ++r) {
-    const RankedPlay& p = ranked[size_t(r)];
-    const Move& mv = plays[size_t(p.index)];
-    std::printf("%5d  %-28s %5d  %6.2f %6.2f %6.2f  %+7.1f  %12.1f %10d\n", r + 1,
-                move_notation(board, mv).c_str(), int(mv.score()), 100.0f * p.win, 100.0f * p.draw,
-                100.0f * p.loss, p.score_diff, p.equity, p.equity_rank);
+    const RankedMove& p = ranked[size_t(r)];
+    const Move& mv = moves[size_t(p.index)];
+    std::printf("%5d  %-28s %5d  %6.2f  %+7.1f  %12.1f %10d", r + 1,
+                move_notation(board, mv).c_str(), int(mv.score()), 100.0f * p.win_rate,
+                p.score_diff, p.equity, p.equity_rank);
+    if (sim) std::printf("  %8.2f %8d", 100.0 * p.sim_win_rate, p.sim_rank);
+    std::printf("\n");
   }
 }
 
-void run(const Options& opt) {
+void validate(const Options& opt) {
   if (opt.turn < 0) throw util::CleanException("--turn must be >= 1 (0 = the final position)");
-  if (opt.top_k < 0) throw util::CleanException("--top-k must be >= 0 (0 = all placements)");
-  if (opt.rows < -1) throw util::CleanException("--rows must be >= 0 (0 = every scored play)");
+  if (opt.top_k < 0) throw util::CleanException("--top-k must be >= 0 (0 = all moves)");
+  if (opt.rows < -1) throw util::CleanException("--rows must be >= 0 (0 = every scored move)");
+  if (opt.sim) SimRunner::validate(opt.sim_params);
+}
+
+void run(const Options& opt) {
+  validate(opt);
   const int rows = opt.rows == -1 ? opt.top_k : opt.rows;
   const EvalObjective objective = parse_eval_objective(opt.objective, "--objective");
   const nn::NeuralNetParams<nn::PositionEvaluationSpec> net_params =
@@ -200,18 +267,19 @@ void run(const Options& opt) {
   const MoveRequest req{
     pos.board,   dict, pos.rack, pos.opp_leave, pos.scores[pos.mover], pos.scores[1 - pos.mover],
     pos.bag_size};
-  const std::vector<Move> plays = generate_legal_plays(req);
-  if (plays.empty()) {
-    std::cout << "no legal placement\n";
+  const std::vector<Move> moves = legal_moves(req, opt.exchanges);
+  if (moves.empty()) {
+    std::cout << "no legal move but a pass\n";
     return;
   }
 
   CandidateEvaluator evaluator =
     replayed_evaluator(dict, std::move(service), net_params.max_rows, pos);
-  const std::vector<RankedPlay> ranked = rank_plays(evaluator, req, plays, opt.top_k, objective);
-  std::cout << plays.size() << " legal placements, " << ranked.size() << " scored, ranked by "
+  std::vector<RankedMove> ranked = rank_moves(evaluator, req, moves, opt.top_k, objective);
+  if (opt.sim) sim_ranked_moves(dict, pos, moves, opt, ranked);
+  std::cout << moves.size() << " legal moves, " << ranked.size() << " scored, ranked by "
             << opt.objective << ":\n";
-  print_table(pos.board, plays, ranked, rows);
+  print_table(pos.board, moves, ranked, rows, opt.sim);
 }
 
 }  // namespace
@@ -231,13 +299,27 @@ int main(int argc, char** argv) {
       "records; 0 = the file's final state, whose mover's rack comes from its #RackN pragma");
     desc.add_options()(
       "top-k,k", po::value<int>(&opt.top_k)->default_value(opt.top_k),
-      "placements scored by the model: K>0 = the top-K by HastyBot static equity (NeuralAgent's "
-      "candidate cut); 0 = every legal placement");
+      "moves scored by the model: K>0 = the top-K by HastyBot static equity (NeuralAgent's "
+      "candidate cut); 0 = every legal move");
     desc.add_options()("rows,r", po::value<int>(&opt.rows),
-                       "rows printed (default: --top-k, so 0 = every scored play)");
+                       "rows printed (default: --top-k, so 0 = every scored move)");
     desc.add_options()(
       "objective,o", po::value<std::string>(&opt.objective)->default_value(opt.objective),
       "ranking head: winprob = P(win)+0.5*P(draw); scorediff = expected final spread");
+    desc.add_options()("exchanges", po::value<bool>(&opt.exchanges)->default_value(opt.exchanges),
+                       "rank the legal exchanges beside the placements (0|1)");
+    desc.add_options()("sim", po::bool_switch(&opt.sim),
+                       "also Monte-Carlo sim every scored move (HastyBot rollouts to a natural "
+                       "end) and print its sim win rate and rank");
+    desc.add_options()(
+      "sim-rollouts",
+      po::value<int>(&opt.sim_params.rollouts)->default_value(opt.sim_params.rollouts),
+      "--sim: rollouts per scored move");
+    desc.add_options()(
+      "sim-threads", po::value<int>(&opt.sim_params.threads)->default_value(opt.sim_params.threads),
+      "--sim: rollout worker threads");
+    desc.add_options()("sim-seed", po::value<uint64_t>(&opt.sim_seed)->default_value(opt.sim_seed),
+                       "--sim: base seed of the common random numbers");
     opt.service.add_options(desc);
     scribblez::Lexicon::instance().add_options(desc);
 
