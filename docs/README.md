@@ -45,6 +45,8 @@
   roadmap item 1 close-out: the first `.mset` v2 (planar) corpus and the
   student trained with the placement-plane readouts, against the v1 curves
   and the incumbent.
+- **[sim_obs_experiment_results.md](sim_obs_experiment_results.md)** — the
+  kill-test's numbers, controls, and conclusions.
 - **[film_conditioning_results.md](film_conditioning_results.md)** — the
   `use_film` post-mortem: FiLM makes the leave↔cross-check binding expressible
   (and the gate engages), but does not close the pos-09 M7 gap; why (learned
@@ -74,9 +76,6 @@ Plan-reviewed designs, incident write-ups with their fix plans, and the
 proposals behind landed or deferred work live in **[plans/](plans/README.md)**,
 whose index describes each one and says whether it has landed. A plan is the
 record of a decision; the documents above describe the system as it is.
-
-- **[sim_obs_experiment_results.md](sim_obs_experiment_results.md)** — the
-  kill-test's numbers, controls, and conclusions.
 
 ## The lexical-NN experiment track
 
