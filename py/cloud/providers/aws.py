@@ -357,10 +357,10 @@ class AwsProvider:
             )
         if code == "AuthFailure.ServiceLinkedRoleCreationNotPermitted":
             return (
-                "The account's first spot request needs the EC2 Spot service-linked role, which "
-                "the scribblez user may not create. Once, as an admin: `aws iam "
-                "create-service-linked-role --aws-service-name spot.amazonaws.com` (console "
-                f"CloudShell works), then rent again. (AWS: {error.detail})"
+                "The account's first spot request creates the EC2 Spot service-linked role, "
+                "which the scribblez user's policy does not allow: give it the "
+                "iam:CreateServiceLinkedRole statement from docs/cloud_machines_plan.md, then "
+                f"rent again. (AWS: {error.detail})"
             )
         if code in ("UnauthorizedOperation", "AuthFailure", "InvalidClientTokenId"):
             return (

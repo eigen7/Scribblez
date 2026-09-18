@@ -252,4 +252,4 @@ def test_spot_prices_cover_the_catalog(provider):
 def test_spot_refusals_name_the_spot_quota(provider):
     assert "spot" in provider.refusal(ProviderError("MaxSpotInstanceCountExceeded"), "g6")
     missing_role = ProviderError("AuthFailure.ServiceLinkedRoleCreationNotPermitted")
-    assert "create-service-linked-role" in provider.refusal(missing_role, "c7a.xlarge")
+    assert "iam:CreateServiceLinkedRole" in provider.refusal(missing_role, "c7a.xlarge")
