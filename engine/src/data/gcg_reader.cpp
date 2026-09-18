@@ -10,6 +10,7 @@
 #include <cctype>
 #include <exception>
 #include <format>
+#include <istream>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -18,6 +19,15 @@
 
 namespace scribblez {
 namespace {
+
+// std::getline with a CRLF line ending stripped whole: GCG files from Windows
+// tools and web exports carry \r\n, and a kept \r would end up inside the
+// last token of the line (a player's name, a rack, a score).
+bool getline_lf_or_crlf(std::istream& in, std::string& line) {
+  if (!std::getline(in, line)) return false;
+  if (!line.empty() && line.back() == '\r') line.pop_back();
+  return true;
+}
 
 char upper_ch(char c) {
   if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
@@ -101,7 +111,7 @@ class GcgReader {
 
     std::istringstream in(gcg_text);
     std::string raw;
-    while (std::getline(in, raw)) {
+    while (getline_lf_or_crlf(in, raw)) {
       if (raw.empty()) continue;
       if (TryParsePlayerDecl(raw)) continue;
       if (TryParseRackPragma(raw)) continue;
@@ -540,7 +550,7 @@ std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
   const std::string want = std::format("#rack{}", player + 1);
   std::istringstream lines(gcg_text);
   std::string line;
-  while (std::getline(lines, line)) {
+  while (getline_lf_or_crlf(lines, line)) {
     if (line.size() < want.size() + 1) continue;
     std::string head = line.substr(0, want.size());
     for (char& c : head) c = char(std::tolower(uint8_t(c)));
@@ -548,7 +558,7 @@ std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
     Rack rack;
     for (size_t i = want.size() + 1; i < line.size(); ++i) {
       const char c = line[i];
-      if (c == ' ' || c == '\r') continue;
+      if (c == ' ') continue;
       rack.add(c == '?' ? BLANK : Tile::from_char(c));
     }
     return rack;
@@ -612,18 +622,52 @@ bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
   return true;
 }
 
-bool read_gcg_position(const std::string& gcg_text, bool open_leaves, ParsedGcgPosition* out,
-                       std::string* error_message) {
-  const ParsedGcgSnapshot* snapshot;
-  if (!final_state(gcg_text, &out->game, &snapshot, &out->mover, &out->rack, error_message)) {
-    return false;
-  }
-  out->board = snapshot->board;
-  out->scores = snapshot->scores;
-  out->opp_leave = open_leaves ? retained_leave(out->game, 1 - out->mover) : Rack{};
+namespace {
+
+// The position-derived fields of `out` from its already-set game (cut to the
+// moves before the position), the snapshot of that state, and the mover's
+// rack.
+void lift_position(const ParsedGcgSnapshot& snapshot, int mover, const Rack& rack, bool open_leaves,
+                   ParsedGcgPosition* out) {
+  out->board = snapshot.board;
+  out->scores = snapshot.scores;
+  out->mover = mover;
+  out->rack = rack;
+  out->opp_leave = open_leaves ? retained_leave(out->game, 1 - mover) : Rack{};
   out->turns = out->game.turns.size();
   const int unseen = Bag::kTotalTiles - out->board.num_tiles() - out->rack.size();
   out->bag_size = std::max(0, unseen - RACK_SIZE);
+}
+
+}  // namespace
+
+bool read_gcg_position(const std::string& gcg_text, bool open_leaves, ParsedGcgPosition* out,
+                       std::string* error_message) {
+  const ParsedGcgSnapshot* snapshot;
+  int mover;
+  Rack rack;
+  if (!final_state(gcg_text, &out->game, &snapshot, &mover, &rack, error_message)) return false;
+  lift_position(*snapshot, mover, rack, open_leaves, out);
+  return true;
+}
+
+bool read_gcg_position_at(const std::string& gcg_text, int turn_index, bool open_leaves,
+                          ParsedGcgPosition* out, std::string* error_message) {
+  ParsedGcgGame& game = out->game;
+  if (!read_gcg_text(gcg_text, &game, error_message)) return false;
+  const int turns = game.turns.size();
+  if (turn_index < 0 || turn_index >= turns) {
+    *error_message =
+      std::format("turn index {} is out of range: the GCG records {} turns", turn_index, turns);
+    return false;
+  }
+  const TurnRecord record = game.turns[size_t(turn_index)].record;
+  // snapshots[i] is the state before turns[i]; the cut keeps exactly the
+  // moves that lead to it, and the game log is rebuilt to match.
+  game.turns.resize(size_t(turn_index));
+  game.snapshots.resize(size_t(turn_index) + 1);
+  game.game_log = game.to_game_log_storage();
+  lift_position(game.snapshots.back(), record.player, record.rack_before, open_leaves, out);
   return true;
 }
 

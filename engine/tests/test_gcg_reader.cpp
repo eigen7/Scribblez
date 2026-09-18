@@ -119,6 +119,58 @@ TEST(GcgPositionTest, FinalStateWithThePragmaRack) {
   EXPECT_TRUE(hidden.opp_leave.empty());
 }
 
+TEST(GcgPositionTest, AnyRecordedTurnOfACompleteGame) {
+  const std::string gcg =
+    "#player1 Alice Alice\n"
+    "#player2 Bob Bob\n"
+    ">Alice: AAAAAAA 8D AAA +6 6\n"
+    ">Bob: BBBBBBB 9D BBB +8 8\n"
+    ">Alice: AAAACCC 10D CCC +10 16\n";
+
+  ParsedGcgPosition p;
+  std::string error;
+  ASSERT_TRUE(read_gcg_position_at(gcg, /*turn_index=*/2, /*open_leaves=*/true, &p, &error))
+    << error;
+  EXPECT_EQ(p.mover, 0);
+  EXPECT_EQ(p.rack.to_string(), "AAAACCC");
+  EXPECT_EQ(p.scores[0], 6);
+  EXPECT_EQ(p.scores[1], 8);
+  EXPECT_EQ(p.turns, 2);
+  EXPECT_EQ(p.game.turns.size(), 2u);
+  EXPECT_EQ(p.game.snapshots.size(), 3u);
+  EXPECT_EQ(p.game.game_log.turns.size(), 2u);
+  EXPECT_EQ(p.board.num_tiles(), 6);
+  EXPECT_EQ(p.opp_leave.to_string(), "BBBB");
+  EXPECT_EQ(p.bag_size, 87 - 7);
+
+  // Turn 0: the empty board, Alice's opening rack, nothing retained by Bob.
+  ASSERT_TRUE(read_gcg_position_at(gcg, 0, true, &p, &error)) << error;
+  EXPECT_EQ(p.board.num_tiles(), 0);
+  EXPECT_EQ(p.rack.to_string(), "AAAAAAA");
+  EXPECT_TRUE(p.opp_leave.empty());
+  EXPECT_EQ(p.turns, 0);
+
+  EXPECT_FALSE(read_gcg_position_at(gcg, 3, true, &p, &error));
+  EXPECT_NE(error.find("out of range"), std::string::npos);
+}
+
+TEST(GcgReaderTest, CrlfLineEndingsLeaveNoCarriageReturnInTokens) {
+  const std::string gcg =
+    "#player1 Alice Alice Smith\r\n"
+    "#player2 Bob Bob\r\n"
+    "#Rack1 CCCDEEE\r\n"
+    ">Alice: AAAAAAA 8D AAA +6 6\r\n"
+    ">Bob: BBBBBBB 9D BBB +8 8\r\n";
+  ParsedGcgPosition p;
+  std::string error;
+  ASSERT_TRUE(read_gcg_position(gcg, true, &p, &error)) << error;
+  EXPECT_EQ(p.game.player_names[0], "Alice Smith");
+  EXPECT_EQ(p.game.player_names[1], "Bob");
+  EXPECT_EQ(p.rack.to_string(), "CCCDEEE");
+  EXPECT_EQ(p.scores[1], 8);
+  EXPECT_EQ(p.opp_leave.to_string(), "BBBB");
+}
+
 TEST(GcgPositionTest, RefusesAMissingRackPragma) {
   const std::string gcg =
     "#player1 Alice Alice\n"

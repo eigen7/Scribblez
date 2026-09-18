@@ -281,6 +281,18 @@ target_link_libraries(sim_obs_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+# Rank every legal placement at one GCG position by the position evaluation
+# model, through the CandidateEvaluator NeuralAgent drives.
+add_executable(neural_rank_tool apps/neural_rank_tool.cpp)
+target_link_libraries(neural_rank_tool PRIVATE
+  scribblez_core
+  scribblez_neural_agents
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
 add_executable(harvest_positions_tool apps/harvest_positions_tool.cpp)
 target_link_libraries(harvest_positions_tool PRIVATE
   scribblez_core

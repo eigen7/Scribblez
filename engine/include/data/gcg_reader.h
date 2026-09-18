@@ -102,6 +102,16 @@ struct ParsedGcgPosition {
 bool read_gcg_position(const std::string& gcg_text, bool open_leaves, ParsedGcgPosition* out,
                        std::string* error_message);
 
+// The position before recorded turn `turn_index` (0-based) of a complete
+// game, the way read_gcg_position lifts a file's final state: the mover is
+// that turn's seat, holding the rack the turn line records, and the moves
+// before it are what the position replays (out->game is cut to them, so its
+// retained leaves and replays stop there). Lets any turn of an annotated game
+// be analyzed without truncating the file by hand. False with an explanation
+// when the text does not parse or `turn_index` is not a recorded turn.
+bool read_gcg_position_at(const std::string& gcg_text, int turn_index, bool open_leaves,
+                          ParsedGcgPosition* out, std::string* error_message);
+
 // The leave `player` retained at their most recent recorded turn: their
 // rack_before minus what that move played or exchanged, a PASS retaining
 // everything. Empty when they have no recorded turn. This is the known part of
