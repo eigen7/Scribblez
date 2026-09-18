@@ -10,9 +10,9 @@
 #include <cctype>
 #include <exception>
 #include <format>
+#include <istream>
 #include <map>
 #include <optional>
-#include <istream>
 #include <sstream>
 #include <string>
 #include <vector>
