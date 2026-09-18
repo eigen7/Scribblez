@@ -27,6 +27,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
 #include "sim/sim_runner.h"
+#include "sim/slog_position_simmer.h"
 #include "training/evidence_trajectory_select.h"
 #include "training/footprint_mask.h"
 #include "training/lane_analysis.h"
@@ -5126,6 +5127,58 @@ TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
   for (size_t i = 0; i < out.size(); ++i) {
     for (size_t j = i + 1; j < out.size(); ++j) EXPECT_NE(out[i], out[j]);
   }
+}
+
+// select_sim_candidates (sim/slog_position_simmer.h): both recipes report each
+// candidate's 0-based static-equity rank, which is what lets a consumer ask how
+// deep in the ranking the sim's favourite sat.
+TEST(SimCandidates, FlatRecipeIsTheRankedPrefix) {
+  const std::vector<Move> ranked = ranked_plays(5);
+  std::mt19937_64 rng(1);
+  SimCandidateRecipe recipe;
+  recipe.top_k = 3;
+  const SimCandidates sel = select_sim_candidates(ranked, ranked[0], recipe, rng);
+  EXPECT_EQ(sel.moves, std::vector<Move>(ranked.begin(), ranked.begin() + 3));
+  EXPECT_EQ(sel.equity_ranks, (std::vector<int32_t>{0, 1, 2}));
+  EXPECT_EQ(sel.num_legal_moves, 5u);
+
+  recipe.top_k = 9;  // more than the position has
+  EXPECT_EQ(select_sim_candidates(ranked, ranked[0], recipe, rng).moves, ranked);
+}
+
+TEST(SimCandidates, StratifiedRecipeRanksEveryStratum) {
+  std::vector<Move> ranked = ranked_plays(40);
+  ranked.push_back(exchange_of('Q'));
+  std::mt19937_64 rng(7);
+  SimCandidateRecipe recipe;
+  recipe.quotas = move_set_eval::StratumQuotas{
+    .top = 2, .mid = 3, .tail = 4, .exchange = 1, .mid_rank_limit = 10};
+  const SimCandidates sel = select_sim_candidates(ranked, ranked[0], recipe, rng);
+  ASSERT_EQ(sel.moves.size(), 11u);  // played + 2 + 3 + 4 + 1
+  ASSERT_EQ(sel.equity_ranks.size(), sel.moves.size());
+  for (size_t i = 0; i < sel.moves.size(); ++i) {
+    ASSERT_GE(sel.equity_ranks[i], 0);
+    EXPECT_EQ(ranked[size_t(sel.equity_ranks[i])], sel.moves[i]);
+  }
+  EXPECT_EQ(sel.equity_ranks[0], 0);  // the played move leads
+  const auto in_band = [&](int lo, int hi) {
+    return std::count_if(sel.equity_ranks.begin(), sel.equity_ranks.end(),
+                         [&](int32_t r) { return r >= lo && r < hi; });
+  };
+  EXPECT_EQ(in_band(0, 3), 3);    // played + the head
+  EXPECT_EQ(in_band(3, 10), 3);   // the contention zone
+  EXPECT_EQ(in_band(10, 41), 5);  // the tail, plus the exchange ranked last
+}
+
+// A played move the generator never enumerates (a PASS chosen while other moves
+// were legal) has no rank.
+TEST(SimCandidates, UnrankedPlayedMoveGetsMinusOne) {
+  const std::vector<Move> ranked = ranked_plays(6);
+  std::mt19937_64 rng(3);
+  SimCandidateRecipe recipe;
+  recipe.quotas = move_set_eval::StratumQuotas{};
+  const SimCandidates sel = select_sim_candidates(ranked, Move{}, recipe, rng);
+  EXPECT_EQ(sel.equity_ranks[0], -1);
 }
 
 // off_policy_draws (the trajectory off-policy floor, docs/roadmap.md item 4)

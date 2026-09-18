@@ -52,6 +52,7 @@ add_library(scribblez_core STATIC
   src/agent/endgame_hasty_bot.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
+  src/sim/slog_position_simmer.cpp
   src/agent/candidate_evaluator.cpp
   # Coalesces concurrent position-eval requests into larger GPU batches. A
   # decorator over the EvalService interface with no CUDA/TensorRT dependency,
