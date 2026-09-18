@@ -902,7 +902,7 @@ class WorkerManager:
         for w in task.slots_on(name):
             self.remove_worker(spec, task, w.worker_id)
         if m.instance_id is not None and self._machine_states.get(key) != "gone":
-            self._provider().terminate(m.instance_id)
+            self._terminate(m.instance_id, m.instance_type)
         for cache in (self._machine_probes, self._machine_states, self._idle_since, self._exits):
             cache.pop(key, None)
         self._restarts.pop(key, None)
@@ -951,7 +951,7 @@ class WorkerManager:
                 "owner": inst.owner,
                 "tracked": inst.owner in owned,
                 "spot": inst.spot,
-                "cost_per_hr": self._rate(inst),
+                "cost_per_hr": self._rate(inst, owned.get(inst.owner)),
                 "uptime_s": int(time.time() - inst.launched_at) if inst.launched_at else None,
             }
             for inst in instances.values()
@@ -966,18 +966,22 @@ class WorkerManager:
             ),
         }
 
-    def _rate(self, inst: Instance) -> float | None:
-        """An instance's hourly rate: a spot instance's own, else its type's
-        catalog rate (None for a type the catalog no longer lists)."""
+    def _rate(self, inst: Instance, record: tasks.MachineRecord | None) -> float | None:
+        """An instance's hourly rate: the task's record of it (a spot
+        instance's rate is known only at launch, and lives there), else the
+        listing's own, else its type's catalog rate (None for a type the
+        catalog no longer lists)."""
+        if record is not None and record.cost_per_hr is not None:
+            return record.cost_per_hr
         if inst.cost_per_hr is not None:
             return inst.cost_per_hr
         mtype = next((t for t in self._provider().catalog() if t.id == inst.type_id), None)
         return mtype.cost_per_hr if mtype is not None else None
 
-    def _owned(self) -> set[str]:
-        """The ownership tags every task's machines carry."""
+    def _owned(self) -> dict[str, tasks.MachineRecord]:
+        """Every task's machines by the ownership tag each carries."""
         return {
-            _owner(spec, task.tag, m.name)
+            _owner(spec, task.tag, m.name): m
             for spec, task in self._all_tasks()
             for m in task.machines
         }
@@ -1003,8 +1007,17 @@ class WorkerManager:
     def terminate_orphan(self, instance_id: str):
         inst = self._instance_index(False).get(instance_id)
         assert inst is not None, f"no instance {instance_id} in the last listing"
-        self._provider().terminate(instance_id)
+        self._terminate(instance_id, inst.type_id)
         self._instances = ({}, 0.0)  # relisted next pass
+
+    def _terminate(self, instance_id: str, type_id: str | None):
+        """Terminate through the provider, a refusal reaching the operator as
+        its sentence (what happened, what to do), as a launch's does."""
+        provider = self._provider()
+        try:
+            provider.terminate(instance_id)
+        except ProviderError as e:
+            raise AssertionError(provider.refusal(e, type_id or "instance")) from e
 
     def machine_status(self, spec, task: tasks.TaskRecord, *, observe: bool = False) -> list[dict]:
         """One dict per machine: the record plus its probe state (`up`,

@@ -26,7 +26,6 @@ from scribblez.dashboard.workers import (
     WorkerManager,
     _container_name,
     _key,
-    _owner,
 )
 from scribblez.paths import TagPaths
 from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
@@ -594,6 +593,25 @@ def test_removing_a_rented_machine_terminates_it_and_retires_its_spend(rented, m
     assert task.machines == [] and task.retired_spend == pytest.approx(2.5, abs=1e-3)
 
 
+def test_a_refused_terminate_keeps_the_machine_and_says_why(
+    rented, manager, spec, task, monkeypatch
+):
+    """A Remove the provider refuses (a policy missing an action) reaches
+    the operator as the refusal sentence, and the record stays: the instance
+    is still there, still billing, still the task's to remove."""
+    provider, m = rented
+
+    def refuse(instance_id):
+        raise ProviderError(
+            "UnauthorizedOperation", "not authorized: ec2:CancelSpotInstanceRequests"
+        )
+
+    monkeypatch.setattr(provider, "terminate", refuse)
+    with pytest.raises(AssertionError, match="refused g6.2xlarge: UnauthorizedOperation"):
+        manager.remove_machine(spec, task, "m1")
+    assert task.machines == [m]
+
+
 def test_a_gone_machines_slots_are_removable_outright(rented, manager, spec, task, monkeypatch):
     """The instance is terminated (by a spot interruption, or in the console):
     its containers went with its disk. The unreachable rule would refuse
@@ -644,9 +662,10 @@ def test_fleet_adds_up_what_bills_whoever_tracks_it(rented, manager, spec, task,
         address=None, launched_at=time.time() - 120,
     )  # fmt: skip
     provider.instances["i-8"] = Instance(
-        id="i-8", state="stopped", type_id="g6.2xlarge", owner=_owner(spec, "t", "m1"),
+        id="i-8", state="stopped", type_id="g6.2xlarge", owner="position_eval/old/s",
         address=None, launched_at=None, spot=True, cost_per_hr=0.4,
     )  # fmt: skip
+    m.cost_per_hr = 0.37  # the record's rate, as a spot launch leaves it, wins over the catalog's
     provider.instances["i-9"] = Instance(
         id="i-9", state="terminated", type_id="c7a.4xlarge", owner=None, address=None,
         launched_at=None,
@@ -658,10 +677,11 @@ def test_fleet_adds_up_what_bills_whoever_tracks_it(rented, manager, spec, task,
     assert fleet["error"] is None and fleet["observed_at"] is not None
     by_id = {r["instance_id"]: r for r in fleet["instances"]}
     assert set(by_id) == {"i-1", "i-7", "i-8"}
-    assert by_id["i-1"]["tracked"] and by_id["i-1"]["cost_per_hr"] == 1.0
-    assert not by_id["i-7"]["tracked"] and by_id["i-7"]["uptime_s"] >= 120
+    assert by_id["i-1"]["tracked"] and by_id["i-1"]["cost_per_hr"] == 0.37
+    assert not by_id["i-7"]["tracked"] and by_id["i-7"]["cost_per_hr"] == 0.5
+    assert by_id["i-7"]["uptime_s"] >= 120
     assert by_id["i-8"]["spot"] and by_id["i-8"]["cost_per_hr"] == 0.4
-    assert fleet["burn_per_hr"] == pytest.approx(1.5)
+    assert fleet["burn_per_hr"] == pytest.approx(0.87)
 
 
 def test_fleet_step_lists_without_rented_machines_and_keeps_a_failure(manager, monkeypatch):
