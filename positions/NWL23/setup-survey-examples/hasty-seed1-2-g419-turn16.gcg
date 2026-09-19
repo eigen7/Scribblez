@@ -1,0 +1,22 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 16 (neural_rank_tool --turn 16); hasty1 to move with DEJKMOR
+#note high-value setup plays outside the hasty top 10 (hasty rank): 2N MO (#27), B7 .ORK (#47), B7 .ORM (#79), 15B KERMOD. (#155), 15E MOK. (#198), B7 .ORD (#199), 15D DROK. (#225), 15E MOD. (#226), 15G D.MO (#227), 15E DOM. (#228), 15F OM.R (#335), 15E MOR. (#336), 15F EM.ROD (#337), 15H .MO (#366), 15E KOR. (#403), B7 .OD (#440), 15F OK. (#452), B7 .OED (#464), 15E ROD. (#515), 15E DOR. (#517), 15G R.DO (#518), 15F OD. (#531), B7 .OME (#534), B7 .OKE (#539), 15D EROD. (#547), 15H .RODE (#549), B7 .OR (#558), B7 .ODE (#566), 11K .EDO (#605), 15F OR. (#629), F11 O. (#639), B7 .ORE (#650)
+>hasty0: ELNOUU? 8H ENOL +8 8
+>hasty1: AIMRRTW -MRRT +0 0
+>hasty0: CEGUUW? -GUUW +0 8
+>hasty1: AAEILRW K5 WAL.IER +40 40
+>hasty0: CERTTY? 7B CaTTERY +67 75
+>hasty1: AABEFHO 6C HAAF +39 79
+>hasty0: BEHIIOO J4 OOH +32 107
+>hasty1: BDENOVV L3 VEND +29 108
+>hasty0: BEIILPT 3G BLIP +21 128
+>hasty1: BDGNOVW 10H VOW.D +20 128
+>hasty0: AEIITTU H10 .ITTAE +30 158
+>hasty1: BCEGNOU H1 BU.GE +30 158
+>hasty0: IMNTUUY 3L .UM +16 174
+>hasty1: ACENOPR 12A COPAREN. +80 238
+>hasty0: IINNTUY 13B YIN +27 201
+>hasty1: DEJKMOR M6 JERK +36 274

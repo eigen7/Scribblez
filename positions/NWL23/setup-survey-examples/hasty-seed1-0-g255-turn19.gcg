@@ -1,0 +1,25 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 19 (neural_rank_tool --turn 19); hasty0 to move with EEEJORR
+#note high-value setup plays outside the hasty top 10 (hasty rank): 13E .ERO (#17), 15M EO. (#129), G2 ORR. (#154), 11B ORR. (#162)
+>hasty0: CEEGOUV 8E VOGUE +18 18
+>hasty1: DDEEIIO I7 D. +5 5
+>hasty0: CDEEFIZ F8 .I +2 20
+>hasty1: DEEIIMO 7I .O +3 8
+>hasty0: CDEEFHZ -DEEH +0 20
+>hasty1: DEEIIMN 6J MEDII +26 34
+>hasty0: CFNOPUZ M3 UNZ.P +38 58
+>hasty1: ACDENNS 5E SCANNED +101 135
+>hasty0: ACFORSS 8K FOSSA +44 102
+>hasty1: EHINPRY 9H HYPER +40 175
+>hasty0: ACNQRST N1 QAT +26 128
+>hasty1: EGINTUY O1 IT +41 216
+>hasty0: ABCENRS 10J ARB +24 152
+>hasty1: EFGINUY 11K EYING +41 257
+>hasty0: AACELNS E8 .ALANCES +78 230
+>hasty1: BEFIMU? 15A BUMF. +48 305
+>hasty0: EEEEORW 14C EE.W +24 254
+>hasty1: EIIINV? O11 .IVEN +30 335
+>hasty0: EEEJORR L2 JOE +27 281

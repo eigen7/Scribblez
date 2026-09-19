@@ -1,0 +1,26 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 20 (neural_rank_tool --turn 20); hasty1 to move with AIJLLRT
+#note high-value setup plays outside the hasty top 10 (hasty rank): K5 LI (#65), K5 TI (#172), K5 AI (#411), 6K I. (#470), N7 A. (#475)
+>hasty0: ABIIOPR H8 AR +4 4
+>hasty1: EEIMNOP I7 NEEP +13 13
+>hasty0: BIIOPSS J9 BIO +18 22
+>hasty1: AILMORU K10 AMOUR +27 40
+>hasty0: EIINPSS 14F INSPI.ES +64 86
+>hasty1: AEHILOU 15L HILA +44 84
+>hasty0: AADDGQU 13C QUAG +31 117
+>hasty1: BEOTUU? C8 BOUTi.UE +69 153
+>hasty0: ADDDEOT D4 DADOED +28 145
+>hasty1: EGIORTZ 15A GE.Z +72 225
+>hasty0: AEFNRST D12 F.T. +42 187
+>hasty1: CFIORTT H12 FI.T +33 258
+>hasty0: ACENNRS L4 CANNERS +76 263
+>hasty1: CDORRT? 5A ReD.CTOR +70 328
+>hasty0: AEEMNOT A3 MO.EEN +27 290
+>hasty1: AAIOTVW C1 AVOI. +21 349
+>hasty0: AHIKTXY 1A AT.XY +69 359
+>hasty1: AEORTVW H1 VOWE. +36 385
+>hasty0: EGHIKNW 8K W.IGH +36 395
+>hasty1: AIJLLRT F2 JIL. +27 412

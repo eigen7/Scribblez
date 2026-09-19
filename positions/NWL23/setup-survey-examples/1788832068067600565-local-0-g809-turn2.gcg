@@ -1,8 +1,0 @@
-#character-encoding UTF-8
-#lexicon NWL23
-#player1 hasty0 hasty0
-#player2 hasty1 hasty1
-#note setup survey: turn 2 (neural_rank_tool --turn 2); hasty1 to move with AAGHIKX
-#note high-value setup plays outside the hasty top 10 (hasty rank): 9I HAIK (#12), 9I HAIKA (#13), 9I HAG (#18), 7I KI (#20), 7C HAIK (#21), 7H AHI (#30), 9H AHA (#40), 9I HA (#48), 9H AGA (#49), 7I AGHA (#57), 7I HI (#60), I6 AG. (#76), I8 .GA (#77), G8 .HIA (#99), 7D AGA (#100), I6 AH. (#112), I8 .HA (#114), 7D AAH (#118), 9I AAH (#127), 7I AI (#143), 7D AHA (#144), 9I AA (#163)
->hasty0: ABILOPT 8F IOTA +8 8
->hasty1: AAGHIKX 9H AX +36 36

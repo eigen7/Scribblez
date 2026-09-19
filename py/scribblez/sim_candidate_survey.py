@@ -263,10 +263,15 @@ def pooled(survey: Survey, key: tuple[str, int, int], move: str) -> tuple[float,
     return win, sum(c.mean_delta for c in found) / len(found)
 
 
-def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, count: int):
-    """Copy the GCGs of the `count` positions whose setup play gained most into
-    `review_dir`, with a README table of what the sims said about each."""
-    review_dir.mkdir(parents=True, exist_ok=True)
+def write_review_dir(
+    survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, count: int, command: str
+):
+    """Replace `review_dir` with the GCGs of the `count` positions whose setup play
+    gained most and a README table of what the sims said about each. `command`
+    is the invocation that produced them, recorded for regeneration."""
+    if review_dir.exists():
+        shutil.rmtree(review_dir)
+    review_dir.mkdir(parents=True)
     lines = [
         "# Setup survey examples",
         "",
@@ -276,6 +281,12 @@ def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, 
         "the decision point. Win% and spread (mean final score differential, mover's view) pool",
         "both replicas' rollouts; the held-out gains are the setup pick of one replica valued on",
         "the other, minus the same for the top-10 pick, one figure per replica assignment.",
+        "",
+        "Regenerate this directory (games, sims and all; `--slog-dir` is scratch space) with:",
+        "",
+        "```",
+        command,
+        "```",
         "",
         "| file | turn | setup play (hasty rank) | win% | spread | best top-10 move | win% "
         "| spread | win gains | spread gains |",

@@ -89,7 +89,8 @@ def test_review_dir_collects_the_gcg_and_a_readme(tmp_path):
     name = gcg_name(("chunk", 0, 3))
     assert name == "chunk-g0-turn4.gcg"
     (gcg_dir / name).write_text("#note a game\n")
-    write_review_dir(survey, 10, gcg_dir, tmp_path / "review", count=5)
+    write_review_dir(survey, 10, gcg_dir, tmp_path / "review", 5, "the command")
     assert (tmp_path / "review" / name).exists()
     readme = (tmp_path / "review" / "README.md").read_text()
+    assert "the command" in readme
     assert "M62 (#63) | 48.0 | +0.0 | M0 | 40.0 | +0.0 | +8.0, +8.0 | +0.0, +0.0" in readme

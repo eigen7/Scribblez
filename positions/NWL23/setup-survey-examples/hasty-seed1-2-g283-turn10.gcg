@@ -1,0 +1,16 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 10 (neural_rank_tool --turn 10); hasty1 to move with AEJNOPY
+#note high-value setup plays outside the hasty top 10 (hasty rank): I13 YAP (#25), G13 YEP (#31), I11 .OYA (#50), G11 .APE (#51), G13 YEN (#56), 4F YAPON (#72), G13 YE (#84), G13 PEN (#89), I13 YA (#95), 4F PONY (#108), G13 PE (#112), I13 NAP (#116), 4F YON (#121), 4E APO (#123), I13 NAY (#139), 4F PONE (#148), 4F NOPE (#149), 4F PO (#164), 4F PAEON (#169), 4F YO (#176), 4B OY (#268), D9 AP.. (#279), I13 NAE (#317), D9 OP.. (#341), 4F NO (#353), I14 AY (#380), G13 NE (#387), I13 NA (#406), 4B AY (#453), K11 .EPOY (#479), G14 EN (#523), I14 AN (#544), G13 AE (#591), 15H .NO (#635), 15F ON. (#636), 4B OE (#678), I14 AE (#722), 14H .A (#749), 14G E. (#774)
+>hasty0: NORSTWY 8F TOWY +20 20
+>hasty1: DEFITUV F8 .UFT +15 15
+>hasty0: ENRSTU? 11D EN.RUSTs +78 98
+>hasty1: DEEEINV 12A VIED +30 45
+>hasty0: DGOORSS 7G GOODS +26 124
+>hasty1: EEEFMNR 6B FREEMEN +86 131
+>hasty0: AILNRRS A12 .IRL +21 145
+>hasty1: AABOPRT H10 R.BATO +33 164
+>hasty0: AANNRSU 5C ANNA +20 165
+>hasty1: AEJNOPY J2 JOYPA. +37 201

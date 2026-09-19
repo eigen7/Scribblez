@@ -1,0 +1,19 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 13 (neural_rank_tool --turn 13); hasty0 to move with AAIJLOP
+#note high-value setup plays outside the hasty top 10 (hasty rank): 3E LAP (#18), 7L APO (#28), 3D OPAL (#29), 3E PAL (#49), 7M POI (#68), 9E PAL (#80), 3D OPA (#83), 7M PO (#101), 7M POL (#110), 3E PA (#121), 9F AL (#137), 9E AAL (#149), K8 .AOI (#156), 9E PA (#178), 2A O. (#204), F8 .A (#224), G2 OP.L (#230), 3F AL (#236), 3E LA (#269), 9E LA (#272), 3D ALA (#288), G2 OP. (#291), 2B .LOP (#310), 7M LOP (#311), L2 A.L (#314), 3F AA (#317), F3 A. (#348), 9E AA (#368), 7M LO (#380)
+>hasty0: AFNORSV H4 SOFAR +18 18
+>hasty1: AEENORU 4E ERA.E +5 5
+>hasty0: AEGNOTV 5A GAVOT +22 40
+>hasty1: ACDNOOU A5 .UACO +24 29
+>hasty0: EEHINOT 8F HE.EINTO +62 102
+>hasty1: DDNNOTY J2 NODDY +27 56
+>hasty0: BFIMORT B2 FOR.M +42 144
+>hasty1: AINPST? B9 SPINATe +80 136
+>hasty0: BHILTUV 3I H.LIBUT +41 185
+>hasty1: EEEGLSZ 15A G.EZ +69 205
+>hasty0: AAILOUV O1 VA.U +24 209
+>hasty1: AEEEELS C9 EASEL +28 233
+>hasty0: AAIJLOP 7L AJI +37 246

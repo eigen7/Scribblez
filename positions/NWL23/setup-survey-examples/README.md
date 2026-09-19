@@ -7,20 +7,26 @@ the decision point. Win% and spread (mean final score differential, mover's view
 both replicas' rollouts; the held-out gains are the setup pick of one replica valued on
 the other, minus the same for the top-10 pick, one figure per replica assignment.
 
+Regenerate this directory (games, sims and all; `--slog-dir` is scratch space) with:
+
+```
+./py/scripts/sim_candidate_survey.py --slog-dir target/setup-survey --generate-games 3000 --game-seed 1 --open-leaves --recipe setup --rollouts 1000 --max-positions 300 --review-dir positions/NWL23/setup-survey-examples
+```
+
 | file | turn | setup play (hasty rank) | win% | spread | best top-10 move | win% | spread | win gains | spread gains |
 |---|---|---|---|---|---|---|---|---|---|
-| 1788832066490927849-local-0-g132-turn5.gcg | 5 | 9F FORME (#14) | 53.6 | +6.2 | O1 OXES | 49.0 | -2.9 | +4.4, +5.7 | +8.2, +7.3 |
-| 1788832066490927849-local-0-g937-turn7.gcg | 7 | G2 YEA (#48) | 78.0 | +62.2 | K9 YEAN | 73.2 | +52.9 | +4.2, +5.3 | +10.0, +8.6 |
-| 1788832068067600565-local-0-g669-turn15.gcg | 15 | 7B OKE. (#81) | 79.7 | +53.5 | E11 J.B | 75.7 | +48.6 | +5.6, +3.0 | +4.9, +6.7 |
-| 1788832066490927849-local-0-g24-turn13.gcg | 13 | 7I KI (#17) | 47.2 | -6.5 | L10 .OOKIE | 44.2 | -9.9 | +1.3, +4.6 | +1.9, +4.9 |
-| 1788832066490927849-local-0-g940-turn6.gcg | 6 | E7 ..COT (#30) | 10.2 | -107.6 | 8A HOOT. | 8.3 | -116.6 | +1.7, +4.2 | +7.9, +15.4 |
-| 1788832068067600565-local-0-g809-turn2.gcg | 2 | 9I HAG (#18) | 54.0 | +10.2 | 7E AGHA | 52.5 | +7.3 | +4.4, +1.2 | +7.1, +3.8 |
-| 1788832165769829233-local-0-g829-turn4.gcg | 4 | 15E NAVE. (#15) | 44.0 | -13.3 | 15H U.VA | 42.9 | -16.8 | +4.2, -1.4 | +5.2, +0.1 |
-| 1788832068067600565-local-0-g338-turn17.gcg | 17 | M6 EVE. (#175) | 95.0 | +45.1 | L8 V.RIX | 93.4 | +47.6 | +2.0, +0.1 | -3.1, -1.0 |
-| 1788832165769829233-local-0-g253-turn19.gcg | 19 | 13H .OE (#21) | 52.7 | -0.5 | 14A .O.IE | 52.2 | -1.2 | +1.4, -0.3 | +0.8, +0.4 |
-| 1788832068067600565-local-0-g125-turn9.gcg | 9 | 13C T.RO (#26) | 53.0 | +5.7 | 13B WR. | 52.5 | +2.9 | +0.7, +0.4 | +4.0, +0.8 |
-| 1788832068067600565-local-0-g586-turn13.gcg | 13 | 13F .GO (#99) | 83.0 | +55.6 | 13C JOK.Y | 82.5 | +61.1 | +0.7, +0.4 | -5.3, -5.7 |
-| 1788832068067600565-local-0-g570-turn19.gcg | 19 | M3 .ARE (#47) | 5.5 | -58.0 | J9 AX.E | 6.1 | -66.0 | +0.1, +0.7 | +8.0, +13.6 |
-| 1788832068067600565-local-0-g201-turn11.gcg | 11 | 15H FEIST. (#21) | 6.9 | -97.7 | 2F FED | 6.5 | -101.6 | +0.6, +0.1 | +4.6, +3.1 |
-| 1788832068067600565-local-0-g453-turn20.gcg | 20 | G13 DAM (#21) | 34.9 | -19.8 | 10A JA.M.N | 36.5 | -23.1 | +1.1, -0.5 | +7.0, +5.3 |
-| 1788832066490927849-local-0-g259-turn15.gcg | 15 | 11M OI (#314) | 41.9 | -8.5 | K1 LOO. | 42.8 | -8.1 | +2.1, -1.5 | +1.6, -3.2 |
+| hasty-seed1-2-g57-turn20.gcg | 20 | K5 LI (#65) | 61.1 | -38.2 | 5K R.J | 20.5 | -35.5 | +40.1, +43.9 | -3.7, -9.4 |
+| hasty-seed1-0-g26-turn22.gcg | 22 | I13 .EE (#719) | 9.1 | -141.6 | 9K EX | 0.2 | -108.1 | +9.2, +8.6 | -33.3, -33.6 |
+| hasty-seed1-0-g891-turn16.gcg | 16 | 15D VEIN. (#43) | 45.7 | -6.5 | C1 .INK | 39.2 | -13.2 | +7.3, +7.7 | +7.5, +7.9 |
+| hasty-seed1-2-g419-turn16.gcg | 16 | 15H .MO (#366) | 77.8 | +52.4 | B11 J..ED | 72.5 | +41.3 | +5.1, +6.5 | +8.4, +13.4 |
+| hasty-seed1-0-g952-turn4.gcg | 4 | I9 FE (#11) | 73.8 | +57.0 | 11E FAZ. | 68.5 | +41.3 | +8.0, +3.5 | +19.6, +10.4 |
+| hasty-seed1-1-g722-turn16.gcg | 16 | 3J AL.C (#44) | 21.2 | -35.0 | M1 ECLAT | 17.7 | -52.7 | +4.0, +5.6 | +19.6, +14.4 |
+| hasty-seed1-2-g390-turn19.gcg | 19 | 15D .AUN (#105) | 10.3 | -51.5 | 15D .UANO | 6.5 | -68.8 | +2.2, +5.4 | +15.8, +18.8 |
+| hasty-seed1-0-g923-turn14.gcg | 14 | N11 URSAE (#37) | 78.2 | +42.5 | 8L ..XA | 75.5 | +42.6 | +3.2, +2.2 | +0.8, -1.1 |
+| hasty-seed1-0-g941-turn9.gcg | 9 | 15G B.OOIE (#28) | 47.9 | -4.9 | 4D OBOE | 45.8 | -8.6 | +2.0, +3.4 | +5.0, +4.4 |
+| hasty-seed1-0-g605-turn22.gcg | 22 | 12B AW (#235) | 10.9 | -28.5 | 14D PAW | 8.3 | -35.2 | +2.8, +2.4 | +7.3, +6.0 |
+| hasty-seed1-2-g143-turn13.gcg | 13 | 3E LAP (#18) | 42.0 | -11.0 | 7L AJI | 40.3 | -15.0 | +2.9, +2.1 | +5.3, +2.0 |
+| hasty-seed1-0-g955-turn13.gcg | 13 | C9 FA.O (#74) | 52.4 | +4.9 | 15A IF | 50.8 | -0.0 | +5.3, -0.7 | +5.5, -1.0 |
+| hasty-seed1-0-g255-turn19.gcg | 19 | 13E .ERO (#17) | 4.2 | -94.1 | 12B JEO. | 2.5 | -103.7 | +2.8, +1.2 | +10.4, +2.5 |
+| hasty-seed1-2-g75-turn16.gcg | 16 | 3F UH (#20) | 86.6 | +36.5 | 3C RALPH | 84.8 | +31.5 | +4.2, -0.6 | +7.0, +3.0 |
+| hasty-seed1-2-g283-turn10.gcg | 10 | G11 .APE (#51) | 55.6 | +10.7 | J2 JOYPA. | 56.2 | +11.2 | -0.6, +3.7 | -1.3, +6.5 |
