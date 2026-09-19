@@ -107,6 +107,13 @@ static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecord>& scratch,
                        uint32_t* sampled_turn);
 
+// Fill in what make_game_view leaves blank in the first `num_turns` records of
+// `scratch` -- each turn's player, pre-move rack, bag size, score delta and
+// running scores -- by replaying the moves and draws from `g`'s initial racks.
+// The .slog stores only moves and draws (the training path re-derives the rest
+// through its encoder); a GCG export needs the records whole.
+void complete_turn_records(const GameLog& g, int num_turns, std::vector<TurnRecord>& scratch);
+
 // A game's training-eligible turn region. May be empty (begin >= end) for a
 // degenerate game, which must then be excluded from any training output.
 struct EligibleSpan {

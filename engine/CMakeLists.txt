@@ -52,6 +52,8 @@ add_library(scribblez_core STATIC
   src/agent/endgame_hasty_bot.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
+  src/sim/slog_position_simmer.cpp
+  src/sim/setup_plays.cpp
   src/agent/candidate_evaluator.cpp
   # Coalesces concurrent position-eval requests into larger GPU batches. A
   # decorator over the EvalService interface with no CUDA/TensorRT dependency,
@@ -277,6 +279,16 @@ target_link_libraries(sim_obs_tool PRIVATE
   scribblez_nn
   Boost::program_options
   Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
+# The sim-labeled-candidates measurement (docs/plans/sim_labeled_candidates.md):
+# stratified candidates per sampled .slog position, simmed, one CSV row each.
+add_executable(sim_candidate_survey_tool apps/sim_candidate_survey_tool.cpp)
+target_link_libraries(sim_candidate_survey_tool PRIVATE
+  scribblez_core
+  Boost::program_options
   Boost::filesystem
   Boost::system
   Threads::Threads)

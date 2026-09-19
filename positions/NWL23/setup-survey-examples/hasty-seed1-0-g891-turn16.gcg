@@ -1,0 +1,22 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 16 (neural_rank_tool --turn 16); hasty1 to move with EHIKNQV
+#note high-value setup plays outside the hasty top 10 (hasty rank): 15D VEIN. (#43), 15H .KIVE (#62), 15H .HIVE (#71), 15H .HIV (#94), K10 N.EVI (#102), 15E VIN. (#106), K10 H.NKIE (#133), 15E VIE. (#196), M6 .EINK (#200), 15E KIN. (#220), 15H .KIN (#222), 15E HIN. (#270), 15H .HIN (#271), 15H .HINE (#280), 15H .KI (#359), M6 .EIN (#398), 15F IN. (#409), 15E HIE. (#419), M6 .EI (#470), 15H .EI (#471)
+>hasty0: AEEEMPW H7 AW +10 10
+>hasty1: AIMNOOU G5 NOMOI +23 23
+>hasty0: EEELMOP H1 ELOPE +32 42
+>hasty1: ACENTUU 5E CU..ATE +36 59
+>hasty0: BEEIMRS 6I BEMIRES +77 119
+>hasty1: DEGNRRU 3F GR.UNDER +74 133
+>hasty0: AEIINOS 2J OI +11 130
+>hasty1: DINPRRY 1K RINDY +34 167
+>hasty0: AEINSV? O3 EVA.IoNS +92 222
+>hasty1: CEGPRZ? F1 EG.C.P +32 199
+>hasty0: AFFIJNT 1A TAJIN. +42 264
+>hasty1: AORRTZ? F8 RAZOR +42 241
+>hasty0: EFFSUWX E5 .UFF +27 291
+>hasty1: AADLOT? 11E b.ATLOAD +82 323
+>hasty0: EGSSTWX H11 .EXTS +39 330
+>hasty1: EHIKNQV C1 .INK +30 353

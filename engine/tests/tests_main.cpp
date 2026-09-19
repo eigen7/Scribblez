@@ -9,6 +9,7 @@
 #include "data/data_loader.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
+#include "data/gcg_writer.h"
 #include "data/sim_observation_log.h"
 #include "data/slog_sampling.h"
 #include "data/streaming_row_buffer.h"
@@ -26,7 +27,9 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
+#include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
+#include "sim/slog_position_simmer.h"
 #include "training/evidence_trajectory_select.h"
 #include "training/footprint_mask.h"
 #include "training/lane_analysis.h"
@@ -58,6 +61,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <random>
 #include <set>
 #include <string>
@@ -5126,6 +5130,89 @@ TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
   for (size_t i = 0; i < out.size(); ++i) {
     for (size_t j = i + 1; j < out.size(); ++j) EXPECT_NE(out[i], out[j]);
   }
+}
+
+// select_sim_candidates (sim/slog_position_simmer.h): both recipes report each
+// candidate's 0-based static-equity rank, which is what lets a consumer ask how
+// deep in the ranking the sim's favourite sat.
+TEST(SimCandidates, FlatRecipeIsTheRankedPrefix) {
+  const std::vector<Move> ranked = ranked_plays(5);
+  std::mt19937_64 rng(1);
+  SimCandidateRecipe recipe;
+  recipe.top_k = 3;
+  const SimCandidates sel = select_sim_candidates(ranked, ranked[0], recipe, rng);
+  EXPECT_EQ(sel.moves, std::vector<Move>(ranked.begin(), ranked.begin() + 3));
+  EXPECT_EQ(sel.equity_ranks, (std::vector<int32_t>{0, 1, 2}));
+  EXPECT_EQ(sel.num_legal_moves, 5u);
+
+  recipe.top_k = 9;  // more than the position has
+  EXPECT_EQ(select_sim_candidates(ranked, ranked[0], recipe, rng).moves, ranked);
+}
+
+TEST(SimCandidates, StratifiedRecipeRanksEveryStratum) {
+  std::vector<Move> ranked = ranked_plays(40);
+  ranked.push_back(exchange_of('Q'));
+  std::mt19937_64 rng(7);
+  SimCandidateRecipe recipe;
+  recipe.quotas = move_set_eval::StratumQuotas{
+    .top = 2, .mid = 3, .tail = 4, .exchange = 1, .mid_rank_limit = 10};
+  const SimCandidates sel = select_sim_candidates(ranked, ranked[0], recipe, rng);
+  ASSERT_EQ(sel.moves.size(), 11u);  // played + 2 + 3 + 4 + 1
+  ASSERT_EQ(sel.equity_ranks.size(), sel.moves.size());
+  for (size_t i = 0; i < sel.moves.size(); ++i) {
+    ASSERT_GE(sel.equity_ranks[i], 0);
+    EXPECT_EQ(ranked[size_t(sel.equity_ranks[i])], sel.moves[i]);
+  }
+  EXPECT_EQ(sel.equity_ranks[0], 0);  // the played move leads
+  const auto in_band = [&](int lo, int hi) {
+    return std::count_if(sel.equity_ranks.begin(), sel.equity_ranks.end(),
+                         [&](int32_t r) { return r >= lo && r < hi; });
+  };
+  EXPECT_EQ(in_band(0, 3), 3);    // played + the head
+  EXPECT_EQ(in_band(3, 10), 3);   // the contention zone
+  EXPECT_EQ(in_band(10, 41), 5);  // the tail, plus the exchange ranked last
+}
+
+// A played move the generator never enumerates (a PASS chosen while other moves
+// were legal) has no rank.
+TEST(SimCandidates, UnrankedPlayedMoveGetsMinusOne) {
+  const std::vector<Move> ranked = ranked_plays(6);
+  std::mt19937_64 rng(3);
+  SimCandidateRecipe recipe;
+  recipe.quotas = move_set_eval::StratumQuotas{};
+  const SimCandidates sel = select_sim_candidates(ranked, Move{}, recipe, rng);
+  EXPECT_EQ(sel.equity_ranks[0], -1);
+}
+
+// is_high_value_setup (sim/setup_plays.h) on the play it was defined from:
+// Sokol's K6 AC.TA (positions/NWL23/interesting-positions/ACETA.gcg) keeps the Z
+// and lays its A's beside the triple-letter squares J6 and J10, where ZA then
+// hooks. The same word one column left puts the A's ON those squares and opens
+// nothing; 9K TIZ spends the Z. Requires the NWL23 KWG + leaves; skipped if
+// absent.
+TEST(SetupPlays, AcetaIsAHighValueSetup) {
+  namespace fs = std::filesystem;
+  const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
+  const std::string leaves = HastyEquity::default_leaves_path("NWL23");
+  if (!fs::exists(kwg) || !fs::exists(leaves)) GTEST_SKIP() << "no NWL23 kwg/leaves";
+  Dictionary dict = Dictionary::load_kwg(kwg);
+  HastyEquity::init(leaves, HastyEquity::default_peg_path());
+
+  const std::string gcg =
+    "#player1 Will Will\n#player2 Joshua Joshua\n"
+    ">Will: EEEFGKR 8H GREEK +30 30\n>Joshua: AACITTZ K6 AC.TA +7 7\n";
+  ParsedGcgPosition pos;
+  std::string error;
+  ASSERT_TRUE(read_gcg_position_at(gcg, 1, /*open_leaves=*/false, &pos, &error)) << error;
+  MoveRequest req{pos.board, dict, pos.rack, Rack{}, pos.scores[1], pos.scores[0], pos.bag_size};
+  std::map<std::string, bool> setup;
+  for (const Move& m : equity_top_k(req, std::numeric_limits<int>::max()))
+    setup[move_notation(pos.board, m)] = is_high_value_setup(pos.board, dict, pos.rack, m);
+
+  ASSERT_TRUE(setup.contains("K6 AC.TA"));
+  EXPECT_TRUE(setup.at("K6 AC.TA"));
+  EXPECT_FALSE(setup.at("J6 AC.TA"));
+  EXPECT_FALSE(setup.at("9K TIZ"));
 }
 
 // off_policy_draws (the trajectory off-policy floor, docs/roadmap.md item 4)

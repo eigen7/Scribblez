@@ -1,0 +1,10 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 4 (neural_rank_tool --turn 4); hasty1 to move with AEFQUZ?
+#note high-value setup plays outside the hasty top 10 (hasty rank): I9 FE (#11), I10 EF (#32), G11 FE (#43), I11 FE (#44), 10G A.F (#50), 10H .E (#141)
+>hasty0: AAILMOO -ILMO +0 0
+>hasty1: DEMORUY -DMORY +0 0
+>hasty0: AAEJLOR H8 LORE +8 8
+>hasty1: AEFQUZ? 10F ZA.F +36 36

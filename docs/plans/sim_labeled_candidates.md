@@ -127,17 +127,19 @@ K=10 or 20 under any selection rule. Use the model-free stratified recipe the
 `quota_top / quota_mid / quota_tail / quota_exchange`, `mid_rank_limit`): the
 head, a sample from the contention zone, a sample from the tail, exchanges.
 The tail sample is what reaches setups; the disagreement rate below says how
-much of it to buy. This is new work in `sim_obs_tool`, not reuse: today it
-takes a flat equity top-K prefix, and its `--positions-per-game` is an integer
-applied to every game. It gains a call into `stratified_candidates` and a
-games-fraction option (2000 positions from 20,000 games is one game in ten).
+much of it to buy. The labeler also needs a games-fraction option, which no
+sidecar tool has (`--positions-per-game` is an integer applied to every game;
+2000 positions from 20,000 games is one game in ten).
 The trajectory selector (`evidence_trajectory_select.h`) is a different,
 model-dependent recipe and is untouched. `quota_exchange` is 0 for this stream
 until the exchange encoding question below is settled.
 
-The selection and the sim loop are a library both callers share: `sim_obs_tool`
-(PR 0's measurement, which keeps writing `.sobs` for analysis) and the labeler
-below.
+The selection and the sim loop are a library (`sim/slog_position_simmer.h`)
+shared by `sim_obs_tool`, PR 0's `sim_candidate_survey_tool`, and the labeler
+below. It reports each candidate's equity rank, which the measurement reads
+and the stratum-balanced sibling draw will need; `.sobs` has no field for it,
+which is why the measurement is its own tool writing CSV rows rather than new
+`sim_obs_tool` flags.
 
 ### Rollouts and their condition
 
@@ -279,17 +281,60 @@ is the starting point; the fleet scales it, and the disagreement measurement
 below sets K. It is also more than the self-play that fills a generation, so
 labeling inline makes generation cadence sim-bound (see Generation).
 
-PR 0 at K = 64, 300 rollouts, 300 positions is 5.8 million rollouts: about an
-hour on 16 threads and about 0.7 GB of dense `.sobs`, analysis-only output
-that is not shipped or trained on.
+PR 0 at K = 64, 300 rollouts, 300 positions, two replicas is 11.5 million
+rollouts: 33 minutes on 28 threads (measured), and 2 MB of CSV.
 
 ## Measurements
 
 **Before building (PR 0):** run the sim at K = 64 with the quota strata over a
-few hundred sampled positions of the current corpus and report the fraction
-where the sim's best candidate lies outside the hasty top 10. That is the
-share of positions where the cut costs something, and it prices K and the
-tail quota.
+few hundred sampled positions of the current corpus and report how often, and
+by how much, the sim prefers a candidate outside the hasty top 10. That is
+what the cut costs, and it prices K and the tail quota. The best of 64 noisy
+estimates flatters itself and most candidates lie outside the cut, so the
+figures are held out: each position is simmed twice on independent rollouts,
+a pick made on one replica is valued on the other.
+
+**PR 0 result** (`py/scripts/sim_candidate_survey.py`; 300 positions of
+`transformer-clipped` gen 2548, face-up, the played move plus the rest of the
+top 32 in full, 28 tail, 4 exchanges, 300 rollouts x 2 replicas):
+
+| | all 300 | the 220 undecided (played move at 10-90% win) |
+|---|---|---|
+| sim pick outside the top 10 | 17.7% of picks | 15.0% |
+| ...which the held-out replica confirms (gain > 0) | 45.3% | 42.4% |
+| held-out win% gained by lifting the cut, per position | +0.10 +/- 0.10 | -0.09 +/- 0.08 |
+
+Picking by spread instead: +0.24 +/- 0.17 points of spread per position. On
+the positions HastyBot's own games reach, the top-10 cut costs nothing
+measurable: a pick outside it is confirmed at coin-flip rate, i.e. it is
+rollout noise. Picks from rank 32 on were 9 of 600, and two positions carry
+all of their gain: one pre-endgame position where every top-10 move loses and
+a rank-58 move wins 30%, one +3-point rank-35 play. The tail sample covers a
+median 6% of a position's tail (median 530 legal moves), so tail winners are
+undercounted by roughly that factor -- but even scaled, a uniform tail draw
+finds a sim-confirmed tail winner at well under one labeled position in ten.
+
+**The same test aimed at setups** (`--recipe setup`): only positions with a
+"high-value setup" play ranked outside the top 10 -- a J/Q/X/Z kept in the
+leave and a tile laid beside an empty premium square where it then hooks
+(`sim/setup_plays.h`; K6 AC.TA is the defining case) -- simming the top 10
+plus every such play, 1000 rollouts x 2 replicas. 16% of eligible turns
+qualify; 300 were simmed. The best setup play loses to the best top-10 move
+by 10.3 +/- 0.6 win% on average (held out), the sim's pick lands outside the
+cut in 5.5% of picks, and lifting the cut gains +0.06 +/- 0.02 win% per
+position. In 11 positions (3.7%) the setup was confirmed better (same pick on
+both replicas, both held-out gains positive), in 3 of them by more than 2
+points on both, in none by more than 5. The strongest are collected in
+`positions/NWL23/setup-survey-examples/`.
+
+What this does and does not say. It confirms the diagnosis's premise from the
+other side: setups are rare on-distribution, which is why the corpus lacks
+them. It does not measure the quantity sim rows would fix, the *model's*
+error on tail candidates (ACETA's ten points), since no model is in this
+loop. And it prices the uniform tail stratum poorly as a way to find setups:
+its labels would overwhelmingly say "as bad as equity says". Whether the model
+already knows that is the measurement that decides the tail quota, and it
+needs the model's values over these same candidates.
 
 **Acceptance for phase 1** (the arms compare at equal generations and equal
 game rows; the offline experiment fine-tunes both arms from the same
@@ -321,11 +366,11 @@ hoc into an existing tag's games, so the loader, the losses and a fine-tune
 can be tried with no generator or workload change. The generator step (task
 params, an ssh bundle redeploy) is built only on a positive result.
 
-0. **Measurement.** The quota selection and sim loop become a shared library;
-   `sim_obs_tool` gains the strata and a games-fraction option; a script runs
-   it at K = 64 over sampled positions and reports the disagreement rate and
-   the rank distribution of the sim's best. Also lands the ACETA reproduction
-   as a documented recipe.
+0. **Measurement (done).** The quota selection and sim loop become a shared
+   library; `sim_candidate_survey_tool` sims the K = 64 sample and a script
+   reports the held-out disagreement figures and the rank distribution of the
+   sim's picks. The games-fraction option moves to PR 1 with the labeler that
+   needs it.
 1. **Format + loader.** The `.slog` version with the sim-label section, the
    post hoc labeling / converting tool, the footprint-class transpose table,
    the post-candidate `EncodeContext` and masks, the sim-row stream and its
