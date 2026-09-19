@@ -91,6 +91,5 @@ def test_review_dir_collects_the_gcg_and_a_readme(tmp_path):
     (gcg_dir / name).write_text("#note a game\n")
     write_review_dir(survey, 10, gcg_dir, tmp_path / "review", count=5)
     assert (tmp_path / "review" / name).exists()
-    assert (
-        "M62 (#63) | 48.0 | M0 | 40.0 | +8.0, +8.0" in (tmp_path / "review/README.md").read_text()
-    )
+    readme = (tmp_path / "review" / "README.md").read_text()
+    assert "M62 (#63) | 48.0 | +0.0 | M0 | 40.0 | +0.0 | +8.0, +8.0 | +0.0, +0.0" in readme

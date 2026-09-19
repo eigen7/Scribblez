@@ -171,10 +171,15 @@ class SetupFinding:
     setup_ranks: tuple[int, int]
     cut_moves: tuple[str, str]
     gains: tuple[float, float]  # held-out win equity, setup pick minus cut pick
+    spread_gains: tuple[float, float]  # the same picks' held-out mean final score differential
 
     @property
     def mean_gain(self) -> float:
         return sum(self.gains) / 2
+
+    @property
+    def mean_spread_gain(self) -> float:
+        return sum(self.spread_gains) / 2
 
     @property
     def confirmed(self) -> bool:
@@ -194,7 +199,14 @@ def setup_findings(survey: Survey, cut: int) -> list[SetupFinding]:
             if not inside or not setups:
                 break
             s, c = best_index(chosen, setups), best_index(chosen, inside)
-            picks.append((chosen[s], chosen[c], scored[s].win_equity - scored[c].win_equity))
+            picks.append(
+                (
+                    chosen[s],
+                    chosen[c],
+                    scored[s].win_equity - scored[c].win_equity,
+                    scored[s].mean_delta - scored[c].mean_delta,
+                )
+            )
         if len(picks) == 2:
             findings.append(
                 SetupFinding(
@@ -203,6 +215,7 @@ def setup_findings(survey: Survey, cut: int) -> list[SetupFinding]:
                     setup_ranks=(picks[0][0].equity_rank, picks[1][0].equity_rank),
                     cut_moves=(picks[0][1].move, picks[1][1].move),
                     gains=(picks[0][2], picks[1][2]),
+                    spread_gains=(picks[0][3], picks[1][3]),
                 )
             )
     return sorted(findings, key=lambda f: -f.mean_gain)
@@ -213,16 +226,26 @@ def setup_report(survey: Survey, cut: int) -> str:
     it, position by position. Gains are win-equity points (percent)."""
     findings = setup_findings(survey, cut)
     mean, se = mean_and_se([100 * f.mean_gain for f in findings])
+    spread, spread_se = mean_and_se([f.mean_spread_gain for f in findings])
     confirmed = [f for f in findings if f.confirmed]
     lines = [
         f"{len(findings)} positions with a high-value setup play outside the top {cut}",
-        f"best such setup vs best top-{cut} move, held out: {mean:+.2f} +/- {se:.2f} pts",
+        f"best such setup vs best top-{cut} move, held out: {mean:+.2f} +/- {se:.2f} win pts, "
+        f"{spread:+.1f} +/- {spread_se:.1f} spread",
         f"setup confirmed better (same pick on both replicas, both held-out gains > 0): "
         f"{len(confirmed)} positions ({len(confirmed) / len(findings):.1%})",
     ]
     for lo in (2, 5):
         n = sum(100 * min(f.gains) > lo for f in confirmed)
         lines.append(f"  ...by more than {lo} pts on both: {n}")
+    both = [f for f in confirmed if min(f.spread_gains) > 0]
+    lines.append(f"  ...and ahead on spread on both replicas too: {len(both)}")
+    for f in confirmed:
+        lines.append(
+            f"    {gcg_name(f.key)}: {f.setup_moves[0]} over {f.cut_moves[0]}, "
+            f"win {100 * f.gains[0]:+.1f}/{100 * f.gains[1]:+.1f}, "
+            f"spread {f.spread_gains[0]:+.1f}/{f.spread_gains[1]:+.1f}"
+        )
     return "\n".join(lines)
 
 
@@ -233,10 +256,11 @@ def gcg_name(key: tuple[str, int, int]) -> str:
     return f"{stem}-g{game}-turn{turn + 1}.gcg"
 
 
-def pooled_win(survey: Survey, key: tuple[str, int, int], move: str) -> float:
-    """A move's win equity over both replicas' rollouts, in percent."""
-    values = [c.win_equity for cands in survey[key].values() for c in cands if c.move == move]
-    return 100 * sum(values) / len(values)
+def pooled(survey: Survey, key: tuple[str, int, int], move: str) -> tuple[float, float]:
+    """A move's (win equity in percent, mean spread) over both replicas' rollouts."""
+    found = [c for cands in survey[key].values() for c in cands if c.move == move]
+    win = 100 * sum(c.win_equity for c in found) / len(found)
+    return win, sum(c.mean_delta for c in found) / len(found)
 
 
 def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, count: int):
@@ -249,19 +273,25 @@ def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, 
         "Positions from HastyBot self-play where a high-value setup play ranked outside the",
         f"hasty top {cut} simmed best against the top {cut}, strongest first. Each GCG ends on",
         "the move the game actually played; `neural_rank_tool --gcg <file> --turn <turn>` opens",
-        "the decision point. Win% pools both replicas' rollouts; the held-out gains are the",
-        "setup pick of one replica valued on the other, minus the same for the top-10 pick.",
+        "the decision point. Win% and spread (mean final score differential, mover's view) pool",
+        "both replicas' rollouts; the held-out gains are the setup pick of one replica valued on",
+        "the other, minus the same for the top-10 pick, one figure per replica assignment.",
         "",
-        "| file | turn | setup play (hasty rank) | win% | best top-10 move | win% | gains |",
-        "|---|---|---|---|---|---|---|",
+        "| file | turn | setup play (hasty rank) | win% | spread | best top-10 move | win% "
+        "| spread | win gains | spread gains |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for f in setup_findings(survey, cut)[:count]:
         shutil.copy(gcg_dir / gcg_name(f.key), review_dir / gcg_name(f.key))
         setup, cut_move = f.setup_moves[0], f.cut_moves[0]
+        (setup_win, setup_spread), (cut_win, cut_spread) = (
+            pooled(survey, f.key, setup),
+            pooled(survey, f.key, cut_move),
+        )
         lines.append(
             f"| {gcg_name(f.key)} | {f.key[2] + 1} | {setup} (#{f.setup_ranks[0] + 1}) "
-            f"| {pooled_win(survey, f.key, setup):.1f} | {cut_move} "
-            f"| {pooled_win(survey, f.key, cut_move):.1f} "
-            f"| {100 * f.gains[0]:+.1f}, {100 * f.gains[1]:+.1f} |"
+            f"| {setup_win:.1f} | {setup_spread:+.1f} | {cut_move} | {cut_win:.1f} "
+            f"| {cut_spread:+.1f} | {100 * f.gains[0]:+.1f}, {100 * f.gains[1]:+.1f} "
+            f"| {f.spread_gains[0]:+.1f}, {f.spread_gains[1]:+.1f} |"
         )
     (review_dir / "README.md").write_text("\n".join(lines) + "\n")
