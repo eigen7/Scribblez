@@ -1,0 +1,10 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 4 (neural_rank_tool --turn 4); hasty1 to move with AENTUVZ
+#note high-value setup plays outside the hasty top 10 (hasty rank): 15E NAVE. (#15), 14F NAT.VE (#24), 11F ANE.T (#561), 14G AN. (#606)
+>hasty0: EEFJNRT H5 JEFE +28 28
+>hasty1: AEIOPRS 9H SOAPIER +76 76
+>hasty0: AHILNRT I8 H.RNTAIL +67 95
+>hasty1: AENTUVZ 15F VAU.T +24 100

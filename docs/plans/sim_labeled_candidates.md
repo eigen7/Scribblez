@@ -313,6 +313,19 @@ median 6% of a position's tail (median 530 legal moves), so tail winners are
 undercounted by roughly that factor -- but even scaled, a uniform tail draw
 finds a sim-confirmed tail winner at well under one labeled position in ten.
 
+**The same test aimed at setups** (`--recipe setup`): only positions with a
+"high-value setup" play ranked outside the top 10 -- a J/Q/X/Z kept in the
+leave and a tile laid beside an empty premium square where it then hooks
+(`sim/setup_plays.h`; K6 AC.TA is the defining case) -- simming the top 10
+plus every such play, 1000 rollouts x 2 replicas. 16% of eligible turns
+qualify; 300 were simmed. The best setup play loses to the best top-10 move
+by 10.3 +/- 0.6 win% on average (held out), the sim's pick lands outside the
+cut in 5.5% of picks, and lifting the cut gains +0.06 +/- 0.02 win% per
+position. In 11 positions (3.7%) the setup was confirmed better (same pick on
+both replicas, both held-out gains positive), in 3 of them by more than 2
+points on both, in none by more than 5. The strongest are collected in
+`positions/NWL23/setup-survey-examples/`.
+
 What this does and does not say. It confirms the diagnosis's premise from the
 other side: setups are rare on-distribution, which is why the corpus lacks
 them. It does not measure the quantity sim rows would fix, the *model's*

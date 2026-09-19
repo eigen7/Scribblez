@@ -1,0 +1,17 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 11 (neural_rank_tool --turn 11); hasty0 to move with DEFIQST
+#note high-value setup plays outside the hasty top 10 (hasty rank): 15H FEIST. (#21), 7E FI..T (#71), 15H DEIST. (#91), 7E DI..T (#151), 11J IDE.S (#231), 11J IDE. (#350), 7D DEI..S (#356), 15I SIFT. (#387), 15I FIST. (#388), 15I TIDE. (#407), 15I DITE. (#408), 15I DIET. (#410), 15J IDE. (#499), 15I SIDE. (#611), 15I SITE. (#638)
+>hasty0: AINOVYZ H4 ZAYIN +54 54
+>hasty1: ELPRSUX G7 XU +36 36
+>hasty0: AEEGOOV 4H .OEAE +28 82
+>hasty1: DDELPRS K1 SPR.DDLE +74 110
+>hasty0: AGINORV 1E VIRAGO. +33 115
+>hasty1: ACEERSW L8 WE +18 128
+>hasty0: ABDINSY 3I BA.NY +37 152
+>hasty1: ACEHORS M9 ROACHES +79 207
+>hasty0: ADEFIOS N8 OAF +30 182
+>hasty1: EPRTTU? O3 PUTTERs +86 293
+>hasty0: DEFIQST 14J FET.D +34 216

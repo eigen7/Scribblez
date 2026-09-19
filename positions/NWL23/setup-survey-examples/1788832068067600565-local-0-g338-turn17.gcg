@@ -1,0 +1,23 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 17 (neural_rank_tool --turn 17); hasty0 to move with EEIORVX
+#note high-value setup plays outside the hasty top 10 (hasty rank): M2 .ROVE (#36), C5 VIE (#39), 5H .IEVER (#51), C5 RIVE (#52), C5 VIER (#53), K5 RIVE. (#68), M6 OVI.E (#82), M6 OVE. (#91), M5 ROVE. (#110), L7 OV. (#132), N2 .OEVER (#150), N2 .IEVE (#171), M6 EVE. (#175), B1 .ORIE (#203), L6 VER. (#265), 9A REI. (#279), N1 O. (#308), 3N OE (#316), 5H .OE (#340), N1 O.E (#342), N1 O.IER (#374), N1 E. (#388), 7H .RIO (#401), 9A REE. (#424), L7 OR. (#443), L7 ER. (#460), 5H .EE (#515), N2 .EE (#517), N2 .EER (#525)
+>hasty0: AEOQSTV 8F ATE +6 6
+>hasty1: AABEGIR F7 R.GE +7 7
+>hasty0: DOOQRSV -OQV +0 6
+>hasty1: AABHIW? E5 WAAH +29 36
+>hasty0: ADEOORS 11C ROADEOS +73 79
+>hasty1: ABIINU? D1 NUBIA +21 57
+>hasty0: DFMMNTU 10E M.NTUM +26 105
+>hasty1: EILRTV? H1 LEVIRaT. +83 140
+>hasty0: ADFGNOR D9 FO.D +27 132
+>hasty1: BEINTTW H10 ..WNIE +39 179
+>hasty0: AGGINRS 2G G.ARINGS +74 206
+>hasty1: BFRTTUZ 14F FR.TZ +45 224
+>hasty0: AEINSTY 3G I.Y +27 233
+>hasty1: ABLNOTU 9I BUTANOL +75 299
+>hasty0: AEENST? O8 E.ASTaNE +122 355
+>hasty1: EIIKOOU 1A KOI.E +27 326
+>hasty0: EEIORVX 1N OX +29 384

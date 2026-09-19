@@ -1,0 +1,25 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 19 (neural_rank_tool --turn 19); hasty0 to move with AEEIRRX
+#note high-value setup plays outside the hasty top 10 (hasty rank): L6 RARE (#35), L6 RE (#38), M3 .ARER (#43), L7 ARE (#44), L7 ERA (#46), M3 .ARE (#47), 7K .ARE (#57), 7K .EAR (#58), 7K .ER (#67), 7K .ARER (#73), L7 ERE (#85), 7K .AR (#103), 7K .EA (#192), 7K .A (#196), 7K .E (#213), 3A AE (#227)
+>hasty0: FORSTZ? 8H Os +2 2
+>hasty1: EKOTUU? I5 tUT. +3 3
+>hasty0: EEFRSTZ G8 SERF +10 12
+>hasty1: ABEIKOU H1 KUBIE +37 40
+>hasty0: ENNORTZ 3H .ONZER +36 48
+>hasty1: AEHLOOY K3 .OOEY +34 74
+>hasty0: EENQRTV H11 EVENT +41 89
+>hasty1: AEEHILM L1 HA.M +34 108
+>hasty0: DILQRSY 11G ..RLY +22 111
+>hasty1: EEGILOR 14C ELOIG.ER +63 171
+>hasty0: CDDIQSW 1K W.IDS +36 147
+>hasty1: GHMPSTU 15A UGH +26 197
+>hasty0: ABCDPQT 13C PAD +33 180
+>hasty1: AAMPSTT 12D PAT +24 221
+>hasty0: BCFNOQT 5D CONF..T. +24 204
+>hasty1: ADMNOST E1 MAST.DON +61 282
+>hasty0: BEEINQR 2B NIQ.B +44 248
+>hasty1: GILNOSV 1A VOG +26 308
+>hasty0: AEEIRRX J9 AX.E +27 275

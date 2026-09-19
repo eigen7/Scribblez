@@ -1,0 +1,11 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 5 (neural_rank_tool --turn 5); hasty0 to move with EFMORSX
+#note high-value setup plays outside the hasty top 10 (hasty rank): 9F FORME (#14), 9I MO (#25), 7C FORME (#39), 9I ME (#40), I7 F.MER (#48), I7 F.ME (#66), 9H EMO (#69), 9F MORSE (#134), I7 F.MERS (#152), I7 M.RE (#173), I7 F.MES (#180), 7C MORSE (#232), I7 M.SO (#246), I7 S.MO (#247), G3 MORSE. (#281), I7 F.SE (#284), I7 M.SE (#312), I7 M.SER (#314), I7 M.RES (#315), J8 .O (#337), 7M ORE (#341), 9I SO (#347), J8 .E (#355), I7 E.RO (#423), M6 .ORSE (#456), I7 R.SE (#471), I7 S.RE (#473), I8 .SER (#497), 7M OSE (#506), I7 E.ROS (#510), I8 .SE (#514)
+>hasty0: ADGLSX? 8G LAuDS +10 10
+>hasty1: CEINRWY K5 IRE. +8 8
+>hasty0: FGGIORX 6J G.IG +10 20
+>hasty1: CDNNSWY 4K WYND +30 38
+>hasty0: EFMORSX O1 OXES +49 69

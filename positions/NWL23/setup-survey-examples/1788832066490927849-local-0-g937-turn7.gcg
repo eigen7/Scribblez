@@ -1,0 +1,13 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 7 (neural_rank_tool --turn 7); hasty0 to move with AAAENXY
+#note high-value setup plays outside the hasty top 10 (hasty rank): K8 AY (#14), K8 AYE (#18), G3 YA (#22), K7 NAY (#25), G3 AA (#37), G2 ANA (#41), G2 YEA (#48), E2 AYE (#56), G11 AA (#63), E2 ANE (#78), G10 NAE (#80), G3 NA (#91), 4F .A (#107), G11 AE (#113), 7D AN. (#148), 7D EN. (#195)
+>hasty0: ABCEEOO -CO +0 0
+>hasty1: AAGLORT H6 GROAT +12 12
+>hasty0: ABEEOW? I7 EEW +25 25
+>hasty1: AEELLTU 6F LU.E +14 26
+>hasty0: ABFOOT? F4 FO.dBOAT +64 89
+>hasty1: AAEILRT 9H ..A +6 32
+>hasty0: AAAENXY 10J YA +26 115

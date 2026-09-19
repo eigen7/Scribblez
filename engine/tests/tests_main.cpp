@@ -9,6 +9,7 @@
 #include "data/data_loader.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
+#include "data/gcg_writer.h"
 #include "data/sim_observation_log.h"
 #include "data/slog_sampling.h"
 #include "data/streaming_row_buffer.h"
@@ -26,6 +27,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
+#include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
 #include "sim/slog_position_simmer.h"
 #include "training/evidence_trajectory_select.h"
@@ -59,6 +61,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <random>
 #include <set>
 #include <string>
@@ -5179,6 +5182,37 @@ TEST(SimCandidates, UnrankedPlayedMoveGetsMinusOne) {
   recipe.quotas = move_set_eval::StratumQuotas{};
   const SimCandidates sel = select_sim_candidates(ranked, Move{}, recipe, rng);
   EXPECT_EQ(sel.equity_ranks[0], -1);
+}
+
+// is_high_value_setup (sim/setup_plays.h) on the play it was defined from:
+// Sokol's K6 AC.TA (positions/NWL23/interesting-positions/ACETA.gcg) keeps the Z
+// and lays its A's beside the triple-letter squares J6 and J10, where ZA then
+// hooks. The same word one column left puts the A's ON those squares and opens
+// nothing; 9K TIZ spends the Z. Requires the NWL23 KWG + leaves; skipped if
+// absent.
+TEST(SetupPlays, AcetaIsAHighValueSetup) {
+  namespace fs = std::filesystem;
+  const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
+  const std::string leaves = HastyEquity::default_leaves_path("NWL23");
+  if (!fs::exists(kwg) || !fs::exists(leaves)) GTEST_SKIP() << "no NWL23 kwg/leaves";
+  Dictionary dict = Dictionary::load_kwg(kwg);
+  HastyEquity::init(leaves, HastyEquity::default_peg_path());
+
+  const std::string gcg =
+    "#player1 Will Will\n#player2 Joshua Joshua\n"
+    ">Will: EEEFGKR 8H GREEK +30 30\n>Joshua: AACITTZ K6 AC.TA +7 7\n";
+  ParsedGcgPosition pos;
+  std::string error;
+  ASSERT_TRUE(read_gcg_position_at(gcg, 1, /*open_leaves=*/false, &pos, &error)) << error;
+  MoveRequest req{pos.board, dict, pos.rack, Rack{}, pos.scores[1], pos.scores[0], pos.bag_size};
+  std::map<std::string, bool> setup;
+  for (const Move& m : equity_top_k(req, std::numeric_limits<int>::max()))
+    setup[move_notation(pos.board, m)] = is_high_value_setup(pos.board, dict, pos.rack, m);
+
+  ASSERT_TRUE(setup.contains("K6 AC.TA"));
+  EXPECT_TRUE(setup.at("K6 AC.TA"));
+  EXPECT_FALSE(setup.at("J6 AC.TA"));
+  EXPECT_FALSE(setup.at("9K TIZ"));
 }
 
 // off_policy_draws (the trajectory off-policy floor, docs/roadmap.md item 4)

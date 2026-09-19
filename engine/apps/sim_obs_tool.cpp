@@ -78,7 +78,7 @@ struct Options {
 SlogSimConfig sim_config(const Options& opt, nn::PositionEvalService* leaf_eval_service) {
   SlogSimConfig c;
   c.open_leaves = opt.open_leaves;
-  c.recipe.top_k = opt.top_k;
+  c.selector = recipe_selector({.top_k = opt.top_k, .quotas = {}});
   c.runner.rollouts = opt.rollouts;
   c.runner.threads = 1;
   c.runner.horizon_plies = opt.horizon;
