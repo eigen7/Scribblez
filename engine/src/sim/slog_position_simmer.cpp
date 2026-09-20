@@ -113,7 +113,7 @@ void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
   res->bag_size = encoder->bag_size();
   res->played = g.records[w.turn_idx].move;
   res->candidates =
-    job->config.selector(pos, rank_candidates(pos, job->dict, res->bag_size), res->played, rng);
+    job->config.selector(w, pos, rank_candidates(pos, job->dict, res->bag_size), res->played, rng);
   if (res->candidates.moves.empty()) return;
   res->candidates.equities = HastyEquity::instance().equities(
     res->candidates.moves, pos.board, res->bag_size, pos.opp_leave, pos.rack);
@@ -171,9 +171,10 @@ SimCandidates select_sim_candidates(const std::vector<Move>& ranked, const Move&
 }
 
 SimCandidateSelector recipe_selector(const SimCandidateRecipe& recipe) {
-  return
-    [recipe](const SimPosition&, const std::vector<Move>& ranked, const Move& played,
-             std::mt19937_64& rng) { return select_sim_candidates(ranked, played, recipe, rng); };
+  return [recipe](const binlog::GamePositionIndex&, const SimPosition&,
+                  const std::vector<Move>& ranked, const Move& played, std::mt19937_64& rng) {
+    return select_sim_candidates(ranked, played, recipe, rng);
+  };
 }
 
 namespace {
@@ -235,17 +236,32 @@ std::vector<SimmedPosition> run_job(const std::vector<char>& buf, const Dictiona
 }  // namespace
 
 SimCandidateSelector setup_selector(const Dictionary& dict, int cut, int max_setups) {
-  return [&dict, cut, max_setups](const SimPosition& pos, const std::vector<Move>& ranked,
-                                  const Move&, std::mt19937_64&) {
+  return [&dict, cut, max_setups](const binlog::GamePositionIndex&, const SimPosition& pos,
+                                  const std::vector<Move>& ranked, const Move&, std::mt19937_64&) {
     return select_setup_candidates(pos, dict, ranked, cut, max_setups);
   };
 }
 
 SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max_plays) {
-  return [&dict, cut, max_plays](const SimPosition& pos, const std::vector<Move>& ranked,
-                                 const Move&, std::mt19937_64&) {
+  return [&dict, cut, max_plays](const binlog::GamePositionIndex&, const SimPosition& pos,
+                                 const std::vector<Move>& ranked, const Move&, std::mt19937_64&) {
     return select_all_plays(pos, dict, ranked, cut, max_plays);
   };
+}
+
+SimCandidateSelector chosen_selector(ChosenMoves chosen) {
+  return
+    [chosen = std::move(chosen)](const binlog::GamePositionIndex& at, const SimPosition&,
+                                 const std::vector<Move>& ranked, const Move&, std::mt19937_64&) {
+      SimCandidates out;
+      const auto it = chosen.find(at);
+      if (it == chosen.end()) return out;
+      out.num_legal_moves = ranked.size();
+      out.moves = it->second;
+      for (const Move& m : out.moves) out.equity_ranks.push_back(equity_rank(ranked, m));
+      out.highlighted.assign(out.moves.size(), 0);
+      return out;
+    };
 }
 
 std::vector<SimmedPosition> sim_slog_positions(const std::vector<char>& buf, const Dictionary& dict,

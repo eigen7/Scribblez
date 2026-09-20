@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <optional>
 #include <random>
 #include <vector>
@@ -59,9 +60,9 @@ SimCandidates select_sim_candidates(const std::vector<Move>& ranked, const Move&
 // Chooses a position's candidates from `ranked` (every legal move, best equity
 // first). `played` is the move the game made there; `rng` is seeded per
 // position, so a selector is deterministic in (run seed, game, turn).
-using SimCandidateSelector =
-  std::function<SimCandidates(const SimPosition& pos, const std::vector<Move>& ranked,
-                              const Move& played, std::mt19937_64& rng)>;
+using SimCandidateSelector = std::function<SimCandidates(
+  const binlog::GamePositionIndex& at, const SimPosition& pos, const std::vector<Move>& ranked,
+  const Move& played, std::mt19937_64& rng)>;
 
 SimCandidateSelector recipe_selector(const SimCandidateRecipe& recipe);
 
@@ -77,6 +78,12 @@ SimCandidateSelector setup_selector(const Dictionary& dict, int cut, int max_set
 // `max_plays` best-ranked beyond the cut (0 = no cap). High-value setups are
 // highlighted. Both this and setup_selector list the cut first, in rank order.
 SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max_plays);
+
+// Exactly the moves `chosen` names for a position, in its order (each must be
+// legal there), declining positions it does not name: the second stage of a
+// screen-then-confirm survey, where the first stage picked the moves.
+using ChosenMoves = std::map<binlog::GamePositionIndex, std::vector<Move>>;
+SimCandidateSelector chosen_selector(ChosenMoves chosen);
 
 struct SlogSimConfig {
   // Sim with the opponent's retained leave known (the open-leaves information
