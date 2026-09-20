@@ -1,0 +1,28 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 22 (neural_rank_tool --turn 22); hasty1 to move with EELNRSX
+#note high-value setup plays outside the hasty top 10 (hasty rank): M8 .LENSER (#63), M8 .RESNEL (#64), 9J ESNE (#104), M8 .LENSE (#106), M8 .LEERS (#113), M8 .LEER (#283), 14H RE (#295), 14I ERNE (#328), N8 .ERNE (#348), 9J ES (#395), M8 .EEL (#447), M8 .LEE (#448), 5J ...SER (#461), M8 .REE (#473), 14I ERNES (#479), N8 .ENSER (#507), N8 .ERNES (#508), I13 .E (#589), M8 .EELS (#601), M8 .LEES (#602), M8 .REES (#609), 5J ...SE (#629), 14I ELSE (#632), 14I ESNE (#635), N8 .ENSE (#655), N8 .ERSE (#661), M8 .EE (#682), I11 SE.ER (#687), I13 .ES (#704), M8 .EES (#712), G13 .EE (#717), I12 E.E (#718), I13 .EE (#719), I11 SE.E (#723)
+>hasty0: EEFHIJO -FHO +0 0
+>hasty1: ELRUUY? H6 RYU +12 12
+>hasty0: EEGIIJU 6H .EJIG +29 29
+>hasty1: AAEILU? J5 A.I +10 22
+>hasty0: EINUVW? L4 VU. +14 43
+>hasty1: AELOSU? 9B jEALOUS +65 87
+>hasty0: DEINRW? E4 WRINk.ED +94 137
+>hasty1: EEEHINV D1 HIVE +38 125
+>hasty0: BDGLOTY 2A BOD.LY +40 177
+>hasty1: ACEEEIN 1F ACE +20 145
+>hasty0: DEGHLPT C7 PL.DGET +28 205
+>hasty1: AEEIMNP 10C .E.P +25 170
+>hasty0: CHOOQRS 6D Q. +11 216
+>hasty1: AEFIMNN D12 FINE +28 198
+>hasty0: CHOORRS 15A OCH.R +30 246
+>hasty1: ADLMNOW 1A AW +32 230
+>hasty0: ENOORSZ 2H SNOOZER +88 334
+>hasty1: BDKLMNO K5 M.NK +32 262
+>hasty0: AFGIOOT 8K .OFTA +39 373
+>hasty1: BDELNOS 1M BOD +24 286
+>hasty0: AGIMORT 13A MI..GATOR +64 437
+>hasty1: EELNRSX H11 EX.NS +60 346

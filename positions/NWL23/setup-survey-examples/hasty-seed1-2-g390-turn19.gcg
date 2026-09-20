@@ -1,0 +1,25 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 19 (neural_rank_tool --turn 19); hasty0 to move with AENOSUX
+#note high-value setup plays outside the hasty top 10 (hasty rank): 14I USNEA (#27), 14J SUE (#30), 14F AEONS (#38), 14G NAOS (#52), 14H ONS (#62), 14G NOES (#72), 14G EONS (#73), M9 NOUS (#82), 14H OES (#88), 15D .AUN (#105), 14G NAES (#113), 14J SEA (#125), 14J SAE (#126), 9J .EU (#180), 15D .NU (#186), 14H ENS (#191), 11L EAU (#226), G1 ON (#239), M9 NAOS (#241), M8 AEONS (#259), M9 EONS (#276), M9 NOES (#277), M10 ONS (#302), M10 OES (#358), M9 NAES (#364), L9 ANO.E (#374), G1 AN (#381), L9 ENO. (#386), G1 OE (#396), G1 AE (#405), 9J .OUSE (#409), G1 ONS (#448), 11L ANUS (#456), G1 OES (#497), M10 ENS (#512), G1 EN (#533), 15D .NUS (#537), F12 SO (#558), G1 OS (#601), G1 ENS (#625), L9 ANO.ES (#627), L9 ENO.S (#651), G1 AS (#687), G1 ES (#734)
+>hasty0: ADEEMSS H4 MEADS +22 22
+>hasty1: DENOOT? 8A DuOTONE. +77 77
+>hasty0: BEIMRSZ C6 BR.MIZES +100 122
+>hasty1: EGNTTU? E5 UNG.TTEn +82 159
+>hasty0: BEIIKRY I3 KYRIE +33 155
+>hasty1: CIINOUV D1 COVIN +28 187
+>hasty0: ABHIITW 1A WIT.H +39 194
+>hasty1: AGIOTTU F2 OUTGAI. +23 210
+>hasty0: ABEINSV 3B VA. +18 212
+>hasty1: AEIJLNT 10B J.L. +27 237
+>hasty0: BEEINRS 6A EB. +13 225
+>hasty1: AEIILNT 3I .I +6 243
+>hasty0: EINPRRS 2J PRIER +36 261
+>hasty1: AEILNTY 1M YET +25 268
+>hasty0: GILNNRS D12 RING +20 281
+>hasty1: ACFILNO J7 FOLACIN +71 339
+>hasty0: LLNSSWX 12H SW.LL +18 299
+>hasty1: AADEFHO 3M HAO +33 372
+>hasty0: AENOSUX 15D .OXES +39 338

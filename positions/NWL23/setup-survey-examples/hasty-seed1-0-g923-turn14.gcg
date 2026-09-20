@@ -1,0 +1,20 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 14 (neural_rank_tool --turn 14); hasty1 to move with AEERSUX
+#note high-value setup plays outside the hasty top 10 (hasty rank): N11 URSAE (#37), 3I RUE (#46), N13 SUE (#51), 14H AE (#63), 14E UREA (#84), I2 AURE. (#138), H13 .A (#144), 14E URSAE (#151), 7L ..EA (#153), 13D SUE (#155), N11 EASER (#160), N11 RASE (#167), N13 SAE (#172), N13 SEA (#173), 3I SUE (#215), 14F ERA (#216), N11 EASE (#228), 3G REUSE (#229), 3F UREASE (#236), N13 SEE (#249), N12 ES (#258), 14L .ERE (#278), N11 RES (#313), G4 ER. (#319), 13D SAE (#323), 13D SEA (#324), N12 AS (#335), I3 AUR.S (#336), 14G SAE (#342), 14E SURA (#384), 14E URSA (#385), 3G SAREE (#387), 3H ARSE (#392), 13D SEE (#393), N11 RAS (#402), 14F SEA (#415), K1 SUR. (#430), 14E SERA (#433), 3H EASE (#440), 14D ERASE (#454), G3 SER. (#517)
+>hasty0: AEEFIST H7 EST +6 6
+>hasty1: ERTTUVZ 8D TRET. +6 6
+>hasty0: AAEFIOT F6 TE. +5 11
+>hasty1: ADEMUVZ 9C DA +7 13
+>hasty0: AAAFINO 6F .AFIA +17 28
+>hasty1: BEMPUVZ 10B ZEBU +43 56
+>hasty0: AGNOPUU 11D UPO +24 52
+>hasty1: DIIMNPV 12B VIN +26 82
+>hasty0: ACEGNSU 10G CANGUES +72 124
+>hasty1: DEIMNP? L7 IMP.NDEd +80 162
+>hasty0: BDIILNO M3 LIBIDO +31 155
+>hasty1: INRTUWX 13H TWIN.R +26 188
+>hasty0: FGLNNRR 4K FL.NG +22 177
+>hasty1: AEERSUX 8L ..XA +39 227

@@ -1,0 +1,15 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 9 (neural_rank_tool --turn 9); hasty0 to move with BEIJOOO
+#note high-value setup plays outside the hasty top 10 (hasty rank): 15G B.OOIE (#28), 15H .OOIE (#52), 15G O.IO (#57), G2 OBI. (#78), 15H .OO (#87), 15G O.EO (#91), 15E BOI. (#125), 4F OE (#145), E7 BO. (#155), 15F OI. (#160), E8 O. (#176), F3 EO. (#194), G4 E. (#314)
+>hasty0: ABFGKRS 8G BARS +12 12
+>hasty1: DHISTUW 9E WHID +20 20
+>hasty0: AFFGGKT J4 GAFF. +20 32
+>hasty1: AEERSTU F9 .UE +8 28
+>hasty0: ACGKNT? 11E G.CK +22 54
+>hasty1: AAELRST H11 .RAAL +30 58
+>hasty0: AEENTT? 5E ANTEd.TE +78 132
+>hasty1: AEINSTV L1 NAIV.TES +76 134
+>hasty0: BEIJOOO F2 JOI. +27 159

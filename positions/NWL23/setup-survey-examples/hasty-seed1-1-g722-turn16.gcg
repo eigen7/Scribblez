@@ -1,0 +1,22 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 16 (neural_rank_tool --turn 16); hasty1 to move with ACCELTZ
+#note high-value setup plays outside the hasty top 10 (hasty rank): 3J AL.C (#44), C4 CLA. (#61), 3I CAT. (#65), 3I LAC. (#82), K1 CAT (#85), 3I TAC. (#86), C5 CA. (#114), 3J AC. (#198), 3I LAT. (#268), K1 LAT (#269), 3I TAL. (#271), 3H ELAT. (#324), C5 LA. (#354), K2 AT (#381), 3J AL.E (#395), 3J AT. (#412), 7L .LA (#417), 3J AL. (#443), K1 EAT (#459), 7L .LAE (#467), 9A ALE. (#469), C6 A. (#476)
+>hasty0: ADFHIIY H5 HIYA +20 20
+>hasty1: GNNQUUY 6F QU.N +33 33
+>hasty0: ADEFINR I6 .AIF +20 40
+>hasty1: GINOUVY 7C YOGI +23 56
+>hasty0: DEEGNR? J7 GREENeD +75 115
+>hasty1: BENRUV? D7 .VERBUrN +82 138
+>hasty0: AIIIMOO 13J .AIMIO +18 133
+>hasty1: AAAEEVW O12 W.VE +42 180
+>hasty0: EGHIMNO K9 MHO +33 166
+>hasty1: AAAEENS E11 ASEA +21 201
+>hasty0: EGILNOT G8 LENTIGO +65 231
+>hasty1: AAEEJNR C12 JEAN +39 240
+>hasty0: AEEILPT L3 EPILATE +79 310
+>hasty1: ADEFORZ H12 FORD +50 290
+>hasty0: PRSSTTW 15A PW.S +44 354
+>hasty1: ACCELTZ 10A CZA. +35 325

@@ -29,6 +29,7 @@
 #include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "sim/sim_runner.h"
+#include "sim/slog_position_simmer.h"
 #include "util/exception.h"
 #include "util/math.h"
 #include "util/misc.h"
@@ -72,18 +73,19 @@ struct Options {
   int limit_games = 0;  // 0 = all games per file (a cap makes smoke runs cheap)
 };
 
-// The SimRunner params every worker builds from `opt`, over the shared
-// truncation leaf service (EvalService serializes its callers) -- null for
-// terminal rollouts. Parallelism here is across positions rather than
-// within one, so each worker's runner is single-threaded (see
-// position_worker).
-SimRunner::Params sim_params(const Options& opt, nn::PositionEvalService* leaf_eval_service) {
-  SimRunner::Params p;
-  p.rollouts = opt.rollouts;
-  p.threads = 1;
-  p.horizon_plies = opt.horizon;
-  p.leaf_service = leaf_eval_service;
-  return p;
+// The shared simmer's config for `opt`, over the shared truncation leaf service
+// (EvalService serializes its callers) -- null for terminal rollouts.
+SlogSimConfig sim_config(const Options& opt, nn::PositionEvalService* leaf_eval_service) {
+  SlogSimConfig c;
+  c.open_leaves = opt.open_leaves;
+  c.selector = recipe_selector({.top_k = opt.top_k, .quotas = {}});
+  c.runner.rollouts = opt.rollouts;
+  c.runner.threads = 1;
+  c.runner.horizon_plies = opt.horizon;
+  c.runner.leaf_service = leaf_eval_service;
+  c.seed = opt.seed;
+  c.threads = opt.threads;
+  return c;
 }
 
 // Reject an unusable invocation before a single .slog is read -- and, for the
@@ -100,98 +102,12 @@ void validate(const Options& opt) {
   SimRunner::validate_horizon("sim-obs-tool", opt.horizon, !opt.leaf_model.empty());
   Options terminal = opt;  // the leaf service does not exist yet
   terminal.horizon = 0;
-  SimRunner::validate(sim_params(terminal, nullptr));
+  SimRunner::validate(sim_config(terminal, nullptr).runner);
   if (opt.top_k < 1) throw util::CleanException("--top-k must be >= 1");
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
 }
 
 using binlog::GamePositionIndex;
-
-// A completed position: what SimObsWriter::add_position consumes.
-struct PositionResult {
-  GamePositionIndex pos;
-  uint64_t base_seed;
-  uint32_t num_legal_moves;
-  std::vector<Move> candidates;
-  std::vector<SimObservation> observations;
-};
-
-// Worker: claims positions off the shared index and fills results[i]. Each
-// worker owns its replay scratch and a single-threaded SimRunner (parallelism
-// is across positions, which utilizes cores better than within-position
-// threading and keeps every position's sims deterministic regardless of the
-// worker count).
-void run_position_worker(const char* buf, const Dictionary& dict, const Options& opt,
-                         nn::PositionEvalService* leaf_eval_service,
-                         const std::vector<GamePositionIndex>& work, std::atomic<size_t>* next,
-                         std::vector<PositionResult>* results, util::ProgressMeter* meter) {
-  std::vector<TurnRecord> scratch;
-  binlog::PositionEncoder encoder(InputEncodingSpec{&dict});
-  const SimRunner runner(dict, sim_params(opt, leaf_eval_service));
-
-  for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
-    const GamePositionIndex& w = work[i];
-    const GameLog g = binlog::make_game_view(buf, w.game_idx, scratch, nullptr);
-    const int mover = encoder.replay_to_sampled(g, int(w.turn_idx),
-                                                /*post_move=*/false);
-    SimPosition pos;
-    pos.board = encoder.enc().board();
-    pos.scores = {encoder.enc().score(0), encoder.enc().score(1)};
-    pos.mover = mover;
-    pos.rack = encoder.rack(mover);
-    // Open leaves: the replay knows both the opponent's rack and the draws
-    // that followed their last move, so their retained leave -- the
-    // Bayesian-inferable part -- is exact; their replenishments stay hidden
-    // and are sampled per rollout.
-    if (opt.open_leaves) {
-      pos.opp_leave = binlog::opp_leave_from_replay(g, int(w.turn_idx), encoder.rack(1 - mover));
-    }
-
-    const int bag_size = encoder.bag_size();
-
-    // Hidden mode: the opponent's replayed rack is ground truth the mover
-    // cannot see, so the candidate ranking must not use it. Open-leaves mode
-    // legitimately reveals the retained leave (only equity's endgame
-    // adjustments read it).
-    const Rack hidden_opp;
-    MoveRequest ranking_req{pos.board,         dict,
-                            pos.rack,          opt.open_leaves ? pos.opp_leave : hidden_opp,
-                            pos.scores[mover], pos.scores[1 - mover],
-                            bag_size};
-
-    PositionResult& res = (*results)[i];
-    res.pos = w;
-    res.base_seed = binlog::position_seed(opt.seed, w.game_idx, w.turn_idx);
-    std::vector<Move> ranked = equity_top_k(ranking_req, std::numeric_limits<int>::max());
-    res.num_legal_moves = ranked.size();
-    if (int(ranked.size()) > opt.top_k) ranked.resize(size_t(opt.top_k));
-    res.candidates = std::move(ranked);
-    // Name the position a runtime failure (e.g. the leaf-model NaN guard) hit,
-    // so an unattended multi-file run leaves a lead instead of a bare message.
-    try {
-      res.observations = runner.run(pos, res.candidates, res.base_seed);
-    } catch (const std::exception& e) {
-      throw util::Exception("game {} turn {}: {}", w.game_idx, w.turn_idx, e.what());
-    }
-    meter->add_done();
-  }
-}
-
-// Thread entry: runs the worker and captures any exception into *err for the
-// joining thread to rethrow. A non-finite leaf readout makes SimRunner::run
-// throw at runtime -- past the up-front validate() -- so letting it escape a
-// std::thread would terminate the process instead of printing an error.
-void position_worker(const char* buf, const Dictionary& dict, const Options& opt,
-                     nn::PositionEvalService* leaf_eval_service,
-                     const std::vector<GamePositionIndex>& work, std::atomic<size_t>* next,
-                     std::vector<PositionResult>* results, util::ProgressMeter* meter,
-                     std::exception_ptr* err) {
-  try {
-    run_position_worker(buf, dict, opt, leaf_eval_service, work, next, results, meter);
-  } catch (...) {
-    *err = std::current_exception();
-  }
-}
 
 // Generate the .sobs sidecar for one loaded .slog file.
 void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const Dictionary& dict,
@@ -208,23 +124,12 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
     binlog::sample_eligible_turns(metas[g], g, opt.seed, opt.positions_per_game, &work);
   std::sort(work.begin(), work.end());
 
-  std::vector<PositionResult> results(work.size());
-  std::atomic<size_t> next{0};
-  std::vector<std::thread> workers;
-  const int threads = std::clamp<int>(opt.threads, 1, std::max<size_t>(1, work.size()));
-  std::vector<std::exception_ptr> errors(threads);
-  for (int t = 0; t < threads; ++t)
-    workers.emplace_back(position_worker, buf.data(), std::cref(dict), std::cref(opt),
-                         leaf_eval_service, std::cref(work), &next, &results, meter, &errors[t]);
-  for (auto& w : workers) w.join();
-  for (const std::exception_ptr& e : errors) {
-    if (!e) continue;
-    // Prepend the file, so a batch run's failure names both file and position.
-    try {
-      std::rethrow_exception(e);
-    } catch (const std::exception& ex) {
-      throw util::Exception("{}: {}", sobs_path.stem().string(), ex.what());
-    }
+  // Prepend the file, so a batch run's failure names both file and position.
+  std::vector<SimmedPosition> results;
+  try {
+    results = sim_slog_positions(buf, dict, sim_config(opt, leaf_eval_service), work, meter);
+  } catch (const util::Exception& ex) {
+    throw util::Exception("{}: {}", sobs_path.stem().string(), ex.what());
   }
 
   // The work list is sorted by (game, turn) and results are indexed by work
@@ -232,9 +137,9 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
   // counts.
   SimObsWriter writer(sobs_path.string(), opt.open_leaves ? kSimObsFlagOpenLeaves : 0,
                       /*proposer_hash=*/{}, leaf_hash, opt.horizon);
-  for (const PositionResult& r : results) {
-    writer.add_position(r.pos.game_idx, r.pos.turn_idx, r.candidates, r.observations,
-                        uint32_t(opt.rollouts), r.base_seed, r.num_legal_moves);
+  for (const SimmedPosition& r : results) {
+    writer.add_position(r.pos.game_idx, r.pos.turn_idx, r.candidates.moves, r.observations,
+                        uint32_t(opt.rollouts), r.base_seed, r.candidates.num_legal_moves);
   }
   writer.close();
 }

@@ -1,0 +1,19 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 13 (neural_rank_tool --turn 13); hasty0 to move with AFIIOTZ
+#note high-value setup plays outside the hasty top 10 (hasty rank): B6 .IAO (#38), 9C TAFI. (#46), C8 FIA. (#62), C9 FA.O (#74), C9 FA.T (#134), C9 FA. (#159), 9J .OAT (#185), E5 ..FAT (#189), 9J .OA (#233), C9 TA.O (#246), C9 OA. (#262), B12 TO.A (#273), C10 A.F (#275), C10 A.O (#284), 13A AT (#329), C9 TA. (#330), B12 AT. (#346), B13 T.A (#347), C10 A.T (#350), C10 A. (#358)
+>hasty0: ACEEGLS H5 EGAL +10 10
+>hasty1: AADFNRT G8 AA +5 5
+>hasty0: CENOST? 5H .rE +2 12
+>hasty1: DEFNNRT 5E DEF...NT +44 49
+>hasty0: CIMNOST J4 C.NTIMOS +66 78
+>hasty1: DELNRTU 11C RUNDLET. +68 117
+>hasty0: ADEPTTX H11 .XPAT +66 144
+>hasty1: ABNOSUY L1 BOUN.Y +28 145
+>hasty0: DEIJKTU 6B JUKED +47 191
+>hasty1: AAAHHSS M3 HAS +36 181
+>hasty0: EGILOTU 14B EULOGI. +24 215
+>hasty1: AAHLORS 1K A.HOR +30 211
+>hasty0: AFIIOTZ 2L .AF +33 248

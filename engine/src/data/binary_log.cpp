@@ -1,5 +1,6 @@
 #include "data/binary_log.h"
 
+#include "game/bag.h"
 #include "game/game_log.h"
 #include "util/misc.h"
 
@@ -61,6 +62,29 @@ GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecor
   g.num_records = gm.num_turns;
   if (sampled_turn) *sampled_turn = gm.sampled_turn;
   return g;
+}
+
+void complete_turn_records(const GameLog& g, int num_turns, std::vector<TurnRecord>& scratch) {
+  std::array<Rack, 2> racks = g.initial_racks;
+  std::array<int, 2> scores = g.initial_scores;
+  int bag = Bag::kTotalTiles - racks[0].size() - racks[1].size();
+  for (int k = 0; k < num_turns; ++k) {
+    TurnRecord& rec = scratch[size_t(k)];
+    rec.player = k % 2;
+    rec.rack_before = racks[rec.player];
+    rec.bag_size_before = bag;
+    rec.score_delta = rec.move.type() == MoveType::PLAY ? rec.move.score() : 0;
+    scores[rec.player] += rec.score_delta;
+    rec.cumulative_scores = scores;
+    for (int i = 0; i < rec.move.num_glyphs(); ++i)
+      racks[rec.player].remove(rec.move.glyph(i).rack_tile());
+    // An exchange returns as many tiles as it draws, so only a play drains the bag.
+    for (const Tile t : rec.drawn.tiles()) {
+      if (t.is_empty()) break;
+      racks[rec.player].add(t);
+      if (rec.move.type() == MoveType::PLAY) --bag;
+    }
+  }
 }
 
 EligibleSpan eligible_span(const GameLog& log) {
