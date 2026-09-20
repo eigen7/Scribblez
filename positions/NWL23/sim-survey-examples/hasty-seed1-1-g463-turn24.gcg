@@ -1,0 +1,30 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 24 (neural_rank_tool --turn 24); hasty1 to move with FMOSTY?
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: AEEITX? 8F ThAE +6 6
+>hasty1: ABLNPTY H8 .BA +5 5
+>hasty0: EGIOQTX -GIO +0 6
+>hasty1: AGLNPTY I5 PAL. +7 12
+>hasty0: EPQRTXZ J3 PREX +58 64
+>hasty1: GINTTVY 3H TY.ING +32 44
+>hasty0: ANNQSTZ H1 QA.S +42 106
+>hasty1: EFINNTV K5 NEVI +34 78
+>hasty0: EINNSTZ L1 ZI.ES +54 160
+>hasty1: ADFIJNT L8 FAINT +33 111
+>hasty0: EHKNNTU 1L .UKE +51 211
+>hasty1: ADEJTUU F6 JU. +26 137
+>hasty0: HILNNOT I5 ....OLITH +26 237
+>hasty1: AADERTU H12 AURA +23 160
+>hasty0: EINNORW J9 WEN +23 260
+>hasty1: DEGMRST 2F GR.M +18 178
+>hasty0: IINOORR M10 NOIR +14 274
+>hasty1: DEENOST N8 DENOTES +83 261
+>hasty0: ADIOOOR O4 RADIO +30 304
+>hasty1: DEILMW? G10 WILD +29 290
+>hasty0: BCEEIOO 9C OBOE +18 322
+>hasty1: DELMSV? 4D VELD. +18 308
+>hasty0: CCEGHIR O13 CIG +25 347
+>hasty1: FMOSTY? 8A FOY +32 340

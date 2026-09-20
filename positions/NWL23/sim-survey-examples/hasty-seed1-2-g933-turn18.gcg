@@ -1,0 +1,24 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 18 (neural_rank_tool --turn 18); hasty1 to move with AFGHORS
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: IIJNNTU H4 JINNI +40 40
+>hasty1: ACEORST 5D EROT.CAS +90 90
+>hasty0: EHQSTUX 6D HEX +61 101
+>hasty1: AADEGNZ 4J ZAG +39 129
+>hasty0: ADIQSTU 9B DIQUATS +82 183
+>hasty1: ADEEENR B2 ENDEARE. +74 203
+>hasty0: DEMOOPY 4B .OPED +48 231
+>hasty1: IINNOY? A7 OY +32 235
+>hasty0: MORUUVY D9 .UORUM +34 265
+>hasty1: IINNOV? K1 INV..IONs +61 296
+>hasty0: ILORTVY 1K .VORY +45 310
+>hasty1: CGIINOO 14A GNO.IC +34 330
+>hasty0: AEILRTU N1 .URALITE +70 380
+>hasty1: FIILMOS O8 FILMI +48 378
+>hasty0: ABEELPT 6J P.E +31 411
+>hasty1: AAEHOSW A12 WA.E +36 414
+>hasty0: ABELTW? 11B sT.WABLE +74 485
+>hasty1: AFGHORS 10F HA +32 446

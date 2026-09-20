@@ -1,0 +1,26 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 20 (neural_rank_tool --turn 20); hasty1 to move with ADMNPQR
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: EEHRRSZ H7 REZ +24 24
+>hasty1: EEFGNOP 6F FOP +31 31
+>hasty0: EHKMRST 5D KHET +29 53
+>hasty1: EEEGLNS D1 GLEE. +24 55
+>hasty0: AIMRRSU I8 MAIR +23 76
+>hasty1: DEGINSV J10 DEV +20 75
+>hasty0: ABDRRSU K4 DURBARS +74 150
+>hasty1: EGINSTY H11 EYING +42 117
+>hasty0: ITTTUUX G13 XU +36 186
+>hasty1: AIJOSTV 8K .JIVA +69 186
+>hasty0: IITTTUU -IITTTUU +0 186
+>hasty1: ABHOST? M3 cOHAB.TS +82 268
+>hasty0: AEFLOOW 2A FOL.OW +40 226
+>hasty1: EEIILRU N4 RELI.E +28 296
+>hasty0: AAEINOT O1 OATEN +28 254
+>hasty1: AIIIOTU -IIIOU +0 296
+>hasty0: AACEEGI 1F AECIA +26 280
+>hasty1: ADDNNOT A2 .ONDANT +36 332
+>hasty0: EGIIIO? 12J .OGIE +18 298
+>hasty1: ADMNPQR 8A .RANQ +15 347

@@ -327,6 +327,32 @@ both replicas, both held-out gains positive), in 3 of them by more than 2
 points on both, in none by more than 5. The strongest are collected in
 `positions/NWL23/setup-survey-examples/`.
 
+**The exhaustive version** (the survey's default recipe): at 900 random
+eligible positions of 3000 fresh HastyBot games, every legal play that places
+no blank was screened at 1000 rollouts (racing: a candidate three paired
+standard errors below the leader stops early), and the screen's five best
+plays from outside the top 10 were re-simmed beside the top 10 at 5000 fresh
+rollouts. A play counts when that confirming sim puts it at least two paired
+standard errors above the best top-10 move. 133 plays at 54 positions (6.0%)
+do; playing the best of them would gain +0.47 +/- 0.12 win% per position. By
+bag size at the decision:
+
+| bag | positions | with a confirmed outside play | mean gain there | cost per position |
+|---|---|---|---|---|
+| 51+ | 368 | 1 (0.3%) | 2.0 | 0.01 |
+| 21-50 | 326 | 10 (3.1%) | 2.1 | 0.07 |
+| 8-20 | 132 | 20 (15.2%) | 2.9 | 0.44 |
+| 1-7 | 74 | 23 (31.1%) | 14.7 | 4.56 |
+
+The cut's cost is a pre-endgame phenomenon: bag-timing and who-goes-out
+decisions static equity cannot see, often worth tens of win%, and often with
+many equivalent plays (every one-tile play that leaves one in the bag). With
+more than 20 tiles in the bag a confirmed outside play is rare and worth about
+2 win%. The positions are in `positions/NWL23/sim-survey-examples/`; each
+`.simsurvey.json` carries per-candidate statistics (margin histogram, both
+sides' next-move scores, the end-of-game rack settlement) for a classifier of
+why such plays win.
+
 What this does and does not say. It confirms the diagnosis's premise from the
 other side: setups are rare on-distribution, which is why the corpus lacks
 them. It does not measure the quantity sim rows would fix, the *model's*

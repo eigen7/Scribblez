@@ -1,0 +1,22 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 16 (neural_rank_tool --turn 16); hasty1 to move with EEFIIUV
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: AEFOSU? 8E FUSs +12 12
+>hasty1: ABCLNWY I7 BYLAW +27 27
+>hasty0: AADELNO H10 LOANED +31 43
+>hasty1: CEEINRS 12C INCRE.SE +84 111
+>hasty0: AACDDEL K8 DECADAL +84 127
+>hasty1: ELQTTTV -QTTV +0 111
+>hasty0: AGIIMNR 14A MIGRAIN. +76 203
+>hasty1: AELOPTT L3 PALETOT +76 187
+>hasty0: IOSTUY? 5E ISObUTY. +90 293
+>hasty1: BEHKNOR M8 RHEBOK +52 239
+>hasty0: EMNORUX 4A MUREX +43 336
+>hasty1: ADENNQT C3 T.ANQ +48 287
+>hasty0: EHNOOOW A12 HO.O +39 375
+>hasty1: DEIJNOR N2 JOINDER +93 380
+>hasty0: AEGNOWZ O1 GOWN +44 419
+>hasty1: EEFIIUV N10 FIE +33 413

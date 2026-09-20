@@ -1,0 +1,16 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 10 (neural_rank_tool --turn 10); hasty1 to move with DEGOO??
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: AAGILLR H6 LAIR +8 8
+>hasty1: ADIIRUV 6F DI.UVIA +23 23
+>hasty0: AGILMNU K5 M.AULING +94 102
+>hasty1: ADEPRSV 7G D.P +23 46
+>hasty0: ACEHNST 9B CHANTE.S +69 171
+>hasty1: AEEIRSV C8 S.IVAREE +78 124
+>hasty0: AIKLNTY 12F TAKIN.LY +92 263
+>hasty1: ADEEGOO J10 GE.OA +21 145
+>hasty0: CHILQRT 8J Q.ITCH +63 326
+>hasty1: DEGOO?? D3 OvErGO.D +74 219

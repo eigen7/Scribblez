@@ -1,0 +1,18 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 12 (neural_rank_tool --turn 12); hasty1 to move with ACCGIMR
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: INPRSU? H7 NUnS +6 6
+>hasty1: EHLOQSU 10H .UQ +32 32
+>hasty0: IIPRTWY 11I PITY +33 39
+>hasty1: EHILORS 8F HO.RLIES +62 94
+>hasty0: FIORTTW 7E TOW. +25 64
+>hasty1: ABDEGLP 6D GAP +28 122
+>hasty0: EFIIMRT M3 FIRME.T +28 92
+>hasty1: ABDEILN L1 BAIL +27 149
+>hasty0: EINNOTY 1L .ONY +27 119
+>hasty1: ADEINS? 12C DANdIES +71 220
+>hasty0: EGILNNT L10 T.NING +24 143
+>hasty1: ACCGIMR 5B CRAG +25 245

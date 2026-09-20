@@ -1,0 +1,26 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 20 (neural_rank_tool --turn 20); hasty1 to move with BEENOOY
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: ABIKLRV 8E VIRAL +16 16
+>hasty1: EGNSSTU F5 GEN.US +11 11
+>hasty0: ABIKLNS E4 KAB +28 44
+>hasty1: EORSTUU I7 U.U +5 16
+>hasty0: AILNNST H8 .NNALIST +79 123
+>hasty1: DEORSTW 14A WORSTED. +78 94
+>hasty0: AFFGMQR D10 GAFF. +24 147
+>hasty1: AEEJMUY 13B JE.E +43 137
+>hasty0: HIIMQRX 11A IHR.M +20 167
+>hasty1: AEIMTUY 15A ETA +37 174
+>hasty0: ADIIPQX 4A QAPI. +60 227
+>hasty1: IMRRTUY A4 .UIRT +42 216
+>hasty0: DILOOOX 3B DOX +42 269
+>hasty1: EIMOORY 2A YOM +31 247
+>hasty0: AILOOPV G3 VIOL +20 289
+>hasty1: AEIIORS 6D O...I +7 254
+>hasty0: AGHOPT? 10A GO +15 304
+>hasty1: ACEIRST J9 STEARIC +66 320
+>hasty0: AAHLPT? J1 AsPHALT +65 369
+>hasty1: BEENOOY K4 OBOE +30 350
