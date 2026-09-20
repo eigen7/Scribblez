@@ -1,0 +1,25 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 19 (neural_rank_tool --turn 19); hasty0 to move with AEILLMX
+#note high-value setup plays outside the hasty top 10 (hasty rank): M10 MALLEI (#15), 5B AL.M (#81), A5 LAM. (#142), I9 .MAIL (#152), A6 AL. (#184), I9 .EL (#235), A5 IAM. (#299), 5B EM. (#316), 5B AM. (#334), 5B EA. (#430)
+>hasty0: AAGILSS H6 SAGS +10 10
+>hasty1: AJRTUWY 6F JU.T +27 27
+>hasty0: AEFIILN 9B FINALI.E +64 74
+>hasty1: ARTTUWY I3 TUT.Y +22 49
+>hasty0: ADIIRRU D4 DURIA. +16 90
+>hasty1: AEFORSW 3F SOF.WARE +80 129
+>hasty0: CDHIIRT H1 DI. +21 111
+>hasty1: ENNOPZ? 2K ZONE +41 170
+>hasty0: CHIRTUW O1 CRWTH +56 167
+>hasty1: AGNOOP? 4K PA +28 198
+>hasty0: BBEIMOU 8A BIM. +33 200
+>hasty1: GKNOOY? G5 Y.K +30 228
+>hasty0: BEENOOU F6 .OU.E +25 225
+>hasty1: AGNNOO? N5 OrGANON +64 292
+>hasty0: BEENOQS O8 BONE +36 261
+>hasty1: ADEEPV? 1A PErVADE. +104 396
+>hasty0: EILLQSX 11D QIS +37 298
+>hasty1: AEEILRV 12A VLEI +44 440
+>hasty0: AEILLMX O8 ....MEAL +45 343

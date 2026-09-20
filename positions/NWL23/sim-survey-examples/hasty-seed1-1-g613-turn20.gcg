@@ -1,0 +1,26 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 20 (neural_rank_tool --turn 20); hasty1 to move with AEKPRTV
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: EIILORY -EOR +0 0
+>hasty1: ADEFLOU H4 FOULED +28 28
+>hasty0: IILNORY I7 IRONY +19 19
+>hasty1: AAEOORR 11E ARRO.O +18 46
+>hasty0: EIILTVW 12B VIEW +25 44
+>hasty1: ABCEOPS 5E CAB.OSE +44 90
+>hasty0: BEEIILT H11 .BELI +30 74
+>hasty1: AEMNPQY C8 PYEM.A +34 124
+>hasty0: AEGIIT? 14H .IGATIvE +74 148
+>hasty1: ALNNQST F2 QAN.T +36 160
+>hasty0: FHORTTZ O13 F.Z +45 193
+>hasty1: ADEHLNS L1 HANDSEL +92 252
+>hasty0: HOORRTT 8A TO.H +39 232
+>hasty1: AEIIJNU 1L .AJI +42 294
+>hasty0: AOORRTX 2K R.TO +28 260
+>hasty1: EEGINTU 3L .EG +25 319
+>hasty0: AELNORX 13K LAX +42 302
+>hasty1: EINTUU? A2 aUTUNI.E +58 377
+>hasty0: DEMNORU 6J OD.UM +23 325
+>hasty1: AEKPRTV 12J PAK +39 416

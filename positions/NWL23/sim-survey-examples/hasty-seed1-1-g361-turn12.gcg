@@ -1,0 +1,18 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 12 (neural_rank_tool --turn 12); hasty1 to move with ADDNOOR
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: BFGRSTY 8H TRY +12 12
+>hasty1: AEHNORY 9I EON +12 12
+>hasty0: BDFGOSV -BDOV +0 12
+>hasty1: AHOPRUY 10F YAUP +22 34
+>hasty0: DFGIISZ G9 Z.G +23 35
+>hasty1: EHJOPRR 11E JO. +27 61
+>hasty0: DEFGIIS L4 FIDGES +28 63
+>hasty1: EHIKPRR K3 HIKE +42 103
+>hasty0: AABIINW K9 .AWAB +20 83
+>hasty1: DNPRRTW 12I WR.PT +20 123
+>hasty0: CEIIINS 13K .I +8 91
+>hasty1: ADDNOOR 12C ROOD +26 149

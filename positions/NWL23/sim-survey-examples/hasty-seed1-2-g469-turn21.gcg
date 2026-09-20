@@ -1,0 +1,27 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 21 (neural_rank_tool --turn 21); hasty0 to move with AORSSUU
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: EILOSUV H6 LUV +12 12
+>hasty1: FRRTTTW 7G T.RF +9 9
+>hasty0: DEHINOS K1 HOIDENS +80 92
+>hasty1: AINRTTW 1J T.WART +48 57
+>hasty0: BCELNR? 3G BERN.CLe +80 172
+>hasty1: EGIINSY J1 .Y.E +31 88
+>hasty0: EEEFMOT 4D FEME +22 194
+>hasty1: AGIIINS M3 .IAISING +61 149
+>hasty0: EEEEKOT 8L K.TE +39 233
+>hasty1: CEIIPRW 5A WIPER +29 178
+>hasty0: AADEEEO 6C ODEA +21 254
+>hasty1: ACGGIP? 7A GIP +19 197
+>hasty0: AADEEOX 8A ODEA +38 292
+>hasty1: ACEGNO? 2B dECAGON +83 280
+>hasty0: AELRSXZ 3A ZAX +57 349
+>hasty1: ABDIORV 1A BOD +31 311
+>hasty0: EHIJLRS 9K JI. +16 365
+>hasty1: AIMORVY K9 .IVY +34 345
+>hasty0: EHILRSU L12 ELHI +26 391
+>hasty1: AEMNORT M12 NOM +27 372
+>hasty0: AORSSUU O3 SOU +16 407

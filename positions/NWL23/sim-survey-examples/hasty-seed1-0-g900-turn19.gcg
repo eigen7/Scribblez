@@ -1,0 +1,25 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 19 (neural_rank_tool --turn 19); hasty0 to move with EIJNNOS
+#note high-value setup plays outside the hasty top 10 (hasty rank): 15B IN (#118), I1 ONES (#140), J3 INN. (#166), J11 INN. (#167), J3 ONE. (#198), J11 ONE. (#202), 15B OE (#254)
+>hasty0: ADIINNR H4 DINAR +16 16
+>hasty1: ABGISTT 6C BATTI.GS +65 65
+>hasty0: EIINOOV 4D OVOI. +18 34
+>hasty1: DEFLMPT 5D DEF +36 101
+>hasty0: EGINRRR C6 .RR +6 40
+>hasty1: AAELMPT 8A LA.P +27 128
+>hasty0: EGINPRS 8H .ESPRING +86 126
+>hasty1: AEEMTU? N8 .UMErATE +80 208
+>hasty0: EEMOOW? O13 MOW +45 171
+>hasty1: AAHIKTU O4 KIAU.H +24 232
+>hasty0: EEIIOO? A8 .OOIE +6 177
+>hasty1: ADLLRST M7 L.DAR +24 256
+>hasty0: CCEITT? 12A .uTECTIC +78 255
+>hasty1: AGLLSTY L10 GALLY +27 283
+>hasty0: JOOQRVZ G11 V.ZOR +27 282
+>hasty1: ENOSTXY 14C OXYT.NES +72 355
+>hasty0: EIJNNOQ G3 Q. +21 303
+>hasty1: AADEIUU 15E AI.ED +34 389
+>hasty0: EIJNNOS 15A JIN +32 335

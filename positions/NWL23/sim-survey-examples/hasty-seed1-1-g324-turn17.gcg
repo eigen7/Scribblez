@@ -1,0 +1,23 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 17 (neural_rank_tool --turn 17); hasty0 to move with AACEORS
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: DEGKNOO H4 KENDO +30 30
+>hasty1: AELMNOU 6C NOUME.AL +68 68
+>hasty0: AAGIOOO C2 OOGO.IA +18 48
+>hasty1: DINOPUX 5E XU +40 108
+>hasty0: AEGHILS J1 SHIGE.LA +70 118
+>hasty1: DIIJNOP 8J .DJOIN +66 174
+>hasty0: ABEFPRT 1D PREFAB. +51 169
+>hasty1: GIIIPTU K8 .IGIT +14 188
+>hasty0: AEEIRTZ 8A IZ.R +42 211
+>hasty1: EHIPUUW 2F HEW +40 228
+>hasty0: AEENTVY L12 ENVY +32 243
+>hasty1: EIPTUUY 15H TYPE. +39 267
+>hasty0: AENORST E8 SANTERO +78 321
+>hasty1: AIMRUU? 10B URA.IUMs +63 330
+>hasty0: AACFORS F14 FA +26 347
+>hasty1: BILRTTW 12C BL.WIT +24 354
+>hasty0: AACEORS 13C OA. +16 363

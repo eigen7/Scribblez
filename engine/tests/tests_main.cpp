@@ -27,6 +27,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
+#include "sim/rollout_summary.h"
 #include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
 #include "sim/slog_position_simmer.h"
@@ -5182,6 +5183,65 @@ TEST(SimCandidates, UnrankedPlayedMoveGetsMinusOne) {
   recipe.quotas = move_set_eval::StratumQuotas{};
   const SimCandidates sel = select_sim_candidates(ranked, Move{}, recipe, rng);
   EXPECT_EQ(sel.equity_ranks[0], -1);
+}
+
+// summarize_rollouts (sim/rollout_summary.h): outcome and margin moments, the
+// margin and next-move score histograms' bin edges, and the adjacency flag that
+// says a next move played off the candidate's own tiles.
+TEST(RolloutSummary, ReducesOutcomesScoresAndAdjacency) {
+  const Glyph a = Glyph::of(Tile::from_char('A'));
+  // The candidate lays one tile at (7, 7).
+  const Move candidate = make_play_full(7, 7, /*horizontal=*/true, 0b1, 10, {a});
+  const Move hook = make_play_full(7, 8, true, 0b1, 35, {a});  // beside it
+  const Move far = make_play_full(0, 0, true, 0b1, 104, {a});  // nowhere near
+  const Move bingo = make_play_full(14, 0, true, 0b1111111, 72, {a, a, a, a, a, a, a});
+
+  std::vector<RolloutResult> rollouts(3);
+  rollouts[0] = {.opp_reply = far, .self_next = hook, .p_win = 1, .delta = 30, .delta_sq = 900};
+  rollouts[1] = {
+    .opp_reply = bingo, .self_next = Move{}, .p_loss = 1, .delta = -201, .delta_sq = 40401};
+  rollouts[2] = {.opp_reply = hook, .self_next = far, .p_draw = 1, .delta = 0, .delta_sq = 0};
+  rollouts[0].opp_stranded = 10;   // the mover played out against a stuck Q: +20
+  rollouts[1].self_stranded = 30;  // the opponent played out: -60, below the floor
+  rollouts[2].self_stranded = 3;   // nobody played out: 5 - 3 = +2
+  rollouts[2].opp_stranded = 5;
+  const RolloutSummary s = summarize_rollouts(candidate, rollouts);
+
+  EXPECT_EQ(s.n, 3u);
+  EXPECT_EQ(s.wins, 1);
+  EXPECT_EQ(s.draws, 1);
+  EXPECT_EQ(s.losses, 1);
+  EXPECT_EQ(s.delta_sum, -171);
+  EXPECT_EQ(s.delta_hist[0], 1u);   // below the -200 floor
+  EXPECT_EQ(s.delta_hist[9], 1u);   // 0 in [0, 25)
+  EXPECT_EQ(s.delta_hist[10], 1u);  // 30 in [25, 50)
+  EXPECT_EQ(s.opp_reply.score_sum, 104 + 72 + 35);
+  EXPECT_EQ(s.opp_reply.score_hist[kScoreBins - 1], 1u);  // 104 lands in the 100+ bin
+  EXPECT_EQ(s.opp_reply.score_hist[7], 1u);
+  EXPECT_EQ(s.opp_reply.bingos, 1u);
+  EXPECT_EQ(s.opp_reply.adjacent, 1u);
+  EXPECT_EQ(s.self_next.non_plays, 1u);  // the PASS of the rollout that ended
+  EXPECT_EQ(s.self_next.adjacent, 1u);
+  EXPECT_EQ(s.opp_stranded_sum, 15);
+  EXPECT_EQ(s.self_went_out, 1u);
+  EXPECT_EQ(s.opp_went_out, 1u);
+  EXPECT_EQ(s.end_swing_sum, 20 - 60 + 2);
+  EXPECT_EQ(s.end_swing_hist[0], 1u);  // -60
+  EXPECT_EQ(s.end_swing_hist[6], 1u);  // +2 in [0, 10)
+  EXPECT_EQ(s.end_swing_hist[8], 1u);  // +20 in [20, 30)
+}
+
+// paired_win_diff: win = 1, draw = 1/2, differenced rollout by rollout.
+TEST(RolloutSummary, PairedWinDiffMoments) {
+  std::vector<RolloutResult> a(3), b(3);
+  a[0].p_win = 1;   // vs a loss: +1
+  a[1].p_draw = 1;  // vs a win: -1/2
+  b[1].p_win = 1;
+  a[2].p_win = 1;  // vs a win: 0
+  b[2].p_win = 1;
+  const PairedWinDiff d = paired_win_diff(a, b);
+  EXPECT_DOUBLE_EQ(d.sum, 0.5);
+  EXPECT_DOUBLE_EQ(d.sq_sum, 1.25);
 }
 
 // is_high_value_setup (sim/setup_plays.h) on the play it was defined from:

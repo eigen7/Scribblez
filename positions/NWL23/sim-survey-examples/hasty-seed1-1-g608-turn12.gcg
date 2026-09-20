@@ -1,0 +1,18 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 12 (neural_rank_tool --turn 12); hasty1 to move with GINNPRT
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: DEELLOX 8G ELL +6 6
+>hasty1: EIIKQRT I8 .IE +4 4
+>hasty0: DEEMORX H6 MO. +5 11
+>hasty1: AIKNQRT -AIKNQRT +0 4
+>hasty0: ADEEERX 11E EXEDRAE +114 125
+>hasty1: AEILOUZ H11 .IAZO +48 52
+>hasty0: AEEORU? 13B AUREOl.E +66 191
+>hasty1: EEELNTU 10B ELUTE +22 74
+>hasty0: DIJMOR? 10I .MOJI +32 223
+>hasty1: EGNNRVW M9 W.VERN +32 106
+>hasty0: BDKPRS? 12L B.RK +30 253
+>hasty1: GINNPRT O8 PRIN. +33 139

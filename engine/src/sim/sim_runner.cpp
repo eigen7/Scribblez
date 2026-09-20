@@ -125,6 +125,8 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
     out->self_next = log.records[1].move;
   if (!game.truncated()) {
     set_terminal_outcome(log.final_scores[pos.mover] - log.final_scores[opponent], out);
+    out->self_stranded = log.final_racks[pos.mover].point_value();
+    out->opp_stranded = log.final_racks[opponent].point_value();
     return;
   }
   stage_horizon_leaf(pos, candidate, log, game, *leaf_spec, batcher, slot);
@@ -175,6 +177,12 @@ void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& app
 }
 
 }  // namespace
+
+int end_rack_swing(const RolloutResult& r) {
+  if (r.self_stranded == 0) return 2 * r.opp_stranded;
+  if (r.opp_stranded == 0) return -2 * r.self_stranded;
+  return r.opp_stranded - r.self_stranded;
+}
 
 // Terminal rollouts contribute exact integers; truncated rollouts contribute
 // fractional values, which run() reduces in a fixed order (see there for why
@@ -361,9 +369,15 @@ SimRunner::SimRunner(const Dictionary& dict, const Params& params) : dict_(dict)
   }
 }
 
-std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
-                                           const std::vector<Move>& candidates,
-                                           uint64_t base_seed) const {
+std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
+                                                   const std::vector<Move>& candidates,
+                                                   uint64_t base_seed) const {
+  return run_rollouts(pos, candidates, base_seed, params_.rollouts);
+}
+
+std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
+                                                   const std::vector<Move>& candidates,
+                                                   uint64_t base_seed, int rollouts) const {
   if (candidates.empty()) return {};
   // The documented non-endgame requirement: a non-empty bag at the decision
   // point. The pool holds the bag plus the opponent's (up to RACK_SIZE)
@@ -376,7 +390,8 @@ std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
   for (const Move& m : candidates) applied.push_back(apply_candidate(pos, m));
 
   Params params = params_;
-  params.threads = std::clamp(params_.threads, 1, std::max(1, params_.rollouts));
+  params.rollouts = rollouts;
+  params.threads = std::clamp(params_.threads, 1, std::max(1, rollouts));
   const InputEncodingSpec* leaf_spec = params.horizon_plies > 0 ? &leaf_spec_ : nullptr;
   std::vector<RolloutResult> results(candidates.size() * size_t(params.rollouts));
   std::vector<std::thread> workers;
@@ -389,14 +404,20 @@ std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
   // the calling thread instead of leaving it to terminate the process.
   for (const std::exception_ptr& e : errors)
     if (e) std::rethrow_exception(e);
+  return results;
+}
 
+std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
+                                           const std::vector<Move>& candidates,
+                                           uint64_t base_seed) const {
+  const std::vector<RolloutResult> results = run_rollouts(pos, candidates, base_seed);
   // Reduce in fixed (candidate, rollout index) order, whatever the thread
   // count -- with fractional contributions, a merge order that followed the
   // work partition would not be.
   std::vector<SimObservation> out(candidates.size());
   for (size_t c = 0; c < out.size(); ++c)
-    for (int i = 0; i < params.rollouts; ++i)
-      accumulate_rollout(results[c * size_t(params.rollouts) + size_t(i)], &out[c]);
+    for (int i = 0; i < params_.rollouts; ++i)
+      accumulate_rollout(results[c * size_t(params_.rollouts) + size_t(i)], &out[c]);
   return out;
 }
 

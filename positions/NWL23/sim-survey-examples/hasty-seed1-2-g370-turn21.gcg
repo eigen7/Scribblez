@@ -1,0 +1,27 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 21 (neural_rank_tool --turn 21); hasty0 to move with EIOPRSS
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: BCEEIOV 8G OBI +10 10
+>hasty1: DEGLNU? H8 .UNGlE +8 8
+>hasty0: CEEEGUV 11H .UV +7 17
+>hasty1: ADELLTZ 14D LATED +18 26
+>hasty0: CEEEEGW C12 EEEW +21 38
+>hasty1: EILRTTZ J6 ZIT +38 64
+>hasty0: ACEEGN? D6 ENCAGEd +76 114
+>hasty1: DELORST B6 OLDSTER +64 128
+>hasty0: AMNOOWY 15A NO.AY +44 158
+>hasty1: AADILMR A1 ARAMID +39 167
+>hasty0: AIMOTTW E9 TOW +27 185
+>hasty1: ADEILQU 6D .QUALI.ED +80 247
+>hasty0: AFIIMTX 5K FIXIT +43 228
+>hasty1: IKOPRVY 4L KOP +47 294
+>hasty0: AAEFHMR H1 HAEMA. +42 270
+>hasty1: GHIRTVY O1 RIGH.Y +68 362
+>hasty0: EFIOPRS M3 F.. +26 296
+>hasty1: ANNNSTV 9G N.NS +25 387
+>hasty0: EIIOPRS 8A O.I. +21 317
+>hasty1: ABCENTV 14B B...... +28 415
+>hasty0: EIOPRSS 1D ROSE.IPS +64 381

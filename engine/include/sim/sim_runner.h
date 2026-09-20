@@ -137,7 +137,18 @@ struct RolloutResult {
   double p_loss = 0;
   double delta = 0;     // (predicted) mean of the final delta
   double delta_sq = 0;  // (predicted) second moment of the final delta
+  // A finished game's end-of-game rack settlement: the tile values each side
+  // was left holding (one of them 0 when that side played out). Already inside
+  // `delta`; kept apart so an analysis can see how much of a candidate's margin
+  // is an opponent stuck with the Q. Both 0 for a truncated rollout.
+  int self_stranded = 0;
+  int opp_stranded = 0;
 };
+
+// What the end-of-game settlement moved the final delta by, root-mover POV:
+// twice the other side's tiles to whoever played out, or each side docked its
+// own when nobody did.
+int end_rack_swing(const RolloutResult& r);
 
 // Fold one rollout into the candidate's observation: outcome and delta
 // moments accumulate, and each move's footprint class (natural frame)
@@ -241,6 +252,20 @@ class SimRunner {
   // so no candidate can end the game outright.
   std::vector<SimObservation> run(const SimPosition& pos, const std::vector<Move>& candidates,
                                   uint64_t base_seed) const;
+
+  // The rollouts behind run(), unreduced: candidates.size() * rollouts results,
+  // candidate c's rollout i at [c * rollouts + i]. For a consumer that reduces
+  // them to something other than a SimObservation (sim/rollout_summary.h).
+  std::vector<RolloutResult> run_rollouts(const SimPosition& pos,
+                                          const std::vector<Move>& candidates,
+                                          uint64_t base_seed) const;
+  // As above with `rollouts` in place of the params' count, so a caller can sim
+  // in instalments: rollouts [a, b) of a candidate are run_rollouts(...,
+  // base_seed + a, b - a), whatever the instalments' sizes.
+  std::vector<RolloutResult> run_rollouts(const SimPosition& pos,
+                                          const std::vector<Move>& candidates, uint64_t base_seed,
+                                          int rollouts) const;
+  int rollouts() const { return params_.rollouts; }
 
  private:
   const Dictionary& dict_;

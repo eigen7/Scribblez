@@ -25,12 +25,6 @@ std::vector<Tile> kept_heavy_tiles(const Rack& rack, const Move& m) {
   return kept;
 }
 
-bool places_blank(const Move& m) {
-  for (int i = 0; i < m.num_glyphs(); ++i)
-    if (m.glyph(i).is_blank()) return true;
-  return false;
-}
-
 // Whether `t` at the empty square (r, c) hooks: it touches a run on at least
 // one axis, and every word it forms is valid. `board`'s caches must be built.
 bool hooks_at(const Board& board, int r, int c, Tile t) {
@@ -77,6 +71,12 @@ bool opens_spot(const SetupProbe& probe, int r, int c, bool hook_is_horizontal) 
 }
 
 }  // namespace
+
+bool places_blank(const Move& m) {
+  for (int i = 0; i < m.num_glyphs(); ++i)
+    if (m.glyph(i).is_blank()) return true;
+  return false;
+}
 
 bool is_high_value_setup(const Board& before, const Dictionary& dict, const Rack& rack,
                          const Move& m) {

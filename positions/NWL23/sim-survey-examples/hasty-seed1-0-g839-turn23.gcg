@@ -1,0 +1,29 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note setup survey: turn 23 (neural_rank_tool --turn 23); hasty0 to move with CIPSTU?
+#note high-value setup plays outside the hasty top 10 (hasty rank): 
+>hasty0: AEEELNR H6 ANE +6 6
+>hasty1: EEEIORZ G6 ZERO +31 31
+>hasty0: BEEILRR 5H BIRLE +20 26
+>hasty1: ADEEEEI M3 EIDE +19 50
+>hasty0: AEILRRY K1 RAIL.ERY +61 87
+>hasty1: ABEEEHQ 1K .EHAB +33 83
+>hasty0: AIKNRTT J2 KA +34 121
+>hasty1: AEELMOQ N6 MOLE +22 105
+>hasty0: AINRTTT O9 TITRANT +76 197
+>hasty1: AEEQSWY J5 .YE +29 134
+>hasty0: AGOSUUX 12K AUGU. +12 209
+>hasty1: ADEQSSW 10D DEWS +30 164
+>hasty0: NOSSVWX 11C VOX +47 256
+>hasty1: ACIOQSU 13I QUASI +58 222
+>hasty0: CENOSSW 2N WO +24 280
+>hasty1: CHINOPR 14E CHOPIN +38 260
+>hasty0: CEGINSS 15H ES +30 310
+>hasty1: DFMRTT? G13 M.T +11 271
+>hasty0: CGIJNS? 9M J.. +18 328
+>hasty1: DEFGRT? I7 DEFT +25 296
+>hasty0: CGINST? 3M .NG +16 344
+>hasty1: AGLNOR? 9E LO. +18 314
+>hasty0: CIPSTU? 8A SITUP +37 381

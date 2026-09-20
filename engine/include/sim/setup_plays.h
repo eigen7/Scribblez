@@ -15,6 +15,9 @@ namespace scribblez {
 
 class Dictionary;
 
+// True iff the play `m` places a blank.
+bool places_blank(const Move& m);
+
 // True iff `m`, a play from `rack` on `before`, is a high-value setup:
 //   * it places no blank, and the leave keeps a J, Q, X or Z -- call it H;
 //   * some empty square S beside one of its newly placed tiles T admits H: every

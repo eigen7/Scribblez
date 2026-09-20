@@ -11,12 +11,14 @@
 
 #include "data/slog_sampling.h"
 #include "game/move.h"
+#include "sim/rollout_summary.h"
 #include "sim/sim_runner.h"
 #include "training/move_set_eval_candidates.h"
 #include "util/progress.h"
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <optional>
 #include <random>
 #include <vector>
@@ -43,6 +45,9 @@ struct SimCandidates {
   // Parallel to `moves`: the candidates a selector is asking about, when it has
   // such a notion (the setup selector's setup plays); all false otherwise.
   std::vector<char> highlighted;
+  // Parallel to `moves`: HastyBot static equity. Filled by the simmer, not by
+  // selectors.
+  std::vector<double> equities;
   uint32_t num_legal_moves = 0;
 };
 
@@ -55,9 +60,9 @@ SimCandidates select_sim_candidates(const std::vector<Move>& ranked, const Move&
 // Chooses a position's candidates from `ranked` (every legal move, best equity
 // first). `played` is the move the game made there; `rng` is seeded per
 // position, so a selector is deterministic in (run seed, game, turn).
-using SimCandidateSelector =
-  std::function<SimCandidates(const SimPosition& pos, const std::vector<Move>& ranked,
-                              const Move& played, std::mt19937_64& rng)>;
+using SimCandidateSelector = std::function<SimCandidates(
+  const binlog::GamePositionIndex& at, const SimPosition& pos, const std::vector<Move>& ranked,
+  const Move& played, std::mt19937_64& rng)>;
 
 SimCandidateSelector recipe_selector(const SimCandidateRecipe& recipe);
 
@@ -66,6 +71,19 @@ SimCandidateSelector recipe_selector(const SimCandidateRecipe& recipe);
 // `max_setups` best-ranked. Declines a position with no setup play outside the
 // cut -- there the cut hides nothing.
 SimCandidateSelector setup_selector(const Dictionary& dict, int cut, int max_setups);
+
+// Every position: the top `cut` of the ranking plus every play that places no
+// blank (the blank-placing plays are most of a blank rack's thousands of legal
+// moves, nearly all of them designation variants of each other), capped at the
+// `max_plays` best-ranked beyond the cut (0 = no cap). High-value setups are
+// highlighted. Both this and setup_selector list the cut first, in rank order.
+SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max_plays);
+
+// Exactly the moves `chosen` names for a position, in its order (each must be
+// legal there), declining positions it does not name: the second stage of a
+// screen-then-confirm survey, where the first stage picked the moves.
+using ChosenMoves = std::map<binlog::GamePositionIndex, std::vector<Move>>;
+SimCandidateSelector chosen_selector(ChosenMoves chosen);
 
 struct SlogSimConfig {
   // Sim with the opponent's retained leave known (the open-leaves information
@@ -83,6 +101,26 @@ struct SlogSimConfig {
   // do not overlap) -- what a held-out estimate of a sim pick's value needs.
   uint64_t rollout_seed_offset = 0;
   int threads = 1;  // position workers
+  // What each position's rollouts are reduced to: observations, the training
+  // currency (35 KB a candidate), or summaries, the analysis one
+  // (sim/rollout_summary.h), cheap enough to keep for every legal play.
+  bool keep_summaries = false;
+  // With summaries: the first this-many candidates are references, and every
+  // candidate gets its paired win difference against each of them.
+  int paired_references = 0;
+  // With summaries: race the candidates instead of simming each to the full
+  // count. `race_checkpoints` are ascending cumulative rollout counts ending at
+  // runner.rollouts; at each one a candidate whose win rate sits more than
+  // `race_sigmas` paired standard errors below the current leader's stops there
+  // (its summary keeps the rollouts it got, so `n` varies). The first
+  // `race_protected` candidates always run to the end. Common random numbers
+  // hold throughout -- rollout i is the same deal for everyone who reaches it
+  // -- so a survivor's rollouts are exactly those of an unraced sim. A race
+  // only decides what is worth simming on; it biases the survivors' estimates
+  // upward like any selection, so conclusions belong to a fresh sim of them.
+  std::vector<int> race_checkpoints;
+  double race_sigmas = 3.0;
+  int race_protected = 0;
 };
 
 struct SimmedPosition {
@@ -90,7 +128,13 @@ struct SimmedPosition {
   SimPosition position;    // the replayed decision point
   uint64_t base_seed = 0;  // the SimRunner::run seed used
   SimCandidates candidates;
-  std::vector<SimObservation> observations;  // parallel to candidates.moves
+  int bag_size = 0;  // tiles in the bag at the decision point
+  Move played;       // the move the game made here
+  // Parallel to candidates.moves; each filled per SlogSimConfig.
+  std::vector<SimObservation> observations;
+  std::vector<RolloutSummary> summaries;
+  // paired[c][r]: candidate c's win value minus reference r's, over the rollouts.
+  std::vector<std::vector<PairedWinDiff>> paired;
 };
 
 // Sim every position of `work` within the loaded .slog bytes `buf`, returning

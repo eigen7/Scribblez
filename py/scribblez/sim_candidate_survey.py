@@ -1,110 +1,149 @@
-"""What a static-equity candidate cut costs, read off sim_candidate_survey_tool's rows.
+"""What a static-equity candidate cut costs, read off sim_candidate_survey_tool's files.
 
 The measurement behind docs/plans/sim_labeled_candidates.md: at each surveyed
-position a stratified candidate sample was simmed, and the question is how
-often, and by how much, the sim prefers a candidate outside the head of the
-HastyBot equity ranking (the top `cut`), which a top-`cut` self-play mover can
-never play.
+position a set of candidates was simmed, and the question is how often, and by
+how much, the sim prefers a candidate outside the head of the HastyBot equity
+ranking (the top `cut`), which a top-`cut` self-play mover can never play.
 
-The best of ~64 noisy sim estimates flatters itself, and most candidates lie
-outside the cut, so "the sim's best is outside the cut" is true far more often
-than the cut costs anything. Every figure here is therefore held out: picks
-are made on one replica's rollouts and valued on another's (same candidates,
-independent rollouts), over both assignments of the two roles.
-
-The tail is sampled, not swept, so a position's best tail move is usually not
-among its candidates: the cost reported is a lower bound on the cut's true
-cost.
+The best of hundreds of noisy sim estimates flatters itself, and most
+candidates lie outside the cut, so "the screen's best is outside the cut" is
+true far more often than the cut costs anything. The tool therefore sims in
+two stages, and every figure here reads the second: the screen singles out
+its few best moves outside the cut (racing away the clearly beaten), and a
+longer confirming sim on fresh rollouts re-sims those moves beside the cut's.
+An outside move "beats the cut" when
+the confirming sim puts it at least MIN_SIGMA standard errors above the cut's
+best move -- the standard error being that of the paired win difference,
+which common random numbers make much tighter than the two marginal errors.
+The cut's best is taken on the confirming sim itself; a best-of-ten flatters
+the cut a little, so the bar errs on the strict side. Against that, each
+position tests a few outside moves, not one, so a few percent of positions
+clear the bar by chance alone; read single positions near the bar with that
+in mind.
 """
 
-import csv
+import json
 import math
 import shutil
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-SURVEY_SUFFIX = ".simsurvey.csv"
+SURVEY_SUFFIX = ".simsurvey.json"
+MIN_SIGMA = 2.0
 
-# Equity-rank buckets a pick is tallied under; ranks are 0-based.
-RANK_BUCKETS = ((0, 1), (1, 10), (10, 32), (32, 100), (100, math.inf))
+# Equity-rank buckets an outside move is tallied under; ranks are 0-based.
+RANK_BUCKETS = ((10, 32), (32, 100), (100, math.inf))
+
+PositionKey = tuple[str, int, int]  # (file stem, game, 0-based turn)
+
+
+def win_equity(summary: dict) -> float:
+    return (summary["wins"] + 0.5 * summary["draws"]) / summary["n"]
+
+
+def spread(summary: dict) -> float:
+    return summary["delta_sum"] / summary["n"]
 
 
 @dataclass(frozen=True)
-class Candidate:
-    equity_rank: int  # -1: a played move the generator never ranks
-    is_play: bool
-    is_setup: bool  # a high-value setup play (the setup recipe's highlight)
+class ConfirmedMove:
+    """One move of a position's confirming sim."""
+
     move: str  # GCG notation
-    win_equity: float  # (wins + draws / 2) / rollouts
-    mean_delta: float
+    equity_rank: int
+    is_setup: bool
+    summary: dict  # the tool's rollout summary, confirming stage
+    win_diff_vs_cut: list[list[float]]  # [sum, sum of squares] against each cut move
+
+    @property
+    def win_equity(self) -> float:
+        return win_equity(self.summary)
+
+    @property
+    def spread(self) -> float:
+        return spread(self.summary)
 
 
-# position key (file stem, game, turn) -> replica -> candidates in stored order
-Survey = dict[tuple[str, int, int], dict[int, list[Candidate]]]
+@dataclass(frozen=True)
+class Finding:
+    """One of the screen's picks from outside the cut, against the cut's best move,
+    both as the position's confirming sim read them."""
+
+    key: PositionKey
+    outside: ConfirmedMove
+    inside: ConfirmedMove
+    gain: float  # win equity, outside minus inside
+    gain_se: float  # of the paired difference
+
+    @property
+    def sigmas(self) -> float:
+        if self.gain_se > 0:
+            return self.gain / self.gain_se
+        return math.copysign(math.inf, self.gain) if self.gain else 0.0
+
+    @property
+    def spread_gain(self) -> float:
+        return self.outside.spread - self.inside.spread
+
+    @property
+    def beats_cut(self) -> bool:
+        return self.sigmas >= MIN_SIGMA
+
+
+def confirmed_moves(position: dict) -> list[ConfirmedMove]:
+    moves = []
+    for entry in position["confirm"]:
+        c = position["candidates"][entry["candidate"]]
+        moves.append(
+            ConfirmedMove(
+                move=c["move"],
+                equity_rank=c["equity_rank"],
+                is_setup=c["is_setup"],
+                summary=entry["summary"],
+                win_diff_vs_cut=entry["win_diff_vs_cut"],
+            )
+        )
+    return moves
+
+
+def position_findings(key: PositionKey, position: dict, cut: int) -> list[Finding]:
+    """A finding per outside move of the position's confirming sim (none when the
+    screen left nothing to confirm)."""
+    moves = confirmed_moves(position)
+    cut_moves = [m for m in moves if 0 <= m.equity_rank < cut]  # the tool lists them first
+    if not cut_moves:
+        return []
+    best = max(range(len(cut_moves)), key=lambda i: (cut_moves[i].win_equity, -i))
+    out = []
+    for outside in moves[len(cut_moves) :]:
+        total, sq_total = outside.win_diff_vs_cut[best]
+        n = outside.summary["n"]
+        mean = total / n
+        se = math.sqrt(max(sq_total / n - mean * mean, 0.0) / n)
+        out.append(Finding(key, outside, cut_moves[best], mean, se))
+    return out
+
+
+@dataclass(frozen=True)
+class Survey:
+    positions: int  # surveyed
+    findings: list[Finding]  # every confirmed outside move, strongest first
+
+    @property
+    def winners(self) -> list[Finding]:
+        return [f for f in self.findings if f.beats_cut]
 
 
 def load_survey(paths: list[Path]) -> Survey:
-    survey: Survey = defaultdict(lambda: defaultdict(list))
+    positions, found = 0, []
     for path in paths:
         stem = path.name.removesuffix(SURVEY_SUFFIX)
-        with open(path, newline="") as f:
-            for row in csv.DictReader(f):
-                n = float(row["rollouts"])
-                survey[(stem, int(row["game"]), int(row["turn"]))][int(row["replica"])].append(
-                    Candidate(
-                        equity_rank=int(row["equity_rank"]),
-                        is_play=row["is_play"] == "1",
-                        is_setup=row["is_setup"] == "1",
-                        move=row["move"],
-                        win_equity=(float(row["wins"]) + 0.5 * float(row["draws"])) / n,
-                        mean_delta=float(row["delta_sum"]) / n,
-                    )
-                )
-    return survey
-
-
-def inside_cut(c: Candidate, cut: int) -> bool:
-    return 0 <= c.equity_rank < cut
-
-
-def best_index(candidates: list[Candidate], eligible: list[int]) -> int:
-    """The eligible index with the highest win equity, ties to the mean delta then
-    the stored order."""
-    return max(eligible, key=lambda i: (candidates[i].win_equity, candidates[i].mean_delta, -i))
-
-
-@dataclass(frozen=True)
-class HeldOutPick:
-    """One (position, replica assignment): the picks made on the selecting replica,
-    valued on the other."""
-
-    pick_rank: int  # equity rank of the unrestricted pick
-    pick_is_play: bool
-    gain: float  # held-out win equity: unrestricted pick minus the pick inside the cut
-
-    def outside(self, cut: int) -> bool:
-        return not 0 <= self.pick_rank < cut
-
-
-def held_out_picks(survey: Survey, cut: int) -> list[HeldOutPick]:
-    picks = []
-    for replicas in survey.values():
-        for select, value in ((0, 1), (1, 0)):
-            chosen, scored = replicas[select], replicas[value]
-            inside = [i for i, c in enumerate(chosen) if inside_cut(c, cut)]
-            if not inside:
-                continue
-            free = best_index(chosen, list(range(len(chosen))))
-            cut_pick = best_index(chosen, inside)
-            picks.append(
-                HeldOutPick(
-                    pick_rank=chosen[free].equity_rank,
-                    pick_is_play=chosen[free].is_play,
-                    gain=scored[free].win_equity - scored[cut_pick].win_equity,
-                )
-            )
-    return picks
+        survey = json.loads(path.read_text())
+        for position in survey["positions"]:
+            positions += 1
+            key = (stem, position["game"], position["turn"])
+            found += position_findings(key, position, survey["cut"])
+    return Survey(positions, sorted(found, key=lambda f: -f.sigmas))
 
 
 def mean_and_se(values: list[float]) -> tuple[float, float]:
@@ -117,170 +156,69 @@ def mean_and_se(values: list[float]) -> tuple[float, float]:
 
 
 def bucket_label(lo: float, hi: float) -> str:
-    if hi == math.inf:
-        return f"rank {lo}+"
-    return f"rank {lo}" if hi == lo + 1 else f"ranks {lo}-{int(hi) - 1}"
+    return f"rank {lo}+" if hi == math.inf else f"ranks {lo}-{int(hi) - 1}"
 
 
-def report(survey: Survey, cut: int) -> str:
-    """The survey's findings as text. Gains are win-equity points (percent)."""
-    if any(set(replicas) != {0, 1} for replicas in survey.values()):
-        raise ValueError("the held-out analysis needs exactly two replicas per position")
-    picks = held_out_picks(survey, cut)
-    outside = [p for p in picks if p.outside(cut)]
+def finding_line(f: Finding) -> str:
+    return (
+        f"{gcg_name(f.key)}: {f.outside.move} (#{f.outside.equity_rank + 1}) over "
+        f"{f.inside.move}, win {100 * f.gain:+.1f} ({f.sigmas:+.1f} sigma), "
+        f"spread {f.spread_gain:+.1f}"
+    )
+
+
+def report(survey: Survey) -> str:
+    """The survey's findings as text. Win gains are win-equity points (percent)."""
+    winners = survey.winners
+    winning_positions = {f.key for f in winners}
+    contested = {f.key for f in survey.findings}
+    best_gain = {}
+    for f in winners:
+        best_gain[f.key] = max(best_gain.get(f.key, 0.0), 100 * f.gain)
+    no_gain = [0.0] * (survey.positions - len(best_gain))
+    cost, cost_se = mean_and_se([*best_gain.values(), *no_gain])
     lines = [
-        f"{len(survey)} positions, {len(picks)} held-out picks (2 per position), cut = top {cut}",
+        f"{survey.positions} positions surveyed; at {len(contested)} the screen left an outside "
+        f"move standing, {len(survey.findings)} such moves confirmed in all",
+        f"outside move beats the cut by >= {MIN_SIGMA:g} sigma: {len(winners)} moves at "
+        f"{len(winning_positions)} positions ({len(winning_positions) / survey.positions:.1%})",
+        f"what playing the best of them would gain, per surveyed position: "
+        f"{cost:+.2f} +/- {cost_se:.2f} win pts",
         "",
-        f"sim pick outside the cut: {len(outside) / len(picks):.1%} of picks",
+        "where they sit in the equity ranking:",
     ]
-    if outside:
-        confirmed = sum(p.gain > 0 for p in outside)
-        mean, se = mean_and_se([100 * p.gain for p in outside])
-        lines += [
-            f"  of those, held-out replica agrees (gain > 0): {confirmed / len(outside):.1%}",
-            f"  their mean held-out gain: {mean:+.2f} +/- {se:.2f} pts",
-        ]
-    mean, se = mean_and_se([100 * p.gain for p in picks])
-    lines += [
-        f"cost of the cut, per position (held-out gain of lifting it): "
-        f"{mean:+.2f} +/- {se:.2f} pts",
-        "",
-        "where the sim's picks sit in the equity ranking (share of picks; mean held-out gain):",
-    ]
-    rows = []
     for lo, hi in RANK_BUCKETS:
-        members = [p for p in picks if p.pick_is_play and lo <= p.pick_rank < hi]
-        rows.append((bucket_label(lo, hi), members))
-    rows.append(("exchange", [p for p in picks if not p.pick_is_play]))
-    for label, members in rows:
-        if not members:
-            lines.append(f"  {label:<12} {0:6.1%}")
-            continue
-        mean, _ = mean_and_se([100 * p.gain for p in members])
-        lines.append(f"  {label:<12} {len(members) / len(picks):6.1%}   {mean:+.2f} pts")
+        members = [f for f in winners if lo <= f.outside.equity_rank < hi]
+        lines.append(f"  {bucket_label(lo, hi):<12} {len(members)}")
+    lines += ["", "strongest first:"]
+    lines += [f"  {finding_line(f)}" for f in winners]
     return "\n".join(lines)
 
 
-@dataclass(frozen=True)
-class SetupFinding:
-    """One setup-recipe position: its best setup play outside the cut against its
-    best move inside, each chosen on one replica and valued on the other."""
-
-    key: tuple[str, int, int]  # (file stem, game, turn)
-    setup_moves: tuple[str, str]  # the setup pick of each replica assignment
-    setup_ranks: tuple[int, int]
-    cut_moves: tuple[str, str]
-    gains: tuple[float, float]  # held-out win equity, setup pick minus cut pick
-    spread_gains: tuple[float, float]  # the same picks' held-out mean final score differential
-
-    @property
-    def mean_gain(self) -> float:
-        return sum(self.gains) / 2
-
-    @property
-    def mean_spread_gain(self) -> float:
-        return sum(self.spread_gains) / 2
-
-    @property
-    def confirmed(self) -> bool:
-        """Both replicas chose the same setup play and each valued the other's
-        choice above the cut's."""
-        return self.setup_moves[0] == self.setup_moves[1] and min(self.gains) > 0
-
-
-def setup_findings(survey: Survey, cut: int) -> list[SetupFinding]:
-    findings = []
-    for key, replicas in survey.items():
-        picks = []
-        for select, value in ((0, 1), (1, 0)):
-            chosen, scored = replicas[select], replicas[value]
-            inside = [i for i, c in enumerate(chosen) if inside_cut(c, cut)]
-            setups = [i for i, c in enumerate(chosen) if c.is_setup and not inside_cut(c, cut)]
-            if not inside or not setups:
-                break
-            s, c = best_index(chosen, setups), best_index(chosen, inside)
-            picks.append(
-                (
-                    chosen[s],
-                    chosen[c],
-                    scored[s].win_equity - scored[c].win_equity,
-                    scored[s].mean_delta - scored[c].mean_delta,
-                )
-            )
-        if len(picks) == 2:
-            findings.append(
-                SetupFinding(
-                    key=key,
-                    setup_moves=(picks[0][0].move, picks[1][0].move),
-                    setup_ranks=(picks[0][0].equity_rank, picks[1][0].equity_rank),
-                    cut_moves=(picks[0][1].move, picks[1][1].move),
-                    gains=(picks[0][2], picks[1][2]),
-                    spread_gains=(picks[0][3], picks[1][3]),
-                )
-            )
-    return sorted(findings, key=lambda f: -f.mean_gain)
-
-
-def setup_report(survey: Survey, cut: int) -> str:
-    """How the best setup play outside the cut fares against the best move inside
-    it, position by position. Gains are win-equity points (percent)."""
-    findings = setup_findings(survey, cut)
-    mean, se = mean_and_se([100 * f.mean_gain for f in findings])
-    spread, spread_se = mean_and_se([f.mean_spread_gain for f in findings])
-    confirmed = [f for f in findings if f.confirmed]
-    lines = [
-        f"{len(findings)} positions with a high-value setup play outside the top {cut}",
-        f"best such setup vs best top-{cut} move, held out: {mean:+.2f} +/- {se:.2f} win pts, "
-        f"{spread:+.1f} +/- {spread_se:.1f} spread",
-        f"setup confirmed better (same pick on both replicas, both held-out gains > 0): "
-        f"{len(confirmed)} positions ({len(confirmed) / len(findings):.1%})",
-    ]
-    for lo in (2, 5):
-        n = sum(100 * min(f.gains) > lo for f in confirmed)
-        lines.append(f"  ...by more than {lo} pts on both: {n}")
-    both = [f for f in confirmed if min(f.spread_gains) > 0]
-    lines.append(f"  ...and ahead on spread on both replicas too: {len(both)}")
-    for f in confirmed:
-        lines.append(
-            f"    {gcg_name(f.key)}: {f.setup_moves[0]} over {f.cut_moves[0]}, "
-            f"win {100 * f.gains[0]:+.1f}/{100 * f.gains[1]:+.1f}, "
-            f"spread {f.spread_gains[0]:+.1f}/{f.spread_gains[1]:+.1f}"
-        )
-    return "\n".join(lines)
-
-
-def gcg_name(key: tuple[str, int, int]) -> str:
+def gcg_name(key: PositionKey) -> str:
     """The file sim_candidate_survey_tool --gcg-dir wrote for a position (its turn
     is 1-based there, as neural_rank_tool --turn takes it)."""
     stem, game, turn = key
     return f"{stem}-g{game}-turn{turn + 1}.gcg"
 
 
-def pooled(survey: Survey, key: tuple[str, int, int], move: str) -> tuple[float, float]:
-    """A move's (win equity in percent, mean spread) over both replicas' rollouts."""
-    found = [c for cands in survey[key].values() for c in cands if c.move == move]
-    win = 100 * sum(c.win_equity for c in found) / len(found)
-    return win, sum(c.mean_delta for c in found) / len(found)
-
-
-def write_review_dir(
-    survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, count: int, command: str
-):
-    """Replace `review_dir` with the GCGs of the `count` positions whose setup play
-    gained most and a README table of what the sims said about each. `command`
-    is the invocation that produced them, recorded for regeneration."""
+def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, command: str):
+    """Replace `review_dir` with the GCGs of the positions where an outside move beat
+    the cut and a README table of what the confirming sim said about each.
+    `command` is the invocation that produced them, recorded for regeneration."""
     if review_dir.exists():
         shutil.rmtree(review_dir)
     review_dir.mkdir(parents=True)
     lines = [
-        "# Setup survey examples",
+        "# Sim survey examples",
         "",
-        "Positions from HastyBot self-play where a high-value setup play ranked outside the",
-        f"hasty top {cut} simmed best against the top {cut}, strongest first. Each GCG ends on",
-        "the move the game actually played; `neural_rank_tool --gcg <file> --turn <turn>` opens",
-        "the decision point. Win% and spread (mean final score differential, mover's view) pool",
-        "both replicas' rollouts; the held-out gains are the setup pick of one replica valued on",
-        "the other, minus the same for the top-10 pick, one figure per replica assignment.",
+        f"Positions from HastyBot self-play where a play ranked outside the hasty top {cut} beat",
+        f"the best top-{cut} move. A screening sim of every candidate singled out its few best",
+        "outside plays; a longer confirming sim on fresh rollouts, of those and the top moves, put",
+        f"it at least {MIN_SIGMA:g} standard errors (of the paired win difference) above the best",
+        "of them. Strongest first. Each GCG ends on the move the game actually played;",
+        "`neural_rank_tool --gcg <file> --turn <turn>` opens the decision point. Win% and spread",
+        "(mean final score differential, mover's view) are the confirming sim's.",
         "",
         "Regenerate this directory (games, sims and all; `--slog-dir` is scratch space) with:",
         "",
@@ -288,21 +226,17 @@ def write_review_dir(
         command,
         "```",
         "",
-        "| file | turn | setup play (hasty rank) | win% | spread | best top-10 move | win% "
-        "| spread | win gains | spread gains |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| file | turn | outside play (hasty rank) | win% | spread | best top move | win% "
+        "| spread | win gain | sigmas | spread gain |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
-    for f in setup_findings(survey, cut)[:count]:
+    for f in survey.winners:
         shutil.copy(gcg_dir / gcg_name(f.key), review_dir / gcg_name(f.key))
-        setup, cut_move = f.setup_moves[0], f.cut_moves[0]
-        (setup_win, setup_spread), (cut_win, cut_spread) = (
-            pooled(survey, f.key, setup),
-            pooled(survey, f.key, cut_move),
-        )
         lines.append(
-            f"| {gcg_name(f.key)} | {f.key[2] + 1} | {setup} (#{f.setup_ranks[0] + 1}) "
-            f"| {setup_win:.1f} | {setup_spread:+.1f} | {cut_move} | {cut_win:.1f} "
-            f"| {cut_spread:+.1f} | {100 * f.gains[0]:+.1f}, {100 * f.gains[1]:+.1f} "
-            f"| {f.spread_gains[0]:+.1f}, {f.spread_gains[1]:+.1f} |"
+            f"| {gcg_name(f.key)} | {f.key[2] + 1} | {f.outside.move} "
+            f"(#{f.outside.equity_rank + 1}) | {100 * f.outside.win_equity:.1f} "
+            f"| {f.outside.spread:+.1f} | {f.inside.move} | {100 * f.inside.win_equity:.1f} "
+            f"| {f.inside.spread:+.1f} | {100 * f.gain:+.1f} | {f.sigmas:+.1f} "
+            f"| {f.spread_gain:+.1f} |"
         )
     (review_dir / "README.md").write_text("\n".join(lines) + "\n")
