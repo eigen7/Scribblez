@@ -242,6 +242,14 @@ class SimRunner {
   std::vector<SimObservation> run(const SimPosition& pos, const std::vector<Move>& candidates,
                                   uint64_t base_seed) const;
 
+  // The rollouts behind run(), unreduced: candidates.size() * rollouts results,
+  // candidate c's rollout i at [c * rollouts + i]. For a consumer that reduces
+  // them to something other than a SimObservation (sim/rollout_summary.h).
+  std::vector<RolloutResult> run_rollouts(const SimPosition& pos,
+                                          const std::vector<Move>& candidates,
+                                          uint64_t base_seed) const;
+  int rollouts() const { return params_.rollouts; }
+
  private:
   const Dictionary& dict_;
   Params params_;

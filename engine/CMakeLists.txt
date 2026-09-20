@@ -54,6 +54,7 @@ add_library(scribblez_core STATIC
   src/sim/sim_runner.cpp
   src/sim/slog_position_simmer.cpp
   src/sim/setup_plays.cpp
+  src/sim/rollout_summary.cpp
   src/agent/candidate_evaluator.cpp
   # Coalesces concurrent position-eval requests into larger GPU batches. A
   # decorator over the EvalService interface with no CUDA/TensorRT dependency,
@@ -289,6 +290,7 @@ add_executable(sim_candidate_survey_tool apps/sim_candidate_survey_tool.cpp)
 target_link_libraries(sim_candidate_survey_tool PRIVATE
   scribblez_core
   Boost::program_options
+  Boost::json
   Boost::filesystem
   Boost::system
   Threads::Threads)

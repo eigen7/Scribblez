@@ -361,9 +361,9 @@ SimRunner::SimRunner(const Dictionary& dict, const Params& params) : dict_(dict)
   }
 }
 
-std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
-                                           const std::vector<Move>& candidates,
-                                           uint64_t base_seed) const {
+std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
+                                                   const std::vector<Move>& candidates,
+                                                   uint64_t base_seed) const {
   if (candidates.empty()) return {};
   // The documented non-endgame requirement: a non-empty bag at the decision
   // point. The pool holds the bag plus the opponent's (up to RACK_SIZE)
@@ -389,14 +389,20 @@ std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
   // the calling thread instead of leaving it to terminate the process.
   for (const std::exception_ptr& e : errors)
     if (e) std::rethrow_exception(e);
+  return results;
+}
 
+std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
+                                           const std::vector<Move>& candidates,
+                                           uint64_t base_seed) const {
+  const std::vector<RolloutResult> results = run_rollouts(pos, candidates, base_seed);
   // Reduce in fixed (candidate, rollout index) order, whatever the thread
   // count -- with fractional contributions, a merge order that followed the
   // work partition would not be.
   std::vector<SimObservation> out(candidates.size());
   for (size_t c = 0; c < out.size(); ++c)
-    for (int i = 0; i < params.rollouts; ++i)
-      accumulate_rollout(results[c * size_t(params.rollouts) + size_t(i)], &out[c]);
+    for (int i = 0; i < params_.rollouts; ++i)
+      accumulate_rollout(results[c * size_t(params_.rollouts) + size_t(i)], &out[c]);
   return out;
 }
 

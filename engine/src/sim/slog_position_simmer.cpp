@@ -4,6 +4,7 @@
 #include "data/binary_log.h"
 #include "encoding/position_encoder.h"
 #include "lexicon/dictionary.h"
+#include "lexicon/hasty_equity.h"
 #include "sim/setup_plays.h"
 #include "util/exception.h"
 
@@ -62,6 +63,41 @@ struct SimJob {
   util::ProgressMeter* meter;
 };
 
+// Candidate c's rollouts within a SimRunner::run_rollouts result.
+std::span<const RolloutResult> candidate_rollouts(const std::vector<RolloutResult>& all, size_t c,
+                                                  int rollouts) {
+  return {all.data() + c * size_t(rollouts), size_t(rollouts)};
+}
+
+void summarize_position(const SlogSimConfig& config, const std::vector<RolloutResult>& all,
+                        int rollouts, SimmedPosition* res) {
+  const size_t n = res->candidates.moves.size();
+  const size_t refs = std::min(n, size_t(config.paired_references));
+  res->paired.assign(n, std::vector<PairedWinDiff>(refs));
+  for (size_t c = 0; c < n; ++c) {
+    const auto mine = candidate_rollouts(all, c, rollouts);
+    res->summaries.push_back(summarize_rollouts(res->candidates.moves[c], mine));
+    for (size_t r = 0; r < refs; ++r)
+      res->paired[c][r] = paired_win_diff(mine, candidate_rollouts(all, r, rollouts));
+  }
+}
+
+// Sim the position's candidates and keep what the config asks for.
+void reduce_rollouts(const SlogSimConfig& config, const SimRunner& runner, SimmedPosition* res) {
+  if (!config.keep_summaries) {
+    res->observations = runner.run(res->position, res->candidates.moves, res->base_seed);
+    return;
+  }
+  const std::vector<RolloutResult> all =
+    runner.run_rollouts(res->position, res->candidates.moves, res->base_seed);
+  summarize_position(config, all, runner.rollouts(), res);
+  if (!config.keep_observations) return;
+  res->observations.resize(res->candidates.moves.size());
+  for (size_t c = 0; c < res->observations.size(); ++c)
+    for (const RolloutResult& r : candidate_rollouts(all, c, runner.rollouts()))
+      accumulate_rollout(r, &res->observations[c]);
+}
+
 void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
                       binlog::PositionEncoder* encoder, std::vector<TurnRecord>* scratch,
                       const SimRunner& runner, SimmedPosition* res) {
@@ -74,10 +110,14 @@ void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
   const uint64_t position_seed = binlog::position_seed(job->config.seed, w.game_idx, w.turn_idx);
   res->base_seed = position_seed + job->config.rollout_seed_offset;
   std::mt19937_64 rng(position_seed);
-  res->candidates = job->config.selector(pos, rank_candidates(pos, job->dict, encoder->bag_size()),
-                                         g.records[w.turn_idx].move, rng);
-  if (job->run_sims && !res->candidates.moves.empty())
-    res->observations = runner.run(pos, res->candidates.moves, res->base_seed);
+  res->bag_size = encoder->bag_size();
+  res->played = g.records[w.turn_idx].move;
+  res->candidates =
+    job->config.selector(pos, rank_candidates(pos, job->dict, res->bag_size), res->played, rng);
+  if (res->candidates.moves.empty()) return;
+  res->candidates.equities = HastyEquity::instance().equities(
+    res->candidates.moves, pos.board, res->bag_size, pos.opp_leave, pos.rack);
+  if (job->run_sims) reduce_rollouts(job->config, runner, res);
 }
 
 // Claims positions off the shared index and fills their result slots. Each
@@ -156,6 +196,25 @@ SimCandidates select_setup_candidates(const SimPosition& pos, const Dictionary& 
   return out;
 }
 
+SimCandidates select_all_plays(const SimPosition& pos, const Dictionary& dict,
+                               const std::vector<Move>& ranked, int cut, int max_plays) {
+  SimCandidates out;
+  out.num_legal_moves = ranked.size();
+  int beyond_cut = 0;
+  for (size_t i = 0; i < ranked.size(); ++i) {
+    const Move& m = ranked[i];
+    if (int(i) >= cut) {
+      const bool wanted = m.type() == MoveType::PLAY && !places_blank(m);
+      if (!wanted || (max_plays > 0 && beyond_cut >= max_plays)) continue;
+      ++beyond_cut;
+    }
+    out.moves.push_back(m);
+    out.equity_ranks.push_back(int32_t(i));
+    out.highlighted.push_back(is_high_value_setup(pos.board, dict, pos.rack, m));
+  }
+  return out;
+}
+
 std::vector<SimmedPosition> run_job(const std::vector<char>& buf, const Dictionary& dict,
                                     const SlogSimConfig& config,
                                     const std::vector<binlog::GamePositionIndex>& work,
@@ -179,6 +238,13 @@ SimCandidateSelector setup_selector(const Dictionary& dict, int cut, int max_set
   return [&dict, cut, max_setups](const SimPosition& pos, const std::vector<Move>& ranked,
                                   const Move&, std::mt19937_64&) {
     return select_setup_candidates(pos, dict, ranked, cut, max_setups);
+  };
+}
+
+SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max_plays) {
+  return [&dict, cut, max_plays](const SimPosition& pos, const std::vector<Move>& ranked,
+                                 const Move&, std::mt19937_64&) {
+    return select_all_plays(pos, dict, ranked, cut, max_plays);
   };
 }
 

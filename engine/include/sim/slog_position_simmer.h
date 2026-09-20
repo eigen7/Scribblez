@@ -11,6 +11,7 @@
 
 #include "data/slog_sampling.h"
 #include "game/move.h"
+#include "sim/rollout_summary.h"
 #include "sim/sim_runner.h"
 #include "training/move_set_eval_candidates.h"
 #include "util/progress.h"
@@ -43,6 +44,9 @@ struct SimCandidates {
   // Parallel to `moves`: the candidates a selector is asking about, when it has
   // such a notion (the setup selector's setup plays); all false otherwise.
   std::vector<char> highlighted;
+  // Parallel to `moves`: HastyBot static equity. Filled by the simmer, not by
+  // selectors.
+  std::vector<double> equities;
   uint32_t num_legal_moves = 0;
 };
 
@@ -67,6 +71,13 @@ SimCandidateSelector recipe_selector(const SimCandidateRecipe& recipe);
 // cut -- there the cut hides nothing.
 SimCandidateSelector setup_selector(const Dictionary& dict, int cut, int max_setups);
 
+// Every position: the top `cut` of the ranking plus every play that places no
+// blank (the blank-placing plays are most of a blank rack's thousands of legal
+// moves, nearly all of them designation variants of each other), capped at the
+// `max_plays` best-ranked beyond the cut (0 = no cap). High-value setups are
+// highlighted. Both this and setup_selector list the cut first, in rank order.
+SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max_plays);
+
 struct SlogSimConfig {
   // Sim with the opponent's retained leave known (the open-leaves information
   // condition); the candidate ranking then sees it too.
@@ -83,6 +94,14 @@ struct SlogSimConfig {
   // do not overlap) -- what a held-out estimate of a sim pick's value needs.
   uint64_t rollout_seed_offset = 0;
   int threads = 1;  // position workers
+  // What each position's rollouts are reduced to. Observations are the training
+  // currency (35 KB a candidate); summaries are the analysis one
+  // (sim/rollout_summary.h), cheap enough to keep for every legal play.
+  bool keep_observations = true;
+  bool keep_summaries = false;
+  // With summaries: the first this-many candidates are references, and every
+  // candidate gets its paired win difference against each of them.
+  int paired_references = 0;
 };
 
 struct SimmedPosition {
@@ -90,7 +109,13 @@ struct SimmedPosition {
   SimPosition position;    // the replayed decision point
   uint64_t base_seed = 0;  // the SimRunner::run seed used
   SimCandidates candidates;
-  std::vector<SimObservation> observations;  // parallel to candidates.moves
+  int bag_size = 0;  // tiles in the bag at the decision point
+  Move played;       // the move the game made here
+  // Parallel to candidates.moves; each filled per SlogSimConfig.
+  std::vector<SimObservation> observations;
+  std::vector<RolloutSummary> summaries;
+  // paired[c][r]: candidate c's win value minus reference r's, over the rollouts.
+  std::vector<std::vector<PairedWinDiff>> paired;
 };
 
 // Sim every position of `work` within the loaded .slog bytes `buf`, returning
