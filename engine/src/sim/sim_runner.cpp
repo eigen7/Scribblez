@@ -125,6 +125,8 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
     out->self_next = log.records[1].move;
   if (!game.truncated()) {
     set_terminal_outcome(log.final_scores[pos.mover] - log.final_scores[opponent], out);
+    out->self_stranded = log.final_racks[pos.mover].point_value();
+    out->opp_stranded = log.final_racks[opponent].point_value();
     return;
   }
   stage_horizon_leaf(pos, candidate, log, game, *leaf_spec, batcher, slot);
@@ -175,6 +177,12 @@ void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& app
 }
 
 }  // namespace
+
+int end_rack_swing(const RolloutResult& r) {
+  if (r.self_stranded == 0) return 2 * r.opp_stranded;
+  if (r.opp_stranded == 0) return -2 * r.self_stranded;
+  return r.opp_stranded - r.self_stranded;
+}
 
 // Terminal rollouts contribute exact integers; truncated rollouts contribute
 // fractional values, which run() reduces in a fixed order (see there for why

@@ -20,7 +20,8 @@
 // have one are skipped, so an interrupted run resumes by rerunning):
 // per position its rack, scores and bag; per candidate its notation, equity,
 // rank and leave; and per candidate per replica a RolloutSummary
-// (sim/rollout_summary.h) -- outcome counts, the final-margin histogram, and
+// (sim/rollout_summary.h) -- outcome counts, the final-margin histogram, the
+// end-of-game rack settlement (tiles stranded on each rack, who played out), and
 // each side's next-move score histogram, bingo count and how often that move
 // played off the candidate's tiles -- plus the paired win difference against
 // each move inside the cut. That is what a later classifier needs to say WHY a
@@ -212,6 +213,12 @@ json::object to_json(const RolloutSummary& s, const std::vector<PairedWinDiff>& 
           {"delta_hist", to_json(s.delta_hist)},
           {"opp_reply", to_json(s.opp_reply)},
           {"self_next", to_json(s.self_next)},
+          {"self_stranded_sum", s.self_stranded_sum},
+          {"opp_stranded_sum", s.opp_stranded_sum},
+          {"self_went_out", s.self_went_out},
+          {"opp_went_out", s.opp_went_out},
+          {"end_swing_sum", s.end_swing_sum},
+          {"end_swing_hist", to_json(s.end_swing_hist)},
           {"win_diff_vs_cut", std::move(vs_cut)}};
 }
 
@@ -268,7 +275,9 @@ json::object header_json(const Options& opt) {
           {"seed", opt.seed},
           {"score_bin_width", kScoreBinWidth},
           {"delta_bin_width", kDeltaBinWidth},
-          {"delta_bin_floor", kDeltaBinFloor}};
+          {"delta_bin_floor", kDeltaBinFloor},
+          {"end_swing_bin_width", kEndSwingBinWidth},
+          {"end_swing_bin_floor", kEndSwingBinFloor}};
 }
 
 // Written to a temp name and renamed, so a survey file's existence means it is

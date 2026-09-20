@@ -29,6 +29,12 @@ inline constexpr int kDeltaBins = 18;
 inline constexpr int kDeltaBinWidth = 25;
 inline constexpr int kDeltaBinFloor = -200;
 
+// The end-of-game rack settlement's swing (end_rack_swing), bucketed by 10s over
+// [-50, 50): bin 0 is everything below -50, the last bin everything from 50 up.
+inline constexpr int kEndSwingBins = 12;
+inline constexpr int kEndSwingBinWidth = 10;
+inline constexpr int kEndSwingBinFloor = -50;
+
 // One side's next move after the candidate, over the candidate's rollouts.
 struct NextMoveStats {
   double score_sum = 0;
@@ -50,6 +56,15 @@ struct RolloutSummary {
   std::array<uint32_t, kDeltaBins> delta_hist{};
   NextMoveStats opp_reply;
   NextMoveStats self_next;
+  // How the games ended: the tile values left on each rack (a candidate that
+  // strands the opponent's Q shows up in opp_stranded_sum), who played out, and
+  // the settlement's swing on the final margin.
+  double self_stranded_sum = 0;
+  double opp_stranded_sum = 0;
+  uint32_t self_went_out = 0;
+  uint32_t opp_went_out = 0;
+  double end_swing_sum = 0;
+  std::array<uint32_t, kEndSwingBins> end_swing_hist{};
 };
 
 // The paired difference in win value (win = 1, draw = 1/2) between two

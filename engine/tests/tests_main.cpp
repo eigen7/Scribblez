@@ -5201,6 +5201,10 @@ TEST(RolloutSummary, ReducesOutcomesScoresAndAdjacency) {
   rollouts[1] = {
     .opp_reply = bingo, .self_next = Move{}, .p_loss = 1, .delta = -201, .delta_sq = 40401};
   rollouts[2] = {.opp_reply = hook, .self_next = far, .p_draw = 1, .delta = 0, .delta_sq = 0};
+  rollouts[0].opp_stranded = 10;   // the mover played out against a stuck Q: +20
+  rollouts[1].self_stranded = 30;  // the opponent played out: -60, below the floor
+  rollouts[2].self_stranded = 3;   // nobody played out: 5 - 3 = +2
+  rollouts[2].opp_stranded = 5;
   const RolloutSummary s = summarize_rollouts(candidate, rollouts);
 
   EXPECT_EQ(s.n, 3u);
@@ -5218,6 +5222,13 @@ TEST(RolloutSummary, ReducesOutcomesScoresAndAdjacency) {
   EXPECT_EQ(s.opp_reply.adjacent, 1u);
   EXPECT_EQ(s.self_next.non_plays, 1u);  // the PASS of the rollout that ended
   EXPECT_EQ(s.self_next.adjacent, 1u);
+  EXPECT_EQ(s.opp_stranded_sum, 15);
+  EXPECT_EQ(s.self_went_out, 1u);
+  EXPECT_EQ(s.opp_went_out, 1u);
+  EXPECT_EQ(s.end_swing_sum, 20 - 60 + 2);
+  EXPECT_EQ(s.end_swing_hist[0], 1u);  // -60
+  EXPECT_EQ(s.end_swing_hist[6], 1u);  // +2 in [0, 10)
+  EXPECT_EQ(s.end_swing_hist[8], 1u);  // +20 in [20, 30)
 }
 
 // paired_win_diff: win = 1, draw = 1/2, differenced rollout by rollout.

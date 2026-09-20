@@ -48,6 +48,21 @@ int delta_bin(double delta) {
   return std::clamp(bin, 0, kDeltaBins - 1);
 }
 
+int end_swing_bin(int swing) {
+  const int bin = int(std::floor(double(swing - kEndSwingBinFloor) / kEndSwingBinWidth)) + 1;
+  return std::clamp(bin, 0, kEndSwingBins - 1);
+}
+
+void add_game_end(const RolloutResult& r, RolloutSummary* s) {
+  s->self_stranded_sum += r.self_stranded;
+  s->opp_stranded_sum += r.opp_stranded;
+  s->self_went_out += r.self_stranded == 0;
+  s->opp_went_out += r.self_stranded != 0 && r.opp_stranded == 0;
+  const int swing = end_rack_swing(r);
+  s->end_swing_sum += swing;
+  ++s->end_swing_hist[size_t(end_swing_bin(swing))];
+}
+
 }  // namespace
 
 PairedWinDiff paired_win_diff(std::span<const RolloutResult> a, std::span<const RolloutResult> b) {
@@ -73,6 +88,7 @@ RolloutSummary summarize_rollouts(const Move& candidate, std::span<const Rollout
     ++s.delta_hist[size_t(delta_bin(r.delta))];
     add_next_move(r.opp_reply, beside, &s.opp_reply);
     add_next_move(r.self_next, beside, &s.self_next);
+    add_game_end(r, &s);
   }
   return s;
 }
