@@ -75,6 +75,12 @@ PairedWinDiff paired_win_diff(std::span<const RolloutResult> a, std::span<const 
   return out;
 }
 
+bool clearly_below(const PairedWinDiff& d, size_t n, double sigmas) {
+  const double mean = d.sum / double(n);
+  const double se = std::sqrt(std::max(d.sq_sum / double(n) - mean * mean, 0.0) / double(n));
+  return mean + sigmas * se < 0;
+}
+
 RolloutSummary summarize_rollouts(const Move& candidate, std::span<const RolloutResult> rollouts) {
   const SquareSet beside = neighbor_squares(candidate);
   RolloutSummary s;

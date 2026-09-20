@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from scribblez.sim_candidate_survey import gcg_name, load_findings, report, write_review_dir
+from scribblez.sim_candidate_survey import gcg_name, load_survey, report, write_review_dir
 
 ROLLOUTS = 100
 
@@ -25,11 +25,11 @@ def paired(wins: int, ref_wins: int) -> list[float]:
     return [float(wins - ref_wins), float(abs(wins - ref_wins))]
 
 
-def position(cut_wins: list[int], outside_rank: int, outside_wins: int) -> dict:
-    """A position whose confirming sim covers a cut of len(cut_wins) moves and one
-    outside move, stored as the candidate after them."""
-    ranks = [*range(len(cut_wins)), outside_rank]
-    wins = [*cut_wins, outside_wins]
+def position(cut_wins: list[int], outside: dict[int, int]) -> dict:
+    """A position whose confirming sim covers a cut of len(cut_wins) moves and the
+    `outside` moves (equity rank -> wins), stored as the candidates after them."""
+    ranks = [*range(len(cut_wins)), *outside]
+    wins = [*cut_wins, *outside.values()]
     candidates = [
         {"move": f"M{rank}", "equity_rank": rank, "is_setup": False, "screen": summary(50)}
         for rank in ranks
@@ -47,12 +47,12 @@ def position(cut_wins: list[int], outside_rank: int, outside_wins: int) -> dict:
 
 def write_survey(tmp_path: Path, positions: list[dict]) -> list[Path]:
     path = tmp_path / "chunk.simsurvey.json"
-    path.write_text(json.dumps({"version": 2, "positions": positions}))
+    path.write_text(json.dumps({"version": 2, "cut": 10, "positions": positions}))
     return [path]
 
 
 def test_the_outside_move_is_measured_against_the_cuts_best(tmp_path):
-    (f,) = load_findings(write_survey(tmp_path, [position([40, 44], 62, 54)]))
+    (f,) = load_survey(write_survey(tmp_path, [position([40, 44], {62: 54})])).findings
     assert (f.outside.move, f.inside.move) == ("M62", "M1")
     assert f.gain == pytest.approx(0.10)
     # The paired SE: 10 disagreements in 100 rollouts, mean 0.1.
@@ -62,27 +62,30 @@ def test_the_outside_move_is_measured_against_the_cuts_best(tmp_path):
     assert f.beats_cut
 
 
-def test_a_small_edge_does_not_beat_the_cut(tmp_path):
-    (f,) = load_findings(write_survey(tmp_path, [position([40], 62, 42)]))
-    assert 0 < f.sigmas < 2
-    assert not f.beats_cut
+def test_each_pick_is_its_own_finding_and_a_small_edge_does_not_beat_the_cut(tmp_path):
+    survey = load_survey(write_survey(tmp_path, [position([40], {62: 42, 80: 55})]))
+    assert [f.outside.move for f in survey.findings] == ["M80", "M62"]  # strongest first
+    assert [f.beats_cut for f in survey.findings] == [True, False]
+    assert 0 < survey.findings[1].sigmas < 2
 
 
-def test_unconfirmed_positions_are_skipped_and_the_report_counts_winners(tmp_path):
-    unconfirmed = position([40], 62, 50) | {"confirm": [], "game": 1}
-    found = load_findings(write_survey(tmp_path, [position([40], 62, 50), unconfirmed]))
-    assert len(found) == 1
-    assert "beats the cut by >= 2 sigma: 1 positions (100.0%)" in report(found)
+def test_the_report_counts_every_surveyed_position(tmp_path):
+    nothing_standing = position([40], {62: 50}) | {"confirm": [], "game": 1}
+    survey = load_survey(write_survey(tmp_path, [position([40], {62: 50}), nothing_standing]))
+    assert (survey.positions, len(survey.findings)) == (2, 1)
+    text = report(survey)
+    assert "1 moves at 1 positions (50.0%)" in text
+    assert "per surveyed position: +5.00" in text
 
 
 def test_review_dir_collects_the_gcg_and_a_readme(tmp_path):
-    found = load_findings(write_survey(tmp_path, [position([40], 62, 50)]))
+    survey = load_survey(write_survey(tmp_path, [position([40], {62: 50})]))
     gcg_dir = tmp_path / "gcg"
     gcg_dir.mkdir()
     name = gcg_name(("chunk", 0, 3))
     assert name == "chunk-g0-turn4.gcg"
     (gcg_dir / name).write_text("#note a game\n")
-    write_review_dir(found, 10, gcg_dir, tmp_path / "review", "the command")
+    write_review_dir(survey, 10, gcg_dir, tmp_path / "review", "the command")
     assert (tmp_path / "review" / name).exists()
     readme = (tmp_path / "review" / "README.md").read_text()
     assert "the command" in readme

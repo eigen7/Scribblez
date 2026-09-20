@@ -9,13 +9,17 @@ The best of hundreds of noisy sim estimates flatters itself, and most
 candidates lie outside the cut, so "the screen's best is outside the cut" is
 true far more often than the cut costs anything. The tool therefore sims in
 two stages, and every figure here reads the second: the screen singles out
-its best move outside the cut, and a longer confirming sim on fresh rollouts
-re-sims that one move beside the cut's. The outside move "beats the cut" when
+its few best moves outside the cut (racing away the clearly beaten), and a
+longer confirming sim on fresh rollouts re-sims those moves beside the cut's.
+An outside move "beats the cut" when
 the confirming sim puts it at least MIN_SIGMA standard errors above the cut's
 best move -- the standard error being that of the paired win difference,
 which common random numbers make much tighter than the two marginal errors.
 The cut's best is taken on the confirming sim itself; a best-of-ten flatters
-the cut a little, so the bar errs on the strict side.
+the cut a little, so the bar errs on the strict side. Against that, each
+position tests a few outside moves, not one, so a few percent of positions
+clear the bar by chance alone; read single positions near the bar with that
+in mind.
 """
 
 import json
@@ -62,8 +66,8 @@ class ConfirmedMove:
 
 @dataclass(frozen=True)
 class Finding:
-    """A position's confirming sim: the screen's best move from outside the cut
-    against the cut's best move."""
+    """One of the screen's picks from outside the cut, against the cut's best move,
+    both as the position's confirming sim read them."""
 
     key: PositionKey
     outside: ConfirmedMove
@@ -102,30 +106,44 @@ def confirmed_moves(position: dict) -> list[ConfirmedMove]:
     return moves
 
 
-def finding(key: PositionKey, position: dict) -> Finding | None:
-    """None when the position had nothing on one side of the cut to confirm."""
+def position_findings(key: PositionKey, position: dict, cut: int) -> list[Finding]:
+    """A finding per outside move of the position's confirming sim (none when the
+    screen left nothing to confirm)."""
     moves = confirmed_moves(position)
-    if not moves:
-        return None
-    *cut_moves, outside = moves  # the tool lists the outside pick last
+    cut_moves = [m for m in moves if 0 <= m.equity_rank < cut]  # the tool lists them first
+    if not cut_moves:
+        return []
     best = max(range(len(cut_moves)), key=lambda i: (cut_moves[i].win_equity, -i))
-    total, sq_total = outside.win_diff_vs_cut[best]
-    n = outside.summary["n"]
-    mean = total / n
-    se = math.sqrt(max(sq_total / n - mean * mean, 0.0) / n)
-    return Finding(key, outside, cut_moves[best], mean, se)
-
-
-def load_findings(paths: list[Path]) -> list[Finding]:
-    """Every confirmed position of the survey files, strongest first."""
     out = []
+    for outside in moves[len(cut_moves) :]:
+        total, sq_total = outside.win_diff_vs_cut[best]
+        n = outside.summary["n"]
+        mean = total / n
+        se = math.sqrt(max(sq_total / n - mean * mean, 0.0) / n)
+        out.append(Finding(key, outside, cut_moves[best], mean, se))
+    return out
+
+
+@dataclass(frozen=True)
+class Survey:
+    positions: int  # surveyed
+    findings: list[Finding]  # every confirmed outside move, strongest first
+
+    @property
+    def winners(self) -> list[Finding]:
+        return [f for f in self.findings if f.beats_cut]
+
+
+def load_survey(paths: list[Path]) -> Survey:
+    positions, found = 0, []
     for path in paths:
         stem = path.name.removesuffix(SURVEY_SUFFIX)
-        for position in json.loads(path.read_text())["positions"]:
-            f = finding((stem, position["game"], position["turn"]), position)
-            if f:
-                out.append(f)
-    return sorted(out, key=lambda f: -f.sigmas)
+        survey = json.loads(path.read_text())
+        for position in survey["positions"]:
+            positions += 1
+            key = (stem, position["game"], position["turn"])
+            found += position_findings(key, position, survey["cut"])
+    return Survey(positions, sorted(found, key=lambda f: -f.sigmas))
 
 
 def mean_and_se(values: list[float]) -> tuple[float, float]:
@@ -149,18 +167,23 @@ def finding_line(f: Finding) -> str:
     )
 
 
-def report(found: list[Finding]) -> str:
+def report(survey: Survey) -> str:
     """The survey's findings as text. Win gains are win-equity points (percent)."""
-    gain, gain_se = mean_and_se([100 * f.gain for f in found])
-    winners = [f for f in found if f.beats_cut]
-    cost, cost_se = mean_and_se([100 * f.gain if f.beats_cut else 0.0 for f in found])
+    winners = survey.winners
+    winning_positions = {f.key for f in winners}
+    contested = {f.key for f in survey.findings}
+    best_gain = {}
+    for f in winners:
+        best_gain[f.key] = max(best_gain.get(f.key, 0.0), 100 * f.gain)
+    no_gain = [0.0] * (survey.positions - len(best_gain))
+    cost, cost_se = mean_and_se([*best_gain.values(), *no_gain])
     lines = [
-        f"{len(found)} positions confirmed",
-        f"screen's best outside move vs the cut's best, confirming sim: "
-        f"{gain:+.2f} +/- {gain_se:.2f} win pts",
-        f"outside move beats the cut by >= {MIN_SIGMA:g} sigma: {len(winners)} positions "
-        f"({len(winners) / len(found):.1%})",
-        f"what playing those would gain, per surveyed position: {cost:+.2f} +/- {cost_se:.2f} pts",
+        f"{survey.positions} positions surveyed; at {len(contested)} the screen left an outside "
+        f"move standing, {len(survey.findings)} such moves confirmed in all",
+        f"outside move beats the cut by >= {MIN_SIGMA:g} sigma: {len(winners)} moves at "
+        f"{len(winning_positions)} positions ({len(winning_positions) / survey.positions:.1%})",
+        f"what playing the best of them would gain, per surveyed position: "
+        f"{cost:+.2f} +/- {cost_se:.2f} win pts",
         "",
         "where they sit in the equity ranking:",
     ]
@@ -179,8 +202,8 @@ def gcg_name(key: PositionKey) -> str:
     return f"{stem}-g{game}-turn{turn + 1}.gcg"
 
 
-def write_review_dir(found: list[Finding], cut: int, gcg_dir: Path, review_dir: Path, command: str):
-    """Replace `review_dir` with the GCGs of the positions whose outside move beat
+def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, command: str):
+    """Replace `review_dir` with the GCGs of the positions where an outside move beat
     the cut and a README table of what the confirming sim said about each.
     `command` is the invocation that produced them, recorded for regeneration."""
     if review_dir.exists():
@@ -190,8 +213,8 @@ def write_review_dir(found: list[Finding], cut: int, gcg_dir: Path, review_dir: 
         "# Sim survey examples",
         "",
         f"Positions from HastyBot self-play where a play ranked outside the hasty top {cut} beat",
-        f"the best top-{cut} move. A screening sim of every candidate singled the play out; a",
-        "longer confirming sim on fresh rollouts, of that play and the top moves alone, then put",
+        f"the best top-{cut} move. A screening sim of every candidate singled out its few best",
+        "outside plays; a longer confirming sim on fresh rollouts, of those and the top moves, put",
         f"it at least {MIN_SIGMA:g} standard errors (of the paired win difference) above the best",
         "of them. Strongest first. Each GCG ends on the move the game actually played;",
         "`neural_rank_tool --gcg <file> --turn <turn>` opens the decision point. Win% and spread",
@@ -207,9 +230,7 @@ def write_review_dir(found: list[Finding], cut: int, gcg_dir: Path, review_dir: 
         "| spread | win gain | sigmas | spread gain |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
-    for f in found:
-        if not f.beats_cut:
-            continue
+    for f in survey.winners:
         shutil.copy(gcg_dir / gcg_name(f.key), review_dir / gcg_name(f.key))
         lines.append(
             f"| {gcg_name(f.key)} | {f.key[2] + 1} | {f.outside.move} "

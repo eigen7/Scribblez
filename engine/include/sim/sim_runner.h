@@ -259,6 +259,12 @@ class SimRunner {
   std::vector<RolloutResult> run_rollouts(const SimPosition& pos,
                                           const std::vector<Move>& candidates,
                                           uint64_t base_seed) const;
+  // As above with `rollouts` in place of the params' count, so a caller can sim
+  // in instalments: rollouts [a, b) of a candidate are run_rollouts(...,
+  // base_seed + a, b - a), whatever the instalments' sizes.
+  std::vector<RolloutResult> run_rollouts(const SimPosition& pos,
+                                          const std::vector<Move>& candidates, uint64_t base_seed,
+                                          int rollouts) const;
   int rollouts() const { return params_.rollouts; }
 
  private:

@@ -77,6 +77,10 @@ struct PairedWinDiff {
   double sq_sum = 0;  // of (a - b)^2
 };
 
+// True iff `d`, over `n` paired rollouts, puts a's win rate more than `sigmas`
+// standard errors BELOW b's: the early-stopping test of a racing sim.
+bool clearly_below(const PairedWinDiff& d, size_t n, double sigmas);
+
 PairedWinDiff paired_win_diff(std::span<const RolloutResult> a, std::span<const RolloutResult> b);
 
 // Reduce `candidate`'s rollouts, in order.

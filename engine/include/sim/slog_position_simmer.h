@@ -101,14 +101,26 @@ struct SlogSimConfig {
   // do not overlap) -- what a held-out estimate of a sim pick's value needs.
   uint64_t rollout_seed_offset = 0;
   int threads = 1;  // position workers
-  // What each position's rollouts are reduced to. Observations are the training
-  // currency (35 KB a candidate); summaries are the analysis one
+  // What each position's rollouts are reduced to: observations, the training
+  // currency (35 KB a candidate), or summaries, the analysis one
   // (sim/rollout_summary.h), cheap enough to keep for every legal play.
-  bool keep_observations = true;
   bool keep_summaries = false;
   // With summaries: the first this-many candidates are references, and every
   // candidate gets its paired win difference against each of them.
   int paired_references = 0;
+  // With summaries: race the candidates instead of simming each to the full
+  // count. `race_checkpoints` are ascending cumulative rollout counts ending at
+  // runner.rollouts; at each one a candidate whose win rate sits more than
+  // `race_sigmas` paired standard errors below the current leader's stops there
+  // (its summary keeps the rollouts it got, so `n` varies). The first
+  // `race_protected` candidates always run to the end. Common random numbers
+  // hold throughout -- rollout i is the same deal for everyone who reaches it
+  // -- so a survivor's rollouts are exactly those of an unraced sim. A race
+  // only decides what is worth simming on; it biases the survivors' estimates
+  // upward like any selection, so conclusions belong to a fresh sim of them.
+  std::vector<int> race_checkpoints;
+  double race_sigmas = 3.0;
+  int race_protected = 0;
 };
 
 struct SimmedPosition {

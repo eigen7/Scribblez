@@ -372,6 +372,12 @@ SimRunner::SimRunner(const Dictionary& dict, const Params& params) : dict_(dict)
 std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
                                                    const std::vector<Move>& candidates,
                                                    uint64_t base_seed) const {
+  return run_rollouts(pos, candidates, base_seed, params_.rollouts);
+}
+
+std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
+                                                   const std::vector<Move>& candidates,
+                                                   uint64_t base_seed, int rollouts) const {
   if (candidates.empty()) return {};
   // The documented non-endgame requirement: a non-empty bag at the decision
   // point. The pool holds the bag plus the opponent's (up to RACK_SIZE)
@@ -384,7 +390,8 @@ std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
   for (const Move& m : candidates) applied.push_back(apply_candidate(pos, m));
 
   Params params = params_;
-  params.threads = std::clamp(params_.threads, 1, std::max(1, params_.rollouts));
+  params.rollouts = rollouts;
+  params.threads = std::clamp(params_.threads, 1, std::max(1, rollouts));
   const InputEncodingSpec* leaf_spec = params.horizon_plies > 0 ? &leaf_spec_ : nullptr;
   std::vector<RolloutResult> results(candidates.size() * size_t(params.rollouts));
   std::vector<std::thread> workers;
