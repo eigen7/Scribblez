@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import AppManual from './AppManual';
 import AppBoard from './AppBoard';
+import AppSurvey from './AppSurvey';
 import MasterApp from './components/master/MasterApp';
 import RenderBoard from './RenderBoard';
 import './index.css';
@@ -17,6 +18,7 @@ const Root =
   : tool === 'board' ? AppBoard
   : tool === 'dashboard' ? MasterApp
   : tool === 'render' ? RenderBoard
+  : tool === 'survey' ? AppSurvey
   : App;
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
