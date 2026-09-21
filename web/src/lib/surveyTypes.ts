@@ -50,6 +50,7 @@ export interface SurveyPosition {
   mover: number;
   rack: string;
   opp_known_leave: string;
+  opp_rack_count: number;
   scores: [number, number];
   bag_size: number;
   num_legal_moves: number;
