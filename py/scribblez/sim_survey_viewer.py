@@ -118,15 +118,20 @@ def move_stats(summary: dict) -> dict:
         "end_swing": summary["end_swing_sum"] / n,
         "opp_stranded": summary["opp_stranded_sum"] / n,
         "self_stranded": summary["self_stranded_sum"] / n,
+        "self_passed_pct": 100 * summary["self_passed"] / n,
+        "opp_passed_pct": 100 * summary["opp_passed"] / n,
         "self_went_out_pct": 100 * summary["self_went_out"] / n,
         "opp_went_out_pct": 100 * summary["opp_went_out"] / n,
     }
     for side in ("opp_reply", "self_next"):
         s = summary[side]
+        spots = s["bingo_spots"]
         out[side] = {
             "score": s["score_sum"] / n,
             "bingo_pct": 100 * s["bingos"] / n,
-            "non_play_pct": 100 * s["non_plays"] / n,
+            # The commonest spot the bingos went down at, and the share of ALL
+            # rollouts that bingoed there.
+            "bingo_spot": {"at": spots[0][0], "pct": 100 * spots[0][1] / n} if spots else None,
             "adjacent_pct": 100 * s["adjacent"] / n,
             "score_hist": s["score_hist"],
         }
@@ -137,6 +142,7 @@ def move_entry(position: dict, entry: dict, finding: Finding | None) -> dict:
     c = position["candidates"][entry["candidate"]]
     out = {
         "move": c["move"],
+        "display": c["display"],
         "hasty_rank": c["equity_rank"] + 1,
         "equity": c["equity"],
         "score": c["score"],
@@ -153,7 +159,7 @@ def move_entry(position: dict, entry: dict, finding: Finding | None) -> dict:
             "gain_pct": 100 * finding.gain,
             "sigmas": finding.sigmas,
             "beats_cut": finding.beats_cut,
-            "versus": finding.inside.move,
+            "versus": finding.inside.display,
         }
     return out
 
@@ -185,6 +191,7 @@ def position_entry(
         "opp_known_leave": position["opp_known_leave"],
         "scores": position["scores"],
         "bag_size": position["bag_size"],
+        "solved_endgames": position["confirm_solved_endgames"],
         "num_legal_moves": position["num_legal_moves"],
         "played": position["played"],
         "board": board,

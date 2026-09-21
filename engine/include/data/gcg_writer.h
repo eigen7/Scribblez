@@ -54,6 +54,11 @@ struct GcgWriteOptions {
 // blank), "-TILES" for an exchange, "-" for a pass.
 std::string move_notation(const Board& board_before, const Move& m);
 
+// move_notation for a reader rather than a parser: the played-through squares
+// spelled out in parentheses instead of dotted -- "A4 (mO)u(N)T" for GCG's
+// "A4 ..u.T".
+std::string spelled_move_notation(const Board& board_before, const Move& m);
+
 std::string game_log_to_gcg(const GameLog& log);
 std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options);
 void write_game_log_gcg(const GameLog& log, std::ostream& out);

@@ -2,6 +2,7 @@
 
 #include "agent/agent.h"
 #include "agent/candidate_evaluator.h"
+#include "agent/endgame_hasty_bot.h"
 #include "agent/macondo_bot.h"
 #include "encoding/game_state_encoder.h"
 #include "game/game.h"
@@ -14,6 +15,7 @@
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <thread>
@@ -93,6 +95,14 @@ void stage_horizon_leaf(const SimPosition& pos, const Move& candidate, const Gam
   batcher->add(slot, horizon_mover == pos.mover);
 }
 
+// Whether `player` passed anywhere in `log`.
+bool passed(const GameLog& log, int player) {
+  for (int i = 0; i < log.num_records; ++i)
+    if (log.records[i].player == player && log.records[i].move.type() == MoveType::PASS)
+      return true;
+  return false;
+}
+
 // Plays one rollout of candidate `a` -- to a natural end, or to horizon_plies
 // when truncating -- and fills `out`'s moves plus, for a finished game, its
 // exact outcome. A truncated game instead stages the horizon state's encoded
@@ -127,9 +137,17 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
     set_terminal_outcome(log.final_scores[pos.mover] - log.final_scores[opponent], out);
     out->self_stranded = log.final_racks[pos.mover].point_value();
     out->opp_stranded = log.final_racks[opponent].point_value();
+    out->self_passed = passed(log, pos.mover);
+    out->opp_passed = passed(log, opponent);
     return;
   }
   stage_horizon_leaf(pos, candidate, log, game, *leaf_spec, batcher, slot);
+}
+
+std::unique_ptr<HastyBotAgent> make_rollout_agent(bool solve_endgames,
+                                                  const EndgameHastyBotAgent::Params& params) {
+  if (solve_endgames) return std::make_unique<EndgameHastyBotAgent>(params);
+  return std::make_unique<HastyBotAgent>(params.hasty);
 }
 
 // Worker t: plays rollout indices {t, t+threads, ...} of EVERY candidate (the
@@ -147,7 +165,14 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
   HastyBotAgent::Params p1;
   p1.thread_id = t;
   p1.name = "H1";
-  HastyBotAgent a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
+  // Temperature 0 -> deterministic greedy argmax, with or without solved endgames.
+  EndgameHastyBotAgent::Params e0, e1;
+  e0.hasty = p0;
+  e1.hasty = p1;
+  std::unique_ptr<HastyBotAgent> a0_owner = make_rollout_agent(params.solve_endgames, e0);
+  std::unique_ptr<HastyBotAgent> a1_owner = make_rollout_agent(params.solve_endgames, e1);
+  HastyBotAgent& a0 = *a0_owner;
+  HastyBotAgent& a1 = *a1_owner;
   std::optional<LeafBatcher> batcher;
   if (params.horizon_plies > 0) batcher.emplace(params.leaf_service, *leaf_spec, results);
   for (int i = t; i < params.rollouts; i += params.threads) {

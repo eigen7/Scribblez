@@ -143,6 +143,10 @@ struct RolloutResult {
   // is an opponent stuck with the Q. Both 0 for a truncated rollout.
   int self_stranded = 0;
   int opp_stranded = 0;
+  // Whether each side passed at any point of the rollout (the candidate itself
+  // not counted): a side with no play left, typically stuck with the Q.
+  bool self_passed = false;
+  bool opp_passed = false;
 };
 
 // What the end-of-game settlement moved the final delta by, root-mover POV:
@@ -222,6 +226,12 @@ class SimRunner {
     // calls itself. Non-owning; must outlive the runner.
     int horizon_plies = 0;
     nn::PositionEvalService* leaf_service = nullptr;
+    // Rollouts are HastyBot-vs-HastyBot; with this set both sides hand the
+    // endgame to the endgame solver (EndgameHastyBotAgent) instead of playing it
+    // greedily. Greedy endgames misjudge a candidate by what happens after the
+    // bag empties -- by tens of win% near the end of the game -- at several
+    // times the rollout cost.
+    bool solve_endgames = false;
   };
 
   // Throws util::CleanException on params no SimRunner can honour. The

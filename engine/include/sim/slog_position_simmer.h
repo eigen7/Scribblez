@@ -94,6 +94,12 @@ struct SlogSimConfig {
   // here must be 1: that utilizes cores better than within-position threading
   // and keeps every position's sims independent of the worker count.
   SimRunner::Params runner;
+  // Positions with at most this many unseen tiles (the bag plus the opponent's
+  // rack) sim with runner.solve_endgames on, whatever `runner` says; -1 = none.
+  // The solver only matters to rollouts that reach the endgame with the
+  // candidate's consequences still live, and costs several times a greedy
+  // rollout, so it is spent where the game is about to end.
+  int solve_endgames_max_unseen = -1;
   uint64_t seed = 0;  // run seed; each position sims under position_seed(seed, game, turn)
   // Added to each position's SimRunner seed and to nothing else, so runs that
   // differ only here sim the same positions and candidates with independent
@@ -128,8 +134,10 @@ struct SimmedPosition {
   SimPosition position;    // the replayed decision point
   uint64_t base_seed = 0;  // the SimRunner::run seed used
   SimCandidates candidates;
-  int bag_size = 0;  // tiles in the bag at the decision point
-  Move played;       // the move the game made here
+  int bag_size = 0;              // tiles in the bag at the decision point
+  int unseen = 0;                // the bag plus the opponent's rack
+  bool solved_endgames = false;  // the rollouts solved their endgames
+  Move played;                   // the move the game made here
   // Parallel to candidates.moves; each filled per SlogSimConfig.
   std::vector<SimObservation> observations;
   std::vector<RolloutSummary> summaries;

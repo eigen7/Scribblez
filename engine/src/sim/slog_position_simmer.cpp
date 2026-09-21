@@ -145,9 +145,29 @@ void reduce_rollouts(const SlogSimConfig& config, const SimRunner& runner, Simme
   }
 }
 
+// A worker's SimRunners: the config's own, and -- when the config solves the
+// endgames of late positions -- a second with solve_endgames on.
+struct PositionRunners {
+  PositionRunners(const Dictionary& dict, const SlogSimConfig& config);
+
+  SimRunner standard;
+  std::optional<SimRunner> solving;
+};
+
+SimRunner::Params with_solved_endgames(SimRunner::Params params) {
+  params.solve_endgames = true;
+  return params;
+}
+
+PositionRunners::PositionRunners(const Dictionary& dict, const SlogSimConfig& config)
+    : standard(dict, config.runner) {
+  if (config.solve_endgames_max_unseen >= 0)
+    solving.emplace(dict, with_solved_endgames(config.runner));
+}
+
 void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
                       binlog::PositionEncoder* encoder, std::vector<TurnRecord>* scratch,
-                      const SimRunner& runner, SimmedPosition* res) {
+                      const PositionRunners& runners, SimmedPosition* res) {
   const GameLog g = binlog::make_game_view(job->buf, w.game_idx, *scratch, nullptr);
   const int mover = encoder->replay_to_sampled(g, int(w.turn_idx), /*post_move=*/false);
   const SimPosition pos =
@@ -164,6 +184,9 @@ void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
   if (res->candidates.moves.empty()) return;
   res->candidates.equities = HastyEquity::instance().equities(
     res->candidates.moves, pos.board, res->bag_size, pos.opp_leave, pos.rack);
+  res->unseen = unseen_pool(pos.board, pos.rack, 0).size();
+  res->solved_endgames = runners.solving && res->unseen <= job->config.solve_endgames_max_unseen;
+  const SimRunner& runner = res->solved_endgames ? *runners.solving : runners.standard;
   if (job->run_sims) reduce_rollouts(job->config, runner, res);
 }
 
@@ -172,14 +195,14 @@ void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
 void run_position_worker(SimJob* job) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(InputEncodingSpec{&job->dict});
-  const SimRunner runner(job->dict, job->config.runner);
+  const PositionRunners runners(job->dict, job->config);
   const size_t n = job->work.size();
   for (size_t i = job->next.fetch_add(1); i < n; i = job->next.fetch_add(1)) {
     const binlog::GamePositionIndex& w = job->work[i];
     // Name the position a runtime failure (e.g. the leaf-model NaN guard) hit,
     // so an unattended multi-file run leaves a lead instead of a bare message.
     try {
-      sim_one_position(w, job, &encoder, &scratch, runner, &job->results[i]);
+      sim_one_position(w, job, &encoder, &scratch, runners, &job->results[i]);
     } catch (const std::exception& e) {
       throw util::Exception("game {} turn {}: {}", w.game_idx, w.turn_idx, e.what());
     }

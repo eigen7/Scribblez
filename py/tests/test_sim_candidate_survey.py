@@ -31,7 +31,13 @@ def position(cut_wins: list[int], outside: dict[int, int]) -> dict:
     ranks = [*range(len(cut_wins)), *outside]
     wins = [*cut_wins, *outside.values()]
     candidates = [
-        {"move": f"M{rank}", "equity_rank": rank, "is_setup": False, "screen": summary(50)}
+        {
+            "move": f"M{rank}",
+            "display": f"M({rank})",
+            "equity_rank": rank,
+            "is_setup": False,
+            "screen": summary(50),
+        }
         for rank in ranks
     ]
     confirm = [
@@ -89,4 +95,13 @@ def test_review_dir_collects_the_gcg_and_a_readme(tmp_path):
     assert (tmp_path / "review" / name).exists()
     readme = (tmp_path / "review" / "README.md").read_text()
     assert "the command" in readme
-    assert "M62 (#63) | 50.0 | +5.0 | M0 | 40.0 | +4.0 | +10.0 | +3.3 | +1.0 |" in readme
+    assert "M(62) (#63) | 50.0 | +5.0 | M(0) | 40.0 | +4.0 | +10.0 | +3.3 | +1.0 |" in readme
+
+
+def test_winning_positions_counts_positions_not_moves(tmp_path):
+    two_winners = position([40], {62: 55, 80: 56})
+    survey = load_survey(
+        write_survey(tmp_path, [two_winners, position([40], {62: 41}) | {"game": 1}])
+    )
+    assert len(survey.winners) == 2
+    assert survey.winning_positions == {("chunk", 0, 3)}

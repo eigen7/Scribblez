@@ -3,12 +3,15 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import AppSurvey from '../AppSurvey';
 import { SurveyData, SurveyMove, SurveyPosition } from '../lib/surveyTypes';
 
-const nextMove = { score: 20, bingo_pct: 5, non_play_pct: 1, adjacent_pct: 30, score_hist: [1, 2] };
+const nextMove = {
+  score: 20, bingo_pct: 5, bingo_spot: { at: 'E12', pct: 3.5 }, adjacent_pct: 30, score_hist: [1, 2],
+};
 
 // A one-tile move laying its last letter at row 7 of `col`.
 function move(name: string, rank: number, win: number, outside: boolean, col = 7): SurveyMove {
   return {
     move: name,
+    display: name.replace('FIND', 'F(I)ND'),
     hasty_rank: rank,
     equity: 10,
     score: 12,
@@ -17,7 +20,8 @@ function move(name: string, rank: number, win: number, outside: boolean, col = 7
     tiles: [{ row: 7, col, letter: name[name.length - 1], isBlank: false }],
     stats: {
       rollouts: 5000, win_pct: win, spread: 3, spread_sd: 80, delta_hist: [0, 3, 1],
-      end_swing: 2, opp_stranded: 4, self_stranded: 1, self_went_out_pct: 60,
+      end_swing: 2, opp_stranded: 4, self_stranded: 1, self_passed_pct: 7.5,
+      opp_passed_pct: 0, self_went_out_pct: 60,
       opp_went_out_pct: 40, opp_reply: nextMove, self_next: nextMove,
     },
     ...(outside ? { gain_pct: 6, sigmas: 4.2, beats_cut: true, versus: 'H8 TOP' } : {}),
@@ -27,7 +31,7 @@ function move(name: string, rank: number, win: number, outside: boolean, col = 7
 function position(name: string, moves: SurveyMove[]): SurveyPosition {
   return {
     name, gcg: `${name}.gcg`, turn: 12, mover: 1, rack: 'ABCDEF?', opp_known_leave: 'QU',
-    opp_rack_count: 7,
+    opp_rack_count: 7, solved_endgames: true,
     scores: [200, 180], bag_size: 9, num_legal_moves: 300, played: 'H8 TOP',
     board: Array.from({ length: 15 }, () => Array<string | null>(15).fill(null)),
     moves,
@@ -81,10 +85,10 @@ describe('AppSurvey', () => {
   it('opens on the best outside play beside hasty #1, both on the board', async () => {
     render(<AppSurvey />);
     await waitFor(() => expect(screen.getByText(/1 \/ 2 · first/)).toBeInTheDocument());
-    expect(statsMoves()).toEqual(['C3 FIND', 'J1 MUD']);
+    expect(statsMoves()).toEqual(['C3 F(I)ND', 'J1 MUD']);
     expect(screen.getByText('+6.0 pts, +4.2σ')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /J1 MUD/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: /C3 FIND/ })).toHaveTextContent('12'); // its points
+    expect(screen.getByRole('button', { name: /C3 F\(I\)ND/ })).toHaveTextContent('12'); // its points
     // The two moves share no square, so both sit on the board, each in its
     // section's tint, with no alternation; the rack stays whole.
     expect(previewed()).toEqual(['D', 'D']); // MUD's D at col 3, FIND's at col 7
@@ -100,7 +104,7 @@ describe('AppSurvey', () => {
 
   it('lines the two stats panels up row for row', async () => {
     render(<AppSurvey />);
-    await screen.findByRole('button', { name: /C3 FIND/ });
+    await screen.findByRole('button', { name: /C3 F\(I\)ND/ });
     const [outside, hasty] = [...document.querySelectorAll('.survey-stats')];
     const labels = (panel: Element) =>
       [...panel.querySelectorAll('.survey-stat-row, .survey-stat-title, .survey-hist')].map(
@@ -108,6 +112,12 @@ describe('AppSurvey', () => {
       );
     expect(labels(hasty)).toEqual(labels(outside));
     expect(screen.queryByText('high-value setup')).not.toBeInTheDocument();
+    expect(screen.queryByText('exchange / pass')).not.toBeInTheDocument();
+    // The commonest bingo spot under each bingo row; passes in the game-end block.
+    expect(screen.getAllByText('bingo@E12')).toHaveLength(4);
+    expect(screen.getAllByText('we pass')).toHaveLength(2);
+    expect(screen.getAllByText('7.5%')).toHaveLength(2);
+    expect(screen.getByText(/endgames solved/)).toBeInTheDocument();
   });
 
   it('alternates two selected moves that share a square', async () => {
@@ -139,7 +149,7 @@ describe('AppSurvey', () => {
 
   it('names each histogram bar in its own tooltip, on a scale the panels share', async () => {
     render(<AppSurvey />);
-    await screen.findByRole('button', { name: /C3 FIND/ });
+    await screen.findByRole('button', { name: /C3 F\(I\)ND/ });
     const slots = [...document.querySelectorAll<HTMLElement>('.survey-hist-slot')];
     const titles = slots.map((el) => el.getAttribute('title'));
     // The margin histogram's first bars, then a next-move score histogram's.
@@ -154,12 +164,12 @@ describe('AppSurvey', () => {
     render(<AppSurvey />);
     fireEvent.click(await screen.findByRole('button', { name: /H8 TOP/ }));
     fireEvent.keyDown(window, { key: 'ArrowUp' }); // within the hasty section, just clicked
-    expect(statsMoves()).toEqual(['C3 FIND', 'J1 MUD']);
+    expect(statsMoves()).toEqual(['C3 F(I)ND', 'J1 MUD']);
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     expect(screen.getByText(/2 \/ 2 · second/)).toBeInTheDocument();
     expect(statsMoves()).toEqual(['A1 QAX', 'B2 TOY']); // hasty #1 again, whatever was selected before
     expect(screen.getByRole('button', { name: 'next position' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'previous position' }));
-    expect(statsMoves()).toEqual(['C3 FIND', 'J1 MUD']); // a revisited position reopens afresh
+    expect(statsMoves()).toEqual(['C3 F(I)ND', 'J1 MUD']); // a revisited position reopens afresh
   });
 });

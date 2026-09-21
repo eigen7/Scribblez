@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <bitset>
 #include <cmath>
+#include <format>
+#include <tuple>
+#include <utility>
 
 namespace scribblez {
 
@@ -39,7 +42,10 @@ void add_next_move(const Move& m, const SquareSet& beside_candidate, NextMoveSta
   }
   stats->score_sum += m.score();
   ++stats->score_hist[size_t(std::min(m.score() / kScoreBinWidth, kScoreBins - 1))];
-  stats->bingos += m.num_glyphs() == RACK_SIZE;
+  if (m.num_glyphs() == RACK_SIZE) {
+    ++stats->bingos;
+    ++stats->bingo_spots[bingo_spot(m)];
+  }
   stats->adjacent += places_tile_in(m, beside_candidate);
 }
 
@@ -61,9 +67,25 @@ void add_game_end(const RolloutResult& r, RolloutSummary* s) {
   const int swing = end_rack_swing(r);
   s->end_swing_sum += swing;
   ++s->end_swing_hist[size_t(end_swing_bin(swing))];
+  s->self_passed += r.self_passed;
+  s->opp_passed += r.opp_passed;
 }
 
 }  // namespace
+
+uint16_t bingo_spot(const Move& bingo) {
+  int row = -1, col = -1;
+  visit_placed_squares(bingo, [&](int r, int c) {
+    if (row < 0) std::tie(row, col) = std::pair(r, c);
+  });
+  return uint16_t((bingo.horizontal() ? 1 : 0) << 8 | row << 4 | col);
+}
+
+std::string bingo_spot_name(uint16_t spot) {
+  const int row = (spot >> 4 & 15) + 1;
+  const char col = char('A' + (spot & 15));
+  return spot >> 8 ? std::format("{}{}", row, col) : std::format("{}{}", col, row);
+}
 
 PairedWinDiff paired_win_diff(std::span<const RolloutResult> a, std::span<const RolloutResult> b) {
   PairedWinDiff out;
