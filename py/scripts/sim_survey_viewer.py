@@ -10,6 +10,7 @@ through the positions, strongest first.
 
 Usage:
     ./py/scripts/sim_survey_viewer.py --survey-dir /workspace/mount/sim-surveys/all-plays-seed1
+    ./py/scripts/sim_survey_viewer.py --tag <a blind_spots dashboard tag>
 """
 
 import argparse
@@ -25,6 +26,7 @@ from scribblez.dashboard.react_server import WEB_DIR, reclaim_port
 from scribblez.service_urls import service_url
 from scribblez.sim_candidate_survey import MIN_SIGMA
 from scribblez.sim_survey_viewer import viewer_data
+from scribblez.workloads import blind_spots
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 DEFAULT_API_PORT = 8091
@@ -33,7 +35,12 @@ DEFAULT_DEV_PORT = 5181
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
-    p.add_argument("--survey-dir", type=Path, required=True, help="a finished survey's --slog-dir")
+    p.add_argument("--survey-dir", type=Path, help="a finished survey's --slog-dir")
+    p.add_argument("--gcg-dir", type=Path, help="the exported games (default: <survey-dir>/gcg)")
+    p.add_argument(
+        "--tag",
+        help="browse this blind_spots dashboard tag instead of a --survey-dir",
+    )
     p.add_argument(
         "--min-sigmas",
         type=float,
@@ -68,7 +75,11 @@ def survey_handler(payload: bytes) -> type[BaseHTTPRequestHandler]:
 
 def main() -> int:
     args = parse_args()
-    data = viewer_data(args.survey_dir, args.min_sigmas)
+    if args.tag:
+        args.survey_dir, args.gcg_dir = blind_spots.survey_dirs(args.tag)
+    elif not args.survey_dir:
+        raise SystemExit("pass --survey-dir or --tag")
+    data = viewer_data(args.survey_dir, args.min_sigmas, args.gcg_dir)
     if not data["positions"]:
         print(f"no position in {args.survey_dir} clears {args.min_sigmas} sigma", file=sys.stderr)
         return 1

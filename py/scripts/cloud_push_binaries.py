@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Upload the locally built engine binaries + py/ tree to the results bucket.
 
-Packages target/engine/{play_game,sim_obs_tool,libscribblez_ffi.so} and the
+Packages the engine binaries workers run (cloud.bundles.BUNDLE_BINARY_NAMES) and the
 py/ tree into a git-SHA-stamped bundle under bundles/<bundle_id>/ in R2, and
 points bundles/LATEST at it. Remote worker containers download the bundle at startup,
 so this -- not a Docker push -- is the code-deployment step: build with
