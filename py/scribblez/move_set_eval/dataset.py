@@ -44,7 +44,7 @@ import numpy as np
 import torch
 
 from scribblez.dataset import row_layout
-from scribblez.ffi import decode_rows, set_opp_leave_input
+from scribblez.ffi import cross_check_deltas, decode_rows, set_opp_leave_input
 
 from . import moves as move_enc
 from .targets import (
@@ -55,6 +55,17 @@ from .targets import (
     read_mset,
     read_mset_flags,
 )
+
+# Batch key -> scribblez.ffi.cross_check_deltas key, each (M, max_cross_deltas):
+# the entries of a move's sparse cross-check change (axis, square, the letter
+# masks before and after) and the mask marking the real ones.
+CROSS_DELTA_KEYS = {
+    "move_cross_axes": "axes",
+    "move_cross_squares": "squares",
+    "move_cross_old_masks": "old_masks",
+    "move_cross_new_masks": "new_masks",
+    "move_cross_mask": "delta_mask",
+}
 
 
 def adopt_information_condition(mset_files: Iterable[str | Path]):
@@ -119,13 +130,18 @@ class MsetDataset:
         *,
         mset_files: Iterable[str | Path] | None = None,
         select: Callable[[Path], set[tuple[int, int]]] | None = None,
+        with_cross_check_deltas: bool = False,
     ):
         """Exactly one source: `data_dir` (directories whose complete pairs are
         globbed) or `mset_files` (explicit .mset paths — the file-level-split
         case, where train and held-out pairs share a directory). `select`,
         given an .mset path, names the (game_index, turn_index) positions to
         keep from it; the rest of the file is not held (the evidence trainer
-        reads only the trajectory positions' labels this way)."""
+        reads only the trajectory positions' labels this way).
+        `with_cross_check_deltas` adds each move's cross-check change to the
+        batches (CROSS_DELTA_KEYS); no model consumes it yet, so it is off
+        unless asked for."""
+        self._with_cross_check_deltas = with_cross_check_deltas
         assert (data_dir is None) != (mset_files is None), (
             "pass exactly one of data_dir or mset_files"
         )
@@ -391,9 +407,41 @@ class MsetDataset:
             "target_wld": torch.from_numpy(all_targets[:, :3].copy()),
             "target_score_diff": torch.from_numpy(all_targets[:, 3:5].copy()),
         }
+        if self._with_cross_check_deltas:
+            batch_out.update(self._cross_check_deltas(batch, by_file))
         if self.has_planes:
             target_planes = np.concatenate(
                 [dequantize_planes(pos.planes, pos.plane_scales) for pos in batch]
             )
             batch_out["target_planes"] = torch.from_numpy(target_planes)
         return batch_out
+
+    def _cross_check_deltas(
+        self, batch: list[_Position], by_file: dict[int, list[int]]
+    ) -> dict[str, torch.Tensor]:
+        """Each move's cross-check entries (scribblez.ffi.cross_check_deltas),
+        one replay call per source file like the board inputs, scattered back
+        into the batch's flattened move order."""
+        counts = np.array([len(pos.moves) for pos in batch], dtype=np.int64)
+        starts = np.cumsum(counts) - counts
+        out: dict[str, np.ndarray] = {}
+        for file_id, locals_ in by_file.items():
+            deltas = cross_check_deltas(
+                self._slogs[file_id],
+                np.array([batch[j].game_index for j in locals_], dtype=np.int64),
+                np.array([batch[j].turn_index for j in locals_], dtype=np.int64),
+                counts[locals_],
+                np.concatenate([batch[j].moves for j in locals_]),
+            )
+            rows = np.concatenate([np.arange(starts[j], starts[j] + counts[j]) for j in locals_])
+            for key, values in deltas.items():
+                if key not in out:
+                    out[key] = np.zeros((int(counts.sum()), *values.shape[1:]), dtype=values.dtype)
+                out[key][rows] = values
+        # torch has no usable uint32: the 26-bit letter masks ride as int64.
+        return {
+            batch_key: torch.from_numpy(
+                out[key].astype(np.int64 if "masks" in key else out[key].dtype)
+            )
+            for batch_key, key in CROSS_DELTA_KEYS.items()
+        }
