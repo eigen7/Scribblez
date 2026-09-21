@@ -27,6 +27,7 @@ from scribblez.sim_candidate_survey import (
 )
 
 BOARD_SIZE = 15
+TOTAL_TILES = 100
 
 # The standard premium layout, one row per string: '=' triple word, '-' double
 # word, '"' triple letter, "'" double letter.
@@ -173,6 +174,8 @@ def position_entry(
     outside = sorted((m for m in moves if "sigmas" in m), key=lambda m: -m["stats"]["win_pct"])
     inside = sorted((m for m in moves if "sigmas" not in m), key=lambda m: m["hasty_rank"])
     gcg = gcg_name(key)
+    board = board_before((gcg_dir / gcg).read_text(), position["turn"])
+    on_board = sum(cell is not None for row in board for cell in row)
     return {
         "name": gcg.removesuffix(".gcg"),
         "gcg": gcg,
@@ -184,7 +187,9 @@ def position_entry(
         "bag_size": position["bag_size"],
         "num_legal_moves": position["num_legal_moves"],
         "played": position["played"],
-        "board": board_before((gcg_dir / gcg).read_text(), position["turn"]),
+        "board": board,
+        # Every tile is on the board, on a rack, or in the bag.
+        "opp_rack_count": TOTAL_TILES - on_board - len(position["rack"]) - position["bag_size"],
         "moves": outside + inside,
     }
 

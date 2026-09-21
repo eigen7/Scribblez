@@ -1,11 +1,25 @@
 import { useCallback, useEffect, useState } from 'react';
 import Board from './components/Board';
 import Rack from './components/Rack';
+import UnseenTiles from './components/UnseenTiles';
+import { oppRackTiles } from './lib/oppRack';
 import { TileInfo } from './types';
 import { SurveyData, SurveyMove, SurveyPosition, isOutsidePlay } from './lib/surveyTypes';
 
 const NOOP = () => {};
+// How long each of two selected moves holds the board before the other fades in.
+const SHOW_MS = 3000;
 
+// The list's two sections; at most one move is selected in each.
+type Section = 'outside' | 'hasty';
+type Selection = Record<Section, number | null>; // an index into position.moves
+
+const SECTION_TITLE: Record<Section, string> = {
+  outside: 'Best-simming plays outside the top',
+  hasty: 'Hasty top moves',
+};
+
+const sectionOf = (m: SurveyMove): Section => (isOutsidePlay(m) ? 'outside' : 'hasty');
 const signed = (v: number, digits = 1) => `${v >= 0 ? '+' : ''}${v.toFixed(digits)}`;
 
 function rackTiles(rack: string, tileScores: Record<string, number>): TileInfo[] {
@@ -16,9 +30,9 @@ function rackTiles(rack: string, tileScores: Record<string, number>): TileInfo[]
 
 // The rack slots a move's tiles come from (a blank's slot is '?'), so the rack
 // under the board shows the leave.
-function usedRackIndices(rack: string, move: SurveyMove): Set<number> {
+function usedRackIndices(rack: string, move: SurveyMove | null): Set<number> {
   const used = new Set<number>();
-  for (const t of move.tiles) {
+  for (const t of move?.tiles ?? []) {
     const want = t.isBlank ? '?' : t.letter;
     const slot = [...rack].findIndex((ch, i) => ch === want && !used.has(i));
     if (slot >= 0) used.add(slot);
@@ -26,14 +40,42 @@ function usedRackIndices(rack: string, move: SurveyMove): Set<number> {
   return used;
 }
 
-// A histogram as a row of bars, scaled to its tallest bin. `zeroBin`, when
+// A position opens on its best outside play beside the top move that play was
+// measured against -- the comparison the survey is about.
+function openingSelection(position: SurveyPosition): Selection {
+  const outside = position.moves.findIndex(isOutsidePlay);
+  const versus = position.moves.findIndex(
+    (m) => !isOutsidePlay(m) && m.move === position.moves[outside]?.versus,
+  );
+  return { outside: outside >= 0 ? outside : null, hasty: versus >= 0 ? versus : null };
+}
+
+// What each bin of the tool's histograms covers (sim/rollout_summary.h).
+const scoreBinLabel = (bin: number, bins: number) =>
+  bin === bins - 1 ? 'scored 100 or more' : `scored ${10 * bin}–${10 * bin + 9}`;
+const marginBinLabel = (bin: number, bins: number) => {
+  if (bin === 0) return 'final margin below −200';
+  if (bin === bins - 1) return 'final margin +200 or more';
+  const lo = -200 + 25 * (bin - 1);
+  return `final margin ${signed(lo, 0)} to ${signed(lo + 24, 0)}`;
+};
+
+// A histogram as a row of bars, scaled to its tallest bin, each bar's tooltip
+// saying what it covers and how many rollouts landed there. `zeroBin`, when
 // given, is the bin a zero value falls in, marked so the eye finds the sign.
-function Histogram({ bins, zeroBin, title }: { bins: number[]; zeroBin?: number; title: string }) {
+function Histogram({
+  bins, zeroBin, binLabel,
+}: { bins: number[]; zeroBin?: number; binLabel: (bin: number, bins: number) => string }) {
   const peak = Math.max(1, ...bins);
+  const total = Math.max(1, bins.reduce((a, b) => a + b, 0));
   return (
-    <div className="survey-hist" title={title}>
+    <div className="survey-hist">
       {bins.map((n, i) => (
-        <div className={`survey-hist-slot${i === zeroBin ? ' zero' : ''}`} key={i}>
+        <div
+          className={`survey-hist-slot${i === zeroBin ? ' zero' : ''}`}
+          key={i}
+          title={`${binLabel(i, bins.length)}: ${n} rollouts (${((100 * n) / total).toFixed(1)}%)`}
+        >
           <div className="survey-hist-bar" style={{ height: `${(100 * n) / peak}%` }} />
         </div>
       ))}
@@ -57,20 +99,20 @@ function NextMovePanel({ title, stats }: { title: string; stats: SurveyMove['sta
       <StatRow label="mean score" value={stats.score.toFixed(1)} />
       <StatRow label="bingo" value={`${stats.bingo_pct.toFixed(1)}%`} />
       <StatRow
-        label="beside this move's tiles"
+        label="beside this move"
         value={`${stats.adjacent_pct.toFixed(1)}%`}
         hint="plays that laid a tile next to one this move placed"
       />
       <StatRow label="exchange / pass" value={`${stats.non_play_pct.toFixed(1)}%`} />
-      <Histogram bins={stats.score_hist} title="score, by tens (last bar: 100+)" />
+      <Histogram bins={stats.score_hist} binLabel={scoreBinLabel} />
     </div>
   );
 }
 
-function StatsPanel({ move }: { move: SurveyMove }) {
+function StatsPanel({ move, section }: { move: SurveyMove; section: Section }) {
   const s = move.stats;
   return (
-    <div className="survey-stats">
+    <div className={`survey-stats survey-tint-${section}`}>
       <div className="survey-stats-move">{move.move}</div>
       <div className="survey-stat-group">
         <StatRow label="hasty rank" value={`#${move.hasty_rank}`} />
@@ -79,18 +121,18 @@ function StatsPanel({ move }: { move: SurveyMove }) {
         {move.is_setup && <StatRow label="high-value setup" value="yes" />}
       </div>
       <div className="survey-stat-group">
-        <div className="survey-stat-title">Confirming sim ({s.rollouts} rollouts)</div>
+        <div className="survey-stat-title">Confirming sim ({s.rollouts})</div>
         <StatRow label="win" value={`${s.win_pct.toFixed(1)}%`} />
         <StatRow label="spread" value={`${signed(s.spread)} ± ${s.spread_sd.toFixed(0)} sd`} />
         {move.sigmas !== undefined && (
           <StatRow
             label={`vs ${move.versus}`}
-            value={`${signed(move.gain_pct ?? 0)} win pts, ${signed(move.sigmas)}σ`}
-            hint="against the best of the hasty top moves, paired over the same rollouts"
+            value={`${signed(move.gain_pct ?? 0)} pts, ${signed(move.sigmas)}σ`}
+            hint="win% against the best of the hasty top moves, paired over the same rollouts"
           />
         )}
         {/* bin 9 of the tool's 18 holds margins in [0, 25) */}
-        <Histogram bins={s.delta_hist} zeroBin={9} title="final margin, by 25s from −200 to +200" />
+        <Histogram bins={s.delta_hist} zeroBin={9} binLabel={marginBinLabel} />
       </div>
       <NextMovePanel title="Opponent's reply" stats={s.opp_reply} />
       <NextMovePanel title="Our next move" stats={s.self_next} />
@@ -113,13 +155,16 @@ function MoveRow({
     .filter(Boolean)
     .join(' ');
   return (
-    <button type="button" className={classes} onClick={onSelect}>
+    <button type="button" className={classes} aria-pressed={selected} onClick={onSelect}>
       <span className="survey-move-rank">#{move.hasty_rank}</span>
       <span className="survey-move-name">
         {move.move}
         {played && <span className="survey-move-played" title="the move the game played"> ●</span>}
       </span>
-      <span className="survey-move-win">{move.stats.win_pct.toFixed(1)}%</span>
+      <span className="survey-move-score" title="points the move scores">{move.score}</span>
+      <span className="survey-move-win" title="confirming-sim win%">
+        {move.stats.win_pct.toFixed(1)}%
+      </span>
       <span className="survey-move-sigma">
         {move.sigmas !== undefined ? `${signed(move.sigmas)}σ` : ''}
       </span>
@@ -127,24 +172,28 @@ function MoveRow({
   );
 }
 
-function MoveListPanel({
-  position, selected, onSelect,
-}: { position: SurveyPosition; selected: number; onSelect: (i: number) => void }) {
-  const firstTop = position.moves.findIndex((m) => !isOutsidePlay(m));
+function MoveSection({
+  section, position, selection, onToggle,
+}: {
+  section: Section;
+  position: SurveyPosition;
+  selection: Selection;
+  onToggle: (section: Section, index: number) => void;
+}) {
   return (
-    <div className="survey-moves">
-      {position.moves.map((m, i) => (
-        <div key={m.move}>
-          {i === 0 && <div className="survey-moves-title">Best-simming plays outside the top</div>}
-          {i === firstTop && <div className="survey-moves-title">Hasty top moves</div>}
+    <div className={`survey-move-section survey-tint-${section}`}>
+      <div className="survey-moves-title">{SECTION_TITLE[section]}</div>
+      {position.moves.map((m, i) =>
+        sectionOf(m) !== section ? null : (
           <MoveRow
+            key={m.move}
             move={m}
-            selected={i === selected}
+            selected={selection[section] === i}
             played={m.move === position.played}
-            onSelect={() => onSelect(i)}
+            onSelect={() => onToggle(section, i)}
           />
-        </div>
-      ))}
+        ),
+      )}
     </div>
   );
 }
@@ -165,7 +214,6 @@ function PositionHeader({
         <div className="survey-header-sub">
           turn {position.turn} · to move {mine}–{theirs} ({signed(mine - theirs, 0)}) · bag{' '}
           {position.bag_size} · {position.num_legal_moves} legal moves
-          {position.opp_known_leave && ` · opponent kept ${position.opp_known_leave}`}
         </div>
       </div>
       <button
@@ -180,15 +228,161 @@ function PositionHeader({
   );
 }
 
+// The section whose selected move the board shows right now: the only selected
+// one, or -- with a move selected in both -- each in turn, SHOW_MS apiece.
+function useShownSection(selection: Selection): Section | null {
+  const both = selection.outside !== null && selection.hasty !== null;
+  const [turn, setTurn] = useState<Section>('outside');
+  useEffect(() => {
+    if (!both) return undefined;
+    setTurn('outside');
+    const id = setInterval(
+      () => setTurn((t) => (t === 'outside' ? 'hasty' : 'outside')),
+      SHOW_MS,
+    );
+    return () => clearInterval(id);
+  }, [both, selection.outside, selection.hasty]);
+  if (both) return turn;
+  if (selection.outside !== null) return 'outside';
+  return selection.hasty !== null ? 'hasty' : null;
+}
+
+function BoardColumn({
+  data, position, selection,
+}: { data: SurveyData; position: SurveyPosition; selection: Selection }) {
+  const shown = useShownSection(selection);
+  const move = shown === null ? null : position.moves[selection[shown]!];
+  const alternating = selection.outside !== null && selection.hasty !== null;
+  const classes = ['survey-board', shown && `showing-${shown}`, alternating && 'alternating']
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <div className={classes}>
+      <Rack
+        tiles={oppRackTiles(
+          position.opp_known_leave,
+          position.opp_known_leave.length,
+          position.opp_rack_count,
+          data.tile_scores,
+        )}
+        usedIndices={new Set()}
+        label="Opponent (green: drawn since their last move)"
+        interactive={false}
+        hideScoreForQuestion
+      />
+      {/* Keyed by the shown move, so each one's tiles mount afresh and the
+          fade-in restarts even on squares both moves use. */}
+      <div key={move?.move ?? 'none'}>
+        <Board
+          board={position.board}
+          bonuses={data.bonuses}
+          candidateTiles={move?.tiles ?? []}
+          tileScores={data.tile_scores}
+          cursorRow={null}
+          cursorCol={null}
+          cursorDir={null}
+          interactive={false}
+          onCellClick={NOOP}
+          onCellDrop={NOOP}
+        />
+      </div>
+      <Rack
+        tiles={rackTiles(position.rack, data.tile_scores)}
+        usedIndices={usedRackIndices(position.rack, move)}
+        label="To move"
+        interactive={false}
+        onTileClick={NOOP}
+      />
+    </div>
+  );
+}
+
+function UnseenPane({ data, position }: { data: SurveyData; position: SurveyPosition }) {
+  return (
+    <UnseenTiles
+      alsoSeen={position.opp_known_leave}
+      state={{
+        type: 'state',
+        board: position.board,
+        bonuses: data.bonuses,
+        rack: rackTiles(position.rack, data.tile_scores).map((t) => ({
+          ...t,
+          letter: t.isBlank ? '?' : t.letter,
+        })),
+        scores: position.scores,
+        player_names: ['Player 1', 'Player 2'],
+        bag_count: position.bag_size,
+        opponent_rack_count: position.opp_rack_count,
+        your_turn: false,
+        game_over: false,
+      }}
+    />
+  );
+}
+
+// One position's view. Mounted afresh per position (keyed by the caller), so the
+// selection always opens on that position's own comparison. ↑/↓ move the
+// selection within the section last clicked.
+function PositionView({ data, position }: { data: SurveyData; position: SurveyPosition }) {
+  const [selection, setSelection] = useState<Selection>(() => openingSelection(position));
+  const [active, setActive] = useState<Section>('outside');
+
+  const toggle = useCallback((section: Section, i: number) => {
+    setActive(section);
+    setSelection((s) => ({ ...s, [section]: s[section] === i ? null : i }));
+  }, []);
+  // Move the active section's selection to its neighbouring row.
+  const nudge = useCallback(
+    (d: number) => {
+      const rows = position.moves.flatMap((m, i) => (sectionOf(m) === active ? [i] : []));
+      if (!rows.length) return;
+      setSelection((s) => {
+        const at = rows.indexOf(s[active] ?? -1);
+        const next = at < 0 ? 0 : Math.min(Math.max(at + d, 0), rows.length - 1);
+        return { ...s, [active]: rows[next] };
+      });
+    },
+    [position, active],
+  );
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      nudge(e.key === 'ArrowUp' ? -1 : 1);
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [nudge]);
+
+  return (
+    <div className="survey-body">
+      <div className="survey-left">
+        <MoveSection section="outside" position={position} selection={selection} onToggle={toggle} />
+        <MoveSection section="hasty" position={position} selection={selection} onToggle={toggle} />
+        <UnseenPane data={data} position={position} />
+      </div>
+      <BoardColumn data={data} position={position} selection={selection} />
+      <div className="survey-stats-columns">
+        {(['outside', 'hasty'] as const).map(
+          (section) =>
+            selection[section] !== null && (
+              <StatsPanel key={section} section={section} move={position.moves[selection[section]!]} />
+            ),
+        )}
+      </div>
+    </div>
+  );
+}
+
 // The sim-survey viewer (`?tool=survey`): step through the positions where a
-// play from outside the HastyBot top moves out-simmed them, pick a move to see
-// it on the board, and read its confirming-sim statistics. ←/→ change position,
-// ↑/↓ change move.
+// play from outside the HastyBot top moves out-simmed them. Up to one move is
+// selected in each section of the list (click again to deselect); their
+// confirming-sim statistics sit side by side, and the board shows the selected
+// move -- both in turn, fading, when there are two. ←/→ change position.
 export default function AppSurvey() {
   const [data, setData] = useState<SurveyData | null>(null);
   const [error, setError] = useState('');
   const [index, setIndex] = useState(0);
-  const [selected, setSelected] = useState(0);
 
   useEffect(() => {
     fetch('/api/survey')
@@ -198,61 +392,28 @@ export default function AppSurvey() {
   }, []);
 
   const total = data?.positions.length ?? 0;
-  const moveCount = data?.positions[index]?.moves.length ?? 0;
   const step = useCallback(
-    (d: number) => {
-      setIndex((i) => Math.min(Math.max(i + d, 0), Math.max(total - 1, 0)));
-      setSelected(0);
-    },
+    (d: number) => setIndex((i) => Math.min(Math.max(i + d, 0), Math.max(total - 1, 0))),
     [total],
   );
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') step(-1);
-      else if (e.key === 'ArrowRight') step(1);
-      else if (e.key === 'ArrowUp') setSelected((s) => Math.max(s - 1, 0));
-      else if (e.key === 'ArrowDown') setSelected((s) => Math.min(s + 1, moveCount - 1));
-      else return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      step(e.key === 'ArrowLeft' ? -1 : 1);
       e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [step, moveCount]);
+  }, [step]);
 
   if (error) return <div className="survey-message">Could not load the survey: {error}</div>;
   if (!data) return <div className="survey-message">Loading…</div>;
 
   const position = data.positions[index];
-  const move = position.moves[selected];
   return (
     <div className="survey-root">
       <PositionHeader position={position} index={index} total={total} onStep={step} />
-      <div className="survey-body">
-        <MoveListPanel position={position} selected={selected} onSelect={setSelected} />
-        <div className="survey-board">
-          <Board
-            board={position.board}
-            bonuses={data.bonuses}
-            candidateTiles={move.tiles}
-            tileScores={data.tile_scores}
-            cursorRow={null}
-            cursorCol={null}
-            cursorDir={null}
-            interactive={false}
-            onCellClick={NOOP}
-            onCellDrop={NOOP}
-          />
-          <Rack
-            tiles={rackTiles(position.rack, data.tile_scores)}
-            usedIndices={usedRackIndices(position.rack, move)}
-            label=""
-            interactive={false}
-            onTileClick={NOOP}
-          />
-        </div>
-        <StatsPanel move={move} />
-      </div>
+      <PositionView key={position.name} data={data} position={position} />
     </div>
   );
 }
