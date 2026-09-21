@@ -6,7 +6,9 @@ import { PlacedTile } from '../types';
 export interface NextMoveStats {
   score: number; // mean
   bingo_pct: number;
-  non_play_pct: number; // exchanges, passes, and rollouts that ended first
+  // The commonest spot the bingos went down at (first placed tile, GCG position
+  // style) and the share of all rollouts that bingoed there; null without bingos.
+  bingo_spot: { at: string; pct: number } | null;
   adjacent_pct: number; // laid a tile beside one the candidate placed
   score_hist: number[]; // by tens; the last bin is 100+
 }
@@ -20,6 +22,8 @@ export interface SurveyMoveStats {
   end_swing: number; // mean end-of-game rack settlement, mover's view
   opp_stranded: number; // mean tile value left on the opponent's rack
   self_stranded: number;
+  self_passed_pct: number; // rollouts in which we passed at least once
+  opp_passed_pct: number;
   self_went_out_pct: number;
   opp_went_out_pct: number;
   opp_reply: NextMoveStats;
@@ -28,6 +32,7 @@ export interface SurveyMoveStats {
 
 export interface SurveyMove {
   move: string; // GCG notation
+  display: string; // the same with played-through tiles spelled out: "A4 (mO)u(N)T"
   hasty_rank: number; // 1-based
   equity: number;
   score: number;
@@ -53,6 +58,7 @@ export interface SurveyPosition {
   opp_rack_count: number;
   scores: [number, number];
   bag_size: number;
+  solved_endgames: boolean; // the confirming sim's rollouts solved their endgames
   num_legal_moves: number;
   played: string;
   board: (string | null)[][];

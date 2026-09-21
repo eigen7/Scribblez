@@ -27,17 +27,24 @@ final-margin histogram, both sides' next-move score statistics and the
 end-of-game rack settlement -- enough for a later tool to classify why an
 outside play wins.
 
+The confirming sim's rollouts solve their endgames, rather than play them
+greedily, at positions with at most --solve-max-unseen unseen tiles: greedy
+endgames misjudge late-game candidates by tens of win%.
+
 --generate-games makes the whole run reproducible from nothing: it first plays
 that many HastyBot-vs-HastyBot games (greedy, random opening of mean 2 plies,
 face-up leaves with --open-leaves -- the position_eval corpus's recipe) into
 --slog-dir on one thread, which with a fixed --game-seed yields the same
-games every time, and names the files by that seed. --review-dir collects the
+games every time, and names the files by that seed. --target-positions keeps
+playing and surveying further batches until that many positions are found.
+--review-dir collects the
 games of the confirmed positions, and its README records the command line, so
 anyone can regenerate its files.
 
 Usage:
-    ./py/scripts/sim_candidate_survey.py --slog-dir target/survey --generate-games 3000 \\
-        --open-leaves --rollouts 1000 --review-dir positions/NWL23/sim-survey-examples
+    ./py/scripts/sim_candidate_survey.py --slog-dir /workspace/mount/sim-surveys/blind-spots \\
+        --generate-games 1000 --target-positions 100 --open-leaves \\
+        --review-dir positions/NWL23/best-bot-blind-spots
     ./py/scripts/sim_candidate_survey.py --slog-dir <dir> --recipe setup --report-only
 """
 
@@ -65,6 +72,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--slog-dir", type=Path, required=True, help="directory of .slog files")
     p.add_argument("--generate-games", type=int, default=0, help="play this many games first")
     p.add_argument("--game-seed", type=int, default=1, help="play_game seed for --generate-games")
+    p.add_argument(
+        "--target-positions",
+        type=int,
+        default=0,
+        help="with --generate-games: keep playing batches of that many games (seeds game-seed, "
+        "game-seed + 1, ...) and surveying them until this many positions have an outside play "
+        "that beats the cut",
+    )
+    p.add_argument(
+        "--solve-max-unseen",
+        type=int,
+        default=14,
+        help="confirming rollouts solve their endgames at positions with at most this many "
+        "unseen tiles (-1 = never)",
+    )
     p.add_argument("--recipe", choices=("all", "setup", "stratified"), default="all")
     p.add_argument("--max-positions", type=int, default=100, help="positions per file (0 = all)")
     p.add_argument("--review-dir", type=Path, help="collect the confirmed positions' games here")
@@ -79,27 +101,48 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def generate_games(args: argparse.Namespace):
-    """Fill an empty --slog-dir with --generate-games games. One game thread and a
-    fixed seed make the games reproducible; play_game names its files by
-    timestamp, so they are renamed after the seed to make everything downstream
-    (survey rows, GCG names) reproducible too."""
-    if any(args.slog_dir.glob("*.slog")):
-        print(f"{args.slog_dir} already has games; not generating")
+def generate_games(args: argparse.Namespace, seed: int):
+    """Play --generate-games games under `seed` into --slog-dir, unless that seed's
+    files are already there. One game thread and a fixed seed make the games
+    reproducible; play_game names its files by timestamp, so they are renamed
+    after the seed to make everything downstream (survey files, GCG names)
+    reproducible too."""
+    if any(args.slog_dir.glob(f"hasty-seed{seed}-*.slog")):
         return
     code = run_games(
         args.slog_dir,
         args.generate_games,
         threads=1,
         player_spec=hasty_player_spec(),
-        seed=args.game_seed,
+        seed=seed,
         random_opening_mean=2.0,
         face_up_leaves=args.open_leaves,
     )
     if code != 0:
         raise SystemExit(code)
-    for i, path in enumerate(sorted(args.slog_dir.glob("*.slog"))):
-        path.rename(args.slog_dir / f"hasty-seed{args.game_seed}-{i}.slog")
+    fresh = sorted(p for p in args.slog_dir.glob("*.slog") if not p.name.startswith("hasty-seed"))
+    for i, path in enumerate(fresh):
+        path.rename(args.slog_dir / f"hasty-seed{seed}-{i}.slog")
+
+
+def survey_files(args: argparse.Namespace) -> list[Path]:
+    return sorted(args.slog_dir.glob(f"*{SURVEY_SUFFIX}"))
+
+
+def generate_and_survey(args: argparse.Namespace):
+    """One batch of games and its survey -- or, with --target-positions, batch after
+    batch until enough positions have an outside play that beats the cut. Batches
+    already played and files already surveyed are skipped, so a stopped run
+    picks up where it left off."""
+    batch = 0
+    while True:
+        generate_games(args, args.game_seed + batch)
+        run_survey(args)
+        found = len(load_survey(survey_files(args)).winning_positions)
+        print(f"batch {batch}: {found} positions so far", file=sys.stderr)
+        if found >= args.target_positions:
+            return
+        batch += 1
 
 
 def gcg_dir(args: argparse.Namespace) -> Path:
@@ -110,6 +153,7 @@ def run_survey(args: argparse.Namespace):
     cmd = [SURVEY_TOOL, "--slog-dir", str(args.slog_dir), "--rollouts", str(args.rollouts)]
     cmd += ["--confirm-rollouts", str(args.confirm_rollouts)]
     cmd += ["--confirm-picks", str(args.confirm_picks)]
+    cmd += ["--solve-max-unseen", str(args.solve_max_unseen)]
     cmd += ["--limit-games", str(args.limit_games), "--seed", str(args.seed)]
     cmd += ["--recipe", args.recipe, "--cut", str(args.cut)]
     cmd += ["--max-positions", str(args.max_positions)]
@@ -123,10 +167,10 @@ def run_survey(args: argparse.Namespace):
 def main() -> int:
     args = parse_args()
     if args.generate_games and not args.report_only:
-        generate_games(args)
-    if not args.report_only:
+        generate_and_survey(args)
+    elif not args.report_only:
         run_survey(args)
-    paths = sorted(args.slog_dir.glob(f"*{SURVEY_SUFFIX}"))
+    paths = survey_files(args)
     if not paths:
         print(f"no *{SURVEY_SUFFIX} files in {args.slog_dir}", file=sys.stderr)
         return 1

@@ -30,27 +30,35 @@ std::string position(const Board& board_before, const Move& m) {
   return m.horizontal() ? std::format("{}{}", r + 1, col) : std::format("{}{}", col, r + 1);
 }
 
-// The played word in GCG form: a '.' for every square already occupied before
-// this move (played through), and a lowercase letter for a designated blank.
-std::string played_word(const Board& board_before, const Move& m) {
+char glyph_char(Glyph g) {
+  const char ch = g.letter().to_char();
+  return g.is_blank() ? char(ch - 'A' + 'a') : ch;
+}
+
+// The played word, a lowercase letter for a designated blank. A square already
+// occupied before this move (played through) is a '.' in GCG form; spelled out,
+// it is its own letter, each run of such squares in one pair of parentheses.
+std::string played_word(const Board& board_before, const Move& m, bool spell_board_tiles = false) {
   std::string out;
+  bool in_run = false;
   const int dr = m.horizontal() ? 0 : 1, dc = m.horizontal() ? 1 : 0;
   const int n = m.num_glyphs();
   auto [r, c] = m.word_origin(board_before);
   int gi = 0;
   while (board_before.in_bounds(r, c)) {
-    if (!board_before.at(r, c).is_empty()) {
-      out.push_back('.');  // played through an existing tile
-    } else if (gi < n) {
-      Glyph g = m.glyph(gi++);
-      char ch = g.letter().to_char();
-      out.push_back(g.is_blank() ? char(ch - 'A' + 'a') : ch);
+    const bool through = !board_before.at(r, c).is_empty();
+    if (!through && gi >= n) break;
+    if (spell_board_tiles && through != in_run) out.push_back(through ? '(' : ')');
+    in_run = through;
+    if (through) {
+      out.push_back(spell_board_tiles ? glyph_char(board_before.at(r, c)) : '.');
     } else {
-      break;
+      out.push_back(glyph_char(m.glyph(gi++)));
     }
     r += dr;
     c += dc;
   }
+  if (spell_board_tiles && in_run) out.push_back(')');
   return out;
 }
 
@@ -186,6 +194,11 @@ void write_gcg_endgame_adjustments(std::string& out, const GameLog& log,
 }
 
 }  // namespace
+
+std::string spelled_move_notation(const Board& board_before, const Move& m) {
+  if (m.type() != MoveType::PLAY) return move_notation(board_before, m);
+  return position(board_before, m) + " " + played_word(board_before, m, /*spell_board_tiles=*/true);
+}
 
 std::string move_notation(const Board& board_before, const Move& m) {
   switch (m.type()) {

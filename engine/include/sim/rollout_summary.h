@@ -14,7 +14,9 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <span>
+#include <string>
 
 namespace scribblez {
 
@@ -39,7 +41,11 @@ inline constexpr int kEndSwingBinFloor = -50;
 struct NextMoveStats {
   double score_sum = 0;
   std::array<uint32_t, kScoreBins> score_hist{};
-  uint32_t bingos = 0;     // plays of all seven tiles
+  uint32_t bingos = 0;  // plays of all seven tiles
+  // Where the bingos went down, counted per spot: the square of the bingo's
+  // first placed tile and its direction (BingoSpot). One spot dominating says
+  // the candidate opened, or left open, a particular lane.
+  std::map<uint16_t, uint32_t> bingo_spots;
   uint32_t non_plays = 0;  // exchanges, passes, and rollouts that ended first
   // Plays that laid a tile on a square orthogonally adjacent to one the
   // candidate placed: a hook on it, a play through it, or a parallel beside it.
@@ -65,7 +71,17 @@ struct RolloutSummary {
   uint32_t opp_went_out = 0;
   double end_swing_sum = 0;
   std::array<uint32_t, kEndSwingBins> end_swing_hist{};
+  // Rollouts in which each side passed at least once: a side left with no play.
+  uint32_t self_passed = 0;
+  uint32_t opp_passed = 0;
 };
+
+// A NextMoveStats::bingo_spots key and its reading in GCG position style: row
+// first for a play across ("12E"), column first for one down ("E12") -- of the
+// first tile placed, which for a bingo played through or onto existing tiles can
+// sit after the word's own first square.
+uint16_t bingo_spot(const Move& bingo);
+std::string bingo_spot_name(uint16_t spot);
 
 // The paired difference in win value (win = 1, draw = 1/2) between two
 // candidates over the same rollout indices. Under common random numbers rollout

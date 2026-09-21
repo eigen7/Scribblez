@@ -72,7 +72,7 @@ using namespace scribblez;
 namespace json = boost::json;
 
 constexpr const char* kSurveyExt = ".simsurvey.json";
-constexpr int kSurveyVersion = 2;
+constexpr int kSurveyVersion = 3;
 
 struct Options {
   std::string slog_dir;
@@ -82,6 +82,7 @@ struct Options {
   int rollouts = 1000;          // per candidate, screening stage
   int confirm_rollouts = 5000;  // per move, confirming stage
   int confirm_picks = 5;        // outside-the-cut moves the confirming stage re-sims
+  int solve_max_unseen = 14;    // confirming stage solves endgames at or below this many unseen
   bool race = true;             // stop clearly beaten candidates early in the screen
   // The stratified recipe.
   move_set_eval::StratumQuotas quotas{.top = 9, .mid = 22, .tail = 28, .exchange = 4};
@@ -139,6 +140,7 @@ SlogSimConfig confirm_config(const Options& opt, const Dictionary& dict, ChosenM
   c.selector = chosen_selector(std::move(chosen));
   c.paired_references = opt.cut;
   c.race_checkpoints.clear();
+  c.solve_endgames_max_unseen = opt.solve_max_unseen;
   c.runner.rollouts = opt.confirm_rollouts;
   c.runner.threads = opt.threads;
   c.threads = 1;
@@ -219,12 +221,24 @@ json::array to_json(const std::array<T, N>& values) {
   return json::array(values.begin(), values.end());
 }
 
+// The three commonest bingo spots, as [name, count] pairs, commonest first.
+json::array bingo_spots_json(const NextMoveStats& s) {
+  std::vector<std::pair<uint32_t, uint16_t>> by_count;
+  for (const auto& [spot, count] : s.bingo_spots) by_count.emplace_back(count, spot);
+  std::sort(by_count.begin(), by_count.end(), [](const auto& a, const auto& b) {
+    return std::pair(b.first, a.second) < std::pair(a.first, b.second);
+  });
+  if (by_count.size() > 3) by_count.resize(3);
+  json::array out;
+  for (const auto& [count, spot] : by_count)
+    out.push_back(json::array{bingo_spot_name(spot), count});
+  return out;
+}
+
 json::object to_json(const NextMoveStats& s) {
-  return {{"score_sum", s.score_sum},
-          {"score_hist", to_json(s.score_hist)},
-          {"bingos", s.bingos},
-          {"non_plays", s.non_plays},
-          {"adjacent", s.adjacent}};
+  return {{"score_sum", s.score_sum}, {"score_hist", to_json(s.score_hist)},
+          {"bingos", s.bingos},       {"bingo_spots", bingo_spots_json(s)},
+          {"non_plays", s.non_plays}, {"adjacent", s.adjacent}};
 }
 
 json::object to_json(const RolloutSummary& s) {
@@ -242,7 +256,9 @@ json::object to_json(const RolloutSummary& s) {
           {"self_went_out", s.self_went_out},
           {"opp_went_out", s.opp_went_out},
           {"end_swing_sum", s.end_swing_sum},
-          {"end_swing_hist", to_json(s.end_swing_hist)}};
+          {"end_swing_hist", to_json(s.end_swing_hist)},
+          {"self_passed", s.self_passed},
+          {"opp_passed", s.opp_passed}};
 }
 
 // The tiles `rack` keeps after `m`.
@@ -309,6 +325,7 @@ struct SurveyedPosition {
 json::object candidate_json(const SimmedPosition& r, size_t c) {
   const Move& m = r.candidates.moves[c];
   return {{"move", move_notation(r.position.board, m)},
+          {"display", spelled_move_notation(r.position.board, m)},  // played-through tiles spelled
           {"equity_rank", r.candidates.equity_ranks[c]},
           {"equity", r.candidates.equities[c]},
           {"score", m.score()},
@@ -352,6 +369,8 @@ json::object position_json(const SurveyedPosition& p, const Options& opt) {
           {"bag_size", r.bag_size},
           {"num_legal_moves", r.candidates.num_legal_moves},
           {"played", move_notation(r.position.board, r.played)},
+          {"unseen", r.unseen},
+          {"confirm_solved_endgames", p.confirm != nullptr && p.confirm->solved_endgames},
           {"candidates", std::move(candidates)},
           {"confirm", confirm_json(p, opt)}};
 }
@@ -363,6 +382,7 @@ json::object header_json(const Options& opt) {
           {"rollouts", opt.rollouts},
           {"confirm_rollouts", opt.confirm_rollouts},
           {"confirm_picks", opt.confirm_picks},
+          {"solve_max_unseen", opt.solve_max_unseen},
           {"race", opt.race},
           {"max_plays", opt.max_plays},
           {"max_positions", opt.max_positions},
@@ -581,6 +601,10 @@ int main(int argc, char** argv) {
       "outside it, on fresh seeds -- an unbiased reading of the few moves the screen singled "
       "out")("confirm-picks", po::value<int>(&opt.confirm_picks)->default_value(opt.confirm_picks),
              "moves from outside the cut the confirming stage re-sims, the screen's best first")(
+      "solve-max-unseen",
+      po::value<int>(&opt.solve_max_unseen)->default_value(opt.solve_max_unseen),
+      "confirming stage: at positions with at most this many unseen tiles (bag + opponent's "
+      "rack) the rollouts solve their endgames instead of playing them greedily (-1 = never)")(
       "race", po::value<bool>(&opt.race)->default_value(opt.race),
       "screening stage: stop a candidate early once it sits three paired standard errors below "
       "the leader (checked at 10/20/40/70% of --rollouts); the cut's moves always finish")(

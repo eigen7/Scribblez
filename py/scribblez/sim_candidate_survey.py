@@ -50,6 +50,7 @@ class ConfirmedMove:
     """One move of a position's confirming sim."""
 
     move: str  # GCG notation
+    display: str  # the same with played-through tiles spelled out: "A4 (mO)u(N)T"
     equity_rank: int
     is_setup: bool
     summary: dict  # the tool's rollout summary, confirming stage
@@ -97,6 +98,7 @@ def confirmed_moves(position: dict) -> list[ConfirmedMove]:
         moves.append(
             ConfirmedMove(
                 move=c["move"],
+                display=c["display"],
                 equity_rank=c["equity_rank"],
                 is_setup=c["is_setup"],
                 summary=entry["summary"],
@@ -130,6 +132,10 @@ class Survey:
     findings: list[Finding]  # every confirmed outside move, strongest first
 
     @property
+    def winning_positions(self) -> set[PositionKey]:
+        return {f.key for f in self.findings if f.beats_cut}
+
+    @property
     def winners(self) -> list[Finding]:
         return [f for f in self.findings if f.beats_cut]
 
@@ -161,8 +167,8 @@ def bucket_label(lo: float, hi: float) -> str:
 
 def finding_line(f: Finding) -> str:
     return (
-        f"{gcg_name(f.key)}: {f.outside.move} (#{f.outside.equity_rank + 1}) over "
-        f"{f.inside.move}, win {100 * f.gain:+.1f} ({f.sigmas:+.1f} sigma), "
+        f"{gcg_name(f.key)}: {f.outside.display} (#{f.outside.equity_rank + 1}) over "
+        f"{f.inside.display}, win {100 * f.gain:+.1f} ({f.sigmas:+.1f} sigma), "
         f"spread {f.spread_gain:+.1f}"
     )
 
@@ -170,7 +176,7 @@ def finding_line(f: Finding) -> str:
 def report(survey: Survey) -> str:
     """The survey's findings as text. Win gains are win-equity points (percent)."""
     winners = survey.winners
-    winning_positions = {f.key for f in winners}
+    winning_positions = survey.winning_positions
     contested = {f.key for f in survey.findings}
     best_gain = {}
     for f in winners:
@@ -218,7 +224,10 @@ def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, 
         f"it at least {MIN_SIGMA:g} standard errors (of the paired win difference) above the best",
         "of them. Strongest first. Each GCG ends on the move the game actually played;",
         "`neural_rank_tool --gcg <file> --turn <turn>` opens the decision point. Win% and spread",
-        "(mean final score differential, mover's view) are the confirming sim's.",
+        "(mean final score differential, mover's view) are the confirming sim's, whose rollouts",
+        "solve their endgames (rather than play them greedily) at positions with few enough",
+        "unseen tiles -- the survey files' `solve_max_unseen`. Played-through tiles are spelled",
+        "out in parentheses. Browse the positions with `py/scripts/sim_survey_viewer.py`.",
         "",
         "Regenerate this directory (games, sims and all; `--slog-dir` is scratch space) with:",
         "",
@@ -233,9 +242,9 @@ def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, 
     for f in survey.winners:
         shutil.copy(gcg_dir / gcg_name(f.key), review_dir / gcg_name(f.key))
         lines.append(
-            f"| {gcg_name(f.key)} | {f.key[2] + 1} | {f.outside.move} "
+            f"| {gcg_name(f.key)} | {f.key[2] + 1} | {f.outside.display} "
             f"(#{f.outside.equity_rank + 1}) | {100 * f.outside.win_equity:.1f} "
-            f"| {f.outside.spread:+.1f} | {f.inside.move} | {100 * f.inside.win_equity:.1f} "
+            f"| {f.outside.spread:+.1f} | {f.inside.display} | {100 * f.inside.win_equity:.1f} "
             f"| {f.inside.spread:+.1f} | {100 * f.gain:+.1f} | {f.sigmas:+.1f} "
             f"| {f.spread_gain:+.1f} |"
         )

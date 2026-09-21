@@ -135,12 +135,20 @@ function NextMovePanel({
       <div className="survey-stat-title">{title}</div>
       <StatRow label="mean score" value={stats.score.toFixed(1)} />
       <StatRow label="bingo" value={`${stats.bingo_pct.toFixed(1)}%`} />
+      {stats.bingo_spot ? (
+        <StatRow
+          label={`bingo@${stats.bingo_spot.at}`}
+          value={`${stats.bingo_spot.pct.toFixed(1)}%`}
+          hint="the commonest spot the bingos went down at (first tile placed; row first = across), as a share of all rollouts"
+        />
+      ) : (
+        <StatRow label={'\u00a0'} value="" />
+      )}
       <StatRow
         label="beside this move"
         value={`${stats.adjacent_pct.toFixed(1)}%`}
         hint="plays that laid a tile next to one this move placed"
       />
-      <StatRow label="exchange / pass" value={`${stats.non_play_pct.toFixed(1)}%`} />
       <Histogram bins={stats.score_hist} binLabel={scoreBinLabel} peakShare={peak} />
     </div>
   );
@@ -154,7 +162,7 @@ function StatsPanel({
   const s = move.stats;
   return (
     <div className={`survey-stats survey-tint-${section}`}>
-      <div className="survey-stats-move">{move.move}</div>
+      <div className="survey-stats-move">{move.display}</div>
       <div className="survey-stat-group">
         <StatRow label="hasty rank" value={`#${move.hasty_rank}`} />
         <StatRow label="score / equity" value={`${move.score} / ${move.equity.toFixed(1)}`} />
@@ -187,6 +195,8 @@ function StatsPanel({
         <div className="survey-stat-title">Game end</div>
         <StatRow label="we play out" value={`${s.self_went_out_pct.toFixed(1)}%`} />
         <StatRow label="they play out" value={`${s.opp_went_out_pct.toFixed(1)}%`} />
+        <StatRow label="we pass" value={`${s.self_passed_pct.toFixed(1)}%`} hint="rollouts in which we passed at least once" />
+        <StatRow label="they pass" value={`${s.opp_passed_pct.toFixed(1)}%`} hint="rollouts in which they passed at least once" />
         <StatRow label="stuck on their rack" value={s.opp_stranded.toFixed(1)} hint="mean tile value" />
         <StatRow label="stuck on ours" value={s.self_stranded.toFixed(1)} hint="mean tile value" />
         <StatRow label="settlement swing" value={signed(s.end_swing)} />
@@ -205,7 +215,7 @@ function MoveRow({
     <button type="button" className={classes} aria-pressed={selected} onClick={onSelect}>
       <span className="survey-move-rank">#{move.hasty_rank}</span>
       <span className="survey-move-name">
-        {move.move}
+        {move.display}
         {played && <span className="survey-move-played" title="the move the game played"> ●</span>}
       </span>
       <span className="survey-move-score" title="points the move scores">{move.score}</span>
@@ -260,7 +270,8 @@ function PositionHeader({
         </div>
         <div className="survey-header-sub">
           turn {position.turn} · to move {mine}–{theirs} ({signed(mine - theirs, 0)}) · bag{' '}
-          {position.bag_size} · {position.num_legal_moves} legal moves
+          {position.bag_size} · {position.num_legal_moves} legal moves ·{' '}
+          {position.solved_endgames ? 'endgames solved' : 'greedy endgames'}
         </div>
       </div>
       <button

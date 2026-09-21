@@ -46,17 +46,19 @@ def test_position_entry_counts_the_opponents_rack(tmp_path):
     summary = {
         "n": 100, "wins": 60, "draws": 0, "delta_sum": 0.0, "delta_sq_sum": 0.0, "delta_hist": [],
         "end_swing_sum": 0.0, "opp_stranded_sum": 0.0, "self_stranded_sum": 0.0,
-        "self_went_out": 0, "opp_went_out": 0,
+        "self_went_out": 0, "opp_went_out": 0, "self_passed": 25, "opp_passed": 0,
     }  # fmt: skip
-    side = {"score_sum": 0.0, "bingos": 0, "non_plays": 0, "adjacent": 0, "score_hist": []}
+    side = {"score_sum": 0.0, "bingos": 12, "bingo_spots": [["E12", 9], ["8A", 3]],
+            "non_plays": 0, "adjacent": 0, "score_hist": []}  # fmt: skip
     summary |= {"opp_reply": side, "self_next": side}
     candidate = {"equity": 1.0, "score": 7, "leave": "ITZ", "is_setup": False}
     position = {
         "game": 0, "turn": 1, "mover": 1, "rack": "AACITTZ", "opp_known_leave": "EF",
         "scores": [30, 0], "bag_size": 81, "num_legal_moves": 137, "played": "K6 AC.TA",
+        "confirm_solved_endgames": False,
         "candidates": [
-            candidate | {"move": "9K TIZ", "equity_rank": 0},
-            candidate | {"move": "K6 AC.TA", "equity_rank": 61},
+            candidate | {"move": "9K TIZ", "display": "9K TIZ", "equity_rank": 0},
+            candidate | {"move": "K6 AC.TA", "display": "K6 AC(E)TA", "equity_rank": 61},
         ],
         "confirm": [
             {"candidate": 0, "summary": summary | {"wins": 40}, "win_diff_vs_cut": [[0.0, 0.0]]},
@@ -67,3 +69,7 @@ def test_position_entry_counts_the_opponents_rack(tmp_path):
     assert entry["opp_rack_count"] == 7
     assert [m["move"] for m in entry["moves"]] == ["K6 AC.TA", "9K TIZ"]  # outside play first
     assert entry["moves"][0]["versus"] == "9K TIZ"
+    assert entry["moves"][0]["display"] == "K6 AC(E)TA"
+    stats = entry["moves"][0]["stats"]
+    assert stats["opp_reply"]["bingo_spot"] == {"at": "E12", "pct": 9.0}  # of all 100 rollouts
+    assert stats["self_passed_pct"] == 25.0
