@@ -130,6 +130,30 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
                                      uint8_t* out_blanks, int32_t* out_squares,
                                      uint8_t* out_tile_mask, float* out_scalars);
 
+// The cross-check entries each candidate move changes on its position's board
+// (training/cross_check_delta.h, which owns the layout). Position j is the
+// pre-move decision point (game_idx[j], turn_idx[j]) of the .slog at `path`,
+// replayed as scribblez_decode_rows replays it; its candidates are the next
+// move_counts[j] serialized Moves of `moves`, which holds sum(move_counts) of
+// them, position-major. Each candidate must be legal on its position's board.
+// Every output holds max_cross_deltas slots per move, in `moves` order:
+// out_axes and out_delta_mask as uint8, out_squares as int32, out_old_masks and
+// out_new_masks as uint32. Returns 0 on success, -1 on an I/O / header error.
+int scribblez_move_set_cross_check_deltas(ScribblezSession* s, const char* path,
+                                          const int64_t* game_idx, const int64_t* turn_idx,
+                                          const int64_t* move_counts, int64_t n_positions,
+                                          const void* moves, uint8_t* out_axes,
+                                          int32_t* out_squares, uint32_t* out_old_masks,
+                                          uint32_t* out_new_masks, uint8_t* out_delta_mask);
+
+// Cross-check delta slots per move (cross_check_delta.h kMoveMaxCrossDeltas).
+int32_t scribblez_move_set_max_cross_deltas(void);
+
+// The board input's first cross-check plane: 26 horizontal-play letter planes
+// start here, the 26 vertical-play ones follow (input_encoder.h kCrossChecks).
+// A delta entry's (axis, letter) addresses plane this + 26 * axis + letter.
+int32_t scribblez_cross_check_plane0(void);
+
 // So Python callers never hardcode them:
 //   max_placed    letter/square array width (tiles per move slot)
 //   num_scalars   per-move scalar-feature count

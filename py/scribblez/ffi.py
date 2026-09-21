@@ -208,6 +208,28 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int32),
     ]
 
+    lib.scribblez_move_set_cross_check_deltas.restype = ctypes.c_int
+    lib.scribblez_move_set_cross_check_deltas.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # .slog path
+        ctypes.POINTER(ctypes.c_int64),  # game_idx
+        ctypes.POINTER(ctypes.c_int64),  # turn_idx
+        ctypes.POINTER(ctypes.c_int64),  # move_counts
+        ctypes.c_int64,  # n_positions
+        ctypes.c_void_p,  # moves
+        ctypes.POINTER(ctypes.c_uint8),  # out_axes
+        ctypes.POINTER(ctypes.c_int32),  # out_squares
+        ctypes.POINTER(ctypes.c_uint32),  # out_old_masks
+        ctypes.POINTER(ctypes.c_uint32),  # out_new_masks
+        ctypes.POINTER(ctypes.c_uint8),  # out_delta_mask
+    ]
+
+    lib.scribblez_move_set_max_cross_deltas.restype = ctypes.c_int32
+    lib.scribblez_move_set_max_cross_deltas.argtypes = []
+
+    lib.scribblez_cross_check_plane0.restype = ctypes.c_int32
+    lib.scribblez_cross_check_plane0.argtypes = []
+
     lib.scribblez_move_set_encoding_version.restype = ctypes.c_int32
     lib.scribblez_move_set_encoding_version.argtypes = []
 
@@ -620,6 +642,74 @@ def encode_moves(moves: np.ndarray, pre_move_score_diffs: np.ndarray) -> dict[st
         "squares": squares.astype(np.int64),
         "tile_mask": tile_mask.astype(bool),
         "scalars": scalars,
+    }
+
+
+def cross_check_plane0() -> int:
+    """The board input's first cross-check plane: the 26 horizontal-play letter
+    planes start here and the 26 vertical-play ones follow, so a
+    cross_check_deltas entry's (axis, letter) is plane this + 26 * axis + letter."""
+    return _lib().scribblez_cross_check_plane0()
+
+
+def cross_check_deltas(
+    path: str | Path,
+    game_idx: np.ndarray,
+    turn_idx: np.ndarray,
+    move_counts: np.ndarray,
+    moves: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """The cross-check entries each candidate move changes on its position's
+    board -- the sparse form of the post-move cross-check planes the position
+    evaluation teacher sees (engine training/cross_check_delta.h, which owns the
+    layout).
+
+    Position j is the pre-move decision point (game_idx[j], turn_idx[j]) of the
+    .slog at `path`; its candidates are the next move_counts[j] records of the
+    (M,) MOVE_DTYPE array `moves`, M = sum(move_counts). Returns, each
+    (M, max_cross_deltas): axes (0 = the horizontal-play cross-check planes,
+    1 = the vertical-play ones) and squares (r*15+c) int64, old_masks and
+    new_masks uint32 (bit L set iff letter L is legal there before / after the
+    move), and delta_mask bool (True on real entries; pads are all-zero).
+    """
+    from scribblez.sim_evidence.sobs import MOVE_DTYPE
+
+    games = np.ascontiguousarray(game_idx, dtype=np.int64)
+    turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
+    counts = np.ascontiguousarray(move_counts, dtype=np.int64)
+    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
+    if not (games.shape == turns.shape == counts.shape) or games.ndim != 1:
+        raise ValueError(f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape}")
+    if counts.sum() != len(moves):
+        raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
+    shape = (len(moves), _lib().scribblez_move_set_max_cross_deltas())
+    axes = np.zeros(shape, dtype=np.uint8)
+    squares = np.zeros(shape, dtype=np.int32)
+    old_masks = np.zeros(shape, dtype=np.uint32)
+    new_masks = np.zeros(shape, dtype=np.uint32)
+    delta_mask = np.zeros(shape, dtype=np.uint8)
+    rc = _lib().scribblez_move_set_cross_check_deltas(
+        _session(),
+        str(path).encode("utf-8"),
+        games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        turns.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        len(games),
+        moves.ctypes.data_as(ctypes.c_void_p),
+        axes.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        squares.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+        old_masks.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+        new_masks.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+        delta_mask.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+    )
+    if rc != 0:
+        raise OSError(f"cross_check_deltas failed (rc={rc}) for {path}")
+    return {
+        "axes": axes.astype(np.int64),
+        "squares": squares.astype(np.int64),
+        "old_masks": old_masks,
+        "new_masks": new_masks,
+        "delta_mask": delta_mask.astype(bool),
     }
 
 

@@ -102,6 +102,12 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
   }
 }
 
+const Board& BlockDecoder::replay_board(const char* buf, uint32_t game_idx, uint32_t turn_idx) {
+  const GameLog g = game_view(buf, game_idx, nullptr);
+  pos_.replay_to_sampled(g, int(turn_idx), /*post_move=*/false);
+  return pos_.enc().board();
+}
+
 void BlockDecoder::encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move,
                                            int diff_lo, int diff_hi, float* out) {
   uint32_t sampled = 0;

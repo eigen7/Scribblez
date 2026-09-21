@@ -18,6 +18,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "sim/sim_runner.h"
+#include "training/cross_check_delta.h"
 #include "training/footprint_collapse.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
@@ -62,6 +63,11 @@ struct ScribblezSession {
                               int diff_hi, float* out_inputs) const;
   int decode_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx, int64_t n,
                   bool post_move, float* out) const;
+  int move_set_cross_check_deltas(const char* path, const int64_t* game_idx,
+                                  const int64_t* turn_idx, const int64_t* move_counts,
+                                  int64_t n_positions, const void* moves, uint8_t* out_axes,
+                                  int32_t* out_squares, uint32_t* out_old_masks,
+                                  uint32_t* out_new_masks, uint8_t* out_delta_mask) const;
   int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads, uint64_t seed,
                        bool open_leaves, char* out_records, int* played_rank) const;
   int dump_position(const char* path, int64_t game_idx, bool post_move, char* out,
@@ -378,6 +384,54 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
                       out_tile_mask + i * mset::kMoveMaxPlaced,
                       out_scalars + i * mset::kMoveScalars);
   }
+}
+
+int ScribblezSession::move_set_cross_check_deltas(
+  const char* path, const int64_t* game_idx, const int64_t* turn_idx, const int64_t* move_counts,
+  int64_t n_positions, const void* moves, uint8_t* out_axes, int32_t* out_squares,
+  uint32_t* out_old_masks, uint32_t* out_new_masks, uint8_t* out_delta_mask) const {
+  namespace mset = scribblez::move_set;
+  if (!game_idx || !turn_idx || !move_counts || n_positions < 0) return -1;
+  std::vector<char> buf;
+  if (load_slog(path, /*game_idx=*/0, buf, nullptr) != 0) return -1;
+  scribblez::binlog::BlockDecoder decoder(spec);
+  // The serialized Moves arrive as packed bytes of no guaranteed alignment, so
+  // each position's run is copied into Moves before encoding.
+  const char* bytes = static_cast<const char*>(moves);
+  std::vector<scribblez::Move> candidates;
+  int64_t done = 0;
+  for (int64_t j = 0; j < n_positions; ++j) {
+    candidates.resize(size_t(move_counts[j]));
+    std::memcpy(candidates.data(), bytes + done * sizeof(scribblez::Move),
+                candidates.size() * sizeof(scribblez::Move));
+    const scribblez::Board& board =
+      decoder.replay_board(buf.data(), uint32_t(game_idx[j]), uint32_t(turn_idx[j]));
+    const int64_t at = done * mset::kMoveMaxCrossDeltas;
+    mset::encode_cross_check_deltas(board, *spec.dict, candidates.data(), move_counts[j],
+                                    out_axes + at, out_squares + at, out_old_masks + at,
+                                    out_new_masks + at, out_delta_mask + at);
+    done += move_counts[j];
+  }
+  return 0;
+}
+
+int scribblez_move_set_cross_check_deltas(ScribblezSession* s, const char* path,
+                                          const int64_t* game_idx, const int64_t* turn_idx,
+                                          const int64_t* move_counts, int64_t n_positions,
+                                          const void* moves, uint8_t* out_axes,
+                                          int32_t* out_squares, uint32_t* out_old_masks,
+                                          uint32_t* out_new_masks, uint8_t* out_delta_mask) {
+  return s->move_set_cross_check_deltas(path, game_idx, turn_idx, move_counts, n_positions, moves,
+                                        out_axes, out_squares, out_old_masks, out_new_masks,
+                                        out_delta_mask);
+}
+
+int32_t scribblez_move_set_max_cross_deltas(void) {
+  return scribblez::move_set::kMoveMaxCrossDeltas;
+}
+
+int32_t scribblez_cross_check_plane0(void) {
+  return scribblez::spatial_block_plane0(scribblez::SpatialBlockId::kCrossChecks);
 }
 
 void scribblez_move_set_move_dims(int32_t* max_placed, int32_t* num_scalars, int32_t* letter_vocab,
