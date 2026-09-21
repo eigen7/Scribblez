@@ -7,7 +7,9 @@ plays one HastyBot-vs-HastyBot game and surveys every eligible turn of it
 confirming sim, with solved endgames late in the game, of the top moves and
 the screen's best plays from outside them). Games cost nothing beside the
 sims, so a game a cycle wastes none, and workers need no coordination: each
-plays its own randomly seeded games.
+plays its own randomly seeded games. The controller ends the run: its
+scheduler tick parks every surveyor once the tag holds target_positions, and
+the dashboard's idle policy then stops the rented machines.
 
 What a cycle delivers is small. A game's full survey file runs to megabytes
 and nearly all of it describes positions where the top moves were fine, so
@@ -30,6 +32,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from scribblez import params as params_mod
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR
 from scribblez.selfplay import hasty_player_spec, run_games
@@ -46,6 +49,9 @@ GCG_DIR = "gcg"
 
 @dataclass(frozen=True)
 class BlindSpotsParams:
+    target_positions: int = param(
+        100, "stop every worker once the tag holds this many found positions (0: never)"
+    )
     face_up_leaves: bool = param(True, "play and sim with the opponent's kept tiles known")
     cut: int = param(10, "HastyBot's top-K moves by static equity that a play must beat")
     rollouts: int = param(
@@ -150,6 +156,23 @@ def run_generate(ctx: WorkerContext) -> int:
     return 0
 
 
+def positions_found(data_dir: Path) -> int:
+    return sum(1 for _ in (data_dir / GCG_DIR).glob("*.gcg"))
+
+
+def tick(spec: WorkloadSpec, task, hooks):
+    """The scheduler entry: park the surveyors once the tag holds its target. Only
+    the controller sees the whole store -- a rented worker delivers to a bucket
+    and cannot count it -- so the stop is a gate from here rather than an exit
+    from there. A parked worker is a paused container, which the dashboard's
+    idle policy reads as nothing running: the rented machines stop themselves
+    ten minutes later."""
+    target = params_mod.validate(spec.params_cls, task.params).target_positions
+    found = positions_found(spec.paths(task.tag).data_dir)
+    reached = target > 0 and found >= target
+    hooks.gate("generate", f"target reached: {found} of {target} positions" if reached else None)
+
+
 def survey_dirs(tag: str) -> tuple[Path, Path]:
     """The tag's (survey files, .gcg exports) directories, for the viewer and the
     collection script."""
@@ -160,7 +183,7 @@ def survey_dirs(tag: str) -> tuple[Path, Path]:
 def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
     data_dir = spec.paths(tag).data_dir
     return [
-        ("positions found", sum(1 for _ in (data_dir / GCG_DIR).glob("*.gcg"))),
+        ("positions found", positions_found(data_dir)),
         ("games surveyed", sum(1 for _ in (data_dir / SURVEY_DIR).glob(f"*{SURVEY_SUFFIX}"))),
     ]
 
@@ -181,6 +204,8 @@ SPEC = WorkloadSpec(
             ),
         ),
     ),
+    scheduler="scribblez.workloads.blind_spots:tick",
     progress="scribblez.workloads.blind_spots:progress",
+    primary_params=("target_positions",),
     sync_data_dirs=(SURVEY_DIR, GCG_DIR),
 )

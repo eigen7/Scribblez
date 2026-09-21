@@ -76,3 +76,32 @@ def test_progress_counts_the_tags_store(tmp_path):
     (tmp_path / "survey" / f"a{SURVEY_SUFFIX}").touch()
     counts = blind_spots.progress(StubSpec(tmp_path), "t")
     assert counts == [("positions found", 1), ("games surveyed", 1)]
+
+
+class Task:
+    tag = "t"
+
+    def __init__(self, target: int):
+        self.params = {"target_positions": target}
+
+
+def gate_after_tick(tmp_path, target: int, found: int):
+    (tmp_path / "gcg").mkdir(exist_ok=True)
+    for i in range(found):
+        (tmp_path / "gcg" / f"{i}.gcg").touch()
+    gates = []
+    spec = StubSpec(tmp_path)
+    spec.params_cls = blind_spots.BlindSpotsParams
+    hooks = type(
+        "Hooks", (), {"gate": staticmethod(lambda role, reason: gates.append((role, reason)))}
+    )
+    blind_spots.tick(spec, Task(target), hooks)
+    return gates
+
+
+def test_the_scheduler_parks_the_surveyors_at_the_target(tmp_path):
+    assert gate_after_tick(tmp_path, target=3, found=2) == [("generate", None)]
+    assert gate_after_tick(tmp_path, target=3, found=3) == [
+        ("generate", "target reached: 3 of 3 positions")
+    ]
+    assert gate_after_tick(tmp_path, target=0, found=3) == [("generate", None)]  # 0: never

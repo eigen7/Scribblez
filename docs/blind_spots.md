@@ -18,8 +18,16 @@ comes out. What the survey measures, and what it has found, is in
    every eligible turn of it, about ten minutes of 28 threads a game. The
    Overview shows positions found and games surveyed; Stats shows the rate per
    worker.
-3. Pause or remove the workers when there are enough. A worker stopped
-   mid-game resumes that game's survey when restarted.
+3. Walk away. When the tag holds `target_positions` found positions (a tag
+   parameter, 100 by default; 0 runs until stopped) the controller parks every
+   surveyor -- they show as *waiting: target reached* -- and ten minutes later
+   the idle policy **stops** the rented machines, which ends their compute
+   charge. Stopped is not terminated: a stopped machine keeps its disk (cents a
+   day) until you click Remove on its row, which is deliberate everywhere in
+   the dashboard -- nothing deletes a disk that might hold undelivered output
+   on its own. Here the only thing such a disk holds is the one game each
+   worker was part-way through. The dashboard has to be running for any of
+   this: it is the controller that counts, parks and stops.
 4. Browse what came in, then turn it into a committed directory:
 
    ```
