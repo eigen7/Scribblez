@@ -1580,22 +1580,17 @@ h1 {
   align-items: center;
   gap: 10px;
 }
-/* The previewed move wears its section's tint... */
-.survey-board.showing-outside {
-  --survey-tint: var(--survey-outside);
-}
-.survey-board.showing-hasty {
-  --survey-tint: var(--survey-hasty);
-}
+/* A previewed move is a solid tile under its section's tint (the tint itself is
+   a Board cellHighlight, colored in AppSurvey.tsx)... */
 .survey-board .board-cell.has-candidate {
-  background: rgba(var(--survey-tint), 0.78);
-  border: 2px solid rgb(var(--survey-tint));
+  background: #e8d090;
+  border: 1px solid #c8a040;
 }
 .survey-board .board-cell.has-candidate .tile-letter {
   opacity: 1;
 }
-/* ...and, with a move selected in both sections, fades in and out over its turn
-   on the board (SHOW_MS in AppSurvey.tsx). */
+/* ...and two selected moves that share a square take the board in turn, each
+   fading in and out over its turn (SHOW_MS in AppSurvey.tsx). */
 .survey-board.alternating .board-cell.has-candidate {
   animation: survey-move-fade 3s ease-in-out both;
 }
@@ -1638,28 +1633,25 @@ h1 {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* Sideways: a thin row per bin, bars growing rightward. */
 .survey-hist {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 1px;
-  height: 36px;
   margin-top: 4px;
+  border-left: 1px solid rgba(127, 127, 127, 0.6);
 }
 .survey-hist-slot {
-  flex: 1;
-  height: 100%;
+  height: 5px;
   display: flex;
-  align-items: flex-end;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.5);
 }
 .survey-hist-slot:hover {
-  background: rgba(127, 127, 127, 0.25);
+  background: rgba(127, 127, 127, 0.3);
 }
 .survey-hist-slot.zero {
-  border-bottom: 2px solid #e67e22;
+  box-shadow: inset 0 1px 0 #e67e22;
 }
 .survey-hist-bar {
-  width: 100%;
+  height: 100%;
   background: rgb(var(--survey-tint));
-  min-height: 0;
 }
