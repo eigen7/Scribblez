@@ -36,14 +36,18 @@ that many HastyBot-vs-HastyBot games (greedy, random opening of mean 2 plies,
 face-up leaves with --open-leaves -- the position_eval corpus's recipe) into
 --slog-dir on one thread, which with a fixed --game-seed yields the same
 games every time, and names the files by that seed. --target-positions keeps
-playing and surveying further batches until that many positions are found.
+playing and surveying further batches until that many positions are found;
+games cost nothing beside the sims, so the way to collect positions is one
+game a batch with every eligible turn surveyed (--generate-games 1
+--max-positions 0), which wastes no game and stops within a game of the
+target.
 --review-dir collects the
 games of the confirmed positions, and its README records the command line, so
 anyone can regenerate its files.
 
 Usage:
     ./py/scripts/sim_candidate_survey.py --slog-dir /workspace/mount/sim-surveys/blind-spots \\
-        --generate-games 1000 --target-positions 100 --open-leaves \\
+        --generate-games 1 --max-positions 0 --target-positions 100 --open-leaves \\
         --review-dir positions/NWL23/best-bot-blind-spots
     ./py/scripts/sim_candidate_survey.py --slog-dir <dir> --recipe setup --report-only
 """
