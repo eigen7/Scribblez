@@ -7,10 +7,10 @@ import { HealthBadge, Tile, fmtCompact, isStale } from './ui';
 // The generic worker Stats tab, driven entirely by the stats schema the API
 // reports (each role's unit noun and timing phases), so any workload role
 // that publishes stats renders here without workload-specific code. Per
-// role: a row of fleet-aggregate tiles, the cumulative, rate and
-// cycle-breakdown figures, and a compact per-worker detail table. A worker
-// still in its first cycle has no stats record yet; the API lists it with
-// a null `updated_at` so the fleet count and table are complete.
+// role: a row of fleet-aggregate tiles, the cumulative figure of one worker
+// or the fleet (picked from a pulldown), and a compact per-worker detail
+// table. A worker still in its first cycle has no stats record yet; the API
+// lists it with a null `updated_at` so the fleet count and table are complete.
 
 type RoleStats = { title: string; unit: string; phases: Record<string, string> };
 type WorkerRow = {
@@ -27,19 +27,37 @@ const cycleSeconds = (w: WorkerRow) => Object.values(w.phases).reduce((a, b) => 
 const workerPending = (w: WorkerRow) => w.updated_at == null;
 const workerStale = (w: WorkerRow) => w.updated_at != null && isStale(w.updated_at, cycleSeconds(w));
 
-function StatsFigure({ workload, tag, role, name, version }: {
-  workload: string; tag: string; role: string; name: string; version: number;
+// The figure's worker selector value that plots the fleet total (the API's
+// worker_stats_figures.FLEET).
+const FLEET = 'fleet';
+
+// The cumulative figure of one worker or the fleet, with the pulldown that
+// picks which; only workers with a stats record are offered.
+function CumulativeFigure({ workload, tag, role, workers, version }: {
+  workload: string; tag: string; role: string; workers: WorkerRow[]; version: number;
 }) {
+  const [worker, setWorker] = useState(FLEET);
   const [item, setItem] = useState<unknown | null>(null);
   useEffect(() => {
-    getJSON(
-      `/api/task/figure/${name}?workload=${workload}&tag=${encodeURIComponent(tag)}&role=${role}`,
-    )
+    const q = `workload=${workload}&tag=${encodeURIComponent(tag)}&role=${role}&worker=${worker}`;
+    getJSON(`/api/task/figure?${q}`)
       .then((d) => setItem(d.item ?? null))
       .catch(() => setItem(null));
-  }, [workload, tag, role, name, version]);
-  if (!item) return null;
-  return <div className="card"><BokehFigure item={item} /></div>;
+  }, [workload, tag, role, worker, version]);
+  return (
+    <div className="card">
+      <label style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 12.5 }}>
+        <span className="dim">show</span>
+        <select value={worker} onChange={(e) => setWorker(e.target.value)}>
+          <option value={FLEET}>fleet total</option>
+          {workers.filter((w) => !workerPending(w)).map((w) => (
+            <option key={w.worker_id} value={w.worker_id}>{w.worker_id}</option>
+          ))}
+        </select>
+      </label>
+      {item ? <BokehFigure item={item} /> : null}
+    </div>
+  );
 }
 
 // Fleet aggregates for one role's tile row. Stale and pending workers are
@@ -225,15 +243,9 @@ function RoleSection({ workload, tag, role, stats, workers, version }: {
         {agg.upload != null && <Tile label="upload" value={fmt(agg.upload)} unit="MB/s" />}
         <Tile label="workers" value={String(workers.length)} sub={workersHealth(agg)} />
       </div>
-      <div className="charts-grid">
-        <StatsFigure
-          workload={workload} tag={tag} role={role} name="cumulative" version={version}
-        />
-        <StatsFigure workload={workload} tag={tag} role={role} name="rate" version={version} />
-        <StatsFigure
-          workload={workload} tag={tag} role={role} name="cycle_breakdown" version={version}
-        />
-      </div>
+      <CumulativeFigure
+        workload={workload} tag={tag} role={role} workers={workers} version={version}
+      />
       <WorkerTable stats={stats} workers={workers} />
     </div>
   );

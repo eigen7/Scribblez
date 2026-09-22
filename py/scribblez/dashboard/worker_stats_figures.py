@@ -1,21 +1,19 @@
-"""Bokeh figures for the generic worker Stats tab.
+"""The generic worker Stats tab's data: per-worker summaries and the
+cumulative figure.
 
 Built from the per-worker stats records (stats/<worker_id>.json under the
 tag's root; see scribblez/workloads/worker.py) and shaped by the role's
 StatsSpec (unit noun + timing phases), so any workload role that publishes
-stats gets the same summary tiles/table and figures. Each builder takes the
-parsed records plus the StatsSpec and returns a Bokeh model or None when
-there is nothing to plot; the API serializes with json_item for the React
+stats gets the same summary tiles/table and figure. The figure builder
+returns a Bokeh model, which the API serializes with json_item for the React
 BokehFigure embed.
 """
 
 import json
 from datetime import UTC, datetime
-from itertools import pairwise
 from pathlib import Path
 
-from bokeh.models import ColumnDataSource, HoverTool, Range1d
-from bokeh.palettes import Blues, Category10
+from bokeh.models import Range1d
 from bokeh.plotting import figure
 
 from scribblez.workloads.base import StatsSpec
@@ -66,12 +64,12 @@ def worker_summary(record: dict, stats: StatsSpec) -> dict:
     }
 
 
-def _rate_points(samples: list[dict]) -> tuple[list[float], list[float]]:
-    """Units/hour between consecutive samples, stamped at each interval's end."""
-    steps = [(a, b) for a, b in pairwise(samples) if b["t"] > a["t"]]
-    xs = [b["t"] for _, b in steps]
-    ys = [(b["units_total"] - a["units_total"]) / (b["t"] - a["t"]) * 3600 for a, b in steps]
-    return xs, ys
+# The figure's worker selector value that plots the fleet total.
+FLEET = "fleet"
+
+
+def _datetime(t: float) -> datetime:
+    return datetime.fromtimestamp(t, tz=UTC)
 
 
 def _time_range(ts: list[float]) -> Range1d:
@@ -81,54 +79,6 @@ def _time_range(ts: list[float]) -> Range1d:
     lo, hi = min(ts), max(ts)
     pad = max((hi - lo) * 0.03, 60.0)
     return Range1d(_datetime(lo - pad), _datetime(hi + pad))
-
-
-def _datetime(t: float) -> datetime:
-    return datetime.fromtimestamp(t, tz=UTC)
-
-
-def _time_figure(title: str, y_label: str, ts: list[float]):
-    fig = figure(
-        title=title,
-        x_axis_type="datetime",
-        x_range=_time_range(ts),
-        height=280,
-        sizing_mode="stretch_width",
-    )
-    fig.yaxis.axis_label = y_label
-    fig.y_range.start = 0
-    return fig
-
-
-def _worker_series(fig, index: int, worker_id: str, xs: list[float], ys: list, step: bool):
-    """One worker's line (a step for counts, straight for rates) plus a marker
-    per point, so a series still shows when it has a single point. Drawn
-    even with no points, so every worker has its legend entry."""
-    color = Category10[10][index % 10]
-    xs = [_datetime(t) for t in xs]
-    if step:
-        fig.step(xs, ys, mode="after", color=color, legend_label=worker_id, line_width=2)
-    else:
-        fig.line(xs, ys, color=color, legend_label=worker_id, line_width=2)
-    fig.scatter(xs, ys, color=color, legend_label=worker_id, size=6)
-
-
-def rate(records: list[dict], stats: StatsSpec):
-    """Units/hour per worker over its recent samples: the slope of the
-    cumulative timeline, plotted directly, so throughput dips and stalls are
-    visible. A worker that stops reporting reads as a line that simply ends;
-    one with a single sample so far has a legend entry and no points."""
-    series = [(r["worker_id"], _rate_points(r.get("recent", []))) for r in records]
-    if not any(xs for _, (xs, _) in series):
-        return None
-    ts = [s["t"] for r in records for s in r.get("recent", [])]
-    fig = _time_figure(
-        f"{stats.unit.capitalize()} per hour (recent window)", f"{stats.unit} / hour", ts
-    )
-    for i, (worker_id, (xs, ys)) in enumerate(series):
-        _worker_series(fig, i, worker_id, xs, ys, step=False)
-    fig.legend.location = "top_left"
-    return fig
 
 
 def _worker_history(record: dict) -> list[list]:
@@ -141,89 +91,46 @@ def _worker_history(record: dict) -> list[list]:
     return [[record["started_at"], 0], *(list(p) for p in sorted(points))]
 
 
-def _fleet_total(histories: list[list[list]]) -> tuple[list[float], list[int]]:
+def _fleet_total(histories: list[list[list]]) -> list[list]:
     """The fleet's cumulative count: at each point of any worker's history,
     the sum of every worker's latest total at or before it."""
     events = sorted((t, w, n) for w, h in enumerate(histories) for t, n in h)
     latest = [0] * len(histories)
-    xs, ys = [], []
+    points = []
     for t, w, n in events:
         latest[w] = n
-        xs.append(t)
-        ys.append(sum(latest))
-    return xs, ys
+        points.append([t, sum(latest)])
+    return points
 
 
-def cumulative(records: list[dict], stats: StatsSpec):
-    """Cumulative units per worker over the whole run, with the fleet total
-    on top: what the run has delivered and how steadily, which a rate of
-    lumpy per-cycle counts (a survey finds 0-6 positions a game) obscures."""
-    if not records:
+def _series(records: list[dict], worker: str) -> list[list]:
+    """The [t, units_total] points to plot: one worker's history, or the
+    fleet total over every record's."""
+    if worker == FLEET:
+        return _fleet_total([_worker_history(r) for r in records])
+    (record,) = (r for r in records if r["worker_id"] == worker)
+    return _worker_history(record)
+
+
+def cumulative(records: list[dict], stats: StatsSpec, worker: str):
+    """Cumulative units over the whole run, for one worker or the fleet: what
+    the run has delivered and how steadily, which a rate of lumpy per-cycle
+    counts (a survey finds 0-6 positions a game) obscures. A step line with a
+    marker per cycle, so a run of one cycle still shows."""
+    points = _series(records, worker)
+    if not points:
         return None
-    histories = [_worker_history(r) for r in records]
-    fleet_xs, fleet_ys = _fleet_total(histories)
-    fig = _time_figure(f"{stats.unit.capitalize()} over time", f"cumulative {stats.unit}", fleet_xs)
-    for i, (record, history) in enumerate(zip(records, histories, strict=True)):
-        xs, ys = [t for t, _ in history], [n for _, n in history]
-        _worker_series(fig, i, record["worker_id"], xs, ys, step=True)
-    fig.step(
-        [_datetime(t) for t in fleet_xs], fleet_ys, mode="after",
-        color="#333333", line_dash="dashed", line_width=2.5, legend_label="fleet",
-    )  # fmt: skip
-    fig.legend.location = "top_left"
-    return fig
-
-
-def _phase_colors(n: int) -> list[str]:
-    """A dark-to-light single-hue ramp: phases are ordered stages of one
-    cycle, not independent series. Drawn from the (n+1)-step palette so the
-    near-white lightest step is never used."""
-    return list(Blues[max(3, n + 1)])[:n]
-
-
-def cycle_breakdown(records: list[dict], stats: StatsSpec):
-    """Mean seconds per cycle phase, stacked horizontally with one row per
-    worker: where each worker's wall time goes, on a common seconds scale
-    that stays readable as the fleet grows. A dominant upload share means
-    the worker is network-bound rather than CPU-bound."""
-    rows = [worker_summary(r, stats) for r in records if _recent(r)]
-    if not rows:
-        return None
-    phases = list(stats.phases)
-    workers = [r["worker_id"] for r in rows]
-    source = ColumnDataSource(
-        {
-            "worker": workers,
-            **{p: [r["phases"][p] for r in rows] for p in phases},
-        }
-    )
+    xs = [_datetime(t) for t, _ in points]
+    ys = [n for _, n in points]
     fig = figure(
-        title="Cycle time by phase",
-        y_range=list(reversed(workers)),  # records order, top to bottom
-        height=110 + 34 * len(workers),
+        title=f"{stats.unit.capitalize()} over time: {worker}",
+        x_axis_type="datetime",
+        x_range=_time_range([t for t, _ in points]),
+        height=280,
         sizing_mode="stretch_width",
-        toolbar_location=None,
     )
-    fig.xaxis.axis_label = "seconds / cycle"
-    fig.x_range.start = 0
-    renderers = fig.hbar_stack(
-        phases,
-        y="worker",
-        height=0.55,
-        source=source,
-        color=_phase_colors(len(phases)),
-        legend_label=[stats.phases[p] for p in phases],
-    )
-    fig.add_tools(
-        HoverTool(renderers=renderers, tooltips=[("worker", "@worker")]
-                  + [(stats.phases[p], f"@{p}{{0.0}} s") for p in phases])
-    )  # fmt: skip
-    fig.legend.location = "top_right"
+    fig.yaxis.axis_label = f"cumulative {stats.unit}"
+    fig.y_range.start = 0
+    fig.step(xs, ys, mode="after", line_width=2)
+    fig.scatter(xs, ys, size=6)
     return fig
-
-
-FIGURES = {
-    "cumulative": cumulative,
-    "rate": rate,
-    "cycle_breakdown": cycle_breakdown,
-}

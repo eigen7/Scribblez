@@ -1371,12 +1371,7 @@ h1 {
 .data-table td:first-child { font-weight: 600; }
 .data-table .dim { color: #7c8694; }
 
-/* Figures render inside half-width cells at a sane aspect ratio instead of
-   stretching across the viewport; single column when narrow. */
-.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-@media (max-width: 980px) { .charts-grid { grid-template-columns: 1fr; } }
-
-/* A role's Stats section: header line, tile row, chart grid, detail table. */
+/* A role's Stats section: header line, tile row, figure, detail table. */
 .role-section { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
 .role-head { display: flex; align-items: baseline; gap: 10px; }
 .role-head b { font-size: 15px; color: #2c3540; }

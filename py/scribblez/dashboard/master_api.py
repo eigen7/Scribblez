@@ -372,14 +372,16 @@ class TaskStatsHandler(_MasterBase):
 
 
 class TaskFigureHandler(_MasterBase):
-    def get(self, name: str):
+    """The Stats tab's cumulative figure for one role, of one worker or the
+    fleet (`worker`, a worker id or worker_stats_figures.FLEET)."""
+
+    def get(self):
         spec = self.spec()
         tag = self.get_query_argument("tag")
         role_name = self.get_query_argument("role")
+        worker = self.get_query_argument("worker")
 
         def build():
-            builder = worker_stats_figures.FIGURES.get(name)
-            assert builder is not None, f"unknown figure '{name}'"
             role = spec.role(role_name)
             assert role.stats is not None, f"role '{role_name}' publishes no stats"
             records = [
@@ -387,7 +389,7 @@ class TaskFigureHandler(_MasterBase):
                 for r in worker_stats_figures.read_stats(spec.paths(tag).stats_dir)
                 if r.get("role") == role_name
             ]
-            model = builder(records, role.stats)
+            model = worker_stats_figures.cumulative(records, role.stats, worker)
             return {"item": json_item(model) if model is not None else None}
 
         self.guarded(build)
@@ -409,5 +411,5 @@ MASTER_ROUTES = [
     (r"/api/cloud/orphans", OrphansHandler),
     (r"/api/cloud/orphan_action", OrphanActionHandler),
     (r"/api/task/stats", TaskStatsHandler),
-    (r"/api/task/figure/([a-z_]+)", TaskFigureHandler),
+    (r"/api/task/figure", TaskFigureHandler),
 ]
