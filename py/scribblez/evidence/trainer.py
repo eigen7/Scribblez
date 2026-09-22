@@ -35,6 +35,7 @@ import functools
 import os
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import torch
 
@@ -61,7 +62,7 @@ from scribblez.move_set_eval.proposal_export import export_proposal_pair
 from scribblez.sim_evidence.position_sets import DEFAULT_SET, POSITIONS_ROOT, ensure_sobs, set_gcgs
 from scribblez.sim_evidence.sobs import read_sobs
 from scribblez.train_common import timed_print
-from scribblez.workloads import pair_store
+from scribblez.workloads import mset_targets, pair_store
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.evidence_trajectories import (
     SLOGS_DIR,
@@ -187,15 +188,15 @@ class PositionSetProbe:
     absent or its sidecars cannot be generated -- the readout is optional and
     never fails training."""
 
-    def __init__(self, params, student_cfg: dict, threads: int):
+    def __init__(self, params, proposer: Path | None, student_cfg: dict, threads: int):
         self.student_cfg = student_cfg
         self.max_e = max_evidence_width(params)
         self.positions: list[tuple[str, object]] = []  # (gcg text, SobsPosition)
         set_dir = POSITIONS_ROOT / DEFAULT_SET
-        if not set_gcgs(set_dir):
+        if proposer is None or not set_gcgs(set_dir):
             return
         try:
-            sobs = ensure_sobs(set_dir, params.proposer_model, recipe_of(params), threads)
+            sobs = ensure_sobs(set_dir, proposer, recipe_of(params), threads)
         except Exception as e:  # noqa: BLE001 -- an optional readout
             timed_print(f"position-set metric disabled: {e}")
             return
@@ -462,6 +463,15 @@ def run(ctx: WorkerContext) -> int:
     params = ctx.params
     paths = ctx.tag_paths()
     paths.root.mkdir(parents=True, exist_ok=True)
+    # The tag's own copy of the proposer, as the generate role reads it: the
+    # source mset tag prunes its exports (mset_targets.pin_model). Only the
+    # optional position-set readout needs it here, so its absence disables
+    # that readout rather than the run.
+    try:
+        proposer = mset_targets.pin_model(params.proposer_model, paths, "proposer_model")
+    except FileNotFoundError as e:
+        timed_print(f"position-set metric disabled: {e}")
+        proposer = None
     device = torch.device(os.environ.get("SCZ_DEVICE", "cuda"))
     print(f"Tag root: {paths.root}\nDevice: {device}")
     if not params.student_checkpoint or not os.path.isfile(params.student_checkpoint):
@@ -531,7 +541,7 @@ def run(ctx: WorkerContext) -> int:
         "loss_cfg": LossConfig.from_args(params),
         "max_e": max_e,
         "stats": WorkerStats(ctx),
-        "posset": PositionSetProbe(params, student_cfg, threads=ctx.threads),
+        "posset": PositionSetProbe(params, proposer, student_cfg, threads=ctx.threads),
         "student_ref": _student_reference(params, device, max_e),
     }
 

@@ -111,8 +111,11 @@ def pin_model(path: str, paths, name: str) -> Path:
     if not Path(path).is_file():
         raise FileNotFoundError(f"{name} {path!r} is not a readable file")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # Copied beside and renamed over, so a reader never sees a partial copy.
-    tmp = dest.with_name(dest.name + ".tmp")
+    # Copied to a per-process temp beside the destination and renamed over it,
+    # so a reader never sees a partial copy and two first-use callers -- a
+    # tag's local workers starting together, or a worker and the dashboard --
+    # each land a whole file, the last rename winning with identical bytes.
+    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
     shutil.copyfile(path, tmp)
     os.replace(tmp, dest)
     return dest

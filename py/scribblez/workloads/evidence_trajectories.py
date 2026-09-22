@@ -27,8 +27,11 @@ rather than something a later task could add. It gives the dashboard the
 teacher's value per simmed candidate; the trainer reads no .mset label.
 
 The proposer is frozen like the teacher: every .sobs stamps its content hash,
-and a corpus of mixed proposers is refused downstream. Point it at a write-once
-export (a move_set_eval tag's models/model_epoch_NNNN.onnx).
+and a corpus of mixed proposers is refused downstream. Point it at a
+move_set_eval tag's models/model_epoch_NNNN.onnx; this tag copies it into its
+own pinned/ on first use (mset_targets.pin_model), because the source tag
+prunes its exports as it trains and would otherwise delete it from under a
+running tag.
 
 The generate role is GPU and local-only: proposer and teacher both run under
 TensorRT (see move_set_eval).

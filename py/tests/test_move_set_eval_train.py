@@ -798,6 +798,30 @@ def test_pin_model_copies_once_and_survives_the_source_being_pruned(tmp_path):
         mset_targets.pin_model(str(tmp_path / "never.onnx"), paths, "proposer_model")
 
 
+def test_pin_model_survives_concurrent_first_use(tmp_path):
+    """A tag's local workers start together and the dashboard may pin at the
+    same moment: every caller must land a whole copy, none may fail."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    source = tmp_path / "model_epoch_0001.onnx"
+    source.write_bytes(os.urandom(4 << 20))
+    root = tmp_path / "tag"
+    with ProcessPoolExecutor(8) as pool:
+        results = list(pool.map(_pin_in_process, [(str(source), str(root))] * 8))
+    assert results == [str(root / "pinned" / source.name)] * 8
+    assert (root / "pinned" / source.name).read_bytes() == source.read_bytes()
+    assert not list((root / "pinned").glob("*.tmp"))
+
+
+def _pin_in_process(args) -> str:
+    from types import SimpleNamespace
+
+    from scribblez.workloads import mset_targets
+
+    source, root = args
+    return str(mset_targets.pin_model(source, SimpleNamespace(root=root), "proposer_model"))
+
+
 def test_prune_exports_keeps_the_recent_window_and_the_ladder(tmp_path):
     from scribblez import paths as paths_mod
     from scribblez.move_set_eval import trainer

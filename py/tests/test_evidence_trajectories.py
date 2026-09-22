@@ -748,3 +748,25 @@ def test_decision_analysis_matches_the_sidecar_and_is_plain_at_prefix_zero(gcg_s
     view0 = payload(a0, notations, 0)
     assert not view0["trained"] and view0["next_sim"] is None
     assert all(m["gain"] is None for m in view0["moves"])
+
+
+def test_dashboard_sidecars_sim_under_the_tags_pinned_proposer(tmp_path, monkeypatch):
+    """The Trajectories tab sims the position set under the tag's pinned copy
+    of its proposer, never the raw source path (which the source tag prunes)."""
+    from scribblez.dashboard import trajectories_api as api
+
+    source = tmp_path / "model_epoch_0523.onnx"
+    source.write_bytes(b"weights")
+    paths = SimpleNamespace(root=tmp_path / "tag")
+    params = EvidenceTrajectoriesParams(proposer_model=str(source))
+    seen = {}
+
+    def fake_ensure_sobs(set_dir, proposer, recipe, threads, mount_root):
+        seen["proposer"] = proposer
+        return {"stem": Path("stem.sobs")}
+
+    monkeypatch.setattr(api, "ensure_sobs", fake_ensure_sobs)
+    monkeypatch.setattr(api, "set_dir", lambda name: tmp_path / name)
+    assert api.sidecars("some-set", params, paths, None) == {"stem": Path("stem.sobs")}
+    assert seen["proposer"] == paths.root / "pinned" / source.name
+    assert seen["proposer"].read_bytes() == b"weights"
