@@ -20,6 +20,13 @@ rationale even where the code has since moved on. New plans go here, not in
   expected-gain (proves-best) head. Steps 1–4 of its implementation roadmap
   are done (the kill-test passed; the fusion stage is built), and the gen-1
   frozen trial is recorded as the floor the move proposal model replaces.
+- **[rack_conditional_evidence.md](rack_conditional_evidence.md)** — extends
+  the sim-residual loop so knowledge found while simming one candidate
+  transfers to the rest of the turn: evidence kept per rack index rather than
+  aggregated, an evidence-conditioned reply policy inside rollouts, outdated
+  rollouts re-priced or re-run rather than discarded, and one acquisition rule
+  over (candidate, rack indices) with no closed "simmed" state. Evaluated on
+  the known blind-spot positions, built one layer at a time.
 - **[generational_teacher.md](generational_teacher.md)** — AlphaZero-style
   teacher broadcast for the distillation pipeline: the teacher as versioned
   per-tag state advanced by one-click (later automatic) promotion,
