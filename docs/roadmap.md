@@ -431,10 +431,13 @@ payoff; D3 is the largest port with the most localized payoff.
 
 ### 8. Cloud generation
 
-The generate role is GPU and local-only until the cloud fleet can host TensorRT
-— the GPU-workloads item in [cloud_compute.md](cloud_compute.md), which also
-needs a way to ship the teacher model to remote machines. Both corpus regenerations above
-want it.
+Done for `move_set_eval`'s generate role: the engine worker image hosts
+TensorRT, and the role declares its teacher export as an out-of-tag input
+(`RoleSpec.inputs`, [cloud_compute.md](cloud_compute.md)) that the controller
+stages for a remote slot. The `move_set_eval` train role and the
+`evidence_trajectories` roles (teacher, proposer, leaf model) remain local:
+the trainer has no bucket-side pull of its pair store or delivery of its
+exports, and the evidence roles have not declared their inputs yet.
 
 ## Models and how they are trained
 
