@@ -54,12 +54,12 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 POLL_SECONDS = 30
 
-# Export retention (prune_exports): nothing consumes a move-set-eval export but
-# "the latest" -- the dashboard's listing, the evidence trajectory workload's
-# proposer pin (an absolute path, resolved when that tag is created) -- so the
-# tag keeps a short recent window for that plus a sparse ladder for a later
-# look back, and drops the rest. Kept whole, a run's per-pass exports outgrow
-# its corpus (6k passes x 40 MB = 240 GB, once).
+# Export retention (prune_exports): nothing reads a move-set-eval export in
+# place but the dashboard's listing of the latest ones -- a tag that pins one
+# (the evidence trajectory workload's proposer) copies it into its own root
+# first (mset_targets.pin_model) -- so the tag keeps a short recent window plus
+# a sparse ladder for a later look back, and drops the rest. Kept whole, a
+# run's per-pass exports outgrow its corpus (6k passes x 40 MB = 240 GB, once).
 KEEP_LAST_EXPORTS = 10
 KEEP_EVERY_EXPORT = 100
 
@@ -168,7 +168,7 @@ def prune_exports(paths, keep_last: int = KEEP_LAST_EXPORTS, keep_every: int = K
         paths.onnx_path(gen).unlink()
 
 
-def retire_training_pairs(paths, train_ds: MsetDataset) -> int:
+def retire_training_pairs(train_ds: MsetDataset) -> int:
     """Delete the finished run's training pairs (.mset and .slog) from the
     store, returning the count. A pair is read by nothing once the last
     budgeted epoch is over -- params are frozen, so the run cannot be extended
@@ -428,6 +428,12 @@ def run(ctx: WorkerContext) -> int:
     recorder = TrainRecorder(ctx.sink)
     publish_config(recorder, ctx.tag, params)
 
+    # A finished run's training pairs are retired, so a resumed one must learn
+    # it is finished from its checkpoint, before waiting on a store that will
+    # never refill or loading a training set that no longer exists.
+    if not epochs_left(params, checkpoint.peek_state(paths, state_cls=MsetTrainState)):
+        timed_print("Training complete (the epoch budget was spent in an earlier session).")
+        return 0
     wait_for_store(paths.data_dir / SLOGS_DIR, params)
     train_ds, holdout_ds = load_datasets(paths, params)
     print(
@@ -488,7 +494,7 @@ def run(ctx: WorkerContext) -> int:
             "needs a new tag; params are frozen)."
         )
         if holdout_ds is not train_ds:
-            n = retire_training_pairs(paths, train_ds)
+            n = retire_training_pairs(train_ds)
             timed_print(f"Retired {n} training pair(s); the held-out pairs remain in the store.")
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")

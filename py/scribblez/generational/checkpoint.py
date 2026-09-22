@@ -54,6 +54,19 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
     os.replace(tmp, path)
 
 
+def peek_state(paths: TagPaths, state_cls: type = GenerationalState) -> GenerationalState:
+    """The rolling checkpoint's cursor alone, without a model or optimizer to
+    load it into -- what a run consults before building anything, to learn
+    whether there is anything left to do. A fresh zero cursor when no
+    checkpoint exists yet; a field the checkpoint predates keeps its default."""
+    path = paths.rolling_checkpoint
+    if not path.exists():
+        return state_cls()
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    names = {f.name for f in fields(state_cls)}
+    return state_cls(**{k: v for k, v in ckpt.items() if k in names})
+
+
 def resume(
     paths: TagPaths, model, optimizer, device, state_cls: type = GenerationalState
 ) -> GenerationalState:

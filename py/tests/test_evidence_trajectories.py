@@ -81,7 +81,8 @@ class _CycleRecorder:
             (out_dir / f"{stem}.slog").touch()
         return 0
 
-    def _trajectories(self, pending, params, threads):
+    def _trajectories(self, pending, proposer, params, threads):
+        assert proposer == Path("/pinned/proposer.onnx")
         self.calls.append(("traj", [p.stem for p in pending]))
         if self.traj_rc == 0:
             for p in pending:
@@ -103,7 +104,9 @@ def test_cycle_sims_only_unsimmed_slogs_and_labels_every_pending_one(tmp_path, m
     (tmp_path / "a.slog").touch()
     (tmp_path / "a.sobs").touch()
     rec = _CycleRecorder(monkeypatch, new_slogs=("b",))
-    r = ET.run_one_cycle(tmp_path, EvidenceTrajectoriesParams(), threads=2)
+    r = ET.run_one_cycle(
+        tmp_path, Path("/pinned/proposer.onnx"), EvidenceTrajectoriesParams(), threads=2
+    )
     assert r.returncode == 0
     assert rec.calls == [("traj", ["b"]), ("mset", ["a", "b"])]
     assert (tmp_path / "a.mset").exists() and (tmp_path / "b.mset").exists()
@@ -113,7 +116,9 @@ def test_a_failed_trajectory_phase_skips_the_labeling(tmp_path, monkeypatch):
     """The labeling force-includes candidates from the .sobs, so it must never
     run over a file whose sims failed."""
     rec = _CycleRecorder(monkeypatch, new_slogs=("b",), traj_rc=3)
-    r = ET.run_one_cycle(tmp_path, EvidenceTrajectoriesParams(), threads=2)
+    r = ET.run_one_cycle(
+        tmp_path, Path("/pinned/proposer.onnx"), EvidenceTrajectoriesParams(), threads=2
+    )
     assert r.returncode == 3
     assert rec.calls == [("traj", ["b"])]
     assert not (tmp_path / "b.mset").exists()
@@ -121,7 +126,7 @@ def test_a_failed_trajectory_phase_skips_the_labeling(tmp_path, monkeypatch):
 
 def test_generate_refuses_a_missing_model(tmp_path, capsys):
     params = EvidenceTrajectoriesParams(proposer_model=str(tmp_path / "no.onnx"), teacher_model="")
-    ctx = SimpleNamespace(params=params)
+    ctx = SimpleNamespace(params=params, tag_paths=lambda: SimpleNamespace(root=tmp_path / "tag"))
     assert ET.run_generate(ctx) == 1
     err = capsys.readouterr().err
     assert "proposer_model" in err and "teacher_model" in err
