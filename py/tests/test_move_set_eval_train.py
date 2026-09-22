@@ -340,6 +340,50 @@ def corpus_dir(tmp_path_factory) -> Path:
     return d
 
 
+def test_generator_refuses_a_teacher_with_non_finite_readouts(corpus_dir, tmp_path):
+    """A teacher whose readouts are non-finite (what FP16 overflow of a value
+    model looks like) must stop the generator, not write an unusable corpus
+    the trainer would later drop row by row."""
+    from scribblez.ffi import get_input_shapes
+    from scribblez.position_eval.model import PositionEvalModel
+    from scribblez.position_eval.onnx_export import export_onnx
+
+    shapes = {s.name: s.dims for s in get_input_shapes()}
+    torch.manual_seed(0)
+    teacher = PositionEvalModel(
+        spatial_planes=shapes["input_spatial"][0],
+        scalar_size=shapes["input_scalar"][0],
+        trunk_channels=8,
+        num_blocks=3,
+    ).eval()
+    with torch.no_grad():
+        teacher.trunk.stem[1].bias.fill_(float("inf"))
+    onnx_path = tmp_path / "nan_teacher.onnx"
+    export_onnx(
+        teacher,
+        onnx_path,
+        spatial_planes=shapes["input_spatial"][0],
+        scalar_size=shapes["input_scalar"][0],
+        opp_leave_input=False,
+    )
+    shutil.copy(sorted(corpus_dir.glob("*.slog"))[0], tmp_path / "g.slog")
+    result = subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-dir={tmp_path}",
+            f"--model={onnx_path}",
+            "--fast-build",
+            "--positions-per-game=1",
+            "--threads=2",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "non-finite" in result.stderr
+    assert not list(tmp_path.glob("*.mset"))
+
+
 @pytest.fixture(scope="module")
 def sweep_dir(corpus_dir, tmp_path_factory) -> Path:
     """The same games labeled in the generator's full-sweep mode: the held-out
@@ -701,16 +745,68 @@ def test_regret_and_baseline_ranking_semantics():
     assert mset_eval._regret(teacher, baseline, 5) == 0.0  # k caps at the candidate count
 
 
-def _pair(store, stem, flags=0, positions=4):
-    _write_mset(
-        store / f"{stem}.mset", [(0, t, _targets(3)) for t in range(positions)], flags=flags
-    )
+def _pair(store, stem, flags=0, positions=4) -> Path:
+    path = store / f"{stem}.mset"
+    _write_mset(path, [(0, t, _targets(3)) for t in range(positions)], flags=flags)
+    return path
 
 
 def _params(**kw):
     from scribblez.workloads.move_set_eval import MoveSetEvalParams
 
     return MoveSetEvalParams(**kw)
+
+
+def test_a_corpus_dropped_whole_is_refused_not_trained_on(tmp_path):
+    """Every candidate non-finite (a teacher served past its precision's
+    range) must stop the run at load, not pace an empty one."""
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.dataset import MsetDataset
+
+    all_bad = np.full((3, 5), np.nan, dtype=np.float32)
+    _write_mset(tmp_path / "a.mset", [(0, t, all_bad) for t in range(4)])
+    ds = MsetDataset(tmp_path)
+    assert ds.num_candidates == 0
+    with pytest.raises(RuntimeError, match="non-finite"):
+        trainer.require_training_rows(ds)
+    trainer.require_training_rows(MsetDataset(mset_files=[_pair(tmp_path, "ok")]))
+
+
+def test_prune_exports_keeps_the_recent_window_and_the_ladder(tmp_path):
+    from scribblez import paths as paths_mod
+    from scribblez.move_set_eval import trainer
+    from scribblez.paths import TagPaths
+
+    paths = TagPaths("t", paths_mod.MOVE_SET_EVAL, tmp_path)
+    paths.onnx_dir.mkdir(parents=True)
+    for gen in range(0, 1204):
+        paths.onnx_path(gen).touch()
+    (paths.onnx_dir / "shared.blob").touch()  # a sidecar is not an export
+
+    trainer.prune_exports(paths, keep_last=10, keep_every=100)
+    kept = paths.exported_generations()
+    assert kept == [*range(0, 1200, 100), *range(1194, 1204)]
+    assert (paths.onnx_dir / "shared.blob").exists()
+    # Idempotent, and a fresh pass prunes only what the window slid past.
+    paths.onnx_path(1204).touch()
+    trainer.prune_exports(paths, keep_last=10, keep_every=100)
+    assert paths.exported_generations() == [*range(0, 1200, 100), *range(1195, 1205)]
+
+
+def test_retire_training_pairs_deletes_the_training_side_only(tmp_path):
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.dataset import MsetDataset
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP, complete_pairs
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    train_files = [_pair(store, f"s{i}") for i in range(3)]
+    _pair(store, "sweep0", flags=MSET_FLAG_FULL_SWEEP)
+    train_ds = MsetDataset(mset_files=train_files)
+
+    assert trainer.retire_training_pairs(None, train_ds) == 3
+    assert complete_pairs(store) == [store / "sweep0.mset"]
+    assert sorted(store.glob("*.slog")) == [store / "sweep0.slog"]
 
 
 def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
@@ -937,7 +1033,11 @@ paths = SimpleNamespace(
     data_dir=root,
     dashboard_db=root / "dashboard.db",
     rolling_checkpoint=root / "checkpoints" / "model.pt",
+    onnx_dir=root / "models",
     onnx_path=lambda epoch: root / "models" / f"model_epoch_{epoch:04d}.onnx",
+    exported_generations=lambda: sorted(
+        int(p.stem.rsplit("_", 1)[1]) for p in (root / "models").glob("model_epoch_*.onnx")
+    ),
 )
 ctx = SimpleNamespace(
     params=params, tag="t", worker_id="w0", threads=1, kind="local",

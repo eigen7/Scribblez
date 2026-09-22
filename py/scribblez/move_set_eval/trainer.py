@@ -54,6 +54,15 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 POLL_SECONDS = 30
 
+# Export retention (prune_exports): nothing consumes a move-set-eval export but
+# "the latest" -- the dashboard's listing, the evidence trajectory workload's
+# proposer pin (an absolute path, resolved when that tag is created) -- so the
+# tag keeps a short recent window for that plus a sparse ladder for a later
+# look back, and drops the rest. Kept whole, a run's per-pass exports outgrow
+# its corpus (6k passes x 40 MB = 240 GB, once).
+KEEP_LAST_EXPORTS = 10
+KEEP_EVERY_EXPORT = 100
+
 
 @dataclass
 class MsetTrainState(GenerationalState):
@@ -117,9 +126,13 @@ def load_datasets(paths, params) -> tuple[MsetDataset, MsetDataset]:
     store = paths.data_dir / SLOGS_DIR
     train_files, holdout_files = split_pairs(store, params.holdout_every)
     if not train_files:
-        raise FileNotFoundError(f"no complete .slog/.mset training pairs in {store}")
+        raise FileNotFoundError(
+            f"no complete .slog/.mset training pairs in {store} (a finished run retires its "
+            "training pairs; a new run needs a new tag)"
+        )
     adopt_information_condition(train_files)
     train_ds = MsetDataset(mset_files=train_files)
+    require_training_rows(train_ds)
     if not holdout_files:
         timed_print("no held-out pairs; metrics are on-train")
         return train_ds, train_ds
@@ -128,6 +141,43 @@ def load_datasets(paths, params) -> tuple[MsetDataset, MsetDataset]:
         "train/holdout pairs disagree on the teacher hash"
     )
     return train_ds, holdout_ds
+
+
+def require_training_rows(train_ds: MsetDataset):
+    """A corpus the dataset dropped whole -- every candidate labeled non-finite
+    by a teacher served past its precision's range -- is a broken run, not an
+    empty one to keep pacing: with nothing to train on, every pass would still
+    export and checkpoint an untouched model."""
+    if train_ds.num_candidates == 0:
+        raise RuntimeError(
+            f"no finite teacher targets in {len(train_ds.files)} training pair(s) "
+            f"({train_ds.dropped_candidates} candidates dropped): the teacher's readouts are "
+            "non-finite, so its serving precision overflows (docs/plans/fp16_safe_serving.md). "
+            "Regenerate the corpus; nothing here is trainable."
+        )
+
+
+def prune_exports(paths, keep_last: int = KEEP_LAST_EXPORTS, keep_every: int = KEEP_EVERY_EXPORT):
+    """Delete this tag's per-pass ONNX exports outside the retention policy:
+    the newest `keep_last` generations and every `keep_every`-th stay."""
+    gens = paths.exported_generations()
+    recent = set(gens[-keep_last:]) if keep_last > 0 else set()
+    for gen in gens:
+        if gen in recent or (keep_every > 0 and gen % keep_every == 0):
+            continue
+        paths.onnx_path(gen).unlink()
+
+
+def retire_training_pairs(paths, train_ds: MsetDataset) -> int:
+    """Delete the finished run's training pairs (.mset and .slog) from the
+    store, returning the count. A pair is read by nothing once the last
+    budgeted epoch is over -- params are frozen, so the run cannot be extended
+    -- and the store is the bulk of a tag's footprint. The held-out pairs stay:
+    they are what a later diagnostic or re-evaluation of the exports reads."""
+    for mset in train_ds.files:
+        for path in (mset, mset.with_suffix(".slog")):
+            path.unlink(missing_ok=True)
+    return len(train_ds.files)
 
 
 def absorb_new_pairs(paths, params, train_ds: MsetDataset, holdout_ds: MsetDataset) -> int:
@@ -240,6 +290,11 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
         on_batch=functools.partial(progress_line, epoch),
         grad_clip=params.grad_clip,
     )
+    if result.n_batches == 0:
+        # Nothing was trained: the pass would otherwise be recorded, exported
+        # and checkpointed as if it were one. Unreachable by construction --
+        # load_datasets refuses an empty corpus -- so a hit is a new bug.
+        raise RuntimeError(f"pass {epoch} saw no training rows")
     state.rows_trained = result.rows_trained
     state.generation_index = epoch + 1
     state.settled_epochs += int(settled)
@@ -328,6 +383,7 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
         move_encoding_version=cfg["move_encoding_version"],
     )
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
+    prune_exports(paths)
     recorder.commit_generation(epoch, state.rows_trained, record)
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
@@ -431,6 +487,9 @@ def run(ctx: WorkerContext) -> int:
             f"{train_ds.num_positions} positions). Pause the worker (raising train_epochs "
             "needs a new tag; params are frozen)."
         )
+        if holdout_ds is not train_ds:
+            n = retire_training_pairs(paths, train_ds)
+            timed_print(f"Retired {n} training pair(s); the held-out pairs remain in the store.")
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")
     return 0
