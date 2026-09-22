@@ -54,23 +54,38 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
     os.replace(tmp, path)
 
 
+def _load(paths: TagPaths, device, state_cls: type) -> tuple[dict | None, GenerationalState]:
+    """The rolling checkpoint's raw dict (None when there is none yet) and its
+    cursor as `state_cls`; a field the checkpoint predates keeps its default."""
+    path = paths.rolling_checkpoint
+    if not path.exists():
+        return None, state_cls()
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    names = {f.name for f in fields(state_cls)}
+    return ckpt, state_cls(**{k: v for k, v in ckpt.items() if k in names})
+
+
+def peek_state(paths: TagPaths, state_cls: type = GenerationalState) -> GenerationalState:
+    """The rolling checkpoint's cursor alone, without a model or optimizer to
+    load it into -- what a run consults before building anything, to learn
+    whether there is anything left to do. A fresh zero cursor when no
+    checkpoint exists yet."""
+    return _load(paths, "cpu", state_cls)[1]
+
+
 def resume(
     paths: TagPaths, model, optimizer, device, state_cls: type = GenerationalState
 ) -> GenerationalState:
     """Load the rolling checkpoint into `model`/`optimizer` and return the cursor,
     as `state_cls` (a GenerationalState or a subclass of it carrying more).
-    Returns a fresh zero cursor when no checkpoint exists yet; a field the
-    checkpoint predates keeps its default."""
-    path = paths.rolling_checkpoint
-    if not path.exists():
-        return state_cls()
-    ckpt = torch.load(path, map_location=device, weights_only=False)
+    Returns a fresh zero cursor when no checkpoint exists yet."""
+    ckpt, state = _load(paths, device, state_cls)
+    if ckpt is None:
+        return state
     model.load_state_dict(ckpt["model_state_dict"])
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    names = {f.name for f in fields(state_cls)}
-    state = state_cls(**{k: v for k, v in ckpt.items() if k in names})
     print(
-        f"Resuming from {path.name}: generation {state.generation_index}, "
+        f"Resuming from {paths.rolling_checkpoint.name}: generation {state.generation_index}, "
         f"{state.rows_trained} rows trained"
     )
     return state

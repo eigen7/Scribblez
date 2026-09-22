@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -286,21 +287,12 @@ def test_schedule_free_recalibrates_the_mset_trunk_batchnorm():
     assert not torch.equal(bn_at_training, first_bn.running_mean)
 
 
-@pytest.fixture(scope="module")
-def corpus_dir(tmp_path_factory) -> Path:
-    """A tiny .slog corpus labeled with .mset targets from a small teacher."""
-    if not TARGET_GENERATOR.exists() or not SLOG_WRITER.exists():
-        pytest.skip("engine binaries not built")
-    if not LEAVES.exists():
-        pytest.skip("HastyBot leave values not installed")
-    if not torch.cuda.is_available():
-        pytest.skip("no GPU")
+def _export_teacher(onnx_path: Path, *, poison: bool = False) -> Path:
+    """A tiny randomly-initialized position-eval teacher exported to ONNX;
+    `poison` gives it an inf bias, so every readout is non-finite."""
     from scribblez.ffi import get_input_shapes
     from scribblez.position_eval.model import PositionEvalModel
     from scribblez.position_eval.onnx_export import export_onnx
-
-    d = tmp_path_factory.mktemp("move_set_eval_train")
-    subprocess.run([str(SLOG_WRITER), str(d), "12", "4"], check=True, capture_output=True)
 
     shapes = {s.name: s.dims for s in get_input_shapes()}
     torch.manual_seed(0)
@@ -310,7 +302,9 @@ def corpus_dir(tmp_path_factory) -> Path:
         trunk_channels=8,
         num_blocks=3,
     ).eval()
-    onnx_path = d / "teacher.onnx"
+    if poison:
+        with torch.no_grad():
+            teacher.trunk.stem[1].bias.fill_(float("inf"))
     export_onnx(
         teacher,
         onnx_path,
@@ -318,6 +312,22 @@ def corpus_dir(tmp_path_factory) -> Path:
         scalar_size=shapes["input_scalar"][0],
         opp_leave_input=False,
     )
+    return onnx_path
+
+
+@pytest.fixture(scope="module")
+def corpus_dir(tmp_path_factory) -> Path:
+    """A tiny .slog corpus labeled with .mset targets from a small teacher."""
+    if not TARGET_GENERATOR.exists() or not SLOG_WRITER.exists():
+        pytest.skip("engine binaries not built")
+    if not LEAVES.exists():
+        pytest.skip("HastyBot leave values not installed")
+    if not torch.cuda.is_available():
+        pytest.skip("no GPU")
+    d = tmp_path_factory.mktemp("move_set_eval_train")
+    subprocess.run([str(SLOG_WRITER), str(d), "12", "4"], check=True, capture_output=True)
+
+    onnx_path = _export_teacher(d / "teacher.onnx")
     result = subprocess.run(
         [
             str(TARGET_GENERATOR),
@@ -338,6 +348,32 @@ def corpus_dir(tmp_path_factory) -> Path:
     assert result.returncode == 0, f"target generator failed: {result.stderr}"
     assert sorted(d.glob("*.mset")), "no .mset produced"
     return d
+
+
+def test_generator_refuses_a_teacher_with_non_finite_readouts(corpus_dir, tmp_path):
+    """A teacher whose readouts are non-finite (what FP16 overflow of a value
+    model looks like) must stop the generator, not write an unusable corpus
+    the trainer would later drop row by row."""
+    onnx_path = _export_teacher(tmp_path / "nan_teacher.onnx", poison=True)
+    shutil.copy(sorted(corpus_dir.glob("*.slog"))[0], tmp_path / "g.slog")
+    result = subprocess.run(
+        [
+            str(TARGET_GENERATOR),
+            f"--slog-dir={tmp_path}",
+            f"--model={onnx_path}",
+            "--fast-build",
+            "--positions-per-game=1",
+            "--threads=2",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    # The clean-exception exit, not a std::terminate abort (134): the throw
+    # happens on the inference thread and must be relayed to main's handler.
+    assert result.returncode == 1, result.stderr
+    assert "non-finite" in result.stderr
+    assert "terminate called" not in result.stderr
+    assert not list(tmp_path.glob("*.mset"))
 
 
 @pytest.fixture(scope="module")
@@ -701,16 +737,126 @@ def test_regret_and_baseline_ranking_semantics():
     assert mset_eval._regret(teacher, baseline, 5) == 0.0  # k caps at the candidate count
 
 
-def _pair(store, stem, flags=0, positions=4):
-    _write_mset(
-        store / f"{stem}.mset", [(0, t, _targets(3)) for t in range(positions)], flags=flags
-    )
+def _pair(store, stem, flags=0, positions=4) -> Path:
+    path = store / f"{stem}.mset"
+    _write_mset(path, [(0, t, _targets(3)) for t in range(positions)], flags=flags)
+    return path
 
 
 def _params(**kw):
     from scribblez.workloads.move_set_eval import MoveSetEvalParams
 
     return MoveSetEvalParams(**kw)
+
+
+def test_a_corpus_dropped_whole_is_refused_not_trained_on(tmp_path):
+    """Every candidate non-finite (a teacher served past its precision's
+    range) must stop the run at load, not pace an empty one."""
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.dataset import MsetDataset
+
+    all_bad = np.full((3, 5), np.nan, dtype=np.float32)
+    _write_mset(tmp_path / "a.mset", [(0, t, all_bad) for t in range(4)])
+    ds = MsetDataset(tmp_path)
+    assert ds.num_candidates == 0
+    with pytest.raises(RuntimeError, match="non-finite"):
+        trainer.require_training_rows(ds)
+    trainer.require_training_rows(MsetDataset(mset_files=[_pair(tmp_path, "ok")]))
+
+
+def test_a_spent_budget_is_read_off_the_checkpoint_before_the_store(tmp_path):
+    """A finished run's training pairs are gone, so a resumed trainer must
+    recognise completion from its checkpoint cursor alone."""
+    from scribblez.generational import checkpoint
+    from scribblez.move_set_eval import trainer
+
+    paths = SimpleNamespace(rolling_checkpoint=tmp_path / "model.pt")
+    params = _params(train_epochs=2)
+    assert trainer.epochs_left(params, checkpoint.peek_state(paths, trainer.MsetTrainState))
+    torch.save(
+        {"settled_epochs": 2, "generation_index": 5, "rows_trained": 9}, paths.rolling_checkpoint
+    )
+    state = checkpoint.peek_state(paths, trainer.MsetTrainState)
+    assert (state.settled_epochs, state.generation_index) == (2, 5)
+    assert not trainer.epochs_left(params, state)
+
+
+def test_pin_model_copies_once_and_survives_the_source_being_pruned(tmp_path):
+    from scribblez.workloads import mset_targets
+
+    source = tmp_path / "models" / "model_epoch_0523.onnx"
+    source.parent.mkdir()
+    source.write_bytes(b"weights")
+    paths = SimpleNamespace(root=tmp_path / "evidence-tag")
+
+    pinned = mset_targets.pin_model(str(source), paths, "proposer_model")
+    assert pinned == paths.root / "pinned" / "model_epoch_0523.onnx"
+    assert pinned.read_bytes() == b"weights"
+    source.unlink()  # the source tag prunes it
+    assert mset_targets.pin_model(str(source), paths, "proposer_model") == pinned
+    with pytest.raises(FileNotFoundError, match="proposer_model"):
+        mset_targets.pin_model(str(tmp_path / "never.onnx"), paths, "proposer_model")
+
+
+def test_pin_model_survives_concurrent_first_use(tmp_path):
+    """A tag's local workers start together and the dashboard may pin at the
+    same moment: every caller must land a whole copy, none may fail."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    source = tmp_path / "model_epoch_0001.onnx"
+    source.write_bytes(os.urandom(4 << 20))
+    root = tmp_path / "tag"
+    with ProcessPoolExecutor(8) as pool:
+        results = list(pool.map(_pin_in_process, [(str(source), str(root))] * 8))
+    assert results == [str(root / "pinned" / source.name)] * 8
+    assert (root / "pinned" / source.name).read_bytes() == source.read_bytes()
+    assert not list((root / "pinned").glob("*.tmp"))
+
+
+def _pin_in_process(args) -> str:
+    from types import SimpleNamespace
+
+    from scribblez.workloads import mset_targets
+
+    source, root = args
+    return str(mset_targets.pin_model(source, SimpleNamespace(root=root), "proposer_model"))
+
+
+def test_prune_exports_keeps_the_recent_window_and_the_ladder(tmp_path):
+    from scribblez import paths as paths_mod
+    from scribblez.move_set_eval import trainer
+    from scribblez.paths import TagPaths
+
+    paths = TagPaths("t", paths_mod.MOVE_SET_EVAL, tmp_path)
+    paths.onnx_dir.mkdir(parents=True)
+    for gen in range(0, 1204):
+        paths.onnx_path(gen).touch()
+    (paths.onnx_dir / "shared.blob").touch()  # a sidecar is not an export
+
+    trainer.prune_exports(paths, keep_last=10, keep_every=100)
+    kept = paths.exported_generations()
+    assert kept == [*range(0, 1200, 100), *range(1194, 1204)]
+    assert (paths.onnx_dir / "shared.blob").exists()
+    # Idempotent, and a fresh pass prunes only what the window slid past.
+    paths.onnx_path(1204).touch()
+    trainer.prune_exports(paths, keep_last=10, keep_every=100)
+    assert paths.exported_generations() == [*range(0, 1200, 100), *range(1195, 1205)]
+
+
+def test_retire_training_pairs_deletes_the_training_side_only(tmp_path):
+    from scribblez.move_set_eval import trainer
+    from scribblez.move_set_eval.dataset import MsetDataset
+    from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP, complete_pairs
+
+    store = tmp_path / "slogs"
+    store.mkdir()
+    train_files = [_pair(store, f"s{i}") for i in range(3)]
+    _pair(store, "sweep0", flags=MSET_FLAG_FULL_SWEEP)
+    train_ds = MsetDataset(mset_files=train_files)
+
+    assert trainer.retire_training_pairs(train_ds) == 3
+    assert complete_pairs(store) == [store / "sweep0.mset"]
+    assert sorted(store.glob("*.slog")) == [store / "sweep0.slog"]
 
 
 def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
@@ -937,7 +1083,11 @@ paths = SimpleNamespace(
     data_dir=root,
     dashboard_db=root / "dashboard.db",
     rolling_checkpoint=root / "checkpoints" / "model.pt",
+    onnx_dir=root / "models",
     onnx_path=lambda epoch: root / "models" / f"model_epoch_{epoch:04d}.onnx",
+    exported_generations=lambda: sorted(
+        int(p.stem.rsplit("_", 1)[1]) for p in (root / "models").glob("model_epoch_*.onnx")
+    ),
 )
 ctx = SimpleNamespace(
     params=params, tag="t", worker_id="w0", threads=1, kind="local",
@@ -948,6 +1098,14 @@ ctx = SimpleNamespace(
     tag_paths=lambda: paths,
 )
 assert trainer.run(ctx) == 0, "run() did not exit cleanly"
+
+# The finished run retired its training pairs and kept the held-out (swept)
+# ones; a resumed run learns it is finished from the checkpoint and exits 0.
+store = root / "slogs"
+remaining = sorted(p.name for p in store.glob("*.mset"))
+assert remaining and all(n.startswith("sweep-") for n in remaining), remaining
+assert sorted(p.stem for p in store.glob("*.slog")) == [p[:-5] for p in remaining]
+assert trainer.run(ctx) == 0, "resumed finished run did not exit cleanly"
 
 saved = torch.load(paths.rolling_checkpoint, map_location="cpu", weights_only=False)
 assert saved["settled_epochs"] == 2, saved["settled_epochs"]

@@ -33,7 +33,11 @@ struct NeuralNetParamsBase {
 
   int max_rows = 0;  // NeuralNetParams<Spec> sets the family default
 
-  Precision precision = Precision::kFP16;
+  // BF16: FP32's exponent range, so the value families' unbounded activation
+  // magnitudes cannot overflow the way they do under FP16 (measured and
+  // resolved in docs/plans/fp16_safe_serving.md). Callers that opt into FP16
+  // do so for models known to fit its range.
+  Precision precision = Precision::kBF16;
   uint64_t workspace_bytes = uint64_t{1} << 30;  // 1 GiB TensorRT scratch
   std::string mount_root = "/workspace/mount";   // root of the engine-plan cache
 

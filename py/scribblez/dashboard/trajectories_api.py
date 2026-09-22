@@ -49,6 +49,7 @@ from scribblez.sim_evidence.position_sets import (
     set_gcgs,
 )
 from scribblez.sim_evidence.sobs import SobsPosition, read_sobs
+from scribblez.workloads import mset_targets
 from scribblez.workloads.evidence_trajectories import (
     EvidenceTrajectoriesParams,
     max_evidence_width,
@@ -110,12 +111,13 @@ def generations(paths: TagPaths, params: EvidenceTrajectoriesParams) -> list[dic
     return gens
 
 
-def sidecars(set_name: str, params: EvidenceTrajectoriesParams, mount_root) -> dict[str, Path]:
+def sidecars(
+    set_name: str, params: EvidenceTrajectoriesParams, paths: TagPaths, mount_root
+) -> dict[str, Path]:
     """{stem: .sobs} for the set under the tag's proposer + recipe, generating
     what is missing (blocking)."""
-    return ensure_sobs(
-        set_dir(set_name), Path(params.proposer_model), recipe_of(params), _SIM_THREADS, mount_root
-    )
+    proposer = mset_targets.pin_model(params.proposer_model, paths, "proposer_model")
+    return ensure_sobs(set_dir(set_name), proposer, recipe_of(params), _SIM_THREADS, mount_root)
 
 
 @functools.lru_cache(maxsize=4)
@@ -172,7 +174,7 @@ def position_payload(
     if generation not in gens:
         raise KeyError(f"no checkpoint for generation {generation}")
     gcg = gcgs[position]
-    sobs_path = sidecars(set_name, params, mount_root)[gcg.stem]
+    sobs_path = sidecars(set_name, params, paths, mount_root)[gcg.stem]
     ckpt_path = gens[generation]
     analysis = _analysis(
         ckpt_path,

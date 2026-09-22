@@ -27,8 +27,11 @@ rather than something a later task could add. It gives the dashboard the
 teacher's value per simmed candidate; the trainer reads no .mset label.
 
 The proposer is frozen like the teacher: every .sobs stamps its content hash,
-and a corpus of mixed proposers is refused downstream. Point it at a write-once
-export (a move_set_eval tag's models/model_epoch_NNNN.onnx).
+and a corpus of mixed proposers is refused downstream. Point it at a
+move_set_eval tag's models/model_epoch_NNNN.onnx; this tag copies it into its
+own pinned/ on first use (mset_targets.pin_model), because the source tag
+prunes its exports as it trains and would otherwise delete it from under a
+running tag.
 
 The generate role is GPU and local-only: proposer and teacher both run under
 TensorRT (see move_set_eval).
@@ -49,6 +52,7 @@ controller-assigned inbox as position_eval's match role
 it trains.
 """
 
+import functools
 import subprocess
 import sys
 import time
@@ -80,8 +84,8 @@ class EvidenceTrajectoriesParams:
     proposer_model: str = param(
         "",
         "absolute path to the move-set-eval student ONNX that proposes trajectory "
-        "candidates (a move_set_eval tag's models/model_epoch_NNNN.onnx); required, and "
-        "must never be overwritten in place",
+        "candidates (a move_set_eval tag's models/model_epoch_NNNN.onnx); required. Copied "
+        "into this tag's pinned/ on first use, since the source tag prunes its exports",
     )
     teacher_model: str = param(
         "",
@@ -282,15 +286,15 @@ class CycleResult:
 
 
 def run_trajectory_generator(
-    pending: list[Path], params: EvidenceTrajectoriesParams, threads: int
+    pending: list[Path], proposer: Path, params: EvidenceTrajectoriesParams, threads: int
 ) -> int:
     """Give `pending` .slog files trajectory .sobs sidecars, proposed by the
-    tag's frozen proposer. The tool skips files whose .sobs already exists, so
-    a resumed cycle sims nothing twice."""
+    tag's pinned copy of its proposer. The tool skips files whose .sobs already
+    exists, so a resumed cycle sims nothing twice."""
     cmd = [
         TRAJECTORY_GENERATOR,
         *[f"--slog-file={p}" for p in pending],
-        f"--model={params.proposer_model}",
+        f"--model={proposer}",
         f"--rollouts={params.rollouts}",
         *(
             [f"--horizon={params.horizon}", f"--leaf-model={params.leaf_model}"]
@@ -311,7 +315,9 @@ def run_trajectory_generator(
     return rc
 
 
-def run_one_cycle(out_dir: Path, params: EvidenceTrajectoriesParams, threads: int) -> CycleResult:
+def run_one_cycle(
+    out_dir: Path, proposer: Path, params: EvidenceTrajectoriesParams, threads: int
+) -> CycleResult:
     """One generation cycle into `out_dir`, with per-phase wall times."""
     t0 = time.monotonic()
     rc = run_games(
@@ -332,7 +338,7 @@ def run_one_cycle(out_dir: Path, params: EvidenceTrajectoriesParams, threads: in
     pending = sorted(s for s in out_dir.glob("*.slog") if not s.with_suffix(".mset").exists())
     t1 = time.monotonic()
     unsimmed = [s for s in pending if not s.with_suffix(".sobs").exists()]
-    if unsimmed and (rc := run_trajectory_generator(unsimmed, params, threads)) != 0:
+    if unsimmed and (rc := run_trajectory_generator(unsimmed, proposer, params, threads)) != 0:
         return CycleResult(rc, gen_seconds, time.monotonic() - t1, 0.0)
     traj_seconds = time.monotonic() - t1
 
@@ -350,9 +356,11 @@ def run_one_cycle(out_dir: Path, params: EvidenceTrajectoriesParams, threads: in
     return CycleResult(rc, gen_seconds, traj_seconds, time.monotonic() - t2)
 
 
-def _cycle(work_dir: Path, params: EvidenceTrajectoriesParams, threads: int) -> tuple[int, dict]:
+def _cycle(
+    proposer: Path, work_dir: Path, params: EvidenceTrajectoriesParams, threads: int
+) -> tuple[int, dict]:
     """One cycle in the shared generate loop's (returncode, phases) shape."""
-    r = run_one_cycle(work_dir, params, threads)
+    r = run_one_cycle(work_dir, proposer, params, threads)
     return r.returncode, {
         "gen_s": r.gen_seconds,
         "traj_s": r.traj_seconds,
@@ -365,7 +373,12 @@ def run_generate(ctx: WorkerContext) -> int:
     A pair is complete at its .mset, the last member produced; the .sobs rides
     along."""
     p = ctx.params
-    ok = mset_targets.require_model_file(p.proposer_model, "proposer_model")
+    ok = True
+    try:
+        proposer = mset_targets.pin_model(p.proposer_model, ctx.tag_paths(), "proposer_model")
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        ok = False
     ok = mset_targets.require_model_file(p.teacher_model, "teacher_model") and ok
     if p.horizon:
         ok = mset_targets.require_model_file(p.leaf_model, "leaf_model") and ok
@@ -373,7 +386,7 @@ def run_generate(ctx: WorkerContext) -> int:
         return 1
     return pair_store.run_pair_generate(
         ctx,
-        _cycle,
+        functools.partial(_cycle, proposer),
         ".mset",
         SLOGS_DIR,
         target_pairs=p.target_pairs,

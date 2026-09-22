@@ -52,9 +52,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -120,6 +122,10 @@ static_assert(kPlacementHeads == nn::kNumMaskHeads);
 static_assert(int(move_set_eval::kPlaneWidth) == kFootprintClasses);
 static_assert(kRawPlaneFloats == nn::kNumMaskHeads * kFootprintClasses);
 static_assert(kPlaneFloats == kRawPlaneFloats);  // mask-softmax preserves the per-head width
+
+bool all_finite(const float* p, size_t n) {
+  return std::all_of(p, p + n, [](float v) { return std::isfinite(v); });
+}
 
 // The teacher: the concrete position-eval service, held by type because the
 // mask-labelling overload is constrained to specs with aux outputs.
@@ -347,9 +353,22 @@ class InferenceLoop {
 
   // Slices in thread-completion order; call after run() returns.
   std::vector<CandidateSlice>& done() { return done_; }
+  // Re-raises what stopped the loop, if anything did. Called after join(): a
+  // throw on the inference thread cannot reach main's handler by itself (an
+  // exception leaving a std::thread is std::terminate), so run() stashes it and
+  // keeps draining the queue -- the encoder workers block on its row budget
+  // otherwise -- and the file's thread of control raises it here.
+  void rethrow_failure() const;
 
  private:
+  // The loop body of run(): batches slices and flushes them through the teacher.
+  void consume(SliceQueue* queue);
   void flush();
+  // Every teacher readout of the last evaluate() must be finite: a non-finite
+  // one is a broken serving path (FP16 overflow of a value model's activations,
+  // docs/plans/fp16_safe_serving.md), and a corpus written through it would be
+  // dropped row by row at training time -- silently, as an empty run. Fail here.
+  void require_finite_teacher_outputs(int rows) const;
 
   TeacherService* service_;
   const Dictionary& dict_;  // for the plane worker's per-candidate movegen caches
@@ -368,6 +387,7 @@ class InferenceLoop {
   std::vector<CandidateSlice> pending_;
   int pending_rows_ = 0;
   std::vector<CandidateSlice> done_;
+  std::exception_ptr failure_;
 };
 
 InferenceLoop::InferenceLoop(TeacherService* service, const Dictionary& dict, int row_floats,
@@ -386,6 +406,21 @@ InferenceLoop::InferenceLoop(TeacherService* service, const Dictionary& dict, in
       masks_(label_planes ? size_t(batch_size) * kRawPlaneFloats : 0) {}
 
 void InferenceLoop::run(SliceQueue* queue) {
+  try {
+    consume(queue);
+  } catch (...) {
+    failure_ = std::current_exception();
+    CandidateSlice discarded;
+    while (queue->pop(&discarded)) {
+    }
+  }
+}
+
+void InferenceLoop::rethrow_failure() const {
+  if (failure_) std::rethrow_exception(failure_);
+}
+
+void InferenceLoop::consume(SliceQueue* queue) {
   CandidateSlice item;
   while (queue->pop(&item)) {
     const int count = item.candidates.size();
@@ -399,6 +434,22 @@ void InferenceLoop::run(SliceQueue* queue) {
   flush();
 }
 
+void InferenceLoop::require_finite_teacher_outputs(int rows) const {
+  const bool ok =
+    all_finite(wld_buf_.data(), size_t(rows) * nn::WldOutput::kRowElems) &&
+    all_finite(score_diff_buf_.data(), size_t(rows) * nn::ScoreDiffOutput::kRowElems) &&
+    (!label_planes_ || all_finite(masks_.data(), size_t(rows) * kRawPlaneFloats));
+  if (!ok) {
+    throw util::CleanException(
+      "the teacher produced non-finite readouts (wld / score-diff / placement logits) in a "
+      "batch of {} rows. This tool serves the model at the engine's default precision "
+      "(BF16, whose range is FP32's), so either the export itself is broken or the default "
+      "was changed to FP16, which overflows the value models "
+      "(docs/plans/fp16_safe_serving.md).",
+      rows);
+  }
+}
+
 void InferenceLoop::flush() {
   if (pending_.empty()) return;
   int rows = 0;
@@ -408,6 +459,7 @@ void InferenceLoop::flush() {
   }
   float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
   service_->evaluate({inputs_.data(), rows}, head_out, label_planes_ ? masks_.data() : nullptr);
+  require_finite_teacher_outputs(rows);
   // Scatter the cheap value readouts inline; gather the heavy plane maskings
   // into jobs (pointing into the still-live pending_ slices and the raw plane
   // buffer) and run them in parallel below.
@@ -526,6 +578,7 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
   std::thread gpu(&InferenceLoop::run, &inference, &queue);
   for (auto& w : workers) w.join();
   gpu.join();
+  inference.rethrow_failure();
 
   const uint32_t flags = move_set_eval::target_flags_from_slog(hdr->flags) |
                          (opt.full_sweep ? move_set_eval::kTargetFlagFullSweep : 0u);

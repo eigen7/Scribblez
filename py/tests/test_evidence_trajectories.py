@@ -81,7 +81,8 @@ class _CycleRecorder:
             (out_dir / f"{stem}.slog").touch()
         return 0
 
-    def _trajectories(self, pending, params, threads):
+    def _trajectories(self, pending, proposer, params, threads):
+        assert proposer == Path("/pinned/proposer.onnx")
         self.calls.append(("traj", [p.stem for p in pending]))
         if self.traj_rc == 0:
             for p in pending:
@@ -103,7 +104,9 @@ def test_cycle_sims_only_unsimmed_slogs_and_labels_every_pending_one(tmp_path, m
     (tmp_path / "a.slog").touch()
     (tmp_path / "a.sobs").touch()
     rec = _CycleRecorder(monkeypatch, new_slogs=("b",))
-    r = ET.run_one_cycle(tmp_path, EvidenceTrajectoriesParams(), threads=2)
+    r = ET.run_one_cycle(
+        tmp_path, Path("/pinned/proposer.onnx"), EvidenceTrajectoriesParams(), threads=2
+    )
     assert r.returncode == 0
     assert rec.calls == [("traj", ["b"]), ("mset", ["a", "b"])]
     assert (tmp_path / "a.mset").exists() and (tmp_path / "b.mset").exists()
@@ -113,7 +116,9 @@ def test_a_failed_trajectory_phase_skips_the_labeling(tmp_path, monkeypatch):
     """The labeling force-includes candidates from the .sobs, so it must never
     run over a file whose sims failed."""
     rec = _CycleRecorder(monkeypatch, new_slogs=("b",), traj_rc=3)
-    r = ET.run_one_cycle(tmp_path, EvidenceTrajectoriesParams(), threads=2)
+    r = ET.run_one_cycle(
+        tmp_path, Path("/pinned/proposer.onnx"), EvidenceTrajectoriesParams(), threads=2
+    )
     assert r.returncode == 3
     assert rec.calls == [("traj", ["b"])]
     assert not (tmp_path / "b.mset").exists()
@@ -121,7 +126,7 @@ def test_a_failed_trajectory_phase_skips_the_labeling(tmp_path, monkeypatch):
 
 def test_generate_refuses_a_missing_model(tmp_path, capsys):
     params = EvidenceTrajectoriesParams(proposer_model=str(tmp_path / "no.onnx"), teacher_model="")
-    ctx = SimpleNamespace(params=params)
+    ctx = SimpleNamespace(params=params, tag_paths=lambda: SimpleNamespace(root=tmp_path / "tag"))
     assert ET.run_generate(ctx) == 1
     err = capsys.readouterr().err
     assert "proposer_model" in err and "teacher_model" in err
@@ -743,3 +748,25 @@ def test_decision_analysis_matches_the_sidecar_and_is_plain_at_prefix_zero(gcg_s
     view0 = payload(a0, notations, 0)
     assert not view0["trained"] and view0["next_sim"] is None
     assert all(m["gain"] is None for m in view0["moves"])
+
+
+def test_dashboard_sidecars_sim_under_the_tags_pinned_proposer(tmp_path, monkeypatch):
+    """The Trajectories tab sims the position set under the tag's pinned copy
+    of its proposer, never the raw source path (which the source tag prunes)."""
+    from scribblez.dashboard import trajectories_api as api
+
+    source = tmp_path / "model_epoch_0523.onnx"
+    source.write_bytes(b"weights")
+    paths = SimpleNamespace(root=tmp_path / "tag")
+    params = EvidenceTrajectoriesParams(proposer_model=str(source))
+    seen = {}
+
+    def fake_ensure_sobs(set_dir, proposer, recipe, threads, mount_root):
+        seen["proposer"] = proposer
+        return {"stem": Path("stem.sobs")}
+
+    monkeypatch.setattr(api, "ensure_sobs", fake_ensure_sobs)
+    monkeypatch.setattr(api, "set_dir", lambda name: tmp_path / name)
+    assert api.sidecars("some-set", params, paths, None) == {"stem": Path("stem.sobs")}
+    assert seen["proposer"] == paths.root / "pinned" / source.name
+    assert seen["proposer"].read_bytes() == b"weights"

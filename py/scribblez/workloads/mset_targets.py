@@ -7,6 +7,8 @@ force-included. The generator's two candidate-selection modes take disjoint
 parameters, so a run is one or the other.
 """
 
+import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -92,6 +94,31 @@ def _run(pending: list[Path], teacher_model: str, selection: list[str], threads:
     if rc != 0:
         print(f"move_set_eval_target_generator exited with code {rc}", file=sys.stderr)
     return rc
+
+
+def pin_model(path: str, paths, name: str) -> Path:
+    """The tag's own copy of the model export at `path`, made on first use
+    under the tag root's pinned/ (idempotent afterwards). A param that names
+    another tag's export by absolute path would otherwise read it in place for
+    the life of this tag, and a move-set-eval tag prunes its exports as it
+    trains (move_set_eval.trainer.prune_exports). Raises FileNotFoundError when
+    neither the copy nor the source exists."""
+    if not path:
+        raise FileNotFoundError(f"{name} is unset")
+    dest = Path(paths.root) / "pinned" / Path(path).name
+    if dest.is_file():
+        return dest
+    if not Path(path).is_file():
+        raise FileNotFoundError(f"{name} {path!r} is not a readable file")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Copied to a per-process temp beside the destination and renamed over it,
+    # so a reader never sees a partial copy and two first-use callers -- a
+    # tag's local workers starting together, or a worker and the dashboard --
+    # each land a whole file, the last rename winning with identical bytes.
+    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
+    shutil.copyfile(path, tmp)
+    os.replace(tmp, dest)
+    return dest
 
 
 def require_model_file(path: str, name: str) -> bool:
