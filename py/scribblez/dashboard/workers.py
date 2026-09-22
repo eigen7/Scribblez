@@ -121,6 +121,14 @@ OBSERVATION_TTL_SECONDS = 5.0
 # disk kept, its rate no longer charged): the "Pause all" and the finished
 # run that cost money on a provider without a real suspend.
 IDLE_STOP_SECONDS = 600.0
+
+# The nice level local workers run at. A worker is the long-running background
+# job on this machine; everything else that competes with it -- a bundle build
+# for a fleet that is billing while it waits, the test suite, an editor's build
+# -- is short and should win. At this level the scheduler gives a nice-0
+# process about ten times a worker's CPU share under contention, and an idle
+# machine still gives the worker all of it.
+LOCAL_WORKER_NICE = 10
 # Per-machine key material for rented machines (known_hosts files).
 MACHINES_DIR = Path("/workspace/mount/cloud/machines")
 # How long the rent form's spot rates are served from the last fetch.
@@ -590,6 +598,7 @@ class WorkerManager:
             env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
+            preexec_fn=lambda: os.nice(LOCAL_WORKER_NICE),  # inherited by its sim threads
         )
         self._local[_key(spec, task.tag, w.worker_id)] = proc
         w.pid = proc.pid  # durable, so any instance can observe and stop this worker
