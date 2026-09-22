@@ -83,6 +83,12 @@ PyTorch FP32 reference to keep the served path honest.
 - **Serving.** `Precision::kBF16` added to the engine; the value-truncation
   leaf service (`load_leaf_position_service`) and the shared agent options
   (`NeuralServiceOptions`, default `BF16`) serve BF16.
+  `NeuralNetParamsBase::precision` itself defaults to BF16, so a tool that
+  builds its params directly (the move-set-eval target generator, the evidence
+  trajectory generator) serves BF16 without opting in. Before that default
+  flipped, the target generator served its transformer teacher at FP16 and
+  wrote a whole corpus of NaN targets; it now refuses to write any non-finite
+  readout, and the move-set trainer refuses a corpus it would drop whole.
 - **Removed.** The FP32-pinning machinery (`kFp32LayerSubstrings`,
   `pin_fp32_region`, the `RuntimeSpec` plumbing and pinned cache-key branch);
   the FP16 export gate (`fp16_gate.py`, the probe builders, the per-export
