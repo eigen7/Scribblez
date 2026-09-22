@@ -17,20 +17,34 @@ trainer's records; relative to the tag root / bucket prefix), and
 counters it published before, and how a trainer reads its controls.
 
 A trainer also consumes and produces whole artifacts at the tag root -- the
-generations it trains over, its exports, its rolling checkpoint and cursor --
-and those take three more calls, which is what lets one trainer run wherever
-its sink points: `fetch_data_dir(data_rel, dest)` and `fetch_file(rel, dest)`
-bring an artifact the controller published to where the trainer reads it
+generations or pair store it trains over, its exports, its rolling
+checkpoint and cursor -- and those take a few more calls, which is what lets
+one trainer run wherever its sink points: `fetch_data_dir(data_rel, dest)`
+(a published directory, whole, manifest last), `fetch_data_files(data_rel,
+dest)` (a directory of independently delivered files, whatever is there)
+and `fetch_file(rel, dest)` bring an artifact to where the trainer reads it
 (nothing to do under the local sink, whose mount dir is where it already
-is), and `deliver_output(src, rel, keep)` sends one the trainer wrote back
-(again nothing to do locally). Under the R2 sink the fetches are pulls from
-the tag prefix, the delivery an upload -- unlinked afterwards unless kept,
-since the machine's disk is scratch and the bucket is where outputs live.
+is); `deliver_output(src, rel, keep)` sends one the trainer wrote back
+(again nothing to do locally); and `remove_output(rel)` / `remove_outputs`
+delete ones it is done with (an export pruned, a corpus retired) wherever
+the sink keeps them -- the bucket's copy and this machine's alike. Under
+the R2 sink the fetches are pulls from the tag prefix, the delivery an
+upload -- unlinked afterwards unless kept, since the machine's disk is
+scratch and the bucket is where outputs live.
+
+Paths are tag-relative on both sinks; a generator's `dest_dir` and a
+trainer's `data_rel` name a data/ subdirectory, and `count_data_files`
+reads how many files of a suffix it holds -- how a target the store is grown
+to is read by a worker that cannot see the store on disk.
+
+The bucket prefix flattens the tag root and its data/ tree (data/slogs and
+stats sit side by side), so a root-relative path's key drops the `data/`.
 """
 
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from cloud.credentials import R2Credentials
@@ -95,9 +109,18 @@ class LocalSink:
         """<tag>/data/<data_rel>'s files are `dest`'s own: nothing to pull."""
         assert dest == self._root / "data" / data_rel, (dest, data_rel)
 
+    def count_data_files(self, data_rel: str, suffix: str) -> int:
+        """Files under <tag>/data/<data_rel> ending in `suffix`."""
+        d = self._root / "data" / data_rel
+        return sum(1 for _ in d.glob(f"*{suffix}")) if d.is_dir() else 0
+
     def remove_output(self, rel_path: str):
         """Delete <tag>/<rel_path>; absent is success."""
         (self._root / rel_path).unlink(missing_ok=True)
+
+    def remove_outputs(self, rel_paths: list[str]):
+        for rel in rel_paths:
+            self.remove_output(rel)
 
     def deliver_output(self, src: Path, rel_path: str, *, keep: bool = False):
         """An output written at its place under the tag root is already
@@ -124,6 +147,12 @@ class R2Sink:
 
     def _path(self, *parts: str) -> str:
         return bucket_path(self._r2, *self._prefix, *parts)
+
+    @staticmethod
+    def _key(rel_path: str) -> str:
+        """A tag-root-relative path's key under the tag prefix, which
+        flattens data/ (deliver lands data/slogs/x at slogs/x)."""
+        return rel_path.removeprefix("data/")
 
     def push_json(self, rel_path: str, obj: dict):
         res = rclone(
@@ -180,17 +209,42 @@ class R2Sink:
         directory of independently delivered files (a pair store), where
         fetch_data_dir's manifest test does not apply: each file is whole on
         arrival, and a pair is complete when both its members are."""
-        res = rclone(self._r2, "copy", "--size-only", self._path("data", *data_rel.split("/")),
+        res = rclone(self._r2, "copy", "--size-only", self._path(*data_rel.split("/")),
                      str(dest), capture=True)  # fmt: skip
         assert res.returncode == 0, f"pull of {data_rel} failed: {res.stderr}"
 
+    def count_data_files(self, data_rel: str, suffix: str) -> int:
+        """Objects under <workload>/<tag>/<data_rel> ending in `suffix`, by
+        one listing."""
+        res = rclone(self._r2, "lsf", self._path(*data_rel.split("/")), capture=True)
+        assert res.returncode == 0, f"listing {data_rel} failed: {res.stderr}"
+        return sum(1 for name in res.stdout.split() if name.endswith(suffix))
+
     def remove_output(self, rel_path: str):
-        """Delete <workload>/<tag>/<rel_path> from the bucket, and this
-        machine's copy if it has one; absent is success."""
-        res = rclone(self._r2, "deletefile", self._path(*rel_path.split("/")), capture=True)
+        """Delete <workload>/<tag>'s object for `rel_path` from the bucket,
+        and this machine's copy if it has one; absent is success."""
+        res = rclone(self._r2, "deletefile", self._path(self._key(rel_path)), capture=True)
         assert res.returncode == 0 or "not found" in res.stderr.lower(), (
             f"delete of {rel_path} failed: {res.stderr}"
         )
+        self._unlink_local(rel_path)
+
+    def remove_outputs(self, rel_paths: list[str]):
+        """As remove_output over many, in one rclone run: a corpus retired
+        file by file would spend a round trip per object."""
+        if not rel_paths:
+            return
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("".join(self._key(rel) + "\n" for rel in rel_paths))
+        try:
+            res = rclone(self._r2, "delete", self._path(), "--files-from", f.name, capture=True)
+            assert res.returncode == 0, f"delete of {len(rel_paths)} outputs failed: {res.stderr}"
+        finally:
+            os.unlink(f.name)
+        for rel in rel_paths:
+            self._unlink_local(rel)
+
+    def _unlink_local(self, rel_path: str):
         if self._root is not None:
             (self._root / rel_path).unlink(missing_ok=True)
 

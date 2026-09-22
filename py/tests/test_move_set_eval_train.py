@@ -915,6 +915,9 @@ class _OutputSink:
     def remove_output(self, rel):
         self.removed.append(rel)
 
+    def remove_outputs(self, rels):
+        self.removed.extend(rels)
+
     def deliver_output(self, src, rel, *, keep=False):
         self.delivered.append((rel, keep))
 

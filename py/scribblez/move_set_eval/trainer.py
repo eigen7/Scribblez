@@ -227,9 +227,13 @@ def retire_training_pairs(train_ds: MsetDataset, sink) -> int:
     they are what a later diagnostic or re-evaluation of the exports reads.
     Through the sink, so a bucket-delivering trainer retires the bucket's
     copies (the ones every later sync would pull again) with its own."""
-    for mset in train_ds.files:
-        for path in (mset, mset.with_suffix(".slog")):
-            sink.remove_output(f"data/{SLOGS_DIR}/{path.name}")
+    sink.remove_outputs(
+        [
+            f"data/{SLOGS_DIR}/{path.name}"
+            for mset in train_ds.files
+            for path in (mset, mset.with_suffix(".slog"))
+        ]
+    )
     return len(train_ds.files)
 
 
