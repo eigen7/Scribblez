@@ -196,11 +196,11 @@ def test_stop_start_terminate_pass_the_id(provider):
     assert provider.ec2.calls == [("stop", ["i-1"]), ("start", ["i-1"]), ("terminate", ["i-1"])]
 
 
-def test_catalog_types_name_built_arches():
-    from build import SUPPORTED_ARCHS
-
+def test_catalog_types_name_an_arch():
+    """A rented machine's bundle is built for its catalog entry's arch (a GCC
+    -march value); a type without one would get no build at all."""
     for t in aws.CATALOG:
-        assert t.arch in SUPPORTED_ARCHS, t
+        assert t.arch and " " not in t.arch, t
 
 
 def test_the_account_line_names_account_user_and_region(provider):

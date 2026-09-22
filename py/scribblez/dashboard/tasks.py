@@ -42,6 +42,10 @@ class WorkerRecord:
     # instead of a bare host: the machine record carries the address and the
     # key material. Exactly one of `host` and `machine` is set.
     machine: str | None = None
+    # ssh, bare host: its CPU microarchitecture (a GCC -march value), asked of
+    # the machine at the slot's first start and kept -- what the task's bundle
+    # is built for. A machine-backed slot's arch is its machine record's.
+    arch: str | None = None
     # The slot's worker exited having reached its role's terminal condition
     # (a trainer's max_rows, a generator's cycle cap): desired state was
     # flipped to paused so reconcile does not restart it forever, and the
@@ -90,7 +94,10 @@ class MachineRecord:
     # machine's key is unknown at launch, and providers reuse addresses.
     known_hosts_file: str | None = None
     gpu_count: int | None = None  # GPUs on the machine; None: unknown (unchecked at add time)
-    arch: str | None = None  # rented: the bundle arch its type's CPU family builds for
+    # The CPU microarchitecture (a GCC -march value) the task's bundle is built
+    # for on its account: from the catalog for a rented machine, asked of a
+    # registered one at its first slot start.
+    arch: str | None = None
     instance_id: str | None = None  # rented: the provider's instance
     instance_type: str | None = None  # rented: the catalog type
     spot: bool = (
@@ -126,6 +133,7 @@ class TaskRecord:
     # comparison (see WorkerManager.bundle_drift) rather than a bucket read.
     bundle_id: str | None = None
     bundle_source_hash: str = ""
+    bundle_archs: list[str] = field(default_factory=list)  # the archs the bundle was built for
     # The parameter profile the params were resolved from (WorkloadSpec
     # .profiles) -- provenance only: the params above are the frozen truth, and
     # the task view shows how they depart from the profile. "" for a workload

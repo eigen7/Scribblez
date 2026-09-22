@@ -80,13 +80,15 @@ Principles:
   all`, which needs the NVIDIA container toolkit (preinstalled on the image
   rented machines boot from).
 - **Bundles** (`py/cloud/bundles.py`, `./py/scripts/cloud_push_binaries.py`):
-  the engine builds once per supported CPU microarchitecture
-  (`py/build.py --build-for-all-archs`); a push uploads one tarball per arch
-  (binaries + the arch-independent `py/` tree). Deploying is automatic --
-  `deploy_current_tree` builds every arch and pushes unless the bucket's
-  LATEST already carries this tree, and a task pins the result when its first
-  remote slot starts, so no fleet runs code you did not deploy because you
-  forgot to. Its staleness test is the manifest's `source_hash` (a digest of
+  the engine builds once per CPU microarchitecture a task's machines report
+  (a rented machine's from the catalog; a registered machine or bare host is
+  asked once, through the worker image's compiler, at its first slot start);
+  a push uploads one tarball per arch (binaries + the arch-independent `py/`
+  tree). Deploying is automatic -- `deploy_current_tree` builds those archs
+  and pushes unless the bucket's LATEST already carries this tree for them,
+  and a task pins the result when its first remote slot starts, so no fleet
+  runs code you did not deploy because you forgot to. A later slot whose arch
+  the pinned bundle lacks has the tree built again with its arch added. Its staleness test is the manifest's `source_hash` (a digest of
   the files a bundle ships), since the bundle_id is deliberately fresh on
   every push and a `-dirty` git sha says a tree changed without saying into
   what. The explicit push CLI remains for pushing a bundle without launching

@@ -108,6 +108,14 @@ class _FakeSshMachine:
     def container_exit(self, name: str) -> str:
         return self.exit_reason
 
+    # The arch survey a bare host or registered machine gets at its first
+    # slot start; a test that cares records the pull and asks something else.
+    def pull_image(self, image):
+        pass
+
+    def detect_arch(self, image) -> str:
+        return "znver3"
+
 
 def test_unlaunched_ssh_slot_stays_manageable_when_unreachable(manager, spec, task, monkeypatch):
     """A slot whose container was never confirmed created reads `missing` on
@@ -217,13 +225,18 @@ def test_redeploy_builds_off_the_blocking_thread_then_pins(manager, spec, task, 
     one answers during it -- and only the repin is serialized."""
     seen = {}
 
-    def build(self):
+    def build(self, archs):
         seen["thread"] = threading.current_thread().name
+        seen["archs"] = archs
         seen["blocking_free"] = manager._blocking.submit(lambda: True).result(timeout=5)
-        return SimpleNamespace(bundle_id="b2", source_hash="h2")
+        return SimpleNamespace(bundle_id="b2", source_hash="h2", archs=archs)
 
     monkeypatch.setattr(WorkerManager, "_build_bundle", build)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     assert asyncio.run(manager.redeploy(spec, task)) == "b2"
+    assert seen["archs"] == ["znver3"]  # what the laptop reported
     assert seen["thread"].startswith("scz-build")
     assert seen["blocking_free"]
     assert tasks.load_task(spec, "t").bundle_id == "b2"
@@ -791,10 +804,11 @@ def test_first_remote_worker_builds_the_bundle_off_the_blocking_thread(
     release = threading.Event()
     seen = {}
 
-    def build(self):
+    def build(self, archs):
         seen["thread"] = threading.current_thread().name
+        seen["archs"] = archs
         release.wait(timeout=5)
-        return SimpleNamespace(bundle_id="b1", source_hash="h1")
+        return SimpleNamespace(bundle_id="b1", source_hash="h1", archs=archs)
 
     monkeypatch.setattr(WorkerManager, "_build_bundle", build)
     w = _starting_ssh_slot(manager, spec, task, monkeypatch)
@@ -802,18 +816,21 @@ def test_first_remote_worker_builds_the_bundle_off_the_blocking_thread(
     key = _key(spec, "t", w.worker_id)
 
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)
-    assert _RecordingSshMachine.ops == []
-    assert manager._exits[key].startswith("building the worker bundle")
+    # The arch survey pulled the image to ask its compiler; nothing ran.
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull"]
+    assert manager._exits[key] == "building the worker bundle for znver3"
     assert manager._blocking.submit(lambda: True).result(timeout=5)  # answers during the build
     assert key not in manager._restarts
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)  # still building: same
-    assert _RecordingSshMachine.ops == [] and task.bundle_id is None
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull"] and task.bundle_id is None
 
     release.set()
     manager._pending_builds[f"{spec.name}/t"].result(timeout=5)
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)
     assert seen["thread"].startswith("scz-build")
-    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull", "run"]
+    assert seen["archs"] == ["znver3"]  # the laptop's, asked once and kept
+    assert (w.arch, task.bundle_archs) == ("znver3", ["znver3"])
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull", "pull", "run"]
     assert (task.bundle_id, w.bundle_id, w.launched) == ("b1", "b1", True)
     assert key not in manager._exits
     # A second slot joins the pinned bundle without another build.
@@ -823,10 +840,47 @@ def test_first_remote_worker_builds_the_bundle_off_the_blocking_thread(
     assert w2.bundle_id == "b1"
 
 
+def test_a_slot_whose_arch_the_bundle_lacks_rebuilds_with_it_added(
+    manager, spec, task, monkeypatch
+):
+    """A task pinned to a znver3 bundle gains a znver4 machine: its slot does
+    not fall back to a generic build -- the same tree is built again for both
+    archs and the task repinned. A slot on an arch the bundle has joins it
+    with no build at all."""
+    builds = []
+    release = threading.Event()
+
+    def build(self, archs):
+        builds.append(archs)
+        release.wait(timeout=5)
+        return SimpleNamespace(bundle_id=f"b-{'+'.join(archs)}", source_hash="h", archs=archs)
+
+    monkeypatch.setattr(WorkerManager, "_build_bundle", build)
+    task.bundle_id, task.bundle_source_hash, task.bundle_archs = "b-znver3", "h", ["znver3"]
+    task.machines.append(
+        tasks.MachineRecord(name="m4", provider="aws", host="ubuntu@x", arch="znver4")
+    )
+    w4 = _starting_ssh_slot(manager, spec, task, monkeypatch)
+    w4.host, w4.machine = None, "m4"
+    w3 = _starting_ssh_slot(manager, spec, task, monkeypatch)  # a laptop: znver3
+    missing = {"observed_running": False, "ssh_probe": "missing"}
+
+    manager._reconcile_worker(spec, task, w3, workers_mod.RUN, missing)
+    assert builds == [] and w3.bundle_id == "b-znver3"
+
+    manager._reconcile_worker(spec, task, w4, workers_mod.RUN, missing)  # kicks off the build
+    release.set()
+    manager._pending_builds[f"{spec.name}/t"].result(timeout=5)
+    manager._reconcile_worker(spec, task, w4, workers_mod.RUN, missing)
+    assert builds == [["znver3", "znver4"]]
+    assert (task.bundle_id, task.bundle_archs) == ("b-znver3+znver4", ["znver3", "znver4"])
+    assert w4.bundle_id == "b-znver3+znver4"
+
+
 def test_a_failed_bundle_build_is_the_slots_exit_reason(manager, spec, task, monkeypatch):
     release = threading.Event()
 
-    def build(self):
+    def build(self, archs):
         release.wait(timeout=5)
         raise RuntimeError("make exited 2")
 
@@ -844,17 +898,17 @@ def test_a_failed_bundle_build_is_the_slots_exit_reason(manager, spec, task, mon
 
 
 def test_bundle_drift_compares_tree_against_pinned_bundle(manager, spec, task, monkeypatch):
-    monkeypatch.setattr(workers_mod, "source_hash", lambda cache=None: "now")
+    monkeypatch.setattr(workers_mod, "source_hash", lambda archs, cache=None: "now")
     assert not manager.bundle_drift(task)  # nothing pinned yet
 
-    task.bundle_source_hash = "now"
+    task.bundle_source_hash, task.bundle_archs = "now", ["x86-64"]
     assert not manager.bundle_drift(task)
 
     task.bundle_source_hash = "then"
     assert manager.bundle_drift(task)
 
     # An unbuilt arch is not evidence of drift, only absence of evidence.
-    monkeypatch.setattr(workers_mod, "source_hash", lambda cache=None: None)
+    monkeypatch.setattr(workers_mod, "source_hash", lambda archs, cache=None: None)
     assert not manager.bundle_drift(task)
 
 
@@ -1332,7 +1386,7 @@ def test_creating_a_container_records_that_it_holds_nothing(manager, spec, task,
     monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
-    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, spec, task, key: "b1")
+    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, spec, task, w, key: "b1")
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     manager._run_ssh_container(spec, task, w)
@@ -1405,7 +1459,7 @@ def test_a_creation_that_failed_says_why(manager, spec, task, monkeypatch):
     monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
-    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, spec, task, key: "b1")
+    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, spec, task, w, key: "b1")
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     _FakeSshMachine.state = "missing"
 
@@ -1432,7 +1486,7 @@ def test_a_gpu_role_gets_the_machines_gpus(manager, monkeypatch):
     monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
-    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, spec, task, key: "b1")
+    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, spec, task, w, key: "b1")
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     _RecordingSshMachine.ops = []
 
@@ -1745,7 +1799,7 @@ def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
 ):
     spec = workloads.get("position_eval")
     task = _all_ssh_task()
-    task.bundle_id = "b1"
+    task.bundle_id, task.bundle_archs = "b1", ["znver3"]  # the fake machines' arch
     envs = {}
 
     class _Recording(_FakeSshMachine):

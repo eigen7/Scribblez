@@ -1,7 +1,7 @@
 """Code+binary bundles: how compiled engine artifacts reach cloud workers.
 
-A bundle is one tarball per supported CPU microarchitecture (the engine is
-compiled per-arch under target/archs/<arch>/; see py/build.py), each holding
+A bundle is one tarball per CPU microarchitecture its fleet needs (the engine
+is compiled per-arch under target/archs/<arch>/; see py/build.py), each holding
 that arch's binaries plus the arch-independent py/ tree, uploaded to the
 results bucket under bundles/<bundle_id>/. A worker container downloads and unpacks
 the tarball matching its CPU at startup (docker-setup/worker/bootstrap.py),
@@ -12,7 +12,7 @@ Bucket layout:
 
     bundles/LATEST                        text file holding the newest bundle_id
     bundles/<bundle_id>/manifest.json     git provenance (sha, dirty flag) + arch list
-    bundles/<bundle_id>/bundle-<arch>.tar.gz   one per arch in SUPPORTED_ARCHS
+    bundles/<bundle_id>/bundle-<arch>.tar.gz   one per arch in the manifest's list
     deps/positions-<digest>.tar.gz        the eval datasets a train role needs
 
 The eval datasets (scribblez/paths.py EVAL_POSITIONS_DIRS, 40 MB) are not in
@@ -42,7 +42,7 @@ from dataclasses import asdict, dataclass
 from dataclasses import fields as fields_of
 from pathlib import Path
 
-from build import SUPPORTED_ARCHS, arch_build_dir, build_all_archs, detect_host_arch
+from build import arch_build_dir, build_all_archs, detect_host_arch
 from scribblez.hardware import default_thread_count
 from scribblez.paths import EVAL_POSITIONS_DIRS, REPO_ROOT
 
@@ -107,7 +107,7 @@ def _create_arch_tarball(arch: str, out_dir: Path) -> Path:
     engine_dir = Path(arch_build_dir(arch)) / "engine"
     for name in BUNDLE_BINARY_NAMES:
         assert (engine_dir / name).is_file(), (
-            f"{engine_dir / name} not built; run py/build.py --build-for-all-archs first"
+            f"{engine_dir / name} not built; run py/build.py --archs {arch} first"
         )
     tar_path = out_dir / arch_tarball_name(arch)
     with tarfile.open(tar_path, "w:gz") as tar:
@@ -117,13 +117,13 @@ def _create_arch_tarball(arch: str, out_dir: Path) -> Path:
     return tar_path
 
 
-def _shipped_files() -> list[tuple[str, Path]]:
-    """Every file a deploy ships, as (identity, path): each supported arch's
+def _shipped_files(archs: list[str]) -> list[tuple[str, Path]]:
+    """Every file a deploy of `archs` ships, as (identity, path): each arch's
     binaries plus the shared py/ tree, named as they appear inside a tarball,
     and the eval datasets, named as they appear under the repo root."""
     files = [
         (f"{arch}/{name}", Path(arch_build_dir(arch)) / "engine" / name)
-        for arch in SUPPORTED_ARCHS
+        for arch in archs
         for name in BUNDLE_BINARY_NAMES
     ]
     files += [
@@ -180,9 +180,9 @@ def push_eval_positions(r2: R2Credentials, digest: str):
         assert res.returncode == 0, "upload of the eval datasets failed"
 
 
-def source_hash(cache: dict | None = None) -> str | None:
-    """A digest of the tree a bundle would ship right now, or None when some
-    arch is unbuilt (nothing to compare until a build produces it).
+def source_hash(archs: list[str], cache: dict | None = None) -> str | None:
+    """A digest of the tree a bundle of `archs` would ship right now, or None
+    when one of them is unbuilt (nothing to compare until a build produces it).
 
     This is the deployment test, and it covers compiled binaries rather than
     git state: two pushes of one tree get different bundle_ids by design, and
@@ -192,7 +192,7 @@ def source_hash(cache: dict | None = None) -> str | None:
     mtime and reduces a repeat call to a stat walk.
     """
     digest = hashlib.sha256()
-    for identity, path in _shipped_files():
+    for identity, path in _shipped_files(archs):
         try:
             stamp = path.stat()
         except FileNotFoundError:
@@ -207,10 +207,11 @@ def source_hash(cache: dict | None = None) -> str | None:
     return digest.hexdigest()
 
 
-def create_bundle(out_dir: Path) -> tuple[list[Path], BundleManifest]:
-    """Build one tarball per supported arch plus manifest.json under `out_dir`
+def create_bundle(out_dir: Path, archs: list[str]) -> tuple[list[Path], BundleManifest]:
+    """Build one tarball per arch in `archs` plus manifest.json under `out_dir`
     from the current tree, returning (tarball paths, manifest)."""
-    tarballs = [_create_arch_tarball(arch, out_dir) for arch in SUPPORTED_ARCHS]
+    archs = sorted(set(archs))
+    tarballs = [_create_arch_tarball(arch, out_dir) for arch in archs]
     digest = hashlib.sha256()
     for tar_path in tarballs:
         digest.update(tar_path.read_bytes())
@@ -221,19 +222,20 @@ def create_bundle(out_dir: Path) -> tuple[list[Path], BundleManifest]:
         bundle_id=bundle_id,
         git_sha=sha,
         git_dirty=dirty,
-        archs=list(SUPPORTED_ARCHS),
-        source_hash=source_hash(),
+        archs=archs,
+        source_hash=source_hash(archs),
         eval_positions=eval_positions_digest(),
     )
     (out_dir / "manifest.json").write_text(json.dumps(asdict(manifest), indent=2) + "\n")
     return tarballs, manifest
 
 
-def push_bundle(r2: R2Credentials) -> BundleManifest:
-    """Create a bundle from the current tree, upload it, and point LATEST at it."""
+def push_bundle(r2: R2Credentials, archs: list[str]) -> BundleManifest:
+    """Create a bundle of `archs` from the current tree, upload it, and point
+    LATEST at it."""
     with tempfile.TemporaryDirectory(prefix="scribblez-bundle-") as tmp:
         tmp_dir = Path(tmp)
-        tarballs, manifest = create_bundle(tmp_dir)
+        tarballs, manifest = create_bundle(tmp_dir, archs)
         push_eval_positions(r2, manifest.eval_positions)
         dest = bucket_path(r2, BUNDLES_PREFIX, manifest.bundle_id)
         for path in [*tarballs, tmp_dir / "manifest.json"]:
@@ -267,34 +269,36 @@ def latest_manifest(r2: R2Credentials) -> BundleManifest | None:
     return read_manifest(r2, res.stdout.strip()) if res.returncode == 0 else None
 
 
-def build_all_supported_archs(jobs: int | None = None):
-    """Rebuild every arch a bundle ships, incrementally (a no-op costs
-    seconds). Release, matching py/build.py's default."""
+def build_archs(archs: list[str], jobs: int | None = None):
+    """Build `archs`, incrementally (a no-op costs seconds). Release, matching
+    py/build.py's default."""
     failed = build_all_archs(
-        SUPPORTED_ARCHS, "Release", jobs or default_thread_count(), detect_host_arch()
+        sorted(set(archs)), "Release", jobs or default_thread_count(), detect_host_arch()
     )
     assert not failed, f"build failed for arch(s): {', '.join(sorted(failed))}"
 
 
 def deploy_current_tree(
-    r2: R2Credentials, *, jobs: int | None = None, cache=None
+    r2: R2Credentials, archs: list[str], *, jobs: int | None = None, cache=None
 ) -> BundleManifest:
-    """Make LATEST be this tree, and return the manifest it now points at.
+    """Make LATEST be this tree built for `archs` -- the archs the fleet that
+    will run it reports, nothing more -- and return the manifest it points at.
 
     Building first is not optional: the fingerprint covers compiled binaries,
     so pushing without it would ship an arch nobody rebuilt under a fresh,
     current-looking bundle id -- the exact deception this whole mechanism
     exists to prevent. The upload is skipped when LATEST already carries this
-    tree, so a redeploy of unchanged code leaves running tasks pinned where
-    they are.
+    tree for every arch asked for (its own arch list, hashed as it was), so a
+    redeploy of unchanged code leaves running tasks pinned where they are.
     """
-    build_all_supported_archs(jobs)
-    current = source_hash(cache)
-    assert current is not None, "a build just ran; every arch's binaries must exist"
+    archs = sorted(set(archs))
+    assert archs, "a bundle needs at least one arch: the machines that will run it"
+    build_archs(archs, jobs)
     latest = latest_manifest(r2)
-    if latest is not None and latest.source_hash == current:
-        return latest
-    return push_bundle(r2)
+    if latest is not None and set(archs) <= set(latest.archs):
+        if source_hash(latest.archs, cache) == latest.source_hash:
+            return latest
+    return push_bundle(r2, archs)
 
 
 def resolve_bundle_id(r2: R2Credentials, ref: str) -> str:

@@ -93,8 +93,8 @@ def pick_arch(bundle_id: str, host_arch: str) -> str:
     if GENERIC_ARCH in archs:
         print(
             f"bootstrap: no '{host_arch}' build in bundle {bundle_id}; "
-            f"falling back to '{GENERIC_ARCH}'. Add '{host_arch}' to "
-            "SUPPORTED_ARCHS in py/build.py for full speed."
+            f"falling back to '{GENERIC_ARCH}'. The dashboard builds a task's bundle for "
+            "the archs its machines report; a Redeploy adds this one."
         )
         return GENERIC_ARCH
     sys.exit(f"bootstrap: bundle {bundle_id} has neither '{host_arch}' nor '{GENERIC_ARCH}'.")

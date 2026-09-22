@@ -29,7 +29,7 @@ class MachineType:
     vcpus: int
     gpu_count: int
     gpu: str  # "" for a CPU-only type
-    arch: str  # the bundle arch its CPU family builds for (py/build.py SUPPORTED_ARCHS)
+    arch: str  # the GCC -march value its CPU family builds for (what its bundle is built for)
     cost_per_hr: float  # on-demand list price, dated in the catalog module
 
 
