@@ -1854,8 +1854,9 @@ def _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink: str):
         workers_mod, "_role_inputs", lambda spec, role, params: {"inputs/teacher.onnx": src}
     )
     monkeypatch.setattr(workers_mod, "_slot_sink", lambda spec, task, w: sink)
+    # The bundle is someone else's concern here: pinned, never built.
+    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, *a, **k: "b1")
     w = _starting_ssh_slot(manager, spec, task, monkeypatch)
-    task.bundle_id = "b1"
     return w, src
 
 
@@ -1900,3 +1901,21 @@ def test_an_own_machine_slots_inputs_are_pushed_into_its_container(
 
 def test_a_role_without_inputs_stages_nothing(manager, spec, task, monkeypatch):
     assert workers_mod._role_inputs(spec, spec.role("generate"), None) == {}
+
+
+def test_a_missing_input_is_the_slots_reason_not_a_reconcile_exception(
+    manager, spec, task, monkeypatch, tmp_path
+):
+    """The teacher tag's export is gone: the slot's row says so, the way a
+    machine that cannot serve the role says so, instead of an assertion in
+    the reconcile log and a slot reading `starting` forever."""
+    rc = _Rclone()
+    monkeypatch.setattr(workers_mod, "rclone", rc)
+    w, src = _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink="r2")
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    src.unlink()
+
+    with pytest.raises(workers_mod.SshMachineError, match="inputs/teacher.onnx is missing"):
+        manager._run_ssh_container(spec, task, w)
+    assert "inputs/teacher.onnx is missing" in manager._exits[_key(spec, "t", w.worker_id)]
+    assert rc.calls == [] and _RecordingSshMachine.ops == []  # nothing started
