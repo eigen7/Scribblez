@@ -38,7 +38,7 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
@@ -455,6 +455,9 @@ class WorkerManager:
         # Where a redeploy's build runs (see redeploy): off the blocking
         # thread, which it would otherwise hold for minutes.
         self._builds = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-build")
+        # A task's first-use bundle build in flight (task key -> Future), see
+        # _bundle_for_start.
+        self._pending_builds: dict[str, Future] = {}
         # Per-file digests behind source_hash, so the drift check every status
         # poll makes costs a stat walk rather than 20 MB of hashing.
         self._source_digests: dict = {}
@@ -488,17 +491,39 @@ class WorkerManager:
         tasks.save_task(spec, task)
         return manifest.bundle_id
 
-    def task_bundle_id(self, spec, task: tasks.TaskRecord) -> str:
-        """The bundle this task's remote workers run, deployed on first use.
+    def _bundle_for_start(self, spec, task: tasks.TaskRecord, key: str) -> str | None:
+        """The bundle this task's remote workers run, deployed on first use --
+        or None while that deployment is still building.
 
         Deployment is not an operator step: a task that has never launched a
-        bucket-delivering worker gets the controller's current tree built and
-        pushed here, and every later worker joins that same bundle. Pinning is
-        what keeps an experiment homogeneous -- editing code mid-run leaves the
-        fleet on the code it started with, and moving it is the explicit
-        redeploy action.
+        remote worker gets the controller's current tree built and pushed, and
+        every later worker joins that same bundle. Pinning is what keeps an
+        experiment homogeneous -- editing code mid-run leaves the fleet on the
+        code it started with, and moving it is the explicit redeploy action.
+
+        The build is minutes, and slot starts run on the blocking thread; built
+        there it held up every Pause and Remove clicked meanwhile (redeploy's
+        lesson). So it goes to the build thread, this pass leaves the slot
+        `starting` with the reason on its row, and the pass that finds the
+        build done pins the task and starts the slot. A build that fails is
+        the slot's exit reason, and the restart backoff paces the retry.
         """
-        return task.bundle_id or self.deploy(spec, task)
+        if task.bundle_id:
+            return task.bundle_id
+        task_key = f"{spec.name}/{task.tag}"
+        future = self._pending_builds.get(task_key)
+        if future is None:
+            future = self._pending_builds[task_key] = self._builds.submit(self._build_bundle)
+        if not future.done():
+            self._exits[key] = "building the worker bundle (every arch: minutes)"
+            return None
+        del self._pending_builds[task_key]
+        try:
+            manifest = future.result()
+        except Exception as e:
+            self._exits[key] = f"bundle build failed: {e}"
+            raise
+        return self._pin_bundle(spec, task, manifest)
 
     def bundle_drift(self, task: tasks.TaskRecord) -> bool:
         """Whether the controller's tree has changed since the task pinned its
@@ -713,9 +738,16 @@ class WorkerManager:
     def _run_ssh_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Create + start slot `w`'s container on its machine, on the task's
         bundle."""
+        key = _key(spec, task.tag, w.worker_id)
+        bundle_id = self._bundle_for_start(spec, task, key)
+        if bundle_id is None:
+            # Not an attempt: the slot is waiting on the build, not failing to
+            # come up, so the restart backoff must not grow across the wait.
+            self._restarts.pop(key, None)
+            return
+        w.bundle_id = bundle_id
         creds = self._creds()
         params = params_mod.validate(spec.params_cls, task.params)
-        w.bundle_id = self.task_bundle_id(spec, task)
         env = bundle_worker_env(
             creds, spec, task.tag, params,
             role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id,
@@ -724,7 +756,6 @@ class WorkerManager:
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
         machine = _ssh_machine(task, w)
-        key = _key(spec, task.tag, w.worker_id)
         try:
             # Creating a container is the moment to take a rebuilt worker
             # image; `docker run --pull=never` below then fails fast rather
