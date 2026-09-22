@@ -201,10 +201,14 @@ def position_entry(
     }
 
 
-def viewer_data(survey_dir: Path, min_sigmas: float = MIN_SIGMA) -> dict:
+def viewer_data(
+    survey_dir: Path, min_sigmas: float = MIN_SIGMA, gcg_dir: Path | None = None
+) -> dict:
     """Everything the viewer loads: the positions of `survey_dir`'s survey files
     where an outside play sat `min_sigmas` standard errors above the cut's best,
-    strongest first."""
+    strongest first. `gcg_dir` holds the positions' exported games (default: the
+    gcg/ beside the survey files)."""
+    gcg_dir = gcg_dir or survey_dir / "gcg"
     positions = []
     header = {}
     for path in sorted(survey_dir.glob(f"*{SURVEY_SUFFIX}")):
@@ -212,7 +216,7 @@ def viewer_data(survey_dir: Path, min_sigmas: float = MIN_SIGMA) -> dict:
         header = {k: v for k, v in survey.items() if k != "positions"}
         stem = path.name.removesuffix(SURVEY_SUFFIX)
         for position in survey["positions"]:
-            entry = position_entry(stem, position, survey["cut"], survey_dir / "gcg", min_sigmas)
+            entry = position_entry(stem, position, survey["cut"], gcg_dir, min_sigmas)
             if entry:
                 positions.append(entry)
     positions.sort(key=lambda p: -max(m.get("sigmas", 0) for m in p["moves"]))

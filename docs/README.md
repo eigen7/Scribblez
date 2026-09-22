@@ -64,6 +64,10 @@
   single entrypoint for all work: the workload registry, the job-control
   plane (launch/stop local and ssh workers from the browser), and
   workload-specific analysis tabs.
+- **[blind_spots.md](blind_spots.md)** — collecting positions where a play
+  from outside HastyBot's top moves out-sims them: the `blind_spots` workload
+  across a fleet, what workers deliver, and turning a tag into a committed
+  examples directory.
 - **[position_eval_workload.md](position_eval_workload.md)** — the training
   workloads on the master dashboard: the workload-spec contract (roles, params,
   stats, tabs), distributed self-play generation via staging + controller-side

@@ -7,6 +7,7 @@ runs.
 """
 
 from scribblez.workloads import (
+    blind_spots,
     evidence_trajectories,
     kill_test,
     match_arms,
@@ -32,6 +33,7 @@ WORKLOADS = {
         move_set_eval.SPEC,
         evidence_trajectories.SPEC,
         match_arms.SPEC,
+        blind_spots.SPEC,
     )
 }
 

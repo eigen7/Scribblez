@@ -145,11 +145,47 @@ def load_survey(paths: list[Path]) -> Survey:
     for path in paths:
         stem = path.name.removesuffix(SURVEY_SUFFIX)
         survey = json.loads(path.read_text())
+        # A slimmed file holds only its found positions and says how many it surveyed.
+        positions += survey.get("positions_surveyed", len(survey["positions"]))
         for position in survey["positions"]:
-            positions += 1
             key = (stem, position["game"], position["turn"])
             found += position_findings(key, position, survey["cut"])
     return Survey(positions, sorted(found, key=lambda f: -f.sigmas))
+
+
+def slim_position(position: dict) -> dict:
+    """`position` with only the candidates its confirming sim covers (the top
+    moves and the outside picks), the confirm entries re-pointed at them. The
+    hundreds of screened-and-dismissed plays are most of a survey file's bulk."""
+    kept = [entry["candidate"] for entry in position["confirm"]]
+    confirm = [entry | {"candidate": i} for i, entry in enumerate(position["confirm"])]
+    return position | {
+        "candidates": [position["candidates"][c] for c in kept],
+        "confirm": confirm,
+    }
+
+
+def slim_survey_file(path: Path) -> list[tuple[int, int]]:
+    """Rewrite a finished survey file in place keeping only the positions where an
+    outside play beat the cut, slimmed; `positions_surveyed` records how many
+    there were. Returns the kept positions' (game, 0-based turn)."""
+    survey = json.loads(path.read_text())
+    stem = path.name.removesuffix(SURVEY_SUFFIX)
+    found = [
+        p
+        for p in survey["positions"]
+        if any(
+            f.beats_cut for f in position_findings((stem, p["game"], p["turn"]), p, survey["cut"])
+        )
+    ]
+    slim = survey | {
+        "positions_surveyed": survey.get("positions_surveyed", len(survey["positions"])),
+        "positions": [slim_position(p) for p in found],
+    }
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(slim))
+    tmp.replace(path)
+    return [(p["game"], p["turn"]) for p in found]
 
 
 def mean_and_se(values: list[float]) -> tuple[float, float]:
@@ -211,7 +247,7 @@ def gcg_name(key: PositionKey) -> str:
 def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, command: str):
     """Replace `review_dir` with the GCGs of the positions where an outside move beat
     the cut and a README table of what the confirming sim said about each.
-    `command` is the invocation that produced them, recorded for regeneration."""
+    `command` is an invocation that generates a corpus like this one."""
     if review_dir.exists():
         shutil.rmtree(review_dir)
     review_dir.mkdir(parents=True)
@@ -229,7 +265,7 @@ def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, 
         "unseen tiles -- the survey files' `solve_max_unseen`. Played-through tiles are spelled",
         "out in parentheses. Browse the positions with `py/scripts/sim_survey_viewer.py`.",
         "",
-        "Regenerate this directory (games, sims and all; `--slog-dir` is scratch space) with:",
+        f"{survey.positions} positions were surveyed for these. Generate a similar corpus with:",
         "",
         "```",
         command,

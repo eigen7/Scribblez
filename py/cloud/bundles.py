@@ -56,6 +56,7 @@ from cloud.r2 import bucket_path, rclone
 BUNDLE_BINARY_NAMES = [
     "play_game",
     "sim_obs_tool",
+    "sim_candidate_survey_tool",
     "move_set_eval_target_generator",
     "libscribblez_ffi.so",
 ]
