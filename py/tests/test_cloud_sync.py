@@ -59,7 +59,7 @@ def test_trainer_outputs_are_pulled_immutable_ones_by_size(spec, monkeypatch):
     root = spec.paths("t").root
     assert _pulled(rc)[3:] == [
         ("copy", "--size-only", "r2:b/position_eval/t/records", str(root / "records")),
-        ("copy", "--size-only", "r2:b/position_eval/t/models", str(root / "models")),
+        ("sync", "--size-only", "r2:b/position_eval/t/models", str(root / "models")),
         ("copy", "r2:b/position_eval/t/checkpoints", str(root / "checkpoints")),
         ("lsf", "r2:b/position_eval/t/train_state.json"),
     ]

@@ -43,7 +43,9 @@ absorbing each pass's new pairs and holding its epoch budget until the store
 reaches `target_pairs` -- so a tag with a worker of each type started together
 grows its corpus, trains on all of it, and stops, unattended. It is the lean
 growing-corpus loop (roadmap A3 slice 1); the generational consume->train
-lifecycle is docs/plans/generational_teacher.md.
+lifecycle is docs/plans/generational_teacher.md. Like the generator it runs on
+a GPU slot of either kind: on a remote one its pair store arrives, and its
+exports and checkpoint leave, through the bucket (the trainer's docstring).
 """
 
 import dataclasses
@@ -452,9 +454,9 @@ SPEC = WorkloadSpec(
             title="Student trainer (GPU)",
             runner="scribblez.move_set_eval.trainer:run",
             runtime=RUNTIME_TORCH,
+            deps="scribblez.move_set_eval.trainer:fetch_train_deps",
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
-            kinds=("local",),
             gpu=True,
             stats=StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"}),
         ),

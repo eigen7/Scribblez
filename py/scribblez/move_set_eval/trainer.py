@@ -20,6 +20,13 @@ the run's `optimizer` arm (generational/optim.py), the same as position_eval's.
 The generational consume->train lifecycle (docs/plans/generational_teacher.md)
 replaces this loop when it lands.
 
+Everything the trainer reads and writes crosses its sink (cloud/sinks.py):
+the pair store is pulled through it before every look (a no-op for a local
+worker, whose store is the controller's), and each pass's export and the
+rolling checkpoint are delivered through it, as are the records and stats.
+So a trainer on the operator's machine and one on a rented GPU run the same
+code; only the sink differs (docs/cloud_compute.md).
+
 Runs as the singleton `train` worker of the move_set_eval workload (launched
 by the worker entrypoint with SCZ_ROLE=train); scripts/move_set_eval/train.py
 remains the headless CLI for ad-hoc runs outside any tag.
@@ -60,6 +67,9 @@ POLL_SECONDS = 30
 # first (mset_targets.pin_model) -- so the tag keeps a short recent window plus
 # a sparse ladder for a later look back, and drops the rest. Kept whole, a
 # run's per-pass exports outgrow its corpus (6k passes x 40 MB = 240 GB, once).
+# Applied one export at a time, as each slides out of the window, so it needs
+# no listing of what is kept -- which a bucket-delivering trainer has no local
+# copy of.
 KEEP_LAST_EXPORTS = 10
 KEEP_EVERY_EXPORT = 100
 
@@ -75,6 +85,15 @@ class MsetTrainState(GenerationalState):
     """
 
     settled_epochs: int = 0
+
+
+def fetch_train_deps(params):
+    """Runtime data the trainer needs beyond the bundle: the engine's default
+    lexicon -- the FFI session that decodes the pair store's rows loads it at
+    open. Its pairs come through the sink, not the deps."""
+    from cloud import worker_deps
+
+    worker_deps.fetch_lexicon(worker_deps.DEFAULT_LEXICON)
 
 
 def store_is_ready(store, params) -> tuple[bool, str]:
@@ -105,11 +124,22 @@ def store_is_ready(store, params) -> tuple[bool, str]:
     return True, ""
 
 
-def wait_for_store(store, params):
+def pull_store(store, sink):
+    """Take what the store has gained: the pairs remote generators delivered
+    that this machine lacks, through `sink` (nothing, for a local worker
+    whose store is the controller's own)."""
+    store.mkdir(parents=True, exist_ok=True)
+    sink.fetch_data_files(SLOGS_DIR, store)
+
+
+def wait_for_store(store, params, sink=None):
     """Block until the store is ready to train on (store_is_ready), reporting
     progress. A worker started alongside its generator lands here rather than
-    dying on an empty store or snapshotting a corpus minutes old."""
+    dying on an empty store or snapshotting a corpus minutes old. With a
+    `sink`, the store is pulled through it before each look."""
     while True:
+        if sink is not None:
+            pull_store(store, sink)
         ready, why = store_is_ready(store, params)
         if ready:
             return
@@ -157,32 +187,58 @@ def require_training_rows(train_ds: MsetDataset):
         )
 
 
-def prune_exports(paths, keep_last: int = KEEP_LAST_EXPORTS, keep_every: int = KEEP_EVERY_EXPORT):
-    """Delete this tag's per-pass ONNX exports outside the retention policy:
-    the newest `keep_last` generations and every `keep_every`-th stay."""
-    gens = paths.exported_generations()
-    recent = set(gens[-keep_last:]) if keep_last > 0 else set()
-    for gen in gens:
-        if gen in recent or (keep_every > 0 and gen % keep_every == 0):
-            continue
-        paths.onnx_path(gen).unlink()
+def prune_exports(
+    paths, sink, epoch: int, keep_last: int = KEEP_LAST_EXPORTS, keep_every: int = KEEP_EVERY_EXPORT
+):
+    """After pass `epoch`'s export: drop the one export that just left the
+    retention window (the newest `keep_last` stay), unless it is on the
+    every-`keep_every`-th ladder. Wherever the exports live -- the sink
+    removes the bucket's copy and this machine's alike."""
+    stale = epoch - keep_last
+    if stale < 0 or (keep_every > 0 and stale % keep_every == 0):
+        return
+    sink.remove_output(f"models/{paths.onnx_path(stale).name}")
 
 
-def retire_training_pairs(train_ds: MsetDataset) -> int:
+def deliver_pass(paths, sink, epoch: int):
+    """Hand pass `epoch`'s export and the rolling checkpoint to the sink: a
+    bucket-delivering trainer uploads them (the export's local copy goes, the
+    checkpoint's stays for a resume), a local one has them in place."""
+    export = paths.onnx_path(epoch)
+    sink.deliver_output(export, f"models/{export.name}")
+    sink.deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
+
+
+def restore_checkpoint(paths, sink):
+    """A fresh machine with none of the tag takes the rolling checkpoint from
+    wherever the sink delivers to, if it is there; one holding a checkpoint
+    resumes from its own."""
+    if paths.rolling_checkpoint.exists():
+        return
+    if sink.fetch_file("checkpoints/model.pt", paths.rolling_checkpoint):
+        timed_print(f"restored the rolling checkpoint through the {sink.kind} sink")
+
+
+def retire_training_pairs(train_ds: MsetDataset, sink) -> int:
     """Delete the finished run's training pairs (.mset and .slog) from the
     store, returning the count. A pair is read by nothing once the last
     budgeted epoch is over -- params are frozen, so the run cannot be extended
     -- and the store is the bulk of a tag's footprint. The held-out pairs stay:
-    they are what a later diagnostic or re-evaluation of the exports reads."""
+    they are what a later diagnostic or re-evaluation of the exports reads.
+    Through the sink, so a bucket-delivering trainer retires the bucket's
+    copies (the ones every later sync would pull again) with its own."""
     for mset in train_ds.files:
         for path in (mset, mset.with_suffix(".slog")):
-            path.unlink(missing_ok=True)
+            sink.remove_output(f"data/{SLOGS_DIR}/{path.name}")
     return len(train_ds.files)
 
 
-def absorb_new_pairs(paths, params, train_ds: MsetDataset, holdout_ds: MsetDataset) -> int:
+def absorb_new_pairs(
+    paths, params, train_ds: MsetDataset, holdout_ds: MsetDataset, sink=None
+) -> int:
     """Ingest every pair delivered since the last pass, into whichever side the
     file-level split assigns it to, and return how many positions arrived.
+    With a `sink`, the store is pulled through it first.
 
     Both sides grow, so once the generator stops the holdout stops with it --
     which is what makes every budgeted epoch's metrics comparable without any
@@ -194,6 +250,8 @@ def absorb_new_pairs(paths, params, train_ds: MsetDataset, holdout_ds: MsetDatas
     turns every stratified pair into a training pair -- and a file that moved
     would be one trained on and then scored as held out.
     """
+    if sink is not None:
+        pull_store(paths.data_dir / SLOGS_DIR, sink)
     train_files, holdout_files = split_pairs(paths.data_dir / SLOGS_DIR, params.holdout_every)
     seen = set(train_ds.files) | set(holdout_ds.files)
     added = train_ds.absorb(_ingestible(train_files, seen, train_ds))
@@ -383,7 +441,8 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
         move_encoding_version=cfg["move_encoding_version"],
     )
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
-    prune_exports(paths)
+    deliver_pass(paths, ctx["sink"], epoch)
+    prune_exports(paths, ctx["sink"], epoch)
     recorder.commit_generation(epoch, state.rows_trained, record)
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
@@ -431,10 +490,11 @@ def run(ctx: WorkerContext) -> int:
     # A finished run's training pairs are retired, so a resumed one must learn
     # it is finished from its checkpoint, before waiting on a store that will
     # never refill or loading a training set that no longer exists.
+    restore_checkpoint(paths, ctx.sink)
     if not epochs_left(params, checkpoint.peek_state(paths, state_cls=MsetTrainState)):
         timed_print("Training complete (the epoch budget was spent in an earlier session).")
         return 0
-    wait_for_store(paths.data_dir / SLOGS_DIR, params)
+    wait_for_store(paths.data_dir / SLOGS_DIR, params, ctx.sink)
     train_ds, holdout_ds = load_datasets(paths, params)
     print(
         f"train: {train_ds.num_positions} positions / {train_ds.num_candidates} candidates; "
@@ -473,6 +533,7 @@ def run(ctx: WorkerContext) -> int:
         "holdout_ds": holdout_ds,
         "loss_cfg": LossConfig.from_args(params),
         "stats": WorkerStats(ctx),
+        "sink": ctx.sink,
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=MsetTrainState)
@@ -482,7 +543,7 @@ def run(ctx: WorkerContext) -> int:
         while epochs_left(params, state):
             # Take up whatever the generator delivered during the last pass
             # before deciding whether this one is over a finished corpus.
-            absorbed = absorb_new_pairs(paths, params, train_ds, holdout_ds)
+            absorbed = absorb_new_pairs(paths, params, train_ds, holdout_ds, ctx.sink)
             settled = clock.is_final(absorbed)
             train_one_epoch(
                 model, optimizer, recorder, paths, device, params, state, run_ctx, settled
@@ -494,7 +555,7 @@ def run(ctx: WorkerContext) -> int:
             "needs a new tag; params are frozen)."
         )
         if holdout_ds is not train_ds:
-            n = retire_training_pairs(train_ds)
+            n = retire_training_pairs(train_ds, ctx.sink)
             timed_print(f"Retired {n} training pair(s); the held-out pairs remain in the store.")
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")

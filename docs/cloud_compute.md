@@ -12,9 +12,13 @@ Generation-style roles distribute trivially: cycles are embarrassingly
 parallel, output files are uniquely named and land atomically (so batches from
 any number of machines merge by copy, and a killed worker loses at most its
 in-flight cycle), data volumes are small, and runtime deps are light and
-fetched from public upstreams. The trainer distributes too, through the
-bucket: generations in, exports and checkpoints out
-([cloud_training.md](plans/cloud_training.md)).
+fetched from public upstreams. The trainers distribute too, through the
+bucket: generations (position_eval) or the pair store (move_set_eval) in,
+exports and checkpoints out ([cloud_training.md](plans/cloud_training.md)).
+A move-set-eval trainer prunes its exports and, when its run completes,
+retires its training pairs bucket-side as well; the controller's `models/`
+copy mirrors the bucket (`cloud_sync`), its `slogs/` copy is the archive
+and stays.
 
 ## Architecture
 
