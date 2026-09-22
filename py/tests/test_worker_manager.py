@@ -34,6 +34,7 @@ from scribblez.workloads.position_eval import PositionEvalParams
 # The fixture below replaces the launch paths with _fail; a test that wants to
 # exercise one for real puts this back.
 _REAL_RUN_SSH_CONTAINER = WorkerManager._run_ssh_container
+_REAL_SPAWN_LOCAL = WorkerManager._spawn_local
 _REAL_ENSURE_SYNC = WorkerManager._ensure_sync
 # ... and redirects task.json out of the tag dir; the deletion tests, which
 # care where the record lives, put this back too.
@@ -1609,6 +1610,31 @@ def test_a_generator_on_a_rented_machine_delivers_through_the_bucket(rented, man
     assert workers_mod._slot_sink(spec, task, on_rented) == "r2"
     assert workers_mod._slot_sink(spec, task, on_laptop) == "local"
     assert workers_mod._has_bucket_slots(spec, task)
+
+
+def test_local_workers_run_niced(manager, spec, task, monkeypatch, tmp_path):
+    """A local worker yields the machine to whatever short job competes with it
+    -- a bundle build for a billing fleet above all -- by running at
+    LOCAL_WORKER_NICE, applied in the child before exec so its threads inherit
+    it."""
+    monkeypatch.setattr(WorkerManager, "_spawn_local", _REAL_SPAWN_LOCAL)
+    monkeypatch.setattr(
+        WorkerManager, "_log_file", lambda self, spec, tag, name: open(tmp_path / "log", "ab")
+    )
+    niced = []
+    monkeypatch.setattr(workers_mod.os, "nice", lambda n: niced.append(n) or n)
+    spawned = {}
+
+    def popen(argv, **kwargs):
+        kwargs["preexec_fn"]()  # what the child would run
+        spawned["argv"] = argv
+        return SimpleNamespace(pid=4242)
+
+    monkeypatch.setattr(workers_mod.subprocess, "Popen", popen)
+    w = manager.add_local(spec, task, "generate", threads=4)
+    manager._spawn_local(spec, task, w)
+    assert niced == [workers_mod.LOCAL_WORKER_NICE] and w.pid == 4242
+    assert spawned["argv"][-1] == "cloud.worker_entrypoint"
 
 
 def test_an_all_ssh_task_with_a_trainer_gets_every_bucket_leg(manager, tmp_path, monkeypatch):
