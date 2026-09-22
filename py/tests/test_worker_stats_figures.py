@@ -20,29 +20,8 @@ def _record(worker_id: str, samples: list[tuple[float, int]]) -> dict:
     }
 
 
-def _legend_labels(fig) -> list[str]:
-    return [item.label["value"] for item in fig.legend[0].items]
-
-
-def test_rate_spans_the_sample_window_and_lists_every_worker():
-    """One rate point (the second sample of a worker) used to leave Bokeh a
-    zero-width datetime range, labelled in microseconds; and a worker with a
-    single sample had no legend entry at all."""
-    records = [_record("ssh-0", [(T0 + 100, 0)]), _record("ssh-1", [(T0 + 50, 1), (T0 + 650, 4)])]
-    fig = figs.rate(records, STATS)
-    assert isinstance(fig.x_range, Range1d)
-    assert (fig.x_range.end - fig.x_range.start).total_seconds() >= 600
-    assert _legend_labels(fig) == ["ssh-0", "ssh-1"]
-
-
-def test_rate_needs_at_least_one_interval():
-    assert figs.rate([_record("ssh-0", [(T0 + 100, 0)])], STATS) is None
-
-
-def test_fleet_total_sums_each_workers_latest_count():
-    a = [[1.0, 1], [3.0, 3]]
-    b = [[2.0, 5]]
-    assert figs._fleet_total([a, b]) == ([1.0, 2.0, 3.0], [1, 6, 8])
+def _ys(fig) -> list[int]:
+    return list(fig.renderers[0].data_source.data["y"])
 
 
 def test_worker_history_merges_the_recent_window():
@@ -51,10 +30,22 @@ def test_worker_history_merges_the_recent_window():
     assert figs._worker_history(record) == [[T0, 0], [T0 + 600, 2], [T0 + 900, 3]]
 
 
-def test_cumulative_starts_each_worker_at_zero_and_adds_the_fleet():
+def test_fleet_total_sums_each_workers_latest_count():
+    a = [[1.0, 1], [3.0, 3]]
+    b = [[2.0, 5]]
+    assert figs._fleet_total([a, b]) == [[1.0, 1], [2.0, 6], [3.0, 8]]
+
+
+def test_cumulative_plots_one_worker_or_the_fleet_from_zero():
     records = [_record("ssh-0", [(T0 + 600, 2)]), _record("ssh-1", [(T0 + 900, 3)])]
-    fig = figs.cumulative(records, STATS)
-    assert _legend_labels(fig) == ["ssh-0", "ssh-1", "fleet"]
-    fleet = fig.legend[0].items[-1].renderers[0].data_source.data
-    assert list(fleet["y"]) == [0, 0, 2, 5]
-    assert figs.cumulative([], STATS) is None
+    assert _ys(figs.cumulative(records, STATS, "ssh-1")) == [0, 3]
+    assert _ys(figs.cumulative(records, STATS, figs.FLEET)) == [0, 0, 2, 5]
+    assert figs.cumulative([], STATS, figs.FLEET) is None
+
+
+def test_cumulative_spans_a_single_cycle_visibly():
+    """A lone point used to leave Bokeh a zero-width datetime range, labelled
+    in microseconds."""
+    fig = figs.cumulative([_record("ssh-0", [(T0 + 600, 2)])], STATS, "ssh-0")
+    assert isinstance(fig.x_range, Range1d)
+    assert (fig.x_range.end - fig.x_range.start).total_seconds() >= 600
