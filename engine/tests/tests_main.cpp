@@ -5643,7 +5643,9 @@ TEST(CrossCheckDelta, PatchedPreMovePlanesEqualTheTeachersPostMovePlanes) {
       const int entries = int(std::count(d.delta_mask, d.delta_mask + width, uint8_t(1)));
       for (int i = 0; i < int(width); ++i) {
         ASSERT_EQ(d.delta_mask[i], i < entries ? 1 : 0);
-        if (i >= entries) ASSERT_EQ(d.axes[i] + d.squares[i] + d.old_masks[i] + d.new_masks[i], 0u);
+        if (i >= entries) {
+          ASSERT_EQ(d.axes[i] + d.squares[i] + d.old_masks[i] + d.new_masks[i], 0u);
+        }
         if (i > 0 && i < entries) {
           ASSERT_LT(std::pair(d.axes[i - 1], d.squares[i - 1]), std::pair(d.axes[i], d.squares[i]));
         }
