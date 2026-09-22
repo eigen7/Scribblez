@@ -215,8 +215,12 @@ def test_the_local_sink_removes_an_output_and_has_nothing_to_pull(paths):
     store = paths.data_dir / "slogs"
     store.mkdir(parents=True)
     (store / "a.mset").touch()
+    (store / "a.slog").touch()
     sink.fetch_data_files("slogs", store)  # the store is its own
     assert (store / "a.mset").exists()
+    assert sink.count_data_files("slogs", ".mset") == 1
+    assert sink.count_data_files("slogs", ".sobs") == 0
+    assert sink.count_data_files("nowhere", ".mset") == 0
     sink.remove_output("data/slogs/a.mset")
     sink.remove_output("data/slogs/a.mset")  # absent is success
     assert not (store / "a.mset").exists()
