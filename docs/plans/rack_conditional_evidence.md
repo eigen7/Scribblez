@@ -296,19 +296,37 @@ add those loop features one at a time (build order, below).
 
 ## Cost accounting
 
-Rollouts run in blocks and the context is fused once per block per contender,
-never per rollout. With `N` rollouts in `B` blocks the fusion work sums to
-roughly `N × B`, not `N²`, and `B` is tens: a block is a batch of racks across
-the contenders in play, and under value truncation rollouts complete in
-bursts on the GPU anyway.
+Two different quadratics have to be kept apart.
 
-Even naive full self-attention over ten thousand rack-index tokens is on the
+**Per-rollout re-reading, the LLM pattern.** A language model reads its
+whole context once per generated token, so generating `N` tokens costs
+`O(N²)` even with a KV cache. The analogue here would be a rollout that reads
+the context, and none does: a rollout reads a cached, fixed-size fused
+encoding of its candidate's board. The context is read only when that
+encoding is rebuilt, once per block per contender, so the number of context
+reads is the number of blocks `B`, tens, not the number of rollouts `N`.
+This is why late fusion is load-bearing: evidence that modulated the trunk or
+the per-rollout scoring pass would have to be read per rollout.
+
+**Inside one read.** Whether a read is linear or quadratic in the context
+size depends on the fusion architecture. Self-attention among the evidence
+tokens, as the base plan specifies, makes one read `O(n²)`, and summed over
+blocks the total grows as `N²·B/3`. Cross-attention only, the context
+attended into the board tokens or into a small fixed set of inducing points
+(a set transformer), makes one read `O(n·L)` and the total `O(N·B)`. This
+plan takes the linear form, for a reason beyond cost: the rack-conditional
+readout is kernel regression, a query rack weighting context racks by
+similarity, which is cross-attention. The base plan's argument for pairwise
+self-attention, contrasts between candidate pairs, is already served by
+placing every candidate's outcome for one rack inside one token. The raw set
+is kept and the latent readout is recomputed from all of it each block, so
+this is not the lossy recurrent memory the base plan rejects.
+
+For scale: even a full self-attention read over ten thousand tokens is on the
 order of a hundred million pairs per layer, tens of milliseconds for a few
-bf16 layers on a 4090, against seconds for the ten thousand rollouts. Should
-it ever bind, a set transformer over a small set of inducing points is linear
-in the context and keeps the raw set: the latent readout is recomputed from
-all of it each block, which is not the lossy recurrent memory the base plan
-rejects.
+bf16 layers on a 4090, against seconds for the ten thousand rollouts. The
+quadratic read would not bind at today's budgets; the linear form is chosen
+so that it never does.
 
 Per rollout, the added work over today is the scoring pass of the reply list
 against a cached encoding. Per block, the re-pricing pass is linear in
