@@ -28,23 +28,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TARGET_DIR = os.path.join(ROOT, "target")
 ARCHS_DIR = os.path.join(TARGET_DIR, "archs")
 
-# CPU microarchitectures (GCC/Clang -march values) this project builds
-# bundles for, e.g. for cloud tooling to upload one binary bundle per arch and
-# have each worker fetch the one matching its CPU. Grows by hand: when
-# building on a host whose arch isn't listed here, build_engine() below warns
-# so the operator can add it and commit. skylake-avx512 was a rented 4090
-# hosts reported (September 2026); a trainer on the generic x86-64 build
-# there took twice as long per generation in its C++ data loader.
-SUPPORTED_ARCHS = [
-    "alderlake",
-    "skylake-avx512",
-    "tigerlake",
-    "x86-64",
-    "znver2",
-    "znver3",
-    "znver4",
-]
-
 # Pinned Macondo release. build.py will clone this tag if the repo is absent,
 # and will move an existing checkout onto it if it is at a different tag
 # (unless --skip-macondo-tag-sync is passed).
@@ -455,11 +438,12 @@ def parse_args() -> argparse.Namespace:
         "-j", "--jobs", type=int, default=0, help="parallel build jobs (default: all CPUs)"
     )
     parser.add_argument(
-        "-b",
-        "--build-for-all-archs",
-        action="store_true",
-        help="build once per entry in SUPPORTED_ARCHS (py/build.py) instead of "
-        "just this host's arch, e.g. to produce cloud-distributable bundles",
+        "-a",
+        "--archs",
+        default="",
+        help="comma-separated GCC -march values to build for instead of just this host's "
+        "arch (each under target/archs/<arch>/), e.g. to push a bundle by hand for machines "
+        "of another CPU family; the dashboard builds a task's archs itself",
     )
     parser.add_argument(
         "--skip-web", action="store_true", help="skip installing the web UI npm dependencies"
@@ -499,20 +483,12 @@ def main():
     jobs = args.jobs or default_thread_count()
     host_arch = detect_host_arch()
 
-    if args.build_for_all_archs:
-        if not SUPPORTED_ARCHS:
-            print("\nWARNING: SUPPORTED_ARCHS (py/build.py) is empty; nothing to build.")
-        else:
-            failed = build_all_archs(SUPPORTED_ARCHS, build_type, jobs, host_arch)
-            if failed:
-                sys.exit(f"Build failed for arch(s): {', '.join(sorted(failed))}")
+    if args.archs:
+        archs = sorted({a.strip() for a in args.archs.split(",") if a.strip()})
+        failed = build_all_archs(archs, build_type, jobs, host_arch)
+        if failed:
+            sys.exit(f"Build failed for arch(s): {', '.join(sorted(failed))}")
     else:
-        if host_arch not in SUPPORTED_ARCHS:
-            print(
-                f"\nWARNING: this host's arch ('{host_arch}') is not in "
-                "SUPPORTED_ARCHS (py/build.py). Please add it there and commit, "
-                "so cloud tooling knows to build/distribute a bundle for it."
-            )
         rc = build_engine(host_arch, build_type, jobs)
         if rc:
             sys.exit(rc)
@@ -523,7 +499,7 @@ def main():
         print(
             f"\nNo build found for this host's arch ('{host_arch}') under "
             f"{arch_build_dir(host_arch)}; target/engine not updated. Run "
-            "py/build.py without --build-for-all-archs to build it."
+            "py/build.py without --archs to build it."
         )
 
     # 2. Install the front-end's npm dependencies so the engine can launch the

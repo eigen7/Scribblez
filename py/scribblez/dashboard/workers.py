@@ -465,41 +465,78 @@ class WorkerManager:
     # ---- bundle deployment -------------------------------------------------
 
     def deploy(self, spec, task: tasks.TaskRecord) -> str:
-        """Build the controller's tree, push it unless the bucket already has
-        it, and pin the task to the result. Returns the bundle id."""
-        return self._pin_bundle(spec, task, self._build_bundle())
+        """Build the controller's tree for the task's archs, push it unless
+        the bucket already has it, and pin the task to the result. Returns
+        the bundle id."""
+        return self._pin_bundle(spec, task, self._build_bundle(self._needed_archs(spec, task)))
 
     async def redeploy(self, spec, task: tasks.TaskRecord) -> str:
         """The operator's Redeploy: `deploy`, with the build on its own thread.
 
-        Building every arch and pushing takes minutes and touches no record;
-        run through `offload` it held the one blocking thread that long, and
-        every Pause and Remove clicked meanwhile landed after it -- on machines
-        that had gone on billing. Only the repin is a serialized step.
+        Building and pushing takes minutes and touches no record; run through
+        `offload` it held the one blocking thread that long, and every Pause
+        and Remove clicked meanwhile landed after it -- on machines that had
+        gone on billing. Only the arch survey and the repin are serialized
+        steps.
         """
-        manifest = await IOLoop.current().run_in_executor(self._builds, self._build_bundle)
+        archs = await self.offload(self._needed_archs, spec, task)
+        manifest = await IOLoop.current().run_in_executor(self._builds, self._build_bundle, archs)
         return await self.offload(self._pin_bundle, spec, task, manifest)
 
-    def _build_bundle(self) -> BundleManifest:
+    def _build_bundle(self, archs: list[str]) -> BundleManifest:
         check_worker_images_current()
         creds = self._creds()
-        return deploy_current_tree(creds.r2, cache=self._source_digests)
+        return deploy_current_tree(creds.r2, archs, cache=self._source_digests)
 
     def _pin_bundle(self, spec, task: tasks.TaskRecord, manifest: BundleManifest) -> str:
         task.bundle_id = manifest.bundle_id
         task.bundle_source_hash = manifest.source_hash
+        task.bundle_archs = list(manifest.archs)
         tasks.save_task(spec, task)
         return manifest.bundle_id
 
-    def _bundle_for_start(self, spec, task: tasks.TaskRecord, key: str) -> str | None:
+    def _slot_arch(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
+        """The CPU microarchitecture slot `w`'s machine reports -- what its
+        bundle must be built for. A rented machine's is its catalog entry's; a
+        registered machine or a bare host is asked once, over ssh, through the
+        worker image's compiler (the container's own start-up detection), and
+        the answer kept on its record."""
+        holder = task.machine(w.machine) if w.machine is not None else w
+        if holder.arch:
+            return holder.arch
+        image = self._creds().registry.image_for(spec.role(w.role).runtime)
+        machine = _ssh_machine(task, w)
+        machine.pull_image(image)
+        holder.arch = machine.detect_arch(image)
+        tasks.save_task(spec, task)
+        return holder.arch
+
+    def _needed_archs(self, spec, task: tasks.TaskRecord) -> list[str]:
+        """The archs the task's bundle must cover: every ssh slot's machine's,
+        plus whatever its current bundle already covers (a slot removed since
+        does not un-need its arch for the containers still running it)."""
+        archs = set(task.bundle_archs)
+        for w in task.workers:
+            if w.kind == "ssh":
+                archs.add(self._slot_arch(spec, task, w))
+        return sorted(archs)
+
+    def _bundle_for_start(
+        self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, key: str
+    ) -> str | None:
         """The bundle this task's remote workers run, deployed on first use --
         or None while that deployment is still building.
 
         Deployment is not an operator step: a task that has never launched a
-        remote worker gets the controller's current tree built and pushed, and
-        every later worker joins that same bundle. Pinning is what keeps an
-        experiment homogeneous -- editing code mid-run leaves the fleet on the
-        code it started with, and moving it is the explicit redeploy action.
+        remote worker gets the controller's current tree built for its
+        machines' archs and pushed, and every later worker joins that same
+        bundle. Pinning is what keeps an experiment homogeneous -- editing
+        code mid-run leaves the fleet on the code it started with, and moving
+        it is the explicit redeploy action. A later slot whose arch the bundle
+        lacks is the one exception: the same tree is built again with that
+        arch added, and the task repinned (the containers on the old bundle
+        run identical code; the repin lets them be replaced at their next
+        restart as any redeploy does).
 
         The build is minutes, and slot starts run on the blocking thread; built
         there it held up every Pause and Remove clicked meanwhile (redeploy's
@@ -508,14 +545,18 @@ class WorkerManager:
         build done pins the task and starts the slot. A build that fails is
         the slot's exit reason, and the restart backoff paces the retry.
         """
-        if task.bundle_id:
+        arch = self._slot_arch(spec, task, w)
+        if task.bundle_id and arch in task.bundle_archs:
             return task.bundle_id
         task_key = f"{spec.name}/{task.tag}"
         future = self._pending_builds.get(task_key)
         if future is None:
-            future = self._pending_builds[task_key] = self._builds.submit(self._build_bundle)
+            archs = self._needed_archs(spec, task)
+            future = self._pending_builds[task_key] = self._builds.submit(self._build_bundle, archs)
         if not future.done():
-            self._exits[key] = "building the worker bundle (every arch: minutes)"
+            self._exits[key] = (
+                f"building the worker bundle for {', '.join(self._needed_archs(spec, task))}"
+            )
             return None
         del self._pending_builds[task_key]
         try:
@@ -530,9 +571,9 @@ class WorkerManager:
         bundle -- what the dashboard badges, and the cue to redeploy. False
         while nothing is pinned, and while an arch is unbuilt (there is no
         tree to compare until a build produces one)."""
-        if not task.bundle_source_hash:
+        if not task.bundle_source_hash or not task.bundle_archs:
             return False
-        current = source_hash(self._source_digests)
+        current = source_hash(task.bundle_archs, self._source_digests)
         return current is not None and current != task.bundle_source_hash
 
     # ---- cloud plumbing --------------------------------------------------
@@ -739,7 +780,7 @@ class WorkerManager:
         """Create + start slot `w`'s container on its machine, on the task's
         bundle."""
         key = _key(spec, task.tag, w.worker_id)
-        bundle_id = self._bundle_for_start(spec, task, key)
+        bundle_id = self._bundle_for_start(spec, task, w, key)
         if bundle_id is None:
             # Not an attempt: the slot is waiting on the build, not failing to
             # come up, so the restart backoff must not grow across the wait.

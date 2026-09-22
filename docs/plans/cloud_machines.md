@@ -254,7 +254,7 @@ the grant. Measured on the first run (2026-09-16): the L4 trains ~560
 rows/s against a 4090's ~800, and a full-window generation consumes
 ~120 games/s, which a c7a.xlarge's 4 vCPUs supply at ~45 games/s each.
 
-`znver3` joins `SUPPORTED_ARCHS`. Other types (g5's A10G, g6e's L40S)
+`znver3` is the catalog's arch for it (the bundle is built for the archs a task's machines report). Other types (g5's A10G, g6e's L40S)
 are one row each when a run wants them.
 
 ## Not in this slice

@@ -227,6 +227,25 @@ class SshMachine:
         )
         return classify_probe(res.returncode, res.stdout, res.stderr)
 
+    def detect_arch(self, image: str) -> str:
+        """The machine's CPU microarchitecture as a GCC -march value, asked of
+        the compiler inside the worker `image` -- the same question the
+        container's bootstrap asks at start-up, so the bundle built for the
+        answer is the one it will pick. The image must already be on the
+        machine (pull_image)."""
+        res = self._run(
+            ["docker", "run", "--rm", "--pull=never", "--entrypoint", "g++", image,
+             "-march=native", "-Q", "--help=target"],
+            timeout=_MUTATE_TIMEOUT,
+        )  # fmt: skip
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("-march="):
+                arch = line.split("=", 1)[1].strip()
+                if arch and arch != "native":
+                    return arch
+        raise SshMachineError(f"{self.host}: could not detect its arch: {res.stderr.strip()}")
+
     def pull_image(self, image: str):
         """Fetch the newest `image` onto the machine. Containers start with
         --pull=never, so this is where a machine picks up a rebuilt worker
