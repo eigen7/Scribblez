@@ -109,6 +109,13 @@ Principles:
   (`py/cloud/sinks.py`, which orders uploads so the bucket only ever presents
   complete outputs). SIGTERM flushes completed output and exits non-zero, so
   a stop is never mistaken for the role's terminal condition.
+- **Out-of-tag inputs** (`RoleSpec.inputs`): a role whose slots read a file
+  outside their own tag -- the move-set-eval generator's teacher, a
+  position_eval export -- names it under a tag-relative key. A local worker
+  reads the source in place; for a remote slot the controller stages a copy
+  where the slot will look before it needs it (the tag's bucket prefix for a
+  bucket-delivering slot, pushed into the container over the control link
+  otherwise), and the runner resolves it through `workloads.base.resolve_input`.
 - **Results sync** (`./py/scripts/cloud_sync.py`): pulls the workload's
   inbound bucket prefixes into `<mount>/tags/<workload>/<tag>/`, merging with
   locally generated data for the same tag; for a tag whose trainer delivers

@@ -16,6 +16,7 @@ importable on machines without torch or a GPU (a CPU-only worker container).
 """
 
 import importlib
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -76,6 +77,15 @@ class RoleSpec:
     # tag on the controller's mount, so it serves a slot of any kind. "" for
     # roles that deliver nothing the controller has to write.
     ingest: str = ""
+    # Dotted path to inputs(params) -> {rel: Path}: files a slot of this role
+    # reads that live outside its own tag -- another tag's model export, say
+    # -- keyed by the tag-relative name the worker looks for them under. A
+    # local worker reads the source in place; the controller stages a copy
+    # into a remote slot's world (the bucket for a bucket-delivering slot,
+    # the container otherwise) before it needs them, and the runner takes
+    # whichever is there (resolve_input below). "" for roles whose every
+    # input is in the bundle, the runtime deps, or the tag itself.
+    inputs: str = ""
     stats: StatsSpec | None = None
 
 
@@ -260,3 +270,34 @@ class WorkerContext:
 
     def tag_paths(self) -> TagPaths:
         return self.spec.paths(self.tag, self.mount_root)
+
+
+# How long resolve_input waits for a staged copy before giving up: the
+# controller pushes a container's inputs right after creating it, so a wait
+# this long means the staging failed, not that it is slow.
+INPUT_WAIT_SECONDS = 600
+INPUT_POLL_SECONDS = 5
+
+
+def resolve_input(ctx: WorkerContext, rel: str, source: Path) -> Path:
+    """The path a runner reads input `rel` (a RoleSpec.inputs key) from: the
+    `source` itself where it exists (a local worker, sharing the controller's
+    mount), else the staged copy under the tag root at `rel` -- already there
+    (pushed into the container), or fetched through the sink (a
+    bucket-delivering slot). A remote slot waits for a copy that is not there
+    yet; a local worker, which nothing stages for, looks once and never at
+    the sink. Raises FileNotFoundError when none arrives."""
+    if source.is_file():
+        return source
+    staged = ctx.tag_paths().root / rel
+    missing = FileNotFoundError(f"input {rel} was neither at {source} nor staged at {staged}")
+    if ctx.kind == "local":
+        if staged.is_file():
+            return staged
+        raise missing
+    deadline = time.monotonic() + INPUT_WAIT_SECONDS
+    while not (staged.is_file() or ctx.sink.fetch_file(rel, staged)):
+        if time.monotonic() >= deadline:
+            raise missing
+        time.sleep(INPUT_POLL_SECONDS)
+    return staged
