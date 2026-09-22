@@ -46,6 +46,11 @@ class BlockDecoder {
   void decode_one(const char* buf, const std::string& path, uint32_t game_idx, uint32_t turn_idx,
                   bool transpose, bool post_move, int64_t output_row, float* output);
 
+  // The board at turn `turn_idx`'s pre-move decision point, for consumers that
+  // derive per-candidate features from it (the move set cross-check deltas).
+  // Valid until this decoder is next used.
+  const Board& replay_board(const char* buf, uint32_t game_idx, uint32_t turn_idx);
+
   // Replay to the game's sampled position, then encode it once per integer
   // score differential in [diff_lo, diff_hi], writing that many input tensors
   // (no targets, natural frame) contiguously to `out`.

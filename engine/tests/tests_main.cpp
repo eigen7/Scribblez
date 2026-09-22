@@ -31,6 +31,7 @@
 #include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
 #include "sim/slog_position_simmer.h"
+#include "training/cross_check_delta.h"
 #include "training/evidence_trajectory_select.h"
 #include "training/footprint_mask.h"
 #include "training/lane_analysis.h"
@@ -5559,6 +5560,100 @@ TEST(MoveSetEncoder, Basic) {
   ASSERT_LT(std::abs(scalars[2 * mset::kMoveScalars + 0] - (-5.0f) / kScoreDiffInputScale), 1e-6f);
   ASSERT_EQ(scalars[2 * mset::kMoveScalars + 1], 0.0f);
   ASSERT_EQ(scalars[2 * mset::kMoveScalars + 2], 0.0f);
+}
+
+// One move's slice of the batch encode_cross_check_deltas arrays.
+struct CrossDeltaView {
+  const uint8_t* axes;
+  const int32_t* squares;
+  const uint32_t* old_masks;
+  const uint32_t* new_masks;
+  const uint8_t* delta_mask;
+};
+
+// The pre-move cross-check planes as the delta entries say `m` leaves them:
+// zeroed on the squares it fills, and rewritten to the new mask on each entry.
+// Checks each entry's old mask against the planes it overwrites on the way.
+std::vector<float> patch_cross_check_planes(const float* pre_planes, const Move& m,
+                                            const CrossDeltaView& d) {
+  std::vector<float> planes(pre_planes, pre_planes + kCrossCheckPlanes * kBoardCells);
+  visit_placed_squares(m, [&](int r, int c) {
+    for (int l = 0; l < kCrossCheckPlanes; ++l) planes[l * kBoardCells + r * kBoardSide + c] = 0.0f;
+  });
+  for (int i = 0; i < move_set::kMoveMaxCrossDeltas; ++i) {
+    if (!d.delta_mask[i]) continue;
+    float* block = planes.data() + d.axes[i] * kHorizontalCrossCheckPlanes * kBoardCells;
+    for (int l = 0; l < 26; ++l) {
+      float& cell = block[l * kBoardCells + d.squares[i]];
+      EXPECT_EQ(cell, float((d.old_masks[i] >> l) & 1u));
+      cell = float((d.new_masks[i] >> l) & 1u);
+    }
+  }
+  return planes;
+}
+
+// The defining property: a candidate's pre-move planes patched with its delta
+// entries are the cross-check planes of the post-move row the teacher is fed.
+// Turn 0 covers the empty-board apply, which rebuilds every cache entry.
+TEST(CrossCheckDelta, PatchedPreMovePlanesEqualTheTeachersPostMovePlanes) {
+  namespace mset = move_set;
+  Dictionary dict = medium_dict();
+  const GameLogStorage storage = play_test_game(dict, /*seed=*/4242ULL);
+  const GameLog g = storage.view();
+  const InputEncodingSpec spec{&dict};
+  const size_t row_floats = input_floats(spec);
+  const size_t cross0 = size_t(spatial_block_plane0(SpatialBlockId::kCrossChecks)) * kBoardCells;
+  const size_t cross_bytes = sizeof(float) * kCrossCheckPlanes * kBoardCells;
+
+  int max_entries = 0;
+  for (int turn = 0; turn < std::min(g.num_records, 10); ++turn) {
+    binlog::PositionEncoder pos(spec);
+    const int mover = pos.replay_to_sampled(g, turn, /*post_move=*/false);
+    const Board& board = pos.enc().board();
+    board.ensure_movegen_caches(dict);
+
+    // PASS leaves the board alone, so its row carries the pre-move planes.
+    std::vector<Move> candidates = {Move::pass()};
+    const std::vector<Move> plays = MoveGenerator(board, dict).generate(pos.rack(mover));
+    const size_t stride = plays.size() / 100 + 1;
+    for (size_t i = 0; i < plays.size(); i += stride) candidates.push_back(plays[i]);
+
+    const size_t n = candidates.size();
+    std::vector<float> rows(n * row_floats);
+    binlog::encode_candidate_rows(pos, g, turn, mover, candidates, rows.data());
+
+    const size_t width = mset::kMoveMaxCrossDeltas;
+    std::vector<uint8_t> axes(n * width), delta_mask(n * width);
+    std::vector<int32_t> squares(n * width);
+    std::vector<uint32_t> old_masks(n * width), new_masks(n * width);
+    mset::encode_cross_check_deltas(board, dict, candidates.data(), int64_t(n), axes.data(),
+                                    squares.data(), old_masks.data(), new_masks.data(),
+                                    delta_mask.data());
+
+    for (size_t c = 0; c < n; ++c) {
+      const size_t at = c * width;
+      const CrossDeltaView d{axes.data() + at, squares.data() + at, old_masks.data() + at,
+                             new_masks.data() + at, delta_mask.data() + at};
+      const std::vector<float> patched =
+        patch_cross_check_planes(rows.data() + cross0, candidates[c], d);
+      ASSERT_EQ(std::memcmp(patched.data(), rows.data() + c * row_floats + cross0, cross_bytes), 0)
+        << "turn " << turn << ", candidate " << c;
+
+      // Real entries lead, strictly ordered by (axis, square); pads are zero.
+      const int entries = int(std::count(d.delta_mask, d.delta_mask + width, uint8_t(1)));
+      for (int i = 0; i < int(width); ++i) {
+        ASSERT_EQ(d.delta_mask[i], i < entries ? 1 : 0);
+        if (i >= entries) ASSERT_EQ(d.axes[i] + d.squares[i] + d.old_masks[i] + d.new_masks[i], 0u);
+        if (i > 0 && i < entries) {
+          ASSERT_LT(std::pair(d.axes[i - 1], d.squares[i - 1]), std::pair(d.axes[i], d.squares[i]));
+        }
+      }
+      max_entries = std::max(max_entries, entries);
+    }
+    // The PASS candidate changes nothing.
+    ASSERT_EQ(std::count(delta_mask.begin(), delta_mask.begin() + width, uint8_t(1)), 0);
+  }
+  ASSERT_GT(max_entries, 4) << "no multi-tile play was exercised";
 }
 
 TEST(SimObservationLog, Roundtrip) {

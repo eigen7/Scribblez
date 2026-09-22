@@ -482,6 +482,87 @@ def test_dataset_batches_flatten_candidates(corpus_dir):
     assert seen_positions == ds.num_positions
 
 
+def test_cross_check_deltas_address_the_decoded_planes(corpus_dir):
+    """The delta entries' (axis, square, letter) convention, checked against the
+    planes Python actually decodes: every entry's old mask is the pre-move
+    cross-check column at its square. (That the new masks are the teacher's
+    post-move planes is the engine's CrossCheckDelta test.)"""
+    from scribblez.ffi import cross_check_deltas, cross_check_plane0, decode_rows
+    from scribblez.move_set_eval.targets import read_mset
+
+    mset = sorted(corpus_dir.glob("*.mset"))[0]
+    positions = read_mset(mset).positions
+    games = np.array([p.game_index for p in positions], dtype=np.int64)
+    turns = np.array([p.turn_index for p in positions], dtype=np.int64)
+    counts = np.array([len(p.moves) for p in positions], dtype=np.int64)
+    moves = np.concatenate([p.moves for p in positions])
+    slog = mset.with_suffix(".slog")
+    deltas = cross_check_deltas(slog, games, turns, counts, moves)
+
+    planes = decode_rows(slog, games, turns, post_move=False)
+    plane0 = cross_check_plane0()
+    cross = planes[:, plane0 * SIDE * SIDE : (plane0 + 52) * SIDE * SIDE]
+    cross = cross.reshape(len(positions), 2, 26, SIDE * SIDE)
+    pos_id = np.repeat(np.arange(len(positions)), counts)
+    letters = np.arange(26, dtype=np.uint32)
+
+    is_play = moves["type"] == MOVE_PLAY
+    n_entries = deltas["delta_mask"].sum(axis=1)
+    assert (n_entries[is_play] >= 1).all()  # a play always extends some run
+    assert (n_entries[~is_play] == 0).all()
+    assert n_entries.max() > 4
+    for m, d in np.argwhere(deltas["delta_mask"]):
+        old_bits = (deltas["old_masks"][m, d] >> letters) & 1
+        column = cross[pos_id[m], deltas["axes"][m, d], :, deltas["squares"][m, d]]
+        np.testing.assert_array_equal(column, old_bits.astype(np.float32))
+        assert deltas["new_masks"][m, d] != deltas["old_masks"][m, d]
+
+
+def test_dataset_cross_check_deltas_follow_the_flattened_move_order(corpus_dir):
+    """The opt-in delta tensors are scattered back from per-file replay calls, so
+    each move's row must be the one a direct per-position call returns."""
+    from scribblez.ffi import cross_check_deltas
+    from scribblez.move_set_eval.dataset import CROSS_DELTA_KEYS, MsetDataset
+
+    ds = MsetDataset(corpus_dir, with_cross_check_deltas=True)
+    assert len(ds.files) > 1  # the scatter is only exercised across files
+    order = np.random.default_rng(0).permutation(ds.num_positions)[:8]
+    positions = [ds._positions[i] for i in order]
+    batch = ds._build_batch(positions)
+    start = 0
+    for pos in positions:
+        direct = cross_check_deltas(
+            ds._slogs[pos.file_id], [pos.game_index], [pos.turn_index], [len(pos.moves)], pos.moves
+        )
+        for batch_key, key in CROSS_DELTA_KEYS.items():
+            rows = batch[batch_key][start : start + len(pos.moves)].numpy()
+            np.testing.assert_array_equal(rows, direct[key].astype(rows.dtype))
+        start += len(pos.moves)
+    assert start == batch["move_pos_id"].shape[0]
+
+
+def test_cross_check_diagnostic_tabulates_a_slice(corpus_dir, monkeypatch):
+    from scribblez.move_set_eval import cross_check_diagnostic as diag
+    from scribblez.move_set_eval.dataset import MsetDataset
+    from scribblez.move_set_eval.model import MoveSetEvalModel
+
+    ds = MsetDataset(corpus_dir, with_cross_check_deltas=True)
+    torch.manual_seed(0)
+    model = MoveSetEvalModel(ds.spatial_planes, ds.scalar_size, trunk_channels=16, num_blocks=2)
+    data = diag.collect(model.eval(), ds, torch.device("cpu"), max_positions=10**9)
+
+    assert all(len(v) == ds.num_candidates for v in data.values())
+    assert all(np.isfinite(data[e]).all() and (data[e] >= -1e-5).all() for e in diag.ERRORS)
+    plays = data["is_play"]
+    assert (data["changed_bits"][plays] > 0).all()
+    assert (data["changed_bits"][~plays] == 0).all()
+    assert (data["hook_letters"] <= 26 * 4).all()  # at most both ends, each way
+
+    monkeypatch.setattr(diag, "MIN_MOVES_PER_ROW", 3)
+    table = diag.format_table(data, "changed_bits", "equity_abs")
+    assert len(table.splitlines()) > 2
+
+
 def test_train_step_and_eval(corpus_dir):
     from scribblez.move_set_eval.dataset import MsetDataset
     from scribblez.move_set_eval.eval import evaluate
