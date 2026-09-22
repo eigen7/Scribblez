@@ -767,16 +767,79 @@ def test_a_local_child_that_exits_zero_is_finished(manager, spec, task, monkeypa
     assert w.desired_state == "paused"
 
 
-def test_first_remote_worker_deploys_and_pins_the_task(manager, spec, task, monkeypatch):
+def _starting_ssh_slot(manager, spec, task, monkeypatch):
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    _RecordingSshMachine.ops = []
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.desired_state = "running"
+    return w
+
+
+def test_first_remote_worker_builds_the_bundle_off_the_blocking_thread(
+    manager, spec, task, monkeypatch
+):
     """Deployment is not an operator step: the task pins a bundle the first
-    time a bucket-delivering worker needs one, and every later worker joins
-    that same bundle rather than whatever the tree has become."""
-    deploys = []
-    monkeypatch.setattr(WorkerManager, "deploy", lambda self, spec, task: deploys.append(1) or "b1")
-    assert manager.task_bundle_id(spec, task) == "b1"
-    task.bundle_id = "b1"  # what deploy() itself records
-    assert manager.task_bundle_id(spec, task) == "b1"
-    assert len(deploys) == 1
+    time a remote worker starts, and later workers join it. But the build is
+    minutes, and on the blocking thread it held every Pause and Remove clicked
+    meanwhile: the slot start that needs it kicks it off on the build thread
+    and waits, `starting` with the reason on its row, and a later pass pins
+    and starts. Waiting is not a failed attempt, so no backoff accrues."""
+    release = threading.Event()
+    seen = {}
+
+    def build(self):
+        seen["thread"] = threading.current_thread().name
+        release.wait(timeout=5)
+        return SimpleNamespace(bundle_id="b1", source_hash="h1")
+
+    monkeypatch.setattr(WorkerManager, "_build_bundle", build)
+    w = _starting_ssh_slot(manager, spec, task, monkeypatch)
+    missing = {"observed_running": False, "ssh_probe": "missing"}
+    key = _key(spec, "t", w.worker_id)
+
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)
+    assert _RecordingSshMachine.ops == []
+    assert manager._exits[key].startswith("building the worker bundle")
+    assert manager._blocking.submit(lambda: True).result(timeout=5)  # answers during the build
+    assert key not in manager._restarts
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)  # still building: same
+    assert _RecordingSshMachine.ops == [] and task.bundle_id is None
+
+    release.set()
+    manager._pending_builds[f"{spec.name}/t"].result(timeout=5)
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)
+    assert seen["thread"].startswith("scz-build")
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull", "run"]
+    assert (task.bundle_id, w.bundle_id, w.launched) == ("b1", "b1", True)
+    assert key not in manager._exits
+    # A second slot joins the pinned bundle without another build.
+    monkeypatch.setattr(WorkerManager, "_build_bundle", _fail)
+    w2 = _starting_ssh_slot(manager, spec, task, monkeypatch)
+    manager._reconcile_worker(spec, task, w2, workers_mod.RUN, missing)
+    assert w2.bundle_id == "b1"
+
+
+def test_a_failed_bundle_build_is_the_slots_exit_reason(manager, spec, task, monkeypatch):
+    release = threading.Event()
+
+    def build(self):
+        release.wait(timeout=5)
+        raise RuntimeError("make exited 2")
+
+    monkeypatch.setattr(WorkerManager, "_build_bundle", build)
+    w = _starting_ssh_slot(manager, spec, task, monkeypatch)
+    missing = {"observed_running": False, "ssh_probe": "missing"}
+    key = _key(spec, "t", w.worker_id)
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)  # kicks the build off
+    release.set()
+    manager._pending_builds[f"{spec.name}/t"].exception(timeout=5)
+    with pytest.raises(RuntimeError, match="make exited 2"):
+        manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)
+    assert manager._exits[key] == "bundle build failed: make exited 2"
+    assert task.bundle_id is None  # the next allowed attempt builds again
 
 
 def test_bundle_drift_compares_tree_against_pinned_bundle(manager, spec, task, monkeypatch):
@@ -1268,7 +1331,7 @@ def test_creating_a_container_records_that_it_holds_nothing(manager, spec, task,
     monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
-    monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
+    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, spec, task, key: "b1")
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     manager._run_ssh_container(spec, task, w)
@@ -1341,7 +1404,7 @@ def test_a_creation_that_failed_says_why(manager, spec, task, monkeypatch):
     monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
-    monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
+    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, spec, task, key: "b1")
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     _FakeSshMachine.state = "missing"
 
@@ -1368,7 +1431,7 @@ def test_a_gpu_role_gets_the_machines_gpus(manager, monkeypatch):
     monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
-    monkeypatch.setattr(WorkerManager, "task_bundle_id", lambda self, spec, task: "b1")
+    monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, spec, task, key: "b1")
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     _RecordingSshMachine.ops = []
 
