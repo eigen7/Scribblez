@@ -52,6 +52,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -350,6 +351,11 @@ class InferenceLoop {
 
  private:
   void flush();
+  // Every teacher readout of the last evaluate() must be finite: a non-finite
+  // one is a broken serving path (FP16 overflow of a value model's activations,
+  // docs/plans/fp16_safe_serving.md), and a corpus written through it would be
+  // dropped row by row at training time -- silently, as an empty run. Fail here.
+  void require_finite_teacher_outputs(int rows) const;
 
   TeacherService* service_;
   const Dictionary& dict_;  // for the plane worker's per-candidate movegen caches
@@ -399,6 +405,22 @@ void InferenceLoop::run(SliceQueue* queue) {
   flush();
 }
 
+void InferenceLoop::require_finite_teacher_outputs(int rows) const {
+  const auto finite = [](const float* p, size_t n) {
+    return std::all_of(p, p + n, [](float v) { return std::isfinite(v); });
+  };
+  const bool ok = finite(wld_buf_.data(), size_t(rows) * nn::WldOutput::kRowElems) &&
+                  finite(score_diff_buf_.data(), size_t(rows) * nn::ScoreDiffOutput::kRowElems) &&
+                  (!label_planes_ || finite(masks_.data(), size_t(rows) * kRawPlaneFloats));
+  if (!ok) {
+    throw util::CleanException(
+      "the teacher produced non-finite readouts (wld / score-diff / placement logits) in a "
+      "batch of {} rows: the served model overflows at this precision. Serve it at BF16 or "
+      "FP32 (--precision), not FP16.",
+      rows);
+  }
+}
+
 void InferenceLoop::flush() {
   if (pending_.empty()) return;
   int rows = 0;
@@ -408,6 +430,7 @@ void InferenceLoop::flush() {
   }
   float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
   service_->evaluate({inputs_.data(), rows}, head_out, label_planes_ ? masks_.data() : nullptr);
+  require_finite_teacher_outputs(rows);
   // Scatter the cheap value readouts inline; gather the heavy plane maskings
   // into jobs (pointing into the still-live pending_ slices and the raw plane
   // buffer) and run them in parallel below.
