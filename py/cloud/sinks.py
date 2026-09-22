@@ -34,8 +34,9 @@ scratch and the bucket is where outputs live.
 
 Paths are tag-relative on both sinks; a generator's `dest_dir` and a
 trainer's `data_rel` name a data/ subdirectory, and `count_data_files`
-reads how many files of a suffix it holds -- how a target the store is grown
-to is read by a worker that cannot see the store on disk.
+reads how many files of a suffix it holds, which is how a worker that cannot
+see the store on disk (a generator uploading to the bucket) reads the target
+the store is grown to.
 
 The bucket prefix flattens the tag root and its data/ tree (data/slogs and
 stats sit side by side), so a root-relative path's key drops the `data/`.
