@@ -50,7 +50,7 @@ from cloud.providers.aws import AwsProvider
 from cloud.providers.base import Instance, LaunchRequest, Provider, ProviderError
 from cloud.r2 import bucket_path, rclone
 from cloud.ssh_machine import SshMachine, SshMachineError
-from cloud.ssh_transfer import pull_results, sweep_stopped
+from cloud.ssh_transfer import pull_results, push_file, sweep_stopped
 from cloud.worker_env import bundle_worker_env
 from tornado.ioloop import IOLoop
 
@@ -142,6 +142,21 @@ BOOT_GRACE_SECONDS = 300.0
 # "park" and "stop" both mean not-working; they differ in how much of the
 # worker survives it, which matters where restarting is expensive.
 RUN, PARK, STOP = "run", "park", "stop"
+
+
+def _role_inputs(spec, role, params) -> dict[str, Path]:
+    """The files a slot of `role` reads from outside its tag (RoleSpec.inputs),
+    resolved against the controller's mount; empty for a role with none."""
+    return workloads.resolve(role.inputs)(params) if role.inputs else {}
+
+
+def _stage_inputs_in_container(machine, container: str, spec, tag: str, inputs: dict[str, Path]):
+    """A container on the operator's own machine delivers over the control
+    link, and takes its inputs the same way: pushed into it right after it
+    is created, under the tag root there (the runner waits for them)."""
+    root = str(spec.paths(tag).root)
+    for rel, src in inputs.items():
+        push_file(machine, container, remote_root=root, rel_dest=rel, src=src)
 
 
 def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dict:
@@ -643,6 +658,15 @@ class WorkerManager:
         assert res.returncode == 0, f"pushing {CONTROLS_REL} failed: {res.stderr}"
         self._controls_pushed[key] = stamp
 
+    def _stage_inputs_in_bucket(self, r2, spec, tag: str, inputs: dict[str, Path]):
+        """A bucket-delivering slot's out-of-tag inputs (RoleSpec.inputs),
+        put under the tag's prefix before the container exists to look for
+        them; a copy already there at the same size is skipped."""
+        for rel, src in inputs.items():
+            dest = bucket_path(r2, spec.name, tag, *rel.split("/"))
+            res = rclone(r2, "copyto", "--size-only", str(src), dest, capture=True)
+            assert res.returncode == 0, f"staging {rel} failed: {res.stderr}"
+
     # ---- local plumbing --------------------------------------------------
 
     def _log_file(self, spec: workloads.WorkloadSpec, tag: str, name: str):
@@ -797,16 +821,20 @@ class WorkerManager:
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
         machine = _ssh_machine(task, w)
+        role = spec.role(w.role)
+        inputs = _role_inputs(spec, role, params)
+        if env["SCZ_SINK"] == "r2":
+            self._stage_inputs_in_bucket(creds.r2, spec, task.tag, inputs)
         try:
             # Creating a container is the moment to take a rebuilt worker
             # image; `docker run --pull=never` below then fails fast rather
             # than pulling under the dashboard.
-            role = spec.role(w.role)
             image = creds.registry.image_for(role.runtime)
             machine.pull_image(image)
-            machine.run_container(
-                _container_name(spec, task.tag, w.worker_id), image, env, gpus=role.gpu
-            )
+            name = _container_name(spec, task.tag, w.worker_id)
+            machine.run_container(name, image, env, gpus=role.gpu)
+            if env["SCZ_SINK"] != "r2":
+                _stage_inputs_in_container(machine, name, spec, task.tag, inputs)
         except SshMachineError as e:
             # The slot will read `starting` until this succeeds, since nothing
             # of it exists to have exited. Recording why keeps that from being

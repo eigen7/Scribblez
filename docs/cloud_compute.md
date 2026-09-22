@@ -12,9 +12,13 @@ Generation-style roles distribute trivially: cycles are embarrassingly
 parallel, output files are uniquely named and land atomically (so batches from
 any number of machines merge by copy, and a killed worker loses at most its
 in-flight cycle), data volumes are small, and runtime deps are light and
-fetched from public upstreams. The trainer distributes too, through the
-bucket: generations in, exports and checkpoints out
-([cloud_training.md](plans/cloud_training.md)).
+fetched from public upstreams. The trainers distribute too, through the
+bucket: generations (position_eval) or the pair store (move_set_eval) in,
+exports and checkpoints out ([cloud_training.md](plans/cloud_training.md)).
+A move-set-eval trainer prunes its exports and, when its run completes,
+retires its training pairs bucket-side as well; the controller's `models/`
+copy mirrors the bucket (`cloud_sync`), its `slogs/` copy is the archive
+and stays.
 
 ## Architecture
 
@@ -111,6 +115,13 @@ Principles:
   (`py/cloud/sinks.py`, which orders uploads so the bucket only ever presents
   complete outputs). SIGTERM flushes completed output and exits non-zero, so
   a stop is never mistaken for the role's terminal condition.
+- **Out-of-tag inputs** (`RoleSpec.inputs`): a role whose slots read a file
+  outside their own tag -- the move-set-eval generator's teacher, a
+  position_eval export -- names it under a tag-relative key. A local worker
+  reads the source in place; for a remote slot the controller stages a copy
+  where the slot will look before it needs it (the tag's bucket prefix for a
+  bucket-delivering slot, pushed into the container over the control link
+  otherwise), and the runner resolves it through `workloads.base.resolve_input`.
 - **Results sync** (`./py/scripts/cloud_sync.py`): pulls the workload's
   inbound bucket prefixes into `<mount>/tags/<workload>/<tag>/`, merging with
   locally generated data for the same tag; for a tag whose trainer delivers

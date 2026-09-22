@@ -17,11 +17,12 @@ pinned generation provides: position-eval exports are write-once, and pinning at
 creation stops a worker that restarts after a newer generation lands from
 resolving a different model and splitting the corpus's teacher hash.
 
-The generate role is GPU and local-only for now: the teacher runs under
-TensorRT, which the cloud worker image cannot host yet (the GPU-workloads item
-in docs/cloud_compute.md -- a CUDA worker image plus a way to ship the teacher
-to remote machines). The generator binary already rides in the worker bundle so that
-enablement is config, not code, on this side.
+The generate role runs on a GPU slot of either kind. A remote slot has no
+position-eval tag to read the teacher from, so the role declares the pinned
+export as its one input (RoleSpec.inputs): the controller stages a copy where
+the slot will look (the bucket for a rented machine, the container on the
+operator's own), and run_generate resolves it through base.resolve_input --
+the same bytes, so the corpus's stamped teacher hash stays single.
 
 Every `sweep_every`-th pair is labeled in the generator's full-sweep mode
 instead -- every legal candidate of a few positions per game, capped -- and is
@@ -42,7 +43,9 @@ absorbing each pass's new pairs and holding its epoch budget until the store
 reaches `target_pairs` -- so a tag with a worker of each type started together
 grows its corpus, trains on all of it, and stops, unattended. It is the lean
 growing-corpus loop (roadmap A3 slice 1); the generational consume->train
-lifecycle is docs/plans/generational_teacher.md.
+lifecycle is docs/plans/generational_teacher.md. Like the generator it runs on
+a GPU slot of either kind: on a remote one its pair store arrives, and its
+exports and checkpoint leave, through the bucket (the trainer's docstring).
 """
 
 import dataclasses
@@ -63,7 +66,13 @@ from scribblez.paths import POSITION_EVAL, TagPaths
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
 from scribblez.workloads import mset_targets, pair_store
-from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
+from scribblez.workloads.base import (
+    RoleSpec,
+    StatsSpec,
+    WorkerContext,
+    WorkloadSpec,
+    resolve_input,
+)
 
 # The tag's pair store, under the tag's data/ dir (locally and in the bucket).
 SLOGS_DIR = "slogs"
@@ -363,13 +372,24 @@ def _cycle(model: str, work_dir: Path, params: MoveSetEvalParams, threads: int) 
     return r.returncode, {"gen_s": r.gen_seconds, "mset_s": r.mset_seconds}
 
 
+# The tag-relative name a remote slot finds its teacher under (RoleSpec.inputs).
+TEACHER_INPUT = "inputs/teacher.onnx"
+
+
+def inputs(params: MoveSetEvalParams) -> dict[str, Path]:
+    """The generate role's one out-of-tag input: the pinned teacher export."""
+    return {TEACHER_INPUT: teacher_onnx(params)}
+
+
 def run_generate(ctx: WorkerContext) -> int:
     """The generate-role runner (the shared pair-store loop over run_one_cycle).
 
     The teacher is resolved once, here: every cycle labels against the same
     pinned ONNX, so the corpus's stamped teacher hash stays single."""
-    model = str(teacher_onnx(ctx.params))
-    if not mset_targets.require_model_file(model, "teacher model"):
+    try:
+        model = str(resolve_input(ctx, TEACHER_INPUT, teacher_onnx(ctx.params, ctx.mount_root)))
+    except FileNotFoundError as e:
+        print(f"error: teacher model: {e}", file=sys.stderr)
         return 1
     return pair_store.run_pair_generate(
         ctx,
@@ -418,7 +438,7 @@ SPEC = WorkloadSpec(
             title="Generator (GPU)",
             runner="scribblez.workloads.move_set_eval:run_generate",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
-            kinds=("local",),
+            inputs="scribblez.workloads.move_set_eval:inputs",
             gpu=True,
             stats=StatsSpec(
                 unit="pairs",
@@ -434,9 +454,9 @@ SPEC = WorkloadSpec(
             title="Student trainer (GPU)",
             runner="scribblez.move_set_eval.trainer:run",
             runtime=RUNTIME_TORCH,
+            deps="scribblez.move_set_eval.trainer:fetch_train_deps",
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
-            kinds=("local",),
             gpu=True,
             stats=StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"}),
         ),

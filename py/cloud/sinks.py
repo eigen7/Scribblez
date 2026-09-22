@@ -91,6 +91,14 @@ class LocalSink:
         assert dest == self._root / rel_path, (dest, rel_path)
         return dest.is_file()
 
+    def fetch_data_files(self, data_rel: str, dest: Path):
+        """<tag>/data/<data_rel>'s files are `dest`'s own: nothing to pull."""
+        assert dest == self._root / "data" / data_rel, (dest, data_rel)
+
+    def remove_output(self, rel_path: str):
+        """Delete <tag>/<rel_path>; absent is success."""
+        (self._root / rel_path).unlink(missing_ok=True)
+
     def deliver_output(self, src: Path, rel_path: str, *, keep: bool = False):
         """An output written at its place under the tag root is already
         delivered. `src` may instead be a snapshot of it taken beside it (a
@@ -106,9 +114,13 @@ class LocalSink:
 class R2Sink:
     kind = "ssh"  # the bucket delivers for ssh slots only
 
-    def __init__(self, r2: R2Credentials, workload: str, tag: str):
+    def __init__(self, r2: R2Credentials, workload: str, tag: str, root: Path | None = None):
         self._r2 = r2
         self._prefix = (workload, tag)
+        # The tag root on this machine, for the outputs a worker keeps a copy
+        # of beside the bucket's (a trainer's checkpoint, its exports until
+        # they are pruned); None for a worker that keeps none.
+        self._root = root
 
     def _path(self, *parts: str) -> str:
         return bucket_path(self._r2, *self._prefix, *parts)
@@ -162,6 +174,26 @@ class R2Sink:
         assert res.returncode == 0, f"pull of {data_rel} failed: {res.stderr}"
         return True
 
+    def fetch_data_files(self, data_rel: str, dest: Path):
+        """Pull every object under <workload>/<tag>/data/<data_rel> into
+        `dest`, skipping what it already holds at the same size. For a
+        directory of independently delivered files (a pair store), where
+        fetch_data_dir's manifest test does not apply: each file is whole on
+        arrival, and a pair is complete when both its members are."""
+        res = rclone(self._r2, "copy", "--size-only", self._path("data", *data_rel.split("/")),
+                     str(dest), capture=True)  # fmt: skip
+        assert res.returncode == 0, f"pull of {data_rel} failed: {res.stderr}"
+
+    def remove_output(self, rel_path: str):
+        """Delete <workload>/<tag>/<rel_path> from the bucket, and this
+        machine's copy if it has one; absent is success."""
+        res = rclone(self._r2, "deletefile", self._path(*rel_path.split("/")), capture=True)
+        assert res.returncode == 0 or "not found" in res.stderr.lower(), (
+            f"delete of {rel_path} failed: {res.stderr}"
+        )
+        if self._root is not None:
+            (self._root / rel_path).unlink(missing_ok=True)
+
     def fetch_file(self, rel_path: str, dest: Path) -> bool:
         """Pull <workload>/<tag>/<rel_path> to `dest` if the bucket has it."""
         src = self._path(*rel_path.split("/"))
@@ -195,4 +227,4 @@ def make_sink(spec, tag: str, mount_root=None):
     sink's root is the tag's under `mount_root` (the mount dir by default)."""
     if os.environ.get("SCZ_SINK", "r2") == "local":
         return LocalSink(spec.paths(tag, mount_root).root)
-    return R2Sink(r2_from_env(), spec.name, tag)
+    return R2Sink(r2_from_env(), spec.name, tag, spec.paths(tag, mount_root).root)

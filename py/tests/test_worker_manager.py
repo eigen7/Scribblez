@@ -1840,3 +1840,63 @@ def test_reconcile_collects_from_the_generator_but_not_the_trainer(manager, tmp_
     assert collected == ["g"]
     (_, tr) = manager.worker_status(spec, task)
     assert tr["undelivered"] == 0
+
+
+# ---- out-of-tag inputs (RoleSpec.inputs) ----------------------------------------
+
+
+def _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink: str):
+    """A starting ssh generator whose role reads one out-of-tag file, on a
+    task whose bundle is pinned; `sink` is where the slot delivers."""
+    src = tmp_path / "teacher.onnx"
+    src.write_bytes(b"onnx")
+    monkeypatch.setattr(
+        workers_mod, "_role_inputs", lambda spec, role, params: {"inputs/teacher.onnx": src}
+    )
+    monkeypatch.setattr(workers_mod, "_slot_sink", lambda spec, task, w: sink)
+    w = _starting_ssh_slot(manager, spec, task, monkeypatch)
+    task.bundle_id = "b1"
+    return w, src
+
+
+def test_a_bucket_slots_inputs_are_staged_in_the_bucket_before_it_starts(
+    manager, spec, task, monkeypatch, tmp_path
+):
+    rc = _Rclone()
+    monkeypatch.setattr(workers_mod, "rclone", rc)
+    pushed = []
+    monkeypatch.setattr(workers_mod, "push_file", lambda *a, **k: pushed.append(k))
+    w, src = _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink="r2")
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)  # a bucket to stage in
+
+    manager._run_ssh_container(spec, task, w)
+    assert rc.calls == [
+        ("copyto", "--size-only", str(src), f"r2:b/{spec.name}/t/inputs/teacher.onnx")
+    ]
+    assert pushed == []
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull", "run"]
+
+
+def test_an_own_machine_slots_inputs_are_pushed_into_its_container(
+    manager, spec, task, monkeypatch, tmp_path
+):
+    rc = _Rclone()
+    monkeypatch.setattr(workers_mod, "rclone", rc)
+    pushed = []
+
+    def push(machine, container, *, remote_root, rel_dest, src):
+        _RecordingSshMachine.ops.append(("push", container))
+        pushed.append((remote_root, rel_dest, src))
+
+    monkeypatch.setattr(workers_mod, "push_file", push)
+    w, src = _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink="local")
+
+    manager._run_ssh_container(spec, task, w)
+    assert rc.calls == []
+    # Into the container, so after it exists; under the tag root there.
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull", "run", "push"]
+    assert pushed == [(str(spec.paths("t").root), "inputs/teacher.onnx", src)]
+
+
+def test_a_role_without_inputs_stages_nothing(manager, spec, task, monkeypatch):
+    assert workers_mod._role_inputs(spec, spec.role("generate"), None) == {}

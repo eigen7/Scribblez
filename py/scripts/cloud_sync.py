@@ -48,6 +48,15 @@ def _targets(spec: workloads.WorkloadSpec, tag: str, trainer_outputs: bool):
     return targets
 
 
+# Trainer-output directories the local copy MIRRORS rather than accumulates:
+# a trainer that prunes its exports (move_set_eval's retention) deletes them
+# from the bucket, and a copy that only ever added would keep every one it
+# had pulled before the prune. rclone sync deletes locally what the bucket
+# no longer has; the directory is the trainer's alone, so nothing else's is
+# at risk.
+MIRRORED_OUTPUT_DIRS = ("models",)
+
+
 def _pull_file(r2, spec: workloads.WorkloadSpec, tag: str, name: str) -> int:
     """Pull one root-level file the trainer rewrites in place, if the bucket
     has it yet (a trainer that has not checkpointed has published nothing)."""
@@ -62,7 +71,8 @@ def sync_once(r2, spec: workloads.WorkloadSpec, tag: str, trainer_outputs: bool 
     targets = _targets(spec, tag, trainer_outputs)
     for sub, dest, flags in targets:
         dest.mkdir(parents=True, exist_ok=True)
-        res = rclone(r2, "copy", *flags, bucket_path(r2, spec.name, tag, sub), str(dest))
+        verb = "sync" if trainer_outputs and sub in MIRRORED_OUTPUT_DIRS else "copy"
+        res = rclone(r2, verb, *flags, bucket_path(r2, spec.name, tag, sub), str(dest))
         if res.returncode != 0:
             print(f"sync of {sub}/ failed", file=sys.stderr)
             return res.returncode

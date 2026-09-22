@@ -71,7 +71,7 @@ def test_workload_is_registered_with_a_valid_schema():
 
 def test_train_role_is_registered():
     role = SPEC.role("train")
-    assert role.singleton and role.gpu and role.kinds == ("local",)
+    assert role.singleton and role.gpu and role.kinds == ("local", "ssh")
     assert role.runner == "scribblez.move_set_eval.trainer:run"
     assert set(role.stats.phases) == {"train_s", "eval_s"}
 
@@ -447,6 +447,7 @@ class StubCtx:
         self.max_cycles = max_cycles
         self.sink = sink
         self.provenance = {}
+        self.mount_root = tmp_path
         self._paths = SPEC.paths("t", mount_root=tmp_path)
 
     def tag_paths(self):
@@ -586,3 +587,62 @@ def test_pair_generate_without_a_target_is_unbounded(tmp_path):
     ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=4)
     assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs") == 0
     assert len(calls) == 4
+
+
+class _StagingSink(RecordingSink):
+    """A sink whose bucket holds one file, delivered on fetch."""
+
+    kind = "ssh"
+
+    def __init__(self, staged: dict[str, bytes]):
+        super().__init__()
+        self.staged = staged
+        self.fetched = []
+
+    def fetch_file(self, rel_path, dest):
+        self.fetched.append(rel_path)
+        if rel_path not in self.staged:
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(self.staged[rel_path])
+        return True
+
+
+def test_the_generate_role_declares_the_pinned_teacher_as_its_input(tmp_path, monkeypatch):
+    _teacher_under(monkeypatch, tmp_path)
+    params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
+    expected = TagPaths("teach", POSITION_EVAL, mount_root=tmp_path).onnx_path(3)
+    assert move_set_eval.inputs(params) == {move_set_eval.TEACHER_INPUT: expected}
+    assert SPEC.role("generate").inputs == "scribblez.workloads.move_set_eval:inputs"
+    assert "ssh" in SPEC.role("generate").kinds
+    assert "ssh" in SPEC.role("train").kinds
+    assert SPEC.role("train").deps == "scribblez.move_set_eval.trainer:fetch_train_deps"
+
+
+def test_a_remote_generator_takes_the_teacher_the_controller_staged(tmp_path, monkeypatch):
+    """No position_eval tag on the machine: the teacher comes through the sink
+    under the tag root, and THAT path is bound into the cycle."""
+    _teacher_under(monkeypatch, tmp_path)  # the export is not there
+    bound = []
+
+    def fake_cycle(model, work_dir, params, threads):
+        bound.append(model)
+        return 0, {"gen_s": 0.0, "mset_s": 0.0}
+
+    monkeypatch.setattr(move_set_eval, "_cycle", fake_cycle)
+    sink = _StagingSink({move_set_eval.TEACHER_INPUT: b"onnx"})
+    ctx = StubCtx(tmp_path, sink, max_cycles=1)
+    ctx.kind = "ssh"
+    ctx.params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
+
+    assert move_set_eval.run_generate(ctx) == 0
+    staged = ctx.tag_paths().root / move_set_eval.TEACHER_INPUT
+    assert bound == [str(staged)] and staged.read_bytes() == b"onnx"
+    assert sink.fetched == [move_set_eval.TEACHER_INPUT]
+
+
+def test_a_local_generator_does_not_wait_for_a_teacher_nobody_stages(tmp_path, monkeypatch):
+    _teacher_under(monkeypatch, tmp_path)
+    ctx = StubCtx(tmp_path, _StagingSink({}), max_cycles=1)  # kind "local"
+    ctx.params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
+    assert move_set_eval.run_generate(ctx) == 1

@@ -903,41 +903,121 @@ def _pin_in_process(args) -> str:
     return str(mset_targets.pin_model(source, SimpleNamespace(root=root), "proposer_model"))
 
 
-def test_prune_exports_keeps_the_recent_window_and_the_ladder(tmp_path):
+class _OutputSink:
+    """Records what a trainer removes and delivers through its sink."""
+
+    kind = "fake"
+
+    def __init__(self):
+        self.removed: list[str] = []
+        self.delivered: list[tuple[str, bool]] = []
+
+    def remove_output(self, rel):
+        self.removed.append(rel)
+
+    def deliver_output(self, src, rel, *, keep=False):
+        self.delivered.append((rel, keep))
+
+
+def test_prune_exports_drops_the_one_export_leaving_the_window_off_the_ladder(tmp_path):
+    """Applied per pass through the sink: pass N removes export N-keep_last
+    unless it is a ladder rung, so over a run the survivors are the recent
+    window plus every keep_every-th -- with no listing of what is kept."""
+    from scribblez import paths as paths_mod
+    from scribblez.move_set_eval import trainer
+    from scribblez.paths import TagPaths
+
+    paths = TagPaths("t", paths_mod.MOVE_SET_EVAL, tmp_path)
+    sink = _OutputSink()
+    for epoch in range(0, 1205):
+        trainer.prune_exports(paths, sink, epoch, keep_last=10, keep_every=100)
+    removed = {int(r.rsplit("_", 1)[1].split(".")[0]) for r in sink.removed}
+    assert all(r.startswith("models/model_epoch_") for r in sink.removed)
+    survivors = sorted(set(range(0, 1205)) - removed)
+    assert survivors == [*range(0, 1200, 100), *range(1195, 1205)]
+
+
+def test_the_local_sink_prunes_the_file_itself(tmp_path):
+    from cloud.sinks import LocalSink
     from scribblez import paths as paths_mod
     from scribblez.move_set_eval import trainer
     from scribblez.paths import TagPaths
 
     paths = TagPaths("t", paths_mod.MOVE_SET_EVAL, tmp_path)
     paths.onnx_dir.mkdir(parents=True)
-    for gen in range(0, 1204):
+    for gen in range(0, 12):
         paths.onnx_path(gen).touch()
-    (paths.onnx_dir / "shared.blob").touch()  # a sidecar is not an export
+    trainer.prune_exports(paths, LocalSink(paths.root), 11, keep_last=10, keep_every=100)
+    assert paths.exported_generations() == [0, *range(2, 12)]  # 1 left the window; 0 is a rung
 
-    trainer.prune_exports(paths, keep_last=10, keep_every=100)
-    kept = paths.exported_generations()
-    assert kept == [*range(0, 1200, 100), *range(1194, 1204)]
-    assert (paths.onnx_dir / "shared.blob").exists()
-    # Idempotent, and a fresh pass prunes only what the window slid past.
-    paths.onnx_path(1204).touch()
-    trainer.prune_exports(paths, keep_last=10, keep_every=100)
-    assert paths.exported_generations() == [*range(0, 1200, 100), *range(1195, 1205)]
+
+def test_deliver_pass_hands_the_export_and_keeps_the_checkpoint(tmp_path):
+    from scribblez import paths as paths_mod
+    from scribblez.move_set_eval import trainer
+    from scribblez.paths import TagPaths
+
+    paths = TagPaths("t", paths_mod.MOVE_SET_EVAL, tmp_path)
+    sink = _OutputSink()
+    trainer.deliver_pass(paths, sink, 7)
+    assert sink.delivered == [
+        ("models/model_epoch_0007.onnx", False),
+        ("checkpoints/model.pt", True),
+    ]
 
 
 def test_retire_training_pairs_deletes_the_training_side_only(tmp_path):
+    from cloud.sinks import LocalSink
     from scribblez.move_set_eval import trainer
     from scribblez.move_set_eval.dataset import MsetDataset
     from scribblez.move_set_eval.targets import MSET_FLAG_FULL_SWEEP, complete_pairs
 
-    store = tmp_path / "slogs"
-    store.mkdir()
+    store = tmp_path / "data" / "slogs"
+    store.mkdir(parents=True)
     train_files = [_pair(store, f"s{i}") for i in range(3)]
     _pair(store, "sweep0", flags=MSET_FLAG_FULL_SWEEP)
     train_ds = MsetDataset(mset_files=train_files)
 
-    assert trainer.retire_training_pairs(train_ds) == 3
+    assert trainer.retire_training_pairs(train_ds, LocalSink(tmp_path)) == 3
     assert complete_pairs(store) == [store / "sweep0.mset"]
     assert sorted(store.glob("*.slog")) == [store / "sweep0.slog"]
+    # Through the sink, by tag-relative name: a bucket trainer retires the
+    # bucket's copies too.
+    sink = _OutputSink()
+    trainer.retire_training_pairs(train_ds, sink)
+    assert sink.removed == [f"data/slogs/s{i}.{ext}" for i in range(3) for ext in ("mset", "slog")]
+
+
+def test_a_remote_trainer_pulls_its_store_and_restores_through_the_sink(tmp_path):
+    """The store is taken through the sink before each look, and a fresh
+    machine takes the checkpoint the same way."""
+    from scribblez.move_set_eval import trainer
+
+    class _StoreSink(_OutputSink):
+        def __init__(self, staged):
+            super().__init__()
+            self.staged, self.pulls, self.fetched = staged, 0, []
+
+        def fetch_data_files(self, data_rel, dest):
+            self.pulls += 1
+            for stem in self.staged:
+                _pair(dest, stem)
+
+        def fetch_file(self, rel, dest):
+            self.fetched.append(rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"ckpt")
+            return True
+
+    store = tmp_path / "data" / "slogs"
+    sink = _StoreSink(["a", "b"])
+    trainer.wait_for_store(store, _params(warmup_pairs=2, sweep_every=0, holdout_every=0), sink)
+    assert sink.pulls == 1 and sorted(p.stem for p in store.glob("*.mset")) == ["a", "b"]
+
+    paths = SimpleNamespace(rolling_checkpoint=tmp_path / "checkpoints" / "model.pt")
+    trainer.restore_checkpoint(paths, sink)
+    assert sink.fetched == ["checkpoints/model.pt"] and paths.rolling_checkpoint.exists()
+    trainer.restore_checkpoint(paths, sink)  # a machine holding one keeps its own
+    assert sink.fetched == ["checkpoints/model.pt"]
 
 
 def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
@@ -1143,13 +1223,14 @@ def test_a_small_generation_target_releases_the_wait_rather_than_hanging(tmp_pat
 _DRIVE_RUN = """
 import sys, torch
 import onnx
+from cloud.sinks import LocalSink
 from types import SimpleNamespace
 from pathlib import Path
 from scribblez.move_set_eval import trainer
 from scribblez.workloads.move_set_eval import MoveSetEvalParams
 
 root = Path(sys.argv[1])
-pairs = len(list((root / "slogs").glob("*.mset")))
+pairs = len(list((root / "data" / "slogs").glob("*.mset")))
 params = MoveSetEvalParams(
     warmup_pairs=1,
     target_pairs=pairs,   # already at size, so every pass is over a final corpus
@@ -1159,9 +1240,18 @@ params = MoveSetEvalParams(
     num_blocks=2,
     num_heads=2,
 )
+# The tag tree's own sink, minus the records (no dashboard here).
+class _DriveSink(LocalSink):
+    def push_json(self, *a, **k):
+        pass
+
+    def read_json(self, *a, **k):
+        return None
+
+
 paths = SimpleNamespace(
     root=root,
-    data_dir=root,
+    data_dir=root / "data",
     dashboard_db=root / "dashboard.db",
     rolling_checkpoint=root / "checkpoints" / "model.pt",
     onnx_dir=root / "models",
@@ -1172,9 +1262,7 @@ paths = SimpleNamespace(
 )
 ctx = SimpleNamespace(
     params=params, tag="t", worker_id="w0", threads=1, kind="local",
-    sink=SimpleNamespace(
-        kind="local", push_json=lambda *a, **k: None, read_json=lambda *a, **k: None
-    ),
+    sink=_DriveSink(root),
     role=SimpleNamespace(name="train"), provenance={},
     tag_paths=lambda: paths,
 )
@@ -1182,7 +1270,7 @@ assert trainer.run(ctx) == 0, "run() did not exit cleanly"
 
 # The finished run retired its training pairs and kept the held-out (swept)
 # ones; a resumed run learns it is finished from the checkpoint and exits 0.
-store = root / "slogs"
+store = root / "data" / "slogs"
 remaining = sorted(p.name for p in store.glob("*.mset"))
 assert remaining and all(n.startswith("sweep-") for n in remaining), remaining
 assert sorted(p.stem for p in store.glob("*.slog")) == [p[:-5] for p in remaining]
@@ -1212,8 +1300,8 @@ def test_run_stops_after_its_budget_over_the_finished_corpus(corpus_dir, sweep_d
     """
     # The sweep fixture relabels the SAME .slog stems, so the swept pairs are
     # copied under their own stems rather than overwriting the stratified ones.
-    store = tmp_path / "slogs"
-    store.mkdir()
+    store = tmp_path / "data" / "slogs"
+    store.mkdir(parents=True)
     for src in corpus_dir.glob("*.mset"):
         for member in (src, src.with_suffix(".slog")):
             shutil.copy(member, store / member.name)

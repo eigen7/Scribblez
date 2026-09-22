@@ -42,6 +42,10 @@ class _Rclone:
                 if k.startswith(prefix + "/"):
                     (dest / k[len(prefix) + 1 :]).write_text(k)
             return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if op == "deletefile":
+            key = self._key(args[1])
+            self.objects.discard(key)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if op == "copyto":
             src, dst = args[1], args[2]
             if src.startswith("r2:"):
@@ -194,3 +198,29 @@ def test_the_local_sink_follows_the_worker_mount_root(tmp_path, monkeypatch):
     sink = sinks.make_sink(spec, "t", tmp_path)
     sink.push_json("records/run.json", {})
     assert (tmp_path / "tags" / "position_eval" / "t" / "records" / "run.json").exists()
+
+
+def test_the_local_sink_removes_an_output_and_has_nothing_to_pull(paths):
+    sink = LocalSink(paths.root)
+    store = paths.data_dir / "slogs"
+    store.mkdir(parents=True)
+    (store / "a.mset").touch()
+    sink.fetch_data_files("slogs", store)  # the store is its own
+    assert (store / "a.mset").exists()
+    sink.remove_output("data/slogs/a.mset")
+    sink.remove_output("data/slogs/a.mset")  # absent is success
+    assert not (store / "a.mset").exists()
+
+
+def test_the_r2_sink_pulls_a_store_by_size_and_removes_both_copies(paths, monkeypatch):
+    rc = _Rclone({"position_eval/t/data/slogs/a.mset", "position_eval/t/data/slogs/a.slog"})
+    monkeypatch.setattr(sinks, "rclone", rc)
+    sink = R2Sink(R2, "position_eval", "t", paths.root)
+    store = paths.data_dir / "slogs"
+    sink.fetch_data_files("slogs", store)
+    assert sorted(p.name for p in store.iterdir()) == ["a.mset", "a.slog"]
+    assert rc.calls[-1][:2] == ("copy", "--size-only")
+
+    sink.remove_output("data/slogs/a.mset")
+    assert "position_eval/t/data/slogs/a.mset" not in rc.objects
+    assert not (store / "a.mset").exists() and (store / "a.slog").exists()
