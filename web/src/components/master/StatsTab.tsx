@@ -7,14 +7,16 @@ import { HealthBadge, Tile, fmtCompact, isStale } from './ui';
 // The generic worker Stats tab, driven entirely by the stats schema the API
 // reports (each role's unit noun and timing phases), so any workload role
 // that publishes stats renders here without workload-specific code. Per
-// role: a row of fleet-aggregate tiles, the rate and cycle-breakdown
-// figures side by side, and a compact per-worker detail table.
+// role: a row of fleet-aggregate tiles, the cumulative, rate and
+// cycle-breakdown figures, and a compact per-worker detail table. A worker
+// still in its first cycle has no stats record yet; the API lists it with
+// a null `updated_at` so the fleet count and table are complete.
 
 type RoleStats = { title: string; unit: string; phases: Record<string, string> };
 type WorkerRow = {
   worker_id: string; role: string | null; kind: string; threads: number | null;
   bundle_id: string | null; host_arch: string | null; bundle_arch: string | null;
-  units_total: number; cycles_total: number; updated_at: number;
+  units_total: number; cycles_total: number; updated_at: number | null;
   units_per_hour: number | null; phases: Record<string, number>; upload_mbps: number | null;
 };
 type StatsPayload = { roles: Record<string, RoleStats>; workers: WorkerRow[]; updated_at: number };
@@ -22,7 +24,8 @@ type StatsPayload = { roles: Record<string, RoleStats>; workers: WorkerRow[]; up
 const fmt = (v: number | null | undefined, digits = 1) => (v == null ? '—' : v.toFixed(digits));
 
 const cycleSeconds = (w: WorkerRow) => Object.values(w.phases).reduce((a, b) => a + b, 0);
-const workerStale = (w: WorkerRow) => isStale(w.updated_at, cycleSeconds(w));
+const workerPending = (w: WorkerRow) => w.updated_at == null;
+const workerStale = (w: WorkerRow) => w.updated_at != null && isStale(w.updated_at, cycleSeconds(w));
 
 function StatsFigure({ workload, tag, role, name, version }: {
   workload: string; tag: string; role: string; name: string; version: number;
@@ -39,16 +42,17 @@ function StatsFigure({ workload, tag, role, name, version }: {
   return <div className="card"><BokehFigure item={item} /></div>;
 }
 
-// Fleet aggregates for one role's tile row. Stale workers are excluded from
-// the rates and means so a dead worker's last recorded window doesn't keep
-// inflating the fleet numbers.
+// Fleet aggregates for one role's tile row. Stale and pending workers are
+// excluded from the rates and means: a dead worker's last recorded window
+// would keep inflating the fleet numbers, and a pending one has none.
 function aggregates(workers: WorkerRow[]) {
-  const fresh = workers.filter((w) => !workerStale(w));
+  const fresh = workers.filter((w) => !workerStale(w) && !workerPending(w));
   const rates = fresh.map((w) => w.units_per_hour).filter((v): v is number => v != null);
   const uploads = fresh.map((w) => w.upload_mbps).filter((v): v is number => v != null);
   return {
     fresh,
-    staleCount: workers.length - fresh.length,
+    staleCount: workers.filter(workerStale).length,
+    pendingCount: workers.filter(workerPending).length,
     rate: rates.length ? rates.reduce((a, b) => a + b, 0) : null,
     total: workers.reduce((a, w) => a + w.units_total, 0),
     cycle: fresh.length
@@ -67,6 +71,20 @@ function phaseSplit(stats: RoleStats, fresh: WorkerRow[]): string {
       return `${label} ${fmt(mean)}`;
     })
     .join(' · ');
+}
+
+// The workers tile's health line: stale and first-cycle counts, or all fresh.
+function workersHealth({ staleCount, pendingCount }: { staleCount: number; pendingCount: number }) {
+  if (staleCount === 0 && pendingCount === 0) {
+    return <span className="health-ok"><span className="dot-ok" /> all fresh</span>;
+  }
+  return (
+    <>
+      {staleCount > 0 && <span className="pill-stale">{staleCount} stale</span>}
+      {staleCount > 0 && pendingCount > 0 && ' · '}
+      {pendingCount > 0 && <span className="dim">{pendingCount} in first cycle</span>}
+    </>
+  );
 }
 
 // One column of the per-worker table: header, sort key, numeric alignment,
@@ -124,7 +142,9 @@ function columns(stats: RoleStats): Col[] {
     { header: 'upload MB/s', key: (w) => w.upload_mbps, numeric: true },
     {
       header: 'updated', key: (w) => w.updated_at,
-      render: (w) => <HealthBadge updatedAt={w.updated_at} stale={workerStale(w)} />,
+      render: (w) => (w.updated_at == null
+        ? dim('first cycle running')
+        : <HealthBadge updatedAt={w.updated_at} stale={workerStale(w)} />),
     },
   ];
 }
@@ -203,17 +223,12 @@ function RoleSection({ workload, tag, role, stats, workers, version }: {
           sub={phaseSplit(stats, agg.fresh)}
         />
         {agg.upload != null && <Tile label="upload" value={fmt(agg.upload)} unit="MB/s" />}
-        <Tile
-          label="workers"
-          value={String(workers.length)}
-          sub={agg.staleCount > 0 ? (
-            <span className="pill-stale">{agg.staleCount} stale</span>
-          ) : (
-            <span className="health-ok"><span className="dot-ok" /> all fresh</span>
-          )}
-        />
+        <Tile label="workers" value={String(workers.length)} sub={workersHealth(agg)} />
       </div>
       <div className="charts-grid">
+        <StatsFigure
+          workload={workload} tag={tag} role={role} name="cumulative" version={version}
+        />
         <StatsFigure workload={workload} tag={tag} role={role} name="rate" version={version} />
         <StatsFigure
           workload={workload} tag={tag} role={role} name="cycle_breakdown" version={version}

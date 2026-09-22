@@ -46,14 +46,43 @@ def _role_payload(role: workloads.RoleSpec) -> dict:
     }
 
 
+def _pending_summary(worker: tasks.WorkerRecord) -> dict:
+    """The table row of a task worker that has published no stats record yet
+    (its first cycle is still running): identity from the task, no numbers."""
+    return {
+        "worker_id": worker.worker_id,
+        "role": worker.role,
+        "kind": worker.kind,
+        "threads": worker.threads,
+        "bundle_id": worker.bundle_id,
+        "host_arch": None,
+        "bundle_arch": None,
+        "units_total": 0,
+        "cycles_total": 0,
+        "updated_at": None,
+        "units_per_hour": None,
+        "phases": {},
+        "upload_mbps": None,
+    }
+
+
 def _stats_by_role(spec: workloads.WorkloadSpec, tag: str) -> dict:
-    """The Stats tab payload: per-role schemas plus every worker's summary."""
+    """The Stats tab payload: per-role schemas plus every worker's summary --
+    the task's workers without a record yet included, so the tab counts and
+    lists the fleet as it is, not only the part that has reported."""
     records = worker_stats_figures.read_stats(spec.paths(tag).stats_dir)
     roles = {r.name: r for r in spec.roles if r.stats}
     summaries = [
         worker_stats_figures.worker_summary(rec, roles[rec["role"]].stats)
         for rec in records
         if rec.get("role") in roles
+    ]
+    reported = {s["worker_id"] for s in summaries}
+    task = tasks.load_task(spec, tag)
+    summaries += [
+        _pending_summary(w)
+        for w in (task.workers if task else [])
+        if w.role in roles and w.worker_id not in reported
     ]
     return {
         "roles": {
