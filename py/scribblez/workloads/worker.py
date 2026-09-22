@@ -18,6 +18,18 @@ class WorkerStopped(Exception):
 # recent-throughput estimates without unbounded growth.
 RECENT_SAMPLES = 50
 
+# Cumulative-count points retained for the whole run: once the history holds
+# this many, every other point is dropped, so a long run keeps a coarser but
+# complete timeline at bounded size.
+HISTORY_POINTS = 1000
+
+
+def thin_history(history: list) -> list:
+    """Halve `history` when it reaches the cap, keeping its latest point."""
+    if len(history) < HISTORY_POINTS:
+        return history
+    return history[-1::-2][::-1]
+
 
 def stats_rel_path(worker_id: str) -> str:
     """Where a worker's stats record lives, relative to the tag root."""
@@ -34,7 +46,9 @@ class WorkerStats:
     totals it last published, so the scheduler's pacing gate (which stops and
     restarts generators many times an hour) reads as a pause rather than as
     work undone. The sample window is not resumed -- it measures the rate right
-    now, and samples from before a gap would only blur that.
+    now, and samples from before a gap would only blur that. The history of
+    [time, units_total] points is resumed, and thinned rather than capped, so
+    the cumulative timeline covers the slot's whole run.
     """
 
     def __init__(self, ctx):
@@ -51,6 +65,7 @@ class WorkerStats:
             "units_total": prior.get("units_total", 0),
             "cycles_total": prior.get("cycles_total", 0),
             "recent": [],
+            "history": prior.get("history", []),
             **ctx.provenance,
         }
 
@@ -71,4 +86,5 @@ class WorkerStats:
             }
         )
         del r["recent"][:-RECENT_SAMPLES]
+        r["history"] = thin_history(r["history"] + [[r["updated_at"], r["units_total"]]])
         self._sink.push_json(stats_rel_path(r["worker_id"]), r)

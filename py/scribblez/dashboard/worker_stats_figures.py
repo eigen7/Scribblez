@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 
-from bokeh.models import ColumnDataSource, HoverTool
+from bokeh.models import ColumnDataSource, HoverTool, Range1d
 from bokeh.palettes import Blues, Category10
 from bokeh.plotting import figure
 
@@ -66,37 +66,110 @@ def worker_summary(record: dict, stats: StatsSpec) -> dict:
     }
 
 
-def _rate_points(samples: list[dict]) -> tuple[list[datetime], list[float]]:
+def _rate_points(samples: list[dict]) -> tuple[list[float], list[float]]:
     """Units/hour between consecutive samples, stamped at each interval's end."""
     steps = [(a, b) for a, b in pairwise(samples) if b["t"] > a["t"]]
-    xs = [datetime.fromtimestamp(b["t"], tz=UTC) for _, b in steps]
+    xs = [b["t"] for _, b in steps]
     ys = [(b["units_total"] - a["units_total"]) / (b["t"] - a["t"]) * 3600 for a, b in steps]
     return xs, ys
 
 
-def rate(records: list[dict], stats: StatsSpec):
-    """Units/hour per worker over its recent samples: the slope the old
-    cumulative timeline made the reader eyeball, plotted directly, so
-    throughput dips and stalls are visible. A worker that stops reporting
-    reads as a line that simply ends."""
+def _time_range(ts: list[float]) -> Range1d:
+    """An x range spanning every timestamp in `ts`, with a margin. Set
+    explicitly because Bokeh's auto range around a lone point collapses to
+    zero width, and the datetime axis then labels it in microseconds."""
+    lo, hi = min(ts), max(ts)
+    pad = max((hi - lo) * 0.03, 60.0)
+    return Range1d(_datetime(lo - pad), _datetime(hi + pad))
+
+
+def _datetime(t: float) -> datetime:
+    return datetime.fromtimestamp(t, tz=UTC)
+
+
+def _time_figure(title: str, y_label: str, ts: list[float]):
     fig = figure(
-        title=f"{stats.unit.capitalize()} per hour (recent window)",
+        title=title,
         x_axis_type="datetime",
+        x_range=_time_range(ts),
         height=280,
         sizing_mode="stretch_width",
     )
-    fig.yaxis.axis_label = f"{stats.unit} / hour"
+    fig.yaxis.axis_label = y_label
     fig.y_range.start = 0
-    palette = Category10[10]
-    plotted = 0
-    for i, record in enumerate(records):
-        xs, ys = _rate_points(record.get("recent", []))
-        if not xs:
-            continue
-        fig.line(xs, ys, color=palette[i % 10], legend_label=record["worker_id"], line_width=2)
-        plotted += 1
-    if plotted == 0:
+    return fig
+
+
+def _worker_series(fig, index: int, worker_id: str, xs: list[float], ys: list, step: bool):
+    """One worker's line (a step for counts, straight for rates) plus a marker
+    per point, so a series still shows when it has a single point. Drawn
+    even with no points, so every worker has its legend entry."""
+    color = Category10[10][index % 10]
+    xs = [_datetime(t) for t in xs]
+    if step:
+        fig.step(xs, ys, mode="after", color=color, legend_label=worker_id, line_width=2)
+    else:
+        fig.line(xs, ys, color=color, legend_label=worker_id, line_width=2)
+    fig.scatter(xs, ys, color=color, legend_label=worker_id, size=6)
+
+
+def rate(records: list[dict], stats: StatsSpec):
+    """Units/hour per worker over its recent samples: the slope of the
+    cumulative timeline, plotted directly, so throughput dips and stalls are
+    visible. A worker that stops reporting reads as a line that simply ends;
+    one with a single sample so far has a legend entry and no points."""
+    series = [(r["worker_id"], _rate_points(r.get("recent", []))) for r in records]
+    if not any(xs for _, (xs, _) in series):
         return None
+    ts = [s["t"] for r in records for s in r.get("recent", [])]
+    fig = _time_figure(
+        f"{stats.unit.capitalize()} per hour (recent window)", f"{stats.unit} / hour", ts
+    )
+    for i, (worker_id, (xs, ys)) in enumerate(series):
+        _worker_series(fig, i, worker_id, xs, ys, step=False)
+    fig.legend.location = "top_left"
+    return fig
+
+
+def _worker_history(record: dict) -> list[list]:
+    """A worker's cumulative count over its whole run: [t, units_total] points
+    from the slot's first start (at zero) through every cycle since. The
+    recent window is merged in: once the history has been thinned, the window
+    holds the finer detail of the latest cycles."""
+    points = {(t, n) for t, n in record.get("history", [])}
+    points |= {(s["t"], s["units_total"]) for s in record.get("recent", [])}
+    return [[record["started_at"], 0], *(list(p) for p in sorted(points))]
+
+
+def _fleet_total(histories: list[list[list]]) -> tuple[list[float], list[int]]:
+    """The fleet's cumulative count: at each point of any worker's history,
+    the sum of every worker's latest total at or before it."""
+    events = sorted((t, w, n) for w, h in enumerate(histories) for t, n in h)
+    latest = [0] * len(histories)
+    xs, ys = [], []
+    for t, w, n in events:
+        latest[w] = n
+        xs.append(t)
+        ys.append(sum(latest))
+    return xs, ys
+
+
+def cumulative(records: list[dict], stats: StatsSpec):
+    """Cumulative units per worker over the whole run, with the fleet total
+    on top: what the run has delivered and how steadily, which a rate of
+    lumpy per-cycle counts (a survey finds 0-6 positions a game) obscures."""
+    if not records:
+        return None
+    histories = [_worker_history(r) for r in records]
+    fleet_xs, fleet_ys = _fleet_total(histories)
+    fig = _time_figure(f"{stats.unit.capitalize()} over time", f"cumulative {stats.unit}", fleet_xs)
+    for i, (record, history) in enumerate(zip(records, histories, strict=True)):
+        xs, ys = [t for t, _ in history], [n for _, n in history]
+        _worker_series(fig, i, record["worker_id"], xs, ys, step=True)
+    fig.step(
+        [_datetime(t) for t in fleet_xs], fleet_ys, mode="after",
+        color="#333333", line_dash="dashed", line_width=2.5, legend_label="fleet",
+    )  # fmt: skip
     fig.legend.location = "top_left"
     return fig
 
@@ -150,6 +223,7 @@ def cycle_breakdown(records: list[dict], stats: StatsSpec):
 
 
 FIGURES = {
+    "cumulative": cumulative,
     "rate": rate,
     "cycle_breakdown": cycle_breakdown,
 }

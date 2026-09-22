@@ -5,7 +5,7 @@ import json
 from cloud.sinks import LocalSink
 from scribblez import workloads
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.worker import WorkerStats, stats_rel_path
+from scribblez.workloads.worker import HISTORY_POINTS, WorkerStats, stats_rel_path, thin_history
 
 
 def _ctx(tmp_path, **overrides):
@@ -57,3 +57,24 @@ def test_a_restarted_worker_resumes_its_slot_counters(tmp_path):
 def test_a_first_run_starts_from_zero(tmp_path):
     WorkerStats(_ctx(tmp_path, worker_id="local-0")).cycle_done({}, units=5, nbytes=0)
     assert json.loads((tmp_path / stats_rel_path("local-0")).read_text())["units_total"] == 5
+
+
+def test_the_history_accumulates_across_restarts(tmp_path):
+    """The cumulative timeline covers the slot's whole run, so unlike the rate
+    window it survives a restart and carries the resumed total."""
+    first = WorkerStats(_ctx(tmp_path))
+    first.cycle_done({}, units=2, nbytes=0)
+    second = WorkerStats(_ctx(tmp_path))
+    second.cycle_done({}, units=3, nbytes=0)
+    record = _published(tmp_path)
+    assert [n for _, n in record["history"]] == [2, 5]
+    assert [t for t, _ in record["history"]][-1] == record["updated_at"]
+
+
+def test_the_history_thins_by_half_at_its_cap():
+    full = [[float(i), i] for i in range(HISTORY_POINTS)]
+    thinned = thin_history(full)
+    assert len(thinned) == HISTORY_POINTS // 2
+    assert thinned[-1] == full[-1]  # the latest point always survives
+    assert thinned[0] == full[1] and thinned[1] == full[3]
+    assert thin_history(full[:-1]) == full[:-1]  # below the cap: untouched
