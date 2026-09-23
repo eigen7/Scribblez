@@ -27,13 +27,6 @@ class Dictionary;
 // and `my_rack`, i.e. the bag plus the opponent's rack. Indexed A..Z, blank.
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack);
 
-// The two positions a turn can be sampled at. Used only by the encoder
-// cross-check tests.
-enum class PositionKind : uint8_t {
-  kPreMove = 0,   // the player is about to move
-  kPostMove = 1,  // the player has moved but not yet drawn
-};
-
 class GameStateEncoder {
  public:
   explicit GameStateEncoder(const InputEncodingSpec& spec) : spec_(spec) {}

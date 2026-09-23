@@ -1082,6 +1082,12 @@ class TestAgent : public scribblez::Agent {
   std::mt19937_64 rng_;
 };
 
+// The two positions a turn can be sampled at.
+enum class PositionKind : uint8_t {
+  kPreMove = 0,   // the player is about to move
+  kPostMove = 1,  // the player has moved but not yet drawn
+};
+
 // One position from an independent replay of a GameLogStorage that tracks both
 // racks directly. The ground truth that GameStateEncoder replays are checked
 // against.
@@ -1093,7 +1099,7 @@ struct LiveSnapshot {
   int score_opp = 0;
   int turn_index = 0;
   int active_player = 0;
-  scribblez::PositionKind kind = scribblez::PositionKind::kPreMove;
+  PositionKind kind = PositionKind::kPreMove;
 };
 
 std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStorage& log) {
@@ -1280,7 +1286,7 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
 
       ASSERT_LT(snap_idx, live_snaps.size());
       const LiveSnapshot& pre = live_snaps[snap_idx++];
-      ASSERT_EQ(pre.kind, scribblez::PositionKind::kPreMove);
+      ASSERT_EQ(pre.kind, PositionKind::kPreMove);
       const int active = enc.active_player();
       ASSERT_EQ(active, pre.active_player);
       ASSERT_EQ(enc.score(active), pre.score_active);
@@ -1295,7 +1301,7 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
       if (turn.move.type() == scribblez::MoveType::PLAY) {
         ASSERT_LT(snap_idx, live_snaps.size());
         const LiveSnapshot& post = live_snaps[snap_idx++];
-        ASSERT_EQ(post.kind, scribblez::PositionKind::kPostMove);
+        ASSERT_EQ(post.kind, PositionKind::kPostMove);
 
         scribblez::Board post_board = enc.board();
         post_board.apply(turn.move);
