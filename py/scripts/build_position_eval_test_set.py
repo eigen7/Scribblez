@@ -1,26 +1,17 @@
 #!/usr/bin/env python3
-"""Build (or re-score) the large position-evaluation Monte-Carlo test set.
+"""Build or re-score the large position-evaluation Monte-Carlo test set.
 
-The dataset is a set of post-move positions (see the position-evaluation test-set
-READMEs): each is a board right after one player's tile placement at a
-training-eligible turn, sampled from HastyBot self-play. The aggregate W/L/D and
-score-delta distribution over many Monte-Carlo rollouts is the low-variance "true
-value" the position evaluation model should predict.
+The set is post-move positions sampled from HastyBot self-play, each with a
+Monte-Carlo ground truth: the W/L/D and score-delta distribution over many
+rollouts, a low-variance "true value" for the position evaluation model to
+predict. Its layout under positions/<lexicon>/<dataset>/ is documented in
+positions/NWL23/position-eval-test-dataset-large/README.md.
 
-The committed artifacts live under positions/<lexicon>/<dataset>/:
-  * part-NNN.gcgs  -- the harvested GCG positions, ~100 concatenated GCG blocks
-                      per file (each block begins with `#character-encoding`);
-  * monte-carlo-sim-results.<condition>.json -- the MC ground truth keyed by
-    position stem, one file per information condition (hidden-leaves,
-    face-up-leaves; see engine/include/sim/monte_carlo_sim.h). On a
-    penultimate-bingo position the two coincide (the opponent kept nothing),
-    so the tool writes the same truth under both names.
-
-The loose per-position pos-*.gcg files the C++ tools consume are transient: this
-script explodes the bundles into them, scores, then removes them.
-
-Pipeline (default): harvest -> write bundles -> explode -> Monte-Carlo score.
-Use --skip-harvest to re-score the committed bundles without replaying games.
+The pipeline runs two engine tools: harvest_positions_tool writes the
+part-NNN.gcgs bundles, then monte_carlo_sim_tool scores them. The scorer reads
+one loose pos-NNNN.gcg per position, so this script explodes the bundles into
+those files before scoring and deletes them afterwards. --skip-harvest re-scores
+the committed bundles without replaying games.
 
 Usage:
     py/scripts/build_position_eval_test_set.py                    # full build
@@ -40,8 +31,8 @@ ENGINE_BIN = REPO_ROOT / "target" / "engine"
 HARVESTER = ENGINE_BIN / "harvest_positions_tool"
 MC_SIM = ENGINE_BIN / "monte_carlo_sim_tool"
 
-# Each harvested GCG block starts with this line; it is the record boundary the
-# bundles are split on. It cannot occur inside a move line or our seed-only note.
+# Each harvested GCG block starts with this line, so the bundles split on it. It
+# cannot occur inside a move line or the block's seed note.
 GCG_MARKER = "#character-encoding UTF-8"
 
 
@@ -89,7 +80,7 @@ def clear_loose_gcgs(dataset: Path):
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
-    p.add_argument("--lexicon", default="NWL23", help="Lexicon name (kwg under --lexica-dir).")
+    p.add_argument("--lexicon", default="NWL23", help="Lexicon name, passed to both tools.")
     p.add_argument(
         "--dataset-name",
         default="position-eval-test-dataset-large",
@@ -97,14 +88,20 @@ def main() -> int:
     )
     p.add_argument("--count", type=int, default=1000, help="Positions to harvest.")
     p.add_argument("--per-file", type=int, default=100, help="GCG blocks per bundle file.")
-    p.add_argument("--seed", type=int, default=1000000, help="Base game seed (reserved range).")
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=1000000,
+        help="First harvest game seed; games use seed, seed+1, ..., a range kept apart from "
+        "training games.",
+    )
     p.add_argument("--games", type=int, default=10000, help="Monte-Carlo rollouts per position.")
     p.add_argument("--threads", type=int, default=0, help="MC worker threads (0 = tool default).")
     p.add_argument(
         "--condition",
         default="both",
         choices=["both", "hidden-leaves", "face-up-leaves"],
-        help="information condition(s) to score; one condition regenerates just its results file.",
+        help="information condition(s) to score; a single condition rewrites only its results file",
     )
     p.add_argument(
         "--skip-harvest",

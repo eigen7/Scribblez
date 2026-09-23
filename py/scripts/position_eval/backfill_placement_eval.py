@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""Backfill a tag's placement-vs-Monte-Carlo metrics from its exported generations.
+"""Compute a position_eval tag's placement metrics for generations that lack them.
 
-The trainer records the placement heads' quality against the rollouts' planes
-(scribblez/position_eval/analysis.placement_metrics) with every checkpoint's
-quality eval, but a run that predates the metric has only its per-generation
-ONNX exports. This rebuilds the model for each export -- the graph's
-initializers loaded back into the tag's architecture
-(onnx_export_util.load_onnx_initializers) -- runs the same evaluation over
-the same dataset, and upserts just the placement metric names into the tag's
-dashboard.db (the value metrics the run recorded itself are left untouched),
-so the Loss tab's placement figures cover the whole run.
+The trainer's quality eval scores the placement heads against the Monte-Carlo
+truth planes (scribblez/position_eval/analysis.placement_metrics) at every
+checkpoint. Generations trained before a metric existed have only their ONNX
+exports. For each such export this loads the graph's weights back into the
+tag's architecture (onnx_export_util.load_onnx_initializers), runs the same
+quality eval, and writes only the placement metrics into the tag's
+dashboard.db, so the dashboard's Loss tab covers the whole run.
 
-Generations already carrying the metrics are skipped unless --force. The
-first export is also checked against onnxruntime on a few positions, so a
-mis-rebuilt model (an architecture-param mismatch the initializer names happen
-to survive) fails loudly rather than producing plausible numbers.
+Generations that already have every placement metric are skipped unless
+--force. The first rebuilt model is checked against onnxruntime on a few
+positions: an architecture-param mismatch can survive the weight loading when
+the tensor names happen to match, and would otherwise produce plausible but
+wrong numbers.
 
 Usage:
     ./py/scripts/position_eval/backfill_placement_eval.py -t mytag
@@ -50,8 +49,9 @@ PARITY_ATOL = 1e-3
 
 
 def _tag_params(paths: TagPaths):
-    """The tag's frozen params (task.json) as the workload's params dataclass;
-    fields the dataclass no longer has are dropped."""
+    """The tag's frozen params from task.json, as the workload's params
+    dataclass. Stored fields the dataclass lacks are dropped, so tags older
+    than a param removal still load."""
     stored = json.loads((paths.root / "task.json").read_text())["params"]
     cls = workloads.get(WORKLOAD).params_cls
     names = {f.name for f in dataclasses.fields(cls)}
@@ -84,10 +84,10 @@ def _done_epochs(conn) -> set[int]:
 
 @torch.no_grad()
 def _check_parity(model, onnx_path, quality: dict):
-    """The rebuilt model against onnxruntime on the first positions, both in
-    true fp32: the TF32 matmuls and cuDNN convolutions the evaluation itself
-    runs under differ from onnxruntime's CPU reference by ~1e-3, more than a
-    mismatch check should forgive."""
+    """Check the rebuilt model against onnxruntime on the first positions. The
+    torch side runs in true FP32 here: the TF32 matmuls and convolutions the
+    evaluation itself uses differ from onnxruntime's CPU reference by ~1e-3,
+    more than a mismatch check should forgive."""
     spatial, scalar = analysis.split_input(
         quality["inputs"][:PARITY_ROWS], quality["spatial_planes"]
     )
@@ -127,7 +127,7 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("-t", "--tag", required=True, help="the tag whose exports to backfill")
-    p.add_argument("--device", default="cuda")
+    p.add_argument("--device", default="cuda", help="torch device for the evaluation")
     p.add_argument("--force", action="store_true", help="recompute generations already recorded")
     args = p.parse_args()
 

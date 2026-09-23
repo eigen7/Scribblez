@@ -2,31 +2,33 @@
 """Does the move set student's distillation error track the cross-check change
 a move causes?
 
-The teacher scores a candidate on its post-move board, cross-check planes
-included; the student sees the pre-move board plus the placed tiles, so a
-move's post-move cross-checks -- above all the hooks of the word it forms --
-are information the student lacks. Before feeding them in (as the sparse
-per-move delta of engine training/cross_check_delta.h), this measures whether
-the student's error is actually concentrated where that delta is large.
+The teacher (the position evaluation model) scores a candidate on its post-move
+board, cross-check planes included. The student sees the pre-move board plus
+the placed tiles, so it lacks the move's post-move cross-checks, above all the
+hooks of the word it forms. Those could be fed in as the sparse per-move delta
+of engine/include/training/cross_check_delta.h; this diagnostic measures first
+whether the student's error is concentrated where that delta is large.
 
-Per candidate move it takes the student-vs-teacher error (win-equity and
-score-diff absolute error, WLD KL, and -- on a plane-carrying slice -- the
+For each candidate it computes the student-vs-teacher error (absolute error in
+win equity and score diff, WLD KL, and on a plane-carrying slice the
 placement-plane KL) and two delta features:
 
   * changed_bits: (square, letter) cross-check bits the move flips;
-  * hook_letters: letters legal, after the move, on the changed squares at the
-    ends of the move's own word -- how open the word it forms is to a hook.
+  * hook_letters: letters legal after the move on the changed squares at the
+    ends of the move's own word, i.e. how open that word is to a hook.
 
-Tiles played drives both features (n tiles touch up to 2n+2 squares) and the
-error (long plays are rarer and swingier), so every table is read WITHIN a
-tile count: moves of one length are split into terciles of the feature, and the
-error compared across them (each cell also shows the tercile's mean feature
-value). Error that rises from the low to the high tercile at fixed length is
-the signal; flat rows say cross-checks are not what the student is missing.
+The number of tiles played drives both the features (n tiles touch up to 2n+2
+squares) and the error (long plays are rarer and swingier). So each table
+compares moves of one length only: they are split into terciles of the feature
+and the error is compared across terciles, each cell also showing the
+tercile's mean feature value. Error rising from the low to the high tercile at
+a fixed length is the signal; flat rows say cross-checks are not what the
+student is missing.
 
-The held-out slice is the tag's full-sweep pairs when it has them (every legal
-move, no planes); --slice train reads the stratified training pairs, which
-carry planes but were trained on.
+The default holdout slice is the one the trainer holds out
+(workloads.move_set_eval.split_pairs): the full-sweep pairs when the tag has
+any, which score every legal move but carry no planes. --slice train reads the
+training pairs instead, which carry planes but were trained on.
 
 Usage:
     ./py/scripts/move_set_eval/crosscheck_delta_diagnostic.py -t TAG
@@ -66,8 +68,10 @@ def main() -> int:
     p.add_argument(
         "-t", "--tag", required=True, help="move_set_eval tag: its checkpoint and corpus."
     )
-    p.add_argument("--slice", choices=("holdout", "train"), default="holdout")
-    p.add_argument("--max-positions", type=int, default=20000)
+    p.add_argument(
+        "--slice", choices=("holdout", "train"), default="holdout", help="pairs to score"
+    )
+    p.add_argument("--max-positions", type=int, default=20000, help="positions to score at most")
     args = p.parse_args()
 
     paths = TagPaths(args.tag, paths_mod.MOVE_SET_EVAL)

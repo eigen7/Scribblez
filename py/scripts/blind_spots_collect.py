@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Turn a blind_spots dashboard tag into a committed examples directory.
+"""Turn a blind_spots dashboard tag into an examples directory ready to commit.
 
-The tag's workers (local, ssh, rented) deliver the positions they find to
-/workspace/mount/tags/blind_spots/<tag>/data/; this copies those positions'
-games into a directory under positions/ with a README table of what the sims
-said about each, ready to `git add`. Rerun it whenever the tag has grown: the
-directory is rebuilt from the tag each time.
+The tag's workers deliver the positions they find to
+/workspace/mount/tags/blind_spots/<tag>/data/. This copies those positions'
+games into a directory under positions/, with a README table of what the sims
+said about each, ready to `git add`. The directory is deleted and rebuilt from
+the tag on every run, so rerun it whenever the tag has grown. See
+docs/blind_spots.md.
 
 Usage:
     ./py/scripts/blind_spots_collect.py --tag seed-corpus
@@ -25,7 +26,7 @@ from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 DEFAULT_REVIEW_DIR = REPO_ROOT / "positions" / "NWL23" / "best-bot-blind-spots"
 
-# What the README tells a reader who wants a corpus like this one.
+# The README's instructions for regenerating or extending the corpus.
 HOW_TO = """\
 # In the dashboard: create a tag of the "Collect HastyBot blind spots" workload and add Surveyor
 # workers (local, ssh or rented); then: ./py/scripts/blind_spots_collect.py --tag <tag>
@@ -37,7 +38,12 @@ HOW_TO = """\
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument("--tag", required=True, help="the blind_spots tag to collect")
-    p.add_argument("--review-dir", type=Path, default=DEFAULT_REVIEW_DIR, help="rebuilt each run")
+    p.add_argument(
+        "--review-dir",
+        type=Path,
+        default=DEFAULT_REVIEW_DIR,
+        help="output directory; deleted and rebuilt on each run",
+    )
     p.add_argument(
         "--min-gain",
         type=float,

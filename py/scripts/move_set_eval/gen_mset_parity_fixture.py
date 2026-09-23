@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Generate a fixture for the C++ move-set inference parity test (docs/roadmap.md, A4).
+"""Generate the fixture for the move-set TensorRT parity test.
 
-The agent will run the move set evaluation model through onnx_export ->
-TensorRT, while training and the dashboard run the in-memory PyTorch model.
-This script captures the PyTorch side as ground truth so the C++ test can
-confirm the TensorRT path -- engine build, the dtype-aware bindings, the
-chunking, and the C++ Eval decode -- reproduces it.
+The engine serves the move set evaluation model from its ONNX export through
+TensorRT; training and the dashboard run the PyTorch model. This script records
+the PyTorch outputs as ground truth for
+engine/tests/test_mset_inference_parity.cpp, which checks that the TensorRT
+path reproduces them: engine build, the dtype-aware bindings, chunking of
+large candidate sets, and the C++ output decode. The build runs it as a ctest
+fixture; to run it by hand, from py/:
 
-Two models of the same architecture are exported to prove the engine-plan cache
-never confuses them. The cache is keyed on the model's exact content, so the
-second one must build and cache its own plan rather than reuse the first's; its
-own reference outputs are what shows which weights were actually served, a
-question no shape or metadata check can answer, since two checkpoints of one
-architecture differ in nothing but their numbers.
+    python3 -m scripts.move_set_eval.gen_mset_parity_fixture --out-dir /tmp/mset_fixture
+
+Two models of one architecture are exported because the engine caches one plan
+per architecture and refits it with each checkpoint's weights. Loading B after
+A hits A's cached plan, and only B's own reference outputs can show that the
+refit actually served B's weights: no shape or metadata check can, since the
+two differ only in their numbers.
 
 Files written into --out-dir:
   * model_a.onnx / model_b.onnx -- randomly-initialized MoveSetEvalModels of one
@@ -81,8 +84,8 @@ def build_model(seed: int, spatial_planes: int, scalar_size: int, board_size: in
 
 def random_candidates(num_moves: int, seed: int) -> dict[str, np.ndarray]:
     """A candidate set shaped the way move_set_encoder.h fills one: each move
-    carries 1..7 tiles, and a fifth of them are exchanges, which carry letters
-    and blanks but no squares (the is_play gate's whole subject)."""
+    carries 1..7 tiles, and a fifth are exchanges, which carry letters and
+    blanks but no squares, to exercise the model's play/exchange gating."""
     tiles, num_scalars, letter_vocab, cells = move_encoding_dims()
     rng = np.random.default_rng(seed)
 
@@ -117,9 +120,9 @@ def reference_evals(model, board_row: np.ndarray, moves: dict, shape: tuple[int,
     [win_prob, p_win, p_draw, p_loss, sd_mean, sd_std] per move.
 
     The reference is `MoveSetEvalModel.forward` rather than the export wrapper,
-    so this fixture measures the whole chain the agent will run against what
-    training actually optimized; the wrapper's equivalence to it is the Python
-    parity suite's job (py/tests/test_move_set_inference_parity.py).
+    so the C++ test compares the whole served chain against what training
+    optimized. The wrapper's equivalence to forward is tested separately, in
+    py/tests/test_move_set_inference_parity.py.
     """
     spatial_planes, board_size, scalar_size = shape
     spatial_floats = spatial_planes * board_size * board_size
@@ -187,9 +190,9 @@ def write_uint8_letters(src: Path, dst: Path):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--out-dir", required=True, type=Path)
-    ap.add_argument("--num-moves", type=int, default=37)
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--out-dir", required=True, type=Path, help="directory to write the fixture")
+    ap.add_argument("--num-moves", type=int, default=37, help="candidate moves in the set")
+    ap.add_argument("--seed", type=int, default=0, help="weight and input seed (B uses seed + 1)")
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 

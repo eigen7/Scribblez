@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
-"""Generate a fixture for the C++ move-proposal inference parity test (roadmap item 3).
+"""Generate the fixture for the move-proposal TensorRT parity test.
 
-The engine runs the move proposal model as two graphs -- a per-turn
-`move_proposal_cache` and a per-evidence-iteration `move_proposal_step`
-(py/scribblez/move_set_eval/proposal_export.py) -- driven by
-agent/move_proposal_nets.h and staged by agent/evidence_staging.h. This
-script captures the PyTorch side as ground truth so the C++ test can confirm the
-whole path -- two engine builds, the board/g/move_enc host handoff, the C++
-evidence staging, and the decode -- reproduces `MoveSetEvalModel.forward`.
+The engine runs the move proposal model as two graphs
+(py/scribblez/move_set_eval/proposal_export.py): a per-turn
+`move_proposal_cache` and a per-evidence-iteration `move_proposal_step`,
+driven by engine/include/agent/move_proposal_nets.h, with the evidence staged
+by agent/evidence_staging.h. This script records PyTorch ground truth for
+engine/tests/test_proposal_inference_parity.cpp, which checks that the whole
+engine path reproduces `MoveSetEvalModel.forward`: both engine builds, the
+board/g/move_enc handoff between the graphs, the C++ evidence staging and the
+output decode. The build runs it as a ctest fixture; to run it by hand, from py/:
 
-The reference is `MoveSetEvalModel.forward(evidence=...)` where the evidence set
-is assembled by the SAME builder (evidence.py's build_evidence_inputs) that the
-C++ evidence_staging.cpp is a port of, from the SAME raw sim observations the C++
-test is handed. So the two sides see identical evidence and the comparison is a
-true engine-vs-PyTorch parity check, tolerance-bounded (independent TensorRT
-plans are not bit-identical to PyTorch).
+    python3 -m scripts.move_set_eval.gen_proposal_parity_fixture --out-dir /tmp/proposal_fixture
 
-Key invariant: every candidate is encoded with ONE pre-move differential, so the
-runtime's gather of move_enc[scored_index] equals the reference's re-encode of
-that evidence candidate. The evidence cases deliberately use scattered and
-duplicate indices so a gather/routing swap shows as a mismatch rather than
-aliasing away.
+The reference assembles its evidence with build_evidence_inputs (evidence.py),
+which evidence_staging.cpp ports, from the same raw sim observations the C++
+test receives. Both sides therefore see identical evidence, and any difference
+beyond TensorRT's numerical tolerance is a real engine bug.
+
+Every candidate is encoded with the same pre-move score differential, so the
+runtime's gather of move_enc[scored_index] equals the reference's re-encoding
+of that evidence candidate. The evidence cases use scattered and duplicated
+indices so that a gather or routing mix-up shows as a mismatch instead of
+cancelling out.
 
 Files written into --out-dir:
   * cache.onnx / step.onnx -- the split graphs of one randomly-initialized model
@@ -78,8 +80,8 @@ NUM_HEADS = 2
 # layout check expects.
 MAX_E = DEFAULT_MAX_EVIDENCE
 
-# The single pre-move differential every candidate is encoded with (see the
-# gather==re-encode invariant in the module docstring).
+# The one pre-move differential every candidate is encoded with (see the module
+# docstring).
 PRE_MOVE_DIFF = 30
 
 OBS_DTYPE = RECORD_DTYPE["obs"]
@@ -206,9 +208,14 @@ def decode_planes(out: dict[str, torch.Tensor]) -> np.ndarray:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--out-dir", required=True, type=Path)
-    ap.add_argument("--num-moves", type=int, default=70)  # >= MAX_E, for the full case
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--out-dir", required=True, type=Path, help="directory to write the fixture")
+    ap.add_argument(
+        "--num-moves",
+        type=int,
+        default=70,
+        help=f"candidate moves; at least {MAX_E}, for the full-evidence case",
+    )
+    ap.add_argument("--seed", type=int, default=0, help="weight and input seed")
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     assert args.num_moves >= MAX_E, "the full evidence case needs num_moves >= MAX_E"

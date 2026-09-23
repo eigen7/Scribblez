@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""Pull a tag's cloud-delivered data down to the local mount dir.
+"""Pull a tag's cloud-delivered data from the bucket into the local tag dir.
 
-Copies the workload's inbound bucket prefixes -- its declared data dirs (e.g.
-kill_test's slogs/, the training workloads' staging/) plus the workers'
-stats/ and params/ records -- into the tag's local dir, merging with anything
-generated locally under the same tag (output filenames carry per-worker
-suffixes, so local and cloud files coexist). With --trainer-outputs, also
-what a trainer running elsewhere delivers (scribblez/paths.py
-TRAINER_OUTPUT_*): its records, exports and rolling checkpoint, and the
-cursor it publishes. Never uploads or deletes anything; the bucket remains
-the durable archive.
+Copies the prefixes remote workers write to: the workload's sync_data_dirs
+(e.g. kill_test's slogs/, the training workloads' staging/) plus the workers'
+stats/ and params/ records. Files merge with anything generated locally under
+the same tag; output filenames carry per-worker suffixes, so they never
+collide. With --trainer-outputs it also pulls what a remotely running trainer
+delivers (scribblez/paths.py TRAINER_OUTPUT_*): records, exports, the rolling
+checkpoint and the train_state.json cursor. It never uploads, and it deletes
+local files only in the mirrored export dir (MIRRORED_OUTPUT_DIRS); the
+bucket stays the durable archive.
 
-Deliberately NOT synced: prefixes the controller host itself maintains in the
-bucket (the generation dirs the scheduler's ingest mirroring and publishing
-populate) -- pulling those would re-download data the local mount already
-holds.
+Prefixes this host itself writes to the bucket, such as the generation dirs the
+scheduler publishes, are not pulled: the local mount already holds them.
 
 Usage:
     ./py/scripts/cloud_sync.py -t hello            one sync
@@ -92,8 +90,13 @@ def sync_once(r2, spec: workloads.WorkloadSpec, tag: str, trainer_outputs: bool 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
-    p.add_argument("-t", "--tag", required=True)
-    p.add_argument("--workload", choices=sorted(workloads.WORKLOADS), default="kill_test")
+    p.add_argument("-t", "--tag", required=True, help="tag to sync")
+    p.add_argument(
+        "--workload",
+        choices=sorted(workloads.WORKLOADS),
+        default="kill_test",
+        help="tag's workload",
+    )
     p.add_argument("--watch", action="store_true", help="keep syncing until Ctrl-C")
     p.add_argument("--interval", type=int, default=60, help="seconds between --watch syncs")
     p.add_argument(

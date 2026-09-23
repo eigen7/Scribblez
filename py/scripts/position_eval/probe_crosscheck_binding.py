@@ -1,29 +1,32 @@
 #!/usr/bin/env python3
-"""Probe whether a position-eval model binds cross-check letters to rack/leave content.
+"""Probe whether a face-up-leaves position-eval model binds cross-check letters
+to the opponent's leave.
 
-The face-up-leaves model is supposed to read a square's cross-check planes (which
-letters may legally play there) *gated by* the opponent's face-up leave (which
-letters the opponent actually holds). The failure mode this tool measures is the
-model reading the letter mask through a fixed tile-frequency prior instead --
-ignoring the leave entirely. It runs three probes against one ONNX checkpoint
-(onnxruntime, CPU):
+Such a model should read a square's cross-check planes (which letters may
+legally be played there) gated by the opponent's face-up leave (which letters
+the opponent holds). The failure this probe looks for is a model that reads the
+cross-check letters through a fixed tile-frequency prior and ignores the leave.
+It runs three probes against one ONNX checkpoint, on the CPU:
 
-  1. LETTER SELECTIVITY -- force a hook square's cross-check mask to each single
-     letter and read Pr[opp plays there]. A frequency-prior model ranks by tile
-     frequency (E,A,S high; Q,Z low) regardless of the leave; a binding model
-     ranks the letters the opponent holds far above the rest.
-  2. AVAILABILITY SWEEP -- vary the opp-leave input for the motivating letter from
-     present to absent and read the same square. A binding model swings; a
-     frequency-prior model barely moves.
-  3. TAIL PERCENTILES -- per-position corr(pred, MC truth) over the large set. The
-     failure lives in the tail (constrained boards), so the mean is blind to it;
-     split |pred - truth| by whether a cell carries a live cross-check constraint
-     (a proper subset of letters -- not an all-ones open square or an all-zero
-     occupied one).
+  1. Letter selectivity: set a hook square's cross-check mask to each single
+     letter in turn and read Pr[opponent plays there]. A frequency-prior model
+     ranks common tiles (E, A, S) high whatever the leave; a binding model ranks
+     the letters the opponent holds far above the rest.
+  2. Availability sweep: remove the focus letter, then the whole leave, from
+     the opponent-leave input and read the same square. A binding model's
+     prediction drops; a frequency-prior model's barely moves.
+  3. Tail percentiles: per-position correlation of prediction with MC truth
+     over the large test set, plus |pred - truth| split by whether a cell has a
+     live cross-check constraint (some letters legal, some not). The failure
+     lives in constrained boards, which the mean correlation hides.
 
-The motivating case is pos-09 M7: the opponent holds G and GNU plays vertically
-there (MC truth 0.668). A vertical play's constraint lives in the V (vertical)
-cross-check block; the tool auto-detects which block carries a square's set.
+The motivating case is pos-09 square M7, where the opponent holds a G and plays
+GNU vertically through M7 (MC truth 0.668). The probe picks whichever
+cross-check block (horizontal or vertical) constrains the square.
+
+Status: broken. The probes read opp_next_placement as a per-cell 15x15 plane,
+but the placement heads output a distribution over move footprints, so the
+script fails on any current checkpoint until it is ported to footprint outputs.
 """
 
 import argparse
@@ -36,9 +39,9 @@ from scribblez import ffi
 from scribblez.paths import REPO_ROOT
 from scribblez.position_eval import analysis as A
 
-# The face-up-leaves arm (opp_leave_input on): 87 planes, 163 scalars.
-# Cross-check blocks and the opp-leave scalar block within that layout (the two
-# reachability planes append after the cross-checks, so these offsets are fixed).
+# Offsets into the face-up-leaves input row (87 planes, 163 scalars), hardcoded
+# from the block registry in engine/include/encoding/input_encoder.h; they go
+# stale if a block is inserted before the cross-checks or the opp-leave counts.
 N_PLANES = 87
 HCC0, VCC0, CC_END = 33, 59, 85  # horizontal / vertical cross-check plane ranges
 OPP_LEAVE0 = 136  # opp-leave scalar block: OPP_LEAVE0 + (letter index 0..25)
@@ -85,10 +88,9 @@ def encode(gcg_text: str, arm) -> tuple[np.ndarray, np.ndarray]:
 
 
 def hook_block(sp: np.ndarray, r: int, c: int) -> tuple[int, str]:
-    """Which cross-check block carries this square's constraint: the proper subset.
-    A hook constrains plays along the axis perpendicular to its cross-word, so that
-    block has letters *unset*; an unconstrained axis is all-ones. Pick the block with
-    more unset bits, so a square with a vertical cross-word resolves to the V block."""
+    """The (first plane, "H"/"V") of the cross-check block that constrains this
+    square: the one with more letters unset, since an unconstrained axis is
+    all ones."""
     h_unset = int((sp[HCC0:VCC0, r, c] == 0).sum())
     v_unset = int((sp[VCC0:CC_END, r, c] == 0).sum())
     return (VCC0, "V") if v_unset >= h_unset else (HCC0, "H")
@@ -104,9 +106,8 @@ def probe_letter_selectivity(model: Model, arm, square: str, focus: str):
     scores = []
     for letter in range(26):
         x = sp.copy()
-        # Clear only the hook block, not both -- the perpendicular axis stays at its
-        # natural encoding (all-ones when unconstrained) rather than reading as fully
-        # illegal, which would be off-distribution.
+        # Rewrite only the constraining block: zeroing the other axis too would
+        # make the square read as fully illegal, which is off-distribution.
         x[block0 : block0 + 26, r, c] = 0
         x[block0 + letter, r, c] = 1
         scores.append((chr(ord("A") + letter), float(model.opp_placement(x, sc)[r, c])))
@@ -159,9 +160,8 @@ def probe_tail_percentiles(model: Model, arm, limit: int):
         if truth.std() == 0 or pred.std() == 0:
             continue
         cors.append(np.corrcoef(pred.ravel(), truth.ravel())[0, 1])
-        # A constrained cross-check cell is a proper subset: some letters legal and
-        # some not. All-ones is an unconstrained (neighbor-free) square and all-zero
-        # is an occupied or fully-dead one -- neither carries a live constraint.
+        # A live constraint means some letters legal and some not: all ones is an
+        # unconstrained square, all zeros an occupied or dead one.
         cc_sum = sp[HCC0:CC_END].sum(axis=0)
         bits = (cc_sum > 0) & (cc_sum < CC_END - HCC0)
         err = np.abs(pred - truth)

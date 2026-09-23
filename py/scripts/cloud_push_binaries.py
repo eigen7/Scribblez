@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Upload the locally built engine binaries + py/ tree to the results bucket.
+"""Push the locally built engine binaries and py/ tree to the bucket by hand.
 
-Packages the engine binaries workers run (cloud.bundles.BUNDLE_BINARY_NAMES) and the
-py/ tree into a git-SHA-stamped bundle under bundles/<bundle_id>/ in R2, and
-points bundles/LATEST at it. Remote worker containers download the bundle at startup,
-so this -- not a Docker push -- is the code-deployment step: build with
-py/build.py, push with this; the dashboard pins tasks to what it deploys.
+Remote workers run code from a bundle (see cloud/bundles.py): the engine
+binaries they need plus the py/ tree, uploaded under bundles/<bundle_id>/ and
+selected through bundles/LATEST. The dashboard builds and pushes a bundle
+itself before launching a worker, for the archs its machines report, so this
+script is only needed to publish a bundle without the dashboard.
 
-The bundle contains exactly what was last built: uncommitted local changes are
-included (and flagged in the manifest via the -dirty bundle_id), so what runs
-in the cloud is bit-for-bit what was just tested locally.
-
-The bundle carries the archs named by --archs (default: this host's) -- each
-must already be built (py/build.py --archs ...). The dashboard needs none of
-this: it builds and pushes a task's bundle for the archs its machines report.
+The bundle holds exactly what was last built, uncommitted changes included, so
+the cloud runs what was just tested locally; a dirty tree shows up as a -dirty
+bundle_id. Each arch in --archs must already be built (py/build.py --archs ...).
 
 Usage:
     ./py/scripts/cloud_push_binaries.py [--archs znver4,x86-64]
@@ -32,7 +28,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument("--archs", default="", help="comma-separated; default: this host's")
+    parser.add_argument(
+        "--archs", default="", help="comma-separated CPU archs to include (default: this host's)"
+    )
     args = parser.parse_args()
     archs = [a.strip() for a in args.archs.split(",") if a.strip()] or [detect_host_arch()]
     creds = load_credentials()

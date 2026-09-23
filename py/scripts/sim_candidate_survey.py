@@ -1,49 +1,45 @@
 #!/usr/bin/env python3
-"""Find the plays a static-equity candidate cut hides from HastyBot self-play.
+"""Find the plays a static-equity candidate cut hides from HastyBot.
 
-Runs sim_candidate_survey_tool over a directory of .slog files (files it has
-already surveyed are skipped) and reports how often, and by how much, a
-Monte-Carlo sim prefers a candidate outside the head of the HastyBot equity
-ranking -- PR 0 of docs/plans/sim_labeled_candidates.md. Each position is
-simmed twice: a screen of every candidate (racing: a candidate clearly below
-the leader stops early) singles out its few best moves outside the cut, and a
-longer confirming sim on fresh rollouts re-sims those beside the cut's, free
-of the screen's best-of-hundreds bias. A move counts only when the confirming
-sim puts it at least two standard errors above the cut's best. A stopped run
-resumes where it left off when rerun with the same options.
+Runs sim_candidate_survey_tool over a directory of self-play .slog files and
+reports how often, and by how much, a Monte-Carlo sim prefers a play outside
+the top --cut of HastyBot's equity ranking. This is the measurement behind
+docs/plans/sim_labeled_candidates.md; docs/blind_spots.md covers collecting
+the positions it finds.
 
-Recipes (sim_candidate_survey_tool.cpp describes them fully):
-  all         every legal play that places no blank, at a sample of every
-              eligible turn -- exhaustive, and expensive (about a minute a
-              position at 1000 rollouts on 28 threads)
-  setup       only positions with a high-value setup play outside the cut (a
-              J/Q/X/Z kept, a tile laid beside a premium square where it
-              hooks), simming just those plays plus the cut
-  stratified  a per-game turn sample, 64 stratified candidates each
+Each position is simmed twice. A screen sims every candidate, dropping clearly
+beaten ones early, and picks the best few outside the cut. A longer confirming
+sim on fresh rollouts then re-sims those picks beside the cut's moves, free of
+the screen's winner's-curse bias. A play counts only if the confirming sim puts
+it at least two standard errors above the cut's best. The confirming rollouts
+solve their endgames exactly once at most --solve-max-unseen tiles are unseen,
+because greedy endgames misjudge late-game candidates by tens of win%.
 
-Each .slog gets a .simsurvey.json sidecar carrying, per candidate (from the
-screen, and again from the confirming sim), the outcome counts, the
-final-margin histogram, both sides' next-move score statistics and the
-end-of-game rack settlement -- enough for a later tool to classify why an
-outside play wins.
+Recipes (sim_candidate_survey_tool.cpp has the details):
+  all         every legal play that places no blank, at sampled eligible turns;
+              exhaustive and expensive (about a minute a position at 1000
+              rollouts on 28 threads)
+  setup       only positions with a high-value setup play outside the cut,
+              simming just those plays plus the cut
+  stratified  a per-game turn sample with a stratified candidate sample
 
-The confirming sim's rollouts solve their endgames, rather than play them
-greedily, at positions with at most --solve-max-unseen unseen tiles: greedy
-endgames misjudge late-game candidates by tens of win%.
+The tool writes a .simsurvey.json beside each .slog with per-candidate sim
+statistics, and skips files that already have one, so rerunning with the same
+options resumes a stopped run.
 
---generate-games makes the whole run reproducible from nothing: it first plays
-that many HastyBot-vs-HastyBot games (greedy, random opening of mean 2 plies,
-face-up leaves with --open-leaves -- the position_eval corpus's recipe) into
---slog-dir on one thread, which with a fixed --game-seed yields the same
-games every time, and names the files by that seed. --target-positions keeps
-playing and surveying further batches until that many positions are found;
-games cost nothing beside the sims, so the way to collect positions is one
-game a batch with every eligible turn surveyed (--generate-games 1
---max-positions 0), which wastes no game and stops within a game of the
-target.
---review-dir collects the
-games of the confirmed positions, and its README records the command line, so
-anyone can regenerate its files.
+--generate-games makes a run reproducible from nothing. It first plays that
+many greedy HastyBot games into --slog-dir, with the position_eval corpus's
+settings (random openings of mean 2 plies; face-up leaves with --open-leaves).
+Playing on one thread with a fixed --game-seed yields the same games every
+time, and the files are named after the seed. --target-positions keeps
+playing and surveying batches, one seed per batch, until that many positions
+are found. Games are cheap next to the sims, so the efficient way to collect
+positions is one game per batch with every eligible turn surveyed
+(--generate-games 1 --max-positions 0): no game is wasted, and the run stops
+within one game of the target.
+
+--review-dir collects the games of the confirmed positions, with a README that
+records the command line so anyone can regenerate them.
 
 Usage:
     ./py/scripts/sim_candidate_survey.py --slog-dir /workspace/mount/sim-surveys/blind-spots \\
@@ -92,16 +88,38 @@ def parse_args() -> argparse.Namespace:
         "unseen tiles (-1 = never)",
     )
     p.add_argument("--recipe", choices=("all", "setup", "stratified"), default="all")
-    p.add_argument("--max-positions", type=int, default=100, help="positions per file (0 = all)")
+    p.add_argument(
+        "--max-positions",
+        type=int,
+        default=100,
+        help="positions surveyed per file (0 = all that qualify)",
+    )
     p.add_argument("--review-dir", type=Path, help="collect the confirmed positions' games here")
-    p.add_argument("--open-leaves", action="store_true", help="a face-up-leaves corpus")
+    p.add_argument(
+        "--open-leaves",
+        action="store_true",
+        help="face-up leaves: generate and sim games under that condition",
+    )
     p.add_argument("--rollouts", type=int, default=1000, help="screening rollouts per candidate")
-    p.add_argument("--confirm-rollouts", type=int, default=5000, help="confirming rollouts")
-    p.add_argument("--confirm-picks", type=int, default=5, help="outside moves confirmed")
+    p.add_argument(
+        "--confirm-rollouts", type=int, default=5000, help="rollouts per move in the confirming sim"
+    )
+    p.add_argument(
+        "--confirm-picks",
+        type=int,
+        default=5,
+        help="outside moves the confirming sim re-sims per position",
+    )
     p.add_argument("--limit-games", type=int, default=0, help="first N games per file (0 = all)")
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--seed", type=int, default=0, help="survey seed: position, candidate and rollout sampling"
+    )
     p.add_argument("--cut", type=int, default=10, help="the equity top-K cut being priced")
-    p.add_argument("--report-only", action="store_true", help="skip the sims; read existing rows")
+    p.add_argument(
+        "--report-only",
+        action="store_true",
+        help="skip the sims; report on the existing .simsurvey.json files",
+    )
     return p.parse_args()
 
 

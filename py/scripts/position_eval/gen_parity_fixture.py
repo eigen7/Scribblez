@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
-"""Generate the fixtures for the C++ TensorRT parity test (Suite 1 hop B).
+"""Generate the fixtures for the position-eval TensorRT parity test.
 
-The agent runs the value model through onnx_export -> TensorRT (FP16), while the
-dashboard runs the in-memory PyTorch model (FP32). This script captures the
-PyTorch side as ground truth so the C++ test can confirm the TensorRT path (and
-the C++ Eval decode -- softmax, win_prob, score-diff mean/std) reproduces it.
+The engine serves the position evaluation model from its ONNX export through
+TensorRT at reduced precision; training and the dashboard run the PyTorch model
+in FP32. This script records the PyTorch outputs as ground truth for
+engine/tests/test_nn_inference_parity.cpp, which checks that the TensorRT path
+and the C++ output decode (softmax, win_prob, score-diff mean/std) reproduce
+them. The build runs it as a ctest fixture; to run it by hand, from py/:
+
+    python3 -m scripts.position_eval.gen_parity_fixture --out-dir /tmp/nn_fixture
 
 One fixture per trunk tower (conv and transformer, the two graph shapes the
-engine may be handed) is written under --out-dir/<trunk>/, three files each:
-  * model.onnx   -- a randomly-initialized PositionEvalModel exported to ONNX.
+engine may be given) is written under --out-dir/<trunk>/, three files each:
+  * model.onnx   -- a randomly initialized PositionEvalModel.
   * inputs.bin   -- N rows x kInputFloats float32, laid out exactly as
                     GameStateEncoder::encode_input writes them (spatial floats
-                    then scalar floats), row-major. N is recovered C++-side from
+                    then scalar floats), row-major. The C++ side recovers N from
                     the file size.
   * expected.bin -- N x 6 float32: [win_prob, p_win, p_draw, p_loss,
-                    score_diff_mean, score_diff_std], the PyTorch reference
-                    decode of each row.
+                    score_diff_mean, score_diff_std], the PyTorch decode of
+                    each row.
 
-Random weights are deliberate: this checks numerical fidelity of the inference
-stack, not the quality of any trained model, and keeps the fixture hermetic.
+The weights are random on purpose: the test checks the numerical fidelity of
+the inference stack, not any trained model, and random weights keep the fixture
+hermetic.
 """
 
 import argparse
@@ -32,11 +37,9 @@ from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.transformer_tower import TransformerConfig
 from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER
 
-# Input contract is owned by the C++ encoder
-# (engine/include/scribblez/input_encoder.h) and surfaced through the FFI, so the
-# fixture's per-row layout always matches the kInputFloats / kSpatialPlanes the
-# C++ parity test reads back. Score-diff head: 2 outputs, [mean, std] of the
-# final-differential Gaussian.
+# The row layout is owned by the C++ encoder (engine/include/encoding/input_encoder.h)
+# and read through the FFI, so the fixture always matches what the C++ test
+# expects.
 _input_shapes = {s.name: s.dims for s in get_input_shapes()}
 SPATIAL_PLANES, BOARD_SIZE, _BOARD_WIDTH = _input_shapes["input_spatial"]
 assert BOARD_SIZE == _BOARD_WIDTH, "the model assumes a square board"
@@ -45,7 +48,7 @@ SPATIAL_FLOATS = SPATIAL_PLANES * BOARD_SIZE * BOARD_SIZE
 INPUT_FLOATS = SPATIAL_FLOATS + SCALAR_SIZE
 
 # The tower each fixture exercises: the conv tower (None) and a tiny transformer
-# tower, both at the smallest widths that still cover every op the real ones use.
+# tower, both at the smallest widths that still use every op the real ones do.
 TRUNK_FIXTURES = {
     TRUNK_CONV: None,
     TRUNK_TRANSFORMER: TransformerConfig(mid_channels=8, num_heads=2, ffn_channels=16),
@@ -58,7 +61,7 @@ def build_model(seed: int, transformer: TransformerConfig | None) -> PositionEva
         spatial_planes=SPATIAL_PLANES,
         scalar_size=SCALAR_SIZE,
         trunk_channels=8,
-        num_blocks=3,  # conv: 3 -> includes one global-pooling block (parity-covers it)
+        num_blocks=3,  # the conv tower's 3 blocks include one global-pooling block
         board_size=BOARD_SIZE,
         transformer=transformer,
     )
@@ -118,9 +121,11 @@ def write_fixture(out_dir: Path, transformer: TransformerConfig | None, num_rows
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--out-dir", required=True, type=Path)
-    ap.add_argument("--num-rows", type=int, default=16)
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--out-dir", required=True, type=Path, help="fixture root; one subdir per tower"
+    )
+    ap.add_argument("--num-rows", type=int, default=16, help="input rows per fixture")
+    ap.add_argument("--seed", type=int, default=0, help="weight and input seed")
     args = ap.parse_args()
     for trunk, transformer in TRUNK_FIXTURES.items():
         write_fixture(args.out_dir / trunk, transformer, args.num_rows, args.seed)
