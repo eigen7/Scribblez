@@ -746,9 +746,8 @@ int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
 
 const char* scribblez_format_layout_json(void) { return scribblez::format_layout_json().c_str(); }
 
-int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
-                               int64_t* out_file_size) {
-  if (!path || !out_num_positions || !out_file_size) return -1;
+int scribblez_read_file_header(const char* path, int64_t* out_num_games, int64_t* out_file_size) {
+  if (!path || !out_num_games || !out_file_size) return -1;
   std::FILE* f = std::fopen(path, "rb");
   if (!f) return -1;
   FileHeader hdr{};
@@ -760,7 +759,7 @@ int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
   std::error_code ec;
   const auto fsz = std::filesystem::file_size(path, ec);
   if (ec) return -1;
-  *out_num_positions = hdr.num_games;
+  *out_num_games = hdr.num_games;
   *out_file_size = fsz;
   return 0;
 }
@@ -789,10 +788,10 @@ DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
 
 void scribblez_dl_delete(DataLoaderHandle* h) { delete h; }
 
-void scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_positions,
+void scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_games,
                            int64_t file_size) {
   if (!h || !path) return;
-  h->loader.add_file(path, num_positions, file_size);
+  h->loader.add_file(path, num_games, file_size);
 }
 
 int64_t scribblez_dl_num_positions(const DataLoaderHandle* h) {

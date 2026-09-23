@@ -54,8 +54,8 @@ class TestEpochDeterminism:
                 memory_budget=256 * 1024 * 1024, num_workers=2, num_prefetch=1
             )
             for p in slogs:
-                num_pos, fsize = read_file_header(p)
-                loader.add_file(p, num_pos, fsize)
+                num_games, fsize = read_file_header(p)
+                loader.add_file(p, num_games, fsize)
             loader.epoch_start(batch_size=4, post_move=True, apply_symmetry=True, seed=seed)
             all_data = []
             while True:

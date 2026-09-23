@@ -2591,7 +2591,7 @@ TEST(DataLoader, PerRowSymmetry) {
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
-  loader.add_file(fix.path.string(), /*num_positions=*/1, fix.fsize);
+  loader.add_file(fix.path.string(), /*num_games=*/1, fix.fsize);
 
   {
     DataLoader::EpochConfig cfg;
@@ -2732,7 +2732,7 @@ TEST(DataLoader, EligibleBeginOffset) {
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
-  loader.add_file(path.string(), /*num_positions=*/1, fsize);
+  loader.add_file(path.string(), /*num_games=*/1, fsize);
   ASSERT_EQ(loader.num_positions(), 1);
 
   DataLoader::EpochConfig cfg;
