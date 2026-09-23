@@ -13,10 +13,10 @@ namespace binlog {
 
 namespace {
 
-// Per-worker sink: pick the sampled turn and encode the row BEFORE claiming a
-// ring slot, so a game with no eligible turn is dropped without holding one.
-// The task-specific work goes to a per-worker RowEncoder, leaving the sink
-// task-agnostic; nothing here is shared across threads.
+// Per-worker sink. It picks the sampled turn before claiming a ring row: a
+// game with no eligible turn is dropped, and a claimed but uncommitted row
+// would keep its slot from ever reaching the consumer. The task-specific
+// encoding is delegated to a per-worker RowEncoder.
 class RingBufferGameSink : public GameSink {
  public:
   RingBufferGameSink(StreamingRowBuffer& ring, std::unique_ptr<RowEncoder> encoder,

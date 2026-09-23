@@ -25,10 +25,9 @@ namespace {
 // endgame spread, yet small enough not to overflow on negation.
 constexpr int32_t kInf = 1'000'000;
 
-// Upper bound on plies a single greedy leaf playout can add past the search
-// depth. The combined racks hold at most 2*RACK_SIZE tiles, each play removes
-// at least one, and two consecutive passes end the game, so a playout is always
-// far shorter than this.
+// Upper bound on the plies a greedy leaf playout can add past the search depth.
+// The two racks hold at most 2*RACK_SIZE tiles, each play removes at least one,
+// and two consecutive passes end the game, so a playout never gets close.
 constexpr int kMaxPlayout = 40;
 
 // One key per (square, letter, is-blank) placement, plus one per internal
@@ -48,10 +47,9 @@ ZobristTable build_zobrist() {
   return z;
 }
 
-// In the first-win window a proven result settles the win/draw/loss class iff
-// its value is a proven win bound (>= kFirstWinBeta), a proven loss bound
-// (<= kFirstWinAlpha), or a proven draw (0). A proven verdict in this window is
-// always one of these, so this holds whenever the result is proven.
+// Whether a first-win-window value settles the win/draw/loss class: a win
+// bound (>= kFirstWinBeta), a loss bound (<= kFirstWinAlpha), or a draw (0).
+// Every proven verdict in that window is one of these.
 bool settles_first_win_class(int32_t value) {
   return value >= EndgameSolver::kFirstWinBeta || value <= EndgameSolver::kFirstWinAlpha ||
          value == 0;
@@ -129,13 +127,11 @@ void EndgameSolver::xor_play_hash(const Move& move) {
 uint64_t EndgameSolver::node_hash() const {
   const ZobristTable& z = zobrist();
   uint64_t h = board_hash_;
-  // The mover's and opponent's racks enter asymmetrically, so a physical
-  // position hashes identically no matter which seat a solve was rooted at --
-  // the property that lets both seats of one game share a table. Stored
-  // values are relative to the mover's spread, so they are equally
-  // seat-agnostic. (Equal racks make the two mover assignments collide, but
-  // those are true transpositions: same board, same racks, same
-  // mover-relative value.)
+  // The racks are keyed by role (mover, opponent) rather than by seat, so a
+  // position hashes the same whichever seat the solve was rooted at. Stored
+  // values are relative to the mover's spread, so both seats of one game can
+  // share the table. Equal racks make the two mover assignments collide, but
+  // those are true transpositions with the same mover-relative value.
   h ^= util::splitmix64(racks_[stm_].bits());
   h ^= util::splitmix64(~racks_[1 - stm_].bits());
   h ^= z.scoreless[scoreless_];
@@ -272,8 +268,7 @@ void EndgameSolver::tt_store(uint64_t hash, int32_t score_rel, uint8_t bound, bo
 
 void EndgameSolver::tt_store_playout(uint64_t hash, int32_t score_rel) {
   TTEntry& e = tt_[hash & tt_mask_];
-  // Never overwrite a current-generation real (deeper) search result with a
-  // depth-0 playout value.
+  // A depth-0 playout value never overwrites a current-generation search result.
   if (e.gen == tt_gen_ && e.flag != kEmpty && e.depth > 0) return;
   e.hash = hash;
   e.best = Move::pass();  // placeholder: depth-0 entries never supply a TT move
@@ -329,8 +324,6 @@ EndgameSolver::SearchResult EndgameSolver::search_child(int child_depth, int32_t
     r = negamax(child_depth, -alpha - 1, -alpha, child_ply);
     if (alpha < -r.value && -r.value < beta) r = negamax(child_depth, -beta, -alpha, child_ply);
   }
-  // Return the value from the parent's perspective; the proven bit is a property
-  // of the search that produced the child's final verdict, not of the sign.
   return {-r.value, r.proven};
 }
 
@@ -342,18 +335,16 @@ int32_t EndgameSolver::outplay_futility_bound(const Move& m, const OutplaySet& r
   if (m.type() == MoveType::PASS && scoreless_ >= 1) return kInf;
   const int32_t p = best_surviving_score(replier_outs, m);
   if (p == kNoOutplaySurvivor) return kInf;
-  // The replier can answer m with the surviving out-play: it scores p and banks
-  // twice the face value L of the mover's post-m leftover as its end-of-game
-  // bonus, so the game ends at spread s + m.score() - p - 2L for the mover,
-  // where s is the mover's spread at this node. That line is available to the
-  // replier, so it caps m's value; anything better for the mover would require
-  // the replier to play worse.
+  // Soundness: the replier can answer m with the surviving out-play, scoring p
+  // and banking twice the face value L of the mover's leftover tiles. The game
+  // then ends at spread s + m.score() - p - 2L for the mover, where s is the
+  // mover's spread at this node. The replier can always choose that line, so
+  // it caps m's value.
   //
-  // The bound stays sound when the out-play set is incomplete. Entries the set
-  // is missing -- dropped by the halo kill filter without really being blocked,
-  // or newly enabled by m -- are further replier options, which can only lower
-  // m's true value. A conservatively dropped entry therefore costs a tighter
-  // bound, never a valid one.
+  // The bound stays sound when the out-play set is incomplete. Missing entries
+  // (dropped because a move touched their halo without really blocking them, or
+  // newly enabled by m) are extra replier options, which can only lower m's
+  // true value. A missing entry costs tightness, never soundness.
   const int32_t leftover = racks_[mover].point_value() - placed_face_value(m);
   return spread_stm() + m.score() - p - 2 * leftover;
 }
@@ -393,19 +384,18 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
 
   if (depth == 0) return {greedy_playout(hash, ply), false};  // a playout leaf is an estimate
 
-  // Owned copy: LeaveOutplays below holds a reference to this list, and the
-  // child searches in the scan run nested generate_moves calls that may insert
-  // into the memo, so an owned vector keeps the list stable across the loop.
+  // Owned copy: LeaveOutplays references this list across the scan, and with
+  // incremental movegen off the children's generations overwrite the scratch
+  // buffer it came from.
   std::vector<Move> plays = generate_moves(racks_[stm_], ply);
   std::vector<RankedMove> moves;
   moves.reserve(plays.size() + 1);
   for (const Move& m : plays) moves.push_back({m, 0});
   moves.push_back({Move::pass(), 0});
 
-  // The replier's maintained out-play set: every mover move that provably
-  // leaves one of its entries intact is capped by its futility bound, first in
-  // the ordering below and then as a pruning cutoff in the scan. LeaveOutplays
-  // buckets this node's own play list to derive the children's mover-side sets.
+  // Every move that leaves one of the replier's out-plays intact is capped by
+  // its futility bound, used first to order moves and then to prune them.
+  // LeaveOutplays derives the mover-side out-play sets the children read.
   const OutplaySet* replier_outs = nullptr;
   if (outplay_futility_ && !outplay_sets_.current(1 - stm_).empty())
     replier_outs = &outplay_sets_.current(1 - stm_);
@@ -421,10 +411,10 @@ EndgameSolver::SearchResult EndgameSolver::negamax(int depth, int32_t alpha, int
   bool cut_proven = false;  // proven bit of the child that witnessed the cutoff
   for (RankedMove& entry : moves) {
     const Move& move = entry.move;
-    // Futility: a move a surviving replier out-play caps below alpha cannot
-    // raise alpha. The bound comes from a terminal line, so skipping the move
-    // neither changes the value nor clears the node's proven bit; fold the
-    // bound in so a fail-low value stays sound even if every move is pruned.
+    // Futility: a move whose bound is at or below alpha cannot raise alpha.
+    // The bound comes from a terminal line, so skipping the move neither
+    // changes the value nor clears the node's proven bit. Folding the bound
+    // into `best` keeps a fail-low value sound even if every move is pruned.
     const int32_t ubound = replier_outs ? outplay_futility_bound(move, *replier_outs) : kInf;
     if (ubound <= alpha) {
       best = std::max(best, ubound);
@@ -468,12 +458,9 @@ EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, in
                                                     std::vector<RankedMove>& root_moves,
                                                     const std::vector<Move>& plays,
                                                     Move* best_out) {
-  // The root is the solving side's node; it hands its children out-play sets
-  // just as an interior node does. Under the narrow first-win window it also
-  // futility-prunes its own moves like an interior node; under the full window
-  // it never prunes, because every root move needs its exact value for the
-  // re-ordering between iterations. It applies a beta cutoff as well (only
-  // reachable under the narrow first-win window; see the scan below).
+  // Like an interior node, the root hands its children out-play sets. It
+  // futility-prunes only under the first-win window: under the full window
+  // every root move needs its exact value to re-order between iterations.
   std::optional<LeaveOutplays> leave_outs;
   if (outplay_futility_) leave_outs.emplace(board_, racks_[stm_], plays);
   const OutplaySet* replier_outs = nullptr;
@@ -486,13 +473,10 @@ EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, in
   bool all_proven = true;    // AND over every root child's verdict
   bool best_proven = false;  // proven bit of the child that set `best`
   for (RankedMove& rm : root_moves) {
-    // Root futility: a move a surviving replier out-play caps below alpha
-    // cannot affect the class verdict. The bound comes from a terminal line,
-    // so folding it into the fail-low value keeps the verdict proven, and it
-    // becomes the move's rank so re-sorts sink it. Folded bounds never raise
-    // alpha (the prune fires only at or below it) and never set best_move, so
-    // a pruned move can be returned only when every root move is bounded below
-    // alpha -- a proven loss, where any legal move is class-correct.
+    // Root futility, sound for the same reason as in negamax. The bound also
+    // becomes the move's rank so re-sorts sink it. A pruned move never sets
+    // best_move, so it is returned only when every root move is bounded below
+    // alpha: a proven loss, where any legal move is class-correct.
     const int32_t ubound = replier_outs ? outplay_futility_bound(rm.move, *replier_outs) : kInf;
     if (ubound <= alpha) {
       best = std::max(best, ubound);
@@ -514,27 +498,19 @@ EndgameSolver::SearchResult EndgameSolver::run_root(int depth, int32_t alpha, in
       best_proven = child.proven;
     }
     alpha = std::max(alpha, best);
-    // Root beta cutoff. Under the full window (spread pass / lexicographic
-    // second pass) beta is +infinity, so this never fires and the whole root is
-    // scanned as before. Under the narrow first-win window a root fail-high
-    // (best >= beta means value >= kFirstWinBeta, the win verdict) settles
-    // everything the window can express, so scanning further root moves adds
-    // nothing to the class verdict. alpha rises only through best, so the child
-    // that just pushed alpha to beta is the one that set best last -- best_move
-    // and best_proven already hold its move and proven bit, the exact witness
-    // the fail-high rests on. Root moves left unscanned keep their prior rank,
-    // so the next iteration's re-sort orders them by stale values; that is
-    // acceptable, since a proven cutoff ends the deepening and an unproven one
-    // only reorders candidates.
+    // Root beta cutoff, reachable only under the first-win window (the full
+    // window's beta is +infinity). There a fail-high is the win verdict, which
+    // settles everything the window can express. alpha rises only through
+    // best, so best_move and best_proven already hold the witness the
+    // fail-high rests on. Unscanned root moves keep stale ranks for the next
+    // re-sort; that is harmless, since a proven cutoff ends the deepening and
+    // an unproven one only affects ordering.
     if (root_cutoff_ && alpha >= beta) break;
   }
   *best_out = best_move;
-  // A root fail-high (best >= beta, reachable only under the narrow first-win
-  // window) rests on the single best-achieving child -- the cutoff witness when
-  // the scan broke early, or the last child to raise best otherwise -- so its
-  // proven bit alone settles the verdict. Otherwise every child must be proven
-  // (pruned root moves contribute proven terminal bounds, so they leave
-  // all_proven untouched).
+  // A fail-high rests on the single child that set best, so its proven bit
+  // alone settles the verdict. Otherwise every child must be proven; pruned
+  // moves contribute proven terminal bounds and leave all_proven untouched.
   const bool proven = best >= beta ? best_proven : all_proven;
   return {best, proven};
 }
@@ -548,11 +524,10 @@ EndgameResult EndgameSolver::run_iterative(int32_t alpha, int32_t beta, bool fir
     Move best_move = root_moves[0].move;
     const SearchResult sr = run_root(depth, alpha, beta, first_win, root_moves, plays, &best_move);
     if (aborting_) {
-      // Budget exhausted mid-iteration: the last completed iteration's result
-      // stands. When not even the first iteration finished, fall back to the
-      // best fully-searched root move of the partial pass -- root moves are
-      // estimate-ordered, so the strongest candidates were searched first --
-      // or, when no root move completed, the estimate-ordered first move.
+      // Budget exhausted mid-iteration: the last completed iteration stands.
+      // If none completed, take the best root move the partial pass fully
+      // searched (moves are estimate-ordered, so the strongest candidates
+      // went first), or else the estimate-ordered first move.
       if (result.depth_completed == 0 && sr.value > -kInf) {
         result.best = best_move;
         result.value = sr.value;
@@ -567,10 +542,8 @@ EndgameResult EndgameSolver::run_iterative(int32_t alpha, int32_t beta, bool fir
       *trace_ << "  depth " << depth << ": best " << trace_move(best_move) << ", value " << sr.value
               << (sr.proven ? " (proven)" : " (estimate)") << ", nodes " << nodes_ << "\n";
     }
-    // A proven iteration has resolved the search exactly: in the full window the
-    // value is the true game spread, and in the first-win window a proven verdict
-    // always settles the win/draw/loss class (a proven bound is itself true).
-    // Deepening cannot change the answer, so stop.
+    // Deepening cannot change a proven answer: in the full window it is the
+    // true final spread, and in the first-win window it settles the class.
     if (proof_early_exit_ && sr.proven && (!first_win || settles_first_win_class(sr.value))) break;
     // Re-order root moves by their returned values for the next depth.
     std::sort(root_moves.begin(), root_moves.end(), by_rank_desc);
@@ -591,9 +564,8 @@ bool EndgameSolver::verify_move_class(const Move& m, int cls, const std::vector<
     verified = class_of(scores_[0] - scores_[1]) == cls;
   } else {
     // The child is searched from the opponent's perspective, so parent class
-    // `cls` needs a proven child verdict of class -cls. Iterative deepening at
-    // the narrow window, over the warm table, until the proof lands or the
-    // shared budget runs out.
+    // `cls` needs a proven child verdict of class -cls. Deepen over the warm
+    // table until the proof lands or the shared budget runs out.
     for (int depth = 1; depth <= max_plies && !aborting_; ++depth) {
       const SearchResult sr = negamax(depth, kFirstWinAlpha, kFirstWinBeta, 1);
       if (aborting_) break;
@@ -611,14 +583,11 @@ bool EndgameSolver::verify_move_class(const Move& m, int cls, const std::vector<
 EndgameResult EndgameSolver::solve_class_first(std::vector<RankedMove>& root_moves,
                                                const std::vector<Move>& plays, int max_plies,
                                                bool refine_spread) {
-  // First pass: prove the win/draw/loss class as cheaply as possible. The pass
-  // is capped at half the budget: on a position whose class is not provable
-  // within it, an uncapped pass would burn the entire cap and leave the spread
-  // fallback below no budget at all -- the narrow-window move it would return
-  // is chosen for a bound rather than for points, the worst of both objectives.
-  // Class proofs are cheap when they land, so the cap loses few of them; the
-  // reserved half is the insurance premium both objectives pay for a move that
-  // means something when the proof does not arrive.
+  // First pass: prove the win/draw/loss class. It gets half the budget. An
+  // uncapped pass on an unprovable position would burn the whole budget and
+  // return a narrow-window move, chosen for a bound rather than for points.
+  // Class proofs are cheap when they land, so the cap loses few of them, and
+  // the reserved half guarantees a spread-chosen move when the proof fails.
   const uint64_t full_budget = budget_;
   budget_ = full_budget / 2;
   if (trace_) *trace_ << "class pass (narrow window, budget " << budget_ << "):\n";
@@ -628,29 +597,28 @@ EndgameResult EndgameSolver::solve_class_first(std::vector<RankedMove>& root_mov
   aborting_ = false;  // a class pass stopped by its half-cap frees the rest
 
   if (!first.proven || first.depth_completed < 1) {
-    // No class proof in budget: margin-maximizing play is the class-robust
-    // fallback (margin is slack against estimate error), over the warm table.
+    // No class proof: maximize spread instead, over the warm table. Margin is
+    // the best hedge against estimate error in the class.
     if (trace_) *trace_ << "no class proof; spread fallback pass:\n";
     const EndgameResult spread =
       run_iterative(-kInf, kInf, /*first_win=*/false, root_moves, plays, max_plies);
     return spread.depth_completed >= 1 ? spread : first;
   }
 
-  // The class is proven. Under the break-out objective that is the whole
-  // answer -- the point of it is to stop spending on a decided endgame.
+  // Class-only objective: the proof is the whole answer, and the point is to
+  // stop spending nodes on a decided endgame.
   if (!refine_spread) {
     EndgameResult result = first;
     result.proven_class = class_of(first.value);
     return result;
   }
 
-  // The class is settled; the rest of the budget maximizes spread. Every move
-  // of a proven-lost position is class-equal, so there the spread answer is
-  // pure defense and needs no check. In a proven win or draw the spread answer
-  // is played only if it provably preserves the class: a proven spread pass
-  // implies that (the exact optimum's sign is the class), an unproven one must
-  // pass a narrow-window probe of its chosen child, and on any failure the
-  // proven-class move from the first pass stands.
+  // The rest of the budget maximizes spread. In a proven loss every move is
+  // class-equal, so the spread answer needs no check. In a proven win or draw
+  // the spread move is played only if it provably preserves the class: a
+  // proven spread pass implies that (the exact optimum's sign is the class),
+  // and an unproven one must pass verify_move_class. Otherwise the first
+  // pass's move stands.
   const int cls = class_of(first.value);
   if (trace_)
     *trace_ << "class proven: "
@@ -688,11 +656,8 @@ void EndgameSolver::trace_root_view(const std::vector<RankedMove>& root_moves) {
     return;
   }
 
-  // The block-or-outscore view of every root move m scoring g with leftover
-  // face value L, against the strongest out-play (+p) m fails to block:
-  //   final spread <= U(m) = s + g - p - 2L,
-  // so m must either block every out-play or score at least p + 2L - s to
-  // reach a draw. kInf bounds are annotated with why no bound applies.
+  // Each root move m either blocks every replier out-play or is capped by the
+  // futility bound s + m.score() - p - 2L (see outplay_futility_bound).
   const int32_t s_root = spread_stm();
   int32_t best_bound = -kInf;
   bool any_unbounded = false;
@@ -735,11 +700,11 @@ bool EndgameSolver::reprove_walk_move(int ply, int req_class, Move* out) {
     const SearchResult sr = negamax(depth, kFirstWinAlpha, kFirstWinBeta, ply);
     if (!sr.proven || !settles_first_win_class(sr.value) || class_of(sr.value) != req_class)
       continue;
-    // The proof's root entry (just stored, or the hit that answered it) holds
-    // the class-preserving move; revalidate it against a fresh generation. The
-    // generation runs even for a PASS (which needs no validation): it stamps
-    // this walk ply's PathMoveLists slot, which deeper walk positions derive
-    // their lists from -- a TT-answered proof would otherwise leave it stale.
+    // The proof's TT entry holds the class-preserving move; revalidate it
+    // against a fresh generation. The generation runs even for a PASS, which
+    // needs no validation, because it fills this ply's PathMoveLists slot that
+    // deeper walk plies derive from. A TT-answered proof would otherwise leave
+    // that slot stale.
     TTEntry* e = tt_probe(node_hash());
     if (e == nullptr) return false;
     const Move m = e->best;
@@ -756,9 +721,8 @@ bool EndgameSolver::reprove_walk_move(int ply, int req_class, Move* out) {
 void EndgameSolver::extract_continuation(EndgameResult& result) {
   if (trace_) *trace_ << "certificate walk: " << trace_move(result.best) << " (chosen move)\n";
 
-  // Reconstruction runs after the search proper, outside the node budget and
-  // with futility pruning off (the incremental out-play sets are not
-  // maintained along the walk, so its re-searches must not consult them).
+  // The walk runs outside the node budget, with futility pruning off: the
+  // out-play sets are not maintained along the walk.
   const uint64_t nodes_before = nodes_;
   const uint64_t budget_before = budget_;
   const bool aborting_before = aborting_;
@@ -771,21 +735,17 @@ void EndgameSolver::extract_continuation(EndgameResult& result) {
   int ply = 1;
   bool ok = true;
   while (!game_over_ && ply < kMaxPlayout) {
-    // The class from the current mover's perspective, under the walk invariant:
-    // the winner's moves are re-proven below and the doomed side's moves cannot
-    // change the class, so every position on the walk keeps the root's class.
+    // Every position on the walk keeps the root's class: the winning side's
+    // moves are re-proven, and the losing side's cannot change it.
     const int req_class = stm_ == 0 ? result.proven_class : -result.proven_class;
     Move next = Move::pass();
     if (req_class >= 0) {
-      // This side must preserve a win or hold a draw: take a freshly-proven
-      // class-preserving move.
       if (!reprove_walk_move(ply, req_class, &next)) {
         ok = false;
         break;
       }
     } else {
-      // This side is proven lost: no move of theirs changes the class, so the
-      // greedy playout move stands in for their optimal play.
+      // Proven lost: any move keeps the class, so play greedily.
       const std::vector<Move>& plays = generate_moves(racks_[stm_], ply);
       if (!plays.empty()) next = greedy_pick(plays);
     }
@@ -830,14 +790,13 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   aborting_ = false;
   budget_ = node_budget;
 
-  // Sized for the deepest search stack plus a certificate walk that runs its
-  // re-searches (and their playouts) on top of the walked plies.
+  // Room for the deepest search stack, and for a certificate walk whose
+  // re-searches and playouts stack on top of the walked plies.
   const size_t needed = size_t(max_plies) + 3 * kMaxPlayout + 2;
   if (frames_.size() < needed) frames_.resize(needed);
 
-  // Owned copy: `plays` is handed by const reference to run_iterative and on to
-  // LeaveOutplays, so it must outlive every nested search (and any memo insert
-  // those searches make) for the whole solve.
+  // Owned copy: the root's LeaveOutplays references `plays` for the whole
+  // solve, while nested searches reuse the scratch buffer.
   std::vector<Move> plays = generate_moves_scratch(racks_[0]);
   std::vector<RankedMove> root_moves;
   root_moves.reserve(plays.size() + 1);
@@ -847,20 +806,17 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
 
   EndgameResult result;
   result.best = root_moves[0].move;
-  // Searching a root move costs at least one node, so a position with more
-  // root moves than the budget provably cannot complete its first iteration.
-  // Decline it up front -- callers treat depth_completed == 0 as "unsolved"
-  // and fall back to their own move policy -- rather than spending the whole
-  // budget on a fraction of the root.
+  // Each root move costs at least one node, so with more root moves than the
+  // budget the first iteration cannot complete. Decline up front rather than
+  // spend the budget on a fraction of the root; callers treat
+  // depth_completed == 0 as unsolved and fall back to their own policy.
   if (root_moves.size() > node_budget) {
     result.movegens = movegens_;
     return result;
   }
 
-  // Seed the incremental out-play sets from one move generation against the
-  // opponent's rack. The same generation seeds PathMoveLists' root lists, from
-  // which every deeper node's move list is derived. Seeded only once the solve
-  // is sure to run, so a declined position pays nothing.
+  // One generation of the opponent's moves seeds both the root out-play set
+  // and PathMoveLists. It runs only once the solve is sure to proceed.
   outplay_sets_.reset(int(needed));
   if (outplay_futility_ || incremental_movegen_) {
     const std::vector<Move>& opp_plays = generate_moves_scratch(state.opp_rack);
@@ -882,9 +838,8 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
     trace_root_view(root_moves);
   }
   result = solve_class_first(root_moves, plays, max_plies, params.spread_matters);
-  // A proven value's sign is the position's class; a result may already carry a
-  // class proven by the first pass even when its final value is an unproven
-  // spread refinement.
+  // A proven value's sign is the class. The result may already carry a class
+  // from the first pass even when its final value is an unproven spread.
   if (result.proven && result.proven_class == EndgameResult::kClassUnknown)
     result.proven_class = class_of(result.value);
   if (result.proven_class != EndgameResult::kClassUnknown && result.depth_completed >= 1)

@@ -20,10 +20,9 @@ Rack combine(const Rack& revealed, const Rack& hidden) {
   return rack;
 }
 
-// Folds scored explanations into a normalized posterior: shift the log weights
-// by their maximum before exponentiating, sum the duplicates (several racks can
-// leave the same tiles behind), and order by leave so that repeating an
-// inference reproduces it exactly.
+// Folds scored explanations into a normalized posterior. Duplicates are summed,
+// since several racks can keep the same tiles, and entries are ordered by leave
+// so a repeated inference reproduces exactly.
 RackPosterior build_posterior(const std::vector<ScoredLeave>& scored, bool exhaustive) {
   double max_log = -std::numeric_limits<double>::infinity();
   for (const ScoredLeave& s : scored) max_log = std::max(max_log, s.log_weight);
@@ -43,8 +42,8 @@ RackPosterior build_posterior(const std::vector<ScoredLeave>& scored, bool exhau
   return RackPosterior(std::move(entries), exhaustive);
 }
 
-// Appends the readings of one hypothesis, each weighted by the prior it was
-// proposed with on top of its own likelihood.
+// Appends the readings of one hypothesis, adding `log_prior` to each reading's
+// log likelihood.
 void score_hypothesis(const EquityLikelihood& likelihood, const Rack& hidden, double log_prior,
                       std::vector<ScoredLeave>* out) {
   const size_t begin = out->size();
@@ -64,10 +63,9 @@ std::vector<ScoredLeave> score_sampled(const EquityLikelihood& likelihood, const
                                        int hidden, int samples, uint64_t seed) {
   std::vector<ScoredLeave> scored;
   std::mt19937_64 rng(util::splitmix64(seed));
-  // Draws come from the prior, so each carries likelihood alone as its
-  // importance weight. The prior then enters through multiplicity -- a likely
-  // leave is simply drawn more often -- which is why repeat draws are scored
-  // again rather than folded into the first.
+  // Draws come from the prior, so each is weighted by likelihood alone and the
+  // prior enters through multiplicity. That is why repeat draws are scored
+  // again rather than deduplicated.
   for (int i = 0; i < samples; ++i)
     score_hypothesis(likelihood, draw_leave(pool, hidden, rng), 0.0, &scored);
   return scored;
@@ -93,9 +91,8 @@ RackInferrer::RackInferrer(const Dictionary& dict, const Params& params)
 
 RackPosterior RackInferrer::infer(const OppMoveObservation& obs, uint64_t seed) const {
   if (obs.move.type() == MoveType::PASS) return {};
-  // Their rack held a full RACK_SIZE tiles: racks stop being refilled only
-  // once the bag empties, and an empty bag is the endgame, where the whole
-  // unseen pool is the opponent's rack and there is nothing left to infer.
+  // With a non-empty bag their rack was full. With an empty bag the whole
+  // unseen pool is their rack, and there is nothing to infer.
   const int bag_size = obs.pool.size() - RACK_SIZE;
   if (bag_size <= 0) return {};
 

@@ -12,10 +12,8 @@ namespace scribblez {
 
 namespace {
 
-// Choose a head-start handicap for one game: pick a player at random and gift
-// them P points, P uniform in [0, max]. Returns per-player starting scores.
-// Seeded from the game seed so the choice is reproducible; max <= 0 yields
-// {0, 0}.
+// Per-player starting scores: a random player gets P points, P uniform in
+// [0, max]. Seeded from the game seed, so reproducible.
 std::array<int, 2> pick_handicap(uint64_t game_seed, int max) {
   if (max <= 0) return {0, 0};
   std::mt19937_64 rng(game_seed);
@@ -26,11 +24,9 @@ std::array<int, 2> pick_handicap(uint64_t game_seed, int max) {
   return scores;
 }
 
-// Choose one game's random-opening length: an exponential draw with the given
-// mean, rounded to the nearest integer (so ~22% of games get 0 at mean 2 and
-// long openings tail off geometrically). Seeded from the game seed (salted to
-// decorrelate from pick_handicap's stream) so the choice is reproducible;
-// mean <= 0 yields 0 (no random opening).
+// One game's random-opening length: an exponential draw with the given mean,
+// rounded (so at mean 2, ~22% of games get none). Seeded from the game seed,
+// salted to decorrelate it from pick_handicap.
 int pick_random_opening_plies(uint64_t game_seed, double mean) {
   if (mean <= 0) return 0;
   std::mt19937_64 rng(game_seed ^ 0x6C62272E07BB0142ULL);
@@ -72,8 +68,7 @@ std::pair<EndGameAction, EndGameAction> GameEngine::play(int thread_idx,
   game.set_face_up_leaves(params_.face_up_leaves);
   game.play();
 
-  // Hand the finished game's owning log storage to the sink (a move). The Game
-  // remains valid for end_game (which reads only the live board/score/rack).
+  // The Game stays valid for end_game, which reads only live game state.
   sink.on_game(game.extract_log(), seats);
 
   auto r0 = seat0.end_game(game, 0);

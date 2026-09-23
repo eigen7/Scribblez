@@ -14,33 +14,29 @@
 
 namespace scribblez {
 
-// The information condition a ground truth is computed under -- what a rollout
-// knows about the opponent's leave (the tiles their last move retained; their
-// replenishment is hidden either way). The position-evaluation model trained
-// under a condition is measured against the truth of that same condition.
+// What a rollout knows about the opponent's leave: the tiles their last move
+// kept. Their replenishment draw is hidden under both conditions. A model
+// trained under one condition is measured against ground truth computed under
+// the same one.
 enum class LeaveCondition {
   // The leave is public: every rollout seats the opponent with it.
   kFaceUp,
-  // The leave is inferred from their last move (belief::RackInferrer, the
-  // Macondo rangefinder port) and sampled per rollout from the posterior; when
-  // the move carries no information (a bingo, a pass, no recorded move) the
-  // whole rack is a uniform draw from the unseen pool.
+  // Each rollout samples the leave from the posterior belief::RackInferrer
+  // infers from the opponent's last move. When that move carries no
+  // information (a bingo, a pass, or no recorded move), the whole rack is a
+  // uniform draw from the unseen pool.
   kHidden,
 };
 
-// "face-up-leaves" / "hidden-leaves": the suffix of the results file the
-// condition's ground truth is committed under.
+// "face-up-leaves" / "hidden-leaves", the suffix of the condition's results file.
 const char* leave_condition_name(LeaveCondition condition);
 
-// Per-square placement counts over the rollouts, from `start_player`'s POV, in
-// board frame. Mirrors the position-evaluation model's four placement heads: in
-// how many rollouts that seat's first move covered the square, and (the `*_win`
-// planes) did so in a rollout it strictly won. "opp" is the seat to move first
-// in the rollout; "self" is start_player. Each `*_win` plane is elementwise at
-// most its `*_next` plane, and occupied board squares stay zero.
-//
-// "Covered" is literal for the opp planes and PROJECTED for the self planes:
-// see accumulate_rollout_placement.
+// Per-square placement counts over the rollouts, in board frame. These are the
+// ground truth for the position-evaluation model's four placement heads.
+// "opp" is the seat that moves first in the rollout; "self" is start_player.
+// A `*_next` plane counts the rollouts in which that seat's first move covered
+// the square; its `*_win` plane counts only the rollouts that seat strictly won.
+// Occupied squares stay zero.
 struct PlacementCounts {
   static constexpr int kCells = BOARD_SIZE * BOARD_SIZE;
   std::array<int, kCells> opp_next{};
@@ -49,43 +45,38 @@ struct PlacementCounts {
   std::array<int, kCells> self_win{};
 };
 
-// Fold one rollout's two first moves into `out`: each seat's move into its
-// `*_next` plane and, when that seat strictly won, its `*_win` plane. A
-// non-PLAY move covers nothing.
+// Fold one rollout's two first moves into `out`. A non-PLAY move covers nothing.
 //
-// `opp_first` is credited with its literal placed squares. `self_first`, the
-// reply to an opponent move the model never sees, is credited with its
-// footprint (training/footprint.h) decoded on `board`, the position's board
-// before that reply -- as if the opponent had passed. That is the decode the
-// placement heads' collapse applies (collapse_footprint_planes), so truth and
-// prediction are the same function of a footprint distribution; literal
-// squares would leave a model-independent residual on every reply that
-// threads through the opponent's fresh tiles.
+// `opp_first` is credited with the squares it places. `self_first` is credited
+// with its footprint (training/footprint.h) decoded on `board`, the position
+// before the opponent's move, as if the opponent had passed. The model never
+// sees the opponent's move, and collapse_footprint_planes decodes its
+// predictions the same way. Crediting literal squares instead would leave a
+// residual the model cannot learn on every reply that plays through the
+// opponent's new tiles.
 void accumulate_rollout_placement(const Board& board, const Move& opp_first, bool opp_won,
                                   const Move& self_first, bool self_won, PlacementCounts& out);
 
-// A Monte-Carlo ground-truth result for one position, from `start_player`'s
-// POV, whose delta is start_player_final - opponent_final.
+// Monte-Carlo ground truth for one position, from start_player's point of view.
 struct MonteCarloResult {
   int start_player = 0;
   int n = 0;
   int wins = 0;
   int losses = 0;
   int draws = 0;
-  std::map<int, int> delta_hist;  // score delta -> number of rollouts with that delta
+  std::map<int, int> delta_hist;  // final score delta (own - opponent) -> rollout count
   PlacementCounts placement;
 
   boost::json::object to_json() const;
 };
 
-// Play `n` rollouts from `pos` to a natural game end, EndgameHastyBot vs
-// EndgameHastyBot at the self-play defaults (greedy static equity until the
-// bag empties, then class-only endgame solves), the opponent's leave seated
-// per `condition` (a face-up rollout is also played as the face-up variant,
-// the information condition its training games are generated under). Game g
-// is seeded by g, so the aggregate is deterministic and independent of how the
-// games spread across the workers. `infer` parameterizes the hidden
-// condition's leave inference.
+// Play `n` rollouts from `pos` to the end of the game, with EndgameHastyBot on
+// both sides at its self-play defaults. The opponent's leave is seated per
+// `condition`, and face-up rollouts play face-up-leaves rules, the rules their
+// training games use. `infer` configures leave inference under kHidden.
+//
+// Rollout g is seeded by g, so the result is deterministic and independent of
+// `threads`.
 MonteCarloResult run_monte_carlo(const ParsedGcgPostMove& pos, const Dictionary& dict, int n,
                                  int threads, LeaveCondition condition,
                                  const belief::RackInferrer::Params& infer = {});

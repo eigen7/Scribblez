@@ -22,21 +22,17 @@ namespace scribblez {
 
 namespace {
 
-// What one finished rollout contributes: the final score delta (start_player's
-// POV) plus the two seats' first moves of the rollout, the placement planes read.
-// The opponent moves first, so records[0] is its move and records[1] is
-// start_player's; a missing move stays a default Move (PASS), which places nothing.
+// A missing first move stays a default Move (PASS), which places nothing.
 struct RolloutResult {
-  int delta = 0;
-  Move opp_first{};   // opponent's first move of the rollout (they move first)
-  Move self_first{};  // start_player's first move of the rollout
+  int delta = 0;  // start_player's final score minus the opponent's
+  Move opp_first{};
+  Move self_first{};
 };
 
-// The leave a rollout seats the opponent with, under the condition. Face-up:
-// the known leave, every rollout. Hidden: a draw from the posterior their last
-// move induces, or nothing (a uniform full draw) when that move carried no
-// information -- which is also what an empty face-up leave amounts to, so the
-// two conditions coincide on every position whose opponent kept nothing.
+// The leave a rollout seats the opponent with. Under kHidden with an
+// uninformative last move, the leave is empty and the whole rack is drawn from
+// the pool. That is also what an empty face-up leave does, so the two
+// conditions coincide on positions where the opponent kept nothing.
 class OppLeaveSampler {
  public:
   OppLeaveSampler(const ParsedGcgPostMove& pos, const Dictionary& dict, LeaveCondition condition,
@@ -45,8 +41,7 @@ class OppLeaveSampler {
   Rack leave(uint64_t seed) const;
 
  private:
-  // A stream of its own, so the variate that picks the leave is not also the
-  // first number that shuffles the pool it is then refilled from.
+  // Offsets the leave's RNG from the pool shuffle's, which shares the seed.
   static constexpr uint64_t kLeaveStream = 0x9E3779B97F4A7C15ULL;
   Rack fixed_;
   belief::RackPosterior posterior_;
@@ -68,15 +63,13 @@ Rack OppLeaveSampler::leave(uint64_t seed) const {
   return posterior_.sample(std::uniform_real_distribution<double>(0.0, 1.0)(rng));
 }
 
-// One rollout (seed g): play to the end from start_player's POV. The unseen pool
-// (shared helper in sim_runner.h) is built from the board and start_player's
-// leave; the opponent is seated with the leave the sampler gives this rollout
-// and draws the rest of its rack from the pool.
+// The opponent moved just before start_player's decision point, so in the
+// rollout it moves first.
 RolloutResult rollout(const ParsedGcgPostMove& pos, const Dictionary& dict, Agent& a0, Agent& a1,
                       const OppLeaveSampler& sampler, bool face_up, uint64_t seed) {
-  const int opponent = 1 - pos.start_player;  // moved before start_player, so plays first
+  const int opponent = 1 - pos.start_player;
   std::array<Rack, 2> known;
-  known[pos.start_player] = pos.leave;  // start_player keeps its leave
+  known[pos.start_player] = pos.leave;
   known[opponent] = sampler.leave(seed);
   Bag pool = unseen_pool(pos.board, pos.leave, seed);
   for (int i = 0; i < known[opponent].size(); ++i) pool.remove(known[opponent].tiles()[i]);
@@ -93,7 +86,6 @@ RolloutResult rollout(const ParsedGcgPostMove& pos, const Dictionary& dict, Agen
   return r;
 }
 
-// Credit one square to a seat's `next` plane, and to its `win` plane when `won`.
 void credit_cell(int r, int c, bool won, std::array<int, PlacementCounts::kCells>& next,
                  std::array<int, PlacementCounts::kCells>& win) {
   const int cell = r * BOARD_SIZE + c;
@@ -101,13 +93,12 @@ void credit_cell(int r, int c, bool won, std::array<int, PlacementCounts::kCells
   if (won) ++win[cell];
 }
 
-// The opponent's literal placed squares.
 void accumulate_opp_placement(const Move& move, bool won, PlacementCounts& out) {
   visit_placed_squares(move,
                        [&](int r, int c) { credit_cell(r, c, won, out.opp_next, out.opp_win); });
 }
 
-// The self reply's footprint decoded on the pre-reply board (see the header).
+// See accumulate_rollout_placement in the header.
 void accumulate_self_placement(const Move& move, const Board& board, bool won,
                                PlacementCounts& out) {
   std::array<std::pair<int, int>, kFootprintMaxK> cells;
@@ -116,8 +107,6 @@ void accumulate_self_placement(const Move& move, const Board& board, bool won,
     credit_cell(cells[i].first, cells[i].second, won, out.self_next, out.self_win);
 }
 
-// Fold one rollout's outcome into `out`: W/L/D, the exact delta histogram, and
-// both seats' placement planes.
 void accumulate_rollout(const Board& board, const RolloutResult& r, MonteCarloResult* out) {
   ++out->n;
   if (r.delta > 0)
@@ -131,14 +120,12 @@ void accumulate_rollout(const Board& board, const RolloutResult& r, MonteCarloRe
                                out->placement);
 }
 
-// Worker: plays games {t+1, t+1+threads, ...} (each seeded by its own g, so the
-// thread split doesn't affect any game's outcome) and accumulates into *out.
+// Plays games t+1, t+1+threads, ...
 void monte_carlo_worker(const ParsedGcgPostMove& pos, const Dictionary& dict, int n, int threads,
                         int t, const OppLeaveSampler& sampler, bool face_up,
                         MonteCarloResult* out) {
-  // Default solver params, matching the self-play generation that produces the
-  // training data (py/scribblez/selfplay.py): the ground truth must reflect the
-  // same rollout policy the model's targets are drawn from.
+  // Default solver params, as in self-play generation (py/scribblez/selfplay.py):
+  // the ground truth must come from the policy the training targets come from.
   EndgameHastyBotAgent::Params p0;
   p0.hasty.thread_id = t;
   p0.hasty.name = "H0";
@@ -149,8 +136,7 @@ void monte_carlo_worker(const ParsedGcgPostMove& pos, const Dictionary& dict, in
     accumulate_rollout(pos.board, rollout(pos, dict, a0, a1, sampler, face_up, uint64_t(g)), out);
 }
 
-// A flat row-major 15x15 count plane as a nested [row][col] JSON array (board
-// frame; no symmetry transpose applied).
+// A row-major count plane as a nested [row][col] JSON array, in board frame.
 boost::json::array plane_to_json(const std::array<int, PlacementCounts::kCells>& plane) {
   boost::json::array rows;
   for (int r = 0; r < BOARD_SIZE; ++r) {

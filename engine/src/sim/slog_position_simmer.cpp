@@ -24,7 +24,6 @@ int32_t equity_rank(const std::vector<Move>& ranked, const Move& m) {
   return it == ranked.end() ? -1 : int32_t(it - ranked.begin());
 }
 
-// The pre-move decision point `encoder` is replayed to, as the sims see it.
 SimPosition sim_position(const binlog::PositionEncoder& encoder, const GameLog& g, int turn_idx,
                          int mover, bool open_leaves) {
   SimPosition pos;
@@ -32,19 +31,16 @@ SimPosition sim_position(const binlog::PositionEncoder& encoder, const GameLog& 
   pos.scores = {encoder.enc().score(0), encoder.enc().score(1)};
   pos.mover = mover;
   pos.rack = encoder.rack(mover);
-  // Open leaves: the replay knows both the opponent's rack and the draws that
-  // followed their last move, so their retained leave -- the Bayesian-inferable
-  // part -- is exact; their replenishments stay hidden and are sampled per
-  // rollout.
+  // The replay knows the opponent's rack and the draws after their last move,
+  // so it can recover exactly which tiles they kept.
   if (open_leaves)
     pos.opp_leave = binlog::opp_leave_from_replay(g, turn_idx, encoder.rack(1 - mover));
   return pos;
 }
 
-// Every legal move at `pos`, best static equity first. Hidden mode: the
-// opponent's replayed rack is ground truth the mover cannot see, so the ranking
-// must not use it. Open-leaves mode legitimately reveals the retained leave
-// (only equity's endgame adjustments read it).
+// Every legal move at `pos`, best static equity first. The ranking may see only
+// what the mover legitimately knows: the opponent's kept tiles under face-up
+// leaves, never their replayed rack.
 std::vector<Move> rank_candidates(const SimPosition& pos, const Dictionary& dict, int bag_size) {
   MoveRequest req{
     pos.board, dict, pos.rack, pos.opp_leave, pos.scores[pos.mover], pos.scores[1 - pos.mover],
@@ -67,8 +63,7 @@ struct SimJob {
 // Each candidate's rollouts, in rollout-index order.
 using CandidateRollouts = std::vector<std::vector<RolloutResult>>;
 
-// Append one instalment -- rollouts [done, upto) of the `alive` candidates -- to
-// their vectors.
+// Append rollouts [done, upto) of the `alive` candidates.
 void run_instalment(const SimRunner& runner, const SimmedPosition& res,
                     const std::vector<size_t>& alive, int done, int upto,
                     CandidateRollouts* rollouts) {
@@ -97,7 +92,8 @@ size_t race_leader(const std::vector<size_t>& alive, const CandidateRollouts& ro
   return leader;
 }
 
-// Drop the unprotected candidates clearly below the leader (SlogSimConfig).
+// Drop the unprotected candidates clearly below the leader (see
+// SlogSimConfig::race_checkpoints).
 void stop_the_beaten(const SlogSimConfig& config, const CandidateRollouts& rollouts,
                      std::vector<size_t>* alive) {
   const std::vector<RolloutResult>& lead = rollouts[race_leader(*alive, rollouts)];
@@ -145,8 +141,8 @@ void reduce_rollouts(const SlogSimConfig& config, const SimRunner& runner, Simme
   }
 }
 
-// A worker's SimRunners: the config's own, and -- when the config solves the
-// endgames of late positions -- a second with solve_endgames on.
+// A worker's SimRunners: the config's own, plus one with solve_endgames on
+// when the config solves late positions' endgames.
 struct PositionRunners {
   PositionRunners(const Dictionary& dict, const SlogSimConfig& config);
 
@@ -190,8 +186,7 @@ void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
   if (job->run_sims) reduce_rollouts(job->config, runner, res);
 }
 
-// Claims positions off the shared index and fills their result slots. Each
-// worker owns its replay scratch and a single-threaded SimRunner.
+// Claims positions off the shared index and fills their result slots.
 void run_position_worker(SimJob* job) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(InputEncodingSpec{&job->dict});
@@ -199,8 +194,7 @@ void run_position_worker(SimJob* job) {
   const size_t n = job->work.size();
   for (size_t i = job->next.fetch_add(1); i < n; i = job->next.fetch_add(1)) {
     const binlog::GamePositionIndex& w = job->work[i];
-    // Name the position a runtime failure (e.g. the leaf-model NaN guard) hit,
-    // so an unattended multi-file run leaves a lead instead of a bare message.
+    // Name the failing position, so an unattended run leaves a lead.
     try {
       sim_one_position(w, job, &encoder, &scratch, runners, &job->results[i]);
     } catch (const std::exception& e) {
@@ -211,9 +205,7 @@ void run_position_worker(SimJob* job) {
 }
 
 // Thread entry: captures any exception into *err for the joining thread to
-// rethrow. A non-finite leaf readout makes SimRunner::run throw at runtime, and
-// letting it escape a std::thread would terminate the process instead of
-// printing an error.
+// rethrow, since one escaping a std::thread terminates the process.
 void position_worker(SimJob* job, std::exception_ptr* err) {
   try {
     run_position_worker(job);

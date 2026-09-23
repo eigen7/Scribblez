@@ -10,14 +10,12 @@ namespace scribblez::belief {
 
 namespace {
 
-// The rack left over once `move` has taken its tiles from `rack`.
 Rack kept_after(const Rack& rack, const Move& move) {
   Rack kept = rack;
   for (int i = 0; i < move.num_glyphs(); ++i) kept.remove(move.glyph(i).rack_tile());
   return kept;
 }
 
-// The tiles `move` took off the rack.
 Rack tiles_used(const Move& move) {
   Rack used;
   for (int i = 0; i < move.num_glyphs(); ++i) used.add(move.glyph(i).rack_tile());
@@ -37,10 +35,8 @@ EquityLikelihood::EquityLikelihood(const Board& board, const Dictionary& dict, i
       hidden_tiles_(RACK_SIZE - revealed_.size()) {}
 
 bool EquityLikelihood::matches_observation(const Move& candidate) const {
-  // A play is public down to the letter, so it identifies itself: every byte
-  // of a Move is meaningful and the generators produce canonical orderings.
-  // An exchange discloses only how many tiles went back, so every exchange of
-  // that size is an equally valid reading of what we saw.
+  // A play is public down to the letter, and move generation is canonical, so
+  // Move equality identifies it. An exchange discloses only its size.
   if (observed_.type() == MoveType::EXCHANGE) {
     return candidate.type() == MoveType::EXCHANGE &&
            candidate.num_glyphs() == observed_.num_glyphs();
@@ -61,12 +57,10 @@ void EquityLikelihood::explain(const Rack& rack, std::vector<ScoredLeave>* out) 
     HastyEquity::instance().equities(moves, board_, bag_size_, opp_rack, rack);
   const double best = *std::max_element(equities.begin(), equities.end());
 
-  // Softmax with the maximum subtracted out, so the exponentials stay in range
-  // however far apart the equities spread. Only the denominator is summed in
-  // linear space; the answer stays logarithmic, because at a low temperature a
-  // move the opponent was never going to make is exp(-1000) away from the best
-  // one, and rounding that to zero here would strike the hypothesis out
-  // entirely rather than merely rank it last.
+  // Log-softmax with the maximum subtracted, so the exponentials stay in range.
+  // The result stays in log space: at a low temperature an unlikely move can be
+  // exp(-1000) from the best, and rounding that to zero would strike the
+  // hypothesis out rather than rank it last.
   double total = 0.0;
   for (double e : equities) total += std::exp((e - best) / temperature_);
   const double log_total = std::log(total);

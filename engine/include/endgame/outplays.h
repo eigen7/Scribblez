@@ -11,16 +11,11 @@
 
 namespace scribblez {
 
-// The blocking footprint of a candidate out-play `o` (a play that would empty a
-// rack): the board cells whose occupation by another move could prevent `o`
-// from being played later. Stored both cell-exact and summarized as the rows
-// and columns those cells occupy.
-//
-// The cell set is o's full main-word span, the ends of the existing
-// perpendicular runs through its placed cells, and the one in-line cell just
-// beyond each end of the span. This over-approximates the true blocking set, so
-// every classification errs toward "blocked" -- a false "still playable", the
-// only direction that would make pruning unsound, cannot arise.
+// The halo of a candidate out-play `o` (a play that would empty a rack): the
+// board cells where another move could change o's legality or score. It
+// over-approximates that set, so every classification errs toward "blocked";
+// a false "still playable", the only error that would make pruning unsound,
+// cannot arise.
 struct OutplayHalo {
   uint16_t rows = 0;                         // bit r set iff a halo cell lies in row r
   uint16_t cols = 0;                         // bit c set iff a halo cell lies in column c
@@ -56,12 +51,12 @@ class LazyHalos {
   std::vector<char> ready_;
 };
 
-// One out-play a side could make, paired with the halo built on the board it
-// was collected on. The halo stays a sound kill trigger as the search board
-// evolves: any sequence of moves that disturbs the out-play's legality or score
-// must first place a tile in the halo, so dropping an entry the moment a move
-// touches its halo guarantees every survivor is still legal at the same score.
-// The price is false drops, which only weaken the bounds derived from the set.
+// One out-play a side could make, paired with its halo on the board it was
+// collected on. The halo stays valid as the search board evolves: any sequence
+// of moves that changes the out-play's legality or score must first place a
+// tile in the halo. So dropping an entry as soon as a move touches its halo
+// guarantees every survivor is still legal at the same score. The price is
+// false drops, which only weaken the bounds derived from the set.
 struct OutplayEntry {
   Move move;
   OutplayHalo halo;
@@ -86,10 +81,10 @@ void assign_surviving(const OutplaySet& parent, const Move& m, OutplaySet& out);
 void collect_rack_outplays(const Board& board, const std::vector<Move>& plays, int rack_size,
                            OutplaySet& out);
 
-// The out-play set to hand each child of one search node: the out-plays of the
-// leave a candidate move keeps, as they stand on the node's own board. Any play
-// of a rack subset is already in the node's legal-play list, so bucketing that
-// list by used-tile multiset finds every leave's out-plays with no extra move
+// Builds, for each child of one search node, the mover's out-play set after
+// the move: the out-plays of the leave the move keeps. Any play of a rack
+// subset is already in the node's legal-play list, so bucketing that list by
+// used-tile multiset finds every leave's out-plays without extra move
 // generation. Built once per node.
 class LeaveOutplays {
  public:
@@ -109,12 +104,10 @@ class LeaveOutplays {
   LazyHalos halos_;
 };
 
-// The out-play sets in effect at one node of a search, one per seat: the
-// candidates that node's futility bounds are read from. A mover pushes the pair
-// its children read and pops it on the way back up, so the stack follows the
-// descent. Only the replier's half of the root pair is ever populated -- the
-// root's own moves are bounded against the replier's out-plays, never against
-// its own.
+// The out-play sets in effect along the current search path, one per seat,
+// which the futility bounds read. A node pushes the pair its child reads and
+// pops it on the way back up. At the root only the replier's set is populated,
+// since the root's moves are bounded only against the replier's out-plays.
 class OutplaySetStack {
  public:
   // Start a fresh search, sizing the per-ply slots for paths of at most

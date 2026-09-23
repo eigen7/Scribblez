@@ -9,8 +9,6 @@ namespace scribblez {
 
 namespace {
 
-// Add one copy of tile `t` to the packed counts (nibble layout: see
-// PackedCounts).
 void packed_add(PackedCounts& p, Tile t) {
   const int i = t;
   if (i < 16)
@@ -33,6 +31,14 @@ PackedCounts pack_move_used(const Move& m) {
   return p;
 }
 
+// Soundness: a placed cell p affects exactly the plays that place a tile on p,
+// and those that place on the first empty cell reached from p in each of the
+// four directions by walking through existing tiles. In-line, that is the cell
+// a word extends p's run from; perpendicular, the cell whose cross-word p's run
+// rewrites. Marking the row and column of p and of those (at most four) cells
+// covers every affected play. It also covers every newly enabled play, which
+// must place on such a cell or play through p. Cross-check, anchor, and dedup
+// state in unmarked lanes is untouched.
 LaneTouch move_lane_influence(const Board& board, const Move& m) {
   LaneTouch t;
   visit_placed_squares(m, [&](int r, int c) {
@@ -102,6 +108,10 @@ const std::vector<Move>& PathMoveLists::moves_at(int ply, const Rack& rack) {
   return out.moves;
 }
 
+// Touched lanes are regenerated on the current board, which also yields every
+// newly enabled play. Untouched lanes are copied from the parent, subset-filtered
+// against the current rack when the side's own intervening move consumed tiles.
+// The two sources are disjoint by lane, so no deduplication is needed.
 void PathMoveLists::rebuild(Slot& out, const Slot& parent, const LaneTouch& touched, bool filter,
                             const Rack& rack) {
   out.moves.clear();

@@ -1,13 +1,8 @@
 #pragma once
 
-// Runs unbounded HastyBot self-play across a thread pool, encoding each
-// finished game's sampled position straight into a StreamingRowBuffer slot --
-// no disk, no .slog round-trip. GameRunner's streaming counterpart: both drive
-// a GameEngine, differing in the loop and the sink.
-//
-// Each worker thread owns its GameSink, which picks the sampled turn and
-// encodes BEFORE claiming a ring-buffer row, so a game with no eligible turn is
-// dropped without claiming one -- which would stall that slot forever.
+// Runs unbounded self-play across a thread pool, encoding one sampled position
+// per finished game straight into a StreamingRowBuffer row, with no .slog
+// round trip. GameRunner's streaming counterpart.
 
 #include "agent/player_factory.h"
 #include "arena/game_engine.h"

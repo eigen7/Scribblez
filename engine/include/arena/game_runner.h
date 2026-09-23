@@ -25,12 +25,11 @@ class BinaryLogWriter;
 
 class Dictionary;
 
-// Drives a fixed series of games between two agents to disk -- a bot-vs-bot
-// match, a human game, or self-play generation, according to the --player
-// specs. Owns a GameEngine (the agents plus the per-game primitive) and the
-// win/loss tally, and is itself the GameSink. It alternates seats each game and
-// honors each agent's EndGameResult to extend (PLAY_AGAIN) or shorten (QUIT)
-// the series past `--games`.
+// Plays a series of games between two agents and writes them to disk: a bot
+// match, a human game, or self-play generation, per the --player specs. Keeps
+// the win/loss tally and is the GameSink for its GameEngine. Seats alternate
+// each game. When running serially, an agent can extend the series past
+// --games (PLAY_AGAIN) or cut it short (QUIT).
 class GameRunner : public GameSink {
  public:
   struct Params {
@@ -59,10 +58,9 @@ class GameRunner : public GameSink {
     void add_options(boost::program_options::options_description& desc);
   };
 
-  // Validates the params, builds one agent pair per thread, and loads the
-  // lexicon. Takes its starting seed from SeedProducer::instance(), which the
-  // caller must already have reseeded if reproducibility is wanted. Throws
-  // util::CleanException on a user-visible error.
+  // Takes its starting seed from SeedProducer::instance(), which the caller
+  // must already have reseeded if reproducibility is wanted. Throws
+  // util::CleanException on invalid params.
   GameRunner(const Params& runner_params, const PlayerFactory::Params& player_params);
   ~GameRunner();
 
@@ -70,21 +68,19 @@ class GameRunner : public GameSink {
   // params.games games in parallel.
   void run();
 
-  // Writes the finished game as an optional .gcg, tallies it, and appends it to
-  // the .slog writer. Called from every game thread; thread-safe.
+  // Called from every game thread; thread-safe.
   void on_game(GameLogStorage&& log, const std::array<int, 2>& seats) override;
 
  private:
-  // Tally indexed by *player identity* rather than seat, seats alternating
-  // every game, plus the optional per-game JSON results stream. Thread-safe.
+  // The tally, by player rather than seat, plus the optional per-game JSON
+  // results stream. Thread-safe.
   class Results;
 
   // The seed index game `game_idx` is played with: the games of a pair share
   // one seed in paired mode.
   uint64_t seed_index(uint64_t game_idx) const { return params_.paired ? game_idx / 2 : game_idx; }
 
-  // Prints a progress line every progress_secs until `done` is set, polling it
-  // at 10 Hz so it exits promptly once the workers finish.
+  // Prints a progress line every progress_secs until `done` is set.
   void run_progress_monitor(const std::atomic<bool>& done, std::chrono::steady_clock::time_point t0,
                             uint64_t total) const;
 
