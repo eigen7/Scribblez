@@ -131,7 +131,7 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
 
     def test_all_figures_routable(self):
         # Each figure resolves; `item` is null when its data isn't seeded.
-        for fig in ("loss", "eval_quality", "training_metrics", "mset_metrics", "match_eval"):
+        for fig in api.FIGURES:
             r = self.fetch(f"/api/figure/{fig}?task={MAX_MOVE_PER_LANE}&tag=run1")
             assert r.code == 200, fig
             assert "item" in json.loads(r.body), fig
