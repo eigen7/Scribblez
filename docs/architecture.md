@@ -1,128 +1,143 @@
 # Architecture: the training-data pipeline
 
-This is a code-level map of how a self-play game becomes a training row. It
-complements [docs/roadmap.md](roadmap.md) (which covers the *why* and the model
-roadmap) and [docs/design.md](design.md) (the design document) by
-naming the components and the file that owns each one. For the *what each score
-means to the model* story, see the roadmap's position evaluation model heads.
+A code-level map of how a self-play game becomes a training row, for anyone
+changing the data format, the input encoding, or the labels. It names each
+component and the file that owns it. The reasons behind the models live in
+[roadmap.md](roadmap.md) and [design.md](design.md); the network wiring is in
+[model_architectures.md](model_architectures.md).
 
 ## Pipeline at a glance
 
 ```
-generate_data.py ─▶ play_game ─▶ GameRunner ─▶ Game ─▶ GameLog
-                                                          │
-                                                BinaryLogWriter
-                                                          │
-                                                      .slog file
-                                                          │
-                                  NativeDataLoader (FFI) ─▶ DataLoader
+generate role / generate_data.py ─▶ play_game ─▶ GameRunner ─▶ GameEngine ─▶ Game
+                                                                              │
+                                                                          GameLog
+                                                                              │
+                                                                     BinaryLogWriter
+                                                                              │
+                                                                          .slog file
+                                                                              │
+                                                  DataLoader (via the FFI) ◀──┘
                                                           │
                                                     BlockDecoder
-                                                    (replays the game)
                                                           │
-                              GameStateEncoder ─▶ input row + AllTargets labels
+                                  PositionEncoder (replays the game through
+                                                   GameStateEncoder)
                                                           │
-                                            torch tensors ─▶ model
+                                        input row + AllTargets labels
+                                                          │
+                                                torch tensors ─▶ model
 ```
 
 | Stage | Owner | Notes |
 |-------|-------|-------|
-| Launch self-play | [py/scripts/generate_data.py](../py/scripts/generate_data.py) | Shells out to the `play_game` binary with two HastyBots and `--binary-log-dir`. |
-| Game loop / threading | [GameRunner](../engine/src/arena/game_runner.cpp) | Owns agents, seeds (one per game), the win tally, and the parallel game loop. |
-| One game | [Game](../engine/src/game/game.cpp) | Plays a single game and accumulates a [GameLog](../engine/include/game/game.h) (initial racks, every move + draw, final scores). |
-| Serialize | [BinaryLogWriter](../engine/src/data/binary_log.cpp) | Batches finished games and flushes them to one `.slog` file per `--games-per-file`. |
-| On-disk format | [binary_log.h](../engine/include/data/binary_log.h) | **Authoritative** layout (see below). |
-| Load + replay | [BlockDecoder](../engine/src/data/block_decoder.cpp) | Replays a game forward to a given turn and emits one populated tensor row (the loader emits one per eligible turn). |
-| State tracking + encoding | [GameStateEncoder](../engine/src/encoding/game_state_encoder.cpp) | Maintains board/scores/last-moves during replay and writes the model input. |
-| Input layout | [input_encoder.h](../engine/include/encoding/input_encoder.h) | The `InputEncodingSpec` + block registry: block order/sizes and layout queries (87 planes + 936 scalars, the open-leaves arm adding 27 scalars). |
-| Label layout | [training_targets.h](../engine/include/training/training_targets.h) | The `AllTargets` registry — single source of truth for the label heads. |
-| Stream to Python | [scribblez_ffi.cpp](../engine/src/serve/scribblez_ffi.cpp) → [py/scribblez/ffi.py](../py/scribblez/ffi.py) → [dataset.py](../py/scribblez/dataset.py) | C ABI over the `DataLoader`; epoch-based batch streaming. |
-| Train | [py/scripts/position_eval/train.py](../py/scripts/position_eval/train.py), [py/scribblez/position_eval/model.py](../py/scribblez/position_eval/model.py) | Generational generate→train loop (see [docs/generational_training.md](generational_training.md)); ResNet trunk + the heads in `AllTargets`. |
+| Launch self-play | [selfplay.py](../py/scribblez/selfplay.py), called by the workloads' generate role ([selfplay_gen.py](../py/scribblez/workloads/selfplay_gen.py)) and the one-shot [generate_data.py](../py/scripts/generate_data.py) | Shells out to the `play_game` binary with two HastyBot seats and `--binary-log-dir`. |
+| Game loop / threading | [GameRunner](../engine/src/arena/game_runner.cpp) | Owns the run: the base seed, the win tally, the parallel game loop, and the `.slog` writer. |
+| One game | [GameEngine](../engine/src/arena/game_engine.cpp), [Game](../engine/src/game/game.cpp) | `GameEngine` owns the per-thread agent pairs and sets up each game (seed, handicap, random opening); `Game` plays it and fills a [GameLog](../engine/include/game/game_log.h): initial racks, every move and draw, final scores. |
+| Serialize | [BinaryLogWriter](../engine/src/data/binary_log.cpp) | Buffers finished games and writes one `.slog` per 1000 games (`kGamesPerFile` in `game_runner.cpp`). |
+| On-disk format | [binary_log.h](../engine/include/data/binary_log.h) | The authoritative layout (see below). |
+| Load | [DataLoader](../engine/src/data/data_loader.cpp) | Expands games into rows, shuffles, and fills batches on decoder threads. |
+| Decode | [BlockDecoder](../engine/src/data/block_decoder.cpp) | Builds a `GameLog` view over a game's bytes in the file and hands it to the encoder. |
+| Replay + encode | [PositionEncoder](../engine/src/encoding/position_encoder.cpp), [GameStateEncoder](../engine/src/encoding/game_state_encoder.cpp) | Replays the game to the requested turn and writes the input row and the labels. |
+| Input layout | [input_encoder.h](../engine/include/encoding/input_encoder.h) | `InputEncodingSpec` and the block registry: block order, sizes, and offsets. 87 planes and 136 scalars; the open-leaves arm adds 27 scalars. |
+| Label layout | [training_targets.h](../engine/include/training/training_targets.h) | The `AllTargets` registry, the single source of truth for the label heads. |
+| Stream to Python | [scribblez_ffi.cpp](../engine/src/serve/scribblez_ffi.cpp) → [ffi.py](../py/scribblez/ffi.py) → [dataset.py](../py/scribblez/dataset.py) | A C ABI over the `DataLoader`; epoch-based batch streaming. |
+| Train | [train.py](../py/scripts/position_eval/train.py), [position_eval/model.py](../py/scribblez/position_eval/model.py) | The generational generate→train loop ([generational_training.md](generational_training.md)). |
 
-## The `.slog` lifecycle
+`PositionEncoder` is the one tensorization path. The `StreamingGameProducer`
+([streaming_game_producer.h](../engine/include/arena/streaming_game_producer.h))
+drives the same `GameEngine` and encodes live games straight into a ring
+buffer without writing a `.slog`, and because it shares the encoder its rows
+are byte-identical to decoded ones.
 
-A `.slog` file holds many games as the *minimum* data needed to faithfully
-replay every state — initial racks plus the move sequence (each move bundled
-with the tiles drawn right after it). This is ~20× smaller than storing
-fully-expanded per-position records, so far more games stay resident in the
-DataLoader's shuffle buffer. The exact byte layout (FileHeader, the
-`GameMetadata` table, then per-game `InitialRacks` + `TurnBlob[]`) lives in
-[binary_log.h](../engine/include/data/binary_log.h) and is versioned by
-`kVersion`; the decoder and FFI both reject a version mismatch, so stale files
-fail loudly rather than misparse. Treat that header as the spec — this doc does
-not duplicate the struct fields, so they cannot drift.
+## The `.slog` format
 
-- **Write** — [`BinaryLogWriter::write_batch`](../engine/src/data/binary_log.cpp)
-  records, per game, which turns are training-**eligible** (the region
-  `[eligible_begin, eligible_end)`: `eligible_end` is the leading prefix of
-  turns whose bag was non-empty, and `eligible_begin` is the position after the
-  game's last random-opening ply — see below), and tallies the region widths
-  into the `FileHeader`'s `num_sample_positions`. Games with an empty region
-  are dropped. Per file: one `FileHeader`, a `GameMetadata` for every game,
-  then each game's blobs. (`sampled_turn` is also recorded but is eval-only —
-  a single representative position per game for probes / dumps.)
-- **Read** — the [`DataLoader`](../engine/src/data/data_loader.cpp) expands
-  each game into **one training row per eligible turn** (so an epoch sees every
-  position, not one per game), and
-  [`BlockDecoder::decode_one`](../engine/src/data/block_decoder.cpp)
-  reconstructs each row: it replays the move sequence up to that turn through a
-  `GameStateEncoder`, then encodes the input and the labels. The
-  `post_move` flag selects the pre-move snapshot (active player about to play)
-  vs. the post-move snapshot (just played, before drawing). Diagonal symmetry
-  (`(r,c) → (c,r)`) is applied stochastically per row.
+A `.slog` file holds many games, each stored as the minimum needed to replay
+every state: the initial racks plus the move sequence, each move bundled with
+the tiles drawn right after it. This is about 20× smaller than fully expanded
+per-position records, so far more games fit in the DataLoader's shuffle
+buffer.
+
+The byte layout (a `FileHeader`, a `GameMetadata` table, then per game an
+`InitialRacks` and a `TurnBlob[]`) is specified in
+[binary_log.h](../engine/include/data/binary_log.h) and versioned by
+`kVersion`. The decoder and the FFI both reject a version mismatch, so a stale
+file fails loudly instead of misparsing. This document deliberately does not
+repeat the struct fields.
+
+- **Write.** [`BinaryLogWriter::write_batch`](../engine/src/data/binary_log.cpp)
+  records each game's **eligible** turns, the region
+  `[eligible_begin, eligible_end)`. `eligible_end` ends the leading run of
+  turns whose bag was non-empty; `eligible_begin` is the position right after
+  the game's last random-opening ply (see below). The region widths sum into
+  the `FileHeader`'s `num_sample_positions`, so a loader knows the epoch size
+  without scanning the file. Games with an empty region are dropped. The
+  writer also records a `sampled_turn`, one representative position per game
+  used only by probes and position dumps.
+- **Read.** The [`DataLoader`](../engine/src/data/data_loader.cpp) expands each
+  game into one training row per eligible turn, so an epoch sees every
+  position. [`BlockDecoder::decode_one`](../engine/src/data/block_decoder.cpp)
+  builds each row. The `post_move` flag selects the snapshot: before the mover
+  plays, or after the move but before the draw. The diagonal symmetry
+  (`(r,c) → (c,r)`) is applied to a random half of the rows when the epoch's
+  `apply_symmetry` is set; the replayed state is transposed as a whole before
+  encoding, so no encoder or target knows about the augmentation.
 
 ## The replay-reconstruction invariant
 
-**A training row is reconstructed by replaying moves, not read back from an
-expanded record.** This is the single most important thing to understand about
-the pipeline, and it dictates where every value originates:
+**A training row is rebuilt by replaying moves, never read back from an
+expanded record.** This decides where every value comes from:
 
-- **Model inputs are recomputed from the replay.** The board, the unseen-tile
-  pool, last-move metadata, and the **score differential** are all rebuilt by
-  applying moves through `GameStateEncoder`, which accumulates each play's score
-  as it goes ([`apply_move`](../engine/src/encoding/game_state_encoder.cpp)).
-  The score-diff input is therefore *derived*, not stored per position — it is
-  whatever the running scores are at the sampled turn.
-- **Targets come from the stored final scores.** The WLD and ScoreDiff heads are
-  computed from `GameMetadata`'s final scores via the
-  [GameLogView](../engine/include/training/training_targets.h) the decoder
-  fills in — independent of the replay's running tally.
+- **Inputs are recomputed by the replay.** The board, the unseen-tile pool,
+  the last-move metadata and the **score differential** are all rebuilt by
+  applying moves through `GameStateEncoder`, which accumulates each play's
+  score as it goes
+  ([`apply_move`](../engine/src/encoding/game_state_encoder.cpp)). The
+  score-differential input is whatever the running scores are at the sampled
+  turn; nothing stores it per position.
+- **Targets come from the stored final scores.** The WLD and score-diff labels
+  are computed from the `GameLog`'s final scores, which the encoder copies into
+  the `EncodeContext` ([encode_context.h](../engine/include/encoding/encode_context.h))
+  the targets read. They are independent of the replay's running tally.
 
-A practical consequence: any per-game state that must reach the input
-encoding has to be seedable into the replay. Example: a starting-score
-handicap is stored in `GameMetadata` and seeds the `GameStateEncoder` at
-replay start, so the score-diff *input* reflects it everywhere; because it is
-also baked into the final scores, the *targets* stay consistent
-automatically. Default self-play requests no handicap.
+The consequence: any per-game state that must reach the input has to be
+seedable into the replay. A starting-score handicap (`play_game
+--random-handicap-max`) is the worked example. It is stored with the game and
+seeds the `GameStateEncoder` at replay start, so the score-differential input
+reflects it at every turn; it is also baked into the final scores, so the
+targets stay consistent without further work. Default self-play uses no
+handicap.
 
-## Random openings (off-policy state coverage)
+## Random openings
 
-With `play_game --random-opening-mean M` (> 0), each game's first
-`K ~ round(Exp(M))` plies are played **uniformly at random** (all legal
-placements plus all legal exchanges; pass only when neither exists) instead
-of by the seated agents
-([`Game::set_random_opening`](../engine/src/game/game.cpp)). This drives
-self-play into states — especially unusual rack leaves — that agent play
-never visits.
+`play_game --random-opening-mean M` (with `M > 0`) plays each game's first
+`K ~ round(Exp(M))` plies uniformly at random instead of by the seated agents
+([`Game::set_random_opening`](../engine/src/game/game.cpp)). A random ply picks
+among all legal placements and exchanges, and passes only when neither
+exists. The point is off-policy coverage: it drives self-play into states,
+especially unusual leaves, that agent play never visits.
 
-Random moves pollute the final-score *targets* of every position they
-follow, so the eligible region starts at the position right after the last
-random ply — the first whose remaining game is pure agent play, and itself
-exactly the kind of unusual state the mechanism exists to cover. Random
-moves are ordinary `TurnBlob`s, so replay reconstruction is unaffected; a
-game that ends during its random opening has an empty eligible region and is
-dropped by the writer.
+Random moves corrupt the final-score targets of every position they precede,
+so the eligible region starts right after the last random ply. That position
+is the first whose remaining game is pure agent play, and is itself exactly
+the kind of unusual state the mechanism exists to cover. Random moves are
+ordinary `TurnBlob`s, so replay is unaffected. A game that ends during its
+random opening has an empty eligible region and is dropped.
 
 ## Determinism and seeding
 
 - [SeedProducer](../engine/src/util/seed_producer.cpp) is the global RNG
-  source; `GameRunner` pulls one base seed and gives game *g* the seed
-  `base + g` (`base + g/2` under `--paired`, where games 2k and 2k+1
-  deliberately share a seed with the seats swapped), which seeds that game's
-  [Bag](../engine/src/game/bag.cpp).
-- Seeds are **not** required to map to fixed bags — nothing in the system relies
-  on reproducing a specific bag from a seed, so auxiliary per-game randomness
-  (e.g. handicap selection) may draw from the game seed freely.
-- The sampled-turn choice and the DataLoader's epoch shuffle are independently
-  seeded; see [data_loader.h](../engine/include/data/data_loader.h) for the
-  epoch API (`epoch_start` then repeated batch fills).
+  source. `GameRunner` draws one base seed, and game *g* is played with seed
+  `base + g`, or `base + g/2` under `--paired`, where games 2k and 2k+1 share a
+  seed with the seats swapped so per-seed tile luck cancels. The game seed
+  seeds that game's [Bag](../engine/src/game/bag.cpp), and derivations
+  of it pick the handicap and the random-opening length.
+- Nothing relies on a seed reproducing a specific bag, so auxiliary per-game
+  randomness may draw from the game seed freely.
+- The generate role runs every chunk with seed 0, which makes `play_game` draw
+  a fresh seed per chunk: a fleet splitting a generation under any
+  deterministic seed partition would duplicate games, so distributed corpora
+  are deliberately not reproducible.
+- The DataLoader's epoch shuffle and symmetry choices are seeded per epoch; see
+  [data_loader.h](../engine/include/data/data_loader.h) for the epoch API
+  (`epoch_start`, then repeated batch fills).

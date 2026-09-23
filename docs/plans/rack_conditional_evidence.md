@@ -1,10 +1,28 @@
 # Rack-conditional evidence: transferring sim knowledge across the tree
 
+**Status: proposed, plan-reviewed (2026-09-23); nothing built.** Two human
+calls from the review are open (see the [review record](#review-record)): who
+labels the layer-0 evaluation positions and how many are needed, and whether
+the learned design proceeds only if it beats an explicit reply catalogue.
+
+**Goal.** Let what the sims discover about the opponent's replies on one
+sampled rack transfer to the rest of the turn's search: to other candidates,
+to racks not yet sampled, and to the rollouts already run.
+
+**Decision.** Keep evidence per rack index instead of aggregating it per
+candidate; read one evidence-conditioned model as the root valuation, the
+ply-one reply policy inside rollouts, and the correction for outdated
+rollouts; re-price or re-run outdated rollouts rather than discard them; and
+rank all work (new candidates, new racks, re-runs) by one acquisition rule,
+with no closed "simmed" state. Build it one layer at a time, each checked on
+known failure positions, starting with an expert-labeled evaluation set.
+
 ## Purpose
 
 Simming a candidate move `M` samples opponent racks and plays them out. Now
 and then a sampled rack `R` reveals that the opponent has a reply far better
-than the one the hasty rollout policy plays. That matters for `M`'s valuation,
+than the one the rollout policy plays. (That policy is HastyBot, greedy by
+static equity; "hasty" below.) That matters for `M`'s valuation,
 but the important question is the next one: was that specific to `R`, or is
 there a fact here that holds across the opponent's whole rack distribution?
 
@@ -440,13 +458,12 @@ and the leaf model is fixed, which is what keeps that check honest. And there
 are enough moving parts that a bug looks exactly like "the model did not
 learn".
 
-**The deficiency cannot be measured under the policy that hides it.** An
-earlier draft of this plan proposed a first gate: stratify existing rollouts
-by letter presence and see whether rack composition explains outcome variance
-beyond noise. That gate is withdrawn. Its outcomes come from hasty rollouts,
-and if the deficiency is that hasty opponents do not exploit their racks, the
-outcomes cannot show the structure; a null there would measure the instrument,
-not the problem. The existence of the deficiency is settled by the expert
+**The deficiency cannot be measured under the policy that hides it.** A
+tempting first gate is to stratify existing rollouts by letter presence and
+see whether rack composition explains outcome variance beyond noise. It
+cannot work: its outcomes come from hasty rollouts, and if the deficiency is
+that hasty opponents do not exploit their racks, the outcomes cannot show the
+structure. A null there would measure the instrument, not the problem. The existence of the deficiency is settled by the expert
 cases and by hasty's construction. What is open is which fix removes it.
 
 ## Evaluation and build order

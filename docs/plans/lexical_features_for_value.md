@@ -1,133 +1,144 @@
 # Lexical foresight via engineered features (for the value models)
 
-> **Status.** The contingent-draw potential map described here was built as an
-> optional input-encoding arm and has since been removed: no run adopted it,
-> and carrying an unused arm through the encoder, the FFI, the ONNX metadata,
-> and every model config cost more than it bought. The row layout is now the
-> single base layout. The design rationale below stands, and the cross-check
-> delta is unbuilt either way; anyone reviving the map starts from this doc and
-> the deleted `engine/{include,src}/encoding/contingent_map.*`.
+**Status.** Two features were proposed. Neither is a model input today.
 
-## Purpose
+- **The contingent-draw potential map**: built as an optional input-encoding
+  arm (3 planes plus 56 scalars on the position evaluation row), then
+  deleted. No run adopted it, and carrying an unused arm through the
+  encoder, the FFI, the ONNX metadata and every model config cost more than
+  it bought. Anyone reviving it starts from this document and the deleted
+  `engine/{include,src}/encoding/contingent_map.*` (removed in commit
+  `d930b59`).
+- **The post-move cross-check delta**: the encoder and a diagnostic have
+  landed, not the model input. `training/cross_check_delta.h` computes each
+  candidate's sparse cross-check change, and the FFI and
+  `MsetDataset(with_cross_check_deltas=True)` expose it. The script
+  `py/scripts/move_set_eval/crosscheck_delta_diagnostic.py` measures whether
+  the student's distillation error concentrates where that delta is large.
+  Feeding the delta into the move set evaluation model waits on that
+  measurement.
 
-The value models need **board-conditional leave evaluation with lexical
-foresight**: the value of the tiles a player keeps depends on what those tiles
-can *do* on this specific board, which is a lexical fact. Rather than teach
-the network the lexicon, compute the relevant lexical facts with the classical
-GADDAG move generator and feed them in as input features — the network then
-only has to learn to *value* them, not derive them.
+**Goal.** Give the value models board-conditional leave evaluation with
+lexical foresight, without asking the network to learn the lexicon.
 
-The seed example: `ZEIN` would score ~50 in an open column, the player holds
-`Z`, `I`, `N` but no `E` — the strong play may be to play four *other* tiles
-and keep the `ZIN` leave, hoping to draw the `E`. A board-independent leave
-table values `ZIN` identically on every board; a context-aware net fixes this
-only if it can *see* that `ZEIN` is reachable here.
+**Decision.** Compute the relevant lexical facts with the classical GADDAG
+move generator and feed them in as input features. The network then only
+has to learn to *value* those facts, not derive them.
 
-The network cannot be trusted to derive this itself: the lexical-NN probe
+## Why
+
+The value of the tiles a player keeps depends on what they can do on this
+specific board, and that is a lexical fact. Example: `ZEIN` would score
+about 50 in an open column, and the player holds `Z`, `I` and `N` but no
+`E`. The strong play may be to play four *other* tiles and keep `ZIN`,
+hoping to draw the `E`. A board-independent leave table values `ZIN` the
+same on every board. A context-aware network fixes this only if it can see
+that `ZEIN` is reachable here.
+
+The network cannot be trusted to work this out itself. The lexical-NN probe
 track ([lexical_nn.md](../lexical_nn.md),
 [word_validity_experiments.md](../word_validity_experiments.md),
-[rack_best_experiments.md](../rack_best_experiments.md)) showed that a plain
-network recovers a play's score and anchor geometry but fails to fill the
-interior letters — precisely the part requiring dictionary membership — and
-that lexicon *tools* help only when their structure matches the task's shape.
-And "let Monte Carlo figure it out" is insufficient because **Monte Carlo only
-runs on candidates that survive the move-set-evaluation filter**: if the
-pre-move model cannot value the leave upside, the play never reaches
-simulation.
+[rack_best_experiments.md](../rack_best_experiments.md)) found that a plain
+network recovers a play's score and anchor geometry but fails to fill in the
+interior letters, which is exactly the part that needs dictionary
+membership. It also found that lexicon *tools* help only when their
+structure matches the shape of the task.
 
-The recall/precision split follows: the **feature's job is recall** (get
-lexically promising plays past the filter), **Monte Carlo's job is precision**
-(honestly evaluate the survivors). This is what makes aggressive feature
-approximations acceptable — a feature need not be accurate, only informative
-enough to prevent the filter from discarding the play.
+Monte Carlo cannot cover for the network either, because it only runs on
+candidates that survive the move set evaluation filter. If the pre-move model
+cannot see a leave's upside, the play never reaches simulation.
 
-The lexical query that matters ("best move achievable with `leave ∪ {X}` on
-this board") is exactly what the GADDAG computes in microseconds, with no
-differentiability needed — the classical engine does the lexical work, the
-network does the value.
+That gives the division of labor: **the feature's job is recall** (get
+lexically promising plays past the filter), and **Monte Carlo's job is
+precision** (evaluate the survivors honestly). This is what makes aggressive
+approximations acceptable. A feature does not need to be accurate, only
+informative enough to keep the filter from discarding the play. And the
+lexical query that matters, "the best move `leave ∪ {X}` can make on this
+board", is what the GADDAG computes in microseconds, with no need to be
+differentiable.
 
 ## The cost/accuracy ladder
 
-Three tiers for a "contingent draw" feature, by which board and rack the
-hypothetical generation runs against:
+A "contingent draw" feature can be computed at three tiers, by which board
+and rack the hypothetical move generation runs against:
 
-1. **Shared, full-rack, current board** — once per position, shared across
-   candidates. Cheapest; blind to leave-specificity and to how the candidate
-   changes the board.
-2. **Per-leave, current board** — per distinct leave (a position has at most
-   a couple hundred). Correct about leave-sufficiency; still blind to
-   self-block and self-created opportunities.
-3. **Per-move, post-move board** — technically correct, **prohibitive**: a
-   full contingent generation per candidate.
+1. **Shared, full rack, current board.** Once per position, shared by every
+   candidate. Cheapest; blind to which tiles a candidate keeps and to how
+   the candidate changes the board.
+2. **Per leave, current board.** Once per distinct leave (a position has at
+   most a couple of hundred). Correct about whether the leave supplies the
+   letters; still blind to a candidate blocking its own follow-up or creating
+   a new one.
+3. **Per move, post-move board.** Correct, and prohibitive: a full contingent
+   generation per candidate.
 
-Tier 1 is acceptable *because* of the recall/precision split: an occasional
+Tier 1 is acceptable because of the recall/precision split: an occasional
 over-credit is caught by the sims downstream.
 
 ## The 27×30 potential map
 
-The core shared feature (tier 1): for each drawable tile `X` (26 letters +
-blank) and each of the 30 lanes, the best move `rack ∪ {X}` can make along
-that lane, **restricted to moves that use `X`**. Two structural points:
+The core tier-1 feature: for each drawable tile `X` (26 letters plus the
+blank) and each of the 30 lanes (15 rows, 15 columns), the best move
+`rack ∪ {X}` can make along that lane, restricted to moves that use `X`.
 
-- **Per-lane is free bookkeeping**: finding the single best move already
-  enumerates every lane, so retaining per-lane bests costs only encoding.
-- **Encode letters + cells + score per entry**, not just a score: the network
-  must check *leave-sufficiency* (do the retained tiles supply the letters?)
-  and *geometric conflict* (does the candidate occupy the contingent play's
-  cells?), and both need the placed letters and cells present.
+- **Per-lane bests cost nothing extra to find.** Finding the single best
+  move already enumerates every lane; keeping each lane's best costs only
+  encoding.
+- **Encode letters, cells and score per entry, not just a score.** The
+  network has to check whether the retained tiles supply the letters and
+  whether the candidate occupies the contingent play's cells. Both need the
+  placed letters and cells.
 
 Weighting entries by the bag's draw probabilities gives a compact
 expected-contingent-score summary.
 
-**Silent-failure limitation**: the best `rack ∪ {X}` move along a lane may
-use tiles the player will not keep, so the per-`(tile, lane)` *maximum* can
-hide exactly the leave-compatible contingency that motivated the feature
-(the six-tile play using both `A`s outranks `ZEIN`). Mitigations: top-k per
-`(tile, lane)`, or bias retention toward moves that consume a scarce
-high-value held tile.
+**Limitation: the maximum can hide the case that matters.** The best
+`rack ∪ {X}` move along a lane may use tiles the player will not keep, so
+the per-(tile, lane) maximum can hide exactly the leave-compatible play that
+motivated the feature (a six-tile play using both `A`s outranks `ZEIN`).
+Mitigations: keep the top k per (tile, lane), or bias retention toward moves
+that consume a scarce high-value tile the player holds.
 
-Cost controls: restrict to moves using the added tile (prunes heavily); lanes
-parallelize; possibly one enriched generation per lane treating the 27 bonus
-tiles as optional rack slots (prototype against the movegen internals before
-accepting a 27× constant); precompute at data-generation time and restrict
-`X` to tiles remaining in the bag.
+**Cost controls.** Restrict to moves that use the added tile (this prunes
+heavily); parallelize over lanes; consider one enriched generation per lane
+that treats the 27 bonus tiles as optional rack slots (prototype it against
+the move generator's internals before accepting a 27× constant); precompute
+at data-generation time; restrict `X` to tiles still in the bag.
 
-## Newly created opportunities: the post-move cross-check delta
+**As implemented on the position evaluation model**, the ladder collapsed.
+That model's input is already post-move (its rack is the leave, its board
+includes the move), so one generation per position yields the tier-3 feature.
+And the 27 per-tile passes became a single generation over
+`rack ∪ {blank}`: a play that uses the extra blank as `L`, rescored at `L`'s
+face value, is the "drew an `L`" play.
 
-A move's value includes board structure it *creates* for the leave to exploit
-(opening an `S`-hook on a triple lane while keeping an `S`) — invisible to
-current-board features. The feature is the **delta** a candidate move makes
-to the board's cross-check sets: sparse (`O(tiles placed)` squares, one
-cross-set per axis), and a property of the specific move, so it rides in the
-move set evaluation model's **per-move** embedding. Complementary to the
-potential map (existing structure vs created structure); the map attaches to
-the shared board encoding, the delta to the per-move half.
+## Created opportunities: the post-move cross-check delta
+
+Part of a move's value is board structure it *creates* for the leave to use,
+such as opening an `S` hook on a triple lane while keeping an `S`. Features
+of the current board cannot see it. The feature is the change a candidate
+makes to the board's cross-check sets. It is sparse (at most two squares per
+placed tile plus two for the word itself, one cross-set per axis) and a
+property of the specific move, so it belongs in the move set evaluation
+model's per-move embedding. It complements the potential map: the map
+describes existing structure and attaches to the shared board encoding; the
+delta describes created structure and attaches to the per-move half.
 
 ## Risks and sequencing
 
-- **Nothing here is measurable without an evaluation bank.** Build a small
-  probe bank of contingent-leave and hook-creation positions and check
-  whether the value model ranks the leave-preserving / hook-opening play
-  correctly; it doubles as a Phase 3 position bank.
-- **Cheap before rich.** Start with the expected-contingent-score scalar plus
-  the cross-check delta; escalate to the full 27×30-with-encoded-moves map
-  (and top-k entries) only if the cheap version shows signal but plateaus —
-  the rich map is significant compute *and* significant relational reasoning
-  to learn.
+- **Nothing here can be judged without an evaluation bank.** Build a small
+  bank of contingent-leave and hook-creation positions and check whether the
+  value model ranks the leave-preserving or hook-opening play correctly.
+- **Cheap before rich.** Start with the expected-contingent-score scalar
+  plus the cross-check delta. Escalate to the full 27×30 map with encoded
+  moves (and top-k entries) only if the cheap version shows signal and then
+  plateaus: the rich map costs significant compute and asks the network for
+  significant relational reasoning.
 
 ## Pointers
 
-- `engine/include/encoding/contingent_map.h` (deleted; see the status note) —
-  the potential map as it was implemented on the position evaluation model,
-  where the ladder collapses: the input state is already post-move (rack =
-  leave, board includes the move), so one generation per position yields the
-  tier-3-correct feature, and the 27 per-tile passes collapse into a single
-  generation over `rack ∪ {blank}` (a play consuming the extra blank
-  designated `L`, rescored at `L`'s face value, is the "drew `L`" play).
-  [input_encoder.h](../../engine/include/encoding/input_encoder.h) owns the row
-  layout it was encoded into.
-- [roadmap.md](../roadmap.md) — the value models and the candidate-selection
-  pipeline; [architecture.md](../architecture.md) — the data pipeline where
-  precomputed features are stored.
-- [lexical_nn.md](../lexical_nn.md) and the experiment docs — the probe-track
-  findings that justify computing lexical facts externally.
+- [input_encoder.h](../../engine/include/encoding/input_encoder.h) owns the
+  row layout a revived map would be encoded into.
+- [roadmap.md](../roadmap.md) covers the value models and the
+  candidate-selection pipeline; [architecture.md](../architecture.md) covers
+  the data pipeline, where precomputed features would be stored.

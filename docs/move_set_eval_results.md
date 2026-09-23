@@ -1,28 +1,35 @@
-# Move set evaluation v1: the A3 curves
+# Move set evaluation v1: the first distillation run
 
-What the first in-variant distillation run measured. These are curves, not a
-verdict. Read them as "how well does the learned filter reproduce the teacher's
-ranking, and by how much does it beat the incumbent" — not as "the filter is
-ready to replace exact evaluation". The sensitivity sweep that was meant to
-convert them into a win-rate bar returned a null
-([evaluation_plan.md](evaluation_plan.md)), so the direct comparison against
-exact evaluation is what settles that question.
+What the first distillation run in the face-up-leaves variant measured.
+
+**Result.** Distillation works: a 6.9M-parameter student ranks candidate moves
+well enough to beat the incumbent static-equity shortlist decisively, with
+recall@1 0.687 vs. 0.563 and 2.8× lower regret@1 on a full-sweep holdout.
+Training plateaued under a flat learning rate, and more epochs on this corpus
+buy nothing.
+
+These are curves, not a verdict on whether the filter can replace exact
+evaluation. The sensitivity sweep meant to convert them into a win-rate bar
+returned a null ([evaluation_plan.md](evaluation_plan.md)), so the direct
+comparison against exact evaluation is what settles that question.
+[move_set_eval_v2_results.md](move_set_eval_v2_results.md) repeats the run
+with per-move placement planes.
 
 ## What the filter is for
 
 Evaluating every legal move with the position evaluation model costs a full
 board re-encode per candidate. The move set evaluation model scores the whole
-candidate set in one pass and hands the top few to the expensive stage, so its
-job is not to be right about values — it is to *not lose the move that
-mattered*. That is why the metrics are recall and regret rather than a loss.
+candidate set in one pass and hands the top few to the expensive stage. Its job
+is therefore not to be right about values but to *not lose the move that
+mattered*, which is why the metrics are recall and regret rather than a loss.
 
-The incumbent it replaces is static equity (score + leave value), the ranking
-every existing engine shortlists by.
+The incumbent it replaces is static equity (score plus leave value), the
+ranking every existing engine shortlists by.
 
 ## The run
 
-A `move_set_eval` dashboard tag with a generate worker and a train worker
-started together, left to complete unattended.
+A `move_set_eval` dashboard tag with a generate worker and a train worker,
+started together and left to complete unattended.
 
 | | |
 |---|---|
@@ -33,30 +40,30 @@ started together, left to complete unattended.
 | held-out set | 26 full-sweep pairs — 10,396 positions / 6,851,783 candidates |
 | student | 6,874,085 params (trunk 192ch × 10 blocks, 4 attention heads) |
 | training | 25 passes (5 while the corpus grew, then 20 budgeted epochs), 772,161,340 rows, ~10.5 h |
-| optimizer | AdamW, lr 1e-3 flat, weight decay 1e-4, 64 positions/batch, `lambda_sd` 0.004 |
+| optimizer | AdamW, lr 1e-3 flat (the trainer had no schedule then), weight decay 1e-4, 64 positions/batch, `lambda_sd` 0.004 |
 
-Generation parameters were the workload defaults: 200 games per cycle, the
-4/4/4/2 stratified quotas with `mid_rank_limit` 32, `sweep_every` 20,
-`sweep_positions_per_game` 2, `sweep_candidate_cap` 1500, greedy HastyBot
-self-play with `random_opening_mean` 2.0.
+Generation parameters were the workload defaults at the time: 200 games per
+cycle, the 4/4/4/2 stratified quotas with `mid_rank_limit` 32, `sweep_every`
+20, `sweep_positions_per_game` 2, `sweep_candidate_cap` 1500, and greedy
+HastyBot self-play with `random_opening_mean` 2.0.
 
 ### Why the held-out slice is the full-sweep one
 
-The stratified training sample carries ~15 candidates per position, so scoring
-the model on it asks only whether it can rank moves it was trained on — it is
-structurally blind to the tail moves a filter exists to catch. The held-out
-pairs are instead labeled in the generator's full-sweep mode: every legal
-candidate of a position, capped at 1500 by static-equity rank, with the true
-legal count stored so truncation stays visible.
+The stratified training sample carries ~15 candidates per position, so
+scoring the model on it asks only whether it can rank moves like those it was
+trained on. It is blind to the tail moves a filter exists to catch. The
+held-out pairs are instead labeled in the generator's full-sweep mode: every
+legal candidate of a position, capped at 1500 by static-equity rank, with the
+true legal count stored so truncation stays visible.
 
 Two consequences matter for reading the numbers:
 
-- Because a sweep is stored in equity-rank order, the incumbent baseline here
-  is the **exact** static-equity ranking rather than a floor. Every
-  student-vs-incumbent comparison below is apples-to-apples.
-- Coverage was 0.930 of legal moves, and 1,386 of 10,396 positions (13.3%) hit
-  the 1500 cap. The truncated positions are the widest ones — two-blank racks,
-  where a filter is most likely to miss — so these numbers are mildly
+- A sweep is stored in equity-rank order, so the incumbent baseline here is
+  the **exact** static-equity ranking rather than an approximation. Every
+  student-vs-incumbent comparison below is like for like.
+- Coverage was 0.930 of legal moves, and 1,386 of 10,396 positions (13.3%)
+  hit the 1500 cap. The truncated positions are the widest ones (two-blank
+  racks, where a filter is most likely to miss), so the numbers are mildly
   optimistic there.
 
 ## Results
@@ -73,21 +80,20 @@ After the final budgeted epoch, on the held-out sweep:
 | regret@5 | **0.00057** | 0.00227 | 4.0× lower |
 | Spearman | **0.875** | 0.802 | |
 
-Recall@K is the fraction of the teacher's top-K that the filter's top-K
-retains. Regret@K is the teacher win-equity forfeited by keeping only the top-K
-— it prices a miss, where recall counts dropping a near-tie the same as
-dropping a uniquely winning move. Both are averaged over positions.
+Recall@K is the fraction of the teacher's top K that the filter's top K
+retains. Regret@K is the teacher win-equity forfeited by keeping only the top
+K. Regret prices a miss, whereas recall counts dropping a near-tie the same
+as dropping a uniquely winning move. Both are averaged over positions.
 
-The regret column is the one to weigh: keeping the filter's top 5 costs
-0.00057 win-equity against the teacher's own best, a quarter of what the
-incumbent's top 5 costs.
+Regret is the column to weigh: keeping the filter's top 5 costs 0.00057
+win-equity against the teacher's own best, a quarter of what the incumbent's
+top 5 costs.
 
 ### The curve
 
-Recall@1 against training progress, with the incumbent flat at 0.563
-throughout. Passes 0–4 ran while the corpus was still growing; the holdout was
-frozen from pass 4 onward, so every budgeted epoch is scored against the same
-slice.
+Recall@1 against training progress; the incumbent is 0.563 throughout. Passes
+0–4 ran while the corpus was still growing. The holdout was frozen from pass 4
+on, so every budgeted epoch is scored against the same slice.
 
 | pass | corpus (positions) | recall@1 | regret@1 | Spearman | `loss_wld` |
 |---|---|---|---|---|---|
@@ -100,29 +106,29 @@ slice.
 | 20 (budget 16) | full | 0.684 | 0.0033 | 0.875 | 0.4944 |
 | 24 (budget 20) | full | 0.687 | 0.0032 | 0.875 | 0.4943 |
 
-The filter passed the incumbent on both recall@1 and regret@1 at pass 1, while
+The filter passed the incumbent on both recall@1 and regret@1 by pass 1, when
 the corpus was still a quarter of its final size and well before the budgeted
 epochs began.
 
 ## What this does and does not establish
 
-**Established.** Distillation works in-variant: a 6.9M-parameter student
-reproduces the teacher's ranking well enough to beat the incumbent shortlist
-decisively on the slice where a filter's failures actually show up. The
-previous shakeout's numbers were provisional — generated out-of-variant against
-a hidden-leave teacher — and this run is their re-derivation.
+**Established.** Distillation works in the face-up-leaves variant: a
+6.9M-parameter student reproduces the teacher's ranking well enough to beat
+the incumbent shortlist decisively on the slice where a filter's failures
+show up. An earlier shakeout run had produced provisional numbers, generated
+outside the variant against a hidden-leave teacher; this run re-derives them.
 
-**Not established.** Whether that margin is *enough*. The sensitivity sweep that
-was to price a recall miss in win-rate terms found no measurable cost at 400
-games per arm ([evaluation_plan.md](evaluation_plan.md)), so 0.687 still has no
-target attached. What settles it is the direct comparison against per-candidate
-exact evaluation at equal rollout budget — a non-inferiority test, since the
-filter is ~13× cheaper per turn.
+**Not established.** Whether that margin is *enough*. The sensitivity sweep
+meant to price a recall miss in win-rate terms found no measurable cost at 400
+games per arm ([evaluation_plan.md](evaluation_plan.md)), so 0.687 still has
+no target attached. What settles it is the direct comparison against
+per-candidate exact evaluation at equal rollout budget: a non-inferiority
+test, since the filter is ~13× cheaper per turn.
 
-**Not comparable.** The earlier shakeout reported recall@1 0.761 against equity
-0.591. That was measured on a *stratified* holdout — ~15 candidates per
-position — and the full-sweep task here is far harder. The two numbers should
-never be put side by side.
+**Not comparable.** The shakeout reported recall@1 0.761 against equity's
+0.591, but on a *stratified* holdout (~15 candidates per position). The
+full-sweep task here is far harder, and the two numbers should never be put
+side by side.
 
 ## Convergence: the plateau is the optimizer's, not the corpus's
 
@@ -137,34 +143,39 @@ Only `loss_score_diff` kept falling (13.9 → 9.7); at `lambda_sd` 0.004 it does
 not affect the ranking.
 
 Training loss flattening *alongside* the held-out metrics is the signal worth
-keeping: data starvation looks like training loss continuing to fall while the
+keeping. Data starvation looks like training loss continuing to fall while the
 holdout stalls, and that is not what happened. The learning rate was pinned at
-1e-3 for all 25 passes and never decayed, so the plateau is evidence about the
-schedule rather than about the corpus being exhausted. Deciding between the two
-needs a decay from this checkpoint, which the headless trainer cannot currently
-do — it builds a fresh model per invocation, so a lower-rate rerun measures
-"train slower from scratch", a different question.
+1e-3 for all 25 passes and never decayed, so the plateau says more about the
+optimizer than about the corpus being exhausted. Telling the two apart needs a
+decay from this checkpoint. The headless trainer
+(`py/scripts/move_set_eval/train.py`) cannot do that, because it builds a
+fresh model per invocation, so a lower-rate rerun would measure "train slower
+from scratch", a different question. The workload trainer now has scheduled
+and schedule-free optimizer arms ([wsd_lr_schedule.md](wsd_lr_schedule.md)).
 
 More epochs on this corpus buy nothing. Whether more data would is untested.
 
 ## Reproducing
 
-Create a `move_set_eval` tag pointing `teacher_tag` at an open-leaves
-position_eval tag, set `face_up_leaves`, add a worker of each role, and
-start them. The trainer waits for `warmup_pairs`, keeps pace with the generator
-while it runs, and spends its `train_epochs` budget on passes over the finished
-corpus, so the tag completes unattended
+Create a `move_set_eval` tag with `teacher_tag` pointing at a face-up-leaves
+position_eval tag, set `face_up_leaves`, add a worker of each role, and start
+them. The trainer waits for `warmup_pairs`, keeps pace with the generator
+while it runs, then spends its `train_epochs` budget on passes over the
+finished corpus, so the tag completes unattended
 ([workloads/move_set_eval.py](../py/scribblez/workloads/move_set_eval.py),
-[move_set_eval/trainer.py](../py/scribblez/move_set_eval/trainer.py)).
+[move_set_eval/trainer.py](../py/scribblez/move_set_eval/trainer.py)). To
+reproduce this run's flat rate on today's trainer, set `optimizer=wsd`,
+`lr_warmup_rows=0`, and an `lr_cycle_rows` longer than the run.
 
-The metrics above are the trainer's own per-pass readouts, recorded to the
-tag's dashboard DB; `move_set_eval/eval.py` defines them and
-`_baseline_ranking` documents exactly what the incumbent column is on each
-kind of slice.
+The metrics above are the trainer's own per-pass readouts, recorded in the
+tag's dashboard database. `py/scribblez/move_set_eval/eval.py` defines them,
+and its `_baseline_ranking` documents exactly what the incumbent column is on
+each kind of slice.
 
 ### An incidental measurement
 
-The two roles share one GPU. With the generator running, training moved
-13.8–14.4k rows/s; once it stopped, 21.2k. Concurrency costs each side roughly
-half again its solo throughput, and generation is a small fraction of a run's
-wall clock, so running them together buys unattendedness rather than speed.
+The two roles shared one GPU. With the generator running, training moved
+13.8–14.4k rows/s; once it stopped, 21.2k. Concurrency slows each side by
+roughly a third relative to running alone, and generation is a small fraction
+of a run's wall clock, so running them together buys unattended operation
+rather than speed.
