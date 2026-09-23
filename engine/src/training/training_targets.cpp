@@ -60,39 +60,37 @@ void write_mask(const FootprintMask& mask, float* out) {
   for (int c = 0; c < kFootprintClasses; ++c) out[c] = mask[c] ? 1.0f : 0.0f;
 }
 
-}  // namespace
-
-// Availability is the unseen pool (100 - board - mover's rack), the same pool
-// the input encoder feeds the model, so the mask agrees with the belief the
-// model can form. ensure_movegen_caches is a no-op when the input encoder has
-// already built the caches.
-void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
+// Readies the sampled board for the footprint masks and returns the tile
+// availability that gates them, written into `pool`; nullptr (ungated) when the
+// context has no POV rack. Availability is the unseen pool (100 - board -
+// mover's rack), the same pool the input encoder feeds the model, so the mask
+// agrees with the belief the model can form. ensure_movegen_caches is a no-op
+// when the input encoder has already built the caches.
+const uint8_t* prepare_mask_inputs(const EncodeContext& v, uint8_t (&pool)[27]) {
   const Board& board = v.enc->board();
   board.ensure_movegen_caches(*v.spec.dict);
-  uint8_t available_counts[27];
-  const uint8_t* available_ptr = nullptr;
-  if (v.pov_rack != nullptr) {
-    compute_unseen_pool(available_counts, board, *v.pov_rack);
-    available_ptr = available_counts;
-  }
+  if (v.pov_rack == nullptr) return nullptr;
+  compute_unseen_pool(pool, board, *v.pov_rack);
+  return pool;
+}
+
+}  // namespace
+
+void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
+  uint8_t pool[27];
+  const uint8_t* available = prepare_mask_inputs(v, pool);
   FootprintMask mask;
-  opp_footprint_mask(board, available_ptr, kMaskTileBudget, /*win_head=*/false, mask);
+  opp_footprint_mask(v.enc->board(), available, kMaskTileBudget, /*win_head=*/false, mask);
   write_mask(mask, out);
 }
 
 // The opponent's ply is gated by the same unseen pool as the opp mask.
 void SelfPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
-  const Board& board = v.enc->board();
-  board.ensure_movegen_caches(*v.spec.dict);
-  uint8_t available_counts[27];
-  const uint8_t* available_ptr = nullptr;
-  if (v.pov_rack != nullptr) {
-    compute_unseen_pool(available_counts, board, *v.pov_rack);
-    available_ptr = available_counts;
-  }
+  uint8_t pool[27];
+  const uint8_t* available = prepare_mask_inputs(v, pool);
   FootprintMask mask;
-  self_footprint_mask(board, kMaskTileBudget, kMaskTileBudget, available_ptr, /*win_head=*/false,
-                      mask);
+  self_footprint_mask(v.enc->board(), kMaskTileBudget, kMaskTileBudget, available,
+                      /*win_head=*/false, mask);
   write_mask(mask, out);
 }
 
