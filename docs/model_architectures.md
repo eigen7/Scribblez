@@ -56,7 +56,8 @@ features by a scalar-derived amount; it cannot gate one feature on another.
 So the trunk cannot express "the opponent holds letter L, so attend to L's
 cross-check plane". Measured consequence: the face-up-leaves model reads
 cross-check masks through a fixed tile-frequency prior and ignores the
-opponent's leave (`py/scripts/position_eval/probe_crosscheck_binding.py`).
+opponent's leave (probed on pre-footprint checkpoints by a since-removed script;
+see [film_conditioning_results.md](film_conditioning_results.md)).
 
 `use_film` adds the missing multiplicative half at both injection sites
 ([FiLM](https://arxiv.org/abs/1709.07871)): alongside the additive term `β`,
