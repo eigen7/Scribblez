@@ -50,9 +50,12 @@ inline Rack three_turn_mover_rack() { return rack_from("DONERST"); }
 
 // The training row the BlockDecoder reconstructs for the three-turn game's
 // sampled turn, untransposed: the pre-move row, or with `post_move` the row
-// after moves[2]. `dict` must be the agent's, for the cross-check planes.
+// after the turn-2 move. That move is moves[2] unless `move2` overrides it
+// (e.g. with an exchange from the DONERST rack). `dict` must be the agent's,
+// for the cross-check planes.
 inline std::vector<float> decode_three_turn_row(const Dictionary& dict,
-                                                std::array<int, 2> initial_scores, bool post_move) {
+                                                std::array<int, 2> initial_scores, bool post_move,
+                                                const Move& move2 = three_turn_moves()[2]) {
   const std::array<Move, 3> moves = three_turn_moves();
   binlog::InitialRacks ir{};
   ir.p0 = rack_from("CATERST");
@@ -63,7 +66,7 @@ inline std::vector<float> decode_three_turn_row(const Dictionary& dict,
   binlog::TurnBlob t1{};
   t1.move = moves[1];
   binlog::TurnBlob t2{};
-  t2.move = moves[2];
+  t2.move = move2;
   const std::vector<char> buf = build_slog(ir, {t0, t1, t2}, kThreeTurnSampledTurn, initial_scores);
 
   binlog::BlockDecoder dec(InputEncodingSpec{&dict});
