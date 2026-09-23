@@ -105,3 +105,11 @@ def test_the_scheduler_parks_the_surveyors_at_the_target(tmp_path):
         ("generate", "target reached: 3 of 3 positions")
     ]
     assert gate_after_tick(tmp_path, target=0, found=3) == [("generate", None)]  # 0: never
+
+
+def test_the_survey_seed_is_fixed_by_the_game_so_a_restart_can_resume(tmp_path):
+    (tmp_path / "123-w1.slog").write_bytes(b"game")
+    seed = blind_spots.survey_seed(tmp_path)
+    assert blind_spots.survey_seed(tmp_path) == seed and 0 <= seed < 2**62
+    (tmp_path / "123-w1.slog").rename(tmp_path / "456-w1.slog")
+    assert blind_spots.survey_seed(tmp_path) != seed

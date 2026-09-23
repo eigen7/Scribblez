@@ -25,7 +25,7 @@ what py/scripts/blind_spots_collect.py turns into a committed examples
 directory.
 """
 
-import random
+import hashlib
 import shutil
 import subprocess
 import time
@@ -84,6 +84,14 @@ def play_game(work_dir: Path, worker_id: str, params: BlindSpotsParams) -> Path:
     return fresh.rename(fresh.with_name(f"{fresh.stem}-{worker_id}.slog"))
 
 
+def survey_seed(work_dir: Path) -> int:
+    """The survey seed for the game in `work_dir`, derived from its .slog name.
+    The tool resumes a partial survey only under the header it started with,
+    seed included, so a run restarted mid-game must pass the same seed."""
+    names = "\n".join(sorted(p.name for p in work_dir.glob("*.slog")))
+    return int.from_bytes(hashlib.blake2b(names.encode(), digest_size=8).digest()) >> 2
+
+
 def run_survey_tool(work_dir: Path, params: BlindSpotsParams, threads: int) -> int:
     """Survey every eligible turn of each game in `work_dir` that has no finished
     survey file yet (a game interrupted mid-survey resumes from its partial
@@ -99,7 +107,7 @@ def run_survey_tool(work_dir: Path, params: BlindSpotsParams, threads: int) -> i
         "--confirm-rollouts", str(params.confirm_rollouts),
         "--confirm-picks", str(params.confirm_picks),
         "--solve-max-unseen", str(params.solve_max_unseen),
-        "--seed", str(random.getrandbits(62)),
+        "--seed", str(survey_seed(work_dir)),
         "--threads", str(threads),
     ]
     # fmt: on
