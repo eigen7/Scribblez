@@ -861,31 +861,29 @@ TEST(EndgameSolver, ContinuationCertificateIsSound) {
             << " class-proven endgames (the rest end with the chosen move)\n";
 }
 
-// At an unlimited budget a spread_matters solve proves every position, and its
-// proven class matches the reference's sign. The two solvers here are
-// configured identically, so the value and move comparisons between them
-// check only determinism across fresh solvers.
+// At an unlimited budget the lexicographic objective (spread_matters: class
+// first, spread as the tie-break) coincides with pure spread maximization,
+// since the spread-optimal line also has the best class. So the solve must
+// prove every position at the brute-force reference's spread-optimal value,
+// its class must be that value's sign, and its move must achieve that value.
 TEST(EndgameSolver, LexicographicMatchesSpreadAtFullBudget) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x1E0C0DE5u);
   for (int i = 0; i < 80; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
-    EndgameSolver lex_solver, spread_solver;
+    EndgameSolver solver;
     const EndgameResult lex =
-      lex_solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
-                       {kBigBudget, kRefDepth, true});
-    const EndgameResult spread =
-      spread_solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
-                          {kBigBudget, kRefDepth, true});
-    ASSERT_EQ(lex.value, spread.value) << "position " << i;
-    ASSERT_TRUE(lex.proven) << "position " << i;
-    const int32_t ref =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {kBigBudget, kRefDepth, /*spread_matters=*/true});
+    const int32_t spread_optimal =
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
-    ASSERT_EQ(lex.proven_class, (ref > 0) - (ref < 0)) << "position " << i;
-    if (!(lex.best == spread.best)) {
-      EXPECT_EQ(forced_move_value(d, p, lex.best, spread_solver), spread.value)
-        << "position " << i << ": divergent best move is not a tie";
-    }
+    ASSERT_TRUE(lex.proven) << "position " << i;
+    ASSERT_EQ(lex.value, spread_optimal) << "position " << i;
+    ASSERT_EQ(lex.proven_class, (spread_optimal > 0) - (spread_optimal < 0)) << "position " << i;
+    EXPECT_EQ(ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
+                                    lex.best, kRefDepth),
+              spread_optimal)
+      << "position " << i << ": the chosen move is not spread-optimal";
   }
 }
 
