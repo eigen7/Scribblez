@@ -14,13 +14,12 @@
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "move_key.h"
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
-#include <cstdio>
 #include <fstream>
 #include <random>
 #include <set>
@@ -28,6 +27,8 @@
 #include <vector>
 
 using namespace scribblez;
+using scribblez::testing::key_set;
+using scribblez::testing::move_key;
 
 namespace {
 
@@ -37,44 +38,6 @@ bool ensure_equity() {
   if (!std::ifstream(leaves).good()) return false;
   HastyEquity::ensure_initialized("NWL23");
   return true;
-}
-
-// A canonical key for a play (placed squares and glyphs, plus score), for
-// checking a move's membership in a generated list.
-std::string move_key(const Move& m) {
-  if (m.type() != MoveType::PLAY) return "PASS";
-  struct Placement {
-    int r, c, code;
-  };
-  std::vector<Placement> tiles;
-  const bool horiz = m.horizontal();
-  uint16_t mask = m.square_mask();
-  int gi = 0;
-  for (int pos = 0; mask; ++pos, mask >>= 1) {
-    if ((mask & 1u) == 0) continue;
-    const int r = horiz ? m.start() : pos;
-    const int c = horiz ? pos : m.start();
-    tiles.push_back({r, c, m.glyph(gi++).code()});
-  }
-  std::sort(tiles.begin(), tiles.end(), [](const Placement& a, const Placement& b) {
-    if (a.r != b.r) return a.r < b.r;
-    return a.c < b.c;
-  });
-  std::string k;
-  char buf[32];
-  for (const auto& t : tiles) {
-    std::snprintf(buf, sizeof(buf), "%d,%d,%d;", t.r, t.c, t.code);
-    k += buf;
-  }
-  std::snprintf(buf, sizeof(buf), "|%d", m.score());
-  k += buf;
-  return k;
-}
-
-std::set<std::string> key_set(const std::vector<Move>& ms) {
-  std::set<std::string> s;
-  for (const auto& m : ms) s.insert(move_key(m));
-  return s;
 }
 
 // Recomputes a finished game's scores from its turn records and checks them

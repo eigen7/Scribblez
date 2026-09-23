@@ -17,6 +17,7 @@
 #include "game/rack.h"
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
+#include "move_key.h"
 
 #include <gtest/gtest.h>
 
@@ -31,6 +32,8 @@
 #include <vector>
 
 using namespace scribblez;
+using scribblez::testing::key_set;
+using scribblez::testing::move_key;
 
 namespace {
 
@@ -43,45 +46,6 @@ Rack rack_from(const std::string& s) {
       r.add(Tile::from_char(c));
   }
   return r;
-}
-
-// A canonical key for a play (placed squares and glyphs, plus score), for
-// comparing move lists regardless of order.
-std::string move_key(const Move& m) {
-  struct Placement {
-    int r, c, code;
-  };
-  std::vector<Placement> tiles;
-  if (m.type() == MoveType::PLAY) {
-    const bool horiz = m.horizontal();
-    uint16_t mask = m.square_mask();
-    int gi = 0;
-    for (int pos = 0; mask; ++pos, mask >>= 1) {
-      if ((mask & 1u) == 0) continue;
-      const int r = horiz ? m.start() : pos;
-      const int c = horiz ? pos : m.start();
-      tiles.push_back({r, c, m.glyph(gi++).code()});
-    }
-  }
-  std::sort(tiles.begin(), tiles.end(), [](const Placement& a, const Placement& b) {
-    if (a.r != b.r) return a.r < b.r;
-    return a.c < b.c;
-  });
-  std::string k;
-  char buf[32];
-  for (const auto& t : tiles) {
-    std::snprintf(buf, sizeof(buf), "%d,%d,%d;", t.r, t.c, t.code);
-    k += buf;
-  }
-  std::snprintf(buf, sizeof(buf), "|%d", m.score());
-  k += buf;
-  return k;
-}
-
-std::set<std::string> key_set(const std::vector<Move>& ms) {
-  std::set<std::string> s;
-  for (const auto& m : ms) s.insert(move_key(m));
-  return s;
 }
 
 bool squares_equal(const Board& a, const Board& b) {
