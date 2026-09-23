@@ -1,29 +1,27 @@
 """Controller-side ingest of a trainer's records into dashboard.db.
 
-The other half of generational/records.py: the dashboard's reconcile pass
-ticks this per task for every role that declares it (RoleSpec.ingest), and it
-writes whatever the trainer has delivered -- the run record into meta, the
-loss weights and the controls' starting values; each generation record into
-metrics, control events and the prediction tables. The trainer never opens
-the database, so wherever it runs, this is the one place its results become
-rows.
+The other half of generational/records.py. The dashboard's reconcile pass
+ticks this per task for every role that declares it (RoleSpec.ingest). The run
+record becomes the meta row, loss weights and the controls' starting values;
+each generation record becomes a metrics row, control events and
+prediction-table rows. The trainer never opens the database, so this is the
+one place its results become rows, wherever it runs.
 
-Every task of a workload is ticked on every pass, including long-finished
-ones, so the pass has to be cheap when nothing is new: the records directory's
-mtime is compared against the last pass's before the database is opened
-(opening applies the schema and commits, which on an archived tag would
-recreate its write-ahead log every few seconds forever). Within a pass, a
-record is written once per file identity (name, mtime, size), kept in the
-database's own ledger table -- a rewritten run.json is re-ingested, an
-unchanged generation record is not touched again.
+Every task is ticked on every pass, long-finished ones included, so a pass
+must be cheap when nothing is new. The records directory's mtime is compared
+with the last pass's before the database is opened, because opening applies
+the schema and commits, which on an archived tag would recreate its
+write-ahead log every few seconds forever. Each record is ingested once per
+file identity (name, mtime, size), tracked in a ledger table in the database:
+a rewritten run.json is ingested again, an unchanged generation record never
+is.
 
-Records are ingested in generation order, oldest first, so the metrics rows
-appear in the order they were trained. A record that cannot be read is
-skipped and retried on later passes: unlike a match result it cannot have
-arrived torn (the sink writes it atomically), so an unreadable one means a
-trainer ahead of this controller's code, which a redeploy fixes. The reverse
-skew -- a trainer on an older bundle still delivering a prediction table this
-controller no longer keeps -- is not an error: the table is left unread.
+Records are ingested oldest generation first, so metrics rows appear in
+training order. A record that cannot be read is skipped and retried on later
+passes. The sink writes records atomically, so an unreadable one is not torn;
+it means a trainer running newer code than this controller, which a redeploy
+fixes. The reverse skew, an older trainer still delivering a prediction table
+this controller has dropped, is not an error: the table is left unread.
 """
 
 import json
@@ -38,9 +36,8 @@ from scribblez.paths import TagPaths
 
 _GENERATION_RECORD = re.compile(r"gen_(\d{6})\.json$")
 
-# records/ directory mtime as of the last pass, per tag root: the cheap "is
-# anything new" test that keeps a finished tag from opening its database
-# every pass. A dashboard restart forgets it and pays one open per tag.
+# records/ directory mtime as of the last pass, per tag root. A dashboard
+# restart forgets it and pays one database open per tag.
 _seen_dir_mtime: dict[Path, int] = {}
 
 
@@ -106,9 +103,9 @@ def ingest(paths: TagPaths, conn) -> list[str]:
 
 
 def _controls_file_current(paths: TagPaths, conn):
-    """A tag whose database predates the controls file has the operator's
-    values in the control table only; publish them once so its trainer keeps
-    running under them rather than its defaults."""
+    """Write the controls file from the database when it is missing. A tag
+    created before the file existed has the operator's values only in the
+    database; this keeps its trainer running under them, not its defaults."""
     if not paths.controls_path.exists():
         write_controls_file(paths, db.read_controls(conn))
 

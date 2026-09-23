@@ -1,29 +1,26 @@
-"""The generate role shared by the generational-training workloads.
+"""The generate role shared by the generational-training workloads
+(position_eval, max_move_per_lane).
 
-A generator is generation-agnostic: each cycle plays one whole .slog chunk of
-HastyBot self-play games into its own subdirectory of the worker's private
-work dir, then hands that directory to a background Deliverer, which delivers
-it to the tag's staging area (a rename for local workers, an upload for cloud
-ones) while the next cycle's generation starts immediately. The generation
-scheduler on the controller host assigns staged chunks to generation
-directories; generators never see generations.
+Generators know nothing about generations. Each cycle plays one .slog chunk of
+self-play games into its own subdirectory of the worker's private work dir and
+hands it to a background Deliverer, which moves it into the tag's staging area
+(a rename for a local worker, an upload for a bucket-delivering one) while the
+next cycle starts. The generation scheduler on the controller then assigns
+staged chunks to generations (scribblez/generational/scheduler.py).
 
-Delivery is deliberately off the generation critical path: on a cloud worker,
-uploading a chunk (an rclone process per file) can take as long as a
-meaningful fraction of the time spent generating it, and none of that upload
-time does useful work if it blocks the next chunk from starting. Each cycle
-gets its own chunk subdirectory (rather than reusing one work dir) so the next
-cycle's files never collide with a chunk still waiting on its delivery.
+Delivery runs off the generation path because on a bucket-delivering worker an
+upload (one rclone process per file) can cost a sizeable fraction of the time
+it took to generate the chunk. Each cycle gets its own subdirectory so its
+files never collide with a chunk still waiting to be delivered.
 
-Chunks always run play_game with seed 0 (the binary draws from
-std::random_device per chunk): a fleet splitting a generation under any
-deterministic seed partition would duplicate games, so distributed corpus
-reproducibility is deliberately not offered.
+play_game always runs with seed 0, which makes the binary seed itself from
+std::random_device. Any deterministic seed partition across a fleet would risk
+two workers playing the same games, so the corpus is deliberately not
+reproducible.
 
-The work dir is wiped on start: a crash mid-cycle may leave a truncated .slog
-(play_game buffers a batch and writes it in one shot), so leftovers are never
-delivered -- a restart loses at most the in-flight chunk and whatever chunks
-were still queued for delivery.
+The work dir is wiped on start. A crash mid-cycle can leave a truncated .slog,
+so leftovers are never delivered; a restart loses at most the in-flight chunk
+and any chunks still queued for delivery.
 """
 
 import queue
@@ -48,10 +45,8 @@ GENERATOR_STATS = StatsSpec(unit="games", phases={"gen_s": "self-play", "upload_
 
 
 def player_spec(params) -> str:
-    # WeirdBot self-play (a diagnostic corpus) puts the leave-forcing bot on both
-    # seats; every other run uses HastyBot. The flag lives only on the
-    # position_eval params, so read it defensively for workloads that share this
-    # generate role without it.
+    # Only position_eval's params carry weirdbot_generation; the other workloads
+    # sharing this role always play HastyBot.
     if getattr(params, "weirdbot_generation", False):
         return "--type=weirdbot"
     return hasty_player_spec(params.hasty_temperature, params.hasty_top_k, endgame=True)
@@ -78,19 +73,16 @@ class DeliveryResult(NamedTuple):
 
 
 class Deliverer:
-    """Delivers finished self-play chunks off the generation critical path.
+    """Delivers finished self-play chunks on a background thread.
 
-    A single background thread drains a FIFO queue of (chunk directory, that
-    cycle's generation time) pairs submitted by the main thread: it delivers
+    The thread drains a FIFO queue of submitted chunk directories: it delivers
     each directory's .slog files through the sink, removes the directory, and
-    posts a DeliveryResult. One thread draining one queue is what keeps
-    deliveries serialized with each other and completing in submission order,
-    so a caller collecting results never has to sort them back into cycle
-    order itself.
+    posts a DeliveryResult. A single thread keeps deliveries serialized and
+    finishing in submission order, so results come back in cycle order.
 
-    A delivery failure (the sink asserts) stops the thread and is re-raised
-    from the next `collect()` or from `drain()` -- surfacing as the runner's
-    failure rather than vanishing silently in the background thread.
+    A delivery failure stops the thread and is re-raised from the next
+    `collect()` or `drain()`, so it fails the runner instead of vanishing in
+    the background.
     """
 
     def __init__(self, sink, worker_id: str):
@@ -107,10 +99,9 @@ class Deliverer:
         self._pending.put((chunk_dir, gen_seconds))
 
     def collect(self) -> list[DeliveryResult]:
-        """Every delivery that has finished since the last call, in the order
-        submitted. Non-blocking: empty when none has finished yet. Raises the
-        background thread's failure, if it hit one delivering any chunk so
-        far (including ones this call doesn't otherwise report)."""
+        """Every delivery finished since the last call, in submission order.
+        Non-blocking. Raises the background thread's failure, if it has hit
+        one."""
         results = []
         while True:
             try:
@@ -122,9 +113,9 @@ class Deliverer:
         return results
 
     def drain(self) -> list[DeliveryResult]:
-        """Block until every chunk submitted so far has finished delivering,
-        then return whatever `collect` had not yet picked up. Call before the
-        runner exits (including on SIGTERM) so nothing submitted is lost."""
+        """Block until every submitted chunk is delivered, then return what
+        `collect` had not yet picked up. Call before the runner exits,
+        including on SIGTERM, so nothing submitted is lost."""
         self._pending.put(None)
         self._thread.join()
         return self.collect()
@@ -157,8 +148,8 @@ def _publish(stats: WorkerStats, results: list[DeliveryResult]):
 
 
 def run_generate(ctx: WorkerContext) -> int:
-    """The generate-role runner: one chunk per cycle, delivered to staging off
-    the generation path."""
+    """The generate-role runner: one chunk per cycle, delivered to staging in
+    the background."""
     p = ctx.params
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     shutil.rmtree(work_dir, ignore_errors=True)

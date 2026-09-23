@@ -1,27 +1,29 @@
-"""The position-evaluation training workload.
+"""The position-evaluation training workload: the teacher model's pipeline.
 
-Three roles on one tag: any number of interchangeable generate workers
-(local/cloud) producing self-play chunks into the tag's staging area, a
-singleton train worker consuming complete generations (sliding window, one
-epoch per generation, per-checkpoint ONNX + dashboard records) -- on this
-machine's GPU, or on a rented GPU machine, where it takes its generations from
-the bucket and delivers its outputs there (docs/plans/cloud_training.md) --
-and a singleton match_eval worker turning exported checkpoints into
-match-play readouts against a fixed opponent (scribblez/match_eval/runner.py).
-The generation scheduler (scribblez/generational/scheduler.py) assigns staged
-chunks to generation directories and paces the generator fleet against the
+Three roles share a tag:
+
+  - generate: any number of interchangeable workers, each delivering HastyBot
+    self-play chunks into the tag's staging area (workloads/selfplay_gen.py).
+  - train: a singleton that trains over a sliding window of complete
+    generations, one epoch per generation, exporting ONNX and dashboard
+    records per generation. It runs on this machine's GPU or on a rented one;
+    a rented trainer reads its generations from the bucket and delivers its
+    outputs there (docs/plans/cloud_training.md).
+  - match_eval: a singleton that plays exported generations against a fixed
+    opponent (scribblez/match_eval/runner.py). It may run on another machine
+    (kind "ssh") so the matches do not compete with training for this host's
+    GPU. The controller assigns its work and ingests its results
+    (scribblez/match_eval/dispatch.py), so the slot needs only a GPU and the
+    worker image, not the exports or the database.
+
+The generation scheduler (scribblez/generational/scheduler.py) moves staged
+chunks into generation directories and paces the generators against the
 trainer's published cursor.
 
-The match_eval slot may sit on another machine (kind "ssh"), which is how the
-eval matches stop competing with training for this host's GPU. Its work is
-assigned and its results ingested by the controller
-(scribblez/match_eval/dispatch.py), so the slot needs neither the exports nor
-the database -- only a GPU and the worker image.
-
-Parameters here are the frozen task params: they define the corpus and the
-model, so every worker on a tag must share them. Live operator knobs
-(DataLoader workers, torch threads) are dashboard.db controls, and per-worker
-resources (threads/vcpus) live on the worker slots.
+The params below are frozen at task creation because they define the corpus
+and the model, which every worker on a tag must share. Knobs the operator may
+change mid-run (DataLoader workers, torch threads) are dashboard controls
+instead, and per-worker resources (threads, vCPUs) belong to the worker slots.
 """
 
 from dataclasses import dataclass
@@ -39,13 +41,12 @@ TRAINER_STATS = StatsSpec(
     unit="rows", phases={"train_s": "train", "eval_s": "eval", "upload_s": "upload"}
 )
 
-# Parameter profiles (WorkloadSpec.profiles): one recipe per trunk, the values
-# the new-tag form and the CLI's --profile start from. Each is a partial
-# override of the dataclass defaults below, so a knob no profile names has the
-# same value under both. The transformer recipe is where a tuning result is
-# promoted once an A/B has shown it (gradient clipping is the standard
-# transformer safeguard the conv tower never needed); the conv recipe is the
-# settings its runs have trained under.
+# Parameter profiles (WorkloadSpec.profiles): one recipe per trunk. Each
+# overrides only some of the dataclass defaults below, so a knob no profile
+# names has the same value under both. A tuning result that an A/B has shown to
+# help the transformer is promoted into its profile; gradient clipping, the
+# standard transformer safeguard, is the first such setting. The conv profile
+# is what conv runs have always trained under.
 PROFILES = {
     TRUNK_TRANSFORMER: {"trunk": TRUNK_TRANSFORMER, "grad_clip": 1.0},
     TRUNK_CONV: {"trunk": TRUNK_CONV},
@@ -63,21 +64,21 @@ class PositionEvalParams:
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
     random_opening_mean: float = param(
         2.0,
-        "open each game with K uniformly-random plies (K ~ round(Exp(mean))) before the "
-        "HastyBots take over, reaching off-policy states; 0 disables",
+        "open each game with K uniformly random plies (K ~ round(Exp(mean))) before the "
+        "HastyBots take over, so the corpus reaches off-policy states; 0 disables",
     )
     face_up_leaves: bool = param(
         True,
-        "play the face-up-leaves variant (docs/roadmap.md) in self-play generation AND "
+        "play the face-up-leaves variant (docs/roadmap.md) in both self-play generation and "
         "match eval, so the model trains and is measured under one information condition",
     )
     weirdbot_generation: bool = param(
         False,
-        "generate the diagnostic WeirdBot corpus: put the leave-forcing WeirdBot on both "
-        "self-play seats instead of HastyBot, making the opponent-leave-letter x cross-check "
-        "conjunction the dominant training signal; off leaves generation unchanged",
+        "generate the diagnostic WeirdBot corpus: the leave-forcing WeirdBot plays both "
+        "self-play seats instead of HastyBot, so the interaction between the opponent's "
+        "leave letters and board cross-checks dominates the training signal",
     )
-    # Match eval (the match_eval role; docs/roadmap.md A1).
+    # Match eval (the match_eval role; docs/evaluation_plan.md).
     match_every_generations: int = param(
         5, "match-eval cadence: play a match for every Nth exported generation; 0 disables"
     )
@@ -89,26 +90,25 @@ class PositionEvalParams:
     )
     match_seed: int = param(
         1,
-        "base game seed for matches; fixed per tag so every generation faces identical deals "
-        "(must be nonzero)",
+        "base game seed for matches, fixed per tag so every generation faces identical deals; "
+        "must be nonzero",
     )
     # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")
-    turns_per_game: int = param(1, "turns sampled per game per generation; 0 = every eligible turn")
+    turns_per_game: int = param(1, "turns trained per game per generation; 0 = every eligible turn")
     max_rows: int = param(0, "stop the trainer after this many rows (0 = run until paused)")
     # Optimization.
     batch_size: int = param(256, "minibatch size")
     optimizer: str = param(
         OPTIMIZER_SCHEDULE_FREE,
-        "optimizer arm (scribblez/generational/optim.py): 'wsd' is AdamW on the rows-clock "
-        "warmup-stable-decay schedule, 'schedule_free' is AdamWScheduleFree -- no schedule, "
-        "no horizon to pick, every generation's export deployable",
+        "optimizer arm (scribblez/generational/optim.py): 'wsd' is AdamW on a "
+        "warmup-stable-decay schedule over rows trained; 'schedule_free' is AdamWScheduleFree, "
+        "which needs no schedule or horizon and makes every generation's export deployable",
         choices=OPTIMIZERS,
     )
     lr: float = param(
         0.0,
-        "learning rate -- the peak the warmup-stable-decay schedule decays away from under the "
-        "wsd arm, the constant the averaged iterate is taken around under schedule_free; "
+        "learning rate: the schedule's peak under wsd, the constant rate under schedule_free; "
         "0 = the arm's own default",
     )
     lr_warmup_rows: int = param(
@@ -118,7 +118,7 @@ class PositionEvalParams:
         2_000_000,
         "period of the stable->decay->restart LR cycle, in positions trained "
         "(~25 default generations; the last fifth of each cycle decays); "
-        "unused by the schedule_free arm, which has no cycle",
+        "unused by schedule_free",
     )
     weight_decay: float = param(1e-4, "AdamW weight decay")
     grad_clip: float = param(
@@ -129,17 +129,16 @@ class PositionEvalParams:
     trunk_channels: int = param(192, "trunk width")
     use_film: bool = param(
         False,
-        "FiLM-style multiplicative conditioning at the trunk's scalar/global-context "
-        "injection sites (scalars emit a per-channel gain alongside the additive bias); "
-        "off is the additive-injection baseline",
+        "FiLM conditioning where the trunk injects scalar and global context: the scalars "
+        "emit a per-channel gain alongside the additive bias; off injects additively only",
     )
     trunk: str = param(
         TRUNK_CONV,
-        "trunk tower (scribblez/spatial_trunk.py): 'conv' is the residual conv tower; "
-        "'transformer' is the KataGo-style nested-bottleneck transformer tower over the "
-        "cells as tokens plus 27 tile-supply register tokens (rack / unseen pool / opp "
-        "leave), so the placement heads can gate a square's cross-checks on whether "
-        "those tiles are available",
+        "trunk tower (scribblez/spatial_trunk.py): 'conv' is a residual conv tower; "
+        "'transformer' is a KataGo-style nested-bottleneck transformer over the board cells "
+        "plus 27 tile-supply register tokens (one per tile type, carrying its rack and "
+        "unseen-pool counts, and the opponent's leave under face-up leaves), so the placement "
+        "heads can gate a square's cross-checks on whether the tiles that fit it are available",
         choices=TRUNKS,
     )
     transformer_mid_channels: int = param(
@@ -150,10 +149,18 @@ class PositionEvalParams:
     )
     transformer_ffn_channels: int = param(512, "transformer trunk: SwiGLU FFN hidden width")
     # Loss.
-    lambda_wld: float = param(1.0, "WLD (value) loss weight; drop to isolate other heads")
+    lambda_wld: float = param(
+        1.0, "win/draw/loss (value) loss weight; lower it to isolate other heads"
+    )
     lambda_sd: float = param(0.0002, "score-diff loss weight")
-    lambda_next_placement: float = param(0.5, "plays-head footprint loss weight (opp and self)")
-    lambda_win_placement: float = param(0.5, "win-head footprint loss weight (opp and self)")
+    lambda_next_placement: float = param(
+        0.5, "loss weight of the next-move placement heads (opp and self footprints)"
+    )
+    lambda_win_placement: float = param(
+        0.5,
+        "loss weight of the win placement heads, which predict Pr[footprint and that player "
+        "wins] (opp and self)",
+    )
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
 
@@ -161,8 +168,8 @@ class PositionEvalParams:
 def fetch_train_deps(params):
     """Runtime data the trainer needs beyond the bundle: the engine's default
     lexicon (the FFI session loads it before the model is built) and the
-    position-evaluation eval datasets. Macondo's strategy tables it does not
-    need -- nothing here plays a move."""
+    position-evaluation eval datasets. Not Macondo's strategy tables: the
+    trainer plays no moves."""
     from cloud import worker_deps
 
     worker_deps.fetch_lexicon(worker_deps.DEFAULT_LEXICON)

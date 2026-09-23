@@ -1,13 +1,12 @@
-"""The pair-producing generate role's shared machinery: the cycle loop and the
-delivery of .slog + same-stem-sidecar pairs (.sobs for kill_test, .mset for
-move_set_eval) to a tag's data store.
+"""Pair stores: the shared generate loop and store readers of the workloads
+whose unit of output is a .slog plus a same-stem sidecar (.sobs for kill_test,
+.mset for move_set_eval, .mset plus .sobs for evidence_trajectories).
 
-Both members of a pair get the same -<worker_id> stem suffix, so names stay
-globally unique across workers while preserving the stem-based pair matching
-downstream readers rely on. The sidecar is delivered before its .slog: a .slog
-missing its sidecar reads as pending work downstream, while an orphaned
-sidecar is inert -- so the store only ever presents complete pairs plus inert
-leftovers.
+Every member of a pair gets the same -<worker_id> stem suffix on delivery, so
+names are unique across workers and readers can still match pairs by stem.
+Sidecars are delivered before their .slog. A .slog without its sidecar would
+read downstream as pending work, while a sidecar without its .slog is inert,
+so an interrupted delivery leaves only complete pairs plus inert leftovers.
 """
 
 import time
@@ -25,12 +24,11 @@ def deliver_pairs(
     dest_dir: str,
     extra_sidecar_exts: tuple[str, ...] = (),
 ) -> tuple[int, int, float]:
-    """Deliver every complete .slog/sidecar pair in `out_dir` (not just the
-    current cycle's -- a restarted worker flushes leftovers too) to the tag's
-    `dest_dir` store. A pair is complete when its `sidecar_ext` member exists;
-    `extra_sidecar_exts` members ride along when present (delivered first, so
-    they are never the missing member of an already-complete-looking pair).
-    Returns (pairs, bytes, seconds)."""
+    """Deliver every complete pair in `out_dir` to the tag's `dest_dir` store,
+    including any a previous run left behind. A pair is complete when its
+    `sidecar_ext` member exists. `extra_sidecar_exts` members go along when
+    present, delivered first so they are never what a complete-looking pair is
+    missing. Returns (pairs, bytes, seconds)."""
     moved, nbytes, t0 = 0, 0, time.monotonic()
     for sidecar in sorted(out_dir.glob(f"*{sidecar_ext}")):
         slog = sidecar.with_suffix(".slog")
@@ -49,19 +47,18 @@ def run_pair_generate(
     target_pairs: int = 0,
     extra_sidecar_exts: tuple[str, ...] = (),
 ) -> int:
-    """The generate-role loop shared by the pair-producing workloads: flush any
-    completed pairs a previous run left undelivered, then alternate
-    `run_cycle(work_dir, params, threads) -> (returncode, phases)` with pair
-    delivery until max_cycles, `target_pairs`, or SIGTERM. `phases` is the
-    cycle's per-phase timing sample (the role's StatsSpec keys), to which the
-    delivery time is appended as `upload_s`; a nonzero cycle returncode ends
-    the run with it.
+    """The generate-role loop shared by the pair-producing workloads.
 
-    `target_pairs` (0 = unbounded) is a size the store is grown to rather than a
-    count this worker produces: it is read from the store through the sink
-    (the tag's data tree, or the bucket's listing of it), so restarting a
-    worker resumes toward the same total instead of starting over, and
-    several workers on one tag converge on it together.
+    Flushes pairs a previous run left undelivered, then alternates
+    `run_cycle(work_dir, params, threads) -> (returncode, phases)` with
+    delivery until max_cycles, `target_pairs`, or SIGTERM. `phases` holds the
+    cycle's timings keyed as in the role's StatsSpec; the delivery time is
+    added as `upload_s`. A nonzero returncode ends the run with that code.
+
+    `target_pairs` (0 = unbounded) is a size for the whole store, not a count
+    for this worker. It is checked against the store as the sink sees it (the
+    tag's data tree, or the bucket's listing of it), so a restarted worker
+    resumes toward the same total and several workers on one tag stop together.
     """
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -99,33 +96,29 @@ def run_pair_generate(
 
 
 def complete_pairs(store_dir: str | Path, sidecar_ext: str) -> list[Path]:
-    """The `sidecar_ext` files in a store whose companion .slog is present,
-    sorted. Every consumer needs both halves -- the sidecar, and the replay
-    the inputs are recomputed from -- and a store can hold an orphaned sidecar
-    (see the module docstring)."""
+    """The `sidecar_ext` files in a store whose .slog is present, sorted.
+    Consumers need both halves (the sidecar, and the .slog replay the inputs
+    are recomputed from), and a store can hold orphaned sidecars."""
     store_dir = Path(store_dir)
     return sorted(f for f in store_dir.glob(f"*{sidecar_ext}") if f.with_suffix(".slog").exists())
 
 
 def count_pairs(store_dir: Path, sidecar_ext: str) -> int:
-    """Pairs in a tag's store, by counting sidecars. A delivery interrupted
-    between a pair's two members can leave an orphaned sidecar briefly counted
-    here; it is inert to every consumer, so the count stays a progress reading
-    rather than a completeness guarantee."""
+    """Pairs in a tag's store, counted by sidecar. An orphaned sidecar is
+    counted too, so this is a progress reading, not a count of usable pairs
+    (complete_pairs)."""
     return sum(1 for _ in store_dir.glob(f"*{sidecar_ext}")) if store_dir.is_dir() else 0
 
 
 def split_pair_stems(stems: list[str], holdout_every: int) -> tuple[list[str], list[str]]:
     """(train, holdout) stems: about one in `holdout_every` is held out.
 
-    File-level (whole pairs) because position-level splits leak through shared
-    game prefixes, and decided by a hash of the stem rather than by a position
-    in the list -- like move_set_eval.sweep_pair, and for a sharper reason
-    here. A trainer re-takes this split as the store grows, so an assignment
-    that depended on where a stem sat in the sorted list would move pairs
-    between the sides whenever one arrived out of order (two generate workers
-    interleave their deliveries), and a pair that changed sides is a pair
-    trained on and then scored as held out.
+    The split is by whole pair because a position-level split leaks through
+    the game prefixes positions share. Each stem's side is a hash of the stem,
+    not its place in the sorted list: a trainer re-takes the split as the store
+    grows, and with several generate workers interleaving deliveries, a
+    list-position rule would move pairs between sides. A pair that changes
+    sides is one that was trained on and then scored as held out.
     """
     ordered = sorted(stems)
     if holdout_every <= 0:
@@ -136,36 +129,28 @@ def split_pair_stems(stems: list[str], holdout_every: int) -> tuple[list[str], l
     return train, holdout
 
 
-# How long the store must sit untouched before a tag that declared no
-# generation size is taken to be done. A generation cycle is 200 self-play
-# games plus labeling -- minutes -- and a training pass over an early, small
-# corpus is far quicker, so a single quiet pass says only that the pass fell
-# between two deliveries.
+# How long the store must go without a new sidecar before a tag with no
+# target_pairs is taken to be done. A generate cycle (a self-play batch plus
+# labeling) takes minutes, and a training pass over an early, small corpus is
+# far quicker, so one pass without a delivery proves nothing.
 QUIET_SECONDS = 900
 
 
 class CorpusClock:
-    """Decides when a tag's pair store has stopped growing -- the point from
-    which a training pass is over the whole corpus and may spend the epoch
-    budget.
+    """Decides when a tag's pair store has stopped growing: from then on a
+    training pass covers the whole corpus and may spend the epoch budget.
 
-    A tag with a declared `target_pairs` is answered by the store reaching it,
-    and by nothing having arrived on the pass that saw it: a second generate
-    worker mid-cycle when the first crossed the target still has pairs to
-    deliver, and counting the budget from before they land would score the
-    run's epochs against two different holdouts.
+    With `target_pairs` set, the store is final once it holds that many
+    complete pairs and the current pass absorbed nothing new. The second
+    condition matters when several generate workers run: one that was
+    mid-cycle when another crossed the target still delivers its pairs, and
+    starting the budget before they land would score the run's epochs against
+    two different holdouts.
 
-    With no declared size there is no end to read, so growth is judged from
-    when the store was last written: a corpus whose newest sidecar is older
-    than QUIET_SECONDS has no generator behind it, and one being delivered
-    into never is. That is a property of the store rather than of this
-    worker's own history, so it reads the same on a fresh start, mid-run, and
-    after a restart -- none of which have watched the generator from the
-    beginning.
-
-    Complete pairs are counted the way every other reader of the store counts
-    them (complete_pairs): a sidecar whose .slog has not landed yet is not one
-    a trainer can use, and delivery writes the sidecar first.
+    Without a target, the store is final once its newest sidecar is older than
+    QUIET_SECONDS. That is a property of the store, not of this trainer's
+    history, so it answers the same on a fresh start, mid-run, or after a
+    restart.
     """
 
     def __init__(self, store: Path, target_pairs: int, sidecar_ext: str):

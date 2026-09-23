@@ -1,13 +1,12 @@
 """The trainer's record stream and the operator's controls file: how a train
 role talks to the controller without touching dashboard.db.
 
-A trainer emits immutable, generation-keyed records through its results sink,
-and the controller's ingest tick (train_ingest.py) writes them into the tag's
-dashboard.db -- the split match eval already uses for its results
-(match_eval/dispatch.py), applied to training. The trainer is then the same
-process wherever it runs: on this machine the sink is a rename into the tag
-root, on a rented machine it is an upload; and the database has exactly one writer, the
-dashboard server.
+A trainer emits immutable, generation-keyed records through its sink, and the
+controller's ingest tick (train_ingest.py) writes them into the tag's
+dashboard.db. The trainer is then the same code wherever it runs (on this
+machine the sink renames into the tag root, on a rented one it uploads), and
+the database has exactly one writer, the dashboard server. Match eval
+delivers its results the same way (match_eval/dispatch.py).
 
 Records, under the tag's records/ directory (paths.py names them):
 
@@ -25,13 +24,12 @@ Records, under the tag's records/ directory (paths.py names them):
   gen_NNNNNN.npz   the per-dataset-position prediction arrays, keyed
                    "<table>/<array>" (dashboard/db.py's PRED_TABLES).
 
-Controls travel the other way as one file, controls.json at the tag root:
-the dashboard writes every control's current value there when the operator
-sets one, and the trainer reads it at its natural cadence (once per
-generation) through the same sink. A missing file or key means the trainer's
-own default.
+Controls travel the other way as one file, controls.json at the tag root. The
+dashboard rewrites it with every control's current value whenever the
+operator sets one, and the trainer reads it through its sink once per
+generation. A missing file or key means the trainer's own default.
 
-Torch-free, like everything a runner shares with the controller.
+Torch-free, since the controller imports it too.
 """
 
 import json
@@ -70,9 +68,9 @@ class TrainRecorder:
     def publish_run(
         self, tag: str, params: dict, model_params: int, loss_weights: dict, controls: dict
     ):
-        """The run's config (the Info tab, the Loss tab's stacking weights,
-        the Controls tab's starting values). Idempotent; call again to
-        re-stamp."""
+        """The run's config, feeding the Info tab, the Loss tab's stacking
+        weights and the Controls tab's starting values. Idempotent; call again
+        to re-stamp."""
         self._sink.push_json(
             RUN_RECORD_REL,
             {
@@ -85,7 +83,7 @@ class TrainRecorder:
         )
 
     def control_event(self, positions: int, name: str, value: float):
-        """A control (or the LR schedule's phase) changed at `positions` rows
+        """A control, or the LR schedule's phase, changed at `positions` rows
         trained. Held until the next generation's record carries it."""
         self._events.append(
             {"positions": int(positions), "name": name, "value": float(value), "t": time.time()}
@@ -94,19 +92,18 @@ class TrainRecorder:
     def commit_generation(
         self, generation: int, positions: int, metrics: dict, preds: dict | None = None
     ):
-        """Deliver a trained generation: `metrics` is its scalar row (the
-        `positions` rows-clock included), `preds` maps a PRED_TABLES name to
-        that table's arrays. Call once the generation's other outputs are in
-        place -- this record is what says they are."""
+        """Deliver a trained generation's record. `metrics` is its scalar row;
+        `preds` maps a PRED_TABLES name to that table's arrays. Call only once
+        the generation's other outputs are in place: this record is the commit
+        marker that says they are."""
         self.deliver_staged(self.stage_generation(generation, positions, metrics, preds))
 
     def stage_generation(
         self, generation: int, positions: int, metrics: dict, preds: dict | None = None
     ) -> "StagedGeneration":
-        """The first half of commit_generation, for a trainer that delivers
-        off its training thread: take the record and the prediction arrays
-        as they are now (the control events held so far go with this
-        generation and are cleared), leaving only the pushes for
+        """The first half of commit_generation, for a trainer that delivers off
+        its training thread: snapshot the record and prediction arrays now,
+        claiming the control events held so far, and leave the pushes to
         deliver_staged."""
         record = {
             "generation": int(generation),
@@ -119,8 +116,7 @@ class TrainRecorder:
         return StagedGeneration(generation, record, _preds_file(preds) if preds else None)
 
     def deliver_staged(self, staged: "StagedGeneration"):
-        """The pushes: the prediction arrays, then the record that names
-        them."""
+        """Push the prediction arrays, then the record that names them."""
         if staged.preds_file is not None:
             self._sink.push_file(staged.preds_file, generation_preds_rel(staged.generation))
         self._sink.push_json(generation_record_rel(staged.generation), staged.record)

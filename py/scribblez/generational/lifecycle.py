@@ -1,20 +1,18 @@
 """Generation lifecycle: on-disk bookkeeping for generational training.
 
-A *generation* is one batch of self-play games in its own directory under a
-tag's data/generations/; the frozen held-out test split (data/test/) is filled
-through the same machinery. The trainer trains over a sliding window of the
-most recent complete generations; older ones are evicted. This module owns the
-directory manifests, the training-window selection, eviction, and the tiny
-train_state.json cursor the trainer publishes -- so producers (the generation
-scheduler filling directories from staged chunks) and the consumer (the
-trainer) coordinate entirely through these files.
+A generation is one batch of self-play games in its own directory under the
+tag's data/generations/. The trainer trains over a sliding window of the most
+recent complete generations and evicts older ones. This module owns the
+per-directory manifests, window selection, eviction, and the small
+train_state.json cursor the trainer publishes. The scheduler, which fills
+generations from staged chunks, and the trainer, which consumes them,
+coordinate entirely through these files.
 
-The manifest is the authority for a directory's status: completeness is a
-recorded fact (status + committed game count), never inferred from a file
-glob -- and so is a complete generation's publication to the results bucket
-(the scheduler's publish hook, for a trainer running elsewhere). Everything
-here reads manifests only (no .slog header I/O), so it stays cheap and free
-of the C++ loader.
+The manifest is the authority on a directory's status. Completeness (status
+plus committed game count) and publication to the results bucket are recorded
+facts, never inferred from a file listing. Everything here reads manifests
+only, never .slog headers, so it stays cheap and independent of the C++
+loader.
 
 See docs/position_eval_workload.md for the surrounding protocol.
 """
@@ -62,8 +60,8 @@ def read_manifest(gen_dir: Path) -> dict | None:
 
 
 def write_manifest(gen_dir: Path, manifest: dict):
-    """Write the manifest atomically (tmp file + os.replace) so a crash never
-    leaves a half-written manifest that would misclassify the directory."""
+    """Write the manifest atomically, so a crash never leaves a half-written
+    one that would misclassify the directory."""
     gen_dir.mkdir(parents=True, exist_ok=True)
     tmp = gen_dir / (MANIFEST_NAME + ".tmp")
     tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True))
@@ -92,8 +90,9 @@ def open_generation(paths: TagPaths, index: int, *, target_games: int) -> Path:
 
 
 def update_committed(gen_dir: Path, committed_games: int):
-    """Record the directory's committed game count (display/bookkeeping; the
-    scheduler recomputes it from file headers, so a stale value self-heals)."""
+    """Record the directory's committed game count, for display. The scheduler
+    recomputes it from .slog headers every tick, so a stale value heals
+    itself."""
     manifest = read_manifest(gen_dir)
     if manifest is None:
         raise FileNotFoundError(f"no manifest to update in {gen_dir}")
@@ -103,8 +102,8 @@ def update_committed(gen_dir: Path, committed_games: int):
 
 
 def mark_complete(gen_dir: Path, committed_games: int):
-    """Flip the directory's manifest to `complete`, recording the authoritative
-    committed game count. Raises if there is no manifest to update."""
+    """Mark the directory complete with its final committed game count. Raises
+    if there is no manifest to update."""
     manifest = read_manifest(gen_dir)
     if manifest is None:
         raise FileNotFoundError(f"no manifest to complete in {gen_dir}")
@@ -138,8 +137,7 @@ def is_published(gen_dir: Path) -> bool:
 
 
 def list_generation_indices(paths: TagPaths) -> list[int]:
-    """Sorted indices of every generation directory present (complete or not).
-    Matches the gen_<NNNNNN> naming produced by TagPaths.generation_dir."""
+    """Sorted indices of every generation directory present, complete or not."""
     root = paths.generations_dir
     if not root.is_dir():
         return []
@@ -173,10 +171,9 @@ def window_dirs(paths: TagPaths, latest_index: int, window: int) -> list[Path]:
 
 
 def evict_beyond_window(paths: TagPaths, latest_index: int, window: int) -> list[int]:
-    """Delete complete generations older than the window ending at `latest_index`,
-    returning the evicted indices. Never touches partial generations or any
-    generation past `latest_index` (a fill in progress). `window <= 0` evicts
-    nothing."""
+    """Delete complete generations older than the window ending at
+    `latest_index`, returning their indices. Never touches incomplete
+    generations or any past `latest_index`. `window <= 0` evicts nothing."""
     if window <= 0:
         return []
     complete = complete_indices_upto(paths, latest_index)
@@ -204,8 +201,8 @@ def read_train_state(paths: TagPaths) -> dict:
 
 
 def write_train_state(paths: TagPaths, state: dict):
-    """Atomically publish the trainer's cursor. The generation scheduler and
-    the dashboard read this instead of parsing the torch checkpoint."""
+    """Atomically publish the trainer's cursor, which the scheduler and the
+    dashboard read instead of loading the torch checkpoint."""
     path = paths.train_state_path
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")

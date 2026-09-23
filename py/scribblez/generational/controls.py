@@ -1,21 +1,21 @@
-"""Learning-rate schedule and live operator controls shared by the generational
+"""The warmup-stable-decay LR schedule and the live CPU controls shared by the
 trainers.
 
-Every generational trainer (position evaluation, move-set evaluation,
-max-move-per-lane) drives its learning rate from the same rows-clock schedule
-(WsdLrController) and exposes the same dashboard-tunable CPU knobs -- C++
-DataLoader workers and torch intra-op threads -- read from the tag's controls
-file (generational/records.py), which the dashboard keeps across restarts.
-Game-generation capacity is deliberately not a control here: generation
-belongs to the generator worker fleet, sized per worker slot from the master
-dashboard.
+The "rows-clock" is the count of training rows seen so far. The WSD schedule
+is a pure function of it, which is what lets a resumed trainer pick up the
+schedule from its checkpoint cursor alone. The evidence and max_move_per_lane
+trainers run it directly (WsdLrController); position_eval and move_set_eval
+reach it through the `wsd` optimizer arm (optim.py).
 
-The CPU controller reads its controls once per generation, applies them, and
-logs each change as a rows-clock control event so the metric plots can annotate
-where a knob moved; the LR schedule logs its phase boundaries the same way.
-Events go to the trainer's recorder, which delivers them with the next
-generation's record. The task-specific trainers own only their model, loss,
-and evaluation.
+The CPU controls (C++ DataLoader workers, torch intra-op threads) are knobs
+the operator can move mid-run from the dashboard's Controls tab. They reach
+the trainer through the tag's controls file (records.py), read once per
+generation. Generation capacity is not a control: it belongs to the generator
+fleet, sized per worker slot.
+
+Both the CPU controller and the LR schedule log changes as rows-clock control
+events, so the metric plots can mark where a knob moved or a phase began. The
+events travel with the next generation's record.
 """
 
 from __future__ import annotations
@@ -56,11 +56,10 @@ class WsdSchedule:
     """Warmup-stable-decay learning rate with periodic restarts, as a pure
     function of the rows-clock.
 
-    An open-ended self-play run has no known horizon, so a single end-of-run
-    decay has no trigger point; instead the stable/decay pair repeats every
-    `cycle_rows`, giving a well-annealed checkpoint per cycle and then a warm
-    restart back to the peak (this project's own adaptation of WSD to the
-    continual setting, structurally like SGDR warm restarts with WSD's tail).
+    An open-ended self-play run has no known horizon to time a single final
+    decay against. Instead the stable/decay pair repeats every `cycle_rows`,
+    giving a well-annealed checkpoint at the end of each cycle followed by a
+    warm restart to the peak: SGDR-style restarts with WSD's decay tail.
 
     With W = warmup_rows, C = cycle_rows, R = W // 4 and t = (rows - W) mod C:
       rows < W                 warmup    linear 0 -> lr
@@ -116,15 +115,12 @@ class WsdSchedule:
 
 class WsdLrController:
     """Serves the WsdSchedule as a trainer's per-batch lr_fn and records its
-    phase boundaries as rows-clock control events.
+    phase boundaries as control events.
 
-    Nothing here is persisted: the schedule is a function of `rows_trained`,
-    which the generational checkpoint already carries, so a resume re-derives
-    everything from the cursor. `.current` is the rate applied to the most
-    recent batch, which is what the trainers' end-of-generation log line and
-    metrics row report. Phase crossings are detected per batch and logged at
-    the exact rows position; the phase is initialised from the resume cursor so
-    a restart mid-phase logs nothing spurious."""
+    Nothing here is persisted: a resume re-derives everything from the
+    checkpoint's `rows_trained`. `current` is the rate applied to the most
+    recent batch, which the metrics row reports. The phase starts from the
+    resume cursor, so a restart mid-phase logs no spurious crossing."""
 
     def __init__(self, recorder, schedule: WsdSchedule, rows_trained: int):
         self._recorder = recorder
@@ -147,8 +143,8 @@ class WsdLrController:
 
 
 def default_controls() -> dict[str, int]:
-    """The CPU-thread controls' starting values on this machine: what a run
-    publishes for the Controls tab to show until the operator moves them."""
+    """The CPU-thread controls' starting values on this machine, shown on the
+    Controls tab until the operator moves them."""
     return {
         CONTROL_DATALOADER_WORKERS: DEFAULT_DATALOADER_WORKERS,
         CONTROL_TORCH_THREADS: torch.get_num_threads(),
@@ -156,13 +152,13 @@ def default_controls() -> dict[str, int]:
 
 
 class CpuController:
-    """Serves the live CPU-thread controls -- C++ DataLoader workers and PyTorch
-    intra-op threads -- refreshed once per generation (the natural point to
-    retune, since the dataset is rebuilt there). `read_controls()` returns the
-    operator's current values (records.read_controls over the trainer's sink);
-    a control it lacks is at its default. torch's thread count is applied
-    here; the DataLoader count is read by the dataset builder via the
-    property. Changes are recorded as rows-clock control events."""
+    """Serves the live CPU-thread controls, refreshed once per generation: the
+    natural point to retune, since the dataset is rebuilt there.
+
+    `read_controls()` returns the operator's current values (typically
+    records.read_controls over the trainer's sink); a missing control keeps its
+    default. The torch thread count is applied here; the dataset builder reads
+    `dataloader_workers`."""
 
     def __init__(self, recorder, read_controls):
         self._recorder = recorder

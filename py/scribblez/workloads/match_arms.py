@@ -1,17 +1,17 @@
-"""The match-arms workload: a batch of named agent configurations, each played
-against one fixed opponent under the shared match discipline (roadmap A4/E2).
+"""The match-arms workload: several named agent configurations ("arms"), each
+played against one fixed opponent under the shared match discipline
+(docs/evaluation_plan.md).
 
-A tag is one experiment: its frozen params name the arms (player-0 specs), the
-opponent, and the pair budget, and every arm shares the same base seed, so the
-engine's --paired mode gives cross-arm common random numbers -- every arm faces
+A tag is one experiment. Its frozen params name the arms (player-0 specs), the
+opponent, and the pair budget. Every arm uses the same base seed, so the
+engine's --paired mode gives common random numbers across arms: each faces
 identical deals, and per-arm scores differ only by what the arms do with them.
-The A4 sensitivity sweep (neural-sim --sim-top-k / --drop-best-prob arms) and
-the move-set-evaluation agent's baseline comparisons are both just arm lists.
+A parameter sweep of one agent and a comparison of agents against baselines
+are both just arm lists.
 
-The singleton arms role plays one unmeasured arm per cycle and writes its
-match_arm row; a restart (or the reconciler's respawn of an exited worker)
-skips the arms already measured, so finishing the batch makes further respawns
-cheap no-ops (the pair_store idempotency shape).
+The singleton arms role plays one unmeasured arm per cycle and records its
+result in the tag's dashboard.db. A restarted or respawned worker skips the
+arms already measured, so once the batch is done a respawn exits at once.
 """
 
 from dataclasses import dataclass
@@ -30,13 +30,13 @@ class Arm:
 
 def parse_arms(text: str) -> list[Arm]:
     """Parse the `arms` param: semicolon-separated `name=<player spec>` entries,
-    each split on its FIRST '=' only, since player specs contain '=' themselves
-    (e.g. "k5=--type=neural-sim --sim-top-k=5"). Raises ParamsError on a
-    malformed entry or a duplicate or empty name -- surfaced at task creation,
-    where params freeze; a bad string must not become a permanently wedged tag
-    the runner rediscovers every cycle. An empty string is a valid empty
-    experiment (params must stay default-constructible for the registry
-    contract); the runner then simply has nothing to measure.
+    each split on its first '=' only, since player specs contain '=' themselves
+    (e.g. "k5=--type=neural-sim --sim-top-k=5").
+
+    Raises ParamsError on a malformed entry or a duplicate or empty name, so a
+    bad string fails task creation instead of wedging the tag's runner. An
+    empty string is a valid experiment with nothing to measure: the params
+    dataclass must be constructible from its defaults.
     """
     arms: list[Arm] = []
     errors: list[str] = []
@@ -70,7 +70,8 @@ class MatchArmsParams:
     opponent: str = param("--type=sim", "the fixed opponent's --player spec, shared by every arm")
     pairs_per_arm: int = param(200, "mirrored game pairs played per arm")
     round_pairs: int = param(
-        25, "pairs per play_game invocation (the granularity of progress lines and SIGTERM loss)"
+        25,
+        "pairs per play_game run: the granularity of progress lines, and the most a SIGTERM loses",
     )
     seed: int = param(
         1,
@@ -78,8 +79,8 @@ class MatchArmsParams:
     )
     face_up_leaves: bool = param(True, "play the face-up-leaves variant (docs/roadmap.md)")
 
-    # Frozen params are validated where they are created (task creation, CLI,
-    # worker env), so a bad experiment definition can never reach a runner.
+    # Runs wherever params are created (task creation, CLI, worker env), so a
+    # bad experiment definition never reaches a runner.
     def __post_init__(self):
         parse_arms(self.arms)
         if self.seed == 0:
@@ -92,7 +93,7 @@ class MatchArmsParams:
 
 def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
     """Arms measured / total, read the same way the runner decides what is left."""
-    from scribblez.dashboard import db  # heavy-ish import kept out of module load
+    from scribblez.dashboard import db
 
     task_params = _task_params(spec, tag)
     if task_params is None:
@@ -104,7 +105,7 @@ def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
 
 
 def _task_params(spec: WorkloadSpec, tag: str):
-    from scribblez.dashboard import tasks  # local import: avoid a module cycle
+    from scribblez.dashboard import tasks  # tasks imports the workload registry
 
     task = tasks.load_task(spec, tag)
     return None if task is None else MatchArmsParams(**task.params)

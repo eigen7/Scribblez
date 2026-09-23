@@ -1,20 +1,19 @@
-"""Workload: collect HastyBot's blind spots -- positions where a play from
-outside its static-equity top moves out-sims all of them.
+"""The blind-spots workload: collect positions where a play from outside
+HastyBot's static-equity top moves out-sims all of them (docs/blind_spots.md).
 
-One role, a generator that any number of workers run side by side. A cycle
-plays one HastyBot-vs-HastyBot game and surveys every eligible turn of it
-(sim_candidate_survey_tool: a racing screen of every legal play, then a longer
-confirming sim, with solved endgames late in the game, of the top moves and
-the screen's best plays from outside them). Games cost nothing beside the
-sims, so a game a cycle wastes none, and workers need no coordination: each
-plays its own randomly seeded games. The controller ends the run: its
+Its one role, a surveyor, runs on any number of workers side by side. A cycle
+plays one HastyBot-vs-HastyBot game and surveys every eligible turn of it with
+sim_candidate_survey_tool: a racing screen of every legal play, then a longer
+confirming sim of the top moves and of the screen's best plays from outside
+them, solving endgames late in the game. A game is cheap next to its survey,
+so one game per cycle costs nothing, and workers need no coordination because
+each plays its own randomly seeded games. The controller ends the run: its
 scheduler tick parks every surveyor once the tag holds target_positions, and
 the dashboard's idle policy then stops the rented machines.
 
-What a cycle delivers is small. A game's full survey file runs to megabytes
-and nearly all of it describes positions where the top moves were fine, so
-the worker keeps only the positions it found (slim_survey) and their .gcg
-exports:
+A game's full survey file runs to megabytes, nearly all of it about positions
+where the top moves were fine. The worker delivers only the positions it found
+(slim_survey_file) and their .gcg exports:
 
     data/survey/<stem>.simsurvey.json   the found positions of one game
     data/gcg/<stem>-g0-turn<N>.gcg      the game up to each found position
@@ -67,7 +66,7 @@ class BlindSpotsParams:
 
 
 def play_game(work_dir: Path, worker_id: str, params: BlindSpotsParams) -> Path:
-    """Play one game into `work_dir`, named <timestamp>-<worker_id>.slog so every
+    """Play one game into `work_dir`, renamed to <stem>-<worker_id>.slog so every
     file the survey derives from it is unique across workers."""
     before = set(work_dir.glob("*.slog"))
     code = run_games(
@@ -93,9 +92,8 @@ def survey_seed(work_dir: Path) -> int:
 
 
 def run_survey_tool(work_dir: Path, params: BlindSpotsParams, threads: int) -> int:
-    """Survey every eligible turn of each game in `work_dir` that has no finished
-    survey file yet (a game interrupted mid-survey resumes from its partial
-    file)."""
+    """Survey every eligible turn of each game in `work_dir` without a finished
+    survey file. A game interrupted mid-survey resumes from its partial file."""
     # fmt: off
     cmd = [
         SURVEY_TOOL,
@@ -135,8 +133,9 @@ def deliver_surveyed(sink, work_dir: Path) -> tuple[int, int, float]:
 
 
 def run_generate(ctx: WorkerContext) -> int:
-    """The generate-role runner: finish and deliver whatever a previous run left in
-    the work dir, then a game a cycle until max_cycles or SIGTERM."""
+    """The generate-role runner: finish and deliver a game a previous run left in
+    the work dir, then play and survey one game per cycle until max_cycles or
+    SIGTERM."""
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     work_dir.mkdir(parents=True, exist_ok=True)
     stats = WorkerStats(ctx)
@@ -147,7 +146,7 @@ def run_generate(ctx: WorkerContext) -> int:
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
             cycle += 1
             t0 = time.monotonic()
-            if not any(work_dir.glob("*.slog")):  # else: a game a stopped run left unfinished
+            if not any(work_dir.glob("*.slog")):  # else finish the game a stopped run left
                 play_game(work_dir, ctx.worker_id, ctx.params)
             t1 = time.monotonic()
             code = run_survey_tool(work_dir, ctx.params, ctx.threads)
@@ -169,12 +168,13 @@ def positions_found(data_dir: Path) -> int:
 
 
 def tick(spec: WorkloadSpec, task, hooks):
-    """The scheduler entry: park the surveyors once the tag holds its target. Only
-    the controller sees the whole store -- a rented worker delivers to a bucket
-    and cannot count it -- so the stop is a gate from here rather than an exit
-    from there. A parked worker is a paused container, which the dashboard's
-    idle policy reads as nothing running: the rented machines stop themselves
-    ten minutes later."""
+    """The scheduler entry: park the surveyors once the tag holds its target.
+
+    The stop is a controller-side gate rather than a worker exit because only
+    the controller sees the whole store; a rented worker delivers to the bucket
+    and cannot count it. A parked worker is a paused container, which the
+    dashboard's idle policy counts as nothing running, so the rented machines
+    are stopped ten minutes later (dashboard/workers.py, IDLE_STOP_SECONDS)."""
     target = params_mod.validate(spec.params_cls, task.params).target_positions
     found = positions_found(spec.paths(task.tag).data_dir)
     reached = target > 0 and found >= target

@@ -1,10 +1,14 @@
-"""The teacher-labeling step shared by the pair-producing workloads: running
-move_set_eval_target_generator over .slog files to give them .mset sidecars.
+"""The teacher-labeling step shared by move_set_eval and evidence_trajectories:
+running move_set_eval_target_generator over .slog files to give them .mset
+sidecars, plus helpers for the model files those workloads name.
 
-move_set_eval labels its pairs stratified (plus a full-sweep held-out slice);
-evidence_trajectories labels stratified with the simmed trajectory candidates
-force-included. The generator's two candidate-selection modes take disjoint
-parameters, so a run is one or the other.
+The generator has two candidate-selection modes with disjoint flags, so one run
+uses one mode:
+
+  - stratified: a small sample per position across the equity ranking.
+    evidence_trajectories adds --sobs to force-include its simmed candidates.
+  - full sweep: every legal candidate of a few positions, for move_set_eval's
+    held-out slice.
 """
 
 import os
@@ -21,8 +25,9 @@ TARGET_GENERATOR = str(ENGINE_DIR / "move_set_eval_target_generator")
 
 @dataclass(frozen=True)
 class StratifiedQuotas:
-    """The stratified candidate sample per position: dense head of the equity
-    ranking, a slice of the contention zone, a uniform tail, and exchanges."""
+    """The stratified candidate sample per position: the head of the equity
+    ranking, a sample of the contention zone (ranks up to mid_rank_limit), a
+    uniform sample of the remaining ranks, and exchanges."""
 
     top: int
     mid: int
@@ -73,7 +78,7 @@ def label_full_sweep(
     threads: int,
 ) -> int:
     """Label `pending` .slog files with every legal candidate of a few
-    positions per game (capped by static-equity rank)."""
+    positions per game, capped by static-equity rank."""
     selection = [
         "--full-sweep",
         f"--sweep-cap={candidate_cap}",
@@ -97,12 +102,13 @@ def _run(pending: list[Path], teacher_model: str, selection: list[str], threads:
 
 
 def pin_model(path: str, paths, name: str) -> Path:
-    """The tag's own copy of the model export at `path`, made on first use
-    under the tag root's pinned/ (idempotent afterwards). A param that names
-    another tag's export by absolute path would otherwise read it in place for
-    the life of this tag, and a move-set-eval tag prunes its exports as it
-    trains (move_set_eval.trainer.prune_exports). Raises FileNotFoundError when
-    neither the copy nor the source exists."""
+    """The tag's own copy of the model export at `path`, made under the tag
+    root's pinned/ on first use and reused afterwards.
+
+    A param naming another tag's export cannot read it in place for the life of
+    this tag: a move_set_eval tag prunes its exports as it trains
+    (move_set_eval.trainer.prune_exports). Raises FileNotFoundError when neither
+    the copy nor the source exists."""
     if not path:
         raise FileNotFoundError(f"{name} is unset")
     dest = Path(paths.root) / "pinned" / Path(path).name
@@ -111,10 +117,10 @@ def pin_model(path: str, paths, name: str) -> Path:
     if not Path(path).is_file():
         raise FileNotFoundError(f"{name} {path!r} is not a readable file")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # Copied to a per-process temp beside the destination and renamed over it,
-    # so a reader never sees a partial copy and two first-use callers -- a
-    # tag's local workers starting together, or a worker and the dashboard --
-    # each land a whole file, the last rename winning with identical bytes.
+    # Copy to a per-process temp file and rename it over the destination, so a
+    # reader never sees a partial copy. Concurrent first users (a tag's workers
+    # starting together, or a worker and the dashboard) each land a whole file;
+    # the last rename wins, with identical bytes.
     tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
     shutil.copyfile(path, tmp)
     os.replace(tmp, dest)
