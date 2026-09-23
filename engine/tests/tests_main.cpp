@@ -3243,11 +3243,10 @@ TEST(HastyEquity, ExchangeBlankLeave) {
   fs::remove_all(tmp);
 }
 
-// A row encoded straight from a live game's log (the streaming path) is
-// bit-identical to the row decoded after writing the game to a .slog (the disk
-// path). Both go through PositionEncoder, so a mismatch means the two log views
-// differ.
-TEST(Streaming, DiskEncodeEquivalence) {
+// PositionEncoder gives a bit-identical row whether it reads a game's in-memory
+// log or the same game's view decoded from a .slog, so a mismatch means the two
+// log views differ.
+TEST(PositionEncoder, LiveLogMatchesDecodedSlog) {
   using namespace scribblez;
   using namespace scribblez::binlog;
   namespace fs = std::filesystem;
@@ -3297,12 +3296,12 @@ TEST(Streaming, DiskEncodeEquivalence) {
       decoder.decode(raw.data(), "eq", /*local_start=*/0, /*n_rows=*/1, &flip, post_move,
                      /*output_row_start=*/0, row_disk.data());
 
-      std::vector<float> row_stream(row_floats, 0.0f);
+      std::vector<float> row_live(row_floats, 0.0f);
       PositionEncoder enc(InputEncodingSpec{&dict});
       enc.encode_row<PositionEvalTask>(storage.view(), sampled, post_move, /*transpose=*/false,
-                                       row_stream.data());
+                                       row_live.data());
 
-      for (int i = 0; i < row_floats; ++i) ASSERT_EQ(row_disk[i], row_stream[i]);
+      for (int i = 0; i < row_floats; ++i) ASSERT_EQ(row_disk[i], row_live[i]);
       ++compared;
     }
 
@@ -3310,7 +3309,7 @@ TEST(Streaming, DiskEncodeEquivalence) {
     for (const auto& ent : fs::directory_iterator(dir)) fs::remove(ent.path());
   }
   ASSERT_EQ(compared, 6);
-  std::cout << "  streaming/disk encode equivalence OK (" << compared << " rows)\n";
+  std::cout << "  live/decoded encode equivalence OK (" << compared << " rows)\n";
 }
 
 // pick_sampled_turn chooses only turns in the eligible region (see
