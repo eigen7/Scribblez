@@ -745,11 +745,6 @@ int scribblez_dl_load_batch(DataLoaderHandle* h, float* output) {
   }
 }
 
-int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h) {
-  if (!h) return 0;
-  return h->loader.resident_bytes();
-}
-
 // ---------------------------------------------------------------------------
 // Streaming self-play pipeline
 // ---------------------------------------------------------------------------

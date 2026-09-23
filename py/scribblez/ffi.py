@@ -294,9 +294,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),
     ]
 
-    lib.scribblez_dl_resident_bytes.restype = ctypes.c_int64
-    lib.scribblez_dl_resident_bytes.argtypes = [ctypes.c_void_p]
-
     lib.scribblez_format_layout_json.restype = ctypes.c_char_p
     lib.scribblez_format_layout_json.argtypes = []
 
@@ -1103,7 +1100,3 @@ class NativeDataLoader:
         if n < self._batch_size:
             return buf[:n]
         return buf
-
-    @property
-    def resident_bytes(self) -> int:
-        return int(self._lib.scribblez_dl_resident_bytes(self._handle))

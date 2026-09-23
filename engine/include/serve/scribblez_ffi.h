@@ -291,9 +291,6 @@ int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move,
 // became unreadable mid-epoch. `output` needs room for batch_size rows.
 int scribblez_dl_load_batch(DataLoaderHandle* h, float* output);
 
-// Resident bytes, for testing eviction.
-int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h);
-
 // ===========================================================================
 // Streaming self-play -> training pipeline
 // ===========================================================================
