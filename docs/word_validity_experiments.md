@@ -1,25 +1,31 @@
 # Word-validity: a clean test of "compiled lexicon as a differentiable tool"
 
-This is the smallest experiment in the lexical-NN track (see `rack_best_experiments.md`
-for the next rung and `lexical_nn.md` for the larger per-lane task). It asks one
-question: can a neural network learn to *use* a frozen, compiled lexicon as a tool, and
-thereby generalize to words it never saw in training? The rack-best follow-up sharpens
-the lesson — that a tool only helps when its *structure* fits the task.
+The smallest experiment in the lexical-NN track
+([rack_best_experiments.md](rack_best_experiments.md) is the next rung, and
+[lexical_nn.md](lexical_nn.md) the larger per-lane task; the tools are
+catalogued in [lexical_tools.md](lexical_tools.md)). It asks one question:
+can a neural network learn to *use* a frozen, compiled lexicon as a tool, and
+so generalize to words it never saw in training?
+
+**Answer: yes.** The DAWG-walk tools classify held-out words essentially
+perfectly with fewer parameters than a baseline stuck at ~0.79, and a
+capacity-matched control shows the gain comes from the tool.
 
 **Task.** Classify a word (2–15 letters) as lexicon-legal (label 1) or a phony
 (label 0).
 
-**Why it is a tool-use test, not a memorization test.** The negatives are not random
-strings — they are a *phony lexicon* generated to match the real lexicon's character
-statistics (see "Phony lexicon" below). `YOP` looks like a word; `QVF` does not. Because
-real and phony words are drawn from the same letter statistics, surface features cannot
-reliably separate them. A model can score well on words it has *seen* by memorizing, but
-the only way to score well on a **held-out** word is to actually look it up. So held-out
-accuracy measures whether the network learned to use the lexicon.
+**Why it tests tool use, not memorization.** The negatives are not random
+strings but a *phony lexicon* generated to match the real lexicon's character
+statistics (see "Phony lexicon" below): `YOP` looks like a word, `QVF` does
+not. Because real and phony words share letter statistics, surface features
+cannot reliably separate them. A model can score well on words it has *seen*
+by memorizing them, but the only way to score well on a **held-out** word is
+to look it up. Held-out accuracy therefore measures whether the network
+learned to use the lexicon.
 
 ## Result
 
-Single GPU, ~1–2 minutes per run, identical protocol (below), seed 0:
+Single GPU, ~1–2 minutes per run, identical protocol (see Reproduce), seed 0:
 
 | `--lexicon-module` | tool kind | params | held-out acc | (real / phony) |
 | --- | --- | --- | --- | --- |
@@ -32,49 +38,52 @@ Single GPU, ~1–2 minutes per run, identical protocol (below), seed 0:
 
 Readings:
 
-1. **The DAWG-walk tools generalize ~perfectly** on held-out words, with
+1. **The DAWG-walk tools generalize almost perfectly** on held-out words, with
    *fewer* parameters than the baseline.
-2. **The win is the tool, not capacity**: the starved control (same FFN
-   shrink, no tool) matches the full baseline (0.788 vs 0.785).
-3. **Not every tool conveys membership**: `kv_memory` retrieves lossy,
-   anagram-invariant letter bags and sits at the baseline — a tool only helps
+2. **The win is the tool, not capacity.** The starved control (the same FFN
+   shrink, with no tool) matches the full baseline (0.788 vs. 0.785).
+3. **Not every tool conveys membership.** `kv_memory` retrieves lossy,
+   anagram-invariant letter bags and sits at the baseline: a tool helps only
    if what it exposes distinguishes members from non-members.
 
-`oracle_crosscheck` is a diagnostic ceiling only (it is handed the answer).
-The 78% baseline is not chance: order-3 phonies leave order-4+ regularities a
-transformer can exploit (train ≈ held-out, so not memorization); a higher
-phony `--order` would push that surface ceiling toward chance.
+`oracle_crosscheck` is a diagnostic ceiling only, since it is handed the
+answer. The ~78% baseline is not chance: order-3 phonies leave higher-order
+regularities a transformer can exploit (train ≈ held-out accuracy, so this is
+not memorization). Generating phonies with a higher Markov `--order` would
+push that surface-feature ceiling toward chance.
 
 ## Components
 
-- **Phony lexicon** — `py/tools/generate_phony_lexicon.py`. Fits an order-k character
-  Markov model (start/end padded, so short words generate) on the real words, then for
-  each length aims for the same count the real lexicon has: it *enumerates and ranks* the
-  short lengths (whole space small enough to score every candidate, so the short tail
-  fills exactly) and *samples with a give-up bound* the long lengths. Rejects real words
-  and duplicates. Writes a word list and a real `.kwg` (via `write_kwg`, the DAWG-only
-  inverse of `compile_kwg` in `scribblez/lexical_tool/compiler.py`). The
-  committed artifact is `phonies/PHONY-NWL23.kwg` (155,660 words, 0 overlap with NWL23).
-- **Lexicon modules** — `scribblez/lexical_tool/modules.py`. Frozen,
-  compiled-lexicon `nn.Module`s selected by name (`soft_traversal`, `straight_through`,
-  `oracle_crosscheck`, `kv_memory`); each documents its mechanism and trade-offs. The same
-  registry serves the per-lane task.
-- **Model + trainer** — `scribblez/word_validity/model.py` and
-  `scripts/word_validity/train.py`. The host is a small transformer over the padded word
-  with a prepended CLS token driving a binary head; the lexicon tool (compiled from the
-  *real* lexicon) feeds a per-cell residual plus a couple of tokens. `--lexicon-mode
-  replace` shrinks the host FFN so word knowledge must come from the tool; `none` keeps
-  the full FFN.
+- **Phony lexicon:** `py/tools/generate_phony_lexicon.py`. It fits an
+  order-k character Markov model on the real words (padded at start and end,
+  so short words can be generated), then aims for the real lexicon's word
+  count at each length. Short lengths are *enumerated and ranked* (the space
+  is small enough to score every candidate, so the short tail fills exactly);
+  long lengths are *sampled* with a give-up bound. Real words and duplicates
+  are rejected. The output is a word list and a real `.kwg` (via `write_kwg`,
+  the DAWG-only inverse of `compile_kwg` in
+  `py/scribblez/lexical_tool/compiler.py`). The committed artifact is
+  `phonies/PHONY-NWL23.kwg` (155,660 words, no overlap with NWL23).
+- **Lexicon modules:** `py/scribblez/lexical_tool/modules.py`, frozen
+  compiled-lexicon `nn.Module`s selected by name, each documenting its
+  mechanism and trade-offs. The same registry serves the other lexical tasks.
+- **Model and trainer:** `py/scribblez/word_validity/model.py` and
+  `py/scripts/word_validity/train.py`. The host is a small transformer over
+  the padded word, with a prepended CLS token driving a binary head. The
+  lexicon tool (compiled from the *real* lexicon) feeds a per-cell residual
+  plus a couple of tokens. `--lexicon-mode replace` shrinks the host FFN so
+  word knowledge must come from the tool; with `--lexicon-module none` the
+  host keeps its full FFN.
 
 ## Reproduce
 
-Prerequisites: the lexica live in `<mount>/lexica/`. `NWL23.kwg` is installed by
-`setup_wizard.py` (downloaded from Woogles); `PHONY-NWL23.kwg` is committed under
-`phonies/` and copied into the mount by `setup_wizard.py` (`install_phony_lexica`). All
+Prerequisites: the lexica live in `<mount>/lexica/`. `setup_wizard.py`
+installs `NWL23.kwg` (downloaded from Woogles) and copies the committed
+`phonies/PHONY-NWL23.kwg` into the mount (`install_phony_lexica`). All
 commands run inside the container.
 
-1. (Optional) regenerate the phony lexicon — already committed, so only needed to change
-   it (e.g. a higher Markov order):
+1. (Optional) Regenerate the phony lexicon. It is committed, so this is only
+   needed to change it (for example, a higher Markov order):
 
    ```
    ./py/tools/generate_phony_lexicon.py \
@@ -82,9 +91,10 @@ commands run inside the container.
    # then re-copy into the mount, or re-run setup_wizard.py on the host
    ```
 
-2. Run each configuration. Protocol used for the table: `--max-steps 1800
-   --eval-every 1800 --seed 0`, all other hyperparameters at their defaults (channels 128,
-   2 layers, 4 heads, FFN mult 4, batch 512, lr 1e-3, weight decay 1e-4, held-out 10%).
+2. Run each configuration. The protocol for the table is `--max-steps 1800
+   --eval-every 1800 --seed 0`, with every other hyperparameter at its default
+   (channels 128, 2 layers, 4 heads, FFN mult 4, batch 512, lr 1e-3, weight
+   decay 1e-4, 10% held out).
 
    ```
    ./py/scripts/word_validity/train.py --lexicon-module none                       # baseline
@@ -95,6 +105,7 @@ commands run inside the container.
    ./py/scripts/word_validity/train.py --lexicon-module kv_memory
    ```
 
-   Each run prints, per epoch, `train` and `holdout` accuracy with the held-out figure
-   split into `real` and `phony`. Drop `--max-steps`/`--eval-every` to train the full
-   `--epochs` (default 10) and watch the held-out accuracy converge.
+   Each run prints `train` and `holdout` accuracy at each evaluation, with the
+   held-out figure split into `real` and `phony`. Drop `--max-steps` and
+   `--eval-every` to train the full `--epochs` (default 10) and watch
+   held-out accuracy converge.
