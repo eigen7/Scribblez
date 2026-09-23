@@ -1938,3 +1938,33 @@ def test_two_tasks_machines_of_one_name_keep_separate_known_hosts(
     assert first.name == second.name
     assert first.known_hosts_file != second.known_hosts_file
     assert Path(first.known_hosts_file).read_text() == "host-a ssh-ed25519 AAAA\n"
+
+
+def test_a_slot_on_a_down_machine_reports_the_machine_not_its_stale_reason(
+    manager, spec, task, monkeypatch
+):
+    """Reconcile leaves a slot alone while its machine is not up, so the
+    slot's own last reason (a bundle build finished minutes ago) goes stale;
+    its row says what it is actually waiting on."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(_FakeSshMachine, "state", "missing")
+    manager.add_machine(spec, task, "aws-1", "u@h", gpu_count=1)
+    w = manager.add_ssh(spec, task, "generate", machine="aws-1", threads=None)
+    w.desired_state = "running"
+    manager._exits[workers_mod._key(spec, "t", w.worker_id)] = "building the worker bundle"
+    mkey = workers_mod._machine_key(spec, "t", "aws-1")
+
+    manager._machine_states[mkey] = "stopped"
+    manager._exits[mkey] = "No g6.2xlarge capacity in the zone right now."
+    (info,) = manager.worker_status(spec, task)
+    assert info["exit_reason"] == (
+        "waiting for machine aws-1 (stopped: No g6.2xlarge capacity in the zone right now.)"
+    )
+
+    del manager._exits[mkey]  # a machine down without a refusal on record
+    (info,) = manager.worker_status(spec, task)
+    assert info["exit_reason"] == "waiting for machine aws-1 (stopped)"
+
+    manager._machine_states[mkey] = "up"  # its own reason again, once it can be acted on
+    (info,) = manager.worker_status(spec, task)
+    assert info["exit_reason"] == "building the worker bundle"
