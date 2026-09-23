@@ -14,10 +14,10 @@ from pathlib import Path
 
 def is_hooked(word: str, letter: str, word_set: set[str]) -> bool:
     """Whether `word` is still a word with `letter` removed from its front or
-    its back."""
-    if word.startswith(letter):
-        return word[1:] in word_set
-    return word.endswith(letter) and word[:-1] in word_set
+    its back. A word both starting and ending with `letter` gets both tries."""
+    return (word.startswith(letter) and word[1:] in word_set) or (
+        word.endswith(letter) and word[:-1] in word_set
+    )
 
 
 def find_hooks(words: list[str], letter: str) -> list[str]:
