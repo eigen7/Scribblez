@@ -48,9 +48,6 @@ class BlockDecoder {
   // until this decoder is next used.
   const Board& replay_board(const char* buf, uint32_t game_idx, uint32_t turn_idx);
 
-  // The game's sampled position as human-readable text.
-  std::string dump_position(const char* buf, uint32_t game_idx, bool post_move);
-
  private:
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);
 

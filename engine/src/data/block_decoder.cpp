@@ -5,45 +5,10 @@
 #include "training/max_move_per_lane_task.h"
 #include "training/training_task.h"
 
-#include <format>
 #include <iostream>
 
 namespace scribblez {
 namespace binlog {
-
-namespace {
-
-// Column-letter + 1-based-row coordinate, e.g. (r=7, c=7) -> "H8".
-std::string square_name(int r, int c) { return std::format("{}{}", char('A' + c), r + 1); }
-
-// One line, from the move's own stored data alone. A PLAY lists only the tiles
-// it PLACED (blanks lowercased) with the anchor square and orientation; the
-// board diagram beside it shows the full word.
-std::string describe_move(const Move& m) {
-  if (m.type() == MoveType::PASS) return "PASS";
-
-  std::string tiles;
-  for (int i = 0; i < m.num_glyphs(); ++i) {
-    char ch = m.glyph(i).to_char();
-    if (m.glyph(i).is_blank()) ch = char(ch - 'A' + 'a');
-    tiles.push_back(ch);
-  }
-  if (m.type() == MoveType::EXCHANGE) return "EXCHANGE " + tiles;
-
-  // PLAY: locate the first placed square from the lane mask (bit k = lane cell k).
-  uint16_t mask = m.square_mask();
-  int along = 0;
-  while (mask && (mask & 1u) == 0) {
-    mask >>= 1;
-    ++along;
-  }
-  const bool horizontal = m.horizontal();
-  const int r = horizontal ? m.start() : along;
-  const int c = horizontal ? along : m.start();
-  return "PLAY " + tiles + " @ " + square_name(r, c) + (horizontal ? " across" : " down");
-}
-
-}  // namespace
 
 int BlockDecoder::row_floats_for(DecodeTask task, const InputEncodingSpec& spec) {
   if (task == DecodeTask::kMaxMovePerLane) return MaxMovePerLaneTask::kRowFloats;
@@ -105,26 +70,6 @@ const Board& BlockDecoder::replay_board(const char* buf, uint32_t game_idx, uint
   const GameLog g = game_view(buf, game_idx, nullptr);
   pos_.replay_to_sampled(g, int(turn_idx), /*post_move=*/false);
   return pos_.enc().board();
-}
-
-std::string BlockDecoder::dump_position(const char* buf, uint32_t game_idx, bool post_move) {
-  uint32_t sampled = 0;
-  const GameLog g = game_view(buf, game_idx, &sampled);
-  const int mover = pos_.replay_to_sampled(g, int(sampled), post_move);
-  const int opp = 1 - mover;
-  const GameStateEncoder& enc = pos_.enc();
-  const int active = enc.score(mover);
-  const int other = enc.score(opp);
-
-  std::string s;
-  s += std::format("game_idx={} kind={}\n", game_idx, post_move ? "post_move" : "pre_move");
-  s += std::format("POV player={}  score: active={} opp={} diff={}\n", mover, active, other,
-                   active - other);
-  s += std::format("POV rack (leave): {}\n", pos_.rack(mover).to_string());
-  s += std::format("last self move: {}\n", describe_move(enc.last_move_by(mover)));
-  s += std::format("last opp move:  {}\n", describe_move(enc.last_move_by(opp)));
-  s += enc.board().to_string();
-  return s;
 }
 
 }  // namespace binlog

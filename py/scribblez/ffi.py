@@ -247,16 +247,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int),
     ]
 
-    lib.scribblez_dump_position.restype = ctypes.c_int
-    lib.scribblez_dump_position.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,
-        ctypes.c_int64,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-    ]
-
     lib.scribblez_sample_slog.restype = ctypes.c_int
     lib.scribblez_sample_slog.argtypes = [
         ctypes.c_char_p,
