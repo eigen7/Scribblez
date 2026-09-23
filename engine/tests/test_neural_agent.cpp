@@ -23,6 +23,7 @@
 #include "nn/eval_service.h"
 #include "stub_eval_service.h"
 #include "synthetic_equity.h"
+#include "temp_dir.h"
 
 #include <gtest/gtest.h>
 
@@ -125,8 +126,7 @@ struct OpeningPosition {
 class NeuralAgentEquityTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    tmp_ = std::filesystem::temp_directory_path() / "scribblez_test_neural_agent_XXXXXX";
-    std::filesystem::create_directories(tmp_);
+    tmp_ = scribblez::testing::make_temp_dir("scribblez_test_neural_agent");
     scribblez::testing::install_synthetic_hasty_equity(tmp_);
   }
   void TearDown() override { std::filesystem::remove_all(tmp_); }
