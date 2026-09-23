@@ -1,10 +1,9 @@
-"""Helpers for talking to the R2 results bucket via rclone.
+"""rclone access to the R2 results bucket (Cloudflare's S3-compatible store).
 
-rclone is configured entirely through environment variables (no config file):
-the `r2:` remote is an S3-compatible endpoint pointed at the operator's
-Cloudflare R2 account. The same helpers serve the laptop-side tools (which get
-their R2Credentials from the credentials file) and the worker entrypoint
-(which gets them from its container's environment).
+The `r2:` remote is defined entirely through environment variables, with no
+rclone config file, so the same helpers work for controller-side tools (whose
+R2Credentials come from the credentials file) and for workers (whose come
+from the container environment; see sinks.r2_from_env).
 """
 
 import os
@@ -25,14 +24,12 @@ def rclone_env(r2: R2Credentials) -> dict[str, str]:
         f"{prefix}_ACCESS_KEY_ID": r2.access_key_id,
         f"{prefix}_SECRET_ACCESS_KEY": r2.secret_access_key,
         f"{prefix}_ENDPOINT": r2.endpoint,
-        # Uploads otherwise begin with a CreateBucket-if-missing check, which
-        # bucket-scoped R2 tokens are not permitted to make (AccessDenied).
-        # The bucket always exists; skip the check.
+        # Without this, uploads start with a create-bucket-if-missing call,
+        # which a bucket-scoped R2 token may not make (AccessDenied). The
+        # bucket always exists.
         f"{prefix}_NO_CHECK_BUCKET": "true",
-        # The remote is defined entirely by the variables above, but rclone
-        # still prints a NOTICE about the config file it did not find -- on
-        # every invocation, which for a multi-file upload reads like something
-        # going wrong. Point it at an empty config it can find instead.
+        # Silences the NOTICE rclone otherwise prints on every invocation
+        # about the config file it did not find.
         "RCLONE_CONFIG": "/dev/null",
     }
 

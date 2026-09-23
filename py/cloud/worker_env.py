@@ -1,6 +1,9 @@
-"""The environment a worker that boots the image + bundle flow is started
-with: an ssh machine's container (dashboard/workers.py), and any launcher of
-the same image."""
+"""The container environment for a worker that runs from a bundle.
+
+The dashboard (scribblez/dashboard/workers.py) passes this to every ssh-slot
+container it creates. The image's bootstrap reads SCZ_BUNDLE to fetch the
+bundle; the worker entrypoint reads the rest (see its docstring for the list).
+"""
 
 from scribblez import workloads
 
@@ -26,11 +29,9 @@ def bundle_worker_env(
     bundle_id: str,
     worker_id: str,
 ) -> dict[str, str]:
-    """The full environment for a worker that boots the image + bundle flow:
-    bucket credentials, the workload's SCZ_* definition, the bundle to run,
-    and the slot identity. The kind travels because the worker cannot infer
-    it from its surroundings (its sink may be local or the bucket), and every
-    slot booted this way is an ssh one."""
+    """Bucket credentials, the workload's SCZ_* definition, the bundle to run,
+    and the slot's identity. The kind is set explicitly because the worker
+    cannot infer it from its sink, which may be local or the bucket."""
     return {
         **r2_env(creds),
         **spec.worker_env(tag, params, role),

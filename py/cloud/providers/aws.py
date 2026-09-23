@@ -1,18 +1,18 @@
 """AWS EC2 as a machine provider (cloud/providers/base.py).
 
-An instance is launched from the region's current Deep Learning Base GPU AMI
-(Ubuntu; the NVIDIA driver, Docker and the container toolkit preinstalled,
-found through AWS's public SSM parameter, so there is no image of ours to
-build), with a key pair and a security group of ours, tagged as the
-dashboard's, and a first-boot script that logs Docker in to the image
-registry and pulls both worker images before writing the readiness marker
--- so the pull happens on the machine during `launching`, never on the
-controller's blocking thread at a slot's first start.
+Instances boot the region's current Deep Learning Base GPU AMI, an Ubuntu
+image with the NVIDIA driver, Docker and the NVIDIA container toolkit
+preinstalled, so there is no machine image of ours to maintain. Each is
+launched with our key pair and security group, tagged as the dashboard's, and
+given a first-boot script (user_data) that logs Docker in to the registry and
+pulls both worker images before writing the readiness marker. The large pull
+therefore happens while the machine is launching, not on the controller's
+blocking thread when a slot first starts.
 
-The catalog is curated: the types that fit the two shapes we run (a GPU
-trainer, a CPU generator), with the CPU family that picks the bundle arch
-and the on-demand list price beside each. Prices are an estimate's input;
-they are changed here by PR when AWS reprices.
+The catalog is hand-curated to the two shapes we run, GPU trainers and CPU
+generators. Each entry records its CPU family's -march (which selects the
+bundle tarball) and its on-demand list price. Prices feed cost estimates
+only, and are updated here by hand when AWS reprices.
 """
 
 import datetime
@@ -25,7 +25,7 @@ import botocore.exceptions
 from cloud.credentials import AwsCredentials, RegistryConfig
 from cloud.providers.base import Instance, LaunchRequest, MachineType, ProviderError
 
-# Where the key pair's private key lives (created by prepare()).
+# Holds the key pair's private key, which prepare() creates.
 AWS_DIR = Path("/workspace/mount/cloud/aws")
 KEY_PAIR_NAME = "scribblez"
 SECURITY_GROUP_NAME = "scribblez"
@@ -36,9 +36,9 @@ AMI_PARAMETER = (
 )
 SSH_USER = "ubuntu"
 READY_FILE = "/var/lib/scribblez/ready"
-# The Deep Learning AMI's root snapshot is 75 GB (2026-09), and a launch that
-# asks for less is refused (InvalidBlockDeviceMapping). Above that, room for
-# the two worker images, a bundle, and a trainer's generation window.
+# At least the AMI's root snapshot (75 GB as of 2026-09); a smaller volume is
+# refused with InvalidBlockDeviceMapping. The margin holds the two worker
+# images, a bundle, and a trainer's generation window.
 ROOT_VOLUME_GB = 100
 
 # us-east-1 on-demand list prices, checked 2026-09-15.
@@ -65,15 +65,14 @@ QUOTA_CONSOLE = "https://console.aws.amazon.com/servicequotas/home/services/ec2/
 
 
 def user_data(registry: RegistryConfig) -> str:
-    """The first-boot script. The registry token travels in the instance's
-    user data, readable by the instance's own metadata service and by our
-    IAM user; it is a read-only pull token, which is the reason it is one.
+    """The first-boot script. The registry token travels in user data, which
+    the instance's metadata service and our IAM user can read; that exposure
+    is why it must be a read-only pull token.
 
-    cloud-init runs this as root, but the login has to be the ssh user's:
-    the dashboard pulls as that user before every container it creates (a
-    rebuilt image reaches the machine that way), and Docker credentials are
-    per user. The first launch pulled as root and every later pull as
-    ubuntu was "access denied" with the images sitting right there."""
+    cloud-init runs this as root, but the docker login must be the ssh
+    user's. Docker credentials are per user, and the dashboard pulls as the
+    ssh user before creating each container; a root login would leave those
+    pulls denied."""
     as_user = f"sudo -u {SSH_USER} -H"
     pulls = "\n".join(f"{as_user} docker pull {image}" for image in registry.images)
     return f"""#!/bin/bash
@@ -99,15 +98,14 @@ def _instance(raw: dict) -> Instance:
     )
 
 
-# A spot instance is asked for as a *persistent* request that *stops* the
-# instance on interruption: its disk survives, AWS starts it again when the
-# capacity is back, and it can be stopped and started by us like any other --
-# so the idle policy and a Start on its slots work unchanged, and a trainer
-# on it loses at most its in-flight generation, resuming from its own
-# checkpoint. (A one-time request would terminate on interruption and could
-# not be stopped at all.) The price of persistence is that the request
-# outlives the instance: terminating means cancelling the request first, or
-# it launches a replacement.
+# Spot instances are requested as *persistent* requests that *stop* the
+# instance on interruption. The disk survives, AWS restarts the instance when
+# capacity returns, and we can stop and start it like an on-demand one, so the
+# idle policy and slot controls work unchanged. A trainer loses at most its
+# in-flight generation and resumes from its checkpoint. A one-time request
+# would instead terminate on interruption and could not be stopped at all.
+# The cost: the request outlives the instance, so terminate() must cancel it
+# first or AWS launches a replacement.
 SPOT_OPTIONS = {
     "MarketType": "spot",
     "SpotOptions": {"SpotInstanceType": "persistent", "InstanceInterruptionBehavior": "stop"},
@@ -115,8 +113,8 @@ SPOT_OPTIONS = {
 
 
 def _call(fn, *args, **kwargs):
-    """Run one boto3 call, turning its failure into a ProviderError that
-    carries AWS's error code and message."""
+    """Run one boto3 call, turning a failure into a ProviderError carrying
+    AWS's error code and message."""
     try:
         return fn(*args, **kwargs)
     except botocore.exceptions.ClientError as e:
@@ -154,18 +152,18 @@ class AwsProvider:
         return _call(self._sts.get_caller_identity)["Arn"]
 
     def account(self) -> str:
-        """E.g. "AWS account 832300492506 as user scribblez, us-east-1"."""
+        """E.g. "AWS account 123456789012 as user scribblez, us-east-1"."""
         arn = self.identity()
         account_id = arn.split(":")[4]
         user = arn.rsplit("/", 1)[-1]
         return f"AWS account {account_id} as user {user}, {self.region}"
 
     def prepare(self):
-        """The account-side setup, idempotent: the key pair (its private key
-        saved beside the credentials file), the security group that admits
-        ssh, and the AMI lookup. Run by scripts/aws_setup.py and again
-        before every launch, so a key or group deleted in the console is
-        recreated rather than failing the launch."""
+        """Idempotent account-side setup: the key pair (private key saved
+        under AWS_DIR), the security group admitting ssh, and the AMI lookup.
+        Run by py/scripts/aws_setup.py and again before every launch, so a key
+        or group deleted in the console is recreated instead of failing the
+        launch."""
         self._ensure_key_pair()
         self._ensure_security_group()
         self.ami()
@@ -221,7 +219,7 @@ class AwsProvider:
         return _call(self._ssm.get_parameter, Name=AMI_PARAMETER)["Parameter"]["Value"]
 
     def quotas(self) -> dict[str, float]:
-        """The vCPU quotas that bound what can be rented, by a short name."""
+        """The account's vCPU quotas that limit renting, by readable name."""
         codes = {
             "on-demand G/VT (GPU) vCPUs": "L-DB2E81BA",
             "spot G/VT (GPU) vCPUs": "L-3819A6DF",
@@ -271,7 +269,7 @@ class AwsProvider:
             ],
         )["Instances"][0]
         instance = _instance(raw)
-        instance.owner = request.owner  # tags are not always echoed on the run response
+        instance.owner = request.owner  # run_instances may not echo the tags
         instance.launched_at = instance.launched_at or time.time()
         instance.spot = request.spot
         if request.spot:
@@ -280,9 +278,9 @@ class AwsProvider:
         return instance
 
     def _spot_price(self, type_id: str, zone: str | None) -> float | None:
-        """The current spot rate for `type_id` in `zone` (the region's lowest
-        when no zone is given); None when the history cannot be read, and the
-        catalog's rate stands in."""
+        """The current spot rate for `type_id` in `zone`, or the region's
+        lowest when no zone is given. None when the price history cannot be
+        read; callers then fall back to the catalog price."""
         try:
             history = _call(
                 self._ec2.describe_spot_price_history,
@@ -298,7 +296,7 @@ class AwsProvider:
 
     def spot_prices(self) -> dict[str, float]:
         """The region's lowest current spot rate per catalog type, for the
-        rent form; a type whose history cannot be read is left out."""
+        rent form. Types whose price cannot be read are omitted."""
         out = {}
         for t in self.catalog():
             price = self._spot_price(t.id, None)
@@ -325,8 +323,8 @@ class AwsProvider:
         _call(self._ec2.start_instances, InstanceIds=[instance_id])
 
     def terminate(self, instance_id: str):
-        """Terminate, cancelling a spot instance's persistent request first
-        (else the request launches a replacement)."""
+        """Terminate, first cancelling a spot instance's persistent request
+        (see SPOT_OPTIONS)."""
         found = _call(self._ec2.describe_instances, InstanceIds=[instance_id])["Reservations"]
         raw = found[0]["Instances"][0] if found and found[0]["Instances"] else {}
         request_id = raw.get("SpotInstanceRequestId")
@@ -335,8 +333,8 @@ class AwsProvider:
         _call(self._ec2.terminate_instances, InstanceIds=[instance_id])
 
     def refusal(self, error: ProviderError, type_id: str) -> str:
-        """The operator-facing sentence for a launch or start AWS refused:
-        what happened and what to do, with AWS's own words after."""
+        """An operator-facing explanation of a refused launch or start: what
+        happened and what to do, followed by AWS's own message."""
         code = str(error)
         if code == "VcpuLimitExceeded":
             return (

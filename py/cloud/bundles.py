@@ -1,36 +1,33 @@
-"""Code+binary bundles: how compiled engine artifacts reach cloud workers.
+"""Bundles: how compiled engine binaries and the py/ tree reach remote workers.
 
-A bundle is one tarball per CPU microarchitecture its fleet needs (the engine
-is compiled per-arch under target/archs/<arch>/; see py/build.py), each holding
-that arch's binaries plus the arch-independent py/ tree, uploaded to the
-results bucket under bundles/<bundle_id>/. A worker container downloads and unpacks
-the tarball matching its CPU at startup (docker-setup/worker/bootstrap.py),
-falling back to the generic-x86-64 tarball, so code iteration never requires
-rebuilding or re-pushing the worker Docker image.
+A bundle holds one tarball per CPU microarchitecture its machines need (the
+engine is compiled per arch under target/archs/<arch>/; see py/build.py).
+Each tarball has that arch's binaries plus the arch-independent py/ tree. At
+startup a worker container downloads the tarball matching its CPU, or the
+generic x86-64 one (docker-setup/worker/bootstrap.py). Code changes therefore
+never require rebuilding the worker Docker image.
 
 Bucket layout:
 
-    bundles/LATEST                        text file holding the newest bundle_id
-    bundles/<bundle_id>/manifest.json     git provenance (sha, dirty flag) + arch list
-    bundles/<bundle_id>/bundle-<arch>.tar.gz   one per arch in the manifest's list
-    deps/positions-<digest>.tar.gz        the eval datasets a train role needs
+    bundles/LATEST                             the newest bundle_id
+    bundles/<bundle_id>/manifest.json          BundleManifest
+    bundles/<bundle_id>/bundle-<arch>.tar.gz   one per arch in the manifest
+    deps/positions-<digest>.tar.gz             the eval datasets, by content
 
-The eval datasets (scribblez/paths.py EVAL_POSITIONS_DIRS, 40 MB) are not in
-the tarballs: five per-arch copies on every deploy would be the dominant cost
-of deploying. They travel once per content version under deps/, the manifest
-names the version a bundle was deployed with, and a train role's dependency
-fetch (cloud/worker_deps.py) takes them from there. A manifest never names a
-version the bucket lacks: the deps object is uploaded before the manifest.
+The eval datasets (EVAL_POSITIONS_DIRS in scribblez/paths.py, ~40 MB) stay
+out of the tarballs, where every deploy would upload a copy per arch. They are
+uploaded once per content version under deps/, before the manifest that names
+that version, so a manifest never points at a missing object. Train roles
+fetch them in cloud/worker_deps.py.
 
-The bundle_id is "<git-sha-12>[-dirty]-<content-hash-8>"; the content hash
-makes successive pushes from the same (possibly dirty) tree distinct.
+A bundle_id is "<git-sha-12>[-dirty]-<content-hash-8>"; the content hash keeps
+successive pushes from the same dirty tree distinct.
 
-Deployment is not a step an operator has to remember: `deploy_current_tree`
-builds every supported arch and pushes only when the bucket's LATEST does not
-already carry this tree, and the dashboard calls it before launching a worker
-that runs from a bundle. Its "is this tree already deployed?" test is the
-manifest's `source_hash` -- a digest of the exact files a bundle ships -- not
-the bundle_id, which is deliberately fresh on every push.
+The dashboard calls `deploy_current_tree` before it launches a worker that
+runs from a bundle, so deploying is never a manual step. It pushes only when
+LATEST does not already hold this tree, judged by the manifest's
+`source_hash` (a digest of exactly the files a bundle ships) rather than by
+the bundle_id, which is new on every push.
 """
 
 import hashlib
@@ -49,10 +46,8 @@ from scribblez.paths import EVAL_POSITIONS_DIRS, REPO_ROOT
 from cloud.credentials import R2Credentials
 from cloud.r2 import bucket_path, rclone
 
-# Engine artifacts shipped to workers. Sourced from each arch's build dir and
-# placed at target/engine/<name> inside the tarball -- the fixed path all
-# python and C++ tooling references. The py/ tree rides along in full (minus
-# caches).
+# Engine artifacts shipped to workers, placed at target/engine/<name> in the
+# tarball: the path all Python and C++ tooling expects them at.
 BUNDLE_BINARY_NAMES = [
     "play_game",
     "sim_obs_tool",
@@ -61,8 +56,8 @@ BUNDLE_BINARY_NAMES = [
     "libscribblez_ffi.so",
 ]
 
-# Arch whose tarball any worker can run (baseline x86-64 codegen); workers
-# whose exact arch has no tarball fall back to this one.
+# The baseline arch any x86-64 CPU can run: the fallback for a worker whose
+# own arch has no tarball.
 GENERIC_ARCH = "x86-64"
 
 BUNDLES_PREFIX = "bundles"
@@ -78,13 +73,12 @@ class BundleManifest:
     git_sha: str
     git_dirty: bool
     archs: list[str]
-    # Digest of the files this bundle shipped (see source_hash). Empty for
-    # bundles pushed before the field existed, which therefore never match a
-    # local tree -- the first deployment against one pushes.
+    # Digest of the files this bundle shipped (see source_hash). A manifest
+    # without it never matches a local tree, so deploying over it pushes.
     source_hash: str = ""
-    # Digest of the eval datasets this bundle was deployed with, naming their
-    # deps/ object (eval_positions_object). Empty for bundles that predate it,
-    # on which a train role cannot run.
+    # Digest of the eval datasets this bundle was deployed with; it names their
+    # deps/ object (eval_positions_object). A train role refuses a bundle
+    # without it.
     eval_positions: str = ""
 
 
@@ -119,8 +113,8 @@ def _create_arch_tarball(arch: str, out_dir: Path) -> Path:
 
 def _shipped_files(archs: list[str]) -> list[tuple[str, Path]]:
     """Every file a deploy of `archs` ships, as (identity, path): each arch's
-    binaries plus the shared py/ tree, named as they appear inside a tarball,
-    and the eval datasets, named as they appear under the repo root."""
+    binaries, the py/ tree, and the eval datasets. The identity is
+    "<arch>/<name>" for a binary and the repo-relative path otherwise."""
     files = [
         (f"{arch}/{name}", Path(arch_build_dir(arch)) / "engine" / name)
         for arch in archs
@@ -145,8 +139,8 @@ def eval_positions_files() -> list[tuple[str, Path]]:
 
 
 def eval_positions_digest(files=None) -> str:
-    """A content digest of the eval datasets (their files' names and bytes);
-    what names their deps/ object and what a worker checks its copy against."""
+    """A digest of the eval datasets' file names and contents. It names their
+    deps/ object, and a worker checks its copy against it."""
     digest = hashlib.sha256()
     for identity, path in eval_positions_files() if files is None else files:
         digest.update(f"{identity}:{hashlib.sha256(path.read_bytes()).hexdigest()}\n".encode())
@@ -168,9 +162,8 @@ def create_eval_positions_tarball(out_dir: Path) -> Path:
 
 
 def push_eval_positions(r2: R2Credentials, digest: str):
-    """Upload the eval datasets under their digest, unless the bucket has that
-    version already (it is content-addressed, so an existing object is the
-    same bytes)."""
+    """Upload the eval datasets under their digest, unless the bucket already
+    has an object by that name (content-addressed, so the same bytes)."""
     dest = bucket_path(r2, eval_positions_object(digest))
     if rclone(r2, "lsf", dest, capture=True).stdout.strip():
         return
@@ -181,15 +174,14 @@ def push_eval_positions(r2: R2Credentials, digest: str):
 
 
 def source_hash(archs: list[str], cache: dict | None = None) -> str | None:
-    """A digest of the tree a bundle of `archs` would ship right now, or None
-    when one of them is unbuilt (nothing to compare until a build produces it).
+    """A digest of the files a bundle of `archs` would ship right now, or None
+    when a file is missing (an arch is unbuilt).
 
-    This is the deployment test, and it covers compiled binaries rather than
-    git state: two pushes of one tree get different bundle_ids by design, and
-    a `-dirty` sha says a tree changed without saying into what. Hashing 20 MB
-    costs ~80 ms, which is too much for a status poll, so `cache` (owned by
-    the caller, keyed by path) holds each file's digest against its size and
-    mtime and reduces a repeat call to a stat walk.
+    This is the "already deployed?" test. It hashes the shipped files rather
+    than using git state, because a `-dirty` sha says the tree changed without
+    saying into what. Hashing ~20 MB takes ~80 ms, too slow for a status poll,
+    so the caller may pass a `cache` (path -> ((size, mtime), digest)) that
+    reduces a repeat call to a stat walk.
     """
     digest = hashlib.sha256()
     for identity, path in _shipped_files(archs):
@@ -208,8 +200,8 @@ def source_hash(archs: list[str], cache: dict | None = None) -> str | None:
 
 
 def create_bundle(out_dir: Path, archs: list[str]) -> tuple[list[Path], BundleManifest]:
-    """Build one tarball per arch in `archs` plus manifest.json under `out_dir`
-    from the current tree, returning (tarball paths, manifest)."""
+    """Write one tarball per arch plus manifest.json into `out_dir`, from the
+    current tree."""
     archs = sorted(set(archs))
     tarballs = [_create_arch_tarball(arch, out_dir) for arch in archs]
     digest = hashlib.sha256()
@@ -270,8 +262,8 @@ def latest_manifest(r2: R2Credentials) -> BundleManifest | None:
 
 
 def build_archs(archs: list[str], jobs: int | None = None):
-    """Build `archs`, incrementally (a no-op costs seconds). Release, matching
-    py/build.py's default."""
+    """Build `archs` in Release, as py/build.py does by default. Incremental,
+    so an up-to-date tree costs seconds."""
     failed = build_all_archs(
         sorted(set(archs)), "Release", jobs or default_thread_count(), detect_host_arch()
     )
@@ -281,15 +273,14 @@ def build_archs(archs: list[str], jobs: int | None = None):
 def deploy_current_tree(
     r2: R2Credentials, archs: list[str], *, jobs: int | None = None, cache=None
 ) -> BundleManifest:
-    """Make LATEST be this tree built for `archs` -- the archs the fleet that
-    will run it reports, nothing more -- and return the manifest it points at.
+    """Point LATEST at the current tree built for `archs` (the archs of the
+    machines that will run it) and return its manifest.
 
-    Building first is not optional: the fingerprint covers compiled binaries,
-    so pushing without it would ship an arch nobody rebuilt under a fresh,
-    current-looking bundle id -- the exact deception this whole mechanism
-    exists to prevent. The upload is skipped when LATEST already carries this
-    tree for every arch asked for (its own arch list, hashed as it was), so a
-    redeploy of unchanged code leaves running tasks pinned where they are.
+    It always builds first. Otherwise a stale binary for some arch would ship
+    under a fresh bundle id, which looks current but is not. The upload is
+    skipped when LATEST already covers every arch in `archs` and its
+    source_hash matches this tree (hashed over LATEST's own arch list), so
+    redeploying unchanged code leaves running tasks on the bundle they have.
     """
     archs = sorted(set(archs))
     assert archs, "a bundle needs at least one arch: the machines that will run it"
@@ -302,8 +293,8 @@ def deploy_current_tree(
 
 
 def resolve_bundle_id(r2: R2Credentials, ref: str) -> str:
-    """Resolve a bundle reference ("latest" or a concrete bundle_id) to a
-    concrete bundle_id, verifying that its manifest exists in the bucket."""
+    """Resolve "latest" or a bundle_id to a bundle_id whose manifest exists
+    in the bucket."""
     if ref == "latest":
         res = rclone(r2, "cat", bucket_path(r2, BUNDLES_PREFIX, LATEST_NAME), capture=True)
         assert res.returncode == 0, "no bundles pushed yet (bundles/LATEST missing)"

@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Long-running entrypoint for a worker (remote container or local subprocess).
+"""The process every worker runs, in a remote container or as a local
+subprocess of the dashboard.
 
-In a container this is launched by the worker image's bootstrap
-(docker-setup/worker/bootstrap.py) after it unpacks a code+binary bundle; the
-master dashboard launches the same entrypoint as a local subprocess. It owns
-the process concerns -- env parsing, the results sink, the SIGTERM handler, a
-provenance manifest -- then dispatches to the runner of the requested workload
-role (the workload registry, scribblez/workloads/). SIGTERM (container stop /
-preemption / dashboard pause) raises WorkerStopped out of the runner's loop;
-runners flush completed output and exit cleanly, losing at most the in-flight
-cycle.
+In a container, the image's bootstrap (docker-setup/worker/bootstrap.py)
+starts this after unpacking the bundle; for a local slot, the dashboard starts
+it directly. It handles the process concerns (environment, results sink,
+SIGTERM, the params/provenance record) and then hands off to the role's runner
+from the workload registry (scribblez/workloads/).
 
-The results sink (SCZ_SINK, cloud/sinks.py) decouples where output goes from
-how it is made: "r2" (default) uploads to the results bucket and deletes local
-copies; "local" renames output into the tag's mount-dir data tree.
+SIGTERM (docker stop, a spot interruption, a slot paused in the dashboard)
+raises WorkerStopped out of the runner's loop. Runners flush completed output
+and exit, losing at most the cycle in flight.
 
-Configuration is entirely via environment variables:
+The results sink (SCZ_SINK, cloud/sinks.py) decides where output goes: "r2"
+uploads it to the bucket, "local" moves it into the tag's tree on this
+machine's mount dir.
+
+All configuration comes from environment variables:
 
     R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,      bucket credentials (r2 sink only)
     R2_SECRET_ACCESS_KEY, R2_BUCKET
@@ -32,14 +33,17 @@ Configuration is entirely via environment variables:
                                           hostname)
     SCZ_WORKER_KIND                       slot kind reported in stats: "local"
                                           or "ssh" (default: the sink's)
-    SCZ_BUNDLE_ID, SCZ_HOST_ARCH,         set by the cloud bootstrap; recorded
-    SCZ_BUNDLE_ARCH                       in the manifest and stats
+    SCZ_BUNDLE                            bundle reference for the bootstrap
+                                          ("latest" or a bundle_id); unused here
+    SCZ_BUNDLE_ID, SCZ_HOST_ARCH,         set by the bootstrap; recorded in the
+    SCZ_BUNDLE_ARCH                       params record and stats
     SCZ_DEVICE                            torch device for a train role
                                           (default "cuda"; read by the trainers)
-    SCZ_MOUNT_ROOT                        where the tag tree lives (default: the
-                                          mount dir); a trainer run against the
-                                          bucket from a machine whose mount dir
-                                          the controller owns needs its own
+    SCZ_MOUNT_ROOT                        root of the tag trees (default: the
+                                          mount dir). Lets an r2-sink trainer
+                                          run on the controller's own machine
+                                          without writing into the tag tree
+                                          the controller manages.
 """
 
 import os
@@ -56,9 +60,9 @@ from scribblez.workloads.worker import WorkerStopped
 
 from cloud.sinks import make_sink
 
-# The SCZ_* variables that configure the worker itself rather than the
-# workload's parameters (the docstring above documents each). Everything else
-# under the prefix must be a parameter this bundle's schema knows.
+# The SCZ_* variables that configure the worker rather than the workload
+# (documented in the module docstring). Every other SCZ_* variable must be a
+# parameter this bundle's schema knows.
 WORKER_ENV_VARS = (
     "SCZ_WORKLOAD",
     "SCZ_ROLE",
@@ -77,10 +81,10 @@ WORKER_ENV_VARS = (
 )
 
 
-# What the process exits with when SIGTERM ended it, whatever the runner
-# returned after draining: the dashboard reads exit 0 as the role's terminal
-# condition reached (a finished slot, not restarted) and anything else as a
-# worker that did not finish. Docker's own code for a SIGTERM death.
+# The exit code after a SIGTERM, whatever the runner returned while draining.
+# The dashboard reads exit 0 as "the role reached its end condition" (the slot
+# is finished and not restarted), so an interrupted worker must not return it.
+# 143 is the conventional code for death by SIGTERM (128 + 15).
 EXIT_INTERRUPTED = 143
 _interrupted = False
 
@@ -95,12 +99,11 @@ def check_params_understood(spec, env):
     """Refuse to start when the environment carries workload parameters this
     bundle's schema does not know.
 
-    The controller composes the environment from its own (newer) schema, so an
-    unknown variable means the bundle is behind the controller. Left to
-    from_env that parameter would simply not apply -- the worker would run the
-    old behaviour under the new parameter's name and deliver data silently
-    unlike its fleetmates'. Failing here makes a stale deployment an immediate,
-    legible startup error instead of a corpus to throw away later.
+    The controller builds the environment from its own schema, so an unknown
+    parameter means the bundle is older than the controller. from_env would
+    ignore it, and the worker would quietly produce data under settings
+    different from the rest of the fleet. Failing at startup turns a stale
+    deployment into a clear error rather than a corpus to discard later.
     """
     unknown = params_mod.unknown_env(spec.params_cls, env, allowed=WORKER_ENV_VARS)
     assert not unknown, (

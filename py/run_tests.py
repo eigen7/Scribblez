@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Run the full Scribblez test suite: C++ engine tests + Python tests + web UI tests.
+"""Run the Scribblez test suites: C++ engine, Python, and web UI.
 
 Usage:
-    py/run_tests.py [--cpp-only] [--python-only] [--web-only] [--verbose]
+    py/run_tests.py [--cpp-only | --python-only | --web-only] [--verbose]
 
-The C++ tests are run via CTest against the build behind target/engine (use
-py/build.py first if you haven't built yet). The Python tests are run via
-pytest against py/tests/. The web tests are run via `npm run test:run`
-(vitest) in web/.
+C++: CTest in the build dir behind target/engine (run py/build.py first).
+Python: pytest over py/tests/, importing this checkout's py/ (so it is safe
+to run from a git worktree). Web: `npm run test:run` (vitest) in web/.
 """
 
 import argparse
@@ -26,19 +25,14 @@ PYTHON_DIR = os.path.join(ROOT, "py")
 
 
 def run(cmd, cwd=None):
-    """Run a command, streaming output. Return the exit code."""
+    """Run a shell command, streaming its output; returns the exit code."""
     print(f"\n$ {cmd}  (cwd={cwd or ROOT})")
     return subprocess.run(cmd, shell=True, cwd=cwd or ROOT).returncode
 
 
 def cpp_build_dir() -> str | None:
-    """Resolve the CMake build dir behind target/engine.
-
-    py/build.py builds each CPU arch under target/archs/<arch>/ and symlinks
-    target/engine to this host's arch build; CTestTestfile.cmake lives at the
-    root of that build dir, one level up from target/engine itself. Returns
-    None if the engine hasn't been built yet.
-    """
+    """The CMake build dir that target/engine links into (where CTest runs),
+    or None if nothing is built yet."""
     if not os.path.exists(ENGINE_LINK):
         return None
     return os.path.dirname(os.path.realpath(ENGINE_LINK))

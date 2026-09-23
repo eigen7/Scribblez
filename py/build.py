@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Build Scribblez: compile the C++ engine and install the web UI's npm deps.
+"""Build Scribblez: the C++ engine, the web UI's npm packages, and Macondo.
 
-This is the one command you run before playing. The build step installs the
-front-end's npm packages, and the engine (play_game) launches the Vite dev
-server itself at play time -- so you never invoke npm by hand.
+The engine builds under target/archs/<arch>/ (this machine's CPU by default;
+see --archs), and target/engine links to this machine's build. play_game
+starts the web UI's dev server itself, so npm never needs running by hand.
+The pinned Macondo checkout under the mount dir, whose data files the engine
+reads, is cloned or moved to the pinned tag as needed.
 
 Usage:
     py/build.py [--debug] [--clean] [-j N]
@@ -28,26 +30,24 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TARGET_DIR = os.path.join(ROOT, "target")
 ARCHS_DIR = os.path.join(TARGET_DIR, "archs")
 
-# Pinned Macondo release. build.py will clone this tag if the repo is absent,
-# and will move an existing checkout onto it if it is at a different tag
-# (unless --skip-macondo-tag-sync is passed).
+# Pinned Macondo release: cloned if absent, and an existing checkout is moved
+# onto it (unless --skip-macondo-tag-sync). cloud/worker_deps.py fetches the
+# same tag on workers.
 MACONDO_TAG = "v0.13.2"
 MOUNT_DIR = "/workspace/mount"
 MACONDO_DIR = os.path.join(MOUNT_DIR, "macondo")
 MACONDO_REPO_URL = "https://github.com/domino14/macondo.git"
 
-# Lexicon .kwg files are downloaded into <mount>/lexica/ by setup_wizard.py.
-# Macondo expects to find them under <macondo>/data/lexica/gaddag/, keyed by
-# lexicon name; we point that directory at <mount>/lexica so the macondo
-# subprocess can resolve them.
+# setup_wizard.py downloads the .kwg lexica into <mount>/lexica/. Macondo looks
+# for them by name under <macondo>/data/lexica/gaddag/, which
+# link_lexica_into_macondo points at <mount>/lexica.
 LEXICA_DIR = os.path.join(MOUNT_DIR, "lexica")
 MACONDO_GADDAG_DIR = os.path.join(MACONDO_DIR, "data", "lexica", "gaddag")
 
 
 def run_rc(cmd, cwd=None) -> int:
-    """Like run(), but returns the exit code instead of exiting the process --
-    for callers that need to keep going after a failure (e.g. a parallel arch
-    build, where one arch failing shouldn't kill its still-running siblings)."""
+    """Like run(), but returns the exit code instead of exiting, for callers
+    that must carry on after a failure (e.g. a parallel multi-arch build)."""
     print(f"$ {cmd}")
     return subprocess.run(cmd, shell=True, cwd=cwd or ROOT).returncode
 
@@ -59,12 +59,9 @@ def run(cmd, cwd=None):
 
 
 def detect_host_arch() -> str:
-    """Return this host's CPU microarchitecture as a GCC/Clang -march value.
-
-    Asks the compiler what "-march=native" resolves to (e.g. "alderlake",
-    "znver3") instead of inspecting /proc/cpuinfo directly, so the returned
-    string is always one the local compiler accepts as an -march value.
-    """
+    """This host's CPU microarchitecture as a GCC -march value (e.g.
+    "alderlake", "znver3"). Asking the compiler what -march=native resolves to,
+    rather than reading /proc/cpuinfo, guarantees a value it accepts."""
     result = subprocess.run(
         ["g++", "-march=native", "-Q", "--help=target"],
         capture_output=True,
@@ -87,21 +84,18 @@ def arch_build_log(arch: str) -> str:
     return os.path.join(arch_build_dir(arch), "build.log")
 
 
-# Strips ANSI/terminal escape sequences (colored diagnostics, cursor control)
-# so a log file reads as plain text regardless of what the tool that produced
-# it thought it was writing to.
+# Strips ANSI escape sequences (colored diagnostics, cursor control) so build
+# logs are plain text.
 _STRIP_TTY_SED = r"sed -u 's/\x1b\[[0-9;]*[a-zA-Z]//g'"
 
 
 def configure_engine(arch: str, build_type: str, *, live: bool, tests: bool) -> int:
-    """Run just the CMake configure step for one CPU microarchitecture.
+    """Run the CMake configure step for one arch.
 
-    `tests` builds the C++ test binaries, which only an arch this machine can
-    execute may do (see SCRIBBLEZ_BUILD_TESTS in the top-level CMakeLists.txt).
-
-    When `live` is False, output is redirected to the arch's build.log
-    instead of the terminal, for the non-primary archs of a multi-arch build
-    (see build_all_archs).
+    `tests` enables the C++ test binaries, which only an arch this machine can
+    execute may build (see SCRIBBLEZ_BUILD_TESTS in the top-level
+    CMakeLists.txt). Without `live`, output goes to the arch's build.log
+    instead of the terminal.
     """
     build_dir = arch_build_dir(arch)
     cmd = (
@@ -121,11 +115,9 @@ def configure_engine(arch: str, build_type: str, *, live: bool, tests: bool) -> 
 
 
 def build_engine(arch: str, build_type: str, jobs: int) -> int:
-    """Configure + compile the C++ engine for this host's own arch, tests
-    included (the default single-arch build; build_all_archs handles the
-    multi-arch case).
-
-    Returns the exit code of the first failing step, or 0.
+    """Configure and compile the engine, tests included, for this host's
+    arch: the default build without --archs. Returns the first failing step's
+    exit code, or 0.
     """
     build_dir = arch_build_dir(arch)
     rc = configure_engine(arch, build_type, live=True, tests=True)
@@ -138,41 +130,26 @@ def build_engine(arch: str, build_type: str, jobs: int) -> int:
 def build_all_archs(
     archs: list[str], build_type: str, total_jobs: int, host_arch: str
 ) -> list[str]:
-    """Configure then build every arch in `archs`.
+    """Configure, then compile, every arch in `archs`. Returns the archs that
+    failed.
 
-    Configuring (`cmake -S -B`) is comparatively cheap and not CPU-bound, so
-    every arch configures concurrently. Compiling is CPU-bound; statically
-    splitting total_jobs across archs up front would leave cores idle once a
-    faster (or already-cached) arch finishes early. Instead, every arch's
-    build is driven as a recursive submake ("+$(MAKE) -C <dir>") under one
-    top-level `make -j{total_jobs}`. GNU Make's jobserver protocol then pools
-    job tokens across all of them: an arch that finishes frees its tokens
-    immediately for the arch(s) still compiling, keeping the machine
-    saturated without exceeding total_jobs concurrent compiler invocations,
-    regardless of how unevenly the archs finish. This relies on the project's
-    Unix Makefiles generator (CMAKE_MAKE_PROGRAM is gmake here); it would need
-    rework under Ninja, which has no equivalent cross-process job-sharing
-    protocol.
+    Configuring is cheap and not CPU-bound, so all archs configure
+    concurrently. Compiling shares one pool of `total_jobs` job slots: each
+    arch's build runs as a recursive submake under a single top-level
+    `make -j{total_jobs}`, and GNU Make's jobserver hands an arch's slots to
+    the others as soon as it finishes. A fixed per-arch split would leave
+    cores idle once a fast or already-built arch finished. This depends on
+    the Unix Makefiles generator; Ninja has no cross-process jobserver.
 
-    Building N archs at once means N streams of compiler output racing for
-    the same terminal. Rather than interleaving (or grouping) all of them,
-    only one arch -- the "primary", `host_arch` if it's in `archs` else the
-    first entry -- prints live; every other arch's output goes straight to
-    its own target/archs/<arch>/build.log with nothing printed live. Every
-    arch's log is written regardless (including the primary's), with
-    terminal escape sequences stripped so the files stay plain text even
-    though the primary's live view keeps them.
-
-    Returns the archs whose configure or build step failed (empty on
-    success).
+    Only one arch, the "primary" (`host_arch` if present, else the first),
+    prints to the terminal. Every arch, the primary included, writes a
+    plain-text target/archs/<arch>/build.log.
     """
     primary = host_arch if host_arch in archs else archs[0]
 
-    # Every arch's log gets rebuilt from scratch this run. Non-primary archs'
-    # logs get recreated by configure_engine(live=False) below regardless,
-    # but the primary's doesn't touch its log at all during the (live)
-    # configure step, so without this a repeat run would silently append
-    # this run's build output after last run's stale leftovers.
+    # Start every log fresh. configure_engine(live=False) truncates the
+    # non-primary logs, but the primary's live configure never touches its log,
+    # and the compile step below appends.
     for arch in archs:
         log = arch_build_log(arch)
         if os.path.exists(log):
@@ -201,24 +178,20 @@ def build_all_archs(
         f"(showing '{primary}' live) ..."
     )
 
-    # A recipe's own exit code can't be read back from the single `make`
-    # subprocess we invoke below, so each one records a real failure via a
-    # marker file instead (cleared up front so a stale marker from a prior
-    # run can't be misread as this run failing). `|| touch <marker>` also
-    # makes every recipe report success to `make` itself, so one arch failing
-    # never stops the others from being scheduled -- there's no need for `-k`.
+    # Per-arch results can't be read back from the single top-level make, so a
+    # failing recipe touches a marker file instead (cleared first, so a stale
+    # one can't be misread). `|| touch <marker>` also makes every recipe
+    # succeed as far as make is concerned, so one arch failing never stops the
+    # others; no `-k` needed.
     fail_markers = {arch: os.path.join(arch_build_dir(arch), ".build_failed") for arch in archs}
     for marker in fail_markers.values():
         if os.path.exists(marker):
             os.remove(marker)
 
-    # pipefail (via .SHELLFLAGS) makes each recipe's exit status reflect
-    # $(MAKE) rather than tee/sed (which almost never fail), so
-    # `|| touch <marker>` actually triggers on a real build failure. The
-    # primary's recipe tees its raw (uncleaned) output live to the terminal
-    # while also piping a filtered copy into its log via process
-    # substitution; every other arch pipes straight into a filtered log with
-    # nothing going to the terminal at all.
+    # pipefail (via .SHELLFLAGS) makes a recipe's status $(MAKE)'s rather than
+    # sed's or tee's, so the marker is touched on a real build failure. The
+    # primary tees raw output to the terminal and a filtered copy to its log;
+    # the others write only to their filtered logs.
     def recipe(arch: str) -> str:
         make_cmd = f"+$(MAKE) -C {arch_build_dir(arch)} 2>&1"
         log = arch_build_log(arch)
@@ -247,11 +220,9 @@ def build_all_archs(
 
     failed = [arch for arch, marker in fail_markers.items() if os.path.exists(marker)]
     if dispatch_rc and not failed:
-        # Every recipe swallows its own failure with `|| touch <marker>` and so
-        # reports success to make, which means a nonzero exit from the dispatch
-        # make can only be a structural failure no per-arch marker captured
-        # (make couldn't schedule a recipe, a jobserver error, a signal). Fail
-        # the build rather than mistaking that empty marker set for success.
+        # Recipes never fail as far as make knows, so a nonzero exit here is a
+        # structural failure no marker captured (a scheduling or jobserver
+        # error, a signal). Don't mistake the empty marker set for success.
         sys.exit(
             f"Build failed: the dispatch make exited {dispatch_rc} without any "
             "arch reporting a compile failure. See the output above."
@@ -260,11 +231,8 @@ def build_all_archs(
 
 
 def count_warnings(log_path: str) -> int:
-    """Count compiler warning diagnostics in a build log.
-
-    GCC and Clang both emit "warning:" in every warning diagnostic line
-    (e.g. "foo.cpp:12:3: warning: unused variable [-Wunused-variable]").
-    """
+    """Count compiler warning diagnostics (": warning: " lines) in a build
+    log."""
     if not os.path.isfile(log_path):
         return 0
     with open(log_path, errors="replace") as f:
@@ -284,9 +252,8 @@ def _print_log_locations(archs: list[str]):
 
 
 def _replace_with_symlink(link_path: str, real_path: str):
-    """Point `link_path` at `real_path` (relative symlink), replacing whatever
-    was already there -- a stale real file/dir left over from a single-arch
-    build, or a symlink from a previously active arch."""
+    """Point `link_path` at `real_path` with a relative symlink, replacing
+    whatever is there (a symlink, file or directory)."""
     if os.path.islink(link_path):
         os.unlink(link_path)
     elif os.path.isdir(link_path):
@@ -298,10 +265,8 @@ def _replace_with_symlink(link_path: str, real_path: str):
 
 def link_host_arch_build(arch: str):
     """Point target/engine and target/compile_commands.json at this host
-    arch's build under target/archs/, so tooling that hardcodes those two
-    paths (tests, scripts, the FFI loader, clangd) keeps working regardless of
-    which archs were actually built.
-    """
+    arch's build, the fixed paths that tests, scripts, the FFI loader and
+    clangd expect."""
     build_dir = arch_build_dir(arch)
     _replace_with_symlink(os.path.join(TARGET_DIR, "engine"), os.path.join(build_dir, "engine"))
     _replace_with_symlink(
@@ -335,12 +300,9 @@ def print_built_binaries(target_dir: str):
 
 
 def link_lexica_into_macondo():
-    """Point Macondo's data/lexica/gaddag dir at <mount>/lexica.
-
-    Macondo looks up its kwg by lexicon name from there. Symlinking the whole
-    directory (rather than each .kwg) makes every installed lexicon resolvable
-    and picks up lexica added later without re-linking. Uses a relative symlink
-    so it survives the mount dir being moved. Safe to run repeatedly.
+    """Point Macondo's data/lexica/gaddag directory at <mount>/lexica, so
+    Macondo's own shell resolves every installed lexicon, including ones added
+    later. The symlink is relative, so it survives the mount dir moving.
     """
     if not os.path.isdir(LEXICA_DIR):
         print(
@@ -364,11 +326,9 @@ def build_macondo_shell():
 
 
 def clone_and_build_macondo():
-    """Clone the pinned Macondo tag and build its shell binary, atomically.
-
-    The clone and `go build` are coupled so the build runs only once, when the
-    checkout is first created -- not on every build.py run. If either step
-    fails, the partial checkout is removed so the next run starts clean.
+    """Clone the pinned Macondo tag and build its shell binary. The shell is
+    built only here and on a tag change, not on every run. If either step
+    fails, the checkout is removed so the next run starts clean.
     """
     print(f"\nCloning Macondo {MACONDO_TAG} into {MACONDO_DIR} ...")
     try:
@@ -396,13 +356,13 @@ def current_macondo_tag() -> str:
 def sync_macondo_tag():
     """Move an existing Macondo checkout onto MACONDO_TAG and rebuild its shell.
 
-    The checkout is shallow, and `clone --branch <tag>` leaves behind a fetch
-    refspec naming only that one tag, so a plain `git fetch` would not see any
-    newer tag -- the wanted one has to be fetched by name.
+    The tag is fetched by name because the checkout is shallow and
+    `clone --branch <tag>` leaves a refspec naming only that tag, so a plain
+    `git fetch` would not see a newer one.
 
-    Local edits to the Macondo source are left alone: they are a supported way
-    to work (see --skip-macondo-tag-sync), and silently stashing or discarding
-    them to move tags would be worse than stopping.
+    Uncommitted edits to the Macondo source stop the build rather than being
+    stashed or discarded: editing Macondo is a supported workflow (see
+    --skip-macondo-tag-sync).
     """
     current = current_macondo_tag()
     if current == MACONDO_TAG:
@@ -441,22 +401,24 @@ def parse_args() -> argparse.Namespace:
         "-a",
         "--archs",
         default="",
-        help="comma-separated GCC -march values to build for instead of just this host's "
-        "arch (each under target/archs/<arch>/), e.g. to push a bundle by hand for machines "
-        "of another CPU family; the dashboard builds a task's archs itself",
+        help="comma-separated GCC -march values to build instead of this host's arch, each "
+        "under target/archs/<arch>/ (tests are built only for this host's arch). Useful for "
+        "pushing a bundle by hand for another CPU family; the dashboard builds the archs its "
+        "machines need itself",
     )
     parser.add_argument(
         "--skip-web", action="store_true", help="skip installing the web UI npm dependencies"
     )
     parser.add_argument(
-        "--skip-macondo", action="store_true", help="skip rebuilding the Macondo shell binary"
+        "--skip-macondo",
+        action="store_true",
+        help="skip the Macondo steps: clone, tag sync, shell build and lexica link",
     )
     parser.add_argument(
         "--skip-macondo-tag-sync",
         action="store_true",
-        help="leave the macondo checkout on whatever tag it is on instead of "
-        f"moving it to the expected one ({MACONDO_TAG}); useful when "
-        "fiddling with the macondo source",
+        help="leave the Macondo checkout on its current tag instead of moving it to "
+        f"{MACONDO_TAG}; for when you are editing the Macondo source",
     )
     args = parser.parse_args()
     return args
@@ -472,13 +434,12 @@ def main():
     elif os.path.exists(os.path.join(target_dir, "CMakeCache.txt")) and not os.path.isdir(
         ARCHS_DIR
     ):
-        # Pre-multi-arch layout: a single CMake build sat directly under
-        # target/. Its cache paths don't match the new target/archs/<arch>
-        # layout, so it can't be reused -- wipe it and reconfigure fresh.
+        # A CMake build directly under target/, not under target/archs/<arch>/:
+        # its cache paths can't be reused, so reconfigure from scratch.
         print(f"\nFound a pre-multi-arch build at {target_dir}; removing it to reconfigure.")
         shutil.rmtree(target_dir)
 
-    # 1. Configure + compile the C++ engine, once per requested arch.
+    # 1. The C++ engine, once per requested arch.
     build_type = "Debug" if args.debug else "Release"
     jobs = args.jobs or default_thread_count()
     host_arch = detect_host_arch()
@@ -502,8 +463,7 @@ def main():
             "py/build.py without --archs to build it."
         )
 
-    # 2. Install the front-end's npm dependencies so the engine can launch the
-    #    Vite dev server (`npm run dev`) for human-vs-AI play.
+    # 2. The web UI's npm packages, so play_game can start the Vite dev server.
     if not args.skip_web:
         if shutil.which("npm") is None:
             print(
@@ -517,8 +477,7 @@ def main():
             else:
                 run("npm install --no-audit --no-fund", cwd=web_dir)
 
-    # 3. Clone + build the Macondo shell binary (only when first cloned, or
-    #    when MACONDO_TAG has moved since).
+    # 3. Macondo: clone, or move to MACONDO_TAG; the shell is rebuilt only then.
     if not args.skip_macondo:
         if shutil.which("git") is None:
             print("\nWARNING: `git` not found on PATH -- skipping Macondo build.")
@@ -530,7 +489,6 @@ def main():
             elif not args.skip_macondo_tag_sync:
                 sync_macondo_tag()
 
-            # Make the installed lexica resolvable by the macondo subprocess.
             link_lexica_into_macondo()
 
     print_built_binaries(target_dir)
