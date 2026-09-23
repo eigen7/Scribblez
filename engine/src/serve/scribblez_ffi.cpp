@@ -1,19 +1,14 @@
 #include "serve/scribblez_ffi.h"
 
 #include "agent/agent.h"
-#include "agent/player_factory.h"
-#include "arena/game_engine.h"
-#include "arena/streaming_game_producer.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
 #include "data/sim_observation_log.h"
-#include "data/streaming_row_buffer.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
-#include "encoding/row_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "sim/sim_runner.h"
@@ -86,13 +81,6 @@ struct ScribblezSession {
                               int out_cap) const;
   DataLoaderHandle* dl_new(int64_t memory_budget, int num_worker_threads, int num_prefetch_threads,
                            int task) const;
-  StreamHandle* stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
-                           int num_threads, bool post_move, bool apply_symmetry, uint64_t seed,
-                           int handicap_max, const char* const* player_specs, int num_specs) const;
-  StreamHandle* max_move_per_lane_stream_new(float* const* slot_ptrs, int num_slots,
-                                             int rows_per_slot, int num_threads,
-                                             bool apply_symmetry, uint64_t seed, int handicap_max,
-                                             const char* const* player_specs, int num_specs) const;
 
   scribblez::InputEncodingSpec spec;
 
@@ -744,128 +732,5 @@ int scribblez_dl_load_batch(DataLoaderHandle* h, float* output) {
     return -1;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Streaming self-play pipeline
-// ---------------------------------------------------------------------------
-
-struct StreamHandle {
-  scribblez::binlog::StreamingRowBuffer ring;
-  scribblez::binlog::StreamingGameProducer producer;
-
-  StreamHandle(float* const* slots, int num_slots, int rows_per_slot, int row_floats,
-               const scribblez::GameEngine::Params& engine_params,
-               const scribblez::PlayerFactory::Params& player_params,
-               const scribblez::binlog::StreamingGameProducer::Params& stream_params)
-      : ring(slots, num_slots, rows_per_slot, row_floats),
-        producer(engine_params, player_params, stream_params, ring) {}
-};
-
-namespace {
-
-// Shared construction for both streaming entry points, which differ only in
-// row encoder and row width. Returns nullptr on a bad config or a failure to
-// construct.
-StreamHandle* new_stream(float* const* slot_ptrs, int num_slots, int rows_per_slot, int num_threads,
-                         int apply_symmetry, uint64_t seed, int handicap_max,
-                         const char* const* player_specs, int num_specs, int row_floats,
-                         scribblez::binlog::RowEncoderFactory factory) {
-  if (!slot_ptrs || num_slots < 1 || rows_per_slot < 1 || !player_specs || num_specs < 1) {
-    return nullptr;
-  }
-  scribblez::PlayerFactory::Params player_params;
-  for (int i = 0; i < num_specs; ++i) {
-    if (!player_specs[i]) return nullptr;
-    player_params.specs.emplace_back(player_specs[i]);
-  }
-  scribblez::GameEngine::Params engine_params;
-  engine_params.threads = num_threads;
-  engine_params.seed = seed;
-  engine_params.handicap_max = handicap_max;
-  scribblez::binlog::StreamingGameProducer::Params stream_params;
-  stream_params.apply_symmetry = apply_symmetry != 0;
-  stream_params.make_encoder = std::move(factory);
-  try {
-    return new StreamHandle(slot_ptrs, num_slots, rows_per_slot, row_floats, engine_params,
-                            player_params, stream_params);
-  } catch (const std::exception& e) {
-    std::cerr << "new_stream: " << e.what() << "\n";
-    return nullptr;
-  }
-}
-
-}  // namespace
-
-StreamHandle* ScribblezSession::stream_new(float* const* slot_ptrs, int num_slots,
-                                           int rows_per_slot, int num_threads, bool post_move,
-                                           bool apply_symmetry, uint64_t seed, int handicap_max,
-                                           const char* const* player_specs, int num_specs) const {
-  const scribblez::InputEncodingSpec enc_spec = spec;
-  return ::new_stream(
-    slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed, handicap_max,
-    player_specs, num_specs, row_size_floats(), [enc_spec, post_move]() {
-      return scribblez::binlog::make_position_eval_row_encoder(enc_spec, post_move);
-    });
-}
-
-StreamHandle* scribblez_stream_new(ScribblezSession* s, float* const* slot_ptrs, int num_slots,
-                                   int rows_per_slot, int num_threads, int post_move,
-                                   int apply_symmetry, uint64_t seed, int handicap_max,
-                                   const char* const* player_specs, int num_specs) {
-  return s->stream_new(slot_ptrs, num_slots, rows_per_slot, num_threads, post_move != 0,
-                       apply_symmetry != 0, seed, handicap_max, player_specs, num_specs);
-}
-
-StreamHandle* ScribblezSession::max_move_per_lane_stream_new(
-  float* const* slot_ptrs, int num_slots, int rows_per_slot, int num_threads, bool apply_symmetry,
-  uint64_t seed, int handicap_max, const char* const* player_specs, int num_specs) const {
-  const scribblez::InputEncodingSpec enc_spec = spec;
-  return ::new_stream(
-    slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed, handicap_max,
-    player_specs, num_specs, scribblez::MaxMovePerLaneTask::kRowFloats,
-    [enc_spec]() { return scribblez::binlog::make_max_move_per_lane_row_encoder(enc_spec); });
-}
-
-StreamHandle* scribblez_max_move_per_lane_stream_new(ScribblezSession* s, float* const* slot_ptrs,
-                                                     int num_slots, int rows_per_slot,
-                                                     int num_threads, int apply_symmetry,
-                                                     uint64_t seed, int handicap_max,
-                                                     const char* const* player_specs,
-                                                     int num_specs) {
-  return s->max_move_per_lane_stream_new(slot_ptrs, num_slots, rows_per_slot, num_threads,
-                                         apply_symmetry != 0, seed, handicap_max, player_specs,
-                                         num_specs);
-}
-
-void scribblez_stream_start(StreamHandle* h) {
-  if (h) h->producer.start();
-}
-
-int scribblez_stream_wait_full_slot(StreamHandle* h) {
-  if (!h) return -1;
-  return h->ring.wait_full_slot();
-}
-
-void scribblez_stream_release_slot(StreamHandle* h, int slot) {
-  if (h) h->ring.release_slot(slot);
-}
-
-void scribblez_stream_get_stats(StreamHandle* h, ScribblezStreamStats* out) {
-  if (!h || !out) return;
-  const scribblez::binlog::ProducerStats ps = h->producer.stats();
-  const scribblez::binlog::RingStats rs = h->ring.stats();
-  out->games_played = ps.games_played;
-  out->games_dropped = ps.games_dropped;
-  out->rows_committed = rs.rows_committed;
-  out->slots_published = rs.slots_published;
-  out->producer_blocked_ns = rs.producer_blocked_ns;
-  out->consumer_blocked_ns = rs.consumer_blocked_ns;
-}
-
-void scribblez_stream_stop(StreamHandle* h) {
-  if (h) h->producer.stop();
-}
-
-void scribblez_stream_delete(StreamHandle* h) { delete h; }
 
 }  // extern "C"

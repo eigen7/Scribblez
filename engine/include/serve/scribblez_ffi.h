@@ -1,7 +1,6 @@
 // The engine's plain C ABI for Python (loaded with ctypes by
-// py/scribblez/ffi.py): row layouts, the training DataLoader, the streaming
-// self-play pipeline, and the position encoders and analysis helpers the
-// dashboard and tools call.
+// py/scribblez/ffi.py): row layouts, the training DataLoader, and the position
+// encoders and analysis helpers the dashboard and tools call.
 //
 // Conventions:
 //   - Most entry points return -1 on failure; an `out_err` buffer, where one
@@ -48,10 +47,10 @@ int scribblez_max_move_per_lane_input_floats(void);
 // ===========================================================================
 //
 // Every entry point that needs the dictionary (position encoding, GCG
-// analysis, DataLoader and stream construction) takes a session, created once
-// per process. Creating it loads <lexica-dir>/<lexicon_name>.kwg. A missing
-// lexicon throws out of the constructor and, uncaught across the C ABI,
-// terminates the process. That is deliberate: nothing useful can be done
+// analysis, DataLoader construction) takes a session, created once per
+// process. Creating it loads <lexica-dir>/<lexicon_name>.kwg. A missing lexicon
+// throws out of the constructor and, uncaught across the C ABI, terminates the
+// process. That is deliberate: nothing useful can be done
 // without a dictionary, so a live session is proof the lexicon is loaded and
 // no later call needs to check.
 //
@@ -290,70 +289,6 @@ int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move,
 // Returns the rows written, 0 once the epoch is exhausted, or -1 if a file
 // became unreadable mid-epoch. `output` needs room for batch_size rows.
 int scribblez_dl_load_batch(DataLoaderHandle* h, float* output);
-
-// ===========================================================================
-// Streaming self-play -> training pipeline
-// ===========================================================================
-//
-// Trains on self-play games as they are generated, with nothing written to
-// disk. The Python trainer owns N row buffers ("slots") and passes their
-// addresses in. C++ producer threads play self-play games and write each
-// game's sampled training row directly into the current slot. When a slot
-// fills, scribblez_stream_wait_full_slot returns its index; the trainer
-// consumes it and hands it back with scribblez_stream_release_slot. With N=2
-// this overlaps CPU game generation with GPU training.
-
-// Throughput and backpressure counters. Growth in producer_blocked_ns means the
-// consumer (GPU) is the bottleneck; growth in consumer_blocked_ns means the
-// producers (CPU) are.
-typedef struct ScribblezStreamStats {
-  int64_t games_played;   // games whose sampled row was committed
-  int64_t games_dropped;  // games with no eligible (bag-nonempty) turn
-  int64_t rows_committed;
-  int64_t slots_published;  // full slots handed to the consumer
-  int64_t producer_blocked_ns;
-  int64_t consumer_blocked_ns;
-} ScribblezStreamStats;
-
-typedef struct StreamHandle StreamHandle;
-
-// Create a streamer over `num_slots` caller-owned buffers, each at least
-// rows_per_slot * scribblez_row_size_floats() floats. `player_specs` holds
-// `num_specs` `--player` spec strings, typically two "--type=hastybot".
-// Production begins at scribblez_stream_start. Returns NULL on a bad config.
-StreamHandle* scribblez_stream_new(ScribblezSession* s, float* const* slot_ptrs, int num_slots,
-                                   int rows_per_slot, int num_threads, int post_move,
-                                   int apply_symmetry, uint64_t seed, int handicap_max,
-                                   const char* const* player_specs, int num_specs);
-
-// scribblez_stream_new for max-move-per-lane rows
-// (scribblez_max_move_per_lane_row_size_floats() floats each), sampled
-// uniformly over all turns. The rest of the streaming API is shared.
-StreamHandle* scribblez_max_move_per_lane_stream_new(ScribblezSession* s, float* const* slot_ptrs,
-                                                     int num_slots, int rows_per_slot,
-                                                     int num_threads, int apply_symmetry,
-                                                     uint64_t seed, int handicap_max,
-                                                     const char* const* player_specs,
-                                                     int num_specs);
-
-// Idempotent.
-void scribblez_stream_start(StreamHandle* h);
-
-// Blocks until a slot is full and returns its index, or -1 once the stream has
-// stopped. ctypes releases the GIL for the call, so other Python threads keep
-// running while it waits.
-int scribblez_stream_wait_full_slot(StreamHandle* h);
-
-void scribblez_stream_release_slot(StreamHandle* h, int slot);
-
-void scribblez_stream_get_stats(StreamHandle* h, ScribblezStreamStats* out);
-
-// Wakes the consumer and producers, then joins the producer threads.
-// Idempotent.
-void scribblez_stream_stop(StreamHandle* h);
-
-// Stops and joins first if needed.
-void scribblez_stream_delete(StreamHandle* h);
 
 #ifdef __cplusplus
 }

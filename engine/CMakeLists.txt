@@ -106,14 +106,11 @@ target_link_libraries(scribblez_core PUBLIC Boost::program_options Boost::filesy
 
 # Plain C ABI for Python (cffi). Statically links the engine so
 # libscribblez_ffi.so is one self-contained artifact exposing only the symbols
-# declared in serve/scribblez_ffi.h. The streaming pipeline plays self-play
-# games inside the library, and player_factory.cpp dispatches --player specs
-# to every agent's from_spec, so scribblez_neural_agents is linked too.
+# declared in serve/scribblez_ffi.h.
 add_library(scribblez_ffi SHARED
   src/serve/scribblez_ffi.cpp)
 target_link_libraries(scribblez_ffi PRIVATE
   scribblez_core
-  scribblez_neural_agents
   Boost::program_options
   Boost::filesystem
   Boost::system
