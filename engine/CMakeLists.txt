@@ -36,6 +36,7 @@ add_library(scribblez_core STATIC
   src/data/block_decoder.cpp
   src/data/slog_subset.cpp
   src/serve/position_json.cpp
+  src/serve/client_message.cpp
   src/data/data_loader.cpp
   src/agent/agent.cpp
   src/agent/agent_options.cpp
@@ -311,8 +312,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(scribblez_tests
     tests/tests_main.cpp
     tests/test_footprint.cpp
-    src/lexicon/hasty_equity.cpp
-    src/lexicon/leave_values.cpp)
+    tests/test_web_server.cpp)
   target_link_libraries(scribblez_tests PRIVATE
     scribblez_core scribblez_evidence_select Boost::json GTest::gtest_main)
   # The lexicon mount is populated by setup_wizard.py (the .kwg is never
@@ -350,9 +350,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # entirely: the tests inject scripted stub services and never touch the GPU.
   add_executable(test_neural_agent
     tests/test_neural_agent.cpp
-    src/agent/neural_agent.cpp
-    src/lexicon/hasty_equity.cpp
-    src/lexicon/leave_values.cpp)
+    src/agent/neural_agent.cpp)
   target_link_libraries(test_neural_agent PRIVATE
     scribblez_core Boost::json Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_neural_agent)
@@ -509,10 +507,10 @@ target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
-add_executable(mset_infer_smoke apps/mset_infer_smoke.cpp)
+add_executable(mset_infer_smoke apps/mset_infer_smoke.cpp apps/synthetic_candidates.cpp)
 target_link_libraries(mset_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
-add_executable(proposal_infer_smoke apps/proposal_infer_smoke.cpp)
+add_executable(proposal_infer_smoke apps/proposal_infer_smoke.cpp apps/synthetic_candidates.cpp)
 target_link_libraries(proposal_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
 # Distillation targets for the move set evaluation model: the position
