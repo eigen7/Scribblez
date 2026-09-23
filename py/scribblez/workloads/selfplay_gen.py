@@ -46,11 +46,8 @@ GAMES_PER_CHUNK = 1000
 GENERATOR_STATS = StatsSpec(unit="games", phases={"gen_s": "self-play", "upload_s": "deliver"})
 
 
-def player_spec(params) -> str:
-    # Only position_eval's params carry weirdbot_generation; the other workloads
-    # sharing this role always play HastyBot.
-    if getattr(params, "weirdbot_generation", False):
-        return "--type=weirdbot"
+def hasty_spec(params) -> str:
+    """The HastyBot --player spec a tag's hasty_* params describe."""
     return hasty_player_spec(params.hasty_temperature, params.hasty_top_k, endgame=True)
 
 
@@ -150,14 +147,18 @@ def _publish(stats: WorkerStats, results: list[DeliveryResult]):
 
 
 def run_generate(ctx: WorkerContext) -> int:
-    """The generate-role runner: one chunk per cycle, delivered to staging in
-    the background."""
+    """The generate-role runner for HastyBot self-play."""
+    return generate(ctx, hasty_spec(ctx.params))
+
+
+def generate(ctx: WorkerContext, player_spec: str) -> int:
+    """Play `player_spec` in both seats, one chunk per cycle, delivered to
+    staging in the background."""
     p = ctx.params
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     shutil.rmtree(work_dir, ignore_errors=True)
     work_dir.mkdir(parents=True)
     stats = WorkerStats(ctx)
-    spec_str = player_spec(p)
     print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {p}")
 
     deliverer = Deliverer(ctx.sink, ctx.worker_id)
@@ -172,7 +173,7 @@ def run_generate(ctx: WorkerContext) -> int:
                 chunk_dir,
                 num_games=GAMES_PER_CHUNK,
                 threads=ctx.threads,
-                player_spec=spec_str,
+                player_spec=player_spec,
                 random_opening_mean=p.random_opening_mean,
                 face_up_leaves=p.face_up_leaves,
             )
