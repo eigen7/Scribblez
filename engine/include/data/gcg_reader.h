@@ -53,6 +53,11 @@ struct ParsedGcgGame {
   std::vector<ParsedGcgTurn> turns;
   std::vector<ParsedGcgSnapshot> snapshots;
   std::vector<ParsedGcgEndAdjustment> end_adjustments;
+  // Each player's "#RackN TILES" pragma from the header (before any event
+  // line), which gives their rack in the final recorded position; nullopt if
+  // the header has none. Only the capitalized "#Rack" form gcg_writer.h emits
+  // is a pragma. The reader already applies these to snapshots.back().
+  std::array<std::optional<ParsedRackSlots>, 2> header_racks;
   GameLogStorage game_log;  // to_game_log_storage() of the above
 
   GameLogStorage to_game_log_storage() const;
@@ -77,10 +82,10 @@ struct ParsedGcgEndgame {
   int turns = 0;
 };
 
-// The rack from the first "#RackN TILES" pragma line for `player` ('?' is a
-// blank), or nullopt if there is none. The pragma name matches
-// case-insensitively because GCG writers vary.
-std::optional<Rack> pragma_rack(const std::string& gcg_text, int player);
+// The known tiles of `player`'s header rack pragma (see
+// ParsedGcgGame::header_racks), or nullopt if the header has none. A '_' slot
+// holds no tile: a writer marks unknown or empty slots with it.
+std::optional<Rack> header_rack(const ParsedGcgGame& game, int player);
 
 // Returns false and sets `error_message` when the text does not parse, the
 // mover's rack pragma is missing, or the opponent's rack must be inferred

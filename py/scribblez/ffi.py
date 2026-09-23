@@ -995,16 +995,16 @@ def gcg_position_board_json(gcg_text: str, open_leaves: bool) -> dict:
 
 def read_file_header(path: str | Path) -> tuple[int, int]:
     """Read a .slog header. Returns (num_games, file_size)."""
-    num_pos = ctypes.c_int64()
+    num_games = ctypes.c_int64()
     file_sz = ctypes.c_int64()
     rc = _lib().scribblez_read_file_header(
         str(path).encode("utf-8"),
-        ctypes.byref(num_pos),
+        ctypes.byref(num_games),
         ctypes.byref(file_sz),
     )
     if rc != 0:
         raise OSError(f"Failed to read .slog header: {path}")
-    return int(num_pos.value), int(file_sz.value)
+    return int(num_games.value), int(file_sz.value)
 
 
 # ---------------------------------------------------------------------------
@@ -1045,9 +1045,9 @@ class NativeDataLoader:
             self._lib.scribblez_dl_delete(self._handle)
             self._handle = None
 
-    def add_file(self, path: str | Path, num_positions: int, file_size: int):
+    def add_file(self, path: str | Path, num_games: int, file_size: int):
         self._lib.scribblez_dl_add_file(
-            self._handle, str(path).encode("utf-8"), num_positions, file_size
+            self._handle, str(path).encode("utf-8"), num_games, file_size
         )
 
     @property

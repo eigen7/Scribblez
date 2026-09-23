@@ -9,10 +9,8 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <format>
 #include <optional>
-#include <sstream>
 
 namespace scribblez {
 
@@ -74,36 +72,6 @@ json::array lane_axis(const Board& board, const std::array<LaneBest, kLanesPerAx
   return out;
 }
 
-// The token after the player's `#Rack1` / `#Rack2` line, if present.
-std::optional<std::string> rack_header_token(const std::string& gcg_text, int player) {
-  const std::string key = player == 0 ? "#Rack1" : "#Rack2";
-  std::istringstream in(gcg_text);
-  std::string line;
-  while (std::getline(in, line)) {
-    if (line.rfind(key, 0) != 0) continue;
-    std::istringstream ls(line);
-    std::string head, tok;
-    ls >> head >> tok;
-    return tok;  // empty string if the header has no token
-  }
-  return std::nullopt;
-}
-
-// '?' is a blank; '_' marks an unknown slot (a hidden opponent tile) and is
-// skipped along with any other non-letter.
-Rack rack_from_header_token(const std::string& tok) {
-  Rack rack;
-  for (char ch : tok) {
-    if (ch == '?') {
-      rack.add(BLANK);
-      continue;
-    }
-    const char up = std::toupper(uint8_t(ch));
-    if (up >= 'A' && up <= 'Z') rack.add(Tile::from_char(up));
-  }
-  return rack;
-}
-
 }  // namespace
 
 bool parse_gcg_analysis_position(const std::string& gcg_text, GcgAnalysisPosition* out,
@@ -118,12 +86,12 @@ bool parse_gcg_analysis_position(const std::string& gcg_text, GcgAnalysisPositio
   out->board = final_pos.board;
   out->on_move = final_pos.turn_player;
 
-  const std::optional<std::string> tok = rack_header_token(gcg_text, out->on_move);
-  if (!tok) {
+  const std::optional<Rack> rack = header_rack(game, out->on_move);
+  if (!rack) {
     if (error) *error = "missing #Rack header for the on-move player";
     return false;
   }
-  out->rack = rack_from_header_token(*tok);
+  out->rack = *rack;
   return true;
 }
 

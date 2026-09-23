@@ -246,8 +246,7 @@ int scribblez_gcg_position_board_json(ScribblezSession* s, const char* gcg_text,
 // A .slog file's game count and on-disk size, the arguments
 // scribblez_dl_add_file needs. Returns 0, or -1 on an I/O failure or a magic
 // or version mismatch.
-int scribblez_read_file_header(const char* path, int64_t* out_num_positions,
-                               int64_t* out_file_size);
+int scribblez_read_file_header(const char* path, int64_t* out_num_games, int64_t* out_file_size);
 
 // A JSON description of the binary file formats (.slog, .sobs, .mset): each
 // struct's field names, offsets, and numpy dtype codes, taken from the
@@ -269,9 +268,9 @@ DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
 
 void scribblez_dl_delete(DataLoaderHandle* h);
 
-// Add files oldest first. `num_positions` and `file_size` are what
+// Add files oldest first. `num_games` and `file_size` are what
 // scribblez_read_file_header reports.
-void scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_positions,
+void scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_games,
                            int64_t file_size);
 
 int64_t scribblez_dl_num_positions(const DataLoaderHandle* h);

@@ -69,9 +69,9 @@ class DataLoader {
   DataLoader& operator=(const DataLoader&) = delete;
 
   // `file_size` must be the file's size on disk. The row count is read from the file's own header;
-  // `num_positions` serves only as a fallback game count (one row per game) if
+  // `num_games` serves only as a fallback game count (one row per game) if
   // that header cannot be read.
-  void add_file(const std::string& path, int64_t num_positions, int64_t file_size);
+  void add_file(const std::string& path, int64_t num_games, int64_t file_size);
 
   // Totals across all registered files.
   int64_t num_positions() const;
@@ -127,8 +127,7 @@ class DataLoader {
   // epoch can be planned before any body is loaded.
   class DataFile {
    public:
-    DataFile(const std::string& path, int64_t num_positions, int64_t file_size,
-             bool expand_all_turns);
+    DataFile(const std::string& path, int64_t num_games, int64_t file_size, bool expand_all_turns);
     ~DataFile();
 
     const std::string& path() const { return path_; }
@@ -250,7 +249,7 @@ class DataLoader {
     FileManager(int64_t memory_budget, int num_prefetch_threads, bool expand_all_turns);
     ~FileManager();
 
-    void append(const std::string& path, int64_t num_positions, int64_t file_size);
+    void append(const std::string& path, int64_t num_games, int64_t file_size);
 
     int64_t num_positions() const;
     int num_files() const;

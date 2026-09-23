@@ -98,10 +98,10 @@ TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t n
 // DataFile
 // ===========================================================================
 
-DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, int64_t file_size,
+DataLoader::DataFile::DataFile(const std::string& path, int64_t num_games, int64_t file_size,
                                bool expand_all_turns)
-    : path_(path), num_positions_(num_positions), file_size_(file_size) {
-  TurnIndex idx = read_turn_index(path_, num_games_, num_positions, expand_all_turns);
+    : path_(path), file_size_(file_size) {
+  TurnIndex idx = read_turn_index(path_, num_games_, num_games, expand_all_turns);
   cumulative_turns_ = std::move(idx.cum);
   first_turns_ = std::move(idx.first_turn);
   num_positions_ = cumulative_turns_.back();
@@ -281,10 +281,10 @@ DataLoader::FileManager::~FileManager() {
   for (DataFile* f : all_files_) delete f;
 }
 
-void DataLoader::FileManager::append(const std::string& path, int64_t num_positions,
+void DataLoader::FileManager::append(const std::string& path, int64_t num_games,
                                      int64_t file_size) {
   // Tally the DataFile's row count, read from the file, not the caller's hint.
-  auto* f = new DataFile(path, num_positions, file_size, expand_all_turns_);
+  auto* f = new DataFile(path, num_games, file_size, expand_all_turns_);
   std::lock_guard<std::mutex> lock(mutex_);
   num_positions_ += f->num_positions();
   all_files_.push_back(f);
@@ -658,8 +658,8 @@ DataLoader::DataLoader(const Params& params)
 
 DataLoader::~DataLoader() = default;
 
-void DataLoader::add_file(const std::string& path, int64_t num_positions, int64_t file_size) {
-  file_manager_.append(path, num_positions, file_size);
+void DataLoader::add_file(const std::string& path, int64_t num_games, int64_t file_size) {
+  file_manager_.append(path, num_games, file_size);
 }
 
 int64_t DataLoader::num_positions() const { return file_manager_.num_positions(); }
