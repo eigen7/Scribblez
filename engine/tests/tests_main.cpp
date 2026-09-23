@@ -445,13 +445,14 @@ TEST(Encoder, BasicLayout) {
   ASSERT_EQ(out[c_plane * 225 + 7 * 15 + 7], 1.0f);
   ASSERT_EQ(out[d_plane * 225 + 3 * 15 + 3], 1.0f);  // blank-as-D still lights the D plane
 
-  // The blank-marker plane is plane 26.
-  ASSERT_EQ(out[26 * 225 + 3 * 15 + 3], 1.0f);
-  ASSERT_EQ(out[26 * 225 + 7 * 15 + 7], 0.0f);
+  // The blank-marker plane lights the blank-as-D, not the real C.
+  ASSERT_EQ(out[BoardPlanes::kBlankMarkerPlane * 225 + 3 * 15 + 3], 1.0f);
+  ASSERT_EQ(out[BoardPlanes::kBlankMarkerPlane * 225 + 7 * 15 + 7], 0.0f);
 
-  // Premium planes (27..30): only check that every cell was written as 0 or 1,
+  // Premium planes: only check that every cell was written as 0 or 1,
   // overwriting the -1.0 fill.
-  for (int p = 27; p <= 30; ++p) {
+  for (int p = BoardPlanes::kPremiumPlane0;
+       p < BoardPlanes::kPremiumPlane0 + BoardPlanes::kPremiumPlanes; ++p) {
     for (int i = 0; i < 225; ++i) {
       float v = out[p * 225 + i];
       ASSERT_TRUE(v == 0.0f || v == 1.0f);
