@@ -1020,9 +1020,9 @@ class TestAgent : public scribblez::Agent {
   std::mt19937_64 rng_;
 };
 
-// One position from an independent replay of a GameLogStorage that tracks both
-// racks directly. The ground truth that GameStateEncoder replays are checked
-// against.
+// One position from an independent replay of a GameLogStorage, taking each
+// mover's rack from its logged rack_before. The ground truth that
+// GameStateEncoder replays are checked against.
 struct LiveSnapshot {
   scribblez::Board board;
   scribblez::Rack rack_active;
@@ -1039,30 +1039,18 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStor
 
   std::vector<LiveSnapshot> out;
   Board board;
-  Rack racks[2];
   Move last_by[2] = {Move{}, Move{}};
-
-  // Seed each player's rack from their first turn's rack_before.
-  bool seeded[2] = {false, false};
-  for (const TurnRecord& t : log.turns) {
-    if (!seeded[t.player]) {
-      racks[t.player] = t.rack_before;
-      seeded[t.player] = true;
-    }
-    if (seeded[0] && seeded[1]) break;
-  }
 
   for (size_t i = 0; i < log.turns.size(); ++i) {
     const TurnRecord& turn = log.turns[i];
     const int active = turn.player;
     const int opp = 1 - active;
-    racks[active] = turn.rack_before;
     const int prev_active = turn.cumulative_scores[active] - turn.score_delta;
     const int prev_opp = turn.cumulative_scores[opp];
 
     LiveSnapshot pre;
     pre.board = board;
-    pre.rack_active = racks[active];
+    pre.rack_active = turn.rack_before;
     pre.last_opp_move = last_by[opp];
     pre.score_active = prev_active;
     pre.score_opp = prev_opp;
@@ -1081,18 +1069,7 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStor
       out.push_back(post);
     }
 
-    if (turn.move.type() == MoveType::PLAY) {
-      const int n = turn.move.num_glyphs();
-      for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyph(g).rack_tile());
-      board.apply(turn.move);
-    } else if (turn.move.type() == MoveType::EXCHANGE) {
-      const int n = turn.move.num_glyphs();
-      for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyph(g).rack_tile());
-    }
-    for (Tile t : turn.drawn.tiles()) {
-      if (t.is_empty()) break;
-      racks[active].add(t);
-    }
+    if (turn.move.type() == MoveType::PLAY) board.apply(turn.move);
     last_by[active] = turn.move;
   }
   return out;
