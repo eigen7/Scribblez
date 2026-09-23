@@ -163,14 +163,12 @@ class ProposalInferenceParityTest : public ::testing::Test {
   void SetUp() override;
   void TearDown() override {
     if (!generated_.empty()) std::filesystem::remove_all(generated_);
-    if (!cache_root_.empty()) std::filesystem::remove_all(cache_root_);
   }
 
   std::string model(const char* name) const { return dir_ + "/" + name; }
 
-  // Params for the fixture's graph pair, with the plan cache in this test's
-  // scratch root. A `max_rows` below the candidate count makes both graphs run
-  // in chunks.
+  // Params for the fixture's graph pair. A `max_rows` below the candidate count
+  // makes both graphs run in chunks.
   MoveProposalNets::Params nets_params(int max_rows) const;
 
   // The evidence set of one case: the fixture's raw records at its indices.
@@ -178,7 +176,6 @@ class ProposalInferenceParityTest : public ::testing::Test {
 
   std::string dir_;
   std::filesystem::path generated_;
-  std::filesystem::path cache_root_;
 
   int num_moves_ = 0;
   std::vector<float> board_;
@@ -190,7 +187,6 @@ class ProposalInferenceParityTest : public ::testing::Test {
 };
 
 void ProposalInferenceParityTest::SetUp() {
-  cache_root_ = make_scratch_dir("scribblez_propcache_");
   if (!g_fixture_dir.empty()) {
     dir_ = g_fixture_dir;
     if (!std::filesystem::exists(dir_ + "/cache.onnx")) {
@@ -244,9 +240,12 @@ MoveProposalNets::Params ProposalInferenceParityTest::nets_params(int max_rows) 
   params.precision = scribblez::nn::Precision::kFP32;  // the serving precision
   params.max_rows = max_rows;
   params.step_max_rows = max_rows;
-  params.mount_root = cache_root_.string();
   // Parity checks the inference plumbing, not kernel-tactic quality, so build
-  // at optimization level 0 to keep cold builds to a few seconds.
+  // at optimization level 0. The plans go to the persistent cache under the
+  // default mount_root, so later runs skip the build: every cache hit is
+  // refitted with the loaded model's own weights, and fast_build plans live in
+  // their own subtree, where no full-optimization production load can find
+  // them.
   params.fast_build = true;
   return params;
 }
