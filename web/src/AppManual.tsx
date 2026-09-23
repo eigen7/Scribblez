@@ -500,7 +500,10 @@ function AppManual() {
   const candidatesInLine = (): boolean => {
     if (candidateTiles.length === 0) return false;
     const [first] = candidateTiles;
-    return candidateTiles.every((t) => t.row === first.row) || candidateTiles.every((t) => t.col === first.col);
+    return (
+      candidateTiles.every((t) => t.row === first.row) ||
+      candidateTiles.every((t) => t.col === first.col)
+    );
   };
 
   function submitMove() {
