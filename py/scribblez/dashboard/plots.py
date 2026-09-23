@@ -1,5 +1,11 @@
-"""Bokeh plot builders for the training dashboard: scalar learning curves over
-epochs (square figures, server-rendered)."""
+"""Bokeh figure builders for the training dashboard's metric tabs: learning
+curves, the Loss tab's stacked losses, and match results.
+
+Each builder reads a tag's dashboard.db and returns a Bokeh model (or None when
+there is nothing to plot yet); api.py serializes it as a json_item that the
+React app embeds with BokehJS. Figures that stream incremental updates name
+their data sources (`_source_name`) for figure_delta.py.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +27,7 @@ from bokeh.plotting import figure
 
 from . import db
 
-SERIES_SIZE = 800  # square-ish learning-curve figures
+SERIES_SIZE = 800  # side of a square learning-curve figure, in pixels
 
 
 # ---------------------------------------------------------------------------
@@ -29,17 +35,15 @@ SERIES_SIZE = 800  # square-ish learning-curve figures
 # ---------------------------------------------------------------------------
 
 
-# Below this many points an EMA is more misleading than helpful (its debiased head
-# just traces the raw points), so smoothing is a no-op until a curve has at least
-# this many samples -- the raw series is drawn as-is.
+# Below this many points an EMA's debiased head just traces the raw points, so
+# smoothing is skipped and the raw series drawn instead.
 _SMOOTH_MIN_POINTS = 10
 
 
 def _ema(values, weight: float = 0.85):
-    """TensorBoard-style debiased exponential moving average of a 1-D array, for
-    reading the trend of a noisy per-checkpoint curve. `weight` in [0, 1) sets the
-    smoothing (higher = smoother); the debias term cancels the zero-initialization
-    bias so the early points aren't dragged toward zero."""
+    """TensorBoard-style debiased exponential moving average. `weight` in [0, 1)
+    sets the smoothing (higher is smoother); the debias term keeps the early
+    points from being dragged toward the zero initialization."""
     out = np.empty(len(values), dtype=np.float64)
     smoothed = 0.0
     debias = 0.0
@@ -51,12 +55,9 @@ def _ema(values, weight: float = 0.85):
 
 
 def _plot_series(fig, x, y, color, label, smooth, name=None):
-    """Draw one metric series, its data source named `name` (see `_source_name`).
-    With smoothing (once the series has at least `_SMOOTH_MIN_POINTS` points) the
-    plotted line is a debiased exponential moving average, so the trend reads
-    clearly; without it, the raw points are drawn as a line plus markers. A single
-    line is drawn either way -- no faint raw underlay -- so a smoothed curve reads
-    as unambiguously smooth."""
+    """Draw one metric series from a data source named `name`. A smoothed series
+    is drawn as its EMA alone, with no raw underlay, so it reads as unambiguously
+    smoothed; an unsmoothed one as a line plus markers."""
     if smooth and len(y) >= _SMOOTH_MIN_POINTS:
         src = ColumnDataSource(dict(x=x, y=_ema(np.asarray(y, dtype=np.float64))), name=name)
         fig.line("x", "y", source=src, color=color, line_width=2, legend_label=label)
@@ -67,19 +68,17 @@ def _plot_series(fig, x, y, color, label, smooth, name=None):
 
 
 def _source_name(title: str, label: str) -> str:
-    """The stable name of one series' data source: "<figure title>|<legend label>",
-    unique within a figure row. The linear and log x-axis rows deliberately share
-    names -- their sources hold identical data, so one incremental update (see
-    figure_delta.py) feeds both."""
+    """The stable name of one series' data source, unique within a figure row.
+    The linear and log x-axis rows share names on purpose: their sources hold
+    identical data, so one incremental update (figure_delta.py) feeds both."""
     return f"{title}|{label}"
 
 
 def _padded_range(values, log):
-    """An explicit padded Range1d over `values`, so a (near-)constant series is
-    not drawn against Bokeh's degenerate default (which spans roughly value +/- 1,
-    burying e.g. a flat 1e-3 learning rate in a [-1, 1] band). Log axes pad
-    multiplicatively and clamp to positive data; linear axes pad additively.
-    None when no finite (log: positive) value exists."""
+    """An explicit padded Range1d over `values`, or None when there is no finite
+    (for a log axis, positive) value. Needed because Bokeh's default range for a
+    near-constant series spans roughly value +/- 1, which buries e.g. a flat 1e-3
+    learning rate in a [-1, 1] band."""
     finite = values[np.isfinite(values)]
     if log:
         finite = finite[finite > 0.0]
@@ -100,8 +99,8 @@ def _padded_range(values, log):
 
 
 def _set_padded_range(fig, axis: str, values, log):
-    """Give `fig`'s `axis` ('x' | 'y') the explicit padded range of `values` (see
-    `_padded_range`); leave Bokeh's auto-range when there is nothing to fit."""
+    """Give `fig`'s `axis` ('x' | 'y') the padded range of `values`, keeping
+    Bokeh's auto range when there is nothing to fit."""
     rng = _padded_range(np.asarray(values, dtype=np.float64), log)
     if rng is not None:
         setattr(fig, f"{axis}_range", rng)
@@ -116,14 +115,14 @@ def _series_figure(
     smooth: bool = False,
     log_x: bool = False,
 ):
-    """A square learning-curve figure of the metric `names`, each drawn once per
-    entry in `sources` -- a list of (conn, label_suffix). Every (source, metric)
-    pair gets its own color, and the legend suffix (e.g. ' [tagB]') names the
-    source, so a second tag's curves overlay the first as distinctly colored,
-    distinctly labeled lines for comparison. `log` / `log_x` draw the y / epoch
-    axis logarithmically (a log epoch axis gets an explicit positive range, so an
-    epoch-0 checkpoint does not pin it). None when no source has any of the
-    metrics."""
+    """A square learning-curve figure of the metrics `names`, or None when no
+    source has any of them.
+
+    `sources` is a list of (conn, legend suffix): each (source, metric) pair gets
+    its own color, and the suffix (e.g. ' [tagB]') names the tag, so a second
+    tag's curves overlay the first for comparison. `log` / `log_x` make the y /
+    epoch axis logarithmic; a log epoch axis gets an explicit positive range so
+    an epoch-0 point does not break it."""
     fig = figure(
         width=SERIES_SIZE,
         height=SERIES_SIZE,
@@ -164,9 +163,8 @@ def _series_figure(
     return fig
 
 
-# Per-epoch scalar-curve groups, by dashboard tab. Each entry is (figure title,
-# metric-series names) and feeds series_grid(). Shared by the dashboard's tab
-# builders (Bokeh shell and the React data API).
+# Metric groups for series_grid(): each entry is (figure title, metric names)
+# or (title, names, {"log": True}) for a log y-axis.
 LOSS = [
     (
         "Loss",
@@ -181,28 +179,22 @@ LOSS = [
         ],
     )
 ]
-# The learning rate spans orders of magnitude, so it reads best on a log y-axis.
-# The averaging-weight panel is there for schedule-free runs (the arm records
-# it, a WSD run does not, and the panel is then absent): that arm holds its rate
-# constant and anneals by giving each new base iterate a smaller share of the
-# deployed average, so the weight is the curve the rate would otherwise show.
+# The learning rate spans orders of magnitude, hence the log y-axis. Only
+# schedule-free runs record the averaging weight (a WSD run's panel is absent):
+# they hold the rate constant and anneal by giving each new iterate a smaller
+# share of the deployed average, so the weight is the curve that shows the
+# anneal.
 TRAINING = [
     ("Learning rate", ["lr"], {"log": True}),
     ("Iterate averaging weight", ["averaging_weight"], {"log": True}),
     ("Epoch time (s)", ["elapsed_s"]),
 ]
-# Move-set-eval distillation quality: the teacher win-equity the student's
-# top-K forfeits (lower is better), with the incumbent ranking's (played
-# move, then equity head) regret@1 as the flat reference line. The
-# recall/Spearman curves and their baselines ride the Loss tab's Accuracy
-# panel instead.
-# The evidence trainer's go/no-go read (docs/roadmap.md item 5): the
-# conditioned pass against the plain one on the same held-out rows, overall
-# and on the evidence-bearing (prefix > 0) rows, plus the proves-best head's
-# gain error. The gain hit rates ride the Loss tab's Accuracy panel. An
-# unfrozen run (the whole model following the sim signal) adds the frozen
-# student's soft-CE as the flat reference its moving plain pass is read
-# against; a frozen run records no such line.
+# The evidence trainer's go/no-go read: the conditioned pass against the plain
+# one on the same held-out rows, overall and on the evidence-bearing (prefix >
+# 0) rows, plus the proves-best head's gain error. The gain hit rates are on the
+# Loss tab's Accuracy panel. An unfrozen run (the whole model following the sim
+# signal) also records the frozen student's soft-CE, the fixed reference its
+# moving plain pass is read against.
 EVIDENCE_QUALITY = [
     (
         "Held-out WLD soft-CE: student reference vs plain vs conditioned",
@@ -214,22 +206,25 @@ EVIDENCE_QUALITY = [
     ),
     ("Held-out value MAE: conditioned vs plain", ["cond_value_mae", "plain_value_mae"]),
     ("Proves-best gain MAE", ["gain_mae", "gain_mae_ev"]),
-    # The hand-maintained position set (positions/NWL23/face-up-trajectory-set,
-    # what the Trajectories tab shows): over every position and evidence
-    # prefix, the rank of the sim-best simmed candidate under the conditioned
-    # value vs the plain one (0 = best; lower is better), and how often each
-    # value's argmax over the simmed candidates is that sim-best one.
+    # On the Trajectories tab's hand-maintained position set, over every
+    # position and evidence prefix: the rank of the sim-best candidate under
+    # each value (0 = best), and how often each value's argmax is that
+    # candidate.
     (
         "Position set: sim-best rank, conditioned vs plain",
         ["posset_cond_rank", "posset_plain_rank"],
     ),
     ("Position set: sim-best hit rate", ["posset_cond_hit", "posset_plain_hit"]),
 ]
+# Move-set-eval distillation quality: the teacher win-equity the student's
+# top-K forfeits (lower is better), with the incumbent ranking's regret@1 (played
+# move, then equity head) as the reference line. The recall/Spearman curves are
+# on the Loss tab's Accuracy panel.
 MSET_QUALITY = [
     ("Teacher-value regret (win-equity)", ["regret1", "regret3", "regret5", "regret1_baseline"]),
-    # The exchange slice (the A4 dedicated-head readout): how well the student
-    # ranks WHICH tiles to keep, against the incumbent leave-value ordering,
-    # and how often the teacher's best exchange survives the global top-K.
+    # Exchanges only: how well the student ranks which tiles to keep, against
+    # the incumbent leave-value ordering, and how often the teacher's best
+    # exchange survives the global top-K.
     (
         "Exchange rank regret (win-equity)",
         ["exch_rank_regret", "exch_rank_regret_baseline"],
@@ -239,21 +234,18 @@ MSET_QUALITY = [
         ["exch_retention1", "exch_retention3", "exch_retention5", "exch_retention1_baseline"],
     ),
 ]
-# Aggregate model-vs-Monte-Carlo quality curves over the large position-evaluation
-# dataset, shown on the Loss tab beneath the training curves. Lower is better for all:
-# how far the model's predicted value is from the Monte-Carlo ground truth, split by
-# head (win/draw/loss vs. score-differential mean/std).
+# position_eval's model-vs-Monte-Carlo quality curves on its held-out position
+# set, shown on the Loss tab beneath the training curves.
 POST_MOVE_QUALITY = [
     ("Value quality vs Monte-Carlo — WLD", ["eval_win_mae", "eval_wld_brier"]),
     (
         "Value quality vs Monte-Carlo — score diff (points)",
         ["eval_sd_mean_mae", "eval_sd_std_mae"],
     ),
-    # The placement heads' collapsed per-cell planes against the rollouts'
-    # planes on the same positions (position_eval/analysis.placement_metrics --
-    # the Positions tab's residual heat map, aggregated): the misplaced coverage
-    # in tiles (lower is better) and how often the model's most covered cell is
-    # the rollouts' (higher is better), one curve per head.
+    # Each placement head's per-cell occupancy against the rollouts' (the
+    # Positions tab's residual heat map, aggregated by
+    # position_eval/analysis.placement_metrics): misplaced coverage in tiles,
+    # and how often the model's most covered cell is the rollouts'.
     (
         "Placement vs Monte-Carlo — misplaced coverage (tiles)",
         [
@@ -278,10 +270,8 @@ QUALITY_NCOLS = 2
 
 
 def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
-    """A grid of square learning-curve figures for a single tag. Each group is
-    (title, metric-names) or (title, metric-names, opts), where opts may set
-    {"log": True} for a log y-axis. `smooth` overlays a debiased-EMA trend line on
-    each noisy curve."""
+    """A grid of learning-curve figures for one tag, one per metric group that
+    has data. `smooth` draws each curve as its EMA."""
     sources = [(conn, "")]
     figs = []
     for title, names, *rest in groups:
@@ -295,13 +285,12 @@ def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
     return column(*rows)
 
 
-# The Loss tab's figures carry EVERY knob variant as pre-built named rows, so the
-# tab's knobs (Linear x/Log x; the loss figure's Absolute/%) flip the rows'
-# visibility inside the embedded BokehJS document -- no round trip to this API,
-# no re-embed. The value-quality figure has the two x-axis rows; the loss figure
-# crosses them with the normalization variants as "<x axis>|<norm>". The web
-# client (TrainingTabs.tsx) addresses the rows by these names; change them in
-# both places.
+# The Loss tab's figures carry every knob variant as a pre-built named row, so
+# the tab's knobs (linear/log x; the loss figure's absolute/percent) just flip
+# row visibility inside the embedded document, with no round trip or re-embed.
+# The value-quality figure has the two x-axis rows; the loss figure crosses them
+# with the normalizations as "<x axis>|<norm>". web/src/components/
+# TrainingTabs.tsx addresses the rows by these names; keep the two in sync.
 X_AXIS_LINEAR = "x_linear"
 X_AXIS_LOG = "x_log"
 NORM_ABSOLUTE = "abs"
@@ -309,8 +298,8 @@ NORM_PERCENT = "pct"
 
 
 def _variant_rows(builders):
-    """The named knob-variant rows of a Loss-tab figure, stacked: `builders` maps
-    each row name (see the constants above) to its zero-arg row builder."""
+    """A Loss-tab figure's knob-variant rows, stacked and named: `builders` maps
+    each row name to its zero-arg row builder."""
     rows = []
     for name, build in builders.items():
         r = build()
@@ -320,8 +309,7 @@ def _variant_rows(builders):
 
 
 def _quality_row(sources, smooth, log_x):
-    """One x-axis variant of the value-quality panel: a figure per
-    POST_MOVE_QUALITY group that any source has data for, QUALITY_NCOLS to a row."""
+    """One x-axis variant of the value-quality panel."""
     figs = [
         f
         for title, group in POST_MOVE_QUALITY
@@ -331,13 +319,10 @@ def _quality_row(sources, smooth, log_x):
 
 
 def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
-    """The aggregate model-vs-Monte-Carlo quality curves over checkpoints, in both
-    x-axis variants (`_x_axis_variants`), or None when the primary tag has recorded
-    no quality metric yet (so the Loss tab can omit the panel rather than show an
-    empty placeholder). `smooth` overlays an EMA trend on each curve (they are noisy
-    checkpoint-to-checkpoint). `secondary`, when given as (conn, tag), overlays that
-    tag's curves in their own colors for comparison; the legend labels are then
-    suffixed with each tag."""
+    """The POST_MOVE_QUALITY curves in both x-axis variants, or None when the tag
+    has recorded none yet (the Loss tab then omits the panel). `smooth` draws each
+    curve as its EMA. `secondary`, a (conn, tag) pair, overlays that tag's curves
+    for comparison, with each legend label suffixed by its tag."""
     names = [name for _title, group in POST_MOVE_QUALITY for name in group]
     if not any(len(db.read_metric_series(conn, name)[0]) for name in names):
         return None
@@ -385,9 +370,8 @@ def _dashed_hline(fig, location: float, color: str = "#888888"):
 
 
 def match_eval_grid(conn):
-    """The Match tab: the win-rate curve against the fixed opponent -- mean
-    pair score with its CI band, the 0.5 line dashed. None when no match has
-    been recorded."""
+    """The Match tab: mean pair score per generation against the fixed opponent,
+    with its CI band. None when no match has been recorded."""
     rows = db.read_all_match_eval(conn)
     if not rows:
         return None
@@ -411,9 +395,8 @@ def match_eval_grid(conn):
 
 
 def match_arms_grid(conn):
-    """The Arms tab: each arm's mean pair score with its CI whisker against the
-    experiment's fixed opponent, in the experiment's declared arm order, the
-    0.5 line dashed. None when no arm has been measured."""
+    """The Arms tab: each arm's mean pair score against the fixed opponent, with
+    its CI whisker, in declared arm order. None when no arm has been measured."""
     rows = db.read_all_match_arms(conn)
     if not rows:
         return None
@@ -463,9 +446,8 @@ def match_arms_grid(conn):
 
 
 def _epoch_figure(title: str, x, y_label: str, log_x: bool):
-    """The Loss tab's square figure shell over the epoch x-axis `x`: `log_x` draws
-    that axis logarithmically, with an explicit positive range so the auto-range
-    does not degrade on an epoch-0 first checkpoint."""
+    """An empty square Loss-tab figure over the epoch axis `x`. A log axis gets
+    an explicit positive range so an epoch-0 point does not break it."""
     fig = figure(
         width=SERIES_SIZE,
         height=SERIES_SIZE,
@@ -501,9 +483,9 @@ def _step_figure(title: str, x, series, y_label: str, log_x: bool = False):
 
 
 def _stacked_loss_figure(x, bands, title: str, y_label: str, log_x: bool):
-    """Stacked area of per-component losses, `bands` = (label, y) bottom-to-top.
-    Click a legend entry to hide it -- hide all but one to read a single
-    component's own curve (from zero)."""
+    """Stacked area of per-component losses, `bands` = (label, y) bottom to top.
+    Legend entries hide on click, but the stack is precomputed: a band left
+    visible keeps its stacked position rather than dropping to zero."""
     fig = _epoch_figure(title, x, y_label, log_x)
     palette = Category10[10]
     xs = list(x)
@@ -531,10 +513,9 @@ def _stacked_loss_figure(x, bands, title: str, y_label: str, log_x: bool):
 
 
 def _loss_bands(series, weights, normalized):
-    """Weighted per-component loss bands [(label, y), ...] bottom-to-top, drawn
-    from the aligned `series` dict (name -> y-array). When `normalized`, each point
-    is divided by that point's stack total, so every column sums to 1 and band
-    heights read as a share of the loss."""
+    """Weighted loss bands [(label, y), ...], bottom to top in `weights` order.
+    `normalized` divides each column by its total, so band heights read as a
+    share of the loss."""
     bands = [
         (name if w == 1 else f"{w:g} x {name}", np.asarray(series[name], dtype=np.float64) * w)
         for name, w in weights.items()
@@ -548,13 +529,9 @@ def _loss_bands(series, weights, normalized):
 
 
 def _loss_accuracy_row(x, series, weights, normalized, conn, pos_by_epoch, log_x):
-    """The Loss tab's figure row over aligned per-point `series` (name -> y-array)
-    and x-axis `x`: a stacked area of the WEIGHTED per-component losses -- band
-    heights show each term's share of the optimized total, and `normalized`
-    rescales every column to sum to 1 -- when loss coefficients (`weights`) were
-    recorded, else overlaid loss lines; plus an Accuracy panel for every '<x>_acc'
-    series. Both panels share the epoch x-axis, logarithmic when `log_x`.
-    LR-change markers overlay the loss panel."""
+    """One knob variant of the Loss tab's figure row: the loss panel (stacked
+    weighted bands when loss weights were recorded, plain lines otherwise) with
+    LR-change markers, plus an Accuracy panel of every '<x>_acc' series."""
     if weights:
         title, y_label = (
             ("Train loss (stacked, % of total)", "fraction of total loss")
@@ -582,13 +559,12 @@ def _loss_accuracy_row(x, series, weights, normalized, conn, pos_by_epoch, log_x
 
 
 def add_control_markers(fig, conn, epochs, pos_by_epoch):
-    """Overlay dashed vertical markers on the epoch-axis figure at each LR-schedule
-    phase boundary (from the control_event table), labeled with the rate there, so
-    the loss curve shows where a decay started or a restart landed. control_event
-    records the change in positions trained, not epoch, so each event's location
-    is interpolated onto the epoch axis against this run's positions-per-epoch
-    curve (`pos_by_epoch`, keyed like `epochs`). A no-op when the run recorded
-    none."""
+    """Mark each LR change the run recorded (its 'lr' control events) with a
+    dashed vertical line labeled with the new rate, so the loss curve shows
+    where a decay started or a restart landed.
+
+    Events are recorded on the rows clock, not by epoch, so each is placed by
+    interpolating against `pos_by_epoch` (epoch -> rows trained)."""
     events = db.read_control_events(conn, "lr")
     if not events:
         return
@@ -618,14 +594,10 @@ def add_control_markers(fig, conn, epochs, pos_by_epoch):
 
 
 def _metrics_series(conn):
-    """The metrics table's loss and accuracy series as an aligned {name: y-array}
-    dict over the epoch x-axis, plus the positions-per-epoch map (epoch ->
-    positions trained) needed to place control-change markers, which are
-    recorded in positions rather than epoch. Only 'loss', 'loss_<head>', and
-    '<x>_acc' metrics are collected; they are co-written per checkpoint
-    alongside 'positions', so all share the metrics table's epoch index.
-    Returns (x, series, pos_by_epoch) -- (None, {}, {}) when nothing is
-    recorded, and NaN for any epoch a series happens to miss."""
+    """(x, series, pos_by_epoch): the epochs that recorded a rows clock, the
+    'loss', 'loss_<head>' and '<x>_acc' series aligned to them (NaN where a
+    series lacks an epoch), and epoch -> rows trained for placing control
+    markers. (None, {}, {}) when nothing is recorded."""
     pos_by_epoch = dict(zip(*db.read_metric_series(conn, "positions"), strict=True))
     if not pos_by_epoch:
         return None, {}, {}
@@ -640,11 +612,8 @@ def _metrics_series(conn):
 
 
 def metrics_loss_grid(conn):
-    """The Loss tab's stacked-loss + accuracy grid built from the per-checkpoint
-    `metrics` table vs epoch, in all four knob variants ("<x axis>|<norm>", see
-    `_variant_rows`): stacked weighted per-component losses (the percent
-    variants -> per-column fractions), an accuracy panel, control-change
-    markers. None when no loss metric exists."""
+    """The Loss tab's loss + accuracy row in all four knob variants ("<x
+    axis>|<norm>"), or None when no loss metric exists."""
     x, series, pos_by_epoch = _metrics_series(conn)
     if not any(k == "loss" or k.startswith("loss_") for k in series):
         return None

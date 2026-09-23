@@ -1,26 +1,23 @@
-"""The evidence_trajectories Trajectories tab's data plane: a hand-maintained
-.gcg position set (positions/<lexicon>/<set>/) simmed under THIS tag's
-proposer and recipe, and the tag's evidence checkpoints re-scoring each
-position at every evidence prefix (scribblez.evidence.trajectory_view).
-Registered alongside the rest of the data plane by api.make_app().
+"""Data for evidence_trajectories' Trajectories tab: a hand-maintained .gcg
+position set (positions/NWL23/<set>/), simmed under this tag's proposer and
+recipe, and re-scored by the tag's checkpoints at every evidence prefix
+(scribblez.evidence.trajectory_view). Registered with the rest of the data
+plane by api.make_app().
 
 Routes (all take task + tag):
   /api/evidence_trajectories/sets         the position sets on disk
   /api/evidence_trajectories/positions    ?set= -> the set's positions
-  /api/evidence_trajectories/generations  the tag's checkpoints: 0 is the frozen
-                                          student itself, N its pass-N checkpoint
+  /api/evidence_trajectories/generations  the slider's stops (see generations())
   /api/evidence_trajectories/position     ?set=&position=&generation=&prefix=&slot=
                                           -> the board bundle + the model view
 
-The first request for a (set, tag) generates the set's trajectory sidecars
-(position_sets.ensure_sobs: cached under <mount>/cache/trajectory_sets/, so
-only a new position or a changed .gcg sims again -- a few positions at 200
-rollouts take well under a minute, during which the request blocks). Model
-work runs on CPU in torch: a checkpoint's plain pass over a position's few
-hundred legal moves takes ~0.1s, a prefix's conditioned pass ~10ms, and
-both are memoized per (checkpoint file, position), keyed by mtime so a
-rewritten file (the student's rolling checkpoint under a live mset trainer, a
-regenerated sidecar) is re-analyzed.
+The first request for a (set, tag) sims the set's trajectory sidecars and
+blocks until they exist (position_sets.ensure_sobs). They are cached, so only
+a new or changed .gcg sims again; a few positions at 200 rollouts take well
+under a minute. Model work runs in torch on the CPU: a checkpoint's plain pass
+over a position's few hundred legal moves takes ~0.1s and a prefix's
+conditioned pass ~10ms. Both are memoized per (checkpoint, position), keyed by
+file mtimes so a rewritten checkpoint or sidecar is re-analyzed.
 """
 
 from __future__ import annotations
@@ -57,16 +54,16 @@ from scribblez.workloads.evidence_trajectories import (
 )
 
 _CHECKPOINT_RE = re.compile(r"model_epoch_(\d{4})\.pt$")
-# Threads for on-demand sidecar generation (the sims are the long pole).
+# Threads for on-demand sidecar sims, the slowest part of a first request.
 _SIM_THREADS = max(4, (os.cpu_count() or 8) - 4)
-# The position handler's work -- sidecar generation, checkpoint loads, model
-# passes -- runs off the IOLoop so a first request does not stall the rest of
-# the dashboard; one worker serializes the model and cache access.
+# The position handler's work (sims, checkpoint loads, model passes) runs off
+# the IOLoop so a first request does not stall the rest of the dashboard. One
+# thread serializes access to the models and caches.
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 
 def position_sets() -> list[str]:
-    """Directories under positions/NWL23/ holding .gcg files, the default set first."""
+    """Directories under positions/NWL23/ holding .gcg files, default set first."""
     if not POSITIONS_ROOT.is_dir():
         return []
     names = sorted(d.name for d in POSITIONS_ROOT.iterdir() if d.is_dir() and set_gcgs(d))
@@ -77,8 +74,8 @@ def position_sets() -> list[str]:
 
 
 def set_dir(name: str) -> Path:
-    """The set's directory; a name that is not a plain directory name (path
-    separators, dots) or does not exist is a KeyError."""
+    """The set's directory. KeyError for a name that is not a plain directory
+    name (the query arg must not escape POSITIONS_ROOT) or does not exist."""
     if not name or "/" in name or name.startswith("."):
         raise KeyError(f"bad position set {name!r}")
     d = POSITIONS_ROOT / name
@@ -96,9 +93,8 @@ def tag_params(tag: str) -> EvidenceTrajectoriesParams:
 
 
 def generations(paths: TagPaths, params: EvidenceTrajectoriesParams) -> list[dict]:
-    """The generation slider's stops: 0 for the frozen student (when its
-    checkpoint exists), then every per-pass checkpoint on disk as generation
-    epoch + 1."""
+    """The generation slider's stops: 0 is the frozen student (when its
+    checkpoint exists), and N >= 1 is the trainer's model_epoch_{N-1} checkpoint."""
     gens = []
     if params.student_checkpoint and os.path.isfile(params.student_checkpoint):
         gens.append({"generation": 0, "epoch": None, "path": params.student_checkpoint})
@@ -114,8 +110,8 @@ def generations(paths: TagPaths, params: EvidenceTrajectoriesParams) -> list[dic
 def sidecars(
     set_name: str, params: EvidenceTrajectoriesParams, paths: TagPaths, mount_root
 ) -> dict[str, Path]:
-    """{stem: .sobs} for the set under the tag's proposer + recipe, generating
-    what is missing (blocking)."""
+    """{stem: .sobs path} for the set under the tag's proposer and recipe,
+    simming whatever is missing first."""
     proposer = mset_targets.pin_model(params.proposer_model, paths, "proposer_model")
     return ensure_sobs(set_dir(set_name), proposer, recipe_of(params), _SIM_THREADS, mount_root)
 
@@ -123,7 +119,7 @@ def sidecars(
 @functools.lru_cache(maxsize=4)
 def _checkpoint(path: str, mtime_ns: int) -> EvidenceCheckpoint:
     """Keyed by mtime: a per-pass checkpoint is written once, but generation
-    0's student rolling checkpoint is rewritten while its trainer runs."""
+    0's student checkpoint is rewritten while its own trainer runs."""
     return load_evidence_checkpoint(path, "cpu")
 
 
@@ -134,8 +130,8 @@ def _board_bundle(gcg_path: str, open_leaves: bool) -> dict:
 
 @functools.lru_cache(maxsize=64)
 def _sobs_position(sobs_path: str, mtime_ns: int) -> SobsPosition:
-    """The set position's single trajectory (keyed by mtime: a sidecar is
-    regenerated in place when its .gcg changes)."""
+    """A set position's single trajectory. Keyed by mtime because a sidecar is
+    regenerated in place when its .gcg changes."""
     return read_sobs(sobs_path)[0]
 
 
@@ -148,8 +144,8 @@ def _analysis(
     sobs_mtime_ns: int,
     max_e: int,
 ) -> DecisionAnalysis:
-    """The prefix-independent passes of (checkpoint, position), memoized; the
-    conditioned passes memoize inside it."""
+    """The prefix-independent passes of (checkpoint, position). The
+    per-prefix conditioned passes are memoized inside the result."""
     ckpt = _checkpoint(ckpt_path, ckpt_mtime_ns)
     sobs = _sobs_position(sobs_path, sobs_mtime_ns)
     return DecisionAnalysis(ckpt, Path(gcg_path).read_text(), sobs, max_e, "cpu")
@@ -162,9 +158,9 @@ def _mtime(path) -> int:
 def position_payload(
     tag: str, task: str, mount_root, set_name: str, position: int, generation: int, prefix, slot
 ) -> dict:
-    """The tab's per-position view. `prefix` None (or "last") means the
-    largest evidence prefix; `slot` None means the last candidate in the prefix
-    (or the anchor at prefix 0)."""
+    """The tab's view of one position. `prefix` None means the largest evidence
+    prefix; `slot` None means the prefix's last candidate (slot 0 at prefix
+    0)."""
     params = tag_params(tag)
     paths = TagPaths(tag, task, mount_root)
     gcgs = set_gcgs(set_dir(set_name))
@@ -226,8 +222,7 @@ class PositionsHandler(_Base):
 
 
 class GenerationsHandler(_Base):
-    """The generation slider's stops for a tag: [{generation}], 0 = the frozen
-    student, N = the trainer's pass N-1 checkpoint."""
+    """The generation slider's stops for a tag (see generations())."""
 
     def get(self):
         tag, task = self.get_query_argument("tag"), self.get_query_argument("task")
@@ -243,9 +238,8 @@ class GenerationsHandler(_Base):
 
 
 class PositionHandler(_Base):
-    """Board + trajectory + model view; see position_payload. `generation` may
-    be 'latest'; `prefix` defaults to the largest; `slot` to the prefix's last
-    candidate."""
+    """One position's view (position_payload). `generation` defaults to the
+    latest checkpoint."""
 
     async def get(self):
         tag, task = self.get_query_argument("tag"), self.get_query_argument("task")
