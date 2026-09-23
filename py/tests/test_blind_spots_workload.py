@@ -86,27 +86,25 @@ class Task:
         self.params = {"target_positions": target}
 
 
-def gate_after_tick(tmp_path, target: int, found: int):
+def finished_after_tick(tmp_path, target: int, found: int) -> list[str]:
     (tmp_path / "gcg").mkdir(exist_ok=True)
     for i in range(found):
         (tmp_path / "gcg" / f"{i}.gcg").touch()
-    gates = []
+    finished = []
     spec = StubSpec(tmp_path)
     spec.params_cls = blind_spots.BlindSpotsParams
-    hooks = type(
-        "Hooks", (), {"gate": staticmethod(lambda role, reason: gates.append((role, reason)))}
-    )
+    hooks = type("Hooks", (), {"finish": staticmethod(finished.append)})
     blind_spots.tick(spec, Task(target), hooks)
-    return gates
+    return finished
 
 
-def test_the_scheduler_parks_the_surveyors_at_the_target(tmp_path):
-    assert gate_after_tick(tmp_path, target=3, found=2) == [("generate", None)]
-    assert gate_after_tick(tmp_path, target=3, found=3) == [
-        ("generate", "target reached: 3 of 3 positions")
-    ]
-    # A target of 0 never parks them.
-    assert gate_after_tick(tmp_path, target=0, found=3) == [("generate", None)]
+def test_the_scheduler_finishes_the_surveyors_at_the_target(tmp_path):
+    """Finished rather than gated: a gated slot holds its rented machine, and
+    the run is over."""
+    assert finished_after_tick(tmp_path, target=3, found=2) == []
+    assert finished_after_tick(tmp_path, target=3, found=3) == ["generate"]
+    # A target of 0 never finishes them.
+    assert finished_after_tick(tmp_path, target=0, found=3) == []
 
 
 def test_the_survey_seed_is_fixed_by_the_game_so_a_restart_can_resume(tmp_path):

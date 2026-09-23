@@ -8,8 +8,8 @@ confirming sim of the top moves and of the screen's best plays from outside
 them, solving endgames late in the game. A game is cheap next to its survey,
 so one game per cycle costs nothing, and workers need no coordination because
 each plays its own randomly seeded games. The controller ends the run: its
-scheduler tick parks every surveyor once the tag holds target_positions, and
-the dashboard's idle policy then stops the rented machines.
+scheduler tick finishes every surveyor once the tag holds target_positions,
+and the dashboard's idle policy then stops the rented machines.
 
 A game's full survey file runs to megabytes, nearly all of it about positions
 where the top moves were fine. The worker delivers only the positions it found
@@ -168,17 +168,16 @@ def positions_found(data_dir: Path) -> int:
 
 
 def tick(spec: WorkloadSpec, task, hooks):
-    """The scheduler entry: park the surveyors once the tag holds its target.
+    """The scheduler entry: finish the surveyors once the tag holds its target.
 
-    The stop is a controller-side gate rather than a worker exit because only
+    The stop comes from the controller rather than a worker exit because only
     the controller sees the whole store; a rented worker delivers to the bucket
-    and cannot count it. A parked worker is a paused container, which the
+    and cannot count it. A finished worker's container is stopped, which the
     dashboard's idle policy counts as nothing running, so the rented machines
     are stopped ten minutes later (dashboard/workers.py, IDLE_STOP_SECONDS)."""
     target = params_mod.validate(spec.params_cls, task.params).target_positions
-    found = positions_found(spec.paths(task.tag).data_dir)
-    reached = target > 0 and found >= target
-    hooks.gate("generate", f"target reached: {found} of {target} positions" if reached else None)
+    if target > 0 and positions_found(spec.paths(task.tag).data_dir) >= target:
+        hooks.finish("generate")
 
 
 def survey_dirs(tag: str) -> tuple[Path, Path]:

@@ -536,9 +536,9 @@ def test_spend_accrues_while_the_instance_bills(rented, manager, spec, task, mon
 
 
 def test_an_idle_machine_is_stopped_after_the_timeout(rented, manager, spec, task, monkeypatch):
-    """Nothing running on it: a finished trainer (exited) and a gated
-    generator (paused) both count. A slot that wants running and has no
-    container is a pending start, so the machine stays."""
+    """Nothing running on it: an operator-paused or finished slot with an
+    exited container. A slot that wants running and has no container is a
+    pending start, so the machine stays."""
     provider, m = rented
     provider.instances["i-1"].state = "running"
     w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
@@ -555,6 +555,51 @@ def test_an_idle_machine_is_stopped_after_the_timeout(rented, manager, spec, tas
     assert ("stop", "i-1") in provider.calls
     (info,) = _observe(manager, spec, task)
     assert info["state"] == "stopping"
+
+
+def test_a_gated_slot_keeps_the_machine_up(rented, manager, spec, task, monkeypatch):
+    """A gate is expected to lift; a role that is done is finished instead."""
+    provider, m = rented
+    provider.instances["i-1"].state = "running"
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.desired_state = "running"
+    task.gates["generate"] = "ahead of trainer"
+    monkeypatch.setattr(_FakeSshMachine, "state", "paused")
+    manager.worker_status(spec, task, observe=True)
+    _observe(manager, spec, task)
+    assert manager._idle_since == {}
+
+
+def test_finishing_a_role_releases_its_machine(rented, manager, spec, task, monkeypatch):
+    """The scheduler's finish hook: the gated slot becomes finished, its gate
+    goes, and once its container has stopped the machine idles toward a stop."""
+    provider, m = rented
+    provider.instances["i-1"].state = "running"
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.desired_state = "running"
+    task.gates["generate"] = "target reached"
+    # The bucket hooks load cloud credentials; this test needs only finish.
+    monkeypatch.setattr(manager, "_make_mirror", lambda spec, task: None)
+    monkeypatch.setattr(manager, "_make_publish", lambda spec, task: None)
+    manager._scheduler_hooks(spec, task).finish("generate")
+    assert (w.desired_state, w.finished, task.gates) == ("paused", True, {})
+    assert tasks.load_task(spec, "t").worker(w.worker_id).finished  # saved
+    monkeypatch.setattr(_FakeSshMachine, "state", "stopped")
+    manager.worker_status(spec, task, observe=True)
+    _observe(manager, spec, task)
+    assert workers_mod._machine_key(spec, "t", "m1") in manager._idle_since
+
+
+def test_finish_role_leaves_other_roles_and_paused_slots():
+    task = tasks.TaskRecord(workload="kill_test", tag="t", params={}, created_at=0.0)
+    gen = tasks.WorkerRecord(worker_id="a", role="generate", kind="ssh", desired_state="running")
+    paused = tasks.WorkerRecord(worker_id="b", role="generate", kind="ssh", desired_state="paused")
+    train = tasks.WorkerRecord(worker_id="c", role="train", kind="ssh", desired_state="running")
+    task.workers = [gen, paused, train]
+    assert workers_mod._finish_role(task, "generate")
+    assert gen.finished and not paused.finished and not train.finished
+    assert train.desired_state == "running"
+    assert not workers_mod._finish_role(task, "generate")  # nothing left to change
 
 
 def test_a_running_container_keeps_the_machine_up(rented, manager, spec, task, monkeypatch):

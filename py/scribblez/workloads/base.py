@@ -237,7 +237,14 @@ class SchedulerHooks:
 
     gate(role, reason)
         Park every worker of `role`, shown as "waiting" with the reason; this is
-        separate from an operator pause. reason=None releases the gate.
+        separate from an operator pause. reason=None releases the gate. A gate
+        is expected to lift, so a gated worker keeps its rented machine up.
+    finish(role)
+        End `role` for good: every slot of it that wants to run becomes
+        finished, as if its worker had exited at its terminal condition, and
+        any gate on the role is dropped. Its workers are stopped and its rented
+        machines then stop once idle. A later Start on a finished slot is
+        finished again on the next tick while the condition still holds.
     mirror(chunk_name, dest_rel), optional
         Repeat a local staging ingest (a chunk moved into a generation) in the
         results bucket. The bucket keeps mirroring the local corpus, so the
@@ -250,6 +257,7 @@ class SchedulerHooks:
     """
 
     gate: object  # callable(role: str, reason: str | None)
+    finish: object  # callable(role: str)
     mirror: object = None  # callable(chunk_name: str, dest_rel: str) | None
     publish: object = None  # callable(dest_rel: str) | None
 
