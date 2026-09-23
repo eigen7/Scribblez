@@ -113,8 +113,9 @@ the Overview's Machines card (name, host, key file, GPUs) and hosts any number
 of the task's slots; the reconcile pass probes it (ssh, then Docker) ahead of
 its slots, and slots on a machine that is not `up` are left alone until it is.
 Removing a machine removes its slots, under the slot rule below. A GPU role
-is refused at add time on a machine whose GPUs are all taken or absent, when
-the count is known; a bare host is unchecked.
+is refused at add time on a machine known to have no GPU; GPU slots on one
+machine share its GPUs (every container runs under `--gpus all`), as local
+workers share the controller's. A bare host is unchecked.
 
 **Renting a machine** (the Machines card's Rent form) launches an AWS
 instance for the task and records it as a machine of the same kind
