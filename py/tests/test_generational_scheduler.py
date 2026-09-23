@@ -37,6 +37,7 @@ class Hooks(SchedulerHooks):
         self.publish_fails = False
         super().__init__(
             gate=lambda role, reason: self.gates.__setitem__(role, reason),
+            finish=lambda role: None,
             mirror=lambda name, dest: self.mirrored.append((name, dest)),
             publish=self._publish if publish else None,
         )
