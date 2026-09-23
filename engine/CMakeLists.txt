@@ -32,7 +32,6 @@ add_library(scribblez_core STATIC
   src/training/training_task.cpp
   src/encoding/position_encoder.cpp
   src/data/block_decoder.cpp
-  src/data/slog_subset.cpp
   src/serve/position_json.cpp
   src/data/data_loader.cpp
   src/agent/agent.cpp
