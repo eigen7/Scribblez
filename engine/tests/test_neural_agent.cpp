@@ -1,9 +1,9 @@
-// NeuralAgent, which scores candidate plays with the position-evaluation model,
-// here replaced by a scripted stub (no GPU). Covers candidate selection in
-// top-K and all-moves modes, chunked evaluation, temperature sampling, the
-// endgame hand-off to the solver, and encode_candidate() parity: the agent must
-// feed the model exactly the row the training BlockDecoder produces for the
-// same position.
+// NeuralAgent, which scores candidate plays and exchanges with the
+// position-evaluation model, here replaced by a scripted stub (no GPU). Covers
+// candidate selection in top-K and all-moves modes, exchange candidates and the
+// bag-size rule, chunked evaluation, temperature sampling, the endgame hand-off
+// to the solver, and encode_candidate() parity: the agent must feed the model
+// exactly the row the training BlockDecoder produces for the same position.
 
 #include "agent/agent.h"
 #include "agent/neural_agent.h"
@@ -275,6 +275,93 @@ TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
   ASSERT_EQ(sp->calls, (n + 1) / 2);
 }
 
+TEST_F(NeuralAgentEquityTest, PlaysAnExchangeTheModelPrefers) {
+  // The model rates one exchange above every play and every other exchange.
+  OpeningPosition pos("CARETS");
+  const std::vector<Move> cands = pos.candidates(0);
+  const auto it = std::find_if(cands.begin(), cands.end(),
+                               [](const Move& m) { return m.type() == MoveType::EXCHANGE; });
+  ASSERT_NE(it, cands.end());
+  const int target = it - cands.begin();
+
+  auto stub = std::make_shared<CountingStubEvalService>();
+  CountingStubEvalService* sp = stub.get();
+  sp->scripted.assign(cands.size(), sd(0.0f));
+  sp->scripted[size_t(target)] = sd(9.0f);
+  NeuralAgent agent({.thread_id = 0,
+                     .name = "exch",
+                     .dict = &pos.dict,
+                     .top_k = 0,
+                     .objective = EvalObjective::kScoreDiff},
+                    std::move(stub));
+  agent.begin_game({});
+
+  const Move got = agent.make_move(pos.request()).move;
+  ASSERT_EQ(got.type(), MoveType::EXCHANGE);
+  ASSERT_TRUE(same_move(got, cands[target]));
+}
+
+TEST_F(NeuralAgentEquityTest, ExchangesOnlyWithAFullRackInTheBag) {
+  // Exchanging needs at least RACK_SIZE tiles in the bag: below that the model
+  // sees plays only.
+  OpeningPosition pos("CARETS");
+  pos.bag_size = RACK_SIZE - 1;
+  const std::vector<Move> cands = pos.candidates(0);
+  ASSERT_EQ(count_exchanges(cands), 0);
+  ASSERT_EQ(cands.size(), generate_legal_plays(pos.request()).size());
+
+  auto stub = std::make_shared<CountingStubEvalService>();
+  CountingStubEvalService* sp = stub.get();
+  NeuralAgent agent({.thread_id = 0,
+                     .name = "short-bag",
+                     .dict = &pos.dict,
+                     .top_k = 0,
+                     .objective = EvalObjective::kScoreDiff},
+                    std::move(stub));
+  agent.begin_game({});
+  ASSERT_NE(agent.make_move(pos.request()).move.type(), MoveType::EXCHANGE);
+  ASSERT_EQ(sp->total_rows, int(cands.size()));
+
+  // At exactly RACK_SIZE the exchanges are back.
+  pos.bag_size = RACK_SIZE;
+  ASSERT_GT(count_exchanges(pos.candidates(0)), 0);
+}
+
+TEST_F(NeuralAgentEquityTest, ExchangesOrPassesWithoutAPlay) {
+  // No word in the dictionary uses Q or Z. With a full bag the agent
+  // exchanges rather than passing; with a short bag it can only pass, and
+  // calls no model.
+  OpeningPosition pos("QZ");
+  ASSERT_TRUE(generate_legal_plays(pos.request()).empty());
+  {
+    auto stub = std::make_shared<CountingStubEvalService>();
+    CountingStubEvalService* sp = stub.get();
+    NeuralAgent agent({.thread_id = 0,
+                       .name = "exch",
+                       .dict = &pos.dict,
+                       .top_k = 0,
+                       .objective = EvalObjective::kScoreDiff},
+                      std::move(stub));
+    agent.begin_game({});
+    ASSERT_EQ(agent.make_move(pos.request()).move.type(), MoveType::EXCHANGE);
+    ASSERT_EQ(sp->total_rows, 3);  // Q, Z and QZ
+  }
+  {
+    pos.bag_size = RACK_SIZE - 1;
+    auto stub = std::make_shared<CountingStubEvalService>();
+    CountingStubEvalService* sp = stub.get();
+    NeuralAgent agent({.thread_id = 0,
+                       .name = "pass",
+                       .dict = &pos.dict,
+                       .top_k = 0,
+                       .objective = EvalObjective::kScoreDiff},
+                      std::move(stub));
+    agent.begin_game({});
+    ASSERT_EQ(agent.make_move(pos.request()).move.type(), MoveType::PASS);
+    ASSERT_EQ(sp->calls, 0);
+  }
+}
+
 // The rack minus the play's tiles.
 static Rack leave_after(const Rack& rack, const Move& mv) {
   Rack leave = rack;
@@ -325,17 +412,22 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
     ASSERT_EQ(agent_row[i], ref_row[i]) << "input float " << i;
 }
 
-// The row encode_candidate() produces for a move must equal, float for float,
+// A turn-2 play for check_candidate_row_matches_decoder's DONERST rack.
+static Move turn2_play() {
+  return make_play_full(2, 2, /*horizontal=*/true, 0b11, 8,
+                        {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
+}
+
+// The row encode_candidate() produces for `move2` must equal, float for float,
 // the post-move row the training BlockDecoder reconstructs for it. Uses a
-// three-turn game sampled at turn 2 (player 0's), so both players have a prior
-// move and the last-move placement planes are exercised.
-static void check_candidate_row_matches_decoder(std::array<int, 2> initial_scores) {
+// three-turn game sampled at turn 2 (player 0's, holding DONERST), so both
+// players have a prior move and the last-move placement planes are exercised.
+static void check_candidate_row_matches_decoder(std::array<int, 2> initial_scores,
+                                                const Move& move2) {
   Move move0 = make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
                               {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                                Glyph::of(Tile::from_char('T'))});
   Move move1 = make_play_full(0, 0, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
-  Move move2 = make_play_full(2, 2, /*horizontal=*/true, 0b11, 8,
-                              {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
   const uint32_t sampled_turn = 2;
   const int mover = int(sampled_turn % 2);  // turn k is played by k % 2
 
@@ -386,7 +478,15 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
 }
 
 TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
-  check_candidate_row_matches_decoder({0, 0});
+  check_candidate_row_matches_decoder({0, 0}, turn2_play());
+}
+
+TEST(NeuralAgent, EncodeExchangeCandidateMatchesTrainingDecoder) {
+  // The training row for an exchange shows the rack minus the exchanged tiles,
+  // before the draw; the agent must encode its exchange candidates the same.
+  TileCounts tiles;
+  for (char c : std::string("DOE")) tiles.add(Tile::from_char(c));
+  check_candidate_row_matches_decoder({0, 0}, Move::exchange(tiles));
 }
 
 TEST(NeuralAgent, AHandicapReachesTheModelRow) {
@@ -395,8 +495,8 @@ TEST(NeuralAgent, AHandicapReachesTheModelRow) {
   // differential wrong by the head start all game, with nothing else in the row
   // to reveal it. Also covers NeuralSimAgent, which encodes through the same
   // CandidateEvaluator.
-  check_candidate_row_matches_decoder({50, 0});
-  check_candidate_row_matches_decoder({0, 37});
+  check_candidate_row_matches_decoder({50, 0}, turn2_play());
+  check_candidate_row_matches_decoder({0, 37}, turn2_play());
 }
 
 TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
