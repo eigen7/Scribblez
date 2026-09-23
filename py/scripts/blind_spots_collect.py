@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         "--min-gain",
         type=float,
         default=0.0,
-        help="keep only outside plays that gain at least this many win% over the best top move "
+        help="keep only outside plays that gain at least this many win%% over the best top move "
         "(on top of the survey's 2-sigma bar, which a large sim passes on tiny edges)",
     )
     return p.parse_args()

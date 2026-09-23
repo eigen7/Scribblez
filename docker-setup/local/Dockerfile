@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libboost-system-dev \
       libeigen3-dev libprotobuf-dev sqlite3 \
       python3 python3-pip python3-dev python-is-python3 \
-      golang-go libonnx-dev && \
+      libonnx-dev && \
     rm -rf /var/lib/apt/lists/* && \
     update-alternatives --install /usr/bin/clang        clang        /usr/bin/clang-19        100 && \
     update-alternatives --install /usr/bin/clang++      clang++      /usr/bin/clang++-19      100 && \

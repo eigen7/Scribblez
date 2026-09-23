@@ -7,9 +7,7 @@
 
 #include "agent/agent.h"
 #include "agent/neural_agent.h"
-#include "data/binary_log.h"
-#include "data/block_decoder.h"
-#include "data/data_loader.h"
+#include "agent_parity_fixture.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
 #include "endgame/endgame_solver.h"
@@ -26,6 +24,7 @@
 #include "sim/sim_runner.h"
 #include "stub_eval_service.h"
 #include "synthetic_equity.h"
+#include "temp_dir.h"
 
 #include <gtest/gtest.h>
 
@@ -44,8 +43,12 @@
 #include <vector>
 
 using namespace scribblez;
-using scribblez::testing::build_slog;
+using scribblez::testing::decode_three_turn_row;
+using scribblez::testing::expect_input_rows_match;
+using scribblez::testing::kThreeTurnSampledTurn;
 using scribblez::testing::make_play_full;
+using scribblez::testing::three_turn_mover_rack;
+using scribblez::testing::three_turn_moves;
 
 static Rack rack_from(const std::string& s) {
   Rack r;
@@ -114,8 +117,7 @@ static int count_exchanges(const std::vector<Move>& moves) {
 class NeuralAgentEquityTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    tmp_ = std::filesystem::temp_directory_path() / "scribblez_test_neural_agent_XXXXXX";
-    std::filesystem::create_directories(tmp_);
+    tmp_ = scribblez::testing::make_temp_dir("scribblez_test_neural_agent");
     scribblez::testing::install_synthetic_hasty_equity(tmp_);
   }
   void TearDown() override { std::filesystem::remove_all(tmp_); }
@@ -129,7 +131,6 @@ using scribblez::testing::StubEvalService;
 
 // The base input layout, which the stubs declare.
 static const int kInputFloats = input_floats(InputEncodingSpec{nullptr});
-static const int kRowFloats = kInputFloats + kLabelFloats;
 
 static ScriptedEval eval_with(float score_diff_mean, float win_prob) {
   return {{win_prob, 0.0f, 0.0f}, {score_diff_mean, 0.0f}};
@@ -412,49 +413,14 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
     ASSERT_EQ(agent_row[i], ref_row[i]) << "input float " << i;
 }
 
-// A turn-2 play for check_candidate_row_matches_decoder's DONERST rack.
-static Move turn2_play() {
-  return make_play_full(2, 2, /*horizontal=*/true, 0b11, 8,
-                        {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
-}
-
-// The row encode_candidate() produces for `move2` must equal, float for float,
-// the post-move row the training BlockDecoder reconstructs for it. Uses a
-// three-turn game sampled at turn 2 (player 0's, holding DONERST), so both
-// players have a prior move and the last-move placement planes are exercised.
+// The row encode_candidate() produces for `move2`, the three-turn game's
+// turn-2 move, must equal, float for float, the post-move row the training
+// BlockDecoder reconstructs for it.
 static void check_candidate_row_matches_decoder(std::array<int, 2> initial_scores,
                                                 const Move& move2) {
-  Move move0 = make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
-                              {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
-                               Glyph::of(Tile::from_char('T'))});
-  Move move1 = make_play_full(0, 0, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
-  const uint32_t sampled_turn = 2;
-  const int mover = int(sampled_turn % 2);  // turn k is played by k % 2
-
-  // Player 0's rack at turn 2 replays to DONERST: CATERST, plays CAT, draws
-  // DON. Player 1 holds the S it plays on turn 1.
-  binlog::InitialRacks ir{};
-  ir.p0 = rack_from("CATERST");
-  ir.p1 = rack_from("SAINTED");
-
-  binlog::TurnBlob t0{};
-  t0.move = move0;
-  t0.drawn = rack_from("DON");
-  binlog::TurnBlob t1{};
-  t1.move = move1;
-  binlog::TurnBlob t2{};
-  t2.move = move2;
-
-  std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn, initial_scores);
-
-  // Training path: the post-move row, untransposed. Both paths use the same
-  // dictionary for the cross-check planes.
   Dictionary dict = medium_dict();
-  binlog::BlockDecoder dec(InputEncodingSpec{&dict});
-  const uint8_t flips[1] = {0};
-  std::vector<float> dec_row(kRowFloats, 0.0f);
-  dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/true,
-             /*output_row_start=*/0, dec_row.data());
+  const std::vector<float> dec_row =
+    decode_three_turn_row(dict, initial_scores, /*post_move=*/true, move2);
 
   NeuralAgent agent({.thread_id = 0,
                      .name = "stub",
@@ -462,23 +428,19 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
                      .top_k = 4,
                      .objective = EvalObjective::kScoreDiff},
                     std::make_shared<StubEvalService>());
+  const std::array<Move, 3> moves = three_turn_moves();
   agent.begin_game({initial_scores});
-  agent.observe_move(move0);
-  agent.observe_move(move1);
+  agent.observe_move(moves[0]);
+  agent.observe_move(moves[1]);
 
+  const int mover = int(kThreeTurnSampledTurn % 2);  // turn k is played by k % 2
   std::vector<float> agent_row(kInputFloats, 0.0f);
-  agent.encode_candidate(move2, rack_from("DONERST"), mover, Rack{}, agent_row.data());
-
-  bool any_nonzero = false;
-  for (int i = 0; i < kInputFloats; ++i) {
-    ASSERT_EQ(agent_row[i], dec_row[i]) << "input float " << i;
-    any_nonzero = any_nonzero || agent_row[i] != 0.0f;
-  }
-  ASSERT_TRUE(any_nonzero);  // an all-zero match would prove nothing
+  agent.encode_candidate(move2, three_turn_mover_rack(), mover, Rack{}, agent_row.data());
+  expect_input_rows_match(agent_row, dec_row);
 }
 
 TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
-  check_candidate_row_matches_decoder({0, 0}, turn2_play());
+  check_candidate_row_matches_decoder({0, 0}, three_turn_moves()[2]);
 }
 
 TEST(NeuralAgent, EncodeExchangeCandidateMatchesTrainingDecoder) {
@@ -495,8 +457,8 @@ TEST(NeuralAgent, AHandicapReachesTheModelRow) {
   // differential wrong by the head start all game, with nothing else in the row
   // to reveal it. Also covers NeuralSimAgent, which encodes through the same
   // CandidateEvaluator.
-  check_candidate_row_matches_decoder({50, 0}, turn2_play());
-  check_candidate_row_matches_decoder({0, 37}, turn2_play());
+  check_candidate_row_matches_decoder({50, 0}, three_turn_moves()[2]);
+  check_candidate_row_matches_decoder({0, 37}, three_turn_moves()[2]);
 }
 
 TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {

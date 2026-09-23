@@ -9,7 +9,7 @@ import numpy as np
 import tornado.testing
 from bokeh.models import ColumnDataSource
 from scribblez.dashboard import api, db
-from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
+from scribblez.paths import MAX_MOVE_PER_LANE, POSITION_EVAL, TagPaths
 
 # The shipped lane-analysis dataset's size, so position indices line up.
 _N_POSITIONS = 10
@@ -131,7 +131,7 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
 
     def test_all_figures_routable(self):
         # Each figure resolves; `item` is null when its data isn't seeded.
-        for fig in ("loss", "eval_quality", "training_metrics", "mset_metrics", "match_eval"):
+        for fig in api.FIGURES:
             r = self.fetch(f"/api/figure/{fig}?task={MAX_MOVE_PER_LANE}&tag=run1")
             assert r.code == 200, fig
             assert "item" in json.loads(r.body), fig
@@ -164,3 +164,13 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
     def test_lane_position_out_of_range_404(self):
         resp = self.fetch(f"/api/lane/position?task={MAX_MOVE_PER_LANE}&tag=run1&position=999")
         assert resp.code == 404
+
+    def test_position_eval_alt_leave_without_exports_404(self):
+        # "latest" resolves against the tag's exports; with none it is a 404.
+        r = self.fetch(
+            f"/api/position_eval/alt_leave?task={POSITION_EVAL}&tag=run1&position=0&leave=AB"
+        )
+        if r.code == 404 and "position out of range" in r.body.decode():
+            self.skipTest("position_eval dataset unavailable")
+        assert r.code == 404
+        assert json.loads(r.body)["error"] == "no model generations recorded yet"

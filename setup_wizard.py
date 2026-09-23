@@ -82,9 +82,8 @@ class ScribblezSetupWizard(SetupWizardTool):
     def setup_lexica(self):
         """List installed lexica, prompt for additional ones, fetch them.
 
-        Only populates <mount>/lexica/. The Macondo checkout's own
-        data/lexica/gaddag/ symlinks are created by py/build.py *after* it clones
-        Macondo -- pre-creating <mount>/macondo/ here would break that clone.
+        Only populates <mount>/lexica/; nothing is created under
+        <mount>/macondo/, which py/build.py clones into.
         """
         lex_dir = self.mount_dir / "lexica"
         lex_dir.mkdir(parents=True, exist_ok=True)

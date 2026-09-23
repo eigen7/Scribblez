@@ -8,6 +8,7 @@
 #include "game/tile_counts.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "serve/client_message.h"
 #include "serve/web_server.h"
 #include "util/exception.h"
 
@@ -39,13 +40,6 @@ po::options_description human_options(HumanWebAgent::Params& params) {
     ("web-dir", po::value<std::string>(&params.web_dir)->default_value(params.web_dir),
      "front-end package dir (cwd of `npm run dev`)");
   return desc;
-}
-
-// A string field of a client message; empty if absent or not a string.
-std::string str_field(const boost::json::object& obj, boost::json::string_view key) {
-  auto it = obj.find(key);
-  if (it == obj.end() || !it->value().is_string()) return "";
-  return std::string(it->value().as_string().c_str());
 }
 
 // Append an EXCHANGE for every distinct non-empty sub-multiset of `types`,
@@ -89,12 +83,7 @@ HumanWebAgent::HumanWebAgent(int thread_id, const Params& params, const std::str
   vite_ =
     std::make_unique<ViteDevServer>(params.web_dir, params.vite_port, params.port, "", "web", 5173);
   std::cerr << "\n  Starting the web UI (npm run dev in " << params.web_dir << ")...\n";
-  if (!vite_->wait_until_ready()) {
-    throw util::CleanException(
-      "the Vite dev server did not start. See {}/.vite-dev.log for details. Did you run "
-      "py/build.py to install the web dependencies?",
-      params.web_dir);
-  }
+  vite_->wait_until_ready();
   std::cerr << "\n  Human-vs-AI game ready.\n"
             << "  Open  " << vite_->url() << "  in your browser to play.\n\n";
   std::string cmd = "xdg-open " + vite_->url() + " >/dev/null 2>&1 &";

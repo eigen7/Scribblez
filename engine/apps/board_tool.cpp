@@ -12,8 +12,9 @@
 #include "game/tile_counts.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/lexicon.h"
+#include "serve/client_message.h"
+#include "serve/position_json.h"
 #include "serve/web_server.h"
-#include "util/exception.h"
 #include "util/misc.h"
 
 #include <boost/json.hpp>
@@ -34,24 +35,6 @@ char upper_ch(char c) {
   return c;
 }
 
-int int_field(const boost::json::object& o, const char* key, int fallback = -1) {
-  auto it = o.find(key);
-  if (it == o.end() || !it->value().is_int64()) return fallback;
-  return it->value().as_int64();
-}
-
-std::string str_field(const boost::json::object& o, const char* key) {
-  auto it = o.find(key);
-  if (it == o.end() || !it->value().is_string()) return "";
-  return std::string(it->value().as_string().c_str());
-}
-
-bool bool_field(const boost::json::object& o, const char* key, bool fallback = false) {
-  auto it = o.find(key);
-  if (it == o.end() || !it->value().is_bool()) return fallback;
-  return it->value().as_bool();
-}
-
 // The letter Tile named by a one-character string, or EMPTY_SQUARE if it is not
 // a letter A..Z. For a blank this is the letter it stands for; whether the tile
 // is a blank travels separately.
@@ -69,63 +52,6 @@ TileCounts full_bag() {
   }
   for (int i = 0; i < TILE_COUNTS[BLANK]; ++i) bag.add(BLANK);
   return bag;
-}
-
-boost::json::array board_grid(const Board& board) {
-  boost::json::array grid;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    boost::json::array row;
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      const Glyph g = board.at(r, c);
-      if (g.is_empty()) {
-        row.emplace_back(nullptr);
-      } else {
-        char ch = g.letter().to_char();
-        if (g.is_blank()) ch = char(ch - 'A' + 'a');
-        row.emplace_back(std::string(1, ch));
-      }
-    }
-    grid.emplace_back(std::move(row));
-  }
-  return grid;
-}
-
-boost::json::array bonus_grid(const Board& board) {
-  boost::json::array grid;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    boost::json::array row;
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      const char* code = board.premium_at(r, c).code();
-      row.emplace_back(code ? boost::json::value(code) : boost::json::value(nullptr));
-    }
-    grid.emplace_back(std::move(row));
-  }
-  return grid;
-}
-
-boost::json::object tile_score_map() {
-  boost::json::object scores;
-  for (Tile L = Tile::of(0); L < 26; ++L) {
-    scores[std::string(1, L.to_char())] = TILE_VALUES[L];
-  }
-  return scores;
-}
-
-// The bag's remaining tiles as a JSON array of {letter, score, count}, with the
-// blank as "?". Letters with no tiles left are omitted.
-boost::json::array bag_tiles_json(const TileCounts& bag) {
-  boost::json::array bag_tiles;
-  for (Tile L = Tile::of(0); L < 26; ++L) {
-    const int count = bag.count(L);
-    if (count <= 0) continue;
-    bag_tiles.emplace_back(boost::json::object{
-      {"letter", std::string(1, L.to_char())}, {"score", L.value()}, {"count", count}});
-  }
-  const int blanks = bag.count(BLANK);
-  if (blanks > 0) {
-    bag_tiles.emplace_back(boost::json::object{{"letter", "?"}, {"score", 0}, {"count", blanks}});
-  }
-  return bag_tiles;
 }
 
 // A board word the dictionary rejects. `square` is its starting square in GCG
@@ -303,9 +229,7 @@ int main(int argc, char** argv) {
     const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
     scribblez::WebSession session(ws_port);
     scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "board", "board", 5175);
-    if (!vite.wait_until_ready()) {
-      throw scribblez::util::Exception("the Vite dev server did not start; see web/.vite-dev.log");
-    }
+    vite.wait_until_ready();
 
     std::cerr << "\nBoard tool ready at " << vite.url()
               << " (lexicon: " << scribblez::Lexicon::instance().name() << ")\n";

@@ -113,7 +113,7 @@ using ForcedCandidates = std::map<GamePositionIndex, std::vector<Move>>;
 
 // Placement-plane floats per candidate: one footprint distribution per head,
 // which the writer quantizes into the record's plane block.
-constexpr int kPlaneFloats = nn::kNumMaskHeads * move_set_eval::kPlaneWidth;
+constexpr int kPlaneFloats = kPlacementHeads * move_set_eval::kPlaneWidth;
 
 // Raw placement floats per candidate as the teacher emits them: per head,
 // kFootprintClasses footprint logits. A masked softmax turns each head's logits
@@ -121,9 +121,8 @@ constexpr int kPlaneFloats = nn::kNumMaskHeads * move_set_eval::kPlaneWidth;
 // teacher's shape to the writer's, so a half-done shape change fails to compile
 // instead of silently corrupting the .mset.
 constexpr int kRawPlaneFloats = nn::PositionEvaluationSpec::AuxOutputs::total_row_elems;
-static_assert(kPlacementHeads == nn::kNumMaskHeads);
 static_assert(int(move_set_eval::kPlaneWidth) == kFootprintClasses);
-static_assert(kRawPlaneFloats == nn::kNumMaskHeads * kFootprintClasses);
+static_assert(kRawPlaneFloats == kPlacementHeads * kFootprintClasses);
 static_assert(kPlaneFloats == kRawPlaneFloats);  // mask-softmax preserves the per-head width
 
 bool all_finite(const float* p, size_t n) {
