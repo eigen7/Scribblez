@@ -35,11 +35,8 @@ from scribblez.onnx_export_util import load_onnx_initializers
 from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis
 from scribblez.position_eval.model import PositionEvalModel
-from scribblez.position_eval.trainer import (
-    _transformer_config,
-    eval_position_eval_quality,
-    load_position_eval_quality,
-)
+from scribblez.position_eval.trainer import eval_position_eval_quality, load_position_eval_quality
+from scribblez.spatial_trunk import transformer_config
 from scribblez.train_common import timed_print
 
 WORKLOAD = "position_eval"
@@ -68,7 +65,7 @@ def _build_model(params, device) -> tuple[PositionEvalModel, int]:
         num_blocks=params.num_blocks,
         trunk_channels=params.trunk_channels,
         use_film=params.use_film,
-        transformer=_transformer_config(params),
+        transformer=transformer_config(dataclasses.asdict(params)),
     ).to(device)
     return model, shapes["input_spatial"][0]
 

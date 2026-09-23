@@ -5,6 +5,7 @@
 #include "training/move_set_encoder.h"
 #include "training/training_targets.h"
 
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -173,10 +174,6 @@ struct SelfWinMaskOutput {
   static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
-// The number of placement heads: the four *MaskOutput descriptors above, and
-// the head count in the move-proposal graphs' `planes` output.
-inline constexpr int kNumPlacementPlanes = 4;
-
 // ---------- move-proposal tensors ----------------------------------------
 //
 // The move proposal model runs as two graphs
@@ -233,7 +230,7 @@ struct MoveEncHandoff {
 struct PlanesOutput {
   static constexpr const char* kName = "planes";
   using Elem = float;
-  static constexpr int kRowElems = kNumPlacementPlanes * kSlotsPerCell * kBoardCells;
+  static constexpr int kRowElems = kPlacementHeads * kSlotsPerCell * kBoardCells;
   static constexpr bool kDynamic = true;
 };
 
@@ -255,7 +252,7 @@ struct GainOutput {
 inline constexpr int kMaxEvidence = 64;
 // 117: observed + predicted footprint channels (4 heads x kSlotsPerCell each)
 // plus the candidate's own kSlotsPerCell-channel footprint one-hot.
-inline constexpr int kEvidencePlanes = (2 * kNumPlacementPlanes + 1) * kSlotsPerCell;
+inline constexpr int kEvidencePlanes = (2 * kPlacementHeads + 1) * kSlotsPerCell;
 inline constexpr int kEvidenceScalars = 11;
 
 // The evidence inputs are static tensors of shape (1, E, ...). Folding E into
@@ -300,6 +297,10 @@ struct TensorList {
   // Meaningful only when every member has a fixed width; a model-decided
   // width contributes 0. Used to size aux-output rows.
   static constexpr int total_row_elems = (0 + ... + Ts::kRowElems);
+
+  // Each member's kRowElems, in list order: per-head row widths for code that
+  // walks a list's buffers at runtime.
+  static constexpr std::array<int, size> row_elems = {Ts::kRowElems...};
 };
 
 // ---------- version requirements ----------------------------------------
@@ -473,9 +474,8 @@ class MoveProposalStepSpec {
   using AuxOutputs = TensorList<>;
 };
 
-// The position model's aux-output count, for consumers that size per-head
-// buffers without naming the list.
-inline constexpr int kNumMaskHeads = PositionEvaluationSpec::AuxOutputs::size;
+// The aux outputs are the placement heads, one per placement target.
+static_assert(PositionEvaluationSpec::AuxOutputs::size == kPlacementHeads);
 
 }  // namespace nn
 }  // namespace scribblez

@@ -2,6 +2,7 @@
 
 #include "nn/eval_service.h"
 
+#include <array>
 #include <condition_variable>
 #include <deque>
 #include <exception>
@@ -65,6 +66,14 @@ class BatchingPositionEvalService : public PositionEvalService {
   // try_evaluate().
   void serve(const std::vector<Request*>& pack);
 
+  // Size the staging buffers for `pack` and copy its input rows into in_rows_,
+  // in pack order. Returns the combined row count.
+  int gather(const std::vector<Request*>& pack);
+
+  // Copy each request's slice of every head's combined output back into the
+  // request's own head_out.
+  void scatter(const std::vector<Request*>& pack) const;
+
   // Evaluate `batch` through inner_ into `head_out`. On failure, record the
   // exception on every request in `blame` and return false rather than throw:
   // an exception escaping the dispatcher loop would strand the other waiters.
@@ -78,10 +87,10 @@ class BatchingPositionEvalService : public PositionEvalService {
   std::deque<Request*> queue_;
   bool dispatching_ = false;
 
-  // Dispatcher-only staging for combined batches, reused across rounds.
+  // Dispatcher-only staging for combined batches, reused across rounds: the
+  // input rows, and one output buffer per Outputs entry, in list order.
   std::vector<float> in_rows_;
-  std::vector<float> wld_out_;
-  std::vector<float> score_diff_out_;
+  std::array<std::vector<float>, Outputs::size> out_rows_;
 };
 
 }  // namespace nn

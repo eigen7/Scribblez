@@ -25,6 +25,7 @@
 #include "nn/cuda_util.h"
 #include "nn/trt_util.h"
 #include "sim/sim_runner.h"
+#include "synthetic_candidates.h"
 #include "training/move_set_encoder.h"
 #include "util/misc.h"
 
@@ -45,35 +46,6 @@ using scribblez::agent::EvidenceSet;
 using scribblez::agent::MoveProposalNets;
 using scribblez::agent::MoveProposalPredictions;
 using scribblez::agent::MoveProposalSession;
-
-// The same synthetic candidate set as mset_infer_smoke's, so the two tools'
-// outputs stay comparable.
-scribblez::move_set::MoveFeatureArrays synthetic_candidates(int num_moves) {
-  using namespace scribblez::move_set;
-  MoveFeatureArrays moves;
-  moves.count = num_moves;
-  moves.letters.assign(size_t(num_moves) * kMoveMaxPlaced, 0);
-  moves.blanks.assign(size_t(num_moves) * kMoveMaxPlaced, 0);
-  moves.squares.assign(size_t(num_moves) * kMoveMaxPlaced, 0);
-  moves.tile_mask.assign(size_t(num_moves) * kMoveMaxPlaced, 0);
-  moves.scalars.assign(size_t(num_moves) * kMoveScalars, 0.0f);
-
-  for (int m = 0; m < num_moves; ++m) {
-    const bool is_play = m % 5 != 0;
-    const int tiles = m % kMoveMaxPlaced + 1;
-    for (int t = 0; t < tiles; ++t) {
-      const size_t slot = size_t(m) * kMoveMaxPlaced + t;
-      moves.letters[slot] = (m + t) % 26 + 1;
-      moves.tile_mask[slot] = 1;
-      if (is_play) moves.squares[slot] = (m * kMoveMaxPlaced + t) % kMoveCells;
-    }
-    float* scalars = moves.scalars.data() + size_t(m) * kMoveScalars;
-    scalars[0] = float(m - num_moves / 2) / 100.0f;
-    scalars[1] = float(tiles) / kMoveMaxPlaced;
-    scalars[2] = is_play ? 1.0f : 0.0f;
-  }
-  return moves;
-}
 
 // A plausible rollout observation, varied slightly by `j`.
 SimObservation synthetic_observation(int j) {
@@ -158,7 +130,8 @@ int main(int argc, char** argv) {
     const size_t row_floats =
       size_t(nets->spatial_planes()) * scribblez::kBoardCells + nets->scalar_floats();
     const std::vector<float> board(row_floats, 0.0f);
-    const scribblez::move_set::MoveFeatureArrays moves = synthetic_candidates(num_moves);
+    const scribblez::move_set::MoveFeatureArrays moves =
+      scribblez::move_set::synthetic_candidates(num_moves);
     const EvidenceSet evidence = synthetic_evidence(num_evidence);
 
     // Warm the pair on a throwaway session first, so its first-use costs

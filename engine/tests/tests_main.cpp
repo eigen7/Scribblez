@@ -28,6 +28,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
 #include "lexicon/lexicon.h"
+#include "move_key.h"
 #include "sim/rollout_summary.h"
 #include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
@@ -76,6 +77,8 @@
 #include <vector>
 
 using namespace scribblez;
+using scribblez::testing::key_set;
+using scribblez::testing::move_key;
 
 // Offsets into the full input layout, which is what these tests encode. They
 // come from the block registry; a null dictionary is fine because the layout
@@ -216,65 +219,19 @@ TEST(Movegen, CrossWord) {
 TEST(Movegen, BingoBonus) {
   Dictionary d = Dictionary::build_from_words({"PARTIED"});
   Board b;
-  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true, {Glyph::of(Tile::from_char('A'))}));
   MoveGenerator gen(b, d);
-  Rack r = rack_from("PRTIED?");
-  auto moves = gen.generate(r);
-  bool found_bingo = false;
+  auto moves = gen.generate(rack_from("PARTIED"));
+  // The opening PARTIED on row 7 from the center star rightward: P on the DWS
+  // center, I on the DLS at column 11.
+  const uint16_t cols_7_to_13 = uint16_t(0x7Fu << CENTER);
+  const Move* bingo = nullptr;
   for (const auto& m : moves) {
-    if (m.num_glyphs() == RACK_SIZE) found_bingo = true;
+    if (m.horizontal() && m.start() == CENTER && m.square_mask() == cols_7_to_13) bingo = &m;
   }
-  // PARTIED through the board's A places only six tiles, so it is not a bingo
-  // and found_bingo is never asserted; the test checks only that PARTIED is
-  // generated. The bingo bonus itself goes untested here.
-  bool found_partied = false;
-  for (const auto& m : moves) {
-    if (m.main_word(b) == "PARTIED") found_partied = true;
-  }
-  ASSERT_TRUE(found_partied);
-  (void)found_bingo;
-}
-
-// A canonical key for a play: its placed tiles (sorted) plus its score. The key
-// omits orientation, so a single-tile play generated from either direction
-// compares equal.
-static std::string move_key(const Board& board, const Move& m) {
-  (void)board;
-  struct Placement {
-    int r, c;
-    Glyph g;
-  };
-  std::vector<Placement> tiles;
-  if (m.type() == MoveType::PLAY) {
-    const bool horiz = m.horizontal();
-    uint16_t mask = m.square_mask();
-    int gi = 0;
-    for (int pos = 0; mask; ++pos, mask >>= 1) {
-      if ((mask & 1u) == 0) continue;
-      int r = horiz ? m.start() : pos;
-      int c = horiz ? pos : m.start();
-      tiles.push_back({r, c, m.glyph(gi++)});
-    }
-  }
-  std::sort(tiles.begin(), tiles.end(), [](const Placement& a, const Placement& b) {
-    if (a.r != b.r) return a.r < b.r;
-    return a.c < b.c;
-  });
-  std::string k;
-  char buf[32];
-  for (const auto& t : tiles) {
-    std::snprintf(buf, sizeof(buf), "%d,%d,%d;", t.r, t.c, (int)t.g.code());
-    k += buf;
-  }
-  std::snprintf(buf, sizeof(buf), "|%d", m.score());
-  k += buf;
-  return k;
-}
-
-static std::set<std::string> key_set(const Board& board, const std::vector<Move>& ms) {
-  std::set<std::string> s;
-  for (const auto& m : ms) s.insert(move_key(board, m));
-  return s;
+  ASSERT_NE(bingo, nullptr);
+  ASSERT_EQ(bingo->num_glyphs(), RACK_SIZE);
+  const int word_score = 2 * (3 + 1 + 1 + 1 + 2 * 1 + 1 + 2);
+  EXPECT_EQ(bingo->score(), word_score + 50);
 }
 
 static Rack random_rack(std::mt19937& rng) {
@@ -301,8 +258,8 @@ static void cross_validate(const Dictionary& d, const char* label, unsigned seed
       MoveGenerator gen(b, d);
       auto via_gaddag = gen.generate(r, GenAlgo::GADDAG);
       auto via_dawg = gen.generate(r, GenAlgo::DAWG);
-      auto kg = key_set(b, via_gaddag);
-      auto kd = key_set(b, via_dawg);
+      auto kg = key_set(via_gaddag);
+      auto kd = key_set(via_dawg);
       if (kg != kd) {
         std::cerr << "MISMATCH [" << label << "] game " << g << " step " << s
                   << ": GADDAG=" << kg.size() << " DAWG=" << kd.size() << "\n";
@@ -507,13 +464,14 @@ TEST(Encoder, BasicLayout) {
   ASSERT_EQ(out[c_plane * 225 + 7 * 15 + 7], 1.0f);
   ASSERT_EQ(out[d_plane * 225 + 3 * 15 + 3], 1.0f);  // blank-as-D still lights the D plane
 
-  // The blank-marker plane is plane 26.
-  ASSERT_EQ(out[26 * 225 + 3 * 15 + 3], 1.0f);
-  ASSERT_EQ(out[26 * 225 + 7 * 15 + 7], 0.0f);
+  // The blank-marker plane lights the blank-as-D, not the real C.
+  ASSERT_EQ(out[BoardPlanes::kBlankMarkerPlane * 225 + 3 * 15 + 3], 1.0f);
+  ASSERT_EQ(out[BoardPlanes::kBlankMarkerPlane * 225 + 7 * 15 + 7], 0.0f);
 
-  // Premium planes (27..30): only check that every cell was written as 0 or 1,
+  // Premium planes: only check that every cell was written as 0 or 1,
   // overwriting the -1.0 fill.
-  for (int p = 27; p <= 30; ++p) {
+  for (int p = BoardPlanes::kPremiumPlane0;
+       p < BoardPlanes::kPremiumPlane0 + BoardPlanes::kPremiumPlanes; ++p) {
     for (int i = 0; i < 225; ++i) {
       float v = out[p * 225 + i];
       ASSERT_TRUE(v == 0.0f || v == 1.0f);
@@ -1088,9 +1046,9 @@ enum class PositionKind : uint8_t {
   kPostMove = 1,  // the player has moved but not yet drawn
 };
 
-// One position from an independent replay of a GameLogStorage that tracks both
-// racks directly. The ground truth that GameStateEncoder replays are checked
-// against.
+// One position from an independent replay of a GameLogStorage, taking each
+// mover's rack from its logged rack_before. The ground truth that
+// GameStateEncoder replays are checked against.
 struct LiveSnapshot {
   scribblez::Board board;
   scribblez::Rack rack_active;
@@ -1107,30 +1065,18 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStor
 
   std::vector<LiveSnapshot> out;
   Board board;
-  Rack racks[2];
   Move last_by[2] = {Move{}, Move{}};
-
-  // Seed each player's rack from their first turn's rack_before.
-  bool seeded[2] = {false, false};
-  for (const TurnRecord& t : log.turns) {
-    if (!seeded[t.player]) {
-      racks[t.player] = t.rack_before;
-      seeded[t.player] = true;
-    }
-    if (seeded[0] && seeded[1]) break;
-  }
 
   for (size_t i = 0; i < log.turns.size(); ++i) {
     const TurnRecord& turn = log.turns[i];
     const int active = turn.player;
     const int opp = 1 - active;
-    racks[active] = turn.rack_before;
     const int prev_active = turn.cumulative_scores[active] - turn.score_delta;
     const int prev_opp = turn.cumulative_scores[opp];
 
     LiveSnapshot pre;
     pre.board = board;
-    pre.rack_active = racks[active];
+    pre.rack_active = turn.rack_before;
     pre.last_opp_move = last_by[opp];
     pre.score_active = prev_active;
     pre.score_opp = prev_opp;
@@ -1149,18 +1095,7 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStor
       out.push_back(post);
     }
 
-    if (turn.move.type() == MoveType::PLAY) {
-      const int n = turn.move.num_glyphs();
-      for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyph(g).rack_tile());
-      board.apply(turn.move);
-    } else if (turn.move.type() == MoveType::EXCHANGE) {
-      const int n = turn.move.num_glyphs();
-      for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyph(g).rack_tile());
-    }
-    for (Tile t : turn.drawn.tiles()) {
-      if (t.is_empty()) break;
-      racks[active].add(t);
-    }
+    if (turn.move.type() == MoveType::PLAY) board.apply(turn.move);
     last_by[active] = turn.move;
   }
   return out;
@@ -1216,8 +1151,8 @@ void check_movegen_equiv(const scribblez::Dictionary& dict, const scribblez::Boa
   scribblez::MoveGenerator gen_l(live, dict);
   auto m_r = gen_r.generate(reconstructed_rack);
   auto m_l = gen_l.generate(live_rack);
-  auto k_r = key_set(reconstructed, m_r);
-  auto k_l = key_set(live, m_l);
+  auto k_r = key_set(m_r);
+  auto k_l = key_set(m_l);
   if (k_r != k_l) {
     std::cerr << "movegen mismatch [" << context << "]: reconstructed=" << k_r.size()
               << " live=" << k_l.size() << "\n";
@@ -3566,7 +3501,7 @@ TEST(Movegen, ShadowMatchesFull) {
         for (Move& m : am) shadow.push_back(std::move(m));
       }
 
-      ASSERT_EQ(key_set(board, full), key_set(board, shadow));
+      ASSERT_EQ(key_set(full), key_set(shadow));
 
       ++positions;
       total_moves += full.size();
@@ -3589,7 +3524,7 @@ class ShadowCheckAgent : public scribblez::Agent {
   scribblez::MoveDecision make_move(const scribblez::MoveRequest& req) override {
     const scribblez::Move shadow = bot_.make_move(req).move;
     const scribblez::Move ref = scribblez::hasty_best_move_reference(req);
-    EXPECT_EQ(move_key(req.board, shadow), move_key(req.board, ref));
+    EXPECT_EQ(move_key(shadow), move_key(ref));
     ++comparisons;
     return shadow;
   }
@@ -3638,7 +3573,7 @@ TEST(WordMap, GenerateMatchesFull) {
         MoveGenerator gen(board, dict);
         const std::vector<Move> full = gen.generate(rack);
         const std::vector<Move> wmp = wmp_generate(board, dict, wm, rack);
-        ASSERT_EQ(key_set(board, full), key_set(board, wmp));
+        ASSERT_EQ(key_set(full), key_set(wmp));
 
         // Per anchor, so WordMap generation can drive the shadow best-first loop.
         ShadowMoveGen smg(board, dict);
@@ -3649,7 +3584,7 @@ TEST(WordMap, GenerateMatchesFull) {
           std::vector<Move> g, w;
           smg.generate_anchor(a, rack, g);
           wmp_generate_anchor(board, wm, subracks, rack_tiles, a, w);
-          ASSERT_EQ(key_set(board, g), key_set(board, w));
+          ASSERT_EQ(key_set(g), key_set(w));
         }
 
         // Together the extents yield exactly the full play set, and each extent's
@@ -3664,7 +3599,7 @@ TEST(WordMap, GenerateMatchesFull) {
             extent_union.push_back(m);
           }
         }
-        ASSERT_EQ(key_set(board, full), key_set(board, extent_union));
+        ASSERT_EQ(key_set(full), key_set(extent_union));
         ++positions;
       }
       board.apply(t.move);
@@ -3735,8 +3670,7 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
   HastyBotAgent blank_bot({.thread_id = 0, .name = "blankcheck"});
   for (const CapturedPos& p : blanked) {
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
-    ASSERT_EQ(move_key(p.board, blank_bot.make_move(req).move),
-              move_key(p.board, hasty_best_move_wmp(req)));
+    ASSERT_EQ(move_key(blank_bot.make_move(req).move), move_key(hasty_best_move_wmp(req)));
   }
 
   HastyBotAgent bot({.thread_id = 0, .name = "wmpcheck"});
@@ -3745,12 +3679,11 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
     MoveGenerator gen(p.board, dict);
     const std::vector<Move> full = gen.generate(p.rack);
     const std::vector<Move> wmp = wmp_generate(p.board, dict, wm, p.rack);
-    ASSERT_EQ(key_set(p.board, full), key_set(p.board, wmp));
+    ASSERT_EQ(key_set(full), key_set(wmp));
     total_moves += full.size();
 
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
-    ASSERT_EQ(move_key(p.board, bot.make_move(req).move),
-              move_key(p.board, hasty_best_move_wmp(req)));
+    ASSERT_EQ(move_key(bot.make_move(req).move), move_key(hasty_best_move_wmp(req)));
   }
   ASSERT_FALSE(positions.empty());
   std::cout << "  WMP/GADDAG equivalence OK (" << positions.size() << " blank-free + "

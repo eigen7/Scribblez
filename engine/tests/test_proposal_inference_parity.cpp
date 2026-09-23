@@ -138,6 +138,12 @@ void track(float& worst, float got, float want, const char* what, int move) {
   worst = std::max(worst, dev);
 }
 
+// track() over one (M, per_move) prediction field against its reference.
+void track_field(float& worst, const std::vector<float>& got, const std::vector<float>& want,
+                 int per_move, const char* what) {
+  for (size_t i = 0; i < got.size(); ++i) track(worst, got[i], want[i], what, int(i / per_move));
+}
+
 // The first `count` candidates of `moves`, as their own set.
 scribblez::move_set::MoveFeatureArrays truncate_moves(
   const scribblez::move_set::MoveFeatureArrays& moves, int count) {
@@ -286,10 +292,9 @@ void expect_same_predictions(const MoveProposalPredictions& a, const MoveProposa
                              Tolerance tol, const char* what) {
   ASSERT_EQ(a.num_moves, b.num_moves) << what;
   Worst worst;
-  for (size_t i = 0; i < a.wld.size(); ++i) track(worst.prob, a.wld[i], b.wld[i], what, int(i / 3));
-  for (size_t i = 0; i < a.score_diff.size(); ++i)
-    track(worst.score_diff, a.score_diff[i], b.score_diff[i], what, int(i / 2));
-  for (size_t i = 0; i < a.gain.size(); ++i) track(worst.gain, a.gain[i], b.gain[i], what, int(i));
+  track_field(worst.prob, a.wld, b.wld, 3, what);
+  track_field(worst.score_diff, a.score_diff, b.score_diff, 2, what);
+  track_field(worst.gain, a.gain, b.gain, 1, what);
   EXPECT_LE(worst.prob, tol.prob) << what;
   EXPECT_LE(worst.score_diff, tol.score_diff) << what;
   EXPECT_LE(worst.gain, tol.gain) << what;
@@ -352,7 +357,8 @@ struct ConsumerCase {
 
 // One consumer's worst deviation from its solo reference over rounds of
 // encode, condition(empty), condition. Runs on its own thread, so it records
-// rather than asserts.
+// rather than asserts; a non-finite output still fails the test, since
+// track()'s ADD_FAILURE is non-fatal and thread-safe.
 struct ConsumerRun {
   const ConsumerCase* c;
   Worst worst;
@@ -363,17 +369,13 @@ void ConsumerRun::run(std::shared_ptr<MoveProposalNets> nets, const float* board
   MoveProposalSession session(std::move(nets));
   for (int i = 0; i < iterations; ++i) {
     const MoveProposalPredictions& plain = session.encode(board, c->moves);
-    for (size_t k = 0; k < plain.wld.size(); ++k)
-      worst.prob = std::max(worst.prob, std::abs(plain.wld[k] - c->want_plain.wld[k]));
+    track_field(worst.prob, plain.wld, c->want_plain.wld, 3, "plain wld");
     session.condition(EvidenceSet{});
     const MoveProposalPredictions& got = session.condition(c->evidence);
-    for (size_t k = 0; k < got.wld.size(); ++k)
-      worst.prob = std::max(worst.prob, std::abs(got.wld[k] - c->want_conditioned.wld[k]));
-    for (size_t k = 0; k < got.score_diff.size(); ++k)
-      worst.score_diff =
-        std::max(worst.score_diff, std::abs(got.score_diff[k] - c->want_conditioned.score_diff[k]));
-    for (size_t k = 0; k < got.gain.size(); ++k)
-      worst.gain = std::max(worst.gain, std::abs(got.gain[k] - c->want_conditioned.gain[k]));
+    track_field(worst.prob, got.wld, c->want_conditioned.wld, 3, "conditioned wld");
+    track_field(worst.score_diff, got.score_diff, c->want_conditioned.score_diff, 2,
+                "conditioned sd");
+    track_field(worst.gain, got.gain, c->want_conditioned.gain, 1, "conditioned gain");
   }
 }
 

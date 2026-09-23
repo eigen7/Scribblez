@@ -1,7 +1,8 @@
 // BatchingPositionEvalService, the decorator that coalesces concurrent callers'
 // requests into one inner evaluate(). The stub echoes each row's first input
-// float back through both heads, so a gather or scatter error across coalesced
-// requests shows up as a caller receiving a wrong marker. No GPU needed.
+// float into every element of every output head, offset per head and element,
+// so a gather or scatter error across coalesced requests (a wrong row, head or
+// width) shows up as a caller receiving a wrong value. No GPU needed.
 
 #include "encoding/input_encoder.h"
 #include "nn/batching_position_eval_service.h"
@@ -10,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <stdexcept>
 #include <thread>
@@ -22,13 +24,17 @@ using scribblez::scalar_floats;
 using scribblez::spatial_planes;
 using scribblez::nn::BatchingPositionEvalService;
 using scribblez::nn::PositionEvalService;
-using scribblez::nn::ScoreDiffOutput;
-using scribblez::nn::WldOutput;
-using SpecBatch = scribblez::nn::PositionEvaluationSpec::Batch;
+using Outputs = PositionEvalService::Outputs;
+using SpecBatch = PositionEvalService::SpecBatch;
 
 int row_floats() { return spatial_planes() * kBoardCells + scalar_floats({nullptr}); }
 
-// Echoes row i's first input float m into head 0 as m and head 1 as m + 0.5.
+// The value the echo stub writes at element k of head h for a row whose marker
+// is m. Every term is exactly representable, so callers compare with ==.
+float echoed(float m, size_t h, int k) { return m + 0.5f * float(h) + 0.125f * float(k); }
+
+// Writes echoed(m, h, k) across every head's full row, m being row i's first
+// input float.
 class EchoStub : public PositionEvalService {
  public:
   std::atomic<int> calls{0};
@@ -40,8 +46,10 @@ class EchoStub : public PositionEvalService {
     const int rf = row_floats();
     for (int i = 0; i < batch.count; ++i) {
       const float m = batch.rows[size_t(i) * rf];
-      head_out[0][size_t(i) * WldOutput::kRowElems] = m;
-      head_out[1][size_t(i) * ScoreDiffOutput::kRowElems] = m + 0.5f;
+      for (size_t h = 0; h < Outputs::size; ++h) {
+        const int width = Outputs::row_elems[h];
+        for (int k = 0; k < width; ++k) head_out[h][size_t(i) * width + k] = echoed(m, h, k);
+      }
     }
   }
 };
@@ -56,6 +64,48 @@ class ThrowingStub : public PositionEvalService {
   }
 };
 
+// One caller's output buffers: one per Outputs entry, sized for `rows` rows.
+class HeadBuffers {
+ public:
+  explicit HeadBuffers(int rows);
+
+  // Overwrite every buffer with a value the stub never writes.
+  void poison();
+
+  std::span<float* const> ptrs() const { return ptrs_; }
+  const std::vector<float>& head(size_t h) const { return bufs_[h]; }
+
+ private:
+  std::array<std::vector<float>, Outputs::size> bufs_;
+  std::array<float*, Outputs::size> ptrs_;
+};
+
+HeadBuffers::HeadBuffers(int rows) {
+  for (size_t h = 0; h < Outputs::size; ++h) {
+    bufs_[h].resize(size_t(rows) * Outputs::row_elems[h]);
+    ptrs_[h] = bufs_[h].data();
+  }
+  poison();
+}
+
+void HeadBuffers::poison() {
+  for (std::vector<float>& b : bufs_) std::fill(b.begin(), b.end(), -1.0f);
+}
+
+// How many elements of `out` differ from what the stub echoes for `markers`.
+int echo_mismatches(const HeadBuffers& out, const std::vector<float>& markers) {
+  int bad = 0;
+  for (size_t h = 0; h < Outputs::size; ++h) {
+    const int width = Outputs::row_elems[h];
+    for (size_t r = 0; r < markers.size(); ++r) {
+      for (int k = 0; k < width; ++k) {
+        bad += out.head(h)[r * width + k] != echoed(markers[r], h, k);
+      }
+    }
+  }
+  return bad;
+}
+
 // One input row per marker, all zero but for the marker in its first float.
 std::vector<float> rows_with_markers(const std::vector<float>& markers) {
   std::vector<float> in(markers.size() * row_floats(), 0.0f);
@@ -67,16 +117,11 @@ TEST(BatchingPositionEvalService, ServesOneCallerCorrectly) {
   BatchingPositionEvalService svc(std::make_unique<EchoStub>());
   const std::vector<float> markers = {3.0f, 7.0f, 11.0f};
   std::vector<float> in = rows_with_markers(markers);
-  std::vector<float> wld(markers.size() * WldOutput::kRowElems, -1.0f);
-  std::vector<float> sd(markers.size() * ScoreDiffOutput::kRowElems, -1.0f);
-  float* const head_out[] = {wld.data(), sd.data()};
+  HeadBuffers out(int(markers.size()));
 
-  svc.evaluate(SpecBatch{in.data(), int(markers.size())}, head_out);
+  svc.evaluate(SpecBatch{in.data(), int(markers.size())}, out.ptrs());
 
-  for (size_t r = 0; r < markers.size(); ++r) {
-    EXPECT_EQ(wld[r * WldOutput::kRowElems], markers[r]);
-    EXPECT_EQ(sd[r * ScoreDiffOutput::kRowElems], markers[r] + 0.5f);
-  }
+  EXPECT_EQ(echo_mismatches(out, markers), 0);
 }
 
 TEST(BatchingPositionEvalService, ConcurrentCallersGetTheirOwnRows) {
@@ -92,18 +137,11 @@ TEST(BatchingPositionEvalService, ConcurrentCallersGetTheirOwnRows) {
     std::vector<float> markers(kRows);
     for (int r = 0; r < kRows; ++r) markers[r] = float(tid * 100 + r);  // unique per (tid, row)
     std::vector<float> in = rows_with_markers(markers);
-    std::vector<float> wld(kRows * WldOutput::kRowElems);
-    std::vector<float> sd(kRows * ScoreDiffOutput::kRowElems);
+    HeadBuffers out(kRows);
     for (int c = 0; c < kCalls; ++c) {
-      std::fill(wld.begin(), wld.end(), -1.0f);
-      std::fill(sd.begin(), sd.end(), -1.0f);
-      float* const head_out[] = {wld.data(), sd.data()};
-      svc.evaluate(SpecBatch{in.data(), kRows}, head_out);
-      for (int r = 0; r < kRows; ++r) {
-        ASSERT_EQ(wld[size_t(r) * WldOutput::kRowElems], markers[r])
-          << "thread " << tid << " got another caller's row " << r;
-        ASSERT_EQ(sd[size_t(r) * ScoreDiffOutput::kRowElems], markers[r] + 0.5f);
-      }
+      out.poison();
+      svc.evaluate(SpecBatch{in.data(), kRows}, out.ptrs());
+      ASSERT_EQ(echo_mismatches(out, markers), 0) << "thread " << tid << " got wrong rows";
     }
   };
 
@@ -119,10 +157,8 @@ TEST(BatchingPositionEvalService, ConcurrentCallersGetTheirOwnRows) {
 TEST(BatchingPositionEvalService, PropagatesInnerFailure) {
   BatchingPositionEvalService svc(std::make_unique<ThrowingStub>());
   std::vector<float> in = rows_with_markers({1.0f});
-  std::vector<float> wld(WldOutput::kRowElems);
-  std::vector<float> sd(ScoreDiffOutput::kRowElems);
-  float* const head_out[] = {wld.data(), sd.data()};
-  EXPECT_THROW(svc.evaluate(SpecBatch{in.data(), 1}, head_out), std::runtime_error);
+  HeadBuffers out(1);
+  EXPECT_THROW(svc.evaluate(SpecBatch{in.data(), 1}, out.ptrs()), std::runtime_error);
 }
 
 TEST(BatchingPositionEvalService, FailureReachesEveryCoalescedCaller) {
@@ -137,12 +173,10 @@ TEST(BatchingPositionEvalService, FailureReachesEveryCoalescedCaller) {
 
   auto worker = [&] {
     std::vector<float> in = rows_with_markers({1.0f, 2.0f});
-    std::vector<float> wld(2 * WldOutput::kRowElems);
-    std::vector<float> sd(2 * ScoreDiffOutput::kRowElems);
-    float* const head_out[] = {wld.data(), sd.data()};
+    HeadBuffers out(2);
     for (int c = 0; c < kCalls; ++c) {
       try {
-        svc.evaluate(SpecBatch{in.data(), 2}, head_out);
+        svc.evaluate(SpecBatch{in.data(), 2}, out.ptrs());
         ++returned;
       } catch (const std::runtime_error&) {
         ++threw;

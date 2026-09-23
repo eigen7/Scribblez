@@ -17,6 +17,7 @@
 #include "game/rack.h"
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
+#include "move_key.h"
 
 #include <gtest/gtest.h>
 
@@ -31,6 +32,8 @@
 #include <vector>
 
 using namespace scribblez;
+using scribblez::testing::key_set;
+using scribblez::testing::move_key;
 
 namespace {
 
@@ -43,45 +46,6 @@ Rack rack_from(const std::string& s) {
       r.add(Tile::from_char(c));
   }
   return r;
-}
-
-// A canonical key for a play (placed squares and glyphs, plus score), for
-// comparing move lists regardless of order.
-std::string move_key(const Move& m) {
-  struct Placement {
-    int r, c, code;
-  };
-  std::vector<Placement> tiles;
-  if (m.type() == MoveType::PLAY) {
-    const bool horiz = m.horizontal();
-    uint16_t mask = m.square_mask();
-    int gi = 0;
-    for (int pos = 0; mask; ++pos, mask >>= 1) {
-      if ((mask & 1u) == 0) continue;
-      const int r = horiz ? m.start() : pos;
-      const int c = horiz ? pos : m.start();
-      tiles.push_back({r, c, m.glyph(gi++).code()});
-    }
-  }
-  std::sort(tiles.begin(), tiles.end(), [](const Placement& a, const Placement& b) {
-    if (a.r != b.r) return a.r < b.r;
-    return a.c < b.c;
-  });
-  std::string k;
-  char buf[32];
-  for (const auto& t : tiles) {
-    std::snprintf(buf, sizeof(buf), "%d,%d,%d;", t.r, t.c, t.code);
-    k += buf;
-  }
-  std::snprintf(buf, sizeof(buf), "|%d", m.score());
-  k += buf;
-  return k;
-}
-
-std::set<std::string> key_set(const std::vector<Move>& ms) {
-  std::set<std::string> s;
-  for (const auto& m : ms) s.insert(move_key(m));
-  return s;
 }
 
 bool squares_equal(const Board& a, const Board& b) {
@@ -861,31 +825,29 @@ TEST(EndgameSolver, ContinuationCertificateIsSound) {
             << " class-proven endgames (the rest end with the chosen move)\n";
 }
 
-// At an unlimited budget a spread_matters solve proves every position, and its
-// proven class matches the reference's sign. The two solvers here are
-// configured identically, so the value and move comparisons between them
-// check only determinism across fresh solvers.
+// At an unlimited budget the lexicographic objective (spread_matters: class
+// first, spread as the tie-break) coincides with pure spread maximization,
+// since the spread-optimal line also has the best class. So the solve must
+// prove every position at the brute-force reference's spread-optimal value,
+// its class must be that value's sign, and its move must achieve that value.
 TEST(EndgameSolver, LexicographicMatchesSpreadAtFullBudget) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x1E0C0DE5u);
   for (int i = 0; i < 80; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
-    EndgameSolver lex_solver, spread_solver;
+    EndgameSolver solver;
     const EndgameResult lex =
-      lex_solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
-                       {kBigBudget, kRefDepth, true});
-    const EndgameResult spread =
-      spread_solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
-                          {kBigBudget, kRefDepth, true});
-    ASSERT_EQ(lex.value, spread.value) << "position " << i;
-    ASSERT_TRUE(lex.proven) << "position " << i;
-    const int32_t ref =
+      solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
+                   {kBigBudget, kRefDepth, /*spread_matters=*/true});
+    const int32_t spread_optimal =
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
-    ASSERT_EQ(lex.proven_class, (ref > 0) - (ref < 0)) << "position " << i;
-    if (!(lex.best == spread.best)) {
-      EXPECT_EQ(forced_move_value(d, p, lex.best, spread_solver), spread.value)
-        << "position " << i << ": divergent best move is not a tie";
-    }
+    ASSERT_TRUE(lex.proven) << "position " << i;
+    ASSERT_EQ(lex.value, spread_optimal) << "position " << i;
+    ASSERT_EQ(lex.proven_class, (spread_optimal > 0) - (spread_optimal < 0)) << "position " << i;
+    EXPECT_EQ(ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0,
+                                    lex.best, kRefDepth),
+              spread_optimal)
+      << "position " << i << ": the chosen move is not spread-optimal";
   }
 }
 

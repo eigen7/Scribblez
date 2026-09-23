@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Build Scribblez: the C++ engine, the web UI's npm packages, and Macondo.
+"""Build Scribblez: the C++ engine and the web UI's npm packages.
 
 The engine builds under target/archs/<arch>/ (this machine's CPU by default;
 see --archs), and target/engine links to this machine's build. play_game
 starts the web UI's dev server itself, so npm never needs running by hand.
-The pinned Macondo checkout under the mount dir, whose data files the engine
-reads, is cloned or moved to the pinned tag as needed.
+The pinned Macondo checkout under the mount dir, whose leave-value and
+pre-endgame data files the engine reads, is cloned or moved to the pinned tag
+as needed. Only its data is used; nothing of Macondo is built.
 
 Usage:
     py/build.py [--debug] [--clean] [-j N]
@@ -37,12 +38,6 @@ MACONDO_TAG = "v0.13.2"
 MOUNT_DIR = "/workspace/mount"
 MACONDO_DIR = os.path.join(MOUNT_DIR, "macondo")
 MACONDO_REPO_URL = "https://github.com/domino14/macondo.git"
-
-# setup_wizard.py downloads the .kwg lexica into <mount>/lexica/. Macondo looks
-# for them by name under <macondo>/data/lexica/gaddag/, which
-# link_lexica_into_macondo points at <mount>/lexica.
-LEXICA_DIR = os.path.join(MOUNT_DIR, "lexica")
-MACONDO_GADDAG_DIR = os.path.join(MACONDO_DIR, "data", "lexica", "gaddag")
 
 
 def run_rc(cmd, cwd=None) -> int:
@@ -299,36 +294,9 @@ def print_built_binaries(target_dir: str):
         print(f"    {rel}  ({size_mb:.1f} MB)")
 
 
-def link_lexica_into_macondo():
-    """Point Macondo's data/lexica/gaddag directory at <mount>/lexica, so
-    Macondo's own shell resolves every installed lexicon, including ones added
-    later. The symlink is relative, so it survives the mount dir moving.
-    """
-    if not os.path.isdir(LEXICA_DIR):
-        print(
-            f"\nNo lexica dir at {LEXICA_DIR}; skipping macondo lexica link.\n"
-            "Run ./setup_wizard.py to install lexica."
-        )
-        return
-    parent = os.path.dirname(MACONDO_GADDAG_DIR)
-    os.makedirs(parent, exist_ok=True)
-    if os.path.islink(MACONDO_GADDAG_DIR):
-        os.unlink(MACONDO_GADDAG_DIR)
-    elif os.path.isdir(MACONDO_GADDAG_DIR):
-        shutil.rmtree(MACONDO_GADDAG_DIR)
-    os.symlink(os.path.relpath(LEXICA_DIR, parent), MACONDO_GADDAG_DIR)
-    print(f"\nLinked {LEXICA_DIR} -> {MACONDO_GADDAG_DIR}")
-
-
-def build_macondo_shell():
-    os.makedirs(os.path.join(MACONDO_DIR, "bin"), exist_ok=True)
-    run("go build -o bin/shell ./cmd/shell", cwd=MACONDO_DIR)
-
-
-def clone_and_build_macondo():
-    """Clone the pinned Macondo tag and build its shell binary. The shell is
-    built only here and on a tag change, not on every run. If either step
-    fails, the checkout is removed so the next run starts clean.
+def clone_macondo():
+    """Clone the pinned Macondo tag. If the clone fails, the partial checkout is
+    removed so the next run starts clean.
     """
     print(f"\nCloning Macondo {MACONDO_TAG} into {MACONDO_DIR} ...")
     try:
@@ -336,7 +304,6 @@ def clone_and_build_macondo():
             f"git -c advice.detachedHead=false clone --branch {MACONDO_TAG} --depth 1 --quiet "
             f"{MACONDO_REPO_URL} {MACONDO_DIR}"
         )
-        build_macondo_shell()
     except BaseException:
         shutil.rmtree(MACONDO_DIR, ignore_errors=True)
         raise
@@ -354,7 +321,7 @@ def current_macondo_tag() -> str:
 
 
 def sync_macondo_tag():
-    """Move an existing Macondo checkout onto MACONDO_TAG and rebuild its shell.
+    """Move an existing Macondo checkout onto MACONDO_TAG.
 
     The tag is fetched by name because the checkout is shallow and
     `clone --branch <tag>` leaves a refspec naming only that tag, so a plain
@@ -382,7 +349,6 @@ def sync_macondo_tag():
         cwd=MACONDO_DIR,
     )
     run(f"git -c advice.detachedHead=false checkout --quiet {MACONDO_TAG}", cwd=MACONDO_DIR)
-    build_macondo_shell()
 
 
 def parse_args() -> argparse.Namespace:
@@ -412,7 +378,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-macondo",
         action="store_true",
-        help="skip the Macondo steps: clone, tag sync, shell build and lexica link",
+        help="skip the Macondo steps: clone and tag sync",
     )
     parser.add_argument(
         "--skip-macondo-tag-sync",
@@ -477,19 +443,12 @@ def main():
             else:
                 run("npm install --no-audit --no-fund", cwd=web_dir)
 
-    # 3. Macondo: clone, or move to MACONDO_TAG; the shell is rebuilt only then.
+    # 3. Macondo: clone, or move to MACONDO_TAG.
     if not args.skip_macondo:
-        if shutil.which("git") is None:
-            print("\nWARNING: `git` not found on PATH -- skipping Macondo build.")
-        elif shutil.which("go") is None:
-            print("\nWARNING: `go` not found on PATH -- skipping Macondo build.")
-        else:
-            if not os.path.isdir(MACONDO_DIR):
-                clone_and_build_macondo()
-            elif not args.skip_macondo_tag_sync:
-                sync_macondo_tag()
-
-            link_lexica_into_macondo()
+        if not os.path.isdir(MACONDO_DIR):
+            clone_macondo()
+        elif not args.skip_macondo_tag_sync:
+            sync_macondo_tag()
 
     print_built_binaries(target_dir)
 

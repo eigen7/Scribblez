@@ -37,20 +37,27 @@ class ViteDevServer {
   ViteDevServer(const ViteDevServer&) = delete;
   ViteDevServer& operator=(const ViteDevServer&) = delete;
 
-  // Wait for the dev server to accept connections. False on timeout or if the
-  // child exited.
-  bool wait_until_ready(int timeout_ms = 60000);
+  // Wait for the dev server to accept connections. Throws
+  // util::CleanException, pointing at Vite's log, on timeout or if the child
+  // exited.
+  void wait_until_ready(int timeout_ms = 60000);
 
   // The browser-facing URL (service_url.h).
   std::string url() const;
   int dev_port() const { return dev_port_; }
 
  private:
+  // False on timeout or if the child exited.
+  bool ready_within(int timeout_ms);
+
   int dev_port_;
   int ws_port_;
   std::string tool_;
   std::string service_;
   int default_dev_port_;
+  // <web_dir>/.vite-dev.log, where Vite's output goes so it cannot corrupt
+  // play_game's stdout, which may carry the game-log JSON.
+  std::string log_path_;
   std::unique_ptr<boost::process::group> group_;
   std::unique_ptr<boost::process::child> child_;
 };
