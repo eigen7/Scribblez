@@ -1,3 +1,3 @@
-"""Compiled word-knowledge exposed as a frozen, differentiable tool the network
-learns to query (distinct from a "lexicon", which is just a word list). See modules.py
-(the tool nn.Modules) and compiler.py (the .kwg -> DAWG compiler)."""
+"""Lexical tools: a lexicon compiled into frozen, differentiable modules that a
+network learns to query. compiler.py turns a .kwg into DAWG tables; modules.py
+holds the modules built on them. See docs/lexical_tools.md."""

@@ -1,9 +1,9 @@
-"""Racks and longest-word (spelling) labels for ordered generation.
+"""Dataset for the rack-best task: random racks labelled with a longest word.
 
-The task is to emit a valid word *spelling* of maximal length from a 7-tile rack
-(no blanks). A rack may have several longest words; the training target is the
-lexicographically-smallest one (evaluation credits any valid longest word).
-Racks with no formable word are dropped -- the task is undefined for them.
+Racks are 7 tiles drawn without blanks from a standard bag. When a rack has
+several longest words, the training target is the alphabetically first; the
+evaluation in scripts/rack_best/train.py accepts any of them. Racks that form
+no word are dropped.
 """
 
 import random
@@ -15,7 +15,7 @@ from scribblez.lexical_tool.compiler import compile_kwg
 
 RACK_SIZE = 7
 
-# Standard English Scrabble tile distribution, blanks excluded (98 letter tiles).
+# Standard English tile distribution without the two blanks: 98 tiles.
 STANDARD_BAG = {
     "A": 9,
     "B": 2,
@@ -51,7 +51,7 @@ def bag_tiles(bag: dict = STANDARD_BAG) -> list[str]:
 
 
 def build_anagram_index(real_kwg: str, min_len: int = 2, max_len: int = RACK_SIZE) -> dict:
-    """sorted-letter tuple -> list of real word spellings with that anagram."""
+    """Map each sorted-letter tuple to the words that are anagrams of it."""
     index: dict[tuple, list[str]] = {}
     for word in compile_kwg(real_kwg).words():
         if min_len <= len(word) <= max_len:
@@ -60,10 +60,11 @@ def build_anagram_index(real_kwg: str, min_len: int = 2, max_len: int = RACK_SIZ
 
 
 def longest_words(rack: tuple, index: dict, min_len: int = 2) -> tuple[int, list[str]]:
-    """(max length, sorted list of all longest word spellings) for a sorted rack."""
+    """(longest length, all words of that length, sorted) formable from a sorted
+    rack, or (0, []) if none."""
     for k in range(len(rack), min_len - 1, -1):
         words: set[str] = set()
-        for combo in set(combinations(rack, k)):  # rack is sorted -> combos are sorted keys
+        for combo in set(combinations(rack, k)):  # a sorted rack yields sorted combos
             words.update(index.get(combo, ()))
         if words:
             return k, sorted(words)
@@ -82,15 +83,16 @@ def sample_racks(n_unique: int, rng: random.Random, rack_size: int = RACK_SIZE) 
 
 
 def make_dataset(real_kwg: str, n_unique: int, seed: int, rack_size: int = RACK_SIZE):
-    """(racks, canonical-target words, max lengths) for racks that form a word."""
+    """(racks, target words, longest lengths) for `n_unique` distinct racks,
+    minus those that form no word."""
     rng = random.Random(seed)
     index = build_anagram_index(real_kwg, max_len=rack_size)
     racks, targets, max_lens = [], [], []
     for rack in sample_racks(n_unique, rng, rack_size):
         ml, words = longest_words(rack, index)
         if ml == 0:
-            continue  # no formable word: task undefined, drop it
+            continue
         racks.append(rack)
-        targets.append(words[0])  # canonical = lexicographically smallest longest word
+        targets.append(words[0])
         max_lens.append(ml)
     return racks, targets, np.array(max_lens, dtype=np.int64)

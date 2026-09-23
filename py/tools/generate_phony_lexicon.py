@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-"""Generate a phony lexicon that mimics a real one's letter statistics.
+"""Generate a phony lexicon: non-words with a real lexicon's letter statistics.
 
-The phony lexicon is a same-size set of plausible-but-invalid "words" -- the kind
-a discriminator must actually look up to reject (``YOP`` looks real, ``QVF`` does
-not). It pairs with a real lexicon for the word-validity toy: shuffle the two
-together with valid/invalid labels and see whether a model can separate them.
-Because the phonies match the real lexicon's character statistics, surface
-features cannot separate them -- only true lexical membership can.
+Phonies are plausible non-words, the kind you can only reject by knowing the
+word list (``YOP`` looks real, ``QVF`` does not). Mixed with the real lexicon,
+they give the word-validity toy task a dataset in which surface features carry
+no signal, so a model can only separate the two by learning membership.
 
-Method:
-  * Fit a character Markov model (default order 3, with start/end padding so
-    short words generate too) on the real words.
-  * For each length L, aim for the SAME count as the real lexicon has at L:
-      - short L (the whole 26^L space is small): enumerate every length-L string,
-        drop the real words, and keep the most word-like by model log-likelihood
-        -- this fills the short tail exactly, where blind sampling would starve;
-      - long L: sample fixed-length strings from the model, dropping real words
-        and duplicates, until the target is met or a give-up bound is hit.
-  * Reject any string that is a real word; never repeat a phony.
+A character Markov model is fit to the real words. For each length the tool
+produces as many phonies as the real lexicon has words of that length:
 
-Writes the phony words to a ``.txt`` (one per line) and a real ``.kwg`` (via the
-DAWG writer), and prints a per-length target-vs-produced report.
+  * Short lengths, where all 26^L strings fit under --enum-max-combos, are
+    enumerated and the most word-like non-words kept. Sampling would starve
+    here, because most likely strings at these lengths are real words.
+  * Longer lengths are sampled from the model until the count is met or the
+    give-up bounds are hit.
+
+Writes the phonies as a ``.txt`` (one per line) and a ``.kwg``, and prints a
+per-length report of any shortfall. The committed phonies/ lexicon was made with
+
+    py/tools/generate_phony_lexicon.py --real-lexicon /workspace/mount/lexica/NWL23.kwg \\
+        --out-txt phonies/PHONY-NWL23.txt --out-kwg phonies/PHONY-NWL23.kwg
 """
 
 import argparse
@@ -44,15 +43,18 @@ START, END = "^", "$"
 
 
 class CharMarkov:
-    """An order-k character model with start/end padding (so 2-letter words and
-    word boundaries are modeled), used both to score and to sample strings."""
+    """Order-k character model with add-alpha smoothing. Words are padded with
+    START and END symbols so the model also learns where words begin and end."""
 
     def __init__(self, order: int, alpha: float = 0.1):
         self.order = order
         self.alpha = alpha
         self.counts: dict = defaultdict(lambda: defaultdict(int))
-        self._score: dict = {}  # ctx -> {sym: log P(sym | ctx)} over letters + END
-        self._sample: dict = {}  # ctx -> (letters, weights) over letters only
+        # Lazily built per-context distributions. Scoring includes END so that a
+        # string which rarely ends at its length scores low; sampling excludes
+        # END because it draws strings of a fixed length.
+        self._score: dict = {}  # ctx -> {sym: log P(sym | ctx)}
+        self._sample: dict = {}  # ctx -> (letters, weights)
 
     def fit(self, words):
         pad = (START,) * self.order
@@ -80,8 +82,7 @@ class CharMarkov:
         return sd
 
     def log_likelihood(self, word: str) -> float:
-        """Log P(word) as a complete word -- includes the terminating END, so a
-        string that rarely ends at this length scores lower."""
+        """Log-probability of `word` as a complete word, END included."""
         seq = (START,) * self.order + tuple(word) + (END,)
         lp = 0.0
         for i in range(self.order, len(seq)):
@@ -102,10 +103,7 @@ class CharMarkov:
 def phonies_for_length(
     length, target, real, model, rng, enum_max_combos, sample_attempts, giveup_misses
 ):
-    """Up to `target` distinct length-`length` non-words, matched to the model.
-
-    Enumerate-and-rank when the whole space is small enough (fills the short tail
-    exactly); otherwise sample with a give-up bound."""
+    """Return up to `target` distinct non-words of the given length."""
     if 26**length <= enum_max_combos:
         pool = [w for w in map("".join, product(LETTERS, repeat=length)) if w not in real]
         return heapq.nlargest(target, pool, key=model.log_likelihood)
@@ -170,22 +168,24 @@ def main() -> int:
     p.add_argument("--out-txt", default="NWL23_phony.txt", help="Phony word list output.")
     p.add_argument("--out-kwg", default="NWL23_phony.kwg", help="Phony .kwg output.")
     p.add_argument("--order", type=int, default=3, help="Character-model order (context length).")
-    p.add_argument("--min-len", type=int, default=2)
-    p.add_argument("--max-len", type=int, default=15)
+    p.add_argument("--min-len", type=int, default=2, help="Shortest word length to generate.")
+    p.add_argument("--max-len", type=int, default=15, help="Longest word length to generate.")
     p.add_argument(
         "--enum-max-combos",
         type=int,
         default=2_000_000,
-        help="Enumerate-and-rank lengths whose 26^L is at or below this (else sample).",
+        help="Enumerate every string of length L when 26^L is at most this; sample otherwise.",
     )
-    p.add_argument("--sample-attempts", type=int, default=200, help="Max samples per wanted word.")
+    p.add_argument(
+        "--sample-attempts", type=int, default=200, help="Sampling budget per wanted word."
+    )
     p.add_argument(
         "--giveup-misses",
         type=int,
         default=20_000,
         help="Give up a length after this many consecutive sampling misses.",
     )
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--seed", type=int, default=0, help="RNG seed for sampling.")
     args = p.parse_args()
 
     phonies = generate(args)

@@ -1,30 +1,24 @@
-"""Frozen, compiled-lexicon modules the network can learn to use as a tool.
+"""Compiled-lexicon tools: frozen lexicon modules a network learns to query.
 
-The premise: instead of forcing the network to grow an internal copy of the
-lexicon, compile the lexicon into a module whose lexical weights are *frozen*
-and *plug it in* as an input the network learns to query -- like handing a USB
-drive to a computer. The compiled lexicon (a DAWG transition table, see
-:mod:`compiler`) is held in non-trainable buffers; the thin query/read
-adapters around it are ordinary parameters. Those adapters *are* "the network
-learning to operate the tool": gradients teach it what to ask and how to read
-the answer, while the lexicon itself never changes.
+Rather than making a network memorize the lexicon, these modules hold a compiled
+lexicon (the DAWG tables from :mod:`compiler`) in non-trainable buffers and let
+the network query it. Only thin adapters around the tables train: what to ask,
+and how to read the answer. docs/lexical_tools.md surveys the modules and the
+experiments that use them.
 
-A module is selected by name (``--lexicon-module``) from
-:data:`LEXICON_MODULE_REGISTRY`. Each obeys one interface:
+A module is picked by name (``--lexicon-module``) from
+:data:`LEXICON_MODULE_REGISTRY`, and all share one interface over a batch of M
+sequences of length L (board lanes, words, or racks, depending on the host):
 
-    forward(lane_feats:   (M, 15, C),    # the network's per-cell lane features
-            lane_letters: (M, 15, 26))   # the known board tiles on the lane
-        -> LexiconOutput(cell_residual: (M, 15, C) | None,
-                         tokens:        (M, T, C)  | None)
+    forward(lane_feats:   (M, L, C),     # the host's per-cell features
+            lane_letters: (M, L, 26))    # one-hot letters known at each cell
+        -> LexiconOutput
 
-``cell_residual`` is added to the 15 lane cells; ``tokens`` are prepended to the
-lane's transformer sequence (alongside the rack tokens). Crucially, a module is
-queried with the network's *learned* representation, never with the ground-truth
-answer -- otherwise it would solve the task for the wrong reason and make the
-held-out-word generalization test meaningless.
-
-Modules run on every lane, rows and columns, with shared weights (transpose
-sharing), matching the lane transformer: a word is a word along either axis.
+The host adds ``cell_residual`` to its cell features and prepends ``tokens`` to
+its transformer sequence. A module must be queried with the network's learned
+features, never with the answer. Otherwise it solves the task for the network,
+and the held-out-word test no longer measures whether the network learned to
+use the tool.
 """
 
 from __future__ import annotations
@@ -48,13 +42,13 @@ from scribblez.lexical_tool.compiler import (
 
 @dataclass
 class LexiconOutput:
-    """What a lexicon module contributes to a lane's transformer sequence.
+    """What a lexicon module returns; any field may be None.
 
-    cell_residual: ``(M, 15, C)`` added to the per-cell lane features, or None.
-    tokens: ``(M, T, C)`` extra tokens prepended to the lane sequence, or None.
-    cell_signals: ``(M, 15, S)`` the module's raw, interpretable per-cell lexical
-        readout (e.g. accept / continuation / alive), or None. The network does
-        not consume this -- it is exposed for tests and dashboard visualization.
+    cell_residual: ``(M, L, C)``, added to the host's per-cell features.
+    tokens: ``(M, T, C)``, prepended to the host's sequence.
+    cell_signals: ``(M, L, S)``, the module's raw per-cell readout before
+        projection (for example accept / continuation / alive). The host does
+        not consume it; tests use it to check the module's lexical answers.
     """
 
     cell_residual: torch.Tensor | None = None
@@ -65,8 +59,8 @@ class LexiconOutput:
 class LexiconModule(nn.Module):
     """Base class for compiled-lexicon modules.
 
-    Subclasses set :attr:`n_tokens` (how many tokens they prepend per lane, so
-    the lane transformer can size its positional table) and implement forward.
+    Subclasses set :attr:`n_tokens`, the number of tokens they prepend, which the
+    host needs to size its positional embedding, and implement forward.
     """
 
     n_tokens: int = 0
@@ -91,8 +85,7 @@ def available_modules() -> list[str]:
     return ["none"] + sorted(LEXICON_MODULE_REGISTRY)
 
 
-# One-line summary of each registered module, shown in --lexicon-module's help so the
-# choice is legible without opening the file.
+# Shown in --lexicon-module's help.
 _MODULE_BLURBS = {
     "none": "no tool (baseline)",
     "soft_traversal": "soft left-to-right DAWG walk (word membership)",
@@ -105,13 +98,9 @@ _MODULE_BLURBS = {
 
 @dataclass
 class LexiconArgs:
-    """The chosen compiled-lexicon-tool options, in one place: `add_arguments` registers
-    the CLI flags, `from_args` reads the chosen values back off a parsed namespace, and
-    `build` / `lane_ffn_mult` turn them into the frozen module and the transformer-FFN
-    width the model wants -- so no trainer copies the flag definitions or the wiring.
+    """The lexicon-tool options, with their CLI flags and the model wiring they imply.
 
-    The lexicon the tool is compiled from is `default_kwg_path()` (NWL23 under the mount)
-    unless a trainer whose lexicon lives on another flag overrides `build(kwg_path=...)`.
+    Trainers share this instead of each defining the flags and building the module.
     """
 
     module: str = "none"
@@ -126,11 +115,9 @@ class LexiconArgs:
         g = parser.add_argument_group(
             "compiled-lexicon tool",
             description="A frozen, compiled lexicon (a DAWG) plugged into the model as a "
-            "tool the network learns to query: its lexical weights never train, while thin "
-            "adapters learn what to ask and how to read the answer -- so the model can use "
-            "the lexicon without memorizing it. Compiled from NWL23 under the mount. See the "
-            "module docstring in scribblez/lexical_tool/modules.py and "
-            "docs/word_validity_experiments.md.",
+            "tool the network learns to query. The lexicon never trains; small adapters "
+            "learn what to ask and how to read the answer, so the model can use the lexicon "
+            "without memorizing it. See docs/lexical_tools.md.",
         )
         module_help = "; ".join(
             f"{n}: {b}" for n, b in _MODULE_BLURBS.items() if n in available_modules()
@@ -140,45 +127,44 @@ class LexiconArgs:
             type=str,
             default="none",
             choices=available_modules(),
-            help=f"Which compiled-lexicon tool to plug in (each is a frozen nn.Module; see "
-            f"its class in modules.py). {module_help}.",
+            help=f"Which compiled-lexicon tool to plug in (classes in "
+            f"scribblez/lexical_tool/modules.py). {module_help}.",
         )
         g.add_argument(
             "--lexicon-opt",
             action="append",
             default=[],
             metavar="KEY=VALUE",
-            help="Module-specific hyperparameter as KEY=VALUE, repeatable; forwarded to the "
-            "selected module's constructor. E.g. --lexicon-opt topk=32 sets soft_traversal's "
-            "beam width. See each module's __init__ in modules.py for its options.",
+            help="Module option passed to the selected module's constructor; repeatable. "
+            "For example, --lexicon-opt topk=32 sets soft_traversal's beam width. Each "
+            "module's docstring lists its options.",
         )
         g.add_argument(
             "--lexicon-mode",
             type=str,
             default="replace",
             choices=["add", "replace"],
-            help="How the tool relates to a transformer host (ignored by conv-trunk models). "
-            "'add': tool augments the internal lexical store. 'replace': shrink the FFN so "
-            "word knowledge must come from the tool (attention kept).",
+            help="How the tool relates to a transformer host; ignored by conv-trunk models. "
+            "'add': the tool supplements the host's full-width FFN. 'replace': shrink the "
+            "FFN (attention keeps full width) so word knowledge has to come from the tool.",
         )
         g.add_argument(
             "--lexicon-replace-ffn-mult",
             type=int,
             default=1,
-            help="Transformer FFN width multiple under --lexicon-mode replace (0 ~ "
-            "attention-only). Sweep down until a tool-off model can no longer learn the "
-            "lexicon -- that is where internal memorization is starved.",
+            help="Transformer FFN width multiple under --lexicon-mode replace (0 is nearly "
+            "attention-only). Pick it by sweeping down until a model without the tool can no "
+            "longer learn the lexicon.",
         )
         g.add_argument(
             "--lexicon-starve-ffn",
             action="store_true",
-            help="Apply the replace-mode FFN shrink even with --lexicon-module none "
-            "(the experiment command minus the tool).",
+            help="Apply the replace-mode FFN shrink even with --lexicon-module none. This is "
+            "the control run: same starved model, no tool.",
         )
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> LexiconArgs:
-        """Gather the chosen values off a parsed namespace."""
         return cls(
             module=args.lexicon_module,
             opt=args.lexicon_opt,
@@ -188,9 +174,8 @@ class LexiconArgs:
         )
 
     def build(self, channels: int, kwg_path: str | None = None):
-        """The frozen lexicon module for these options (None for ``module='none'``). The
-        lexicon is `default_kwg_path()` unless `kwg_path` overrides it (for trainers whose
-        KWG is a separate flag, e.g. word-validity's --real-lexicon)."""
+        """Build the selected module, or None for ``none``. It is compiled from
+        `kwg_path`, defaulting to `default_kwg_path()`."""
         return build_lexicon_module(
             self.module,
             channels=channels,
@@ -199,14 +184,13 @@ class LexiconArgs:
         )
 
     def lane_ffn_mult(self, has_module: bool) -> int | None:
-        """The transformer FFN width multiple these options imply (None to keep full)."""
+        """The host FFN width multiple these options imply, or None for the default."""
         return resolve_lane_ffn_mult(self.mode, has_module, self.starve_ffn, self.replace_ffn_mult)
 
 
 def parse_module_opts(items: list[str]) -> dict[str, object]:
-    """Parse repeated ``KEY=VALUE`` CLI options into a kwargs dict.
-
-    Values are coerced to int, then float, else left as a string."""
+    """Parse ``KEY=VALUE`` options into kwargs, converting each value to int or
+    float where it parses as one."""
     opts: dict[str, object] = {}
     for item in items:
         if "=" not in item:
@@ -228,15 +212,13 @@ def _coerce(value: str) -> object:
 def resolve_lane_ffn_mult(
     mode: str, has_module: bool, starve_ffn: bool, replace_ffn_mult: int
 ) -> int | None:
-    """The lane transformer's FFN-width override for the lexicon experiment, or
-    None to keep the default width.
+    """The host transformer's FFN width multiple, or None to keep its default.
 
-    In "replace" mode the lane FFN -- where an internal lexicon would be
-    memorized -- is shrunk to ``replace_ffn_mult`` so word knowledge must come
-    from the tool. That fires when a tool is plugged in, OR when ``starve_ffn`` is
-    set: the starved-no-tool control -- a shrunk backbone with no tool, which
-    should then FAIL to learn the lexicon, proving the FFN is genuinely starved.
-    "add" mode never overrides (the tool augments a full internal store).
+    The FFN is where a transformer would memorize the lexicon. "replace" mode
+    shrinks it to ``replace_ffn_mult`` so word knowledge has to come from the
+    tool. The shrink also applies without a tool when ``starve_ffn`` is set: that
+    control run should fail to learn the lexicon, showing that the shrunk FFN
+    really cannot memorize it. "add" mode keeps the full FFN.
     """
     if mode == "replace" and (has_module or starve_ffn):
         return replace_ffn_mult
@@ -248,9 +230,8 @@ def build_lexicon_module(
 ) -> LexiconModule | None:
     """Construct the named lexicon module, or None for ``"none"``.
 
-    The lexicon is compiled from ``kwg_path``, which MUST be the same lexicon the
-    self-play labels are computed from, or the frozen module and the training
-    targets describe different dictionaries."""
+    ``kwg_path`` must be the lexicon the training labels were computed with, or
+    the tool and the targets disagree about which words exist."""
     if name == "none":
         return None
     if name not in LEXICON_MODULE_REGISTRY:
@@ -260,11 +241,11 @@ def build_lexicon_module(
 
 
 class _DawgLexicon(LexiconModule):
-    """Base for modules that traverse the compiled DAWG.
+    """Base for modules that walk the compiled DAWG.
 
-    Holds the frozen transition / acceptance / letter-legality tables as buffers
-    (the compiled lexicon, moved with the model but never trained). Subclasses
-    add the trainable adapters and the forward pass.
+    Holds the DAWG tables as buffers, so they move with the model but never
+    train. ``exists_tbl`` marks every (state, letter) that is a real arc: one
+    that leads on, completes a word, or both.
     """
 
     def __init__(self, compiled: CompiledLexicon):
@@ -279,52 +260,31 @@ class _DawgLexicon(LexiconModule):
 
 @register_module("soft_traversal")
 class SoftTraversalLexicon(_DawgLexicon):
-    """A differentiable forward-DAWG walk along the lane, queried by the network.
+    """A differentiable left-to-right DAWG walk, with letters chosen by the network.
 
-    Design
-    ------
-    The frozen DAWG is a transition table; this module walks it left-to-right
-    along a lane while the network supplies the letters. At each cell the letter
-    fed in is the known board tile if the cell is occupied, else a *soft* query
-    distribution the network emits from its own lane features. A learned restart
-    gate lets a fresh word begin at any cell (words are not anchored at cell 0),
-    so one left-to-right pass covers plays starting anywhere.
+    At each cell the walk consumes the known letter if there is one, and
+    otherwise a soft letter distribution the network produces from its own
+    features. A learned restart gate lets a new word begin at any cell. The walk
+    state is a probability distribution over DAWG states, kept sparse as the top
+    K, since a real lexicon has far too many states for a dense distribution.
+    Each cell reads out:
 
-    The traversal state is a distribution over DAWG nodes, kept tractable as a
-    sparse top-K set (the lexicon has tens of thousands of nodes; a dense state
-    is infeasible). Each step reads out, differentiably:
-      * accept   -- probability the soft prefix ending here is a complete word;
-      * cont     -- per-letter legality: which letters the lexicon permits next
-                    given the soft prefix (a soft, network-derived cross-check);
-      * alive    -- how much of the soft letter mass was a legal continuation.
-    These per-cell signals become a cell residual; their pooled summary becomes
-    two lane tokens.
+      * accept -- probability that the soft prefix ending here is a word;
+      * cont   -- which letters the lexicon allows next after the soft prefix;
+      * alive  -- how much probability mass is still on valid prefixes.
 
-    Frozen vs. trainable
-    --------------------
-    The transition/accept/exists tables are buffers (frozen lexicon). Trainable:
-    the query head (what letter to ask about), the restart gate, and the readout
-    projections (how to turn lexical answers into features). Learning these is
-    the network learning to use the tool.
+    These become a per-cell residual, and their pooled summary two tokens. The
+    trainable parts are the letter query, the restart gate and the readouts.
 
-    Tradeoffs / suitability
-    -----------------------
-    Faithful to "a differentiable automaton": exact transitions, true gradients
-    through the soft letters, de-assemblable lexicon. Approximations: top-K
-    truncation drops low-probability branches, and equal target states from
-    different (state, letter) pairs are not merged before the top-K (a mild
-    over-spread). Cost is O(lane_len * K * 26) per lane and is the heaviest of
-    the planned modules.
+    Transitions are exact and gradients reach the letter query through the soft
+    letters. The approximation is the top-K truncation, which drops unlikely
+    branches; mass reaching the same state along two paths is also not merged
+    before truncation. The walk is left-to-right from a single start, so it does
+    not see a play that extends through existing tiles in both directions, nor
+    words on the perpendicular axis; the host has to handle those. Cost is
+    O(L * K * 26) per sequence, the highest of the modules.
 
-    Toy vs. general: the left-to-right, single-anchor walk is tailored to the
-    per-lane toy task -- it does not model a play threading bidirectionally
-    through existing tiles, nor cross-words on the perpendicular axis (those are
-    left to the shared transformer). The *soft* state is, however, exactly the
-    primitive a future win-probability model wants (a soft prefix = genuine
-    uncertainty over the opponent's tiles / the bag), so the mechanism is meant
-    to transfer even though this particular anchoring is toy-specific.
-
-    Options: ``topk`` (tracked states, default 16).
+    Options: ``topk`` (states kept, default 16).
     """
 
     def __init__(self, *, channels: int, compiled: CompiledLexicon, topk: int = 16):
@@ -333,7 +293,6 @@ class SoftTraversalLexicon(_DawgLexicon):
         self.channels = channels
         self.topk = int(topk)
 
-        # Trainable adapters (the network's "hands" on the tool).
         self.query = nn.Linear(channels, N_LETTERS)  # which letter to ask about
         self.restart = nn.Linear(channels, 1)  # may a new word start here?
         feat_dim = 1 + N_LETTERS + 1  # accept, cont(26), alive
@@ -341,9 +300,7 @@ class SoftTraversalLexicon(_DawgLexicon):
         self.token_proj = nn.Linear(2 * feat_dim, self.n_tokens * channels)
 
     def _letter_query(self, lane_feats: torch.Tensor) -> torch.Tensor:
-        """Per-cell letter distribution used to probe empty cells -- ``(M, L, 26)``.
-        Soft (a full softmax): the traversal state spreads over every word the
-        query is compatible with, giving true (top-K truncated) gradients."""
+        """Letter distribution (M, L, 26) fed to the walk at empty cells."""
         return torch.softmax(self.query(lane_feats), dim=-1)
 
     def forward(self, lane_feats: torch.Tensor, lane_letters: torch.Tensor) -> LexiconOutput:
@@ -382,10 +339,9 @@ class SoftTraversalLexicon(_DawgLexicon):
             flat_flow = flow.reshape(m, -1).masked_fill(flat_idx == self.dead, 0.0)
             top_flow, top_pos = flat_flow.topk(k, dim=1)
             idx = flat_idx.gather(1, top_pos)
-            # Keep raw probability mass (no renormalization): the mass on a prefix
-            # IS its soft probability, so accept reflects how likely the queried
-            # word is and gradients reach the query head. The surviving mass
-            # ("alive") doubles as a signal of how lexically legal the prefix is.
+            # No renormalization: the mass left on a prefix is its probability, so
+            # accept measures how likely the queried word is, and the total
+            # surviving mass (alive) measures how valid the soft prefix is.
             val = top_flow
             alive_steps.append(val.sum(1))
 
@@ -402,58 +358,42 @@ class SoftTraversalLexicon(_DawgLexicon):
 
 @register_module("straight_through")
 class StraightThroughLexicon(SoftTraversalLexicon):
-    """A DAWG walk with an EXACT (hard) forward pass and straight-through gradients.
+    """:class:`SoftTraversalLexicon` with a one-hot letter query and
+    straight-through gradients.
 
-    Identical to :class:`SoftTraversalLexicon` except the letter probed at each
-    empty cell is the network's query **hardened to one-hot** (argmax) via a
-    straight-through estimator: the forward pass commits to a single letter, so
-    the traversal follows one exact path -- acceptance and continuation are crisp
-    0/1 facts with no top-K truncation -- while the backward pass flows gradient
-    to the query head as if the soft distribution had been used.
-
-    Tradeoffs / suitability
-    -----------------------
-    Exact and cheap forward (a single path; the soft module's truncation can
-    never drop the true branch), and the readout reflects the real lexicon, not a
-    smeared approximation. The cost is a **biased** gradient: the straight-through
-    estimator ignores how committing to argmax changes the path, so the query
-    head is trained on an approximate signal. A good toy baseline and a clean
-    contrast to ``soft_traversal`` (exact-but-biased vs. approximate-but-true
-    gradients); as a transfer primitive it is weaker, since the hard commitment
-    discards exactly the distributional softness a win-probability model wants.
+    The forward pass commits to the argmax letter at each empty cell, so the walk
+    follows a single path and its readouts are exact 0/1 answers from the real
+    lexicon, with nothing lost to truncation. The backward pass sends gradient to
+    the query as if the soft distribution had been used. That gradient is biased,
+    since it ignores how the argmax choice changes the path. The pair gives an
+    exact-but-biased versus approximate-but-unbiased comparison.
     """
 
     def _letter_query(self, lane_feats: torch.Tensor) -> torch.Tensor:
         q = torch.softmax(self.query(lane_feats), dim=-1)
         hard = torch.zeros_like(q).scatter_(-1, q.argmax(-1, keepdim=True), 1.0)
-        return hard + (q - q.detach())  # forward: one-hot; backward: soft (STE)
+        return hard + (q - q.detach())  # value is one-hot; gradient is q's
 
 
 @register_module("oracle_crosscheck")
 class OracleCrosscheckLexicon(_DawgLexicon):
-    """DIAGNOSTIC ONLY -- a cheating upper bound, NOT a legitimate result.
+    """Diagnostic ceiling that cheats: exact lexical facts read off the board.
 
-    Feeds the network exact, board-derived lexical legality -- the very
-    cross-check knowledge the input encoder deliberately withholds (which is the
-    whole point of the experiment). It is NOT queried by the network's learned
-    representation: it reads the answer straight off the board, so it defeats the
-    experiment and would "pass" the held-out-word test for the wrong reason
-    (board-derived legality covers held-out words for free). Its only honest use
-    is as a ceiling -- how high lane accuracy can go given perfect per-cell
-    lexical info -- and as a wiring check. Never compare it to the real
-    generators as if it were one.
+    It computes the letter-legality information the input encoder deliberately
+    withholds, directly from the board rather than from the network's features.
+    It therefore passes the held-out-word test for free and is not a result. Use
+    it only to measure how well a model could do given perfect per-cell lexical
+    information, and as a wiring check.
 
-    Mechanism: a single left-to-right DAWG scan with a hard reset at each empty
-    cell (a broken contiguous run). At every cell it reads, exactly, from the
-    state of the contiguous run on its left:
-      * run_word -- whether that left run is itself a complete word;
-      * cont     -- the letters that legally extend the run (prefix-valid);
-      * accept   -- the letters that, placed here, complete a word.
-    This is the LEFT-context cross-check (a simplification of the full
-    bidirectional cross-check; the perpendicular and right-context legality are
-    left to the shared transformer). The scan has no learnable part -- only the
-    readout that projects the exact signal into the trunk's feature space is
-    trained, i.e. the network learns to USE a perfect (cheating) oracle.
+    It scans each sequence left to right, restarting at every empty cell, and at
+    each cell reports, for the run of tiles immediately to its left:
+
+      * run_word -- whether the run is a word;
+      * cont     -- the letters that extend the run to a valid prefix;
+      * accept   -- the letters that complete a word.
+
+    Only left context is covered; right-hand and perpendicular words are left to
+    the host. The only trained part is the readout.
     """
 
     def __init__(self, *, channels: int, compiled: CompiledLexicon):
@@ -468,7 +408,7 @@ class OracleCrosscheckLexicon(_DawgLexicon):
         m, length, _ = lane_feats.shape
         device = lane_feats.device
         occupied = lane_letters.sum(-1) > 0  # (M, L)
-        letters = lane_letters.argmax(-1)  # (M, L); 0 where empty (unused there)
+        letters = lane_letters.argmax(-1)  # (M, L); meaningless at empty cells
 
         state = torch.full((m,), self.root, dtype=torch.long, device=device)
         root = torch.full((m,), self.root, dtype=torch.long, device=device)
@@ -477,14 +417,14 @@ class OracleCrosscheckLexicon(_DawgLexicon):
 
         run_steps, cont_steps, accept_steps = [], [], []
         for c in range(length):
-            run_steps.append(run_word)  # left run (ending before c) is a word
-            cont_steps.append(self.exists_tbl[state])  # prefix-legal letters here
-            accept_steps.append(self.accept_tbl[state])  # word-completing letters here
+            run_steps.append(run_word)
+            cont_steps.append(self.exists_tbl[state])
+            accept_steps.append(self.accept_tbl[state])
             occ_c = occupied[:, c]
             lc = letters[:, c]
             nxt = self.next_tbl[state, lc]
             acc = self.accept_tbl[state, lc]
-            state = torch.where(occ_c, nxt, root)  # continue the run, or reset at a gap
+            state = torch.where(occ_c, nxt, root)  # an empty cell ends the run
             run_word = torch.where(occ_c, acc, zero)
 
         run = torch.stack(run_steps, dim=1).unsqueeze(-1)  # (M, L, 1)
@@ -500,29 +440,20 @@ class OracleCrosscheckLexicon(_DawgLexicon):
 
 @register_module("kv_memory")
 class KvMemoryLexicon(LexiconModule):
-    """Frozen key-value lexicon memory with learned product-key addressing.
+    """Frozen word memory with learned product-key addressing (Lample et al.).
 
-    Compiles the lexicon into a frozen value memory -- one slot per word, holding
-    that word's letter bag (its letter-count distribution). The network forms a
-    query from its pooled lane features plus the lane's existing tiles and
-    retrieves a blend of the compatible words' letters via product-key attention
-    (Lample et al.): two learned sub-key codebooks of size ~sqrt(N) make top-k
-    retrieval over the ~170k-word memory cheap (2*sqrt(N) comparisons, not N).
-    The retrieved letter hint becomes lane tokens.
+    Each word gets one frozen value slot holding its normalized letter counts.
+    The network builds a query from its pooled features and the sequence's known
+    letters, and retrieves a softmax blend of the top-k slots. Addressing uses
+    two learned sub-key codebooks of about sqrt(N) keys each, so retrieval costs
+    about 2*sqrt(N) comparisons instead of N. The blend becomes two tokens.
 
-    Frozen vs. trainable: the per-word value memory is a buffer (the compiled,
-    de-assemblable lexicon). Trainable: the query projection, the two sub-key
-    codebooks (HOW to address the memory), and the readout -- the network
-    learning to look words up.
+    Only the values are the lexicon; the keys are learned, not derived from the
+    words. The output is a sequence-level letter hint, not per-cell legality, and
+    letter counts cannot tell anagrams apart. This is the least exact module.
 
-    Tradeoffs / suitability: retrieval, NOT an automaton. Clean gradients
-    (softmax over the retrieved slots) and tractable, but it returns a
-    lane-level letter *hint*, not exact per-cell legality, and the addressing
-    keys are learned rather than a structural encoding of the words, so the
-    "compiled lexicon" lives only in the frozen values. The coarsest,
-    fuzziest generator -- a differentiable lexicon lookup, weakest on exactness.
-    Options: ``knn`` (retrieved slots, default 32), ``key_dim`` (per-codebook
-    query width, default 32).
+    Options: ``knn`` (slots retrieved, default 32), ``key_dim`` (width of each
+    half-query, default 32).
     """
 
     def __init__(
@@ -538,7 +469,7 @@ class KvMemoryLexicon(LexiconModule):
         self.codebook = codebook
         self.knn = min(int(knn), codebook)
 
-        # One frozen value slot per word: its letter-count distribution.
+        # Slots beyond the word count stay all-zero.
         value = np.zeros((codebook * codebook, N_LETTERS), dtype=np.float32)
         for i, word in enumerate(words):
             for ch in word:
@@ -546,7 +477,6 @@ class KvMemoryLexicon(LexiconModule):
         np.divide(value, np.clip(value.sum(1, keepdims=True), 1.0, None), out=value)
         self.register_buffer("value_mem", torch.from_numpy(value))
 
-        # Learned addressing: query from lane context, two sub-key codebooks.
         self.query = nn.Linear(channels + N_LETTERS, 2 * self.key_dim)
         self.subkeys1 = nn.Parameter(torch.randn(codebook, self.key_dim) * 0.02)
         self.subkeys2 = nn.Parameter(torch.randn(codebook, self.key_dim) * 0.02)
@@ -560,8 +490,8 @@ class KvMemoryLexicon(LexiconModule):
         q1, q2 = self.query(ctx).split(self.key_dim, dim=-1)
         s1, s2 = q1 @ self.subkeys1.t(), q2 @ self.subkeys2.t()  # (M, c) each
 
-        # Product-key top-k: best k of each codebook, then the best k of the k*k
-        # combined slots (slot index == i1 * c + i2).
+        # Top k of each codebook, then the top k of their k*k sums. Slot (i1, i2)
+        # is value row i1 * c + i2.
         v1, i1 = s1.topk(k, dim=1)
         v2, i2 = s2.topk(k, dim=1)
         cand_score = (v1.unsqueeze(2) + v2.unsqueeze(1)).reshape(m, -1)  # (M, k*k)
@@ -576,8 +506,8 @@ class KvMemoryLexicon(LexiconModule):
 
 
 def _node_depths(compiled: CompiledLexicon) -> np.ndarray:
-    """Depth (path length from the root) of every state in a trie-shaped lexicon.
-    A `from_words` lexicon is a trie, so each state has a unique depth."""
+    """Distance from the root of every state. Well defined only for a trie, such
+    as a `from_words` lexicon, where each state has a single path from the root."""
     depth = np.zeros(compiled.num_states, dtype=np.int64)
     seen = np.zeros(compiled.num_states, dtype=bool)
     seen[compiled.root] = True
@@ -596,33 +526,24 @@ def _node_depths(compiled: CompiledLexicon) -> np.ndarray:
 
 @register_module("anagram")
 class AnagramLexicon(_DawgLexicon):
-    """A differentiable anagram-search tool: longest word formable from a rack.
+    """Anagram search: which word lengths can be formed from a rack.
 
-    Built for tasks where the input is an unordered multiset of tiles (a rack)
-    rather than an ordered word -- the walk modules don't apply because there is
-    no canonical order to walk. Two ideas make it work:
+    For inputs that are an unordered set of tiles, where there is no letter order
+    for a DAWG walk to follow. The lexicon is recompiled over each word's letters
+    in sorted order (``CAT`` becomes ``ACT``), so all anagrams share one path.
+    The rack must be fed sorted too; any subset of it is then read in the order
+    this lexicon expects.
 
-    Canonicalize by sorting. The lexicon is compiled over each word's letters
-    *sorted* (``CAT`` -> ``ACT``), so a multiset has a single canonical key and
-    anagrams collapse. The rack is fed sorted, so a used subset's letters are read
-    in the same sorted order the lexicon expects.
+    The walk goes over the sorted rack, and at each tile the state either skips it
+    or uses it to advance. Together these cover every subset of the rack. The
+    state is a top-K set of trie states. Whenever a use step completes a word,
+    its mass is added to the bin for that word's length. The result, ``accept``,
+    says how reachable a word of each length is; the longest nonzero bin is the
+    answer. Only the readout into two tokens trains.
 
-    Search subsets by a soft skip/use walk. Over the sorted rack, at each position
-    the state can either skip the tile (carry mass) or use it (advance the
-    sorted-anagram DAWG by that letter). Summing both over all positions explores
-    every subset; the state is a sparse top-K node distribution. A word completing
-    on a "use" transition is binned by the node's depth, giving ``accept`` -- a
-    per-length vector of how reachable a word of each length is from this rack.
-    The longest length with mass is the answer; ``accept`` becomes lane tokens.
-
-    Frozen: the sorted-anagram DAWG and node depths (buffers). Trainable: the
-    readout. As with the walk tools, the rack is fully given, so the module
-    surfaces achievability and the network learns to read it. Bingo (use all
-    tiles) is just the top length bin, so this also covers the all-tiles case.
-
-    Requires the rack fed in sorted order. Options: ``topk`` (tracked nodes,
-    default 128 -- enough to be exact for a 7-tile rack), ``max_word_len`` (cap
-    the compiled words; default all).
+    Options: ``topk`` (states kept, default 128; a 7-tile rack has at most 2^7 =
+    128 subsets, so the default is exact), ``max_word_len`` (drop longer words
+    from the compiled lexicon; default keep all).
     """
 
     def __init__(
@@ -643,14 +564,14 @@ class AnagramLexicon(_DawgLexicon):
         self.topk = int(topk)
 
         depth = _node_depths(sorted_lexicon)
-        self.n_bins = int(depth.max()) + 2  # word lengths 0 .. max, with headroom
+        self.n_bins = int(depth.max()) + 2  # word lengths 0 .. max, plus one spare bin
         self.register_buffer("depth", torch.from_numpy(depth))
         self.readout = nn.Linear(self.n_bins, self.n_tokens * channels)
 
     def forward(self, lane_feats: torch.Tensor, lane_letters: torch.Tensor) -> LexiconOutput:
         m, seqlen, _ = lane_feats.shape
         device = lane_feats.device
-        letters = lane_letters.argmax(-1)  # (M, seqlen) -- the sorted rack letters
+        letters = lane_letters.argmax(-1)  # (M, seqlen) sorted rack letters
         k = self.topk
 
         idx = torch.full((m, k), self.dead, dtype=torch.long, device=device)
@@ -662,11 +583,11 @@ class AnagramLexicon(_DawgLexicon):
         for j in range(seqlen):
             ell = letters[:, j : j + 1].expand(m, k)
             adv_next = self.next_tbl[idx, ell]  # (M, K) state after using this tile
-            adv_acc = self.accept_tbl[idx, ell]  # (M, K) does that complete a word?
-            done_len = (self.depth[idx] + 1).clamp(max=self.n_bins - 1)  # word length if so
+            adv_acc = self.accept_tbl[idx, ell]  # (M, K) whether that completes a word
+            done_len = (self.depth[idx] + 1).clamp(max=self.n_bins - 1)
             accept = accept.scatter_add(1, done_len, val * adv_acc)
 
-            # New state: skip (keep idx, val) plus use (advance, valid moves only).
+            # Skip keeps (idx, val); use advances, dropping mass with no valid arc.
             cand_idx = torch.cat([idx, adv_next], dim=1)  # (M, 2K)
             cand_val = torch.cat([val, val * (adv_next != self.dead).float()], dim=1)
             val, pos = cand_val.topk(k, dim=1)

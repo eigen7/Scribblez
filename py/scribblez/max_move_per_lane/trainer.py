@@ -1,24 +1,21 @@
-"""The max-move-per-lane train role: an open-ended consume->train loop.
+"""Train role of the max_move_per_lane workload: an open-ended consume-and-train loop.
 
-Sibling to the position-evaluation trainer (scribblez/position_eval/trainer.py).
-It runs the same consumer lifecycle -- wait for the generation scheduler to
-complete the cursor generation, train one epoch over a sliding window of the
-most recent generations (turns_per_game turns sampled per game), then advance,
-evict, and publish the cursor -- but for the "highest-scoring move per lane"
-representation probe. The
-per-lane labels are recomputed by replaying each .slog game and enumerating
-legal moves at the position, so every turn of a game (including endgame turns)
-is a training row.
+It follows the same generation lifecycle as the position-eval trainer
+(position_eval/trainer.py), reusing its window and resume helpers. For each
+generation it waits for self-play to finish it, trains one epoch over a sliding
+window of recent generations, then checkpoints, advances the cursor and evicts
+generations that left the window. Labels are recomputed by replaying each .slog
+game and enumerating legal moves, so every turn, endgame included, can be a
+training row.
 
-There is no held-out probe/calibration eval or ONNX export -- this is a
-representation-learning probe. Eval is the per-lane train accuracy, recorded
-alongside the losses, plus a per-checkpoint lane-analysis pass over a frozen
-GCG dataset for the dashboard's Lane-analysis tab. Like its sibling it never
-writes dashboard.db: each generation leaves as a record through the worker's
-sink (generational/records.py) for the dashboard's ingest tick.
+This model is a representation-learning probe, so there is no held-out eval or
+ONNX export. Its metrics are the per-lane training accuracies, plus predictions
+on a fixed GCG position set for the dashboard's Lane-analysis tab. Both leave
+through the worker's sink as the generation's record (generational/records.py);
+the trainer never writes dashboard.db itself.
 
-Runs as the singleton `train` worker of the max_move_per_lane workload, or
-directly via the scripts/max_move_per_lane/train.py CLI.
+Runs as the workload's singleton `train` worker, or directly via
+scripts/max_move_per_lane/train.py.
 """
 
 import functools
@@ -58,11 +55,11 @@ def _rows_left(params, state: GenerationalState) -> bool:
 def _checkpoint_and_eval(
     model, optimizer, recorder, paths, device, params, state, gen, result, elapsed, lr_now, ctx
 ):
-    """Run the lane-analysis eval, save the rolling checkpoint, publish the
-    cursor, and last deliver the generation's record (metrics + lane
-    accuracies keyed on the generation index `gen`, with the rows-clock stored
-    as `positions`, plus the eval's predictions) -- last, so the dashboard
-    sees the generation only once everything it produced is on disk."""
+    """Run the lane-analysis eval, save the checkpoint and train state, then
+    deliver the generation's record. Returns the seconds this took.
+
+    The record goes last because its arrival is what tells the dashboard the
+    generation is complete; everything it refers to must already be delivered."""
     sys.stdout.write("\n")
     avg = result.losses
     ci = gen
@@ -99,7 +96,7 @@ def train_one_generation(
     model, optimizer, recorder, paths, device, params, state, loss_cfg, lr_controller, cpu, ctx
 ):
     """Train one epoch over the window ending at the cursor generation, then
-    checkpoint under that generation's index and advance the cursor."""
+    checkpoint and advance the cursor."""
     gen = state.generation_index
     window = lifecycle.window_dirs(paths, gen, params.window)
     ds = SlogDataset(
@@ -109,9 +106,9 @@ def train_one_generation(
         f"generation {gen}: window {[d.name for d in window]} "
         f"({ds.num_games} games, {ds.num_samples} rows)"
     )
-    # The generation index seeds the shuffle and the per-game turn rotation, so
-    # each of the `window` passes a game gets over its residency shuffles
-    # differently and draws distinct turns.
+    # Seed the shuffle and the per-game turn choice with the generation index. A
+    # game stays in the window for `window` generations, and this makes each of
+    # those passes shuffle differently and sample different turns.
     batches = ds.iter_batches(
         params.batch_size,
         seed=gen * 1000003,
@@ -156,7 +153,7 @@ def train_one_generation(
 
 
 def run_generational_training(model, optimizer, recorder, paths, device, params, state, ctx):
-    """The wait->train->advance loop, from the resumed cursor onward."""
+    """Wait, train, advance and evict, from the resumed cursor until max_rows."""
     loss_cfg = LossConfig.from_args(params)
     lr_controller = WsdLrController(recorder, WsdSchedule.from_params(params), state.rows_trained)
     cpu = CpuController(recorder, ctx["read_controls"])
@@ -183,9 +180,10 @@ def run_generational_training(model, optimizer, recorder, paths, device, params,
 
 
 def load_lane_eval(params, spatial_planes: int) -> dict | None:
-    """Build the frozen lane-analysis input batch once (or None if disabled / the
-    dataset is empty / the lexicon is unavailable). At each checkpoint the model is
-    run over it and the predictions are written to the dashboard DB."""
+    """Encode the lane-analysis positions once, for eval at every checkpoint.
+
+    Returns None, which disables the eval, if it is turned off, the dataset is
+    empty, or it cannot be loaded (for example, the lexicon is missing)."""
     if params.no_lane_eval:
         return None
     dataset = params.lane_eval_dataset or str(lane_analysis.DEFAULT_DATASET)
@@ -202,15 +200,13 @@ def load_lane_eval(params, spatial_planes: int) -> dict | None:
 
 
 def eval_lane_analysis(model, lane_eval: dict, device) -> dict:
-    """Run the model over the frozen lane-analysis set and return this
-    checkpoint's per-(position, lane) predictions for the generation's record."""
+    """Per-(position, lane) predictions on the lane-analysis set, for the generation's record."""
     model.eval()
     return lane_analysis.predict(model, lane_eval["inputs"], lane_eval["spatial_planes"], device)
 
 
 def run(ctx: WorkerContext) -> int:
-    """The train-role runner (invoked by the worker entrypoint; also the
-    substance of the scripts/max_move_per_lane/train.py CLI)."""
+    """Entry point of the train role, called by the worker and by the train.py CLI."""
     params = ctx.params
     paths = ctx.tag_paths()
     paths.root.mkdir(parents=True, exist_ok=True)
@@ -246,8 +242,8 @@ def run(ctx: WorkerContext) -> int:
     )
 
     recorder = TrainRecorder(ctx.sink)
-    # Coefficients of each loss term in compute_loss's total (PDF has weight 1),
-    # so the dashboard can stack the weighted contributions.
+    # Each loss term's weight in compute_loss's total, so the dashboard can stack
+    # the weighted contributions.
     recorder.publish_run(
         ctx.tag,
         asdict(params),

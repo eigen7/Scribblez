@@ -3,11 +3,11 @@
 
     py/tools/plot_model_architectures.py [--outdir docs/images] [--png-dir DIR]
 
-One SVG per figure, named `arch_<figure>.svg`. Layout is hand-placed -- each
-figure names its columns and row tops as local constants -- but box widths are
-measured from the rendered text, so relabelling a box keeps it fitting its
-contents. `--png-dir` additionally writes rasterized copies, which is how the
-figures are eyeballed while editing them.
+Writes one `arch_<figure>.svg` per entry in FIGURES. Positions are placed by
+hand: each figure function keeps its column x's and row tops as local
+constants. Box widths are measured from the rendered text, so relabelling a box
+does not require re-laying it out. Use `--png-dir` to get raster copies for
+checking the figures by eye while editing them.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from matplotlib.path import Path as MplPath  # noqa: E402
 
 # Text as outlines, so a viewer without DejaVu still gets the measured layout.
 matplotlib.rcParams["svg.fonttype"] = "path"
-# Element ids are salted; fixing the salt keeps re-runs byte-identical, so
-# regenerating an unchanged figure is a no-op in the diff.
+# A fixed salt for SVG element ids makes re-runs byte-identical, so regenerating
+# an unchanged figure leaves no diff.
 matplotlib.rcParams["svg.hashsalt"] = "scribblez-model-architectures"
 
 # One data unit is one point, so font sizes and layout constants share a scale.
@@ -71,7 +71,8 @@ def mono(text: str) -> tuple[str, str]:
 
 @dataclass(frozen=True)
 class Box:
-    """A placed box, exposing the edge midpoints edges are routed between."""
+    """A placed box. Its properties are the edge midpoints that arrows attach to;
+    `head` is the top edge, where an incoming arrow lands."""
 
     cx: float
     top: float
@@ -248,8 +249,8 @@ def spatial_trunk() -> Diagram:
     out_s = d.box(right, 466, [title("s"), mono("(B, C)")], "out")
     d.edge(norm.bottom, out_x.head)
 
-    # The scalar projection runs down the right margin: broadcast into the board
-    # features at the stem, and handed to the heads as `s`.
+    # The scalar projection runs down the right margin. It is broadcast-added into
+    # the board features at the stem and also passed to the heads as `s`.
     d.edge((right, proj.top + proj.h), (right, out_s.top))
     d.edge((right, 240), (left + 11, 240))
     d.note(right - 18, 226, "broadcast-add over 15 × 15", ha="right")
@@ -835,7 +836,9 @@ FIGURES = {
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--outdir", default="docs/images", help="directory to write SVGs into")
-    parser.add_argument("--png-dir", default=None, help="also write PNG copies here")
+    parser.add_argument(
+        "--png-dir", default=None, help="also write PNG copies here, for previewing"
+    )
     args = parser.parse_args()
 
     outdir = Path(args.outdir)

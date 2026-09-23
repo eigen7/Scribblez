@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Render the `endgame_bench --mode=endgames` margin sweep as SVG charts.
 
-Usage:
-    py/tools/plot_endgame_bench.py sweep.txt [--outdir docs/images] [--prefix endgame]
+Takes the benchmark's captured stdout and writes <prefix>_skill_vs_margin.svg and
+<prefix>_cost_vs_margin.svg, the charts docs/endgame_bench_results.md embeds:
 
-Feed it the captured stdout of the sweep; it writes <prefix>_skill_vs_margin.svg and
-<prefix>_cost_vs_margin.svg, which docs/endgame_bench_results.md embeds in place of the
-raw tables.
+    py/tools/plot_endgame_bench.py docs/data/endgame_margin_sweep.txt [--outdir docs/images]
 """
 
 import argparse
@@ -21,8 +19,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, LogLocator, MultipleLocator
 
-# Ink, surface and gridline tokens; the SVGs sit in a markdown doc that may be viewed on a
-# dark page, so the surface is painted opaquely rather than inherited from the page.
+# The SVGs are embedded in Markdown that may be viewed on a dark page, so the background is
+# painted opaquely instead of inherited.
 SURFACE = "#fcfcfb"
 INK_PRIMARY = "#0b0b0b"
 INK_SECONDARY = "#52514e"
@@ -30,10 +28,10 @@ INK_MUTED = "#898781"
 GRIDLINE = "#e1e0d9"
 AXIS_RULE = "#c3c2b7"
 
-# Budgets are an ordered ladder, so they take a single-hue ordinal ramp (light = least
-# compute) rather than categorical hues. These are steps 250..700 of the blue ramp; the
-# 3- and 5-series subsets this script picks were checked against the ordinal gates
-# (monotone lightness, adjacent dL >= 0.06, light end >= 2:1 on the surface).
+# Budgets are ordered, so they get a single-hue ramp (lightest = least compute) instead of
+# categorical colors. The 3- and 5-color subsets budget_colors() picks were checked for
+# monotone lightness, distinguishable neighbours, and at least 2:1 contrast at the light
+# end against SURFACE.
 BLUE_RAMP = [
     "#86b6ef",
     "#6da7ec",
@@ -68,7 +66,7 @@ class Sweep:
 
 
 def parse_header(text):
-    """Pull the run's shape out of the `endgames mode (margin sweep): ...` banner."""
+    """Parse the run's parameters from the `endgames mode (margin sweep): ...` banner."""
     match = re.search(r"^endgames mode \(margin sweep\):.*$", text, re.MULTILINE)
     if match is None:
         raise ValueError("no 'endgames mode (margin sweep):' header line found")
@@ -103,10 +101,10 @@ def _is_int(token):
 
 
 def parse_table(lines, marker):
-    """Parse one `margin x budget` table into (budgets, margins, columns, trailing).
+    """Parse one margin-by-budget table into (budgets, margins, columns, trailing).
 
-    The budget list comes from the column header row, so adding or removing budgets in the
-    benchmark needs no change here. `trailing` holds the optional extra column past the
+    Budgets are read from the column header row, so the benchmark can change its budget
+    ladder without touching this parser. `trailing` is the optional column after the
     budgets (the skill table's `hasty win%`), or None.
     """
     starts = [i for i, line in enumerate(lines) if line.startswith(marker)]
@@ -255,10 +253,11 @@ def subtitle_tail(sweep):
 
 
 def plot_skill(sweep, path):
-    """Win% advantage per budget, over a subordinate panel carrying the baseline it is
-    measured against. Two panels rather than two y-scales on one plot: the baseline is
-    absolute win% and the series are differences, and overlaying them on invented-aligned
-    axes would suggest a correlation the data does not contain."""
+    """Win% advantage per budget, above a small panel with HastyBot's baseline win%.
+
+    The baseline gets its own panel instead of a second y-axis: it is an absolute win%
+    while the series are differences, and any alignment of two y-scales on one plot would
+    be arbitrary and suggest a relationship the data does not show."""
     fig, (ax, ax_base) = plt.subplots(
         2, 1, figsize=(9, 5), sharex=True, gridspec_kw={"height_ratios": [2.6, 1], "hspace": 0.14}
     )
@@ -329,11 +328,10 @@ def plot_cost(sweep, path):
     style_axes(ax)
     style_margin_axis(ax, sweep)
     ax.set_yscale("log")
-    # Log, not linear: the cheap budgets sit within a few percent of 1.00x and a linear axis
-    # spanning the expensive ones would collapse them onto the baseline. Decade-only ticks
-    # leave two or three labels over this range, so 1-2-5 subdivisions carry the labels and
-    # the rest of the decade stays unlabelled tick marks -- gridding them all would bury the
-    # series and bloat the SVG.
+    # Log scale: the cheap budgets sit within a few percent of 1.00x, and a linear axis
+    # spanning the expensive ones would flatten them onto the baseline. Decade ticks alone
+    # give only two or three labels over this range, so labels go at 1-2-5 and the other
+    # minor ticks stay unlabelled; labelling or gridding them all would bury the series.
     ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=20))
     ax.yaxis.set_minor_locator(
         LogLocator(base=10.0, subs=tuple(float(x) for x in range(2, 10)), numticks=20)
@@ -341,7 +339,7 @@ def plot_cost(sweep, path):
     ax.yaxis.set_major_formatter(FuncFormatter(format_multiple))
     ax.yaxis.set_minor_formatter(plt.NullFormatter())
     ax.tick_params(which="minor", length=2, color=INK_MUTED, width=0.6)
-    # 1.00x is a free endgame, so it anchors the axis rather than floating in it.
+    # 1.00x means the solver added no cost.
     ax.axhline(1.0, color=AXIS_RULE, linewidth=1.0, zorder=2)
     ax.set_ylabel(
         "self-play game time\n(multiple of hasty-vs-hasty, log scale)",

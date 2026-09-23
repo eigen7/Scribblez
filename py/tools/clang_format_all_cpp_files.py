@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Run clang-format over all C++ sources."""
+"""Run clang-format over every C++ source under engine/.
+
+py/tools/clang_format_all_cpp_files.py            # reformat in place
+py/tools/clang_format_all_cpp_files.py --check    # report only; exit 1 if any differ
+"""
 
 import sys
 from pathlib import Path
 
-# Put this checkout's py/ first on sys.path: `setup_check` otherwise resolves
-# only through the container's main-checkout .pth entry (and not at all on the
-# host), so this script run from a git worktree would silently import -- and
-# operate on -- the main checkout instead of its own.
+# Put this checkout's py/ first on sys.path. Otherwise `setup_check` resolves
+# through the container's .pth entry, which points at the main checkout (and
+# does not exist on the host). Run from a git worktree, the script would then
+# silently format the main checkout instead of the worktree.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from setup_check import import_setup_common
