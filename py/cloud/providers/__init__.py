@@ -1,1 +1,1 @@
-"""Cloud providers that rent machines for the dashboard (docs/plans/cloud_machines.md)."""
+"""Cloud providers the dashboard rents machines from (docs/plans/cloud_machines.md)."""

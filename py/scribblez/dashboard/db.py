@@ -1,16 +1,26 @@
-"""SQLite store for training metrics and eval artifacts.
+"""The per-tag SQLite store behind the training dashboard.
 
-A single per-tag database (``tags/<tag>/dashboard.db``) holds everything the
-dashboard renders, so training produces data (never PNGs) and the Bokeh app
-renders on the fly. The dashboard server is its only writer: a trainer's
-metrics and predictions arrive as records the server's ingest tick writes
-(generational/train_ingest.py), as do match-eval results
-(match_eval/dispatch.py). WAL mode lets requests read while a tick writes.
+Each tag has one database, ``tags/<task>/<tag>/dashboard.db``, holding every
+metric and eval result the dashboard shows. Training never renders anything
+itself: the dashboard API builds its figures from these rows on each request
+(plots.py) and the React app embeds them.
+
+The dashboard process writes nearly everything. Trainers deliver records that
+its ingest tick writes (generational/train_ingest.py), match-eval results
+arrive the same way (match_eval/dispatch.py), and operator controls are set
+through the API. The exception is the local-only match_arms runner, which
+writes its match_arm rows directly (match_eval/arms.py). WAL mode lets
+requests read while a write is in progress.
 
 Tables:
   meta            one row of run config (args, model size, timestamps)
   metrics         long-format scalar series: (epoch, name) -> value
-  match_eval      per-generation match-play result vs a fixed opponent
+  loss_weights    each loss component's coefficient in the optimized total
+  lane_pred       max_move_per_lane's per-checkpoint lane-analysis predictions
+  match_eval      per-generation match result vs a fixed opponent
+  match_arm       per-arm match result of a match_arms experiment
+  control         live operator controls and their current values
+  control_event   when each control change took effect, on the rows clock
   train_record    the ingest ledger: which trainer records have been written
 
 NumPy arrays are stored as ``np.save`` BLOBs (shape + dtype preserved).
@@ -31,14 +41,12 @@ import numpy as np
 
 
 def to_blob(arr: np.ndarray) -> bytes:
-    """Serialize a NumPy array to a .npy-format BLOB (shape + dtype preserved)."""
     buf = io.BytesIO()
     np.save(buf, np.ascontiguousarray(arr))
     return buf.getvalue()
 
 
 def from_blob(blob: bytes) -> np.ndarray:
-    """Inverse of to_blob."""
     return np.load(io.BytesIO(blob), allow_pickle=False)
 
 
@@ -105,8 +113,8 @@ CREATE TABLE IF NOT EXISTS train_record (
   mtime_ns INTEGER,             -- the file as last ingested: its mtime ...
   size     INTEGER              -- ... and size, so a rewrite is ingested again
 );
--- Retired: the Positions tab computes its predictions from the generation's
--- export on demand (dashboard/api.py). Sheds the rows older databases carry.
+-- Unused: the Positions tab computes predictions from each generation's ONNX
+-- export on demand (dashboard/api.py). Dropped so existing databases shed it.
 DROP TABLE IF EXISTS position_eval_pred;
 """
 
@@ -125,7 +133,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 # --------------------------------------------------------------------------
-# Writers
+# Per-table writers and readers
 # --------------------------------------------------------------------------
 
 
@@ -157,10 +165,10 @@ def write_metrics(conn: sqlite3.Connection, epoch: int, record: dict):
 
 
 def write_loss_weights(conn: sqlite3.Connection, weights: dict):
-    """Record each per-component loss series' coefficient in the optimized total
-    (e.g. {'loss_score_cdf': lambda_cdf, ...}). The dashboard stacks the WEIGHTED
-    components, so a band's height is how much that term actually drives the loss.
-    Idempotent; insertion order is preserved (it sets the stacking order)."""
+    """Record each loss component's coefficient in the optimized total, keyed by
+    its metric name ('loss_<head>'). The Loss tab stacks the weighted components,
+    so a band's height is how much that term drives the loss. Insertion order
+    sets the stacking order."""
     conn.executemany(
         "INSERT INTO loss_weights (name, weight) VALUES (?, ?) "
         "ON CONFLICT(name) DO UPDATE SET weight=excluded.weight",
@@ -170,8 +178,8 @@ def write_loss_weights(conn: sqlite3.Connection, weights: dict):
 
 
 def read_loss_weights(conn: sqlite3.Connection) -> dict:
-    """The per-component loss weights in insertion order (empty if none recorded,
-    e.g. a DB written before this table existed -> the plot falls back to lines)."""
+    """The loss weights in insertion order. Empty when none were recorded; the
+    Loss tab then draws plain loss lines instead of stacked bands."""
     return {
         r["name"]: r["weight"]
         for r in conn.execute("SELECT name, weight FROM loss_weights ORDER BY rowid")
@@ -179,9 +187,8 @@ def read_loss_weights(conn: sqlite3.Connection) -> dict:
 
 
 def init_control(conn: sqlite3.Connection, defaults: dict):
-    """Seed control values that are not already present, so a restart keeps the
-    operator's last-set values while a fresh run gets the configured defaults.
-    Idempotent."""
+    """Seed the controls that are not set yet, so a restarted run keeps the
+    operator's last values while a fresh run gets the configured defaults."""
     now = time.time()
     conn.executemany(
         "INSERT OR IGNORE INTO control (name, value, updated_at) VALUES (?, ?, ?)",
@@ -191,7 +198,6 @@ def init_control(conn: sqlite3.Connection, defaults: dict):
 
 
 def write_control(conn: sqlite3.Connection, name: str, value: float):
-    """Upsert a live control value (the operator/dashboard write path)."""
     conn.execute(
         "INSERT INTO control (name, value, updated_at) VALUES (?, ?, ?) "
         "ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
@@ -214,10 +220,9 @@ def read_controls(conn: sqlite3.Connection) -> dict:
 def write_control_event(
     conn: sqlite3.Connection, positions: int, name: str, value: float, t: float | None = None
 ):
-    """Record that a control changed to `value` at `positions` rows trained, so the
-    dashboard can annotate the metric curves where the operator intervened. `t`
-    is when it happened -- now, unless the event is being ingested from a
-    trainer's record, which carries its own."""
+    """Record that a control changed to `value` at `positions` rows trained, so
+    the Loss tab can mark where it took effect. `t` defaults to now; an event
+    ingested from a trainer record carries its own."""
     conn.execute(
         "INSERT INTO control_event (positions, name, value, t) VALUES (?, ?, ?, ?)",
         (int(positions), name, float(value), time.time() if t is None else float(t)),
@@ -237,11 +242,9 @@ def read_control_events(conn: sqlite3.Connection, name: str | None = None) -> li
 
 
 def write_lane_preds(conn: sqlite3.Connection, generation: int, positions: int, preds: dict):
-    """Store one model generation's lane-analysis predictions over the dataset.
-
-    `preds` holds per-position-stacked arrays: occ (N,30,15,27) uint8, score_pmf
-    (N,30,100) float32, has_move (N,30) float32. One row per dataset position;
-    re-recording a generation replaces it (idempotent on resume)."""
+    """Store one generation's lane-analysis predictions, one row per dataset
+    position (shapes in the lane_pred schema, stacked over positions).
+    Re-recording a generation replaces its rows, so a resumed run is safe."""
     occ, pmf, has = preds["occ"], preds["score_pmf"], preds["has_move"]
     rows = [
         (generation, positions, i, to_blob(occ[i]), to_blob(pmf[i]), to_blob(has[i]))
@@ -258,8 +261,8 @@ def write_lane_preds(conn: sqlite3.Connection, generation: int, positions: int, 
 
 
 def read_lane_generations(conn: sqlite3.Connection) -> list[dict]:
-    """The recorded generations (checkpoints), each {generation, positions}, oldest
-    first -- the dashboard's model slider scrubs over these."""
+    """The generations with lane predictions, oldest first: the stops of the
+    Lane analysis tab's generation slider."""
     return [
         {"generation": r["generation"], "positions": r["positions"]}
         for r in conn.execute(
@@ -270,8 +273,7 @@ def read_lane_generations(conn: sqlite3.Connection) -> list[dict]:
 
 
 def read_lane_pred(conn: sqlite3.Connection, generation: int, position: int) -> dict | None:
-    """One generation's prediction for one dataset position (occ / score_pmf /
-    has_move arrays), or None if absent."""
+    """One generation's prediction for one dataset position, or None."""
     r = conn.execute(
         "SELECT occ, score_pmf, has_move FROM lane_pred WHERE generation=? AND position=?",
         (generation, position),
@@ -287,17 +289,16 @@ def read_lane_pred(conn: sqlite3.Connection, generation: int, position: int) -> 
 
 @dataclass(frozen=True)
 class PredTable:
-    """A per-checkpoint prediction table: the arrays a generation's row set
-    is built from (each stacked over dataset positions) and the writer that
-    stores them."""
+    """A per-generation prediction table: the array names a trainer record
+    carries for it, and the writer that stores them."""
 
     arrays: tuple[str, ...]
     write: object  # callable(conn, generation, positions, {array name: ndarray})
 
 
-# The prediction tables a trainer's generation record may carry, by table
-# name (generational/records.py packs the arrays; train_ingest.py unpacks
-# them through `write`).
+# The prediction tables a trainer's generation record may carry, by table name.
+# generational/records.py packs the arrays; train_ingest.py unpacks them into
+# `write`.
 PRED_TABLES = {
     "lane_pred": PredTable(("occ", "score_pmf", "has_move"), write_lane_preds),
 }
@@ -322,8 +323,8 @@ def write_record_ledger(conn: sqlite3.Connection, name: str, mtime_ns: int, size
 
 
 def write_match_eval(conn: sqlite3.Connection, epoch: int, record: dict):
-    """Store one generation's match-eval result (the match_eval runner's write
-    path). Idempotent: replaying a generation's match replaces its row."""
+    """Store one generation's match-eval result. Replaying a generation's match
+    replaces its row."""
     conn.execute(
         "INSERT INTO match_eval "
         "(epoch, positions, opponent, games, wins, draws, losses, pair_counts, "
@@ -360,8 +361,7 @@ def read_all_match_eval(conn: sqlite3.Connection) -> list[dict]:
 
 
 def write_match_arm(conn: sqlite3.Connection, arm: str, record: dict):
-    """Store one arm's finished match (the match_arms runner's write path).
-    Idempotent: replaying an arm replaces its row."""
+    """Store one arm's finished match. Replaying an arm replaces its row."""
     conn.execute(
         "INSERT INTO match_arm "
         "(arm, player_spec, opponent, games, wins, draws, losses, pair_counts, "
@@ -390,8 +390,8 @@ def write_match_arm(conn: sqlite3.Connection, arm: str, record: dict):
 
 
 def read_all_match_arms(conn: sqlite3.Connection) -> list[dict]:
-    """Every arm row in insertion order (the experiment's declared arm order,
-    since the runner measures arms in that order), pair_counts decoded."""
+    """Every arm row, pair_counts decoded, in insertion order. The runner measures
+    arms in the experiment's declared order, so this is that order."""
     rows = [dict(r) for r in conn.execute("SELECT * FROM match_arm ORDER BY rowid")]
     for r in rows:
         r["pair_counts"] = json.loads(r["pair_counts"])
@@ -399,7 +399,7 @@ def read_all_match_arms(conn: sqlite3.Connection) -> list[dict]:
 
 
 # --------------------------------------------------------------------------
-# Readers
+# Tag listing and metric series
 # --------------------------------------------------------------------------
 
 
@@ -429,7 +429,6 @@ def read_metric_series(conn: sqlite3.Connection, name: str):
 
 
 def read_rows_clock(conn: sqlite3.Connection) -> dict[int, int]:
-    """Each recorded generation's rows-trained clock (its `positions` metric),
-    by generation index."""
+    """generation -> rows trained at it (the `positions` metric)."""
     epochs, values = read_metric_series(conn, "positions")
     return {int(e): int(v) for e, v in zip(epochs, values, strict=True)}

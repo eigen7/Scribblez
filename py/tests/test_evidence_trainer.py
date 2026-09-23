@@ -1,10 +1,14 @@
-"""Tests for the evidence trainer (roadmap items 2-3, 5): the sim-outcome
-targets, the subset-assembly dataset (arbitrary evidence subsets, the single
-membership tensor threading its five seams, the batched evidence builder), the
-frozen-backbone model surface (proves-best head, freeze, student init), and --
-on the GPU e2e corpus of test_evidence_trajectories -- a training pass with the
-plain-vs-conditioned metrics and the empty-subset exactness they rest on, in
-both the frozen mode and the unfrozen (whole-model, sim-outcome) one."""
+"""Tests for the evidence trainer (scribblez.evidence), which trains the move
+proposal model to condition on sim evidence.
+
+CPU tests cover the sim-outcome gain targets, subset assembly (which evidence
+records a training row may see), the batched evidence builder, the model's
+frozen-backbone surface, and the trainer's store pacing. GPU tests reuse
+test_evidence_trajectories' corpus to run training passes in both modes (frozen
+backbone, and the unfrozen whole-model step) and the train role end to end. The
+invariant they lean on throughout: with an empty evidence subset, the
+conditioned pass equals the plain one exactly.
+"""
 
 import numpy as np
 import pytest
@@ -33,10 +37,10 @@ from test_move_set_eval_evidence import _synthetic_sobs
 
 
 def test_packed_obs_round_trips_records_exactly():
-    """The dataset's sparse retention (_PackedObs) must rebuild the verbatim
-    .sobs records: retaining the near-empty 2927-wide histograms dense is what
-    would blow trainer RAM at corpus scale, and any lossy repack would corrupt
-    the observed half of every evidence token."""
+    """_PackedObs keeps .sobs observation records sparse and must rebuild them
+    verbatim. Kept dense, the near-empty footprint-class histograms would blow
+    trainer RAM at corpus scale; a lossy repack would corrupt the observed half
+    of every evidence token."""
     _, obs = _synthetic_sobs(3)
     rng = np.random.default_rng(0)
     for name in ("opp_next_count", "self_next_count"):
@@ -50,9 +54,9 @@ def test_packed_obs_round_trips_records_exactly():
 
 
 def test_dataset_retains_obs_sparse_but_batches_carry_dense_records(traj_datasets):
-    """_TrajPosition empties its SobsPosition's dense records (the RAM guard),
-    while every batch's `positions` re-attach obs rows identical to `all_obs`.
-    The retained moves/roles must OWN their data: as read_sobs field views
+    """_TrajPosition drops its SobsPosition's dense records to save RAM, and
+    every batch's `positions` re-attach obs rows identical to `all_obs`. The
+    retained moves and roles must own their data: left as read_sobs field views,
     their .base would silently pin the whole dense record buffer."""
     train, _ = traj_datasets
     for pos in train._positions:
@@ -82,17 +86,17 @@ def test_sim_targets_and_gain():
         m[list(members)] = True
         return m
 
-    # Empty subset: the gain is the value itself. best-so-far is a max over the
-    # subset's members, not a leading prefix -- a subset {0,3} (values 0.5, 0.75)
-    # tops out at 0.75, so only a candidate strictly above it gains and the tie
-    # gains nothing; a non-contiguous {1} (0.75) baselines the same at 0.75.
+    # With an empty subset the gain is the value itself. Otherwise the baseline
+    # is the max over the subset's members, not a leading prefix: {0, 3} (values
+    # 0.5, 0.75) tops out at 0.75, so a tie gains nothing, and the non-contiguous
+    # {1} (0.75) gives the same baseline.
     assert np.allclose(ED.gain_targets(value, subset()), value)
     assert np.allclose(ED.gain_targets(value, subset(0, 3)), [0.0, 0.0, 0.0, 0.0])
     assert np.allclose(ED.gain_targets(value, subset(0)), [0.0, 0.25, 0.0, 0.25])
     assert np.allclose(ED.gain_targets(value, subset(1)), [0.0, 0.0, 0.0, 0.0])
 
 
-# --- subset assembly (CPU, synthetic v4 positions -- no GPU, no model) ---
+# --- subset assembly (CPU, synthetic positions -- no GPU, no model) ---
 
 
 def _traj_pos(roles, num_legal_moves: int = 64) -> SobsPosition:
@@ -128,8 +132,9 @@ def test_assemble_subset_holds_only_the_anchor_and_on_policy_within_the_cap():
 
 
 def test_assemble_subset_empty_fraction_pins_the_zero_prefix_rate():
-    """empty_fraction fixes P(empty subset) -- the all-held-out rows that set
-    the rows-clocked LR horizon -- and the default sweeps size uniformly."""
+    """empty_fraction fixes P(empty subset); by default the subset size is
+    uniform. Empty subsets make every row of the unit held out, so this knob
+    moves the epoch's row count and with it the rows-clocked LR schedule."""
     pos = _traj_pos(_ROLES)
     rng = np.random.default_rng(1)
     assert all(not ED.assemble_subset(rng, pos, empty_fraction=1.0).any() for _ in range(20))
@@ -142,18 +147,18 @@ def test_assemble_subset_empty_fraction_pins_the_zero_prefix_rate():
 
 
 def test_compact_index_packs_members_in_slot_order():
-    """_compact_index gives each member its 0-based rank in slot order -- the
-    padded slot an arbitrary subset scatters to, the way the deployment builder
-    packs {0, 2, 3} into rows 0, 1, 2."""
+    """_compact_index gives each member its rank in slot order, the padded row
+    it scatters to: {0, 2, 3} packs into rows 0, 1, 2, as the deployment
+    builder packs them."""
     mask = np.array([True, False, True, True, False])
     assert ED._compact_index(mask).tolist() == [0, 0, 1, 2, 0]
     assert ED._compact_index(np.zeros(3, bool)).tolist() == [0, 0, 0]
 
 
 def _cpu_evidence_batch(units, pre_diffs):
-    """The subset of a batch dict + move_args batch_evidence_inputs reads, built
-    from (position, subset mask) units the way _build_batch does (real
-    _compact_index), so the seam is exercised without board inputs or a GPU."""
+    """The part of a batch dict, plus the move_args, that batch_evidence_inputs
+    reads. Built from (position, subset mask) units as _build_batch builds them,
+    so the builder is exercised without board inputs or a GPU."""
     positions = [pos for pos, _ in units]
     masks = [mask for _, mask in units]
     all_moves = np.concatenate([pos.moves for pos in positions])
@@ -295,8 +300,8 @@ def traj_datasets(traj_corpus):  # noqa: F811
 
 @pytest.fixture(scope="module")
 def mset_holdout(traj_datasets):
-    """The corpus's .mset side over the held-out stems -- the move-set
-    evaluator's own input, used here only to check that evaluator."""
+    """The .mset files of the held-out stems, for checking the move-set
+    evaluator."""
     _, hold = traj_datasets
     files = [f.with_suffix(".mset") for f in hold.files]
     assert all(f.exists() for f in files)
@@ -304,10 +309,10 @@ def mset_holdout(traj_datasets):
 
 
 def test_dataset_rows_follow_the_subset(traj_datasets):
-    """Every simmed candidate is a scored row; held-out is exactly ~in_evidence;
-    the gain targets are the CRN-paired improvements over the subset's best; a
-    subset only ever holds evidence-eligible (anchor + on-policy) records; K
-    subsets per pool multiply the units."""
+    """Every simmed candidate is a scored row; held_out is exactly ~in_evidence;
+    gain targets are measured against the subset's best; a subset only holds
+    evidence-eligible (anchor and on-policy) records; and subsets_per_pool
+    multiplies the units."""
     train, _ = traj_datasets
     # anchor + [1..3] on-policy + the default off-policy floor (3 uniform draws).
     assert train.num_positions > 0 and train.max_trajectory <= 1 + 3 + 3
@@ -333,7 +338,7 @@ def test_dataset_rows_follow_the_subset(traj_datasets):
             assert np.allclose(batch["target_gain"].numpy()[rows], ED.gain_targets(value, members))
             units += 1
     assert 0 in seen_sizes and len(seen_sizes) > 1
-    # One subset per pool per epoch, over four epochs: K-multiplicity.
+    # One subset per pool per epoch, over four epochs.
     assert units == 4 * train.num_positions
     triple = sum(
         1 for b in train.iter_batches(4, seed=1, subsets_per_pool=3) for _ in b["positions"]
@@ -342,9 +347,8 @@ def test_dataset_rows_follow_the_subset(traj_datasets):
 
 
 def test_training_pass_moves_only_the_evidence_path(traj_datasets):
-    """One pass on the frozen-backbone model: the plain outputs are unchanged
-    (metrics' plain_* identical before/after), prefix-0 rows stay exact, and
-    the fusion + head parameters moved."""
+    """One pass on the frozen-backbone model leaves the plain outputs unchanged
+    and empty-subset rows exact, while the evidence parameters move."""
     train, hold = traj_datasets
     device = torch.device("cuda")
     model = MoveSetEvalModel(
@@ -369,7 +373,8 @@ def test_training_pass_moves_only_the_evidence_path(traj_datasets):
     assert after["exact_p0_maxdiff"] == 0.0
     pairs = zip(ev_params, model.evidence_parameters(), strict=True)
     assert any(not torch.equal(a, b.detach()) for a, b in pairs)
-    # Conditioned outputs differ from plain on evidence-bearing rows now.
+    # After training, conditioned outputs differ from plain on evidence-bearing
+    # rows.
     batch = next(train.iter_batches(4, seed=3))
     plain, cond = conditioned_forward(model, batch, device, max_e=8)
     with_ev = batch["held_out"].to(device) & (
@@ -383,10 +388,8 @@ def test_training_pass_moves_only_the_evidence_path(traj_datasets):
 
 
 def _unfrozen_model(train, device):
-    # num_blocks=3 so the trunk holds a real GlobalPoolingResBlock (make_block
-    # emits one at every index % 3 == 2): the joint step's pooled-FC penalty
-    # then collects real activations, so its wiring is exercised, not just
-    # tolerated.
+    # num_blocks=3 so the trunk holds a GlobalPoolingResBlock (make_block emits
+    # one at every index % 3 == 2), and the unfrozen step must train through it.
     torch.manual_seed(0)
     return MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 3, 2).to(device)
 
@@ -401,13 +404,14 @@ def _unfrozen_epoch(model, opt, train, device, lr_fn=None):
 
 
 def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets):
-    """The move proposal model's step: backbone params receive gradients from
-    the sim loss and move (so the plain pass changes) -- all but the placement
-    heads, which no sim loss reads and which therefore stay the student's,
-    bit for bit -- the optimizer runs two groups at lr and lr *
-    backbone_lr_mult under the schedule, only the sim losses are reported,
-    and prefix-0 rows stay exact between the current plain and conditioned
-    passes."""
+    """The unfrozen step trains the backbone on the sim loss, so the plain pass
+    changes. Checked:
+
+    - every backbone parameter gets a gradient and moves, except the placement
+      heads: no sim loss reads them, so they stay the student's bit for bit;
+    - the optimizer runs two groups, at lr and lr * backbone_lr_mult;
+    - only the sim losses are reported;
+    - empty-subset rows still match the plain pass exactly."""
     from scribblez.evidence import trainer
     from scribblez.evidence.train_loop import LOSS_KEYS
 

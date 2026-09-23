@@ -1,32 +1,29 @@
-"""The evidence_trajectories workload's train role: the move proposal model
-(docs/roadmap.md item 5) -- the fusion stage and the proves-best head, and
-with the backbone unfrozen the whole student copy -- trained on the tag's
-trajectory pair store's sim outcomes.
+"""The evidence_trajectories workload's train role: trains the move proposal
+model (docs/roadmap.md item 5) on the sim outcomes in the tag's trajectory
+pair store.
 
-The model is the move set evaluation student named by `student_checkpoint`
-(a move_set_eval tag's rolling checkpoint: weights plus the config it was
-built against). Frozen mode (the default, the recorded-floor diagnostic)
-holds its trunk, move encoder and value heads at the checkpoint;
-EvidenceFusion and the proves-best head are what learn
-(model.freeze_backbone). Unfrozen mode -- the move proposal model proper --
-trains everything on the same sim-outcome loss, the backbone at
-`backbone_lr_mult` times the evidence path's rate and no distillation anchor
-(the empty-subset rows keep the plain pass calibrated on the simmed
-candidates; docs/roadmap.md item 5 says why no anchor). The plain student
-then changes each pass, so it is exported per pass as ONNX, and the frozen
-student's held-out sim soft-CE is reported as the flat reference the moving
-plain pass's drift is read against (StudentReference). The student's
-information-condition arm must be the corpus's -- the trainer refuses a
-hidden-leaves student on an open-leaves corpus and vice versa.
+The model starts as a copy of the move set evaluation student named by
+`student_checkpoint` (a move_set_eval tag's rolling checkpoint). Two modes:
 
-The loop is the mset trainer's growing-corpus loop: wait for the store, take
-up new .sobs pairs each pass into a file-level split by stem hash
-(pair_store.split_pair_stems), spend the epoch budget only on passes over a
-finished corpus (pair_store.CorpusClock), record metrics, checkpoint. Every
-pass also writes its own checkpoint under checkpoints/model_epoch_NNNN.pt
-(model weights + config), which is what the dashboard's trajectory pane loads
-per generation, and exports the model as the engine's cache/step graph pair
-(export_proposal_graphs), what UltimateBot plays.
+  * Frozen (the default): the student's backbone stays fixed and only
+    EvidenceFusion and the proves-best head learn (model.freeze_backbone).
+    This is a diagnostic baseline for what the evidence path alone achieves.
+  * Unfrozen (`unfreeze_backbone`), the move proposal model proper: the whole
+    model trains on the same sim-outcome loss, the backbone at
+    `backbone_lr_mult` times the evidence path's rate. The plain pass then
+    drifts from the student, so each pass also exports it as a plain ONNX,
+    and StudentReference reports the original student's held-out soft-CE as
+    a fixed reference line.
+
+The student's information condition and move encoding version must match the
+corpus and the engine; the trainer refuses to start otherwise.
+
+The loop is the move_set_eval trainer's growing-corpus loop: wait for the
+store, absorb new .sobs pairs each pass into a file-level split
+(pair_store.split_pair_stems), and spend the epoch budget only on passes over
+a finished corpus (pair_store.CorpusClock). Each pass writes a per-pass
+checkpoint (checkpoints/model_epoch_NNNN.pt, which the dashboard's trajectory
+pane loads) and exports the cache/step graph pair that UltimateBot plays.
 """
 
 from __future__ import annotations
@@ -77,16 +74,16 @@ POLL_SECONDS = 30
 
 @dataclass
 class EvidenceTrainState(GenerationalState):
-    """The generational cursor plus the epoch-budget clock (see the mset
-    trainer's MsetTrainState for why the budget is spent from settled passes)."""
+    """The generational cursor plus the epoch-budget clock (see
+    move_set_eval.trainer.MsetTrainState for why only settled passes count)."""
 
     settled_epochs: int = 0
 
 
 def split_pairs(store, holdout_every: int, ext: str = ".sobs") -> tuple[list, list]:
     """(train, holdout) `ext` sidecar paths of the store's complete pairs,
-    split at file level by stem hash (pair_store.split_pair_stems); a stem is
-    listed for `ext` only where that sidecar exists."""
+    split at file level by pair_store.split_pair_stems. Stems lacking an
+    `ext` sidecar are omitted."""
     train, holdout = pair_store.split_pair_stems(
         [f.stem for f in complete_pairs(store)], holdout_every
     )
@@ -98,8 +95,9 @@ def _sidecars(store, stems: list[str], ext: str) -> list:
 
 
 def store_is_ready(store, params) -> tuple[bool, str]:
-    """Enough pairs to be worth a pass, and a held-out pair when one is asked
-    for; a store at the tag's target size overrides both (nothing more comes)."""
+    """As move_set_eval.trainer.store_is_ready: at least `warmup_pairs` pairs
+    and a held-out pair if one is wanted, unless the store has reached
+    `target_pairs`."""
     pairs = complete_pairs(store) if store.is_dir() else []
     if params.target_pairs and len(pairs) >= params.target_pairs:
         return True, ""
@@ -121,10 +119,9 @@ def wait_for_store(store, params):
 
 
 def _load_split(store, params, ext: str, build, hash_attr: str) -> tuple:
-    """(train, holdout) datasets over one sidecar side of the split -- `build`
-    makes a dataset from a file list; both sides must agree on `hash_attr`
-    (the proposer or teacher). With no held-out files the training set stands
-    in (metrics are then on-train)."""
+    """(train, holdout) datasets over the `ext` sidecars, built by `build`
+    from a file list. Both sides must agree on `hash_attr`. With no held-out
+    files, the training set stands in for the holdout."""
     train_files, holdout_files = split_pairs(store, params.holdout_every, ext)
     if not train_files:
         raise FileNotFoundError(f"no complete .slog/{ext} training pairs in {store}")
@@ -139,15 +136,14 @@ def _load_split(store, params, ext: str, build, hash_attr: str) -> tuple:
 
 
 def _trajectory_dataset(files) -> TrajectoryDataset:
-    """A trajectory dataset, the corpus's information-condition arm adopted
-    first (it must precede the first dataset; re-adopting the same arm for
-    the holdout is a no-op)."""
+    """A TrajectoryDataset, after adopting the corpus's information
+    condition (a no-op when repeated for the holdout)."""
     adopt_information_condition(files)
     return TrajectoryDataset(files)
 
 
 def load_datasets(store, params) -> tuple[TrajectoryDataset, TrajectoryDataset]:
-    """The trajectory (.sobs) side of the split."""
+    """(train, holdout) trajectory datasets."""
     train_ds, holdout_ds = _load_split(store, params, ".sobs", _trajectory_dataset, "proposer_hash")
     if holdout_ds is train_ds:
         timed_print("no held-out pairs; metrics are on-train")
@@ -170,9 +166,8 @@ def epochs_left(params, state: EvidenceTrainState) -> bool:
 
 
 def build_optimizer(model, params) -> torch.optim.AdamW:
-    """AdamW over the trainable params: the evidence path at `lr`, and --
-    unfrozen -- the backbone as its own group at `lr * backbone_lr_mult`
-    (train_loop.set_lr applies the schedule through the group's `lr_mult`)."""
+    """AdamW over the evidence path and, if unfrozen, a backbone group with
+    `lr_mult` = backbone_lr_mult (applied by train_loop.set_lr)."""
     groups = [{"params": model.evidence_parameters()}]
     if params.unfreeze_backbone:
         groups.append({"params": model.backbone_parameters(), "lr_mult": params.backbone_lr_mult})
@@ -180,13 +175,12 @@ def build_optimizer(model, params) -> torch.optim.AdamW:
 
 
 class PositionSetProbe:
-    """The hand-maintained position set (positions/NWL23/<DEFAULT_SET>) as a
-    per-pass readout: its .gcg positions with trajectory sidecars simmed under
-    this tag's proposer + recipe (the same sidecars the dashboard's
-    Trajectories tab shows), re-scored by the current model at every evidence
-    prefix (trajectory_view.position_set_metrics). Empty when the set is
-    absent or its sidecars cannot be generated -- the readout is optional and
-    never fails training."""
+    """Per-pass metrics on the hand-maintained position set
+    (positions/NWL23/<DEFAULT_SET>): its positions' trajectory sidecars,
+    simmed under this tag's proposer and recipe, re-scored by the current
+    model at every evidence prefix (trajectory_view.position_set_metrics).
+    Optional: if the set or its sidecars are unavailable it reports nothing
+    rather than failing training."""
 
     def __init__(self, params, proposer: Path | None, student_cfg: dict, threads: int):
         self.student_cfg = student_cfg
@@ -220,11 +214,10 @@ class PositionSetProbe:
 
 
 class StudentReference:
-    """The frozen student's held-out sim soft-CE (`student_wld_ce`, `_ev`) --
-    the flat reference line an unfrozen run's moving `plain_wld_ce` is read
-    against, on the same eval prefix draw (evaluate's fixed seed). Computed
-    from a pristine copy of the student, so it is what it claims after a
-    resume too, and recomputed only when the holdout grows."""
+    """The original student's held-out sim soft-CE (`student_wld_ce`, `_ev`):
+    the fixed reference for an unfrozen run's drifting `plain_wld_ce`, on the
+    same evaluation draw. Loaded from the student checkpoint, so it stays
+    correct after a resume; recomputed only when the holdout grows."""
 
     def __init__(self, student_checkpoint: str, device, batch_positions: int, max_e: int):
         self.model, _ = load_student(student_checkpoint, device)
@@ -248,20 +241,17 @@ class StudentReference:
 
 
 def save_epoch_checkpoint(paths, model, epoch: int, config: dict):
-    """The per-pass checkpoint the trajectory pane loads: weights + config."""
+    """The per-pass checkpoint (weights + config) the trajectory pane loads."""
     path = paths.checkpoint_path(epoch)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state_dict": model.state_dict(), "config": config}, path)
 
 
 def export_proposal_graphs(paths, model, epoch: int, student_cfg: dict, max_e: int):
-    """The pass's move proposal model as the engine serves it: the
-    move_proposal_cache graph at models/model_epoch_NNNN.onnx and its step
-    graph at models/step/model_epoch_NNNN.onnx (TagPaths.proposal_step_path),
-    stamped with the student's arm and version and with the evidence width
-    `max_e` the fusion stage trained at -- the bound UltimateBot's sim budget
-    is checked against. Every pass, in both modes: the fusion stage and the
-    gain head move even when the backbone is frozen."""
+    """Export the pass's cache graph (models/model_epoch_NNNN.onnx) and step
+    graph (TagPaths.proposal_step_path), stamped with the student's encoding
+    and the trained evidence width `max_e`, which bounds UltimateBot's sim
+    budget. Runs in both modes, since the evidence path trains in both."""
     step = paths.proposal_step_path(epoch)
     step.parent.mkdir(parents=True, exist_ok=True)
     export_proposal_pair(
@@ -277,10 +267,8 @@ def export_proposal_graphs(paths, model, epoch: int, student_cfg: dict, max_e: i
 
 
 def export_student(paths, model, epoch: int, student_cfg: dict):
-    """The unfrozen mode's per-pass plain-student ONNX (models/plain/
-    model_epoch_NNNN.onnx), stamped with the student's arm and version as the
-    mset trainer stamps its own -- the plain path alone, a move-set-eval
-    graph a later generation's proposer can be taken from."""
+    """Export the unfrozen model's plain pass as a move_set_eval graph
+    (TagPaths.plain_onnx_path), usable as a later generation's proposer."""
     path = paths.plain_onnx_path(epoch)
     path.parent.mkdir(parents=True, exist_ok=True)
     export_onnx(
@@ -299,10 +287,10 @@ MAX_SKIPPED_PER_PASS = 10
 
 
 def check_finite(model, result):
-    """Stop the run -- before anything is checkpointed -- when the pass
-    diverged: non-finite parameters, or more skipped batches than an isolated
-    incident. The rolling checkpoint then holds the last good pass, and the
-    worker exits non-zero instead of logging NaN passes to the budget."""
+    """Raise if the pass diverged (non-finite parameters, or more than
+    MAX_SKIPPED_PER_PASS skipped batches). Called before checkpointing, so the
+    rolling checkpoint keeps the last good pass and the worker exits
+    non-zero."""
     bad = [n for n, p in model.named_parameters() if not torch.isfinite(p).all()]
     if bad:
         raise RuntimeError(f"diverged: non-finite parameters {bad[:4]}")
@@ -313,9 +301,8 @@ def check_finite(model, result):
 def _metrics_record(
     epoch: int, state, settled: bool, losses: dict, m: dict, lr: float, skipped: int
 ) -> dict:
-    """The dashboard row: losses, and the plain-vs-conditioned metrics as
-    *_acc series (the Loss tab's Accuracy panel) with the rest in the table.
-    An unfrozen pass adds the student-reference holdout series."""
+    """The pass's dashboard record. Hit rates get the `_acc` suffix so they
+    plot on the Loss tab's Accuracy panel; other metrics go to the table."""
     record = {
         "epoch": epoch,
         "positions": state.rows_trained,
@@ -344,9 +331,8 @@ def _metrics_record(
 
 
 def _holdout_metrics(model, device, params, ctx) -> dict:
-    """The pass's held-out readout: plain vs conditioned on the trajectory
-    holdout and the position set; unfrozen, also the student reference the
-    moving plain pass is read against."""
+    """Held-out metrics, position-set metrics and, when unfrozen, the
+    student reference."""
     m = evaluate(model, ctx["holdout_ds"], device, params.batch_positions, ctx["max_e"])
     m.update(ctx["posset"].metrics(model, device))
     if ctx["student_ref"] is not None:
@@ -376,10 +362,8 @@ def _pass_line(epoch, state, params, result, m, lr_now, train_s, settled, ctx) -
 
 
 def training_batches(train_ds, params, max_e: int, epoch: int):
-    """One pass's batches under the tag's subset-assembly knobs: each pool
-    yields `subsets_per_pool` subsets, empty at `empty_fraction` (0 = the
-    sampler's uniform-size default), capped at the evidence width `max_e` the
-    model conditions on. Deterministic for a given pass."""
+    """One pass's batches under the tag's subset-assembly params
+    (empty_fraction 0 selects assemble_subset's uniform-size default)."""
     return train_ds.iter_batches(
         params.batch_positions,
         seed=0,
@@ -422,11 +406,9 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
     save_epoch_checkpoint(paths, model, epoch, ctx["config"])
     export_proposal_graphs(paths, model, epoch, ctx["config"]["student"], ctx["max_e"])
     if params.unfreeze_backbone:
-        # Frozen, the plain model is the student byte for byte; only an
-        # unfrozen pass has a new plain student to export.
+        # Frozen, the plain pass is exactly the student; nothing new to export.
         export_student(paths, model, epoch, ctx["config"]["student"])
-    # Delivered last: the record is what makes the pass visible, and every
-    # artifact it stands for is now on disk.
+    # Last, so every artifact a visible record refers to is already on disk.
     recorder.commit_generation(epoch, state.rows_trained, record)
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
@@ -450,23 +432,20 @@ def _report_model(model, params) -> int:
 
 
 def _student_reference(params, device, max_e) -> StudentReference | None:
-    """The frozen student's reference metrics -- only meaningful when the
-    plain pass can move (unfrozen); None in frozen mode, where the plain pass
-    IS the student."""
+    """StudentReference when unfrozen; None when frozen, where the plain pass
+    is the student."""
     if not params.unfreeze_backbone:
         return None
     return StudentReference(params.student_checkpoint, device, params.batch_positions, max_e)
 
 
 def run(ctx: WorkerContext) -> int:
-    """The train-role runner (invoked by the worker entrypoint)."""
+    """The train-role entrypoint."""
     params = ctx.params
     paths = ctx.tag_paths()
     paths.root.mkdir(parents=True, exist_ok=True)
-    # The tag's own copy of the proposer, as the generate role reads it: the
-    # source mset tag prunes its exports (mset_targets.pin_model). Only the
-    # optional position-set readout needs it here, so its absence disables
-    # that readout rather than the run.
+    # The tag's pinned copy of the proposer (the source tag prunes its
+    # exports). Only the optional position-set readout needs it here.
     try:
         proposer = mset_targets.pin_model(params.proposer_model, paths, "proposer_model")
     except FileNotFoundError as e:
@@ -487,9 +466,8 @@ def run(ctx: WorkerContext) -> int:
     model, student_cfg = load_student(
         params.student_checkpoint, device, freeze=not params.unfreeze_backbone
     )
-    # The move rows this trainer encodes (candidates and evidence tokens) must
-    # be the rows the student learned; a version bump in the engine would
-    # otherwise train the fusion against embeddings of the wrong layout.
+    # The engine must encode move rows exactly as the student learned them,
+    # or the fusion would train against embeddings of the wrong layout.
     if student_cfg["move_encoding_version"] != move_encoding_version():
         print(
             f"error: the student was trained under move encoding version "
@@ -514,8 +492,8 @@ def run(ctx: WorkerContext) -> int:
             "simmed with this tag's recipe"
         )
         return 1
-    # The padded evidence width the model conditions on -- only the anchor and
-    # on-policy picks ever enter an evidence set, never the off-policy floor.
+    # Only the anchor and on-policy picks enter evidence sets, so this is
+    # narrower than the trajectory pool.
     max_e = max_evidence_width(params)
     print(
         f"train: {train_ds.num_positions} positions / {train_ds.num_candidates} simmed candidates; "

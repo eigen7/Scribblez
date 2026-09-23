@@ -1,45 +1,33 @@
-"""Moving files between the controller and a worker's container, over the
-control ssh link.
+"""Moving files between the controller and a worker's container over the ssh
+link the controller already uses to manage it.
 
-An ssh worker on a machine the operator owns is one the controller already
-reaches over ssh to manage its container. Its outputs used to travel the same
-way a rented machine's do -- uploaded to the results bucket and pulled back
-down -- which put two R2 round trips on every cycle of a job whose actual work took
-1.5 seconds, and made a home network's hiccups the throughput ceiling.
+A worker with the local sink (SCZ_SINK=local) delivers into its own
+container, and the controller collects: each pass streams a `docker exec tar`
+of finished output back over the open ssh connection. This keeps the network
+out of the worker's cycle (a bucket round trip per cycle would dwarf work that
+takes seconds) and needs no bucket or extra credential. The same link runs the
+other way for roles whose work the controller assigns: push_file drops a file
+where the worker polls for it (match eval: the ONNX of the generation to
+play), and list_dir reads back what is there.
 
-So the worker delivers locally, into its own container (SCZ_SINK=local), and
-the controller collects from there: a `docker exec tar` per pass streams
-finished output back over the ssh connection that is already open. The
-worker's cycle no longer contains a network at all.
+Only the controller initiates. The dev container runs no sshd, and a worker
+that pushed would need a route, a stable address and a key for the
+controller. This also degrades well: while the controller is down, the worker
+keeps generating into its own filesystem and the next pass collects the
+backlog.
 
-Direction matters. The controller reaches the machine, never the reverse: the
-dev container runs no sshd, and a worker that had to push would need a route
-back to it, an address that survives DHCP, and a key -- for no gain, since the
-bytes are the same either way. It also fails better: a controller that is down
-or restarting leaves the worker generating into its own filesystem, and the
-next pass collects the backlog.
+A pull takes a bounded batch (BATCH files), not the whole backlog. If a pull's
+cost grew with the backlog, one slow pull could exceed its timeout, skip the
+deletes that follow extraction, and leave a larger backlog for the next pull,
+which then also times out; the backlog would grow without bound. With a fixed
+batch, every pull costs the same and drains at a steady rate.
 
-The same link carries the other direction for roles whose work the controller
-assigns: push_file puts a file where the worker will find it (match eval: the
-ONNX of the generation to play) and list_dir reads back what is there. Both
-run over the connection that is already open, so a machine the controller can
-manage is a machine it can feed -- no bucket, and no second credential.
-
-A pull takes a bounded batch, not everything waiting. Taking everything made a
-pull's cost grow with the backlog it existed to drain, which is a loop that
-only diverges: once one pull outran its timeout, none finished, the deletes
-that follow a successful extraction never ran, and the backlog grew without
-bound (10,746 chunks and 6.3 GB, observed on a laptop generating a chunk every
-two seconds). Bounded batches make a pull's cost fixed and the drain rate a
-floor -- BATCH files per pass against however fast one worker produces them.
-
-Delivered data is moved (deleted from the container once safely on disk here);
-the workers' own stats and params records are copied, because the worker reads
-its counters back from them on restart. Deleting is a separate step after the
+Delivered data is moved: deleted from the container once it is on disk here.
+The worker's stats and params records are copied instead, because the worker
+reads its counters back from them on restart. The delete runs only after
 extraction succeeds, so a transfer that dies mid-stream loses nothing. A file
-that is pulled twice (the delete failed, or the container restarted before it
-ran) is deduplicated by the scheduler's ingest ledger, exactly as a re-synced
-bucket chunk was.
+pulled twice (the delete failed, or the container restarted first) is
+deduplicated by the scheduler's ingest ledger.
 """
 
 import shlex
@@ -49,54 +37,48 @@ from io import BytesIO
 from pathlib import Path
 from typing import IO
 
-# Records the worker keeps writing to and reading back: copied, never removed.
+# Records the worker rewrites and reads back: copied, never removed.
 RECORD_DIRS = ("stats", "params")
 
-# Delivered files moved per pull. The bound being on files rather than on the
-# backlog is the point; the size trades drain rate against how long one pull
-# holds the pass's single blocking thread. Measured on this fleet: 32 chunks is
-# ~20 MB raw, ~0.4 s to compress and ~1.4 s to move over a link clocked at
-# 7.5 MB/s -- around a third of a pass, and ~29 net files drained per pass
-# against one worker's ~2.5.
+# Delivered files moved per pull. Larger drains faster but holds the pass's
+# single blocking thread longer. Measured on this fleet: 32 chunks is ~20 MB
+# raw, ~0.4 s to compress and ~1.4 s to move at 7.5 MB/s, about a third of a
+# pass, draining ~29 net files per pass against one worker's ~2.5.
 BATCH = 32
 
-# Compression level for the stream. The worker machine is busy playing games,
-# and its CPU is scarcer than the link: on real chunks, level 1 costs 0.2 s and
-# the default 0.7 s, for 13% fewer bytes -- a net loss at this bandwidth.
+# The worker machine's CPU is busy playing games and is scarcer than the link.
+# On real chunks, level 1 takes 0.2 s against the default's 0.7 s, for only
+# 13% more bytes: a net win at this bandwidth.
 COMPRESSION = "gzip -1"
 
-# What the in-container tar is allowed, enforced inside the container so a
-# transfer that overruns dies with its ssh client instead of outliving it. An
-# abandoned tar keeps reading the backlog it was asked for, and one per pass
-# compounds: six were found running at once on the jammed machine.
+# Time limit on the in-container tar, enforced inside the container so an
+# overrunning transfer dies with its ssh client. Otherwise an abandoned tar
+# keeps running, and one more accumulates each pass.
 COLLECT_TIMEOUT_SECONDS = 60
 
-# Where a pulled file waits while the rest of the archive extracts. Under the
-# tag root, so moving it to its final place is a rename on one filesystem --
-# a chunk appears in staging whole or not at all.
+# Where a pulled file is written before it is moved into place. It is under
+# the tag root, so the move is a same-filesystem rename and a file appears at
+# its destination whole or not at all.
 INCOMING_DIR = ".incoming"
 
-# Names the file a sweep streams through, so one left behind by a process that
-# died mid-copy is recognisable -- and removable -- by the next sweep.
+# Prefix of the spool file a sweep streams through, so the next sweep can
+# recognize and remove one left by a process that died mid-copy.
 SPOOL_PREFIX = "sweep-"
 
 
 @dataclass(frozen=True)
 class PullResult:
-    """What one pull moved, and what it left for the next one."""
-
     pulled: list[str]  # paths relative to the tag root, as extracted
-    remaining: int | None  # delivered files still there; None if that is unclear
+    remaining: int | None  # delivered files still waiting; None if unknown
 
 
 def list_command(root: str, data_dirs: list[str], batch: int) -> list[str]:
-    """The in-container command listing the next `batch` delivered files,
-    oldest name first, then a "TOTAL <n>" line counting everything waiting.
+    """The in-container command listing the next `batch` delivered files, then
+    a "TOTAL <n>" line counting everything waiting.
 
-    Names begin with the timestamp their chunk was written at, so sorting them
-    drains in production order. Only the batch crosses the wire: a backlog of
-    ten thousand would otherwise ship a third of a megabyte of filenames every
-    pass to choose sixteen of them."""
+    Names begin with their chunk's write timestamp, so sorting drains in
+    production order. The command trims the list in the container so only the
+    batch's names cross the wire, however large the backlog."""
     dirs = " ".join(shlex.quote(d) for d in data_dirs)
     return [
         "sh",
@@ -110,10 +92,9 @@ def list_command(root: str, data_dirs: list[str], batch: int) -> list[str]:
 def parse_listing(output: bytes) -> tuple[list[str], int | None]:
     """The batch of names and the total waiting, from list_command's output.
 
-    No output at all means the tag root does not exist there yet -- a real
-    zero. Output without the sentinel is not understood, and says so: the
-    total ends up deciding whether a container may be destroyed, so a count
-    nobody can vouch for must not read as "empty"."""
+    Empty output means the tag root does not exist yet: a true zero. Output
+    without the TOTAL line gives a total of None, never 0, because the total
+    decides whether a container may be destroyed."""
     if not output.strip():
         return [], 0
     lines = output.decode(errors="replace").split()
@@ -124,8 +105,8 @@ def parse_listing(output: bytes) -> tuple[list[str], int | None]:
 
 def collect_command(root: str, names: list[str], seconds: int) -> list[str]:
     """The in-container command streaming `names` plus the record directories
-    as a tar archive. Emits nothing when there is nothing to send rather than
-    asking tar to build an empty archive, which it refuses to do."""
+    as a gzipped tar. Emits nothing when there is nothing to send, since tar
+    refuses to create an empty archive."""
     quoted = " ".join(shlex.quote(name) for name in names)
     records = " ".join(RECORD_DIRS)
     return [
@@ -142,18 +123,15 @@ def collect_command(root: str, names: list[str], seconds: int) -> list[str]:
 def write_command(root: str, rel_dest: str, size: int) -> list[str]:
     """The in-container command reading `size` bytes off stdin into `rel_dest`.
 
-    It lands under a dotted temporary name in its own directory and is renamed
-    into place, so the worker -- which polls for exactly these files -- never
-    opens a half-written one, and a push that dies mid-stream leaves nothing
-    but a leftover the next one overwrites (dotted, so it is not in the
-    listing either).
+    The bytes land in a dotted temporary file beside the destination and are
+    renamed into place, so the worker, which polls for these files, never
+    opens a half-written one. A push that dies mid-stream leaves only the
+    temporary, which the next push overwrites and listings skip.
 
-    The size is checked before the rename because `cat` cannot tell a
-    truncated stream from a complete one: it exits 0 on any EOF, including the
-    one a dropped link produces, and would hand the worker a short model under
-    the name that means "ready". That file would then wedge the slot -- it
-    reads as a match in flight, so nothing replaces it, and the worker dies on
-    it as fast as the container can be restarted."""
+    The size is checked before the rename because `cat` exits 0 on any EOF,
+    including a dropped link's. A truncated model under its final name would
+    wedge the slot: it reads as a match in flight, so nothing replaces it, and
+    the worker crashes on it at every restart."""
     dest = f"{root}/{rel_dest}"
     parent, _, name = dest.rpartition("/")
     tmp = f"{parent}/.{name}.part"
@@ -170,46 +148,44 @@ def write_command(root: str, rel_dest: str, size: int) -> list[str]:
 
 
 def list_dir_command(root: str, rel: str) -> list[str]:
-    """The in-container command naming what is in `rel`. A directory that does
-    not exist yet is empty, not an error: nothing has been pushed there."""
+    """The in-container command listing `rel`. A directory that does not exist
+    yet lists as empty: nothing has been pushed there."""
     return ["sh", "-c", f"ls -1 {shlex.quote(f'{root}/{rel}')} 2>/dev/null || true"]
 
 
 def push_file(machine, container: str, *, remote_root: str, rel_dest: str, src: Path):
-    """Send `src` into `container` at `rel_dest` (relative to the tag root
-    there). Raises if it did not arrive whole."""
+    """Send `src` to `rel_dest` under the container's tag root. Raises if it
+    did not arrive whole."""
     command = write_command(remote_root, rel_dest, src.stat().st_size)
     machine.write_to_container(container, command, src)
 
 
 def list_dir(machine, container: str, *, remote_root: str, rel: str) -> list[str]:
-    """What `container` holds under `rel` (relative to the tag root there)."""
+    """The names under `rel` in the container's tag root."""
     output = machine.read_from_container(container, list_dir_command(remote_root, rel))
     return output.decode(errors="replace").split()
 
 
 def remove_file(machine, container: str, *, remote_root: str, rel: str):
-    """Delete `rel` inside `container`. Absent is success, as it is for the
-    delivered files a pull removes."""
+    """Delete `rel` under the container's tag root; absent is success."""
     machine.exec_in_container(container, ["rm", "-f", f"{remote_root}/{rel}"])
 
 
 def _extract(
     archive: bytes | IO[bytes], root: Path, mode: str = "r:gz", prefix: str = ""
 ) -> list[str]:
-    """Unpack `archive` -- bytes, or a file object to read as a stream -- under
-    `root`, atomically per file, returning the paths written relative to
-    `root`. `prefix` is prepended to each member name, for an archive that does
-    not already name things the way this tree does."""
+    """Unpack `archive` (bytes, or a file object) under `root`, each file
+    atomically, and return the paths written relative to `root`. `prefix` is
+    prepended to every member name."""
     if isinstance(archive, bytes):
         if not archive:
             return []
         archive = BytesIO(archive)
     names = []
     with tarfile.open(fileobj=archive, mode=mode) as tar:
-        # Iterated rather than read through getmembers(), which a stream ("r|",
-        # what sweep_stopped uses) cannot serve: it allows one forward pass, so
-        # building the member list would consume the data before extraction.
+        # Iterate rather than call getmembers(): a stream ("r|", as
+        # sweep_stopped uses) allows one forward pass, and building the member
+        # list would consume the data before extraction.
         for member in tar:
             if not member.isfile():
                 continue
@@ -229,23 +205,19 @@ def sweep_stopped(
 ) -> list[str]:
     """Take everything a stopped container still holds, before it is destroyed.
 
-    A container is stopped gracefully -- SIGTERM, then a minute in which the
-    worker flushes the output it has finished -- and that flush lands after the
-    last collection could run, since collecting needs a running container. Left
-    there it would go into the bin with the container. `docker cp` reads a
-    stopped one, so this is the last look before a replacement.
+    A graceful stop gives the worker a minute after SIGTERM to flush finished
+    output, and that flush lands after the last collection, which needs a
+    running container. `docker cp` can read a stopped container, so this is the
+    last chance to save that output.
 
-    Takes the directory whole rather than in batches, because a stopped
-    container cannot be asked what is in it. That is affordable only because a
-    sweep runs solely on a container recorded as holding nothing -- a
-    collection said so, or it never came up long enough to hold anything -- so
-    what it finds is one worker's dying gasp: were something ever to replace a
-    container holding a backlog, this would be gigabytes in one call. It
-    streams through a file rather than memory even so -- the size is a remote
-    machine's business, not something to hold in the dashboard.
-    Uncompressed, unlike a collection: what a sweep moves is a couple of
-    megabytes, and the shell pipeline that would compress it costs the ability
-    to tell a failed copy from an empty one (see copy_from_container).
+    A stopped container cannot run a listing, so each data directory is taken
+    whole rather than in batches. That is affordable only because sweeps run
+    on containers recorded as empty (by a collection, or because they never
+    ran long enough to produce anything), so a sweep moves just the final
+    flush, a few megabytes. On a container with a real backlog it would move
+    gigabytes in one call. The copy is spooled through a file rather than held
+    in memory all the same, and it is uncompressed; copy_from_container
+    explains why.
     """
     names = []
     incoming = local_root / INCOMING_DIR
@@ -260,7 +232,7 @@ def sweep_stopped(
                 continue
             with open(archive, "rb") as stream:
                 # docker cp names members relative to the copied directory's
-                # parent, and "r|" reads without holding the archive.
+                # parent; "r|" streams without seeking.
                 names += _extract(stream, local_root, mode="r|", prefix=f"{Path(data_dir).parent}/")
         finally:
             archive.unlink(missing_ok=True)
@@ -276,13 +248,12 @@ def pull_results(
     data_dirs: list[str],
     batch: int = BATCH,
 ) -> PullResult:
-    """Collect up to `batch` of one ssh worker's finished outputs into the
-    tag's local tree, plus its records.
+    """Collect up to `batch` of one ssh worker's finished outputs, plus its
+    records, into the tag's local tree.
 
-    `remote_root` is the tag's root inside the container and `local_root` is
-    the controller's own. In production they are the same string -- the worker
-    runs the same layout under the same mount root -- but they are different
-    machines' paths, and only one of them can be opened here.
+    `remote_root` is the tag root inside the container; `local_root` is the
+    controller's. In production they are the same string, since both sides
+    use the same mount layout, but they name paths on different machines.
     """
     listing = machine.read_from_container(container, list_command(remote_root, data_dirs, batch))
     taking, waiting = parse_listing(listing)

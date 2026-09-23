@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """Export a move_set_eval tag's rolling checkpoint to ONNX.
 
-The trainer exports per pass on its own; this standalone path exists for
-checkpoints whose training run is already over -- a finished tag's epoch
-budget is spent, so without this script its checkpoint could never produce
-the ONNX the A4 runtime loads.
+The trainer exports after every pass on its own. This script is for a tag whose
+training has finished: its pass budget is spent, so the trainer will never
+export its checkpoint again.
 
-The model is rebuilt from the checkpoint's recorded config. Checkpoints
-written since the config became self-describing carry the adopted
-information-condition arm, the input widths, and the move-encoding version
-directly; an older checkpoint predates those fields, so the arm is re-adopted
-from the tag's .mset corpus exactly as the trainer adopted it (and the export
-is stamped move_encoding_version=0 -- pre-exchange-fix rows -- which the
-engine-side loader will rightly refuse to run against a newer encoder).
+The model is rebuilt from the config recorded in the checkpoint. A checkpoint
+too old to record its information condition, input widths and move-encoding
+version gets them recovered from the tag's corpus
+(onnx_export.legacy_checkpoint_condition).
 
 Usage:
     ./py/scripts/move_set_eval/export.py -t face-up-leaves-v1
@@ -61,9 +57,9 @@ def main() -> int:
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
-    # checkpoint.save persists the post-increment cursor, so the weights on
-    # disk are those of pass generation_index - 1 -- name the export the way
-    # the trainer named that same pass's own export.
+    # The checkpoint stores the post-increment cursor, so its weights are those
+    # of pass generation_index - 1; name the export as the trainer named that
+    # pass's own export.
     last_pass = ckpt["generation_index"] - 1
     out = args.out or paths.onnx_path(last_pass)
     export_onnx(

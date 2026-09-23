@@ -1,17 +1,14 @@
-"""The match_arms role runner: one arm's match per cycle (roadmap A4/E2).
+"""The match_arms role runner: plays a list of agent configurations ("arms")
+against one opponent, one arm per cycle.
 
-Each cycle picks the first arm of the task's list that has no match_arm row
-yet, plays its full pair budget in rounds through the match harness, and
-writes the row the dashboard's Arms tab reads. Every arm runs from the same
-base seed, so arms share deals pair-for-pair (cross-arm CRN) and per-arm
-scores are directly comparable. No sequential test: an arms experiment
-estimates effect sizes across its arms, it does not accept or reject one
-hypothesis.
+Each cycle takes the first arm without a match_arm row, plays its full pair
+budget through the match harness, and writes the row the dashboard's Arms tab
+reads. Every arm starts from the same base seed, so all arms face the same
+deals pair for pair (common random numbers) and their scores compare directly.
 
-When every arm has its row the runner exits; the reconciler's respawn of an
-exited worker then re-checks and exits again, a cheap no-op. A SIGTERM
-mid-arm discards the partial arm; it is still row-less, so the next start
-replays it from the same fixed seeds.
+Once every arm has a row the runner exits; when the dashboard respawns it, it
+finds nothing to do and exits again. A stop mid-arm discards that arm's
+partial results, and the next start replays it from the same seeds.
 """
 
 import time
@@ -35,7 +32,7 @@ def _pending_arm(conn, arms: list[Arm]) -> Arm | None:
 
 def _play_arm(ctx: WorkerContext, arm: Arm) -> dict:
     """Play one arm's full pair budget in rounds; returns its match_arm record
-    (minus elapsed_s, which the caller times)."""
+    without elapsed_s, which the caller adds."""
     p = ctx.params
     results_file = ctx.tag_paths().work_dir(ctx.worker_id) / "match_results.jsonl"
     counts = [0] * 5
@@ -75,7 +72,7 @@ def _play_arm(ctx: WorkerContext, arm: Arm) -> dict:
 
 
 def run(ctx: WorkerContext) -> int:
-    """The arms role runner: one arm's match per cycle, exiting when none is left."""
+    """The match_arms role entry point."""
     arms = parse_arms(ctx.params.arms)
     conn = db.connect(ctx.tag_paths().dashboard_db)
     stats_rec = WorkerStats(ctx)

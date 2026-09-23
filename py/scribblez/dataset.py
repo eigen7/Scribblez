@@ -17,15 +17,13 @@ from .ffi import (
 
 
 def row_layout(input_shapes=None, target_shapes=None):
-    """Describe the contiguous training row.
+    """How a flat (B, row_floats) training batch maps to named tensors.
 
-    Returns (input_shapes, targets): the list of input ShapeInfo (in row order)
-    and a list of (name, start, end, dims) slices for each target head, where
-    start/end are float offsets into the row. Single source of truth for how a
-    flat (B, row_floats) batch maps to named tensors, shared by the disk
-    DataLoader and the streaming source. Pass explicit input/target ShapeInfo
-    lists to describe a non-default task (e.g. the max-move-per-lane shapes);
-    both default to the post-move task's shapes.
+    Returns (input_shapes, targets): the input ShapeInfo list in row order, and
+    one (name, start, end, dims) entry per target, where start/end are float
+    offsets into the row. Inputs come first, then targets. The shapes default to
+    the position-evaluation task's; pass explicit lists for another task (e.g.
+    max-move-per-lane).
     """
     input_shapes = get_input_shapes() if input_shapes is None else input_shapes
     target_shapes = get_target_shapes() if target_shapes is None else target_shapes
@@ -40,12 +38,8 @@ def row_layout(input_shapes=None, target_shapes=None):
 
 
 def slice_row_batch(batch_2d: np.ndarray, input_shapes, targets) -> dict[str, torch.Tensor]:
-    """Split a (B, row_floats) float array into named input/target tensors.
-
-    Each named region is reshaped to its (B, *dims) tensor; a copy is taken so
-    the result outlives the source buffer (important for the streaming source,
-    whose slot is overwritten once released).
-    """
+    """Split a (B, row_floats) float array into named (B, *dims) tensors,
+    each a contiguous copy of its column range."""
     result: dict[str, torch.Tensor] = {}
     offset = 0
     for s in input_shapes:
@@ -60,11 +54,10 @@ def slice_row_batch(batch_2d: np.ndarray, input_shapes, targets) -> dict[str, to
 
 
 class SlogDataset:
-    """Streams training data from .slog files via the C++ epoch-based DataLoader.
+    """Streams training rows from .slog files through the C++ DataLoader.
 
-    Data is loaded on-demand in batch-sized chunks, with memory-budget-
-    constrained LRU eviction. Shuffling and symmetry augmentation are
-    deterministic for a given seed.
+    Games are decoded on demand under a memory budget with LRU eviction.
+    Shuffling and symmetry augmentation are deterministic for a given seed.
     """
 
     def __init__(
@@ -77,10 +70,8 @@ class SlogDataset:
         num_workers: int = 4,
         num_prefetch: int = 2,
     ):
-        # Accept a single directory or several; a multi-directory dataset is the
-        # union of every directory's .slog files (e.g. data accumulated across
-        # separate generation runs). A lone str/Path is one directory, not an
-        # iterable of characters.
+        # A multi-directory dataset is the union of every directory's .slog files.
+        # A lone str/Path is one directory, not an iterable of characters.
         if isinstance(data_dir, (str, Path)):
             self.data_dirs = [Path(data_dir)]
         else:
@@ -89,7 +80,6 @@ class SlogDataset:
         self.post_move = post_move
         self.apply_symmetry = apply_symmetry
 
-        # Discover and register .slog files across every directory.
         slog_files = sorted(f for d in self.data_dirs for f in d.glob("*.slog"))
         if not slog_files:
             dirs = ", ".join(str(d) for d in self.data_dirs)
@@ -102,13 +92,9 @@ class SlogDataset:
             self._loader.add_file(path, num_games, file_size)
             self._num_games += num_games
 
-        # num_samples is the loader's EXPANDED row count (one per included turn
-        # across every game), not the game count -- read it back from the loader,
-        # which derives it from each file's header.
+        # One row per eligible turn, so the row count exceeds the game count.
         self._total = self._loader.num_positions
         self._row_floats = self._loader.row_floats
-        # The row layout mirrors the loader's task: the post-move input/target
-        # shapes, or the max-move-per-lane ones.
         if task == "max_move_per_lane":
             self._input_shapes = get_max_move_per_lane_input_shapes()
             target_shapes = get_max_move_per_lane_target_shapes()
@@ -123,15 +109,13 @@ class SlogDataset:
 
     @property
     def num_games(self) -> int:
-        """Total games across all files (the all-turns epoch expands each game
-        into one row per turn of its eligible region; a turns_per_game=1 epoch
-        is one row per game)."""
+        """Total games across all files. An all-turns epoch yields one row per
+        eligible turn; a turns_per_game=1 epoch yields one row per game."""
         return self._num_games
 
     @property
     def input_shapes(self) -> dict[str, tuple[int, ...]]:
-        """Per-input tensor shapes (channel/feature dims), keyed by name, for the
-        dataset's task."""
+        """Per-sample input shapes, keyed by input name."""
         return {s.name: s.dims for s in self._input_shapes}
 
     def iter_batches(
@@ -144,18 +128,13 @@ class SlogDataset:
         epoch_index: int = 0,
         drop_last: bool = False,
     ):
-        """Yield batch dicts for one epoch, streaming from disk.
+        """Yield one epoch of batch dicts, deterministic for a given seed.
 
-        All data is loaded on-demand with LRU eviction. Deterministic for
-        a given seed.
-
-        turns_per_game: 0 (default) iterates every eligible turn of every game.
-        k > 0 draws k turns per game this epoch; pass a distinct epoch_index per
-        epoch so successive epochs cover distinct turns (k == 1 makes every row
-        in the epoch come from a different game).
-        drop_last: skip the epoch's trailing short batch (the rows left over
-        once the epoch no longer fills batch_size), so every yielded batch has
-        the same shape.
+        turns_per_game: 0 iterates every eligible turn of every game; k > 0
+        draws k turns per game. Pass a distinct epoch_index per epoch so
+        successive epochs draw distinct turns.
+        drop_last: skip the trailing short batch so every batch has the same
+        shape.
         """
         pm = post_move if post_move is not None else self.post_move
         sym = apply_symmetry if apply_symmetry is not None else self.apply_symmetry

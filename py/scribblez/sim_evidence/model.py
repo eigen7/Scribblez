@@ -1,19 +1,21 @@
-"""Evidence-conditioned position evaluation model (docs/plans/sim_residual_feedback.md).
+"""Evidence-conditioned position evaluation model for the kill test
+(py/scripts/kill_test.py, docs/plans/sim_residual_feedback.md).
 
-The model is PositionEvalModel with a fusion stage inserted between the trunk
-and the heads. Each simmed candidate contributes one evidence token (its
-scalar sim summary) paired with its spatial observation planes; tokens
-self-attend (cross-candidate contrasts -- "A left this spot open, B blocked
-it" -- are pairwise computations), FiLM-modulate their plane features, and the
-modulated planes are mean-pooled over candidates into a spatial residual added
-to the trunk output. A pooled token summary is likewise projected into the
-value-head input.
+This is PositionEvalModel with a fusion stage between the trunk and the heads.
+Each simmed candidate contributes a token (from its scalar sim summary) and
+its spatial observation planes (sobs.evidence_features). Tokens self-attend,
+because cross-candidate contrasts ("A left this spot open, B blocked it") are
+pairwise, then FiLM-modulate their plane features. The modulated planes are
+mean-pooled over candidates into a residual added to the trunk output, and a
+pooled token summary is added to the value-head input.
 
-Both fusion projections are zero-initialized, so at initialization the model
-computes exactly the plain PositionEvalModel, and an empty evidence set (all
-mask entries False) keeps it that way -- the evidence-free baseline arm of the
-kill-test is this same architecture with the evidence inputs zeroed, making
-the two arms parameter-identical.
+Both output projections are zero-initialized, so a fresh model computes
+exactly the plain PositionEvalModel, and an empty evidence set keeps it so.
+The kill test's evidence-free baseline arm is therefore this same
+architecture with zeroed evidence inputs, with identical parameter counts.
+
+The move proposal model's fusion stage is a separate design
+(scribblez.evidence_fusion).
 """
 
 from __future__ import annotations
@@ -26,10 +28,9 @@ from scribblez.position_eval.model import PositionEvalModel
 from scribblez.sim_evidence.sobs import NUM_EVIDENCE_SCALARS
 from scribblez.spatial_trunk import mean_max_pool
 
-# Per-candidate spatial evidence channels (sobs.evidence_features' layout):
-# the four footprint histograms (opp/self placement, each also conjoined with
-# that player winning) as per-slot board channels, plus the candidate's own
-# footprint one-hot block.
+# Per-candidate spatial channels in sobs.evidence_features' layout: the four
+# observed footprint histograms (opp/self next placement, and each conjoined
+# with that player winning), then the candidate's own footprint one-hot.
 NUM_EVIDENCE_PLANES = 5 * SLOTS_PER_CELL
 
 
@@ -55,8 +56,7 @@ class EvidenceEncoder(nn.Module):
             nn.Conv2d(d_planes, d_planes, 3, padding=1),
         )
         self.film = nn.Linear(d_token, 2 * d_planes)
-        # Zero-initialized: fusion starts as (and, with no evidence, stays) a
-        # no-op, so the conditioned model's initialization equals the baseline.
+        # Zero-initialized (see the module docstring).
         self.spatial_out = nn.Conv2d(d_planes, trunk_channels, 1)
         nn.init.zeros_(self.spatial_out.weight)
         nn.init.zeros_(self.spatial_out.bias)
@@ -71,9 +71,8 @@ class EvidenceEncoder(nn.Module):
         denom = mask.sum(dim=1).clamp(min=1).float()  # (B,)
 
         tokens = self.token_mlp(scalars)  # (B,K,d)
-        # TransformerEncoderLayer NaNs on rows whose key-padding mask is all
-        # True (no keys). Padding rows are zeroed out downstream anyway, so
-        # mark one key valid for empty sets.
+        # TransformerEncoderLayer returns NaN for a row with every key masked.
+        # Empty sets are zeroed downstream anyway, so unmask one key for them.
         attn_pad = ~mask
         attn_pad = attn_pad & ~(attn_pad.all(dim=1, keepdim=True))
         tokens = self.token_attn(tokens, src_key_padding_mask=attn_pad)
@@ -117,9 +116,7 @@ class EvidencePositionEvalModel(PositionEvalModel):
         ev_scalars: torch.Tensor,
         ev_mask: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        # The parent forward with the fusion stage spliced in between the trunk
-        # and the heads: the trunk output and value summary are conditioned on
-        # the evidence set, then the inherited head registry runs unchanged.
+        # The parent forward with the fusion stage between trunk and heads.
         x, s = self.trunk(input_spatial, input_scalar)
         ev_spatial, ev_pooled = self.evidence(ev_planes, ev_scalars, ev_mask)
         x = x + ev_spatial

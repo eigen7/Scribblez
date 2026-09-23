@@ -1,27 +1,28 @@
-"""Export a trained MoveSetEvalModel to ONNX (docs/roadmap.md, A4).
+"""Export a trained MoveSetEvalModel to the plain (evidence-free) ONNX graph.
 
-The exported graph is the P=1 specialization: one position's board inputs plus
-M candidate-move rows, with M the single dynamic axis ("moves"). At a decision
-point the agent holds exactly one position, and under P=1 the training
-forward's padded (P, maxK, C) query grid degenerates exactly -- the
-scatter/gather become a reshape, `move_pos_id` disappears, and the
-data-dependent maxK host sync never arises -- so the export carries none of
-the batching machinery, only the model.
+The graph is specialized to one position (P=1): its board inputs plus M
+candidate-move rows, with M the only dynamic axis ("moves"). The agent scores
+one position at a time, and at P=1 the training forward's padded (P, maxK, C)
+query grid collapses: the scatter/gather become a reshape, `move_pos_id`
+disappears, and there is no data-dependent maxK to sync on.
 
-Move-input dtypes match move_set_encoder.h's native buffers (int32
-letters/squares, uint8 masks) so the engine feeds them zero-copy; the
-int64/float casts the torch modules need are traced into the graph.
+Move inputs keep move_set_encoder.h's native dtypes (int32 letters/squares,
+uint8 masks) so the engine can feed its buffers without conversion; the casts
+the torch modules need are traced into the graph.
 
-Weight-map discipline (shared with the position exporter): `dynamo=False` and
-`do_constant_folding=False` keep every weight a plain named initializer for
-the TensorRT parser-refitter. Two modules are additionally rebuilt over the
-trained weights as the wrapper's OWN parameters, because their traced forms
-defeat the refitter: the cross-attention (nn.MultiheadAttention's packed
-in_proj surfaces in the trace as a bare Constant the refitter cannot map --
-caught by the refit gate probe) becomes three plain q/k/v Linears plus
-explicit attention math, and the head's concat-Linear is re-associated into
-attended + g sub-Linears, which also removes the per-move `g` Expand, the
-legacy tracer's main shape-baking hazard.
+TensorRT-refit rules, shared by every exporter here: `dynamo=False` and
+`do_constant_folding=False` keep every weight a plain named initializer the
+TensorRT refitter can map. Two modules are also rebuilt over the trained
+weights as the wrapper's own parameters, because their traced forms defeat
+the refitter or the tracer:
+
+  * nn.MultiheadAttention's packed in_proj traces as a bare Constant the
+    refitter cannot map, so it becomes plain q/k/v Linears plus explicit
+    attention math (split_mha_qkv, cross_attention_2d).
+  * The head's Linear over cat([attended, g]) is split into two Linears whose
+    outputs are summed (split_concat_linear). The per-move `g` is then never
+    Expanded across the dynamic M axis, which the TorchScript tracer would
+    otherwise bake into a fixed shape.
 """
 
 import warnings
@@ -56,21 +57,15 @@ MOVE_INPUT_NAMES = (
     "move_tile_mask",
     "move_scalars",
 )
-# The P=1 export deliberately omits the placement-plane readout: the engine
-# has no consumer for per-candidate planes until the evidence path lands
-# (roadmap item 3), which also decides how the cached-vs-per-iteration graph
-# split exposes them. Until then planes are a training-time distillation head.
+# No placement planes: this graph serves plain move ranking. The evidence path
+# gets its planes from the proposal cache graph (proposal_export.py).
 OUTPUT_NAMES = ("wld", "score_diff")
 
 
 class MoveSetEvalExportModel(nn.Module):
-    """The P=1 forward over a trained model's own submodules.
-
-    Board inputs are (1, ...) and the M move rows query the single position's
-    board tokens directly -- `MoveSetEvalModel.forward`'s grid construction
-    applied at P=1, where `rank == arange(M)` and the scatter is an unsqueeze.
-    Outputs are the training heads' (M, 3) WLD logits and (M, 2) score-diff
-    [mean, std>0], as a tuple so the exported output order is explicit.
+    """MoveSetEvalModel.forward at P=1, without evidence or planes, sharing
+    the trained model's submodules. Returns (wld (M, 3) logits, score_diff
+    (M, 2) [mean, std > 0]) as a tuple to fix the exported output order.
     """
 
     def __init__(self, model: MoveSetEvalModel):
@@ -78,23 +73,18 @@ class MoveSetEvalExportModel(nn.Module):
         self.trunk = model.trunk
         self.board_pos_emb = model.board_pos_emb
         self.move_encoder = model.move_encoder
-        # Cross-attention re-expressed as plain q/k/v Linears via split_mha_qkv
-        # (see onnx_export_util.py for why); out_proj is already a plain Linear.
+        # Rebuilt for the refitter (module docstring); out_proj is already plain.
         mha = model.cross_attn
         c = mha.embed_dim
         self.num_heads = mha.num_heads
         self.q_proj, self.k_proj, self.v_proj = split_mha_qkv(mha)
         self.attn_out = mha.out_proj
-        # Re-associate head[0] = Linear(cat([attended (C), g (3C)])) into an
-        # attended sub-Linear (keeps the bias) and a bias-free g sub-Linear, so
-        # both export as plain initializers and the per-move g never Expands.
+        # head[0] is Linear(cat([attended (C), g (3C)])); split at C.
         self.head_attended, self.head_g = split_concat_linear(model.head[0], c)
         self.head_out = model.head[2]
 
     def _cross_attention(self, e: torch.Tensor, board0: torch.Tensor) -> torch.Tensor:
-        """nn.MultiheadAttention's math (batch_first, no mask, eval mode) over
-        M move queries (e, (M, C)) and one position's 225 board tokens
-        (board0, (225, C)) -> (M, C)."""
+        """e (M, C) move queries over board0 (225, C) -> (M, C)."""
         return cross_attention_2d(
             self.q_proj, self.k_proj, self.v_proj, self.attn_out, self.num_heads, e, board0
         )
@@ -117,9 +107,7 @@ class MoveSetEvalExportModel(nn.Module):
         board = x.flatten(2).transpose(1, 2) + self.board_pos_emb  # (1, 225, C)
         g = torch.cat([mean_max_pool(x), s], dim=1)  # (1, 3C)
 
-        # The single position's board token at each tile's square, gated by
-        # is_play exactly as the training forward gates it (exchange tiles
-        # carry letters but no squares).
+        # is_play gate, as in MoveSetEvalModel.encode_moves.
         tile_board = board[0][squares]  # (M, T, C)
         tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)
         e = self.move_encoder(letters, move_blanks, tile_mask, move_scalars, tile_board)
@@ -143,17 +131,15 @@ def export_onnx(
     board_size: int = 15,
     opset: int = 17,
 ):
-    """Wrap `model` in the P=1 export forward, trace it with a dynamic "moves"
-    axis, and write the ONNX graph to `path` atomically, stamping the
-    input-encoding arm, `graph=move_set_eval`, and the move-encoding version
-    into its metadata_props (the version is what stops a checkpoint from
-    silently running against an encoder whose rows it was not trained on)."""
+    """Write the plain graph to `path` atomically. The metadata records the
+    input-encoding arm, `graph=move_set_eval` and the move-encoding version;
+    the engine checks the version so a model never runs against move rows it
+    was not trained on."""
     path = Path(path)
     was_training = model.training
-    model.eval()  # explicit, not via the wrapper's aliasing of the submodules
+    model.eval()
     device = next(model.parameters()).device
-    # .to(device) is a no-op for the shared trained modules and moves only the
-    # wrapper's own materialized sub-Linears, which construct on the CPU.
+    # Moves the wrapper's rebuilt Linears, which are constructed on the CPU.
     wrapper = MoveSetEvalExportModel(model).to(device)
     wrapper.eval()
     t, _, _, _ = move_encoding_dims()
@@ -170,8 +156,8 @@ def export_onnx(
     )
     input_names = ["input_spatial", "input_scalar", *MOVE_INPUT_NAMES]
 
-    # dynamo=False for the same reasons as the position exporter (see its
-    # export_onnx); DeprecationWarnings silenced likewise.
+    # The TorchScript exporter warns that it is deprecated; see
+    # position_eval/onnx_export.py for why it is still used.
     with atomic_output(path) as tmp_path, warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         torch.onnx.export(
@@ -200,13 +186,11 @@ def export_onnx(
 
 
 def legacy_checkpoint_condition(paths) -> dict:
-    """Recover the self-describing config fields for a checkpoint that predates
-    them: adopt the information-condition arm from the tag's .mset corpus (the
-    trainer's own path), then read the input widths off the session layout.
-    Raises FileNotFoundError when the tag holds no corpus to read the arm from.
-    The recovered move_encoding_version is 0 -- pre-exchange-fix rows -- which
-    an engine loader enforcing the version will rightly refuse to run against
-    a newer encoder."""
+    """Reconstruct the config fields a checkpoint lacks when it was saved
+    without them: the information condition from the tag's .mset corpus, the
+    input widths from the FFI session layout, and move_encoding_version 0
+    (which a version-checking engine loader refuses against a newer encoder).
+    Raises FileNotFoundError when the tag has no corpus."""
     mset_files = sorted(Path(paths.data_dir).glob("slogs/*.mset"))
     if not mset_files:
         raise FileNotFoundError(

@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Headless CLI over the position-evaluation train role.
+"""Run the position_eval trainer on a tag without the dashboard, for debugging.
 
-The master dashboard is the normal way to run training: create a position_eval
-task, attach generator workers and the singleton trainer, and the dashboard's
-generation scheduler fills generations from their staged chunks. This CLI
-invokes the same train-role runner (scribblez/position_eval/trainer.py)
-directly on a tag for debugging -- it consumes complete generations under the
-tag exactly like the dashboard-launched trainer, so something must be filling
-them (the dashboard server with generator workers attached to the same tag).
+Normally the dashboard runs training: create a position_eval task, attach
+generator workers and the singleton trainer, and the dashboard's generation
+scheduler assembles generations from the workers' staged chunks. This CLI calls
+the same train-role runner (scribblez/position_eval/trainer.py) directly. It
+trains on the tag's complete generations exactly as the dashboard's trainer
+does, so something must still be producing them: a dashboard server with
+generator workers attached to the same tag.
 
-The flags are generated from the workload's params dataclass, so this CLI
-cannot drift from the dashboard's task form.
+The workload flags are generated from its params dataclass, so they always
+match the dashboard's task form.
 
-The trainer delivers its metrics as records under the tag (records/), which
-the dashboard server ingests into dashboard.db as it runs; with no server up,
-run scripts/ingest_train_records.py afterwards.
+The trainer writes its metrics as records under the tag's records/ dir. A
+running dashboard server ingests them into dashboard.db; with none up, run
+scripts/ingest_train_records.py afterwards.
 
 Usage:
     ./py/scripts/position_eval/train.py -t mytag
@@ -34,7 +34,9 @@ from util.argparse_ext import ArgumentDefaultsHelpFormatter
 def main() -> int:
     spec = workloads.get("position_eval")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
-    p.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
+    p.add_argument(
+        "-t", "--tag", required=True, help="Tag to train; its directory holds all outputs."
+    )
     p.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
     spec.add_cli_arguments(p)
     args = p.parse_args()

@@ -168,9 +168,8 @@ def _chunks(tmp_path, count: int):
 
 
 def test_a_pull_takes_a_bounded_batch_and_reports_the_rest(tmp_path):
-    """The pull used to take everything waiting, so its cost grew with the
-    backlog it was draining -- and once one overran its timeout, none ever
-    finished again."""
+    """An unbounded pull's cost grows with the backlog it drains, and once one
+    overruns its timeout, none ever finishes again."""
     remote = _chunks(tmp_path, 40)
     local = tmp_path / "local"
     local.mkdir()

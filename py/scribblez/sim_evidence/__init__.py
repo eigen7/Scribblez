@@ -1,2 +1,3 @@
-"""Sim-evidence data path: .sobs parsing, evidence feature encoding, and the
-evidence-conditioned post-move model (docs/plans/sim_residual_feedback.md)."""
+"""Sim-evidence data path: .sobs and .slog readers, the hand-maintained
+position sets' trajectory sidecars, and the kill test's evidence-conditioned
+position evaluation model (docs/plans/sim_residual_feedback.md)."""

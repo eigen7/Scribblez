@@ -1,37 +1,28 @@
 """Training dataset for the move set evaluation model: .mset targets paired
-with pre-move inputs reconstructed by replay.
+with pre-move board inputs reconstructed by replay.
 
-Each position is identified by (game_index, turn_index) in a .slog file and
-carries, in a companion .mset sidecar, a sampled set of candidate moves with the
-teacher position evaluation model's readouts for each candidate's post-move state
-(scribblez.move_set_eval.targets). This dataset:
+A position is a (game_index, turn_index) in a .slog file. Its companion .mset
+sidecar holds a sampled set of candidate moves, each with the teacher's
+readouts for its post-move state (targets.py). The dataset holds those small
+records in memory for every labeled position, shuffles positions across all
+files each epoch, and rebuilds each position's pre-move board input on demand
+with decode_rows(post_move=False). This is the project's replay-reconstruction
+invariant (docs/architecture.md): inputs are recomputed from the replay,
+targets come from the sidecar.
 
-  * indexes every labeled position across a directory's .mset/.slog pairs and
-    holds the (small) candidate/target records in memory;
-  * shuffles at the position level across all files each epoch (not inside any
-    one file), per the replay-reconstruction pipeline
-    (docs/architecture.md);
-  * reconstructs each position's PRE-move board input on demand via
-    decode_rows(post_move=False) -- the standard invariant: inputs are recomputed
-    from the replay, targets come from the sidecar.
+A batch is P positions whose variable-length candidate sets are concatenated
+without padding into M moves. `move_pos_id` maps each move to its position row
+in [0, P), so the model attends each move to its own board and the loss is
+taken per move.
 
-A batch is P positions. The variable-length candidate sets are flattened across
-those positions with no padding: all M = sum of per-position candidate counts
-moves are concatenated, and a `move_pos_id` array maps each move back to its
-position row (0..P-1) so the model can attend each move to its own board and the
-loss can be taken per move.
+The opponent-leave block of the board input is a process-wide FFI session
+setting. Call adopt_information_condition before building a dataset so the
+inputs match the condition the corpus was labeled under.
 
-The board-input encoding arm (the opponent-leave block) is a property of the
-process-wide FFI session; the caller must configure it (via
-scribblez.ffi.set_opp_leave_input) to match the model being trained before
-iterating. The .mset open-leaves flag is surfaced as `open_leaves` so the
-caller can honor it.
-
-A dataset is stratified or full-sweep throughout, after the .mset header flag
-(`full_sweep`); mixing the two is refused. Swept positions are the held-out
-evaluation slice the A3 gate metrics need and are never trained on, so a shared
-store is split at file level before construction
-(scribblez.move_set_eval.targets.partition_full_sweep).
+A dataset is either all stratified or all full-sweep, per the .mset header
+flag. Swept positions are the held-out evaluation slice for eval.py's recall
+and regret metrics and are never trained on, so a store holding both is split
+by targets.partition_full_sweep before construction.
 """
 
 from __future__ import annotations
@@ -57,8 +48,8 @@ from .targets import (
 )
 
 # Batch key -> scribblez.ffi.cross_check_deltas key, each (M, max_cross_deltas):
-# the entries of a move's sparse cross-check change (axis, square, the letter
-# masks before and after) and the mask marking the real ones.
+# a move's sparse cross-check changes (axis, square, letter masks before and
+# after) plus the mask marking real entries.
 CROSS_DELTA_KEYS = {
     "move_cross_axes": "axes",
     "move_cross_squares": "squares",
@@ -69,14 +60,14 @@ CROSS_DELTA_KEYS = {
 
 
 def adopt_information_condition(mset_files: Iterable[str | Path]):
-    """Point the FFI session's opponent-leave input arm at the arm `mset_files`
-    were labeled under, before any of them is opened as a dataset.
+    """Set the FFI session's opponent-leave input to the information condition
+    `mset_files` were labeled under. Call before opening any of them as a
+    dataset.
 
-    The arm is baked into the process-wide session when it is created, and a
-    dataset creates it just by asking for the row layout -- so the condition has
-    to be read from a header (read_mset_flags), which touches no session, rather
-    than from a constructed dataset's `open_leaves`. One file answers for the
-    corpus: MsetDataset refuses a set that mixes header flags.
+    The setting is fixed when the process-wide session is created, and
+    constructing a dataset creates it (via row_layout). So the condition is
+    read from a raw header rather than a dataset's `open_leaves`. The first
+    file speaks for all of them, since MsetDataset refuses mixed flags.
     """
     first = next(iter(mset_files))
     set_opp_leave_input(bool(read_mset_flags(first) & MSET_FLAG_OPEN_LEAVES))
@@ -112,11 +103,10 @@ class _Position:
         self.turn_index = turn_index
         self.moves = moves  # (K,) MOVE_DTYPE
         self.targets = targets  # (K, 5) float32: [p_win, p_draw, p_loss, sd_mean, sd_std]
-        # Quantized teacher placement planes, held as stored (u8 cells + f4
-        # scales -- ~1/4 the memory of floats) and dequantized per batch; None
-        # on a plane-less (full-sweep) corpus.
-        self.plane_scales = plane_scales  # (K, 4) float32 | None
-        self.planes = planes  # (K, 4, PLANE_WIDTH) uint8 | None
+        # Kept quantized (about 1/4 the memory of floats) and dequantized per
+        # batch; None on a full-sweep corpus.
+        self.plane_scales = plane_scales  # (K, num_planes) float32 | None
+        self.planes = planes  # (K, num_planes, PLANE_WIDTH) uint8 | None
         self.num_legal_moves = num_legal_moves  # 0 unless swept (see targets.MsetPosition)
 
 
@@ -132,15 +122,15 @@ class MsetDataset:
         select: Callable[[Path], set[tuple[int, int]]] | None = None,
         with_cross_check_deltas: bool = False,
     ):
-        """Exactly one source: `data_dir` (directories whose complete pairs are
-        globbed) or `mset_files` (explicit .mset paths — the file-level-split
-        case, where train and held-out pairs share a directory). `select`,
-        given an .mset path, names the (game_index, turn_index) positions to
-        keep from it; the rest of the file is not held (the evidence trainer
-        reads only the trajectory positions' labels this way).
-        `with_cross_check_deltas` adds each move's cross-check change to the
-        batches (CROSS_DELTA_KEYS); no model consumes it yet, so it is off
-        unless asked for."""
+        """Pass exactly one source: `data_dir` (directories whose complete
+        pairs are globbed) or `mset_files` (explicit paths, for when train and
+        held-out pairs share a directory).
+
+        `select`, given a .mset path, names the (game_index, turn_index)
+        positions to keep from it; the evidence trainer uses it to hold only
+        its trajectory positions' labels. `with_cross_check_deltas` adds each
+        move's cross-check changes (CROSS_DELTA_KEYS) to the batches; only
+        cross_check_diagnostic reads them so far."""
         self._with_cross_check_deltas = with_cross_check_deltas
         assert (data_dir is None) != (mset_files is None), (
             "pass exactly one of data_dir or mset_files"
@@ -163,13 +153,11 @@ class MsetDataset:
         self._positions: list[_Position] = []
         self._files: list[Path] = []
         self.dropped_candidates = 0
-        # A corpus must come from one blessed teacher and one information
-        # condition; a mix would train against inconsistent targets. The
-        # full-sweep bit is held to the same rule for a different reason: swept
-        # files are evaluation-only, so a dataset that mixed them with
-        # stratified ones is exactly the leak file-level routing prevents
-        # (targets.partition_full_sweep is how a shared store is split). The
-        # first file sets both; absorb() holds every later one to them.
+        # A corpus must come from one teacher and one information condition, or
+        # it trains against inconsistent targets. The full-sweep bit must also
+        # agree, because swept files are evaluation-only and mixing them in
+        # would leak them into training. The first file sets these; absorb()
+        # holds every later file to them.
         self.model_hash: str | None = None
         self._flags: int | None = None
         self._record_planes: int | None = None
@@ -182,32 +170,28 @@ class MsetDataset:
         self._spatial_floats = int(np.prod(self._spatial_shape))
 
         # Where the mover's pre-move score differential sits in the decoded
-        # scalar input, so each candidate's resultant post-move differential
-        # feature can be formed from the same value the board trunk sees.
+        # scalar input. Each candidate's post-move differential feature is built
+        # from this same value, so it agrees with what the board trunk sees.
         self._sd_index, self._sd_scale = move_enc.score_diff_input_layout()
 
     @property
     def flags(self) -> int:
-        """The header flags every file in this corpus carries -- what a caller
-        holding a growing store checks a candidate file against before offering
-        it, since a dataset cannot mix them."""
+        """The header flags every file in this corpus carries. A caller
+        watching a growing store checks new files against them before
+        absorbing, since a dataset cannot mix flags."""
         return self._flags
 
     @property
     def files(self) -> list[Path]:
-        """The .mset files ingested so far, in ingest order -- what a caller
-        watching a growing store diffs against to find the new ones."""
+        """The .mset files ingested so far, in ingest order."""
         return list(self._files)
 
     def absorb(self, mset_files: Iterable[str | Path]) -> int:
-        """Ingest `mset_files` on top of what is already held, returning the
-        positions added.
+        """Ingest more .mset files, returning the number of positions added.
 
-        A .mset is immutable once delivered, so a store that is still being
-        written is absorbed by reading only its new files -- the cost of
-        keeping up with a running generator is the new data, not a re-read of
-        the corpus. Every file is held to the first one's teacher and header
-        flags.
+        A delivered .mset never changes, so keeping up with a running generator
+        only requires reading its new files. Every file must match the first
+        one's teacher hash, header flags and plane count.
         """
         before, dropped_before = len(self._positions), self.dropped_candidates
         for mset_path in (Path(f) for f in mset_files):
@@ -236,19 +220,18 @@ class MsetDataset:
         return len(self._positions) - before
 
     def _ingest_positions(self, positions, file_id: int, selected: set[tuple[int, int]] | None):
-        """Append one file's positions (those in `selected`, when given),
-        dropping candidates the teacher labeled non-finitely."""
+        """Append one file's positions (only those in `selected`, if given),
+        dropping candidates with non-finite teacher targets."""
         for pos in positions:
             if selected is not None and (pos.game_index, pos.turn_index) not in selected:
                 continue
             moves, targets = pos.moves, pos.targets
             plane_scales, planes = pos.plane_scales, pos.planes
-            # The generator stores the teacher's readouts verbatim, and the
-            # FP16 score-diff std head can overflow to inf on near-terminal
-            # post-move states. The generator now clamps the stored std
-            # (kSdStdCap in engine/include/training/move_set_eval_target_log.h),
-            # so this drop only fires on corpora generated before the clamp;
-            # it goes when those corpora are retired.
+            # The FP16 score-diff std head can overflow to inf on near-terminal
+            # post-move states. The generator clamps the stored std (kSdStdCap
+            # in move_set_eval_target_log.h), so this drop only matters for
+            # corpora generated without the clamp and can be removed once none
+            # remain.
             keep = np.isfinite(targets).all(axis=1)
             if not keep.all():
                 self.dropped_candidates += int((~keep).sum())
@@ -281,15 +264,14 @@ class MsetDataset:
     @property
     def full_sweep(self) -> bool:
         """Whether these positions are capped sweeps of their legal candidates
-        rather than stratified samples -- the evaluation-only slice the A3 gate
-        metrics are read on, never trained against."""
+        (the evaluation-only slice) rather than stratified samples."""
         return bool(self._flags & MSET_FLAG_FULL_SWEEP)
 
     @property
     def sweep_coverage(self) -> tuple[float, int]:
-        """(mean fraction of legal moves swept, positions the cap truncated),
-        over the positions carrying a legal-move count. (1.0, 0) when none do
-        -- a stratified corpus records no counts, and nothing was truncated."""
+        """(mean fraction of legal moves swept, number of positions the cap
+        truncated) over positions that record a legal-move count; (1.0, 0) for
+        a stratified corpus, which records none."""
         swept = [p for p in self._positions if p.num_legal_moves > 0]
         if not swept:
             return 1.0, 0
@@ -299,16 +281,14 @@ class MsetDataset:
 
     @property
     def has_planes(self) -> bool:
-        """Whether the records carry the teacher's quantized placement planes
-        (batches then include "target_planes"). Stratified training files do;
-        the full-sweep evaluation slice does not."""
+        """Whether batches include "target_planes". Stratified files carry
+        placement planes; full-sweep files do not."""
         return bool(self._record_planes)
 
     @property
     def open_leaves(self) -> bool:
-        """Whether the teacher labeled these positions under the open-leaves
-        information condition (the caller must then enable the opponent-leave
-        input block on the FFI session to match)."""
+        """Whether the corpus was labeled under the open-leaves information
+        condition (see adopt_information_condition)."""
         return bool(self._flags & MSET_FLAG_OPEN_LEAVES)
 
     @property
@@ -326,16 +306,13 @@ class MsetDataset:
         epoch_index: int = 0,
         max_candidates: int | None = None,
     ):
-        """Yield one epoch of batch dicts.
+        """Yield one epoch of batch dicts, positions shuffled deterministically
+        by seed + epoch_index.
 
-        Positions are shuffled globally (deterministically for a given
-        seed/epoch); each batch reconstructs its positions' board inputs and
-        flattens their candidate sets. `positions_per_batch` bounds the
-        positions in a batch and `max_candidates`, if given, the moves: a swept
-        position carries hundreds of candidates against a stratified one's ~15,
-        so over full-sweep positions the position count alone no longer bounds
-        what a batch costs (each candidate carries its own move activations and
-        attention weights on top of its position's board encoding).
+        `max_candidates`, if given, also caps the moves per batch. A swept
+        position has hundreds of candidates against a stratified one's ~15, and
+        each candidate carries its own activations, so the position count alone
+        does not bound a sweep batch's memory.
         """
         rng = np.random.default_rng(seed + epoch_index)
         order = rng.permutation(len(self._positions))
@@ -344,9 +321,9 @@ class MsetDataset:
 
     def _batches_of(self, order, positions_per_batch: int, max_candidates: int | None):
         """Split a position ordering into batches under both bounds. A position
-        whose candidate set alone exceeds `max_candidates` still forms a batch:
-        candidate sets are indivisible here, and the whole point of the sweep is
-        the positions with the most of them."""
+        whose candidate set alone exceeds `max_candidates` still gets a batch of
+        its own: candidate sets are indivisible, and the largest ones are what
+        the sweep is for."""
         chunk: list[int] = []
         candidates = 0
         for i in order:
@@ -366,8 +343,7 @@ class MsetDataset:
         spatial = np.empty((p, *self._spatial_shape), dtype=np.float32)
         scalar = np.empty((p, self._scalar_width), dtype=np.float32)
 
-        # Reconstruct board inputs one decode_rows call per source file (each
-        # call addresses a batch of positions in one .slog by identity).
+        # One decode_rows call per source .slog.
         by_file: dict[int, list[int]] = defaultdict(list)
         for local_p, pos in enumerate(batch):
             by_file[pos.file_id].append(local_p)
@@ -382,15 +358,12 @@ class MsetDataset:
                 spatial[j] = spatial_block[k]
                 scalar[j] = scalar_block[k]
 
-        # Flatten candidate sets across positions (no padding); pos_id maps each
-        # move back to its board row.
         all_moves = np.concatenate([pos.moves for pos in batch])
         all_targets = np.concatenate([pos.targets for pos in batch]).astype(np.float32)
         pos_id = np.concatenate(
             [np.full(len(pos.moves), local_p, dtype=np.int64) for local_p, pos in enumerate(batch)]
         )
-        # Each position's pre-move differential (points) read from the decoded
-        # score-diff scalar, expanded to one value per candidate move.
+        # Pre-move score differential in points, one per candidate.
         pre_diff_points = np.rint(scalar[:, self._sd_index] * self._sd_scale).astype(np.int32)
         move_pre_diffs = pre_diff_points[pos_id]
         enc = move_enc.encode_moves(all_moves, move_pre_diffs)
@@ -420,8 +393,8 @@ class MsetDataset:
         self, batch: list[_Position], by_file: dict[int, list[int]]
     ) -> dict[str, torch.Tensor]:
         """Each move's cross-check entries (scribblez.ffi.cross_check_deltas),
-        one replay call per source file like the board inputs, scattered back
-        into the batch's flattened move order."""
+        one replay call per source file, scattered into the batch's flattened
+        move order."""
         counts = np.array([len(pos.moves) for pos in batch], dtype=np.int64)
         starts = np.cumsum(counts) - counts
         out: dict[str, np.ndarray] = {}

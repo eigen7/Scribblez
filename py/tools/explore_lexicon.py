@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Inspect slices of a lexicon -- real or phony -- by pattern, length, or sample.
 
-Reads a ``.kwg`` (decoded to its word list) or a plain ``.txt`` (one word per
-line) and prints the words matching some filters, or a length histogram. Handy
-for eyeing how plausible a generated phony lexicon looks next to the real one.
+Reads a ``.kwg`` or a plain ``.txt`` (one word per line) and prints the words
+that pass the filters, or a length histogram of them. Handy for judging how
+plausible a generated phony lexicon looks next to the real one.
 
 Pattern syntax (anchored, case-insensitive): a letter matches itself, ``.``
 matches any one letter, ``*`` matches any run. So ``A..`` is every 3-letter word
@@ -66,15 +66,15 @@ def main() -> int:
     p.add_argument("lexicon", help="A .kwg or .txt lexicon.")
     p.add_argument("--pattern", action="append", default=[], help="Match pattern (repeatable; OR).")
     p.add_argument("--length", type=int, help="Keep only words of exactly this length.")
-    p.add_argument("--min-len", type=int)
-    p.add_argument("--max-len", type=int)
+    p.add_argument("--min-len", type=int, help="Keep only words at least this long.")
+    p.add_argument("--max-len", type=int, help="Keep only words at most this long.")
     p.add_argument("--by-length", action="store_true", help="Print a length histogram of matches.")
     p.add_argument(
-        "--sample", type=int, help="Print this many random matches instead of the first."
+        "--sample", type=int, help="Print this many random matches instead of the first --limit."
     )
     p.add_argument("--limit", type=int, default=50, help="Max words to print (0 = all).")
     p.add_argument("--count", action="store_true", help="Print only the match count.")
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--seed", type=int, default=0, help="RNG seed for --sample.")
     args = p.parse_args()
 
     matches = select(load_words(args.lexicon), args)

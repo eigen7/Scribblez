@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""The roadmap-item-3 TRT gate: prove the two move-proposal ONNX graphs parse,
-build, and REFIT correctly under TensorRT before the engine runtime is designed
-around them (the plan's front-loaded #1 risk).
+"""Check that the two move-proposal ONNX graphs parse, build and refit correctly
+under TensorRT, standalone in Python.
 
-The cache graph is close to the mset graph (already covered by trt_refit_probe),
-so the point here is the STEP graph: its fusion stage carries the pieces that
-have never been exported before -- the split self-attention MHA, the additive
-padding-bias softmaxes, the TransformerEncoderLayer LayerNorms + FFN, and the 4D
-`einsum` mixing the spatial features. A silently wrong refit of any of them, or
-an op TensorRT cannot build, would surface here rather than in the C++ runtime.
+The engine runs the move proposal model as two graphs (see
+scribblez/move_set_eval/proposal_export.py): a per-turn cache graph, close to
+the move set evaluation graph that trt_refit_probe.py covers, and a
+per-evidence-iteration step graph. The step graph's evidence-fusion stage holds
+the ops no other exported graph has: the split self-attention, the
+padding-bias softmaxes, the TransformerEncoderLayer LayerNorms and FFN, and the
+4D einsum over the spatial features. This probe catches a silently wrong refit
+of any of them, or an op TensorRT cannot build, on production-shape models.
 
-On the GPU, for EACH graph:
-  1. Export two random-init production-shape proposal models A and B.
-  2. Parse A and build a refittable FP32 engine with the dynamic-M profile the
-     C++ runtime will use (the step graph's evidence inputs are fixed-width, so
-     only move_enc / the move inputs ride M).
-  3. Refit that engine with B's weights; assert no weights go missing.
-  4. Run the refitted engine at several Ms and compare against ONNXRuntime on B
-     -- a wrong mapping makes the outputs A/B chimeras and the comparison fails.
+On the GPU, for each graph, it:
+  1. Exports two randomly initialized production-shape models, A and B.
+  2. Builds a refittable FP32 engine from A with the runtime's dynamic-M
+     profile. The step graph's evidence inputs are fixed-width, so only
+     move_enc varies with M there.
+  3. Refits the engine with B's weights and checks that none go missing.
+  4. Runs the refitted engine at several M and compares with onnxruntime on B.
+     A wrong mapping leaves an A/B hybrid whose outputs fail the comparison.
 
-Exit code 0 = gate passed.
+Exit code 0 means the probe passed.
 """
 
 import argparse
@@ -44,11 +45,12 @@ from scribblez.move_set_eval.targets import PLANE_NAMES
 MAX_MOVES = 4096
 OPT_MOVES = 512
 PROBE_MS = (1, 37, 512)
-# FP32 TRT vs FP32 ORT is kernel-order noise, not semantics; a wrong refit makes
-# the outputs A/B chimeras that differ by O(1) relative, far above either bound.
-# The scalar heads are small and bounded, so an absolute bound fits them; the
-# raw plane logits are unbounded (O(tens)) and sum over C*225 in a different
-# order than ORT, so they are judged by RELATIVE error against ORT's magnitude.
+# FP32 TensorRT and FP32 onnxruntime differ only by summation order, while a
+# wrong refit changes outputs by O(1) relative, far above either bound. The
+# scalar heads are small and bounded, so an absolute bound fits them. The raw
+# plane logits are unbounded (tens) and sum over C*225 terms in a different
+# order than onnxruntime, so they are judged by error relative to ORT's
+# magnitude.
 TOLERANCE = 2e-3
 PLANES_RTOL = 5e-2
 BOARD = 15
@@ -62,6 +64,8 @@ def _shapes():
 def _random_model(seed: int, spatial_planes: int, scalar_size: int) -> MoveSetEvalModel:
     torch.manual_seed(seed)
     model = MoveSetEvalModel(spatial_planes, scalar_size)  # production dims
+    # The fusion stage and proves-best head are zero-initialized; perturb them so
+    # a mis-refit of their weights changes the outputs.
     with torch.no_grad():
         for module in (model.evidence_fusion, model.proves_best):
             for p in module.parameters():
@@ -103,8 +107,7 @@ def _step_inputs(m: int, channels: int, seed: int) -> dict:
     }
 
 
-# One spec per graph: its output head names, its M-riding input names, and the
-# per-input dtypes -- everything _probe_graph needs without a family branch.
+# Input dtypes by name, shared by both graphs; unlisted inputs are float32.
 _INT32 = {"move_letters", "move_squares"}
 _UINT8 = {"move_blanks", "move_tile_mask", "ev_mask"}
 
@@ -118,8 +121,8 @@ def _dtype(name: str) -> torch.dtype:
 
 
 def _build_refittable(trt, onnx_path: Path, dyn_inputs: dict):
-    """Parse + build a kREFIT FP32 engine; `dyn_inputs` maps each M-riding input
-    name to its per-row width, for the (1 / OPT / MAX) profile."""
+    """Parse and build a kREFIT FP32 engine. `dyn_inputs` maps each input whose
+    first dim is M to its per-row width, for the (1, OPT, MAX) profile."""
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
     network = builder.create_network(0)
@@ -175,8 +178,9 @@ def _run_trt(engine, feeds: dict, outputs: dict, dyn_inputs: set) -> dict:
 
 
 def _probe_graph(trt, ort, name, export_a, export_b, make_inputs, out_shapes, dyn_widths):
-    """Build+refit+compare one graph. `out_shapes(m)` gives the output buffers;
-    `dyn_widths` maps M-riding input names to their widths."""
+    """Build, refit and compare one graph. `out_shapes(m)` gives the output
+    buffer shapes; `dyn_widths` maps each input whose first dim is M to its
+    width."""
     print(f"\n[{name}] two random-init exports")
     with tempfile.TemporaryDirectory(prefix=f"proposal_{name}_") as tmp:
         a, b = Path(tmp) / "a.onnx", Path(tmp) / "b.onnx"

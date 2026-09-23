@@ -1,10 +1,8 @@
-"""Training-epoch loop for the move set evaluation model.
+"""Training-epoch loop for the move set evaluation model, the counterpart of
+position_eval/train_loop.
 
-A sibling to position_eval/train_loop: one pass over the flattened candidate
-batches, moving each to the device, forward, combined-loss backward, optimizer
-step, and accumulating the per-head losses. The per-batch loss is a mean over
-that batch's candidate moves, so the epoch averages are weighted by candidate
-count (batches hold variable move totals).
+Batches hold varying numbers of candidate moves and each batch loss is a mean
+over its moves, so the epoch averages are weighted by candidate count.
 """
 
 from __future__ import annotations
@@ -17,8 +15,7 @@ import torch
 
 from .model import compute_loss
 
-# Per-head loss keys accumulated each epoch ("total" is the optimized
-# objective).
+# compute_loss keys averaged each epoch; "total" is the optimized objective.
 LOSS_KEYS = (
     "total",
     "wld",
@@ -28,7 +25,6 @@ LOSS_KEYS = (
     "planes",
 )
 
-# Tensors in the batch dict, split into board inputs, move inputs, and targets.
 _INPUT_KEYS = ("input_spatial", "input_scalar")
 _MOVE_KEYS = (
     "move_letters",
@@ -44,7 +40,7 @@ TARGET_KEYS = ("target_wld", "target_score_diff", "target_planes")
 
 @dataclass
 class LossConfig:
-    """Weight and Huber transition points for the combined pre-move loss."""
+    """compute_loss weights and Huber transition points."""
 
     lambda_sd: float
     huber_delta_mean: float
@@ -61,7 +57,6 @@ class LossConfig:
         )
 
     def loss(self, outputs: dict, targets: dict) -> dict:
-        """compute_loss under this config."""
         return compute_loss(
             outputs,
             targets,
@@ -90,9 +85,8 @@ def _forward_args(batch: dict, device):
 
 
 def batch_loss(model, batch: dict, device, loss_cfg: LossConfig) -> dict:
-    """The plain forward over one batch and its distillation loss (compute_loss'
-    dict): the step of this loop, and the distillation half of the evidence
-    trainer's joint (unfrozen-backbone) step."""
+    """Plain (evidence-free) forward and distillation loss for one batch,
+    as compute_loss' dict."""
     inputs, move_args, targets = _forward_args(batch, device)
     return loss_cfg.loss(model(*inputs, *move_args), targets)
 
@@ -109,15 +103,14 @@ def run_epoch(
     on_batch: Callable[[int, int, float, int], None] | None = None,
     grad_clip: float = 0.0,
 ) -> EpochResult:
-    """Run one training pass over `batches` (already ordered by the caller).
+    """Run one training pass over `batches`, in the order given.
 
-    rows_trained: starting cumulative candidate count; carried forward in the
-        result. lr_fn, if given, sets every param group's LR from that count
-        before each step (the rows-clock learning rate).
-    on_batch: optional progress callback (done_batches, candidates, elapsed_s,
-        rows_trained), invoked at most ~once per second.
-    grad_clip: when > 0, each step's gradient is clipped to this global norm
-        before the optimizer step.
+    rows_trained: the run's cumulative candidate count at the start; the
+        result carries it forward. lr_fn, if given, maps it to the learning
+        rate before each step.
+    on_batch: progress callback (done_batches, candidates, elapsed_s,
+        rows_trained), called at most about once per second.
+    grad_clip: global gradient-norm clip; 0 disables.
     """
     model.train()
     sums = {k: 0.0 for k in LOSS_KEYS}

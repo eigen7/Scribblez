@@ -1,29 +1,31 @@
-"""The generation scheduler: controller-side ingest, lifecycle, and pacing.
+"""The generation scheduler: turns staged self-play chunks into generations and
+paces the generators against the trainer.
 
-Generators are generation-agnostic -- they deliver whole .slog chunks into the
-tag's staging area (directly for local workers, via cloud sync for bucket-delivering ones). The
-scheduler, ticked per task by the dashboard server's reconcile loop, is the
-single writer of generation structure:
+Generators know nothing about generations. They deliver whole .slog chunks
+into the tag's staging area, directly for local workers and via cloud sync
+for bucket-delivering ones. The scheduler, ticked per task by the dashboard
+server's reconcile loop, is the single writer of generation structure:
 
-  1. It keeps exactly one generation open at a time, assigning staged chunks
-     by atomic rename and recording completion in the directory manifest when
-     the target game count is reached.
-  2. It paces the fleet: a generation is opened only while its index is within
-     `open_ahead` of the trainer's published cursor (train_state.json); when
-     nothing may be opened, the generate role is gated (parked) until the
-     trainer advances.
-  3. Committed counts are recomputed from .slog headers each tick rather than
-     tracked incrementally, so a crash between a rename and a manifest write
-     self-heals.
+  1. It keeps one generation open at a time, moving staged chunks into it by
+     atomic rename and marking it complete in its manifest once it holds the
+     target game count.
+  2. It opens a generation only while its index is within `open_ahead` of the
+     trainer's published cursor (train_state.json). When none may be opened,
+     it gates (parks) the generate role until the trainer advances.
+  3. It recomputes committed game counts from .slog headers every tick rather
+     than tracking them, so a crash between a rename and a manifest write heals
+     itself.
 
-An ingest ledger (one chunk name per line) makes assignment idempotent: a
-chunk re-appearing in staging (a cloud sync racing an ingest) is deleted, not
-assigned twice. The ledger line is written before the rename, so a crash
-between the two loses that one chunk rather than duplicating it.
+An ingest ledger (one chunk name per line) keeps a chunk from being assigned
+twice: a chunk that reappears in staging, because cloud sync downloaded it
+again before the bucket-side move landed, is deleted. The ledger line is
+written before the rename, so a crash between the two loses that chunk rather
+than duplicating it.
 
-Because assignment is one rename per whole file by a single process, every
-.slog belongs to exactly one generation and arrives whole -- the invariants
-the C++ loader and the reuse accounting rely on.
+Since a single process assigns each whole file with one rename, every .slog
+arrives whole and belongs to exactly one generation. The C++ loader relies on
+that, and so does the training design's bound on how often a game is reused
+(window x turns_per_game passes; docs/generational_training.md).
 """
 
 from __future__ import annotations
@@ -71,9 +73,9 @@ def tick_for_task(spec, task, hooks):
 
 
 def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn = _header_games):
-    """One scheduling pass: drain staging into fill targets as far as pacing
-    allows, updating manifests and the generate-role gate; then put any
-    complete generation not yet in the bucket there."""
+    """One scheduling pass: move staged chunks into generations as far as
+    pacing allows, updating manifests and the generate-role gate; then publish
+    any complete generation not yet in the bucket."""
     paths.staging_dir.mkdir(parents=True, exist_ok=True)
     _drain(paths, cfg, hooks, chunk_games)
     if hooks.publish:
@@ -81,10 +83,10 @@ def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn
 
 
 def _publish_complete(paths: TagPaths, hooks):
-    """Call the publish hook for every complete generation the manifest does
-    not yet record as published, marking each only once the call returned:
-    a failed upload is retried next tick, and a controller restart picks up
-    where it left off. Window eviction bounds what the scan can find."""
+    """Publish every complete generation whose manifest does not yet record
+    it, marking each only after the hook returns: a failed upload is retried
+    next tick, and a controller restart picks up where it left off. Window
+    eviction keeps the scan short."""
     for index in lifecycle.list_generation_indices(paths):
         gen_dir = paths.generation_dir(index)
         if lifecycle.is_complete(gen_dir) and not lifecycle.is_published(gen_dir):
@@ -136,9 +138,8 @@ def _append_ledger(paths: TagPaths, name: str):
 
 
 def _staged_chunks(paths: TagPaths) -> list[Path]:
-    """Staged chunks awaiting assignment, oldest name first. A chunk already in
-    the ingest ledger is a duplicate (a cloud sync re-downloaded it before the
-    bucket-side mirror move landed) and is deleted."""
+    """Staged chunks awaiting assignment, sorted by name. A chunk already in
+    the ledger is a duplicate (see the module docstring) and is deleted."""
     ledger = _read_ledger(paths)
     staged = []
     for f in sorted(paths.staging_dir.glob("*.slog")):
@@ -170,9 +171,9 @@ def _fill(
         try:
             games = chunk_games(chunk)
         except OSError:
-            # An unreadable header means a corrupt chunk (it can only have
-            # arrived whole, so this is damage, not an in-flight file); set it
-            # aside rather than poisoning the generation or rescanning forever.
+            # Chunks arrive whole, so an unreadable header means damage, not a
+            # file still in flight. Set it aside rather than poison the
+            # generation or retry it every tick.
             print(f"scheduler: quarantining unreadable chunk {chunk.name}")
             os.replace(chunk, chunk.with_suffix(".bad"))
             continue
@@ -194,8 +195,8 @@ def _fill(
 
 
 def _open_index(paths: TagPaths) -> int | None:
-    """The index of the open (status: generating) generation, or None. At most
-    one is open by construction; the lowest wins if a crash left several."""
+    """The index of the open (still generating) generation, or None. Only one
+    is ever opened at a time; if a crash left several, the lowest wins."""
     for i in lifecycle.list_generation_indices(paths):
         manifest = lifecycle.read_manifest(paths.generation_dir(i))
         if manifest is not None and manifest.get("status") == lifecycle.GENERATING:

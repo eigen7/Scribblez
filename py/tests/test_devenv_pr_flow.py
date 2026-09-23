@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# subtrees.* lives at the repo root, not on the py/-rooted PYTHONPATH.
+# subtrees.* lives at the repo root, outside the py/-rooted import path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from subtrees.devenv_utils import pr_flow  # noqa: E402

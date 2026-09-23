@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
-"""Generate training data by running self-play games.
+"""Generate a one-shot self-play corpus with a train/test split, without the dashboard.
+
+Runs the C++ play_game binary, logging .slog files into a position_eval tag's
+data/train/ and data/test/ dirs. The two splits are separate game batches, so
+no game straddles them. Nothing in the pipeline reads these dirs; the
+position_eval workload generates its corpus through the dashboard's generation
+scheduler instead. This is for ad-hoc corpora.
+
+Both seats play HastyBot by default, which reads its leave values from the
+Macondo checkout py/build.py clones. With --model they play the neural value
+agent instead; --temperature adds the exploration that argmax self-play lacks.
 
 Usage:
-    # HastyBot self-play (iteration 0):
     ./py/scripts/generate_data.py -t mytag -g 100000 --test-ratio 0.1
-
-    # Policy-iteration self-play with the neural value agent (temperature adds
-    # the exploration that pure argmax self-play lacks). --top-k 0 evaluates
-    # every legal play (most diverse); K > 0 keeps the top-K by HastyBot equity:
     ./py/scripts/generate_data.py -t mytag_iter1 -g 100000 \
         --model /path/to/model.onnx --top-k 10 --temperature 3.0
-
-This shells out to the C++ `play_game` binary with --binary-log-dir pointed at
-the tag's train/ and test/ data directories. The split is partitioned at the
-file level by running two independent game batches, so a game never straddles
-the train/test boundary. The test set is the frozen held-out split used for
-calibration and the monotonicity probe bank; it must never be trained on.
-
-Requires Macondo to be built.
 """
 
 import argparse
@@ -33,11 +30,9 @@ from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
 def build_player_spec(args) -> str:
-    """The `--player` value for both seats. With no --model: HastyBot, optionally
-    temperature-sampled over equity (--hasty-temperature > 0) for exploration.
-    With a --model: the neural value agent -- --top-k=0 evaluates every legal
-    play (most diverse), K > 0 keeps the top-K by HastyBot equity (faster); its
-    endgames go to the exact solver at the engine's default node budget."""
+    """The `--player` value for both seats: HastyBot with no --model, else the
+    neural value agent, whose endgames go to the exact solver at the engine's
+    default node budget."""
     if not args.model:
         return hasty_player_spec(args.hasty_temperature, args.hasty_top_k)
     return (
@@ -47,7 +42,7 @@ def build_player_spec(args) -> str:
 
 
 def count_positions(out_dir: Path) -> int:
-    """Sum the per-file position counts from .slog headers; -1 on failure."""
+    """Total positions across the .slog headers in out_dir; -1 on failure."""
     try:
         total = 0
         for f in sorted(out_dir.glob("*.slog")):
@@ -61,10 +56,10 @@ def count_positions(out_dir: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Generate HastyBot self-play data with a train/test split.",
+        description="Generate a self-play corpus with a train/test split.",
         formatter_class=ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
+    parser.add_argument("-t", "--tag", required=True, help="position_eval tag to write under.")
     parser.add_argument("-g", "--num-games", type=int, default=100000, help="Total games.")
     parser.add_argument(
         "-T",

@@ -111,16 +111,14 @@ def test_run_epoch_leaves_lr_untouched_without_lr_fn():
 
 
 def test_masked_placement_guards_the_target_class():
-    """The NaN guard force-keeps the target class, so the masked softmax-CE stays
-    finite even with an all-illegal side mask -- a data-dependent gap must degrade
-    to an unmasked target, never to -log(0). With every class but the target
-    illegal, a plays head has only the target legal so its CE is ~0; a leaky mask
-    (a large finite fill instead of -inf) would leave mass elsewhere and fail
-    that. A win head keeps its not-win (extra) class legal too, so its effective
-    mask holds exactly {target, extra} and its CE is finite but > 0 -- checked
-    both directly (the head's mask opens the extra slot) and through the loss (a
-    regression that dropped the win-head extra-opening would leave a target-only
-    mask and a 0 loss)."""
+    """The masked softmax-CE force-keeps the target class legal, so an all-illegal
+    side mask (a data gap) yields a finite loss instead of -log(0).
+
+    With only the target legal, a plays head's CE is ~0; a leaky mask (a large
+    finite fill instead of -inf) would leave mass elsewhere and fail that. A win
+    head also keeps its not-win (extra) class legal, so its CE is finite but
+    positive. That is checked on the head's mask directly and through the loss,
+    where dropping the extra class would show as a zero loss."""
     torch.manual_seed(0)
     model = _model()
     batch = _batch()
@@ -141,12 +139,11 @@ def test_masked_placement_guards_the_target_class():
 
 
 def test_compute_loss_matches_reference_math():
-    """Every head's loss and the weighted total must equal a hand-written
-    reference computed straight from the loss formulas, so a change to one head's
-    loss -- a swapped Huber delta, a flipped win/plays weight, a dropped detach --
-    can only move that head's number, never silently the whole objective. The
-    weights and Huber deltas below are all DISTINCT so that a mean-vs-std delta or
-    win-vs-plays weight mix-up actually changes the result the reference checks."""
+    """Every head's loss and the weighted total equal a hand-written reference,
+    so a slip in one head's loss (a swapped Huber delta, a flipped win/plays
+    weight, a dropped detach) shows in that head's number rather than silently
+    shifting the whole objective. The weights and Huber deltas below are all
+    distinct, so a mix-up between any two of them changes the result."""
     torch.manual_seed(0)
     model = _model()
     batch = _batch()
@@ -193,9 +190,9 @@ def test_compute_loss_matches_reference_math():
 
 
 def test_lambda_wld_scales_the_wld_term_out_of_the_total():
-    """lambda_wld weights the WLD loss in the total (the diagnostic that isolates
-    the other heads sets it to 0): total(lambda_wld=0) == total(lambda_wld=1)
-    minus exactly the wld term, and the per-head wld loss itself is unweighted."""
+    """lambda_wld weights the WLD loss in the total only: total(lambda_wld=0) is
+    total(lambda_wld=1) minus exactly the wld term, and the reported wld loss is
+    unweighted. Setting it to 0 isolates the other heads, for diagnostics."""
     torch.manual_seed(0)
     model = _model()
     batch = _batch()

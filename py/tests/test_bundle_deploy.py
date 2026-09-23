@@ -113,8 +113,8 @@ def test_deploy_always_builds_before_deciding(monkeypatch):
 
 
 def test_deploy_builds_and_ships_only_the_archs_asked_for(monkeypatch):
-    """A bundle is for the machines that will run it -- not every arch the
-    repo could target, which was minutes of building for nothing."""
+    """A bundle is built for the machines that will run it, not every arch the
+    repo could target: each extra arch costs minutes of building."""
     calls = _deploy_harness(monkeypatch, latest=None)
     manifest = bundles.deploy_current_tree(None, ["znver4", "znver3", "znver4"])
     assert calls["archs"] == [["znver3", "znver4"]]

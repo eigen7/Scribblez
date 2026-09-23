@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Ingest a tag's trainer records into its dashboard.db, once.
 
-The dashboard server does this on every reconcile pass for every training
-workload (generational/train_ingest.py), so it is never needed while the
-server runs. It is for a trainer driven headlessly (the scripts/<workload>/
-train.py CLIs) with no server up: the records sit under the tag's records/
-until something writes them, and this is that something.
+A trainer writes its metrics as record files under the tag's records/ dir, and
+the dashboard server ingests them on every reconcile pass
+(scribblez/generational/train_ingest.py). This script is for a trainer run
+headlessly through a scripts/<workload>/train.py CLI with no dashboard server
+up; without it, those records never reach dashboard.db.
 
 Usage:
     ./py/scripts/ingest_train_records.py -w position_eval -t mytag

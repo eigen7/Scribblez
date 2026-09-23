@@ -1,10 +1,10 @@
-"""Unit tests for the WorkerManager's slot lifecycle policy: slots are added
-paused and nothing launches at add time, local and ssh slots share one
-reconcile pass that contains each slot's failures, and a status poll observes
-without writing.
+"""Unit tests for the dashboard's WorkerManager: the slot lifecycle and its reconcile
+pass, registered and rented machines, bundle deployment and container replacement,
+output collection and backlog accounting, and the bucket legs of a task whose
+trainer runs off the controller.
 
 Every path that would launch compute or touch cloud credentials is patched to
-fail, so a regression back toward launch-on-add breaks loudly.
+fail, so anything that launches where it should not breaks loudly.
 """
 
 import asyncio
@@ -164,11 +164,10 @@ def test_reconcile_contains_per_slot_failures(manager, spec, task, monkeypatch):
 
 
 def test_a_pause_survives_a_pass_that_looked_at_the_task_before_it(manager, spec, task):
-    """The incident: "Pause all" landed in the handler's copy of the task,
-    and the reconcile pass -- which had loaded its own copy, reading
-    "running", before the click -- saved that copy back over it a step later.
-    The next pass then honored "running" with a fresh process. Both now hold the
-    one record, so the pass saves the pause it did not know about."""
+    """The failure mode: "Pause all" lands in the handler's copy of the task,
+    while the reconcile pass, having loaded its own copy before the click, saves
+    "running" back over it; the next pass then starts a fresh process. With one
+    shared record per task, the pass saves the pause it did not know about."""
     w = manager.add_local(spec, task, "generate", threads=1)
     w.desired_state = "running"
     tasks.save_task(spec, task)
@@ -220,9 +219,9 @@ def test_reconcile_skips_a_slot_removed_between_its_steps(manager, spec, task, m
 
 
 def test_redeploy_builds_off_the_blocking_thread_then_pins(manager, spec, task, monkeypatch):
-    """A build is minutes; on the blocking thread it held up every Pause and
-    Remove clicked meanwhile. The build runs on its own thread -- the blocking
-    one answers during it -- and only the repin is serialized."""
+    """A build takes minutes, and on the blocking thread it would hold up every
+    Pause and Remove clicked meanwhile. It runs on its own thread; only the
+    repin is serialized."""
     seen = {}
 
     def build(self, archs):
@@ -796,11 +795,10 @@ def test_first_remote_worker_builds_the_bundle_off_the_blocking_thread(
     manager, spec, task, monkeypatch
 ):
     """Deployment is not an operator step: the task pins a bundle the first
-    time a remote worker starts, and later workers join it. But the build is
-    minutes, and on the blocking thread it held every Pause and Remove clicked
-    meanwhile: the slot start that needs it kicks it off on the build thread
-    and waits, `starting` with the reason on its row, and a later pass pins
-    and starts. Waiting is not a failed attempt, so no backoff accrues."""
+    time a remote worker starts, and later workers join it. The build takes
+    minutes, so the slot start that needs it kicks it off on the build thread
+    and waits (`starting`, with the reason on its row); a later pass pins and
+    starts. Waiting is not a failed attempt, so no backoff accrues."""
     release = threading.Event()
     seen = {}
 
@@ -1131,9 +1129,9 @@ def test_observations_expire(manager, spec, task, monkeypatch):
 
 
 def test_a_stopped_container_reports_why(manager, spec, task, monkeypatch):
-    """A worker that cannot start (a bundle its image cannot load, say) used
-    to read as a bare "exited" flickering back to "running" -- the reason was
-    only in `docker logs` on the machine."""
+    """A worker that cannot start (say, a bundle its image cannot load) shows
+    why on its row. Otherwise it reads as a bare "exited" flickering back to
+    "running", with the reason only in `docker logs` on the machine."""
     monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     monkeypatch.setattr(_FakeSshMachine, "state", "stopped")
     monkeypatch.setattr(_FakeSshMachine, "exit_reason", "exit 1: GLIBCXX_3.4.35 not found")
@@ -1261,7 +1259,7 @@ def test_a_drained_container_on_an_old_bundle_is_stopped_so_it_can_be_replaced(
     manager, spec, task, monkeypatch
 ):
     """Replacement only acts on a container that is down, and draining one
-    leaves it running -- so without this the slot ran on the old bundle
+    leaves it running -- so without this the slot would run on the old bundle
     forever, which is what pinning a task to a bundle exists to prevent."""
     w = _stopped_ssh_slot(manager, spec, task, monkeypatch, slot_bundle="b1", task_bundle="b2")
     w.undelivered = 0
@@ -1556,8 +1554,7 @@ def test_a_crashlooping_container_is_restarted_not_destroyed(manager, spec, task
     nothing can collect from it and nothing can measure what it holds.
     Recovering the slot means discarding that, which is the operator's call --
     the workers table shows the reason it is down and Remove says what would
-    go. An automatic replacement here would be this PR's own bug, wearing the
-    disguise of a repair."""
+    go. An automatic replacement would silently throw that backlog away."""
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _fail)
     for bundle in ("b1", "b2"):  # its own bundle, and one the task moved past
         w = _stopped_ssh_slot(
@@ -1576,8 +1573,8 @@ def test_a_crashlooping_container_is_restarted_not_destroyed(manager, spec, task
 def test_an_unreachable_machine_gives_up_a_recorded_zero(manager, spec, task, monkeypatch):
     """The count says the container was empty when someone last looked. A
     machine off the network for hours has a worker that went on filling it the
-    whole time, and believing the old zero would authorise sweeping -- in one
-    unbounded copy -- exactly the backlog this PR exists to bound."""
+    whole time. Believing the stale zero would authorise sweeping that whole
+    backlog in one unbounded copy."""
     monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     monkeypatch.setattr(_FakeSshMachine, "state", "unreachable")
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
@@ -1692,8 +1689,8 @@ class _FakeWatcher:
 
 def _all_ssh_task(tag="t"):
     """A position_eval task with an ssh generator and an ssh trainer and no
-    cloud slot: the shape a rented machine hosts (docs/plans/cloud_machines.md),
-    and one the bucket legs used to read as having nothing to do."""
+    cloud slot: the shape a rented machine hosts (docs/plans/cloud_machines.md).
+    The bucket legs must not read it as having nothing to do."""
     task = tasks.TaskRecord(workload="position_eval", tag=tag, params={}, created_at=0.0)
     for wid, role in (("g", "generate"), ("tr", "train")):
         task.workers.append(

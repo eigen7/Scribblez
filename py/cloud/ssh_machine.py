@@ -1,26 +1,21 @@
-"""Docker container control on an operator-owned machine, over SSH.
+"""Docker container control on a remote machine, over ssh.
 
 Backs the dashboard's "ssh" worker slots: each slot is one container of the
-worker image on a machine the operator owns (a spare laptop on the LAN, a home
-server), started/stopped/probed here. The host string is handed to `ssh`
-verbatim, so "user@host" and ~/.ssh/config aliases both work; key-based auth
-must already be set up (BatchMode forbids prompts, so a missing key fails fast
-instead of hanging the dashboard).
+worker image on either a machine the operator owns (a spare laptop, a home
+server) or one the dashboard rented (cloud/providers/). The host string goes
+to `ssh` verbatim, so "user@host" and ~/.ssh/config aliases both work.
+Key-based auth must already work: BatchMode forbids prompts, so a missing key
+fails fast instead of hanging the dashboard.
 
-An unreachable machine is a normal condition (powered off, lid closed), not an
-error: container_state() reports it as the "unreachable" probe state and the
-caller decides what to do. Mutating calls raise SshMachineError.
+An unreachable machine (powered off, lid closed) is a normal condition, not an
+error: probes report it as "unreachable" and the caller decides what to do.
+Mutating calls raise SshMachineError.
 
-Results come back the same way control goes out -- over this ssh connection,
-read out of the container with docker exec (see read_from_container). A worker
-on an operator's own machine therefore needs no bucket and no inbound network
-path to the controller.
-
-Stopping is not the only way to idle a container: pause/unpause suspend and
-resume its processes in place, keeping the unpacked bundle and the in-flight
-work. That is what the dashboard uses for a scheduler gate, which parks a
-worker many times an hour (docker stop, then a start that re-runs the image's
-bootstrap, costs a minute of every cycle and discards the chunk in flight).
+Pausing a container (pause_container) suspends its processes in place,
+keeping the unpacked bundle and the work in flight. The dashboard's scheduler
+gates use it because they park workers many times an hour, and a stop/start
+cycle would re-run the image's bootstrap (about a minute) and discard the
+chunk in flight each time.
 """
 
 import shlex
@@ -28,9 +23,9 @@ import subprocess
 from pathlib import Path
 from typing import IO
 
-# ConnectTimeout bounds how long an unreachable host can stall a probe;
+# ConnectTimeout bounds how long an unreachable host can stall a probe.
 # ControlMaster/ControlPersist multiplex every call onto one shared connection,
-# so the dashboard's frequent status probes cost a round-trip, not a handshake.
+# so the dashboard's frequent probes cost a round trip, not a handshake.
 _SSH_OPTIONS = [
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=5",
@@ -42,34 +37,32 @@ _SSH_OPTIONS = [
 # ssh(1) reserves exit status 255 for its own failures (unreachable host, auth
 # refused); anything else is the remote command's own status.
 _SSH_FAILED = 255
-# probe()'s own status for "the readiness marker is not there yet".
+# probe()'s exit status for "the readiness marker is not there yet".
 _NOT_READY = 3
 
 _PROBE_TIMEOUT = 15
-# Long enough for `docker stop`'s in-container SIGTERM grace (below) plus the
-# worker's final uploads.
+# Covers `docker stop`'s 60 s SIGTERM grace (stop_container) with room to
+# spare.
 _MUTATE_TIMEOUT = 90
 
 # A first pull of the worker image moves a gigabyte or so of NVIDIA runtime
 # over a home connection.
 _PULL_TIMEOUT = 1800
 
-# How `docker cp` says the path is not in the container, which is a legitimate
-# empty answer rather than a failure. Two spellings because the message was
-# reworded: the first is what Docker 29 emits (checked against the fleet), the
-# second what older versions did. Matching too narrowly here would turn "this
-# worker produced nothing" into an error that blocks its replacement forever.
+# How `docker cp` reports a path the container lacks: a legitimate empty
+# answer, not a failure. Docker 29 emits the first form, older versions the
+# second. Missing a spelling would turn "this worker produced nothing" into an
+# error that blocks the container's replacement indefinitely.
 _PATH_NOT_IN_CONTAINER = ("Could not find the file", "No such container:path")
 
-# Sending a file into a container. Long because what goes this way is a model
-# (tens of megabytes) over a home network, and a push that gives up leaves the
-# slot with nothing to work on until the next pass tries again.
+# Sending a file into a container: a model of tens of megabytes, possibly over
+# a home network. A push that gives up leaves the slot idle until the next
+# pass retries, so the limit is generous.
 _WRITE_TIMEOUT = 600
 
-# Reading a container's output directory out of it. Generous because it is the
-# last look at a container about to be destroyed and there is no way to ask how
-# much there is first -- and because failing means the replacement is cancelled
-# and the whole copy is repeated next pass.
+# Copying a stopped container's output out before it is destroyed. Generous
+# because the size cannot be asked first, and a failure cancels the
+# replacement and repeats the whole copy next pass.
 _COPY_TIMEOUT = 1800
 
 
@@ -78,18 +71,17 @@ class SshMachineError(Exception):
 
 
 def classify_probe(returncode: int, stdout: str, stderr: str) -> str:
-    """Map a `docker inspect -f {{.State.Status}}` result onto the probe
-    states: "running" | "paused" | "stopped" | "missing" | "unreachable". Only
-    a definite "no such object" counts as missing; any other failure (ssh
+    """Map a `docker inspect -f {{.State.Status}}` result to a probe state:
+    "running" | "paused" | "stopped" | "missing" | "unreachable". Only a
+    definite "no such object" counts as missing. Any other failure (ssh
     itself, a down docker daemon) is "unreachable", so the caller never
     recreates a container it merely could not see.
 
-    The match is case-insensitive because Docker reworded the phrasing: 28 and
-    earlier said "Error: No such object", 29 says "error: no such object". A
-    capitalized-only check silently reclassified every missing container as
-    unreachable on Docker 29 -- and an unreachable slot is never removed
-    (removal refuses it) while it poisons the host's shared reachability
-    cache, starving every other slot on that host."""
+    The match is case-insensitive because Docker 28 prints "Error: No such
+    object" and Docker 29 "error: no such object". Misreading a missing
+    container as unreachable is costly: removal refuses an unreachable slot,
+    and the host's shared reachability cache then stalls every other slot on
+    that host."""
     if returncode != 0:
         if returncode != _SSH_FAILED and "no such object" in stderr.lower():
             return "missing"
@@ -101,9 +93,8 @@ def classify_probe(returncode: int, stdout: str, stderr: str) -> str:
 
 
 def env_file(env: dict[str, str]) -> str:
-    """`env` in docker --env-file format. The format is line-based with no
-    quoting, so a newline inside a value would silently truncate it -- refuse
-    rather than corrupt."""
+    """`env` in docker --env-file format. The format has no quoting, so a
+    value containing a newline is refused rather than silently truncated."""
     assert not any("\n" in v for v in env.values()), "env values must not contain newlines"
     return "".join(f"{k}={v}\n" for k, v in env.items())
 
@@ -112,18 +103,18 @@ class SshMachine:
     def __init__(
         self, host: str, identity_file: str | None = None, known_hosts_file: str | None = None
     ):
-        """`host` goes to ssh verbatim. A machine the dashboard rented has its
-        own key and its own known_hosts file (its host key is unknown until
-        first contact, and providers reuse addresses, so the global file would
-        be wrong twice over); an operator's own machine leaves both None and
-        uses the container's identity and known_hosts as ever."""
+        """`host` goes to ssh verbatim. A rented machine passes its own key
+        and known_hosts file: its host key is unknown until first contact, and
+        providers reuse addresses, so entries in the shared file would go
+        stale. An operator's own machine leaves both None and uses the dev
+        container's ssh defaults."""
         self.host = host
         self.identity_file = identity_file
         self.known_hosts_file = known_hosts_file
 
     def argv(self, command: list[str]) -> list[str]:
-        """The local ssh invocation for `command` on the machine. The remote
-        side runs a shell, so each argument is quoted for it."""
+        """The local ssh argv that runs `command` on the machine. ssh hands
+        the remote side one shell string, so each argument is quoted."""
         remote = " ".join(shlex.quote(a) for a in command)
         options = list(_SSH_OPTIONS)
         if self.identity_file:
@@ -137,11 +128,13 @@ class SshMachine:
 
     def probe(self, ready_file: str | None = None) -> str:
         """Whether the machine can host containers right now: "up" (ssh
-        answers and Docker serves), "no docker" (ssh answers, Docker does not
-        -- not installed, or the user is not in the docker group), or
-        "unreachable". With `ready_file`, the marker a rented machine's
-        first-boot script writes last (after pulling the worker images): its
-        absence is "preparing" -- sshd is up well before that script is done.
+        answers and Docker serves), "no docker" (ssh answers but Docker does
+        not: not installed, or the user is not in the docker group), or
+        "unreachable".
+
+        A rented machine passes `ready_file`, which its first-boot script
+        writes after pulling the worker images. sshd comes up well before
+        that, so until the file exists the answer is "preparing".
         """
         if ready_file is None:
             command = ["docker", "info", "--format", "{{.ServerVersion}}"]
@@ -172,17 +165,16 @@ class SshMachine:
             return subprocess.CompletedProcess(command, _SSH_FAILED, "", "ssh timed out")
 
     def exec_in_container(self, name: str, command: list[str]):
-        """Run `command` inside container `name`. Raises SshMachineError on
-        failure, like every other mutating call."""
+        """Run `command` inside container `name`; raises SshMachineError on
+        failure."""
         self._mutate(["docker", "exec", name, *command])
 
     def _exec(
         self, argv: list[str], *, timeout: int, doing: str, stdin: IO[bytes] | None = None
     ) -> bytes:
-        """Run one `docker exec` and return its stdout as bytes. Binary
-        throughout: what these calls carry is a tar stream or a model, which
-        text decoding would corrupt. `doing` names the operation in the error
-        a timeout raises."""
+        """Run one remote command and return its stdout. Binary throughout,
+        since it carries tar streams and models. `doing` describes the
+        operation in the timeout error."""
         try:
             res = subprocess.run(self.argv(argv), stdin=stdin, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -192,8 +184,8 @@ class SshMachine:
         return res.stdout
 
     def read_from_container(self, name: str, command: list[str]) -> bytes:
-        """Run `command` inside container `name` and return its stdout -- how
-        results are read out of a worker (a tar stream)."""
+        """Run `command` inside container `name` and return its stdout; how
+        cloud/ssh_transfer.py reads results out of a worker."""
         return self._exec(
             ["docker", "exec", name, *command],
             timeout=_MUTATE_TIMEOUT,
@@ -201,11 +193,10 @@ class SshMachine:
         )
 
     def write_to_container(self, name: str, command: list[str], src: Path):
-        """Run `command` inside container `name` with the bytes of `src` on its
-        stdin -- how a file goes the other way, from the controller into a
-        worker (cloud/ssh_transfer.py's push). Streamed from the file rather
-        than read into memory: what travels this way is a model, tens of
-        megabytes of it, and the dashboard holds no copy of it."""
+        """Run `command` inside container `name` with `src` streamed to its
+        stdin; how cloud/ssh_transfer.py pushes a file into a worker. Streamed
+        rather than loaded, since it is typically a model of tens of
+        megabytes."""
         with open(src, "rb") as f:
             self._exec(
                 ["docker", "exec", "-i", name, *command],
@@ -228,11 +219,10 @@ class SshMachine:
         return classify_probe(res.returncode, res.stdout, res.stderr)
 
     def detect_arch(self, image: str) -> str:
-        """The machine's CPU microarchitecture as a GCC -march value, asked of
-        the compiler inside the worker `image` -- the same question the
-        container's bootstrap asks at start-up, so the bundle built for the
-        answer is the one it will pick. The image must already be on the
-        machine (pull_image)."""
+        """The machine's CPU microarchitecture as a GCC -march value. It asks
+        the compiler inside the worker `image`, as the container's bootstrap
+        does at startup, so the answer names the tarball the bootstrap will
+        pick. The image must already be on the machine (pull_image)."""
         res = self._run(
             ["docker", "run", "--rm", "--pull=never", "--entrypoint", "g++", image,
              "-march=native", "-Q", "--help=target"],
@@ -248,39 +238,32 @@ class SshMachine:
 
     def pull_image(self, image: str):
         """Fetch the newest `image` onto the machine. Containers start with
-        --pull=never, so this is where a machine picks up a rebuilt worker
-        image -- otherwise every machine would need a hand-run `docker pull`
-        after every image change. A private repo needs `docker login` here
-        (a one-time setup step), and this reports its failure as any other."""
+        --pull=never, so this is how a machine picks up a rebuilt worker
+        image; the dashboard calls it before creating each container. The
+        repo is private, so the machine needs a one-time `docker login` (a
+        rented machine's first-boot script does it)."""
         res = self._run(["docker", "pull", image], timeout=_PULL_TIMEOUT)
         if res.returncode != 0:
             raise SshMachineError(f"{self.host}: pulling {image} failed: {res.stderr.strip()}")
 
     def copy_from_container(self, name: str, path: str, dest: Path) -> bool:
-        """`path` out of container `name`, as a tar stream whose member names
-        are relative to its parent. Unlike exec, this works on a container that
-        is stopped -- the only way to read what a worker flushed on its way
-        down. A path the container does not have is empty, not an error: a
-        worker that died before producing anything never made its output
-        directory, and that must not be mistaken for a failure to read it.
+        """Copy `path` out of container `name` into `dest` as a tar whose
+        member names are relative to the path's parent. Returns whether
+        anything was written. Unlike exec, this works on a stopped container,
+        which makes it the way to read what a worker flushed as it stopped.
 
-        Anything else raises, which is the safe direction: the caller sweeps a
-        container in order to destroy it, so a read that failed for a reason
-        nobody recognised must stop that, not look like "nothing there".
+        A path the container lacks returns False: a worker that died before
+        producing anything never created its output directory. Any other
+        failure raises. The caller is sweeping the container in order to
+        destroy it, so an unrecognized failure must stop that rather than
+        read as "nothing there".
 
-        The stream is written to `dest` rather than returned, because its size
-        is the container's whole output directory and holding that in the
-        dashboard's memory is not something this can promise about a machine it
-        does not control.
-
-        Uncompressed, unlike a collection: piping through gzip would put the
-        pipeline's exit status in gzip's hands rather than docker's, and gzip
-        exits happily on the empty stream a failed `docker cp` hands it -- so a
-        real error would arrive here as "nothing there", which is the one
-        answer that lets the caller destroy the container. `set -o pipefail`
-        would settle it, but the fleet's /bin/sh is dash, which has no such
-        option. What is not compressed is one worker's dying gasp; see
-        ssh_transfer.sweep_stopped. Returns whether anything was written."""
+        The stream goes to a file rather than memory because its size is
+        whatever the remote container holds. It is not compressed: piping
+        through gzip would make the pipeline's exit status gzip's, and gzip
+        succeeds on the empty stream a failed `docker cp` produces, turning an
+        error into "nothing there". `set -o pipefail` would fix that, but the
+        machines' /bin/sh is dash, which lacks it."""
         with open(dest, "wb") as out:
             try:
                 res = subprocess.run(
@@ -301,19 +284,16 @@ class SshMachine:
         raise SshMachineError(f"{self.host}: {stderr.strip()}")
 
     def run_container(self, name: str, image: str, env: dict[str, str], *, gpus: bool = False):
-        """Create + start container `name` from `image`. The environment
-        (which includes bucket credentials) travels on the ssh pipe as an
-        --env-file rather than on the remote command line, where it would be
-        visible in the machine's process list. --pull=never keeps a missing
-        image an instant, actionable error instead of a multi-minute pull
-        blocking the dashboard: pulling is a one-time manual setup step (the
-        image repo is private, so it needs a docker login anyway).
+        """Create and start container `name` from `image`. The environment,
+        which includes bucket credentials, travels over the ssh pipe as an
+        --env-file rather than on the remote command line, where the machine's
+        process list would show it. --pull=never makes a missing image an
+        immediate error rather than a long pull under the dashboard; pulling
+        is pull_image's job.
 
-        `gpus` gives the container the machine's GPUs, for a role that runs
-        one (match eval plays a neural agent). It needs the NVIDIA container
-        toolkit installed there; without it `docker run` fails immediately and
-        says so, which is the honest answer for a machine that cannot serve
-        the role."""
+        `gpus` gives the container the machine's GPUs, for roles that use one
+        (e.g. match eval's neural agents). Without the NVIDIA container toolkit
+        on the machine, `docker run` fails immediately with a clear error."""
         self._mutate(
             [
                 "docker",
@@ -331,10 +311,10 @@ class SshMachine:
         )
 
     def container_exit(self, name: str) -> str:
-        """Why container `name` is not running: its exit code and the last
-        thing it said, as one line. Empty when the container is gone or the
-        machine cannot be reached -- a slot's failure reason is a nicety, and
-        never worth failing a status pass over."""
+        """Why container `name` is not running: its exit code and last log
+        line, as one line. Empty when the container is gone or the machine is
+        unreachable; a failure reason is informational and never worth
+        failing a status pass over."""
         res = self._run(
             [
                 "sh",
@@ -350,17 +330,16 @@ class SshMachine:
         self._mutate(["docker", "start", name])
 
     def pause_container(self, name: str):
-        """Suspend the container's processes (SIGSTOP-like, via the freezer
-        cgroup). Nothing is lost and nothing restarts on resume -- the point of
-        using this for a gate rather than stop/start."""
+        """Freeze the container's processes (via the freezer cgroup). Nothing
+        is lost, and unpause resumes them where they were."""
         self._mutate(["docker", "pause", name])
 
     def unpause_container(self, name: str):
         self._mutate(["docker", "unpause", name])
 
     def stop_container(self, name: str):
-        # SIGTERM with a grace period long enough to flush completed output
-        # (the worker loses at most its in-flight cycle), then SIGKILL.
+        # SIGTERM, then SIGKILL after 60 s: long enough for the worker to flush
+        # completed output.
         self._mutate(["docker", "stop", "-t", "60", name])
 
     def remove_container(self, name: str):

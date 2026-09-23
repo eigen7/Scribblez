@@ -1,15 +1,17 @@
-"""Ordered longest-word generation from a rack, with a forward-DAWG constraint.
+"""Rack-best model: generate a longest word from a rack, letter by letter.
 
-A decoder-only transformer reads the 7 rack tiles then generates a word letter by
-letter. At each step the frozen forward DAWG masks the logits to valid word
-prefixes and the rack masks them to available tiles, so every complete decode is
-automatically a valid rack-word -- the network only has to learn to reach the
-maximal length. With the DAWG constraint off, the decoder must have learned the
-lexicon itself and produces non-words on held-out racks (the tool-use contrast).
+A decoder-only transformer reads the 7 rack tiles, then emits a word. At every
+step the rack masks out letters it has run out of, and the frozen forward DAWG
+masks out letters that leave no valid word prefix and allows END only after a
+complete word. Every decode that reaches END is therefore a real word from the
+rack, and the network only has to learn to make it as long as possible. With
+the DAWG mask off, the network must learn the lexicon itself; comparing the two
+is the tool-use experiment (docs/rack_best_experiments.md).
 
-Token scheme. Input embedding (size 28): 0..25 letters, 26 = BOS, 27 = PAD.
-Output logits (size 27): 0..25 letters, 26 = END. Target padding uses 27, the
-cross-entropy ignore index.
+Tokens:
+  input (28):   0..25 letters, 26 = BOS, 27 = PAD
+  output (27):  0..25 letters, 26 = END
+  targets pad with 27, the cross-entropy ignore index
 """
 
 import numpy as np
@@ -21,14 +23,13 @@ from scribblez.lexical_tool.compiler import CompiledLexicon
 
 RACK_SIZE = 7
 MAX_WORD = 7
-MAX_GEN = (
-    MAX_WORD + 1
-)  # generated positions: BOS + up to 7 letters, predicting up to 7 letters + END
+# Generated positions: input BOS + up to 7 letters, predicting up to 7 letters + END.
+MAX_GEN = MAX_WORD + 1
 N_LETTERS = 26
-END = 26  # output symbol
-BOS = 26  # input token
-PAD = 27  # input token / target ignore index
-N_OUT = 27  # output symbols: 26 letters + END
+END = 26  # output
+BOS = 26  # input
+PAD = 27  # input, and target ignore index
+N_OUT = 27
 
 
 def encode_racks(racks: list[tuple]) -> torch.Tensor:
@@ -40,8 +41,8 @@ def encode_racks(racks: list[tuple]) -> torch.Tensor:
 
 
 def encode_targets(words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Teacher-forcing tensors: gen input ``[BOS, l0, l1, ...]`` and target
-    ``[l0, l1, ..., END]``, both padded to MAX_GEN. Returns ``(gen_in, target)``."""
+    """Teacher-forcing tensors (gen_in, target): ``[BOS, l0, l1, ...]`` and
+    ``[l0, l1, ..., END]``, both padded to MAX_GEN."""
     gen_in = np.full((len(words), MAX_GEN), PAD, dtype=np.int64)
     target = np.full((len(words), MAX_GEN), PAD, dtype=np.int64)
     for i, word in enumerate(words):
@@ -54,7 +55,7 @@ def encode_targets(words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 class RackWordModel(nn.Module):
-    """Decoder-only transformer + optional forward-DAWG constraint."""
+    """Decoder-only transformer with an optional forward-DAWG constraint."""
 
     def __init__(
         self,
@@ -93,15 +94,15 @@ class RackWordModel(nn.Module):
         self.register_buffer("types", types)
 
     def logits(self, rack: torch.Tensor, gen_in: torch.Tensor) -> torch.Tensor:
-        """rack (B,7), gen_in (B,MAX_GEN) -> gen-position logits (B, MAX_GEN, 27)."""
+        """Unmasked logits at the generated positions: (B, MAX_GEN, 27)."""
         tok = torch.cat([rack, gen_in], dim=1)  # (B, 7+MAX_GEN)
         x = self.embed(tok) + self.type_emb(self.types) + self.pos[:, : tok.size(1)]
         h = self.encoder(x, mask=self.causal)
         return self.head(h[:, RACK_SIZE:])
 
     def _step_mask(self, node, is_word, rack_rem) -> torch.Tensor:
-        """Valid next symbols (B, 27): letters allowed by the rack and (if the
-        DAWG is on) by a valid word prefix; END allowed at a word boundary."""
+        """Allowed next symbols (B, 27), given the DAWG node, whether the prefix so
+        far is a word, and the rack tiles remaining."""
         available = rack_rem > 0  # (B, 26)
         if self.use_dawg:
             # A transition exists if it leads onward OR completes a word (a leaf
@@ -115,7 +116,7 @@ class RackWordModel(nn.Module):
         return torch.cat([letter_ok, end_ok[:, None]], dim=1)
 
     def teacher_masks(self, rack: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """Per-position constraint masks (B, MAX_GEN, 27) for the true prefixes."""
+        """Allowed-symbol masks (B, MAX_GEN, 27) along the target's prefixes."""
         b, device = rack.size(0), rack.device
         node = torch.full((b,), self.root, dtype=torch.long, device=device)
         is_word = torch.zeros(b, device=device)
@@ -134,18 +135,18 @@ class RackWordModel(nn.Module):
         return torch.stack(masks, dim=1)
 
     def forward(self, rack: torch.Tensor, gen_in: torch.Tensor, target: torch.Tensor):
-        """Masked gen-position logits (B, MAX_GEN, 27) for teacher-forced training.
+        """Masked logits (B, MAX_GEN, 27) for teacher-forced training.
 
-        Uses a large finite fill rather than -inf: past-the-word (PAD) positions
-        are fully masked, and -inf there would make log_softmax NaN even though
-        the loss ignores them."""
+        Masks with a large finite value, not -inf. Positions past the word's END
+        have every symbol masked, and an all -inf row makes log_softmax NaN even
+        though the loss ignores that position."""
         logits = self.logits(rack, gen_in)
         masks = self.teacher_masks(rack, target)
         return logits.masked_fill(~masks, -1e9)
 
     @torch.no_grad()
     def greedy(self, rack: torch.Tensor) -> list[list[int]]:
-        """Greedy constrained decode -> list of letter-index lists (one per rack)."""
+        """Greedy constrained decode; returns each rack's word as letter indices."""
         b, device = rack.size(0), rack.device
         node = torch.full((b,), self.root, dtype=torch.long, device=device)
         is_word = torch.zeros(b, device=device)
@@ -159,10 +160,10 @@ class RackWordModel(nn.Module):
             mask = self._step_mask(node, is_word, rack_rem)
             step = self.logits(rack, gen_in)[:, p].masked_fill(~mask, float("-inf"))
             sym = step.argmax(-1)
-            # A dead-end prefix leaves the mask all-False; argmax then returns a
-            # bogus index. Only "take" a letter that is actually allowed.
+            # At a dead-end prefix every symbol is masked and argmax returns an
+            # arbitrary index, so also check that the pick was allowed.
             picked_ok = mask.gather(1, sym[:, None]).squeeze(1)
-            take = (sym < N_LETTERS) & ~done & picked_ok  # picked a valid letter
+            take = (sym < N_LETTERS) & ~done & picked_ok
             letter = sym.clamp(max=N_LETTERS - 1)
             decoded[:, p] = torch.where(take, letter, torch.full_like(letter, -1))
             node_next = self.dawg_next[node, letter]  # read before advancing `node`

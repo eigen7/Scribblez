@@ -1,8 +1,10 @@
-"""The max-move-per-lane training workload (the representation probe).
+"""The max-move-per-lane training workload: a representation probe that trains a
+model to predict the highest-scoring move in each board row and column
+(docs/lexical_nn.md).
 
-Same two-role shape as position_eval -- interchangeable generate workers plus
-a singleton local trainer -- with the probe's own model/loss parameters (its
-eval is train accuracy plus the frozen lane-analysis GCG dataset).
+It has position_eval's generate and train roles, with the trainer local only,
+and its own model and loss parameters. Each checkpoint is evaluated on the
+lane-analysis GCG dataset for the dashboard's Lane-analysis tab.
 """
 
 from dataclasses import dataclass
@@ -24,7 +26,9 @@ class MaxMovePerLaneParams:
     )
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
-    random_opening_mean: float = param(0.0, "random-opening plies per game (0 disables)")
+    random_opening_mean: float = param(
+        0.0, "mean number of uniformly random opening plies per game (0 disables)"
+    )
     face_up_leaves: bool = param(
         True, "play the face-up-leaves variant (docs/roadmap.md) in self-play generation"
     )
@@ -52,7 +56,7 @@ class MaxMovePerLaneParams:
     ffn_mult: int = param(4, "lane transformer FFN width multiple")
     rack_tokens: int = param(4, "rack tokens prepended per lane")
     lexicon_module: str = param(
-        "none", "compiled-lexicon tool to plug in (see lexical_tool/modules.py)"
+        "none", "compiled-lexicon tool to plug in (see scribblez/lexical_tool/modules.py)"
     )
     # Loss.
     lambda_cdf: float = param(1.0, "score-CDF (CRPS) loss weight")

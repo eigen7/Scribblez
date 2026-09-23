@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""The one-time AWS setup the dashboard's provider needs, idempotent
-(docs/plans/cloud_machines.md): the key pair (private key saved under
-/workspace/mount/cloud/aws/), the security group admitting ssh, and the
-Deep Learning GPU AMI lookup -- then a report of the account's vCPU quotas
-and any pending quota requests, since a quota of 0 is the usual reason a
-first launch fails.
+"""Prepare an AWS account for the dashboard's rented machines. Idempotent.
+
+Creates the ssh key pair (private key saved under /workspace/mount/cloud/aws/)
+and the security group admitting ssh, and looks up the Deep Learning GPU AMI.
+The provider repeats this before every launch anyway; running it here up front
+also reports the account's vCPU quotas and pending quota requests, because a
+quota of 0 is the usual reason a first launch fails. See
+docs/plans/cloud_machines.md.
 
 Usage:
     ./py/scripts/aws_setup.py

@@ -1,11 +1,7 @@
-"""Training-epoch loop for the position evaluation model.
+"""One training epoch of the position evaluation model.
 
-The generational trainer (scripts/position_eval/train.py) drives its
-per-minibatch step through run_epoch: move a batch to the device, forward,
-combined-loss backward, optimizer step, and accumulate the per-head losses plus
-WLD accuracy. Keeping the step here (a sibling to the max-move-per-lane
-train_loop) isolates the gradient update from the orchestrator, which owns only
-the data lifecycle, learning-rate policy, evaluation, and checkpointing.
+The gradient step lives here, apart from the trainer (trainer.py), which owns
+the data lifecycle, learning-rate policy, evaluation and checkpointing.
 """
 
 from __future__ import annotations
@@ -16,11 +12,8 @@ from dataclasses import dataclass
 
 import torch
 
-# The loss config and the loss itself live with the head registry in model.py:
-# the model owns compute_loss(), and the per-head loss keys and batch target keys
-# are derived from its heads (model.loss_keys() / model.target_keys()), so a new
-# head extends them without touching this loop. LossConfig is re-exported for
-# callers that import it from the train loop.
+# Re-exported: callers import LossConfig from here. The loss itself, and the
+# loss and target keys this loop iterates, come from the model's head registry.
 from .model import LossConfig
 
 __all__ = ["LossConfig", "EpochResult", "run_epoch"]
@@ -28,7 +21,7 @@ __all__ = ["LossConfig", "EpochResult", "run_epoch"]
 
 @dataclass
 class EpochResult:
-    """Averages over one epoch's minibatches, plus the advanced rows counter."""
+    """Per-epoch averages, plus the updated cumulative rows counter."""
 
     losses: dict[str, float]  # per-head means, including "total"
     wld_acc: float
@@ -38,8 +31,7 @@ class EpochResult:
 
 
 def _to_device(batch: dict, device, target_keys: tuple[str, ...]):
-    """Split a batch dict into (spatial, scalar) inputs and the `target_keys`
-    target tensors, each moved to `device`."""
+    """((spatial, scalar) inputs, targets dict), moved to `device`."""
     inputs = (batch["input_spatial"].to(device), batch["input_scalar"].to(device))
     targets = {k: batch[k].to(device) for k in target_keys}
     return inputs, targets
@@ -57,18 +49,16 @@ def run_epoch(
     on_batch: Callable[[int, int, float, int], None] | None = None,
     grad_clip: float = 0.0,
 ) -> EpochResult:
-    """Run one training pass over `batches` (already seeded/ordered by the caller).
+    """Run one training pass over `batches`.
 
-    lr_fn: if given, called per step with the running rows count; its result is
-        written to every optimizer param group before the step (the generational
-        rows-clock learning rate). When None the caller owns the learning rate
-        (e.g. a per-epoch scheduler) and this loop leaves it untouched.
-    rows_trained: starting cumulative row (position) count; the return value
-        carries it forward across epochs and generations.
-    on_batch: optional progress callback (done_batches, samples, elapsed_s,
-        rows_trained), invoked at most ~once per second.
-    grad_clip: when > 0, each step's gradient is clipped to this global norm
-        before the optimizer step.
+    lr_fn: if given, maps the cumulative rows count to the learning rate,
+        applied to every param group before each step. Otherwise the caller
+        owns the learning rate.
+    rows_trained: cumulative rows before this epoch; the result carries the
+        updated count.
+    on_batch: progress callback (done_batches, samples, elapsed_s,
+        rows_trained), called at most about once per second.
+    grad_clip: if > 0, the global gradient-norm clip.
     """
     model.train()
     target_keys = model.target_keys()
@@ -86,9 +76,8 @@ def run_epoch(
             for group in optimizer.param_groups:
                 group["lr"] = lr
 
-        # bf16 mixed precision for the network only: the loss below runs on
-        # fp32-upcast outputs, so its arithmetic (masked softmax-CE, Huber) is
-        # untouched. Precision regime rationale: position_eval/trainer.py.
+        # bf16 for the network only; the loss runs in fp32 on upcast outputs.
+        # Rationale in trainer.py's module docstring.
         with torch.autocast(device.type, dtype=torch.bfloat16):
             outputs = model(input_spatial, input_scalar)
         outputs = {k: v.float() for k, v in outputs.items()}

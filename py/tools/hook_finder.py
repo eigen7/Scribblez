@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""
-Reads a dictionary file and accepts a single letter.
+"""List the words that are a front or back hook of another word, for one letter.
 
-Outputs all words that starts or ends with that letter, which have the property that if you remove
-that letter from the word, you still have a valid word in the dictionary. Sorts the output by word
-length (longest to shortest), then alphabetically.
+Prints every word that starts or ends with LETTER and is still a word with that
+letter removed, longest first, then alphabetically. The dictionary is a plain
+text word list, one word per line, in upper case:
+
+    py/tools/hook_finder.py words.txt S
 """
 
 import sys

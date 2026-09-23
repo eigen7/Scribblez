@@ -1,50 +1,37 @@
-"""Export the move proposal model as the split evidence-path graphs (roadmap item 3).
+"""Export the move proposal model as the two evidence-path ONNX graphs.
 
-The move proposal model is a MoveSetEvalModel carrying the evidence fusion stage
+The move proposal model is a MoveSetEvalModel with the evidence fusion stage
 and the proves-best head. Its deployment loop
-(docs/plans/sim_residual_feedback.md, docs/roadmap.md) runs it incrementally: encode
-the board, moves, and evidence-free predictions ONCE per turn, then -- after
-each sim -- condition on the growing evidence set and re-score every candidate,
-without recomputing the trunk. This module emits that split as two ONNX graphs,
-mirroring MoveSetEvalModel's own staged API (encode_board / encode_moves /
-score_moves vs. evidence_fusion + conditioned score_moves):
+(docs/plans/sim_residual_feedback.md) encodes the board, the candidate moves
+and the evidence-free predictions once per turn; after each sim it conditions
+on the grown evidence set and re-scores every candidate without re-running the
+trunk. The two graphs mirror that split, and MoveSetEvalModel's staged methods:
 
-  * `move_proposal_cache` (once per turn): the P=1 board inputs plus M candidate
-    rows -> the cache (board tokens, global summary, per-move encodings) and the
-    evidence-free predictions (wld, score_diff, planes). M is the single dynamic
-    axis.
-  * `move_proposal_step` (per loop iteration): the cache tensors plus a padded
-    evidence set of fixed width E -> the evidence-conditioned wld, score_diff,
-    and the proves-best gain. M rides the dynamic axis; the evidence inputs are
-    fixed-width (leading-1 batch), so the graph keeps ONE dynamic axis exactly
-    as the plain move-set graph does. No planes: an evidence token carries the
-    EVIDENCE-FREE predicted planes of its candidate (from the cache graph), and
-    nothing reads a conditioned plane, so the step graph does not compute one
-    -- at (M, 4 * SLOTS_PER_CELL, 225) floats it would be the graph's largest
-    output by far, allocated at the engine's row ceiling for nobody. The gain
-    head's best-so-far input is computed in-graph from the evidence tokens'
-    observed win values (evidence_fusion.best_so_far), so the engine stages
-    nothing for it.
+  * `move_proposal_cache`, once per turn: P=1 board inputs plus M candidate
+    rows -> the cache (board tokens, global summary, per-move encodings) and
+    the evidence-free wld, score_diff and planes.
+  * `move_proposal_step`, once per loop iteration: the cache tensors plus an
+    evidence set padded to a fixed width E -> the conditioned wld, score_diff
+    and proves-best gain. The step graph emits no planes: evidence tokens
+    carry their candidate's evidence-free planes from the cache graph, and
+    nothing reads a conditioned plane. At (M, 4 * SLOTS_PER_CELL, 225) floats
+    it would be by far the largest output, allocated at the engine's row
+    ceiling. The gain head's best-so-far input is computed in-graph
+    (evidence_fusion.best_so_far), so the engine stages nothing for it.
 
-Refitter discipline (shared with onnx_export.py's MoveSetEvalExportModel, via
-the helpers in onnx_export_util.py): `dynamo=False` and
-`do_constant_folding=False` keep every weight a plain named initializer for the
-TensorRT parser-refitter, any nn.MultiheadAttention (whose packed in_proj traces
-as a bare Constant the refitter cannot map) is re-expressed into plain q/k/v
-Linears plus explicit attention math (split_mha_qkv / cross_attention_2d), and a
-Linear over a concatenation is re-associated (split_concat_linear) so the
-per-move `g` never has to Expand across the dynamic M axis. The scoring
-cross-attention (model.cross_attn) and BOTH fusion attentions get the attention
-treatment; the fusion's own cross-attention, though already plain Linears, is
-re-expressed here so its padding mask becomes an additive float bias (NEG_BIAS)
-rather than a boolean masked_fill, keeping boolean reductions -- which the
-ONNX/TensorRT path handles poorly -- out of the graph.
+In both graphs M ("moves") is the only dynamic axis; the evidence inputs have
+a fixed leading-1 batch.
 
-The evidence tokens are re-encoded inside the step graph (encode_tokens is
-folded into ProposalStepExportModel rather than split into a third graph):
-re-encoding the <=E tokens each iteration is negligible beside the rollouts each
-step schedules, and the finer per-candidate-encode / device-resident split is
-deferred to the engine runtime (see docs/plans/sim_residual_feedback.md).
+Both graphs follow the plain exporter's TensorRT-refit rules (onnx_export.py's
+module docstring). Here the rebuilt attentions are the scoring
+cross-attention and both fusion attentions. The fusion cross-attention is
+already plain Linears but is rebuilt anyway, so its padding mask becomes an
+additive float bias (NEG_BIAS) rather than a boolean masked_fill; boolean ops
+are poorly supported on the ONNX/TensorRT path.
+
+The step graph re-encodes the evidence tokens every iteration instead of taking
+them from a third graph. That costs little next to the rollouts each step
+schedules; caching per-candidate encodings is left to the engine runtime.
 """
 
 import warnings
@@ -73,21 +60,19 @@ from .model import MoveSetEvalModel, footprint_slot_planes
 from .moves import move_encoding_dims
 from .targets import PLANE_NAMES
 
-# The padded evidence-set width the step graph is specialized to. E is baked
-# into the step graph as a fixed shape (the leading-1 batch keeps M the only
-# dynamic axis), so an engine loader must stage exactly this many evidence rows.
-# 64 is comfortably above the deployment sim budget; a single retunable pin.
+# The padded evidence-set width E baked into the step graph as a fixed shape;
+# the engine must stage exactly this many evidence rows. 64 is comfortably above
+# the deployment sim budget.
 DEFAULT_MAX_EVIDENCE = 64
 
-# ONNX `graph` metadata values -- must match the engine's kGraphMoveProposal*
-# constants (engine/include/nn/onnx_metadata.h), the strings a C++ loader gates
-# the runtime on.
+# ONNX `graph` metadata values; must match kGraphMoveProposal* in
+# engine/include/nn/onnx_metadata.h, which the C++ loader checks.
 GRAPH_CACHE = "move_proposal_cache"
 GRAPH_STEP = "move_proposal_step"
 
-# A logit bias that softmaxes to exactly zero weight -- exp(-1e9) underflows to
-# 0.0 in IEEE arithmetic, so an additive `(attend - 1) * NEG_BIAS` mask is
-# bit-identical to a boolean masked_fill(-inf) while staying a plain float op.
+# A logit bias that softmaxes to exactly zero weight: exp(-1e9) underflows to
+# 0.0, so an additive `(attend - 1) * NEG_BIAS` mask matches a boolean
+# masked_fill(-inf) bit for bit while staying a plain float op.
 NEG_BIAS = 1.0e9
 
 CACHE_INPUT_NAMES = (
@@ -114,43 +99,34 @@ STEP_OUTPUT_NAMES = ("wld", "score_diff", "gain")
 
 
 class _ScoringHeads(nn.Module):
-    """The move proposal model's scoring machinery, refitter-re-expressed.
+    """MoveSetEvalModel.score_moves at P=1, rebuilt for the refitter.
 
-    Scores M encoded moves against a board token map and global summary --
-    plain (over the trunk map, in the cache graph) or evidence-conditioned (over
-    the fused map, in the step graph); the math is identical, only the board/g
-    it reads differ. `value` returns the attended embeddings alongside the WLD /
-    score-diff heads; `planes` and `gain` read the same attended embedding for
-    the footprint and proves-best outputs.
+    The cache graph runs it over the plain board map, the step graph over the
+    evidence-conditioned one. `value` returns the attended embeddings that
+    `planes` and `gain` then read.
     """
 
     def __init__(self, model: MoveSetEvalModel):
         super().__init__()
-        # Scoring cross-attention (model.cross_attn) as plain q/k/v/out Linears.
         mha = model.cross_attn
         c = mha.embed_dim
         self.c = c
         self.num_heads = mha.num_heads
         self.q_proj, self.k_proj, self.v_proj = split_mha_qkv(mha)
-        self.attn_out = mha.out_proj  # a plain Linear already
+        self.attn_out = mha.out_proj
 
-        # Value head Linear(4C, C) over cat([attended, g]) -> attended/g split.
+        # Each head's first Linear over cat([attended, g, ...]) is split at C.
         self.head_attended, self.head_g = split_concat_linear(model.head[0], c)
         self.head_out = model.head[2]
-        # Plane readout: the footprint head's Linear(4C, num_planes*slots*C) plane
-        # queries and its Linear(4C, num_planes*catch_all) direct catch-all, each
-        # attended/g split.
         self.num_planes = len(PLANE_NAMES)
         self.plane_attended, self.plane_g = split_concat_linear(model.plane_proj, c)
         self.plane_catch_attended, self.plane_catch_g = split_concat_linear(model.plane_catch, c)
-        # Proves-best head Linear(4C + 1, C) over cat([attended, g, best-so-far])
-        # -> attended / [g, best] split, then Linear(C, 1).
+        # pb_rest takes cat([g, best_so_far]).
         self.pb_attended, self.pb_rest = split_concat_linear(model.proves_best[0], c)
         self.pb_out = model.proves_best[2]
 
     def _cross_attention(self, e: torch.Tensor, board0: torch.Tensor) -> torch.Tensor:
-        """model.cross_attn's math (eval mode, no mask) over M move queries
-        (e, (M, C)) and one position's 225 board tokens (board0, (225, C))."""
+        """e (M, C) move queries over board0 (225, C) -> (M, C)."""
         return cross_attention_2d(
             self.q_proj, self.k_proj, self.v_proj, self.attn_out, self.num_heads, e, board0
         )
@@ -168,11 +144,10 @@ class _ScoringHeads(nn.Module):
         return attended, wld, score_diff
 
     def planes(self, attended: torch.Tensor, g: torch.Tensor, board: torch.Tensor) -> torch.Tensor:
-        """The plane head off the attended embeddings: the full footprint
-        distribution, served softmaxed in the evidence-channel layout
-        (footprint_slot_planes, catch-all dropped) as (M, num_planes*SLOTS_PER_CELL,
-        225) -- exactly what the C++ staging copies into the predicted half of
-        every evidence token. Cache graph only."""
+        """Footprint probabilities in the evidence-channel layout
+        (footprint_slot_planes), (M, num_planes * SLOTS_PER_CELL, 225): exactly
+        what the C++ staging copies into each evidence token's predicted
+        block. Cache graph only."""
         plane_q = self.plane_attended(attended) + self.plane_g(g)  # (M, num_planes*slots*C)
         plane_q = plane_q.view(-1, self.num_planes, SLOTS_PER_CELL, self.c)
         anchored = torch.einsum("mhsc,nc->mhns", plane_q, board[0])  # (M, num_planes, N, slots)
@@ -184,21 +159,16 @@ class _ScoringHeads(nn.Module):
         return footprint_slot_planes(footprint_logits).flatten(2)  # (M, planes*slots, 225)
 
     def gain(self, attended: torch.Tensor, g: torch.Tensor, best: torch.Tensor) -> torch.Tensor:
-        """The proves-best expected gain (M,) >= 0 off the same fused vector,
-        `g` (1, 3C) and the evidence set's best-so-far `best` (1, 1) entering
-        together through the split's position-level half."""
+        """Proves-best expected gain (M,) >= 0; `best` (1, 1) is the evidence
+        set's best-so-far."""
         hidden = F.relu(self.pb_attended(attended) + self.pb_rest(torch.cat([g, best], dim=1)))
         return F.softplus(self.pb_out(hidden)).squeeze(1)
 
 
 class ProposalCacheExportModel(nn.Module):
-    """The `move_proposal_cache` forward: trunk + move encodings + evidence-free
-    scoring, exposing the cache tensors alongside the plain predictions.
-
-    Board inputs are (1, ...) and the M move rows query the single position's
-    board tokens directly -- MoveSetEvalModel.encode_board / encode_moves /
-    plain score_moves at P=1, where the padded (P, maxK, C) grid degenerates.
-    """
+    """The `move_proposal_cache` forward: MoveSetEvalModel's encode_board,
+    encode_moves and plain score_moves at P=1, returning the cache tensors
+    alongside the evidence-free predictions."""
 
     def __init__(self, model: MoveSetEvalModel):
         super().__init__()
@@ -238,27 +208,26 @@ class ProposalStepExportModel(nn.Module):
     """The `move_proposal_step` forward: encode the evidence tokens, fuse them
     into the cached board map, and re-score every candidate.
 
-    The fusion stage is EvidenceFusion, run at P=1 with its two attentions
-    re-expressed for the refitter (see module docstring). encode_tokens is
-    reused verbatim -- it is already plain convs/Linears -- so only the two
-    attentions and the padding masks are rebuilt here.
+    EvidenceFusion.encode_tokens is plain convs and Linears and is reused
+    as is; only the fusion's two attentions and their padding masks are
+    rebuilt here.
     """
 
     def __init__(self, model: MoveSetEvalModel):
         super().__init__()
         self.fusion = model.evidence_fusion
         self.heads = _ScoringHeads(model)
-        # Fusion self-attention: an nn.TransformerEncoderLayer whose inner MHA
-        # carries the packed in_proj hazard -- split into plain q/k/v Linears.
+        # The fusion self-attention is a TransformerEncoderLayer; its inner MHA
+        # has the packed in_proj.
         sa = self.fusion.self_attn.self_attn
         self.sa_num_heads = sa.num_heads
         self.sa_head_dim = sa.embed_dim // sa.num_heads
         self.sa_q, self.sa_k, self.sa_v = split_mha_qkv(sa)
-        self.sa_out = sa.out_proj  # plain Linear
+        self.sa_out = sa.out_proj
 
     def _self_attention(self, tokens: torch.Tensor, key_bias: torch.Tensor) -> torch.Tensor:
-        """The TransformerEncoderLayer (post-norm, dropout 0) over E evidence
-        tokens (1, E, C), padded keys suppressed by the additive `key_bias`
+        """The fusion's TransformerEncoderLayer (post-norm, no dropout) over
+        tokens (1, E, C), with pad keys suppressed by the additive `key_bias`
         (1, E)."""
         h, d = self.sa_num_heads, self.sa_head_dim
         q = self.sa_q(tokens).view(1, -1, h, d).transpose(1, 2)  # (1, H, E, d)
@@ -282,20 +251,16 @@ class ProposalStepExportModel(nn.Module):
         m: torch.Tensor,
         has_ev: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """EvidenceFusion.forward at P=1: evidence self-attention, board tokens
-        cross-attend into the set, and the conditioned (board, g). `m` (1, E) is
-        the float evidence mask, `has_ev` (1, 1) marks positions with any real
-        token."""
+        """EvidenceFusion.forward at P=1 -> conditioned (board, g). `m` (1, E)
+        is the float evidence mask; `has_ev` (1, 1) is 1 if any token is real."""
         f = self.fusion
-        # Self-attention: real keys unbiased, pad keys -inf, but an all-empty
-        # set (has_ev == 0) keeps every key so the softmax stays finite (the row
-        # is gated to zero downstream regardless).
+        # An empty set (has_ev == 0) keeps every key so the softmax stays
+        # finite; its output is gated to zero below regardless.
         sa_key = (m - 1.0) * NEG_BIAS * has_ev  # (1, E)
         t = self._self_attention(tokens, sa_key)
         t = t * m.unsqueeze(-1)
 
-        # Cross-attention: board queries into the evidence tokens, padded tokens
-        # suppressed; an all-empty set is left attending to token 0.
+        # As in EvidenceFusion._cross_attention, an empty set attends to token 0.
         col0 = torch.maximum(m[:, :1], 1.0 - has_ev)  # (1, 1)
         attend = torch.cat([col0, m[:, 1:]], dim=1)  # (1, E)
         key_bias = (attend - 1.0) * NEG_BIAS  # (1, E)
@@ -334,8 +299,6 @@ class ProposalStepExportModel(nn.Module):
         has_ev = m.amax(dim=1, keepdim=True)  # (1, 1)
         board_c, g_c = self._fuse(board, g, tokens, spatial_feats, m, has_ev)
         attended, wld, score_diff = self.heads.value(board_c, g_c, move_enc)
-        # Best-so-far off the evidence tokens' observed win values (the shared
-        # definition, float ops only), no extra graph input.
         best = best_so_far(ev_obs_scalars, m).unsqueeze(1)  # (1, 1)
         gain = self.heads.gain(attended, g_c, best)
         return wld, score_diff, gain
@@ -356,16 +319,14 @@ def _export(
     trained_max_evidence: int,
     opset: int,
 ):
-    """Trace `wrapper` to `path` atomically and stamp its metadata: the shared
-    common keys, the per-graph architecture signature (the engine-plan cache
-    key), the graph kind, the move-encoding version gate, the
-    proposal_export_id that ties a cache graph to the step graph exported from
-    the same model, and trained_max_evidence -- the widest evidence set the
-    fusion stage was trained on (1 + the corpus recipe's on_policy_max), which
-    the deployed agent's sim budget must respect: the step graph pads to
-    DEFAULT_MAX_EVIDENCE, but a set wider than the training width is one the
-    model has never seen. `dynamo=False`/`do_constant_folding=False` keep every weight
-    a plain named initializer for the refitter (see the plain exporter)."""
+    """Trace `wrapper` to `path` atomically and stamp its metadata.
+
+    Beyond the keys the plain exporter writes, a proposal graph carries
+    proposal_export_id, which ties a cache graph to its step graph, and
+    trained_max_evidence, the widest evidence set the fusion stage trained on.
+    The deployed agent's sim budget must respect the latter: the step graph
+    pads to DEFAULT_MAX_EVIDENCE, but a wider set than the model trained on is
+    out of distribution."""
     with atomic_output(path) as tmp_path, warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         torch.onnx.export(
@@ -406,9 +367,7 @@ def export_proposal_cache(
     board_size: int = 15,
     opset: int = 17,
 ):
-    """Trace and write the `move_proposal_cache` graph: board + M candidates ->
-    board, g, move_enc, and the plain wld / score_diff / planes. M is the single
-    dynamic axis ("moves")."""
+    """Write the `move_proposal_cache` graph."""
     path = Path(path)
     was_training = model.training
     model.eval()
@@ -427,8 +386,6 @@ def export_proposal_cache(
         torch.zeros(dummy_m, t, dtype=torch.uint8, device=device),
         torch.zeros(dummy_m, 3, device=device),
     )
-    # The move inputs and the M-indexed outputs ride "moves"; board and g are
-    # fixed (1, ...) and carry no dynamic axis.
     move_and_dyn = (
         "move_letters",
         "move_blanks",
@@ -471,10 +428,7 @@ def export_proposal_step(
     board_size: int = 15,
     opset: int = 17,
 ):
-    """Trace and write the `move_proposal_step` graph: the cache tensors plus a
-    padded width-`max_evidence` evidence set -> the conditioned wld / score_diff
-    and the proves-best gain. M ("moves") is the single dynamic axis; the
-    evidence inputs are fixed-width leading-1 batches."""
+    """Write the `move_proposal_step` graph, padded to `max_evidence`."""
     path = Path(path)
     was_training = model.training
     model.eval()
@@ -527,10 +481,10 @@ def export_proposal_pair(
     max_evidence: int = DEFAULT_MAX_EVIDENCE,
     board_size: int = 15,
 ):
-    """Both graphs of one model, tied by one proposal_export_id -- what a
-    trainer exports per pass and what the engine loads as a pair. The step
-    graph lands first: the cache graph is the file a tag's ledger and match
-    dispatch key on, and each write is atomic, so the pair is whole the moment
+    """Write both graphs of one model under one proposal_export_id.
+
+    The step graph is written first. Tag ledgers and match dispatch key on the
+    cache graph, and each write is atomic, so the pair is complete as soon as
     the cache graph is visible."""
     xid = proposal_export_id(model)
     export_proposal_step(
@@ -557,10 +511,7 @@ def export_proposal_pair(
 
 
 def proposal_export_id(model: MoveSetEvalModel) -> str:
-    """The fingerprint tying a cache graph to its step graph: a WEIGHT-sensitive
-    hash of the model (weight_fingerprint), identical for both wrappers exported
-    from one in-memory model and different for any other checkpoint -- so a
-    loader can reject a cache graph paired with a step graph from a different
-    model, not just an architecturally different one (which the per-graph
-    architecture signature already separates)."""
+    """A hash of the model's weights, shared by the cache and step graphs of
+    one export. It lets a loader reject a pair from different checkpoints of
+    the same architecture, which the architecture signature cannot catch."""
     return weight_fingerprint(model)

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Move a trajectory-generating move_set_eval tag to the evidence_trajectories
-workload it now belongs to.
+"""Convert a trajectory-generating move_set_eval tag into an evidence_trajectories tag.
 
-Before the workload split, evidence trajectories were an option of the
-move_set_eval workload (`traj_every` > 0). A tag generated that way holds
-exactly what evidence_trajectories produces -- .slog/.sobs/.mset triples in
-data/slogs, no workload identity in any file -- so it migrates by moving its
-directory under the new workload's tags root and rewriting task.json: the
-workload name, the params (traj_* renamed, the student-training and sweep
-params dropped), and the worker slots reset to paused/unlaunched (their
-processes ran with the old workload's env and must be respawned).
+A one-off migration for tags created when evidence trajectories were a
+move_set_eval option (`traj_every` > 0). Such a tag's data is exactly what
+evidence_trajectories produces, .slog/.sobs/.mset triples in data/slogs with no
+workload identity in any file, so migrating it only moves the tag directory to
+the new workload and rewrites task.json:
+
+  * the workload name;
+  * the params: those listed in RENAMES carry over (the traj_* ones renamed),
+    the rest are dropped;
+  * the generate worker slots, reset to paused and unlaunched, since their
+    processes ran with the old workload's environment and must be respawned.
+    Other roles' slots are dropped.
 
 Refuses to run while any of the tag's workers is alive; pause them first.
 
@@ -29,7 +32,7 @@ from scribblez.paths import DEFAULT_MOUNT_ROOT, EVIDENCE_TRAJECTORIES, MOVE_SET_
 from scribblez.workloads import evidence_trajectories
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
-# Old param -> new param, for the params that carry over.
+# move_set_eval param -> evidence_trajectories param, for those that carry over.
 RENAMES = {
     "teacher_model": "teacher_model",
     "proposer_model": "proposer_model",

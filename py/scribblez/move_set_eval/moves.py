@@ -1,16 +1,12 @@
 """Move-feature inputs for the move set evaluation model.
 
-The encoding is owned by the engine
-(engine/include/scribblez/move_set_encoder.h) so the training dataset
-and the eventual move set evaluation agent share one implementation and never
-drift. This module is a thin Python view over it: `encode_moves` turns a (M,) array of
-packed Move records (plus their pre-move score differentials) into the
-per-candidate letter/blank/square/mask/scalar arrays, `move_encoding_dims`
-reports the layout constants (max placed tiles, scalar count, letter
-vocabulary, board cells) the model builds its embeddings from, and
-`score_diff_input_layout` locates the board input's score-diff scalar so the
-dataset can read each position's pre-move differential straight out of the
-encoded row.
+The engine owns the encoding (engine/include/training/move_set_encoder.h), so
+the training dataset and the in-engine agents share one implementation. This
+module re-exports its FFI bindings: `encode_moves` turns packed Move records
+into per-candidate letter/blank/square/mask/scalar arrays, `move_encoding_dims`
+reports the layout constants the model sizes its embeddings from, and
+`score_diff_input_layout` locates the score-diff scalar in the board input so
+the dataset can read a position's pre-move differential from its encoded row.
 """
 
 from __future__ import annotations

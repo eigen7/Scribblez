@@ -1,25 +1,26 @@
-"""What a static-equity candidate cut costs, read off sim_candidate_survey_tool's files.
+"""Analysis of sim_candidate_survey_tool's output: what cutting candidates to
+the top of the static-equity ranking costs.
 
-The measurement behind docs/plans/sim_labeled_candidates.md: at each surveyed
-position a set of candidates was simmed, and the question is how often, and by
-how much, the sim prefers a candidate outside the head of the HastyBot equity
-ranking (the top `cut`), which a top-`cut` self-play mover can never play.
+A self-play mover that only considers HastyBot's top `cut` moves by equity can
+never play anything else. The survey sims candidates at many positions and asks
+how often, and by how much, the sim prefers a move outside the cut
+(docs/plans/sim_labeled_candidates.md).
 
-The best of hundreds of noisy sim estimates flatters itself, and most
-candidates lie outside the cut, so "the screen's best is outside the cut" is
-true far more often than the cut costs anything. The tool therefore sims in
-two stages, and every figure here reads the second: the screen singles out
-its few best moves outside the cut (racing away the clearly beaten), and a
-longer confirming sim on fresh rollouts re-sims those moves beside the cut's.
-An outside move "beats the cut" when
-the confirming sim puts it at least MIN_SIGMA standard errors above the cut's
-best move -- the standard error being that of the paired win difference,
-which common random numbers make much tighter than the two marginal errors.
-The cut's best is taken on the confirming sim itself; a best-of-ten flatters
-the cut a little, so the bar errs on the strict side. Against that, each
-position tests a few outside moves, not one, so a few percent of positions
-clear the bar by chance alone; read single positions near the bar with that
-in mind.
+The tool sims in two stages, and everything here reads the second. The
+maximum of hundreds of noisy sim estimates is biased upward, and most
+candidates lie outside the cut, so the screening stage's best move is outside
+the cut far more often than the cut actually costs anything. The screen
+therefore only nominates its few best outside moves, and a longer confirming
+sim on fresh rollouts re-sims them beside the cut's moves.
+
+An outside move "beats the cut" when the confirming sim puts it at least
+MIN_SIGMA standard errors above the cut's best move. The standard error is that
+of the paired win difference, which common random numbers make much tighter
+than the two marginal errors. Two biases remain:
+- The cut's best is picked on the confirming sim itself, which slightly
+  flatters the cut, so the bar is a little strict.
+- Each position tests several outside moves, so a few percent of positions
+  clear the bar by chance. Read single positions near the bar accordingly.
 """
 
 import json
@@ -109,8 +110,7 @@ def confirmed_moves(position: dict) -> list[ConfirmedMove]:
 
 
 def position_findings(key: PositionKey, position: dict, cut: int) -> list[Finding]:
-    """A finding per outside move of the position's confirming sim (none when the
-    screen left nothing to confirm)."""
+    """One finding per outside move in the position's confirming sim."""
     moves = confirmed_moves(position)
     cut_moves = [m for m in moves if 0 <= m.equity_rank < cut]  # the tool lists them first
     if not cut_moves:
@@ -145,7 +145,7 @@ def load_survey(paths: list[Path]) -> Survey:
     for path in paths:
         stem = path.name.removesuffix(SURVEY_SUFFIX)
         survey = json.loads(path.read_text())
-        # A slimmed file holds only its found positions and says how many it surveyed.
+        # A slimmed file (slim_survey_file) records how many positions it surveyed.
         positions += survey.get("positions_surveyed", len(survey["positions"]))
         for position in survey["positions"]:
             key = (stem, position["game"], position["turn"])
@@ -154,9 +154,9 @@ def load_survey(paths: list[Path]) -> Survey:
 
 
 def slim_position(position: dict) -> dict:
-    """`position` with only the candidates its confirming sim covers (the top
-    moves and the outside picks), the confirm entries re-pointed at them. The
-    hundreds of screened-and-dismissed plays are most of a survey file's bulk."""
+    """`position` reduced to the candidates in its confirming sim, with the
+    confirm entries re-indexed. The screened-out candidates are most of a
+    survey file's bulk."""
     kept = [entry["candidate"] for entry in position["confirm"]]
     confirm = [entry | {"candidate": i} for i, entry in enumerate(position["confirm"])]
     return position | {
@@ -166,9 +166,9 @@ def slim_position(position: dict) -> dict:
 
 
 def slim_survey_file(path: Path) -> list[tuple[int, int]]:
-    """Rewrite a finished survey file in place keeping only the positions where an
-    outside play beat the cut, slimmed; `positions_surveyed` records how many
-    there were. Returns the kept positions' (game, 0-based turn)."""
+    """Rewrite a finished survey file in place, keeping only (slimmed) positions
+    where an outside move beat the cut. Returns the kept positions'
+    (game, 0-based turn)."""
     survey = json.loads(path.read_text())
     stem = path.name.removesuffix(SURVEY_SUFFIX)
     found = [
@@ -238,16 +238,17 @@ def report(survey: Survey) -> str:
 
 
 def gcg_name(key: PositionKey) -> str:
-    """The file sim_candidate_survey_tool --gcg-dir wrote for a position (its turn
-    is 1-based there, as neural_rank_tool --turn takes it)."""
+    """The GCG filename sim_candidate_survey_tool --gcg-dir wrote for a
+    position. The turn in the name is 1-based, as neural_rank_tool --turn
+    expects."""
     stem, game, turn = key
     return f"{stem}-g{game}-turn{turn + 1}.gcg"
 
 
 def write_review_dir(survey: Survey, cut: int, gcg_dir: Path, review_dir: Path, command: str):
-    """Replace `review_dir` with the GCGs of the positions where an outside move beat
-    the cut and a README table of what the confirming sim said about each.
-    `command` is an invocation that generates a corpus like this one."""
+    """Replace `review_dir` with the GCGs of the positions where an outside move
+    beat the cut, plus a README tabulating the confirming sim's numbers.
+    `command` is shown in the README as a way to generate a similar corpus."""
     if review_dir.exists():
         shutil.rmtree(review_dir)
     review_dir.mkdir(parents=True)

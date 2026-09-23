@@ -1,45 +1,38 @@
 """Move set evaluation model: score a variable-size candidate set in one pass.
 
-The model encodes the pre-move board once with the shared SpatialTrunk (the same
-front end as the position evaluation model), then scores every candidate move
-against that one encoding via cross-attention -- so the expensive board encode
-is amortized across all candidates, not repeated per move (docs/roadmap.md,
-track A).
+The model is a distillation of the position evaluation model (the teacher) over
+a candidate set: for each candidate move it predicts what the teacher would
+output for the resulting post-move state, from the mover's point of view. It
+encodes the pre-move board once with the shared SpatialTrunk, then scores every
+candidate against that one encoding by cross-attention, so the expensive board
+encode is amortized over all candidates instead of repeated per move.
 
-Shapes follow the dataset's flattened, no-padding batch: P positions supply the
-board inputs, and M candidate moves (concatenated across those positions) each
-carry a `pos_id` into [0, P). Each move:
+Batches are flattened with no padding: P positions supply the board inputs, and
+M candidate moves (concatenated across positions) each carry a `pos_id` into
+[0, P). Per move, the model:
 
-  * is embedded from its placed tiles (glyph + square embeddings, masked-mean
-    pooled) fused with its move-level scalars;
-  * cross-attends into its own position's board tokens (the 15x15 trunk feature
-    map flattened to 225 tokens, plus a learned square positional embedding);
-  * is fused with its position's global summary and projected to the five
-    per-move targets: a WLD distribution (3 logits) and the score-diff
-    (mean, std), matching the teacher readouts stored in the .mset sidecar;
-  * additionally decodes the teacher's four placement distributions for its own
-    post-move state: the fused per-move vector is projected to SLOTS_PER_CELL
-    queries per plane head, scored against the 225 board tokens to give the
-    anchored footprint logits (cell x slot), plus a small direct catch-all head,
-    so a single per-move vector yields four footprint-categorical distributions
-    (distilled by masked softmax-CE against the teacher's masked footprint
-    softmax) without any per-move spatial decoding.
+  * embeds the placed tiles (letter + blank-flag embeddings plus the board
+    token at the tile's square, masked-mean pooled) fused with the move's
+    scalars;
+  * cross-attends into its own position's 225 board tokens (the 15x15 trunk
+    map flattened, plus a learned per-square embedding);
+  * fuses the result with its position's global summary and reads out
+    - a WLD distribution (3 logits) and the score-diff (mean, std), matching
+      the teacher readouts stored in the .mset sidecar, and
+    - one footprint-categorical placement distribution per teacher placement
+      head (targets.PLANE_NAMES). These are dot products of per-move queries
+      against the board tokens, so no per-move spatial decoder is needed.
 
-The heads predict what the teacher position evaluation model would output for
-the candidate's post-move state, from the mover's POV -- this model is a
-distillation of the position evaluation model over the candidate set.
+The forward can optionally condition on a sim-evidence set (roadmap item 2):
+the EvidenceFusion stage rewrites the board token map and position summary
+between the trunk and the scoring, which reads the conditioned map exactly as
+it would the plain one. The staged methods (encode_board, encode_moves,
+encode_evidence, score_moves) mirror the deployment loop's caching split:
+everything before the fusion is computed once per decision point. forward() is
+their composition and is bit-identical to calling them in sequence.
 
-The forward optionally conditions the scoring on a sim-evidence set (roadmap
-item 2): the EvidenceFusion stage rewrites the board token map and position
-summary between the trunk and the scoring machinery, which then reads the
-conditioned map exactly as it reads the plain one. The staged methods
-(encode_board / encode_moves / encode_evidence / score_moves) expose the
-deployment loop's caching split -- everything up to the fusion is computed
-once per decision point, and forward() composed of them is bit-identical to
-the staged path.
-
-docs/model_architectures.md diagrams this network; any change to the
-architecture belongs in the same commit as the corresponding change there.
+docs/model_architectures.md diagrams this network; keep it in step with any
+architecture change.
 """
 
 from __future__ import annotations
@@ -61,13 +54,11 @@ from .targets import PLANE_NAMES
 class MoveEncoder(nn.Module):
     """Embeds each candidate move into a query vector for cross-attention.
 
-    The move-input layout (letter vocabulary, scalar count) is the engine's,
-    queried via move_encoding_dims so the embeddings match the encoder that
-    produces the inputs. A placed tile is represented by its letter embedding, a
-    blank-flag embedding (so a natural letter and its blank twin share letter
-    semantics), and the board token at the square it lands on -- gathered from
-    the trunk's board map by the caller, which ties a move's position directly to
-    the board's own representation of that square.
+    A placed tile is the sum of its letter embedding, a blank-flag embedding
+    (so a natural letter and its blank twin share the letter's meaning), and
+    the board token at the square it lands on. The caller gathers that token
+    from the trunk's map, which ties the move directly to the board's own
+    representation of the squares it occupies.
     """
 
     def __init__(self, channels: int, letter_vocab: int, num_scalars: int):
@@ -90,7 +81,7 @@ class MoveEncoder(nn.Module):
         board_tokens: torch.Tensor,
     ) -> torch.Tensor:
         """letters/blanks/tile_mask (M, T), scalars (M, S), board_tokens
-        (M, T, C) -- the board features at each placed tile's square -> (M, C)."""
+        (M, T, C) at each placed tile's square -> (M, C)."""
         tile_tok = self.letter_emb(letters) + self.blank_emb(blanks.long()) + board_tokens
         tile_tok = tile_tok * tile_mask.unsqueeze(-1)
         denom = tile_mask.sum(dim=1, keepdim=True).clamp(min=1).float()  # (M, 1)
@@ -100,14 +91,13 @@ class MoveEncoder(nn.Module):
 
 
 def _rank_within_position(pos_id: torch.Tensor, num_positions: int) -> tuple[torch.Tensor, int]:
-    """Each move's index within its own position's candidate block, plus the
-    largest block -- the (row, column) address that packs the flattened move set
-    into a padded (P, maxK) grid.
+    """Each move's index within its position's candidate block, plus the
+    largest block size: the (row, column) address that packs the flattened move
+    set into a padded (P, maxK) grid.
 
-    Assumes the dataset's layout: each position's moves are one contiguous run
-    and the runs are in position order (move_set_eval.dataset._build_batch
-    concatenates per-position blocks), so this is arithmetic on the block
-    offsets rather than a sort.
+    Requires each position's moves to be one contiguous run, with the runs in
+    position order (as dataset._build_batch lays them out), so this is offset
+    arithmetic rather than a sort.
     """
     counts = torch.bincount(pos_id, minlength=num_positions)  # (P,)
     starts = torch.cumsum(counts, dim=0) - counts  # (P,)
@@ -132,10 +122,10 @@ class MoveSetEvalModel(nn.Module):
         super().__init__()
         self.board_size = board_size
         self._backbone_frozen = False
-        # Shared trunk: stem + scalar injection + tower. Under the transformer
-        # tower it carries the tile-supply register tokens, so the placement-plane
-        # readout can gate a square's cross-checks on whether those tiles are
-        # available, the way the teacher's placement heads do (supply_registers.py).
+        # The transformer tower carries the tile-supply register tokens, as the
+        # teacher's does, so the placement readout can gate a square's
+        # cross-checks on whether those tiles are still available
+        # (supply_registers.py).
         self.trunk = SpatialTrunk(
             spatial_planes,
             scalar_size,
@@ -147,10 +137,9 @@ class MoveSetEvalModel(nn.Module):
             board_size=board_size,
         )
         _, num_scalars, letter_vocab, cells = move_encoding_dims()
-        # The flattened board tokens lose their grid identity; a learned
-        # per-square embedding restores it so a move query can attend to the
-        # square it plays on, and so the tokens a move gathers at its footprint
-        # carry position.
+        # Flattening the board map loses grid identity. A learned per-square
+        # embedding restores it, both for the attention keys and for the tokens
+        # a move gathers at its own squares.
         self.board_pos_emb = nn.Parameter(torch.zeros(cells, trunk_channels))
         nn.init.normal_(self.board_pos_emb, std=0.02)
 
@@ -167,34 +156,33 @@ class MoveSetEvalModel(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, 5),  # [wld(3), sd_mean, sd_std]
         )
-        # Placement-plane readout (PLANE_NAMES order): a footprint-categorical
-        # distribution per head. The anchored classes factor as (board cell, slot)
-        # -- SLOTS_PER_CELL orientations/lengths per square (footprint.h) -- so the
-        # readout emits SLOTS_PER_CELL C-wide queries per head from the fused
-        # per-move vector and scores each against the board tokens: logit
-        # (h, cell, slot) = query_(h,slot) . board_token_cell. The two non-spatial
-        # catch-all classes (pass, not-win) come from a small direct head.
+        # Placement readout, one footprint-categorical distribution per head in
+        # PLANE_NAMES order. An anchored class factors as (board cell, slot),
+        # with SLOTS_PER_CELL orientation/length slots per square (footprint.h),
+        # so the fused per-move vector is projected to SLOTS_PER_CELL queries per
+        # head and logit(h, cell, slot) = query(h, slot) . board_token(cell).
+        # The two non-spatial catch-all classes (pass, not-win) come from a
+        # small direct head.
         self.num_planes = len(PLANE_NAMES)
         self.plane_proj = nn.Linear(head_in, self.num_planes * SLOTS_PER_CELL * trunk_channels)
         self.plane_catch = nn.Linear(head_in, self.num_planes * CATCH_ALL)
 
         self.evidence_fusion = EvidenceFusion(trunk_channels, num_heads=num_heads)
-        # The proves-best head: gain >= 0 through a softplus, off the fused
-        # per-move vector plus the scalar best-so-far -- the max sim value over
-        # the evidence set (evidence_fusion.best_so_far), the known quantity the
-        # gain target is measured from, fed in directly rather than left for
-        # the head to reconstruct from the mean-pooled evidence summary.
+        # The proves-best head predicts a gain >= 0 (softplus) from the fused
+        # per-move vector plus best-so-far, the best sim value in the evidence
+        # set (evidence_fusion.best_so_far). The gain label is measured from
+        # best-so-far, so the head gets it directly rather than having to
+        # reconstruct it from the mean-pooled evidence summary.
         self.proves_best = nn.Sequential(
             nn.Linear(head_in + 1, trunk_channels),
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, 1),
         )
 
-    # The evidence path's own parameters -- the fusion stage and the proves-best
-    # head -- against the backbone, everything else: the distilled student's.
-    # The evidence trainer either freezes the backbone at the student's
-    # checkpoint (freeze_backbone) or trains it on the sim-outcome loss at its
-    # own learning rate (backbone_parameters), no distillation anchor.
+    # Top-level modules owned by the evidence path. Everything else is the
+    # backbone, i.e. the distilled student. The evidence trainer either freezes
+    # the backbone at the student's weights (freeze_backbone) or trains it on
+    # the sim-outcome loss at its own learning rate (backbone_parameters).
     EVIDENCE_MODULES = ("evidence_fusion", "proves_best")
 
     @classmethod
@@ -202,12 +190,12 @@ class MoveSetEvalModel(nn.Module):
         return name.split(".", 1)[0] in cls.EVIDENCE_MODULES
 
     def freeze_backbone(self):
-        """Freeze every parameter outside EVIDENCE_MODULES, and pin those
-        modules to eval mode (the trunk's BatchNorm would otherwise switch to
-        batch statistics and drift its running stats under train()). Empty-
-        evidence exactness is then structural (the fusion's zero-init + hard
-        gate), so the plain pass is the student's, bit for bit, whatever
-        training does."""
+        """Freeze every parameter outside EVIDENCE_MODULES and pin the backbone
+        modules to eval mode, which train() then preserves; otherwise the
+        trunk's BatchNorm would use batch statistics and drift its running
+        stats. Because the fusion stage is a hard no-op on an empty evidence
+        set, the plain pass then stays the student's, bit for bit, however
+        long the evidence path trains."""
         self._backbone_frozen = True
         for name, param in self.named_parameters():
             param.requires_grad = self._is_evidence_param(name)
@@ -232,12 +220,12 @@ class MoveSetEvalModel(nn.Module):
         return [p for n, p in self.named_parameters() if not self._is_evidence_param(n)]
 
     def load_student(self, state_dict: dict):
-        """Initialize from a distilled student's state dict. The student may
-        predate the fusion stage, and its proves-best head is never taken
-        (nothing trains it there, and a student checkpoint may carry the head
-        at a width without the best-so-far input); those stay at their fresh
-        (zero-init / random) values. Anything else missing, or anything
-        unexpected, is a real mismatch and fails."""
+        """Initialize from a distilled student's state dict.
+
+        The evidence modules keep their fresh initialization when absent. The
+        student's proves-best head is always discarded: distillation never
+        trains it, and an older student may carry it without the best-so-far
+        input width. Any other missing or unexpected key raises."""
         state_dict = {k: v for k, v in state_dict.items() if not k.startswith("proves_best.")}
         missing, unexpected = self.load_state_dict(state_dict, strict=False)
         stray = [k for k in missing if not self._is_evidence_param(k)]
@@ -266,28 +254,24 @@ class MoveSetEvalModel(nn.Module):
         scalars: torch.Tensor,
         pos_id: torch.Tensor,
     ) -> torch.Tensor:
-        """Embed M flattened moves against the (plain) board token map -> (M, C).
-
-        Gathers the board token at each placed tile's square from that move's
-        own position, so the move encoder reads the board's representation of
-        the squares it plays on (pad squares gather token 0, masked out).
-        Exchange tiles carry letters but no squares (move_set_encoder.h):
-        gating by is_play zeroes the square-(0,0) tokens their zero squares
-        would otherwise gather, so a surrendered tile contributes its letter
-        and blank embeddings alone.
-        """
+        """Embed M flattened moves against the plain board token map -> (M, C)."""
+        # Pad slots gather token 0 and are masked out by the move encoder.
+        # Exchange tiles carry letters but square 0 (move_set_encoder.h), so the
+        # is_play scalar zeroes their gathered tokens: a surrendered tile
+        # contributes only its letter and blank embeddings.
         t = squares.shape[1]
         tile_board = board[pos_id.unsqueeze(1).expand(-1, t), squares]  # (M, T, C)
-        tile_board = tile_board * scalars[:, 2].view(-1, 1, 1)
+        tile_board = tile_board * scalars[:, 2].view(-1, 1, 1)  # scalars[:, 2] = is_play
         return self.move_encoder(letters, blanks, tile_mask, scalars, tile_board)
 
     def encode_evidence(
         self, board: torch.Tensor, evidence: EvidenceInputs
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Per-candidate evidence tokens over the plain board map (the move
-        encodings and token features must cache across loop iterations, so
-        they read the map the trunk produced, never a conditioned one).
-        Returns EvidenceFusion.encode_tokens' (tokens, spatial features)."""
+        """Per-candidate evidence tokens -> EvidenceFusion.encode_tokens'
+        (tokens, spatial features).
+
+        Reads the plain board map, never a conditioned one, so the tokens can be
+        cached across the deployment loop's iterations."""
         p, k = evidence.mask.shape
         pos_id = torch.arange(p, device=board.device).repeat_interleave(k)
         move_enc = self.encode_moves(
@@ -311,26 +295,25 @@ class MoveSetEvalModel(nn.Module):
         pos_id: torch.Tensor,
         best_so_far: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Score M encoded moves (M, C) against the board map and summary --
-        plain or evidence-conditioned, the machinery is identical. `best_so_far`
-        (P,) is each position's evidence-set best (evidence_fusion.best_so_far),
-        read by the proves-best head alone; None is the empty set's 0.
+        """Score M encoded moves (M, C) against a board map and summary, plain
+        or evidence-conditioned. `best_so_far` (P,) feeds only the proves-best
+        head; None means an empty evidence set (0).
 
-        Returns {"wld": (M,3) logits, "score_diff": (M,2) = [mean, std>0],
-        "planes": (M, num_planes, NUM_CLASSES) footprint logits, PLANE_NAMES order,
-        "gain": (M,) the proves-best expected gain, >= 0}.
+        Returns:
+          "wld":        (M, 3) logits
+          "score_diff": (M, 2) [mean, std > 0]
+          "planes":     (M, num_planes, NUM_CLASSES) footprint logits, PLANE_NAMES order
+          "gain":       (M,) proves-best expected gain, >= 0
         """
-        # Each move attends into its own position's board tokens. Grouping the
-        # queries by position keeps the key/value set at one copy per position,
-        # so the attention's W_k/W_v projections -- a function of the board
-        # alone, and ~C times the arithmetic of the attention math they feed --
-        # are amortized across candidates the same way the trunk is.
+        # Queries are grouped by position into a padded (P, maxK) grid so the
+        # key/value set is one copy per position. The W_k/W_v projections depend
+        # only on the board and cost ~C times the attention math they feed, so
+        # this amortizes them across candidates the same way the trunk is.
         rank, max_k = _rank_within_position(pos_id, board.shape[0])
         queries = board.new_zeros(board.shape[0], max_k, board.shape[2])  # (P, maxK, C)
         queries[pos_id, rank] = e
-        # The per-square attention weights are not a model output, and asking
-        # for them would both materialize a (P, maxK, 225) tensor -- the padded
-        # grid's largest by far -- and hold the call off the fused kernels.
+        # Returning the weights would materialize a (P, maxK, 225) tensor, the
+        # largest in the grid, and keep the call off the fused kernels.
         attended, _ = self.cross_attn(queries, board, board, need_weights=False)
         attended = attended[pos_id, rank]  # (P, maxK, C) -> (M, C)
 
@@ -339,12 +322,10 @@ class MoveSetEvalModel(nn.Module):
         sd_mean = out[:, 3:4]
         sd_std = F.softplus(out[:, 4:5]) + 1e-3
 
-        # Plane readout through the same padded grid as the cross-attention, so
-        # the (P, 225, C) board tokens are contracted once per position rather than
-        # gathered per move. The SLOTS_PER_CELL queries per head give
-        # (head, slot, cell) logits; ordered (head, cell, slot) they flatten to the
-        # anchored footprint classes (class = cell*slots + slot), then the direct
-        # catch-all logits append the two non-spatial classes.
+        # The placement readout reuses the padded grid, so the board tokens are
+        # contracted once per position rather than gathered per move. Logits are
+        # laid out (head, cell, slot) so they flatten to the anchored footprint
+        # classes (class = cell * slots + slot); the catch-all logits follow.
         c = board.shape[2]
         p, n = board.shape[0], board.shape[1]
         hs = self.num_planes * SLOTS_PER_CELL
@@ -379,10 +360,10 @@ class MoveSetEvalModel(nn.Module):
         move_pos_id: torch.Tensor,
         evidence: EvidenceInputs | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Encode P board positions and score the M flattened candidate moves,
-        optionally conditioned on a per-position evidence set (score_moves'
-        return contract). With `evidence` None -- or with a position's mask
-        row empty -- the plain one-pass model, bit-exactly.
+        """Encode P positions and score the M flattened candidates, optionally
+        conditioned on a per-position evidence set; returns score_moves' dict.
+        With `evidence` None, or for a position whose evidence mask row is
+        empty, the result is bit-identical to the plain one-pass model.
         """
         board, g = self.encode_board(input_spatial, input_scalar)
         e = self.encode_moves(
@@ -403,23 +384,19 @@ class MoveSetEvalModel(nn.Module):
 
 
 def win_equity(probs: torch.Tensor) -> torch.Tensor:
-    """Scalar move value from a WLD probability distribution (..., 3):
-    P(win) + 0.5*P(draw), the expected game-point value used to rank candidates.
-    This model and the teacher are ranked the same way for the recall metric;
-    the caller softmaxes this model's logits, while the teacher targets are
-    already probabilities."""
+    """P(win) + 0.5 * P(draw) from WLD probabilities (..., 3): the expected
+    game points used to rank candidates, for both student and teacher. Takes
+    probabilities, so the caller softmaxes the model's logits first."""
     return probs[..., 0] + 0.5 * probs[..., 1]
 
 
 def footprint_cell_marginal(plane_logits: torch.Tensor) -> torch.Tensor:
-    """Per-cell anchor marginal from footprint logits: softmax over the classes,
-    drop the two catch-all classes, and sum the SLOTS_PER_CELL slots at each cell
-    -> (..., num_planes, SIDE, SIDE).
+    """Probability that the move is anchored at each cell, from footprint
+    logits (..., num_planes, NUM_CLASSES) -> (..., num_planes, SIDE, SIDE).
 
-    A display-only reduction (Pr the move is anchored at a cell): the
-    Trajectories pane draws it beside the observed histogram's own anchor
-    marginal. The evidence path consumes footprint_slot_planes instead --
-    feeding it this marginal would be a collapse.
+    Display only: the Trajectories pane draws it beside the observed anchor
+    marginal. It sums away the slot axis, so model inputs use
+    footprint_slot_planes instead.
     """
     probs = F.softmax(plane_logits, dim=-1)[..., :ANCHORED]
     per_cell = probs.reshape(*probs.shape[:-1], SIDE * SIDE, SLOTS_PER_CELL).sum(-1)
@@ -427,15 +404,16 @@ def footprint_cell_marginal(plane_logits: torch.Tensor) -> torch.Tensor:
 
 
 def footprint_slot_planes(plane_logits: torch.Tensor) -> torch.Tensor:
-    """Footprint logits (..., num_planes, NUM_CLASSES) -> probabilities as
-    per-slot board channels (..., num_planes * SLOTS_PER_CELL, SIDE, SIDE):
-    softmax over all classes, drop the two catch-alls (no renormalization),
-    anchored class (cell, slot) at channel (head * SLOTS_PER_CELL + slot).
+    """Footprint logits (..., num_planes, NUM_CLASSES) -> anchored-class
+    probabilities as board channels (..., num_planes * SLOTS_PER_CELL, SIDE, SIDE),
+    class (cell, slot) of head h at channel h * SLOTS_PER_CELL + slot. The
+    softmax runs over all classes and the catch-alls are then dropped without
+    renormalizing.
 
-    The predicted half of the evidence-plane layout
-    (evidence_fusion.EVIDENCE_PLANE_NAMES), and -- flattened to (..., channels,
-    SIDE*SIDE) -- the `planes` output the proposal graphs serve. Traced by the
-    ONNX export, so it must stay plain reshape/permute arithmetic.
+    This is the predicted block of the evidence-plane layout
+    (evidence_fusion.EVIDENCE_PLANE_NAMES) and, flattened over SIDE*SIDE, the
+    `planes` output of the proposal graphs. The ONNX export traces it, so keep
+    it to plain reshape/permute arithmetic.
     """
     probs = F.softmax(plane_logits, dim=-1)[..., :ANCHORED]
     spatial = probs.reshape(*probs.shape[:-1], SIDE, SIDE, SLOTS_PER_CELL)
@@ -455,25 +433,17 @@ def compute_loss(
     huber_delta_std: float = 10.0,
     lambda_planes: float = 1.0,
 ) -> dict[str, torch.Tensor]:
-    """Distillation loss over the flattened candidate set (mean over all moves).
+    """Distillation loss over the flattened candidate set, averaged over moves.
 
-    Args:
-        outputs: forward() result. "wld" (M,3 logits), "score_diff" (M,2),
-                 "planes" (M, num_planes, NUM_CLASSES) footprint logits.
-        targets: "target_wld" (M,3) teacher probabilities, "target_score_diff"
-                 (M,2) teacher [mean, std] in score points, and -- on a
-                 plane-carrying corpus -- "target_planes" (M, num_planes,
-                 NUM_CLASSES) teacher footprint distributions.
+    `targets` holds the teacher's "target_wld" (M, 3) probabilities,
+    "target_score_diff" (M, 2) [mean, std] in score points, and, on a corpus
+    that stores planes, "target_planes" (M, num_planes, NUM_CLASSES).
 
-    WLD is soft cross-entropy against the teacher distribution (distillation),
-    the score-diff mean/std are Huber regressions in score points, and the
-    planes are soft softmax cross-entropy against the teacher's footprint
-    distribution -- the student softmaxes over all classes (unmasked; the teacher
-    target's illegal footprints are already zero, so the student learns to
-    suppress them). A batch without plane targets contributes a zero plane term
-    (the plane head simply gets no gradient from it).
+    WLD and planes are soft cross-entropy against the teacher distributions;
+    the score-diff mean and std are Huber regressions. The plane softmax is
+    unmasked: illegal footprints are already zero in the teacher target, so the
+    student learns to suppress them. Without plane targets the plane term is 0.
     """
-    # Soft cross-entropy: -sum(teacher_prob * log_softmax(pred)).
     log_pred = F.log_softmax(outputs["wld"], dim=1)
     loss_wld = -(targets["target_wld"] * log_pred).sum(dim=1).mean()
 
@@ -486,8 +456,6 @@ def compute_loss(
     loss_sd = loss_sd_mean + loss_sd_std
 
     if "target_planes" in targets:
-        # Soft softmax-CE per head over the footprint classes, mean over heads and
-        # moves: -sum_c teacher[c] * log_softmax(pred)[c].
         log_pred_planes = F.log_softmax(outputs["planes"], dim=-1)
         loss_planes = -(targets["target_planes"] * log_pred_planes).sum(dim=-1).mean()
     else:

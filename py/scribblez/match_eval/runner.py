@@ -1,22 +1,16 @@
-"""The match_eval role: automated match play during training (roadmap A1).
+"""The match_eval role: match play against a fixed opponent during training.
 
-A worker beside the trainer -- on this machine or on another one over ssh --
-that turns exported checkpoints into match-play readouts without blocking the
-training loop. Each cycle plays the model its inbox holds against the
-configured opponent through the match harness, over the same fixed number of
-mirrored pairs for every generation, and delivers the outcome as one small
-JSON.
+The worker runs beside the trainer, locally or on another machine over ssh.
+Each cycle it plays the model in its inbox against the configured opponent,
+over the same seeds and number of mirrored pairs for every generation, and
+delivers the outcome as a small JSON file.
 
-What to play and what the result means are the controller's business, not the
-worker's (match_eval/dispatch.py): it puts the model in the inbox and turns
-the delivered file into the tag's dashboard.db rows. So this runner needs
-nothing but its own directory -- which is what lets the role run on a machine
-that has neither the database nor the exports, e.g. a second machine doing the
-eval matches while this one trains.
+The controller (dispatch.py) decides what to play and records the results, so
+this runner needs only its own inbox and can run on a machine that has
+neither the database nor the exports.
 
-An interrupted match (SIGTERM, a killed container) leaves the model where it
-was, so the next start replays it from the same fixed seeds rather than losing
-it or recording half of it.
+An interrupted match leaves the model in the inbox, so the next start replays
+it from the same seeds.
 """
 
 import json
@@ -30,38 +24,30 @@ from scribblez.paths import DONE_SUFFIX, MATCH_RESULTS_DIR, ONNX_PREFIX, TagPath
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
-# How often to re-check the inbox when the controller has assigned nothing.
-# Short because it is dead time on the eval machine at the worst moment: the
-# next assignment lands just after a match ends, so a long poll would idle the
-# GPU for half of it on every match. Listing a directory that holds at most a
-# couple of files costs microseconds.
+# Inbox poll interval while idle. Kept short because the next assignment
+# usually lands just after a match ends, so polling latency is idle GPU time on
+# every match; listing the tiny inbox is nearly free.
 POLL_SECONDS = 1
 
 
 def _assigned_model(paths: TagPaths, worker_id: str) -> Path | None:
-    """The export this slot has been assigned, or None while it is idle. The
-    newest wins if several are somehow there; the others are picked up on later
-    cycles."""
+    """The export assigned to this slot, or None while idle. If several are
+    present, the newest goes first."""
     inbox = paths.match_inbox_dir(worker_id)
     models = sorted(inbox.glob(f"{ONNX_PREFIX}*.onnx"))
     return models[-1] if models else None
 
 
 def _step_companion(onnx_path: Path) -> Path:
-    """Where a move-proposal export's step graph sits beside the cache graph
-    the ledger names -- in the inbox as in the tag's models/
-    (TagPaths.proposal_step_path): a step/ subdirectory the model_epoch_* glob
-    never sees."""
+    """Where a move-proposal export's step graph sits relative to its cache
+    graph (see TagPaths.proposal_step_path)."""
     return onnx_path.parent / "step" / onnx_path.name
 
 
 def _model_player_spec(onnx_path: Path, params) -> str:
-    """The --player spec that plays the assigned export. Two shapes of
-    generation exist: a position-evaluation export plays as the neural agent,
-    and a move-proposal export -- recognized by the step graph delivered beside
-    it -- plays as UltimateBot at the tag's own sim configuration (rollouts,
-    truncation, and the match sim budget), the deployment loop the evidence
-    corpus was made for."""
+    """The --player spec for the assigned export. A position-evaluation export
+    plays as the neural agent. A move-proposal export, recognized by its step
+    graph, plays as UltimateBot with the tag's sim settings."""
     step = _step_companion(onnx_path)
     if not step.exists():
         return f"--type=neural --model={onnx_path} --name=model"
@@ -76,8 +62,8 @@ def _model_player_spec(onnx_path: Path, params) -> str:
 
 @dataclass(frozen=True)
 class MatchOutcome:
-    """One generation's finished match: the pentanomial pair counts and the
-    per-game W/D/L behind them."""
+    """One generation's match result: pair-score counts
+    (stats.pair_score_counts) and per-game W/D/L."""
 
     pair_counts: list[int]
     wins: int
@@ -90,8 +76,7 @@ class MatchOutcome:
 
 
 def _play_match(ctx: WorkerContext, model: Path) -> MatchOutcome:
-    """Play one generation's match: match_pairs mirrored pairs off the tag's
-    base seed."""
+    """Play `match_pairs` mirrored pairs from the tag's fixed seed."""
     p = ctx.params
     result = harness.play_round(
         _model_player_spec(model, p),
@@ -107,9 +92,9 @@ def _play_match(ctx: WorkerContext, model: Path) -> MatchOutcome:
 
 
 def match_record(ctx: WorkerContext, gen: int, outcome: MatchOutcome, elapsed: float) -> dict:
-    """One finished match as the controller ingests it (dispatch.RESULT_FIELDS).
-    The columns the controller fills in itself -- the rows-clock label -- are
-    not here: they are read off a database this worker may not have."""
+    """A finished match in the form the controller ingests
+    (dispatch.RESULT_FIELDS). Rows trained is omitted; the controller adds it
+    from the database, which this worker may not have."""
     mean, ci = stats.score_confidence_interval(outcome.pair_counts)
     return {
         "epoch": gen,
@@ -135,16 +120,15 @@ def _deliver(ctx: WorkerContext, record: dict) -> int:
 
 
 def run(ctx: WorkerContext) -> int:
-    """The match_eval role runner: one assigned generation's match per cycle."""
+    """The match_eval role entry point."""
     paths = ctx.tag_paths()
     stats_rec = WorkerStats(ctx)
     print(
         f"worker {ctx.worker_id}: match eval for tag '{ctx.tag}' vs '{ctx.params.match_opponent}'"
     )
     if ctx.params.match_every_generations <= 0:
-        # Said once rather than exiting: an exited worker is one the reconcile
-        # pass respawns, so a disabled tag would become a restart loop. The
-        # slot idles instead, and its log says why it will never do anything.
+        # Idle rather than exit: the reconcile pass respawns exited workers, so
+        # exiting would become a restart loop.
         print("match_every_generations is 0: match eval is disabled for this tag")
 
     cycles = 0
@@ -160,11 +144,8 @@ def run(ctx: WorkerContext) -> int:
             outcome = _play_match(ctx, model)
             record = match_record(ctx, gen, outcome, time.monotonic() - t0)
             nbytes = _deliver(ctx, record)
-            # Marked, not removed: the controller reads the inbox to decide
-            # what to assign, and until it has the result in hand -- which for
-            # a container is a collection away -- this generation must still
-            # count as spoken for. It removes the marker once the result is
-            # recorded (match_eval/dispatch.py).
+            # Mark rather than delete: the generation must stay assigned until
+            # the controller has the result (see dispatch.py).
             model.rename(model.with_name(model.name + DONE_SUFFIX))
             stats_rec.cycle_done(
                 {"match_s": record["elapsed_s"]}, units=outcome.games, nbytes=nbytes

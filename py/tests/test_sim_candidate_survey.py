@@ -20,8 +20,9 @@ def summary(wins: int) -> dict:
 
 
 def paired(wins: int, ref_wins: int) -> list[float]:
-    """Paired moments against a cut move this one's rollouts disagree with as
-    little as the two win counts allow (the tightest CRN can make them)."""
+    """Paired-difference moments against a cut move, with the two moves' rollouts
+    disagreeing as little as their win counts allow: the tightest pairing common
+    random numbers can produce."""
     return [float(wins - ref_wins), float(abs(wins - ref_wins))]
 
 

@@ -1,19 +1,14 @@
-"""Argparse help formatters.
+"""Argparse help formatter that always shows defaults.
 
-`argparse.ArgumentDefaultsHelpFormatter` only appends "(default: ...)" to an
-argument's help text. If an argument has no `help=` at all, argparse skips the
-help column entirely for that argument, so the default is never shown. This
-module provides a drop-in replacement that shows the default in that case too.
+`argparse.ArgumentDefaultsHelpFormatter` appends "(default: ...)" to existing
+help text, so an argument declared without `help=` never shows its default. The
+formatter here fills in the default for those arguments too.
 """
 
 import argparse
 
 
 class ArgumentDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
-    """Like `argparse.ArgumentDefaultsHelpFormatter`, but also shows the
-    default value for arguments that have no `help=` text.
-    """
-
     def add_argument(self, action):
         if not action.help and action.default is not argparse.SUPPRESS:
             defaulting_nargs = [argparse.OPTIONAL, argparse.ZERO_OR_MORE]

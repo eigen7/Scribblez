@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Format and lint all of the project's Python sources with Ruff.
+"""Format and lint the project's first-party Python with Ruff.
 
-The Python counterpart of py/tools/clang_format_all_cpp_files.py. Default mode
-reformats in place and applies Ruff's safe lint fixes; ``--check`` reports what
-would change and exits non-zero if anything does, without modifying files.
+The Python counterpart of clang_format_all_cpp_files.py:
 
-Ruff reads its configuration from the repo-root pyproject.toml ([tool.ruff]).
-The target paths below are the project's first-party Python; the checkouts
-under subtrees/ and the build directory are excluded by that config.
+    py/tools/ruff_format_all_py_files.py            # apply safe lint fixes, then reformat
+    py/tools/ruff_format_all_py_files.py --check    # report only; exit 1 if anything differs
+
+Configuration lives in the repo-root pyproject.toml ([tool.ruff]), which also
+excludes subtrees/ and target/.
 """
 
 import argparse
@@ -18,9 +18,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# First-party Python: the package/scripts/tests tree, the host-side setup
-# scripts at the repo root, and the position-metadata helper. Paths are
-# relative to REPO_ROOT and passed straight to Ruff, which applies the
+# Relative to REPO_ROOT and passed straight to Ruff, which applies the
 # pyproject excludes within them.
 TARGETS = [
     "py",
@@ -33,24 +31,19 @@ TARGETS = [
 
 
 def _abort(message: str):
-    """Print an error to stderr and exit non-zero."""
     print(f"ERROR: {message}", file=sys.stderr)
     sys.exit(1)
 
 
 def _run_ruff(args: list[str]) -> int:
-    """Run ``ruff`` with *args* from the repo root; return its exit code."""
     return subprocess.run(["ruff", *args, *TARGETS], cwd=REPO_ROOT).returncode
 
 
 def main(check: bool):
-    """Format and lint the targets, or check them when *check* is true."""
     if shutil.which("ruff") is None:
         _abort("ruff not found on PATH.")
     if check:
-        # Linter first, then the formatter, so a single run surfaces both
-        # classes of problem. Combine the exit codes so either failing fails
-        # the whole check.
+        # Run both even if the first fails, so one run reports every problem.
         rc = _run_ruff(["check"])
         rc |= _run_ruff(["format", "--check"])
         if rc:
@@ -66,7 +59,6 @@ def main(check: bool):
 
 
 def _parse_args() -> bool:
-    """Return whether ``--check`` was requested."""
     parser = argparse.ArgumentParser(
         description="Run Ruff over the project's Python sources. With --check, "
         "report files that would change and exit non-zero if any "

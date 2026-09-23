@@ -1,17 +1,18 @@
-"""Position evaluation analysis: the GCG position dataset and decoding a model's
-predictions over it for the dashboard.
+"""The position evaluation eval sets: loading positions and Monte-Carlo ground
+truth, running a model over them, and scoring it.
 
-Ground truth (per-position win/loss/draw + the exact final-score-delta distribution)
-is precomputed offline by the `monte_carlo_sim_tool` and committed alongside the
-dataset, one file per information condition (what a rollout knows of the
-opponent's leave): `monte-carlo-sim-results.face-up-leaves.json` and
-`monte-carlo-sim-results.hidden-leaves.json`. A model is measured against the
-truth of the condition it trains under. This module owns the Python side: listing
-the dataset's GCG positions, building the model-input batch from them (via
-`scribblez.ffi.analyze_position_eval_gcg`), and decoding a model's outputs into the
-per-position predictions the dashboard stores. The trainer writes those predictions
-at each checkpoint; the dashboard API reads them back and pairs them with the
-Monte-Carlo ground truth. See docs/react_dashboard.md.
+The trainer scores every checkpoint on the large set (quality_metrics,
+placement_metrics); the dashboard's Positions tab shows the small set
+(docs/react_dashboard.md).
+
+Ground truth comes from monte_carlo_sim_tool, run offline and committed beside
+each dataset: WLD counts, the final score-differential histogram, and placement
+planes. There is one results file per information condition, i.e. what a
+rollout knows of the opponent's leave (ground_truth_path). A model is scored
+against the condition it trains under.
+
+Each position is the board after its GCG's final move, evaluated from the POV of
+the player who made that move.
 """
 
 import json
@@ -31,24 +32,19 @@ from scribblez.ffi import (
 from scribblez.paths import EVAL_POSITIONS_DIRS
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
 
-# The frozen evaluation sets: post-move positions (the final recorded move is
-# the evaluated player's) whose Monte-Carlo ground truth lives next to the GCGs.
-# DEFAULT_DATASET is the small hand-built set (loose .gcg files) the Positions
-# tab scrubs; LARGE_DATASET is the machine-harvested penultimate-bingo set
-# (committed as part-*.gcgs bundles) the Loss tab's aggregate quality curves are
-# measured over. Located by paths.py, which is what a bundle-run worker's
-# fetch of them keys on.
+# DEFAULT_DATASET: the small hand-built set of loose .gcg files, shown in the
+# Positions tab. LARGE_DATASET: a machine-harvested set stored as part-*.gcgs
+# bundles, behind the Loss tab's quality curves.
 DEFAULT_DATASET, LARGE_DATASET = EVAL_POSITIONS_DIRS
 
-# The record boundary in a part-*.gcgs bundle: every GCG block starts with this line.
+# Every GCG block in a part-*.gcgs bundle starts with this line.
 GCG_MARKER = "#character-encoding UTF-8"
 
 BOARD_SIZE = 15
 
 
 def ground_truth_path(dataset_dir: str | Path, face_up_leaves: bool) -> Path:
-    """The dataset's Monte-Carlo results file for an information condition (the
-    names monte_carlo_sim_tool writes)."""
+    """The dataset's Monte-Carlo results file for an information condition."""
     condition = "face-up-leaves" if face_up_leaves else "hidden-leaves"
     return Path(dataset_dir) / f"monte-carlo-sim-results.{condition}.json"
 
@@ -59,7 +55,7 @@ def dataset_gcgs(dataset_dir: str | Path) -> list[Path]:
 
 
 def split_bundle(text: str) -> list[str]:
-    """Split a part-*.gcgs bundle's text into its GCG blocks (each starting at GCG_MARKER)."""
+    """Split a part-*.gcgs bundle's text into its GCG blocks."""
     blocks: list[str] = []
     current: list[str] = []
     for line in text.splitlines():
@@ -74,12 +70,10 @@ def split_bundle(text: str) -> list[str]:
 
 
 def _dataset_items(dataset_dir: str | Path) -> list[tuple[str, str]]:
-    """(stem, gcg_text) for every position in the dataset, in stable order.
-
-    A dataset is either loose `pos-*.gcg` files (the small hand-built set) or
-    `part-*.gcgs` bundles of concatenated GCG blocks (the large harvested set). For
-    bundles the stems are `pos-NNNN` in bundle order, matching the Monte-Carlo
-    ground-truth keys the build_position_eval_test_set explode step produced.
+    """(stem, gcg_text) for every position, in stable order, from either loose
+    `pos-*.gcg` files or `part-*.gcgs` bundles. Bundle positions are named
+    `pos-NNNN` in bundle order, the names scripts/build_position_eval_test_set.py
+    gives them when it computes the ground truth.
     """
     loose = dataset_gcgs(dataset_dir)
     if loose:
@@ -92,13 +86,8 @@ def _dataset_items(dataset_dir: str | Path) -> list[tuple[str, str]]:
 
 
 def load_inputs(dataset_dir: str | Path, arm: InputArm) -> tuple[list[str], np.ndarray]:
-    """(names, inputs): each position's flat position-eval model-input tensor
-    under `arm`, stacked (N, F).
-
-    `names` are the position stems (matching the Monte-Carlo ground-truth keys). Each
-    input is encoded from the POV of the player that made the final move -- the same
-    seat the ground truth scores. Works for both loose-.gcg and bundled datasets.
-    """
+    """(names, inputs): the position stems, which key the ground truth, and
+    the flat model inputs under `arm`, stacked (N, F)."""
     items = _dataset_items(dataset_dir)
     names = [stem for stem, _ in items]
     rows = [analyze_position_eval_gcg(text, arm) for _, text in items]
@@ -106,9 +95,8 @@ def load_inputs(dataset_dir: str | Path, arm: InputArm) -> tuple[list[str], np.n
 
 
 def split_input(inputs: np.ndarray, spatial_planes: int) -> tuple[np.ndarray, np.ndarray]:
-    """Split flat inputs (N, F) into the model's (spatial (N, P, 15, 15), scalar
-    (N, S)) halves -- the encoder lays spatial planes (channel-major) before the
-    scalar block."""
+    """Split flat (N, F) inputs into (spatial (N, P, 15, 15), scalar (N, S)).
+    The encoder lays out the spatial planes first, channel-major."""
     cells = BOARD_SIZE * BOARD_SIZE
     spatial = inputs[:, : spatial_planes * cells].reshape(
         -1, spatial_planes, BOARD_SIZE, BOARD_SIZE
@@ -119,18 +107,14 @@ def split_input(inputs: np.ndarray, spatial_planes: int) -> tuple[np.ndarray, np
 
 @torch.no_grad()
 def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
-    """Run `model` over the dataset inputs and decode each position's outputs:
+    """Run `model` over the dataset inputs and decode its outputs:
 
-        wld               (N, 3) float32   softmax win/draw/loss probabilities (in that order)
-        sd_mean           (N,)   float32   predicted final-score-delta mean (points)
-        sd_std            (N,)   float32   predicted final-score-delta std (points, a Gaussian)
-        placement_logits  (N, 4, C) float32  the placement heads' raw footprint logits,
-                                             in PLACEMENT_HEAD_NAMES order
+        wld               (N, 3)     float32  win/draw/loss probabilities
+        sd_mean           (N,)       float32  final score-differential mean (points)
+        sd_std            (N,)       float32  final score-differential std (points)
+        placement_logits  (N, 4, C)  float32  raw footprint logits, PLACEMENT_HEAD_NAMES order
 
-    The value outputs are exactly what the dashboard pairs against the Monte-Carlo
-    ground truth: the WLD bars and the score-delta Gaussian overlaid on the MC
-    histogram. The placement logits are raw because masking and collapsing them
-    to per-cell planes is the engine's job (collapse_placement).
+    Placement logits stay raw; collapse_placement turns them into per-cell planes.
     """
     spatial, scalar = split_input(inputs, spatial_planes)
     sp = torch.from_numpy(np.ascontiguousarray(spatial)).to(device)
@@ -148,11 +132,10 @@ def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
 
 
 def load_placement_frame(dataset_dir: str | Path) -> tuple[list[str], np.ndarray]:
-    """What collapsing and scoring a dataset's placement predictions needs beyond
-    the model inputs: each position's GCG text (the engine re-derives the board
-    from it to mask and scatter the footprints) and its per-head cell legality,
-    (N, 4, 15, 15) bool -- the cells some legal footprint of that head covers, the
-    only cells a residual can live on."""
+    """(texts, legal): what collapsing and scoring placement predictions needs
+    beyond the model inputs. `texts` are the positions' GCGs, from which the
+    engine rebuilds each board. `legal` (N, 4, 15, 15) bool marks the cells some
+    legal footprint of each head covers."""
     items = _dataset_items(dataset_dir)
     texts = [text for _, text in items]
     legal = np.stack([legal_position_eval_placement(text) for text in texts])
@@ -160,12 +143,9 @@ def load_placement_frame(dataset_dir: str | Path) -> tuple[list[str], np.ndarray
 
 
 def collapse_placement(logits: np.ndarray, texts: list[str]) -> np.ndarray:
-    """The per-cell occupancy planes, (N, 4, 15, 15), of the placement logits
-    (N, 4, C) over the positions' GCG `texts`: per position, the engine masks the
-    illegal footprints, softmaxes, and scatters each footprint's probability onto
-    the cells it covers -- Pr[the next move covers cell] for the plays heads,
-    Pr[covers cell AND that seat wins] for the win heads. The same collapse the
-    Positions tab draws and the Monte-Carlo planes count."""
+    """Collapse placement logits (N, 4, C) into per-cell planes (N, 4, 15, 15)
+    via the engine (ffi.collapse_position_eval_placement). These are the planes
+    the Positions tab draws and the Monte-Carlo planes are compared with."""
     return np.stack(
         [
             collapse_position_eval_placement(text, raw)
@@ -175,18 +155,16 @@ def collapse_placement(logits: np.ndarray, texts: list[str]) -> np.ndarray:
 
 
 def load_ground_truth(dataset_dir: str | Path, names: list[str], face_up_leaves: bool) -> dict:
-    """Per-position Monte-Carlo ground truth under an information condition,
-    aligned to `names`.
+    """Monte-Carlo ground truth for an information condition, aligned to `names`:
 
-    Reads the condition's results file and returns arrays over the positions:
-        win_eq    (N,)   empirical win equity (win + 0.5*draw)
-        wld       (N, 3) empirical [win, draw, loss] fractions (model output order)
-        mean      (N,)   final-score-delta mean (points)
-        std       (N,)   final-score-delta std (points)
-        placement (N, 4, 15, 15) per-cell rollout fractions, PLACEMENT_HEAD_NAMES
-                  order (the sim's PlacementCounts / n: how often that seat's
-                  first move covered the cell, and did so in a rollout it won);
-                  None when the results file predates the planes
+    win_eq     (N,)            win + 0.5 * draw fraction
+    wld        (N, 3)          [win, draw, loss] fractions
+    mean       (N,)            final score-differential mean (points)
+    std        (N,)            final score-differential std (points)
+    placement  (N, 4, 15, 15)  per-cell rollout fractions in PLACEMENT_HEAD_NAMES
+                               order: how often that seat's next move covered the
+                               cell (and, for win heads, that seat won); None if the
+                               results file has no placement planes
     """
     gt = json.loads(ground_truth_path(dataset_dir, face_up_leaves).read_text())
     n = len(names)
@@ -224,9 +202,8 @@ def load_ground_truth(dataset_dir: str | Path, names: list[str], face_up_leaves:
 
 
 def quality_metrics(preds: dict, gt: dict) -> dict:
-    """Aggregate model-vs-Monte-Carlo quality scalars over the dataset (all lower is
-    better): win-equity MAE and full-WLD Brier for the win/draw/loss head, and mean-
-    and std-MAE (points) for the score-delta Gaussian head."""
+    """Model-vs-Monte-Carlo value metrics over the dataset, all lower-is-better:
+    win-equity MAE, WLD Brier score, and score-differential mean and std MAE."""
     pred_win_eq = preds["wld"][:, 0] + 0.5 * preds["wld"][:, 1]
     return {
         "eval_win_mae": float(np.mean(np.abs(pred_win_eq - gt["win_eq"]))),
@@ -251,30 +228,26 @@ def placement_metric_names() -> list[str]:
 
 
 def placement_metrics(planes: np.ndarray, truth: np.ndarray, legal: np.ndarray) -> dict:
-    """Aggregate placement quality vs Monte-Carlo over the dataset, per head, from
-    the model's collapsed planes and the MC planes (both (N, 4, 15, 15)) over the
-    head's legal cells (N, 4, 15, 15) bool -- the systematic form of the Positions
-    tab's residual heat map:
+    """Per-head placement metrics: the model's collapsed planes against the
+    Monte-Carlo planes (both (N, 4, 15, 15)), restricted to each head's legal
+    cells. The aggregate form of the Positions tab's residual heat map.
 
-        eval_place_l1_<head>    misplaced coverage, in tiles: sum |model - MC| over
-                                the legal cells, per position, averaged (lower is
-                                better). A plane sums to the expected number of
-                                tiles the move places (times the win probability
-                                for a win head), so this is how many tiles' worth
-                                of coverage sit on the wrong cells. Absolute
-                                rather than relative to the MC mass, which is
-                                near zero for a win head wherever that seat
-                                rarely wins and would blow the ratio up.
-        eval_place_top1_<head>  fraction of positions where the model's most
-                                covered cell is the rollouts' most covered cell
+        eval_place_l1_<head>    sum of |model - MC| over the cells, averaged over
+                                positions (lower is better). A plane sums to the
+                                expected tiles placed (times the win probability
+                                for a win head), so this is tiles' worth of
+                                coverage on the wrong cells. It is absolute rather
+                                than relative to the MC mass, which is near zero
+                                for a win head whose seat rarely wins.
+        eval_place_top1_<head>  fraction of positions where the model's and the
+                                rollouts' most-covered cells agree
 
-    Positions where the MC plane is empty for a head (the win heads, when that
-    seat never won a rollout) contribute to neither statistic for that head; a
-    head empty on every position records nothing.
+    Positions where a head's MC plane is empty (a win head whose seat never won)
+    are skipped for that head; a head empty everywhere records nothing.
 
-    The two sides are comparable for the self heads only because the MC planes
-    credit each reply's footprint decoded on the position's board, as the
-    collapse does -- not its literal squares (accumulate_rollout_placement,
+    The self heads are comparable only because the MC planes credit each
+    reply's footprint as decoded on the position's board, the way the collapse
+    does, rather than its literal squares (accumulate_rollout_placement in
     engine/include/sim/monte_carlo_sim.h).
     """
     record = {}

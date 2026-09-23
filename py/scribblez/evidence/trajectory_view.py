@@ -1,24 +1,20 @@
-"""The trajectory pane's model side: one position-set decision point re-scored
-by an evidence checkpoint at every evidence prefix.
+"""Model side of the dashboard's Trajectories pane: one decision point from
+the position set, re-scored by an evidence checkpoint at every evidence prefix
+(the first `prefix` trajectory candidates, as the deployed loop accumulates
+them).
 
-A DecisionAnalysis pairs a loaded checkpoint with one .gcg position and its
-trajectory .sobs. Its constructor runs everything the prefix does not change --
-the board row and the FULL legal move list from the engine
-(ffi.gcg_position_inputs), the board trunk once, the move encodings and the
-plain (evidence-free) pass over every legal move -- and `conditioned(prefix)`
-runs only the fusion stage and the re-score, reading the first `prefix`
-trajectory candidates as evidence exactly the way the deployed loop and the
-trainer do (move_set_eval.evidence.build_evidence_inputs). Prefix 0 is the
-plain pass by construction (an all-masked evidence set leaves the fusion's
-hard gate shut), which the pane relies on and a test asserts.
+A DecisionAnalysis pairs a checkpoint with one .gcg position and its
+trajectory .sobs. Its constructor computes everything independent of the
+prefix once: the board input and the full legal move list
+(ffi.gcg_position_inputs), the trunk, the move encodings, and the plain pass
+over every legal move. `conditioned(prefix)` then runs only the fusion stage
+and the re-score, building evidence with the deployment builder
+(move_set_eval.evidence.build_evidence_inputs). Prefix 0 is exactly the plain
+pass, since an empty evidence set gates the fusion stage off.
 
-`payload` turns one prefix's outputs into what the pane renders: the
-trajectory cards, the move table over every legal move ranked by conditioned
-value with the argmax-gain unsimmed move marked as the loop's next sim, and
-for the selected simmed candidate the sim and predicted placement planes
-(the pane draws their residual). The
-trainer's position-set metric (position_set_metrics) reads the same
-analyses, so what it charts is what the pane shows.
+`payload` turns one prefix's outputs into what the pane renders. The trainer's
+position-set metric (position_set_metrics) reads the same analyses, so what it
+charts is what the pane shows.
 """
 
 from __future__ import annotations
@@ -46,8 +42,8 @@ from scribblez.sim_evidence.sobs import (
 
 
 def _sim_stats(obs: np.ndarray) -> dict:
-    """One .sobs observation record's W/D/L frequencies, win value, its
-    standard error, and the delta moments, for a trajectory card."""
+    """A trajectory card's sim stats from one .sobs observation record: W/D/L
+    frequencies, win value and its standard error, and the delta moments."""
     n = max(int(obs["n"]), 1)
     win, draw, loss = (float(obs[k]) / n for k in ("wins", "draws", "losses"))
     value = win + 0.5 * draw
@@ -66,8 +62,9 @@ def _sim_stats(obs: np.ndarray) -> dict:
 
 
 def move_tiles(move: np.void) -> list[dict]:
-    """A MOVE_DTYPE play's placed tiles as the web Board's candidate tiles
-    ({row, col, letter, isBlank}), lane order; empty for an exchange or pass."""
+    """A MOVE_DTYPE play's placed tiles in the web Board's format
+    ({row, col, letter, isBlank}), in lane order; empty for an exchange or
+    pass."""
     if move["type"] != MOVE_PLAY:
         return []
     start, mask, horizontal = int(move["start"]), int(move["square_mask"]), bool(move["horizontal"])
@@ -95,10 +92,9 @@ def move_lane(move: np.void) -> dict | None:
 
 @dataclass
 class ScoredPass:
-    """A pass's per-legal-move readouts as numpy: value (N,), gain (N,) and
-    the per-cell placement planes (N, 4, 15, 15) -- the footprint head's anchor
-    marginal, a display-only reduction (the evidence path consumes the full
-    footprint distribution)."""
+    """One pass's per-legal-move readouts as numpy: value (N,), gain (N,),
+    and planes (N, num_planes, 15, 15), the display-only anchor marginal
+    (model.footprint_cell_marginal)."""
 
     value: np.ndarray
     gain: np.ndarray
@@ -124,8 +120,8 @@ def _ranks(value: np.ndarray) -> np.ndarray:
 
 
 class DecisionAnalysis:
-    """One (checkpoint, position, trajectory): the prefix-independent passes
-    computed once, the conditioned pass memoized per prefix."""
+    """One (checkpoint, position, trajectory), with the conditioned pass
+    memoized per prefix."""
 
     def __init__(
         self,
@@ -155,8 +151,8 @@ class DecisionAnalysis:
         return len(self.inputs.moves)
 
     def _locate_candidates(self) -> np.ndarray:
-        """Each trajectory candidate's index in the legal move list (the
-        generator drew from this very ranking, so byte-equal Moves exist)."""
+        """Each trajectory candidate's index in the legal move list, matched
+        by bytes: the generator drew the candidates from this same list."""
         index = {m.tobytes(): i for i, m in enumerate(self.inputs.moves)}
         found = []
         for m in self.sobs.moves:
@@ -187,8 +183,8 @@ class DecisionAnalysis:
         self.plain = ScoredPass.from_outputs(self._plain_out)
 
     def conditioned(self, prefix: int) -> ScoredPass:
-        """The conditioned pass over every legal move, the first `prefix`
-        trajectory candidates as evidence (memoized per prefix)."""
+        """The conditioned pass over every legal move, with the first
+        `prefix` trajectory candidates as evidence."""
         if prefix not in self._cond_cache:
             self._cond_cache[prefix] = ScoredPass.from_outputs(self.conditioned_outputs(prefix))
         return self._cond_cache[prefix]
@@ -221,9 +217,8 @@ class DecisionAnalysis:
         return np.array([_sim_stats(o)["value"] for o in self.sobs.obs], dtype=np.float64)
 
     def observed_planes(self) -> np.ndarray:
-        """(K, 4, 15, 15): each head's observed anchor marginal for display --
-        the footprint histogram normalized by rollouts, summed over slots, the
-        counterpart of the prediction's footprint_cell_marginal."""
+        """(K, 4, 15, 15) observed anchor marginals per head, for display:
+        the observed counterpart of footprint_cell_marginal."""
         planes = observed_slot_planes(self.sobs.obs)  # (K, 4*slots, 15, 15)
         k = len(self.sobs.obs)
         return planes.reshape(k, 4, SLOTS_PER_CELL, *planes.shape[-2:]).sum(axis=2)
@@ -234,8 +229,8 @@ def _round_planes(planes: np.ndarray) -> list:
 
 
 def _next_sim(gain: np.ndarray, sim_index: np.ndarray, prefix: int) -> int | None:
-    """The loop's next acquisition at this prefix: the argmax-gain move among
-    those NOT yet simmed in the prefix, or None when everything is simmed."""
+    """The loop's next sim at this prefix: the argmax-gain move not yet in
+    the prefix, or None if every move is."""
     candidates = np.ones(len(gain), dtype=bool)
     candidates[sim_index[:prefix]] = False
     if not candidates.any():
@@ -251,11 +246,13 @@ def payload(
     slot: int | None = None,
     top_n: int = 40,
 ) -> dict:
-    """The pane's per-(position, generation, prefix) view, with the overlay
-    planes of the simmed candidate at trajectory `slot` and the move table cut
-    to the top `top_n` of either ranking plus every simmed candidate (the board
-    bundle is the caller's, from ffi.gcg_position_board_json; `notations` is
-    its `moves` list, in legal-move order)."""
+    """The pane's view of one (position, generation, prefix): trajectory
+    cards, a move table ranked by conditioned value with the loop's next sim
+    marked, and the observed and predicted planes of the simmed candidate at
+    trajectory `slot`. The table keeps the top `top_n` of either ranking plus
+    every simmed candidate. `notations` is the legal moves' notation in
+    legal-move order (the `moves` list of ffi.gcg_position_board_json, whose
+    board the caller serves)."""
     sobs = analysis.sobs
     plain, cond = analysis.plain, analysis.conditioned(prefix)
     trained = analysis.ckpt.trained
@@ -321,11 +318,8 @@ def payload(
 
 
 def _planes_block(analysis: DecisionAnalysis, cond: ScoredPass, slot: int | None) -> dict | None:
-    """The overlay's plane pair for one simmed candidate (its trajectory slot):
-    per placement head the observed anchor marginal (the sim's footprint
-    histogram collapsed for display) and the conditioned pass's predicted
-    per-cell marginal at this prefix (the plain one at prefix 0, where the two
-    passes coincide). None without a candidate."""
+    """Per placement head, the observed and conditioned-predicted anchor
+    marginals of the simmed candidate at `slot`; None without a valid slot."""
     if slot is None or not 0 <= slot < len(analysis.sim_index):
         return None
     observed = analysis.observed_planes()
@@ -344,13 +338,15 @@ def _planes_block(analysis: DecisionAnalysis, cond: ScoredPass, slot: int | None
 
 
 def position_set_metrics(analyses: list[DecisionAnalysis]) -> dict[str, float]:
-    """The trainer's position-set readout over a set's decision analyses: at
-    every evidence prefix of every position, the rank (0 = best, over the
-    position's simmed candidates) of the sim-best candidate under the
-    conditioned value and under the plain value, averaged -- lower is
-    better, and conditioned below plain is the loop learning from its sims.
-    Also the mean over prefixes of whether the conditioned argmax over the
-    simmed candidates is the sim-best one, against the plain baseline."""
+    """The trainer's position-set metrics, averaged over every evidence
+    prefix of every position with >= 2 simmed candidates:
+
+      posset_{cond,plain}_rank: the sim-best candidate's rank (0 = top) among
+        the simmed candidates under each pass's value. Conditioned below
+        plain means the model learns from its sims.
+      posset_{cond,plain}_hit: whether each pass's argmax over the simmed
+        candidates is the sim-best one.
+    """
     cond_ranks, plain_ranks, cond_hits, plain_hits = [], [], [], []
     for a in analyses:
         sims = a.sim_values()

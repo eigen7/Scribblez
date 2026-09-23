@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Train the rack-best toy: emit a valid longest word from a 7-tile rack.
+"""Train the rack-best toy model: emit a longest valid word from a 7-tile rack.
 
 A decoder-only transformer generates the word letter by letter, constrained at
-each step by the frozen forward DAWG (valid word prefixes) and the rack
-(available tiles). With the constraint on, every complete decode is a valid
-rack-word, so the network only learns to reach the maximal length; with it off
-(--no-dawg), the decoder must have learned the lexicon itself and produces
-non-words on held-out racks. Held-out valid-longest accuracy is the measurement.
+each step by the frozen forward DAWG (which prefixes can still become words)
+and by the rack (which tiles remain). With the constraint on, every complete
+decode is a valid word formable from the rack, so the network only has to learn
+to reach the maximal length. With --no-dawg it must learn the lexicon itself,
+and produces non-words on held-out racks. The measurement is held-out
+valid-longest accuracy; results are in docs/rack_best_experiments.md.
 
 Usage:
     ./py/scripts/rack_best/train.py                 # forward-DAWG constrained
@@ -53,7 +54,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def load_dataset(args):
-    """Cached (rack (N,7), gen_in (N,8), target (N,8), max_len (N,))."""
+    """(rack (N,7), gen_in (N,8), target (N,8), max_len (N,)), cached on disk
+    under CACHE_DIR by lexicon, rack count and seed."""
     key = hashlib.sha256(
         f"gen:{compile_kwg(args.real_lexicon).source_hash}:{args.num_racks}:{args.seed}".encode()
     ).hexdigest()[:16]
@@ -77,8 +79,9 @@ def load_dataset(args):
 
 
 def evaluate(model, compiled, rack, target, max_len, idx, device, batch_size) -> dict:
-    """Greedy-decode rates: `valid` (a real formable word, any length), the tool's
-    clean guarantee; `valid_longest` (also of max length); `exact` (== canonical)."""
+    """Greedy-decode rates: `valid` (a real word formable from the rack, any
+    length; guaranteed with the DAWG constraint on), `valid_longest` (valid and of
+    maximal length) and `exact` (equal to the dataset's canonical word)."""
     valid = valid_longest = exact = 0
     for start in range(0, len(idx), batch_size):
         b = idx[start : start + batch_size]

@@ -1,11 +1,14 @@
-"""What the dashboard asks of a cloud provider: a catalog of machine types,
-and launch / describe / stop / start / terminate of instances it tags as its
-own. A provider is one module implementing `Provider` plus a section in the
-credentials file; the dashboard names none of them outside the machine forms.
+"""The interface the dashboard needs from a cloud provider.
 
-An instance here is a machine in the sense of docs/plans/cloud_machines.md:
-ssh-reachable, running Docker, hosting the existing ssh-kind slots. The
-provider's job ends at the address; everything after is the ssh kind's.
+A provider offers a catalog of machine types and can launch, describe, stop,
+start and terminate the instances it has tagged as the dashboard's. Adding a
+provider means one module implementing `Provider` plus a section in the
+credentials file; outside the machine forms, the dashboard never names a
+specific provider.
+
+The provider's job ends once an instance has an address. From there the
+instance is an ordinary ssh machine (cloud/ssh_machine.py) hosting ssh-kind
+worker slots.
 """
 
 from dataclasses import dataclass
@@ -13,8 +16,9 @@ from typing import Protocol
 
 
 class ProviderError(Exception):
-    """A provider call failed. `detail` is the provider's own words; the
-    message is the operator-facing sentence (see Provider.refusal)."""
+    """A provider call failed. The message is the provider's error code;
+    `detail` is its own explanation. Provider.refusal turns both into a
+    sentence for the operator."""
 
     def __init__(self, message: str, detail: str = ""):
         super().__init__(message)
@@ -29,27 +33,26 @@ class MachineType:
     vcpus: int
     gpu_count: int
     gpu: str  # "" for a CPU-only type
-    arch: str  # the GCC -march value its CPU family builds for (what its bundle is built for)
-    cost_per_hr: float  # on-demand list price, dated in the catalog module
+    arch: str  # GCC -march value for its CPU family; selects the bundle it runs
+    cost_per_hr: float  # on-demand list price, dated in the provider module
 
 
 @dataclass(frozen=True)
 class LaunchRequest:
     type_id: str
-    # The value of the ownership tag: "<workload>/<tag>/<machine name>", what
-    # the dashboard recognizes an instance by. An instance tagged with a value
-    # no task's machines carry is an orphan.
+    # The ownership tag's value, "<workload>/<tag>/<machine name>": how the
+    # dashboard recognizes its instances. One whose value matches no task's
+    # machine is an orphan.
     owner: str
-    # Rent spare capacity at its market rate, with the provider free to
-    # interrupt (stop) the instance when it wants the capacity back.
+    # Rent spare capacity at the market rate. The provider may interrupt
+    # (stop) the instance when it wants the capacity back.
     spot: bool = False
 
 
 @dataclass
 class Instance:
-    """An instance as the provider describes it. `state` is the provider's own
-    lifecycle word, normalized: pending | running | stopping | stopped |
-    terminated."""
+    """An instance as the provider describes it. `state` is normalized to one
+    of pending | running | stopping | stopped | terminated."""
 
     id: str
     state: str
@@ -58,22 +61,22 @@ class Instance:
     address: str | None  # public address while it has one
     launched_at: float | None
     spot: bool = False
-    cost_per_hr: float | None = None  # a spot instance's rate at launch; None: the catalog's
+    cost_per_hr: float | None = None  # spot rate at launch; None means the catalog price
 
 
 class Provider(Protocol):
     name: str
-    ssh_user: str  # the login the image gives ssh
+    ssh_user: str  # the login the machine image provides
     identity_file: str  # the private key every instance is launched with
-    ready_file: str  # the marker the first-boot script writes last
+    ready_file: str  # written last by the first-boot script; see SshMachine.probe
 
     def catalog(self) -> list[MachineType]: ...
 
     def spot_prices(self) -> dict[str, float]: ...  # current spot rate by catalog type id
 
-    def account(self) -> str: ...  # who and where machines are rented as, for the form
+    def account(self) -> str: ...  # which account and region, for display in the form
 
-    def prepare(self): ...  # the account-side one-time setup, idempotent
+    def prepare(self): ...  # one-time account-side setup; idempotent
 
     def launch(self, request: LaunchRequest) -> Instance: ...
 

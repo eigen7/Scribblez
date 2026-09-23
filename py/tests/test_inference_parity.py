@@ -1,20 +1,14 @@
-"""Inference-parity tests for the ONNX export path (hop A: PyTorch <-> ONNXRuntime).
+"""Inference-parity tests for the position-eval ONNX export, PyTorch vs ONNXRuntime.
 
-The agent (NeuralAgent) and the dashboard probes run the *same weights*
-through *different* inference stacks: the dashboard calls the in-memory PyTorch
-PositionEvalModel (FP32), while the agent uses onnx_export -> TensorRT. This test
-pins the first hop of that chain -- that exporting to ONNX and running it under
-ONNXRuntime reproduces the PyTorch outputs bit-for-bit (FP32) -- so an export
-regression (wrong head order/names, opset/tracing breakage) fails loudly here
-rather than silently corrupting the agent's value estimates.
+Training and Python-side analysis run the PyTorch PositionEvalModel; engine
+agents run the same weights through onnx_export and TensorRT. These tests pin the
+first hop: the exported graph under ONNXRuntime matches PyTorch to FP32 rounding
+on every head. A broken export (wrong head order or names, a tracing or opset
+failure) fails here instead of silently corrupting the agents' value estimates.
+The ONNX -> TensorRT hop is engine/tests/test_nn_inference_parity.cpp.
 
-The model is *randomly initialized*: we are testing the fidelity of the
-plumbing, not the quality of any trained weights, so random weights on a
-matching input shape are sufficient and keep the test hermetic (no checkpoint,
-no GPU/TensorRT, CPU-only).
-
-The second hop (ONNX -> TensorRT FP16, plus the C++ Eval decode) needs the GPU
-stack and is covered separately.
+The model is randomly initialized: this tests the plumbing, not trained weights,
+so the tests stay hermetic (no checkpoint, CPU only).
 """
 
 import numpy as np
@@ -29,17 +23,16 @@ from scribblez.position_eval.model import (
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.transformer_tower import TransformerConfig
 
-# Input contract (single source of truth: engine/include/scribblez/input_encoder.h,
-# surfaced through the FFI). The export is numerically agnostic to these, but
-# pulling the real shapes keeps the test representative and in lock-step with the
-# encoder, so a plane-count change can never silently mismatch this test.
+# The engine encoder's real input shapes, served by the FFI. The export does not
+# depend on them numerically, but using them keeps the test in step with the
+# encoder when a plane count changes.
 _input_shapes = {s.name: s.dims for s in get_input_shapes()}
 SPATIAL_PLANES, BOARD_SIZE, _BOARD_WIDTH = _input_shapes["input_spatial"]
 assert BOARD_SIZE == _BOARD_WIDTH, "the model assumes a square board"
 SCALAR_SIZE = _input_shapes["input_scalar"][0]
 
-# Exported graph output order (onnx_export.export_onnx output_names). A silent
-# reordering here would scramble which head the agent reads -- assert it.
+# The exported graph's output order. A silent reordering would scramble which head
+# the agent reads.
 OUTPUT_NAMES = ["wld", "score_diff", *PLACEMENT_HEAD_NAMES]
 
 # Both trunk towers export, so both are checked: the conv tower (None) and a tiny
@@ -51,8 +44,8 @@ TRUNKS = {
 
 
 def _random_model(trunk: str, seed: int = 0) -> PositionEvalModel:
-    """A small randomly-initialized model in eval mode (BatchNorm uses its
-    default running stats, so the forward pass is deterministic)."""
+    """A small random model in eval mode, so BatchNorm uses its default running
+    stats and the forward pass is deterministic."""
     torch.manual_seed(seed)
     model = PositionEvalModel(
         spatial_planes=SPATIAL_PLANES,
@@ -76,7 +69,6 @@ def _random_inputs(batch: int, seed: int = 1):
 @pytest.mark.parametrize("trunk", TRUNKS)
 @pytest.mark.parametrize("batch", [1, 4])
 def test_pytorch_matches_onnxruntime(tmp_path, trunk, batch):
-    """Exported ONNX run under ONNXRuntime matches PyTorch on every head."""
     ort = pytest.importorskip("onnxruntime")
 
     model = _random_model(trunk)
@@ -96,7 +88,6 @@ def test_pytorch_matches_onnxruntime(tmp_path, trunk, batch):
         torch_out = model(torch.from_numpy(spatial), torch.from_numpy(scalar))
 
     sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
-    # Exported output order must be the documented head order.
     assert [o.name for o in sess.get_outputs()] == OUTPUT_NAMES
     ort_out = sess.run(OUTPUT_NAMES, {"input_spatial": spatial, "input_scalar": scalar})
 

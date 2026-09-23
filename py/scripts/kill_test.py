@@ -1,57 +1,52 @@
 #!/usr/bin/env python3
-"""The 4-armed sim-evidence kill-test (docs/plans/sim_residual_feedback.md, step 3).
+"""The sim-evidence kill-test: does conditioning the position evaluation model
+on Monte-Carlo sim evidence improve its outcome prediction?
 
-Tests the load-bearing hypothesis of the sim-evidence loop in isolation: does
-conditioning the position evaluation model on Monte-Carlo sim evidence improve
-its outcome prediction? One invocation runs the whole experiment against the data
-accumulated by scripts/generate_kill_test_data.py under the same tag:
+This tests the load-bearing hypothesis of the sim-evidence loop in isolation;
+the kill-test section of docs/plans/sim_residual_feedback.md has the design and
+the decision rubric. One invocation runs the whole experiment on the data
+scripts/generate_kill_test_data.py accumulated under the same tag:
 
-  1. Cache build: every complete .slog/.sobs pair in the tag's pair store
-     (<mount>/tags/kill_test/<tag>/data/slogs) is decoded (each evidence
-     position's post-move training row, addressed by identity) and its evidence
-     set encoded, into one .npz shard per file under the tag's cache/ dir.
-     Shards are cached across invocations; only new files are processed.
-     Files alternate into train/holdout round-robin (--holdout-every), so the
-     split is by game and cannot leak.
+  1. Cache build. Each complete .slog/.sobs pair in the tag's data/slogs dir
+     becomes one .npz shard under the tag's cache/ dir, holding every evidence
+     position's post-move input row and its encoded evidence set. Shards
+     persist across runs, so only new files are processed. Files go to train
+     or holdout round-robin (--holdout-every), so the split is by game and
+     cannot leak.
 
-  2. Four training arms, identical seed and architecture (the fusion stage is
-     zero-initialized and parameter counts match across arms; only the
-     evidence input differs). Every evidence arm is leave-one-out by default:
-     the played move's own sim (candidate 0) is masked, because at deployment
-     the model only re-scores unsimmed moves -- simmed ones are ranked by
-     their sims directly -- and the own-sim token is a near-copy of the
-     training target.
-       none      evidence zeroed -- the baseline
-       shuffled  real (leave-one-out) evidence permuted across positions -- a
-                 falsification control; any gain over `none` is what the
-                 model extracts from evidence marginals rather than
-                 position-matched evidence
-       scalar    scalar sim summaries only (the cheap rung of the ladder)
-       full      spatial planes + scalar summaries (the real thing)
-     A fifth arm, `ownsim` (--arms ownsim), is the opt-in non-LOO variant:
-     full evidence including the played move's own sim. `ownsim` vs `full`
-     prices the own-sim shortcut; it is not a deployment-relevant capability.
+  2. Training arms. Every arm uses the same seed and architecture; only the
+     evidence input differs. The fusion stage is zero-initialized and exists
+     in every arm, so parameter counts match. By default each evidence arm is
+     leave-one-out: the played move's own sim (candidate 0) is masked, since
+     at deployment the model only re-scores unsimmed moves, and the own-sim
+     token is a near-copy of the training target.
+       none      no evidence: the baseline
+       shuffled  real evidence permuted across positions: a falsification
+                 control, measuring what the model gets from the evidence's
+                 marginal statistics rather than from matching it to the
+                 position
+       scalar    scalar sim summaries only, the cheap option
+       full      spatial planes plus scalar summaries
+     An opt-in fifth arm, `ownsim` (--arms), keeps the played move's own sim.
+     `ownsim` vs `full` prices that shortcut; no deployed model has it.
 
-  Passing --open-leaves selects the open-leaves information condition end to
-  end: the cache decodes rows with the opponent-leave input block, and the
-  .sobs sidecars are required to carry the open-leaves flag (i.e. generated
-  by generate_kill_test_data.py --open-leaves, whose sims start the opponent
-  from the leave their last move retained, with replenishments sampled).
-  Open-leaves and hidden artifacts must live under different tags; the cache
-  records its mode and refuses a mismatch.
+  3. Analysis. A paired per-position comparison follows the arms, and --analyze
+     reruns it alone: per-position cross-entropy deltas with sign tests,
+     sliced by game phase and by whether the sim samples the opponent's rack
+     without bias at that position (the opponent just bingoed or has not yet
+     moved), plus an evidence-only logistic regression measuring how
+     predictive the raw sim scalars are without the board. Shards lacking the
+     analysis metadata columns get them backfilled from the .slog/.sobs
+     headers, without re-decoding rows.
 
-The decision metric is best held-out WLD cross-entropy; a comparison table
-prints at the end and per-arm histories land in the tag's cache/results/ dir.
-See the doc's kill-test section for the decision rubric.
+The decision metric is the best held-out WLD cross-entropy. A comparison table
+prints at the end, and per-arm histories land in the tag's cache/results/ dir.
 
-After the arms, a paired per-position analysis runs automatically (and can be
-rerun without retraining via --analyze): per-position CE deltas with sign
-tests, sliced by whether the sim's opponent-rack sampling is exact at the
-position (opponent just bingoed / hasn't acted) and by game phase, plus an
-evidence-only logistic yardstick measuring how predictive the raw sim scalars
-are without any board input. Caches built before these analyses existed are
-upgraded in place (meta columns are backfilled from the .slog/.sobs headers;
-no row re-decode).
+--open-leaves selects the open-leaves information condition end to end: rows
+are decoded with the opponent-leave input block, and every .sobs must carry
+the open-leaves flag (generate_kill_test_data.py --open-leaves). The two
+conditions need separate tags; the cache records its condition and refuses a
+mismatch.
 
 Usage:
     ./py/scripts/kill_test.py -t apple
@@ -169,9 +164,9 @@ def build_cache(slog_dir: Path, cache: Path, holdout_every: int, max_k: int, ope
 
 
 def upgrade_shard_meta(shard_path: Path, slog: Path, sobs: Path) -> int:
-    """Backfill the analysis meta columns into a shard written before they
-    existed. Reads only .sobs positions and .slog headers (no row decode), so
-    upgrading a cache is cheap. Returns 1 if the shard was rewritten."""
+    """Add the analysis metadata columns to a shard that lacks them; returns 1 if
+    it was rewritten. Reads only the .sobs positions and .slog headers, not the
+    rows, so this is cheap."""
     with np.load(shard_path) as z:
         if "meta_opp_unbiased" in z.files:
             return 0
@@ -200,16 +195,13 @@ def load_split(cache: Path, split: str) -> dict[str, torch.Tensor]:
 
 
 def apply_evidence_mode(data: dict[str, torch.Tensor], mode: str, seed: int):
-    """Mutate a split's evidence tensors in place per the arm being trained.
+    """Rewrite a split's evidence tensors in place for the arm being trained.
 
-    Every evidence arm except `ownsim` is leave-one-out: candidate 0 -- the
-    equity argmax, which on HastyBot self-play is the played move whose
-    post-move state the row encodes -- is masked out. What remains is the
-    deployment-shaped query: evaluate a move given the OTHER candidates' sims
-    (at deployment the model only ever re-scores unsimmed moves; simmed ones
-    are ranked by their own sims directly). `ownsim` opts back into the full
-    evidence set; its gain over `full` prices the own-sim shortcut, whose
-    token is a near-copy of the training target."""
+    Every evidence arm except `ownsim` masks candidate 0: the equity argmax,
+    which in HastyBot self-play is the played move whose post-move state the
+    row encodes. That leaves the deployment-shaped query, evaluating a move
+    from the other candidates' sims, since deployment ranks simmed moves by
+    their own sims and uses the model only for unsimmed ones."""
     if mode == "none":
         data["ev_planes"].zero_()
         data["ev_scalars"].zero_()
@@ -257,9 +249,8 @@ def forward(model, batch):
 
 @torch.no_grad()
 def evaluate(model, data, device, batch_size: int) -> tuple[dict[str, float], np.ndarray]:
-    """Held-out metrics plus the per-position WLD cross-entropy vector (row
-    order = the split's shard order, which the paired analysis relies on).
-    wld_ce is the kill-test's decision metric."""
+    """Held-out metrics, plus the per-position WLD cross-entropy in the split's
+    shard order, which the paired analysis relies on."""
     model.eval()
     n = len(data["wld"])
     per_row = np.zeros(n, dtype=np.float32)
@@ -382,10 +373,10 @@ def load_per_row(results_dir: Path, arm: str) -> np.ndarray:
 
 
 def evidence_yardstick(train, holdout, device) -> dict[str, float]:
-    """Holdout WLD cross-entropy of logistic regressions over the evidence
-    scalars alone (no board, no trunk): how predictive is the raw sim output?
-    `played move` uses only candidate 0 (the move actually played, whose sim
-    estimates the target directly); `all candidates` uses every token."""
+    """How predictive the raw sim output is on its own: holdout WLD
+    cross-entropy of logistic regressions over the evidence scalars, with no
+    board input. `played move` uses only candidate 0, whose sim estimates the
+    target directly; `all candidates` uses every token."""
 
     def flat(data, k):
         m = data["ev_mask"][:, :k].float().unsqueeze(-1)
@@ -408,14 +399,15 @@ def evidence_yardstick(train, holdout, device) -> dict[str, float]:
 
 
 def run_analysis(cache: Path, device, suffix: str = ""):
-    """Paired per-position comparison of the trained arms over the holdout
-    split, sliced by the rack-inference and game-phase metadata, plus the
-    evidence-only yardstick. Uses the per-position CE vectors saved at each
-    arm's best epoch; row order is the holdout shard order in every artifact,
-    which is what makes the pairing valid. Analyzes whichever arms (of the
-    standard four plus `loo`) have saved artifacts under the given suffix, and
-    drops arms whose holdout size differs from the current cache (arms trained
-    before more data was generated cannot be paired)."""
+    """Paired per-position comparison of the trained arms on the holdout split,
+    sliced by opponent-rack bias and game phase, plus the evidence-only
+    yardstick.
+
+    Pairs the per-position cross-entropies saved at each arm's best epoch;
+    every artifact is in holdout shard order, which makes the pairing valid.
+    Covers whichever arms (the standard four and `ownsim`) have artifacts under
+    `suffix`, skipping any whose holdout size differs from the current cache,
+    i.e. arms trained before more data arrived."""
     results_dir = cache / "results"
     holdout = load_split(cache, "holdout")
     if "meta_opp_unbiased" not in holdout:
@@ -503,20 +495,20 @@ def main():
     p.add_argument("-t", "--tag", required=True, help="tag used with generate_kill_test_data.py")
     p.add_argument("--holdout-every", type=int, default=10, help="every Nth file is holdout")
     p.add_argument("--max-k", type=int, default=10, help="evidence candidates kept per position")
-    p.add_argument("--epochs", type=int, default=20)
-    p.add_argument("--batch-size", type=int, default=256)
-    p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--epochs", type=int, default=20, help="max epochs per arm")
+    p.add_argument("--batch-size", type=int, default=256, help="positions per batch")
+    p.add_argument("--lr", type=float, default=3e-4, help="AdamW learning rate")
     p.add_argument(
         "--lambda-sd",
         type=float,
         default=0.004,
-        help="Score-diff loss weight (the production trainer's default), so the "
-        "WLD head -- the decision metric -- dominates the objective.",
+        help="score-diff loss weight; the production trainer's default, small so the "
+        "WLD head, which the decision metric scores, dominates the objective",
     )
-    p.add_argument("--weight-decay", type=float, default=1e-4)
-    p.add_argument("--trunk-channels", type=int, default=96)
-    p.add_argument("--num-blocks", type=int, default=6)
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--weight-decay", type=float, default=1e-4, help="AdamW weight decay")
+    p.add_argument("--trunk-channels", type=int, default=96, help="trunk width")
+    p.add_argument("--num-blocks", type=int, default=6, help="trunk residual blocks")
+    p.add_argument("--seed", type=int, default=0, help="init, shuffle and permutation seed")
     p.add_argument(
         "--patience",
         type=int,
@@ -537,16 +529,15 @@ def main():
     p.add_argument(
         "--arms",
         default=",".join(ARMS),
-        help="comma-separated subset of arms to run (default: the four standard arms, "
-        "whose evidence is leave-one-out; `ownsim` is additionally available -- full "
-        "evidence including the played move's own sim, pricing that shortcut)",
+        help="comma-separated arms to run: any of the four standard (leave-one-out) arms, "
+        "plus `ownsim`, which keeps the played move's own sim",
     )
     p.add_argument(
         "--open-leaves",
         action="store_true",
         help="the open-leaves information condition: decode rows with the opponent-leave "
-        "input block and require open-leaves .sobs sidecars (a dedicated tag generated "
-        "with generate_kill_test_data.py --open-leaves)",
+        "input block and require open-leaves .sobs files (a separate tag generated with "
+        "generate_kill_test_data.py --open-leaves)",
     )
     args = p.parse_args()
 

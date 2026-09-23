@@ -1,14 +1,16 @@
-"""Tornado data API for the React dashboard.
+"""The dashboard's Tornado server: the training data plane, and the process
+that hosts the control plane (master_api.py, workers.py).
 
-Serves what the React dashboard renders: the tag list, a cheap per-tag change
-token for polling, and each metrics figure as a Bokeh ``json_item`` (built by the
-existing ``plots.py`` builders and embedded client-side with BokehJS). The React
-app proxies ``/api`` to this server (see web/vite.config.ts), so the browser sees
-one origin.
+The data plane serves what the React app renders for a tag: the tag list, a
+cheap change token for polling, run meta and live controls, each metrics
+figure as a Bokeh ``json_item`` (plots.py) with incremental updates
+(figure_delta.py), and the Lane analysis and Positions tabs, whose predictions
+come from the DB or are computed on demand from a generation's ONNX export.
 
-One server serves any run: the task and tag are request parameters, and each
-request opens the matching per-tag ``dashboard.db``. Tornado is used because it is
-already present (a Bokeh dependency), so the API needs no extra dependency.
+One server serves every run: task and tag are request parameters, and each
+request opens that tag's dashboard.db. The React app reaches it through Vite's
+``/api`` proxy (web/vite.config.ts), so the browser sees one origin. Tornado
+comes with Bokeh, so the API adds no dependency.
 
 See docs/react_dashboard.md for the architecture.
 """
@@ -51,10 +53,6 @@ from scribblez.workloads.position_eval import PositionEvalParams
 # The lane-union tile kinds in order: 26 letters then the collapsed blank.
 _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
 
-# The tables whose row counts form the per-tag change token the React shell polls
-# (a change in any count means that tab's data advanced). Mirrors the Bokeh shell's
-# per-tab ``watch()``.
-# How often the WorkerManager closes desired-vs-actual worker-slot gaps.
 # How often the reconcile pass runs. It is the only observer of ssh containers
 # and rented machines, and the only thing that acts on a scheduler gate, so its
 # period is also how long a released worker waits before resuming. Every step
@@ -62,6 +60,8 @@ _LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
 # this short affordable.
 RECONCILE_SECONDS = 5
 
+# The tables whose row counts form the per-tag change token the React app polls:
+# a change in any count means some tab's data advanced.
 VERSION_TABLES = (
     "metrics",
     "control_event",
@@ -71,18 +71,14 @@ VERSION_TABLES = (
 
 
 def _loss(conn, params, mount_root):
-    """The Loss tab's top panel: the loss/accuracy curves from the per-epoch
-    metrics table, with control-change markers. Every knob variant rides along as
-    a named row (see plots._variant_rows) for the client to flip between. The
-    value-quality curves are a separate figure (`eval_quality`), so the client
-    can place its own controls between the two."""
+    """The Loss tab's top panel. The value-quality curves are a separate figure
+    (`eval_quality`) so the client can place its own controls between the two."""
     return plots.metrics_loss_grid(conn)
 
 
 def _eval_quality(conn, params, mount_root):
-    """The Loss tab's aggregate model-vs-Monte-Carlo value-quality curves, in both
-    x-axis variants like `_loss`. `smooth` overlays an EMA trend; `secondary`, a
-    second tag, overlays that tag's curves for comparison."""
+    """The Loss tab's value-quality panel. `secondary` names a second tag whose
+    curves are overlaid for comparison."""
     secondary_tag = params.get("secondary") or None
     sec_conn = _open(mount_root, params.get("task"), secondary_tag) if secondary_tag else None
     try:
@@ -100,15 +96,14 @@ def _training_metrics(conn, params, mount_root):
 
 
 def _mset_metrics(conn, params, mount_root):
-    """move_set_eval's Training tab: the generic training curves plus the
-    teacher-value-regret quality figure."""
+    """move_set_eval's Training tab: the generic curves plus distillation quality."""
     groups = plots.TRAINING + plots.MSET_QUALITY
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
 def _evidence_metrics(conn, params, mount_root):
-    """evidence_trajectories' Training tab: the generic training curves plus
-    the conditioned-vs-plain quality figures."""
+    """evidence_trajectories' Training tab: the generic curves plus the
+    conditioned-vs-plain quality figures."""
     groups = plots.TRAINING + plots.EVIDENCE_QUALITY
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
@@ -121,10 +116,9 @@ def _match_arms(conn, params, mount_root):
     return plots.match_arms_grid(conn)
 
 
-# Figure name -> builder(conn, params, mount_root) -> Bokeh model | None.
-# Reuses the plots.py builders; the model is serialized with json_item for client-
-# side embedding. `mount_root` lets a builder open a second tag's DB (eval_quality's
-# secondary-tag overlay).
+# Figure name -> builder(conn, params, mount_root) -> Bokeh model | None, where
+# `params` are the request's query arguments. `mount_root` lets a builder open a
+# second tag's DB (eval_quality's overlay).
 FIGURES = {
     "loss": _loss,
     "eval_quality": _eval_quality,
@@ -148,15 +142,14 @@ def _row_count(conn: sqlite3.Connection, table: str) -> int:
 
 
 def version_token(conn: sqlite3.Connection) -> dict:
-    """Per-tag row counts the client polls to decide when to re-fetch figures."""
+    """Per-tag row counts the client polls to decide when to refetch figures."""
     return {table: _row_count(conn, table) for table in VERSION_TABLES}
 
 
 def build_figure_item(conn: sqlite3.Connection, name: str, params: dict, mount_root: str):
-    """(json_item dict, structure key) for figure `name`, or (None, None) when
-    there's no data (or no such figure). The handler turns None into
-    ``{"item": null}``. The structure key is echoed back by the client's
-    incremental-update requests (see figure_delta.py)."""
+    """(json_item, structure key) for figure `name`, or (None, None) when it has
+    no data. The client echoes the structure key in its incremental-update
+    requests (figure_delta.py)."""
     builder = FIGURES.get(name)
     if builder is None:
         return None, None
@@ -167,17 +160,19 @@ def build_figure_item(conn: sqlite3.Connection, name: str, params: dict, mount_r
 
 
 def _open(mount_root: str, task: str, tag: str) -> sqlite3.Connection | None:
-    """Open a tag's dashboard DB, or None if it doesn't exist yet (no spurious
-    empty DB is created for an unknown tag)."""
+    """Open a tag's dashboard DB, or None if it does not exist yet. Never creates
+    one, so a request for an unknown tag leaves nothing behind."""
     path = Path(TagPaths(tag, task, mount_root).dashboard_db)
     return db.connect(path) if path.exists() else None
 
 
-# --- Lane-analysis endpoints -----------------------------------------------
-# The position dataset and its ground truth (board + per-lane best moves) are fixed,
-# so they are recomputed from the engine once and cached; only the per-generation
-# model predictions come from the tag's DB. The score head has 100 bins, with the
-# top bin a catch-all for scores >= 99 (matching the C++ label encoding).
+# --- Lane analysis tab (max_move_per_lane) ---------------------------------
+# The position dataset and its ground truth (board + per-lane best moves) are
+# fixed, so they are computed by the engine once and cached; only the
+# per-generation predictions come from the tag's DB.
+
+# The score head's last bin, a catch-all for scores >= 99 (as in the C++ label
+# encoding).
 _TOP_SCORE_BIN = 99
 
 
@@ -188,22 +183,22 @@ def _dataset_files() -> tuple:
 
 @lru_cache(maxsize=64)
 def _ground_truth(position: int) -> tuple:
-    """(name, bundle) for a dataset position -- the engine analysis bundle (board +
-    per-lane ground truth). Cached: it is fixed for the dataset."""
+    """(name, engine analysis bundle) for a dataset position: the board and its
+    per-lane ground truth."""
     gcg = _dataset_files()[position]
     bundle, _input = analyze_gcg(gcg.read_text())
     return gcg.stem, bundle
 
 
 def _pred_placed(occ_lane: np.ndarray) -> list:
-    """A predicted lane union (15, 27) -> per-cell letter lists, matching the
-    ground-truth `placed` shape so the UI can diff them cell by cell."""
+    """A predicted lane union (15, 27) as per-cell letter lists, the shape of the
+    ground truth's `placed`, so the UI can diff them cell by cell."""
     return [[_LANE_KINDS[k] for k in range(27) if occ_lane[c, k]] for c in range(15)]
 
 
 def _merge_lane(gt: dict, occ_lane, pmf_lane, has_lane) -> dict:
-    """A lane's ground truth, plus (when a prediction exists) the model's predicted
-    union / score distribution / has-move and the server-computed correctness."""
+    """A lane's ground truth, plus the model's prediction and its correctness
+    when a prediction exists."""
     o = dict(gt)
     if occ_lane is None:
         return o
@@ -234,8 +229,8 @@ def _merge_axis(gt_axis, occ, pmf, has, base: int) -> list:
 
 
 def lane_position_payload(conn, position: int, generation) -> dict:
-    """The full per-position view: board + rack for rendering, and each lane's
-    ground truth merged with the selected generation's prediction."""
+    """The Lane analysis tab's view of one position: board and rack, and each
+    lane's ground truth merged with the selected generation's prediction."""
     name, bundle = _ground_truth(position)
     pred = (
         db.read_lane_pred(conn, generation, position)
@@ -262,17 +257,22 @@ def lane_position_payload(conn, position: int, generation) -> dict:
     }
 
 
+# --- Positions tab (position_eval) -----------------------------------------
+# Board, legality and Monte-Carlo truth depend only on the position and are
+# cached per file; predictions are computed on demand from each generation's
+# ONNX export.
+
+
 def _position_eval_dataset_files() -> tuple:
-    """The dataset's GCG files in natural order. Listed afresh on every call:
-    the set is hand-maintained and reshaped in place (files added, renamed,
-    rewritten), and a running dashboard follows it without a restart."""
+    """The position_eval dataset's GCG files in natural order. Listed afresh on
+    every call: the set is hand-maintained and edited in place, and a running
+    dashboard should follow it without a restart."""
     return tuple(position_eval_analysis.dataset_gcgs(position_eval_analysis.DEFAULT_DATASET))
 
 
 def _position_eval_gcg_key(position: int) -> tuple[str, int]:
-    """A dataset position's identity for the per-position memos below: its
-    file's path and mtime, so a file rewritten in place is a miss, never a
-    stale hit."""
+    """A dataset position's cache key for the memos below: its file's path and
+    mtime, so a file rewritten in place misses rather than hitting stale."""
     gcg = _position_eval_dataset_files()[position]
     return str(gcg), gcg.stat().st_mtime_ns
 
@@ -283,17 +283,16 @@ def _position_eval_board(position: int) -> tuple:
 
 @lru_cache(maxsize=64)
 def _position_eval_board_for(gcg_key: tuple[str, int]) -> tuple:
-    """(name, board_bundle) for a dataset GCG (a _position_eval_gcg_key) --
-    board / bonuses / leave rack for rendering."""
+    """(name, board bundle for rendering) for a _position_eval_gcg_key."""
     gcg = Path(gcg_key[0])
     return gcg.stem, position_eval_board_json(gcg.read_text())
 
 
 def _position_eval_face_up_leaves(task: str, tag: str) -> bool:
     """The information condition a position_eval tag trains under (its frozen
-    `face_up_leaves` param): which Monte-Carlo truth it is measured against and
-    how much of the opponent's rack the Positions tab shows. KeyError for a tag
-    with no task.json."""
+    `face_up_leaves` param). It decides which Monte-Carlo truth the tag is
+    measured against and how much of the opponent's rack the Positions tab
+    shows. KeyError for a tag with no task.json."""
     record = tasks.load_task(workloads.get(task), tag)
     if record is None:
         raise KeyError(f"tag {tag!r} has no task.json")
@@ -302,8 +301,8 @@ def _position_eval_face_up_leaves(task: str, tag: str) -> bool:
 
 @lru_cache(maxsize=2)
 def _mc_ground_truth(face_up_leaves: bool) -> dict:
-    """The committed Monte-Carlo ground truth under an information condition,
-    keyed by position name (pos-1, ...)."""
+    """The committed Monte-Carlo ground truth for an information condition,
+    keyed by position name."""
     path = position_eval_analysis.ground_truth_path(
         position_eval_analysis.DEFAULT_DATASET, face_up_leaves
     )
@@ -311,9 +310,9 @@ def _mc_ground_truth(face_up_leaves: bool) -> dict:
 
 
 def _mc_payload(name: str, face_up_leaves: bool) -> dict:
-    """A position's Monte-Carlo ground truth shaped for the UI: W/L/D as fractions, the
-    exact score-delta histogram as sorted [delta, count] pairs, and the mean delta (the
-    UI derives the std from the histogram)."""
+    """A position's Monte-Carlo ground truth shaped for the UI: W/L/D as
+    fractions, the score-delta histogram as sorted [delta, count] pairs, and
+    its mean (the UI derives the std from the histogram)."""
     gt = _mc_ground_truth(face_up_leaves).get(name, {})
     n = gt.get("n", 0)
     wld = gt.get("wld", {})
@@ -333,23 +332,19 @@ def _position_eval_legal(position: int) -> np.ndarray:
 
 @lru_cache(maxsize=64)
 def _position_eval_legal_for(gcg_key: tuple[str, int]) -> np.ndarray:
-    """Which board cells each of the four placement heads can legally reach at a
-    dataset GCG (a _position_eval_gcg_key) -- (4, 15, 15) bool. Like the board,
-    this depends only on the position (board legality + unseen-pool
-    availability), not the selected generation."""
+    """(4, 15, 15) bool: which cells each placement head can legally reach at
+    the position. Depends only on the position, not the generation."""
     return legal_position_eval_placement(Path(gcg_key[0]).read_text())
 
 
 def _placement_block(name: str, face_up_leaves: bool, pred, legal: np.ndarray) -> dict | None:
-    """The Positions tab's residual-heat-map payload: for each of the four placement
-    heads, the Monte-Carlo truth (per-square rollout fraction count/n, board frame)
-    paired with the model's on-demand placement prediction (`pred`, or None) and
-    which squares that head can legally reach at all (`legal`), so the frontend can
-    tell a square with no legal placement apart from one the model/rollouts just
-    assign low probability.
+    """The Positions tab's residual heat map: per placement head, the rollouts'
+    per-cell occupancy fraction, the model's prediction (`pred`, or None), and
+    which cells the head can reach at all, so the UI can tell an unreachable
+    cell from one that is merely unlikely.
 
-    None when the ground-truth file carries no per-square planes (an older
-    results file), so the frontend can hide the overlay."""
+    None when the ground-truth file has no placement planes; the UI then hides
+    the overlay."""
     gt = _mc_ground_truth(face_up_leaves).get(name, {})
     planes = gt.get("placement")
     if planes is None:
@@ -368,17 +363,15 @@ def _placement_block(name: str, face_up_leaves: bool, pred, legal: np.ndarray) -
 
 
 def position_eval_position_payload(position: int, generation, tag, task, mount_root) -> dict:
-    """The full per-position view: board + both racks for rendering, the Monte-Carlo
-    ground truth of the tag's information condition, and the selected generation's
-    model prediction (WLD + score-delta Gaussian), computed on demand from its
-    exported ONNX -- None when the generation has no usable export. The
-    `placement` block pairs the per-square Monte-Carlo truth with the same run's
-    placement-head predictions for the residual heat-map overlay.
+    """The Positions tab's view of one position: board and racks, the
+    Monte-Carlo truth for the tag's information condition, and the selected
+    generation's prediction, computed on demand from its ONNX export (None
+    without a usable export).
 
-    The opponent's rack is their retained leave plus hidden draws: `opp_leave_size`
-    tiles of leave, spelled out in `opp_leave` under face-up leaves and withheld
-    (None) under hidden leaves -- the client never receives tiles the condition
-    says it cannot see -- and the rest of `opponent_rack_count` drawn since."""
+    The opponent's rack is their retained leave plus tiles drawn since. The
+    leave's tiles are sent only under face-up leaves; under hidden leaves the
+    client gets just its size, so it never receives tiles the condition says it
+    cannot see."""
     face_up_leaves = _position_eval_face_up_leaves(task, tag)
     name, bundle = _position_eval_board(position)
     pred = _position_eval_prediction(tag, task, mount_root, generation, position)
@@ -410,11 +403,10 @@ def position_eval_position_payload(position: int, generation, tag, task, mount_r
 
 
 def position_eval_generations(conn, tag, task, mount_root) -> list[dict]:
-    """The generations the Positions tab scrubs over -- those with an exported
-    ONNX, ascending, each {generation, positions}. The export is what every
-    prediction is computed from, so its existence is what makes a generation
-    selectable; `positions` is the rows-clock of the generation's ingested
-    record, None while the record still trails the export by an ingest tick."""
+    """The Positions tab's generation slider: every generation with an ONNX
+    export (predictions are computed from it), ascending. `positions` is the
+    rows trained at that generation, None until its record has been ingested,
+    which can trail the export by a tick."""
     clock = db.read_rows_clock(conn) if conn is not None else {}
     return [
         {"generation": g, "positions": clock.get(g)}
@@ -423,17 +415,16 @@ def position_eval_generations(conn, tag, task, mount_root) -> list[dict]:
 
 
 def _resolve_position_eval_generation(tag, task, mount_root, arg: str):
-    """Resolve a generation query arg: a specific index, or the newest exported
-    one for '' or 'latest' (None when nothing is exported yet)."""
+    """A generation query arg as an index: '' or 'latest' is the newest export
+    (None when there is none)."""
     if arg in ("", "latest"):
         exported = TagPaths(tag, task, mount_root).exported_generations()
         return exported[-1] if exported else None
     return int(arg)
 
 
-# Per-(file, mtime) ONNX session cache. Every prediction the Positions tab shows is
-# the selected generation's exported model run on demand under fp32 onnxruntime,
-# which reproduces the torch model it was exported from.
+# ONNX sessions by (path, mtime). The Positions tab runs exports on the CPU
+# under fp32 onnxruntime, which reproduces the torch model they came from.
 _ONNX_SESSIONS: dict = {}
 
 
@@ -447,11 +438,10 @@ def _position_eval_onnx_session(onnx_path: Path):
 
 
 def _position_eval_model_arm(sess) -> InputArm:
-    """The arm an exported model consumes, from its ONNX metadata_props (stamped
-    at export; an absent flag means off) and its declared input widths. The
-    dashboard encodes each position under the model's own arm -- one process
-    serves models of every arm -- and the engine refuses the widths of a model
-    from another encoding era at the encode call."""
+    """The input arm an exported model consumes, read from its ONNX metadata
+    (an absent flag means off) and its declared input widths. One dashboard
+    serves models of every arm, so each position is encoded under the model's
+    own. The engine rejects widths it cannot produce at the encode call."""
     meta = sess.get_modelmeta().custom_metadata_map
     model_inputs = {i.name: i.shape for i in sess.get_inputs()}
     return InputArm(
@@ -471,8 +461,8 @@ def _position_eval_onnx_feed(arm: InputArm, flat_input: np.ndarray) -> dict:
 
 
 def _decode_value_outputs(wld: np.ndarray, sd: np.ndarray) -> dict:
-    """One row's value outputs as the UI's model block: the (3,) W/L/D logits
-    softmaxed, and the score-delta (mean, std) pair."""
+    """One row's value outputs for the UI: W/L/D probabilities and the
+    score-delta mean and std."""
     probs = np.exp(wld - wld.max())
     probs /= probs.sum()
     return {
@@ -483,23 +473,21 @@ def _decode_value_outputs(wld: np.ndarray, sd: np.ndarray) -> dict:
 
 
 def _collapse_placement_outputs(outs: list, gcg_text: str) -> dict:
-    """The four placement heads' outputs for one row (a (1, C) raw footprint
-    logit array per head, in PLACEMENT_HEAD_NAMES order) as board-frame
-    (15, 15) per-cell occupancy marginals keyed by head name.
+    """The placement heads' raw footprint logits for one row, in
+    PLACEMENT_HEAD_NAMES order, as (15, 15) per-cell occupancy marginals by
+    head: the frame the Monte-Carlo placement planes use.
 
-    The engine collapse masks the illegal footprints, softmaxes, and scatters
-    each footprint's probability onto the cells it covers -- reproducing the
-    (15, 15) marginal the old per-cell heads emitted (and the frame the
-    Monte-Carlo ground-truth planes use). The analysis encoder never flips the
-    board, so the planes need no transpose."""
+    The engine masks illegal footprints, softmaxes, and spreads each
+    footprint's probability over the cells it covers. The analysis encoder
+    never transposes the board, so the planes need no un-transpose."""
     raw = np.stack([out[0] for out in outs], axis=0)  # (4, FOOTPRINT_CLASSES)
     planes = collapse_position_eval_placement(gcg_text, raw)  # (4, 15, 15)
     return dict(zip(PLACEMENT_HEAD_NAMES, planes, strict=True))
 
 
 def _run_position_eval_onnx(sess, arm: InputArm, flat_input: np.ndarray) -> dict:
-    """Run an exported post-move model on one flat input row (encoded under the
-    model's `arm`) and decode its value outputs (the what-if's model block)."""
+    """Run an export's value heads on one encoded row (the alternate-leave
+    what-if)."""
     wld, sd = sess.run(["wld", "score_diff"], _position_eval_onnx_feed(arm, flat_input))
     return _decode_value_outputs(wld[0], sd[0])
 
@@ -507,9 +495,8 @@ def _run_position_eval_onnx(sess, arm: InputArm, flat_input: np.ndarray) -> dict
 def _run_position_eval_prediction(
     sess, arm: InputArm, flat_input: np.ndarray, gcg_text: str
 ) -> dict:
-    """One forward pass of an exported model on a dataset position, every head
-    at once, decoded as the Positions tab's prediction: {"model": the value
-    block, "placement": the per-head planes}."""
+    """Run every head of an export on one dataset position: {"model": value
+    outputs, "placement": per-head planes}."""
     outs = sess.run(
         ["wld", "score_diff", *PLACEMENT_HEAD_NAMES], _position_eval_onnx_feed(arm, flat_input)
     )
@@ -521,14 +508,11 @@ def _run_position_eval_prediction(
 
 @lru_cache(maxsize=256)
 def _position_eval_prediction_for(onnx_path_str: str, gcg_key: tuple[str, int]) -> dict | None:
-    """One export's prediction on one dataset GCG (_run_position_eval_prediction),
-    or None when the engine does not encode the model's declared input widths
-    (an earlier, differently sized encoding era).
+    """One export's prediction on one dataset GCG, or None when the engine
+    cannot encode the model's input widths.
 
-    Memoized per (export path, GCG path + mtime): an export is atomic (a temp
-    file renamed into place) and never rewritten, and a GCG rewritten in place
-    changes its mtime, so a hit is never stale. The cannot-encode result is
-    likewise permanent for the pair."""
+    Memoizing is sound because an export is written atomically and never
+    rewritten, and a GCG rewritten in place changes its key's mtime."""
     sess = _position_eval_onnx_session(Path(onnx_path_str))
     arm = _position_eval_model_arm(sess)
     gcg_text = Path(gcg_key[0]).read_text()
@@ -540,19 +524,18 @@ def _position_eval_prediction_for(onnx_path_str: str, gcg_key: tuple[str, int]) 
 
 
 def _position_eval_prediction(tag, task, mount_root, generation, position) -> dict | None:
-    """The selected generation's prediction on a dataset position (see
-    _position_eval_prediction_for), or None when the generation has no exported
-    ONNX or one from an incompatible encoding era.
-
-    File existence is checked uncached on every call: memoizing a miss would pin
-    a null prediction to the generation even if its export appears later. Only
-    once the file exists is the memoized lookup consulted."""
+    """The generation's prediction on a dataset position, or None when it has
+    no export or one the engine cannot encode. Existence is checked before the
+    memo, so a missing export is never cached as a permanent None."""
     if generation is None:
         return None
     onnx_path = TagPaths(tag, task, mount_root).onnx_path(generation)
     if not onnx_path.exists():
         return None
     return _position_eval_prediction_for(str(onnx_path), _position_eval_gcg_key(position))
+
+
+# --- Handlers ----------------------------------------------------------------
 
 
 class _Base(tornado.web.RequestHandler):
@@ -618,11 +601,12 @@ class MetaHandler(_Base):
 
 class ControlsHandler(_Base):
     """Live operator controls (e.g. dataloader_workers). GET returns the current
-    values and the rows-clock change events (which also carry the LR schedule's
-    phase boundaries); POST {name, value} sets one, which the trainer adopts at
-    its next generation. Values persist in the tag's dashboard.db, and every
-    set republishes them all in the tag's controls file, which is what the
-    trainer reads (generational/records.py)."""
+    values and the change events, LR schedule phases included; POST {name,
+    value} sets one, which the trainer adopts at its next generation.
+
+    Values persist in the tag's dashboard.db. Every set also rewrites the tag's
+    controls file, which is what the trainer actually reads
+    (generational/records.py)."""
 
     def get(self):
         conn = self._open_conn()
@@ -645,8 +629,8 @@ class ControlsHandler(_Base):
             self.set_status(400)
             self.write({"error": "value must be a number"})
             return
-        # Open (creating if needed) directly rather than via the exists-gated
-        # _open_conn, so a control can be set before the first training run.
+        # Creates the DB if needed (unlike _open_conn), so a control can be set
+        # before the first training run.
         paths = TagPaths(
             self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
         )
@@ -679,10 +663,7 @@ class FigureHandler(_Base):
 
 
 class FigureDeltaHandler(_Base):
-    """Incremental update for an embedded figure: the client POSTs its document's
-    structure key and per-source cursors, and gets back just the appended rows and
-    current explicit ranges -- or ``{"refetch": true}`` when the document must be
-    rebuilt (see figure_delta.py)."""
+    """Incremental update for an embedded figure (figure_delta.py)."""
 
     def post(self, name: str):
         if name not in FIGURES:
@@ -732,8 +713,7 @@ class LaneGenerationsHandler(_Base):
 
 
 class LanePositionHandler(_Base):
-    """Board + per-lane ground truth merged with one generation's prediction.
-    `generation` may be omitted or 'latest' to use the newest recorded one."""
+    """One position's lane view. `generation` defaults to the newest recorded."""
 
     def get(self):
         files = _dataset_files()
@@ -762,7 +742,7 @@ class LanePositionHandler(_Base):
 
 
 class PositionEvalPositionsHandler(_Base):
-    """The position evaluation dataset's positions (the UI's position selector)."""
+    """The position_eval dataset's positions (the UI's position selector)."""
 
     def get(self):
         try:
@@ -793,8 +773,8 @@ class PositionEvalGenerationsHandler(_Base):
 
 
 class PositionEvalPositionHandler(_Base):
-    """Board + Monte-Carlo ground truth merged with one generation's prediction.
-    `generation` may be omitted or 'latest' to use the newest exported one."""
+    """One position's Positions-tab view. `generation` defaults to the newest
+    export."""
 
     def get(self):
         files = _position_eval_dataset_files()
@@ -820,11 +800,10 @@ class PositionEvalPositionHandler(_Base):
 
 
 class PositionEvalAltLeaveHandler(_Base):
-    """Evaluate the selected generation's model on a position with alternate leaves (a
-    what-if). Query: position, generation, leave, and optionally opp_leave (the
-    opponent's; meaningful only to a model with an opponent-leave input). Returns the
-    model's W/L/D + score-delta mean/std, or a 400 with a human-readable reason for an
-    invalid/unavailable leave."""
+    """What-if: the selected generation's value outputs on a position with
+    alternate leaves. Query: position, generation, leave, and optionally
+    opp_leave (only for a model with an opponent-leave input). An invalid or
+    unavailable leave is a 400 whose message says why."""
 
     def get(self):
         files = _position_eval_dataset_files()
@@ -883,8 +862,8 @@ class PositionEvalAltLeaveHandler(_Base):
 
 
 def make_app(mount_root: str, worker_manager=None) -> tornado.web.Application:
-    """The full API app: the read-only training data plane plus (when a
-    WorkerManager is supplied) the master dashboard's control plane."""
+    """The API app: the training data plane plus the master control plane,
+    whose handlers need `worker_manager`."""
     return tornado.web.Application(
         [
             *master_api.MASTER_ROUTES,
@@ -914,15 +893,14 @@ _CONTROL_LOCK = None
 
 
 def _acquire_control_lock(mount_root: str):
-    """Guarantee a single dashboard control plane per mount root. The
-    WorkerManager owns local worker processes and reconciles every task's slots
-    against its task.json; two dashboards on the same mount would fight over the
-    same slots -- double-spawning local workers and issuing conflicting
-    pause/gate enforcement. An exclusive advisory lock on <mount>/.dashboard.lock
-    serializes them. Because flock is released by the kernel when its holder
-    dies, a crashed dashboard never leaves a stale lock behind; only a live one
-    blocks a second start. Port reclaim (react_server) only dedups a single
-    port, so a dashboard on another port would otherwise slip through."""
+    """Exit unless this is the only dashboard managing `mount_root`.
+
+    Two dashboards on one mount would fight over the same slots,
+    double-spawning local workers and enforcing conflicting pauses and gates.
+    react_server's port reclaim does not prevent that (a second dashboard can
+    use other ports), so an exclusive flock on <mount>/.dashboard.lock does.
+    The kernel drops the lock when its holder dies, so a crashed dashboard
+    never leaves a stale one."""
     global _CONTROL_LOCK
     path = Path(mount_root) / ".dashboard.lock"
     path.touch(exist_ok=True)
@@ -943,20 +921,16 @@ def _acquire_control_lock(mount_root: str):
 
 
 def run(port: int, mount_root: str):
-    """Serve the API on `port` until SIGTERM/interrupt (used by the dashboard
-    launcher). Binds to localhost only: the control plane holds cloud
-    credentials and launches processes, so it must not be reachable
-    off-machine (the browser reaches it through the Vite /api proxy).
+    """Serve the API on `port` until SIGTERM or interrupt, reconciling worker
+    slots at boot and every RECONCILE_SECONDS.
 
-    Refuses to start if another dashboard already manages this mount root
-    (a single control plane owns the local workers). The WorkerManager
-    reconciles worker slots at boot (relaunching local workers that should be
-    running) and every RECONCILE_SECONDS thereafter (starting and stopping
-    rented machines as their slots want). Its blocking work runs in the
-    manager's executor, so serving the dashboard never waits on ssh, the
-    provider's API or a build; a pass that overruns simply delays the next
-    one (PeriodicCallback awaits it). On shutdown, owned local workers get
-    SIGTERM (they flush and exit); machines and their containers keep running.
+    Binds to localhost only: the control plane holds cloud credentials and
+    launches processes, so it must not be reachable off-machine. The browser
+    reaches it through Vite's /api proxy.
+
+    A pass that overruns delays the next one (PeriodicCallback awaits it). On
+    shutdown, local workers get SIGTERM and flush; remote machines and their
+    containers keep running.
     """
     _acquire_control_lock(mount_root)
     manager = WorkerManager()

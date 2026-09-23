@@ -1,8 +1,8 @@
-"""Rolling checkpoint for the generational trainer -- the restart authority.
+"""The rolling checkpoint: what a trainer resumes from after a restart.
 
-A single rolling `model.pt` under the tag holds everything needed to resume: the
-model and optimizer state plus the generational cursor. Restarting the script
-loads this and continues exactly where it left off.
+A single `model.pt` under the tag holds the model and optimizer state plus the
+training cursor (GenerationalState), so a restarted trainer continues exactly
+where it left off. Every trainer uses it, generational or not.
 """
 
 from __future__ import annotations
@@ -17,17 +17,17 @@ from ..paths import TagPaths
 
 @dataclass
 class GenerationalState:
-    """The generational cursor persisted across restarts.
+    """The training cursor persisted across restarts.
 
-    rows_trained: cumulative rows (positions) trained -- the rows-clock that
-        keys the dashboard x-axis.
-    generation_index: the next generation to train. Each generation is trained
-        exactly once, so this is also the metrics / ONNX index its checkpoint
+    rows_trained: cumulative rows trained; the rows-clock that the LR schedule
+        runs on and the dashboard plots against.
+    generation_index: the next generation (or pass) to train. Each is trained
+        exactly once, so this is also the index its metrics and ONNX export
         will be written under.
 
-    A trainer needing more cursor than this subclasses it and names the subclass
-    to resume(); the checkpoint persists whatever fields the class declares, so
-    the extra state rides along without every other trainer carrying it.
+    A trainer needing more state subclasses this and passes the subclass to
+    resume() and peek_state(); the checkpoint persists whatever fields the
+    class declares.
     """
 
     rows_trained: int = 0
@@ -35,12 +35,12 @@ class GenerationalState:
 
 
 def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: dict):
-    """Persist the rolling checkpoint (model + optimizer + generational cursor).
-    `config` is the run's frozen task params, recorded for later inspection."""
+    """Persist the rolling checkpoint. `config` is the run's frozen task params,
+    recorded for later inspection."""
     path = paths.rolling_checkpoint
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Written beside and renamed over: a crash (or a copy taken) mid-write
-    # must never leave the one file a resume depends on torn.
+    # Write beside and rename over: a crash or a copy taken mid-write must
+    # never tear the one file a resume depends on.
     tmp = path.with_name(path.name + ".tmp")
     torch.save(
         {
@@ -56,7 +56,8 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
 
 def _load(paths: TagPaths, device, state_cls: type) -> tuple[dict | None, GenerationalState]:
     """The rolling checkpoint's raw dict (None when there is none yet) and its
-    cursor as `state_cls`; a field the checkpoint predates keeps its default."""
+    cursor as `state_cls`. A field missing from the checkpoint keeps its
+    default."""
     path = paths.rolling_checkpoint
     if not path.exists():
         return None, state_cls()
@@ -66,19 +67,17 @@ def _load(paths: TagPaths, device, state_cls: type) -> tuple[dict | None, Genera
 
 
 def peek_state(paths: TagPaths, state_cls: type = GenerationalState) -> GenerationalState:
-    """The rolling checkpoint's cursor alone, without a model or optimizer to
-    load it into -- what a run consults before building anything, to learn
-    whether there is anything left to do. A fresh zero cursor when no
-    checkpoint exists yet."""
+    """The rolling checkpoint's cursor alone, for a run deciding whether there
+    is work left before it builds a model. A zero cursor when no checkpoint
+    exists yet."""
     return _load(paths, "cpu", state_cls)[1]
 
 
 def resume(
     paths: TagPaths, model, optimizer, device, state_cls: type = GenerationalState
 ) -> GenerationalState:
-    """Load the rolling checkpoint into `model`/`optimizer` and return the cursor,
-    as `state_cls` (a GenerationalState or a subclass of it carrying more).
-    Returns a fresh zero cursor when no checkpoint exists yet."""
+    """Load the rolling checkpoint into `model` and `optimizer` and return its
+    cursor as `state_cls`. A zero cursor when no checkpoint exists yet."""
     ckpt, state = _load(paths, device, state_cls)
     if ckpt is None:
         return state

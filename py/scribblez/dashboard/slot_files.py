@@ -1,20 +1,19 @@
 """One worker slot's filesystem, as the controller reaches it.
 
-Some roles are not self-directing: the controller decides what a slot should
-work on next and puts the input where the worker will find it (match eval: the
-ONNX export of the generation to play), reads the directory back to learn
-whether that work is still in flight, and removes what the exchange is
-finished with. Where "there" is depends on the slot kind -- the tag's own data
-tree for a local worker, a container on another machine for an ssh one -- so
-both are presented through the three calls a dispatch needs
-(scribblez/match_eval/dispatch.py), which therefore never branches on kind.
+Dispatch-driven roles (RoleSpec.dispatch) do not pick their own work: the
+controller puts each assignment where the worker will find it (for match eval,
+the ONNX export of the generation to play), lists the directory to learn
+whether the work is still in flight, and removes what the exchange is finished
+with. That place is the tag's own tree for a local slot and a container on
+another machine for an ssh slot, so both expose the same three calls and the
+dispatch code (scribblez/match_eval/dispatch.py) never branches on kind.
 
-Paths are relative to the tag root, the one layout both sides share: the
-container runs the controller's own tree under the same mount root, so a
-relative path names the same thing on either machine.
+Paths are relative to the tag root. A container runs the controller's own
+layout under the same mount root, so a relative path names the same thing on
+either machine.
 
-A container on a rented machine delivers through the bucket instead, and a
-dispatch-driven role's RoleSpec says which machines it can run on.
+A container on a rented machine delivers its results through the bucket, not
+through these calls.
 """
 
 import os
@@ -24,11 +23,11 @@ from cloud.ssh_transfer import list_dir, push_file, remove_file
 
 
 class LocalSlotFiles:
-    """A local slot's world: the tag tree this process is already writing.
+    """A local slot's files: the tag tree on this machine.
 
-    Inputs are symlinked rather than copied -- the file the worker is being
-    pointed at is right there, and a per-assignment copy of a model would be
-    tens of megabytes of the same bytes.
+    Inputs are symlinked rather than copied: the file is already here, and a
+    per-assignment copy of a model would be tens of megabytes of duplicate
+    bytes.
     """
 
     def __init__(self, worker_id: str, tag_root: Path):
@@ -39,12 +38,11 @@ class LocalSlotFiles:
         try:
             return sorted(p.name for p in (self._root / rel).iterdir())
         except FileNotFoundError:
-            return []  # nothing has been put there yet
+            return []
 
     def put(self, src: Path, rel: str):
-        """Point the slot at `src` under `rel`. The link is created under a
-        temporary name and renamed into place, so a worker polling the
-        directory never sees a link before it has a target."""
+        """Point the slot at `src` under `rel`. The link is renamed into place,
+        so a worker polling the directory never sees it half made."""
         dest = self._root / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(f".{dest.name}.part")
@@ -57,8 +55,8 @@ class LocalSlotFiles:
 
 
 class SshSlotFiles:
-    """An ssh slot's world: its container, over the control link (which is how
-    its results come back too, cloud/ssh_transfer.py)."""
+    """An ssh slot's files: its container, reached over the ssh control link
+    (cloud/ssh_transfer.py)."""
 
     def __init__(self, worker_id: str, machine, container: str, remote_root: str):
         self.worker_id = worker_id

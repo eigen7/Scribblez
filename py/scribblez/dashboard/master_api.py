@@ -1,11 +1,10 @@
-"""Control-plane handlers for the master dashboard.
+"""Control-plane handlers for the master dashboard, registered alongside the
+training data plane by api.make_app().
 
-The read-only training data plane lives in api.py; these handlers add the
-master flow: enumerating workloads (with their param schemas and role
-declarations, which drive the web forms), creating tasks, managing worker
-slots through the process-wide WorkerManager (settings["worker_manager"]), and
-the generic per-role worker Stats data. Registered alongside the data plane by
-api.make_app().
+They list workloads (with the param schemas and role declarations that drive
+the web forms), create and delete tasks, manage worker slots and machines
+through the process-wide WorkerManager (settings["worker_manager"]), and serve
+the generic Stats tab.
 
 Expected client errors (bad params, unknown tags, missing cloud credentials,
 provider refusals) return 400 with {"error": ...} rather than a stack trace.
@@ -47,8 +46,8 @@ def _role_payload(role: workloads.RoleSpec) -> dict:
 
 
 def _pending_summary(worker: tasks.WorkerRecord) -> dict:
-    """The table row of a task worker that has published no stats record yet
-    (its first cycle is still running): identity from the task, no numbers."""
+    """The Stats row of a worker that has published no stats yet: identity from
+    the task, no numbers."""
     return {
         "worker_id": worker.worker_id,
         "role": worker.role,
@@ -67,9 +66,9 @@ def _pending_summary(worker: tasks.WorkerRecord) -> dict:
 
 
 def _stats_by_role(spec: workloads.WorkloadSpec, tag: str) -> dict:
-    """The Stats tab payload: per-role schemas plus every worker's summary --
-    the task's workers without a record yet included, so the tab counts and
-    lists the fleet as it is, not only the part that has reported."""
+    """The Stats tab payload: per-role schemas plus every worker's summary,
+    including workers that have not reported yet, so the tab shows the whole
+    fleet."""
     records = worker_stats_figures.read_stats(spec.paths(tag).stats_dir)
     roles = {r.name: r for r in spec.roles if r.stats}
     summaries = [
@@ -116,9 +115,8 @@ class _MasterBase(tornado.web.RequestHandler):
 
     async def guarded_offload(self, fn):
         """`guarded`, with `fn` run off the event loop in the worker manager's
-        executor. Launching and removing are seconds of ssh and cloud API
-        work; the loop has to stay free to serve the status polls the operator
-        is watching while they happen."""
+        executor. Launching and removing take seconds of ssh and cloud API work,
+        and the loop must stay free to serve the status polls meanwhile."""
         await self.guarded_await(self.manager.offload(fn))
 
     async def guarded_await(self, awaitable):
@@ -204,9 +202,8 @@ class TaskHandler(_MasterBase):
 
 
 class TaskDeleteHandler(_MasterBase):
-    """Delete a tag and its local data. The tag's idle worker slots go with
-    it -- tearing their containers and machines down is seconds of ssh and cloud
-    work, hence the offload."""
+    """Delete a tag, its idle worker slots and its local data. Offloaded because
+    tearing slots down takes seconds of ssh and cloud work."""
 
     async def post(self):
         body = self.body()
@@ -220,8 +217,8 @@ class TaskDeleteHandler(_MasterBase):
 
 class TaskDeployHandler(_MasterBase):
     """Move a task onto the controller's current tree: build, push if the
-    bucket lacks it, repin. Running remote workers are replaced with ones on
-    the new bundle as reconcile next observes them."""
+    bucket lacks it, repin. Reconcile then replaces each remote worker with
+    one on the new bundle once it holds no undelivered output."""
 
     async def post(self):
         body = self.body()
@@ -262,8 +259,8 @@ class WorkerAddHandler(_MasterBase):
 
 class MachineAddHandler(_MasterBase):
     """Register a machine the operator prepared for the task's ssh slots, or
-    rent one from the provider (`type_id` given) -- seconds of API work,
-    hence the offload."""
+    rent one from the provider when `type_id` is given. Offloaded because
+    renting takes seconds of provider API work."""
 
     async def post(self):
         body = self.body()
@@ -291,16 +288,17 @@ class MachineAddHandler(_MasterBase):
 
 
 class RentalOfferHandler(_MasterBase):
-    """The provider, its account and its catalog, for the rent form -- a
-    provider API call the first time, hence the offload."""
+    """The provider, its account and its catalog, for the rent form.
+    Offloaded because the first call asks the provider's API."""
 
     async def get(self):
         await self.guarded_offload(self.manager.rental_offer)
 
 
 class FleetHandler(_MasterBase):
-    """Every instance the provider tagged ours and what they bill per hour,
-    for the burn strip: the last listing, so a poll costs no provider call."""
+    """Every instance the provider tagged ours and its hourly rate, for the
+    burn strip. Served from the last listing, so a poll costs no provider
+    call."""
 
     def get(self):
         self.guarded(self.manager.fleet)
@@ -326,8 +324,8 @@ class OrphanActionHandler(_MasterBase):
 
 
 class MachineActionHandler(_MasterBase):
-    """Remove a machine and its slots -- seconds of ssh to check and clean
-    each slot's container, hence the offload."""
+    """Remove a machine and its slots. Offloaded because checking and cleaning
+    each slot's container takes seconds of ssh."""
 
     async def post(self):
         body = self.body()

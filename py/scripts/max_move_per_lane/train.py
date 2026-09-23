@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Headless CLI over the max-move-per-lane train role.
+"""Run the max_move_per_lane trainer on a tag without the dashboard, for debugging.
 
-Sibling to scripts/position_eval/train.py: the master dashboard is the normal
-way to run training; this CLI invokes the same train-role runner
-(scribblez/max_move_per_lane/trainer.py) directly on a tag for debugging. It
-consumes complete generations under the tag, so something must be filling them
-(the dashboard server with generator workers attached to the same tag).
+Normally the dashboard runs training. This CLI calls the same train-role runner
+(scribblez/max_move_per_lane/trainer.py) directly. It trains on the tag's
+complete generations, so something must still be producing them: a dashboard
+server with generator workers attached to the same tag.
 
-The trainer delivers its metrics as records under the tag (records/), which
-the dashboard server ingests into dashboard.db as it runs; with no server up,
-run scripts/ingest_train_records.py afterwards.
+The trainer writes its metrics as records under the tag's records/ dir. A
+running dashboard server ingests them into dashboard.db; with none up, run
+scripts/ingest_train_records.py afterwards.
 
 Usage:
     ./py/scripts/max_move_per_lane/train.py -t mytag
@@ -29,7 +28,9 @@ from util.argparse_ext import ArgumentDefaultsHelpFormatter
 def main() -> int:
     spec = workloads.get("max_move_per_lane")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
-    p.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
+    p.add_argument(
+        "-t", "--tag", required=True, help="Tag to train; its directory holds all outputs."
+    )
     p.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
     spec.add_cli_arguments(p)
     args = p.parse_args()

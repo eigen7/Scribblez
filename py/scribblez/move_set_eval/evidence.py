@@ -1,16 +1,13 @@
-"""Evidence inputs for the move set evaluation model's fusion stage.
+"""Builds the fusion stage's EvidenceInputs (scribblez.evidence_fusion) for
+one position.
 
-Assembles EvidenceInputs (scribblez.evidence_fusion) for one position from
-the two halves an evidence token carries: the raw sim observations of the
-simmed candidates -- .sobs records (sim_observation_log.h), read via
-scribblez.sim_evidence.sobs -- and the model's own evidence-free first-pass
-outputs for the same candidates. Raw observations are model-independent and
-never go stale; the prediction half is recomputed live by the caller (its
-rows are slices of the full-candidate-set first pass it runs anyway), so no
-stored artifact carries model outputs.
-
-The move half reuses the engine's move encoding (moves.encode_moves), so the
-evidence tokens describe their moves exactly the way candidate rows do.
+An evidence token combines a simmed candidate's move encoding (the same
+moves.encode_moves rows candidates use), its raw sim observations (.sobs
+records, via scribblez.sim_evidence.sobs), and the model's own evidence-free
+predictions for it. Only the observations are stored: they do not depend on
+any model, so they never go stale. The caller supplies the predictions as
+slices of the plain first pass over the full candidate set, which it runs
+anyway.
 """
 
 from __future__ import annotations
@@ -38,8 +35,9 @@ _PREDICTED_END = NUM_OBSERVED_PLANES + NUM_PREDICTED_PLANES
 
 
 def observed_scalars(obs: np.ndarray) -> np.ndarray:
-    """(K,) .sobs records -> (K, 6) [win/draw/loss freq, delta mean/std (score
-    points, ~unit-scaled), log1p rollouts]."""
+    """(K,) .sobs records -> (K, 6) observed evidence scalars: win/draw/loss
+    frequencies, delta mean and std (score points / 100), and
+    log1p(rollouts) / 8."""
     n = np.maximum(obs["n"].astype(np.float64), 1.0)
     delta_mean = obs["delta_sum"] / n
     delta_var = np.maximum(obs["delta_sq_sum"] / n - delta_mean**2, 0.0)
@@ -56,8 +54,8 @@ def observed_scalars(obs: np.ndarray) -> np.ndarray:
 
 def predicted_scalars(first_pass: dict[str, torch.Tensor]) -> np.ndarray:
     """First-pass outputs for the K evidence candidates -> (K, 5)
-    [p_win, p_draw, p_loss, sd mean, sd std], the sd pair unit-scaled the way
-    the observed delta moments are."""
+    [p_win, p_draw, p_loss, sd mean / 100, sd std / 100], scaled like the
+    observed delta moments."""
     wld = torch.softmax(first_pass["wld"].detach(), dim=1).cpu().float().numpy()
     sd = first_pass["score_diff"].detach().cpu().float().numpy() / 100.0
     return np.concatenate([wld, sd], axis=1)
@@ -89,10 +87,10 @@ def build_evidence_inputs(
     """One position's evidence set as (1, max_e, ...) model inputs.
 
     `moves`/`obs` are the simmed candidates' .sobs rows (a SobsPosition's
-    arrays, or any prefix of them); `pre_move_diff` is the mover's score
-    differential before the move, as the move encoder expects; `first_pass`
-    holds the model's evidence-free outputs ("wld", "score_diff", "planes")
-    sliced to the same K candidates in the same order.
+    arrays or a prefix of them). `pre_move_diff` is the mover's score
+    differential before the move. `first_pass` holds the model's
+    evidence-free "wld", "score_diff" and "planes" for the same K candidates
+    in the same order.
     """
     k = len(moves)
     if k > max_e:
@@ -132,10 +130,8 @@ def build_evidence_inputs(
 def empty_evidence_inputs(
     max_e: int, *, dtype: torch.dtype = torch.float32, device: torch.device | str = "cpu"
 ) -> EvidenceInputs:
-    """The empty evidence set as (1, max_e, ...) inputs -- every row masked
-    out, so the model degrades to its plain pass (the prefix-0 training rows,
-    and the first pass of every deployed turn). Row widths follow the move
-    encoding the way build_evidence_inputs' do."""
+    """The empty evidence set as (1, max_e, ...) inputs, every row masked out,
+    under which the model computes exactly its plain pass."""
     max_tiles, num_scalars, _, _ = move_encoding_dims()
     zeros = functools.partial(_zero_rows, max_e, dtype=dtype, device=device)
     return EvidenceInputs(

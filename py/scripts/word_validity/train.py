@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Train the word-validity toy and report held-out accuracy.
+"""Train the word-validity toy model and report held-out accuracy.
 
-Shuffles a real lexicon (label 1) with its phony counterpart (label 0), holds
-out a random split, and trains a small transformer -- optionally with a frozen
-compiled-lexicon tool -- to classify words valid/invalid. Because the phonies
-match the real lexicon's letter statistics, held-out accuracy is the tool-use
-test: a model with no tool can only memorize and sits near chance on held-out
-words, while one that learns to use the tool generalizes.
+A small transformer, optionally given a frozen compiled-lexicon tool, learns to
+tell a real lexicon's words (label 1) from a phony lexicon's (label 0), with a
+random split held out. The phonies match the real lexicon's letter statistics,
+so held-out accuracy tests whether the model learned to use the tool: without
+it a model plateaus around 0.79 on residual letter statistics, while the
+lexicon-walk tools reach ~1.0. Results and protocol are in
+docs/word_validity_experiments.md.
 
 Usage:
-    ./py/scripts/word_validity/train.py              # baseline (no tool)
-See --help for the compiled-lexicon-tool flags, and docs/word_validity_experiments.md
-for the tool-vs-starve protocol.
+    ./py/scripts/word_validity/train.py                                  # baseline, no tool
+    ./py/scripts/word_validity/train.py --lexicon-module soft_traversal  # with a tool
 """
 
 import argparse
@@ -34,8 +34,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--phony-lexicon", default=default_kwg_path("PHONY-NWL23"), help="Phony .kwg (label 0)."
     )
-    p.add_argument("--min-len", type=int, default=2)
-    p.add_argument("--max-len", type=int, default=15)
+    p.add_argument("--min-len", type=int, default=2, help="Shortest word length kept.")
+    p.add_argument("--max-len", type=int, default=15, help="Longest word length kept.")
     p.add_argument("--holdout-frac", type=float, default=0.1, help="Random held-out fraction.")
     p.add_argument("--channels", type=int, default=128)
     p.add_argument("--layers", type=int, default=2)

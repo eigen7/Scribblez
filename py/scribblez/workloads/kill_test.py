@@ -1,15 +1,15 @@
-"""The kill-test data-generation workload (docs/plans/sim_residual_feedback.md).
+"""The kill-test data-generation workload (docs/plans/sim_residual_feedback.md):
+self-play positions with sim observations of their top candidates.
 
-One cycle = one HastyBot self-play batch into a fresh timestamp-named .slog
-file in the worker's private work dir, then sim_obs_tool over every .slog
-still missing its .sobs sidecar (the fresh batch plus any backlog an
-interrupted run left), then delivery of every complete pair to the tag's
-slogs/ store (a rename for local workers, an upload for cloud ones). Both
-artifacts land atomically, so cycles can be interrupted and resumed freely and
-any number of workers can generate into the same tag.
+A cycle plays a HastyBot self-play batch into a fresh .slog in the worker's
+work dir, runs sim_obs_tool over every .slog still missing its .sobs sidecar
+(so an interrupted run's backlog is picked up), and delivers every complete
+pair to the tag's slogs/ store (workloads/pair_store.py). Cycles can be
+interrupted and resumed freely, and any number of workers can generate into
+one tag.
 
-Shared by every driver: the local CLI (scripts/generate_kill_test_data.py) and
-the worker entrypoint that the master dashboard and remote containers run.
+Both the local CLI (scripts/generate_kill_test_data.py) and the dashboard's
+workers run this code.
 """
 
 import subprocess
@@ -32,9 +32,9 @@ SLOGS_DIR = "slogs"
 
 @dataclass(frozen=True)
 class KillTestParams:
-    """A tag's generation parameters. Frozen at task creation: every worker on
-    a tag must generate with identical settings for the data to be analyzable
-    as one corpus. Worker-level knobs (thread count) deliberately live outside.
+    """A tag's generation parameters, frozen at task creation so the data is
+    analyzable as one corpus. Worker-level knobs (thread count) live on the
+    slots.
     """
 
     games_per_batch: int = param(200, "self-play games per generation cycle")
@@ -43,9 +43,9 @@ class KillTestParams:
     positions_per_game: int = param(1, "positions sampled per game for sim observation")
     open_leaves: bool = param(
         False,
-        "sim with the opponent's retained leave known, replenishments hidden (the "
+        "sim with the opponent's retained leave known and their draws hidden (the "
         "open-leaves information condition); use a dedicated tag, and pass "
-        "--open-leaves to kill_test.py as well",
+        "--open-leaves to scripts/kill_test.py when analyzing it",
     )
 
 
@@ -111,7 +111,7 @@ def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
 
 
 def slog_dir(tag: str) -> Path:
-    """The tag's pair store (complete .slog/.sobs pairs), for analysis tools."""
+    """The tag's pair store of .slog/.sobs pairs, for analysis tools."""
     return SPEC.paths(tag).data_dir / SLOGS_DIR
 
 

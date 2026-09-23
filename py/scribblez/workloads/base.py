@@ -1,18 +1,21 @@
 """The workload-spec contract: everything a launchable kind of work declares.
 
-A WorkloadSpec ties together a workload's name, its frozen parameter dataclass
-(see scribblez/params.py -- the single source of truth from which CLI flags,
-worker env vars, the dashboard's config form, and validation all derive), its
-worker roles (parallel generators, a singleton trainer, ...), an optional
-controller-side scheduler, and how to summarize a tag's progress. Consumers:
+A WorkloadSpec ties together a workload's name, its frozen parameter dataclass,
+its worker roles (parallel generators, a singleton trainer, ...), an optional
+controller-side scheduler, and how to summarize a tag's progress. The params
+dataclass is the single source from which CLI flags, worker env vars, the
+dashboard's new-tag form and validation all derive (scribblez/params.py).
 
-  - the master dashboard (task creation, worker slots, the Stats tab, progress)
+Two consumers read a spec:
+
+  - the master dashboard: task creation, worker slots, the Stats tab, progress.
   - the worker entrypoint (py/cloud/worker_entrypoint.py), which reads
-    SCZ_WORKLOAD + SCZ_ROLE and dispatches to the role's runner
+    SCZ_WORKLOAD and SCZ_ROLE and calls the role's runner.
 
-Heavy code -- runners, deps fetchers, schedulers -- is referenced by dotted
-path ("pkg.module:attr") and imported only when it runs, so the registry stays
-importable on machines without torch or a GPU (a CPU-only worker container).
+Heavy code (runners, deps fetchers, schedulers) is referenced by a dotted
+"pkg.module:attr" path and imported only when it runs. That keeps the registry
+importable in processes without torch or a GPU: the dashboard, and CPU-only
+worker containers.
 """
 
 import importlib
@@ -35,8 +38,8 @@ def resolve(dotted: str):
 
 @dataclass(frozen=True)
 class StatsSpec:
-    """The shape of a role's per-cycle stats samples, driving the generic
-    Stats tab (aggregate tiles, rate/breakdown figures, summary table)."""
+    """The shape of a role's per-cycle stats samples, from which the generic
+    Stats tab builds its tiles, rate and breakdown figures, and summary table."""
 
     unit: str  # what a cycle delivers: "pairs", "games", "rows"
     phases: dict[str, str]  # sample key -> display label, in stacking order
@@ -51,40 +54,38 @@ class RoleSpec:
     runner: str  # dotted path to run(ctx: WorkerContext) -> int
     deps: str = ""  # dotted path to a fetch-runtime-deps callable, or ""
     singleton: bool = False  # at most one slot per task (the trainer)
-    # Worker kinds this role's slots may run as: a "local" subprocess, an
-    # "ssh" container on a machine reached over ssh (the operator's own, or
-    # one rented for the task).
+    # Worker kinds this role's slots may run as: "local" (a subprocess on the
+    # controller's machine) or "ssh" (a container on a machine reached over
+    # ssh, either the operator's own or one rented for the task).
     kinds: tuple[str, ...] = ("local", "ssh")
-    # Whether this role runs on GPU hardware: its container gets the machine's
-    # GPUs, and a machine of known shape refuses it when it has none free.
+    # Whether the role needs a GPU. Its container gets the machine's GPUs, and
+    # a machine of known shape refuses the slot when none is free.
     gpu: bool = False
-    # Which worker image a remote slot of this role runs on
-    # (cloud/runtime_abi.py): "engine" for anything the binaries and the FFI
-    # cover, "torch" for a role that imports the training stack. Independent
-    # of `gpu`: match eval runs a GPU on the engine runtime.
+    # The worker image a remote slot runs on (cloud/runtime_abi.py): "engine"
+    # when the binaries and the FFI cover the role, "torch" when it imports the
+    # training stack. Independent of `gpu`: match eval uses a GPU on the engine
+    # image.
     runtime: str = RUNTIME_ENGINE
-    # Dotted path to a controller-side tick for this role,
-    # dispatch(spec, tag, params, slots) -- for a role whose work the
-    # controller assigns rather than the worker choosing it, and whose results
-    # it ingests. `slots` holds one scribblez/dashboard/slot_files.py handle
-    # per running slot of the role, the only way into a worker's filesystem;
-    # "" for the self-directing roles (a generator picks its own work).
+    # Dotted path to a controller-side tick, dispatch(spec, tag, params, slots),
+    # for a role whose work the controller assigns and whose results it
+    # collects (match eval). `slots` holds one scribblez/dashboard/slot_files.py
+    # handle per running slot, the controller's only way into a worker's
+    # filesystem. "" for roles that pick their own work, like generators.
     dispatch: str = ""
-    # Dotted path to a controller-side ingest tick for this role,
-    # ingest(spec, tag): takes in what the role's worker has delivered under
-    # the tag -- a trainer's records (generational/train_ingest.py) into
-    # dashboard.db. Unlike dispatch it needs no way into the worker, only the
-    # tag on the controller's mount, so it serves a slot of any kind. "" for
-    # roles that deliver nothing the controller has to write.
+    # Dotted path to a controller-side tick, ingest(spec, tag), that writes what
+    # the role has delivered under the tag into dashboard.db (a trainer's
+    # records: generational/train_ingest.py). It reads only the tag on the
+    # controller's mount, so unlike dispatch it works for a slot of any kind.
+    # "" for roles that deliver nothing the controller has to write.
     ingest: str = ""
-    # Dotted path to inputs(params) -> {rel: Path}: files a slot of this role
-    # reads that live outside its own tag -- another tag's model export, say
-    # -- keyed by the tag-relative name the worker looks for them under. A
-    # local worker reads the source in place; the controller stages a copy
-    # into a remote slot's world (the bucket for a bucket-delivering slot,
-    # the container otherwise) before it needs them, and the runner takes
-    # whichever is there (resolve_input below). "" for roles whose every
-    # input is in the bundle, the runtime deps, or the tag itself.
+    # Dotted path to inputs(params) -> {rel: Path}: files the role reads from
+    # outside its own tag (another tag's model export, say), keyed by the
+    # tag-relative name the worker looks for them under. A local worker reads
+    # each source in place. For a remote slot the controller stages a copy
+    # before the slot needs it: into the bucket for a bucket-delivering slot,
+    # into the container otherwise. resolve_input below finds whichever copy
+    # exists. "" when every input is in the bundle, the runtime deps, or the
+    # tag itself.
     inputs: str = ""
     stats: StatsSpec | None = None
 
@@ -95,36 +96,39 @@ class WorkloadSpec:
     title: str  # human-readable, shown in the dashboard's workload picker
     params_cls: type
     roles: tuple[RoleSpec, ...]
-    # Dotted path to a controller-side per-task tick
+    # Dotted path to a controller-side per-task tick,
     # tick(spec, task, hooks: SchedulerHooks), run by the dashboard server's
-    # reconcile loop; "" for workloads without generation lifecycle to manage.
+    # reconcile loop. "" for workloads with nothing to schedule.
     scheduler: str = ""
     # Dotted path to progress(spec, tag) -> list[(label, value)]: the counters
     # shown in the tag listing and the task Overview.
     progress: str = ""
-    # Dotted path to finalize(spec, tag, params) -> params: a creation-time step
-    # that resolves derived/pinned fields before the params are frozen into
-    # task.json -- e.g. pinning a "latest" reference to a concrete generation so
-    # it cannot drift under a later worker restart. "" leaves params as validated.
+    # Dotted path to finalize(spec, tag, params) -> params, run at task creation
+    # before the params are frozen into task.json. It resolves fields that must
+    # not drift later, such as pinning a "latest" reference to a concrete
+    # generation so a worker restart cannot pick up a newer one. "" leaves the
+    # params as validated.
     finalize: str = ""
-    # data/ subdirectories cloud workers deliver into; cloud_sync pulls exactly
-    # these bucket prefixes (plus stats/ and params/) down to the local mount.
+    # data/ subdirectories bucket-delivering workers write into.
+    # scripts/cloud_sync.py pulls exactly these bucket prefixes (plus stats/
+    # and params/) down to the local mount.
     sync_data_dirs: tuple[str, ...] = ()
-    # data/ subdirectories only local and ssh workers deliver into. An ssh
-    # collection takes these as well (collected_dirs below), but they never
-    # exist in the bucket, so asking cloud_sync for them would be one rclone
-    # per watcher cycle against a prefix nothing can ever write.
+    # data/ subdirectories that only local and ssh workers write into. A
+    # collection from an ssh container takes these too (collected_dirs), but
+    # they never exist in the bucket, so they are kept out of sync_data_dirs:
+    # cloud_sync would otherwise spend an rclone call per cycle on a prefix
+    # nothing writes.
     local_data_dirs: tuple[str, ...] = ()
     # The parameters the dashboard's new-tag form shows up front, in this
-    # order; the rest are folded into its collapsed "Advanced" section. The
-    # ordering is the form's, not the dataclass's, which groups fields by
-    # subject instead. Empty means every parameter is shown up front.
+    # order; the rest fold into its collapsed "Advanced" section. The dataclass
+    # groups fields by subject, so this order is independent of it. Empty
+    # shows every parameter up front.
     primary_params: tuple[str, ...] = ()
-    # Parameter profiles (scribblez/params.py): name -> the values it sets over
-    # the dataclass defaults. The new-tag form starts from `default_profile`
-    # and lets the operator switch; the CLI takes --profile. A profile may set
-    # any subset of the params, and its values must validate. Empty for a
-    # workload with one recipe.
+    # Parameter profiles (scribblez/params.py): profile name -> the values it
+    # sets over the dataclass defaults. A profile may set any subset of the
+    # params, and its values must validate. The new-tag form starts from
+    # `default_profile` and lets the operator switch; the CLI takes --profile.
+    # Empty for a workload with a single recipe.
     profiles: dict[str, dict] = field(default_factory=dict, hash=False)
     default_profile: str = ""
 
@@ -161,27 +165,28 @@ class WorkloadSpec:
         params_mod.add_arguments(parser, self.params_cls, self.profiles, self.default_profile)
 
     def params_from_args(self, args):
-        """Params from `add_cli_arguments` flags: defaults under the chosen
-        profile under the flags given."""
+        """Params from `add_cli_arguments` flags. Precedence, lowest first: the
+        dataclass defaults, the chosen profile, the flags given."""
         return params_mod.from_args(self.params_cls, args, self.profiles)
 
     def resolve_params(self, profile: str | None, raw: dict):
-        """(profile name, params): the dataclass defaults under the named
-        profile's values -- the default profile when `profile` is None, none
-        when the workload has none -- under `raw`, validated. What a new tag
-        freezes."""
+        """The (profile name, validated params) a new tag freezes.
+
+        Precedence, lowest first: the dataclass defaults, the profile, `raw`.
+        `profile` None means the default profile (or none, for a workload
+        without profiles)."""
         name = self.default_profile if profile is None else profile
         assert not name or name in self.profiles, f"workload '{self.name}': no profile {name!r}"
         return name, params_mod.validate(self.params_cls, raw, base=self.profiles.get(name, {}))
 
     def profile_defaults(self, profile: str) -> dict:
-        """Every param's value under `profile` alone (the dataclass defaults
-        where it is silent) -- what the new-tag form shows before any edit."""
+        """Every param's value under `profile` alone, with dataclass defaults
+        where it is silent: what the new-tag form shows before any edit."""
         return asdict(params_mod.validate(self.params_cls, {}, base=self.profiles.get(profile, {})))
 
     def profile_diff(self, profile: str, params: dict) -> list[dict]:
-        """How a tag's frozen `params` depart from `profile`'s defaults, as
-        [{name, profile, task}] -- the provenance the task view shows."""
+        """How a tag's frozen `params` depart from `profile`'s values, as
+        [{name, profile, task}] rows for the task view's provenance table."""
         defaults = self.profile_defaults(profile)
         return [
             {"name": name, "profile": value, "task": params[name]}
@@ -191,7 +196,7 @@ class WorkloadSpec:
 
     @property
     def collected_dirs(self) -> tuple[str, ...]:
-        """Every data/ subdirectory a worker delivers into -- what a collection
+        """Every data/ subdirectory a worker delivers into: what a collection
         from an ssh container looks through."""
         return self.sync_data_dirs + self.local_data_dirs
 
@@ -214,9 +219,9 @@ class WorkloadSpec:
         raise KeyError(f"workload '{self.name}' has no role '{name}'")
 
     def worker_env(self, tag: str, params, role: str) -> dict[str, str]:
-        """The SCZ_* environment defining this work for a worker entrypoint
-        (local or cloud); worker-level knobs (sink, threads, worker id) and R2
-        credentials are layered on top by the launcher."""
+        """The SCZ_* environment that tells a worker entrypoint what to run. The
+        launcher adds worker-level settings (sink, threads, worker id) and the
+        bucket credentials on top."""
         self.role(role)  # validate
         return {
             "SCZ_WORKLOAD": self.name,
@@ -230,16 +235,18 @@ class WorkloadSpec:
 class SchedulerHooks:
     """The narrow surface a scheduler tick gets from the dashboard server.
 
-    gate(role, reason) parks every worker of `role` (distinct from operator
-    pause; shown as "waiting" with the reason) or, with reason=None, releases
-    it. mirror(chunk_name, dest_rel), when present, replays a local staging
-    ingest in the results bucket so the bucket layout keeps mirroring the local
-    corpus and the sync watcher never re-downloads an ingested chunk.
-    publish(dest_rel), when present, puts a complete generation in the bucket
-    whole -- chunks, then manifest -- for a trainer that runs elsewhere and
-    reads it there; the scheduler calls it once per generation, after
-    completion, and records the fact in the manifest so a failed call is
-    retried on the next tick.
+    gate(role, reason)
+        Park every worker of `role`, shown as "waiting" with the reason; this is
+        separate from an operator pause. reason=None releases the gate.
+    mirror(chunk_name, dest_rel), optional
+        Repeat a local staging ingest (a chunk moved into a generation) in the
+        results bucket. The bucket keeps mirroring the local corpus, so the
+        sync watcher never downloads an ingested chunk a second time.
+    publish(dest_rel), optional
+        Upload a complete generation to the bucket, chunks first and manifest
+        last, for a trainer that runs elsewhere and reads it from there. The
+        scheduler calls it once per generation and records success in the
+        manifest, so a failed call is retried on the next tick.
     """
 
     gate: object  # callable(role: str, reason: str | None)
@@ -259,34 +266,36 @@ class WorkerContext:
     threads: int
     max_cycles: int  # 0 = run until stopped
     sink: object  # cloud.sinks.LocalSink | R2Sink
-    # The slot kind reported in stats. In-process runners (CLI tools, tests)
-    # are local by construction; only a launcher of remote workers overrides it.
+    # The slot kind, reported in stats and consulted by resolve_input.
+    # In-process runners (CLI tools, tests) are local; only a launcher of
+    # remote workers overrides it.
     kind: str = "local"
     provenance: dict = field(default_factory=dict)
-    # Where the tag tree this worker reads and writes lives; the mount dir
-    # unless a launcher points a worker elsewhere (a trainer speaking to the
-    # bucket from a machine whose mount dir the controller owns).
+    # Root of the tag tree this worker reads and writes: the mount dir, unless
+    # the launcher points it elsewhere (a bucket-delivering trainer on a
+    # machine whose mount dir belongs to the controller).
     mount_root: Path | None = None
 
     def tag_paths(self) -> TagPaths:
         return self.spec.paths(self.tag, self.mount_root)
 
 
-# How long resolve_input waits for a staged copy before giving up: the
-# controller pushes a container's inputs right after creating it, so a wait
-# this long means the staging failed, not that it is slow.
+# How long resolve_input waits for a staged copy. The controller pushes a
+# container's inputs right after creating it, so a wait this long means the
+# staging failed, not that it is slow.
 INPUT_WAIT_SECONDS = 600
 INPUT_POLL_SECONDS = 5
 
 
 def resolve_input(ctx: WorkerContext, rel: str, source: Path) -> Path:
-    """The path a runner reads input `rel` (a RoleSpec.inputs key) from: the
-    `source` itself where it exists (a local worker, sharing the controller's
-    mount), else the staged copy under the tag root at `rel` -- already there
-    (pushed into the container), or fetched through the sink (a
-    bucket-delivering slot). A remote slot waits for a copy that is not there
-    yet; a local worker, which nothing stages for, looks once and never at
-    the sink. Raises FileNotFoundError when none arrives."""
+    """Where a runner reads input `rel` (a RoleSpec.inputs key) from.
+
+    `source` itself when it exists, as it does for a local worker sharing the
+    controller's mount. Otherwise the staged copy at `rel` under the tag root:
+    either pushed into the container already, or fetched through the sink by a
+    bucket-delivering slot. A remote slot polls until the copy arrives; a local
+    worker, for which nothing is staged, checks once and never asks the sink.
+    Raises FileNotFoundError when no copy turns up."""
     if source.is_file():
         return source
     staged = ctx.tag_paths().root / rel

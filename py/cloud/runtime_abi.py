@@ -1,33 +1,31 @@
-"""The runtime a compiled bundle needs from the machine that runs it: which
-worker image a role takes, and the ABI that image provides.
+"""Which worker image a role runs on, and a check that the image can load
+bundles built in this dev container.
 
-Bundles carry code and binaries; the worker images carry the libraries they
-link against. Those libraries come from the dev image -- copied out of it
-(libstdc++, the NVIDIA runtime) or apt-installed to match it -- so the images
-are a matched set, and rebuilding one without the other produces binaries no
-worker can load:
+Bundles carry code and binaries; the worker images carry the shared libraries
+those binaries link against. The libraries come from the dev image (copied out
+of it, or apt-installed to match), so the dev image and the worker images are
+a matched set. Upgrading the dev image's compiler without rebuilding the
+worker images (build_and_push_worker_image.py, run by hand) produces bundles
+no worker can load:
 
     OSError: /lib/x86_64-linux-gnu/libstdc++.so.6: version `GLIBCXX_3.4.35'
     not found (required by .../libscribblez_ffi.so)
 
-which is what a gcc upgrade in the dev image did in August 2026. The worker
-images are rebuilt by hand after such a dev-image change
-(build_and_push_worker_image.py); this module is the check that it was
-done. Each image's versions are recorded at push time into the shared mount,
-where the dev container can compare them against its own before deploying a
-bundle built there.
+To catch this before deploying, the image push records each image's library
+versions under the shared mount, and the dashboard compares them against the
+dev container's own (stale_libraries) before it deploys a bundle.
 
-There are two images, one per *runtime* a role declares (RoleSpec.runtime):
+There is one image per *runtime* a role declares (RoleSpec.runtime):
 
   engine  the engine binaries and the ctypes FFI: numpy, the C++ and NVIDIA
-          runtime libraries, TensorRT's builder. Generators, match eval.
-  torch   the engine runtime plus PyTorch and the training stack, for the
-          train roles. A further stage on the same Dockerfile, so it provides
-          every library the engine image does, at the same versions.
+          runtime libraries, TensorRT's builder. Generators and match eval.
+  torch   the engine runtime plus PyTorch and the training stack, for train
+          roles. It is a later stage of the same Dockerfile, so it has every
+          library the engine image has, at the same versions.
 
-Versions are read as the file behind each soname symlink ("libstdc++.so.6" ->
-"libstdc++.so.6.0.35"), which is available on both sides without a compiler,
-a package manager, or docker.
+A library's version is the name of the file its soname symlink resolves to
+("libstdc++.so.6" -> "libstdc++.so.6.0.35"). That can be read on either side
+without a compiler, a package manager or docker.
 """
 
 import json
@@ -37,33 +35,33 @@ RUNTIME_ENGINE = "engine"
 RUNTIME_TORCH = "torch"
 RUNTIMES = (RUNTIME_ENGINE, RUNTIME_TORCH)
 
-# The Dockerfile stage (docker-setup/worker/Dockerfile) that builds each
-# runtime's image, and the tag suffix that names the torch image beside the
-# engine one (cloud/credentials.py RegistryConfig.image_for).
+# The docker-setup/worker/Dockerfile stage that builds each runtime's image,
+# and the tag suffix that distinguishes the torch image from the engine one
+# (see RegistryConfig.image_for in cloud/credentials.py).
 DOCKER_TARGET = {RUNTIME_ENGINE: "worker", RUNTIME_TORCH: "worker-torch"}
 TORCH_TAG_SUFFIX = "-torch"
 
-# Where a tracked library may live. The CUDA runtime sits under the toolkit in
-# the dev image and beside the rest in the worker image (which copies it
-# there), so both are searched and the first hit wins.
+# Where a tracked library may live. The dev image keeps the CUDA runtime under
+# the toolkit; the worker image copies it beside the other libraries. The
+# first hit wins.
 LIB_DIRS = (Path("/usr/lib/x86_64-linux-gnu"), Path("/usr/local/cuda/lib64"))
 
-# The libraries whose version has to agree. libstdc++/libgcc_s move with the
-# compiler and are backward compatible, so the worker's may not be older than
-# the dev image's; the NVIDIA runtime is copied verbatim and version-locked to
-# the TensorRT the engine was built against, so it must match exactly.
+# The libraries whose versions must agree. libstdc++ and libgcc_s are
+# backward compatible, so the worker's need only be at least as new as the dev
+# image's. The NVIDIA libraries are locked to the TensorRT the engine was built
+# against, so they must match exactly.
 AT_LEAST = ("libstdc++.so.6", "libgcc_s.so.1")
 EXACTLY = ("libnvinfer.so.10", "libcudart.so.12")
 
-# Where the push records what it built, under the shared mount root: one
-# entry per runtime, {"images": {runtime: {"image": name, "versions": {...}}}}.
+# The push's record, relative to the shared mount root. Format:
+# {"images": {runtime: {"image": name, "versions": {soname: file}}}}.
 RECORD_REL = "cloud/worker_image.json"
 
 
 def _version(soname: str, lib_dirs) -> str:
-    """The versioned file behind `soname`, the soname itself when it is not a
-    symlink (libgcc_s ships as a real file on some images), or "" when this
-    filesystem does not have it at all."""
+    """The versioned file behind `soname`; the soname itself when it is a
+    real file rather than a symlink (libgcc_s, on some images); "" when
+    absent."""
     for lib_dir in lib_dirs:
         path = lib_dir / soname
         if path.exists():
@@ -72,14 +70,14 @@ def _version(soname: str, lib_dirs) -> str:
 
 
 def local_versions(lib_dirs=LIB_DIRS) -> dict[str, str]:
-    """What this filesystem provides, for every tracked library."""
+    """The tracked libraries' versions on this filesystem."""
     return {name: _version(name, lib_dirs) for name in AT_LEAST + EXACTLY}
 
 
 def probe_command() -> list[str]:
-    """A shell command printing what an image provides, in parse_versions'
-    format. Lets the host ask the worker image directly -- it holds no repo to
-    import this module from."""
+    """A shell equivalent of local_versions, printing parse_versions' format.
+    The image push runs it inside a worker image, which has no repo to import
+    this module from."""
     dirs = " ".join(str(d) for d in LIB_DIRS)
     names = " ".join(AT_LEAST + EXACTLY)
     return [
@@ -102,9 +100,9 @@ def _ordering(version: str) -> list[int]:
 
 
 def stale_libraries(worker: dict, dev: dict) -> list[str]:
-    """The tracked libraries on which `worker` cannot run code built against
-    `dev`: an older backward-compatible one, or a mismatched locked one. An
-    empty result means a bundle from `dev` will load."""
+    """The libraries that stop `worker` from loading a bundle built against
+    `dev`: a backward-compatible one that is older, or a locked one that
+    differs. Empty means the bundle will load."""
     stale = []
     for name in AT_LEAST:
         if _ordering(worker.get(name, "")) < _ordering(dev.get(name, "")):
@@ -120,7 +118,7 @@ def record_path(mount_root: Path) -> Path:
 
 
 def write_record(mount_root: Path, runtime: str, image: str, versions: dict[str, str]):
-    """Record what the `runtime` image now published provides, keeping the
+    """Record the versions in the just-pushed `runtime` image, keeping the
     other runtimes' entries."""
     assert runtime in RUNTIMES, runtime
     path = record_path(mount_root)
@@ -130,9 +128,8 @@ def write_record(mount_root: Path, runtime: str, image: str, versions: dict[str,
 
 
 def read_records(mount_root: Path) -> dict[str, dict] | None:
-    """Every runtime's last push, runtime -> {image, versions}, or None if no
-    push has written a record (in which case nothing can be said about the
-    images and nothing is claimed)."""
+    """Each runtime's last push, runtime -> {image, versions}, or None when
+    no push has been recorded (the check then has nothing to compare)."""
     try:
         return json.loads(record_path(mount_root).read_text())["images"]
     except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):

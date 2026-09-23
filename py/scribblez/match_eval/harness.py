@@ -1,11 +1,10 @@
-"""Head-to-head match harness: paired play_game rounds (roadmap E2).
+"""Head-to-head match play: rounds of mirrored game pairs through play_game.
 
-The harness owns the match-play discipline so experiments do not reinvent it.
-Games run in the engine's --paired mode (games 2k and 2k+1 share a game seed
-with the seats swapped, cancelling per-seed tile luck), the base seed is
-caller-fixed so different arms -- e.g. successive training generations against
-one baseline -- face identical deals, and outcomes come back as the pair
-scores scribblez.stats' sequential test consumes.
+Games run in play_game's --paired mode: each pair shares a game seed with the
+seats swapped, cancelling most per-seed tile luck. The caller fixes the base
+seed, so different contenders (arms, or successive training generations
+against one baseline) face identical deals. Results come back as pair scores
+for scribblez.stats.
 """
 
 import json
@@ -14,15 +13,14 @@ from pathlib import Path
 
 from scribblez.selfplay import run_play_game
 
-# Game scores for the player under test, and the per-pair average of two of
-# them; see scribblez.stats.PAIR_SCORES.
+# Per-game scores for the player under test; a pair score is the mean of two
+# (scribblez.stats.PAIR_SCORES).
 _WIN, _DRAW, _LOSS = 1.0, 0.5, 0.0
 
 
 @dataclass(frozen=True)
 class RoundResult:
-    """One paired round from the perspective of player 0 (the player under
-    test): per-pair scores plus the per-game W/D/L tally behind them."""
+    """One round's results for player 0, the player under test."""
 
     pair_scores: list[float]
     wins: int
@@ -39,9 +37,8 @@ def _game_score_for_player0(line: dict) -> float:
 
 
 def _pair_by_seed(lines: list[dict]) -> list[float]:
-    """Collapse per-game records to per-pair scores. Games arrive in completion
-    order (the engine plays them on a thread pool), so the pair identity is the
-    shared game seed, not adjacency."""
+    """Per-pair scores. Games are recorded in completion order across threads,
+    so pairs are matched by their shared seed, not by adjacency."""
     by_seed: dict[int, list[float]] = {}
     for line in lines:
         by_seed.setdefault(line["seed"], []).append(_game_score_for_player0(line))
@@ -60,9 +57,9 @@ def play_round(
     results_file: Path,
     face_up_leaves: bool = False,
 ) -> RoundResult:
-    """Play `num_pairs` mirrored pairs of player0 vs player1 and return player
-    0's results. `seed` must be nonzero (0 asks the engine for entropy, which
-    would unfix the deals the pairing discipline relies on)."""
+    """Play `num_pairs` mirrored pairs of player0 vs player1. `seed` must be
+    nonzero: play_game treats 0 as "pick a random seed", which would break the
+    fixed deals comparisons rely on."""
     if seed == 0:
         raise ValueError("seed 0 means 'random' to play_game; matches need fixed seeds")
     results_file.parent.mkdir(parents=True, exist_ok=True)

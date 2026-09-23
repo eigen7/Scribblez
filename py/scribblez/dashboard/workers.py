@@ -1,34 +1,27 @@
 """The WorkerManager: reconciles worker slots with real processes and
 containers, and the task's machines with rented instances.
 
-Owned by the dashboard API process. Local worker slots are backed by
-subprocesses of this process running the worker entrypoint with the local
-results sink; ssh slots are backed by worker-image containers on machines
-reached over ssh (cloud/ssh_machine.py) -- the operator's own, or ones the
-dashboard rents from a provider (cloud/providers/) and records as the task's
-machines. A slot on a rented machine, and a trainer anywhere remote, delivers
-through the results bucket, so while a task has any such slot, a cloud_sync
---watch subprocess streams that tag's bucket results into the local mount.
+It lives in the dashboard API process. A local slot is a subprocess of that
+process running the worker entrypoint. An ssh slot is a worker-image container
+on a machine reached over ssh (cloud/ssh_machine.py): the operator's own, or
+one the dashboard rents from a provider (cloud/providers/) and records as a
+task machine. Slots on rented machines, and remote trainers anywhere, deliver
+through the results bucket; while a task has any such slot, a `cloud_sync
+--watch` subprocess streams its bucket results into the local mount.
 
-Adding a slot only records it, paused: nothing launches until the operator
-starts it; the first start spawns the process / container. Renting a machine
-launches its instance at once, which bills from then on.
+Adding a slot only records it, paused; its first start spawns the process or
+container. Renting a machine launches its instance at once, and it bills from
+then on.
 
-Desired state lives in task.json (dashboard/tasks.py); actual state is observed
-live -- local workers by their durable pid (worker_pid_alive reads /proc, so a
-worker is observable and stoppable no matter which dashboard instance spawned
-it, even across a restart), ssh slots by a docker probe over ssh, rented
+Desired state lives in task.json (tasks.py). Actual state is observed live:
+local workers by their durable pid, so any dashboard instance can observe and
+stop them, even after a restart; ssh slots by a docker probe over ssh; rented
 machines by the provider's listing plus that probe. reconcile() drives
-observed toward desired in both directions: it relaunches local workers that
-should be running (e.g. after a dashboard restart), starts a stopped machine a
-slot wants, stops one nothing has run on, and stops workers that are running
-but should not be. It also
-runs each workload's scheduler tick (generation lifecycle + fleet pacing): a
-scheduler may *gate* a role -- park its workers without touching the operator's
-desired state -- and reconcile stops a gated worker just as it stops a paused
-one.
+observed state toward desired state in both directions, starting and stopping
+workers and machines. It also runs each workload's scheduler tick, which may
+*gate* a role: park its workers without touching the operator's desired state.
 
-Cloud operations need <mount>/cloud/credentials.json; credentials load lazily
+Cloud operations need <mount>/cloud/credentials.json. Credentials load lazily,
 so a local-only dashboard works without them.
 """
 
@@ -68,18 +61,22 @@ SYNC_INTERVAL_SECONDS = 30
 
 
 def _slot_sink(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
-    """Where slot `w`'s worker delivers (cloud/sinks.py's SCZ_SINK): "local"
-    for a local subprocess, and for an ssh container on the operator's own
-    machine whose output the reconcile pass reads back over the control link
-    (cloud/ssh_transfer.py); "r2" for an ssh container on a rented
-    machine (a datacenter link to the bucket, where collection over ssh would
-    haul every chunk to the controller and publish it back up from a home
-    uplink), and for an ssh container running a role with inputs as well as
-    outputs anywhere -- a trainer, whose generations arrive and whose
-    exports, checkpoint and records leave through the bucket
-    (docs/plans/cloud_machines.md). Everything the controller does for a
-    bucket-delivering slot -- the sync watcher, the scheduler's publish and
-    mirror hooks, the controls push -- keys off this, not off the kind."""
+    """Where slot `w`'s worker delivers (SCZ_SINK, cloud/sinks.py).
+
+    "local": a local subprocess, or an ssh container on the operator's own
+    machine, whose output the reconcile pass pulls over ssh
+    (cloud/ssh_transfer.py).
+
+    "r2", the results bucket: an ssh container on a rented machine, whose
+    datacenter link to the bucket beats hauling every chunk to the controller
+    and publishing it back up from a home uplink; and an ssh trainer (a role
+    with an ingest tick) anywhere, whose generations arrive and whose exports,
+    checkpoints and records leave through the bucket
+    (docs/plans/cloud_machines.md).
+
+    Everything the controller does for bucket-delivering slots (the sync
+    watcher, the scheduler's publish and mirror hooks, the controls push) keys
+    off this, not off the slot kind."""
     if w.kind == "local":
         return "local"
     if w.kind == "ssh" and not spec.role(w.role).ingest and not _rented(task, w):
@@ -96,20 +93,20 @@ def _has_bucket_slots(spec: workloads.WorkloadSpec, task) -> bool:
 
 
 def _bucket_trainer(spec: workloads.WorkloadSpec, task) -> bool:
-    """Whether a slot whose role delivers records the controller ingests (a
-    trainer) runs through the bucket -- the case that has the sync pull its
-    outputs and the controls file pushed up for it."""
+    """Whether the task has a trainer (a role the controller ingests) running
+    through the bucket, which needs its outputs synced down and the controls
+    file pushed up."""
     return any(_slot_sink(spec, task, w) == "r2" and spec.role(w.role).ingest for w in task.workers)
 
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
-# before probing again -- so a powered-off machine costs one connect timeout
-# per reconcile pass, not one per pass on a host that is simply off.
+# before probing again, so a powered-off machine costs one connect timeout per
+# this interval rather than one per pass.
 SSH_REPROBE_SECONDS = 30.0
 
-# A container that dies as fast as it is started is not going to be fixed by
-# starting it again: restarts back off from the pass interval up to this, and
-# reset the moment one is observed running.
+# A container that dies as fast as it is started will not be fixed by starting
+# it again: restarts back off from the observation TTL up to this, and reset
+# once the container is observed running.
 MAX_RESTART_BACKOFF_SECONDS = 300.0
 
 # How long an observation of a container or machine stands in for a fresh one.
@@ -117,9 +114,8 @@ MAX_RESTART_BACKOFF_SECONDS = 300.0
 # browser polling every 3 seconds costs no ssh round trips at all.
 OBSERVATION_TTL_SECONDS = 5.0
 
-# A rented machine on which nothing has run for this long is stopped (its
-# disk kept, its rate no longer charged): the "Pause all" and the finished
-# run that cost money on a provider without a real suspend.
+# A rented machine on which nothing has run for this long is stopped, keeping
+# its disk, so a paused or finished run stops paying the provider's rate.
 IDLE_STOP_SECONDS = 600.0
 
 # The nice level local workers run at. A worker is the long-running background
@@ -141,8 +137,9 @@ BOOT_GRACE_SECONDS = 300.0
 
 
 # What a slot should be doing, from operator intent plus scheduler gating.
-# "park" and "stop" both mean not-working; they differ in how much of the
-# worker survives it, which matters where restarting is expensive.
+# PARK (a gated slot) and STOP (a paused one) both mean not working; a parked
+# ssh container is frozen rather than stopped, because restarting one is
+# expensive (see _reconcile_ssh).
 RUN, PARK, STOP = "run", "park", "stop"
 
 
@@ -160,19 +157,18 @@ def _require_inputs(inputs: dict[str, Path]):
 
 
 def _stage_inputs_in_container(machine, container: str, spec, tag: str, inputs: dict[str, Path]):
-    """A container on the operator's own machine delivers over the control
-    link, and takes its inputs the same way: pushed into it right after it
-    is created, under the tag root there (the runner waits for them)."""
+    """Push a role's inputs into a freshly created container on the operator's
+    own machine, under the tag root there. Its runner waits for them."""
     root = str(spec.paths(tag).root)
     for rel, src in inputs.items():
         push_file(machine, container, remote_root=root, rel_dest=rel, src=src)
 
 
 def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dict:
-    """Where slot `w`'s output lives, on both machines. The container runs the
-    controller's own layout under the same mount root, so the two roots read
-    alike -- but they are different machines' paths, and both collection paths
-    (a batched pull, a sweep of a stopped container) need all four."""
+    """Where slot `w`'s output lives on both machines, as the collection calls
+    (a batched pull, a sweep of a stopped container) take it. The two roots
+    read alike, since the container uses the controller's layout, but they are
+    paths on different machines."""
     paths = spec.paths(task.tag)
     return {
         "container": _container_name(spec, task.tag, w.worker_id),
@@ -183,9 +179,8 @@ def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dic
 
 
 def _ssh_machine(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> SshMachine:
-    """The link to slot `w`'s machine -- the only place one is built. A slot
-    on one of the task's machines (TaskRecord.machines) takes the record's
-    address and key material; a bare-host slot dials its host string."""
+    """The ssh link to slot `w`'s machine: its task machine's address and key
+    material, or its bare host string."""
     if w.machine is None:
         return SshMachine(w.host)
     return _machine_link(task.machine(w.machine))
@@ -209,15 +204,15 @@ def _next_machine_name(task: tasks.TaskRecord, provider: str) -> str:
 
 
 def _owner(spec: workloads.WorkloadSpec, tag: str, name: str) -> str:
-    """The ownership tag a rented instance carries: which task's machine it
-    is. One no task's machines name is an orphan."""
+    """The ownership tag a rented instance carries, naming the task machine it
+    is. An instance whose tag no task machine matches is an orphan."""
     return f"{spec.name}/{tag}/{name}"
 
 
 def _accrue_machine(m: tasks.MachineRecord, billing: bool):
-    """Advance a rented machine's spend to now, as _accrue does a slot's:
-    the interval since the last observation is charged if it was billing
-    then (an instance bills while pending or running, not while stopped)."""
+    """Advance a rented machine's spend to now: the interval since the last
+    observation is charged if the machine was billing then (pending or
+    running, not stopped)."""
     with _ACCRUE_LOCK:
         now = time.time()
         if m.observed_up and m.observed_at is not None:
@@ -227,13 +222,17 @@ def _accrue_machine(m: tasks.MachineRecord, billing: bool):
 
 
 def _rented_state(m: tasks.MachineRecord, inst: Instance | None, probe: str | None) -> str:
-    """A rented machine's display state from what its provider says and,
-    when the instance is running, what its ssh probe found: `launching`
-    while the instance is pending or freshly running and not yet answering,
-    `preparing` while its first-boot script is still pulling the images,
-    `up` when it can host containers, `stopping` / `stopped` when
-    suspended, `gone` once terminated -- or listed by nobody, which after a
-    real listing means the same."""
+    """A rented machine's display state, from the provider's listing and, once
+    the instance runs, its ssh probe:
+
+      launching           pending, or running but not answering ssh yet
+      preparing           its first-boot script is still pulling the images
+      up                  it can host containers
+      stopping, stopped   suspended
+      gone                terminated, or absent from the listing
+      unreachable         not answering past BOOT_GRACE_SECONDS
+      checking            running, not probed yet
+    """
     if inst is None or inst.state == "terminated":
         return "gone"
     if inst.state in ("pending", "stopping", "stopped"):
@@ -249,31 +248,28 @@ def _ssh_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
 
 
 def _forget_empty(w: tasks.WorkerRecord):
-    """Give up a count of zero, keeping any other.
+    """Downgrade an `undelivered` count of zero to unknown, keeping any other.
 
-    Zero is the one value that authorises destroying a container, and it is
-    only worth anything while it is current: a machine that has been off the
-    network for hours has a worker that went on filling it up the whole time.
-    A positive count is kept because it only ever refuses -- being wrong about
-    it costs nothing.
+    Zero is the one value that authorizes destroying a container, so it is
+    worth trusting only while current: a machine off the network for hours may
+    have a worker that kept filling it the whole time. A positive count only
+    ever refuses, so keeping a stale one costs nothing.
     """
     if w.undelivered == 0:
         w.undelivered = None
 
 
 def _holds_nothing(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-    """An ssh slot delivering through the bucket keeps nothing in its
-    container for the controller to collect, so its count is always zero:
-    what the replace rule and the Remove dialog read."""
+    """Set a bucket-delivering ssh slot's `undelivered` to zero: its container
+    holds nothing for the controller to collect."""
     if w.kind == "ssh" and _slot_sink(spec, task, w) == "r2":
         w.undelivered = 0
 
 
 def _note_finished(w: tasks.WorkerRecord):
-    """Slot `w`'s worker exited 0: its role's terminal condition (a trainer's
-    max_rows, a generator's cycle cap) is reached. Flip it to paused so
-    reconcile does not restart it every backoff period forever -- a machine
-    whose trainer finished would otherwise never idle -- and remember why."""
+    """Record that slot `w`'s worker exited 0, i.e. reached its role's terminal
+    condition. Pausing it keeps reconcile from restarting it forever, which
+    would also keep its machine from ever going idle."""
     if w.desired_state == "running":
         w.desired_state = "paused"
         w.finished = True
@@ -281,10 +277,9 @@ def _note_finished(w: tasks.WorkerRecord):
 
 def _replaceable(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> bool:
     """Whether slot `w`'s container may be thrown away for one on the task's
-    bundle: it has to be on a different bundle, and known to be holding
-    nothing. A container created but never collected from reports zero from
-    the moment it is created, so one that never came up at all -- the state a
-    redeploy is often trying to fix -- is replaceable rather than restarted
+    bundle: it is on a different bundle and known to hold nothing. A new
+    container counts zero from creation, so one that never came up (often what
+    a redeploy is trying to fix) is replaceable rather than restarted
     forever."""
     return w.bundle_id != task.bundle_id and w.undelivered == 0
 
@@ -298,17 +293,15 @@ def _intent(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> str:
 def check_worker_images_current():
     """Refuse to deploy a bundle a published worker image cannot load.
 
-    Bundles are compiled here, in the dev container, and run there, against
-    the worker images' libraries -- so a dev image whose toolchain moved
-    produces binaries no worker can start (August 2026: gcc-16's libstdc++,
-    which crash-looped every ssh worker at import). The worker images are
-    rebuilt by hand after such a change; this catches the case where they
-    were not.
+    Bundles are compiled in the dev container but run against the worker
+    images' libraries, so a toolchain upgrade here (a newer libstdc++, say)
+    produces binaries every worker crashes on at import. The worker images are
+    rebuilt by hand after such a change; this catches a forgotten rebuild.
 
-    Every recorded image is checked, whichever runtime this deploy's slots
-    will use: a task's slots can run either, and both are rebuilt together.
-    Says nothing when no push has recorded what the images provide, which is
-    all that can honestly be said about them.
+    Every recorded image is checked, whichever runtime this deploy's slots use:
+    a task's slots can run either, and both are rebuilt together. Passes when
+    no image push has recorded its library versions, since then nothing is
+    known.
     """
     records = runtime_abi.read_records(DEFAULT_MOUNT_ROOT)
     if records is None:
@@ -375,11 +368,11 @@ def worker_pid_alive(pid: int | None, worker_id: str, tag: str) -> bool:
 
 
 def _local_state(desired: str, alive: bool, gated: bool, finished: bool = False) -> str:
-    """The honest display state of a local slot from the two observed axes
-    (operator intent + real liveness) plus scheduler gating. `stopping` is the
-    in-flight state where a paused slot's process has not yet exited; `exited`
-    is an unexpected death of a slot that should be running (reconcile respawns
-    it); `finished` is the exit that reached the role's terminal condition."""
+    """A local slot's display state, from operator intent, real liveness and
+    gating. `stopping` is a paused slot whose process has not exited yet;
+    `exited` is an unexpected death of a slot that should be running
+    (reconcile respawns it); `finished` is an exit at the role's terminal
+    condition."""
     if gated:
         return "waiting"
     if desired == "paused":
@@ -390,22 +383,19 @@ def _local_state(desired: str, alive: bool, gated: bool, finished: bool = False)
 
 
 def _ssh_state(desired: str, probe: str, gated: bool, finished: bool = False) -> str:
-    """The honest display state of an ssh slot from its container probe
-    (cloud/ssh_machine.py's probe states, plus "unknown" for a slot the
-    reconcile pass has not observed yet). `unreachable` is its own display
-    state rather than a guess either way: the machine may be powered off with
-    the worker gone, or merely off the network with the worker still running.
-    A gated slot reads `waiting` whether its container is paused (the usual
-    case) or still winding down.
+    """An ssh slot's display state, from its container probe
+    (cloud/ssh_machine.py's states, plus "unknown" before the reconcile pass
+    has observed it), operator intent and gating.
 
-    A slot that should be running and has no container is `starting`, not
-    `exited`: the two probe states mean different things to whoever is
-    watching. `stopped` is a container that ran and died, which is the alarm
-    the word carries; `missing` is one that does not exist yet, which is the
-    ordinary state of a slot between the operator's Start and the moment its
-    container exists -- and that is not a moment, it is however long the
-    machine takes to pull an image measured in gigabytes. Reading that as
-    `exited` announced a dead worker every time one was created."""
+    `unreachable` stays its own state rather than a guess: the machine may be
+    off with the worker gone, or just off the network with it still running.
+    A gated slot reads `waiting` whether its container is paused or still
+    winding down.
+
+    A slot that should be running shows `exited` only for a container that ran
+    and died (`stopped`). No container yet (`missing`) is `starting`: the
+    ordinary state between the operator's Start and the container's creation,
+    which lasts as long as the machine takes to pull a multi-gigabyte image."""
     if probe == "unknown":
         return "checking"
     if gated:
@@ -420,10 +410,8 @@ def _ssh_state(desired: str, probe: str, gated: bool, finished: bool = False) ->
         return "starting"
     if probe == "running":
         return "running"
-    # Paused while it is meant to be running: a gate released between the pass
-    # that parked it and the one that will resume it. Reporting that as
-    # "exited" -- next to an empty exit reason, because nothing exited --
-    # describes a healthy worker as a dead one.
+    # Paused while meant to be running: a gate was released and the next pass
+    # will resume it. Nothing exited, so it is not `exited`.
     return "starting" if probe == "paused" else "exited"
 
 
@@ -473,14 +461,13 @@ class WorkerManager:
         self._account: str | None = None  # the provider's account line, once asked
         # (spot rate by type, when fetched): the rent form's, refreshed lazily.
         self._spot_prices: tuple[dict[str, float], float] = ({}, 0.0)
-        # Where every blocking step runs (see _offload). One thread: the point
-        # is to keep the event loop free, not to do two of these at once.
+        # Where every blocking step runs (see offload). One thread: the point is
+        # to keep the event loop free, not to run these steps concurrently.
         self._blocking = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-blocking")
-        # Where a redeploy's build runs (see redeploy): off the blocking
-        # thread, which it would otherwise hold for minutes.
+        # Where bundle builds run (see redeploy and _bundle_for_start): off the
+        # blocking thread, which a build would otherwise hold for minutes.
         self._builds = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-build")
-        # A task's first-use bundle build in flight (task key -> Future), see
-        # _bundle_for_start.
+        # Task key -> its first-use bundle build in flight (_bundle_for_start).
         self._pending_builds: dict[str, Future] = {}
         # Per-file digests behind source_hash, so the drift check every status
         # poll makes costs a stat walk rather than 20 MB of hashing.
@@ -497,11 +484,10 @@ class WorkerManager:
     async def redeploy(self, spec, task: tasks.TaskRecord) -> str:
         """The operator's Redeploy: `deploy`, with the build on its own thread.
 
-        Building and pushing takes minutes and touches no record; run through
-        `offload` it held the one blocking thread that long, and every Pause
-        and Remove clicked meanwhile landed after it -- on machines that had
-        gone on billing. Only the arch survey and the repin are serialized
-        steps.
+        Building and pushing take minutes and touch no record. On the blocking
+        thread they would delay every Pause and Remove clicked meanwhile, while
+        the machines went on billing. Only the arch survey and the repin need
+        to be serialized with other steps.
         """
         archs = await self.offload(self._needed_archs, spec, task)
         manifest = await IOLoop.current().run_in_executor(self._builds, self._build_bundle, archs)
@@ -520,11 +506,10 @@ class WorkerManager:
         return manifest.bundle_id
 
     def _slot_arch(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
-        """The CPU microarchitecture slot `w`'s machine reports -- what its
-        bundle must be built for. A rented machine's is its catalog entry's; a
-        registered machine or a bare host is asked once, over ssh, through the
-        worker image's compiler (the container's own start-up detection), and
-        the answer kept on its record."""
+        """The CPU microarchitecture slot `w`'s bundle must be built for. A
+        rented machine's comes from the catalog. A registered machine or bare
+        host is asked once over ssh, through the worker image's own start-up
+        detection, and the answer is kept on its record."""
         holder = task.machine(w.machine) if w.machine is not None else w
         if holder.arch:
             return holder.arch
@@ -536,9 +521,9 @@ class WorkerManager:
         return holder.arch
 
     def _needed_archs(self, spec, task: tasks.TaskRecord) -> list[str]:
-        """The archs the task's bundle must cover: every ssh slot's machine's,
-        plus whatever its current bundle already covers (a slot removed since
-        does not un-need its arch for the containers still running it)."""
+        """The archs the task's bundle must cover: every ssh slot's, plus those
+        its current bundle already covers, since containers of a removed slot's
+        arch may still be running it."""
         archs = set(task.bundle_archs)
         for w in task.workers:
             if w.kind == "ssh":
@@ -548,25 +533,21 @@ class WorkerManager:
     def _bundle_for_start(
         self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, key: str
     ) -> str | None:
-        """The bundle this task's remote workers run, deployed on first use --
-        or None while that deployment is still building.
+        """The bundle this task's remote workers run, deployed on first use, or
+        None while that deployment is still building.
 
-        Deployment is not an operator step: a task that has never launched a
-        remote worker gets the controller's current tree built for its
-        machines' archs and pushed, and every later worker joins that same
-        bundle. Pinning is what keeps an experiment homogeneous -- editing
-        code mid-run leaves the fleet on the code it started with, and moving
-        it is the explicit redeploy action. A later slot whose arch the bundle
-        lacks is the one exception: the same tree is built again with that
-        arch added, and the task repinned (the containers on the old bundle
-        run identical code; the repin lets them be replaced at their next
-        restart as any redeploy does).
+        Deployment is not an operator step: the first remote start builds the
+        controller's current tree for the task's archs, pushes it, and pins
+        it, and every later worker joins that bundle. Pinning keeps an
+        experiment homogeneous; moving the fleet to new code is the explicit
+        redeploy. The one exception is a later slot whose arch the bundle
+        lacks: the tree is rebuilt with that arch added and the task repinned.
+        Containers on the old bundle then get replaced as after any redeploy.
 
-        The build is minutes, and slot starts run on the blocking thread; built
-        there it held up every Pause and Remove clicked meanwhile (redeploy's
-        lesson). So it goes to the build thread, this pass leaves the slot
+        A build takes minutes, and slot starts run on the blocking thread, so
+        the build goes to the build thread instead. Meanwhile the slot shows
         `starting` with the reason on its row, and the pass that finds the
-        build done pins the task and starts the slot. A build that fails is
+        build done pins the task and starts the slot. A failed build becomes
         the slot's exit reason, and the restart backoff paces the retry.
         """
         arch = self._slot_arch(spec, task, w)
@@ -592,9 +573,8 @@ class WorkerManager:
 
     def bundle_drift(self, task: tasks.TaskRecord) -> bool:
         """Whether the controller's tree has changed since the task pinned its
-        bundle -- what the dashboard badges, and the cue to redeploy. False
-        while nothing is pinned, and while an arch is unbuilt (there is no
-        tree to compare until a build produces one)."""
+        bundle: the dashboard's cue to redeploy. False while nothing is pinned
+        or the tree's hash cannot be computed yet (an arch not built here)."""
         if not task.bundle_source_hash or not task.bundle_archs:
             return False
         current = source_hash(task.bundle_archs, self._source_digests)
@@ -647,10 +627,9 @@ class WorkerManager:
             self._sync[key] = (proc, argv)
 
     def _push_controls(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
-        """Put the operator's controls file in the bucket for a trainer that
-        runs through it, whenever the file changed: the trainer reads it
-        there (generational/records.py) as a local one reads the file. One
-        copy per set, none per quiet pass."""
+        """Copy the operator's controls file to the bucket when it has changed,
+        for a trainer that runs through the bucket and reads it there
+        (generational/records.py)."""
         if not _bucket_trainer(spec, task):
             return
         path = spec.paths(task.tag).controls_path
@@ -668,9 +647,9 @@ class WorkerManager:
         self._controls_pushed[key] = stamp
 
     def _stage_inputs_in_bucket(self, r2, spec, tag: str, inputs: dict[str, Path]):
-        """A bucket-delivering slot's out-of-tag inputs (RoleSpec.inputs),
-        put under the tag's prefix before the container exists to look for
-        them; a copy already there at the same size is skipped."""
+        """Upload a bucket-delivering slot's out-of-tag inputs (RoleSpec.inputs)
+        under the tag's prefix before its container is created. A copy already
+        there at the same size is skipped."""
         for rel, src in inputs.items():
             dest = bucket_path(r2, spec.name, tag, *rel.split("/"))
             res = rclone(r2, "copyto", "--size-only", str(src), dest, capture=True)
@@ -706,23 +685,23 @@ class WorkerManager:
 
     def _local_alive(self, spec, task: tasks.TaskRecord, w) -> bool:
         """Whether slot `w`'s worker process is really running. Reaps our own
-        exited child first (so it does not linger as a zombie), then probes by
-        durable pid -- catching workers spawned by a previous or concurrent
-        dashboard instance that this process holds no handle to."""
+        exited child first so it does not linger as a zombie, then checks the
+        durable pid, which also covers workers another dashboard instance
+        spawned."""
         proc = self._local.get(_key(spec, task.tag, w.worker_id))
         if proc is not None:
             proc.poll()
         return worker_pid_alive(w.pid, w.worker_id, task.tag)
 
     def _local_exit_code(self, spec, task: tasks.TaskRecord, w) -> int | None:
-        """How slot `w`'s worker exited, when it was this process's child and
-        has; None otherwise (still running, or spawned by another instance)."""
+        """Slot `w`'s worker's exit code, or None if it is still running or was
+        not this process's child."""
         proc = self._local.get(_key(spec, task.tag, w.worker_id))
         return None if proc is None else proc.returncode
 
     def _stop_local(self, spec, task: tasks.TaskRecord, w):
-        """SIGTERM slot `w`'s worker by durable pid (workers flush completed
-        output and exit cleanly on SIGTERM). No-op if it is not running."""
+        """SIGTERM slot `w`'s worker, which flushes completed output and exits.
+        No-op if it is not running."""
         if worker_pid_alive(w.pid, w.worker_id, task.tag):
             try:
                 os.kill(w.pid, signal.SIGTERM)
@@ -732,16 +711,13 @@ class WorkerManager:
     # ---- ssh plumbing ----------------------------------------------------
 
     def _observe_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
-        """Probe slot `w`'s container over ssh and remember the answer.
+        """Probe slot `w`'s container over ssh (or skip, for a host that failed
+        within SSH_REPROBE_SECONDS) and remember the answer, with the exit
+        reason of a stopped container.
 
-        Negative caching stands: after a failed probe the host is assumed
-        unreachable for SSH_REPROBE_SECONDS rather than paying a connect
-        timeout every pass.
-
-        A not-yet-launched slot is probed like any other -- an in-doubt first
-        start (the ssh link dying after `docker run` was dispatched) may have
-        left a live container, and a probe that finds one flips the slot to
-        launched."""
+        An unlaunched slot is probed too: an in-doubt first start (ssh lost
+        after `docker run` was sent) may have left a live container, and
+        finding one marks the slot launched."""
         tag, host = task.tag, _ssh_host(task, w)
         down_since = self._ssh_down.get(host)
         if down_since is not None and time.time() - down_since < SSH_REPROBE_SECONDS:
@@ -764,9 +740,8 @@ class WorkerManager:
                 _note_finished(w)
         elif probe in ("running", "paused"):
             self._exits.pop(key, None)
-        # A probe that finds no container clears nothing: what it is likely to
-        # find is a slot whose creation failed, and that failure is the only
-        # account of why it is not running.
+        # Finding no container clears nothing: that is usually a slot whose
+        # creation failed, and the failure is the only account of why.
         if probe == "running":
             self._restarts.pop(key, None)  # it came up; it is not looping
         if probe == "unreachable":
@@ -778,15 +753,13 @@ class WorkerManager:
     ) -> str:
         """Slot `w`'s container probe state, freshly observed or remembered.
 
-        Only the reconcile pass observes (`observe=True`); a status request
-        reads what that pass left, so a browser polling every few seconds costs
-        no ssh at all -- and the dashboard cannot be stalled by a machine that
-        is slow to answer. A slot no pass has reached yet reads "unknown"
-        rather than a guess.
+        Only the reconcile pass observes (`observe=True`). Status requests read
+        what it left, so browser polling costs no ssh and cannot be stalled by
+        a slow machine. A slot no pass has reached yet reads "unknown".
 
-        An unlaunched slot's `unreachable` maps to `missing`: with no container
-        confirmed to exist, the slot must stay manageable (in particular,
-        removable) even when the host is bogus or offline."""
+        An unlaunched slot's `unreachable` reads as `missing`: with no
+        container known to exist, the slot must stay removable even when its
+        host is bogus or offline."""
         key = _key(spec, task.tag, w.worker_id)
         remembered, at = self._probes.get(key, ("unknown", 0.0))
         if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
@@ -798,10 +771,9 @@ class WorkerManager:
         return probe
 
     def _restart_allowed(self, key: str) -> bool:
-        """Whether slot `key` may be (re)started now. A container that keeps
-        dying gets progressively longer between attempts, so a broken worker
-        costs one ssh round trip every few minutes rather than one per pass --
-        and its failure stays on screen instead of scrolling past."""
+        """Whether slot or machine `key` may be (re)started now. Attempts back
+        off, so a broken worker costs one ssh round trip every few minutes
+        rather than one per pass, and its failure stays on screen."""
         _, next_at = self._restarts.get(key, (0, 0.0))
         return time.time() >= next_at
 
@@ -816,8 +788,8 @@ class WorkerManager:
         key = _key(spec, task.tag, w.worker_id)
         bundle_id = self._bundle_for_start(spec, task, w, key)
         if bundle_id is None:
-            # Not an attempt: the slot is waiting on the build, not failing to
-            # come up, so the restart backoff must not grow across the wait.
+            # Waiting on the build is not a failed attempt, so the restart
+            # backoff must not grow across the wait.
             self._restarts.pop(key, None)
             return
         w.bundle_id = bundle_id
@@ -834,15 +806,13 @@ class WorkerManager:
         role = spec.role(w.role)
         inputs = _role_inputs(spec, role, params)
         try:
-            # An input that is not there to stage is the slot's reason, on
-            # its row and paced by the restart backoff like a machine that
-            # cannot serve the role -- not an exception in the reconcile log.
+            # A missing input becomes the slot's exit reason, shown on its row
+            # and paced by the restart backoff.
             _require_inputs(inputs)
             if env["SCZ_SINK"] == "r2":
                 self._stage_inputs_in_bucket(creds.r2, spec, task.tag, inputs)
-            # Creating a container is the moment to take a rebuilt worker
-            # image; `docker run --pull=never` below then fails fast rather
-            # than pulling under the dashboard.
+            # Pull here so a new container picks up a rebuilt worker image;
+            # run_container then never pulls on its own.
             image = creds.registry.image_for(role.runtime)
             machine.pull_image(image)
             name = _container_name(spec, task.tag, w.worker_id)
@@ -850,10 +820,9 @@ class WorkerManager:
             if env["SCZ_SINK"] != "r2":
                 _stage_inputs_in_container(machine, name, spec, task.tag, inputs)
         except SshMachineError as e:
-            # The slot will read `starting` until this succeeds, since nothing
-            # of it exists to have exited. Recording why keeps that from being
-            # the whole story a machine that cannot serve the role ever tells:
-            # a missing NVIDIA toolkit, an image nobody logged in to pull.
+            # The slot reads `starting` until this succeeds. Recording why shows
+            # the operator what the machine lacks (an NVIDIA toolkit, a
+            # registry login) instead of an endless `starting`.
             self._exits[key] = str(e)
             raise
         self._exits.pop(key, None)
@@ -943,9 +912,9 @@ class WorkerManager:
         identity_file: str | None = None,
         gpu_count: int | None = None,
     ) -> tasks.MachineRecord:
-        """Register a machine the operator owns or launched themself, for the
-        task's ssh slots to run on. Prepared by hand as docs/master_dashboard.md
-        says; nothing here touches it."""
+        """Register a machine the operator prepared by hand (see
+        docs/master_dashboard.md) for the task's ssh slots. Nothing here
+        contacts it."""
         assert name and host, "a machine needs a name and a host"
         assert all(m.name != name for m in task.machines), f"machine '{name}' exists"
         m = tasks.MachineRecord(
@@ -977,10 +946,10 @@ class WorkerManager:
     def rent_machine(
         self, spec, task: tasks.TaskRecord, name: str, type_id: str, *, spot: bool = False
     ):
-        """Launch an instance of `type_id` for the task and record it as one
-        of its machines, under `name` or a generated one. A refusal (a quota
-        of 0, no capacity) reaches the form as the provider's sentence;
-        nothing is recorded for it."""
+        """Launch an instance of `type_id` and record it as a task machine
+        named `name` (or a generated name). A provider refusal (zero quota, no
+        capacity) reaches the form as the provider's explanation, and nothing
+        is recorded."""
         provider = self._provider()
         name = name or _next_machine_name(task, provider.name)
         assert all(m.name != name for m in task.machines), f"machine '{name}' exists"
@@ -990,8 +959,8 @@ class WorkerManager:
             inst = provider.launch(LaunchRequest(type_id, _owner(spec, task.tag, name), spot=spot))
         except ProviderError as e:
             raise AssertionError(provider.refusal(e, type_id)) from e
-        # Into the listing now: the record names an instance the last listing
-        # predates, which would read `gone` until the next pass relists.
+        # Add it to the cached listing now; otherwise the machine reads `gone`
+        # until the next pass relists.
         self._instances[0][inst.id] = inst
         known_hosts = MACHINES_DIR / spec.name / task.tag / name / "known_hosts"
         known_hosts.parent.mkdir(parents=True, exist_ok=True)
@@ -1017,11 +986,10 @@ class WorkerManager:
         return m
 
     def remove_machine(self, spec, task: tasks.TaskRecord, name: str):
-        """Remove a machine and the slots on it -- each under the slot rule
-        (not running, reachable, and the operator warned of what it holds),
-        so a machine is never dropped out from under a working container --
-        and terminate it if it was rented. A gone instance's slots are
-        removable outright: their containers went with its disk."""
+        """Remove a machine and its slots, terminating it if rented. Each slot
+        goes through remove_worker's checks, so a machine is never dropped from
+        under a working container; the slots of a gone instance are removed
+        outright, since their containers went with its disk."""
         m = task.machine(name)
         key = _machine_key(spec, task.tag, name)
         for w in task.slots_on(name):
@@ -1044,12 +1012,10 @@ class WorkerManager:
 
     def _list_fleet(self):
         """The pass's fleet step: list every instance the provider tagged
-        ours, whether or not any task names one. The per-task machine step
-        lists only for tasks with rented machines, so without this a
-        task.json that lost its machines would leave their instances
-        unlisted -- billing, and invisible. A failure (no credentials, the
-        provider unreachable) is kept for the burn strip to show, and
-        printed once per change rather than every pass."""
+        ours, whether or not a task names it. The per-task step lists only
+        for tasks with rented machines, so without this an instance whose
+        task.json lost its record would bill invisibly. A failure is kept for
+        the burn strip and printed only when it changes."""
         try:
             self._instance_index(observe=True)
             error = None
@@ -1060,12 +1026,10 @@ class WorkerManager:
         self._fleet_error = error
 
     def fleet(self) -> dict:
-        """What the burn strip shows: every non-terminated instance tagged
-        ours with its hourly rate, and the rate they add up to right now
-        (those pending or running -- what _accrue_machine charges for).
-        Read from the last listing, like orphans and machine_status;
-        `observed_at` lets the strip flag a listing that has stopped
-        refreshing."""
+        """The burn strip: every live instance tagged ours with its hourly rate,
+        and the total rate of those billing now (pending or running). Read
+        from the last listing; `observed_at` lets the strip flag a listing
+        that has stopped refreshing."""
         instances, at = self._instances
         owned = self._owned()
         rows = [
@@ -1092,10 +1056,9 @@ class WorkerManager:
         }
 
     def _rate(self, inst: Instance, record: tasks.MachineRecord | None) -> float | None:
-        """An instance's hourly rate: the task's record of it (a spot
-        instance's rate is known only at launch, and lives there), else the
-        listing's own, else its type's catalog rate (None for a type the
-        catalog no longer lists)."""
+        """An instance's hourly rate: its task record's (the only place a spot
+        rate, known at launch, is kept), else the listing's, else its type's
+        catalog rate, else None."""
         if record is not None and record.cost_per_hr is not None:
             return record.cost_per_hr
         if inst.cost_per_hr is not None:
@@ -1112,10 +1075,9 @@ class WorkerManager:
         }
 
     def orphans(self, observe: bool = False) -> list[dict]:
-        """Instances the provider tagged ours that no task's machines name:
-        shown with a Terminate button, never terminated on their own (a
-        task.json restored from an older copy must not kill a running
-        experiment)."""
+        """Instances tagged ours that no task machine names. They are shown with
+        a Terminate button but never terminated automatically: a task.json
+        restored from an older copy must not kill a running experiment."""
         owned = self._owned()
         return [
             {
@@ -1136,24 +1098,29 @@ class WorkerManager:
         self._instances = ({}, 0.0)  # relisted next pass
 
     def _terminate(self, instance_id: str, type_id: str | None):
-        """Terminate through the provider, a refusal reaching the operator as
-        its sentence (what happened, what to do), as a launch's does."""
+        """Terminate through the provider; a refusal reaches the operator as
+        the provider's explanation, as for a launch."""
         provider = self._provider()
         try:
             provider.terminate(instance_id)
         except ProviderError as e:
             raise AssertionError(provider.refusal(e, type_id or "instance")) from e
-        # Out of the listing now, as the next pass will find it: until then
-        # a terminated machine's instance would read as a running orphan.
+        # Mark it terminated in the cached listing now; until the next pass it
+        # would otherwise read as a running orphan.
         cached = self._instances[0].get(instance_id)
         if cached is not None:
             cached.state = "terminated"
 
     def machine_status(self, spec, task: tasks.TaskRecord, *, observe: bool = False) -> list[dict]:
-        """One dict per machine: the record plus its probe state (`up`,
-        `no docker`, `unreachable`; `checking` before the first pass). Like
-        the slot probes, only the reconcile pass observes; a status request
-        reads what it left."""
+        """One dict per machine: the record plus its display state. A registered
+        machine's state is its ssh probe (`up`, `preparing`, `no docker`,
+        `unreachable`; `checking` before the first pass); a rented one's is
+        _rented_state. Only the reconcile pass observes; a status request reads
+        what it left.
+
+        Every call accrues rented machines' spend. Only an observing call
+        saves, but a poll's accrual is not lost: the record is the pass's own
+        shared object, so the next pass saves it."""
         out = []
         rented = any(m.instance_id is not None for m in task.machines)
         index = self._instance_index(observe) if rented else {}
@@ -1204,13 +1171,14 @@ class WorkerManager:
 
     def _reconcile_machines(self, spec, task: tasks.TaskRecord, status: list[dict]):
         """Drive each rented machine toward what its slots want: start a
-        stopped instance that a slot wants running (with the growing backoff
-        a refused start gets, and its reason on the machine's row), and stop
-        one on which nothing has run for IDLE_STOP_SECONDS. Idle is read
-        from the slots' remembered probes: a gated generator is a paused
-        container and a finished trainer an exited one, so a run that ends
-        stops its machine; a slot that wants running and has no container
-        yet is a pending start, not idleness."""
+        stopped instance a slot wants running (a refused start backs off, with
+        its reason on the machine's row), and stop one on which nothing has
+        run for IDLE_STOP_SECONDS.
+
+        Idleness is read from the slots' remembered probes, so a machine whose
+        slots are all gated (paused containers) or finished (exited ones)
+        stops. A slot that wants to run but has no container yet counts as
+        busy."""
         provider = None
         for info in status:
             m = next((x for x in task.machines if x.name == info["name"]), None)
@@ -1254,8 +1222,8 @@ class WorkerManager:
                 self._instances = ({}, 0.0)
 
     def _observe_machine(self, m: tasks.MachineRecord) -> str:
-        """Probe a machine, under the same negative cache as its slots: a
-        host that just failed is not dialed again for SSH_REPROBE_SECONDS."""
+        """Probe a machine, skipping a host that failed within
+        SSH_REPROBE_SECONDS, as for its slots."""
         down_since = self._ssh_down.get(m.host)
         if down_since is not None and time.time() - down_since < SSH_REPROBE_SECONDS:
             return "unreachable"
@@ -1280,11 +1248,10 @@ class WorkerManager:
             elif not run:
                 self._stop_local(spec, task, w)
         else:
-            # Freshly observed: dispatching a start or stop off a remembered
-            # state would send the wrong command (or, for a slot no pass has
-            # reached yet, none at all). An unreachable machine gets no action
-            # either way: the desired state is saved, and reconcile enforces it
-            # once probes succeed.
+            # Observe afresh: a remembered state could send the wrong command,
+            # or none for a slot no pass has reached. An unreachable machine
+            # gets no command; reconcile enforces the saved desired state once
+            # it answers.
             probe = self._probe_container(spec, task, w, observe=True)
             name = _container_name(spec, task.tag, w.worker_id)
             if start and probe == "stopped":
@@ -1295,8 +1262,8 @@ class WorkerManager:
                 _ssh_machine(task, w).stop_container(name)
 
     def remove_worker(self, spec, task: tasks.TaskRecord, worker_id: str):
-        """Remove a slot. Only non-running workers may be removed (pause
-        first), so a removal never silently discards an in-flight cycle."""
+        """Remove a slot. Its worker must not be running, so a removal never
+        silently discards an in-flight cycle."""
         w = task.worker(worker_id)
         if w.kind == "local":
             assert not self._local_alive(spec, task, w), f"{worker_id} is running; pause it first"
@@ -1304,22 +1271,20 @@ class WorkerManager:
         elif w.kind == "ssh" and self._machine_gone(spec, task, w):
             pass  # its container went with the instance's disk; nothing to check or clean
         elif w.kind == "ssh":
-            # Freshly observed: a removal must not act on a remembered state.
+            # Observe afresh: a removal must not act on a remembered state.
             probe = self._probe_container(spec, task, w, observe=True)
             assert probe not in ("running", "paused"), f"{worker_id} is running; pause it first"
-            # Removing while unreachable would orphan a possibly-live container
-            # that keeps generating into the tag with nothing tracking it.
+            # Removing while unreachable could orphan a live container that
+            # keeps generating into the tag with nothing tracking it.
             assert probe != "unreachable", (
                 f"{_ssh_host(task, w)} is unreachable; bring it online (or clean up its "
                 f"container by hand) before removing {worker_id}"
             )
             if probe == "stopped":
                 _ssh_machine(task, w).remove_container(_container_name(spec, task.tag, w.worker_id))
-            # A future slot may be assigned this same worker_id (a freed id is
-            # the first one _next_worker_id hands out again), and a deleted
-            # tag can be recreated under the same name -- both reproduce this
-            # key. Without this, the new slot would start out narrating the
-            # old container's exit and backoff.
+            # A later slot can reuse this key (_next_worker_id hands out the
+            # freed id again, and a deleted tag can be recreated), and must not
+            # inherit the old container's exit reason and backoff.
             key = _key(spec, task.tag, worker_id)
             self._exits.pop(key, None)
             self._restarts.pop(key, None)
@@ -1328,19 +1293,17 @@ class WorkerManager:
         self._ensure_sync(spec, task)
 
     def delete_task(self, spec, tag: str):
-        """Delete a tag: tear its worker slots down, then delete its local dir.
+        """Delete a tag: remove its worker slots, then its local dir.
 
-        Idle slots are removed on the operator's behalf rather than refused --
-        they are how a container gets released, and the task record
-        about to be deleted is the only thing tracking it. A slot that is
-        still running refuses, so a fleet at work is never deleted out from
-        under itself.
+        Idle slots are removed on the operator's behalf, since removal is what
+        releases a container and the task record about to go is the only
+        thing tracking it. A running slot refuses, so a working fleet is never
+        deleted from under itself.
 
-        Slots go one at a time, so a refusal partway through leaves the
-        earlier ones removed. Hence the intent check up front: the ordinary
-        refusal -- an operator who has not paused the fleet -- costs nothing,
-        and what is left to discover slot by slot is the paused one whose
-        backing process turns out to be alive after all.
+        Slots are removed one at a time, so a refusal partway leaves the
+        earlier ones gone. The desired-state check up front catches the usual
+        case (the fleet was not paused) before anything is removed; only a
+        paused slot whose process is still alive is discovered midway.
         """
         task = tasks.load_task(spec, tag)
         if task is not None:
@@ -1354,14 +1317,11 @@ class WorkerManager:
 
     def worker_status(self, spec, task: tasks.TaskRecord, *, observe: bool = False) -> list[dict]:
         """One dict per slot: the durable record plus observed live state.
-        Every call is also a spend-accrual observation point.
 
-        `observe` is the reconcile pass's privilege: it goes to the machines
-        and the cloud API, and leaves what it learns behind -- persisted, the
-        only save here. Every other caller -- every status request a browser
-        makes -- reads those observations, so serving the dashboard never
-        waits on ssh or the provider, and accrues in memory only: the record is the
-        pass's own object, so the next pass saves what the polls accrued.
+        Only the reconcile pass passes `observe`: it probes the machines and
+        saves what it learns. Every other caller, such as a browser's status
+        poll, reads those observations, so serving the dashboard never waits on
+        ssh.
         """
         out = []
         for w in task.workers:
@@ -1376,8 +1336,8 @@ class WorkerManager:
                 "machine": w.machine,
                 "bundle_id": w.bundle_id,
                 "launched": w.launched,
-                # Zero and None differ to anyone about to remove the slot:
-                # drained, versus nothing known about what it holds.
+                # Zero means drained, None means unknown; the Remove dialog
+                # tells them apart.
                 "undelivered": w.undelivered,
             }
             if gated:
@@ -1437,14 +1397,13 @@ class WorkerManager:
         )
 
     def _make_publish(self, spec, task: tasks.TaskRecord):
-        """Bucket-side copy of a completed generation (the scheduler's publish
-        hook): its chunks -- the cloud-origin ones are there already after the
-        mirror move and are skipped by size, the local- and ssh-origin ones
-        upload -- and then its manifest, last, so a manifest in the bucket
-        means the whole generation is. What a trainer running elsewhere reads
-        (docs/plans/cloud_training.md); and with it the bucket holds every
-        generation of a cloud-fed tag complete, not just its cloud chunks.
-        None for tasks without bucket-delivering slots, as for the mirror."""
+        """The scheduler's publish hook: copy a completed generation to the
+        bucket, where a remote trainer reads it (docs/plans/cloud_training.md).
+        None for a task without bucket-delivering slots.
+
+        Chunks that came through the bucket are already there after the
+        mirror move and are skipped by size; the rest upload. The manifest goes
+        last, so a manifest in the bucket means the whole generation is."""
         if not _has_bucket_slots(spec, task):
             return None
         try:
@@ -1470,12 +1429,11 @@ class WorkerManager:
         return publish
 
     def _make_mirror(self, spec, task: tasks.TaskRecord):
-        """Bucket-side replay of staging ingests: when the scheduler assigns a
-        chunk locally, its bucket object (if any -- the chunk may be
-        local-origin) moves to the matching generation prefix, so the bucket
-        keeps mirroring the local corpus and the sync watcher never
-        re-downloads an ingested chunk. None for tasks without
-        bucket-delivering slots."""
+        """The scheduler's mirror hook: when it assigns a staged chunk to a
+        generation locally, move the chunk's bucket copy (if it came through
+        the bucket) to the same generation prefix. The bucket then mirrors the
+        local corpus, and the sync watcher never re-downloads an assigned
+        chunk. None for a task without bucket-delivering slots."""
         if not _has_bucket_slots(spec, task):
             return None
         try:
@@ -1515,13 +1473,11 @@ class WorkerManager:
                 yield spec, task
 
     def _forget_stale_counts(self, spec, task: tasks.TaskRecord):
-        """The first time this process sees a task, drop any recorded zero.
-
-        The count is durable so that a restart cannot forget a container is
-        holding hours of work -- but it must not let one inherit the opposite
-        claim either, since whatever the workers did while nothing was
-        watching is exactly what a zero from before the restart does not
-        cover.
+        """The first time this process sees a task, forget its slots' recorded
+        zero `undelivered` counts. The count is durable so a restart cannot
+        forget a container holds hours of work, but a zero from before the
+        restart says nothing about what workers produced while no dashboard
+        was watching.
         """
         key = _key(spec, task.tag)
         if key in self._counted_from:
@@ -1535,35 +1491,27 @@ class WorkerManager:
     async def offload(self, fn, *args, **kwargs):
         """Run one blocking step off the event loop, one at a time.
 
-        Everything reconcile does is blocking IO measured in seconds: ssh to a
-        laptop, rclone to R2, the provider's API, a build. Run inline it froze the
-        whole dashboard -- an 8-second stall at every scheduler gate flip, with
-        the UI hanging on requests it could otherwise have served. The executor
-        holds a single thread, so these steps stay serialized with each other
-        (they mutate the same task records) while the loop stays free.
+        Everything reconcile does is blocking IO measured in seconds: ssh,
+        rclone, the provider's API. Inline, it would freeze every request the
+        dashboard serves (a scheduler gate flip alone can take 8 seconds). The
+        executor has a single thread, so the steps stay serialized with each
+        other, as they mutate the same task records.
         """
         return await IOLoop.current().run_in_executor(self._blocking, partial(fn, *args, **kwargs))
 
     async def reconcile(self):
-        """One pass over every task: run the workload's scheduler tick, then
-        drive each worker's observed state toward its desired state -- respawn
-        local workers that should be running but are not (dashboard restart,
-        crashed process), start and stop rented machines as their slots want,
-        and park or stop workers that are running but should not be (a
-        scheduler gate or an operator pause). Enforcement keys off real
-        liveness by durable pid or container probe, so it holds a paused
-        worker down even across a dashboard restart or a second dashboard
-        instance.
+        """One pass over every task. For each: run the workload's scheduler
+        tick; start and stop rented machines as their slots want; collect from
+        ssh slots; drive each worker toward its intent, respawning, parking or
+        stopping it; run dispatch ticks (RoleSpec.dispatch) and ingest ticks
+        (RoleSpec.ingest); keep the bucket sync and controls push current.
 
-        It is also where the controller's half of a dispatch-driven role runs
-        (RoleSpec.dispatch): assigning those slots their next piece of work and
-        ingesting what they have delivered, once the pass knows which of them
-        are really running -- and where a role's ingest tick (RoleSpec.ingest)
-        takes a trainer's delivered records into dashboard.db.
+        Enforcement keys off real liveness (durable pid or container probe),
+        so it holds a paused worker down even across a dashboard restart.
 
         This pass is the only observer: it refreshes the container probes and
-        the provider's instance listing everything else reads, which also
-        makes it the spend-accrual heartbeat when no browser is polling.
+        the instance listing that everything else reads, which also makes it
+        the spend-accrual heartbeat when no browser is polling.
         """
         await self.offload(self._list_fleet)
         for spec, task in self._all_tasks():
@@ -1580,8 +1528,7 @@ class WorkerManager:
             down = {m["name"] for m in machines if m["state"] != "up"}
             status = await self.offload(self.worker_status, spec, task, observe=True)
             for info in status:
-                # A handler runs between this pass's steps; the slot it removed
-                # is not enforced.
+                # A handler may have removed the slot between this pass's steps.
                 w = task.find(info["worker_id"])
                 if w is None:
                     continue
@@ -1598,11 +1545,9 @@ class WorkerManager:
                         await self.offload(self._collect_ssh, spec, task, w)
                     except Exception as e:  # noqa: BLE001 -- one slot must not stop the pass
                         print(f"collect {spec.name}/{task.tag}/{w.worker_id}: {e}")
-                # Contained per slot: one slot's failing enforcement (an ssh
-                # machine vanishing mid-action, an instance launch that keeps
-                # failing on an out-of-stock type) must not starve the rest
-                # of the pass -- reconcile is the only enforcement some slots
-                # get (e.g. stopping gated machines that are still billing).
+                # Contained per slot: one slot's failure (a machine vanishing
+                # mid-action, say) must not starve the rest of the pass, which
+                # is the only enforcement some slots get.
                 try:
                     await self.offload(
                         self._reconcile_worker, spec, task, w, _intent(w, task), info
@@ -1627,24 +1572,18 @@ class WorkerManager:
                 print(f"controls push {spec.name}/{task.tag}: {e}")
 
     def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Read a batch of slot `w`'s finished outputs out of its container
-        into the tag, and remember how much it still holds.
+        """Pull a batch of slot `w`'s finished output from its container into
+        the tag, and record how much it still holds.
 
-        The container can stop between the pass's probe and this pull: an
-        operator pausing the slot stops it synchronously (set_worker_state),
-        so a pull racing a "Pause all" reaches a container `docker exec` can no
-        longer read. That is a benign race, not a collection failure -- a
-        re-probe that finds it stopped (or gone) means the output it flushed on
-        the way down waits in place for the next start (or the sweep that
-        precedes a replacement) to take it. Any other failure -- a slow link
-        timing out while the container is still up, an unreachable host -- is
-        real, and propagates."""
+        A pull can race an operator's pause, which stops the container
+        between the pass's probe and the pull. That is benign: if a re-probe
+        finds the container stopped or gone, what it flushed on the way down
+        waits for the next start, or for the sweep before a replacement. Any
+        other failure propagates."""
         machine = _ssh_machine(task, w)
-        # Unknown until this pull says otherwise. A collection that fails --
-        # a link slow enough to keep hitting the transfer timeout, say, while
-        # the far cheaper probe still reports the container running -- must not
-        # leave the last count standing in for knowledge: it would go on
-        # claiming "drained" while the container fills up.
+        # Unknown until this pull succeeds: a failing collection (a link too
+        # slow for the transfer timeout while probes still pass) must not
+        # leave an old zero claiming "drained" while the container fills up.
         w.undelivered = None
         try:
             result = pull_results(machine, **_transfer_target(spec, task, w))
@@ -1657,14 +1596,12 @@ class WorkerManager:
         tasks.save_task(spec, task)
 
     def _dispatch_role(self, spec, task: tasks.TaskRecord, role, status: list[dict]):
-        """Run one role's controller-side tick: hand its running slots their
-        next piece of work, and take in what they have delivered.
+        """Run one role's dispatch tick: hand its running slots their next piece
+        of work, and take in what they have delivered.
 
-        Only running slots are offered: a paused container cannot be written
-        to, and an assignment is worth making when there is something to act on
-        it. Ingest is not conditional on any of that -- results already
-        collected must reach the database even when every slot of the role is
-        gone -- so the tick runs whether or not the list is empty.
+        Only running slots are offered, since a paused container cannot be
+        written to. The tick runs even with no slots, because results already
+        collected must still reach the database.
         """
         slots = [
             self._slot_files(spec, task, w)
@@ -1696,11 +1633,8 @@ class WorkerManager:
         workloads.resolve(spec.scheduler)(spec, task, self._scheduler_hooks(spec, task))
 
     def _reconcile_worker(self, spec, task: tasks.TaskRecord, w, intent: str, info: dict):
-        """Close one slot's desired-vs-observed gap. A rented machine that is booting
-        (`starting`) is left alone -- it is already on its way up. An
-        unreachable or not-yet-observed ssh machine is left alone too. A failure
-        here only skips this slot's tick (the caller contains it): enforcement
-        resumes on the next pass."""
+        """Close one slot's desired-vs-observed gap. A failure skips only this
+        slot; enforcement resumes on the next pass."""
         alive = info["observed_running"]
         if w.kind == "local":
             # A local worker restarts in about a second, so parking it and
@@ -1713,14 +1647,14 @@ class WorkerManager:
             self._reconcile_ssh(spec, task, w, intent, info["ssh_probe"])
 
     def _reconcile_ssh(self, spec, task: tasks.TaskRecord, w, intent: str, probe: str):
-        """Enforce one ssh slot's intent.
+        """Enforce one ssh slot's intent. An unreachable or unobserved container
+        gets no command.
 
         A gate parks the container by pausing it rather than stopping it. A
-        stop costs the worker its in-flight chunk, and the next start re-runs
-        the image's bootstrap -- refetching and unpacking the bundle before the
-        first game -- which on a gate that flips every minute was eating a
-        third of the machine's duty cycle. A pause is instant in both
-        directions and resumes the work mid-chunk.
+        stop loses the in-flight chunk, and the next start re-runs the image's
+        bootstrap (fetching and unpacking the bundle), which under a gate that
+        flips every minute costs about a third of the machine's time. A pause
+        is instant both ways and resumes mid-chunk.
         """
         machine = _ssh_machine(task, w)
         name = _container_name(spec, task.tag, w.worker_id)
@@ -1730,14 +1664,12 @@ class WorkerManager:
                 machine.unpause_container(name)  # resuming a parked worker is not a restart
             elif probe == "running":
                 if _replaceable(w, task):
-                    # The task has redeployed past this container and it has
-                    # handed everything over: stopping it is how it gets
-                    # replaced, which the next pass does. As with any stop, the
-                    # cycle in flight is lost.
+                    # The task has redeployed past this container and it holds
+                    # nothing: stop it, and the next pass replaces it. As with
+                    # any stop, the cycle in flight is lost.
                     machine.stop_container(name)
             elif probe in ("missing", "stopped") and self._restart_allowed(key):
-                # Anything else -- unreachable, or not observed yet -- is not
-                # something this pass can act on.
+                # Unreachable or unobserved: nothing this pass can act on.
                 self._note_restart(key)
                 self._start_or_replace(machine, name, spec, task, w, probe)
         elif intent == PARK and probe == "running":
@@ -1748,31 +1680,27 @@ class WorkerManager:
             machine.stop_container(name)
 
     def _start_or_replace(self, machine, name, spec, task: tasks.TaskRecord, w, probe: str):
-        """Bring a container that is not running back up.
+        """Bring a container that is not running back up, replacing it when
+        _replaceable allows.
 
-        A container's bundle is fixed in the environment it was created with,
-        so a slot joins a bundle the task has moved to by being replaced. That
-        destroys anything the container never handed over, so it waits until a
-        collection has reported the container empty -- and a container holding
-        output is started instead, which is what lets the next passes drain it.
+        A container's bundle is fixed at creation, so a slot moves to its
+        task's new bundle only by being replaced. Replacing destroys whatever
+        the container has not handed over, so a container holding output is
+        restarted instead, which lets later passes drain it.
 
-        A container that will not stay up is never collected from, so a count
-        it had when it stopped staying up is the last word on it: one that was
-        holding a backlog stays pinned to its bundle, restarted and visibly
-        down, because recovering the slot would mean discarding an amount
-        nothing can measure any more -- the operator's call from the workers
-        table, where Remove says what would go. One that never held anything
-        is replaceable as ever; the rule is _replaceable's, not "a collection
-        said so".
+        A container that will not stay up is never collected from, so its last
+        count stands. Unless that count is zero, the slot stays on its old
+        bundle, restarting and visibly down: recovering it would discard an
+        amount nothing can measure any more, which is the operator's call
+        (Remove says what would go).
         """
         if probe == "stopped" and not _replaceable(w, task):
             machine.start_container(name)
             return
         if probe == "stopped":
-            # Take what it flushed on the way down before the container (and
-            # its filesystem) go. If that fails, so does the replacement: the
-            # slot keeps running on the old bundle, which is recoverable, where
-            # throwing the output away is not.
+            # Collect what it flushed on the way down before the container
+            # goes. If that fails, so does the replacement: staying on the old
+            # bundle is recoverable, losing the output is not.
             self._sweep_ssh(machine, spec, task, w)
             machine.remove_container(name)
         self._run_ssh_container(spec, task, w)
@@ -1782,9 +1710,8 @@ class WorkerManager:
         sweep_stopped(machine, **_transfer_target(spec, task, w))
 
     def shutdown(self):
-        """Stop owned subprocesses (workers flush completed output on SIGTERM);
-        ssh containers are unaffected -- their work continues across
-        dashboard restarts."""
+        """SIGTERM this process's local workers (they flush and exit) and sync
+        watchers. ssh containers keep running across a dashboard restart."""
         self._blocking.shutdown(wait=False, cancel_futures=True)
         self._builds.shutdown(wait=False, cancel_futures=True)
         for proc in [*self._local.values(), *(p for p, _ in self._sync.values())]:

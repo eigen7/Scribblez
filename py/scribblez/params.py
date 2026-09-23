@@ -10,22 +10,20 @@ that single declaration:
     auto-generated config form
   - validation of user-supplied values  (validate)
 
-Supported field kinds: int, float, str, and bool. A bool field may default
-either way: it maps to an argparse BooleanOptionalAction, so `--flag` and
-`--no-flag` both exist and the CLI can override whichever default it carries.
+Supported field kinds: int, float, str, and bool. A bool field maps to an
+argparse BooleanOptionalAction, so both `--flag` and `--no-flag` exist whatever
+its default.
 
-A field may also declare `choices`, closing its value set. Validation then
-rejects anything outside it -- so a bad value is refused where it is entered
-rather than surfacing later as a worker crash -- argparse enforces the same
-set, and the dashboard form renders a selector rather than a text box.
+A field may declare `choices`, closing its value set. Validation and argparse
+both enforce the set, so a bad value is refused where it is entered rather than
+crashing a worker later, and the dashboard form renders a selector.
 
-A workload may layer *profiles* over the dataclass defaults (WorkloadSpec
-.profiles): named partial value sets -- "the transformer recipe", "the conv
-recipe" -- that the new-tag form and the CLI's --profile start from. Values
-resolve as dataclass defaults, under the profile's values, under whatever the
-operator set explicitly (validate's `base`, from_args); a tag freezes the
-result and records the profile name as provenance. Profiles live here rather
-than in the form so the CLI cannot drift from it.
+A workload may also define *profiles* (WorkloadSpec.profiles): named partial
+value sets, such as a per-trunk training recipe, that the new-tag form and the
+CLI's --profile start from. Precedence, lowest first: dataclass defaults, the
+profile's values, values the operator set explicitly. A tag freezes the result
+and records the profile name. Profiles are resolved here rather than in the
+form so the CLI and dashboard cannot drift apart.
 """
 
 import argparse
@@ -80,8 +78,8 @@ def public_schema(params_cls: type) -> list[dict]:
 
 
 def _flag_help(f: ParamField, profiles: dict | None) -> str:
-    """The flag's help: the field's, its dataclass default, and each profile's
-    override of it -- since the flag itself carries no default (add_arguments)."""
+    """Help text naming the dataclass default and each profile's override,
+    since the flag itself carries no default (see add_arguments)."""
     overrides = [
         f"{name}={values[f.name]}" for name, values in (profiles or {}).items() if f.name in values
     ]
@@ -92,13 +90,12 @@ def _flag_help(f: ParamField, profiles: dict | None) -> str:
 def add_arguments(
     parser, params_cls: type, profiles: dict | None = None, default_profile: str = ""
 ):
-    """Register one argparse option per field (--snake-case-name), plus
-    `--profile` over `profiles` when the caller has any.
+    """Register one --kebab-case option per field, plus `--profile` when the
+    workload has profiles.
 
-    The flags carry no argparse default (SUPPRESS): from_args layers the flags
-    actually given over the profile's values over the dataclass defaults, which
-    a per-flag default would make indistinguishable from a typed value. The
-    help text shows the defaults instead."""
+    The flags have no argparse default (SUPPRESS) so that from_args can tell a
+    flag the user typed from one left unset, and layer only typed flags over
+    the profile."""
     if profiles:
         parser.add_argument(
             "--profile",
@@ -151,11 +148,9 @@ def unknown_env(params_cls: type, env=os.environ, *, allowed=()) -> list[str]:
     """The SCZ_* variables in `env` naming neither a parameter of `params_cls`
     nor one of `allowed` (the launcher's own worker-level knobs).
 
-    from_env reads the schema, not the environment, so a parameter the schema
-    predates is silently ignored rather than misapplied -- which lets a worker
-    on stale code produce data that looks valid and is not. Callers that know
-    the full set of variables they were launched with use this to refuse
-    instead.
+    from_env silently ignores variables its schema does not know, so a worker
+    running stale code would produce plausible-looking but wrong data. Callers
+    use this to refuse to start instead.
     """
     known = {ENV_PREFIX + f.name.upper() for f in schema(params_cls)} | set(allowed)
     return sorted(k for k in env if k.startswith(ENV_PREFIX) and k not in known)

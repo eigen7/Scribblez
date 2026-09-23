@@ -1,20 +1,19 @@
-"""Runtime data dependencies a cloud worker fetches at startup.
+"""Data files a worker fetches at startup, called from the roles' `deps`
+hooks (RoleSpec.deps).
 
-The worker image and bundles deliberately contain no lexica (the .kwg files
-encode a copyrighted wordlist and are never redistributed; each machine
-fetches them from the public Woogles/liwords URL, exactly as setup_wizard.py
-does for the dev machine) and no Macondo data (fetched from the public Macondo
-repo at the tag pinned in py/build.py).
+Neither the worker image nor a bundle contains:
 
-The eval datasets a train role scores every checkpoint against are
-git-tracked, so a checkout has them; a worker running from a bundle takes them
-from the bucket's deps/ prefix, at the version its bundle's manifest names
-(cloud/bundles.py).
+- lexica: the .kwg files encode a copyrighted wordlist and are never
+  redistributed. Each machine downloads them from the public Woogles/liwords
+  URL, as setup_wizard.py does for the dev machine.
+- Macondo's strategy data (leave values, pre-endgame table): sparse-cloned
+  from the public Macondo repo at the tag py/build.py pins.
+- the eval datasets a train role scores checkpoints against: git-tracked, so
+  a checkout has them, but a bundle-run worker takes them from the bucket's
+  deps/ prefix (see cloud/bundles.py).
 
-Every fetch is idempotent and short-circuits when the target files already
-exist -- so worker restarts skip it, and running the worker entrypoint inside
-the dev container (whose mount dir setup_wizard.py/build.py already populated)
-touches nothing.
+Every fetch is a no-op when its files are already present, so a restarted
+worker, or a worker run inside the dev container, fetches nothing.
 """
 
 import os
@@ -36,14 +35,12 @@ MOUNT_ROOT = Path("/workspace/mount")
 LEXICA_DIR = MOUNT_ROOT / "lexica"
 MACONDO_DIR = MOUNT_ROOT / "macondo"
 
-# The engine's default lexicon (scribblez::Lexicon::Params.name); kill-test
-# generation runs the engine with its defaults, so these are the data files a
-# kill-test worker needs.
+# The engine's default lexicon (scribblez::Lexicon::Params::name). Workers run
+# the engine with its defaults, so this is the one lexicon they need.
 DEFAULT_LEXICON = "NWL23"
 
-# Mirrors setup_common.LIWORDS_KWG_URL_TEMPLATE. Duplicated because
-# setup_common lives at the repo root (for host-side imports) and is not part
-# of worker bundles, which ship the py/ tree only.
+# Duplicates setup_common.LIWORDS_KWG_URL_TEMPLATE: setup_common lives at the
+# repo root, outside the py/ tree that bundles ship.
 LIWORDS_KWG_URL_TEMPLATE = (
     "https://raw.githubusercontent.com/woogles-io/liwords/master/"
     "liwords-ui/public/wasm/2024/{name}.kwg"
@@ -51,9 +48,8 @@ LIWORDS_KWG_URL_TEMPLATE = (
 
 
 def fetch_lexicon(name: str):
-    """Download <mount>/lexica/<name>.kwg from the public liwords URL. The
-    download lands under a temporary name and is renamed into place, so a
-    partially-fetched file is never visible."""
+    """Download <mount>/lexica/<name>.kwg. It lands under a temporary name
+    and is renamed into place, so a partial download is never visible."""
     kwg = LEXICA_DIR / f"{name}.kwg"
     if kwg.is_file():
         return
@@ -66,13 +62,12 @@ def fetch_lexicon(name: str):
 
 
 def fetch_macondo_strategy(lexicon: str):
-    """Ensure Macondo's strategy data for `lexicon` (leaves) and the shared
-    default/ tables (pre-endgame) exist under <mount>/macondo.
+    """Ensure <mount>/macondo has the leave values for `lexicon` and the
+    shared pre-endgame table.
 
-    On a fresh machine this makes a sparse, blobless, depth-1 checkout of the
-    pinned Macondo tag holding just those two directories -- the engine reads
-    the files straight from the checkout (hasty_equity.cpp), no Macondo build
-    involved."""
+    The engine reads these files straight from a Macondo checkout
+    (hasty_equity.cpp) and needs no Macondo build, so a sparse, blobless,
+    depth-1 clone of just those two directories suffices."""
     strategy = MACONDO_DIR / "data" / "strategy"
     leaves = strategy / lexicon / "leaves.klv2"
     peg = strategy / "default" / "preendgame.json"
@@ -113,14 +108,13 @@ def fetch_macondo_strategy(lexicon: str):
 
 
 def fetch_eval_positions():
-    """Ensure the eval datasets (EVAL_POSITIONS_DIRS) are under the repo root
-    at the version this worker's bundle was deployed with.
+    """Ensure the eval datasets (EVAL_POSITIONS_DIRS) under the repo root are
+    the version this worker's bundle was deployed with.
 
-    On a machine running the checkout itself -- a local slot, a CLI -- there
-    is no bundle and the datasets are the checkout's; they are required to
-    be there. A bundle-run worker (SCZ_BUNDLE_ID set) compares its copy's
-    digest against the manifest's and replaces it from the bucket when they
-    differ, which also covers a redeploy that changed the datasets."""
+    Without a bundle (a local slot, a CLI) the checkout's own copy is used and
+    must exist. A bundle-run worker (SCZ_BUNDLE_ID set) compares its copy's
+    digest with the manifest's and replaces the copy from the bucket when they
+    differ, as they do after a redeploy that changed the datasets."""
     bundle_id = os.environ.get("SCZ_BUNDLE_ID")
     if not bundle_id:
         missing = [d for d in EVAL_POSITIONS_DIRS if not d.is_dir()]

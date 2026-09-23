@@ -1,8 +1,8 @@
-"""Tests for the move set evaluation model distillation-target data path:
-move_set_eval_target_generator over
-.slog fixtures with a tiny teacher ONNX, parsed by the .mset reader. Skipped
-when the engine binaries, HastyBot leave values, or torch/TensorRT are
-unavailable (the tool builds a TensorRT engine, so this is a GPU test).
+"""Tests for the move set evaluation model's distillation targets:
+move_set_eval_target_generator labels .slog fixtures with a tiny teacher ONNX,
+and the .mset reader parses the result. The generator builds a TensorRT engine,
+so this is a GPU test; it skips when the engine binaries, HastyBot leave values,
+or torch/TensorRT are unavailable.
 """
 
 import subprocess
@@ -24,10 +24,10 @@ from scribblez.position_eval.model import PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.sim_evidence.slog_meta import game_metas, move_at, read_slog_bytes
 
-# This checkout's own binaries (not the primary checkout's), so a worktree's
-# tests exercise the code built beside them -- the external-data test below
-# exists precisely to catch a neural_net.cpp regression, which a fixed path to
-# /workspace/repo would mask until after merge.
+# This checkout's own binaries, not the primary checkout's, so a worktree's tests
+# exercise the code built beside them. A fixed /workspace/repo path would let a
+# broken engine change (the external-data test below guards neural_net.cpp) pass
+# in its worktree and fail only after merge.
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 TARGET_GENERATOR = _ENGINE_DIR / "move_set_eval_target_generator"
 SLOG_WRITER = _ENGINE_DIR / "test_slog_writer"
@@ -119,16 +119,15 @@ def test_mset_positions_parse_and_hold_invariants(mset_dir):
             total += 1
             assert 1 <= len(pos.moves) <= max_candidates
             assert pos.targets.shape == (len(pos.moves), len(TARGET_NAMES_V1))
-            # WLD probabilities: each a distribution summing to ~1.
             wld = pos.targets[:, :3]
             assert np.all(wld >= 0) and np.all(wld <= 1)
             assert np.allclose(wld.sum(axis=1), 1.0, atol=1e-3)
             # The std head is softplus-floored positive.
             assert np.all(pos.targets[:, 4] > 0)
-            # Placement planes: the teacher's four masked footprint distributions
-            # (mask + softmax, training/footprint_collapse.h masked_placement_
-            # distributions), absmax-quantized -- the scale is at most 1/255, and
-            # dequantizing lands back in [0, 1].
+            # Placement planes are the teacher's four masked footprint
+            # distributions (masked_placement_distributions in
+            # training/footprint_collapse.h), absmax-quantized: the scale is at
+            # most 1/255, and dequantizing lands back in [0, 1].
             assert pos.planes.shape == (len(pos.moves), len(PLANE_NAMES), PLANE_WIDTH)
             assert pos.planes.dtype == np.uint8
             assert pos.plane_scales.shape == (len(pos.moves), len(PLANE_NAMES))
@@ -136,10 +135,9 @@ def test_mset_positions_parse_and_hold_invariants(mset_dir):
             assert np.all(pos.plane_scales <= 1 / 255 + 1e-6)
             probs = dequantize_planes(pos.planes, pos.plane_scales)
             assert np.all(probs >= 0) and np.all(probs <= 1 + 1e-6)
-            # Absmax quantization sends a plane's max class to 255 -- unless the
-            # whole plane is zero (scale 0), which masking can produce (a win head
-            # at a position the teacher gives that seat no winning footprint mass),
-            # where the max stays 0.
+            # Absmax quantization sends a plane's max class to 255, unless masking
+            # zeroed the whole plane (scale 0): e.g. a win head where the teacher
+            # gives that seat no winning footprint mass.
             plane_max = pos.planes.max(axis=2)
             assert np.all((plane_max == 255) | (plane_max == 0))
     assert total > 0
@@ -183,9 +181,8 @@ def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path,
     move set -- orders of magnitude past the stratified quota -- and stamps the
     file full-sweep so the trainer holds it out."""
     _skip_unless_runnable()
-    # Two games: an uncapped sweep labels every legal move of every position it
-    # takes, so each extra position costs hundreds of records to re-parse here
-    # while asserting nothing the first ones do not.
+    # Two games only: each swept position adds hundreds of records to parse and
+    # asserts nothing new.
     subprocess.run([str(SLOG_WRITER), str(tmp_path), "2", "4"], check=True, capture_output=True)
 
     result = _run_full_sweep(tmp_path, tiny_teacher, cap=100000)
@@ -201,7 +198,6 @@ def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path,
         # value-based and its positions run to the sweep cap.
         assert parsed.record_planes == 0
         for pos in parsed.positions:
-            # Uncapped, the sweep is complete: candidates == the legal count.
             assert pos.num_legal_moves == len(pos.moves)
             assert pos.targets.shape == (len(pos.moves), len(TARGET_NAMES_V1))
             assert pos.planes is None and pos.plane_scales is None

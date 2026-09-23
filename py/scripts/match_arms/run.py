@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Headless CLI over the match_arms arms role.
+"""Run a match_arms experiment on a tag without the dashboard.
 
-The master dashboard is the normal way to run an arms experiment: create a
-match_arms task (its frozen params define the arms, the opponent, and the pair
-budget) and attach the singleton arms worker. This CLI invokes the same role
-runner directly on a tag for headless runs and debugging; results land in the
-tag's dashboard.db either way, so the Arms tab renders them identically.
+Normally an arms experiment runs from the master dashboard: create a
+match_arms task, whose params define the arms, the shared opponent and the
+number of game pairs, and attach its singleton arms worker. This CLI calls the
+same role runner directly, for headless runs and debugging. Results land in
+the tag's dashboard.db either way, so the dashboard's Arms tab shows them.
 
-The flags are generated from the workload's params dataclass, so this CLI
-cannot drift from the dashboard's task form.
+The workload flags are generated from its params dataclass (MatchArmsParams),
+so they always match the dashboard's task form.
 
 Usage:
     ./py/scripts/match_arms/run.py -t sweep1 --threads 8 \
@@ -29,7 +29,9 @@ from util.argparse_ext import ArgumentDefaultsHelpFormatter
 def main() -> int:
     spec = workloads.get("match_arms")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
-    p.add_argument("-t", "--tag", required=True, help="Tag (per-tag artifact root).")
+    p.add_argument(
+        "-t", "--tag", required=True, help="Tag to run under; its directory holds all outputs."
+    )
     p.add_argument("--threads", type=int, default=8, help="Game threads per match round.")
     spec.add_cli_arguments(p)
     args = p.parse_args()

@@ -1,39 +1,31 @@
-"""Controller-side match eval: assigning the matches and ingesting the results.
+"""Controller-side match eval: assigning matches and ingesting results.
 
-A match-eval worker does not choose its own work. It plays whatever export is
-in its inbox and delivers the outcome as a file; this half -- ticked per task
-by the dashboard's reconcile pass -- decides which generation that should be
-and turns delivered outcomes into the dashboard.db rows the win-rate and LLR
-curves read.
+A match-eval worker (runner.py) plays whatever export is in its inbox and
+delivers the outcome as a file. This half, ticked per task by the dashboard's
+reconcile pass, decides which generation each worker plays and turns delivered
+outcomes into the dashboard.db rows behind the match win-rate curve.
 
-Splitting the role this way is what lets it run on another machine. The
-database and the exports both live on the controller, neither of which an ssh
-worker can reach; what crosses the link is one model in and one small JSON out
-(cloud/ssh_transfer.py). A local slot takes the identical path -- its "link"
-being a symlink into models/ -- so there is one runner and one set of rules
-rather than one per kind.
+The split is what lets the worker run on another machine: the database and
+the exports live on the controller, and only one model in and one small JSON
+out cross the link (cloud/ssh_transfer.py). A local slot takes the same path,
+with a symlink into models/ as its "link", so there is one set of rules.
 
-The inbox is the ledger, and it holds a generation until that generation is
-accounted for here -- not until the worker is done with it. The worker marks
-the model it has played (DONE_SUFFIX) rather than deleting it. The gap between
-those two moments is real and wide: a container's result reaches the
-controller by collection, which is a separate step of the reconcile pass and
-can fail or time out for passes on end. A ledger that emptied when the worker
-finished would offer that generation up again in exactly that gap, and the
-machine would replay a match it had already played.
+The inbox is the ledger of assignments. A generation stays in it until the
+controller has accounted for the result, not merely until the worker has
+played it: the worker marks a played model with DONE_SUFFIX rather than
+deleting it. For a remote worker the result arrives by a separate collection
+step, which can lag or fail for many passes, and an inbox that emptied on
+completion would get the same generation assigned and replayed in that gap.
+So a slot is busy while its inbox holds an unplayed export or a mark for an
+unaccounted generation. Ingest is idempotent (rows are keyed by generation),
+so an interrupted worker replaying its own match is harmless.
 
-So an inbox holding either an unplayed export or a mark for an unaccounted
-generation means that slot is spoken for. Ingest is idempotent anyway (a match
-row is keyed by its generation), which is what keeps the database consistent
-when a worker is interrupted and replays its own match.
-
-Accounted for means recorded, or delivered and found unreadable: a quarantined
-result is never coming back, so its mark stops holding the slot and the
-generation simply falls due again and is replayed. Marks are cleared when the
-slot is next offered work, not when the result lands -- there is nothing to
-clear up for until then, and looking costs a round trip to another machine. A
-mark can therefore outlive its row for as long as nothing new is due, which is
-harmless: it blocks only assignment, and there is none to make.
+A generation is accounted for once its result is recorded, or once its
+delivered result was found unreadable and quarantined; the latter has no row,
+so it falls due again and is replayed. Marks are cleared lazily, when the slot
+is next offered work, since checking a remote inbox costs a round trip. A mark
+can thus outlive its purpose while nothing new is due, which is harmless: it
+blocks only assignment.
 """
 
 import json
@@ -42,8 +34,7 @@ from pathlib import Path
 from scribblez.dashboard import db
 from scribblez.paths import DONE_SUFFIX, ONNX_PREFIX, TagPaths
 
-# What a delivered result must carry beyond the columns the controller fills
-# in itself; a file missing any of them is not a match result.
+# Fields a delivered result must carry (the controller adds the rest itself).
 RESULT_FIELDS = (
     "epoch",
     "opponent",
@@ -59,7 +50,7 @@ RESULT_FIELDS = (
 
 
 def _rel(paths: TagPaths, path: Path) -> str:
-    """`path` as the slot-relative path both machines name it by."""
+    """`path` relative to the tag root, which is how both machines name it."""
     return str(path.relative_to(paths.root))
 
 
@@ -70,15 +61,15 @@ def recorded_generations(conn) -> set[int]:
 
 def pending_generation(paths: TagPaths, recorded: set[int], every: int) -> int | None:
     """The newest exported generation that is due a match and has none. Newest
-    first keeps the readout tracking the training frontier; older stragglers
-    backfill on later cycles."""
+    first keeps the readout at the training frontier; older ones backfill
+    later."""
     pending = [g for g in paths.exported_generations() if g % every == 0 and g not in recorded]
     return max(pending) if pending else None
 
 
 def _rows_trained_label(conn, gen: int) -> int:
-    """The rows-clock the trainer recorded for this generation (the dashboard's
-    alternate x-axis), 0 if the metrics row has not landed yet."""
+    """Rows trained as of generation `gen` (the dashboard's alternate x-axis),
+    or 0 if its metrics row has not been ingested yet."""
     row = conn.execute(
         "SELECT value FROM metrics WHERE epoch = ? AND name = 'positions'", (gen,)
     ).fetchone()
@@ -86,8 +77,7 @@ def _rows_trained_label(conn, gen: int) -> int:
 
 
 def _delivered_results(paths: TagPaths) -> list[Path]:
-    """Results a worker has delivered and nobody has recorded yet, oldest
-    first."""
+    """Delivered results not yet ingested, oldest first."""
     return sorted(paths.match_results_dir.glob("*.json"))
 
 
@@ -110,13 +100,12 @@ def _ingest_result(conn, path: Path) -> int:
 
 
 def ingest(paths: TagPaths, conn) -> list[int]:
-    """Drain delivered results into the database, oldest first. Returns the
+    """Ingest delivered results into the database, oldest first. Returns the
     generations ingested.
 
-    A file that is not a result is set aside rather than retried forever: it
-    can only have arrived whole (delivery is a rename, and a pull extracts
-    atomically), so a malformed one is damage, and the tag's match readout must
-    not stop advancing because of it.
+    A malformed file is quarantined (renamed to .bad) rather than retried.
+    Delivery is atomic, so it is not a partial write that might yet complete,
+    and it must not stall the tag's match readout.
     """
     ingested = []
     for path in _delivered_results(paths):
@@ -136,20 +125,14 @@ def _inbox_epoch(name: str) -> int:
 
 
 def _result_epoch(path: Path) -> int:
-    """The generation a delivered result's name carries (gen_NNNNNN-<worker>).
-    Split at the first dash, since a worker id has dashes of its own."""
+    """The generation in a result filename, gen_NNNNNN-<worker_id> (worker ids
+    may contain dashes, so split at the first)."""
     return int(path.stem.split("-", 1)[0].removeprefix("gen_"))
 
 
 def _quarantined_generations(paths: TagPaths) -> set[int]:
-    """Generations whose delivered result was unreadable. Nothing further is
-    coming for them, so they are as settled as recorded ones -- and, having no
-    row, they fall due again and are replayed.
-
-    A quarantined file whose name is not a result's is skipped: ingest sets
-    aside whatever it finds in the directory, so this cannot assume the name
-    was written by a worker of ours.
-    """
+    """Generations whose delivered result was quarantined. Ingest quarantines
+    any file in the directory, so names that do not parse are skipped."""
     epochs = set()
     for path in paths.match_results_dir.glob("*.bad"):
         try:
@@ -160,8 +143,7 @@ def _quarantined_generations(paths: TagPaths) -> set[int]:
 
 
 def _spent_marks(held: list[str], settled: set[int]) -> list[str]:
-    """The marks in `held` whose generation is accounted for: their exchange is
-    over, and the inbox entry is all that is left of it."""
+    """The done-marks in `held` whose generation is accounted for."""
     return [
         name
         for name in held
@@ -172,12 +154,10 @@ def _spent_marks(held: list[str], settled: set[int]) -> list[str]:
 
 
 def _assign(paths: TagPaths, conn, every: int, slot):
-    """Give one idle slot the newest generation that is due a match.
+    """Give one slot the newest generation due a match, if the slot is idle.
 
-    The local question is asked first because the other one is not local: a
-    slot's listing is an ssh round trip for a container, and a tag whose
-    matches are all played would otherwise pay one every pass to learn there
-    was nothing to send.
+    Checks for due work before listing the slot's inbox, because listing a
+    remote inbox costs an ssh round trip and most passes have nothing to assign.
     """
     recorded = recorded_generations(conn)
     gen = pending_generation(paths, recorded, every)
@@ -188,19 +168,18 @@ def _assign(paths: TagPaths, conn, every: int, slot):
     spent = _spent_marks(held, recorded | _quarantined_generations(paths))
     for name in spent:
         slot.remove(f"{inbox}/{name}")
-        # A move-proposal generation's step graph rode along under step/; the
-        # worker marks only the cache graph, so its companion is cleared here.
+        # The worker marks only a move-proposal export's cache graph; clear its
+        # step/ companion too.
         slot.remove(f"{inbox}/step/{name.removesuffix(DONE_SUFFIX)}")
     if any(name.startswith(ONNX_PREFIX) and name not in spent for name in held):
-        return  # an unplayed export, or one whose result is still on its way
-    # The shared external-data blobs go first and stay: a model does not load
-    # without them, and they are identical for every generation.
+        return  # busy: an unplayed export, or a result still in transit
+    # Sidecars go first and stay: models need them to load, and they are shared
+    # by every generation.
     for sidecar in paths.onnx_sidecars:
         if sidecar.name not in held:
             slot.put(sidecar, f"{inbox}/{sidecar.name}")
-    # A move-proposal export is a pair: its step graph goes under step/ before
-    # the cache graph, whose arrival is what the worker polls for
-    # (match_eval/runner.py), so the pair is whole when it is seen.
+    # A move-proposal export is a pair. The worker polls for the cache graph,
+    # so the step graph must arrive first.
     model = paths.onnx_path(gen)
     step = paths.proposal_step_path(gen)
     if step.exists():
@@ -209,14 +188,12 @@ def _assign(paths: TagPaths, conn, every: int, slot):
 
 
 def tick(spec, tag: str, params, slots):
-    """The RoleSpec.dispatch entry: one controller-side pass for one task.
+    """One controller-side pass for one task (the RoleSpec.dispatch hook).
 
-    Every task of the workload is ticked on every reconcile pass, including
-    long-finished ones, so the two questions that need no database -- has the
-    trainer ever run, and is there anything to do -- are asked first. Opening
-    the database is not free: it applies the schema and commits, which on an
-    archived tag means recreating its write-ahead log every few seconds
-    forever.
+    Every task is ticked on every reconcile pass, including long-finished ones,
+    so the cheap filesystem checks come before opening the database. Opening it
+    applies the schema and commits, which on an archived tag would recreate its
+    write-ahead log every few seconds.
     """
     paths = spec.paths(tag)
     if not paths.dashboard_db.is_file():

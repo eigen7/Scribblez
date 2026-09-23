@@ -1,38 +1,31 @@
 """Evaluation for the move set evaluation model: how well it reproduces the
-teacher's ranking of a position's candidate set (docs/roadmap.md, A3 gate).
+teacher's ranking of each position's candidate set.
 
-The filter's job is measured two ways: recall (this model's top-K must
-contain the moves the position evaluation model would pick) and teacher-value
-regret (what a miss costs, the roadmap's other named A3 gate metric). For
-each labeled position we rank its candidates two ways -- by the teacher's
-stored win-equity and by this model's predicted win-equity -- and report:
+The model's job is to filter candidates, so its top-K must keep the moves the
+teacher would pick. Per position, candidates are ranked by the teacher's stored
+win-equity and by the model's predicted win-equity (model.win_equity), and the
+module reports, averaged over positions:
 
-  * top-K recall: the fraction of the teacher's top-K candidates that fall in
-    this model's top-K (averaged over positions), for each K;
-  * teacher-value regret@K: the teacher win-equity forfeited by keeping only
-    the top-K -- recall scores dropping a near-tie like dropping a uniquely
-    winning move; regret prices the miss;
-  * rank correlation: the Spearman correlation between the two rankings over the
-    whole candidate set (averaged over positions with >= 2 candidates);
-  * exchange-slice metrics, the readout that decides whether exchanges need a
-    dedicated head (docs/roadmap.md A4): exch_retention@K -- how often the
-    teacher's best exchange survives into the model's global top-K, over
-    positions with any exchange -- and exch_rank_regret, the teacher win-equity
-    lost by taking the model's favourite exchange instead of the teacher's,
-    over positions with >= 2 exchanges. The latter is exactly the
-    which-tiles-to-keep ranking the pre-v1 encoding could not express.
+  * recall@K: the fraction of the teacher's top-K that is in the model's top-K.
+  * regret@K: the teacher win-equity lost by keeping only the model's top-K.
+    Recall counts dropping a near-tie the same as dropping the only winning
+    move; regret prices the miss.
+  * spearman: rank correlation of the two rankings over the whole set
+    (positions with >= 2 candidates).
+  * exch_retention@K: how often the teacher's best exchange makes the model's
+    top-K over all candidates (positions with any exchange).
+  * exch_rank_regret: teacher win-equity lost by taking the model's favourite
+    exchange over the teacher's (positions with >= 2 exchanges). This measures
+    whether the model ranks which tiles to keep.
 
-Every metric is paired with an incumbent-baseline value computed on the same
-positions from the stored candidate order (_baseline_ranking). Ranking is by
-win-equity P(win)+0.5*P(draw), the same scalar both models are scored on, so
-the comparison is apples-to-apples.
+Every metric has a "_baseline" twin: the same metric for the incumbent's
+ranking, recovered from the stored candidate order (_baseline_ranking).
 
-The metrics mean what the roadmap's A3 gate asks only on a full-sweep dataset,
-where a position's candidates are all of its legal moves: over a stratified
-sample they score the model on ~15 candidates it was trained on and cannot see
-the tail moves the filter exists to catch. Nothing here treats the two
-differently -- a swept position is just a position with far more candidates --
-so the caller chooses the dataset the numbers are read on.
+The numbers are meaningful only on a full-sweep dataset, where a position's
+candidates are all of its legal moves. A stratified sample has ~15 candidates
+per position, the same kind the model trained on, and never contains the tail
+moves the filter exists to catch. This module treats both alike, so the caller
+chooses the dataset (see eval_slice_line).
 """
 
 from __future__ import annotations
@@ -45,18 +38,16 @@ from .train_loop import TARGET_KEYS
 
 DEFAULT_KS = (1, 3, 5)
 
-# Moves per forward pass. A swept position carries hundreds of candidates
-# against a stratified one's ~15, so over full-sweep positions the position
-# count alone stops describing what a batch costs and the candidate count takes
-# over -- but not alone: the model also builds a padded (positions x largest
-# candidate set) query grid, so a batch mixing one near-cap position with small
-# ones costs more than its candidate count suggests. The two terms are
-# comparable, and this budget bounds only the first. Whole-forward peaks under
-# no_grad at C=192, positions_per_batch at its 64 default: +429 MiB at the worst
-# shape admitted here (one position at the generator's 1500 sweep cap, M=16305),
-# +366 MiB for that M with every position the same size, +342 MiB for that grid
-# at M=1563. Over stratified positions this never binds before the position
-# bound does.
+# Moves per forward pass. Swept positions have hundreds of candidates, so the
+# position count alone no longer bounds a batch's memory. The model also pads
+# queries to a (positions x largest candidate set) grid, a second cost of
+# similar size that this budget does not bound: one near-cap position among
+# small ones costs more than its candidate count suggests. Measured
+# whole-forward peaks under no_grad, C=192, 64 positions per batch:
+#   +429 MiB  worst admitted shape: one position at the 1500 sweep cap, M=16305
+#   +366 MiB  same M, all positions the same size
+#   +342 MiB  same grid, M=1563
+# On stratified data the position bound always binds first.
 MAX_CANDIDATES_PER_BATCH = 16384
 
 # Move-input tensors passed positionally to the model's forward.
@@ -71,11 +62,9 @@ _MOVE_KEYS = (
 
 
 def eval_slice_line(dataset) -> str:
-    """One line describing what the gate metrics are being read on, for a
-    trainer's startup log. Recall and regret are A3 gate numbers only over full
-    sweeps; over a stratified holdout they are a provisional reading, and that
-    belongs next to them. For a sweep, how much of each position the generator's
-    candidate cap reached is part of the reading."""
+    """A startup-log line saying what slice the metrics are read on: a
+    stratified holdout (provisional numbers) or a full sweep with its
+    legal-move coverage under the generator's cap."""
     if not dataset.full_sweep:
         return "eval slice: stratified (recall/regret are provisional -- no tail coverage)"
     coverage, truncated = dataset.sweep_coverage
@@ -86,9 +75,8 @@ def eval_slice_line(dataset) -> str:
 
 
 def _spearman(a: np.ndarray, b: np.ndarray) -> float:
-    """Spearman rank correlation of two 1-D arrays (Pearson of their ordinal
-    ranks). Ties are broken arbitrarily, which is immaterial for the continuous
-    equity values ranked here."""
+    """Spearman rank correlation. Ties break arbitrarily, which is harmless
+    for continuous equity values."""
     ra = a.argsort().argsort().astype(np.float64)
     rb = b.argsort().argsort().astype(np.float64)
     ra -= ra.mean()
@@ -105,44 +93,36 @@ def _topk_indices(scores: np.ndarray, k: int) -> np.ndarray:
 
 
 def _topk_recall(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
-    """Fraction of the teacher's top-k candidates that appear in the model's
-    top-k."""
+    """Fraction of the teacher's top-k that is in the model's top-k."""
     teacher_top = set(_topk_indices(teacher, k).tolist())
     pred_top = set(_topk_indices(pred, k).tolist())
     return len(teacher_top & pred_top) / len(teacher_top)
 
 
 def _regret(teacher: np.ndarray, pred: np.ndarray, k: int) -> float:
-    """Teacher win-equity forfeited by keeping only the ranking's top-k: the
-    gap between the teacher's best candidate and the best it retains (the
-    module docstring carries the rationale)."""
+    """Teacher's best win-equity minus the best among `pred`'s top-k."""
     return float(teacher.max() - teacher[_topk_indices(pred, k)].max())
 
 
 def _exchange_mask(scalars: np.ndarray) -> np.ndarray:
-    """Which candidates are EXCHANGE moves, off the encoded scalars: not a
-    play, at least one tile surrendered (a pass has neither)."""
+    """Exchange candidates, from the encoded move scalars: not a play and at
+    least one tile surrendered (a pass has neither)."""
     return (scalars[:, 2] == 0.0) & (scalars[:, 1] > 0.0)
 
 
 def _baseline_ranking(n: int) -> np.ndarray:
-    """The incumbent's ranking, encoded descending-by-stored-index, which the
-    generator's storage order is chosen to make exact.
+    """The incumbent's ranking as scores: earlier stored index ranks higher.
 
-    On a full-sweep position the stored order IS the static-equity ranking
-    (move_set_eval_candidates.h keeps the sweep a subsequence of it), so every
-    baseline metric here is the true incumbent's -- which is what the A3 gate
-    compares the learned filter against.
+    On a full-sweep position the stored order is exactly the static-equity
+    ranking (move_set_eval_candidates.h keeps the sweep a subsequence of it),
+    so the baseline metrics are the true incumbent's.
 
-    On a stratified position the generator stores the played move first
-    (HastyBot's own choice: the equity argmax outside the endgame, the solver's
-    move inside it), then the equity ranking's head; beyond the top stratum the
-    order is a shuffled sample. Baseline rank metrics over the full set
-    (Spearman) are then a floor, and top-k metrics are exact only for
-    k <= 1 + quota_top. One known smudge: on the rare positions where the
-    dataset's non-finite-target filter dropped the stored-first candidate,
-    index 0 is the next surviving candidate rather than the move the incumbent
-    played."""
+    On a stratified position the generator stores the played move first, then
+    any forced trajectory candidates, then the head of the equity ranking,
+    then shuffled samples. The baseline is then exact only for top-1 (and for
+    k <= 1 + StratumQuotas::top when nothing was forced); Spearman is a floor.
+    If the non-finite-target filter dropped the played move, index 0 is
+    instead the next surviving candidate."""
     return -np.arange(n, dtype=np.float64)
 
 
@@ -157,19 +137,11 @@ def evaluate(
     max_candidates_per_batch: int = MAX_CANDIDATES_PER_BATCH,
     loss_cfg=None,
 ) -> dict[str, float]:
-    """Run the model over `dataset` and return the ranking metrics, each
-    paired with the incumbent baseline computed on the same positions (see
-    _baseline_ranking).
-
-    Returns, per K in `ks`: "recall@K" / "recall@K_baseline" (top-k set
-    overlap with the teacher's) and "regret@K" / "regret@K_baseline" (mean
-    teacher win-equity forfeited by the top-k, lower is better); plus
-    "spearman" / "spearman_baseline", the exchange-slice metrics
-    ("exch_retention@K", "exch_rank_regret", each with its baseline; see the
-    module docstring), and the "positions" / "positions_with_exchanges"
-    denominators. With a train_loop.LossConfig as `loss_cfg`, also the
-    distillation loss over the same forward, candidate-weighted like the
-    training epoch's: "loss" and its "loss_<term>" components.
+    """Run the model over `dataset` and return the metrics named in the module
+    docstring (with "_baseline" twins), the "positions" and
+    "positions_with_exchanges" denominators, and "plane_ce" when the slice has
+    plane targets. With a train_loop.LossConfig as `loss_cfg`, also returns
+    the candidate-weighted distillation loss as "loss" and "loss_<term>".
     """
     model.eval()
     sums = {}
@@ -197,8 +169,7 @@ def evaluate(
             _accumulate_loss(loss_sums, out, batch, device, loss_cfg)
         if "target_planes" in batch:
             m = batch["move_pos_id"].shape[0]
-            # Soft softmax-CE per head against the teacher footprint distribution,
-            # matching compute_loss's plane term.
+            # Same as compute_loss's plane term.
             log_pred = torch.nn.functional.log_softmax(out["planes"], dim=-1)
             ce = -(batch["target_planes"].to(device) * log_pred).sum(dim=-1).mean()
             plane_ce_sum += ce.item() * m
@@ -245,8 +216,6 @@ def evaluate(
         metrics[name] = total / max(denom, 1)
     metrics["positions"] = n_positions
     metrics["positions_with_exchanges"] = n_exch
-    # Plane-readout quality, only when the slice carries plane targets (the
-    # full-sweep holdout does not; the stratified fallback holdout does).
     if plane_candidates:
         metrics["plane_ce"] = plane_ce_sum / plane_candidates
     if loss_cfg is not None:
@@ -256,8 +225,8 @@ def evaluate(
 
 
 def _accumulate_loss(sums: dict, out: dict, batch: dict, device, loss_cfg):
-    """Add one batch's candidate-weighted distillation loss terms to `sums`
-    ("loss", "loss_<term>", and the "_candidates" denominator)."""
+    """Add one batch's candidate-weighted loss terms to `sums`, with the
+    "_candidates" denominator."""
     targets = {k: batch[k].to(device) for k in TARGET_KEYS if k in batch}
     losses = loss_cfg.loss(out, targets)
     m = targets["target_wld"].shape[0]

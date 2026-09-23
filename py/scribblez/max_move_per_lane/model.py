@@ -1,18 +1,17 @@
-"""Max-move-per-lane model: predict the highest-scoring move in each lane.
+"""Max-move-per-lane model: predict the highest-scoring play in each lane.
 
-For every lane (a board row read horizontally, or a column read vertically) the
-model predicts (a) the tiles the lane's best play(s) place -- a per-cell, 52->27
-occupancy distribution -- and (b) the score of that best play, as a 100-bin
-distribution. There are 15 + 15 = 30 lanes; the global best move is the max over
-them. See docs/lexical_nn.md for the task framing and label layout.
+A lane is one board row read horizontally or one column read vertically, 30 in
+all. For each lane the model predicts which tiles the lane's best play places
+(per cell, multi-label over 27 tile kinds, the union over plays tied for best),
+the best play's score as a 100-bin distribution, and whether the lane has any
+legal play. The best move on the board is the max over lanes. See
+docs/lexical_nn.md for the task and label layout.
 
-Architecture in one breath: a CNN trunk encodes the board spatially, then a
-single transformer -- THE lexical store -- is run along every lane (rows and
-columns, transpose-shared weights). The conv handles "where" (premiums, board
-geometry, which tiles sit where); the lane transformer handles "what word"
-(threading a play through existing tiles), with the dictionary living in its FFN
-width and attention indexing into it. Fusing the two is exactly running the
-transformer on the conv's per-cell lane features.
+Architecture: a conv trunk encodes the board, then one transformer runs along
+every lane, rows and columns sharing weights. The conv handles where things are
+(premium squares, geometry, placed tiles). The lane transformer handles which
+words fit: attention binds the cells a word threads through, and the FFN is
+where the network memorizes the lexicon.
 """
 
 import torch
@@ -23,23 +22,20 @@ from scribblez.lexical_tool.compiler import N_LETTERS
 from scribblez.lexical_tool.modules import LexiconModule
 from scribblez.spatial_trunk import SpatialTrunk
 
-# Label dimensions -- must match the C++ lane-target layout (lane_targets.h).
+# Label dimensions; must match the C++ lane-target layout (training/lane_targets.h).
 BOARD_SIZE = 15
 LANE_LEN = 15  # cells along a lane
 N_LANES = 2 * BOARD_SIZE  # 15 rows + 15 columns
-N_TILE_KINDS = 27  # 26 letters + 1 (blanks collapsed)
+N_TILE_KINDS = 27  # 26 letters + 1 for a blank, whatever letter it designates
 N_SCORE_BINS = 100  # bin k == score k; top bin is the catch-all score >= 99
 
 
 class LaneModel(nn.Module):
-    """The lexical store: one transformer encoder, run on every lane.
+    """One transformer encoder, run on every lane.
 
-    A lane is a length-15 sequence of per-cell trunk vectors. A few rack tokens
-    (from the rack counts) are prepended so the lane can attend rack<->board.
-    Self-attention binds the non-adjacent cells a word threads through; the FFN
-    width holds the lexicon (key-value memory). The SAME weights run on rows and
-    on columns -- main-word scoring and cross-word checking are one operation on
-    two axes.
+    The input is a lane's 15 per-cell trunk vectors, prefixed with rack tokens so
+    cells can attend to the rack. Rows and columns share these weights: scoring a
+    main word and checking a cross-word are the same operation on two axes.
     """
 
     def __init__(
@@ -74,8 +70,7 @@ class LaneModel(nn.Module):
         rack_tokens: torch.Tensor,
         lex_tokens: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """lanes: (M, LANE_LEN, C); rack_tokens: (M, n_rack_tokens, C);
-        lex_tokens: (M, n_lex_tokens, C) or None -> (M, LANE_LEN, C)."""
+        """(M, LANE_LEN, C) lanes, with prefix tokens (M, n, C) -> (M, LANE_LEN, C)."""
         prefix = [rack_tokens] if lex_tokens is None else [rack_tokens, lex_tokens]
         x = torch.cat([*prefix, lanes], dim=1)  # (M, n_prefix + LANE_LEN, C)
         x = x + self.pos[:, : x.size(1)]
@@ -84,8 +79,7 @@ class LaneModel(nn.Module):
 
 
 def _lane_pool(feat: torch.Tensor, cell_dim: int) -> torch.Tensor:
-    """Pool a lane's cells to one vector: mean+max over `cell_dim`.
-    (B, S, S, C) -> (B, S, 2C), keeping the lane-index dim."""
+    """Mean and max over a lane's cells: (B, S, S, C) -> (B, S, 2C)."""
     return torch.cat([feat.mean(dim=cell_dim), feat.amax(dim=cell_dim)], dim=-1)
 
 
@@ -112,34 +106,30 @@ class MaxMovePerLaneModel(nn.Module):
 
         self.trunk = SpatialTrunk(spatial_planes, scalar_size, trunk_channels, num_blocks)
 
-        # Rack counts -> a few rack tokens prepended to every lane sequence. Exact
-        # counts matter ("can I play two R's"), so this reads the raw rack vector.
+        # Rack tokens, prepended to every lane. They read the raw per-tile rack
+        # counts (the whole scalar input) because exact counts matter: "can I play
+        # two R's?"
         self.rack_tokens = nn.Sequential(
             nn.Linear(scalar_size, trunk_channels),
             nn.GELU(),
             nn.Linear(trunk_channels, n_rack_tokens * trunk_channels),
         )
 
-        # Optional frozen compiled-lexicon tool. It is queried per lane with the
-        # network's own features (never the ground-truth answer) and contributes
-        # a per-cell residual plus a few prepended tokens. See lexical_tool.modules.
+        # Optional compiled-lexicon tool (lexical_tool.modules), queried per lane.
         self.lexicon_module = lexicon_module
         n_lex_tokens = lexicon_module.n_tokens if lexicon_module is not None else 0
 
-        # The lane transformer's FFN is where an internal lexicon would be
-        # memorized (a key-value store; see docs/lexical_nn.md). `lane_ffn_mult`
-        # optionally overrides its width (vs the default `ffn_mult`) so it can be
-        # shrunk when a compiled-lexicon tool supplies the lexicon instead;
-        # attention is left intact, since that is the capacity needed to USE the
-        # tool. None keeps the default width. The replace-vs-add policy that
-        # picks this value lives in the trainer (lexical_tool.modules.resolve_lane_ffn_mult).
+        # `lane_ffn_mult` overrides the lane FFN width so a lexicon tool can take
+        # over the memorization the FFN would otherwise do. Attention keeps its
+        # full width, since that is what the network needs to use the tool. The
+        # policy that picks the value is lexical_tool.modules.resolve_lane_ffn_mult.
         effective_ffn_mult = ffn_mult if lane_ffn_mult is None else lane_ffn_mult
 
         self.lane = LaneModel(
             trunk_channels, lane_layers, lane_heads, effective_ffn_mult, n_rack_tokens, n_lex_tokens
         )
 
-        # Heads, shared across the two axes (the per-lane operation is the same).
+        # Heads are shared across the two axes.
         self.occ_head = nn.Linear(trunk_channels, N_TILE_KINDS)  # per cell, per kind
         self.score_head = nn.Sequential(  # per lane (pooled), score PMF logits
             nn.Linear(2 * trunk_channels, trunk_channels),
@@ -155,8 +145,7 @@ class MaxMovePerLaneModel(nn.Module):
     def _encode_axis(
         self, lane_feats: torch.Tensor, lane_letters: torch.Tensor, rack_tokens: torch.Tensor
     ) -> torch.Tensor:
-        """Run one axis's lanes through the optional lexicon module and the lane
-        transformer. lane_feats/lane_letters: (M, S, C)/(M, S, 26) -> (M, S, C)."""
+        """Run one axis's lanes through the lexicon tool, if any, and the lane transformer."""
         lex_tokens = None
         if self.lexicon_module is not None:
             out = self.lexicon_module(lane_feats, lane_letters)
@@ -166,9 +155,10 @@ class MaxMovePerLaneModel(nn.Module):
         return self.lane(lane_feats, rack_tokens, lex_tokens)
 
     def _run_lanes(self, h: torch.Tensor, rack_tokens: torch.Tensor, input_spatial: torch.Tensor):
-        """h: (B, C, S, S) -> (row_feat, col_feat), each (B, row, col, C). The
-        lexicon module reads the board's per-lane letters from the first 26
-        (letter) planes of input_spatial."""
+        """(B, C, S, S) trunk output -> (row_feat, col_feat), each (B, row, col, C).
+
+        The lexicon tool reads each lane's board letters from the first 26 planes
+        of input_spatial, which are the one-hot letter planes."""
         b, c, s, _ = h.shape
         rt = rack_tokens.repeat_interleave(s, dim=0)  # one rack-token set per lane
         letters = input_spatial[:, :N_LETTERS]  # (B, 26, S, S) one-hot board letters
@@ -202,8 +192,9 @@ class MaxMovePerLaneModel(nn.Module):
         score_logits = self.score_head(pooled)  # (B, 30, bins)
         has_move_logits = self.has_move_head(pooled).squeeze(-1)  # (B, 30)
 
-        # Structural global max: the expected score of each lane, gated by its
-        # has-move probability so empty lanes (unsupervised on score) cannot win.
+        # Board-level estimate: max over lanes of the expected score, gated by the
+        # has-move probability. The gate matters because a lane with no legal play
+        # gets no score supervision, so its score head output is arbitrary.
         bins = torch.arange(self.n_score_bins, device=score_logits.device, dtype=score_logits.dtype)
         expected = (F.softmax(score_logits, dim=-1) * bins).sum(-1)  # (B, 30)
         gated = expected * torch.sigmoid(has_move_logits)
@@ -231,8 +222,10 @@ def score_pdf_loss(logits: torch.Tensor, target_bin: torch.Tensor, mask: torch.T
 
 
 def score_cdf_loss(logits: torch.Tensor, target_bin: torch.Tensor, mask: torch.Tensor):
-    """Per-lane discrete CRPS: sum_k (CDF_hat(k) - 1[k >= target])^2. Distance-
-    aware (penalizes mass by how far it sits from the true bin), masked."""
+    """Per-lane discrete CRPS, sum_k (CDF_hat(k) - 1[k >= target])^2, masked.
+
+    Unlike cross-entropy it is distance-aware: mass is penalized by how far it
+    sits from the true bin."""
     n = logits.size(-1)
     cdf_hat = torch.cumsum(F.softmax(logits, dim=-1), dim=-1)  # (B,30,bins)
     ks = torch.arange(n, device=logits.device)

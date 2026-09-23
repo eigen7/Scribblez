@@ -1,30 +1,24 @@
-"""Compile a KWG lexicon file into frozen tensors for a neural lexicon module.
+"""Compile a KWG lexicon file into dense DAWG tables for the lexical-tool modules.
 
 A KWG (Kurnia Word Graph) packs a forward DAWG and a GADDAG into one flat
-little-endian ``uint32`` array (the bit layout is documented in
-``engine/include/scribblez/dictionary.h``). This module reads that file directly
-and extracts the DAWG half as a dense, compact transition table suitable for
-differentiable traversal:
+little-endian ``uint32`` array; engine/include/lexicon/dictionary.h documents the
+bit layout. This module extracts the DAWG half as a total transition table that
+a network can traverse with tensor indexing:
 
     next[state, letter]   -> the state reached by appending ``letter``, or DEAD
-    accept[state, letter] -> whether appending ``letter`` completes a valid word
+    accept[state, letter] -> whether appending ``letter`` completes a word
 
-``state`` indexes the DAWG's arc-list heads, compacted to the nodes reachable
-from the root (the GADDAG half and any unreachable nodes are dropped). A single
-absorbing DEAD state (index ``num_states - 1``) collects every missing or
-terminal transition, so the table is total: every ``(state, letter)`` resolves.
+States are the DAWG's arc lists reachable from the root, renumbered densely. A
+single absorbing DEAD state (the last index) receives every missing or terminal
+transition, so every ``(state, letter)`` pair resolves.
 
-The extraction is invertible: :meth:`CompiledLexicon.words` walks the table back
-out into the full word list ("de-assembly"). That round trip is what makes the
-compiled tensors a faithful, recoverable encoding of the lexicon rather than a
-lossy embedding -- it is the property the lexicon-tool experiment leans on (the
-module *contains* the lexicon, so any failure to use it is the network's, not
-missing information).
+The encoding is lossless: :meth:`CompiledLexicon.words` recovers the full word
+list from the tables. The lexical-tool experiments depend on this. Because the
+module provably contains the whole lexicon, a model that fails to use it is
+failing to learn, not missing information.
 
-The compile is a vectorized numpy pass over the node array (no per-node Python
-loop) and runs in well under a second for a ~1.2M-node lexicon such as NWL23.
-:class:`RawKwg` keeps the original arc-list stepping for tests that want to
-validate the compact table against an independent traversal of the same file.
+:class:`RawKwg` steps the on-disk arc lists directly. It exists so tests can
+check the compact tables against an independent traversal of the same file.
 """
 
 from __future__ import annotations
@@ -34,21 +28,22 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# KWG node bit layout (mirrors Dictionary in dictionary.h).
+# KWG node bit layout (mirrors Dictionary in engine/include/lexicon/dictionary.h).
 ARC_MASK = 0x003FFFFF
 IS_END_BIT = 0x00400000
 ACCEPTS_BIT = 0x00800000
 
-N_LETTERS = 26  # A..Z. Blanks are not stored: a blank designates a played letter.
+N_LETTERS = 26  # A..Z. A lexicon has no blank: a blank stands for a letter when played.
 
-# Default lexicon, matching the C++ Lexicon defaults (see lexicon.h). The neural
-# module MUST be compiled from the same .kwg the self-play labels use.
+# Default lexicon, matching the C++ Lexicon::Params defaults (lexicon/lexicon.h). A
+# lexical-tool module must be compiled from the same .kwg that produced the self-play
+# labels, or it will disagree with its own training targets.
 DEFAULT_LEXICA_DIR = "/workspace/mount/lexica"
 DEFAULT_LEXICON_NAME = "NWL23"
 
 
 def default_kwg_path(name: str = DEFAULT_LEXICON_NAME) -> str:
-    """Path to a lexicon's ``.kwg`` under the standard mounted lexica directory."""
+    """Path to a lexicon's ``.kwg`` in the mounted lexica directory."""
     return f"{DEFAULT_LEXICA_DIR}/{name}.kwg"
 
 
@@ -57,13 +52,13 @@ class CompiledLexicon:
     """Compact DAWG transition tables extracted from a KWG file.
 
     Attributes:
-        next: ``(num_states, 26)`` int32. Next state for each letter; the
-            absorbing ``dead_state`` marks a missing or terminal transition.
-        accept: ``(num_states, 26)`` bool. Whether that letter completes a word.
-        root: The DAWG root state index.
-        dead_state: The absorbing state index (``num_states - 1``).
-        source_hash: sha256 of the source ``.kwg`` bytes (``"from_words"`` for
-            hand-built lexicons).
+        next: ``(num_states, 26)`` int32 next state per letter; ``dead_state``
+            where the transition is missing or ends the word.
+        accept: ``(num_states, 26)`` bool; whether that letter completes a word.
+        root: The DAWG root state.
+        dead_state: The absorbing state, always ``num_states - 1``.
+        source_hash: sha256 of the source ``.kwg`` bytes, or ``"from_words"``
+            for a lexicon built by :meth:`from_words`.
     """
 
     next: np.ndarray
@@ -77,7 +72,7 @@ class CompiledLexicon:
         return int(self.next.shape[0])
 
     def contains(self, word: str) -> bool:
-        """Whole-word membership by walking the compact DAWG from the root."""
+        """Whole-word membership, walking the compact tables."""
         if not word:
             return False
         state = self.root
@@ -93,11 +88,9 @@ class CompiledLexicon:
         return False
 
     def words(self) -> list[str]:
-        """De-assemble: recover every word by depth-first walk of the table."""
-        # The walk touches every transition of every reachable state, so on a
-        # real lexicon it is hundreds of thousands of element reads: take the
-        # tables over to plain lists once rather than paying tensor indexing
-        # (and a per-cell scalar unwrap) on each.
+        """Recover every word in the lexicon, in depth-first order."""
+        # The walk reads every transition of every state. Convert the arrays to
+        # lists once: per-element numpy indexing is far slower on a real lexicon.
         accept = self.accept.tolist()
         transitions = self.next.tolist()
         letters = [chr(ord("A") + letter) for letter in range(N_LETTERS)]
@@ -119,8 +112,9 @@ class CompiledLexicon:
 
     @classmethod
     def from_words(cls, words: list[str]) -> CompiledLexicon:
-        """Build compact tables from an explicit word list (for tests / held-out
-        splits). Words are uppercase A..Z; others are skipped."""
+        """Build tables from a word list, for tests and held-out splits. Words are
+        upper-cased; any containing a non-letter are skipped. The result is an
+        unminimized trie."""
         children: list[dict[int, int]] = [{}]  # node 0 == root
         is_word: list[bool] = [False]
         for raw in words:
@@ -161,7 +155,10 @@ def _decode_nodes(raw: np.ndarray):
 
 
 def compile_kwg(path: str) -> CompiledLexicon:
-    """Read a ``.kwg`` and extract its DAWG as compact transition tables."""
+    """Read a ``.kwg`` and extract its DAWG as compact transition tables.
+
+    Vectorized over the node array, with no per-node Python loop, so a full
+    lexicon such as NWL23 compiles in well under a second."""
     raw = np.fromfile(path, dtype="<u4")
     if raw.size < 2:
         raise ValueError(f"{path}: not a valid KWG (need at least 2 nodes)")
@@ -171,18 +168,17 @@ def compile_kwg(path: str) -> CompiledLexicon:
     n = raw.size
     dawg_root_head = int(child[0])  # node 0's arc_index is the DAWG root list.
 
-    # Every arc-list head is the target of some arc_index pointer (or a root).
-    # head_of[i] = the most recent head index at or before i; arc lists are
-    # contiguous runs, and KWG pointers only ever target a list's first arc, so
-    # "last head <= i" assigns each arc to its owning list.
+    # Assign each arc to the arc list it belongs to. Arc lists are contiguous
+    # runs, and every pointer (and each root) targets a list's first arc. So the
+    # owner of arc i is the last pointed-to index at or before i.
     is_head = np.zeros(n, dtype=bool)
     nz = child > 0
     is_head[child[nz]] = True
     is_head[dawg_root_head] = True
     head_of = np.maximum.accumulate(np.where(is_head, np.arange(n), -1))
 
-    # Letter arcs (tile 1..26) become transitions FROM their list head ON
-    # (tile - 1) TO child (0 == terminal, i.e. no onward list).
+    # Each letter arc (tile 1..26) is a transition from its list's head, on
+    # letter tile - 1, to its child list. Child 0 means the arc has no children.
     letter_arc = (tile >= 1) & (tile <= 26) & (head_of >= 0)
     arc_idx = np.nonzero(letter_arc)[0]
     src = head_of[arc_idx]
@@ -199,7 +195,7 @@ def compile_kwg(path: str) -> CompiledLexicon:
     frontier = np.array([dawg_root_head], dtype=np.int64)
     while frontier.size:
         nbrs = next_full[frontier].reshape(-1)
-        nbrs = np.unique(nbrs[nbrs > 0])  # >0 is a real onward list head
+        nbrs = np.unique(nbrs[nbrs > 0])  # drop absent (-1) and childless (0)
         nbrs = nbrs[~visited[nbrs]]
         visited[nbrs] = True
         frontier = nbrs
@@ -228,13 +224,13 @@ def compile_kwg(path: str) -> CompiledLexicon:
 
 
 def write_kwg(compiled: CompiledLexicon, path: str):
-    """Serialize a compiled DAWG to a ``.kwg`` file -- the inverse of
-    :func:`compile_kwg` for the forward-trie half.
+    """Write the DAWG as a ``.kwg`` file; :func:`compile_kwg` reads back the same words.
 
-    Writes the DAWG only (node 1's GADDAG-root slot is left empty); the lexicon
-    modules read just the DAWG, so this is enough to package a generated lexicon
-    (e.g. a phony lexicon) as a real KWG. Not minimized -- fine for an offline
-    artifact. ``compile_kwg`` of the result recovers the exact word set.
+    Used to package a generated lexicon, such as a phony one, as a KWG. The file
+    has no GADDAG half (node 1's root slot is left empty), and the DAWG is not
+    minimized. That is enough for :func:`compile_kwg` and the lexical-tool
+    modules, but not for anything that walks the GADDAG, such as the engine's
+    move generator.
     """
     dead = compiled.dead_state
     nxt, acc = compiled.next, compiled.accept
@@ -267,12 +263,10 @@ def write_kwg(compiled: CompiledLexicon, path: str):
 
 @dataclass
 class RawKwg:
-    """The original KWG arc-list traversal, kept for independent validation.
+    """Walks the on-disk KWG node array the way C++ ``Dictionary::step_tile`` does.
 
-    Steps the on-disk node array exactly as ``Dictionary::step_tile`` does in
-    C++, so tests can confirm the compact :class:`CompiledLexicon` agrees with a
-    from-scratch walk -- including via the GADDAG half, an entirely separate path
-    through the same file.
+    Tests use it to check :class:`CompiledLexicon` against an independent walk,
+    including one through the GADDAG half, which shares no nodes with the DAWG.
     """
 
     nodes: np.ndarray  # int64 decoded raw array
@@ -285,7 +279,7 @@ class RawKwg:
         return cls(nodes=raw, dawg_root=int(raw[0] & ARC_MASK), gaddag_root=int(raw[1] & ARC_MASK))
 
     def _step(self, node: int, tile_value: int):
-        """Scan a node's sibling arc list for ``tile_value`` -> (next, accepts, valid)."""
+        """Scan the arc list at ``node`` for ``tile_value``; return (next, accepts, valid)."""
         i = node
         while True:
             a = int(self.nodes[i])
@@ -313,6 +307,5 @@ class RawKwg:
         return bool(word) and self._walk(self.dawg_root, word)
 
     def contains_gaddag(self, word: str) -> bool:
-        """Membership via the GADDAG, using the fully-reversed encoding of the
-        word -- a path through the GADDAG half that is independent of the DAWG."""
+        """Membership via the GADDAG's fully reversed encoding of the word."""
         return bool(word) and self._walk(self.gaddag_root, word[::-1])

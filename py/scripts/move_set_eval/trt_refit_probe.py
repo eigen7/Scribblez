@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
-"""The A4 TRT gate: prove the mset ONNX graph parses, builds, and REFITS
-correctly under TensorRT before any engine runtime is designed around it
-(the reviewed plan's front-loaded check for its #1 risk -- a silently wrong
-refit of the embedding tables or the packed MHA in_proj_weight would corrupt
-match results while passing every ORT-level parity test).
+"""Check that the move set evaluation ONNX graph parses, builds and refits
+correctly under TensorRT, standalone in Python.
 
-What it does, on the GPU:
-  1. Exports two RANDOMLY-INITIALIZED production-shape models A and B.
-  2. Parses A and builds a refittable FP32 engine (optimization level 0; the
-     dynamic-M profile the C++ TensorRT runtime will use).
-  3. Refits that engine with B's weights through the ONNX parser-refitter,
-     asserting no weights go missing. This is the path both runtimes' shared
-     plan cache takes for a new checkpoint of a cached architecture
-     (engine/src/nn/neural_net.cpp). Step 3's own finding tempers what that
-     asserts: TensorRT reports a refit that mapped every weight and one that
-     left a weight behind identically, so "no weights go missing" is not the
-     assurance it reads as -- which is why step 4's output comparison, not the
-     API, is the verification (the C++ parity test does the same per run).
-  4. Runs the refitted engine at several Ms and compares against ONNXRuntime
-     on B: if the refit silently mapped anything wrong, the outputs are A/B
-     chimeras and the comparison fails loudly.
+The engine caches one TensorRT plan per model architecture and refits it with
+each new checkpoint's weights (engine/src/nn/neural_net.cpp). A refit that
+silently mis-maps a weight, e.g. an embedding table or the packed attention
+in_proj_weight, would corrupt every evaluation while all ONNX-level parity
+tests still pass. This probe exercises exactly that path on a production-shape
+model, which the tiny parity-test fixtures do not; rerun it after changing the
+model's graph or upgrading TensorRT.
 
-Exit code 0 = gate passed. Uses torch CUDA tensors as TRT buffers, so no
-pycuda dependency.
+On the GPU it:
+  1. Exports two randomly initialized production-shape models, A and B.
+  2. Builds a refittable FP32 engine from A with the runtime's dynamic-M
+     (candidate count) profile, at optimization level 0.
+  3. Refits the engine with B's weights through the ONNX parser-refitter.
+  4. Runs the refitted engine at several M and compares with onnxruntime on B.
+     A wrong mapping leaves an A/B hybrid whose outputs fail the comparison.
+
+Step 4 is the real verification. TensorRT reports a refit that left a weight
+behind the same way as a complete one, so step 3's "no missing weights" check
+proves little on its own; the C++ parity test compares outputs for the same
+reason.
+
+Exit code 0 means the probe passed. Torch CUDA tensors serve as the TensorRT
+buffers, so pycuda is not needed.
 """
 
 import argparse
@@ -40,7 +42,7 @@ from scribblez.move_set_eval.onnx_export import MOVE_INPUT_NAMES, export_onnx
 MAX_MOVES = 4096
 OPT_MOVES = 512
 PROBE_MS = (1, 37, 512)
-TOLERANCE = 2e-3  # FP32 TRT vs FP32 ORT: kernel-order noise, not semantics
+TOLERANCE = 2e-3  # FP32 TRT vs FP32 ORT differ only by kernel summation order
 
 
 def _shapes():
@@ -77,7 +79,7 @@ def _random_inputs(m: int, spatial_planes: int, scalar_size: int, seed: int) -> 
 
 
 def _build_refittable_engine(trt, onnx_path: Path):
-    """Parse + build with kREFIT and the dynamic-M profile; returns the engine."""
+    """Parse and build with kREFIT and the dynamic-M profile; returns (engine, logger)."""
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
     network = builder.create_network(0)
@@ -90,7 +92,7 @@ def _build_refittable_engine(trt, onnx_path: Path):
 
     config = builder.create_builder_config()
     config.set_flag(trt.BuilderFlag.REFIT)
-    config.builder_optimization_level = 0  # first-working-kernel; a probe, not production
+    config.builder_optimization_level = 0  # fastest build; kernel speed is irrelevant here
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 256 << 20)
     t, s, _, _ = move_encoding_dims()
     profile = builder.create_optimization_profile()
@@ -140,8 +142,7 @@ _TORCH_DTYPES = {
 
 
 def _run_trt(engine, feeds: dict, m: int) -> dict:
-    """One inference through the (refitted) engine, torch CUDA tensors as
-    buffers."""
+    """One inference through the engine, with torch CUDA tensors as buffers."""
     context = engine.create_execution_context()
     device_tensors = {}
     for name, arr in feeds.items():
@@ -162,8 +163,8 @@ def _run_trt(engine, feeds: dict, m: int) -> dict:
 
 
 def main() -> int:
-    # No options -- but --help must print this docstring and exit rather than
-    # silently running a GPU job on what may be a busy, shared GPU.
+    # No options, but --help must print the docstring and exit rather than start
+    # a GPU job on what may be a busy, shared GPU.
     argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     ).parse_args()

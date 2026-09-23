@@ -1,11 +1,11 @@
-"""Tests for evidence-trajectory generation (roadmap item 4): the trajectory
-.sobs contract end to end (anchor slot, per-record roles, v4 header fields,
-proposer hash), the .mset labeling's forced inclusion of simmed candidates,
-and the evidence_trajectories workload's cycle and delivery.
+"""Tests for evidence-trajectory generation: the trajectory .sobs contract (anchor
+slot, per-record roles, header fields, proposer hash), the .mset labeling's forced
+inclusion of simmed candidates, the evidence_trajectories workload's cycle and
+delivery, the .gcg position-set front end, and the dashboard's trajectory pane.
 
-The e2e path runs the real binaries (GPU: both generators build TensorRT
-engines), over test_slog_writer games and tiny freshly-exported models --
-the same fixture recipe as test_move_set_eval_train.
+The e2e tests run the real binaries over test_slog_writer games and tiny freshly
+exported models (the same fixture recipe as test_move_set_eval_train). They need
+a GPU: both generators build TensorRT engines.
 """
 
 import os
@@ -186,9 +186,9 @@ def _synthetic_position(roles: np.ndarray, num_legal_moves: int = 64) -> SobsPos
 
 
 def test_v4_roles_split_evidence_from_labels_only_draws():
-    """A synthetic v4 position: evidence prefixes cover only the anchor and the
-    on-policy records; off-policy draws sit outside every prefix and never enter
-    the gain baseline (the split item 5's subset assembly depends on)."""
+    """Evidence covers only the anchor and the on-policy records. Off-policy
+    draws are labels-only: they sit outside every evidence prefix and never
+    enter the gain baseline. Subset assembly depends on this split."""
     roles = np.array(
         [ROLE_ANCHOR, ROLE_ON_POLICY, ROLE_ON_POLICY, ROLE_OFF_POLICY, ROLE_OFF_POLICY],
         dtype=np.uint8,
@@ -197,9 +197,9 @@ def test_v4_roles_split_evidence_from_labels_only_draws():
     assert pos.num_evidence == 3
     assert list(pos.evidence_prefix_sizes()) == [0, 1, 2, 3]
     assert pos.evidence_mask.tolist() == [True, True, True, False, False]
-    # The off-policy draw carries the largest value, but because it is never in
-    # a prefix it never raises the best-so-far baseline the gain is measured
-    # against -- so no candidate's gain is suppressed by a labels-only sim.
+    # The off-policy draw carries the largest value, but it never raises the
+    # best-so-far baseline, so no candidate's gain is suppressed by a
+    # labels-only sim.
     value = np.array([0.2, 0.5, 0.3, 0.9, 0.4], dtype=np.float32)
     for prefix in pos.evidence_prefix_sizes():
         subset = np.zeros(len(value), dtype=bool)
@@ -365,7 +365,7 @@ def traj_corpus(tmp_path_factory) -> SimpleNamespace:
 
 
 def test_trajectory_sobs_contract(traj_corpus):
-    """The .sobs v4 trajectory contract: flags, proposer hash, per-position
+    """The trajectory .sobs contract: flags, proposer hash, per-position
     legal counts, the anchor's raw-score supremacy, and the per-record roles
     (anchor, then on-policy, then off-policy)."""
     sobs_files = sorted(traj_corpus.dir.glob("*.sobs"))
@@ -378,7 +378,7 @@ def test_trajectory_sobs_contract(traj_corpus):
             total_positions += 1
             k = len(pos.moves)
             assert 0 < k <= pos.num_legal_moves
-            assert pos.flags == 0  # no position flags at v4
+            assert pos.flags == 0  # the format defines no position flags
             roles = np.asarray(pos.roles)
             # Storage order: exactly one anchor first, then on-policy, then the
             # off-policy floor -- so evidence-eligible records form a prefix.
@@ -399,8 +399,8 @@ def test_trajectory_sobs_contract(traj_corpus):
 
 
 def test_mset_labeling_covers_the_simmed_candidates(traj_corpus):
-    """The roadmap item-4 invariant: every trajectory candidate appears among
-    its position's value-labeled .mset candidates."""
+    """Every trajectory candidate appears among its position's value-labeled
+    .mset candidates, so every sim outcome has a value label beside it."""
     for sobs in sorted(traj_corpus.dir.glob("*.sobs")):
         mset = read_mset(sobs.with_suffix(".mset"))
         labeled = {(p.game_index, p.turn_index): p.moves.tobytes() for p in mset.positions}
@@ -415,7 +415,7 @@ def test_mset_labeling_covers_the_simmed_candidates(traj_corpus):
 
 
 def test_sobs_positions_outside_the_sample_fail_loudly(traj_corpus, tmp_path):
-    """The subset guard: labeling a trajectory pair with a smaller
+    """The sample-coverage guard: labeling a trajectory pair with a smaller
     --positions-per-game than the trajectory run's leaves simmed positions
     outside the labeled sample, which must fail rather than silently waste
     the corpus's most expensive rows."""

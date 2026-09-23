@@ -1,33 +1,34 @@
 #!/usr/bin/env python3
-"""Pick the sparse top-k width `k` for the footprint-native `.sobs`/`.mset`
-formats, offline and before any format is frozen.
+"""Measure how much of a teacher's footprint distributions a sparse top-k
+encoding would keep.
 
-The footprint-native placement path stores each head's 2927-class distribution
-sparsely as its top-k `(class, value)` pairs (footprint_spatial.top_k_sparse).
-Truncating to top-k drops tail mass; this probe measures how much, on the teacher
-softmax over a position set, so `k` is chosen from data rather than guessed.
+Each placement head outputs a distribution over the 2927 footprint classes. The
+.mset (and .sobs) formats could store it sparsely, as its top-k (class, value)
+pairs (footprint_spatial.top_k_sparse), instead of as a dense plane. This probe
+supplies the data for that choice: the .mset target planes stay dense because
+the distribution is too broad for a small k (see
+engine/include/training/move_set_eval_target_log.h). Rerun it when a new
+teacher or mask might change that.
 
-For each head it reports, across positions, the median and the worst-case (p10)
-fraction of the mass the top-k keeps, at several k -- and the smallest k whose p10
-clears the target. The distribution is the engine's MASKED footprint softmax (via
-ffi.masked_position_eval_placement) -- the exact target the student distills,
-board-legality mask and availability applied, illegal footprints at zero -- not an
-unmasked proxy. The win heads carry not-win mass in kExtraClass, reported per head.
+The distribution measured is the engine's masked footprint softmax
+(ffi.masked_position_eval_placement), the exact target the student distills:
+board-legality and tile-availability masks applied, illegal footprints at zero.
+For each head it reports, across positions:
 
-It also reports each head's legal support -- the nonzero classes after masking,
-a property of the mask rather than the model -- because that is the k at which a
-sparse encoding is lossless. Against the dense plane's u8 cells, a `(class:u16,
-value:u8)` entry costs 3 bytes, so sparse beats dense below ~975 entries; the
-sweep always extends to the largest support seen so full coverage is on the table.
-Positions come from position_eval.analysis, which reads a set's loose .gcg files
-or its committed part-*.gcgs bundles alike.
+  * the legal support (nonzero classes after masking), a property of the mask
+    rather than the model, and the k at which top-k is lossless;
+  * the median and worst-case (p10) fraction of mass the top-k keeps, at each k;
+  * the smallest k whose p10 clears --target.
+
+The win heads put their not-win mass in the extra class (kExtraClass), which
+counts like any other class here. For scale: a (class: u16, value: u8) sparse
+entry costs 3 bytes against the dense plane's 1 byte per class, so sparse is
+smaller only below ~975 entries. The sweep always extends to the largest support
+seen, so full coverage is among the rows.
 
 Usage:
     ./py/scripts/position_eval/footprint_topk_fidelity.py \
         --model /workspace/mount/tags/position_eval/<tag>/models/model_epoch_XXXX.onnx
-
-The row is split into its spatial / scalar halves by the session's InputArm, so
-the plane count tracks the encoder registry rather than a constant here.
 """
 
 import argparse
@@ -44,11 +45,11 @@ DEFAULT_GCG_DIR = A.LARGE_DATASET
 
 
 def head_distributions(sess, gcg_text, arm):
-    """The engine's masked footprint distribution (len(HEADS), NUM_CLASSES) for
-    one position: run the teacher for raw logits, then apply the same mask +
-    masked-softmax the .mset target uses."""
+    """One position's masked footprint distributions, (len(HEADS), NUM_CLASSES):
+    the teacher's raw logits put through the same masked softmax as the .mset
+    target."""
     row = ffi.analyze_position_eval_gcg(gcg_text, arm)
-    spatial, scalar = arm.split(row)  # the arm's own widths, never a hardcoded plane count
+    spatial, scalar = arm.split(row)
     sp = spatial[None].astype(np.float32)
     sc = scalar[None].astype(np.float32)
     inames = [i.name for i in sess.get_inputs()]
@@ -70,7 +71,11 @@ def main():
         "--gcg-dir", default=str(DEFAULT_GCG_DIR), help="a position set (loose .gcg or part-*.gcgs)"
     )
     ap.add_argument(
-        "--k", type=int, nargs="+", default=[8, 16, 32, 64, 128, 192, 256, 384, 512, 768, 1024]
+        "--k",
+        type=int,
+        nargs="+",
+        default=[8, 16, 32, 64, 128, 192, 256, 384, 512, 768, 1024],
+        help="top-k widths to sweep",
     )
     ap.add_argument("--target", type=float, default=0.99, help="p10 mass fraction to clear")
     args = ap.parse_args()
@@ -86,8 +91,6 @@ def main():
     sess = ort.InferenceSession(model, providers=["CPUExecutionProvider"])
     dists = np.stack([head_distributions(sess, text, arm) for text in gcgs])  # (P, H, C)
 
-    # The mask's legal support is model-independent: it is the k at which top-k is
-    # lossless, so it is the sparse size to weigh against the 2927-wide dense plane.
     nnz = (dists > 0).sum(axis=-1)  # (P, H)
     print("legal support (nonzero classes) per head -- the lossless sparse k:")
     for h, name in enumerate(HEADS):

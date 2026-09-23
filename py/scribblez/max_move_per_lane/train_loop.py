@@ -1,11 +1,7 @@
-"""Shared training-epoch loop for the max-move-per-lane model.
+"""One training epoch of the max-move-per-lane model, plus its lane accuracies.
 
-The generational orchestrator drives per-minibatch training through run_epoch:
-move a batch to the device, forward, combined-lane-loss backward, optimizer step,
-and accumulate the per-component losses plus the per-lane train accuracies.
-Keeping the step here (a sibling to the position-evaluation trainer's train_loop)
-means the orchestrator owns only its data lifecycle, learning-rate policy,
-evaluation, and checkpointing.
+Kept apart from trainer.py so the trainer owns only the generation lifecycle,
+learning-rate policy, eval and checkpointing, mirroring position_eval's split.
 """
 
 from __future__ import annotations
@@ -18,18 +14,15 @@ import torch
 
 from .model import compute_loss
 
-# Per-component loss keys accumulated each epoch. compute_loss returns all of
-# these; "total" is the optimized objective.
+# The keys of compute_loss's result; "total" is the optimized objective.
 LOSS_KEYS = ("total", "score_pdf", "score_cdf", "move", "has_move")
 
-# The three lane targets the model is trained against.
 TARGET_KEYS = ("lane_occupancy", "lane_score", "lane_mask")
 
 
 @dataclass
 class LossConfig:
-    """Weights for the combined max-move-per-lane loss (the score-PDF term has
-    weight 1)."""
+    """Loss-term weights for compute_loss, relative to the score-PDF term's 1."""
 
     lambda_cdf: float
     lambda_occ: float
@@ -42,26 +35,27 @@ class LossConfig:
 
 @dataclass
 class EpochResult:
-    """Averages over one epoch's minibatches, plus the advanced rows counter."""
+    """Per-batch means over one epoch, plus the advanced rows counter."""
 
-    losses: dict[str, float]  # per-component means, including "total"
-    accs: dict[str, float]  # score_acc / move_acc / has_move_acc means
+    losses: dict[str, float]  # keyed by LOSS_KEYS
+    accs: dict[str, float]  # keyed as lane_accuracy returns
     n_batches: int
     samples: int
     rows_trained: int
 
 
 def lane_accuracy(outputs: dict, targets: dict) -> dict:
-    """Per-legal-lane train accuracy: does the model get each lane's best move and
-    score right? Averaged over the lanes that actually have a legal move (plus a
-    has-move accuracy over all 30 lanes)."""
+    """Fraction of lanes whose best-play score bin and tile set are exactly right.
+
+    Score and move accuracy average over lanes with a legal play; has-move accuracy
+    averages over all 30 lanes."""
     mask = targets["lane_mask"]  # (B, 30)
     legal = mask.sum().clamp_min(1.0)
 
     pred_bin = outputs["lane_score_logits"].argmax(-1)  # (B, 30)
     score_ok = (((pred_bin == targets["lane_score"].long()).float() * mask).sum() / legal).item()
 
-    # "Move right" == the thresholded occupancy union matches the target exactly.
+    # The move counts as right only if every thresholded (cell, kind) matches.
     pred_occ = (outputs["lane_occupancy_logits"] > 0).float()  # (B, 30, 15, 27)
     lane_match = (pred_occ == targets["lane_occupancy"]).all(dim=-1).all(dim=-1).float()  # (B, 30)
     move_ok = ((lane_match * mask).sum() / legal).item()
@@ -72,8 +66,6 @@ def lane_accuracy(outputs: dict, targets: dict) -> dict:
 
 
 def _to_device(batch: dict, device):
-    """Split a batch dict into (spatial, scalar) inputs and the three lane target
-    tensors, each moved to `device`."""
     inputs = (batch["input_spatial"].to(device), batch["input_scalar"].to(device))
     targets = {k: batch[k].to(device) for k in TARGET_KEYS}
     return inputs, targets
@@ -90,15 +82,13 @@ def run_epoch(
     rows_trained: int = 0,
     on_batch: Callable[[int, int, float, int], None] | None = None,
 ) -> EpochResult:
-    """Run one training pass over `batches` (already seeded/ordered by the caller).
+    """Run one training pass over `batches`, in the order given.
 
-    lr_fn: if given, called per step with the running rows count; its result is
-        written to every optimizer param group before the step (the generational
-        rows-clock learning rate). When None the caller owns the learning rate.
-    rows_trained: starting cumulative row (position) count; the return value
-        carries it forward across epochs and generations.
-    on_batch: optional progress callback (done_batches, samples, elapsed_s,
-        rows_trained), invoked at most ~once per second.
+    lr_fn: maps the running rows count to a learning rate, applied before every
+        step. When None, the optimizer's learning rate is left alone.
+    rows_trained: cumulative rows before this epoch; the result carries it on.
+    on_batch: progress callback (done_batches, samples, elapsed_s, rows_trained),
+        called at most about once per second.
     """
     model.train()
     loss_sums = {k: 0.0 for k in LOSS_KEYS}

@@ -1,3 +1,2 @@
-"""Move set evaluation model track (docs/roadmap.md, track A): the
-distillation-target data path (.mset sidecars) plus the training side -- dataset,
-model, training loop, and the top-K recall metric against the teacher."""
+"""The move set evaluation model: .mset distillation targets, dataset, model,
+training and evaluation, and the ONNX exports (plain and move proposal)."""

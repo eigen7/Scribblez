@@ -1,10 +1,10 @@
-"""Shared runtime pieces for role runners (the loop bodies workers execute).
+"""Shared runtime pieces for role runners, the loops workers execute.
 
-The worker entrypoint (py/cloud/worker_entrypoint.py) owns process concerns --
-env parsing, sink construction, the SIGTERM handler -- and hands a
-WorkerContext to the role's runner. Runners use the helpers here: WorkerStopped
-(raised by the SIGTERM handler to unwind any loop), and WorkerStats (the
-per-worker stats record behind the dashboard's Stats tab).
+The worker entrypoint (py/cloud/worker_entrypoint.py) owns process concerns
+(env parsing, sink construction, the SIGTERM handler) and hands a
+WorkerContext to the role's runner. Runners use two helpers from here:
+WorkerStopped, which the SIGTERM handler raises to unwind any loop, and
+WorkerStats, the per-worker record behind the dashboard's Stats tab.
 """
 
 import time
@@ -37,18 +37,17 @@ def stats_rel_path(worker_id: str) -> str:
 
 
 class WorkerStats:
-    """The per-worker stats record published after every cycle: cumulative
-    counters plus a bounded window of per-cycle samples, each carrying the
-    role's declared timing phases (RoleSpec.stats). The dashboard's Stats tab
-    derives throughput and bottleneck breakdowns from these.
+    """The per-worker stats record, published after every cycle: cumulative
+    counters, a bounded window of per-cycle samples carrying the role's timing
+    phases (RoleSpec.stats), and a [time, units_total] history. The Stats tab
+    derives throughput and bottleneck breakdowns from it.
 
-    The counters belong to the slot, not to this process: a worker resumes the
-    totals it last published, so the scheduler's pacing gate (which stops and
-    restarts generators many times an hour) reads as a pause rather than as
-    work undone. The sample window is not resumed -- it measures the rate right
-    now, and samples from before a gap would only blur that. The history of
-    [time, units_total] points is resumed, and thinned rather than capped, so
-    the cumulative timeline covers the slot's whole run.
+    The counters belong to the slot, not the process: a worker resumes the
+    totals it last published, so the scheduler's pacing gate, which stops and
+    restarts generators many times an hour, reads as a pause rather than lost
+    work. The history is resumed too, and thinned rather than capped, so it
+    covers the slot's whole run. The sample window starts empty: it measures
+    the current rate, which samples from before a gap would only blur.
     """
 
     def __init__(self, ctx):

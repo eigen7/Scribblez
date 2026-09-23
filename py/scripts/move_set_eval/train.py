@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Minimal trainer for the move set evaluation model.
+"""Train a move set evaluation model on a fixed directory of .mset/.slog pairs.
 
-Trains the model to distill the position evaluation model over the candidate
-sets stored in a directory of .mset/.slog pairs (produced by the
-move_set_eval_target_generator), reporting the top-K recall / rank-correlation
-metric against the teacher on a held-out split. This is a lean, single-window
-loop for iterating on the model and the metric; the generational
-generate->train pipeline and dashboard integration (docs/roadmap.md track A)
-are separate, later work.
+The student learns to distill the position evaluation model over the candidate
+sets the move_set_eval_target_generator wrote, and each epoch reports top-k
+recall and rank correlation against the teacher on a held-out split. It is a
+lean, single-window loop for experimenting on the model and its metrics
+outside the dashboard: it builds only the conv trunk and writes no checkpoints
+or ONNX. Real training runs as the move_set_eval workload's train role
+(scribblez/move_set_eval/trainer.py).
 
 Usage:
     ./py/scripts/move_set_eval/train.py --data-dir DIR [--holdout-dir DIR] \
@@ -53,11 +53,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--trunk-channels", type=int, default=192, help="Trunk width.")
     p.add_argument("--num-heads", type=int, default=4, help="Cross-attention heads.")
     p.add_argument("--lambda-sd", type=float, default=0.004, help="Score-diff loss weight.")
-    p.add_argument("--lambda-planes", type=float, default=1.0, help="Placement-plane BCE weight.")
+    p.add_argument(
+        "--lambda-planes", type=float, default=1.0, help="Placement-plane cross-entropy weight."
+    )
     p.add_argument("--huber-delta-mean", type=float, default=10.0, help="Huber delta, mean head.")
     p.add_argument("--huber-delta-std", type=float, default=10.0, help="Huber delta, std head.")
     p.add_argument("--seed", type=int, default=0, help="Shuffle/init seed.")
-    p.add_argument("--out", default=None, help="Optional path to save the model state_dict.")
+    p.add_argument(
+        "--out", default=None, help="Path to save the final state_dict (default: not saved)."
+    )
     return p
 
 

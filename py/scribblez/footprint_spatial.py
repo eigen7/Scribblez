@@ -1,28 +1,22 @@
-"""Footprint placement as a (side, side, slots) spatial tensor + catch-all, and a
-sparse top-k codec.
+"""Footprint placement classes as a spatial tensor, plus a sparse top-k codec.
 
-A placement class (engine/include/training/footprint.h) is (anchor, orientation,
-k). The ANCHORED classes number ``side*side*slots_per_cell`` (2925 = 225 cells ×
-13 slots), followed by two non-spatial catch-all classes: ``pass`` then the win
-heads' not-win/dummy. Because an anchored class factors as ``(cell, slot)`` with
-``cell = r*side + c`` (slot minor), the anchored block reshapes losslessly to
-``(side, side, slots)`` -- a 15×15 board grid with 13 channels per square. This is
-the representation the footprint-native placement path shares across the teacher
-target, the sim observation, the student head, and the evidence fusion.
+A footprint class (engine/include/training/footprint.h) describes where the next
+move's tiles go: an anchor cell, an orientation, and a tile count. There are
+``side*side*slots_per_cell`` anchored classes (225 cells x 13 slots = 2925),
+followed by two non-spatial catch-all classes: ``pass`` (no placement), then
+the win heads' not-win class. An anchored class index is ``(r*side + c)*slots + slot``, so the
+anchored block reshapes losslessly to ``(side, side, slots)``: a 15x15 grid with
+13 channels per square. The teacher target, the sim observation, the student
+head and evidence fusion all use this layout.
 
-FRAME INVARIANT: every placement path is pinned to the game's natural frame (no
-symmetry transpose). A diagonal transpose swaps rows↔cols AND the
-horizontal↔vertical slot channels (footprint.h), so the SLOT axis -- not only the
-spatial axes -- permutes under a transpose. Any future transposed consumer must
-permute the 13 channels too, not just H/W.
+Frame invariant: every placement path uses the game's natural frame, with no
+symmetry transpose. A diagonal transpose swaps rows with columns and also the
+horizontal with the vertical slot channels (footprint.h), so a transposed
+consumer would have to permute the 13 channels as well as H and W.
 
-The sparse codec keeps the top-k classes of a per-head distribution as fixed
-padded ``(index, value)`` pairs. Both on-disk formats (``.mset``, ``.sobs``)
-ended up dense -- the teacher distribution is too broad for any small k, and the
-sim observation stayed a verbatim POD -- so the codec currently has no on-disk
-consumer; it remains for offline analysis (the fidelity probe). It is generic
-over the class count, so both the anchored+catch-all distribution and any
-sub-block can use it.
+The sparse codec keeps each distribution's top-k classes as fixed-size
+``(index, value)`` pairs. No on-disk format uses it; it serves offline analysis
+(scripts/position_eval/footprint_topk_fidelity.py).
 """
 
 import numpy as np
@@ -45,8 +39,7 @@ assert ANCHORED == SIDE * SIDE * SLOTS_PER_CELL, "footprint constants inconsiste
 def to_spatial(dense):
     """Split a ``(..., NUM_CLASSES)`` array into a ``(..., SIDE, SIDE, SLOTS)``
     anchored block and a ``(..., CATCH_ALL)`` catch-all block. Inverse of
-    ``from_spatial``. The anchored reshape is cell-major, slot-minor -- matching
-    ``footprint_class = (r*side + c)*slots + slot`` in the natural frame."""
+    ``from_spatial``."""
     dense = np.asarray(dense)
     lead = dense.shape[:-1]
     anchored = dense[..., :ANCHORED].reshape(*lead, SIDE, SIDE, SLOTS_PER_CELL)
@@ -64,20 +57,19 @@ def from_spatial(anchored, catch_all):
 
 
 def to_slot_planes(dense):
-    """A ``(..., NUM_CLASSES)`` array as ``(..., SLOTS_PER_CELL, SIDE, SIDE)``
-    per-slot board maps, the catch-all block dropped. This is the evidence
-    fusion's channel layout: anchored class ``(cell, slot)`` lands on channel
-    ``slot`` at ``cell``."""
+    """A ``(..., NUM_CLASSES)`` array as channels-first
+    ``(..., SLOTS_PER_CELL, SIDE, SIDE)`` board maps, dropping the catch-all
+    classes."""
     anchored, _ = to_spatial(dense)  # (..., SIDE, SIDE, SLOTS)
     return np.moveaxis(anchored, -1, -3)
 
 
 def top_k_sparse(dense, k):
-    """The ``k`` largest entries of each row of a ``(..., n)`` array, as fixed
-    padded ``(indices (..., k) int32, values (..., k) float32)`` sorted
-    descending. The k indices are always distinct board positions (so
-    ``scatter_sparse`` reconstructs exactly when ``k`` covers every nonzero
-    entry); pad slots past the nonzero support carry a real index with value 0."""
+    """The ``k`` largest entries of each row of a ``(..., n)`` array, as
+    ``(indices (..., k) int32, values (..., k) float32)`` sorted descending.
+    The indices are distinct, so ``scatter_sparse`` reconstructs the row exactly
+    when ``k`` covers its nonzero support. Past that support, entries carry a
+    real index with value 0."""
     dense = np.asarray(dense, dtype=np.float32)
     n = dense.shape[-1]
     k = min(k, n)
@@ -90,9 +82,8 @@ def top_k_sparse(dense, k):
 
 
 def scatter_sparse(indices, values, n=NUM_CLASSES):
-    """Dense ``(..., n)`` reconstructed from sparse ``(indices, values)``. The k
-    indices per row are distinct, so this is a plain scatter (not scatter-add);
-    every unlisted class is 0."""
+    """Dense ``(..., n)`` reconstructed from ``top_k_sparse`` output; unlisted
+    classes are 0."""
     indices = np.asarray(indices)
     values = np.asarray(values, dtype=np.float32)
     out = np.zeros((*indices.shape[:-1], n), dtype=np.float32)
@@ -101,8 +92,8 @@ def scatter_sparse(indices, values, n=NUM_CLASSES):
 
 
 def top_k_mass(dense, k):
-    """Fraction of each row's total that its top-k entries carry -- the fidelity
-    a sparse top-k target preserves. Rows summing to 0 report 1.0."""
+    """Fraction of each row's total mass carried by its top-k entries. Rows
+    summing to 0 report 1.0."""
     dense = np.asarray(dense, dtype=np.float64)
     total = dense.sum(axis=-1)
     _, values = top_k_sparse(dense, k)

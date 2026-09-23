@@ -1,10 +1,10 @@
-"""Launch the master dashboard: the Python (Tornado) data+control API plus the
-Vite dev server that serves the React app (``VITE_TOOL=dashboard``).
+"""Launch the master dashboard: the Tornado API (api.py) plus the Vite dev
+server that serves the React app (``VITE_TOOL=dashboard``).
 
-This mirrors how the C++ web tools launch Vite (ports injected via env vars), but
-the backend here is the Python API (``api.py``) rather than a C++ WebSocket
-server -- the dashboard's data lives in Python (SQLite, torch, the engine FFI).
-See docs/master_dashboard.md and docs/react_dashboard.md.
+Vite is launched the way the C++ web tools launch it, with ports passed in env
+vars, but the backend is Python rather than a C++ WebSocket server because the
+dashboard's data lives in Python (SQLite, torch, the engine FFI). See
+docs/master_dashboard.md and docs/react_dashboard.md.
 """
 
 import os
@@ -19,17 +19,16 @@ from scribblez.service_urls import service_url
 
 WEB_DIR = REPO_ROOT / "web"
 
-# Ports distinct from the C++ web tools' (8080 / 5173-5). The Vite dev server is
-# the page the browser opens; it is routed by the gateway as
-# scribblez-dash.localhost. The Tornado API is loopback-only, reached through
-# Vite's proxy, so it never faces the browser directly.
+# Distinct from the C++ web tools' ports. The browser opens the Vite dev server,
+# which the gateway routes as scribblez-dash.localhost; the loopback-only API is
+# reached through Vite's proxy.
 DEFAULT_API_PORT = 8090
 DEFAULT_DEV_PORT = 5180
 
 
 def _listening_pids(port: int) -> list[int]:
-    """PIDs LISTENing on `port` (TCP), via lsof. Client sockets are excluded
-    (`-sTCP:LISTEN`) so an unrelated client connection is never matched."""
+    """PIDs listening on TCP `port`. Only listeners: an unrelated client
+    connection to the port must not be matched."""
     lsof = shutil.which("lsof")
     if not lsof:
         return []
@@ -46,9 +45,8 @@ def _listening_pids(port: int) -> list[int]:
 
 
 def reclaim_port(port: int):
-    """Free `port` by killing any process LISTENing on it. Mirrors the C++ web
-    server, which reclaims a stale dev-server port: a leftover dashboard from a
-    prior run otherwise makes Vite (or the API) fail to bind on relaunch."""
+    """Free `port` by killing whatever listens on it, as the C++ web server does:
+    a leftover dashboard would otherwise make Vite or the API fail to bind."""
     for pid in _listening_pids(port):
         print(f"  Port {port} is in use by pid {pid}; reclaiming it.", file=sys.stderr)
         try:
@@ -58,9 +56,8 @@ def reclaim_port(port: int):
 
 
 def _dashboard_banner(url: str) -> str:
-    """A prominent, blank-line-padded banner pointing at the dashboard URL, so it
-    stands out from the surrounding training and npm output. Bold cyan on a
-    terminal; plain text when stderr is redirected to a file (no stray escapes)."""
+    """The dashboard URL, set off from the surrounding output. Bold cyan on a
+    terminal; plain when stderr is redirected, so logs get no escape codes."""
     line = f"Dashboard: {url}"
     if sys.stderr.isatty():
         line = f"\033[1;36m{line}\033[0m"
@@ -74,11 +71,9 @@ def spawn(
     workload: str | None = None,
     tag: str | None = None,
 ) -> list[subprocess.Popen]:
-    """Spawn the API and the Vite dev server in the background; return their
-    processes (so a caller can terminate them on exit). Any process already
-    holding the API or Vite port is reclaimed first (a stale dashboard from a
-    prior run). When `workload`/`tag` are given, the printed URL carries them
-    so the dashboard opens on that task."""
+    """Spawn the API and the Vite dev server in the background and return their
+    processes for the caller to terminate. The printed URL carries `workload`
+    and `tag`, when given, so the dashboard opens on that task."""
     reclaim_port(api_port)
     reclaim_port(dev_port)
     api = subprocess.Popen(
@@ -98,10 +93,9 @@ def spawn(
         "VITE_DEV_PORT": str(dev_port),
         "VITE_API_PORT": str(api_port),
     }
-    # Vite's own startup chatter (the npm "> dev" lines, the ready banner, and a
-    # transient "/api proxy ECONNREFUSED" while the API port is still binding) is
-    # discarded: it's noise, and its bare "Local: http://.../" URL tempts a click
-    # on a tag-less page. The one URL worth clicking is printed below instead.
+    # Vite's output is discarded: it is startup noise (including a transient
+    # proxy ECONNREFUSED while the API binds), and its bare "Local:" URL would
+    # tempt a click on a tag-less page. The URL worth clicking is printed below.
     vite = subprocess.Popen(
         ["npm", "run", "dev"],
         cwd=WEB_DIR,
@@ -127,8 +121,7 @@ def launch(
     workload: str | None = None,
     tag: str | None = None,
 ):
-    """Spawn the dashboard and block until interrupted, then tear it down (the CLI
-    entry point)."""
+    """The CLI entry point: run the dashboard until interrupted."""
     procs = spawn(mount_root, api_port, dev_port, workload, tag)
     try:
         procs[-1].wait()  # the Vite process

@@ -1,4 +1,4 @@
-"""What the per-task sync pulls (scripts/cloud_sync.py), with and without a
+"""What the per-task sync pulls (py/scripts/cloud_sync.py), with and without a
 trainer delivering through the bucket."""
 
 from types import SimpleNamespace
@@ -49,10 +49,10 @@ def test_a_generator_only_tag_pulls_staging_stats_and_params(spec, monkeypatch):
 
 
 def test_trainer_outputs_are_pulled_immutable_ones_by_size(spec, monkeypatch):
-    """Records and exports never change once written, so they are compared
-    by size (an S3 listing carries no modtime; the default would HEAD every
-    export each pass); the checkpoint is rewritten in place and is not. The
-    cursor file is pulled only once the bucket has it."""
+    """Records and exports never change once written, so they are compared by
+    size alone: an S3 listing carries no modtime, and rclone's default check
+    would HEAD every export on every pass. The checkpoint is rewritten in place,
+    so it is not. The cursor file is pulled only once the bucket has it."""
     rc = _Rclone()
     monkeypatch.setattr(cloud_sync, "rclone", rc)
     assert cloud_sync.sync_once(R2, spec, "t", trainer_outputs=True) == 0

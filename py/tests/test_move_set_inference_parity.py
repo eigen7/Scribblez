@@ -1,22 +1,22 @@
-"""Inference-parity tests for the move-set-eval ONNX export (hop A).
+"""Inference-parity tests for the move-set-eval ONNX export, PyTorch vs ONNXRuntime.
+The ONNX -> TensorRT hop is engine/tests/test_mset_inference_parity.cpp.
 
-Three claims, each pinned before any TensorRT runtime exists (PR 4 covers hop
-B separately):
+Three claims:
 
-  (a) The P=1 export wrapper IS the training forward: over a ragged
-      multi-position batch, decomposing into per-position P=1 calls reproduces
-      `MoveSetEvalModel.forward` (allclose, not bitwise -- the re-associated
-      head and the collapsed grid reorder float sums).
-  (b) The exported graph is truly dynamic in M: traced at one M, it reproduces
-      the wrapper under ONNXRuntime at different Ms -- a single-M check would
-      pass with a shape silently baked by the legacy tracer.
-  (c) The file contract holds: input/output names, dtypes and the "moves"
-      axis; the metadata keys engine loaders read (graph kind, move-encoding
-      version, arm, signature); the re-associated head weights present as
-      plain initializers with no Identity aliasing left.
+  (a) The P=1 export wrapper is the training forward: over a ragged
+      multi-position batch, per-position P=1 calls reproduce
+      `MoveSetEvalModel.forward`. Allclose, not bitwise: the re-associated head
+      and the collapsed grid reorder float sums.
+  (b) The exported graph is dynamic in M: traced at one M, it reproduces the
+      wrapper under ONNXRuntime at other Ms. A single-M check would pass with a
+      shape the legacy tracer silently baked in.
+  (c) The file contract: input/output names, dtypes and the "moves" axis; the
+      metadata keys engine loaders read (graph kind, move-encoding version, arm,
+      signature); and the re-associated head weights present as plain
+      initializers with no Identity aliasing, as TensorRT refit requires.
 
-The model is randomly initialized: this tests the plumbing's fidelity, not any
-trained weights, so the tests stay hermetic (no checkpoint, no GPU).
+The model is randomly initialized: this tests the plumbing, not trained weights,
+so the tests stay hermetic (no checkpoint, no GPU).
 """
 
 import json

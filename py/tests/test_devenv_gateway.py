@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-# subtrees.* lives at the repo root, not on the py/-rooted PYTHONPATH.
+# subtrees.* lives at the repo root, outside the py/-rooted import path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scribblez.service_urls import service_url  # noqa: E402

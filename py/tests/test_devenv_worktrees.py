@@ -1,10 +1,10 @@
-"""Tests for the shared devenv_utils worktree logic and PR-flow teardown.
+"""Tests for devenv_utils' worktree logic (worktrees.py: primary-checkout resolution
+and enumeration) and pr_flow.py's local teardown helpers, against a throwaway git
+repo -- no GitHub, no Docker.
 
-These exercise subtrees/devenv_utils/worktrees.py (primary-checkout
-resolution + enumeration) and pr_flow.py's local teardown helpers against a
-throwaway git repo -- no GitHub, no Docker. The central case is the one the
-merge incident got wrong: resolving the primary checkout from inside a feature
-worktree must return the primary checkout, not the worktree.
+The case that matters most: resolved from inside a feature worktree, the primary
+checkout must still be the primary checkout, since every pr_flow command anchors
+its git operations there.
 """
 
 import subprocess
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-# subtrees.* lives at the repo root, which is not on the py/-rooted PYTHONPATH.
+# subtrees.* lives at the repo root, outside the py/-rooted import path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from subtrees.devenv_utils import pr_flow  # noqa: E402
@@ -54,8 +54,6 @@ def test_primary_worktree_from_primary(repo: Path):
 
 def test_primary_worktree_from_secondary(repo: Path):
     worktree = add_worktree(repo, "feature", "feature")
-    # The crux of the incident fix: resolved from inside a feature worktree,
-    # the primary is still the primary checkout, not the worktree itself.
     assert primary_worktree(worktree).resolve() == repo.resolve()
 
 
@@ -105,8 +103,8 @@ def test_teardown_branch_without_worktree_returns_false(repo: Path):
 def test_teardown_branch_is_idempotent(repo: Path):
     add_worktree(repo, "feature", "feature")
     pr_flow.teardown_branch(repo, "feature", force=True)
-    # Re-running against the now-absent branch and worktree must not raise --
-    # this is what makes a re-run of `pr.py merge` after a partial failure safe.
+    # A second teardown of the absent branch and worktree must not raise: that
+    # is what makes re-running `pr_flow.py cleanup` after a partial failure safe.
     pr_flow.teardown_branch(repo, "feature", force=True)
 
 
@@ -117,7 +115,6 @@ def test_delete_local_branch_tolerates_missing(repo: Path):
 def test_delete_local_branch_reraises_real_errors(repo: Path):
     add_worktree(repo, "feature", "feature")
     # git refuses to delete a branch checked out in a live worktree. That is a
-    # genuine failure, not the tolerated already-gone case, so it must surface
-    # rather than be swallowed as idempotency.
+    # real failure, not the tolerated already-gone case, so it must surface.
     with pytest.raises(subprocess.CalledProcessError):
         pr_flow.delete_local_branch(repo, "feature", force=False)

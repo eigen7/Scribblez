@@ -1,18 +1,17 @@
-"""Word-validity model: is a given word lexicon-legal, or a phony?
+"""Word-validity model: is a word in the lexicon, or a phony?
 
-The simplest tool-use probe. A word (2-15 letters) is classified valid/invalid.
-The negatives are phonies generated to match the real lexicon's letter
-statistics (see tools/generate_phony_lexicon.py), so surface features cannot
-separate them -- a model can only succeed on held-out words by actually looking
-them up. With a frozen compiled-lexicon tool (from the lexicon-module registry,
-compiled from the *real* lexicon) plugged in, that lookup is available; without
-one, the model can only memorize the training words and sits near chance on the
-held-out split. The held-out accuracy is therefore the tool-use measurement.
+The simplest lexical-tool probe. The negatives are phonies with the real
+lexicon's letter statistics (tools/generate_phony_lexicon.py), so surface
+features do not separate them: on held-out words a model succeeds only by
+looking the word up. A compiled-lexicon tool built from the real lexicon makes
+that lookup possible. Without one, the model can only memorize its training
+words and should sit near chance on the held-out split, so held-out accuracy
+measures tool use. Results are in docs/word_validity_experiments.md.
 
-The host is a small transformer over the padded word with a prepended CLS token
-that drives the binary head. It mirrors the lane model: the lexicon tool feeds a
-per-cell residual plus a couple of tokens, and `lane_ffn_mult` can shrink the
-transformer's FFN ("replace" mode) so word knowledge must come from the tool.
+The model is a small transformer over the padded word, classifying from a
+prepended CLS token. The tool plugs in the same way as in the max-move-per-lane
+lane transformer: a per-cell residual plus prefix tokens, with `lane_ffn_mult`
+available to shrink the FFN so word knowledge has to come from the tool.
 """
 
 import numpy as np
@@ -27,8 +26,8 @@ N_LETTERS = 26
 
 
 def encode_words(words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Encode words to ``(indices (N, 15) long, lengths (N,) long)``. Letters are
-    0..25; positions past a word's length are left at 0 (masked out by length)."""
+    """Encode words as (letter indices (N, 15), lengths (N,)). Positions past a
+    word's end hold 0 and are masked by length downstream."""
     enc = np.zeros((len(words), MAX_LEN), dtype=np.int64)
     lengths = np.zeros(len(words), dtype=np.int64)
     for i, w in enumerate(words):
@@ -39,14 +38,14 @@ def encode_words(words: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def onehot_batch(indices: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
-    """``(B, 15) indices + (B,) lengths -> (B, 15, 26)`` one-hot, padding zeroed."""
+    """One-hot letters (B, 15, 26), all-zero past each word's end."""
     oh = F.one_hot(indices, N_LETTERS).float()
     valid = torch.arange(MAX_LEN, device=indices.device)[None, :] < lengths[:, None]
     return oh * valid[..., None]
 
 
 class WordValidityModel(nn.Module):
-    """CLS transformer over a padded word + optional frozen lexicon tool."""
+    """CLS-token transformer over a padded word, with an optional lexicon tool."""
 
     def __init__(
         self,
@@ -79,7 +78,7 @@ class WordValidityModel(nn.Module):
         self.head = nn.Sequential(nn.Linear(channels, channels), nn.GELU(), nn.Linear(channels, 1))
 
     def forward(self, word_onehot: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
-        """word_onehot: (B, 15, 26); lengths: (B,) -> validity logit (B,)."""
+        """(B, 15, 26) one-hot words and (B,) lengths -> (B,) validity logits."""
         b = word_onehot.size(0)
         feats = self.embed(word_onehot)  # (B, 15, C)
 

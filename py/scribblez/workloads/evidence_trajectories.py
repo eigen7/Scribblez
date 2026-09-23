@@ -1,55 +1,51 @@
-"""The evidence-trajectory workload (docs/roadmap.md item 4): the data for the
-evidence-conditioned pass and the proves-best head (items 2 and 3).
+"""The evidence-trajectory workload (docs/roadmap.md item 4): the training data
+for the move proposal model (item 5), plus that model's trainer and a match
+readout of the agent it drives.
 
-One cycle = one HastyBot self-play batch into a fresh .slog in the worker's
-private work dir, then evidence_trajectory_generator over every .slog still
-missing its .sobs sidecar, then move_set_eval_target_generator (--sobs) over
-every .slog still missing its .mset, then delivery of every complete
-.slog/.sobs/.mset triple to the tag's slogs/ store -- the move_set_eval cycle
-shape with the trajectory phase in front of the labeling.
+A generate cycle has three phases, each run over every .slog in the worker's
+work dir still missing its output, so a resumed cycle picks up a backlog:
 
-The trajectory generator sims, at each sampled position, the sequential loop
-the deployed agent will run: the greedy anchor, then temperature-softmax
-on-policy picks from the tag's frozen `proposer_model` (a move-set-eval student
-export), then an off-policy floor of a few candidates drawn uniformly over the
-untaken legal moves -- each candidate under common random
-numbers -- and records the ordered candidates with their sim outcomes and
-evidence role (docs/plans/sim_residual_feedback.md, "Evidence-trajectory
-generation"). The .sobs is both the evidence input (any prefix of the anchor
-and on-policy picks) and the training
-target (each held-out simmed candidate's sim value and its CRN-paired gain over
-the prefix's best-so-far); the trainer reads no teacher labels.
+  1. HastyBot self-play writes a fresh .slog.
+  2. evidence_trajectory_generator sims trajectories into a .sobs sidecar.
+  3. move_set_eval_target_generator --sobs labels a .mset sidecar.
 
-The .mset labeling still runs, with the simmed candidates force-included: it
-is cheap next to the sims, and both tools sample positions from the same seed
-stream, so its coverage of the simmed positions is a property of this cycle
-rather than something a later task could add. It gives the dashboard the
-teacher's value per simmed candidate; the trainer reads no .mset label.
+Every complete .slog/.sobs/.mset triple is then delivered to the tag's slogs/
+store. This is the move_set_eval cycle with the trajectory phase in front.
 
-The proposer is frozen like the teacher: every .sobs stamps its content hash,
-and a corpus of mixed proposers is refused downstream. Point it at a
-move_set_eval tag's models/model_epoch_NNNN.onnx; this tag copies it into its
-own pinned/ on first use (mset_targets.pin_model), because the source tag
-prunes its exports as it trains and would otherwise delete it from under a
-running tag.
+At each sampled position the trajectory generator sims the loop the deployed
+agent runs: the greedy anchor, then on-policy picks drawn by temperature
+softmax from the frozen `proposer_model` (a move-set-eval student export), then
+a few off-policy candidates drawn uniformly from the untaken legal moves. All
+candidates share common random numbers (CRN). The .sobs records the ordered
+candidates with their sim outcomes and evidence roles
+(docs/plans/sim_residual_feedback.md, "Evidence-trajectory generation"). It
+is both the model's evidence input and its training target; the trainer reads
+no teacher labels.
 
-The generate role is GPU and local-only: proposer and teacher both run under
-TensorRT (see move_set_eval).
+The .mset labeling runs anyway, with the simmed candidates force-included. It
+is cheap next to the sims, and it can only cover the simmed positions here:
+both tools pick positions from the same seed stream, so a later task could not
+add it. It gives the dashboard the teacher's value for each simmed candidate.
 
-The singleton train role (scribblez/evidence/trainer.py) trains the move
-proposal model over the tag's pair store's sim outcomes, on top of the
-student named by `student_checkpoint` -- its backbone frozen by default (the
-recorded-floor diagnostic), or (`unfreeze_backbone`) the whole copy trained
-on the sim signal -- with the mset trainer's growing-corpus pacing: it
-absorbs each pass's new pairs and spends its epoch budget only once the
-store is final, exporting the model's cache/step graph pair every pass.
+The proposer is frozen like the teacher: every .sobs stamps the proposer's
+content hash, and the trainer's dataset refuses a corpus of mixed proposers.
+Point `proposer_model` at a move_set_eval tag's models/model_epoch_NNNN.onnx.
+This tag copies it into its own pinned/ on first use (mset_targets.pin_model),
+because the source tag prunes its exports as it trains.
 
-The singleton match_eval role plays every Nth exported pair as UltimateBot
-(the sequential evidence loop, docs/roadmap.md item 6) at this tag's rollout
-and truncation configuration against a fixed opponent, through the same
-controller-assigned inbox as position_eval's match role
-(scribblez/match_eval/), so the tag's Match tab reads the agent's strength as
-it trains.
+Roles:
+
+  - generate: GPU, local only; the proposer and teacher both run under TensorRT.
+  - train (scribblez/evidence/trainer.py): trains the move proposal model on
+    the store's sim outcomes, starting from the student named by
+    `student_checkpoint`. It paces itself to the growing store the way the
+    move_set_eval trainer does, and exports the cache/step graph pair
+    UltimateBot plays every pass.
+  - match_eval: plays every Nth exported pair as UltimateBot (item 6) at this
+    tag's rollout and truncation settings against a fixed opponent, through
+    the same controller-assigned inbox as position_eval's match role
+    (scribblez/match_eval/), so the Match tab tracks the agent's strength as
+    it trains.
 """
 
 import functools
@@ -76,9 +72,9 @@ SLOGS_DIR = "slogs"
 
 @dataclass(frozen=True)
 class EvidenceTrajectoriesParams:
-    """A tag's generation parameters, frozen at task creation so every worker
-    sims the same recipe with the same proposer and the corpus reads as one.
-    Worker-level knobs (thread count) live on the slots.
+    """A tag's parameters, frozen at task creation so every worker sims the
+    same recipe with the same proposer and the corpus reads as one. Worker-level
+    knobs (thread count) live on the slots.
     """
 
     proposer_model: str = param(
@@ -95,20 +91,20 @@ class EvidenceTrajectoriesParams:
     games_per_batch: int = param(200, "self-play games per generation cycle")
     positions_per_game: int = param(
         1,
-        "eligible turns per game given a trajectory (and labeled); a trajectory costs "
-        "rollouts x candidates rollout-games, so this is small on purpose",
+        "eligible turns per game that get a trajectory (and a label); a trajectory costs "
+        "rollouts x candidates rollout games, so this is small on purpose",
     )
     # The trajectory recipe.
     rollouts: int = param(200, "Monte-Carlo rollouts per trajectory candidate")
     horizon: int = param(
         0,
         "value truncation (roadmap item 2): rollouts stop after this many plies and "
-        "leaf_model scores the horizon; 0 rolls out to a natural game end",
+        "leaf_model scores the position reached; 0 rolls out to the end of the game",
     )
     leaf_model: str = param(
         "",
-        "absolute path to the position-eval ONNX that scores rollout horizons; required with, "
-        "and only with, horizon, and frozen like proposer_model",
+        "absolute path to the position-eval ONNX that scores truncated rollouts; required "
+        "when horizon is set, ignored otherwise; frozen like proposer_model",
     )
     on_policy_min: int = param(2, "least on-policy (proposer) picks per trajectory")
     on_policy_max: int = param(8, "most on-policy (proposer) picks per trajectory")
@@ -116,10 +112,9 @@ class EvidenceTrajectoriesParams:
     off_policy_count: int = param(
         3, "labels-only off-policy draws, uniform over the untaken legal moves"
     )
-    # The stratum quotas drive the .mset labeling's stratified sample around the
-    # forced candidates (docs/roadmap.md item 4): a handful of candidates per
-    # position for dense value labels. The off-policy floor no longer reuses
-    # them -- it is a plain uniform draw (off_policy_count).
+    # Stratum quotas for the .mset labeling's stratified sample, drawn around
+    # the force-included simmed candidates: a handful per position for dense
+    # teacher-value labels. They do not affect the trajectory itself.
     quota_top: int = param(4, "labeled head candidates")
     quota_mid: int = param(4, "candidates sampled from the contention zone")
     quota_tail: int = param(4, "candidates sampled from the remaining ranks")
@@ -130,7 +125,7 @@ class EvidenceTrajectoriesParams:
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
     random_opening_mean: float = param(
         2.0,
-        "open each game with K uniformly-random plies (K ~ round(Exp(mean))); positions "
+        "open each game with K uniformly random plies (K ~ round(Exp(mean))); positions "
         "before the last random ply are ineligible, so targets stay agent-play only",
     )
     face_up_leaves: bool = param(
@@ -142,28 +137,28 @@ class EvidenceTrajectoriesParams:
     target_pairs: int = param(
         0,
         "stop generating once the store holds this many pairs (0 = generate until paused). "
-        "It is also what tells the trainer its corpus is final; with 0 the trainer reads "
-        "'finished' off the store going quiet",
+        "Reaching it also tells the trainer its corpus is final; with 0 the trainer "
+        "treats the corpus as final once no pair has arrived for 15 minutes",
     )
-    # Fusion + proves-best training (the train role; scribblez/evidence/trainer.py).
+    # Move proposal training (the train role; scribblez/evidence/trainer.py).
     student_checkpoint: str = param(
         "",
         "absolute path to the move-set-eval student's rolling checkpoint (a move_set_eval "
-        "tag's checkpoints/model.pt) whose backbone the fusion stage and proves-best head "
-        "train on top of; its arch and encoding arm are read from the checkpoint",
+        "tag's checkpoints/model.pt) that the fusion stage and proves-best head are trained "
+        "on top of; its architecture and encoding arm are read from the checkpoint",
     )
     unfreeze_backbone: bool = param(
         False,
-        "train the whole model on the sim-outcome loss (the move proposal model: trunk, move "
-        "encoder, and heads follow the sim signal, no distillation anchor) and export the "
-        "plain student per pass; off, the student's backbone is held at its checkpoint and "
-        "only the fusion stage and proves-best head train",
+        "train the whole model on the sim-outcome loss (trunk, move encoder and heads all "
+        "follow the sim signal, with no distillation anchor) and also export the plain "
+        "student each pass; off holds the student's backbone at its checkpoint and trains "
+        "only the fusion stage and proves-best head",
     )
     backbone_lr_mult: float = param(
         0.1,
-        "unfrozen mode: the backbone's learning rate as a fraction of lr (the fusion stage "
-        "and head start from zero-init/random and want the full rate; the distilled trunk "
-        "should not be shaken at it)",
+        "with unfreeze_backbone: the backbone's learning rate as a fraction of lr. The fusion "
+        "stage and head start untrained and want the full rate; the distilled backbone "
+        "would be disrupted by it",
     )
     train_epochs: int = param(
         20,
@@ -175,20 +170,19 @@ class EvidenceTrajectoriesParams:
         10, "hold out every Nth pair (file-level, by stem hash) for the metrics; 0 = on-train"
     )
     batch_positions: int = param(32, "positions per training batch")
-    # Subset assembly (evidence.dataset.assemble_subset): how many evidence
-    # subsets each simmed pool yields per pass, and how often a subset is
-    # empty. Both move the held-out rows-clock the LR schedule runs on, so
-    # they are pinned per run like the recipe.
+    # Subset assembly (evidence.dataset.assemble_subset). Both knobs change how
+    # many held-out rows a pass yields, which is the clock the LR schedule
+    # runs on, so they are frozen per run like the recipe.
     subsets_per_pool: int = param(
         1,
-        "evidence subsets drawn per simmed pool per pass, each a training unit over the pool's "
-        "held-out candidates; multiplies the rows-clock, so pin it per run",
+        "evidence subsets drawn per simmed pool per pass; each trains on the pool's candidates "
+        "outside the subset",
     )
     empty_fraction: float = param(
         0.0,
-        "probability that a drawn evidence subset is empty (the prefix-0 rows that keep the "
-        "plain pass calibrated); 0 = unpinned, the subset size uniform over 0..cap (empty at "
-        "~1/(cap+1)). An empty subset holds every candidate out, so this moves the rows-clock",
+        "probability that a drawn evidence subset is empty (the rows that keep the "
+        "evidence-free pass calibrated); 0 draws the subset size uniformly over 0..cap "
+        "instead, so a subset is empty about 1/(cap+1) of the time",
     )
     lr: float = param(1e-3, "peak learning rate of the warmup-stable-decay schedule")
     lr_warmup_rows: int = param(
@@ -211,9 +205,7 @@ class EvidenceTrajectoriesParams:
     grad_clip: float = param(
         1.0, "max gradient norm over all trainable params per step (0 = no clipping)"
     )
-    # Match eval (the match_eval role): UltimateBot over each exported
-    # cache/step pair, at this tag's sim configuration, against a fixed
-    # opponent (docs/evaluation_plan.md).
+    # Match eval (the match_eval role; docs/evaluation_plan.md).
     match_every_generations: int = param(
         5, "match-eval cadence: play a match for every Nth exported generation; 0 disables"
     )
@@ -226,15 +218,15 @@ class EvidenceTrajectoriesParams:
     )
     match_max_sims: int = param(
         10,
-        "UltimateBot's sim budget per turn in match play, the anchor included; at most 2 + "
-        "on_policy_max (its last conditioned pass reads one sim fewer than the budget, and "
-        "the model trained on evidence sets of at most 1 + on_policy_max, which its export "
-        "stamps)",
+        "UltimateBot's sim budget per turn in match play, anchor included; at most 2 + "
+        "on_policy_max. The model trained on evidence sets of at most 1 + on_policy_max (its "
+        "export records this), and the agent's last pick conditions on one sim fewer than "
+        "the budget",
     )
 
-    # Validated where the params are created (task creation, CLI), the bound
-    # the UltimateBot factory enforces at load: a budget past it would crash
-    # every match instead of one tag-creation form.
+    # The UltimateBot factory enforces this bound when it loads the export.
+    # Checking it here, where params are created, fails one tag-creation form
+    # instead of every match.
     def __post_init__(self):
         widest = 2 + self.on_policy_max
         if not 1 <= self.match_max_sims <= widest:
@@ -245,9 +237,9 @@ class EvidenceTrajectoriesParams:
 
 
 def recipe_of(params: EvidenceTrajectoriesParams) -> TrajectoryRecipe:
-    """The tag's trajectory recipe as the position-set sidecar cache keys it
-    (the dashboard's trajectory pane and the trainer's position-set metric
-    both sim the set under exactly the tag's recipe)."""
+    """The tag's trajectory recipe, the key of the position-set .sobs cache. The
+    dashboard's trajectory pane and the trainer's position-set metric both sim
+    the set under exactly this recipe."""
     return TrajectoryRecipe(
         rollouts=params.rollouts,
         on_policy_min=params.on_policy_min,
@@ -265,15 +257,14 @@ def max_off_policy(params: EvidenceTrajectoriesParams) -> int:
 
 def max_evidence_width(params: EvidenceTrajectoriesParams) -> int:
     """The padded evidence-set capacity: the anchor plus the most on-policy
-    picks. Off-policy draws are labels-only and never enter an evidence set, so
-    they do not widen the padded evidence input the model conditions on."""
+    picks. Off-policy draws are training labels only and never enter an
+    evidence set."""
     return 1 + params.on_policy_max
 
 
 def max_pool_width(params: EvidenceTrajectoriesParams) -> int:
-    """The most records a position's pool can hold: anchor + on-policy picks +
-    the off-policy floor. This is the full trajectory length the train-role
-    guard checks a corpus against."""
+    """The most candidates a position's pool can hold: anchor, on-policy picks
+    and off-policy draws. The trainer checks the corpus against it."""
     return 1 + params.on_policy_max + max_off_policy(params)
 
 
@@ -289,8 +280,7 @@ def run_trajectory_generator(
     pending: list[Path], proposer: Path, params: EvidenceTrajectoriesParams, threads: int
 ) -> int:
     """Give `pending` .slog files trajectory .sobs sidecars, proposed by the
-    tag's pinned copy of its proposer. The tool skips files whose .sobs already
-    exists, so a resumed cycle sims nothing twice."""
+    tag's pinned proposer."""
     cmd = [
         TRAJECTORY_GENERATOR,
         *[f"--slog-file={p}" for p in pending],
@@ -333,8 +323,8 @@ def run_one_cycle(
         print(f"play_game exited with code {rc}", file=sys.stderr)
         return CycleResult(rc, gen_seconds, 0.0, 0.0)
 
-    # Trajectories first: the labeling force-includes the simmed candidates
-    # from the same-stem .sobs, so it needs them on disk.
+    # Trajectories first: the labeling reads the simmed candidates to
+    # force-include from the same-stem .sobs.
     pending = sorted(s for s in out_dir.glob("*.slog") if not s.with_suffix(".mset").exists())
     t1 = time.monotonic()
     unsimmed = [s for s in pending if not s.with_suffix(".sobs").exists()]
@@ -369,9 +359,8 @@ def _cycle(
 
 
 def run_generate(ctx: WorkerContext) -> int:
-    """The generate-role runner (the shared pair-store loop over run_one_cycle).
-    A pair is complete at its .mset, the last member produced; the .sobs rides
-    along."""
+    """The generate-role runner: the shared pair-store loop over run_one_cycle.
+    A triple is complete once its .mset, the last output, exists."""
     p = ctx.params
     ok = True
     try:
@@ -436,9 +425,9 @@ SPEC = WorkloadSpec(
             gpu=True,
             stats=StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"}),
         ),
-        # Local only: the match plays at the tag's truncation configuration,
-        # and --leaf-model is an absolute path into another tag's models/ that
-        # the one-file inbox delivery never ships to an ssh container.
+        # Local only: with truncation on, the match needs --leaf-model, an
+        # absolute path into another tag's models/, and the controller's
+        # one-file inbox delivery cannot ship it to an ssh container.
         RoleSpec(
             name="match_eval",
             title="Match eval (GPU)",

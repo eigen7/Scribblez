@@ -1,17 +1,17 @@
 """Task records for the master dashboard.
 
-A task is one (workload, tag) pair with a frozen parameter set and a list of
-worker slots, persisted as task.json in the tag's root dir. Tags that predate
-the dashboard (no task.json) still appear in listings, read-only.
+A task is one (workload, tag) pair with frozen params, worker slots and
+machines, persisted as task.json in the tag's root. A tag directory without a
+task.json still appears in listings, read-only.
 
 A process holds one TaskRecord per task: load_task returns the same object
-every time until the file changes under it, and save_task writes that object.
-The dashboard reads and mutates a task from several places at once -- the
-reconcile pass across its blocking steps, request handlers, status polls --
-and when each of those held its own copy, the last save won: an operator's
-pause, saved by its handler, was overwritten seconds later by the pass's copy
-that had loaded "running" before the click (and a worker was started again
-to honor it). With one object there is nothing stale to save.
+until the file changes under it, and save_task writes that object. The
+dashboard reads and mutates a task from several places at once (the reconcile
+pass across its blocking steps, request handlers, status polls). With a copy
+each, the last save would win: an operator's pause, saved by its handler,
+would be overwritten seconds later by the pass's copy, loaded as "running"
+before the click, and the worker started again. With one shared object there
+is nothing stale to save.
 """
 
 import json
@@ -29,8 +29,8 @@ from scribblez.workloads import WorkloadSpec, resolve
 
 @dataclass
 class WorkerRecord:
-    """One worker slot: durable identity + desired state. The backing process
-    or container's actual state is observed live by the WorkerManager."""
+    """One worker slot: durable identity and desired state. The actual state of
+    its process or container is observed live by the WorkerManager."""
 
     worker_id: str
     role: str  # which of the workload's roles this slot runs
@@ -38,53 +38,48 @@ class WorkerRecord:
     desired_state: str  # "running" | "paused"
     threads: int | None = None  # local/ssh: engine thread count (None: all cores)
     host: str | None = None  # ssh: SSH destination ("user@host" or an ssh-config alias)
-    # ssh: the task's machine (TaskRecord.machines, by name) the slot runs on,
-    # instead of a bare host: the machine record carries the address and the
-    # key material. Exactly one of `host` and `machine` is set.
+    # ssh: the name of the task's machine the slot runs on, whose record carries
+    # the address and key material. Exactly one of `host` and `machine` is set.
     machine: str | None = None
-    # ssh, bare host: its CPU microarchitecture (a GCC -march value), asked of
-    # the machine at the slot's first start and kept -- what the task's bundle
-    # is built for. A machine-backed slot's arch is its machine record's.
+    # ssh on a bare host: its CPU microarchitecture (a GCC -march value), which
+    # the task's bundle must be built for. Asked of the host at the slot's first
+    # start. A machine-backed slot uses its machine record's instead.
     arch: str | None = None
-    # The slot's worker exited having reached its role's terminal condition
-    # (a trainer's max_rows, a generator's cycle cap): desired state was
-    # flipped to paused so reconcile does not restart it forever, and the
-    # slot reads `finished` rather than `paused`. Cleared by a Start.
+    # The worker exited on reaching its role's terminal condition (a trainer's
+    # max_rows, a generator's cycle cap). Its desired state is then paused, so
+    # reconcile does not restart it forever, and it displays as `finished`
+    # rather than `paused`. Cleared by a Start.
     finished: bool = False
-    # ssh: whether the slot's container is known to have been created. False
-    # from add until a start confirms it -- or until a probe finds a container
-    # an in-doubt start (ssh link lost mid-command) did create. While False, an
-    # unreachable probe reads as "missing", so the slot stays manageable --
-    # removable even when the host is bogus or offline (the host string is
-    # unvalidated until first start). Defaults True so records saved before
-    # this field existed (adds used to launch immediately) keep the stricter
-    # unreachable handling.
+    # ssh: whether the slot's container is known to exist. False from add until a
+    # start confirms it, or a probe finds the container an in-doubt start (ssh
+    # lost mid-command) did create. While False, an unreachable probe reads as
+    # "missing", so the slot stays removable even when its host is bogus or
+    # offline (a host string is not validated until the first start). add_ssh
+    # sets it False; the True default errs toward the stricter unreachable
+    # handling for any record that lacks the field.
     launched: bool = True
     pid: int | None = None  # local: OS pid of the backing subprocess, if spawned
-    # ssh: the bundle the container was created with. A container's
-    # environment fixes its bundle at creation, so a slot whose id no longer
-    # matches its task's is replaced rather than restarted.
+    # ssh: the bundle the container was created with. The bundle is fixed in the
+    # container's environment, so a slot whose bundle differs from its task's
+    # is replaced rather than restarted.
     bundle_id: str | None = None
-    # ssh: delivered files the container still holds. Zero from the moment the
-    # container is created (it cannot hold anything yet, which is what lets one
-    # that never came up be replaced), then whatever each collection finds --
-    # and None whenever that is not known: before a container exists, and again
-    # if a collection fails, since a stale count would go on claiming "drained"
-    # while the container fills up. Durable because it decides whether
-    # replacing the container is safe, and a dashboard restart must not turn
-    # "holding six hours of work" into "nothing known, go ahead".
+    # ssh: finished output the container holds that the controller has not
+    # collected. Zero when the container is created (which lets one that never
+    # came up be replaced), then whatever each collection finds. None when not
+    # known: before a container exists, and after a failed collection, since a
+    # stale zero would keep claiming "drained" while the container fills up.
+    # Durable because it decides whether replacing the container is safe, and a
+    # dashboard restart must not turn "holding six hours of work" into
+    # "nothing known, go ahead".
     undelivered: int | None = None
 
 
 @dataclass
 class MachineRecord:
-    """A machine the task's ssh slots run on: registered by the operator
-    (`manual`) or rented for the task by a cloud provider (`aws`). It is the
-    task's own -- it hosts this task's slots and its record lives and dies
-    with the task, the way a slot's does -- so nothing outside task.json has
-    to agree with it. The address and key material are what the ssh link is
-    built from (dashboard/workers.py); the rental fields describe what a
-    provider launched and what it costs."""
+    """A machine the task's ssh slots run on, either registered by the operator
+    (`manual`) or rented for the task from a cloud provider (`aws`). It belongs
+    to the task, living and dying with it like a slot, so nothing outside
+    task.json has to agree with it."""
 
     name: str
     provider: str  # "manual" | "aws"
@@ -94,8 +89,8 @@ class MachineRecord:
     # machine's key is unknown at launch, and providers reuse addresses.
     known_hosts_file: str | None = None
     gpu_count: int | None = None  # GPUs on the machine; None: unknown (unchecked at add time)
-    # The CPU microarchitecture (a GCC -march value) the task's bundle is built
-    # for on its account: from the catalog for a rented machine, asked of a
+    # The CPU microarchitecture (a GCC -march value) the task's bundle must
+    # cover for this machine: from the catalog for a rented machine, asked of a
     # registered one at its first slot start.
     arch: str | None = None
     instance_id: str | None = None  # rented: the provider's instance
@@ -107,8 +102,10 @@ class MachineRecord:
     cost_per_hr: float | None = None  # rented: the catalog rate
     launched_at: float | None = None
     spend: float = 0.0  # estimated dollars this machine has cost so far
-    observed_at: float | None = None  # spend accrual: when it was last observed
-    observed_up: bool = False  # ... and whether it was billing then
+    # Spend accrual: when the machine was last observed, and whether it was
+    # billing then.
+    observed_at: float | None = None
+    observed_up: bool = False
 
 
 @dataclass
@@ -126,18 +123,17 @@ class TaskRecord:
     # Estimated spend of machines that have since been removed, so the
     # task's cumulative total survives slot removal.
     retired_spend: float = 0.0
-    # The bundle every bucket-delivering worker of this task runs, pinned when
-    # the first one launches: an experiment's fleet stays homogeneous, and code
-    # edited mid-run cannot silently become what the fleet is executing. The
-    # source digest it was built from rides along so drift is a local
-    # comparison (see WorkerManager.bundle_drift) rather than a bucket read.
+    # The bundle every ssh worker of this task runs, pinned when the first one
+    # launches, so the fleet stays homogeneous and code edited mid-run does not
+    # silently reach it. The source digest it was built from is kept so drift
+    # is a local comparison (WorkerManager.bundle_drift), not a bucket read.
     bundle_id: str | None = None
     bundle_source_hash: str = ""
     bundle_archs: list[str] = field(default_factory=list)  # the archs the bundle was built for
     # The parameter profile the params were resolved from (WorkloadSpec
-    # .profiles) -- provenance only: the params above are the frozen truth, and
-    # the task view shows how they depart from the profile. "" for a workload
-    # without profiles, or a record from before they existed.
+    # .profiles). Provenance only: the params are the frozen truth, and the task
+    # view shows how they depart from the profile. "" for a workload without
+    # profiles.
     profile: str = ""
 
     def worker(self, worker_id: str) -> WorkerRecord:
@@ -147,8 +143,8 @@ class TaskRecord:
         return w
 
     def find(self, worker_id: str) -> WorkerRecord | None:
-        """The slot, or None once it has been removed -- what a step that
-        planned its work from an earlier look at the slot list checks."""
+        """The slot, or None once it has been removed. For steps that planned
+        their work from an earlier look at the slot list."""
         for w in self.workers:
             if w.worker_id == worker_id:
                 return w
@@ -168,17 +164,17 @@ def task_path(spec: WorkloadSpec, tag: str) -> Path:
     return spec.data_dir(tag) / "task.json"
 
 
-# The process's records, by path, each with the file mtime it matches (see
-# the module docstring). A file whose mtime moved away from that was written
-# by someone else -- a CLI tool migrating params -- and is read afresh.
+# The process's shared records (see the module docstring), by path, each with
+# the file mtime it matches. A file whose mtime has moved was written by
+# someone else, such as a CLI tool migrating params, and is read afresh.
 _records: dict[Path, tuple[TaskRecord, int]] = {}
 _records_lock = threading.Lock()
 
 
 def _declared(cls, raw: dict) -> dict:
-    """`raw` restricted to `cls`'s fields: a stored record keeps every field
-    its writer had, so a field removed since is dropped on read (and gone from
-    the file on the next save) rather than failing the whole load."""
+    """`raw` restricted to `cls`'s fields, so a stored field the dataclass no
+    longer declares is dropped (and gone after the next save) instead of
+    failing the load."""
     names = {f.name for f in fields(cls)}
     return {k: v for k, v in raw.items() if k in names}
 
@@ -211,8 +207,8 @@ def load_task(spec: WorkloadSpec, tag: str) -> TaskRecord | None:
 
 
 def save_task(spec: WorkloadSpec, task: TaskRecord):
-    """Write the record, atomically: two threads saving at once (the pass and
-    a handler) each replace the file whole, never interleave in it."""
+    """Write the record atomically, so two threads saving at once (the pass and
+    a handler) never interleave in the file."""
     path = task_path(spec, task.tag)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".task.", suffix=".json")
@@ -226,15 +222,13 @@ def save_task(spec: WorkloadSpec, task: TaskRecord):
 def create_task(
     spec: WorkloadSpec, tag: str, raw_params: dict, profile: str | None = None
 ) -> TaskRecord:
-    """Resolve params -- the workload's defaults under `profile` (its default
-    profile when None) under `raw_params` -- validate them against the schema,
-    and persist a fresh task. Raises params.ParamsError on bad values,
-    AssertionError on a taken tag or unknown profile.
+    """Create and persist a task. Params resolve as `raw_params` over `profile`
+    (the workload's default profile when None) over the workload's defaults.
+    Raises params.ParamsError on bad values, AssertionError on a taken tag or
+    unknown profile.
 
-    A workload's `finalize` hook (WorkloadSpec.finalize) runs after validation,
-    on the typed params: its last chance to resolve derived fields before they
-    are frozen, since task.json is re-read verbatim on every worker start with
-    no dynamic step."""
+    The workload's `finalize` hook runs on the validated params: its last
+    chance to resolve derived fields, since workers read task.json verbatim."""
     assert tag and all(c.isalnum() or c in "._-" for c in tag), f"invalid tag name '{tag}'"
     assert load_task(spec, tag) is None, f"tag '{tag}' already has a task"
     profile_name, validated = spec.resolve_params(profile, raw_params)
@@ -252,14 +246,12 @@ def create_task(
 
 
 def delete_tag(spec: WorkloadSpec, tag: str):
-    """Delete a tag's local dir (task record, data, stats, logs). Any cloud
-    archive of the tag in the results bucket is deliberately untouched --
-    purge it manually if truly done with it.
+    """Delete a tag's local dir (task record, data, stats, logs). The tag's
+    copy in the results bucket is deliberately left alone; purge it by hand.
 
-    The tag must have no worker slots left: this deletes the task record that
-    tracks their containers and machines, so deleting past one would orphan
-    the thing it was renting. Callers go through WorkerManager.delete_task, which
-    tears the slots down first.
+    The tag must have no worker slots left, since the task record is what
+    tracks their containers and machines. Callers go through
+    WorkerManager.delete_task, which removes the slots first.
     """
     task = load_task(spec, tag)
     assert task is None or not task.workers, "remove the tag's workers first"
@@ -278,24 +270,17 @@ def progress(spec: WorkloadSpec, tag: str) -> list:
 
 
 def _last_active(tag_dir: Path) -> float:
-    """The tag's most recent real activity: the latest cycle any worker has
-    published, plus the data subdirs' mtimes.
+    """When the tag last saw real work: the newest worker stats record or data
+    subdirectory mtime, or 0 if nothing has happened yet.
 
-    Stats are read for their own `updated_at`, not the stats file's mtime: an
-    ssh slot's records are re-copied from its container on every 5s reconcile
-    pass regardless of whether the worker actually completed a cycle since
-    the last one, so the file's mtime tracks the poll, not the work -- a
-    stalled worker's container that is still reachable would otherwise read
-    as active forever.
+    Stats are dated by their own `updated_at`, not the file's mtime: an ssh
+    slot's records are copied back on every collection whether or not a cycle
+    completed, so the mtime would make a stalled but reachable worker look
+    active forever.
 
-    The data scan goes two levels under `data/`, not one: a flat workload's
-    files land directly in a `data/` subdir (e.g. `data/slogs/`), whose own
-    mtime already bumps on arrival, but a generational workload nests one
-    deeper (`data/generations/gen_NNNNNN/`), and a new file landing inside an
-    existing generation dir only bumps *that* dir's mtime, not its parent's.
-
-    Returns 0 for a tag nothing has happened in yet, rather than the tag
-    dir's own creation time.
+    The data scan goes two levels deep because a generational workload nests
+    its files one level further (`data/generations/gen_NNNNNN/`), and a file
+    landing there bumps only its own directory's mtime.
     """
     stamps = [r["updated_at"] for r in read_stats(tag_dir / "stats")]
     data = tag_dir / "data"
@@ -324,10 +309,9 @@ def list_tags(spec: WorkloadSpec) -> list[dict]:
                 "has_task": task is not None,
                 "created_at": task.created_at if task else None,
                 "workers": len(workers),
-                # Slots the operator has running, a gated one included: the
-                # scheduler resumes that one on its own. Read off desired
-                # state rather than observed, so listing every tag stays free
-                # of ssh and cloud round trips.
+                # Slots the operator wants running, gated ones included (the
+                # scheduler resumes those itself). Desired rather than observed
+                # state, so listing tags costs no ssh or cloud round trips.
                 "active_workers": sum(w.desired_state == "running" for w in workers),
                 "progress": progress(spec, tag_dir.name),
                 "last_active": _last_active(tag_dir),

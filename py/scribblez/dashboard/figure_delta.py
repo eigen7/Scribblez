@@ -1,18 +1,18 @@
 """Incremental (append-only) updates for the dashboard's embedded figures.
 
-The client holds a figure embedded from a full ``/api/figure`` fetch. When the
-run advances it does not refetch and re-embed the whole document (a megabyte on
-a long run); it posts each named data source's current length and last x, and
-the server -- which rebuilds the figure model from SQLite either way, the cheap
-part -- answers with just each source's new tail rows, plus the current
-explicit axis ranges, for the client to stream in place (web/src/lib/bokehDoc.ts).
+The client embeds a figure from a full ``/api/figure`` fetch. When the run
+advances, re-embedding the whole document would cost up to a megabyte on a long
+run. Instead the client posts each named data source's length and last x. The
+server rebuilds the figure model from SQLite (the cheap part) and answers with
+each source's new tail rows plus the current explicit axis ranges, which the
+client streams in place (web/src/lib/bokehDoc.ts).
 
 Appends are exact because every plotted column is causal in x: raw series, the
-debiased EMA, and the stacked-band cumulative sums (normalized or not) all leave
-earlier points unchanged when rows are appended. Anything else -- a new series,
-a control marker, recorded loss weights, a run reset rewriting history -- shows
-up as a structure-key or tail mismatch and the response is ``{"refetch": true}``:
-the client falls back to the full fetch it would have done anyway.
+debiased EMA, and the stacked-band cumulative sums (normalized or not) leave
+earlier points unchanged when rows are appended. Any other change (a new
+series, a control marker, recorded loss weights, a reset rewriting history)
+shows up as a structure-key or tail mismatch, and the response is
+``{"refetch": true}``: the client falls back to a full fetch.
 """
 
 import hashlib
@@ -22,8 +22,9 @@ from bokeh.models import ColumnDataSource, Plot, Range1d, Span
 
 
 def _named_sources(model) -> dict:
-    """name -> the model's ColumnDataSources carrying that name (the linear and
-    log x-axis rows share names by design; both copies hold identical data)."""
+    """name -> the model's ColumnDataSources with that name. A name can have
+    several: the linear and log x-axis rows share names and hold identical
+    data."""
     out: dict[str, list] = {}
     for cds in model.select({"type": ColumnDataSource}):
         if cds.name:
@@ -32,8 +33,8 @@ def _named_sources(model) -> dict:
 
 
 def _row_panels(child) -> list:
-    """A figure row's Plot panels in layout order (Bokeh's `select` traverses
-    references in nondeterministic order; the client zips by layout order)."""
+    """A figure row's Plot panels in layout order, which is how the client zips
+    them. Bokeh's `select` would return them in no fixed order."""
     return [p for p in getattr(child, "children", []) if isinstance(p, Plot)]
 
 
@@ -80,9 +81,9 @@ def _explicit_ranges(model) -> dict:
 
 
 def delta_response(model, client: dict) -> dict:
-    """The incremental update taking the client's document (`client`: its
-    structure key and per-source {"n", "last_x"}) to `model`, or
-    {"refetch": true} when it cannot be reached by appends alone."""
+    """The appends that bring the client's document up to `model`, or
+    {"refetch": true} when appends alone cannot. `client` carries the
+    document's structure key and, per source, {"n", "last_x"}."""
     if model is None or client.get("structure") != structure_key(model):
         return {"refetch": True}
     sources = _named_sources(model)

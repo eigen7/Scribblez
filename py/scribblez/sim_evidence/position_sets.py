@@ -1,16 +1,15 @@
 """Trajectory sidecars for .gcg position sets, generated on demand and cached.
 
-A position set is a directory of hand-maintained .gcg files (positions/<lexicon>/
-<set>/), each read at its final recorded state with the side to move's rack
-from its #RackN pragma (engine: read_gcg_position, data/gcg_reader.h). Its
-trajectory .sobs -- what the dashboard's trajectory pane shows and what the
-evidence trainer's position-set metric reads -- depend on the proposer and
-the recipe, so they are not committed:
-they live under <mount>/cache/trajectory_sets/<set>/<key>/, keyed by the
-proposer's bytes and the recipe, and each is regenerated when its .gcg
-changes. `ensure_sobs` is the one entry point: it runs
-evidence_trajectory_generator --gcg for whatever is missing or stale and
-returns the sidecar per position.
+A position set is a directory of hand-maintained .gcg files
+(positions/<lexicon>/<set>/). The engine reads each at its final recorded
+state, with the mover's rack from its #RackN pragma (read_gcg_position in
+data/gcg_reader.h). The dashboard's Trajectories pane and the evidence
+trainer's position-set metric both read the positions' trajectory .sobs.
+
+Those sidecars depend on the proposer and the recipe, so they are cached
+rather than committed, under <mount>/cache/trajectory_sets/<set>/<key>/ with
+the key hashing both; a sidecar is regenerated when its .gcg changes.
+`ensure_sobs` is the entry point.
 """
 
 import hashlib
@@ -22,8 +21,8 @@ from pathlib import Path
 from scribblez.paths import DEFAULT_MOUNT_ROOT, ENGINE_DIR, REPO_ROOT
 
 TRAJECTORY_GENERATOR = ENGINE_DIR / "evidence_trajectory_generator"
-# Where the hand-maintained sets live, and the one the dashboard opens on and
-# the trainer's position-set metric reads.
+# DEFAULT_SET is the set the dashboard opens on and the trainer's
+# position-set metric reads.
 POSITIONS_ROOT = REPO_ROOT / "positions" / "NWL23"
 DEFAULT_SET = "face-up-trajectory-set"
 CACHE_DIR = "cache/trajectory_sets"
@@ -32,8 +31,8 @@ MANIFEST = "manifest.json"  # stem -> sha256 of the .gcg the sidecar was generat
 
 @dataclass(frozen=True)
 class TrajectoryRecipe:
-    """The generator's per-position recipe plus the information condition --
-    everything besides the proposer that determines a trajectory."""
+    """Everything besides the proposer that determines a trajectory: the
+    generator's per-position settings and the information condition."""
 
     rollouts: int = 200
     on_policy_min: int = 2
@@ -60,9 +59,9 @@ def _sha256(data: bytes) -> str:
 
 
 def cache_key(proposer_model: Path, recipe: TrajectoryRecipe) -> str:
-    """The cache subdirectory for (proposer, recipe): a hash of the model's
-    bytes and the recipe's fields, so a re-exported model or a changed knob
-    never reads another configuration's sidecars."""
+    """The cache subdirectory name for (proposer, recipe): a hash of the
+    model's bytes and the recipe's fields, so a changed model or setting never
+    reads another configuration's sidecars."""
     h = hashlib.sha256(Path(proposer_model).read_bytes())
     h.update(json.dumps(asdict(recipe), sort_keys=True).encode())
     return h.hexdigest()[:16]
@@ -85,9 +84,9 @@ def _load_manifest(d: Path) -> dict:
 
 
 def _stale_or_missing(gcgs: list[Path], d: Path) -> list[Path]:
-    """The .gcg files whose sidecar is absent or was generated from other bytes.
-    Stale sidecars are removed so the generator (which skips existing outputs)
-    regenerates them."""
+    """The .gcg files whose sidecar is missing or was generated from other
+    bytes. Stale sidecars are deleted, since the generator skips existing
+    outputs."""
     manifest = _load_manifest(d)
     pending = []
     for gcg in gcgs:
@@ -106,8 +105,9 @@ def ensure_sobs(
     threads: int,
     mount_root=None,
 ) -> dict[str, Path]:
-    """Every position's trajectory sidecar for (set, proposer, recipe),
-    generating what is missing or stale. Returns {gcg stem: .sobs path}."""
+    """Every position's trajectory sidecar for (set, proposer, recipe), running
+    evidence_trajectory_generator for any that are missing or stale. Returns
+    {gcg stem: .sobs path}."""
     gcgs = set_gcgs(set_dir)
     d = cache_dir(set_dir, proposer_model, recipe, mount_root)
     d.mkdir(parents=True, exist_ok=True)

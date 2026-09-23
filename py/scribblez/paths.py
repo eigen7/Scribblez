@@ -1,11 +1,10 @@
 """Filesystem layout for a workload tag.
 
-Tags are namespaced by workload, so each workload's runs are isolated (and the
-dashboard's tag selector shows only its own workload's tags). Every artifact tied
-to a tag lives under a single per-tag root, `<mount_root>/tags/<task>/<tag>/`:
+A tag is one run of a workload. Tags are namespaced by workload, and every
+artifact tied to a tag lives under one root, `<mount_root>/tags/<task>/<tag>/`:
 
     tags/<task>/<tag>/
-      task.json                   frozen params + worker slots (master dashboard)
+      task.json                   frozen params + worker slots (written by the dashboard)
       logs/                       per-worker process logs
       stats/                      per-worker stats records (the Stats tab)
       params/                     per-worker provenance manifests
@@ -26,37 +25,36 @@ to a tag lives under a single per-tag root, `<mount_root>/tags/<task>/<tag>/`:
 
 Workloads use the subset of this tree they need (kill_test keeps its pairs under
 data/slogs/; only the training workloads have checkpoints or a dashboard DB).
-This module is the single source of truth for the layout: scripts derive every
-path from a `TagPaths` rather than reassembling subdirectories.
+Code derives every path from a `TagPaths` rather than reassembling
+subdirectories.
 
-All training/eval results end up in dashboard.db (a SQLite store); the
-dashboard renders every plot on the fly from it -- no PNG artifacts. The
-trainer never writes that database itself: it delivers records under records/
-and the dashboard's ingest tick writes them (generational/records.py).
+dashboard.db (SQLite) holds every training and eval result, and the dashboard
+renders its plots from it. Only the dashboard writes it: the trainer delivers
+records under records/ and the dashboard ingests them (the protocol is
+documented in generational/records.py).
 """
 
 from pathlib import Path
 
 DEFAULT_MOUNT_ROOT = Path("/workspace/mount")
 
-# The checkout this package was imported from (py/scribblez/ -> repo root) --
-# not a hard-coded /workspace/repo, so code running in a git worktree resolves
-# the worktree's own binaries and data rather than the primary checkout's.
+# The checkout this package was imported from, so code running in a git
+# worktree uses the worktree's own binaries and data.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENGINE_DIR = REPO_ROOT / "target" / "engine"
 
-# The position-evaluation eval datasets, git-tracked under the repo root: the
-# small hand-built set the Positions tab scrubs, and the machine-harvested
-# penultimate-bingo set the Loss tab's aggregate quality curves are measured
-# over (position_eval/analysis.py). A worker that runs from a bundle rather
-# than a checkout fetches them separately (cloud/worker_deps.py).
+# The position-evaluation eval sets (position_eval/analysis.py): the small
+# hand-built set the dashboard's Positions tab browses, and the larger
+# machine-harvested set behind the Loss tab's aggregate quality curves. A
+# worker running from a deployed bundle rather than a checkout fetches them
+# separately (py/cloud/worker_deps.py).
 EVAL_POSITIONS_DIRS = (
     REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset",
     REPO_ROOT / "positions" / "NWL23" / "position-eval-test-dataset-large",
 )
 
 # Workload identifiers: the `<task>` level of the tags/ tree, the workload
-# registry keys, and the dashboard's task slugs. The single source of truth.
+# registry keys, and the dashboard's task slugs.
 POSITION_EVAL = "position_eval"
 MAX_MOVE_PER_LANE = "max_move_per_lane"
 KILL_TEST = "kill_test"
@@ -64,30 +62,27 @@ MOVE_SET_EVAL = "move_set_eval"
 EVIDENCE_TRAJECTORIES = "evidence_trajectories"
 MATCH_ARMS = "match_arms"
 
-# The data/ subdirectories the match-eval roundtrip uses. Named here (rather
-# than where they are read) because they are two ends of one exchange between
-# machines: the controller writes an inbox the worker polls, the worker
-# delivers a result the controller ingests.
+# The data/ subdirectories of the match-eval exchange. They are defined here
+# because both ends use them: the controller writes an inbox the worker polls,
+# and the worker delivers results the controller ingests.
 MATCH_INBOX_DIR = "match_inbox"
 MATCH_RESULTS_DIR = "match_results"
 
-# Filename stem prefix of a per-generation ONNX export, which is what tells one
-# apart from the shared blobs beside it in models/ (see onnx_sidecars).
+# Filename prefix of a per-generation ONNX export; it distinguishes exports
+# from the shared blobs beside them in models/ (see onnx_sidecars).
 ONNX_PREFIX = "model_epoch_"
 
-# What a trainer running elsewhere delivers through the results bucket,
-# relative to the tag root, and the controller's sync pulls back
-# (scripts/cloud_sync.py): the record stream and the exports never change
-# once written, so they are pulled by size alone; the rolling checkpoint and
-# the cursor are rewritten in place.
+# What a trainer on a rented machine delivers through the results bucket,
+# relative to the tag root, for scripts/cloud_sync.py to pull back. Records and
+# exports never change once written, so they are synced by size alone; the
+# rolling checkpoint and train_state.json are rewritten in place.
 TRAINER_OUTPUT_DIRS = ("records", "models", "checkpoints")
 TRAINER_OUTPUT_IMMUTABLE = ("records", "models")
 TRAINER_OUTPUT_FILES = ("train_state.json",)
 
-# The trainer's record stream (generational/records.py): where it lives
-# relative to the tag root, and how a generation's record is named. Relative
-# paths because the trainer addresses them through its results sink, which
-# maps them under the tag root locally and under the tag prefix in the bucket.
+# The trainer's record stream (generational/records.py), relative to the tag
+# root because the trainer writes through a results sink that maps them either
+# under the local tag root or under the tag's prefix in the bucket.
 RECORDS_DIR = "records"
 RUN_RECORD_REL = f"{RECORDS_DIR}/run.json"
 CONTROLS_REL = "controls.json"
@@ -101,10 +96,9 @@ def generation_preds_rel(generation: int) -> str:
     return f"{RECORDS_DIR}/gen_{generation:06d}.npz"
 
 
-# Appended to an assigned model by the worker that has finished playing it.
-# Part of the inbox protocol rather than a detail of either side: the worker
-# stops offering it, while the controller still counts the generation as
-# spoken for (match_eval/dispatch.py).
+# Appended to an inbox model's filename by the worker once it has played it:
+# the worker stops offering it, while the controller still counts that
+# generation as assigned (match_eval/dispatch.py).
 DONE_SUFFIX = ".done"
 
 
@@ -126,20 +120,19 @@ class TagPaths:
 
     @property
     def staging_dir(self) -> Path:
-        """Generator chunks land here (directly, or via cloud sync) until the
-        generation scheduler assigns them to a generation directory."""
+        """Generator output waits here until the generation scheduler assigns
+        it to a generation directory."""
         return self.data_dir / "staging"
 
     def work_dir(self, worker_id: str) -> Path:
-        """A generator's private scratch dir for the in-progress cycle. Wiped on
-        worker start: a crash mid-cycle may leave a truncated .slog here, so
-        leftovers are never delivered."""
+        """A generator's scratch dir for its in-progress cycle. Wiped on worker
+        start, because a crash mid-cycle can leave a truncated .slog here."""
         return self.data_dir / "work" / worker_id
 
     @property
     def train_dir(self) -> Path:
-        """One-shot training data (the scripts/generate_data.py flow); the
-        generational pipeline uses generations_dir instead."""
+        """Training data from scripts/generate_data.py; the generational
+        pipeline uses generations_dir instead."""
         return self.data_dir / "train"
 
     @property
@@ -148,10 +141,9 @@ class TagPaths:
 
     @property
     def generations_dir(self) -> Path:
-        """Parent of the per-generation game directories. Each child
-        `gen_<NNNNNN>/` holds one generation's .slog files plus a manifest; the
-        trainer trains over a sliding window of the most recent complete
-        generations."""
+        """Parent of the per-generation `gen_NNNNNN/` directories, each holding
+        one generation's .slog files plus a manifest. The trainer trains over a
+        sliding window of the most recent complete generations."""
         return self.data_dir / "generations"
 
     def generation_dir(self, index: int) -> Path:
@@ -167,8 +159,8 @@ class TagPaths:
 
     @property
     def records_dir(self) -> Path:
-        """The trainer's delivered records, awaiting (or after) the
-        controller's ingest into dashboard.db (generational/train_ingest.py)."""
+        """The trainer's delivered records, which the controller ingests into
+        dashboard.db (generational/train_ingest.py)."""
         return self.root / RECORDS_DIR
 
     @property
@@ -180,14 +172,15 @@ class TagPaths:
 
     @property
     def controls_path(self) -> Path:
-        """The operator's live controls as the trainer reads them: written by
-        the dashboard whenever a control is set (generational/records.py)."""
+        """The operator's live controls: written by the dashboard, read by the
+        trainer (generational/records.py)."""
         return self.root / CONTROLS_REL
 
     @property
     def train_state_path(self) -> Path:
-        """The trainer's published cursor: a tiny JSON the generation scheduler
-        and the dashboard read instead of parsing the torch checkpoint."""
+        """The trainer's progress cursor, a small JSON that the generation
+        scheduler and the dashboard read instead of loading the torch
+        checkpoint."""
         return self.root / "train_state.json"
 
     @property
@@ -200,7 +193,7 @@ class TagPaths:
 
     @property
     def dashboard_db(self) -> Path:
-        """SQLite store of all metrics + eval data, read by the dashboard."""
+        """SQLite store of all metrics and eval data, read by the dashboard."""
         return self.root / "dashboard.db"
 
     def checkpoint_path(self, epoch: int) -> Path:
@@ -208,18 +201,18 @@ class TagPaths:
 
     @property
     def rolling_checkpoint(self) -> Path:
-        """Single .pt reused across the streaming run (full resume state)."""
+        """The trainer's full resume state, overwritten as training progresses."""
         return self.checkpoints_dir / "model.pt"
 
     def onnx_path(self, epoch: int) -> Path:
         return self.onnx_dir / f"{ONNX_PREFIX}{epoch:04d}.onnx"
 
-    # The evidence trainer exports a pair per pass: the move_proposal_cache
-    # graph at onnx_path (the ledger's model: exported_generations, the match
-    # inbox) and its move_proposal_step companion under step/ -- a
-    # subdirectory, so neither the model_epoch_* glob nor onnx_sidecars' file
-    # filter sees it. Its unfrozen mode's plain-student export lives under
-    # plain/ for the same reason.
+    # The evidence trainer exports two graphs per generation: move_proposal_cache
+    # at onnx_path (the generation's model, as far as exported_generations and
+    # the match inbox are concerned) and its move_proposal_step companion under
+    # step/. In unfrozen mode it also exports the plain student under plain/.
+    # Subdirectories keep the companions out of the model_epoch_* glob and out
+    # of onnx_sidecars.
     def proposal_step_path(self, epoch: int) -> Path:
         return self.onnx_dir / "step" / f"{ONNX_PREFIX}{epoch:04d}.onnx"
 
@@ -232,30 +225,30 @@ class TagPaths:
         return int(path.stem.rsplit("_", 1)[1])
 
     def exported_generations(self) -> list[int]:
-        """The generation indices this tag has an exported ONNX for, ascending
-        (the inverse-parsed model_epoch_NNNN.onnx names in models/). The
-        filesystem is the authority on what is deployable: a generation's ONNX
-        is written before any dashboard row records it."""
+        """The generations with an ONNX export in models/, ascending. The
+        filesystem rather than the dashboard is the authority on what is
+        deployable, because the export is written before any dashboard row
+        records it."""
         return sorted(self.onnx_epoch(p) for p in self.onnx_dir.glob(f"{ONNX_PREFIX}*.onnx"))
 
     @property
     def onnx_sidecars(self) -> list[Path]:
-        """Files in models/ that the exports reference rather than being one:
-        the shared external-data blob the frozen lexicon buffers live in
-        (position_eval/onnx_export.py), written once and pointed at by every
-        generation. A model only loads beside them, so anything given a model
-        is given these too."""
+        """Non-export files in models/ that exports reference: the shared
+        external-data blob holding the frozen lexicon buffers
+        (position_eval/onnx_export.py), written once for all generations. A
+        model loads only beside its sidecars, so whatever ships a model must
+        ship these too."""
         return sorted(
             p for p in self.onnx_dir.glob("*") if p.is_file() and not p.name.startswith(ONNX_PREFIX)
         )
 
     @property
     def match_results_dir(self) -> Path:
-        """Finished matches a match-eval worker has delivered, awaiting the
-        controller's ingest into dashboard.db (match_eval/dispatch.py)."""
+        """Finished matches delivered by match-eval workers, awaiting ingest
+        into dashboard.db (match_eval/dispatch.py)."""
         return self.data_dir / MATCH_RESULTS_DIR
 
     def match_inbox_dir(self, worker_id: str) -> Path:
-        """Where a match-eval slot is handed the model it is to play
-        (match_eval/dispatch.py owns what the directory's contents mean)."""
+        """Where a match-eval slot receives the model it is to play
+        (match_eval/dispatch.py)."""
         return self.data_dir / MATCH_INBOX_DIR / worker_id

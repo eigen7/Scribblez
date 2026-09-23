@@ -122,9 +122,9 @@ def test_split_pair_stems_zero_disables_holdout():
 
 
 def test_split_pairs_holds_out_the_full_sweep_pairs(tmp_path):
-    """Swept pairs are the holdout wherever they exist -- they are the only
-    pairs the A3 gate metrics mean anything on -- and holdout_every does not
-    reserve stratified pairs on top of them."""
+    """Swept pairs are the holdout wherever they exist, since the full-sweep
+    ranking metrics mean something only on them; holdout_every then reserves
+    no stratified pairs on top."""
     for i in range(6):
         write_empty_pair(tmp_path, f"{i:03d}-local-0")
     write_empty_pair(tmp_path, "900-local-0", flags=MSET_FLAG_FULL_SWEEP)
@@ -410,10 +410,10 @@ def test_finalize_pins_the_teacher_generation(tmp_path, monkeypatch):
 
 
 def test_a_teacher_pinned_at_generation_zero_is_not_re_resolved(tmp_path, monkeypatch):
-    """Regression: generation 0 is a real generation, not the 'latest' sentinel.
-    A tag whose latest export at creation is generation 0 must pin to 0 and stay
-    there after newer generations land -- otherwise a worker restart would drift
-    the teacher and split the corpus's stamped hash."""
+    """Generation 0 is a real generation, not the 'latest' sentinel. A tag whose
+    latest export at creation is generation 0 must stay pinned to 0 after newer
+    generations land; otherwise a worker restart drifts the teacher and splits
+    the corpus's stamped teacher hash."""
     _teacher_under(monkeypatch, tmp_path)
     _write_teacher_export(tmp_path, "teach", 0)
     pinned = move_set_eval.finalize(SPEC, "run1", MoveSetEvalParams(teacher_tag="teach"))

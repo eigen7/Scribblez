@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Data generator for the sim-evidence kill-test (docs/plans/sim_residual_feedback.md).
+"""Generate data for the sim-evidence kill-test on this machine, without the dashboard.
 
-Runs generation cycles until stopped (Ctrl-C), accumulating .slog/.sobs pairs
-in the tag's pair store (<mount>/tags/kill_test/<tag>/data/slogs). The cycle
-logic and parameter set live in scribblez/workloads/kill_test.py (shared with
-the cloud/local worker entrypoint and the master dashboard); the parameter
-flags below are generated from KillTestParams, so this CLI cannot drift from
-the other drivers.
+Runs kill_test generation cycles until Ctrl-C, accumulating .slog/.sobs pairs
+under <mount>/tags/kill_test/<tag>/data/slogs. The cycle itself and its
+parameters live in scribblez/workloads/kill_test.py, shared with the dashboard's
+workers; the parameter flags are generated from KillTestParams.
 
-Interrupting loses at most the in-flight cycle's unfinished work; a rerun
-resumes exactly where generation left off. Run the 4-armed experiment on the
-accumulated data with scripts/kill_test.py -t <tag> (which may run while this
-keeps generating; it snapshots whatever complete pairs exist).
+A rerun resumes where the last run stopped. Train the experiment's arms on the
+accumulated pairs with scripts/kill_test.py -t <tag>; that may run while this
+keeps generating, since it uses whatever complete pairs exist. See the
+kill-test section of docs/plans/sim_residual_feedback.md.
 
 Usage:
     ./py/scripts/generate_kill_test_data.py -t apple
@@ -32,13 +30,13 @@ def main() -> int:
         "-t",
         "--tag",
         required=True,
-        help="run tag; data accumulates in the tag's data/slogs dir",
+        help="tag to accumulate data under (its data/slogs dir)",
     )
     p.add_argument(
         "--threads",
         type=int,
         default=default_thread_count(),
-        help="num c++ threads (default: all logical processors)",
+        help="engine threads for self-play and sims (default: all logical processors)",
     )
     params_mod.add_arguments(p, KillTestParams)
     args = p.parse_args()

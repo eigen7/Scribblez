@@ -12,19 +12,19 @@ Two arms, selected by a frozen task param:
   horizon the open-ended runs do not have, and every generation's export is
   equally deployable.
 
-The averaging is why the arms need a mode: schedule-free training steps at one
+The averaging is why the arms need modes. Schedule-free training steps at one
 point (`y`) and deploys another (`x`), keeping the difference in optimizer
-state, so the live weights have to be swapped before anything reads the model
-and swapped back afterwards. The swap alone is not enough for a model with
-BatchNorm: the running statistics accumulate during training, i.e. at `y`, and
-are wrong for `x` (the schedulefree README's BatchNorm caveat). Measured on the
-position-evaluation large test set, a schedule-free export read that way had
-its placement heads badly under-confident (calibration slope 1.44 instead of
-~1.05) and a 10% worse win MAE; so eval_mode also recomputes every BatchNorm
+state, so the live weights must be swapped before anything reads the model
+and swapped back afterwards. For a model with BatchNorm the swap is not
+enough: the running statistics accumulate during training, at `y`, and are
+wrong for `x` (the schedulefree README's BatchNorm caveat). On the
+position-evaluation large test set, a schedule-free export evaluated that way
+had badly under-confident placement heads (calibration slope 1.44 instead of
+~1.05) and a 10% worse win MAE. So eval_mode also recomputes every BatchNorm
 layer's statistics at `x` over a few training batches, which restores both.
-The trainer brackets its phases with train_mode / eval_mode rather than knowing
-which arm needs them; under `wsd` they do nothing, because there the live
-weights are the only weights and the statistics already match them.
+The trainer brackets its phases with train_mode / eval_mode without knowing
+which arm needs them; under `wsd` they do nothing, because the live weights
+are the only weights and the statistics already match them.
 
 Both arms present one surface: the per-step `lr_fn` run_epoch applies (None
 when the arm imposes no schedule), the `current` rate for the metrics row, any
@@ -86,7 +86,7 @@ def _model_forward(model, spatial, scalar):
 class WsdArm:
     """AdamW under the rows-clock WSD schedule, with no mode to switch."""
 
-    #: Nothing beyond `current`: the rate is the whole story for this arm.
+    #: No metrics beyond `current`.
     metrics = staticmethod(dict)
 
     def __init__(self, recorder, params, rows_trained: int):

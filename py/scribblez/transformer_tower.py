@@ -1,36 +1,29 @@
 """KataGo-style transformer tower for the shared spatial trunk.
 
-The conv tower in spatial_trunk.py reasons spatially through stacked 3x3
-convolutions and periodically re-broadcasts board-global context through
-global-pooling blocks. This tower replaces both with attention over the board's
-cells as a token sequence, mirroring the trunk of KataGo's released transformer
-nets (its NestedBottleneckTransformerBlock): each block projects the trunk
-stream down to a narrower width, runs a few (self-attention, SwiGLU FFN) pairs
-there, and projects back up onto the residual stream. Position enters through
-2D rotary embeddings on the attention queries and keys, with per-head learnable
-frequencies, so a head can be as local or as global as it learns to be.
+The alternative to spatial_trunk.py's conv tower: attention over the board's
+cells as a token sequence, following the trunk of KataGo's transformer nets
+(NestedBottleneckTransformerBlock). Each block projects the residual stream down
+to a narrower width, runs a few (self-attention, SwiGLU FFN) pairs there, and
+projects back up. Position enters through 2D rotary embeddings on queries and
+keys with learnable per-head frequencies, so each head learns how local to be.
 
-The sequence may carry extra *register* tokens past the board cells -- content
-the caller supplies (the position-eval model's tile-supply tokens) that every
-attention layer sees alongside the cells. Registers have learnable 2D positions,
-initialised just off the board, so the same rotary machinery covers them.
+The sequence may also carry *register* tokens after the cells, supplied by the
+caller (e.g. supply_registers.py's tile-supply tokens). Registers get learnable
+2D positions, initialized just off the board, so the same rotary machinery
+covers them.
 
-Training memory: each (attention, FFN) pair is activation-checkpointed --
-autograd keeps only the pair's input and recomputes its ~dozen internal
-activations during backward. Without it the 20 pairs of the production config
-(10 blocks x inner_length 2, mid 192, 252 tokens) need ~25 GiB at batch 256 in
-fp32; with it, ~5 GiB, for roughly a quarter more step time. Checkpointing is
-skipped outside a training backward (eval, no-grad passes, ONNX tracing), where
-nothing is saved for backward anyway.
+Training memory: each (attention, FFN) pair is activation-checkpointed, so
+backward recomputes the pair's internal activations instead of storing them.
+For the default position-eval config (10 blocks x 2 pairs, width 192, 252
+tokens) at batch 256 in fp32 this cuts memory from ~25 GiB to ~5 GiB for about
+25% more step time.
 
-Export discipline (onnx_export_util.py): the attention projections are
-per-projection nn.Linears and RMSNorm is elementwise, so the legacy tracer
-emits every weight as a named initializer. The fused
-scaled_dot_product_attention between them carries no weights and decomposes
-to plain matmul + softmax in the exported graph.
+ONNX export (onnx_export_util.py): the attention projections are separate
+nn.Linears and RMSNorm is written elementwise, so every weight exports as a
+named initializer. scaled_dot_product_attention has no weights and exports as
+plain matmul + softmax.
 
-docs/model_architectures.md diagrams this tower; any change to it belongs in
-the same commit as the corresponding change there.
+docs/model_architectures.md diagrams this tower; keep it in sync.
 """
 
 import math
@@ -44,9 +37,9 @@ from torch.utils.checkpoint import checkpoint
 
 @dataclass(frozen=True)
 class TransformerConfig:
-    """Shape of one nested-bottleneck block: the inner width, its attention head
-    count (head dim = mid_channels / num_heads, even so RoPE can rotate channel
-    pairs), the SwiGLU hidden width, and the (attention, FFN) pairs per block."""
+    """Shape of one nested-bottleneck block. The head dim
+    (mid_channels / num_heads) must be even, since RoPE rotates channel pairs.
+    inner_length is the number of (attention, FFN) pairs per block."""
 
     mid_channels: int
     num_heads: int
@@ -69,8 +62,8 @@ class TransformerConfig:
 
 
 class RMSNorm(nn.Module):
-    """Root-mean-square normalisation over the last dim with a learned per-channel
-    gain, written out elementwise so it exports as plain ops."""
+    """RMS normalization over the last dim with a learned per-channel gain,
+    written elementwise so it exports as plain ops."""
 
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
@@ -141,9 +134,8 @@ class AttentionBlock(nn.Module):
         q = apply_rope(self._heads(self.q_proj(xn)), cos, sin).transpose(1, 2)  # (B, H, S, D)
         k = apply_rope(self._heads(self.k_proj(xn)), cos, sin).transpose(1, 2)
         v = self._heads(self.v_proj(xn)).transpose(1, 2)
-        # Fused attention never materializes the (B, H, S, S) score matrix, which
-        # the explicit softmax(q @ k^T) form keeps for backward at every layer --
-        # ~20 x 400 MB at batch 256 over the 252-token board+register sequence.
+        # Fused attention avoids storing the (B, H, S, S) score matrix for
+        # backward, about 400 MB per layer at batch 256 over 252 tokens.
         context = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).flatten(2)  # (B, S, C)
         return self.out_proj(context)
 
@@ -179,9 +171,9 @@ class TransformerPair(nn.Module):
 
 class NestedBottleneckTransformerBlock(nn.Module):
     """One tower block: RMSNorm -> ReLU -> Linear C -> C_mid, `inner_length`
-    transformer pairs at C_mid, RMSNorm -> ReLU -> Linear C_mid -> C. The
-    up-projection is zero-initialised, so every block starts as the identity on
-    the trunk stream (KataGo's fixup-style init). forward returns the residual."""
+    transformer pairs at C_mid, RMSNorm -> ReLU -> Linear C_mid -> C.
+    forward returns the residual. The up-projection is zero-initialized, so
+    every block starts as the identity on the residual stream (as in KataGo)."""
 
     def __init__(self, channels: int, cfg: TransformerConfig):
         super().__init__()
@@ -198,8 +190,8 @@ class NestedBottleneckTransformerBlock(nn.Module):
     def _run_pair(
         self, pair: TransformerPair, out: torch.Tensor, pos_x: torch.Tensor, pos_y: torch.Tensor
     ) -> torch.Tensor:
-        """The pair's forward; under a training backward it is recomputed rather
-        than having its internal activations saved (see the module docstring)."""
+        """The pair's forward, activation-checkpointed when training with grad
+        (see the module docstring)."""
         if self.training and torch.is_grad_enabled():
             return checkpoint(pair, out, pos_x, pos_y, use_reentrant=False)
         return pair(out, pos_x, pos_y)
@@ -211,8 +203,8 @@ class NestedBottleneckTransformerBlock(nn.Module):
         return self.up(F.relu(self.up_norm(out)))
 
 
-# Register tokens start in one column three cells past the board's left edge,
-# spread down its height, so no register coincides with a cell or another register.
+# Register tokens start in a column three cells left of the board, spread down
+# its height, so none coincides with a cell or another register.
 REGISTER_INIT_X = -3.0
 
 
@@ -223,10 +215,9 @@ def register_init_positions(num_registers: int, board_size: int) -> torch.Tensor
 
 
 class TransformerTower(nn.Module):
-    """`num_blocks` nested-bottleneck blocks over a token sequence of the board's
-    board_size² cells (row-major) followed by `num_registers` register tokens,
-    then a final RMSNorm. Cells sit at their grid coordinates; registers at
-    learnable positions."""
+    """`num_blocks` nested-bottleneck blocks and a final RMSNorm over the
+    board's cells (row-major, at their grid coordinates) followed by
+    `num_registers` register tokens (at learnable positions)."""
 
     def __init__(
         self,
