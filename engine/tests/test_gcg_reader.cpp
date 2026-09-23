@@ -6,6 +6,7 @@
 #include "data/gcg_reader.h"
 #include "game/tile.h"
 #include "game/tile_counts.h"
+#include "training/lane_analysis.h"
 
 #include <gtest/gtest.h>
 
@@ -180,6 +181,50 @@ TEST(GcgPositionTest, RefusesAMissingRackPragma) {
   std::string error;
   EXPECT_FALSE(read_gcg_position(gcg, false, &p, &error));
   EXPECT_NE(error.find("#Rack1"), std::string::npos);
+}
+
+// Every reader takes the side to move's rack from the same header pragma. The
+// two-move game below leaves Alice (player 1) to move.
+std::string two_move_game(const std::string& header_pragma, const std::string& post_event_pragma) {
+  return "#player1 Alice Alice\n"
+         "#player2 Bob Bob\n" +
+         header_pragma + ">Alice: AAAAAAA 8D AAA +6 6\n" + post_event_pragma +
+         ">Bob: BBBBBBB 9D BBB +8 8\n";
+}
+
+// The mover's rack as read_gcg_position and the lane-analysis reader take it,
+// or "<none>" when a reader refuses the file. The two must always agree.
+std::string mover_rack(const std::string& gcg) {
+  ParsedGcgPosition p;
+  std::string error;
+  const bool position_ok = read_gcg_position(gcg, /*open_leaves=*/false, &p, &error);
+  GcgAnalysisPosition a;
+  const bool analysis_ok = parse_gcg_analysis_position(gcg, &a, &error);
+  EXPECT_EQ(position_ok, analysis_ok);
+  if (!position_ok || !analysis_ok) return "<none>";
+  EXPECT_EQ(p.rack.to_string(), a.rack.to_string());
+  return p.rack.to_string();
+}
+
+// '_' marks a slot the writer does not reveal: it holds no tile, and is not a
+// blank. '?' and a lowercase letter are blanks, as in a turn line's rack.
+TEST(GcgRackPragmaTest, UnknownSlotsHoldNoTile) {
+  EXPECT_EQ(mover_rack(two_move_game("#Rack1 _CE__MR\n", "")), "CEMR");
+  EXPECT_EQ(mover_rack(two_move_game("#Rack1 CE?m\n", "")), "CE??");
+}
+
+// Only the capitalized form gcg_writer.h emits is a rack pragma.
+TEST(GcgRackPragmaTest, TheLowercaseFormIsNotAPragma) {
+  EXPECT_EQ(mover_rack(two_move_game("#rack1 CCCDEEE\n", "")), "<none>");
+  EXPECT_EQ(mover_rack(two_move_game("#RACK1 CCCDEEE\n", "")), "<none>");
+  EXPECT_EQ(mover_rack(two_move_game("#Rack1x CCCDEEE\n", "")), "<none>");
+}
+
+// Only a header pragma gives the final position's rack. A post-event pragma is
+// the rack just after that event, which the final position may have moved past.
+TEST(GcgRackPragmaTest, OnlyTheHeaderPragmaGivesTheFinalRack) {
+  EXPECT_EQ(mover_rack(two_move_game("", "#Rack1 EEIORST\n")), "<none>");
+  EXPECT_EQ(mover_rack(two_move_game("#Rack1 CCCDEEE\n", "#Rack1 EEIORST\n")), "CCCDEEE");
 }
 
 // The position-evaluation datasets' reading: the board after the final move,

@@ -95,6 +95,29 @@ int board_tile_count(const Board& board) {
   return n;
 }
 
+// The player (0 or 1) that a "#Rack1 <tiles>" / "#Rack2 <tiles>" pragma line
+// is for, or nullopt if `line` is not one. Only the capitalized form that
+// gcg_writer.h emits is a rack pragma: tournament GCG uses lowercase "#rack1"
+// with different meaning, and the turn lines carry that information anyway.
+std::optional<int> rack_pragma_player(const std::string& line) {
+  for (int player = 0; player < 2; ++player) {
+    const std::string name = std::format("#Rack{}", player + 1);
+    if (line.starts_with(name) && (line.size() == name.size() || line[name.size()] == ' ')) {
+      return player;
+    }
+  }
+  return std::nullopt;
+}
+
+// The known tiles of `slots`.
+Rack rack_from_slots(const ParsedRackSlots& slots) {
+  Rack rack;
+  for (const std::optional<Tile>& tile : slots) {
+    if (tile.has_value()) rack.add(*tile);
+  }
+  return rack;
+}
+
 TileCounts full_bag() {
   TileCounts bag;
   for (Tile l = Tile::of(0); l < 26; ++l) {
@@ -159,21 +182,13 @@ class GcgReader {
     return false;
   }
 
-  // Parses the "#Rack1 <tiles>" / "#Rack2 <tiles>" pragmata that
-  // gcg_writer.h emits. Before any event line, the pragma gives a player's
-  // current rack, applied to the final position (the "resume" rack). After an
-  // event, it gives their rack just after that event. Only the capitalized
-  // form is consumed: tournament GCG uses lowercase "#rack1" with different
-  // meaning, and the turn lines carry that information anyway.
+  // Parses a rack pragma (see rack_pragma_player). Before any event line, the
+  // pragma gives a player's current rack, applied to the final position (the
+  // "resume" rack). After an event, it gives their rack just after that event.
   bool TryParseRackPragma(const std::string& line) {
-    int player = 0;
-    if (line.rfind("#Rack1", 0) == 0) {
-      player = 0;
-    } else if (line.rfind("#Rack2", 0) == 0) {
-      player = 1;
-    } else {
-      return false;
-    }
+    const std::optional<int> pragma_player = rack_pragma_player(line);
+    if (!pragma_player.has_value()) return false;
+    const int player = *pragma_player;
 
     const std::size_t space = line.find(' ');
     const std::string token = space == std::string::npos ? "" : line.substr(space + 1);
@@ -285,7 +300,7 @@ class GcgReader {
     ParsedGcgTurn turn;
     turn.rack_before_slots = racks_[player];
     turn.record.player = player;
-    turn.record.rack_before = RackFromSlots(turn.rack_before_slots);
+    turn.record.rack_before = rack_from_slots(turn.rack_before_slots);
     turn.record.bag_size_before = BagSizeEstimate();
     turn.record.move = Move::pass();
     turn.record.score_delta = 0;
@@ -307,7 +322,7 @@ class GcgReader {
     ParsedGcgTurn turn;
     turn.rack_before_slots = racks_[player];
     turn.record.player = player;
-    turn.record.rack_before = RackFromSlots(turn.rack_before_slots);
+    turn.record.rack_before = rack_from_slots(turn.rack_before_slots);
     turn.record.bag_size_before = BagSizeEstimate();
 
     TileCounts exchanged;
@@ -398,7 +413,7 @@ class GcgReader {
     ParsedGcgTurn turn;
     turn.rack_before_slots = racks_[player];
     turn.record.player = player;
-    turn.record.rack_before = RackFromSlots(turn.rack_before_slots);
+    turn.record.rack_before = rack_from_slots(turn.rack_before_slots);
     turn.record.bag_size_before = bag_size_before;
     turn.record.move = move;
     turn.record.score_delta = *score;
@@ -452,14 +467,6 @@ class GcgReader {
     }
   }
 
-  Rack RackFromSlots(const ParsedRackSlots& slots) const {
-    Rack rack;
-    for (int i = 0; i < RACK_SIZE; ++i) {
-      if (slots[i].has_value()) rack.add(slots[i].value());
-    }
-    return rack;
-  }
-
   int BagSizeEstimate() const { return std::max(0, 100 - board_tile_count(board_) - 14); }
 
   ParsedGcgSnapshot CurrentSnapshot(int turn_player = 0) const {
@@ -477,6 +484,7 @@ class GcgReader {
     out_game->turns = turns_;
     out_game->snapshots = snapshots_;
     out_game->end_adjustments = end_adjustments_;
+    out_game->header_racks = resume_racks_;
   }
 
   std::array<std::string, 2> names_ = {"Player 1", "Player 2"};
@@ -504,14 +512,7 @@ GameLogStorage ParsedGcgGame::to_game_log_storage() const {
 
   if (!snapshots.empty()) {
     storage.final_scores = snapshots.back().scores;
-    for (int p = 0; p < 2; ++p) {
-      Rack rack;
-      for (int i = 0; i < RACK_SIZE; ++i) {
-        if (snapshots.back().racks[p][i].has_value())
-          rack.add(snapshots.back().racks[p][i].value());
-      }
-      storage.final_racks[p] = rack;
-    }
+    for (int p = 0; p < 2; ++p) storage.final_racks[p] = rack_from_slots(snapshots.back().racks[p]);
   }
 
   return storage;
@@ -540,24 +541,10 @@ Rack retained_leave(const ParsedGcgGame& game, int player) {
   return Rack{};
 }
 
-std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
-  const std::string want = std::format("#rack{}", player + 1);
-  std::istringstream lines(gcg_text);
-  std::string line;
-  while (getline_lf_or_crlf(lines, line)) {
-    if (line.size() < want.size() + 1) continue;
-    std::string head = line.substr(0, want.size());
-    for (char& c : head) c = char(std::tolower(uint8_t(c)));
-    if (head != want || line[want.size()] != ' ') continue;
-    Rack rack;
-    for (size_t i = want.size() + 1; i < line.size(); ++i) {
-      const char c = line[i];
-      if (c == ' ') continue;
-      rack.add(c == '?' ? BLANK : Tile::from_char(c));
-    }
-    return rack;
-  }
-  return std::nullopt;
+std::optional<Rack> header_rack(const ParsedGcgGame& game, int player) {
+  const std::optional<ParsedRackSlots>& slots = game.header_racks[player];
+  if (!slots.has_value()) return std::nullopt;
+  return rack_from_slots(*slots);
 }
 
 namespace {
@@ -574,7 +561,7 @@ bool final_state(const std::string& gcg_text, ParsedGcgGame* game,
   }
   *snapshot = &game->snapshots.back();
   *mover = (*snapshot)->turn_player;
-  const std::optional<Rack> rack = pragma_rack(gcg_text, *mover);
+  const std::optional<Rack> rack = header_rack(*game, *mover);
   if (!rack.has_value()) {
     *error_message = std::format("the mover's rack is unknown: add a #Rack{} pragma", *mover + 1);
     return false;
@@ -595,7 +582,7 @@ bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
     return false;
   }
   const ParsedGcgSnapshot& snapshot = *snapshot_ptr;
-  std::optional<Rack> opp_rack = pragma_rack(gcg_text, 1 - mover);
+  std::optional<Rack> opp_rack = header_rack(game, 1 - mover);
   if (!opp_rack.has_value()) {
     try {
       opp_rack = snapshot.board.hidden_rack(mover_rack);
