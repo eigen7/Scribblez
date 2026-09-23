@@ -3188,6 +3188,22 @@ TEST(LeaveValues, RealKwg) {
   ASSERT_EQ(lv.lookup(empty), 0.0f);
 }
 
+// A named pre-endgame table that is missing or malformed is a setup error,
+// not a silent opt-out of the adjustment.
+TEST(HastyEquity, BadPegFileThrows) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_heq_badpeg";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+
+  EXPECT_THROW(HastyEquity::init(fix.path.string(), (tmp / "missing.json").string()),
+               util::Exception);
+  const fs::path malformed = tmp / "malformed.json";
+  std::ofstream(malformed) << "{}";
+  EXPECT_THROW(HastyEquity::init(fix.path.string(), malformed.string()), util::Exception);
+  fs::remove_all(tmp);
+}
+
 TEST(HastyEquity, Components) {
   // The equity components one at a time, on the synthetic leaves and an empty
   // pre-endgame table (so the PEG term is always 0).

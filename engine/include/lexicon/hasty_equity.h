@@ -49,8 +49,8 @@ class HastyEquity {
  public:
   static HastyEquity& instance();
 
-  // Call once before any equity query. Throws if the leaves file can't be read;
-  // a missing or malformed pre-endgame file silently disables that adjustment.
+  // Call once before any equity query. Throws if either file can't be read or
+  // parsed. An empty `peg_json_path` opts out of the pre-endgame adjustment.
   static void init(const std::string& klv2_path, const std::string& peg_json_path);
 
   // init() with `lexicon`'s default files; a no-op once loaded. Call during

@@ -53,22 +53,24 @@ double endgame_adjustment(int leave_point_value, bool leave_empty, const Rack& o
   return 2.0 * opp_rack.point_value();
 }
 
-// Returns an empty table (disabling the adjustment) if the file is missing or
-// isn't a JSON array.
+// An empty path means no pre-endgame adjustment. Throws if a named file is
+// missing or isn't a JSON array of numbers.
 std::vector<double> load_peg_table(const std::string& path) {
   if (path.empty()) return {};
   std::ifstream in(path);
-  if (!in) return {};
+  if (!in) throw util::Exception("HastyEquity: cannot open pre-endgame table {}", path);
 
   std::ostringstream buf;
   buf << in.rdbuf();
 
   boost::json::error_code ec;
   auto val = boost::json::parse(buf.str(), ec);
-  if (ec || !val.is_array()) return {};
+  if (ec || !val.is_array()) {
+    throw util::Exception("HastyEquity: pre-endgame table {} is not a JSON array", path);
+  }
 
   std::vector<double> table;
-  for (const auto& elem : val.as_array()) table.push_back(elem.as_double());
+  for (const auto& elem : val.as_array()) table.push_back(elem.to_number<double>());
   return table;
 }
 
@@ -80,9 +82,12 @@ HastyEquity& HastyEquity::instance() {
 }
 
 void HastyEquity::init(const std::string& klv2_path, const std::string& peg_json_path) {
+  // Load both before assigning either, so a throw leaves the singleton as it was.
+  LeaveValues leave_values = LeaveValues::load(klv2_path);
+  std::vector<double> peg_table = load_peg_table(peg_json_path);
   auto& inst = instance();
-  inst.leave_values_ = LeaveValues::load(klv2_path);
-  inst.peg_table_ = load_peg_table(peg_json_path);
+  inst.leave_values_ = std::move(leave_values);
+  inst.peg_table_ = std::move(peg_table);
   inst.ready_ = true;
 }
 
