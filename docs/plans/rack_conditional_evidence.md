@@ -532,8 +532,8 @@ nothing. Each layer is checked against the same cases before the next.
   whether the spot-check cap is a fixed count or a fraction of rollouts.
 - **How far the learned policy extends into the rollout.** Ply one is the
   cut where, with the rack-late student, the trunk encode is per candidate;
-  extending to our own follow-up
-  costs an encode per rollout and is measurable.
+  extending to our own follow-up costs an encode per rollout and is
+  measurable.
 - **Nested-sim shape**: how many replies, how many rollouts, how shallow a
   horizon, before a spot check is worth its cost.
 - **Whether the conditioned student generalizes ideas across candidates**
