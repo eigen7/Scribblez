@@ -510,10 +510,10 @@ target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
-add_executable(mset_infer_smoke apps/mset_infer_smoke.cpp)
+add_executable(mset_infer_smoke apps/mset_infer_smoke.cpp apps/synthetic_candidates.cpp)
 target_link_libraries(mset_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
-add_executable(proposal_infer_smoke apps/proposal_infer_smoke.cpp)
+add_executable(proposal_infer_smoke apps/proposal_infer_smoke.cpp apps/synthetic_candidates.cpp)
 target_link_libraries(proposal_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
 # Distillation targets for the move set evaluation model: the position
