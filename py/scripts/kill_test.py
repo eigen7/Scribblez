@@ -64,6 +64,7 @@ import torch
 import torch.nn.functional as F
 from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows, get_input_shapes, set_opp_leave_input
+from scribblez.position_eval.model import LossConfig
 from scribblez.sim_evidence.model import NUM_EVIDENCE_PLANES, EvidencePositionEvalModel
 from scribblez.sim_evidence.slog_meta import position_meta
 from scribblez.sim_evidence.sobs import (
@@ -75,6 +76,7 @@ from scribblez.sim_evidence.sobs import (
     read_sobs_flags,
 )
 from scribblez.workloads import kill_test as kill_test_workload
+from scribblez.workloads.position_eval import PositionEvalParams
 
 ARMS = ("none", "shuffled", "scalar", "full")
 
@@ -292,6 +294,8 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
         num_blocks=args.num_blocks,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # The production trainer's loss weights, but for --lambda-sd.
+    loss_cfg = LossConfig.from_args(PositionEvalParams(lambda_sd=args.lambda_sd))
     n_params = sum(p.numel() for p in model.parameters())
     print(
         f"\n=== arm={arm} train={len(train['wld'])} holdout={len(holdout['wld'])} "
@@ -310,11 +314,7 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
         for idx in batch_slices(len(train["wld"]), args.batch_size, generator):
             batch = to_device(train, idx, device)
             out = forward(model, batch)
-            losses = model.compute_loss(
-                out,
-                {k: batch[k] for k in model.target_keys()},
-                lambda_sd=args.lambda_sd,
-            )
+            losses = model.compute_loss(out, {k: batch[k] for k in model.target_keys()}, loss_cfg)
             optimizer.zero_grad()
             losses["total"].backward()
             optimizer.step()
@@ -502,8 +502,8 @@ def main():
         "--lambda-sd",
         type=float,
         default=0.004,
-        help="score-diff loss weight; the production trainer's default, small so the "
-        "WLD head, which the decision metric scores, dominates the objective",
+        help="score-diff loss weight, small so the WLD head, which the decision metric "
+        "scores, dominates the objective",
     )
     p.add_argument("--weight-decay", type=float, default=1e-4, help="AdamW weight decay")
     p.add_argument("--trunk-channels", type=int, default=96, help="trunk width")

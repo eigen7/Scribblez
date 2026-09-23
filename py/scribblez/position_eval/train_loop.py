@@ -81,16 +81,7 @@ def run_epoch(
         with torch.autocast(device.type, dtype=torch.bfloat16):
             outputs = model(input_spatial, input_scalar)
         outputs = {k: v.float() for k, v in outputs.items()}
-        losses = model.compute_loss(
-            outputs,
-            targets,
-            lambda_wld=loss_cfg.lambda_wld,
-            lambda_sd=loss_cfg.lambda_sd,
-            lambda_next_placement=loss_cfg.lambda_next_placement,
-            lambda_win_placement=loss_cfg.lambda_win_placement,
-            huber_delta_mean=loss_cfg.huber_delta_mean,
-            huber_delta_std=loss_cfg.huber_delta_std,
-        )
+        losses = model.compute_loss(outputs, targets, loss_cfg)
         optimizer.zero_grad()
         losses["total"].backward()
         if grad_clip > 0:
