@@ -20,15 +20,14 @@ namespace {
 
 namespace json = boost::json;
 
-// Cap on maximal plays reported per lane: a low-scoring lane can tie across many
-// short plays, and the UI only needs a representative sample.
+// A low-scoring lane can tie across many short plays, and the UI only needs a
+// representative sample.
 constexpr int kMaxBestMovesPerLane = 16;
 
-// The display character for a lane-union tile kind (a letter, or '?' for a blank).
 char kind_char(int kind) { return kind == kLaneBlankKind ? '?' : char('A' + kind); }
 
-// One lane's placed-tile union as a 15-cell array; cell `i` lists the letter(s) /
-// blank that a maximal play newly places there (empty where nothing is placed).
+// One lane's placed-tile union: per cell, the tile kinds some maximal play newly
+// places there.
 json::array lane_placed(const LaneBest& lane) {
   json::array cells;
   for (int cell = 0; cell < kLaneLen; ++cell) {
@@ -41,8 +40,8 @@ json::array lane_placed(const LaneBest& lane) {
   return cells;
 }
 
-// One lane's maximal plays (capped), each with its word and origin recovered from
-// the pre-move board.
+// One lane's maximal plays (capped), with words and origins read off the
+// pre-move board.
 json::array lane_best_moves(const Board& board, const LaneBestMoves& lane) {
   json::array out;
   const int n = std::min(int(lane.moves.size()), kMaxBestMovesPerLane);
@@ -75,7 +74,7 @@ json::array lane_axis(const Board& board, const std::array<LaneBest, kLanesPerAx
   return out;
 }
 
-// The token after a `#Rack1` / `#Rack2` header line, if present (player 0 -> Rack1).
+// The token after the player's `#Rack1` / `#Rack2` line, if present.
 std::optional<std::string> rack_header_token(const std::string& gcg_text, int player) {
   const std::string key = player == 0 ? "#Rack1" : "#Rack2";
   std::istringstream in(gcg_text);
@@ -90,8 +89,8 @@ std::optional<std::string> rack_header_token(const std::string& gcg_text, int pl
   return std::nullopt;
 }
 
-// A Rack from a GCG rack token: letters become tiles, '?' a blank; '_' marks an
-// unknown slot (used for a hidden opponent rack) and is skipped.
+// '?' is a blank; '_' marks an unknown slot (a hidden opponent tile) and is
+// skipped along with any other non-letter.
 Rack rack_from_header_token(const std::string& tok) {
   Rack rack;
   for (char ch : tok) {

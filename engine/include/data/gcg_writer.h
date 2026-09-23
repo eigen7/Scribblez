@@ -7,56 +7,57 @@
 #include <string>
 #include <vector>
 
+// Writes GameLogs as GCG, the de-facto standard Scrabble game-log format (as
+// written by Macondo and Quackle): header pragmata, then one event line per
+// turn,
+//   >nick: rack POS WORD +score cumulative   (play; '.' = a tile already on
+//                                              the board, lowercase = a blank)
+//   >nick: rack -TILES +0 cumulative         (exchange)
+//   >nick: rack - +0 cumulative              (pass)
+// then the end-of-game rack adjustment lines.
+
 namespace scribblez {
 
-// Serialize a GameLog as a GCG file -- the de-facto standard Scrabble game-log
-// format (as written by Macondo/Quackle). Header pragmata plus one event line
-// per turn:
-//   >nick: rack POS WORD +score cumulative      (tile placement; '.' = a tile
-//                                                 already on the board, lower-
-//                                                 case = a designated blank)
-//   >nick: rack -TILES +0 cumulative            (exchange)
-//   >nick: rack - +0 cumulative                 (pass)
-// followed by end-of-game rack adjustments (END_RACK_PTS / END_RACK_PENALTY).
 struct GcgWriteOptions {
   struct PostEventRacks {
     std::optional<std::string> rack1;
     std::optional<std::string> rack2;
   };
 
-  // If set, emits '#lexicon <name>' near the top of the file.
+  // Emitted as '#lexicon <name>'.
   std::optional<std::string> lexicon_name;
 
-  // Extra '#note ...' lines to include near the top of the file.
+  // Emitted as '#note ...' lines in the header.
   std::vector<std::string> notes;
 
-  // Per turn, whether its line includes rack_before. Empty includes them all.
+  // Per turn, whether its line includes the rack. Empty includes them all.
   std::vector<bool> include_rack_before;
 
-  // Overrides include_rack_before and the rack string derived from TurnRecord.
+  // Per turn, the rack field to write, or nullopt to omit it. If non-empty,
+  // replaces both include_rack_before and the TurnRecord's rack.
   std::vector<std::optional<std::string>> rack_before_fields;
 
-  // The exchanged-tile field, without its leading '-'. For incomplete-rack GCG
-  // logs, which encode unknown exchanged tiles as '_' or by count.
+  // Per turn, the exchanged-tile field without its leading '-', overriding the
+  // move's tiles. For logs of games with hidden racks, which record unknown
+  // exchanged tiles as '_' or as a count.
   std::vector<std::optional<std::string>> exchange_fields;
 
-  // '#rack1' / '#rack2' pragmata to emit after each event line.
+  // Per turn, '#Rack1' / '#Rack2' pragmata to emit after its event line.
   std::vector<PostEventRacks> post_event_racks;
 
-  // '#Rack1' / '#Rack2' pragmata to emit after the header.
+  // '#Rack1' / '#Rack2' pragmata to emit in the header. gcg_reader.h applies
+  // these to the game's final position.
   std::optional<std::string> initial_rack1;
   std::optional<std::string> initial_rack2;
 };
 
-// One move in GCG event notation against the board it is about to be played
-// on: "POS WORD" for a play (row-first position for horizontal, column-first
-// for vertical; '.' marks a played-through square, lowercase a designated
-// blank), "-TILES" for an exchange, "-" for a pass.
+// One move in GCG event notation, given the board it is played on: "POS WORD"
+// for a play (row first for horizontal, "8D"; column first for vertical,
+// "D8"), "-TILES" for an exchange, "-" for a pass.
 std::string move_notation(const Board& board_before, const Move& m);
 
-// move_notation for a reader rather than a parser: the played-through squares
-// spelled out in parentheses instead of dotted -- "A4 (mO)u(N)T" for GCG's
-// "A4 ..u.T".
+// move_notation for human readers: played-through tiles are spelled out in
+// parentheses instead of dotted, e.g. "A4 (mO)u(N)T" for GCG's "A4 ..u.T".
 std::string spelled_move_notation(const Board& board_before, const Move& m);
 
 std::string game_log_to_gcg(const GameLog& log);

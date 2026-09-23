@@ -1,3 +1,12 @@
+// Placement footprints, the class space of the position-evaluation model's
+// placement heads: the class encoding (training/footprint.h), the legality
+// masks the heads' masked softmax uses (training/footprint_mask.h), and the
+// collapse from per-class logits to per-cell planes
+// (training/footprint_collapse.h). Class indices are written out as
+// (row * 15 + col) * kSlotsPerCell + slot, where slot 0 is a lone tile,
+// 1 + (k - 2) a horizontal k-tile footprint, and kFootprintMaxK + (k - 2) a
+// vertical one.
+
 #include "data/gcg_reader.h"
 #include "encoding/game_state_encoder.h"
 #include "game/board.h"
@@ -30,9 +39,8 @@ using CellSet = std::set<std::pair<int, int>>;
 
 Glyph G(int letter_index) { return Glyph::of(Tile::of(letter_index)); }
 
-// A 27-count availability array (A..Z then blank at 26) holding one of each
-// listed letter; '?' adds a wildcard blank. Unlisted letters stay 0 (out of
-// stock). Feeds opp_footprint_mask / collapse_footprint_planes as available_counts.
+// A 27-count availability array (A..Z, then blank at 26) with one of each
+// listed letter; '?' adds a blank. Unlisted letters are out of stock.
 std::array<uint8_t, 27> available_of(const std::string& letters) {
   std::array<uint8_t, 27> s{};
   for (char ch : letters) {
@@ -134,10 +142,9 @@ int count_true(const FootprintMask& m) {
   return n;
 }
 
-// On an empty board every square reads as unconstrained, so with no availability
-// counts the opp mask reduces to geometry + tile budget -- exercisable without a
-// dictionary. (Cross-check and availability gating need a real board/counts; see
-// the availability tests below and the soundness sweep.)
+// On an empty board every square is unconstrained, so without availability
+// counts the opp mask reduces to geometry plus the tile budget, and needs no
+// dictionary.
 TEST(FootprintMask, EmptyBoardGeometryAndBudget) {
   Board b;
   FootprintMask m;
@@ -146,8 +153,8 @@ TEST(FootprintMask, EmptyBoardGeometryAndBudget) {
   EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (3 - 2))]);    // horizontal k=3 fits
   EXPECT_FALSE(m[(7 * 15 + 12) * kSlotsPerCell + (1 + (7 - 2))]);  // horizontal k=7 off the edge
   EXPECT_TRUE(m[kPassClass]);                                      // pass always legal
-  EXPECT_FALSE(m[kExtraClass]);                                    // dummy for a plays head
-  EXPECT_EQ(count_true(m), 2295 + 1);  // every geometrically-fitting footprint + pass
+  EXPECT_FALSE(m[kExtraClass]);                                    // unused by a plays head
+  EXPECT_EQ(count_true(m), 2295 + 1);  // every footprint that fits, plus pass
 }
 
 TEST(FootprintMask, WinHeadKeepsNotWinSlot) {
@@ -155,7 +162,7 @@ TEST(FootprintMask, WinHeadKeepsNotWinSlot) {
   FootprintMask m;
   opp_footprint_mask(b, /*available_counts=*/nullptr, 7, /*win_head=*/true, m);
   EXPECT_TRUE(m[kExtraClass]);
-  EXPECT_EQ(count_true(m), 2295 + 2);  // + pass + not-win
+  EXPECT_EQ(count_true(m), 2295 + 2);  // plus pass and not-win
 }
 
 TEST(FootprintMask, BudgetCapsK) {
@@ -182,8 +189,8 @@ int transposed_class(int cls) {
   return (c * kFootprintSide + r) * kSlotsPerCell + tslot;
 }
 
-// The mask of the transposed board is the transposed mask, class for class --
-// through the cross-check caches Board::transpose hands over.
+// The mask of the transposed board is the transposed mask, class for class.
+// Also exercises the cross-check caches Board::transpose carries over.
 TEST(FootprintMask, TransposedBoardMaskIsTheTransposedMask) {
   Board b;
   b.set(6, 7, G(0));  // 'A' above (7,7): a hook constraint that breaks the symmetry
@@ -203,19 +210,17 @@ TEST(FootprintMask, TransposedBoardMaskIsTheTransposedMask) {
   EXPECT_LT(legal, kAnchoredFootprints);
 }
 
-// The opp mask gates a covered square's hook letters by availability: a footprint
-// whose constrained cell has no available legal letter (and no wildcard blank) is
-// masked out; supplying any legal hook -- or a blank -- readmits it. Board: 'A'
-// above (7,7), so a horizontal tile there hooks the down-word "A_", legal for
-// {X, Y} under the dict; (7,8) has no vertical neighbour, so it is unconstrained.
+// A footprint is masked when a constrained cell it covers has no legal letter
+// in stock and no blank. 'A' above (7,7) means a tile there forms the down-word
+// "A_", legal only for X and Y; (7,8) has no vertical neighbour.
 TEST(FootprintMask, AvailabilityGatesHookLetters) {
   Board b;
   b.set(6, 7, G(0));  // 'A'
   const Dictionary d = Dictionary::build_from_words({"AX", "AY"});
   b.ensure_movegen_caches(d);
 
-  // Horizontal 2-tile footprint covering (7,7) [hook {X,Y}] and (7,8) [free].
-  Glyph played[2] = {G(23), G(23)};  // placed letters are irrelevant to the mask
+  // Horizontal 2-tile footprint covering (7,7) and (7,8).
+  Glyph played[2] = {G(23), G(23)};  // the mask ignores the placed letters
   const uint16_t sq = (1u << 7) | (1u << 8);
   const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 2));
 
@@ -225,17 +230,16 @@ TEST(FootprintMask, AvailabilityGatesHookLetters) {
   EXPECT_FALSE(opp_admits(b, available_of("EIO"), cls));  // no legal hook available -> masked
   EXPECT_TRUE(opp_admits(b, available_of("?"), cls));     // a blank is a wildcard hook
   EXPECT_TRUE(opp_admits(b, available_of("EIO?"), cls));  // ... even amid non-hook letters
-  EXPECT_TRUE(opp_admits(b, available_of("XY"), cls));    // sanity: unchanged on re-check
+  EXPECT_TRUE(opp_admits(b, available_of("XY"), cls));    // no state carried between calls
 
-  // Null availability disables the gate -- pure board legality readmits it.
+  // Null availability disables the gate, leaving board legality only.
   FootprintMask m;
   opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, /*win_head=*/false, m);
   EXPECT_TRUE(m[cls]);
 }
 
-// The unconstrained free cell (7,8) still needs SOME tile: an utterly empty
-// availability (a blank-less bag with no listed letters) masks even a footprint whose
-// only real constraint is "place a tile here".
+// Even an unconstrained cell needs some tile, so empty availability masks
+// every footprint.
 TEST(FootprintMask, AvailabilityEmptyMasksEverything) {
   Board b;
   b.set(6, 7, G(0));
@@ -247,36 +251,33 @@ TEST(FootprintMask, AvailabilityEmptyMasksEverything) {
   EXPECT_FALSE(opp_admits(b, available_of(""), cls));  // nothing to place at all
 }
 
-// The lone-tile fix in miniature (the I13 case): a single tile below a vertical
-// word forms that word as its DOWN cross-word, so it is playable only with a
-// letter that both completes the word and is in stock -- NOT, as the old per-axis
-// OR wrongly allowed, any letter merely because the empty across-axis is
-// unconstrained. Board: 'A' above (7,7), down-word "A_" legal for {X,Y}.
+// A lone tile below a letter forms the down-word, so it needs an in-stock
+// letter that completes that word. An unconstrained across axis does not make
+// any letter playable: the tile must satisfy both axes at once. 'A' is above
+// (7,7), and "A_" is legal only for X and Y.
 TEST(FootprintMask, AvailabilityGatesLoneTileHook) {
   Board b;
   b.set(6, 7, G(0));  // 'A'
   const Dictionary d = Dictionary::build_from_words({"AX", "AY"});
   b.ensure_movegen_caches(d);
 
-  const int lone = (7 * 15 + 7) * kSlotsPerCell + 0;       // orientation-free k==1 at (7,7)
+  const int lone = (7 * 15 + 7) * kSlotsPerCell + 0;
   EXPECT_TRUE(opp_admits(b, available_of("XY"), lone));    // both down-hooks in stock
   EXPECT_TRUE(opp_admits(b, available_of("YE"), lone));    // one legal down-hook (Y) suffices
   EXPECT_TRUE(opp_admits(b, available_of("?"), lone));     // a blank is a wildcard hook
-  EXPECT_FALSE(opp_admits(b, available_of("EIO"), lone));  // no legal down-hook -> masked (the fix)
+  EXPECT_FALSE(opp_admits(b, available_of("EIO"), lone));  // no legal down-hook
   EXPECT_FALSE(opp_admits(b, available_of(""), lone));     // nothing to place at all
 
-  // Board legality only (null availability) still admits it -- some letter (X/Y) exists.
+  // Under board legality alone it is playable, since X and Y exist.
   FootprintMask m;
   opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, /*win_head=*/false, m);
   EXPECT_TRUE(m[lone]);
 }
 
-// A lone tile at a cross-point forms BOTH cross-words at once, so the exact test
-// intersects the two cross-check letter sets -- a per-axis "some available letter
-// fits this axis, AND some available letter fits that axis" is not enough. Board:
-// 'A' above (7,7) [down-word {X,Y}] and 'B' left of it [across-word {E}]. No
-// single letter is in both sets, so the square is unplayable even with X, Y and E
-// all in stock; overlapping cross-words readmit it.
+// A lone tile at a cross-point forms both cross-words, so one letter must fit
+// both; checking each axis separately is not enough. With 'A' above (7,7)
+// (down-word needs X or Y) and 'B' left of it (across-word needs E), no letter
+// fits both, so the square is unplayable even with X, Y and E in stock.
 TEST(FootprintMask, AvailabilityLoneTileNeedsBothCrossWords) {
   const int lone = (7 * 15 + 7) * kSlotsPerCell + 0;
 
@@ -298,35 +299,28 @@ TEST(FootprintMask, AvailabilityLoneTileNeedsBothCrossWords) {
   EXPECT_FALSE(opp_admits(overlap, available_of("XY"), lone));  // only E fits; X/Y satisfy neither
 }
 
-// The opp mask requires a placement to CONNECT to the board: a footprint that
-// floats free of every tile is masked even though its cells are individually
-// playable. This is the reported A1-corner bug in miniature -- an isolated empty
-// corner has unconstrained cross-checks, so the per-cell letter test admits it,
-// yet no legal move (after the opener) can reach it. Footprints touching the lone
-// 'A' at (7,7) are kept; ones adrift in the empty expanse are not. Independent of
-// the availability gate, so it also shows under null (board-legality-only) counts.
+// After the opening move, a placement must connect to a tile on the board. An
+// empty corner far from any tile has unconstrained cross-checks, so a per-cell
+// letter test alone would admit footprints there although no legal move can
+// reach them. Connectivity is checked independently of availability.
 TEST(FootprintMask, ConnectivityMasksFloatingPlacements) {
   Board b;
   b.set(7, 7, G(0));  // 'A': the sole structure everything must connect to
   const Dictionary d = Dictionary::build_from_words({"AB"});
   b.ensure_movegen_caches(d);
 
-  const int corner_lone = (0 * 15 + 0) * kSlotsPerCell + 0;            // lone tile at (0,0)
-  const int floating2 = (0 * 15 + 3) * kSlotsPerCell + (1 + (2 - 2));  // horiz k=2 in empty row 0
+  const int corner_lone = (0 * 15 + 0) * kSlotsPerCell + 0;
+  const int floating2 = (0 * 15 + 3) * kSlotsPerCell + (1 + (2 - 2));  // in empty row 0
   const int hook_lone = (7 * 15 + 8) * kSlotsPerCell + 0;              // lone tile right of 'A'
   const int abutting2 = (7 * 15 + 8) * kSlotsPerCell + (1 + (2 - 2));  // horiz k=2 abutting 'A'
 
-  // Disconnected placements: floated free of the board -> masked (the fix).
   EXPECT_FALSE(opp_admits(b, available_of("AB"), corner_lone));
   EXPECT_FALSE(opp_admits(b, available_of("AB"), floating2));
-  // Connected placements: the covered cell at (7,8) abuts 'A'. The lone tile forms
-  // the across-word "A_" (legal "AB"), so B both connects and hooks; the k=2 covers
-  // (7,8),(7,9) whose vertical cross-checks are free -> both kept.
+  // Both cover (7,8), which abuts 'A'. The lone tile hooks "AB"; the pair's
+  // cells have free vertical cross-checks.
   EXPECT_TRUE(opp_admits(b, available_of("B"), hook_lone));
   EXPECT_TRUE(opp_admits(b, available_of("AB"), abutting2));
 
-  // Connectivity holds independently of availability -- null (pure board legality)
-  // still masks the floating corner and keeps the abutting footprint.
   FootprintMask m;
   opp_footprint_mask(b, /*available_counts=*/nullptr, RACK_SIZE, /*win_head=*/false, m);
   EXPECT_FALSE(m[corner_lone]);
@@ -335,47 +329,45 @@ TEST(FootprintMask, ConnectivityMasksFloatingPlacements) {
   EXPECT_TRUE(m[abutting2]);
 }
 
-// The self mask is two expansions: the opponent's this-turn reach, then the
-// mover's footprints abutting that extended board. Without a dictionary every
-// cross-check reads as unconstrained, so these run on geometry alone.
+// The self mask covers the mover's next move, one ply after the opponent's. It
+// expands twice: first the squares the opponent's move could cover, then the
+// mover's footprints that connect to that enlarged board. Without a dictionary
+// every cross-check is unconstrained, so these tests run on geometry alone.
 TEST(SelfFootprintMask, ReachabilityFromStructure) {
   Board b;
-  b.set(7, 7, G(4));  // a lone tile: the only structure to bridge from
+  b.set(7, 7, G(4));  // the only tile on the board
   FootprintMask m;
-  // opp_budget=1: the opponent can put one tile against (7,7). self_budget=1.
   self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, /*opp_available_counts=*/nullptr,
                       /*win_head=*/false, m);
-  // (7,8) abuts the tile itself -> a lone self tile there is legal.
-  EXPECT_TRUE(m[(7 * 15 + 8) * kSlotsPerCell + 0]);
-  // (7,10): the opponent's one tile reaches at most (7,8), so a lone tile at
-  // (7,10) abuts nothing on any board the opponent can leave -> it floats.
+  EXPECT_TRUE(m[(7 * 15 + 8) * kSlotsPerCell + 0]);  // abuts the tile itself
+  // The opponent's one tile reaches at most (7,8), so (7,10) abuts nothing on
+  // any board the opponent can leave.
   EXPECT_FALSE(m[(7 * 15 + 10) * kSlotsPerCell + 0]);
-  // A far corner is well beyond reach.
   EXPECT_FALSE(m[(0 * 15 + 0) * kSlotsPerCell + 0]);
   EXPECT_TRUE(m[kPassClass]);
 }
 
-// A larger self budget widens reach only through footprints that still abut the
-// opponent's reach: with the opponent able to fill (7,8), the mover's 2-tile word
-// at (7,9)-(7,10) connects, but a lone tile at (7,10) never does -- the cell is
-// coverable, the floating footprint is not (the self-side twin of the A1 case).
+// A larger self budget widens reach only through footprints that connect. With
+// the opponent able to fill (7,8), the mover's pair at (7,9)-(7,10) connects,
+// but a lone tile at (7,10) still does not: the cell is coverable, that
+// footprint is not.
 TEST(SelfFootprintMask, WiderBudgetReachesThroughConnectedFootprints) {
   Board b;
   b.set(7, 7, G(4));
   FootprintMask m;
   const int lone_7_10 = (7 * 15 + 10) * kSlotsPerCell + 0;
-  const int pair_7_9 = (7 * 15 + 9) * kSlotsPerCell + (1 + (2 - 2));  // horiz k=2: (7,9),(7,10)
+  const int pair_7_9 = (7 * 15 + 9) * kSlotsPerCell + (1 + (2 - 2));  // (7,9),(7,10)
   self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, nullptr, /*win_head=*/false, m);
   EXPECT_FALSE(m[lone_7_10]);
   EXPECT_FALSE(m[pair_7_9]);  // k=2 exceeds self_budget=1
   self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/1, nullptr, /*win_head=*/false, m);
-  EXPECT_TRUE(m[pair_7_9]);    // (7,9) abuts the opponent's (7,8) -> the pair connects
-  EXPECT_FALSE(m[lone_7_10]);  // ... but the lone tile at (7,10) still abuts nothing
+  EXPECT_TRUE(m[pair_7_9]);  // (7,9) abuts the opponent's (7,8)
+  EXPECT_FALSE(m[lone_7_10]);
 }
 
 TEST(SelfFootprintMask, BudgetCapsK) {
   Board b;
-  b.set(7, 4, G(4));  // structure so nearby cells are reachable
+  b.set(7, 4, G(4));
   FootprintMask m;
   self_footprint_mask(b, /*self_budget=*/2, /*opp_budget=*/7, nullptr, /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 5) * kSlotsPerCell + (1 + (2 - 2))]);   // k=2 within budget
@@ -383,50 +375,49 @@ TEST(SelfFootprintMask, BudgetCapsK) {
 }
 
 TEST(SelfFootprintMask, EmptyBoardTreatsAllReachable) {
-  Board b;  // no structure -> nothing to abut, so every fitting footprint is kept
+  Board b;  // no tiles, so no connectivity requirement (the opening move)
   FootprintMask m;
   self_footprint_mask(b, 7, 7, nullptr, /*win_head=*/false, m);
   EXPECT_TRUE(m[(7 * 15 + 7) * kSlotsPerCell + 0]);
-  EXPECT_EQ(count_true(m), 2295 + 1);  // every fitting footprint reachable + pass
+  EXPECT_EQ(count_true(m), 2295 + 1);  // every footprint that fits, plus pass
 }
 
-// The opponent's stage carries cross-checks and its pool; the mover's does not.
-// 'A' at (6,7): the square below it, (7,7), hooks the down-word "A_" -> only Y.
+// The opponent's expansion applies cross-checks and the unseen pool; the
+// mover's does not. 'A' at (6,7) means (7,7) takes only Y.
 TEST(SelfFootprintMask, OppStageGatesReachTheMoverStageDoesNot) {
   Board b;
   b.set(6, 7, G(0));
   const Dictionary d = Dictionary::build_from_words({"AY"});
   b.ensure_movegen_caches(d);
   const int lone_7_7 = (7 * 15 + 7) * kSlotsPerCell + 0;  // the hook square itself
-  const int lone_8_7 = (8 * 15 + 7) * kSlotsPerCell + 0;  // two below 'A'
+  const int lone_8_7 = (8 * 15 + 7) * kSlotsPerCell + 0;  // below the hook square
   FootprintMask m;
 
-  // Y in the opponent's pool: it can fill (7,7), so a mover tile at (8,7) abuts it.
+  // With Y in the pool the opponent can fill (7,7), which (8,7) then abuts.
   const std::array<uint8_t, 27> with_y = available_of("YE");
   self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, with_y.data(), false, m);
   EXPECT_TRUE(m[lone_8_7]);
 
-  // No Y: the opponent cannot reach (7,7), so (8,7) abuts nothing -> masked.
   const std::array<uint8_t, 27> no_y = available_of("EIO");
   self_footprint_mask(b, 1, 1, no_y.data(), false, m);
   EXPECT_FALSE(m[lone_8_7]);
-  // Yet the mover's own tile at (7,7) stays legal: it abuts 'A' directly, and the
-  // mover's stage is cross-check-free -- its rack is separate from the pool, so
-  // it may hold the Y the pool lacks.
+  // The mover's own tile at (7,7) stays legal: the mover's rack is not drawn
+  // from the pool, so it may hold the Y the pool lacks.
   EXPECT_TRUE(m[lone_7_7]);
 }
 
-// A ply's reach is its seed plus every square its legal footprints cover.
+// A ply's reach is its seed (the occupied squares) plus every square its legal
+// footprints cover.
 TEST(FootprintPly, ReachIsSeedPlusCoveredSquares) {
   Board b;
   b.set(7, 7, G(4));
   const FootprintPly ply = footprint_ply(b, occupied_squares(b), /*budget=*/7,
                                          /*use_cross_checks=*/false, nullptr, /*win_head=*/false);
-  EXPECT_TRUE(ply.reach.contains(7, 7));           // the seed
-  EXPECT_TRUE(ply.reach.contains(7, 8));           // a lone tile abuts it
-  EXPECT_TRUE(ply.reach.contains(7, 9));           // via the 2-tile word from (7,8)
-  EXPECT_TRUE(ply.reach.contains(7, 14));          // the row's end, via a 7-tile word
-  EXPECT_FALSE(ply.reach.contains(0, 0));          // the far corner: nothing abuts the seed
+  EXPECT_TRUE(ply.reach.contains(7, 7));   // the seed
+  EXPECT_TRUE(ply.reach.contains(7, 8));   // a lone tile
+  EXPECT_TRUE(ply.reach.contains(7, 9));   // a 2-tile word from (7,8)
+  EXPECT_TRUE(ply.reach.contains(7, 14));  // a 7-tile word
+  EXPECT_FALSE(ply.reach.contains(0, 0));
   EXPECT_TRUE(occupied_squares(Board{}).empty());  // the opener has no seed
   EXPECT_FALSE(occupied_squares(b).empty());
 }
@@ -438,26 +429,24 @@ std::string slurp(const std::string& path) {
   return ss.str();
 }
 
-// Gate (b): the mask must never exclude a move that actually happens, or the
-// masked-softmax cross-entropy would take -log(0) -> NaN on that target. Replay
-// each real game; for every played move assert its footprint class is in the opp
-// mask on the pre-move board (one ply ahead -- needs the lexicon for cross-checks)
-// and in the self mask on the board two plies earlier (the self head's context;
-// its opponent stage takes the same loosest pool, and without the lexicon every
-// cross-check reads as unconstrained, so it runs either way).
+// The masks must never exclude a move that is actually played: the masked
+// softmax cross-entropy would take -log(0) on that target. Replays real games
+// and checks every played move against the opp mask on the pre-move board, and
+// against the self mask on the board two plies earlier, which is the self
+// head's context. The opp check needs the lexicon for cross-checks; the self
+// check runs without it, since every cross-check is then unconstrained.
 void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
   Board board;
   if (dict) board.ensure_movegen_caches(*dict);
-  std::optional<Board> two_plies_ago;  // board before the previous move
+  std::optional<Board> two_plies_ago;
   for (const ParsedGcgTurn& turn : game.turns) {
     const Move& m = turn.record.move;
     if (m.type() == MoveType::PLAY) {
       const int cls = footprint_class(m);
       if (dict) {
-        // Availability the mover of `m` could draw from: everything off the board
-        // (the loosest sound pool -- a superset of any one rack, so it can never
-        // exclude a move the mover actually makes). This exercises the
-        // availability path and, in the fixtures' endgames, its binding regime.
+        // Everything off the board: a superset of the mover's rack, so a sound
+        // pool that still exercises availability gating, and binds in the
+        // fixtures' endgames.
         uint8_t available_counts[27];
         compute_unseen_pool(available_counts, board, Rack{});
         FootprintMask opp;
@@ -473,7 +462,7 @@ void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
         EXPECT_TRUE(self[cls]) << "self mask excluded a real move (class " << cls << ")";
       }
     }
-    two_plies_ago = board;  // board before THIS move == two plies before the next
+    two_plies_ago = board;  // two plies before the next move
     if (m.type() == MoveType::PLAY) {
       board.apply(m);
       if (dict) board.ensure_movegen_caches(*dict);
@@ -494,23 +483,21 @@ TEST(FootprintMaskSoundness, RealGamesNeverMaskAPlayedMove) {
     if (text.empty()) continue;
     ParsedGcgGame game;
     std::string err;
-    if (!read_gcg_text(text, &game, &err)) continue;  // skip an unparseable fixture
+    if (!read_gcg_text(text, &game, &err)) continue;
     sweep_game(game, dict ? &*dict : nullptr);
     ++swept;
   }
   EXPECT_GT(swept, 0) << "no fixtures swept";
 }
 
-// collapse_footprint_planes: overwhelming logit mass on one known footprint
-// lands as ~1 on exactly the board cells that footprint covers, and ~0
-// elsewhere. Pins the mask -> masked-softmax -> footprint_cells scatter,
-// including that the scatter is not row/col transposed.
+// A dominant logit on one footprint lands ~1 on exactly the cells it covers
+// and ~0 elsewhere, which pins the scatter from classes to cells, including
+// its orientation.
 TEST(FootprintCollapse, MassLandsOnCoveredCells) {
-  Board b;  // empty: every square unconstrained, so the opp mask is dict-free
+  Board b;  // empty, so every square is unconstrained
   const Dictionary d = Dictionary::build_from_words({"CAT"});
 
-  // A horizontal 3-tile play at row 7, cols 5,6,7 -- the first placement head's
-  // target -- covers (7,5), (7,6), (7,7).
+  // Covers (7,5), (7,6), (7,7).
   Glyph played[3] = {G(0), G(1), G(2)};
   const uint16_t sq = (1u << 5) | (1u << 6) | (1u << 7);
   const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 3));
@@ -520,23 +507,22 @@ TEST(FootprintCollapse, MassLandsOnCoveredCells) {
   std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
   collapse_footprint_planes(b, d, /*available_counts=*/nullptr, raw.data(), out.data());
 
-  const float* plane = out.data();  // head 0
+  const float* plane = out.data();
   const auto cell = [&](int r, int c) { return plane[r * kFootprintSide + c]; };
   EXPECT_GT(cell(7, 5), 0.99f);
   EXPECT_GT(cell(7, 6), 0.99f);
   EXPECT_GT(cell(7, 7), 0.99f);
-  EXPECT_LT(cell(5, 7), 0.01f);  // the transpose of (7,5): a row/col swap would light this
+  EXPECT_LT(cell(5, 7), 0.01f);  // (7,5) transposed: a row/col swap would light this
   EXPECT_LT(cell(7, 8), 0.01f);  // just past the covered run
   float total = 0.0f;
   for (int i = 0; i < kFootprintSide * kFootprintSide; ++i) total += plane[i];
-  EXPECT_NEAR(total, 3.0f, 0.02f);  // three covered cells, ~all the mass
+  EXPECT_NEAR(total, 3.0f, 0.02f);
 }
 
-// The collapse actually applies the legality mask, not just softmax+scatter: a
-// dominant logit on an ILLEGAL footprint contributes no plane mass. Uses the
-// self head, whose mask excludes footprints too far to reach in two plies: a
-// lone tile at (0,0) leaves (14,12..14) unreachable (distance 26+ > budget 14).
-// Were the mask dropped, that footprint's huge logit would light its cells.
+// The collapse applies the legality mask: a dominant logit on an illegal
+// footprint contributes no mass. Uses the self head, whose mask excludes
+// footprints two plies cannot reach: from a lone tile at (0,0), (14,12..14) is
+// 26+ squares away against a combined budget of 14.
 TEST(FootprintCollapse, IllegalFootprintGetsNoMass) {
   Board b;
   b.set(0, 0, G(0));  // the only structure; the far corner is unreachable from it
@@ -548,7 +534,7 @@ TEST(FootprintCollapse, IllegalFootprintGetsNoMass) {
   ASSERT_LT(illegal, kAnchoredFootprints);
 
   std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
-  raw[1 * kFootprintClasses + illegal] = 20.0f;  // head 1 (self_next); would dominate unmasked
+  raw[1 * kFootprintClasses + illegal] = 20.0f;  // head 1 (self_next)
   std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
   collapse_footprint_planes(b, d, /*available_counts=*/nullptr, raw.data(), out.data());
 
@@ -556,27 +542,22 @@ TEST(FootprintCollapse, IllegalFootprintGetsNoMass) {
   EXPECT_LT(self_plane[14 * kFootprintSide + 12], 0.01f);
   EXPECT_LT(self_plane[14 * kFootprintSide + 13], 0.01f);
   EXPECT_LT(self_plane[14 * kFootprintSide + 14], 0.01f);
-  // The mass did not vanish -- masked-softmax spread it over the reachable
-  // (legal) footprints near the tile, so the plane still sums to ~its tiles.
+  // The mass went to the legal footprints near the tile instead.
   float total = 0.0f;
   for (int i = 0; i < kFootprintSide * kFootprintSide; ++i) total += self_plane[i];
   EXPECT_GT(total, 0.5f);
 }
 
-// The collapse threads availability into the OPP heads: a dominant logit on an
-// opp footprint whose only hook is unavailable contributes NO plane mass -- the
-// mask drops it, so its 20-logit probability renormalizes away and (7,7) keeps
-// only the uniform share of the other footprints that still cover it. With the
-// hook letter supplied, the dominant footprint lights (7,7) (~1.0) instead. This
-// is the inference-time "no Y unseen -> the I13 Y-hook carries no belief"
-// behaviour in miniature. The residual share is not vanishing here: connectivity
-// confines the legal set to footprints abutting the lone 'A', and (7,7) sits
-// against it, so its uniform share is a modest fraction rather than the near-zero
-// of a board-wide legal set -- the point is the loss of the DOMINANT spike.
+// The collapse applies availability to the opp heads. A dominant logit on a
+// footprint whose only hook letter (Y) is unavailable is masked out, so (7,7)
+// keeps only its share of the other legal footprints; with Y available it gets
+// ~1. That share is not near zero, because connectivity limits the legal set
+// to footprints touching the lone 'A' and (7,7) is one of them. The check is
+// that the dominant spike disappears.
 TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
   Board b;
-  b.set(6, 7, G(0));  // 'A' above (7,7): a horizontal hook there needs a "A_" word
-  const Dictionary d = Dictionary::build_from_words({"AY"});  // sole hook letter: Y
+  b.set(6, 7, G(0));                                          // 'A' above (7,7)
+  const Dictionary d = Dictionary::build_from_words({"AY"});  // (7,7) takes only Y
   b.ensure_movegen_caches(d);
 
   Glyph played[2] = {G(23), G(23)};
@@ -590,48 +571,44 @@ TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
   const std::array<uint8_t, 27> with_y = available_of("YE");
   collapse_footprint_planes(b, d, with_y.data(), raw.data(), out.data());
   const float lit = out[7 * kFootprintSide + 7];
-  EXPECT_GT(lit, 0.9f);  // Y available -> the dominant hook lands on (7,7)
+  EXPECT_GT(lit, 0.9f);
 
-  const std::array<uint8_t, 27> no_y = available_of("EIO");  // letters, but no Y, no blank
+  const std::array<uint8_t, 27> no_y = available_of("EIO");  // no Y, no blank
   collapse_footprint_planes(b, d, no_y.data(), raw.data(), out.data());
   const float gated = out[7 * kFootprintSide + 7];
-  EXPECT_LT(gated, 0.5f);        // the dominant 20-logit hook is gone -> only the uniform share
-  EXPECT_LT(gated, lit * 0.5f);  // ... a clear drop vs. the near-1.0 it held with the hook in stock
+  EXPECT_LT(gated, 0.5f);
+  EXPECT_LT(gated, lit * 0.5f);
 }
 
-// masked_placement_distributions returns the same mask + masked-softmax the
-// collapse applies, but per class instead of scattered to cells: each head is a
-// distribution over its legal footprints (sums to ~1), a dominant logit on a
-// legal footprint takes ~all its head's mass, and a structurally illegal class
-// stays at zero.
+// masked_placement_distributions is the collapse's masked softmax, per class
+// rather than scattered to cells: each head sums to ~1 over its legal
+// footprints, and an illegal class gets exactly zero.
 TEST(FootprintCollapse, MaskedDistributionsAreLegalSoftmaxes) {
-  Board b;  // empty board: unconstrained, so the opp mask is dict-free
+  Board b;  // empty, so every square is unconstrained
   const Dictionary d = Dictionary::build_from_words({"CAT"});
   Glyph played[3] = {G(0), G(1), G(2)};
   const uint16_t sq = (1u << 5) | (1u << 6) | (1u << 7);
   const int cls = footprint_class(Move::play(true, 7, sq, 0, played, 3));
 
   std::vector<float> raw(kPlacementHeads * kFootprintClasses, 0.0f);
-  raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next) dominant
+  raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next)
   std::vector<float> dist(kPlacementHeads * kFootprintClasses, 0.0f);
   masked_placement_distributions(b, d, /*available_counts=*/nullptr, raw.data(), dist.data());
 
-  EXPECT_GT(dist[cls], 0.99f);  // the dominant legal footprint takes ~all head 0's mass
-  for (int h = 0; h < kPlacementHeads; ++h) {  // each head is a legal-class distribution
+  EXPECT_GT(dist[cls], 0.99f);
+  for (int h = 0; h < kPlacementHeads; ++h) {
     float sum = 0.0f;
     for (int c = 0; c < kFootprintClasses; ++c) sum += dist[size_t(h) * kFootprintClasses + c];
     EXPECT_NEAR(sum, 1.0f, 1e-4) << "head " << h;
   }
   const int off_edge = (7 * 15 + 12) * kSlotsPerCell + (1 + (7 - 2));  // k=7 off the right edge
-  EXPECT_EQ(dist[off_edge], 0.0f);  // structurally illegal -> masked to zero
+  EXPECT_EQ(dist[off_edge], 0.0f);
 }
 
-// collapse_footprint_legal_cells: a cell collapse_footprint_planes lands
-// nonzero probability mass on must be legal (a masked-softmax can only ever
-// put mass on a legal class) -- checked against MassLandsOnCoveredCells'
-// board/logit setup, where (7,5)/(7,6)/(7,7) take ~all of head 0's mass.
+// Every cell collapse_footprint_planes puts mass on is legal according to
+// collapse_footprint_legal_cells. Uses MassLandsOnCoveredCells' setup.
 TEST(FootprintCollapse, LegalCellsCoverAllProbabilityMass) {
-  Board b;  // empty: every square unconstrained, so the opp mask is dict-free
+  Board b;  // empty, so every square is unconstrained
   const Dictionary d = Dictionary::build_from_words({"CAT"});
 
   Glyph played[3] = {G(0), G(1), G(2)};
@@ -654,18 +631,15 @@ TEST(FootprintCollapse, LegalCellsCoverAllProbabilityMass) {
       }
     }
   }
-  EXPECT_GT(legal[7 * kFootprintSide + 7], 0.5f);  // sanity: the covered cell is indeed legal
+  EXPECT_GT(legal[7 * kFootprintSide + 7], 0.5f);  // not vacuous: a covered cell is legal
 }
 
-// collapse_footprint_legal_cells: a cell the SELF head's reach can never touch
-// (too far from the board's only tile for footprint_ply's tile-budget-bounded
-// reach, per IllegalFootprintGetsNoMass) is illegal regardless of any single
-// class's logits -- the same reach bound that drove that test's near-zero
-// probability, read directly off the legal plane instead. A near cell, by
-// contrast, is legal.
+// The legal-cells plane reflects the self head's reach bound: the far corner
+// that IllegalFootprintGetsNoMass cannot reach is illegal, a cell next to the
+// tile is legal.
 TEST(FootprintCollapse, LegalCellsRespectReachBound) {
   Board b;
-  b.set(0, 0, G(0));  // the only structure; the far corner is unreachable from it
+  b.set(0, 0, G(0));
   const Dictionary d = Dictionary::build_from_words({"CAT"});
 
   std::vector<float> legal(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
@@ -676,14 +650,13 @@ TEST(FootprintCollapse, LegalCellsRespectReachBound) {
   EXPECT_EQ(self_legal[14 * kFootprintSide + 12], 0.0f);
   EXPECT_EQ(self_legal[14 * kFootprintSide + 13], 0.0f);
   EXPECT_EQ(self_legal[14 * kFootprintSide + 14], 0.0f);
-  EXPECT_GT(self_legal[0 * kFootprintSide + 1], 0.5f);  // right next to the seed tile: reachable
+  EXPECT_GT(self_legal[0 * kFootprintSide + 1], 0.5f);
 }
 
-// footprint_reachable_cells: on an empty board every square is coverable (a lone
-// tile fits anywhere), a null pool is board-legality-only, and it equals the
-// same reduction when the pool holds every tile.
+// On an empty board every square is coverable, and a null pool (board legality
+// only) matches a pool holding every tile.
 TEST(FootprintReachable, EmptyBoardCoversEverythingAndNullIsFullStock) {
-  Board b;  // empty: every square unconstrained
+  Board b;
   const Dictionary d = Dictionary::build_from_words({"CAT"});
   b.ensure_movegen_caches(d);
 
@@ -691,7 +664,6 @@ TEST(FootprintReachable, EmptyBoardCoversEverythingAndNullIsFullStock) {
   footprint_reachable_cells(b, /*available_counts=*/nullptr, kMaskTileBudget, null_pool.data());
   for (int i = 0; i < kFootprintCells; ++i) EXPECT_EQ(null_pool[i], 1.0f) << "cell " << i;
 
-  // A null pool is "everything in stock" -> identical to a full-count array.
   std::array<uint8_t, 27> all_stock;
   all_stock.fill(9);
   std::vector<float> full_pool(kFootprintCells, -1.0f);
@@ -699,17 +671,15 @@ TEST(FootprintReachable, EmptyBoardCoversEverythingAndNullIsFullStock) {
   EXPECT_EQ(null_pool, full_pool);
 }
 
-// A cell is reachable iff some legal "moves-next" footprint covers it: occupied
-// squares are never covered, and availability gates a fully boxed cell whose
-// every covering footprint needs the same hook letter. (7,7) is walled by A's on
-// all four sides with only "AYA" legal, so its horizontal and vertical
-// cross-checks are both {Y} -- it lights only when Y is in stock.
+// A cell is reachable iff some legal footprint for the side to move covers it.
+// (7,7) is boxed in by A's on all four sides and only "AYA" is a word, so both
+// its cross-checks are {Y}: it is reachable only when Y is in stock.
 TEST(FootprintReachable, OccupancyAndAvailabilityGateCells) {
   Board b;
-  b.set(6, 7, G(0));  // A above
-  b.set(8, 7, G(0));  // A below
-  b.set(7, 6, G(0));  // A left
-  b.set(7, 8, G(0));  // A right
+  b.set(6, 7, G(0));
+  b.set(8, 7, G(0));
+  b.set(7, 6, G(0));
+  b.set(7, 8, G(0));
   const Dictionary d = Dictionary::build_from_words({"AYA"});
   b.ensure_movegen_caches(d);
 
@@ -720,21 +690,21 @@ TEST(FootprintReachable, OccupancyAndAvailabilityGateCells) {
   };
 
   const std::array<uint8_t, 27> with_y = available_of("YE");
-  EXPECT_EQ(reach_at(with_y, 7, 7), 1.0f);    // Y in stock -> the boxed cell is reachable
-  EXPECT_EQ(reach_at(with_y, 6, 7), 0.0f);    // occupied square is never covered
-  EXPECT_EQ(reach_at(with_y, 14, 14), 0.0f);  // the far corner floats free -> unreachable
+  EXPECT_EQ(reach_at(with_y, 7, 7), 1.0f);
+  EXPECT_EQ(reach_at(with_y, 6, 7), 0.0f);    // occupied
+  EXPECT_EQ(reach_at(with_y, 14, 14), 0.0f);  // not connected
 
-  const std::array<uint8_t, 27> no_y = available_of("EIO");  // letters, no Y, no blank
-  EXPECT_EQ(reach_at(no_y, 7, 7), 0.0f);    // every footprint covering (7,7) needs Y -> gated off
-  EXPECT_EQ(reach_at(no_y, 14, 14), 0.0f);  // ... and the disconnected corner stays unreachable
+  const std::array<uint8_t, 27> no_y = available_of("EIO");  // no Y, no blank
+  EXPECT_EQ(reach_at(no_y, 7, 7), 0.0f);
+  EXPECT_EQ(reach_at(no_y, 14, 14), 0.0f);
 }
 
-// Reachability on the transposed board is the transpose of reachability on the
-// board -- the invariant the input encoder's spatial planes all share. The caches
-// were built on `b`, so this also exercises Board::transpose's cache hand-over.
+// Reachability commutes with transposition, as every input-encoder spatial
+// plane must. The caches were built on `b`, so this also exercises
+// Board::transpose's cache hand-over.
 TEST(FootprintReachable, TransposedBoardIsTheTranspose) {
   Board b;
-  b.set(3, 5, G(1));  // an asymmetric bit of structure so the transpose is non-trivial
+  b.set(3, 5, G(1));  // asymmetric, so the transpose is non-trivial
   b.set(9, 2, G(2));
   const Dictionary d = Dictionary::build_from_words({"CAT", "AY"});
   b.ensure_movegen_caches(d);

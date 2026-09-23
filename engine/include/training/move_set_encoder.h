@@ -1,28 +1,26 @@
 #pragma once
 
-// Move-feature encoding for the move set evaluation model: on top of the board
-// the shared trunk encodes, each candidate move is described by its placed
-// tiles (letter, blank flag, board square) and a small scalar block. The single
-// source of truth for that layout, reached both by the training dataset through
-// the FFI and by the agent at inference, so the two never drift.
+// Per-move features for the move set evaluation model. The shared trunk encodes
+// the board once; each candidate move is then described by its tiles (letter,
+// blank flag, board square) and a small scalar block. Both the training dataset
+// (through the FFI) and the agent at inference encode moves here, so the two
+// cannot drift.
 //
-// A tile's letter is stored as its A..Z identity with a separate blank flag,
-// rather than one glyph code spanning natural and blank letters, so the model
-// shares one letter representation between a natural tile and its blank twin.
+// A tile's letter is its A..Z identity plus a separate blank flag, so a natural
+// tile and a blank playing the same letter share one letter representation.
 //
-// The score differential feeds in as the resultant post-move value rather than
-// the raw move score: that is the quantity the position evaluation model
-// evaluates, on the same scale as the board trunk's score-diff input, so the
-// two compare directly. The leave is deliberately absent, being recoverable
-// from the mover's rack (which the trunk sees) minus the placed tiles.
+// The score scalar is the resultant post-move differential, not the move's raw
+// score: that is what the position evaluation model evaluates, on the same
+// scale as the trunk's score-diff input, so the two compare directly. The leave
+// is absent because it is recoverable from the mover's rack, which the trunk
+// sees, minus the move's tiles.
 //
-// EXCHANGE moves have no placed squares, but their surrendered tiles fill the
-// same letter/blank/tile_mask slots (squares stay 0, masked spatially
-// downstream by is_play): without them every same-size exchange from one rack
-// encodes identically while the teacher's value depends on exactly which
-// tiles are kept, an irreducible target error. An unassigned blank -- an
-// exchange surrenders undesignated blanks -- encodes as letters=0/blanks=1,
-// represented by the blank flag alone. PASS stays all-zero.
+// An EXCHANGE has no placed squares, but its surrendered tiles fill the letter,
+// blank and tile_mask slots (squares stay 0; downstream, is_play masks them out
+// spatially). Otherwise every same-size exchange from one rack would encode
+// identically, though the teacher's value depends on exactly which tiles are
+// kept. An exchanged blank has no designated letter, so it encodes as
+// letter 0 with the blank flag set. A PASS encodes as all zeros.
 
 #include "game/board.h"
 #include "game/move.h"
@@ -43,13 +41,13 @@ inline constexpr int kMoveLetterVocab = 27;
 // One embedding index per board cell.
 inline constexpr int kMoveCells = BOARD_SIZE * BOARD_SIZE;
 
-// The move-feature SEMANTICS version: bumped whenever encode_move changes what
-// the same Move encodes to (v1: exchanges carry their surrendered tiles). A
-// checkpoint is only valid with the encoder version its training rows used, and
-// nothing structural detects a mismatch -- the tensor shapes are unchanged --
-// so the version rides the checkpoint config and the exported ONNX metadata,
-// where the engine-side loader rejects a stale model instead of silently
-// feeding it off-distribution rows.
+// The move-feature semantics version, bumped whenever encode_move changes what
+// a given Move encodes to (v1: exchanges carry their surrendered tiles). A
+// checkpoint is valid only with the version its training rows used, and the
+// tensor shapes do not change between versions, so nothing structural would
+// catch a mismatch. The version therefore travels in the checkpoint config and
+// the exported ONNX metadata, and the engine-side loader rejects a stale model
+// rather than feed it off-distribution rows.
 inline constexpr int kMoveEncodingVersion = 1;
 
 // `pre_move_score_diff` is the mover's score advantage in points before the
@@ -72,11 +70,10 @@ void encode_moves(const Move* moves, int64_t n, const int32_t* pre_move_score_di
                   int32_t* letters, uint8_t* blanks, int32_t* squares, uint8_t* tile_mask,
                   float* scalars);
 
-// One encoded candidate set, owning the five buffers encode_move fills so it
-// crosses an API boundary as a single object (nn::MoveSetEvalService takes
-// one). Row-major, `count` rows of kMoveMaxPlaced -- kMoveScalars for scalars.
-// The training path keeps writing into its own tensors through the batch
-// pointer form above; this is the inference side's convenience.
+// One encoded candidate set, owning the five buffers encode_move fills, so it
+// crosses an API boundary as one object (inference services take it). `count`
+// rows of kMoveMaxPlaced each (kMoveScalars for scalars). The training path
+// writes its own tensors through the pointer forms above.
 struct MoveFeatureArrays {
   std::vector<int32_t> letters;
   std::vector<uint8_t> blanks;
@@ -85,9 +82,8 @@ struct MoveFeatureArrays {
   std::vector<float> scalars;
   int count = 0;
 
-  // Size the buffers for `n` moves and encode them. One differential covers the
-  // set: a candidate set is one position's alternatives, so every move in it
-  // resolves the same pre-move score advantage.
+  // Size the buffers for `n` moves and encode them. One differential serves the
+  // whole set, since all candidates start from the same position.
   void encode(const Move* moves, int n, int pre_move_score_diff);
 };
 

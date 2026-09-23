@@ -1,19 +1,22 @@
-// Offline Monte-Carlo ground-truth generator for the position-evaluation test
-// datasets.
+// monte_carlo_sim_tool: computes Monte-Carlo ground truth for a
+// position-evaluation test dataset, the reference the position evaluation
+// model is scored against.
 //
-// Each input GCG is a post-move position (data/gcg_post_move.h): the final
-// recorded move is the evaluated player's, the other player acts next. From
-// the final player's POV, this plays the position out many times --
-// EndgameHastyBot vs EndgameHastyBot, sampling the hidden tiles and bag -- and
-// records the exact win/loss/draw and final-score-delta distribution. The
-// aggregate converges to the true value the position evaluation model should
-// predict.
+//   monte_carlo_sim_tool --dataset-name position-eval-test-dataset --games 10000
+//   monte_carlo_sim_tool --dataset-name position-eval-test-dataset --condition face-up-leaves
+//
+// The dataset is the set of .gcg files in positions/<lexicon>/<dataset-name>/,
+// read relative to the working directory (run from the repo root). Each GCG is
+// a post-move position (data/gcg_post_move.h): its last move is the evaluated
+// player's, and the opponent moves next. The tool plays each position out
+// --games times with EndgameHastyBot on both sides, sampling the unseen tiles,
+// and records the win/loss/draw counts and the final-spread distribution from
+// the evaluated player's point of view.
 //
 // The truth depends on what a rollout knows of the opponent's leave, so it is
-// computed under both information conditions (sim/monte_carlo_sim.h) and
-// written as <dataset>/monte-carlo-sim-results.<condition>.json, keyed by GCG
-// stem (e.g. "pos-7"). A position whose opponent kept nothing (a bingo) has
-// one truth, rolled once and written under both.
+// computed per information condition (sim/monte_carlo_sim.h) and written to
+// <dataset>/monte-carlo-sim-results.<condition>.json, keyed by GCG stem (e.g.
+// "pos-7"). --condition picks one condition to regenerate only its file.
 
 #include "belief/rack_inference.h"
 #include "data/gcg_post_move.h"
@@ -112,9 +115,9 @@ int main(int argc, char** argv) {
       const std::string stem = gcg.stem().string();
       for (int c = 0; c < 2; ++c) {
         if (!selected[c]) continue;
-        // An empty opponent leave makes the conditions coincide: nothing is
-        // known face-up, and hidden has nothing to infer from. Reuse the
-        // hidden result when this run computed it.
+        // With an empty opponent leave (e.g. after a bingo) the conditions
+        // coincide: nothing is face-up and nothing is hidden. Reuse the hidden
+        // result when this run computed it.
         if (c == 1 && selected[0] && pos.opp_leave.empty()) {
           out[1][stem] = out[0][stem];
           continue;
@@ -131,9 +134,8 @@ int main(int argc, char** argv) {
     for (int c = 0; c < 2; ++c) {
       if (!selected[c]) continue;
       const fs::path out_path = results_path(dataset, kConditions[c]);
-      // Unlink before writing: were the destination a symlink (one condition's
-      // file once aliased the other's), an ofstream would write THROUGH it and
-      // clobber the file it points at.
+      // Unlink first: if the destination is a symlink to the other condition's
+      // file, an ofstream would write through it and clobber that file.
       fs::remove(out_path);
       std::ofstream os(out_path);
       scribblez::util::pretty_print(os, json::value(std::move(out[c])));

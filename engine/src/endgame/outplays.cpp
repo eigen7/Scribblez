@@ -75,14 +75,15 @@ bool by_entry_score_desc(const OutplayEntry& a, const OutplayEntry& b) {
 
 }  // namespace
 
+// The halo is o's full main-word span, the ends of the existing perpendicular
+// runs through its placed cells, and the in-line cell just beyond each end of
+// the span.
 OutplayHalo build_outplay_halo(const Board& board, const Move& o) {
   OutplayHalo h;
   const bool horizontal = o.horizontal();
   const int line = o.start();
 
-  // Placed extent along the lane, plus the end cells of each placed tile's
-  // existing perpendicular run (the only cells a reply can rewrite that
-  // tile's cross-word from).
+  // Placed extent along the lane, plus the cross-run ends of each placed tile.
   int lo = BOARD_SIZE, hi = -1;
   uint16_t mask = o.square_mask();
   for (int p = 0; mask; ++p, mask >>= 1) {
@@ -172,8 +173,7 @@ void LeaveOutplays::collect_after(const Move& m, OutplaySet& out) {
   if (leave.empty()) return;  // m empties the rack: the game ends with it
   const uint8_t key = canonical_used_mask(rack_, leave);
 
-  // Out-plays of the leave that survive m (m does not touch their halo). m's own
-  // placement always touches its own halo, so it drops out here naturally.
+  // m's own placement touches its own halo, so m itself drops out here.
   for (int j = 0; j < int(plays_.size()); ++j) {
     if (play_mask_[j] != key) continue;
     if (move_touches_halo(halos_[j], m)) continue;

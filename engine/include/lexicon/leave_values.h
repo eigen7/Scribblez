@@ -10,14 +10,13 @@
 
 namespace scribblez {
 
-// Leave values loaded from a Kurnia Leave Value (.klv2) file. Read-only after
-// construction and safe to query concurrently.
+// Leave values from a Kurnia Leave Value (.klv2) file. Read-only after load()
+// and safe to query concurrently.
 //
-// Loading walks the embedded KWG once to enumerate every leave into a hash map
-// keyed on the canonical Rack, making lookup() a single probe. The KWG itself
-// is retained for the cursor API below, which follows one tile per arc instead
-// of hashing a whole leave -- what lets a subrack enumeration price every leave
-// in a single DFS rather than one hash per subrack.
+// Two access paths. lookup() is one hash probe on a map built at load time.
+// The cursor API walks the embedded KWG one tile at a time, so a caller that
+// enumerates sub-racks depth-first prices each one incrementally instead of
+// hashing it from scratch.
 class LeaveValues {
  public:
   // Throws util::Exception on I/O failure.
@@ -26,22 +25,23 @@ class LeaveValues {
   // 0.0 for an empty leave or one absent from the table.
   float lookup(const Rack& leave) const;
 
-  // ---- Incremental cursor over the leave KWG ----------------------------
-  // The KWG is a minimized DAWG, so a leave's value is keyed by its word index
-  // (its pre-order position over the tree expansion) rather than by the node it
-  // ends on, suffix nodes being shared. The cursor follows a leave's tiles in
-  // ascending KLV code order, accumulating that index: klv_step matches one tile
-  // and adds the word counts of the earlier siblings it skipped; after matching,
-  // advance past the arc's own word (if accepting) and descend with klv_next.
-  // The leave's value is klv_value_at(index) iff the arc it ends on accepts.
+  // ---- Incremental cursor ----
+  // The KWG is minimized, so suffix nodes are shared and a node can't carry a
+  // value. Instead a leave's value is indexed by its word index: its position
+  // in a pre-order enumeration of all leaves. The cursor accumulates that
+  // index while following the leave's tiles in ascending klv_code order:
+  //   1. klv_step() matches one tile, adding the word counts of the siblings
+  //      it skips.
+  //   2. If the matched arc accepts, the leave spelled so far is a table
+  //      entry and its value is klv_value_at(index).
+  //   3. To continue, add 1 if the arc accepts, then descend via klv_next().
 
   uint32_t klv_root() const { return root_arc_list_; }
 
   // A..Z -> 1..26; the blank is code 0.
   static uint8_t klv_code(Tile letter) { return letter.index() + 1; }
 
-  // Returns the matched arc, or 0 if the tile is absent -- siblings are sorted,
-  // so a larger tile means absent.
+  // The matched arc, or 0 if `code` has no arc in `arc_list`.
   uint32_t klv_step(uint32_t arc_list, uint8_t code, uint32_t* index) const;
 
   bool klv_accepts(uint32_t arc) const { return (nodes_[arc] & kAcceptsBit) != 0; }
@@ -59,7 +59,7 @@ class LeaveValues {
   std::unordered_map<Rack, float> values_by_leave_;  // leave -> value
   std::vector<uint32_t> nodes_;                      // KWG arc nodes
   std::vector<float> values_;                        // leave values, indexed by word index
-  std::vector<uint32_t> subtree_words_;              // per-arc word count of its subtree
+  std::vector<uint32_t> subtree_words_;              // per arc: words at or below it
   uint32_t root_arc_list_ = 0;
 };
 

@@ -10,15 +10,15 @@ namespace scribblez {
 
 namespace {
 
-// The mover's tile availability as a bit-set for a fast per-cell test: bit L
-// set iff at least one of tile L is in stock, indexed like the 27-count array
-// (0..25 = A..Z, 26 = blank).
+// Tile availability as a bitset for a fast per-cell test: bit t is set iff at
+// least one of tile t is in stock, indexed like the 27-count array (0..25 =
+// A..Z, 26 = blank).
 using tile_set_t = uint32_t;
-inline constexpr tile_set_t kBlankTile = 1u << 26;                     // wildcard blank
-inline constexpr tile_set_t kAllTiles = kAllLettersMask | kBlankTile;  // every tile in stock
+inline constexpr tile_set_t kBlankTile = 1u << 26;
+inline constexpr tile_set_t kAllTiles = kAllLettersMask | kBlankTile;
 
-// The available tiles distilled from a 27-count array. A null array is
-// "everything in stock", which collapses the availability test to board legality.
+// A null array means everything is in stock, which reduces the availability
+// test to board legality.
 tile_set_t available_tiles(const uint8_t* counts) {
   if (counts == nullptr) return kAllTiles;
   tile_set_t avail = 0;
@@ -27,30 +27,29 @@ tile_set_t available_tiles(const uint8_t* counts) {
   return avail;
 }
 
-// Can some AVAILABLE letter play at empty cell (r,c) in board-frame orientation
-// `horizontal`? Its perpendicular cross-check mask must share a letter with
-// `avail` (a blank is a wildcard). Cache indexing matches the input encoder: a
-// horizontal word's cross-words run down the columns (non-transposed [r*side+c]),
-// a vertical word's along the rows (transposed [c*side+r]).
+// Whether some available letter can play at empty cell (r,c) as part of a word
+// in board-frame orientation `horizontal`: the perpendicular cross-check must
+// allow a letter in `avail` (a blank allows any). The cache indexing matches the
+// input encoder: a horizontal word's cross-words run down the columns
+// (non-transposed cache, [r*side+c]), a vertical word's along the rows
+// (transposed cache, [c*side+r]).
 bool cell_admits_letter(const Board& board, tile_set_t avail, bool horizontal, int r, int c) {
   const CrossCheck& cc = horizontal ? board.cross_checks(false)[r * BOARD_SIZE + c]
                                     : board.cross_checks(true)[c * BOARD_SIZE + r];
-  if (avail & kBlankTile) return cc.mask != 0;  // a wildcard plays wherever any letter is legal
-  return (cc.mask & avail) != 0;                // an available letter that is legal here
+  if (avail & kBlankTile) return cc.mask != 0;
+  return (cc.mask & avail) != 0;
 }
 
-// Can some AVAILABLE letter play as a LONE tile at (r,c)? It forms both its
-// cross-words at once, so its letter must clear both cross-checks -- their mask
-// intersection, not cell_admits_letter's per-axis test.
+// Whether some available letter can play as a lone tile at (r,c). A lone tile
+// forms words on both axes at once, so its letter must pass both cross-checks.
 bool lone_tile_admits_letter(const Board& board, tile_set_t avail, int r, int c) {
   const CrossCheck& vert = board.cross_checks(false)[r * BOARD_SIZE + c];
   const CrossCheck& horiz = board.cross_checks(true)[c * BOARD_SIZE + r];
-  const uint32_t allowed = vert.mask & horiz.mask;  // letters legal in both words the tile forms
-  if (avail & kBlankTile) return allowed != 0;      // a wildcard fills any jointly-legal square
-  return (allowed & avail) != 0;                    // a jointly-legal letter that is in stock
+  const uint32_t allowed = vert.mask & horiz.mask;
+  if (avail & kBlankTile) return allowed != 0;
+  return (allowed & avail) != 0;
 }
 
-// An empty cell (r,c) is orthogonally adjacent to a seed square.
 bool touches_seed(const SquareSet& seed, int r, int c) {
   for (const auto& [dr, dc] : util::kFourNeighborDeltas) {
     const int nr = r + dr;
@@ -77,11 +76,11 @@ FootprintPly footprint_ply(const Board& board, const SquareSet& seed, int budget
   out.reach = seed;
   const int kmax = std::min(budget, kFootprintMaxK);
   const tile_set_t avail = use_cross_checks ? available_tiles(available_counts) : kAllTiles;
-  const bool adjacency_gate = !seed.empty();  // nothing to abut on the opener's empty board
-  // TODO(perf): most anchors abut nothing and get masked, yet we scan all
-  // kFootprintCells of them; crawling footprints out from the seed would touch
-  // only the connected few (~222 vs 2925 for a centred opener). Mask-build has
-  // not shown up in profiling, so it is deferred.
+  const bool adjacency_gate = !seed.empty();
+  // TODO(perf): most anchors abut nothing and get masked, yet all
+  // kFootprintCells are scanned; growing footprints outward from the seed would
+  // visit only the connected few (~222 of 2925 classes after a centred
+  // opener). Mask building has not shown up in profiles.
   std::array<int, kFootprintMaxK> covered;
   for (int cell = 0; cell < kFootprintCells; ++cell) {
     const int anchor_r = cell / kFootprintSide;
@@ -110,7 +109,7 @@ FootprintPly footprint_ply(const Board& board, const SquareSet& seed, int budget
       int r = anchor_r;
       int c = anchor_c;
       bool ok = true;
-      bool connected = !adjacency_gate;  // vacuously satisfied when the gate is off
+      bool connected = !adjacency_gate;
       while (r < kFootprintSide && c < kFootprintSide && count < k) {
         if (board.at(r, c).is_empty()) {
           if (use_cross_checks && !cell_admits_letter(board, avail, horizontal, r, c)) {
@@ -126,8 +125,7 @@ FootprintPly footprint_ply(const Board& board, const SquareSet& seed, int budget
           ++r;
         }
       }
-      // count<k means the edge cut it short; !connected means it floats free of
-      // the seed (a disconnected placement).
+      // count < k: the board edge cut the run short.
       if (ok && count == k && connected) {
         out.mask[cls] = true;
         for (int i = 0; i < k; ++i) out.reach.bits.set(covered[i]);
@@ -160,7 +158,6 @@ void footprint_reachable_cells(const Board& board, const uint8_t* available_coun
   const SquareSet seed = occupied_squares(board);
   const FootprintPly ply = footprint_ply(board, seed, tile_budget, /*use_cross_checks=*/true,
                                          available_counts, /*win_head=*/false);
-  // The squares the ply covers: its reach less the seed it started from.
   const auto covered = ply.reach.bits & ~seed.bits;
   for (int i = 0; i < kFootprintCells; ++i) out[i] = covered.test(i) ? 1.0f : 0.0f;
 }

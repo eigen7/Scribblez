@@ -1,3 +1,7 @@
+// The .gcg readers: rack pragmas, the decision-point reading
+// (read_gcg_position), and the post-move reading the position-evaluation
+// datasets use (read_gcg_post_move).
+
 #include "data/gcg_post_move.h"
 #include "data/gcg_reader.h"
 #include "game/tile.h"
@@ -25,10 +29,9 @@ ParsedGcgGame parse_or_fail(const std::string& gcg) {
   return game;
 }
 
-// A top-of-file "#Rack1" pragma records a player's current rack for the final
-// position; the reader must restore it there instead of leaving an unknown
-// hand. Without it, player 0's rack is cleared after their move and the final
-// snapshot holds nothing for them.
+// A top-of-file #Rack1 pragma is player 1's rack in the final position. The
+// reader must put it in the final snapshot, where otherwise the rack would be
+// empty after that player's last move.
 TEST(GcgReaderTest, InitialRackPragmaRestoresFinalRack) {
   const std::string gcg =
     "#player1 Alice Alice\n"
@@ -42,7 +45,6 @@ TEST(GcgReaderTest, InitialRackPragmaRestoresFinalRack) {
   EXPECT_EQ(rack_letters(game.snapshots.back().racks[0]), "ADEIMRZ");
 }
 
-// A "#Rack2" pragma is honored the same way for the second player.
 TEST(GcgReaderTest, InitialRackPragmaRestoresSecondPlayerRack) {
   const std::string gcg =
     "#player1 Alice Alice\n"
@@ -56,8 +58,8 @@ TEST(GcgReaderTest, InitialRackPragmaRestoresSecondPlayerRack) {
   EXPECT_EQ(rack_letters(game.snapshots.back().racks[1]), "QUARTZY");
 }
 
-// A "#Rack1" pragma emitted after an event line records that player's rack just
-// after the event, updating the turn's post-event racks and its snapshot.
+// A #Rack1 pragma after an event line is that player's rack just after the
+// event, and updates both that turn's racks and its snapshot.
 TEST(GcgReaderTest, PostEventRackPragmaUpdatesThatTurn) {
   const std::string gcg =
     "#player1 Alice Alice\n"
@@ -73,8 +75,8 @@ TEST(GcgReaderTest, PostEventRackPragmaUpdatesThatTurn) {
   EXPECT_EQ(rack_letters(game.snapshots[1].racks[0]), "EEIORST");
 }
 
-// Absent any pragma, the final snapshot still clears the mover's rack -- the
-// baseline the pragma corrects.
+// The baseline the pragma tests correct: with no pragma, the final snapshot
+// holds an empty rack for the mover.
 TEST(GcgReaderTest, NoRackPragmaLeavesFinalRackCleared) {
   const std::string gcg =
     "#player1 Alice Alice\n"
@@ -87,10 +89,9 @@ TEST(GcgReaderTest, NoRackPragmaLeavesFinalRackCleared) {
   EXPECT_EQ(rack_letters(game.snapshots.back().racks[0]), "");
 }
 
-// A position-set .gcg is read at its final recorded state, the side to move
-// holding the rack its #RackN pragma records (read_gcg_endgame's reading, with
-// a bag). Under open leaves the opponent's retained leave (their last rack
-// minus what they played) is exposed.
+// A position-set .gcg is read at its final recorded state, with the side to
+// move holding its #RackN pragma rack. With open leaves the opponent's retained
+// leave (last rack minus the tiles played) is exposed too.
 TEST(GcgPositionTest, FinalStateWithThePragmaRack) {
   const std::string gcg =
     "#player1 Alice Alice\n"
@@ -108,10 +109,9 @@ TEST(GcgPositionTest, FinalStateWithThePragmaRack) {
   EXPECT_EQ(p.scores[1], 8);
   EXPECT_EQ(p.turns, 2);
   EXPECT_EQ(p.board.num_tiles(), 6);
-  // Bob kept BBBB after playing BBB.
   EXPECT_EQ(p.opp_leave.to_string(), "BBBB");
-  // AAA and BBB are on the board; the unseen pool is 100 - 6 - 7 = 87, minus
-  // the opponent's assumed-full rack.
+  // 100 tiles - 6 on the board - the mover's 7 = 87 unseen, less the
+  // opponent's rack, assumed full.
   EXPECT_EQ(p.bag_size, 87 - 7);
 
   ParsedGcgPosition hidden;
@@ -143,7 +143,6 @@ TEST(GcgPositionTest, AnyRecordedTurnOfACompleteGame) {
   EXPECT_EQ(p.opp_leave.to_string(), "BBBB");
   EXPECT_EQ(p.bag_size, 87 - 7);
 
-  // Turn 0: the empty board, Alice's opening rack, nothing retained by Bob.
   ASSERT_TRUE(read_gcg_position_at(gcg, 0, true, &p, &error)) << error;
   EXPECT_EQ(p.board.num_tiles(), 0);
   EXPECT_EQ(p.rack.to_string(), "AAAAAAA");
@@ -184,9 +183,10 @@ TEST(GcgPositionTest, RefusesAMissingRackPragma) {
 }
 
 // The position-evaluation datasets' reading: the board after the final move,
-// from the POV of the seat that made it, holding its leave. The opponent's
-// retained leave and the observation of their last move (board, move, the pool
-// unseen to the POV while it was played) come along for the sims.
+// from the POV of the seat that made it, holding its leave. It also carries the
+// opponent's retained leave and an observation of their last move (the board
+// before it, the move, and the pool unseen to the POV at the time), which the
+// sims use for rack inference.
 TEST(GcgPostMoveTest, FinalMoverPovWithOpponentLeaveAndObservation) {
   const std::string gcg =
     "#player1 Alice Alice\n"
@@ -203,13 +203,12 @@ TEST(GcgPostMoveTest, FinalMoverPovWithOpponentLeaveAndObservation) {
   EXPECT_EQ(p.scores[0], 12);
   EXPECT_EQ(p.scores[1], 8);
   EXPECT_EQ(p.board.num_tiles(), 9);
-  // Bob kept BCDE after playing BBB.
   EXPECT_EQ(p.opp_leave.to_string(), "BCDE");
   ASSERT_TRUE(p.opp_observation.has_value());
-  // Bob's move was played on the board holding only Alice's AAA ...
+  // Bob played onto a board holding only Alice's AAA, while Alice held
+  // AAAAEFG: 100 - 3 - 7 tiles were unseen to her.
   EXPECT_EQ(p.opp_observation->board_before.num_tiles(), 3);
   EXPECT_EQ(p.opp_observation->move.num_glyphs(), 3);
-  // ... while Alice held AAAAEFG: the pool unseen to her was 100 - 3 - 7.
   EXPECT_EQ(p.opp_observation->pool.size(), 90);
   EXPECT_EQ(p.opp_observation->pool.count(Tile::from_char('A')), 9 - 3 - 4);
   EXPECT_EQ(p.opp_observation->pool.count(Tile::from_char('B')), 2);

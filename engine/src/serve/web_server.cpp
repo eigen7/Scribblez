@@ -34,7 +34,6 @@ namespace scribblez {
 
 namespace {
 
-// Generic socket I/O, Base64, SHA-1, and ASCII case folding live in util/.
 using util::base64;
 using util::read_n;
 using util::sha1;
@@ -43,7 +42,8 @@ using util::write_all;
 
 // --------------------------- HTTP / WS helpers ---------------------------
 
-// Case-insensitive.
+// The value of header `name` in `req`, matched case-insensitively; empty if
+// absent.
 std::string header_value(const std::string& req, const std::string& name) {
   std::string lower = req;
   to_lower(lower);
@@ -60,12 +60,10 @@ std::string header_value(const std::string& req, const std::string& name) {
   return a == std::string::npos ? "" : val.substr(a, b - a + 1);
 }
 
-// --------------------------- JSON serialization --------------------------
-
 // ----------------------------- port freeing ------------------------------
 
-// PIDs currently LISTENing on `port`, via lsof. We intentionally ignore
-// established client sockets so we never kill unrelated client processes.
+// PIDs listening on `port`, via lsof. Only listeners, so that a process that
+// merely has a client connection to the port is never killed.
 std::set<int> pids_listening_on_port(int port) {
   namespace bp = boost::process;
   std::set<int> pids;
@@ -278,8 +276,8 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
       default_dev_port_(default_dev_port) {
   namespace bp = boost::process;
 
-  // If a dev server is already listening on this port, reuse it only when it
-  // actually responds to HTTP. If the listener is stale/stuck, reclaim it.
+  // Reuse a dev server already on this port if it answers HTTP; kill a stuck
+  // one.
   if (!pids_listening_on_port(dev_port_).empty()) {
     if (http_responding_on_port(dev_port_)) {
       std::cerr << "  Reusing existing dev server on port " << dev_port_ << ".\n";
@@ -290,16 +288,15 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
     kill_listening_pids_on_port(dev_port_);
   }
 
-  // Pass the ports through to vite.config.ts so the browser UI and the engine's
-  // WebSocket server always agree on which ports to use / proxy, and the tool
-  // name through to main.tsx so the bare URL mounts the right UI.
+  // vite.config.ts reads the ports, so Vite listens and proxies where the engine
+  // expects; main.tsx reads the tool, so the bare URL mounts the right UI.
   bp::environment env = boost::this_process::environment();
   env["VITE_DEV_PORT"] = std::to_string(dev_port_);
   env["VITE_WS_PORT"] = std::to_string(ws_port_);
   if (!tool_.empty()) env["VITE_TOOL"] = tool_;
 
-  // Redirect Vite's chatty output to a log file so it can never corrupt
-  // play_game's own stdout (which may carry the game-log JSON).
+  // Vite's output goes to a log file so it cannot corrupt play_game's stdout,
+  // which may carry the game-log JSON.
   boost::filesystem::path log = boost::filesystem::path(web_dir) / ".vite-dev.log";
 
   boost::filesystem::path npm = bp::search_path("npm");
@@ -308,8 +305,8 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
       "npm not found on PATH (needed to launch the web UI); run py/build.py");
   }
 
-  // A process group lets us terminate the whole tree on exit: `npm run dev`
-  // spawns vite as a grandchild that would otherwise be orphaned.
+  // A process group, so the destructor can kill the whole tree: `npm run dev`
+  // runs vite as a grandchild that would otherwise be orphaned.
   group_ = std::make_unique<bp::group>();
   child_ = std::make_unique<bp::child>(npm, "run", "dev", bp::start_dir = web_dir,
                                        bp::std_out > log, bp::std_err > log, env, *group_);
@@ -317,8 +314,8 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
 
 ViteDevServer::~ViteDevServer() {
   boost::system::error_code ec;
-  if (group_) group_->terminate(ec);  // kill the whole process group
-  if (child_) child_->wait(ec);       // reap
+  if (group_) group_->terminate(ec);
+  if (child_) child_->wait(ec);
 }
 
 bool ViteDevServer::wait_until_ready(int timeout_ms) {
@@ -330,7 +327,7 @@ bool ViteDevServer::wait_until_ready(int timeout_ms) {
   auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   tcp::endpoint endpoint(asio::ip::make_address("127.0.0.1"), uint16_t(dev_port_));
   while (std::chrono::steady_clock::now() < deadline) {
-    // Fail fast if the dev server already exited (e.g. deps not installed).
+    // Fail fast if the dev server exited, e.g. because deps are not installed.
     if (child_ && !child_->running()) return false;
 
     asio::io_context io;
@@ -351,11 +348,10 @@ std::string ViteDevServer::url() const {
 
 WebSession::WebSession(int port) : port_(port) {
   std::signal(SIGPIPE, SIG_IGN);
-  // Reclaim the WebSocket port so a new manual_gcg_tool launch can take over
-  // from an older instance without manual cleanup.
+  // Take the port over from any earlier instance still holding it.
   kill_listening_pids_on_port(port_);
-  // SOCK_CLOEXEC so the Vite dev server we later fork/exec does not inherit (and
-  // keep alive) this listening socket.
+  // SOCK_CLOEXEC so the Vite dev server, forked later, does not inherit this
+  // socket and keep the port bound after the engine exits.
   listen_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (listen_fd_ < 0) throw util::Exception("socket() failed");
   int yes = 1;
@@ -408,7 +404,7 @@ bool WebSession::wait_for_client() {
       if (errno == EINTR) continue;
       return false;
     }
-    // Read the request headers, which a blank line terminates.
+    // Read the request headers, up to the terminating blank line.
     std::string req;
     char buf[2048];
     while (req.find("\r\n\r\n") == std::string::npos) {
@@ -432,8 +428,8 @@ bool WebSession::wait_for_client() {
       ::close(conn);
       continue;
     }
-    // Not a WebSocket upgrade. The UI is served by the Vite dev server, which
-    // only proxies `/ws` here, so any other request is stray -- just close it.
+    // Vite serves the UI and proxies only `/ws` here, so any other request is
+    // stray.
     ::close(conn);
   }
 }
@@ -459,10 +455,9 @@ void WebSession::send_text(const std::string& msg) {
 
 std::optional<std::string> WebSession::recv_text() {
   if (ws_fd_ < 0) return std::nullopt;
-  // Accumulates the payload of a fragmented message: a data frame with FIN
-  // clear, followed by continuation frames (opcode 0x0) until one has FIN set.
-  // Browsers fragment large messages (e.g. a big PNG export), so we must
-  // reassemble rather than return the first frame.
+  // Browsers fragment large messages (e.g. a PNG export) into a data frame
+  // with FIN clear followed by continuation frames up to one with FIN set, so
+  // payloads accumulate here until FIN.
   std::string message;
   for (;;) {
     uint8_t hdr[2];
@@ -531,7 +526,6 @@ std::optional<std::string> WebSession::recv_text() {
 }
 
 void WebSession::linger_after_final_message() {
-  // Give the kernel a moment to flush the final frame before we close.
   std::this_thread::sleep_for(std::chrono::milliseconds(700));
 }
 

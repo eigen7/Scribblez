@@ -9,17 +9,14 @@
 #include <numeric>
 #include <optional>
 
-// The production constructor -- the only member that references the concrete
-// TensorRT-backed service (and thus pulls in CUDA / TensorRT) -- lives in
-// mset_sim_agent_factory.cpp, so this translation unit, and the agent's unit
-// tests that compile it, carry no GPU dependency.
+// The production constructor and from_spec live in mset_sim_agent_factory.cpp.
 
 namespace scribblez {
 
 namespace {
 
-// The dictionary reference the members that need it read before any
-// constructor body could check it.
+// Checked in the initializer list, where members dereference the dictionary
+// before any constructor body could check it.
 const Dictionary& require_dict(const Dictionary* dict) {
   if (dict == nullptr) throw util::Exception("mset-sim agent: a dictionary is required");
   return *dict;
@@ -51,9 +48,8 @@ void MsetSimAgent::validate(const Params& params) {
     throw util::CleanException("mset-sim agent: --shortlist must be >= 0 (0 = all moves)");
   if (params.sim_top_k < 1) throw util::CleanException("mset-sim agent: --sim-top-k must be >= 1");
   SimRunner::validate(params.sim);
-  // The horizon lower bound, checked early (the factory calls validate()
-  // before loading the model). The flag pairing against --leaf-model is the
-  // factory's, which alone knows whether a leaf path was given.
+  // Only the horizon's range: whether a leaf model accompanies it is checked
+  // by from_spec, which alone knows whether a path was given.
   SimRunner::validate_min_horizon("mset-sim agent", params.sim_horizon);
 }
 
@@ -75,10 +71,10 @@ void MsetSimAgent::observe_move(const Move& move) {
 
 void MsetSimAgent::encode_board_row(const MoveRequest& req, float* dst) const {
   // The cross-check input planes read the board's move-generation caches;
-  // building them here (a no-op once valid) keeps them lexicon-accurate.
+  // building them here is a no-op once they are valid.
   encoder_.board().ensure_movegen_caches(*spec_.dict);
-  // The encoder's active player is this agent's own seat: it has observed every
-  // prior move, and this is its turn.
+  // The encoder has observed every prior move, so its active player is this
+  // agent's seat.
   const int me = encoder_.active_player();
   if (spec_.opp_leave_input) {
     encoder_.encode_input(me, req.my_rack, req.opp_rack, dst);
@@ -90,10 +86,9 @@ void MsetSimAgent::encode_board_row(const MoveRequest& req, float* dst) const {
 void MsetSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates) {
   const int n = candidates.size();
   encode_board_row(req, board_row_.data());
-  // The differential the moves resolve is read off the same mirrored encoder
-  // that wrote the board row's score-diff feature, so a candidate's resultant
-  // differential is exactly that feature plus the move's score -- the plain sum
-  // the two representations were designed to share (input_encoder.h).
+  // Take the score differential from the same encoder that wrote the board
+  // row, so each candidate's resulting differential is exactly the row's
+  // score-diff feature plus the move's score (input_encoder.h).
   const int me = encoder_.active_player();
   move_features_.encode(candidates.data(), n, encoder_.score(me) - encoder_.score(1 - me));
   wld_buf_.resize(size_t(n) * nn::WldOutput::kRowElems);
@@ -114,15 +109,13 @@ float MsetSimAgent::objective(int i) const {
 }
 
 MoveDecision MsetSimAgent::make_move(const MoveRequest& req) {
-  // The endgame belongs to the exact solver, which needs no candidates of ours.
   if (const std::optional<MoveDecision> solved = endgame_.try_solve(req)) return *solved;
 
   const std::vector<Move> candidates =
     equity_top_k(req, shortlist_ == 0 ? std::numeric_limits<int>::max() : shortlist_);
-  // A bag-empty turn the solver declined: the value model is out of its
-  // training regime and rollouts have no bag to draw the opponent's
-  // replenishments from, so play the static-equity move -- which is what
-  // equity_top_k already ranked first.
+  // On a bag-empty turn the solver declined, the model is outside its
+  // training regime and rollouts have no bag to draw from, so play the
+  // static-equity favourite, which equity_top_k ranked first.
   if (req.bag_size == 0 || candidates.size() == 1) return candidates.front();
 
   rank_candidates(req, candidates);
@@ -135,8 +128,7 @@ MoveDecision MsetSimAgent::make_move(const MoveRequest& req) {
   const SimPosition pos = sim_position_from(req);
 
   const std::vector<SimObservation> observations = runner_.run(pos, sim_moves_, sim_seed(ply_));
-  // Ties in the observations go to the earlier candidate -- the better model
-  // rank, this agent's own ordering.
+  // Ties go to the earlier candidate, the better model rank.
   return sim_moves_[size_t(best_observation_index(observations, sim_objective_))];
 }
 

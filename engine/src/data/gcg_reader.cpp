@@ -20,9 +20,9 @@
 namespace scribblez {
 namespace {
 
-// std::getline with a CRLF line ending stripped whole: GCG files from Windows
-// tools and web exports carry \r\n, and a kept \r would end up inside the
-// last token of the line (a player's name, a rack, a score).
+// std::getline that also strips a trailing '\r'. GCG files from Windows tools
+// and web exports use CRLF, and a kept '\r' would end up inside the line's
+// last token (a player's name, a rack, a score).
 bool getline_lf_or_crlf(std::istream& in, std::string& line) {
   if (!std::getline(in, line)) return false;
   if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -159,12 +159,12 @@ class GcgReader {
     return false;
   }
 
-  // Parse the manual tool's own rack pragmata, "#Rack1 <tiles>" / "#Rack2
-  // <tiles>". Before any event line the pragma gives a player's current
-  // ("resume") rack, held for the final position; after an event it gives their
-  // rack just after that event. Standard tournament GCG spells the starting
-  // rack in lowercase ("#rack1"), which carries different semantics and is left
-  // for the turn lines to supply, so only the capitalized form is consumed here.
+  // Parses the "#Rack1 <tiles>" / "#Rack2 <tiles>" pragmata that
+  // gcg_writer.h emits. Before any event line, the pragma gives a player's
+  // current rack, applied to the final position (the "resume" rack). After an
+  // event, it gives their rack just after that event. Only the capitalized
+  // form is consumed: tournament GCG uses lowercase "#rack1" with different
+  // meaning, and the turn lines carry that information anyway.
   bool TryParseRackPragma(const std::string& line) {
     int player = 0;
     if (line.rfind("#Rack1", 0) == 0) {
@@ -244,11 +244,9 @@ class GcgReader {
     return out;
   }
 
-  // Recognize the two end-of-game adjustment line shapes and record them
-  // instead of treating them as plays:
-  //   ">nick: (opp_rack) +delta total"        (player went out, gains tiles)
-  //   ">nick: rack (rack) -delta total"        (player held tiles, penalized)
-  // Returns true if the line was an adjustment (and was consumed).
+  // Consumes the two end-of-game adjustment line shapes:
+  //   ">nick: (opp_rack) +delta total"   (player went out, gains opp's tiles)
+  //   ">nick: rack (rack) -delta total"  (player held tiles, penalized)
   bool TryParseEndAdjustment(int player, const std::vector<std::string>& tok) {
     if (!tok.empty() && tok.front().front() == '(') {
       if (tok.size() >= 3) RecordEndAdjustment(player, StripParens(tok[0]), tok[1], tok[2]);
@@ -274,8 +272,7 @@ class GcgReader {
     adj.total = *total;
     end_adjustments_.push_back(adj);
 
-    // Fold the adjustment into the final scores so the end-of-game position
-    // shows the adjusted totals, not the last move's cumulative.
+    // The final snapshot shows adjusted totals, not the last move's.
     scores_[player] = *total;
     if (!snapshots_.empty()) snapshots_.back().scores = scores_;
   }
@@ -421,8 +418,8 @@ class GcgReader {
     for (int i = 0; i < RACK_SIZE; ++i) racks_[player][i].reset();
   }
 
-  // Parse a rack token into slots: 'A'..'Z' are tiles, '?'/'*'/lowercase are
-  // blanks, '_' marks a present-but-unknown slot, '.' is skipped.
+  // 'A'..'Z' are tiles, '?', '*' and lowercase are blanks, '_' is an unknown
+  // tile (left empty), and '.' is skipped.
   static ParsedRackSlots SlotsFromRackToken(const std::string& rack_token) {
     ParsedRackSlots slots;
     int slot = 0;
@@ -449,9 +446,6 @@ class GcgReader {
     racks_[player] = SlotsFromRackToken(rack_token);
   }
 
-  // Install the resume racks parsed from top-of-file "#Rack1"/"#Rack2" pragmata
-  // onto the final position, so a fully-recorded game reopens with each player's
-  // recorded current rack rather than an unknown hand.
   void ApplyResumeRacks() {
     for (int p = 0; p < 2; ++p) {
       if (resume_racks_[p].has_value()) snapshots_.back().racks[p] = *resume_racks_[p];
@@ -568,9 +562,8 @@ std::optional<Rack> pragma_rack(const std::string& gcg_text, int player) {
 
 namespace {
 
-// The final recorded state and the side to move's pragma rack -- what both
-// position readings below start from. False with an explanation when the
-// text does not parse, has no position, or lacks the mover's rack pragma.
+// The final recorded state, the side to move, and its pragma rack: the common
+// start of read_gcg_endgame and read_gcg_position.
 bool final_state(const std::string& gcg_text, ParsedGcgGame* game,
                  const ParsedGcgSnapshot** snapshot, int* mover, Rack* mover_rack,
                  std::string* error_message) {
@@ -624,9 +617,8 @@ bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
 
 namespace {
 
-// The position-derived fields of `out` from its already-set game (cut to the
-// moves before the position), the snapshot of that state, and the mover's
-// rack.
+// Fills in everything in `out` but `game`, which the caller has already set
+// (cut to the moves before the position).
 void lift_position(const ParsedGcgSnapshot& snapshot, int mover, const Rack& rack, bool open_leaves,
                    ParsedGcgPosition* out) {
   out->board = snapshot.board;
@@ -662,8 +654,7 @@ bool read_gcg_position_at(const std::string& gcg_text, int turn_index, bool open
     return false;
   }
   const TurnRecord record = game.turns[size_t(turn_index)].record;
-  // snapshots[i] is the state before turns[i]; the cut keeps exactly the
-  // moves that lead to it, and the game log is rebuilt to match.
+  // Keep only the moves that lead to the position, and rebuild the log to match.
   game.turns.resize(size_t(turn_index));
   game.snapshots.resize(size_t(turn_index) + 1);
   game.game_log = game.to_game_log_storage();

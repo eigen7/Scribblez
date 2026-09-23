@@ -1,16 +1,8 @@
-// Unit tests for Bayesian rack inference (docs/roadmap.md, track B).
-//
-//  * the hypergeometric prior: enumeration agrees with the count, priors
-//    normalize, and drawing from the pool reproduces them empirically -- the
-//    property the sampling path relies on to skip the prior term.
-//  * the observations that carry nothing to infer: a bingo, a pass, an empty
-//    bag.
-//  * posterior shape: normalized, ordered, every leave the right size, and
-//    reproducible across runs.
-//  * that inference actually informs -- over a spread of racks, the leave the
-//    opponent really kept ends up weighted well above its prior. This is the
-//    unit-test-scale version of the offline ground-truth readout that sets the
-//    temperature (docs/roadmap.md, B2).
+// Bayesian rack inference (belief/rack_inference.h): the hypergeometric leave
+// prior, the observations that carry nothing to infer, the posterior's shape,
+// and whether inference informs at all -- over a spread of racks, the leave the
+// opponent really kept should gain weight over its prior. Runs off a synthetic
+// leave table, so it needs no data mount.
 
 #include "agent/agent.h"
 #include "belief/leave_prior.h"
@@ -51,10 +43,9 @@ TileCounts pool_from(const std::string& s) {
   return c;
 }
 
-// Words spanning a common letter set at six and seven letters, so that adding
-// one tile to a rack can unlock a bingo. That is what makes hypotheses
-// distinguishable: a leave the opponent demonstrably did not have would have
-// led them to a different, better play.
+// Six- and seven-letter words over a common letter set, so adding one tile to
+// a rack can unlock a bingo. That makes leave hypotheses distinguishable: many
+// leaves the opponent did not have would have led to a different, better play.
 Dictionary bingo_capable_dict() {
   return Dictionary::build_from_words(
     {"AE",    "AR",     "AS",      "AT",    "ARC",    "ARCS",   "ARE",     "ART",   "ARTS",
@@ -66,8 +57,8 @@ Dictionary bingo_capable_dict() {
      "TEARS", "TRACE",  "TRACES"});
 }
 
-// A fixture over an opening position: an empty board, a pool the opponent's
-// rack was drawn from, and the synthetic leave table the equity model reads.
+// An opening position: an empty board and a small pool the opponent's rack was
+// drawn from.
 class RackInferenceTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -83,8 +74,8 @@ class RackInferenceTest : public ::testing::Test {
 
   int bag_size() const { return pool().size() - RACK_SIZE; }
 
-  // The move HastyBot would make from `rack` here -- the equity argmax, which
-  // is exactly the process the likelihood model assumes.
+  // The equity argmax from `rack`: exactly the move-choice process the
+  // likelihood model assumes.
   Move best_move(const Rack& rack) const {
     const Rack no_opp;
     const MoveRequest req{board_, dict_, rack, no_opp, 0, 0, bag_size()};
@@ -101,9 +92,9 @@ class RackInferenceTest : public ::testing::Test {
     return OppMoveObservation{board_, move, pool()};
   }
 
-  // A rack whose best play here is CRATE, keeping BB -- a two-tile leave
-  // space, small enough to enumerate and awkward enough that a different
-  // leave would have meant a different play.
+  // Best play CRATE, keeping BB: a two-tile leave space, small enough to
+  // enumerate, and awkward enough that a different leave would have meant a
+  // different play.
   static Rack partial_play_rack() { return rack_from("BBCARTE"); }
 
   std::filesystem::path tmp_;
@@ -153,10 +144,11 @@ TEST(LeavePrior, UndrawableLeaveHasZeroProbability) {
 
 TEST(LeavePrior, CountingStopsOnceTheCapIsExceeded) {
   const TileCounts pool = pool_from("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-  EXPECT_EQ(count_multisets(pool, 5, 10), 11);  // cap + 1 means "more than cap"
+  EXPECT_EQ(count_multisets(pool, 5, 10), 11);  // cap + 1 signals "more than the cap"
   EXPECT_EQ(count_multisets(pool, 1, 100), 26);
 }
 
+// The sampling path relies on this to leave the prior term out of its weights.
 TEST(LeavePrior, DrawingReproducesThePrior) {
   const TileCounts pool = pool_from("AABBC");
   const std::vector<ScoredLeave> hyps = enumerate_leaves(pool, 2);
@@ -175,7 +167,6 @@ TEST(LeavePrior, DrawingReproducesThePrior) {
 
 TEST_F(RackInferenceTest, ABingoLeavesNothingToInfer) {
   const RackInferrer inferrer(dict_, {});
-  // CASTERS uses the whole rack, so nothing was kept.
   const Move bingo = best_move(rack_from("CASTERS"));
   ASSERT_EQ(bingo.num_glyphs(), RACK_SIZE);
   EXPECT_TRUE(inferrer.infer(observation_of(bingo), 1).empty());
@@ -189,7 +180,7 @@ TEST_F(RackInferenceTest, APassRevealsNothing) {
 TEST_F(RackInferenceTest, AnEmptyBagSkipsInference) {
   const RackInferrer inferrer(dict_, {});
   OppMoveObservation obs = observation_of(best_move(partial_play_rack()));
-  obs.pool = pool_from("ABCDEFG");  // exactly one rack: the bag is gone
+  obs.pool = pool_from("ABCDEFG");  // one rack's worth: the bag is empty
   EXPECT_TRUE(inferrer.infer(obs, 1).empty());
 }
 
@@ -217,12 +208,12 @@ TEST_F(RackInferenceTest, PosteriorIsNormalizedOrderedAndTheRightShape) {
 
 TEST_F(RackInferenceTest, SmallLeaveSpacesAreEnumeratedExactly) {
   const Move played = best_move(partial_play_rack());
-  ASSERT_LT(RACK_SIZE - played.num_glyphs(), 3);  // a small space, so exhaustive
+  ASSERT_LT(RACK_SIZE - played.num_glyphs(), 3);
 
   EXPECT_TRUE(RackInferrer(dict_, {}).infer(observation_of(played), 1).exhaustive());
 
   RackInferrer::Params sampled;
-  sampled.max_enumerated = 1;  // force the space over the threshold
+  sampled.max_enumerated = 1;  // forces sampling
   sampled.samples = 200;
   EXPECT_FALSE(RackInferrer(dict_, sampled).infer(observation_of(played), 1).exhaustive());
 }
@@ -252,9 +243,9 @@ TEST_F(RackInferenceTest, SamplingWeightsMatchEnumerationOnASmallSpace) {
   params.samples = 12000;
   const RackPosterior sampled = RackInferrer(dict_, params).infer(obs, 5);
 
-  // Importance sampling is unbiased for the same posterior, so with enough
-  // draws the two paths agree -- which is what says the sampling path really
-  // does pick the prior up from its proposal.
+  // Importance sampling targets the same posterior, so with enough draws the
+  // two paths agree. Agreement shows the sampling path correctly takes the
+  // prior from its proposal distribution.
   ASSERT_FALSE(exact.empty());
   for (int i = 0; i < exact.size(); ++i)
     EXPECT_NEAR(weight_of(sampled, exact.entry(i).leave), exact.entry(i).weight, 0.03)
@@ -263,7 +254,6 @@ TEST_F(RackInferenceTest, SamplingWeightsMatchEnumerationOnASmallSpace) {
 
 TEST_F(RackInferenceTest, AnExchangeInfersWhatWasKept) {
   const RackInferrer inferrer(dict_, {});
-  // A rack of awkward consonants: the equity argmax here is an exchange.
   const Rack truth = rack_from("BBCTTRC");
   const Move played = best_move(truth);
   ASSERT_EQ(played.type(), MoveType::EXCHANGE);
@@ -276,7 +266,7 @@ TEST_F(RackInferenceTest, AnExchangeInfersWhatWasKept) {
 
 TEST_F(RackInferenceTest, TheTrueLeaveGainsWeightOverItsPrior) {
   RackInferrer::Params params;
-  params.temperature = 3.0;  // pinned, so retuning the default cannot move this bar
+  params.temperature = 3.0;  // pinned, so retuning the default cannot move the bar
   const RackInferrer inferrer(dict_, params);
   const std::vector<std::string> racks = {"BBCARTE", "AACERST", "ACEERST", "ABCERST",
                                           "AAERSTT", "AAABEST", "RSTTEAB", "BBTTCAE"};
@@ -287,7 +277,7 @@ TEST_F(RackInferenceTest, TheTrueLeaveGainsWeightOverItsPrior) {
   for (const std::string& s : racks) {
     const Rack truth = rack_from(s);
     const Move played = best_move(truth);
-    if (played.num_glyphs() == RACK_SIZE) continue;  // a bingo tells us nothing
+    if (played.num_glyphs() == RACK_SIZE) continue;  // a bingo keeps nothing
 
     Rack kept = truth;
     for (int i = 0; i < played.num_glyphs(); ++i) kept.remove(played.glyph(i).rack_tile());
@@ -311,11 +301,10 @@ TEST_F(RackInferenceTest, TheTrueLeaveGainsWeightOverItsPrior) {
 }
 
 TEST_F(RackInferenceTest, ALowTemperatureKeepsEveryHypothesis) {
-  // A sharp temperature divides equity gaps into the hundreds, which is where
-  // a likelihood held as a plain probability rounds to zero and takes its
-  // hypothesis out of the posterior altogether. Support must not depend on the
-  // temperature: a hypothesis the evidence merely disfavors should rank last,
-  // not disappear.
+  // A sharp temperature scales equity gaps into the hundreds, where a
+  // likelihood held as a plain probability underflows to zero and drops its
+  // hypothesis from the posterior. Support must not depend on the temperature:
+  // a hypothesis the evidence disfavours should rank last, not disappear.
   const OppMoveObservation obs = observation_of(best_move(partial_play_rack()));
   RackInferrer::Params warm;
   warm.temperature = 3.0;

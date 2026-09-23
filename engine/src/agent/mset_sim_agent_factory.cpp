@@ -1,9 +1,7 @@
-// Command-line construction of MsetSimAgent, kept separate from the agent's
-// selection logic (mset_sim_agent.cpp) for the same reason as
-// neural_sim_agent_factory.cpp: this is the only MsetSimAgent translation unit
-// that references the concrete TensorRT-backed move set service, so the core
-// agent TU -- and the agent's unit tests, which inject a stub through the other
-// constructor -- carry no CUDA/TensorRT dependency.
+// MsetSimAgent's command-line construction and production constructor. They
+// are the only parts that reference the concrete TensorRT-backed service, so
+// keeping them here leaves mset_sim_agent.cpp, and the unit tests that inject
+// a stub service, free of CUDA/TensorRT.
 
 #include "agent/mset_sim_agent.h"
 #include "agent/neural_service_options.h"
@@ -27,10 +25,9 @@ namespace {
 
 namespace po = boost::program_options;
 
-// Parsed `--type=mset-sim` option values, with their defaults. A single
-// options_description is built over these fields (make_options_description)
-// and reused for both parsing (from_spec) and help rendering (options_help),
-// so the two can never drift.
+// Parsed `--type=mset-sim` options with their defaults. from_spec and
+// options_help build the same options_description over them, so the parsed
+// and documented options cannot drift.
 struct MsetSimOptions {
   NeuralServiceOptions service;
   int shortlist = 0;
@@ -47,9 +44,9 @@ struct MsetSimOptions {
 
 po::options_description make_options_description(MsetSimOptions& o) {
   po::options_description desc("Move-set-evaluation agent (--type=mset-sim) options");
-  // One GPU call scores a whole turn's candidate set, so the shared per-call
-  // ceiling is sized as the move set spec sizes it (model_specs.h documents
-  // why generously): a set past the ceiling costs another board pass.
+  // One GPU call scores a turn's whole candidate set, and a set past the
+  // ceiling costs another board pass, so use the move-set spec's generous
+  // default (model_specs.h explains it).
   o.service.batch_size = nn::MoveSetEvaluationSpec::kDefaultMaxRows;
   o.service.add_options(desc);
   desc.add_options()  //
@@ -115,20 +112,16 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
   params.sim_horizon = opts.sim_horizon;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
-  // Fail on a bad scalar option now, before net_params() and the
-  // constructor spend seconds loading the model and building the TensorRT
-  // engine.
+  // Fail on a bad option before seconds go into the TensorRT engine build.
   validate(params);
 
   SimRunner::validate_horizon("mset-sim agent", opts.sim_horizon, !opts.leaf_model.empty());
-  // The leaf net shares the service's device; its per-call ceiling is the
-  // position family's own (the runner batches to it).
+  // The leaf model shares the service's device.
   std::shared_ptr<nn::PositionEvalService> leaf =
     nn::load_leaf_position_service(opts.leaf_model, opts.service.cuda_device);
 
-  // Raising the per-pass ceiling to the shortlist just lets the whole shortlist
-  // be scored in one pass; the service chunks to the ceiling either way.
-  // shortlist == 0 (all moves) is chunked to batch_size.
+  // Raise the per-pass ceiling to the shortlist so it is scored in one pass.
+  // With shortlist == 0 (all moves) the service chunks to batch_size.
   return std::make_unique<MsetSimAgent>(
     params,
     nn::make_loaded_service(opts.service.net_params<nn::MoveSetEvaluationSpec>(opts.shortlist)),

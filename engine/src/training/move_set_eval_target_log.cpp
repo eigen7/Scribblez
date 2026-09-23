@@ -78,9 +78,8 @@ void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
     DEBUG_ASSERT(!candidates[c].transposed());  // on-disk moves are natural-frame
     append_bytes(&buffer_, &candidates[c], sizeof(Move));
     append_bytes(&buffer_, targets.data() + c * record_floats_, sizeof(float) * record_floats_);
-    // Scales first, then the quantized planes, so each stays a contiguous
-    // fixed-width block (the reader's accessors and the numpy dtype both
-    // address them as such).
+    // All scales first, then the quantized planes, so each is a contiguous
+    // fixed-width block for the reader's accessors and the numpy dtype.
     const float* cand_planes = planes.data() + c * record_planes_ * kPlaneWidth;
     const size_t scales_offset = buffer_.size();
     buffer_.resize(buffer_.size() + sizeof(float) * record_planes_);
@@ -98,9 +97,7 @@ void TargetWriter::close() {
   closed_ = true;
   TargetFileHeader* hdr = reinterpret_cast<TargetFileHeader*>(buffer_.data());
   hdr->num_positions = num_positions_;
-  // Temp-file + rename so the .mset appears atomically: an interrupted run
-  // never leaves a truncated file that a resume (which skips existing
-  // sidecars) would silently keep.
+  // Temp file + rename, so the .mset appears atomically.
   const std::string tmp = std::format("{}.tmp.{}", path_, ::getpid());
   {
     std::ofstream f(tmp, std::ios::binary);

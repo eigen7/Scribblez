@@ -34,9 +34,7 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
   }
   const int n = ranked.size();
 
-  // Top stratum: the head of the ranking, dense. The bound is relative to
-  // what the played move and the forced set already occupy, so forced
-  // candidates add to the sample rather than stealing head slots from it.
+  // Top stratum: the head of the ranking, dense.
   const int head_target = int(out.size()) + quotas.top;
   for (int i = 0; i < n && int(out.size()) < head_target; ++i) {
     if (std::find(out.begin(), out.end(), ranked[i]) == out.end()) out.push_back(ranked[i]);
@@ -87,10 +85,9 @@ Selection full_sweep_candidates(const std::vector<Move>& ranked, const Move& pla
     played_kept = played_kept || m == played;
     out.push_back(m);
   }
-  // A played move the generator never enumerates -- a PASS chosen while other
-  // moves were legal -- has no equity rank, so it can only go last; every other
-  // candidate keeps its rank order. It counts toward the legal total all the
-  // same: it was legal, and the sweep did reach it.
+  // A played move that move generation never enumerates (a PASS chosen while
+  // other moves were legal) has no equity rank, so it goes last. It still
+  // counts toward the legal total: it was legal, and the sweep reached it.
   uint32_t legal = ranked.size();
   if (!played_kept) {
     out.push_back(played);

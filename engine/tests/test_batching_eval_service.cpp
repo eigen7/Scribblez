@@ -1,8 +1,7 @@
-// BatchingPositionEvalService: the caller-led cooperative batching decorator.
-// A scripted stub echoes each row's first input float into both scoring heads,
-// so a caller can assert it got back exactly the rows it submitted -- any
-// mis-gather or mis-scatter across coalesced requests shows up as a wrong or
-// swapped marker. No ONNX, no TensorRT, no GPU.
+// BatchingPositionEvalService, the decorator that coalesces concurrent callers'
+// requests into one inner evaluate(). The stub echoes each row's first input
+// float back through both heads, so a gather or scatter error across coalesced
+// requests shows up as a caller receiving a wrong marker. No GPU needed.
 
 #include "encoding/input_encoder.h"
 #include "nn/batching_position_eval_service.h"
@@ -29,8 +28,7 @@ using SpecBatch = scribblez::nn::PositionEvaluationSpec::Batch;
 
 int row_floats() { return spatial_planes() * kBoardCells + scalar_floats({nullptr}); }
 
-// Echoes row i's first input float m into head 0 (as m) and head 1 (as m+0.5),
-// so a caller recognizes its own rows in the output.
+// Echoes row i's first input float m into head 0 as m and head 1 as m + 0.5.
 class EchoStub : public PositionEvalService {
  public:
   std::atomic<int> calls{0};
@@ -58,7 +56,7 @@ class ThrowingStub : public PositionEvalService {
   }
 };
 
-// One row's input block, all zero but for the marker in its first float.
+// One input row per marker, all zero but for the marker in its first float.
 std::vector<float> rows_with_markers(const std::vector<float>& markers) {
   std::vector<float> in(markers.size() * row_floats(), 0.0f);
   for (size_t r = 0; r < markers.size(); ++r) in[r * row_floats()] = markers[r];
@@ -113,8 +111,7 @@ TEST(BatchingPositionEvalService, ConcurrentCallersGetTheirOwnRows) {
   for (int t = 0; t < kThreads; ++t) threads.emplace_back(worker, t);
   for (std::thread& t : threads) t.join();
 
-  // Every request was served, and coalescing never manufactures work: the
-  // wrapped service saw at most one call per request (fewer when it coalesced).
+  // Coalescing may merge requests but never adds inner calls.
   EXPECT_GT(raw->calls.load(), 0);
   EXPECT_LE(raw->calls.load(), kThreads * kCalls);
 }
@@ -129,10 +126,9 @@ TEST(BatchingPositionEvalService, PropagatesInnerFailure) {
 }
 
 TEST(BatchingPositionEvalService, FailureReachesEveryCoalescedCaller) {
-  // Many threads contend, so drains coalesce more than one request; serve()'s
-  // catch must set the exception on every request in the pack, not just one --
-  // otherwise a co-batched caller returns garbage (or hangs) instead of
-  // throwing. Every call must observe the failure.
+  // Contention makes drains coalesce several requests. The inner failure must
+  // reach every request in the pack; a co-batched caller that missed it would
+  // return garbage or hang instead of throwing.
   BatchingPositionEvalService svc(std::make_unique<ThrowingStub>());
   constexpr int kThreads = 8;
   constexpr int kCalls = 200;

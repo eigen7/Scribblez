@@ -26,10 +26,8 @@ namespace scribblez {
 namespace {
 
 // A candidate applied to the decision point: the state handed to
-// Game::play_from for that candidate's rollouts. PLAY places its tiles and
-// scores; EXCHANGE surrenders its tiles (returned to the bag after the
-// refills); PASS changes nothing. In every case the opponent's rack is left
-// empty, to be sampled from the pool by the rollout's refill.
+// Game::play_from for its rollouts. The opponent's rack is left empty here;
+// each rollout seats it.
 struct AppliedCandidate {
   Board board;
   std::array<int, 2> scores{0, 0};
@@ -69,16 +67,13 @@ void set_terminal_outcome(int delta, RolloutResult* r) {
   r->delta_sq = double(delta) * delta;
 }
 
-// Encodes the horizon leaf of a truncated rollout -- the post-move pre-draw
-// state of the horizon ply's mover, from their POV, the exact sample kind the
-// position evaluation model trains on -- and stages the row in the batcher,
-// whose later flush writes the readout back to the pending slot's result. The
-// trainer loads post-move rows
-// (position_eval/trainer.py, post_move=True) of eligible turns of EVERY move
-// type: replay_to_sampled applies the sampled PLAY, EXCHANGE, or PASS before
-// encoding, so all three horizon kinds are in-distribution. The seeded
-// encoder's unknown last-move slots are overwritten by the candidate and the
-// >= kMinHorizonPlies rollout plies before anything reads them.
+// Stages a truncated rollout's horizon leaf in the batcher. The leaf is the
+// horizon ply's post-move, pre-draw state from its mover's point of view: the
+// sample kind the position-evaluation model trains on (post_move=True in
+// position_eval/trainer.py). Training covers every move type, so a PLAY,
+// EXCHANGE, or PASS at the horizon are all in-distribution. The encoder is
+// seeded without move history, but the candidate and the >= kMinHorizonPlies
+// rollout plies fill every last-move slot before anything reads them.
 void stage_horizon_leaf(const SimPosition& pos, const Move& candidate, const GameLog& log,
                         const Game& game, const InputEncodingSpec& leaf_spec, LeafBatcher* batcher,
                         size_t slot) {
@@ -95,7 +90,6 @@ void stage_horizon_leaf(const SimPosition& pos, const Move& candidate, const Gam
   batcher->add(slot, horizon_mover == pos.mover);
 }
 
-// Whether `player` passed anywhere in `log`.
 bool passed(const GameLog& log, int player) {
   for (int i = 0; i < log.num_records; ++i)
     if (log.records[i].player == player && log.records[i].move.type() == MoveType::PASS)
@@ -103,21 +97,18 @@ bool passed(const GameLog& log, int player) {
   return false;
 }
 
-// Plays one rollout of candidate `a` -- to a natural end, or to horizon_plies
-// when truncating -- and fills `out`'s moves plus, for a finished game, its
-// exact outcome. A truncated game instead stages the horizon state's encoded
-// row in the batcher, which completes `out` when it flushes.
+// Plays one rollout of candidate `a`. A finished game fills `out` completely;
+// a truncated one stages its horizon leaf, and the batcher completes `out`
+// when it flushes.
 void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& candidate,
                  const Dictionary& dict, HastyBotAgent& a0, HastyBotAgent& a1, uint64_t seed,
                  int horizon_plies, const InputEncodingSpec* leaf_spec, LeafBatcher* batcher,
                  size_t slot, RolloutResult* out) {
   const int opponent = 1 - pos.mover;
-  // Built from the PRE-move board and full rack so the pool -- and therefore
-  // the opponent's sampled tiles -- is identical across candidates (CRN). A
-  // known opp_leave seeds the opponent's retained tiles; the refill then
-  // draws only their hidden replenishments from the pool, which is exactly
-  // the true conditional given the mover's information (fresh draws are
-  // uniform from the bag by construction).
+  // Built from the pre-move board and full rack, so the pool, and with it the
+  // opponent's sampled tiles, is the same for every candidate (CRN). A known
+  // opp_leave is seated directly and the refill draws only the rest, which is
+  // the correct conditional given the mover's information.
   Bag pool = unseen_pool(pos.board, pos.rack, seed);
   std::array<Rack, 2> known_racks = a.known_racks;
   if (pos.opp_leave.size() > 0) {
@@ -150,11 +141,8 @@ std::unique_ptr<HastyBotAgent> make_rollout_agent(bool solve_endgames,
   return std::make_unique<HastyBotAgent>(params.hasty);
 }
 
-// Worker t: plays rollout indices {t, t+threads, ...} of EVERY candidate (the
-// per-index seed is shared across candidates -- the CRN scheme) into the flat
-// results array at slot = candidate * rollouts + index. Owns its rollout
-// agents and, under truncation, a LeafBatcher over the shared leaf service;
-// slots are disjoint across workers, so results need no synchronization.
+// Worker t plays rollout indices t, t+threads, ... of every candidate. Workers
+// write disjoint slots of `results`, so they need no synchronization.
 void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
                     const std::vector<Move>& candidates, const Dictionary& dict,
                     SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
@@ -165,7 +153,7 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
   HastyBotAgent::Params p1;
   p1.thread_id = t;
   p1.name = "H1";
-  // Temperature 0 -> deterministic greedy argmax, with or without solved endgames.
+  // Default temperature 0: deterministic greedy play.
   EndgameHastyBotAgent::Params e0, e1;
   e0.hasty = p0;
   e1.hasty = p1;
@@ -186,10 +174,9 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
   if (batcher) batcher->flush();
 }
 
-// Thread entry: runs the worker and captures any exception into *err for the
-// joining thread to rethrow. A rollout's leaf guard (LeafBatcher::flush)
-// throws on a non-finite readout; letting that escape a std::thread would
-// call std::terminate and bypass the caller's clean error reporting.
+// Thread entry: captures any exception into *err for the joining thread to
+// rethrow. LeafBatcher::flush throws on a non-finite readout, and an exception
+// escaping a std::thread calls std::terminate.
 void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
                 const std::vector<Move>& candidates, const Dictionary& dict,
                 SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
@@ -209,9 +196,8 @@ int end_rack_swing(const RolloutResult& r) {
   return r.opp_stranded - r.self_stranded;
 }
 
-// Terminal rollouts contribute exact integers; truncated rollouts contribute
-// fractional values, which run() reduces in a fixed order (see there for why
-// order matters).
+// The opponent's reply is weighted by p_loss: the opponent wins iff the mover
+// loses.
 void accumulate_rollout(const RolloutResult& o, SimObservation* obs) {
   ++obs->n;
   obs->wins += o.p_win;
@@ -242,14 +228,11 @@ void LeafBatcher::flush() {
     const float* wld = wld_.data() + j * nn::WldOutput::kRowElems;
     const float* sd = sd_.data() + j * nn::ScoreDiffOutput::kRowElems;
     // A non-finite readout would flow silently into training data and
-    // decisions -- a NaN compares false against everything, an inf poisons
-    // the running sums -- so it is a hard error. Every consumed field is
-    // checked with isfinite, not isnan: a range overflow reaches +/-inf
-    // before any NaN, and the identity-decoded score-diff head applies no
-    // softmax that would fold that inf into a NaN (unlike the WLD head), so
-    // inf must be caught explicitly. It should not happen: the leaf serves
-    // BF16, whose FP32-range exponent covers the trunk's magnitudes, so a
-    // trip here means an off-distribution input or a genuinely broken model.
+    // decisions, so it is a hard error. The check is isfinite, not isnan: an
+    // overflow reaches inf first, and unlike the WLD head the score-diff head
+    // has no softmax to turn that inf into a NaN. It should not happen at the
+    // default BF16 precision, whose exponent range matches FP32, so a trip
+    // means an off-distribution input or a broken model.
     if (!std::isfinite(wld[0]) || !std::isfinite(wld[1]) || !std::isfinite(wld[2]) ||
         !std::isfinite(sd[0]) || !std::isfinite(sd[1])) {
       throw util::Exception(
@@ -300,10 +283,8 @@ SimObjective parse_sim_objective(const std::string& name, const std::string& fla
 }
 
 std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
-  // Rejected as a hard error rather than tolerated: k == 0 would hand back an
-  // empty candidate set, which every caller reads as "nothing to choose from"
-  // rather than as a misconfiguration, and k < 0 walks partial_sort's middle
-  // iterator before the range's start.
+  // k == 0 would return an empty candidate set, which callers read as
+  // "nothing to choose from" rather than as a misconfiguration.
   if (k < 1) throw util::Exception("equity_top_k: k must be >= 1");
   std::vector<Move> candidates = generate_legal_plays(req);
   const std::vector<Move> exchanges = generate_legal_exchanges(req);
@@ -327,14 +308,12 @@ std::vector<Move> equity_top_k(const MoveRequest& req, int k) {
 SimPosition sim_position_from(const MoveRequest& req) {
   SimPosition pos;
   pos.board = req.board;
-  // The rollouts run from the mover's point of view, so seating them as player
-  // 0 costs nothing and spares the agent having to know its own seat.
+  // Seat the mover as player 0, so the agent need not know its own seat.
   pos.mover = 0;
   pos.scores = {req.my_score, req.opp_score};
   pos.rack = req.my_rack;
-  // Whatever we legitimately know of the opponent's rack (see MoveRequest):
-  // under face-up leaves their retained tiles, which then seed every rollout
-  // instead of being drawn from the pool.
+  // Whatever the agent legitimately knows of the opponent's rack (see
+  // MoveRequest): under face-up leaves, the tiles they kept.
   pos.opp_leave = req.opp_rack;
   return pos;
 }
@@ -350,10 +329,8 @@ Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed) {
   return pool;
 }
 
-// Rejected as a user error rather than tolerated: at 0 rollouts every
-// observation's mean is 0/0, and those NaNs compare false against everything,
-// so best_observation_index hands back the first candidate every time and the
-// caller stops simulating without ever being told.
+// Zero rollouts would make best_observation_index silently return the first
+// candidate every time.
 void SimRunner::validate(const Params& params) {
   if (params.rollouts < 1 || params.rollouts > kMaxRollouts) {
     throw util::CleanException("sim runner: rollouts must be in [1, {}]", kMaxRollouts);
@@ -404,10 +381,8 @@ std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
                                                    const std::vector<Move>& candidates,
                                                    uint64_t base_seed, int rollouts) const {
   if (candidates.empty()) return {};
-  // The documented non-endgame requirement: a non-empty bag at the decision
-  // point. The pool holds the bag plus the opponent's (up to RACK_SIZE)
-  // tiles, known or not, so the bound is uniform across information
-  // conditions.
+  // A non-empty bag: the pool holds the bag plus the opponent's (up to
+  // RACK_SIZE) tiles, known or not.
   DEBUG_ASSERT(unseen_pool(pos.board, pos.rack, 0).size() > RACK_SIZE);
 
   std::vector<AppliedCandidate> applied;
@@ -425,8 +400,6 @@ std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
     workers.emplace_back(sim_worker, std::cref(pos), std::cref(applied), std::cref(candidates),
                          std::cref(dict_), params, leaf_spec, t, base_seed, &results, &errors[t]);
   for (auto& w : workers) w.join();
-  // A worker's leaf guard may have thrown; surface the first such failure on
-  // the calling thread instead of leaving it to terminate the process.
   for (const std::exception_ptr& e : errors)
     if (e) std::rethrow_exception(e);
   return results;
@@ -436,9 +409,9 @@ std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
                                            const std::vector<Move>& candidates,
                                            uint64_t base_seed) const {
   const std::vector<RolloutResult> results = run_rollouts(pos, candidates, base_seed);
-  // Reduce in fixed (candidate, rollout index) order, whatever the thread
-  // count -- with fractional contributions, a merge order that followed the
-  // work partition would not be.
+  // Reduce in a fixed order: with fractional contributions, floating-point
+  // sums in an order that followed the thread partition would depend on the
+  // thread count.
   std::vector<SimObservation> out(candidates.size());
   for (size_t c = 0; c < out.size(); ++c)
     for (int i = 0; i < params_.rollouts; ++i)

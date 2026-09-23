@@ -1,11 +1,12 @@
 #pragma once
 
-// A process-wide registry of live shared instances keyed on the params that
-// determine them -- the machinery behind every `create()` factory that lets a
-// run's game threads resolve one set of params to ONE loaded model instead of
-// one apiece (PositionEvalService::create(), MoveProposalNets::create()).
-// Entries are held weakly, so an instance is freed once its last holder drops
-// it; a later run rebuilds.
+// A process-wide registry of live instances, keyed on the params that determine
+// them. It backs the `create()` factories (PositionEvalService::create(),
+// MoveProposalNets::create()) so that all the game threads of a run share one
+// loaded model rather than each loading its own.
+//
+// Entries are held weakly: an instance is freed when its last holder drops it,
+// and the next request for the same params builds a fresh one.
 
 #include <memory>
 #include <mutex>
@@ -18,10 +19,9 @@ namespace nn {
 template <typename Params, typename T>
 class SharedRegistry {
  public:
-  // The live instance registered for `params`, or -- when none is -- the one
-  // `make()` builds, registered before it is returned. Serialized: two callers
-  // racing on equal params get one instance, the second waiting out the
-  // first's build.
+  // The live instance for `params`, or else a new one from `make()`. The build
+  // runs under the registry lock, so two callers racing on equal params get the
+  // same instance: the second waits for the first's build to finish.
   template <typename Factory>
   std::shared_ptr<T> get_or_create(const Params& params, Factory&& make) {
     std::lock_guard<std::mutex> lock(mutex_);

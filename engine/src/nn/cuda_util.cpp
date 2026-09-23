@@ -11,16 +11,15 @@ namespace nn {
 
 namespace {
 
-// Throw on a non-success status, naming the CUDA op. These are genuinely
-// unexpected failures (a misconfigured GPU, OOM); util::Exception lets the
-// top-level handler surface the message rather than exiting silently.
+// Throw on a non-success status, naming the CUDA call. These failures (a
+// misconfigured GPU, out of memory) are unexpected, hence util::Exception
+// rather than CleanException.
 void check(cudaError_t err, const char* what) {
   if (err != cudaSuccess) {
     throw util::Exception("CUDA error in {}: {}", what, cudaGetErrorString(err));
   }
 }
 
-// The current device's properties (compute capability, name, limits).
 cudaDeviceProp current_device_props() {
   int device = 0;
   check(cudaGetDevice(&device), "cudaGetDevice");
@@ -32,8 +31,8 @@ cudaDeviceProp current_device_props() {
 }  // namespace
 
 const char* sm_tag() {
-  // Function-local static: C++ guarantees the initializer runs exactly once,
-  // even under concurrent first calls.
+  // Cached for the process from whichever device is current at the first call,
+  // which assumes every device the process uses is the same GPU model.
   static const std::string tag = [] {
     const cudaDeviceProp prop = current_device_props();
     return std::format("{}.{}", prop.major, prop.minor);

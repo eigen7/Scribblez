@@ -8,15 +8,13 @@ namespace scribblez {
 
 class GameStateEncoder;
 
-// The post-replay state at a sampled position, from which a TrainingTask encodes
-// one training row. The single context object both the input encoder and every
-// target read from; a task uses only the fields it needs.
+// Everything a TrainingTask may read to encode one row for a replayed
+// position: its inputs and its targets. A task uses only the fields it needs.
 struct EncodeContext {
-  // `enc` exposes the board, cumulative scores, and both players' last moves;
-  // `pov_rack` is the mover's rack, which `enc` does not itself hold.
-  // `opp_known_leave` is what the opponent retained from their last move, read
-  // only under the open-leaves arm and empty when they have not acted or kept
-  // nothing. `active_player` is the POV -- the mover at the sampled turn.
+  // `enc` holds the replayed public state. `pov_rack` is the POV player's rack,
+  // which `enc` does not hold. `opp_known_leave` is what the opponent kept from
+  // their last move; only open-leaves specs read it. `active_player` is the
+  // POV: the player who moves at the sampled turn.
   const GameStateEncoder* enc = nullptr;
   const Rack* pov_rack = nullptr;
   Rack opp_known_leave{};
@@ -24,9 +22,9 @@ struct EncodeContext {
 
   InputEncodingSpec spec{nullptr};
 
-  // Each player's next move from the sampled snapshot onward, in `enc`'s board
-  // frame (see Board::transpose), and the game's final scores. A move past the
-  // end of the game leaves its has_* flag false.
+  // Target data: each player's next move after the sampled position, in
+  // `enc`'s board frame (see Board::transpose), and the final scores. A next
+  // move past the end of the game leaves its has_* flag false.
   Move opp_next_move{};
   bool has_opp_next_move = false;
   Move self_next_move{};

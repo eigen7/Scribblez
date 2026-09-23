@@ -1,20 +1,15 @@
 #pragma once
 
-// Stateful game-state tracker and model input encoder, scoped to the
-// information set of one player observing a game from the outside. It tracks
-// only what a player at the table can see -- board, both scores, both players'
-// most-recent moves, the active player, and the turn index -- so an owning
-// Agent forwards it every move through apply_move() and supplies its OWN rack
-// at encode time. Nothing here depends on hidden opponent tiles.
+// Tracks a game's public state and encodes model input rows from it (layout in
+// input_encoder.h). It holds only what either player can see: the board, the
+// scores, each player's last move, and whose turn it is. The caller supplies
+// the POV player's own rack, and under open leaves the opponent's known leave,
+// at encode time. An agent keeps one per game and feeds it every move through
+// apply_move(); replaying a log is apply_move() per turn from the start state.
 //
-// The "unseen pool" scalar deliberately lumps the bag and the opponent's rack
-// together, indistinguishable from the active player's POV; the partition
-// follows from Scrabble's refill-to-7 rule, so no opp-rack-size scalar is
-// needed.
-//
-// A default-constructed encoder is in the game-start state, so a replay is just
-// apply_move() per turn. The initial-scores constructor seeds a head-start
-// handicap, making the score-differential feature reflect it from turn 0.
+// The unseen pool lumps the bag and the opponent's rack together, as the POV
+// player cannot tell them apart. The opponent's rack size needs no feature of
+// its own: it is always 7, or the whole unseen pool once that is smaller.
 
 #include "encoding/input_encoder.h"
 #include "game/board.h"
@@ -28,51 +23,42 @@ namespace scribblez {
 
 class Dictionary;
 
-// TILE_COUNTS minus the tiles on `board` and in `my_rack`: the union of the bag
-// and the opponent's rack. Indexed by tile kind (A..Z, then blank).
+// The tiles the holder of `my_rack` cannot see: TILE_COUNTS minus the board
+// and `my_rack`, i.e. the bag plus the opponent's rack. Indexed A..Z, blank.
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack);
 
-// The two encodable samples of a turn. The position evaluation model's
-// training loader encodes the POST-move state of every sampled turn,
-// whatever its move type (replay_to_sampled applies the PLAY, EXCHANGE, or
-// PASS before encoding); this tag is used by the encoder cross-check
-// harness, whose reference snapshots take the post-move kind for PLAY turns
-// only.
+// The two positions a turn can be sampled at. Used only by the encoder
+// cross-check tests.
 enum class PositionKind : uint8_t {
-  kPreMove = 0,   // active player is about to move
-  kPostMove = 1,  // active player just moved; refill has not happened yet
-                  // (unseen-pool composition unchanged from pre-move)
+  kPreMove = 0,   // the player is about to move
+  kPostMove = 1,  // the player has moved but not yet drawn
 };
 
 class GameStateEncoder {
  public:
   explicit GameStateEncoder(const InputEncodingSpec& spec) : spec_(spec) {}
 
-  // Additionally seed the score accumulator with a per-player handicap.
+  // Starts from handicap scores, so the score-difference feature reflects them
+  // from turn 0.
   GameStateEncoder(const InputEncodingSpec& spec, std::array<int, 2> initial_scores)
       : spec_(spec), scores_(initial_scores) {}
 
-  // Seed at a mid-game state -- a Monte-Carlo rollout's decision point --
-  // where no move history is available: `board`, `scores`, and the player
-  // about to move, both last-move slots unknown (PASS, which encodes as
-  // placing nothing). Encode only after apply_move has supplied both
-  // players' most recent moves -- the placement planes and move-meta
-  // scalars read them -- which two applied plies guarantee.
+  // Starts mid-game with no move history, e.g. at a Monte-Carlo rollout's
+  // decision point. Both last moves start as PASS. Since the placement planes
+  // and move-meta scalars read them, encode only after two apply_move() calls
+  // have supplied real ones.
   GameStateEncoder(const InputEncodingSpec& spec, const Board& board, std::array<int, 2> scores,
                    int active)
       : spec_(spec), board_(board), scores_(scores), active_(active) {}
 
-  // Advance one turn: the *current* active player made `move`. It deliberately
-  // takes no draw information, an outside observer seeing none.
+  // The active player made `move`. Takes no draw, since nobody else sees it.
   void apply_move(const Move& move);
 
-  // This state in the diagonally transposed frame: the board and both last
-  // moves transposed together (see Board::transpose), so an encode of the
-  // result is the transpose of an encode of this. Any move applied afterwards
-  // must be in the transposed frame too.
+  // This state with the board and both last moves transposed (see
+  // Board::transpose), so encoding the result gives the transposed row. Moves
+  // applied afterwards must be in the transposed frame too.
   GameStateEncoder transpose() const;
 
-  // --- inspectors ---------------------------------------------------------
   const InputEncodingSpec& spec() const { return spec_; }
   int active_player() const { return active_; }
   int turn_index() const { return turn_index_; }
@@ -80,54 +66,46 @@ class GameStateEncoder {
   int score(int p) const { return scores_[p]; }
   const Move& last_move_by(int p) const { return last_move_by_[p]; }
 
-  // --- encoders -----------------------------------------------------------
-  // Encode the current state from `player`'s POV into `out`
-  // (input_floats(spec()) long, the spec's blocks in registry order).
-  // `my_rack` is `player`'s own rack right now.
+  // Encodes the current state from `player`'s POV into `out`, which needs
+  // input_floats(spec()) floats. `my_rack` is `player`'s current rack.
   //
-  // A pre-move sample passes player == active_player(). A post-PLAY sample
-  // (that player, before any draw and before the opponent responds) goes:
-  //     enc.apply_move(my_play);
-  //     enc.encode_input(the_player_who_just_played, rack_after_play_pre_draw, ...);
-  // where active_player() is now the opponent, so passing the just-moved player
-  // keeps the encode anchored to their POV and both labels and last_opp_move
-  // attach to them.
+  // `player` need not be the active player. A post-move row encodes the player
+  // who just moved, with their rack before drawing:
+  //     enc.apply_move(my_move);
+  //     enc.encode_input(me, rack_after_move_before_draw, out);
   //
-  // Aborts if the spec demands an opponent leave; use the overload.
+  // Aborts under an open-leaves spec; use the overload.
   void encode_input(int player, const Rack& my_rack, float* out) const;
 
-  // Additionally encodes `opp_leave` into the kOppLeaveCounts block, for a spec
-  // under the open-leaves condition. An empty leave (opponent has not acted, or
-  // bingoed) is legitimate and encodes as zeros.
+  // For an open-leaves spec. `opp_leave` may be empty (the opponent has not
+  // moved, or kept nothing).
   void encode_input(int player, const Rack& my_rack, const Rack& opp_leave, float* out) const;
 
-  // As encode_input(), but forcing the score differential to `score_diff` and
-  // leaving every other feature identical -- isolating it for the structural
-  // monotonicity probes that sweep a fixed position's score advantage.
+  // As encode_input(), but with the score difference forced to `score_diff`,
+  // for probes that sweep a fixed position's score advantage. Hidden-leaves
+  // specs only.
   void encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
                                     float* out) const;
 
-  // Rewrite an already-encoded row's score differential in place, so a sweep
-  // encodes the position once instead of re-running the move-generating encode
-  // per step.
+  // Rewrites the score difference of an encoded row in place. Much cheaper
+  // than a full encode, which runs move generation.
   void overwrite_score_diff(int score_diff, float* input_row) const;
 
  private:
   InputEncodingSpec spec_;
   Board board_{};
   std::array<int, 2> scores_{0, 0};
-  std::array<Move, 2> last_move_by_{};  // default-constructed = PASS
+  std::array<Move, 2> last_move_by_{};  // PASS until each player moves
   int active_ = 0;
   int turn_index_ = 0;
 };
 
-// The row for the state `mv` leads to, from `mover`'s POV: `mv` applied to a
-// copy of `pre` and encoded with `my_rack` (their rack before the move) reduced
-// to the leave. `opp_leave` is read only under an open-leaves spec, which the
-// mover's own move leaves unchanged.
+// The post-move row for candidate `mv` from `pre`, from `mover`'s POV.
+// `my_rack` is the mover's rack before the move. `opp_leave` is read only
+// under an open-leaves spec.
 //
-// The one place a candidate move's row is formed, so the serving agent and the
-// offline target generator cannot drift on which input arm they encode.
+// This is the one place a candidate's row is built, so the serving agent and
+// the offline target generator cannot disagree on how to encode it.
 void encode_post_move_row(const GameStateEncoder& pre, int mover, const Rack& my_rack,
                           const Move& mv, const Rack& opp_leave, float* out);
 

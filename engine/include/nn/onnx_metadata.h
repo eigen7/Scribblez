@@ -4,28 +4,26 @@
 #include <string>
 #include <vector>
 
-// The metadata_props entries our ONNX exporters stamp into every model the
-// serving side consumes, and the one place that reads them back. They say what
-// a model file cannot say structurally: which optional input blocks it takes,
-// which graph family it is, and which encoding versions it was trained on.
-// An entry the exporter did not write reads as its documented "absent" value,
-// so a consumer that knows of an entry the exporter never heard of still reads
-// the model correctly.
+// Reads back the metadata_props entries our ONNX exporters stamp into every
+// model. They record what a model file cannot say structurally: which optional
+// input blocks it takes, which graph it is, and which encoding versions it was
+// trained on. An entry an older exporter did not write reads as a documented
+// "absent" value, so older models stay loadable where that value is accepted.
 //
-// The writers are the ONNX exporters under py/scribblez/ (position_eval and
-// move_set_eval's onnx_export.py, and move_set_eval's proposal_export.py),
-// through the shared py/scribblez/onnx_export_util.py.
+// The writers, all under py/scribblez/ and all through onnx_export_util.py:
+// position_eval/onnx_export.py, move_set_eval/onnx_export.py, and
+// move_set_eval/proposal_export.py.
 
 namespace scribblez {
 namespace nn {
 
-// The `graph` entry's values: which model family, and so which runtime, a file
+// The `graph` entry's values: which model family, and so which spec, a file
 // belongs to.
 inline constexpr const char* kGraphPositionEval = "position_eval";
 inline constexpr const char* kGraphMoveSetEval = "move_set_eval";
-// The move proposal model's split evidence-path graphs (roadmap item 3): the
-// per-turn cache graph and the per-loop-iteration step graph. These strings
-// must match proposal_export.py's GRAPH_CACHE / GRAPH_STEP.
+// The move proposal model's two graphs: the per-turn cache graph and the
+// per-evidence-iteration step graph. Must match proposal_export.py's
+// GRAPH_CACHE and GRAPH_STEP.
 inline constexpr const char* kGraphMoveProposalCache = "move_proposal_cache";
 inline constexpr const char* kGraphMoveProposalStep = "move_proposal_step";
 
@@ -34,14 +32,14 @@ struct OnnxMetadata {
   bool opp_leave_input = false;
 
   // Keys the engine-plan cache, so every checkpoint of one architecture shares
-  // a plan. Required -- a model without it throws.
+  // a plan. Required: parsing a model without it throws.
   std::string architecture_signature;
 
   // kGraph* above. Empty for an export predating the entry.
   std::string graph;
 
-  // Every metadata_props entry as stamped, for the keys without a typed field
-  // above -- the encoding-version gates read through int_entry().
+  // Every other entry, verbatim. The encoding-version gates read these through
+  // int_entry().
   std::map<std::string, std::string> entries;
 
   // The integer entry at `key`, or `absent_value` for an export predating the

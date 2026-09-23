@@ -1,9 +1,7 @@
-// Command-line construction of SimAgent, kept separate from the agent's
-// selection logic (sim_agent.cpp) for the same reason as the neural agents'
-// factories: --leaf-model stands up the concrete TensorRT-backed leaf
-// service, so this is the only SimAgent translation unit with a CUDA/TensorRT
-// dependency, and the agent's unit tests (which inject a stub, or run
-// terminal) never link it.
+// SimAgent's command-line construction. --leaf-model loads the concrete
+// TensorRT-backed leaf service, so keeping this out of sim_agent.cpp leaves
+// the agent's unit tests (stub leaf, or terminal rollouts) free of
+// CUDA/TensorRT.
 
 #include "agent/agent_options.h"
 #include "agent/sim_agent.h"
@@ -25,8 +23,9 @@ namespace {
 
 namespace po = boost::program_options;
 
-// The `--player "--type=sim ..."` options, bound to one struct so the parsed
-// set and the documented set cannot drift.
+// Parsed `--type=sim` options with their defaults. from_spec and options_help
+// build the same options_description over them, so the parsed and documented
+// options cannot drift.
 struct SimOptions {
   int top_k = 10;
   int rollouts = 400;
@@ -79,8 +78,7 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
   } catch (const std::exception& e) {
     throw util::CleanException("bad --type=sim options: {}", e.what());
   }
-  // Validate the truncation flags before loading the leaf model, so a bad
-  // combination fails fast rather than after seconds of TensorRT engine build.
+  // Fail on bad truncation flags before seconds go into the engine build.
   SimRunner::validate_horizon("sim agent", opts.sim_horizon, !opts.leaf_model.empty());
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
@@ -102,7 +100,7 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
 }
 
 std::string SimAgent::options_help() {
-  SimOptions defaults;  // scratch binding targets; only the defaults are read
+  SimOptions defaults;  // binding targets; only the defaults are read
   return agent_options_help(
     "  Monte-Carlo simming bot: it keeps the best --top-k moves by HastyBot static\n"
     "  equity, plays --rollouts games out from each under common random numbers,\n"

@@ -77,14 +77,11 @@ struct EndgameResult {
 // futility pruning of outplays.h, and the incremental move-list maintenance of
 // path_move_lists.h.
 //
-// TODO(multithreading): when single-game (non-parallel-self-play) settings
-// arrive, add an opt-in threaded mode: repack TTEntry into two XOR-verified
-// atomic uint64 words (the lockless Hyatt scheme MAGPIE uses, which also
-// shrinks the entry), then run shared-TT lazy-SMP -- helper threads search at
-// staggered depths with jittered root orderings and only populate the TT,
-// while the main thread owns the PV. Keep 1 thread the default: both Macondo
-// ("~2x with 3 threads, degrades beyond") and MAGPIE found endgame SMP's
-// returns modest, so stop at lazy-SMP unless a profile says otherwise.
+// Single-threaded: self-play gets its parallelism from running many games.
+// TODO(multithreading): for single-game settings, add an opt-in lazy-SMP mode
+// over a shared, lockless TT (MAGPIE's XOR-verified two-word entries). Keep one
+// thread the default: Macondo and MAGPIE both found endgame SMP's returns
+// modest (Macondo: ~2x at 3 threads, worse beyond).
 class EndgameSolver {
  public:
   // The board passed is the one the move is about to be played on.
@@ -118,6 +115,7 @@ class EndgameSolver {
                      const std::string& prefix = "");
   };
 
+  // Solve the given state.
   EndgameResult solve(const EndgameState& state, const Params& params);
 
   // The window a class-only solve searches: a final spread >= kFirstWinBeta is a
@@ -128,12 +126,13 @@ class EndgameSolver {
   // Must be called between games; within a game, every turn reuses the table.
   void clear();
 
-  // Trace each solve to `os`, or nullptr to stop (the default).
+  // Enable a detailed trace of each solve to `os`, for debugging; nullptr (the
+  // default) disables it. `fmt` renders moves in the trace.
   void set_trace(std::ostream* os, MoveFormatter fmt);
 
-  // Switches for individual search features, all on. Production never touches
-  // them; they let a test assert that a feature changes no result, and a
-  // benchmark measure what it saves.
+  // Switches for individual search features, all on by default. Production
+  // never touches them; they let a test assert that a feature changes no
+  // result, and let a benchmark measure what it saves.
   void set_outplay_futility(bool on) { outplay_futility_ = on; }
   void set_root_futility(bool on) { root_futility_ = on; }
   void set_proof_early_exit(bool on) { proof_early_exit_ = on; }
@@ -141,12 +140,12 @@ class EndgameSolver {
   void set_incremental_movegen(bool on) { incremental_movegen_ = on; }
 
  private:
-  // Bound type in the low two bits of a TTEntry's flag byte; kEmpty == 0 marks a
-  // never-written slot. Every stored entry carries a real bound (>= kExact), so a
-  // nonzero flag byte always means "occupied".
+  // A TTEntry's flag byte: the bound type in bits 0-1, the proven bit in bit 2.
+  // kEmpty marks a never-written slot; every stored entry carries a real bound,
+  // so a nonzero flag byte means "occupied".
   enum TTFlag : uint8_t { kEmpty = 0, kExact, kLower, kUpper };
-  static constexpr uint8_t kBoundMask = 0x03;  // bits 0-1: the TTFlag bound type
-  static constexpr uint8_t kProvenBit = 0x04;  // bit 2: the stored value is proven
+  static constexpr uint8_t kBoundMask = 0x03;
+  static constexpr uint8_t kProvenBit = 0x04;
   static constexpr uint8_t tt_bound(uint8_t flag) { return flag & kBoundMask; }
   static constexpr bool tt_is_proven(uint8_t flag) { return (flag & kProvenBit) != 0; }
   static constexpr uint8_t tt_pack(uint8_t bound, bool proven) {
@@ -228,10 +227,10 @@ class EndgameSolver {
   // search path. The reference stays valid across nested make/unmake and nested
   // generate_moves calls.
   const std::vector<Move>& generate_moves(const Rack& rack, int ply);
-  // Generated straight from the board, bypassing the path lists: for the root,
-  // whose lists are what this seeds, and for the incremental A/B. The reference
-  // is invalidated by the next call, so a caller holding a list across further
-  // generation keeps its own copy.
+  // Generated straight from the board, bypassing the path lists: used at the
+  // root, whose lists seed the path lists, and whenever incremental movegen is
+  // switched off. The reference is invalidated by the next call, so a caller
+  // holding a list across further generation keeps its own copy.
   const std::vector<Move>& generate_moves_scratch(const Rack& rack);
 
   // A sound upper bound on what the mover can get out of playing `m`, derived
@@ -297,8 +296,7 @@ class EndgameSolver {
   bool proof_early_exit_ = true;
   bool root_cutoff_ = true;
 
-  // Tracing is active iff trace_ is non-null; set_trace installs a fallback
-  // renderer when given none.
+  // Tracing is active iff trace_ is non-null.
   std::ostream* trace_ = nullptr;
   MoveFormatter trace_fmt_;
 

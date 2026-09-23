@@ -30,8 +30,8 @@
 
 namespace scribblez {
 
-// Games per .slog file. One file is also the unit a self-play generator stages
-// as a chunk, so this fixes the chunk size fleet-wide.
+// Games per .slog file. A file is also the chunk a self-play generator stages,
+// so this fixes the chunk size fleet-wide.
 constexpr int kGamesPerFile = 1000;
 
 // --------------------------- Results -------------------------------------
@@ -95,8 +95,8 @@ class GameRunner::Results {
   }
 
  private:
-  // One self-contained line per game, flushed so a supervising process can
-  // read results as they stream. Caller holds `mutex_`.
+  // Flushed so a supervising process can read results as they stream. Caller
+  // holds `mutex_`.
   void write_result_line(const GameLog& log, const std::array<int, 2>& seats) {
     boost::json::object o;
     o["seed"] = log.seed;
@@ -195,9 +195,7 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
   if (params_.paired && params_.games % 2 != 0) {
     throw util::CleanException("--paired requires an even --games");
   }
-  // Force the lexicon load now so any I/O error surfaces at construction
-  // time (rather than mid-game), and so the verbose summary below has the
-  // node count to report.
+  // Load the lexicon now, so an I/O error surfaces here rather than mid-game.
   const Dictionary& dict = load_dictionary_or_throw();
   if (!params_.log_dir.empty()) {
     std::error_code ec;
@@ -233,9 +231,7 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
 GameRunner::~GameRunner() = default;
 
 void GameRunner::on_game(GameLogStorage&& storage, const std::array<int, 2>& seats) {
-  // Read the finished game through a view for the gcg/tally consumers, then hand
-  // ownership to the binary writer (a move). Take the view BEFORE the move; do
-  // not touch it afterward (the move invalidates its pointers).
+  // The view dangles once `storage` moves into the binary writer below.
   const GameLog log = storage.view();
 
   if (!params_.log_dir.empty()) {
@@ -259,9 +255,8 @@ void GameRunner::run() {
   auto t0 = std::chrono::steady_clock::now();
 
   if (engine_.num_threads() == 1) {
-    // Serial mode: supports PLAY_AGAIN / QUIT signalling from agents.
-    // Seats swap every game so the two players alternate who starts; who
-    // starts game 1 is decided by the low bit of the seed.
+    // Serial mode honors PLAY_AGAIN / QUIT. The seed's low bit picks who
+    // starts the first game.
     std::array<int, 2> player_at_seat = {int(seed_ & 1ULL), int(1 - (seed_ & 1ULL))};
     uint64_t game_idx = 0;
     while (true) {
@@ -274,16 +269,13 @@ void GameRunner::run() {
       ++game_idx;
     }
   } else {
-    // Parallel mode: play exactly params_.games games across a thread pool.
-    // Each game's seat assignment alternates with game_idx so overall balance
-    // is preserved across any interleaving of threads.
+    // Parallel mode: exactly params_.games games. Seats follow the game index,
+    // so they stay balanced however the threads interleave.
     std::atomic<uint64_t> next_game{0};
     const uint64_t total = params_.games;
 
-    // Optional monitor thread: prints a games-done/rate/ETA line every
-    // progress_secs seconds. Useful for long self-play batches (e.g. the
-    // all-moves neural agent), where no .slog file flushes until a full
-    // .slog chunk completes, so this is the only sign of life.
+    // In a long batch no .slog file appears until a full chunk completes, so
+    // the progress line is the only sign of life.
     std::atomic<bool> done{false};
     std::thread monitor;
     if (params_.progress_secs > 0) {

@@ -19,9 +19,8 @@ namespace {
 
 // CPU count implied by a cgroup CPU quota (ceil(quota / period)), or
 // std::nullopt when no quota is in force: cgroup v2's "max", cgroup v1's
-// quota of -1, or neither version's files present (not running under Linux
-// cgroups at all). v2 is tried first; v1 is only consulted when v2's file is
-// absent, since Runpod hosts may run either.
+// quota of -1, or no cgroup files at all. Hosts may run either cgroup version,
+// so v1 is consulted when v2's file is absent.
 std::optional<int> cgroup_quota_cpus() {
   if (std::ifstream v2("/sys/fs/cgroup/cpu.max"); v2) {
     std::string quota_str;
@@ -97,12 +96,11 @@ uint64_t get_unique_id() {
                              std::chrono::system_clock::now().time_since_epoch())
                              .count());
     uint64_t expected = last_id.load(std::memory_order_relaxed);
-    if (ts <= expected) continue;  // clock hasn't advanced past last returned value; retry
+    if (ts <= expected) continue;  // clock hasn't advanced past the last id yet
     if (last_id.compare_exchange_weak(expected, ts, std::memory_order_acq_rel,
                                       std::memory_order_relaxed)) {
       return ts;
     }
-    // Another thread updated last_id between our load and CAS; retry.
   }
 }
 

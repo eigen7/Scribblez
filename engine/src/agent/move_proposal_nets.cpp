@@ -12,10 +12,9 @@
 namespace scribblez {
 namespace agent {
 
-// The step spec's evidence layout (restated in model_specs.h to keep it free of
-// the heavy agent/sim headers) must equal the staging port's -- otherwise the
-// step graph's ev_obs_* inputs are sized differently from what stage_evidence
-// writes. Pinned here, the one place that includes both.
+// model_specs.h restates the evidence layout to stay free of the agent/sim
+// headers; it must match what stage_evidence writes. Checked here, the one
+// file that includes both.
 static_assert(nn::kEvidencePlanes == evidence::kNumEvidencePlanes);
 static_assert(nn::kEvidenceScalars == evidence::kNumEvidenceScalars);
 static_assert(kBoardCells == evidence::kEvidencePlaneCells);
@@ -29,9 +28,8 @@ using nn::PlanesOutput;
 using nn::ScoreDiffOutput;
 using nn::WldOutput;
 
-// One per-move input tensor's chunk, from the MoveFeatureArrays field its
-// descriptor names -- the cache graph stages its candidates exactly as the
-// move-set graph does.
+// Copy one chunk of a per-move input tensor from the MoveFeatureArrays field
+// its descriptor names, as the move-set graph stages its candidates.
 template <typename Tensor>
 void stage_move_rows(nn::NeuralNet<MoveProposalCacheSpec>& net,
                      const move_set::MoveFeatureArrays& moves, int start, int rows) {
@@ -48,14 +46,12 @@ void stage_move_tensors(nn::NeuralNet<MoveProposalCacheSpec>& net,
   (stage_move_rows<Ts>(net, moves, start, rows), ...);
 }
 
-// Copy `rows` of a raw output head as is, `width` floats each, into `dst`.
 void copy_rows(const float* src, int rows, int width, float* dst) {
   std::memcpy(dst, src, sizeof(float) * size_t(rows) * width);
 }
 
-// What the exporter stamps into one graph of a pair beyond the loader's own
-// gates: the proposal_export_id fingerprint tying a cache graph to the step
-// graph exported from the same in-memory model ("" if absent), and the
+// The exporter's stamps tying a cache graph to its step graph: the
+// proposal_export_id fingerprint of the exported model ("" if absent) and the
 // evidence width the fusion stage trained at (0 if absent).
 struct PairStamp {
   std::string export_id;
@@ -69,8 +65,8 @@ PairStamp read_pair_stamp(const std::string& onnx_path) {
           meta.int_entry("trained_max_evidence", 0)};
 }
 
-// One net's params from the shared Params (NeuralNet is neither copyable nor
-// movable, so its params must be built before the member init list runs).
+// One net's params from the shared Params. A function, because NeuralNet is
+// neither copyable nor movable and must be constructed in the init list.
 template <typename Spec>
 nn::NeuralNetParams<Spec> net_params_from(const std::string& onnx_path, int max_rows,
                                           const MoveProposalNets::Params& p) {
@@ -106,10 +102,9 @@ void MoveProposalNets::load() {
   cache_net_.load();
   step_net_.load();
 
-  // The pair must have come from one in-memory model. Precision agrees by
-  // construction (both nets use params_.precision); E is pinned by the step
-  // spec's own tensor-width check at load; C and the weight fingerprint are
-  // what a mismatched pair would otherwise disagree on only at the numbers.
+  // Check that the pair came from one exported model. Precision agrees by
+  // construction, and the step spec's load-time width check pins the evidence
+  // width; a mismatched pair would otherwise differ only in its numbers.
   if (cache_net_.channels() != step_net_.channels()) {
     throw util::CleanException(
       "move proposal cache/step graphs disagree on trunk channels: cache {} vs step {}",
@@ -129,9 +124,7 @@ void MoveProposalNets::load() {
       "export both from one checkpoint",
       cache.export_id, step.export_id);
   }
-  // The width the fusion stage trained at: stamped on both, agreeing, within
-  // the step graph's padding. An export predating the stamp is refused rather
-  // than trusted to the padded width.
+  // Refuse a missing stamp rather than assume the padded width.
   if (cache.trained_max_evidence != step.trained_max_evidence) {
     throw util::CleanException(
       "move proposal cache/step graphs disagree on trained_max_evidence ({} vs {})",
@@ -162,8 +155,8 @@ void MoveProposalNets::run_cache(const float* board_row, const move_set::MoveFea
   cache->board.resize(size_t(kBoardCells) * c);
   cache->g.resize(size_t(3) * c);
 
-  // The board row splits into the two static board inputs once; the move
-  // candidates ride the dynamic axis and are re-staged per chunk.
+  // The board inputs are staged once; the candidates ride the dynamic axis
+  // and are re-staged per chunk.
   const size_t spatial_floats = size_t(cache_net_.spatial_planes()) * kBoardCells;
   const size_t scalar_floats = cache_net_.scalar_floats();
   std::memcpy(cache_net_.host<nn::SpatialInput>(), board_row, sizeof(float) * spatial_floats);
@@ -175,8 +168,7 @@ void MoveProposalNets::run_cache(const float* board_row, const move_set::MoveFea
     stage_move_tensors(cache_net_, moves, start, chunk, MoveProposalCacheSpec::MoveInputs{});
     cache_net_.predict(chunk);
 
-    // board/g are static (one row, position-level): identical every chunk, so
-    // retain them once. The M-indexed tensors are retained at the chunk offset.
+    // board/g are position-level and identical for every chunk.
     if (start == 0) {
       copy_rows(cache_net_.host<nn::BoardHandoff>(), 1, kBoardCells * c, cache->board.data());
       copy_rows(cache_net_.host<nn::GHandoff>(), 1, 3 * c, cache->g.data());
@@ -202,8 +194,6 @@ void MoveProposalNets::run_step(const MoveProposalCache& cache, const EvidenceSe
   const int c = cache_net_.channels();
   const int max_rows = step_net_.max_rows();
 
-  // Stage the evidence directly into the step graph's input buffers. The cache
-  // predictions it gathers from are the retained full-M raw outputs.
   const evidence::CachePredictions predictions{cache.move_enc.data(), cache.wld.data(),
                                                cache.score_diff.data(), cache.planes.data(), c};
   const evidence::EvidenceStagingOutputs staged{
@@ -212,9 +202,8 @@ void MoveProposalNets::run_step(const MoveProposalCache& cache, const EvidenceSe
   evidence::stage_evidence(evidence.moves, evidence.observations, evidence.scored_indices,
                            predictions, nn::kMaxEvidence, staged);
 
-  // The board/g handoff and the evidence set are position-level (static across
-  // the candidate axis): staged once, re-sent with each chunk. move_enc rides
-  // the dynamic axis, re-staged per chunk.
+  // The evidence and the board/g handoff are position-level: staged once and
+  // re-sent with each chunk. move_enc is re-staged per chunk.
   copy_rows(cache.board.data(), 1, kBoardCells * c, step_net_.host<nn::BoardHandoff>());
   copy_rows(cache.g.data(), 1, 3 * c, step_net_.host<nn::GHandoff>());
 

@@ -75,11 +75,9 @@
 
 using namespace scribblez;
 
-// Layout shorthands for the FULL input layout, which is what these tests
-// encode; derived from the block registry (the spec's dict is irrelevant to
-// layout math). Blocks the registry does not name individually (the board
-// sub-planes, the two cross-check families, the per-move metadata halves) are
-// located relative to their block starts.
+// Offsets into the full input layout, which is what these tests encode. They
+// come from the block registry; a null dictionary is fine because the layout
+// does not depend on it.
 static const InputEncodingSpec kBaseLayout{nullptr};
 static const int kInputFloats = input_floats(kBaseLayout);
 static const int kSpatialFloats = spatial_floats();
@@ -126,9 +124,7 @@ static Rack rack_from(const std::string& s) {
   return r;
 }
 
-// Build a PLAY Move from a starting square, direction, and ordered new glyphs.
-// Assumes every glyph is newly placed (sufficient for the tests' empty-board
-// setups); the square mask is absolute over the play's lane.
+// A PLAY of consecutive newly placed glyphs starting at (row, col). Score is 0.
 static Move make_play(int row, int col, bool horizontal, std::initializer_list<Glyph> gs) {
   std::array<Glyph, RACK_SIZE> played{};
   int n = 0;
@@ -143,10 +139,8 @@ static Move make_play(int row, int col, bool horizontal, std::initializer_list<G
   return Move::play(horizontal, start, mask, /*score=*/0, played.data(), n);
 }
 
-// Build a PLAY Move with an explicit per-tile layout. `rel_mask` is the play's
-// mask relative to its first lane cell (bit 0 == the start cell); it is shifted
-// into the absolute lane mask the Move stores. `gs` are the newly placed glyphs
-// in word order (their count must equal popcount(rel_mask)).
+// A PLAY with gaps for tiles already on the board. `rel_mask` bit 0 is the cell
+// at (row, col); `gs` are the newly placed glyphs in word order, one per set bit.
 static Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask, uint16_t score,
                            std::initializer_list<Glyph> gs) {
   std::array<Glyph, RACK_SIZE> played{};
@@ -165,12 +159,10 @@ TEST(Movegen, Opening) {
   Dictionary d = tiny_dict();
   Board b;
   MoveGenerator gen(b, d);
-  // Opening rack with letters CATSO -> can play CAT, CATS, etc., must cover center.
   Rack r = rack_from("CATSOHE");
   auto moves = gen.generate(r);
   ASSERT_FALSE(moves.empty());
-  // Every opening move must cover the center square (CENTER, CENTER).
-  // The board is empty, so placements are at consecutive squares from start.
+  // Every opening move must cover the center square.
   for (const auto& m : moves) {
     ASSERT_EQ(m.type(), MoveType::PLAY);
     const bool horiz = m.horizontal();
@@ -187,7 +179,6 @@ TEST(Movegen, Opening) {
     }
     ASSERT_TRUE(covers);
   }
-  // The highest-scoring move should be a real word in the dictionary.
   int best = 0;
   const Move* best_move = nullptr;
   for (const auto& m : moves) {
@@ -203,7 +194,6 @@ TEST(Movegen, Opening) {
 TEST(Movegen, CrossWord) {
   Dictionary d = tiny_dict();
   Board b;
-  // Place CAT at the center horizontally.
   b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
                     {
                       Glyph::of(Tile::from_char('C')),
@@ -211,7 +201,6 @@ TEST(Movegen, CrossWord) {
                       Glyph::of(Tile::from_char('T')),
                     }));
   MoveGenerator gen(b, d);
-  // Now play with rack "S" -> can extend to CATS by placing S at (CENTER, CENTER+3).
   Rack r = rack_from("SSSSSSS");
   auto moves = gen.generate(r);
   ASSERT_FALSE(moves.empty());
@@ -225,20 +214,17 @@ TEST(Movegen, CrossWord) {
 TEST(Movegen, BingoBonus) {
   Dictionary d = Dictionary::build_from_words({"PARTIED"});
   Board b;
-  // Place an A at the center to provide an anchor.
   b.apply(make_play(CENTER, CENTER, /*horizontal=*/true, {Glyph::of(Tile::from_char('A'))}));
   MoveGenerator gen(b, d);
-  // Rack PRTIED + something already used (the A is on the board).
-  Rack r = rack_from("PRTIED?");  // blank as 7th, won't be needed; ensure 7 tiles
+  Rack r = rack_from("PRTIED?");
   auto moves = gen.generate(r);
-  // Look for a 7-tile play that uses the A. Bingo should give +50.
   bool found_bingo = false;
   for (const auto& m : moves) {
     if (m.num_glyphs() == RACK_SIZE) found_bingo = true;
   }
-  // Note: rack has 6 non-blank tiles + 1 blank, total 7. PARTIED needs P,A,R,T,I,E,D;
-  // A is on the board; the other 6 must come from the rack. So we'd place 6 tiles, not 7.
-  // So no bingo here. But ensure PARTIED is generated.
+  // PARTIED through the board's A places only six tiles, so it is not a bingo
+  // and found_bingo is never asserted; the test checks only that PARTIED is
+  // generated. The bingo bonus itself goes untested here.
   bool found_partied = false;
   for (const auto& m : moves) {
     if (m.main_word(b) == "PARTIED") found_partied = true;
@@ -247,10 +233,9 @@ TEST(Movegen, BingoBonus) {
   (void)found_bingo;
 }
 
-// A canonical key for a play: its placed tiles (sorted) plus its score. Two
-// plays with the same key are the same move for legality/scoring purposes (the
-// `main_word` of a single-tile cross play is orientation-dependent and is not
-// part of the key).
+// A canonical key for a play: its placed tiles (sorted) plus its score. The key
+// omits orientation, so a single-tile play generated from either direction
+// compares equal.
 static std::string move_key(const Board& board, const Move& m) {
   (void)board;
   struct Placement {
@@ -300,10 +285,9 @@ static Rack random_rack(std::mt19937& rng) {
   return r;
 }
 
-// The core invariant: the GADDAG generator and the reference DAWG generator must
-// enumerate exactly the same set of legal plays (with identical scores) from any
-// position. We stress this by walking random games: at each step we compare the
-// two generators, then advance the board by applying a random generated play.
+// The GADDAG generator and the reference DAWG generator must enumerate the same
+// plays with the same scores from any position. Walks random games, comparing
+// the two at every step.
 static void cross_validate(const Dictionary& d, const char* label, unsigned seed, int games,
                            int steps_per_game) {
   std::mt19937 rng(seed);
@@ -331,7 +315,6 @@ static void cross_validate(const Dictionary& d, const char* label, unsigned seed
       }
       ++compared;
       if (via_gaddag.empty()) break;
-      // Advance: apply a random generated play.
       std::uniform_int_distribution<size_t> pick(0, via_gaddag.size() - 1);
       b.apply(via_gaddag[pick(rng)]);
     }
@@ -339,8 +322,8 @@ static void cross_validate(const Dictionary& d, const char* label, unsigned seed
   std::cout << "  cross-validated " << compared << " positions [" << label << "]\n";
 }
 
-// A medium word list (overlaps, plurals, hooks, a 7-letter bingo) to exercise
-// more of the generator than the tiny dict does.
+// Overlaps, plurals, hooks and 7-letter words, to exercise more of the
+// generator than tiny_dict() does.
 static Dictionary medium_dict() {
   return Dictionary::build_from_words(
     {"AA",     "AB",      "AD",      "AE",     "AG",      "AH",      "AI",      "AL",      "AN",
@@ -363,15 +346,12 @@ TEST(Dictionary, GaddagVsDawgInMemory) {
   cross_validate(d, "medium_dict", 1234u, /*games=*/12, /*steps_per_game=*/6);
 }
 
-// The board maintains its move-generation caches (cross-checks + GADDAG anchors)
-// incrementally as moves are applied. This must always agree with a from-scratch
-// full recompute of the same position. We stress that invariant by walking
-// random games and, after every applied play, comparing the incrementally
-// maintained caches against a freshly built board holding the same squares.
+// The board updates its move-generation caches (cross-checks and GADDAG
+// anchors) incrementally as moves are applied. After every applied play in a
+// random game, they must match a from-scratch recompute of the same squares.
 static void check_caches_match_full(const Dictionary& d, const Board& incremental,
                                     const char* label, int game, int step) {
-  // Rebuild a board with identical squares; set() invalidates the caches so
-  // ensure_movegen_caches() does a complete recompute.
+  // set() invalidates the caches, so ensure_movegen_caches() recomputes fully.
   Board fresh;
   for (int r = 0; r < BOARD_SIZE; ++r)
     for (int c = 0; c < BOARD_SIZE; ++c) fresh.set(r, c, incremental.at(r, c));
@@ -409,12 +389,12 @@ static void cache_consistency_stress(const Dictionary& d, const char* label, uns
     for (int s = 0; s < steps_per_game; ++s) {
       Rack r = random_rack(rng);
       MoveGenerator gen(b, d);
-      auto moves = gen.generate(r);  // builds/uses the incremental caches
+      auto moves = gen.generate(r);
       check_caches_match_full(d, b, label, g, s);
       ++checked;
       if (moves.empty()) break;
       std::uniform_int_distribution<size_t> pick(0, moves.size() - 1);
-      b.apply(moves[pick(rng)]);  // incremental cache update happens here
+      b.apply(moves[pick(rng)]);
       check_caches_match_full(d, b, label, g, s);
     }
   }
@@ -426,9 +406,8 @@ TEST(Board, CachesIncrementalMatchesFull) {
   cache_consistency_stress(d, "medium_dict", 99887766u, /*games=*/30, /*steps_per_game=*/10);
 }
 
-// num_tiles() is maintained by every square-write path -- set() in both
-// directions and unapply()'s restore -- so consumers (bag-size arithmetic)
-// never rescan the grid.
+// num_tiles() is a maintained counter, not a scan, so every square-write path
+// must update it: set() in both directions, apply(), and unapply().
 TEST(Board, NumTilesTracksEveryWritePath) {
   Board b;
   ASSERT_EQ(b.num_tiles(), 0);
@@ -453,11 +432,9 @@ TEST(Board, NumTilesTracksEveryWritePath) {
   ASSERT_FALSE(b.empty_board());
 }
 
-// If the real lexicon is present locally, cross-validate against it too and
-// sanity-check a few known NWL words. The path comes from a compile-time define
-// (SCRIBBLEZ_DEFAULT_KWG, set by CMake to data/lexica/NWL23.kwg). Skipped (not
-// failed) when the define is absent or the file is missing -- the .kwg binary
-// is not committed.
+// GADDAG/DAWG cross-validation on the real NWL23 lexicon. Skipped when the
+// .kwg file (installed under /workspace/mount/lexica, never committed) is
+// missing.
 TEST(Dictionary, RealKwgCrossValidation) {
   const char* path = SCRIBBLEZ_DEFAULT_KWG;
   if (!std::ifstream(path).good()) {
@@ -484,12 +461,8 @@ static int pool_region_start(int letter) {
 
 TEST(Encoder, BasicLayout) {
   using namespace scribblez::binlog;
-  // Build state via apply_move only: p0 plays a single 'C' at (7,7) for 50
-  // points; p1 then plays a single blank-as-D at (3,3) for 30 points. After
-  // these two moves the encoder's active player is p0 with last_move_by_p1
-  // = the D play, scores=[50,30], and a board with C@(7,7) and D@(3,3).
-  // (Board::apply doesn't enforce legality, so the disconnected placements
-  // are fine for an encoder-layout test.)
+  // p0 plays C at (7,7) for 50, then p1 plays blank-as-D at (3,3) for 30. The
+  // placements are disconnected, which is fine: apply does not check legality.
   Move p0_play =
     make_play_full(7, 7, /*horizontal=*/true, 0b1, 50, {Glyph::of(Tile::from_char('C'))});
 
@@ -509,18 +482,18 @@ TEST(Encoder, BasicLayout) {
   std::vector<float> out(kInputFloats, -1.0f);
   enc.encode_input(enc.active_player(), active_rack, out.data());
 
-  // Letter planes A..Z occupy [0..25].
+  // Letter planes A..Z are planes 0..25.
   const int c_plane = Tile::from_char('C');
   const int d_plane = Tile::from_char('D');
   ASSERT_EQ(out[c_plane * 225 + 7 * 15 + 7], 1.0f);
   ASSERT_EQ(out[d_plane * 225 + 3 * 15 + 3], 1.0f);  // blank-as-D still lights the D plane
 
-  // Blank-marker plane is index 26: 1 at (3,3), 0 at (7,7).
+  // The blank-marker plane is plane 26.
   ASSERT_EQ(out[26 * 225 + 3 * 15 + 3], 1.0f);
   ASSERT_EQ(out[26 * 225 + 7 * 15 + 7], 0.0f);
 
-  // Premium planes (27..30) are board-static; just verify they are emitted as
-  // 0/1 (no garbage left over from the -1.0 sentinel).
+  // Premium planes (27..30): only check that every cell was written as 0 or 1,
+  // overwriting the -1.0 fill.
   for (int p = 27; p <= 30; ++p) {
     for (int i = 0; i < 225; ++i) {
       float v = out[p * 225 + i];
@@ -528,9 +501,8 @@ TEST(Encoder, BasicLayout) {
     }
   }
 
-  // Self last-placement plane (31): only (7,7) is lit (p0's own most recent
-  // move). Opponent last-placement plane (32): only (3,3) is lit (p1's most
-  // recent move).
+  // The self and opponent last-placement planes each light only that player's
+  // most recent move.
   for (int r = 0; r < 15; ++r) {
     for (int c = 0; c < 15; ++c) {
       const float self_expected = (r == 7 && c == 7) ? 1.0f : 0.0f;
@@ -542,35 +514,32 @@ TEST(Encoder, BasicLayout) {
 
   const float* scalars = out.data() + kSpatialFloats;
 
-  // Rack: raw per-tile counts at kRackCountOffset.
+  // The rack block holds raw per-tile counts.
   ASSERT_EQ(scalars[kRackCountOffset + Tile::from_char('Q')], 1.0f);
   ASSERT_EQ(scalars[kRackCountOffset + Tile::from_char('Z')], 1.0f);
   ASSERT_EQ(scalars[kRackCountOffset + 26], 1.0f);  // blank count in rack
   ASSERT_EQ(scalars[kRackCountOffset + Tile::from_char('A')], 0.0f);
 
-  // Unseen pool: per-letter thermometer at kUnseenPoolOffset. The pool is
-  // TILE_COUNTS minus board and active_rack only (opp-rack tiles, if any,
-  // remain in the pool from the POV).
+  // The unseen pool is a per-letter thermometer over TILE_COUNTS minus the
+  // board and the active rack; the opponent's rack stays in the pool.
   const float* pool = scalars + kUnseenPoolOffset;
   float pool_sum = 0.0f;
   for (int i = 0; i < kUnseenPoolThermoFloats; ++i) pool_sum += pool[i];
   ASSERT_EQ(pool_sum, 95.0f);  // 100 - 2 on board - 3 in rack
-  // A: all 9 unseen -> region fully set.
+  // A: all 9 unseen, so the region is full.
   ASSERT_EQ(pool[pool_region_start(0) + 0], 1.0f);
   ASSERT_EQ(pool[pool_region_start(0) + 8], 1.0f);
-  // C: 1 of 2 unseen (one C on board) -> first slot set, hole at tail.
+  // C: 1 of 2 unseen (one is on the board).
   ASSERT_EQ(pool[pool_region_start(Tile::from_char('C')) + 0], 1.0f);
   ASSERT_EQ(pool[pool_region_start(Tile::from_char('C')) + 1], 0.0f);
-  // Blank: 1 on board (blank-D) + 1 in rack -> 0 unseen.
+  // Blank: one on the board (as D) and one in the rack, so none unseen.
   ASSERT_EQ(pool[pool_region_start(26) + 0], 0.0f);
   ASSERT_EQ(pool[pool_region_start(26) + 1], 0.0f);
 
-  // Score-diff scalar at kScoreDiffOffset: (50 - 30) / kScoreDiffInputScale.
   const float* sd = scalars + kScoreDiffOffset;
   ASSERT_EQ(sd[0], 20.0f / kScoreDiffInputScale);
 
-  // Last-2-move metadata at kMoveMetaOffset: self move (p0's C play) then
-  // opponent move (p1's blank-D play); both are 1-glyph PLAYs.
+  // Last-move metadata: the self move first, then the opponent's.
   const float* meta = scalars + kMoveMetaOffset;
   ASSERT_EQ(meta[int(MoveType::PLAY)], 1.0f);
   ASSERT_EQ(meta[int(MoveType::EXCHANGE)], 0.0f);
@@ -581,9 +550,9 @@ TEST(Encoder, BasicLayout) {
   ASSERT_EQ(opp_meta[kMoveMetaTypeFloats], 1.0f);  // opp num_glyphs
 }
 
-// The mid-game seeding constructor (a rollout's decision point): once two
-// applied plies have supplied both last-move slots, a seeded encoder's row is
-// byte-identical to a full-history encoder's.
+// An encoder seeded mid-game (as a rollout starts) has no move history, but once
+// two applied plies fill both last-move slots its rows are byte-identical to a
+// full-history encoder's.
 TEST(Encoder, MidGameSeedMatchesFullHistory) {
   using namespace scribblez::binlog;
   const Move m1 =
@@ -600,7 +569,6 @@ TEST(Encoder, MidGameSeedMatchesFullHistory) {
   GameStateEncoder full{spec};
   full.apply_move(m1);
   full.apply_move(m2);
-  // The seed point: the state after m1/m2, with no history handed over.
   GameStateEncoder seeded{spec, full.board(), {full.score(0), full.score(1)}, full.active_player()};
   full.apply_move(m3);
   full.apply_move(m4);
@@ -620,9 +588,7 @@ TEST(Encoder, MidGameSeedMatchesFullHistory) {
 TEST(Encoder, LastOppPlaneMask) {
   using namespace scribblez::binlog;
 
-  // p0 plays a single 'A' at (7,7), then p1 plays "CAT" horizontally
-  // starting at (7,6), interleaving the existing A at (7,7): cells (7,6)
-  // and (7,8) were newly placed -> square_mask = 0b101.
+  // p1's CAT plays through p0's A, so only (7,6) and (7,8) are newly placed.
   Move p0_play =
     make_play_full(7, 7, /*horizontal=*/true, 0b1, 1, {Glyph::of(Tile::from_char('A'))});
 
@@ -646,7 +612,7 @@ TEST(Encoder, LastOppPlaneMask) {
       ASSERT_EQ(plane[r * 15 + c], expected);
     }
   }
-  // The opponent's num_glyphs reflects placements (2 = C, T), not cells walked.
+  // num_glyphs counts placed tiles (C, T), not the word's length.
   const float* opp_meta = out.data() + kSpatialFloats + kMoveMetaOffset + kMoveMetaFloatsPerMove;
   ASSERT_EQ(opp_meta[kMoveMetaTypeFloats], 2.0f);
 }
@@ -658,9 +624,9 @@ static bool same_glyph(Glyph a, Glyph b) {
   return a.letter().index() == b.letter().index() && a.is_blank() == b.is_blank();
 }
 
-// Board::transpose reflects the squares across the diagonal, toggles the frame
-// bit, and carries the move-generation caches over by swapping their view
-// orientations -- entry for entry what a rebuild on the transposed board gives.
+// Board::transpose reflects the squares across the diagonal and toggles the
+// frame bit. Its carried-over move-generation caches must equal a rebuild on
+// the transposed squares.
 TEST(Board, Transpose) {
   Dictionary d = medium_dict();
   Board b;
@@ -688,16 +654,15 @@ TEST(Board, Transpose) {
     }
   }
 
-  // An involution.
   const Board back = t.transpose();
   ASSERT_FALSE(back.transposed());
   for (int r = 0; r < BOARD_SIZE; ++r)
     for (int c = 0; c < BOARD_SIZE; ++c) ASSERT_TRUE(same_glyph(back.at(r, c), b.at(r, c)));
 }
 
-// Move::transpose swaps a PLAY's orientation, keeps its lane-relative start and
-// mask, toggles the frame bit for every move type, and is an involution. A
-// board refuses a move from the other frame.
+// Move::transpose swaps a PLAY's orientation but keeps its start and mask, and
+// toggles the frame bit for every move type. In debug builds a board rejects a
+// move from the other frame.
 TEST(Move, Transpose) {
   const Glyph ax[2] = {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('X'))};
   const Move m = Move::play(/*horizontal=*/true, 3, (1u << 5) | (1u << 6), 30, ax, 2);
@@ -722,13 +687,12 @@ TEST(Move, Transpose) {
   }
 }
 
-// Encoding the transposed state (Board::transpose plus both last moves) is the
-// transpose of encoding the state: every spatial plane transposes, the
-// cross-check halves exchange, and the scalars are untouched.
+// Encoding the transposed state equals transposing the encoding: every spatial
+// plane transposes, the horizontal and vertical cross-check blocks swap, and the
+// scalars are unchanged.
 TEST(Encoder, TransposeSymmetry) {
   using namespace scribblez::binlog;
 
-  // p0 single 'B' at (3,5); p1 vertical "AX" at (0,4) (mask=0b11).
   Move p0_play =
     make_play_full(3, 5, /*horizontal=*/true, 0b1, 30, {Glyph::of(Tile::from_char('B'))});
 
@@ -753,7 +717,8 @@ TEST(Encoder, TransposeSymmetry) {
   for (int i = kSpatialFloats; i < kInputFloats; ++i) {
     ASSERT_EQ(normal[i], flipped[i]);
   }
-  // The halves must differ, or the swap below would hold for the wrong reason.
+  // The two cross-check blocks must differ here, or the swap check below would
+  // pass vacuously.
   bool halves_differ = false;
   for (int i = 0; i < kHorizontalCrossCheckPlanes * 225 && !halves_differ; ++i) {
     halves_differ =
@@ -761,8 +726,6 @@ TEST(Encoder, TransposeSymmetry) {
   }
   ASSERT_TRUE(halves_differ);
 
-  // Every spatial plane (including both placement planes) is transposed, and
-  // the cross-check halves also exchange.
   for (int p = 0; p < kSpatialPlanes; ++p) {
     int src = p;
     if (p >= kHorizontalCrossCheckPlane0 && p < kVerticalCrossCheckPlane0) {
@@ -779,11 +742,12 @@ TEST(Encoder, TransposeSymmetry) {
   }
 }
 
-// The two reachability planes carry exactly footprint_reachable_cells over the
-// right pool: the opp plane over the unseen pool (S - M), the self plane over
-// S - O (here the hidden arm, so every unplayed tile). The self pool contains
-// the opp pool plus the mover's own rack, so the self plane covers at least as
-// many squares.
+// The two reachability planes equal footprint_reachable_cells over their pools.
+// The opponent plane uses the tiles unseen by the mover. The self plane uses
+// every unplayed tile minus any the opponent is known to hold; here the
+// opponent's rack is hidden, so that is every unplayed tile. The self pool is a
+// superset of the opponent pool, so the self plane reaches at least as many
+// cells.
 TEST(Encoder, ReachabilityPlanes) {
   using namespace scribblez::binlog;
   Move p0_play = make_play_full(7, 7, /*horizontal=*/true, 0b111, 20,
@@ -801,13 +765,12 @@ TEST(Encoder, ReachabilityPlanes) {
   std::vector<float> out(kInputFloats, -1.0f);
   enc.encode_input(enc.active_player(), active_rack, out.data());
 
-  // Independently compute the two planes from the same board and pools.
   Board board = enc.board();
   board.ensure_movegen_caches(d);
   uint8_t opp_pool[27], self_pool[27];
-  compute_unseen_pool(opp_pool, board, active_rack);  // S - M
+  compute_unseen_pool(opp_pool, board, active_rack);
   Rack empty;
-  compute_unseen_pool(self_pool, board, empty);  // S - (nothing) = S, the hidden-arm S - O
+  compute_unseen_pool(self_pool, board, empty);
 
   std::vector<float> opp_expected(225), self_expected(225);
   footprint_reachable_cells(board, opp_pool, kMaskTileBudget, opp_expected.data());
@@ -817,18 +780,17 @@ TEST(Encoder, ReachabilityPlanes) {
   for (int i = 0; i < 225; ++i) {
     ASSERT_EQ(out[kOppReachPlane * 225 + i], opp_expected[i]) << "opp cell " << i;
     ASSERT_EQ(out[kSelfReachPlane * 225 + i], self_expected[i]) << "self cell " << i;
-    // A reachable cell is exactly 1 and the rest exactly 0 -- no -1.0 sentinel left.
+    // Every cell is overwritten with 0 or 1; none keeps the -1.0 fill.
     ASSERT_TRUE(out[kOppReachPlane * 225 + i] == 0.0f || out[kOppReachPlane * 225 + i] == 1.0f);
     opp_sum += opp_expected[i];
     self_sum += self_expected[i];
   }
-  ASSERT_GE(self_sum, opp_sum);  // S - O superset of S - M -> self reaches at least as much
+  ASSERT_GE(self_sum, opp_sum);
 }
 
-// Single-tile plays whose only word is perpendicular to the placement axis
-// (hooking S onto the I of QI to form vertical IS / SI) come from the
-// transposed pass; a single tile that also forms a word along the horizontal
-// axis (the S of QIS) is emitted exactly once, from the horizontal pass.
+// A single-tile play is generated exactly once. Hooks that form only a vertical
+// word (IS, SI through the I of QI) come from the transposed pass; the S of QIS
+// comes from the horizontal pass and is not duplicated by the vertical one.
 TEST(Movegen, SingleTileVerticalHooks) {
   Dictionary d = medium_dict();
   Board b;
@@ -852,24 +814,22 @@ TEST(Movegen, SingleTileVerticalHooks) {
   ASSERT_EQ(dawg.size(), plays.size());
 }
 
-// A square's cross-check set constrains the axis perpendicular to the run it
-// abuts, so the hooks above and below QI belong to the horizontal block and
-// those left and right of it to the vertical block.
+// A square's cross-check set constrains plays perpendicular to the run it
+// abuts. So the hooks above and below a horizontal QI land in the horizontal
+// block (a horizontal play there forms a vertical cross word), and the squares
+// left and right of it land in the vertical block.
 TEST(Encoder, CrossCheckPlanesQi) {
   using namespace scribblez::binlog;
 
   Dictionary d = medium_dict();
 
-  // p0 opens with horizontal "QI" at (7,7)..(7,8). We then encode from p1's
-  // POV (active after one move) and verify directional per-letter cross-check
-  // planes around that word.
   Move qi_play = make_play_full(7, 7, /*horizontal=*/true, 0b11, 22,
                                 {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))});
 
   GameStateEncoder enc{InputEncodingSpec{&d}};
   enc.apply_move(qi_play);
 
-  Rack active_rack;  // p1 rack is irrelevant for the cross-check plane checks
+  Rack active_rack;
   std::vector<float> out(kInputFloats, 0.0f);
   enc.encode_input(enc.active_player(), active_rack, out.data());
 
@@ -902,8 +862,7 @@ TEST(Encoder, CrossCheckPlanesQi) {
     }
   };
 
-  // A square with no perpendicular neighbor constrains nothing: every letter is
-  // legal, so all 26 planes of the axis block are set.
+  // A square with no perpendicular neighbor allows every letter.
   const auto assert_horizontal_unconstrained = [&](int r, int c) {
     for (int l = 0; l < 26; ++l) ASSERT_EQ(h_cross_check(Tile::of(l), r, c), 1.0f);
   };
@@ -911,26 +870,21 @@ TEST(Encoder, CrossCheckPlanesQi) {
     for (int l = 0; l < 26; ++l) ASSERT_EQ(v_cross_check(Tile::of(l), r, c), 1.0f);
   };
 
-  // Left and right of QI, the cross word runs across through the QI:
-  //   - right of I: QIS -> only 'S'
-  //   - left of Q: none in this fixture dictionary
+  // Left and right of QI, the cross word runs across through QI: QIS allows
+  // only S to the right, and medium_dict() has no ?QI word.
   assert_vertical_set(7, 9, {'S'});
   assert_vertical_set(7, 6, {});
-  // Nothing runs down through either square, so no vertical cross word
-  // constrains it and the horizontal block is all-ones.
   assert_horizontal_unconstrained(7, 9);
   assert_horizontal_unconstrained(7, 6);
 
-  // Above and below QI, the cross word runs down:
-  //   - below Q: QI -> only 'I'
-  //   - above I: AI BI GI HI KI LI MI OI PI QI SI TI XI
-  //   - below I: ID IF IN IS IT
+  // Above and below QI, the cross word runs down. From medium_dict():
+  //   below Q: QI; above Q: none
+  //   above I: AI BI GI HI KI LI MI OI PI QI SI TI XI
+  //   below I: ID IF IN IS IT
   assert_horizontal_set(8, 7, {'I'});
   assert_horizontal_set(6, 7, {});
   assert_horizontal_set(6, 8, {'A', 'B', 'G', 'H', 'K', 'L', 'M', 'O', 'P', 'Q', 'S', 'T', 'X'});
   assert_horizontal_set(8, 8, {'D', 'F', 'N', 'S', 'T'});
-  // No horizontal cross word runs through these squares, so the vertical block
-  // is all-ones (every letter legal).
   assert_vertical_unconstrained(8, 7);
   assert_vertical_unconstrained(6, 8);
   assert_vertical_unconstrained(8, 8);
@@ -941,23 +895,20 @@ TEST(Encoder, CrossCheckPlanesQi) {
   assert_vertical_set(7, 7, {});
   assert_vertical_set(7, 8, {});
 
-  // A cell with no neighbor in any direction is fully unconstrained: every
-  // plane in both families is set.
   assert_horizontal_unconstrained(0, 0);
   assert_horizontal_unconstrained(14, 14);
   assert_vertical_unconstrained(0, 0);
   assert_vertical_unconstrained(14, 14);
 }
 
-// A letter illegal as a lone tile can be legal inside a longer word, so the
-// cross-check set must not be intersected with the main word's validity. (7,8)
-// reads `_XI` across and `_VOW` down: no word is `_XI`, but AXIOM places an `A`
-// there. Intersecting reports the square as taking no letter, either way.
+// Each cross-check block depends only on the cross word in its own direction,
+// not on whether a single tile there forms legal words both ways. At (7,8), the
+// run below reads _VOW (AVOW allows A) and the run to the right reads _XI (no
+// such word). A lone A there would be illegal, yet AXIOM places one, so the
+// horizontal block must still allow A.
 TEST(Encoder, CrossCheckSetIsNotOneTileLegality) {
   Dictionary d = Dictionary::build_from_words({"AVOW", "AXIOM", "VOW", "XI"});
 
-  // "XI" across at (7,9)..(7,10) and "VOW" down at (8,8)..(10,8), leaving
-  // (7,8) empty with a run to its right and a run below it.
   Move xi = make_play_full(7, 9, /*horizontal=*/true, 0b11, 9,
                            {Glyph::of(Tile::from_char('X')), Glyph::of(Tile::from_char('I'))});
   Move vow = make_play_full(8, 8, /*horizontal=*/false, 0b111, 9,
@@ -980,18 +931,15 @@ TEST(Encoder, CrossCheckSetIsNotOneTileLegality) {
   }
 }
 
-// The production replay path (PositionEncoder, used by both the streaming and
-// disk pipelines) must emit lexicon-true cross-check planes: it seeds the
-// board's move-generation caches from its dictionary. Without that seeding the
-// planes degrade silently to all-26-letters adjacency masks, so this checks a
-// square whose legal hook set is a strict subset.
+// PositionEncoder, the replay path that produces training rows, must seed the
+// board's move-generation caches from its dictionary. Without that, the
+// cross-check planes silently degrade to all-letters adjacency masks, so this
+// checks a square whose legal hook set is a strict subset.
 TEST(PositionEncoder, CrossCheckPlanesLexical) {
   using namespace scribblez::binlog;
 
   Dictionary d = medium_dict();
 
-  // p0 opens with horizontal "QI" at (7,7)..(7,8); the post-move row at turn 0
-  // is encoded from p0's POV.
   GameLogStorage storage;
   storage.initial_racks[0] = rack_from("QIAAAAA");
   storage.initial_racks[1] = rack_from("SAINTED");
@@ -1008,9 +956,7 @@ TEST(PositionEncoder, CrossCheckPlanesLexical) {
   auto v_cross_check = [&row](char ch, int r, int c) {
     return row[(kVerticalCrossCheckPlane0 + Tile::from_char(ch).index()) * 225 + r * 15 + c];
   };
-  // Right of the I the cross word is QIS (per the fixture dictionary), which
-  // constrains a vertical word placing a tile there: 'S' is set and every
-  // other letter is clear.
+  // Right of QI only S hooks (QIS).
   for (char ch = 'A'; ch <= 'Z'; ++ch) {
     ASSERT_EQ(v_cross_check(ch, 7, 9), (ch == 'S' ? 1.0f : 0.0f));
   }
@@ -1042,20 +988,17 @@ TEST(Encoder, ForcedScoreDiffIsolation) {
   const int score_lo = kSpatialFloats + kScoreDiffOffset;
   const int score_hi = score_lo + kScoreDiffInputFloats;
 
-  // Only the score-diff block should differ.
   for (int i = 0; i < kInputFloats; ++i) {
     if (i >= score_lo && i < score_hi) continue;
     ASSERT_EQ(normal[i], forced[i]);
   }
 
-  // Forced block must represent score_diff=123 as the normalized scalar.
   ASSERT_EQ(forced[score_lo], 123.0f / kScoreDiffInputScale);
 }
 
 TEST(Encoder, NonplayLastMoveMetadata) {
   using namespace scribblez::binlog;
 
-  // p0 PASS, p1 EXCHANGE(1 tile). After two plies active is p0 again.
   Move p0_pass = Move::pass();
   TileCounts ex_tiles;
   ex_tiles.add(Tile::from_char('A'));
@@ -1084,7 +1027,7 @@ TEST(Encoder, NonplayLastMoveMetadata) {
   ASSERT_EQ(opp_meta[int(MoveType::PASS)], 0.0f);
   ASSERT_EQ(opp_meta[kMoveMetaTypeFloats], 1.0f);
 
-  // Both last-placement planes must be all zero because neither last move is PLAY.
+  // Neither last move is a PLAY, so both last-placement planes are empty.
   for (int i = 0; i < 225; ++i) {
     ASSERT_EQ(out[kSelfPlacementPlane * 225 + i], 0.0f);
     ASSERT_EQ(out[kOppPlacementPlane * 225 + i], 0.0f);
@@ -1095,9 +1038,7 @@ TEST(Encoder, NonplayLastMoveMetadata) {
 // Binary-log / DataLoader / movegen round-trip tests
 // ===========================================================================
 
-// A minimal Agent used to drive Game in tests. Picks a uniformly-random
-// highest-scoring PLAY; if none exists, passes. (Sufficient for generating
-// realistic-looking game logs; we don't need exchange logic here.)
+// Plays a random highest-scoring PLAY, else passes. Never exchanges.
 namespace {
 class TestAgent : public scribblez::Agent {
  public:
@@ -1122,9 +1063,9 @@ class TestAgent : public scribblez::Agent {
   std::mt19937_64 rng_;
 };
 
-// Snapshot of game state at one eligible sample moment, captured during a
-// live in-memory replay. Used as the ground-truth reference for the
-// GameStateEncoder-driven replays under test.
+// One position from an independent replay of a GameLogStorage that tracks both
+// racks directly. The ground truth that GameStateEncoder replays are checked
+// against.
 struct LiveSnapshot {
   scribblez::Board board;
   scribblez::Rack rack_active;
@@ -1144,8 +1085,7 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStor
   Rack racks[2];
   Move last_by[2] = {Move{}, Move{}};
 
-  // Seed each player's rack from their first-turn rack_before. (Matches
-  // extract_positions's seeding.)
+  // Seed each player's rack from their first turn's rack_before.
   bool seeded[2] = {false, false};
   for (const TurnRecord& t : log.turns) {
     if (!seeded[t.player]) {
@@ -1184,7 +1124,6 @@ std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStor
       out.push_back(post);
     }
 
-    // Advance live state.
     if (turn.move.type() == MoveType::PLAY) {
       const int n = turn.move.num_glyphs();
       for (int g = 0; g < n; ++g) racks[active].remove(turn.move.glyph(g).rack_tile());
@@ -1243,10 +1182,8 @@ scribblez::GameLogStorage play_test_game(const scribblez::Dictionary& dict, uint
   return g.extract_log();
 }
 
-// Compare the set of legal plays from movegen on a reconstructed state vs
-// movegen on the live state. Uses the existing move_key/key_set helpers
-// (defined earlier in this file) so the comparison ignores enumeration order
-// and identifies plays by placed-tiles + score.
+// Exits if movegen yields different play sets (by move_key) on the
+// reconstructed and live positions.
 void check_movegen_equiv(const scribblez::Dictionary& dict, const scribblez::Board& reconstructed,
                          const scribblez::Rack& reconstructed_rack, const scribblez::Board& live,
                          const scribblez::Rack& live_rack, const char* context) {
@@ -1264,9 +1201,8 @@ void check_movegen_equiv(const scribblez::Dictionary& dict, const scribblez::Boa
 }
 }  // anonymous namespace
 
-// Open-leaves arm: the row is the base row plus the opponent-leave counts
-// block at the scalar tail, holding exactly the known leave's per-tile
-// counts.
+// With opp_leave_input, the row is the base row plus a trailing block of the
+// opponent's known per-tile rack counts.
 TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
   Dictionary d = medium_dict();
   const InputEncodingSpec base{&d};
@@ -1289,7 +1225,6 @@ TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
   base_enc.encode_input(base_enc.active_player(), rack, base_row.data());
   open_enc.encode_input(open_enc.active_player(), rack, opp, open_row.data());
 
-  // Identical prefix; the tail is the opponent rack's counts.
   ASSERT_EQ(
     std::memcmp(base_row.data(), open_row.data(), sizeof(float) * size_t(input_floats(base))), 0);
   const float* tail = open_row.data() + input_floats(base);
@@ -1302,14 +1237,11 @@ TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
   ASSERT_EQ(tail_total, 5.0f);
 }
 
-// GameStateEncoder, replayed against a live in-memory replay, faithfully
-// reproduces every eligible position -- proven by running movegen on both and
-// demanding identical legal-play sets at the pre-move snapshot of each turn.
+// Replaying a game log through GameStateEncoder reproduces every position of an
+// independent replay: board, scores, last opponent move, and the legal-play set.
 TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
   Dictionary dict = medium_dict();
 
-  // A handful of games at different seeds; for every eligible position we
-  // compare encoder state against the independent live snapshot vector.
   const std::vector<uint64_t> seeds = {42, 1337, 0xDEADBEEFULL};
   long positions_compared = 0;
 
@@ -1320,16 +1252,13 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
     auto live_snaps = live_replay_all_snapshots(log);
 
     scribblez::GameStateEncoder enc{scribblez::InputEncodingSpec{&dict}};
-    // The encoder tracks no racks (an outside observer cannot see opponent
-    // draws), but the test has full information, so it maintains a parallel
-    // rack pair alongside the encoder.
+    // The encoder does not track racks, so the test tracks them alongside it.
     std::array<scribblez::Rack, 2> racks = {log.initial_racks[0], log.initial_racks[1]};
 
     size_t snap_idx = 0;
     for (size_t k = 0; k < log.turns.size(); ++k) {
       const auto& turn = log.turns[k];
 
-      // ---- pre-move snapshot ----
       ASSERT_LT(snap_idx, live_snaps.size());
       const LiveSnapshot& pre = live_snaps[snap_idx++];
       ASSERT_EQ(pre.kind, scribblez::PositionKind::kPreMove);
@@ -1344,14 +1273,11 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
                           "GameStateEncoder-pre");
       ++positions_compared;
 
-      // ---- post-move snapshot (PLAY only) ----
       if (turn.move.type() == scribblez::MoveType::PLAY) {
         ASSERT_LT(snap_idx, live_snaps.size());
         const LiveSnapshot& post = live_snaps[snap_idx++];
         ASSERT_EQ(post.kind, scribblez::PositionKind::kPostMove);
 
-        // Materialize post-state from the encoder + parallel racks by hand
-        // and compare.
         scribblez::Board post_board = enc.board();
         post_board.apply(turn.move);
         scribblez::Rack post_rack = racks[active];
@@ -1364,7 +1290,6 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
         ++positions_compared;
       }
 
-      // Advance both encoder and parallel rack tracking.
       if (turn.move.type() == scribblez::MoveType::PLAY ||
           turn.move.type() == scribblez::MoveType::EXCHANGE) {
         const int n = turn.move.num_glyphs();
@@ -1383,11 +1308,9 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
             << " positions across " << seeds.size() << " games)\n";
 }
 
-// End-to-end: play a game, write it through BinaryLogWriter to disk, register
-// the resulting .slog file with DataLoader, decode all rows, and verify that
-// (a) every label tail matches a valid (game, active POV) and (b) running
-// movegen on a board freshly reconstructed from the .slog file produces the
-// same legal-play set as the live game.
+// End to end: write games through BinaryLogWriter, load the .slog with
+// DataLoader, and check that (a) every row's labels match some (game, POV) and
+// (b) replaying the raw on-disk turns reproduces every live position.
 TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   Dictionary dict = medium_dict();
 
@@ -1403,27 +1326,23 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
     }
   } cleanup{dir};
 
-  // Write a small batch through the public writer (separate games -> one file).
   constexpr int kGames = 3;
   std::vector<scribblez::GameLogStorage> logs;
   {
     scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/kGames);
     for (int i = 0; i < kGames; ++i) {
       scribblez::GameLogStorage log = play_test_game(dict, /*seed=*/100ULL + i);
-      writer.append(scribblez::GameLogStorage(log));  // append a copy; keep `log` for verification
+      writer.append(scribblez::GameLogStorage(log));
       logs.push_back(std::move(log));
     }
-    // Destructor flushes; explicit flush would be redundant.
-  }
+  }  // The writer's destructor flushes the file.
 
-  // Find the .slog file(s) the writer produced.
   std::vector<fs::path> slogs;
   for (const auto& ent : fs::directory_iterator(dir)) {
     if (ent.path().extension() == ".slog") slogs.push_back(ent.path());
   }
   ASSERT_EQ(slogs.size(), 1);
 
-  // Verify the on-disk header is self-consistent.
   const fs::path& slog = slogs.front();
   const int64_t fsize = fs::file_size(slog);
   std::vector<char> raw(fsize);
@@ -1436,8 +1355,7 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   ASSERT_EQ(hdr->magic, scribblez::binlog::kMagic);
   ASSERT_EQ(hdr->version, scribblez::binlog::kVersion);
   ASSERT_EQ(hdr->num_games, uint32_t(kGames));
-  // Training expands each game into one row per eligible (pre-endgame) turn, so
-  // the loader's position count is the sum of those across all games.
+  // Each turn that began with tiles in the bag is one sample position.
   int64_t total_positions = 0;
   for (const auto& log : logs)
     for (const auto& turn : log.turns)
@@ -1445,8 +1363,6 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   ASSERT_GT(total_positions, 0);
   ASSERT_EQ(int64_t(hdr->num_sample_positions), total_positions);
 
-  // Register with DataLoader and drain rows via epoch_start/load_batch
-  // for both pre-move and post-move phases.
   scribblez::binlog::DataLoader::Params dl_params;
   dl_params.spec = {&dict};
   dl_params.num_worker_threads = 2;
@@ -1457,7 +1373,6 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
 
   const int row_size = kRowFloats;
 
-  // Helper: drain one full epoch into a vector.
   auto drain_epoch = [&](bool post_move) {
     scribblez::binlog::DataLoader::EpochConfig cfg;
     cfg.batch_size = total_positions;
@@ -1475,14 +1390,12 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
   std::vector<float> pre_rows = drain_epoch(/*post_move=*/false);
   std::vector<float> post_rows = drain_epoch(/*post_move=*/true);
 
-  // Combine for validation.
   const int n_samples = int(total_positions) * 2;
   std::vector<float> rows;
   rows.insert(rows.end(), pre_rows.begin(), pre_rows.end());
   rows.insert(rows.end(), post_rows.begin(), post_rows.end());
 
-  // Build the set of valid (WLD label, score_diff) pairs across all games.
-  std::set<std::tuple<int, int, int, int>> valid_labels;  // (W,D,L,score_diff)
+  std::set<std::tuple<int, int, int, int>> valid_labels;  // (W, D, L, score_diff)
   for (const auto& log : logs) {
     for (int active = 0; active < 2; ++active) {
       const int fa = log.final_scores[active];
@@ -1498,30 +1411,25 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
     }
   }
 
-  // Every decoded row's label tail must match a valid (game, POV).
   const int label_off = kInputFloats;
   for (int i = 0; i < n_samples; ++i) {
     const float* row = rows.data() + int64_t(i) * row_size;
     const int w = row[label_off + 0];
     const int dd = row[label_off + 1];
     const int l = row[label_off + 2];
-    // Score-diff target is a single scalar: the clipped final differential.
     const int sd = row[label_off + scribblez::kWldFloats];
-    ASSERT_EQ(w + dd + l, 1);  // exactly one of W/D/L
+    ASSERT_EQ(w + dd + l, 1);
     ASSERT_EQ(valid_labels.count({w, dd, l, sd}), 1);
   }
 
-  // Re-read the file's raw TurnBlobs, replay each game via GameStateEncoder,
-  // and verify the round-tripped state passes the movegen equivalence check
-  // against the live snapshots. This exercises the writer -> file ->
-  // reinterpret_cast path that the DataLoader itself uses internally.
+  // Replay each game from the raw on-disk records, read the same way DataLoader
+  // reads them, and compare against the live snapshots.
   const auto* metas = reinterpret_cast<const scribblez::binlog::GameMetadata*>(
     raw.data() + sizeof(scribblez::binlog::FileHeader));
   long compared = 0;
   for (uint32_t gi = 0; gi < hdr->num_games; ++gi) {
     const auto& gm = metas[gi];
-    // GameMetadata is written in the order games were appended, so logs[gi]
-    // corresponds to metas[gi]. num_turns must match the GameLog.
+    // Games are stored in append order.
     ASSERT_EQ(gm.num_turns, logs[gi].turns.size());
 
     const auto* ir =
@@ -1529,7 +1437,6 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
     const auto* turns = reinterpret_cast<const scribblez::binlog::TurnBlob*>(
       raw.data() + gm.start_offset + sizeof(scribblez::binlog::InitialRacks));
 
-    // Reconstruct the initial racks from the on-disk bytes and replay.
     const Rack& r0_init = ir->p0;
     const Rack& r1_init = ir->p1;
     ASSERT_TRUE(racks_equal(r0_init, logs[gi].initial_racks[0]));
@@ -1572,15 +1479,12 @@ TEST(BinaryLog, FileAndDataLoaderRoundtrip) {
     }
     ASSERT_EQ(snap_idx, live_snaps.size());
   }
-  // `compared` includes one pre-snapshot per turn + one post-snapshot per PLAY
-  // turn; total_positions counts only one row per turn (shared between pre/post).
   ASSERT_GE(compared, total_positions);
   std::cout << "  file+DataLoader round-trip OK (" << kGames << " games, " << total_positions
             << " positions, " << n_samples << " loader rows)\n";
 }
 
-// Play one game with two TestAgents and a random opening of `plies` moves;
-// return its owning log storage.
+// play_test_game with a random opening of `plies` moves.
 static scribblez::GameLogStorage play_random_opening_test_game(const scribblez::Dictionary& dict,
                                                                uint64_t seed, int plies) {
   TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
@@ -1591,9 +1495,8 @@ static scribblez::GameLogStorage play_random_opening_test_game(const scribblez::
   return g.extract_log();
 }
 
-// Game::set_random_opening plays exactly the first K plies at random (fewer
-// only if the game ends sooner), records the count in the log, and is
-// reproducible from the game seed.
+// Game::set_random_opening records how many random plies were played (fewer
+// only if the game ends sooner), and the game is reproducible from its seed.
 TEST(Game, RandomOpening) {
   Dictionary dict = medium_dict();
 
@@ -1602,7 +1505,6 @@ TEST(Game, RandomOpening) {
     ASSERT_FALSE(log.turns.empty());
     ASSERT_EQ(log.num_random_opening_plies, std::min<int>(plies, int(log.turns.size())));
 
-    // Same seed + same opening length -> the identical move sequence.
     scribblez::GameLogStorage again = play_random_opening_test_game(dict, /*seed=*/321, plies);
     ASSERT_EQ(again.turns.size(), log.turns.size());
     for (size_t k = 0; k < log.turns.size(); ++k)
@@ -1611,13 +1513,12 @@ TEST(Game, RandomOpening) {
   std::cout << "  Game random opening OK\n";
 }
 
-// generate_legal_exchanges enumerates every distinct non-empty sub-multiset of
-// the rack (duplicates don't multiply the list), and is empty when the bag is
-// too small to allow exchanging.
+// generate_legal_exchanges yields each distinct non-empty sub-multiset of the
+// rack once, and nothing when the bag holds fewer than RACK_SIZE tiles.
 TEST(Movegen, GenerateLegalExchanges) {
   Dictionary dict = medium_dict();
   Board board;
-  Rack rack;  // A A B ? -> types (A:2, B:1, ?:1) -> 3*2*2 - 1 = 11 exchanges
+  Rack rack;  // AAB?: (2+1)(1+1)(1+1) - 1 = 11 distinct exchanges
   rack.add(Tile::from_char('A'));
   rack.add(Tile::from_char('A'));
   rack.add(Tile::from_char('B'));
@@ -1628,7 +1529,6 @@ TEST(Movegen, GenerateLegalExchanges) {
   const std::vector<Move> exchanges = generate_legal_exchanges(req);
   ASSERT_EQ(exchanges.size(), 11);
 
-  // Every move is an EXCHANGE of a distinct non-empty sub-multiset of the rack.
   std::set<std::string> seen;
   for (const Move& m : exchanges) {
     ASSERT_EQ(m.type(), MoveType::EXCHANGE);
@@ -1642,16 +1542,14 @@ TEST(Movegen, GenerateLegalExchanges) {
   }
   ASSERT_EQ(seen.size(), exchanges.size());
 
-  // Exchanging is illegal when the bag has fewer than RACK_SIZE tiles.
   MoveRequest starved{board, dict, rack, opp, 0, 0, /*bag_size=*/RACK_SIZE - 1};
   ASSERT_TRUE(generate_legal_exchanges(starved).empty());
   std::cout << "  generate_legal_exchanges OK (" << exchanges.size() << " exchanges)\n";
 }
 
-// BinaryLogWriter records a random-opening game's eligible region: begin is the
-// position after the last random ply, end is the bag-non-empty prefix, and the
-// header's num_sample_positions sums the region widths. The DataLoader sizes
-// its epoch from the same regions.
+// BinaryLogWriter records a random-opening game's eligible turn region: it
+// begins at the last random ply and ends after the last turn that began with
+// tiles in the bag. The header's num_sample_positions sums the region widths.
 TEST(BinaryLog, RandomOpeningRegion) {
   Dictionary dict = medium_dict();
 
@@ -1741,8 +1639,7 @@ TEST(Tile, GlyphBasics) {
   ASSERT_TRUE(Tile::from_char('_').is_blank());
   ASSERT_EQ(BLANK.value(), 0);
 
-  // Glyph: played-as-blank renders the letter but scores zero and consumes
-  // a blank from the rack.
+  // A blank played as Q reads as Q but scores zero and comes from a rack blank.
   Glyph plain = Glyph::of(Tile::from_char('Q'));
   Glyph blank_q = Glyph::played(Tile::from_char('Q'), /*is_blank=*/true);
   ASSERT_EQ(plain.letter(), Tile::from_char('Q'));
@@ -1756,14 +1653,13 @@ TEST(Tile, GlyphBasics) {
   ASSERT_NE(plain, blank_q);
   ASSERT_EQ(plain, Glyph::of(Tile::from_char('Q')));
 
-  // Empty/unassigned-blank predicates.
   ASSERT_TRUE(Glyph::empty().is_empty());
   ASSERT_FALSE(Glyph::blank().is_empty());
   ASSERT_TRUE(Glyph::blank().is_blank());
   ASSERT_EQ(Glyph::blank().rack_tile(), BLANK);
 
-  // Glyph code 0 means empty -- a default-constructed Board is all-empty
-  // by virtue of zero-init, which a lot of code relies on.
+  // Code 0 is empty, so zero-initialized storage (e.g. a default Board) is
+  // all-empty. Much code relies on this.
   Glyph g;
   ASSERT_TRUE(g.is_empty());
   ASSERT_EQ(g.code(), 0);
@@ -1778,38 +1674,34 @@ static bool rack_is_sorted(const Rack& r) {
   for (int i = 1; i < r.size(); ++i) {
     if (a[i] < a[i - 1]) return false;
   }
-  // Trailing slots are Tile::empty() (sentinel == 27, which is >= any letter
-  // or blank), so the full array is also non-decreasing.
   return true;
 }
 
 TEST(Rack, Invariants) {
-  // Sorted-array invariant survives interleaved add/remove in arbitrary order.
+  // The tile array stays sorted through adds and removes in arbitrary order.
   Rack r;
   ASSERT_TRUE(r.empty());
   ASSERT_EQ(r.size(), 0);
   ASSERT_EQ(r.point_value(), 0);
-  ASSERT_FALSE(r.remove(Tile::from_char('A')));  // remove-missing returns false
+  ASSERT_FALSE(r.remove(Tile::from_char('A')));
 
-  const char* in = "QAZZB?A";  // 7 tiles incl two A's, two Z's, one blank
+  const char* in = "QAZZB?A";
   for (char c : std::string(in)) {
     r.add(c == '?' ? BLANK : Tile::from_char(c));
   }
   ASSERT_EQ(r.size(), 7);
   ASSERT_TRUE(rack_is_sorted(r));
-  ASSERT_EQ(r.to_string(), "AABQZZ?");  // sorted A..Z then '?'
+  ASSERT_EQ(r.to_string(), "AABQZZ?");
   ASSERT_EQ(r.count(Tile::from_char('A')), 2);
   ASSERT_EQ(r.count(Tile::from_char('Z')), 2);
   ASSERT_EQ(r.count(Tile::from_char('B')), 1);
   ASSERT_EQ(r.count(Tile::from_char('X')), 0);
   ASSERT_EQ(r.blanks(), 1);
 
-  // point_value: blanks contribute 0, everything else its TILE_VALUES entry.
   int expected = TILE_VALUES[Tile::from_char('A')] * 2 + TILE_VALUES[Tile::from_char('B')] +
                  TILE_VALUES[Tile::from_char('Q')] + TILE_VALUES[Tile::from_char('Z')] * 2;
   ASSERT_EQ(r.point_value(), expected);
 
-  // remove() removes one occurrence and preserves sortedness.
   ASSERT_TRUE(r.remove(Tile::from_char('A')));
   ASSERT_EQ(r.count(Tile::from_char('A')), 1);
   ASSERT_EQ(r.size(), 6);
@@ -1817,9 +1709,8 @@ TEST(Rack, Invariants) {
   ASSERT_TRUE(r.remove(BLANK));
   ASSERT_EQ(r.blanks(), 0);
   ASSERT_TRUE(rack_is_sorted(r));
-  ASSERT_FALSE(r.remove(BLANK));  // gone now
+  ASSERT_FALSE(r.remove(BLANK));
 
-  // counts() histogram matches per-tile count() probes.
   TileCounts tc = r.counts();
   for (Tile t = Tile::of(0); t < 27; ++t) {
     int via_tc = tc.count(t);
@@ -1833,10 +1724,8 @@ TEST(Rack, Invariants) {
 // ===========================================================================
 
 TEST(Bag, Basics) {
-  // Initial composition matches TILE_COUNTS and totals to 100 tiles -- and
-  // kTotalTiles, the constant bag-size arithmetic uses in place of a scan,
-  // agrees (release builds skip the constructor's DEBUG_ASSERT, so this test
-  // is what pins the constant to the distribution there).
+  // Bag::kTotalTiles must match TILE_COUNTS. The constructor checks this only
+  // with a DEBUG_ASSERT, so this test is what pins it in release builds.
   Bag b(/*seed=*/42);
   int total = 0;
   for (int c : TILE_COUNTS) total += c;
@@ -1845,7 +1734,7 @@ TEST(Bag, Basics) {
   ASSERT_EQ(b.size(), Bag::kTotalTiles);
   for (int i = 0; i < 27; ++i) ASSERT_EQ(b.counts()[i], TILE_COUNTS[i]);
 
-  // Same seed -> identical draw sequence (reproducibility).
+  // The draw sequence is reproducible from the seed.
   Bag b1(/*seed=*/12345);
   Bag b2(/*seed=*/12345);
   for (int i = 0; i < 100; ++i) {
@@ -1855,9 +1744,8 @@ TEST(Bag, Basics) {
     ASSERT_EQ(*t1, *t2);
   }
   ASSERT_EQ(b1.size(), 0);
-  ASSERT_FALSE(b1.draw().has_value());  // empty bag returns nullopt
+  ASSERT_FALSE(b1.draw().has_value());
 
-  // Different seeds -> sequences differ (almost surely; 100 draws is plenty).
   Bag bA(1), bB(2);
   bool any_diff = false;
   for (int i = 0; i < 100; ++i) {
@@ -1867,15 +1755,13 @@ TEST(Bag, Basics) {
   }
   ASSERT_TRUE(any_diff);
 
-  // Tile-count conservation: drain the bag, the per-tile draw counts must
-  // equal TILE_COUNTS exactly.
+  // Draining the bag yields exactly TILE_COUNTS.
   std::array<int, 27> drawn{};
   Bag b3(/*seed=*/777);
   while (auto t = b3.draw()) ++drawn[*t];
   for (int i = 0; i < 27; ++i) ASSERT_EQ(drawn[i], TILE_COUNTS[i]);
   ASSERT_EQ(b3.size(), 0);
 
-  // put_back round-trip: drain bag, put a tile back, next draw is that tile.
   Bag b4(/*seed=*/9999);
   while (b4.draw().has_value()) {
   }
@@ -1886,21 +1772,13 @@ TEST(Bag, Basics) {
   ASSERT_TRUE(got.has_value() && *got == Tile::from_char('Q'));
 }
 
-// ===========================================================================
-// Board::apply -- the exact interleave-with-cross-tiles scenario
-// ===========================================================================
-
+// Board::apply places glyphs only on the square mask's cells, skipping tiles
+// already on the board, and a PASS changes nothing.
 TEST(Board, ApplyInterleavesCrossTiles) {
-  // Place CA_ at (7,7..9) leaving (7,9) empty? No -- we want a more rigorous
-  // scenario: place a single existing tile in the middle of the run, then
-  // apply a move whose square_mask says "skip that cell".
   Board b;
-  // Existing tile: an 'A' at (7,8).
   b.set(7, 8, Glyph::of(Tile::from_char('A')));
 
-  // Build a move equivalent to playing CAT horizontally starting at (7,7)
-  // where the middle 'A' is already on the board: placements at (7,7) and
-  // (7,9). main_word is "CAT", glyphs = {C, T}, square_mask = 0b101.
+  // CAT through the existing A.
   Move m = make_play_full(7, 7, /*horizontal=*/true, 0b101, 0,
                           {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('T'))});
 
@@ -1909,7 +1787,6 @@ TEST(Board, ApplyInterleavesCrossTiles) {
   ASSERT_EQ(b.at(7, 7).letter(), Tile::from_char('C'));
   ASSERT_EQ(b.at(7, 8).letter(), Tile::from_char('A'));  // unchanged
   ASSERT_EQ(b.at(7, 9).letter(), Tile::from_char('T'));
-  // Apply on a PASS is a no-op.
   Move pass;
   Board snapshot = b;
   b.apply(pass);
@@ -1920,38 +1797,28 @@ TEST(Board, ApplyInterleavesCrossTiles) {
   }
 }
 
-// ===========================================================================
-// Move::main_word
-// ===========================================================================
-
 TEST(Move, MainWordThroughCross) {
   Board b;
-  // Pre-existing CAT horizontally at row 7, cols 7..9.
   b.set(7, 7, Glyph::of(Tile::from_char('C')));
   b.set(7, 8, Glyph::of(Tile::from_char('A')));
   b.set(7, 9, Glyph::of(Tile::from_char('T')));
 
-  // 1. Hook: play S at (7,10) to make CATS. Single placement, but main_word
-  //    must include all four letters by walking the existing tiles.
+  // A one-tile hook: main_word extends back through the existing tiles.
   Move hook = make_play_full(7, 10, /*horizontal=*/true, 0b1, 0, {Glyph::of(Tile::from_char('S'))});
-  // Move::main_word walks back from the placed S through the existing C,A,T
-  // to recover the word origin, then renders "CATS".
   ASSERT_EQ(hook.main_word(b), "CATS");
 
-  // 2. Through-word: place B at (7,6) and S at (7,10) for "BCATS"? Not a
-  //    real word -- but main_word doesn't care about legality. We just
-  //    verify that interleaving works.
+  // Tiles on both ends interleave with the existing ones. main_word does not
+  // check legality, so the non-word BCATS is fine.
   Move through = make_play_full(7, 6, /*horizontal=*/true, 0b10001, 0,
                                 {Glyph::of(Tile::from_char('B')),    // placed at (7,6)
                                  Glyph::of(Tile::from_char('S'))});  // placed at (7,10)
   ASSERT_EQ(through.main_word(b), "BCATS");
 
-  // 3. Blank renders as its designated letter (uppercase), like a regular tile.
+  // A blank renders as its designated letter.
   Move with_blank = make_play_full(7, 10, /*horizontal=*/true, 0b1, 0,
                                    {Glyph::played(Tile::from_char('S'), /*is_blank=*/true)});
   ASSERT_EQ(with_blank.main_word(b), "CATS");
 
-  // 4. PASS / EXCHANGE produce empty strings.
   Move pass;
   ASSERT_TRUE(pass.main_word(b).empty());
   TileCounts xch_tiles;
@@ -1960,24 +1827,15 @@ TEST(Move, MainWordThroughCross) {
   ASSERT_TRUE(xch.main_word(b).empty());
 }
 
-// ===========================================================================
-// Movegen: blank placement scores zero, even on a letter premium
-// ===========================================================================
-
+// A blank placed as C scores less than a real C in the same play (CAT onto an
+// existing AT).
 TEST(Movegen, BlankScoresZero) {
-  // Dictionary that contains both CAT (no blank needed) and a word that uses
-  // a letter that doesn't appear in our rack so we're forced to use a blank.
   Dictionary d = Dictionary::build_from_words({"CAT", "CATS", "BAT", "BATS"});
 
   Board b;
-  // Anchor: place AT horizontally at (CENTER, CENTER..CENTER+1).
   b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
                     {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('T'))}));
 
-  // Rack with 'C' (real) -> forms CAT at (CENTER, CENTER-1..CENTER+1).
-  // Also rack with only blank + filler that can't form anything.
-  // To compare scores cleanly, we generate twice: once with rack {C}, once
-  // with rack {?, ?, ?, ?, ?, ?, ?} (all blanks).
   MoveGenerator gen(b, d);
 
   Rack rack_real = rack_from("CXXXXXX");
@@ -1996,7 +1854,6 @@ TEST(Movegen, BlankScoresZero) {
   int score_blank = -1;
   for (const auto& m : moves_blank) {
     if (m.main_word(b) == "CAT") {
-      // Verify the C placement is a blank.
       ASSERT_EQ(m.num_glyphs(), 1);
       ASSERT_TRUE(m.glyph(0).is_blank());
       score_blank = m.score();
@@ -2004,11 +1861,6 @@ TEST(Movegen, BlankScoresZero) {
     }
   }
   ASSERT_GE(score_blank, 0);
-  // The blank-C contributes 0 letter value; the only word score is from the
-  // existing A and T (already on the board). With a blank in the placed
-  // position the word score equals the unscored A+T sum, possibly multiplied
-  // by a word premium under the placed blank. With the real C the score is
-  // strictly greater (C alone is worth 3).
   ASSERT_LT(score_blank, score_real);
 }
 
@@ -2018,8 +1870,7 @@ TEST(Movegen, BlankScoresZero) {
 
 namespace {
 
-// Agent that always returns PASS. Used to force the stalemate end condition
-// deterministically.
+// Always passes, forcing a stalemate end.
 class AlwaysPassAgent : public scribblez::Agent {
  public:
   AlwaysPassAgent(int tid, std::string name) : scribblez::Agent(tid, std::move(name)) {}
@@ -2079,8 +1930,8 @@ class LeaveWatchingAgent : public scribblez::Agent {
   std::vector<SeenRequest>* seen_;
 };
 
-// The tiles `player` held back at their most recent turn before `turn`, which
-// is what face-up leaves makes public. Empty before they have acted.
+// The tiles `player` kept at their most recent turn before `turn`: what
+// face-up leaves makes public. Empty before they have acted.
 Rack leave_before_turn(const scribblez::GameLogStorage& log, int player, size_t turn) {
   Rack leave;
   for (size_t t = turn; t-- > 0;) {
@@ -2138,8 +1989,8 @@ TEST(FaceUpLeaves, TheLogRecordsWhichVariantWasPlayed) {
     std::ifstream f(slog, std::ios::binary);
     ASSERT_TRUE(f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr))) << "face_up=" << face_up;
     EXPECT_EQ(hdr.magic, scribblez::binlog::kMagic);
-    // The version does not move with the flags: a file written before the bits
-    // existed carries none, which correctly reads as standard Scrabble.
+    // The variant is a header flag, not a format version: a file with no flags
+    // reads as standard Scrabble.
     EXPECT_EQ(hdr.version, scribblez::binlog::kVersion);
     EXPECT_EQ(hdr.flags & scribblez::binlog::kFlagFaceUpLeaves, flags) << "face_up=" << face_up;
   }
@@ -2206,11 +2057,8 @@ TEST(FaceUpLeaves, AnEmptyBagShowsTheWholeRackInEitherVariant) {
 }
 
 TEST(Game, EndRackOutBonus) {
-  // Greedy agents on a small in-memory dict almost always stalemate (they
-  // can't form enough words to drain the bag). With the real lexicon, "out"
-  // is the normal end condition. Skip gracefully if no real lexicon is
-  // available -- the stalemate test below still covers Game::play()'s other
-  // end-of-game arithmetic.
+  // Needs the real lexicon: on a small dictionary greedy agents almost always
+  // stalemate before emptying the bag.
   const char* path = SCRIBBLEZ_DEFAULT_KWG;
   if (!std::ifstream(path).good()) {
     GTEST_SKIP() << "no lexicon at " << path;
@@ -2224,11 +2072,10 @@ TEST(Game, EndRackOutBonus) {
     found_out = true;
 
     const TurnRecord& last = log.turns.back();
-    const int winner = last.player;  // out-going player
+    const int winner = last.player;  // the player who went out
     const int loser = 1 - winner;
-    // Game applies the modern tournament convention: the out-going player
-    // gains twice the opponent's remaining tile values, and the opponent's
-    // score is left unchanged.
+    // Tournament convention: the player going out gains twice the opponent's
+    // remaining tile values; the opponent's score is unchanged.
     const int bonus = 2 * log.final_racks[loser].point_value();
 
     ASSERT_EQ(log.final_scores[winner], last.cumulative_scores[winner] + bonus);
@@ -2239,9 +2086,8 @@ TEST(Game, EndRackOutBonus) {
 }
 
 TEST(Game, EndStalematePenalty) {
-  // Two pass-agents: 6 consecutive zero turns trigger "stalemate" and each
-  // player's final = cumulative - their own remaining-rack value (cumulative
-  // is 0 for both -- nobody scored).
+  // Six consecutive zero-score turns end the game, and each player loses their
+  // own remaining rack value from a score of zero.
   Dictionary dict = medium_dict();
   AlwaysPassAgent a0(0, "P0");
   AlwaysPassAgent a1(0, "P1");
@@ -2250,7 +2096,7 @@ TEST(Game, EndStalematePenalty) {
   const scribblez::GameLogStorage log = g.extract_log();
 
   ASSERT_EQ(log.end_reason, "stalemate");
-  ASSERT_EQ(log.turns.size(), 6);  // 6 zero turns (3 per player)
+  ASSERT_EQ(log.turns.size(), 6);
   for (const auto& t : log.turns) ASSERT_EQ(t.move.type(), MoveType::PASS);
   for (int p = 0; p < 2; ++p) {
     ASSERT_EQ(log.final_scores[p], -log.final_racks[p].point_value());
@@ -2308,11 +2154,11 @@ static bool rack_contains(const Rack& r, Tile want) {
   return false;
 }
 
-// Bag::remove (build the unseen pool) and Game::play_from (Monte-Carlo rollout from
-// a mid-game position): the deal keeps the post-mover's leave, refills both racks
-// from the seeded pool, plays to a natural end, and is deterministic per seed.
+// Game::play_from, which starts a rollout from a mid-game position: it keeps
+// the known leave, fills both racks from the given pool, plays to a natural
+// end, and is deterministic per seed. Also checks Bag::remove, which callers
+// use to take known tiles out of the pool.
 TEST(Game, PlayFrom) {
-  // Bag::remove: a fully-removed letter never comes out of the bag.
   {
     Bag bag(123);
     const Tile a = Tile::from_char('A');
@@ -2322,35 +2168,35 @@ TEST(Game, PlayFrom) {
   }
 
   const Dictionary d = medium_dict();
-  const Board board;                    // empty post-move board (sufficient here)
-  const Rack leave = rack_from("ING");  // seat 0 (post-mover) leave
+  const Board board;
+  const Rack leave = rack_from("ING");  // seat 0 just moved and kept ING
   const std::array<Rack, 2> known = {leave, Rack{}};
   const std::array<int, 2> scores = {120, 95};
 
   GameLogStorage logs[2];
-  for (int run = 0; run < 2; ++run) {  // same seed twice -> identical (determinism)
+  for (int run = 0; run < 2; ++run) {  // the same seed twice
     const uint64_t seed = 7;
     Bag pool(seed);
-    for (int i = 0; i < leave.size(); ++i) pool.remove(leave.tiles()[i]);  // leave is off the bag
+    for (int i = 0; i < leave.size(); ++i) pool.remove(leave.tiles()[i]);
     TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
     TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
     scribblez::Game g(a0, a1, d, seed);
-    g.play_from(board, scores, known, pool, /*to_move=*/1);  // seat 0 just moved; seat 1 first
+    g.play_from(board, scores, known, pool, /*to_move=*/1);
     logs[run] = g.extract_log();
   }
 
-  ASSERT_FALSE(logs[0].end_reason.empty());               // reached a natural end
-  ASSERT_EQ(logs[0].initial_racks[0].size(), RACK_SIZE);  // post-mover topped up to 7
-  ASSERT_EQ(logs[0].initial_racks[1].size(), RACK_SIZE);  // on-move drew a fresh rack
-  for (int i = 0; i < leave.size(); ++i)                  // the leave is preserved
+  ASSERT_FALSE(logs[0].end_reason.empty());
+  ASSERT_EQ(logs[0].initial_racks[0].size(), RACK_SIZE);
+  ASSERT_EQ(logs[0].initial_racks[1].size(), RACK_SIZE);
+  for (int i = 0; i < leave.size(); ++i)
     ASSERT_TRUE(rack_contains(logs[0].initial_racks[0], leave.tiles()[i]));
-  ASSERT_EQ(logs[0].final_scores, logs[1].final_scores);  // deterministic per seed
+  ASSERT_EQ(logs[0].final_scores, logs[1].final_scores);
   ASSERT_EQ(logs[0].end_reason, logs[1].end_reason);
 }
 
-// Game::set_max_plies (a value-truncated rollout's horizon): play stops after
-// exactly the cap, truncated() reports it, no end-of-game score adjustment is
-// applied, and leave() exposes the last mover's post-move pre-draw rack.
+// Game::set_max_plies sets a truncated rollout's horizon. Play stops after
+// exactly the cap with no end-of-game score adjustment, and leave() gives the
+// last mover's rack after the move but before drawing.
 TEST(Game, MaxPliesTruncation) {
   const Dictionary d = medium_dict();
   const Board board;
@@ -2372,14 +2218,10 @@ TEST(Game, MaxPliesTruncation) {
   const GameLog log = g.log();
   ASSERT_EQ(log.num_records, kPlies);
   ASSERT_STREQ(log.end_reason, "truncated");
-  // Truncation applies no out/stalemate adjustment: the final scores are the
-  // running scores, the initial scores plus each player's move scores.
   std::array<int, 2> expected = scores;
   for (int i = 0; i < log.num_records; ++i)
     expected[log.records[i].player] += log.records[i].score_delta;
   ASSERT_EQ(log.final_scores, expected);
-  // leave(): the last mover's record's rack_before minus the tiles the move
-  // surrendered -- their post-move pre-draw rack.
   const TurnRecord& last = log.records[kPlies - 1];
   Rack expected_leave = last.rack_before;
   for (int i = 0; i < last.move.num_glyphs(); ++i)
@@ -2397,20 +2239,18 @@ TEST(Game, MaxPliesTruncation) {
   ASSERT_FALSE(g2.truncated());
 }
 
-// The cap never truncates an endgame: once the bag empties the game plays out
-// to a natural end, however many plies past the cap that takes -- the leaf
-// model's training domain is the pre-endgame prefix, so there is no valid
-// leaf to hand it there (see Game::set_max_plies).
+// The ply cap never truncates in the endgame: once the bag is empty the game
+// plays to a natural end. The leaf model that values a truncated rollout is
+// trained only on positions with tiles in the bag (see Game::set_max_plies).
 TEST(Game, MaxPliesSparesTheEndgame) {
   const Dictionary d = medium_dict();
   const Board board;
-  // Both racks fully known and a nearly-empty pool, so the bag empties within
-  // the first couple of plies while play continues.
+  // Both racks known and two tiles in the bag, so the bag empties within the
+  // first couple of plies.
   const std::array<Rack, 2> known = {rack_from("CATSEIQ"), rack_from("RATESIN")};
   const uint64_t seed = 7;
   Bag pool(seed);
   {
-    // Reduce the pool to exactly 2 tiles beyond the known racks.
     Bag two(seed);
     while (two.size() > 2) two.draw();
     pool = two;
@@ -2423,37 +2263,32 @@ TEST(Game, MaxPliesSparesTheEndgame) {
 
   const GameLog log = g.log();
   if (g.truncated()) {
-    // Truncation is only legitimate at a training-eligible capped ply: its
-    // pre-move bag must have been non-empty.
+    // Truncation is allowed only at a ply that began with tiles in the bag.
     ASSERT_GT(log.records[log.num_records - 1].bag_size_before, 0);
   } else {
-    // The expected path with a 2-tile bag: the cap passed inside the endgame
-    // and was ignored, so the game reached a natural end beyond it.
+    // The expected path: the cap fell inside the endgame and was ignored.
     ASSERT_GE(log.num_records, 3);
     ASSERT_TRUE(std::string(log.end_reason) == "out" || std::string(log.end_reason) == "stalemate");
   }
 }
 
 // ===========================================================================
-// LabelEncoder
+// Training targets
 // ===========================================================================
 
 namespace {
 
-// The label row lays the eight targets out as
+// Label row layout (AllTargets order):
 //   [wld(3), score_diff(1),
 //    opp_next(1), self_next(1), opp_win(1), self_win(1),   // footprint class index
-//    opp_placement_mask(N), self_placement_mask(N)]        // N=kFootprintClasses
-// -- the four placement heads are a single categorical footprint class each; the
-// two per-side legality masks (plays-head form, kExtraClass illegal) are shared,
-// a head's win variant opening kExtraClass in the loss.
+//    opp_placement_mask(N), self_placement_mask(N)]        // N = kFootprintClasses
+// Each side's legality mask serves both its next and win heads. The mask marks
+// kExtraClass illegal; the loss makes it legal for the win head.
 constexpr int kClassBase = kWldFloats + kScoreDiffFloats;
 constexpr int kMaskBase = kClassBase + 4 * kPlacementClassFloats;
 
-// An EncodeContext holding just the fields the label targets read: the final
-// scores / POV (wld, score_diff, win-head gating) and the encoder + spec the
-// masks read the sampled board and dictionary through. The next moves stay
-// unset -- a caller that wants the placement class targets exercised sets them.
+// An EncodeContext with the POV, final scores and encoder set. The next moves
+// are unset; callers testing the placement class targets set them.
 scribblez::EncodeContext scores_view(const GameStateEncoder& enc, const InputEncodingSpec& spec,
                                      int fs_active, int fs_opp, int active_player) {
   scribblez::EncodeContext v{};
@@ -2465,11 +2300,8 @@ scribblez::EncodeContext scores_view(const GameStateEncoder& enc, const InputEnc
   return v;
 }
 
-// The label targets read the sampled board and dictionary through the context's
-// encoder for the masks; a single empty-board encoder over an in-memory
-// dictionary serves every sub-case (only the board matters to the masks, and on
-// an empty board every square is unconstrained, so the opp mask is
-// dictionary-free but still binds the caches). The class targets need no board.
+// An empty-board encoder for the label tests. Only the legality masks read the
+// board, and on an empty board they do not depend on the dictionary.
 struct LabelFixture {
   Dictionary dict = Dictionary::build_from_words({"CAT", "CATS", "BAT"});
   InputEncodingSpec spec{&dict};
@@ -2513,13 +2345,12 @@ TEST(TrainingTargets, EncodeLabelsWldAndScoreDiff) {
   ASSERT_EQ(flat[2], 1.0f);
   check_score_diff(-15);
 
-  // Large differentials are stored as-is (not clipped or rejected).
+  // Large differentials are stored unclipped.
   encode_labels_flat(fx.view(620, 0, 0), flat.data());
   check_score_diff(620);
   encode_labels_flat(fx.view(0, 620, 0), flat.data());
   check_score_diff(-620);
 
-  // WLD entries are mutually exclusive and sum to 1.0 for every case.
   for (auto [a, b] : std::vector<std::pair<int, int>>{{1, 0}, {0, 0}, {-5, 5}, {200, -200}}) {
     encode_labels_flat(fx.view(a, b, 0), flat.data());
     ASSERT_EQ(flat[0] + flat[1] + flat[2], 1.0f);
@@ -2537,9 +2368,8 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   const float* opp_mask = flat.data() + kMaskBase + 0 * kFootprintClasses;
   const float* self_mask = flat.data() + kMaskBase + 1 * kFootprintClasses;
 
-  // No next move -> the plays heads are kPassClass, and pass is always legal in
-  // both side masks; the not-win (extra) class is illegal in the plays-head-form
-  // side mask (the loss opens it for win heads).
+  // With no next move the next heads are kPassClass, which both masks allow.
+  // Both masks mark kExtraClass illegal.
   auto v = fx.view(/*fs_active=*/100, /*fs_opp=*/80, /*active_player=*/0);
   encode_labels_flat(v, flat.data());
   ASSERT_EQ(flat[opp_next], float(kPassClass));
@@ -2549,9 +2379,9 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   ASSERT_EQ(opp_mask[kExtraClass], 0.0f);
   ASSERT_EQ(self_mask[kExtraClass], 0.0f);
 
-  // A horizontal opponent PLAY at (4,2) covering 3 empty cells -> its footprint
-  // class, which the opp mask keeps (the -log(0) soundness property) and whose
-  // covered cells round-trip on the (empty) sampled board.
+  // An opponent PLAY maps to its footprint class, which the opp mask must allow
+  // (a masked-out target would give the loss -log(0)). The class decodes back
+  // to the play's cells.
   Move next_play = make_play_full(4, 2, /*horizontal=*/true, 0b111, 0,
                                   {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
                                    Glyph::of(Tile::from_char('C'))});
@@ -2569,8 +2399,8 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   ASSERT_EQ(cells[1], std::make_pair(4, 3));
   ASSERT_EQ(cells[2], std::make_pair(4, 4));
 
-  // In the transposed frame (board and next move transposed together) the class
-  // transposes with the move: anchor (4,2) -> (2,4), horizontal -> vertical.
+  // In the transposed frame the class transposes with the move: anchor (4,2)
+  // becomes (2,4) and the play becomes vertical.
   const GameStateEncoder enc_t = fx.enc.transpose();
   v.enc = &enc_t;
   v.opp_next_move = next_play.transpose();
@@ -2579,29 +2409,28 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   v.enc = &fx.enc;
   v.opp_next_move = next_play;
 
-  // EXCHANGE next move -> kPassClass.
+  // An EXCHANGE maps to kPassClass.
   TileCounts xch_tiles;
   xch_tiles.add(Tile::from_char('A'));
   v.opp_next_move = Move::exchange(xch_tiles);
   encode_labels_flat(v, flat.data());
   ASSERT_EQ(int(flat[opp_next]), kPassClass);
 
-  // --- Win heads: the footprint if that seat won, else kExtraClass (not-win) ---
-  v.opp_next_move = next_play;  // opponent plays; active player (0) is winning
+  // Win heads: the played footprint if that seat won, else kExtraClass.
+  v.opp_next_move = next_play;
 
-  // Active player winning -> the opponent did NOT win -> opp_win is not-win.
+  // The active player (0) is winning, so opp_win is kExtraClass.
   encode_labels_flat(v, flat.data());
   ASSERT_EQ(int(flat[opp_win]), kExtraClass);
 
-  // Opponent winning -> opp_win is the played footprint, same class as opp_next.
+  // With the opponent winning, opp_win equals opp_next.
   v.final_score_p0 = 80;
   v.final_score_p1 = 100;
   encode_labels_flat(v, flat.data());
   ASSERT_EQ(int(flat[opp_win]), int(flat[opp_next]));
   ASSERT_LT(int(flat[opp_win]), kAnchoredFootprints);
 
-  // A vertical mover PLAY at (7,3)/(8,3): self_next is always its footprint;
-  // self_win is that footprint only when the mover wins, else not-win.
+  // The same for the mover's own next play.
   Move self_play =
     make_play_full(7, 3, /*horizontal=*/false, 0b11, 0,
                    {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('E'))});
@@ -2611,8 +2440,7 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
   encode_labels_flat(v, flat.data());  // mover (0) losing
   ASSERT_EQ(int(flat[self_next]), footprint_class(self_play));
   ASSERT_EQ(int(flat[self_win]), kExtraClass);
-  // The self side mask keeps the played footprint legal (the -log(0) property);
-  // kExtraClass stays illegal here -- the loss opens it for the self_win head.
+  // The self mask must allow the played footprint too.
   ASSERT_EQ(self_mask[footprint_class(self_play)], 1.0f);
   ASSERT_EQ(self_mask[kExtraClass], 0.0f);
 
@@ -2633,42 +2461,34 @@ TEST(TrainingTargets, EncodeLabelsPlacementFootprints) {
 }
 
 // ===========================================================================
-// DataLoader: per-row diagonal-transpose symmetry
+// DataLoader
 // ===========================================================================
 
-// Build a one-game .slog file under `dir` whose 2-turn game is:
-//   turn 0: p0 PLAYs a synthetic single-tile move placing 'Q' at (3,5)
-//   turn 1: p1 PASSes
-// The file declares a single eligible turn (turn 0), so the loader expands it to
-// exactly one training row. The position under test is turn 0 POST-move: the
-// board already holds the asymmetric Q, the POV is the mover (p0), whose leave
-// is the 6 As. Returns the file path, the on-disk size, and the
-// (path-independent) state describing that position so the test can build its
-// reference encoding.
+// A one-game .slog with a single eligible turn: p0 plays Q at (3,5), then p1
+// passes. The loader's one row is turn 0 post-move, from p0's POV with a leave
+// of six As. The Q sits off the diagonal, so the position is not
+// transpose-symmetric. The other fields let the test build the reference
+// encoding.
 struct SymFixture {
   std::filesystem::path path;
   int64_t fsize;
-  // Reproducible inputs to encode_input for the position we'll sample.
-  scribblez::Rack active_rack;  // POV (p0) leave after the Q play: 6 As
-  scribblez::Move self_move;    // the Q play, applied to reach the post-move state
+  scribblez::Rack active_rack;
+  scribblez::Move self_move;
   int final_score_p0;
   int final_score_p1;
-  int active_player;  // POV = p0 (the mover at turn 0)
+  int active_player;
 };
 
 static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   using namespace scribblez::binlog;
   using namespace scribblez;
 
-  // Initial racks. p0 gets Q + 6 As (no draws, so size never replenishes);
-  // p1 starts empty so the bag-derivation has no contribution from them.
+  // No draws are recorded, so p0's rack after the Q is exactly the six As.
   Rack p0_init;
   p0_init.add(Tile::from_char('Q'));
   for (int i = 0; i < 6; ++i) p0_init.add(Tile::from_char('A'));
-  Rack p1_init;  // empty
+  Rack p1_init;
 
-  // Synthetic 1-tile PLAY: place 'Q' at (3,5). Score is arbitrary; we'll
-  // record it in the move and recompute it in the reference.
   Move q_play =
     make_play_full(3, 5, /*horizontal=*/true, 0b1, 42, {Glyph::of(Tile::from_char('Q'))});
 
@@ -2687,13 +2507,13 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   hdr.magic = kMagic;
   hdr.version = kVersion;
   hdr.num_games = 1;
-  hdr.num_sample_positions = 1;  // one eligible turn -> one training row
+  hdr.num_sample_positions = 1;
 
   GameMetadata gm{};
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
-  gm.sampled_turn = 0;    // eval-only; training uses the eligible region
-  gm.eligible_begin = 0;  // expand to one row: turn 0
+  gm.sampled_turn = 0;  // eval-only; training uses the eligible region
+  gm.eligible_begin = 0;
   gm.eligible_end = 1;
   gm.final_score_p0 = 350;
   gm.final_score_p1 = 200;
@@ -2710,8 +2530,6 @@ static SymFixture write_one_position_slog(const std::filesystem::path& dir) {
   }
   int64_t fsize = std::filesystem::file_size(path);
 
-  // Canonical state for turn 0 post-move: POV is p0 (the mover), whose leave is
-  // the 6 As; applying q_play places the Q and gives p0 a score of 42.
   SymFixture out;
   out.path = path;
   out.fsize = fsize;
@@ -2741,28 +2559,19 @@ TEST(DataLoader, PerRowSymmetry) {
   SymFixture fix = write_one_position_slog(dir);
   Dictionary dict = medium_dict();
 
-  // Build the two reference input encodings (canonical + flipped) for the
-  // sampled position (turn 0 post-move).
   std::vector<float> ref_normal(kInputFloats, 0.0f);
   std::vector<float> ref_flipped(kInputFloats, 0.0f);
   {
-    // Apply the q_play so the encoder lands in the turn-0 post-move state:
-    // board has Q at (3,5), p0 (the mover) scored 42, last_move_by_p0 = q_play.
-    // The POV is the mover (p0), encoded with its post-play leave (6 As).
     GameStateEncoder ref_enc{InputEncodingSpec{&dict}};
     ref_enc.apply_move(fix.self_move);
     ref_enc.encode_input(fix.active_player, fix.active_rack, ref_normal.data());
     ref_enc.transpose().encode_input(fix.active_player, fix.active_rack, ref_flipped.data());
   }
-  // Sanity: the two encodings differ (asymmetric Q placement).
   ASSERT_NE(std::memcmp(ref_normal.data(), ref_flipped.data(), kInputFloats * sizeof(float)), 0);
 
-  // Expected labels for active=p0 (final p0=350 vs p1=200 -> active wins by
-  // 150). The move after turn 0 is p1's PASS and the game has no turn 2, so the
-  // placement class targets are all pass/not-win; but the legality masks read
-  // the (asymmetric) sampled board, so the label tail is NOT transpose-invariant --
-  // a flipped row carries the transposed masks. Build both frames from an
-  // encoder in the turn-0 post-move state (the Q applied).
+  // The labels are not transpose-invariant either: the placement class targets
+  // are all pass/not-win here, but the legality masks read the asymmetric board,
+  // so a flipped row carries transposed masks.
   GameStateEncoder label_enc{InputEncodingSpec{&dict}};
   label_enc.apply_move(fix.self_move);
   const GameStateEncoder label_enc_t = label_enc.transpose();
@@ -2775,7 +2584,6 @@ TEST(DataLoader, PerRowSymmetry) {
   encode_labels_flat(
     scores_view(label_enc_t, label_spec, fix.final_score_p0, fix.final_score_p1, fix.active_player),
     ref_labels_flipped);
-  // The masks make the two frames differ, so the transpose actually reaches labels.
   ASSERT_NE(std::memcmp(ref_labels, ref_labels_flipped, kLabelFloats * sizeof(float)), 0);
 
   DataLoader::Params params;
@@ -2785,10 +2593,6 @@ TEST(DataLoader, PerRowSymmetry) {
   DataLoader loader(params);
   loader.add_file(fix.path.string(), /*num_positions=*/1, fix.fsize);
 
-  // The fixture has a single game contributing a single sample row.
-
-  // apply_symmetry=false: the single row must match the canonical
-  // (unflipped) encoding.
   {
     DataLoader::EpochConfig cfg;
     cfg.batch_size = 1;
@@ -2802,8 +2606,8 @@ TEST(DataLoader, PerRowSymmetry) {
     ASSERT_EQ(std::memcmp(rows.data() + kInputFloats, ref_labels, kLabelFloats * sizeof(float)), 0);
   }
 
-  // apply_symmetry=true: each epoch uses a different seed, producing a
-  // different transpose decision. Over many seeds we expect both buckets.
+  // With apply_symmetry, the transpose is a per-row coin flip seeded by the
+  // epoch seed, so many seeds must produce both frames.
   {
     constexpr int n = 200;
     std::vector<float> row(kRowFloats, 0.0f);
@@ -2820,9 +2624,8 @@ TEST(DataLoader, PerRowSymmetry) {
         std::memcmp(row.data(), ref_normal.data(), kInputFloats * sizeof(float)) == 0;
       const bool is_flipped =
         std::memcmp(row.data(), ref_flipped.data(), kInputFloats * sizeof(float)) == 0;
-      ASSERT_TRUE(is_normal || is_flipped);  // every row matches one of the two
-      // The label tail flips with the input: a normal row carries the canonical
-      // masks, a flipped row the transposed ones.
+      ASSERT_TRUE(is_normal || is_flipped);
+      // The labels must be in the same frame as the input.
       const float* want = is_normal ? ref_labels : ref_labels_flipped;
       if (is_normal)
         ++normal_count;
@@ -2830,8 +2633,7 @@ TEST(DataLoader, PerRowSymmetry) {
         ++flipped_count;
       ASSERT_EQ(std::memcmp(row.data() + kInputFloats, want, kLabelFloats * sizeof(float)), 0);
     }
-    // With n=200 fair coin flips, the probability that one bucket is empty
-    // is 2 * 2^-200; the test is effectively deterministic.
+    // A spurious failure needs 200 identical fair flips: probability 2^-199.
     ASSERT_GT(normal_count, 0);
     ASSERT_GT(flipped_count, 0);
     std::cout << "  DataLoader per-row symmetry: " << normal_count << " normal / " << flipped_count
@@ -2839,9 +2641,8 @@ TEST(DataLoader, PerRowSymmetry) {
   }
 }
 
-// The DataLoader maps a game's flat rows to turns starting at eligible_begin:
-// a two-PLAY game whose metadata declares the region [1, 2) expands to exactly
-// one row, and that row is the turn-1 post-move encoding (POV p1), not turn 0.
+// A game's rows start at eligible_begin: with the region [1, 2), the single row
+// is the turn-1 post-move position (POV p1), not turn 0.
 TEST(DataLoader, EligibleBeginOffset) {
   using namespace scribblez::binlog;
   namespace fs = std::filesystem;
@@ -2857,8 +2658,7 @@ TEST(DataLoader, EligibleBeginOffset) {
     }
   } cleanup{dir};
 
-  // Synthetic game: turn 0 p0 plays 'Q' at (3,5); turn 1 p1 plays 'C' at (7,3).
-  // Each player's leave after their play is 6 As.
+  // p0 plays Q, then p1 plays C; each keeps six As.
   Rack p0_init;
   p0_init.add(Tile::from_char('Q'));
   for (int i = 0; i < 6; ++i) p0_init.add(Tile::from_char('A'));
@@ -2889,7 +2689,7 @@ TEST(DataLoader, EligibleBeginOffset) {
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
   gm.sampled_turn = 1;
-  gm.eligible_begin = 1;  // the single flat row stands for turn 1
+  gm.eligible_begin = 1;
   gm.eligible_end = 2;
   gm.final_score_p0 = 350;
   gm.final_score_p1 = 200;
@@ -2908,8 +2708,6 @@ TEST(DataLoader, EligibleBeginOffset) {
 
   Dictionary dict = medium_dict();
 
-  // Reference: replay both moves, then encode turn 1 post-move -- POV p1 with
-  // its post-play leave (6 As).
   std::vector<float> ref_row(kInputFloats, 0.0f);
   {
     GameStateEncoder ref_enc{InputEncodingSpec{&dict}};
@@ -2919,10 +2717,8 @@ TEST(DataLoader, EligibleBeginOffset) {
     for (int i = 0; i < 6; ++i) leave.add(Tile::from_char('A'));
     ref_enc.encode_input(/*active_player=*/1, leave, ref_row.data());
   }
-  // Labels for POV p1 (final 200 vs 350); turn 1 is the last turn, so the
-  // placement class targets are all pass/not-win. The legality masks read the
-  // turn-1 post-move board, so the reference encoder must be in that state
-  // (both plays applied), matching the loader's unflipped row.
+  // The legality masks read the board, so the label encoder must also be in the
+  // turn-1 post-move state.
   GameStateEncoder label_enc{InputEncodingSpec{&dict}};
   label_enc.apply_move(q_play);
   label_enc.apply_move(c_play);
@@ -2952,11 +2748,7 @@ TEST(DataLoader, EligibleBeginOffset) {
   std::cout << "  DataLoader eligible_begin offset decode OK\n";
 }
 
-// ===========================================================================
-// Epoch-based DataLoader tests
-// ===========================================================================
-
-// Helper: write N games via BinaryLogWriter and return the .slog path + game count.
+// Self-play games written through BinaryLogWriter into `num_files` .slog files.
 struct SlogFixture {
   std::filesystem::path dir;
   std::vector<std::filesystem::path> slog_paths;
@@ -2987,8 +2779,9 @@ static SlogFixture write_multi_file_slog(int games_per_file, int num_files) {
   return fix;
 }
 
+// An epoch's rows are a function of its seed alone, across loaders and across
+// repeated epochs on one loader.
 TEST(DataLoader, EpochDeterminism) {
-  // Two epoch_start calls with the same seed must produce identical output.
   using namespace scribblez::binlog;
   namespace fs = std::filesystem;
 
@@ -3007,7 +2800,6 @@ TEST(DataLoader, EpochDeterminism) {
   params.num_worker_threads = 2;
   params.num_prefetch_threads = 1;
 
-  // Run two epochs with the same seed and verify byte-identical output.
   const int batch_size = 4;
   const uint64_t seed = 12345;
 
@@ -3029,7 +2821,6 @@ TEST(DataLoader, EpochDeterminism) {
     return all_data;
   };
 
-  // First run.
   DataLoader loader1(params);
   for (auto& p : fix.slog_paths) {
     std::ifstream f(p, std::ios::binary);
@@ -3040,7 +2831,6 @@ TEST(DataLoader, EpochDeterminism) {
   }
   auto data1 = run_epoch(loader1);
 
-  // Second run: fresh loader, same files, same seed.
   DataLoader loader2(params);
   for (auto& p : fix.slog_paths) {
     std::ifstream f(p, std::ios::binary);
@@ -3055,12 +2845,10 @@ TEST(DataLoader, EpochDeterminism) {
   ASSERT_GT(data1.size(), 0);
   ASSERT_EQ(std::memcmp(data1.data(), data2.data(), data1.size() * sizeof(float)), 0);
 
-  // Third run: same loader, same seed again -- must also be identical.
   auto data3 = run_epoch(loader1);
   ASSERT_EQ(data3.size(), data1.size());
   ASSERT_EQ(std::memcmp(data1.data(), data3.data(), data1.size() * sizeof(float)), 0);
 
-  // Fourth run: different seed -- must differ.
   {
     DataLoader::EpochConfig cfg;
     cfg.batch_size = batch_size;
@@ -3082,10 +2870,9 @@ TEST(DataLoader, EpochDeterminism) {
   std::cout << "  epoch determinism OK (" << data1.size() / kRowFloats << " rows)\n";
 }
 
+// Each epoch visits every row exactly once: two differently seeded epochs hold
+// the same rows in different orders.
 TEST(DataLoader, EpochCoverage) {
-  // Every position in the dataset must appear exactly once per epoch.
-  // Verified by running two epochs with different seeds and confirming
-  // that they contain the same set of rows (just in different order).
   using namespace scribblez::binlog;
   namespace fs = std::filesystem;
 
@@ -3112,15 +2899,14 @@ TEST(DataLoader, EpochCoverage) {
     int64_t fsize = fs::file_size(p);
     loader.add_file(p.string(), hdr.num_games, fsize);
   }
-  // Each game expands to one row per eligible turn; the loader knows the total.
+  // Each game has several eligible turns, so rows outnumber games.
   const int64_t total_positions = loader.num_positions();
-  ASSERT_GT(total_positions, fix.total_games);  // strictly more rows than games
+  ASSERT_GT(total_positions, fix.total_games);
 
-  // Helper: drain a full epoch into a flat float vector.
   const int row_sz = kRowFloats;
   auto drain_epoch = [&](uint64_t seed) {
     DataLoader::EpochConfig cfg;
-    cfg.batch_size = 3;  // doesn't evenly divide 12 -> tests partial batch
+    cfg.batch_size = 3;
     cfg.post_move = true;
     cfg.apply_symmetry = false;
     cfg.seed = seed;
@@ -3139,15 +2925,11 @@ TEST(DataLoader, EpochCoverage) {
   std::vector<float> epoch1 = drain_epoch(7777);
   std::vector<float> epoch2 = drain_epoch(8888);
 
-  // Both epochs must contain exactly total_positions rows.
   ASSERT_EQ(int64_t(epoch1.size()), total_positions * row_sz);
   ASSERT_EQ(int64_t(epoch2.size()), total_positions * row_sz);
 
-  // The two epochs have different seeds, so should be in different order.
   ASSERT_NE(std::memcmp(epoch1.data(), epoch2.data(), epoch1.size() * sizeof(float)), 0);
 
-  // Every row in epoch1 must appear exactly once in epoch2 (same content,
-  // different order).
   std::vector<bool> found(total_positions, false);
   for (int64_t ei = 0; ei < total_positions; ++ei) {
     const float* row1 = epoch1.data() + ei * row_sz;
@@ -3167,10 +2949,9 @@ TEST(DataLoader, EpochCoverage) {
   std::cout << "  epoch coverage OK (" << total_positions << " positions)\n";
 }
 
+// A memory budget of one file forces the loader to evict and reload files
+// throughout a shuffled epoch. Every row must still come out, deterministically.
 TEST(DataLoader, EpochMemoryBudgetStress) {
-  // Set a tiny memory budget (just enough for one file) and run a full epoch.
-  // This exercises LRU eviction heavily: the loader must load/evict files
-  // repeatedly as it walks through shuffled file-level work units.
   using namespace scribblez::binlog;
   namespace fs = std::filesystem;
 
@@ -3183,7 +2964,6 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
     }
   } cleanup{fix.dir};
 
-  // Find the largest file size to set a budget just above it.
   int64_t max_fsize = 0;
   std::vector<std::pair<int64_t, int64_t>> file_info;  // (num_pos, fsize)
   for (auto& p : fix.slog_paths) {
@@ -3195,11 +2975,10 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
     if (fsize > max_fsize) max_fsize = fsize;
   }
 
-  // Budget = just one file (largest). This forces eviction on every file switch.
   Dictionary dict = medium_dict();
   DataLoader::Params params;
   params.spec = {&dict};
-  params.memory_budget = max_fsize + 1;  // allow exactly one file at a time
+  params.memory_budget = max_fsize + 1;
   params.num_worker_threads = 1;
   params.num_prefetch_threads = 1;
   DataLoader loader(params);
@@ -3209,7 +2988,6 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
   }
   const int64_t total_positions = loader.num_positions();
 
-  // Run epoch with batch_size=2 (small batches = more file switches).
   DataLoader::EpochConfig cfg;
   cfg.batch_size = 2;
   cfg.post_move = true;
@@ -3223,13 +3001,11 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
     int n = loader.load_batch(batch.data());
     if (n == 0) break;
     rows_decoded += n;
-    // Memory should never exceed budget + one extra file (prefetch).
-    // In practice with prefetch disabled (budget too tight), should be <= 2 * max_fsize.
+    // Residency may exceed the one-file budget by at most one more file.
     ASSERT_LE(loader.resident_bytes(), 2 * max_fsize + 100);
   }
   ASSERT_EQ(rows_decoded, total_positions);
 
-  // Verify determinism: same seed produces same data.
   loader.epoch_start(cfg);
   std::vector<float> run1;
   while (true) {
@@ -3254,7 +3030,6 @@ TEST(DataLoader, EpochMemoryBudgetStress) {
 }
 
 TEST(DataLoader, EpochShufflesAcrossSeeds) {
-  // Different seeds produce different orderings of the same data.
   using namespace scribblez::binlog;
   namespace fs = std::filesystem;
 
@@ -3286,7 +3061,7 @@ TEST(DataLoader, EpochShufflesAcrossSeeds) {
     DataLoader::EpochConfig cfg;
     cfg.batch_size = 4;
     cfg.post_move = true;
-    cfg.apply_symmetry = false;  // no flips -- pure shuffle test
+    cfg.apply_symmetry = false;
     cfg.seed = seed;
     loader.epoch_start(cfg);
     std::vector<float> data;
@@ -3301,14 +3076,12 @@ TEST(DataLoader, EpochShufflesAcrossSeeds) {
 
   auto d1 = run_with_seed(100);
   auto d2 = run_with_seed(200);
-  auto d3 = run_with_seed(100);  // same as d1
+  auto d3 = run_with_seed(100);
 
   ASSERT_EQ(d1.size(), d2.size());
   ASSERT_EQ(d1.size(), d3.size());
   ASSERT_GT(d1.size(), 0);
-  // Same seed -> identical.
   ASSERT_EQ(std::memcmp(d1.data(), d3.data(), d1.size() * sizeof(float)), 0);
-  // Different seed -> different ordering.
   ASSERT_NE(std::memcmp(d1.data(), d2.data(), d1.size() * sizeof(float)), 0);
 
   std::cout << "  epoch seed-shuffle OK\n";
@@ -3318,19 +3091,10 @@ TEST(DataLoader, EpochShufflesAcrossSeeds) {
 // LeaveValues and HastyEquity tests
 // =========================================================================
 
-// Build and write a minimal .klv2 file in a temp path.
-// The KWG encodes three single-tile leaves: the blank "?" (tile=0), "A"
-// (tile=1) and "B" (tile=2). Macondo's leave KWG numbers the blank as machine
-// letter 0 (sorting ahead of the letters), so including it here exercises the
-// blank-leave mapping that real exchanges depend on.
-// KWG node layout: bits 0..21 arc_index, 22 is_end, 23 accepts, 24..31 tile.
-//
-// Node 0 (root): arc_index=1, is_end=1, accepts=0, tile=0
-// Node 1 (?):    arc_index=0, is_end=0, accepts=1, tile=0
-// Node 2 (A):    arc_index=0, is_end=0, accepts=1, tile=1
-// Node 3 (B):    arc_index=0, is_end=1, accepts=1, tile=2
-//
-// Word order: ?(index 0) = 12.0f, A(index 1) = 1.5f, B(index 2) = -2.5f.
+// A minimal .klv2 holding three single-tile leaves: ? = 12.0, A = 1.5 and
+// B = -2.5. Macondo's leave KWG numbers the blank as machine letter 0, ahead of
+// the letters, so the blank entry exercises that mapping.
+// KWG node bits: 0..21 arc_index, 22 is_end, 23 accepts, 24..31 tile.
 struct KlvFixture {
   std::filesystem::path path;
 };
@@ -3342,18 +3106,12 @@ KlvFixture write_synthetic_klv(const std::filesystem::path& dir) {
   auto write_u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
   auto write_f32 = [&](float v) { f.write(reinterpret_cast<const char*>(&v), 4); };
 
-  // kwg_node_count = 4
-  write_u32(4);
-  // Node 0: root; arc_index=1, is_end=1, accepts=0, tile=0
-  write_u32((0u << 24) | (1u << 22) | (0u << 23) | 1u);
-  // Node 1: ? (blank); arc_index=0, is_end=0, accepts=1, tile=0
-  write_u32((0u << 24) | (0u << 22) | (1u << 23) | 0u);
-  // Node 2: A; arc_index=0, is_end=0, accepts=1, tile=1
-  write_u32((1u << 24) | (0u << 22) | (1u << 23) | 0u);
-  // Node 3: B; arc_index=0, is_end=1, accepts=1, tile=2
-  write_u32((2u << 24) | (1u << 22) | (1u << 23) | 0u);
-  // num_leaves = 3
-  write_u32(3);
+  write_u32(4);                                          // node count
+  write_u32((0u << 24) | (1u << 22) | (0u << 23) | 1u);  // root: arcs start at node 1
+  write_u32((0u << 24) | (0u << 22) | (1u << 23) | 0u);  // ?
+  write_u32((1u << 24) | (0u << 22) | (1u << 23) | 0u);  // A
+  write_u32((2u << 24) | (1u << 22) | (1u << 23) | 0u);  // B, last sibling
+  write_u32(3);                                          // leave count, then values in word order
   write_f32(12.0f);
   write_f32(1.5f);
   write_f32(-2.5f);
@@ -3369,27 +3127,23 @@ TEST(LeaveValues, Synthetic) {
   KlvFixture fix = write_synthetic_klv(tmp);
   LeaveValues lv = LeaveValues::load(fix.path.string());
 
-  // Leave "A"
   Rack a;
   a.add(Tile::from_char('A'));
   ASSERT_LT(std::abs(lv.lookup(a) - 1.5f), 1e-4f);
 
-  // Leave "B"
   Rack b;
   b.add(Tile::from_char('B'));
   ASSERT_LT(std::abs(lv.lookup(b) - (-2.5f)), 1e-4f);
 
-  // Leave "?" (blank). Macondo's leave KWG numbers the blank as machine letter
-  // 0; a regression here means blank-bearing leaves silently look up as 0.
+  // A mis-mapped blank would silently look up as 0.
   Rack blank;
   blank.add(BLANK);
   ASSERT_LT(std::abs(lv.lookup(blank) - 12.0f), 1e-4f);
 
-  // Empty leave → 0
   Rack empty;
   ASSERT_EQ(lv.lookup(empty), 0.0f);
 
-  // Unknown leave (C) → 0
+  // A leave missing from the table is worth 0.
   Rack c;
   c.add(Tile::from_char('C'));
   ASSERT_EQ(lv.lookup(c), 0.0f);
@@ -3398,8 +3152,7 @@ TEST(LeaveValues, Synthetic) {
 }
 
 TEST(LeaveValues, RealKwg) {
-  // The real NWL23 leave values ship with the Macondo checkout; skip if that
-  // is not installed.
+  // The NWL23 leave values ship with the Macondo checkout.
   const std::string klv_path = HastyEquity::default_leaves_path("NWL23");
   if (!std::filesystem::exists(klv_path)) {
     GTEST_SKIP() << "no leaves.klv2 at " << klv_path;
@@ -3407,27 +3160,23 @@ TEST(LeaveValues, RealKwg) {
 
   LeaveValues lv = LeaveValues::load(klv_path);
 
-  // Single blank is a well-known leave with strongly positive value.
   Rack blank_leave;
   blank_leave.add(BLANK);
   float blank_val = lv.lookup(blank_leave);
-  ASSERT_GT(blank_val, 20.0f);  // known to be ~24..26 in Macondo NWL23
+  ASSERT_GT(blank_val, 20.0f);  // about 25 in Macondo's NWL23 table
 
-  // Empty leave is 0.
   Rack empty;
   ASSERT_EQ(lv.lookup(empty), 0.0f);
 }
 
 TEST(HastyEquity, Components) {
-  // Test the four equity components individually without initialising the
-  // singleton (we call the pure functions via a test harness that constructs
-  // a HastyEquity from a synthetic KLV).
+  // The equity components one at a time, on the synthetic leaves and an empty
+  // pre-endgame table (so the PEG term is always 0).
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_heq_XXXXXX";
   fs::create_directories(tmp);
 
   KlvFixture fix = write_synthetic_klv(tmp);
-  // Write an empty PEG JSON (valid empty array).
   std::filesystem::path peg_path = tmp / "peg.json";
   {
     std::ofstream pf(peg_path);
@@ -3437,10 +3186,10 @@ TEST(HastyEquity, Components) {
   HastyEquity::init(fix.path.string(), peg_path.string());
 
   const HastyEquity& eq = HastyEquity::instance();
-  Board board;  // empty
+  Board board;
   Rack opp;
 
-  // --- leave equity: PLAY move that uses all 7 tiles (empty leave) mid-game
+  // Opening adjustment: a seven-A opening over columns 4..10.
   Move all_out = make_play_full(7, 4, /*horizontal=*/true, 0b1111111, 50,
                                 {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('A')),
                                  Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('A')),
@@ -3450,67 +3199,54 @@ TEST(HastyEquity, Components) {
   Rack rack_7a;
   for (int i = 0; i < 7; ++i) rack_7a.add(Tile::from_char('A'));
 
-  // With bag_size > 0, leave is empty → leave_equity = 0.
-  // Opening adjustment: tile A at columns 4..10; columns 6 and 8 are in
-  // penalty set, both have vowel A → 2 * -0.7 = -1.4.
+  // The leave is empty (worth 0). Columns 6 and 8 are penalised opening
+  // squares, each holding a vowel: 2 * -0.7 = -1.4.
   double e_mid = eq.equity(all_out, board, 86, opp, rack_7a);
   ASSERT_LT(std::abs(e_mid - (50.0 - 1.4)), 1e-3);
 
-  // --- leave equity with non-empty leave (uses synthetic KLV: A=1.5, B=-2.5)
-  // Play a single A, leaving AAAAAA (6 A's). Our synthetic KLV only has
-  // single-tile leaves so the 6-tile leave returns 0.
+  // An opening A on the center column, which is not penalised.
   Move one_a = make_play_full(7, 7, /*horizontal=*/true, 0b1, 2, {Glyph::of(Tile::from_char('A'))});
 
-  // rack = single A; leave = empty after playing it.
   Rack rack_1a;
   rack_1a.add(Tile::from_char('A'));
   double e_one = eq.equity(one_a, board, 86, opp, rack_1a);
-  // score=2, leave=empty(0), opening: center col=7 not in {2,6,8,12} → 0
   ASSERT_LT(std::abs(e_one - 2.0), 1e-3);
 
-  // --- endgame adjustment (bag_size = 0, non-out play)
-  // Leave a single B on the rack (leave value from KLV = -2.5 but ignored
-  // for endgame penalty which uses tile point values).
+  // Endgame, not going out: the leave's KLV value is ignored, and the mover pays
+  // twice the leave's tile points plus 10. Leaving B (3 points): -2 * 3 - 10.
   Move play_a_endgame =
     make_play_full(7, 7, /*horizontal=*/true, 0b1, 2, {Glyph::of(Tile::from_char('A'))});
 
-  // Rack = AB, play A, leave = B (value 3). bag_size = 0.
-  // endgame_adjustment = -2 * 3 - 10 = -16.
   Rack rack_ab;
   rack_ab.add(Tile::from_char('A'));
   rack_ab.add(Tile::from_char('B'));
-  Board board_with_tiles;                                       // non-empty so opening adj = 0
-  board_with_tiles.set(0, 0, Glyph::of(Tile::from_char('Q')));  // make non-empty
+  Board board_with_tiles;  // not an opening, so no opening adjustment
+  board_with_tiles.set(0, 0, Glyph::of(Tile::from_char('Q')));
   double e_eg = eq.equity(play_a_endgame, board_with_tiles, 0, opp, rack_ab);
-  // score=2, leave_equity=0 (bag=0), opening=0, peg=0, endgame=-16
   ASSERT_LT(std::abs(e_eg - (2.0 - 16.0)), 1e-3);
 
-  // --- endgame out-play (leave empty, bag = 0)
-  // Play both tiles A and B (2 tiles used, both in glyphs).
+  // Endgame, going out: gain twice the opponent's rack, here a Q (10 points).
   Move out_play =
     make_play_full(7, 7, /*horizontal=*/true, 0b11, 5,
                    {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B'))});
 
-  // Opponent has a Q (value=10) on their rack.
   Rack opp_q;
   opp_q.add(Tile::from_char('Q'));
-  // endgame bonus = 2 * 10 = 20.
   double e_out = eq.equity(out_play, board_with_tiles, 0, opp_q, rack_ab);
   ASSERT_LT(std::abs(e_out - (5.0 + 20.0)), 1e-3);
 
   fs::remove_all(tmp);
 }
 
-// Regression test for blank-bearing exchange equity. An EXCHANGE's equity is
-// just the leave value of the tiles kept (score 0, no opening/peg/endgame
-// adjustments mid-game), so a mis-keyed blank leave surfaces directly as a
-// wrong (typically 0) exchange equity in the web move list.
+// A mid-game EXCHANGE's equity is just the value of the kept leave, so a
+// mis-keyed blank leave shows up directly as a wrong (typically 0) exchange
+// equity. The single-move and batched paths must both get it right.
 TEST(HastyEquity, ExchangeBlankLeave) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_heq_xch_XXXXXX";
   fs::create_directories(tmp);
 
-  KlvFixture fix = write_synthetic_klv(tmp);  // ?=12.0, A=1.5, B=-2.5
+  KlvFixture fix = write_synthetic_klv(tmp);  // ? = 12.0
   std::filesystem::path peg_path = tmp / "peg.json";
   {
     std::ofstream pf(peg_path);
@@ -3519,11 +3255,10 @@ TEST(HastyEquity, ExchangeBlankLeave) {
   HastyEquity::init(fix.path.string(), peg_path.string());
   const HastyEquity& eq = HastyEquity::instance();
 
-  Board board;  // empty
+  Board board;
   Rack opp;
 
-  // Rack = A + blank. Exchanging the A keeps the blank, so the equity must be
-  // the blank leave value (12.0), not 0. bag_size > 0 so no endgame term.
+  // Exchanging the A keeps the blank.
   Rack rack_a_blank;
   rack_a_blank.add(Tile::from_char('A'));
   rack_a_blank.add(BLANK);
@@ -3532,7 +3267,6 @@ TEST(HastyEquity, ExchangeBlankLeave) {
   surrender_a.add(Tile::from_char('A'));
   Move exch_a = Move::exchange(surrender_a);
 
-  // Single-move and batched paths must agree and both reflect the blank leave.
   double single = eq.equity(exch_a, board, 50, opp, rack_a_blank);
   ASSERT_LT(std::abs(single - 12.0), 1e-3);
 
@@ -3544,11 +3278,10 @@ TEST(HastyEquity, ExchangeBlankLeave) {
   fs::remove_all(tmp);
 }
 
-// The keystone streaming guarantee: a row encoded directly from a live game's
-// GameLog view (the streaming path) is BIT-IDENTICAL to the row the disk
-// pipeline produces by writing that game to a .slog and decoding it back. Both
-// funnel through PositionEncoder, so any divergence would mean the view built
-// from the .slog buffer differs from the one built from self-play storage.
+// A row encoded straight from a live game's log (the streaming path) is
+// bit-identical to the row decoded after writing the game to a .slog (the disk
+// path). Both go through PositionEncoder, so a mismatch means the two log views
+// differ.
 TEST(Streaming, DiskEncodeEquivalence) {
   using namespace scribblez;
   using namespace scribblez::binlog;
@@ -3571,7 +3304,7 @@ TEST(Streaming, DiskEncodeEquivalence) {
   for (uint64_t seed : std::vector<uint64_t>{7, 99, 12345}) {
     GameLogStorage storage = play_test_game(dict, seed);
 
-    // Write a COPY through the real disk writer (it picks the sampled turn).
+    // The writer picks the sampled turn that both paths encode.
     {
       BinaryLogWriter writer(dir.string(), /*games_per_file=*/1);
       writer.append(GameLogStorage(storage));
@@ -3608,16 +3341,16 @@ TEST(Streaming, DiskEncodeEquivalence) {
       ++compared;
     }
 
-    // Fresh dir per seed so directory_iterator finds exactly one file.
+    // Empty the directory so the next seed's lookup finds only its own file.
     for (const auto& ent : fs::directory_iterator(dir)) fs::remove(ent.path());
   }
   ASSERT_EQ(compared, 6);
   std::cout << "  streaming/disk encode equivalence OK (" << compared << " rows)\n";
 }
 
-// StreamingRowBuffer: many producers, tiny slots (frequent boundary crossings).
-// Every global row must be written exactly once and read back in a contiguous
-// set, with no slot overwritten while the consumer holds it.
+// Many producers and tiny slots, so rows often straddle slot boundaries. Every
+// row index is written and read exactly once, and the consumed rows are exactly
+// [0, total), which a slot overwritten while the consumer held it would break.
 TEST(StreamingRowBuffer, Concurrency) {
   using namespace scribblez::binlog;
   const int n_slots = 2, rows_per_slot = 4, row_floats = 1;
@@ -3628,13 +3361,12 @@ TEST(StreamingRowBuffer, Concurrency) {
   for (auto& b : bufs) slots.push_back(b.data());
   StreamingRowBuffer ring(slots.data(), n_slots, rows_per_slot, row_floats);
 
-  // Bound production to exactly slots_to_consume full generations via a shared
-  // work counter, so consuming that many slots drains every produced row. (With
-  // unbounded production the first N slots of one lane can race ahead of the
-  // other, so "first M consumed slots" would not be generations 0..M-1.)
+  // Cap production at exactly the rows the consumer will read. Unbounded
+  // producers could fill later slot generations before earlier ones, and the
+  // first slots_to_consume slots read would then not be rows [0, total).
   const uint64_t total_rows = uint64_t(slots_to_consume) * rows_per_slot;
   std::atomic<uint64_t> work{0};
-  const int K = 8;  // many producers + tiny slots -> frequent slot-boundary crossings
+  const int K = 8;
   std::vector<std::thread> producers;
   for (int t = 0; t < K; ++t) {
     producers.emplace_back([&] {
@@ -3660,14 +3392,14 @@ TEST(StreamingRowBuffer, Concurrency) {
   }
   for (auto& p : producers) p.join();
 
-  ASSERT_FALSE(dup);  // each global row written and read exactly once
+  ASSERT_FALSE(dup);
   ASSERT_EQ(int(seen.size()), slots_to_consume * rows_per_slot);
-  for (uint64_t v = 0; v < total_rows; ++v) ASSERT_EQ(seen.count(v), 1);  // exactly [0, total)
+  for (uint64_t v = 0; v < total_rows; ++v) ASSERT_EQ(seen.count(v), 1);
   std::cout << "  StreamingRowBuffer concurrency OK (" << seen.size() << " rows, K=" << K << ")\n";
 }
 
-// StreamingRowBuffer shutdown: stop() must wake every blocked producer (and the
-// consumer) so nothing hangs, even with producers parked on backpressure.
+// stop() wakes every producer blocked on a full ring, and the consumer's
+// wait_full_slot() then returns -1.
 TEST(StreamingRowBuffer, Shutdown) {
   using namespace scribblez::binlog;
   const int n_slots = 2, rows_per_slot = 8, row_floats = 1;
@@ -3700,9 +3432,8 @@ TEST(StreamingRowBuffer, Shutdown) {
   std::cout << "  StreamingRowBuffer shutdown OK\n";
 }
 
-// pick_sampled_turn only chooses turns in the eligible region -- within the
-// bag-non-empty prefix and not before the last random-opening ply -- and
-// returns -1 when the region is empty.
+// pick_sampled_turn chooses only turns in the eligible region (see
+// GameMetadata::eligible_begin) and returns -1 when it is empty.
 TEST(BinaryLog, PickSampledTurnEligibility) {
   using namespace scribblez;
   using namespace scribblez::binlog;
@@ -3719,8 +3450,7 @@ TEST(BinaryLog, PickSampledTurnEligibility) {
     ASSERT_TRUE(t == 0 || t == 1);
   }
 
-  // A random opening excludes the positions before its last ply: with 2 random
-  // plies, only turns >= 1 remain eligible.
+  // Two random plies: the region starts at the last one, turn 1.
   s.num_random_opening_plies = 2;
   ASSERT_EQ(eligible_span(s.view()).begin, 1);
   for (int i = 0; i < 20; ++i) ASSERT_EQ(pick_sampled_turn(s.view(), rng), 1);
@@ -3731,27 +3461,27 @@ TEST(BinaryLog, PickSampledTurnEligibility) {
   s.num_random_opening_plies = 0;
 
   GameLogStorage z;
-  z.turns.resize(2);  // all ineligible
+  z.turns.resize(2);  // every bag_size_before is 0
   ASSERT_EQ(pick_sampled_turn(z.view(), rng), -1);
 
-  // pick_any_turn (max-move-per-lane sampling) ignores bag size: every turn is eligible,
-  // and the choice covers the whole range. An empty game yields -1.
+  // pick_any_turn, which the max-move-per-lane task samples with, ignores bag
+  // size and the random opening.
   std::array<bool, 3> seen{};
   for (int i = 0; i < 200; ++i) {
     const int t = pick_any_turn(s.view(), rng);
     ASSERT_TRUE(t >= 0 && t < 3);
     seen[t] = true;
   }
-  ASSERT_TRUE(seen[0] && seen[1] && seen[2]);  // bag_size_before == 0 turns included
+  ASSERT_TRUE(seen[0] && seen[1] && seen[2]);
   GameLogStorage empty;
   ASSERT_EQ(pick_any_turn(empty.view(), rng), -1);
   std::cout << "  pick_sampled_turn / pick_any_turn eligibility OK\n";
 }
 
-// ShadowMoveGen, summed over every anchor (no pruning), reproduces exactly the
-// move set of MoveGenerator::generate, and every anchor's score bound is
-// admissible (>= the score of each play canonically anchored there). The latter
-// is the invariant that makes best-first equity pruning exact.
+// ShadowMoveGen's per-anchor generation, run over every anchor, yields exactly
+// MoveGenerator::generate's plays. Each anchor's score bound must be admissible
+// (never below a play generated there), which is what makes best-first pruning
+// by the bound exact.
 TEST(Movegen, ShadowMatchesFull) {
   using namespace scribblez;
   Dictionary dict = medium_dict();
@@ -3772,7 +3502,6 @@ TEST(Movegen, ShadowMatchesFull) {
         std::vector<Move> am;
         smg.generate_anchor(a, rack, am);
         for (const Move& m : am) {
-          // The per-tile-count bound never underestimates a real play's score.
           ASSERT_LE(int(m.score()), a.score_bound_by_size[m.num_glyphs()]);
         }
         for (Move& m : am) shadow.push_back(std::move(m));
@@ -3790,9 +3519,9 @@ TEST(Movegen, ShadowMatchesFull) {
             << " positions, " << total_moves << " moves)\n";
 }
 
-// HastyBot's shadow-play search picks exactly the move the deterministic
-// reference (full generation + equity argmax) would, across real self-play
-// games. Requires the real NWL23 KWG + leaves; skipped if absent.
+// HastyBot's pruned search picks the same move as full generation plus an
+// equity argmax, across NWL23 self-play games. Skipped without the NWL23 lexicon
+// and leaves.
 namespace {
 class ShadowCheckAgent : public scribblez::Agent {
  public:
@@ -3834,9 +3563,8 @@ TEST(HastyEquity, ShadowMatchesReference) {
   std::cout << "  HastyBot shadow search matches reference (" << comparisons << " positions)\n";
 }
 
-// wmp_generate (WordMap anagram lookup) produces exactly the same set of legal
-// plays as the GADDAG move generator, for blank-free racks. Always runs against
-// the in-memory medium dictionary.
+// For blank-free racks, WordMap generation (wmp_generate) yields the same plays
+// as the GADDAG generator, as a whole, per anchor, and per extent.
 TEST(WordMap, GenerateMatchesFull) {
   using namespace scribblez;
   Dictionary dict = medium_dict();
@@ -3853,8 +3581,7 @@ TEST(WordMap, GenerateMatchesFull) {
         const std::vector<Move> wmp = wmp_generate(board, dict, wm, rack);
         ASSERT_EQ(key_set(board, full), key_set(board, wmp));
 
-        // Per-anchor WMP generation matches the GADDAG's generate_anchor exactly,
-        // so it can drive the shadow best-first loop.
+        // Per anchor, so WordMap generation can drive the shadow best-first loop.
         ShadowMoveGen smg(board, dict);
         WmpSubracks subracks;
         int rack_tiles = 0;
@@ -3866,9 +3593,9 @@ TEST(WordMap, GenerateMatchesFull) {
           ASSERT_EQ(key_set(board, g), key_set(board, w));
         }
 
-        // The per-extent partition covers every legal play exactly once, and each
-        // extent's score bound never underestimates its plays (so the best-first
-        // early-exit over extents is exact).
+        // Together the extents yield exactly the full play set, and each extent's
+        // score bound is admissible, so the best-first early exit over extents is
+        // exact.
         std::vector<Move> extent_union;
         for (const ShadowExtent& e : smg.extents(rack, &wm)) {
           std::vector<Move> em;
@@ -3921,12 +3648,10 @@ class CapturingAgent : public scribblez::Agent {
 };
 }  // namespace
 
-// WordMap anagram-lookup move generation agrees with the GADDAG generator on
-// real NWL23 positions drawn from HastyBot self-play: for blank-free racks the
-// two enumerate the same legal-play set and the WordMap-driven HastyBot makes
-// the same move choice, and for blank-bearing racks (which fall back to the
-// GADDAG path) the choices likewise match. Requires the NWL23 KWG + leaves;
-// skipped if absent.
+// On NWL23 positions from HastyBot self-play, WordMap generation yields the
+// GADDAG's play set for blank-free racks, and HastyBot picks the same move as
+// hasty_best_move_wmp for every rack. Skipped without the NWL23 lexicon and
+// leaves.
 TEST(WordMap, MatchesGaddagRealLexicon) {
   namespace fs = std::filesystem;
   using namespace scribblez;
@@ -3947,8 +3672,7 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
     g.play();
   }
 
-  // Blank-bearing racks fall back to the GADDAG path, so the WordMap bot must
-  // still pick exactly the move HastyBot (make_move) does on them.
+  // Racks with a blank fall back to the GADDAG path.
   HastyBotAgent blank_bot({.thread_id = 0, .name = "blankcheck"});
   for (const CapturedPos& p : blanked) {
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
@@ -3956,9 +3680,6 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
               move_key(p.board, hasty_best_move_wmp(req)));
   }
 
-  // Blank-free racks: WordMap lookup enumerates exactly the GADDAG's legal plays,
-  // and the WordMap-driven HastyBot (shadow best-first with early-exit) makes the
-  // same move choice as the reference GADDAG HastyBot.
   HastyBotAgent bot({.thread_id = 0, .name = "wmpcheck"});
   long total_moves = 0;
   for (const CapturedPos& p : positions) {
@@ -3978,7 +3699,6 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
 }
 
 TEST(Util, Helpers) {
-  // round_up_pow2: exact powers map to themselves; everything else rounds up.
   ASSERT_EQ(util::round_up_pow2(0), 1);
   ASSERT_EQ(util::round_up_pow2(1), 1);
   ASSERT_EQ(util::round_up_pow2(2), 2);
@@ -3989,7 +3709,6 @@ TEST(Util, Helpers) {
   ASSERT_EQ(util::round_up_pow2(1u << 20), (1u << 20));
   ASSERT_EQ(util::round_up_pow2((1u << 20) + 1), (1u << 21));
 
-  // align_up to a power-of-two boundary.
   ASSERT_EQ(util::align_up(0, 8), 0);
   ASSERT_EQ(util::align_up(1, 8), 8);
   ASSERT_EQ(util::align_up(7, 8), 8);
@@ -3997,10 +3716,9 @@ TEST(Util, Helpers) {
   ASSERT_EQ(util::align_up(9, 8), 16);
   ASSERT_EQ(util::align_up(7, 1), 7);
 
-  // The four orthogonal neighbor deltas are unit steps with zero net sum.
   int sum_dr = 0, sum_dc = 0;
   for (const auto& [dr, dc] : util::kFourNeighborDeltas) {
-    ASSERT_NE((dr == 0), (dc == 0));  // exactly one axis moves
+    ASSERT_NE((dr == 0), (dc == 0));
     ASSERT_TRUE(dr >= -1 && dr <= 1 && dc >= -1 && dc <= 1);
     sum_dr += dr;
     sum_dc += dc;
@@ -4008,14 +3726,10 @@ TEST(Util, Helpers) {
   ASSERT_TRUE(sum_dr == 0 && sum_dc == 0);
 }
 
-// Backs the invariant "NeuralAgent with --top-k=1 plays exactly HastyBot's
-// move" without instantiating the (TensorRT-linked) agent. At k=1 both agents
-// reduce to the same equity argmax over the legal plays, via two different
-// HastyEquity entry points: HastyBot scores moves one at a time with
-// HastyEquity::equity(), while NeuralAgent ranks the batch from
-// HastyEquity::equities(). This checks (a) the batch and per-move APIs
-// agree value-for-value and (b) their argmax -- the move each agent returns --
-// is identical.
+// HastyEquity::equities() (batched) agrees value for value with equity() (one
+// move at a time), so both give the same argmax. A top-k=1 agent that ranks with
+// the batched call then plays exactly HastyBot's move; this checks that without
+// linking TensorRT.
 TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_topk1_XXXXXX";
@@ -4030,17 +3744,15 @@ TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
   const HastyEquity& eq = HastyEquity::instance();
 
   Dictionary d = tiny_dict();
-  Board board;  // opening position
+  Board board;
   MoveGenerator gen(board, d);
   Rack my_rack = rack_from("CATSOHE");
   std::vector<Move> plays = gen.generate(my_rack);
-  ASSERT_GE(plays.size(), 2);  // a meaningful argmax needs >1 candidate
+  ASSERT_GE(plays.size(), 2);
 
-  Rack opp;  // empty
+  Rack opp;
   const int bag_size = 80;
 
-  // Batch path (what NeuralAgent uses) must match the per-move path (what
-  // HastyBot uses) value-for-value.
   std::vector<double> batch = eq.equities(plays, board, bag_size, opp, my_rack);
   ASSERT_EQ(batch.size(), plays.size());
   std::vector<double> per_move(plays.size());
@@ -4049,12 +3761,10 @@ TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
     ASSERT_LT(std::abs(batch[i] - per_move[i]), 1e-9);
   }
 
-  // HastyBot's selection: first move with strictly-greatest per-move equity.
   int hasty_pick = 0;
   for (size_t i = 1; i < per_move.size(); ++i) {
     if (per_move[i] > per_move[hasty_pick]) hasty_pick = int(i);
   }
-  // NeuralAgent k=1 selection: top-1 of the batch ranking (same rule).
   int topk1_pick = 0;
   for (size_t i = 1; i < batch.size(); ++i) {
     if (batch[i] > batch[topk1_pick]) topk1_pick = int(i);
@@ -4064,14 +3774,9 @@ TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
   fs::remove_all(tmp);
 }
 
-// Regression: DDGPTWZ (the rack the bug was originally reported with) has no
-// legal PLAY against tiny_dict's small vocabulary (real dictionaries do have
-// vowel-less words -- NTH, RHYTHM, CWM -- tiny_dict just doesn't carry any).
-// HastyBot's move-selection paths used to fall straight through to
-// Move::pass() in that case without ever considering an exchange, even though
-// exchanging strictly dominates passing (both score 0, but exchanging gives a
-// shot at a better rack next turn). It must exchange whenever the bag can
-// support one, matching GreedyAgent's existing no-legal-play fallback.
+// With no legal PLAY, HastyBot exchanges rather than passes whenever the bag
+// allows it: both score 0, but an exchange gives a chance at a better rack.
+// DDGPTWZ has no play on an empty board with tiny_dict().
 TEST(HastyBotAgent, ExchangesInsteadOfPassingWithNoLegalPlay) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_hasty_exchange_XXXXXX";
@@ -4084,13 +3789,13 @@ TEST(HastyBotAgent, ExchangesInsteadOfPassingWithNoLegalPlay) {
   }
   HastyEquity::init(fix.path.string(), peg_path.string());
 
-  Dictionary dict = tiny_dict();  // no all-consonant entries
-  Board board;                    // empty board
+  Dictionary dict = tiny_dict();
+  Board board;
   Rack rack = rack_from("DDGPTWZ");
-  Rack opp;  // empty
+  Rack opp;
 
   MoveRequest req{board, dict, rack, opp, 0, 0, /*bag_size=*/80};
-  ASSERT_TRUE(generate_legal_plays(req).empty());  // sanity: no placement exists
+  ASSERT_TRUE(generate_legal_plays(req).empty());
 
   HastyBotAgent agent(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty"});
   const Move chosen = agent.make_move(req).move;
@@ -4099,22 +3804,18 @@ TEST(HastyBotAgent, ExchangesInsteadOfPassingWithNoLegalPlay) {
   fs::remove_all(tmp);
 }
 
-// Same regression, but on a real mid-game board instead of the empty-board
-// opening case above. Position lifted from an actual HastyBot-vs-HastyBot
-// self-play game (turn 30, NWL23): the mover holds AEFIORX with no legal PLAY
-// on the board these 29 prior turns produced, and HastyBot must exchange
-// rather than pass. Gated on the real NWL23 lexicon the game was generated
-// against (not committed to the repo).
+// The same on a real mid-game board, from HastyBot self-play on NWL23: after
+// these 26 turns the mover's AEFIORX has no legal PLAY. Skipped without the
+// NWL23 lexicon and leaves.
 TEST(HastyBotAgent, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
   const std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
   const std::string leaves_path = HastyEquity::default_leaves_path("NWL23");
   if (!std::ifstream(kwg_path).good() || !std::ifstream(leaves_path).good()) {
     GTEST_SKIP() << "no NWL23 kwg/leaves";
   }
-  // init(), not ensure_initialized(): HastyEquity is a process-wide singleton,
-  // and other tests in this binary load a synthetic leave table over it --
-  // ensure_initialized() would then no-op and silently leave those stale
-  // values in place instead of these real ones.
+  // init(), not ensure_initialized(): other tests in this binary load synthetic
+  // leaves into the process-wide singleton, and ensure_initialized() would keep
+  // them.
   HastyEquity::init(leaves_path, HastyEquity::default_peg_path());
   Dictionary dict = Dictionary::load_kwg(kwg_path);
 
@@ -4162,38 +3863,34 @@ TEST(HastyBotAgent, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
   const int my_score = pos.scores[pos.mover];
   const int opp_score = pos.scores[1 - pos.mover];
   MoveRequest req{pos.board, dict, pos.rack, pos.opp_leave, my_score, opp_score, pos.bag_size};
-  ASSERT_TRUE(generate_legal_plays(req).empty());  // sanity: no placement exists
+  ASSERT_TRUE(generate_legal_plays(req).empty());
 
   HastyBotAgent agent(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty"});
   const Move chosen = agent.make_move(req).move;
   ASSERT_EQ(chosen.type(), MoveType::EXCHANGE);
 }
 
-// Regression: HastyBot must weigh EXCHANGE candidates against PLAY candidates
-// by equity, not just fall back to exchanging when no play exists (the test
-// above). A real NWL23 rack of six I's and an H has exactly one legal play
-// (HI, worth a few points) and a catastrophic leave (IIIII), so even with
-// genuine leave values -- no hacked table needed -- HastyBot must prefer
-// exchanging over playing the only word it has.
+// HastyBot weighs exchanges against plays by equity, not only as a fallback
+// when no play exists. IIIIIIH's only play, HI, keeps IIIII, and with the real
+// NWL23 leaves that is bad enough that exchanging must win.
 TEST(HastyBotAgent, ExchangesDuplicateHeavyRackOverItsOnlyPlay) {
   const std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
   const std::string leaves_path = HastyEquity::default_leaves_path("NWL23");
   if (!std::ifstream(kwg_path).good() || !std::ifstream(leaves_path).good()) {
     GTEST_SKIP() << "no NWL23 kwg/leaves";
   }
-  // init(), not ensure_initialized(): HastyEquity is a process-wide singleton,
-  // and other tests in this binary load a synthetic leave table over it --
-  // ensure_initialized() would then no-op and silently leave those stale
-  // values in place instead of these real ones.
+  // init(), not ensure_initialized(): other tests in this binary load synthetic
+  // leaves into the process-wide singleton, and ensure_initialized() would keep
+  // them.
   HastyEquity::init(leaves_path, HastyEquity::default_peg_path());
   Dictionary dict = Dictionary::load_kwg(kwg_path);
 
-  Board board;  // empty board
+  Board board;
   Rack rack = rack_from("IIIIIIH");
-  Rack opp;  // empty
+  Rack opp;
 
   MoveRequest req{board, dict, rack, opp, 0, 0, /*bag_size=*/80};
-  ASSERT_FALSE(generate_legal_plays(req).empty());  // HI is legal
+  ASSERT_FALSE(generate_legal_plays(req).empty());
 
   HastyBotAgent agent(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty"});
   const Move chosen = agent.make_move(req).move;
@@ -4204,16 +3901,14 @@ TEST(HastyBotAgent, ExchangesDuplicateHeavyRackOverItsOnlyPlay) {
 // SimRunner + sim-observation log
 // ===========================================================================
 
-// Tile-conservation check for play_from's returned_to_bag: exchanged tiles
-// re-enter the bag only after both refills, and stay in circulation for the
-// rest of the game.
+// play_from's returned_to_bag (tiles the mover just exchanged) joins the bag
+// only after both racks are filled, and every tile is conserved through the
+// game.
 TEST(Game, PlayFromReturnedToBag) {
   const Dictionary d = medium_dict();
-  const Board board;  // empty board
+  const Board board;
 
-  // The mover (seat 0) holds AB after exchanging its Q and Z; the exchanged
-  // tiles are absent from the unseen pool (they were in the mover's hand) and
-  // re-enter the bag via returned_to_bag.
+  // Seat 0 exchanged Q and Z and kept AB.
   const Rack leave = rack_from("AB");
   Rack returned;
   returned.add(Tile::from_char('Q'));
@@ -4230,18 +3925,15 @@ TEST(Game, PlayFromReturnedToBag) {
   scribblez::Game g(a0, a1, d, seed);
   g.play_from(board, {0, 0}, {leave, Rack{}}, pool, /*to_move=*/1, returned);
 
-  // The refills precede the exchanged tiles' return, so neither initial rack
-  // can contain Q or Z (each occurs once in the bag, and both were removed
-  // from the pool).
+  // The distribution has one Q and one Z, both out of the pool at refill time.
   const GameLog log = g.log();
   for (int p = 0; p < 2; ++p) {
     ASSERT_FALSE(rack_contains(log.initial_racks[p], Tile::from_char('Q')));
     ASSERT_FALSE(rack_contains(log.initial_racks[p], Tile::from_char('Z')));
   }
 
-  // Conservation: every tile handed to play_from (pool + leaves + returned) is
-  // on the board, on a rack, or in the bag when the game ends -- the returned
-  // tiles rejoined circulation exactly once.
+  // Every tile handed to play_from is on the board, on a rack or in the bag at
+  // the end, so the returned tiles joined exactly once.
   int on_board = 0;
   for (int r = 0; r < BOARD_SIZE; ++r)
     for (int c = 0; c < BOARD_SIZE; ++c)
@@ -4267,8 +3959,7 @@ TEST(SimRunner, Basic) {
   pos.mover = 0;
   pos.rack = rack_from("CATSEIQ");
 
-  // Candidates covering all three move types: two distinct opening plays, a
-  // pass, and a one-tile exchange.
+  // Candidates of all three move types.
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
   ASSERT_GE(plays.size(), 2);
@@ -4298,14 +3989,13 @@ TEST(SimRunner, Basic) {
     }
   }
 
-  // The dictionary is rich in 2-letter words, so sampled opponent racks have
-  // replies on the (near-)open board: some ANCHORED class (a real placement,
-  // not the pass catch-all) must have fired.
+  // medium_dict() has many 2-letter words, so some opponent replies are real
+  // placements (anchored classes), not passes.
   int64_t total_opp = 0;
   for (int i = 0; i < kAnchoredFootprints; ++i) total_opp += obs[0].opp_next_count[i];
   ASSERT_GT(total_opp, 0);
 
-  // Determinism and thread-independence: a single-threaded run is identical.
+  // Results do not depend on the thread count.
   {
     SimRunner::Params p1 = params;
     p1.threads = 1;
@@ -4326,21 +4016,19 @@ TEST(SimRunner, Basic) {
   fs::remove_all(tmp);
 }
 
-// accumulate_rollout buckets each rollout move at footprint_class(move), in
-// the natural frame, in the right histogram: opp_reply in the opp counts weighted by
-// p_loss, self_next in the self counts weighted by p_win, a PASS in the pass
-// catch-all. This pins the field routing, frame, and slot encoding exactly --
-// the per-class invariants the SimRunner tests assert (win <= next <= n,
-// 0-or-n) would also hold under a swapped opp/self wiring or a flipped frame,
-// so only a hand-computed class can catch those.
+// accumulate_rollout buckets each rollout move at footprint_class(move) in the
+// untransposed frame: opp_reply into the opp counts (win weight p_loss),
+// self_next into the self counts (win weight p_win), a PASS into kPassClass.
+// The classes are computed by hand because the invariants SimRunner.Basic
+// checks would still hold with opp/self swapped or the frame transposed.
 TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
   const Glyph g[3] = {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
                       Glyph::of(Tile::from_char('C'))};
   RolloutResult r;
-  // Opp reply: horizontal, 2 tiles at row 3, cols 6-7 -> anchor (3,6), slot 1.
+  // Horizontal, 2 tiles at row 3, cols 6-7: anchor (3,6), slot 1.
   r.opp_reply = Move::play(/*horizontal=*/true, /*start=*/3,
                            /*square_mask=*/uint16_t((1 << 6) | (1 << 7)), /*score=*/10, g, 2);
-  // Self next: vertical, 3 tiles at col 5, rows 2-4 -> anchor (2,5), slot
+  // Vertical, 3 tiles at col 5, rows 2-4: anchor (2,5), slot
   // kFootprintMaxK + (3 - 2).
   r.self_next = Move::play(/*horizontal=*/false, /*start=*/5,
                            /*square_mask=*/uint16_t((1 << 2) | (1 << 3) | (1 << 4)),
@@ -4356,10 +4044,9 @@ TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
   const int opp_cls = (3 * BOARD_SIZE + 6) * kSlotsPerCell + 1;
   const int self_cls = (2 * BOARD_SIZE + 5) * kSlotsPerCell + (kFootprintMaxK + 1);
   EXPECT_EQ(obs.opp_next_count[opp_cls], 1);
-  EXPECT_FLOAT_EQ(obs.opp_win_count[opp_cls], 0.5f);  // the p_loss side
+  EXPECT_FLOAT_EQ(obs.opp_win_count[opp_cls], 0.5f);  // p_loss
   EXPECT_EQ(obs.self_next_count[self_cls], 1);
-  EXPECT_FLOAT_EQ(obs.self_win_count[self_cls], 0.25f);  // the p_win side
-  // Exactly one class fired per histogram.
+  EXPECT_FLOAT_EQ(obs.self_win_count[self_cls], 0.25f);  // p_win
   int64_t opp_total = 0, self_total = 0;
   for (int i = 0; i < SimObservation::kClasses; ++i) {
     opp_total += obs.opp_next_count[i];
@@ -4368,8 +4055,8 @@ TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
   EXPECT_EQ(opp_total, 1);
   EXPECT_EQ(self_total, 1);
 
-  // A 1-tile play is the orientation-free slot 0 whichever axis it declares,
-  // and a missing move (default Move = PASS) buckets into the pass catch-all.
+  // A 1-tile play takes the orientation-free slot 0 whichever axis it declares,
+  // and a missing move (a default Move is a PASS) buckets into kPassClass.
   RolloutResult r2;
   r2.opp_reply = Move::play(/*horizontal=*/false, /*start=*/9,
                             /*square_mask=*/uint16_t(1 << 4), /*score=*/4, g, 1);
@@ -4381,10 +4068,10 @@ TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
   EXPECT_DOUBLE_EQ(obs.wins, 1.25);
 }
 
-// Constant-output leaf stub for value-truncation tests: every horizon row
-// reads WLD (0.7, 0.1, 0.2) and predicted final delta +100 from the horizon
-// MOVER's POV, so the root-POV flip at odd horizons is exactly checkable.
-// Declares the contingent, no-opponent-leave input arm like the agent stubs.
+// Leaf-model stub for truncated rollouts: every row reads WLD (0.7, 0.1, 0.2)
+// and a final score delta of +100, from the POV of the player to move at the
+// horizon. Constant outputs make the flip to the root player's POV at odd
+// horizons exactly checkable.
 class ConstantLeafService : public scribblez::nn::PositionEvalService {
  public:
   int rows_seen = 0;
@@ -4405,10 +4092,9 @@ class ConstantLeafService : public scribblez::nn::PositionEvalService {
   }
 };
 
-// Row-dependent leaf stub: outputs are a deterministic function of the
-// encoded row's score-diff scalar, so rollouts get distinct fractional
-// contributions -- which makes reduction-order determinism and CRN
-// cancellation real assertions rather than vacuous ones.
+// Leaf stub whose outputs depend on the row's score-diff input. Rollouts then
+// contribute distinct fractional values, so the reduction-order determinism and
+// common-random-number checks are not vacuous.
 class RowLeafService : public scribblez::nn::PositionEvalService {
  public:
   int rows_seen = 0;
@@ -4429,15 +4115,15 @@ class RowLeafService : public scribblez::nn::PositionEvalService {
       wld[1] = 0.1f;
       wld[2] = 0.9f - w;
       float* sd = head_out[1] + size_t(i) * scribblez::nn::ScoreDiffOutput::kRowElems;
-      sd[0] = s * scribblez::kScoreDiffInputScale;  // "the current diff holds up"
+      sd[0] = s * scribblez::kScoreDiffInputScale;  // predicts the current diff holds
       sd[1] = 5.0f;
     }
     rows_seen += batch.count;
   }
 };
 
-// Poisons one output element of an otherwise-finite leaf readout, to exercise
-// the runner's hard-error guard.
+// One output element to overwrite (typically with a non-finite value) in an
+// otherwise constant leaf readout, to exercise the runner's error guard.
 struct LeafPoison {
   int head;   // 0 = WLD, 1 = score-diff
   int index;  // element within the row
@@ -4467,10 +4153,9 @@ class NonFiniteLeafService : public scribblez::nn::PositionEvalService {
   LeafPoison poison_;
 };
 
-// Value truncation with a constant leaf: every rollout of every candidate is
-// cut at the horizon (a mid-game position cannot end within 4 plies), so the
-// observations are exact multiples of the stub's outputs -- from the root
-// mover's POV, which flips at an odd horizon.
+// With a constant leaf, every rollout is cut at the horizon (a game from the
+// opening cannot end within 4 plies), so the observations are exact multiples
+// of the stub's outputs, flipped to the root mover's POV at an odd horizon.
 TEST(SimRunner, TruncatedPovParity) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_pov";
@@ -4502,10 +4187,10 @@ TEST(SimRunner, TruncatedPovParity) {
     params.leaf_service = &leaf;
     const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, 400);
     ASSERT_EQ(leaf.rows_seen, params.rollouts * int(candidates.size()));
-    // The leaf is the horizon ply's post-move state from ITS mover's POV.
-    // The opponent moves first, so horizon 4's last ply is the root mover's
-    // own (opp, self, opp, self) and the readout carries over; horizon 3's
-    // is the opponent's, so win/loss and the delta sign flip.
+    // The leaf reads the position after the horizon ply from that ply's
+    // mover's POV. The opponent moves first, so at horizon 4 the last ply is
+    // the root mover's own (opp, self, opp, self) and the readout carries over;
+    // at horizon 3 it is the opponent's, so win/loss and the delta sign flip.
     const double p_win = horizon % 2 == 0 ? double(0.7f) : double(0.2f);
     const double p_loss = horizon % 2 == 0 ? double(0.2f) : double(0.7f);
     const double delta = horizon % 2 == 0 ? 100.0 : -100.0;
@@ -4515,10 +4200,9 @@ TEST(SimRunner, TruncatedPovParity) {
       ASSERT_DOUBLE_EQ(o.draws, o.n * double(0.1f));
       ASSERT_DOUBLE_EQ(o.losses, o.n * p_loss);
       ASSERT_DOUBLE_EQ(o.delta_sum, o.n * delta);
-      // The stub predicts sigma = 5, so the second moment carries mean^2 +
-      // sigma^2 whichever POV the mean was flipped from.
+      // The stub predicts sigma = 5, so the second moment is mean^2 + sigma^2,
+      // unaffected by the POV flip.
       ASSERT_DOUBLE_EQ(o.delta_sq_sum, o.n * (100.0 * 100.0 + 5.0 * 5.0));
-      // The win-conjoined histograms carry the leaf probabilities per class.
       for (int i = 0; i < SimObservation::kClasses; ++i) {
         ASSERT_NEAR(o.opp_win_count[i], p_loss * o.opp_next_count[i], 1e-3);
         ASSERT_NEAR(o.self_win_count[i], p_win * o.self_next_count[i], 1e-3);
@@ -4528,10 +4212,10 @@ TEST(SimRunner, TruncatedPovParity) {
   fs::remove_all(tmp);
 }
 
-// Truncated observations stay deterministic across thread counts (the fixed
-// reduction order), CRN-cancel exactly on duplicate candidates, and are
-// independent of which other candidates were simmed -- with the workers
-// sharing one stub service through EvalService's own serialization.
+// Truncated observations are exactly identical across thread counts (the
+// reduction order is fixed), identical for duplicate candidates (common random
+// numbers), and independent of which other candidates were simmed. The worker
+// threads share one leaf service.
 TEST(SimRunner, TruncatedDeterminismAndCrn) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_crn";
@@ -4552,7 +4236,6 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
   ASSERT_GE(plays.size(), 2);
-  // The same play twice: a CRN duplicate whose observations must be equal.
   const std::vector<Move> candidates = {plays.front(), plays.front(), plays[plays.size() / 2]};
 
   RowLeafService leaf;
@@ -4568,11 +4251,8 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
     ASSERT_EQ(int(o.n), params.rollouts);
     ASSERT_NEAR(o.wins + o.draws + o.losses, double(o.n), 1e-5);
   }
-  // Exact CRN cancellation: the duplicate's observation is byte-identical.
   ASSERT_EQ(std::memcmp(&obs[0], &obs[1], sizeof(SimObservation)), 0);
 
-  // Thread-count independence, exactly (fractional contributions reduce in a
-  // fixed order).
   {
     SimRunner::Params p1 = params;
     p1.threads = 1;
@@ -4580,7 +4260,6 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
     for (size_t c = 0; c < obs.size(); ++c)
       ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(SimObservation)), 0);
   }
-  // CRN across candidate-set membership.
   {
     const std::vector<SimObservation> alone =
       SimRunner(d, params).run(pos, {candidates[2]}, base_seed);
@@ -4589,10 +4268,8 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
   fs::remove_all(tmp);
 }
 
-// A horizon past every game's natural end changes nothing: each rollout
-// finishes before the cap, contributes its exact terminal outcome, and the
-// leaf service is never consulted -- so the observations are byte-identical
-// to a terminal runner's.
+// A horizon past every game's natural end changes nothing: the leaf service is
+// never called and the observations are byte-identical to an untruncated run's.
 TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_term";
@@ -4621,7 +4298,7 @@ TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
 
   RowLeafService leaf;
   SimRunner::Params truncated = terminal;
-  truncated.horizon_plies = 350;  // beyond any natural game length
+  truncated.horizon_plies = 350;
   truncated.leaf_service = &leaf;
   const std::vector<SimObservation> obs_truncated =
     SimRunner(d, truncated).run(pos, candidates, 400);
@@ -4632,26 +4309,26 @@ TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
   fs::remove_all(tmp);
 }
 
-// The horizon/service pairing and the minimum horizon are validated.
+// A horizon and a leaf service must be set together, and the horizon must be at
+// least kMinHorizonPlies.
 TEST(SimRunner, ValidatesTruncationParams) {
   SimRunner::Params p;
-  p.horizon_plies = 4;  // horizon without a service
+  p.horizon_plies = 4;
   ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
   ConstantLeafService leaf;
   p.leaf_service = &leaf;
-  p.horizon_plies = 0;  // service without a horizon
+  p.horizon_plies = 0;
   ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
-  p.horizon_plies = SimRunner::kMinHorizonPlies - 1;  // below the minimum
+  p.horizon_plies = SimRunner::kMinHorizonPlies - 1;
   ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
   p.horizon_plies = SimRunner::kMinHorizonPlies;
   SimRunner::validate(p);
 }
 
-// A non-finite leaf readout is a hard error -- whether NaN or the +/-inf an
-// FP16 overflow reaches first, and in any consumed field, including the
-// score-diff std that feeds delta_sq. Because a rollout runs on a worker
-// thread, the guard's throw must surface on the calling thread (threads > 1
-// here) rather than terminating the process.
+// A non-finite leaf readout in any field the runner consumes is a hard error,
+// whether NaN or the inf that an FP16 overflow produces. Rollouts run on worker
+// threads, so the throw must reach the calling thread rather than terminate the
+// process.
 TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sim_nonfinite_leaf";
@@ -4677,10 +4354,10 @@ TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
   const float inf = std::numeric_limits<float>::infinity();
   const float nan = std::numeric_limits<float>::quiet_NaN();
   const LeafPoison cases[] = {
-    {1, 0, inf},  // score-diff mean overflows to +inf: isnan-false, was missed
-    {1, 1, inf},  // score-diff std -> inf: feeds delta_sq, was unchecked
-    {1, 1, nan},  // score-diff std -> NaN: likewise
-    {0, 2, nan},  // loss prob NaN while the checked win prob stays finite
+    {1, 0, inf},  // score-diff mean: inf passes an isnan check
+    {1, 1, inf},  // score-diff std, which feeds delta_sq
+    {1, 1, nan},
+    {0, 2, nan},  // loss probability, with the win probability finite
   };
   for (const LeafPoison& c : cases) {
     NonFiniteLeafService leaf(c);
@@ -4694,11 +4371,9 @@ TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
   fs::remove_all(tmp);
 }
 
-// A full 7-tile known leave degenerates to a completely known opponent rack:
-// under a greedy (deterministic) rollout policy the opponent's first reply to
-// each candidate is then the same in every rollout, so the reply-placement
-// counts are exactly 0 or S per square. (A partial leave is exercised by the
-// partial-leave test below.)
+// A known 7-tile opponent leave is the opponent's whole rack. The rollout
+// policy is deterministic, so the opponent's first reply to a candidate is the
+// same in every rollout and each footprint class count is exactly 0 or n.
 TEST(SimRunner, KnownOppRack) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sim_openrack";
@@ -4731,18 +4406,14 @@ TEST(SimRunner, KnownOppRack) {
   bool any_reply = false;
   for (const SimObservation& o : obs) {
     ASSERT_EQ(int(o.n), params.rollouts);
-    // With the opponent's whole rack known the reply is deterministic, so every
-    // rollout lands in one footprint class: each class holds 0 or n.
     for (int i = 0; i < SimObservation::kClasses; ++i)
       ASSERT_TRUE(o.opp_next_count[i] == 0 || o.opp_next_count[i] == o.n);
-    // ...and for some candidate that class is an anchored one (a real
-    // placement, not the pass catch-all).
+    // For some candidate the reply is a real placement, not a pass.
     for (int i = 0; i < kAnchoredFootprints; ++i)
       if (o.opp_next_count[i] == o.n) any_reply = true;
   }
   ASSERT_TRUE(any_reply);
 
-  // Determinism across thread counts holds in this mode too.
   SimRunner::Params p1 = params;
   p1.threads = 1;
   const std::vector<SimObservation> obs1 = SimRunner(d, p1).run(pos, candidates, /*base_seed=*/9);
@@ -4752,9 +4423,8 @@ TEST(SimRunner, KnownOppRack) {
   fs::remove_all(tmp);
 }
 
-// A partial known leave: the rollout seeds the opponent's retained tiles and
-// samples only their hidden replenishments, so observations satisfy the same
-// invariants while replies may vary across rollouts.
+// A partial known leave: rollouts keep the opponent's known tiles and sample
+// only the rest of their rack. The usual observation invariants hold.
 TEST(SimRunner, PartialLeave) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sim_partial";
@@ -4774,7 +4444,7 @@ TEST(SimRunner, PartialLeave) {
   pos.scores = {10, 5};
   pos.mover = 0;
   pos.rack = rack_from("CATSEIQ");
-  pos.opp_leave = rack_from("ZI");  // kept 2; the other 5 are hidden draws
+  pos.opp_leave = rack_from("ZI");
 
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
@@ -4793,8 +4463,8 @@ TEST(SimRunner, PartialLeave) {
   fs::remove_all(tmp);
 }
 
-// opp_leave_from_replay: the opponent's current rack minus the draws after
-// their last move; empty before they have acted.
+// opp_leave_from_replay is the opponent's current rack minus what they drew
+// after their last move, and empty before they have acted.
 TEST(SimRunner, OppLeaveFromReplay) {
   using scribblez::binlog::opp_leave_from_replay;
   TurnRecord records[2] = {};
@@ -4804,22 +4474,17 @@ TEST(SimRunner, OppLeaveFromReplay) {
   g.records = records;
   g.num_records = 2;
 
-  // Mover at turn 1: opponent moved at turn 0, then drew A and B. Their
-  // current rack CABDEFG minus {A, B} leaves their retained CDEFG.
   const Rack now = rack_from("CABDEFG");
   const Rack leave = opp_leave_from_replay(g, /*sampled_turn=*/1, now);
   ASSERT_EQ(leave.size(), 5);
   Rack expect = rack_from("CDEFG");
   for (int i = 0; i < expect.size(); ++i) ASSERT_TRUE(rack_contains(leave, expect.tiles()[i]));
 
-  // Mover at turn 0: the opponent has not acted; nothing is known.
   ASSERT_EQ(opp_leave_from_replay(g, /*sampled_turn=*/0, now).size(), 0);
 }
 
-// util/metaprogramming.h's consteval reflection helpers, exercised on a
-// local struct. The assertions are static_asserts -- the test body passing
-// is the compile succeeding -- with a TEST wrapper so the coverage is
-// visible in the suite.
+// util/metaprogramming.h's consteval reflection helpers. The checks are
+// compile-time; the TEST wrapper only makes the coverage visible in the suite.
 namespace metaprog_test {
 struct Sample {
  public:
@@ -4829,8 +4494,7 @@ struct Sample {
   std::array<uint16_t, 3> squares_;
 
  public:
-  // squares_ is only reflected on, never read; silence -Wunused-private-field
-  // style diagnostics by touching it.
+  // Uses squares_ to silence unused-private-field warnings.
   const void* touch() const { return &squares_; }
 };
 
@@ -4838,8 +4502,7 @@ consteval bool helpers_hold() {
   if (scribblez::util::num_members<Sample>() != 2) return false;
   const auto members = scribblez::util::nonstatic_data_members<Sample>();
   if (!scribblez::util::type_is<uint32_t>(std::meta::type_of(members[0]))) return false;
-  // The private member reflects, and its reader-facing name drops the
-  // trailing underscore.
+  // Private members reflect too, and member_name drops the trailing underscore.
   if (std::string_view(scribblez::util::member_name(members[1])) != "squares") return false;
   const auto arr = std::meta::dealias(std::meta::type_of(members[1]));
   if (!scribblez::util::is_specialization_of(arr, ^^std::array)) return false;
@@ -4853,9 +4516,10 @@ consteval bool helpers_hold() {
 
 TEST(Metaprogramming, ConstevalReflectionHelpers) { static_assert(metaprog_test::helpers_hold()); }
 
-// The FFI-served format-layout document: itemsizes and constants are the
-// compiler's own, so this exercises the JSON transport, the nested-struct
-// references, and the document paths the Python reader walks.
+// The format-layout JSON served over the FFI to Python readers. Its sizes and
+// constants come from the compiler, so this checks the document structure the
+// Python side walks: struct entries, nested-struct references, subarray
+// fields and constants.
 TEST(FormatLayout, DescribesTheSidecarStructs) {
   namespace bj = boost::json;
   const bj::value doc = bj::parse(format_layout_json());
@@ -4877,8 +4541,8 @@ TEST(FormatLayout, DescribesTheSidecarStructs) {
   EXPECT_EQ(rec_fields.at(2).at("dtype").as_string(), "u1");
 
   // A subarray field carries its element code and shape. The next-move
-  // histograms are integer counts; the win-conjoined histograms and the
-  // outcome accumulators are fractional under value truncation.
+  // histograms are integer counts; the win histograms and outcome sums are
+  // fractional because truncated rollouts add leaf probabilities.
   const bj::array& obs_fields = structs.at("SimObservation").at("fields").as_array();
   bool found_counts = false, found_win = false, found_wins = false;
   for (const bj::value& f : obs_fields) {
@@ -4906,11 +4570,10 @@ TEST(FormatLayout, DescribesTheSidecarStructs) {
             OppNextPlacementTarget::kName);
 }
 
-// The Glyph byte code table is deliberately replicated in Python
-// (sim_evidence/sobs.py glyph_char) rather than served over the FFI: it is
-// effectively frozen. This pin and its Python twin (test_format_layout.py)
-// keep the two replicas in lockstep; a change on either side must be
-// mirrored on the other.
+// The Glyph code table is replicated in Python (sim_evidence/sobs.py
+// glyph_char) rather than served over the FFI, because it is effectively
+// frozen. This test and its twin in py/tests/test_format_layout.py pin both
+// copies; change them together.
 TEST(Glyph, CodeTablePinnedForCrossLanguageReaders) {
   EXPECT_EQ(Glyph::empty().code(), 0);
   EXPECT_EQ(Glyph::of(Tile::from_char('A')).code(), 1);
@@ -4928,7 +4591,7 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
 
   constexpr uint32_t kFloats = move_set_eval::kTargetFloatsV1;
   constexpr uint32_t kPlanes = move_set_eval::kTargetPlanes;
-  constexpr uint32_t kCells = move_set_eval::kPlaneWidth;  // footprint classes per head
+  constexpr uint32_t kCells = move_set_eval::kPlaneWidth;
 
   const Move m1 = make_play_full(4, 2, /*horizontal=*/true, 0b111, 24,
                                  {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
@@ -4938,8 +4601,8 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   const Move m2 = Move::exchange(xchg_tiles);
   const std::vector<float> targets = {0.7f, 0.1f, 0.2f, 33.5f,  41.0f,
                                       0.2f, 0.0f, 0.8f, -12.0f, 55.5f};
-  // Per candidate, kPlanes probability planes with distinct per-plane maxima;
-  // candidate 1's last plane is all-zero (the scale-0 case).
+  // Distinct per-plane maxima; candidate 1's last plane is all zero, so its
+  // quantization scale is 0.
   std::vector<float> planes(2 * kPlanes * kCells, 0.0f);
   for (uint32_t c = 0; c < 2; ++c) {
     for (uint32_t h = 0; h < kPlanes; ++h) {
@@ -4954,8 +4617,8 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   {
     move_set_eval::TargetWriter w(path, kFloats, kPlanes, "abc123");
     w.add_position(3, 11, {m1, m2}, targets, planes);
-    // A swept position records the legal-move count its candidates were drawn
-    // from, so a cap-truncated sweep is visible as a shortfall.
+    // A swept position records its legal-move count, so a sweep truncated by
+    // the candidate cap shows as a shortfall.
     w.add_position(3, 12, {m1, m2}, targets, planes, /*num_legal_moves=*/9184);
     w.close();
   }
@@ -4969,7 +4632,7 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   ASSERT_EQ(p0.header->game_index, 3);
   ASSERT_EQ(p0.header->turn_index, 11);
   ASSERT_EQ(p0.header->num_candidates, 2);
-  ASSERT_EQ(p0.header->num_legal_moves, 0u);  // stratified: not recorded
+  ASSERT_EQ(p0.header->num_legal_moves, 0u);  // not recorded
   ASSERT_EQ(r.position(1).header->num_legal_moves, 9184u);
   ASSERT_EQ(r.move_at(p0, 0), m1);
   ASSERT_EQ(r.move_at(p0, 1), m2);
@@ -4979,8 +4642,8 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
     }
   }
 
-  // Planes dequantize to the written probabilities within absmax-quantization
-  // error (half a step, scale/2), with the plane max reconstructed exactly.
+  // Planes are 8-bit absmax-quantized: each dequantizes within half a step,
+  // and the plane max is exact.
   for (int c = 0; c < 2; ++c) {
     const float* scales = r.plane_scales_at(p0, c);
     const uint8_t* cells = r.planes_at(p0, c);
@@ -5000,7 +4663,7 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
     }
   }
 
-  // A version mismatch fails loudly (stale files must never misparse).
+  // A version mismatch throws rather than misparsing a stale file.
   {
     std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
     f.seekp(4);  // TargetFileHeader::version
@@ -5012,9 +4675,8 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   fs::remove_all(tmp);
 }
 
-// The plane-less layout full-sweep files use: record_planes 0 shrinks the
-// record back to Move + value targets, and the plane accessors address a
-// zero-length block.
+// Full-sweep files carry no planes: with record_planes 0 a record is just the
+// Move and its value targets.
 TEST(MoveSetEvalTargetLog, RoundtripWithoutPlanes) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_mset_noplanes";
@@ -5059,9 +4721,9 @@ static Move exchange_of(char c) {
   return Move::exchange(tiles);
 }
 
-// The full sweep's selection rule: capped by static-equity rank, but never at
-// the cost of an exchange candidate, the played move, or the rank order that
-// makes the stored order an exact static-equity ranking.
+// The full sweep caps candidates by static-equity rank, but always keeps every
+// exchange and the played move, and preserves rank order so the stored order is
+// still a static-equity ranking.
 TEST(MoveSetEvalCandidates, FullSweepCapKeepsExchangesAndRankOrder) {
   std::vector<Move> ranked = ranked_plays(10);
   const Move buried_exchange = exchange_of('Q');
@@ -5073,18 +4735,16 @@ TEST(MoveSetEvalCandidates, FullSweepCapKeepsExchangesAndRankOrder) {
     move_set_eval::full_sweep_candidates(ranked, buried_play, /*cap=*/4);
   const std::vector<Move>& swept = sel.candidates;
 
-  // Everything kept, in `ranked`'s order: the head under the cap, then the two
-  // exchanges and the played move from beyond it.
+  // The head under the cap, then the exchanges and the played move from beyond
+  // it, all in `ranked`'s order.
   ASSERT_EQ(swept.size(), 7u);
   for (int i = 0; i < 4; ++i) EXPECT_EQ(swept[size_t(i)], ranked[i]);
-  EXPECT_EQ(swept[4], ranked[6]);  // the in-cap exchange, past the cap by rank
+  EXPECT_EQ(swept[4], ranked[6]);  // the first exchange, ranked past the cap
   EXPECT_EQ(swept[5], buried_play);
   EXPECT_EQ(swept[6], buried_exchange);
-  // The recorded legal count is what the sweep drew from, so the shortfall
-  // against it is exactly what the cap dropped.
+  // The shortfall against the recorded legal count is what the cap dropped.
   EXPECT_EQ(sel.num_legal_moves, ranked.size());
 
-  // Uncapped, the sweep is the whole ranking verbatim and nothing is truncated.
   const move_set_eval::Selection whole =
     move_set_eval::full_sweep_candidates(ranked, buried_play, /*cap=*/1000);
   EXPECT_EQ(whole.candidates, ranked);
@@ -5105,9 +4765,9 @@ TEST(MoveSetEvalCandidates, FullSweepKeepsAnUnrankedPlayedMove) {
   EXPECT_EQ(sel.num_legal_moves, ranked.size() + 1);
 }
 
-// Forced (simmed trajectory) candidates enter the stratified sample right
-// after the played move, deduplicated against it -- and the strata that follow
-// dedupe against them in turn, so nothing is labeled twice.
+// Forced candidates (moves already simmed for the trajectory sidecar) come right
+// after the played move, and duplicates are dropped throughout, so nothing is
+// labeled twice.
 TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
   const std::vector<Move> ranked = ranked_plays(40);
   const Move played = ranked[0];
@@ -5117,15 +4777,12 @@ TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
   const move_set_eval::Selection sel =
     move_set_eval::stratified_candidates(ranked, played, quotas, rng, forced);
   const std::vector<Move>& out = sel.candidates;
-  // The budget is additive: played + 2 distinct forced + full quotas (4 top,
-  // 4 mid, 4 tail; ranked_plays has no exchanges). Forced candidates must
-  // never shrink a stratum.
+  // Forced candidates add to the budget rather than shrinking a stratum:
+  // played + 2 distinct forced + 4 top, 4 mid, 4 tail (no exchanges exist).
   ASSERT_EQ(out.size(), 15u);
   EXPECT_EQ(out[0], played);
   EXPECT_EQ(out[1], ranked[17]);
   EXPECT_EQ(out[2], ranked[35]);  // the duplicate of `played` was skipped
-  // The top stratum still delivers the dense head: quotas.top candidates
-  // beyond the played move.
   for (int i = 1; i <= quotas.top; ++i) {
     EXPECT_NE(std::find(out.begin(), out.end(), ranked[size_t(i)]), out.end());
   }
@@ -5134,9 +4791,8 @@ TEST(MoveSetEvalCandidates, StratifiedForceIncludesSimmedCandidates) {
   }
 }
 
-// select_sim_candidates (sim/slog_position_simmer.h): both recipes report each
-// candidate's 0-based static-equity rank, which is what lets a consumer ask how
-// deep in the ranking the sim's favourite sat.
+// select_sim_candidates reports each candidate's 0-based static-equity rank, so
+// a consumer can ask how deep in the ranking the sim's favourite sat.
 TEST(SimCandidates, FlatRecipeIsTheRankedPrefix) {
   const std::vector<Move> ranked = ranked_plays(5);
   std::mt19937_64 rng(1);
@@ -5147,7 +4803,7 @@ TEST(SimCandidates, FlatRecipeIsTheRankedPrefix) {
   EXPECT_EQ(sel.equity_ranks, (std::vector<int32_t>{0, 1, 2}));
   EXPECT_EQ(sel.num_legal_moves, 5u);
 
-  recipe.top_k = 9;  // more than the position has
+  recipe.top_k = 9;  // more moves than exist
   EXPECT_EQ(select_sim_candidates(ranked, ranked[0], recipe, rng).moves, ranked);
 }
 
@@ -5170,9 +4826,9 @@ TEST(SimCandidates, StratifiedRecipeRanksEveryStratum) {
     return std::count_if(sel.equity_ranks.begin(), sel.equity_ranks.end(),
                          [&](int32_t r) { return r >= lo && r < hi; });
   };
-  EXPECT_EQ(in_band(0, 3), 3);    // played + the head
-  EXPECT_EQ(in_band(3, 10), 3);   // the contention zone
-  EXPECT_EQ(in_band(10, 41), 5);  // the tail, plus the exchange ranked last
+  EXPECT_EQ(in_band(0, 3), 3);    // played + top
+  EXPECT_EQ(in_band(3, 10), 3);   // mid, up to mid_rank_limit
+  EXPECT_EQ(in_band(10, 41), 5);  // tail, plus the exchange ranked last
 }
 
 // A played move the generator never enumerates (a PASS chosen while other moves
@@ -5186,15 +4842,13 @@ TEST(SimCandidates, UnrankedPlayedMoveGetsMinusOne) {
   EXPECT_EQ(sel.equity_ranks[0], -1);
 }
 
-// summarize_rollouts (sim/rollout_summary.h): outcome and margin moments, the
-// margin and next-move score histograms' bin edges, and the adjacency flag that
-// says a next move played off the candidate's own tiles.
+// summarize_rollouts: outcome and margin sums, histogram bin edges, and the
+// adjacency count of next moves played next to the candidate's own tiles.
 TEST(RolloutSummary, ReducesOutcomesScoresAndAdjacency) {
   const Glyph a = Glyph::of(Tile::from_char('A'));
-  // The candidate lays one tile at (7, 7).
   const Move candidate = make_play_full(7, 7, /*horizontal=*/true, 0b1, 10, {a});
   const Move hook = make_play_full(7, 8, true, 0b1, 35, {a});  // beside it
-  const Move far = make_play_full(0, 0, true, 0b1, 104, {a});  // nowhere near
+  const Move far = make_play_full(0, 0, true, 0b1, 104, {a});
   const Move bingo = make_play_full(14, 0, true, 0b1111111, 72, {a, a, a, a, a, a, a});
 
   std::vector<RolloutResult> rollouts(3);
@@ -5217,11 +4871,11 @@ TEST(RolloutSummary, ReducesOutcomesScoresAndAdjacency) {
   EXPECT_EQ(s.delta_hist[9], 1u);   // 0 in [0, 25)
   EXPECT_EQ(s.delta_hist[10], 1u);  // 30 in [25, 50)
   EXPECT_EQ(s.opp_reply.score_sum, 104 + 72 + 35);
-  EXPECT_EQ(s.opp_reply.score_hist[kScoreBins - 1], 1u);  // 104 lands in the 100+ bin
-  EXPECT_EQ(s.opp_reply.score_hist[7], 1u);
+  EXPECT_EQ(s.opp_reply.score_hist[kScoreBins - 1], 1u);  // 104: the open-ended top bin
+  EXPECT_EQ(s.opp_reply.score_hist[7], 1u);               // 72
   EXPECT_EQ(s.opp_reply.bingos, 1u);
   EXPECT_EQ(s.opp_reply.adjacent, 1u);
-  EXPECT_EQ(s.self_next.non_plays, 1u);  // the PASS of the rollout that ended
+  EXPECT_EQ(s.self_next.non_plays, 1u);  // rollout 1's missing move (a default Move)
   EXPECT_EQ(s.self_next.adjacent, 1u);
   EXPECT_EQ(s.opp_stranded_sum, 15);
   EXPECT_EQ(s.self_went_out, 1u);
@@ -5245,12 +4899,11 @@ TEST(RolloutSummary, PairedWinDiffMoments) {
   EXPECT_DOUBLE_EQ(d.sq_sum, 1.25);
 }
 
-// is_high_value_setup (sim/setup_plays.h) on the play it was defined from:
-// Sokol's K6 AC.TA (positions/NWL23/interesting-positions/ACETA.gcg) keeps the Z
-// and lays its A's beside the triple-letter squares J6 and J10, where ZA then
-// hooks. The same word one column left puts the A's ON those squares and opens
-// nothing; 9K TIZ spends the Z. Requires the NWL23 KWG + leaves; skipped if
-// absent.
+// is_high_value_setup on the play it was defined from: Sokol's K6 AC.TA
+// (positions/NWL23/interesting-positions/ACETA.gcg) keeps the Z and lays its A's
+// beside the triple-letter squares J6 and J10, where ZA then hooks. The same
+// word one column left puts the A's on those squares and sets up nothing; 9K TIZ
+// spends the Z. Skipped without the NWL23 lexicon and leaves.
 TEST(SetupPlays, AcetaIsAHighValueSetup) {
   namespace fs = std::filesystem;
   const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
@@ -5276,19 +4929,18 @@ TEST(SetupPlays, AcetaIsAHighValueSetup) {
   EXPECT_FALSE(setup.at("9K TIZ"));
 }
 
-// off_policy_draws (the trajectory off-policy floor, docs/roadmap.md item 4)
-// draws `count` distinct legal-move indices uniformly from those not already
-// taken (the anchor and on-policy picks), excludes them, and marks what it
-// draws. No stratification -- exchanges and the tail are reachable at their
-// natural frequency in the move list.
+// off_policy_draws (the trajectory's off-policy picks, docs/roadmap.md item 4)
+// draws `count` distinct indices uniformly from the moves not yet taken, and
+// marks them taken. There is no stratification: exchanges and the tail appear
+// at their natural frequency in the move list.
 TEST(MoveSetEvalCandidates, OffPolicyDrawsUniformlyExcludingTaken) {
   std::vector<Move> ranked = ranked_plays(20);
   TileCounts xchg;
   xchg.add(Tile::from_char('A'));
-  ranked.push_back(Move::exchange(xchg));  // a non-PLAY candidate is in the pool
+  ranked.push_back(Move::exchange(xchg));
   const size_t n = ranked.size();
   std::vector<char> taken(n, 0);
-  for (size_t i : {size_t{0}, size_t{5}, size_t{12}}) taken[i] = 1;  // anchor/on-policy stand-ins
+  for (size_t i : {size_t{0}, size_t{5}, size_t{12}}) taken[i] = 1;  // anchor and on-policy
   const std::vector<char> pre = taken;
   std::mt19937_64 rng(3);
   const std::vector<size_t> draws =
@@ -5297,57 +4949,55 @@ TEST(MoveSetEvalCandidates, OffPolicyDrawsUniformlyExcludingTaken) {
   ASSERT_EQ(draws.size(), 4u);
   for (size_t a = 0; a < draws.size(); ++a) {
     EXPECT_LT(draws[a], n);
-    EXPECT_FALSE(pre[draws[a]]);   // never a pre-marked (anchor/on-policy) index
-    EXPECT_TRUE(taken[draws[a]]);  // marked afterward
-    for (size_t b = a + 1; b < draws.size(); ++b) EXPECT_NE(draws[a], draws[b]);  // distinct
+    EXPECT_FALSE(pre[draws[a]]);
+    EXPECT_TRUE(taken[draws[a]]);
+    for (size_t b = a + 1; b < draws.size(); ++b) EXPECT_NE(draws[a], draws[b]);
   }
 }
 
-// A count larger than the untaken pool yields exactly the remaining pool -- and
-// a non-PLAY (exchange) is reachable with no stratum reserved for it.
+// A count larger than the untaken pool yields exactly the remaining pool,
+// including an exchange.
 TEST(MoveSetEvalCandidates, OffPolicyDrawsWholeUntakenPoolIncludingNonPlays) {
   std::vector<Move> ranked = ranked_plays(4);
   TileCounts xchg;
   xchg.add(Tile::from_char('A'));
-  ranked.push_back(Move::exchange(xchg));  // index 4, a non-PLAY
+  ranked.push_back(Move::exchange(xchg));  // index 4
   std::vector<char> taken(ranked.size(), 0);
-  taken[0] = taken[1] = 1;  // untaken pool: indices 2, 3, 4(exchange)
+  taken[0] = taken[1] = 1;
   std::mt19937_64 rng(1);
   const std::vector<size_t> draws =
     move_set_eval::off_policy_draws(ranked, /*count=*/10, rng, &taken);
-  ASSERT_EQ(draws.size(), 3u);  // capped at the untaken pool
+  ASSERT_EQ(draws.size(), 3u);
   std::vector<size_t> sorted = draws;
   std::ranges::sort(sorted);
   EXPECT_EQ(sorted, (std::vector<size_t>{2u, 3u, 4u}));
 }
 
-// count == 0 (a validated-legal config) draws nothing and leaves `taken` as it
-// was -- pins the loop's count guard against an off-by-one.
+// count == 0 is a valid config and must draw nothing.
 TEST(MoveSetEvalCandidates, OffPolicyDrawsCountZeroDrawsNothing) {
   const std::vector<Move> ranked = ranked_plays(6);
   std::vector<char> taken(ranked.size(), 0);
-  taken[0] = 1;  // one pre-taken index
+  taken[0] = 1;
   const std::vector<char> pre = taken;
   std::mt19937_64 rng(1);
   const std::vector<size_t> draws =
     move_set_eval::off_policy_draws(ranked, /*count=*/0, rng, &taken);
   EXPECT_TRUE(draws.empty());
-  EXPECT_EQ(taken, pre);  // nothing marked
+  EXPECT_EQ(taken, pre);
 }
 
-// The on-policy proposals draw a temperature softmax over EVERY unsimmed
-// candidate, not a capped head (docs/roadmap.md item 4, PR1): deployment
-// argmaxes over the full support, so a corpus proposal must be reachable at
-// any rank. With equal win equities the softmax is exactly uniform regardless
-// of temperature, so a candidate past the retired top-64 cap can only be drawn
-// once the cap is gone -- pinned here rather than left to the GPU-gated
-// end-to-end run.
+// On-policy proposals are a temperature softmax over every unsimmed candidate,
+// not over a top-ranked head: the deployed agent argmaxes over the full
+// support, so a training proposal must be reachable at any rank. Equal win
+// equities make the softmax uniform, so over 500 seeds some proposal lands
+// deeper than rank 64. Checked here so it does not depend on the GPU-gated
+// end-to-end test.
 TEST(EvidenceTrajectory, ProposalsDrawBeyondTheRetiredPoolCap) {
   constexpr int kN = 100;
-  const std::vector<Move> ranked = ranked_plays(kN);  // descending score: anchor is index 0
-  const std::vector<float> win_equity(kN, 0.5f);      // equal -> uniform softmax
+  const std::vector<Move> ranked = ranked_plays(kN);  // descending score
+  const std::vector<float> win_equity(kN, 0.5f);
   evidence::TrajectoryOptions opt;
-  opt.on_policy_min = 1;  // exactly one on-policy softmax proposal at chosen[1]
+  opt.on_policy_min = 1;  // exactly one on-policy proposal, at chosen[1]
   opt.on_policy_max = 1;
   util::SoftmaxSampler sampler;
   size_t deepest_proposal = 0;
@@ -5360,20 +5010,17 @@ TEST(EvidenceTrajectory, ProposalsDrawBeyondTheRetiredPoolCap) {
     ASSERT_GE(chosen.size(), 2u);
     EXPECT_EQ(chosen[0], 0u);  // the anchor is the highest-raw-score move
     EXPECT_EQ(roles[0], SimObsRole::kAnchor);
-    EXPECT_EQ(roles[1], SimObsRole::kOnPolicy);  // chosen[1] is the softmax proposal
+    EXPECT_EQ(roles[1], SimObsRole::kOnPolicy);
     deepest_proposal = std::max(deepest_proposal, chosen[1]);
   }
-  // The old cap kept unsimmed order indices 1..64 in reach; a proposal at 65+
-  // proves the softmax now spans the whole candidate set.
   EXPECT_GT(deepest_proposal, 64u);
 }
 
-// The sampling shuffle is a fixed permutation per (seed, game): a smaller
-// per-game sample is a prefix of a larger one. This is the subset guarantee
-// slog_sampling.h calls load-bearing -- it is what lets the target generator
-// find every trajectory-sidecar position inside its own sample with no
-// coordination beyond the seed -- so it is pinned directly here rather than
-// only through the GPU-gated end-to-end test.
+// The per-game sampling shuffle depends only on (seed, game), so a smaller
+// sample is a prefix of a larger one. The move-set target generator relies on
+// this to find every trajectory-sidecar position in its own sample (see
+// slog_sampling.h); checked here so it does not depend on the GPU-gated
+// end-to-end test.
 TEST(SlogSampling, SmallerSamplesArePrefixesOfLarger) {
   binlog::GameMetadata gm{};
   gm.eligible_begin = 3;
@@ -5398,8 +5045,8 @@ TEST(SlogSampling, SmallerSamplesArePrefixesOfLarger) {
   }
 }
 
-// The stored std must be finite even when FP16 teacher inference overflows the
-// readout to +inf (see kSdStdCap in the header); genuine readouts pass through.
+// The stored std stays finite when FP16 teacher inference overflows it to +inf
+// (see kSdStdCap); ordinary values pass through.
 TEST(MoveSetEvalTargetLog, SdStdClamp) {
   ASSERT_EQ(move_set_eval::clamped_sd_std(std::numeric_limits<float>::infinity()),
             move_set_eval::kSdStdCap);
@@ -5407,9 +5054,9 @@ TEST(MoveSetEvalTargetLog, SdStdClamp) {
   ASSERT_EQ(move_set_eval::clamped_sd_std(move_set_eval::kSdStdCap), move_set_eval::kSdStdCap);
 }
 
-// A .mset carries the information condition of the games it labels, read off
-// its source .slog's header, which is what holds a training corpus to a single
-// condition.
+// A .mset records whether the games it labels were played with face-up leaves,
+// taken from its source .slog's header, so a training corpus can be held to one
+// variant.
 TEST(MoveSetEvalTargetLog, OpenLeavesFlagFollowsTheSourceLog) {
   namespace fs = std::filesystem;
   Dictionary dict = medium_dict();
@@ -5454,10 +5101,9 @@ TEST(MoveSetEvalTargetLog, OpenLeavesFlagFollowsTheSourceLog) {
   }
 }
 
-// The distillation generator's encode path under the open-leaves arm: every
-// candidate row is the standard row plus the opponent's replayed retained
-// leave, so an open-leaves teacher is fed the input it was trained on rather
-// than a zeroed block.
+// With opp_leave_input, the target generator's candidate rows carry the
+// opponent's leave as recovered by replay, so an open-leaves teacher sees the
+// input it was trained on rather than a zeroed block.
 TEST(MoveSetEvalTargetLog, OpenLeavesCandidateRowsCarryTheReplayedLeave) {
   Dictionary dict = medium_dict();
   const GameLogStorage storage = play_test_game(dict, /*seed=*/4242ULL);
@@ -5499,9 +5145,7 @@ TEST(MoveSetEvalTargetLog, OpenLeavesCandidateRowsCarryTheReplayedLeave) {
 
 TEST(MoveSetEncoder, Basic) {
   namespace mset = move_set;
-  // A horizontal PLAY at (row 4, cols 2..4): A, a blank shown as B, C; scoring
-  // 24. An exchange surrendering D, A, and an undesignated blank (stored
-  // sorted: A, D, blank). And a PASS.
+  // A PLAY of A, blank-as-B, C; an exchange of D, A and a blank; a PASS.
   const Move play = make_play_full(
     4, 2, /*horizontal=*/true, 0b111, 24,
     {Glyph::of(Tile::from_char('A')), Glyph::played(Tile::from_char('B'), /*is_blank=*/true),
@@ -5522,8 +5166,7 @@ TEST(MoveSetEncoder, Basic) {
   mset::encode_moves(moves, 3, pre_diffs, letters.data(), blanks.data(), squares.data(),
                      tile_mask.data(), scalars.data());
 
-  // PLAY: three placed tiles in lane order; the middle is a blank. Letters are
-  // 1..26 identities regardless of blank-ness.
+  // Letters are 1..26 whether or not the tile is a blank; 0 is padding.
   ASSERT_TRUE(tile_mask[0] == 1 && tile_mask[1] == 1 && tile_mask[2] == 1);
   ASSERT_TRUE(tile_mask[3] == 0 && tile_mask[6] == 0);
   ASSERT_EQ(letters[0], Tile::from_char('A').index() + 1);
@@ -5532,29 +5175,26 @@ TEST(MoveSetEncoder, Basic) {
   ASSERT_TRUE(blanks[0] == 0 && blanks[1] == 1 && blanks[2] == 0);
   ASSERT_EQ(squares[0], 4 * BOARD_SIZE + 2);
   ASSERT_EQ(squares[2], 4 * BOARD_SIZE + 4);
-  // Resultant differential (pre 10 + score 24), tiles/7, is_play.
+  // Scalars: resulting score differential, tiles / 7, is_play.
   ASSERT_LT(std::abs(scalars[0] - 34.0f / kScoreDiffInputScale), 1e-6f);
   ASSERT_LT(std::abs(scalars[1] - 3.0f / 7.0f), 1e-6f);
   ASSERT_EQ(scalars[2], 1.0f);
 
-  // EXCHANGE: the surrendered tiles (sorted A, D, blank) fill the letter/
-  // blank/tile_mask slots so same-size exchanges differ by which tiles leave;
-  // squares stay 0. The undesignated blank has no letter -- the blank flag
-  // alone represents it. Resultant diff is the pre-move diff (score 0), and
-  // is_play is 0.
+  // An exchange encodes its surrendered tiles, sorted, so same-size exchanges
+  // are distinguishable; squares stay 0. An exchanged blank has no letter, only
+  // the blank flag.
   const int e = mset::kMoveMaxPlaced;
   ASSERT_TRUE(tile_mask[e + 0] == 1 && tile_mask[e + 1] == 1 && tile_mask[e + 2] == 1);
   ASSERT_TRUE(tile_mask[e + 3] == 0 && tile_mask[e + 6] == 0);
   ASSERT_EQ(letters[e + 0], Tile::from_char('A').index() + 1);
   ASSERT_EQ(letters[e + 1], Tile::from_char('D').index() + 1);
-  ASSERT_EQ(letters[e + 2], 0);  // the blank: letter stays the pad value
+  ASSERT_EQ(letters[e + 2], 0);
   ASSERT_TRUE(blanks[e + 0] == 0 && blanks[e + 1] == 0 && blanks[e + 2] == 1);
   for (int j = 0; j < mset::kMoveMaxPlaced; ++j) ASSERT_EQ(squares[e + j], 0);
   ASSERT_LT(std::abs(scalars[mset::kMoveScalars + 0] - (-5.0f) / kScoreDiffInputScale), 1e-6f);
   ASSERT_LT(std::abs(scalars[mset::kMoveScalars + 1] - 3.0f / 7.0f), 1e-6f);
   ASSERT_EQ(scalars[mset::kMoveScalars + 2], 0.0f);
 
-  // PASS: no tiles at all; only the carried-through differential is nonzero.
   const int p = 2 * mset::kMoveMaxPlaced;
   for (int j = 0; j < mset::kMoveMaxPlaced; ++j) ASSERT_EQ(tile_mask[p + j], 0);
   ASSERT_LT(std::abs(scalars[2 * mset::kMoveScalars + 0] - (-5.0f) / kScoreDiffInputScale), 1e-6f);
@@ -5612,7 +5252,7 @@ TEST(CrossCheckDelta, PatchedPreMovePlanesEqualTheTeachersPostMovePlanes) {
     const Board& board = pos.enc().board();
     board.ensure_movegen_caches(dict);
 
-    // PASS leaves the board alone, so its row carries the pre-move planes.
+    // A PASS leaves the board alone, so its row carries the pre-move planes.
     std::vector<Move> candidates = {Move::pass()};
     const std::vector<Move> plays = MoveGenerator(board, dict).generate(pos.rack(mover));
     const size_t stride = plays.size() / 100 + 1;
@@ -5652,7 +5292,6 @@ TEST(CrossCheckDelta, PatchedPreMovePlanesEqualTheTeachersPostMovePlanes) {
       }
       max_entries = std::max(max_entries, entries);
     }
-    // The PASS candidate changes nothing.
     ASSERT_EQ(std::count(delta_mask.begin(), delta_mask.begin() + width, uint8_t(1)), 0);
   }
   ASSERT_GT(max_entries, 4) << "no multi-tile play was exercised";
@@ -5668,7 +5307,7 @@ TEST(SimObservationLog, Roundtrip) {
   // mixup cannot round-trip cleanly.
   SimObservation o1{};
   o1.n = 16;
-  o1.wins = 9.25;  // fractional, as value-truncated rollouts accumulate
+  o1.wins = 9.25;  // fractional, as truncated rollouts produce
   o1.draws = 1.5;
   o1.losses = 5.25;
   o1.delta_sum = 123.5;
@@ -5692,7 +5331,7 @@ TEST(SimObservationLog, Roundtrip) {
     SimObsWriter w(path, kSimObsFlagTrajectory, "cafe1234", "beef5678", /*horizon_plies=*/4);
     w.add_position(3, 11, {m1, m2}, {o1, o2}, 16, 999, /*num_legal_moves=*/321,
                    {SimObsRole::kAnchor, SimObsRole::kOffPolicy});
-    w.add_position(4, 0, {m2}, {o2}, 16, 1000);  // no roles: every record stores kAnchor
+    w.add_position(4, 0, {m2}, {o2}, 16, 1000);  // no roles
     w.close();
   }
 
@@ -5709,8 +5348,8 @@ TEST(SimObservationLog, Roundtrip) {
   ASSERT_EQ(p0.header->rollouts, 16);
   ASSERT_EQ(p0.header->base_seed, 999);
   ASSERT_EQ(p0.header->num_legal_moves, 321);
-  ASSERT_EQ(p0.header->flags, 0u);  // no position flags at v4
-  SimObsRecord rec;                 // copy out of the packed file view before comparing
+  ASSERT_EQ(p0.header->flags, 0u);  // reserved
+  SimObsRecord rec;                 // copied out of the packed file view before comparing
   std::memcpy(&rec, &p0.records[0], sizeof(rec));
   ASSERT_EQ(std::memcmp(&rec.move, &m1, sizeof(Move)), 0);
   ASSERT_EQ(std::memcmp(&rec.obs, &o1, sizeof(SimObservation)), 0);
@@ -5724,9 +5363,9 @@ TEST(SimObservationLog, Roundtrip) {
   ASSERT_EQ(p1.header->num_candidates, 1);
   ASSERT_EQ(p1.header->base_seed, 1000);
   std::memcpy(&rec, &p1.records[0], sizeof(rec));
-  ASSERT_EQ(rec.role, SimObsRole::kAnchor);  // default when roles omitted
+  ASSERT_EQ(rec.role, SimObsRole::kAnchor);  // the default without roles
 
-  // A version mismatch fails loudly (stale files must never misparse).
+  // A version mismatch throws rather than misparsing a stale file.
   {
     std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
     f.seekp(4);  // SimObsFileHeader::version
@@ -5738,11 +5377,10 @@ TEST(SimObservationLog, Roundtrip) {
   fs::remove_all(tmp);
 }
 
-// Build a one-game .slog buffer whose two turns are both PASSes, with a starting
-// handicap of `initial_score_p0` points for p0, and return the score
-// differential recovered from the sampled position's input encoding. The two
-// turns are PASSes, so the board stays empty and the handicap is the sole
-// contributor to the score-diff feature.
+// Decodes turn 0 of a one-game .slog buffer in which p0 starts with
+// `initial_score_p0` points and both turns are passes, and returns the score
+// differential read back from the score-diff input. Nothing else scores, so the
+// result is the handicap.
 static int decode_handicap_score_diff(int initial_score_p0) {
   using namespace scribblez::binlog;
   using namespace scribblez;
@@ -5755,10 +5393,10 @@ static int decode_handicap_score_diff(int initial_score_p0) {
   GameMetadata gm{};
   gm.start_offset = sizeof(FileHeader) + sizeof(GameMetadata);
   gm.num_turns = 2;
-  gm.sampled_turn = 0;  // pre-move state at turn 0: empty board, active p0
+  gm.sampled_turn = 0;
   gm.initial_score_p0 = initial_score_p0;
 
-  InitialRacks ir{};  // both racks empty -- irrelevant to the score-diff feature
+  InitialRacks ir{};
   TurnBlob t0{};
   t0.move = Move::pass();
   TurnBlob t1{};
@@ -5782,14 +5420,12 @@ static int decode_handicap_score_diff(int initial_score_p0) {
   dec.decode(buf.data(), "handicap-test", /*local_start=*/0, /*n_rows=*/1, &flip,
              /*post_move=*/false, /*output_row_start=*/0, output.data());
 
-  // The score-diff scalar recovers the differential when rescaled.
   const float* sd = output.data() + kSpatialFloats + kScoreDiffOffset;
   return std::lround(sd[0] * kScoreDiffInputScale);
 }
 
-// A head-start handicap stored in GameMetadata must reach the replayed
-// position's score-differential input (the decoder seeds its score
-// accumulator from the metadata's initial scores).
+// A handicap stored in GameMetadata's initial scores reaches the replayed
+// position's score-diff input.
 TEST(Encoder, HandicapShiftsScoreDiffInput) {
   ASSERT_EQ(decode_handicap_score_diff(0), 0);
   ASSERT_EQ(decode_handicap_score_diff(80), 80);
@@ -5812,16 +5448,14 @@ static int lane_global_max(const LaneTargets& t) {
   return best;
 }
 
-// The max-move-per-lane task's per-lane targets: every legal play is bucketed into the
-// row it lies along (horizontal) or column (vertical); single-tile plays go to
-// whichever direction(s) they form a word in. These pin the bucketing, the
-// union-over-tied-maxima, and the single-tile cross rule, and cross-check the
-// structural global max against the raw move list.
+// The max-move-per-lane task's per-lane targets. Each legal play belongs to the
+// row it lies along (horizontal) or the column (vertical); a single-tile play
+// belongs to each direction in which it forms a word. The best lane max must
+// equal the best play's score.
 TEST(Lane, Targets) {
   const Dictionary d = tiny_dict();
 
-  // 1. Extending CAT -> CATS is a horizontal play in CENTER's row only; the
-  //    lone S forms no vertical word, so its column stays empty.
+  // CAT -> CATS is in CENTER's row only; the S forms no vertical word.
   {
     Board b;
     b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
@@ -5835,14 +5469,14 @@ TEST(Lane, Targets) {
     const int sk = Tile::from_char('S').index();
 
     ASSERT_TRUE(t.rows[CENTER].has_move);
-    ASSERT_TRUE((t.rows[CENTER].placed[CENTER + 3] >> sk) & 1u);  // S newly placed after CAT
+    ASSERT_TRUE((t.rows[CENTER].placed[CENTER + 3] >> sk) & 1u);
     ASSERT_EQ(t.rows[CENTER].max_score, best_move_score(moves));
     ASSERT_FALSE(t.cols[CENTER + 3].has_move);
     ASSERT_EQ(lane_global_max(t), best_move_score(moves));
   }
 
-  // 2. A single tile that crosses (forms a word both ways) lands in BOTH its
-  //    row and its column, at the same score.
+  // A single tile forming words both ways lands in its row and its column, at
+  // the same score.
   {
     Board b;
     b.set(CENTER, CENTER - 1, Glyph::of(Tile::from_char('A')));  // A to S's left
@@ -5853,13 +5487,12 @@ TEST(Lane, Targets) {
 
     ASSERT_TRUE(t.rows[CENTER].has_move);
     ASSERT_TRUE(t.cols[CENTER].has_move);
-    ASSERT_TRUE((t.rows[CENTER].placed[CENTER] >> sk) & 1u);  // lane cell == column
-    ASSERT_TRUE((t.cols[CENTER].placed[CENTER] >> sk) & 1u);  // lane cell == row
+    ASSERT_TRUE((t.rows[CENTER].placed[CENTER] >> sk) & 1u);  // lane cell is the column
+    ASSERT_TRUE((t.cols[CENTER].placed[CENTER] >> sk) & 1u);  // lane cell is the row
     ASSERT_EQ(t.rows[CENTER].max_score, t.cols[CENTER].max_score);
   }
 
-  // 3. A single tile cannot open the game (no word formed), so every lane is
-  //    empty on an empty board.
+  // A single tile cannot open the game, so every lane is empty.
   {
     Board b;
     const LaneTargets t = compute_lane_targets(b, rack_from("S"), d);
@@ -5867,9 +5500,8 @@ TEST(Lane, Targets) {
     for (const auto& lane : t.cols) ASSERT_FALSE(lane.has_move);
   }
 
-  // 3b. The flat label encoding mirrors the LaneTargets for the CATS position:
-  //     CENTER's row lane carries the S occupancy + score bin + mask bit, and an
-  //     untouched lane is all zeros.
+  // The flat label encoding of the CATS position: CENTER's row lane carries the
+  // S occupancy, the score bin and the mask bit; other lanes are all zeros.
   {
     Board b;
     b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
@@ -5885,34 +5517,32 @@ TEST(Lane, Targets) {
     const int row_id = CENTER;  // axis 0, lane CENTER
     const int sk = Tile::from_char('S').index();
 
-    // Occupancy: only S at cell CENTER+3 of CENTER's row lane is set.
     const float* lane_occ = occ + row_id * kLaneLen * kLaneTileKinds;
     ASSERT_EQ(lane_occ[(CENTER + 3) * kLaneTileKinds + sk], 1.0f);
     ASSERT_EQ(lane_occ[(CENTER + 3) * kLaneTileKinds + Tile::from_char('C').index()], 0.0f);
-    ASSERT_EQ(lane_occ[CENTER * kLaneTileKinds + sk], 0.0f);  // CAT tiles are not "placed"
+    ASSERT_EQ(lane_occ[CENTER * kLaneTileKinds + sk], 0.0f);  // CAT was already on the board
 
     ASSERT_EQ(mask[row_id], 1.0f);
     ASSERT_EQ(score[row_id], float(std::min(t.rows[CENTER].max_score, kLaneScoreBins - 1)));
 
-    // An empty lane (row 0) is all zeros: mask off, score 0, no occupancy.
     ASSERT_EQ(mask[0], 0.0f);
     ASSERT_EQ(score[0], 0.0f);
     for (int i = 0; i < kLaneLen * kLaneTileKinds; ++i) ASSERT_EQ(occ[i], 0.0f);
 
-    // On the transposed board the same play is vertical: what lived in axis-0
-    // lane CENTER now lives in axis-1 (vertical) lane CENTER, same cell.
+    // On the transposed board the play is vertical, so it moves to the axis-1
+    // lane CENTER, same cell.
     std::vector<float> frow(kLaneLabelFloats, -1.0f);
     encode_lane_targets(compute_lane_targets(b.transpose(), rack_from("S"), d), frow.data());
     const float* focc = frow.data();
     const float* v_lane = focc + (kLanesPerAxis + CENTER) * kLaneLen * kLaneTileKinds;
     const float* h_lane = focc + CENTER * kLaneLen * kLaneTileKinds;
-    ASSERT_EQ(v_lane[(CENTER + 3) * kLaneTileKinds + sk], 1.0f);                     // now vertical
-    for (int i = 0; i < kLaneLen * kLaneTileKinds; ++i) ASSERT_EQ(h_lane[i], 0.0f);  // cols empty
+    ASSERT_EQ(v_lane[(CENTER + 3) * kLaneTileKinds + sk], 1.0f);
+    for (int i = 0; i < kLaneLen * kLaneTileKinds; ++i) ASSERT_EQ(h_lane[i], 0.0f);
     ASSERT_EQ((focc + kLaneOccupancyFloats)[kLanesPerAxis + CENTER], score[row_id]);
   }
 
-  // 4. Random-walk invariant: the structural global max always equals the raw
-  //    best move score, and lanes are marked iff legal moves exist.
+  // Along a random game: the best lane max equals the best play's score, and
+  // some lane has a move iff any legal play exists.
   {
     std::mt19937 rng(0x1a2b3c);
     Board b;
@@ -5929,7 +5559,7 @@ TEST(Lane, Targets) {
       ASSERT_EQ(any_lane, !moves.empty());
 
       if (moves.empty()) {
-        b = Board();  // reset when the position is stuck
+        b = Board();
         continue;
       }
       const Move* best = &moves.front();
@@ -5940,11 +5570,9 @@ TEST(Lane, Targets) {
   }
 }
 
-// compute_lane_best_moves keeps the actual plays tied for each lane's maximum,
-// sharing compute_lane_targets' assignment rule. Pins: the two agree on
-// has_move/max_score for every lane; every kept move scores exactly the lane max;
-// and a kept play's word and origin recover from the pre-move board (CATS extends
-// CAT in CENTER's row).
+// compute_lane_best_moves keeps the plays tied for each lane's maximum. It
+// agrees with compute_lane_targets on every lane, keeps only maximal plays, and
+// a kept play's word and origin are recoverable from the pre-move board.
 TEST(Lane, BestMoves) {
   const Dictionary d = tiny_dict();
 
@@ -5957,7 +5585,6 @@ TEST(Lane, BestMoves) {
   const LaneTargets t = compute_lane_targets(b, r, d);
   const LaneBestMovesSet bm = compute_lane_best_moves(b, r, d);
 
-  // Agreement with the union targets across all 30 lanes.
   for (int i = 0; i < kLanesPerAxis; ++i) {
     ASSERT_EQ(bm.rows[i].has_move, t.rows[i].has_move);
     ASSERT_EQ(bm.cols[i].has_move, t.cols[i].has_move);
@@ -5965,14 +5592,11 @@ TEST(Lane, BestMoves) {
     ASSERT_EQ(bm.cols[i].max_score, t.cols[i].max_score);
   }
 
-  // Every kept move scores exactly its lane's max (no sub-maximal plays retained).
   for (const auto& lane : bm.rows)
     for (const Move& m : lane.moves) ASSERT_EQ(int(m.score()), lane.max_score);
   for (const auto& lane : bm.cols)
     for (const Move& m : lane.moves) ASSERT_EQ(int(m.score()), lane.max_score);
 
-  // CENTER's row holds the maximal play CATS; its word and origin recover from the
-  // pre-move board.
   const LaneBestMoves& row = bm.rows[CENTER];
   ASSERT_TRUE(row.has_move);
   ASSERT_FALSE(row.moves.empty());
@@ -5986,13 +5610,12 @@ TEST(Lane, BestMoves) {
   ASSERT_TRUE(found_cats);
 }
 
-// The GCG -> analysis-position bridge and the lane-analysis JSON. parse_* takes the
-// board after all recorded moves with the next player to move and reads that
-// player's rack from the #Rack header (the move log clears it during replay); the
-// JSON carries the web board plus per-lane ground truth and maximal plays.
+// parse_gcg_analysis_position takes the board after all recorded moves, with
+// the next player to move and that player's rack from the #Rack header. The
+// lane-analysis JSON carries the web board plus per-lane ground truth and
+// maximal plays.
 TEST(Lane, Analysis) {
-  // One play by P1 (CAT across the center), so P2 is on move; #Rack2 is the
-  // analysis rack. Coordinate "8H" is row 8 (index 7 == CENTER), column H (index 7).
+  // After P1's CAT at 8H (the center square), P2 is on move with #Rack2.
   const std::string gcg =
     "#player1 P1 Player One\n"
     "#player2 P2 Player Two\n"
@@ -6003,14 +5626,12 @@ TEST(Lane, Analysis) {
   GcgAnalysisPosition pos;
   std::string error;
   ASSERT_TRUE(parse_gcg_analysis_position(gcg, &pos, &error));
-  ASSERT_EQ(pos.on_move, 1);                                  // P2 to move after P1's single play
-  ASSERT_EQ(pos.rack, rack_from("EINRSTU"));                  // from #Rack2
+  ASSERT_EQ(pos.on_move, 1);
+  ASSERT_EQ(pos.rack, rack_from("EINRSTU"));
   ASSERT_FALSE(pos.board.at(CENTER, CENTER).is_empty());      // C
   ASSERT_FALSE(pos.board.at(CENTER, CENTER + 2).is_empty());  // T
-  ASSERT_TRUE(pos.board.at(CENTER, CENTER + 3).is_empty());   // nothing past CAT
+  ASSERT_TRUE(pos.board.at(CENTER, CENTER + 3).is_empty());
 
-  // JSON structure (built against a tiny dictionary, no real lexicon needed):
-  // extend CAT with S in CENTER's row.
   const Dictionary d = tiny_dict();
   Board b;
   b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
@@ -6019,7 +5640,7 @@ TEST(Lane, Analysis) {
   const std::string js = lane_analysis_json(b, rack_from("S"), /*on_move=*/0, d);
   const boost::json::value v = boost::json::parse(js);
   const boost::json::object& o = v.as_object();
-  ASSERT_TRUE(o.contains("board"));  // web GameState for rendering
+  ASSERT_TRUE(o.contains("board"));
   ASSERT_EQ(o.at("on_move").as_int64(), 0);
   const boost::json::object& la = o.at("lane_analysis").as_object();
   const boost::json::array& rows = la.at("rows").as_array();
@@ -6032,9 +5653,7 @@ TEST(Lane, Analysis) {
   ASSERT_TRUE(json_has_cats);
 }
 
-// The max-move-per-lane model's input encoder: 31 board planes (letters, blank-marker,
-// premiums) + 27 raw rack counts, with NO cross-check planes. Pins the plane
-// contents, premium consistency, rack counts, and the transposed board.
+// The premium plane (0-based, within the premium block) for `p`, or -1.
 static int prem_plane_offset(Premium p) {
   if (p == Premium::DLS) return 0;
   if (p == Premium::TLS) return 1;
@@ -6043,12 +5662,14 @@ static int prem_plane_offset(Premium p) {
   return -1;
 }
 
+// The max-move-per-lane model's input: the 31 board planes (letters, blank
+// marker, premiums) and 27 raw rack counts, with no cross-check planes.
 TEST(MaxMovePerLane, InputEncoder) {
   Board b;
   b.set(7, 7, Glyph::of(Tile::from_char('C')));
   b.set(7, 8, Glyph::of(Tile::from_char('A')));
   b.set(7, 9, Glyph::of(Tile::from_char('T')));
-  b.set(5, 5, Glyph::played(Tile::from_char('S'), /*is_blank=*/true));  // designated blank
+  b.set(5, 5, Glyph::played(Tile::from_char('S'), /*is_blank=*/true));
   const Rack rack = rack_from("AAB?");
 
   using Enc = MaxMovePerLaneInputEncoder;
@@ -6062,18 +5683,17 @@ TEST(MaxMovePerLane, InputEncoder) {
   std::vector<float> out(Enc::kInputFloats, -1.0f);
   Enc::encode(b, rack, out.data());
 
-  // Letter planes (a designated blank still sets its letter plane).
+  // A blank sets its designated letter's plane too.
   ASSERT_EQ(out[C * cells + cell(7, 7)], 1.0f);
   ASSERT_EQ(out[A * cells + cell(7, 8)], 1.0f);
   ASSERT_EQ(out[Sx * cells + cell(5, 5)], 1.0f);
   ASSERT_EQ(out[A * cells + cell(7, 7)], 0.0f);
 
-  // Blank-marker plane: set under the blank only.
   ASSERT_EQ(out[BoardPlanes::kBlankMarkerPlane * cells + cell(5, 5)], 1.0f);
   ASSERT_EQ(out[BoardPlanes::kBlankMarkerPlane * cells + cell(7, 7)], 0.0f);
 
-  // Premium planes agree with Board::PREMIUM at every cell (reported even under
-  // a played tile), and exactly one premium plane is set per premium square.
+  // Premium planes match the board's premiums everywhere, including under
+  // played tiles.
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
       const int want = prem_plane_offset(b.premium_at(r, c));
@@ -6084,30 +5704,26 @@ TEST(MaxMovePerLane, InputEncoder) {
     }
   }
 
-  // Rack scalars: raw counts, blank in slot 26.
   const float* counts = out.data() + Enc::kSpatialFloats;
   ASSERT_EQ(counts[A], 2.0f);
   ASSERT_EQ(counts[B], 1.0f);
   ASSERT_EQ(counts[26], 1.0f);  // blank
   ASSERT_EQ(counts[C], 0.0f);
 
-  // The transposed board's planes transpose; the rack scalars are untouched.
   std::vector<float> flipped(Enc::kInputFloats, -1.0f);
   Enc::encode(b.transpose(), rack, flipped.data());
-  ASSERT_EQ(flipped[A * cells + cell(8, 7)], 1.0f);  // (7,8) -> (8,7)
+  ASSERT_EQ(flipped[A * cells + cell(8, 7)], 1.0f);
   ASSERT_EQ(flipped[A * cells + cell(7, 8)], 0.0f);
   ASSERT_EQ(flipped[C * cells + cell(7, 7)], 1.0f);  // on the diagonal, unchanged
   const float* fcounts = flipped.data() + Enc::kSpatialFloats;
   ASSERT_TRUE(fcounts[A] == 2.0f && fcounts[26] == 1.0f);
 }
 
-// The max-move-per-lane training task: one full row is exactly the max-move-per-lane input encoding
-// followed by the per-lane labels for the board/rack at the sampled position.
-// Checked for both symmetry orientations.
+// A max-move-per-lane training row is the task's input encoding followed by
+// the per-lane labels, in both frames.
 TEST(MaxMovePerLane, TaskRow) {
   const Dictionary d = tiny_dict();
 
-  // CAT on the board (the context exposes the board via its GameStateEncoder).
   GameStateEncoder gse{InputEncodingSpec{&d}};
   gse.apply_move(make_play(CENTER, CENTER, /*horizontal=*/true,
                            {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
@@ -6137,14 +5753,12 @@ TEST(MaxMovePerLane, TaskRow) {
   }
 }
 
-// The trajectory pane's decision-point reading of a position-set .gcg
-// (training/trajectory_position.h): the exhibit position (a frozen copy of
-// positions/NWL23/face-up-trajectory-set/egotize-lane.gcg) parses to the seat,
-// rack and known leave that set's README states, the board row is the open-leaves
-// arm's, the score differential is the mover's, and every legal move --
-// among them the recorded HastyBot play, E11 GAVE (through the A of INCASED,
-// so "E11 G.VE") -- carries a notation in the bundle. Requires the NWL23 KWG +
-// leaves; skipped if absent.
+// read_trajectory_decision on a position-set .gcg (a copy of
+// positions/NWL23/face-up-trajectory-set/egotize-lane.gcg): the seat, rack,
+// scores and known leave match that set's README, the row uses the open-leaves
+// layout, and the bundle has a notation for every legal move, including
+// HastyBot's E11 GAVE through the A of INCASED ("E11 G.VE"). Skipped without
+// the NWL23 lexicon and leaves.
 TEST(TrajectoryPosition, ExhibitDecisionPoint) {
   namespace fs = std::filesystem;
   using namespace scribblez;
@@ -6182,28 +5796,25 @@ TEST(TrajectoryPosition, ExhibitDecisionPoint) {
   int score_diff = 0;
   encode_trajectory_decision(d, arm, row.data(), &score_diff);
   EXPECT_EQ(score_diff, 440 - 387);
-  // The hidden arm's row is a prefix-shaped sibling: same spatial block,
-  // fewer scalars.
+  // Without opp_leave_input, the row only lacks the opponent-leave block.
   const InputEncodingSpec hidden{&dict, false};
   EXPECT_EQ(input_floats(arm), input_floats(hidden) + kOppLeaveCountFloats);
 }
 
-// Evidence staging (agent/evidence_staging.h): the C++ port of evidence.py's
-// build_evidence_inputs. Hand-computed against a two-candidate evidence set over
-// three scored candidates, so a drift from the Python normalization -- a
-// missing /rollouts, an unscaled delta, a wrong softmax/sigmoid, a mis-gathered
-// move encoding, or a footprint class on the wrong (slot, cell) channel -- is
-// caught here; the runtime's end-to-end parity test
-// (test_proposal_inference_parity) cross-checks the whole path against the
-// Python fusion stage.
+// Evidence staging, the C++ port of evidence.py's build_evidence_inputs,
+// checked against hand-computed values for a two-candidate evidence set over
+// three scored candidates. This catches drift from the Python normalization (a
+// missing /rollouts, an unscaled delta, a wrong softmax or sigmoid, a
+// mis-gathered move encoding, a footprint class on the wrong channel).
+// test_proposal_inference_parity.cpp checks the whole path end to end.
 TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   using namespace evidence;
   constexpr int kChannels = 2;
   constexpr int kScored = 3;
   constexpr int kCells = kEvidencePlaneCells;
 
-  // Cache predictions for three scored candidates. move_enc is gathered by a
-  // candidate's scored index; wld/planes are decoded here.
+  // Cached model predictions for three scored candidates, gathered by each
+  // evidence candidate's scored index.
   std::vector<float> move_enc = {1.0f, 2.0f, 3.0f, 4.0f, 7.0f, 8.0f};  // rows 0,1,2
   std::vector<float> wld_logits = {0.0f, 0.0f, 0.0f, 5.0f, 5.0f, 5.0f, 2.0f, 0.0f, 0.0f};
   std::vector<float> score_diff = {-50.0f, 10.0f, 0.0f, 0.0f, 30.0f, 5.0f};  // [mean,std] rows
@@ -6243,9 +5854,8 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   const std::vector<int> scored_indices = {2, 0};
 
   constexpr int kMaxE = 4;
-  // Pre-fill with a sentinel (buffers are reused turn-over-turn), so the
-  // padding-row zero checks below prove the memsets actually cleared it rather
-  // than passing vacuously on a fresh zero-initialized vector.
+  // Sentinel-filled, because real buffers are reused from turn to turn: the
+  // padding checks below must see stale data cleared, not a fresh zero buffer.
   std::vector<float> ev_move_enc(size_t(kMaxE) * kChannels, -1.0f);
   std::vector<float> ev_planes(size_t(kMaxE) * kNumEvidencePlanes * kCells, -1.0f);
   std::vector<float> ev_scalars(size_t(kMaxE) * kNumEvidenceScalars, -1.0f);
@@ -6259,8 +5869,7 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   EXPECT_EQ(ev_mask[2], 0);
   EXPECT_EQ(ev_mask[3], 0);
 
-  // Padding rows (2, 3) are fully zeroed in every buffer, not just move_enc: a
-  // dropped or mis-sized memset of planes/scalars would otherwise leak garbage.
+  // Padding rows (2, 3) are zeroed in every buffer.
   for (int row = 2; row < kMaxE; ++row) {
     const float* pad_planes = ev_planes.data() + size_t(row) * kNumEvidencePlanes * kCells;
     const float* pad_scalars = ev_scalars.data() + size_t(row) * kNumEvidenceScalars;
@@ -6270,7 +5879,7 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
     EXPECT_FLOAT_EQ(pad_scalars[kNumEvidenceScalars - 1], 0.0f);
   }
 
-  // move_enc gathered by scored index (2 then 0), padding rows zeroed.
+  // move_enc gathered by scored index: 2, then 0.
   EXPECT_FLOAT_EQ(ev_move_enc[0], 7.0f);
   EXPECT_FLOAT_EQ(ev_move_enc[1], 8.0f);
   EXPECT_FLOAT_EQ(ev_move_enc[2], 1.0f);
@@ -6279,8 +5888,8 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   EXPECT_FLOAT_EQ(ev_move_enc[7], 0.0f);
 
   // Candidate 0 planes: observed histogram counts / rollouts on channel
-  // (head * kSlotsPerCell + slot) at the class's cell, predicted probs copied
-  // through, footprint one-hot at (slot channel, anchor cell).
+  // (head * kSlotsPerCell + slot) at the class's cell, predicted probabilities
+  // copied through, and the candidate's footprint one-hot at (slot, anchor cell).
   const float* p0 = ev_planes.data();
   constexpr int kPredBase = kNumObservedPlanes;
   constexpr int kFootBase = kNumObservedPlanes + kNumPredictedPlanes;
@@ -6296,13 +5905,12 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   EXPECT_FLOAT_EQ(p0[(kFootBase + 0) * kCells + 0], 0.0f);
   EXPECT_FLOAT_EQ(p0[(kFootBase + 1) * kCells + (7 * BOARD_SIZE + 7)], 0.0f);
 
-  // Candidate 1 (PASS): observed planes empty (the pass catch-all class is
-  // dropped), footprint block empty.
+  // Candidate 1 (PASS): the pass class has no cell, so the observed and
+  // footprint planes stay empty.
   const float* p1 = ev_planes.data() + size_t(kNumEvidencePlanes) * kCells;
   EXPECT_FLOAT_EQ(p1[(0 * kSlotsPerCell + 2) * kCells + 5], 0.0f);
   EXPECT_FLOAT_EQ(p1[(kFootBase + 0) * kCells + (7 * BOARD_SIZE + 7)], 0.0f);
 
-  // Candidate 0 scalars.
   const float* s0 = ev_scalars.data();
   EXPECT_FLOAT_EQ(s0[0], 0.75f);  // wins/n
   EXPECT_FLOAT_EQ(s0[1], 0.0f);
@@ -6356,13 +5964,12 @@ TEST(EvidenceStaging, RejectsOversizedSetAndAcceptsFullWidth) {
   std::vector<uint8_t> mk(kMaxE);
   const EvidenceStagingOutputs out{me.data(), pl.data(), sc.data(), mk.data()};
 
-  // One more candidate than the padded width -> throws (before any write).
+  // One more candidate than the padded width throws.
   const std::vector<Move> too_many(kMaxE + 1);
   const std::vector<SimObservation> obs_many(kMaxE + 1);
   const std::vector<int> idx_many(kMaxE + 1, 0);
   EXPECT_THROW(stage_evidence(too_many, obs_many, idx_many, pred, kMaxE, out), std::runtime_error);
-  // Mismatched span lengths -> throws too, on either the observations or the
-  // scored_indices disjunct of the length check.
+  // So does a length mismatch, in either the observations or scored_indices.
   EXPECT_THROW(stage_evidence(std::vector<Move>(2), std::vector<SimObservation>(1),
                               std::vector<int>(2), pred, kMaxE, out),
                std::runtime_error);
@@ -6370,7 +5977,7 @@ TEST(EvidenceStaging, RejectsOversizedSetAndAcceptsFullWidth) {
                               std::vector<int>(1), pred, kMaxE, out),
                std::runtime_error);
 
-  // Exactly the padded width is accepted and marks every row real.
+  // Exactly the padded width is accepted.
   stage_evidence(std::vector<Move>(kMaxE), std::vector<SimObservation>(kMaxE),
                  std::vector<int>(kMaxE, 0), pred, kMaxE, out);
   for (int j = 0; j < kMaxE; ++j) EXPECT_EQ(mk[j], 1);
@@ -6388,8 +5995,8 @@ TEST(EvidenceStaging, ClampsNegativeVarianceAndHandlesEmptySet) {
   std::vector<uint8_t> mk(kMaxE);
   const EvidenceStagingOutputs out{me.data(), pl.data(), sc.data(), mk.data()};
 
-  // delta_sq_sum/n (75) below mean^2 (100): the sample variance is negative from
-  // these (deliberate) inputs; the std must clamp to exactly 0, never NaN.
+  // delta_sq_sum / n (75) below mean^2 (100) gives a negative variance; the std
+  // must clamp to exactly 0, never NaN.
   SimObservation neg_var;
   neg_var.n = 2;
   neg_var.delta_sum = 20.0;      // mean 10
@@ -6400,9 +6007,7 @@ TEST(EvidenceStaging, ClampsNegativeVarianceAndHandlesEmptySet) {
   EXPECT_TRUE(std::isfinite(sc[4]));
 
   // The empty set (the deployment loop's first pass) masks and zeroes every
-  // buffer. Sentinel-fill first (buffers are reused turn-over-turn), so each
-  // memset -- planes and move_enc included -- is verified to clear stale data,
-  // not just to leave a fresh zero buffer alone.
+  // buffer. Sentinel-filled first, as in MatchesHandComputedNormalization.
   std::fill(mk.begin(), mk.end(), uint8_t(9));
   std::fill(sc.begin(), sc.end(), -1.0f);
   std::fill(pl.begin(), pl.end(), -1.0f);

@@ -1,6 +1,6 @@
-// Monte-Carlo ground truth under the two leave conditions
-// (sim/monte_carlo_sim.h). Gated on the lexicon mount, like the other
-// HastyBot-driven tests.
+// Monte-Carlo ground truth (sim/monte_carlo_sim.h): the per-square placement
+// planes, and the rollouts under the two leave conditions. The rollout tests
+// need the NWL23 lexicon and leaves on the data mount and skip without them.
 
 #include "data/gcg_post_move.h"
 #include "game/board.h"
@@ -30,12 +30,12 @@ Glyph G(int letter_index) { return Glyph::of(Tile::of(letter_index)); }
 int cell(int r, int c) { return r * BOARD_SIZE + c; }
 
 // The self planes credit a reply's footprint decoded on the pre-reply board,
-// not its literal squares. The opponent's reply is a lone tile at (7,8); self
-// then plays vertically down column 8 THROUGH it -- tiles at (5,8), (6,8),
-// (8,8), threading (7,8). On the pre-reply board (7,8) is still empty, so the
-// footprint (anchor (5,8), vertical, k=3) decodes to (5,8), (6,8), (7,8): the
-// tail moves from the square past the opponent's tile onto the opponent's
-// tile, exactly as the placement heads' collapse would decode it.
+// not its literal squares. The opponent plays a lone tile at (7,8); self then
+// plays down column 8 through it, placing (5,8), (6,8) and (8,8). On the
+// pre-reply board (7,8) is still empty, so the footprint (anchor (5,8),
+// vertical, 3 tiles) decodes to (5,8), (6,8), (7,8): the third tile lands on
+// the opponent's square rather than the one past it, matching how the model's
+// placement heads decode a footprint.
 TEST(PlacementPlanes, SelfReplyIsProjectedOntoThePreReplyBoard) {
   Board board;
   board.set(7, 7, G(4));  // the position's one tile
@@ -78,8 +78,8 @@ class MonteCarloSimTest : public ::testing::Test {
     HastyEquity::ensure_initialized("NWL23");
   }
 
-  // The fixture position: Hasty_2 bingoed INCASED, Hasty_1 then played GAVE --
-  // the final mover is the POV, and the opponent kept nothing.
+  // Hasty_2 bingoed INCASED, then Hasty_1 (the POV) played GAVE; the opponent
+  // kept nothing.
   static std::string postbingo_text() {
     const fs::path p = fs::path(SCRIBBLEZ_TEST_DATA_DIR) / "postbingo-gave.gcg";
     std::string text = util::read_file(p.string());
@@ -121,9 +121,8 @@ void expect_same(const MonteCarloResult& a, const MonteCarloResult& b) {
   EXPECT_EQ(a.placement.opp_next, b.placement.opp_next);
 }
 
-// After a bingo nothing is known face-up and there is nothing to infer, so
-// the two conditions are the same rollouts -- what lets the tool write one
-// truth under both names for such a position.
+// After a bingo the opponent kept nothing, so there is nothing to show face-up
+// or to infer and the two conditions must produce identical rollouts.
 TEST_F(MonteCarloSimTest, ConditionsCoincideAfterABingo) {
   const ParsedGcgPostMove pos = parse(postbingo_text());
   ASSERT_TRUE(pos.opp_leave.empty());

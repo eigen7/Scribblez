@@ -6,10 +6,9 @@
 
 namespace scribblez {
 
-// The "highest-scoring move per lane" task: the lean board + rack input
-// (MaxMovePerLaneInputEncoder) plus the per-lane occupancy / score / mask labels.
-// The labels require enumerating legal moves at the position, so this task reads
-// the lexicon from the context's `dict`.
+// The max-move-per-lane training task: MaxMovePerLaneInputEncoder's input plus
+// the lane_targets.h labels. The labels come from generating every legal move at
+// the position, using the lexicon in ctx.spec.dict.
 struct MaxMovePerLaneTask {
   static constexpr int kInputFloats = MaxMovePerLaneInputEncoder::kInputFloats;
   static constexpr int kLabelFloats = kLaneLabelFloats;

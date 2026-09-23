@@ -1,21 +1,11 @@
-// Unit tests for MsetSimAgent, the move-set-evaluation agent, with the model
-// replaced by a scripted MoveSetEvalService stub -- no ONNX, no TensorRT, no
-// GPU.
-//
-//  * the sim set is the scripted model's top K, not static equity's: the agent
-//    plays the rollouts' favourite among them, checked by replaying the
-//    decision through SimRunner with the agent's own seed.
-//  * the default shortlist scores every candidate -- exchanges included, which
-//    the model may promote -- and a shortlist caps what reaches the model.
-//  * two agents on one seed agree.
-//  * a bag-empty turn, and a sole candidate, are answered without the model.
-//  * ONE service call carries the whole candidate set, and the move features in
-//    it are exactly what move_set::encode_move makes of each candidate at the
-//    turn's score differential. (Chunking a set past the engine's ceiling is
-//    the service's job, not the agent's, and is tested where it lives.)
-//  * the pre-move board row the agent feeds the model is byte-identical to the
-//    row the training BlockDecoder reconstructs for the same position -- the
-//    drift the model itself could never reveal.
+// MsetSimAgent, which sims the move-set evaluation model's top K candidates,
+// with the model replaced by a scripted stub (no GPU). Besides the selection
+// checks it shares with the NeuralSimAgent suite, it pins the agent's side of
+// the model contract: one service call carries the whole candidate set, each
+// candidate's features are what move_set::encode_move produces, and the board
+// row matches the one the training decoder reconstructs. Chunking a set larger
+// than the engine is the service's job and is tested in
+// test_mset_inference_parity.
 
 #include "agent/agent.h"
 #include "agent/mset_sim_agent.h"
@@ -58,7 +48,7 @@ using scribblez::testing::StubMoveSetEvalService;
 
 namespace {
 
-// The base input layout the stub declares.
+// The stub declares the base input layout.
 const int kInputFloats = input_floats(InputEncodingSpec{nullptr});
 
 class MsetSimAgentTest : public ::testing::Test {
@@ -83,7 +73,7 @@ class MsetSimAgentTest : public ::testing::Test {
   }
 
   // An opening turn with a non-empty opponent leave, so the position handed to
-  // the simulator carries every field the agent is responsible for filling.
+  // the simulator has every field the agent is responsible for filling.
   MoveRequest request() const {
     return MoveRequest{board_,          dict_,    my_rack_, opp_leave_, /*my_score=*/13,
                        /*opp_score=*/7, bag_size_};
@@ -100,10 +90,9 @@ class MsetSimAgentTest : public ::testing::Test {
 }  // namespace
 
 TEST_F(MsetSimAgentTest, OutOfRangeScalarParamsAreRejected) {
-  // Every guard in validate(), including its boundaries. --rollouts is the one
-  // whose absence was silent rather than loud: SimRunner only asserts its
-  // bound, so a Release build ran 0 rollouts and played the model's rank-0
-  // candidate every turn (see validate()'s comment).
+  // Every guard in validate(), at its boundaries. Zero rollouts is the
+  // dangerous one: without the guard the agent would play the model's top
+  // candidate every turn without complaint.
   const auto build = [&](int shortlist, int sim_top_k, int rollouts) {
     MsetSimAgent::Params p = params();
     p.shortlist = shortlist;
@@ -117,25 +106,25 @@ TEST_F(MsetSimAgentTest, OutOfRangeScalarParamsAreRejected) {
   EXPECT_THROW(build(0, 2, 0), std::runtime_error);   // --rollouts, lower
   EXPECT_THROW(build(0, 2, SimRunner::kMaxRollouts + 1), std::runtime_error);
 
-  // The accepted boundaries, so the bounds cannot silently tighten.
+  // The accepted boundaries, so the bounds cannot tighten unnoticed.
   EXPECT_NO_THROW(build(0, 1, 1));
   EXPECT_NO_THROW(build(0, 1, SimRunner::kMaxRollouts));
 }
 
-// The agent forwards sim_horizon into its SimRunner: the runner validates the
-// horizon (pairing against the injected leaf, and the lower bound) at
-// construction, so a bad horizon is rejected. If the agent silently dropped
-// sim_horizon it would run terminal rollouts and none of these would throw.
+// The agent must forward sim_horizon to its SimRunner, which validates it at
+// construction: it needs a leaf service and must meet the minimum. An agent
+// that dropped sim_horizon would run terminal rollouts and throw in neither
+// case.
 TEST_F(MsetSimAgentTest, TruncationHorizonIsWiredToTheRunner) {
   using scribblez::testing::StubEvalService;
   MsetSimAgent::Params p = params();
-  p.sim_horizon = SimRunner::kMinHorizonPlies;  // a horizon with no leaf service
+  p.sim_horizon = SimRunner::kMinHorizonPlies;  // no leaf service
   EXPECT_THROW(MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>()), std::runtime_error);
   p.sim_horizon = SimRunner::kMinHorizonPlies - 1;  // below the minimum, even with a leaf
   EXPECT_THROW(MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>(),
                             std::make_shared<StubEvalService>()),
                std::runtime_error);
-  p.sim_horizon = SimRunner::kMinHorizonPlies;  // a valid horizon with a leaf
+  p.sim_horizon = SimRunner::kMinHorizonPlies;
   EXPECT_NO_THROW(MsetSimAgent(p, std::make_unique<StubMoveSetEvalService>(),
                                std::make_shared<StubEvalService>()));
 }
@@ -145,8 +134,8 @@ TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
   ASSERT_GT(candidates.size(), 4u);
 
-  // The model favours the equity ranking's 3rd and 4th candidates; equity's
-  // own favourites score low, so the sim set differs from SimAgent's.
+  // The model favours equity's 3rd and 4th candidates, so its sim set differs
+  // from the one SimAgent would pick.
   const auto scripted = script_favouring(candidates.size(), {2, 3});
 
   auto stub = std::make_unique<StubMoveSetEvalService>();
@@ -155,8 +144,6 @@ TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   agent.begin_game({});
   const Move played = agent.make_move(request()).move;
 
-  // Replay the same decision independently: the model's top-2 by scripted
-  // value, simmed from the same position with the agent's own seed.
   const std::vector<int> rank = model_rank(scripted, p.rank_objective);
   const std::vector<Move> simmed = {candidates[size_t(rank[0])], candidates[size_t(rank[1])]};
   SimPosition pos;
@@ -194,9 +181,8 @@ TEST_F(MsetSimAgentTest, TheModelCanPromoteAnExchange) {
   p.sim_top_k = 1;
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
 
-  // The default shortlist is every legal move, so the candidate space includes
-  // every exchange; find one (static equity buries them all far below the plays
-  // on this rack).
+  // The default shortlist includes every exchange, which static equity ranks
+  // far below the plays on this rack.
   int exchange_idx = -1;
   for (size_t i = 0; i < candidates.size(); ++i) {
     if (candidates[i].type() == MoveType::EXCHANGE) {
@@ -230,8 +216,8 @@ TEST_F(MsetSimAgentTest, OneSeedGivesOneDecision) {
 }
 
 TEST_F(MsetSimAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
-  // A rack with no legal play and a bag too small for exchanges leaves a lone
-  // PASS candidate, which the size-1 early return plays outright.
+  // No legal play and a bag too small to exchange leave PASS as the only
+  // candidate.
   auto stub = std::make_unique<StubMoveSetEvalService>();
   StubMoveSetEvalService* sp = stub.get();
   MsetSimAgent agent(params(), std::move(stub));
@@ -246,8 +232,7 @@ TEST_F(MsetSimAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
 }
 
 TEST_F(MsetSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
-  // sim_top_k above the candidate count must clamp to what exists: all three
-  // candidates sim, and one of them plays.
+  // sim_top_k above the candidate count clamps to what exists.
   MsetSimAgent::Params p = params();
   p.shortlist = 3;
   p.sim_top_k = 10;
@@ -269,7 +254,8 @@ TEST_F(MsetSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
 TEST_F(MsetSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
   auto stub = std::make_unique<StubMoveSetEvalService>();
   StubMoveSetEvalService* sp = stub.get();
-  MsetSimAgent agent(params(), std::move(stub));  // endgame budget 0: solver declines
+  // With endgame budget 0 the solver declines, and there is no bag to sim from.
+  MsetSimAgent agent(params(), std::move(stub));
   agent.begin_game({});
   MoveRequest req{board_,          dict_,         my_rack_, opp_leave_, /*my_score=*/13,
                   /*opp_score=*/7, /*bag_size=*/0};
@@ -279,10 +265,9 @@ TEST_F(MsetSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
 }
 
 TEST_F(MsetSimAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
-  // Every other rollout test decides at ply 0, where sim_seed(ply_) and a
-  // hardcoded sim_seed(0) are indistinguishable. Here two moves have been
-  // observed first, so a decision seeded off a stale ply would draw different
-  // rollouts and, on this scripted pair, play the other candidate.
+  // The other rollout tests decide at ply 0, where seeding from the current ply
+  // and a hardcoded ply 0 look the same. Here two moves are observed first, and
+  // the position is chosen so the two seeds pick different candidates.
   const MsetSimAgent::Params p = params();
   const Move opening =
     make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
@@ -314,10 +299,6 @@ TEST_F(MsetSimAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
   agent.observe_move(reply);
   const Move played = agent.make_move(req).move;
 
-  // Replay at ply 2 -- the ply the agent is actually at -- and separately at
-  // ply 0, the value a stale-seed regression would use. The decision must
-  // follow the former; the latter must be a different decision, or this test
-  // could not tell them apart.
   const std::vector<int> rank = model_rank(scripted, p.rank_objective);
   const std::vector<Move> simmed = {candidates[size_t(rank[0])], candidates[size_t(rank[1])]};
   const SimRunner runner(dict_, p.sim);
@@ -332,9 +313,8 @@ TEST_F(MsetSimAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
 }
 
 TEST_F(MsetSimAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
-  // Second turn of the game: the opponent has opened for 10, so the pre-move
-  // differential the move features resolve is a signed non-zero number rather
-  // than the game-start 0.
+  // The opponent opened for 10, so the move features see a non-zero pre-move
+  // score differential.
   const Move opening =
     make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
                    {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
@@ -365,15 +345,14 @@ TEST_F(MsetSimAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
   ASSERT_EQ(sp->calls, 1);
   ASSERT_EQ(sp->last_moves.count, int(candidates.size()));
 
-  // And that one board row is the position's own pre-move row (which the
-  // decoder cross-check separately proves is the training row).
+  // The board row is the position's pre-move row, which
+  // ThePreMoveRowMatchesTheTrainingDecoder ties to the training row.
   std::vector<float> expected_row(size_t(kInputFloats), 0.0f);
   agent.encode_board_row(req, expected_row.data());
   EXPECT_EQ(sp->last_board_row, expected_row);
 
-  // Each candidate's features are what the shared encoder makes of it at this
-  // turn's pre-move differential -- the same encode_move the training rows go
-  // through, reached here by the agent instead of the FFI.
+  // Each candidate's features must be what encode_move, the encoder the
+  // training rows go through, makes of it at this differential.
   for (size_t i = 0; i < candidates.size(); ++i) {
     int32_t letters[move_set::kMoveMaxPlaced];
     uint8_t blanks[move_set::kMoveMaxPlaced];
@@ -399,12 +378,10 @@ TEST_F(MsetSimAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
 
 namespace {
 
-// The row cross-check, run at a chosen head-start handicap: a three-turn game
-// whose sampled turn (2) is player 0's, so both players already have a prior
-// move -- which exercises the last-self / last-opp placement-plane features.
-// The agent scores that turn's candidates against the position's PRE-move row,
-// which is the row MsetDataset reconstructs by replay for the very same
-// position, so the two must agree float for float.
+// The pre-move row the agent encodes must equal, float for float, the row the
+// training BlockDecoder reconstructs by replay for the same position. Uses a
+// three-turn game sampled at turn 2 (player 0's), so both players have a prior
+// move and the last-move placement planes are exercised.
 void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   const Move move0 =
     make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
@@ -417,9 +394,8 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
                    {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
   const uint32_t sampled_turn = 2;
 
-  // Initial racks and post-turn draws chosen so the replay reconstructs player
-  // 0's pre-move rack at turn 2 as DONERST: starting CATERST, play CAT (leave
-  // ERST), draw DON. Player 1 holds an S to play on turn 1.
+  // Player 0's rack at turn 2 replays to DONERST: CATERST, plays CAT, draws
+  // DON. Player 1 holds the S it plays on turn 1.
   binlog::InitialRacks ir{};
   ir.p0 = rack_from("CATERST");
   ir.p1 = rack_from("SAINTED");
@@ -434,8 +410,8 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
 
   const std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn, initial_scores);
 
-  // Training path: decode the PRE-move sampled row (no symmetry transpose). The same
-  // dictionary drives both paths' cross-check planes.
+  // Training path: the pre-move row, untransposed. Both paths use the same
+  // dictionary for the cross-check planes.
   Dictionary dict = opening_dict();
   binlog::BlockDecoder dec(InputEncodingSpec{&dict});
   const uint8_t flips[1] = {0};
@@ -443,8 +419,6 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/false,
              /*output_row_start=*/0, dec_row.data());
 
-  // Inference path: the agent starts from the same handicap, observes turns
-  // 0..1, then encodes its own decision point at turn 2.
   MsetSimAgent::Params p;
   p.name = "MS";
   p.dict = &dict;
@@ -453,9 +427,8 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   agent.observe_move(move0);
   agent.observe_move(move1);
 
-  // The board and scores of the encoded row come from the agent's own mirrored
-  // replay, not from the request -- only the rack does, so the rest of the
-  // request is whatever a turn would carry.
+  // The agent takes board and scores from its own replay of observed moves;
+  // only the rack comes from the request, so the rest of it is arbitrary.
   const Rack my_rack = rack_from("DONERST");
   const Rack no_leave;
   const Board board;
@@ -469,7 +442,7 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
     ASSERT_EQ(agent_row[size_t(i)], dec_row[size_t(i)]) << "input float " << i;
     any_nonzero = any_nonzero || agent_row[size_t(i)] != 0.0f;
   }
-  ASSERT_TRUE(any_nonzero);  // guard against a vacuous all-zero match
+  ASSERT_TRUE(any_nonzero);  // an all-zero match would prove nothing
 }
 
 }  // namespace
@@ -479,11 +452,10 @@ TEST(MsetSimAgent, ThePreMoveRowMatchesTheTrainingDecoder) {
 }
 
 TEST(MsetSimAgent, AHandicapReachesTheModelRow) {
-  // A head start is a score-differential feature like any other, and the
-  // training replay seeds its encoder from the handicap the .slog records. An
-  // agent that began every game at 0-0 would feed the model a differential
-  // wrong by the head start for the whole game -- silently, since nothing
-  // about the row's shape changes. The two rows must still agree.
+  // The training replay seeds its scores from the handicap the .slog records.
+  // An agent that started every game at 0-0 would feed the model a score
+  // differential wrong by the head start all game, with nothing else in the row
+  // to reveal it.
   check_pre_move_row_matches_decoder({50, 0});
   check_pre_move_row_matches_decoder({0, 37});
 }

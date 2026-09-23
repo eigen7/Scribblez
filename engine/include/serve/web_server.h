@@ -19,16 +19,16 @@ namespace scribblez {
 
 class Game;
 
-// Spawns `npm run dev` (the Vite dev server) to serve the front-end and
-// terminates its whole process group on destruction. The browser loads the UI
-// from Vite, which proxies the `/ws` WebSocket back to the WebSession. The
-// engine launches the dev server itself, so no npm command is ever run by hand.
+// Runs the Vite dev server (`npm run dev`) that serves the web front-end, and
+// kills its whole process group on destruction. The browser loads the UI from
+// Vite, which proxies the `/ws` WebSocket back to the engine's WebSession.
+// Reuses a responsive dev server already on the port.
 class ViteDevServer {
  public:
   // `dev_port` is the port Vite listens on and `ws_port` the WebSession port it
-  // proxies `/ws` to; `tool` selects which front-end UI to mount, empty meaning
-  // play_game's default. `service` and `default_dev_port` name this UI's
-  // devenv.toml gateway service and its unshifted port, shaping only url().
+  // proxies `/ws` to. `tool` selects the front-end UI (web/src/main.tsx); empty
+  // means play_game's. `service` and `default_dev_port` name the UI's
+  // devenv.toml gateway service and its default port, and affect only url().
   // Throws if the child process cannot be started.
   ViteDevServer(const std::string& web_dir, int dev_port, int ws_port, const std::string& tool,
                 const std::string& service, int default_dev_port);
@@ -37,11 +37,11 @@ class ViteDevServer {
   ViteDevServer(const ViteDevServer&) = delete;
   ViteDevServer& operator=(const ViteDevServer&) = delete;
 
-  // False on timeout or if the child exited early.
+  // Wait for the dev server to accept connections. False on timeout or if the
+  // child exited.
   bool wait_until_ready(int timeout_ms = 60000);
 
-  // The gateway route for `service` while `dev_port` is the default, else a
-  // plain localhost fallback (see service_url.h).
+  // The browser-facing URL (service_url.h).
   std::string url() const;
   int dev_port() const { return dev_port_; }
 
@@ -55,9 +55,11 @@ class ViteDevServer {
   std::unique_ptr<boost::process::child> child_;
 };
 
-// A minimal, single-client WebSocket server (POSIX sockets, blocking) that
-// upgrades the `/ws` connection Vite proxies in and drives a human player. For
-// local human-vs-AI play: one browser tab, one game, no concurrency.
+// A minimal, blocking, single-client WebSocket server on POSIX sockets. It
+// accepts the `/ws` connection Vite proxies in and exchanges text messages with
+// one browser tab: a human player in play_game, or an interactive tool UI.
+// Binds loopback only. On construction it kills whatever process is listening
+// on its port, so a relaunch takes over from an earlier instance.
 class WebSession {
  public:
   // Throws util::CleanException if the port cannot be bound (another instance
@@ -68,24 +70,23 @@ class WebSession {
   WebSession(const WebSession&) = delete;
   WebSession& operator=(const WebSession&) = delete;
 
-  // Accepts until a client completes the WebSocket handshake, closing
-  // non-WebSocket requests; returns immediately if one is already connected.
-  // False only on unrecoverable error.
+  // Block until a client completes the WebSocket handshake, closing any other
+  // requests. Returns at once if a client is already connected. False only on
+  // an unrecoverable error.
   bool wait_for_client();
 
   // No-op if disconnected.
   void send_text(const std::string& msg);
 
-  // nullopt once the connection closes. Control frames are handled
-  // transparently.
+  // The next complete message, reassembled from fragments. nullopt once the
+  // connection closes. Pings are answered internally.
   std::optional<std::string> recv_text();
 
   bool connected() const { return ws_fd_ >= 0; }
   void disconnect();
   int port() const { return port_; }
 
-  // Keep the socket open briefly, so the final message lands before the process
-  // exits.
+  // Sleep briefly so the final message is flushed before the process exits.
   void linger_after_final_message();
 
  private:
@@ -102,20 +103,14 @@ class WebSession {
 // "pass".
 std::string move_to_notation(const Board& board, const Move& move);
 
-// Build the GameState JSON the front-end expects, from the perspective of one
-// seat ("my" side). Its two constructors cover the two sources a view is ever
-// built from: mid-game, a MoveRequest (the human's own turn), whose fields it
-// relays with the agent-supplied display names and optional Macondo equities
-// tagged on; and end-of-game (or any other view anchored on a live Game), the
-// Game itself.
-//
-// `legal_play_equities`, when non-null, must be parallel to `legal_plays`
-// and is emitted per-move as the JSON `equity` field (null for entries
-// without a value).
+// The inputs to game_state_json(): the front-end's GameState, seen from one
+// seat ("my" side). Built either from a MoveRequest, on the human's own turn,
+// or from a live Game, e.g. at game end.
 struct StateView {
-  // The active-turn view, always your_turn and never game_over.
-  // `display_moves` is the UI's "Legal Moves" panel -- legal plays plus any
-  // synthesised exchanges -- and must outlive the StateView.
+  // The human's-turn view. `display_moves` fills the UI's move list (legal
+  // plays plus any synthesized exchanges) and must outlive the view.
+  // `legal_play_equities`, if non-null, runs parallel to it and supplies each
+  // move's `equity` field (null where it has no value).
   StateView(const MoveRequest& req, const std::string& my_name, const std::string& opp_name,
             const std::vector<Move>& display_moves,
             const std::vector<std::optional<double>>* legal_play_equities = nullptr);
@@ -136,6 +131,8 @@ struct StateView {
   bool your_turn;
   bool game_over;
 };
+// The GameState JSON, plus the move list on the human's turn and the result
+// once the game is over.
 std::string game_state_json(const StateView& view);
 
 }  // namespace scribblez

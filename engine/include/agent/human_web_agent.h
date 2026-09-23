@@ -11,13 +11,13 @@ namespace scribblez {
 class ViteDevServer;
 class WebSession;
 
-// A human player driven through a WebSession: renders the position to the
-// browser and blocks until the user submits a move. Owns both the engine-side
-// WebSocket server and the Vite dev server serving the front-end, so the whole
-// browser-driven UI lives and dies with the agent.
+// A human player in the browser: sends each position over a WebSession and
+// blocks until the user submits a move. Owns both the WebSocket server and the
+// Vite dev server serving the front-end, so the UI lives and dies with the
+// agent.
 class HumanWebAgent : public Agent {
  public:
-  // The browser link is routed through the gateway only while vite_port keeps
+  // The browser link goes through the dev gateway only while vite_port keeps
   // its default (see service_url.h).
   struct Params {
     int port = 8080;              // engine WebSocket port
@@ -25,8 +25,8 @@ class HumanWebAgent : public Agent {
     std::string web_dir = "web";  // front-end package dir (cwd of `npm run dev`)
   };
 
-  // Starts the WebSocket server, spawns `npm run dev`, blocks until Vite is
-  // ready, and best-effort opens the browser. Throws if any step fails.
+  // Starts both servers, blocks until Vite is ready, and tries to open the
+  // browser. Throws if a server fails to start.
   HumanWebAgent(int thread_id, const Params& params, const std::string& my_name,
                 const std::string& opp_name);
   ~HumanWebAgent() override;

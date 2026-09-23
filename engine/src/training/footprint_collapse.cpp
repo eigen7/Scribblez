@@ -18,16 +18,14 @@ namespace {
 inline constexpr int kBoardCells = kFootprintSide * kFootprintSide;
 
 // One anchored footprint's covered cells as flat plane indices (r*side + c),
-// precomputed once per board and reused
-// across the four heads.
+// computed once per board and shared by the four heads.
 struct CellList {
   uint8_t n = 0;
   std::array<uint16_t, kFootprintMaxK> cell{};
 };
 
-// footprint_cells for every anchored class on `board`, into `cells`. An
-// impossible class on this board reports zero cells and simply never receives
-// probability.
+// footprint_cells for every anchored class on `board`. A class impossible on
+// this board gets zero cells, so any probability it carries lands nowhere.
 void compute_cells(const Board& board, std::vector<CellList>& cells) {
   cells.assign(kAnchoredFootprints, CellList{});
   std::array<std::pair<int, int>, kFootprintMaxK> rc;
@@ -39,9 +37,8 @@ void compute_cells(const Board& board, std::vector<CellList>& cells) {
   }
 }
 
-// Softmax of `logits` over the classes `mask` keeps, into `prob` (illegal
-// classes get zero). kPassClass is always legal, so the denominator is never
-// zero.
+// Softmax over the classes `mask` keeps; illegal classes get zero. kPassClass
+// is always legal, so the denominator is never zero.
 void masked_softmax(const float* logits, const FootprintMask& mask, std::vector<float>& prob) {
   prob.assign(kFootprintClasses, 0.0f);
   float max_logit = -std::numeric_limits<float>::infinity();
@@ -58,9 +55,8 @@ void masked_softmax(const float* logits, const FootprintMask& mask, std::vector<
   for (int c = 0; c < kFootprintClasses; ++c) prob[c] *= inv;
 }
 
-// out[cell] = sum over anchored footprints of prob[footprint] on each cell it
-// covers. pass / not-win carry no cells, so they drop out of the per-cell
-// marginal (they placed no tile), exactly as the old occupancy plane.
+// out[cell] = the summed probability of the anchored footprints covering cell.
+// Pass and not-win place no tile, so they contribute to no cell.
 void scatter(const std::vector<float>& prob, const std::vector<CellList>& cells, float* out) {
   std::fill_n(out, kBoardCells, 0.0f);
   for (int cls = 0; cls < kAnchoredFootprints; ++cls) {
@@ -71,12 +67,9 @@ void scatter(const std::vector<float>& prob, const std::vector<CellList>& cells,
   }
 }
 
-// The four heads' legality into `masks` (opp_next, self_next, opp_win, self_win):
-// opp / self, each with a plays (win_head=false) and a win (win_head=true)
-// variant. win_head toggles only kExtraClass (the not-win outcome). Availability
-// (`available_counts`, the opponent's pool) gates the opp heads directly and the
-// self heads through the opponent's stage, whose reach seeds theirs (see
-// footprint_mask.h) -- one opp ply serves both.
+// The four heads' masks, in kPlacementHeads order. A side's plays and win heads
+// differ only at kExtraClass, and one opponent ply serves both sides: its mask
+// is the opp heads' and its reach seeds the self heads' ply.
 void fill_head_masks(const Board& board, const uint8_t* available_counts,
                      std::array<FootprintMask, kPlacementHeads>& masks) {
   const FootprintPly opp =
@@ -101,12 +94,12 @@ void collapse_footprint_planes(const Board& board, const Dictionary& dict,
   std::array<FootprintMask, kPlacementHeads> masks;
   fill_head_masks(board, available_counts, masks);
 
-  // win_head toggles only kExtraClass, which carries no cells -- so it changes
-  // the softmax denominator (P[covers & win] <= P[covers]) but not which cells
-  // are covered.
-  // Reused across calls on this thread -- the generator collapses many
-  // candidates per thread, so the ~44KB cells buffer and the prob buffer are
-  // allocated once and refilled, not per candidate.
+  // A win head's extra not-win class carries no cells, so it enlarges the
+  // softmax denominator (P[covers & win] <= P[covers]) without changing which
+  // cells are covered.
+  //
+  // thread_local so repeated calls on a thread refill the ~44 KB cell table and
+  // the probability buffer instead of reallocating them.
   thread_local std::vector<CellList> cells;
   thread_local std::vector<float> prob;
   compute_cells(board, cells);
@@ -135,9 +128,6 @@ void collapse_footprint_legal_cells(const Board& board, const Dictionary& dict,
   std::array<FootprintMask, kPlacementHeads> masks;
   fill_head_masks(board, available_counts, masks);
 
-  // Called once per position (no per-candidate hot loop like the siblings
-  // above), so a plain local vector is enough -- no thread_local reuse to pay
-  // for.
   std::vector<CellList> cells;
   compute_cells(board, cells);
   std::fill_n(out, size_t(kPlacementHeads) * kBoardCells, 0.0f);

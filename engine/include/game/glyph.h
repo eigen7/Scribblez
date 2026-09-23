@@ -6,11 +6,9 @@
 
 namespace scribblez {
 
-// The face of a board square (or a slot in a move): empty, a played letter
-// (optionally a designated blank), or an unassigned blank (a blank with no
-// chosen letter -- only meaningful in a move/rack, never on the board).
-//
-// One byte:
+// The content of a board square or a move slot: empty, a letter, a blank
+// designated as a letter, or an undesignated blank (in exchanges only, never
+// on the board). Encoding:
 //   0        empty
 //   1..26    played letter A..Z            (letter index = code - 1)
 //   27..52   designated blank, shows A..Z  (letter index = code - 27)
@@ -30,11 +28,12 @@ class Glyph {
   constexpr bool is_blank() const { return code_ >= 27; }  // designated or not
   constexpr bool has_letter() const { return code_ >= 1 && code_ <= 52; }
   constexpr Tile letter() const;    // valid iff has_letter()
-  constexpr bool is_vowel() const;  // false unless has_letter()
+  constexpr bool is_vowel() const;  // designated blanks count by their letter
   int value() const { return has_letter() && !is_blank() ? letter().value() : 0; }
   constexpr char to_char() const;
   constexpr uint8_t code() const { return code_; }
 
+  // The rack tile this glyph consumes.
   constexpr Tile rack_tile() const { return is_blank() ? BLANK : letter(); }
 
   static constexpr Glyph exchanging(Tile t) { return t.is_blank() ? blank() : of(t); }

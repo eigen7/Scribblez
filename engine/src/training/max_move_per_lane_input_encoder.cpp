@@ -12,7 +12,7 @@ void MaxMovePerLaneInputEncoder::encode(const Board& board, const Rack& rack, fl
 
   BoardPlanes::encode(board, out);
 
-  // Rack as raw per-tile counts; Tile::index() maps the blank to slot 26.
+  // Tile::index() maps the blank to slot 26.
   float* counts = out + kSpatialFloats;
   for (Tile t : rack.tiles()) {
     if (!t.is_empty()) counts[t.index()] += 1.0f;

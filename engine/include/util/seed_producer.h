@@ -19,8 +19,8 @@ namespace scribblez {
 class SeedProducer {
  public:
   struct Params {
-    // 0 means "pick a fresh seed from std::random_device". Yes, that makes an
-    // explicit --seed=0 unreachable; that's fine.
+    // 0 means "pick a fresh seed from std::random_device", so 0 itself can't be
+    // requested as a seed.
     uint64_t seed = 0;
 
     void add_options(boost::program_options::options_description& desc);

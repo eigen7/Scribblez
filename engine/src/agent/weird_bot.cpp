@@ -18,12 +18,21 @@ namespace scribblez {
 
 namespace {
 
+// The forcing rule, applied each turn:
+//   1. With no tracked leave, play HastyBot's greedy move.
+//   2. Take T, the highest-value non-blank tile in the leave.
+//   3-4. Find the empty square where T forms the highest-scoring perpendicular
+//        word.
+//   5. Play the highest-equity legal play that puts T on that square along the
+//      target axis.
+//   6. Record the tiles this move keeps as the new leave.
+// Any step that finds nothing falls back to HastyBot's greedy move.
+
 // The empty-tile sentinel doubles as "the leave holds no non-blank tile".
 constexpr Tile kNoTile = Tile::empty();
 
-// Step 2: the highest face-value non-blank tile in `leave`, ties broken by
-// lowest letter index. Blanks (value 0, wild) never force, so they are skipped;
-// an all-blank or empty leave yields kNoTile.
+// Step 2. Ties go to the lowest letter (a Rack is sorted). Blanks never
+// force; an all-blank or empty leave yields kNoTile.
 Tile highest_forcing_tile(const Rack& leave) {
   Tile best = kNoTile;
   int best_value = 0;
@@ -38,16 +47,14 @@ Tile highest_forcing_tile(const Rack& leave) {
   return best;
 }
 
-// The perpendicular cross-word score of placing a value-`tile_value` tile on the
-// empty square (r, c): the run's existing tile values (cc.score) plus the new
-// tile scored under the square's letter premium, the whole word taken under its
-// word premium. Only the newly covered square's premiums apply.
+// The score of the perpendicular word formed by placing a tile worth
+// `tile_value` on the empty square (r, c). Only that square's premiums apply.
 int cross_word_score(const Board& board, int r, int c, const CrossCheck& cc, int tile_value) {
   const Premium p = board.premium_at(r, c);
   return (cc.score + tile_value * p.letter_mult()) * p.word_mult();
 }
 
-// The winning cross-check square for tile T, chosen in step 4.
+// The square chosen in step 4.
 struct ForcingTarget {
   int r = 0;
   int c = 0;
@@ -55,16 +62,11 @@ struct ForcingTarget {
   bool found = false;
 };
 
-// Steps 3-4: over both orientations and every empty square, the square whose
-// perpendicular cross-word (with T placed) scores highest. A candidate must
-// admit T in its cross-check and form a real perpendicular word (has_neighbor);
-// a vacuous all-letters cross-check forms no word and never wins. Ties break by
-// lowest (r, c) then orientation, achieved by iterating (r, c, transposed) in
-// ascending order and replacing only on a strictly higher score.
-//
-// Cross-checks are read straight from Board::cross_check_at(), which computes a
-// square's cross-check on demand from the live board; ensure_movegen_caches()
-// must have run first to bind the dictionary it reads.
+// Steps 3-4, over both orientations of every empty square. A square must
+// admit T in its cross-check and have a perpendicular neighbour, since a
+// vacuous cross-check forms no word. Ties go to the lowest (r, c), then
+// orientation. Board::cross_check_at() reads the dictionary that
+// ensure_movegen_caches() binds, so that must run first.
 ForcingTarget best_cross_check_square(const Board& board, Tile t) {
   ForcingTarget best;
   int best_score = 0;
@@ -90,9 +92,8 @@ ForcingTarget best_cross_check_square(const Board& board, Tile t) {
   return best;
 }
 
-// Whether play `m` places a newly-placed, non-blank tile equal to `t` on the
-// square (want_r, want_c). Mirrors Board::apply()'s lane walk so the i-th set
-// square carries the i-th stored glyph.
+// Whether play `m` places a new, non-blank `t` on (want_r, want_c). Walks the
+// lane as Board::apply() does: the i-th set square carries the i-th glyph.
 bool play_forces_tile(const Move& m, int want_r, int want_c, Tile t) {
   if (m.type() != MoveType::PLAY) return false;
   const bool horizontal = m.horizontal();
@@ -109,8 +110,7 @@ bool play_forces_tile(const Move& m, int want_r, int want_c, Tile t) {
   return false;
 }
 
-// Step 5: among the legal plays, the highest-hasty-equity one that runs along
-// the target axis and places T on the target square. nullptr when none exists.
+// Step 5; nullptr when no legal play qualifies.
 const Move* best_forcing_play(const std::vector<Move>& plays, const ForcingTarget& tgt, Tile t,
                               const MoveRequest& req) {
   const bool want_horizontal = !tgt.transposed;
@@ -130,10 +130,9 @@ const Move* best_forcing_play(const std::vector<Move>& plays, const ForcingTarge
   return best;
 }
 
-// Step 6: my_rack minus the rack tiles the move consumed. A move's stored glyphs
-// are exactly those tiles for every move type -- placed tiles for a play (a
-// placed blank consumes the rack blank), surrendered tiles for an exchange, none
-// for a pass -- so one loop covers all three.
+// Step 6. A move's glyphs are exactly the rack tiles it consumes for every
+// move type (placed tiles, surrendered tiles, or none for a pass), so one loop
+// covers all three.
 Rack leave_after_move(const Rack& rack, const Move& move) {
   Rack leave = rack;
   const int n = move.num_glyphs();
@@ -150,20 +149,18 @@ WeirdBotAgent::WeirdBotAgent(int thread_id, const std::string& name) : Agent(thr
 void WeirdBotAgent::begin_game(const BeginGameRequest&) { leave_ = Rack{}; }
 
 Move WeirdBotAgent::choose_move(const MoveRequest& req) const {
-  // Step 1: no tracked leave (first move, or the last move kept nothing) -> the
-  // plain greedy hasty argmax fallback.
   if (leave_.empty()) return hasty_best_move_wmp(req);
 
   const Tile t = highest_forcing_tile(leave_);
-  if (t == kNoTile) return hasty_best_move_wmp(req);  // an all-blank leave never forces
+  if (t == kNoTile) return hasty_best_move_wmp(req);
 
   req.board.ensure_movegen_caches(req.dict);
   const ForcingTarget tgt = best_cross_check_square(req.board, t);
-  if (!tgt.found) return hasty_best_move_wmp(req);  // T fits no real cross-check square
+  if (!tgt.found) return hasty_best_move_wmp(req);
 
   const std::vector<Move> plays = generate_legal_plays(req);
   const Move* forced = best_forcing_play(plays, tgt, t, req);
-  return forced ? *forced : hasty_best_move_wmp(req);  // no legal forcing play -> fallback
+  return forced ? *forced : hasty_best_move_wmp(req);
 }
 
 MoveDecision WeirdBotAgent::make_move(const MoveRequest& req) {
@@ -174,8 +171,7 @@ MoveDecision WeirdBotAgent::make_move(const MoveRequest& req) {
 
 std::unique_ptr<WeirdBotAgent> WeirdBotAgent::from_spec(const std::vector<std::string>& tokens,
                                                         int thread_id, const std::string& name) {
-  // WeirdBot takes no options of its own; parse an empty set so any token is a
-  // reported error rather than silently ignored.
+  // Parse against an empty option set so any token is an error, not ignored.
   po::options_description desc;
   try {
     po::variables_map vm;
@@ -185,8 +181,7 @@ std::unique_ptr<WeirdBotAgent> WeirdBotAgent::from_spec(const std::vector<std::s
     throw util::CleanException("bad --type=weirdbot options: {}", e.what());
   }
 
-  // The forcing-play ranking and the fallback both read the process-wide equity
-  // tables, so load the active lexicon's defaults now (idempotent).
+  // The forcing-play ranking and the fallback both read the equity tables.
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   return std::make_unique<WeirdBotAgent>(thread_id, name);
 }

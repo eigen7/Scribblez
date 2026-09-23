@@ -1,9 +1,8 @@
 #pragma once
 
-// The random bag-empty positions the endgame tests search over, shared by the
-// solver suite, the EndgameHastyBot suite, and the NeuralAgent suite. A
-// randomized corpus is what lets a test scan for the rare position that
-// exercises it (a solver move that beats the greedy one, a proven loss, ...)
+// Random small bag-empty positions over a tiny dictionary, for the endgame
+// solver and agent suites. A random corpus lets a test scan for the rare
+// position it needs (a solver move that beats the greedy one, a proven loss)
 // instead of hand-building one.
 
 #include "agent/agent.h"
@@ -38,9 +37,6 @@ inline Rack random_rack(std::mt19937& rng) {
   return r;
 }
 
-// A small endgame position: a board seeded with a few random plays, two short
-// racks drawn from a curated tiny-dict letter set (so plays exist but branching
-// stays low), and small random scores.
 struct EndgamePos {
   Board board;
   Rack my_rack;
@@ -49,6 +45,9 @@ struct EndgamePos {
   int opp_score;
 };
 
+// A board seeded with one to three random plays, two `rack_tiles`-tile racks
+// drawn from a curated letter set (so plays exist but branching stays low), and
+// small random scores.
 inline EndgamePos random_endgame(std::mt19937& rng, const Dictionary& d, int rack_tiles) {
   static const char kLetters[] = "ATSOCHEBDGRINO";
   EndgamePos p;

@@ -25,11 +25,9 @@ namespace {
 
 namespace json = boost::json;
 
-// Each struct's field list is enumerated with P2996 reflection, so a member
-// added, removed, renamed, retyped, or reordered in a struct re-derives the
-// document with no restatement to keep in sync. What remains hand-written is
-// exactly the policy: the type -> dtype-code table below, and which structs
-// are served (build_structs).
+// Field lists are enumerated with P2996 reflection. The hand-written parts are
+// the policy: the type -> dtype-code table below, and which structs are served
+// (build_structs).
 
 struct FieldInfo {
   const char* name;  // reader-facing (trailing '_' stripped)
@@ -39,9 +37,8 @@ struct FieldInfo {
   std::size_t count;       // subarray element count; 0 = scalar
 };
 
-// The numpy dtype code of one scalar member type -- one mapping per line,
-// little-endian to match the on-disk packed structs. One-byte enums and
-// wrappers (MoveType, Glyph, bool) serialize as their underlying byte.
+// Little-endian, to match the on-disk structs. One-byte enums and wrappers
+// serialize as their underlying byte.
 consteval const char* scalar_code(std::meta::info t) {
   if (util::type_is<uint8_t>(t) || util::type_is<Glyph>(t) || util::type_is<MoveType>(t) ||
       util::type_is<SimObsRole>(t) || util::type_is<bool>(t))
@@ -64,10 +61,9 @@ consteval bool is_served_struct(std::meta::info t) {
   return util::type_is<Move>(t) || util::type_is<SimObservation>(t);
 }
 
-// The dtype half of one field: a nested reference, a text field (char array
-// -> numpy fixed bytes), an opaque aggregate readers skip over (Rack -> numpy
-// void), a subarray, or a scalar. A member type none of those cover is a
-// compile-time error naming the gap.
+// Fills in the dtype of one field: a nested struct reference, a char array
+// (numpy fixed bytes), a Rack (opaque numpy void, which readers skip), a
+// std::array subarray, or a scalar. Any other member type is a compile error.
 consteval void describe_type(FieldInfo* f, std::meta::info type, std::size_t member_size) {
   std::meta::info t = std::meta::dealias(type);
   if (is_served_struct(t)) {
@@ -164,23 +160,22 @@ json::object build_constants() {
                  {"planes", move_set_eval::kTargetPlanes},
                  {"plane_width", move_set_eval::kPlaneWidth}};
   }
-  // The board-row encoding semantics version the exporters stamp into ONNX
-  // metadata (input_encoder.h).
+  // The version ONNX exporters stamp into model metadata (input_encoder.h).
   c["input_encoding_version"] = kInputEncodingVersion;
   c["move_type"] = {{"play", int(MoveType::PLAY)},
                     {"exchange", int(MoveType::EXCHANGE)},
                     {"pass", int(MoveType::PASS)}};
-  // The four placement heads in declaration order (training_targets.h) --
+  // The four placement heads in declaration order (training_targets.h). This is
   // also the .mset plane order and the SimObservation count-plane order.
   c["placement_head_names"] = {OppNextPlacementTarget::kName, SelfNextPlacementTarget::kName,
                                OppWinPlacementTarget::kName, SelfWinPlacementTarget::kName};
-  // The two per-side legality-mask targets (opp / self), in row order. One mask
-  // per side, not per head: a head's win variant opens kExtraClass in the loss.
+  // The per-side legality-mask targets (opp, self), in row order. There is one
+  // mask per side rather than per head; the loss opens kExtraClass for a
+  // side's win head.
   c["placement_mask_names"] = {OppPlacementMaskTarget::kName, SelfPlacementMaskTarget::kName};
-  // The footprint categorical class space each placement head is a distribution
-  // over (footprint.h), so the Python model / loss / viz read one width, class
-  // layout, and the pass/not-win slot indices from the same source the C++
-  // targets and TensorRT output descriptors do.
+  // The footprint class space each placement head is a distribution over
+  // (training/footprint.h), so Python reads the same class count and special
+  // class indices as the C++ targets.
   c["footprint"] = {{"num_classes", kFootprintClasses}, {"slots_per_cell", kSlotsPerCell},
                     {"side", kFootprintSide},           {"max_k", kFootprintMaxK},
                     {"anchored", kAnchoredFootprints},  {"pass_class", kPassClass},

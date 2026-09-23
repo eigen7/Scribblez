@@ -2,10 +2,6 @@
 
 namespace scribblez {
 
-// All Move accessors are single-line and defined in the header. Multi-line
-// reconstruction logic (leave, word_origin, main_word) and MoveFactory live in
-// move.cpp.
-
 template <typename F>
 void visit_placed_squares(const Move& m, F&& f) {
   if (m.type() != MoveType::PLAY) return;

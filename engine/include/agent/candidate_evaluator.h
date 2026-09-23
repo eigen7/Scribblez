@@ -1,15 +1,14 @@
 #pragma once
 
-// The position-evaluation core shared by the agents that rank candidate moves
-// with the position evaluation model (NeuralAgent, NeuralSimAgent). It owns
-// the EvalService, derives the input-encoding spec the served model declares,
-// mirrors the live game through a GameStateEncoder, and batch-evaluates the
-// post-move rows of a turn's candidates -- so every model-driven agent feeds
-// the model identical inputs and none can drift from the training encoding.
+// The position-evaluation core shared by NeuralAgent and NeuralSimAgent: it
+// mirrors the live game through a GameStateEncoder and batch-evaluates the
+// post-move row of each candidate move. Keeping this in one class means every
+// agent that ranks moves with the position evaluation model feeds it exactly
+// the training encoding.
 //
-// Deriving that spec is the one part every model-driven agent needs, whichever
-// model family it serves, so it lives here as a free function (MsetSimAgent
-// calls it too).
+// derive_input_spec() is a free function because every served model needs it,
+// including those of other model families (MsetSimAgent, UltimateBotAgent) and
+// the rollout leaf evaluator (SimRunner).
 
 #include "encoding/game_state_encoder.h"
 #include "nn/eval_service.h"
@@ -28,35 +27,33 @@ struct BeginGameRequest;  // agent.h
 // final differential, or P(win) + 0.5*P(draw) from the WLD head.
 enum class EvalObjective { kScoreDiff, kWinProb };
 
-// The candidate-ranking value read off one candidate's decoded scoring-head
-// rows: the score-diff mean, or expected game points under the WLD head
-// (draws counting half).
+// One candidate's ranking value under `objective`, read off its decoded
+// scoring-head rows.
 float objective_value(const float* wld_row, const float* score_diff_row, EvalObjective objective);
 
 // "scorediff" or "winprob"; anything else throws util::CleanException naming
 // `flag` as the offending option.
 EvalObjective parse_eval_objective(const std::string& name, const std::string& flag);
 
-// The InputEncodingSpec implied by the input-encoding arm a served model
-// declares, cross-checked against the input widths that model accepts -- a
-// disagreement means the exporter's metadata and the exported graph describe
-// different rows, and neither can be trusted to encode one, so it throws with
-// `who` naming the caller.
+// The InputEncodingSpec for the input arm a served model declares. Throws,
+// naming `who`, if that spec's row widths differ from the widths the model
+// accepts: the exporter's metadata and the exported graph then describe
+// different rows, and neither can be trusted.
 InputEncodingSpec derive_input_spec(const Dictionary& dict, const nn::ServedModelInputs& model,
                                     const std::string& who);
 
 class CandidateEvaluator {
  public:
-  // Takes a shared evaluation service (nn::PositionEvalService::create() in
-  // production, a scripted stub in tests). Loads no model and touches no GPU;
-  // `max_batch` bounds one evaluate() call. The service is shared, so every
-  // thread's evaluator drives one loaded model.
+  // `service` is shared by every game thread's evaluator
+  // (nn::PositionEvalService::create() in production, a scripted stub in
+  // tests); the constructor loads no model. `max_batch` bounds the rows of one
+  // service call.
   CandidateEvaluator(const Dictionary& dict, std::shared_ptr<nn::PositionEvalService> service,
                      int max_batch);
 
-  // The owning agent forwards its own begin_game() / observe_move() here, so
-  // the mirrored encoder sees both seats' moves; its placement-plane features
-  // depend on them, which make_move() alone cannot see.
+  // The owning agent forwards its begin_game() / observe_move() here. The
+  // encoder's features depend on the whole move history, which make_move()
+  // alone does not see.
   void begin_game(const BeginGameRequest& req);
   void observe_move(const Move& move);
 
@@ -64,13 +61,13 @@ class CandidateEvaluator {
   // is deciding a turn.
   int active_player() const { return encoder_.active_player(); }
 
-  // The shared service, for an agent that reuses its model elsewhere -- e.g. as
-  // the value-truncated rollout leaf evaluator (SimRunner::Params).
+  // For an agent that reuses the model elsewhere, e.g. as its rollout leaf
+  // evaluator.
   nn::PositionEvalService& service() { return *service_; }
 
-  // Evaluate candidates[idx[0..k)]'s post-move rows from the mover's POV,
-  // chunked to max_batch rows per service call; the decoded scoring-head rows
-  // then land at wld_row()/score_diff_row() [0..k) in the same order.
+  // Evaluate the post-move positions of candidates[idx[0..k)] from the
+  // mover's POV. The decoded head rows land at wld_row(i) / score_diff_row(i)
+  // for i in [0, k), in the same order.
   void evaluate(const MoveRequest& req, const std::vector<Move>& candidates,
                 const std::vector<int>& idx, int k);
   const float* wld_row(int i) const { return wld_buf_.data() + i * nn::WldOutput::kRowElems; }
@@ -78,10 +75,10 @@ class CandidateEvaluator {
     return score_diff_buf_.data() + i * nn::ScoreDiffOutput::kRowElems;
   }
 
-  // The post-move input for candidate `mv`, encoded exactly as evaluate()
-  // does. Public so the encoding the model actually sees can be checked
-  // against an independent replay. `opp_leave` is ignored unless the model's
-  // input layout carries the opponent-leave block.
+  // The post-move input row for candidate `mv`, encoded exactly as evaluate()
+  // encodes it. Public so a test can check it against an independent replay.
+  // `opp_leave` is ignored unless the model's input layout carries the
+  // opponent-leave block.
   void encode_candidate(const Move& mv, const Rack& my_rack, int my_seat, const Rack& opp_leave,
                         float* dst) const;
 
@@ -91,10 +88,10 @@ class CandidateEvaluator {
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;
 
-  // Scratch reused across turns to avoid per-move allocation.
+  // Reused across turns to avoid per-move allocation.
   std::vector<float> input_buf_;
-  std::vector<float> wld_buf_;         // evaluate()'s decoded WLD rows
-  std::vector<float> score_diff_buf_;  // evaluate()'s decoded score-diff rows
+  std::vector<float> wld_buf_;
+  std::vector<float> score_diff_buf_;
 };
 
 }  // namespace scribblez

@@ -1,11 +1,10 @@
 #pragma once
 
-// Owns the per-thread agent pairs and the play-one-game primitive: build the
-// agents once, then play individual games on a chosen thread, routing each
-// finished log to a GameSink. The shared core under both GameRunner and the
-// streaming producer, which differ only in their driving loop and their sink.
-// The two agents are whatever the --player specs named, so this drives a bot
-// match or a human game as readily as self-play generation.
+// Owns one agent pair per thread and plays single games on them, handing each
+// finished log to a GameSink. The shared core of GameRunner and
+// StreamingGameProducer, which differ only in their driving loop and their
+// sink. The agents are whatever the --player specs name, so this drives bot
+// matches and human games as well as self-play.
 
 #include "agent/agent.h"
 #include "agent/player_factory.h"
@@ -28,11 +27,10 @@ class GameEngine {
     // If > 0, each game opens with K uniformly-random plies, K drawn per game
     // as an exponential with this mean, rounded to the nearest integer.
     double random_opening_mean = 0.0;
-    // Respect agents' projected_remaining_moves annotations (see MoveDecision),
-    // fast-tracking a proven endgame instead of prompting turn by turn. Off by
-    // default; self-play generation is the special case that turns it on, its
-    // compute belonging to undecided games and its logs tolerating proof-line
-    // stand-ins for agent moves.
+    // Honor agents' projected_remaining_moves (see MoveDecision), playing out
+    // a proven endgame directly instead of prompting turn by turn. Self-play
+    // generation turns it on: its compute is better spent on undecided games,
+    // and its logs tolerate proof-line moves standing in for agent moves.
     bool respect_projections = false;
     // Play face-up-leaves Scrabble, in which each player's retained tiles are
     // public until they move again (docs/roadmap.md).
@@ -44,8 +42,7 @@ class GameEngine {
   // bad params.
   GameEngine(const Params& params, const PlayerFactory::Params& player_params);
 
-  // Agent pairs actually built, which may be below params.threads; see the
-  // constructor.
+  // Agent pairs actually built, which may be fewer than params.threads.
   int num_threads() const { return agents_.size(); }
 
   // Game g is played with seed() + g.
@@ -55,9 +52,9 @@ class GameEngine {
   // between games.
   std::array<std::string, 2> player_names() const;
 
-  // Play one game on `thread_idx`'s agent pair, `seats[s]` being the player
-  // index at seat s, and hand the finished log storage to `sink`. The returned
-  // end-of-game actions are meaningful only on the serial path.
+  // Play one game on `thread_idx`'s agent pair, with player seats[s] at seat s,
+  // and hand the finished log to `sink`. The returned end-of-game actions
+  // (PLAY_AGAIN/QUIT) matter only to a serial driver.
   std::pair<EndGameAction, EndGameAction> play(int thread_idx, const std::array<int, 2>& seats,
                                                uint64_t game_idx, GameSink& sink);
 

@@ -8,8 +8,7 @@ namespace {
 
 constexpr int kCells = BOARD_SIZE * BOARD_SIZE;
 
-// Plane offset for premium kind `p`, or -1 for a non-premium square. Order
-// matches the canonical block: DLS, TLS, DWS, TWS.
+// Offset from kPremiumPlane0, or -1 for a plain square.
 int premium_offset(Premium p) {
   if (p == Premium::DLS) return 0;
   if (p == Premium::TLS) return 1;
@@ -27,7 +26,7 @@ void BoardPlanes::encode(const Board& board, float* planes_out) {
 
       const Glyph g = board.at(r, c);
       if (!g.is_empty()) {
-        planes_out[g.letter().index() * kCells + idx] = 1.0f;  // letter plane 0..25
+        planes_out[g.letter().index() * kCells + idx] = 1.0f;
         if (g.is_blank()) planes_out[kBlankMarkerPlane * kCells + idx] = 1.0f;
       }
 

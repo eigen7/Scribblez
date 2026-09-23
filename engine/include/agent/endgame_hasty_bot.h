@@ -10,10 +10,8 @@
 
 namespace scribblez {
 
-// A HastyBot that hands the endgame off to an EndgameTurnPolicy, so it
-// converts won endgames and defends lost ones optimally rather than greedily.
-// Until the bag empties it plays exactly like HastyBotAgent, as it does on any
-// turn the solver declines.
+// HastyBot with an exact endgame: bag-empty turns go to an EndgameTurnPolicy,
+// and every other turn, like any the solver declines, plays HastyBot's move.
 class EndgameHastyBotAgent : public HastyBotAgent {
  public:
   struct Params {
@@ -27,13 +25,13 @@ class EndgameHastyBotAgent : public HastyBotAgent {
   void observe_move(const Move& move) override;
   void begin_game(const BeginGameRequest& req) override;
 
-  // Exposed for the endgame benchmark, which reads the solve totals and toggles
-  // individual solver features.
+  // For the endgame benchmark, which reads the solve totals and toggles solver
+  // features.
   EndgameTurnPolicy& endgame() { return endgame_; }
 
   // Build from `--player "--type=hastybot-endgame [options]"` tokens, with
-  // --type and --name already stripped. Accepts every HastyBot option plus the
-  // solver Params under an "endgame-" prefix. Throws on bad input.
+  // --type and --name already stripped: every HastyBot option, plus the solver
+  // Params under an "endgame-" prefix. Throws on bad input.
   static std::unique_ptr<EndgameHastyBotAgent> from_spec(const std::vector<std::string>& tokens,
                                                          int thread_id, const std::string& name);
 

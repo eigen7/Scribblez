@@ -26,38 +26,30 @@ namespace {
 
 namespace po = boost::program_options;
 
-// Everything the factory needs to know about a player type lives in one row of
-// kPlayerTypes below, so adding a type is a single new entry -- no per-type
-// switch scattered across parse_player_spec(), make_one(), display_name(), and
-// all_player_types_help(); each of those iterates the list generically.
+// Everything the factory knows about a player type, as one row of kPlayerTypes.
 struct PlayerType {
   std::string_view type_str;      // --type value (lowercased)
   std::string_view default_name;  // display name when --name is omitted
   std::string (*options_help)();  // the agent's per-type --player help block
-  // Construct the agent. opp_name is the other seat's display name; only the
-  // human seat's from_spec takes it, so the uniform adapter ignores it.
+  // opp_name is the other seat's display name, used only by the human agent.
   std::unique_ptr<Agent> (*build)(const std::vector<std::string>& tokens, int thread_id,
                                   const std::string& name, const std::string& opp_name);
 };
 
-// Adapter for the nine agents whose from_spec is the uniform three-arg form:
-// drop opp_name, forward the rest. from_spec is a non-type template argument,
-// so one template covers them all and each returns its own unique_ptr subtype
-// (implicitly converted to unique_ptr<Agent>).
+// Adapts every agent's three-argument from_spec to PlayerType::build.
 template <auto FromSpec>
 std::unique_ptr<Agent> build_agent(const std::vector<std::string>& tokens, int thread_id,
                                    const std::string& name, const std::string& /*opp_name*/) {
   return FromSpec(tokens, thread_id, name);
 }
 
-// The human seat is the lone outlier: its from_spec also takes the opponent's
-// display name (shown in the browser UI).
+// The human agent's from_spec also takes the opponent's name, for the UI.
 std::unique_ptr<Agent> build_human(const std::vector<std::string>& tokens, int thread_id,
                                    const std::string& name, const std::string& opp_name) {
   return HumanWebAgent::from_spec(tokens, thread_id, name, opp_name);
 }
 
-// The single source of per-type knowledge. Adding a player type is one new row.
+// Adding a player type takes only a new row here.
 constexpr std::array<PlayerType, 10> kPlayerTypes{{
   {"greedy", "Greedy", &GreedyAgent::options_help, &build_agent<&GreedyAgent::from_spec>},
   {"human", "You", &HumanWebAgent::options_help, &build_human},
@@ -103,9 +95,9 @@ std::string type_choices_prose() {
   return out;
 }
 
-// The --player options common to every agent type. Built by both
-// parse_player_spec() and all_player_types_help(), so the parsed options and
-// the documented ones share one source of truth.
+// The --player options common to every type. Shared by parse_player_spec()
+// and all_player_types_help(), so the parsed and documented options cannot
+// drift.
 po::options_description universal_player_options(std::string& type_str, std::string& name) {
   static const std::string type_help = "player type: " + type_choices_bar();
   po::options_description desc;
@@ -117,21 +109,14 @@ po::options_description universal_player_options(std::string& type_str, std::str
   return desc;
 }
 
-// Parse one --player spec string. An implementation detail of
-// PlayerFactory::make_players().
+// Parse one --player value. Only --type and --name are parsed here; every
+// other token is forwarded to the chosen agent's from_spec().
 PlayerSpec parse_player_spec(const std::string& spec) {
   std::string type_str;
   PlayerSpec out;
-
-  // Only the universal options (--type and --name) are parsed here. Anything
-  // else is forwarded to the chosen agent's from_spec() as remaining tokens,
-  // so adding a new agent never requires touching this function.
   po::options_description desc = universal_player_options(type_str, out.name);
 
   try {
-    // Each --player value is its own little option string; tokenize it the way
-    // a shell would and feed it through program_options with the rest passed
-    // through unparsed.
     std::vector<std::string> tokens = po::split_unix(spec);
     po::parsed_options parsed =
       po::command_line_parser(tokens).options(desc).allow_unregistered().run();
@@ -151,7 +136,6 @@ PlayerSpec parse_player_spec(const std::string& spec) {
   return out;
 }
 
-// Dispatch to the chosen Agent subclass's from_spec() via its table entry.
 std::unique_ptr<Agent> make_one(const PlayerSpec& spec, int thread_id,
                                 const std::string& opp_name) {
   const PlayerType* pt = find_player_type(spec.type);
@@ -165,7 +149,7 @@ std::string PlayerSpec::display_name() const {
   if (!name.empty()) return name;
   const PlayerType* pt = find_player_type(type);
   if (pt != nullptr) return std::string(pt->default_name);
-  return type;  // unknown types: fall back to the literal type string
+  return type;
 }
 
 bool PlayerSpec::is_human() const { return type == "human"; }
@@ -187,8 +171,7 @@ PlayerFactory::Players PlayerFactory::make_players(const Params& params, int thr
   std::array<PlayerSpec, 2> specs;
   for (int s = 0; s < 2; ++s) specs[s] = parse_player_spec(raw[s]);
 
-  // Build both agents. A Human agent's ctor blocks on its Vite dev server
-  // coming up, so this is the point at which the browser UI appears.
+  // A human agent's constructor blocks until its web UI is up.
   Players out;
   out[0] = make_one(specs[0], thread_id, specs[1].display_name());
   out[1] = make_one(specs[1], thread_id, specs[0].display_name());
@@ -200,7 +183,7 @@ std::string PlayerFactory::all_player_types_help() {
   for (const PlayerType& pt : kPlayerTypes) {
     o << "--player \"--type=" << pt.type_str << " [options]\"\n" << pt.options_help() << "\n";
   }
-  std::string type_str, name;  // scratch binding targets; never read here
+  std::string type_str, name;  // binding targets; never read
   o << "Universal --player options (parsed by the factory before dispatch):\n"
     << universal_player_options(type_str, name);
   return o.str();

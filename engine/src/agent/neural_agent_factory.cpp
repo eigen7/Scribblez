@@ -1,13 +1,6 @@
-// Command-line construction of NeuralAgent, kept separate from the agent's
-// selection logic (neural_agent.cpp). from_spec resolves the run-shared model
-// through nn::PositionEvalService::create() and hands the agent the shared_ptr,
-// so the core agent TU -- and the agent's unit tests, which inject a stub
-// through the same constructor -- carry no CUDA/TensorRT dependency (create()'s
-// construction of the concrete service lives in the TensorRT layer). Parsing the
-// `--type=neural` option string additionally pulls in Boost.program_options,
-// the process-wide Lexicon, and the shared NeuralServiceOptions block
-// (neural_service_options.cpp, which resolves --precision through
-// nn::parse_precision), all kept out of the core agent TU.
+// NeuralAgent's command-line construction, kept out of neural_agent.cpp so the
+// unit tests that compile the agent with a stub service need none of the
+// option-parsing, Lexicon, or model-loading dependencies.
 
 #include "agent/neural_agent.h"
 #include "agent/neural_service_options.h"
@@ -31,10 +24,9 @@ namespace {
 
 namespace po = boost::program_options;
 
-// Parsed `--type=neural` option values, with their defaults. A single
-// options_description is built over these fields (make_options_description) and
-// reused for both parsing (from_spec) and help rendering (options_help), so the
-// two can never drift.
+// Parsed `--type=neural` options with their defaults. from_spec and
+// options_help build the same options_description over them, so the parsed
+// and documented options cannot drift.
 struct NeuralOptions {
   NeuralServiceOptions service;
   int top_k = 10;
@@ -44,8 +36,7 @@ struct NeuralOptions {
   EndgameSolver::Params endgame;
 };
 
-// Boost.program_options renders defaults set via default_value() as "(=...)" in
-// the help text, so the option descriptions deliberately omit them.
+// Help strings omit defaults: program_options renders them as "(=...)".
 po::options_description make_options_description(NeuralOptions& opts) {
   po::options_description desc("Neural agent (--type=neural) options");
   opts.service.add_options(desc);
@@ -82,17 +73,14 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
 
   if (opts.top_k < 0) throw util::CleanException("--top-k must be >= 0 (0 = all legal plays)");
 
-  // Sizing the engine batch to at least top_k just lets the whole top-K set be
-  // scored in a single chunk; the agent chunks to the engine batch either way.
-  // top_k == 0 (all plays) is chunked to batch_size.
+  // Raise the engine batch to top_k so the top-K set is scored in one chunk.
+  // With top_k == 0 (all plays) the evaluator chunks to batch_size.
   const NeuralAgent::NetParams net_params =
     opts.service.net_params<nn::PositionEvaluationSpec>(opts.top_k);
 
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   const uint64_t resolved_seed = have_seed ? opts.seed : SeedProducer::instance().next();
-  // One loaded model per (net_params), shared across this run's threads;
-  // net_params.max_rows bounds one evaluate() call, matching the batch the
-  // shared engine was built for.
+  // One loaded model per distinct net_params, shared by the run's threads.
   std::shared_ptr<nn::PositionEvalService> service = nn::PositionEvalService::create(net_params);
   return std::make_unique<NeuralAgent>(
     NeuralAgent::Params{.thread_id = thread_id,

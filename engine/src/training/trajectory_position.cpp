@@ -19,8 +19,8 @@ bool read_trajectory_decision(const std::string& gcg_text, const Dictionary& dic
                               TrajectoryDecision* out, std::string* error) {
   ParsedGcgPosition& p = out->position;
   if (!read_gcg_position(gcg_text, open_leaves, &p, error)) return false;
-  // The ranking request TrajectoryRunner::run makes: the opponent rack is
-  // the known leave under open leaves, else nothing.
+  // The ranking request TrajectoryRunner::run makes. read_gcg_position leaves
+  // opp_leave empty unless leaves are open.
   const MoveRequest req{
     p.board, dict, p.rack, p.opp_leave, p.scores[p.mover], p.scores[1 - p.mover], p.bag_size};
   out->legal_moves = equity_top_k(req, std::numeric_limits<int>::max());
@@ -30,9 +30,8 @@ bool read_trajectory_decision(const std::string& gcg_text, const Dictionary& dic
 void encode_trajectory_decision(const TrajectoryDecision& d, const InputEncodingSpec& spec,
                                 float* out, int* score_diff) {
   const ParsedGcgPosition& p = d.position;
-  // apply_move attributes each move to the encoder's own turn order (seat 0
-  // first), which the recorded seats follow -- the same replay the generator
-  // and the training path run.
+  // apply_move attributes each move by the encoder's own turn order (seat 0
+  // first), which the recorded seats follow.
   GameStateEncoder enc{spec};
   for (const ParsedGcgTurn& t : p.game.turns) enc.apply_move(t.record.move);
   RELEASE_ASSERT(enc.active_player() == p.mover);

@@ -1,32 +1,32 @@
 #pragma once
 
-// Multithreaded loader that streams sampled training rows from a set of .slog
-// files into a caller-provided float buffer.
+// Multithreaded loader that streams training rows decoded from .slog files into
+// a caller-provided float buffer.
 //
-// Register every .slog file in chronological order (the loader assumes a strict
-// newest-last add order), then alternate epoch_start() with load_batch() until
-// it returns 0. New self-play data can be added between epochs.
+// Register files with add_file(), then alternate epoch_start() with
+// load_batch() until load_batch() returns 0. Files may be added between epochs
+// as self-play produces them.
 //
-// epoch_start() selects the epoch's rows and applies one global shuffle across
-// all files, deterministically seeded, so a batch draws uniformly from the whole
-// epoch rather than from one file's games. Files load on demand and are evicted
-// once resident bytes exceed the memory budget, with a background prefetch loop
-// pulling in upcoming files while the workers decode the current batch.
+// epoch_start() picks the epoch's rows and shuffles them once, globally and
+// deterministically, so each batch draws from the whole epoch rather than from
+// one file's games. File bodies load on demand: for each batch, a background
+// prefetch loop loads the files it needs, keeping resident bytes within the
+// memory budget where it can, and files the batch does not need are evicted.
 //
-// A row is input_floats(spec) input floats followed by the label block that
-// training_targets.h owns (whose constants this header re-exports).
+// A kPositionEval row is input_floats(spec) input floats followed by the label
+// block defined in training/training_targets.h; kMaxMovePerLane rows use
+// MaxMovePerLaneTask's layout.
 //
-// The implementation splits into focused inner classes, following AZA's
-// DataLoader pattern:
+// The inner classes follow AlphaZeroArcade's DataLoader design:
 //
-//   DataFile        — one registered .slog file; owns the in-memory buffer
-//   WorkUnit        — (DataFile*, local positions, output offset) for one file
-//   ThreadTable     — tracks available thread IDs with blocking allocate
-//   PrefetchThread  — persistent thread that loads a file on demand
-//   FileManager     — owns all DataFiles, LRU eviction, prefetch orchestration
-//   WorkerThread    — persistent thread that decodes WorkUnits via BlockDecoder
-//   WorkManager     — distributes WorkUnits to WorkerThreads
-//   SamplingManager — builds shuffled epoch plan, slices into batches
+//   DataFile        one registered .slog file and its in-memory body
+//   WorkUnit        the rows of one batch that come from one file
+//   ThreadTable     pool of free thread IDs with blocking allocation
+//   PrefetchThread  loads one DataFile at a time on request
+//   FileManager     owns the DataFiles; drives prefetching and eviction
+//   WorkerThread    decodes WorkUnits with its own BlockDecoder
+//   WorkManager     hands WorkUnits to the WorkerThreads
+//   SamplingManager builds the shuffled epoch plan and slices it into batches
 
 #include "data/block_decoder.h"
 #include "encoding/input_encoder.h"
@@ -44,8 +44,7 @@
 namespace scribblez {
 namespace binlog {
 
-// A (game, turn) sample location within a single .slog file: a flat position
-// index expanded back into the game it belongs to and the turn within it.
+// The (game, turn) within one .slog file that a flat row index stands for.
 struct GameTurn {
   uint32_t game_idx;
   uint16_t turn_idx;
@@ -55,12 +54,12 @@ class DataLoader {
  public:
   struct Params {
     // spec.dict is required and must outlive the loader. `task` fixes both the
-    // row decoded and which of a game's turns expand into rows.
+    // row layout and which of a game's turns become rows (see DecodeTask).
     InputEncodingSpec spec{nullptr};
     DecodeTask task = DecodeTask::kPositionEval;
-    int64_t memory_budget = 256LL * 1024 * 1024;  // resident buffers
-    int num_worker_threads = 4;                   // decoder pool size
-    int num_prefetch_threads = 2;                 // disk-I/O pool size
+    int64_t memory_budget = 256LL * 1024 * 1024;  // bytes of resident file bodies
+    int num_worker_threads = 4;
+    int num_prefetch_threads = 2;
   };
 
   explicit DataLoader(const Params& params);
@@ -69,8 +68,9 @@ class DataLoader {
   DataLoader(const DataLoader&) = delete;
   DataLoader& operator=(const DataLoader&) = delete;
 
-  // Oldest-first; the loader treats the most-recently-added file as the
-  // newest. `num_positions` and `file_size` must match the on-disk header.
+  // `file_size` must be the file's size on disk. The row count is read from the file's own header;
+  // `num_positions` serves only as a fallback game count (one row per game) if
+  // that header cannot be read.
   void add_file(const std::string& path, int64_t num_positions, int64_t file_size);
 
   // Totals across all registered files.
@@ -79,34 +79,30 @@ class DataLoader {
 
   int64_t resident_bytes() const;
 
-  // =========================================================================
-  // Epoch-based streaming API
-  // =========================================================================
-
   struct EpochConfig {
     int batch_size = 256;
-    bool post_move = true;
-    bool apply_symmetry = true;
+    bool post_move = true;       // kPositionEval: encode the position after the move
+    bool apply_symmetry = true;  // transpose each row with probability 1/2
     uint64_t seed = 42;
 
     // Per-game turn subsampling. 0 trains on every eligible turn of every game.
-    // k > 0 draws k turns per game per epoch (clamped to its eligible-turn
-    // count), so at k == 1 no two rows of an epoch share a game and a batch is
-    // decorrelated. Each game has a fixed pseudo-random turn ordering, seeded by
-    // file path and game index independently of `seed`, of which `epoch_index`
-    // selects the length-k window -- so successive epochs cover distinct turns
-    // until the ordering wraps, and over E epochs a game contributes
-    // min(E * k, its eligible-turn count) distinct positions.
+    // k > 0 takes k turns per game (at most its eligible-turn count), so at
+    // k == 1 no two rows of an epoch share a game. Each game has a fixed
+    // pseudo-random ordering of its turns, seeded by file path and game index
+    // and independent of `seed`; epoch `epoch_index` takes the k-long window at
+    // epoch_index * k. Successive epochs therefore see distinct turns until the
+    // ordering wraps.
     int turns_per_game = 0;
     int epoch_index = 0;
   };
 
-  // Returns the number of complete batches the epoch will yield; a final
-  // partial batch, if any, is yielded on top of those.
+  // Returns the number of full batches in the epoch. A final partial batch, if
+  // any, comes on top of those.
   int epoch_start(const EpochConfig& config);
 
-  // The rows written -- short on the final batch, 0 once the epoch is
-  // exhausted. `output` needs room for batch_size * row_size_floats() floats.
+  // Returns the number of rows written: batch_size, fewer on the final batch,
+  // 0 once the epoch is exhausted. `output` needs room for
+  // batch_size * row_size_floats() floats. Throws if a file body cannot be read.
   int load_batch(float* output);
 
   int row_size_floats() const {
@@ -122,15 +118,13 @@ class DataLoader {
                                                        : kLabelFloats;
   }
 
-  // =========================================================================
-  // Inner classes
-  // =========================================================================
-
-  // One registered .slog file, owning the in-memory buffer once loaded.
+  // One registered .slog file and, while loaded, its in-memory body.
   //
-  // A file's "positions" are its expanded training rows, one per included turn
-  // across all games. `expand_all_turns` chooses which turns count: every turn
-  // (the lane task) or only each game's eligible region (the value task).
+  // A file's "positions" are its training rows, one per included turn of each
+  // game. `expand_all_turns` includes every turn (kMaxMovePerLane); otherwise
+  // only each game's eligible region is included (kPositionEval). The row
+  // index is built at construction from the header and metadata table, so an
+  // epoch can be planned before any body is loaded.
   class DataFile {
    public:
     DataFile(const std::string& path, int64_t num_positions, int64_t file_size,
@@ -142,24 +136,20 @@ class DataLoader {
     int64_t file_size() const { return file_size_; }
     bool is_loaded() const;
 
-    // Reads the file contents into memory; blocking I/O.
+    // Blocking.
     void load();
 
     // Frees the buffer and returns the bytes freed, or 0 if it was not loaded.
     int64_t unload();
 
-    // Blocks until the file's load resolves, then returns its body -- or
-    // nullptr if the load failed (the file was unreadable). Never blocks
-    // forever on a failed load.
+    // Blocks until a load attempt resolves, then returns the body, or nullptr
+    // if the file could not be read.
     const char* buffer() const;
 
-    // The (game, turn) a flat position index in [0, num_positions()) stands
-    // for.
     GameTurn sample_to_game_turn(int64_t sample_index) const;
 
-    // From the file header and metadata table, needing no resident body.
     int64_t num_games() const { return num_games_; }
-    // Flat rows the game expands into.
+    // The number of rows game `game` contributes.
     int turns_in_game(int64_t game) const {
       return cumulative_turns_[game + 1] - cumulative_turns_[game];
     }
@@ -171,30 +161,25 @@ class DataLoader {
     int64_t file_size_;
     int64_t num_games_ = 0;
 
-    // Prefix sums of per-game included-turn counts (size num_games_ + 1):
-    // cumulative_turns_[g] is game g's first flat position index, and the last
-    // entry is num_positions_.
+    // cumulative_turns_[g] is game g's first row index; the extra last entry is
+    // num_positions_.
     std::vector<int64_t> cumulative_turns_;
 
-    // The turn index game g's first flat position stands for: eligible_begin
-    // for the value task, 0 when expanding all turns.
+    // The turn that game g's first row stands for: eligible_begin, or 0 when
+    // expanding all turns.
     std::vector<uint8_t> first_turns_;
 
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;
     char* buffer_ = nullptr;
-    // Set once a load() attempt has run and come back empty (open error, short
-    // read). Distinguishes "loaded and failed" from "not yet loaded" so a
-    // waiter in buffer() can give up instead of blocking on a body that will
-    // never arrive.
+    // Set when the latest load() attempt failed, so buffer() can tell "failed"
+    // from "not loaded yet" and return instead of waiting forever.
     bool load_failed_ = false;
   };
 
-  // Latches the first .slog whose body failed to load during a batch. A worker
-  // that finds its file unreadable records the path here and returns, leaving
-  // its rows untouched, so load_batch turns the failure into a clean error on
-  // the caller's thread rather than every party blocking forever on a load
-  // that cannot complete.
+  // Records the first file whose body failed to load during a batch. The worker
+  // that hits the failure records it and skips its rows; load_batch then throws
+  // on the caller's thread.
   class LoadFailureLatch {
    public:
     void reset();
@@ -208,15 +193,15 @@ class DataLoader {
     std::string path_;
   };
 
-  // A batch of rows to decode from one file.
+  // The rows of one batch that come from one file. The three vectors are
+  // parallel, one entry per row.
   struct WorkUnit {
     DataFile* file;
-    std::vector<int64_t> local_positions;  // positions within the file
-    std::vector<uint8_t> flips;            // per-row flip bits
-    std::vector<int> output_indices;       // where each row lands in output
+    std::vector<int64_t> local_positions;  // row index within the file
+    std::vector<uint8_t> flips;            // nonzero: transpose the board
+    std::vector<int> output_indices;       // row index within the batch
   };
 
-  // Tracks available thread IDs with blocking allocate/release.
   class ThreadTable {
    public:
     explicit ThreadTable(int n_threads);
@@ -239,7 +224,6 @@ class DataLoader {
     bool quitting_ = false;
   };
 
-  // A persistent thread that loads a DataFile on demand.
   class PrefetchThread {
    public:
     PrefetchThread(ThreadTable* table, int id);
@@ -261,7 +245,6 @@ class DataLoader {
     bool quitting_ = false;
   };
 
-  // Owns all DataFiles, manages LRU eviction and prefetch orchestration.
   class FileManager {
    public:
     FileManager(int64_t memory_budget, int num_prefetch_threads, bool expand_all_turns);
@@ -278,8 +261,9 @@ class DataLoader {
 
     void add_to_unload_queue(DataFile* file);
 
-    // Sorts work_units loaded-first, enqueues unloaded files for prefetching,
-    // and trims files this batch no longer needs.
+    // Called once per batch before its WorkUnits are dispatched: evicts queued
+    // files this batch does not need, queues the ones it needs that are not
+    // loaded, and orders already-loaded files first so workers start at once.
     void prepare_work_units(std::deque<WorkUnit>& work_units);
 
     void reset_prefetch_loop();
@@ -292,7 +276,7 @@ class DataLoader {
     void exit_prefetch_loop();
 
     int64_t memory_budget_;
-    bool expand_all_turns_;  // passed to each DataFile
+    bool expand_all_turns_;
 
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;
@@ -307,11 +291,10 @@ class DataLoader {
     int active_file_count_ = 0;
 
     int64_t num_positions_ = 0;
-    std::deque<DataFile*> all_files_;  // chronological order
+    std::deque<DataFile*> all_files_;
     int64_t memory_usage_ = 0;
   };
 
-  // A persistent thread that decodes WorkUnits using a BlockDecoder.
   class WorkerThread {
    public:
     WorkerThread(FileManager* file_manager, ThreadTable* table, LoadFailureLatch* load_failure,
@@ -342,7 +325,6 @@ class DataLoader {
     BlockDecoder decoder_;
   };
 
-  // Distributes WorkUnits to a pool of WorkerThreads.
   class WorkManager {
    public:
     WorkManager(FileManager* file_manager, LoadFailureLatch* load_failure, int num_threads,
@@ -357,7 +339,6 @@ class DataLoader {
     ThreadTable thread_table_;
   };
 
-  // Builds the shuffled epoch plan and slices it into per-batch WorkUnits.
   class SamplingManager {
    public:
     void build_epoch(const std::vector<DataFile*>& files, const EpochConfig& config);
@@ -373,15 +354,12 @@ class DataLoader {
       int64_t local_pos;
     };
 
-    // Both collect order_ grouped by file, which build_epoch then shuffles
-    // globally: every flat position of every file, or config.turns_per_game
-    // turns drawn per game.
+    // Fill order_, grouped by file, with every row of every file or with
+    // config.turns_per_game turns per game. build_epoch then shuffles it.
     void collect_full_order(const std::vector<DataFile*>& files);
     void collect_sampled_order(const std::vector<DataFile*>& files, const EpochConfig& config);
 
-    // `n` is the game's eligible-turn count and `base` its first flat position.
-    // The turns come from a fixed per-game ordering seeded by `file_key` and
-    // `game`, windowed by epoch_index.
+    // `n` is the game's row count and `base` its first row index.
     void append_game_turns(int file_idx, int64_t game, int n, int64_t base, uint64_t file_key,
                            int turns_per_game, int epoch_index);
 
@@ -398,8 +376,7 @@ class DataLoader {
   Params params_;
   FileManager file_manager_;
   // Declared before work_manager_ so it outlives the worker threads that write
-  // to it (members destruct in reverse order: work_manager_ joins its workers
-  // first).
+  // to it.
   LoadFailureLatch load_failure_;
   WorkManager work_manager_;
   SamplingManager sampling_manager_;
@@ -407,7 +384,7 @@ class DataLoader {
   std::mutex epoch_mu_;
   bool epoch_active_ = false;
   EpochConfig epoch_config_;
-  std::vector<DataFile*> epoch_files_;  // snapshot at epoch_start
+  std::vector<DataFile*> epoch_files_;  // snapshot taken by epoch_start
 };
 
 }  // namespace binlog

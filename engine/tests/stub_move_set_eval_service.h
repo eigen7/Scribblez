@@ -1,10 +1,9 @@
 #pragma once
 
-// A scripted nn::MoveSetEvalService stub for agent unit tests -- no ONNX, no
-// TensorRT, no GPU. It declares the base input layout (no opponent-leave
-// block) and, unlike the position-model stubs, keeps what it was handed: the
-// board row and the encoded candidate set are what a test checks the agent's
-// encoding against.
+// A scripted move-set evaluation service, so agent tests run without a model
+// or GPU. Unlike the position-evaluation stubs it keeps its inputs, so a test
+// can check the agent's board row and candidate encoding. Declares the base
+// input layout (no opponent-leave block).
 
 #include "encoding/input_encoder.h"
 #include "nn/eval_service.h"
@@ -19,12 +18,11 @@ namespace testing {
 
 class StubMoveSetEvalService : public nn::MoveSetEvalService {
  public:
-  // One scripted row per candidate, in candidate order; candidates past its
-  // end score a default (all-zero) row.
+  // One row per candidate, in order; candidates past the end get zeros.
   std::vector<ScriptedEval> scripted;
 
-  // What the last evaluate() saw, and how many times it was called. One call
-  // per turn is the architecture's whole claim, so a test asserts on it.
+  // Call counts, and the inputs of the last call. The move-set model exists to
+  // score a whole turn in one call, so tests assert on `calls`.
   int calls = 0;
   int total_moves = 0;
   std::vector<float> last_board_row;

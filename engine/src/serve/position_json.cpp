@@ -12,7 +12,7 @@ namespace json = boost::json;
 
 namespace {
 
-// 15x15 grid: uppercase letters, lowercase for blanks, null for empty squares.
+// 15x15 grid of letters (lowercase for blanks), null for empty squares.
 json::array board_grid(const Board& board) {
   json::array grid;
   for (int r = 0; r < BOARD_SIZE; ++r) {
@@ -46,7 +46,7 @@ json::array bonus_grid(const Board& board) {
   return grid;
 }
 
-// Rack as {letter, score} entries: letters first, then blanks ('?', score 0).
+// {letter, score} entries, letters first, then blanks as '?' scoring 0.
 json::array rack_tiles(const Rack& my_rack) {
   json::array rack;
   for (Tile L = Tile::of(0); L < 26; ++L) {
@@ -118,8 +118,8 @@ json::object position_state_object(const Board& board, const Rack& my_rack, int 
 json::object position_state_object_pov(const Board& board, const Rack& my_rack, int my_score,
                                        int opp_score, const std::string& my_name,
                                        const std::string& opp_name) {
-  // The active player cannot tell the bag from the opponent's rack; the
-  // refill-to-7 rule pins the partition of the unseen pool.
+  // The POV player cannot tell the bag from the opponent's rack, but the
+  // refill-to-7 rule fixes their sizes.
   const int total = std::accumulate(TILE_COUNTS.begin(), TILE_COUNTS.end(), 0);
   const int unseen = total - tiles_on_board(board) - my_rack.size();
   const int opp_rack_size = std::min(unseen, RACK_SIZE);

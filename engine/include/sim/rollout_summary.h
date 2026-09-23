@@ -1,13 +1,13 @@
 #pragma once
 
 // A compact reduction of one candidate's rollouts, for analysis rather than
-// training: where a SimObservation keeps per-footprint placement histograms
-// (35 KB), this keeps what explains WHY a candidate sims as it does -- how the
-// final margin is distributed, and what each side's next move scored and
-// whether it played off the candidate's own tiles. A candidate that sims well
-// because the opponent's replies score less is defending; one whose own next
-// move scores more, off its own tiles, is setting up; one that only reshapes
-// the margin distribution is trading variance.
+// training. A SimObservation keeps per-footprint placement histograms (35 KB);
+// this keeps what explains why a candidate sims as it does: how the final
+// margin is distributed, what each side's next move scored, and whether it
+// played off the candidate's tiles. A candidate that sims well because the
+// opponent's replies score less is defending; one whose own next move scores
+// more, off its own tiles, is setting up; one that only reshapes the margin
+// distribution is trading variance.
 
 #include "game/move.h"
 #include "sim/sim_runner.h"
@@ -21,7 +21,7 @@
 namespace scribblez {
 
 // A next move's score, bucketed by tens: bin b counts scores in [10b, 10b + 10),
-// the last bin everything from 100 up.
+// the last bin everything from 100 up. Non-plays count as 0.
 inline constexpr int kScoreBins = 11;
 inline constexpr int kScoreBinWidth = 10;
 
@@ -42,9 +42,8 @@ struct NextMoveStats {
   double score_sum = 0;
   std::array<uint32_t, kScoreBins> score_hist{};
   uint32_t bingos = 0;  // plays of all seven tiles
-  // Where the bingos went down, counted per spot: the square of the bingo's
-  // first placed tile and its direction (BingoSpot). One spot dominating says
-  // the candidate opened, or left open, a particular lane.
+  // Bingo counts per bingo_spot(). One spot dominating says the candidate
+  // opened, or left open, a particular lane.
   std::map<uint16_t, uint32_t> bingo_spots;
   uint32_t non_plays = 0;  // exchanges, passes, and rollouts that ended first
   // Plays that laid a tile on a square orthogonally adjacent to one the
@@ -76,25 +75,25 @@ struct RolloutSummary {
   uint32_t opp_passed = 0;
 };
 
-// A NextMoveStats::bingo_spots key and its reading in GCG position style: row
-// first for a play across ("12E"), column first for one down ("E12") -- of the
-// first tile placed, which for a bingo played through or onto existing tiles can
-// sit after the word's own first square.
+// A bingo's spot: the square of its first placed tile, plus its direction.
+// bingo_spot_name renders it in GCG position style: row first for a play
+// across ("12E"), column first for one down ("E12"). For a bingo that plays
+// through existing tiles, the first placed tile can come after the word's
+// first square.
 uint16_t bingo_spot(const Move& bingo);
 std::string bingo_spot_name(uint16_t spot);
 
-// The paired difference in win value (win = 1, draw = 1/2) between two
-// candidates over the same rollout indices. Under common random numbers rollout
-// i of both faced the same opponent rack, so these moments give the standard
-// error of the candidates' win-rate difference exactly, where the two marginal
-// errors would overstate it.
+// Moments of the paired difference in win value (win = 1, draw = 1/2) between
+// two candidates over the same rollout indices. Under common random numbers,
+// rollout i of both faced the same opponent rack, so the paired standard error
+// is much tighter than one combined from the two marginal errors.
 struct PairedWinDiff {
   double sum = 0;     // of (a - b)
   double sq_sum = 0;  // of (a - b)^2
 };
 
 // True iff `d`, over `n` paired rollouts, puts a's win rate more than `sigmas`
-// standard errors BELOW b's: the early-stopping test of a racing sim.
+// standard errors below b's: the early-stopping test of a racing sim.
 bool clearly_below(const PairedWinDiff& d, size_t n, double sigmas);
 
 PairedWinDiff paired_win_diff(std::span<const RolloutResult> a, std::span<const RolloutResult> b);

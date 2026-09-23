@@ -1,33 +1,27 @@
 #pragma once
 
-// Monte-Carlo evaluation of candidate moves at one decision point, producing
-// the per-candidate observations the sim-evidence loop consumes
-// (docs/plans/sim_residual_feedback.md).
+// Monte-Carlo simulation of candidate moves at one decision point: the
+// simming agents' move choice, and the per-candidate observations the
+// sim-evidence loop consumes (docs/plans/sim_residual_feedback.md).
 //
-// Common random numbers: rollout index i uses the same seed for every
-// candidate. The unseen pool is a function of the pre-move board and the
-// mover's full rack, identical across candidates since a candidate only moves
-// tiles between the two, so for a given i the opponent's sampled rack is
-// identical across candidates. Shared rack luck then cancels in candidate
-// differences, sharpening comparisons far beyond independent sampling and
-// making the observations a valid source of pairwise covariance estimates.
-// Results are deterministic and independent of the thread count (per-rollout
-// results are reduced in a fixed order; under value truncation this also
-// leans on the eval service's contract that a row's outputs do not depend on
-// its batch, trt_eval_service.h).
+// Common random numbers (CRN): rollout i of every candidate uses the same
+// seed, and the unseen pool depends only on the pre-move board and the
+// mover's full rack, so rollout i deals the opponent the same rack for every
+// candidate. Rack luck then cancels in candidate differences, which sharpens
+// comparisons well beyond independent sampling.
 //
-// Value truncation (docs/roadmap.md item 2): with horizon_plies set, a
-// rollout plays that many plies and the position evaluation model's readout
-// at the horizon -- the post-move pre-draw state of the horizon ply's
-// mover, the sample kind the model trains on -- stands for everything
-// after: the rollout contributes the model's outcome probabilities and
-// predicted final delta (root-mover POV) instead of a terminal {0,1}
-// outcome, with the leaf Gaussian's variance folded into the delta second
-// moment. A rollout whose game ends before the horizon, or whose horizon
-// ply falls inside the endgame (the model's domain is the pre-endgame
-// prefix), contributes its exact terminal outcome instead. Identical
-// candidates reach identical horizon states under CRN, so their
-// observations still cancel exactly in differences.
+// Results are deterministic and independent of the thread count. Per-rollout
+// results are reduced in a fixed order, and under value truncation the leaf
+// service guarantees that a row's outputs do not depend on its batch
+// (trt_eval_service.h).
+//
+// Value truncation (docs/roadmap.md item 2): with horizon_plies set, a rollout
+// stops after that many plies, and the position-evaluation model's readout at
+// the horizon stands in for the rest of the game. The rollout then contributes
+// the model's outcome probabilities and predicted final delta instead of a
+// terminal outcome. A rollout whose game ends before the horizon, or whose
+// horizon falls in the endgame (outside the model's domain), contributes its
+// exact terminal outcome instead.
 
 #include "game/bag.h"
 #include "game/board.h"
@@ -47,54 +41,46 @@ namespace scribblez {
 class Dictionary;
 struct MoveRequest;  // agent.h
 
-// The pre-move decision point candidates are simmed from. `opp_leave` carries
-// the KNOWN part of the opponent's rack -- under the open-leaves condition, the
-// tiles they retained from their last move -- and every rollout starts them
-// from those plus hidden replenishments drawn from the unseen pool. Empty means
-// the whole rack is hidden and sampled; a full 7-tile leave degenerates to a
-// completely known rack, making the opponent's first reply to each candidate
-// deterministic under the greedy rollout policy.
+// The pre-move decision point candidates are simmed from. `opp_leave` is the
+// known part of the opponent's rack: under face-up leaves, the tiles they kept
+// from their last move. Every rollout seats the opponent with it and draws the
+// rest of their rack from the unseen pool. Empty means the whole rack is
+// hidden.
 struct SimPosition {
   Board board;
   std::array<int, 2> scores{0, 0};
   int mover = 0;
-  Rack rack;       // the mover's full pre-move rack
-  Rack opp_leave;  // the known part of the opponent's rack; empty = all hidden
+  Rack rack;  // the mover's full pre-move rack
+  Rack opp_leave;
 };
 
-// Aggregate observations from `n` rollouts of one candidate, all from the
-// mover's POV. The spatial planes mirror the placement heads' collapsed per-cell
-// marginals (training/footprint_collapse.h) -- how often the opponent's reply or
-// the mover's own next move placed a tile on the square, and how often it did so
-// in a rollout that player went on to win
-// -- as row-major COUNTS rather than frequencies, so a consumer can weigh them
-// by sample size. SimObsWriter/SimObsReader serialize the layout verbatim.
+// Aggregate observations from `n` rollouts of one candidate, from the mover's
+// point of view. Everything is a sum rather than a mean, so a consumer can
+// weigh observations by sample size; consumers normalize by `n`.
+// SimObsWriter/SimObsReader serialize the layout verbatim.
 //
-// A terminal rollout contributes a {0,1} outcome and an integer delta; a
-// value-truncated rollout (docs/roadmap.md item 2) contributes the leaf
-// model's outcome probabilities and predicted final delta, so the outcome
-// accumulators and the win-conjoined planes are fractional. The next-move
-// planes stay integer counts: the plies they read are always simmed, never
-// predicted. Every consumer normalizes by `n` -- the rollout count, integral
-// in both configurations -- so the frequency semantics are unchanged.
+// Under value truncation the outcome sums and the `*_win_count` histograms are
+// fractional, since they accumulate the leaf model's probabilities. The
+// `*_next_count` histograms stay integral: the moves they record are always
+// played, never predicted.
+//
+// The placement histograms are over footprint classes (training/footprint.h):
+// each rollout credits the opponent's reply and the mover's next move to one
+// class each. `*_win_count` weights that credit by the probability that the
+// move's player won. Stored dense; the anchored classes reshape to
+// (15, 15, slots).
 struct SimObservation {
-  // Placement is a histogram over the kFootprintClasses footprint classes
-  // (training/footprint.h), not per-cell occupancy: each rollout's reply / next
-  // move contributes to exactly one class (its footprint), in the natural
-  // frame. Stored dense; the anchored classes reshape to (15, 15, slots).
   static constexpr int kClasses = kFootprintClasses;
 
   // Doubles first, so the layout carries no alignment padding to serialize.
-  double wins = 0;  // outcome weight for the mover winning (draws are neither)
+  double wins = 0;
   double draws = 0;
   double losses = 0;
-  double delta_sum = 0;  // sum over rollouts of (mover final - opp final)
-  // Sum over rollouts of the final delta's second moment: delta^2 for a
-  // terminal rollout, mean^2 + sigma^2 of the leaf Gaussian for a truncated
-  // one. The recovered variance is therefore PREDICTIVE in both
-  // configurations (law of total variance: across-rollout spread of the
-  // means plus the mean leaf variance), distinguishing "win by 103 exactly"
-  // from "win by 103 +/- 39".
+  double delta_sum = 0;  // final delta: mover's score minus the opponent's
+  // Sum of the final delta's second moment (see RolloutResult::delta_sq). The
+  // variance recovered from it is predictive in both configurations: by the
+  // law of total variance, the spread of the rollout means plus the mean leaf
+  // variance.
   double delta_sq_sum = 0;
   uint32_t n = 0;  // rollouts
 
@@ -106,66 +92,60 @@ struct SimObservation {
 static_assert(sizeof(SimObservation) == 44 + (2 + 2 + 4 + 4) * SimObservation::kClasses,
               "SimObservation is serialized verbatim; its layout must stay packed");
 
-// Which simulated quantity ranks a candidate set: how often the rollouts were
-// won, or the average final score differential they ended on.
+// What ranks simulated candidates: win rate (draws count half) or mean final
+// spread.
 enum class SimObjective { kWinRate, kSpread };
 
 double sim_objective_value(const SimObservation& o, SimObjective objective);
 
-// Index of the candidate `observations` rank highest under `objective`, ties
-// going to the lower index -- so the caller's own candidate order (static
-// equity for SimAgent, model rank for NeuralSimAgent) breaks them.
+// Index of the best observation under `objective`. Ties go to the lower index,
+// so the caller's own candidate order breaks them.
 int best_observation_index(const std::vector<SimObservation>& observations, SimObjective objective);
 
-// "winrate" or "spread"; anything else throws util::CleanException naming
-// `flag` as the offending option.
+// Parses "winrate" or "spread"; anything else throws util::CleanException
+// naming `flag`.
 SimObjective parse_sim_objective(const std::string& name, const std::string& flag);
 
-// What one rollout contributes to a SimObservation, root-mover POV: the two
-// moves the placement maps read (a missing move is a default Move -- PASS --
-// which places nothing), plus the outcome distribution. A terminal rollout
-// contributes its exact result ({0,1} probabilities, integer delta, delta_sq
-// = delta^2); a truncated one the leaf model's outcome probabilities and its
-// Gaussian's moments -- delta_sq = mean^2 + sigma^2, so the leaf's own
-// predictive uncertainty ("win by 103 +/- 39", not "win by exactly 103")
-// reaches the aggregated delta moments.
+// One rollout's outcome, from the root mover's point of view. A terminal
+// rollout has 0/1 probabilities and an exact delta; a truncated one carries
+// the leaf model's outcome probabilities and final-delta Gaussian.
 struct RolloutResult {
+  // The two moves the placement histograms read. A missing move is a default
+  // Move (PASS), which places nothing.
   Move opp_reply{};
   Move self_next{};
   double p_win = 0;
   double p_draw = 0;
   double p_loss = 0;
-  double delta = 0;     // (predicted) mean of the final delta
-  double delta_sq = 0;  // (predicted) second moment of the final delta
-  // A finished game's end-of-game rack settlement: the tile values each side
-  // was left holding (one of them 0 when that side played out). Already inside
-  // `delta`; kept apart so an analysis can see how much of a candidate's margin
-  // is an opponent stuck with the Q. Both 0 for a truncated rollout.
+  double delta = 0;  // mean of the final delta
+  // Second moment of the final delta: delta^2 when terminal, mean^2 + sigma^2
+  // when truncated, so the leaf's own uncertainty ("win by 103 +/- 39", not
+  // "by exactly 103") reaches the aggregated moments.
+  double delta_sq = 0;
+  // The tile values each side was left holding at the end of a finished game
+  // (0 for the side that played out; both 0 for a truncated rollout). Already
+  // counted in `delta`; kept apart so an analysis can see how much of a
+  // candidate's margin comes from an opponent stuck with the Q.
   int self_stranded = 0;
   int opp_stranded = 0;
-  // Whether each side passed at any point of the rollout (the candidate itself
-  // not counted): a side with no play left, typically stuck with the Q.
+  // Whether each side passed at any point after the candidate: typically a
+  // side with no play left, stuck with the Q.
   bool self_passed = false;
   bool opp_passed = false;
 };
 
-// What the end-of-game settlement moved the final delta by, root-mover POV:
-// twice the other side's tiles to whoever played out, or each side docked its
-// own when nobody did.
+// How much the end-of-game rack settlement moved the final delta, from the
+// root mover's point of view: twice the other side's tiles to whoever played
+// out, or each side docked its own when nobody did.
 int end_rack_swing(const RolloutResult& r);
 
-// Fold one rollout into the candidate's observation: outcome and delta
-// moments accumulate, and each move's footprint class (natural frame)
-// buckets the placement histograms -- opp_reply into the opp counts weighted
-// by p_loss (the opponent wins iff the mover loses), self_next into the self
-// counts weighted by p_win.
+// Fold one rollout into the candidate's observation.
 void accumulate_rollout(const RolloutResult& o, SimObservation* obs);
 
-// One rollout worker's staging for horizon leaf evaluations: encoded rows
-// are buffered, flushed through the (shared) leaf service in chunks, and the
-// decoded scoring heads written back into the pending slots' results,
-// flipped to the root mover's POV. Buffering amortizes the service round
-// trip while holding at most kRows encoded rows (~80 KB each).
+// One rollout worker's buffer of horizon leaves awaiting evaluation. Rows are
+// flushed through the shared leaf service kRows at a time, and the readouts
+// are written into the pending rollouts' results in the root mover's point of
+// view. Batching amortizes the service round trip; each row is ~80 KB.
 class LeafBatcher {
  public:
   static constexpr int kRows = 64;
@@ -208,70 +188,61 @@ class SimRunner {
   // Rollouts per candidate are counted in u16 planes, so this bounds them.
   static constexpr int kMaxRollouts = 65535;
 
-  // Below this horizon the last two input plies at a leaf encode could
-  // predate the rollout, and -- the real bound -- a contingent draw has not
-  // had its draw-then-play plies to resolve, leaving the sim nothing to
-  // observe that the leaf model did not already know (docs/roadmap.md
-  // item 2).
+  // With a shorter horizon, a draw that depends on the candidate would not yet
+  // have been drawn and played, so the sim would observe nothing the leaf
+  // model did not already know (docs/roadmap.md item 2). It also guarantees
+  // that the leaf's last-move input planes all come from the rollout.
   static constexpr int kMinHorizonPlies = 3;
 
   struct Params {
     int rollouts = 300;  // per candidate; at most kMaxRollouts
     int threads = 1;
-    // Value truncation: 0 rolls every rollout to a natural game end (no
-    // leaf service); otherwise rollouts stop after this many plies (at
-    // least kMinHorizonPlies) and `leaf_service` -- a served position
-    // evaluation model -- scores the horizon. May be shared freely across
-    // workers and runners: EvalService serializes concurrent evaluate()
-    // calls itself. Non-owning; must outlive the runner.
+    // Value truncation: 0 plays every rollout to the end of the game with no
+    // leaf service. Otherwise rollouts stop after this many plies (at least
+    // kMinHorizonPlies) and `leaf_service`, a served position-evaluation
+    // model, scores the horizon. The service is non-owning, must outlive the
+    // runner, and may be shared across runners: it serializes concurrent
+    // evaluate() calls itself.
     int horizon_plies = 0;
     nn::PositionEvalService* leaf_service = nullptr;
-    // Rollouts are HastyBot-vs-HastyBot; with this set both sides hand the
-    // endgame to the endgame solver (EndgameHastyBotAgent) instead of playing it
-    // greedily. Greedy endgames misjudge a candidate by what happens after the
-    // bag empties -- by tens of win% near the end of the game -- at several
-    // times the rollout cost.
+    // Rollouts are HastyBot vs HastyBot. With this set, both sides hand the
+    // endgame to the solver (EndgameHastyBotAgent) instead of playing it
+    // greedily. Greedy endgames can misjudge a late-game candidate by tens of
+    // percentage points of win rate; solving costs several times as much per
+    // rollout.
     bool solve_endgames = false;
   };
 
-  // Throws util::CleanException on params no SimRunner can honour. The
-  // constructor calls it; an agent may call it earlier, to reject a bad flag
-  // before spending seconds loading a model.
+  // Throws util::CleanException on invalid params. The constructor calls it;
+  // an agent may call it earlier, to reject a bad flag before spending seconds
+  // loading a model.
   static void validate(const Params& params);
 
-  // Checks the truncation-flag pairing (a horizon iff a leaf) and the horizon
-  // lower bound for one CLI surface that knows both, throwing
-  // util::CleanException prefixed with `context` (the agent or tool name) on a
-  // bad combination. validate() re-checks these against the built Params; a
-  // surface calls this earlier -- before loading the leaf model -- so a bad
-  // flag fails fast rather than after seconds of model building.
+  // The horizon checks of validate(), for a CLI surface to run before it loads
+  // the leaf model: a horizon comes with a leaf model and vice versa, and the
+  // horizon respects kMinHorizonPlies. Errors are prefixed with `context`, the
+  // agent or tool name.
   static void validate_horizon(std::string_view context, int horizon_plies, bool have_leaf_service);
 
-  // The horizon lower bound alone, for a surface whose leaf presence is
-  // decided (and whose pairing is thus checked) elsewhere -- an agent whose
-  // factory already ran validate_horizon, or a library whose caller owns the
-  // pairing. Still worth checking early, to fail before a model load.
+  // The kMinHorizonPlies check alone, for a surface whose horizon/leaf pairing
+  // is checked elsewhere.
   static void validate_min_horizon(std::string_view context, int horizon_plies);
 
   SimRunner(const Dictionary& dict, const Params& params);
 
-  // Rollout i of every candidate is seeded by `base_seed + i` (the scheme
-  // above), and rollouts are HastyBot-vs-HastyBot to a natural game end --
-  // or to the truncation horizon, when the params set one. Requires a
-  // non-empty bag at the decision point -- the training-eligibility rule --
-  // so no candidate can end the game outright.
+  // Rollout i of every candidate is seeded by `base_seed + i`. Requires a
+  // non-empty bag at the decision point, so no candidate can end the game.
   std::vector<SimObservation> run(const SimPosition& pos, const std::vector<Move>& candidates,
                                   uint64_t base_seed) const;
 
-  // The rollouts behind run(), unreduced: candidates.size() * rollouts results,
-  // candidate c's rollout i at [c * rollouts + i]. For a consumer that reduces
-  // them to something other than a SimObservation (sim/rollout_summary.h).
+  // The rollouts behind run(), unreduced, for a consumer that reduces them
+  // differently (sim/rollout_summary.h). Candidate c's rollout i is at
+  // [c * rollouts + i].
   std::vector<RolloutResult> run_rollouts(const SimPosition& pos,
                                           const std::vector<Move>& candidates,
                                           uint64_t base_seed) const;
   // As above with `rollouts` in place of the params' count, so a caller can sim
-  // in instalments: rollouts [a, b) of a candidate are run_rollouts(...,
-  // base_seed + a, b - a), whatever the instalments' sizes.
+  // in instalments: rollouts [a, b) are run_rollouts(..., base_seed + a, b - a).
   std::vector<RolloutResult> run_rollouts(const SimPosition& pos,
                                           const std::vector<Move>& candidates, uint64_t base_seed,
                                           int rollouts) const;
@@ -280,18 +251,15 @@ class SimRunner {
  private:
   const Dictionary& dict_;
   Params params_;
-  // The leaf model's input encoding, derived from the service's declared arm
-  // at construction; meaningful only under truncation.
+  // The leaf model's input encoding; meaningful only under truncation.
   InputEncodingSpec leaf_spec_{};
 };
 
-// Fills a SimRunner::Params from a simming agent's shared truncation knobs:
-// its base sim params, its horizon, and its leaf evaluator. The one place the
-// three simming agents translate their own Params into the runner's, so they
-// cannot drift on this mapping. `leaf` is passed through as given (validate()
-// then rejects a horizon/leaf mismatch); a caller whose leaf exists
-// regardless of truncation -- NeuralSimAgent's own served model -- passes null
-// itself when its horizon is 0.
+// A simming agent's runner params: its base sim params plus its truncation
+// horizon and leaf service. Shared so the simming agents cannot drift on this
+// mapping. `leaf` passes through as given, and validate() rejects a
+// horizon/leaf mismatch, so an agent whose model exists regardless of
+// truncation must pass null when its horizon is 0.
 SimRunner::Params make_runner_params(SimRunner::Params sim, int horizon_plies,
                                      nn::PositionEvalService* leaf);
 
@@ -299,19 +267,14 @@ SimRunner::Params make_runner_params(SimRunner::Params sim, int horizon_plies,
 // in the player's own rack.
 Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed);
 
-// Every legal play and exchange ranked by HastyBot static equity, best first
-// and capped at `k`, or a lone PASS when nothing is legal. HastyEquity must be
-// initialized. The opponent rack in `req` should be empty mid-game, their tiles
-// being hidden; it only influences equity near the endgame.
-//
-// Throws util::Exception on k < 1. "All moves" is spelled as a large cap,
-// not as 0: a caller wanting no cap passes INT_MAX.
+// The top `k` legal plays and exchanges by HastyBot static equity, best first,
+// or a lone PASS when nothing is legal. HastyEquity must be initialized.
+// Throws util::Exception on k < 1; for no cap, pass INT_MAX.
 std::vector<Move> equity_top_k(const MoveRequest& req, int k);
 
-// The rollout position for an agent deciding `req`: the one place a turn is
-// translated into a SimPosition, so the three simulating agents cannot drift on
-// the seating convention or on what of the opponent's rack a rollout may seed
-// from -- and so a new SimPosition field is filled for all of them at once.
+// The rollout position for an agent deciding `req`. Shared so the simming
+// agents cannot drift on the seating convention or on which of the opponent's
+// tiles a rollout may treat as known.
 SimPosition sim_position_from(const MoveRequest& req);
 
 }  // namespace scribblez

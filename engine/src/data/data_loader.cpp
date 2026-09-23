@@ -37,8 +37,8 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
   return buf;
 }
 
-// One row of a batch, tagged with the file it comes from so the batch can be
-// grouped into per-file WorkUnits.
+// One row of a batch, tagged with its file so the batch can be grouped into
+// per-file WorkUnits.
 struct TaggedRow {
   int file_idx;
   int64_t local_pos;
@@ -48,18 +48,17 @@ struct TaggedRow {
 
 bool by_file_idx(const TaggedRow& a, const TaggedRow& b) { return a.file_idx < b.file_idx; }
 
-// Per-game turn index of one .slog file: for each game, the number of included
-// turns (as prefix sums: cum[g] = first flat row index of game g, cum.back() =
-// total expanded rows) and the turn index its first flat row stands for.
+// The row index of one .slog file; see DataFile::cumulative_turns_ and
+// first_turns_.
 struct TurnIndex {
   std::vector<int64_t> cum;
   std::vector<uint8_t> first_turn;
 };
 
-// From the file's header and metadata table, needing no resident body.
-// `all_turns` counts every turn of each game, otherwise only its
-// training-eligible region. On any read failure it falls back to one turn per
-// game.
+// Reads only the header and metadata table. `all_turns` counts every turn of
+// each game, otherwise only its eligible region. If the header is unreadable,
+// falls back to `num_games_fallback` games of one row each; if only the
+// metadata table is unreadable, to one row per game.
 TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t num_games_fallback,
                           bool all_turns) {
   std::ifstream f(path, std::ios::binary);
@@ -102,10 +101,6 @@ TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t n
 DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, int64_t file_size,
                                bool expand_all_turns)
     : path_(path), num_positions_(num_positions), file_size_(file_size) {
-  // Read the per-game included-turn index from the header + metadata table (no
-  // resident body needed), so an epoch can be sized and subsampled before the
-  // file body is loaded. num_positions_ is the expanded row count; the
-  // caller-passed value is only a fallback.
   TurnIndex idx = read_turn_index(path_, num_games_, num_positions, expand_all_turns);
   cumulative_turns_ = std::move(idx.cum);
   first_turns_ = std::move(idx.first_turn);
@@ -115,9 +110,7 @@ DataLoader::DataFile::DataFile(const std::string& path, int64_t num_positions, i
 DataLoader::DataFile::~DataFile() { unload(); }
 
 GameTurn DataLoader::DataFile::sample_to_game_turn(int64_t sample_index) const {
-  // Find the game whose flat-index range contains sample_index: the last g with
-  // cumulative_turns_[g] <= sample_index. The game's flat rows start at its
-  // first included turn (eligible_begin for the value task, 0 otherwise).
+  // The game is the last g with cumulative_turns_[g] <= sample_index.
   auto it = std::upper_bound(cumulative_turns_.begin(), cumulative_turns_.end(), sample_index);
   int64_t g = (it - cumulative_turns_.begin()) - 1;
   int64_t turn = first_turns_[g] + (sample_index - cumulative_turns_[g]);
@@ -133,7 +126,6 @@ void DataLoader::DataFile::load() {
   std::unique_lock<std::mutex> lock(mutex_);
   if (!buffer_) {
     buffer_ = read_whole_file(path_, file_size_);
-    // Record the outcome so a waiter can tell a failed load from a pending one.
     // A later retry that succeeds clears the flag.
     load_failed_ = buffer_ == nullptr;
   }
@@ -291,8 +283,7 @@ DataLoader::FileManager::~FileManager() {
 
 void DataLoader::FileManager::append(const std::string& path, int64_t num_positions,
                                      int64_t file_size) {
-  // DataFile derives its true (expanded) position count from the file header;
-  // tally that, not the caller-passed value (which is the game count).
+  // Tally the DataFile's row count, read from the file, not the caller's hint.
   auto* f = new DataFile(path, num_positions, file_size, expand_all_turns_);
   std::lock_guard<std::mutex> lock(mutex_);
   num_positions_ += f->num_positions();
@@ -331,11 +322,10 @@ void DataLoader::FileManager::add_to_unload_queue(DataFile* file) {
 void DataLoader::FileManager::prepare_work_units(std::deque<WorkUnit>& work_units) {
   std::unique_lock<std::mutex> lock(mutex_);
 
-  // Determine which files this batch needs.
   std::unordered_set<DataFile*> needed;
   for (const WorkUnit& unit : work_units) needed.insert(unit.file);
 
-  // Drain unload queue: unload files not needed by this batch.
+  // Evict files earlier batches finished with, unless this batch needs them.
   while (!unload_queue_.empty()) {
     DataFile* f = unload_queue_.front();
     unload_queue_.pop_front();
@@ -347,7 +337,7 @@ void DataLoader::FileManager::prepare_work_units(std::deque<WorkUnit>& work_unit
   load_queue_.clear();
   active_file_count_ = 0;
 
-  // Sort: loaded files first so workers can start immediately.
+  // Loaded files first, so workers can start immediately.
   std::sort(work_units.begin(), work_units.end(), [](const WorkUnit& a, const WorkUnit& b) {
     return a.file->is_loaded() > b.file->is_loaded();
   });
@@ -390,7 +380,8 @@ DataLoader::FileManager::Instruction DataLoader::FileManager::get_next_instructi
   if (!unload_queue_.empty()) return kUnload;
   if (active_file_count_ > 0) return kWait;
 
-  // Memory budget insufficient for this single file — load anyway.
+  // Nothing is left to evict or wait for, so the budget cannot be met: load
+  // anyway rather than stall.
   return kLoad;
 }
 
@@ -478,12 +469,11 @@ void DataLoader::WorkerThread::loop() {
     DataFile* file = unit_.file;
     lock.unlock();
 
-    // Release the file before the thread: WorkManager::process() returns once
-    // every thread is available, and the next batch's prepare_work_units()
-    // then resets the FileManager's per-batch state, so the file handback must
-    // already be visible by then. The reverse order let a straggling handback
-    // land after the reset (underflowing active_file_count_, and queueing a
-    // file the new batch may be reading for unload).
+    // Hand back the file before the thread. WorkManager::process() returns
+    // once every thread is available, and the next batch's
+    // prepare_work_units() then resets the FileManager's per-batch state. A
+    // handback arriving after that reset would underflow active_file_count_
+    // and could queue a file the new batch is reading for eviction.
     file_manager_->add_to_unload_queue(file);
     table_->mark_as_available(id_);
   }
@@ -495,15 +485,13 @@ void DataLoader::WorkerThread::do_work() {
   DataFile* file = unit_.file;
   const char* buf = file->buffer();  // blocks until the load resolves
   if (!buf) {
-    // The body could not be read (deleted or truncated under the reader). Latch
-    // it and leave this unit's rows untouched; load_batch raises on the caller's
-    // thread rather than letting the wait above hang forever.
+    // The body could not be read, e.g. the file was deleted or truncated. Leave
+    // this unit's rows unwritten; load_batch throws on the caller's thread.
     load_failure_->record(file->path());
     return;
   }
 
   for (size_t i = 0; i < unit_.local_positions.size(); ++i) {
-    // Each local position is a flat (game, turn) sample index within the file.
     GameTurn game_turn = file->sample_to_game_turn(unit_.local_positions[i]);
     decoder_.decode_one(buf, file->path(), game_turn.game_idx, game_turn.turn_idx,
                         unit_.flips[i] != 0, config_.post_move,
@@ -556,12 +544,9 @@ void DataLoader::SamplingManager::build_epoch(const std::vector<DataFile*>& file
     collect_sampled_order(files, config);
   }
 
-  // The one and only ordering shuffle: a single global shuffle over every
-  // sample of every file. next_batch() slices contiguous windows of order_, so
-  // this is what decorrelates a batch -- without it, a batch would draw mostly
-  // from one file's games (samples sit in order_ grouped by file). The
-  // selection of *which* turns each game contributes is done above and is
-  // independent of this shuffle.
+  // order_ is grouped by file and next_batch() slices contiguous windows of it,
+  // so this global shuffle is what keeps a batch from drawing mostly from one
+  // file's games.
   std::mt19937_64 rng(config.seed);
   std::shuffle(order_.begin(), order_.end(), rng);
 
@@ -574,8 +559,6 @@ void DataLoader::SamplingManager::collect_full_order(const std::vector<DataFile*
   for (auto* f : files) total += f->num_positions();
   order_.reserve(size_t(total));
 
-  // Every flat position of every file, in file-then-position order. build_epoch
-  // shuffles order_ globally afterwards.
   for (int fi = 0; fi < int(files.size()); ++fi) {
     const int64_t n = files[fi]->num_positions();
     for (int64_t p = 0; p < n; ++p) {
@@ -586,9 +569,6 @@ void DataLoader::SamplingManager::collect_full_order(const std::vector<DataFile*
 
 void DataLoader::SamplingManager::collect_sampled_order(const std::vector<DataFile*>& files,
                                                         const EpochConfig& config) {
-  // For each file, select config.turns_per_game turns from every game. The
-  // resulting rows are left grouped by file; build_epoch shuffles order_
-  // globally afterwards.
   for (int fi = 0; fi < int(files.size()); ++fi) {
     DataFile* f = files[fi];
     const uint64_t file_key = std::hash<std::string>{}(f->path());
@@ -604,9 +584,8 @@ void DataLoader::SamplingManager::append_game_turns(int file_idx, int64_t game, 
                                                     int epoch_index) {
   if (n <= 0) return;
 
-  // A fixed per-game ordering of the game's eligible turns, independent of the
-  // epoch, so that epoch e drawing the window [e*k, e*k + k) of it covers turns
-  // disjoint from neighboring epochs until the ordering wraps after n turns.
+  // The game's turn ordering must not depend on the epoch, so that successive
+  // epochs' windows [e*k, e*k + k) cover disjoint turns until they wrap.
   std::vector<int64_t> turn_order(n);
   std::iota(turn_order.begin(), turn_order.end(), int64_t{0});
   std::mt19937_64 turn_rng(file_key ^ (uint64_t(game) * 0x9E3779B97F4A7C15ULL));
@@ -642,7 +621,6 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
   const int n_rows = batch_end - batch_start;
   cursor_ = batch_end;
 
-  // Group rows by file for locality.
   std::vector<TaggedRow> rows(n_rows);
   for (int i = 0; i < n_rows; ++i) {
     const auto& ep = order_[batch_start + i];
@@ -650,7 +628,6 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
   }
   std::sort(rows.begin(), rows.end(), by_file_idx);
 
-  // Build one WorkUnit per contiguous file group.
   int i = 0;
   while (i < n_rows) {
     int fi = rows[i].file_idx;
@@ -697,9 +674,6 @@ int DataLoader::epoch_start(const EpochConfig& config) {
   std::lock_guard<std::mutex> lock(epoch_mu_);
   epoch_config_ = config;
 
-  // Snapshot the files. Their order doesn't matter: SamplingManager globally
-  // shuffles the per-sample epoch plan, so file_idx assignment is irrelevant to
-  // batch composition.
   epoch_files_ = file_manager_.snapshot_files();
 
   if (epoch_files_.empty() || config.batch_size <= 0) {
@@ -732,9 +706,7 @@ int DataLoader::load_batch(float* output) {
   work_manager_.process(work_units, epoch_config_, output);
   file_manager_.reset_prefetch_loop();
 
-  // A worker that could not read its file latched the path instead of blocking
-  // forever. Surface it as a clean error on this thread rather than returning a
-  // batch with unwritten rows.
+  // Some rows were left unwritten; never return such a batch.
   if (load_failure_.failed()) {
     epoch_active_ = false;
     throw util::CleanException(

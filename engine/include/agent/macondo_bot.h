@@ -19,26 +19,24 @@ namespace scribblez {
 // canonical move ordering so the choice never depends on generation order.
 bool hasty_move_better(double eq_a, const Move& a, double eq_b, const Move& b);
 
-// Generate every legal play and take the hasty_move_better argmax. The
-// specification hasty_best_move_wmp reproduces.
+// HastyBot's greedy move by brute force: generate every legal move and take
+// the hasty_move_better argmax. The specification hasty_best_move_wmp is
+// tested against.
 Move hasty_best_move_reference(const MoveRequest& req);
 
-// The same move, without generating every legal play: bound each word extent's
-// best possible equity (shadow play), generate extents best-first with WordMap
-// anagram lookups, and stop once no remaining extent can beat the best move
-// found. Racks holding a blank fall back to the GADDAG anchor search, the
-// WordMap being blank-free.
+// The same move as hasty_best_move_reference, found without generating every
+// legal play (shadow-play bounds plus WordMap lookups). HastyBot's production
+// greedy path.
 Move hasty_best_move_wmp(const MoveRequest& req);
 
-// An in-process HastyBot player that ranks plays by static equity (score +
-// leave value + opening/PEG/endgame adjustments) using the process-wide
-// HastyEquity singleton. Thread-safe once HastyEquity::init() has run.
+// A reimplementation of Macondo's HastyBot: ranks moves by static equity
+// (score + leave value + opening, pre-endgame and endgame adjustments) from
+// the process-wide HastyEquity tables.
 //
-// At temperature 0 it plays the argmax; above it, it samples
-// softmax(equity / temperature) over the top-K plays, injecting the exploration
-// that self-play data generation wants and pure argmax play lacks. Equity units
-// are points, so a temperature of a few points spreads probability across
-// near-best plays.
+// At temperature 0 it plays the argmax. Above 0 it samples
+// softmax(equity / temperature) over the top-K moves, the exploration that
+// self-play data generation wants. Equity is in points, so a temperature of a
+// few points spreads probability across near-best moves.
 class HastyBotAgent : public Agent {
  public:
   // The defaults describe greedy HastyBot.
@@ -62,10 +60,8 @@ class HastyBotAgent : public Agent {
 
   static std::string options_help();
 
-  // Parse HastyBot's own options out of `tokens`, along with any a derived
-  // agent registered in `extra`, in one pass. Lets a derived agent reuse the
-  // option set instead of duplicating it. `type_label` names the type in
-  // parse-error text.
+  // Parse HastyBot's options, plus any a derived agent registered in `extra`,
+  // from `tokens` in one pass. `type_label` names the type in parse errors.
   static Params parse_hasty_params(const std::vector<std::string>& tokens, int thread_id,
                                    const std::string& name,
                                    boost::program_options::options_description& extra,

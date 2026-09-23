@@ -8,7 +8,7 @@ inline uint32_t LeaveValues::klv_step(uint32_t arc_list, uint8_t code, uint32_t*
     const uint32_t e = nodes_[i];
     const uint32_t t = e >> kTileShift;
     if (t == code) return i;
-    if (t > code) return 0;
+    if (t > code) return 0;  // siblings are sorted by tile
     *index += subtree_words_[i];
     if (e & kIsEndBit) return 0;
   }

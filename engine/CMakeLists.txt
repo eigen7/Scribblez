@@ -56,10 +56,8 @@ add_library(scribblez_core STATIC
   src/sim/setup_plays.cpp
   src/sim/rollout_summary.cpp
   src/agent/candidate_evaluator.cpp
-  # Coalesces concurrent position-eval requests into larger GPU batches. A
-  # decorator over the EvalService interface with no CUDA/TensorRT dependency,
-  # so it lives in the core library (like CandidateEvaluator) and is unit-tested
-  # with a scripted stub.
+  # A GPU-free decorator over the EvalService interface, so it lives here and is
+  # unit-tested against a scripted stub.
   src/nn/batching_position_eval_service.cpp
   src/agent/evidence_staging.cpp
   src/belief/leave_prior.cpp
@@ -98,21 +96,19 @@ target_include_directories(scribblez_core PUBLIC
 # every consumer of the core library (FFI, web server, tests).
 target_link_libraries(scribblez_core PUBLIC Boost::json)
 target_link_libraries(scribblez_core PUBLIC Eigen3::Eigen)
-# misc.cpp/lexicon.cpp/the agent factories parse options with
-# Boost.ProgramOptions, and web_server.cpp drives npm through Boost.Process
-# (-> Boost.Filesystem/System). Declared here, where the code lives: consumers
-# that only linked these transitively-by-luck survived Release LTO stripping,
-# but -O0 test links surfaced the missing deps.
+# lexicon.cpp and the agent option parsers use Boost.ProgramOptions;
+# web_server.cpp drives npm through Boost.Process, which needs Boost.Filesystem
+# and Boost.System. Declaring them on the library that uses them matters: a
+# Release LTO link can strip the references and hide a missing dependency that
+# an -O0 link then trips over.
 target_link_libraries(scribblez_core PUBLIC Boost::program_options Boost::filesystem
                                             Boost::system)
 
-# Plain C ABI for Python (cffi) consumption. Statically links scribblez_core
-# so the resulting libscribblez_ffi.so is a single self-contained artifact
-# that exposes only the symbols declared in serve/scribblez_ffi.h.
-# The streaming pipeline plays self-play games inside the library, so it pulls
-# in the agent/runner code that parses --player specs via Boost.ProgramOptions.
-# player_factory.cpp (in scribblez_core) dispatches to the model-driven agents'
-# from_spec, so scribblez_neural_agents must also be linked here.
+# Plain C ABI for Python (cffi). Statically links the engine so
+# libscribblez_ffi.so is one self-contained artifact exposing only the symbols
+# declared in serve/scribblez_ffi.h. The streaming pipeline plays self-play
+# games inside the library, and player_factory.cpp dispatches --player specs
+# to every agent's from_spec, so scribblez_neural_agents is linked too.
 add_library(scribblez_ffi SHARED
   src/serve/scribblez_ffi.cpp)
 target_link_libraries(scribblez_ffi PRIVATE
@@ -124,11 +120,10 @@ target_link_libraries(scribblez_ffi PRIVATE
   Threads::Threads)
 
 # --- Neural-net inference (TensorRT) -----------------------------------------
-# The position evaluation model runs on the GPU through TensorRT. Discover
-# CUDA and TensorRT assuming the standard NVIDIA TensorRT container layout (the
-# project always runs inside that container -- see CLAUDE.md). The CUDA runtime
-# is used purely as a host library, so no CUDA language needs to be enabled
-# (and we avoid find_package(CUDAToolkit), which would require CMake >= 3.17).
+# The models run on the GPU through TensorRT. CUDA and TensorRT are located at
+# the standard NVIDIA TensorRT container paths, since the project always builds
+# inside that container. The CUDA runtime is used only as a host library, so
+# the CUDA language is never enabled.
 find_path(CUDA_INCLUDE_DIR cuda_runtime_api.h
   HINTS /usr/local/cuda/include /usr/include)
 find_library(CUDA_CUDART cudart
@@ -148,22 +143,18 @@ if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_NVINFER OR NOT TENSORRT_NVONNXPARSER
     "This project builds inside the NVIDIA TensorRT container.")
 endif()
 
-# A self-contained TensorRT inference layer: the NeuralNet<Spec> engine
-# wrapper and the synchronous TrtEvalService<Spec>. Kept out of scribblez_core so the core
-# game library carries no CUDA/TensorRT dependency. The NvInfer headers are
-# confined to this library's .cpp files (the public headers are pimpl/free of
-# them), so consumers link it without needing the TensorRT include path.
+# The TensorRT inference layer: the NeuralNet<Spec> engine wrapper and
+# TrtEvalService<Spec>. It is kept out of scribblez_core so the game library
+# has no CUDA/TensorRT dependency. NvInfer headers appear only in this
+# library's .cpp files, so consumers need no TensorRT include path.
 add_library(scribblez_nn STATIC
   src/nn/cuda_util.cpp
   src/nn/trt_util.cpp
   src/nn/onnx_metadata.cpp
   src/nn/neural_net.cpp
   src/nn/trt_eval_service.cpp
-  # The move-proposal two-graph runtime (roadmap item 3): the shared engine
-  # pair and the per-consumer session that drive the cache and step
-  # NeuralNet<Spec>s and marshal the handoff between them. Lives with the
-  # TensorRT layer (it drives two nets and stages evidence); scribblez_nn
-  # already links scribblez_core for the evidence staging + game types.
+  # The move proposal model's two-graph (cache + step) runtime; see
+  # docs/roadmap.md item 3. It drives two NeuralNets, so it lives here.
   src/agent/move_proposal_nets.cpp
   src/agent/move_proposal_session.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -173,27 +164,24 @@ target_include_directories(scribblez_nn
 target_link_libraries(scribblez_nn PUBLIC
   ${CUDA_CUDART} ${TENSORRT_NVINFER} ${TENSORRT_NVONNXPARSER})
 target_link_libraries(scribblez_nn PUBLIC Eigen3::Eigen Boost::program_options)
-# The GPU-free FP32-pinning walk lives in scribblez_core (so it is unit-testable
-# there); neural_net.cpp's TensorRT adapter calls into it.
+# For the game types, utilities, and the evidence staging the move-proposal
+# runtime marshals.
 target_link_libraries(scribblez_nn PUBLIC scribblez_core)
-# Reading the exported model's metadata_props (the input-encoding arm) parses
-# the ONNX protobuf directly. The system onnx package ships the ML variant of
-# the generated headers, selected via ONNX_ML.
+# onnx_metadata.cpp reads the exported model's metadata_props by parsing the
+# ONNX protobuf directly. The system onnx package ships the ML variant of the
+# generated headers, which ONNX_ML selects.
 find_package(Protobuf REQUIRED)
 find_library(ONNX_PROTO_LIB onnx_proto REQUIRED)
 target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
 target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
-# The model-driven agents (NeuralAgent, NeuralSimAgent, MsetSimAgent) -- the
-# only agent sources not in scribblez_core, kept out so the core game library
-# carries no CUDA/TensorRT dependency. (Their shared CandidateEvaluator TU is
-# itself GPU-free and lives in scribblez_core: SimRunner's value-truncated
-# rollouts use derive_input_spec too.) Every consumer that builds --player
-# specs (play_game, scribblez_ffi, test_game_runner) links this; scribblez_nn
-# supplies the TrtEvalService the agents drive. Every other agent (HastyBot,
-# human, greedy) and the runner come from scribblez_core. The GPU-free
-# unit-test binaries instead compile the selection TUs directly, factories
-# excluded (see their comments below).
+# The model-driven agents (NeuralAgent, NeuralSimAgent, MsetSimAgent,
+# UltimateBotAgent) plus SimAgent's factory, which can load a leaf model: every
+# agent source that reaches TensorRT, kept out of scribblez_core for the same
+# reason as scribblez_nn. Every consumer that parses --player specs links it.
+# The factories are the only TUs that construct a TensorRT service; the agent
+# unit tests below compile the other TUs directly and inject stubs, so they
+# never link TensorRT.
 add_library(scribblez_neural_agents STATIC
   src/agent/sim_agent_factory.cpp
   src/agent/mset_sim_agent.cpp
@@ -241,8 +229,7 @@ target_link_libraries(board_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-# Solve one GCG endgame position with a verbose trace of the solver's
-# reasoning (out-play futility view, iteration verdicts, certificate walk).
+# Solve one GCG endgame position with a verbose trace of the solver.
 add_executable(endgame_tool apps/endgame_tool.cpp)
 target_link_libraries(endgame_tool PRIVATE
   scribblez_core
@@ -252,8 +239,8 @@ target_link_libraries(endgame_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-# Endgame-solver cost / whole-game-throughput benchmark (docs: phase-B endgame
-# solver). Pure CPU: no neural path, so it does not link scribblez_nn.
+# Endgame solver cost and whole-game throughput benchmark
+# (docs/endgame_bench_results.md). CPU-only.
 add_executable(endgame_bench apps/endgame_bench.cpp)
 target_link_libraries(endgame_bench PRIVATE
   scribblez_core
@@ -263,7 +250,7 @@ target_link_libraries(endgame_bench PRIVATE
   Boost::system
   Threads::Threads)
 
-# One-off Monte-Carlo ground-truth generator for the position-evaluation test dataset.
+# Monte-Carlo ground truth for the position-evaluation test positions.
 add_executable(monte_carlo_sim_tool apps/monte_carlo_sim_tool.cpp)
 target_link_libraries(monte_carlo_sim_tool PRIVATE
   scribblez_core
@@ -273,8 +260,8 @@ target_link_libraries(monte_carlo_sim_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-# Sim-observation (.sobs) generator for .slog data: HastyBot-equity top-K
-# candidates per sampled position, simmed by SimRunner (docs/plans/sim_residual_feedback.md).
+# Sim-observation (.sobs) sidecars for .slog data
+# (docs/plans/sim_residual_feedback.md).
 add_executable(sim_obs_tool apps/sim_obs_tool.cpp)
 target_link_libraries(sim_obs_tool PRIVATE
   scribblez_core
@@ -285,8 +272,7 @@ target_link_libraries(sim_obs_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-# The sim-labeled-candidates measurement (docs/plans/sim_labeled_candidates.md):
-# stratified candidates per sampled .slog position, simmed, one CSV row each.
+# The sim-labeled-candidates survey (docs/plans/sim_labeled_candidates.md).
 add_executable(sim_candidate_survey_tool apps/sim_candidate_survey_tool.cpp)
 target_link_libraries(sim_candidate_survey_tool PRIVATE
   scribblez_core
@@ -297,7 +283,7 @@ target_link_libraries(sim_candidate_survey_tool PRIVATE
   Threads::Threads)
 
 # Rank every legal placement at one GCG position by the position evaluation
-# model, through the CandidateEvaluator NeuralAgent drives.
+# model, scored the way NeuralAgent scores them.
 add_executable(neural_rank_tool apps/neural_rank_tool.cpp)
 target_link_libraries(neural_rank_tool PRIVATE
   scribblez_core
@@ -329,24 +315,19 @@ if(SCRIBBLEZ_BUILD_TESTS)
     src/lexicon/leave_values.cpp)
   target_link_libraries(scribblez_tests PRIVATE
     scribblez_core scribblez_evidence_select Boost::json GTest::gtest_main)
-  # Point the tests at the container's lexicon mount (populated by
-  # setup_wizard.py) so they cross-validate against the real GADDAG when it is
-  # installed (the .kwg is not committed; the tests skip gracefully if absent),
-  # and at tests/data -- the frozen fixture corpus every data-reading test uses.
+  # The lexicon mount is populated by setup_wizard.py (the .kwg is never
+  # committed); lexicon-dependent cases skip when it is absent. tests/data is
+  # the frozen fixture corpus every data-reading test uses. The other
+  # lexicon-gated binaries below get the same two definitions.
   target_compile_definitions(scribblez_tests PRIVATE
     SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
     SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   gtest_discover_tests(scribblez_tests)
 
-  # GCG reader tests: rack-pragma parsing and the replay/snapshot reconstruction
-  # that reopens a recorded game.
   add_executable(test_gcg_reader tests/test_gcg_reader.cpp)
   target_link_libraries(test_gcg_reader PRIVATE scribblez_core Boost::json GTest::gtest_main)
   gtest_discover_tests(test_gcg_reader)
 
-  # Monte-Carlo ground truth under the two leave conditions (hidden vs
-  # face-up); reads its position from tests/data and is gated on the lexicon
-  # mount like scribblez_tests.
   add_executable(test_monte_carlo_sim tests/test_monte_carlo_sim.cpp)
   target_link_libraries(test_monte_carlo_sim PRIVATE scribblez_core Boost::json GTest::gtest_main)
   target_compile_definitions(test_monte_carlo_sim PRIVATE
@@ -354,10 +335,6 @@ if(SCRIBBLEZ_BUILD_TESTS)
     SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   gtest_discover_tests(test_monte_carlo_sim)
 
-  # Endgame solver tests: Board make/unmake round-trips and EndgameSolver
-  # correctness (brute-force differential, oracle positions, determinism, node
-  # budget, cross-turn transposition-table reuse). Gated lexicon cases read the
-  # same container mount as scribblez_tests and skip gracefully when it is absent.
   add_executable(test_endgame tests/test_endgame.cpp tests/test_endgame_agent.cpp)
   target_link_libraries(test_endgame PRIVATE
     scribblez_core Boost::program_options GTest::gtest_main)
@@ -366,14 +343,11 @@ if(SCRIBBLEZ_BUILD_TESTS)
     SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   gtest_discover_tests(test_endgame)
 
-  # Agent unit tests: NeuralAgent selection in both top-K and all-moves modes
-  # (with a scripted EvalService stub), chunked evaluation, and encode_candidate
-  # parity. Compiles the selection TUs (not the factory) directly. The factory
-  # TU holds the production constructor, whose nn::make_loaded_service() call
-  # (defined in scribblez_nn's trt_eval_service.cpp) is where the concrete
-  # service gets built -- by not compiling the factory, this binary links
-  # neither scribblez_nn nor CUDA/TensorRT: the tests use the injecting
-  # constructor and never touch the GPU.
+  # The model-driven agent tests compile the agent's selection TU without its
+  # factory. The factory is what builds the TensorRT service
+  # (nn::PositionEvalService::create() and friends, defined in scribblez_nn), so
+  # leaving it out lets these binaries skip scribblez_nn and CUDA/TensorRT
+  # entirely: the tests inject scripted stub services and never touch the GPU.
   add_executable(test_neural_agent
     tests/test_neural_agent.cpp
     src/agent/neural_agent.cpp
@@ -383,41 +357,24 @@ if(SCRIBBLEZ_BUILD_TESTS)
     scribblez_core Boost::json Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_neural_agent)
 
-  # BatchingPositionEvalService: that coalescing many concurrent evaluate()
-  # calls onto one shared service returns each caller its own correct rows
-  # (parity with calling the wrapped service directly), holds under a many-thread
-  # stress, and propagates an inference failure to exactly its callers -- to a
-  # lone caller and to every caller of a coalesced pack. Runs against a scripted
-  # stub -- no GPU.
   add_executable(test_batching_eval_service tests/test_batching_eval_service.cpp)
   target_link_libraries(test_batching_eval_service PRIVATE
     scribblez_core Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_batching_eval_service)
 
-  # Rack inference: the hypergeometric prior and its sampler, the observations
-  # that carry no information, posterior shape and reproducibility, and that
-  # the leave the opponent actually held gains weight over its prior. Runs off
-  # a synthetic leave table, so it needs no lexicon or Macondo data mount.
+  # Runs off a synthetic leave table, so it needs no lexicon or Macondo data.
   add_executable(test_rack_inference tests/test_rack_inference.cpp)
   target_link_libraries(test_rack_inference PRIVATE
     scribblez_core Boost::json GTest::gtest_main)
   gtest_discover_tests(test_rack_inference)
 
-  # SimAgent: that it plays the candidate its own rollouts rank best (checked by
-  # replaying the decision through SimRunner), that a seed reproduces a game,
-  # and that a bag-empty turn falls back to static equity. Runs off a synthetic
-  # leave table, so it needs no lexicon or Macondo data mount.
+  # Runs off a synthetic leave table, so it needs no lexicon or Macondo data.
   add_executable(test_sim_agent tests/test_sim_agent.cpp)
   target_link_libraries(test_sim_agent PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_sim_agent)
 
-  # NeuralSimAgent, the position-evaluation-top-K agent: that the sim set is
-  # the scripted model's top K (not static equity's), that the rollouts decide
-  # among them, that drop-best-prob excludes the model's favourite, and that a
-  # bag-empty turn falls back to static equity. Compiles the selection TUs (not
-  # the factory), so like test_neural_agent it links neither scribblez_nn nor
-  # CUDA/TensorRT: the tests inject a scripted EvalService stub.
+  # Factory excluded, like test_neural_agent.
   add_executable(test_neural_sim_agent
     tests/test_neural_sim_agent.cpp
     src/agent/neural_sim_agent.cpp)
@@ -425,13 +382,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_neural_sim_agent)
 
-  # MsetSimAgent, the move-set-evaluation agent: that the sim set is the
-  # scripted model's top K (not static equity's), that the rollouts decide among
-  # them, that the whole candidate set reaches the model in one pass carrying the
-  # shared encoder's own move features, and that the pre-move board row matches
-  # the training decoder's. Compiles the selection TUs (not the factory), so like
-  # test_neural_sim_agent it links neither scribblez_nn nor CUDA/TensorRT: the
-  # tests inject a scripted MoveSetEvalService stub.
+  # Factory excluded, like test_neural_agent.
   add_executable(test_mset_sim_agent
     tests/test_mset_sim_agent.cpp
     src/agent/mset_sim_agent.cpp)
@@ -439,14 +390,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_mset_sim_agent)
 
-  # The evidence loop and UltimateBotAgent: that the anchor is simmed first
-  # regardless of the model, that each later sim is the scripted proves-best
-  # argmax over the UNSIMMED candidates, that the budget and the gain threshold
-  # stop the loop, that the sequential sims pair with (and equal) one batched
-  # SimRunner::run, and that the pre-move board row matches the training
-  # decoder's. Compiles the decision TU (not the factory), so like
-  # test_mset_sim_agent it links neither scribblez_nn nor CUDA/TensorRT: the
-  # tests inject a scripted MoveProposalService stub.
+  # Covers the evidence loop and UltimateBotAgent. Factory excluded, like
+  # test_neural_agent.
   add_executable(test_ultimate_bot_agent
     tests/test_ultimate_bot_agent.cpp
     src/agent/ultimate_bot_agent.cpp)
@@ -455,11 +400,6 @@ if(SCRIBBLEZ_BUILD_TESTS)
     GTest::gtest_main)
   gtest_discover_tests(test_ultimate_bot_agent)
 
-  # WeirdBotAgent: the diagnostic leave-forcing self-play bot. Checks the
-  # forcing path (T lands on its best cross-check square), the fallback path
-  # (no legal forcing placement -> HastyBot's argmax), own-leave tracking across
-  # two moves, and the first-move (no leave) fallback. Gated on the NWL23 leaves
-  # the equity ranking and fallback both read; skips gracefully when absent.
   add_executable(test_weird_bot tests/test_weird_bot.cpp)
   target_link_libraries(test_weird_bot PRIVATE
     scribblez_core Boost::program_options GTest::gtest_main)
@@ -468,10 +408,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   gtest_discover_tests(test_weird_bot)
 
-  # GameRunner match-eval plumbing: --paired seat/seed mirroring and the
-  # --results-file per-game JSON stream. Builds real agents through
-  # PlayerFactory, whose dispatch references every agent type, so it links
-  # scribblez_neural_agents the same way play_game does.
+  # Builds real agents through PlayerFactory, whose dispatch references every
+  # agent type, so it links scribblez_neural_agents like play_game does.
   add_executable(test_game_runner
     tests/test_game_runner.cpp)
   target_link_libraries(test_game_runner PRIVATE
@@ -485,22 +423,20 @@ if(SCRIBBLEZ_BUILD_TESTS)
     GTest::gtest_main)
   gtest_discover_tests(test_game_runner)
 
-  # The two TensorRT-vs-PyTorch parity binaries below each generate their fixture
-  # by invoking a Python generator (torch import + ONNX export, ~1.7s). Because
-  # gtest_discover_tests runs every TEST() in its own process, letting each case
-  # self-generate would pay that cost once per case. Instead a ctest FIXTURES_SETUP
-  # step generates each fixture once per suite run into PARITY_FIXTURE_ROOT and
-  # every case is handed that directory (EXTRA_ARGS -> the binary's fixture-dir
-  # argument), so the generator runs a single time per binary. The fixtures are
-  # deterministic (fixed seed), so one shared copy serves every case; the binaries
-  # still self-generate when run directly with no directory argument.
+  # TensorRT-vs-PyTorch parity binaries. Each compares against a fixture built
+  # by a Python generator (torch import + ONNX export, ~1.7 s). Since
+  # gtest_discover_tests runs every TEST() in its own process, a ctest
+  # FIXTURES_SETUP step generates each fixture once per suite run into
+  # PARITY_FIXTURE_ROOT, and EXTRA_ARGS hands that directory to every case. The
+  # fixtures are deterministic (fixed seed), so one copy serves all cases. Run
+  # directly with no directory argument, a binary generates its own fixture;
+  # that argument is why these binaries carry their own main() and link
+  # GTest::gtest rather than gtest_main. All of them need a GPU at run time.
   #
-  # The setup command tolerates a torch/onnx-less environment: it probes for the
-  # imports and, when they are missing, leaves the directory empty rather than
-  # failing, and the tests skip on an empty directory just as they did when they
-  # self-generated. A real generator failure (imports present) still fails the
-  # setup and takes its dependents down with it, surfacing a broken fixture the
-  # old per-test skip would have masked.
+  # Without torch/onnx the setup step leaves the directory empty and the cases
+  # skip. When the imports are present, a generator failure fails the setup
+  # and every case that depends on it, so a broken fixture cannot hide behind
+  # a skip.
   set(PARITY_FIXTURE_ROOT "${CMAKE_CURRENT_BINARY_DIR}/parity_fixtures")
 
   function(add_parity_fixture fixture_name out_dir generator_module)
@@ -519,10 +455,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   set_tests_properties(parity_fixtures_cleanup PROPERTIES
     FIXTURES_CLEANUP "nn_parity_fixture;mset_parity_fixture;proposal_parity_fixture")
 
-  # TensorRT-vs-PyTorch inference parity (Suite 1 hop B). Needs a GPU at run time.
-  # A fixture directory may be passed as the first non-gtest argument to reuse one
-  # (the FIXTURES_SETUP path below), so this binary carries its own main() and
-  # links GTest::gtest, not gtest_main.
+  # The position evaluation model.
   add_executable(test_nn_inference_parity tests/test_nn_inference_parity.cpp)
   target_link_libraries(test_nn_inference_parity PRIVATE
     scribblez_nn scribblez_core Threads::Threads GTest::gtest)
@@ -534,10 +467,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/nn"
     PROPERTIES FIXTURES_REQUIRED nn_parity_fixture)
 
-  # the move-set runtime against the PyTorch move set evaluation model, including the
-  # plan-cache refit and the service's chunking. Same shape as the parity test
-  # above: needs a GPU at run time, and takes an optional fixture directory as its
-  # first argument, so it carries its own main().
+  # The move set evaluation model, including the plan-cache refit and the
+  # service's chunking.
   add_executable(test_mset_inference_parity tests/test_mset_inference_parity.cpp)
   target_link_libraries(test_mset_inference_parity PRIVATE
     scribblez_nn scribblez_core Threads::Threads GTest::gtest)
@@ -549,10 +480,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/mset"
     PROPERTIES FIXTURES_REQUIRED mset_parity_fixture)
 
-  # The move-proposal two-graph runtime (roadmap item 3): cache -> evidence
-  # staging -> step against the PyTorch model, over several evidence cases. Same
-  # shape as the parity tests above -- needs a GPU at run time, carries its own
-  # main() for the optional fixture-dir argument.
+  # The move proposal model's two-graph runtime: cache, evidence staging, then
+  # step, over several evidence cases.
   add_executable(test_proposal_inference_parity tests/test_proposal_inference_parity.cpp)
   target_link_libraries(test_proposal_inference_parity PRIVATE
     scribblez_nn scribblez_core Threads::Threads GTest::gtest)
@@ -564,38 +493,30 @@ if(SCRIBBLEZ_BUILD_TESTS)
     EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/proposal"
     PROPERTIES FIXTURES_REQUIRED proposal_parity_fixture)
 
-  # Test helper: writes .slog files using an in-memory dictionary for integration
-  # testing (Python FFI tests, etc.).
+  # Writes small .slog files from an in-memory dictionary, for the Python FFI
+  # tests.
   add_executable(test_slog_writer apps/test_slog_writer.cpp)
   target_link_libraries(test_slog_writer PRIVATE scribblez_core Threads::Threads)
 endif()
 
-# Standalone ad-hoc driver for the binary-log DataLoader. Lets us point it at
-# a directory of .slog files and verify load() produces well-formed rows.
+# Ad-hoc check that DataLoader produces well-formed rows from a .slog directory.
 add_executable(dataloader_smoke apps/dataloader_smoke.cpp)
 target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)
 
-# Standalone TensorRT inference sanity check: load an ONNX model, run a batch of
-# zero inputs, print WLD + ScoreDiff outputs. Exercises the engine path without
-# any game logic.
+# TensorRT smoke tests, one per model family: load an ONNX export, run a
+# synthetic batch, and print the outputs. They check the GPU path on a real
+# checkpoint without any game logic.
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
-# The same for the move set evaluation model: load an ONNX model, score a
-# synthetic candidate set, print the decoded Evals. Exercises the move-set
-# path on a real checkpoint without any game logic.
 add_executable(mset_infer_smoke apps/mset_infer_smoke.cpp)
 target_link_libraries(mset_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
-# The move proposal model's two-graph evidence-path runtime (roadmap item 3):
-# load a cache/step ONNX pair, run cache -> one synthetic evidence set -> step,
-# print the plain and conditioned predictions. GPU liveness for the whole loop.
 add_executable(proposal_infer_smoke apps/proposal_infer_smoke.cpp)
 target_link_libraries(proposal_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
-# Move set evaluation model distillation-target generator: stratified
-# candidate sampling + batched teacher (position evaluation model) inference
-# over .slog positions (docs/roadmap.md track A).
+# Distillation targets for the move set evaluation model: the position
+# evaluation model (the teacher) scores sampled candidates at .slog positions.
 add_executable(move_set_eval_target_generator apps/move_set_eval_target_generator.cpp)
 target_link_libraries(move_set_eval_target_generator PRIVATE
   scribblez_nn
@@ -606,11 +527,9 @@ target_link_libraries(move_set_eval_target_generator PRIVATE
   Boost::system
   Threads::Threads)
 
-# The NN-free evidence-selection core: which candidates get simmed, in what
-# order -- the trajectory generator's one-shot recipe (vectors in, indices out)
-# and the sequential evidence loop UltimateBot plays (agent/evidence_loop.h,
-# driving a MoveProposalService and a CandidateSimmer it is handed). Links
-# without the TensorRT runtime the scoring front-ends carry, so both are
+# Evidence selection: which candidates get simmed, and in what order. Holds
+# both the trajectory generator's one-shot recipe and the sequential evidence
+# loop UltimateBot plays. It has no TensorRT dependency, so both are
 # unit-tested with scripted stubs.
 add_library(scribblez_evidence_select STATIC
   src/training/evidence_trajectory_select.cpp
@@ -618,11 +537,9 @@ add_library(scribblez_evidence_select STATIC
 set_target_properties(scribblez_evidence_select PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_evidence_select PUBLIC scribblez_core)
 
-# Evidence trajectories (docs/roadmap.md item 4): the deployment schedule's
-# candidate selection (anchor, on-policy picks, off-policy draws) simmed
-# per decision point. The library is the position-level recipe over the
-# student model; the generator supplies decision points from .slog self-play
-# data or .gcg position sets and writes trajectory .sobs sidecars.
+# Evidence trajectories (docs/roadmap.md item 4). The library runs the
+# per-position recipe against the move set evaluation model; the generator
+# feeds it positions and writes trajectory .sobs sidecars.
 add_library(scribblez_evidence STATIC src/training/evidence_trajectory.cpp)
 set_target_properties(scribblez_evidence PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_evidence PUBLIC scribblez_evidence_select scribblez_core scribblez_nn)

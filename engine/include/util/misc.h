@@ -22,12 +22,12 @@ void parse_command_line(int argc, char** argv, boost::program_options::options_d
 //   try { ... } catch (...) { return util::main_exit_code(); }
 int main_exit_code();
 
-// Logical processors available to this process: its CPU affinity mask (so
-// taskset/cgroup cpusets are respected), further capped by the cgroup CPU
-// quota when one is set (a host that limits CPU by quota rather than
-// cpuset -- e.g. a Runpod pod -- would otherwise report the whole host's
-// core count). The project-wide default for compute-bound worker pools; the
-// Python counterpart is scribblez.hardware.default_thread_count.
+// Logical processors available to this process: the CPU affinity mask (which
+// respects taskset and cgroup cpusets), capped by the cgroup CPU quota if one
+// is set. The quota cap matters in containers that limit CPU by quota rather
+// than cpuset; the affinity mask alone would report every core on the host.
+// The project-wide default for compute-bound worker pools; the Python
+// counterpart is scribblez.hardware.default_thread_count.
 int default_thread_count();
 
 // A unique nanosecond Unix timestamp; thread-safe. Spins until the clock

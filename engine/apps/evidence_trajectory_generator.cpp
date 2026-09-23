@@ -1,25 +1,29 @@
-// Offline generator of evidence trajectories (.sobs sidecars stamped
-// kSimObsFlagTrajectory) -- the training data of docs/plans/sim_residual_feedback.md's
-// evidence conditioning and proves-best head (docs/roadmap.md, item 4). The
-// per-position recipe (anchor, on-policy student proposals, a uniform
-// off-policy floor, all under common random numbers) is
-// training/evidence_trajectory_select.h; this tool supplies
-// the decision points from one of two front-ends:
+// evidence_trajectory_generator: writes evidence trajectories, .sobs sidecars
+// stamped kSimObsFlagTrajectory, as training data for the move proposal model
+// (docs/roadmap.md items 4 and 5). The evidence_trajectories workload drives it
+// on .slog data; py/scribblez/sim_evidence/position_sets.py drives it on the
+// .gcg position sets.
 //
-// - .slog self-play data (--slog-dir / --slog-file): a sampled subset of each
-//   game's training-eligible turns, replayed to the pre-move decision point.
-//   One .sobs per .slog, positions keyed (game, turn) as the .mset labeling
-//   keys them (the two tools share the seed stream, see data/slog_sampling.h).
-// - .gcg position sets (--gcg / --gcg-dir, into --out-dir): each file's final
-//   recorded state, the side to move holding its #RackN pragma rack
-//   (read_gcg_position). One .sobs per .gcg, its single position keyed
-//   (0, decision turn). This is how the hand-maintained sets under positions/
-//   get their trajectory sidecars.
+//   evidence_trajectory_generator --slog-dir data/slogs --model student.onnx --seed 7
+//   evidence_trajectory_generator --gcg-dir positions/NWL23/face-up-trajectory-set
+//       --out-dir /tmp/sobs --model student.onnx --open-leaves
 //
-// The student model is required (--model): generation-0 equity-top-K evidence
-// is sim_obs_tool's job. Inference runs on a single dedicated thread
-// (NeuralNet's one-net-one-thread contract) that position workers round-trip
-// through; the sims dominate wall-clock, so the serialization is free.
+// Which candidates get simmed at a position (the anchor, on-policy proposals
+// from the student model, and uniform off-policy draws, all under common random
+// numbers) is defined in training/evidence_trajectory_select.h. This tool
+// supplies the positions, from one of two inputs:
+//   - .slog self-play data (--slog-dir / --slog-file): a seeded sample of each
+//     game's training-eligible turns, replayed to the decision point. One .sobs
+//     per .slog, positions keyed (game, turn). The sample uses the same seed
+//     stream as move_set_eval_target_generator (data/slog_sampling.h), so with
+//     a matching --seed that tool can force these candidates into its labels.
+//   - .gcg position sets (--gcg / --gcg-dir, written to --out-dir): each file's
+//     final state, the side to move holding its #RackN rack
+//     (read_gcg_position). One .sobs per .gcg, its one position keyed
+//     (0, turns played).
+//
+// --model (the student) is required; equity-top-K evidence without a model is
+// sim_obs_tool's job.
 
 #include "data/binary_log.h"
 #include "data/gcg_reader.h"
@@ -83,10 +87,10 @@ struct Options {
   bool gcg_mode() const { return !gcg_dir.empty() || !gcg_files.empty(); }
 };
 
-// Reject an unusable invocation before any input is read and before any
-// worker thread exists (a runner-constructor throw inside a worker would
-// terminate the process). --positions-per-game is rejected at 0 for the same
-// reason as sim_obs_tool: an empty .sobs would stand in for real evidence.
+// Reject an unusable invocation before any input is read and before any worker
+// thread exists, where a runner-constructor throw would terminate the process.
+// --positions-per-game rejects 0 for the same reason as in sim_obs_tool: an
+// empty .sobs would stand in for real evidence.
 void validate(const Options& opt) {
   evidence::validate(opt.traj);
   SimRunner::validate_horizon("evidence-trajectory-generator", opt.traj.horizon,
@@ -110,10 +114,9 @@ uint32_t file_flags(const Options& opt) {
 // The most off-policy draws a position can carry, for the run banner.
 int max_off_policy(const evidence::TrajectoryOptions& t) { return t.off_policy_count; }
 
-// What every worker shares: the lexicon and encoding, the options, the
-// scorer over the loaded proposer model, and -- under --horizon -- the
-// truncation leaf service (shared freely: EvalService serializes its
-// callers) and its content hash.
+// What every worker shares. leaf_eval_service is the value-truncation leaf
+// model under --horizon; EvalService serializes its callers, so sharing it is
+// safe.
 struct Shared {
   const Dictionary& dict;
   const InputEncodingSpec& spec;
@@ -129,12 +132,12 @@ void add_result(SimObsWriter* writer, const Options& opt, uint32_t game_idx, uin
                        uint32_t(opt.traj.rollouts), base_seed, t.num_legal_moves, t.roles);
 }
 
-// Runs a front-end's work items across opt.threads worker threads plus the
-// scorer's own thread. A front-end declares its `Item` type and a `Worker`
-// constructible from the front-end, with `run(index, item, runner)`; each
-// thread owns one Worker and one TrajectoryRunner and claims items off a
-// shared index. Results are written by index, so the output is canonically
-// ordered and byte-stable across thread counts.
+// One worker thread's loop over a front-end's work items. A front-end (SlogFront,
+// GcgFront) declares an `Item` type, a static describe(item), and a `Worker`
+// constructible from the front-end with run(index, item, runner). Each thread
+// owns one Worker and one TrajectoryRunner and claims items off a shared index.
+// Results are stored by index, so the output is byte-stable across thread
+// counts. The student model runs on the StudentScorer's own thread.
 template <typename Front>
 void run_worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
                        util::ProgressMeter* meter) {
@@ -142,8 +145,8 @@ void run_worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>
   TrajectoryRunner runner(sh.dict, sh.spec, sh.opt.traj, sh.scorer, sh.leaf_eval_service);
   const std::vector<typename Front::Item>& work = front.work;
   for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
-    // Name the item a runtime failure (e.g. the leaf-model NaN guard) hit, so
-    // an unattended run leaves a lead instead of a bare message.
+    // Name the failing item (e.g. for the leaf-model NaN guard), so an unattended
+    // run leaves a lead instead of a bare message.
     try {
       worker.run(i, work[i], runner);
     } catch (const std::exception& e) {
@@ -153,10 +156,8 @@ void run_worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>
   }
 }
 
-// Thread entry: runs the worker and captures any exception into *err for the
-// joining thread to rethrow. A non-finite leaf readout makes the runner throw
-// at runtime, and letting it escape a std::thread would terminate the process
-// instead of printing an error.
+// Thread entry: captures any exception into *err for the joining thread to
+// rethrow, since one escaping a std::thread would terminate the process.
 template <typename Front>
 void worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
                    util::ProgressMeter* meter, std::exception_ptr* err) {
@@ -181,15 +182,13 @@ void run_positions(const Shared& sh, const Front& front, util::ProgressMeter* me
   for (auto& w : workers) w.join();
   sh.scorer->stop();
   gpu.join();
-  // Cleanup above runs unconditionally; only then surface the first worker
-  // failure on this thread rather than letting it terminate the process.
+  // Surface the first worker failure only after the scorer thread is stopped.
   for (const std::exception_ptr& e : errors)
     if (e) std::rethrow_exception(e);
 }
 
 // --- the .slog front-end ---
 
-// A completed position: what SimObsWriter::add_position consumes.
 struct SlogResult {
   uint64_t base_seed;
   TrajectoryResult traj;
@@ -198,7 +197,6 @@ struct SlogResult {
 struct SlogFront {
   using Item = GamePositionIndex;
 
-  // Names an item for a runtime error's message.
   static std::string describe(const Item& w) {
     return std::format("game {} turn {}", w.game_idx, w.turn_idx);
   }
@@ -209,8 +207,7 @@ struct SlogFront {
   std::vector<Item> work;
   std::vector<SlogResult>* results;
 
-  // Replay to the pre-move decision point, then the recipe. Owns its replay
-  // scratch and encoder.
+  // Replays to the decision point, then runs the recipe.
   class Worker {
    public:
     explicit Worker(const SlogFront& front) : front_(front), encoder_(front.spec) {}
@@ -337,7 +334,6 @@ struct GcgResult {
 struct GcgFront {
   using Item = GcgWork;
 
-  // Names an item for a runtime error's message.
   static std::string describe(const Item& w) {
     return std::format("{} (after {} turns)", w.path.stem().string(), w.position.turns);
   }
@@ -347,7 +343,6 @@ struct GcgFront {
   std::vector<Item> work;
   std::vector<GcgResult>* results;
 
-  // Replay the parsed game to its decision point, then the recipe.
   class Worker {
    public:
     explicit Worker(const GcgFront& front) : front_(front) {}
@@ -360,9 +355,9 @@ struct GcgFront {
 
 void GcgFront::Worker::run(size_t i, const GcgWork& w, TrajectoryRunner& runner) {
   const ParsedGcgPosition& p = w.position;
-  // Replay the recorded moves into a fresh encoder. apply_move attributes
-  // each to the encoder's own turn order (seat 0 first), which the recorded
-  // seats must follow for scores and last moves to land on the right player.
+  // Replay the recorded moves into a fresh encoder. apply_move credits each move
+  // by the encoder's own turn order (seat 0 first); the assert checks the
+  // recorded seats agree.
   GameStateEncoder enc(front_.spec);
   for (const ParsedGcgTurn& t : p.game.turns) enc.apply_move(t.record.move);
   RELEASE_ASSERT(enc.active_player() == p.mover);
@@ -380,8 +375,8 @@ void GcgFront::Worker::run(size_t i, const GcgWork& w, TrajectoryRunner& runner)
 }
 
 // Parse every pending .gcg up front, so a malformed file fails the run before
-// any sim is spent, and an endgame position (which the sims cannot run) is
-// named rather than crashing a worker.
+// any sim is spent, and an empty-bag position (which the sims cannot run) is
+// reported by name instead of crashing a worker.
 std::vector<GcgWork> load_pending_gcgs(const Options& opt) {
   std::vector<GcgWork> work;
   for (const fs::path& gcg : resolve_gcg_inputs(opt)) {
@@ -450,7 +445,7 @@ int main(int argc, char** argv) {
       "out-dir", po::value<std::string>(&opt.out_dir),
       "where .gcg inputs' .sobs go, named <gcg stem>.sobs (required with .gcg inputs)")(
       "open-leaves", po::bool_switch(&opt.open_leaves),
-      "sim and score with the opponent's retained leave known -- required for face-up-leaves "
+      "sim and score with the opponent's retained leave known; required for face-up-leaves "
       "games, and must match the model's input arm")(
       "rollouts", po::value<int>(&traj.rollouts)->default_value(traj.rollouts),
       "Monte-Carlo rollouts per candidate")(
@@ -474,8 +469,8 @@ int main(int argc, char** argv) {
       "eligible turns sampled per game (.slog inputs)")(
       "threads", po::value<int>(&opt.threads)->default_value(opt.threads), "parallel workers")(
       "seed", po::value<uint64_t>(&opt.seed)->default_value(opt.seed),
-      "run seed; with .slog inputs it MUST match the target generator's --seed for its sampled "
-      "positions to contain this tool's (the forced-candidate labeling relies on it)")(
+      "run seed; with .slog inputs, pass the same --seed to move_set_eval_target_generator "
+      "--sobs so its sampled positions include this tool's")(
       "limit-games", po::value<int>(&opt.limit_games)->default_value(opt.limit_games),
       "process only the first N games of each .slog (0 = all); for smoke runs");
     params.add_options(desc);
@@ -497,9 +492,6 @@ int main(int argc, char** argv) {
     const InputEncodingSpec spec{&dict, service.opp_leave_input()};
     const std::string proposer_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
 
-    // The truncation leaf service, shared by every position worker (the
-    // runners are single-threaded, but many run at once; EvalService
-    // serializes their calls).
     std::shared_ptr<nn::PositionEvalService> leaf_eval_service =
       nn::load_leaf_position_service(opt.leaf_model, params.cuda_device_id);
     std::string leaf_hash;

@@ -10,8 +10,8 @@
 
 namespace scribblez {
 
-// Up to RACK_SIZE tiles, held sorted in a fixed-size array so the type stays
-// compact and trivially serializable. TileCounts is the histogram counterpart.
+// Up to RACK_SIZE tiles, kept sorted in a fixed 8-byte layout that doubles as
+// a canonical multiset key. TileCounts is the histogram counterpart.
 class Rack {
  public:
   void add(Tile t);
@@ -32,15 +32,14 @@ class Rack {
 
   const std::array<Tile, RACK_SIZE>& tiles() const { return tiles_; }
 
-  // Comparison and hashing run on the object representation. The array is kept
-  // sorted with trailing empty slots, so equal multisets have identical bytes:
-  // byte equality is exactly multiset equality, and the byte ordering is an
-  // arbitrary but consistent total order.
+  // Comparison and hashing use the raw bytes. Sorted tiles with empty trailing
+  // slots make equal multisets byte-identical, so byte equality is multiset
+  // equality, and operator< is an arbitrary but consistent total order.
   bool operator==(const Rack& o) const { return bits() == o.bits(); }
   bool operator<(const Rack& o) const { return bits() < o.bits(); }
 
-  // Copied out via memcpy: defined behavior (Rack is trivially copyable) that
-  // the optimizer lowers to a single load.
+  // The object representation as one integer (a memcpy, which compiles to a
+  // single load).
   uint64_t bits() const;
 
  private:
@@ -54,7 +53,5 @@ static_assert(sizeof(Rack) == 8, "Rack should pack into 8 bytes");
 
 template <>
 struct std::hash<scribblez::Rack> {
-  // std::hash<uint64_t> is the identity on the standard libraries, so bits()
-  // is equivalent and avoids the wrapper.
   size_t operator()(const scribblez::Rack& r) const noexcept { return r.bits(); }
 };

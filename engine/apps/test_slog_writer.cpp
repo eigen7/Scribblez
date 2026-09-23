@@ -1,11 +1,12 @@
-// Standalone helper that writes test .slog files for integration testing.
-// Usage: test_slog_writer <output_dir> <num_games> <games_per_file> [--face-up-leaves]
+// test_slog_writer: writes small, deterministic .slog files for the Python
+// data-pipeline tests (py/tests/test_dataloader.py and friends), which need
+// real engine output without the lexicon mount.
 //
-// Plays `num_games` games using a medium-sized in-memory dictionary and a
-// hasty-move agent, writing them through BinaryLogWriter into the given
-// output directory. Files are split by `games_per_file`. With
-// --face-up-leaves the games are played under the variant and the file
-// headers are stamped accordingly, mirroring GameRunner.
+//   test_slog_writer <output_dir> <num_games> <games_per_file> [--face-up-leaves]
+//
+// Games are played between two max-score agents over a ~70-word built-in
+// dictionary, with fixed per-game seeds. --face-up-leaves plays the variant and
+// stamps the file headers the way GameRunner does.
 
 #include "agent/agent.h"
 #include "data/binary_log.h"
@@ -19,7 +20,7 @@
 
 using namespace scribblez;
 
-// Hasty agent: picks the highest-scoring legal move (ties broken randomly).
+// Plays the highest-scoring legal move, breaking ties randomly.
 class HastyAgent : public Agent {
  public:
   HastyAgent(int tid, std::string name, uint64_t seed) : Agent(tid, std::move(name)), rng_(seed) {}

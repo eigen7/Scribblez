@@ -1,12 +1,13 @@
-// dataloader_smoke: ad-hoc test driver for the DataLoader.
+// dataloader_smoke: an ad-hoc check that DataLoader reads a directory of .slog
+// files. It registers every *.slog in DIR, draws one batch of up to --samples
+// rows (default 64) through the epoch API, and prints the load rate, the WLD
+// and score-diff label distribution, and the label columns of the first rows.
 //
-// Usage:
-//   dataloader_smoke DIR [--samples N] [--workers W] [--prefetch P] [--budget MB] [--phase
-//   pre|post]
+//   dataloader_smoke DIR [--samples N] [--workers W] [--prefetch P]
+//                    [--budget MB | --budget-bytes B] [--phase pre|post]
 //
-// Walks DIR for *.slog files (in lexicographic == chronological order),
-// registers them, then runs one load() over the full window and prints
-// summary stats over the resulting rows.
+// --phase post reads post-move rows instead of pre-move ones. The lexicon
+// is always the default one; this tool has no --lexicon flag.
 
 #include "data/binary_log.h"
 #include "data/data_loader.h"
@@ -36,7 +37,8 @@ int main(int argc, char** argv) {
   using namespace scribblez::binlog;
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0]
-              << " DIR [--samples N] [--workers W] [--prefetch P] [--budget MB]\n";
+              << " DIR [--samples N] [--workers W] [--prefetch P] [--budget MB | --budget-bytes B]"
+                 " [--phase pre|post]\n";
     return 2;
   }
   const std::string dir = argv[1];
@@ -79,7 +81,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // Discover .slog files in lexicographic (== timestamp == chronological) order.
+  // .slog names start with a timestamp, so lexicographic order is chronological.
   std::vector<std::filesystem::path> paths;
   for (auto& e : std::filesystem::directory_iterator(dir)) {
     if (e.is_regular_file() && e.path().extension() == ".slog") {
@@ -113,7 +115,6 @@ int main(int argc, char** argv) {
 
   auto t0 = std::chrono::steady_clock::now();
 
-  // Drain one epoch using the streaming API.
   DataLoader::EpochConfig cfg;
   cfg.batch_size = n_load;
   cfg.post_move = post_move;
@@ -128,7 +129,6 @@ int main(int argc, char** argv) {
   std::cout << "load_batch(" << loaded << ") in " << secs << "s (" << (loaded / secs)
             << " rows/s); resident=" << loader.resident_bytes() << " B\n";
 
-  // Summary: per-row WLD distribution and score-diff stats.
   int w = 0, d = 0, l = 0;
   double sd_sum = 0.0, sd_min = 1e9, sd_max = -1e9;
   const int RS = loader.row_size_floats();
@@ -150,14 +150,13 @@ int main(int argc, char** argv) {
   std::cout << "score_diff: mean=" << (sd_sum / n_load) << " min=" << sd_min << " max=" << sd_max
             << "\n";
 
-  // Show the label tail (last 4 floats) of the first 2 rows; the full 7000+
-  // input floats are too noisy to dump.
+  // Print only the label columns of the first two rows; the input floats are
+  // too many to dump.
   const int IS = loader.input_size_floats();
   for (int64_t i = 0; i < std::min<int64_t>(2, n_load); ++i) {
     const float* row = out.data() + i * RS;
     std::cout << "row[" << i << "] labels:";
     for (int j = IS; j < RS; ++j) std::cout << " " << row[j];
-    // Also report a few input-vector sanity numbers.
     int nonzero_spatial = 0;
     for (int j = 0; j < IS; ++j)
       if (row[j] != 0.0f) ++nonzero_spatial;

@@ -1,6 +1,6 @@
 #include "encoding/row_encoder.h"
 
-#include "data/binary_log.h"  // pick_sampled_turn, pick_any_turn
+#include "data/binary_log.h"
 #include "encoding/position_encoder.h"
 #include "training/max_move_per_lane_task.h"
 #include "training/training_task.h"
@@ -10,7 +10,6 @@ namespace binlog {
 
 namespace {
 
-// Win-probability rows: bag-nonempty turn sampling + PositionEvalTask encoding.
 class PositionEvalRowEncoder : public RowEncoder {
  public:
   PositionEvalRowEncoder(const InputEncodingSpec& spec, bool post_move)
@@ -32,8 +31,6 @@ class PositionEvalRowEncoder : public RowEncoder {
   PositionEncoder pos_;
 };
 
-// Max-move-per-lane rows: uniform all-turn sampling + MaxMovePerLaneTask encoding (always
-// pre-move; the lexicon drives the per-lane move enumeration).
 class MaxMovePerLaneRowEncoder : public RowEncoder {
  public:
   explicit MaxMovePerLaneRowEncoder(const InputEncodingSpec& spec) : pos_(spec) {}

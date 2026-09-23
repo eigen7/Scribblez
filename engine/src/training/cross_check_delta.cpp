@@ -18,8 +18,8 @@ struct Entry {
   auto operator<=>(const Entry&) const = default;
 };
 
-// The cross-check caches index in view coordinates, the transposed view
-// swapping row and column; an entry's square is in the board's own frame.
+// The cross-check caches index squares in view coordinates (the transposed view
+// swaps row and column); an entry's square is in the board's own frame.
 int32_t board_square(const BoardUndo::CrossRec& rec) {
   const int vr = rec.idx / BOARD_SIZE;
   const int vc = rec.idx % BOARD_SIZE;
@@ -27,10 +27,10 @@ int32_t board_square(const BoardUndo::CrossRec& rec) {
 }
 
 // The changed entries among the cache writes `undo` recorded, read off the
-// post-move `board`. A write is not an entry when it lands on a square the move
-// filled, or leaves the mask as it was -- which also drops the repeat writes to
-// the ends of the move's own word, one per placed tile, whose first record
-// alone holds the pre-move value.
+// post-move `board`. A write is skipped when it lands on a square the move
+// filled or leaves the mask unchanged. The second test also drops the repeat
+// writes to the ends of the move's own word (one per placed tile): only the
+// first record holds the true pre-move mask, and the later ones compare equal.
 int collect_entries(const Board& board, const BoardUndo& undo, Entry* out) {
   int n = 0;
   for (const BoardUndo::CrossRec& rec : undo.crosses) {

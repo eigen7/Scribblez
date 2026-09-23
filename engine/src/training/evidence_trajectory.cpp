@@ -19,7 +19,9 @@ SimRunner::Params sim_params(const TrajectoryOptions& opt, nn::PositionEvalServi
 
 void validate(const TrajectoryOptions& opt) {
   SimRunner::validate_min_horizon("evidence trajectory", opt.horizon);
-  TrajectoryOptions terminal = opt;  // the leaf pairing is the caller's to check
+  // Validated as terminal: whether a leaf service accompanies the horizon is
+  // the caller's check.
+  TrajectoryOptions terminal = opt;
   terminal.horizon = 0;
   SimRunner::validate(sim_params(terminal, nullptr));
   if (opt.on_policy_min < 0) throw util::CleanException("--on-policy-min must be >= 0");
@@ -81,8 +83,8 @@ const std::vector<float>& TrajectoryRunner::win_equities(const DecisionPoint& dp
   const GameStateEncoder& enc = *dp.enc;
   const int mover = dp.pos.mover;
   const int n = ranked.size();
-  // The cross-check input planes read the board's move-generation caches;
-  // building them here (a no-op once valid) keeps them lexicon-accurate.
+  // The cross-check input planes read the board's move-generation caches.
+  // Building them here is a no-op once they are valid.
   enc.board().ensure_movegen_caches(*spec_.dict);
   if (spec_.opp_leave_input) {
     enc.encode_input(mover, dp.pos.rack, visible_opp, board_row_.data());

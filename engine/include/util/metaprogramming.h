@@ -1,11 +1,9 @@
 #pragma once
 
-// Consteval conveniences over P2996 reflection, factored out of consumers so
-// the std::meta plumbing (access contexts, dealiasing, template-argument
-// surgery, static-string promotion) reads as one call at the use site.
-// Everything here is policy-free; what a consumer does with the members it
-// enumerates stays with the consumer. Requires -freflection (set globally in
-// the root CMakeLists).
+// Consteval helpers over P2996 reflection, so std::meta plumbing (access
+// contexts, dealiasing, template arguments, static strings) reads as one call
+// at the use site. Requires -freflection, which the root CMakeLists.txt sets
+// globally.
 
 #include <cstddef>
 #include <meta>
@@ -62,8 +60,8 @@ consteval std::string dec_string(std::size_t v) {
 // name computed during constant evaluation survives into runtime data.
 consteval const char* static_string(std::string_view s) { return std::define_static_string(s); }
 
-// A member's identifier as a reader-facing name: the trailing underscore of
-// the private-member convention stripped, promoted to static storage.
+// A member's identifier with the private-member trailing underscore stripped,
+// in static storage.
 consteval const char* member_name(std::meta::info member) {
   std::string n(std::meta::identifier_of(member));
   if (!n.empty() && n.back() == '_') n.pop_back();

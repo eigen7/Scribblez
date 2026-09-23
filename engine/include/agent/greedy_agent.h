@@ -9,8 +9,8 @@
 
 namespace scribblez {
 
-// Picks the highest-scoring PLAY. If none exists, exchanges the entire rack (if
-// the bag has >= RACK_SIZE tiles), otherwise passes. Ties broken randomly.
+// Plays the highest-scoring play, breaking ties at random. With no legal play
+// it exchanges its whole rack if the bag allows, else passes.
 class GreedyAgent : public Agent {
  public:
   explicit GreedyAgent(int thread_id, const std::string& name = "Greedy");

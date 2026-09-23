@@ -1,10 +1,7 @@
-// Command-line construction of NeuralSimAgent, kept separate from the agent's
-// selection logic (neural_sim_agent.cpp) for the same reason as
-// neural_agent_factory.cpp: from_spec resolves the run-shared model through
-// nn::PositionEvalService::create() and hands the agent the shared_ptr (create()'s
-// construction of the concrete service lives in the TensorRT layer), so the core
-// agent TU -- and the agent's unit tests, which inject a stub through the same
-// constructor -- carry no CUDA/TensorRT dependency.
+// NeuralSimAgent's command-line construction, kept out of
+// neural_sim_agent.cpp so the unit tests that compile the agent with a stub
+// service need none of the option-parsing, Lexicon, or model-loading
+// dependencies.
 
 #include "agent/neural_service_options.h"
 #include "agent/neural_sim_agent.h"
@@ -28,10 +25,9 @@ namespace {
 
 namespace po = boost::program_options;
 
-// Parsed `--type=neural-sim` option values, with their defaults. A single
-// options_description is built over these fields (make_options_description)
-// and reused for both parsing (from_spec) and help rendering (options_help),
-// so the two can never drift.
+// Parsed `--type=neural-sim` options with their defaults. from_spec and
+// options_help build the same options_description over them, so the parsed
+// and documented options cannot drift.
 struct NeuralSimOptions {
   NeuralServiceOptions service;
   int shortlist = 50;
@@ -60,7 +56,7 @@ po::options_description make_options_description(NeuralSimOptions& o) {
      "what the rollouts are scored on: 'winrate' or 'spread'")  //
     ("drop-best-prob", po::value<double>(&o.drop_best_prob)->default_value(o.drop_best_prob),
      "per-turn probability of excluding the model's top-ranked candidate from the sim "
-     "set -- the A4 sensitivity sweep's controlled recall miss")  //
+     "set, to simulate a recall miss (docs/evaluation_plan.md)")  //
     ("rollouts", po::value<int>(&o.rollouts)->default_value(o.rollouts),
      "rollouts per simmed candidate; every candidate shares the same rollout seeds, so "
      "rack and draw luck cancels when they are compared")  //
@@ -109,17 +105,14 @@ std::unique_ptr<NeuralSimAgent> NeuralSimAgent::from_spec(const std::vector<std:
   params.sim_horizon = opts.sim_horizon;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
-  // Fail on a bad scalar option now, before net_params() and the constructor
-  // spend seconds loading the model and building the TensorRT engine.
+  // Fail on a bad option before seconds go into the TensorRT engine build.
   validate(params);
 
-  // Sizing the engine batch to at least the shortlist just lets the whole
-  // shortlist be scored in a single chunk; the agent chunks to the engine
-  // batch either way. shortlist == 0 (all moves) is chunked to batch_size.
+  // Raise the engine batch to the shortlist so it is scored in one chunk.
+  // With shortlist == 0 (all moves) the evaluator chunks to batch_size.
   const NeuralSimAgent::NetParams net_params =
     opts.service.net_params<nn::PositionEvaluationSpec>(opts.shortlist);
-  // One loaded model per (net_params), shared across this run's threads; the
-  // agent -- and its rollout leaf -- use it.
+  // One loaded model per distinct net_params, shared by the run's threads.
   std::shared_ptr<nn::PositionEvalService> service = nn::PositionEvalService::create(net_params);
   return std::make_unique<NeuralSimAgent>(params, std::move(service), net_params.max_rows);
 }

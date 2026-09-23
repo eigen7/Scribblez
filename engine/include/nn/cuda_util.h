@@ -3,8 +3,8 @@
 #include <cstddef>
 
 // Thin wrappers around the CUDA runtime calls the TensorRT inference path
-// needs, each throwing util::Exception on failure so callers never inspect
-// status codes. The CUDA headers stay confined to cuda_util.cpp; consumers see
+// needs. Each throws util::Exception on failure, so callers never inspect
+// status codes. The CUDA headers stay confined to cuda_util.cpp: consumers see
 // only opaque void* device pointers and the stream typedef below.
 
 // cudaStream_t is `struct CUstream_st*`.
@@ -15,12 +15,13 @@ namespace nn {
 
 using stream_t = CUstream_st*;
 
-// "8.9" for an RTX 4090. Keys the engine-plan cache, a plan being valid only
-// for the compute capability it was built on.
+// The current device's compute capability, e.g. "8.9" for an RTX 4090. Keys
+// the engine-plan cache, since a plan is valid only on the compute capability
+// it was built for.
 const char* sm_tag();
 
-// Compute-capability major version of the current device (8 for Ampere, 9 for
-// Hopper/Ada). BF16 tensor cores require >= 8.
+// Compute-capability major version of the current device (8 for Ampere and
+// Ada, 9 for Hopper). BF16 tensor cores require >= 8.
 int compute_capability_major();
 
 void set_device(int device_id);
@@ -30,13 +31,13 @@ void destroy_stream(stream_t stream);
 void synchronize_stream(stream_t stream);
 
 // Bytes of device memory in use on the current device (total minus free), for
-// a tool reporting what a loaded engine costs.
+// tools that report what a loaded engine costs.
 size_t device_memory_used();
 
 void* device_malloc(size_t n_bytes);
 void device_free(void* ptr);
 
-// Pinned, so host<->device copies can run asynchronously on the stream.
+// Page-locked host memory, which cudaMemcpyAsync needs to run asynchronously.
 void* host_malloc(size_t n_bytes);
 void host_free(void* ptr);
 

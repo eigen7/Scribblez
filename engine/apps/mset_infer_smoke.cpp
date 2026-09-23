@@ -1,18 +1,14 @@
-// Standalone sanity-check for the move set evaluation inference path,
-// independent of any game logic -- nn_infer_smoke's counterpart for the other
-// model family. Loads an exported ONNX model (building or loading a cached
-// engine), scores a synthetic candidate set through MoveSetEvalService, and
-// prints each candidate's decoded Eval.
+// mset_infer_smoke: nn_infer_smoke's counterpart for the move set evaluation
+// model. It loads an ONNX export, scores a synthetic candidate set against an
+// all-zero board through TrtEvalService, and prints each candidate's decoded
+// output. A clean run covers ONNX parse and metadata checks, engine build and
+// plan cache, the bindings, chunking, and decoding on a real checkpoint.
+// Running it at two precisions is a quick precision spot check.
 //
-// Usage:
-//   mset_infer_smoke <model.onnx> [num_moves] [FP16|FP32]
+//   mset_infer_smoke model.onnx [num_moves=8] [FP16|BF16|FP32, default FP16]
 //
-// A successful run confirms the whole path -- ONNX parse and metadata checks,
-// engine build + plan cache, the dtype-aware bindings, chunking, and the Eval
-// decode -- works end to end on a real checkpoint, and running it at both
-// precisions is the FP32-vs-FP16 spot check. The move features are synthetic,
-// not encoder output: what a Move encodes to has its own golden test, and this
-// tool is about the engine path.
+// The move features are synthetic rather than encoder output: the encoder has
+// its own tests, and this tool is about the inference path.
 
 #include "encoding/input_encoder.h"
 #include "nn/trt_eval_service.h"
@@ -28,9 +24,8 @@
 
 namespace {
 
-// A candidate set spanning the shapes the model sees: plays of 1..7 tiles
-// spread across the board, and -- every fifth candidate -- an exchange, which
-// carries tiles but no squares.
+// Candidates of every shape the model sees: plays of 1..7 tiles spread across
+// the board, and every fifth one an exchange, which has tiles but no squares.
 scribblez::move_set::MoveFeatureArrays synthetic_candidates(int num_moves) {
   using namespace scribblez::move_set;
   MoveFeatureArrays moves;
@@ -62,7 +57,7 @@ scribblez::move_set::MoveFeatureArrays synthetic_candidates(int num_moves) {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <model.onnx> [num_moves] [FP16|FP32]\n";
+    std::cerr << "Usage: " << argv[0] << " <model.onnx> [num_moves] [FP16|BF16|FP32]\n";
     return 1;
   }
 
@@ -79,8 +74,7 @@ int main(int argc, char** argv) {
     scribblez::nn::TrtEvalService<Spec> service(params);
     service.load();
 
-    // An all-zero board row at the model's own width: the candidates are what
-    // this tool varies.
+    // An all-zero board row at the model's own width; only the candidates vary.
     const size_t row_floats =
       size_t(service.spatial_planes()) * scribblez::kBoardCells + service.scalar_floats();
     const std::vector<float> board(row_floats, 0.0f);

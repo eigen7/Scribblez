@@ -1,31 +1,27 @@
-// The move-proposal two-graph runtime (agent/move_proposal_nets.h +
-// agent/move_proposal_session.h) against the PyTorch model it serves (roadmap
-// item 3). mset_infer_parity's counterpart for the split evidence-path graphs.
+// The move proposal model's two-graph TensorRT runtime
+// (agent/move_proposal_nets.h, agent/move_proposal_session.h), checked against
+// the PyTorch reference. The test_mset_inference_parity counterpart for the
+// evidence path.
 //
-// A session runs the cache graph once, then -- for each evidence set the
-// fixture describes -- stages the raw sim observations through
-// agent/evidence_staging.h and runs the step graph, and this test compares
-// every candidate's conditioned prediction against MoveSetEvalModel.forward's.
-// More can go silently wrong here than in the single-graph runtimes: the
-// board/g/move_enc host handoff, the leading-1 evidence inputs, the move_enc
-// gather by scored index, and the empty-set fusion gate. Each changes the
-// numbers, and every case is a comparison against the PyTorch reference for the
-// same inputs. The verification is tolerance-bounded, not bit-identical:
-// independent TensorRT plans reorder float sums, so parity is held to a
-// tolerance (docs/roadmap.md item 3), as the sibling mset parity test is.
+// A session runs the cache graph once per position, then the step graph once
+// per evidence set, after staging the raw sim observations through
+// agent/evidence_staging.h. More can go silently wrong than in the single-graph
+// runtimes: the board/g/move_enc handoff from cache to step through host
+// memory, the leading-1 evidence inputs, the move_enc gather by scored index,
+// and the empty-set fusion gate. The cache graph's placement planes, which the
+// step graph does not re-emit, are checked on the session's retained cache.
 //
-// The cache graph's planes -- the evidence-free predicted planes every evidence
-// token's predicted half is gathered from -- are checked on the session's
-// retained cache against the plain reference; the step graph emits none.
+// Parity is tolerance-bounded, not bitwise: independent TensorRT plans reorder
+// float sums.
 //
-// The fixture (one model's cache/step pair, a candidate set, its raw Move /
-// SimObservation records, and several evidence cases -- empty, partial with
-// scattered+duplicate indices, and full at the padding boundary) is generated
-// by py/scripts/move_set_eval/gen_proposal_parity_fixture.py, invoked at the
-// build-time SCRIBBLEZ_PY_DIR; the test skips when that generator cannot run
-// (no torch/onnx). Pass a fixture directory as the first non-gtest argument to
-// reuse one:
-//   test_proposal_inference_parity <fixture_dir>
+// The fixture comes from py/scripts/move_set_eval/gen_proposal_parity_fixture.py:
+// one model's cache/step pair, a candidate set with its raw Move and
+// SimObservation records, and evidence cases (empty; partial, with scattered
+// and duplicate indices; full, at the padding boundary). Run with no
+// arguments, the binary generates it through the Python generator at
+// SCRIBBLEZ_PY_DIR and skips if that fails (no torch/onnx). Pass a fixture
+// directory as the first non-gtest argument to reuse one instead:
+//   test_proposal_inference_parity [<fixture_dir>]
 
 #include "agent/move_proposal_nets.h"
 #include "agent/move_proposal_session.h"
@@ -58,23 +54,20 @@ using scribblez::agent::MoveProposalSession;
 
 namespace {
 
-// The fixture's per-candidate reference scalars: [p_win, p_draw, p_loss,
-// sd_mean, sd_std, gain]. The plane reference is a separate M x 52 x 225 file
-// (the cache graph's footprint slot-channel planes output).
+// Per-candidate reference scalars: p_win, p_draw, p_loss, sd_mean, sd_std,
+// gain. The plane reference is a separate file of M rows of kPlaneFloats.
 constexpr int kScalarFields = 6;
 constexpr int kPlaneFloats = scribblez::nn::PlanesOutput::kRowElems;
 
-// How far a TensorRT run may deviate from the PyTorch FP32 reference. Set from
-// the measured noise floor, not loosely: on this fixture the observed worst
-// deviations are ~1e-5 (wld probs), ~3.5e-4 (planes, a 900-cell softmax-then-
-// per-cell-marginal off a 225-token attention -- the jitteriest head), and
-// ~5e-5 (score_diff / gain).
-// The bounds sit above those with room for cross-GPU / cross-build kernel jitter
-// -- ~6x on the jittery planes head, a wider (~50-100x) round-number margin on
-// the far tighter wld / score_diff / gain -- yet stay orders of magnitude below
-// any real defect (a dropped ev_obs field, a mis-strided evidence plane, a
-// mis-bound handoff move outputs by far more). The test prints the actual
-// deviations, so retune here if a future model legitimately needs it.
+// Allowed deviation from the PyTorch FP32 reference, set from the measured
+// noise floor. The observed worst deviations on this fixture are ~1e-5 for the
+// WLD probabilities, ~5e-5 for score_diff and gain, and ~3.5e-4 for the planes,
+// the noisiest head (a softmax over 900 cells, then per-cell marginals, on top
+// of a 225-token attention). The bounds leave room for kernel differences
+// across GPUs and builds (~6x on the planes, a rounder 50-100x elsewhere) yet
+// stay orders of magnitude below a real defect such as a dropped evidence
+// field, a mis-strided evidence plane or a mis-bound handoff. The test prints
+// the actual deviations, for retuning if a future model legitimately needs it.
 struct Tolerance {
   float prob;        // the three WLD probabilities
   float planes;      // the per-cell-marginal placement planes (widest head)
@@ -121,21 +114,21 @@ bool generate_fixture(const std::string& out_dir) {
 #endif
 }
 
-// One evidence case as the fixture describes it.
 struct EvidenceCase {
   std::string name;
   std::vector<int> indices;        // scored indices, empty for the empty case
   std::vector<float> ref_scalars;  // M x kScalarFields
 };
 
-// The worst deviation of a prediction from the reference, per field group. NaN
-// is caught rather than hidden (std::max returns its first argument on a NaN
-// comparison, so an all-NaN run -- what an unbound buffer looks like -- would
-// otherwise report a perfect match).
+// The worst deviation of a prediction from the reference, per field group.
 struct Worst {
   float prob = 0, score_diff = 0, gain = 0, planes = 0;
 };
 
+// Folds one deviation into `worst`, failing on a non-finite one. std::max would
+// silently drop a NaN (it keeps its first argument when the comparison is
+// false), so an all-NaN run, which an unbound buffer can produce, would report
+// a perfect match.
 void track(float& worst, float got, float want, const char* what, int move) {
   const float dev = std::abs(got - want);
   if (!std::isfinite(dev)) {
@@ -169,9 +162,9 @@ class ProposalInferenceParityTest : public ::testing::Test {
 
   std::string model(const char* name) const { return dir_ + "/" + name; }
 
-  // The params of a loaded pair over the fixture's graphs, its plan cache in
-  // this test's scratch root, engines bounded at `max_rows` (below the
-  // candidate count to exercise chunking of both graphs).
+  // Params for the fixture's graph pair, with the plan cache in this test's
+  // scratch root. A `max_rows` below the candidate count makes both graphs run
+  // in chunks.
   MoveProposalNets::Params nets_params(int max_rows) const;
 
   // The evidence set of one case: the fixture's raw records at its indices.
@@ -242,12 +235,12 @@ MoveProposalNets::Params ProposalInferenceParityTest::nets_params(int max_rows) 
   MoveProposalNets::Params params;
   params.cache_onnx_path = model("cache.onnx");
   params.step_onnx_path = model("step.onnx");
-  params.precision = scribblez::nn::Precision::kFP32;  // item-3 serving precision
+  params.precision = scribblez::nn::Precision::kFP32;  // the serving precision
   params.max_rows = max_rows;
-  params.step_max_rows = max_rows;  // so a bound below M chunks BOTH graphs
+  params.step_max_rows = max_rows;
   params.mount_root = cache_root_.string();
-  // The parity check validates the inference stack, not kernel-tactic quality,
-  // so build at optimization level 0 to keep cold builds to a few seconds.
+  // Parity checks the inference plumbing, not kernel-tactic quality, so build
+  // at optimization level 0 to keep cold builds to a few seconds.
   params.fast_build = true;
   return params;
 }
@@ -258,7 +251,6 @@ EvidenceSet ProposalInferenceParityTest::evidence_of(const EvidenceCase& c) cons
   return evidence;
 }
 
-// Every candidate's conditioned prediction against the reference, for one case.
 void expect_case_matches(const MoveProposalPredictions& got, const EvidenceCase& c, int num_moves,
                          Tolerance tol) {
   Worst worst;
@@ -279,7 +271,6 @@ void expect_case_matches(const MoveProposalPredictions& got, const EvidenceCase&
   EXPECT_LE(worst.gain, tol.gain) << c.name;
 }
 
-// The session's retained cache planes against the plain reference.
 void expect_planes_match(const std::vector<float>& got, const std::vector<float>& ref,
                          int num_moves, Tolerance tol) {
   ASSERT_EQ(got.size(), size_t(num_moves) * kPlaneFloats);
@@ -290,9 +281,7 @@ void expect_planes_match(const std::vector<float>& got, const std::vector<float>
   EXPECT_LE(worst.planes, tol.planes);
 }
 
-// Two predictions over the same candidates, held to `tol` on every field --
-// what one session's outputs must equal whether or not another session used
-// the nets in between.
+// Two predictions over the same candidates, held to `tol` on every field.
 void expect_same_predictions(const MoveProposalPredictions& a, const MoveProposalPredictions& b,
                              Tolerance tol, const char* what) {
   ASSERT_EQ(a.num_moves, b.num_moves) << what;
@@ -308,11 +297,10 @@ void expect_same_predictions(const MoveProposalPredictions& a, const MoveProposa
 
 }  // namespace
 
-// The full run at a single chunk: every candidate scored in one predict() per
-// graph.
+// Every candidate scored in a single chunk per graph.
 TEST_F(ProposalInferenceParityTest, MatchesPyTorchReferenceForEveryEvidenceCase) {
   MoveProposalSession session(MoveProposalNets::create(nets_params(num_moves_)));
-  // The fixture stamps its pair as trained at the full padded width.
+  // The fixture stamps its pair as trained at the full padded evidence width.
   EXPECT_EQ(session.nets().trained_max_evidence(), scribblez::nn::kMaxEvidence);
   const MoveProposalPredictions plain = session.encode(board_.data(), moves_);
   ASSERT_TRUE(plain.gain.empty()) << "the cache graph emits no gain head";
@@ -323,8 +311,7 @@ TEST_F(ProposalInferenceParityTest, MatchesPyTorchReferenceForEveryEvidenceCase)
     expect_case_matches(conditioned, c, num_moves_, kFp32Tol);
 
     if (c.name == "empty") {
-      // The step graph at an empty set must reproduce the cache's plain heads
-      // (and the plain mset outputs, which the reference IS), within tolerance.
+      // With no evidence the step graph must reproduce the cache graph's heads.
       Worst worst;
       for (size_t i = 0; i < plain.wld.size(); ++i)
         track(worst.prob, conditioned.wld[i], plain.wld[i], "empty==plain wld", int(i / 3));
@@ -338,9 +325,9 @@ TEST_F(ProposalInferenceParityTest, MatchesPyTorchReferenceForEveryEvidenceCase)
   }
 }
 
-// The same candidate set scored with the engines bounded below M, so both the
-// cache and step graphs run in chunks and the session's full-M retention of
-// move_enc / board / g across chunk boundaries is exercised.
+// Engines bounded below M make both graphs run in chunks, which exercises the
+// session's retention of the full-M board/g/move_enc handoff across chunk
+// boundaries.
 TEST_F(ProposalInferenceParityTest, ChunksACandidateSetLargerThanTheEngines) {
   const int chunk = 32;
   ASSERT_GT(num_moves_, chunk) << "the fixture must exceed the chunk size to test chunking";
@@ -354,9 +341,8 @@ TEST_F(ProposalInferenceParityTest, ChunksACandidateSetLargerThanTheEngines) {
   }
 }
 
-// One consumer's worth of work over a shared pair: a candidate subset and the
-// evidence that fits it, with what that consumer produces when nothing else
-// touches the nets.
+// One consumer of a shared pair: a candidate subset, the evidence within it,
+// and what the consumer produces when it has the nets to itself.
 struct ConsumerCase {
   scribblez::move_set::MoveFeatureArrays moves;
   EvidenceSet evidence;
@@ -364,9 +350,9 @@ struct ConsumerCase {
   MoveProposalPredictions want_conditioned;
 };
 
-// The worst deviation over one consumer's outputs from its solo reference,
-// across `iterations` rounds of encode / condition(empty) / condition -- run on
-// its own thread, so it reports rather than asserts.
+// One consumer's worst deviation from its solo reference over rounds of
+// encode, condition(empty), condition. Runs on its own thread, so it records
+// rather than asserts.
 struct ConsumerRun {
   const ConsumerCase* c;
   Worst worst;
@@ -391,23 +377,20 @@ void ConsumerRun::run(std::shared_ptr<MoveProposalNets> nets, const float* board
   }
 }
 
-// Sessions over ONE shared pair, their encode/condition calls interleaved over
-// different candidate sets and evidence, each reproduce what they produce
-// alone: the nets hold no per-position state, and the mutex spans a whole
-// call. First interleaved on one thread (the sequencing), then from real
-// concurrent threads (the locking): a leak of one session's cache into
-// another's step -- a shared handoff or staging buffer read after another
-// session re-staged it, which a critical section narrowed to predict() alone
-// would allow -- moves outputs by far more than the parity tolerance.
+// Sessions sharing one pair each reproduce their solo outputs when their calls
+// interleave: the nets hold no per-position state, and the lock spans a whole
+// call. Checked first interleaved on one thread (sequencing), then from
+// concurrent threads (locking). The failure this guards against is one session
+// reading a shared staging or handoff buffer after another re-staged it, which
+// a lock around predict() alone would allow.
 TEST_F(ProposalInferenceParityTest, SessionsOnOneSharedPairDoNotCrosstalk) {
   const EvidenceCase* partial = nullptr;
   for (const EvidenceCase& c : cases_)
     if (c.name == "partial") partial = &c;
   ASSERT_NE(partial, nullptr);
 
-  // Four consumers over nested candidate subsets (the full set first), each
-  // with the partial case's evidence that fits its subset, and their solo
-  // references.
+  // Nested candidate subsets, each with the partial case's evidence that falls
+  // inside it.
   std::shared_ptr<MoveProposalNets> nets = MoveProposalNets::create(nets_params(num_moves_));
   const int subsets[] = {num_moves_, 40, 25, 10};
   std::vector<ConsumerCase> consumers;
@@ -423,7 +406,6 @@ TEST_F(ProposalInferenceParityTest, SessionsOnOneSharedPairDoNotCrosstalk) {
     consumers.push_back(std::move(c));
   }
 
-  // Interleaved on one thread.
   MoveProposalSession a(nets);
   MoveProposalSession b(nets);
   a.encode(board_.data(), consumers[0].moves);
@@ -435,8 +417,7 @@ TEST_F(ProposalInferenceParityTest, SessionsOnOneSharedPairDoNotCrosstalk) {
   expect_same_predictions(got_b_plain, consumers[1].want_plain, kFp32Tol, "session b plain");
   expect_same_predictions(got_b, consumers[1].want_conditioned, kFp32Tol, "session b");
 
-  // Concurrently: one thread per consumer, each its own session, hammering the
-  // shared pair.
+  // One thread and session per consumer.
   const int iterations = 8;
   std::vector<ConsumerRun> runs;
   for (const ConsumerCase& c : consumers) runs.push_back(ConsumerRun{&c, {}});
@@ -453,9 +434,8 @@ TEST_F(ProposalInferenceParityTest, SessionsOnOneSharedPairDoNotCrosstalk) {
   }
 }
 
-// create() dedupes on the full engine-determining params: equal params share
-// one live pair -- also when the callers race, the second waiting out the
-// first's build -- and a differing row bound gets its own.
+// Equal engine-determining params share one live pair, even when callers race
+// (later ones wait out the first build); a different row bound gets its own.
 TEST_F(ProposalInferenceParityTest, CreateSharesAPairAcrossEqualParams) {
   std::vector<std::shared_ptr<MoveProposalNets>> racers(6);
   std::vector<std::thread> threads;
@@ -470,12 +450,10 @@ TEST_F(ProposalInferenceParityTest, CreateSharesAPairAcrossEqualParams) {
   EXPECT_NE(other.get(), racers[0].get());
 }
 
-// A cache and step graph exported from different checkpoints (same architecture,
-// so C and the layout checks agree, but different weights) share no
-// proposal_export_id -- create() must reject the pair loudly rather than serve
-// plausible-looking wrong numbers. step_mismatch.onnx is that second model's
-// step graph; the mismatch is caught only by the fingerprint, so this is the one
-// test of that guard.
+// A cache and step graph from different checkpoints of the same architecture
+// pass every shape and layout check, and would serve plausible wrong numbers.
+// Only the proposal_export_id fingerprint catches them, and this is the one
+// test of that guard. step_mismatch.onnx is the other checkpoint's step graph.
 TEST_F(ProposalInferenceParityTest, RejectsACacheStepPairFromDifferentModels) {
   MoveProposalNets::Params params = nets_params(num_moves_);
   params.step_onnx_path = model("step_mismatch.onnx");
@@ -483,8 +461,7 @@ TEST_F(ProposalInferenceParityTest, RejectsACacheStepPairFromDifferentModels) {
     MoveProposalNets::create(params);
     ADD_FAILURE() << "loading a cache/step pair from different models should have been rejected";
   } catch (const std::runtime_error& e) {
-    // Matched against what it should object to, so a load that failed for some
-    // other reason (a missing file, a layout mismatch) does not pass as this.
+    // Match the cause, so a load that failed for another reason cannot pass.
     EXPECT_NE(std::string(e.what()).find("different models"), std::string::npos) << e.what();
   }
 }

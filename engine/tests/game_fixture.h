@@ -1,9 +1,8 @@
 #pragma once
 
-// Hand-built games for tests: an explicit PLAY Move, and a single game
-// serialized into an in-memory .slog buffer the real BlockDecoder reads --
-// together, what a test needs to put the training replay path and an agent's
-// own encoder on the same position.
+// Hand-built games for tests that compare an agent's input encoding with the
+// training decoder's: explicit plays, and a one-game .slog buffer that the real
+// BlockDecoder can read.
 
 #include "data/binary_log.h"
 #include "game/glyph.h"
@@ -17,9 +16,9 @@
 
 namespace scribblez::testing {
 
-// A PLAY Move with an explicit per-tile layout. `rel_mask` is relative to the
-// first lane cell (bit 0 == the start cell); `gs` are the placed glyphs in word
-// order (count == popcount(rel_mask)).
+// A play starting at (row, col). Bit i of `rel_mask` places a tile i cells
+// along the lane from there; `gs` are the placed glyphs in order, one per set
+// bit.
 inline Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask, uint16_t score,
                            std::initializer_list<Glyph> gs) {
   std::array<Glyph, RACK_SIZE> played{};
@@ -34,18 +33,15 @@ inline Move make_play_full(int row, int col, bool horizontal, uint16_t rel_mask,
   return Move::play(horizontal, start, mask, score, played.data(), n);
 }
 
-// Append the raw bytes of a trivially-copyable value to a byte buffer.
 template <class T>
 void append_pod(std::vector<char>& buf, const T& v) {
   const char* p = reinterpret_cast<const char*>(&v);
   buf.insert(buf.end(), p, p + sizeof(T));
 }
 
-// FileHeader, one GameMetadata (with a caller-chosen sampled_turn), then the
-// game's InitialRacks and TurnBlob[]. FINAL scores are left at zero: a fixture
-// built this way is for comparing input rows, not the score-derived targets.
-// `initial_scores` is the head-start handicap the replay decoder seeds its
-// score accumulator from -- {0, 0} for an ordinary game.
+// A one-game .slog sampled at `sampled_turn`. Final scores are left at zero,
+// so it is good for comparing input rows but not score-derived targets.
+// `initial_scores` is the head-start handicap, {0, 0} for an ordinary game.
 inline std::vector<char> build_slog(const binlog::InitialRacks& ir,
                                     const std::vector<binlog::TurnBlob>& turns,
                                     uint32_t sampled_turn,

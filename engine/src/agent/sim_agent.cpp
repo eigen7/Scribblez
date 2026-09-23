@@ -6,10 +6,7 @@
 
 #include <optional>
 
-// from_spec and options_help -- the only members that can pull in the
-// concrete TensorRT-backed leaf service (--leaf-model) -- live in
-// sim_agent_factory.cpp, so this translation unit, and the agent's unit
-// tests that compile it, carry no GPU dependency.
+// from_spec and options_help live in sim_agent_factory.cpp.
 
 namespace scribblez {
 
@@ -51,13 +48,11 @@ void SimAgent::observe_move(const Move& move) {
 }
 
 MoveDecision SimAgent::make_move(const MoveRequest& req) {
-  // The endgame belongs to the exact solver, which needs no candidates of ours.
   if (const std::optional<MoveDecision> solved = endgame_.try_solve(req)) return *solved;
 
   const std::vector<Move> candidates = equity_top_k(req, top_k_);
-  // Rollouts need a bag to draw the opponent's replenishments from, so a
-  // bag-empty turn the solver declined falls back to the static-equity move --
-  // which is what equity_top_k already ranked first.
+  // Rollouts need a bag to draw from, so a bag-empty turn the solver declined
+  // plays the static-equity favourite, which equity_top_k ranked first.
   if (req.bag_size == 0 || candidates.size() == 1) return candidates.front();
 
   const SimPosition pos = sim_position_from(req);

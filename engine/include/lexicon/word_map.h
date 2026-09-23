@@ -1,11 +1,10 @@
 #pragma once
 
-// Anagram index ("word map"): per word length, a hash map from a letter
-// multiset to the contiguous list of dictionary words having exactly that
-// multiset. The MAGPIE-style alternative to walking a GADDAG during move
-// generation -- a rack subset's anagrams come back as one cache-resident block
-// instead of a tree traversal. Words hold no blanks; the move generator
-// resolves those to concrete letters before looking up.
+// Anagram index ("word map", after MAGPIE's WMP): per word length, a hash map
+// from a letter multiset to the dictionary words with exactly those letters.
+// Move generation uses it instead of a GADDAG walk: a rack subset's anagrams
+// come back as one contiguous, cache-friendly block. Keys hold no blanks; the
+// move generator substitutes concrete letters before looking up.
 
 #include "game/tile.h"
 
@@ -17,11 +16,10 @@ namespace scribblez {
 
 class Dictionary;
 
-// A 128-bit letter multiset: 4 bits per letter, A..Z in slots 0..25. The word
-// map's key type -- a rack subset's count vector plus the playthrough tiles'
-// hashes straight to the anagram list. A multiset is only ever built up to a
-// full word (<= 15 tiles), so no per-letter count reaches 16 and two 64-bit
-// adds union two multisets with no inter-nibble carry handling.
+// A letter multiset packed 4 bits per letter (A..Z in nibbles 0..25), the word
+// map's key: a rack subset plus the playthrough tiles, added together. No
+// multiset exceeds one word (<= 15 letters), so no nibble overflows and two
+// 64-bit adds union two multisets.
 struct BitRack {
   uint64_t lo = 0;  // letters 0..15
   uint64_t hi = 0;  // letters 16..25
@@ -57,8 +55,7 @@ class WordMap {
  private:
   static constexpr int kMaxLen = 15;
 
-  // Open-addressing slot: an empty slot has count == 0 (every word has >= 2
-  // letters, so a real entry has count >= 1 and a nonzero key).
+  // Linear-probing slot; count == 0 marks it empty.
   struct Slot {
     BitRack key;
     uint32_t word_start = 0;

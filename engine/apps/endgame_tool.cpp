@@ -1,15 +1,12 @@
-// endgame_tool: solve one endgame position from a GCG file, with a verbose
-// trace of the solver's reasoning.
+// endgame_tool: solves the endgame at the end of a GCG file and prints the
+// solver's trace, for inspecting why the solver plays what it plays.
 //
-// The GCG's final position must be a true endgame: the bag empty and both
-// racks determinable (see read_gcg_endgame). The trace shows the position,
-// the solver's root block-or-outscore view (the replier's out-plays and every
-// root move's futility bound), each deepening iteration, the certificate
-// walk, and the final verdict with its projected line.
+//   endgame_tool --gcg positions/NWL23/interesting-positions/foo.gcg
+//   endgame_tool --gcg game.gcg --budget 50000000 --plies 12 --spread-matters false
 //
-// Usage:
-//   endgame_tool --gcg PATH [--budget N] [--plies P] [--spread-matters 0|1]
-//                [--lexicon NAME]
+// The GCG's final position must be a true endgame: the bag is empty and both
+// racks are determinable (see read_gcg_endgame). The output is the position,
+// the solver trace, the verdict, and the projected line.
 
 #include "data/gcg_reader.h"
 #include "data/gcg_writer.h"
@@ -92,8 +89,8 @@ int main(int argc, char** argv) {
   namespace po = boost::program_options;
   try {
     std::string gcg_path;
-    // Analysis defaults: a generous budget and the spread verdict, not the
-    // agents' throughput-tuned settings.
+    // Analysis defaults (a generous budget, spread maximized) rather than the
+    // agents' throughput-tuned ones.
     scribblez::EndgameSolver::Params params;
     params.budget = 1'000'000;
     params.spread_matters = true;

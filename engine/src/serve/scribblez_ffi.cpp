@@ -46,12 +46,10 @@ using scribblez::binlog::FileHeader;
 using scribblez::binlog::kMagic;
 using scribblez::binlog::kVersion;
 
-// The session behind the C ABI (see scribblez_ffi.h). Owns the process's
-// InputEncodingSpec -- the loaded Dictionary plus the arm's block choice --
-// that every encoding / analysis / loader entry point derives from, and the
-// spec's input tensor shapes, which the shape/size queries report. A
-// constructed session is proof the lexicon is loaded, so the methods do no
-// load-failure checking.
+// The session behind the C ABI (scribblez_ffi.h). Owns the InputEncodingSpec,
+// the loaded dictionary plus the encoding arm, that every encoding, analysis,
+// and loader entry point works from, and the input shapes the shape queries
+// report.
 struct ScribblezSession {
   ScribblezSession(const char* lexicon_name, bool opp_leave_input);
 
@@ -109,8 +107,8 @@ struct ScribblezSession {
   std::optional<scribblez::InputEncodingSpec> analysis_arm(bool opp_leave_input, int input_cap,
                                                            char* out_err, int err_cap) const;
 
-  // The spec's input tensor shapes, advertised through input_shapes(). The dim
-  // arrays live in the session so the pointers stay valid for its lifetime.
+  // The dim arrays live here so the advertised pointers stay valid for the
+  // session's lifetime.
   int spatial_dims_[3];
   int scalar_dims_[1];
   ScribblezShape input_shapes_[3];
@@ -118,8 +116,7 @@ struct ScribblezSession {
 
 namespace {
 
-// Throws when the .kwg is missing, having printed an install hint; uncaught
-// across the C ABI, that terminates the process.
+// Throws, after printing an install hint, when the .kwg is missing.
 const scribblez::Dictionary& load_session_dictionary(const char* lexicon_name) {
   scribblez::Lexicon& lex = scribblez::Lexicon::instance();
   lex.set_params({.name = lexicon_name, .dir = lex.dir()});
@@ -144,10 +141,8 @@ void scribblez_session_delete(ScribblezSession* s) { delete s; }
 
 namespace {
 
-// Build the (null-terminated) target shape table at compile time directly
-// from scribblez::AllTargets, so adding/removing a target struct
-// in training_targets.h automatically updates the FFI advertisement with
-// no edits here.
+// The NULL-terminated target shape table, generated at compile time from
+// AllTargets so it tracks training_targets.h with no edits here.
 template <typename List>
 struct TargetShapeTable;
 
@@ -166,9 +161,9 @@ struct TargetShapeTable<scribblez::TargetList<Ts...>> {
 
 constexpr auto kTargetShapesArr = TargetShapeTable<scribblez::AllTargets>::kValue;
 
-// --- Max-move-per-lane task shapes (hand-written; the max-move-per-lane encoders are not part of
-// the AllTargets pack). Input: 31 board planes + 27 rack scalars. Labels: the
-// per-lane occupancy / score / mask blocks of encode_lane_targets. ---
+// The max-move-per-lane task's shapes, written by hand since that task is not
+// part of AllTargets. The labels are encode_lane_targets()'s per-lane
+// occupancy, score, and mask blocks.
 constexpr int kMaxMovePerLaneInputSpatialDims[3] = {
   scribblez::MaxMovePerLaneInputEncoder::kSpatialPlanes, scribblez::kBoardSide,
   scribblez::kBoardSide};
@@ -221,9 +216,9 @@ int scribblez_max_move_per_lane_input_floats(void) {
 
 namespace {
 
-// Read a .slog file into `buf`, validate its header, and report the game
-// count, bounds-checking `game_idx` when it is >= 0. Returns 0 on
-// success, -1 on any failure.
+// Read a .slog file into `buf`, validate its header, and report its game count,
+// bounds-checking `game_idx` when it is >= 0. Returns 0 on success, -1 on any
+// failure.
 int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf, uint32_t* num_games) {
   if (!path) return -1;
   std::ifstream f(path, std::ios::binary);
@@ -249,11 +244,10 @@ int ScribblezSession::encode_score_diff_sweep(const char* path, int64_t game_idx
   const int64_t sweep = int64_t(diff_hi - diff_lo + 1) * input_floats();
   scribblez::binlog::BlockDecoder decoder(spec);
   if (game_idx >= 0) {
-    // A single position.
     decoder.encode_score_diff_sweep(buf.data(), uint32_t(game_idx), post_move, diff_lo, diff_hi,
                                     out_inputs);
   } else {
-    // Every position in the file, position-major (game g at row g * R).
+    // Every game in the file, game g at row g * R.
     for (uint32_t g = 0; g < num_games; ++g) {
       decoder.encode_score_diff_sweep(buf.data(), g, post_move, diff_lo, diff_hi,
                                       out_inputs + int64_t(g) * sweep);
@@ -269,8 +263,8 @@ int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int
 
 namespace {
 
-// Copy `s` into the caller's NUL-terminated buffer (truncating to out_cap) and
-// return the full length, which may exceed out_cap - 1 (caller should retry).
+// Copy `s` into the caller's buffer, NUL-terminated and truncated to out_cap,
+// and return its full length so the caller can detect truncation and retry.
 int emit_string(const std::string& s, char* out, int out_cap) {
   const int len = s.size();
   if (out && out_cap > 0) {
@@ -293,7 +287,7 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
   if (game.turns.empty() || game.snapshots.size() != game.turns.size() + 1) return -1;
 
   // The decision point: the state before the final recorded move, with the
-  // mover's full reconstructed rack.
+  // mover's rack as it was then.
   const size_t last = game.turns.size() - 1;
   const scribblez::TurnRecord& final_turn = game.turns[last].record;
   scribblez::SimPosition pos;
@@ -302,18 +296,18 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
   pos.mover = final_turn.player;
   pos.rack = final_turn.rack_before;
 
-  // Open leaves: the opponent's retained leave is reconstructable from their
-  // last recorded move (their replenishments stay hidden and are sampled).
-  // An empty leave -- opponent bingoed or has not acted -- is legitimate.
+  // The opponent's leave is known from their last recorded move; the tiles
+  // they drew afterward stay hidden and are sampled. An empty leave (the
+  // opponent bingoed, or has not moved yet) is valid.
   if (open_leaves) pos.opp_leave = scribblez::retained_leave(game, 1 - pos.mover);
 
   const int pool_size = scribblez::unseen_pool(pos.board, pos.rack, 0).size();
   if (pool_size <= scribblez::RACK_SIZE) return -1;  // endgame: SimRunner's non-empty-bag rule
 
   scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
-  // Bag size from the mover's POV: the unseen pool minus the opponent's
-  // (assumed full) rack. Only equity's endgame adjustments read the opponent
-  // rack, for which open-leaves supplies the known part.
+  // Bag size from the mover's POV: the unseen pool minus the opponent's full
+  // rack. Equity reads the opponent's rack only for endgame adjustments, and
+  // then only its known part, which open leaves supplies.
   const scribblez::Rack hidden_opp;
   scribblez::MoveRequest req{pos.board,
                              *spec.dict,
@@ -374,8 +368,8 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
                                      uint8_t* out_tile_mask, float* out_scalars) {
   namespace mset = scribblez::move_set;
   const char* bytes = static_cast<const char*>(moves);
-  // The input is a packed byte buffer of serialized Moves whose alignment the
-  // caller does not guarantee, so copy each into a Move before encoding.
+  // The caller's buffer is not guaranteed to be aligned for Move, so copy each
+  // one out before encoding.
   for (int64_t i = 0; i < n; ++i) {
     scribblez::Move m;
     std::memcpy(&m, bytes + i * sizeof(scribblez::Move), sizeof(scribblez::Move));
@@ -395,8 +389,7 @@ int ScribblezSession::move_set_cross_check_deltas(
   std::vector<char> buf;
   if (load_slog(path, /*game_idx=*/0, buf, nullptr) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
-  // The serialized Moves arrive as packed bytes of no guaranteed alignment, so
-  // each position's run is copied into Moves before encoding.
+  // Copied out for alignment, as in scribblez_move_set_encode_moves.
   const char* bytes = static_cast<const char*>(moves);
   std::vector<scribblez::Move> candidates;
   int64_t done = 0;
@@ -499,9 +492,10 @@ int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg
   return s->max_move_per_lane_analyze_gcg(gcg_text, out_json, out_cap, out_input);
 }
 
-// The explicit arm an analysis entry point encodes under, or nullopt with the
-// width mismatch reported in `out_err`: the caller's buffer is sized for its
-// model, and a model from another encoding era cannot be fed today's rows.
+// The encoding spec for an analysis entry point's explicit arm. Returns
+// nullopt, with the mismatch in `out_err`, when the caller's buffer (sized for
+// its model's input) does not match the arm's width: that model cannot be fed
+// the engine's rows.
 std::optional<scribblez::InputEncodingSpec> ScribblezSession::analysis_arm(bool opp_leave_input,
                                                                            int input_cap,
                                                                            char* out_err,
@@ -821,9 +815,8 @@ int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move,
 
 int scribblez_dl_load_batch(DataLoaderHandle* h, float* output) {
   if (!h || !output) return 0;
-  // load_batch throws when a window file becomes unreadable mid-epoch rather
-  // than blocking forever. Translate that into a negative sentinel the Python
-  // wrapper raises on.
+  // load_batch throws when a file becomes unreadable mid-epoch; the Python
+  // wrapper raises on -1.
   try {
     return h->loader.load_batch(output);
   } catch (const std::exception& e) {
@@ -838,7 +831,7 @@ int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h) {
 }
 
 // ---------------------------------------------------------------------------
-// Streaming self-play -> training pipeline
+// Streaming self-play pipeline
 // ---------------------------------------------------------------------------
 
 struct StreamHandle {
@@ -855,11 +848,9 @@ struct StreamHandle {
 
 namespace {
 
-// Shared construction for both streaming entry points: validate the config,
-// build the engine + player params, and create the StreamHandle with the given
-// row width and per-worker encoder factory. Returns nullptr on bad config or a
-// lexicon-load failure. Both tasks play the same HastyBot self-play games; only
-// the per-row encoding (and thus the row width) differs.
+// Shared construction for both streaming entry points, which differ only in
+// row encoder and row width. Returns nullptr on a bad config or a failure to
+// construct.
 StreamHandle* new_stream(float* const* slot_ptrs, int num_slots, int rows_per_slot, int num_threads,
                          int apply_symmetry, uint64_t seed, int handicap_max,
                          const char* const* player_specs, int num_specs, int row_floats,

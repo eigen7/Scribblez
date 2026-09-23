@@ -13,8 +13,7 @@ Step step_of(const Move& m) { return m.horizontal() ? Step{0, 1} : Step{1, 0}; }
 
 std::pair<int, int> Move::word_origin(const Board& board) const {
   DEBUG_ASSERT(board.transposed() == transposed_);
-  // The lowest set bit of the absolute mask is the first newly placed lane
-  // cell; the word may extend left of it through pre-existing tiles.
+  // Start at the first placed cell, then back up over any existing tiles.
   int along = 0;
   for (uint16_t m = square_mask_; (m & 1u) == 0; m >>= 1) ++along;
   Step s = step_of(*this);
@@ -37,11 +36,11 @@ std::string Move::main_word(const Board& board) const {
   while (board.in_bounds(r, c)) {
     Glyph cell = board.at(r, c);
     if (!cell.is_empty()) {
-      word.push_back(cell.letter().to_char());  // existing tile
+      word.push_back(cell.letter().to_char());
     } else if (gi < n) {
-      word.push_back(glyphs_[gi++].letter().to_char());  // newly placed tile
+      word.push_back(glyphs_[gi++].letter().to_char());
     } else {
-      break;  // empty square, no tiles left to place: word ends here
+      break;
     }
     r += s.dr;
     c += s.dc;
@@ -49,11 +48,9 @@ std::string Move::main_word(const Board& board) const {
   return word;
 }
 
-// ---------------------------------------------------------------------------
-
 namespace {
-// Lay a multiset of rack tiles into `glyphs` starting at `j`, sorted ascending
-// (A..Z then blanks) -- the same order a Rack keeps. Returns the next index.
+// Writes `tiles` into `glyphs` from index `j` in Rack order (A..Z, then
+// blanks), so equal exchanges are byte-identical. Returns the next index.
 int append_sorted(std::array<Glyph, RACK_SIZE>& glyphs, int j, const TileCounts& tiles) {
   for (Tile t = Tile::of(0); t <= BLANK; ++t) {
     for (int k = 0; k < tiles.count(t); ++k) glyphs[j++] = Glyph::exchanging(t);

@@ -1,7 +1,9 @@
-// GoogleTest suite for the endgame solver and its Board make/unmake support:
-//   - Board::apply(move, &undo) / unapply(undo) round-trips, and
-//   - EndgameSolver correctness against a brute-force reference plus oracle
-//     positions, determinism, node-budget behavior, and cross-turn TT reuse.
+// The endgame solver and its supporting pieces: Board make/unmake, the
+// out-play futility machinery (endgame/outplays.h), incremental move lists
+// (endgame/path_move_lists.h), and EndgameSolver itself. Solver correctness is
+// checked against a brute-force negamax over small random endgames on the tiny
+// dictionary; each search optimization is A/B-tested against the solver with
+// it disabled, for identical results and for the nodes it saves.
 
 #include "data/gcg_reader.h"
 #include "endgame/endgame_solver.h"
@@ -43,8 +45,8 @@ Rack rack_from(const std::string& s) {
   return r;
 }
 
-// A canonical key for a play (placed squares/glyphs + score), so two move lists
-// can be compared ignoring enumeration order.
+// A canonical key for a play (placed squares and glyphs, plus score), for
+// comparing move lists regardless of order.
 std::string move_key(const Move& m) {
   struct Placement {
     int r, c, code;
@@ -99,9 +101,9 @@ bool cross_equal(const std::array<CrossCheck, BOARD_SIZE * BOARD_SIZE>& a,
   return true;
 }
 
-// Apply `m` with an undo, unapply it, and assert every observable -- squares,
-// both cross-check tables, both anchor tables, and the set of legal plays for
-// `probe_rack` -- returns to exactly what it was before the apply.
+// Applies `m` with an undo and unapplies it, then checks that the squares,
+// cross-check and anchor tables, and legal plays for `probe_rack` are all
+// unchanged.
 void expect_apply_unapply_is_identity(Board& b, const Dictionary& d, const Move& m,
                                       const Rack& probe_rack) {
   std::array<Glyph, BOARD_SIZE * BOARD_SIZE> sq;
@@ -127,9 +129,8 @@ void expect_apply_unapply_is_identity(Board& b, const Dictionary& d, const Move&
   ASSERT_EQ(key_set(MoveGenerator(b, d).generate(probe_rack)), before_keys);
 }
 
-// Copy `src`'s squares into a fresh board via set(), which leaves the caches
-// invalid -- the state in which apply() takes its "caches were stale anyway"
-// branch (squares change, caches untouched).
+// A copy of `src`'s squares with invalid caches, the state in which apply()
+// updates squares only and leaves the caches for a later rebuild.
 Board squares_only_copy(const Board& src) {
   Board out;
   for (int r = 0; r < BOARD_SIZE; ++r)
@@ -148,11 +149,11 @@ void roundtrip_random_games(const Dictionary& d, unsigned seed, int games, int s
       std::uniform_int_distribution<size_t> pick(0, moves.size() - 1);
       const Move m = moves[pick(rng)];
 
-      // Caches-valid path: full round-trip identity on the live board.
+      // With valid caches.
       expect_apply_unapply_is_identity(b, d, m, r);
 
-      // Caches-invalid path: apply/unapply on a squares-only copy restores the
-      // squares and leaves the caches rebuildable to the correct values.
+      // With invalid caches: the squares are restored, and the caches rebuild
+      // to the correct values.
       Board inv = squares_only_copy(b);
       BoardUndo undo;
       inv.apply(m, &undo);
@@ -164,18 +165,18 @@ void roundtrip_random_games(const Dictionary& d, unsigned seed, int games, int s
       ASSERT_TRUE(cross_equal(inv.cross_checks(false), fresh.cross_checks(false)));
       ASSERT_TRUE(cross_equal(inv.cross_checks(true), fresh.cross_checks(true)));
 
-      b.apply(m);  // advance the game
+      b.apply(m);
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Brute-force reference: exact endgame value with no transposition table, move
-// ordering, PVS, or leaf playout. Given a depth larger than any possible line
-// length, every leaf is a real game end, so this is the exact optimal final
-// spread from the side-to-move's perspective. It mirrors EndgameSolver's end
-// rules exactly: the out bonus, the internal scoreless cap of 2, and the
-// scoreless rebase at entry.
+// Brute-force reference: plain negamax with no transposition table, move
+// ordering, PVS, or leaf playout. At a depth beyond any possible line, every
+// leaf is a real game end, so the result is the exact optimal final spread for
+// the side to move. It applies EndgameSolver's end rules: the out bonus, and
+// the game ending after two consecutive scoreless turns (so any scoreless turn
+// before the solve counts as one).
 // ---------------------------------------------------------------------------
 
 struct RefState {
@@ -186,8 +187,8 @@ struct RefState {
   int stm;
 };
 
-// Apply `m` (a play or a pass) to `s` for the side to move, returning the next
-// state and setting `over` when the move ends the game.
+// The state after the side to move plays `m` (a play or a pass); sets `over`
+// when the move ends the game.
 RefState ref_apply(const RefState& s, const Move& m, bool& over) {
   const int mover = s.stm, opp = 1 - s.stm;
   RefState ns = s;
@@ -246,8 +247,8 @@ int32_t ref_solve(const Board& b, const Dictionary& d, const Rack& my, const Rac
   return ref_negamax(make_ref_state(b, my, opp, my_score, opp_score, scoreless_turns), d, depth);
 }
 
-// Exact value of forcing `first` as the solving side's first move, then optimal
-// play by both sides -- used to prove a specific first move is suboptimal.
+// The exact value of forcing `first` as the first move, with optimal play
+// after it.
 int32_t ref_value_after_first(const Board& b, const Dictionary& d, const Rack& my, const Rack& opp,
                               int my_score, int opp_score, int scoreless_turns, const Move& first,
                               int depth) {
@@ -265,18 +266,17 @@ const Move* find_out_move(const std::vector<Move>& moves, const Rack& rack) {
   return nullptr;
 }
 
-constexpr int kRefDepth = 24;  // > any small-endgame line length
+constexpr int kRefDepth = 24;  // longer than any line in these small endgames
 constexpr uint64_t kBigBudget = 1ull << 40;
 
-// A synthetic PLAY placing dummy tiles at the given lane positions, for exercising
-// the halo geometry directly (build_outplay_halo reads only the move's shape and
-// the board, never the dictionary, so the glyphs' identity is irrelevant).
+// A play of dummy 'A' tiles at the given positions along one lane, for tests
+// that depend only on a move's shape, never on its letters.
 Move lane_play(bool horizontal, int line, const std::vector<int>& along, uint16_t score = 0) {
   uint16_t mask = 0;
   std::vector<Glyph> glyphs;
   for (int p : along) {
     mask |= 1u << p;
-    glyphs.push_back(Glyph::of(Tile::of(0)));  // an 'A'; value is unused here
+    glyphs.push_back(Glyph::of(Tile::of(0)));
   }
   return Move::play(horizontal, line, mask, score, glyphs.data(), int(glyphs.size()));
 }
@@ -287,10 +287,9 @@ Move vert_play(int col, const std::vector<int>& rows, uint16_t score = 0) {
   return lane_play(false, col, rows, score);
 }
 
-// The exact value of forcing `m` as the solving side's first move in position
-// `p`, scored by `control` (a solver whose configuration the caller trusts):
-// the terminal spread when `m` ends the game, else the negation of the control
-// solver's full-window value for the resulting child position.
+// The exact value of forcing `m` as the first move in `p`, with the rest scored
+// by `control`, a full-window solver the caller trusts. Used to accept a
+// divergent best move only when it is a true tie.
 int32_t forced_move_value(const Dictionary& d, const EndgamePos& p, const Move& m,
                           EndgameSolver& control) {
   const RefState s = make_ref_state(p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0);
@@ -303,23 +302,18 @@ int32_t forced_move_value(const Dictionary& d, const EndgamePos& p, const Move& 
   return -r.value;
 }
 
-// What one A/B batch cost each way: total nodes searched with outplay futility
-// pruning on, and over the same positions with it off.
+// Total nodes one A/B batch searched with out-play futility pruning on and off.
 struct PruningNodes {
   uint64_t pruned = 0;
   uint64_t unpruned = 0;
 };
 
-// A/B one batch of random endgames with futility pruning on vs off at full
-// window and kRefDepth (so every line resolves and no playout leaf is
-// consulted): the pruning must not change the value. The best move must either
-// be identical or a proven tie: the scheme reorders moves (the ordering cap,
-// and the fail-low bounds root re-ordering sorts by), so it can legitimately
-// settle on a different optimum among equal-valued moves -- a divergent best
-// move is accepted only if the control solver credits it with the same optimal
-// value when forced. Node counts are returned per batch rather than compared
-// per position: a reordering scheme can shift an individual position's node
-// count either way. Failures use EXPECT, so all are reported.
+// Solves a batch of random endgames with futility pruning on and off, at full
+// window and depth so every line resolves. The value must not change. The best
+// move may differ, because pruning reorders moves and can settle on another
+// equal-valued optimum, but only if the control solver confirms it is a tie.
+// Node counts are summed rather than compared per position, since reordering
+// can shift one position's count either way.
 PruningNodes check_pruning_ab(const Dictionary& d, unsigned seed, int count) {
   std::mt19937 rng(seed);
   PruningNodes nodes;
@@ -347,8 +341,8 @@ PruningNodes check_pruning_ab(const Dictionary& d, unsigned seed, int count) {
   return nodes;
 }
 
-// The batch's search-cost win, in the test output where a regression that
-// silently defeats the pruning is visible as the cut shrinking towards zero.
+// Prints the batch's node saving, so a regression that quietly defeats the
+// pruning shows up as the cut shrinking towards zero.
 void report_pruning_cut(const char* label, const PruningNodes& nodes) {
   std::printf("  outplay-futility nodes (%s): %llu pruned vs %llu unpruned (%.1f%% cut)\n", label,
               static_cast<unsigned long long>(nodes.pruned),
@@ -371,10 +365,9 @@ TEST(EndgameBoardUndo, RoundtripRealLexicon) {
   roundtrip_random_games(d, 0xBEEF01u, /*games=*/8, /*steps=*/14);
 }
 
-// The solver's exact value must match the brute-force reference over many
-// randomized small endgames, for both sides to move. With max_plies >= kRefDepth
-// every line resolves to a real game end, so the leaf playout is never consulted
-// and the two searches must agree exactly.
+// With max_plies >= kRefDepth every line reaches a real game end and the leaf
+// playout is never consulted, so the solver must match the brute-force
+// reference exactly, for either side to move.
 TEST(EndgameSolver, DifferentialVsBruteForce) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -390,7 +383,7 @@ TEST(EndgameSolver, DifferentialVsBruteForce) {
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
     ASSERT_EQ(r.value, ref) << "position " << i << " (solving side to move)";
 
-    // Other parity: opponent's rack/score becomes the side to move.
+    // The same position with the opponent to move.
     solver.clear();
     const EndgameResult r2 =
       solver.solve({&d, p.board, p.opp_rack, p.my_rack, p.opp_score, p.my_score, 0},
@@ -403,15 +396,15 @@ TEST(EndgameSolver, DifferentialVsBruteForce) {
   std::cout << "  differential-checked " << checked << " endgames\n";
 }
 
-// A hand-picked position where an out-in-one exists and its 2x-remaining bonus
-// makes it the optimal play. Verifies the exact value arithmetic and that the
-// chosen move empties the rack.
+// A position where going out in one, with its bonus of twice the opponent's
+// rack, is optimal. Checks the value arithmetic and that the move empties the
+// rack.
 TEST(EndgameSolver, OutInOneOptimal) {
   Dictionary d = tiny_dict();
   Board b;  // empty board: "GO" opens across the center and empties the rack
 
   const Rack my = rack_from("GO");
-  const Rack opp = rack_from("BD");  // no tiny-dict word: opponent is stuck
+  const Rack opp = rack_from("BD");
   const int my_score = 30, opp_score = 25;
 
   const std::vector<Move> plays = MoveGenerator(b, d).generate(my);
@@ -425,11 +418,11 @@ TEST(EndgameSolver, OutInOneOptimal) {
   EXPECT_EQ(r.value, expected);
   EXPECT_EQ(r.value, ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth));
   ASSERT_EQ(r.best.type(), MoveType::PLAY);
-  EXPECT_EQ(r.best.num_glyphs(), my.size());  // the out play
+  EXPECT_EQ(r.best.num_glyphs(), my.size());
 }
 
-// Neither side can play: two passes end the game as a stalemate, and each side
-// subtracts its own remaining tiles.
+// Neither side can play, so two passes end the game and each side loses the
+// value of its own tiles.
 TEST(EndgameSolver, StalematePassPass) {
   Dictionary d = tiny_dict();
   Board b;
@@ -449,14 +442,13 @@ TEST(EndgameSolver, StalematePassPass) {
   EXPECT_EQ(r.value, ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth));
 }
 
-// One side is stuck while the other plays out over more than one turn. The
-// solver's exact value matches the reference and beats what any single move can
-// secure, since going out requires multiple plays.
+// The opponent can never play. The solver's value must match the reference and
+// beat passing immediately.
 TEST(EndgameSolver, StuckOpponentMultiTurnOut) {
   Dictionary d = tiny_dict();
   Board b;
-  const Rack my = rack_from("CATS");  // needs multiple turns to shed all tiles
-  const Rack opp = rack_from("VW");   // stuck: no legal play, ever
+  const Rack my = rack_from("CATS");
+  const Rack opp = rack_from("VW");  // V and W are in no tiny_dict word
   const int my_score = 10, opp_score = 8;
 
   ASSERT_TRUE(MoveGenerator(b, d).generate(opp).empty());
@@ -466,17 +458,12 @@ TEST(EndgameSolver, StuckOpponentMultiTurnOut) {
     solver.solve({&d, b, my, opp, my_score, opp_score, 0}, {kBigBudget, 12, true});
   const int32_t ref = ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth);
   EXPECT_EQ(deep.value, ref);
-  // No single opening play empties this 4-tile rack (the longest tiny-dict word
-  // reachable here is 4 letters only via the board), so the optimal line spans
-  // multiple turns; confirm the value strictly beats a here-and-now pass.
   const int32_t pass_now = (my_score - my.point_value()) - (opp_score - opp.point_value());
   EXPECT_GT(deep.value, pass_now);
 }
 
-// Depth-1 play is greedy; deeper search can find a higher-value hold-back. Scan
-// randomized positions for one where the greedy first move is provably
-// suboptimal (optimal play after it yields less than the true optimum) and
-// assert the deep solve's exact value matches the reference.
+// A depth-1 solve is greedy. Scans for a position where its move is provably
+// suboptimal, and checks that the deep solve plays something else.
 TEST(EndgameSolver, GreedyHoldbackSuboptimal) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -500,7 +487,6 @@ TEST(EndgameSolver, GreedyHoldbackSuboptimal) {
     const int32_t greedy_true = ref_value_after_first(p.board, d, p.my_rack, p.opp_rack, p.my_score,
                                                       p.opp_score, 0, greedy.best, kRefDepth);
     if (greedy_true < ref) {
-      // The greedy first move genuinely forfeits value a deeper hold-back keeps.
       EXPECT_NE(greedy.best, deep.best);
       found = true;
     }
@@ -508,8 +494,8 @@ TEST(EndgameSolver, GreedyHoldbackSuboptimal) {
   ASSERT_TRUE(found) << "no greedy-suboptimal position found in the scan";
 }
 
-// Identical inputs and budget must produce identical results, both across a
-// clear() on the same solver and against a freshly constructed solver.
+// Identical inputs give identical results, after a clear() and on a fresh
+// solver.
 TEST(EndgameSolver, Determinism) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xD37E211Du);
@@ -533,23 +519,19 @@ TEST(EndgameSolver, Determinism) {
   }
 }
 
-// The node budget is a hard cap across every pass a solve runs (class pass,
-// spread pass, verification probes): nodes spent never exceed it by more than
-// one greedy playout's plies -- the overshoot before the next negamax entry
-// detects exhaustion -- under either objective. A legal move comes back even at
-// absurdly small budgets, where depth_completed may be 0.
+// The node budget caps every pass of a solve together. It can be overshot only
+// by one greedy playout, which runs before the next negamax entry notices the
+// budget is spent. A legal move comes back even at tiny budgets.
 //
-// Depth and nodes are deliberately not asserted monotone in the budget. Both
-// objectives fork control flow at budget-dependent thresholds (the class pass
-// proves or aborts at its half-budget cap, and what the fallback then reports
-// comes from a different window), so both can legitimately report less depth at
-// a larger budget.
+// Depth and nodes are not monotone in the budget, so they are not asserted.
+// Control flow forks at budget-dependent thresholds (the class pass proves or
+// gives up at half the budget, and the fallback searches a different window),
+// so a larger budget can legitimately report less depth.
 TEST(EndgameSolver, NodeBudget) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xB0DA711Eu);
   EndgameSolver solver;
-  // One playout can run past the cap before the abort lands (kMaxPlayout = 40
-  // plies), plus the detecting node itself.
+  // One playout of up to 40 plies (kMaxPlayout), plus the detecting node.
   constexpr uint64_t kSlack = 41;
 
   for (int i = 0; i < 10; ++i) {
@@ -563,7 +545,6 @@ TEST(EndgameSolver, NodeBudget) {
                        {budget, 12, spread_matters});
         EXPECT_LE(r.nodes, budget + kSlack)
           << "budget " << budget << " position " << i << " spread_matters " << spread_matters;
-        // The returned move is always legal: a pass or a generated play.
         if (r.best.type() != MoveType::PASS) {
           EXPECT_TRUE(legal.count(move_key(r.best)) > 0)
             << "budget " << budget << " position " << i << " spread_matters " << spread_matters;
@@ -573,10 +554,9 @@ TEST(EndgameSolver, NodeBudget) {
   }
 }
 
-// A position with more root moves than the node budget provably cannot complete
-// its first iteration, so solve() declines it up front: no nodes are spent,
-// depth_completed is 0, and the returned move is the statically best-estimated
-// root move (still legal).
+// A position with more root moves than budget cannot finish its first
+// iteration, so solve() declines it without spending nodes and returns a legal
+// root move chosen statically.
 TEST(EndgameSolver, DeclinesRichPositionsBeyondBudget) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xDEC11983u);
@@ -587,8 +567,7 @@ TEST(EndgameSolver, DeclinesRichPositionsBeyondBudget) {
     const std::vector<Move> plays = MoveGenerator(p.board, d).generate(p.my_rack);
     if (plays.empty()) continue;
     solver.clear();
-    // Root moves are the plays plus the pass, so a budget of plays.size() falls
-    // one node short of the first iteration.
+    // The root moves are the plays plus a pass, so this budget is one short.
     const EndgameResult r = solver.solve(
       {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {plays.size(), 12, true});
     EXPECT_EQ(r.depth_completed, 0) << "position " << i;
@@ -601,11 +580,9 @@ TEST(EndgameSolver, DeclinesRichPositionsBeyondBudget) {
   ASSERT_GT(checked, 0);
 }
 
-// The transposition table is spread-rebased, so entries survive across turns. A
-// solve, then applying the PV move plus a reply, then solving again must not
-// crash and must return consistent values: the child position's value from the
-// opponent's perspective equals the negated parent value when the parent solve
-// was exact.
+// Transposition-table entries store spread relative to the root, so they stay
+// valid across turns. Solving a position, then the child after its best move
+// on the warm table, must give the child the negated parent value.
 TEST(EndgameSolver, TTReuseAcrossTurns) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x7700FACEu);
@@ -616,29 +593,23 @@ TEST(EndgameSolver, TTReuseAcrossTurns) {
       solver.solve({&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0},
                    {kBigBudget, kRefDepth, true});
 
-    // Apply the parent's best move; if it ends the game there is no child solve.
     RefState s = make_ref_state(p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0);
     bool over = false;
     const RefState after = ref_apply(s, parent.best, over);
     if (over) continue;
 
-    // Reuse the warm TT: solve the child from the opponent's perspective.
     const EndgameResult child = solver.solve({&d, after.board, after.racks[1], after.racks[0],
                                               after.scores[1], after.scores[0], after.scoreless},
                                              {kBigBudget, kRefDepth, true});
-    // The child's optimal value (opponent to move) is the negation of the value
-    // the parent assigned to reaching it, i.e. the parent's optimum.
     EXPECT_EQ(child.value, -parent.value);
   }
 }
 
-// first_win pins the root window to (kFirstWinAlpha, kFirstWinBeta), so the
-// search only has to resolve the win/draw/loss class instead of the exact
-// spread. Over many random endgames, the wld value's class matches the
-// brute-force reference's sign, and whenever the position is a proven win or
-// draw the chosen move exactly preserves that class under optimal play by both
-// sides afterward (a proven loss makes every root move losing, so there is no
-// per-move claim to check there).
+// With spread_matters off the solve searches the window (kFirstWinAlpha,
+// kFirstWinBeta), which resolves only the win/draw/loss class. The class must
+// match the brute-force reference, and in a won or drawn position the chosen
+// move must keep that class under optimal play. (In a lost position every move
+// loses, so there is nothing to check per move.)
 TEST(EndgameSolver, FirstWinPreservesDecidedOutcomes) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -677,9 +648,8 @@ TEST(EndgameSolver, FirstWinPreservesDecidedOutcomes) {
             << " draw, " << losses << " loss\n";
 }
 
-// The first-win window is narrower than the full (-inf, +inf) window, so
-// pruning is never worse: the same batch of positions spends no more total
-// search effort under first_win than under a full-window solve.
+// The class-only window is narrower than the full window, so over a batch it
+// never searches more nodes.
 TEST(EndgameSolver, FirstWinSearchesNoMoreNodes) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -702,10 +672,9 @@ TEST(EndgameSolver, FirstWinSearchesNoMoreNodes) {
   EXPECT_LE(wld_nodes, full_nodes);
 }
 
-// Whenever a full-window solve reports its value as proven, that value is the
-// exact game-theoretic spread and must equal the brute-force reference. The
-// tiny endgames here terminate well within kRefDepth, so the proof fires on the
-// clear majority of them -- the bit is not vacuously false.
+// A value reported as proven is exact and must equal the brute-force
+// reference. These endgames end well within kRefDepth, so most solves prove,
+// and the check is not vacuous.
 TEST(EndgameSolver, ProvenMatchesBruteForce) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -729,14 +698,11 @@ TEST(EndgameSolver, ProvenMatchesBruteForce) {
   std::cout << "  proven " << proven << "/" << checked << " endgames\n";
 }
 
-// The iterative-deepening early exit returns exactly what stopping at the proof
-// depth would: capping max_plies at the early-exit run's depth_completed runs
-// the identical iterations, so value, best move, and node count all match. And
-// because the proof depth is far below the kRefDepth horizon, the full-horizon
-// solve spends no more nodes than the shallow depth-capped one -- the proof
-// truncated the deepening. Run without spread_matters: its single pass makes
-// "the same iterations up to the proof depth" well-defined, while the
-// spread_matters driver's two passes each deepen on their own schedule.
+// Iterative deepening stops once the value is proven. That must return exactly
+// what capping max_plies at the proof depth returns: the same iterations, so
+// the same value, best move and node count. Runs with spread_matters off,
+// whose single pass makes "the same iterations" well-defined; with it on, two
+// passes deepen on their own schedules.
 TEST(EndgameSolver, EarlyExitPreservesResults) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -764,12 +730,10 @@ TEST(EndgameSolver, EarlyExitPreservesResults) {
   std::cout << "  early-exit truncated " << truncated << "/" << checked << " solves\n";
 }
 
-// The short-circuit demonstrably fires and demonstrably pays: on positions
-// whose whole game tree ends within a few plies (1-tile racks: every line is
-// an out, a pass-out, or a pass-pass stalemate), the solve is proven at a
-// shallow depth, and an identical solve with the short-circuit disabled keeps
-// deepening over the same tiny tree -- same value, same move, strictly more
-// nodes. Random 2-tile endgames then quantify the aggregate saving.
+// The proof early exit fires and saves nodes. With 1- and 2-tile racks the
+// game tree ends within a few plies, so solves prove shallow, while a solver
+// with the early exit disabled keeps deepening to the ply cap for the same
+// value.
 TEST(EndgameSolver, ProofShortCircuitSavesNodes) {
   Dictionary d = tiny_dict();
   EndgameSolver on;
@@ -789,13 +753,11 @@ TEST(EndgameSolver, ProofShortCircuitSavesNodes) {
       {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {kBigBudget, 25, true});
     ASSERT_EQ(a.value, b.value) << "position " << i;
     if (!(a.best == b.best)) {
-      // The short-circuit changes how many narrow-window class-pass iterations
-      // run before the spread pass, and a root beta cutoff leaves the moves it
-      // skips stale-ranked, so a different iteration count can reorder the root
-      // and settle on a different equal-optimal move. A divergent best is
-      // accepted only if a fresh control solver credits it with the same exact
-      // value when forced (a true tie); a fresh solver keeps the measured
-      // solvers' warm tables untouched.
+      // The early exit changes how many class-pass iterations run, and the root
+      // cutoff leaves skipped moves ranked by stale values, so the two solvers
+      // may settle on different equal-valued moves. A divergent best must be a
+      // true tie. The control is a fresh solver so the measured solvers' tables
+      // stay untouched.
       EndgameSolver control;
       EXPECT_EQ(forced_move_value(d, p, a.best, control), b.value)
         << "position " << i << ": divergent best move is not a tie";
@@ -805,21 +767,18 @@ TEST(EndgameSolver, ProofShortCircuitSavesNodes) {
     ++checked;
     if (!a.proven) continue;
     ++proven;
-    // The proof landed well below the horizon and the disabled control kept
-    // deepening past it: the short-circuit saved real nodes on this position.
     EXPECT_LT(a.depth_completed, 25) << "position " << i;
     EXPECT_LT(a.nodes, b.nodes) << "position " << i;
     EXPECT_EQ(b.depth_completed, 25) << "position " << i;
   }
   ASSERT_GT(proven, checked / 2) << "shallow endgames should mostly be provable";
-  EXPECT_LT(nodes_on * 2, nodes_off);  // the short-circuit at least halves the batch
+  EXPECT_LT(nodes_on * 2, nodes_off);  // at least halves the batch's nodes
   std::cout << "  proof short-circuit: " << proven << "/" << checked << " proven, nodes "
             << nodes_on << " vs " << nodes_off << " without early exit\n";
 }
 
-// In the first_win window a proven early exit settles the win/draw/loss class:
-// the wld value's sign matches the brute-force reference's, and the narrower
-// window plus its earlier proof never search more nodes than the full window.
+// With spread_matters off, a proven solve's sign matches the reference's, and
+// never costs more nodes than the full-window solve.
 TEST(EndgameSolver, WldEarlyExitSettlesClass) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -851,11 +810,10 @@ TEST(EndgameSolver, WldEarlyExitSettlesClass) {
   std::cout << "  wld-proven " << proven << "/" << checked << " endgames\n";
 }
 
-// Every class-proven solve carries a valid proof certificate: starting from
-// the returned best move, every entry is legal in its position (regenerated
-// and matched exactly), the line ends the game under the solver's rules, and
-// the final spread's class is the proven class. Checked across objectives and
-// budgets.
+// Every class-proven solve carries a valid certificate: after the best move,
+// each entry is a legal move in its position, the line ends the game under the
+// solver's rules, and the final spread has the proven class. Checked with
+// spread_matters on and off, at a starved and an unlimited budget.
 TEST(EndgameSolver, ContinuationCertificateIsSound) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -878,8 +836,7 @@ TEST(EndgameSolver, ContinuationCertificateIsSound) {
     RefState st = make_ref_state(p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0);
     bool over = false;
     st = ref_apply(st, r.best, over);
-    // A best move that itself ends the game needs no continuation; otherwise
-    // the certificate must be present and finish the game.
+    // A best move that ends the game needs no certificate.
     if (!over) {
       ASSERT_FALSE(r.continuation.empty())
         << "position " << i << ": class proven but no certificate";
@@ -904,11 +861,10 @@ TEST(EndgameSolver, ContinuationCertificateIsSound) {
             << " class-proven endgames (the rest end with the chosen move)\n";
 }
 
-// At a budget large enough to prove everything, the lexicographic objective is
-// exactly the spread objective: the class pass proves the class, the spread
-// pass proves the exact optimum, and an exact optimum's sign is its class. The
-// two must agree on value, on the proven class (which must match the
-// brute-force reference's sign), and on the move up to equal-valued ties.
+// At an unlimited budget a spread_matters solve proves every position, and its
+// proven class matches the reference's sign. The two solvers here are
+// configured identically, so the value and move comparisons between them
+// check only determinism across fresh solvers.
 TEST(EndgameSolver, LexicographicMatchesSpreadAtFullBudget) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x1E0C0DE5u);
@@ -933,11 +889,10 @@ TEST(EndgameSolver, LexicographicMatchesSpreadAtFullBudget) {
   }
 }
 
-// THE gate for "never sacrifice the class for points": under constrained
-// budgets, whenever a lexicographic solve reports a proven class, the move it
-// returns preserves that class under optimal play by both sides afterward (a
-// proven loss exempts itself: every move loses). The scan also checks the
-// proven class against the brute-force reference.
+// The gate for "never sacrifice the class for points". With spread_matters on
+// and constrained budgets, whenever a solve proves a class, its move must keep
+// that class under optimal play, and the class must match the reference. (In a
+// lost position every move loses, so there is nothing to check per move.)
 TEST(EndgameSolver, LexicographicPreservesProvenClass) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -945,7 +900,7 @@ TEST(EndgameSolver, LexicographicPreservesProvenClass) {
   int class_proven = 0, checked = 0;
   for (int i = 0; i < 120; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
-    const uint64_t budget = 60 + 140 * (i % 5);  // 60..620: from starved to roomy
+    const uint64_t budget = 60 + 140 * (i % 5);  // 60..620, starved to roomy
     solver.clear();
     const EndgameResult r = solver.solve(
       {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0}, {budget, kRefDepth, true});
@@ -965,9 +920,7 @@ TEST(EndgameSolver, LexicographicPreservesProvenClass) {
   std::cout << "  lexicographic class-proven " << class_proven << "/" << checked << " endgames\n";
 }
 
-// proven_class is reported consistently across objectives: at full budget both
-// the spread and first-win objectives prove these tiny endgames, and the class
-// each reports matches the brute-force reference's sign.
+// With spread_matters on or off, a proven class matches the reference's sign.
 TEST(EndgameSolver, ProvenClassMatchesReference) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -990,20 +943,17 @@ TEST(EndgameSolver, ProvenClassMatchesReference) {
   }
 }
 
-// THE soundness gate for opponent-outplay futility pruning, and the guard on
-// what it buys. Over a large random batch (tiny dictionary, and the real
-// lexicon when installed) solving with pruning on and off must agree exactly on
-// value and best move: a wrong halo-survival classification, a stale
-// incrementally-maintained out-play entry, or a wrong U(m) bound would prune a
-// mover move that mattered and change one of them. Pruning must also never
-// search more nodes than its control, and on the real lexicon it must search
-// strictly fewer: the same A/B solves already measure that, so pinning the
-// search-cost win costs nothing beyond the comparison, and a regression that
-// silently defeats the pruning fails here rather than passing as a merely sound
-// no-op. The bar sits on the real-lexicon batch because that is where the win
-// is large (a quarter of the nodes) rather than incidental -- the tiny
-// dictionary's boards are too bare for the pruning to bite, and a few hundred
-// nodes either way there says nothing about the scheme.
+// The soundness gate for opponent out-play futility pruning, and the check on
+// what it saves. With pruning on and off, solves must agree on value and on
+// the best move up to ties. A wrong halo-survival classification, a stale
+// incrementally maintained out-play entry, or a wrong upper bound would prune
+// a move that mattered and change one of them.
+//
+// Pruning must never search more nodes in aggregate, and on the real lexicon
+// it must search strictly fewer, so a regression that quietly disables it
+// fails here. The strict bar applies only to the real lexicon, where pruning
+// saves around a quarter of the nodes; the tiny dictionary's boards are too
+// bare for it to bite.
 TEST(EndgameSolver, OutplayFutilityPruningIsSound) {
   const Dictionary tiny = tiny_dict();
   const PruningNodes tiny_nodes = check_pruning_ab(tiny, 0x0F0DD5EAu, 200);
@@ -1023,9 +973,9 @@ TEST(EndgameSolver, OutplayFutilityPruningIsSound) {
   }
 }
 
-// collect_rack_outplays keeps only the rack-emptying plays, ranked by score;
-// best_surviving_score reports the best one a query move provably leaves
-// intact, and assign_surviving derives a child set by the same halo filter.
+// collect_rack_outplays keeps only the rack-emptying plays, best score first;
+// best_surviving_score is the best one a given move provably leaves intact;
+// assign_surviving builds a child set with the same halo filter.
 TEST(OutplaySet, CollectQueryFilter) {
   Board b;
   std::vector<Move> plays;
@@ -1035,36 +985,29 @@ TEST(OutplaySet, CollectQueryFilter) {
   OutplaySet outs;
   collect_rack_outplays(b, plays, /*rack_size=*/2, outs);
   ASSERT_EQ(outs.size(), 2u);
-  EXPECT_EQ(outs[0].move.score(), 30);  // sorted by descending score
+  EXPECT_EQ(outs[0].move.score(), 30);
 
-  // A pass places nothing, so every out-play survives and the best score wins.
   EXPECT_EQ(best_surviving_score(outs, Move::pass()), 30);
-  // A move elsewhere on the board disturbs neither out-play.
-  EXPECT_EQ(best_surviving_score(outs, horiz_play(7, {6, 7, 8})), 30);
-  // Occupying the in-line extension cell of the top out-play kills it; the
-  // bottom one, untouched, survives.
+  EXPECT_EQ(best_surviving_score(outs, horiz_play(7, {6, 7, 8})), 30);  // far from both
+  // (2,3) extends the top out-play's word, so only the bottom one survives.
   EXPECT_EQ(best_surviving_score(outs, vert_play(3, {2})), 20);
-  // A move reaching into both halos leaves no survivor.
   EXPECT_EQ(best_surviving_score(outs, vert_play(3, {2, 12})), kNoOutplaySurvivor);
 
-  // The child set after that top-killing move holds exactly the bottom out-play.
   OutplaySet child;
   assign_surviving(outs, vert_play(3, {2}), child);
   ASSERT_EQ(child.size(), 1u);
   EXPECT_EQ(child[0].move.score(), 20);
 
-  // A play list with no rack-emptying play yields an empty set.
   std::vector<Move> singles;
   singles.push_back(vert_play(9, {7}, 50));
   collect_rack_outplays(b, singles, /*rack_size=*/2, outs);
   EXPECT_TRUE(outs.empty());
 }
 
-// LeaveOutplays buckets a node's own play list by used-tile multiset: the
-// out-plays it hands the child after move m are exactly the plays that spend
-// m's leave, minus those m itself disturbs. All plays here spend 'A's from an
-// "AA" rack, so a one-tile play's leave (one A) is emptied by the other
-// one-tile plays and the whole rack by the two-tile play.
+// LeaveOutplays buckets a node's play list by the tiles each play uses. After
+// move m, the child's out-plays are the plays that spend exactly m's leave,
+// minus those m disturbs. With an "AA" rack, a one-tile play leaves one A,
+// which the other one-tile plays spend.
 TEST(LeaveOutplays, BucketsByLeave) {
   Board b;
   const Rack rack = rack_from("AA");
@@ -1074,60 +1017,53 @@ TEST(LeaveOutplays, BucketsByLeave) {
   plays.push_back(horiz_play(11, {4}, 12));   // spends one A
   LeaveOutplays lo(b, rack, plays);
 
-  // After the one-tile play at (7, 9), the leave is a single A: its out-plays
-  // are the other one-tile plays that survive it -- (11, 4) is far away, and
-  // the play's own placement always touches its own halo.
+  // After the play at (7,9), the only surviving one-tile play is the far-away
+  // (11,4); a play always disturbs itself.
   OutplaySet out;
   lo.collect_after(plays[1], out);
   ASSERT_EQ(out.size(), 1u);
   EXPECT_EQ(out[0].move.score(), 12);
 
-  // A pass keeps the whole rack, so its bucket is the full-rack out-plays.
   lo.collect_after(Move::pass(), out);
   ASSERT_EQ(out.size(), 1u);
   EXPECT_EQ(out[0].move.score(), 30);
 
-  // The two-tile play empties the rack: no leave, no out-plays.
+  // The two-tile play empties the rack.
   lo.collect_after(plays[0], out);
   EXPECT_TRUE(out.empty());
 }
 
-// The halo of a candidate out-play covers every cell whose occupation by a reply
-// could stop it: its own squares, the cross-word neighbors of its placed tiles,
-// and the in-line cell just beyond each end of its word.
+// An out-play's halo is every cell whose occupation by a reply could stop it:
+// its own squares, the cross-word neighbours of its placed tiles, and the cell
+// just beyond each end of its word.
 TEST(OutplayHalo, CoversBlockingCells) {
-  Board b;  // empty: the span never extends through existing tiles here
+  Board b;
   const OutplayHalo h = build_outplay_halo(b, horiz_play(7, {7, 8}));
-  EXPECT_TRUE(h.contains(7, 7));  // placed square
-  EXPECT_TRUE(h.contains(7, 8));  // placed square
-  EXPECT_TRUE(h.contains(6, 7));  // cross-word neighbor above a placed tile
-  EXPECT_TRUE(h.contains(8, 8));  // cross-word neighbor below a placed tile
-  EXPECT_TRUE(h.contains(7, 6));  // in-line cell before the word
-  EXPECT_TRUE(h.contains(7, 9));  // in-line cell after the word
+  EXPECT_TRUE(h.contains(7, 7));  // placed
+  EXPECT_TRUE(h.contains(7, 8));  // placed
+  EXPECT_TRUE(h.contains(6, 7));  // cross-word neighbour above
+  EXPECT_TRUE(h.contains(8, 8));  // cross-word neighbour below
+  EXPECT_TRUE(h.contains(7, 6));  // before the word
+  EXPECT_TRUE(h.contains(7, 9));  // after the word
 }
 
-// When a placed cell sits at the end of an existing perpendicular run, the
-// cross-word it forms includes the whole run, so the cells a reply can rewrite
-// that cross-word from are the run's far ends -- not the (occupied) immediate
-// neighbors. The halo must reach past the run.
+// A tile placed at the end of an existing perpendicular run forms a cross-word
+// that includes the whole run, so a reply can change that word only at the
+// run's far end. The halo must reach past the run.
 TEST(OutplayHalo, CoversPerpendicularRunEnds) {
   Board b;
-  b.apply(vert_play(7, {3, 4, 5}));  // an existing run at rows 3-5 of column 7
-  // The out-play places at (6, 7), directly beneath the run: its cross-word
-  // there is rows 3-6 of column 7.
+  b.apply(vert_play(7, {3, 4, 5}));
+  // Placing at (6,7) forms the cross-word on rows 3-6 of column 7.
   const OutplayHalo h = build_outplay_halo(b, horiz_play(6, {7}));
-  EXPECT_TRUE(h.contains(2, 7));  // just past the run's far (top) end
-  EXPECT_TRUE(h.contains(7, 7));  // just past the near (bottom) end
+  EXPECT_TRUE(h.contains(2, 7));  // past the top of the run
+  EXPECT_TRUE(h.contains(7, 7));  // past the bottom
 }
 
-// THE soundness gate for the root beta cutoff: over a large random batch of
-// first-win (spread_matters=false) solves, whenever the solve proves a class it
-// must equal the brute-force reference's sign, and for a proven win or draw the
-// returned move must preserve that class under optimal play by both sides
-// afterward (a proven loss makes every move class-equal, so there is no per-move
-// claim to check). The cutoff stops a root scan the instant a fail-high settles
-// the class, so a cutoff that dropped a move that mattered would surface here as
-// a wrong class or a class-forfeiting best move.
+// The soundness gate for the root beta cutoff, which stops the root scan as
+// soon as a fail-high settles the class. With spread_matters off, a proven
+// class must match the reference, and in a won or drawn position the move must
+// keep the class. A cutoff that skipped a move that mattered would fail one of
+// these.
 TEST(EndgameSolver, RootCutoffPreservesVerdicts) {
   Dictionary d = tiny_dict();
   EndgameSolver solver;
@@ -1156,15 +1092,11 @@ TEST(EndgameSolver, RootCutoffPreservesVerdicts) {
   std::cout << "  root-cutoff class-proven " << class_proven << "/" << checked << " endgames\n";
 }
 
-// The root cutoff demonstrably pays on won blowouts: scan for random endgames
-// the reference scores as a decisive win, where a top-ordered winning root move
-// fails high early and the cutoff skips the rest of the root. A solver with the
-// cutoff disabled scans every root move at every depth instead. The cutoff is
-// never worse per position (it only ever skips work), it strictly wins on most
-// of the batch, and it cuts the aggregate node count. A blowout can tie when its
-// fail-high lands on the last-scanned root move at the proving depth (nothing
-// left to skip), which is why the strict claim is the batch total, not each
-// position. Both solvers must still prove the same (won) class.
+// The root cutoff saves nodes on decisive wins, where a winning root move
+// fails high early and the rest of the root is skipped. It only ever skips
+// work, so it is never worse per position. It can tie when the fail-high lands
+// on the last root move scanned, so the strict saving is asserted on most
+// positions and on the batch total, not on each one.
 TEST(EndgameSolver, RootCutoffSavesNodes) {
   Dictionary d = tiny_dict();
   EndgameSolver on, off;
@@ -1176,17 +1108,17 @@ TEST(EndgameSolver, RootCutoffSavesNodes) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/2 + (i % 3));
     const int32_t ref =
       ref_solve(p.board, d, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0, kRefDepth);
-    if (ref < 30) continue;  // want a decisive win whose fail-high lands early
+    if (ref < 30) continue;  // only decisive wins
     const EndgameState state = {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, 0};
     on.clear();
     off.clear();
     const EndgameResult a = on.solve(state, {kBigBudget, kRefDepth, /*spread_matters=*/false});
     const EndgameResult b = off.solve(state, {kBigBudget, kRefDepth, /*spread_matters=*/false});
-    ASSERT_EQ(a.proven_class, 1) << "position " << i;  // a blowout is a proven win
+    ASSERT_EQ(a.proven_class, 1) << "position " << i;
     ASSERT_EQ(b.proven_class, a.proven_class) << "position " << i;
     nodes_on += a.nodes;
     nodes_off += b.nodes;
-    EXPECT_LE(a.nodes, b.nodes) << "position " << i;  // the cutoff never costs more
+    EXPECT_LE(a.nodes, b.nodes) << "position " << i;
     if (a.nodes < b.nodes) ++improved;
     ++blowouts;
   }
@@ -1197,19 +1129,16 @@ TEST(EndgameSolver, RootCutoffSavesNodes) {
             << " strictly fewer): nodes " << nodes_on << " vs " << nodes_off << " without cutoff\n";
 }
 
-// THE soundness gate for root-level outplay futility pruning: over a large
-// random batch of first-win solves at budgets from starved to unlimited,
-// pruning on and off must prove the same classes, each matching the
-// brute-force reference's sign, and for a proven win or draw the pruned
-// solver's move must preserve that class under optimal play by both sides
-// afterward (a proven loss makes every move class-equal -- and a loss is the
-// one verdict root pruning can return without searching a single move, so the
-// scan requires losses to occur). A wrong root bound would either prune a
-// class-saving move (wrong class or class-forfeiting best) or fold an unsound
-// bound into a fail-low (wrong class versus the reference). At the unlimited
-// budget both solves must prove; there the pruning must also not cost nodes in
-// aggregate (per-position counts can shift either way: pruned moves re-rank by
-// their bounds, so later iterations search the root in a different order).
+// The soundness gate for root-level out-play futility pruning. With
+// spread_matters off, at a starved and an unlimited budget, both solvers' proven
+// classes must match the reference, and in a won or drawn position the pruned
+// solver's move must keep the class. A wrong root bound would either prune a
+// class-saving move or turn an unsound bound into a false loss.
+//
+// A loss is the one verdict root pruning can return without searching, so the
+// scan must contain proven losses. At the unlimited budget pruning must not
+// cost nodes in aggregate; per position the count can move either way, because
+// pruned moves are re-ranked by their bounds.
 TEST(EndgameSolver, RootFutilityPruningIsSound) {
   Dictionary d = tiny_dict();
   EndgameSolver on, off;
@@ -1257,19 +1186,16 @@ TEST(EndgameSolver, RootFutilityPruningIsSound) {
             << full_nodes_off << " unpruned\n";
 }
 
-// The end of the block-or-outscore chain: when no root move blocks the
-// opponent's out-plays or outscores them, the loss is proven from the bounds
-// alone, with no search below the root. Here the mover is stuck (no plays, so
-// the only root move is a pass) while the opponent holds an out-play; the pass
-// leaves that out-play alive and its bound is a loss, so a first-win solve
-// proves the loss having spent zero search nodes -- and still produces a valid
-// certificate. The control solver with root pruning disabled must reach the
-// same proven loss by actually searching.
+// When no root move can block the opponent's out-plays or outscore them, the
+// loss is proven from the bounds alone. Here the mover can only pass while the
+// opponent can go out, so a spread_matters-off solve proves the loss with zero
+// nodes searched and still produces a certificate. With root pruning disabled
+// the same proof takes search.
 TEST(EndgameSolver, RootFutilityProvesLossFromBoundsAlone) {
   Dictionary d = tiny_dict();
   Board b;
-  const Rack my = rack_from("VV");   // V appears in no tiny-dict word: pass only
-  const Rack opp = rack_from("GO");  // "GO" opens across the center and goes out
+  const Rack my = rack_from("VV");  // V is in no tiny_dict word
+  const Rack opp = rack_from("GO");
   const int my_score = 20, opp_score = 20;
   ASSERT_TRUE(MoveGenerator(b, d).generate(my).empty());
   ASSERT_NE(find_out_move(MoveGenerator(b, d).generate(opp), opp), nullptr);
@@ -1279,7 +1205,7 @@ TEST(EndgameSolver, RootFutilityProvesLossFromBoundsAlone) {
     on.solve({&d, b, my, opp, my_score, opp_score, 0}, {kBigBudget, kRefDepth, false});
   EXPECT_TRUE(a.proven);
   EXPECT_EQ(a.proven_class, -1);
-  EXPECT_EQ(a.nodes, 0u);  // the bounds settled the root; nothing was searched
+  EXPECT_EQ(a.nodes, 0u);
   EXPECT_EQ(a.best.type(), MoveType::PASS);
   EXPECT_FALSE(a.continuation.empty());
   EXPECT_LT(ref_solve(b, d, my, opp, my_score, opp_score, 0, kRefDepth), 0);
@@ -1290,16 +1216,14 @@ TEST(EndgameSolver, RootFutilityProvesLossFromBoundsAlone) {
     off.solve({&d, b, my, opp, my_score, opp_score, 0}, {kBigBudget, kRefDepth, false});
   EXPECT_TRUE(c.proven);
   EXPECT_EQ(c.proven_class, -1);
-  EXPECT_GT(c.nodes, 0u);  // without root pruning the same proof takes search
+  EXPECT_GT(c.nodes, 0u);
 }
 
 namespace {
 
-// One curated endgame position, committed as a GCG under tests/data/: the
-// solver must prove the expected win/draw/loss class for the side to move
-// while expending at most `max_nodes` of a generous budget, and its
-// certificate must exist. Add cases by dropping a GCG (with a #RackN pragma
-// for the mover) into tests/data/ and appending a row.
+// A curated endgame in tests/data/. The solver must prove the expected class
+// for the side to move within `max_nodes`, with a certificate. To add a case,
+// commit a .gcg with a #RackN pragma for the mover and append a row.
 struct GcgEndgameCase {
   const char* file;
   int expected_class;  // +1 win, 0 draw, -1 loss, for the side to move
@@ -1314,8 +1238,7 @@ constexpr GcgEndgameCase kGcgEndgameCases[] = {
 
 }  // namespace
 
-// Curated GCG endgames resolve to their known class, cheaply. These run the
-// real lexicon and skip when it is not installed.
+// Needs the real lexicon; skips without it.
 TEST(EndgameGcgCases, ProvenClassAndCost) {
   const char* path = SCRIBBLEZ_DEFAULT_KWG;
   if (!std::ifstream(path).good()) GTEST_SKIP() << "no lexicon at " << path;
@@ -1346,10 +1269,9 @@ TEST(EndgameGcgCases, ProvenClassAndCost) {
   }
 }
 
-// The logical movegens count is nonzero for any real solve and never shrinks
-// with a larger budget on a fixed position: a bigger budget searches a superset
-// of the smaller budget's deterministic work (each requests a move list at the
-// same points), so it performs at least as many generations.
+// The movegens count is nonzero for a real solve and does not shrink with a
+// larger budget: a bigger budget repeats the smaller one's deterministic work
+// and then some.
 TEST(EndgameSolver, MovegensCounted) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xB16B00B5u);
@@ -1436,10 +1358,10 @@ void rack_add_move(Rack& rack, const Move& m) {
   for (int i = 0; i < m.num_glyphs(); ++i) rack.add(m.glyph(i).rack_tile());
 }
 
-// Walk random game paths and assert every PathMoveLists materialization is
-// byte-identical to a scratch generation -- including for a sibling probe
-// (make a move, materialize the child, unmake, proceed with another move),
-// the pattern a search's move scan produces.
+// Walks random game paths and checks every PathMoveLists list against a
+// scratch generation, including after a sibling probe (make a move, read the
+// child's list, unmake, continue with another move), which is the pattern a
+// search's move scan produces.
 void check_path_lists_on_random_paths(const Dictionary& d, unsigned seed, int games,
                                       int max_plies) {
   std::mt19937 rng(seed);
@@ -1462,7 +1384,6 @@ void check_path_lists_on_random_paths(const Dictionary& d, unsigned seed, int ga
         expect_moves_identical(inc, ref, "path", ply);
       }
       if (!ref.empty()) {
-        // Sibling probe.
         const Move probe = ref[rng() % ref.size()];
         pl.on_make(ply, probe);
         BoardUndo undo;
@@ -1499,10 +1420,10 @@ TEST(PathMoveLists, MatchesScratchRealLexicon) {
   check_path_lists_on_random_paths(d, 0x9A7E22u, /*games=*/6, /*max_plies=*/8);
 }
 
-// Incremental maintenance must be invisible in every solver observable: value,
-// best move, node/movegen counts, proof state, and continuation, across
-// windows and budget levels.
 namespace {
+
+// Incremental move lists must not change any solver output, with spread_matters
+// on and off, at a starved and an unlimited budget.
 
 void check_incremental_ab(const Dictionary& d, unsigned seed, int count) {
   std::mt19937 rng(seed);

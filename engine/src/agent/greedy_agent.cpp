@@ -14,8 +14,8 @@ namespace {
 
 namespace po = boost::program_options;
 
-// Built by both from_spec() and options_help(), so the parsed options and the
-// documented ones share one source of truth.
+// Shared by from_spec() and options_help(), so the parsed and documented
+// options cannot drift.
 po::options_description greedy_options(uint64_t& seed) {
   po::options_description desc;
   desc.add_options()                      //
@@ -43,9 +43,8 @@ MoveDecision GreedyAgent::make_move(const MoveRequest& req) {
     std::uniform_int_distribution<size_t> d(0, top.size() - 1);
     return *top[d(rng_)];
   }
-  // No legal plays: exchange the entire rack if the bag can support it (a
-  // deliberately naive policy -- GreedyAgent doesn't reason about leave
-  // quality, so it doesn't try to keep a good partial leave), else pass.
+  // Exchanging everything is deliberately naive: GreedyAgent has no notion of
+  // leave quality.
   if (req.bag_size >= RACK_SIZE) return Move::exchange(req.my_rack.counts());
   return Move::pass();
 }

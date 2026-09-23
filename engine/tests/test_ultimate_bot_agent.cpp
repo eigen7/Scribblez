@@ -1,23 +1,14 @@
-// Unit tests for the evidence loop (agent/evidence_loop.h) and UltimateBotAgent,
-// with the move proposal model replaced by a scripted MoveProposalService stub
-// -- no ONNX, no TensorRT, no GPU.
+// The evidence loop (agent/evidence_loop.h) and UltimateBotAgent, with the
+// move proposal model replaced by a scripted stub (no GPU). The loop sims the
+// anchor (the highest-scoring candidate) first, whatever the model says; each
+// later sim is the model's highest-gain unsimmed candidate, conditioned on the
+// sims so far, until the budget or the gain threshold stops it. The agent then
+// plays the rollouts' favourite among the simmed set.
 //
-//  * the anchor -- the highest-raw-score candidate -- is simmed first whatever
-//    the model says, and every later sim is the scripted proves-best argmax
-//    over the UNSIMMED candidates, conditioned on exactly the sims so far.
-//  * the budget (--max-sims) and the gain threshold both stop the loop; a
-//    budget of one plays the anchor with no sim and no model pass; a budget
-//    past the candidate count sims them all.
-//  * the loop's one-at-a-time sims equal, bit for bit, one batched
-//    SimRunner::run over the same candidates -- the common-random-numbers
-//    pairing the final pick and the stopping rule ride on.
-//  * the agent plays the rollouts' favourite among the simmed set, checked by
-//    replaying the decision through SimRunner with the agent's own seed.
-//  * two agents on one seed agree; the seed follows the advancing ply.
-//  * a bag-empty turn, and a sole candidate, are answered without the model.
-//  * ONE encode() carries the whole candidate set, with the move features
-//    move_set::encode_move makes of each candidate at the turn's differential,
-//    and the pre-move board row is byte-identical to the training decoder's.
+// The stub dictates each conditioned pass's gains and records the evidence it
+// was shown, so the tests check the sequence of picks directly. The model
+// contract checks (one encode per turn, move features, board row) mirror the
+// MsetSimAgent suite's.
 
 #include "agent/agent.h"
 #include "agent/evidence_loop.h"
@@ -63,11 +54,10 @@ using scribblez::testing::StubMoveProposalService;
 
 namespace {
 
-// The base input layout the stub declares.
+// The stub declares the base input layout.
 const int kInputFloats = input_floats(InputEncodingSpec{nullptr});
 
-// A gain vector over `n` candidates favouring `favoured` in that order
-// (descending), everyone else at a low constant.
+// Gains over `n` candidates, descending along `favoured`, low elsewhere.
 std::vector<float> gains_favouring(size_t n, const std::vector<int>& favoured) {
   std::vector<float> g(n, 0.1f);
   float v = 1.0f;
@@ -112,7 +102,7 @@ class UltimateBotAgentTest : public ::testing::Test {
   }
 
   // An opening turn with a non-empty opponent leave, so the position handed to
-  // the simulator carries every field the agent is responsible for filling.
+  // the simulator has every field the agent is responsible for filling.
   MoveRequest request() const {
     return MoveRequest{board_,          dict_,    my_rack_, opp_leave_, /*my_score=*/13,
                        /*opp_score=*/7, bag_size_};
@@ -147,25 +137,24 @@ TEST_F(UltimateBotAgentTest, OutOfRangeScalarParamsAreRejected) {
   EXPECT_THROW(build(3, 0.0f, 0), std::runtime_error);                     // --rollouts, lower
   EXPECT_THROW(build(3, 0.0f, SimRunner::kMaxRollouts + 1), std::runtime_error);
 
-  // The accepted boundaries, so the bounds cannot silently tighten.
+  // The accepted boundaries, so the bounds cannot tighten unnoticed.
   EXPECT_NO_THROW(build(1, 0.0f, 1));
   EXPECT_NO_THROW(build(nn::kMaxEvidence, 0.0f, SimRunner::kMaxRollouts));
 }
 
-// The agent forwards sim_horizon into its SimRunner: the runner validates the
-// horizon (pairing against the injected leaf, and the lower bound) at
-// construction, so a bad horizon is rejected.
+// The agent must forward sim_horizon to its SimRunner, which validates it at
+// construction: it needs a leaf service and must meet the minimum.
 TEST_F(UltimateBotAgentTest, TruncationHorizonIsWiredToTheRunner) {
   using scribblez::testing::StubEvalService;
   UltimateBotAgent::Params p = params();
-  p.sim_horizon = SimRunner::kMinHorizonPlies;  // a horizon with no leaf service
+  p.sim_horizon = SimRunner::kMinHorizonPlies;  // no leaf service
   EXPECT_THROW(UltimateBotAgent(p, std::make_unique<StubMoveProposalService>()),
                std::runtime_error);
   p.sim_horizon = SimRunner::kMinHorizonPlies - 1;  // below the minimum, even with a leaf
   EXPECT_THROW(UltimateBotAgent(p, std::make_unique<StubMoveProposalService>(),
                                 std::make_shared<StubEvalService>()),
                std::runtime_error);
-  p.sim_horizon = SimRunner::kMinHorizonPlies;  // a valid horizon with a leaf
+  p.sim_horizon = SimRunner::kMinHorizonPlies;
   EXPECT_NO_THROW(UltimateBotAgent(p, std::make_unique<StubMoveProposalService>(),
                                    std::make_shared<StubEvalService>()));
 }
@@ -178,9 +167,8 @@ TEST_F(UltimateBotAgentTest, TheAnchorIsSimmedFirstAndLaterSimsFollowTheConditio
   const int anchor = int(evidence::anchor_index(cands));
   const std::vector<int> picks = picks_avoiding(anchor, n, 2);
 
-  // The first conditioned pass favours picks[0], the second picks[1]. Neither
-  // is the anchor, and the anchor's gain is never the highest -- yet it is
-  // simmed first.
+  // The passes favour picks[0], then picks[1]; the anchor's gain is never the
+  // highest, yet it is simmed first.
   auto stub = std::make_unique<StubMoveProposalService>();
   StubMoveProposalService* sp = stub.get();
   sp->scripted_gains = {gains_favouring(n, {picks[0]}), gains_favouring(n, {picks[1]})};
@@ -189,15 +177,12 @@ TEST_F(UltimateBotAgentTest, TheAnchorIsSimmedFirstAndLaterSimsFollowTheConditio
   const Move played = agent.make_move(request()).move;
 
   EXPECT_EQ(sp->encode_calls, 1);
-  // sims - 1 conditioned passes: none before the anchor, one before each later
-  // sim, none after the budget is spent.
+  // One conditioned pass before each sim after the anchor.
   ASSERT_EQ(sp->condition_calls, 2);
   EXPECT_EQ(sp->seen_evidence[0], std::vector<int>{anchor});
   EXPECT_EQ(sp->seen_evidence[1], (std::vector<int>{anchor, picks[0]}));
 
-  // Replay the same decision independently: the three simmed candidates,
-  // batched from the same position with the agent's own seed, the rollouts'
-  // favourite by win rate.
+  // Replay the three sims as one batch with the agent's seed.
   const std::vector<Move> simmed = {cands[size_t(anchor)], cands[size_t(picks[0])],
                                     cands[size_t(picks[1])]};
   const std::vector<SimObservation> obs =
@@ -212,8 +197,8 @@ TEST_F(UltimateBotAgentTest, ASimmedCandidateIsNeverRepicked) {
   const int anchor = int(evidence::anchor_index(cands));
   const int runner_up = picks_avoiding(anchor, n, 1)[0];
 
-  // Every conditioned pass rates the (already simmed) anchor highest; the
-  // argmax over the UNSIMMED candidates is the runner-up.
+  // Every pass rates the already-simmed anchor highest, so the second sim must
+  // be the runner-up.
   auto stub = std::make_unique<StubMoveProposalService>();
   StubMoveProposalService* sp = stub.get();
   sp->scripted_gains = {gains_favouring(n, {anchor, runner_up}),
@@ -223,9 +208,6 @@ TEST_F(UltimateBotAgentTest, ASimmedCandidateIsNeverRepicked) {
   agent.make_move(request());
   ASSERT_EQ(sp->condition_calls, 2);
   EXPECT_EQ(sp->seen_evidence[1], (std::vector<int>{anchor, runner_up}));
-  // And the second pass, with both taken, picked neither: three distinct sims.
-  // (The third sim is not in any evidence set the stub saw; the agent's own
-  // final pick covers it in the replay test above.)
 }
 
 TEST_F(UltimateBotAgentTest, EqualGainsGoToTheEquityPreferredCandidate) {
@@ -233,8 +215,8 @@ TEST_F(UltimateBotAgentTest, EqualGainsGoToTheEquityPreferredCandidate) {
   const std::vector<Move> cands = candidates(request());
   const int anchor = int(evidence::anchor_index(cands));
 
-  // An all-zero gain vector (the stub's default): the tie falls to the lowest
-  // unsimmed index -- the static-equity order the candidates arrive in.
+  // With the stub's default all-zero gains, the tie goes to the lowest unsimmed
+  // index, i.e. the best by static equity.
   auto stub = std::make_unique<StubMoveProposalService>();
   StubMoveProposalService* sp = stub.get();
   UltimateBotAgent agent(p, std::move(stub));
@@ -249,8 +231,7 @@ TEST_F(UltimateBotAgentTest, TheGainThresholdStopsTheLoop) {
   const int n = int(cands.size());
   const int anchor = int(evidence::anchor_index(cands));
 
-  // Every predicted gain sits below the threshold: the anchor is the turn's
-  // only sim, and plays.
+  // Every gain is below the threshold, so the anchor is the only sim and plays.
   UltimateBotAgent::Params p = params();
   p.gain_threshold = 0.5f;
   auto stub = std::make_unique<StubMoveProposalService>();
@@ -261,8 +242,7 @@ TEST_F(UltimateBotAgentTest, TheGainThresholdStopsTheLoop) {
   EXPECT_TRUE(agent.make_move(request()).move == cands[size_t(anchor)]);
   EXPECT_EQ(sp->condition_calls, 1);
 
-  // At the default threshold of 0 the same gains never stop the loop: the
-  // budget does.
+  // At the default threshold of 0 only the budget stops the loop.
   p.gain_threshold = 0.0f;
   auto stub2 = std::make_unique<StubMoveProposalService>();
   StubMoveProposalService* sp2 = stub2.get();
@@ -272,8 +252,7 @@ TEST_F(UltimateBotAgentTest, TheGainThresholdStopsTheLoop) {
   agent2.make_move(request());
   EXPECT_EQ(sp2->condition_calls, p.max_sims - 1);
 
-  // A gain exactly at the threshold "reaches" it (the flag's words): the loop
-  // continues, so the bound is inclusive and cannot silently tighten.
+  // A gain equal to the threshold continues the loop: the bound is inclusive.
   p.gain_threshold = 0.5f;
   auto stub3 = std::make_unique<StubMoveProposalService>();
   StubMoveProposalService* sp3 = stub3.get();
@@ -284,8 +263,8 @@ TEST_F(UltimateBotAgentTest, TheGainThresholdStopsTheLoop) {
   EXPECT_EQ(sp3->condition_calls, 2);
 }
 
-// A non-finite gain is a broken model output, not a candidate: it would win
-// every argmax (NaN compares false) and defeat the threshold.
+// A non-finite gain is a broken model output. Left unchecked, NaN's false
+// comparisons would corrupt the argmax and slip past the threshold.
 TEST_F(UltimateBotAgentTest, ANonFiniteGainIsAHardError) {
   const std::vector<Move> cands = candidates(request());
   const int n = int(cands.size());
@@ -294,7 +273,7 @@ TEST_F(UltimateBotAgentTest, ANonFiniteGainIsAHardError) {
   p.gain_threshold = 0.5f;
   auto stub = std::make_unique<StubMoveProposalService>();
   std::vector<float> gains(size_t(n), 0.9f);
-  // On an unsimmed candidate: the anchor's own gain is never read.
+  // On an unsimmed candidate, since the anchor's gain is never read.
   gains[(evidence::anchor_index(cands) + 1) % size_t(n)] = std::numeric_limits<float>::quiet_NaN();
   stub->scripted_gains = {gains};
   UltimateBotAgent agent(p, std::move(stub));
@@ -303,9 +282,9 @@ TEST_F(UltimateBotAgentTest, ANonFiniteGainIsAHardError) {
 }
 
 TEST_F(UltimateBotAgentTest, ABudgetPastTheCandidateCountSimsThemAll) {
-  // A legal rack (the sims draw from the bag less these tiles, so it must be
-  // one the bag can supply) with no legal play in this dictionary: the
-  // candidate set is its 35 distinct exchanges -- small enough to exhaust.
+  // No legal play in this dictionary, so the candidates are the rack's 35
+  // distinct exchanges, few enough to exhaust. The bag must be able to supply
+  // the rack, since the sims draw from the bag less these tiles.
   const Rack rack = rack_from("VVWWXQ");
   const MoveRequest req{board_,          dict_,    rack, opp_leave_, /*my_score=*/13,
                         /*opp_score=*/7, bag_size_};
@@ -321,8 +300,6 @@ TEST_F(UltimateBotAgentTest, ABudgetPastTheCandidateCountSimsThemAll) {
   UltimateBotAgent agent(p, std::move(stub));
   agent.begin_game({});
   agent.make_move(req);
-  // One conditioned pass before each sim after the anchor, then nothing left
-  // to pick from.
   EXPECT_EQ(sp->condition_calls, int(cands.size()) - 1);
   EXPECT_EQ(sp->seen_evidence.back().size(), cands.size() - 1);
 }
@@ -337,10 +314,8 @@ TEST_F(UltimateBotAgentTest, ABudgetOfOnePlaysTheAnchorUnsimmed) {
   UltimateBotAgent agent(p, std::move(stub));
   agent.begin_game({});
   EXPECT_TRUE(agent.make_move(request()).move == cands[size_t(anchor)]);
-  EXPECT_EQ(sp->encode_calls, 0);  // the model was never consulted...
+  EXPECT_EQ(sp->encode_calls, 0);
   EXPECT_EQ(sp->condition_calls, 0);
-  // ...and the anchor is the highest-scoring candidate, by the rule no model
-  // can be wrong about.
   for (const Move& m : cands) EXPECT_LE(m.score(), cands[size_t(anchor)].score());
 }
 
@@ -363,8 +338,8 @@ TEST_F(UltimateBotAgentTest, OneSeedGivesOneDecision) {
 }
 
 TEST_F(UltimateBotAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
-  // A rack with no legal play and a bag too small for exchanges leaves a lone
-  // PASS candidate, which the size-1 early return plays outright.
+  // No legal play and a bag too small to exchange leave PASS as the only
+  // candidate.
   auto stub = std::make_unique<StubMoveProposalService>();
   StubMoveProposalService* sp = stub.get();
   UltimateBotAgent agent(params(), std::move(stub));
@@ -381,7 +356,8 @@ TEST_F(UltimateBotAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
 TEST_F(UltimateBotAgentTest, AnEmptyBagFallsBackToStaticEquity) {
   auto stub = std::make_unique<StubMoveProposalService>();
   StubMoveProposalService* sp = stub.get();
-  UltimateBotAgent agent(params(), std::move(stub));  // endgame budget 0: solver declines
+  // With endgame budget 0 the solver declines, and there is no bag to sim from.
+  UltimateBotAgent agent(params(), std::move(stub));
   agent.begin_game({});
   MoveRequest req{board_,          dict_,         my_rack_, opp_leave_, /*my_score=*/13,
                   /*opp_score=*/7, /*bag_size=*/0};
@@ -391,10 +367,9 @@ TEST_F(UltimateBotAgentTest, AnEmptyBagFallsBackToStaticEquity) {
 }
 
 TEST_F(UltimateBotAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
-  // Every other rollout test decides at ply 0, where sim_seed(ply_) and a
-  // hardcoded sim_seed(0) are indistinguishable. Here two moves have been
-  // observed first, so a decision seeded off a stale ply would draw different
-  // rollouts and, on a scripted pair chosen to split, play the other candidate.
+  // The other rollout tests decide at ply 0, where seeding from the current ply
+  // and a hardcoded ply 0 look the same. Here two moves are observed first, and
+  // the sim pair is chosen so the two seeds pick different candidates.
   UltimateBotAgent::Params p = params();
   p.max_sims = 2;
   const Move opening =
@@ -420,8 +395,6 @@ TEST_F(UltimateBotAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
   ASSERT_GT(n, 4);
   const int anchor = int(evidence::anchor_index(cands));
 
-  // A partner for the anchor on which the two plies disagree -- searched for,
-  // since the test proves nothing on a pair where they agree.
   const SimRunner runner(dict_, p.sim);
   const SimPosition pos = sim_position_from(req);
   int partner = -1;
@@ -429,8 +402,8 @@ TEST_F(UltimateBotAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
   for (int i = 0; i < n && partner < 0; ++i) {
     if (i == anchor) continue;
     const std::vector<Move> simmed = {cands[size_t(anchor)], cands[size_t(i)]};
-    // sim_seed is a function of the params' seed alone, so any agent over
-    // these params answers for the one under test.
+    // sim_seed depends only on the params, so a probe agent stands in for the
+    // one under test.
     UltimateBotAgent probe(p, std::make_unique<StubMoveProposalService>());
     const Move p2 = simmed[size_t(
       best_observation_index(runner.run(pos, simmed, probe.sim_seed(2)), SimObjective::kWinRate))];
@@ -453,9 +426,8 @@ TEST_F(UltimateBotAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
 }
 
 TEST_F(UltimateBotAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
-  // Second turn of the game: the opponent has opened for 10, so the pre-move
-  // differential the move features resolve is a signed non-zero number rather
-  // than the game-start 0.
+  // The opponent opened for 10, so the move features see a non-zero pre-move
+  // score differential.
   const Move opening =
     make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
                    {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
@@ -485,15 +457,14 @@ TEST_F(UltimateBotAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
   ASSERT_EQ(sp->encode_calls, 1);
   ASSERT_EQ(sp->last_moves.count, int(cands.size()));
 
-  // And that one board row is the position's own pre-move row (which the
-  // decoder cross-check separately proves is the training row).
+  // The board row is the position's pre-move row, which
+  // ThePreMoveRowMatchesTheTrainingDecoder ties to the training row.
   std::vector<float> expected_row(size_t(kInputFloats), 0.0f);
   agent.encode_board_row(req, expected_row.data());
   EXPECT_EQ(sp->last_board_row, expected_row);
 
-  // Each candidate's features are what the shared encoder makes of it at this
-  // turn's pre-move differential -- the same encode_move the training rows go
-  // through, reached here by the agent instead of the FFI.
+  // Each candidate's features must be what encode_move, the encoder the
+  // training rows go through, makes of it at this differential.
   for (size_t i = 0; i < cands.size(); ++i) {
     int32_t letters[move_set::kMoveMaxPlaced];
     uint8_t blanks[move_set::kMoveMaxPlaced];
@@ -517,15 +488,15 @@ TEST_F(UltimateBotAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
   }
 }
 
-// The loop's sims, taken one candidate at a time, pair with each other exactly:
-// each observation is bit-identical to the same candidate's in one batched
-// SimRunner::run over the whole simmed set (terminal rollouts; under
-// truncation the leaf batches differ and the equality is a tolerance). Also
-// prints an upper bound on what running one-at-a-time costs per sim -- the
-// thread spawn, agent construction, and candidate setup each run() pays,
-// bounded above by a whole one-rollout run -- against the rollouts of a
-// deployment-sized sim, the number docs/roadmap.md item 6's plan accepted as
-// negligible.
+// The loop sims one candidate at a time, yet each observation must equal, bit
+// for bit, that candidate's result in one batched SimRunner::run: the final
+// pick compares sims under common random numbers. (This holds for terminal
+// rollouts; under truncation the leaf batches differ and equality is only up to
+// a tolerance.)
+//
+// Also prints the per-sim setup cost of running one at a time, bounded above
+// by a one-candidate, one-rollout run, against the rollout time of a
+// 400-rollout sim.
 TEST_F(UltimateBotAgentTest, OneAtATimeSimsEqualOneBatchedRun) {
   const std::vector<Move> cands = candidates(request());
   const int n = int(cands.size());
@@ -558,9 +529,6 @@ TEST_F(UltimateBotAgentTest, OneAtATimeSimsEqualOneBatchedRun) {
       << "sim " << j;
   }
 
-  // A one-candidate, one-rollout run is setup plus one rollout: an upper bound
-  // on the per-sim setup cost, against a 400-rollout sim's rollouts scaled
-  // from the batched run's per-rollout time.
   const SimRunner one(dict_, SimRunner::Params{1, 1});
   const auto t2 = std::chrono::steady_clock::now();
   one.run(pos, {evidence.moves.front()}, seed);
@@ -575,12 +543,10 @@ TEST_F(UltimateBotAgentTest, OneAtATimeSimsEqualOneBatchedRun) {
 
 namespace {
 
-// The row cross-check, run at a chosen head-start handicap: a three-turn game
-// whose sampled turn (2) is player 0's, so both players already have a prior
-// move -- which exercises the last-self / last-opp placement-plane features.
-// The agent scores that turn's candidates against the position's PRE-move row,
-// which is the row MsetDataset reconstructs by replay for the very same
-// position, so the two must agree float for float.
+// The pre-move row the agent encodes must equal, float for float, the row the
+// training BlockDecoder reconstructs by replay for the same position. Uses a
+// three-turn game sampled at turn 2 (player 0's), so both players have a prior
+// move and the last-move placement planes are exercised.
 void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   const Move move0 =
     make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
@@ -593,9 +559,8 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
                    {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
   const uint32_t sampled_turn = 2;
 
-  // Initial racks and post-turn draws chosen so the replay reconstructs player
-  // 0's pre-move rack at turn 2 as DONERST: starting CATERST, play CAT (leave
-  // ERST), draw DON. Player 1 holds an S to play on turn 1.
+  // Player 0's rack at turn 2 replays to DONERST: CATERST, plays CAT, draws
+  // DON. Player 1 holds the S it plays on turn 1.
   binlog::InitialRacks ir{};
   ir.p0 = rack_from("CATERST");
   ir.p1 = rack_from("SAINTED");
@@ -610,8 +575,8 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
 
   const std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn, initial_scores);
 
-  // Training path: decode the PRE-move sampled row (no symmetry transpose). The same
-  // dictionary drives both paths' cross-check planes.
+  // Training path: the pre-move row, untransposed. Both paths use the same
+  // dictionary for the cross-check planes.
   Dictionary dict = opening_dict();
   binlog::BlockDecoder dec(InputEncodingSpec{&dict});
   const uint8_t flips[1] = {0};
@@ -619,8 +584,6 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/false,
              /*output_row_start=*/0, dec_row.data());
 
-  // Inference path: the agent starts from the same handicap, observes turns
-  // 0..1, then encodes its own decision point at turn 2.
   UltimateBotAgent::Params p;
   p.name = "UB";
   p.dict = &dict;
@@ -629,9 +592,8 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
   agent.observe_move(move0);
   agent.observe_move(move1);
 
-  // The board and scores of the encoded row come from the agent's own mirrored
-  // replay, not from the request -- only the rack does, so the rest of the
-  // request is whatever a turn would carry.
+  // The agent takes board and scores from its own replay of observed moves;
+  // only the rack comes from the request, so the rest of it is arbitrary.
   const Rack my_rack = rack_from("DONERST");
   const Rack no_leave;
   const Board board;
@@ -645,7 +607,7 @@ void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
     ASSERT_EQ(agent_row[size_t(i)], dec_row[size_t(i)]) << "input float " << i;
     any_nonzero = any_nonzero || agent_row[size_t(i)] != 0.0f;
   }
-  ASSERT_TRUE(any_nonzero);  // guard against a vacuous all-zero match
+  ASSERT_TRUE(any_nonzero);  // an all-zero match would prove nothing
 }
 
 }  // namespace
@@ -655,11 +617,10 @@ TEST(UltimateBotAgent, ThePreMoveRowMatchesTheTrainingDecoder) {
 }
 
 TEST(UltimateBotAgent, AHandicapReachesTheModelRow) {
-  // A head start is a score-differential feature like any other, and the
-  // training replay seeds its encoder from the handicap the .slog records. An
-  // agent that began every game at 0-0 would feed the model a differential
-  // wrong by the head start for the whole game -- silently, since nothing
-  // about the row's shape changes. The two rows must still agree.
+  // The training replay seeds its scores from the handicap the .slog records.
+  // An agent that started every game at 0-0 would feed the model a score
+  // differential wrong by the head start all game, with nothing else in the row
+  // to reveal it.
   check_pre_move_row_matches_decoder({50, 0});
   check_pre_move_row_matches_decoder({0, 37});
 }
