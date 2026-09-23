@@ -2,7 +2,9 @@
 
 **Status: diagnosis settled; fix not designed or built.** Nothing in the
 trainer adds restoring force or the proposed gates yet ([Future
-work](#future-work)).
+work](#future-work)). The findings stand, but the evidence for them is no
+longer present: the tags whose checkpoints produced every number below have
+been deleted ([Pointers](#pointers)).
 
 **Problem.** The position evaluation model (the teacher) systematically
 flatters the player whose point of view (POV) it evaluates from. At
@@ -303,8 +305,8 @@ checkpoints (27 rack counts and 100 unseen-pool floats precede it).
   encoding intervention and why it was closed.
 - The four position_eval runs whose checkpoints carry all of the above:
   `face-up-official`, `face-up-leaves-fixed2` (the WSD control),
-  `sd-mean-mse` and `score-diff-basis`. None of them is under
-  `/workspace/mount/tags/position_eval/` any longer (checked September 2026),
-  so reproducing the numbers exactly needs them restored from elsewhere.
+  `sd-mean-mse` and `score-diff-basis`. These tags have since been deleted,
+  so the evidence behind this document's numbers is no longer present; the
+  recipe above still describes how to measure a current checkpoint.
 - [position_eval/trainer.py](../../py/scribblez/position_eval/trainer.py):
   trains on post-move rows; where the gates would land.

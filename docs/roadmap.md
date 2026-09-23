@@ -20,8 +20,8 @@ whether to build something else.
 | [1. Per-move placement planes](#1-per-move-placement-planes) | Done |
 | [2. Value-truncated rollouts (D1)](#2-value-truncated-rollouts-d1) | Done |
 | [3. Engine runtime for the evidence path](#3-engine-runtime-for-the-evidence-path) | Done |
-| [4. Evidence-trajectory generation](#4-evidence-trajectory-generation) | Built; the corpus is not yet generated |
-| [5. The move proposal model](#5-the-move-proposal-model) | Built; not yet trained beyond the frozen trial |
+| [4. Evidence-trajectory generation](#4-evidence-trajectory-generation) | Done; regenerated as improvements are tested |
+| [5. The move proposal model](#5-the-move-proposal-model) | Done; retrained as improvements are tested |
 | [6. The sequential agent](#6-the-sequential-agent) | Built; waits on a trained model from item 5 |
 | [7. Self-model plies and the endgame solver (D2, D3)](#7-self-model-plies-and-the-endgame-solver-d2-d3) | D2 not started; D3 partly built |
 | [8. Cloud generation](#8-cloud-generation) | Done for `move_set_eval`; `evidence_trajectories` is local-only |
@@ -278,8 +278,8 @@ made.
 
 ### 4. Evidence-trajectory generation
 
-**Built; the corpus is not yet generated.** The `evidence_trajectories`
-workload's generate role runs self-play, then the
+**Done.** Corpora are regenerated continually as improvements are tested. The
+`evidence_trajectories` workload's generate role runs self-play, then the
 [evidence trajectory generator](../engine/apps/evidence_trajectory_generator.cpp)
 (selection in
 [evidence_trajectory_select.h](../engine/include/training/evidence_trajectory_select.h)),
@@ -332,8 +332,9 @@ its coverage at no cost to the input distribution.
 
 ### 5. The move proposal model
 
-**Built; not yet trained beyond the frozen trial.** The trainer is
-`py/scribblez/evidence/`, the `evidence_trajectories` workload's train role;
+**Done.** The model is retrained continually as improvements are tested. The
+trainer is `py/scribblez/evidence/`, the `evidence_trajectories` workload's
+train role;
 [model_architectures.md](model_architectures.md#training-the-evidence-path-scribblezevidence)
 has its modes and loss table.
 
