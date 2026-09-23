@@ -46,24 +46,22 @@ static_assert(sizeof(Premium) == 1);
 class Move;
 class Dictionary;
 
-// Bitmask with every letter A..Z allowed -- the cross-check of a square with no
-// perpendicular neighbor.
+// Every letter A..Z allowed: the cross-check of a square with no perpendicular
+// neighbor.
 inline constexpr uint32_t kAllLettersMask = (1u << 26) - 1u;
 
-// The perpendicular-word constraint on a single empty square, mirroring
-// Macondo's board-stored cross-sets.
+// The perpendicular-word constraint on one empty square (Macondo's cross-set).
 struct CrossCheck {
   uint32_t mask = kAllLettersMask;  // bit L set iff letter L is legal here
-  int score = 0;                    // sum of TILE_VALUES of the perpendicular run
-  bool has_neighbor = false;        // true iff a perpendicular run touches this square
+  int score = 0;                    // face value of the perpendicular run (blanks 0)
+  bool has_neighbor = false;        // a perpendicular run touches this square
 };
 
-// Records everything Board::apply(move, undo) changes so Board::unapply(undo)
-// can revert it exactly. Every mutation is logged as (location, old value) in
-// write order and undone in reverse, which stays correct even when one apply
-// touches a location twice. The lists are std::vectors because the first move
-// on an empty board rewrites every cache entry, far more than an incremental
-// update region.
+// Everything Board::apply(move, undo) changed, so Board::unapply(undo) can
+// revert it exactly. Each write is logged as (location, old value) and undone
+// in reverse order, which stays correct when one apply writes a location
+// twice. The lists are vectors, not fixed arrays, because the first move on an
+// empty board rewrites every cache entry.
 struct BoardUndo {
   struct SquareRec {
     uint16_t idx;
@@ -100,50 +98,48 @@ class Board {
   void set(int r, int c, Glyph g);
   bool in_bounds(int r, int c) const;
   bool empty_board() const { return num_tiles_ == 0; }
-  // Placed tiles currently on the board; every square write maintains it.
   int num_tiles() const { return num_tiles_; }
 
   // The frame this board is expressed in: the game's natural frame (false) or
-  // its diagonal transpose (true). Not to be confused with the `transposed`
-  // VIEW argument of the move-generation caches below, which picks a scanning
-  // orientation within whichever frame the board is in.
+  // its diagonal transpose (true). Distinct from the `transposed` view argument
+  // of the move-generation caches below, which picks a scanning orientation
+  // within whichever frame the board is in.
   bool transposed() const { return transposed_; }
 
   // This board reflected across the main diagonal, (r,c) -> (c,r), with the
-  // frame bit toggled -- the training symmetry augmentation. The premium
-  // layout is diagonally symmetric, so the result is a legal position that
-  // scores identically. The move-generation caches carry over by swapping
-  // their two view orientations, so nothing is recomputed.
+  // frame bit toggled; used for training-data symmetry augmentation. The
+  // premium layout is diagonally symmetric, so the result is a legal position
+  // that scores identically. The move-generation caches carry over by swapping
+  // their two views, with no recomputation.
   Board transpose() const;
 
   Premium premium_at(int r, int c) const { return PREMIUM[r * BOARD_SIZE + c]; }
 
-  // Place the move's new tiles; the move must be in this board's frame
-  // (asserted). Valid move-generation caches are updated incrementally; stale
-  // ones are left for a later ensure_movegen_caches().
+  // Places the move's new tiles; the move must be in this board's frame.
+  // Valid move-generation caches are updated incrementally; stale ones are left
+  // for a later ensure_movegen_caches().
   void apply(const Move& move);
 
-  // As apply(move), but recording enough in `undo` for unapply() to restore the
-  // board and its caches bit-for-bit. The make half of the endgame solver's
-  // make/unmake; rack and draw bookkeeping stay the caller's.
+  // As apply(move), also recording in `undo` what unapply() needs to restore
+  // the board and its caches exactly. The endgame solver's make/unmake; racks
+  // and draws are the caller's to undo.
   void apply(const Move& move, BoardUndo* undo);
 
   void unapply(const BoardUndo& undo);
 
   std::string to_string() const;
 
-  // The tiles absent from both this board and `known` under the full tile
-  // distribution -- with an empty bag, exactly the other player's rack (a
-  // board blank counts as a blank tile). Throws when the remainder exceeds a
-  // rackful (the bag is not empty) or when board + known overdraw the
-  // distribution.
+  // The tiles of the full distribution that are neither on this board nor in
+  // `known`: with an empty bag, exactly the other player's rack. Throws if that
+  // is more than a rackful (the bag isn't empty) or if board + known overdraw
+  // the distribution.
   Rack hidden_rack(const Rack& known) const;
 
-  // ---- Persistent move-generation state ---------------------------------
-  // Cross-checks and GADDAG anchors are computed once for the current board and
-  // then maintained incrementally as moves are applied, so the generator need
-  // not rescan the whole board each turn. Indexing is in the generator's view
-  // coordinates: `transposed` swaps row and column.
+  // ---- Move-generation caches ----
+  // Cross-checks and GADDAG anchors, as Macondo keeps them on its board: built
+  // once, then updated incrementally by apply() so the generator never rescans
+  // the whole board. Each is kept for two views, indexed in view coordinates:
+  // the transposed view swaps row and column so every play is "horizontal".
 
   void ensure_movegen_caches(const Dictionary& dict) const;
 
@@ -154,11 +150,9 @@ class Board {
     return ganchor_[transposed ? 1 : 0];
   }
 
-  // The cross-check of a single empty square, computed on demand from the live
-  // board in view coordinates (`transposed` swaps row and column). Requires a
-  // prior ensure_movegen_caches() to have bound the dictionary it reads; the
-  // value equals cross_checks(transposed)[r * BOARD_SIZE + c], the cache entry
-  // built from this same computation.
+  // One square's cross-check computed from scratch, in view coordinates; equal
+  // to the cached entry. Requires a prior ensure_movegen_caches(), which binds
+  // the dictionary.
   CrossCheck cross_check_at(bool transposed, int r, int c) const;
 
   static const std::array<Premium, BOARD_SIZE * BOARD_SIZE> PREMIUM;
@@ -166,23 +160,22 @@ class Board {
  private:
   Glyph oriented_at(int r, int c, bool transposed) const;
 
-  // Per-square anchor computation (view coordinates).
   bool gaddag_anchor_at(bool transposed, int r, int c) const;
 
   // Inclusive [top, bot] row extent of the maximal filled perpendicular run
   // through the empty square (r, c).
   std::pair<int, int> perpendicular_run_bounds(bool transposed, int r, int c) const;
 
-  // Letters that, placed at (r, c), complete a word with the perpendicular run
-  // below it. `prefix_node` is the node reached by walking the run above.
+  // Letters that, placed at (r, c), form a word with the perpendicular run
+  // through it. `prefix_node` is the DAWG node after the run above (r, c).
   uint32_t cross_check_letter_mask(bool transposed, int c, uint32_t prefix_node, int r,
                                    int bot) const;
 
   void recompute_all_caches() const;
   void update_caches_after_place(const std::pair<int, int>* placed, int n) const;
 
-  // Every cache write goes through these, so an active `recorder_` captures
-  // exactly the entries an update touches.
+  // Every cache write goes through these, so `recorder_` captures exactly the
+  // entries an update touches.
   void set_cross_(int transposed, int idx, const CrossCheck& cc) const;
   void set_anchor_(int transposed, int idx, bool value) const;
 
@@ -190,8 +183,8 @@ class Board {
   int num_tiles_ = 0;
   bool transposed_ = false;
 
-  // Mutable so const accessors can lazily build the caches; `dict_` is
-  // non-owning and outlives the board.
+  // Mutable so the caches can be built lazily from const methods. `dict_` is
+  // non-owning.
   mutable const Dictionary* dict_ = nullptr;
   mutable bool caches_valid_ = false;
   mutable std::array<CrossCheck, BOARD_SIZE * BOARD_SIZE> cross_[2];

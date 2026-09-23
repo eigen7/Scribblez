@@ -15,8 +15,8 @@ namespace scribblez {
 
 namespace {
 
-// A View presents the board with optional transpose, so the same generator can
-// produce both horizontal and vertical plays.
+// The board as seen by one scanning pass. The transposed view swaps rows and
+// columns, so every generator only ever builds "horizontal" plays along a row.
 struct View {
   const Board& board;
   bool transposed;
@@ -24,39 +24,34 @@ struct View {
   Premium premium_at(int r, int c) const {
     return transposed ? board.premium_at(c, r) : board.premium_at(r, c);
   }
-  // Translate view coords back to board coords.
   std::pair<int, int> to_board(int r, int c) const {
     return transposed ? std::make_pair(c, r) : std::make_pair(r, c);
   }
 };
 
-// Per-square scratch for one generate() pass. CrossCheck and the cross-check
-// values themselves live on the Board (persisted and incrementally maintained);
-// see board.h / board.cpp.
+// One view's Board-owned caches, indexed by idx(row, col).
 using CrossChecks = std::array<CrossCheck, BOARD_SIZE * BOARD_SIZE>;
 using Anchors = std::array<bool, BOARD_SIZE * BOARD_SIZE>;
 
 constexpr int idx(int r, int c) { return r * BOARD_SIZE + c; }
 
-// Duplicate test for single-tile plays. A single placed tile that also forms a
-// word along the other axis is reachable by both orientation passes (each pass
-// sees one of the words as its main word), and the horizontal pass is
-// canonical for it. A single tile whose ONLY word lies along the current pass
-// has no counterpart in the other pass and must be kept. The play's word spans
-// [start_col, end_col_excl) on view row `row`; its placed square is the span's
-// unique empty cell, and it forms a perpendicular word iff a perpendicular run
-// touches that square.
+// Whether a transposed-pass single-tile play duplicates one from the
+// horizontal pass. A single tile that forms words along both axes is found by
+// both passes; the horizontal pass owns it. A single tile whose only word lies
+// along this pass has no twin and is kept. The word spans
+// [start_col, end_col_excl) of `row`, and its one empty square is the placed
+// tile.
 bool single_tile_duplicates_horizontal_pass(const View& view, const CrossChecks& cross, int row,
                                             int start_col, int end_col_excl) {
   for (int c = start_col; c < end_col_excl; ++c) {
     if (view.at(row, c).is_empty()) return cross[idx(row, c)].has_neighbor;
   }
-  return false;  // a play always places a tile; not reached
+  return false;  // unreachable: a play places at least one tile
 }
 
-// Compute anchor squares for this view. An anchor is an empty square adjacent
-// (in any of the 4 directions) to a filled square. Special case: if the board
-// is completely empty, the single anchor is the center square.
+// Appel-Jacobson anchors: empty squares orthogonally adjacent to a tile, or
+// the center on an empty board. The DAWG generator's counterpart to the
+// Board's cached GADDAG anchors.
 Anchors compute_anchors(const View& view) {
   Anchors anchor{};
   bool any_tile = false;
@@ -89,12 +84,10 @@ Anchors compute_anchors(const View& view) {
   return anchor;
 }
 
-// Build a PLAY Move (placed tiles, main word, score) for the run that occupies
-// view columns [start_col, end_col_excl) on `row`. Squares already filled on
-// the board contribute their existing letters; empty squares in the span are
-// newly placed and their (letter, is_blank) come from
-// `placed_letter`/`placed_blank`. Scoring (premiums, cross-words, bingo) is
-// shared by both generators so the two algorithms produce byte-identical moves.
+// Builds and scores the play whose word occupies [start_col, end_col_excl) of
+// `row`. Filled squares keep their letters; empty ones take `placed_letter` /
+// `placed_blank`. Every generator scores through here, which is what makes
+// their moves byte-identical.
 Move build_play(const View& view, const CrossChecks& cross, int row, int start_col,
                 int end_col_excl, const std::array<Tile, BOARD_SIZE>& placed_letter,
                 const std::array<bool, BOARD_SIZE>& placed_blank) {
@@ -118,8 +111,8 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
       L = placed_letter[c];
       is_blank = placed_blank[c];
       newly_placed = true;
-      played[n_placed++] = Glyph::played(L, is_blank);  // in word order
-      square_mask |= uint16_t(1u << c);                 // absolute lane index
+      played[n_placed++] = Glyph::played(L, is_blank);
+      square_mask |= uint16_t(1u << c);
     }
 
     int letter_value = is_blank ? 0 : TILE_VALUES[L];
@@ -144,6 +137,13 @@ Move build_play(const View& view, const CrossChecks& cross, int row, int start_c
                     view.board.transposed());
 }
 
+// ---------------------------------------------------------------------------
+// DAWG reference generator (Appel-Jacobson). From each anchor it chooses a
+// left part, then extends right through the DAWG. The left part is either
+// fresh tiles on the empty squares before the anchor (case A) or, when the
+// anchor directly follows existing tiles, those tiles (case B). Kept only to
+// cross-check the GADDAG generator in tests.
+// ---------------------------------------------------------------------------
 struct GenState {
   GenState(const View& view, const Dictionary& dict, const CrossChecks& cross,
            const Anchors& anchor, TileCounts rack, std::vector<Move>& out)
@@ -153,11 +153,11 @@ struct GenState {
   const Dictionary& dict;
   const CrossChecks& cross;
   const Anchors& anchor;
-  TileCounts rack;  // available-tile scratch (built from the player's rack)
+  TileCounts rack;  // tiles still available to the recursion
   std::vector<Move>& out;
 
-  // Recursion state for the current word being built.
-  std::vector<std::pair<Tile, bool>> left_letters;  // (letter, is_blank) in left-to-right order
+  // The word under construction.
+  std::vector<std::pair<Tile, bool>> left_letters;  // (letter, is_blank), left to right
   struct RightTile {
     int col;
     Tile letter;
@@ -166,7 +166,7 @@ struct GenState {
   std::vector<RightTile> right_placed;
   int current_row = 0;
   int current_anchor_col = 0;
-  int case_b_start_col = -1;  // for case B: where the existing prefix begins; -1 means case A
+  int case_b_start_col = -1;  // case B: where the existing prefix begins; -1 in case A
 
   void emit_move(int start_col, int end_col_excl);
 
@@ -176,13 +176,11 @@ struct GenState {
 };
 
 void GenState::emit_move(int start_col, int end_col_excl) {
-  // Lay the recursion's placed tiles into a per-column strip, then defer to the
-  // shared scorer.
   std::array<Tile, BOARD_SIZE> placed_letter{};
   std::array<bool, BOARD_SIZE> placed_blank{};
   int li = 0, ri = 0;
   for (int c = start_col; c < end_col_excl; ++c) {
-    if (!view.at(current_row, c).is_empty()) continue;  // existing tile
+    if (!view.at(current_row, c).is_empty()) continue;
     if (case_b_start_col < 0 && c < current_anchor_col) {
       placed_letter[c] = left_letters[li].first;
       placed_blank[c] = left_letters[li].second;
@@ -245,9 +243,8 @@ void GenState::extend_right(int col, uint32_t node, bool accepts_here) {
 }
 
 void GenState::left_part(int limit, uint32_t node) {
-  // First: attempt to stop the left part here and extend right from anchor.
-  // `accepts_here` is irrelevant: extend_right at col == anchor_col cannot emit
-  // (the emit guard requires col > anchor_col), so any value is safe.
+  // Try ending the left part here. `accepts_here` doesn't matter: extend_right
+  // never emits at the anchor column itself.
   extend_right(current_anchor_col, node, /*accepts_here=*/false);
   if (limit <= 0) return;
   for (Tile L = Tile::of(0); L < 26; ++L) {
@@ -276,12 +273,10 @@ void GenState::generate_for_row(int row) {
     if (!anchor[idx(row, col)]) continue;
     current_anchor_col = col;
 
-    // Decide between case A (no immediate-left filled tile) and case B (immediate-left filled).
     if (col > 0 && !view.at(row, col - 1).is_empty()) {
-      // Case B: walk left through existing tiles to find prefix start.
+      // Case B: the left part is the existing run ending at col - 1.
       int start_c = col - 1;
       while (start_c - 1 >= 0 && !view.at(row, start_c - 1).is_empty()) --start_c;
-      // Traverse the dictionary through the existing prefix.
       uint32_t node = dict.root();
       bool ok = true;
       for (int x = start_c; x < col; ++x) {
@@ -298,7 +293,7 @@ void GenState::generate_for_row(int row) {
         case_b_start_col = -1;
       }
     } else {
-      // Case A: compute left limit.
+      // Case A: the left part may take the empty non-anchor squares to the left.
       int limit = 0;
       int c2 = col - 1;
       while (c2 >= 0 && view.at(row, c2).is_empty() && !anchor[idx(row, c2)]) {
@@ -311,16 +306,11 @@ void GenState::generate_for_row(int row) {
 }
 
 // ---------------------------------------------------------------------------
-// GADDAG generator (Gordon's algorithm).
-//
-// This is the move generator described in the design doc. The GADDAG spine
-// lets a single left-to-right scan from each anchor place tiles leftward
-// (following reversed-prefix arcs), then "shift direction" through the
-// separator token to place tiles rightward. Cross-checks (computed from the
-// forward DAWG, identical to the reference generator) gate perpendicular-word
-// validity, and build_play() does the scoring. Single-tile plays that form
-// words along both axes are emitted from the horizontal pass only (see
-// single_tile_duplicates_horizontal_pass).
+// GADDAG generator (Gordon's algorithm). From each anchor it places tiles
+// leftward along reversed-prefix arcs, then crosses the separator arc to place
+// tiles rightward of the anchor. Leftward extension stops short of the
+// previous anchor in the row, so each play is found from exactly one anchor.
+// The recursion mirrors Gordon's Gen/GoOn.
 // ---------------------------------------------------------------------------
 struct GaddagGen {
   GaddagGen(const View& view, const Dictionary& dict, const CrossChecks& cross,
@@ -331,12 +321,12 @@ struct GaddagGen {
   const Dictionary& dict;
   const CrossChecks& cross;
   const Anchors& anchor;
-  TileCounts rack;  // available-tile scratch (built from the player's rack)
+  TileCounts rack;  // tiles still available to the recursion
   std::vector<Move>& out;
 
   int current_row = 0;
   int current_anchor_col = 0;
-  int last_anchor_col = 100;  // sentinel: no previous anchor this row
+  int last_anchor_col = 100;  // 100: no previous anchor in this row
   int tiles_played = 0;
   std::array<Tile, BOARD_SIZE> strip_letter{};
   std::array<bool, BOARD_SIZE> strip_blank{};
@@ -354,8 +344,8 @@ struct GaddagGen {
       build_play(view, cross, current_row, leftstrip, rightstrip + 1, strip_letter, strip_blank));
   }
 
-  // Gordon's GoOn: we have just transitioned to `new_node` by placing/using
-  // letter L at `col`; `accepts` says the path so far spells a complete word.
+  // Gordon's GoOn: letter L at `col` (placed or already there) led to
+  // `new_node`; `accepts` says the path so far spells a word.
   void go_on(int col, Tile L, bool is_blank, uint32_t new_node, bool accepts, int leftstrip,
              int rightstrip) {
     const bool placed = row_cells[col].is_empty();
@@ -371,11 +361,10 @@ struct GaddagGen {
         record(leftstrip, rightstrip);
       }
       if (new_node == 0) return;
-      // Keep extending to the left (but never past the previous anchor).
       if (col > 0 && col - 1 != last_anchor_col) {
         recursive_gen(col - 1, new_node, leftstrip, rightstrip);
       }
-      // Shift direction through the separator to extend right of the anchor.
+      // Cross the separator to continue rightward from the anchor.
       auto sep = dict.step_tile(new_node, Dictionary::SEPARATOR);
       if (sep.valid && sep.next != 0 && no_letter_left && current_anchor_col < BOARD_SIZE - 1) {
         recursive_gen(current_anchor_col + 1, sep.next, leftstrip, rightstrip);
@@ -405,8 +394,7 @@ struct GaddagGen {
     }
     if (node == 0 || rack.empty()) return;
     const CrossCheck& cc = cross[idx(current_row, col)];
-    // Iterate this node's child arcs once (KWG arcs are sorted by tile value, so
-    // letters come out A..Z) rather than scanning the arc list 26 times.
+    // One pass over the arc list rather than a step() per letter.
     for (uint32_t i = node;; ++i) {
       uint32_t a = dict.arc(i);
       uint8_t tv = Dictionary::arc_tile(a);  // 0 = separator, 1..26 = A..Z
@@ -445,10 +433,9 @@ struct GaddagGen {
     }
   }
 
-  // Generate exactly the plays canonically anchored at (row, col). `last_anchor`
-  // is the nearest anchor to the left in this row (100 if none), matching the
-  // left-extension bound generate_for_row applies, so this produces the same
-  // moves with the same dedup regardless of processing order.
+  // The plays anchored at (row, col), identical to what generate_for_row finds
+  // there. `last_anchor` is the previous anchor in the row (100 if none), which
+  // generate_for_row would have set.
   void generate_one_anchor(int row, int col, int last_anchor) {
     current_row = row;
     for (int c = 0; c < BOARD_SIZE; ++c) row_cells[c] = view.at(row, c);
@@ -459,8 +446,11 @@ struct GaddagGen {
   }
 };
 
-// The player's tile values (blanks count as 0) sorted descending -- the input
-// to the shadow score bound's "best tiles in best multipliers" estimate.
+// ---------------------------------------------------------------------------
+// Per-anchor shadow bounds (ShadowMoveGen::anchors).
+// ---------------------------------------------------------------------------
+
+// The rack's tile values sorted descending, blanks as 0.
 std::vector<int> rack_values_desc(const TileCounts& rack) {
   std::vector<int> v;
   for (Tile L = Tile::of(0); L < 26; ++L) {
@@ -471,20 +461,20 @@ std::vector<int> rack_values_desc(const TileCounts& rack) {
   return v;
 }
 
-// Per-lane (one view row) scratch for the shadow score bound, computed once and
-// reused across the row's anchors. For empty squares it records the premium
-// multipliers, cross-word score/neighbor, whether any rack tile can be played
-// there, and the highest-value rack tile the cross-check permits.
+// One view row's inputs to anchor_score_bounds, built once per row.
 struct LaneInfo {
   std::array<bool, BOARD_SIZE> filled{}, placeable{};
   std::array<int, BOARD_SIZE> tval{}, lmul{}, wmul{}, cscore{}, maxval{};
   std::array<int8_t, BOARD_SIZE> letter_idx{};  // A..Z index at filled squares
-  std::array<bool, BOARD_SIZE> cneigh{};
-  std::array<int, BOARD_SIZE + 1> pref{};  // prefix sum of filled tile values
+  std::array<bool, BOARD_SIZE> cneigh{};        // cross-word forms here
+  std::array<int, BOARD_SIZE + 1> pref{};       // prefix sum of tval
+  // At empty squares: lmul/wmul are premiums, cscore the cross-word's existing
+  // score, placeable whether any rack tile fits, maxval the best such tile's
+  // value. tval is the face value at filled squares.
 };
 
-// The set (mask over A..Z) of letters that are child arcs of `node` -- the GADDAG
-// node's extension set (MAGPIE's kwg extension_set), ignoring the separator.
+// The letters (mask over A..Z) with an arc out of `node`, ignoring the
+// separator: MAGPIE's KWG extension set.
 uint32_t letter_children_mask(const Dictionary& dict, uint32_t node) {
   uint32_t mask = 0;
   for (uint32_t i = node;; ++i) {
@@ -496,18 +486,15 @@ uint32_t letter_children_mask(const Dictionary& dict, uint32_t node) {
   return mask;
 }
 
-// Per-lane left/right extension sets, the faithful analogue of MAGPIE's
-// game_gen_classic_cross_set extension-set computation. For each maximal run of
-// board tiles [a, b] in the lane, walk the GADDAG through the run reversed from
-// the gaddag root: the resulting node's letter children are the letters that can
-// precede the run (its left extension `es_left`), and following the separator arc
-// yields the letters that can follow it (its right extension `es_right`).
-// `left_ext[c]` constrains a tile placed at empty square c that continues a run to
-// its right leftward; `right_ext[c]` constrains the first tile placed to the right
-// of a run ending at c (read at that run's rightmost tile when it is the anchor).
-// Both are necessary conditions -- a placed letter must at least extend the
-// immediate run -- so pruning the shadow walk with them never drops a real play.
-// Squares with no adjacent run keep the trivial (all-letters) set.
+// In-row extension sets, as MAGPIE's game_gen_classic_cross_set computes them.
+// For each run of tiles [a, b], walking the GADDAG through the run reversed
+// gives a node whose letter arcs are the letters that can precede the run, and
+// whose separator arc leads to the letters that can follow it.
+//   - left_ext: at a - 1 (the square before the run) and at b (the run's end,
+//     where its anchor sits), the letters that can precede the run.
+//   - right_ext: at b, the letters that can follow the run.
+// Squares next to no run get all letters. Any real play must at least extend
+// the adjacent run, so pruning with these sets never drops a play.
 void compute_lane_extensions(const View& view, const Dictionary& dict, int row,
                              std::array<uint32_t, BOARD_SIZE>& left_ext,
                              std::array<uint32_t, BOARD_SIZE>& right_ext) {
@@ -522,7 +509,7 @@ void compute_lane_extensions(const View& view, const Dictionary& dict, int row,
     while (b + 1 < BOARD_SIZE && !view.at(row, b + 1).is_empty()) ++b;
     uint32_t node = dict.gaddag_root();
     bool ok = true;
-    for (int k = b; k >= a && ok; --k) {  // walk the run reversed
+    for (int k = b; k >= a && ok; --k) {
       const Dictionary::Step s = dict.step(node, view.at(row, k).letter());
       ok = s.valid;
       node = s.next;
@@ -533,8 +520,8 @@ void compute_lane_extensions(const View& view, const Dictionary& dict, int row,
       const Dictionary::Step sep = dict.step_tile(node, Dictionary::SEPARATOR);
       if (sep.valid && sep.next != 0) es_right = letter_children_mask(dict, sep.next);
     }
-    left_ext[b] = es_left;                 // run's rightmost tile (occupied anchor)
-    if (a > 0) left_ext[a - 1] = es_left;  // empty square just left of the run
+    left_ext[b] = es_left;
+    if (a > 0) left_ext[a - 1] = es_left;
     right_ext[b] = es_right;
     a = b + 1;
   }
@@ -558,9 +545,7 @@ void build_lane(const View& view, const CrossChecks& cross, int row, uint32_t ra
     const CrossCheck& cc = cross[idx(row, c)];
     lane.cscore[c] = cc.score;
     lane.cneigh[c] = cc.has_neighbor;
-    // Highest-value rack tile this square permits: legal by the cross-check, on
-    // the rack, and able to extend any adjacent run in-lane. A square no rack tile
-    // can fill makes any covering window infeasible.
+    // A square no rack tile can fill makes any window covering it infeasible.
     const uint32_t playable = cc.mask & inlane_ext[c];
     const uint32_t allowed = playable & rack_letter_mask;
     if (allowed != 0) {
@@ -578,16 +563,17 @@ void build_lane(const View& view, const CrossChecks& cross, int row, uint32_t ra
   for (int c = 0; c < BOARD_SIZE; ++c) lane.pref[c + 1] = lane.pref[c] + lane.tval[c];
 }
 
-// Fill `out[e]` with an admissible upper bound on the raw score of a play that
-// places exactly e tiles canonically anchored at `col` (or -1 if none). It
-// enumerates every contiguous window [a, b] covering the anchor (a no further
-// left than the previous anchor), and for each window placing 1..rack_size tiles
-// bounds the score by the smaller of two over-estimates of the placed
-// contribution -- greedily pairing the top rack tiles with the window's best
-// letter multipliers (count-tight), and summing each square's max permitted tile
-// (cross-check-tight) -- times the product of word multipliers, plus generous
-// cross-word and bingo terms. Every term over-estimates, so the bound never
-// underestimates a real play's score, which makes best-first pruning exact.
+// Fills out[e] with an upper bound on the score of any play from anchor `col`
+// placing e tiles (-1 if there is none). Enumerates every window [a, b] that
+// covers the anchor without reaching the previous anchor. For each, the placed
+// tiles' contribution is bounded by the smaller of two overestimates:
+//   - the top e rack values paired with the window's best letter multipliers
+//     (tight on tile counts);
+//   - each square's best permitted tile times its multiplier (tight on
+//     cross-checks).
+// That, plus the existing tiles, times the word multipliers, plus cross-word
+// and bingo terms that also overestimate. A true upper bound is what makes
+// best-first pruning exact.
 void anchor_score_bounds(const LaneInfo& lane, int col, int last_anchor_col,
                          const std::vector<int>& rack_vals_desc,
                          std::array<int, kMaxPlayTiles + 1>& out) {
@@ -612,22 +598,20 @@ void anchor_score_bounds(const LaneInfo& lane, int col, int last_anchor_col,
       else if (lm == 2)
         ++c2;
       wprod *= lane.wmul[c];
-      psm += lane.maxval[c] * lm;  // per-square max placed contribution
+      psm += lane.maxval[c] * lm;
       if (lane.cneigh[c]) cross_sum += (lane.cscore[c] + lane.maxval[c] * lm) * lane.wmul[c];
     };
     for (int c = a; c < col; ++c) add_square(c);
     for (int b = col; b < BOARD_SIZE; ++b) {
       add_square(b);
       if (e == 0) continue;
-      if (e > e_cap) break;  // e only grows with b
-      if (bad > 0) break;    // window has an unfillable square (stays so as b grows)
+      if (e > e_cap) break;  // e and bad only grow with b
+      if (bad > 0) break;
       int wl = a;
       while (wl - 1 >= 0 && lane.filled[wl - 1]) --wl;
       int wr = b;
       while (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) ++wr;
       const int existing = lane.pref[wr + 1] - lane.pref[wl];
-      // Count-tight estimate: top-e rack values paired with the window's highest
-      // letter multipliers (3s, then 2s, then 1s).
       int greedy = 0, taken = 0;
       for (int j = 0; j < c3 && taken < e; ++j) greedy += rack_vals_desc[taken++] * 3;
       for (int j = 0; j < c2 && taken < e; ++j) greedy += rack_vals_desc[taken++] * 2;
@@ -640,9 +624,12 @@ void anchor_score_bounds(const LaneInfo& lane, int col, int last_anchor_col,
   }
 }
 
-// Enumerate every non-empty sub-multiset of a rack (real letters only, given as
-// (letter index, count) pairs) and bucket each one by its tile count into
-// `out[size]`. These are the candidate tile sets a WordMap play can place.
+// ---------------------------------------------------------------------------
+// WordMap generation.
+// ---------------------------------------------------------------------------
+
+// Buckets every non-empty sub-multiset of `letters` ((letter, count) pairs)
+// into out[size].
 void enum_subracks(const std::vector<std::pair<int, int>>& letters, size_t i, BitRack cur, int size,
                    std::array<std::vector<BitRack>, kMaxPlayTiles + 1>& out) {
   if (i == letters.size()) {
@@ -653,12 +640,11 @@ void enum_subracks(const std::vector<std::pair<int, int>>& letters, size_t i, Bi
   const int cnt = letters[i].second;
   for (int use = 0; use <= cnt; ++use) {
     enum_subracks(letters, i + 1, cur, size + use, out);
-    cur.add_letter(li);  // `cur` now holds use+1 copies of this letter
+    cur.add_letter(li);
   }
 }
 
-// One row of a (possibly transposed) board prepared for WordMap generation: the
-// per-square occupancy/letter snapshot plus the view and cross-checks it indexes.
+// One view row's tiles, snapshotted for WordMap generation.
 struct WmpLane {
   const View& view;
   const CrossChecks& cross;
@@ -677,7 +663,7 @@ WmpLane build_wmp_lane(const View& view, const CrossChecks& cross, int row) {
   return lane;
 }
 
-// The letters the rack can place (blank-free) as a bitmask over A..Z.
+// The rack's letters as a mask over A..Z, read off the size-1 subracks.
 uint32_t wmp_rack_letter_mask(const WmpSubracks& subracks) {
   uint32_t mask = 0;
   for (const BitRack& s : subracks[1]) {
@@ -688,9 +674,9 @@ uint32_t wmp_rack_letter_mask(const WmpSubracks& subracks) {
   return mask;
 }
 
-// Squares a tile could legally land on: filled (playthrough) squares, or empty
-// squares whose cross-check admits at least one rack letter. A span covering an
-// unplaceable empty is dead -- the pruning the GADDAG gets free by following arcs.
+// Squares a word can cover: filled ones, and empty ones whose cross-check
+// admits a rack letter. Skipping spans over other squares recovers the pruning
+// the GADDAG gets for free by following arcs.
 std::array<bool, BOARD_SIZE> wmp_placeable_squares(const WmpLane& lane, uint32_t rack_mask) {
   std::array<bool, BOARD_SIZE> placeable{};
   for (int c = 0; c < BOARD_SIZE; ++c) {
@@ -699,11 +685,9 @@ std::array<bool, BOARD_SIZE> wmp_placeable_squares(const WmpLane& lane, uint32_t
   return placeable;
 }
 
-// Verify candidate `word` (L tiles) against the lane's span starting at column
-// `wl`: playthrough letters must match the board, placed letters must satisfy
-// their cross-checks. On success build the play and append it to `out`. The
-// single funnel for every WordMap play, so the single-tile duplicate rule
-// (matching GaddagGen::record) lives here.
+// Appends the play of `word` (length L) at column `wl` if it fits: letters on
+// filled squares must match and placed letters must pass cross-checks. Every
+// WordMap play passes through here, so the single-tile dedup rule does too.
 void wmp_try_word(const WmpLane& lane, int wl, int L, const Tile* word, std::vector<Move>& out) {
   std::array<Tile, BOARD_SIZE> placed_letter{};
   int placed = 0;
@@ -722,12 +706,12 @@ void wmp_try_word(const WmpLane& lane, int wl, int L, const Tile* word, std::vec
       single_tile_duplicates_horizontal_pass(lane.view, lane.cross, lane.row, wl, wl + L)) {
     return;
   }
-  const std::array<bool, BOARD_SIZE> no_blanks{};  // blank-free
+  const std::array<bool, BOARD_SIZE> no_blanks{};
   out.push_back(build_play(lane.view, lane.cross, lane.row, wl, wl + L, placed_letter, no_blanks));
 }
 
-// Look up every (playthrough + subrack) anagram set of length L and emit the
-// plays that fit the lane's span at column `wl`.
+// Emits the plays of length L at column `wl` that place one of the given
+// subracks.
 void wmp_emit_span(const WmpLane& lane, const WordMap& wm, int wl, int L,
                    const BitRack& playthrough, const std::vector<BitRack>& subracks_of_size,
                    std::vector<Move>& out) {
@@ -739,9 +723,8 @@ void wmp_emit_span(const WmpLane& lane, const WordMap& wm, int wl, int L,
   }
 }
 
-// Append every play whose leftmost newly-placed square is `A` -- the dedup
-// partition for full-board WordMap generation. The word spans [wl, wr]: wl
-// extends left through filled squares from A, wr ends at an empty/edge.
+// Every play whose leftmost placed tile is at `A`. Keying plays by that square
+// partitions them, so full-board generation finds each play exactly once.
 void wmp_emit_leftmost_anchor(const WmpLane& lane, const WordMap& wm, const WmpSubracks& subracks,
                               int rack_tiles, int A, bool empty_board, std::vector<Move>& out) {
   if (lane.filled[A]) return;
@@ -761,7 +744,7 @@ void wmp_emit_leftmost_anchor(const WmpLane& lane, const WordMap& wm, const WmpS
       if (lane.cross[idx(lane.row, wr)].has_neighbor) any_cross = true;
     }
     if (placed > rack_tiles) break;
-    if (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) continue;  // word extends further right
+    if (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) continue;  // word can't end here
     const int L = wr - wl + 1;
     if (L < 2) continue;
     // First move covers the center square; later moves must touch the board.
@@ -854,10 +837,9 @@ void wmp_generate_anchor(const Board& board, const WordMap& wm, const WmpSubrack
   const int col = a.col;
   const int left_limit = (a.last_anchor_col < 0) ? 0 : a.last_anchor_col + 1;
 
-  // The play's word covers the anchor col and starts at some wl in
-  // [left_limit, col] with wl-1 empty/edge (the GADDAG extends left only as far
-  // as the previous anchor). col itself may be occupied (the rightmost tile of a
-  // run) or empty, so it is scored like any other square in the span.
+  // The word covers the anchor and starts at some wl in [left_limit, col], the
+  // same range the GADDAG's leftward walk covers. The anchor square may be
+  // filled (the end of a run) or empty.
   for (int wl = left_limit; wl <= col; ++wl) {
     if (wl > 0 && lane.filled[wl - 1]) continue;  // not a maximal word start
     BitRack playthrough{};
@@ -871,18 +853,18 @@ void wmp_generate_anchor(const Board& board, const WordMap& wm, const WmpSubrack
         if (!placeable[c]) left_ok = false;
       }
     }
-    if (!left_ok) continue;  // an unplaceable empty in the left extent
+    if (!left_ok) continue;
     for (int wr = col; wr < BOARD_SIZE; ++wr) {
       if (lane.filled[wr]) {
         playthrough.add_letter(lane.letter[wr].index());
       } else {
         ++placed;
-        if (!placeable[wr]) break;  // this and every longer span cover a dead square
+        if (!placeable[wr]) break;  // so is every longer span
       }
       if (placed > rack_tiles) break;
-      if (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) continue;  // word extends further right
+      if (wr + 1 < BOARD_SIZE && lane.filled[wr + 1]) continue;  // word can't end here
       const int L = wr - wl + 1;
-      if (L < 2 || placed < 1) continue;  // a play must place at least one tile
+      if (L < 2 || placed < 1) continue;
       wmp_emit_span(lane, wm, wl, L, playthrough, subracks[placed], out);
     }
   }
@@ -894,14 +876,10 @@ void wmp_generate_extent(const Board& board, const WordMap& wm, const WmpSubrack
   const View view{board, e.transposed};
   const CrossChecks& cross = board.cross_checks(e.transposed);
   const WmpLane lane = build_wmp_lane(view, cross, e.row);
-  // One scan of (playthrough + subrack) per subrack serves every start column in
-  // the anchor's range: each found word is verified against the board at every
-  // start in [leftmost, rightmost] (MAGPIE's wordmap_gen sliding the word list
-  // across the start-column range). When `sub_terms` is supplied, a subrack is
-  // skipped before its probe if the extent's score bound plus that subrack's own
-  // leave value cannot reach `best_equity` (MAGPIE's better_play_has_been_found on
-  // leave_value + highest_possible_score) -- sound, since the bound over-estimates
-  // every play that subrack could make.
+  // As MAGPIE's wordmap_gen: one lookup per subrack, with each word found tried
+  // at every start column. The sub_terms skip mirrors MAGPIE's
+  // better_play_has_been_found check, and is sound because score_bound
+  // overestimates every play the subrack could make.
   const std::vector<BitRack>& subs = subracks[e.placed];
   for (size_t j = 0; j < subs.size(); ++j) {
     if (sub_terms != nullptr && double(e.score_bound) + sub_terms[j] < best_equity) continue;
@@ -928,8 +906,8 @@ std::vector<ShadowAnchor> ShadowMoveGen::anchors(const Rack& rack) const {
   }
   const bool has_blank = counts.blanks() > 0;
 
-  // The GADDAG path enforces in-lane validity during traversal, so its bounds
-  // need no extra extension constraint.
+  // No extension-set pruning: the bounds stay valid, just looser, and the
+  // GADDAG enforces in-row validity during generation.
   std::array<uint32_t, BOARD_SIZE> trivial_ext;
   trivial_ext.fill(kAllLettersMask);
 
@@ -941,12 +919,11 @@ std::vector<ShadowAnchor> ShadowMoveGen::anchors(const Rack& rack) const {
     const CrossChecks& cross = board_.cross_checks(transposed);
     const Anchors& anchors = board_.gaddag_anchors(transposed);
     for (int r = 0; r < BOARD_SIZE; ++r) {
-      // Lanes with no anchors contribute nothing; skip the lane build.
       bool any = false;
       for (int c = 0; c < BOARD_SIZE && !any; ++c) any = anchors[idx(r, c)];
       if (!any) continue;
       build_lane(view, cross, r, rack_letter_mask, has_blank, trivial_ext, lane);
-      int prev = -1;  // nearest anchor to the left in this row
+      int prev = -1;
       for (int c = 0; c < BOARD_SIZE; ++c) {
         if (!anchors[idx(r, c)]) continue;
         ShadowAnchor sa{transposed, r, c, prev, {}};
@@ -970,17 +947,20 @@ void ShadowMoveGen::generate_anchor(const ShadowAnchor& a, const Rack& rack,
 
 namespace {
 
-// MAGPIE's word-aligned rack size (the unrestricted-multiplier arrays are sized
-// to it) and the (playthrough_blocks, tiles_played) anchor-table dimensions.
+// ---------------------------------------------------------------------------
+// Per-extent shadow bounds (ShadowMoveGen::extents): a translation of MAGPIE's
+// shadow walk in move_gen.c. Names follow MAGPIE's so the two can be read side
+// by side; MAGPIE's source is the reference for the finer points.
+// ---------------------------------------------------------------------------
+
+// kRackAlign sizes the multiplier arrays as MAGPIE does. The anchor table has
+// one slot per (playthrough_blocks, tiles_played).
 constexpr int kRackAlign = util::align_up(RACK_SIZE, 8);
 constexpr int kMaxPlaythroughBlocks = (BOARD_SIZE / 2) + 1;
 constexpr int kMaxShadowAnchors = (RACK_SIZE + 1) * kMaxPlaythroughBlocks;
 constexpr uint32_t kTrivialCrossSet = kAllLettersMask;
 
-// One (possibly transposed) row prepared for the shadow walk: per-square
-// occupancy, cross-set / cross-score / cross-word, premium multipliers, the
-// GADDAG-derived left/right extension sets, and which squares are anchors. This
-// is the analogue of MAGPIE's row_cache.
+// One view row prepared for the shadow walk (MAGPIE's row_cache).
 struct ShadowLane {
   std::array<bool, BOARD_SIZE> empty{};
   std::array<int8_t, BOARD_SIZE> letter{};       // A..Z index at filled squares
@@ -1017,9 +997,9 @@ ShadowLane build_shadow_lane(const View& view, const CrossChecks& cross, const A
   return lane;
 }
 
-// Reconstruct the playthrough multiset for an anchor slot by scanning rightward
-// from `rightmost_start_col` for `blocks` filled blocks (MAGPIE's
-// wmp_move_gen_set_playthrough_bit_rack), accumulating their letters.
+// The letters of the first `blocks` runs of tiles at or after
+// `rightmost_start_col`: an extent's playthrough multiset (MAGPIE's
+// wmp_move_gen_set_playthrough_bit_rack).
 BitRack set_playthrough_bitrack(const ShadowLane& lane, int rightmost_start_col, int blocks) {
   BitRack pt;
   if (blocks == 0) return pt;
@@ -1042,17 +1022,25 @@ BitRack set_playthrough_bitrack(const ShadowLane& lane, int rightmost_start_col,
   return pt;
 }
 
-// The faithful translation of MAGPIE's shadow walk (move_gen.c). It enumerates,
-// for one anchor, the highest possible score of every play family keyed by
-// (playthrough_blocks, tiles_played), using the descending-tile-score x
-// descending-effective-letter-multiplier bound with restricted/unrestricted
-// square partitioning. The per-(blocks, tiles) maxima land in the anchor table.
+// The shadow walk for one anchor. It grows a window left and right from the
+// anchor, as the GADDAG would, and at each step bounds the score of any play
+// covering that window. The maxima, keyed by (playthrough_blocks,
+// tiles_played), land in the anchor table `slots`; each becomes a
+// ShadowExtent.
+//
+// The bound: a square whose constraints admit exactly one rack letter is
+// "restricted" and scores that letter exactly. The remaining tiles are
+// assumed to land in the best way possible: the highest tile values paired
+// with the highest effective multipliers of the unrestricted squares. A
+// square's effective multiplier is its letter multiplier times the main word's
+// multiplier, plus its multiplier within any cross-word it forms.
 struct ShadowGen {
   const ShadowLane& lane;
   bool transposed;
 
-  // Rack state (blank-free): the multiset, the available-letter mask, the
-  // descending tile-score list (mutated as tiles are restricted), and the total.
+  // Rack state, blanks excluded. Restricting a tile removes it from `rack`,
+  // `rack_cross_set` and `descending_tile_scores`; the *_copy members save
+  // state for shadow_play_right to restore.
   TileCounts rack;
   TileCounts full_rack;
   TileCounts player_rack_shadow_right_copy;
@@ -1062,7 +1050,7 @@ struct ShadowGen {
   std::array<int, RACK_SIZE> descending_tile_scores{};
   std::array<int, RACK_SIZE> descending_tile_scores_copy{};
 
-  // Unrestricted-multiplier bookkeeping (kept sorted descending).
+  // Effective multipliers of the unrestricted squares, sorted descending.
   std::array<int, kRackAlign> descending_effective_letter_multipliers{};
   std::array<int, kRackAlign> desc_eff_letter_muls_copy{};
   struct XwMul {
@@ -1074,32 +1062,31 @@ struct ShadowGen {
   int num_unrestricted_multipliers = 0;
   int last_word_multiplier = 1;
 
-  // Score accumulators (see MoveGen field comments).
+  // Restricted tiles' main-word score (before the word multiplier), and all
+  // cross-word score.
   int shadow_mainword_restricted_score = 0;
   int shadow_perpendicular_additional_score = 0;
   int shadow_word_multiplier = 1;
 
-  // Walk position / extents.
   int max_tiles_to_play = 0;
   int tiles_played = 0;
   int current_left_col = 0, current_right_col = 0;
   int current_anchor_col = 0, last_anchor_col = 0;
   uint32_t anchor_left_extension_set = 0, anchor_right_extension_set = 0;
 
-  // Playthrough state (block count + tile count drive the slot key + word length;
-  // the multiset is needed for the full-rack word-existence prune).
+  // Existing tiles inside the window. Block count and tile count give the slot
+  // key and word length; the multiset feeds the word-existence prune.
   int playthrough_blocks = 0, num_tiles_played_through = 0;
   BitRack playthrough_bit_rack;
   int playthrough_blocks_copy = 0, num_tiles_played_through_copy = 0;
   BitRack playthrough_bit_rack_copy;
 
-  // Word-existence pruning (skips recording slots that provably hold no word).
-  // Null `wm` disables it (the move set is unchanged, just less pruned).
+  // Word-existence pruning; a null `wm` disables it.
   const WordMap* wm = nullptr;
   BitRack full_rack_bit_rack;
   std::array<bool, RACK_SIZE + 1> nonplaythrough_has_word{};
 
-  // The (playthrough_blocks, tiles_played) anchor table.
+  // The anchor table; `touched` lists the slots written this anchor.
   struct Slot {
     int tiles_to_play;
     int playthrough_blocks;
@@ -1131,14 +1118,11 @@ struct ShadowGen {
       }
     }
     std::sort(full_rack_descending.begin(), full_rack_descending.begin() + n, std::greater<int>());
-    // The slots array is value-initialized (all tiles_to_play == 0); the sparse
-    // reset and the first-touch initialization in maybe_update_anchor keep it
-    // consistent without a full per-lane seed.
   }
 
-  // A slot's tiles_to_play == 0 means "untouched this pass" -- the first-touch
-  // sentinel. Clearing only that field is enough to recycle the slot, since
-  // maybe_update_anchor seeds leftmost/rightmost/score on the first touch.
+  // tiles_to_play == 0 marks a slot unused this anchor; maybe_update_anchor
+  // initializes the rest on first touch. So resetting only that field, and
+  // only in touched slots, suffices.
   void reset_anchors() {
     for (int i = 0; i < num_touched; ++i) slots[touched[i]].tiles_to_play = 0;
     num_touched = 0;
@@ -1149,7 +1133,7 @@ struct ShadowGen {
     Slot& a = slots[s];
     a.playthrough_blocks = playthrough_blocks;
     a.word_length = word_length;
-    if (a.tiles_to_play == 0) {  // first touch this pass: initialize the running range/max
+    if (a.tiles_to_play == 0) {
       touched[num_touched++] = s;
       a.tiles_to_play = tp;
       a.leftmost = a.rightmost = start_col;
@@ -1162,8 +1146,6 @@ struct ShadowGen {
     if (score > a.score) a.score = score;
   }
 
-  // descending_tile_scores is sorted descending; remove one occurrence of `score`
-  // (the just-restricted tile's value) and shift the tail left.
   void remove_score_from_descending_tile_scores(int score) {
     const int num_available = rack.size();
     for (int i = num_available; i-- > 0;) {
@@ -1237,11 +1219,10 @@ struct ShadowGen {
   void shadow_record() {
     const int word_length = num_tiles_played_through + tiles_played;
 
-    // Word-existence prunes (MAGPIE shadow_record): skip recording a slot the
-    // WordMap proves holds no word. A nonplaythrough play of length k exists only
-    // if some size-k subrack forms a k-letter word; a full-rack play through tiles
-    // exists only if the (rack + playthrough) multiset is in the map at that
-    // length. Both shrink the extent set without dropping any real play.
+    // Skip slots the WordMap proves hold no word, as MAGPIE's shadow_record
+    // does. A play of k tiles with no playthrough needs some size-k subrack to
+    // be a word; a full-rack play through tiles needs rack + playthrough to be
+    // one. Partial-rack playthrough plays aren't checked.
     if (wm != nullptr) {
       if (num_tiles_played_through > 0) {
         if (tiles_played == number_of_letters_on_rack &&
@@ -1263,6 +1244,7 @@ struct ShadowGen {
     if (tiles_played > max_tiles_to_play) max_tiles_to_play = tiles_played;
   }
 
+  // Whether to record: several tiles, or one tile that no other pass owns.
   static bool nonempty_and_nondup(int tiles_played, bool is_unique) {
     return (tiles_played > 1) || ((tiles_played == 1) && is_unique);
   }
@@ -1413,13 +1395,15 @@ struct ShadowGen {
     const int letter_mult = lane.letter_mult[current_left_col];
     const int this_word_mult = lane.word_mult[current_left_col];
     shadow_perpendicular_additional_score = lane.cross_score[current_left_col] * this_word_mult;
-    shadow_word_multiplier =
-      0;  // temporarily 0 so a single tile doesn't double-score the main word
+    // 0 for the one-tile record: a lone tile makes no main word, only the
+    // cross-word already counted in the perpendicular score.
+    shadow_word_multiplier = 0;
     if (!try_restrict_tile(possible, letter_mult, this_word_mult, current_left_col))
       insert_unrestricted_multipliers(current_left_col);
     ++tiles_played;
-    // MAGPIE's is_unique: a single tile is a cross-pass duplicate unless its
-    // square has a trivial cross set (no perpendicular word forms there).
+    // A single tile in the transposed pass duplicates the horizontal pass's
+    // play unless no cross-word forms at its square (cf.
+    // single_tile_duplicates_horizontal_pass).
     const bool is_unique = !transposed || cross_set == kTrivialCrossSet;
     if (is_unique) shadow_record();
     shadow_word_multiplier = this_word_mult;
@@ -1456,7 +1440,7 @@ struct ShadowGen {
     rack = full_rack;
   }
 
-  // Run the walk for one anchor column. Returns whether any play was found.
+  // Runs the walk for one anchor. Returns whether any slot was recorded.
   bool shadow_play_for_anchor(int col) {
     current_left_col = col;
     current_right_col = col;
@@ -1490,11 +1474,8 @@ std::vector<ShadowExtent> ShadowMoveGen::extents(
   const TileCounts& counts = rack.counts();
   const int rack_tiles = counts.size();
 
-  // Whether any size-k subrack forms a k-letter word (MAGPIE's
-  // nonplaythrough_has_word_of_length). The caller may pass it in (it often has
-  // already paid for these lookups while computing leave values); otherwise
-  // compute it here. Either way these are shadow-time word-existence checks, not
-  // generation probes, so they are not counted in the generation lookup profile.
+  // MAGPIE's nonplaythrough_has_word_of_length. Callers that price leaves have
+  // usually made these lookups already and pass the result in.
   std::array<bool, kMaxPlayTiles + 1> has_word_storage{};
   if (nonplaythrough_has_word == nullptr && wm != nullptr) {
     WmpSubracks subracks;
@@ -1526,10 +1507,7 @@ std::vector<ShadowExtent> ShadowMoveGen::extents(
       if (!any) continue;
       const ShadowLane lane = build_shadow_lane(view, cross, anchors, dict_, r);
       ShadowGen gen{lane, transposed, counts, wm, has_word};
-      // MAGPIE's last_anchor_col tiling: occupied anchors bump it by one so the
-      // next anchor leaves a one-square gap (avoiding double-emission across the
-      // playthrough tile).
-      gen.last_anchor_col = BOARD_SIZE;
+      gen.last_anchor_col = BOARD_SIZE;  // no previous anchor in this row
       for (int c = 0; c < BOARD_SIZE; ++c) {
         if (!lane.anchor[c]) continue;
         if (gen.shadow_play_for_anchor(c)) {
@@ -1548,6 +1526,9 @@ std::vector<ShadowExtent> ShadowMoveGen::extents(
             out.push_back(e);
           }
         }
+        // As in MAGPIE, an occupied anchor pushes the left limit one further
+        // right: a play covering the next square also covers this tile, so it was
+        // already bounded from this anchor.
         gen.last_anchor_col = c;
         if (!lane.empty[c]) ++gen.last_anchor_col;
       }

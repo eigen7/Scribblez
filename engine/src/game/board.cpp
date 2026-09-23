@@ -21,9 +21,8 @@ const Premium Premium::DWS = Premium(Premium::kDWS);
 const Premium Premium::TWS = Premium(Premium::kTWS);
 namespace {
 
-// Encoded as: ' ' NONE, '\'' DLS, '"' TLS, '-' DWS, '=' TWS (matching MAGPIE's
-// bonus-square character codes). Center (7,7) is treated as DWS for first-move
-// scoring.
+// Encoded as: ' ' NONE, '\'' DLS, '"' TLS, '-' DWS, '=' TWS (MAGPIE's
+// bonus-square characters). The center star is a DWS.
 // clang-format off
 constexpr const char* kPremiumLayout[BOARD_SIZE] = {
     "=  '   =   '  =",
@@ -90,10 +89,8 @@ void Board::apply(const Move& move, BoardUndo* undo) {
   }
   if (np == 0 || !had_caches) return;  // nothing placed, or caches were stale anyway
 
-  // Keep the caches in sync without a full rescan. The first move (empty board
-  // becoming non-empty) flips the anchor model, so just rebuild once. All cache
-  // writes flow through set_cross_/set_anchor_ so `undo` captures exactly the
-  // entries touched.
+  // The first move replaces the lone center anchor with the tile-adjacency
+  // anchors, so it gets a full rebuild; later moves update incrementally.
   recorder_ = undo;
   if (was_empty) {
     recompute_all_caches();
@@ -171,14 +168,7 @@ std::string Board::to_string() const {
   return s;
 }
 
-// ---------------------------------------------------------------------------
-// Persistent move-generation caches (cross-checks + GADDAG anchors).
-//
-// These mirror Macondo's board-resident cross-sets and anchors: computed once
-// for a position and then updated incrementally as tiles are placed, so the
-// move generator never rescans the whole board on a turn that did not change it
-// (e.g. PASS/EXCHANGE) and only touches the affected squares on a PLAY.
-// ---------------------------------------------------------------------------
+// ---- Move-generation caches ----
 
 std::pair<int, int> Board::perpendicular_run_bounds(bool t, int r, int c) const {
   int top = r - 1;
@@ -225,8 +215,8 @@ CrossCheck Board::cross_check_at(bool t, int r, int c) const {
     return cc;
   }
 
-  // Walk the dictionary through the run above (r, c) and total the run's tile
-  // score (filled squares above plus below, excluding blanks).
+  // Walk the DAWG through the run above (r, c), totalling the face value of the
+  // run above and below.
   const Dictionary& dict = *dict_;
   uint32_t prefix_node = dict.root();
   int prefix_score = 0;
@@ -252,10 +242,12 @@ CrossCheck Board::cross_check_at(bool t, int r, int c) const {
 }
 
 bool Board::gaddag_anchor_at(bool t, int r, int c) const {
-  // GADDAG anchors (direction-specific, along increasing column in this view):
-  //   - an occupied square is an anchor iff nothing is immediately to its right;
-  //   - an empty square is an anchor iff both horizontal neighbors are empty and
-  //     it has a tile directly above or below (a pure cross-hook).
+  // GADDAG anchors, one per place a play can start its leftward walk (this
+  // view's rows only):
+  //   - a filled square is an anchor iff it ends a run (nothing to its right);
+  //   - an empty square is an anchor iff it touches no in-row tile but has one
+  //     above or below (a pure hook). Squares next to an in-row run are
+  //     reached from that run's anchor instead.
   const bool here = !oriented_at(r, c, t).is_empty();
   const bool tile_left = c > 0 && !oriented_at(r, c - 1, t).is_empty();
   const bool tile_right = c < BOARD_SIZE - 1 && !oriented_at(r, c + 1, t).is_empty();
@@ -272,9 +264,8 @@ void Board::recompute_all_caches() const {
       for (int c = 0; c < BOARD_SIZE; ++c)
         set_cross_(t, r * BOARD_SIZE + c, cross_check_at(t, r, c));
     if (empty) {
-      // A full rebuild of an empty board never runs under an undo recorder
-      // (the first placed tile makes the board non-empty before this branch),
-      // so the anchor reset is a direct write.
+      // Never reached under an undo recorder (apply() rebuilds only after
+      // placing a tile), so the direct writes are safe.
       ganchor_[t].fill(false);
       ganchor_[t][CENTER * BOARD_SIZE + CENTER] = true;  // sole opening anchor
     } else {
@@ -288,13 +279,12 @@ void Board::recompute_all_caches() const {
 void Board::update_caches_after_place(const std::pair<int, int>* placed, int n) const {
   for (int t = 0; t < 2; ++t) {
     for (int i = 0; i < n; ++i) {
-      // View coordinates of the placed square in this orientation.
       const int vr = t ? placed[i].second : placed[i].first;
       const int vc = t ? placed[i].first : placed[i].second;
       // The placed square is now filled; its cross-check is unused.
       set_cross_(t, vr * BOARD_SIZE + vc, CrossCheck{});
-      // Only the empty squares at the two ends of the (now extended)
-      // perpendicular run through column vc can change.
+      // Only the empty squares just past each end of the perpendicular run
+      // through the placed tile can change.
       int top = vr;
       while (top - 1 >= 0 && !oriented_at(top - 1, vc, t).is_empty()) --top;
       int bot = vr;
@@ -305,8 +295,8 @@ void Board::update_caches_after_place(const std::pair<int, int>* placed, int n) 
     }
   }
 
-  // A GADDAG anchor depends on a square and its four neighbors, so re-evaluate
-  // each placed square and its neighbors (k == -1 is the square itself).
+  // An anchor depends on a square and its four neighbors, so re-evaluate each
+  // placed square (k == -1) and its neighbors.
   for (int i = 0; i < n; ++i) {
     const int br = placed[i].first, bc = placed[i].second;
     for (int k = -1; k < 4; ++k) {

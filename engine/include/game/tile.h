@@ -5,12 +5,9 @@
 
 namespace scribblez {
 
-// A single Scrabble tile, stored in one byte. A tile is a letter A..Z, a blank,
-// or -- when it is the content of a board square -- the empty sentinel.
-//
-// A Tile converts implicitly to its underlying code (0..25 = A..Z, 26 = blank,
-// 27 = empty) so it can be used directly as an array index or in arithmetic.
-// Construct with the factories or the BLANK / EMPTY_SQUARE constants below.
+// A tile in one byte: a letter A..Z, a blank, or the empty sentinel. Converts
+// implicitly to its code (0..25 = A..Z, 26 = blank, 27 = empty) for use as an
+// array index.
 class Tile {
  public:
   constexpr Tile() = default;  // empty square
@@ -18,9 +15,9 @@ class Tile {
   static constexpr Tile of(int letter_index) { return Tile(uint8_t(letter_index)); }
   static constexpr Tile blank() { return Tile(kBlank); }
   static constexpr Tile empty() { return Tile(kEmpty); }
-  static constexpr Tile from_char(char c);
+  static constexpr Tile from_char(char c);  // either case; '?' or '_' is a blank
 
-  constexpr operator uint8_t() const { return code_; }  // usable as an index
+  constexpr operator uint8_t() const { return code_; }
   constexpr uint8_t index() const { return code_; }
   constexpr bool is_blank() const { return code_ == kBlank; }
   constexpr bool is_empty() const { return code_ == kEmpty; }
@@ -43,10 +40,8 @@ inline constexpr Tile EMPTY_SQUARE = Tile::empty();
 
 constexpr int RACK_SIZE = 7;
 
-// Standard English Scrabble point values, indexed by letter (0..25).
+// Standard English point values and tile distribution, indexed by Tile code.
 extern const std::array<int, 26> TILE_VALUES;
-
-// Standard English tile counts. Index 0..25 = A..Z, index 26 = blank.
 extern const std::array<int, 27> TILE_COUNTS;
 
 }  // namespace scribblez

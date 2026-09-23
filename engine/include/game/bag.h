@@ -10,17 +10,15 @@ namespace scribblez {
 
 class Bag {
  public:
-  // The full bag's tile count (the standard English distribution); the
-  // constructor asserts the distribution table still sums to it.
+  // Tiles in a full bag under TILE_COUNTS, the standard English distribution
+  // a new Bag starts from.
   static constexpr int kTotalTiles = 100;
 
-  // Initialize from the standard English tile distribution.
   explicit Bag(uint64_t seed);
 
   std::optional<Tile> draw();
   void put_back(Tile t);
-  // `t` must be present. Lets a caller carve an unseen-tile pool out of a full
-  // bag.
+  // `t` must be present. For carving an unseen-tile pool out of a full bag.
   void remove(Tile t);
   int size() const { return remaining_; }
   const std::array<int, 27>& counts() const { return counts_; }

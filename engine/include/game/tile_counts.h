@@ -7,8 +7,8 @@
 
 namespace scribblez {
 
-// Rack's counterpart: the same tiles as a per-type histogram, which trades
-// Rack's compactness for O(1) counting.
+// Rack's counterpart: tiles as a per-type histogram, trading Rack's
+// compactness for O(1) count().
 class TileCounts {
  public:
   void add(Tile t) { ++counts_[t]; }

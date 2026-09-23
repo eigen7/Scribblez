@@ -11,8 +11,7 @@ uint64_t Rack::bits() const {
 }
 
 void Rack::add(Tile t) {
-  // Insertion sort into the fixed array (RACK_SIZE is tiny). The caller never
-  // exceeds RACK_SIZE tiles.
+  // Insertion sort; the caller never exceeds RACK_SIZE tiles.
   int i = size_;
   while (i > 0 && t < tiles_[i - 1]) {
     tiles_[i] = tiles_[i - 1];
@@ -42,7 +41,6 @@ int Rack::count(Tile t) const {
 }
 
 std::string Rack::to_string() const {
-  // tiles_ is sorted, so letters come before blanks; a blank renders as '?'.
   std::string s;
   for (int i = 0; i < size_; ++i) s.push_back(tiles_[i].to_char());
   return s;

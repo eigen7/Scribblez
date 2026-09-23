@@ -11,8 +11,9 @@ namespace scribblez::util {
 // Returns an empty string if the file can't be opened.
 std::string read_file(const std::string& path);
 
-// Read/write exactly n bytes, looping over short reads and writes. Returns
-// false on EOF or error.
+// Receive/send exactly n bytes on a socket (recv/send, so not usable on
+// plain files), looping over short transfers. Returns false on EOF or error.
+// Sends use MSG_NOSIGNAL, so a closed peer yields false rather than SIGPIPE.
 bool read_n(int fd, void* buf, size_t n);
 bool write_all(int fd, const void* buf, size_t n);
 

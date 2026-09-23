@@ -66,15 +66,13 @@ void Game::refill_rack(int p, Rack* drawn_out) {
 }
 
 void Game::play() {
-  // Initial draws.
   for (int p = 0; p < 2; ++p) {
     refill_rack(p, /*drawn_out=*/nullptr);
   }
   log_.initial_racks[0] = racks_[0];
   log_.initial_racks[1] = racks_[1];
 
-  // Let stateful agents reset to a clean position (seats alternate across a
-  // series, so the same Agent instances are reused game to game).
+  // Agents are reused across a series of games, so let them reset.
   const BeginGameRequest start{scores_};
   players_[0]->begin_game(start);
   players_[1]->begin_game(start);
@@ -89,14 +87,10 @@ void Game::play_from(const Board& board, std::array<int, 2> scores,
   scores_ = scores;
   racks_[0] = known_racks[0];
   racks_[1] = known_racks[1];
-  // Whatever a seat is seeded with is exactly what it has publicly retained --
-  // a rollout's known racks ARE the leaves the simulating player can see -- so
-  // the face-up-leaves view is already correct before the first refill hides
-  // the replenishments.
+  // A rollout's known racks are exactly the leaves the simulating player can
+  // see, so they seed the face-up-leaves view.
   leaves_ = known_racks;
   bag_ = pool;
-  // Refill both racks from the seeded pool in turn order, then return any
-  // just-exchanged tiles to the bag (they were not drawable by either refill).
   refill_rack(to_move, /*drawn_out=*/nullptr);
   refill_rack(1 - to_move, /*drawn_out=*/nullptr);
   for (int i = 0; i < returned_to_bag.size(); ++i) bag_.put_back(returned_to_bag.tiles()[i]);
@@ -122,12 +116,10 @@ void Game::play_loop(int start_player) {
   int cur = start_player;
   int consecutive_zero_turns = 0;
   constexpr int kMaxConsecutiveZero = 6;  // 3 per player
-  constexpr int kMaxTurns = 400;          // safety net
+  constexpr int kMaxTurns = 400;          // guards against agents that never end the game
 
-  // Moves an earlier decision projected for the rest of the game (see
-  // MoveDecision); while any are queued, the loop plays them instead of
-  // prompting the agents. The projecting agent has proven the game's course,
-  // so its moves are trusted exactly as an agent's own move is.
+  // The rest of the game as projected by an earlier decision (see
+  // set_respect_projections); played in place of prompting the agents.
   std::vector<Move> projected;
   size_t projected_next = 0;
 
@@ -155,9 +147,8 @@ void Game::play_loop(int start_player) {
 
     bool rack_emptied = false;
     const int n_glyphs = m.num_glyphs();
-    // Every move kind surrenders its glyphs off the rack first (a PASS has
-    // none), and what remains is the leave -- which face-up leaves makes
-    // public, captured here before the refill hides the replenishments.
+    // What remains after removing the move's tiles (none for a PASS) is the
+    // leave; capture it before the refill.
     for (int i = 0; i < n_glyphs; ++i) racks_[cur].remove(m.glyph(i).rack_tile());
     leaves_[cur] = racks_[cur];
 
@@ -182,9 +173,7 @@ void Game::play_loop(int start_player) {
 
     rec.move = std::move(m);
 
-    // Notify both seats of the applied move, in turn order, so stateful agents
-    // (e.g. NeuralAgent) can mirror the full game even on the opponent's
-    // turns. The board/score are already updated above for a PLAY.
+    // Both seats observe every move, so stateful agents can mirror the game.
     players_[0]->observe_move(rec.move);
     players_[1]->observe_move(rec.move);
 
@@ -192,10 +181,9 @@ void Game::play_loop(int start_player) {
     log_.turns.push_back(std::move(rec));
 
     if (rack_emptied) {
-      // Standard end: the out-going player gains twice the sum of the
-      // opponents' remaining tile values, and the opponents' scores are left
-      // unchanged. This is the modern tournament convention (a single +2N
-      // bonus) rather than awarding +N to the winner and -N to the loser.
+      // Going out earns twice the opponent's remaining tile values and the
+      // opponent loses nothing: the tournament convention, not the +N/-N rule
+      // of some rulebooks.
       int opp = 1 - cur;
       int opp_remain = racks_[opp].point_value();
       scores_[cur] += 2 * opp_remain;
@@ -208,10 +196,8 @@ void Game::play_loop(int start_player) {
       log_.end_reason = "stalemate";
       break;
     }
-    // Checked after the natural ends, so a game that finishes exactly at the
-    // cap counts as finished, with its score adjustments applied. Once the
-    // bag has emptied the cap stops applying and the game plays out -- see
-    // set_max_plies for why the endgame is never truncated.
+    // Checked after the natural ends, so a game that ends exactly at the cap
+    // counts as finished. See set_max_plies for the bag condition.
     if (max_plies_ > 0 && (int)log_.turns.size() >= max_plies_ &&
         log_.turns.back().bag_size_before > 0) {
       log_.end_reason = "truncated";

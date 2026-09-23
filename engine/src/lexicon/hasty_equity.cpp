@@ -19,20 +19,15 @@ namespace scribblez {
 
 namespace {
 
-// Root of Macondo's per-lexicon strategy data (leaves + pre-endgame tables),
-// from which HastyBot's default file locations are derived.
 constexpr char kStrategyRoot[] = "/workspace/mount/macondo/data/strategy";
 
-// ---- leave computation --------------------------------------------------
-
-// ---- opening adjustment -------------------------------------------------
-
-// 2LS column (or row) positions on a standard 15x15 board that adjoin the
-// star; identical set for horizontal and vertical first plays.
+// Squares on the center line whose perpendicular neighbors are DLS (rows and
+// columns 6 and 8 have DLS at 2, 6, 8, 12), so a vowel there sets up the
+// opponent's parallel play across a DLS. The same for either direction.
 bool is_penalised_position(int pos) { return pos == 2 || pos == 6 || pos == 8 || pos == 12; }
 
-// A kVowelPenalty charge per vowel that lands on a 2LS square adjacent to the
-// star on an empty-board opening play. Matches Maven / Macondo's heuristic.
+// Maven's and Macondo's opening heuristic: kVowelPenalty per vowel an opening
+// play puts on one of those squares.
 double opening_adjustment(const Move& move, const Board& board) {
   if (!board.empty_board()) return 0.0;
   if (move.type() != MoveType::PLAY) return 0.0;
@@ -49,8 +44,6 @@ double opening_adjustment(const Move& move, const Board& board) {
   return penalty;
 }
 
-// ---- pre-endgame adjustment ---------------------------------------------
-
 double peg_adjustment(const Move& move, int bag_size, const std::vector<double>& peg_table) {
   if (bag_size <= 0 || peg_table.empty()) return 0.0;
   int bag_after = bag_size - move.num_glyphs() + 7;
@@ -58,8 +51,8 @@ double peg_adjustment(const Move& move, int bag_size, const std::vector<double>&
   return peg_table[size_t(bag_after)];
 }
 
-// ---- endgame adjustment -------------------------------------------------
-
+// With the bag empty: going out collects twice the opponent's rack's face
+// value; otherwise the mover pays twice its own leave's, plus 10.
 double endgame_adjustment(int leave_point_value, bool leave_empty, const Rack& opp_rack,
                           int bag_size) {
   if (bag_size > 0) return 0.0;
@@ -67,8 +60,8 @@ double endgame_adjustment(int leave_point_value, bool leave_empty, const Rack& o
   return 2.0 * opp_rack.point_value();
 }
 
-// ---- PEG JSON loader ----------------------------------------------------
-
+// Returns an empty table (disabling the adjustment) if the file is missing or
+// isn't a JSON array.
 std::vector<double> load_peg_table(const std::string& path) {
   if (path.empty()) return {};
   std::ifstream in(path);
@@ -87,8 +80,6 @@ std::vector<double> load_peg_table(const std::string& path) {
 }
 
 }  // namespace
-
-// -------------------------------------------------------------------------
 
 HastyEquity& HastyEquity::instance() {
   static HastyEquity inst;
@@ -119,8 +110,7 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
                            const Rack& my_rack) const {
   if (!ready_) throw util::Exception("HastyEquity::init() was not called");
 
-  // Derive the leave directly from the rack and the move's played tiles; the
-  // single-move path is not perf-critical, so it skips the per-turn table.
+  // One move at a time isn't hot, so skip building a TurnLeaves.
   Rack leave = my_rack;
   for (int i = 0; i < move.num_glyphs(); ++i) leave.remove(move.glyph(i).rack_tile());
 
@@ -131,9 +121,8 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
 }
 
 TurnLeaves HastyEquity::turn_leaves(const Rack& my_rack) const {
-  // The greedy HastyBot path prices every leave through this table rather
-  // than equity(), so it needs the same guard: an unloaded table silently
-  // values every leave at 0, which is a different bot.
+  // Guarded like equity(): an unloaded table would silently value every leave
+  // at 0, which is a different bot.
   if (!ready_) throw util::Exception("HastyEquity::init() was not called");
   return TurnLeaves(my_rack, leave_values_);
 }
@@ -149,8 +138,8 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
 
 namespace {
 
-// Recurse over the rack's distinct tile types, choosing how many of each to
-// KEEP, and track the max leave value by leave size in `best[size]`.
+// Enumerates sub-leaves by choosing how many of each distinct tile to keep,
+// recording the best value per leave size in `best`.
 void enum_sub_leaves(const std::vector<std::pair<Tile, int>>& types, size_t i, Rack& leave,
                      int kept, const LeaveValues& lv, std::array<double, RACK_SIZE + 1>& best) {
   if (i == types.size()) {

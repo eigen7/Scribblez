@@ -20,7 +20,6 @@ struct TrieNode {
   bool terminal = false;
 };
 
-// Insert a sequence of tile values, marking the final node terminal.
 void insert(TrieNode* root, const std::vector<uint8_t>& tiles) {
   TrieNode* node = root;
   for (uint8_t t : tiles) {
@@ -31,8 +30,8 @@ void insert(TrieNode* root, const std::vector<uint8_t>& tiles) {
   node->terminal = true;
 }
 
-// Lay out the (non-minimized) trie into the KWG node array, appending nodes and
-// returning the arc-list index of `tn`'s children (0 if it has none).
+// Appends `tn`'s subtree to the KWG node array and returns the index of its
+// child arc list (0 if it has none).
 uint32_t layout(std::vector<uint32_t>& nodes, const TrieNode* tn) {
   if (tn->children.empty()) return 0;
   uint32_t first = nodes.size();
@@ -52,15 +51,15 @@ uint32_t layout(std::vector<uint32_t>& nodes, const TrieNode* tn) {
   return first;
 }
 
-// Validate and normalize a word to A..Z tile values (1-indexed). Returns false
-// (and leaves `out` unspecified) for words shorter than 2 or with non-letters.
+// Converts a word to KWG tile values. Returns false (leaving `out`
+// unspecified) for words shorter than 2 or with non-letters.
 bool word_to_tiles(const std::string& w, std::vector<uint8_t>& out) {
   if (w.size() < 2) return false;
   out.clear();
   for (char c : w) {
     if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
     if (c < 'A' || c > 'Z') return false;
-    out.push_back(uint8_t(c - 'A' + 1));  // 1-indexed
+    out.push_back(uint8_t(c - 'A' + 1));
   }
   return true;
 }
@@ -113,13 +112,12 @@ Dictionary Dictionary::load_kwg(const std::string& path) {
   d.nodes_.resize(size_t(size) / 4);
   in.read(reinterpret_cast<char*>(d.nodes_.data()), size);
   if (!in) throw util::Exception("Failed to read KWG file: {}", path);
-  // KWG is little-endian uint32. This loader assumes a little-endian host
-  // (true on x86-64 / aarch64); add a byte-swap fallback if you target BE.
+  // Read without byte-swapping: assumes a little-endian host.
   if (d.nodes_.size() < 2) {
     throw util::Exception("KWG file too small: {}", path);
   }
-  d.root_ = d.nodes_[0] & ARC_MASK;         // DAWG root.
-  d.gaddag_root_ = d.nodes_[1] & ARC_MASK;  // GADDAG root.
+  d.root_ = d.nodes_[0] & ARC_MASK;
+  d.gaddag_root_ = d.nodes_[1] & ARC_MASK;
   return d;
 }
 
@@ -130,12 +128,9 @@ Dictionary Dictionary::build_from_words(const std::vector<std::string>& words) {
   for (const auto& w : words) {
     if (!word_to_tiles(w, tiles)) continue;
 
-    // DAWG: the word itself.
     insert(&dawg, tiles);
 
-    // GADDAG: rev(c1..ci) + SEP + c(i+1..n) for i = 1..n-1, and the fully
-    // reversed word (no separator) for i = n. This matches the wolges/Macondo
-    // encoding (verified against real .kwg files).
+    // GADDAG paths, in the encoding described in dictionary.h.
     const int n = tiles.size();
     std::vector<uint8_t> path;
     path.reserve(n + 1);
@@ -151,8 +146,8 @@ Dictionary Dictionary::build_from_words(const std::vector<std::string>& words) {
   }
 
   Dictionary d;
-  // Reserve the two-slot KWG header: ArcIndex(0) is the DAWG root, ArcIndex(1)
-  // is the GADDAG root. Lay out both tries into the shared node array.
+  // Entries 0 and 1 are the root pointers, filled in once both tries are laid
+  // out.
   d.nodes_.push_back(0);
   d.nodes_.push_back(0);
   uint32_t dawg_root = layout(d.nodes_, &dawg);
