@@ -13,11 +13,23 @@ over both players' hidden racks from the perspective of an outside observer —
 and use a learned encoder/decoder framework with posterior refinement to
 produce accurate, context-aware rack samples for Monte Carlo simulation.
 
-**Scope note.** This document describes the full design, in standard Scrabble.
-Development currently runs in the face-up-leaves variant, which parks the
-belief system (§3) and everything downstream of it; see
-[roadmap.md](roadmap.md) for what that defers and why. Nothing else here is
-specific to an information condition.
+**How to read this.** This is the north-star design, in standard Scrabble:
+the architecture the project is heading toward and the reasoning behind it.
+It is not a description of the code. [roadmap.md](roadmap.md) is the
+implementation plan, and where the two differ, the roadmap records the
+decision. In particular:
+
+- Development runs in the face-up-leaves variant, which parks the belief
+  system (§3) and everything downstream of it. Nothing else here depends on
+  the information condition.
+- The Q-head (§4) is realized as a separate network, the move set evaluation
+  model, distilled from the V-head, which is realized as the position
+  evaluation model ([model_architectures.md](model_architectures.md)).
+- The root search (§5) is a sequential evidence loop: a learned proves-best
+  head picks each next candidate to simulate, conditioned on the sims so far,
+  instead of simulating a fixed top `K`. Rollouts are played by HastyBot and
+  cut off at a horizon where the position evaluation model takes over; the
+  Q-head playing inside rollouts is the later D2 rung.
 
 ## 1. Introduction and motivation
 
@@ -35,22 +47,19 @@ same valuation whether the board is wide open or locked down, whether the
 player is ahead by 100 points or behind by 50, and whether the bag contains 80
 tiles or 5.
 
-**Naive opponent rack inference.** When sampling opponent racks for simulation,
-Macondo uses a rejection sampling heuristic: sample a random rack from the
-unseen tile pool, and accept it if the opponent's most recent move would have
-been "plausible" given that rack. This approach has two critical limitations:
+**Naive opponent rack inference.** When sampling opponent racks for
+simulation, Macondo's range finder draws candidate racks from the unseen tile
+pool and weights each by how plausible the opponent's most recent move would
+have been with it. This has two critical limitations:
 
 1. **Myopia**: It conditions only on the opponent's last move, discarding all
-   earlier history. A low-value `S` play two turns ago — strong evidence of a
-   duplicate `S` — is ignored entirely.
-2. **Sparsity**: After moves involving a small number of observed tiles (or no
-   observed tiles in the case of an exchange), most sampled moves will get
-   rejected as implausible, so the acceptance filter has little effect and
-   sampling degenerates to near-uniform over unseen tiles. (Macondo uniformly
-   samples racks, filtering those that get rejected as implausible. If it fails
-   to produce enough plausible samples within a given budget, it fills the
-   remainder of the sample with unfiltered uniformly sampled racks. This
-   unfiltered filler is what leads to the near-uniform degeneracy.)
+   earlier history. A low-value `S` play two turns ago, strong evidence of a
+   duplicate `S`, is ignored entirely.
+2. **Sparsity**: After a move that shows few tiles, or none in the case of an
+   exchange, the last move says little about the rest of the rack, so the
+   plausibility weights carry little signal. And when inference yields only a
+   few racks, the simulator mixes in fully random ones as a fallback. Either
+   way, sampling degenerates toward uniform over the unseen tiles.
 
 Our design addresses both weaknesses by introducing neural network components
 that condition on the full game state, combined with Bayesian inference
@@ -188,8 +197,8 @@ that the network may miss, especially around rare words unseen during training.
 
 ### 3.4 Rejection traces as information
 
-A key insight is that *rejected* candidate racks carry as much or more
-information than accepted ones. When a candidate rack is rejected, the
+*Rejected* candidate racks carry as much information as accepted ones, or
+more. When a candidate rack is rejected, the
 rejection comes with a reason: "if the opponent had held `AEINRST`, they would
 have played `NASTIER` for 83 points instead of their actual 24-point play."
 This is a crisp, high-information signal that carves out a region of rack space
@@ -234,7 +243,7 @@ the compressor's updated understanding of the rejection landscape:
    compressor state. Repeat until the accepted particle set reaches the
    required size `M`.
 
-The first batch is essentially sampling from the neural prior. By the second or
+The first batch samples from the neural prior. By the second or
 third batch, the decoder has seen what kinds of racks get rejected and why, and
 can steer its proposals accordingly. The acceptance rate is expected to climb
 with each iteration as the decoder learns to avoid implausible regions for the
@@ -332,7 +341,10 @@ instantiations per physical placement). We manage this through:
 
 **Deduplication.** Moves that produce identical board states (same tiles in
 same positions, regardless of which physical tile is the blank) are collapsed.
-This eliminates the majority of blank-induced duplicates.
+This eliminates the majority of blank-induced duplicates. (The roadmap scores
+every legal move without filtering instead: its one-pass Q-head makes large
+move sets cheap, and blanks with different letters produce genuinely
+different boards. See [roadmap.md](roadmap.md#the-destination).)
 
 **Batch evaluation.** After deduplication, the remaining `N` moves are encoded
 and passed to the Q-head in a single forward pass. Typical `N` after

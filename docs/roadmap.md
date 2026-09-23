@@ -1,36 +1,63 @@
-# Scribblez Project Roadmap
+# Scribblez roadmap
 
 Scribblez aims to beat existing Scrabble engines by replacing their
 context-blind static evaluation and naive rack inference with learned,
 belief-aware evaluation ([design.md](design.md)). This document is the
-**implementation plan**: the agent we are building, what already exists, what is
-left to write, and the models that have to be trained to feed it.
+**implementation plan**: the agent being built, what exists, what is left, and
+the models that have to be trained to feed it. Read it to know where a piece
+of work fits and why the pieces are ordered as they are.
 
-It deliberately contains no experiments. Measurement — what has been established,
-and how the finished agent gets evaluated — lives in
-[evaluation_plan.md](evaluation_plan.md) and happens once the build is done. The
-plan below is committed to, not gated: every component listed is part of the
-destination agent, and nothing here exists to decide whether to build something
-else.
+It contains no experiments. What past measurements established, and how the
+finished agent will be evaluated, is in
+[evaluation_plan.md](evaluation_plan.md). The plan is committed to, not gated:
+every item is part of the destination agent, and nothing here exists to decide
+whether to build something else.
 
-Legacy track labels (A2, A3, C2, D1, …) are kept where code comments and other
-docs already reference them, but the ordering below is implementation order, not
-track order.
+## Status at a glance
+
+| Item | Status |
+|------|--------|
+| [1. Per-move placement planes](#1-per-move-placement-planes) | Done |
+| [2. Value-truncated rollouts (D1)](#2-value-truncated-rollouts-d1) | Done |
+| [3. Engine runtime for the evidence path](#3-engine-runtime-for-the-evidence-path) | Done |
+| [4. Evidence-trajectory generation](#4-evidence-trajectory-generation) | Built; the corpus is not yet generated |
+| [5. The move proposal model](#5-the-move-proposal-model) | Built; not yet trained beyond the frozen trial |
+| [6. The sequential agent](#6-the-sequential-agent) | Built; waits on a trained model from item 5 |
+| [7. Self-model plies and the endgame solver (D2, D3)](#7-self-model-plies-and-the-endgame-solver-d2-d3) | D2 not started; D3 partly built |
+| [8. Cloud generation](#8-cloud-generation) | Done for `move_set_eval`; `evidence_trajectories` is local-only |
+
+What remains is mostly compute: generate the item-4 corpus, train the item-5
+model on it, then run the measurements in
+[evaluation_plan.md](evaluation_plan.md).
+
+**Track labels.** Code comments and older documents refer to work by track
+label. The numbering in this document is implementation order; the labels map
+as follows:
+
+- **A** — the move set evaluation track. A1 the match harness, A2 `.mset`
+  target generation, A3 the distilled student and its gate metrics, A4 engine
+  inference and the `mset-sim` agent.
+- **B** — rack inference ([parked](#rack-inference-parked)).
+- **C** — sim candidate selection. C1 was an interim diversity heuristic, now
+  [rejected](#what-is-deliberately-not-here).
+- **D** — the rollout-policy ladder: D1 value truncation (item 2), D2
+  self-model plies and D3 the endgame solver (item 7).
+- **E** — infrastructure: E1 the cloud fleet, E2 match discipline.
 
 ## The variant: face-up leaves
 
-Development happens in **face-up-leaves Scrabble**, where each player reveals
-their leave after every turn and only the replenishment draws stay hidden.
-Symmetrically: both seats see, and both may use, the other's retained tiles.
+Development happens in **face-up-leaves Scrabble**: each player reveals their
+leave after every turn, and only the replenishment draws stay hidden. Both
+seats see, and may use, the other's retained tiles.
 
-Rack uncertainty is the dominant confound in everything downstream, and removing
-it by rule lets the effort go where the novelty is: the move set evaluation
-model, evidence conditioning, and sim scheduling. None of those components are
-specific to an information condition, so returning to standard Scrabble later is
-a data regeneration rather than a redesign.
+Rack uncertainty is the dominant confound in everything downstream. Removing it
+by rule puts the effort where the novelty is: the move set evaluation model,
+evidence conditioning, and sim scheduling. None of those components depends on
+the information condition, so returning to standard Scrabble later means
+regenerating data, not redesigning.
 
-What this parks is the *belief* half of the thesis in [design.md](design.md).
-That is a sequencing decision, not a retraction; see [rack inference](#rack-inference--parked).
+This parks the *belief* half of [design.md](design.md). That is a sequencing
+decision, not a retraction; see [rack inference](#rack-inference-parked).
 
 ## The destination
 
@@ -62,482 +89,487 @@ sim the highest-SCORING move (the greedy anchor)   ← model-independent
 play the best simmed candidate by simulation value
 ```
 
-The model in the loop is the **move proposal model** — a copy of the move set
+The model in the loop is the **move proposal model**: a copy of the move set
 evaluation model carrying the fusion stage and the proves-best head
 ([models](#models-and-how-they-are-trained)). The plain student never runs at
-the root; its readouts reach the loop through the copy's anchored plain pass.
+the root; its readouts reach the loop through the copy's plain pass.
 
-Rollouts inside the loop are value-truncated at a lexically sufficient
-horizon ([item 2](#2-value-truncated-rollouts-d1)) and climb the rest of the
-[policy ladder](#7-self-model-plies-and-the-endgame-solver-d2-d3): self-model
-plies, then the endgame solver once the bag empties.
+Rollouts inside the loop are value-truncated at a horizon deep enough for the
+lexical contingencies to play out ([item 2](#2-value-truncated-rollouts-d1)),
+and climb the rest of the
+[rollout-policy ladder](#7-self-model-plies-and-the-endgame-solver-d2-d3):
+self-model plies, then the endgame solver once the bag empties.
 
-**The first sim is a mechanical anchor**, not a model choice: the
-highest-raw-score move, as the greedy agent would pick it, regardless of how the
-model ranks it. Two reasons, both from
-[sim_residual_feedback.md](plans/sim_residual_feedback.md). It is cheap insurance
-against model blind spots — the one candidate guaranteed to be simmed is chosen
-by a rule the model cannot be wrong about. And its sim is unusually informative
-evidence: the residual on the obvious move calibrates the rest of the evidence
-set, which a pick correlated with the model's own errors would not do.
+The design choices behind the loop:
 
-**The loop is sequential by design.** Every sim is informed by all prior
-evidence, and if the agent sims `N` candidates it queries the proves-best head
-`N − 1` times — the anchor needs no query, and every pick after it is
-evidence-conditioned. This is `(B = 1, R = K)` in
-[sim_residual_feedback.md](plans/sim_residual_feedback.md)'s schedule spectrum, which
-that document already identifies as the design center; batched multi-round
-variants are a fallback, not a step on the way.
-
-The serial queries are free. One full-candidate-set forward pass costs **0.37 ms**
-at M = 4000 ([model_specs.h](../engine/include/nn/model_specs.h), measured),
-against **~16.8 thread-seconds** of rollouts per turn at K=10 × 400 (measured)
-— and the deployment budget is nearer ~1,000 rollouts per candidate (~42
-thread-seconds by that scaling), which is what makes value truncation
-([item 2](#2-value-truncated-rollouts-d1)) and early stopping load-bearing.
-Ten sequential passes are four orders of magnitude below the rollouts they
-schedule.
-
-**Promotion, not re-scoring, is the payoff.** Simmed candidates are ranked by
-their own sims; conditioning matters because the loop can promote a candidate no
-earlier round would have picked — the modest play that blocks a hot spot the
-sims just revealed.
-
-**No upfront candidate filtering.** `N` ranges from 1 to 10,000+ (blanks), and
-collapsing near-duplicate blank designations before scoring is both unnecessary
-and risky: the single linear pass makes large `N` a non-problem, differing blank
-letters produce genuinely different crosswords and hooks, and an upfront filter
-risks dropping exactly the move the model exists to find. Every legal move is
-scored, every iteration. The `O(N)` argument assumes full-set evaluation happens
-once per decision, at the root — a neural *rollout* policy prunes instead, for
-the separate reasons under [D2](#7-self-model-plies-and-the-endgame-solver-d2-d3).
+- **The first sim is a mechanical anchor**, not a model choice: the
+  highest-raw-score move, as the greedy agent would pick it, however the model
+  ranks it. It is cheap insurance against model blind spots, because the one
+  candidate guaranteed a sim is chosen by a rule the model cannot get wrong.
+  Its sim is also unusually informative: the residual on the obvious move
+  calibrates the rest of the evidence set, which a pick correlated with the
+  model's own errors would not do
+  ([sim_residual_feedback.md](plans/sim_residual_feedback.md)).
+- **The loop is sequential.** Every sim is informed by all prior evidence. If
+  the agent sims `N` candidates it queries the proves-best head `N − 1` times:
+  the anchor needs no query, and every later pick is evidence-conditioned. In
+  [sim_residual_feedback.md](plans/sim_residual_feedback.md)'s schedule
+  spectrum this is `(B = 1, R = K)`, which that document identifies as the
+  design center; batched multi-round variants are a fallback, not a step on
+  the way.
+- **The serial queries are free.** One full-candidate-set forward pass costs
+  0.37 ms at M = 4000 (measured; [model_specs.h](../engine/include/nn/model_specs.h)),
+  against ~16.8 thread-seconds of rollouts per turn at K = 10 candidates × 400
+  rollouts (measured). The deployment budget is nearer ~1,000 rollouts per
+  candidate (~42 thread-seconds by the same scaling), which is what makes value
+  truncation and early stopping load-bearing. Ten sequential passes are four
+  orders of magnitude below the rollouts they schedule.
+- **Promotion, not re-scoring, is the payoff.** Simmed candidates are ranked by
+  their own sims. Conditioning matters because the loop can promote a
+  candidate no earlier round would have picked, such as the modest play that
+  blocks a hot spot the sims just revealed.
+- **No upfront candidate filtering.** `N` ranges from 1 to 10,000+ with blanks.
+  Collapsing near-duplicate blank designations before scoring is unnecessary
+  and risky: the single linear pass makes large `N` cheap, different blank
+  letters produce genuinely different crosswords and hooks, and a filter risks
+  dropping exactly the move the model exists to find. Every legal move is
+  scored at every iteration. This `O(N)` argument assumes full-set evaluation
+  happens once per decision, at the root; a neural *rollout* policy prunes
+  instead, for the reasons under [D2](#7-self-model-plies-and-the-endgame-solver-d2-d3).
 
 ## What is already built
 
-- **The position evaluation model** — the teacher. Evaluates a post-move,
-  pre-draw board from the mover's POV: WLD, a Gaussian over the final score
-  differential, and four 15×15 placement masks (opponent/self next-move
-  occupancy, each conjoined with that player winning). Trained on HastyBot
-  self-play under the generational lifecycle
+- **The position evaluation model**, the teacher. It evaluates a post-move,
+  pre-draw board from the mover's point of view: WLD, a Gaussian over the final
+  score differential, and four footprint-categorical placement heads (where
+  each seat's next move lands, and the same conjoined with that seat winning).
+  Trained on HastyBot self-play under the generational lifecycle
   ([architecture.md](architecture.md),
   [generational_training.md](generational_training.md)).
-- **The move set evaluation model** — the student. Board trunk once, one
-  cheap vector per candidate, cross-attention scoring all `N` in one pass
-  ([model_architectures.md](model_architectures.md)); v2 carries the per-move
-  placement planes ([move_set_eval_v2_results.md](move_set_eval_v2_results.md)).
-- **Target generation** (A2) — the `.mset` sidecar, its generator, and the
-  `move_set_eval` dashboard workload, running in-variant with a frozen
-  hash-stamped teacher.
-- **Engine inference** — the move-set arm of `NeuralNet<Spec>` and its
+- **The move set evaluation model**, the student. The board trunk runs once,
+  each candidate gets one cheap vector, and cross-attention scores all `N` in
+  one pass ([model_architectures.md](model_architectures.md)). It carries the
+  per-move placement readouts of item 1.
+- **Target generation** (A2): the `.mset` sidecar, its generator, and the
+  `move_set_eval` dashboard workload, run in-variant against a teacher pinned
+  by content hash.
+- **Engine inference** (A4): the move-set arm of `NeuralNet<Spec>` and its
   evaluation service ([model_specs.h](../engine/include/nn/model_specs.h)), the
-  P=1 ONNX export
+  P = 1 ONNX export
   ([onnx_export.py](../py/scribblez/move_set_eval/onnx_export.py)), and the
   `--type=mset-sim` agent
-  ([mset_sim_agent.h](../engine/include/agent/mset_sim_agent.h)): scores a
-  turn's whole candidate set in one pass and sims the model's top K. This is the
-  destination agent minus the evidence loop.
-- **Sim machinery** — [sim_runner.h](../engine/include/sim/sim_runner.h) runs
-  common-random-number rollouts, terminal or value-truncated
-  ([item 2](#2-value-truncated-rollouts-d1));
+  ([mset_sim_agent.h](../engine/include/agent/mset_sim_agent.h)), which scores
+  a turn's whole candidate set in one pass and sims the model's top K: the
+  destination agent without the evidence loop.
+- **Sim machinery**: [sim_runner.h](../engine/include/sim/sim_runner.h) runs
+  common-random-number (CRN) rollouts, to game end or value-truncated;
   [sim_observation_log.h](../engine/include/data/sim_observation_log.h) stores
-  them in `.sobs` sidecars, leaf-model-versioned when truncated.
-- **Evidence machinery** — the fusion stage and its exactness tests
+  them in `.sobs` sidecars.
+- **The evidence path**: the fusion stage
   ([evidence_fusion.py](../py/scribblez/evidence_fusion.py)), the proves-best
-  head, the trajectory generator and `evidence_trajectories` workload, and the
-  evidence trainer (`py/scribblez/evidence/`). Items 4–5 revise how these are
-  fed and trained, not what they are.
-- **The sim agent baseline** and the endgame solver, plus face-up leaves in the
+  head, the trajectory generator and the `evidence_trajectories` workload, the
+  evidence trainer (`py/scribblez/evidence/`), the engine runtime, and the
+  UltimateBot agent (items 3–6).
+- **The sim agent baseline**, the endgame solver, and face-up leaves in the
   game loop.
-- **Infrastructure** — the master dashboard and workload registry, the
-  match harness (A1/E2), and the cloud fleet (E1).
+- **Infrastructure**: the master dashboard and workload registry, the match
+  harness (A1/E2), and the cloud fleet (E1).
 
-## What needs implementing
+## The items
 
-In dependency order. Each item is part of the destination agent.
+In dependency order.
 
 ### 1. Per-move placement planes
 
-**Done** — the format, readouts, regenerated corpus, and trained student v2
-all exist; [move_set_eval_v2_results.md](move_set_eval_v2_results.md) records
-the run and its gate metrics.
+**Done.** [move_set_eval_v2_results.md](move_set_eval_v2_results.md) records
+the corpus, the trained student, and its gate metrics.
 
-The four placement maps the position evaluation model already predicts, but
-predicted **per candidate**, for that candidate's post-move state. The scoring
-path holds one vector per move, so decoding a 15×15 map means scoring that
-vector against the 225 board tokens, one readout per head.
-
-These are the quantity sim evidence is differenced against, so they gate
-everything below.
+The placement distributions the position evaluation model predicts, predicted
+instead **per candidate**, for that candidate's post-move state. The scoring
+path holds one vector per move, so decoding a board-shaped distribution means
+scoring that vector against the 225 board tokens, one readout per head. These
+are the quantity sim evidence is differenced against, so everything below
+depends on them.
 
 - **Model**: four per-move readouts on the move set evaluation model.
-- **Targets**: the teacher's own masks at the same post-move states — the
-  generator already runs the teacher there for the value targets.
-- **Format** (settled, `.mset` v2): each stratified candidate record carries the
-  four planes dense and absmax-quantized — per plane a float32 scale
-  (max/255) plus 225 bytes, ~950 B per record against 36 B for v1 and ~3.6 KB
-  for float32 planes. Dense-over-sparse because the masks are sigmoid outputs
-  (near-zero, not zero, so a nonzero-mask encoding saves an unreliable amount),
-  and fixed-size records keep both readers' vectorized indexing; full-sweep
-  files stay plane-less (evaluation-only, value-based metrics).
-- **Consequence**: the existing 600-pair corpus cannot be reused. Regeneration
-  is required, which is why the format decision comes first.
+- **Targets**: the teacher's own distributions at the same post-move states;
+  the generator already runs the teacher there for the value targets.
+- **Format**: each stratified `.mset` record carries the four distributions
+  dense and absmax-quantized, one byte per footprint class plus a float32
+  scale per head, about 11.8 KB per record. Dense because the masked footprint
+  softmax is broad (a top-128 truncation keeps only ~0.8–0.9 of the mass), and
+  fixed-size records keep both readers' vectorized indexing. Full-sweep files
+  carry no planes; they are evaluation-only and their metrics are value-based.
+  [move_set_eval_target_log.h](../engine/include/training/move_set_eval_target_log.h)
+  is the authoritative layout.
+- **Consequence**: adding planes invalidated every existing corpus, which is
+  why the format was settled before regenerating.
 
 ### 2. Value-truncated rollouts (D1)
 
-**Done** — `SimRunner` truncates at a configurable horizon and reads the
-position evaluation model there (the post-move pre-draw state of the last
-ply's mover, the state the model is trained on); games ending earlier keep
-their exact terminal result. Exposed as `--sim-horizon` (+ `--leaf-model`)
-on the sim, neural-sim, and mset-sim agents and as `--horizon`/`--leaf-model`
-on sim_obs_tool and the trajectory generator; `.sobs` v3 stamps the leaf
-model's content hash and the horizon, and observations carry fractional
-(probability-weighted) outcomes. The costs below are paid.
+**Done.** `SimRunner` truncates at a configurable horizon and reads the
+position evaluation model there, at the post-move, pre-draw state of the last
+ply's mover (the state the model is trained on). Games that end earlier keep
+their exact result. It is exposed as `--sim-horizon` and `--leaf-model` on the
+sim, neural-sim, mset-sim and ultimatebot agents, and as `--horizon` and
+`--leaf-model` on `sim_obs_tool` and the trajectory generator. A truncated
+`.sobs` stamps the leaf model's content hash and the horizon, and its
+observations carry fractional (probability-weighted) outcomes.
 
-Promoted from the rollout-policy ladder to the head of the queue: truncation
-is now a **data prerequisite**, not just an agent speedup.
+Rollouts sim a few plies, then read the model's value at the horizon. The plies
+before the horizon supply what the model cannot, the near-root lexical facts
+sims exist to observe, and the leaf value stands for everything after.
 
-Rollouts sim a few plies, then read the position evaluation model's value at
-the horizon. The division of labor: the plies before the horizon supply what
-the model cannot — the near-root lexical facts sims exist to observe — and
-the leaf value stands for everything after. The horizon is set structurally
-(below); the match harness judges the stack end to end.
-
-- **Why first**: the deployment budget is ~1,000 rollouts per candidate, and
-  the trajectory corpus must carry deployment-quality evidence — the count
+- **Why it comes first**: truncation is a data prerequisite, not only an agent
+  speedup. The deployment budget is ~1,000 rollouts per candidate, and the
+  trajectory corpus must carry deployment-quality evidence: the rollout-count
   inputs let the model discount noisy maps, but a head trained only on
   200-rollout evidence has never seen the maps it will be asked to trust.
-  Against the v1 recipe that is ~5× the rollouts per sim and ~3× the sims
-  per position; truncation is what makes the regeneration affordable. The
+  Against the first trajectory recipe that is ~5× the rollouts per sim and ~3×
+  the sims per position, and truncation is what makes that affordable. The
   kill-test's phase gradient
-  ([sim_obs_experiment_results.md](sim_obs_experiment_results.md)) says the
-  same move also *cleans* the evidence: truncation manufactures
-  late-game-quality, low-variance observations at every phase.
+  ([sim_obs_experiment_results.md](sim_obs_experiment_results.md)) says it also
+  *cleans* the evidence: truncation produces late-game-quality, low-variance
+  observations at every phase.
 - **Horizon**: deep enough for the lexical contingencies the loop hunts to
-  resolve. A contingent draw is realized as draw-then-play — plies 2–3 after
-  the candidate — so the horizon is ≥ 3–4 plies; shallower, and the horizon
-  is handed straight back to the lexically blind leaf model, leaving the sim
-  nothing to observe that the model did not already know.
-- **Costs to accept** (unchanged from the ladder): `.sobs` artifacts become
-  model-versioned, and sims start contending for the GPU.
+  resolve. A contingent draw is realized as draw-then-play, plies 2–3 after the
+  candidate, so the horizon is at least 3–4 plies (`SimRunner` enforces a
+  minimum of 3). Any shallower and the question is handed straight back to the
+  lexically blind leaf model, leaving the sim nothing to observe that the
+  model did not already know.
+- **Costs accepted**: `.sobs` artifacts become model-versioned, and sims
+  contend for the GPU.
 
 ### 3. Engine runtime for the evidence path
 
-**Done** — the move proposal model runs incrementally in the engine as two
-graphs, delivered over three PRs:
+**Done.** The move proposal model runs incrementally in the engine as two
+graphs; [model_architectures.md](model_architectures.md#4-side-by-side) has
+their inputs and outputs.
 
-- **Split ONNX export** (`py/scribblez/move_set_eval/proposal_export.py`): a
+- **Split ONNX export**
+  ([proposal_export.py](../py/scribblez/move_set_eval/proposal_export.py)): a
   `move_proposal_cache` graph (trunk, move encodings, evidence-free
-  predictions, computed once per turn) and a `move_proposal_step` graph (the
-  fusion stage plus re-scoring, run per loop iteration over the cache tensors).
-  Their composition is asserted bit-identical to `MoveSetEvalModel.forward` in
-  PyTorch (`test_move_set_eval_evidence.py`); across independently built
-  TensorRT plans it is tolerance-bounded, not bitwise.
-- **Engine-side evidence staging** (`agent/evidence_staging.h`):
-  `SimObservation` + `Move` + the cache's per-candidate predictions →
-  the fusion stage's padded `(1, E, …)` inputs.
-- **Two specs beside `MoveSetEvaluationSpec`** (`MoveProposalCacheSpec` /
-  `MoveProposalStepSpec`) driven by `agent/move_proposal_nets.h` (one shared,
-  serialized engine pair per run) through per-consumer
-  `agent/move_proposal_session.h` sessions, behind the GPU-free
-  `agent/move_proposal_service.h` seam — served at FP32, driving
-  `NeuralNet<Spec>` directly (the handoff tensors do not fit
-  `TrtEvalService`'s row-uniform decode). Verified against the PyTorch
-  reference over empty/partial/full evidence sets by
-  `test_proposal_inference_parity.cpp`, with `proposal_infer_smoke` for GPU
-  liveness. The step graph emits no planes (nothing reads a conditioned
-  plane), and the cache graph bounds its chunks at 1024 rows — the restructure
-  item 6 needed before a per-thread agent could fit a 4 GiB match GPU.
+  predictions; once per turn) and a `move_proposal_step` graph (the fusion
+  stage plus re-scoring; per loop iteration, over the cache tensors). Their
+  composition is bit-identical to `MoveSetEvalModel.forward` in PyTorch
+  (`test_move_set_eval_evidence.py`); across independently built TensorRT
+  plans it is tolerance-bounded.
+- **Evidence staging**
+  ([evidence_staging.h](../engine/include/agent/evidence_staging.h)): turns
+  `SimObservation`s, moves and the cache's per-candidate predictions into the
+  fusion stage's padded `(1, E, …)` inputs.
+- **Runtime**: two specs beside `MoveSetEvaluationSpec`
+  (`MoveProposalCacheSpec`, `MoveProposalStepSpec`), served at FP32 through
+  `NeuralNet<Spec>` directly, because the handoff tensors do not fit
+  `TrtEvalService`'s row-uniform decode. One shared engine pair per run
+  ([move_proposal_nets.h](../engine/include/agent/move_proposal_nets.h)) is
+  driven through per-consumer sessions
+  ([move_proposal_session.h](../engine/include/agent/move_proposal_session.h))
+  behind the GPU-free
+  [move_proposal_service.h](../engine/include/agent/move_proposal_service.h)
+  interface. Verified against the PyTorch reference over empty, partial and
+  full evidence sets by `test_proposal_inference_parity.cpp`, with
+  `proposal_infer_smoke` checking GPU liveness. The cache graph bounds its
+  chunks at 1024 rows so that a per-thread agent fits a 4 GiB match GPU.
 
-The sequential *playing* agent that drives this loop is item 6.
-
-Moved ahead of data generation: the revised recipe's on-policy side (item 4)
-*is* the deployment loop, so the generator needs this runtime before the
-corpus can be made.
+This item precedes data generation because item 4's on-policy side *is* the
+deployment loop, so the generator needs the runtime before the corpus can be
+made.
 
 ### 4. Evidence-trajectory generation
 
-The data for item 5. **Machinery built, recipe revised** — the v1 chain
-(self-play → trajectories → labeling as the `evidence_trajectories`
-workload's generate role:
-[evidence_trajectory_generator](../engine/apps/evidence_trajectory_generator.cpp)
-writing trajectory `.sobs` v2, `--sobs` force-inclusion in the `.mset`
-labeling) is implemented end to end and produced the 200-rollout corpus the
-frozen trial consumed. The recipe below replaces v1's — a temperature
-softmax over the student's top 64 plus one uniform tail sim; regeneration
-waits on items 2–3.
+**Built; the corpus is not yet generated.** The `evidence_trajectories`
+workload's generate role runs self-play, then the
+[evidence trajectory generator](../engine/apps/evidence_trajectory_generator.cpp)
+(selection in
+[evidence_trajectory_select.h](../engine/include/training/evidence_trajectory_select.h)),
+then `.mset` labeling. An earlier recipe produced the 200-rollout corpus the
+frozen trial of item 5 consumed.
 
-Per labeled position, one simmed **pool**, every sim at the deployment
-rollout configuration (truncated per item 2, CRN across the pool):
+Per labeled position the generator sims one **pool**, every candidate under
+common random numbers and at the tag's rollout and truncation configuration
+(the deployment configuration of item 2 is the target):
 
-- **The anchor** — the highest-raw-score move, exactly as deployed.
-- **A ≈ 15 on-policy picks** — the deployment loop itself: iterative
-  proves-best proposals conditioned on the sims so far, with temperature in
-  the proposal argmax for exploration. Generation 0, with no trained gain
-  head, selects this side by a temperature softmax over the plain student's
-  values on the **full** candidate set. No proposal-pool cap in any
-  generation: deployment argmaxes over every unsimmed candidate, and a cap
-  keeps deep promotions out of the corpus (the egotize-lane set's
-  structurally unsimmable GAVE was the exhibit).
-- **B ≈ 3 off-policy draws** — held out from evidence sets by construction,
-  drawn uniformly over the legal moves the anchor and on-policy picks did not
-  take. This is the bounded floor against the proposer's echo chamber, kept
-  deliberately assumption-free: a uniform draw samples exchanges and the tail
-  at their natural frequency, so no stratum has to be hand-specified.
-  Stratified or semantic draws (contention zone, high-leave, setups) are a
-  later refinement if the floor proves too coarse; the rationale is in
-  [sim_residual_feedback.md](plans/sim_residual_feedback.md).
+- **The anchor**: the highest-raw-score move, exactly as deployed.
+- **A ≈ 15 on-policy picks** (`on_policy_min`/`on_policy_max`): the deployment
+  loop itself, iterative proves-best proposals conditioned on the sims so far,
+  with temperature in the argmax for exploration. Generation 0 has no trained
+  gain head, so it selects these by a temperature softmax over the plain
+  student's values on the **full** candidate set. There is no proposal-pool cap
+  in any generation: deployment argmaxes over every unsimmed candidate, and a
+  cap keeps deep promotions out of the corpus. The exhibit is the trajectory
+  set's `egotize-lane` position, where a top-64 cap left the key move GAVE
+  unsimmable.
+- **B ≈ 3 off-policy draws** (`off_policy_count`): drawn uniformly over the
+  legal moves the anchor and on-policy picks did not take, and held out of
+  evidence sets by construction. This is the bounded floor against the
+  proposer's echo chamber, kept assumption-free: a uniform draw samples
+  exchanges and the tail at their natural frequency, so no stratum has to be
+  hand-specified. Stratified or semantic draws (contention zone, high leave,
+  setups) are a later refinement if the floor proves too coarse; the rationale
+  is in [sim_residual_feedback.md](plans/sim_residual_feedback.md).
 
-Training rows are **assembled from the pool, not replayed from it**: the
+Training rows are **assembled from the pool, not replayed from it**. The
 evidence set is permutation-invariant and the gain label is a max over the
-set, so any subset of {anchor} ∪ A that contains the anchor and fits the
-deployment sim budget is a valid evidence set, and every pool member outside
-it is a labeled held-out row (gain measured against the CRN max over the
-set). One pool yields combinatorially many rows — the right response to sims
-that now cost ~1,000 rollouts each. The B draws never enter an evidence set:
-deployed evidence holds only the anchor and proposer picks, so keeping the
-floor labels-only buys its coverage at zero input-distribution cost.
+set, so any subset of {anchor} ∪ A that contains the anchor and fits the sim
+budget is a valid evidence set, and every pool member outside it is a labeled
+held-out row, its gain measured against the CRN max over the set. One pool
+yields combinatorially many rows, the right response to sims that cost ~1,000
+rollouts each. The B draws never enter an evidence set: deployed evidence
+holds only the anchor and proposer picks, so keeping the floor labels-only buys
+its coverage at no cost to the input distribution.
 
 - The same tool reads hand-maintained `.gcg` position sets (`--gcg`,
   [positions/NWL23/face-up-trajectory-set](../positions/NWL23/face-up-trajectory-set/README.md))
-  for the exhibits and the position-set metric of item 5: the dashboard's
-  Trajectories tab ([react_dashboard.md](react_dashboard.md#the-evidence-trajectories-trajectories-tab))
+  for the exhibits and item 5's position-set metric. The dashboard's
+  Trajectories tab ([react_dashboard.md](react_dashboard.md#trajectories-evidence_trajectories))
   replays a set position through any checkpoint at every evidence-set size,
   and the trainer charts the set's sim-best rank (`posset_*`) per pass.
-- The value-labeled `.mset` subset must always include the position's simmed
-  pool, the way the mset sampler always includes the played move — otherwise
-  dense value labels stay at the static strata's rate while the proposer
+- The `.mset` labeling force-includes each position's simmed pool (`--sobs`),
+  the way the mset sampler always includes the played move. Otherwise dense
+  value labels would stay at the static strata's rate while the proposer
   explores elsewhere.
 
 ### 5. The move proposal model
 
-The evidence consumer, and the model the sequential agent runs at the root:
-a **copy** of the move set evaluation student — trunk, move encoder, value
-and plane heads, fusion stage — plus the **proves-best head**, predicting
-the expected improvement `E[max(0, v − best-so-far)]` a candidate's sim
-would contribute over the best simmed so far. This is the acquisition
-function that drives the loop; the expected-gain form (not probability), its
-CRN pairing, and the truncation caveat are settled in
+**Built; not yet trained beyond the frozen trial.** The trainer is
+`py/scribblez/evidence/`, the `evidence_trajectories` workload's train role;
+[model_architectures.md](model_architectures.md#training-the-evidence-path-scribblezevidence)
+has its modes and loss table.
+
+The evidence consumer, and the model the sequential agent runs at the root: a
+**copy** of the move set evaluation student (trunk, move encoder, value and
+placement heads, fusion stage) plus the **proves-best head**, which predicts
+the expected improvement `E[max(0, v − best-so-far)]` a candidate's sim would
+add over the best simmed so far. This is the acquisition function that drives
+the loop. The expected-gain form (rather than a probability of being best),
+its CRN pairing, and the truncation caveat are settled in
 [sim_residual_feedback.md](plans/sim_residual_feedback.md#candidate-selection).
 
-A separate model rather than new heads on the student, so that each keeps
-one job and one lifecycle: the student stays a pure distillation vessel (the
-dense prior, the backbone source, and — under D2 — the rollout policy),
-while the copy is free to follow the sim signal.
+It is a separate model rather than new heads on the student so that each keeps
+one job and one lifecycle. The student stays a pure distillation vessel (the
+dense prior, the backbone source, and under D2 the rollout policy), while the
+copy is free to follow the sim signal.
 
-Trained on item 4's assembled rows, two loss components:
+It trains on item 4's assembled rows with two loss components:
 
 - **Gain** (primary): Huber against the held-out candidate's CRN-paired gain
-  over its evidence set's best. The best-so-far the gain is measured against
-  is a **known scalar at inference** — the max sim value over the evidence set
-  gathered so far — so it is fed to the head as an **input**, not left to be
-  reconstructed from the pooled evidence (a mean pool cannot carry the max the
-  target rides on). Built: the head reads it off the evidence tokens' own
-  observed win values (`evidence_fusion.best_so_far`), in training, in the
-  dashboard's Trajectories pane, and inside the exported step graph alike.
-- **Conditioned WLD / score-diff** (auxiliary): soft-CE / Huber against the
-  held-out candidate's own sim outcome, on the same rows. Sim outcomes and
-  never the plain teacher, whose readout is a function of the board alone —
-  as a target on evidence-bearing rows it would train the fusion stage to
-  ignore evidence. The gain is a thin transform of the conditioned value, so
-  these auxiliaries feed the head at no extra sim cost.
+  over its evidence set's best. Best-so-far is a known scalar at inference, the
+  max sim value over the evidence gathered so far, so it is fed to the head as
+  an input rather than left to be reconstructed from the pooled evidence (a
+  mean pool cannot carry the max the target depends on). The head computes it
+  from the evidence tokens' observed win values (`evidence_fusion.best_so_far`)
+  identically in training, in the dashboard's Trajectories pane, and in the
+  exported step graph.
+- **Conditioned WLD and score differential** (auxiliary): soft-CE and Huber
+  against the held-out candidate's own sim outcome, on the same rows. The
+  target is always the sim outcome, never the plain teacher: the teacher's
+  readout is a function of the board alone, so on evidence-bearing rows it
+  would train the fusion stage to ignore evidence. The gain is a thin
+  transform of the conditioned value, so these auxiliaries help the head at no
+  extra sim cost.
 
-The backbone trains — the copy is free to follow the sim signal — starting
-from the student's ranking, and the empty-evidence (prefix-0) rows keep the
-evidence-free pass calibrated as a board-only prior on the simmed candidates.
-There is deliberately **no self-distillation anchor**: an anchor's only added
-job would be extending that calibration to the *unsimmed* legal moves the gain
-argmax ranges over, and doing so cleanly needs a live frozen-student forward
-over **all** `N` candidates per position — which the replay pipeline (encoded
-inputs, no move list) cannot supply without a new engine move generator, a
-large build for a speculative stabilizer. The gain head instead generalizes
-from a diverse held-out set (anchor, on-policy, low-value off-policy draws) and
-the student starting point, with `backbone_lr_mult` as the drift knob; whether
-the argmax over unsimmed moves holds up is measured at the agent (item 6), the
-anchor a known fallback if it does not.
+The backbone trains, starting from the student, and the empty-evidence
+(prefix-0) rows keep the evidence-free pass calibrated as a board-only prior on
+the simmed candidates. There is deliberately **no self-distillation anchor**.
+Its only added job would be extending that calibration to the *unsimmed* legal
+moves the gain argmax ranges over, and doing that cleanly needs a live
+frozen-student forward over all `N` candidates per position. The replay
+pipeline (encoded inputs, no move list) cannot supply that without a new
+engine move generator, a large build for a speculative stabilizer. The gain
+head instead generalizes from a diverse held-out set (anchor, on-policy, and
+low-value off-policy draws) and the student starting point, with
+`backbone_lr_mult` as the drift knob. Whether the argmax over unsimmed moves
+holds up is measured at the agent (item 6); adding the self-distillation anchor
+is the known fallback if it does not.
 
-The gen-1 **frozen-backbone trial** (fusion stage + head only, over the
-200-rollout v1 corpus) is the recorded floor: conditioned − plain soft-CE
-−0.0008, acquisition hit rate 0.57 against the plain value's 0.61. The
-mechanism demonstrably engages on exhibits, but 200-rollout evidence is too
-noisy — and a zero-initialized fusion stage over a frozen trunk too weak — to
-beat the plain ranking. Both diagnoses are addressed above: deployment-count
-rollouts (item 2), and a trainable backbone.
+**The recorded floor.** The gen-1 frozen-backbone trial (fusion stage and head
+only, over the 200-rollout corpus) measured conditioned − plain soft-CE
+−0.0008, and an acquisition hit rate of 0.57 against the plain value's 0.61.
+The mechanism visibly engages on exhibits, but 200-rollout evidence is too
+noisy, and a zero-initialized fusion stage over a frozen trunk too weak, to
+beat the plain ranking. The plan addresses both: deployment-count rollouts
+(item 2) and a trainable backbone.
 
-One fusion refinement remains open to validate during this build (cheap,
-unimplemented): a direct move-query → evidence-token cross-attention (`O(N·K)`),
-letting a candidate compare itself to each simmed move by encoding rather than
-only through shared board squares — a leave-twin with a different footprint is
-currently visible only through the move scalars and the pooled summary. (The
-earlier mean+max / attention-pooling refinement is obviated by feeding
-best-so-far in directly.)
+One fusion refinement remains open, cheap and unimplemented: a direct
+move-query → evidence-token cross-attention (`O(N·K)`), letting a candidate
+compare itself to each simmed move by encoding rather than only through shared
+board squares. Today a leave-twin with a different footprint is visible only
+through the move scalars and the pooled summary.
+
+A proposed extension, keeping evidence per sampled opponent rack so knowledge
+transfers across candidates and rollouts, is
+[rack_conditional_evidence.md](plans/rack_conditional_evidence.md).
 
 ### 6. The sequential agent
 
-**Built** — `--player "--type=ultimatebot"` (UltimateBot,
-[ultimate_bot_agent.h](../engine/include/agent/ultimate_bot_agent.h)): the
-loop from [the destination](#the-destination) as a playing agent, over the
-item-3 runtime. It reuses `mset_sim_agent`'s candidate generation, encoding,
-and endgame handoff; the loop itself is
-[evidence_loop.h](../engine/include/agent/evidence_loop.h), NN-free and
-sim-free by construction (it drives a `MoveProposalService` and a
-`CandidateSimmer` it is handed) with the pick rule as a policy, so item 4's
-generator can run its gen-1+ on-policy side through the same loop with a
-tempered pick once a trained gain head exists to justify that build. The
-evidence trainer exports the cache/step pair every pass, stamped with the
-evidence width it trained at, which the agent's `--max-sims` is checked
-against at load, and the workload's `match_eval` role plays every Nth pair
-as UltimateBot against a fixed opponent (local only until the truncation
-leaf can be shipped to an ssh worker). What remains is the compute: a
-trained head, then the budget/threshold measurements of
-[evaluation_plan.md](evaluation_plan.md).
+**Built; waits on a trained model from item 5.** `--player
+"--type=ultimatebot"` ([ultimate_bot_agent.h](../engine/include/agent/ultimate_bot_agent.h))
+is the loop from [the destination](#the-destination) as a playing agent, over
+the item-3 runtime. It reuses `mset-sim`'s candidate generation, encoding, and
+endgame handoff. The loop itself
+([evidence_loop.h](../engine/include/agent/evidence_loop.h)) holds no network
+and runs no sims: it drives a `MoveProposalService` and a `CandidateSimmer` it
+is handed, with the pick rule as a policy, so item 4's generator can later run
+its on-policy side through the same loop with a tempered pick.
 
-- **First sim: the greedy anchor** — the highest-raw-score candidate, taken
-  straight off the generated move list, not from the model's ranking. It is
-  the one pick in the turn that does not depend on a network.
-- **Every later sim**: argmax of the proves-best head over the unsimmed
+The evidence trainer exports the cache/step pair every pass, stamped with the
+evidence width it trained at; the agent checks its `--max-sims` against that
+width at load. The workload's `match_eval` role plays every Nth exported pair
+as UltimateBot against a fixed opponent. It runs locally only, until the
+truncation leaf model can be shipped to an ssh worker.
+
+- **First sim: the greedy anchor**, the highest-raw-score candidate, taken
+  straight off the generated move list rather than from the model's ranking.
+- **Every later sim**: the argmax of the proves-best head over the unsimmed
   candidates, conditioned on the evidence so far.
-- **Early stopping**: halt when no unsimmed candidate's predicted gain
-  clears a threshold (`--gain-threshold`, in the gain head's win-probability
-  units; 0 never stops early). At ~1,000 rollouts per sim this is where a
-  budget saving turns directly into strength per second.
-- **Final pick**: best simmed candidate by simulation value (win rate — the
-  value the gain head is trained in, so the pick and the stopping rule agree;
-  the agent has no spread objective). `--max-sims` (default 10, the anchor
-  included, `mset-sim`'s `--sim-top-k`) bounds the loop; 1 plays the anchor
-  unsimmed.
+- **Early stopping**: halt when no unsimmed candidate's predicted gain clears
+  `--gain-threshold` (in the gain head's win-probability units; 0 never stops
+  early). At ~1,000 rollouts per sim, this is where a budget saving turns
+  directly into strength per second.
+- **Final pick**: the best simmed candidate by simulation win rate, the value
+  the gain head is trained in, so the pick and the stopping rule agree. The
+  agent has no spread objective. `--max-sims` (default 10, anchor included;
+  the counterpart of `mset-sim`'s `--sim-top-k`) bounds the loop, and 1 plays
+  the anchor unsimmed.
+
+What remains is compute: a trained head, then the budget and threshold
+measurements in [evaluation_plan.md](evaluation_plan.md).
 
 ### 7. Self-model plies and the endgame solver (D2, D3)
 
-The rest of the rollout-policy ladder (D1 moved to item 2). Each rung
-changes sim semantics, so each lands behind a `.sobs` flag.
+The rest of the rollout-policy ladder. Each rung changes what a sim means, so
+each lands behind a `.sobs` flag.
 
-- **D2 — self-model plies.** Plies 1–2 played by our own stack over racks
-  built from the public leave, then HastyBot to the horizon. This beats a
-  generic policy upgrade because the evidence maps read *exactly* plies 1–2.
-  Inside rollouts the model scores only the top-`k` by static equity for
-  small fixed `k` — nothing is cached across plies, and fixed `k` gives
-  static tensor shapes for batching plies across concurrent rollouts. D2 is
-  also what closes the loop AlphaZero-style: once rollouts play with the
-  model, sim quality — and every label derived from it — improves with each
-  generation. Until then the sim is a fixed HastyBot oracle, and training
+- **D2: self-model plies.** Not started. Plies 1–2 are played by our own stack
+  over racks built from the public leave, then HastyBot plays to the horizon.
+  This beats a generic policy upgrade because the evidence maps read exactly
+  plies 1–2. Inside rollouts the model scores only the top `k` moves by static
+  equity, for a small fixed `k`: nothing is cached across plies, and a fixed
+  `k` gives static tensor shapes for batching plies across concurrent
+  rollouts. D2 is also what closes the loop AlphaZero-style: once rollouts play
+  with the model, sim quality, and every label derived from it, improves with
+  each generation. Until then the sim is a fixed HastyBot oracle, and training
   distills it.
-- **D3 — endgame solver for late-game rollouts.** A port of Macondo's
-  negamax solver into the engine (the WMP precedent); rollouts switch to it
-  when the bag empties, with budget scaled by the root's distance to the
-  end.
+- **D3: the endgame solver in late-game rollouts.** Partly built. The engine
+  has an endgame solver ([endgame_solver.h](../engine/include/endgame/endgame_solver.h)),
+  and `SimRunner::Params::solve_endgames` hands every rollout's endgame to it
+  once the bag empties, at the solver's default budget. Only the sim candidate
+  survey (and the `blind_spots` workload built on it) turns this on today; the
+  agents, the trajectory generator and `.sobs` do not expose it yet. Scaling
+  the budget by the root's distance to the end is unbuilt.
 
-D2 before D3: D2 depends on the trained student and carries the generational
-payoff; D3 is the largest port with the most localized payoff.
+D2 comes before D3: D2 depends on the trained student and carries the
+generational payoff; D3's payoff is more localized.
 
 ### 8. Cloud generation
 
-Done for `move_set_eval`'s generate role: the engine worker image hosts
-TensorRT, and the role declares its teacher export as an out-of-tag input
+**Done for `move_set_eval`.** The engine worker image hosts TensorRT, and the
+generate role declares its teacher export as an out-of-tag input
 (`RoleSpec.inputs`, [cloud_compute.md](cloud_compute.md)) that the controller
-stages for a remote slot; its train role pulls the pair store and delivers
-its exports through its sink, so a whole `move_set_eval` run can sit on
-rented GPUs with only the dashboard local. The `evidence_trajectories`
-roles (teacher, proposer, leaf model) remain local: they have not declared
-their inputs yet.
+stages for a remote slot. The train role pulls the pair store and delivers its
+exports through its sink, so a whole `move_set_eval` run can sit on rented GPUs
+with only the dashboard local. The `evidence_trajectories` roles (which need
+the teacher, the proposer and the leaf model) remain local-only because they do
+not declare their inputs yet.
 
 ## Models and how they are trained
 
-Three networks plus a spin-off copy, trained in this order; each depends on
-the one above it.
+Three networks, trained in this order; each depends on the one above it.
 
 ### The position evaluation model (teacher)
 
-- **Trained on**: HastyBot self-play `.slog` data, generational
-  generate→train ([generational_training.md](generational_training.md)).
-- **Planned second target stream**: sim values. A simmed candidate's `.sobs`
-  record is a many-rollout estimate of the value at that candidate's
-  post-move state — under face-up leaves the sim samples the same draw
-  distribution the game did, so it is the same target as the game outcome at
-  a fraction of the variance. Positions with sims train on both streams.
-  Constraint if adopted after D1: this stream must come from
-  terminal-configuration sims — a truncated sim value embeds the PE model's
-  own leaf readouts, and the model must not train on its own outputs.
-- **Predicts**: WLD, score-differential Gaussian, four placement masks.
-- **Roles**: teacher for the student's distillation and, once item 2 lands,
-  the rollout leaf evaluator — which is what puts it inside the generational
-  improvement loop (stronger self-play → better value → better leaves →
-  better sims → better labels).
-- **Status**: trained and in use. Advancing it by promotion rather than by a
-  new tag and full regeneration is
-  [generational_teacher.md](plans/generational_teacher.md), still deferred.
+- **Trained on**: HastyBot self-play `.slog` data, generational generate→train
+  ([generational_training.md](generational_training.md)).
+- **Predicts**: WLD, a score-differential Gaussian, and four footprint
+  placement heads.
+- **Roles**: the teacher for the student's distillation, and the rollout leaf
+  evaluator of item 2. The leaf role puts it inside the generational
+  improvement loop: stronger self-play, better value, better leaves, better
+  sims, better labels.
+- **Planned second target stream: sim values.** A simmed candidate's `.sobs`
+  record is a many-rollout estimate of the value at its post-move state. Under
+  face-up leaves the sim samples the same draw distribution the game did, so it
+  is the same target as the game outcome at a fraction of the variance.
+  Positions with sims would train on both streams. Constraint: the stream must
+  come from untruncated sims, because a truncated sim value embeds the model's
+  own leaf readouts and the model must not train on its own outputs. The plan
+  is [sim_labeled_candidates.md](plans/sim_labeled_candidates.md).
+- **Advancing it** by promotion, rather than by a new tag and full
+  regeneration, is [generational_teacher.md](plans/generational_teacher.md),
+  deferred.
 
 ### The move set evaluation model (student)
 
-- **Trained on**: `.mset` sidecars — the teacher's readouts at each
-  candidate's post-move state (WLD, score differential, the four placement
-  planes), paired with pre-move board inputs reconstructed by replay.
-  Distillation only: the student carries no sim-outcome losses, and the
-  fusion stage it hosts in code trains only in its move-proposal copy.
-- **Predicts**: per candidate, WLD + score differential + the four placement
-  planes.
+- **Trained on**: `.mset` sidecars, the teacher's readouts at each candidate's
+  post-move state (WLD, score differential, the four placement
+  distributions), paired with pre-move board inputs reconstructed by replay.
+  Distillation only: the student has no sim-outcome losses, and the fusion
+  stage its code hosts trains only in the move proposal copy.
+- **Predicts**: per candidate, WLD, score differential, and the four placement
+  distributions.
 - **Roles**: the dense prior over full candidate sets; the backbone the move
   proposal model is copied from; under D2, the rollout policy.
-- **Status**: v2 (with planes) trained
-  ([move_set_eval_v2_results.md](move_set_eval_v2_results.md)).
 
 ### The move proposal model
 
 - **Is**: the student copy plus the proves-best head
-  ([item 5](#5-the-move-proposal-model)); the model at the root of the
+  ([item 5](#5-the-move-proposal-model)), the model at the root of the
   deployed loop.
-- **Trained on**: evidence-set rows assembled from item 4's pools, under the
-  two-part loss of item 5 — gain first (best-so-far fed as an input) and the
-  sim-outcome auxiliaries.
-- **Bootstrapping**: the gen-0 pool's on-policy side is selected by the
-  plain student (temperature softmax over the full candidate set) — correct
+- **Trained on**: evidence-set rows assembled from item 4's pools, under item
+  5's loss: gain first (best-so-far fed as an input), with the sim-outcome
+  auxiliaries.
+- **Bootstrapping**: the gen-0 pool's on-policy side is selected by the plain
+  student (a temperature softmax over the full candidate set). That is correct
   at the empty evidence set, and the greedy anchor supplies the first sim
   regardless of proposer. Later generations select with the current move
   proposal model, and each new student generation refreshes the copy's
   starting point.
 
-## Rack inference — parked
+## Rack inference (parked)
 
-Face-up leaves removes the need to infer anything, so this is dormant until the
-project returns to standard Scrabble.
+Face-up leaves removes the need to infer anything, so this is dormant until
+the project returns to standard Scrabble.
 
-What exists: a port of the algorithm behind Macondo's `SIMMING_INFER_BOT` — the
-hypergeometric prior over draws from the unseen pool, a temperature-softened
-static-equity likelihood, exhaustive enumeration of small leave spaces with
-importance sampling above them, and the posterior a simulation would sample
-racks from ([belief/rack_inference.h](../engine/include/belief/rack_inference.h)).
-Tested; its one consumer is offline: the hidden-leaves Monte-Carlo ground truth
-of the position-evaluation test sets samples the opponent's leave from this
-posterior ([sim/monte_carlo_sim.h](../engine/include/sim/monte_carlo_sim.h)),
-at the default (Macondo) temperature — nothing in play uses it.
+What exists: a port of the algorithm behind Macondo's `SIMMING_INFER_BOT`
+([belief/rack_inference.h](../engine/include/belief/rack_inference.h)). It
+combines a hypergeometric prior over draws from the unseen pool with a
+temperature-softened static-equity likelihood, enumerates small leave spaces
+exhaustively and importance-samples above them, and yields the posterior a
+simulation would sample opponent racks from. It is tested, and its one consumer
+is offline: the hidden-leaves Monte Carlo ground truth of the position
+evaluation test sets samples the opponent's leave from this posterior
+([sim/monte_carlo_sim.h](../engine/include/sim/monte_carlo_sim.h)), at the
+default (Macondo) temperature. Nothing in play uses it.
 
 Resuming means pricing the posterior against ground truth (a `.slog` replay
-recovers the leave the opponent actually held), which is also what sets the
-likelihood temperature, then wiring it into `SimRunner`, whose per-rollout-index
+recovers the leave the opponent actually held), which also sets the likelihood
+temperature, and then wiring it into `SimRunner`, whose per-rollout-index
 sampling already preserves common random numbers. Beyond that lies the learned
-belief system of design.md §3.
+belief system of [design.md](design.md) §3.
 
 ## What is deliberately not here
 
 - **Batched multi-round scheduling.** The sequential loop subsumes it; batch
   mode returns only if sequential proposal underperforms it.
-- **Interim diversity heuristics** (the old C1 footprint/lane-overlap penalty),
-  and footprint dedup at sim-selection time. Redundancy is handled twice over
-  without them: the expected-improvement target rates a CRN-duplicate at ~0 by
-  construction, and evidence conditioning propagates a disappointing sim to
-  every candidate sharing its blind spot, since corrections are written onto
-  board squares and near-duplicates attend to the same ones. A hand-built
-  novelty penalty is both redundant and lossier — it can only express
-  "identical footprint or not", where the model grades similarity by degree.
-- **A frozen-backbone move proposal model.** The gen-1 frozen trial stays in
-  the trainer as the diagnostic it was and in the record as the floor
-  ([item 5](#5-the-move-proposal-model)); the plan trains the backbone,
-  starting from the student and relying on the sim signal plus a small
-  backbone learning rate rather than an explicit anchor.
-- **Backtracking self-play** — rewind to a decision point and play out a
-  different candidate. Needs a `.slog` branch-point extension and a branching
-  `GameRunner` mode; parked until training signal is demonstrably
-  data-diversity-limited.
-- **Standard (hidden-leave) Scrabble**, and with it everything belief. Returning
-  means regenerating data and retraining, not redesigning.
-- **Search-derived knowledge buffers beyond the evidence loop** — still the
-  long-range shape, but every nearer rung must fail first.
+- **Diversity heuristics** (C1's footprint/lane-overlap penalty) and footprint
+  dedup at sim-selection time. Redundancy is already handled twice: the
+  expected-improvement target rates a CRN duplicate at ~0 by construction, and
+  evidence conditioning propagates a disappointing sim to every candidate
+  sharing its blind spot, since corrections are written onto board squares and
+  near-duplicates attend to the same ones. A hand-built novelty penalty would
+  be redundant and lossier: it can only express "identical footprint or not",
+  where the model grades similarity by degree.
+- **A frozen-backbone move proposal model.** The frozen mode stays in the
+  trainer as the diagnostic behind the [recorded floor](#5-the-move-proposal-model);
+  the plan trains the backbone, relying on the sim signal and a small backbone
+  learning rate rather than an explicit anchor.
+- **Backtracking self-play**: rewinding to a decision point to play out a
+  different candidate. It needs a `.slog` branch-point extension and a
+  branching `GameRunner` mode, and is parked until training signal is
+  demonstrably limited by data diversity.
+- **Standard (hidden-leave) Scrabble**, and with it everything belief.
+  Returning means regenerating data and retraining, not redesigning.
+- **Search-derived knowledge buffers** beyond the evidence loop
+  ([design.md](design.md) §8.1): still the long-range shape, but every nearer
+  rung must fail first.
