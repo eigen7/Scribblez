@@ -477,17 +477,14 @@ TEST(FootprintMaskSoundness, RealGamesNeverMaskAPlayedMove) {
 
   const char* fixtures[] = {"boreal.gcg",  "egotize-lane.gcg",   "FOE.gcg",      "ole.gcg",
                             "violets.gcg", "postbingo-gave.gcg", "pos09-gnu.gcg"};
-  int swept = 0;
   for (const char* name : fixtures) {
     const std::string text = slurp(std::string(SCRIBBLEZ_TEST_DATA_DIR) + "/" + name);
-    if (text.empty()) continue;
+    ASSERT_FALSE(text.empty()) << "missing or empty fixture " << name;
     ParsedGcgGame game;
     std::string err;
-    if (!read_gcg_text(text, &game, &err)) continue;
+    ASSERT_TRUE(read_gcg_text(text, &game, &err)) << name << ": " << err;
     sweep_game(game, dict ? &*dict : nullptr);
-    ++swept;
   }
-  EXPECT_GT(swept, 0) << "no fixtures swept";
 }
 
 // A dominant logit on one footprint lands ~1 on exactly the cells it covers
