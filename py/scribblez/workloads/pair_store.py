@@ -58,23 +58,25 @@ def run_pair_generate(
     the run with it.
 
     `target_pairs` (0 = unbounded) is a size the store is grown to rather than a
-    count this worker produces: it is read from the store, so restarting a
-    worker resumes toward the same total instead of starting over, and several
-    workers on one tag converge on it together. Only a role whose sink leaves
-    pairs in the tag's own data tree can ask for it -- a worker uploading to a
-    bucket cannot see the store to count it.
+    count this worker produces: it is read from the store through the sink
+    (the tag's data tree, or the bucket's listing of it), so restarting a
+    worker resumes toward the same total instead of starting over, and
+    several workers on one tag converge on it together.
     """
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     work_dir.mkdir(parents=True, exist_ok=True)
-    store = ctx.tag_paths().data_dir / dest_dir
     stats = WorkerStats(ctx)
+
+    def held() -> int:
+        return ctx.sink.count_data_files(dest_dir, sidecar_ext)
+
     print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {ctx.params}")
 
     cycle = 0
     try:
         deliver_pairs(ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts)
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
-            if target_pairs and count_pairs(store, sidecar_ext) >= target_pairs:
+            if target_pairs and held() >= target_pairs:
                 print(f"target of {target_pairs} pair(s) reached; exiting")
                 return 0
             cycle += 1
@@ -86,8 +88,8 @@ def run_pair_generate(
             )
             stats.cycle_done({**phases, "upload_s": secs}, units=moved, nbytes=nbytes)
             toward = f"/{target_pairs}" if target_pairs else ""
-            held = f", {count_pairs(store, sidecar_ext)}{toward} in store" if target_pairs else ""
-            print(f"cycle {cycle}: {moved} pair(s) delivered{held}")
+            in_store = f", {held()}{toward} in store" if target_pairs else ""
+            print(f"cycle {cycle}: {moved} pair(s) delivered{in_store}")
     except WorkerStopped:
         moved, _, _ = deliver_pairs(
             ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts

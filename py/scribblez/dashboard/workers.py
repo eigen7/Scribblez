@@ -150,6 +150,13 @@ def _role_inputs(spec, role, params) -> dict[str, Path]:
     return workloads.resolve(role.inputs)(params) if role.inputs else {}
 
 
+def _require_inputs(inputs: dict[str, Path]):
+    """Every input source must exist before a slot is started for it."""
+    for rel, src in inputs.items():
+        if not src.is_file():
+            raise SshMachineError(f"input {rel} is missing: {src} is not a readable file")
+
+
 def _stage_inputs_in_container(machine, container: str, spec, tag: str, inputs: dict[str, Path]):
     """A container on the operator's own machine delivers over the control
     link, and takes its inputs the same way: pushed into it right after it
@@ -665,7 +672,8 @@ class WorkerManager:
         for rel, src in inputs.items():
             dest = bucket_path(r2, spec.name, tag, *rel.split("/"))
             res = rclone(r2, "copyto", "--size-only", str(src), dest, capture=True)
-            assert res.returncode == 0, f"staging {rel} failed: {res.stderr}"
+            if res.returncode != 0:
+                raise SshMachineError(f"staging input {rel} in the bucket failed: {res.stderr}")
 
     # ---- local plumbing --------------------------------------------------
 
@@ -823,9 +831,13 @@ class WorkerManager:
         machine = _ssh_machine(task, w)
         role = spec.role(w.role)
         inputs = _role_inputs(spec, role, params)
-        if env["SCZ_SINK"] == "r2":
-            self._stage_inputs_in_bucket(creds.r2, spec, task.tag, inputs)
         try:
+            # An input that is not there to stage is the slot's reason, on
+            # its row and paced by the restart backoff like a machine that
+            # cannot serve the role -- not an exception in the reconcile log.
+            _require_inputs(inputs)
+            if env["SCZ_SINK"] == "r2":
+                self._stage_inputs_in_bucket(creds.r2, spec, task.tag, inputs)
             # Creating a container is the moment to take a rebuilt worker
             # image; `docker run --pull=never` below then fails fast rather
             # than pulling under the dashboard.

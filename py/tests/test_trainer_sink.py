@@ -33,8 +33,18 @@ class _Rclone:
         op = args[0]
         if op == "lsf":
             key = self._key(args[1])
-            present = key in self.objects or any(k.startswith(key + "/") for k in self.objects)
-            return SimpleNamespace(returncode=0, stdout="x\n" if present else "", stderr="")
+            under = sorted(k[len(key) + 1 :] for k in self.objects if k.startswith(key + "/"))
+            listing = (
+                "".join(f"{n}\n" for n in under)
+                if under
+                else ("x\n" if key in self.objects else "")
+            )
+            return SimpleNamespace(returncode=0, stdout=listing, stderr="")
+        if op == "delete":  # a prefix, --files-from a list of keys under it
+            prefix, names = self._key(args[1]), Path(args[3]).read_text().split()
+            for n in names:
+                self.objects.discard(f"{prefix}/{n}")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         if op == "copy":  # bucket prefix -> local dir, whole
             prefix, dest = self._key(args[-2]), Path(args[-1])
             dest.mkdir(parents=True, exist_ok=True)
@@ -205,22 +215,45 @@ def test_the_local_sink_removes_an_output_and_has_nothing_to_pull(paths):
     store = paths.data_dir / "slogs"
     store.mkdir(parents=True)
     (store / "a.mset").touch()
+    (store / "a.slog").touch()
     sink.fetch_data_files("slogs", store)  # the store is its own
     assert (store / "a.mset").exists()
+    assert sink.count_data_files("slogs", ".mset") == 1
+    assert sink.count_data_files("slogs", ".sobs") == 0
+    assert sink.count_data_files("nowhere", ".mset") == 0
     sink.remove_output("data/slogs/a.mset")
     sink.remove_output("data/slogs/a.mset")  # absent is success
     assert not (store / "a.mset").exists()
 
 
-def test_the_r2_sink_pulls_a_store_by_size_and_removes_both_copies(paths, monkeypatch):
-    rc = _Rclone({"position_eval/t/data/slogs/a.mset", "position_eval/t/data/slogs/a.slog"})
+def test_the_r2_sink_addresses_the_flattened_store(paths, monkeypatch):
+    """The bucket flattens data/: a generator delivers data/slogs/x at
+    slogs/x, and the trainer's pull, count and removals must read the same
+    keys, or a bucket trainer sees an empty store and retires nothing."""
+    rc = _Rclone()
     monkeypatch.setattr(sinks, "rclone", rc)
-    sink = R2Sink(R2, "position_eval", "t", paths.root)
-    store = paths.data_dir / "slogs"
-    sink.fetch_data_files("slogs", store)
-    assert sorted(p.name for p in store.iterdir()) == ["a.mset", "a.slog"]
-    assert rc.calls[-1][:2] == ("copy", "--size-only")
+    generator = R2Sink(R2, "position_eval", "t")
+    for name in ("a.mset", "a.slog", "b.mset", "b.slog"):
+        src = paths.root / name
+        src.write_text(name)
+        generator.deliver(src, f"slogs/{name}")
+    assert "position_eval/t/slogs/a.mset" in rc.objects
 
-    sink.remove_output("data/slogs/a.mset")
-    assert "position_eval/t/data/slogs/a.mset" not in rc.objects
+    trainer = R2Sink(R2, "position_eval", "t", paths.root)
+    store = paths.data_dir / "slogs"
+    trainer.fetch_data_files("slogs", store)
+    assert sorted(p.name for p in store.iterdir()) == ["a.mset", "a.slog", "b.mset", "b.slog"]
+    assert rc.calls[-1][:2] == ("copy", "--size-only")
+    assert trainer.count_data_files("slogs", ".mset") == 2
+
+    trainer.remove_output("data/slogs/a.mset")
+    assert "position_eval/t/slogs/a.mset" not in rc.objects
     assert not (store / "a.mset").exists() and (store / "a.slog").exists()
+    # A batch removal is one rclone run, and takes the local copies too.
+    calls_before = len(rc.calls)
+    trainer.remove_outputs(["data/slogs/a.slog", "data/slogs/b.mset", "data/slogs/b.slog"])
+    assert len(rc.calls) == calls_before + 1 and rc.calls[-1][0] == "delete"
+    assert not any(k.startswith("position_eval/t/slogs/") for k in rc.objects)
+    assert list(store.iterdir()) == []
+    trainer.remove_outputs([])  # nothing to run for nothing
+    assert len(rc.calls) == calls_before + 1

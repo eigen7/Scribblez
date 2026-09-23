@@ -52,6 +52,9 @@ class RecordingSink:
         src.unlink()
         return 100
 
+    def count_data_files(self, data_rel, suffix):
+        return sum(1 for _, rel in self.delivered if rel.endswith(suffix))
+
     def push_json(self, rel_path, obj):
         pass
 
@@ -541,11 +544,39 @@ class StoringSink:
         src.rename(dest)
         return dest.stat().st_size
 
+    def count_data_files(self, data_rel, suffix):
+        return pair_store.count_pairs(self.root / data_rel, suffix)
+
     def push_json(self, rel_path, obj):
         pass
 
     def read_json(self, rel_path):
         return None
+
+
+class BucketSink(RecordingSink):
+    """A bucket-style sink: delivery takes the file off the machine, and the
+    store's size is read back by listing what was delivered."""
+
+    kind = "ssh"
+
+
+def test_a_bucket_generator_reads_the_target_through_its_sink(tmp_path):
+    """A worker uploading to a bucket has no store on disk to count; the
+    target is read through the sink, or a rented generator never stops."""
+    cycles = []
+
+    def fake_cycle(work_dir, params, threads):
+        cycles.append(1)
+        stem = f"c{len(cycles)}"
+        (work_dir / f"{stem}.slog").write_bytes(b"s")
+        (work_dir / f"{stem}.mset").write_bytes(b"m")
+        return 0, {"gen_s": 0.1, "mset_s": 0.2}
+
+    ctx = StubCtx(tmp_path, BucketSink(), max_cycles=0)
+    ctx.kind = "ssh"
+    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target_pairs=2) == 0
+    assert len(cycles) == 2
 
 
 def test_pair_generate_stops_once_the_store_holds_the_target(tmp_path):
