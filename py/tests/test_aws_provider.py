@@ -120,7 +120,7 @@ def provider(tmp_path, monkeypatch):
     monkeypatch.setattr(aws.AwsProvider, "identity_file", str(tmp_path / "scribblez.pem"))
     ec2 = _Ec2()
     p = aws.AwsProvider(_CREDS, _REGISTRY, session=_Session(ec2))
-    p.ec2 = ec2  # for the tests
+    p.ec2 = ec2
     return p
 
 
@@ -137,8 +137,8 @@ def test_prepare_creates_the_key_pair_and_group_once(provider, tmp_path):
 
 
 def test_a_key_pair_on_aws_without_its_private_key_is_refused(provider):
-    """The key pair exists but its private key was never saved here: no
-    launch could be reached. Say what to do rather than launch blind."""
+    """The key pair exists on AWS but its private key was never saved here, so
+    no instance launched with it could be reached. Say what to do instead."""
     provider.ec2.key_pairs.append("scribblez")
     with pytest.raises(AssertionError, match="delete the key pair"):
         provider.prepare()
@@ -150,7 +150,7 @@ def test_launch_tags_the_owner_and_boots_with_the_pull_script(provider):
     assert run["ImageId"] == "ami-123" and run["InstanceType"] == "g6.2xlarge"
     assert run["KeyName"] == "scribblez" and run["SecurityGroupIds"] == ["sg-1"]
     root = run["BlockDeviceMappings"][0]["Ebs"]
-    assert root["VolumeSize"] == aws.ROOT_VOLUME_GB >= 75  # the AMI snapshot's size
+    assert root["VolumeSize"] == aws.ROOT_VOLUME_GB >= 75  # at least the AMI snapshot
     assert run["TagSpecifications"][0]["Tags"] == [
         {"Key": "scribblez", "Value": "position_eval/t/m1"}
     ]

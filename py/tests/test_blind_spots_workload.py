@@ -1,4 +1,5 @@
-"""The blind_spots workload: what a cycle keeps and delivers."""
+"""The blind_spots workload: what a cycle keeps and delivers, and when the scheduler
+parks the surveyors."""
 
 import json
 from pathlib import Path
@@ -9,8 +10,8 @@ from tests.test_sim_candidate_survey import position
 
 
 class RecordingSink:
-    """Records deliveries as (data-relative destination, file name) and consumes
-    the file, as a real sink does."""
+    """Records each delivery's data-relative destination and consumes the file,
+    as a real sink does."""
 
     kind = "local"
 
@@ -104,7 +105,8 @@ def test_the_scheduler_parks_the_surveyors_at_the_target(tmp_path):
     assert gate_after_tick(tmp_path, target=3, found=3) == [
         ("generate", "target reached: 3 of 3 positions")
     ]
-    assert gate_after_tick(tmp_path, target=0, found=3) == [("generate", None)]  # 0: never
+    # A target of 0 never parks them.
+    assert gate_after_tick(tmp_path, target=0, found=3) == [("generate", None)]
 
 
 def test_the_survey_seed_is_fixed_by_the_game_so_a_restart_can_resume(tmp_path):

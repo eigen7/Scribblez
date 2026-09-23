@@ -16,7 +16,9 @@ _SPEC = importlib.util.spec_from_file_location(
 mig = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(mig)
 
-_WORKLOAD = "position_eval"  # its schema no longer has mask_placement (dropped) -> a real case
+# mask_placement is a field position_eval's schema has dropped, so stored copies of
+# it are the real migration case.
+_WORKLOAD = "position_eval"
 
 
 def _tag_dir(mount_root, tag, worker_ids=("local-0",), extra_params=None):

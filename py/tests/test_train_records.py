@@ -1,6 +1,6 @@
 """The trainer's record stream and the controller's ingest of it
-(generational/records.py + train_ingest.py): what a trainer delivers must
-land in dashboard.db exactly as the direct writes it replaced would have."""
+(generational/records.py + train_ingest.py): what a trainer delivers must land
+in dashboard.db exactly as writing the same facts directly would."""
 
 import json
 

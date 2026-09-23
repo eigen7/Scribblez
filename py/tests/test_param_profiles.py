@@ -55,7 +55,8 @@ def test_cli_layers_flags_over_profile_over_defaults():
 
 def test_cli_without_profiles_keeps_the_dataclass_defaults():
     """A workload with no profiles gets no --profile flag, and unspecified flags
-    (now SUPPRESSed rather than defaulted) still resolve to the defaults."""
+    (argparse.SUPPRESS, so a profile could fill them) resolve to the dataclass
+    defaults."""
     spec = _spec()
     p = _parser(spec)
     assert spec.params_from_args(p.parse_args([])) == DemoParams()

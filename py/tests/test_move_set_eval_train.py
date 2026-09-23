@@ -22,14 +22,14 @@ from scribblez.move_set_eval.model import compute_loss, footprint_cell_marginal
 from scribblez.move_set_eval.targets import PLANE_NAMES
 from scribblez.sim_evidence.sobs import MOVE_DTYPE, MOVE_PLAY, move_footprint
 
-# This checkout's own binaries, so a worktree's tests exercise the code built
-# beside them rather than the primary checkout's (as in test_move_set_eval_targets.py).
+# This checkout's own binaries, not the primary checkout's; see
+# test_move_set_eval_targets.py.
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 
-# The same principle for subprocesses running a script file: their sys.path[0]
-# is the script's directory, so without this override the image-wide
-# PYTHONPATH=/workspace/repo/py would hand a worktree's subprocess the primary
-# checkout's scribblez.
+# The same for subprocesses running a script file. Their sys.path[0] is the
+# script's directory, and the image's site-packages .pth file points at
+# /workspace/repo/py, so without this override a worktree's subprocess would
+# import the primary checkout's scribblez.
 _SUBPROCESS_ENV = {
     **os.environ,
     "PYTHONPATH": os.pathsep.join(
@@ -403,9 +403,9 @@ def sweep_dir(corpus_dir, tmp_path_factory) -> Path:
 
 
 def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
-    """The A3 gate path end to end: a swept holdout is far larger per position
-    than a stratified one, so this exercises the candidate-budget batching and
-    the metrics over full legal sets."""
+    """The full-sweep ranking metrics end to end. A swept holdout is far larger
+    per position than a stratified one, so this exercises the candidate-budget
+    batching and the metrics over whole legal move sets."""
     from scribblez.move_set_eval.dataset import MsetDataset
     from scribblez.move_set_eval.eval import evaluate
     from scribblez.move_set_eval.model import MoveSetEvalModel
@@ -433,17 +433,13 @@ def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
     for k in (1, 3, 5):
         assert 0.0 <= metrics[f"recall@{k}"] <= 1.0
         assert metrics[f"regret@{k}"] >= 0.0
-    # The Spearman baseline is the static-equity stored order scored against the
-    # teacher's values -- a signed correlation only over a *trained* teacher
-    # (where higher static equity means higher win-equity: the A3 gate's real
-    # reading). This fixture's teacher is randomly initialized, so the sign is
-    # an accident of the init, not an invariant; assert only the range, as the
-    # stratified path does.
+    # The Spearman baseline scores the stored static-equity order against the
+    # teacher's values. Its sign means something only for a trained teacher;
+    # this fixture's teacher is random, so assert only the range.
     for suffix in ("", "_baseline"):
         assert -1.0 <= metrics[f"spearman{suffix}"] <= 1.0
-    # Exchange-slice metrics (the A4 dedicated-head readout): a sweep keeps
-    # every exchange candidate, so eligible positions exist in any corpus with
-    # bag >= 7 turns, and both metrics stay in range.
+    # Exchange-slice metrics: a sweep keeps every exchange candidate, so any
+    # corpus with bag >= 7 turns has eligible positions.
     assert metrics["positions_with_exchanges"] > 0
     for suffix in ("", "_baseline"):
         assert metrics[f"exch_rank_regret{suffix}"] >= 0.0
@@ -606,8 +602,7 @@ def test_train_step_and_eval(corpus_dir):
 
     metrics = evaluate(model, ds, device, positions_per_batch=8)
     assert metrics["positions"] == ds.num_positions
-    # This slice carries plane targets, so the plane-readout metric is
-    # reported (and CE is positive for any non-degenerate model).
+    # A stratified slice carries plane targets, so plane CE is reported.
     assert metrics["plane_ce"] > 0.0
     for k in (1, 3, 5):
         for suffix in ("", "_baseline"):
@@ -623,16 +618,15 @@ def test_train_step_and_eval(corpus_dir):
 def test_move_encoding_version_is_the_engines():
     from scribblez.move_set_eval.moves import move_encoding_version
 
-    # v1 = exchanges carry their surrendered tiles (move_set_encoder.h). A bump
-    # without a coordinated retrain story should fail loudly here.
+    # Pinned so a bump is deliberate: it makes every trained checkpoint
+    # unloadable (see kMoveEncodingVersion in move_set_encoder.h).
     assert move_encoding_version() == 1
 
 
 def test_publish_config_records_params_before_the_model_exists(tmp_path):
-    """The Info tab's params are written up front (parameter count re-stamped
-    once the model is built), so the dashboard shows the run's config while the
-    trainer is still filling the store toward warmup_pairs -- as position_eval
-    does -- rather than staying blank until training starts."""
+    """The Info tab's params are published up front, with the parameter count
+    re-stamped once the model is built, so the dashboard shows the run's config
+    while the trainer waits for warmup_pairs rather than staying blank."""
     import json
 
     from cloud.sinks import LocalSink
@@ -1039,7 +1033,7 @@ def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
     assert trainer.store_is_ready(store, params) == (False, "0/3 pairs")
     for i in range(3):
         _pair(store, f"s{i}")
-    # Enough pairs, but nothing to read the A3 gate metrics on yet.
+    # Enough pairs, but no swept pair to read the full-sweep metrics on yet.
     ready, why = trainer.store_is_ready(store, params)
     assert not ready and "no held-out pair yet" in why
 

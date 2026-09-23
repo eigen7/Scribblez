@@ -44,8 +44,8 @@ def test_cumulative_plots_one_worker_or_the_fleet_from_zero():
 
 
 def test_cumulative_spans_a_single_cycle_visibly():
-    """A lone point used to leave Bokeh a zero-width datetime range, labelled
-    in microseconds."""
+    """A lone point would otherwise leave Bokeh a zero-width datetime range,
+    labelled in microseconds."""
     fig = figs.cumulative([_record("ssh-0", [(T0 + 600, 2)])], STATS, "ssh-0")
     assert isinstance(fig.x_range, Range1d)
     assert (fig.x_range.end - fig.x_range.start).total_seconds() >= 600

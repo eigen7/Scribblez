@@ -1,31 +1,29 @@
-"""Inference-parity tests for the move-proposal split ONNX export (roadmap item 3).
+"""Inference-parity tests for the move proposal model's split ONNX export, PyTorch vs
+ONNXRuntime. The ONNX -> TensorRT hop is engine/tests/test_proposal_inference_parity.cpp.
 
-The move proposal model runs incrementally in the engine as two graphs -- a
-`move_proposal_cache` graph once per turn, then a `move_proposal_step` graph per
-evidence-loop iteration reusing the cache. These tests pin the Python side of
-that split before any TensorRT runtime exists (PR3 covers the engine):
+The engine runs the model incrementally as two graphs: `move_proposal_cache` once
+per turn, then `move_proposal_step` once per evidence-loop iteration, reusing the
+cache. Three claims:
 
-  (a) The two export wrappers, composed, ARE `MoveSetEvalModel.forward`: the
-      cache wrapper's plain heads and the step wrapper's evidence-conditioned
-      heads reproduce the monolithic forward over empty, partial, and full
-      evidence sets (allclose, not bitwise -- the re-associated heads and the
-      re-expressed attentions reorder float sums). Evidence tokens gather the
-      cache's own move encodings by scored index (scattered, not the first k, so
-      a move_enc/ev_move_enc routing swap can't alias away), and the reference's
-      evidence moves are those same scored candidates.
-  (b) Both graphs are truly dynamic in M: traced at one M, they reproduce the
-      wrappers under ONNXRuntime at other Ms -- and the step graph's fixed-width
-      E evidence block stays inert past its mask.
+  (a) The two export wrappers, composed, are `MoveSetEvalModel.forward`: the cache
+      wrapper's plain heads and the step wrapper's evidence-conditioned heads
+      reproduce the monolithic forward over empty, partial, and full evidence
+      sets. Allclose, not bitwise: the re-associated heads and re-expressed
+      attentions reorder float sums. Evidence tokens gather the cache's move
+      encodings by scored index, deliberately scattered so a move_enc /
+      ev_move_enc routing swap cannot alias away.
+  (b) Both graphs are dynamic in M: traced at one M, they reproduce the wrappers
+      under ONNXRuntime at other Ms, and the step graph's fixed-width evidence
+      block stays inert past its mask.
   (c) The file contract: names, dtypes, the "moves" axis, the fixed-width
       leading-1 evidence inputs, the metadata engine loaders read (graph kind,
-      move-encoding version, the shared proposal_export_id tying the pair), and
-      the refit discipline (split heads + hand-rolled attentions as plain
+      move-encoding version, the proposal_export_id tying the pair), and the
+      refit discipline (split heads and hand-rolled attentions as plain
       initializers, no Identity aliasing).
 
-The model is randomly initialized, with its evidence path perturbed off its
-zero-init so a populated set actually differs from the plain pass -- this tests
-plumbing fidelity, not trained weights, and stays hermetic (no checkpoint, no
-GPU).
+The model is randomly initialized, with its evidence path perturbed off its zero
+init so a populated set differs from the plain pass. This tests the plumbing, not
+trained weights, and stays hermetic (no checkpoint, no GPU).
 """
 
 import numpy as np

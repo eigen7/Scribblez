@@ -11,7 +11,7 @@ from bokeh.models import ColumnDataSource
 from scribblez.dashboard import api, db
 from scribblez.paths import MAX_MOVE_PER_LANE, TagPaths
 
-# Match the shipped lane-analysis dataset size, so position indices line up.
+# The shipped lane-analysis dataset's size, so position indices line up.
 _N_POSITIONS = 10
 
 
@@ -130,7 +130,7 @@ class DashboardApiTest(tornado.testing.AsyncHTTPTestCase):
         assert self.fetch(f"/api/figure/bogus?task={MAX_MOVE_PER_LANE}&tag=run1").code == 404
 
     def test_all_figures_routable(self):
-        # Every registered figure resolves (item may be null when its data isn't seeded).
+        # Each figure resolves; `item` is null when its data isn't seeded.
         for fig in ("loss", "eval_quality", "training_metrics", "mset_metrics", "match_eval"):
             r = self.fetch(f"/api/figure/{fig}?task={MAX_MOVE_PER_LANE}&tag=run1")
             assert r.code == 200, fig

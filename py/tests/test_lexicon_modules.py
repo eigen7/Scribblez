@@ -45,23 +45,21 @@ def test_registry_and_build():
 def test_straight_through_is_exact_and_differentiable():
     mod = StraightThroughLexicon(channels=16, compiled=_lexicon(), topk=8)
 
-    # Forward commits to one path: acceptance is a crisp 0/1 fact. CAT is a word;
-    # CBT is not -- and there is no top-K smear in between.
+    # The forward pass commits to one path, so acceptance is exactly 0 or 1:
+    # CAT is a word, CBT is not, with no top-K smear between them.
     feats = torch.zeros(1, 15, 16)
     _force_query(mod, "A")
     assert mod(feats, _board("CAT", gaps=(1,))).cell_signals[0, 2, 0].item() == pytest.approx(1.0)
     _force_query(mod, "B")
     assert mod(feats, _board("CAT", gaps=(1,))).cell_signals[0, 2, 0].item() == pytest.approx(0.0)
 
-    # Straight-through still routes gradient to the query head (nonzero features).
-    # On an all-empty board, every cell's hard commitment is drawn from the same
-    # unconstrained query; with the default random init it can land on a letter
-    # that is illegal from the root at *every* cell, killing the whole lane
-    # (masked to a dead state with no gradient) and making this assertion
-    # nondeterministic. Anchor the query to a legal start letter ("C") so the
-    # commit always survives -- weight.grad is still exercised for real, since
-    # the STE backward term flows through the pre-hardening softmax regardless
-    # of where the bias pins the argmax.
+    # The straight-through estimator still routes gradient to the query head.
+    # On an empty board every cell commits from the same unconstrained query,
+    # and a random init can pick a letter no word starts with: the whole lane
+    # then goes dead, gets no gradient, and the assertion flakes. Biasing the
+    # query toward "C" keeps the commit alive. The gradient check stays real,
+    # since the backward pass flows through the pre-hardening softmax wherever
+    # the argmax lands.
     mod2 = StraightThroughLexicon(channels=16, compiled=_lexicon(), topk=8)
     with torch.no_grad():
         mod2.query.bias[ord("C") - ord("A")] += 8.0

@@ -1,8 +1,12 @@
-"""Tests for the evidence fusion stage (roadmap item 5): the exactness
-guarantees the deployment loop rests on -- empty evidence degrades to the
-plain one-pass model bit-for-bit, padding is inert, and the staged
-(cached-per-round) path reproduces the monolithic forward -- plus the .sobs ->
-EvidenceInputs builder (FFI-backed, so it needs the engine built)."""
+"""Tests for the move-set model's evidence fusion stage and the .sobs ->
+EvidenceInputs builder that feeds it.
+
+The fusion tests pin the exactness guarantees the deployment loop rests on:
+empty evidence reproduces the plain one-pass model bit for bit, padding is
+inert, and the staged path (board and candidates encoded once, fusion re-run
+per round) reproduces the monolithic forward. The builder tests go through the
+FFI, so they need the engine built.
+"""
 
 import dataclasses
 

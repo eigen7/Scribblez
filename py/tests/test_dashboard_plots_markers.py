@@ -24,11 +24,10 @@ def test_metrics_loss_grid_adds_control_markers(tmp_path):
 
     grid = plots.metrics_loss_grid(conn)
     assert grid is not None
-    # The grid stacks every knob-variant row; each row's loss figure carries its
-    # own markers, so select recursively within a row. Events are recorded in
-    # positions (150, 250) but the axis is now epoch, so their markers land at
-    # the interpolated epoch between the seeded (epoch, positions) checkpoints
-    # (1, 100), (2, 200), (3, 300): 1.5 and 2.5.
+    # Each knob-variant row's loss figure carries its own markers, so select
+    # within a row. Events are recorded at positions 150 and 250, but the axis
+    # is epoch: interpolating between the seeded (epoch, positions) checkpoints
+    # (1, 100), (2, 200), (3, 300) puts the markers at 1.5 and 2.5.
     for axis_row in _rows_by_name(grid, LOSS_ROW_NAMES).values():
         spans = list(axis_row.select({"type": Span}))
         labels = list(axis_row.select({"type": Label}))

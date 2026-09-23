@@ -1,12 +1,5 @@
-"""End-to-end tests for the streaming DataLoader via the Python FFI.
-
-These tests create .slog files using the C++ test_slog_writer binary,
-then exercise:
-  1. Epoch determinism: same seed → identical output
-  2. Coverage: all positions appear exactly once per epoch
-  3. Memory-budget stress: tiny budget, verify all data is still yielded
-  4. Streaming dataset iteration via SlogDataset.iter_batches()
-"""
+"""End-to-end tests for the streaming DataLoader through the Python FFI, over .slog
+files written by the C++ test_slog_writer binary."""
 
 import subprocess
 import threading
@@ -34,13 +27,8 @@ _PLACEMENT_HEADS = tuple(format_layout()["constants"]["placement_head_names"])
 _PLACEMENT_MASKS = tuple(format_layout()["constants"]["placement_mask_names"])
 _FOOTPRINT_CLASSES = format_layout()["constants"]["footprint"]["num_classes"]
 
-# ---------------------------------------------------------------------------
-# Fixture: generate .slog files using the test_slog_writer binary.
-# ---------------------------------------------------------------------------
-
 
 def generate_test_slogs(tmpdir: Path, num_games: int = 12, games_per_file: int = 4) -> list[Path]:
-    """Generate .slog files for testing using the test_slog_writer binary."""
     binary = _ENGINE_DIR / "test_slog_writer"
     if not binary.is_file():
         pytest.skip("test_slog_writer not built -- run 'make test_slog_writer' first")
@@ -55,11 +43,6 @@ def generate_test_slogs(tmpdir: Path, num_games: int = 12, games_per_file: int =
     slogs = sorted(tmpdir.glob("*.slog"))
     assert len(slogs) > 0
     return slogs
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 class TestEpochDeterminism:
@@ -97,18 +80,17 @@ class TestEpochDeterminism:
 
 class TestEpochCoverage:
     def test_all_positions_appear_once(self, tmp_path):
-        """Verify every position appears exactly once per epoch by running
-        two epochs with different seeds and checking they contain the same
-        set of rows (just in different order)."""
+        """Two epochs under different seeds hold the same multiset of rows in a
+        different order."""
         slogs = generate_test_slogs(tmp_path)
 
         loader = NativeDataLoader(memory_budget=256 * 1024 * 1024, num_workers=2, num_prefetch=1)
         for p in slogs:
             num_games, fsize = read_file_header(p)
             loader.add_file(p, num_games, fsize)
-        # read_file_header reports games; the default (turns_per_game=0) epoch
-        # expands each game into all its eligible turns, so the per-epoch row
-        # count is the loader's total expanded position count.
+        # read_file_header counts games, but the default (turns_per_game=0) epoch
+        # expands each game into all its eligible turns, so an epoch's row count
+        # is the loader's expanded position count.
         total = loader.num_positions
 
         def drain_epoch(seed: int) -> np.ndarray:
@@ -127,10 +109,9 @@ class TestEpochCoverage:
         assert epoch1.shape[0] == total
         assert epoch2.shape[0] == total
 
-        # Different order.
         assert not np.array_equal(epoch1, epoch2)
 
-        # Same set of rows (sort by raw bytes and compare).
+        # Same rows: compare after sorting by raw bytes.
         e1_sorted = np.sort(epoch1.view(np.uint8).reshape(total, -1), axis=0)
         e2_sorted = np.sort(epoch2.view(np.uint8).reshape(total, -1), axis=0)
         np.testing.assert_array_equal(e1_sorted, e2_sorted)
@@ -138,7 +119,6 @@ class TestEpochCoverage:
 
 class TestStreamingDataset:
     def test_iter_batches(self, tmp_path):
-        """Test the SlogDataset.iter_batches() method."""
         generate_test_slogs(tmp_path)
 
         ds = SlogDataset(
@@ -147,9 +127,8 @@ class TestStreamingDataset:
         batches = list(ds.iter_batches(batch_size=4, seed=555))
         assert len(batches) > 0
 
-        # Each batch should have the expected tensor keys and the session's
-        # own input dims (derived, so a layout change can't leave a stale magic
-        # number here).
+        # Input dims come from the session rather than literals, so a layout
+        # change cannot leave a stale magic number here.
         in_shapes = {s.name: tuple(s.dims) for s in get_input_shapes()}
         for b in batches:
             assert "input_spatial" in b
@@ -157,22 +136,21 @@ class TestStreamingDataset:
             assert "wld" in b
             assert "score_diff" in b
             for head in _PLACEMENT_HEADS:
-                assert head in b  # footprint class index
+                assert head in b
             for mask in _PLACEMENT_MASKS:
-                assert mask in b  # per-side legality mask
+                assert mask in b
             assert tuple(b["input_spatial"].shape[1:]) == in_shapes["input_spatial"]
             assert b["input_scalar"].shape[1] == in_shapes["input_scalar"][0]
             assert b["wld"].shape[1] == 3
             assert b["score_diff"].shape[1] == 1
-            # Each placement head is a single footprint class index; each side
-            # carries one FOOTPRINT_CLASSES-wide legality mask (not a per-cell
-            # (15,15) map).
+            # Each placement head is one footprint class index; each side's
+            # legality mask spans the footprint class space.
             for head in _PLACEMENT_HEADS:
                 assert b[head].shape[1] == 1
             for mask in _PLACEMENT_MASKS:
                 assert b[mask].shape[1] == _FOOTPRINT_CLASSES
 
-        # Determinism: same seed, same output.
+        # Same seed, same batches.
         batches2 = list(ds.iter_batches(batch_size=4, seed=555))
         assert len(batches) == len(batches2)
         for b1, b2 in zip(batches, batches2, strict=True):
@@ -180,9 +158,8 @@ class TestStreamingDataset:
                 np.testing.assert_array_equal(b1[key].numpy(), b2[key].numpy())
 
     def test_drop_last_yields_only_full_batches(self, tmp_path):
-        """With a batch size that does not divide the epoch's row count, the
-        default epoch ends in a short batch and drop_last omits exactly that
-        batch, leaving every yielded batch at batch_size rows."""
+        """An epoch whose row count batch_size does not divide ends in a short
+        batch; drop_last omits exactly that one."""
         generate_test_slogs(tmp_path)  # 12 games; one row per game below
         ds = SlogDataset(
             tmp_path, post_move=True, apply_symmetry=False, memory_budget=256 * 1024 * 1024
@@ -196,16 +173,15 @@ class TestStreamingDataset:
 
 class TestUnreadableFile:
     def test_deleted_file_raises_not_hangs(self, tmp_path):
-        """A registered .slog that vanishes before its body is read must raise a
-        clean error, not wedge forever.
+        """A registered .slog that vanishes before its body is read must raise,
+        not hang.
 
-        Regression guard for the deadlock where a failed body load left
-        DataFile::buffer() waiting on `buffer_ != nullptr` forever, hanging the
-        decode worker (and load_batch) indefinitely. On a live generational tag
-        a window file can be evicted or rewritten between when SlogDataset reads
-        the headers and when the loader lazily loads the bodies, so this is a
-        real path, not a contrived one. The iteration runs on a watchdog thread
-        so a regressed hang fails the test instead of blocking the suite.
+        The failure mode: a failed body load that never signals leaves
+        DataFile::buffer() waiting forever, and with it the decode worker and
+        load_batch. On a live generational tag this is a real path: a window file
+        can be evicted between SlogDataset reading the headers and the loader
+        lazily loading the bodies. Iteration runs on a watchdog thread so a hang
+        fails the test instead of blocking the suite.
         """
         slogs = generate_test_slogs(tmp_path)
         assert len(slogs) >= 2
@@ -213,8 +189,7 @@ class TestUnreadableFile:
         ds = SlogDataset(
             tmp_path, post_move=True, apply_symmetry=True, memory_budget=256 * 1024 * 1024
         )
-        # Remove one registered file out from under the loader before iterating;
-        # its header (and thus its rows) were already registered at construction.
+        # Its header, and so its rows, were registered at construction.
         slogs[0].unlink()
 
         result: dict[str, object] = {}
@@ -239,8 +214,8 @@ class TestUnreadableFile:
 
 
 def test_slice_row_batch_matches_dataset():
-    """slice_row_batch reproduces the named tensors with correct shapes/values
-    (guards the row-slicing SlogDataset applies to every loaded batch)."""
+    """slice_row_batch, which SlogDataset applies to every loaded batch, yields every
+    named tensor at its advertised shape and loses no values."""
     if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
         pytest.skip("libscribblez_ffi.so not built -- run py/build.py first")
     rf = row_size_floats()
@@ -250,7 +225,6 @@ def test_slice_row_batch_matches_dataset():
     input_shapes, targets = row_layout()
     out = slice_row_batch(batch, input_shapes, targets)
 
-    # Every input + target tensor is present with the advertised shape.
     expected = {s.name: (5, *s.dims) for s in get_input_shapes()}
     expected.update({s.name: (5, *s.dims) for s in get_target_shapes()})
     assert set(out) == set(expected)
