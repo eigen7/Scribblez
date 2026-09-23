@@ -1,17 +1,7 @@
-// Unit tests for NeuralSimAgent, the position-evaluation-top-K agent, with the
-// model replaced by a scripted EvalService stub -- no ONNX, no TensorRT, no
-// GPU.
-//
-//  * the sim set is the scripted model's top K, not static equity's: the agent
-//    plays the rollouts' favourite among them, checked by replaying the
-//    decision through SimRunner with the agent's own seed.
-//  * the shortlist caps what the model evaluates, and shortlist 0 evaluates
-//    every candidate -- exchanges included, which the model may promote.
-//  * drop-best-prob=1 excludes the model's top-ranked candidate from the sim
-//    set; 0 keeps it.
-//  * two agents on one seed agree.
-//  * a bag-empty turn with solving disabled falls back to static equity
-//    without consulting the model.
+// NeuralSimAgent, which sims the position-evaluation model's top K candidates,
+// with the model replaced by a scripted stub (no GPU). The central check is
+// that the sim set is the model's top K rather than static equity's, verified
+// by replaying the decision through SimRunner with the agent's own seed.
 
 #include "agent/agent.h"
 #include "agent/neural_sim_agent.h"
@@ -69,7 +59,7 @@ class NeuralSimAgentTest : public ::testing::Test {
   }
 
   // An opening turn with a non-empty opponent leave, so the position handed to
-  // the simulator carries every field the agent is responsible for filling.
+  // the simulator has every field the agent is responsible for filling.
   MoveRequest request() const {
     return MoveRequest{board_,          dict_,    my_rack_, opp_leave_, /*my_score=*/13,
                        /*opp_score=*/7, bag_size_};
@@ -85,16 +75,15 @@ class NeuralSimAgentTest : public ::testing::Test {
 
 }  // namespace
 
-// The agent forwards sim_horizon into its SimRunner, using its own served
-// model as the leaf: the runner validates the horizon lower bound at
-// construction, so a below-minimum horizon is rejected. If the agent silently
-// dropped sim_horizon it would run terminal rollouts and neither would throw.
+// The agent must forward sim_horizon to its SimRunner, which rejects a horizon
+// below the minimum at construction. An agent that dropped sim_horizon would
+// run terminal rollouts and throw in neither case.
 TEST_F(NeuralSimAgentTest, TruncationHorizonIsWiredToTheRunner) {
   NeuralSimAgent::Params p = params();
-  p.sim_horizon = SimRunner::kMinHorizonPlies - 1;  // below the minimum
+  p.sim_horizon = SimRunner::kMinHorizonPlies - 1;
   EXPECT_THROW(NeuralSimAgent(p, std::make_shared<StubEvalService>(), /*max_batch=*/1024),
                std::runtime_error);
-  p.sim_horizon = SimRunner::kMinHorizonPlies;  // a valid horizon
+  p.sim_horizon = SimRunner::kMinHorizonPlies;
   EXPECT_NO_THROW(NeuralSimAgent(p, std::make_shared<StubEvalService>(), /*max_batch=*/1024));
 }
 
@@ -103,8 +92,8 @@ TEST_F(NeuralSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
   ASSERT_GT(candidates.size(), 4u);
 
-  // The model favours the equity ranking's 3rd and 4th candidates; equity's
-  // own favourites score low, so the sim set differs from SimAgent's.
+  // The model favours equity's 3rd and 4th candidates, so its sim set differs
+  // from the one SimAgent would pick.
   const auto scripted = script_favouring(candidates.size(), {2, 3});
 
   auto stub = std::make_shared<StubEvalService>();
@@ -113,8 +102,6 @@ TEST_F(NeuralSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   agent.begin_game({});
   const Move played = agent.make_move(request()).move;
 
-  // Replay the same decision independently: the model's top-2 by scripted
-  // value, simmed from the same position with the agent's own seed.
   const std::vector<int> rank = model_rank(scripted, p.rank_objective);
   const std::vector<Move> simmed = {candidates[size_t(rank[0])], candidates[size_t(rank[1])]};
   SimPosition pos;
@@ -152,8 +139,8 @@ TEST_F(NeuralSimAgentTest, TheModelCanPromoteAnExchange) {
   p.sim_top_k = 1;
   const std::vector<Move> candidates = shortlist_candidates(request(), p.shortlist);
 
-  // With shortlist 0 the candidate space includes every exchange; find one
-  // (static equity buries them all far below the plays on this rack).
+  // Shortlist 0 includes every exchange, which static equity ranks far below
+  // the plays on this rack.
   int exchange_idx = -1;
   for (size_t i = 0; i < candidates.size(); ++i) {
     if (candidates[i].type() == MoveType::EXCHANGE) {
@@ -207,10 +194,9 @@ TEST_F(NeuralSimAgentTest, OneSeedGivesOneDecision) {
 }
 
 TEST_F(NeuralSimAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
-  // A rack with no legal play and a bag too small for exchanges leaves a lone
-  // PASS candidate. drop_best_prob=1 makes this the sharpest edge: were the
-  // sole candidate ranked and dropped, the sim set would be empty -- the
-  // size-1 early return must fire before either can happen.
+  // No legal play and a bag too small to exchange leave PASS as the only
+  // candidate. With drop_best_prob=1, ranking and dropping it would leave an
+  // empty sim set, so the sole-candidate case must return before either.
   NeuralSimAgent::Params p = params();
   p.drop_best_prob = 1.0;
   auto stub = std::make_shared<CountingStubEvalService>();
@@ -227,9 +213,8 @@ TEST_F(NeuralSimAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
 }
 
 TEST_F(NeuralSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
-  // sim_top_k above the candidate count (here also shaved by a certain drop)
-  // must clamp to what exists: the drop excludes the model's favourite, the
-  // remaining two candidates sim, and one of them plays.
+  // sim_top_k above the candidate count clamps to what exists. The drop removes
+  // the model's favourite, and one of the remaining two plays.
   NeuralSimAgent::Params p = params();
   p.shortlist = 3;
   p.sim_top_k = 10;
@@ -245,7 +230,6 @@ TEST_F(NeuralSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
 
   const Move played = agent.make_move(request()).move;
   EXPECT_EQ(sp->total_rows, 3);
-  // The favourite (equity rank 1) was dropped; the survivors are ranks 0 and 2.
   EXPECT_TRUE(played == candidates[0] || played == candidates[2]);
   EXPECT_FALSE(played == candidates[1]);
 }
@@ -253,8 +237,9 @@ TEST_F(NeuralSimAgentTest, SimTopKLargerThanTheCandidateSetIsCapped) {
 TEST_F(NeuralSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
   auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
+  // With endgame budget 0 the solver declines, and there is no bag to sim from.
   NeuralSimAgent agent(params(), std::move(stub),
-                       /*max_batch=*/1024);  // endgame budget 0: solver declines
+                       /*max_batch=*/1024);
   agent.begin_game({});
   MoveRequest req{board_,          dict_,         my_rack_, opp_leave_, /*my_score=*/13,
                   /*opp_score=*/7, /*bag_size=*/0};
@@ -264,8 +249,7 @@ TEST_F(NeuralSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
 }
 
 TEST_F(NeuralSimAgentTest, AnUnusableRolloutCountIsRejected) {
-  // As for SimAgent: the bound SimRunner only asserts, enforced here so a
-  // Release build cannot quietly stop simulating (see sim_runner.h).
+  // SimRunner's rollout bound must reach this agent too, in every build type.
   const auto build = [&](int rollouts) {
     NeuralSimAgent::Params p = params();
     p.sim.rollouts = rollouts;

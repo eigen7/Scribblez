@@ -1,7 +1,6 @@
-// GoogleTest suite for EndgameHastyBotAgent: pre-endgame delegation to plain
-// HastyBot, endgame takeover by the solver (and its disablement at
-// budget=0), legality of returned endgame moves, full-game integration,
-// and --type=hastybot-endgame from_spec parsing.
+// EndgameHastyBotAgent: HastyBot while the bag holds tiles, the endgame solver
+// once it is empty. Compiled into test_endgame alongside the solver suite.
+// Every case needs the Macondo-bundled NWL23 leave table and skips without it.
 
 #include "agent/endgame_hasty_bot.h"
 #include "agent/macondo_bot.h"
@@ -32,9 +31,7 @@ using namespace scribblez;
 
 namespace {
 
-// Load HastyBot's default equity tables for NWL23 (leaves + pre-endgame), which
-// the agent's greedy path needs. Returns false (so the caller skips) when the
-// Macondo-bundled leaves file is absent; ensure_initialized is idempotent.
+// Loads the NWL23 equity tables; false when the leaves file is absent.
 bool ensure_equity() {
   const std::string leaves = HastyEquity::default_leaves_path("NWL23");
   if (!std::ifstream(leaves).good()) return false;
@@ -42,8 +39,8 @@ bool ensure_equity() {
   return true;
 }
 
-// A canonical key for a play (placed squares/glyphs + score), so a returned move
-// can be checked for membership in a generated list ignoring enumeration order.
+// A canonical key for a play (placed squares and glyphs, plus score), for
+// checking a move's membership in a generated list.
 std::string move_key(const Move& m) {
   if (m.type() != MoveType::PLAY) return "PASS";
   struct Placement {
@@ -80,10 +77,9 @@ std::set<std::string> key_set(const std::vector<Move>& ms) {
   return s;
 }
 
-// Reconstruct a completed game's end-of-game bookkeeping from its turn records
-// and assert it matches the logged final scores: the per-player score-delta sum
-// equals the last recorded cumulative score, and the endgame adjustment implied
-// by the end reason reproduces final_scores.
+// Recomputes a finished game's scores from its turn records and checks them
+// against the log: score deltas sum to the last cumulative scores, and the
+// end-of-game rack adjustment for the end reason yields final_scores.
 void check_log_consistency(const GameLog& log) {
   ASSERT_GT(log.num_records, 0);
   std::array<int, 2> running = log.initial_scores;
@@ -110,8 +106,8 @@ void check_log_consistency(const GameLog& log) {
 constexpr uint64_t kSolveBudget = 1ull << 20;
 constexpr int kSolvePlies = 24;
 
-// Forwards to an inner agent while counting how often the game loop prompts
-// it, to observe projection fast-tracking from the outside.
+// Forwards to an inner agent and counts how often the game loop prompts it,
+// which makes projection fast-tracking observable from outside.
 class PromptCountingAgent : public Agent {
  public:
   PromptCountingAgent(Agent& inner) : Agent(inner.thread_id(), inner.name()), inner_(inner) {}
@@ -137,8 +133,7 @@ EndgameHastyBotAgent::Params endgame_params(uint64_t budget, int plies) {
 
 }  // namespace
 
-// While the bag holds tiles the agent must play exactly like a plain HastyBot:
-// for a mid-game request (bag_size > 0), both return the identical move.
+// While the bag holds tiles the agent plays exactly like a plain HastyBot.
 TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
@@ -149,7 +144,6 @@ TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
 
   int checked = 0;
   for (int i = 0; i < 30; ++i) {
-    // A board with a few tiles down, but plenty of tiles still in the bag.
     Board b;
     const int setup = std::uniform_int_distribution<int>(1, 4)(rng);
     for (int k = 0; k < setup; ++k) {
@@ -167,9 +161,8 @@ TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
   ASSERT_GT(checked, 0);
 }
 
-// On an endgame where the exact solver's move differs from HastyBot's greedy
-// move, the agent plays the solver's move; with the solver disabled
-// (solver budget 0) it plays the greedy move instead.
+// On an endgame where the solver's move differs from HastyBot's greedy move,
+// the agent plays the solver's move, or the greedy move with budget 0.
 TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
@@ -181,21 +174,18 @@ TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
     const MoveRequest req = endgame_request(p, d);
     const Move greedy = hasty_best_move_wmp(req);
-    // The reference solve mirrors the agent's default configuration
-    // (spread_matters off), so the moves must match exactly.
+    // Same configuration as the agent's (spread_matters off), so the moves must
+    // match exactly.
     ref.clear();
     const EndgameResult r = ref.solve(
       {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
       {kSolveBudget, kSolvePlies, false});
     if (r.best == greedy) continue;
 
-    // Solver takes over: the agent (with a matching budget/plies) plays the
-    // solver's move, not the greedy one.
     EndgameHastyBotAgent solving(endgame_params(kSolveBudget, kSolvePlies));
     EXPECT_EQ(solving.make_move(req).move, r.best);
     EXPECT_NE(solving.make_move(req).move, greedy);
 
-    // Solver disabled: the agent falls back to the greedy move.
     EndgameHastyBotAgent disabled(endgame_params(/*nodes=*/0, kSolvePlies));
     EXPECT_EQ(disabled.make_move(req).move, greedy);
 
@@ -204,10 +194,9 @@ TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
   ASSERT_TRUE(found) << "no solver-beats-greedy endgame found in the scan";
 }
 
-// When the node budget cannot cover even the solver's first iteration (here: a
-// single node against multi-move positions), the solve is declined and the agent
-// plays exactly HastyBot's static-equity move -- shallow searches never replace
-// the greedy policy with a noisier one.
+// A budget too small for the solver's first iteration (one node against a
+// multi-move root) declines the solve, and the agent plays HastyBot's move: a
+// partial search never replaces the greedy policy with a noisier one.
 TEST(EndgameAgent, ShallowSolveFallsBackToHasty) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
@@ -218,8 +207,7 @@ TEST(EndgameAgent, ShallowSolveFallsBackToHasty) {
   int checked = 0;
   for (int i = 0; i < 30; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
-    // Pass-only positions fit any budget; only multi-move roots exercise the
-    // decline-and-fall-back path.
+    // A pass-only root fits any budget, so it would not exercise the decline.
     if (MoveGenerator(p.board, d).generate(p.my_rack).empty()) continue;
     const MoveRequest req = endgame_request(p, d);
     EXPECT_EQ(tiny.make_move(req).move, hasty.make_move(req).move) << "position " << i;
@@ -228,8 +216,6 @@ TEST(EndgameAgent, ShallowSolveFallsBackToHasty) {
   ASSERT_GT(checked, 0);
 }
 
-// Every endgame move the agent returns is legal: a pass, or one of the moves the
-// generator produces for its rack.
 TEST(EndgameAgent, EndgameMoveIsLegal) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
@@ -252,8 +238,8 @@ TEST(EndgameAgent, EndgameMoveIsLegal) {
   ASSERT_GT(checked, 0);
 }
 
-// A full EndgameHastyBot-vs-HastyBot game on the tiny dictionary terminates
-// normally and logs internally consistent scores.
+// Full EndgameHastyBot-vs-HastyBot games terminate normally and log consistent
+// scores.
 TEST(EndgameAgent, FullGameTinyDict) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
@@ -266,7 +252,6 @@ TEST(EndgameAgent, FullGameTinyDict) {
   }
 }
 
-// The same integration against the real NWL23 lexicon (gated on the KWG).
 TEST(EndgameAgent, FullGameRealLexicon) {
   const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
   if (!std::ifstream(kwg).good() || !ensure_equity()) GTEST_SKIP() << "no NWL23 kwg/leaves";
@@ -280,8 +265,8 @@ TEST(EndgameAgent, FullGameRealLexicon) {
   }
 }
 
-// --type=hastybot-endgame from_spec: valid specs (endgame + hasty options)
-// produce agents, and bad options throw.
+// from_spec accepts both the endgame- and the HastyBot options, and rejects bad
+// ones.
 TEST(EndgameAgent, FromSpecParsing) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
@@ -292,8 +277,7 @@ TEST(EndgameAgent, FromSpecParsing) {
     EndgameHastyBotAgent::from_spec({"--top-k=5", "--temperature=1.5", "--seed=42"}, 0, "Y"),
     nullptr);
 
-  // A parsed --endgame-budget=0 disables the solver: the agent plays the greedy
-  // move on a bag-empty request.
+  // A parsed --endgame-budget=0 must disable the solver.
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x0FF5E7u);
   const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
@@ -306,7 +290,6 @@ TEST(EndgameAgent, FromSpecParsing) {
   EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--bogus-option=1"}, 0, "C"), std::runtime_error);
 }
 
-// --endgame-spread-matters parses both settings and rejects non-boolean input.
 TEST(EndgameAgent, SpreadMattersFromSpec) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
@@ -319,13 +302,12 @@ TEST(EndgameAgent, SpreadMattersFromSpec) {
                std::runtime_error);
 }
 
-// The first-win agent's contract per solve outcome, checked against a
-// reference solver run on the same position: a proof-certificate continuation
-// rides along as the decision's projection (break-out takes priority even in a
-// proven-lost position -- the game's class is settled, so stop spending
-// compute); a proven loss WITHOUT a certificate falls back to HastyBot's
-// static-equity move, which shapes the final spread better than an arbitrary
-// losing move.
+// With spread_matters off (the solve stops at the win/draw/loss proof), checked
+// against a reference solve of the same position:
+//   * a proof certificate becomes the decision's projection, even for a proven
+//     loss: the result is settled, so the game loop can stop spending compute;
+//   * a proven loss without a certificate falls back to HastyBot's move, which
+//     shapes the final spread better than an arbitrary losing move.
 TEST(EndgameAgent, FirstWinProjectsCertificates) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
@@ -347,9 +329,8 @@ TEST(EndgameAgent, FirstWinProjectsCertificates) {
     if (r.depth_completed < 1) continue;
     ++checked;
 
-    // Reset the agent per position: its solver's transposition table is only
-    // cleared between games, and a warm table would make its capped solve
-    // diverge from the freshly-cleared reference solve above.
+    // begin_game clears the agent's transposition table. A warm table would
+    // make its capped solve diverge from the freshly cleared reference solve.
     wld.begin_game({});
     const MoveRequest req = endgame_request(p, d);
     const MoveDecision decision = wld.make_move(req);
@@ -370,10 +351,9 @@ TEST(EndgameAgent, FirstWinProjectsCertificates) {
             << " loss fallbacks, " << checked << " checked\n";
 }
 
-// Integration: in real-lexicon self-play, respected projections reduce agent
-// prompts (proven endgames fast-track to their end) while every game still
-// reaches a natural conclusion with identical rules. Runs the same seeds both
-// ways and compares total prompt counts.
+// In real-lexicon self-play, a game loop that respects projections fast-tracks
+// proven endgames to their end, so agents are prompted less, and every game
+// still ends naturally. Plays the same seeds both ways and compares prompts.
 TEST(EndgameAgent, FastTrackReducesPrompts) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   const char* path = SCRIBBLEZ_DEFAULT_KWG;
@@ -387,10 +367,9 @@ TEST(EndgameAgent, FastTrackReducesPrompts) {
     params.solver.spread_matters = false;
     EndgameHastyBotAgent inner0(params), inner1(params);
     PromptCountingAgent a0(inner0), a1(inner1);
-    // Each game is a full real-lexicon self-play run played twice over, so the
-    // batch is the whole cost of this test. Ten is what the margin needs: a
-    // proven endgame fast-tracks in most games, so the prompt gap it opens is
-    // many times the run-to-run wobble.
+    // These games are the whole cost of the test. Ten is plenty: most games
+    // reach a proven endgame, so the prompt gap is many times the
+    // seed-to-seed variation.
     for (int i = 0; i < 10; ++i) {
       Game g(a0, a1, d, /*seed=*/9000 + i);
       g.set_respect_projections(respect);

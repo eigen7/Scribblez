@@ -1,8 +1,8 @@
 #pragma once
 
-// Scripted nn::EvalService stubs for agent unit tests -- no ONNX, no TensorRT,
-// no GPU. Both declare the base input layout (no opponent-leave block) and
-// ignore the input rows entirely.
+// Scripted position-evaluation services, so agent tests run without a model or
+// GPU. Both declare the base input layout (no opponent-leave block) and ignore
+// the input rows.
 
 #include "encoding/input_encoder.h"
 #include "nn/eval_service.h"
@@ -15,10 +15,8 @@
 namespace scribblez {
 namespace testing {
 
-// One scripted row of the two scoring heads, exactly as the service interface
-// transports them: [P(win), P(draw), P(loss)] and [mean, std]. A test-side
-// convenience -- production consumers read decoded head rows directly. The
-// win-prob ranking objective reads wld[0] + 0.5 * wld[1].
+// One scripted row of the two scoring heads: [P(win), P(draw), P(loss)] and
+// the score difference's [mean, std].
 struct ScriptedEval {
   std::array<float, 3> wld{};
   std::array<float, 2> score_diff{};
@@ -31,9 +29,8 @@ inline void write_scripted(const ScriptedEval& e, int row, std::span<float* cons
   std::copy(e.score_diff.begin(), e.score_diff.end(), sd);
 }
 
-// Returns pre-set evals, one per candidate in *per-call* order. Suits tests
-// that re-script and call make_move repeatedly on the same agent (the scripted
-// index resets every call).
+// Row i of every evaluate() call gets scripted[i]; rows past the end get
+// zeros. For tests that re-script between make_move calls on one agent.
 class StubEvalService : public nn::PositionEvalService {
  public:
   std::vector<ScriptedEval> scripted;
@@ -47,10 +44,9 @@ class StubEvalService : public nn::PositionEvalService {
   }
 };
 
-// Returns pre-set evals indexed in *global* candidate order across however
-// many chunked evaluate() calls a single make_move() makes, and records the
-// total rows seen, the largest chunk, and the call count. Suits all-moves and
-// chunking tests (one make_move per agent).
+// Indexes `scripted` across all evaluate() calls, so a make_move() split into
+// chunks still sees one row per candidate, and records the rows, largest
+// chunk and calls it saw. Use one per make_move().
 class CountingStubEvalService : public nn::PositionEvalService {
  public:
   std::vector<ScriptedEval> scripted;

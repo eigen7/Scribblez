@@ -1,12 +1,10 @@
 #pragma once
 
-// Shared fixtures for the model-driven simulating agents' unit tests
-// (NeuralSimAgent, MsetSimAgent), which script a model over the same opening
-// position and check the same thing of it: that the sim set is the MODEL's top
-// K rather than static equity's. Both suites need the candidate space the agent
-// ranks, the ranking the agent's stable_sort produces, and a way to script a
-// model that favours chosen candidates -- identically, since the two agents are
-// meant to make the same decision from the same information.
+// Shared helpers for the model-driven simulating agents' tests (NeuralSimAgent,
+// MsetSimAgent, UltimateBotAgent). They script a model over the same opening
+// position and check that the sim set follows the model's ranking rather than
+// static equity's, so they share the candidate space, the model ranking, and a
+// way to script a model that favours chosen candidates.
 
 #include "agent/agent.h"
 #include "agent/candidate_evaluator.h"
@@ -31,8 +29,8 @@ inline Rack rack_from(const std::string& s) {
   return r;
 }
 
-// A word list dense enough in one rack's letters to yield many opening plays of
-// differing scores -- the candidate sets these suites rank and prune.
+// Dense enough in one rack's letters (CARTES, in these suites) to give many
+// opening plays of differing scores.
 inline Dictionary opening_dict() {
   return Dictionary::build_from_words(
     {"AE",    "AR",     "AT",    "ARC",    "ARCS", "ARE",   "ART",   "ARTS", "ATE",   "CAR",
@@ -42,14 +40,14 @@ inline Dictionary opening_dict() {
      "TEARS", "TRACE",  "DON",   "DOT",    "DOTS", "NOD",   "SNORT", "TONE", "TONES", "STONED"});
 }
 
-// The candidate space these agents rank: every legal play and exchange in
-// descending static-equity order, capped the way they cap it (0 = uncapped).
+// The candidates the agents rank: legal plays and exchanges in descending
+// static-equity order, capped at `shortlist` (0 = uncapped).
 inline std::vector<Move> shortlist_candidates(const MoveRequest& req, int shortlist) {
   return equity_top_k(req, shortlist == 0 ? std::numeric_limits<int>::max() : shortlist);
 }
 
-// The agents' own model ranking: candidate indices in descending scripted-value
-// order, ties keeping equity order (their stable_sort).
+// Mirrors the agents' model ranking: candidate indices by descending scripted
+// value, with ties kept in equity order as their stable_sort does.
 inline std::vector<int> model_rank(const std::vector<ScriptedEval>& scripted,
                                    EvalObjective objective) {
   std::vector<int> idx(scripted.size());
@@ -65,9 +63,8 @@ inline std::vector<int> model_rank(const std::vector<ScriptedEval>& scripted,
 
 inline ScriptedEval wp(float win_prob) { return {{win_prob, 0.0f, 0.0f}, {}}; }
 
-// Scripted rows for a candidate set of `n`: `favoured` (indices into the
-// equity ranking) get descending high win probabilities, the rest a low one --
-// so the model's preference is separated from static equity's by construction.
+// Scripted rows for `n` candidates: the `favoured` equity-rank indices get
+// descending high win probabilities, the rest a low one.
 inline std::vector<ScriptedEval> script_favouring(size_t n, const std::vector<int>& favoured) {
   std::vector<ScriptedEval> scripted(n, wp(0.1f));
   float v = 0.9f;

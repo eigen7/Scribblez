@@ -1,21 +1,9 @@
-// Unit tests for NeuralAgent, with the model replaced by a scripted EvalService
-// stub -- no ONNX, no TensorRT, no GPU.
-//
-//  * top-K mode (top_k > 0): among the top-K equity candidates the agent plays
-//    the one the stub rates highest under the configured objective, and a play
-//    outside the top-K is never evaluated.
-//  * all-moves mode (top_k == 0): every legal play is evaluated with no equity
-//    pre-filter, so the agent can play a move HastyBot ranks last.
-//  * chunked evaluation: with a small batch limit the agent still scores every
-//    candidate (across multiple evaluate() calls) and picks the global best.
-//  * encode_candidate() parity: it produces exactly the row an independent
-//    GameStateEncoder replay -- and the training BlockDecoder -- produce, so the
-//    agent feeds the model the position (POV, leave, post-move state) it was
-//    trained on.
-//  * temperature controls selection: temperature 0 is the greedy argmax, while a
-//    high temperature samples across the candidates.
-//  * the endgame goes to the exact solver, with the greedy static-equity move as
-//    the fallback when solving is disabled -- either way without the model.
+// NeuralAgent, which scores candidate plays with the position-evaluation model,
+// here replaced by a scripted stub (no GPU). Covers candidate selection in
+// top-K and all-moves modes, chunked evaluation, temperature sampling, the
+// endgame hand-off to the solver, and encode_candidate() parity: the agent must
+// feed the model exactly the row the training BlockDecoder produces for the
+// same position.
 
 #include "agent/agent.h"
 #include "agent/neural_agent.h"
@@ -83,9 +71,7 @@ static Dictionary medium_dict() {
      "ACRES",  "RACE",    "RACES",  "SCAR",   "SCARE", "ARC",    "ARCS",    "ARE",     "ERA"});
 }
 
-// True iff two moves are the same play (type, orientation, anchor, placed
-// squares, and placed glyphs). Lets a test name an expected move by identity
-// rather than by an injected slot.
+// Same type, orientation, anchor, squares and glyphs; ignores score.
 static bool same_move(const Move& a, const Move& b) {
   if (a.type() != b.type()) return false;
   if (a.horizontal() != b.horizontal() || a.start() != b.start() ||
@@ -96,11 +82,10 @@ static bool same_move(const Move& a, const Move& b) {
   return true;
 }
 
-// Mirror NeuralAgent::select_candidates exactly: the indices into `plays`, in
-// the order the agent evaluates them. top_k == 0 (or n <= top_k) keeps every
-// play in generation order; otherwise the top_k by descending HastyBot equity.
-// Replicating the agent's own partial_sort makes the expected order match the
-// agent's regardless of equity ties.
+// Mirrors NeuralAgent::select_candidates: indices into the plays, in the order
+// the agent evaluates them. Every play in generation order when top_k == 0 or
+// n <= top_k, else the top_k by descending equity. Using the same partial_sort
+// makes ties come out in the agent's order.
 static std::vector<int> expected_candidate_order(const std::vector<double>& equities, int top_k) {
   const int n = equities.size();
   std::vector<int> idx(n);
@@ -112,9 +97,8 @@ static std::vector<int> expected_candidate_order(const std::vector<double>& equi
   return idx;
 }
 
-// An opening position (empty board) for `rack`, plus the legal plays the agent
-// will generate and their HastyBot equities -- the exact inputs the agent's
-// candidate selection consumes, so tests script the model against them.
+// An opening position for `rack`, with the legal plays and equities the agent's
+// candidate selection will see, so a test can script the model against them.
 struct OpeningPosition {
   Board board;
   Dictionary dict = medium_dict();
@@ -135,9 +119,7 @@ struct OpeningPosition {
   }
 };
 
-// Fixture for the selection tests, which rank candidates by HastyBot equity.
-// The temp dir holding the synthetic leave table is removed on teardown, pass
-// or fail.
+// Installs a synthetic leave table for the tests that rank by equity.
 class NeuralAgentEquityTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -150,14 +132,11 @@ class NeuralAgentEquityTest : public ::testing::Test {
   std::filesystem::path tmp_;
 };
 
-// The scripted EvalService stubs (per-call StubEvalService, globally-indexed
-// CountingStubEvalService) live in stub_eval_service.h, shared with the other
-// model-driven agents' tests.
 using scribblez::testing::CountingStubEvalService;
 using scribblez::testing::ScriptedEval;
 using scribblez::testing::StubEvalService;
 
-// Layout shorthands for the base input layout these tests encode.
+// The base input layout, which the stubs declare.
 static const int kInputFloats = input_floats(InputEncodingSpec{nullptr});
 static const int kRowFloats = kInputFloats + kLabelFloats;
 
@@ -168,18 +147,15 @@ static ScriptedEval eval_with(float score_diff_mean, float win_prob) {
 static ScriptedEval sd(float score_diff_mean) { return eval_with(score_diff_mean, 0.0f); }
 
 TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
-  // Real opening plays for CARETS, ranked by HastyBot equity exactly as the
-  // agent ranks them. top_k=2 keeps the two highest-equity plays; the order
-  // below is [highest-equity, second].
+  // The stub's rows follow `order`: highest equity first.
   OpeningPosition pos("CARETS");
-  ASSERT_GE(pos.plays.size(), 3u);  // > top_k, so the equity filter actually drops plays
+  ASSERT_GE(pos.plays.size(), 3u);  // more than top_k, so the filter drops plays
   const int top_k = 2;
   const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
   ASSERT_EQ(int(order.size()), top_k);
   const MoveRequest req = pos.request();
 
-  // Value head prefers the SECOND-ranked equity candidate -> the agent overrides
-  // HastyBot's equity argmax and plays it.
+  // The model prefers equity's second choice, overriding the equity argmax.
   {
     auto stub = std::make_shared<StubEvalService>();
     StubEvalService* sp = stub.get();
@@ -190,11 +166,11 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
                        .objective = EvalObjective::kScoreDiff},
                       std::move(stub));
     agent.begin_game({});
-    sp->scripted = {sd(1.0f), sd(9.0f)};  // processing order is [order[0], order[1]]
+    sp->scripted = {sd(1.0f), sd(9.0f)};
     ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[1]]));
   }
 
-  // Value head prefers the top equity candidate -> the agent agrees with HastyBot.
+  // The model agrees with equity.
   {
     auto stub = std::make_shared<StubEvalService>();
     StubEvalService* sp = stub.get();
@@ -209,7 +185,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
     ASSERT_TRUE(same_move(agent.make_move(req).move, pos.plays[order[0]]));
   }
 
-  // The win-prob objective reads win_prob, not score_diff_mean.
+  // The win-prob objective ignores score_diff_mean.
   {
     auto stub = std::make_shared<StubEvalService>();
     StubEvalService* sp = stub.get();
@@ -226,9 +202,7 @@ TEST_F(NeuralAgentEquityTest, TopKSelectionUsesObjective) {
 }
 
 TEST_F(NeuralAgentEquityTest, TopKExcludesLowEquityPlay) {
-  // top_k=2 keeps the two highest-equity plays and drops the rest before any
-  // evaluation -- so even with more than two legal plays, only two reach the
-  // model, and the agent plays a survivor (never a dropped lower-equity play).
+  // Plays outside the top_k by equity never reach the model.
   OpeningPosition pos("CARETS");
   ASSERT_GE(pos.plays.size(), 3u);
   const int top_k = 2;
@@ -237,7 +211,7 @@ TEST_F(NeuralAgentEquityTest, TopKExcludesLowEquityPlay) {
 
   auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
-  sp->scripted = {sd(1.0f), sd(5.0f)};  // among the two survivors, processing-pos 1 wins
+  sp->scripted = {sd(1.0f), sd(5.0f)};
   NeuralAgent agent({.thread_id = 0,
                      .name = "topk",
                      .dict = &pos.dict,
@@ -247,14 +221,13 @@ TEST_F(NeuralAgentEquityTest, TopKExcludesLowEquityPlay) {
   agent.begin_game({});
 
   Move got = agent.make_move(req).move;
-  ASSERT_TRUE(same_move(got, pos.plays[order[1]]));  // a survivor, not a dropped play
-  ASSERT_EQ(sp->total_rows, top_k);  // only the top-2 were evaluated, not every play
+  ASSERT_TRUE(same_move(got, pos.plays[order[1]]));
+  ASSERT_EQ(sp->total_rows, top_k);
 }
 
 TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
-  // top_k = 0: every legal play is evaluated with no equity pre-filter, in
-  // generation order. The stub prefers the LOWEST-equity play -- a move a
-  // small-top-K agent would never even see -- so the agent plays it.
+  // With top_k 0 every legal play is evaluated, in generation order. The model
+  // prefers the lowest-equity play, which a top-K agent would never see.
   OpeningPosition pos("CARETS");
   const int n = pos.plays.size();
   ASSERT_GE(n, 3);
@@ -264,13 +237,13 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
     if (pos.equities[i] < pos.equities[lo]) lo = i;
     if (pos.equities[i] > pos.equities[hi]) hi = i;
   }
-  ASSERT_LT(pos.equities[lo], pos.equities[hi]);  // a meaningful override needs distinct equities
+  ASSERT_LT(pos.equities[lo], pos.equities[hi]);  // else the override proves nothing
   const MoveRequest req = pos.request();
 
   auto stub = std::make_shared<CountingStubEvalService>();
   CountingStubEvalService* sp = stub.get();
   sp->scripted.assign(size_t(n), sd(0.0f));
-  sp->scripted[size_t(lo)] = sd(9.0f);  // generation index == processing index
+  sp->scripted[size_t(lo)] = sd(9.0f);
   NeuralAgent agent({.thread_id = 0,
                      .name = "full",
                      .dict = &pos.dict,
@@ -280,18 +253,17 @@ TEST_F(NeuralAgentEquityTest, AllMovesEvaluated) {
   agent.begin_game({});
 
   Move got = agent.make_move(req).move;
-  ASSERT_TRUE(same_move(got, pos.plays[lo]));  // played the model's pick, not HastyBot's
-  ASSERT_EQ(sp->total_rows, n);                // every legal play was evaluated
+  ASSERT_TRUE(same_move(got, pos.plays[lo]));
+  ASSERT_EQ(sp->total_rows, n);
 }
 
 TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
-  // All plays scored with a batch limit of 2 -> the agent scores them across
-  // multiple evaluate() calls, yet still picks the single globally best-rated
-  // candidate.
+  // With a batch limit of 2 the agent scores the plays across several
+  // evaluate() calls and still picks the global best.
   OpeningPosition pos("CARETS");
   const int n = pos.plays.size();
-  ASSERT_GE(n, 3);           // needs at least two chunks at max_batch = 2
-  const int target = n - 1;  // a candidate in the final chunk
+  ASSERT_GE(n, 3);           // at least two chunks
+  const int target = n - 1;  // in the final chunk
   const MoveRequest req = pos.request();
 
   auto stub = std::make_shared<CountingStubEvalService>();
@@ -307,13 +279,13 @@ TEST_F(NeuralAgentEquityTest, ChunkedEvaluation) {
   agent.begin_game({});
 
   Move got = agent.make_move(req).move;
-  ASSERT_TRUE(same_move(got, pos.plays[target]));  // the globally best-rated candidate
-  ASSERT_EQ(sp->total_rows, n);                    // every play scored
-  ASSERT_LE(sp->max_chunk, 2);                     // never exceeded the batch limit
-  ASSERT_EQ(sp->calls, (n + 1) / 2);               // ceil(n / 2) chunks
+  ASSERT_TRUE(same_move(got, pos.plays[target]));
+  ASSERT_EQ(sp->total_rows, n);
+  ASSERT_LE(sp->max_chunk, 2);
+  ASSERT_EQ(sp->calls, (n + 1) / 2);
 }
 
-// Remove a play's tiles from a rack copy (the leave the encoder sees).
+// The rack minus the play's tiles.
 static Rack leave_after(const Rack& rack, const Move& mv) {
   Rack leave = rack;
   for (int i = 0; i < mv.num_glyphs(); ++i) leave.remove(mv.glyph(i).rack_tile());
@@ -321,15 +293,14 @@ static Rack leave_after(const Rack& rack, const Move& mv) {
 }
 
 TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
-  // A short move history applied to both the agent (via observe_move) and an
-  // independent reference encoder.
+  // The same history goes to the agent and to an independent reference encoder.
   Move move_a = make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
                                {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                                 Glyph::of(Tile::from_char('T'))});
   Move move_b =
     make_play_full(9, 7, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
 
-  // encode_candidate uses only the tracked encoder, so no model/service is run.
+  // encode_candidate never calls the model.
   Dictionary dict = medium_dict();
   NeuralAgent agent({.thread_id = 0,
                      .name = "stub",
@@ -346,7 +317,6 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
   ref.apply_move(move_b);
   const int my_seat = ref.active_player();
 
-  // The candidate the agent is about to score, with the rack it holds.
   Move candidate =
     make_play_full(0, 0, /*horizontal=*/true, 0b11, 8,
                    {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
@@ -365,11 +335,11 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
     ASSERT_EQ(agent_row[i], ref_row[i]) << "input float " << i;
 }
 
-// The training-decoder cross-check, run at a chosen head-start handicap.
+// The row encode_candidate() produces for a move must equal, float for float,
+// the post-move row the training BlockDecoder reconstructs for it. Uses a
+// three-turn game sampled at turn 2 (player 0's), so both players have a prior
+// move and the last-move placement planes are exercised.
 static void check_candidate_row_matches_decoder(std::array<int, 2> initial_scores) {
-  // A three-turn game. The sampled turn (2, post-move) is player 0's, so the
-  // decoded POV is player 0 and both players already have a prior move, which
-  // exercises the last-self / last-opp placement-plane features.
   Move move0 = make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
                               {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                                Glyph::of(Tile::from_char('T'))});
@@ -379,9 +349,8 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
   const uint32_t sampled_turn = 2;
   const int mover = int(sampled_turn % 2);  // turn k is played by k % 2
 
-  // Initial racks and post-turn draws chosen so the decoder reconstructs
-  // player 0's pre-move rack at turn 2 as DONERST: starting CATERST, play CAT
-  // (leave ERST), draw DON. Player 1 holds an S to play on turn 1.
+  // Player 0's rack at turn 2 replays to DONERST: CATERST, plays CAT, draws
+  // DON. Player 1 holds the S it plays on turn 1.
   binlog::InitialRacks ir{};
   ir.p0 = rack_from("CATERST");
   ir.p1 = rack_from("SAINTED");
@@ -396,8 +365,8 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
 
   std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn, initial_scores);
 
-  // Training path: decode the post-move sampled row (no symmetry transpose). The
-  // same dictionary drives both paths' cross-check planes.
+  // Training path: the post-move row, untransposed. Both paths use the same
+  // dictionary for the cross-check planes.
   Dictionary dict = medium_dict();
   binlog::BlockDecoder dec(InputEncodingSpec{&dict});
   const uint8_t flips[1] = {0};
@@ -405,8 +374,6 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
   dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/true,
              /*output_row_start=*/0, dec_row.data());
 
-  // Inference path: the agent observes turns 0..1, then encodes the move played
-  // at the sampled turn from the rack it holds there (CATERST -> ... -> DONERST).
   NeuralAgent agent({.thread_id = 0,
                      .name = "stub",
                      .dict = &dict,
@@ -425,7 +392,7 @@ static void check_candidate_row_matches_decoder(std::array<int, 2> initial_score
     ASSERT_EQ(agent_row[i], dec_row[i]) << "input float " << i;
     any_nonzero = any_nonzero || agent_row[i] != 0.0f;
   }
-  ASSERT_TRUE(any_nonzero);  // guard against a vacuous all-zero match
+  ASSERT_TRUE(any_nonzero);  // an all-zero match would prove nothing
 }
 
 TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
@@ -433,25 +400,24 @@ TEST(NeuralAgent, EncodeCandidateMatchesTrainingDecoder) {
 }
 
 TEST(NeuralAgent, AHandicapReachesTheModelRow) {
-  // The mirrored encoder must start from the head start the .slog records, as
-  // the training replay's does. An agent that began every game at 0-0 would
-  // feed the model a score differential wrong by the handicap for the whole
-  // game -- invisibly, since the row's shape is unchanged. This covers the
-  // CandidateEvaluator both NeuralAgent and NeuralSimAgent mirror through.
+  // The training replay seeds its scores from the handicap the .slog records.
+  // An agent that started every game at 0-0 would feed the model a score
+  // differential wrong by the head start all game, with nothing else in the row
+  // to reveal it. Also covers NeuralSimAgent, which encodes through the same
+  // CandidateEvaluator.
   check_candidate_row_matches_decoder({50, 0});
   check_candidate_row_matches_decoder({0, 37});
 }
 
 TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
-  // top_k=2 keeps the two highest-equity plays; the stub rates processing-pos 0
-  // above pos 1 (order[0] above order[1]).
+  // The stub rates order[0] above order[1].
   OpeningPosition pos("CARETS");
   ASSERT_GE(pos.plays.size(), 3u);
   const int top_k = 2;
   const std::vector<int> order = expected_candidate_order(pos.equities, top_k);
   const MoveRequest req = pos.request();
 
-  // Temperature 0 -> always the model-preferred candidate (order[0]).
+  // Temperature 0 always plays the model's favourite.
   {
     auto stub = std::make_shared<StubEvalService>();
     StubEvalService* gp = stub.get();
@@ -468,8 +434,7 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
       ASSERT_TRUE(same_move(greedy.make_move(req).move, pos.plays[order[0]]));
   }
 
-  // High temperature -> both candidates are sampled, but the higher-rated one
-  // (order[0]) still dominates. Seeded for reproducibility.
+  // A high temperature samples both, with the favourite still more often.
   {
     auto stub = std::make_shared<StubEvalService>();
     StubEvalService* sp = stub.get();
@@ -491,9 +456,9 @@ TEST_F(NeuralAgentEquityTest, TemperatureSamplingSpreads) {
       else if (same_move(got, pos.plays[order[1]]))
         ++low;
     }
-    ASSERT_GT(high, 0);  // both arms explored
+    ASSERT_GT(high, 0);
     ASSERT_GT(low, 0);
-    ASSERT_GT(high, low);  // higher-valued arm dominates
+    ASSERT_GT(high, low);
   }
 }
 
@@ -509,9 +474,8 @@ static EndgameSolver::Params solver_params(uint64_t budget) {
   return p;
 }
 
-// The move the agent falls back on when the solver declines a bag-empty turn:
-// the static-equity argmax over the generated plays, tie-broken the way the
-// agent's own std::max_element is.
+// The agent's fallback when the solver declines a bag-empty turn: the
+// static-equity argmax, with ties broken as the agent's std::max_element does.
 static Move greedy_equity_move(const MoveRequest& req, const std::vector<Move>& plays) {
   const std::vector<double> eq =
     HastyEquity::instance().equities(plays, req.board, req.bag_size, req.opp_rack, req.my_rack);
@@ -519,9 +483,9 @@ static Move greedy_equity_move(const MoveRequest& req, const std::vector<Move>& 
 }
 
 TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
-  // Scan random bag-empty positions for one where the exact solver's move
-  // differs from the static-equity move -- the only kind that tells the two
-  // policies apart -- and check both configurations on it.
+  // Only a position where the solver and static equity disagree tells the two
+  // policies apart, so scan random endgames for one. Neither configuration may
+  // call the model.
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xE9DA3E01u);
   EndgameSolver ref;
@@ -538,14 +502,13 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
     const EndgameResult r = ref.solve(
       {&d, p.board, p.my_rack, p.opp_rack, p.my_score, p.opp_score, /*scoreless_turns=*/0},
       solver_params(kSolveBudget));
-    // Skip the outcomes the agent is specified to play itself: no completed
-    // iteration, or a proven loss whose move is arbitrary.
+    // Skip outcomes where the agent plays its own move: no completed iteration,
+    // or a proven loss with no certificate (its move is arbitrary).
     if (r.depth_completed < 1) continue;
     if (r.proven_class == -1 && r.continuation.empty()) continue;
     if (r.best == greedy) continue;
 
-    // Solving enabled: the solver's move (with its certificate as the
-    // decision's projection), and no model call at all.
+    // The solver's move, with its certificate as the projection.
     auto solving_stub = std::make_shared<CountingStubEvalService>();
     CountingStubEvalService* solving_sp = solving_stub.get();
     NeuralAgent solving({.thread_id = 0,
@@ -555,15 +518,15 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
                          .objective = EvalObjective::kScoreDiff,
                          .endgame = solver_params(kSolveBudget)},
                         std::move(solving_stub));
-    // begin_game() clears the shared transposition table, matching the
-    // freshly-cleared reference solve above.
+    // begin_game() clears the transposition table, matching the freshly
+    // cleared reference solve.
     solving.begin_game({});
     const MoveDecision decision = solving.make_move(req);
     EXPECT_EQ(decision.move, r.best);
     EXPECT_EQ(decision.projected_remaining_moves.size(), r.continuation.size());
     EXPECT_EQ(solving_sp->calls, 0);
 
-    // Solving disabled: the greedy static-equity move, again without the model.
+    // With solving disabled, the static-equity move.
     auto disabled_stub = std::make_shared<CountingStubEvalService>();
     CountingStubEvalService* disabled_sp = disabled_stub.get();
     NeuralAgent disabled({.thread_id = 0,
@@ -587,10 +550,8 @@ TEST_F(NeuralAgentEquityTest, EndgameGoesToTheSolver) {
 // --- Shared service (nn::PositionEvalService::create() path) ----------------
 
 TEST_F(NeuralAgentEquityTest, AgentsShareOneService) {
-  // create() hands every thread's agent the same shared_ptr, so N threads drive
-  // one loaded model. Mirror that with one shared stub two agents hold: both
-  // drive it correctly, and it lives exactly as long as its holders (freed here
-  // only when the last agent -- and the test -- drop it).
+  // PositionEvalService::create() hands every thread's agent the same
+  // service. Two agents sharing one stub must each drive it correctly.
   OpeningPosition pos("CARETS");
   ASSERT_GE(pos.plays.size(), 3u);
   const int top_k = 2;
@@ -616,11 +577,11 @@ TEST_F(NeuralAgentEquityTest, AgentsShareOneService) {
 }
 
 TEST(NeuralNetSharingKey, EqualityDistinguishesEngineDeterminingFields) {
-  // create() keys on NeuralNetParams equality to decide who shares one loaded
-  // engine. Each field that changes the built engine (or its buffers) must
-  // break equality -- copy_aux and fast_build especially: they are correctness,
-  // not just performance (aux host buffers exist only under copy_aux; fast_build
-  // is a separately cached, differently optimized plan).
+  // create() shares one loaded engine among equal NeuralNetParams, so every
+  // field that changes the built engine or its buffers must break equality.
+  // copy_aux and fast_build matter for correctness, not just speed: aux host
+  // buffers exist only under copy_aux, and a fast_build plan is cached
+  // separately and optimized differently.
   using Params = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
   Params a;
   a.onnx_path = "model.onnx";

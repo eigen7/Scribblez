@@ -1,13 +1,11 @@
 #pragma once
 
-// A scripted agent::MoveProposalService stub for the evidence loop's and
-// UltimateBot's unit tests -- no ONNX, no TensorRT, no GPU. It declares the base
-// input layout (no opponent-leave block), keeps what encode() was handed (the
-// board row and the encoded candidate set, for an encoding check), records
-// every evidence set condition() saw (in call order, as scored indices), and
-// answers each condition() call with the next scripted gain vector -- so a test
-// dictates the loop's picks sim by sim and then checks the sequence the loop
-// actually took.
+// A scripted move proposal service for the evidence loop's and UltimateBot's
+// tests, with no model or GPU. Each condition() call returns the next scripted
+// gain vector, so a test dictates the loop's picks sim by sim; the stub records
+// the evidence each call saw, so the test can check the sequence the loop
+// took. It also keeps what encode() was handed, for encoding checks. Declares
+// the base input layout (no opponent-leave block).
 
 #include "agent/move_proposal_service.h"
 #include "encoding/input_encoder.h"
@@ -20,15 +18,14 @@ namespace testing {
 
 class StubMoveProposalService : public agent::MoveProposalService {
  public:
-  // scripted_gains[k] is the (M,) gain vector the k-th condition() call
-  // returns; a call past the end (or a vector shorter than M) reads zeros.
+  // The k-th condition() call's M gains; missing entries read as zero.
   std::vector<std::vector<float>> scripted_gains;
 
   int encode_calls = 0;
   int condition_calls = 0;
   std::vector<float> last_board_row;
   move_set::MoveFeatureArrays last_moves;
-  std::vector<std::vector<int>> seen_evidence;  // per condition() call
+  std::vector<std::vector<int>> seen_evidence;  // scored indices, per condition() call
 
   bool opp_leave_input() const override { return false; }
   int spatial_planes() const override { return scribblez::spatial_planes(); }
@@ -50,8 +47,8 @@ class StubMoveProposalService : public agent::MoveProposalService {
   }
 
  private:
-  // Uniform value heads (the loop reads none of them) and the scripted gain
-  // for the given condition() call, or no gain at all for the plain pass.
+  // Uniform value heads, which the loop never reads, plus the scripted gains
+  // for condition() call `gain_call`, or none for encode() (-1).
   void fill(int num_moves, int gain_call) {
     predictions_.num_moves = num_moves;
     predictions_.wld.assign(size_t(num_moves) * 3, 1.0f / 3.0f);

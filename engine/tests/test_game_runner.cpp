@@ -1,8 +1,9 @@
-// GameRunner match-eval plumbing: that --paired plays games 2k and 2k+1 under
-// one game seed with the seats swapped, and that --results-file records one
-// readable JSON line per game. Drives real (deterministic HastyBot) agents
-// through PlayerFactory, which is why this binary links like play_game rather
-// than joining scribblez_tests. Needs the real lexicon mount; skips without it.
+// GameRunner's match-eval options -- --paired plays games 2k and 2k+1 under one
+// seed with the seats swapped, --results-file writes one JSON line per game --
+// and PlayerFactory's per-type tables. The GameRunner tests build real HastyBot
+// agents through PlayerFactory, which references every agent type; that is why
+// this is its own binary linked like play_game. They skip without the lexicon
+// mount.
 
 #include "agent/player_factory.h"
 #include "arena/game_runner.h"
@@ -53,9 +54,7 @@ std::vector<ResultLine> read_result_lines(const std::filesystem::path& path) {
   return out;
 }
 
-// The real lexicon plus a synthetic equity table, torn down with the temp
-// dir. Skips (not fails) without the lexicon mount, like the other gated
-// suites.
+// The real lexicon plus a synthetic equity table in a per-process temp dir.
 class GameRunnerTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -129,12 +128,12 @@ TEST_F(GameRunnerTest, PairedRequiresEvenGames) {
   EXPECT_THROW(GameRunner(paired_params(/*games=*/3), hasty_players()), util::CleanException);
 }
 
-// PlayerFactory's per-type knowledge lives in one trait list (player_factory.cpp).
-// These lexicon-free tests pin the list-generated surfaces -- default names, the
-// help block, and the unknown-type error -- so each stays covered as types are
-// added. Full construction of every type isn't unit-testable (human blocks on
-// its Vite server, neural needs a model), so agent building is left to the
-// GameRunner suite's real hastybot games above.
+// PlayerFactory keeps its per-type knowledge in one trait list
+// (player_factory.cpp). These lexicon-free tests cover what is generated from
+// that list: default names, the help block, and the unknown-type error.
+// Building every type is not unit-testable (human waits on its web server, the
+// neural types need a model), so agent construction is covered only by the
+// HastyBot games above.
 namespace {
 
 // Every player type paired with its default display name (no explicit --name).
@@ -152,7 +151,7 @@ const std::array<std::pair<const char*, const char*>, 9> kTypeDefaults{{
 
 }  // namespace
 
-// Each type resolves to its trait-list default name, and an explicit --name wins.
+// An explicit --name overrides the type's default name.
 TEST(PlayerFactoryTest, DefaultDisplayNames) {
   for (const auto& [type, def] : kTypeDefaults) {
     PlayerSpec spec;
@@ -163,14 +162,13 @@ TEST(PlayerFactoryTest, DefaultDisplayNames) {
   }
 }
 
-// An unknown type falls back to the literal type string (no trait entry).
+// A type with no trait entry displays as the literal type string.
 TEST(PlayerFactoryTest, UnknownTypeDisplayNameFallsBack) {
   PlayerSpec spec;
   spec.type = "nope";
   EXPECT_EQ(spec.display_name(), "nope");
 }
 
-// The help block is generated from the list: one --type=<t> line per type.
 TEST(PlayerFactoryTest, HelpListsEveryType) {
   const std::string help = PlayerFactory::all_player_types_help();
   for (const auto& [type, def] : kTypeDefaults) {
@@ -179,8 +177,8 @@ TEST(PlayerFactoryTest, HelpListsEveryType) {
   }
 }
 
-// A bad --type is rejected before any agent is built, and the error names every
-// valid type (the listing is generated from the same list).
+// A bad --type is rejected before any agent is built, with an error that lists
+// every valid type.
 TEST(PlayerFactoryTest, UnknownTypeErrorNamesEveryType) {
   PlayerFactory::Params params;
   params.specs = {"--type=bogus", "--type=greedy"};
