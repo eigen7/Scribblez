@@ -312,9 +312,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(scribblez_tests
     tests/tests_main.cpp
     tests/test_footprint.cpp
-    tests/test_web_server.cpp
-    src/lexicon/hasty_equity.cpp
-    src/lexicon/leave_values.cpp)
+    tests/test_web_server.cpp)
   target_link_libraries(scribblez_tests PRIVATE
     scribblez_core scribblez_evidence_select Boost::json GTest::gtest_main)
   # The lexicon mount is populated by setup_wizard.py (the .kwg is never
@@ -352,9 +350,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # entirely: the tests inject scripted stub services and never touch the GPU.
   add_executable(test_neural_agent
     tests/test_neural_agent.cpp
-    src/agent/neural_agent.cpp
-    src/lexicon/hasty_equity.cpp
-    src/lexicon/leave_values.cpp)
+    src/agent/neural_agent.cpp)
   target_link_libraries(test_neural_agent PRIVATE
     scribblez_core Boost::json Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_neural_agent)
