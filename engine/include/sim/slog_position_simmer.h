@@ -87,8 +87,11 @@ struct SlogSimConfig {
   // rollouts and to the candidate ranking.
   bool open_leaves = false;
   SimCandidateSelector selector = recipe_selector({});
-  // Per-position runner params. `threads` here must be 1: parallelism is
-  // across positions, which uses cores better than threading within one.
+  // Per-position runner params. runner.threads parallelizes within a position
+  // and `threads` below across positions; the two multiply, so keep one at 1.
+  // Across positions uses cores better, unless a position has hundreds of
+  // candidates and workers would idle behind the last few. Results depend on
+  // neither.
   SimRunner::Params runner;
   // Positions with at most this many unseen tiles (the bag plus the opponent's
   // rack) sim with runner.solve_endgames on; -1 = none. Solving costs several
