@@ -25,7 +25,6 @@ class WeirdBotAgent : public Agent {
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
-  bool supports_parallelism() const override { return true; }
 
   // Build from `--player "--type=weirdbot"` tokens, with --type and --name
   // already stripped. It takes no options, so any token throws.

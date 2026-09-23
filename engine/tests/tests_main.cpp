@@ -27,6 +27,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
+#include "lexicon/lexicon.h"
 #include "move_key.h"
 #include "sim/rollout_summary.h"
 #include "sim/setup_plays.h"
@@ -52,6 +53,7 @@
 #include "util/string.h"
 
 #include <boost/json.hpp>
+#include <boost/program_options.hpp>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -403,6 +405,23 @@ TEST(Dictionary, RealKwgCrossValidation) {
   ASSERT_TRUE(d.contains("PARTIED"));
   ASSERT_FALSE(d.contains("QXZ"));
   cross_validate(d, "real-kwg", 99u, /*games=*/6, /*steps_per_game=*/8);
+}
+
+// --lexicon parsed after dict() has loaded would change name() without
+// reloading, so it must throw like set_params() does.
+TEST(Lexicon, OptionsAfterLoadThrow) {
+  Lexicon& lex = Lexicon::instance();
+  if (!std::ifstream(lex.kwg_path()).good()) GTEST_SKIP() << "no lexicon at " << lex.kwg_path();
+  lex.dict();
+
+  namespace po = boost::program_options;
+  po::options_description desc;
+  lex.add_options(desc);
+  const char* argv[] = {"test", "--lexicon=CSW21"};
+  po::variables_map vm;
+  po::store(po::parse_command_line(2, argv, desc), vm);
+  EXPECT_THROW(po::notify(vm), util::Exception);
+  EXPECT_EQ(lex.name(), "NWL23");
 }
 
 // ===========================================================================
@@ -1021,6 +1040,12 @@ class TestAgent : public scribblez::Agent {
   std::mt19937_64 rng_;
 };
 
+// The two positions a turn can be sampled at.
+enum class PositionKind : uint8_t {
+  kPreMove = 0,   // the player is about to move
+  kPostMove = 1,  // the player has moved but not yet drawn
+};
+
 // One position from an independent replay of a GameLogStorage, taking each
 // mover's rack from its logged rack_before. The ground truth that
 // GameStateEncoder replays are checked against.
@@ -1032,7 +1057,7 @@ struct LiveSnapshot {
   int score_opp = 0;
   int turn_index = 0;
   int active_player = 0;
-  scribblez::PositionKind kind = scribblez::PositionKind::kPreMove;
+  PositionKind kind = PositionKind::kPreMove;
 };
 
 std::vector<LiveSnapshot> live_replay_all_snapshots(const scribblez::GameLogStorage& log) {
@@ -1172,6 +1197,24 @@ TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
   ASSERT_EQ(tail_total, 5.0f);
 }
 
+// Under a hidden-leaves spec the opponent-leave overload ignores the leave, so
+// callers can pass it without branching on the spec.
+TEST(InputLayout, HiddenLeavesIgnoresOppLeave) {
+  Dictionary d = medium_dict();
+  const InputEncodingSpec spec{&d};
+  GameStateEncoder enc{spec};
+  enc.apply_move(make_play_full(7, 7, /*horizontal=*/true, 0b111, 12,
+                                {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                                 Glyph::of(Tile::from_char('T'))}));
+  const Rack rack = rack_from("RSE");
+
+  std::vector<float> plain(input_floats(spec), -1.0f);
+  std::vector<float> with_leave(input_floats(spec), -1.0f);
+  enc.encode_input(enc.active_player(), rack, plain.data());
+  enc.encode_input(enc.active_player(), rack, rack_from("QIZAA"), with_leave.data());
+  ASSERT_EQ(plain, with_leave);
+}
+
 // Replaying a game log through GameStateEncoder reproduces every position of an
 // independent replay: board, scores, last opponent move, and the legal-play set.
 TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
@@ -1196,7 +1239,7 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
 
       ASSERT_LT(snap_idx, live_snaps.size());
       const LiveSnapshot& pre = live_snaps[snap_idx++];
-      ASSERT_EQ(pre.kind, scribblez::PositionKind::kPreMove);
+      ASSERT_EQ(pre.kind, PositionKind::kPreMove);
       const int active = enc.active_player();
       ASSERT_EQ(active, pre.active_player);
       ASSERT_EQ(enc.score(active), pre.score_active);
@@ -1211,7 +1254,7 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
       if (turn.move.type() == scribblez::MoveType::PLAY) {
         ASSERT_LT(snap_idx, live_snaps.size());
         const LiveSnapshot& post = live_snaps[snap_idx++];
-        ASSERT_EQ(post.kind, scribblez::PositionKind::kPostMove);
+        ASSERT_EQ(post.kind, PositionKind::kPostMove);
 
         scribblez::Board post_board = enc.board();
         post_board.apply(turn.move);
@@ -3102,6 +3145,22 @@ TEST(LeaveValues, RealKwg) {
 
   Rack empty;
   ASSERT_EQ(lv.lookup(empty), 0.0f);
+}
+
+// A named pre-endgame table that is missing or malformed is a setup error,
+// not a silent opt-out of the adjustment.
+TEST(HastyEquity, BadPegFileThrows) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_heq_badpeg";
+  fs::create_directories(tmp);
+  KlvFixture fix = write_synthetic_klv(tmp);
+
+  EXPECT_THROW(HastyEquity::init(fix.path.string(), (tmp / "missing.json").string()),
+               util::Exception);
+  const fs::path malformed = tmp / "malformed.json";
+  std::ofstream(malformed) << "{}";
+  EXPECT_THROW(HastyEquity::init(fix.path.string(), malformed.string()), util::Exception);
+  fs::remove_all(tmp);
 }
 
 TEST(HastyEquity, Components) {

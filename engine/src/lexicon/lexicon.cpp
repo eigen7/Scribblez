@@ -4,6 +4,8 @@
 
 #include <boost/program_options.hpp>
 
+#include <functional>
+
 namespace scribblez {
 
 Lexicon& Lexicon::instance() {
@@ -14,19 +16,33 @@ Lexicon& Lexicon::instance() {
 void Lexicon::add_options(boost::program_options::options_description& desc) {
   namespace po = boost::program_options;
   desc.add_options()  //
-    ("lexicon", po::value<std::string>(&params_.name)->default_value(params_.name),
+    ("lexicon",
+     po::value<std::string>()
+       ->default_value(params_.name)
+       ->notifier(std::bind_front(&Lexicon::set_param, this, &Params::name)),
      "lexicon name; loaded from <lexica-dir>/<lexicon>.kwg. Run "
      "setup_wizard.py outside the Docker container to install lexica.")  //
-    ("lexica-dir", po::value<std::string>(&params_.dir)->default_value(params_.dir),
+    ("lexica-dir",
+     po::value<std::string>()
+       ->default_value(params_.dir)
+       ->notifier(std::bind_front(&Lexicon::set_param, this, &Params::dir)),
      "directory holding .kwg files (rarely overridden)");
 }
 
 void Lexicon::set_params(const Params& params) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (dict_) {
-    throw util::Exception("Lexicon::set_params called after dict() was loaded");
-  }
+  throw_if_loaded();
   params_ = params;
+}
+
+void Lexicon::set_param(std::string Params::* field, const std::string& value) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  throw_if_loaded();
+  params_.*field = value;
+}
+
+void Lexicon::throw_if_loaded() const {
+  if (dict_) throw util::Exception("Lexicon params changed after dict() was loaded");
 }
 
 const Dictionary& Lexicon::dict() {

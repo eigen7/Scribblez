@@ -27,13 +27,6 @@ class Dictionary;
 // and `my_rack`, i.e. the bag plus the opponent's rack. Indexed A..Z, blank.
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack);
 
-// The two positions a turn can be sampled at. Used only by the encoder
-// cross-check tests.
-enum class PositionKind : uint8_t {
-  kPreMove = 0,   // the player is about to move
-  kPostMove = 1,  // the player has moved but not yet drawn
-};
-
 class GameStateEncoder {
  public:
   explicit GameStateEncoder(const InputEncodingSpec& spec) : spec_(spec) {}
@@ -77,8 +70,9 @@ class GameStateEncoder {
   // Aborts under an open-leaves spec; use the overload.
   void encode_input(int player, const Rack& my_rack, float* out) const;
 
-  // For an open-leaves spec. `opp_leave` may be empty (the opponent has not
-  // moved, or kept nothing).
+  // Under any spec. `opp_leave` is read only under an open-leaves spec, so a
+  // caller that has the opponent's leave can encode without branching on the
+  // spec. It may be empty (the opponent has not moved, or kept nothing).
   void encode_input(int player, const Rack& my_rack, const Rack& opp_leave, float* out) const;
 
   // As encode_input(), but with the score difference forced to `score_diff`,

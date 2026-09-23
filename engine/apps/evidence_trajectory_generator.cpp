@@ -111,9 +111,6 @@ uint32_t file_flags(const Options& opt) {
   return kSimObsFlagTrajectory | (opt.open_leaves ? kSimObsFlagOpenLeaves : 0u);
 }
 
-// The most off-policy draws a position can carry, for the run banner.
-int max_off_policy(const evidence::TrajectoryOptions& t) { return t.off_policy_count; }
-
 // What every worker shares. leaf_eval_service is the value-truncation leaf
 // model under --horizon; EvalService serializes its callers, so sharing it is
 // safe.
@@ -282,7 +279,7 @@ void run_slog_mode(const Dictionary& dict, const InputEncodingSpec& spec, const 
       binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
   std::cerr << "evidence trajectories: " << pending.size() << " file(s), " << total_positions
             << " positions; anchor + " << opt.traj.on_policy_min << ".." << opt.traj.on_policy_max
-            << " on-policy + up to " << max_off_policy(opt.traj) << " off-policy x "
+            << " on-policy + up to " << opt.traj.off_policy_count << " off-policy x "
             << opt.traj.rollouts << " rollouts, proposer " << proposer_hash.substr(0, 12) << ", "
             << opt.threads << " threads\n";
 
@@ -405,7 +402,7 @@ void run_gcg_mode(const Dictionary& dict, const InputEncodingSpec& spec, const O
   fs::create_directories(opt.out_dir);
   std::cerr << "evidence trajectories: " << front.work.size() << " gcg position(s); anchor + "
             << opt.traj.on_policy_min << ".." << opt.traj.on_policy_max << " on-policy + up to "
-            << max_off_policy(opt.traj) << " off-policy x " << opt.traj.rollouts
+            << opt.traj.off_policy_count << " off-policy x " << opt.traj.rollouts
             << " rollouts, proposer " << proposer_hash.substr(0, 12) << ", " << opt.threads
             << " threads\n";
 

@@ -285,11 +285,7 @@ void encode_post_move_row(const GameStateEncoder& pre, int mover, const Rack& my
   for (int i = 0; i < mv.num_glyphs(); ++i) leave.remove(mv.glyph(i).rack_tile());
   GameStateEncoder post = pre;
   post.apply_move(mv);
-  if (pre.spec().opp_leave_input) {
-    post.encode_input(mover, leave, opp_leave, out);
-  } else {
-    post.encode_input(mover, leave, out);
-  }
+  post.encode_input(mover, leave, opp_leave, out);
 }
 
 }  // namespace scribblez

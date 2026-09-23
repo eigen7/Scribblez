@@ -11,12 +11,6 @@ namespace scribblez {
 
 namespace {
 
-// KWG bit fields; see dictionary.h.
-constexpr uint32_t kArcMask = 0x003fffffu;
-constexpr uint32_t kIsEndBit = 0x00400000u;
-constexpr uint32_t kAcceptsBit = 0x00800000u;
-constexpr uint32_t kTileShift = 24u;
-
 // Readers for the file's little-endian arrays; assume a little-endian host.
 std::vector<uint32_t> read_u32_array(std::ifstream& in, uint32_t count) {
   std::vector<uint32_t> data(count);
@@ -53,16 +47,16 @@ void enumerate_leaves(const std::vector<uint32_t>& nodes, const std::vector<floa
                       std::unordered_map<Rack, float>& out) {
   while (node != 0) {
     const uint32_t entry = nodes[node];
-    const Tile tile = tile_from_klv_code(uint8_t(entry >> kTileShift));
+    const Tile tile = tile_from_klv_code(Dictionary::arc_tile(entry));
     acc.add(tile);
-    if (entry & kAcceptsBit) {
+    if (entry & Dictionary::ACCEPTS_BIT) {
       if (counter < values.size()) out.emplace(acc, values[counter]);
       ++counter;
     }
-    const uint32_t child = entry & kArcMask;
+    const uint32_t child = entry & Dictionary::ARC_MASK;
     if (child != 0) enumerate_leaves(nodes, values, child, acc, counter, out);
     acc.remove(tile);
-    if (entry & kIsEndBit) break;
+    if (entry & Dictionary::IS_END_BIT) break;
     ++node;
   }
 }
@@ -75,18 +69,18 @@ void compute_subtree_words(const std::vector<uint32_t>& nodes, uint32_t list,
   for (uint32_t i = list;; ++i) {
     if (!done[i]) {
       const uint32_t entry = nodes[i];
-      const uint32_t child = entry & kArcMask;
+      const uint32_t child = entry & Dictionary::ARC_MASK;
       if (child != 0) compute_subtree_words(nodes, child, subtree_words, done);
-      uint32_t sw = (entry & kAcceptsBit) ? 1u : 0u;
+      uint32_t sw = (entry & Dictionary::ACCEPTS_BIT) ? 1u : 0u;
       if (child != 0)
         for (uint32_t c = child;; ++c) {
           sw += subtree_words[c];
-          if (nodes[c] & kIsEndBit) break;
+          if (nodes[c] & Dictionary::IS_END_BIT) break;
         }
       subtree_words[i] = sw;
       done[i] = true;
     }
-    if (nodes[i] & kIsEndBit) break;
+    if (nodes[i] & Dictionary::IS_END_BIT) break;
   }
 }
 
@@ -108,16 +102,17 @@ LeaveValues LeaveValues::load(const std::string& path) {
 
   LeaveValues lv;
   lv.values_by_leave_.reserve(num_leaves);
-  lv.root_arc_list_ = nodes.empty() ? 0u : (nodes[0] & kArcMask);
+  lv.root_arc_list_ = nodes.empty() ? 0u : (nodes[0] & Dictionary::ARC_MASK);
   Rack acc;
   size_t counter = 0;
   if (!nodes.empty())
-    enumerate_leaves(nodes, values, nodes[0] & kArcMask, acc, counter, lv.values_by_leave_);
+    enumerate_leaves(nodes, values, nodes[0] & Dictionary::ARC_MASK, acc, counter,
+                     lv.values_by_leave_);
   // For the cursor's index accumulation.
   lv.subtree_words_.assign(nodes.size(), 0u);
   if (!nodes.empty()) {
     std::vector<bool> done(nodes.size(), false);
-    compute_subtree_words(nodes, nodes[0] & kArcMask, lv.subtree_words_, done);
+    compute_subtree_words(nodes, nodes[0] & Dictionary::ARC_MASK, lv.subtree_words_, done);
   }
   lv.nodes_ = std::move(nodes);
   lv.values_ = std::move(values);

@@ -2,6 +2,7 @@
 
 #include "game/rack.h"
 #include "game/tile.h"
+#include "lexicon/dictionary.h"
 
 #include <cstdint>
 #include <string>
@@ -44,18 +45,13 @@ class LeaveValues {
   // The matched arc, or 0 if `code` has no arc in `arc_list`.
   uint32_t klv_step(uint32_t arc_list, uint8_t code, uint32_t* index) const;
 
-  bool klv_accepts(uint32_t arc) const { return (nodes_[arc] & kAcceptsBit) != 0; }
-  uint32_t klv_next(uint32_t arc) const { return nodes_[arc] & kArcMask; }
+  bool klv_accepts(uint32_t arc) const { return (nodes_[arc] & Dictionary::ACCEPTS_BIT) != 0; }
+  uint32_t klv_next(uint32_t arc) const { return nodes_[arc] & Dictionary::ARC_MASK; }
   float klv_value_at(uint32_t index) const {
     return index < values_.size() ? values_[index] : 0.0f;
   }
 
  private:
-  static constexpr uint32_t kArcMask = 0x003fffffu;
-  static constexpr uint32_t kIsEndBit = 0x00400000u;
-  static constexpr uint32_t kAcceptsBit = 0x00800000u;
-  static constexpr uint32_t kTileShift = 24u;
-
   std::unordered_map<Rack, float> values_by_leave_;  // leave -> value
   std::vector<uint32_t> nodes_;                      // KWG arc nodes
   std::vector<float> values_;                        // leave values, indexed by word index
