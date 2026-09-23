@@ -28,6 +28,7 @@ instead, and per-worker resources (threads, vCPUs) belong to the worker slots.
 
 from dataclasses import dataclass
 
+from cloud import worker_deps
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
@@ -170,8 +171,6 @@ def fetch_train_deps(params):
     lexicon (the FFI session loads it before the model is built) and the
     position-evaluation eval datasets. Not Macondo's strategy tables: the
     trainer plays no moves."""
-    from cloud import worker_deps
-
     worker_deps.fetch_lexicon(worker_deps.DEFAULT_LEXICON)
     worker_deps.fetch_eval_positions()
 

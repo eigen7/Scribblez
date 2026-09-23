@@ -33,6 +33,7 @@ import time
 from dataclasses import asdict, dataclass
 
 import torch
+from cloud import worker_deps
 
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
@@ -81,8 +82,6 @@ class MsetTrainState(GenerationalState):
 def fetch_train_deps(params):
     """Fetch the default lexicon, which the FFI session loads to decode the
     pair store's rows. The pairs themselves come through the sink."""
-    from cloud import worker_deps
-
     worker_deps.fetch_lexicon(worker_deps.DEFAULT_LEXICON)
 
 

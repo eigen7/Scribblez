@@ -16,6 +16,7 @@ arms already measured, so once the batch is done a respawn exits at once.
 
 from dataclasses import dataclass
 
+from scribblez.dashboard import db
 from scribblez.params import ParamsError, param
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
 
@@ -93,8 +94,6 @@ class MatchArmsParams:
 
 def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
     """Arms measured / total, read the same way the runner decides what is left."""
-    from scribblez.dashboard import db
-
     task_params = _task_params(spec, tag)
     if task_params is None:
         return []
