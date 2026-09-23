@@ -78,11 +78,12 @@ RUN mkdir -p /etc/apt/keyrings && \
     rm -rf /var/lib/apt/lists/* \
       /usr/local/bin/cmake /usr/local/bin/cpack /usr/local/bin/ctest
 
-# 3) Node.js 22 (NodeSource), for the web UI and the CLI coding agents.
+# 3) Node.js 22 (NodeSource), for the web UI and Codex. (Claude Code is
+#    installed natively as the final step, below.)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/* && \
-    npm install -g @anthropic-ai/claude-code @openai/codex
+    npm install -g @openai/codex
 
 # 4) Python deps. PyTorch from the stable cu129 index (nightly lacks x86_64
 #    wheels), matching the TensorRT base's CUDA.
@@ -141,3 +142,10 @@ RUN chmod +x /usr/local/bin/devuser-setup.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 CMD ["bash"]
+
+# 10) Claude Code, via devenv_utils' install-claude.sh. Must stay the last
+#     step: the build passes the resolved release as CLAUDE_CODE_VERSION, so
+#     anything below the ARG would rebuild on every Claude release.
+ARG CLAUDE_CODE_VERSION=latest
+COPY install-claude.sh /tmp/
+RUN bash /tmp/install-claude.sh "$CLAUDE_CODE_VERSION"
