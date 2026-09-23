@@ -44,13 +44,6 @@ double opening_adjustment(const Move& move, const Board& board) {
   return penalty;
 }
 
-double peg_adjustment(const Move& move, int bag_size, const std::vector<double>& peg_table) {
-  if (bag_size <= 0 || peg_table.empty()) return 0.0;
-  int bag_after = bag_size - move.num_glyphs() + 7;
-  if (bag_after < 0 || size_t(bag_after) >= peg_table.size()) return 0.0;
-  return peg_table[size_t(bag_after)];
-}
-
 // With the bag empty: going out collects twice the opponent's rack's face
 // value; otherwise the mover pays twice its own leave's, plus 10.
 double endgame_adjustment(int leave_point_value, bool leave_empty, const Rack& opp_rack,
@@ -117,7 +110,7 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
   double lv = (bag_size > 0) ? double(leave_values_.lookup(leave)) : 0.0;
   double eg = endgame_adjustment(leave.point_value(), leave.empty(), opp_rack, bag_size);
   return double(move.score()) + lv + opening_adjustment(move, board) +
-         peg_adjustment(move, bag_size, peg_table_) + eg;
+         peg_for_tiles(move.num_glyphs(), bag_size) + eg;
 }
 
 TurnLeaves HastyEquity::turn_leaves(const Rack& my_rack) const {
@@ -133,7 +126,7 @@ double HastyEquity::equity(const Move& move, const Board& board, int bag_size, c
   const double lv = (bag_size > 0) ? leaves.value(mask) : 0.0;
   const double eg = endgame_adjustment(leaves.point_value(mask), mask == 0, opp_rack, bag_size);
   return double(move.score()) + lv + opening_adjustment(move, board) +
-         peg_adjustment(move, bag_size, peg_table_) + eg;
+         peg_for_tiles(move.num_glyphs(), bag_size) + eg;
 }
 
 namespace {
