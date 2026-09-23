@@ -862,6 +862,15 @@ class WorkerManager:
             # and a count of them would pin nothing. An unknown count (a
             # manual machine) is not checked, as a bare host never was.
             raise AssertionError(f"machine '{machine.name}' has no GPU for role '{role}'")
+        # A rented slot delivers through the bucket (_slot_sink), but a
+        # dispatch-driven role's results are collected only from the slot's
+        # filesystem: a rented match_eval worker would play one match whose
+        # result never arrives, then wait on it forever.
+        assert not (role_spec.dispatch and machine is not None and machine.instance_id), (
+            f"role '{role}' cannot run on rented machine '{machine.name}': its results are "
+            "collected over ssh, and a rented machine delivers through the bucket; "
+            "use a local slot or a registered machine"
+        )
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"

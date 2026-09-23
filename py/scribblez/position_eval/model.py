@@ -302,12 +302,7 @@ class PositionEvalModel(nn.Module):
         self,
         outputs: dict[str, torch.Tensor],
         targets: dict[str, torch.Tensor],
-        lambda_wld: float = 1.0,
-        lambda_sd: float = 1.0,
-        lambda_next_placement: float = 0.5,
-        lambda_win_placement: float = 0.5,
-        huber_delta_mean: float = 10.0,
-        huber_delta_std: float = 10.0,
+        cfg: LossConfig,
     ) -> dict[str, torch.Tensor]:
         """The weighted total ("total") plus every head's reported losses.
 
@@ -318,14 +313,6 @@ class PositionEvalModel(nn.Module):
             opp_placement_mask,
             self_placement_mask   (B, num_classes)  1 = legal footprint
         """
-        cfg = LossConfig(
-            lambda_wld,
-            lambda_sd,
-            lambda_next_placement,
-            lambda_win_placement,
-            huber_delta_mean,
-            huber_delta_std,
-        )
         total: torch.Tensor | None = None
         reported: dict[str, torch.Tensor] = {}
         for head in self.heads.values():

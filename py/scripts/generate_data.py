@@ -41,13 +41,13 @@ def build_player_spec(args) -> str:
     )
 
 
-def count_positions(out_dir: Path) -> int:
-    """Total positions across the .slog headers in out_dir; -1 on failure."""
+def count_games(out_dir: Path) -> int:
+    """Total games across the .slog headers in out_dir; -1 on failure."""
     try:
         total = 0
         for f in sorted(out_dir.glob("*.slog")):
-            num_pos, _ = read_file_header(f)
-            total += num_pos
+            num_games, _ = read_file_header(f)
+            total += num_games
         return total
     except Exception as e:  # noqa: BLE001 -- validation is best-effort
         print(f"Warning: could not validate headers in {out_dir}: {e}", file=sys.stderr)
@@ -147,7 +147,7 @@ def main() -> int:
         if n <= 0:
             continue
         files = list(out_dir.glob("*.slog"))
-        print(f"  {name}: {len(files)} files, {count_positions(out_dir)} games -> {out_dir}")
+        print(f"  {name}: {len(files)} files, {count_games(out_dir)} games -> {out_dir}")
     print(f"  Rate:  {args.num_games / elapsed:.0f} games/s")
     return 0
 

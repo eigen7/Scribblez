@@ -455,6 +455,13 @@ def test_renting_records_the_instance_and_its_key_material(rented, spec, task, t
     assert provider.instances["i-1"].owner == f"{spec.name}/t/m1"
 
 
+def test_a_dispatch_role_is_refused_on_a_rented_machine(rented, manager, task):
+    """A rented slot delivers through the bucket, which a dispatch-driven
+    role's results never come back through."""
+    with pytest.raises(AssertionError, match="cannot run on rented machine 'm1'"):
+        manager.add_ssh(_GpuRoles(), task, "match_eval", machine="m1", threads=None)
+
+
 def test_a_rented_machine_without_a_name_gets_one(rented, manager, spec, task):
     provider, m = rented
     second = manager.rent_machine(spec, task, "", "c7a.4xlarge")
