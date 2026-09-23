@@ -26,6 +26,10 @@ constexpr uint64_t align_up(uint64_t n, uint64_t alignment) {
   return (n + alignment - 1) & ~(alignment - 1);
 }
 
+// Numerically-stable softmax of `n` logits into `out`, which may alias
+// `logits`. Accumulates the normalizer in double.
+void softmax(const float* logits, int n, float* out);
+
 // Draws an index from a numerically-stable softmax over a vector of scores.
 // It owns a weight buffer that sample() reuses, so hold one instance for the
 // caller's lifetime rather than paying a per-call allocation.
