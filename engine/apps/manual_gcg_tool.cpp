@@ -491,20 +491,12 @@ class ManualGame {
     view_ply_ = turns_.size();
   }
 
-  void play_turn(int player, int row, int col, const std::string& dir, const std::string& word,
-                 const boost::json::array& placements) {
+  // Records the legal play that places exactly `placements` (the client's
+  // candidate tiles); the placements alone determine the move.
+  void play_turn(int player, const boost::json::array& placements) {
     if (!require_live_mode("play turns")) return;
     if (player != turn_player_) {
       status_ = "It is not that player's turn";
-      return;
-    }
-    const bool horizontal = (dir == "horizontal");
-    if (!horizontal && dir != "vertical") {
-      status_ = "Direction must be horizontal or vertical";
-      return;
-    }
-    if (word.empty()) {
-      status_ = "Word cannot be empty";
       return;
     }
 
@@ -1113,8 +1105,7 @@ std::optional<boost::json::object> handle_message(ManualGame& game,
     boost::json::array placements;
     auto it = obj.find("placements");
     if (it != obj.end() && it->value().is_array()) placements = it->value().as_array();
-    game.play_turn(int_field(obj, "player"), int_field(obj, "row"), int_field(obj, "col"),
-                   str_field(obj, "dir"), str_field(obj, "word"), placements);
+    game.play_turn(int_field(obj, "player"), placements);
     return std::nullopt;
   }
   if (type == "jump_to_ply") {

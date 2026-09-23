@@ -102,13 +102,6 @@ const GCG_OPPONENT_RACK_CHOICES: ReadonlyArray<{
 // up on the save.
 const GCG_REQUEST_TIMEOUT_MS = 5000;
 
-interface PlayBuildResult {
-  row: number;
-  col: number;
-  dir: ManualDirection;
-  word: string;
-}
-
 const MAX_NAME_LENGTH = 18;
 
 // Save a file via the browser's native "Save As" dialog (File System Access
@@ -502,52 +495,18 @@ function AppManual() {
     setRackSelection({ player, slot: index });
   };
 
-  const buildPlay = (): PlayBuildResult | null => {
-    if (!state) return null;
-    if (candidateTiles.length === 0) return null;
-
-    const sameRow = candidateTiles.every((t) => t.row === candidateTiles[0].row);
-    const sameCol = candidateTiles.every((t) => t.col === candidateTiles[0].col);
-    if (!sameRow && !sameCol) return null;
-    const dir: ManualDirection = sameRow ? 'horizontal' : 'vertical';
-
-    let row = candidateTiles[0].row;
-    let col = candidateTiles[0].col;
-    if (dir === 'horizontal') {
-      const minCol = Math.min(...candidateTiles.map((t) => t.col));
-      col = minCol;
-      while (col > 0 && state.board[row]?.[col - 1]) col -= 1;
-    } else {
-      const minRow = Math.min(...candidateTiles.map((t) => t.row));
-      row = minRow;
-      while (row > 0 && state.board[row - 1]?.[col]) row -= 1;
-    }
-
-    const letters: string[] = [];
-    let r = row;
-    let c = col;
-    while (r < 15 && c < 15) {
-      const boardCell = state.board[r]?.[c];
-      const cand = candidateMap.get(`${r},${c}`);
-      if (!boardCell && !cand) break;
-      if (boardCell) {
-        letters.push(boardCell);
-      } else if (cand) {
-        letters.push(cand.isBlank ? cand.letter.toLowerCase() : cand.letter.toUpperCase());
-      }
-      if (dir === 'horizontal') c += 1;
-      else r += 1;
-    }
-
-    if (letters.length === 0) return null;
-    return { row, col, dir, word: letters.join('') };
+  // Whether the candidate tiles share a row or a column. The engine matches
+  // them against its legal moves, which checks the rest.
+  const candidatesInLine = (): boolean => {
+    if (candidateTiles.length === 0) return false;
+    const [first] = candidateTiles;
+    return candidateTiles.every((t) => t.row === first.row) || candidateTiles.every((t) => t.col === first.col);
   };
 
   function submitMove() {
     if (!state) return;
     if (interactionLocked) return;
-    const built = buildPlay();
-    if (!built) {
+    if (!candidatesInLine()) {
       setStatus('Candidate tiles must form one contiguous row or column.');
       return;
     }
@@ -555,10 +514,6 @@ function AppManual() {
     send({
       type: 'play',
       player: state.current_player,
-      row: built.row,
-      col: built.col,
-      dir: built.dir,
-      word: built.word,
       placements: candidateTiles.map((t) => ({
         row: t.row,
         col: t.col,
