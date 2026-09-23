@@ -1,20 +1,16 @@
-// play_game: runs Scrabble games between two agents (Greedy, HastyBot, or
-// Human) and optionally writes one GCG-format game log per game to a
-// directory. A Human player is driven through a local web UI.
+// play_game: plays games between two agents, optionally logging each game as
+// GCG (--log-dir) or into .slog training files (--binary-log-dir). This is the
+// general match and self-play driver; `--help` lists every player type and
+// runner option.
 //
-// Usage:
-//   play_game [--player "--type=T [opts]"]... [--lexicon NAME] [--seed N]
-//             [--log-dir DIR] [--games N] [--threads N] [--verbose]
-//             [--leaves-file PATH] [--peg-file PATH]
+//   play_game --player "--type=hastybot" --player "--type=greedy" --games 100 --threads 8
 //
-// Each --player spec selects a seat; repeat once per seat (defaults to two
-// greedy players). The human agent's own --port / --vite-port / --web-dir
-// options live inside its --player spec, e.g.
-//   --player "--type=human --port=8081 --web-dir=web"
+// Give two --player specs, or none for two greedy seats. Each agent's own
+// options go inside its spec. A human seat is played in the browser: the engine
+// starts the web UI's Vite dev server itself and opens it, so run py/build.py
+// once beforehand to install the web dependencies.
 //
-// For human play the engine launches the front-end's Vite dev server itself
-// (npm run dev) and opens the browser at it -- you never run npm by hand. Run
-// py/build.py once first to install the web dependencies.
+//   play_game --player "--type=human --port=8081" --player "--type=hastybot"
 
 #include "agent/player_factory.h"
 #include "arena/game_runner.h"
@@ -30,8 +26,6 @@
 int main(int argc, char** argv) {
   namespace po = boost::program_options;
   try {
-    // Each subsystem owns its own Params + add_options() so this top-level
-    // function never has to know which knobs belong to whom.
     scribblez::SeedProducer::Params seed_params;
     scribblez::PlayerFactory::Params player_params;
     scribblez::GameRunner::Params runner_params;

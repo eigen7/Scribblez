@@ -1,41 +1,40 @@
-// The measurement behind docs/plans/sim_labeled_candidates.md (PR 0): how often
-// does a Monte-Carlo sim prefer a candidate that a HastyBot static-equity cut
-// would never have offered it -- and what kind of move is it when it does?
+// sim_candidate_survey_tool: the measurement behind
+// docs/plans/sim_labeled_candidates.md. How often does a Monte-Carlo sim prefer
+// a move that a HastyBot static-equity top-K cut would never have offered it,
+// and what kind of move is it when it does? py/scripts/sim_candidate_survey.py
+// and the blind_spots dashboard workload drive it and read its output.
 //
-// Three recipes choose the positions and candidates, all simmed with terminal
-// HastyBot rollouts:
-//   * all (the default) -- a random --max-positions of each file's
-//     training-eligible turns (0 = every one), and at each the top --cut of the
-//     equity ranking plus EVERY legal play that places no blank: the exhaustive
-//     search for plays the cut hides.
-//   * setup -- the same, narrowed to positions with a high-value setup play
-//     (sim/setup_plays.h) outside the cut, simming only the cut plus those
-//     plays: the cheap search for one known kind.
-//   * stratified -- a per-game sample of turns and a stratified candidate sample
-//     (the head of the ranking, the contention zone, a uniform tail,
-//     exchanges): what the cut costs on average.
-// --gcg-dir exports each simmed position's game for manual review.
+//   sim_candidate_survey_tool --slog-dir data/slogs --recipe all --max-positions 20
+//   sim_candidate_survey_tool --slog-file a.slog --recipe setup --gcg-dir /tmp/setups
 //
-// Each processed .slog gets a same-stem .simsurvey.json (files that already
-// have one are skipped, so an interrupted run resumes by rerunning):
-// per position its rack, scores and bag; per candidate its notation, equity,
-// rank and leave; and per candidate (from the screen, and again from the
-// confirming sim for the moves in it) a RolloutSummary
-// (sim/rollout_summary.h) -- outcome counts, the final-margin histogram, the
-// end-of-game rack settlement (tiles stranded on each rack, who played out), and
-// each side's next-move score histogram, bingo count and how often that move
-// played off the candidate's tiles -- plus the paired win difference against
-// each move inside the cut. That is what a later classifier needs to say WHY a
-// move outside the cut sims well: the opponent's replies scoring less
-// (defense), the mover's next move scoring more off its own tiles (setup), or
-// only the margin distribution changing shape (variance).
+// A recipe picks the positions and candidates; all are simmed with HastyBot
+// rollouts to game end.
+//   - all (default): a random --max-positions of each file's training-eligible
+//     turns, simming the top --cut of the equity ranking plus every legal play
+//     that places no blank. The exhaustive search for what the cut hides.
+//   - setup: the same, restricted to positions with a high-value setup play
+//     (sim/setup_plays.h) outside the cut, and simming only the cut plus those
+//     plays. A cheap search for one known kind of move.
+//   - stratified: a per-game sample of turns and a stratified sample of
+//     candidates (ranking head, contention zone, uniform tail, exchanges). What
+//     the cut costs on average.
 //
-// Each position is simmed in two stages. The screen sims every candidate once
-// (--rollouts) and singles out its best move outside the cut; the best of
-// hundreds of noisy estimates flatters itself (the winner's curse), so the
-// confirming stage re-sims that one move and the cut's moves alone, longer
-// (--confirm-rollouts) and on fresh seeds, for an unbiased reading.
-// py/scripts/sim_candidate_survey.py drives the run and reads the files.
+// Each position is simmed in two stages. The screen sims every candidate at
+// --rollouts and picks the best --confirm-picks moves outside the cut. The best
+// of hundreds of noisy estimates is biased upward (the winner's curse), so the
+// confirming stage re-sims just those picks and the cut's moves at
+// --confirm-rollouts, on fresh seeds, for an unbiased reading.
+//
+// Each .slog gets a same-stem .simsurvey.json; files that already have one are
+// skipped. Per position it records the rack, scores and bag; per candidate its
+// notation, equity, rank, leave, and a RolloutSummary (sim/rollout_summary.h)
+// from each stage that simmed it; and for each confirmed move its paired win
+// difference against every cut move. The summaries carry what a later
+// classifier needs to say why a move outside the cut sims well: the opponent's
+// replies score less (defense), the mover's next move scores more off its own
+// tiles (setup), or only the shape of the margin distribution changes
+// (variance). Results are appended to a partial file as they finish, so an
+// interrupted run resumes where it stopped (see PartialSurvey).
 
 #include "data/binary_log.h"
 #include "data/gcg_writer.h"
@@ -113,18 +112,18 @@ SlogSimConfig screen_config(const Options& opt, const Dictionary& dict) {
   c.keep_summaries = true;
   c.runner.rollouts = opt.rollouts;
   if (opt.race) {
-    // Checkpoints at 10%, 20%, 40% and 70% of the screen. Three paired standard
-    // errors below the leader, at four looks, stops a candidate that is truly
-    // the leader's equal well under once in a hundred positions; whatever it
-    // does stop was never going to be a pick.
+    // Checkpoints at 10%, 20%, 40% and 70% of the screen. At three paired
+    // standard errors below the leader over four looks, a candidate truly equal
+    // to the leader is stopped well under once per hundred positions, and
+    // anything stopped was never going to be a pick.
     for (const int pct : {10, 20, 40, 70})
       if (opt.rollouts * pct / 100 > 0) c.race_checkpoints.push_back(opt.rollouts * pct / 100);
     c.race_protected = opt.cut;
   }
-  // Hundreds of candidates a position (the all recipe) make one position a
-  // long job, and across-position workers would idle behind the last few; there
-  // the threads go inside the position instead. Results do not depend on either
-  // thread count.
+  // Under the all recipe a position has hundreds of candidates, so one position
+  // is a long job and across-position workers would idle behind the last few.
+  // There the threads go inside the position instead. Results do not depend on
+  // either thread count.
   const bool wide = opt.recipe == "all";
   c.runner.threads = wide ? opt.threads : 1;
   c.seed = opt.seed;
@@ -132,9 +131,9 @@ SlogSimConfig screen_config(const Options& opt, const Dictionary& dict) {
   return c;
 }
 
-// The confirming stage: the `chosen` moves alone at --confirm-rollouts, on
-// rollout seeds past the screen's, each paired against the cut's moves (which
-// `chosen` lists first).
+// The confirming stage: only the `chosen` moves, at --confirm-rollouts, on
+// rollout seeds past the screen's. Each is paired against the cut's moves,
+// which `chosen` lists first.
 SlogSimConfig confirm_config(const Options& opt, const Dictionary& dict, ChosenMoves chosen) {
   SlogSimConfig c = screen_config(opt, dict);
   c.selector = chosen_selector(std::move(chosen));
@@ -162,7 +161,8 @@ void validate(const Options& opt) {
     throw util::CleanException("quotas must be >= 0 and --mid-rank-limit >= 1");
 }
 
-// The turns a recipe looks at: a per-game sample, or (setup) every eligible turn.
+// The turns a recipe considers: a per-game sample (stratified) or every
+// eligible turn (all, setup).
 std::vector<binlog::GamePositionIndex> sample_work(const std::vector<char>& buf,
                                                    const Options& opt) {
   const auto* hdr = reinterpret_cast<const binlog::FileHeader*>(buf.data());
@@ -205,9 +205,8 @@ std::vector<binlog::GamePositionIndex> setup_turns(
   return accepted;
 }
 
-// The positions of `slog` this run sims: the stratified recipe's per-game
-// sample, or a sample of every eligible turn (all) or of those with a setup
-// play outside the cut (setup).
+// The positions of `slog` this run sims. The all and setup recipes then sample
+// --max-positions of the qualifying turns.
 std::vector<binlog::GamePositionIndex> survey_work(const binlog::PendingSlog& slog,
                                                    const Dictionary& dict, const Options& opt) {
   std::vector<binlog::GamePositionIndex> work = sample_work(slog.bytes, opt);
@@ -269,10 +268,10 @@ std::string leave_after(Rack rack, const Move& m) {
 
 double win_equity(const RolloutSummary& s) { return (s.wins + 0.5 * s.draws) / s.n; }
 
-// The screen's best --confirm-picks candidates outside the cut, best first by
-// win rate (ties to the mean margin, then stored order) -- under the setup
-// recipe, its best setup plays there. Only candidates the race let run to the
-// end compete: one stopped early was already clearly below the leader.
+// The screen's best --confirm-picks candidates outside the cut (setup plays
+// only, under the setup recipe), best first by win rate, then mean margin, then
+// stored order. Candidates the race stopped early are excluded: they were
+// already clearly below the leader.
 std::vector<int> best_outside_cut(const SimmedPosition& r, const Options& opt) {
   std::vector<int> outside;
   for (size_t c = 0; c < r.summaries.size(); ++c) {
@@ -290,9 +289,8 @@ std::vector<int> best_outside_cut(const SimmedPosition& r, const Options& opt) {
   return outside;
 }
 
-// The indices the confirming stage re-sims: the candidates inside the cut, in
-// stored order, then the screen's picks from outside it. Empty when either side
-// is missing.
+// The indices the confirming stage re-sims: the cut's candidates in stored
+// order, then the picks from outside it. Empty when either group is empty.
 std::vector<int> confirm_indices(const SimmedPosition& r, const Options& opt) {
   std::vector<int> out;
   for (size_t c = 0; c < r.candidates.moves.size(); ++c) {
@@ -315,8 +313,6 @@ ChosenMoves chosen_moves(const std::vector<SimmedPosition>& screen, const Option
   return chosen;
 }
 
-// A position's screen and, where it had moves on both sides of the cut, its
-// confirming sim.
 struct SurveyedPosition {
   const SimmedPosition* screen;
   const SimmedPosition* confirm;  // null when nothing was confirmed
@@ -336,11 +332,9 @@ json::object candidate_json(const SimmedPosition& r, size_t c) {
           {"screen", to_json(r.summaries[c])}};
 }
 
-// The confirming sim: per re-simmed move its index into the position's
-// candidates, its summary, and its win value minus each cut move's over the
-// same rollout indices ([sum, sum of squares] per cut move, in listed order).
-// The cut's moves come first, then the screen's picks from outside it, best
-// first.
+// The confirming sim, in confirm_indices order. Per re-simmed move: its index
+// into the position's candidates, its summary, and its win value minus each cut
+// move's over the same rollouts, as [sum, sum of squares] per cut move.
 json::array confirm_json(const SurveyedPosition& p, const Options& opt) {
   json::array out;
   if (!p.confirm) return out;
@@ -395,11 +389,10 @@ json::object header_json(const Options& opt) {
           {"end_swing_bin_floor", kEndSwingBinFloor}};
 }
 
-// A file's survey in progress: <stem>.simsurvey.partial.jsonl, the run's header
-// on the first line and one finished position per line after it, appended as
-// positions complete. A rerun reads it back, skips what is there, and carries
-// on; a header that differs means different options, whose positions would not
-// mix, so it refuses instead.
+// A file's survey in progress, kept in <stem>.simsurvey.partial.jsonl: the
+// run's header on the first line, then one finished position per line. A rerun
+// reads it back and skips what is already there. A different header means
+// different options, whose positions must not mix, so the rerun refuses.
 class PartialSurvey {
  public:
   PartialSurvey(const fs::path& final_path, const Options& opt);
@@ -478,11 +471,10 @@ std::string setup_plays_note(const SimmedPosition& r, int cut) {
   return note;
 }
 
-// The game through the surveyed turn's played move, as
-// <stem>-g<game>-turn<N>.gcg, N the surveyed turn's 1-based number, which is
-// what neural_rank_tool --turn takes. Ending the log there, on its
-// running scores, keeps the writer from emitting end-of-game rack adjustments
-// for a game that is not over.
+// Write the game through the surveyed turn's played move as
+// <stem>-g<game>-turn<N>.gcg, where N is the turn's 1-based number (what
+// neural_rank_tool --turn takes). Setting final_scores to the running scores
+// keeps the writer from emitting end-of-game rack lines for an unfinished game.
 void write_position_gcg(const binlog::PendingSlog& slog, const SimmedPosition& r,
                         const Options& opt) {
   std::vector<TurnRecord> scratch;
@@ -506,8 +498,8 @@ void write_position_gcg(const binlog::PendingSlog& slog, const SimmedPosition& r
   write_game_log_gcg(g, out, gcg);
 }
 
-// Pair each screened position with its confirming sim (both in work order, the
-// confirm list skipping the positions that had nothing to confirm).
+// Pair each screened position with its confirming sim. Both lists are in work
+// order; the confirm list omits positions that had nothing to confirm.
 std::vector<SurveyedPosition> join_stages(const std::vector<SimmedPosition>& screen,
                                           const std::vector<SimmedPosition>& confirm) {
   std::vector<SurveyedPosition> out;
@@ -519,10 +511,7 @@ std::vector<SurveyedPosition> join_stages(const std::vector<SimmedPosition>& scr
   return out;
 }
 
-// Screen every candidate of the batch's positions once, then re-sim only the cut
-// and the screen's best moves outside it, longer and on fresh rollouts: the
-// screen's best-of-hundreds flatters itself (the winner's curse), and the
-// confirming sim reads the few moves it singled out without that bias.
+// Run both stages over a batch of positions and append the results.
 void survey_batch(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt,
                   const std::vector<binlog::GamePositionIndex>& batch, util::ProgressMeter* meter,
                   PartialSurvey* partial) {
@@ -541,11 +530,10 @@ void survey_batch(const binlog::PendingSlog& slog, const Dictionary& dict, const
   }
 }
 
-// Positions are surveyed in batches and each batch's results appended to the
-// partial file as it completes, so a stopped run loses at most one batch. The
-// all recipe threads inside a position, so its batch is one position; the
-// others thread across positions and need a batch wide enough to keep every
-// worker busy.
+// Survey in batches, appending each batch to the partial file, so a stopped run
+// loses at most one batch. The all recipe threads inside a position, so its
+// batch is one position; the others thread across positions and need batches
+// wide enough to keep every worker busy.
 void survey_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt) {
   PartialSurvey partial(slog.sidecar(kSurveyExt), opt);
   std::vector<binlog::GamePositionIndex> work = survey_work(slog, dict, opt);
@@ -563,7 +551,7 @@ void survey_file(const binlog::PendingSlog& slog, const Dictionary& dict, const 
   partial.finish();
 }
 
-// Prepend the file, so a batch run's failure names both file and position.
+// Prefix the file name, so a batch run's failure names both file and position.
 void process_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt) {
   try {
     survey_file(slog, dict, opt);
@@ -597,10 +585,11 @@ int main(int argc, char** argv) {
       "screening stage: terminal Monte-Carlo rollouts per candidate")(
       "confirm-rollouts",
       po::value<int>(&opt.confirm_rollouts)->default_value(opt.confirm_rollouts),
-      "confirming stage: rollouts for each move inside the cut and for the screen's best move "
-      "outside it, on fresh seeds -- an unbiased reading of the few moves the screen singled "
-      "out")("confirm-picks", po::value<int>(&opt.confirm_picks)->default_value(opt.confirm_picks),
-             "moves from outside the cut the confirming stage re-sims, the screen's best first")(
+      "confirming stage: rollouts for each move inside the cut and each of the screen's "
+      "--confirm-picks, on fresh seeds, for an unbiased reading of the moves the screen "
+      "singled out")(
+      "confirm-picks", po::value<int>(&opt.confirm_picks)->default_value(opt.confirm_picks),
+      "moves from outside the cut the confirming stage re-sims, the screen's best first")(
       "solve-max-unseen",
       po::value<int>(&opt.solve_max_unseen)->default_value(opt.solve_max_unseen),
       "confirming stage: at positions with at most this many unseen tiles (bag + opponent's "

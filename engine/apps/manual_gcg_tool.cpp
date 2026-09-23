@@ -1,3 +1,24 @@
+// manual_gcg_tool: a browser tool for entering a Scrabble game by hand and
+// saving it as GCG. It is how the hand-maintained position sets under
+// positions/ are written. You record plays, exchanges and passes, fill in
+// whichever rack tiles are known, step back through the history, fork a variant
+// from any earlier position, load an existing GCG, or generate a random
+// HastyBot game to review. Like a human seat in play_game, the tool launches
+// the web UI's Vite dev server and opens it; the UI talks to this process over
+// a WebSocket.
+//
+//   manual_gcg_tool [--lexicon NWL23] [--port 8082] [--vite-port 5174]
+//
+// Two headless modes read a GCG and exit without starting the UI:
+//
+//   manual_gcg_tool --dump-gcg game.gcg --dump-plies 21,22 --dump-out states
+//   manual_gcg_tool --dump-gcg game.gcg --list-ply 21 --list-rack RULIEST
+//
+// The first writes each ply's UI state JSON, which web/scripts/render_boards.mjs
+// rasterizes into board images. The second prints every legal play for a rack
+// on that ply's board, best score first, for finding the exact notation of a
+// hypothetical move.
+
 #include "agent/macondo_bot.h"
 #include "data/gcg_reader.h"
 #include "data/gcg_writer.h"
@@ -51,11 +72,10 @@ struct ManualTilePlacement {
 
 enum class RackSlotState : uint8_t { UNKNOWN, KNOWN, EMPTY };
 
-// A rack slot as shown in the UI: KNOWN carries a revealed tile; UNKNOWN is a
-// tile that is present but hidden (rendered as "?", still selectable for
-// exchange); EMPTY is a slot holding no tile (rendered as empty space).
-// `drawn` marks a tile the player drew to replace what their last move used,
-// as opposed to one that move left them holding; the two are shaded apart.
+// A rack slot as shown in the UI. KNOWN carries a revealed tile; UNKNOWN is a
+// tile that is present but hidden (shown as "?", still selectable for
+// exchange); EMPTY holds no tile. `drawn` marks a tile drawn after the player's
+// last move, as opposed to one that move kept; the UI shades the two apart.
 struct DisplaySlot {
   RackSlotState state = RackSlotState::UNKNOWN;
   Tile tile = EMPTY_SQUARE;
@@ -78,10 +98,8 @@ RackDisplay display_from_slots(const RackSlots& slots, RackSlotState hidden) {
   return display;
 }
 
-// Marks every revealed tile of `display` that `leave` does not cover as drawn:
-// the tiles the player took onto their rack after their last move, as opposed
-// to the ones that move left them. A tile counts as part of the leave at most
-// as many times as `leave` holds it.
+// Marks every revealed tile of `display` that `leave` does not cover as drawn.
+// A tile counts as part of the leave at most as many times as `leave` holds it.
 void mark_drawn_tiles(RackDisplay* display, TileCounts leave) {
   for (DisplaySlot& slot : *display) {
     if (slot.state != RackSlotState::KNOWN) continue;
@@ -89,11 +107,11 @@ void mark_drawn_tiles(RackDisplay* display, TileCounts leave) {
   }
 }
 
-// How much of the opponent's rack the '#Rack' pragmata of an exported GCG
-// reveal. The opponent is the player on turn, the one whose tiles a position
-// exported for study must not give away: their leave -- what their own last
-// move kept -- was deducible from that move, but the tiles they drew to replace
-// the ones it played were not.
+// How much of the on-turn player's rack an exported GCG's '#Rack' pragmas
+// reveal. An exported position is studied from the side of the player who just
+// moved, so the player on turn is "the opponent", whose tiles must not be given
+// away. LEAVE reveals only what their own last move kept, which that move made
+// deducible; the tiles they drew since stay hidden.
 enum class GcgOpponentRack : uint8_t { FULL, LEAVE, HIDDEN };
 
 constexpr const char* kGcgOpponentRackNames[] = {"full", "leave", "hidden"};
@@ -105,7 +123,7 @@ std::optional<GcgOpponentRack> parse_gcg_opponent_rack(const std::string& name) 
   return std::nullopt;
 }
 
-// `slots` with every tile `revealed` does not cover cleared, so a rack field
+// `slots` with every tile not covered by `revealed` cleared, so a rack field
 // writes those slots as unknown ('_'). Each tile survives at most as many times
 // as `revealed` holds it.
 RackSlots keep_only(const RackSlots& slots, TileCounts revealed) {
@@ -254,16 +272,12 @@ int board_tile_count(const Board& board) {
   return n;
 }
 
-// Tiles left in the bag, estimated from the board the same way the UI's bag
-// count is: 100 tiles total, less those on the board and the (up to) 14 on the
-// two racks. Used to decide whether unknown rack slots are still drawable "?"
-// tiles or genuinely empty.
+// The bag count the UI shows: 100 tiles, less those on the board and 14 for two
+// full racks. Racks are always full while the bag has tiles, so this is exact
+// whatever rack tiles have been entered.
 int bag_estimate(const Board& board) { return std::max(0, 100 - board_tile_count(board) - 14); }
 
-// Both players' racks as a JSON array of per-slot tiles. A known slot carries
-// its letter/score; an unknown ("present" but hidden) slot renders as "?" and
-// stays selectable for exchange; an absent slot (present:false) renders as
-// empty space.
+// Both players' racks as JSON, one object per slot (see DisplaySlot).
 boost::json::array racks_json(const std::array<RackDisplay, 2>& display_racks) {
   boost::json::array racks;
   for (int p = 0; p < 2; ++p) {
@@ -296,8 +310,8 @@ boost::json::array racks_json(const std::array<RackDisplay, 2>& display_racks) {
   return racks;
 }
 
-// Remaining bag contents as a JSON array of {letter, score, count}, listing each
-// present letter (and the blank as "?") with a positive count.
+// The bag's remaining tiles as a JSON array of {letter, score, count}, with the
+// blank as "?". Letters with no tiles left are omitted.
 boost::json::array bag_tiles_json(const ManualSnapshot& snap) {
   boost::json::array bag_tiles;
   for (Tile L = Tile::of(0); L < 26; ++L) {
@@ -329,6 +343,8 @@ boost::json::array turns_json(const std::vector<ManualTurn>& turns) {
   return turn_list;
 }
 
+// The game being edited. The live fields describe the latest position; one
+// snapshot per ply lets the UI view earlier positions and fork from them.
 class ManualGame {
  public:
   explicit ManualGame(const Dictionary& dict) : dict_(dict), movegen_(board_, dict_) {
@@ -369,16 +385,15 @@ class ManualGame {
     return o;
   }
 
-  // Board squares of the tiles newly placed by the move that produced the
-  // currently viewed position, as [row, col] pairs. Empty at the start position
-  // and for pass/exchange turns (which place no tiles).
+  // [row, col] of each tile placed by the move that led to the viewed position;
+  // empty at the start and after a pass or exchange.
   boost::json::array last_move_squares() const {
     if (view_ply_ <= 0 || view_ply_ > int(turns_.size())) return {};
     return move_squares(turns_[view_ply_ - 1].record.move);
   }
 
-  // End-of-game rack adjustments as a JSON array of {player, tiles, delta,
-  // total}, one per scoring/penalty line; empty during a game in progress.
+  // End-of-game rack adjustments, one {player, tiles, delta, total} per line;
+  // empty while the game is in progress.
   boost::json::array end_adjustments_json() const {
     boost::json::array out;
     for (const ParsedGcgEndAdjustment& adj : end_adjustments_) {
@@ -687,13 +702,12 @@ class ManualGame {
     view_ply_ = turns_.size();
   }
 
-  // The number of turns recorded (the final, "tail" ply). A jump_to_ply target
-  // ranges over [0, ply_count()]: 0 is the empty start, ply_count() the end.
+  // The number of recorded turns. jump_to_ply accepts [0, ply_count()], from
+  // the empty start to the latest position.
   int ply_count() const { return int(turns_.size()); }
 
-  // Every legal play for `rack_str` on the board at `ply`, as notation strings
-  // ("8H WAREZ 54") sorted by descending score. Offline aid for finding the
-  // exact coordinates of a hypothetical move when authoring a variant GCG.
+  // Every legal play for `rack_str` ('?' for a blank) on the board at `ply`, as
+  // notation strings ("8H WAREZ 54"), highest score first.
   std::vector<std::string> list_moves(int ply, const std::string& rack_str) const {
     const Board& board = snapshots_.at(std::size_t(ply)).board;
     Rack rack;
@@ -743,11 +757,9 @@ class ManualGame {
     status_ = std::format("Forked game at turn {}", view_ply_);
   }
 
-  // Play a full game between two in-process HastyBot agents and load the result
-  // as the current game, so the whole self-play game can be reviewed turn by
-  // turn. The played-out game log is serialized to GCG and routed through the
-  // same load path as an imported file, reusing its snapshot/rack
-  // reconstruction.
+  // Play a HastyBot-vs-HastyBot game and load it for review. The log goes
+  // through GCG and the normal import path, which rebuilds the snapshots and
+  // racks.
   void create_random_game() {
     HastyEquity::ensure_initialized(Lexicon::instance().name());
     HastyBotAgent player0(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty 1"});
@@ -809,17 +821,16 @@ class ManualGame {
     status_ = "Loaded " + source_name;
   }
 
-  // The reply to an export request: the GCG text for the front-end to save.
-  // Nullopt if `opponent_rack` does not name a reveal mode.
+  // The reply to an export request: the GCG text, which the front-end offers as
+  // a download. Nullopt if `opponent_rack` names no GcgOpponentRack mode.
   std::optional<boost::json::object> gcg_export_json(const std::string& opponent_rack) const {
     const std::optional<GcgOpponentRack> mode = parse_gcg_opponent_rack(opponent_rack);
     if (!mode.has_value()) return std::nullopt;
     return boost::json::object{{"type", "manual_gcg"}, {"text", build_gcg(mode.value())}};
   }
 
-  // The current game serialized as GCG text, revealing `opponent_rack` of the
-  // rack of the player on turn. The front-end offers it for download, so the
-  // file is written browser-side rather than here.
+  // The current game as GCG text, revealing as much of the on-turn player's
+  // rack as `opponent_rack` allows.
   std::string build_gcg(GcgOpponentRack opponent_rack) const {
     GameLogStorage log;
     log.player_names = names_;
@@ -837,9 +848,8 @@ class ManualGame {
       log.turns.push_back(t.record);
       rack_fields.push_back(gcg_rack_field(t.rack_before_slots));
       exchange_fields.push_back(t.exchange_field);
-      // A post-event pragma states the racks as they stood after that event,
-      // so it is masked against what was deducible by then -- one turn further
-      // on than the event itself.
+      // A post-event pragma states the racks as they stood after the event, so
+      // it is masked against what was deducible by then: one ply past the event.
       const int ply = int(post_event_racks.size()) + 1;
       post_event_racks.push_back({rack_pragma(0, t.racks_after_turn[0], ply, opponent_rack),
                                   rack_pragma(1, t.racks_after_turn[1], ply, opponent_rack)});
@@ -886,8 +896,7 @@ class ManualGame {
     return n;
   }
 
-  // The known tiles of a display rack as plain rack slots; unknown and absent
-  // slots become unset. Used when forking a game off a viewed position.
+  // The known tiles of a display rack as rack slots; other slots are unset.
   RackSlots slots_from_display(const RackDisplay& display) const {
     RackSlots slots;
     for (int i = 0; i < kRackSlots; ++i) {
@@ -896,10 +905,9 @@ class ManualGame {
     return slots;
   }
 
-  // The leftover tiles of `player` as recorded in an end-of-game adjustment, if
-  // any. A gain line (delta >= 0) scores the opponent's tiles, so its tiles
-  // belong to the other player; a penalty line (delta < 0) scores the player's
-  // own tiles.
+  // `player`'s leftover tiles from the end-of-game adjustments, if recorded. A
+  // gain line (delta >= 0) lists the opponent's tiles; a penalty line (delta < 0)
+  // lists the player's own.
   std::optional<std::string> end_rack_tiles_for(int player) const {
     for (const ParsedGcgEndAdjustment& adj : end_adjustments_) {
       const int owner = adj.delta >= 0 ? 1 - adj.player : adj.player;
@@ -908,7 +916,7 @@ class ManualGame {
     return std::nullopt;
   }
 
-  // Parse a rack string ("AER?" etc.; '?' is a blank) into rack slots.
+  // Parse a rack string such as "AER?" ('?' is a blank) into rack slots.
   RackSlots rack_slots_from_letters(const std::string& letters) const {
     RackSlots slots;
     int i = 0;
@@ -933,11 +941,9 @@ class ManualGame {
     return true;
   }
 
-  // The waiting player's rack at `from_ply` as recorded before their next turn:
-  // their rack does not change until they move again, so that turn's
-  // rack_before is their current hand. Nullopt when they have no later recorded
-  // turn with a known rack (an unspecified rack, shown as a full hidden "?"
-  // rack instead).
+  // The waiting player's rack at `from_ply`, taken from the rack_before of
+  // their next turn with known tiles: the rack cannot change until they move.
+  // Nullopt if no later turn records it.
   std::optional<RackSlots> next_known_rack_before(int player, int from_ply) const {
     for (int i = from_ply; i < int(turns_.size()); ++i) {
       const ManualTurn& t = turns_[i];
@@ -947,16 +953,15 @@ class ManualGame {
     return std::nullopt;
   }
 
-  // How an empty slot of `slots` renders: a rack whose tiles we know is
-  // complete, so an empty slot holds no tile (EMPTY); a rack with no known
-  // tiles is an unspecified full hand whose slots are hidden ("?" / UNKNOWN).
+  // How an empty slot of `slots` renders. A rack with any known tiles is taken
+  // to be complete, so its empty slots hold nothing (EMPTY); a rack with none is
+  // an unspecified full hand (UNKNOWN).
   static RackSlotState hidden_state_for(const RackSlots& slots) {
     return has_known_tiles(slots) ? RackSlotState::EMPTY : RackSlotState::UNKNOWN;
   }
 
-  // A '#Rack' pragma for `player` holding `slots` at `ply`, as an export
-  // reveals it. Only the opponent's rack is masked; the player whose position
-  // is being studied keeps theirs whole.
+  // The '#Rack' pragma for `player` holding `slots` at `ply`. Only the on-turn
+  // player's rack is masked (see GcgOpponentRack).
   std::optional<std::string> rack_pragma(int player, const RackSlots& slots, int ply,
                                          GcgOpponentRack opponent_rack) const {
     if (player != turn_player_ || opponent_rack == GcgOpponentRack::FULL) {
@@ -966,9 +971,8 @@ class ManualGame {
     return maybe_rack_pragma(keep_only(slots, leave_after_last_move(player, ply)));
   }
 
-  // The tiles `player` kept from their own last move before `ply`: the leave
-  // that move revealed, holding nothing of what they drew to replace the tiles
-  // it used. Empty before the player's first turn.
+  // The known tiles `player` kept after their last move before `ply`, excluding
+  // anything drawn since. Empty before the player's first turn.
   TileCounts leave_after_last_move(int player, int ply) const {
     TileCounts leave;
     for (int i = ply - 1; i >= 0; --i) {
@@ -1001,10 +1005,8 @@ class ManualGame {
       }
     }
 
-    // Show the player's leave: the tiles still in hand after the move. Played
-    // tiles leave their slots empty, and drawn replacements are not displayed
-    // (they render as empty space too). Remaining known tiles render as
-    // themselves; a remaining hidden tile renders as "?".
+    // The result shows the leave only: played tiles leave their slots empty,
+    // and the replacements drawn afterwards are not shown.
     RackDisplay out;
     for (int i = 0; i < kRackSlots; ++i) {
       out[i].state = state[i];
@@ -1034,10 +1036,9 @@ class ManualGame {
 
   std::array<RackDisplay, 2> display_racks_for_view(
     int view_ply, const std::array<RackSlots, 2>& fallback) const {
-    // An unrevealed slot of a rack we have no count for is assumed to be a held
-    // (present) tile, shown as "?". A rack might legitimately be full and hidden
-    // even at the end of the game (e.g. the opponent's rack after the final
-    // play), so empty slots are not inferred from the bag being empty.
+    // An unrevealed slot is assumed to hold a hidden tile ("?"). An empty bag is
+    // no evidence otherwise: a rack can be full and hidden at the end of the
+    // game (e.g. the opponent's after the final play).
     std::array<RackDisplay, 2> out = {display_from_slots(fallback[0], RackSlotState::UNKNOWN),
                                       display_from_slots(fallback[1], RackSlotState::UNKNOWN)};
     if (view_ply <= 0 || view_ply > int(turns_.size())) return out;
@@ -1056,14 +1057,11 @@ class ManualGame {
       out[waiting] = display_from_slots(fallback[waiting], RackSlotState::UNKNOWN);
     }
 
-    // Their rack is a leave plus what they drew onto it; the two are shaded
-    // apart, so say which slots are which.
     mark_drawn_tiles(&out[waiting], leave_after_last_move(waiting, view_ply));
 
-    // At the final position, the player who didn't go out still holds their
-    // leftover tiles. These survive only in the end-of-game adjustment (the
-    // per-turn racks are cleared after each move), so reveal them here. The
-    // adjustment lists their whole rack, so any other slot is genuinely empty.
+    // At the final position, the player who did not go out still holds tiles
+    // that only the end-of-game adjustment records. It lists their whole rack,
+    // so any other slot is empty.
     if (view_ply == int(turns_.size())) {
       if (const auto tiles = end_rack_tiles_for(waiting)) {
         out[waiting] = display_from_slots(rack_slots_from_letters(*tiles), RackSlotState::EMPTY);
@@ -1145,8 +1143,8 @@ class ManualGame {
   std::string status_;
 };
 
-// Applies one front-end message, returning the direct reply it calls for (only
-// an export does; every other message is answered by the state that follows).
+// Apply one front-end message. Returns a direct reply only for an export; every
+// message is also answered by the state sent after it.
 std::optional<boost::json::object> handle_message(ManualGame& game,
                                                   const boost::json::object& obj) {
   const std::string type = str_field(obj, "type");
@@ -1216,7 +1214,6 @@ std::optional<boost::json::object> handle_message(ManualGame& game,
   return std::nullopt;
 }
 
-// Reads a whole text file into a string, throwing if it cannot be opened.
 std::string read_file(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in) throw util::CleanException("cannot open GCG file: {}", path.string());
@@ -1225,8 +1222,7 @@ std::string read_file(const std::filesystem::path& path) {
   return buf.str();
 }
 
-// Parses a comma-separated list of ply indices ("0,21,22"). An empty string
-// selects every ply from the empty start (0) through the final position.
+// Parse a comma-separated ply list ("0,21,22"); empty means every ply.
 std::vector<int> parse_plies(const std::string& spec, int ply_count) {
   std::vector<int> plies;
   if (spec.empty()) {
@@ -1242,10 +1238,8 @@ std::vector<int> parse_plies(const std::string& spec, int ply_count) {
   return plies;
 }
 
-// Headless companion to the live server: writes each requested ply's front-end
-// state JSON (exactly what the WebSocket would send) to `out_dir/ply_<n>.json`,
-// so the render harness can rasterize it offline. No browser, Vite, or socket
-// is involved. `game` must already have a GCG loaded.
+// Write each requested ply's UI state JSON, exactly what the WebSocket would
+// send, to `out_dir/ply_<n>.json`. `game` must already have a GCG loaded.
 void dump_states(ManualGame& game, const std::string& plies_spec,
                  const std::filesystem::path& out_dir) {
   const std::vector<int> plies = parse_plies(plies_spec, game.ply_count());
@@ -1280,16 +1274,17 @@ int main(int argc, char** argv) {
       "port", po::value<int>(&ws_port)->default_value(ws_port), "engine WebSocket port")(
       "vite-port", po::value<int>(&vite_port)->default_value(vite_port), "browser UI port")(
       "web-dir", po::value<std::string>(&web_dir)->default_value(web_dir),
-      "front-end package dir (cwd of npm run dev)")(
+      "front-end package directory (where npm run dev is started)")(
       "dump-gcg", po::value<std::string>(&dump_gcg),
-      "headless: load this GCG file and dump per-ply state JSON, then exit (no server)")(
+      "headless: load this GCG file, write per-ply UI state JSON (or with --list-rack, a move "
+      "list), and exit without starting the UI")(
       "dump-plies", po::value<std::string>(&dump_plies),
       "comma-separated plies to dump (default: all); requires --dump-gcg")(
       "dump-out", po::value<std::string>(&dump_out)->default_value(dump_out),
-      "output directory for dumped state JSON; requires --dump-gcg")(
+      "output directory for the state JSON; requires --dump-gcg")(
       "list-rack", po::value<std::string>(&list_rack),
-      "instead of dumping, print every legal play for this rack (e.g. RULIEST) "
-      "on the --list-ply board; requires --dump-gcg")(
+      "instead of writing states, print every legal play for this rack (e.g. RULIEST, '?' "
+      "for a blank) on the --list-ply board; requires --dump-gcg")(
       "list-ply", po::value<int>(&list_ply)->default_value(list_ply),
       "ply whose board --list-rack enumerates against");
     scribblez::Lexicon::instance().add_options(desc);
@@ -1298,8 +1293,6 @@ int main(int argc, char** argv) {
 
     const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
 
-    // Headless mode: no WebSocket, no Vite -- just GCG in, state JSON (or a move
-    // list) out.
     if (!dump_gcg.empty()) {
       scribblez::ManualGame game(dict);
       game.load_gcg_text(scribblez::read_file(dump_gcg), dump_gcg);

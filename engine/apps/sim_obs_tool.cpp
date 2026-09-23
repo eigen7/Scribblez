@@ -1,22 +1,19 @@
-// Offline generator of Monte-Carlo sim observations (.sobs sidecars) for
-// .slog self-play data -- the sim-evidence inputs of
-// docs/plans/sim_residual_feedback.md and the data source for its kill-test.
+// sim_obs_tool: writes Monte-Carlo sim observations (.sobs sidecars) for .slog
+// self-play data. These are the sim-evidence inputs of
+// docs/plans/sim_residual_feedback.md; the kill_test workload and
+// py/scripts/generate_kill_test_data.py drive it.
 //
-// For a sampled subset of each game's training-eligible turns, the tool
-// replays the game to the pre-move decision point, ranks the legal candidates
-// (plays and exchanges) by HastyBot static equity, and runs SimRunner over the
-// top-K (common random numbers, HastyBot rollouts to a natural end). Each
-// processed .slog file gets a same-stem .sobs sidecar. The input is either
-// --slog-dir (every .slog in the directory; files whose sidecar already
-// exists are skipped, so an interrupted run resumes by rerunning) or one or
-// more explicit --slog-file arguments (what generate_kill_test_data.py
-// passes, having already selected the files missing a sidecar). Progress
-// across all positions of the invocation renders as a bar on stderr (TTY
-// only), and a timing summary prints at the end.
+//   sim_obs_tool --slog-dir data/slogs --top-k 10 --rollouts 200 --threads 16
+//   sim_obs_tool --slog-file a.slog --slog-file b.slog --horizon 4 --leaf-model teacher.onnx
 //
-// Because the self-play games are HastyBot's own, the equity-argmax candidate
-// (rank 0) is the move that was actually played at the position, so each
-// position's evidence set contains the played move's own sim.
+// For a seeded sample of each game's training-eligible turns, the tool replays
+// the game to the decision point, ranks the legal plays and exchanges by
+// HastyBot static equity, and sims the top K with SimRunner (common random
+// numbers, HastyBot rollouts). Each .slog gets a same-stem .sobs sidecar.
+//
+// --slog-dir skips files that already have a sidecar, so rerunning resumes an
+// interrupted run. On a HastyBot self-play corpus the equity argmax is the move
+// actually played, so every evidence set includes a sim of the played move.
 
 #include "agent/agent.h"
 #include "data/binary_log.h"
@@ -73,8 +70,9 @@ struct Options {
   int limit_games = 0;  // 0 = all games per file (a cap makes smoke runs cheap)
 };
 
-// The shared simmer's config for `opt`, over the shared truncation leaf service
-// (EvalService serializes its callers) -- null for terminal rollouts.
+// The simmer config for `opt`. `leaf_eval_service` is the value-truncation leaf
+// model shared by all workers (EvalService serializes its callers), or null for
+// rollouts to the end of the game.
 SlogSimConfig sim_config(const Options& opt, nn::PositionEvalService* leaf_eval_service) {
   SlogSimConfig c;
   c.open_leaves = opt.open_leaves;
@@ -88,16 +86,15 @@ SlogSimConfig sim_config(const Options& opt, nn::PositionEvalService* leaf_eval_
   return c;
 }
 
-// Reject an unusable invocation before a single .slog is read -- and, for the
-// SimRunner params, before any worker thread exists: the runners are built
-// inside the workers, where a constructor throw would escape the thread and
-// terminate the process instead of printing an error.
+// Reject an unusable invocation before any .slog is read. The SimRunner params
+// in particular must be checked before any worker thread exists: runners are
+// built inside the workers, where a constructor throw would terminate the
+// process instead of printing an error.
 //
-// Both caps are rejected at 0 rather than read as "no cap". A run that samples
-// no positions, or ranks no candidates, still writes a .sobs sidecar for every
-// input file, and a sidecar's existence is what makes later runs skip its
-// .slog -- so the empty output would silently stand in for the real evidence
-// until someone noticed the corpus was hollow.
+// --top-k and --positions-per-game reject 0 rather than reading it as "no cap".
+// A run that sims nothing still writes a sidecar for every input, and a
+// sidecar's existence makes later runs skip its .slog, so the empty output
+// would silently stand in for the real evidence.
 void validate(const Options& opt) {
   SimRunner::validate_horizon("sim-obs-tool", opt.horizon, !opt.leaf_model.empty());
   Options terminal = opt;  // the leaf service does not exist yet
@@ -124,7 +121,7 @@ void process_file(const std::vector<char>& buf, const fs::path& sobs_path, const
     binlog::sample_eligible_turns(metas[g], g, opt.seed, opt.positions_per_game, &work);
   std::sort(work.begin(), work.end());
 
-  // Prepend the file, so a batch run's failure names both file and position.
+  // Prefix the file name, so a batch run's failure names both file and position.
   std::vector<SimmedPosition> results;
   try {
     results = sim_slog_positions(buf, dict, sim_config(opt, leaf_eval_service), work, meter);
@@ -157,10 +154,10 @@ int main(int argc, char** argv) {
       "slog-file", po::value<std::vector<std::string>>(&opt.slog_files),
       "explicit .slog file to process (repeatable; overrides --slog-dir)")(
       "open-leaves", po::bool_switch(&opt.open_leaves),
-      "sim with the opponent's retained leave known (their replenishment draws stay "
-      "hidden and sampled) -- the open-leaves information condition; recorded in the "
-      ".sobs header flags")("rollouts", po::value<int>(&opt.rollouts)->default_value(opt.rollouts),
-                            "Monte-Carlo rollouts per candidate")(
+      "sim with the opponent's retained leave known (the open-leaves information "
+      "condition); their replacement draws stay hidden and sampled. Recorded in the .sobs "
+      "header flags")("rollouts", po::value<int>(&opt.rollouts)->default_value(opt.rollouts),
+                      "Monte-Carlo rollouts per candidate")(
       "horizon", po::value<int>(&opt.horizon)->default_value(opt.horizon),
       "value truncation: rollouts stop after this many plies and --leaf-model scores the "
       "horizon; 0 rolls out to a natural game end")(
@@ -183,12 +180,10 @@ int main(int argc, char** argv) {
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
-    // Games played face up must be simmed face up. The reverse is fine and
-    // deliberate: open-leaves sims over a standard corpus are the
-    // information-condition instrument (docs/plans/sim_residual_feedback.md), which
-    // hands the sims more than the players had. Sims that know LESS than the
-    // players did are the incoherent direction -- the evidence would describe
-    // a game nobody played.
+    // Games played face up must be simmed face up: sims that know less than the
+    // players did would describe a game nobody played. The reverse is
+    // deliberate: open-leaves sims over a standard corpus measure the value of
+    // the extra information (docs/plans/sim_residual_feedback.md).
     const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
       binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files), ".sobs", opt.open_leaves,
       "{} was played with face-up leaves; pass --open-leaves to sim it");
@@ -201,9 +196,6 @@ int main(int argc, char** argv) {
               << opt.top_k << " candidates x " << opt.rollouts << " rollouts, " << opt.threads
               << " threads\n";
 
-    // The truncation leaf service, shared by every position worker (the
-    // runners are single-threaded, but many run at once; EvalService
-    // serializes their calls).
     std::shared_ptr<nn::PositionEvalService> leaf_eval_service =
       nn::load_leaf_position_service(opt.leaf_model);
     std::string leaf_hash;

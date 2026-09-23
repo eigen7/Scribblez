@@ -1,36 +1,29 @@
-// neural_rank_tool: rank every legal move at one GCG position by the position
-// evaluation model, the way NeuralAgent ranks its candidates, optionally
-// beside a Monte-Carlo sim of the same moves.
+// neural_rank_tool: ranks the legal moves at one GCG position by the position
+// evaluation model, exactly as NeuralAgent would score them, optionally beside
+// a Monte-Carlo sim of the same moves. It is the tool for asking "what does
+// the model think of this position, and is it right?"
 //
-// The position is either the file's final recorded state, with the mover's
-// rack taken from its #RackN pragma (read_gcg_position), or -- for a complete
-// annotated game -- the position before recorded turn N, with the rack that
-// turn line records (--turn N, read_gcg_position_at). Every legal placement
-// and (unless --exchanges 0) exchange is applied -- or, with --top-k K, the K
-// best by HastyBot static equity, the agent's own candidate cut -- its
-// post-move position encoded from the mover's POV and scored by the model
-// through the same CandidateEvaluator the agent drives, and the scored moves
-// are printed best-first by the chosen objective with the model's win rate
-// (P(win) + 0.5 P(draw)), its predicted final spread, and HastyBot static
-// equity for comparison. Whether the opponent's retained leave is known to the
-// mover follows the input arm the model declares, as it does for the agent. A
-// post-exchange position is an ordinary training row of the model (the mover
-// holding the tiles it kept), so exchanges rank on the same footing as
-// placements; a pass is never ranked.
+//   neural_rank_tool --gcg pos.gcg --model teacher.onnx --top-k 20
+//   neural_rank_tool --gcg game.gcg --turn 14 --model teacher.onnx -k 15 --sim
 //
-// --sim adds the ground the model is judged against: every scored move is
-// simmed by SimRunner (HastyBot rollouts to a natural end under common random
-// numbers, the opponent's known leave honoured), and its sim win rate and its
-// rank by it are printed beside the model's. Sims cost rollouts x scored
-// moves, so --top-k bounds them; they need tiles in the bag.
+// Without --turn, the position is the file's final state, with the mover's rack
+// taken from its #RackN pragma. With --turn N, it is the position before
+// recorded turn N of an annotated game, with the rack that turn line records.
 //
-// Usage:
-//   neural_rank_tool --gcg PATH --model PATH.onnx [--turn N] [--top-k K]
-//                    [--rows N] [--objective winprob|scorediff]
-//                    [--exchanges 0|1] [--sim] [--sim-rollouts R]
-//                    [--sim-threads T] [--sim-seed S]
-//                    [--batch-size B] [--cuda-device D] [--precision P]
-//                    [--lexicon NAME]
+// Each candidate's post-move position is scored through the same
+// CandidateEvaluator the agent uses. Candidates are every legal placement and
+// exchange, or with --top-k K the K best by HastyBot static equity (the agent's
+// own candidate cut). The table shows the model's win rate
+// (P(win) + 0.5 P(draw)), its predicted final spread, and HastyBot equity.
+// Exchanges rank alongside placements, since a post-exchange position is an
+// ordinary input to the model; passes are never ranked. Whether the mover sees
+// the opponent's retained leave follows the model's declared input arm, as it
+// does for the agent.
+//
+// --sim sims every scored move with SimRunner (HastyBot rollouts under common
+// random numbers) and adds its sim win rate and rank: the ground truth the
+// model is judged against. Sim cost is rollouts x scored moves, so bound it with
+// --top-k. Sims need tiles in the bag.
 
 #include "agent/agent.h"
 #include "agent/candidate_evaluator.h"
@@ -78,8 +71,8 @@ struct Options {
   NeuralServiceOptions service;
 };
 
-// One legal move's model verdict, alongside its static equity and -- when
-// sims ran -- its Monte-Carlo win rate.
+// One scored move: the model's verdict, its static equity, and (with --sim)
+// its Monte-Carlo win rate.
 struct RankedMove {
   int index;         // into the legal-move list
   float win_rate;    // the WLD head's P(win) + 0.5 P(draw)
@@ -99,8 +92,8 @@ std::string read_file(const std::string& path) {
   return buffer.str();
 }
 
-// `open_leaves` is the served model's input arm: under the opponent-leave
-// arm the mover knows the opponent's retained leave.
+// `open_leaves` is true when the served model's input arm lets the mover see
+// the opponent's retained leave.
 ParsedGcgPosition read_position(const Options& opt, bool open_leaves) {
   const std::string gcg_text = read_file(opt.gcg_path);
   ParsedGcgPosition pos;
@@ -115,8 +108,8 @@ ParsedGcgPosition read_position(const Options& opt, bool open_leaves) {
   return pos;
 }
 
-// An evaluator whose mirrored game is `pos`: the recorded moves replayed in
-// turn order, as the agent observes them during a live game.
+// An evaluator that has observed `pos`'s recorded moves in turn order, the same
+// state the agent would be in during a live game.
 CandidateEvaluator replayed_evaluator(const Dictionary& dict,
                                       std::shared_ptr<nn::PositionEvalService> service,
                                       int max_batch, const ParsedGcgPosition& pos) {
@@ -127,7 +120,6 @@ CandidateEvaluator replayed_evaluator(const Dictionary& dict,
   return evaluator;
 }
 
-// Every legal placement, then (when asked for) every legal exchange.
 std::vector<Move> legal_moves(const MoveRequest& req, bool exchanges) {
   std::vector<Move> moves = generate_legal_plays(req);
   if (!exchanges) return moves;
@@ -136,8 +128,8 @@ std::vector<Move> legal_moves(const MoveRequest& req, bool exchanges) {
   return moves;
 }
 
-// Every move's index, best static equity first -- the order NeuralAgent's
-// top-K candidate cut keeps the head of.
+// Move indices, best static equity first: the order whose head NeuralAgent's
+// top-K cut keeps.
 std::vector<int> equity_order(const std::vector<double>& equities) {
   std::vector<int> order(equities.size());
   std::iota(order.begin(), order.end(), 0);
@@ -146,9 +138,8 @@ std::vector<int> equity_order(const std::vector<double>& equities) {
   return order;
 }
 
-// The top_k (0 = all) moves by static equity scored by the model, in one
-// chunked batch as the agent scores its candidates, sorted best-first by
-// `objective`.
+// Score the top_k (0 = all) moves by static equity the way the agent does,
+// then sort them best-first by `objective`.
 std::vector<RankedMove> rank_moves(CandidateEvaluator& evaluator, const MoveRequest& req,
                                    const std::vector<Move>& moves, int top_k,
                                    EvalObjective objective) {
@@ -188,7 +179,6 @@ void assign_sim_ranks(std::vector<RankedMove>& ranked) {
   for (size_t r = 0; r < order.size(); ++r) ranked[size_t(order[r])].sim_rank = int(r) + 1;
 }
 
-// Sim every ranked move from `pos` and fill in its sim win rate and rank.
 void sim_ranked_moves(const Dictionary& dict, const ParsedGcgPosition& pos,
                       const std::vector<Move>& moves, const Options& opt,
                       std::vector<RankedMove>& ranked) {
@@ -308,11 +298,10 @@ int main(int argc, char** argv) {
       "ranking head: winprob = P(win)+0.5*P(draw); scorediff = expected final spread");
     desc.add_options()(
       "exchanges", po::value<bool>(&opt.exchanges)->default_value(opt.exchanges),
-      "include the legal exchanges in the one ranking, interleaved with the placements by "
-      "value (0|1); 0 ranks placements only");
+      "rank legal exchanges together with placements (0|1); 0 ranks placements only");
     desc.add_options()("sim", po::bool_switch(&opt.sim),
-                       "also Monte-Carlo sim every scored move (HastyBot rollouts to a natural "
-                       "end) and print its sim win rate and rank");
+                       "also Monte-Carlo sim every scored move (HastyBot rollouts to game end) "
+                       "and print its sim win rate and rank");
     desc.add_options()(
       "sim-rollouts",
       po::value<int>(&opt.sim_params.rollouts)->default_value(opt.sim_params.rollouts),

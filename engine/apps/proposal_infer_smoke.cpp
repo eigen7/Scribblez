@@ -1,29 +1,21 @@
-// Standalone sanity-check for the move proposal model's two-graph evidence-path
-// runtime (roadmap item 3) -- mset_infer_smoke's counterpart for the split
-// cache/step graphs. Loads a cache/step ONNX pair as the shared
-// MoveProposalNets, opens `sessions` sessions over it, runs each over a
-// synthetic candidate set, conditions each on one synthetic evidence set, and
-// prints the plain and conditioned predictions plus what the whole thing cost:
-// the device memory the loaded pair took, and the host memory the sessions'
-// retained caches took -- both as the exact sum of their vectors and as the
-// resident-set delta, measured after the pair has been warmed on a throwaway
-// session so its first-use footprint (first-touched pinned buffers, lazily
-// loaded CUDA modules) is not charged to the sessions.
+// proposal_infer_smoke: exercises the move proposal model's two-graph runtime
+// (cache graph, then step graph; docs/roadmap.md item 3) on a real checkpoint,
+// with no game logic. It loads a cache/step ONNX pair as one shared
+// MoveProposalNets, opens `sessions` sessions over it, and runs each through
+// encode (a synthetic candidate set) and condition (a synthetic evidence set).
+// It prints the first few candidates' plain and conditioned predictions, plus
+// what the setup costs:
+//   - device memory taken by the loaded pair;
+//   - host memory held by the sessions' retained caches, both as the sum of
+//     their vectors and as the resident-set growth.
+// Run it with sessions=12 and a deployment-sized num_moves to see what a
+// 12-thread match costs in memory.
 //
-// Usage:
-//   proposal_infer_smoke <cache.onnx> <step.onnx> [num_moves] [num_evidence]
-//                        [FP32|FP16] [sessions] [max_rows]
+//   proposal_infer_smoke cache.onnx step.onnx [num_moves=12] [num_evidence=3]
+//                        [FP32|BF16|FP16, default FP32] [sessions=1] [max_rows]
 //
-// A successful run confirms the whole path end to end on a real checkpoint:
-// both ONNX parses and the cache/step compatibility check, two engine builds +
-// plan caches, the board/g/move_enc host handoff, the evidence staging
-// (agent/evidence_staging.h), and the decode. FP32 is the item-3 serving
-// precision; FP16 is available as a spot check, with the fusion-graph caveat in
-// docs/plans/fp16_safe_serving.md. The moves and observations are synthetic -- what a
-// Move/SimObservation encodes to has its own tests; this tool is about the
-// engine path. The memory readouts are the numbers roadmap item 6's runtime
-// restructure was sized by: run at sessions=12 and the deployment num_moves to
-// see what a 12-thread match costs.
+// max_rows bounds the cache graph's batch only. The moves and observations are
+// synthetic; their encoders have their own tests.
 
 #include "agent/move_proposal_nets.h"
 #include "agent/move_proposal_session.h"
@@ -54,9 +46,8 @@ using scribblez::agent::MoveProposalNets;
 using scribblez::agent::MoveProposalPredictions;
 using scribblez::agent::MoveProposalSession;
 
-// A candidate set spanning the shapes the model sees: plays of 1..7 tiles, and
-// every fifth candidate an exchange (tiles, no squares). Mirrors
-// mset_infer_smoke's synthetic set so the two smoke tools stay comparable.
+// The same synthetic candidate set as mset_infer_smoke's, so the two tools'
+// outputs stay comparable.
 scribblez::move_set::MoveFeatureArrays synthetic_candidates(int num_moves) {
   using namespace scribblez::move_set;
   MoveFeatureArrays moves;
@@ -84,8 +75,7 @@ scribblez::move_set::MoveFeatureArrays synthetic_candidates(int num_moves) {
   return moves;
 }
 
-// One synthetic evidence candidate: a horizontal 2-tile play with a plausible
-// rollout observation, tied to scored candidate `scored_index`.
+// A plausible rollout observation, varied slightly by `j`.
 SimObservation synthetic_observation(int j) {
   SimObservation obs;
   obs.n = 40 + j;
@@ -101,8 +91,8 @@ SimObservation synthetic_observation(int j) {
   return obs;
 }
 
-// Evidence over the first `num_evidence` candidates (scattered indices would
-// do too; the parity test covers those).
+// Evidence on the first `num_evidence` candidates, each a horizontal 2-tile
+// play. The parity test covers scattered candidate indices.
 EvidenceSet synthetic_evidence(int num_evidence) {
   EvidenceSet evidence;
   for (int j = 0; j < num_evidence; ++j) {
@@ -138,7 +128,7 @@ size_t cache_bytes(const scribblez::agent::MoveProposalCache& c) {
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::cerr << "Usage: " << argv[0]
-              << " <cache.onnx> <step.onnx> [num_moves] [num_evidence] [FP32|FP16] [sessions] "
+              << " <cache.onnx> <step.onnx> [num_moves] [num_evidence] [FP32|BF16|FP16] [sessions] "
                  "[max_rows]\n";
     return 1;
   }
@@ -153,8 +143,7 @@ int main(int argc, char** argv) {
     params.cache_onnx_path = argv[1];
     params.step_onnx_path = argv[2];
     params.precision = scribblez::nn::parse_precision(precision);
-    // The cache graph's row bound only; the step graph keeps its own default
-    // (step_max_rows), which the memory question is not about.
+    // The step graph keeps its own row bound (step_max_rows).
     if (argc > 7) params.max_rows = std::max(std::atoi(argv[7]), 1);
 
     const size_t device_before = scribblez::nn::device_memory_used();
@@ -165,14 +154,16 @@ int main(int argc, char** argv) {
               << "): device memory +" << mib(scribblez::nn::device_memory_used() - device_before)
               << " MiB\n";
 
-    // An all-zero board row at the model's own width; the candidates are what
-    // this tool varies.
+    // An all-zero board row at the model's own width; only the candidates vary.
     const size_t row_floats =
       size_t(nets->spatial_planes()) * scribblez::kBoardCells + nets->scalar_floats();
     const std::vector<float> board(row_floats, 0.0f);
     const scribblez::move_set::MoveFeatureArrays moves = synthetic_candidates(num_moves);
     const EvidenceSet evidence = synthetic_evidence(num_evidence);
 
+    // Warm the pair on a throwaway session first, so its first-use costs
+    // (first-touched pinned buffers, lazily loaded CUDA modules) are not
+    // charged to the measured sessions.
     {
       MoveProposalSession warmup(nets);
       warmup.encode(board.data(), moves);

@@ -1,3 +1,11 @@
+// board_tool: a browser-based freeform board editor. Place any tiles anywhere
+// (drawn from one shared bag, blanks included) and ask the lexicon which words
+// on the board are invalid. Useful for composing positions by hand. Like a
+// human seat in play_game, the tool launches the web UI's Vite dev server and
+// opens it; the UI talks to this process over a WebSocket.
+//
+//   board_tool [--lexicon NWL23] [--port 8083] [--vite-port 5175]
+
 #include "game/board.h"
 #include "game/glyph.h"
 #include "game/tile.h"
@@ -45,8 +53,8 @@ bool bool_field(const boost::json::object& o, const char* key, bool fallback = f
 }
 
 // The letter Tile named by a one-character string, or EMPTY_SQUARE if it is not
-// a letter A..Z. Designated blanks carry their shown letter here; the blank-ness
-// is tracked separately.
+// a letter A..Z. For a blank this is the letter it stands for; whether the tile
+// is a blank travels separately.
 Tile letter_tile(const std::string& s) {
   if (s.empty()) return EMPTY_SQUARE;
   const char c = upper_ch(s[0]);
@@ -103,8 +111,8 @@ boost::json::object tile_score_map() {
   return scores;
 }
 
-// Remaining bag contents as a JSON array of {letter, score, count}: each present
-// letter (and the blank as "?") with a positive count.
+// The bag's remaining tiles as a JSON array of {letter, score, count}, with the
+// blank as "?". Letters with no tiles left are omitted.
 boost::json::array bag_tiles_json(const TileCounts& bag) {
   boost::json::array bag_tiles;
   for (Tile L = Tile::of(0); L < 26; ++L) {
@@ -120,16 +128,16 @@ boost::json::array bag_tiles_json(const TileCounts& bag) {
   return bag_tiles;
 }
 
-// A board word that the dictionary rejects, with its starting coordinate in GCG
-// notation (row number first across, column letter first down).
+// A board word the dictionary rejects. `square` is its starting square in GCG
+// notation: row number first for across words, column letter first for down.
 struct InvalidWord {
   std::string word;
   std::string square;
   std::string direction;  // "across" or "down"
 };
 
-// A freeform 15x15 board the user fills however they like, drawing tiles from a
-// shared bag, plus a word-legality check over every contiguous run.
+// The editor's state: the board, the bag its tiles come from, and the result
+// of the last word check.
 class BoardEditor {
  public:
   explicit BoardEditor(const Dictionary& dict) : dict_(dict) { reset(); }
@@ -211,8 +219,8 @@ class BoardEditor {
     return vertical ? board_.at(index, line) : board_.at(line, index);
   }
 
-  // Scan one row (or column when `vertical`) for maximal contiguous runs and
-  // record every run of length >= 2 that the dictionary rejects.
+  // Record every run of two or more tiles in this row (or column, when
+  // `vertical`) that the dictionary rejects.
   void scan_line(bool vertical, int line, std::vector<InvalidWord>* out) const {
     int i = 0;
     while (i < BOARD_SIZE) {
@@ -287,7 +295,7 @@ int main(int argc, char** argv) {
       "port", po::value<int>(&ws_port)->default_value(ws_port), "engine WebSocket port")(
       "vite-port", po::value<int>(&vite_port)->default_value(vite_port), "browser UI port")(
       "web-dir", po::value<std::string>(&web_dir)->default_value(web_dir),
-      "front-end package dir (cwd of npm run dev)");
+      "front-end package directory (where npm run dev is started)");
     scribblez::Lexicon::instance().add_options(desc);
 
     scribblez::util::parse_command_line(argc, argv, desc);

@@ -1,42 +1,29 @@
 // endgame_bench: measures what the endgame solver costs and what it buys.
+// Results and methodology are written up in docs/endgame_bench_results.md.
 //
-// Two modes:
-//   --mode=endgames : play N HastyBot-vs-HastyBot games and capture each one's
-//                     first bag-empty position. Then, for every captured
-//                     position, synthetically sweep the score margin at the
-//                     start of the endgame over [--margin-min, --margin-max]
-//                     (from the point of view of the first player to act once
-//                     the bag is empty), and for every (margin, budget) report
-//                     two tables:
-//                       skill -- mean over games of the solver seat's game-value
-//                                minus a plain-HastyBot baseline's, in win%
-//                                points (a win is 1, a draw 0.5, a loss 0);
-//                       cost  -- what solving the endgame does to self-play
-//                                throughput: the solver seat's measured endgame
-//                                time over the timed games, as a multiple of a
-//                                hasty-vs-hasty game (see run_endgames_mode).
-//                     Absolute score level is irrelevant -- both agent types
-//                     decide off the spread alone -- so each margin sets the
-//                     first actor's scores to (margin, 0).
-//   --mode=games    : run N seeded full games for hasty-vs-hasty and for
-//                     endgame-vs-endgame at every budget (same seeds across
-//                     configs) and report wall-time ratios to the
-//                     hasty-vs-hasty baseline, then the seat-mirrored
-//                     head-to-head win% and W/D/L record against plain HastyBot
-//                     bucketed by each seed's baseline bag-empty spread. Every
-//                     game respects projections, as self-play generation does.
+//   endgame_bench --mode=endgames --games 400 --budgets 100,220,1600 --threads 16
+//   endgame_bench --mode=games --games 1000 --budgets 220,1600 --threads 16
 //
-// Usage:
-//   endgame_bench [--mode=endgames|games] [--games N] [--seed N]
-//                 [--budget N | --budgets 100,220,...] [--plies P]
-//                 [--spread-matters 0|1] [--threads N]
-//                 [--margin-min M] [--margin-max M] [--margin-step S]
-//                 [--time-games N] [--projections 0|1]       (endgames mode)
-//                 [--spread-buckets 20,60]                   (games mode)
-//                 [--lexicon NAME] [--leaves-file PATH] [--peg-file PATH]
+// --mode=endgames (default) is a margin sweep. It plays --games
+// HastyBot-vs-HastyBot games and captures each one's first bag-empty position.
+// It then replays every captured endgame with EndgameHastyBot on the side to
+// move and plain HastyBot replying, at every (start-of-endgame margin, budget)
+// pair. Only the spread matters to either agent, so a margin m is set as scores
+// (m, 0). Two tables come out, margins as rows and budgets as columns:
+//   - skill: the solver seat's mean game value (win 1, draw 0.5, loss 0) minus
+//     that of a HastyBot-vs-HastyBot playout, in win% points;
+//   - cost: a self-play game's time with the endgame solved, as a multiple of a
+//     hasty-vs-hasty game. Only the first --time-games games are timed, on one
+//     thread with nothing else running.
 //
-// Measured results (cost ratios, strength-vs-budget, and methodology) are
-// summarized in docs/endgame_bench_results.md.
+// --mode=games times --games full games of hasty-vs-hasty and of
+// endgame-vs-endgame at each budget, on the same seeds, and reports the time
+// ratios. It then plays EndgameHastyBot against HastyBot with seats mirrored
+// per seed and reports win% and W/D/L, bucketed by the seed's
+// hasty-vs-hasty spread when the bag empties (--spread-buckets).
+//
+// All games respect projections (a proven endgame ends at its certificate), as
+// self-play generation does; --projections 0 turns that off in endgames mode.
 
 #include "agent/agent.h"
 #include "agent/endgame_hasty_bot.h"
@@ -80,11 +67,10 @@ double seconds_since(Clock::time_point t0) {
   return std::chrono::duration<double>(Clock::now() - t0).count();
 }
 
-// Run items [0, items) across `threads` workers, each pulling the next index off
-// a shared counter, and pass each worker its own index so it can key per-thread
-// resources (the pooled EndgameSolver) off it. Work is handed out dynamically
-// because a game's sweep cost varies by orders of magnitude with its position:
-// static chunks leave most workers waiting on the slowest chunk.
+// Run body(worker, item) for every item in [0, items) on `threads` workers.
+// Items are handed out one at a time because sweep cost varies by orders of
+// magnitude between positions: static chunks would leave most workers waiting
+// on the slowest one.
 void parallel_for(int items, int threads, const std::function<void(int worker, int item)>& body) {
   std::atomic<int> next{0};
   std::vector<std::thread> pool;
@@ -96,9 +82,9 @@ void parallel_for(int items, int threads, const std::function<void(int worker, i
   for (std::thread& th : pool) th.join();
 }
 
-// The first bag-empty decision point of one HastyBot self-play game --
-// everything needed to replay the endgame with either agent type. The first
-// actor once the bag empties holds my_rack; opp_rack is the reply rack.
+// The first bag-empty decision point of one HastyBot self-play game: enough to
+// replay the endgame with either agent type. my_rack belongs to the side to
+// move.
 struct CapturedEndgame {
   Board board;
   Rack my_rack;
@@ -108,10 +94,9 @@ struct CapturedEndgame {
   int scoreless = 0;
 };
 
-// A HastyBot that records the game's first bag-empty position it is asked to
-// move on. It tracks the consecutive-scoreless-turn count from observe_move
-// exactly as the game loop does, so each captured position carries the solver's
-// scoreless input.
+// A HastyBot that records the first bag-empty position it is asked to move on.
+// It counts consecutive scoreless turns the way the game loop does, since the
+// solver takes that count as input.
 class FirstEndgameCapturer : public Agent {
  public:
   FirstEndgameCapturer(int thread_id, const std::string& name, CapturedEndgame& sink,
@@ -150,22 +135,19 @@ class FirstEndgameCapturer : public Agent {
   int scoreless_ = 0;
 };
 
-// Parse a comma-separated budget list ("100,220,1600") into node counts.
 std::vector<uint64_t> parse_budgets(const std::string& csv) {
   std::vector<uint64_t> out;
   for (const std::string& tok : util::split(csv, ',')) out.push_back(std::stoull(tok));
   return out;
 }
 
-// Parse a comma-separated ascending threshold list ("20,60") into spreads.
 std::vector<int> parse_thresholds(const std::string& csv) {
   std::vector<int> out;
   for (const std::string& tok : util::split(csv, ',')) out.push_back(std::stoi(tok));
   return out;
 }
 
-// Bucket index of an absolute bag-empty spread under ascending `thresholds`:
-// bucket k holds [t_{k-1}, t_k), with a final unbounded bucket.
+// Bucket k holds |spread| in [t_{k-1}, t_k); the last bucket is unbounded.
 int bucket_of(int abs_spread, const std::vector<int>& thresholds) {
   int k = 0;
   while (k < int(thresholds.size()) && abs_spread >= thresholds[k]) ++k;
@@ -179,9 +161,7 @@ std::string bucket_label(int k, const std::vector<int>& thresholds) {
 }
 
 // Play `games` HastyBot-vs-HastyBot games seeded base_seed+i and return the
-// first bag-empty position of each game that reached one, in seed order. Each
-// game is seeded independently, so which worker plays it does not show up in
-// the captured position.
+// first bag-empty position of each game that reached one, in seed order.
 std::vector<CapturedEndgame> capture_endgames(const Dictionary& dict, uint64_t base_seed, int games,
                                               int threads) {
   std::vector<CapturedEndgame> caps(games);
@@ -201,9 +181,8 @@ std::vector<CapturedEndgame> capture_endgames(const Dictionary& dict, uint64_t b
   return out;
 }
 
-// The bag of tiles unseen from the captured endgame: empty, since the board and
-// both racks account for the full distribution. play_from then draws nothing,
-// so both racks stay exactly as captured.
+// The captured endgame's bag, which is empty: the board and both racks account
+// for every tile. play_from then draws nothing, so the racks stay as captured.
 Bag empty_pool(const CapturedEndgame& cap) {
   Bag pool(/*seed=*/1);
   for (int r = 0; r < BOARD_SIZE; ++r) {
@@ -217,9 +196,8 @@ Bag empty_pool(const CapturedEndgame& cap) {
   return pool;
 }
 
-// Mean wall time of a plain HastyBot-vs-HastyBot game, over the same seeds the
-// timed sweep games use. This is the denominator the cost table is quoted in:
-// what one self-play game costs when nothing solves its endgame.
+// Mean wall time of a HastyBot-vs-HastyBot game over the timed games' seeds:
+// the cost table's unit, a self-play game with no endgame solving.
 double hasty_game_ms(const Dictionary& dict, uint64_t base_seed, int games) {
   HastyBotAgent a0(HastyBotAgent::Params{.thread_id = 0, .name = "A"});
   HastyBotAgent a1(HastyBotAgent::Params{.thread_id = 0, .name = "B"});
@@ -232,8 +210,7 @@ double hasty_game_ms(const Dictionary& dict, uint64_t base_seed, int games) {
   return 1000.0 * seconds_since(t0) / games;
 }
 
-// Game value of a finished endgame from the first actor's seat: a win is 1, a
-// draw 0.5, a loss 0.
+// Game value for the side with this final spread: win 1, draw 0.5, loss 0.
 double win_fraction(int spread) {
   if (spread > 0) return 1.0;
   if (spread < 0) return 0.0;
@@ -242,31 +219,26 @@ double win_fraction(int spread) {
 
 // --- Margin sweep -----------------------------------------------------------
 
-// One solver-seat endgame playout's result: the first actor's final spread,
-// which is deterministic, and the wall time the solver spent on it, which is
-// meaningful only for a playout from the single-threaded timed phase.
+// One solver-seat playout: the side to move's final spread (deterministic), and
+// the solver's wall time (meaningful only in the single-threaded timed phase).
 struct SolverOutcome {
   int spread = 0;
   uint64_t solve_ns = 0;
 };
 
-// A solver-seat playout's outcome together with the solver's full totals (the
-// caller needs max_solve_nodes for the budget-nesting skip).
+// The same, with the solver's full totals; the budget-nesting skip in
+// sweep_column needs max_solve_nodes.
 struct SolverPlayout {
   int spread = 0;
   EndgameTurnPolicy::SolveTotals totals;
 };
 
-// Play one captured endgame with an EndgameHastyBot on the first-actor seat
-// (scores set to {margin, 0}) and a plain HastyBot on the reply seat,
-// projections respected, and return the first actor's final spread and the
-// solver's totals. Agents are rebuilt per call with a fixed thread_id/name so
-// greedy HastyBot's deterministic tie-breaks make the spread a pure function of
-// the position, margin, and budget (threading cannot perturb it).
-// `incremental` toggles the solver's incremental move-list maintenance, which
-// changes speed but no result. `projections` toggles whether a proven class
-// ends the game at its certificate, as self-play generation has it, or the
-// endgame is played out move by move.
+// Play one captured endgame with EndgameHastyBot to move (scores {margin, 0})
+// and HastyBot replying. Agents are rebuilt per call with a fixed thread_id and
+// name, so HastyBot's deterministic tie-breaks make the spread a pure function
+// of position, margin, and budget, whichever worker runs it. `incremental`
+// toggles the solver's incremental move-list maintenance, which changes speed
+// but never results.
 SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& cap, int margin,
                                  const EndgameSolver::Params& params, int thread_id,
                                  bool incremental, bool projections) {
@@ -288,11 +260,9 @@ SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& 
   return out;
 }
 
-// The change in the first actor's spread over a plain HastyBot-vs-HastyBot
-// playout of the captured endgame (scores start at 0). HastyBot's moves never
-// read scores, so this one delta fixes the baseline at every margin: the
-// baseline final spread at margin m is m + delta, and the baseline win fraction
-// is win_fraction(m + delta).
+// The side to move's spread gain over a HastyBot-vs-HastyBot playout of the
+// captured endgame. HastyBot never reads scores, so this one number gives the
+// baseline at every margin: the final spread at margin m is m + delta.
 int baseline_delta(const Dictionary& dict, const CapturedEndgame& cap, int thread_id) {
   HastyBotAgent a0(HastyBotAgent::Params{.thread_id = thread_id, .name = "A"});
   HastyBotAgent a1(HastyBotAgent::Params{.thread_id = thread_id, .name = "B"});
@@ -302,28 +272,24 @@ int baseline_delta(const Dictionary& dict, const CapturedEndgame& cap, int threa
   return g.score(0) - g.score(1);
 }
 
-// The ascending margins the sweep covers: min, min+step, ..., up to max.
 std::vector<int> margin_axis(int margin_min, int margin_max, int margin_step) {
   std::vector<int> margins;
   for (int m = margin_min; m <= margin_max; m += margin_step) margins.push_back(m);
   return margins;
 }
 
-// Solve one (game, margin) column of the grid -- every budget at that margin --
-// into `grid[cell_base + budget index]`.
+// Fill one (game, margin) column of the grid, every budget at that margin,
+// into `grid[cell_base + budget index]`. A column rather than a whole game is
+// the unit of parallel work because per-position solve cost spans orders of
+// magnitude.
 //
-// Budgets are processed in DESCENDING order so the budget-nesting skip can
-// reuse a larger budget's bit-identical result: once a run's max_solve_nodes is
-// <= a smaller budget b', re-running at b' changes nothing (no solve hit the
-// larger cap, and any solve declined for having more root moves than the larger
-// budget stays declined at b'), so its measured time stands for the smaller
-// budget's too. The skip is unsound when spread_matters (its half-budget class
-// pass makes behavior depend on the budget value itself), so it is disabled
-// there. `skipped` counts the cells the skip filled without a playout.
-//
-// A column, rather than a whole game, is the sweep's unit of parallel work:
-// per-position solve cost spans orders of magnitude, so whole-game items leave
-// every worker waiting on the slowest game.
+// Budgets run in descending order so the budget-nesting skip can reuse a larger
+// budget's result. If a run's max_solve_nodes is <= a smaller budget b', rerunning
+// at b' is bit-identical: no solve hit the larger cap, and a solve declined for
+// having more root moves than the larger budget stays declined at b'. The skip
+// is unsound under spread_matters, whose class pass gets half the budget, so
+// the result depends on the budget value itself. `skipped` counts the cells
+// filled without a playout.
 void sweep_column(const Dictionary& dict, const CapturedEndgame& cap, int margin,
                   const std::vector<std::pair<uint64_t, int>>& desc_budgets,
                   EndgameSolver::Params params, bool incremental, bool projections, int thread_id,
@@ -360,13 +326,10 @@ std::string join_budgets(const std::vector<uint64_t>& budgets) {
   return s;
 }
 
-// Print the two margin-sweep tables from the filled grid: skill (solver win%
-// minus baseline win%, plus a trailing baseline win% column) over every game,
-// and cost over the first `timed_games`, margins as ascending rows and budgets
-// as columns. Cost is quoted as what a self-play game costs with the endgame
-// solved, relative to `baseline_ms` -- the same currency as the games-mode
-// throughput ratios, and the one that says what the solver does to generation
-// throughput. 1.00x is free.
+// Print the skill table over every game (with a trailing baseline win% column)
+// and the cost table over the first `timed_games`. Cost is a self-play game's
+// time with the endgame solved relative to `baseline_ms`, the same unit as
+// games mode's throughput ratios; 1.00x means the solver is free.
 void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint64_t>& budgets,
                         const std::vector<int>& d0, const std::vector<SolverOutcome>& grid,
                         int timed_games, double baseline_ms) {
@@ -415,10 +378,9 @@ void print_sweep_tables(const std::vector<int>& margins, const std::vector<uint6
 
 // Sweep every captured endgame over the margin x budget grid. The first
 // `time_games` games run alone on one thread and are the only ones the cost
-// table reads: a solve's wall time is only worth reporting when nothing else on
-// the machine is competing for cores, caches, and clock. The rest run across
-// `threads` workers and contribute their (deterministic) spreads to the skill
-// table, which is where sample size buys accuracy.
+// table reads: solve times are only trustworthy with nothing else competing for
+// cores, caches, and clock. The rest run on `threads` workers and add their
+// deterministic spreads to the skill table, where sample size buys accuracy.
 void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, int threads,
                        const std::vector<uint64_t>& budgets, EndgameSolver::Params params,
                        bool incremental, bool projections, int margin_min, int margin_max,
@@ -487,10 +449,9 @@ void run_endgames_mode(const Dictionary& dict, uint64_t base_seed, int games, in
 
 using AgentFactory = std::function<std::unique_ptr<Agent>(int thread_id)>;
 
-// Play `games` seeded games (seed base_seed+i) of factory-built agents and
-// return the wall-clock seconds. Threads split the game indices into contiguous
-// chunks; each thread builds its own pair of agents once and reuses them. All
-// games respect agent projections, as self-play does.
+// Play `games` games (seed base_seed+i) between factory-built agents and return
+// the wall-clock seconds. Each thread takes a contiguous chunk of seeds and
+// builds its agent pair once.
 double run_config(const Dictionary& dict, uint64_t base_seed, int games, int threads,
                   const AgentFactory& make0, const AgentFactory& make1) {
   const auto t0 = Clock::now();
@@ -532,8 +493,7 @@ AgentFactory endgame_factory(const EndgameSolver::Params& params, bool increment
   };
 }
 
-// Head-to-head record for one bag-empty-spread bucket: the endgame bot's
-// win/draw/loss counts against a plain HastyBot.
+// EndgameHastyBot's record against HastyBot in one spread bucket.
 struct H2H {
   int games = 0;
   int wins = 0;
@@ -541,11 +501,9 @@ struct H2H {
   int losses = 0;
 };
 
-// The absolute score spread at the baseline game's first bag-empty decision
-// point, or -1 when the seed's HastyBot-vs-HastyBot game never empties the
-// bag. The baseline game is seed-deterministic and agent-independent, so it
-// gives every configuration the same seat-independent conditioning variable
-// for the head-to-head buckets.
+// |spread| when the bag first empties in this seed's HastyBot-vs-HastyBot game,
+// or -1 if it never does. It depends only on the seed, so every configuration
+// and both seat orders bucket a seed the same way.
 int baseline_bag_empty_spread(const Dictionary& dict, uint64_t seed) {
   CapturedEndgame cap;
   bool captured = false;
@@ -557,14 +515,11 @@ int baseline_bag_empty_spread(const Dictionary& dict, uint64_t seed) {
   return std::abs(cap.my_score - cap.opp_score);
 }
 
-// Play `games` seeded games of the endgame bot against a plain HastyBot,
-// bucketed by the seed's baseline bag-empty spread (the last bucket holds
-// seeds whose baseline game never empties the bag). Each seed is played twice
-// with the seats mirrored, so per-seed tile-draw luck (who gets the blanks)
-// cancels instead of dominating the variance; unpaired spread estimates are
-// not usable. Games respect projections, so once the bot proves a class the
-// recorded spread is the certificate line's -- the production semantics.
-// Single-threaded so the per-game results are deterministic in `base_seed`.
+// Play EndgameHastyBot against HastyBot over ceil(games / 2) seeds, bucketed by
+// baseline_bag_empty_spread; the last bucket holds seeds whose bag never
+// empties. Each seed is played twice with seats mirrored, so tile-draw luck
+// (who gets the blanks) cancels instead of dominating the variance. Runs
+// single-threaded so the results are deterministic in `base_seed`.
 std::vector<H2H> endgame_vs_hasty(const Dictionary& dict, uint64_t base_seed, int games,
                                   const EndgameSolver::Params& params, bool incremental,
                                   const std::vector<int>& thresholds) {
@@ -600,8 +555,6 @@ void print_games_row(const char* config, const std::string& budget, double total
               total_s / games, games / total_s, ratio);
 }
 
-// One head-to-head row: the endgame bot's win% ((W + 0.5*D)/games) and its
-// W/D/L counts for a bucket.
 void print_h2h_row(uint64_t budget, const std::string& label, const H2H& h) {
   const double winpct = 100.0 * (h.wins + 0.5 * h.draws) / h.games;
   std::printf("%11llu %9s %8d %9.1f%% %8d %8d %8d\n", static_cast<unsigned long long>(budget),
@@ -629,11 +582,8 @@ void run_games_mode(const Dictionary& dict, uint64_t base_seed, int games, int t
     print_games_row("endgame-vs-endgame", std::to_string(b), s, games, s / base_s);
   }
 
-  // Strength evidence: the endgame bot's win% and W/D/L record against a plain
-  // HastyBot, seats mirrored per seed and bucketed by the seed's baseline
-  // bag-empty spread -- accuracy shows up in the small buckets, where the
-  // endgame still decides the game. Run single-threaded so the per-game results
-  // are deterministic in base_seed.
+  // Strength shows in the small-spread buckets, where the endgame still decides
+  // the game.
   std::printf("\nhead-to-head (endgame-vs-hasty, mirrored seats, by baseline bag-empty spread):\n");
   std::printf("%11s %9s %8s %10s %8s %8s %8s\n", "budget", "|spread|", "games", "win%", "W", "D",
               "L");

@@ -1,20 +1,24 @@
-// Offline harvester for the large position-evaluation Monte-Carlo test set.
+// harvest_positions_tool: harvests positions for the large position-evaluation
+// test set. py/scripts/build_position_eval_test_set.py drives it, splits the
+// bundles into one GCG per position, and scores them with monte_carlo_sim_tool.
 //
-// Plays HastyBot-vs-HastyBot games and, from each game, samples one post-move
-// position (data/gcg_post_move.h): a training-eligible turn (the bag had tiles
-// when it began -- binary_log.h's eligible_span) whose move placed tiles, so
-// the recorded final move is a PLAY the way the truth and the encoder read it.
-// The game is truncated right after that move and written as a GCG from the
-// final mover's POV -- exactly the input `monte_carlo_sim_tool` scores.
+//   harvest_positions_tool --dataset-name position-eval-test-dataset-large --count 1000
 //
-// The emitted GCG keeps each move line's rack_before (the sim reads the final
-// mover's leave, and the opponent's retained leave, from them) but writes NO
-// #Rack pragmas and no end-of-game rack adjustments, so neither player's
-// post-move draw ever appears.
+// It plays HastyBot-vs-HastyBot games with consecutive seeds and samples one
+// post-move position (data/gcg_post_move.h) from each game. The sampled turn
+// must be training-eligible (binary_log.h's eligible_span: the bag had tiles
+// when the turn began) and must place tiles, since the ground truth and the
+// encoder both read the last move as a play. The game is cut off right after
+// that move and written as a GCG.
 //
-// Output: positions/<lexicon>/<dataset-name>/part-NNN.gcgs, each a concatenation
-// of up to --per-file GCG blocks. Every block begins with `#character-encoding`,
-// the record boundary the Python wrapper splits on before scoring.
+// Each move line keeps its rack_before, because the sim reads both players'
+// leaves from those. The GCG has no #Rack pragmas and no end-of-game rack
+// lines, so neither player's post-move draw is revealed.
+//
+// Output goes to positions/<lexicon>/<dataset-name>/part-NNN.gcgs, relative to
+// the working directory. Each bundle concatenates up to --per-file GCG blocks,
+// and every block begins with `#character-encoding`, the record boundary the
+// Python driver splits on.
 
 #include "agent/macondo_bot.h"
 #include "data/binary_log.h"
@@ -55,8 +59,8 @@ std::vector<int> qualifying_turns(const GameLogStorage& log) {
   return out;
 }
 
-// Truncate the log to end right after turn `last`, and set final_scores to the
-// last kept cumulative so the writer emits no END_RACK adjustment lines.
+// Truncate the log to end right after turn `last`. Setting final_scores to the
+// last cumulative scores keeps the writer from emitting end-of-game rack lines.
 GameLogStorage truncate_after(GameLogStorage log, int last) {
   log.turns.resize(last + 1);
   log.final_scores = log.turns.back().cumulative_scores;
@@ -65,7 +69,6 @@ GameLogStorage truncate_after(GameLogStorage log, int last) {
   return log;
 }
 
-// The GCG for one harvested position: rack_before kept per line, no #Rack pragmas.
 std::string harvested_gcg(GameLogStorage log, int last, uint64_t seed, const std::string& lexicon) {
   const GameLogStorage truncated = truncate_after(std::move(log), last);
   GcgWriteOptions options;
@@ -74,8 +77,9 @@ std::string harvested_gcg(GameLogStorage log, int last, uint64_t seed, const std
   return game_log_to_gcg(truncated.view(), options);
 }
 
-// Play game `seed` and, if it has any qualifying turn, return the GCG for one
-// sampled uniformly (RNG seeded by the game, for reproducibility). Empty if none.
+// Play game `seed` and return the GCG for one uniformly sampled qualifying turn,
+// or an empty string if there is none. The sample is seeded by the game seed,
+// so a harvest is reproducible.
 std::string harvest_from_game(HastyBotAgent& a0, HastyBotAgent& a1, const Dictionary& dict,
                               uint64_t seed, const std::string& lexicon) {
   Game game(a0, a1, dict, seed);
@@ -90,7 +94,6 @@ std::string harvest_from_game(HastyBotAgent& a0, HastyBotAgent& a1, const Dictio
 
 std::string part_filename(int part) { return std::format("part-{:03}.gcgs", part); }
 
-// Write the collected GCG blocks into per_file-sized bundle files.
 void write_bundles(const fs::path& dir, const std::vector<std::string>& gcgs, int per_file) {
   const int num_parts = (int(gcgs.size()) + per_file - 1) / per_file;
   for (int part = 0; part < num_parts; ++part) {
@@ -118,8 +121,8 @@ int main(int argc, char** argv) {
       "count", po::value<int>(&count)->default_value(count), "number of positions to harvest")(
       "per-file", po::value<int>(&per_file)->default_value(per_file), "GCG blocks per bundle file")(
       "seed", po::value<long>(&base_seed)->default_value(base_seed),
-      "base game seed (scans base_seed, base_seed+1, ...; a reserved range disjoint from "
-      "training)");
+      "first game seed; games use base_seed, base_seed+1, ... (keep this range disjoint from "
+      "the seeds used for training games)");
     scribblez::Lexicon::instance().add_options(desc);
 
     scribblez::util::parse_command_line(argc, argv, desc);
