@@ -173,10 +173,6 @@ struct SelfWinMaskOutput {
   static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
-// The number of placement heads: the four *MaskOutput descriptors above, and
-// the head count in the move-proposal graphs' `planes` output.
-inline constexpr int kNumPlacementPlanes = 4;
-
 // ---------- move-proposal tensors ----------------------------------------
 //
 // The move proposal model runs as two graphs
@@ -233,7 +229,7 @@ struct MoveEncHandoff {
 struct PlanesOutput {
   static constexpr const char* kName = "planes";
   using Elem = float;
-  static constexpr int kRowElems = kNumPlacementPlanes * kSlotsPerCell * kBoardCells;
+  static constexpr int kRowElems = kPlacementHeads * kSlotsPerCell * kBoardCells;
   static constexpr bool kDynamic = true;
 };
 
@@ -255,7 +251,7 @@ struct GainOutput {
 inline constexpr int kMaxEvidence = 64;
 // 117: observed + predicted footprint channels (4 heads x kSlotsPerCell each)
 // plus the candidate's own kSlotsPerCell-channel footprint one-hot.
-inline constexpr int kEvidencePlanes = (2 * kNumPlacementPlanes + 1) * kSlotsPerCell;
+inline constexpr int kEvidencePlanes = (2 * kPlacementHeads + 1) * kSlotsPerCell;
 inline constexpr int kEvidenceScalars = 11;
 
 // The evidence inputs are static tensors of shape (1, E, ...). Folding E into
@@ -473,9 +469,8 @@ class MoveProposalStepSpec {
   using AuxOutputs = TensorList<>;
 };
 
-// The position model's aux-output count, for consumers that size per-head
-// buffers without naming the list.
-inline constexpr int kNumMaskHeads = PositionEvaluationSpec::AuxOutputs::size;
+// The aux outputs are the placement heads, one per placement target.
+static_assert(PositionEvaluationSpec::AuxOutputs::size == kPlacementHeads);
 
 }  // namespace nn
 }  // namespace scribblez
