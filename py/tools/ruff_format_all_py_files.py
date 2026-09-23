@@ -22,7 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # pyproject excludes within them.
 TARGETS = [
     "py",
-    "positions",
+    "docker-setup",
+    "build_and_push_worker_image.py",
     "build_docker_image.py",
     "run_docker.py",
     "setup_common.py",
