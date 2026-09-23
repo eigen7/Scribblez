@@ -45,6 +45,13 @@ _PROBE_TIMEOUT = 15
 # spare.
 _MUTATE_TIMEOUT = 90
 
+# Commands that read from the machine without changing it: a docker exec
+# reading a worker's listings or result archives (cloud/ssh_transfer.py), and
+# detect_arch's throwaway container. Above ssh_transfer's
+# COLLECT_TIMEOUT_SECONDS, so an overrunning in-container tar hits its own
+# limit first.
+_READ_TIMEOUT = 90
+
 # A first pull of the worker image moves a gigabyte or so of NVIDIA runtime
 # over a home connection.
 _PULL_TIMEOUT = 1800
@@ -188,7 +195,7 @@ class SshMachine:
         cloud/ssh_transfer.py reads results out of a worker."""
         return self._exec(
             ["docker", "exec", name, *command],
-            timeout=_MUTATE_TIMEOUT,
+            timeout=_READ_TIMEOUT,
             doing=f"reading from {name}",
         )
 
@@ -226,7 +233,7 @@ class SshMachine:
         res = self._run(
             ["docker", "run", "--rm", "--pull=never", "--entrypoint", "g++", image,
              "-march=native", "-Q", "--help=target"],
-            timeout=_MUTATE_TIMEOUT,
+            timeout=_READ_TIMEOUT,
         )  # fmt: skip
         for line in res.stdout.splitlines():
             line = line.strip()
