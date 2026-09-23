@@ -162,11 +162,6 @@ void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_inde
 int scribblez_dump_position(ScribblezSession* s, const char* path, int64_t game_idx, int post_move,
                             char* out, int out_cap);
 
-// The same position as the web UI's GameState JSON, for the board image
-// renderer.
-int scribblez_dump_position_json(ScribblezSession* s, const char* path, int64_t game_idx,
-                                 int post_move, char* out, int out_cap);
-
 // Max-move-per-lane analysis of a GCG's final position (the board after all
 // recorded moves, with the on-move player's #Rack). Writes the lane-analysis
 // JSON (board, ground-truth per-lane targets, maximal plays) to `out_json` and,

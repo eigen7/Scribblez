@@ -68,8 +68,6 @@ struct ScribblezSession {
                        bool open_leaves, char* out_records, int* played_rank) const;
   int dump_position(const char* path, int64_t game_idx, bool post_move, char* out,
                     int out_cap) const;
-  int dump_position_json(const char* path, int64_t game_idx, bool post_move, char* out,
-                         int out_cap) const;
   int max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
                                     float* out_input) const;
   int position_eval_analyze_gcg(const char* gcg_text, bool opp_leave_input, float* out_input,
@@ -421,20 +419,6 @@ int ScribblezSession::dump_position(const char* path, int64_t game_idx, bool pos
 int scribblez_dump_position(ScribblezSession* s, const char* path, int64_t game_idx, int post_move,
                             char* out, int out_cap) {
   return s->dump_position(path, game_idx, post_move != 0, out, out_cap);
-}
-
-int ScribblezSession::dump_position_json(const char* path, int64_t game_idx, bool post_move,
-                                         char* out, int out_cap) const {
-  std::vector<char> buf;
-  if (load_slog(path, game_idx, buf) != 0) return -1;
-  scribblez::binlog::BlockDecoder decoder(spec);
-  return emit_string(decoder.dump_position_json(buf.data(), uint32_t(game_idx), post_move), out,
-                     out_cap);
-}
-
-int scribblez_dump_position_json(ScribblezSession* s, const char* path, int64_t game_idx,
-                                 int post_move, char* out, int out_cap) {
-  return s->dump_position_json(path, game_idx, post_move != 0, out, out_cap);
 }
 
 int ScribblezSession::max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json,

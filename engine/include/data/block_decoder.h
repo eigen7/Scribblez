@@ -51,10 +51,6 @@ class BlockDecoder {
   // The game's sampled position as human-readable text.
   std::string dump_position(const char* buf, uint32_t game_idx, bool post_move);
 
-  // The game's sampled position as the web UI's GameState JSON, showing only
-  // what the player to be evaluated could see.
-  std::string dump_position_json(const char* buf, uint32_t game_idx, bool post_move);
-
  private:
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);
 
