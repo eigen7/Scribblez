@@ -24,8 +24,8 @@ class Lexicon {
 
   static Lexicon& instance();
 
-  // Registers --lexicon and --lexica-dir, which write the stored params
-  // directly when parsed.
+  // Registers --lexicon and --lexica-dir, which set the stored params when
+  // notified. Like set_params(), notifying after dict() has loaded throws.
   void add_options(boost::program_options::options_description& desc);
 
   // Throws if dict() has already loaded; there is no reloading.
@@ -41,6 +41,12 @@ class Lexicon {
 
  private:
   Lexicon() = default;
+
+  // The add_options() notifier for one field. Call without mutex_ held.
+  void set_param(std::string Params::* field, const std::string& value);
+
+  // Call with mutex_ held.
+  void throw_if_loaded() const;
 
   std::mutex mutex_;
   Params params_;

@@ -27,6 +27,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
+#include "lexicon/lexicon.h"
 #include "sim/rollout_summary.h"
 #include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
@@ -51,6 +52,7 @@
 #include "util/string.h"
 
 #include <boost/json.hpp>
+#include <boost/program_options.hpp>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -446,6 +448,23 @@ TEST(Dictionary, RealKwgCrossValidation) {
   ASSERT_TRUE(d.contains("PARTIED"));
   ASSERT_FALSE(d.contains("QXZ"));
   cross_validate(d, "real-kwg", 99u, /*games=*/6, /*steps_per_game=*/8);
+}
+
+// --lexicon parsed after dict() has loaded would change name() without
+// reloading, so it must throw like set_params() does.
+TEST(Lexicon, OptionsAfterLoadThrow) {
+  Lexicon& lex = Lexicon::instance();
+  if (!std::ifstream(lex.kwg_path()).good()) GTEST_SKIP() << "no lexicon at " << lex.kwg_path();
+  lex.dict();
+
+  namespace po = boost::program_options;
+  po::options_description desc;
+  lex.add_options(desc);
+  const char* argv[] = {"test", "--lexicon=CSW21"};
+  po::variables_map vm;
+  po::store(po::parse_command_line(2, argv, desc), vm);
+  EXPECT_THROW(po::notify(vm), util::Exception);
+  EXPECT_EQ(lex.name(), "NWL23");
 }
 
 // ===========================================================================
