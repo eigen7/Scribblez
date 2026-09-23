@@ -63,8 +63,9 @@ class MoveProposalNets {
     // magnitude (see the file comment).
     int max_rows = nn::MoveProposalCacheSpec::kDefaultMaxRows;
     int step_max_rows = nn::MoveProposalStepSpec::kDefaultMaxRows;
-    // FP32 by default: the fusion graph's masked_fill and 4D einsum are FP16
-    // hazards that no export gate covers yet (docs/plans/fp16_safe_serving.md).
+    // FP32 by default: the fusion graph's masked_fill and 4D einsum have not
+    // been validated at reduced precision, unlike the BF16-served value models
+    // (docs/plans/fp16_safe_serving.md).
     nn::Precision precision = nn::Precision::kFP32;
     bool fast_build = false;
     std::string mount_root = "/workspace/mount";

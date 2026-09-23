@@ -29,8 +29,9 @@ struct WldTarget {
 
 struct ScoreDiffTarget {
   // The final score differential, active player minus opponent. The head
-  // predicts a Gaussian over it (kScoreDiffOutputFloats) and trains by negative
-  // log-likelihood against this one float.
+  // predicts its mean and standard deviation (kScoreDiffOutputFloats), each
+  // trained by a Huber regression against this one float (see ScoreDiffHead in
+  // py/scribblez/position_eval/model.py).
   static constexpr const char* kName = "score_diff";
   static constexpr int kDims[] = {1};
   static void encode(const EncodeContext& v, float* out);
