@@ -96,17 +96,17 @@ int board_tile_count(const Board& board) {
 }
 
 // The player (0 or 1) that a "#Rack1 <tiles>" / "#Rack2 <tiles>" pragma line
-// is for, or nullopt if `line` is not one. Only the capitalized form that
+// is for, or -1 if `line` is not one. Only the capitalized form that
 // gcg_writer.h emits is a rack pragma: tournament GCG uses lowercase "#rack1"
 // with different meaning, and the turn lines carry that information anyway.
-std::optional<int> rack_pragma_player(const std::string& line) {
+int rack_pragma_player(const std::string& line) {
   for (int player = 0; player < 2; ++player) {
     const std::string name = std::format("#Rack{}", player + 1);
     if (line.starts_with(name) && (line.size() == name.size() || line[name.size()] == ' ')) {
       return player;
     }
   }
-  return std::nullopt;
+  return -1;
 }
 
 // The known tiles of `slots`.
@@ -186,9 +186,8 @@ class GcgReader {
   // pragma gives a player's current rack, applied to the final position (the
   // "resume" rack). After an event, it gives their rack just after that event.
   bool TryParseRackPragma(const std::string& line) {
-    const std::optional<int> pragma_player = rack_pragma_player(line);
-    if (!pragma_player.has_value()) return false;
-    const int player = *pragma_player;
+    const int player = rack_pragma_player(line);
+    if (player < 0) return false;
 
     const std::size_t space = line.find(' ');
     const std::string token = space == std::string::npos ? "" : line.substr(space + 1);
