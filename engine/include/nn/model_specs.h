@@ -5,6 +5,7 @@
 #include "training/move_set_encoder.h"
 #include "training/training_targets.h"
 
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -296,6 +297,10 @@ struct TensorList {
   // Meaningful only when every member has a fixed width; a model-decided
   // width contributes 0. Used to size aux-output rows.
   static constexpr int total_row_elems = (0 + ... + Ts::kRowElems);
+
+  // Each member's kRowElems, in list order: per-head row widths for code that
+  // walks a list's buffers at runtime.
+  static constexpr std::array<int, size> row_elems = {Ts::kRowElems...};
 };
 
 // ---------- version requirements ----------------------------------------
