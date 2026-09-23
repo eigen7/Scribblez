@@ -1,21 +1,23 @@
-// Evidence-trajectory candidate selection (docs/roadmap.md item 4): the pure,
-// NN-free core of a trajectory -- which of a decision point's legal moves get
-// simmed, in what order, and each one's evidence role. The greedy anchor first,
-// then a randomized-length sequence of on-policy proposals drawn from a
-// temperature softmax over the move set evaluation model's win equities (over
-// EVERY unsimmed candidate -- deployment's full support), then a uniform draw of
-// off-policy candidates (the labels-only exploration floor).
+// Evidence-trajectory candidate selection (docs/roadmap.md item 4): which of a
+// decision point's legal moves get simmed, in what order, and in what evidence
+// role. In sim order:
 //
-// The anchor and the on-policy proposals are evidence (SimObsRole::kAnchor /
-// kOnPolicy); the off-policy draws are labels-only (kOffPolicy) -- simmed for
-// their proves-best gain but never placed in an evidence set, because deployed
-// evidence holds only the anchor and the proposer's picks. See
-// docs/plans/sim_residual_feedback.md, "Evidence-trajectory generation".
+//   1. the anchor, the highest-raw-score move (SimObsRole::kAnchor);
+//   2. a random number of on-policy proposals, each drawn from a temperature
+//      softmax over the student's win equities across every unsimmed
+//      candidate, the full support deployment chooses from (kOnPolicy);
+//   3. a few off-policy candidates drawn uniformly from the rest (kOffPolicy).
 //
-// This is selection only -- vectors in, indices and roles out -- so it links
-// without the TensorRT runtime the scoring front-end (evidence_trajectory.h)
-// carries, and is unit-tested directly. The anchor rule is also the sequential
-// evidence loop's (agent/evidence_loop.h, item 6): both sim the anchor first.
+// The anchor and on-policy picks are evidence. The off-policy draws are
+// labels-only: they are simmed for their proves-best gain but never placed in
+// an evidence set, because deployed evidence holds only the anchor and the
+// proposer's picks. docs/plans/sim_residual_feedback.md, "Evidence-trajectory
+// generation", has the rationale.
+//
+// Selection is NN-free (vectors in, indices and roles out) so it links without
+// TensorRT and is unit-tested directly; evidence_trajectory.h does the scoring.
+// The anchor rule is shared with the sequential evidence loop
+// (agent/evidence_loop.h).
 #pragma once
 
 #include "data/sim_obs_role.h"
@@ -29,27 +31,24 @@ namespace scribblez::evidence {
 
 struct TrajectoryOptions {
   int rollouts = 200;
-  // Value truncation; see SimRunner::Params::horizon_plies for the full
-  // semantics. The leaf service handed to TrajectoryRunner scores the horizon.
+  // Value truncation, as SimRunner::Params::horizon_plies. The leaf service
+  // handed to TrajectoryRunner scores the truncated rollouts.
   int horizon = 0;
   int on_policy_min = 2;
   int on_policy_max = 8;
   double temperature = 0.05;  // win-equity units
-  // The off-policy floor (docs/roadmap.md item 4): this many candidates drawn
-  // uniformly over the untaken legal moves, all held out of every evidence set.
+  // The off-policy floor: candidates drawn uniformly over the untaken legal
+  // moves, all held out of every evidence set.
   int off_policy_count = 3;
 };
 
-// The anchor: the highest-raw-score candidate, taken off the move list by a
-// rule no model can be wrong about. `ranked` is descending static equity, so
-// ties resolve to the equity-preferred instance deterministically.
+// The anchor: the highest-raw-score candidate, chosen by a rule no model can get
+// wrong. `ranked` is in descending static-equity order, so a score tie resolves
+// deterministically to the equity-preferred move.
 size_t anchor_index(const std::vector<Move>& ranked);
 
-// The trajectory's candidate indices into `ranked`, in sim order: the anchor,
-// up to a sampled count of temperature-softmax proposals over the student's win
-// equities, then the uniform off-policy draws. Fills *roles in parallel with
-// the returned indices (kAnchor, kOnPolicy, kOffPolicy), so a reader recovers
-// evidence-eligibility from the role.
+// The trajectory's candidate indices into `ranked`, in sim order, with *roles
+// filled in parallel. `win_equity` is parallel to `ranked`.
 std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
                                       const std::vector<float>& win_equity,
                                       const TrajectoryOptions& opt, std::mt19937_64& rng,

@@ -6,14 +6,13 @@
 
 namespace scribblez {
 
-// A TrainingTask bundles an input encoding and a set of labels into one training
-// row. PositionEncoder replays a game to a sampled position, fills an
-// EncodeContext, and hands it to the task's encode_row. Parameterizing the
-// encoder on the task lets one replay/streaming pipeline serve several training
-// problems.
+// A training task turns an EncodeContext into one training row: an input
+// encoding followed by labels. PositionEncoder replays a game to a sampled
+// position and hands the context to Task::encode_row, so one replay pipeline
+// serves several training problems; docs/architecture.md describes the replay.
+// MaxMovePerLaneTask is the other task.
 
-// The win-probability task: the post-move board/leave/score input plus the WLD,
-// score-diff, and placement labels.
+// The position evaluation task: the input_encoder.h input, then AllTargets.
 struct PositionEvalTask {
   static int row_floats(const InputEncodingSpec& spec);
 

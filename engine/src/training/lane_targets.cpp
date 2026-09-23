@@ -12,8 +12,6 @@ namespace scribblez {
 
 namespace {
 
-// The lane-union kind for a played glyph: a designated blank collapses to the
-// single blank kind, every other tile maps to its letter index.
 int tile_kind(Glyph g) { return g.is_blank() ? kLaneBlankKind : g.letter().index(); }
 
 bool occupied(const Board& board, int r, int c) {
@@ -21,16 +19,14 @@ bool occupied(const Board& board, int r, int c) {
 }
 
 // Outcome of offering a play of `score` to a lane holding its current best.
-//   admit=false -> below the lane max; ignore the play.
-//   reset=true  -> a new strict max; the caller must drop the prior maximum's
-//                  data (union or move list) before recording this play.
+//   admit=false: below the lane max; ignore the play.
+//   reset=true:  a new strict max; drop the previous maximum's union or move
+//                list before recording this play.
 struct AdmitResult {
   bool admit;
   bool reset;
 };
 
-// Shared by the union and move-list accumulators, which differ only in what
-// data `reset` tells them to drop.
 AdmitResult admit_score(bool& has_move, int& max_score, int score) {
   if (has_move && score < max_score) return {false, false};
   const bool reset = !has_move || score > max_score;
@@ -41,8 +37,7 @@ AdmitResult admit_score(bool& has_move, int& max_score, int score) {
 
 }  // namespace
 
-// Decode a PLAY into its newly placed tiles. The stored glyphs are in
-// ascending lane-cell order, matching square_mask().
+// Move stores its glyphs in ascending lane-cell order, matching square_mask().
 int decode_placements(const Move& m, PlacedTile* out) {
   const bool horiz = m.horizontal();
   uint16_t mask = m.square_mask();
@@ -127,7 +122,6 @@ LaneBestMovesSet compute_lane_best_moves(const Board& board, const Rack& rack,
 
 namespace {
 
-// Write one lane's occupancy block, all zero where !has_move.
 void encode_lane_occupancy(const LaneBest& lane, float* out) {
   for (int cell = 0; cell < kLaneLen; ++cell) {
     const uint32_t bits = lane.has_move ? lane.placed[cell] : 0u;
@@ -143,8 +137,6 @@ void encode_lane_targets(const LaneTargets& t, float* out) {
   float* score = out + kLaneOccupancyFloats;
   float* mask = score + kLaneScoreFloats;
 
-  // Flat lane id `axis * 15 + lane`: axis 0 = horizontal lanes, axis 1 = vertical
-  // lanes.
   for (int lane = 0; lane < kLanesPerAxis; ++lane) {
     const LaneBest& h = t.rows[lane];
     const LaneBest& v = t.cols[lane];

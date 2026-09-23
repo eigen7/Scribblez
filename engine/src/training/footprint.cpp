@@ -6,12 +6,9 @@ namespace scribblez {
 
 namespace {
 
-// The per-cell slot for (orientation, k): slot 0 is the orientation-free k==1
-// footprint; slots 1..kFootprintMaxK-1 are horizontal k=2..RACK_SIZE; the next
-// block is the vertical k=2..RACK_SIZE.
 int slot_for(bool horizontal, int k) {
   if (k <= 1) return 0;
-  const int base = horizontal ? 1 : kFootprintMaxK;  // H: 1.., V: kFootprintMaxK..
+  const int base = horizontal ? 1 : kFootprintMaxK;
   return base + (k - 2);
 }
 
@@ -19,7 +16,7 @@ int slot_for(bool horizontal, int k) {
 
 void footprint_slot_decode(int slot, bool& horizontal, int& k) {
   if (slot == 0) {
-    horizontal = true;  // orientation-free; a lone tile has no distinct axis
+    horizontal = true;
     k = 1;
   } else if (slot < kFootprintMaxK) {
     horizontal = true;
@@ -50,7 +47,7 @@ int footprint_cells(int cls, const Board& board,
 
   int r = cell / kFootprintSide;
   int c = cell % kFootprintSide;
-  if (!board.at(r, c).is_empty()) return 0;  // anchor must be a placeable square
+  if (!board.at(r, c).is_empty()) return 0;
 
   int count = 0;
   while (r < kFootprintSide && c < kFootprintSide && count < k) {
@@ -61,7 +58,7 @@ int footprint_cells(int cls, const Board& board,
       ++r;
     }
   }
-  return count == k ? k : 0;  // 0 if the board edge cut the run short
+  return count == k ? k : 0;
 }
 
 }  // namespace scribblez

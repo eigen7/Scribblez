@@ -6,21 +6,17 @@
 
 namespace scribblez {
 
-// Stateless input encoder for the "highest-scoring move per lane" model: a lean
-// board + rack tensor. It deliberately OMITS two things the post-move encoder
-// carries:
+// Input encoder for the max-move-per-lane model: the shared BoardPlanes block
+// plus the rack as raw per-tile counts. It leaves out two things the position
+// evaluation encoder carries:
 //
-//   * cross-check planes -- they encode which letters are legal where, i.e. the
-//     very lexicon knowledge this model is meant to learn; feeding them in would
-//     defeat the experiment.
-//   * post-move-specific features (scores, unseen pool, move history) -- a
-//     single-move query does not depend on game context.
+//   * cross-check planes, which encode which letters are legal where: the very
+//     lexicon knowledge this model is meant to learn.
+//   * game-context features (scores, unseen pool, move history), which do not
+//     affect which play scores best.
 //
-// All-static, so it composes as a policy type alongside the target structs in
-// training_targets.h. The spatial half is the shared BoardPlanes block and
-// nothing else; the scalar half is the POV rack as raw per-tile counts -- raw
-// rather than unary because rack counts are tiny, and exact ("can I play two
-// R's").
+// Rack counts are small exact integers ("can I play two R's"), so they go in
+// raw rather than unary-coded.
 struct MaxMovePerLaneInputEncoder {
   static constexpr int kSpatialPlanes = BoardPlanes::kPlanes;          // 31
   static constexpr int kBoardCells = BOARD_SIZE * BOARD_SIZE;          // 225
@@ -30,8 +26,7 @@ struct MaxMovePerLaneInputEncoder {
   static constexpr int kScalarFloats = kRackCountFloats;               // 27
   static constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 7002
 
-  // Encode `board` plus the POV player's `rack` into the kInputFloats-long `out`
-  // (spatial planes, then rack scalars).
+  // Writes kInputFloats: the spatial planes, then the rack counts.
   static void encode(const Board& board, const Rack& rack, float* out);
 };
 

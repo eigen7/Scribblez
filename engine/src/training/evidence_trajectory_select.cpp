@@ -22,10 +22,8 @@ std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
   taken[chosen[0]] = 1;
   roles->assign(1, SimObsRole::kAnchor);
 
-  // Proposals draw from a temperature softmax over every unsimmed candidate
-  // (deployment's full support). The softmax is permutation-invariant, so the
-  // pool is assembled in `ranked`'s own (descending static-equity) order -- no
-  // separate sort by win equity, which would change nothing but the wasted work.
+  // The softmax is permutation-invariant, so the pool stays in `ranked`'s own
+  // order; sorting it by win equity would not change the distribution.
   std::uniform_int_distribution<int> length(opt.on_policy_min, opt.on_policy_max);
   const int proposals = length(rng);
   std::vector<double> pool_scores;
@@ -45,8 +43,6 @@ std::vector<size_t> select_trajectory(const std::vector<Move>& ranked,
     roles->push_back(SimObsRole::kOnPolicy);
   }
 
-  // The off-policy floor: a uniform draw over what the anchor and on-policy
-  // picks have not taken. Labels-only -- never in an evidence set.
   const std::vector<size_t> off_policy =
     move_set_eval::off_policy_draws(ranked, opt.off_policy_count, rng, &taken);
   for (size_t idx : off_policy) {

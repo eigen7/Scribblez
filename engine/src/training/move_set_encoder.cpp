@@ -15,9 +15,9 @@ void encode_move(const Move& m, int pre_move_score_diff, int32_t* letters, uint8
   std::fill_n(tile_mask, kMoveMaxPlaced, uint8_t(0));
 
   if (m.type() == MoveType::PLAY) {
-    // visit_placed_squares yields the newly placed squares in lane order, the
-    // same order Move stores its glyphs, so a single counter indexes both. A
-    // placed tile always carries a letter (natural or a designated blank).
+    // visit_placed_squares yields squares in lane order, the order Move stores
+    // its glyphs in, so one counter indexes both. A placed tile always has a
+    // letter, a blank's being its designation.
     int placed = 0;
     visit_placed_squares(m, [&](int r, int c) {
       const Glyph g = m.glyph(placed);
@@ -28,11 +28,8 @@ void encode_move(const Move& m, int pre_move_score_diff, int32_t* letters, uint8
       ++placed;
     });
   } else {
-    // An EXCHANGE has no placed squares (visit_placed_squares yields nothing);
-    // its glyphs are the surrendered tiles, encoded so same-size exchanges
-    // differ by WHICH tiles leave. An undesignated blank has no letter --
-    // letters stays 0 (the pad value; the blank flag alone represents it).
-    // A PASS has no glyphs and stays all-zero.
+    // An EXCHANGE's glyphs are its surrendered tiles; an undesignated blank
+    // among them keeps letter 0. A PASS has no glyphs.
     for (int i = 0; i < m.num_glyphs(); ++i) {
       const Glyph g = m.glyph(i);
       letters[i] = g.has_letter() ? g.letter().index() + 1 : 0;
@@ -41,8 +38,6 @@ void encode_move(const Move& m, int pre_move_score_diff, int32_t* letters, uint8
     }
   }
 
-  // Resultant post-move differential (mover POV): the mover's score advantage
-  // plus this move's score, on the board trunk's score-diff scale.
   const int resultant_diff = pre_move_score_diff + int(m.score());
   scalars[0] = float(resultant_diff) / kScoreDiffInputScale;
   scalars[1] = float(m.num_glyphs()) / float(kMoveMaxPlaced);

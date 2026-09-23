@@ -8,25 +8,27 @@
 
 namespace scribblez {
 
-// A move's placement FOOTPRINT as a categorical class, for the position-eval
-// placement heads (softmax cross-entropy over footprints, replacing per-cell
-// BCE). A footprint is (anchor, orientation, k): the anchor is the first newly
-// placed square, k the number of tiles placed (1..RACK_SIZE), and the covered
-// cells are "the first k empty cells from the anchor along the orientation" --
-// which for a legal play are exactly its newly placed squares, since a play
-// fills every empty cell in its span and only skips through-tiles.
+// A move's placement footprint as a categorical class, the label space of the
+// position evaluation model's placement heads (masked softmax cross-entropy
+// over footprints; docs/model_architectures.md).
 //
-// Class layout: each anchor cell owns kSlotsPerCell classes -- one
-// orientation-free slot for k==1 (a lone tile's footprint is a single cell,
-// identical either way), then k=2..RACK_SIZE for the horizontal orientation and
-// again for the vertical. The per-cell grid is followed by two catch-all
-// classes: kPassClass (no placement -- EXCHANGE, PASS, or an absent move) and
-// kExtraClass (the win heads' "not-win"; an unused dummy for the plays heads).
+// A footprint is (anchor, orientation, k): the anchor is the first newly placed
+// square, k the number of tiles placed (1..RACK_SIZE), and the covered cells are
+// the first k empty cells from the anchor along the orientation. For a legal
+// play those are exactly its newly placed squares, since a play fills every
+// empty cell in its span and skips only through-tiles.
 //
-// Frame: a class is expressed in the frame of the move / board it came from
-// (see Board::transpose). A diagonal transpose swaps rows<->cols AND
-// horizontal<->vertical, so the class of a transposed move is not a plain cell
-// transpose: its slot also moves between the H and V blocks.
+// Class layout: each anchor cell owns kSlotsPerCell classes. Slot 0 is k == 1,
+// orientation-free because a lone tile covers the same cell either way. Then
+// come k = 2..RACK_SIZE horizontal, then the same vertical. Two catch-all
+// classes follow the per-cell grid: kPassClass (no placement: EXCHANGE, PASS, or
+// no move) and kExtraClass (the win heads' "not-win" outcome; unused by the
+// plays heads).
+//
+// A class is expressed in the frame of the move or board it came from (see
+// Board::transpose). A diagonal transpose swaps rows with columns AND horizontal
+// with vertical, so transposing a class moves its slot between the H and V
+// blocks as well as moving its cell.
 
 inline constexpr int kFootprintSide = BOARD_SIZE;                            // 15
 inline constexpr int kFootprintMaxK = RACK_SIZE;                             // 7
@@ -37,21 +39,20 @@ inline constexpr int kPassClass = kAnchoredFootprints;                       // 
 inline constexpr int kExtraClass = kAnchoredFootprints + 1;                  // 2926
 inline constexpr int kFootprintClasses = kAnchoredFootprints + 2;            // 2927
 
-// The footprint class of a played move, in the move's frame. A non-PLAY move
-// (EXCHANGE / PASS) maps to kPassClass.
+// The footprint class of a move, in the move's frame. EXCHANGE and PASS map to
+// kPassClass.
 int footprint_class(const Move& m);
 
-// Decode a per-cell slot [0, kSlotsPerCell) into its orientation and tile count
-// k. Slot 0 is the orientation-free k==1 footprint (horizontal reported by
-// convention).
+// Decode a per-cell slot in [0, kSlotsPerCell) into its orientation and tile
+// count k. Slot 0 (k == 1) reports horizontal by convention.
 void footprint_slot_decode(int slot, bool& horizontal, int& k);
 
-// The covered board cells of a footprint class: the first k empty cells from the anchor along the
-// orientation on `board` (the state BEFORE the move). Writes the (row, col) pairs into `cells` and
-// returns their count. Returns 0 for kPassClass / kExtraClass, and for a structurally impossible
-// class on this board -- anchor not empty, or fewer than k empty cells before the board edge (such
-// classes never occur as targets and are masked out). This inverts footprint_class: the covered
-// cells of footprint_class(m) on m's pre-move board are exactly m's placed squares.
+// The inverse of footprint_class: the cells a class covers on `board`, the
+// pre-move state, written to `cells` as (row, col) pairs, returning their count.
+// On m's pre-move board, footprint_class(m) covers exactly m's placed squares.
+// Returns 0 for kPassClass and kExtraClass, and for a class impossible on this
+// board (occupied anchor, or fewer than k empty cells before the edge); such
+// classes never occur as targets and are masked out.
 int footprint_cells(int cls, const Board& board,
                     std::array<std::pair<int, int>, kFootprintMaxK>& cells);
 

@@ -23,21 +23,19 @@ namespace {
 
 namespace json = boost::json;
 
-// Replay every recorded move into a fresh encoder, then encode the input from
-// `start_player`'s POV holding `leave`, with `opp_leave` as the opponent's
-// known tiles where the arm takes them. apply_move needs only the moves (not
-// racks), so this reproduces the board / scores / last-two-moves state the
-// training replay builds; only the rack, opponent-leave, and unseen-pool
-// features depend on the leaves.
+// Encode from `start_player`'s POV holding `leave`, with `opp_leave` as the
+// opponent's known tiles when the arm takes them. apply_move needs only the
+// moves, not the racks, so the replay reproduces the board, scores and
+// last-two-moves state the training replay builds; only the rack,
+// opponent-leave and unseen-pool features depend on the leaves.
 void replay_and_encode(const ParsedGcgPostMove& pos, const Rack& leave, const Rack& opp_leave,
                        const InputEncodingSpec& spec, float* out) {
   GameStateEncoder enc{spec};
   for (const ParsedGcgTurn& t : pos.game.turns) enc.apply_move(t.record.move);
   RELEASE_ASSERT(enc.active_player() == 1 - pos.start_player);
   if (spec.opp_leave_input) {
-    // Open-leaves arm: an empty opponent leave (the penultimate-bingo
-    // datasets, whose to-act player kept nothing) is legitimate and encodes
-    // as zeros.
+    // An empty opponent leave is legitimate here (in the penultimate-bingo
+    // datasets the player to act kept nothing) and encodes as zeros.
     enc.encode_input(pos.start_player, leave, opp_leave, out);
   } else {
     enc.encode_input(pos.start_player, leave, out);
@@ -70,9 +68,9 @@ bool parse_leave(const std::string& s, Rack* out, std::string* error) {
 std::string tile_name(Tile t) { return t.is_blank() ? "?" : std::string(1, t.to_char()); }
 
 // Parse `leave_str` as `who`'s alternate leave: it must hold as many tiles as
-// `original` and every tile must be drawable from `available` (which it is
-// removed from, so a second leave validated against the same pool cannot
-// double-spend a tile).
+// `original`, and every tile must be drawable from `available`. The tiles are
+// removed from `available`, so a second leave checked against the same pool
+// cannot reuse them.
 bool parse_alternate_leave(const std::string& leave_str, const Rack& original, const char* who,
                            TileCounts* available, Rack* out, std::string* error) {
   if (!parse_leave(leave_str, out, error)) return false;
@@ -137,11 +135,10 @@ bool collapse_position_eval_analysis_placement(const std::string& gcg_text,
                                                float* out, std::string* error) {
   ParsedGcgPostMove pos;
   if (!read_gcg_post_move(gcg_text, &pos, error)) return false;
-  // The opponent (who moves next on pos.board) draws from or holds the unseen
-  // pool: 100 tiles less the board and the mover's rack (pos.leave). Feeding it
-  // as the availability counts is what makes the collapse's opp marginal match
-  // the availability-masked belief the model was trained on -- e.g. a Y-hook with
-  // no Y unseen collapses to a hard zero here.
+  // The opponent, who moves next, holds or draws from the unseen pool: all
+  // tiles less the board and the mover's leave. Masking with it matches the
+  // availability-masked belief the model was trained on; a Y hook with no Y
+  // unseen gets exactly zero.
   uint8_t available_counts[27];
   compute_unseen_pool(available_counts, pos.board, pos.leave);
   collapse_footprint_planes(pos.board, *spec.dict, available_counts, raw, out);

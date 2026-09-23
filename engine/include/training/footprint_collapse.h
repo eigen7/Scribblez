@@ -8,56 +8,45 @@
 
 namespace scribblez {
 
-// The four placement heads, in PositionEvaluationSpec::AuxOutputs / .mset plane
-// order: opp_next, self_next, opp_win, self_win.
+// Turns the placement heads' raw footprint logits into distributions a consumer
+// can read: masked per class, or collapsed onto board cells. The model emits raw
+// logits, so every consumer masks and softmaxes itself; these are the engine's
+// shared implementations.
+//
+// All three functions share one masking regime. Each head gets its side's
+// legality mask (training/footprint_mask.h): the opp heads from the ply on
+// `board`, the self heads from the ply after it. `available_counts` is the
+// opponent's 27-count tile pool (the unseen tiles). It gates the opp heads
+// directly, so a footprint whose hooks no available tile can fill is masked and
+// its mass renormalizes onto the rest. It gates the self heads only through the
+// opponent's ply, whose reach seeds theirs. nullptr disables availability,
+// leaving board legality only. `raw`, where taken, is kPlacementHeads x
+// kFootprintClasses undecoded logits from an encode of this same board, so the
+// outputs share its frame. `board` gets its move-generation caches built from
+// `dict` on demand.
+
+// The four placement heads, in PositionEvaluationSpec::AuxOutputs and .mset
+// plane order: opp_next, self_next, opp_win, self_win.
 inline constexpr int kPlacementHeads = 4;
 
-// Collapse the four placement heads' raw footprint logits at one post-move state
-// into the four per-cell occupancy marginals the .mset teacher target stores --
-// the bridge that lets the categorical footprint heads keep feeding the
-// per-cell (15,15) student/distillation stack unchanged.
-//
-// `raw` is kPlacementHeads x kFootprintClasses (each head's raw logits, the
-// service's undecoded aux output); `out` is kPlacementHeads x
-// (kFootprintSide*kFootprintSide). Per head: drive illegal footprints to zero
-// with the legality mask (opp heads exact-ish from `board`, self heads
-// opp-move-invariant; see training/footprint_mask.h), softmax over the legal
-// classes, then scatter each footprint's probability onto the board cells it
-// covers (footprint_cells). So out[h][cell] is Pr[the next move covers cell] for
-// a plays head and Pr[covers cell AND that seat wins] for a win head -- the same
-// per-cell marginal the old Bernoulli heads emitted, now derived from the
-// footprint distribution. A self footprint is decoded on `board` too, i.e. as
-// if the opponent passed.
-//
-// `available_counts` is the opponent's 27-count tile availability (the unseen
-// pool; see footprint_mask.h). It gates the two OPP heads directly -- a
-// footprint whose hooks no available tile can satisfy is masked out and its
-// mass renormalizes onto viable footprints -- and the two SELF heads through
-// the opponent's stage, whose reach seeds theirs. `available_counts == nullptr`
-// disables availability (board legality only) -- now exercised only by tests;
-// the sole production caller (the dashboard occupancy viz) passes real counts,
-// and the .mset generator no longer collapses at all (it stores the masked
-// footprint distribution directly).
-//
-// `board` gets its movegen caches bound from `dict` on demand. `raw` must come
-// from an encode of this same board, so the output planes share its frame.
+// Collapses each head onto the board: out[h][cell] is the probability that the
+// next move covers `cell` (plays heads), or covers it AND that seat goes on to
+// win (win heads). This drives the dashboard's occupancy overlay. Self
+// footprints are decoded on `board` too, i.e. as if the opponent passed.
+// `out` is kPlacementHeads x kFootprintCells.
 void collapse_footprint_planes(const Board& board, const Dictionary& dict,
                                const uint8_t* available_counts, const float* raw, float* out);
 
-// The four heads' MASKED footprint distributions -- the same mask + masked-softmax
-// collapse_footprint_planes applies (identical `available_counts` semantics), but written per class
-// instead of scattered onto cells. `raw` is kPlacementHeads x kFootprintClasses; `out` is
-// kPlacementHeads x kFootprintClasses, each head a distribution over the 2927 classes with illegal
-// footprints at zero. This is the exact target the student distills against,
-// exposed so its per-footprint sparsity/fidelity can be measured (the per-cell
-// collapse hides the footprint distribution).
+// Each head's masked footprint distribution, per class rather than collapsed
+// onto cells: illegal footprints at zero. With null `available_counts` this is
+// the .mset distillation target the student trains against. `out` is
+// kPlacementHeads x kFootprintClasses.
 void masked_placement_distributions(const Board& board, const Dictionary& dict,
                                     const uint8_t* available_counts, const float* raw, float* out);
 
-// Computes each head's per-cell legality -- the same mask
-// collapse_footprint_planes applies, exposed per cell instead of folded into a
-// probability -- and writes it to `out` (kPlacementHeads x
-// (kFootprintSide*kFootprintSide), 1.0f/0.0f).
+// Each head's legality per cell: out[h][cell] is 1.0 iff some footprint the
+// head's mask keeps covers `cell`, else 0.0. `out` is kPlacementHeads x
+// kFootprintCells.
 void collapse_footprint_legal_cells(const Board& board, const Dictionary& dict,
                                     const uint8_t* available_counts, float* out);
 

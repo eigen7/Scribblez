@@ -9,39 +9,46 @@
 
 namespace scribblez {
 
-// Per-class legality over the footprint classes, in the board's frame:
-// mask[cls] == true iff the masked softmax should keep that class. Illegal
-// classes are driven to -inf before the softmax, so their probability (and
-// gradient) is zero.
+// Legality masks over the footprint classes (training/footprint.h), in the
+// board's frame: mask[cls] is true iff the masked softmax keeps that class.
+// Illegal classes are driven to -inf before the softmax, so they get zero
+// probability and zero gradient.
 //
 // Every mask is built from one primitive, footprint_ply(): one ply of play from
-// a seed set of squares, kept as the footprints that abut the seed. The seed is
-// what a ply starts from -- the occupied squares S for a move on this board, or
-// the squares a prior ply reached for a move on the board that ply will have
-// extended. So:
+// a seed set of squares, keeping the footprints that abut the seed. For a move
+// on the current board the seed is its occupied squares S; for a move one ply
+// later it is the set of squares the earlier ply could reach:
 //
-//   opp_this_turn  = footprint_ply(S, cross-checks on, the opponent's pool)
-//   self_this_turn = footprint_ply(S, cross-checks on, the mover's pool)   [input plane]
-//   self_next_turn = footprint_ply(opp_this_turn.reach, cross-checks off)
+//   opp_this_turn  = footprint_ply(S, cross-checks on, opponent's pool)    opp mask, kOppReach
+//   self_this_turn = footprint_ply(S, cross-checks on, mover's pool)       kSelfReach
+//   self_next_turn = footprint_ply(opp_this_turn.reach, cross-checks off)  self mask
 //
-// The first ply happens on the known board, so its cross-checks and tile
-// availability apply. The second happens after an unknown opponent move, which
-// can rewrite every cross-check and draws from a separate rack, so it is
-// cross-check-free: it must never mask a footprint some opponent move makes
-// legal. No move-gen, no main-word dictionary lookup, no joint multi-cell tile
-// contention -- each ply is a sound over-approximation of its move.
+// kOppReach and kSelfReach are the input planes footprint_reachable_cells builds.
+//
+// The first ply happens on the known board, so cross-checks and tile
+// availability apply. The second follows an unknown opponent move, which can
+// rewrite any cross-check and draws from a different rack, so it ignores
+// cross-checks: it must never mask a footprint that some opponent move makes
+// legal. Each ply is a sound over-approximation of the real move set: no move
+// generation, no main-word lookup, no joint tile contention across cells.
 
 using FootprintMask = std::array<bool, kFootprintClasses>;
 
-// The sound tile budget every caller passes these masks: a mover holds at most
-// RACK_SIZE tiles, so a full rack is the loosest cap and never masks a real move
-// (a smaller, endgame-aware budget would only tighten -- see the TODO in
-// training_targets.cpp). Shared so the per-row training masks and the .mset /
-// dashboard collapse cannot drift.
+// The tile budget (max k) every caller passes these masks. A player holds at
+// most RACK_SIZE tiles, so a full rack never masks a real move. Shared so the
+// training-row masks and footprint_collapse.h cannot drift apart.
+//
+// TODO(sharpen masks): near the endgame fewer tiles remain, and a tighter cap
+// would make the masks more precise. Care is needed for soundness. Two plies
+// out the mover has redrawn, so today's rack size is not a sound bound for the
+// self mask. The bag count is also not in the observer's information set: only
+// the unseen total (bag plus opponent rack, i.e. 100 - board - own rack) is
+// knowable. An unsound cap that masks a real target falls back on the loss's
+// keep-target guard.
 inline constexpr int kMaskTileBudget = RACK_SIZE;
 
-// A set of board squares, one bit per cell. A ply's seed and the squares it
-// reaches are both SquareSets, so plies chain.
+// A set of board squares. A ply's seed and its reach are both SquareSets, so
+// plies chain.
 struct SquareSet {
   std::bitset<kFootprintCells> bits;
 
@@ -50,7 +57,7 @@ struct SquareSet {
   bool empty() const { return bits.none(); }
 };
 
-// S: the occupied squares.
+// S, the seed for a ply on this board.
 SquareSet occupied_squares(const Board& board);
 
 struct FootprintPly {
@@ -59,38 +66,35 @@ struct FootprintPly {
 };
 
 // One ply from `seed`: the footprints of k <= budget tiles on empty squares
-// that abut a seed square. With no seed at all (the opener's empty board)
-// there is nothing to abut, so every fitting footprint is kept.
-//   - use_cross_checks: gate each covered square on its cross-check -- some
-//     letter must be legal there and, given available_counts, in stock. Off
-//     for a ply on a board an unknown move will first rewrite.
-//   - available_counts: the mover's pool as a 27-count array (A..Z then blank),
-//     a blank being a wildcard; nullptr treats every tile as in stock. Ignored
-//     when cross-checks are off. Sound -- never masks a tile the mover could
-//     draw and play.
-//   - win_head: keep kExtraClass (the win heads' not-win slot); false for a
-//     plays head. kPassClass is always legal.
-// `board` needs movegen caches only when cross-checks are on.
+// that abut a seed square. An empty seed (the opening move) has nothing to
+// abut, so every footprint that fits on the board is kept.
+//   - use_cross_checks: each covered square must admit some letter that is
+//     legal there and, given available_counts, in stock. Off for a ply on a
+//     board an unknown move will rewrite first.
+//   - available_counts: the player's pool as 27 counts (A..Z, then blank; a
+//     blank is a wildcard). nullptr treats every tile as in stock. Ignored when
+//     cross-checks are off.
+//   - win_head: keep kExtraClass (the win heads' not-win outcome); false for a
+//     plays head. kPassClass is always kept.
+// `board` needs move-generation caches only when cross-checks are on.
 FootprintPly footprint_ply(const Board& board, const SquareSet& seed, int budget,
                            bool use_cross_checks, const uint8_t* available_counts, bool win_head);
 
-// Legality for an OPPONENT placement head (opp_next / opp_win): the opponent
-// moves next on `board`. footprint_ply(S, cross-checks on, available_counts).
+// The mask for an opponent placement head (opp_next / opp_win), whose player
+// moves next on `board`: opp_this_turn above.
 void opp_footprint_mask(const Board& board, const uint8_t* available_counts, int tile_budget,
                         bool win_head, FootprintMask& mask);
 
-// Legality for a SELF placement head (self_next / self_win): the mover plays
-// after the opponent. The opponent's this-turn ply (opp_budget,
-// opp_available_counts -- the pool it draws from) seeds the mover's
-// cross-check-free one (self_budget).
+// The mask for a self placement head (self_next / self_win), whose player moves
+// after the opponent: self_next_turn above. `opp_available_counts` is the pool
+// the opponent's ply draws from.
 void self_footprint_mask(const Board& board, int self_budget, int opp_budget,
                          const uint8_t* opp_available_counts, bool win_head, FootprintMask& mask);
 
-// Per-cell reachability plane: out[r*kFootprintSide + c] == 1 iff some legal
-// this-turn footprint under `available_counts` covers that cell, else 0
-// (occupied squares are never covered). The input-feature view of
-// footprint_ply(S, cross-checks on, available_counts); `board` must have
-// movegen caches built. Writes exactly kFootprintCells floats.
+// An input plane: out[r*kFootprintSide + c] is 1 iff some footprint of the
+// this-turn ply under `available_counts` covers that cell, else 0 (occupied
+// cells are never covered). `board` must have move-generation caches built.
+// Writes kFootprintCells floats.
 void footprint_reachable_cells(const Board& board, const uint8_t* available_counts, int tile_budget,
                                float* out);
 
