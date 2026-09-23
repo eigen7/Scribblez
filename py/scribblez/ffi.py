@@ -171,17 +171,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # err_cap
     ]
 
-    lib.scribblez_encode_score_diff_sweep.restype = ctypes.c_int
-    lib.scribblez_encode_score_diff_sweep.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,
-        ctypes.c_int64,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.POINTER(ctypes.c_float),
-    ]
-
     lib.scribblez_decode_rows.restype = ctypes.c_int
     lib.scribblez_decode_rows.argtypes = [
         ctypes.c_void_p,  # session
@@ -491,39 +480,6 @@ def get_max_move_per_lane_target_shapes() -> list[ShapeInfo]:
 
 def max_move_per_lane_row_size_floats() -> int:
     return _lib().scribblez_max_move_per_lane_row_size_floats()
-
-
-def encode_score_diff_sweep(
-    path: str | Path,
-    game_idx: int,
-    diff_lo: int,
-    diff_hi: int,
-    post_move: bool = True,
-) -> np.ndarray:
-    """Re-encode a .slog game's sampled position once per score differential
-    in [diff_lo, diff_hi], varying nothing else.
-
-    Returns (R, input_floats()) float32 with R = diff_hi - diff_lo + 1, or
-    (num_games * R, input_floats()), game-major, when game_idx < 0.
-    """
-    r = diff_hi - diff_lo + 1
-    if r <= 0:
-        raise ValueError(f"empty score-diff range [{diff_lo}, {diff_hi}]")
-    num_games = read_file_header(path)[0] if game_idx < 0 else 1
-    width = input_floats()
-    out = np.empty((num_games * r, width), dtype=np.float32)
-    rc = _lib().scribblez_encode_score_diff_sweep(
-        _session(),
-        str(path).encode("utf-8"),
-        int(game_idx),
-        int(post_move),
-        int(diff_lo),
-        int(diff_hi),
-        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-    )
-    if rc != 0:
-        raise OSError(f"encode_score_diff_sweep failed (rc={rc}) for {path} game {game_idx}")
-    return out
 
 
 def decode_rows(

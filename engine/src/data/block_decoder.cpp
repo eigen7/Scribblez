@@ -108,13 +108,6 @@ const Board& BlockDecoder::replay_board(const char* buf, uint32_t game_idx, uint
   return pos_.enc().board();
 }
 
-void BlockDecoder::encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move,
-                                           int diff_lo, int diff_hi, float* out) {
-  uint32_t sampled = 0;
-  const GameLog g = game_view(buf, game_idx, &sampled);
-  pos_.encode_score_diff_sweep(g, int(sampled), post_move, diff_lo, diff_hi, out);
-}
-
 std::string BlockDecoder::dump_position(const char* buf, uint32_t game_idx, bool post_move) {
   uint32_t sampled = 0;
   const GameLog g = game_view(buf, game_idx, &sampled);

@@ -265,20 +265,6 @@ void GameStateEncoder::encode_input(int player, const Rack& my_rack, const Rack&
              scores_[player] - scores_[opp], &opp_leave, out);
 }
 
-void GameStateEncoder::encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
-                                                    float* out) const {
-  RELEASE_ASSERT(player == 0 || player == 1);
-  const int opp = 1 - player;
-  encode_pov(spec_, board_, my_rack, last_move_by_[player], last_move_by_[opp], score_diff,
-             /*opp_leave=*/nullptr, out);
-}
-
-void GameStateEncoder::overwrite_score_diff(int score_diff, float* input_row) const {
-  float* block =
-    input_row + spatial_floats() + scalar_block_offset(spec_, ScalarBlockId::kScoreDiff);
-  encode_score_diff_scalar(score_diff, block);
-}
-
 void encode_post_move_row(const GameStateEncoder& pre, int mover, const Rack& my_rack,
                           const Move& mv, const Rack& opp_leave, float* out) {
   Rack leave = my_rack;

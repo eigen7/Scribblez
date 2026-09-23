@@ -70,19 +70,6 @@ const ScribblezShape* scribblez_input_shapes(ScribblezSession* s);
 int scribblez_input_floats(ScribblezSession* s);
 int scribblez_row_size_floats(ScribblezSession* s);
 
-// Encode a game's sampled position once per integer score differential in
-// [diff_lo, diff_hi], varying only the mover's score advantage. Board, racks,
-// and move history stay fixed. With R = diff_hi - diff_lo + 1:
-//
-// `game_idx`   : one game, giving R input tensors; or < 0 for every game in
-//                the file, giving num_games * R, game g at rows [g*R, (g+1)*R).
-// `post_move`  : the post-move snapshot (1) or the pre-move one (0).
-// `out_inputs` : contiguous, each tensor scribblez_input_floats(s) long.
-//
-// Returns 0 on success, -1 on an I/O error, bad header, or out-of-range index.
-int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int64_t game_idx,
-                                      int post_move, int diff_lo, int diff_hi, float* out_inputs);
-
 // Sim the final decision of a GCG: replay to the state before its last
 // recorded move, take the mover's top-K moves by static equity, and run
 // SimRunner over them. With open_leaves != 0, every rollout starts the opponent

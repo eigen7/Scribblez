@@ -43,12 +43,6 @@ class PositionEncoder {
   void encode_row(const GameLog& g, int sampled_turn, bool post_move, bool transpose,
                   float* out_row);
 
-  // Replays, then encodes the input once per score difference in
-  // [diff_lo, diff_hi], writing that many input rows (no labels, untransposed)
-  // contiguously to `out`. Hidden-leaves specs only.
-  void encode_score_diff_sweep(const GameLog& g, int sampled_turn, bool post_move, int diff_lo,
-                               int diff_hi, float* out);
-
   // Valid after replay_to_sampled / encode_row.
   const GameStateEncoder& enc() const { return enc_; }
   const Rack& rack(int p) const { return racks_[p]; }

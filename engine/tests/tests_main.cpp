@@ -962,40 +962,6 @@ TEST(PositionEncoder, CrossCheckPlanesLexical) {
   }
 }
 
-TEST(Encoder, ForcedScoreDiffIsolation) {
-  using namespace scribblez::binlog;
-
-  Move p0_play =
-    make_play_full(7, 7, /*horizontal=*/true, 0b1, 17, {Glyph::of(Tile::from_char('A'))});
-  Move p1_play =
-    make_play_full(7, 8, /*horizontal=*/true, 0b1, 9, {Glyph::of(Tile::from_char('T'))});
-
-  Dictionary d = medium_dict();
-  GameStateEncoder enc{InputEncodingSpec{&d}};
-  enc.apply_move(p0_play);
-  enc.apply_move(p1_play);
-
-  Rack active_rack;
-  active_rack.add(Tile::from_char('E'));
-  active_rack.add(Tile::from_char('R'));
-
-  std::vector<float> normal(kInputFloats, 0.0f);
-  std::vector<float> forced(kInputFloats, 0.0f);
-  enc.encode_input(enc.active_player(), active_rack, normal.data());
-  enc.encode_input_with_score_diff(enc.active_player(), active_rack,
-                                   /*score_diff=*/123, forced.data());
-
-  const int score_lo = kSpatialFloats + kScoreDiffOffset;
-  const int score_hi = score_lo + kScoreDiffInputFloats;
-
-  for (int i = 0; i < kInputFloats; ++i) {
-    if (i >= score_lo && i < score_hi) continue;
-    ASSERT_EQ(normal[i], forced[i]);
-  }
-
-  ASSERT_EQ(forced[score_lo], 123.0f / kScoreDiffInputScale);
-}
-
 TEST(Encoder, NonplayLastMoveMetadata) {
   using namespace scribblez::binlog;
 

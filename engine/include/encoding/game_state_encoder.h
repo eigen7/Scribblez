@@ -81,16 +81,6 @@ class GameStateEncoder {
   // moved, or kept nothing).
   void encode_input(int player, const Rack& my_rack, const Rack& opp_leave, float* out) const;
 
-  // As encode_input(), but with the score difference forced to `score_diff`,
-  // for probes that sweep a fixed position's score advantage. Hidden-leaves
-  // specs only.
-  void encode_input_with_score_diff(int player, const Rack& my_rack, int score_diff,
-                                    float* out) const;
-
-  // Rewrites the score difference of an encoded row in place. Much cheaper
-  // than a full encode, which runs move generation.
-  void overwrite_score_diff(int score_diff, float* input_row) const;
-
  private:
   InputEncodingSpec spec_;
   Board board_{};

@@ -48,13 +48,6 @@ class BlockDecoder {
   // until this decoder is next used.
   const Board& replay_board(const char* buf, uint32_t game_idx, uint32_t turn_idx);
 
-  // Encodes the game's sampled position once per score differential in
-  // [diff_lo, diff_hi], writing that many input tensors (inputs only,
-  // untransposed) contiguously to `out`. For probing the model's sensitivity
-  // to the score.
-  void encode_score_diff_sweep(const char* buf, uint32_t game_idx, bool post_move, int diff_lo,
-                               int diff_hi, float* out);
-
   // The game's sampled position as human-readable text.
   std::string dump_position(const char* buf, uint32_t game_idx, bool post_move);
 

@@ -57,8 +57,6 @@ struct ScribblezSession {
   int input_floats() const { return scribblez::input_floats(spec); }
   int row_size_floats() const { return input_floats() + scribblez::kLabelFloats; }
 
-  int encode_score_diff_sweep(const char* path, int64_t game_idx, bool post_move, int diff_lo,
-                              int diff_hi, float* out_inputs) const;
   int decode_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx, int64_t n,
                   bool post_move, float* out) const;
   int move_set_cross_check_deltas(const char* path, const int64_t* game_idx,
@@ -216,10 +214,9 @@ int scribblez_max_move_per_lane_input_floats(void) {
 
 namespace {
 
-// Read a .slog file into `buf`, validate its header, and report its game count,
-// bounds-checking `game_idx` when it is >= 0. Returns 0 on success, -1 on any
-// failure.
-int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf, uint32_t* num_games) {
+// Read a .slog file into `buf`, validate its header, and bounds-check
+// `game_idx`. Returns 0 on success, -1 on any failure.
+int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf) {
   if (!path) return -1;
   std::ifstream f(path, std::ios::binary);
   if (!f) return -1;
@@ -228,40 +225,8 @@ int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf, uint32
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   if (hdr->magic != kMagic || hdr->version != kVersion) return -1;
   if (game_idx >= int64_t(hdr->num_games)) return -1;
-  if (num_games) *num_games = hdr->num_games;
   return 0;
 }
-
-}  // namespace
-
-int ScribblezSession::encode_score_diff_sweep(const char* path, int64_t game_idx, bool post_move,
-                                              int diff_lo, int diff_hi, float* out_inputs) const {
-  if (!out_inputs || diff_hi < diff_lo) return -1;
-  uint32_t num_games = 0;
-  std::vector<char> buf;
-  if (load_slog(path, game_idx, buf, &num_games) != 0) return -1;
-
-  const int64_t sweep = int64_t(diff_hi - diff_lo + 1) * input_floats();
-  scribblez::binlog::BlockDecoder decoder(spec);
-  if (game_idx >= 0) {
-    decoder.encode_score_diff_sweep(buf.data(), uint32_t(game_idx), post_move, diff_lo, diff_hi,
-                                    out_inputs);
-  } else {
-    // Every game in the file, game g at row g * R.
-    for (uint32_t g = 0; g < num_games; ++g) {
-      decoder.encode_score_diff_sweep(buf.data(), g, post_move, diff_lo, diff_hi,
-                                      out_inputs + int64_t(g) * sweep);
-    }
-  }
-  return 0;
-}
-
-int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int64_t game_idx,
-                                      int post_move, int diff_lo, int diff_hi, float* out_inputs) {
-  return s->encode_score_diff_sweep(path, game_idx, post_move != 0, diff_lo, diff_hi, out_inputs);
-}
-
-namespace {
 
 // Copy `s` into the caller's buffer, NUL-terminated and truncated to out_cap,
 // and return its full length so the caller can detect truncation and retry.
@@ -346,7 +311,7 @@ int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
                                   float* out) const {
   if (!game_idx || !turn_idx || !out || n < 0) return -1;
   std::vector<char> buf;
-  if (load_slog(path, /*game_idx=*/0, buf, nullptr) != 0) return -1;
+  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
   const int64_t row_floats = scribblez::input_floats(spec) + scribblez::kLabelFloats;
   for (int64_t j = 0; j < n; ++j) {
@@ -387,7 +352,7 @@ int ScribblezSession::move_set_cross_check_deltas(
   namespace mset = scribblez::move_set;
   if (!game_idx || !turn_idx || !move_counts || n_positions < 0) return -1;
   std::vector<char> buf;
-  if (load_slog(path, /*game_idx=*/0, buf, nullptr) != 0) return -1;
+  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
   // Copied out for alignment, as in scribblez_move_set_encode_moves.
   const char* bytes = static_cast<const char*>(moves);
@@ -447,7 +412,7 @@ void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_inde
 int ScribblezSession::dump_position(const char* path, int64_t game_idx, bool post_move, char* out,
                                     int out_cap) const {
   std::vector<char> buf;
-  if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
+  if (load_slog(path, game_idx, buf) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
   return emit_string(decoder.dump_position(buf.data(), uint32_t(game_idx), post_move), out,
                      out_cap);
@@ -461,7 +426,7 @@ int scribblez_dump_position(ScribblezSession* s, const char* path, int64_t game_
 int ScribblezSession::dump_position_json(const char* path, int64_t game_idx, bool post_move,
                                          char* out, int out_cap) const {
   std::vector<char> buf;
-  if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
+  if (load_slog(path, game_idx, buf) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
   return emit_string(decoder.dump_position_json(buf.data(), uint32_t(game_idx), post_move), out,
                      out_cap);
