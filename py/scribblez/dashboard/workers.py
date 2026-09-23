@@ -873,16 +873,15 @@ class WorkerManager:
     ):
         role_spec = spec.role(role)
         assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
-        if machine is not None and role_spec.gpu and machine.gpu_count is not None:
+        if machine is not None and role_spec.gpu and machine.gpu_count == 0:
             # Refused here rather than by `docker run --gpus all` on the
-            # remote, after a bundle deploy: a machine of known shape says
-            # what it can host. An unknown count (a manual machine) is not
-            # checked, as a bare host never was.
-            taking = [w.worker_id for w in task.slots_on(machine.name) if spec.role(w.role).gpu]
-            assert len(taking) < machine.gpu_count, (
-                f"machine '{machine.name}' has {machine.gpu_count} GPU(s), "
-                f"{'already taken by ' + ', '.join(taking) if taking else 'none for'} role '{role}'"
-            )
+            # remote, after a bundle deploy. Only a machine known to have no
+            # GPU is refused: every GPU container runs under `--gpus all`, so
+            # GPU slots share a machine's GPUs the way local workers share the
+            # controller's (a move-set-eval generator and trainer on one L4),
+            # and a count of them would pin nothing. An unknown count (a
+            # manual machine) is not checked, as a bare host never was.
+            raise AssertionError(f"machine '{machine.name}' has no GPU for role '{role}'")
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"

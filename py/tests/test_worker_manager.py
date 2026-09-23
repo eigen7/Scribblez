@@ -290,19 +290,19 @@ class _GpuRoles:
         return self._roles[name]
 
 
-def test_a_gpu_role_is_refused_on_a_machine_without_a_free_gpu(manager, monkeypatch):
+def test_a_gpu_role_is_refused_only_on_a_machine_without_a_gpu(manager, monkeypatch):
     """Refused at add time by the machine's known shape, not at `docker run`
-    on the remote after a deploy. An unknown count is not checked."""
+    on the remote after a deploy. GPU slots share a machine's GPUs (every
+    container runs under --gpus all); an unknown count is not checked."""
     spec = _GpuRoles()
     task = tasks.TaskRecord(workload=spec.name, tag="t", params={}, created_at=0.0)
     manager.add_machine(spec, task, "cpu", "u@h", gpu_count=0)
     manager.add_machine(spec, task, "gpu1", "u@g", gpu_count=1)
     manager.add_machine(spec, task, "unknown", "u@x")
-    with pytest.raises(AssertionError, match="has 0 GPU"):
+    with pytest.raises(AssertionError, match="has no GPU for role 'match_eval'"):
         manager.add_ssh(spec, task, "match_eval", machine="cpu", threads=None)
-    first = manager.add_ssh(spec, task, "match_eval", machine="gpu1", threads=None)
-    with pytest.raises(AssertionError, match=f"already taken by {first.worker_id}"):
-        manager.add_ssh(spec, task, "match_b", machine="gpu1", threads=None)
+    manager.add_ssh(spec, task, "match_eval", machine="gpu1", threads=None)
+    manager.add_ssh(spec, task, "match_b", machine="gpu1", threads=None)  # shares the one GPU
     manager.add_ssh(spec, task, "match_b", machine="unknown", threads=None)
 
 
