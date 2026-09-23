@@ -1,7 +1,7 @@
 #include "agent/weird_bot.h"
 
 #include "agent/agent_options.h"
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "game/board.h"
 #include "game/move.h"
 #include "game/tile.h"

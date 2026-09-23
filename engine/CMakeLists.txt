@@ -44,7 +44,7 @@ add_library(scribblez_core STATIC
   src/serve/service_url.cpp
   src/lexicon/leave_values.cpp
   src/lexicon/lexicon.cpp
-  src/agent/macondo_bot.cpp
+  src/agent/hasty_bot.cpp
   src/agent/endgame_turn_policy.cpp
   src/agent/endgame_hasty_bot.cpp
   src/sim/monte_carlo_sim.cpp

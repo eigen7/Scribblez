@@ -1,6 +1,6 @@
 #include "endgame/endgame_solver.h"
 
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "endgame/outplays.h"
 #include "game/glyph.h"
 #include "game/movegen.h"

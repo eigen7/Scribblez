@@ -3,7 +3,7 @@
 #include "agent/agent.h"
 #include "agent/candidate_evaluator.h"
 #include "agent/endgame_hasty_bot.h"
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "encoding/game_state_encoder.h"
 #include "game/game.h"
 #include "lexicon/dictionary.h"

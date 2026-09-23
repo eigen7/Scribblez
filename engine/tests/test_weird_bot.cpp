@@ -9,7 +9,7 @@
 // Every case needs the Macondo-bundled NWL23 leave table (both the forcing
 // ranking and the fallback price leaves with it) and skips without it.
 
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "agent/weird_bot.h"
 #include "data/gcg_reader.h"
 #include "endgame_positions.h"

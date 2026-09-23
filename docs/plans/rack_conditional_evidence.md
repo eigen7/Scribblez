@@ -181,7 +181,7 @@ load-bearing constraint, and the cost structure below depends on it.
 
    Either way the ply-one policy needs the full reply list, which greedy
    hasty does not produce: its WordMap search stops without enumerating the
-   legal plays ([macondo_bot.h](../../engine/include/agent/macondo_bot.h)),
+   legal plays ([hasty_bot.h](../../engine/include/agent/hasty_bot.h)),
    and full generation costs about twice as much. Scoring also needs a GPU
    round trip in the middle of a rollout, which nothing downstream can
    defer the way the horizon readout is deferred. So ply one is

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agent/endgame_turn_policy.h"
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "endgame/endgame_solver.h"
 
 #include <memory>

@@ -3,7 +3,7 @@
 
 #include "agent/agent.h"
 #include "agent/evidence_staging.h"
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
