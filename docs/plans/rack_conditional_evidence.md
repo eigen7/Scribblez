@@ -37,18 +37,23 @@ which every branch shares.
 
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** is the base. Its
   evidence token is an *aggregate* over a candidate's rollouts, and the loop
-  it drives closes a candidate once simmed. This plan keeps its architecture
+  it drives closes a candidate once simmed. This plan keeps its principles
   (prediction-beside-observation, late fusion, permutation-invariant evidence
   sets, subset-assembled training rows, the CRN pairing) and changes the
-  granularity: the evidence keeps its racks.
+  granularity: the evidence keeps its racks. It does not keep the
+  implementation of that plan; [what the existing stack
+  loses](#what-the-existing-stack-loses) is the inventory.
 - **[design.md §8.1](../design.md)** (search-derived knowledge buffers) is
   the idea in the abstract. Here the buffer is the evidence set itself; there
   is no separate table of discovered facts.
 - **[roadmap.md item 6](../roadmap.md)** built UltimateBot over the base loop.
   The agent described below replaces its decision procedure.
 - **[sim_labeled_candidates.md](sim_labeled_candidates.md)** and
-  [blind_spots.md](../blind_spots.md) collect the positions where hasty-policy
-  sims fail. Those positions are this plan's evaluation set.
+  [blind_spots.md](../blind_spots.md) collect positions where a play outside
+  HastyBot's static-equity top moves out-sims them. Those labels come from
+  hasty-policy sims, so they find where static equity is wrong, not where the
+  sims are; they serve this plan as a regression set, and its evaluation set
+  is built separately (layer 0, below).
 
 ## What is exact and what is learned
 
@@ -76,11 +81,12 @@ sample racks from the natural distribution, so a region one rack in five
 hundred falls into contributes two rollouts to a thousand. The within-turn
 evidence cannot resolve it; the amortized prior has to carry it, from the
 many positions where the same kind of structure recurred. Where the prior is
-weak the engine can supply cheap **lexical primitives** without naming
+weak the engine could supply cheap **lexical primitives** without naming
 predicates: for the few lanes the sims flag as hot, enumerate the words that
 fit once, and give each rack its maximum letter overlap with any of them.
 That makes "six of seven" a one-dimensional feature the encoder composes
-freely.
+freely. It is deferred: built only if a known case still fails after layer 4
+and the failure traces to a rack region too rare for the prior.
 
 ## The evidence set at rollout granularity
 
@@ -125,14 +131,47 @@ load-bearing constraint, and the cost structure below depends on it.
    the incumbent over the same racks, with the model's predictive spread, is
    the expected gain of the base plan's proves-best head with a rack axis.
    A candidate no round proposed rises when the context shows it fixes the
-   rack region where the incumbent bleeds.
+   rack region where the incumbent bleeds. This needs a head no model has
+   today: the student sees the unseen pool, never the opponent's rack, and
+   returns one outcome per candidate. The **rack-query head** takes a
+   candidate's fused latent and one opponent rack and returns that
+   candidate's outcome on that rack; it reads the latent, never the raw
+   context, so a query costs a small MLP or a short attention over the
+   latent, not a context read. Queries are still numerous (legal moves times
+   active racks per block), so per-rack scoring runs only on a shortlist
+   taken from the per-candidate prediction.
 2. **The reply policy at ply one of every rollout.** The board after `DOG` is
-   the same for every rollout of `DOG`; only the rack differs. So the trunk
-   encode and the fusion of the context into it run **once per candidate per
-   block**, and per rollout the work is the reply move list, which the hasty
-   policy generates anyway, plus a cheap scoring pass of that list against
-   the cached conditioned encoding with the rack as input. The expensive part
-   is per candidate, the cheap part per rollout. This is where `CAT`'s
+   the same for every rollout of `DOG`; only the replier's rack differs. The
+   design wants the trunk encode and the fusion of the context into it to run
+   **once per candidate per block**, with per-rollout work reduced to the
+   reply move list and a cheap scoring pass of that list against the cached
+   conditioned encoding. **Today's student cannot do this.** Its trunk reads
+   the mover's rack three ways: the rack counts, the unseen-pool thermometer
+   (the pool minus the mover's rack), and the opponent-reach plane gated on
+   that pool ([game_state_encoder.cpp](../../engine/src/encoding/game_state_encoder.cpp),
+   `encode_board` in [model.py](../../py/scribblez/move_set_eval/model.py)).
+   At ply one the mover holds a different rack in every rollout, so the
+   trunk input differs per rollout. Two ways through:
+
+   - **Per-rollout encodes, batched.** Correct with today's student, at
+     rollouts times contenders trunk passes per block. Acceptable for
+     measuring the ply-one policy's strength; too slow as the design center.
+   - **A rack-late student.** The trunk reads the board and the
+     rack-independent scalars; the rack, the pool it implies and the reach
+     plane enter at scoring. This needs a re-distilled student and a
+     quality gate against the current one, and readers 1 to 3 all assume it.
+
+   Either way the ply-one policy needs the full reply list, which greedy
+   hasty does not produce: its WordMap search stops without enumerating the
+   legal plays ([macondo_bot.h](../../engine/include/agent/macondo_bot.h)),
+   and full generation costs about twice as much. Scoring also needs a GPU
+   round trip in the middle of a rollout, which nothing downstream can
+   defer the way the horizon readout is deferred. So ply one is
+   **block-staged**: generate every rollout's reply list for the block,
+   score them in one batch, then resume each rollout with its first move
+   forced.
+
+   This is where `CAT`'s
    discoveries reach `DOG`'s rollouts: on a rack with an M, the conditioned
    student scores the lane play above the hasty move although nobody rolled
    that reply after `DOG`. With an empty context the conditioned student is
@@ -143,6 +182,24 @@ load-bearing constraint, and the cost structure below depends on it.
 3. **The correction for outdated rollouts.** The value gap between the
    post-reply states of the played reply and the preferred one, read from the
    student's per-move value heads.
+
+## What the existing stack loses
+
+The base plan's per-candidate aggregate token is load-bearing across a
+shipped surface, and this plan replaces most of it rather than extending it.
+
+| Piece | Today | Under this plan |
+|---|---|---|
+| Evidence unit | `EvidenceSet`: one `SimObservation` per simmed candidate ([move_proposal_service.h](../../engine/include/agent/move_proposal_service.h)) | Rack-index tokens, each a variable-size set of per-candidate sub-records, plus nested-sim tokens. The sub-record encoder is new. |
+| Fusion | Self-attention over at most 64 padded evidence tokens ([evidence_fusion.py](../../py/scribblez/evidence_fusion.py)) | Cross-attention into board tokens or inducing points, over a context of thousands. The exported graph needs a dynamic evidence axis. |
+| Evidence encoding | Board tokens gathered from the root board's map, cached once | Encoded against each candidate's post-move board. |
+| Serving | `MoveProposalService` holds one encoded position | A session holding each contender's fused encoding at once, for reader 2. |
+| Agent loop | `evidence_loop.h`: one sim call per candidate, one observation back | Blocks over (candidate, rack indices), block-staged ply one. |
+| Training | `py/scribblez/evidence/` and `py/scribblez/sim_evidence/`, keyed to per-candidate observations | Per-rollout targets, rack-query rows, reply-node rows. |
+
+The aggregate path stays in service until layer 4 beats it on the known
+cases, then retires; the two do not interoperate. Each new piece lands in the
+layer that first needs it (build order, below).
 
 ## The turn
 
@@ -165,8 +222,11 @@ as in the base plan.
 
 1. **Re-fuse.** Fuse the current context into each contender's cached trunk
    output.
-2. **Re-price.** Rescore every existing rollout's cached reply list against
-   its candidate's new encoding and update its gap. A slight change of mind
+2. **Re-price.** Rescore every existing rollout's cached reply shortlist
+   against its candidate's new encoding and update its gap. The shortlist is
+   the top few replies by the plain score, kept at generation time; caching
+   every rollout's full list is hundreds of megabytes per turn, and the gap
+   is computed over the shortlist. A slight change of mind
    that flips the argmax between near-equal replies produces a gap near zero
    and the rollout stays nearly as good as fresh; a large gap says the
    rollout understates the opponent by about that much. This pass is linear
@@ -180,6 +240,14 @@ as in the base plan.
    maximal uncertainty, which is what puts it in the race. There is no
    "simmed" state: a candidate has some rollouts, some gap on each, and some
    model uncertainty on the racks that decide the pick.
+
+   The unified rule needs an epistemic uncertainty the model does not
+   produce: its heads give outcome distributions, not how sure the model is
+   of them. Until a source is chosen and validated (an ensemble, or a
+   variance head trained against held-out rollouts), the loop runs a fixed
+   heuristic schedule: re-run the highest-gap rollouts on the floor indices,
+   top up the contenders the root ranking separates least, and admit the
+   next candidate by the proves-best gain as today.
 
    Which new indices to activate is adaptive: look ahead at the next few
    dozen racks in the stream, score each by contender disagreement times
@@ -220,7 +288,13 @@ the full context: free, since it needs no rollouts, and paired across
 contenders on the same sample so rack luck cancels there as it did under
 CRN. Pick the highest on the winrate objective. Two guardrails. A move must
 have rollouts on the floor indices before it can be chosen, so a raw paired
-mean exists as the fallback and no move is played on a model's promise. And
+mean exists as the fallback and no move is played on a model's promise. That
+mean is paired only if every contender's floor rollouts used the same reply
+policy. Under the loop they do not: a candidate simmed late faces a
+better-informed opponent than one simmed early, and the difference is
+systematic. So before the pick, the floor indices of every eligible
+contender are re-run under one policy snapshot, and those re-runs are
+charged to the budget. And
 until the adjusted estimate has proven calibrated in match play, a
 disagreement between adjusted and raw rankings beyond the raw standard error
 is logged as a case to study.
@@ -294,6 +368,17 @@ away from anything assembled from static pools. This is handled
 generationally, as the base plan handles the proposer, and it is a reason to
 add those loop features one at a time (build order, below).
 
+**Targets from a context-conditioned policy.** Subset assembly is sound in
+the base plan because a rollout's outcome does not depend on the context: the
+reply policy is hasty. Once replies come from the conditioned student, a
+held-out rollout's outcome depends on the context that was live when it ran,
+and a row that pairs it with some other subset asks the model to predict a
+policy whose input it cannot see. So every rollout records the reply-policy
+model and the context version that chose its reply, and the first corpora
+use only context-free reply policies, hasty or the plain student. Rows whose
+targets came from a conditioned policy carry that policy's context, not an
+arbitrary subset, and they wait until layer 5 needs them.
+
 ## Cost accounting
 
 Two different quadratics have to be kept apart.
@@ -328,9 +413,15 @@ bf16 layers on a 4090, against seconds for the ten thousand rollouts. The
 quadratic read would not bind at today's budgets; the linear form is chosen
 so that it never does.
 
-Per rollout, the added work over today is the scoring pass of the reply list
-against a cached encoding. Per block, the re-pricing pass is linear in
-rollouts and touches no trunk. The root proposal over all legal moves is one
+Per rollout, the added work over today is at ply one: full reply
+generation, move-feature encoding of that list, and its share of the
+block-staged scoring batch, plus a trunk encode if the student is not
+rack-late (reader 2). This term, not the context read, is what bounds
+rollouts per second, and it is measured before the design commits to it.
+Per block, the re-pricing pass scores each rollout's reply shortlist and
+touches no trunk. The rack-query head adds shortlisted candidates times
+active racks small queries per block, and several thousand racks times the
+contenders at the final pick. The root proposal over all legal moves is one
 scoring pass per block, the same shape as today's proposer.
 
 ## Risks
@@ -360,49 +451,75 @@ cases and by hasty's construction. What is open is which fix removes it.
 
 ## Evaluation and build order
 
-**Three fixes, and the classification that chooses between them.** The
+**Layer 0: the evaluation set.** The positions that decide this plan's
+direction mostly do not exist yet. `positions/NWL23/interesting-positions/`
+holds one position family (ACETA and two variants), and the blind-spot
+collections are labeled by hasty sims. Layer 0 assembles expert-labeled
+failure positions, each with the root move an expert chooses and the
+opponent reply the sims miss, sourced from annotated games and expert
+review rather than sim surveys, with a minimum count set before the
+classification below counts as a decision.
+
+**Four fixes, and the classification that chooses between them.** The
 unrealistic hasty policy inside rollouts is a known deficiency, but in-context
-transfer is one of three fixes for it, and the other two are cheaper:
+transfer is one of four fixes for it, and the other three are cheaper:
 
 - a **stronger static rollout policy**, the plain student at ply one, with no
   in-turn machinery, for failures of the kind "the simmed opponent never
   fishes, never sets up, never defends";
 - a **deeper reply search** at a sampled fraction of reply nodes, averaged
   in: position-specific, no learning, expensive but simple;
+- an **explicit reply catalogue**: spot-checked replies stored as specific
+  moves with their tile requirement, broadcast to every candidate and rack
+  where the exact legality and multiset checks pass, and injected as
+  challengers to the policy reply. It transfers identical tactics only, not
+  ideas, and it is the interpretable baseline the learned design has to beat;
 - **in-context transfer**, this plan, for failures that are position-specific
   in a way a static policy cannot learn and a reply search cannot afford to
   rediscover per rollout.
 
-Before building, take the known failure positions (the blind-spot
-collections and `positions/NWL23/interesting-positions/`) and for each ask
+Before building, take the layer-0 positions and for each ask
 what the simmed opponent did wrong and what the minimal machinery is that
 would make it do right. If most fall to the first bucket, a better rollout
 policy is the whole first step and the rest of this plan waits. If a
-meaningful share need the third, those positions are the mandate.
+catalogue would fix most of the rest, it is built next. The positions a
+catalogue cannot fix, because the right reply after one candidate is
+structurally different from any reply discovered after another, are this
+plan's mandate.
 
 **What is measured.** The known cases, directly: does the agent find the
 reply the experts say it should, and choose the root move they say is right.
-And match play against the previous version, because a fix that gets the
-examples right can still lose on the distribution. Not statistical proxies
-that can miss the effect.
+And, from layer 6, match play against the previous version, because a fix
+that gets the examples right can still lose on the distribution. Layers 1 to
+5 are checked on the known cases and on held-out per-rollout comparisons
+alone. Not statistical proxies that can miss the effect.
 
 **Layers, one at a time.** The sequencing is a debugging discipline, not a
 hedge on the idea: built at once, a known case that still fails points at
 nothing. Each layer is checked against the same cases before the next.
 
 1. **Per-rollout logging.** The `.sobs` record gains, per rollout, the rack
-   index, the reply played, our follow-up, and the outcome. The runner has
-   all of it transiently today. Small next to the count planes.
-2. **The plain student as the ply-one reply policy.** No context. This is
-   the first bucket's fix and the floor for everything after; it alone may
-   move the known cases.
-3. **The rack-conditioned evidence model**, static contexts, natural racks,
+   index, the sampled opponent rack, the reply played, our follow-up, the
+   outcome, and the reply-policy model and context version; the position
+   header gains the opponent's known leave. The runner has all of it
+   transiently today. Storing the rack avoids reproducing the engine's bag
+   shuffle in Python for every training row. At about 60 bytes per rollout
+   this outgrows the count planes at around 600 rollouts per candidate, so
+   corpus disk budgets are planned against it.
+2. **The plain student as the ply-one reply policy.** No context, per-rollout
+   encodes batched, ply one block-staged (reader 2). This is the first
+   bucket's fix and the floor for everything after; it alone may move the
+   known cases. Its rollouts-per-second against greedy hasty is measured
+   here.
+3. **The rack-late student**, re-distilled, gated on matching the current
+   student's ranking quality. Everything below assumes it.
+4. **The rack-conditioned evidence model**, static contexts, natural racks,
    no loop: trained on subset-assembled rows with per-rollout targets,
    compared with the aggregate-token model on the held-out candidate's
    per-rollout outcomes, and at the root on the known cases.
-4. **The conditioned reply policy** at spot-checked nodes, static contexts
+5. **The conditioned reply policy** at spot-checked nodes, static contexts
    still, nested sims as truth; the sibling-token ablation above.
-5. **The loop**, one feature per step, each measured in match play against
+6. **The loop**, one feature per step, each measured in match play against
    the version without it: plain re-runs first (exact and cheap under
    truncation), then model-based corrections, then adaptive rack
    activation. Adaptive activation buys variance reduction, not knowledge,
@@ -414,12 +531,39 @@ nothing. Each layer is checked against the same cases before the next.
 - **Budget split** between candidate proposals, rack top-ups and re-runs;
   whether the spot-check cap is a fixed count or a fraction of rollouts.
 - **How far the learned policy extends into the rollout.** Ply one is the
-  cut where the trunk encode is per candidate; extending to our own follow-up
-  costs an encode per rollout and is measurable.
+  cut where, with the rack-late student, the trunk encode is per candidate;
+  extending to our own follow-up costs an encode per rollout and is
+  measurable.
 - **Nested-sim shape**: how many replies, how many rollouts, how shallow a
   horizon, before a spot check is worth its cost.
 - **Whether the conditioned student generalizes ideas across candidates**
   rather than memorizing move identities (the sibling-token ablation).
+- **Whether the catalogue gates the learned design.** Proceed past layer 4
+  only if the learned model fixes known cases the catalogue cannot, at
+  equal rollout and nested-sim budgets, or build the learned design
+  regardless and keep the catalogue as its baseline (review record, below).
 - **Context persistence across turns** for the nested-sim tokens only: their
   replies are board-conditioned and a legality check would make stale ones
   harmless. Deferred until there is a case that needs it.
+
+## Review record
+
+Plan review, 2026-09-23: four independent panelists (hidden complexity,
+rival design on a different vendor's model, scope, integration). Every
+blocking and serious critique and its resolution:
+
+| Critique | Resolution |
+|---|---|
+| **Blocking.** The student's trunk reads the mover's rack, so there is no rack-free per-candidate encode to cache for the ply-one policy. | Revised. Verified in the encoder. Reader 2 states the fork; the rack-late student is its own gated layer. |
+| Reader 1 and the final pick need a (candidate, rack) query no head has, at a cost the accounting omitted. | Revised: the rack-query head reads the fused latent; shortlisted; costed. |
+| Greedy hasty does not generate the reply list, and a ply-one policy needs a mid-rollout GPU round trip. | Revised: block-staged ply one; full generation costed; throughput measured in layer 2. |
+| Caching every rollout's reply list for re-pricing is hundreds of MB per turn. | Revised: top-few shortlist per rollout. |
+| "Keeps its architecture" understates a rewrite of the evidence token, fusion, export, serving, loop and trainer. Raised by two panelists. | Revised: inventory table; the aggregate path retires rather than interoperates. |
+| Subset-assembled rows are inconsistent once rollouts came from a context-conditioned policy. | Revised: log policy and context version; context-free policies first; conditioned rows carry their live context. |
+| The acquisition rule needs an epistemic uncertainty nothing produces. | Revised: heuristic schedule until a source is validated. |
+| The raw paired fallback is biased once contenders' rollouts used different policy versions. | Revised: floor indices re-run under one snapshot before the pick. |
+| The evaluation set mostly does not exist, and blind spots are labeled by the policy the plan distrusts. Raised by two panelists. | Revised: layer 0 builds an expert-labeled set; blind spots demoted to regression. **Open, human call:** who labels the positions and the minimum count. |
+| **Blocking (rival design).** An explicit per-turn reply catalogue, with exact legality and rack checks, targets the same defect with less coupled machinery and was never benchmarked. | Partly revised: the catalogue is a fourth fix in the classification and the baseline for layer 4. Not adopted as a gate. The conversation behind this plan moved from such a buffer to learned transfer on purpose, because the ideas worth transferring ("block that lane") often need a different move after a different candidate. **Open, human call:** whether the learned design proceeds only if it beats the catalogue. |
+| Lexical primitives are unassigned scope with no gate. | Revised: deferred behind layer 4. |
+| Per-rollout logging omits the rack and is not small. | Revised (minor): rack and known leave stored; size stated. |
+| Match play scoped ambiguously across layers. | Revised (minor): match play from layer 6 only. |
