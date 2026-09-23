@@ -17,16 +17,17 @@
 namespace scribblez {
 
 // The position evaluation model as a player (--type=neural): evaluates the
-// post-move position of each candidate play and picks by the configured
-// objective, greedily at temperature 0, else by sampling
-// softmax(objective / temperature). Its candidates are plays only: it never
-// exchanges, and passes only when it has no play.
+// post-move position of each candidate play or exchange and picks by the
+// configured objective, greedily at temperature 0, else by sampling
+// softmax(objective / temperature). It passes only when it has neither.
 //
-// top_k == 0 evaluates every legal play, which keeps the move distribution
-// independent of HastyBot and the self-play data most diverse, at the cost of
-// putting every play through the GPU. A positive top_k keeps the best plays by
-// static equity: cheaper, and a guard against blank-heavy racks with
-// thousands of plays.
+// Candidates come from equity_top_k, as for the simming agents, so they are
+// ordered by static equity and ties in the objective go to the higher-equity
+// move. top_k == 0 evaluates every legal move, which keeps the move
+// distribution otherwise independent of HastyBot and the self-play data most
+// diverse, at the cost of putting every move through the GPU. A positive top_k
+// keeps the best moves by static equity: cheaper, and a guard against
+// blank-heavy racks with thousands of plays.
 //
 // Bag-empty turns bypass the model, which never trains on them: they go to the
 // endgame solver, or to the static-equity move when the solver declines.
@@ -71,14 +72,6 @@ class NeuralAgent : public Agent {
  private:
   // Throws on out-of-range params.
   void init();
-
-  std::vector<double> candidate_equities(const MoveRequest& req,
-                                         const std::vector<Move>& plays) const;
-
-  int greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const;
-
-  // Fills cand_idx_ with the plays worth evaluating and returns their count.
-  int select_candidates(const MoveRequest& req, const std::vector<Move>& plays);
 
   // Index, into the first `k` evaluated candidates, of the one to play.
   int select_index(int k);
