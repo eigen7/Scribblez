@@ -8,6 +8,7 @@
 #include "game/tile_counts.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "serve/client_message.h"
 #include "serve/web_server.h"
 #include "util/exception.h"
 
@@ -39,13 +40,6 @@ po::options_description human_options(HumanWebAgent::Params& params) {
     ("web-dir", po::value<std::string>(&params.web_dir)->default_value(params.web_dir),
      "front-end package dir (cwd of `npm run dev`)");
   return desc;
-}
-
-// A string field of a client message; empty if absent or not a string.
-std::string str_field(const boost::json::object& obj, boost::json::string_view key) {
-  auto it = obj.find(key);
-  if (it == obj.end() || !it->value().is_string()) return "";
-  return std::string(it->value().as_string().c_str());
 }
 
 // Append an EXCHANGE for every distinct non-empty sub-multiset of `types`,

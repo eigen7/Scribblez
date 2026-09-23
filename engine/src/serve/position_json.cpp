@@ -12,7 +12,33 @@ namespace json = boost::json;
 
 namespace {
 
-// 15x15 grid of letters (lowercase for blanks), null for empty squares.
+// {letter, score} entries, letters first, then blanks as '?' scoring 0.
+json::array rack_tiles(const Rack& my_rack) {
+  json::array rack;
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    for (int i = 0; i < my_rack.count(L); ++i) {
+      rack.emplace_back(
+        json::object{{"letter", std::string(1, L.to_char())}, {"score", TILE_VALUES[L]}});
+    }
+  }
+  for (int i = 0; i < my_rack.blanks(); ++i) {
+    rack.emplace_back(json::object{{"letter", "?"}, {"score", 0}});
+  }
+  return rack;
+}
+
+int tiles_on_board(const Board& board) {
+  int n = 0;
+  for (int r = 0; r < BOARD_SIZE; ++r) {
+    for (int c = 0; c < BOARD_SIZE; ++c) {
+      if (!board.at(r, c).is_empty()) ++n;
+    }
+  }
+  return n;
+}
+
+}  // namespace
+
 json::array board_grid(const Board& board) {
   json::array grid;
   for (int r = 0; r < BOARD_SIZE; ++r) {
@@ -32,7 +58,6 @@ json::array board_grid(const Board& board) {
   return grid;
 }
 
-// 15x15 grid of premium codes (DL/TL/DW/TW) or null.
 json::array bonus_grid(const Board& board) {
   json::array grid;
   for (int r = 0; r < BOARD_SIZE; ++r) {
@@ -46,21 +71,6 @@ json::array bonus_grid(const Board& board) {
   return grid;
 }
 
-// {letter, score} entries, letters first, then blanks as '?' scoring 0.
-json::array rack_tiles(const Rack& my_rack) {
-  json::array rack;
-  for (Tile L = Tile::of(0); L < 26; ++L) {
-    for (int i = 0; i < my_rack.count(L); ++i) {
-      rack.emplace_back(
-        json::object{{"letter", std::string(1, L.to_char())}, {"score", TILE_VALUES[L]}});
-    }
-  }
-  for (int i = 0; i < my_rack.blanks(); ++i) {
-    rack.emplace_back(json::object{{"letter", "?"}, {"score", 0}});
-  }
-  return rack;
-}
-
 json::object tile_score_map() {
   json::object tile_scores;
   for (Tile L = Tile::of(0); L < 26; ++L) {
@@ -69,17 +79,20 @@ json::object tile_score_map() {
   return tile_scores;
 }
 
-int tiles_on_board(const Board& board) {
-  int n = 0;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      if (!board.at(r, c).is_empty()) ++n;
-    }
+json::array bag_tiles_json(const TileCounts& bag) {
+  json::array tiles;
+  for (Tile L = Tile::of(0); L < 26; ++L) {
+    const int count = bag.count(L);
+    if (count <= 0) continue;
+    tiles.emplace_back(json::object{
+      {"letter", std::string(1, L.to_char())}, {"score", L.value()}, {"count", count}});
   }
-  return n;
+  const int blanks = bag.count(BLANK);
+  if (blanks > 0) {
+    tiles.emplace_back(json::object{{"letter", "?"}, {"score", 0}, {"count", blanks}});
+  }
+  return tiles;
 }
-
-}  // namespace
 
 json::array move_squares(const Move& m) {
   json::array squares;

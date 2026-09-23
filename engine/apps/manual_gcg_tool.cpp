@@ -26,6 +26,7 @@
 #include "game/movegen.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "serve/client_message.h"
 #include "serve/position_json.h"
 #include "serve/web_server.h"
 #include "util/exception.h"
@@ -183,64 +184,6 @@ Tile tile_from_letter(const std::string& s, bool is_blank) {
   return Tile::from_char(c);
 }
 
-boost::json::array board_grid(const Board& board) {
-  boost::json::array grid;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    boost::json::array row;
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      Glyph g = board.at(r, c);
-      if (g.is_empty()) {
-        row.emplace_back(nullptr);
-      } else {
-        char ch = g.letter().to_char();
-        if (g.is_blank()) ch = char(ch - 'A' + 'a');
-        row.emplace_back(std::string(1, ch));
-      }
-    }
-    grid.emplace_back(std::move(row));
-  }
-  return grid;
-}
-
-boost::json::array bonus_grid(const Board& board) {
-  boost::json::array grid;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    boost::json::array row;
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      const char* code = board.premium_at(r, c).code();
-      row.emplace_back(code ? boost::json::value(code) : boost::json::value(nullptr));
-    }
-    grid.emplace_back(std::move(row));
-  }
-  return grid;
-}
-
-boost::json::object tile_score_map() {
-  boost::json::object scores;
-  for (Tile L = Tile::of(0); L < 26; ++L) {
-    scores[std::string(1, L.to_char())] = TILE_VALUES[L];
-  }
-  return scores;
-}
-
-int int_field(const boost::json::object& o, const char* key, int fallback = -1) {
-  auto it = o.find(key);
-  if (it == o.end() || !it->value().is_int64()) return fallback;
-  return it->value().as_int64();
-}
-
-std::string str_field(const boost::json::object& o, const char* key) {
-  auto it = o.find(key);
-  if (it == o.end() || !it->value().is_string()) return "";
-  return std::string(it->value().as_string().c_str());
-}
-
-bool bool_field(const boost::json::object& o, const char* key, bool fallback = false) {
-  auto it = o.find(key);
-  if (it == o.end() || !it->value().is_bool()) return fallback;
-  return it->value().as_bool();
-}
-
 std::string gcg_rack_field(const RackSlots& slots) {
   std::string out;
   out.reserve(kRackSlots);
@@ -310,23 +253,6 @@ boost::json::array racks_json(const std::array<RackDisplay, 2>& display_racks) {
   return racks;
 }
 
-// The bag's remaining tiles as a JSON array of {letter, score, count}, with the
-// blank as "?". Letters with no tiles left are omitted.
-boost::json::array bag_tiles_json(const ManualSnapshot& snap) {
-  boost::json::array bag_tiles;
-  for (Tile L = Tile::of(0); L < 26; ++L) {
-    const int count = snap.bag.count(L);
-    if (count <= 0) continue;
-    bag_tiles.emplace_back(boost::json::object{
-      {"letter", std::string(1, L.to_char())}, {"score", L.value()}, {"count", count}});
-  }
-  const int blanks = snap.bag.count(BLANK);
-  if (blanks > 0) {
-    bag_tiles.emplace_back(boost::json::object{{"letter", "?"}, {"score", 0}, {"count", blanks}});
-  }
-  return bag_tiles;
-}
-
 // The move history as a JSON array, one {player, text, score, cumulative, rack}
 // entry per turn.
 boost::json::array turns_json(const std::vector<ManualTurn>& turns) {
@@ -377,7 +303,7 @@ class ManualGame {
     o["backtracking"] = is_backtracking();
     o["game_over"] = !end_adjustments_.empty();
     o["racks"] = racks_json(display_racks);
-    o["bag_tiles"] = bag_tiles_json(snap);
+    o["bag_tiles"] = bag_tiles_json(snap.bag);
     o["turns"] = turns_json(turns_);
     o["end_adjustments"] = end_adjustments_json();
     o["last_move"] = last_move_squares();
