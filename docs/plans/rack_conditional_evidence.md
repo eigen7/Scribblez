@@ -237,6 +237,14 @@ as in the base plan.
    "simmed" state: a candidate has some rollouts, some gap on each, and some
    model uncertainty on the racks that decide the pick.
 
+   The unified rule needs an epistemic uncertainty the model does not
+   produce: its heads give outcome distributions, not how sure the model is
+   of them. Until a source is chosen and validated (an ensemble, or a
+   variance head trained against held-out rollouts), the loop runs a fixed
+   heuristic schedule: re-run the highest-gap rollouts on the floor indices,
+   top up the contenders the root ranking separates least, and admit the
+   next candidate by the proves-best gain as today.
+
    Which new indices to activate is adaptive: look ahead at the next few
    dozen racks in the stream, score each by contender disagreement times
    model uncertainty, and activate the best ones plus a **floor** of
@@ -276,7 +284,13 @@ the full context: free, since it needs no rollouts, and paired across
 contenders on the same sample so rack luck cancels there as it did under
 CRN. Pick the highest on the winrate objective. Two guardrails. A move must
 have rollouts on the floor indices before it can be chosen, so a raw paired
-mean exists as the fallback and no move is played on a model's promise. And
+mean exists as the fallback and no move is played on a model's promise. That
+mean is paired only if every contender's floor rollouts used the same reply
+policy. Under the loop they do not: a candidate simmed late faces a
+better-informed opponent than one simmed early, and the difference is
+systematic. So before the pick, the floor indices of every eligible
+contender are re-run under one policy snapshot, and those re-runs are
+charged to the budget. And
 until the adjusted estimate has proven calibrated in match play, a
 disagreement between adjusted and raw rankings beyond the raw standard error
 is logged as a case to study.
@@ -349,6 +363,17 @@ agent's own loop, and adaptive activation, re-runs and corrections push it
 away from anything assembled from static pools. This is handled
 generationally, as the base plan handles the proposer, and it is a reason to
 add those loop features one at a time (build order, below).
+
+**Targets from a context-conditioned policy.** Subset assembly is sound in
+the base plan because a rollout's outcome does not depend on the context: the
+reply policy is hasty. Once replies come from the conditioned student, a
+held-out rollout's outcome depends on the context that was live when it ran,
+and a row that pairs it with some other subset asks the model to predict a
+policy whose input it cannot see. So every rollout records the reply-policy
+model and the context version that chose its reply, and the first corpora
+use only context-free reply policies, hasty or the plain student. Rows whose
+targets came from a conditioned policy carry that policy's context, not an
+arbitrary subset, and they wait until layer 4 needs them.
 
 ## Cost accounting
 
