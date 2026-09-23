@@ -35,9 +35,4 @@ boost::json::object position_state_object_pov(const Board& board, const Rack& my
 // pass: the web client's last_move shape, used to highlight the latest play.
 boost::json::array move_squares(const Move& m);
 
-// position_state_object_pov() serialized.
-std::string position_state_json(const Board& board, const Rack& my_rack, int my_score,
-                                int opp_score, const std::string& my_name,
-                                const std::string& opp_name);
-
 }  // namespace scribblez
