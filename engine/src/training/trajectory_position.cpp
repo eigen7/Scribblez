@@ -37,11 +37,7 @@ void encode_trajectory_decision(const TrajectoryDecision& d, const InputEncoding
   RELEASE_ASSERT(enc.active_player() == p.mover);
   // The cross-check planes read the board's move-generation caches.
   enc.board().ensure_movegen_caches(*spec.dict);
-  if (spec.opp_leave_input) {
-    enc.encode_input(p.mover, p.rack, p.opp_leave, out);
-  } else {
-    enc.encode_input(p.mover, p.rack, out);
-  }
+  enc.encode_input(p.mover, p.rack, p.opp_leave, out);
   *score_diff = enc.score(p.mover) - enc.score(1 - p.mover);
 }
 

@@ -76,11 +76,7 @@ void MsetSimAgent::encode_board_row(const MoveRequest& req, float* dst) const {
   // The encoder has observed every prior move, so its active player is this
   // agent's seat.
   const int me = encoder_.active_player();
-  if (spec_.opp_leave_input) {
-    encoder_.encode_input(me, req.my_rack, req.opp_rack, dst);
-  } else {
-    encoder_.encode_input(me, req.my_rack, dst);
-  }
+  encoder_.encode_input(me, req.my_rack, req.opp_rack, dst);
 }
 
 void MsetSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Move>& candidates) {

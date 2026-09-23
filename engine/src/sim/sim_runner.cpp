@@ -82,11 +82,7 @@ void stage_horizon_leaf(const SimPosition& pos, const Move& candidate, const Gam
   for (int i = 0; i < log.num_records; ++i) enc.apply_move(log.records[i].move);
   const int horizon_mover = log.records[log.num_records - 1].player;
   float* row = batcher->next_row();
-  if (leaf_spec.opp_leave_input) {
-    enc.encode_input(horizon_mover, game.leave(horizon_mover), game.leave(1 - horizon_mover), row);
-  } else {
-    enc.encode_input(horizon_mover, game.leave(horizon_mover), row);
-  }
+  enc.encode_input(horizon_mover, game.leave(horizon_mover), game.leave(1 - horizon_mover), row);
   batcher->add(slot, horizon_mover == pos.mover);
 }
 

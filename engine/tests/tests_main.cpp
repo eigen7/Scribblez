@@ -1262,6 +1262,24 @@ TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
   ASSERT_EQ(tail_total, 5.0f);
 }
 
+// Under a hidden-leaves spec the opponent-leave overload ignores the leave, so
+// callers can pass it without branching on the spec.
+TEST(InputLayout, HiddenLeavesIgnoresOppLeave) {
+  Dictionary d = medium_dict();
+  const InputEncodingSpec spec{&d};
+  GameStateEncoder enc{spec};
+  enc.apply_move(make_play_full(7, 7, /*horizontal=*/true, 0b111, 12,
+                                {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
+                                 Glyph::of(Tile::from_char('T'))}));
+  const Rack rack = rack_from("RSE");
+
+  std::vector<float> plain(input_floats(spec), -1.0f);
+  std::vector<float> with_leave(input_floats(spec), -1.0f);
+  enc.encode_input(enc.active_player(), rack, plain.data());
+  enc.encode_input(enc.active_player(), rack, rack_from("QIZAA"), with_leave.data());
+  ASSERT_EQ(plain, with_leave);
+}
+
 // Replaying a game log through GameStateEncoder reproduces every position of an
 // independent replay: board, scores, last opponent move, and the legal-play set.
 TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
