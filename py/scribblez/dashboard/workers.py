@@ -129,7 +129,9 @@ IDLE_STOP_SECONDS = 600.0
 # process about ten times a worker's CPU share under contention, and an idle
 # machine still gives the worker all of it.
 LOCAL_WORKER_NICE = 10
-# Per-machine key material for rented machines (known_hosts files).
+# Per-machine key material for rented machines (known_hosts files), under
+# <workload>/<tag>/<name>: a machine's name is unique only within its task
+# (_next_machine_name), so two tasks' `aws-1` must not share a file.
 MACHINES_DIR = Path("/workspace/mount/cloud/machines")
 # How long the rent form's spot rates are served from the last fetch.
 SPOT_PRICES_TTL_SECONDS = 300.0
@@ -992,7 +994,7 @@ class WorkerManager:
         # Into the listing now: the record names an instance the last listing
         # predates, which would read `gone` until the next pass relists.
         self._instances[0][inst.id] = inst
-        known_hosts = MACHINES_DIR / name / "known_hosts"
+        known_hosts = MACHINES_DIR / spec.name / task.tag / name / "known_hosts"
         known_hosts.parent.mkdir(parents=True, exist_ok=True)
         known_hosts.write_text("")  # a relaunch is a new name, so never a stale key
         m = tasks.MachineRecord(

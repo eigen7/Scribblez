@@ -449,8 +449,8 @@ def test_renting_records_the_instance_and_its_key_material(rented, spec, task, t
     assert provider.calls == [("launch", "g6.2xlarge")]
     assert m.instance_id == "i-1" and m.instance_type == "g6.2xlarge"
     assert m.host == "ubuntu@pending" and m.identity_file == "/k/scribblez.pem"
-    assert m.known_hosts_file == str(tmp_path / "machines" / "m1" / "known_hosts")
-    assert (tmp_path / "machines" / "m1" / "known_hosts").read_text() == ""
+    known_hosts = tmp_path / "machines" / spec.name / "t" / "m1" / "known_hosts"
+    assert m.known_hosts_file == str(known_hosts) and known_hosts.read_text() == ""
     assert m.gpu_count == 1 and m.arch == "znver3" and m.cost_per_hr == 1.0
     assert tasks.load_task(spec, "t").machine("m1").instance_id == "i-1"
     assert provider.instances["i-1"].owner == f"{spec.name}/t/m1"
@@ -1919,3 +1919,22 @@ def test_a_missing_input_is_the_slots_reason_not_a_reconcile_exception(
         manager._run_ssh_container(spec, task, w)
     assert "inputs/teacher.onnx is missing" in manager._exits[_key(spec, "t", w.worker_id)]
     assert rc.calls == [] and _RecordingSshMachine.ops == []  # nothing started
+
+
+def test_two_tasks_machines_of_one_name_keep_separate_known_hosts(
+    manager, spec, monkeypatch, tmp_path
+):
+    """Names are unique per task only: renting another task's `aws-1` must not
+    truncate the first one's host keys."""
+    provider = _FakeProvider()
+    monkeypatch.setattr(manager, "_provider", lambda: provider)
+    monkeypatch.setattr(workers_mod, "MACHINES_DIR", tmp_path / "machines")
+    _fake_ssh(monkeypatch, state="missing", machine_state="up")
+    a = tasks.TaskRecord(workload=spec.name, tag="a", params={}, created_at=0.0)
+    b = tasks.TaskRecord(workload=spec.name, tag="b", params={}, created_at=0.0)
+    first = manager.rent_machine(spec, a, None, "g6.2xlarge")
+    Path(first.known_hosts_file).write_text("host-a ssh-ed25519 AAAA\n")
+    second = manager.rent_machine(spec, b, None, "g6.2xlarge")
+    assert first.name == second.name
+    assert first.known_hosts_file != second.known_hosts_file
+    assert Path(first.known_hosts_file).read_text() == "host-a ssh-ed25519 AAAA\n"
