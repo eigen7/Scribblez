@@ -83,12 +83,7 @@ HumanWebAgent::HumanWebAgent(int thread_id, const Params& params, const std::str
   vite_ =
     std::make_unique<ViteDevServer>(params.web_dir, params.vite_port, params.port, "", "web", 5173);
   std::cerr << "\n  Starting the web UI (npm run dev in " << params.web_dir << ")...\n";
-  if (!vite_->wait_until_ready()) {
-    throw util::CleanException(
-      "the Vite dev server did not start. See {}/.vite-dev.log for details. Did you run "
-      "py/build.py to install the web dependencies?",
-      params.web_dir);
-  }
+  vite_->wait_until_ready();
   std::cerr << "\n  Human-vs-AI game ready.\n"
             << "  Open  " << vite_->url() << "  in your browser to play.\n\n";
   std::string cmd = "xdg-open " + vite_->url() + " >/dev/null 2>&1 &";

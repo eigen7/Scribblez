@@ -273,7 +273,8 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
       ws_port_(ws_port),
       tool_(tool),
       service_(service),
-      default_dev_port_(default_dev_port) {
+      default_dev_port_(default_dev_port),
+      log_path_((boost::filesystem::path(web_dir) / ".vite-dev.log").string()) {
   namespace bp = boost::process;
 
   // Reuse a dev server already on this port if it answers HTTP; kill a stuck
@@ -295,10 +296,6 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
   env["VITE_WS_PORT"] = std::to_string(ws_port_);
   if (!tool_.empty()) env["VITE_TOOL"] = tool_;
 
-  // Vite's output goes to a log file so it cannot corrupt play_game's stdout,
-  // which may carry the game-log JSON.
-  boost::filesystem::path log = boost::filesystem::path(web_dir) / ".vite-dev.log";
-
   boost::filesystem::path npm = bp::search_path("npm");
   if (npm.empty()) {
     throw util::CleanException(
@@ -308,8 +305,9 @@ ViteDevServer::ViteDevServer(const std::string& web_dir, int dev_port, int ws_po
   // A process group, so the destructor can kill the whole tree: `npm run dev`
   // runs vite as a grandchild that would otherwise be orphaned.
   group_ = std::make_unique<bp::group>();
-  child_ = std::make_unique<bp::child>(npm, "run", "dev", bp::start_dir = web_dir,
-                                       bp::std_out > log, bp::std_err > log, env, *group_);
+  child_ =
+    std::make_unique<bp::child>(npm, "run", "dev", bp::start_dir = web_dir, bp::std_out > log_path_,
+                                bp::std_err > log_path_, env, *group_);
 }
 
 ViteDevServer::~ViteDevServer() {
@@ -318,7 +316,15 @@ ViteDevServer::~ViteDevServer() {
   if (child_) child_->wait(ec);
 }
 
-bool ViteDevServer::wait_until_ready(int timeout_ms) {
+void ViteDevServer::wait_until_ready(int timeout_ms) {
+  if (ready_within(timeout_ms)) return;
+  throw util::CleanException(
+    "the Vite dev server did not start. See {} for details. Did you run py/build.py to install "
+    "the web dependencies?",
+    log_path_);
+}
+
+bool ViteDevServer::ready_within(int timeout_ms) {
   if (!child_) return http_responding_on_port(dev_port_);
 
   namespace asio = boost::asio;

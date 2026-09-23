@@ -15,7 +15,6 @@
 #include "serve/client_message.h"
 #include "serve/position_json.h"
 #include "serve/web_server.h"
-#include "util/exception.h"
 #include "util/misc.h"
 
 #include <boost/json.hpp>
@@ -230,9 +229,7 @@ int main(int argc, char** argv) {
     const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
     scribblez::WebSession session(ws_port);
     scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "board", "board", 5175);
-    if (!vite.wait_until_ready()) {
-      throw scribblez::util::Exception("the Vite dev server did not start; see web/.vite-dev.log");
-    }
+    vite.wait_until_ready();
 
     std::cerr << "\nBoard tool ready at " << vite.url()
               << " (lexicon: " << scribblez::Lexicon::instance().name() << ")\n";

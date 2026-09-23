@@ -312,6 +312,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(scribblez_tests
     tests/tests_main.cpp
     tests/test_footprint.cpp
+    tests/test_web_server.cpp
     src/lexicon/hasty_equity.cpp
     src/lexicon/leave_values.cpp)
   target_link_libraries(scribblez_tests PRIVATE

@@ -1232,9 +1232,7 @@ int main(int argc, char** argv) {
 
     scribblez::WebSession session(ws_port);
     scribblez::ViteDevServer vite(web_dir, vite_port, ws_port, "manual", "manual", 5174);
-    if (!vite.wait_until_ready()) {
-      throw scribblez::util::Exception("the Vite dev server did not start; see web/.vite-dev.log");
-    }
+    vite.wait_until_ready();
 
     std::cerr << "\nManual GCG tool ready at " << vite.url()
               << " (lexicon: " << scribblez::Lexicon::instance().name() << ")\n";
