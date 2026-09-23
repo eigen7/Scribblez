@@ -814,21 +814,15 @@ class PositionEvalAltLeaveHandler(_Base):
             return
         leave = self.get_query_argument("leave", "").strip()
         opp_leave = self.get_query_argument("opp_leave", None)
-        conn = self._open_conn()
-        try:
-            generation = _resolve_position_eval_generation(
-                conn, self.get_query_argument("generation", "latest")
-            )
-        finally:
-            if conn is not None:
-                conn.close()
+        tag, task = self.get_query_argument("tag"), self.get_query_argument("task")
+        generation = _resolve_position_eval_generation(
+            tag, task, self.mount_root, self.get_query_argument("generation", "latest")
+        )
         if generation is None:
             self.set_status(404)
             self.write({"error": "no model generations recorded yet"})
             return
-        onnx_path = TagPaths(
-            self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
-        ).onnx_path(generation)
+        onnx_path = TagPaths(tag, task, self.mount_root).onnx_path(generation)
         if not onnx_path.exists():
             self.set_status(404)
             self.write({"error": f"model for generation {generation} is not available"})
