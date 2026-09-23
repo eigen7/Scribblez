@@ -1,12 +1,11 @@
-"""Position-level metadata read directly from .slog bytes.
+"""Position-level metadata read directly from .slog bytes, for the kill test's
+analyses: per-game turn counts and each position's preceding move.
 
-The binary layout is owned by engine/include/data/binary_log.h; the dtypes
-below are built from the engine's own format-layout document
-(scribblez.ffi.format_layout), so they cannot drift from the packed structs.
-Only the fields the sim-evidence analyses need are exposed: per-game turn
-counts and each position's preceding opponent move. Version enforcement is
-not duplicated here -- every consumer also decodes the same file through the
-FFI (scribblez_decode_rows), which rejects a version mismatch loudly.
+engine/include/data/binary_log.h owns the layout; the dtypes come from the
+engine's format-layout document (scribblez.ffi.format_layout), so they cannot
+drift from the packed structs. There is no version check here because every
+consumer also decodes the same file through the FFI's decode_rows, which
+rejects a version mismatch.
 """
 
 from __future__ import annotations
@@ -47,17 +46,15 @@ def move_at(buf: np.ndarray, meta: np.void, turn: int) -> np.void:
 
 
 def position_meta(slog_path: str | Path, positions: list[SobsPosition]) -> dict[str, np.ndarray]:
-    """Per-position analysis metadata, aligned with `positions` (read_sobs
-    order, which is also the shard row order):
+    """Per-position metadata arrays, aligned with `positions` (read_sobs
+    order):
 
-      meta_turn          the pre-move turn index;
-      meta_remaining     moves left in the original game (a rollout-depth
-                         proxy);
-      meta_opp_unbiased  True iff the sim's uniform opponent-rack sampling is
-                         exactly the true conditional at this position: the
-                         opponent has not acted yet, or their last move was a
-                         bingo (played all 7 tiles), so their rack is a fresh
-                         uniform draw from the unseen pool.
+      meta_turn          the pre-move turn index
+      meta_remaining     moves left in the original game, a rollout-depth proxy
+      meta_opp_unbiased  whether the sim's uniform opponent-rack sampling is
+                         exactly the true conditional: the opponent has not
+                         moved yet, or just played all 7 tiles, so their rack
+                         is a fresh uniform draw from the unseen pool
     """
     buf = read_slog_bytes(slog_path)
     metas = game_metas(buf)

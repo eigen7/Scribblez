@@ -1,15 +1,14 @@
-"""Pure-numpy reader for .mset move set evaluation model distillation-target
-sidecars.
+"""Pure-numpy reader for .mset sidecars, the move set evaluation model's
+distillation targets.
 
-The binary layout is owned by
-engine/include/training/move_set_eval_target_log.h (one TargetFileHeader, then
-per position a TargetPositionHeader followed by its (Move, targets, plane
-scales, quantized planes) records). The dtypes and constants below are built
-from the engine's own format-layout document (scribblez.ffi.format_layout),
-whose offsets and sizes come from the C++ compiler -- so they cannot drift
-from the packed structs. The record's target width and plane count come from
-each file's header (`record_floats`, `record_planes`), so the record dtype is
-built per file.
+engine/include/training/move_set_eval_target_log.h owns the layout: a
+TargetFileHeader, then per position a TargetPositionHeader followed by its
+(Move, targets, plane scales, quantized planes) records. The dtypes and
+constants here come from the engine's format-layout document
+(scribblez.ffi.format_layout), whose offsets and sizes the C++ compiler
+produces, so they cannot drift from the packed structs. Target width and plane
+count vary per file (`record_floats`, `record_planes` in the header), so the
+record dtype is built per file.
 """
 
 from __future__ import annotations
@@ -31,18 +30,17 @@ MSET_VERSION = _CONST["mset"]["version"]
 # Version-1 target floats per candidate, in record order (mover's POV).
 TARGET_NAMES_V1 = tuple(_CONST["mset"]["target_names_v1"])
 
-# A record's placement planes, in plane order: the teacher's four footprint
-# distributions at the candidate's post-move state (the placement heads of
-# training_targets.h, also the SimObservation plane order) -- a masked softmax
-# over PLANE_WIDTH = kFootprintClasses classes per head. Stored absmax-quantized:
-# per plane a float scale and PLANE_WIDTH bytes, value = byte * scale
-# (scale = plane max / 255).
+# A record's placement planes, one per teacher placement head in this order
+# (also the SimObservation plane order): the teacher's legality-masked
+# footprint softmax over PLANE_WIDTH classes at the candidate's post-move
+# state. Stored absmax-quantized as a float scale plus PLANE_WIDTH bytes per
+# plane, value = byte * scale with scale = plane max / 255.
 PLANE_NAMES = tuple(_CONST["placement_head_names"])
 PLANE_WIDTH = _CONST["mset"]["plane_width"]
 
-# TargetFileHeader.flags bits (mirrors the .sobs convention). Full-sweep files
-# -- capped sweeps of every legal candidate, evaluation-only and held out by
-# construction -- carry no placement planes (record_planes == 0).
+# TargetFileHeader.flags bits, mirroring the .sobs convention. A full-sweep
+# file holds a capped sweep of every legal candidate; it is evaluation-only,
+# held out by construction, and carries no placement planes (record_planes 0).
 MSET_FLAG_OPEN_LEAVES = _CONST["mset"]["flag_open_leaves"]
 MSET_FLAG_FULL_SWEEP = _CONST["mset"]["flag_full_sweep"]
 
@@ -74,13 +72,12 @@ class MsetPosition:
     turn_index: int
     moves: np.ndarray  # (K,) MOVE_DTYPE
     targets: np.ndarray  # (K, record_floats) float32
-    # Quantized placement planes and their scales (dequantize_planes recovers
-    # probabilities); None on a plane-less (full-sweep) file.
+    # Quantized placement planes (see dequantize_planes); None on a full-sweep
+    # file.
     plane_scales: np.ndarray | None  # (K, record_planes) float32
     planes: np.ndarray | None  # (K, record_planes, PLANE_WIDTH) uint8
-    # Legal moves the position had, recorded for a swept position so that a
-    # sweep the generator's cap truncated is visible as num_legal_moves > K.
-    # 0 ("not recorded") on every stratified position.
+    # Recorded only for swept positions, so a sweep truncated by the
+    # generator's cap shows as num_legal_moves > K. 0 on stratified positions.
     num_legal_moves: int = 0
 
 
@@ -98,8 +95,7 @@ class MsetFile:
 
 
 def read_mset_flags(path: str | Path) -> int:
-    """The file's TargetFileHeader.flags, read without parsing its positions --
-    what routing a corpus at file granularity needs."""
+    """The file's TargetFileHeader.flags, read without parsing its positions."""
     hdr = np.fromfile(str(path), dtype=_FILE_HEADER, count=1)[0]
     if hdr["magic"] != MSET_MAGIC:
         raise ValueError(f"bad .mset magic in {path}")
@@ -107,20 +103,21 @@ def read_mset_flags(path: str | Path) -> int:
 
 
 def complete_pairs(directory: str | Path) -> list[Path]:
-    """The .mset paths in `directory` whose companion .slog is present, sorted.
-    Every consumer needs both halves -- the targets, and the replay the inputs
-    are recomputed from -- and a store can hold an orphaned sidecar
-    (scribblez.workloads.pair_store documents when). The same two lines as
-    pair_store.complete_pairs, which this module cannot import: the workload
-    registry imports this module, and pair_store sits behind that package."""
+    """The .mset paths in `directory` whose companion .slog exists, sorted.
+
+    Every consumer needs both the targets and the .slog replay the inputs are
+    recomputed from, and a store can hold orphaned sidecars (see
+    scribblez.workloads.pair_store). This duplicates pair_store.complete_pairs
+    because importing it here would be circular: the workload registry
+    imports this module."""
     directory = Path(directory)
     return sorted(f for f in directory.glob("*.mset") if f.with_suffix(".slog").exists())
 
 
 def partition_full_sweep(paths: Iterable[str | Path]) -> tuple[list[Path], list[Path]]:
-    """(stratified, full_sweep) partition of .mset paths by header flag: the
-    training pairs and the evaluation-only swept pairs, which a corpus holds
-    side by side in one store."""
+    """Split .mset paths by header flag into (stratified, full_sweep): the
+    training pairs and the evaluation-only swept pairs a store holds side by
+    side."""
     stratified, swept = [], []
     for path in paths:
         path = Path(path)
@@ -129,8 +126,7 @@ def partition_full_sweep(paths: Iterable[str | Path]) -> tuple[list[Path], list[
 
 
 def read_mset(path: str | Path) -> MsetFile:
-    """Parse a .mset file. Raises on a bad magic or a version mismatch (stale
-    files must fail loudly)."""
+    """Parse a .mset file. Raises on bad magic or a version mismatch."""
     buf = np.fromfile(str(path), dtype=np.uint8)
     hdr = np.frombuffer(buf[: _FILE_HEADER.itemsize].tobytes(), dtype=_FILE_HEADER)[0]
     if hdr["magic"] != MSET_MAGIC:

@@ -1,24 +1,24 @@
-"""The evidence trainer's forward, loss, epoch loop, and held-out metrics.
+"""The evidence trainer's forward, loss, epoch loop and held-out metrics.
 
-The forward is the model's staged path: board trunk, move encodings, the
-evidence-free first pass (which supplies the predicted half of every evidence
-token, and is never a training path itself), then the fusion stage and the
-conditioned re-score. Loss is taken on the held-out simmed candidates
-(outside the subset), against their own sim outcomes -- the only loss there
-is. With the backbone frozen the trunk and move encodings run under no_grad
-and only EvidenceFusion and the proves-best head learn; unfrozen (the move
-proposal model, docs/roadmap.md item 5), the whole model follows the sim
-signal, the backbone at its own learning rate, with the empty-subset rows
-keeping the plain pass calibrated on the simmed candidates and no
-distillation anchor.
+The forward follows the model's staged path: board trunk, move encodings, the
+evidence-free first pass, then the fusion stage and the conditioned re-score.
+The first pass only supplies the predicted half of each evidence token and
+never receives gradient. The sole loss is on the held-out simmed candidates
+(those outside the evidence subset), against their own sim outcomes.
 
-Metrics compare the conditioned pass with the plain one on the same held-out
-rows, so "does conditioning learn anything from sim outcomes" is read directly:
-soft-CE against the sim's W/D/L, value MAE, the proves-best gain error, and the
-acquisition hit rate (does argmax gain over a position's held-out candidates
-pick the one that actually simmed best; the plain value's argmax is the
-baseline). Prefix-0 rows double as the exactness check -- conditioned and plain
-must agree there to floating-point noise.
+With the backbone frozen, only EvidenceFusion and the proves-best head learn.
+Unfrozen (the move proposal model, docs/roadmap.md item 5), the whole model
+trains on the sim signal, the backbone at its own learning rate, and the
+empty-subset rows keep the plain pass calibrated; there is no distillation
+term.
+
+The metrics compare the conditioned pass with the plain one on the same
+held-out rows, which directly answers whether conditioning learns from sim
+outcomes: soft-CE against the sim's W/D/L, value MAE, gain error, and the
+acquisition hit rate (whether argmax gain over a position's held-out
+candidates picks the one that simmed best, against the plain value's argmax as
+baseline). Empty-subset rows double as an exactness check: conditioned and
+plain must agree there up to floating-point noise.
 """
 
 from __future__ import annotations
@@ -100,19 +100,15 @@ def _scatter_rows(rows: torch.Tensor, flat: torch.Tensor, shape: tuple[int, int]
 def batch_evidence_inputs(
     batch: dict, move_args: tuple, plain: dict[str, torch.Tensor], max_e: int, device
 ) -> EvidenceInputs:
-    """The batch's evidence sets as (P, max_e, ...) inputs in one shot -- the
-    batched sibling of move_set_eval.evidence.build_evidence_inputs (the
-    single-position deployment builder), equal to collating it per position.
+    """The batch's evidence sets as (P, max_e, ...) inputs, equal to collating
+    move_set_eval.evidence.build_evidence_inputs per position.
 
-    The evidence rows are the batch's own candidate rows the subset marks
-    (`in_evidence`): their move half is those rows' move inputs (same moves,
-    same pre-move differential, so identical to a fresh encode), scattered to
-    padded index pos_id * max_e + `ev_index` (the member's compact slot within
-    its unit's set, so an arbitrary subset packs the way the deployment builder
-    does); the predicted half is the plain pass over the same rows, on device;
-    the observed half is the .sobs records the subset selects, gathered from the
-    flattened records by the same membership mask, so both halves enumerate the
-    unit blocks in ascending slot order and cannot drift apart.
+    Evidence rows are the batch's own candidate rows marked `in_evidence`,
+    scattered to padded slot pos_id * max_e + ev_index. Their move inputs are
+    reused as is (same moves and pre-move differential as a fresh encode), the
+    predicted half comes from the plain pass over those rows, and the observed
+    half from the .sobs records selected by the same mask. Both halves thus
+    enumerate members in the same order.
     """
     letters, blanks, squares, tile_mask, scalars, pos_id = move_args
     p = len(batch["positions"])
@@ -158,11 +154,11 @@ def conditioned_forward(
     model, batch: dict, device, max_e: int
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
     """(plain, conditioned) score_moves outputs over the batch's flattened
-    candidates; the conditioned pass reads each position's evidence prefix.
-    The trunk and move encodings carry gradients only when the backbone is
-    unfrozen; the plain pass never does -- it is the evidence tokens'
-    predicted half, an input, so it is computed under no_grad in either
-    mode."""
+    candidates, the conditioned pass reading each unit's evidence subset.
+
+    The trunk and move encodings carry gradient only when the backbone is
+    unfrozen. The plain pass never does: it is an input (the tokens'
+    predicted half), not a training path."""
     spatial, scalar = (batch[k].to(device) for k in _INPUT_KEYS)
     move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
     pos_id = move_args[-1]
@@ -175,8 +171,6 @@ def conditioned_forward(
     evidence = batch_evidence_inputs(batch, move_args, plain, max_e, device)
     tokens, spatial_feats = model.encode_evidence(board, evidence)
     board_c, g_c = model.evidence_fusion(board, g, tokens, spatial_feats, evidence.mask)
-    # The gain head's best-so-far is read off the staged evidence tokens -- the
-    # same observed values gain_targets took its max over.
     best = best_so_far(evidence.obs_scalars, evidence.mask)
     return plain, model.score_moves(board_c, g_c, e, pos_id, best)
 
@@ -184,9 +178,9 @@ def conditioned_forward(
 def compute_loss(
     outputs: dict[str, torch.Tensor], targets: dict[str, torch.Tensor], cfg: LossConfig
 ) -> dict[str, torch.Tensor]:
-    """Sim-outcome loss over the held-out rows: soft cross-entropy against the
-    sim's W/D/L frequencies, Huber on the score-diff mean/std against the sim
-    delta moments, Huber on the proves-best gain. Means over held-out rows."""
+    """Sim-outcome loss, averaged over held-out rows: soft cross-entropy
+    against the sim's W/D/L frequencies, and Huber losses for the score-diff
+    mean/std (against the sim delta moments) and the proves-best gain."""
     held = targets["held_out"]
     log_pred = F.log_softmax(outputs["wld"][held], dim=1)
     loss_wld = -(targets["sim_wld"][held] * log_pred).sum(dim=1).mean()
@@ -207,9 +201,8 @@ def _targets(batch: dict, device) -> dict[str, torch.Tensor]:
 
 
 def set_lr(optimizer, lr: float):
-    """Apply the schedule's rate to every param group, times the group's own
-    `lr_mult` when it carries one (the unfrozen backbone's group runs at a
-    fraction of the evidence path's rate)."""
+    """Set every param group to `lr` times its `lr_mult` (default 1), which
+    lets the unfrozen backbone run at a fraction of the evidence path's rate."""
     for group in optimizer.param_groups:
         group["lr"] = lr * group.get("lr_mult", 1.0)
 
@@ -227,9 +220,8 @@ def run_epoch(
     on_batch: Callable[[int, int, float, int], None] | None = None,
 ) -> EpochResult:
     """One training pass. rows_trained counts held-out rows (the rows that
-    carry loss) and keys the rows-clock learning rate. Gradients are clipped
-    to cfg.grad_clip over the optimizer's params; a batch with a non-finite
-    loss is skipped (see below)."""
+    carry loss) and drives lr_fn. Batches with a non-finite loss or gradient
+    are skipped and counted in the result."""
     model.train()
     trainable = [p for group in optimizer.param_groups for p in group["params"]]
     sums = {k: 0.0 for k in LOSS_KEYS}
@@ -244,17 +236,14 @@ def run_epoch(
             set_lr(optimizer, lr_fn(rows_trained))
         _, cond = conditioned_forward(model, batch, device, max_e)
         losses = compute_loss(cond, targets, cfg)
-        # A non-finite loss must not reach the optimizer: one such step
-        # poisons Adam's moments and every weight after it. Skip the batch
-        # and count it; the pass reports the count and the trainer stops the
-        # run when it is anything but rare.
+        # One non-finite step poisons Adam's moments and every later weight.
+        # The trainer stops the run if skips are more than rare.
         if not torch.isfinite(losses["total"]):
             skipped += 1
             continue
         optimizer.zero_grad()
         losses["total"].backward()
-        # Clip, and skip a step whose gradient is non-finite (an overflow in
-        # backward can leave inf/nan grads under a finite loss).
+        # Backward can overflow to inf/nan gradients under a finite loss.
         norm = torch.nn.utils.clip_grad_norm_(trainable, cfg.grad_clip or float("inf"))
         if not torch.isfinite(norm):
             skipped += 1
@@ -273,8 +262,7 @@ def run_epoch(
 
 
 class _Accumulator:
-    """Held-out-row sums for the plain-vs-conditioned metrics, overall and on
-    the evidence-bearing (prefix > 0) rows."""
+    """Running sums and counts for per-key means."""
 
     def __init__(self):
         self.sums: dict[str, float] = {}
@@ -304,7 +292,8 @@ def _hit_rate(acc: _Accumulator, key: str, score, value, pos_id, held):
 
 @torch.no_grad()
 def evaluate(model, dataset, device, positions_per_batch: int, max_e: int, seed: int = 0) -> dict:
-    """Held-out metrics, plain vs conditioned, on a fixed prefix draw (seed)."""
+    """Held-out metrics, plain vs conditioned, over a subset draw fixed by
+    `seed`. Keys ending in "_ev" cover only rows with non-empty evidence."""
     model.eval()
     acc = _Accumulator()
     exact = 0.0

@@ -1,10 +1,14 @@
-"""The evidence trainer's two checkpoint kinds, loaded into a MoveSetEvalModel:
-the student's rolling checkpoint (a move_set_eval tag's checkpoints/model.pt
--- generation 0, the plain student with the fusion stage at its zero-init and
-an untrained proves-best head) and the trainer's own per-pass checkpoints
-(checkpoints/model_epoch_NNNN.pt: the full model's weights, with the student's
-config under "student"). Both the trainer and the dashboard's trajectory pane
-load through here, so they agree on what a checkpoint's config means."""
+"""Loads the evidence trainer's two checkpoint kinds into a MoveSetEvalModel:
+
+  * the student's rolling checkpoint (a move_set_eval tag's
+    checkpoints/model.pt): the plain student, with the fusion stage at its
+    zero-init and an untrained proves-best head;
+  * the evidence trainer's per-pass checkpoints
+    (checkpoints/model_epoch_NNNN.pt): the full model, with the student's
+    config under "student".
+
+The trainer and the dashboard's trajectory pane both load through here, so
+they read a checkpoint's config the same way."""
 
 from __future__ import annotations
 
@@ -15,7 +19,8 @@ import torch
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.spatial_trunk import transformer_config
 
-# What the model needs from the student's config to be rebuilt without it.
+# The student-config keys needed to rebuild the model without the student's
+# checkpoint.
 STUDENT_CONFIG_KEYS = (
     "spatial_planes",
     "scalar_size",
@@ -43,10 +48,10 @@ def build_model(student_cfg: dict) -> MoveSetEvalModel:
 
 
 def load_student(path: str, device, freeze: bool = True) -> tuple[MoveSetEvalModel, dict]:
-    """The model initialized from a move_set_eval rolling checkpoint -- its
-    backbone frozen at the student's weights unless `freeze` is False (the
-    trainer's unfrozen mode) -- and that checkpoint's config (the arch and
-    encoding arm the student was built against, which this model inherits)."""
+    """(model initialized from a move_set_eval rolling checkpoint, that
+    checkpoint's config). The backbone is frozen unless `freeze` is False.
+    The model inherits the student's architecture and input encoding from the
+    config."""
     ckpt = torch.load(path, map_location=device, weights_only=False)
     cfg = ckpt["config"]
     model = build_model(cfg)
@@ -58,10 +63,9 @@ def load_student(path: str, device, freeze: bool = True) -> tuple[MoveSetEvalMod
 
 @dataclass
 class EvidenceCheckpoint:
-    """A loaded checkpoint of either kind. `trained` says whether the fusion
-    stage and proves-best head carry trained weights (a per-pass checkpoint)
-    or sit at their initial values (the student itself: conditioning is the
-    identity and the gain head is noise)."""
+    """A loaded checkpoint of either kind. `trained` is False for the student
+    itself, whose conditioning is the identity and whose gain head is
+    untrained noise."""
 
     model: MoveSetEvalModel
     student_cfg: dict
@@ -69,8 +73,8 @@ class EvidenceCheckpoint:
 
 
 def load_evidence_checkpoint(path: str, device) -> EvidenceCheckpoint:
-    """Load either checkpoint kind (told apart by the per-pass config's
-    "student" block) into an eval-mode frozen-backbone model."""
+    """Load either checkpoint kind (per-pass configs have a "student" block)
+    into an eval-mode, frozen-backbone model."""
     ckpt = torch.load(path, map_location=device, weights_only=False)
     cfg = ckpt["config"]
     if "student" in cfg:

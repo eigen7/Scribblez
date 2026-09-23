@@ -1,12 +1,10 @@
-"""Does the move set student's distillation error track the cross-check change
-a move causes? The measurement behind
-py/scripts/move_set_eval/crosscheck_delta_diagnostic.py, whose docstring states
-the question and how to read the tables.
+"""Measures whether the move set student's distillation error tracks the
+cross-check change a move causes. py/scripts/move_set_eval/
+crosscheck_delta_diagnostic.py drives it and explains how to read the tables.
 
-Per candidate move: the student-vs-teacher error (move_errors) against two
-features of the move's sparse cross-check delta (delta_features, from the
-dataset's CROSS_DELTA_KEYS tensors), tabulated within a tile count because
-tiles played drives both.
+Per candidate move, the student-vs-teacher error (move_errors) is tabulated
+against two features of the move's cross-check delta (delta_features). Rows
+are split by tiles played, because tile count drives both.
 """
 
 from __future__ import annotations
@@ -33,10 +31,10 @@ def delta_features(batch: dict) -> dict[str, np.ndarray]:
     real = batch["move_cross_mask"].numpy()
     old = batch["move_cross_old_masks"].numpy().astype(np.uint32)
     new = batch["move_cross_new_masks"].numpy().astype(np.uint32)
-    # A word's ends are constrained along the OTHER axis: a tile hooking a
-    # horizontal word is part of a vertical play's cross word, and the engine
-    # files that under the vertical-play planes (axis 1). A one-tile play forms
-    # a word each way, so all of its entries are word ends.
+    # Hooks onto a word's ends are cross-checks for plays along the other
+    # axis: a tile hooking a horizontal word lies in a vertical play's cross
+    # word, which the engine files under axis 1. A one-tile play forms a word
+    # each way, so all of its entries count.
     squares = batch["move_squares"].numpy()
     horizontal = squares[:, 0] // BOARD == squares[:, 1] // BOARD
     one_tile = batch["move_tile_mask"].sum(dim=1).numpy() == 1
