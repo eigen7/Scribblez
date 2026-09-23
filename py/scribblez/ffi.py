@@ -171,17 +171,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # err_cap
     ]
 
-    lib.scribblez_encode_score_diff_sweep.restype = ctypes.c_int
-    lib.scribblez_encode_score_diff_sweep.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,
-        ctypes.c_int64,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.POINTER(ctypes.c_float),
-    ]
-
     lib.scribblez_decode_rows.restype = ctypes.c_int
     lib.scribblez_decode_rows.argtypes = [
         ctypes.c_void_p,  # session
@@ -258,34 +247,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int),
     ]
 
-    lib.scribblez_dump_position.restype = ctypes.c_int
-    lib.scribblez_dump_position.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,
-        ctypes.c_int64,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-    ]
-
-    lib.scribblez_dump_position_json.restype = ctypes.c_int
-    lib.scribblez_dump_position_json.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,
-        ctypes.c_int64,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-    ]
-
-    lib.scribblez_sample_slog.restype = ctypes.c_int
-    lib.scribblez_sample_slog.argtypes = [
-        ctypes.c_char_p,
-        ctypes.POINTER(ctypes.c_char_p),
-        ctypes.POINTER(ctypes.c_int64),
-        ctypes.c_int,
-    ]
-
     lib.scribblez_read_file_header.restype = ctypes.c_int
     lib.scribblez_read_file_header.argtypes = [
         ctypes.c_char_p,
@@ -332,9 +293,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_float),
     ]
-
-    lib.scribblez_dl_resident_bytes.restype = ctypes.c_int64
-    lib.scribblez_dl_resident_bytes.argtypes = [ctypes.c_void_p]
 
     lib.scribblez_format_layout_json.restype = ctypes.c_char_p
     lib.scribblez_format_layout_json.argtypes = []
@@ -491,39 +449,6 @@ def get_max_move_per_lane_target_shapes() -> list[ShapeInfo]:
 
 def max_move_per_lane_row_size_floats() -> int:
     return _lib().scribblez_max_move_per_lane_row_size_floats()
-
-
-def encode_score_diff_sweep(
-    path: str | Path,
-    game_idx: int,
-    diff_lo: int,
-    diff_hi: int,
-    post_move: bool = True,
-) -> np.ndarray:
-    """Re-encode a .slog game's sampled position once per score differential
-    in [diff_lo, diff_hi], varying nothing else.
-
-    Returns (R, input_floats()) float32 with R = diff_hi - diff_lo + 1, or
-    (num_games * R, input_floats()), game-major, when game_idx < 0.
-    """
-    r = diff_hi - diff_lo + 1
-    if r <= 0:
-        raise ValueError(f"empty score-diff range [{diff_lo}, {diff_hi}]")
-    num_games = read_file_header(path)[0] if game_idx < 0 else 1
-    width = input_floats()
-    out = np.empty((num_games * r, width), dtype=np.float32)
-    rc = _lib().scribblez_encode_score_diff_sweep(
-        _session(),
-        str(path).encode("utf-8"),
-        int(game_idx),
-        int(post_move),
-        int(diff_lo),
-        int(diff_hi),
-        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-    )
-    if rc != 0:
-        raise OSError(f"encode_score_diff_sweep failed (rc={rc}) for {path} game {game_idx}")
-    return out
 
 
 def decode_rows(
@@ -739,29 +664,6 @@ def gcg_sim_evidence(
     # comparisons of the records.
     records = np.frombuffer(bytes(buf.raw[: n * RECORD_DTYPE.itemsize]), dtype=RECORD_DTYPE)
     return records, int(played_rank.value)
-
-
-def _read_string_ffi(fn, path: str | Path, game_idx: int, post_move: bool, what: str) -> str:
-    """Call a (session, path, game_idx, post_move, out, cap) -> len string FFI,
-    retrying once with an exact-size buffer if the first was too small."""
-    encoded = str(path).encode("utf-8")
-    cap = 4096
-    out = ctypes.create_string_buffer(cap)
-    n = fn(_session(), encoded, int(game_idx), int(post_move), out, cap)
-    if n < 0:
-        raise OSError(f"{what} failed for {path} game {game_idx}")
-    if n >= cap:  # buffer was too small; retry once with the exact size
-        cap = n + 1
-        out = ctypes.create_string_buffer(cap)
-        n = fn(_session(), encoded, int(game_idx), int(post_move), out, cap)
-    return out.value.decode("utf-8", errors="replace")
-
-
-def dump_position_json(path: str | Path, game_idx: int, post_move: bool = True) -> str:
-    """Return the web UI's GameState JSON for a game's sampled position."""
-    return _read_string_ffi(
-        _lib().scribblez_dump_position_json, path, game_idx, post_move, "dump_position_json"
-    )
 
 
 def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
@@ -1086,16 +988,6 @@ def gcg_position_board_json(gcg_text: str, open_leaves: bool) -> dict:
     return json.loads(out.value.decode("utf-8"))
 
 
-def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]):
-    """Write a new .slog at `dst_path` from selected (source path, game index) picks."""
-    n = len(picks)
-    src_arr = (ctypes.c_char_p * n)(*[str(p).encode("utf-8") for p, _ in picks])
-    idx_arr = (ctypes.c_int64 * n)(*[int(g) for _, g in picks])
-    rc = _lib().scribblez_sample_slog(str(dst_path).encode("utf-8"), src_arr, idx_arr, n)
-    if rc != 0:
-        raise OSError(f"sample_slog failed (rc={rc}) writing {dst_path}")
-
-
 # ---------------------------------------------------------------------------
 # File header reader
 # ---------------------------------------------------------------------------
@@ -1208,7 +1100,3 @@ class NativeDataLoader:
         if n < self._batch_size:
             return buf[:n]
         return buf
-
-    @property
-    def resident_bytes(self) -> int:
-        return int(self._lib.scribblez_dl_resident_bytes(self._handle))

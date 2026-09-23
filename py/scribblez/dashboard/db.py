@@ -206,12 +206,6 @@ def write_control(conn: sqlite3.Connection, name: str, value: float):
     conn.commit()
 
 
-def read_control(conn: sqlite3.Connection, name: str, default: float | None = None):
-    """The current value of one control, or `default` if it has never been set."""
-    row = conn.execute("SELECT value FROM control WHERE name = ?", (name,)).fetchone()
-    return row["value"] if row is not None else default
-
-
 def read_controls(conn: sqlite3.Connection) -> dict:
     """Every control's current value, name -> value."""
     return {r["name"]: r["value"] for r in conn.execute("SELECT name, value FROM control")}

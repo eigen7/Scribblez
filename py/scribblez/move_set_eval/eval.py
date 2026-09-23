@@ -33,7 +33,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from .model import win_equity
+from .model import MOVE_KEYS, win_equity
 from .train_loop import TARGET_KEYS
 
 DEFAULT_KS = (1, 3, 5)
@@ -49,16 +49,6 @@ DEFAULT_KS = (1, 3, 5)
 #   +342 MiB  same grid, M=1563
 # On stratified data the position bound always binds first.
 MAX_CANDIDATES_PER_BATCH = 16384
-
-# Move-input tensors passed positionally to the model's forward.
-_MOVE_KEYS = (
-    "move_letters",
-    "move_blanks",
-    "move_squares",
-    "move_tile_mask",
-    "move_scalars",
-    "move_pos_id",
-)
 
 
 def eval_slice_line(dataset) -> str:
@@ -163,7 +153,7 @@ def evaluate(
         positions_per_batch, seed=seed, max_candidates=max_candidates_per_batch
     ):
         inputs = (batch["input_spatial"].to(device), batch["input_scalar"].to(device))
-        move_args = tuple(batch[key].to(device) for key in _MOVE_KEYS)
+        move_args = tuple(batch[key].to(device) for key in MOVE_KEYS)
         out = model(*inputs, *move_args)
         if loss_cfg is not None:
             _accumulate_loss(loss_sums, out, batch, device, loss_cfg)

@@ -28,14 +28,15 @@ instead, and per-worker resources (threads, vCPUs) belong to the worker slots.
 
 from dataclasses import dataclass
 
+from cloud import worker_deps
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR
 from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
-from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
-from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR
+from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
+from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
 
 TRAINER_STATS = StatsSpec(
     unit="rows", phases={"train_s": "train", "eval_s": "eval", "upload_s": "upload"}
@@ -170,10 +171,15 @@ def fetch_train_deps(params):
     lexicon (the FFI session loads it before the model is built) and the
     position-evaluation eval datasets. Not Macondo's strategy tables: the
     trainer plays no moves."""
-    from cloud import worker_deps
-
     worker_deps.fetch_lexicon(worker_deps.DEFAULT_LEXICON)
     worker_deps.fetch_eval_positions()
+
+
+def run_generate(ctx: WorkerContext) -> int:
+    """The generate-role runner: selfplay_gen's, with WeirdBot in both seats
+    instead of HastyBot when weirdbot_generation is set."""
+    p = ctx.params
+    return generate(ctx, "--type=weirdbot" if p.weirdbot_generation else hasty_spec(p))
 
 
 SPEC = WorkloadSpec(
@@ -184,7 +190,7 @@ SPEC = WorkloadSpec(
         RoleSpec(
             name="generate",
             title="Generator",
-            runner="scribblez.workloads.selfplay_gen:run_generate",
+            runner="scribblez.workloads.position_eval:run_generate",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
             stats=GENERATOR_STATS,
         ),

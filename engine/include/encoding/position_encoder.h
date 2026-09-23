@@ -4,8 +4,7 @@
 // labels) for the position there. The game is a GameLog, either from live
 // self-play or viewed from a .slog buffer.
 //
-// The streaming producer and the DataLoader both encode through this class,
-// so a row from a live game is byte-identical to the same row decoded from a
+// A row from a live game is byte-identical to the same row decoded from a
 // .slog. It reuses its buffers between calls, so each worker thread owns one.
 
 #include "encoding/encode_context.h"
@@ -42,12 +41,6 @@ class PositionEncoder {
   template <typename Task>
   void encode_row(const GameLog& g, int sampled_turn, bool post_move, bool transpose,
                   float* out_row);
-
-  // Replays, then encodes the input once per score difference in
-  // [diff_lo, diff_hi], writing that many input rows (no labels, untransposed)
-  // contiguously to `out`. Hidden-leaves specs only.
-  void encode_score_diff_sweep(const GameLog& g, int sampled_turn, bool post_move, int diff_lo,
-                               int diff_hi, float* out);
 
   // Valid after replay_to_sampled / encode_row.
   const GameStateEncoder& enc() const { return enc_; }

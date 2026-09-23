@@ -141,9 +141,3 @@ def fetch_eval_positions():
             tar.extractall(REPO_ROOT, filter="data")
     got = bundles.eval_positions_digest()
     assert got == want, f"eval datasets unpacked at {got}, manifest names {want}"
-
-
-def fetch_kill_test_deps():
-    """Everything a kill-test worker needs beyond the bundle itself."""
-    fetch_lexicon(DEFAULT_LEXICON)
-    fetch_macondo_strategy(DEFAULT_LEXICON)

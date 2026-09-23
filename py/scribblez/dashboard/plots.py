@@ -165,20 +165,6 @@ def _series_figure(
 
 # Metric groups for series_grid(): each entry is (figure title, metric names)
 # or (title, names, {"log": True}) for a log y-axis.
-LOSS = [
-    (
-        "Loss",
-        [
-            "loss",
-            "loss_wld",
-            "loss_score_diff",
-            "loss_opp_next_placement",
-            "loss_self_next_placement",
-            "loss_opp_win_placement",
-            "loss_self_win_placement",
-        ],
-    )
-]
 # The learning rate spans orders of magnitude, hence the log y-axis. Only
 # schedule-free runs record the averaging weight (a WSD run's panel is absent):
 # they hold the rate constant and anneal by giving each new iterate a smaller

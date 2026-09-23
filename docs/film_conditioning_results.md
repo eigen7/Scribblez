@@ -19,12 +19,25 @@ conditioning path alongside the trunk's additive injection (see
 
 **Method.** The `face-up-leaves-film` run (`use_film: true`, otherwise
 identical to the additive baseline `face-up-leaves-fixed5`), probed with
-`py/scripts/position_eval/probe_crosscheck_binding.py`. That script reads the
-placement heads as 15×15 planes, which the models of these runs had; current
-position evaluation models predict move footprints instead, so it does not
-run on today's checkpoints. The recurring test case is **pos-09 M7**: the
-opponent holds G, GNU plays vertically there, and the Monte-Carlo truth for
-the opponent placing a tile on M7 is **0.668**.
+`py/scripts/position_eval/probe_crosscheck_binding.py`. The script read the
+placement heads as 15×15 planes, which these pre-footprint checkpoints had;
+current position evaluation models predict move footprints instead, and the
+script has since been removed. It ran three probes against one checkpoint:
+
+- **Letter selectivity**: set a hook square's cross-check mask to each single
+  letter in turn and read Pr[opponent plays there]. A frequency-prior model
+  ranks common tiles high whatever the leave; a binding model ranks the
+  letters the opponent holds far above the rest.
+- **Availability sweep**: remove the focus letter, then the whole leave, from
+  the opponent-leave input and read the same square. A binding model's
+  prediction drops; a frequency-prior model's barely moves.
+- **Tail percentiles**: per-position correlation of prediction with MC truth
+  over the large test set, plus |pred − truth| on cells with a live
+  cross-check constraint (some letters legal, some not).
+
+The recurring test case is **pos-09 M7**: the opponent holds G, GNU plays
+vertically there, and the Monte-Carlo truth for the opponent placing a tile on
+M7 is **0.668**.
 
 ## Result 1 — FiLM engages, but does not close the gap
 

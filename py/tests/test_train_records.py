@@ -131,7 +131,7 @@ def test_ingest_is_incremental_and_follows_a_rewritten_run_record(paths):
     recorder.commit_generation(1, 2000, _metrics(1))
     assert train_ingest.ingest(paths, conn) == ["run.json", "gen_000001.json"]
     assert db.read_meta(conn)["model_params"] == 456
-    assert db.read_control(conn, "dataloader_workers") == 2
+    assert db.read_controls(conn)["dataloader_workers"] == 2
     assert list(db.read_metric_series(conn, "loss")[0]) == [0, 1]
 
 

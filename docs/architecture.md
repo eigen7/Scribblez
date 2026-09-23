@@ -44,11 +44,7 @@ generate role / generate_data.py ─▶ play_game ─▶ GameRunner ─▶ GameE
 | Stream to Python | [scribblez_ffi.cpp](../engine/src/serve/scribblez_ffi.cpp) → [ffi.py](../py/scribblez/ffi.py) → [dataset.py](../py/scribblez/dataset.py) | A C ABI over the `DataLoader`; epoch-based batch streaming. |
 | Train | [train.py](../py/scripts/position_eval/train.py), [position_eval/model.py](../py/scribblez/position_eval/model.py) | The generational generate→train loop ([generational_training.md](generational_training.md)). |
 
-`PositionEncoder` is the one tensorization path. The `StreamingGameProducer`
-([streaming_game_producer.h](../engine/include/arena/streaming_game_producer.h))
-drives the same `GameEngine` and encodes live games straight into a ring
-buffer without writing a `.slog`, and because it shares the encoder its rows
-are byte-identical to decoded ones.
+`PositionEncoder` is the one tensorization path.
 
 ## The `.slog` format
 

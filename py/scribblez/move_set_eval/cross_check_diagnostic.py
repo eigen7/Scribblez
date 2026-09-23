@@ -15,9 +15,8 @@ import torch.nn.functional as F
 
 from .dataset import MsetDataset
 from .eval import MAX_CANDIDATES_PER_BATCH
-from .model import win_equity
+from .model import INPUT_KEYS, MOVE_KEYS, win_equity
 from .moves import BOARD
-from .train_loop import _INPUT_KEYS, _MOVE_KEYS
 
 TERCILES = ("low", "mid", "high")
 ERRORS = ("equity_abs", "wld_kl", "sd_mean_abs", "plane_kl")
@@ -71,7 +70,7 @@ def collect(model, dataset: MsetDataset, device, max_positions: int) -> dict[str
     positions = 0
     for batch in dataset.iter_batches(64, max_candidates=MAX_CANDIDATES_PER_BATCH):
         with torch.no_grad():
-            out = model(*(batch[k].to(device) for k in (*_INPUT_KEYS, *_MOVE_KEYS)))
+            out = model(*(batch[k].to(device) for k in (*INPUT_KEYS, *MOVE_KEYS)))
         row = {
             **move_errors(out, batch, device),
             **delta_features(batch),
