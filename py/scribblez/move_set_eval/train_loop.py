@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .model import compute_loss
+from .model import INPUT_KEYS, MOVE_KEYS, compute_loss
 
 # compute_loss keys averaged each epoch; "total" is the optimized objective.
 LOSS_KEYS = (
@@ -23,16 +23,6 @@ LOSS_KEYS = (
     "score_diff_mean",
     "score_diff_std",
     "planes",
-)
-
-_INPUT_KEYS = ("input_spatial", "input_scalar")
-_MOVE_KEYS = (
-    "move_letters",
-    "move_blanks",
-    "move_squares",
-    "move_tile_mask",
-    "move_scalars",
-    "move_pos_id",
 )
 # target_planes is present only on a plane-carrying corpus (dataset.has_planes).
 TARGET_KEYS = ("target_wld", "target_score_diff", "target_planes")
@@ -78,8 +68,8 @@ class EpochResult:
 
 
 def _forward_args(batch: dict, device):
-    inputs = tuple(batch[k].to(device) for k in _INPUT_KEYS)
-    move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
+    inputs = tuple(batch[k].to(device) for k in INPUT_KEYS)
+    move_args = tuple(batch[k].to(device) for k in MOVE_KEYS)
     targets = {k: batch[k].to(device) for k in TARGET_KEYS if k in batch}
     return inputs, move_args, targets
 

@@ -1,20 +1,14 @@
 #include "serve/scribblez_ffi.h"
 
 #include "agent/agent.h"
-#include "agent/player_factory.h"
-#include "arena/game_engine.h"
-#include "arena/streaming_game_producer.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
 #include "data/sim_observation_log.h"
-#include "data/slog_subset.h"
-#include "data/streaming_row_buffer.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
-#include "encoding/row_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "sim/sim_runner.h"
@@ -57,8 +51,6 @@ struct ScribblezSession {
   int input_floats() const { return scribblez::input_floats(spec); }
   int row_size_floats() const { return input_floats() + scribblez::kLabelFloats; }
 
-  int encode_score_diff_sweep(const char* path, int64_t game_idx, bool post_move, int diff_lo,
-                              int diff_hi, float* out_inputs) const;
   int decode_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx, int64_t n,
                   bool post_move, float* out) const;
   int move_set_cross_check_deltas(const char* path, const int64_t* game_idx,
@@ -68,10 +60,6 @@ struct ScribblezSession {
                                   uint32_t* out_new_masks, uint8_t* out_delta_mask) const;
   int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads, uint64_t seed,
                        bool open_leaves, char* out_records, int* played_rank) const;
-  int dump_position(const char* path, int64_t game_idx, bool post_move, char* out,
-                    int out_cap) const;
-  int dump_position_json(const char* path, int64_t game_idx, bool post_move, char* out,
-                         int out_cap) const;
   int max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
                                     float* out_input) const;
   int position_eval_analyze_gcg(const char* gcg_text, bool opp_leave_input, float* out_input,
@@ -93,13 +81,6 @@ struct ScribblezSession {
                               int out_cap) const;
   DataLoaderHandle* dl_new(int64_t memory_budget, int num_worker_threads, int num_prefetch_threads,
                            int task) const;
-  StreamHandle* stream_new(float* const* slot_ptrs, int num_slots, int rows_per_slot,
-                           int num_threads, bool post_move, bool apply_symmetry, uint64_t seed,
-                           int handicap_max, const char* const* player_specs, int num_specs) const;
-  StreamHandle* max_move_per_lane_stream_new(float* const* slot_ptrs, int num_slots,
-                                             int rows_per_slot, int num_threads,
-                                             bool apply_symmetry, uint64_t seed, int handicap_max,
-                                             const char* const* player_specs, int num_specs) const;
 
   scribblez::InputEncodingSpec spec;
 
@@ -216,10 +197,9 @@ int scribblez_max_move_per_lane_input_floats(void) {
 
 namespace {
 
-// Read a .slog file into `buf`, validate its header, and report its game count,
-// bounds-checking `game_idx` when it is >= 0. Returns 0 on success, -1 on any
-// failure.
-int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf, uint32_t* num_games) {
+// Read a .slog file into `buf`, validate its header, and bounds-check
+// `game_idx`. Returns 0 on success, -1 on any failure.
+int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf) {
   if (!path) return -1;
   std::ifstream f(path, std::ios::binary);
   if (!f) return -1;
@@ -228,40 +208,8 @@ int load_slog(const char* path, int64_t game_idx, std::vector<char>& buf, uint32
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
   if (hdr->magic != kMagic || hdr->version != kVersion) return -1;
   if (game_idx >= int64_t(hdr->num_games)) return -1;
-  if (num_games) *num_games = hdr->num_games;
   return 0;
 }
-
-}  // namespace
-
-int ScribblezSession::encode_score_diff_sweep(const char* path, int64_t game_idx, bool post_move,
-                                              int diff_lo, int diff_hi, float* out_inputs) const {
-  if (!out_inputs || diff_hi < diff_lo) return -1;
-  uint32_t num_games = 0;
-  std::vector<char> buf;
-  if (load_slog(path, game_idx, buf, &num_games) != 0) return -1;
-
-  const int64_t sweep = int64_t(diff_hi - diff_lo + 1) * input_floats();
-  scribblez::binlog::BlockDecoder decoder(spec);
-  if (game_idx >= 0) {
-    decoder.encode_score_diff_sweep(buf.data(), uint32_t(game_idx), post_move, diff_lo, diff_hi,
-                                    out_inputs);
-  } else {
-    // Every game in the file, game g at row g * R.
-    for (uint32_t g = 0; g < num_games; ++g) {
-      decoder.encode_score_diff_sweep(buf.data(), g, post_move, diff_lo, diff_hi,
-                                      out_inputs + int64_t(g) * sweep);
-    }
-  }
-  return 0;
-}
-
-int scribblez_encode_score_diff_sweep(ScribblezSession* s, const char* path, int64_t game_idx,
-                                      int post_move, int diff_lo, int diff_hi, float* out_inputs) {
-  return s->encode_score_diff_sweep(path, game_idx, post_move != 0, diff_lo, diff_hi, out_inputs);
-}
-
-namespace {
 
 // Copy `s` into the caller's buffer, NUL-terminated and truncated to out_cap,
 // and return its full length so the caller can detect truncation and retry.
@@ -346,7 +294,7 @@ int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
                                   float* out) const {
   if (!game_idx || !turn_idx || !out || n < 0) return -1;
   std::vector<char> buf;
-  if (load_slog(path, /*game_idx=*/0, buf, nullptr) != 0) return -1;
+  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
   const int64_t row_floats = scribblez::input_floats(spec) + scribblez::kLabelFloats;
   for (int64_t j = 0; j < n; ++j) {
@@ -387,7 +335,7 @@ int ScribblezSession::move_set_cross_check_deltas(
   namespace mset = scribblez::move_set;
   if (!game_idx || !turn_idx || !move_counts || n_positions < 0) return -1;
   std::vector<char> buf;
-  if (load_slog(path, /*game_idx=*/0, buf, nullptr) != 0) return -1;
+  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
   // Copied out for alignment, as in scribblez_move_set_encode_moves.
   const char* bytes = static_cast<const char*>(moves);
@@ -442,34 +390,6 @@ int32_t scribblez_move_set_encoding_version(void) {
 void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_index, float* scale) {
   *scalar_index = scribblez::scalar_block_offset(s->spec, scribblez::ScalarBlockId::kScoreDiff);
   *scale = scribblez::kScoreDiffInputScale;
-}
-
-int ScribblezSession::dump_position(const char* path, int64_t game_idx, bool post_move, char* out,
-                                    int out_cap) const {
-  std::vector<char> buf;
-  if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
-  scribblez::binlog::BlockDecoder decoder(spec);
-  return emit_string(decoder.dump_position(buf.data(), uint32_t(game_idx), post_move), out,
-                     out_cap);
-}
-
-int scribblez_dump_position(ScribblezSession* s, const char* path, int64_t game_idx, int post_move,
-                            char* out, int out_cap) {
-  return s->dump_position(path, game_idx, post_move != 0, out, out_cap);
-}
-
-int ScribblezSession::dump_position_json(const char* path, int64_t game_idx, bool post_move,
-                                         char* out, int out_cap) const {
-  std::vector<char> buf;
-  if (load_slog(path, game_idx, buf, nullptr) != 0) return -1;
-  scribblez::binlog::BlockDecoder decoder(spec);
-  return emit_string(decoder.dump_position_json(buf.data(), uint32_t(game_idx), post_move), out,
-                     out_cap);
-}
-
-int scribblez_dump_position_json(ScribblezSession* s, const char* path, int64_t game_idx,
-                                 int post_move, char* out, int out_cap) {
-  return s->dump_position_json(path, game_idx, post_move != 0, out, out_cap);
 }
 
 int ScribblezSession::max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json,
@@ -732,18 +652,6 @@ int scribblez_gcg_position_board_json(ScribblezSession* s, const char* gcg_text,
   return s->gcg_position_board_json(gcg_text, open_leaves != 0, out_json, out_cap);
 }
 
-int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
-                          const int64_t* game_indices, int num_picks) {
-  if (!dst_path || !src_paths || !game_indices || num_picks < 0) return -1;
-  std::vector<scribblez::binlog::SlogPick> picks;
-  picks.reserve(size_t(num_picks));
-  for (int i = 0; i < num_picks; ++i) {
-    if (!src_paths[i]) return -1;
-    picks.push_back({src_paths[i], game_indices[i]});
-  }
-  return scribblez::binlog::write_slog_subset(dst_path, picks) ? 0 : -1;
-}
-
 const char* scribblez_format_layout_json(void) { return scribblez::format_layout_json().c_str(); }
 
 int scribblez_read_file_header(const char* path, int64_t* out_num_games, int64_t* out_file_size) {
@@ -823,133 +731,5 @@ int scribblez_dl_load_batch(DataLoaderHandle* h, float* output) {
     return -1;
   }
 }
-
-int64_t scribblez_dl_resident_bytes(const DataLoaderHandle* h) {
-  if (!h) return 0;
-  return h->loader.resident_bytes();
-}
-
-// ---------------------------------------------------------------------------
-// Streaming self-play pipeline
-// ---------------------------------------------------------------------------
-
-struct StreamHandle {
-  scribblez::binlog::StreamingRowBuffer ring;
-  scribblez::binlog::StreamingGameProducer producer;
-
-  StreamHandle(float* const* slots, int num_slots, int rows_per_slot, int row_floats,
-               const scribblez::GameEngine::Params& engine_params,
-               const scribblez::PlayerFactory::Params& player_params,
-               const scribblez::binlog::StreamingGameProducer::Params& stream_params)
-      : ring(slots, num_slots, rows_per_slot, row_floats),
-        producer(engine_params, player_params, stream_params, ring) {}
-};
-
-namespace {
-
-// Shared construction for both streaming entry points, which differ only in
-// row encoder and row width. Returns nullptr on a bad config or a failure to
-// construct.
-StreamHandle* new_stream(float* const* slot_ptrs, int num_slots, int rows_per_slot, int num_threads,
-                         int apply_symmetry, uint64_t seed, int handicap_max,
-                         const char* const* player_specs, int num_specs, int row_floats,
-                         scribblez::binlog::RowEncoderFactory factory) {
-  if (!slot_ptrs || num_slots < 1 || rows_per_slot < 1 || !player_specs || num_specs < 1) {
-    return nullptr;
-  }
-  scribblez::PlayerFactory::Params player_params;
-  for (int i = 0; i < num_specs; ++i) {
-    if (!player_specs[i]) return nullptr;
-    player_params.specs.emplace_back(player_specs[i]);
-  }
-  scribblez::GameEngine::Params engine_params;
-  engine_params.threads = num_threads;
-  engine_params.seed = seed;
-  engine_params.handicap_max = handicap_max;
-  scribblez::binlog::StreamingGameProducer::Params stream_params;
-  stream_params.apply_symmetry = apply_symmetry != 0;
-  stream_params.make_encoder = std::move(factory);
-  try {
-    return new StreamHandle(slot_ptrs, num_slots, rows_per_slot, row_floats, engine_params,
-                            player_params, stream_params);
-  } catch (const std::exception& e) {
-    std::cerr << "new_stream: " << e.what() << "\n";
-    return nullptr;
-  }
-}
-
-}  // namespace
-
-StreamHandle* ScribblezSession::stream_new(float* const* slot_ptrs, int num_slots,
-                                           int rows_per_slot, int num_threads, bool post_move,
-                                           bool apply_symmetry, uint64_t seed, int handicap_max,
-                                           const char* const* player_specs, int num_specs) const {
-  const scribblez::InputEncodingSpec enc_spec = spec;
-  return ::new_stream(
-    slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed, handicap_max,
-    player_specs, num_specs, row_size_floats(), [enc_spec, post_move]() {
-      return scribblez::binlog::make_position_eval_row_encoder(enc_spec, post_move);
-    });
-}
-
-StreamHandle* scribblez_stream_new(ScribblezSession* s, float* const* slot_ptrs, int num_slots,
-                                   int rows_per_slot, int num_threads, int post_move,
-                                   int apply_symmetry, uint64_t seed, int handicap_max,
-                                   const char* const* player_specs, int num_specs) {
-  return s->stream_new(slot_ptrs, num_slots, rows_per_slot, num_threads, post_move != 0,
-                       apply_symmetry != 0, seed, handicap_max, player_specs, num_specs);
-}
-
-StreamHandle* ScribblezSession::max_move_per_lane_stream_new(
-  float* const* slot_ptrs, int num_slots, int rows_per_slot, int num_threads, bool apply_symmetry,
-  uint64_t seed, int handicap_max, const char* const* player_specs, int num_specs) const {
-  const scribblez::InputEncodingSpec enc_spec = spec;
-  return ::new_stream(
-    slot_ptrs, num_slots, rows_per_slot, num_threads, apply_symmetry, seed, handicap_max,
-    player_specs, num_specs, scribblez::MaxMovePerLaneTask::kRowFloats,
-    [enc_spec]() { return scribblez::binlog::make_max_move_per_lane_row_encoder(enc_spec); });
-}
-
-StreamHandle* scribblez_max_move_per_lane_stream_new(ScribblezSession* s, float* const* slot_ptrs,
-                                                     int num_slots, int rows_per_slot,
-                                                     int num_threads, int apply_symmetry,
-                                                     uint64_t seed, int handicap_max,
-                                                     const char* const* player_specs,
-                                                     int num_specs) {
-  return s->max_move_per_lane_stream_new(slot_ptrs, num_slots, rows_per_slot, num_threads,
-                                         apply_symmetry != 0, seed, handicap_max, player_specs,
-                                         num_specs);
-}
-
-void scribblez_stream_start(StreamHandle* h) {
-  if (h) h->producer.start();
-}
-
-int scribblez_stream_wait_full_slot(StreamHandle* h) {
-  if (!h) return -1;
-  return h->ring.wait_full_slot();
-}
-
-void scribblez_stream_release_slot(StreamHandle* h, int slot) {
-  if (h) h->ring.release_slot(slot);
-}
-
-void scribblez_stream_get_stats(StreamHandle* h, ScribblezStreamStats* out) {
-  if (!h || !out) return;
-  const scribblez::binlog::ProducerStats ps = h->producer.stats();
-  const scribblez::binlog::RingStats rs = h->ring.stats();
-  out->games_played = ps.games_played;
-  out->games_dropped = ps.games_dropped;
-  out->rows_committed = rs.rows_committed;
-  out->slots_published = rs.slots_published;
-  out->producer_blocked_ns = rs.producer_blocked_ns;
-  out->consumer_blocked_ns = rs.consumer_blocked_ns;
-}
-
-void scribblez_stream_stop(StreamHandle* h) {
-  if (h) h->producer.stop();
-}
-
-void scribblez_stream_delete(StreamHandle* h) { delete h; }
 
 }  // extern "C"

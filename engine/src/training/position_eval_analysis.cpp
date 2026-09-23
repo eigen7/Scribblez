@@ -33,13 +33,9 @@ void replay_and_encode(const ParsedGcgPostMove& pos, const Rack& leave, const Ra
   GameStateEncoder enc{spec};
   for (const ParsedGcgTurn& t : pos.game.turns) enc.apply_move(t.record.move);
   RELEASE_ASSERT(enc.active_player() == 1 - pos.start_player);
-  if (spec.opp_leave_input) {
-    // An empty opponent leave is legitimate here (in the penultimate-bingo
-    // datasets the player to act kept nothing) and encodes as zeros.
-    enc.encode_input(pos.start_player, leave, opp_leave, out);
-  } else {
-    enc.encode_input(pos.start_player, leave, out);
-  }
+  // An empty opponent leave is legitimate here (in the penultimate-bingo
+  // datasets the player to act kept nothing) and encodes as zeros.
+  enc.encode_input(pos.start_player, leave, opp_leave, out);
 }
 
 // Parse a leave string into a Rack: A-Z (any case) are letters, '?' is a blank,

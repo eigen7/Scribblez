@@ -24,9 +24,6 @@ struct View {
   Premium premium_at(int r, int c) const {
     return transposed ? board.premium_at(c, r) : board.premium_at(r, c);
   }
-  std::pair<int, int> to_board(int r, int c) const {
-    return transposed ? std::make_pair(c, r) : std::make_pair(r, c);
-  }
 };
 
 // One view's Board-owned caches, indexed by idx(row, col).

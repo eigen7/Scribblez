@@ -42,8 +42,8 @@ po::options_description make_options_description(NeuralOptions& opts) {
   opts.service.add_options(desc);
   desc.add_options()(
     "top-k,k", po::value<int>(&opts.top_k)->default_value(opts.top_k),
-    "candidate plays to evaluate: K>0 = top-K by static equity; 0 = ALL legal plays (most "
-    "diverse, but slowest -- every play hits the GPU)")(
+    "candidate moves (plays and exchanges) to evaluate: K>0 = top-K by static equity; 0 = ALL "
+    "legal moves (most diverse, but slowest -- every move hits the GPU)")(
     "objective,o", po::value<std::string>(&opts.objective)->default_value(opts.objective),
     "selection head: winprob = highest P(win)+0.5*P(draw); scorediff = highest expected final "
     "score differential")("temperature,t",
@@ -71,10 +71,10 @@ std::unique_ptr<NeuralAgent> NeuralAgent::from_spec(const std::vector<std::strin
     throw util::CleanException("bad --type=neural options: {}", e.what());
   }
 
-  if (opts.top_k < 0) throw util::CleanException("--top-k must be >= 0 (0 = all legal plays)");
+  if (opts.top_k < 0) throw util::CleanException("--top-k must be >= 0 (0 = all legal moves)");
 
   // Raise the engine batch to top_k so the top-K set is scored in one chunk.
-  // With top_k == 0 (all plays) the evaluator chunks to batch_size.
+  // With top_k == 0 (all moves) the evaluator chunks to batch_size.
   const NeuralAgent::NetParams net_params =
     opts.service.net_params<nn::PositionEvaluationSpec>(opts.top_k);
 

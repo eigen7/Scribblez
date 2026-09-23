@@ -3,6 +3,7 @@
 
 import threading
 import time
+from dataclasses import replace
 
 from scribblez import workloads
 from scribblez.workloads import selfplay_gen
@@ -161,3 +162,30 @@ def test_max_cycles_still_bounds_the_loop(tmp_path, monkeypatch):
 
     assert rc == 0
     assert len(calls) == 3
+
+
+def _player_specs_played(tmp_path, monkeypatch, weirdbot_generation: bool) -> set[str]:
+    """The --player specs position_eval's generate runner hands run_games."""
+    specs = set()
+
+    def run_games(out_dir, player_spec, **kwargs):
+        specs.add(player_spec)
+        (out_dir / "game.slog").write_bytes(b"fake-slog")
+        return 0
+
+    monkeypatch.setattr(selfplay_gen, "run_games", run_games)
+    ctx = _ctx(tmp_path, RecordingSink(), max_cycles=1)
+    ctx = replace(ctx, params=replace(ctx.params, weirdbot_generation=weirdbot_generation))
+    assert workloads.resolve(ctx.role.runner)(ctx) == 0
+    return specs
+
+
+def test_position_eval_generates_hastybot_by_default(tmp_path, monkeypatch):
+    params = workloads.get("position_eval").params_cls()
+    specs = _player_specs_played(tmp_path, monkeypatch, weirdbot_generation=False)
+    assert specs == {selfplay_gen.hasty_spec(params)}
+
+
+def test_position_eval_weirdbot_generation_plays_weirdbot(tmp_path, monkeypatch):
+    specs = _player_specs_played(tmp_path, monkeypatch, weirdbot_generation=True)
+    assert specs == {"--type=weirdbot"}

@@ -58,7 +58,6 @@ class SimAgent : public Agent {
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
   void observe_move(const Move& move) override;
-  bool supports_parallelism() const override { return true; }
 
   // Build from `--player "--type=sim [options]"` tokens, with --type and --name
   // already stripped. Throws util::CleanException on bad input.

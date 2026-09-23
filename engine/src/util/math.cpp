@@ -2,7 +2,20 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
+#include <cmath>
+
 namespace scribblez::util {
+
+void softmax(const float* logits, int n, float* out) {
+  const float m = *std::max_element(logits, logits + n);
+  double sum = 0.0;
+  for (int i = 0; i < n; ++i) {
+    out[i] = std::exp(logits[i] - m);
+    sum += out[i];
+  }
+  for (int i = 0; i < n; ++i) out[i] = float(out[i] / sum);
+}
 
 int SoftmaxSampler::sample(const std::vector<double>& values, int k, double temperature,
                            std::mt19937_64& rng) {

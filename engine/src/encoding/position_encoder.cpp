@@ -5,7 +5,6 @@
 #include "util/assert.h"
 
 #include <cstdint>
-#include <cstring>
 
 namespace scribblez {
 namespace binlog {
@@ -118,20 +117,6 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
   ctx.final_score_p0 = g.final_scores[0];
   ctx.final_score_p1 = g.final_scores[1];
   return ctx;
-}
-
-void PositionEncoder::encode_score_diff_sweep(const GameLog& g, int sampled_turn, bool post_move,
-                                              int diff_lo, int diff_hi, float* out) {
-  const int mover = replay_to_sampled(g, sampled_turn, post_move);
-  // Encode fully once, since that runs move generation, then copy the row and
-  // overwrite only the score difference.
-  const int64_t row_floats = input_floats(spec_);
-  enc_.encode_input_with_score_diff(mover, racks_[mover], diff_lo, out);
-  for (int64_t i = 1; i <= diff_hi - diff_lo; ++i) {
-    float* row = out + i * row_floats;
-    std::memcpy(row, out, sizeof(float) * size_t(row_floats));
-    enc_.overwrite_score_diff(diff_lo + int(i), row);
-  }
 }
 
 }  // namespace binlog

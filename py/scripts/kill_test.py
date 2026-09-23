@@ -362,16 +362,6 @@ def paired_stats(delta: np.ndarray) -> str:
     return f"d={mean:+.4f} +/- {se:.4f}   win%={100 * wins / n:5.1f}   sign-p={p:.2g}"
 
 
-def load_per_row(results_dir: Path, arm: str) -> np.ndarray:
-    path = results_dir / f"{arm}_holdout_ce.npy"
-    if not path.exists():
-        raise SystemExit(
-            f"{path} missing -- per-position losses are saved during training, so rerun "
-            "the arms once (a run predating this analysis has none to analyze)"
-        )
-    return np.load(path)
-
-
 def evidence_yardstick(train, holdout, device) -> dict[str, float]:
     """How predictive the raw sim output is on its own: holdout WLD
     cross-entropy of logistic regressions over the evidence scalars, with no

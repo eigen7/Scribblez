@@ -1,6 +1,7 @@
 #include "agent/evidence_staging.h"
 
 #include "util/exception.h"
+#include "util/math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -16,18 +17,6 @@ constexpr int kCells = kEvidencePlaneCells;
 // stage sees inputs unlike those it trained on.
 constexpr double kScorePointScale = 100.0;
 constexpr double kRolloutLogScale = 8.0;
-
-// One candidate's three WLD logits to [p_win, p_draw, p_loss], the same
-// decode the eval service applies to this head.
-void softmax3(const float* logits, float* out) {
-  const float m = std::max({logits[0], logits[1], logits[2]});
-  double sum = 0.0;
-  for (int i = 0; i < 3; ++i) {
-    out[i] = std::exp(logits[i] - m);
-    sum += out[i];
-  }
-  for (int i = 0; i < 3; ++i) out[i] = float(out[i] / sum);
-}
 
 // One head's footprint histogram scattered into its kSlotsPerCell channels,
 // scaled by inv_n: anchored class (cell, slot) goes to channel `slot` at
@@ -69,7 +58,8 @@ void stage_scalars(const SimObservation& obs, const float* wld_logits, const flo
   out[3] = float(delta_mean / kScorePointScale);
   out[4] = float(std::sqrt(delta_var) / kScorePointScale);
   out[5] = float(std::log1p(double(obs.n)) / kRolloutLogScale);
-  softmax3(wld_logits, out + kNumObservedScalars);
+  // [p_win, p_draw, p_loss], the same decode the eval service applies to this head.
+  util::softmax(wld_logits, 3, out + kNumObservedScalars);
   out[kNumObservedScalars + 3] = float(score_diff[0] / kScorePointScale);
   out[kNumObservedScalars + 4] = float(score_diff[1] / kScorePointScale);
 }

@@ -7,28 +7,22 @@ def _conn(tmp_path):
     return db.connect(tmp_path / "dashboard.db")
 
 
-def test_read_control_default_when_unset(tmp_path):
-    conn = _conn(tmp_path)
-    assert db.read_control(conn, "base_lr") is None
-    assert db.read_control(conn, "base_lr", default=1e-3) == 1e-3
-
-
 def test_init_control_seeds_then_preserves(tmp_path):
     conn = _conn(tmp_path)
     db.init_control(conn, {"base_lr": 1e-3})
-    assert db.read_control(conn, "base_lr") == 1e-3
+    assert db.read_controls(conn)["base_lr"] == 1e-3
     # A later operator write, then a re-seed (as on restart): the value is kept.
     db.write_control(conn, "base_lr", 2e-4)
     db.init_control(conn, {"base_lr": 1e-3})
-    assert db.read_control(conn, "base_lr") == 2e-4
+    assert db.read_controls(conn)["base_lr"] == 2e-4
 
 
 def test_write_control_upserts(tmp_path):
     conn = _conn(tmp_path)
     db.write_control(conn, "base_lr", 5e-4)
-    assert db.read_control(conn, "base_lr") == 5e-4
+    assert db.read_controls(conn)["base_lr"] == 5e-4
     db.write_control(conn, "base_lr", 1e-4)
-    assert db.read_control(conn, "base_lr") == 1e-4
+    assert db.read_controls(conn)["base_lr"] == 1e-4
     assert db.read_controls(conn) == {"base_lr": 1e-4}
 
 

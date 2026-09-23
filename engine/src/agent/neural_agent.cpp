@@ -1,10 +1,10 @@
 #include "agent/neural_agent.h"
 
-#include "lexicon/hasty_equity.h"
+#include "sim/sim_runner.h"
 #include "util/exception.h"
 #include "util/math.h"
 
-#include <algorithm>
+#include <limits>
 #include <numeric>
 #include <optional>
 
@@ -39,31 +39,6 @@ void NeuralAgent::observe_move(const Move& move) {
   endgame_.observe_move(move);
 }
 
-std::vector<double> NeuralAgent::candidate_equities(const MoveRequest& req,
-                                                    const std::vector<Move>& plays) const {
-  return HastyEquity::instance().equities(plays, req.board, req.bag_size, req.opp_rack,
-                                          req.my_rack);
-}
-
-int NeuralAgent::greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const {
-  const std::vector<double> equities = candidate_equities(req, plays);
-  return std::max_element(equities.begin(), equities.end()) - equities.begin();
-}
-
-int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Move>& plays) {
-  const int n = plays.size();
-  cand_idx_.resize(size_t(n));
-  std::iota(cand_idx_.begin(), cand_idx_.end(), 0);
-
-  if (top_k_ == 0 || n <= top_k_) return n;
-
-  const std::vector<double> equities = candidate_equities(req, plays);
-  std::partial_sort(cand_idx_.begin(), cand_idx_.begin() + top_k_, cand_idx_.end(),
-                    [&](int a, int b) { return equities[a] > equities[b]; });
-  cand_idx_.resize(size_t(top_k_));
-  return top_k_;
-}
-
 void NeuralAgent::encode_candidate(const Move& mv, const Rack& my_rack, int my_seat,
                                    const Rack& opp_leave, float* dst) const {
   evaluator_.encode_candidate(mv, my_rack, my_seat, opp_leave, dst);
@@ -93,18 +68,18 @@ float NeuralAgent::objective(int i) const {
 MoveDecision NeuralAgent::make_move(const MoveRequest& req) {
   if (const std::optional<MoveDecision> solved = endgame_.try_solve(req)) return *solved;
 
-  const std::vector<Move> plays = generate_legal_plays(req);
-  if (plays.empty()) return Move::pass();
-
+  const std::vector<Move> candidates =
+    equity_top_k(req, top_k_ == 0 ? std::numeric_limits<int>::max() : top_k_);
   // On a bag-empty turn the solver declined, the model is outside its
-  // training regime and ranks worse than static equity.
-  if (req.bag_size == 0) {
-    return plays[size_t(greedy_equity_index(req, plays))];
-  }
+  // training regime and ranks worse than static equity, so play the
+  // static-equity favourite, which equity_top_k ranked first.
+  if (req.bag_size == 0 || candidates.size() == 1) return candidates.front();
 
-  const int k = select_candidates(req, plays);
-  evaluator_.evaluate(req, plays, cand_idx_, k);
-  return plays[size_t(cand_idx_[select_index(k)])];
+  const int k = candidates.size();
+  cand_idx_.resize(size_t(k));
+  std::iota(cand_idx_.begin(), cand_idx_.end(), 0);
+  evaluator_.evaluate(req, candidates, cand_idx_, k);
+  return candidates[size_t(select_index(k))];
 }
 
 }  // namespace scribblez

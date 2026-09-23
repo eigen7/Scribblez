@@ -1,7 +1,7 @@
 #include "agent/move_proposal_session.h"
 
-#include <algorithm>
-#include <cmath>
+#include "util/math.h"
+
 #include <utility>
 
 namespace scribblez {
@@ -13,14 +13,7 @@ namespace {
 void softmax_rows_in_place(float* data, int rows, int width) {
   for (int r = 0; r < rows; ++r) {
     float* row = data + size_t(r) * width;
-    float m = row[0];
-    for (int i = 1; i < width; ++i) m = std::max(m, row[i]);
-    double sum = 0.0;
-    for (int i = 0; i < width; ++i) {
-      row[i] = std::exp(row[i] - m);
-      sum += row[i];
-    }
-    for (int i = 0; i < width; ++i) row[i] = float(row[i] / sum);
+    util::softmax(row, width, row);
   }
 }
 

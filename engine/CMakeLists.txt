@@ -16,7 +16,6 @@ add_library(scribblez_core STATIC
   src/encoding/board_planes.cpp
   src/training/max_move_per_lane_input_encoder.cpp
   src/training/max_move_per_lane_task.cpp
-  src/encoding/row_encoder.cpp
   src/game/game.cpp
   src/game/game_log.cpp
   src/data/gcg_reader.cpp
@@ -31,10 +30,7 @@ add_library(scribblez_core STATIC
   src/lexicon/word_map.cpp
   src/training/training_task.cpp
   src/encoding/position_encoder.cpp
-  src/data/streaming_row_buffer.cpp
-  src/arena/streaming_game_producer.cpp
   src/data/block_decoder.cpp
-  src/data/slog_subset.cpp
   src/serve/position_json.cpp
   src/serve/client_message.cpp
   src/data/data_loader.cpp
@@ -107,14 +103,11 @@ target_link_libraries(scribblez_core PUBLIC Boost::program_options Boost::filesy
 
 # Plain C ABI for Python (cffi). Statically links the engine so
 # libscribblez_ffi.so is one self-contained artifact exposing only the symbols
-# declared in serve/scribblez_ffi.h. The streaming pipeline plays self-play
-# games inside the library, and player_factory.cpp dispatches --player specs
-# to every agent's from_spec, so scribblez_neural_agents is linked too.
+# declared in serve/scribblez_ffi.h.
 add_library(scribblez_ffi SHARED
   src/serve/scribblez_ffi.cpp)
 target_link_libraries(scribblez_ffi PRIVATE
   scribblez_core
-  scribblez_neural_agents
   Boost::program_options
   Boost::filesystem
   Boost::system
