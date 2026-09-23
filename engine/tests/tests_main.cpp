@@ -12,7 +12,6 @@
 #include "data/gcg_writer.h"
 #include "data/sim_observation_log.h"
 #include "data/slog_sampling.h"
-#include "data/streaming_row_buffer.h"
 #include "encoding/board_planes.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
@@ -3312,90 +3311,6 @@ TEST(Streaming, DiskEncodeEquivalence) {
   }
   ASSERT_EQ(compared, 6);
   std::cout << "  streaming/disk encode equivalence OK (" << compared << " rows)\n";
-}
-
-// Many producers and tiny slots, so rows often straddle slot boundaries. Every
-// row index is written and read exactly once, and the consumed rows are exactly
-// [0, total), which a slot overwritten while the consumer held it would break.
-TEST(StreamingRowBuffer, Concurrency) {
-  using namespace scribblez::binlog;
-  const int n_slots = 2, rows_per_slot = 4, row_floats = 1;
-  const int slots_to_consume = 64;
-  std::vector<std::vector<float>> bufs(n_slots,
-                                       std::vector<float>(rows_per_slot * row_floats, -1.0f));
-  std::vector<float*> slots;
-  for (auto& b : bufs) slots.push_back(b.data());
-  StreamingRowBuffer ring(slots.data(), n_slots, rows_per_slot, row_floats);
-
-  // Cap production at exactly the rows the consumer will read. Unbounded
-  // producers could fill later slot generations before earlier ones, and the
-  // first slots_to_consume slots read would then not be rows [0, total).
-  const uint64_t total_rows = uint64_t(slots_to_consume) * rows_per_slot;
-  std::atomic<uint64_t> work{0};
-  const int K = 8;
-  std::vector<std::thread> producers;
-  for (int t = 0; t < K; ++t) {
-    producers.emplace_back([&] {
-      while (work.fetch_add(1, std::memory_order_relaxed) < total_rows) {
-        uint64_t r = ring.claim_row();
-        if (r == StreamingRowBuffer::kNoRow) break;
-        ring.row_dest(r)[0] = float(r);
-        ring.commit_row(r);
-      }
-    });
-  }
-
-  std::set<uint64_t> seen;
-  bool dup = false;
-  for (int i = 0; i < slots_to_consume; ++i) {
-    int slot = ring.wait_full_slot();
-    ASSERT_GE(slot, 0);
-    for (int k = 0; k < rows_per_slot; ++k) {
-      uint64_t v = slots[slot][k];
-      if (!seen.insert(v).second) dup = true;
-    }
-    ring.release_slot(slot);
-  }
-  for (auto& p : producers) p.join();
-
-  ASSERT_FALSE(dup);
-  ASSERT_EQ(int(seen.size()), slots_to_consume * rows_per_slot);
-  for (uint64_t v = 0; v < total_rows; ++v) ASSERT_EQ(seen.count(v), 1);
-  std::cout << "  StreamingRowBuffer concurrency OK (" << seen.size() << " rows, K=" << K << ")\n";
-}
-
-// stop() wakes every producer blocked on a full ring, and the consumer's
-// wait_full_slot() then returns -1.
-TEST(StreamingRowBuffer, Shutdown) {
-  using namespace scribblez::binlog;
-  const int n_slots = 2, rows_per_slot = 8, row_floats = 1;
-  std::vector<std::vector<float>> bufs(n_slots, std::vector<float>(rows_per_slot * row_floats));
-  std::vector<float*> slots;
-  for (auto& b : bufs) slots.push_back(b.data());
-  StreamingRowBuffer ring(slots.data(), n_slots, rows_per_slot, row_floats);
-
-  std::atomic<int> exited{0};
-  const int K = 4;
-  std::vector<std::thread> producers;
-  for (int t = 0; t < K; ++t) {
-    producers.emplace_back([&] {
-      while (true) {
-        uint64_t r = ring.claim_row();
-        if (r == StreamingRowBuffer::kNoRow) break;
-        ring.row_dest(r)[0] = float(r);
-        ring.commit_row(r);
-      }
-      exited.fetch_add(1, std::memory_order_relaxed);
-    });
-  }
-
-  // No consumer: producers fill both slots, then park on backpressure. stop()
-  // must release them all.
-  ring.stop();
-  for (auto& p : producers) p.join();
-  ASSERT_EQ(exited.load(), K);
-  ASSERT_EQ(ring.wait_full_slot(), -1);
-  std::cout << "  StreamingRowBuffer shutdown OK\n";
 }
 
 // pick_sampled_turn chooses only turns in the eligible region (see

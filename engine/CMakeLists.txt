@@ -31,8 +31,6 @@ add_library(scribblez_core STATIC
   src/lexicon/word_map.cpp
   src/training/training_task.cpp
   src/encoding/position_encoder.cpp
-  src/data/streaming_row_buffer.cpp
-  src/arena/streaming_game_producer.cpp
   src/data/block_decoder.cpp
   src/data/slog_subset.cpp
   src/serve/position_json.cpp

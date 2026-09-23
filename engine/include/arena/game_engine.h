@@ -1,10 +1,9 @@
 #pragma once
 
 // Owns one agent pair per thread and plays single games on them, handing each
-// finished log to a GameSink. The shared core of GameRunner and
-// StreamingGameProducer, which differ only in their driving loop and their
-// sink. The agents are whatever the --player specs name, so this drives bot
-// matches and human games as well as self-play.
+// finished log to a GameSink. The core of GameRunner, which supplies the
+// driving loop and the sink. The agents are whatever the --player specs name,
+// so this drives bot matches and human games as well as self-play.
 
 #include "agent/agent.h"
 #include "agent/player_factory.h"

@@ -4,8 +4,7 @@
 // labels) for the position there. The game is a GameLog, either from live
 // self-play or viewed from a .slog buffer.
 //
-// The streaming producer and the DataLoader both encode through this class,
-// so a row from a live game is byte-identical to the same row decoded from a
+// A row from a live game is byte-identical to the same row decoded from a
 // .slog. It reuses its buffers between calls, so each worker thread owns one.
 
 #include "encoding/encode_context.h"

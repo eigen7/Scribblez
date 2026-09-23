@@ -20,8 +20,7 @@ class RowEncoder {
 
   virtual int row_floats() const = 0;
 
-  // The turn of `view` to sample, or -1 to drop the game. Called before a row
-  // is claimed in the StreamingRowBuffer, so a dropped game never holds one.
+  // The turn of `view` to sample, or -1 to drop the game.
   virtual int pick_turn(const GameLog& view, std::mt19937_64& rng) = 0;
 
   virtual void encode(const GameLog& view, int turn, bool transpose, float* dest) = 0;
