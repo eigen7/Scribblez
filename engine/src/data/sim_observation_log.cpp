@@ -19,7 +19,6 @@ void append_bytes(std::vector<char>* buffer, const void* data, size_t size) {
   buffer->insert(buffer->end(), p, p + size);
 }
 
-// A fixed-width, NUL-padded model-hash header field read back as a string.
 std::string header_hash_field(const char* field, size_t size) {
   return std::string(field, strnlen(field, size));
 }
@@ -82,9 +81,8 @@ void SimObsWriter::close() {
   closed_ = true;
   SimObsFileHeader* hdr = reinterpret_cast<SimObsFileHeader*>(buffer_.data());
   hdr->num_positions = num_positions_;
-  // Temp-file + rename so the .sobs appears atomically: an interrupted run
-  // never leaves a truncated file that a resume (which skips existing
-  // sidecars) would silently keep.
+  // Write to a temp file and rename, so an interrupted run never leaves a
+  // truncated .sobs that a resume, which skips existing sidecars, would keep.
   const std::string tmp = std::format("{}.tmp.{}", path_, ::getpid());
   {
     std::ofstream f(tmp, std::ios::binary);

@@ -22,13 +22,18 @@ StreamingRowBuffer::StreamingRowBuffer(float* const* slots, int num_slots, int r
       row_floats_(row_floats),
       slot_base_(size_t(num_slots)),
       filled_count_(size_t(num_slots), 0) {
-  // Slot s initially serves the fill whose base is s * rows_per_slot, so the
-  // first N fills (rows [0, N*rows_per_slot)) proceed without backpressure.
+  // Slot s first serves global rows [s * rows_per_slot, (s + 1) * rows_per_slot),
+  // so the first N fills proceed without waiting on the consumer.
   for (int s = 0; s < num_slots_; ++s) {
     slot_base_[s] = uint64_t(s) * rows_per_slot_;
   }
 }
 
+// Global row r belongs to slot (r / rows_per_slot) % N, in the fill whose first
+// row is `base`. The producer waits until the slot serves that fill:
+// release_slot() advances a slot's base by rows_per_slot * N, to the next fill
+// that maps to it. So a slow consumer stalls producers, and no producer can
+// write into a slot the consumer still holds.
 uint64_t StreamingRowBuffer::claim_row() {
   const uint64_t r = next_row_.fetch_add(1, std::memory_order_acq_rel);
   const int slot = slot_of(r);
@@ -46,6 +51,8 @@ void StreamingRowBuffer::commit_row(uint64_t r) {
   const int slot = slot_of(r);
   std::lock_guard<std::mutex> lock(m_);
   rows_committed_.fetch_add(1, std::memory_order_relaxed);
+  // Rows complete out of claim order, but exactly one commit brings the count
+  // to rows_per_slot, so the slot is published exactly once.
   if (++filled_count_[slot] == rows_per_slot_) {
     ready_.push_back(slot);
     slots_published_.fetch_add(1, std::memory_order_relaxed);

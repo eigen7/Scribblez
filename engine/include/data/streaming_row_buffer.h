@@ -1,28 +1,16 @@
 #pragma once
 
-// The producer/consumer hand-off at the heart of the streaming training
-// pipeline. The Python trainer owns N float buffers ("slots") and passes their
-// addresses in. Several C++ producer threads fill the current slot at distinct
-// row indices; a full slot is published to the single consumer (the training
-// loop) and producers advance to the next, BLOCKING if it has not been released
-// yet. Production therefore stays at most N slots ahead of consumption,
-// saturating CPU (game generation) and GPU (training) at once.
+// The ring buffer between the C++ game producers and the Python training loop
+// in streaming training (arena/streaming_game_producer.h). The trainer owns N
+// float buffers ("slots") and passes their addresses in. Producer threads fill
+// rows of the current slot concurrently; a full slot goes to the single
+// consumer, and producers move on to the next slot, blocking until the
+// consumer has released it. Production thus runs at most N slots ahead of
+// training, keeping both the CPU (game generation) and the GPU (training)
+// busy.
 //
-// Concurrency design:
-//   * A global monotonic counter hands each producer a row index r, which maps
-//     to slot (r / rows_per_slot) % N, row r % rows_per_slot, and the base row
-//     of the slot-fill it belongs to.
-//   * Backpressure: a producer for row r blocks until its slot's base equals
-//     r's. release_slot() advances a slot's base by rows_per_slot * N, the next
-//     fill mapping there, so a slow consumer stalls producers and a runaway
-//     producer can never clobber a slot the consumer still holds.
-//   * Seal-exactly-once: commit_row() bumps a per-slot completion counter, and
-//     the thread whose bump reaches rows_per_slot publishes the slot. Exactly
-//     one bump hits the target, so this holds even though claim order and
-//     completion order differ.
-//
-// All waits are predicate waits, so there are no lost wakeups, and no lock is
-// held across the expensive row encode between claim_row and commit_row.
+// A producer calls claim_row(), writes the row at row_dest(), then calls
+// commit_row(). No lock is held while it encodes the row.
 
 #include <atomic>
 #include <condition_variable>
@@ -34,9 +22,9 @@
 namespace scribblez {
 namespace binlog {
 
-// Throughput / backpressure counters. Growing producer_blocked_ns means
-// producers wait for free slots, so the consumer/GPU is the bottleneck; growing
-// consumer_blocked_ns means the reverse.
+// Throughput and backpressure counters. Growing producer_blocked_ns means the
+// consumer (GPU) is the bottleneck; growing consumer_blocked_ns means the
+// producers (CPU) are.
 struct RingStats {
   int64_t rows_committed = 0;
   int64_t slots_published = 0;
@@ -56,25 +44,26 @@ class StreamingRowBuffer {
   StreamingRowBuffer& operator=(const StreamingRowBuffer&) = delete;
 
   // ---- producer side ----
-  // Blocks until the next row's slot is free for this fill. Returns the global
-  // row index, or kNoRow if the buffer stopped while waiting.
+  // Blocks until the next row's slot is free. Returns the row's global index,
+  // or kNoRow once the buffer is stopped.
   uint64_t claim_row();
 
   float* row_dest(uint64_t r) const {
     return slots_[slot_of(r)] + int64_t(row_in(r)) * row_floats_;
   }
 
-  // Publishes the slot to the consumer once its last row is committed.
+  // Hands the slot to the consumer once all its rows are committed.
   void commit_row(uint64_t r);
 
   // ---- consumer side ----
-  // Blocks; -1 if the buffer is stopped and no more slots will come.
+  // Blocks until a slot is full and returns it, or -1 once the buffer is
+  // stopped. The consumer must release_slot() it when done.
   int wait_full_slot();
 
   void release_slot(int slot);
 
-  // Wake every blocked producer and the consumer. claim_row returns kNoRow and
-  // wait_full_slot returns -1 thereafter.
+  // Unblocks every producer and the consumer; see claim_row and
+  // wait_full_slot.
   void stop();
 
   RingStats stats() const;
@@ -96,8 +85,8 @@ class StreamingRowBuffer {
   mutable std::mutex m_;
   std::condition_variable cv_producer_;  // producers wait for a free slot
   std::condition_variable cv_consumer_;  // consumer waits for a full slot
-  std::vector<uint64_t> slot_base_;      // current fill's base row index, per slot
-  std::vector<int> filled_count_;        // rows committed into the current fill, per slot
+  std::vector<uint64_t> slot_base_;      // per slot: first global row of its current fill
+  std::vector<int> filled_count_;        // per slot: rows committed to its current fill
   std::deque<int> ready_;                // sealed slots awaiting the consumer
   bool stopped_ = false;
 

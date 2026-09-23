@@ -1,36 +1,33 @@
 #pragma once
 
-// Binary sidecar format for Monte-Carlo sim observations. One .sobs file
-// accompanies one .slog file (binary_log.h) and holds, for a subset of that
-// file's positions, the candidate moves simmed at the position and each
-// candidate's SimObservation (sim_runner.h). Training reads these as the
-// sim-evidence inputs of docs/plans/sim_residual_feedback.md; positions carry raw
-// observations (counts and moments, never model-relative residuals) so the
-// file stays valid as the proposer model trains. Value-truncated sims
-// (docs/roadmap.md item 2) ARE a function of one model -- the leaf evaluator
-// scoring every horizon -- so the header carries that model's content hash
-// and the horizon, and consumers must not mix files that disagree on them.
+// The .sobs sidecar format for Monte-Carlo sim observations. One .sobs file
+// accompanies one .slog file (binary_log.h). For a subset of that file's
+// positions it holds the candidate moves simmed there and each candidate's
+// SimObservation (sim/sim_runner.h). Training reads these as the sim-evidence
+// inputs described in docs/plans/sim_residual_feedback.md.
+//
+// Observations are raw counts and moments, never residuals relative to a
+// model, so a file stays valid while the proposer model trains. The exception
+// is value-truncated sims (docs/roadmap.md item 2): their results depend on
+// the leaf evaluator that scores each horizon. The header therefore records
+// that model's content hash and the horizon, and consumers must not mix files
+// that disagree on them.
 //
 // File layout
 // -----------
-//   [SimObsFileHeader                       144 B]
+//   [SimObsFileHeader                        144 B]
 //   For each position p in [0, num_positions):
-//     [SimObsPositionHeader                  32 B]
-//     [SimObsRecord   num_candidates(p)   35185 B each]
+//     [SimObsPositionHeader                   32 B]
+//     [SimObsRecord  x num_candidates(p)   35185 B each]
 //
 // A position is identified by (game_index, turn_index) within the companion
-// .slog file. Records store the exact Move alongside its observation, the
-// evidence encoding pairing each observation with the move behind it.
+// .slog file.
 //
-// In a trajectory file (kSimObsFlagTrajectory) a position's records carry a
-// per-record SimObsRole (docs/roadmap.md item 4): the greedy anchor, the
-// proposer's on-policy picks, and the off-policy draws (a uniform sample of the
-// untaken legal moves). The stored
-// order is anchor, then on-policy, then off-policy -- which the sim runner and
-// incumbent recovery rely on -- but evidence-eligibility is read off the role,
-// not the position, so an off-policy record renders held-out wherever it sits.
-// A valid evidence set is any subset of the anchor-plus-on-policy records that
-// contains the anchor; off-policy records are labels-only.
+// In a trajectory file (kSimObsFlagTrajectory, docs/roadmap.md item 4) each
+// record carries a SimObsRole. Records are stored in sim order: the anchor,
+// then on-policy picks, then off-policy draws (see
+// training/evidence_trajectory_select.h). Readers must still determine
+// evidence eligibility from the role, not from a record's position.
 
 #include "data/sim_obs_role.h"
 #include "game/move.h"
@@ -46,19 +43,15 @@ namespace scribblez {
 inline constexpr uint32_t kSimObsMagic = 0x53424F53u;
 inline constexpr uint16_t kSimObsVersion = 5;
 
-// SimObsFileHeader::flags bits. Bit 0x1 is RETIRED (it marked sims that used
-// the opponent's entire true rack, an information condition no consumer
-// supports); readers must reject files carrying it.
+// SimObsFileHeader::flags bits. Bit 0x1 is reserved and must be rejected by
+// readers: it marks sims that saw the opponent's entire true rack, an
+// information condition no consumer supports.
 inline constexpr uint32_t kSimObsFlagOpenLeaves = 2u;  // sims knew the opponent's retained leave
 inline constexpr uint32_t kSimObsFlagTrajectory = 4u;  // record order is trajectory order
 
-// SimObsPositionHeader::flags has no bits at v4: the uniform-tail bit it carried
-// through v3 is retired -- the off-policy exploration draw is now one of the
-// SimObsRole::kOffPolicy records, so held-out-ness is read off the record role.
-
-// Size of SimObsFileHeader's hex model-content-hash fields (the candidate
-// proposer, and the truncation leaf evaluator). All-zero bytes mean no such
-// model was involved: the equity-top-K proposer, or terminal rollouts.
+// Width of SimObsFileHeader's hex model-content-hash fields, NUL-padded.
+// All-zero means no model was involved: the equity-top-K proposer, or
+// terminal rollouts.
 inline constexpr size_t kSimObsModelHashSize = 64;
 
 #pragma pack(push, 1)
@@ -81,30 +74,28 @@ struct SimObsPositionHeader {
   uint32_t rollouts;         // rollouts per candidate (== every record's obs.n)
   uint64_t base_seed;        // SimRunner::run seed, for reproducing the sims
   uint32_t num_legal_moves;  // legal moves at the position (the off-policy draws' domain)
-  uint32_t flags;            // reserved; no SimObsPosFlag bits at v4
+  uint32_t flags;            // reserved; always 0
 };
 static_assert(sizeof(SimObsPositionHeader) == 32, "SimObsPositionHeader must be 32 bytes");
 
 struct SimObsRecord {
   Move move;  // 16 B; the simmed candidate
   SimObservation obs;
-  SimObsRole role;  // evidence eligibility; meaningful in trajectory files
+  SimObsRole role;  // meaningful only in trajectory files
 };
 static_assert(sizeof(SimObsRecord) == 16 + sizeof(SimObservation) + 1,
               "SimObsRecord must pack move + observation + role byte with no padding");
 
 #pragma pack(pop)
 
-// Accumulates positions and writes the .sobs file atomically (temp + rename)
-// on close, so nothing exists on disk until then.
+// Accumulates positions in memory and writes the .sobs file atomically on
+// close(), so a partial file never exists on disk.
 class SimObsWriter {
  public:
-  // `proposer_hash` is the hex content hash of the model that drove candidate
-  // selection; empty for the equity-top-K proposer. `leaf_model_hash` is the
-  // hex content hash of the leaf evaluator behind value-truncated sims and
-  // `horizon_plies` their horizon; empty/0 for terminal rollouts (give both
-  // or neither). Longer hashes truncate to their header fields, matching
-  // move_set_eval::TargetWriter.
+  // `proposer_hash` is the hex content hash of the model that chose the
+  // candidates; empty for the equity-top-K proposer. `leaf_model_hash` and
+  // `horizon_plies` describe value-truncated sims; pass both, or neither for
+  // terminal rollouts. Hashes longer than kSimObsModelHashSize are truncated.
   explicit SimObsWriter(const std::string& path, uint32_t flags = 0,
                         const std::string& proposer_hash = {},
                         const std::string& leaf_model_hash = {}, int horizon_plies = 0);
@@ -113,10 +104,9 @@ class SimObsWriter {
   SimObsWriter(const SimObsWriter&) = delete;
   SimObsWriter& operator=(const SimObsWriter&) = delete;
 
-  // `candidates`, `observations`, and (in a trajectory file) `roles` are
-  // parallel arrays; `base_seed` is the SimRunner::run seed used. `roles` is
-  // empty for non-trajectory files -- every record then stores kAnchor, which
-  // their readers ignore; a trajectory writer passes one role per candidate.
+  // `candidates`, `observations` and `roles` are parallel arrays. A
+  // non-trajectory writer leaves `roles` empty, and every record then stores
+  // kAnchor, which readers of such files ignore.
   void add_position(uint32_t game_index, uint32_t turn_index, const std::vector<Move>& candidates,
                     const std::vector<SimObservation>& observations, uint32_t rollouts,
                     uint64_t base_seed, uint32_t num_legal_moves = 0,
@@ -131,9 +121,9 @@ class SimObsWriter {
   bool closed_ = false;
 };
 
-// Loads a .sobs file into memory and serves per-position views. Throws
-// util::Exception on a missing file, bad magic, or version mismatch, so a
-// stale file fails loudly rather than misparsing.
+// Loads a whole .sobs file into memory and serves per-position views. Throws
+// util::Exception on a missing or truncated file, bad magic, or version
+// mismatch. It does not check flags; callers must.
 class SimObsReader {
  public:
   // Per-position view into the reader's buffer; valid while the reader lives.
@@ -150,7 +140,7 @@ class SimObsReader {
   uint32_t flags() const { return header().flags; }
   // Empty for the equity-top-K proposer.
   std::string proposer_hash() const;
-  // Empty / 0 for terminal rollouts.
+  // Empty for terminal rollouts.
   std::string leaf_model_hash() const;
   int horizon_plies() const { return header().horizon_plies; }
 

@@ -21,9 +21,8 @@ std::string nickify(const std::string& name) {
   return nick;
 }
 
-// Coordinate of the main word's first square: "8D" for a horizontal play (row
-// number first), "D8" for a vertical one (column letter first). The origin is
-// recovered from the board as it stood before the move.
+// The coordinate of the main word's first square, which may be a
+// played-through tile, hence the board before the move.
 std::string position(const Board& board_before, const Move& m) {
   auto [r, c] = m.word_origin(board_before);
   const char col = 'A' + c;
@@ -35,9 +34,9 @@ char glyph_char(Glyph g) {
   return g.is_blank() ? char(ch - 'A' + 'a') : ch;
 }
 
-// The played word, a lowercase letter for a designated blank. A square already
-// occupied before this move (played through) is a '.' in GCG form; spelled out,
-// it is its own letter, each run of such squares in one pair of parentheses.
+// The main word, lowercase for a blank. Played-through squares are '.' in GCG
+// form, or with `spell_board_tiles`, their letters with each run in
+// parentheses.
 std::string played_word(const Board& board_before, const Move& m, bool spell_board_tiles = false) {
   std::string out;
   bool in_run = false;
@@ -104,8 +103,6 @@ std::array<std::string, 2> player_nicks(const GameLog& log) {
   return nick;
 }
 
-// GCG metadata header: character encoding, optional lexicon, the two player
-// lines, optional initial racks, and any free-form notes.
 void write_gcg_header(std::string& out, const GameLog& log, const std::array<std::string, 2>& nick,
                       const GcgWriteOptions& options) {
   out += "#character-encoding UTF-8\n";
@@ -121,9 +118,9 @@ void write_gcg_header(std::string& out, const GameLog& log, const std::array<std
   }
 }
 
-// Replay the board so each play renders relative to the tiles already down, and
-// write one '>' event line per turn. last_cumulative records each player's most
-// recent cumulative score for the subsequent end-game adjustment lines.
+// Replays the board, since a play's notation depends on the tiles already
+// down. Records each player's last cumulative score in `last_cumulative`, for
+// the end-of-game adjustment lines.
 void write_gcg_turns(std::string& out, const GameLog& log, const std::array<std::string, 2>& nick,
                      const GcgWriteOptions& options, std::array<int, 2>& last_cumulative) {
   Board board;
@@ -169,9 +166,10 @@ void write_gcg_turns(std::string& out, const GameLog& log, const std::array<std:
   }
 }
 
-// End-of-game rack adjustments. A player who went out gains the value of the
-// opponent's leftover tiles (END_RACK_PTS); a player left holding tiles loses
-// their value (END_RACK_PENALTY). The positive adjustment is emitted first.
+// End-of-game rack adjustments, derived from the gap between final_scores and
+// each player's last cumulative score. A player who went out gains the value
+// of the opponent's leftover tiles; a player left holding tiles loses theirs.
+// The gain is written first.
 void write_gcg_endgame_adjustments(std::string& out, const GameLog& log,
                                    const std::array<std::string, 2>& nick,
                                    const std::array<int, 2>& last_cumulative) {

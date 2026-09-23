@@ -14,9 +14,7 @@
 
 namespace scribblez {
 
-// TILE_COUNTS minus every tile on `board`, then minus every tile in `held` when
-// non-null. The arithmetic core of the unseen pool (held = my rack) and the
-// self-reach pool (held = the opponent tiles known to us).
+// TILE_COUNTS minus the tiles on `board` and, if non-null, in `held`.
 static void tiles_off_board_and_hand(uint8_t out[27], const Board& board, const Rack* held) {
   for (int i = 0; i < 27; ++i) out[i] = uint8_t(TILE_COUNTS[i]);
   for (int r = 0; r < BOARD_SIZE; ++r) {
@@ -36,61 +34,52 @@ static void tiles_off_board_and_hand(uint8_t out[27], const Board& board, const 
   }
 }
 
-// Every tile is in exactly one of (bag, board, p0 rack, p1 rack); the active
-// player has no way to distinguish the bag from the opponent's rack, so
-// unseen[i] = TILE_COUNTS[i] - (#tile i on board) - (#tile i in my_rack).
-// This depends only on data the active player observes.
 void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack) {
   tiles_off_board_and_hand(out, board, &my_rack);
 }
 
 namespace {
 
-// The tiles the POV player could still hold or draw for their OWN next play,
-// used by the self-reach plane: every unplayed tile minus any the opponent is
-// KNOWN to hold (`known_opp`, the open-leaves leave; null in the hidden arm).
-// S - O in the reachability note's terms -- it keeps the mover's own rack (they
-// can play it) and, in the hidden arm, the indistinguishable bag + opponent pool.
+// The tiles the POV player might play on their own next turn, for the
+// self-reach plane: every unplayed tile except those the opponent is known to
+// hold (`known_opp`, their open leave; null for a hidden-leaves spec). This
+// includes the POV player's own rack, and the bag and the opponent's unknown
+// tiles, which the POV player could still draw.
 void compute_self_reach_pool(uint8_t out[27], const Board& board, const Rack* known_opp) {
   tiles_off_board_and_hand(out, board, known_opp);
 }
 
-// Everything the block writers read: the POV-visible position state, plus the
-// blocks the spec makes optional.
+// Everything the block writers read.
 struct PovCtx {
   const Board& board;
   const Rack& my_rack;
   const Move& self_move;
   const Move& opp_move;
   int score_diff;
-  const uint8_t* unseen;     // 27 per-kind unseen-pool counts (S - M)
-  const uint8_t* self_pool;  // 27 per-kind self-reach counts (S - O)
+  const uint8_t* unseen;     // 27 per-tile counts, from compute_unseen_pool
+  const uint8_t* self_pool;  // 27 per-tile counts, from compute_self_reach_pool
   const Rack* opp_leave;     // null iff the spec excludes the open-leaves block
 };
 
-// One plane at `out`, marking the squares `m` placed tiles on. EXCHANGE, PASS,
-// and game-start place nothing and leave it all-zero.
+// EXCHANGE and PASS (including the initial last-move placeholder) leave the
+// plane all-zero.
 int encode_placement_plane(const Move& m, float* out) {
   visit_placed_squares(m, [&](int r, int c) { out[r * kBoardSide + c] = 1.0f; });
   return 1;
 }
 
-// Set `cc`'s legal letters at `cell` across a 26-plane block. A square with no
-// perpendicular run constrains nothing, so its mask is all-ones and the block
-// is written all-ones -- a plane's 1 means "letter legal here" regardless of
-// whether the square has an occupied neighbor, rather than an all-zero block
-// that a reader can only interpret by first checking the neighbors.
+// A square with no perpendicular neighbor has an all-ones mask, so it is
+// written as all 26 letters legal. A 1 then means "legal here" on its own; an
+// all-zero encoding would force the network to check the neighbors to read it.
 void write_cross_check(const CrossCheck& cc, int cell, float* planes) {
   for (int l = 0; l < 26; ++l) {
     if (cc.mask & (1u << l)) planes[l * kBoardCells + cell] = 1.0f;
   }
 }
 
-// The kCrossCheckPlanes cross-check planes at `out`: horizontal A..Z, then
-// vertical A..Z. A word along one axis places one tile per lane of the other,
-// so its legal letters on a square are that square's perpendicular cross-check
-// set, at any word length. The word's own validity depends on the whole play,
-// so it is not a per-square fact and is not folded in.
+// Horizontal A..Z, then vertical A..Z. A plane records only the per-square
+// cross-check constraint; whether the main word itself is valid depends on
+// the whole play and is not a per-square fact.
 int encode_cross_check_planes(const Board& board, float* out) {
   float* h_planes = out;
   float* v_planes = out + kHorizontalCrossCheckPlanes * kBoardCells;
@@ -110,7 +99,6 @@ int encode_cross_check_planes(const Board& board, float* out) {
   return kCrossCheckPlanes;
 }
 
-// The active player's rack as raw per-tile counts.
 int encode_rack_counts(const Rack& my_rack, float* out) {
   for (Tile t : my_rack.tiles()) {
     if (!t.is_empty()) out[t.index()] += 1.0f;
@@ -118,9 +106,6 @@ int encode_rack_counts(const Rack& my_rack, float* out) {
   return kRackCountFloats;
 }
 
-// A per-letter thermometer: letter i owns a region of width TILE_COUNTS[i]
-// whose first unseen[i] slots are 1.0, the holes falling at the tail. Regions
-// are concatenated in tile order.
 int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
   int offset = 0;
   for (int i = 0; i < 27; ++i) {
@@ -131,32 +116,23 @@ int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
   return kUnseenPoolThermoFloats;
 }
 
-// Score differential as a single signed scalar (kScoreDiffInputFloats floats):
-// (score_active - score_opp) / kScoreDiffInputScale, not clipped.
-//
-// ANALYSIS TODO (score-diff resolution near the endgame): as the bag empties
-// the win/draw/loss boundary in score differential becomes sharp and
-// phase-conditional -- a two-point swing (e.g. +15 vs +17) can flip the likely
-// outcome, whereas mid-game it is nearly flat. A single scalar can express this
-// (the first projection can amplify small differences), but its smoothness bias
-// makes a steep, phase-gated transition something the trunk must spend capacity
-// to learn, exactly where true-endgame training positions are sparsest. Measure
-// it: slice held-out WLD calibration/Brier by (tiles-remaining, score-diff) and
-// look at the near-empty-bag, small-|diff| cells for under-sharpening (win prob
-// flattened across the flip point). If it shows, prefer a compact nonlinear
-// featurization (a handful of RBF/bins, denser near 0) over widening back to a
-// full thermometer, and apply the same basis to the move set evaluation
-// model's resultant-diff move feature (move_set_encoder) so the two stay on
-// one representation. The principled answer for the decisive endgame is the
-// negamax solver (docs/roadmap.md, D3), not finer value-net input resolution.
+// TODO(score-diff resolution near the endgame): as the bag empties, the
+// win/loss boundary in score difference becomes sharp; a two-point swing can
+// flip the likely outcome, where mid-game it barely matters. A single linear
+// scalar can express that, but the network must spend capacity learning the
+// steep, phase-dependent transition exactly where endgame training positions
+// are sparsest. To measure it, slice held-out win calibration by (tiles
+// remaining, score difference) and look for win probability flattened across
+// the flip point in the near-empty-bag, small-difference cells. If it shows,
+// prefer a few nonlinear features (RBF bumps or bins, denser near 0) over a
+// full thermometer, and change the move set model's score feature
+// (move_set_encoder.cpp) to match. The decisive endgame itself belongs to the
+// endgame solver (docs/roadmap.md item 7), not to finer value-net input.
 int encode_score_diff_scalar(int score_diff, float* out) {
   out[0] = float(score_diff) / kScoreDiffInputScale;
   return kScoreDiffInputFloats;
 }
 
-// Last-2-move metadata (kMoveMetaFloats floats): for the POV player's and then
-// the opponent's most recent move, a move-type one-hot (indexed by MoveType)
-// followed by num_glyphs.
 int encode_move_meta(const Move& self_move, const Move& opp_move, float* out) {
   out[int(self_move.type())] = 1.0f;
   out[kMoveMetaTypeFloats] = float(self_move.num_glyphs());
@@ -166,16 +142,13 @@ int encode_move_meta(const Move& self_move, const Move& opp_move, float* out) {
   return kMoveMetaFloats;
 }
 
-// One reachability plane at `out`: the squares covered by
-// footprint_ply(S, cross-checks on, `pool`) -- a this-turn move from the current
-// occupied set, gated by cross-checks and the pool -- as per-cell coverage. The
-// mover holds at most a full rack, so kMaskTileBudget caps k.
+// The cells some this-turn move drawing on `pool` could cover.
 int encode_reach_plane(const Board& board, const uint8_t* pool, float* out) {
   footprint_reachable_cells(board, pool, kMaskTileBudget, out);
   return 1;
 }
 
-// Registry dispatch: write one block at `out`, returning its plane count.
+// Writes one block at `out` and returns its plane count.
 int encode_spatial_block(SpatialBlockId id, const PovCtx& ctx, float* out) {
   switch (id) {
     case SpatialBlockId::kBoard:
@@ -197,7 +170,7 @@ int encode_spatial_block(SpatialBlockId id, const PovCtx& ctx, float* out) {
   std::abort();  // unreachable: the switch covers every SpatialBlockId
 }
 
-// Registry dispatch: write one block at `out`, returning its float count.
+// Writes one block at `out` and returns its float count.
 int encode_scalar_block(ScalarBlockId id, const PovCtx& ctx, float* out) {
   switch (id) {
     case ScalarBlockId::kRackCounts:
@@ -214,20 +187,16 @@ int encode_scalar_block(ScalarBlockId id, const PovCtx& ctx, float* out) {
   std::abort();  // unreachable: the switch covers every ScalarBlockId
 }
 
-// Always-on layout guard (kept in release builds -- the checks are a handful
-// of integer compares per row): a block writer disagreeing with the registry,
-// or the walk not landing exactly on the spec's totals, is memory corruption
-// in the making.
+// Enabled in release builds too: it costs a few integer compares per row, and
+// a block writer disagreeing with the registry would corrupt memory.
 void check_layout(bool ok, const char* what) {
   if (ok) return;
   std::fprintf(stderr, "input encode: %s disagrees with the layout registry\n", what);
   std::abort();
 }
 
-// Shared back-end for both pre-move and post-PLAY encoding. Takes only
-// POV-visible inputs; `score_diff` is the active player's score advantage.
-// Writes the spec's blocks in registry order, validating every block's size
-// and the final totals against the registry.
+// The shared encoder behind every GameStateEncoder::encode_input* method.
+// `score_diff` is the POV player's lead.
 void encode_pov(const InputEncodingSpec& spec, const Board& board, const Rack& my_rack,
                 const Move& self_move, const Move& opp_move, int score_diff, const Rack* opp_leave,
                 float* out) {
@@ -236,9 +205,8 @@ void encode_pov(const InputEncodingSpec& spec, const Board& board, const Rack& m
   check_layout(!spec.opp_leave_input || opp_leave != nullptr,
                "an open-leaves spec encoded without the opponent leave");
   std::memset(out, 0, sizeof(float) * size_t(input_floats(spec)));
-  // The cross-check planes read the board's move-generation caches; build them
-  // up front (a no-op when already valid) so they are lexicon-accurate
-  // regardless of the board's prior cache state.
+  // The cross-check and reach planes read the board's move-generation caches.
+  // A no-op if they are already built.
   board.ensure_movegen_caches(*spec.dict);
   const Rack* known_opp = spec.opp_leave_input ? opp_leave : nullptr;
   uint8_t unseen[27];
@@ -270,7 +238,6 @@ void GameStateEncoder::apply_move(const Move& move) {
     board_.apply(move);
     scores_[active_] += move.score();
   }
-  // EXCHANGE / PASS: board and score are unchanged.
   last_move_by_[active_] = move;
   active_ = 1 - active_;
   ++turn_index_;

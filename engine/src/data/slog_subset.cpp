@@ -12,7 +12,6 @@ namespace binlog {
 
 namespace {
 
-// Returns false on I/O failure.
 bool read_file(const std::string& path, std::vector<char>& buf) {
   std::ifstream f(path, std::ios::binary);
   if (!f) return false;
@@ -20,7 +19,6 @@ bool read_file(const std::string& path, std::vector<char>& buf) {
   return true;
 }
 
-// Bytes occupied by one game's blob: its initial racks plus its turn array.
 int64_t blob_size(const GameMetadata& gm) {
   return int64_t(sizeof(InitialRacks)) + int64_t(gm.num_turns) * int64_t(sizeof(TurnBlob));
 }
@@ -30,7 +28,7 @@ int64_t blob_size(const GameMetadata& gm) {
 bool write_slog_subset(const std::string& dst_path, const std::vector<SlogPick>& picks) {
   const uint32_t n = picks.size();
 
-  // Cache source file contents so a file referenced by many picks is read once.
+  // Each source file is read once, however many picks reference it.
   std::unordered_map<std::string, std::vector<char>> cache;
 
   std::vector<GameMetadata> out_meta(n);
@@ -57,16 +55,12 @@ bool write_slog_subset(const std::string& dst_path, const std::vector<SlogPick>&
     const int64_t bsize = blob_size(gm);
     if (gm.start_offset + uint64_t(bsize) > src.size()) return false;
 
-    // Copy the metadata, repointing start_offset into the destination layout.
     out_meta[k] = gm;
     out_meta[k].start_offset = uint64_t(blobs_start) + out_blobs.size();
     out_blobs.insert(out_blobs.end(), src.data() + gm.start_offset,
                      src.data() + gm.start_offset + bsize);
   }
 
-  // The subset's training-row count is the sum of the picked games' eligible
-  // regions (eligible_begin/eligible_end are carried over per game above), so
-  // the DataLoader sizes an epoch over the subset correctly.
   uint32_t num_sample_positions = 0;
   for (const GameMetadata& gm : out_meta)
     num_sample_positions += gm.eligible_end - gm.eligible_begin;

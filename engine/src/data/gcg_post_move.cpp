@@ -19,11 +19,9 @@ Rack leave_after(const Rack& rack, const Move& move) {
   return leave;
 }
 
-// The opponent's last recorded turn, seen from start_player's seat at that
-// moment. The turns alternate, so when the opponent has a turn at all it is
-// the penultimate one, and the rack start_player held while it was played is
-// the final turn's rack_before (start_player drew after its previous move and
-// before the opponent's).
+// Turns alternate, so the opponent's last turn, if any, is the penultimate
+// one. The rack start_player held while it was played is the final turn's
+// rack_before, since start_player's draws happen right after its own moves.
 std::optional<belief::OppMoveObservation> observe_opp_move(const ParsedGcgGame& game,
                                                            int start_player) {
   const int n = int(game.turns.size());

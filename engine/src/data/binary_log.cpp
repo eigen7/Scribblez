@@ -90,13 +90,10 @@ void complete_turn_records(const GameLog& g, int num_turns, std::vector<TurnReco
 EligibleSpan eligible_span(const GameLog& log) {
   int end = 0;
   for (int k = 0; k < log.num_records; ++k) {
-    if (log.records[k].bag_size_before <= 0) break;  // prefix ends at the first endgame turn
+    if (log.records[k].bag_size_before <= 0) break;
     ++end;
   }
-  // GameMetadata stores the region in uint8_t fields; turns past 255 (reachable
-  // only in degenerate pass-heavy games near the 400-turn safety cap) are
-  // excluded.
-  end = std::min(end, 255);
+  end = std::min(end, 255);  // GameMetadata's uint8_t field width
   return {std::max(0, log.num_random_opening_plies - 1), end};
 }
 
@@ -153,20 +150,19 @@ void BinaryLogWriter::flush() {
 
 namespace {
 
-// One batch of games packed into serialization-ready pieces, gathered before
-// any file offsets are known. The GameLog entries are non-owning views into the
-// source GameLogStorage vector, which must outlive the PreparedBatch.
+// A batch of games converted to their on-disk pieces, before file offsets are
+// assigned. `games` are views into the source GameLogStorage vector, which must
+// outlive the PreparedBatch.
 struct PreparedBatch {
   std::vector<InitialRacks> initial;
   std::vector<std::vector<TurnBlob>> turns;
-  std::vector<int> sampled_turn;       // eval-only representative position per game
-  std::vector<EligibleSpan> eligible;  // training-eligible turn region per game
+  std::vector<int> sampled_turn;
+  std::vector<EligibleSpan> eligible;
   std::vector<GameLog> games;
 };
 
-// Each kept game records its eligible-turn region and one eval-only sampled
-// turn drawn uniformly from it. A game with an empty region -- its bag empty
-// every turn, or an end during its random opening -- is dropped.
+// Drops any game whose eligible region is empty: one that ended during its
+// random opening, or whose bag was empty from the first turn.
 PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
   PreparedBatch p;
   p.initial.reserve(games.size());
@@ -195,8 +191,6 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
   return p;
 }
 
-// Build the metadata index: one entry per game, every start offset being known
-// up front.
 std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
   std::vector<GameMetadata> meta;
   meta.reserve(p.games.size());
@@ -257,7 +251,7 @@ void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
   if (prepared.games.empty()) return;
 
   const std::vector<GameMetadata> meta = build_metadata_table(prepared);
-  // unique_id keeps slog filenames globally unique, as with gcg log filenames.
+  // A strictly increasing timestamp, so no two writes in this process collide.
   const std::filesystem::path path =
     std::filesystem::path(dir_) / std::format("{}.slog", util::get_unique_id());
   write_slog_file(path, prepared, meta, flags_);

@@ -12,7 +12,6 @@ namespace binlog {
 
 namespace {
 
-// Clear from `rack` the tiles a PLAY places or an EXCHANGE swaps out.
 void remove_played_or_exchanged(Rack& rack, const Move& m) {
   const int n = m.num_glyphs();
   for (int i = 0; i < n; ++i) {
@@ -21,17 +20,15 @@ void remove_played_or_exchanged(Rack& rack, const Move& m) {
   }
 }
 
-// `m`, a natural-frame move from the game log, in the frame of a board that is
-// transposed iff `transposed`.
+// A move from the game log, which is in the untransposed frame, brought into
+// the frame given by `transposed`.
 Move in_frame(const Move& m, bool transposed) { return transposed ? m.transpose() : m; }
 
 }  // namespace
 
 Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_rack_now) {
-  // The opponent of the mover at `sampled_turn` acted at sampled_turn - 1 (if
-  // at all); every tile in records[sampled_turn - 1].drawn is a replenishment
-  // still on their rack (they have not moved since), so subtracting the draws
-  // from the current rack leaves exactly the retained leave.
+  // The opponent last moved at sampled_turn - 1 and has not moved since, so
+  // everything they drew then is still on their rack.
   if (sampled_turn == 0) return Rack{};
   Rack leave = opp_rack_now;
   for (Tile t : g.records[sampled_turn - 1].drawn.tiles()) {
@@ -49,9 +46,8 @@ void encode_candidate_rows(const PositionEncoder& encoder, const GameLog& g, int
   const Rack opp_leave =
     spec.opp_leave_input ? opp_leave_from_replay(g, turn, encoder.rack(1 - mover)) : Rack{};
 
-  // The cross-check planes read the board's move-generation caches; building
-  // them on the replayed board (a no-op once valid) lets each candidate's copy
-  // update them incrementally instead of rebuilding them.
+  // Build the move-generation caches once on the shared board, so each
+  // candidate's copy updates them incrementally instead of rebuilding them.
   pre.board().ensure_movegen_caches(*spec.dict);
   const size_t row_floats = input_floats(spec);
   for (size_t c = 0; c < candidates.size(); ++c) {
@@ -69,8 +65,6 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
   racks_[0] = g.initial_racks[0];
   racks_[1] = g.initial_racks[1];
 
-  // Replay turns [0, sampled_turn) silently (apply move + remove played tiles +
-  // add drawn tiles). The mover of turn k alternates from active=0.
   for (int k = 0; k < sampled_turn; ++k) {
     const int mover = enc_.active_player();
     const Move& move = g.records[k].move;
@@ -84,7 +78,6 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
     }
   }
 
-  // At this point enc_ holds the pre-move state for turn `sampled_turn`.
   const int mover = enc_.active_player();
   if (post_move) {
     const Move& move = g.records[sampled_turn].move;
@@ -92,7 +85,8 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
       remove_played_or_exchanged(racks_[mover], move);
     }
     enc_.apply_move(move);
-    // racks_[mover] is now the pre-draw rack; do NOT add records[sampled_turn].drawn.
+    // The post-move position precedes the draw, so records[sampled_turn].drawn
+    // is not added.
   }
 
   return mover;
@@ -108,12 +102,9 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
   ctx.active_player = mover;
   ctx.spec = spec_;
 
-  // Each player's next move from the sampled snapshot. The opponent's is turn
-  // sampled_turn+1 in both snapshot kinds (pre-move: the mover plays
-  // sampled_turn and the opponent answers at +1; post-move: enc_ has advanced
-  // past sampled_turn, and the opponent's reply is still at +1). The mover's
-  // own next move is the sampled turn itself for a pre-move snapshot, and the
-  // turn after the opponent's reply for a post-move one.
+  // The opponent's next move is turn sampled_turn + 1 either way. The
+  // mover's is the sampled turn itself pre-move, or the turn after the
+  // opponent's reply post-move.
   const int opp_idx = sampled_turn + 1;
   if (opp_idx < g.num_records) {
     ctx.opp_next_move = in_frame(g.records[opp_idx].move, transposed);
@@ -132,9 +123,8 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
 void PositionEncoder::encode_score_diff_sweep(const GameLog& g, int sampled_turn, bool post_move,
                                               int diff_lo, int diff_hi, float* out) {
   const int mover = replay_to_sampled(g, sampled_turn, post_move);
-  // Only the score-diff thermometer varies across the sweep, so the position
-  // is fully encoded once (the expensive, move-generating part) and each
-  // swept differential is stamped into a copy of that row.
+  // Encode fully once, since that runs move generation, then copy the row and
+  // overwrite only the score difference.
   const int64_t row_floats = input_floats(spec_);
   enc_.encode_input_with_score_diff(mover, racks_[mover], diff_lo, out);
   for (int64_t i = 1; i <= diff_hi - diff_lo; ++i) {
