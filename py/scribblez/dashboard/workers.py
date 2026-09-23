@@ -1394,7 +1394,7 @@ class WorkerManager:
                 info["state"] = _ssh_state(w.desired_state, probe, gated, w.finished)
                 info["ssh_probe"] = probe  # reconcile keys its enforcement off this
                 info["ssh"] = f"ssh {_ssh_host(task, w)}"
-                reason = self._exits.get(_key(spec, task.tag, w.worker_id))
+                reason = self._slot_reason(spec, task, w)
                 if reason and not alive:
                     info["exit_reason"] = reason
             # Real liveness, for reconcile's desired-vs-observed enforcement.
@@ -1403,6 +1403,18 @@ class WorkerManager:
         if observe and task.workers:
             tasks.save_task(spec, task)
         return out
+
+    def _slot_reason(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
+        """Why ssh slot `w` is not running. While its machine is not up the
+        reconcile pass leaves the slot alone, so the slot's own last reason (a
+        bundle build long finished, say) goes stale; the machine's state, and
+        why its last start was refused, is the answer then."""
+        mkey = _machine_key(spec, task.tag, w.machine) if w.machine else None
+        mstate = self._machine_states.get(mkey) if mkey else None
+        if mstate is not None and mstate != "up":
+            why = self._exits.get(mkey)
+            return f"waiting for machine {w.machine} ({mstate}{': ' + why if why else ''})"
+        return self._exits.get(_key(spec, task.tag, w.worker_id))
 
     # ---- the scheduler's hook surface --------------------------------------
 
