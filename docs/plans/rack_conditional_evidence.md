@@ -37,10 +37,12 @@ which every branch shares.
 
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** is the base. Its
   evidence token is an *aggregate* over a candidate's rollouts, and the loop
-  it drives closes a candidate once simmed. This plan keeps its architecture
+  it drives closes a candidate once simmed. This plan keeps its principles
   (prediction-beside-observation, late fusion, permutation-invariant evidence
   sets, subset-assembled training rows, the CRN pairing) and changes the
-  granularity: the evidence keeps its racks.
+  granularity: the evidence keeps its racks. It does not keep the
+  implementation of that plan; [what the existing stack
+  loses](#what-the-existing-stack-loses) is the inventory.
 - **[design.md §8.1](../design.md)** (search-derived knowledge buffers) is
   the idea in the abstract. Here the buffer is the evidence set itself; there
   is no separate table of discovered facts.
@@ -125,14 +127,47 @@ load-bearing constraint, and the cost structure below depends on it.
    the incumbent over the same racks, with the model's predictive spread, is
    the expected gain of the base plan's proves-best head with a rack axis.
    A candidate no round proposed rises when the context shows it fixes the
-   rack region where the incumbent bleeds.
+   rack region where the incumbent bleeds. This needs a head no model has
+   today: the student sees the unseen pool, never the opponent's rack, and
+   returns one outcome per candidate. The **rack-query head** takes a
+   candidate's fused latent and one opponent rack and returns that
+   candidate's outcome on that rack; it reads the latent, never the raw
+   context, so a query costs a small MLP or a short attention over the
+   latent, not a context read. Queries are still numerous (legal moves times
+   active racks per block), so per-rack scoring runs only on a shortlist
+   taken from the per-candidate prediction.
 2. **The reply policy at ply one of every rollout.** The board after `DOG` is
-   the same for every rollout of `DOG`; only the rack differs. So the trunk
-   encode and the fusion of the context into it run **once per candidate per
-   block**, and per rollout the work is the reply move list, which the hasty
-   policy generates anyway, plus a cheap scoring pass of that list against
-   the cached conditioned encoding with the rack as input. The expensive part
-   is per candidate, the cheap part per rollout. This is where `CAT`'s
+   the same for every rollout of `DOG`; only the replier's rack differs. The
+   design wants the trunk encode and the fusion of the context into it to run
+   **once per candidate per block**, with per-rollout work reduced to the
+   reply move list and a cheap scoring pass of that list against the cached
+   conditioned encoding. **Today's student cannot do this.** Its trunk reads
+   the mover's rack three ways: the rack counts, the unseen-pool thermometer
+   (the pool minus the mover's rack), and the opponent-reach plane gated on
+   that pool ([game_state_encoder.cpp](../../engine/src/encoding/game_state_encoder.cpp),
+   `encode_board` in [model.py](../../py/scribblez/move_set_eval/model.py)).
+   At ply one the mover holds a different rack in every rollout, so the
+   trunk input differs per rollout. Two ways through:
+
+   - **Per-rollout encodes, batched.** Correct with today's student, at
+     rollouts times contenders trunk passes per block. Acceptable for
+     measuring the ply-one policy's strength; too slow as the design center.
+   - **A rack-late student.** The trunk reads the board and the
+     rack-independent scalars; the rack, the pool it implies and the reach
+     plane enter at scoring. This needs a re-distilled student and a
+     quality gate against the current one, and readers 1 to 3 all assume it.
+
+   Either way the ply-one policy needs the full reply list, which greedy
+   hasty does not produce: its WordMap search stops without enumerating the
+   legal plays ([macondo_bot.h](../../engine/include/agent/macondo_bot.h)),
+   and full generation costs about twice as much. Scoring also needs a GPU
+   round trip in the middle of a rollout, which nothing downstream can
+   defer the way the horizon readout is deferred. So ply one is
+   **block-staged**: generate every rollout's reply list for the block,
+   score them in one batch, then resume each rollout with its first move
+   forced.
+
+   This is where `CAT`'s
    discoveries reach `DOG`'s rollouts: on a rack with an M, the conditioned
    student scores the lane play above the hasty move although nobody rolled
    that reply after `DOG`. With an empty context the conditioned student is
@@ -143,6 +178,24 @@ load-bearing constraint, and the cost structure below depends on it.
 3. **The correction for outdated rollouts.** The value gap between the
    post-reply states of the played reply and the preferred one, read from the
    student's per-move value heads.
+
+## What the existing stack loses
+
+The base plan's per-candidate aggregate token is load-bearing across a
+shipped surface, and this plan replaces most of it rather than extending it.
+
+| Piece | Today | Under this plan |
+|---|---|---|
+| Evidence unit | `EvidenceSet`: one `SimObservation` per simmed candidate ([move_proposal_service.h](../../engine/include/agent/move_proposal_service.h)) | Rack-index tokens, each a variable-size set of per-candidate sub-records, plus nested-sim tokens. The sub-record encoder is new. |
+| Fusion | Self-attention over at most 64 padded evidence tokens ([evidence_fusion.py](../../py/scribblez/evidence_fusion.py)) | Cross-attention into board tokens or inducing points, over a context of thousands. The exported graph needs a dynamic evidence axis. |
+| Evidence encoding | Board tokens gathered from the root board's map, cached once | Encoded against each candidate's post-move board. |
+| Serving | `MoveProposalService` holds one encoded position | A session holding each contender's fused encoding at once, for reader 2. |
+| Agent loop | `evidence_loop.h`: one sim call per candidate, one observation back | Blocks over (candidate, rack indices), block-staged ply one. |
+| Training | `py/scribblez/evidence/` and `py/scribblez/sim_evidence/`, keyed to per-candidate observations | Per-rollout targets, rack-query rows, reply-node rows. |
+
+The aggregate path stays in service until layer 3 beats it on the known
+cases, then retires; the two do not interoperate. Each new piece lands in the
+layer that first needs it (build order, below).
 
 ## The turn
 
@@ -165,8 +218,11 @@ as in the base plan.
 
 1. **Re-fuse.** Fuse the current context into each contender's cached trunk
    output.
-2. **Re-price.** Rescore every existing rollout's cached reply list against
-   its candidate's new encoding and update its gap. A slight change of mind
+2. **Re-price.** Rescore every existing rollout's cached reply shortlist
+   against its candidate's new encoding and update its gap. The shortlist is
+   the top few replies by the plain score, kept at generation time; caching
+   every rollout's full list is hundreds of megabytes per turn, and the gap
+   is computed over the shortlist. A slight change of mind
    that flips the argmax between near-equal replies produces a gap near zero
    and the rollout stays nearly as good as fresh; a large gap says the
    rollout understates the opponent by about that much. This pass is linear
@@ -328,9 +384,15 @@ bf16 layers on a 4090, against seconds for the ten thousand rollouts. The
 quadratic read would not bind at today's budgets; the linear form is chosen
 so that it never does.
 
-Per rollout, the added work over today is the scoring pass of the reply list
-against a cached encoding. Per block, the re-pricing pass is linear in
-rollouts and touches no trunk. The root proposal over all legal moves is one
+Per rollout, the added work over today is at ply one: full reply
+generation, move-feature encoding of that list, and its share of the
+block-staged scoring batch, plus a trunk encode if the student is not
+rack-late (reader 2). This term, not the context read, is what bounds
+rollouts per second, and it is measured before the design commits to it.
+Per block, the re-pricing pass scores each rollout's reply shortlist and
+touches no trunk. The rack-query head adds shortlisted candidates times
+active racks small queries per block, and several thousand racks times the
+contenders at the final pick. The root proposal over all legal moves is one
 scoring pass per block, the same shape as today's proposer.
 
 ## Risks
