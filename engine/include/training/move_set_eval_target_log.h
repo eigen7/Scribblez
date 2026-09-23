@@ -74,7 +74,7 @@ inline constexpr std::array<const char*, 5> kTargetNamesV1 = {"p_win", "p_draw",
                                                               "sd_mean", "sd_std"};
 inline constexpr uint32_t kTargetFloatsV1 = kTargetNamesV1.size();
 // Quantized placement planes per candidate record, when the file carries them.
-inline constexpr uint32_t kTargetPlanes = 4;
+inline constexpr uint32_t kTargetPlanes = kPlacementHeads;
 inline constexpr uint32_t kPlaneWidth = kFootprintClasses;
 
 // TargetFileHeader::flags bits, mirroring the .sobs convention.

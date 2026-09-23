@@ -5,7 +5,7 @@
 // plan cache, the bindings, chunking, and decoding on a real checkpoint.
 // Running it at two precisions is a quick precision spot check.
 //
-//   mset_infer_smoke model.onnx [num_moves=8] [FP16|BF16|FP32, default FP16]
+//   mset_infer_smoke model.onnx [num_moves=8] [FP16|BF16|FP32, default BF16]
 //
 // The move features are synthetic rather than encoder output: the encoder has
 // its own tests, and this tool is about the inference path.
@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
 
   const std::string model = argv[1];
   const int num_moves = std::max(argc > 2 ? std::atoi(argv[2]) : 8, 1);
-  const std::string precision = argc > 3 ? argv[3] : "FP16";
+  const std::string precision = argc > 3 ? argv[3] : "BF16";
 
   try {
     using Spec = scribblez::nn::MoveSetEvaluationSpec;

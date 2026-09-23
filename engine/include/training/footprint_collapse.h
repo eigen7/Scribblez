@@ -25,10 +25,6 @@ namespace scribblez {
 // outputs share its frame. `board` gets its move-generation caches built from
 // `dict` on demand.
 
-// The four placement heads, in PositionEvaluationSpec::AuxOutputs and .mset
-// plane order: opp_next, self_next, opp_win, self_win.
-inline constexpr int kPlacementHeads = 4;
-
 // Collapses each head onto the board: out[h][cell] is the probability that the
 // next move covers `cell` (plays heads), or covers it AND that seat goes on to
 // win (win heads). This drives the dashboard's occupancy overlay. Self

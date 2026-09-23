@@ -1,8 +1,8 @@
 #include "nn/batching_position_eval_service.h"
 
 #include "encoding/input_encoder.h"
-#include "nn/model_specs.h"
 
+#include <array>
 #include <cstring>
 
 namespace scribblez {
@@ -62,13 +62,24 @@ void BatchingPositionEvalService::serve(const std::vector<Request*>& pack) {
     return;
   }
 
+  const int total = gather(pack);
+  std::array<float*, Outputs::size> combined;
+  for (size_t h = 0; h < Outputs::size; ++h) combined[h] = out_rows_[h].data();
+
+  // The combined batch may exceed max_rows; the wrapped service chunks it.
+  if (!try_evaluate(SpecBatch{in_rows_.data(), total}, combined, pack)) return;
+  scatter(pack);
+}
+
+int BatchingPositionEvalService::gather(const std::vector<Request*>& pack) {
   const int row_floats = spatial_planes() * kBoardCells + scalar_floats();
   int total = 0;
   for (const Request* r : pack) total += r->batch->count;
 
   in_rows_.resize(size_t(total) * row_floats);
-  wld_out_.resize(size_t(total) * WldOutput::kRowElems);
-  score_diff_out_.resize(size_t(total) * ScoreDiffOutput::kRowElems);
+  for (size_t h = 0; h < Outputs::size; ++h) {
+    out_rows_[h].resize(size_t(total) * Outputs::row_elems[h]);
+  }
 
   int offset = 0;
   for (const Request* r : pack) {
@@ -76,18 +87,17 @@ void BatchingPositionEvalService::serve(const std::vector<Request*>& pack) {
                 sizeof(float) * size_t(r->batch->count) * row_floats);
     offset += r->batch->count;
   }
+  return total;
+}
 
-  // The combined batch may exceed max_rows; the wrapped service chunks it.
-  float* const combined[] = {wld_out_.data(), score_diff_out_.data()};
-  if (!try_evaluate(SpecBatch{in_rows_.data(), total}, combined, pack)) return;
-
-  offset = 0;
+void BatchingPositionEvalService::scatter(const std::vector<Request*>& pack) const {
+  int offset = 0;
   for (const Request* r : pack) {
-    std::memcpy(r->head_out[0], wld_out_.data() + size_t(offset) * WldOutput::kRowElems,
-                sizeof(float) * size_t(r->batch->count) * WldOutput::kRowElems);
-    std::memcpy(r->head_out[1],
-                score_diff_out_.data() + size_t(offset) * ScoreDiffOutput::kRowElems,
-                sizeof(float) * size_t(r->batch->count) * ScoreDiffOutput::kRowElems);
+    for (size_t h = 0; h < Outputs::size; ++h) {
+      const int width = Outputs::row_elems[h];
+      std::memcpy(r->head_out[h], out_rows_[h].data() + size_t(offset) * width,
+                  sizeof(float) * size_t(r->batch->count) * width);
+    }
     offset += r->batch->count;
   }
 }

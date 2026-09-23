@@ -39,6 +39,12 @@ inline constexpr int kPassClass = kAnchoredFootprints;                       // 
 inline constexpr int kExtraClass = kAnchoredFootprints + 1;                  // 2926
 inline constexpr int kFootprintClasses = kAnchoredFootprints + 2;            // 2927
 
+// The number of placement heads, one per placement target in
+// training_targets.h. Everything indexed by head (the position model's aux
+// outputs, .mset planes, the move-proposal planes and evidence channels) uses
+// the targets' declaration order: opp_next, self_next, opp_win, self_win.
+inline constexpr int kPlacementHeads = 4;
+
 // The footprint class of a move, in the move's frame. EXCHANGE and PASS map to
 // kPassClass.
 int footprint_class(const Move& m);

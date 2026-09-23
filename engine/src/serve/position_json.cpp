@@ -141,11 +141,4 @@ json::object position_state_object_pov(const Board& board, const Rack& my_rack, 
                                my_name, opp_name, /*your_turn=*/true, /*game_over=*/false);
 }
 
-std::string position_state_json(const Board& board, const Rack& my_rack, int my_score,
-                                int opp_score, const std::string& my_name,
-                                const std::string& opp_name) {
-  return json::serialize(
-    position_state_object_pov(board, my_rack, my_score, opp_score, my_name, opp_name));
-}
-
 }  // namespace scribblez
