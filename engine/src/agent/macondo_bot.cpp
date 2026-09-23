@@ -32,8 +32,8 @@ HastyBotAgent::HastyBotAgent(const Params& params)
 
 namespace {
 
-// Canonical total order on distinct PLAY moves (orientation, anchor, placed
-// squares, then placed glyphs) -- used only to break exact-equity ties.
+// Canonical total order on distinct PLAY moves (orientation, lane, placed
+// squares, then placed glyphs), used only to break exact-equity ties.
 bool move_order_less(const Move& a, const Move& b) {
   if (a.horizontal() != b.horizontal()) return a.horizontal() < b.horizontal();
   if (a.start() != b.start()) return a.start() < b.start();
@@ -95,8 +95,9 @@ BoundInputs make_bound_inputs(const MoveRequest& req, const HastyEquity& eq) {
 }
 
 // Admissible equity bound for placing `placed` tiles whose raw score is at most
-// `score_bound`: equity = score + leave(rack - placed) + opening(<=0) + peg, so
-// adding the best leave of the complementary size (or the endgame term) bounds it.
+// `score_bound`. Equity = score + leave(rack - placed) + opening (<= 0) + peg,
+// so adding the best leave of the complementary size (or, in the endgame, the
+// endgame term) bounds it.
 double equity_bound(const HastyEquity& eq, const BoundInputs& in, int placed, int score_bound) {
   const double leave_term =
     in.endgame ? in.endgame_term
@@ -104,14 +105,13 @@ double equity_bound(const HastyEquity& eq, const BoundInputs& in, int placed, in
   return double(score_bound) + leave_term;
 }
 
-// Best move found so far, with hasty tie-break.
+// The best move found so far, under hasty_move_better.
 struct BestMove {
   bool have = false;
   Move move;
   double eq = 0.0;
 };
 
-// Fold each candidate play's equity into the running best.
 void consider_moves(const HastyEquity& eq, const MoveRequest& req, TurnLeaves& leaves,
                     const std::vector<Move>& moves, BestMove& bm) {
   for (const Move& m : moves) {
@@ -124,8 +124,8 @@ void consider_moves(const HastyEquity& eq, const MoveRequest& req, TurnLeaves& l
   }
 }
 
-// Indices into `units` paired with their equity bound, sorted best-first so the
-// search can stop as soon as a bound can no longer beat the best move found.
+// (bound, index) pairs sorted by descending bound, so the search can stop at
+// the first bound that cannot beat the best move found.
 std::vector<std::pair<double, int>> rank_by_bound(const std::vector<double>& bounds) {
   std::vector<std::pair<double, int>> order;
   order.reserve(bounds.size());
@@ -135,8 +135,8 @@ std::vector<std::pair<double, int>> rank_by_bound(const std::vector<double>& bou
   return order;
 }
 
-// The GADDAG HastyBot path: bound each anchor by its best tile-count, then
-// generate anchors best-first with the GADDAG.
+// The GADDAG path, for blank-bearing racks: bound each anchor's equity over
+// its possible tile counts, then generate anchors best-first.
 Move hasty_best_move_gaddag(const MoveRequest& req) {
   const HastyEquity& eq = HastyEquity::instance();
   ShadowMoveGen smg(req.board, req.dict);
@@ -167,11 +167,11 @@ Move hasty_best_move_gaddag(const MoveRequest& req) {
   return bm.have ? bm.move : Move::pass();
 }
 
-// Enumerates every non-empty sub-multiset of a rack and, in the same depth-first
-// pass, prices each one's leave (the rack minus the subrack) by walking the leave
-// KWG one tile at a time. Each subrack's leave value is read off the cursor with
-// no hashing -- the whole turn costs a few hundred arc-follows instead of one
-// leave hash per subrack. `subracks[k]` and `leaves[k]` are filled in lockstep.
+// Enumerates every non-empty sub-multiset of a rack and, in the same
+// depth-first pass, prices each one's leave (the rack minus the subrack) by
+// walking the leave KWG one tile at a time. No subrack is hashed: the whole
+// turn costs a few hundred arc-follows. `subracks[k]` and `leaves[k]` are
+// filled in lockstep.
 struct SubrackLeaveDFS {
   const LeaveValues& lv;
   const std::array<std::pair<int, int>, 26>& letters;  // (letter index, count), ascending
@@ -179,11 +179,11 @@ struct SubrackLeaveDFS {
   WmpSubracks& subracks;
   std::array<std::vector<float>, kMaxPlayTiles + 1>& leaves;
 
-  // The cursor over the leave built so far (in ascending letter order, matching
-  // the KWG's tile order): `list` is the sibling list to match the next tile in,
-  // `index` is the accumulated word index, `val` is the leave value if it ended
-  // here, and `alive` is false once a tile went missing. `subrack`/`size` are the
-  // complementary placed tiles.
+  // The KWG cursor over the leave built so far, in ascending letter order
+  // (the KWG's tile order): `list` is the sibling list to match the next tile
+  // in, `index` the accumulated word index, `val` the leave value if the leave
+  // ended here, and `alive` false once the leave left the KWG.
+  // `subrack`/`size` are the complementary placed tiles.
   void recurse(int idx, uint32_t list, uint32_t index, float val, bool alive, BitRack subrack,
                int size) const {
     if (idx == num_letters) {
@@ -237,22 +237,22 @@ struct SubrackLeaveDFS {
   }
 };
 
-// The WordMap HastyBot path: bound each individual extent, then generate extents
-// best-first with WordMap lookups. The finer (per-extent) granularity lets the
-// early-exit prune whole extents, the regime where WordMap beats the GADDAG.
+// The WordMap path: bound each word extent's best possible equity (shadow
+// play), generate extents best-first with WordMap anagram lookups, and stop
+// once no remaining extent can beat the best move found. Bounding per extent,
+// finer than the GADDAG path's per-anchor bounds, lets the early exit prune
+// whole extents; that is where WordMap beats the GADDAG.
 //
-// Racks holding a blank fall back to the GADDAG path: the WordMap is blank-free,
-// and resolving blanks by enumerating their letters at query time is too slow
-// (MAGPIE uses precomputed blank tables instead). Blanks are a minority of racks,
-// so self-play still gets the WordMap speedup on the common (blank-free) case.
+// Racks holding a blank fall back to the GADDAG path: the WordMap is
+// blank-free, and enumerating a blank's letters at query time is too slow
+// (MAGPIE uses precomputed blank tables instead). Blank-free racks are the
+// common case, so self-play still gets most of the speedup.
 Move hasty_best_move_wmp_impl(const MoveRequest& req) {
   if (req.my_rack.counts().blanks() > 0) return hasty_best_move_gaddag(req);
   const WordMap& wm = req.dict.word_map();
   const HastyEquity& eq = HastyEquity::instance();
   TurnLeaves leaves = eq.turn_leaves(req.my_rack);
 
-  // Enumerate the rack's subracks and price every subrack's leave in one DFS over
-  // the leave KWG (no per-subrack hashing). subracks[k]/leaves[k] are aligned.
   WmpSubracks subracks;
   std::array<std::vector<float>, kMaxPlayTiles + 1> sub_leaves;
   std::array<std::pair<int, int>, 26> letters{};
@@ -269,9 +269,9 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req) {
   const SubrackLeaveDFS dfs{lv, letters, num_letters, subracks, sub_leaves};
   dfs.recurse(0, lv.klv_root(), /*index=*/0, /*val=*/0.0f, /*alive=*/true, BitRack{}, 0);
 
-  // The shadow bounds need the best leave of each size, which is exactly the max
-  // priced leave per subrack size -- so derive it from the DFS instead of a second
-  // best-leave enumeration. A play placing `placed` tiles keeps size rack-placed.
+  // The shadow bounds need the best leave of each size, which is the max
+  // priced leave per subrack size, so it comes from the DFS rather than a
+  // second enumeration. A play placing `placed` tiles keeps rack - placed.
   BoundInputs in;
   in.rack_size = rack_tiles;
   in.endgame = req.bag_size <= 0;
@@ -346,10 +346,8 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req) {
   return bm.have ? bm.move : Move::pass();
 }
 
-// The HastyBot --player options, binding the softmax-sampler controls to the
-// given storage. from_spec() builds this to parse a spec; options_help() builds
-// it against scratch defaults to document the same flags, so the parsed options
-// and the documented options share one source of truth.
+// Shared by parse_hasty_params() and options_help(), so the parsed and
+// documented options cannot drift.
 boost::program_options::options_description hastybot_options(int& top_k, double& temperature,
                                                              uint64_t& seed) {
   namespace po = boost::program_options;
@@ -366,15 +364,12 @@ boost::program_options::options_description hastybot_options(int& top_k, double&
 }  // namespace
 
 MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
-  // Greedy: the fast pruned shadow-play search (WordMap extents, with a GADDAG
-  // fallback for blank-bearing racks).
   if (temperature_ <= 0.0) {
     return hasty_best_move_wmp_impl(req);
   }
 
-  // Exploratory: generate every legal play and exchange, rank by equity, keep
-  // the top-K, and softmax-sample among them to inject exploration into
-  // self-play data generation that pure argmax play lacks.
+  // Sampling needs the top K, which the pruned search cannot give, so generate
+  // every legal move.
   std::vector<Move> candidates = generate_legal_plays(req);
   const std::vector<Move> exchanges = generate_legal_exchanges(req);
   candidates.insert(candidates.end(), exchanges.begin(), exchanges.end());
@@ -402,10 +397,6 @@ HastyBotAgent::Params HastyBotAgent::parse_hasty_params(
   boost::program_options::options_description& extra, const char* type_label) {
   namespace po = boost::program_options;
 
-  // The equity tables (leaves + pre-endgame) are process-wide: a play_game
-  // --leaves-file overrides them, but otherwise we lazily load Macondo's
-  // defaults for the active lexicon. The only per-agent options control the
-  // optional softmax-over-equity sampler used for exploratory self-play.
   int top_k = 10;
   double temperature = 0.0;
   uint64_t seed = 0;
@@ -423,6 +414,8 @@ HastyBotAgent::Params HastyBotAgent::parse_hasty_params(
     throw util::CleanException("bad --type={} options: {}", type_label, e.what());
   }
 
+  // The equity tables are process-wide: play_game --leaves-file may have
+  // loaded them already; otherwise load Macondo's defaults for the lexicon.
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   const uint64_t resolved_seed = have_seed ? seed : SeedProducer::instance().next();
   return HastyBotAgent::Params{.thread_id = thread_id,
@@ -442,10 +435,10 @@ std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::s
 std::string HastyBotAgent::options_help() {
   int top_k = 10;
   double temperature = 0.0;
-  uint64_t seed = 0;  // scratch binding targets; never read here
+  uint64_t seed = 0;  // binding targets; only the defaults are read
   return agent_options_help(
-    "  In-process HastyBot: enumerates all legal plays and ranks them by\n"
-    "  static equity (score + leave value + adjustments).\n",
+    "  In-process HastyBot: chooses among the legal plays by static equity\n"
+    "  (score + leave value + adjustments).\n",
     hastybot_options(top_k, temperature, seed));
 }
 

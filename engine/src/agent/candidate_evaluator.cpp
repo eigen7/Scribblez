@@ -51,9 +51,9 @@ void CandidateEvaluator::observe_move(const Move& move) { encoder_.apply_move(mo
 
 void CandidateEvaluator::encode_candidate(const Move& mv, const Rack& my_rack, int my_seat,
                                           const Rack& opp_leave, float* dst) const {
-  // The cross-check input planes read the board's move-generation caches;
-  // building them here (a no-op once valid) keeps them lexicon-accurate on the
-  // copy, which then updates them incrementally when the candidate is applied.
+  // The cross-check input planes read the board's move-generation caches.
+  // Building them here (a no-op once valid) means the post-move copy inherits
+  // valid caches and updates them incrementally when the candidate is applied.
   encoder_.board().ensure_movegen_caches(*spec_.dict);
   encode_post_move_row(encoder_, my_seat, my_rack, mv, opp_leave, dst);
 }
@@ -63,9 +63,8 @@ void CandidateEvaluator::evaluate(const MoveRequest& req, const std::vector<Move
   wld_buf_.resize(size_t(k) * nn::WldOutput::kRowElems);
   score_diff_buf_.resize(size_t(k) * nn::ScoreDiffOutput::kRowElems);
 
-  // The encoder's active player is the owning agent's seat (it has observed
-  // every prior move). Each candidate is scored from a post-move copy of the
-  // encoder, in chunks no larger than the model's batch limit.
+  // The encoder has observed every prior move, so its active player is the
+  // owning agent's seat.
   const int my_seat = encoder_.active_player();
   int done = 0;
   while (done < k) {

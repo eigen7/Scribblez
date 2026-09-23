@@ -18,16 +18,16 @@ std::optional<int> ArgmaxGainPolicy::pick(const MoveProposalPredictions& conditi
   int best = -1;
   for (int i = 0; i < conditioned.num_moves; ++i) {
     if (simmed[size_t(i)]) continue;
-    // A non-finite gain compares false against everything: a NaN at the
-    // lowest unsimmed index would win every pick and slip past the threshold.
-    // As for the leaf readout (sim_runner.cpp), a broken model output is a
-    // hard error, not a silent decision.
+    // A NaN compares false against everything, so a NaN at the lowest
+    // unsimmed index would win every pick and slip past the threshold. As
+    // with the rollout leaf readout (sim_runner.cpp), a broken model output is
+    // a hard error.
     if (!std::isfinite(conditioned.gain[size_t(i)])) {
       throw util::Exception(
         "evidence loop: the move proposal model returned a non-finite gain (off-distribution "
         "input, or a broken model)");
     }
-    // Strict: the first (lowest-index, equity-preferred) maximum wins a tie.
+    // Strict comparison: ties go to the lowest index.
     if (best < 0 || conditioned.gain[size_t(i)] > conditioned.gain[size_t(best)]) best = i;
   }
   RELEASE_ASSERT(best >= 0);

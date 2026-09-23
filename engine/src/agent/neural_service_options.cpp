@@ -9,8 +9,7 @@ namespace scribblez {
 
 namespace po = boost::program_options;
 
-// Boost.program_options renders defaults set via default_value() as "(=...)" in
-// the help text, so the option descriptions deliberately omit them.
+// Help strings omit defaults: program_options renders them as "(=...)".
 void NeuralServiceOptions::add_options(po::options_description& desc) {
   desc.add_options()  //
     ("model,m", po::value<std::string>(&model), "exported ONNX model (required)")(
@@ -23,7 +22,6 @@ void NeuralServiceOptions::add_options(po::options_description& desc) {
 
 namespace {
 
-// The model path is the one option with no usable default.
 const std::string& require_model(const std::string& model) {
   if (model.empty()) throw util::CleanException("this player type requires --model=<path.onnx>");
   return model;

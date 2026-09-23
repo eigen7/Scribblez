@@ -9,7 +9,7 @@ namespace agent {
 
 namespace {
 
-// `rows` of raw logits, softmax'd in place across each row's `width` floats.
+// Softmax each of `rows` rows of `width` logits in place.
 void softmax_rows_in_place(float* data, int rows, int width) {
   for (int r = 0; r < rows; ++r) {
     float* row = data + size_t(r) * width;
@@ -32,8 +32,7 @@ MoveProposalSession::MoveProposalSession(std::shared_ptr<MoveProposalNets> nets)
 const MoveProposalPredictions& MoveProposalSession::encode(
   const float* board_row, const move_set::MoveFeatureArrays& moves) {
   nets_->run_cache(board_row, moves, &cache_);
-  // The evidence-free predictions, decoded from the retained raw outputs. The
-  // cache graph emits no gain head.
+  // The cache graph has no gain head.
   plain_.num_moves = cache_.num_moves;
   plain_.wld = cache_.wld;
   plain_.score_diff = cache_.score_diff;

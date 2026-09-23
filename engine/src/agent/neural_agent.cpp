@@ -8,10 +8,7 @@
 #include <numeric>
 #include <optional>
 
-// The production constructor -- the only member that references the concrete
-// nn::TrtEvalService (and thus pulls in CUDA / TensorRT) -- lives in
-// neural_agent_factory.cpp, so this translation unit, and the agent's unit
-// tests that compile it, carry no GPU dependency.
+// from_spec lives in neural_agent_factory.cpp.
 
 namespace scribblez {
 
@@ -42,15 +39,6 @@ void NeuralAgent::observe_move(const Move& move) {
   endgame_.observe_move(move);
 }
 
-// --- make_move()'s per-turn pipeline ---------------------------------------
-// make_move() (at the bottom of this file) drives three stages:
-//   select_candidates()    -- prune the legal plays to the set worth scoring
-//   evaluator_.evaluate()  -- encode each candidate's post-move position from
-//                             the agent's POV and run the model on the batch
-//   select_index()         -- pick one candidate from the model's scores
-// The rest (candidate_equities, greedy_equity_index, encode_candidate) are
-// shared helpers those stages call.
-
 std::vector<double> NeuralAgent::candidate_equities(const MoveRequest& req,
                                                     const std::vector<Move>& plays) const {
   return HastyEquity::instance().equities(plays, req.board, req.bag_size, req.opp_rack,
@@ -67,11 +55,8 @@ int NeuralAgent::select_candidates(const MoveRequest& req, const std::vector<Mov
   cand_idx_.resize(size_t(n));
   std::iota(cand_idx_.begin(), cand_idx_.end(), 0);
 
-  // All-moves mode (top_k_ == 0) or fewer plays than the cap: evaluate every
-  // play, without consulting static equity.
   if (top_k_ == 0 || n <= top_k_) return n;
 
-  // Otherwise keep the top_k_ plays by HastyBot static equity.
   const std::vector<double> equities = candidate_equities(req, plays);
   std::partial_sort(cand_idx_.begin(), cand_idx_.begin() + top_k_, cand_idx_.end(),
                     [&](int a, int b) { return equities[a] > equities[b]; });
@@ -102,18 +87,17 @@ float NeuralAgent::objective(int i) const {
   return objective_value(evaluator_.wld_row(i), evaluator_.score_diff_row(i), objective_);
 }
 
-// TODO: use the WMP/shadow-play based play-generation that the streaming data generation code
-// uses in order to generate just the top-K plays efficiently
+// TODO: with a positive top_k, generate only the top-K plays under a
+// shadow-play bound (as hasty_best_move_wmp does for the argmax) instead of
+// every legal play.
 MoveDecision NeuralAgent::make_move(const MoveRequest& req) {
-  // The endgame belongs to the exact solver, which needs no move list of ours.
   if (const std::optional<MoveDecision> solved = endgame_.try_solve(req)) return *solved;
 
   const std::vector<Move> plays = generate_legal_plays(req);
   if (plays.empty()) return Move::pass();
 
-  // A bag-empty position the solver declined: the value model is out of its
-  // training regime and ranks these worse than static equity, so play the
-  // greedy HastyBot equity move instead of consulting the model.
+  // On a bag-empty turn the solver declined, the model is outside its
+  // training regime and ranks worse than static equity.
   if (req.bag_size == 0) {
     return plays[size_t(greedy_equity_index(req, plays))];
   }

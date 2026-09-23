@@ -8,10 +8,7 @@
 #include <numeric>
 #include <optional>
 
-// The production constructor -- the only member that references the concrete
-// nn::TrtEvalService (and thus pulls in CUDA / TensorRT) -- lives in
-// neural_sim_agent_factory.cpp, so this translation unit, and the agent's unit
-// tests that compile it, carry no GPU dependency.
+// from_spec lives in neural_sim_agent_factory.cpp.
 
 namespace scribblez {
 
@@ -21,8 +18,8 @@ namespace {
 // the two deterministic per-ply draws never correlate.
 constexpr uint64_t kDropStreamSalt = 0x9e3779b97f4a7c15ULL;
 
-// The dictionary reference the CandidateEvaluator member needs before any
-// constructor body could check it.
+// Checked in the initializer list, where the CandidateEvaluator member needs
+// the dictionary before any constructor body could check it.
 const Dictionary& require_dict(const Dictionary* dict) {
   if (dict == nullptr) throw util::Exception("neural-sim agent: a dictionary is required");
   return *dict;
@@ -55,9 +52,8 @@ void NeuralSimAgent::validate(const Params& params) {
   if (params.drop_best_prob < 0.0 || params.drop_best_prob > 1.0)
     throw util::CleanException("neural-sim agent: --drop-best-prob must be in [0, 1]");
   SimRunner::validate(params.sim);
-  // The agent's own served model is always the leaf, so the pairing holds by
-  // construction; this checks the horizon lower bound early -- the factory
-  // calls validate() before loading that model.
+  // The agent's own model is always the leaf, so only the horizon's range
+  // needs checking.
   SimRunner::validate_min_horizon("neural-sim agent", params.sim_horizon);
 }
 
@@ -98,21 +94,18 @@ float NeuralSimAgent::objective(int i) const {
 }
 
 MoveDecision NeuralSimAgent::make_move(const MoveRequest& req) {
-  // The endgame belongs to the exact solver, which needs no candidates of ours.
   if (const std::optional<MoveDecision> solved = endgame_.try_solve(req)) return *solved;
 
   const std::vector<Move> candidates =
     equity_top_k(req, shortlist_ == 0 ? std::numeric_limits<int>::max() : shortlist_);
-  // A bag-empty turn the solver declined: the value model is out of its
-  // training regime and rollouts have no bag to draw the opponent's
-  // replenishments from, so play the static-equity move -- which is what
-  // equity_top_k already ranked first.
+  // On a bag-empty turn the solver declined, the model is outside its
+  // training regime and rollouts have no bag to draw from, so play the
+  // static-equity favourite, which equity_top_k ranked first.
   if (req.bag_size == 0 || candidates.size() == 1) return candidates.front();
 
   rank_candidates(req, candidates);
 
-  // The sim set: the model's top K, minus its #1 on a drop turn (the injected
-  // recall miss), which shifts the window down one so K candidates still sim.
+  // On a drop turn the window shifts down one, so K candidates still sim.
   const int n = candidates.size();
   const int first = drop_best(ply_) ? 1 : 0;
   const int k = std::min(sim_top_k_, n - first);
@@ -123,8 +116,7 @@ MoveDecision NeuralSimAgent::make_move(const MoveRequest& req) {
   const SimPosition pos = sim_position_from(req);
 
   const std::vector<SimObservation> observations = runner_.run(pos, sim_moves_, sim_seed(ply_));
-  // Ties in the observations go to the earlier candidate -- the better model
-  // rank, this agent's own ordering.
+  // Ties go to the earlier candidate, the better model rank.
   return sim_moves_[size_t(best_observation_index(observations, sim_objective_))];
 }
 

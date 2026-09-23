@@ -1,9 +1,7 @@
-// Command-line construction of UltimateBotAgent, kept separate from the agent's
-// decision logic (ultimate_bot_agent.cpp) for the same reason as
-// mset_sim_agent_factory.cpp: this is the only UltimateBotAgent translation
-// unit that references the concrete TensorRT-backed move proposal nets and
-// session, so the core agent TU -- and the agent's unit tests, which inject a
-// stub through the other constructor -- carry no CUDA/TensorRT dependency.
+// UltimateBotAgent's command-line construction: the only part that references
+// the concrete TensorRT-backed MoveProposalNets and session, so keeping it out
+// of ultimate_bot_agent.cpp leaves the unit tests that inject a stub service
+// free of CUDA/TensorRT.
 
 #include "agent/agent_options.h"
 #include "agent/move_proposal_nets.h"
@@ -29,18 +27,16 @@ namespace {
 
 namespace po = boost::program_options;
 
-// Parsed `--type=ultimatebot` option values, with their defaults. A single
-// options_description is built over these fields (make_options_description)
-// and reused for both parsing (from_spec) and help rendering (options_help),
-// so the two can never drift. The model options are this agent's own rather
-// than NeuralServiceOptions': it serves a PAIR of graphs, not one model.
+// Parsed `--type=ultimatebot` options with their defaults. from_spec and
+// options_help build the same options_description over them, so the parsed
+// and documented options cannot drift. The model options are not
+// NeuralServiceOptions because this agent serves a pair of graphs.
 struct UltimateBotOptions {
   std::string cache_model;
   std::string step_model;
   int batch_size = nn::MoveProposalCacheSpec::kDefaultMaxRows;
   int cuda_device = 0;
-  // FP32: the evidence path's serving precision (docs/roadmap.md item 3); the
-  // fusion graph is not yet FP16-gated.
+  // FP32: see MoveProposalNets::Params::precision.
   std::string precision = "FP32";
   int max_sims = 10;
   float gain_threshold = 0.0f;
@@ -52,8 +48,7 @@ struct UltimateBotOptions {
   EndgameSolver::Params endgame;
 };
 
-// Boost.program_options renders defaults set via default_value() as "(=...)" in
-// the help text, so the option descriptions deliberately omit them.
+// Help strings omit defaults: program_options renders them as "(=...)".
 po::options_description make_options_description(UltimateBotOptions& o) {
   po::options_description desc("UltimateBot (--type=ultimatebot) options");
   desc.add_options()  //
@@ -94,7 +89,7 @@ po::options_description make_options_description(UltimateBotOptions& o) {
   return desc;
 }
 
-// The loaded, shared engine pair the options name. Both paths are required.
+// The loaded, shared engine pair the options name.
 std::shared_ptr<agent::MoveProposalNets> load_nets(const UltimateBotOptions& o) {
   if (o.cache_model.empty() || o.step_model.empty()) {
     throw util::CleanException(
@@ -139,17 +134,16 @@ std::unique_ptr<UltimateBotAgent> UltimateBotAgent::from_spec(
   params.sim_horizon = opts.sim_horizon;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;
-  // Fail on a bad scalar option now, before the engine builds.
+  // Fail on a bad option before seconds go into the engine build.
   validate(params);
   SimRunner::validate_horizon("ultimatebot", opts.sim_horizon, !opts.leaf_model.empty());
 
-  // The leaf shares the nets' device; the run's agents share the leaf.
+  // The leaf model shares the nets' device.
   std::shared_ptr<nn::PositionEvalService> leaf =
     nn::load_leaf_position_service(opts.leaf_model, opts.cuda_device);
   std::shared_ptr<agent::MoveProposalNets> nets = load_nets(opts);
-  // The last conditioned pass of a turn reads max_sims - 1 sims; the fusion
-  // stage has never seen a set wider than it trained at, so a budget past
-  // that is refused rather than run off-distribution.
+  // A turn's last conditioned pass reads max_sims - 1 sims. Refuse a budget
+  // that would condition on wider evidence sets than the model trained on.
   if (params.max_sims - 1 > nets->trained_max_evidence()) {
     throw util::CleanException(
       "--max-sims={} conditions on up to {} sims, but this model was trained on evidence sets "

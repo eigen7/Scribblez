@@ -1,19 +1,16 @@
 #pragma once
 
-// The Monte-Carlo simming agent (docs/roadmap.md, track A): filter the legal
-// moves by static equity, roll the survivors out under common random numbers,
-// and play whichever the rollouts liked best. Once the bag empties the turn
-// goes to the exact solver, as it does for every agent that plays the endgame
-// properly.
+// The Monte-Carlo simming agent (--type=sim): keep the top K legal moves by
+// static equity, roll each out under common random numbers, and play whichever
+// the rollouts liked best. Bag-empty turns go to the endgame solver.
 //
-// This is the baseline the move set evaluation model has to beat, and the
-// harness the sim-quality and scheduling tracks take their match readouts in.
-// It is also the closest thing we have to Macondo's BestBot -- simming plus an
-// endgame solver, with no rack inference -- which is what makes a win rate
-// against it comparable to published results. The resemblance is in the shape,
-// not the details: our rollouts run to a natural game end where Macondo's stop
-// at a fixed ply and read static equity, and we sim every candidate to the same
-// depth where Macondo trims the field as it goes.
+// This is the project's baseline opponent and its stand-in for Macondo's
+// BestBot (simming plus an endgame solver, no rack inference), which is what
+// makes win rates against it comparable to published results
+// (docs/evaluation_plan.md). The resemblance is in shape, not detail: Macondo's
+// rollouts stop at a fixed ply and read static equity, where ours run to the
+// game's end or to a learned leaf evaluation (sim_horizon), and Macondo prunes
+// weak candidates as it sims where we sim every candidate equally.
 
 #include "agent/agent.h"
 #include "agent/endgame_turn_policy.h"
@@ -33,29 +30,28 @@ class Dictionary;
 class SimAgent : public Agent {
  public:
   // `dict` is required and must outlive the agent. An `endgame` budget of 0
-  // turns endgame solving off, leaving the greedy static-equity move to play
-  // the endgame out.
+  // turns solving off, leaving the static-equity move to play the endgame.
   struct Params {
     int thread_id = 0;
     std::string name;
     const Dictionary* dict = nullptr;
     int top_k = 10;  // candidates simmed per turn, by static equity
     // Rollouts per candidate, and their threading. 400 is where the measured
-    // strength curve flattens: a rollout run to a natural game end carries the
-    // noise of every ply in it, so below a few hundred the ranking is swamped
-    // and the agent plays WORSE than the static equity it started from -- 35%
+    // strength curve flattens. A rollout to the game's end carries the noise
+    // of every ply in it, so below a few hundred the ranking is swamped and
+    // the agent plays worse than the static equity it started from: 35%
     // against HastyBot at 50 rollouts, 48% at 200, 57% at 400, 58% at 800.
     SimRunner::Params sim = {400, 1};
-    // Value truncation; see SimRunner::Params::horizon_plies for the full
-    // semantics. The leaf service handed to the constructor scores the horizon.
+    // Value truncation; see SimRunner::Params::horizon_plies. The leaf service
+    // handed to the constructor scores the horizon.
     int sim_horizon = 0;
     SimObjective objective = SimObjective::kWinRate;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  // `leaf_service` is the value-truncation leaf evaluator (the run's shared
-  // service, or a scripted stub); give it iff params.sim_horizon is set.
+  // `leaf_service` is the rollout leaf evaluator (real or a scripted stub);
+  // give it iff params.sim_horizon is set.
   explicit SimAgent(const Params& params,
                     std::shared_ptr<nn::PositionEvalService> leaf_service = nullptr);
 

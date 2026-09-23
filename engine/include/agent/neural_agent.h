@@ -16,28 +16,24 @@
 
 namespace scribblez {
 
-// Position evaluation model agent. On its turn it picks a candidate set of
-// legal plays, hands them to its CandidateEvaluator (which encodes each
-// resulting post-move position from the agent's POV and batch-evaluates them
-// with the model), and selects among them by the configured objective --
-// greedily at temperature 0, else by a softmax(objective / temperature)
-// sample.
+// The position evaluation model as a player (--type=neural): evaluates the
+// post-move position of each candidate play and picks by the configured
+// objective, greedily at temperature 0, else by sampling
+// softmax(objective / temperature). Its candidates are plays only: it never
+// exchanges, and passes only when it has no play.
 //
-// top_k == 0 evaluates every legal play, keeping the move distribution
-// independent of HastyBot and so yielding the most diverse self-play data, at
-// the price of putting every play through the GPU. A positive top_k keeps the
-// best plays by HastyBot static equity instead -- cheaper, and a safety valve
-// against the blank explosion of positions with thousands of plays.
+// top_k == 0 evaluates every legal play, which keeps the move distribution
+// independent of HastyBot and the self-play data most diverse, at the cost of
+// putting every play through the GPU. A positive top_k keeps the best plays by
+// static equity: cheaper, and a guard against blank-heavy racks with
+// thousands of plays.
 //
-// In the endgame the agent bypasses the model entirely -- the value model never
-// trains on bag-empty positions and evaluates them poorly -- and hands the turn
-// to an EndgameTurnPolicy's exact solve, falling back to the greedy HastyBot
-// move on the turns the solver declines (or when a zero budget disables it).
+// Bag-empty turns bypass the model, which never trains on them: they go to the
+// endgame solver, or to the static-equity move when the solver declines.
 class NeuralAgent : public Agent {
  public:
   // `dict` is required and must outlive the agent; `seed` is read only when
-  // temperature is positive. An `endgame` budget of 0 turns endgame solving off,
-  // leaving the greedy HastyBot move to play the endgame out.
+  // temperature is positive. An `endgame` budget of 0 turns solving off.
   struct Params {
     int thread_id = 0;
     std::string name;
@@ -51,9 +47,7 @@ class NeuralAgent : public Agent {
 
   using NetParams = nn::NeuralNetParams<nn::PositionEvaluationSpec>;
 
-  // Takes a shared evaluation service (nn::PositionEvalService::create() in
-  // production, a scripted stub in tests). Loads no model and touches no GPU;
-  // `max_batch` bounds one evaluate() call.
+  // See CandidateEvaluator's constructor for `service` and `max_batch`.
   NeuralAgent(const Params& params, std::shared_ptr<nn::PositionEvalService> service,
               int max_batch = 256);
 
@@ -70,15 +64,12 @@ class NeuralAgent : public Agent {
 
   static std::string options_help();
 
-  // The post-move input for candidate `mv`, encoded exactly as make_move()
-  // does. Public so the encoding the model actually sees can be checked
-  // against an independent replay. `opp_leave` is ignored unless the model's
-  // input layout carries the opponent-leave block.
+  // Forwards to CandidateEvaluator::encode_candidate, for tests.
   void encode_candidate(const Move& mv, const Rack& my_rack, int my_seat, const Rack& opp_leave,
                         float* dst) const;
 
  private:
-  // Validate parameters.
+  // Throws on out-of-range params.
   void init();
 
   std::vector<double> candidate_equities(const MoveRequest& req,
@@ -86,7 +77,7 @@ class NeuralAgent : public Agent {
 
   int greedy_equity_index(const MoveRequest& req, const std::vector<Move>& plays) const;
 
-  // Fills cand_idx_ with this turn's candidates and returns their count.
+  // Fills cand_idx_ with the plays worth evaluating and returns their count.
   int select_candidates(const MoveRequest& req, const std::vector<Move>& plays);
 
   // Index, into the first `k` evaluated candidates, of the one to play.
@@ -102,7 +93,7 @@ class NeuralAgent : public Agent {
   EndgameTurnPolicy endgame_;
   std::mt19937_64 rng_;
 
-  // Scratch reused across turns to avoid per-move allocation.
+  // Reused across turns to avoid per-move allocation.
   std::vector<int> cand_idx_;
   std::vector<double> obj_values_;
   util::SoftmaxSampler sampler_;

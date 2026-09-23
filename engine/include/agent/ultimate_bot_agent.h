@@ -1,26 +1,17 @@
 #pragma once
 
-// UltimateBot (docs/roadmap.md, item 6): the destination agent -- the move
-// proposal model at the root of a sequential sim loop. Every turn: the greedy
-// anchor (the highest-raw-score candidate) is simmed first, then the model,
-// conditioned on every sim so far, re-scores the whole candidate set and the
-// proves-best argmax is simmed next, until the sim budget is spent or no
-// unsimmed candidate's predicted gain clears the stopping threshold; the best
-// simmed candidate by simulation value plays. Once the bag empties the turn
-// goes to the exact solver, as for every agent that plays the endgame
-// properly.
+// UltimateBot (--type=ultimatebot; docs/roadmap.md item 6), the destination
+// agent: the move proposal model driving a sequential sim loop
+// (evidence_loop.h). Each turn it sims the greedy anchor, then repeatedly
+// sims the candidate the model, conditioned on every sim so far, picks as
+// most likely to prove best. It stops when the sim budget is spent or no
+// candidate's predicted gain clears the threshold, and plays the simmed
+// candidate with the best win rate. Bag-empty turns go to the endgame solver.
 //
-// MsetSimAgent is the reference this agent is measured against (the same
-// stack with the evidence loop removed, docs/evaluation_plan.md): both score
-// the whole candidate set in one model pass and both sim K candidates under
-// common random numbers, but that agent picks its K off the plain pass at once
-// where this one picks each sim off a pass conditioned on the previous ones --
-// and may stop early. Candidate generation, encoding, and the endgame handoff
-// are theirs in common; the loop itself is agent/evidence_loop.h, shared with
-// the conditioned trajectory generator to come.
-//
-// The model reads a PRE-move board row (its candidates carry the move features
-// that distinguish them) -- the training encoding.
+// Its baseline is MsetSimAgent (docs/evaluation_plan.md), with which it shares
+// candidate generation, encoding, and the endgame handoff. MsetSimAgent picks
+// all K sims from one unconditioned pass; this agent picks each sim from a
+// pass conditioned on the previous ones, and may stop early.
 
 #include "agent/agent.h"
 #include "agent/candidate_evaluator.h"
@@ -45,36 +36,30 @@ class Dictionary;
 class UltimateBotAgent : public Agent {
  public:
   // `dict` is required and must outlive the agent. An `endgame` budget of 0
-  // turns endgame solving off, leaving the greedy static-equity move to play
-  // the endgame out.
+  // turns solving off, leaving the static-equity move to play the endgame.
   struct Params {
     int thread_id = 0;
     std::string name;
     const Dictionary* dict = nullptr;
     // The sim budget per turn, the anchor included; 1 plays the anchor
-    // unsimmed. Bounded above by the padded evidence width nn::kMaxEvidence.
-    // 10 matches
-    // MsetSimAgent's --sim-top-k, so the equal-budget comparison against it
-    // is the configuration-free default.
+    // unsimmed. At most nn::kMaxEvidence. The default matches MsetSimAgent's
+    // sim_top_k, so equal-budget comparisons need no configuration.
     int max_sims = 10;
     // Early stopping: no further sim once every unsimmed candidate's predicted
-    // gain is below this, in win-probability units (the gain head's). 0 never
-    // stops early; the budget curve of docs/evaluation_plan.md sweeps it.
+    // gain (in win probability) is below this. 0 never stops early.
     float gain_threshold = 0.0f;
-    // Rollouts per candidate, and their threading; MsetSimAgent's defaults,
-    // for the equal-budget comparison.
+    // Rollouts per candidate, and their threading; MsetSimAgent's defaults.
     SimRunner::Params sim = {400, 1};
-    // Value truncation; see SimRunner::Params::horizon_plies for the full
-    // semantics. The leaf service handed to the constructor scores the horizon.
+    // Value truncation; see SimRunner::Params::horizon_plies. The leaf service
+    // handed to the constructor scores the horizon.
     int sim_horizon = 0;
     uint64_t seed = 0;
     EndgameSolver::Params endgame = {};  // the solver's own defaults
   };
 
-  // Takes an already-loaded service (a MoveProposalSession over the run's
-  // shared nets, or a scripted stub), loading no model and touching no GPU.
-  // `leaf_service` is the value-truncation leaf evaluator (the run's shared
-  // service); give it iff params.sim_horizon is set.
+  // Takes an already-loaded service (a MoveProposalSession, or a scripted
+  // stub). `leaf_service` is the rollout leaf evaluator; give it iff
+  // params.sim_horizon is set.
   UltimateBotAgent(const Params& params, std::unique_ptr<agent::MoveProposalService> service,
                    std::shared_ptr<nn::PositionEvalService> leaf_service = nullptr);
 
@@ -91,25 +76,22 @@ class UltimateBotAgent : public Agent {
 
   static std::string options_help();
 
-  // The seed SimRunner::run is given on the turn after `ply` moves have been
-  // observed -- every sim of that turn, so they pair. Public so a test can
-  // reproduce a decision's rollouts exactly.
+  // The seed every sim of the turn after `ply` observed moves is given, so
+  // those sims pair. Public so a test can reproduce a decision's rollouts.
   uint64_t sim_seed(int ply) const;
 
-  // The pre-move board row this agent hands the model for `req`, encoded
-  // exactly as make_move() encodes it. Public so the row the model actually
-  // sees can be checked against the training replay's row for the same
-  // position -- the one drift the model itself could never reveal.
+  // The pre-move board row make_move() hands the model for `req`. Public so a
+  // test can check it against the training replay's row for the same
+  // position, a drift the model itself could never reveal.
   void encode_board_row(const MoveRequest& req, float* dst) const;
 
  private:
-  // Throws on out-of-range scalar params, the rollout ones and the evidence
-  // width bound included. from_spec runs it BEFORE the production constructor,
-  // so a bad flag fails fast instead of after the TensorRT engine build.
+  // Throws on out-of-range scalar params. from_spec runs it before loading the
+  // model, so a bad flag fails before the TensorRT engine build.
   static void validate(const Params& params);
 
-  // The model's one pass of the turn: the board row and the whole candidate
-  // set, encoded and handed to the service.
+  // Encode the board row and the whole candidate set, and run the model's
+  // evidence-free pass over them.
   void encode_candidates(const MoveRequest& req, const std::vector<Move>& candidates);
 
   int max_sims_;
@@ -123,7 +105,7 @@ class UltimateBotAgent : public Agent {
   EndgameTurnPolicy endgame_;
   int ply_ = 0;  // moves observed this game, by either seat
 
-  // Scratch reused across turns to avoid per-move allocation.
+  // Reused across turns to avoid per-move allocation.
   std::vector<float> board_row_;
   move_set::MoveFeatureArrays move_features_;
 };

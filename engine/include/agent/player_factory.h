@@ -25,8 +25,7 @@ struct PlayerSpec {
   bool is_human() const;
 };
 
-// The whole --player flow: registers the option, parses the raw strings, and
-// constructs the agents.
+// The --player flag: registers it, parses its values, and builds the agents.
 class PlayerFactory {
  public:
   struct Params {
@@ -38,8 +37,8 @@ class PlayerFactory {
 
   using Players = std::array<std::unique_ptr<Agent>, 2>;
 
-  // Validate and parse the raw `--player` specs and return both agents.
-  // Defaults to two greedy players. Throws util::CleanException on bad input.
+  // Both seats' agents for one game thread. Defaults to two greedy players.
+  // Throws util::CleanException on bad input.
   static Players make_players(const Params& params, int thread_id);
 
   static std::string all_player_types_help();
