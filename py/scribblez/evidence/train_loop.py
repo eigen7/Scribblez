@@ -41,21 +41,12 @@ from scribblez.evidence_fusion import (
     best_so_far,
 )
 from scribblez.move_set_eval.evidence import observed_scalars
-from scribblez.move_set_eval.model import footprint_slot_planes, win_equity
+from scribblez.move_set_eval.model import INPUT_KEYS, MOVE_KEYS, footprint_slot_planes, win_equity
 from scribblez.sim_evidence.sobs import BOARD, candidate_slot_planes, observed_slot_planes
 
 # The sim-outcome loss terms every epoch reports.
 LOSS_KEYS = ("total", "wld", "score_diff", "gain")
 
-_INPUT_KEYS = ("input_spatial", "input_scalar")
-_MOVE_KEYS = (
-    "move_letters",
-    "move_blanks",
-    "move_squares",
-    "move_tile_mask",
-    "move_scalars",
-    "move_pos_id",
-)
 _TARGET_KEYS = ("sim_wld", "sim_delta", "sim_value", "target_gain", "held_out")
 
 
@@ -159,8 +150,8 @@ def conditioned_forward(
     The trunk and move encodings carry gradient only when the backbone is
     unfrozen. The plain pass never does: it is an input (the tokens'
     predicted half), not a training path."""
-    spatial, scalar = (batch[k].to(device) for k in _INPUT_KEYS)
-    move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
+    spatial, scalar = (batch[k].to(device) for k in INPUT_KEYS)
+    move_args = tuple(batch[k].to(device) for k in MOVE_KEYS)
     pos_id = move_args[-1]
     backbone_grad = torch.no_grad() if model.backbone_frozen else contextlib.nullcontext()
     with backbone_grad:

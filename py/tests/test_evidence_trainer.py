@@ -25,7 +25,7 @@ from scribblez.footprint_spatial import NUM_CLASSES
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.dataset import MsetDataset
-from scribblez.move_set_eval.model import MoveSetEvalModel
+from scribblez.move_set_eval.model import INPUT_KEYS, MOVE_KEYS, MoveSetEvalModel
 from scribblez.sim_evidence.sobs import (
     ROLE_ANCHOR,
     ROLE_OFF_POLICY,
@@ -689,7 +689,7 @@ def _ingested_db(paths):
 
 
 def test_batched_evidence_builder_matches_the_per_position_one(traj_datasets):
-    from scribblez.evidence.train_loop import _INPUT_KEYS, _MOVE_KEYS, batch_evidence_inputs
+    from scribblez.evidence.train_loop import batch_evidence_inputs
     from scribblez.move_set_eval.evidence import build_evidence_inputs, collate_evidence
 
     train, _ = traj_datasets
@@ -700,8 +700,8 @@ def test_batched_evidence_builder_matches_the_per_position_one(traj_datasets):
     # per-position builder is fed the subset's members, and the batched builder
     # must pack them the same compact way.
     for batch in train.iter_batches(4, seed=2, subsets_per_pool=3):
-        move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
-        spatial, scalar = (batch[k].to(device) for k in _INPUT_KEYS)
+        move_args = tuple(batch[k].to(device) for k in MOVE_KEYS)
+        spatial, scalar = (batch[k].to(device) for k in INPUT_KEYS)
         pos_id = move_args[-1]
         in_ev = batch["in_evidence"].numpy()
         with torch.no_grad():
@@ -956,7 +956,7 @@ def test_the_staged_best_so_far_is_the_gain_targets_baseline(traj_datasets):
     """conditioned_forward's best-so-far -- read off the staged evidence
     tokens -- is the max sim value over each unit's subset, the very baseline
     gain_targets subtracted; 0 for an empty subset."""
-    from scribblez.evidence.train_loop import _INPUT_KEYS, _MOVE_KEYS, batch_evidence_inputs
+    from scribblez.evidence.train_loop import batch_evidence_inputs
     from scribblez.evidence_fusion import best_so_far
 
     train, _ = traj_datasets
@@ -965,8 +965,8 @@ def test_the_staged_best_so_far_is_the_gain_targets_baseline(traj_datasets):
     max_e = 8
     seen_empty = seen_full = False
     for batch in train.iter_batches(4, seed=5, subsets_per_pool=3):
-        move_args = tuple(batch[k].to(device) for k in _MOVE_KEYS)
-        spatial, scalar = (batch[k].to(device) for k in _INPUT_KEYS)
+        move_args = tuple(batch[k].to(device) for k in MOVE_KEYS)
+        spatial, scalar = (batch[k].to(device) for k in INPUT_KEYS)
         pos_id = move_args[-1]
         with torch.no_grad():
             board, g = model.encode_board(spatial, scalar)

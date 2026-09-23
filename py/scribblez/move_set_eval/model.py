@@ -50,6 +50,19 @@ from scribblez.transformer_tower import TransformerConfig
 from .moves import move_encoding_dims
 from .targets import PLANE_NAMES
 
+# MoveSetEvalModel.forward's positional inputs, in order: the board, then the
+# flattened candidates. The mset and evidence datasets key their batch tensors
+# by these names.
+INPUT_KEYS = ("input_spatial", "input_scalar")
+MOVE_KEYS = (
+    "move_letters",
+    "move_blanks",
+    "move_squares",
+    "move_tile_mask",
+    "move_scalars",
+    "move_pos_id",
+)
+
 
 class MoveEncoder(nn.Module):
     """Embeds each candidate move into a query vector for cross-attention.
