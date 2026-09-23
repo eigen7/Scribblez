@@ -11,38 +11,43 @@ text word list, one word per line, in upper case:
 import sys
 from pathlib import Path
 
-if len(sys.argv) != 3:
-    print("Usage: python hook_finder.py <dictionary_file> <letter>")
-    sys.exit(1)
 
-dictionary_file = sys.argv[1]
-letter = sys.argv[2].upper()
+def is_hooked(word: str, letter: str, word_set: set[str]) -> bool:
+    """Whether `word` is still a word with `letter` removed from its front or
+    its back. A word both starting and ending with `letter` gets both tries."""
+    return (word.startswith(letter) and word[1:] in word_set) or (
+        word.endswith(letter) and word[:-1] in word_set
+    )
 
-if not letter.isalpha() or len(letter) != 1:
-    print("Error: The second argument must be a single letter.")
-    sys.exit(1)
 
-if not Path(dictionary_file).is_file():
-    print(f"Error: The dictionary file '{dictionary_file}' does not exist.")
-    sys.exit(1)
+def find_hooks(words: list[str], letter: str) -> list[str]:
+    """The words of `words` hooked by `letter`, longest first, then alphabetically."""
+    word_set = set(words)
+    return sorted((w for w in words if is_hooked(w, letter, word_set)), key=lambda w: (-len(w), w))
 
-with open(dictionary_file) as f:
-    word_list = [line.strip() for line in f if line.strip()]
 
-word_set = set(word_list)
+def main():
+    if len(sys.argv) != 3:
+        print("Usage: python hook_finder.py <dictionary_file> <letter>")
+        sys.exit(1)
 
-output = []
-for word in word_list:
-    if word.startswith(letter):
-        subword = word[1:]
-    elif word.endswith(letter):
-        subword = word[:-1]
-    else:
-        continue
+    dictionary_file = sys.argv[1]
+    letter = sys.argv[2].upper()
 
-    if subword in word_set:
-        output.append(word)
+    if not letter.isalpha() or len(letter) != 1:
+        print("Error: The second argument must be a single letter.")
+        sys.exit(1)
 
-output.sort(key=lambda x: (-len(x), x))
-for word in output:
-    print(word)
+    if not Path(dictionary_file).is_file():
+        print(f"Error: The dictionary file '{dictionary_file}' does not exist.")
+        sys.exit(1)
+
+    with open(dictionary_file) as f:
+        words = [line.strip() for line in f if line.strip()]
+
+    for word in find_hooks(words, letter):
+        print(word)
+
+
+if __name__ == "__main__":
+    main()

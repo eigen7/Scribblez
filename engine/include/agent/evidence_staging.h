@@ -40,9 +40,8 @@ namespace evidence {
 // Within a block, anchored footprint class (cell, slot) lands on channel
 // (head * kSlotsPerCell + slot) at that cell. The two catch-all classes (pass,
 // not-win) are dropped and nothing is renormalized.
-inline constexpr int kNumPlacementHeads = 4;  // opp/self next, opp/self win
-inline constexpr int kNumObservedPlanes = kNumPlacementHeads * kSlotsPerCell;
-inline constexpr int kNumPredictedPlanes = kNumPlacementHeads * kSlotsPerCell;
+inline constexpr int kNumObservedPlanes = kPlacementHeads * kSlotsPerCell;
+inline constexpr int kNumPredictedPlanes = kPlacementHeads * kSlotsPerCell;
 inline constexpr int kNumEvidencePlanes = kNumObservedPlanes + kNumPredictedPlanes + kSlotsPerCell;
 inline constexpr int kEvidencePlaneCells = BOARD_SIZE * BOARD_SIZE;
 

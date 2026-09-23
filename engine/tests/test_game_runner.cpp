@@ -137,7 +137,7 @@ TEST_F(GameRunnerTest, PairedRequiresEvenGames) {
 namespace {
 
 // Every player type paired with its default display name (no explicit --name).
-const std::array<std::pair<const char*, const char*>, 9> kTypeDefaults{{
+const std::array<std::pair<const char*, const char*>, 10> kTypeDefaults{{
   {"greedy", "Greedy"},
   {"human", "You"},
   {"hastybot", "HastyBot"},
@@ -146,6 +146,7 @@ const std::array<std::pair<const char*, const char*>, 9> kTypeDefaults{{
   {"neural", "Neural"},
   {"neural-sim", "NeuralSim"},
   {"sim", "SimBot"},
+  {"ultimatebot", "UltimateBot"},
   {"weirdbot", "WeirdBot"},
 }};
 
@@ -175,6 +176,18 @@ TEST(PlayerFactoryTest, HelpListsEveryType) {
     EXPECT_NE(help.find(std::string("--type=") + type + " "), std::string::npos)
       << "help missing type " << type;
   }
+}
+
+// The help has one `--player "--type=` header per registered type, so a count
+// mismatch means kTypeDefaults has fallen behind player_factory.cpp.
+TEST(PlayerFactoryTest, TypeDefaultsCoverEveryType) {
+  const std::string help = PlayerFactory::all_player_types_help();
+  const std::string header = "--player \"--type=";
+  size_t headers = 0;
+  for (size_t at = help.find(header); at != std::string::npos; at = help.find(header, at + 1)) {
+    ++headers;
+  }
+  EXPECT_EQ(headers, kTypeDefaults.size());
 }
 
 // A bad --type is rejected before any agent is built, with an error that lists

@@ -266,13 +266,24 @@ def _holds_nothing(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: task
         w.undelivered = 0
 
 
-def _note_finished(w: tasks.WorkerRecord):
-    """Record that slot `w`'s worker exited 0, i.e. reached its role's terminal
-    condition. Pausing it keeps reconcile from restarting it forever, which
-    would also keep its machine from ever going idle."""
-    if w.desired_state == "running":
-        w.desired_state = "paused"
-        w.finished = True
+def _note_finished(w: tasks.WorkerRecord) -> bool:
+    """Record that slot `w` reached its role's terminal condition: its worker
+    exited 0, or the scheduler finished the role. Pausing it keeps reconcile
+    from restarting it forever, which would also keep its machine from ever
+    going idle. Returns whether the slot changed."""
+    if w.desired_state != "running":
+        return False
+    w.desired_state = "paused"
+    w.finished = True
+    return True
+
+
+def _finish_role(task: tasks.TaskRecord, role: str) -> bool:
+    """Finish every slot of `role` that wants to run and drop the role's gate
+    (the scheduler's finish hook). Returns whether the task changed."""
+    finished = [_note_finished(w) for w in task.workers if w.role == role]
+    ungated = task.gates.pop(role, None) is not None
+    return any(finished) or ungated
 
 
 def _replaceable(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> bool:
@@ -851,6 +862,15 @@ class WorkerManager:
             # and a count of them would pin nothing. An unknown count (a
             # manual machine) is not checked, as a bare host never was.
             raise AssertionError(f"machine '{machine.name}' has no GPU for role '{role}'")
+        # A rented slot delivers through the bucket (_slot_sink), but a
+        # dispatch-driven role's results are collected only from the slot's
+        # filesystem: a rented match_eval worker would play one match whose
+        # result never arrives, then wait on it forever.
+        assert not (role_spec.dispatch and machine is not None and machine.instance_id), (
+            f"role '{role}' cannot run on rented machine '{machine.name}': its results are "
+            "collected over ssh, and a rented machine delivers through the bucket; "
+            "use a local slot or a registered machine"
+        )
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
@@ -1176,9 +1196,10 @@ class WorkerManager:
         run for IDLE_STOP_SECONDS.
 
         Idleness is read from the slots' remembered probes, so a machine whose
-        slots are all gated (paused containers) or finished (exited ones)
-        stops. A slot that wants to run but has no container yet counts as
-        busy."""
+        slots are all operator-paused or finished (exited containers) stops. A
+        slot that wants to run counts as busy even with no container yet, and
+        so does a gated one: a gate is expected to lift. A role that is done
+        is finished by its scheduler (SchedulerHooks.finish) instead."""
         provider = None
         for info in status:
             m = next((x for x in task.machines if x.name == info["name"]), None)
@@ -1390,8 +1411,13 @@ class WorkerManager:
             if changed:
                 tasks.save_task(spec, task)
 
+        def finish(role: str):
+            if _finish_role(task, role):
+                tasks.save_task(spec, task)
+
         return SchedulerHooks(
             gate=gate,
+            finish=finish,
             mirror=self._make_mirror(spec, task),
             publish=self._make_publish(spec, task),
         )

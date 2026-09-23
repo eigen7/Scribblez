@@ -5,7 +5,7 @@
 // well-formed output means ONNX parse, engine build, device copies and output
 // decoding all work.
 //
-//   nn_infer_smoke model.onnx [num_rows=4] [FP16|BF16|FP32, default FP16]
+//   nn_infer_smoke model.onnx [num_rows=4] [FP16|BF16|FP32, default BF16]
 
 #include "encoding/input_encoder.h"
 #include "nn/trt_eval_service.h"
@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
 
   const std::string model = argv[1];
   const int rows = argc > 2 ? std::atoi(argv[2]) : 4;
-  const std::string precision = argc > 3 ? argv[3] : "FP16";
+  const std::string precision = argc > 3 ? argv[3] : "BF16";
 
   try {
     using Spec = scribblez::nn::PositionEvaluationSpec;

@@ -13,9 +13,7 @@
 #include "agent/agent.h"
 #include "agent/evidence_loop.h"
 #include "agent/ultimate_bot_agent.h"
-#include "data/binary_log.h"
-#include "data/block_decoder.h"
-#include "data/data_loader.h"  // kLabelFloats
+#include "agent_parity_fixture.h"
 #include "encoding/input_encoder.h"
 #include "game/board.h"
 #include "game/glyph.h"
@@ -46,7 +44,8 @@
 
 using namespace scribblez;
 using scribblez::agent::EvidenceSet;
-using scribblez::testing::build_slog;
+using scribblez::testing::check_pre_move_row_matches_decoder;
+using scribblez::testing::expect_move_features_match;
 using scribblez::testing::make_play_full;
 using scribblez::testing::opening_dict;
 using scribblez::testing::rack_from;
@@ -465,27 +464,7 @@ TEST_F(UltimateBotAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
 
   // Each candidate's features must be what encode_move, the encoder the
   // training rows go through, makes of it at this differential.
-  for (size_t i = 0; i < cands.size(); ++i) {
-    int32_t letters[move_set::kMoveMaxPlaced];
-    uint8_t blanks[move_set::kMoveMaxPlaced];
-    int32_t squares[move_set::kMoveMaxPlaced];
-    uint8_t tile_mask[move_set::kMoveMaxPlaced];
-    float scalars[move_set::kMoveScalars];
-    move_set::encode_move(cands[i], pre_diff, letters, blanks, squares, tile_mask, scalars);
-
-    const size_t tile_base = i * move_set::kMoveMaxPlaced;
-    for (int t = 0; t < move_set::kMoveMaxPlaced; ++t) {
-      EXPECT_EQ(sp->last_moves.letters[tile_base + t], letters[t]) << "move " << i << " tile " << t;
-      EXPECT_EQ(sp->last_moves.blanks[tile_base + t], blanks[t]) << "move " << i << " tile " << t;
-      EXPECT_EQ(sp->last_moves.squares[tile_base + t], squares[t]) << "move " << i << " tile " << t;
-      EXPECT_EQ(sp->last_moves.tile_mask[tile_base + t], tile_mask[t])
-        << "move " << i << " tile " << t;
-    }
-    for (int s = 0; s < move_set::kMoveScalars; ++s) {
-      EXPECT_EQ(sp->last_moves.scalars[i * move_set::kMoveScalars + s], scalars[s])
-        << "move " << i << " scalar " << s;
-    }
-  }
+  expect_move_features_match(sp->last_moves, cands, pre_diff);
 }
 
 // The loop sims one candidate at a time, yet each observation must equal, bit
@@ -541,79 +520,8 @@ TEST_F(UltimateBotAgentTest, OneAtATimeSimsEqualOneBatchedRun) {
             << "%)\n";
 }
 
-namespace {
-
-// The pre-move row the agent encodes must equal, float for float, the row the
-// training BlockDecoder reconstructs by replay for the same position. Uses a
-// three-turn game sampled at turn 2 (player 0's), so both players have a prior
-// move and the last-move placement planes are exercised.
-void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
-  const Move move0 =
-    make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
-                   {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
-                    Glyph::of(Tile::from_char('T'))});
-  const Move move1 =
-    make_play_full(0, 0, /*horizontal=*/true, 0b1, 5, {Glyph::of(Tile::from_char('S'))});
-  const Move move2 =
-    make_play_full(2, 2, /*horizontal=*/true, 0b11, 8,
-                   {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
-  const uint32_t sampled_turn = 2;
-
-  // Player 0's rack at turn 2 replays to DONERST: CATERST, plays CAT, draws
-  // DON. Player 1 holds the S it plays on turn 1.
-  binlog::InitialRacks ir{};
-  ir.p0 = rack_from("CATERST");
-  ir.p1 = rack_from("SAINTED");
-
-  binlog::TurnBlob t0{};
-  t0.move = move0;
-  t0.drawn = rack_from("DON");
-  binlog::TurnBlob t1{};
-  t1.move = move1;
-  binlog::TurnBlob t2{};
-  t2.move = move2;
-
-  const std::vector<char> buf = build_slog(ir, {t0, t1, t2}, sampled_turn, initial_scores);
-
-  // Training path: the pre-move row, untransposed. Both paths use the same
-  // dictionary for the cross-check planes.
-  Dictionary dict = opening_dict();
-  binlog::BlockDecoder dec(InputEncodingSpec{&dict});
-  const uint8_t flips[1] = {0};
-  std::vector<float> dec_row(size_t(kInputFloats + kLabelFloats), 0.0f);
-  dec.decode(buf.data(), "test.slog", /*local_start=*/0, /*n_rows=*/1, flips, /*post_move=*/false,
-             /*output_row_start=*/0, dec_row.data());
-
-  UltimateBotAgent::Params p;
-  p.name = "UB";
-  p.dict = &dict;
-  UltimateBotAgent agent(p, std::make_unique<StubMoveProposalService>());
-  agent.begin_game({initial_scores});
-  agent.observe_move(move0);
-  agent.observe_move(move1);
-
-  // The agent takes board and scores from its own replay of observed moves;
-  // only the rack comes from the request, so the rest of it is arbitrary.
-  const Rack my_rack = rack_from("DONERST");
-  const Rack no_leave;
-  const Board board;
-  const MoveRequest req{board,          dict, my_rack, no_leave, /*my_score=*/10, /*opp_score=*/5,
-                        /*bag_size=*/50};
-  std::vector<float> agent_row(size_t(kInputFloats), 0.0f);
-  agent.encode_board_row(req, agent_row.data());
-
-  bool any_nonzero = false;
-  for (int i = 0; i < kInputFloats; ++i) {
-    ASSERT_EQ(agent_row[size_t(i)], dec_row[size_t(i)]) << "input float " << i;
-    any_nonzero = any_nonzero || agent_row[size_t(i)] != 0.0f;
-  }
-  ASSERT_TRUE(any_nonzero);  // an all-zero match would prove nothing
-}
-
-}  // namespace
-
 TEST(UltimateBotAgent, ThePreMoveRowMatchesTheTrainingDecoder) {
-  check_pre_move_row_matches_decoder({0, 0});
+  check_pre_move_row_matches_decoder<UltimateBotAgent, StubMoveProposalService>({0, 0});
 }
 
 TEST(UltimateBotAgent, AHandicapReachesTheModelRow) {
@@ -621,6 +529,6 @@ TEST(UltimateBotAgent, AHandicapReachesTheModelRow) {
   // An agent that started every game at 0-0 would feed the model a score
   // differential wrong by the head start all game, with nothing else in the row
   // to reveal it.
-  check_pre_move_row_matches_decoder({50, 0});
-  check_pre_move_row_matches_decoder({0, 37});
+  check_pre_move_row_matches_decoder<UltimateBotAgent, StubMoveProposalService>({50, 0});
+  check_pre_move_row_matches_decoder<UltimateBotAgent, StubMoveProposalService>({0, 37});
 }

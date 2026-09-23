@@ -5,6 +5,8 @@ exercises run_epoch's forward/backward/accumulate and its learning-rate
 handling, and drives the per-head loss registry through compute_loss.
 """
 
+from dataclasses import replace
+
 import torch
 import torch.nn.functional as F
 from scribblez.position_eval.model import (
@@ -126,7 +128,7 @@ def test_masked_placement_guards_the_target_class():
     targets = {k: batch[k] for k in _TARGET_KEYS}
     for name in PLACEMENT_MASK_NAMES:  # the adversarial case: nothing legal
         targets[name] = torch.zeros_like(targets[name])
-    losses = model.compute_loss(out, targets)
+    losses = model.compute_loss(out, targets, _LOSS_CFG)
     for name in PLACEMENT_HEAD_NAMES:
         assert torch.isfinite(losses[name]), f"{name} loss is not finite"
         extra_legal = _head_legal_mask(name, targets)[:, FOOTPRINT_EXTRA_CLASS]
@@ -155,12 +157,7 @@ def test_compute_loss_matches_reference_math():
     losses = model.compute_loss(
         out,
         targets,
-        lambda_wld=lambda_wld,
-        lambda_sd=lambda_sd,
-        lambda_next_placement=lambda_next,
-        lambda_win_placement=lambda_win,
-        huber_delta_mean=delta_mean,
-        huber_delta_std=delta_std,
+        LossConfig(lambda_wld, lambda_sd, lambda_next, lambda_win, delta_mean, delta_std),
     )
 
     # The reference: the loss written out by hand, head by head.
@@ -198,7 +195,7 @@ def test_lambda_wld_scales_the_wld_term_out_of_the_total():
     batch = _batch()
     out = model(batch["input_spatial"], batch["input_scalar"])
     targets = {k: batch[k] for k in _TARGET_KEYS}
-    on = model.compute_loss(out, targets, lambda_wld=1.0)
-    off = model.compute_loss(out, targets, lambda_wld=0.0)
+    on = model.compute_loss(out, targets, replace(_LOSS_CFG, lambda_wld=1.0))
+    off = model.compute_loss(out, targets, replace(_LOSS_CFG, lambda_wld=0.0))
     assert torch.isclose(off["total"], on["total"] - on["wld"])
     assert torch.equal(off["wld"], on["wld"])  # the reported head loss is unweighted
