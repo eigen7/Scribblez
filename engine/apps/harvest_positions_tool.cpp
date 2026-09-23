@@ -20,7 +20,7 @@
 // and every block begins with `#character-encoding`, the record boundary the
 // Python driver splits on.
 
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "data/binary_log.h"
 #include "data/gcg_writer.h"
 #include "game/game.h"

@@ -1,4 +1,4 @@
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 
 #include "agent/agent_options.h"
 #include "game/move.h"

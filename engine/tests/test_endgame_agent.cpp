@@ -3,7 +3,7 @@
 // Every case needs the Macondo-bundled NWL23 leave table and skips without it.
 
 #include "agent/endgame_hasty_bot.h"
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "endgame/endgame_solver.h"
 #include "endgame_positions.h"
 #include "game/board.h"

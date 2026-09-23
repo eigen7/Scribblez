@@ -28,7 +28,7 @@
 #include "agent/agent.h"
 #include "agent/endgame_hasty_bot.h"
 #include "agent/endgame_turn_policy.h"
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "endgame/endgame_solver.h"
 #include "game/bag.h"
 #include "game/board.h"

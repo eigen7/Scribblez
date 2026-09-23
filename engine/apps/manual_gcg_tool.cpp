@@ -19,7 +19,7 @@
 // on that ply's board, best score first, for finding the exact notation of a
 // hypothetical move.
 
-#include "agent/macondo_bot.h"
+#include "agent/hasty_bot.h"
 #include "data/gcg_reader.h"
 #include "data/gcg_writer.h"
 #include "game/game.h"
