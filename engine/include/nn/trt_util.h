@@ -5,8 +5,8 @@
 #include <string>
 #include <vector>
 
-// TensorRT helpers that do not themselves need the NvInfer headers, so the
-// agent and service code can reason about precision without <NvInfer.h>.
+// TensorRT helpers that do not need the NvInfer headers, so agent and service
+// code can handle precision settings and plan-cache paths without them.
 
 namespace scribblez {
 namespace nn {
@@ -17,41 +17,37 @@ enum class Precision : uint8_t { kFP32, kFP16, kBF16 };
 Precision parse_precision(const std::string& s);
 const char* precision_to_string(Precision precision);
 
-// "10.11.0" -- the linked TensorRT version. A serialized plan is only loadable
-// by the same major version that built it.
+// The linked TensorRT version, e.g. "10.11.0". Part of the plan-cache path,
+// since a serialized plan is loadable only by the version that built it.
 std::string trt_version_tag();
 
-// Hex-encoded FNV-1a: an exact-content fingerprint of a model file, for uses
-// where weights matter (e.g. tagging eval targets with the model behind them).
+// A hex FNV-1a fingerprint of a model file's exact bytes, for recording which
+// weights produced some output. Unlike the architecture signature, it tells
+// checkpoints apart.
 std::string content_hash(const std::vector<char>& bytes);
 
-// Under <mount>/TensorRT-cache/. The path encodes the GPU's compute capability
-// and the TensorRT version, since a plan is invalid across either, and
-// `fast_build` plans live in a separate subtree so one can never satisfy a
-// full-optimization load.
-//
-// `model_key` decides which models may share a plan. NeuralNetBase passes the
-// architecture signature the exporter stamps, so every checkpoint of one
-// architecture shares a plan that the loader refits with the checkpoint's own
-// weights (NeuralNetBase::load on how a refit is verified).
-//
-// `profile_tag` names the optimization profile the plan was built for, and is a
-// caller's string rather than a number because the two model families size
-// different axes: the position net bounds a row batch ("batch_256"), the move
-// set net a candidate count ("moves_4096"; Spec::kAxisTag). A plan is only
-// valid within the bounds it was built with, so the tag has to separate them.
+// Where a plan is cached, under <mount_root>/TensorRT-cache/. The path
+// encodes everything a plan is only valid for:
+//   - the GPU's compute capability and the TensorRT version;
+//   - `fast_build`, so a quick plan never satisfies a full-optimization load;
+//   - the precision;
+//   - `profile_tag`, the dynamic axis and its bound, e.g. "batch_256" or
+//     "moves_4096" (Spec::kAxisTag plus max_rows). A string because the
+//     families bound different axes;
+//   - `model_key`, which decides which models share a plan. NeuralNetBase
+//     passes the architecture signature, so every checkpoint of one
+//     architecture shares a plan and is refitted into it on load.
 std::string engine_plan_cache_path(const std::string& model_key, Precision precision,
                                    const std::string& profile_tag, bool fast_build,
                                    const std::string& mount_root);
 
-// Whole-file read, for the ONNX models and cached plans the loaders consume.
 // Throws if the file cannot be opened.
 std::vector<char> read_file_bytes(const std::string& path);
 
-// Write `bytes` to `path` atomically (temp file + rename), creating parents.
-// The temp name carries the pid and a random suffix, so two processes building
-// the same plan concurrently -- self-play workers sharing one cache directory
-// -- cannot corrupt each other's rename.
+// Write `bytes` to `path` atomically (temp file + rename), creating parent
+// directories. The temp name carries the pid and a random suffix, so processes
+// that build the same plan concurrently into a shared cache directory cannot
+// clobber each other's temp file.
 void write_file_bytes(const std::string& path, const char* bytes, size_t size);
 
 }  // namespace nn

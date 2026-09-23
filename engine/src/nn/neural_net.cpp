@@ -22,7 +22,7 @@ namespace nn {
 
 namespace {
 
-// Drops anything below a warning, so the build logs stay readable.
+// Drops everything below a warning, so build logs stay readable.
 class Logger : public nvinfer1::ILogger {
  public:
   void log(Severity severity, const char* msg) noexcept override {
@@ -46,40 +46,37 @@ size_t element_size(nvinfer1::DataType dtype) {
   }
 }
 
-// Elements in one row of a tensor, i.e. the product of every dimension after
-// the leading one.
+// The product of every dimension after the leading (row) one.
 int row_elements(const nvinfer1::Dims& dims) {
   int n = 1;
   for (int i = 1; i < dims.nbDims; ++i) n *= int(dims.d[i]);
   return n;
 }
 
-// `dims` with the leading (row) dimension replaced.
 nvinfer1::Dims dims_with_rows(nvinfer1::Dims dims, int rows) {
   dims.d[0] = rows;
   return dims;
 }
 
-// What the spec's TensorSpec table expects of one tensor, as read off either a
-// pre-build network definition or a built engine's bindings -- the two places
-// check_required_layout is called from.
+// The layout facts check_required_layout compares, as observed on either a
+// parsed network or a built engine.
 struct ObservedTensor {
   size_t elem_size;
   int elems_per_row;
   bool dynamic;
 };
 
-// Every entry of the spec's tensor table against what `lookup` observes, so
-// the same dtype/width/axis guard can run before a build (on the parsed
-// network, cheaply rejecting a model that would otherwise waste a full build)
-// and after one (on the built engine, the only check a cache hit gets since it
-// skips the parse). The staging and decode loops are written at the table's
-// constants against buffers the engine's own declarations size, so a model
-// that disagrees would overrun those buffers rather than fail -- and neither
-// shapes nor dtypes are part of the metadata the loader gates on. `lookup`
-// throws its own "no tensor named" error for a tensor the model doesn't
-// declare at all; NetworkTensorLookup, below, and Impl::BindingLookup are its
-// two implementations.
+// Check every entry of the spec's tensor table against what `lookup` observes:
+// dtype, row width, and whether the tensor rides the dynamic axis. This guard
+// is essential. Buffers are sized from the engine's own declarations, but the
+// staging and decode loops are written at the table's constants, so a model
+// that disagrees would overrun those buffers rather than fail. Nor do the
+// metadata gates catch it: they cover encoding versions, not shapes or dtypes.
+//
+// It runs twice: on the parsed network before a build (NetworkTensorLookup),
+// so a bad model fails before wasting a build, and on the built engine
+// (Impl::BindingLookup), which is the only check a plan-cache hit gets. Each
+// lookup throws for a tensor the model does not declare at all.
 template <typename Lookup>
 void check_required_layout(const std::string& onnx_path, const Lookup& lookup,
                            std::span<const TensorSpec> tensors) {
@@ -103,8 +100,7 @@ void check_required_layout(const std::string& onnx_path, const Lookup& lookup,
   }
 }
 
-// check_required_layout's lookup on a parsed-but-not-yet-built network, so
-// build_plan() can reject a bad layout before spending a build on it.
+// check_required_layout's lookup on a parsed, not yet built, network.
 class NetworkTensorLookup {
  public:
   explicit NetworkTensorLookup(const nvinfer1::INetworkDefinition& network) : network_(&network) {}
@@ -131,9 +127,9 @@ class NetworkTensorLookup {
 };
 
 // One of the engine's I/O tensors, with the host and device buffers bound to
-// it. Up to seven inputs across three dtypes, and a per-call row count on the
-// dynamic ones, leave no room for a pointer-per-tensor style: allocation,
-// binding, shape updates, and the copies are all loops over these.
+// it. With up to seven inputs across three dtypes, a member per tensor would
+// not scale, so allocation, binding, shape updates, and copies all loop over a
+// table of these.
 struct Binding {
   std::string name;
   size_t elem_size = 0;
@@ -169,25 +165,22 @@ struct NeuralNetBase::Impl {
 
   void deserialize_engine(const std::vector<char>& plan);
 
-  // Builds the plan in memory; touches no disk.
+  // Builds a serialized plan in memory; touches no disk.
   std::vector<char> build_plan(const std::vector<char>& onnx_bytes);
 
-  // For after deserializing a cached plan, which shares the architecture but
-  // holds whatever same-architecture checkpoint first populated the cache.
+  // Swaps this model's weights into a deserialized cached plan, which holds the
+  // weights of whichever same-architecture checkpoint first populated it.
   void refit_engine(const std::vector<char>& onnx_bytes);
 
   // Context, stream, and the binding table, once the engine exists.
   void allocate_buffers();
 
-  // The binding for `name`, which the engine is guaranteed to expose (a model
-  // missing a tensor this runtime feeds fails here rather than at inference).
-  // A linear scan over at most eleven entries, run a handful of times per call.
+  // The binding for `name`; throws if the engine has no such tensor. A linear
+  // scan over about a dozen entries, run a handful of times per call.
   Binding& binding(const char* name);
   const Binding& binding(const char* name) const;
 
-  // check_required_layout's lookup on a built engine's bindings -- the cheap
-  // guard a cache hit still gets, since it skips build_plan()'s own pre-build
-  // check (NetworkTensorLookup, above).
+  // check_required_layout's lookup on a built engine's bindings.
   class BindingLookup {
    public:
     explicit BindingLookup(const Impl& impl) : impl_(&impl) {}
@@ -210,10 +203,7 @@ struct NeuralNetBase::Impl {
   stream_t stream = nullptr;
   std::vector<Binding> bindings;
 
-  // Read off the deserialized engine's declared board input shapes and the
-  // model's own ONNX metadata_props. spatial/scalar stay 0 for a graph with no
-  // board inputs (the move-proposal step graph); channels stays 0 unless the
-  // spec names a channels_tensor.
+  // Read off the engine's tensor shapes and the model's ONNX metadata at load.
   int spatial_planes = 0;
   int scalar_floats = 0;
   int channels = 0;
@@ -221,10 +211,7 @@ struct NeuralNetBase::Impl {
 
   int last_rows = -1;
 
-  // The binding named `name`, or null if the engine exposes no such tensor --
-  // for the reads that are conditional on a family declaring the tensor at all
-  // (the board inputs, the channels handoff), where binding()'s throw is not
-  // the wanted behavior.
+  // binding() without the throw, for tensors only some specs declare.
   const Binding* find_binding(const char* name) const {
     for (const Binding& b : bindings) {
       if (b.name == name) return &b;
@@ -265,9 +252,9 @@ std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_
   std::unique_ptr<nvinfer1::IBuilder> builder(nvinfer1::createInferBuilder(logger));
   std::unique_ptr<nvinfer1::INetworkDefinition> network(builder->createNetworkV2(0));
   std::unique_ptr<nvonnxparser::IParser> parser(nvonnxparser::createParser(*network, logger));
-  // The model path makes external-data references (e.g. an externalized frozen
-  // lexicon blob beside the .onnx) resolve against the model's own directory;
-  // without it TensorRT resolves them against the process CWD.
+  // Passing the model path makes external-data references (such as a frozen
+  // lexicon blob stored beside the .onnx) resolve against the model's own
+  // directory rather than the process's working directory.
   if (!parser->parse(onnx_bytes.data(), onnx_bytes.size(), params.onnx_path.c_str())) {
     if (parser->getNbErrors() > 0) {
       throw util::CleanException("Failed to parse ONNX model: {}", parser->getError(0)->desc());
@@ -275,24 +262,18 @@ std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_
     throw util::CleanException("Failed to parse ONNX model");
   }
 
-  // Reject a model with the wrong tensor layout off the parsed graph, before
-  // spending a build on it: TensorRT happily builds an engine for, say, a
-  // narrowed or re-typed tensor, since the graph is still valid, and only
-  // allocate_buffers()'s post-build check (kept as the cheap guard a cache hit
-  // still gets, skipping this parse) would otherwise have caught the mismatch.
+  // TensorRT happily builds a valid graph with a narrowed or re-typed tensor,
+  // so check the layout now rather than after a wasted build.
   check_required_layout(params.onnx_path, NetworkTensorLookup(*network), spec.tensors);
 
   std::unique_ptr<nvinfer1::IBuilderConfig> config(builder->createBuilderConfig());
   config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, params.workspace_bytes);
-  // BF16 has FP32's exponent range, so it serves this family's activation
-  // magnitudes without the FP16 overflow that once needed per-layer FP32 pins
-  // (retired). FP16 stays available for models known to fit its range.
   if (params.precision == Precision::kFP16) {
     config->setFlag(nvinfer1::BuilderFlag::kFP16);
   } else if (params.precision == Precision::kBF16) {
-    // BF16 tensor cores are Ampere-and-newer (SM80+). On older hardware
-    // TensorRT would honor the flag but silently pick FP32 tactics, losing the
-    // acceleration with no signal -- fail loudly and name FP16 as the fallback.
+    // BF16 tensor cores need Ampere or newer (SM80+). On older hardware
+    // TensorRT accepts the flag but silently falls back to FP32 tactics, so fail
+    // loudly instead and name FP16 as the alternative.
     if (compute_capability_major() < 8) {
       throw util::CleanException(
         "BF16 serving requires an Ampere-or-newer GPU (compute capability >= 8.0); this device is "
@@ -301,18 +282,14 @@ std::vector<char> NeuralNetBase::Impl::build_plan(const std::vector<char>& onnx_
     }
     config->setFlag(nvinfer1::BuilderFlag::kBF16);
   }
-  // The cache is keyed on model architecture, so a cached plan generally holds
-  // a different same-architecture checkpoint's weights; every plan must be
-  // refittable so a cache hit can swap in the loaded model's weights.
+  // A cached plan is shared by every checkpoint of one architecture, so it
+  // must be refittable for a cache hit to swap in the loaded model's weights.
   config->setFlag(nvinfer1::BuilderFlag::kREFIT);
-  // Level 0 takes the first working tactic per layer instead of timing the full
-  // tactic set, trading inference speed for a far shorter build.
   if (params.fast_build) config->setBuilderOptimizationLevel(0);
 
-  // Only tensors carrying the dynamic row axis get a profile entry; a static
-  // tensor (the move-set graph's board inputs) needs none. Reading which is
-  // which off the parsed network keeps the graph itself the authority on its
-  // own shapes -- the layout check above has already pinned it to the spec.
+  // Only inputs on the dynamic row axis get a profile entry. Which ones those
+  // are is read off the parsed network, which the layout check above has
+  // already pinned to the spec.
   nvinfer1::IOptimizationProfile* profile = builder->createOptimizationProfile();
   const int opt_rows = std::min(spec.opt_rows, params.max_rows);
   for (int i = 0; i < network->getNbInputs(); ++i) {
@@ -338,18 +315,19 @@ void NeuralNetBase::Impl::refit_engine(const std::vector<char>& onnx_bytes) {
   std::unique_ptr<nvinfer1::IRefitter> refitter(nvinfer1::createInferRefitter(*engine, logger));
   std::unique_ptr<nvonnxparser::IParserRefitter> parser_refitter(
     nvonnxparser::createParserRefitter(*refitter, logger));
-  // Model path for external-data resolution, as in build_plan().
+  // The model path resolves external-data references, as in build_plan().
   const bool clean =
     parser_refitter->refitFromBytes(onnx_bytes.data(), onnx_bytes.size(), params.onnx_path.c_str());
-  // TensorRT 10.11's parser-refitter can count one more ONNX-side weight than
-  // the engine exposes a slot for (an anonymous fusion product; the move-set
-  // graph has one) and fail its own strict count on a refit that left nothing
-  // behind, so a false return is tolerated when the engine reports no missing
-  // weights. Neither signal can prove a refit complete -- a deserialized plan
-  // carries a value for every weight, so nothing is ever "missing" -- which is
-  // why the parity tests compare a refitted engine's outputs against each
-  // checkpoint's own reference: the verification the API cannot provide
-  // (py/scripts/move_set_eval/trt_refit_probe.py reached the same verdict).
+  // TensorRT 10.11's parser-refitter can count one more ONNX weight than the
+  // engine has a slot for (an anonymous fusion product; the move-set graph has
+  // one), and then fails its own strict count on a refit that missed nothing.
+  // So a false return is tolerated when the engine reports no missing weights.
+  //
+  // Neither signal proves a refit complete: a deserialized plan already holds a
+  // value for every weight, so none is ever reported missing. The real check is
+  // the parity tests, which compare a refitted engine's outputs against each
+  // checkpoint's own reference outputs (py/scripts/move_set_eval/
+  // trt_refit_probe.py reached the same conclusion).
   if (!clean && refitter->getMissingWeights(0, nullptr) != 0) {
     if (parser_refitter->getNbErrors() > 0) {
       throw util::Exception("Failed to read refit weights from ONNX model: {}",
@@ -365,10 +343,9 @@ void NeuralNetBase::Impl::allocate_buffers() {
   if (!context) throw util::Exception("Failed to create TensorRT execution context");
   stream = create_stream();
 
-  // Enumerate the engine's own I/O tensors: their names, modes, dtypes, and
-  // shapes are all it takes to size and bind every buffer. Only the spec's aux
-  // flag comes from the table -- the engine cannot know which outputs callers
-  // opt into copying back.
+  // The engine's own tensor declarations size and bind every buffer. Only the
+  // aux flag comes from the spec, since the engine cannot know which outputs
+  // callers opt into copying back.
   for (int i = 0; i < engine->getNbIOTensors(); ++i) {
     Binding b;
     b.name = engine->getIOTensorName(i);
@@ -382,28 +359,23 @@ void NeuralNetBase::Impl::allocate_buffers() {
     }
     const size_t capacity = b.bytes(params.max_rows);
     b.device = device_malloc(capacity);
-    // Aux outputs always occupy device buffers (they must stay bound for
-    // enqueueV3), but get host buffers -- and copies back -- only under
-    // copy_aux; agent inference never reads them.
+    // Every output needs a device buffer to stay bound for enqueueV3, but aux
+    // outputs get a host buffer, and a copy back, only under copy_aux.
     if (!b.aux || params.copy_aux) b.host = host_malloc(capacity);
     context->setTensorAddress(b.name.c_str(), b.device);
     bindings.push_back(b);
   }
 
-  // The cheap guard a cache hit still gets: build_plan()'s own check runs
-  // only on a fresh build, so this is what catches a stale plan cached
-  // before an encoder layout change.
+  // Repeated here for a cache hit, which skipped build_plan()'s check.
   check_required_layout(params.onnx_path, BindingLookup(*this), spec.tensors);
 
-  // The board-row widths, for a family that consumes board inputs; the
-  // move-proposal step graph takes none (its board arrives pre-encoded as a
-  // handoff tensor), so leave them 0 rather than read a nonexistent tensor.
+  // The move-proposal step graph has no board inputs; its board arrives
+  // pre-encoded as a handoff tensor.
   if (find_binding(SpatialInput::kName)) {
     spatial_planes = engine->getTensorShape(SpatialInput::kName).d[1];
     scalar_floats = engine->getTensorShape(ScalarInput::kName).d[1];
   }
-  // The trunk channel width, off the spec's named handoff tensor's per-row
-  // width (move_enc is (M, C), so its row elements ARE C).
+  // The channels tensor is (rows, C), so its per-row width is C.
   if (spec.channels_tensor) channels = binding(spec.channels_tensor).elems_per_row;
 }
 
@@ -411,9 +383,8 @@ void NeuralNetBase::Impl::allocate_buffers() {
 
 namespace {
 
-// The spec's graph, exactly -- which model family a file belongs to is the
-// first thing its metadata declares -- with the spec deciding whether an
-// export predating the entry is accepted (model_specs.h).
+// The model must declare exactly the spec's graph, or, if the spec allows it,
+// no graph at all.
 void check_graph(const RuntimeSpec& spec, const OnnxMetadata& meta, const std::string& onnx_path) {
   if (meta.graph.empty() && spec.accept_untagged_graph) return;
   if (meta.graph != spec.graph) {
@@ -422,8 +393,8 @@ void check_graph(const RuntimeSpec& spec, const OnnxMetadata& meta, const std::s
   }
 }
 
-// Every encoding version the spec requires, exactly (model_specs.h explains
-// what a version gate protects against).
+// The model must declare exactly each encoding version the spec requires
+// (see VersionRequirement in model_specs.h).
 void check_versions(const RuntimeSpec& spec, const OnnxMetadata& meta,
                     const std::string& onnx_path) {
   for (const VersionRequirement& v : spec.versions) {
@@ -462,14 +433,9 @@ void NeuralNetBase::load() {
                            std::format("{}_{}", m.spec.axis_tag, m.params.max_rows),
                            m.params.fast_build, m.params.mount_root);
 
-  // The cache is keyed on the model's architecture signature, so a hit yields
-  // a plan with the right structure but (in general) another checkpoint's
-  // weights; refitting swaps in this model's weights, which is far cheaper
-  // than an engine build. The parity tests are what verify a refit actually
-  // served the right checkpoint: TensorRT 10.11 reports a refit that mapped
-  // every weight and one that left a weight behind identically, so the
-  // numeric check against each checkpoint's own reference outputs is the
-  // guard the API cannot provide.
+  // The cache is keyed on the architecture signature, so a hit yields the
+  // right structure with, in general, another checkpoint's weights. Refitting
+  // swaps in this model's weights at a fraction of the cost of a build.
   if (std::filesystem::exists(cache_path)) {
     m.deserialize_engine(read_file_bytes(cache_path));
     m.refit_engine(onnx_bytes);

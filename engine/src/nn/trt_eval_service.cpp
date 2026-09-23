@@ -18,16 +18,15 @@ namespace nn {
 
 namespace {
 
-// The one genuinely family-specific part of serving -- how a Batch's rows
-// reach the engine's staging buffers -- as free functions overloaded on the
-// spec's Batch type. Everything else (chunking, decode, the aux path) is the
-// shared driver below.
+// The family-specific part of serving, how a Batch's rows reach the engine's
+// staging buffers, as free functions overloaded on the spec's Batch type.
+// Chunking, decoding, and the aux path are shared (evaluate_batch()).
 
 int batch_rows(const PositionEvaluationSpec::Batch& batch) { return batch.count; }
 int batch_rows(const MoveSetEvaluationSpec::Batch& batch) { return batch.moves->count; }
 
-// Split one encoder row's [spatial | scalar] block into the engine's two
-// separate, densely packed board buffers, at the model's own widths.
+// Split one encoder row, [spatial | scalar], across the engine's two board
+// input buffers.
 template <typename Spec>
 void stage_board_row(NeuralNet<Spec>& net, const float* row, int dst_row) {
   const size_t spatial_floats = size_t(net.spatial_planes()) * kBoardCells;
@@ -38,16 +37,15 @@ void stage_board_row(NeuralNet<Spec>& net, const float* row, int dst_row) {
               sizeof(float) * scalar_floats);
 }
 
-// Once per call: nothing for the position model (every tensor is per-chunk);
-// the board row for the move set model, staged once and re-sent with every
-// chunk, the engine holding one position per call by construction.
+// Staging done once per call rather than per chunk. The move-set board input
+// is static, so it is staged once and re-sent with every chunk.
 void stage_call(NeuralNet<PositionEvaluationSpec>&, const PositionEvaluationSpec::Batch&) {}
 void stage_call(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationSpec::Batch& batch) {
   stage_board_row(net, batch.board_row, 0);
 }
 
-// One per-move tensor's chunk, from the MoveFeatureArrays field its descriptor
-// names.
+// One chunk of a per-move tensor, copied from the MoveFeatureArrays field its
+// descriptor names (kBatchSource).
 template <typename Tensor>
 void stage_move_rows(NeuralNet<MoveSetEvaluationSpec>& net,
                      const move_set::MoveFeatureArrays& moves, int start, int rows) {
@@ -64,8 +62,7 @@ void stage_move_tensors(NeuralNet<MoveSetEvaluationSpec>& net,
   (stage_move_rows<Ts>(net, moves, start, rows), ...);
 }
 
-// The chunk's rows: de-interleaved encoder rows for the position model, the
-// spec's per-move tensor list for the move set model.
+// Stage rows [start, start + chunk) of the batch.
 void stage_chunk(NeuralNet<PositionEvaluationSpec>& net, const PositionEvaluationSpec::Batch& batch,
                  int start, int chunk) {
   const size_t row_floats = size_t(net.spatial_planes()) * kBoardCells + net.scalar_floats();
@@ -78,9 +75,8 @@ void stage_chunk(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationS
   stage_move_tensors(net, *batch.moves, start, chunk, MoveSetEvaluationSpec::MoveInputs{});
 }
 
-// `rows` rows of one head's raw output into its decoded form, per the head's
-// declared RowDecode (model_specs.h): each row `width` floats, landing at
-// `dst_stride`-float steps.
+// Decode `rows` rows of one head's raw output per its RowDecode. Each row is
+// `width` floats; output rows start `dst_stride` floats apart.
 void decode_head_rows(RowDecode decode, const float* raw, int rows, int width, float* dst,
                       int dst_stride) {
   for (int r = 0; r < rows; ++r) {
@@ -91,7 +87,7 @@ void decode_head_rows(RowDecode decode, const float* raw, int rows, int width, f
         out = in;
         break;
       case RowDecode::kSoftmax:
-        // Numerically stable: subtract the max before exponentiating.
+        // Subtracting the max keeps exp() from overflowing.
         out = (in - in.maxCoeff()).exp();
         out /= out.sum();
         break;
@@ -102,8 +98,8 @@ void decode_head_rows(RowDecode decode, const float* raw, int rows, int width, f
   }
 }
 
-// One chunk of every scoring head into the caller's per-head destinations, in
-// list order, `start` rows in.
+// Decode one chunk of every output head into the caller's per-head
+// destinations, `start` rows in.
 template <typename Spec, TensorDescriptor... Ts>
 void decode_outputs(const NeuralNet<Spec>& net, int start, int chunk,
                     std::span<float* const> head_out, TensorList<Ts...>) {
@@ -114,8 +110,8 @@ void decode_outputs(const NeuralNet<Spec>& net, int start, int chunk,
    ...);
 }
 
-// Every aux head into its slot of the caller's per-row aux block, in list
-// (head) order.
+// Decode one chunk of every aux head into the caller's aux block, where each
+// row holds all aux heads side by side in list order.
 template <typename Spec, TensorDescriptor... Ts>
 void copy_aux_outputs(const NeuralNet<Spec>& net, int chunk, float* aux_out, TensorList<Ts...>) {
   constexpr int row_stride = TensorList<Ts...>::total_row_elems;
@@ -176,15 +172,13 @@ template std::unique_ptr<EvalService<PositionEvaluationSpec>> make_loaded_servic
 template std::unique_ptr<EvalService<MoveSetEvaluationSpec>> make_loaded_service(
   const NeuralNetParams<MoveSetEvaluationSpec>& params);
 
-// The shared-service factory (eval_service.h). Position family only: a run's
-// threads all resolve the same model to one instance, wrapped in the batching
-// decorator so they coalesce their requests. The move-set family has no create()
-// definition yet -- its agents still build per instance.
+// The shared engine is wrapped in the batching decorator, so the threads
+// sharing it also coalesce their requests. The move-set family has no create():
+// its agents each load their own service through make_loaded_service().
 template <>
 std::shared_ptr<PositionEvalService> EvalService<PositionEvaluationSpec>::create(
   const NeuralNetParams<PositionEvaluationSpec>& params) {
-  // Keyed on the full engine-determining params (NeuralNetParamsBase's
-  // defaulted equality).
+  // Keyed on every param field; see NeuralNetParamsBase::operator==.
   static SharedRegistry<NeuralNetParamsBase, PositionEvalService> registry;
   return registry.get_or_create(params, [&] {
     return std::make_shared<BatchingPositionEvalService>(
@@ -198,9 +192,9 @@ std::shared_ptr<PositionEvalService> load_leaf_position_service(const std::strin
   NeuralNetParams<PositionEvaluationSpec> params;
   params.onnx_path = onnx_path;
   params.cuda_device_id = cuda_device_id;
-  // BF16 serves this family's activation magnitudes without FP16's overflow at
-  // extreme-advantage rollout leaves (its exponent range is FP32's), at a
-  // mantissa cost far below the model's own error against Monte-Carlo truth.
+  // Rollout leaves include extreme-advantage positions whose activations
+  // overflow FP16. BF16 has FP32's exponent range, and its mantissa loss is far
+  // below the model's own error against Monte-Carlo truth.
   params.precision = Precision::kBF16;
   return PositionEvalService::create(params);
 }

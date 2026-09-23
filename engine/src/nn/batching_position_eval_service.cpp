@@ -18,13 +18,12 @@ void BatchingPositionEvalService::evaluate(const SpecBatch& batch,
   queue_.push_back(&req);
 
   if (dispatching_) {
-    // Another caller is draining; it will serve this request.
+    // Another caller is dispatching and will serve this request.
     served_.wait(lock, [&req] { return req.done; });
   } else {
-    // Become the dispatcher until the queue empties. Requests that arrive while
-    // serve() runs (lock released) are picked up by the next iteration, so none
-    // is stranded and a still-active dispatcher blocks new callers from racing
-    // in as a second dispatcher.
+    // Dispatch until the queue is empty. The lock is released while serve()
+    // runs; requests arriving meanwhile see dispatching_ set, wait, and are
+    // served by the next iteration.
     dispatching_ = true;
     while (!queue_.empty()) {
       const std::vector<Request*> pack(queue_.begin(), queue_.end());
@@ -56,10 +55,8 @@ bool BatchingPositionEvalService::try_evaluate(const SpecBatch& batch,
 }
 
 void BatchingPositionEvalService::serve(const std::vector<Request*>& pack) {
-  // Single-request drain -- the common case under low or bursty concurrency,
-  // where a caller finds the queue empty and serves only itself. Evaluate
-  // straight into the caller's buffers, skipping the gather/scatter copies that
-  // earn their keep only when coalescing more than one request.
+  // A lone request, the common case under light load, is evaluated straight
+  // into its caller's buffers with no gather/scatter copies.
   if (pack.size() == 1) {
     try_evaluate(*pack.front()->batch, pack.front()->head_out, pack);
     return;
@@ -80,8 +77,7 @@ void BatchingPositionEvalService::serve(const std::vector<Request*>& pack) {
     offset += r->batch->count;
   }
 
-  // The wrapped service chunks this to its own max_rows; the combined batch is
-  // in general larger than -- and unaligned with -- any single request's.
+  // The combined batch may exceed max_rows; the wrapped service chunks it.
   float* const combined[] = {wld_out_.data(), score_diff_out_.data()};
   if (!try_evaluate(SpecBatch{in_rows_.data(), total}, combined, pack)) return;
 

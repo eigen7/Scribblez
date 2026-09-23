@@ -17,66 +17,58 @@ class options_description;
 // A thin, synchronous wrapper around a TensorRT engine, specialized to a model
 // family by its spec (model_specs.h).
 //
-// One net drives one engine from one thread AT A TIME: predict() blocks until
-// the outputs are back, with no cross-thread batching and no async pipeline,
-// and calls must never overlap. Serialized calls from different threads are
-// fine -- the CUDA stream and buffers carry their device -- which is what
-// both nn::EvalService's internal serialization and the generators'
-// scorer-thread pattern rely on.
+// Threading contract: one call at a time, from any thread. predict() blocks
+// until the outputs are on the host, and calls must never overlap, since they
+// share one execution context and one set of staging buffers. There is no
+// thread affinity: the stream and buffers carry their device, so serialized
+// calls from different threads are fine. EvalService's mutex relies on this.
 
 namespace scribblez {
 namespace nn {
 
 struct NeuralNetParamsBase {
-  std::string onnx_path;  // exported ONNX model load() builds from
+  std::string onnx_path;
   int cuda_device_id = 0;
 
   int max_rows = 0;  // NeuralNetParams<Spec> sets the family default
 
-  // BF16: FP32's exponent range, so the value families' unbounded activation
-  // magnitudes cannot overflow the way they do under FP16 (measured and
-  // resolved in docs/plans/fp16_safe_serving.md). Callers that opt into FP16
-  // do so for models known to fit its range.
+  // BF16 by default: it has FP32's exponent range, so activations that
+  // overflow FP16 stay finite (docs/plans/fp16_safe_serving.md has the
+  // measurements). Opt into FP16 only for a model known to fit its range.
   Precision precision = Precision::kBF16;
   uint64_t workspace_bytes = uint64_t{1} << 30;  // 1 GiB TensorRT scratch
   std::string mount_root = "/workspace/mount";   // root of the engine-plan cache
 
-  // Build at TensorRT optimization level 0: take the first working kernel per
-  // layer instead of timing tactics. Cuts a cold build from tens of seconds to
-  // a few, at the cost of much slower inference -- for tests and quick checks,
+  // Build at TensorRT optimization level 0, which takes the first working
+  // kernel per layer instead of timing tactics. A cold build drops from tens of
+  // seconds to a few, but inference is much slower: for tests and quick checks,
   // not production agents. Cached separately from full-optimization plans.
   bool fast_build = false;
 
-  // Copy the spec's aux outputs back to host on every predict(), making their
-  // host buffers valid. Off by default: aux outputs always stay bound on the
-  // device, but only a consumer that reads them should pay their per-call
-  // device-to-host copy. No-op for a spec with no aux outputs.
+  // Copy the spec's aux outputs back to the host on every predict(). Off by
+  // default so that only a consumer that reads them pays for the per-call
+  // device-to-host copy. No effect for a spec with no aux outputs.
   bool copy_aux = false;
 
-  // Every field determines the engine that gets built (or the buffers it
-  // allocates), so equality over all of them decides whether two callers may
-  // share one loaded service (nn::PositionEvalService::create()). copy_aux and
-  // fast_build are load-bearing here, not just perf: copy_aux decides whether
-  // aux host buffers exist at all, and fast_build selects a different,
-  // separately cached plan.
+  // Two callers may share one loaded service (PositionEvalService::create())
+  // only if all fields are equal, since every field shapes the engine or its
+  // buffers. That includes copy_aux, which decides whether aux host buffers
+  // exist at all, and fast_build, which selects a different cached plan.
   bool operator==(const NeuralNetParamsBase&) const = default;
 
-  // Register the command-line-facing subset, bound to this struct's fields.
-  // Call before parsing argv.
+  // Register the command-line subset of these fields. Call before parsing argv.
   void add_options(boost::program_options::options_description& desc);
 };
 
-// The params for one model family: the base fields at the family's row-bound
-// default.
+// The base params with max_rows at the family's default.
 template <typename Spec>
 struct NeuralNetParams : NeuralNetParamsBase {
   NeuralNetParams() { max_rows = Spec::kDefaultMaxRows; }
 };
 
-// One engine I/O tensor as the runtime must see it -- a spec descriptor
-// (model_specs.h) flattened to runtime data. The loader checks every field
-// against the model's own declarations, pre-build on the parsed graph and
-// post-deserialize on the engine.
+// One engine I/O tensor as the runtime expects it: a spec descriptor
+// (model_specs.h) flattened to runtime data. The loader checks each one against
+// the model's own declarations.
 struct TensorSpec {
   const char* name;
   std::size_t elem_size;
@@ -85,7 +77,7 @@ struct TensorSpec {
   bool aux;           // host copy only under params.copy_aux
 };
 
-// Everything NeuralNetBase needs to serve one model family, as plain data.
+// A spec (model_specs.h) flattened to the plain data NeuralNetBase runs on.
 // The spans point at NeuralNet<Spec>'s static tables.
 struct RuntimeSpec {
   const char* graph;
@@ -94,16 +86,14 @@ struct RuntimeSpec {
   const char* axis_tag;
   int opt_rows;
   std::span<const TensorSpec> tensors;
-  // The tensor whose per-row width is the trunk channel count C, read off after
-  // load() for channels(); null for a family with no such handoff tensor (the
-  // move-proposal specs set it, position/mset leave it null).
+  // The tensor whose per-row width is the trunk channel count C, which
+  // channels() reports. Null when the spec exposes no such tensor.
   const char* channels_tensor;
 };
 
-// All machinery -- engine build, the architecture-keyed refitted plan cache,
-// metadata gates, layout validation, binding-table buffer management --
-// compiled once here and driven by a RuntimeSpec; NeuralNet<Spec> below adds
-// only typed access.
+// The spec-independent runtime: engine build, the plan cache, metadata gates,
+// layout validation, and buffer management. It is compiled once and driven by
+// a RuntimeSpec; NeuralNet<Spec> below adds only typed buffer access.
 class NeuralNetBase {
  public:
   ~NeuralNetBase();
@@ -111,39 +101,35 @@ class NeuralNetBase {
   NeuralNetBase(const NeuralNetBase&) = delete;
   NeuralNetBase& operator=(const NeuralNetBase&) = delete;
 
-  // Build the engine from params.onnx_path, or deserialize a cached plan and
-  // refit it with this model's weights -- every checkpoint of one architecture
-  // shares a plan, keyed by architecture signature, precision, the spec's row
-  // axis and bound, GPU compute capability, and TRT version. Throws unless the
-  // model declares the spec's graph and every encoding version the spec
-  // requires (see model_specs.h). Exactly once, before predict().
+  // Load params.onnx_path into a ready engine. Every checkpoint of one
+  // architecture shares a cached plan, so a cache hit costs a weight refit
+  // rather than a full build. Throws unless the model declares the spec's graph
+  // and every encoding version the spec requires. Call exactly once, before
+  // predict().
   void load();
 
   int max_rows() const;
 
-  // Valid after load(): the board-row widths the served model consumes. Zero
-  // for a graph that takes no board inputs (the move-proposal step graph, whose
-  // board arrives pre-encoded as a handoff tensor).
+  // Valid after load(): the board-row widths the model consumes. Zero for a
+  // graph with no board inputs, such as the move-proposal step graph.
   int spatial_planes() const;
   int scalar_floats() const;
 
-  // Valid after load() for a spec that names a channels_tensor: the trunk
-  // channel width C, read off that handoff tensor's per-row width. Zero for a
-  // family that exposes no such tensor.
+  // Valid after load(): the trunk channel width C, or zero for a spec with no
+  // channels_tensor.
   int channels() const;
 
-  // The model's input-encoding arm, from the ONNX metadata_props the exporter
-  // stamps. Valid after load(); consumers cross-check it against the input
-  // widths through input_encoder.h's registry.
+  // Valid after load(): the model's input-encoding arm, from its ONNX
+  // metadata. derive_input_spec() (agent/candidate_evaluator.h) checks it
+  // against the input widths.
   bool opp_leave_input() const;
 
-  // Blocks until the outputs are back. Requires 1 <= num_rows <= max_rows().
-  // Static tensors stage one row whatever num_rows is.
+  // Run the staged inputs. Requires 1 <= num_rows <= max_rows(); static
+  // tensors always carry one row.
   void predict(int num_rows);
 
-  // The host staging/readout buffer bound to `name`, which the engine is
-  // guaranteed to expose -- NeuralNet<Spec>::host() is the typed way in. Null
-  // for an aux output without params.copy_aux.
+  // The host buffer bound to `name`; NeuralNet<Spec>::host() is the typed way
+  // in. Null for an aux output without params.copy_aux.
   void* host_ptr(const char* name) const;
 
  protected:
@@ -156,8 +142,8 @@ class NeuralNetBase {
 
 namespace detail {
 
-// The spec's tensor descriptor lists flattened into NeuralNetBase's runtime
-// table, in list order: inputs, outputs, then aux outputs.
+// The spec's descriptor lists flattened into one table: inputs, outputs, then
+// aux outputs.
 template <typename... In, typename... Out, typename... Aux>
 constexpr std::array<TensorSpec, sizeof...(In) + sizeof...(Out) + sizeof...(Aux)> tensor_specs(
   TensorList<In...>, TensorList<Out...>, TensorList<Aux...>) {
@@ -178,9 +164,9 @@ class NeuralNet : public NeuralNetBase {
  public:
   explicit NeuralNet(const NeuralNetParams<Spec>& params) : NeuralNetBase(params, kRuntimeSpec) {}
 
-  // The host buffer for one of the spec's tensors, e.g. host<SpatialInput>():
-  // staging for inputs (write, then predict()), readout for outputs (valid
-  // after predict(), raw logits). Aux-output buffers require params.copy_aux.
+  // The host buffer for one of the spec's tensors, e.g. host<SpatialInput>().
+  // Write inputs before predict(); read outputs after it, undecoded. Aux-output
+  // buffers require params.copy_aux.
   template <typename Tensor>
   Tensor::Elem* host() {
     using TensorElem = Tensor::Elem;
