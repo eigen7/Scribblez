@@ -18,7 +18,6 @@
 #include <iostream>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -46,36 +45,6 @@ std::string str_field(const boost::json::object& obj, boost::json::string_view k
   auto it = obj.find(key);
   if (it == obj.end() || !it->value().is_string()) return "";
   return std::string(it->value().as_string().c_str());
-}
-
-// Append an EXCHANGE for every distinct non-empty sub-multiset of `types`,
-// recursing one tile type at a time. `chosen` accumulates the tiles
-// surrendered so far and is restored before returning.
-void enumerate_exchanges(std::vector<Move>& out, const std::vector<std::pair<Tile, int>>& types,
-                         size_t idx, TileCounts& chosen) {
-  if (idx == types.size()) {
-    if (!chosen.empty()) out.push_back(Move::exchange(chosen));
-    return;
-  }
-  const auto [tile, max_count] = types[idx];
-  for (int k = 0; k <= max_count; ++k) {
-    enumerate_exchanges(out, types, idx + 1, chosen);
-    if (k < max_count) chosen.add(tile);
-  }
-  for (int k = 0; k < max_count; ++k) chosen.remove(tile);
-}
-
-// Append one EXCHANGE per distinct non-empty sub-multiset of `rack`. The
-// caller checks that the bag allows exchanging.
-void append_exchange_moves(std::vector<Move>& out, const Rack& rack) {
-  const TileCounts counts = rack.counts();
-  std::vector<std::pair<Tile, int>> types;
-  for (Tile t = Tile::of(0); t <= BLANK; ++t) {
-    const int c = counts.count(t);
-    if (c > 0) types.emplace_back(t, c);
-  }
-  TileCounts chosen;
-  enumerate_exchanges(out, types, 0, chosen);
 }
 
 }  // namespace
@@ -116,7 +85,8 @@ MoveDecision HumanWebAgent::make_move(const MoveRequest& req) {
   // {"type":"exchange","letters":...}.
   const std::vector<Move> plays = generate_legal_plays(req);
   std::vector<Move> display_moves = plays;
-  if (req.bag_size >= RACK_SIZE) append_exchange_moves(display_moves, req.my_rack);
+  const std::vector<Move> exchanges = generate_legal_exchanges(req);
+  display_moves.insert(display_moves.end(), exchanges.begin(), exchanges.end());
 
   // Each displayed move's HastyBot equity, for the cheat-mode move list. The
   // column stays blank when the equity tables failed to load (see from_spec).
