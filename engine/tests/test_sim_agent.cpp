@@ -107,20 +107,6 @@ class LeafStub : public nn::PositionEvalService {
   }
 };
 
-// Mirrors best_observation_index (the first maximum wins), so the replays
-// below break ties exactly as the agent does.
-int best_of(const std::vector<SimObservation>& obs, SimObjective objective) {
-  auto value = [&](const SimObservation& o) {
-    if (o.n == 0) return 0.0;
-    return objective == SimObjective::kWinRate ? (o.wins + 0.5 * o.draws) / double(o.n)
-                                               : double(o.delta_sum) / double(o.n);
-  };
-  int best = 0;
-  for (size_t i = 1; i < obs.size(); ++i)
-    if (value(obs[i]) > value(obs[best])) best = int(i);
-  return best;
-}
-
 }  // namespace
 
 TEST_F(SimAgentTest, PlaysTheCandidateItsOwnRolloutsRankBest) {
@@ -144,7 +130,7 @@ TEST_F(SimAgentTest, PlaysTheCandidateItsOwnRolloutsRankBest) {
     const std::vector<SimObservation> obs =
       SimRunner(dict_, p.sim).run(pos, candidates, agent.sim_seed(0));
 
-    EXPECT_TRUE(played == candidates[size_t(best_of(obs, objective))])
+    EXPECT_TRUE(played == candidates[size_t(best_observation_index(obs, objective))])
       << "objective=" << int(objective);
   }
 }
@@ -174,9 +160,10 @@ TEST_F(SimAgentTest, SimulatesAgainstTheOpponentsPublicLeave) {
     pos.opp_leave = leave;
 
     const SimRunner runner(dict_, p.sim);
-    const int with = best_of(runner.run(pos, candidates, SimAgent(p).sim_seed(0)), p.objective);
+    const int with =
+      best_observation_index(runner.run(pos, candidates, SimAgent(p).sim_seed(0)), p.objective);
     const int without =
-      best_of(runner.run(blind, candidates, SimAgent(p).sim_seed(0)), p.objective);
+      best_observation_index(runner.run(blind, candidates, SimAgent(p).sim_seed(0)), p.objective);
     if (with == without) continue;
 
     discriminated = true;
@@ -248,7 +235,7 @@ TEST_F(SimAgentTest, TruncatedRolloutsReproduceThroughSimRunner) {
   sp.leaf_service = &replay_leaf;
   const std::vector<SimObservation> obs =
     SimRunner(dict_, sp).run(pos, candidates, agent.sim_seed(0));
-  EXPECT_TRUE(played == candidates[size_t(best_of(obs, p.objective))]);
+  EXPECT_TRUE(played == candidates[size_t(best_observation_index(obs, p.objective))]);
 }
 
 // A horizon without a leaf service, or a leaf service without a horizon, is
