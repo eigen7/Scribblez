@@ -247,14 +247,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int),
     ]
 
-    lib.scribblez_sample_slog.restype = ctypes.c_int
-    lib.scribblez_sample_slog.argtypes = [
-        ctypes.c_char_p,
-        ctypes.POINTER(ctypes.c_char_p),
-        ctypes.POINTER(ctypes.c_int64),
-        ctypes.c_int,
-    ]
-
     lib.scribblez_read_file_header.restype = ctypes.c_int
     lib.scribblez_read_file_header.argtypes = [
         ctypes.c_char_p,
@@ -997,16 +989,6 @@ def gcg_position_board_json(gcg_text: str, open_leaves: bool) -> dict:
         out = ctypes.create_string_buffer(cap)
         n = fn(_session(), encoded, int(open_leaves), out, cap)
     return json.loads(out.value.decode("utf-8"))
-
-
-def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]):
-    """Write a new .slog at `dst_path` from selected (source path, game index) picks."""
-    n = len(picks)
-    src_arr = (ctypes.c_char_p * n)(*[str(p).encode("utf-8") for p, _ in picks])
-    idx_arr = (ctypes.c_int64 * n)(*[int(g) for _, g in picks])
-    rc = _lib().scribblez_sample_slog(str(dst_path).encode("utf-8"), src_arr, idx_arr, n)
-    if rc != 0:
-        raise OSError(f"sample_slog failed (rc={rc}) writing {dst_path}")
 
 
 # ---------------------------------------------------------------------------

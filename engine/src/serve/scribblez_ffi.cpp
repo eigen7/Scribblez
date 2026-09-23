@@ -10,7 +10,6 @@
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
 #include "data/sim_observation_log.h"
-#include "data/slog_subset.h"
 #include "data/streaming_row_buffer.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
@@ -663,18 +662,6 @@ int ScribblezSession::gcg_position_board_json(const char* gcg_text, bool open_le
 int scribblez_gcg_position_board_json(ScribblezSession* s, const char* gcg_text, int open_leaves,
                                       char* out_json, int out_cap) {
   return s->gcg_position_board_json(gcg_text, open_leaves != 0, out_json, out_cap);
-}
-
-int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
-                          const int64_t* game_indices, int num_picks) {
-  if (!dst_path || !src_paths || !game_indices || num_picks < 0) return -1;
-  std::vector<scribblez::binlog::SlogPick> picks;
-  picks.reserve(size_t(num_picks));
-  for (int i = 0; i < num_picks; ++i) {
-    if (!src_paths[i]) return -1;
-    picks.push_back({src_paths[i], game_indices[i]});
-  }
-  return scribblez::binlog::write_slog_subset(dst_path, picks) ? 0 : -1;
 }
 
 const char* scribblez_format_layout_json(void) { return scribblez::format_layout_json().c_str(); }

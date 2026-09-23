@@ -244,12 +244,6 @@ int scribblez_gcg_position_inputs(ScribblezSession* s, const char* gcg_text, int
 int scribblez_gcg_position_board_json(ScribblezSession* s, const char* gcg_text, int open_leaves,
                                       char* out_json, int out_cap);
 
-// Write a new .slog at `dst_path` holding the selected games in order: game i
-// is game_indices[i] of src_paths[i]. Games are copied verbatim. Returns 0 on
-// success, -1 on any I/O, header, or out-of-range error.
-int scribblez_sample_slog(const char* dst_path, const char* const* src_paths,
-                          const int64_t* game_indices, int num_picks);
-
 // A .slog file's game count and on-disk size, the arguments
 // scribblez_dl_add_file needs. Returns 0, or -1 on an I/O failure or a magic
 // or version mismatch.
