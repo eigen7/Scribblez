@@ -214,23 +214,19 @@ TEST(Movegen, CrossWord) {
 TEST(Movegen, BingoBonus) {
   Dictionary d = Dictionary::build_from_words({"PARTIED"});
   Board b;
-  b.apply(make_play(CENTER, CENTER, /*horizontal=*/true, {Glyph::of(Tile::from_char('A'))}));
   MoveGenerator gen(b, d);
-  Rack r = rack_from("PRTIED?");
-  auto moves = gen.generate(r);
-  bool found_bingo = false;
+  auto moves = gen.generate(rack_from("PARTIED"));
+  // The opening PARTIED on row 7 from the center star rightward: P on the DWS
+  // center, I on the DLS at column 11.
+  const uint16_t cols_7_to_13 = uint16_t(0x7Fu << CENTER);
+  const Move* bingo = nullptr;
   for (const auto& m : moves) {
-    if (m.num_glyphs() == RACK_SIZE) found_bingo = true;
+    if (m.horizontal() && m.start() == CENTER && m.square_mask() == cols_7_to_13) bingo = &m;
   }
-  // PARTIED through the board's A places only six tiles, so it is not a bingo
-  // and found_bingo is never asserted; the test checks only that PARTIED is
-  // generated. The bingo bonus itself goes untested here.
-  bool found_partied = false;
-  for (const auto& m : moves) {
-    if (m.main_word(b) == "PARTIED") found_partied = true;
-  }
-  ASSERT_TRUE(found_partied);
-  (void)found_bingo;
+  ASSERT_NE(bingo, nullptr);
+  ASSERT_EQ(bingo->num_glyphs(), RACK_SIZE);
+  const int word_score = 2 * (3 + 1 + 1 + 1 + 2 * 1 + 1 + 2);
+  EXPECT_EQ(bingo->score(), word_score + 50);
 }
 
 // A canonical key for a play: its placed tiles (sorted) plus its score. The key
