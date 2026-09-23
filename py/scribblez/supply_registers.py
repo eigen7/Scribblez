@@ -1,34 +1,31 @@
 """Tile-supply register tokens for the transformer trunk (spatial_trunk.py).
 
-The placement heads must gate a square's cross-check letters by whether those
-letters are actually *available* -- present in the bag, the opponent's known
-leave, or the mover's own rack. A conv trunk struggles to learn this:
-cross-checks are a per-square, per-letter spatial signal while availability is a
-global per-letter scalar, and the two meet only through the trunk's blunt
-global-context injection (a per-channel bias/FiLM). That composition is
-sample-expensive -- a conv model learns availability-gating for common tiles and
-falls back to a fixed frequency prior for rare ones (the I13 analysis: a live
-model holds a ~0.17 Y-hook belief with zero Y's unseen).
+The placement heads must weigh a square's cross-check letters by whether those
+letters are actually available: in the mover's rack, in the unseen pool, or in
+the opponent's known leave. A conv trunk learns this poorly. Cross-checks are a
+per-square, per-letter spatial signal, availability is a global per-letter
+scalar, and a conv trunk combines them only through a per-channel global
+bias/FiLM. In practice a conv model learns the gating for common tiles but
+falls back to a fixed frequency prior for rare ones: one model predicted a
+~0.17 chance of a Y hook with no Y left unseen.
 
-This module gives the letter-indexed cross a first-class token. Each of the 27
-tiles (A..Z, blank) becomes a *register token* -- a learned identity embedding
-plus that letter's per-seat availability (mover rack, unseen pool, and under the
-open-leaves arm the opponent's known leave) -- appended to the board-cell
-sequence the transformer tower attends over (transformer_tower.py). A square
-hooking on S/Y then reads S- and Y-supply directly in every attention layer,
-graded by the actual counts and distinguishing "available to me" from
-"available to the opponent", which a single gated input plane cannot.
+The transformer trunk instead appends one register token per tile (A..Z,
+blank) to the board-cell sequence (transformer_tower.py). Each token is a
+learned tile embedding plus that tile's normalized count in each seat: mover
+rack, unseen pool, and, under the open-leaves arm, the opponent's leave. Every
+attention layer can then read a hooking square's letter supply directly, graded
+by count and split by who holds it.
 
-docs/model_architectures.md diagrams these tokens; any change here belongs in
-the same commit as the corresponding change there.
+docs/model_architectures.md diagrams these tokens; keep it in sync.
 """
 
 import torch
 import torch.nn as nn
 
-# Scalar-block layout (engine/include/encoding/input_encoder.h): rack counts, the
-# unseen-pool thermometer, score diff, move meta, then -- open-leaves arm only --
-# the opponent-leave counts. The two arms are told apart by the scalar width.
+# Scalar-block offsets (engine/include/encoding/input_encoder.h): rack counts
+# (27), unseen-pool thermometer (100), score diff (1), move meta (8), then, in the
+# open-leaves arm only, opponent-leave counts (27). The scalar width tells the
+# two arms apart.
 N_TILES = 27  # A..Z + blank
 RACK0 = 0
 UNSEEN_THERMO0 = 27
@@ -43,9 +40,9 @@ TILE_COUNTS = (9, 2, 2, 4, 12, 2, 3, 2, 9, 1, 1, 4, 2, 6, 8, 2, 1, 6, 4, 6, 4, 2
 
 
 def _thermometer_to_count_matrix() -> torch.Tensor:
-    """A fixed (100, 27) 0/1 matrix summing each letter's thermometer region back
-    to a raw count: `unseen_thermo @ M` recovers the per-letter unseen counts.
-    Letter i owns a contiguous width-TILE_COUNTS[i] region (input_encoder.h)."""
+    """A fixed (100, 27) 0/1 matrix M with `unseen_thermo @ M` = per-letter
+    unseen counts. Letter i owns a contiguous TILE_COUNTS[i]-wide region of the
+    thermometer."""
     m = torch.zeros(UNSEEN_THERMO_LEN, N_TILES)
     offset = 0
     for i, width in enumerate(TILE_COUNTS):
@@ -70,9 +67,7 @@ class TileSupplyRegisters(nn.Module):
                 f"{SCALAR_SIZE_OPEN_LEAVES}, got {scalar_size}"
             )
         self.has_opp_leave = scalar_size == SCALAR_SIZE_OPEN_LEAVES
-        # Fixed decode of the unseen thermometer to per-letter counts, and the
-        # per-letter normalisers -- buffers so they move with the module and
-        # export as constants.
+        # Buffers, so they follow .to(device) and export as constants.
         self.register_buffer("thermo_to_count", _thermometer_to_count_matrix())
         self.register_buffer("tile_counts", torch.tensor(TILE_COUNTS, dtype=torch.float32))
         self.token_embed = nn.Parameter(torch.randn(N_TILES, channels) * 0.02)

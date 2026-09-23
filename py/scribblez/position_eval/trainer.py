@@ -1,58 +1,47 @@
-"""The position-evaluation train role: an open-ended consume->train loop.
+"""The position-evaluation train role: an open-ended consume-and-train loop.
 
-The trainer is a pure consumer. It never generates games: the generation
-scheduler (scribblez/generational/scheduler.py) fills generation directories
-from generator workers' staged chunks, and the trainer
+Runs as the position_eval workload's singleton `train` worker (SCZ_ROLE=train),
+or via scripts/position_eval/train.py for headless debugging.
 
-  1. waits until its cursor generation is complete on disk,
-  2. trains one epoch over a sliding window of the most recent complete
-     generations (turns_per_game turns sampled per game), checkpointing under
-     the generation's index,
-  3. advances, evicting generations older than the window, and publishes its
-     cursor (train_state.json) so the scheduler can pace the generator fleet.
+The trainer never generates games. The generation scheduler
+(generational/scheduler.py) assembles generation directories from the
+generator workers' output, and the trainer loops:
 
-One epoch per generation keeps data reuse low by construction -- a game is
-trained on `window` times over its residency, once per generation it is part
-of the window -- and makes epoch and generation the same clock. Everything
-else is keyed on cumulative rows trained (the rows-clock): the dashboard
-x-axis and the restart cursor. A single rolling model.pt holds resume state,
-so pausing and restarting the worker continues exactly where it left off;
-SIGTERM stops at the next batch boundary, losing at most the current
-(uncheckpointed) generation. The optimizer and its learning-rate policy are
-the run's `optimizer` arm (generational/optim.py); the CPU thread pools
-(DataLoader workers, torch intra-op threads) are live controls the dashboard
-publishes in the tag's controls file, adopted at the next generation. Nothing
-here writes dashboard.db: metrics, predictions and control events leave as
-records through the worker's sink (generational/records.py) and the
-dashboard's ingest tick turns them into rows.
+  1. wait until its cursor generation is complete on disk;
+  2. train one epoch over a sliding window of the most recent complete
+     generations, sampling turns_per_game turns per game;
+  3. export, evaluate and checkpoint under that generation's index, evict
+     generations that left the window, and publish the cursor
+     (train_state.json), which the scheduler uses to pace the generators.
 
-Every other artifact crosses the same sink, which is what lets this one
-trainer run on the controller's machine or on a rented one: a generation to
-train over is fetched through it before the wait on its manifest (a pull from
-the bucket, or nothing, when the sink is the mount dir it is already in), and
-each generation's outputs -- the ONNX export, the rolling checkpoint, the
-cursor -- are delivered through it after they are written, the record last.
-A fresh start restores the checkpoint and cursor the same way, then the
-window's generations, so the first epoch after a replacement is the epoch a
-local resume would run.
+One epoch per generation bounds data reuse: each game is trained on `window`
+times, once per generation it spends in the window. Epoch and generation are
+the same clock; progress is otherwise measured in cumulative rows trained, the
+dashboard's x-axis. A single rolling model.pt holds the resume state, so a
+restarted worker continues where it stopped, and a stop loses at most the
+current generation's epoch.
 
-Training-step regime. The network forward runs under bf16 autocast, with the
-loss on fp32-upcast outputs and fp32 master weights / optimizer state (bf16
-keeps fp32's exponent range, so the overflow that ruled out fp16 serving in
-docs/plans/fp16_safe_serving.md cannot occur); the fp32 matmuls that remain use
-TF32, which cuDNN's convolutions already did by default. The training forward
-is torch.compile'd; every other pass -- BatchNorm recalibration, the
-per-checkpoint evals, ONNX export, the saved checkpoint -- goes through the
-eager module, so state-dict keys and the exported graph are unchanged. Epochs
-drop the trailing partial batch so the compiled graph is one static shape,
-compiled once per process. Measured on the transformer trunk at batch 256,
-these compound to ~5x on the isolated step (1453 -> 286 ms) and ~4x in the
-full loop (0.2k -> 0.8k rows/s); the conv trunk gains ~2.6x, nearly all of it
-from bf16. See the PR that introduced them for the per-component table.
+Where it runs. All I/O beyond local scratch goes through the worker's sink, so
+the same trainer runs on the controller's machine or on a rented one: the sink
+fetches generations before training on them and delivers each generation's
+outputs afterwards (export, checkpoint, cursor, and last the record). The
+trainer never writes dashboard.db; the dashboard ingests its records
+(generational/records.py). On a fresh machine, the checkpoint, cursor and
+window are restored through the sink, so the first epoch is the one a local
+resume would have run. The optimizer arm (generational/optim.py) owns the
+learning-rate policy; CPU thread counts are live dashboard controls, adopted
+at the next generation.
 
-Runs as the singleton `train` worker of the position_eval workload (launched
-by the worker entrypoint with SCZ_ROLE=train), or directly via the
-scripts/position_eval/train.py CLI for headless debugging.
+Training-step performance. The forward runs under bf16 autocast, with the loss
+computed on fp32-upcast outputs and fp32 weights and optimizer state. bf16 has
+fp32's exponent range, so it cannot hit the overflow that rules out fp16
+(docs/plans/fp16_safe_serving.md). Remaining fp32 matmuls use TF32. The
+training forward is torch.compile'd; every other pass (BatchNorm
+recalibration, evals, ONNX export, checkpointing) uses the eager module, so
+state-dict keys and the exported graph are unaffected. Epochs drop the
+trailing partial batch so the compiled graph sees one static shape and
+compiles once. On the transformer trunk at batch 256 this is ~4x end to end
+(0.2k -> 0.8k rows/s); the conv trunk gains ~2.6x, almost all from bf16.
 """
 
 import functools
@@ -88,8 +77,7 @@ from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
-# How often the trainer re-checks the manifests while waiting for its cursor
-# generation to complete.
+# Poll interval while waiting for the cursor generation to complete.
 POLL_SECONDS = 5
 
 
@@ -98,9 +86,9 @@ def _publish_train_state(paths: TagPaths, state: GenerationalState):
 
 
 def _generation_ready(paths: TagPaths, sink, index: int) -> bool:
-    """Whether generation `index` is complete under `paths`, fetching it
-    through `sink` when it is not there yet (a published generation arrives
-    whole, manifest last, so complete on arrival)."""
+    """Whether generation `index` is complete locally, first trying to fetch
+    it through `sink` if not. A published generation arrives manifest last, so
+    a fetched one is complete."""
     gen_dir = paths.generation_dir(index)
     if lifecycle.is_complete(gen_dir):
         return True
@@ -110,9 +98,8 @@ def _generation_ready(paths: TagPaths, sink, index: int) -> bool:
 
 
 def wait_for_generation(paths: TagPaths, index: int, sink):
-    """Block until generation `index` is complete on disk, pulling it through
-    the sink as it becomes available. The GPU idling here is the
-    generation-is-the-bottleneck signal, visible in the Stats tab."""
+    """Block until generation `index` is complete on disk. Time spent here
+    shows in the Stats tab as generation being the bottleneck."""
     announced = False
     while not _generation_ready(paths, sink, index):
         if not announced:
@@ -124,9 +111,8 @@ def wait_for_generation(paths: TagPaths, index: int, sink):
 
 
 def restore_from_sink(paths: TagPaths, sink):
-    """A fresh start on a machine that has none of the tag: take the rolling
-    checkpoint and the cursor from wherever the sink delivers to, if they are
-    there. A machine that has a checkpoint resumes from its own."""
+    """On a machine with no local checkpoint, fetch the rolling checkpoint and
+    cursor through the sink, if it has them."""
     if paths.rolling_checkpoint.exists():
         return
     if sink.fetch_file("checkpoints/model.pt", paths.rolling_checkpoint):
@@ -135,10 +121,9 @@ def restore_from_sink(paths: TagPaths, sink):
 
 
 def ensure_window(paths: TagPaths, sink, cursor: int, window: int):
-    """Fetch the complete generations the window ending before `cursor` would
-    train over and this machine lacks, so a restored trainer's first epoch is
-    the one a local resume would run. One that is not there to fetch (evicted
-    before it was ever published) just leaves the window shorter."""
+    """Fetch any missing generations of the window ending before `cursor`, so
+    a restored trainer's first epoch matches a local resume. A generation that
+    cannot be fetched just shortens the window."""
     for index in range(max(0, cursor - window), cursor):
         _generation_ready(paths, sink, index)
 
@@ -147,24 +132,20 @@ def _rows_left(params, state: GenerationalState) -> bool:
     return params.max_rows == 0 or state.rows_trained < params.max_rows
 
 
-# How many generations' deliveries may wait behind the one in flight before
-# the training thread blocks on submitting the next: a bucket that has fallen
-# this far behind is a problem to stop for, not to keep piling onto.
+# How many generations' deliveries may queue behind the one in flight before
+# submitting blocks training. Uploads falling this far behind signal a problem
+# worth stalling for rather than letting the backlog grow.
 MAX_PENDING_DELIVERIES = 2
 
 
 class OutputDeliverer:
-    """Delivers a generation's outputs off the training critical path.
+    """Delivers generations' outputs on a background thread.
 
-    One background thread drains a FIFO of delivery steps submitted by the
-    training thread, so the ~150 MB a remote trainer sends per generation
-    (export, checkpoint, record) uploads while the next generation trains
-    instead of holding it up -- and so the steps still complete in
-    submission order, which is what lets a record be the marker that
-    everything before it is in place. The queue is bounded: submitting past
-    MAX_PENDING_DELIVERIES blocks. A failed step stops the thread and is
-    raised from the next `submit` or from `drain`, as the runner's own
-    failure rather than a silent loss in the background.
+    A remote trainer uploads ~150 MB per generation; this lets that overlap
+    the next generation's training. A single thread keeps deliveries in
+    submission order, which the record-last commit protocol relies on. A
+    failed delivery stops the thread and is re-raised from the next `submit`,
+    `collect` or `drain`, so it fails the runner instead of vanishing.
     """
 
     def __init__(self, max_pending: int = MAX_PENDING_DELIVERIES):
@@ -175,8 +156,7 @@ class OutputDeliverer:
         self._thread.start()
 
     def submit(self, what: str, fn):
-        """Queue `fn` (called with no arguments on the delivery thread);
-        blocks while the queue is full."""
+        """Queue `fn()` for the delivery thread; blocks while the queue is full."""
         while True:
             self._raise_failure()
             try:
@@ -197,8 +177,8 @@ class OutputDeliverer:
         return out
 
     def drain(self):
-        """Block until everything submitted has been delivered. Call before
-        the runner exits, on SIGTERM too, so nothing submitted is lost."""
+        """Block until everything submitted has been delivered. Must be called
+        before the runner exits, including on a stop."""
         self._pending.put(None)
         self._thread.join()
         self._raise_failure()
@@ -223,9 +203,9 @@ class OutputDeliverer:
 
 
 def _snapshot(path: Path, gen: int) -> Path:
-    """A hard link to `path` as it is now, for a delivery that runs while the
-    trainer goes on rewriting `path` (the rolling checkpoint, the cursor):
-    a later rewrite replaces the name, so the link keeps this version."""
+    """A hard link to `path`'s current version, for a delivery that may run
+    after the trainer has rewritten `path`. Rewrites replace the file rather
+    than modifying it, so the link keeps this version."""
     snap = path.with_name(f"{path.name}.gen{gen}")
     snap.unlink(missing_ok=True)
     os.link(path, snap)
@@ -235,9 +215,9 @@ def _snapshot(path: Path, gen: int) -> Path:
 def _deliver_generation(
     sink, paths: TagPaths, gen: int, checkpoint_snap, state_snap, recorder, staged
 ):
-    """One generation's deliveries, in the order their meaning requires: the
-    export (and what it loads beside), the checkpoint a restart resumes
-    from, the cursor, and last the record that says the rest is there."""
+    """One generation's deliveries: the export and its sidecars, the
+    checkpoint, the cursor, and last the record, whose arrival means the rest
+    is in place."""
     for sidecar in paths.onnx_sidecars:
         sink.deliver_output(sidecar, f"models/{sidecar.name}", keep=True)
     sink.deliver_output(paths.onnx_path(gen), f"models/{paths.onnx_path(gen).name}")
@@ -249,17 +229,14 @@ def _deliver_generation(
 def _checkpoint_and_eval(
     model, optimizer, recorder, paths, device, params, state, gen, result, elapsed, optim_arm, ctx
 ):
-    """Export ONNX, evaluate, save the rolling checkpoint, publish the cursor,
-    and hand the generation's deliveries -- ending with its record (its
-    metrics + eval, keyed on the generation index `gen`, with the rows-clock
-    stored as `positions`) -- to the delivery thread.
+    """Evaluate, export ONNX, save the rolling checkpoint, publish the cursor,
+    and queue the generation's deliveries. Returns the seconds spent.
 
-    The record goes last because it is what makes this generation visible to
-    the Loss tab, so everything it stands for (the ONNX export the Positions
-    tab runs on demand, the checkpoint a restart resumes from) is in place
-    before anything can ask for it. Everything delivered is written here
-    first, on this thread; the checkpoint and the cursor, which the next
-    generation rewrites, go as snapshots."""
+    The record (metrics and eval, with rows trained as `positions`) is
+    delivered last because it makes the generation visible on the dashboard,
+    which may then ask for the export or rely on the checkpoint. The
+    checkpoint and cursor are delivered as snapshots because the next
+    generation rewrites them."""
     sys.stdout.write("\n")
     avg = result.losses
     lr_now = optim_arm.current
@@ -283,13 +260,12 @@ def _checkpoint_and_eval(
         "wld_acc": result.wld_acc,
         "lr": lr_now,
         "elapsed_s": elapsed,
-        # Whatever else the arm wants on the record -- for a schedule-free run
-        # the averaging weight, which is what anneals there in place of the rate.
+        # Arm-specific metrics, e.g. schedule-free's averaging weight, which
+        # anneals in place of the learning rate.
         **optim_arm.metrics(),
     }
-    # Aggregate model-vs-Monte-Carlo quality over the large held-out dataset,
-    # folded into the same metrics record so the Loss tab plots it alongside the
-    # training curves.
+    # Model-vs-Monte-Carlo quality on the large eval set, recorded alongside
+    # the training losses.
     t_eval = time.time()
     record.update(eval_position_eval_quality(model, ctx["position_eval_quality"], device))
     timed_print(
@@ -328,11 +304,10 @@ def _checkpoint_and_eval(
     return time.time() - t_eval
 
 
-# Input batches the schedule-free arm recomputes BatchNorm statistics over
-# before the checkpoint reads the model (optim.ScheduleFreeArm.eval_mode): a
-# prefix of a fresh pass over the window, forward-only, so a small fraction of
-# the epoch's cost. Ten batches already reproduce the statistics of a full
-# pass; 32 leaves margin. The WSD arm never pulls from the generator.
+# Batches the schedule-free arm recomputes BatchNorm statistics over before
+# checkpointing (optim.ScheduleFreeArm.eval_mode), forward-only. Ten batches
+# already match a full pass's statistics; 32 leaves margin. The WSD arm ignores
+# them.
 BN_RECALIBRATION_BATCHES = 32
 
 
@@ -363,14 +338,12 @@ def train_one_generation(
     cpu,
     ctx,
 ):
-    """Train one epoch (through `train_model`, the compiled forward over
-    `model`'s parameters) over the window ending at the cursor generation, then
-    checkpoint `model` under that generation's index and advance the cursor.
+    """Train one epoch over the window ending at the cursor generation, then
+    checkpoint under that generation's index and advance the cursor.
 
-    The optimizer arm is switched to training weights around the epoch and to
-    deployable ones around the checkpoint, so everything the checkpoint step
-    reads -- quality eval, ONNX export, saved state -- sees the same weights a
-    schedule-free run would deploy (a no-op under the WSD arm)."""
+    `train_model` is the compiled forward sharing `model`'s parameters. The
+    optimizer arm swaps in the deployable weights (schedule-free's average)
+    for the checkpoint step, so eval, export and saved state all see them."""
     gen = state.generation_index
     window = lifecycle.window_dirs(paths, gen, params.window)
     ds = SlogDataset(
@@ -380,10 +353,9 @@ def train_one_generation(
         f"generation {gen}: window {[d.name for d in window]} "
         f"({ds.num_games} games, {ds.num_samples} eligible rows)"
     )
-    # The generation index seeds the shuffle and the per-game turn rotation, so
-    # each of the `window` passes a game gets over its residency shuffles
-    # differently and draws distinct turns. The trailing short batch is dropped
-    # (one static shape for the compiled forward); generation is cheap.
+    # Seeding by generation gives each of a game's `window` passes a different
+    # shuffle and different turns. drop_last keeps one static shape for the
+    # compiled forward.
     batches = ds.iter_batches(
         params.batch_size,
         seed=gen * 1000003,
@@ -425,8 +397,7 @@ def train_one_generation(
     )
     optim_arm.train_mode()
     if ctx["stats"] is not None:
-        # The upload time reported is the last delivery to have finished --
-        # usually the previous generation's, since this one's is under way.
+        # The last finished delivery, usually the previous generation's.
         finished = ctx["deliverer"].collect()
         ctx["stats"].cycle_done(
             {
@@ -475,13 +446,11 @@ def run_generational_training(
 
 
 def load_position_eval_quality(spatial_planes: int, face_up_leaves: bool) -> dict:
-    """Build the large-dataset quality-eval batch and its Monte-Carlo ground
-    truth (the run's information condition) once. At each checkpoint the
-    model is run over it and aggregate quality scalars are recorded for the
-    Loss tab. A missing dataset or ground truth is an error: a run without
-    its eval is not the run anyone asked for, least of all one on a rented
-    machine that would otherwise train for hours before anyone saw the
-    curves were absent."""
+    """Load the large eval set's inputs and its Monte-Carlo ground truth for
+    the run's information condition, evaluated at every checkpoint.
+
+    A missing dataset or ground truth is fatal: otherwise a rented machine
+    could train for hours before anyone noticed the eval curves were missing."""
     dataset = str(position_eval_analysis.LARGE_DATASET)
     names, inputs = position_eval_analysis.load_inputs(dataset, session_input_arm())
     assert names, f"no positions in {dataset}"
@@ -498,10 +467,9 @@ def load_position_eval_quality(spatial_planes: int, face_up_leaves: bool) -> dic
 
 
 def eval_position_eval_quality(model, quality_eval: dict, device) -> dict:
-    """Run the model over the large quality set and return the aggregate
-    model-vs-Monte-Carlo quality scalars: win-equity/WLD + score-delta mean/std
-    MAE, and the placement heads' collapsed planes against the rollouts' planes
-    (when the ground truth carries them)."""
+    """Aggregate model-vs-Monte-Carlo metrics on the large eval set: value and
+    score-differential errors, plus placement-plane errors when the ground
+    truth has placement planes."""
     model.eval()
     preds = position_eval_analysis.predict(
         model, quality_eval["inputs"], quality_eval["spatial_planes"], device
@@ -525,14 +493,12 @@ def eval_position_eval_quality(model, quality_eval: dict, device) -> dict:
 
 
 def run(ctx: WorkerContext) -> int:
-    """The train-role runner (invoked by the worker entrypoint; also the
-    substance of the scripts/position_eval/train.py CLI)."""
+    """The train-role entry point."""
     params = ctx.params
-    # Pick the experiment arms before any engine call: they are baked into the
-    # process-wide FFI session, whose reported input shapes -- and therefore the
-    # model, the ONNX export, and the eval batches -- all follow them. A
-    # face-up-leaves run trains on the opponent-leave input block, matching the
-    # information condition its self-play games are generated under.
+    # Must precede any engine call: the arm is baked into the FFI session, whose
+    # input shapes the model, export and eval batches all follow. A
+    # face-up-leaves run's games expose the opponent's leave, so its model
+    # takes the opponent-leave input block.
     set_opp_leave_input(params.face_up_leaves)
 
     paths = ctx.tag_paths()
@@ -554,10 +520,7 @@ def run(ctx: WorkerContext) -> int:
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
     optimizer = build_optimizer(model, params)
-    # The training-step regime (module docstring): TF32 for the fp32 matmuls,
-    # and the compiled training forward. `train_model` shares `model`'s
-    # parameters and is used for the epoch only; `model` stays the module that
-    # is recalibrated, evaluated, exported, and checkpointed.
+    # See "Training-step performance" in the module docstring.
     torch.set_float32_matmul_precision("high")
     train_model = torch.compile(model)
 
@@ -599,7 +562,7 @@ def run(ctx: WorkerContext) -> int:
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")
     finally:
-        # Whatever is still uploading goes before the process does: a stop
-        # (docker's SIGTERM grace) is long enough for a generation's outputs.
+        # Finish pending uploads; the stop grace period is long enough for a
+        # generation's outputs.
         run_ctx["deliverer"].drain()
     return 0

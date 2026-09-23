@@ -1,17 +1,11 @@
-"""Match statistics over paired game play (roadmap E2).
+"""Win-rate statistics for head-to-head matches played in mirrored pairs.
 
-The shared discipline for head-to-head match play: games arrive in mirrored
-pairs (the engine's --paired mode), each pair collapses to one score for the
-player under test, and the accumulated pairs give that player's win rate with
-a confidence interval. Owning this here keeps every match-play experiment
-(A1's training-time eval first) from reinventing it.
-
-Pairing is what makes the arithmetic honest: the two games of a pair share a
-game seed, so per-seed tile luck lands on both sides of the comparison and
-cancels out of the pair score. The unit of observation is therefore the pair,
-and the pentanomial pair-score distribution -- not the per-game trinomial --
-is what the variance estimate must come from, because the two games of a pair
-are correlated.
+play_game's --paired mode plays each game seed twice with the seats swapped,
+so tile luck lands on both sides and largely cancels within a pair. The two
+games of a pair are therefore correlated, and the unit of observation must be
+the pair: each pair reduces to one score for the player under test, and the
+variance comes from the five-valued (pentanomial) pair-score distribution
+rather than from per-game win/draw/loss counts.
 """
 
 import math
@@ -22,8 +16,7 @@ PAIR_SCORES = (0.0, 0.25, 0.5, 0.75, 1.0)
 
 
 def pair_score_counts(pair_scores: list[float]) -> list[int]:
-    """Pentanomial counts from per-pair scores (each the mean of a pair's two
-    game scores, so one of PAIR_SCORES; anything else raises)."""
+    """Counts of each PAIR_SCORES value; any other score raises."""
     counts = [0] * 5
     for score in pair_scores:
         counts[PAIR_SCORES.index(score)] += 1
@@ -41,8 +34,8 @@ def mean_and_variance(counts: list[int]) -> tuple[float, float]:
 
 
 def score_confidence_interval(counts: list[int], z: float = 1.96) -> tuple[float, float]:
-    """Normal-approximation confidence interval (mean, half_width) for the
-    expected pair score."""
+    """(mean, half_width) of a normal-approximation confidence interval for
+    the expected pair score."""
     n = sum(counts)
     mean, var = mean_and_variance(counts)
     if n < 2:

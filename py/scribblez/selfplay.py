@@ -1,9 +1,6 @@
-"""Running the C++ `play_game` self-play binary.
-
-The library home for shelling out to play_game, shared by every driver that
-generates .slog data: the one-shot CLI (scripts/generate_data.py), the
-kill-test cycle, and the generational generator role.
-"""
+"""Launching the C++ `play_game` self-play binary, shared by every Python
+driver that generates games (scripts/generate_data.py, the dashboard
+workloads, match evaluation)."""
 
 import subprocess
 from pathlib import Path
@@ -14,8 +11,8 @@ PLAY_GAME = str(ENGINE_DIR / "play_game")
 
 
 def run_play_game(args: list[str]) -> int:
-    """Run the play_game binary with `args`, echoing the command line (quoted
-    the way a shell would want it) first. Returns the exit code."""
+    """Run play_game with `args`, echoing a shell-pasteable command line first.
+    Returns the exit code."""
     cmd = [PLAY_GAME, *args]
     cmd_str = " ".join(f'"{t}"' if " " in t else t for t in cmd)
     print(f"Running: {cmd_str}")
@@ -23,11 +20,9 @@ def run_play_game(args: list[str]) -> int:
 
 
 def hasty_player_spec(temperature: float = 0.0, top_k: int = 10, endgame: bool = False) -> str:
-    """The `--player` value for a HastyBot seat, optionally temperature-sampled
-    over equity (temperature > 0) for exploration. `endgame` selects the
-    hastybot-endgame agent, which plays identically until the bag empties and
-    then hands the position to the endgame solver at the engine's default
-    node budget."""
+    """The `--player` value for a HastyBot seat. temperature > 0 samples over
+    the top-k moves by equity, for exploration. `endgame` selects
+    hastybot-endgame, which hands empty-bag positions to the endgame solver."""
     bot_type = "hastybot-endgame" if endgame else "hastybot"
     if temperature > 0:
         return f"--type={bot_type} --temperature={temperature} --top-k={top_k}"
@@ -45,15 +40,13 @@ def run_games(
 ) -> int:
     """Run `num_games` self-play games, logging .slog files to out_dir.
 
-    Both seats use `player_spec` (the value of a `--player` flag); each seat is a
-    fresh agent, so two neural seats draw independent sampling seeds. `seed` is
-    the PRNG seed passed to play_game; 0 (the default) lets the binary pick one
-    from std::random_device, so successive default-seeded runs differ.
-    `random_opening_mean` > 0 opens each game with K uniformly-random plies
-    (K ~ round(Exp(mean)) per game) before the agents take over; positions
-    before the last random ply are excluded from the training-eligible region.
-    `face_up_leaves` plays the variant in which retained tiles are public; the
-    .slog header records it.
+    Both seats are built from `player_spec` (a `--player` value) as separate
+    agents, so two sampling seats draw independent seeds. seed=0 lets
+    play_game pick a random seed, so successive default runs differ.
+    `random_opening_mean` > 0 opens each game with a random number of
+    uniformly random plies (mean `random_opening_mean`) for position
+    diversity; positions before the last random ply are not training-eligible.
+    `face_up_leaves` plays the variant in which retained tiles are public.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     # fmt: off

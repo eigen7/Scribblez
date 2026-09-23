@@ -1,12 +1,9 @@
-"""Export a trained PositionEvalModel to ONNX.
+"""Export a PositionEvalModel to ONNX for the engine's TensorRT loader.
 
-The exported graph takes the same two inputs as the PyTorch model
-(`input_spatial`, `input_scalar`) and produces all head outputs (`wld`,
-`score_diff`, then one raw footprint-logit output per
-`scribblez.position_eval.model.PLACEMENT_HEAD_NAMES` entry, each (batch,
-FOOTPRINT_CLASSES) -- masking and softmax happen in the consumer, not the
-graph). The batch dimension is dynamic so the same file serves single-position
-and batched inference.
+The graph has the model's inputs (`input_spatial`, `input_scalar`) and its head
+outputs by name (`wld`, `score_diff`, then one raw footprint-logit output per
+placement head; consumers apply masking and softmax), with a dynamic batch
+dimension.
 """
 
 import warnings
@@ -27,15 +24,14 @@ from scribblez.onnx_export_util import (
 
 from .model import PLACEMENT_HEAD_NAMES
 
-# Frozen compiled-lexicon buffers are identical across every checkpoint, so rather
-# than bake ~24 MB into each per-generation ONNX they are shared: moved into one blob
-# beside the models that all generations reference via ONNX external data.
+# The frozen compiled-lexicon buffers (~24 MB) are identical in every checkpoint,
+# so instead of being baked into each export they live in one shared blob beside
+# the models, referenced as ONNX external data.
 _LEXICON_BLOB = "lexicon_frozen.bin"
 
 
 def _frozen_lexicon_names(model: torch.nn.Module) -> set[str]:
-    """The ONNX initializer names of the trunk's frozen lexicon-tool buffers (empty
-    if the model has no lexicon module)."""
+    """ONNX initializer names of the trunk's lexicon-module buffers, if any."""
     lex = getattr(getattr(model, "trunk", None), "lexicon_module", None)
     if lex is None:
         return set()
@@ -43,10 +39,8 @@ def _frozen_lexicon_names(model: torch.nn.Module) -> set[str]:
 
 
 def _externalize_frozen_lexicon(path: Path, frozen_names: set[str]):
-    """Move the frozen lexicon initializers out of the just-written ONNX into a shared
-    `lexicon_frozen.bin` beside it (ONNX external data). Every generation lays the same
-    (frozen) tensors out identically, so the blob is written once and later generations
-    only re-point at it; onnxruntime resolves it transparently at load."""
+    """Move the frozen lexicon initializers into the shared blob beside `path`
+    and point the graph at it."""
     if not frozen_names:
         return
     model = onnx.load(str(path))
@@ -55,8 +49,8 @@ def _externalize_frozen_lexicon(path: Path, frozen_names: set[str]):
     if not frozen:
         return
 
-    # Deterministic sorted-name layout with cumulative offsets -- identical across
-    # generations because the compiled DAWG never changes, so the blob is write-once.
+    # Sorted-name layout, identical across generations because the compiled
+    # lexicon never changes, so the blob only needs writing once.
     blob, chunks, layout, offset = path.parent / _LEXICON_BLOB, [], [], 0
     for init in frozen:
         raw = np.ascontiguousarray(numpy_helper.to_array(init)).tobytes()
@@ -87,8 +81,7 @@ def export_onnx(
     board_size: int = 15,
     opset: int = 17,
 ):
-    """Trace `model` and write an ONNX graph to `path` atomically (eval mode,
-    dynamic batch), stamping the input-encoding arm into its metadata_props."""
+    """Export `model` in eval mode to `path`, atomically."""
     path = Path(path)
     was_training = model.training
     model.eval()
@@ -96,11 +89,9 @@ def export_onnx(
     dummy_spatial = torch.zeros(1, spatial_planes, board_size, board_size, device=device)
     dummy_scalar = torch.zeros(1, scalar_size, device=device)
 
-    # The legacy TorchScript exporter (dynamo=False) is pinned deliberately: it
-    # produces the exact output names/order the C++ TensorRT decode binds to and
-    # that the parity tests assert. PyTorch 2.9 deprecated that path in favor of
-    # the torch.export-based exporter, so silence its expected DeprecationWarnings
-    # at this one call site rather than letting them flood every export.
+    # The legacy TorchScript exporter (dynamo=False) produces the output names
+    # and order the C++ loader binds to and the parity tests assert. It is
+    # deprecated since PyTorch 2.9; silence the warnings here.
     with atomic_output(path) as tmp_path, warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         torch.onnx.export(
@@ -116,19 +107,14 @@ def export_onnx(
             },
             opset_version=opset,
             dynamo=False,
-            # Constant folding bakes some weights into derived constants that
-            # TensorRT's parser-refitter cannot map back to ONNX initializers,
-            # which breaks weight refit onto an architecture-shared cached
-            # engine plan. Every weight must survive as a plain initializer.
+            # Folding would turn some weights into derived constants that the
+            # TensorRT refitter cannot map back to initializers
+            # (see onnx_export_util.py).
             do_constant_folding=False,
         )
         undo_initializer_dedup(tmp_path)
-        # Share the frozen compiled-lexicon buffers across generations instead
-        # of baking them into every export (no-op when the model has no lexicon
-        # module). The external-data location recorded inside the graph is the
-        # bare blob filename (resolved relative to the directory the model file
-        # is loaded from, not to the model file's own name), so it stays
-        # correct once tmp_path is renamed to path.
+        # The external-data location is a bare filename, resolved relative to
+        # the model's directory, so it stays valid after the rename to `path`.
         _externalize_frozen_lexicon(tmp_path, _frozen_lexicon_names(model))
         write_metadata(
             tmp_path,

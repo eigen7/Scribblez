@@ -1,12 +1,9 @@
-"""Max-move-per-lane lane-analysis: the GCG position dataset and decoding a model's
-predictions over it for the dashboard.
+"""The max-move-per-lane model's lane-analysis eval set and prediction decoding.
 
-Ground truth (per-lane best moves, the true union/score) comes from the engine via
-`scribblez.ffi.analyze_gcg`. This module owns the Python side: listing the dataset's
-GCG positions, building the model-input batch from them, and decoding a model's
-outputs into the per-(position, lane) predictions the dashboard stores. The trainer
-writes those predictions at each checkpoint; the dashboard API reads them back and
-pairs them with the engine ground truth. See docs/react_dashboard.md.
+The trainer runs the model over a fixed set of GCG positions at each checkpoint
+and stores the decoded per-(position, lane) predictions; the dashboard's Lane
+analysis view pairs them with the engine's ground truth from
+`scribblez.ffi.analyze_gcg`. See docs/react_dashboard.md.
 """
 
 from pathlib import Path
@@ -31,10 +28,8 @@ def dataset_gcgs(dataset_dir: str | Path) -> list[Path]:
 
 
 def load_inputs(dataset_dir: str | Path) -> tuple[list[str], np.ndarray]:
-    """(names, inputs): each position's flat model-input tensor, stacked (N, F).
-
-    `names` are the GCG file stems (the dashboard's position labels). Requires the
-    lexicon (analyze_gcg enumerates legal moves for the ground truth)."""
+    """(names, inputs): the GCG file stems (the dashboard's position labels) and
+    the positions' flat model inputs stacked as (N, F). Requires the lexicon."""
     names: list[str] = []
     rows: list[np.ndarray] = []
     for gcg in dataset_gcgs(dataset_dir):
@@ -45,9 +40,8 @@ def load_inputs(dataset_dir: str | Path) -> tuple[list[str], np.ndarray]:
 
 
 def split_input(inputs: np.ndarray, spatial_planes: int) -> tuple[np.ndarray, np.ndarray]:
-    """Split flat inputs (N, F) into the model's (spatial (N, P, 15, 15), scalar
-    (N, S)) halves -- the encoder lays spatial planes (channel-major) before the
-    scalar rack counts."""
+    """Split flat (N, F) inputs into (spatial (N, P, 15, 15), scalar (N, S)).
+    The encoder lays out the spatial planes first, channel-major."""
     cells = BOARD_SIZE * BOARD_SIZE
     spatial = inputs[:, : spatial_planes * cells].reshape(
         -1, spatial_planes, BOARD_SIZE, BOARD_SIZE
@@ -58,14 +52,11 @@ def split_input(inputs: np.ndarray, spatial_planes: int) -> tuple[np.ndarray, np
 
 @torch.no_grad()
 def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
-    """Run `model` over the dataset inputs and decode per-(position, lane) outputs:
+    """Run `model` over the dataset and decode what the dashboard displays:
 
-        occ        (N, 30, 15, 27) uint8   thresholded occupancy union (logit > 0)
-        score_pmf  (N, 30, 100)    float32 softmax over the score bins
-        has_move   (N, 30)         float32 sigmoid has-move probability
-
-    These are exactly what the dashboard needs to show the predicted union (vs the
-    true one), the score histogram, and the per-lane has-move call.
+    occ        (N, 30, 15, 27) uint8   thresholded occupancy union (logit > 0)
+    score_pmf  (N, 30, 100)    float32 softmax over the score bins
+    has_move   (N, 30)         float32 sigmoid has-move probability
     """
     spatial, scalar = split_input(inputs, spatial_planes)
     sp = torch.from_numpy(np.ascontiguousarray(spatial)).to(device)

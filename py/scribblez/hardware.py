@@ -15,9 +15,8 @@ CGROUP_V1_CPU_PERIOD = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
 
 
 def _cgroup_quota_cpus() -> int | None:
-    """CPU count implied by the cgroup CPU quota (ceil(quota / period)), or
-    None when no quota is in force -- v2's "max", v1's quota of -1, or neither
-    cgroup version's files present (not running under Linux cgroups)."""
+    """CPU count implied by the cgroup CPU quota, rounded up, or None when no
+    quota is in force or no cgroup CPU files exist."""
     try:
         quota_str, period_str = CGROUP_V2_CPU_MAX.read_text().split()
         if quota_str == "max":
@@ -37,19 +36,14 @@ def _cgroup_quota_cpus() -> int | None:
 
 
 def default_thread_count() -> int:
-    """Number of logical processors available to this process: its CPU
-    affinity mask (so taskset/cgroup cpusets are respected), further capped by
-    the cgroup CPU quota when one is set.
+    """The project-wide default size for compute-bound thread pools: the
+    logical processors in this process's affinity mask, capped by the cgroup
+    CPU quota when one is set.
 
-    The quota cap matters on hosts that limit CPU by cgroup quota rather than
-    cpuset -- a rented container, notably: a 12-vCPU one on a 96-core host reports an
-    affinity mask of 96, and without the quota cap a thread pool sized from
-    that oversubscribes the container by 8x.
-
-    This is the project-wide default for worker-thread counts: compute-bound
-    pools (self-play game generation, Monte Carlo workers) default to using
-    every available logical processor. The C++ counterpart is
-    util::default_thread_count() (util/hardware.h).
+    The quota cap matters in containers limited by quota rather than cpuset,
+    such as rented cloud machines: a 12-vCPU container on a 96-core host
+    reports an affinity mask of 96, and a pool sized from that oversubscribes
+    it 8x. The C++ counterpart is util::default_thread_count() (util/misc.h).
     """
     affinity = len(os.sched_getaffinity(0))
     quota_cpus = _cgroup_quota_cpus()

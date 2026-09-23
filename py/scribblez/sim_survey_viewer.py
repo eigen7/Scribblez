@@ -1,16 +1,14 @@
 """The data behind the sim-survey viewer (web ?tool=survey).
 
-Joins a finished sim candidate survey (sim_candidate_survey.py) into what the
-browser draws, one entry per position where a play from outside the HastyBot
-top moves beat them: the board at the decision point, the mover's rack, and
-the confirming sim's moves -- the outside plays first, then the top moves --
-each with the squares it places and its sim statistics.
+Turns a finished sim candidate survey (sim_candidate_survey.py) into what the
+browser draws: one entry per position where a move outside HastyBot's top
+moves beat them, with the board, the mover's rack, and the confirming sim's
+moves (outside moves first) with their placed squares and sim statistics.
 
-The survey files name moves in GCG notation and do not store boards, so the
-board is rebuilt here by replaying the position's exported .gcg, which takes
-nothing more than reading that notation: a position ("K6" reads down column
-K from row 6, "6K" across row 6) and a word whose '.' squares are already on
-the board and whose lowercase letters are blanks.
+Survey files do not store boards, so the board is rebuilt by replaying the
+position's exported .gcg. That needs only GCG move notation, parsed here
+without the engine: "K6" reads down column K from row 6, "6K" across row 6,
+'.' in the word marks a tile already on the board, and lowercase is a blank.
 """
 
 import json
@@ -167,8 +165,8 @@ def move_entry(position: dict, entry: dict, finding: Finding | None) -> dict:
 def position_entry(
     stem: str, position: dict, cut: int, gcg_dir: Path, min_sigmas: float
 ) -> dict | None:
-    """The viewer's entry for one surveyed position, or None when no outside play
-    sat `min_sigmas` above the cut's best there."""
+    """The viewer's entry for one surveyed position, or None when no outside
+    move is at least `min_sigmas` above the cut's best."""
     key = (stem, position["game"], position["turn"])
     found = {f.outside.move: f for f in position_findings(key, position, cut)}
     if not any(f.sigmas >= min_sigmas for f in found.values()):
@@ -204,10 +202,10 @@ def position_entry(
 def viewer_data(
     survey_dir: Path, min_sigmas: float = MIN_SIGMA, gcg_dir: Path | None = None
 ) -> dict:
-    """Everything the viewer loads: the positions of `survey_dir`'s survey files
-    where an outside play sat `min_sigmas` standard errors above the cut's best,
-    strongest first. `gcg_dir` holds the positions' exported games (default: the
-    gcg/ beside the survey files)."""
+    """Everything the viewer loads: the positions in `survey_dir`'s survey files
+    where an outside move is at least `min_sigmas` standard errors above the
+    cut's best, strongest first. `gcg_dir` defaults to gcg/ beside the survey
+    files."""
     gcg_dir = gcg_dir or survey_dir / "gcg"
     positions = []
     header = {}

@@ -1,4 +1,9 @@
-"""ctypes wrapper around libscribblez_ffi.so."""
+"""ctypes bindings to the engine's C API (libscribblez_ffi.so).
+
+The C declarations and their contracts live in
+engine/include/serve/scribblez_ffi.h. Dictionary-dependent calls go through one
+lazily created, process-wide session bound to DEFAULT_LEXICON.
+"""
 
 import ctypes
 import json
@@ -379,12 +384,11 @@ _STRUCT_DTYPES: dict[str, np.dtype] = {}
 
 
 def format_layout() -> dict:
-    """The engine's description of the sidecar binary formats (.slog / .sobs /
-    .mset): per struct the field names, offsets, and numpy dtype codes --
-    compiler-derived, so they cannot drift from the packed C++ structs -- plus
-    magics, versions, flag bits, and the Move/Glyph code tables
-    (engine/include/data/format_layout.h documents the shape). Sessionless;
-    parsed once per process."""
+    """The engine's description of its binary formats (.slog / .sobs / .mset):
+    each struct's field names, offsets and numpy dtype codes, plus magics,
+    versions, flag bits, code tables and shared constants. The engine derives it
+    from the packed C++ structs, so it cannot drift from them
+    (engine/include/data/format_layout.h). Cached per process."""
     global _FORMAT_LAYOUT
     if _FORMAT_LAYOUT is None:
         _FORMAT_LAYOUT = json.loads(_lib().scribblez_format_layout_json().decode())
@@ -392,8 +396,7 @@ def format_layout() -> dict:
 
 
 def struct_dtype(name: str) -> np.dtype:
-    """The numpy dtype of one engine-described struct (format_layout's
-    "structs" keys), nested struct references resolved recursively."""
+    """The numpy dtype of a struct named in format_layout()["structs"]."""
     if name not in _STRUCT_DTYPES:
         desc = format_layout()["structs"][name]
         names, formats, offsets = [], [], []
@@ -412,9 +415,6 @@ def struct_dtype(name: str) -> np.dtype:
     return _STRUCT_DTYPES[name]
 
 
-# The lexicon this process's FFI session binds to. Every dictionary-dependent
-# entry point (encoding, GCG analysis, DataLoader construction) is a method of
-# one C++ ScribblezSession, created lazily on first use.
 DEFAULT_LEXICON = "NWL23"
 
 _SESSION_HANDLE = None
@@ -422,14 +422,13 @@ _OPP_LEAVE_INPUT = False
 
 
 def set_opp_leave_input(enabled: bool):
-    """Choose the open-leaves experiment arm before any dictionary-dependent
-    FFI call: whether the input layout includes the opponent-leave counts
-    block (the open-leaves information condition of
-    docs/plans/sim_residual_feedback.md -- the opponent's retained leave is public,
-    their replenishment draws stay hidden). The session's shape/size queries
-    report whichever layout it encodes, so no downstream code branches on this.
-    The flag is baked into the process-wide session at creation, so flipping it
-    afterwards is an error.
+    """Choose whether the session's input layout includes the opponent-leave
+    counts block (the open-leaves arm, where the opponent's retained leave is
+    public but their draws stay hidden).
+
+    Must be called before the session exists; changing it afterwards raises.
+    The session's shape queries then report the chosen layout, so downstream
+    code need not branch on it.
     """
     global _OPP_LEAVE_INPUT
     if _SESSION_HANDLE is not None and _OPP_LEAVE_INPUT != enabled:
@@ -438,12 +437,8 @@ def set_opp_leave_input(enabled: bool):
 
 
 def _session() -> int:
-    """The process-wide ScribblezSession handle, created on first use.
-
-    Constructing the session loads the lexicon's .kwg; a missing lexicon throws
-    out of the C++ constructor, which terminates the process (nothing useful can
-    be done without a dictionary).
-    """
+    """The process-wide session handle, created on first use. Creating it
+    loads the lexicon's .kwg; a missing lexicon terminates the process."""
     global _SESSION_HANDLE
     if _SESSION_HANDLE is None:
         _SESSION_HANDLE = _lib().scribblez_session_new(
@@ -482,7 +477,7 @@ def row_size_floats() -> int:
 
 
 def input_floats() -> int:
-    """Floats in a single input tensor (spatial + scalar)."""
+    """Floats in one flat input row (spatial + scalar)."""
     return _lib().scribblez_input_floats(_session())
 
 
@@ -505,14 +500,11 @@ def encode_score_diff_sweep(
     diff_hi: int,
     post_move: bool = True,
 ) -> np.ndarray:
-    """Encode sampled positions swept across a score-differential range.
+    """Re-encode a .slog game's sampled position once per score differential
+    in [diff_lo, diff_hi], varying nothing else.
 
-    Replays positions of the .slog file at `path` and re-encodes each once per
-    integer score differential in [diff_lo, diff_hi], varying only the active
-    player's score advantage. With `game_idx >= 0` only that game is encoded
-    (R rows); with `game_idx < 0` every game is encoded (num_games * R rows,
-    position-major). Returns a (rows, input_floats()) float32 array, where
-    R = diff_hi - diff_lo + 1.
+    Returns (R, input_floats()) float32 with R = diff_hi - diff_lo + 1, or
+    (num_games * R, input_floats()), game-major, when game_idx < 0.
     """
     r = diff_hi - diff_lo + 1
     if r <= 0:
@@ -540,14 +532,12 @@ def decode_rows(
     turn_idx: np.ndarray,
     post_move: bool = True,
 ) -> np.ndarray:
-    """Decode explicit training rows of one .slog file by position identity.
+    """Decode specific training rows of one .slog, addressed by
+    (game_idx[j], turn_idx[j]).
 
-    Row j is the position at (game_idx[j], turn_idx[j]), encoded exactly like a
-    DataLoader training row (input floats followed by the label block) with no
-    symmetry transpose. Returns a (n, row_size_floats()) float32 array. Serves
-    consumers that pair rows with per-position sidecar data (the .sobs sim
-    observations) and so must address positions by identity rather than stream
-    them shuffled.
+    Rows are encoded exactly as the DataLoader encodes them, without symmetry
+    augmentation: (n, row_size_floats()) float32. For consumers that pair rows
+    with per-position sidecar data such as .sobs sim observations.
     """
     games = np.ascontiguousarray(game_idx, dtype=np.int64)
     turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
@@ -569,9 +559,9 @@ def decode_rows(
 
 
 def move_encoding_dims() -> tuple[int, int, int, int]:
-    """The move set evaluation model's move-encoder layout, owned by the engine
-    (scribblez/move_set_encoder.h): (max_placed, num_scalars,
-    letter_vocab, cells). Needs no session -- it is a pure layout query."""
+    """The move set model's move-encoder dims (engine
+    training/move_set_encoder.h): (max_placed, num_scalars, letter_vocab,
+    cells)."""
     max_placed = ctypes.c_int32()
     num_scalars = ctypes.c_int32()
     letter_vocab = ctypes.c_int32()
@@ -586,16 +576,15 @@ def move_encoding_dims() -> tuple[int, int, int, int]:
 
 
 def move_encoding_version() -> int:
-    """The engine's move-feature semantics version (move_set_encoder.h
-    kMoveEncodingVersion). Recorded in mset checkpoints and ONNX metadata; a
-    model trained under one version must never run against another."""
+    """The engine's move-encoding version (training/move_set_encoder.h
+    kMoveEncodingVersion), recorded in move set checkpoints and ONNX metadata so
+    a model is never run under a different encoding than it was trained on."""
     return int(_lib().scribblez_move_set_encoding_version())
 
 
 def score_diff_input_layout() -> tuple[int, float]:
-    """(scalar_index, scale) locating the board input's score-diff scalar for
-    this session's arm, so a caller can read a position's pre-move differential
-    in points as input_scalar[scalar_index] * scale."""
+    """(scalar_index, scale) such that input_scalar[scalar_index] * scale is
+    the position's score differential in points, under the session's arm."""
     index = ctypes.c_int32()
     scale = ctypes.c_float()
     _lib().scribblez_score_diff_input_layout(_session(), ctypes.byref(index), ctypes.byref(scale))
@@ -603,14 +592,14 @@ def score_diff_input_layout() -> tuple[int, float]:
 
 
 def encode_moves(moves: np.ndarray, pre_move_score_diffs: np.ndarray) -> dict[str, np.ndarray]:
-    """Encode a (M,) array of packed 16-byte Move records
-    (scribblez.sim_evidence.sobs.MOVE_DTYPE) into the move set evaluation
-    model's move-encoder inputs, via the engine's encoder (the single source
-    of truth, shared with the move set evaluation agent). `pre_move_score_diffs`
-    is the (M,) per-move mover pre-move score advantage in points, used for the
-    resultant post-move differential feature. Returns letters/squares
-    (M, max_placed) int64, blanks and tile_mask (M, max_placed) bool, and
-    scalars (M, num_scalars) float32.
+    """Encode (M,) Move records (sim_evidence.sobs.MOVE_DTYPE) into the move
+    set model's move-encoder inputs, using the same engine encoder the move set
+    agent uses.
+
+    `pre_move_score_diffs` (M,) is the mover's score advantage in points before
+    each move; the encoder derives the post-move differential from it. Returns
+    letters and squares (M, max_placed) int64, blanks and tile_mask
+    (M, max_placed) bool, scalars (M, num_scalars) float32.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -646,9 +635,8 @@ def encode_moves(moves: np.ndarray, pre_move_score_diffs: np.ndarray) -> dict[st
 
 
 def cross_check_plane0() -> int:
-    """The board input's first cross-check plane: the 26 horizontal-play letter
-    planes start here and the 26 vertical-play ones follow, so a
-    cross_check_deltas entry's (axis, letter) is plane this + 26 * axis + letter."""
+    """Index of the board input's first cross-check plane. A cross_check_deltas
+    entry's (axis, letter) is plane cross_check_plane0() + 26 * axis + letter."""
     return _lib().scribblez_cross_check_plane0()
 
 
@@ -659,18 +647,17 @@ def cross_check_deltas(
     move_counts: np.ndarray,
     moves: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """The cross-check entries each candidate move changes on its position's
-    board -- the sparse form of the post-move cross-check planes the position
-    evaluation teacher sees (engine training/cross_check_delta.h, which owns the
-    layout).
+    """The cross-check entries each candidate move changes: a sparse form of
+    the post-move cross-check planes (engine training/cross_check_delta.h).
 
     Position j is the pre-move decision point (game_idx[j], turn_idx[j]) of the
-    .slog at `path`; its candidates are the next move_counts[j] records of the
-    (M,) MOVE_DTYPE array `moves`, M = sum(move_counts). Returns, each
-    (M, max_cross_deltas): axes (0 = the horizontal-play cross-check planes,
-    1 = the vertical-play ones) and squares (r*15+c) int64, old_masks and
-    new_masks uint32 (bit L set iff letter L is legal there before / after the
-    move), and delta_mask bool (True on real entries; pads are all-zero).
+    .slog at `path`; its candidates are the next move_counts[j] records of
+    `moves` (MOVE_DTYPE). Returns, each (M, max_cross_deltas):
+        axes         int64   0 = horizontal-play planes, 1 = vertical-play
+        squares      int64   r*15 + c
+        old_masks    uint32  bit L set iff letter L is legal there before the move
+        new_masks    uint32  ... after the move
+        delta_mask   bool    True on real entries; padding is all-zero
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -721,18 +708,14 @@ def gcg_sim_evidence(
     seed: int = 0,
     open_leaves: bool = False,
 ) -> tuple[np.ndarray, int]:
-    """Sim evidence for a penultimate-bingo analysis GCG's final decision point.
+    """Sim the top-K moves by HastyBot equity at the decision point before a
+    GCG's final recorded move, with common random numbers.
 
-    Replays to the state before the final recorded move, ranks the mover's
-    legal moves by HastyBot equity, and sims the top-K with common random
-    numbers. `open_leaves` starts every rollout's opponent from the leave
-    their last recorded move retained (the open-leaves information condition;
-    replenishments stay hidden and sampled) -- an empty leave (bingo, or no
-    recorded move) is legitimate and equivalent to fully hidden. Returns
-    (records, played_rank): `records` is a structured array in the .sobs
-    record layout (scribblez.sim_evidence.sobs.RECORD_DTYPE) and
-    `played_rank` is the GCG's final move's index within it (-1 if outside
-    the top-K). Raises on a parse error or an endgame decision point.
+    With `open_leaves`, each rollout's opponent starts from the leave their last
+    recorded move kept, with draws still sampled. Returns (records,
+    played_rank): .sobs records (sim_evidence.sobs.RECORD_DTYPE) and the index
+    of the GCG's final move among them, or -1 if it is outside the top K.
+    Raises on a parse error or an endgame decision point.
     """
     from scribblez.sim_evidence.sobs import RECORD_DTYPE
 
@@ -751,15 +734,16 @@ def gcg_sim_evidence(
     )
     if n < 0:
         raise OSError("gcg_sim_evidence failed (parse error or endgame decision point)")
-    # View over an owned bytes copy. (A structured-array .copy() would rewrite
-    # field by field and leave the dtype's padding bytes uninitialized, breaking
-    # byte-level comparisons of the records.)
+    # Copy via bytes rather than a structured-array .copy(), which copies field
+    # by field and leaves padding bytes uninitialized, breaking byte-level
+    # comparisons of the records.
     records = np.frombuffer(bytes(buf.raw[: n * RECORD_DTYPE.itemsize]), dtype=RECORD_DTYPE)
     return records, int(played_rank.value)
 
 
 def _read_string_ffi(fn, path: str | Path, game_idx: int, post_move: bool, what: str) -> str:
-    """Call a (session, path, game_idx, post_move, out, cap)->len FFI, growing the buffer once."""
+    """Call a (session, path, game_idx, post_move, out, cap) -> len string FFI,
+    retrying once with an exact-size buffer if the first was too small."""
     encoded = str(path).encode("utf-8")
     cap = 4096
     out = ctypes.create_string_buffer(cap)
@@ -781,13 +765,12 @@ def dump_position_json(path: str | Path, game_idx: int, post_move: bool = True) 
 
 
 def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
-    """Parse GCG text into the max-move-per-lane analysis bundle.
+    """The max-move-per-lane analysis of the position after a GCG's last move.
 
-    Returns (bundle, model_input): `bundle` is the lane-analysis JSON parsed to a
-    dict (the web board/bonuses/rack the dashboard renders, plus per-lane ground
-    truth and maximal plays); `model_input` is the flat float32 model-input tensor
-    for the analysis position (board after all recorded moves, on-move player's
-    rack). Raises IOError on a parse error.
+    Returns (bundle, model_input): `bundle` is the dashboard's lane-analysis
+    JSON (board, rack, per-lane ground truth and maximal plays) and
+    `model_input` the flat float32 model input, with the side to move's rack.
+    Raises OSError on a parse error.
     """
     lib = _lib()
     fn = lib.scribblez_max_move_per_lane_analyze_gcg
@@ -809,12 +792,11 @@ def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
 
 @dataclass(frozen=True)
 class InputArm:
-    """A board-row encoding arm together with the input widths a model built
-    for it declares. The engine encodes under the arm and refuses a width it
-    does not produce, so a model from another encoding era is caught at the
-    encode call rather than fed a misaligned row. `session_input_arm()` is the
-    process-wide session's own; a served ONNX model's comes from its metadata
-    and declared input shapes."""
+    """An input-encoding arm plus the input widths a model built for it
+    declares. The engine refuses to encode a width the arm does not produce,
+    so a model from an older encoding fails at the encode call instead of
+    being fed a misaligned row. For a served ONNX model these come from its
+    metadata and input shapes."""
 
     opp_leave_input: bool
     spatial_planes: int
@@ -825,7 +807,7 @@ class InputArm:
         return self.spatial_planes * BOARD_CELLS + self.scalar_size
 
     def split(self, flat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """A flat row under this arm as its (spatial (P, 15, 15), scalar (S,)) halves."""
+        """Split a flat row into (spatial (P, 15, 15), scalar (S,))."""
         spatial = flat[: self.spatial_planes * BOARD_CELLS].reshape(self.spatial_planes, 15, 15)
         return spatial, flat[self.spatial_planes * BOARD_CELLS :]
 
@@ -841,16 +823,13 @@ def session_input_arm() -> InputArm:
 
 
 def analyze_position_eval_gcg(gcg_text: str, arm: InputArm) -> np.ndarray:
-    """Encode a dataset GCG's post-move position into the position evaluation
-    model's flat float32 input tensor under `arm` (arm.input_floats long; the
-    session contributes only its dictionary).
+    """Encode an eval-set GCG for the position evaluation model under `arm`.
 
-    The position is the board after the final recorded move, encoded from the POV of
-    the player that made it (its leave is the encode-time rack) -- the same seat the
-    Monte-Carlo ground truth scores; the opponent-leave arm also reads what the
-    opponent's last move retained. Raises ValueError when the arm does not encode
-    the declared widths (a model from another encoding era), OSError on a parse error
-    or a non-PLAY final move.
+    The position is the board after the final recorded move, from the POV of
+    the player who made it, with that player's leave as the rack; this is the
+    seat the Monte-Carlo ground truth scores. Only the session's dictionary is
+    used, not its arm. Raises ValueError when the arm does not produce the
+    declared widths, OSError on a parse error or a non-PLAY final move.
     """
     lib = _lib()
     inp = np.zeros(arm.input_floats, dtype=np.float32)
@@ -871,14 +850,14 @@ def analyze_position_eval_gcg(gcg_text: str, arm: InputArm) -> np.ndarray:
 
 
 def collapse_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarray:
-    """Collapse a dataset GCG's post-move placement logits into per-cell marginals.
+    """Collapse the four placement heads' raw footprint logits for an eval-set
+    GCG into (4, 15, 15) per-cell marginals.
 
-    `raw` is the four placement heads' raw footprint logits, shape
-    (4, footprint num_classes) or flat; the result is the four board-frame
-    (4, 15, 15) occupancy marginals -- Pr[the next move covers cell] for the
-    plays heads and Pr[covers cell AND that seat wins] for the win heads -- via
-    the same mask + softmax + scatter the engine applies to the .mset teacher
-    planes. OSError on a parse error or a non-PLAY final move.
+    The plays heads give Pr[the next move covers the cell]; the win heads give
+    Pr[covers the cell and that seat wins]. Uses the same legality mask, softmax
+    and scatter the engine applies to the .mset teacher planes. `raw` is
+    (4, num_classes) or flat. Raises OSError on a parse error or a non-PLAY
+    final move.
     """
     consts = format_layout()["constants"]
     heads = len(consts["placement_head_names"])
@@ -903,15 +882,13 @@ def collapse_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarr
 
 
 def masked_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarray:
-    """The four placement heads' MASKED footprint distributions for a dataset GCG.
+    """The four placement heads' footprint distributions for an eval-set GCG
+    after the engine's legality mask and masked softmax: (4, num_classes), with
+    illegal footprints at zero.
 
-    `raw` is the four heads' raw footprint logits, shape (4, num_classes) or flat;
-    the result is (4, num_classes), each head a distribution over the 2927 classes
-    (illegal footprints at zero) via the same board-legality mask + masked softmax
-    the engine applies to the .mset teacher target -- but per class, not collapsed
-    to cells. This is the exact distilled placement target, exposed so its
-    per-footprint sparsity/fidelity can be measured. OSError on a parse error or a
-    non-PLAY final move.
+    This is the exact .mset distillation target, before collapsing to cells,
+    exposed for measuring its sparsity. `raw` is (4, num_classes) or flat.
+    Raises OSError on a parse error or a non-PLAY final move.
     """
     consts = format_layout()["constants"]
     heads = len(consts["placement_head_names"])
@@ -936,10 +913,9 @@ def masked_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarray
 
 
 def legal_position_eval_placement(gcg_text: str) -> np.ndarray:
-    """Computes each of the four placement heads' per-cell legality for a dataset
-    GCG's post-move position: (4, 15, 15) bool, True where some legal anchored
-    footprint (see collapse_position_eval_placement) covers the cell. OSError on
-    a parse error or a non-PLAY final move.
+    """(4, 15, 15) bool per placement head: True where some legal anchored
+    footprint covers the cell, for an eval-set GCG. Raises OSError on a parse
+    error or a non-PLAY final move.
     """
     consts = format_layout()["constants"]
     heads = len(consts["placement_head_names"])
@@ -961,9 +937,9 @@ def legal_position_eval_placement(gcg_text: str) -> np.ndarray:
 
 
 def _raise_analysis_error(reason: str):
-    """The engine's one -1 covers two callers' concerns: a width the arm does not
-    encode (the caller's model is wrong for today's layout) and a position that
-    does not parse (the GCG is wrong)."""
+    """Map the engine's error message to an exception type. The engine returns
+    -1 both for a width the arm does not encode (the model is wrong: ValueError)
+    and for a GCG that does not parse (the input is wrong: OSError)."""
     if "the arm encodes" in reason:
         raise ValueError(reason)
     raise OSError(reason or "GCG parse error or non-PLAY final move")
@@ -972,15 +948,13 @@ def _raise_analysis_error(reason: str):
 def analyze_position_eval_gcg_leaves(
     gcg_text: str, leave: str, opp_leave: str | None, arm: InputArm
 ) -> np.ndarray:
-    """Encode the analysis position with explicit alternate leaves ('?' = a
-    blank) instead of the GCG's recorded ones -- a dashboard what-if: `leave`
-    for the POV and, unless None, `opp_leave` for the opponent (read by the
-    opponent-leave arm only).
+    """analyze_position_eval_gcg with substitute leaves, for the dashboard's
+    what-if: `leave` for the POV player and, unless None, `opp_leave` for the
+    opponent (read only by the opponent-leave arm). '?' is a blank.
 
-    Board, scores, and moves are unchanged; only the rack, opponent-leave, and
-    unseen-pool features reflect the new leaves. Raises ValueError with a
-    human-readable reason on a size mismatch, unavailable tiles, or a width the
-    arm does not encode; OSError on a GCG parse error.
+    Only the rack, opponent-leave and unseen-pool features change. Raises
+    ValueError with a readable reason on a bad or unavailable leave or a width
+    the arm does not encode.
     """
     lib = _lib()
     inp = np.zeros(arm.input_floats, dtype=np.float32)
@@ -1003,14 +977,12 @@ def analyze_position_eval_gcg_leaves(
 
 
 def position_eval_board_json(gcg_text: str) -> dict:
-    """The web-render board bundle for a dataset GCG's post-move position (board
-    / bonuses / rack / tile_scores / start_player / last_move / opp_leave), parsed
-    to a dict.
+    """The web board bundle (board, bonuses, rack, tile_scores, start_player,
+    last_move, opp_leave) for the position analyze_position_eval_gcg encodes.
 
-    The board is the position after the final recorded move; the rack is the leave of
-    the player that made it (the evaluated POV); opp_leave is what the opponent's last
-    recorded move retained ('?' = a blank). Raises IOError on a parse error or a
-    non-PLAY final move.
+    The rack is the POV player's leave; opp_leave is what the opponent's last
+    move kept ('?' is a blank). Raises OSError on a parse error or a non-PLAY
+    final move.
     """
     lib = _lib()
     fn = lib.scribblez_position_eval_board_json
@@ -1029,8 +1001,8 @@ def position_eval_board_json(gcg_text: str) -> dict:
 
 @dataclass(frozen=True)
 class GcgPositionInputs:
-    """A position-set .gcg's decision point as the move set evaluation model's
-    inputs (see gcg_position_inputs)."""
+    """A position-set GCG's decision point as move set model inputs
+    (see gcg_position_inputs)."""
 
     input_spatial: np.ndarray  # (planes, 15, 15) float32
     input_scalar: np.ndarray  # (scalars,) float32
@@ -1038,7 +1010,7 @@ class GcgPositionInputs:
     moves: np.ndarray  # (N,) MOVE_DTYPE: the full legal move list, equity-ranked
 
 
-# The legal-move buffer's first-try capacity; a busier position retries at the
+# First-try capacity of the legal-move buffer; a larger position retries at the
 # reported count.
 _GCG_MOVES_FIRST_CAP = 4096
 
@@ -1050,15 +1022,15 @@ def gcg_position_inputs(
     spatial_planes: int,
     scalar_size: int,
 ) -> GcgPositionInputs:
-    """Encode a position-set .gcg's decision point (final recorded state, side
-    to move next, rack from its #RackN pragma) for the move set evaluation
-    model: the mover's pre-move board row under the given arm (independent of
-    the process-wide session's arm -- a checkpoint's config names its own),
-    the pre-move score differential, and the FULL legal move list in the
-    equity ranking the trajectory generator drew its candidates from.
-    `spatial_planes` / `scalar_size` are the model's (its checkpoint config);
-    a width the arm does not encode is a ValueError, as is a GCG that does
-    not parse."""
+    """Encode a position-set GCG's decision point for the move set model.
+
+    The decision point is the state after the last recorded move, with the side
+    to move's rack taken from its #RackN pragma. Returns the board row under the
+    given arm (a checkpoint's own, not the session's), the score differential,
+    and every legal move in the equity order the trajectory generator draws
+    candidates from. The widths come from the model's checkpoint config.
+    Raises ValueError on a width the arm does not encode or an unparseable GCG.
+    """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
     lib = _lib()
@@ -1095,12 +1067,10 @@ def gcg_position_inputs(
 
 
 def gcg_position_board_json(gcg_text: str, open_leaves: bool) -> dict:
-    """The trajectory pane's web-render bundle for a position-set .gcg's
-    decision point: the mover's-POV GameState (board / bonuses / rack / scores /
-    bag and opponent-rack counts / tile_scores) plus `mover`, `opp_leave`,
-    `last_move`, and `moves` -- every legal move's GCG notation, in
-    gcg_position_inputs' order under the same `open_leaves`. Raises OSError on
-    a parse error."""
+    """The dashboard trajectory pane's bundle for a position-set GCG's decision
+    point: the mover's-POV GameState plus `mover`, `opp_leave`, `last_move`,
+    and `moves`, every legal move's GCG notation in gcg_position_inputs' order
+    (under the same `open_leaves`). Raises OSError on a parse error."""
     lib = _lib()
     fn = lib.scribblez_gcg_position_board_json
     encoded = gcg_text.encode("utf-8")
@@ -1132,7 +1102,7 @@ def sample_slog(dst_path: str | Path, picks: list[tuple[str | Path, int]]):
 
 
 def read_file_header(path: str | Path) -> tuple[int, int]:
-    """Read a .slog header. Returns (num_positions, file_size)."""
+    """Read a .slog header. Returns (num_games, file_size)."""
     num_pos = ctypes.c_int64()
     file_sz = ctypes.c_int64()
     rc = _lib().scribblez_read_file_header(
@@ -1151,12 +1121,10 @@ def read_file_header(path: str | Path) -> tuple[int, int]:
 
 
 class NativeDataLoader:
-    """Python wrapper around the C++ DataLoader via FFI.
+    """The C++ DataLoader (engine/include/data/data_loader.h).
 
-    `task` selects which training row the loader decodes from each .slog game:
-    "position_eval" (the position-evaluation row, over each game's eligible-turn prefix)
-    or "max_move_per_lane" (the per-lane row, over every turn). It fixes the row
-    width and is baked into the handle at construction.
+    `task` fixes which training row it decodes: "position_eval" (over each
+    game's training-eligible turns) or "max_move_per_lane" (over every turn).
     """
 
     _TASK_CODES = {"position_eval": 0, "max_move_per_lane": 1}
@@ -1207,12 +1175,8 @@ class NativeDataLoader:
         turns_per_game: int = 0,
         epoch_index: int = 0,
     ) -> int:
-        """Begin a new epoch. Returns number of complete batches.
-
-        turns_per_game: 0 = every eligible turn of every game; k > 0 = k turns
-        per game per epoch, with epoch_index selecting which turns so successive
-        epochs cover distinct turns.
-        """
+        """Begin an epoch; returns the number of complete batches. See
+        SlogDataset.iter_batches for turns_per_game and epoch_index."""
         self._batch_size = batch_size
         return self._lib.scribblez_dl_epoch_start(
             self._handle,
@@ -1225,12 +1189,11 @@ class NativeDataLoader:
         )
 
     def load_batch(self) -> np.ndarray | None:
-        """Load the next batch. Returns None when epoch is exhausted.
+        """The next batch as a fresh array, or None when the epoch is done.
 
-        Raises OSError if a registered .slog became unreadable mid-epoch (the
-        native loader reports -1 rather than blocking forever on a load that
-        can never complete -- e.g. a window file deleted or truncated under the
-        reader); the specific file is named on stderr.
+        Raises OSError if a registered .slog became unreadable mid-epoch, e.g.
+        deleted or truncated under the reader; the native loader names the file
+        on stderr.
         """
         buf = np.empty((self._batch_size, self._row_floats), dtype=np.float32)
         ptr = buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
