@@ -1,7 +1,7 @@
 #include "data/gcg_reader.h"
 
+#include "data/gcg_writer.h"
 #include "game/tile.h"
-#include "serve/web_server.h"
 #include "util/assert.h"
 #include "util/exception.h"
 

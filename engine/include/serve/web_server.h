@@ -104,12 +104,6 @@ class WebSession {
   int ws_fd_ = -1;
 };
 
-// Standard Scrabble coordinate notation for a play, e.g. "8H WAREZ 54"
-// (horizontal) or "H8 WAREZ 54" (vertical). Newly placed blanks are lowercased.
-// Non-plays render as "exch AQWW" (surrendered tiles, '?' for a blank) or
-// "pass".
-std::string move_to_notation(const Board& board, const Move& move);
-
 // The inputs to game_state_json(): the front-end's GameState, seen from one
 // seat ("my" side). Built either from a MoveRequest, on the human's own turn,
 // or from a live Game, e.g. at game end.

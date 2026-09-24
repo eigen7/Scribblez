@@ -34,10 +34,17 @@ char glyph_char(Glyph g) {
   return g.is_blank() ? char(ch - 'A' + 'a') : ch;
 }
 
-// The main word, lowercase for a blank. Played-through squares are '.' in GCG
-// form, or with `spell_board_tiles`, their letters with each run in
-// parentheses.
-std::string played_word(const Board& board_before, const Move& m, bool spell_board_tiles = false) {
+// How played_word writes the squares a move plays through.
+enum class ThroughTiles : uint8_t {
+  DOTTED,     // '.', as GCG does
+  BRACKETED,  // their letters, each run in parentheses
+  SPELLED,    // their letters, unmarked
+};
+
+// The main word, lowercase for a blank.
+std::string played_word(const Board& board_before, const Move& m,
+                        ThroughTiles through_tiles = ThroughTiles::DOTTED) {
+  const bool bracket = through_tiles == ThroughTiles::BRACKETED;
   std::string out;
   bool in_run = false;
   const int dr = m.horizontal() ? 0 : 1, dc = m.horizontal() ? 1 : 0;
@@ -47,17 +54,18 @@ std::string played_word(const Board& board_before, const Move& m, bool spell_boa
   while (board_before.in_bounds(r, c)) {
     const bool through = !board_before.at(r, c).is_empty();
     if (!through && gi >= n) break;
-    if (spell_board_tiles && through != in_run) out.push_back(through ? '(' : ')');
+    if (bracket && through != in_run) out.push_back(through ? '(' : ')');
     in_run = through;
     if (through) {
-      out.push_back(spell_board_tiles ? glyph_char(board_before.at(r, c)) : '.');
+      out.push_back(through_tiles == ThroughTiles::DOTTED ? '.'
+                                                          : glyph_char(board_before.at(r, c)));
     } else {
       out.push_back(glyph_char(m.glyph(gi++)));
     }
     r += dr;
     c += dc;
   }
-  if (spell_board_tiles && in_run) out.push_back(')');
+  if (bracket && in_run) out.push_back(')');
   return out;
 }
 
@@ -190,18 +198,28 @@ void write_gcg_endgame_adjustments(std::string& out, const GameLog& log,
 
 std::string spelled_move_notation(const Board& board_before, const Move& m) {
   if (m.type() != MoveType::PLAY) return move_notation(board_before, m);
-  return position(board_before, m) + " " + played_word(board_before, m, /*spell_board_tiles=*/true);
+  return position(board_before, m) + " " + played_word(board_before, m, ThroughTiles::BRACKETED);
+}
+
+std::string move_to_notation(const Board& board, const Move& move) {
+  switch (move.type()) {
+    case MoveType::PLAY:
+      return std::format("{} {} {}", position(board, move),
+                         played_word(board, move, ThroughTiles::SPELLED), move.score());
+    case MoveType::EXCHANGE:
+      return "exch " + exchanged_tiles(move);
+    case MoveType::PASS:
+      return "pass";
+  }
+  return "?";
 }
 
 std::string move_notation(const Board& board_before, const Move& m) {
   switch (m.type()) {
     case MoveType::PLAY:
       return position(board_before, m) + " " + played_word(board_before, m);
-    case MoveType::EXCHANGE: {
-      std::string tiles;
-      for (int i = 0; i < m.num_glyphs(); ++i) tiles.push_back(m.glyph(i).rack_tile().to_char());
-      return "-" + tiles;
-    }
+    case MoveType::EXCHANGE:
+      return "-" + exchanged_tiles(m);
     case MoveType::PASS:
       return "-";
   }
