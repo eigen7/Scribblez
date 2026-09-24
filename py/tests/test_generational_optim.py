@@ -334,7 +334,7 @@ def test_decay_groups_partition_the_model(make_model):
     """Every parameter lands in exactly one group, the decay group first, and
     only matrices and kernels decay."""
     model = make_model()
-    decay, no_decay = decay_groups(model, 0.05)
+    decay, no_decay = decay_groups(list(model.named_parameters()), 0.05)
     assert (decay["weight_decay"], no_decay["weight_decay"]) == (0.05, 0.0)
     ids = [id(p) for p in decay["params"] + no_decay["params"]]
     assert sorted(ids) == sorted(id(p) for p in model.parameters())

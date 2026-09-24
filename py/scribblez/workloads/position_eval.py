@@ -103,7 +103,9 @@ class PositionEvalParams:
     optimizer: str = param(
         OPTIMIZER_SCHEDULE_FREE,
         "optimizer arm (scribblez/generational/optim.py): 'wsd' is AdamW on a "
-        "warmup-stable-decay schedule over rows trained; 'schedule_free' is AdamWScheduleFree, "
+        "warmup-stable-decay schedule over rows trained; 'muon' runs that schedule with Muon "
+        "on the transformer tower's weight matrices (transformer trunk only); "
+        "'schedule_free' is AdamWScheduleFree, "
         "which needs no schedule or horizon and makes every generation's export deployable",
         choices=OPTIMIZERS,
     )
