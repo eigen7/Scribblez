@@ -56,10 +56,9 @@
 namespace scribblez {
 namespace {
 
-constexpr int kRackSlots = 7;
 constexpr int kMaxNameLen = 18;
 
-using RackSlots = std::array<std::optional<Tile>, kRackSlots>;
+using RackSlots = std::array<std::optional<Tile>, RACK_SIZE>;
 
 struct ManualTilePlacement {
   int row = -1;
@@ -82,14 +81,14 @@ struct DisplaySlot {
   Tile tile = EMPTY_SQUARE;
   bool drawn = false;
 };
-using RackDisplay = std::array<DisplaySlot, kRackSlots>;
+using RackDisplay = std::array<DisplaySlot, RACK_SIZE>;
 
 // A rack's slots for display. A revealed tile is KNOWN; every other slot takes
 // `hidden`: UNKNOWN ("?") when the rack is assumed full but its tiles aren't
 // known, or EMPTY when the player is known to hold only their revealed tiles.
 RackDisplay display_from_slots(const RackSlots& slots, RackSlotState hidden) {
   RackDisplay display;
-  for (int i = 0; i < kRackSlots; ++i) {
+  for (int i = 0; i < RACK_SIZE; ++i) {
     if (slots[i].has_value()) {
       display[i] = {RackSlotState::KNOWN, slots[i].value()};
     } else {
@@ -129,7 +128,7 @@ std::optional<GcgOpponentRack> parse_gcg_opponent_rack(const std::string& name) 
 // as `revealed` holds it.
 RackSlots keep_only(const RackSlots& slots, TileCounts revealed) {
   RackSlots out;
-  for (int i = 0; i < kRackSlots; ++i) {
+  for (int i = 0; i < RACK_SIZE; ++i) {
     if (slots[i].has_value() && revealed.remove(slots[i].value())) out[i] = slots[i];
   }
   return out;
@@ -186,7 +185,7 @@ Tile tile_from_letter(const std::string& s, bool is_blank) {
 
 std::string gcg_rack_field(const RackSlots& slots) {
   std::string out;
-  out.reserve(kRackSlots);
+  out.reserve(RACK_SIZE);
   for (const auto& tile : slots) {
     out.push_back(tile.has_value() ? tile->to_char() : '_');
   }
@@ -225,7 +224,7 @@ boost::json::array racks_json(const std::array<RackDisplay, 2>& display_racks) {
   boost::json::array racks;
   for (int p = 0; p < 2; ++p) {
     boost::json::array r;
-    for (int s = 0; s < kRackSlots; ++s) {
+    for (int s = 0; s < RACK_SIZE; ++s) {
       const DisplaySlot& slot = display_racks[p][s];
       switch (slot.state) {
         case RackSlotState::KNOWN:
@@ -337,7 +336,7 @@ class ManualGame {
     end_adjustments_.clear();
     status_ = "";
     for (int p = 0; p < 2; ++p) {
-      for (int s = 0; s < kRackSlots; ++s) racks_[p][s].reset();
+      for (int s = 0; s < RACK_SIZE; ++s) racks_[p][s].reset();
     }
     bag_ = TileCounts();
     for (Tile L = Tile::of(0); L < 26; ++L) {
@@ -367,7 +366,7 @@ class ManualGame {
 
   void set_rack_slot(int player, int slot, const std::string& letter) {
     if (!require_live_mode("edit racks")) return;
-    if (player < 0 || player > 1 || slot < 0 || slot >= kRackSlots) {
+    if (player < 0 || player > 1 || slot < 0 || slot >= RACK_SIZE) {
       status_ = "Invalid rack slot";
       return;
     }
@@ -440,7 +439,7 @@ class ManualGame {
 
     std::set<int> unique_slots;
     for (int slot : slots) {
-      if (slot < 0 || slot >= kRackSlots || unique_slots.count(slot) > 0) {
+      if (slot < 0 || slot >= RACK_SIZE || unique_slots.count(slot) > 0) {
         status_ = "Invalid exchange selection";
         return;
       }
@@ -555,7 +554,7 @@ class ManualGame {
     TileCounts bag_needed;
     for (const ManualTilePlacement& p : spec) {
       if (p.from_rack) {
-        if (p.rack_slot < 0 || p.rack_slot >= kRackSlots || used_slots.count(p.rack_slot) > 0) {
+        if (p.rack_slot < 0 || p.rack_slot >= RACK_SIZE || used_slots.count(p.rack_slot) > 0) {
           status_ = "Invalid or repeated rack slot in play";
           return;
         }
@@ -788,7 +787,7 @@ class ManualGame {
  private:
   Rack rack_known_tiles_from_slots(const RackSlots& slots) const {
     Rack r;
-    for (int i = 0; i < kRackSlots; ++i) {
+    for (int i = 0; i < RACK_SIZE; ++i) {
       if (slots[i].has_value()) r.add(slots[i].value());
     }
     return r;
@@ -800,7 +799,7 @@ class ManualGame {
 
   int known_count(const RackSlots& slots) const {
     int n = 0;
-    for (int i = 0; i < kRackSlots; ++i) {
+    for (int i = 0; i < RACK_SIZE; ++i) {
       if (slots[i].has_value()) ++n;
     }
     return n;
@@ -817,7 +816,7 @@ class ManualGame {
   // The known tiles of a display rack as rack slots; other slots are unset.
   RackSlots slots_from_display(const RackDisplay& display) const {
     RackSlots slots;
-    for (int i = 0; i < kRackSlots; ++i) {
+    for (int i = 0; i < RACK_SIZE; ++i) {
       if (display[i].state == RackSlotState::KNOWN) slots[i] = display[i].tile;
     }
     return slots;
@@ -839,7 +838,7 @@ class ManualGame {
     RackSlots slots;
     int i = 0;
     for (char ch : letters) {
-      if (i >= kRackSlots) break;
+      if (i >= RACK_SIZE) break;
       const char up = upper_ch(ch);
       if (up == '?') {
         slots[i++] = BLANK;
@@ -853,7 +852,7 @@ class ManualGame {
   bool rack_fully_known(int player) const { return rack_fully_known(racks_[player]); }
 
   bool rack_fully_known(const RackSlots& slots) const {
-    for (int i = 0; i < kRackSlots; ++i) {
+    for (int i = 0; i < RACK_SIZE; ++i) {
       if (!slots[i].has_value()) return false;
     }
     return true;
@@ -905,9 +904,9 @@ class ManualGame {
 
   RackDisplay post_move_rack_from_turn(const ManualTurn& t) const {
     const RackSlotState hidden = hidden_state_for(t.rack_before_slots);
-    std::array<RackSlotState, kRackSlots> state;
-    std::array<std::optional<Tile>, kRackSlots> letters;
-    for (int i = 0; i < kRackSlots; ++i) {
+    std::array<RackSlotState, RACK_SIZE> state;
+    std::array<std::optional<Tile>, RACK_SIZE> letters;
+    for (int i = 0; i < RACK_SIZE; ++i) {
       if (t.rack_before_slots[i].has_value()) {
         state[i] = RackSlotState::KNOWN;
         letters[i] = t.rack_before_slots[i].value();
@@ -926,17 +925,17 @@ class ManualGame {
     // The result shows the leave only: played tiles leave their slots empty,
     // and the replacements drawn afterwards are not shown.
     RackDisplay out;
-    for (int i = 0; i < kRackSlots; ++i) {
+    for (int i = 0; i < RACK_SIZE; ++i) {
       out[i].state = state[i];
       if (state[i] == RackSlotState::KNOWN) out[i].tile = letters[i].value();
     }
     return out;
   }
 
-  void consume_rack_tile_for_post_move(std::array<RackSlotState, kRackSlots>* state,
-                                       std::array<std::optional<Tile>, kRackSlots>* letters,
+  void consume_rack_tile_for_post_move(std::array<RackSlotState, RACK_SIZE>* state,
+                                       std::array<std::optional<Tile>, RACK_SIZE>* letters,
                                        Tile rack_tile) const {
-    for (int i = 0; i < kRackSlots; ++i) {
+    for (int i = 0; i < RACK_SIZE; ++i) {
       if ((*state)[i] == RackSlotState::KNOWN && (*letters)[i].has_value() &&
           (*letters)[i].value() == rack_tile) {
         (*state)[i] = RackSlotState::EMPTY;
@@ -944,7 +943,7 @@ class ManualGame {
         return;
       }
     }
-    for (int i = 0; i < kRackSlots; ++i) {
+    for (int i = 0; i < RACK_SIZE; ++i) {
       if ((*state)[i] == RackSlotState::UNKNOWN) {
         (*state)[i] = RackSlotState::EMPTY;
         return;
@@ -1051,7 +1050,7 @@ class ManualGame {
   MoveGenerator movegen_;
   std::array<std::string, 2> names_;
   std::array<int, 2> scores_ = {0, 0};
-  std::array<std::array<std::optional<Tile>, kRackSlots>, 2> racks_;
+  std::array<std::array<std::optional<Tile>, RACK_SIZE>, 2> racks_;
   TileCounts bag_;
   std::vector<ManualTurn> turns_;
   std::vector<ManualSnapshot> snapshots_;
