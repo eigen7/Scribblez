@@ -249,8 +249,8 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
   // opponent bingoed, or has not moved yet) is valid.
   if (open_leaves) pos.opp_leave = scribblez::retained_leave(game, 1 - pos.mover);
 
-  const int pool_size = pos.board.unseen_tiles(pos.rack).size();
-  if (pool_size <= scribblez::RACK_SIZE) return -1;  // endgame: SimRunner's non-empty-bag rule
+  if (pos.board.unseen_count(pos.rack.size()) <= scribblez::RACK_SIZE)
+    return -1;  // endgame: SimRunner's non-empty-bag rule
 
   scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
   // Bag size from the mover's POV: the unseen pool minus the opponent's full
@@ -263,7 +263,7 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
                              open_leaves ? pos.opp_leave : hidden_opp,
                              pos.scores[pos.mover],
                              pos.scores[1 - pos.mover],
-                             std::max(0, pool_size - scribblez::RACK_SIZE)};
+                             pos.board.pov_bag_size(pos.rack.size())};
   const std::vector<scribblez::Move> candidates = scribblez::equity_top_k(req, top_k);
 
   scribblez::SimRunner::Params params;

@@ -1,12 +1,10 @@
 #include "data/gcg_reader.h"
 
-#include "game/bag.h"
 #include "game/tile.h"
 #include "serve/web_server.h"
 #include "util/assert.h"
 #include "util/exception.h"
 
-#include <algorithm>
 #include <cctype>
 #include <exception>
 #include <format>
@@ -83,16 +81,6 @@ bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int*
   *row = r;
   *col = c - 'A';
   return true;
-}
-
-int board_tile_count(const Board& board) {
-  int n = 0;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      if (!board.at(r, c).is_empty()) ++n;
-    }
-  }
-  return n;
 }
 
 // The player (0 or 1) that a "#Rack1 <tiles>" / "#Rack2 <tiles>" pragma line
@@ -443,7 +431,9 @@ class GcgReader {
     for (ParsedGcgSnapshot& snapshot : snapshots_) snapshot.bag = unaccounted_tiles(snapshot);
   }
 
-  int BagSizeEstimate() const { return std::max(0, 100 - board_tile_count(board_) - 14); }
+  // A turn line's rack may be partly hidden, but racks are full while the
+  // bag holds tiles.
+  int BagSizeEstimate() const { return board_.pov_bag_size(RACK_SIZE); }
 
   ParsedGcgSnapshot CurrentSnapshot(int turn_player = 0) const {
     ParsedGcgSnapshot snapshot;
@@ -582,8 +572,7 @@ void lift_position(const ParsedGcgSnapshot& snapshot, int mover, const Rack& rac
   out->rack = rack;
   out->opp_leave = open_leaves ? retained_leave(out->game, 1 - mover) : Rack{};
   out->turns = out->game.turns.size();
-  const int unseen = Bag::kTotalTiles - out->board.num_tiles() - out->rack.size();
-  out->bag_size = std::max(0, unseen - RACK_SIZE);
+  out->bag_size = out->board.pov_bag_size(out->rack.size());
 }
 
 }  // namespace

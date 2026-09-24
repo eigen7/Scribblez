@@ -206,21 +206,6 @@ std::optional<std::string> maybe_rack_pragma(const RackSlots& slots) {
   return gcg_rack_field(slots);
 }
 
-int board_tile_count(const Board& board) {
-  int n = 0;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      if (!board.at(r, c).is_empty()) ++n;
-    }
-  }
-  return n;
-}
-
-// The bag count the UI shows: 100 tiles, less those on the board and 14 for two
-// full racks. Racks are always full while the bag has tiles, so this is exact
-// whatever rack tiles have been entered.
-int bag_estimate(const Board& board) { return std::max(0, 100 - board_tile_count(board) - 14); }
-
 // Both players' racks as JSON, one object per slot (see DisplaySlot).
 boost::json::array racks_json(const std::array<RackDisplay, 2>& display_racks) {
   boost::json::array racks;
@@ -282,7 +267,9 @@ class ManualGame {
 
   boost::json::object state_json() const {
     const ManualSnapshot& snap = snapshots_[view_ply_];
-    const int bag_count = bag_estimate(snap.board);
+    // Racks are always full while the bag has tiles, so this is exact whatever
+    // rack tiles have been entered.
+    const int bag_count = snap.board.pov_bag_size(RACK_SIZE);
     const std::array<RackDisplay, 2> display_racks = display_racks_for_view(view_ply_, snap.racks);
 
     boost::json::object o;

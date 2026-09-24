@@ -1,5 +1,6 @@
 #include "game/board.h"
 
+#include "game/bag.h"
 #include "game/move.h"
 #include "game/tile.h"
 #include "game/tile_counts.h"
@@ -8,6 +9,7 @@
 #include "util/exception.h"
 #include "util/math.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <utility>
@@ -337,6 +339,14 @@ TileCounts Board::unseen_tiles(const Rack& held) const {
   if (!unseen.remove(held.counts()))
     throw util::Exception("the held rack holds a tile the distribution has run out of");
   return unseen;
+}
+
+int Board::unseen_count(int held_tiles) const {
+  return Bag::kTotalTiles - num_tiles() - held_tiles;
+}
+
+int Board::pov_bag_size(int held_tiles) const {
+  return std::max(0, unseen_count(held_tiles) - RACK_SIZE);
 }
 
 Rack Board::hidden_rack(const Rack& known) const {

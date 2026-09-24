@@ -138,6 +138,14 @@ class Board {
   // overdraw the distribution.
   TileCounts unseen_tiles(const Rack& held) const;
 
+  // The number of tiles neither on this board nor among `held_tiles` rack
+  // tiles: unseen_tiles(held).size() without the per-tile check.
+  int unseen_count(int held_tiles) const;
+
+  // The bag's size as the holder of `held_tiles` tiles sees it: unseen_count()
+  // less the opponent's rack, which is full while the bag holds tiles.
+  int pov_bag_size(int held_tiles) const;
+
   // unseen_tiles(known) as a rack: with an empty bag, exactly the other
   // player's rack. Throws as unseen_tiles does, or if that is more than a
   // rackful (the bag isn't empty).
