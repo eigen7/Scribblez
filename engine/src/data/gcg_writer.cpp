@@ -69,12 +69,9 @@ std::string exchanged_tiles(const Move& m) {
 }
 
 bool include_rack_field(const GcgWriteOptions& options, size_t turn_idx) {
-  if (!options.rack_before_fields.empty()) {
-    return turn_idx < options.rack_before_fields.size() &&
-           options.rack_before_fields[turn_idx].has_value();
-  }
-  return options.include_rack_before.empty() ||
-         (turn_idx < options.include_rack_before.size() && options.include_rack_before[turn_idx]);
+  if (options.rack_before_fields.empty()) return true;
+  return turn_idx < options.rack_before_fields.size() &&
+         options.rack_before_fields[turn_idx].has_value();
 }
 
 std::string rack_field(const GameLog& log, const GcgWriteOptions& options, size_t turn_idx) {
@@ -106,9 +103,7 @@ std::array<std::string, 2> player_nicks(const GameLog& log) {
 void write_gcg_header(std::string& out, const GameLog& log, const std::array<std::string, 2>& nick,
                       const GcgWriteOptions& options) {
   out += "#character-encoding UTF-8\n";
-  if (options.lexicon_name.has_value() && !options.lexicon_name->empty()) {
-    out += std::format("#lexicon {}\n", *options.lexicon_name);
-  }
+  if (!options.lexicon_name.empty()) out += std::format("#lexicon {}\n", options.lexicon_name);
   out += std::format("#player1 {} {}\n", nick[0], log.player_names[0]);
   out += std::format("#player2 {} {}\n", nick[1], log.player_names[1]);
   if (options.initial_rack1.has_value()) out += std::format("#Rack1 {}\n", *options.initial_rack1);
