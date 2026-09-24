@@ -16,6 +16,8 @@ class Tile {
   static constexpr Tile blank() { return Tile(kBlank); }
   static constexpr Tile empty() { return Tile(kEmpty); }
   static constexpr Tile from_char(char c);  // either case; '?' or '_' is a blank
+  // A..Z in either case as its letter; empty for any other character.
+  static constexpr Tile letter_from_char(char c);
 
   constexpr operator uint8_t() const { return code_; }
   constexpr uint8_t index() const { return code_; }

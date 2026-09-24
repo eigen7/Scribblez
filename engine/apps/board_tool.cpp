@@ -30,21 +30,6 @@
 namespace scribblez {
 namespace {
 
-char upper_ch(char c) {
-  if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
-  return c;
-}
-
-// The letter Tile named by a one-character string, or EMPTY_SQUARE if it is not
-// a letter A..Z. For a blank this is the letter it stands for; whether the tile
-// is a blank travels separately.
-Tile letter_tile(const std::string& s) {
-  if (s.empty()) return EMPTY_SQUARE;
-  const char c = upper_ch(s[0]);
-  if (c < 'A' || c > 'Z') return EMPTY_SQUARE;
-  return Tile::from_char(c);
-}
-
 // A board word the dictionary rejects. `square` is its starting square in GCG
 // notation: row number first for across words, column letter first for down.
 struct InvalidWord {
@@ -66,7 +51,7 @@ class BoardEditor {
     status_.clear();
   }
 
-  void place(int row, int col, const std::string& letter_str, bool is_blank) {
+  void place(int row, int col, Tile letter, bool is_blank) {
     validation_.reset();
     if (!board_.in_bounds(row, col)) {
       status_ = "Invalid square";
@@ -76,7 +61,6 @@ class BoardEditor {
       status_ = "That square already holds a tile";
       return;
     }
-    const Tile letter = letter_tile(letter_str);
     if (letter.is_empty()) {
       status_ = "Invalid letter";
       return;
@@ -186,7 +170,7 @@ class BoardEditor {
 void handle_message(BoardEditor& editor, const boost::json::object& obj) {
   const std::string type = str_field(obj, "type");
   if (type == "place") {
-    editor.place(int_field(obj, "row"), int_field(obj, "col"), str_field(obj, "letter"),
+    editor.place(int_field(obj, "row"), int_field(obj, "col"), letter_field(obj, "letter"),
                  bool_field(obj, "isBlank"));
   } else if (type == "remove") {
     editor.remove(int_field(obj, "row"), int_field(obj, "col"));

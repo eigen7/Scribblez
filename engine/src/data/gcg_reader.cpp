@@ -27,11 +27,6 @@ bool getline_lf_or_crlf(std::istream& in, std::string& line) {
   return true;
 }
 
-char upper_ch(char c) {
-  if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
-  return c;
-}
-
 std::vector<std::string> split_ws(const std::string& s) {
   std::istringstream iss(s);
   std::vector<std::string> out;
@@ -58,7 +53,7 @@ bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int*
     std::size_t i = 0;
     while (i < pos.size() && std::isdigit(uint8_t(pos[i])) != 0) ++i;
     if (i == 0 || i >= pos.size()) return false;
-    const char c = upper_ch(pos[i]);
+    const char c = char(std::toupper(uint8_t(pos[i])));
     if (c < 'A' || c > 'O') return false;
     const int r = std::stoi(pos.substr(0, i)) - 1;
     if (r < 0 || r >= BOARD_SIZE || i + 1 != pos.size()) return false;
@@ -68,7 +63,7 @@ bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int*
     return true;
   }
 
-  const char c = upper_ch(pos[0]);
+  const char c = char(std::toupper(uint8_t(pos[0])));
   if (c < 'A' || c > 'O') return false;
   const std::string digits = pos.substr(1);
   if (digits.empty()) return false;
@@ -303,12 +298,8 @@ class GcgReader {
     TileCounts exchanged;
     const std::string exchange_letters = tok[1].substr(1);
     for (char ch : exchange_letters) {
-      const char up = upper_ch(ch);
-      if (up == '?') {
-        exchanged.add(BLANK);
-      } else if (up >= 'A' && up <= 'Z') {
-        exchanged.add(Tile::from_char(up));
-      }
+      const Tile t = ch == '?' ? BLANK : Tile::letter_from_char(ch);
+      if (!t.is_empty()) exchanged.add(t);
     }
 
     turn.record.move = Move::exchange(exchanged);
@@ -359,13 +350,13 @@ class GcgReader {
           break;
         }
       } else {
-        const char up = upper_ch(ch);
-        if (up < 'A' || up > 'Z' || num_glyphs >= RACK_SIZE) {
+        const Tile letter = Tile::letter_from_char(ch);
+        if (letter.is_empty() || num_glyphs >= RACK_SIZE) {
           malformed = true;
           break;
         }
         const bool is_blank = std::islower(uint8_t(ch)) != 0;
-        glyphs[num_glyphs++] = Glyph::played(Tile::from_char(up), is_blank);
+        glyphs[num_glyphs++] = Glyph::played(letter, is_blank);
         const int lane = horizontal ? c : r;
         mask |= uint16_t(1) << lane;
       }
@@ -411,11 +402,11 @@ class GcgReader {
     int slot = 0;
     for (char ch : rack_token) {
       if (slot >= RACK_SIZE) break;
-      const char up = upper_ch(ch);
-      const bool blank = up == '?' || ch == '*' || (ch >= 'a' && ch <= 'z');
-      if (!blank && up != '_' && (up < 'A' || up > 'Z')) continue;
+      const Tile letter = Tile::letter_from_char(ch);
+      const bool blank = ch == '?' || ch == '*' || (ch >= 'a' && ch <= 'z');
+      if (!blank && ch != '_' && letter.is_empty()) continue;
       ++slot;
-      if (up != '_') rack.add(blank ? BLANK : Tile::from_char(up));
+      if (ch != '_') rack.add(blank ? BLANK : letter);
     }
     return rack;
   }

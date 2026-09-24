@@ -66,7 +66,7 @@ struct ManualTilePlacement {
   int row = -1;
   int col = -1;
   Tile tile = EMPTY_SQUARE;
-  char letter = '\0';
+  Tile letter = EMPTY_SQUARE;  // for a blank, the letter it designates
   bool is_blank = false;
   bool from_rack = false;
   int rack_slot = -1;
@@ -153,11 +153,6 @@ struct ManualSnapshot {
   int turn_player = 0;
 };
 
-char upper_ch(char c) {
-  if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
-  return c;
-}
-
 std::string now_string() {
   using clock = std::chrono::system_clock;
   const std::time_t t = clock::to_time_t(clock::now());
@@ -175,14 +170,6 @@ std::string now_string() {
 std::string trim_name(const std::string& in) {
   if (in.empty()) return in;
   return in.substr(0, kMaxNameLen);
-}
-
-Tile tile_from_letter(const std::string& s, bool is_blank) {
-  if (is_blank) return BLANK;
-  if (s.empty()) return EMPTY_SQUARE;
-  const char c = upper_ch(s[0]);
-  if (c < 'A' || c > 'Z') return EMPTY_SQUARE;
-  return Tile::from_char(c);
 }
 
 std::string gcg_rack_field(const RackSlots& slots) {
@@ -364,7 +351,7 @@ class ManualGame {
       return;
     }
 
-    const Tile t = tile_from_letter(letter, letter == "?");
+    const Tile t = letter == "?" ? BLANK : Tile::letter_from_char(letter[0]);
     if (t.is_empty()) {
       status_ = "Invalid tile letter";
       return;
@@ -493,13 +480,12 @@ class ManualGame {
       p.row = int_field(o, "row");
       p.col = int_field(o, "col");
       p.is_blank = bool_field(o, "isBlank");
-      const std::string letter = str_field(o, "letter");
-      p.tile = tile_from_letter(letter, p.is_blank);
-      p.letter = letter.empty() ? '\0' : upper_ch(letter[0]);
+      p.letter = letter_field(o, "letter");
+      p.tile = p.is_blank ? BLANK : p.letter;
       p.from_rack = str_field(o, "source") == "rack";
       p.rack_slot = int_field(o, "slot");
       if (p.row < 0 || p.col < 0 || p.row >= BOARD_SIZE || p.col >= BOARD_SIZE ||
-          p.tile.is_empty() || p.letter < 'A' || p.letter > 'Z') {
+          p.tile.is_empty() || p.letter.is_empty()) {
         status_ = "Invalid tile placement";
         return;
       }
@@ -813,12 +799,8 @@ class ManualGame {
     int i = 0;
     for (char ch : letters) {
       if (i >= RACK_SIZE) break;
-      const char up = upper_ch(ch);
-      if (up == '?') {
-        slots[i++] = BLANK;
-      } else if (up >= 'A' && up <= 'Z') {
-        slots[i++] = Tile::from_char(up);
-      }
+      const Tile t = ch == '?' ? BLANK : Tile::letter_from_char(ch);
+      if (!t.is_empty()) slots[i++] = t;
     }
     return slots;
   }
@@ -992,7 +974,7 @@ class ManualGame {
       const ManualTilePlacement* p = it->second;
       Glyph g = m.glyph(gi++);
       if (g.is_blank() != p->is_blank) return false;
-      if (g.letter().to_char() != p->letter) return false;
+      if (g.letter() != p->letter) return false;
     }
 
     return gi == m.num_glyphs();

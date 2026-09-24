@@ -1567,6 +1567,13 @@ TEST(BinaryLog, RandomOpeningRegion) {
 // Foundation types: Tile / Glyph
 // ===========================================================================
 
+// letter_from_char accepts exactly the letters, in either case.
+TEST(Tile, LetterFromChar) {
+  EXPECT_EQ(Tile::letter_from_char('A'), Tile::of(0));
+  EXPECT_EQ(Tile::letter_from_char('z'), Tile::of(25));
+  for (const char c : std::string("?_*.@[`{0 ")) EXPECT_TRUE(Tile::letter_from_char(c).is_empty());
+}
+
 TEST(Tile, GlyphBasics) {
   // Tile::from_char round-trips for letters and the blank marker.
   for (char c = 'A'; c <= 'Z'; ++c) {
