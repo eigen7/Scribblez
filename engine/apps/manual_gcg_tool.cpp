@@ -58,7 +58,9 @@ namespace {
 
 constexpr int kMaxNameLen = 18;
 
-using RackSlots = std::array<std::optional<Tile>, RACK_SIZE>;
+// A rack as the UI lays it out: each slot holds a tile or is empty. Unlike
+// Rack it keeps positions, since the UI edits, exchanges and plays by slot.
+using RackSlots = std::array<Tile, RACK_SIZE>;
 
 struct ManualTilePlacement {
   int row = -1;
@@ -89,8 +91,8 @@ using RackDisplay = std::array<DisplaySlot, RACK_SIZE>;
 RackDisplay display_from_slots(const RackSlots& slots, RackSlotState hidden) {
   RackDisplay display;
   for (int i = 0; i < RACK_SIZE; ++i) {
-    if (slots[i].has_value()) {
-      display[i] = {RackSlotState::KNOWN, slots[i].value()};
+    if (!slots[i].is_empty()) {
+      display[i] = {RackSlotState::KNOWN, slots[i]};
     } else {
       display[i].state = hidden;
     }
@@ -129,7 +131,7 @@ std::optional<GcgOpponentRack> parse_gcg_opponent_rack(const std::string& name) 
 RackSlots keep_only(const RackSlots& slots, TileCounts revealed) {
   RackSlots out;
   for (int i = 0; i < RACK_SIZE; ++i) {
-    if (slots[i].has_value() && revealed.remove(slots[i].value())) out[i] = slots[i];
+    if (!slots[i].is_empty() && revealed.remove(slots[i])) out[i] = slots[i];
   }
   return out;
 }
@@ -186,15 +188,15 @@ Tile tile_from_letter(const std::string& s, bool is_blank) {
 std::string gcg_rack_field(const RackSlots& slots) {
   std::string out;
   out.reserve(RACK_SIZE);
-  for (const auto& tile : slots) {
-    out.push_back(tile.has_value() ? tile->to_char() : '_');
+  for (Tile tile : slots) {
+    out.push_back(tile.is_empty() ? '_' : tile.to_char());
   }
   return out;
 }
 
 bool has_known_tiles(const RackSlots& slots) {
-  for (const auto& tile : slots) {
-    if (tile.has_value()) return true;
+  for (Tile tile : slots) {
+    if (!tile.is_empty()) return true;
   }
   return false;
 }
@@ -335,9 +337,7 @@ class ManualGame {
     turns_.clear();
     end_adjustments_.clear();
     status_ = "";
-    for (int p = 0; p < 2; ++p) {
-      for (int s = 0; s < RACK_SIZE; ++s) racks_[p][s].reset();
-    }
+    racks_ = {};
     bag_ = TileCounts();
     for (Tile L = Tile::of(0); L < 26; ++L) {
       for (int i = 0; i < TILE_COUNTS[L]; ++i) bag_.add(L);
@@ -371,9 +371,9 @@ class ManualGame {
       return;
     }
 
-    if (racks_[player][slot].has_value()) {
-      bag_.add(racks_[player][slot].value());
-      racks_[player][slot].reset();
+    if (!racks_[player][slot].is_empty()) {
+      bag_.add(racks_[player][slot]);
+      racks_[player][slot] = EMPTY_SQUARE;
     }
 
     if (letter.empty()) {
@@ -453,8 +453,8 @@ class ManualGame {
     exchange_field.reserve(unique_slots.size());
     bool all_unknown = true;
     for (int slot : unique_slots) {
-      if (before_slots[slot].has_value()) {
-        const Tile tile = before_slots[slot].value();
+      if (!before_slots[slot].is_empty()) {
+        const Tile tile = before_slots[slot];
         exchanged_known.add(tile);
         bag_.add(tile);
         exchange_field.push_back(tile.to_char());
@@ -462,7 +462,7 @@ class ManualGame {
       } else {
         exchange_field.push_back('_');
       }
-      racks_[player][slot].reset();
+      racks_[player][slot] = EMPTY_SQUARE;
     }
     if (all_unknown) exchange_field = std::to_string(unique_slots.size());
 
@@ -558,11 +558,11 @@ class ManualGame {
           status_ = "Invalid or repeated rack slot in play";
           return;
         }
-        if (!racks_[player][p.rack_slot].has_value()) {
+        if (racks_[player][p.rack_slot].is_empty()) {
           status_ = "Referenced rack slot is unknown";
           return;
         }
-        if (racks_[player][p.rack_slot].value() != p.tile) {
+        if (racks_[player][p.rack_slot] != p.tile) {
           status_ = "Rack slot tile does not match placement";
           return;
         }
@@ -590,7 +590,7 @@ class ManualGame {
 
     const RackSlots before_slots = racks_[player];
     const int bag_size_before = bag_.size();
-    for (int slot : used_slots) racks_[player][slot].reset();
+    for (int slot : used_slots) racks_[player][slot] = EMPTY_SQUARE;
 
     const Board before = board_;
     TurnRecord rec;
@@ -711,10 +711,11 @@ class ManualGame {
       const ParsedGcgTurn& parsed_turn = parsed.turns[i];
       ManualTurn turn;
       turn.record = parsed.game_log.turns[i];
-      turn.include_rack_before = rack_fully_known(parsed_turn.rack_before_slots);
+      turn.rack_before_slots = turn.record.rack_before.tiles();
+      turn.include_rack_before = rack_fully_known(turn.rack_before_slots);
       turn.notation = parsed_turn.notation;
-      turn.rack_before_slots = parsed_turn.rack_before_slots;
-      turn.racks_after_turn = parsed_turn.racks_after_turn;
+      turn.racks_after_turn = {parsed_turn.racks_after_turn[0].tiles(),
+                               parsed_turn.racks_after_turn[1].tiles()};
       turn.exchange_field = parsed_turn.exchange_field;
       turns_.push_back(std::move(turn));
     }
@@ -725,7 +726,7 @@ class ManualGame {
       ManualSnapshot snapshot;
       snapshot.board = parsed_snapshot.board;
       snapshot.scores = parsed_snapshot.scores;
-      snapshot.racks = parsed_snapshot.racks;
+      snapshot.racks = {parsed_snapshot.racks[0].tiles(), parsed_snapshot.racks[1].tiles()};
       snapshot.bag = parsed_snapshot.bag;
       snapshot.turn_player = parsed_snapshot.turn_player;
       snapshots_.push_back(std::move(snapshot));
@@ -788,22 +789,12 @@ class ManualGame {
   Rack rack_known_tiles_from_slots(const RackSlots& slots) const {
     Rack r;
     for (int i = 0; i < RACK_SIZE; ++i) {
-      if (slots[i].has_value()) r.add(slots[i].value());
+      if (!slots[i].is_empty()) r.add(slots[i]);
     }
     return r;
   }
 
   Rack rack_known_tiles(int player) const { return rack_known_tiles_from_slots(racks_[player]); }
-
-  int known_count(int player) const { return known_count(racks_[player]); }
-
-  int known_count(const RackSlots& slots) const {
-    int n = 0;
-    for (int i = 0; i < RACK_SIZE; ++i) {
-      if (slots[i].has_value()) ++n;
-    }
-    return n;
-  }
 
   int known_count(const RackDisplay& display) const {
     int n = 0;
@@ -813,7 +804,7 @@ class ManualGame {
     return n;
   }
 
-  // The known tiles of a display rack as rack slots; other slots are unset.
+  // The known tiles of a display rack as rack slots; other slots are empty.
   RackSlots slots_from_display(const RackDisplay& display) const {
     RackSlots slots;
     for (int i = 0; i < RACK_SIZE; ++i) {
@@ -824,13 +815,13 @@ class ManualGame {
 
   // `player`'s leftover tiles from the end-of-game adjustments, if recorded. A
   // gain line (delta >= 0) lists the opponent's tiles; a penalty line (delta < 0)
-  // lists the player's own.
-  std::optional<std::string> end_rack_tiles_for(int player) const {
+  // lists the player's own. Empty if not recorded.
+  std::string end_rack_tiles_for(int player) const {
     for (const ParsedGcgEndAdjustment& adj : end_adjustments_) {
       const int owner = adj.delta >= 0 ? 1 - adj.player : adj.player;
       if (owner == player && !adj.tiles.empty()) return adj.tiles;
     }
-    return std::nullopt;
+    return "";
   }
 
   // Parse a rack string such as "AER?" ('?' is a blank) into rack slots.
@@ -849,25 +840,23 @@ class ManualGame {
     return slots;
   }
 
-  bool rack_fully_known(int player) const { return rack_fully_known(racks_[player]); }
-
   bool rack_fully_known(const RackSlots& slots) const {
     for (int i = 0; i < RACK_SIZE; ++i) {
-      if (!slots[i].has_value()) return false;
+      if (slots[i].is_empty()) return false;
     }
     return true;
   }
 
   // The waiting player's rack at `from_ply`, taken from the rack_before of
   // their next turn with known tiles: the rack cannot change until they move.
-  // Nullopt if no later turn records it.
-  std::optional<RackSlots> next_known_rack_before(int player, int from_ply) const {
+  // All slots empty if no later turn records it.
+  RackSlots next_known_rack_before(int player, int from_ply) const {
     for (int i = from_ply; i < int(turns_.size()); ++i) {
       const ManualTurn& t = turns_[i];
       if (t.record.player != player) continue;
       if (has_known_tiles(t.rack_before_slots)) return t.rack_before_slots;
     }
-    return std::nullopt;
+    return {};
   }
 
   // How an empty slot of `slots` renders. A rack with any known tiles is taken
@@ -903,49 +892,30 @@ class ManualGame {
   }
 
   RackDisplay post_move_rack_from_turn(const ManualTurn& t) const {
-    const RackSlotState hidden = hidden_state_for(t.rack_before_slots);
-    std::array<RackSlotState, RACK_SIZE> state;
-    std::array<std::optional<Tile>, RACK_SIZE> letters;
-    for (int i = 0; i < RACK_SIZE; ++i) {
-      if (t.rack_before_slots[i].has_value()) {
-        state[i] = RackSlotState::KNOWN;
-        letters[i] = t.rack_before_slots[i].value();
-      } else {
-        state[i] = hidden;
-        letters[i].reset();
-      }
-    }
-
-    if (t.record.move.type() == MoveType::PLAY || t.record.move.type() == MoveType::EXCHANGE) {
-      for (int i = 0; i < t.record.move.num_glyphs(); ++i) {
-        consume_rack_tile_for_post_move(&state, &letters, t.record.move.glyph(i).rack_tile());
-      }
-    }
-
+    RackDisplay out =
+      display_from_slots(t.rack_before_slots, hidden_state_for(t.rack_before_slots));
     // The result shows the leave only: played tiles leave their slots empty,
     // and the replacements drawn afterwards are not shown.
-    RackDisplay out;
-    for (int i = 0; i < RACK_SIZE; ++i) {
-      out[i].state = state[i];
-      if (state[i] == RackSlotState::KNOWN) out[i].tile = letters[i].value();
+    if (t.record.move.type() == MoveType::PLAY || t.record.move.type() == MoveType::EXCHANGE) {
+      for (int i = 0; i < t.record.move.num_glyphs(); ++i) {
+        consume_rack_tile_for_post_move(&out, t.record.move.glyph(i).rack_tile());
+      }
     }
     return out;
   }
 
-  void consume_rack_tile_for_post_move(std::array<RackSlotState, RACK_SIZE>* state,
-                                       std::array<std::optional<Tile>, RACK_SIZE>* letters,
-                                       Tile rack_tile) const {
-    for (int i = 0; i < RACK_SIZE; ++i) {
-      if ((*state)[i] == RackSlotState::KNOWN && (*letters)[i].has_value() &&
-          (*letters)[i].value() == rack_tile) {
-        (*state)[i] = RackSlotState::EMPTY;
-        (*letters)[i].reset();
+  // Empties the slot `rack_tile` was played from: a revealed slot holding it if
+  // any, else a hidden one.
+  static void consume_rack_tile_for_post_move(RackDisplay* display, Tile rack_tile) {
+    for (DisplaySlot& slot : *display) {
+      if (slot.state == RackSlotState::KNOWN && slot.tile == rack_tile) {
+        slot = {RackSlotState::EMPTY};
         return;
       }
     }
-    for (int i = 0; i < RACK_SIZE; ++i) {
-      if ((*state)[i] == RackSlotState::UNKNOWN) {
-        (*state)[i] = RackSlotState::EMPTY;
+    for (DisplaySlot& slot : *display) {
+      if (slot.state == RackSlotState::UNKNOWN) {
+        slot = {RackSlotState::EMPTY};
         return;
       }
     }
@@ -965,11 +935,11 @@ class ManualGame {
     const int waiting = 1 - mover;
 
     out[mover] = post_move_rack_from_turn(viewed);
-    if (const auto rack = next_known_rack_before(waiting, view_ply)) {
+    if (const RackSlots rack = next_known_rack_before(waiting, view_ply); has_known_tiles(rack)) {
       // A known rack is complete: it holds exactly its tiles, so slots past them
       // are empty (e.g. an endgame hand the bag could not refill to seven),
       // never a hidden "?".
-      out[waiting] = display_from_slots(*rack, RackSlotState::EMPTY);
+      out[waiting] = display_from_slots(rack, RackSlotState::EMPTY);
     } else {
       out[waiting] = display_from_slots(fallback[waiting], RackSlotState::UNKNOWN);
     }
@@ -980,8 +950,8 @@ class ManualGame {
     // that only the end-of-game adjustment records. It lists their whole rack,
     // so any other slot is empty.
     if (view_ply == int(turns_.size())) {
-      if (const auto tiles = end_rack_tiles_for(waiting)) {
-        out[waiting] = display_from_slots(rack_slots_from_letters(*tiles), RackSlotState::EMPTY);
+      if (const std::string tiles = end_rack_tiles_for(waiting); !tiles.empty()) {
+        out[waiting] = display_from_slots(rack_slots_from_letters(tiles), RackSlotState::EMPTY);
         mark_drawn_tiles(&out[waiting], leave_after_last_move(waiting, view_ply));
       }
     }
@@ -1050,7 +1020,7 @@ class ManualGame {
   MoveGenerator movegen_;
   std::array<std::string, 2> names_;
   std::array<int, 2> scores_ = {0, 0};
-  std::array<std::array<std::optional<Tile>, RACK_SIZE>, 2> racks_;
+  std::array<RackSlots, 2> racks_;
   TileCounts bag_;
   std::vector<ManualTurn> turns_;
   std::vector<ManualSnapshot> snapshots_;

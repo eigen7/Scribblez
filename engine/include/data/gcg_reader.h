@@ -17,22 +17,17 @@
 
 namespace scribblez {
 
-// A rack as a GCG line records it. An empty slot means either no tile or a
-// tile the file does not reveal ('_').
-using ParsedRackSlots = std::array<std::optional<Tile>, RACK_SIZE>;
-
 struct ParsedGcgTurn {
   TurnRecord record;
   std::string notation;
-  ParsedRackSlots rack_before_slots;
-  std::array<ParsedRackSlots, 2> racks_after_turn;
+  std::array<Rack, 2> racks_after_turn;
   std::optional<std::string> exchange_field;
 };
 
 struct ParsedGcgSnapshot {
   Board board;
   std::array<int, 2> scores = {0, 0};
-  std::array<ParsedRackSlots, 2> racks;
+  std::array<Rack, 2> racks;
   TileCounts bag;
   int turn_player = 0;
 };
@@ -55,9 +50,10 @@ struct ParsedGcgGame {
   std::vector<ParsedGcgEndAdjustment> end_adjustments;
   // Each player's "#RackN TILES" pragma from the header (before any event
   // line), which gives their rack in the final recorded position; nullopt if
-  // the header has none. Only the capitalized "#Rack" form gcg_writer.h emits
-  // is a pragma. The reader already applies these to snapshots.back().
-  std::array<std::optional<ParsedRackSlots>, 2> header_racks;
+  // the header has none, which is not the same as an empty rack. Only the
+  // capitalized "#Rack" form gcg_writer.h emits is a pragma. The reader already
+  // applies these to snapshots.back().
+  std::array<std::optional<Rack>, 2> header_racks;
   GameLogStorage game_log;  // to_game_log_storage() of the above
 
   GameLogStorage to_game_log_storage() const;
@@ -70,8 +66,8 @@ bool read_gcg_text(const std::string& gcg_text, ParsedGcgGame* out_game,
 
 // The endgame position at a GCG's final recorded state: the bag is empty,
 // `mover` is to act, and both racks are known. racks[mover] comes from the
-// file's #RackN pragma, because rack slots cannot tell an empty slot from a
-// hidden tile. The other rack comes from its own pragma if present, else it is
+// file's #RackN pragma, because a rack field's '_' cannot tell an empty slot
+// from a hidden tile. The other rack comes from its own pragma if present, else it is
 // whatever the board and the mover's rack leave unaccounted for.
 struct ParsedGcgEndgame {
   Board board;
@@ -81,11 +77,6 @@ struct ParsedGcgEndgame {
   std::array<std::string, 2> player_names;
   int turns = 0;
 };
-
-// The known tiles of `player`'s header rack pragma (see
-// ParsedGcgGame::header_racks), or nullopt if the header has none. A '_' slot
-// holds no tile: a writer marks unknown or empty slots with it.
-std::optional<Rack> header_rack(const ParsedGcgGame& game, int player);
 
 // Returns false and sets `error_message` when the text does not parse, the
 // mover's rack pragma is missing, or the opponent's rack must be inferred
