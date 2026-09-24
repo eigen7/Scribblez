@@ -32,18 +32,6 @@ using namespace scribblez::belief;
 
 namespace {
 
-Rack rack_from(const std::string& s) {
-  Rack r;
-  for (char c : s) r.add(c == '?' ? BLANK : Tile::from_char(c));
-  return r;
-}
-
-TileCounts pool_from(const std::string& s) {
-  TileCounts c;
-  for (char ch : s) c.add(ch == '?' ? BLANK : Tile::from_char(ch));
-  return c;
-}
-
 // Six- and seven-letter words over a common letter set, so adding one tile to
 // a rack can unlock a bingo. That makes leave hypotheses distinguishable: many
 // leaves the opponent did not have would have led to a different, better play.
@@ -70,7 +58,7 @@ class RackInferenceTest : public ::testing::Test {
 
   // Roomy enough that exchanges are legal and several leaves are plausible,
   // small enough that a one- or two-tile leave space enumerates.
-  TileCounts pool() const { return pool_from("AAAABBCCEEEERRSSTTT?"); }
+  TileCounts pool() const { return TileCounts::from_string("AAAABBCCEEEERRSSTTT?"); }
 
   int bag_size() const { return pool().size() - RACK_SIZE; }
 
@@ -95,7 +83,7 @@ class RackInferenceTest : public ::testing::Test {
   // Best play CRATE, keeping BB: a two-tile leave space, small enough to
   // enumerate, and awkward enough that a different leave would have meant a
   // different play.
-  static Rack partial_play_rack() { return rack_from("BBCARTE"); }
+  static Rack partial_play_rack() { return Rack::from_string("BBCARTE"); }
 
   std::filesystem::path tmp_;
   Board board_;
@@ -111,14 +99,14 @@ double weight_of(const RackPosterior& p, const Rack& leave) {
 }  // namespace
 
 TEST(LeavePrior, EnumerationAgreesWithTheCount) {
-  const TileCounts pool = pool_from("AABBCDE");
+  const TileCounts pool = TileCounts::from_string("AABBCDE");
   for (int k = 1; k <= 4; ++k)
     EXPECT_EQ(int64_t(enumerate_leaves(pool, k).size()), count_multisets(pool, k, 1'000'000))
       << "k=" << k;
 }
 
 TEST(LeavePrior, PriorsNormalize) {
-  const TileCounts pool = pool_from("AABBCDE");
+  const TileCounts pool = TileCounts::from_string("AABBCDE");
   for (int k = 1; k <= 4; ++k) {
     double total = 0.0;
     for (const ScoredLeave& h : enumerate_leaves(pool, k)) total += std::exp(h.log_weight);
@@ -127,7 +115,7 @@ TEST(LeavePrior, PriorsNormalize) {
 }
 
 TEST(LeavePrior, SingleTilePriorIsTheTileFraction) {
-  const TileCounts pool = pool_from("AABBCDE");
+  const TileCounts pool = TileCounts::from_string("AABBCDE");
   const std::vector<ScoredLeave> hyps = enumerate_leaves(pool, 1);
   ASSERT_EQ(hyps.size(), 5u);  // A, B, C, D, E
   for (const ScoredLeave& h : hyps) {
@@ -137,20 +125,20 @@ TEST(LeavePrior, SingleTilePriorIsTheTileFraction) {
 }
 
 TEST(LeavePrior, UndrawableLeaveHasZeroProbability) {
-  const TileCounts pool = pool_from("AABBCDE");
-  EXPECT_FALSE(std::isfinite(log_hypergeometric_prior(rack_from("AAA"), pool)));
-  EXPECT_FALSE(std::isfinite(log_hypergeometric_prior(rack_from("Z"), pool)));
+  const TileCounts pool = TileCounts::from_string("AABBCDE");
+  EXPECT_FALSE(std::isfinite(log_hypergeometric_prior(Rack::from_string("AAA"), pool)));
+  EXPECT_FALSE(std::isfinite(log_hypergeometric_prior(Rack::from_string("Z"), pool)));
 }
 
 TEST(LeavePrior, CountingStopsOnceTheCapIsExceeded) {
-  const TileCounts pool = pool_from("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  const TileCounts pool = TileCounts::from_string("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
   EXPECT_EQ(count_multisets(pool, 5, 10), 11);  // cap + 1 signals "more than the cap"
   EXPECT_EQ(count_multisets(pool, 1, 100), 26);
 }
 
 // The sampling path relies on this to leave the prior term out of its weights.
 TEST(LeavePrior, DrawingReproducesThePrior) {
-  const TileCounts pool = pool_from("AABBC");
+  const TileCounts pool = TileCounts::from_string("AABBC");
   const std::vector<ScoredLeave> hyps = enumerate_leaves(pool, 2);
   std::mt19937_64 rng(7);
   std::vector<int> hits(hyps.size(), 0);
@@ -167,7 +155,7 @@ TEST(LeavePrior, DrawingReproducesThePrior) {
 
 TEST_F(RackInferenceTest, ABingoLeavesNothingToInfer) {
   const RackInferrer inferrer(dict_, {});
-  const Move bingo = best_move(rack_from("CASTERS"));
+  const Move bingo = best_move(Rack::from_string("CASTERS"));
   ASSERT_EQ(bingo.num_glyphs(), RACK_SIZE);
   EXPECT_TRUE(inferrer.infer(observation_of(bingo), 1).empty());
 }
@@ -180,7 +168,7 @@ TEST_F(RackInferenceTest, APassRevealsNothing) {
 TEST_F(RackInferenceTest, AnEmptyBagSkipsInference) {
   const RackInferrer inferrer(dict_, {});
   OppMoveObservation obs = observation_of(best_move(partial_play_rack()));
-  obs.pool = pool_from("ABCDEFG");  // one rack's worth: the bag is empty
+  obs.pool = TileCounts::from_string("ABCDEFG");  // one rack's worth: the bag is empty
   EXPECT_TRUE(inferrer.infer(obs, 1).empty());
 }
 
@@ -254,7 +242,7 @@ TEST_F(RackInferenceTest, SamplingWeightsMatchEnumerationOnASmallSpace) {
 
 TEST_F(RackInferenceTest, AnExchangeInfersWhatWasKept) {
   const RackInferrer inferrer(dict_, {});
-  const Rack truth = rack_from("BBCTTRC");
+  const Rack truth = Rack::from_string("BBCTTRC");
   const Move played = best_move(truth);
   ASSERT_EQ(played.type(), MoveType::EXCHANGE);
 
@@ -275,7 +263,7 @@ TEST_F(RackInferenceTest, TheTrueLeaveGainsWeightOverItsPrior) {
   double total_log_ratio = 0.0;
   int scored = 0;
   for (const std::string& s : racks) {
-    const Rack truth = rack_from(s);
+    const Rack truth = Rack::from_string(s);
     const Move played = best_move(truth);
     if (played.num_glyphs() == RACK_SIZE) continue;  // a bingo keeps nothing
 

@@ -1,12 +1,10 @@
 #include "data/gcg_reader.h"
 
-#include "game/bag.h"
+#include "data/gcg_writer.h"
 #include "game/tile.h"
-#include "serve/web_server.h"
 #include "util/assert.h"
 #include "util/exception.h"
 
-#include <algorithm>
 #include <cctype>
 #include <exception>
 #include <format>
@@ -27,11 +25,6 @@ bool getline_lf_or_crlf(std::istream& in, std::string& line) {
   if (!std::getline(in, line)) return false;
   if (!line.empty() && line.back() == '\r') line.pop_back();
   return true;
-}
-
-char upper_ch(char c) {
-  if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
-  return c;
 }
 
 std::vector<std::string> split_ws(const std::string& s) {
@@ -60,7 +53,7 @@ bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int*
     std::size_t i = 0;
     while (i < pos.size() && std::isdigit(uint8_t(pos[i])) != 0) ++i;
     if (i == 0 || i >= pos.size()) return false;
-    const char c = upper_ch(pos[i]);
+    const char c = char(std::toupper(uint8_t(pos[i])));
     if (c < 'A' || c > 'O') return false;
     const int r = std::stoi(pos.substr(0, i)) - 1;
     if (r < 0 || r >= BOARD_SIZE || i + 1 != pos.size()) return false;
@@ -70,7 +63,7 @@ bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int*
     return true;
   }
 
-  const char c = upper_ch(pos[0]);
+  const char c = char(std::toupper(uint8_t(pos[0])));
   if (c < 'A' || c > 'O') return false;
   const std::string digits = pos.substr(1);
   if (digits.empty()) return false;
@@ -83,16 +76,6 @@ bool parse_gcg_position(const std::string& pos, bool* horizontal, int* row, int*
   *row = r;
   *col = c - 'A';
   return true;
-}
-
-int board_tile_count(const Board& board) {
-  int n = 0;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      if (!board.at(r, c).is_empty()) ++n;
-    }
-  }
-  return n;
 }
 
 // The player (0 or 1) that a "#Rack1 <tiles>" / "#Rack2 <tiles>" pragma line
@@ -109,13 +92,14 @@ int rack_pragma_player(const std::string& line) {
   return -1;
 }
 
-TileCounts full_bag() {
-  TileCounts bag;
-  for (Tile l = Tile::of(0); l < 26; ++l) {
-    for (int i = 0; i < TILE_COUNTS[l]; ++i) bag.add(l);
-  }
-  for (int i = 0; i < TILE_COUNTS[BLANK]; ++i) bag.add(BLANK);
-  return bag;
+// The tiles neither on the snapshot's board nor known to be on a rack. A file
+// that overdraws a tile leaves its count at 0: unparseable input is skipped,
+// never an error.
+TileCounts unaccounted_tiles(const ParsedGcgSnapshot& snapshot) {
+  TileCounts tiles = TileCounts::full_distribution();
+  tiles.remove(snapshot.board.tile_counts());
+  for (const Rack& rack : snapshot.racks) tiles.remove(rack.counts());
+  return tiles;
 }
 
 class GcgReader {
@@ -139,6 +123,7 @@ class GcgReader {
     }
 
     ApplyResumeRacks();
+    FillBags();
     FillResult(out_game);
     return true;
   }
@@ -151,7 +136,6 @@ class GcgReader {
     scores_ = {0, 0};
     racks_ = {};
     resume_racks_ = {};
-    bag_ = full_bag();
     turns_.clear();
     snapshots_.clear();
     snapshots_.push_back(CurrentSnapshot());
@@ -285,20 +269,7 @@ class GcgReader {
     const auto cumulative = parse_signed_int(tok.back());
     if (!cumulative.has_value()) return;
 
-    ParsedGcgTurn turn;
-    turn.record.player = player;
-    turn.record.rack_before = racks_[player];
-    turn.record.bag_size_before = BagSizeEstimate();
-    turn.record.move = Move::pass();
-    turn.record.score_delta = 0;
-    scores_[player] = *cumulative;
-    turn.record.cumulative_scores = scores_;
-    turn.notation = "pass";
-    turn.racks_after_turn = racks_;
-
-    turns_.push_back(std::move(turn));
-    snapshots_.push_back(CurrentSnapshot(1 - player));
-    saw_turn_ = true;
+    RecordTurn(player, Move::pass(), *cumulative);
   }
 
   void ParseExchangeTurn(int player, const std::vector<std::string>& tok) {
@@ -306,35 +277,17 @@ class GcgReader {
     const auto cumulative = parse_signed_int(tok.back());
     if (!cumulative.has_value()) return;
 
-    ParsedGcgTurn turn;
-    turn.record.player = player;
-    turn.record.rack_before = racks_[player];
-    turn.record.bag_size_before = BagSizeEstimate();
-
     TileCounts exchanged;
     const std::string exchange_letters = tok[1].substr(1);
     for (char ch : exchange_letters) {
-      const char up = upper_ch(ch);
-      if (up == '?') {
-        exchanged.add(BLANK);
-      } else if (up >= 'A' && up <= 'Z') {
-        exchanged.add(Tile::from_char(up));
-      }
+      const Tile t = ch == '?' ? BLANK : Tile::letter_from_char(ch);
+      if (!t.is_empty()) exchanged.add(t);
     }
 
-    turn.record.move = Move::exchange(exchanged);
-    turn.record.score_delta = 0;
-    scores_[player] = *cumulative;
-    turn.record.cumulative_scores = scores_;
+    ParsedGcgTurn& turn = RecordTurn(player, Move::exchange(exchanged), *cumulative);
+    // The field as written, since it may record hidden tiles as '_' or a count.
     turn.notation = "exch " + exchange_letters;
     turn.exchange_field = exchange_letters;
-
-    racks_[player] = Rack();
-    turn.racks_after_turn = racks_;
-
-    turns_.push_back(std::move(turn));
-    snapshots_.push_back(CurrentSnapshot(1 - player));
-    saw_turn_ = true;
   }
 
   void ParsePlayTurn(int player, const std::vector<std::string>& tok) {
@@ -370,13 +323,13 @@ class GcgReader {
           break;
         }
       } else {
-        const char up = upper_ch(ch);
-        if (up < 'A' || up > 'Z' || num_glyphs >= RACK_SIZE) {
+        const Tile letter = Tile::letter_from_char(ch);
+        if (letter.is_empty() || num_glyphs >= RACK_SIZE) {
           malformed = true;
           break;
         }
         const bool is_blank = std::islower(uint8_t(ch)) != 0;
-        glyphs[num_glyphs++] = Glyph::played(Tile::from_char(up), is_blank);
+        glyphs[num_glyphs++] = Glyph::played(letter, is_blank);
         const int lane = horizontal ? c : r;
         mask |= uint16_t(1) << lane;
       }
@@ -389,29 +342,32 @@ class GcgReader {
     if (malformed) return;
 
     const int start = horizontal ? row : col;
-    const Move move =
-      Move::play(horizontal, start, mask, uint16_t(*score), glyphs.data(), num_glyphs);
+    RecordTurn(player,
+               Move::play(horizontal, start, mask, uint16_t(*score), glyphs.data(), num_glyphs),
+               *cumulative);
+  }
 
-    const Board before = board_;
-    const int bag_size_before = BagSizeEstimate();
-    board_.apply(move);
-
+  // Records `player` making `move`, which leaves their score at `cumulative`,
+  // and applies it. A play or exchange empties the rack: the tiles drawn after
+  // it are unknown until the player's next rack field or pragma.
+  ParsedGcgTurn& RecordTurn(int player, const Move& move, int cumulative) {
     ParsedGcgTurn turn;
     turn.record.player = player;
     turn.record.rack_before = racks_[player];
-    turn.record.bag_size_before = bag_size_before;
+    turn.record.bag_size_before = BagSizeEstimate();
     turn.record.move = move;
-    turn.record.score_delta = *score;
-    scores_[player] = *cumulative;
+    turn.record.score_delta = move.score();
+    turn.notation = scored_move_notation(board_, move);
+    board_.apply(move);
+    scores_[player] = cumulative;
     turn.record.cumulative_scores = scores_;
-    turn.notation = move_to_notation(before, move);
-
-    racks_[player] = Rack();
+    if (move.type() != MoveType::PASS) racks_[player] = Rack();
     turn.racks_after_turn = racks_;
 
     turns_.push_back(std::move(turn));
     snapshots_.push_back(CurrentSnapshot(1 - player));
     saw_turn_ = true;
+    return turns_.back();
   }
 
   // The known tiles of a GCG rack field. 'A'..'Z' are tiles; '?', '*' and
@@ -422,11 +378,11 @@ class GcgReader {
     int slot = 0;
     for (char ch : rack_token) {
       if (slot >= RACK_SIZE) break;
-      const char up = upper_ch(ch);
-      const bool blank = up == '?' || ch == '*' || (ch >= 'a' && ch <= 'z');
-      if (!blank && up != '_' && (up < 'A' || up > 'Z')) continue;
+      const Tile letter = Tile::letter_from_char(ch);
+      const bool blank = ch == '?' || ch == '*' || (ch >= 'a' && ch <= 'z');
+      if (!blank && ch != '_' && letter.is_empty()) continue;
       ++slot;
-      if (up != '_') rack.add(blank ? BLANK : Tile::from_char(up));
+      if (ch != '_') rack.add(blank ? BLANK : letter);
     }
     return rack;
   }
@@ -437,14 +393,20 @@ class GcgReader {
     }
   }
 
-  int BagSizeEstimate() const { return std::max(0, 100 - board_tile_count(board_) - 14); }
+  // Last, since rack pragmas revise a snapshot's racks after it is taken.
+  void FillBags() {
+    for (ParsedGcgSnapshot& snapshot : snapshots_) snapshot.bag = unaccounted_tiles(snapshot);
+  }
+
+  // A turn line's rack may be partly hidden, but racks are full while the
+  // bag holds tiles.
+  int BagSizeEstimate() const { return board_.pov_bag_size(RACK_SIZE); }
 
   ParsedGcgSnapshot CurrentSnapshot(int turn_player = 0) const {
     ParsedGcgSnapshot snapshot;
     snapshot.board = board_;
     snapshot.scores = scores_;
     snapshot.racks = racks_;
-    snapshot.bag = bag_;
     snapshot.turn_player = turn_player;
     return snapshot;
   }
@@ -463,7 +425,6 @@ class GcgReader {
   std::array<int, 2> scores_ = {0, 0};
   std::array<Rack, 2> racks_;
   std::array<std::optional<Rack>, 2> resume_racks_;
-  TileCounts bag_;
   std::vector<ParsedGcgTurn> turns_;
   std::vector<ParsedGcgSnapshot> snapshots_;
   std::vector<ParsedGcgEndAdjustment> end_adjustments_;
@@ -578,8 +539,7 @@ void lift_position(const ParsedGcgSnapshot& snapshot, int mover, const Rack& rac
   out->rack = rack;
   out->opp_leave = open_leaves ? retained_leave(out->game, 1 - mover) : Rack{};
   out->turns = out->game.turns.size();
-  const int unseen = Bag::kTotalTiles - out->board.num_tiles() - out->rack.size();
-  out->bag_size = std::max(0, unseen - RACK_SIZE);
+  out->bag_size = out->board.pov_bag_size(out->rack.size());
 }
 
 }  // namespace

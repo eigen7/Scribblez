@@ -66,7 +66,7 @@ void write_mask(const FootprintMask& mask, float* out) {
 // mover's rack), the same pool the input encoder feeds the model, so the mask
 // agrees with the belief the model can form. ensure_movegen_caches is a no-op
 // when the input encoder has already built the caches.
-const uint8_t* prepare_mask_inputs(const EncodeContext& v, uint8_t (&pool)[27]) {
+const uint8_t* prepare_mask_inputs(const EncodeContext& v, uint8_t (&pool)[TILE_KINDS]) {
   const Board& board = v.enc->board();
   board.ensure_movegen_caches(*v.spec.dict);
   if (v.pov_rack == nullptr) return nullptr;
@@ -77,7 +77,7 @@ const uint8_t* prepare_mask_inputs(const EncodeContext& v, uint8_t (&pool)[27]) 
 }  // namespace
 
 void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
-  uint8_t pool[27];
+  uint8_t pool[TILE_KINDS];
   const uint8_t* available = prepare_mask_inputs(v, pool);
   FootprintMask mask;
   opp_footprint_mask(v.enc->board(), available, kMaskTileBudget, /*win_head=*/false, mask);
@@ -86,7 +86,7 @@ void OppPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
 
 // The opponent's ply is gated by the same unseen pool as the opp mask.
 void SelfPlacementMaskTarget::encode(const EncodeContext& v, float* out) {
-  uint8_t pool[27];
+  uint8_t pool[TILE_KINDS];
   const uint8_t* available = prepare_mask_inputs(v, pool);
   FootprintMask mask;
   self_footprint_mask(v.enc->board(), kMaskTileBudget, kMaskTileBudget, available,

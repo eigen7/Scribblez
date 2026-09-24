@@ -19,6 +19,12 @@ constexpr Tile Tile::from_char(char c) {
   return of(c - 'A');
 }
 
+constexpr Tile Tile::letter_from_char(char c) {
+  if (c >= 'a' && c <= 'z') return of(c - 'a');
+  if (c >= 'A' && c <= 'Z') return of(c - 'A');
+  return empty();
+}
+
 inline int Tile::value() const { return (is_blank() || is_empty()) ? 0 : TILE_VALUES[code_]; }
 
 }  // namespace scribblez

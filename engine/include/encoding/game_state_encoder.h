@@ -25,7 +25,7 @@ class Dictionary;
 
 // The tiles the holder of `my_rack` cannot see: TILE_COUNTS minus the board
 // and `my_rack`, i.e. the bag plus the opponent's rack. Indexed A..Z, blank.
-void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack);
+void compute_unseen_pool(uint8_t out[TILE_KINDS], const Board& board, const Rack& my_rack);
 
 class GameStateEncoder {
  public:

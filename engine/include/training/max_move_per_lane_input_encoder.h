@@ -22,7 +22,7 @@ struct MaxMovePerLaneInputEncoder {
   static constexpr int kBoardCells = BOARD_SIZE * BOARD_SIZE;          // 225
   static constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;  // 6975
 
-  static constexpr int kRackCountFloats = 27;
+  static constexpr int kRackCountFloats = TILE_KINDS;
   static constexpr int kScalarFloats = kRackCountFloats;               // 27
   static constexpr int kInputFloats = kSpatialFloats + kScalarFloats;  // 7002
 

@@ -184,14 +184,7 @@ std::vector<CapturedEndgame> capture_endgames(const Dictionary& dict, uint64_t b
 // The captured endgame's bag, which is empty: the board and both racks account
 // for every tile. play_from then draws nothing, so the racks stay as captured.
 Bag empty_pool(const CapturedEndgame& cap) {
-  Bag pool(/*seed=*/1);
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      const Glyph g = cap.board.at(r, c);
-      if (g.has_letter()) pool.remove(g.rack_tile());
-    }
-  }
-  for (int i = 0; i < cap.my_rack.size(); ++i) pool.remove(cap.my_rack.tiles()[i]);
+  Bag pool(/*seed=*/1, cap.board.unseen_tiles(cap.my_rack));
   for (int i = 0; i < cap.opp_rack.size(); ++i) pool.remove(cap.opp_rack.tiles()[i]);
   return pool;
 }

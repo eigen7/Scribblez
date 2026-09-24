@@ -180,7 +180,7 @@ void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
   if (res->candidates.moves.empty()) return;
   res->candidates.equities = HastyEquity::instance().equities(
     res->candidates.moves, pos.board, res->bag_size, pos.opp_leave, pos.rack);
-  res->unseen = unseen_pool(pos.board, pos.rack, 0).size();
+  res->unseen = pos.board.unseen_tiles(pos.rack).size();
   res->solved_endgames = runners.solving && res->unseen <= job->config.solve_endgames_max_unseen;
   const SimRunner& runner = res->solved_endgames ? *runners.solving : runners.standard;
   if (job->run_sims) reduce_rollouts(job->config, runner, res);

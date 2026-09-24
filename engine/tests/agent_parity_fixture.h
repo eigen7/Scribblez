@@ -46,7 +46,7 @@ inline std::array<Move, 3> three_turn_moves() {
 }
 
 // The sampled mover's rack at turn 2.
-inline Rack three_turn_mover_rack() { return rack_from("DONERST"); }
+inline Rack three_turn_mover_rack() { return Rack::from_string("DONERST"); }
 
 // The training row the BlockDecoder reconstructs for the three-turn game's
 // sampled turn, untransposed: the pre-move row, or with `post_move` the row
@@ -58,11 +58,11 @@ inline std::vector<float> decode_three_turn_row(const Dictionary& dict,
                                                 const Move& move2 = three_turn_moves()[2]) {
   const std::array<Move, 3> moves = three_turn_moves();
   binlog::InitialRacks ir{};
-  ir.p0 = rack_from("CATERST");
-  ir.p1 = rack_from("SAINTED");
+  ir.p0 = Rack::from_string("CATERST");
+  ir.p1 = Rack::from_string("SAINTED");
   binlog::TurnBlob t0{};
   t0.move = moves[0];
-  t0.drawn = rack_from("DON");
+  t0.drawn = Rack::from_string("DON");
   binlog::TurnBlob t1{};
   t1.move = moves[1];
   binlog::TurnBlob t2{};

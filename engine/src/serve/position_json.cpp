@@ -3,9 +3,6 @@
 #include "game/glyph.h"
 #include "game/tile.h"
 
-#include <algorithm>
-#include <numeric>
-
 namespace scribblez {
 
 namespace json = boost::json;
@@ -25,16 +22,6 @@ json::array rack_tiles(const Rack& my_rack) {
     rack.emplace_back(json::object{{"letter", "?"}, {"score", 0}});
   }
   return rack;
-}
-
-int tiles_on_board(const Board& board) {
-  int n = 0;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      if (!board.at(r, c).is_empty()) ++n;
-    }
-  }
-  return n;
 }
 
 }  // namespace
@@ -133,10 +120,8 @@ json::object position_state_object_pov(const Board& board, const Rack& my_rack, 
                                        const std::string& opp_name) {
   // The POV player cannot tell the bag from the opponent's rack, but the
   // refill-to-7 rule fixes their sizes.
-  const int total = std::accumulate(TILE_COUNTS.begin(), TILE_COUNTS.end(), 0);
-  const int unseen = total - tiles_on_board(board) - my_rack.size();
-  const int opp_rack_size = std::min(unseen, RACK_SIZE);
-  const int bag_size = unseen - opp_rack_size;
+  const int bag_size = board.pov_bag_size(my_rack.size());
+  const int opp_rack_size = board.unseen_count(my_rack.size()) - bag_size;
   return position_state_object(board, my_rack, my_score, opp_score, bag_size, opp_rack_size,
                                my_name, opp_name, /*your_turn=*/true, /*game_over=*/false);
 }

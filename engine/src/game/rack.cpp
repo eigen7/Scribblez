@@ -1,8 +1,21 @@
 #include "game/rack.h"
 
+#include "util/exception.h"
+
 #include <cstring>
 
 namespace scribblez {
+
+Rack Rack::from_counts(const TileCounts& counts) {
+  if (counts.size() > RACK_SIZE) {
+    throw util::Exception("a rack holds at most {} tiles, not {}", RACK_SIZE, counts.size());
+  }
+  Rack rack;
+  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
+    for (int i = 0; i < counts.count(t); ++i) rack.add(t);
+  }
+  return rack;
+}
 
 uint64_t Rack::bits() const {
   uint64_t b;

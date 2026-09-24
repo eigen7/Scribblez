@@ -66,7 +66,7 @@ struct ManualTilePlacement {
   int row = -1;
   int col = -1;
   Tile tile = EMPTY_SQUARE;
-  char letter = '\0';
+  Tile letter = EMPTY_SQUARE;  // for a blank, the letter it designates
   bool is_blank = false;
   bool from_rack = false;
   int rack_slot = -1;
@@ -153,11 +153,6 @@ struct ManualSnapshot {
   int turn_player = 0;
 };
 
-char upper_ch(char c) {
-  if (c >= 'a' && c <= 'z') return char(c - 'a' + 'A');
-  return c;
-}
-
 std::string now_string() {
   using clock = std::chrono::system_clock;
   const std::time_t t = clock::to_time_t(clock::now());
@@ -175,14 +170,6 @@ std::string now_string() {
 std::string trim_name(const std::string& in) {
   if (in.empty()) return in;
   return in.substr(0, kMaxNameLen);
-}
-
-Tile tile_from_letter(const std::string& s, bool is_blank) {
-  if (is_blank) return BLANK;
-  if (s.empty()) return EMPTY_SQUARE;
-  const char c = upper_ch(s[0]);
-  if (c < 'A' || c > 'Z') return EMPTY_SQUARE;
-  return Tile::from_char(c);
 }
 
 std::string gcg_rack_field(const RackSlots& slots) {
@@ -205,21 +192,6 @@ std::optional<std::string> maybe_rack_pragma(const RackSlots& slots) {
   if (!has_known_tiles(slots)) return std::nullopt;
   return gcg_rack_field(slots);
 }
-
-int board_tile_count(const Board& board) {
-  int n = 0;
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      if (!board.at(r, c).is_empty()) ++n;
-    }
-  }
-  return n;
-}
-
-// The bag count the UI shows: 100 tiles, less those on the board and 14 for two
-// full racks. Racks are always full while the bag has tiles, so this is exact
-// whatever rack tiles have been entered.
-int bag_estimate(const Board& board) { return std::max(0, 100 - board_tile_count(board) - 14); }
 
 // Both players' racks as JSON, one object per slot (see DisplaySlot).
 boost::json::array racks_json(const std::array<RackDisplay, 2>& display_racks) {
@@ -282,7 +254,9 @@ class ManualGame {
 
   boost::json::object state_json() const {
     const ManualSnapshot& snap = snapshots_[view_ply_];
-    const int bag_count = bag_estimate(snap.board);
+    // Racks are always full while the bag has tiles, so this is exact whatever
+    // rack tiles have been entered.
+    const int bag_count = snap.board.pov_bag_size(RACK_SIZE);
     const std::array<RackDisplay, 2> display_racks = display_racks_for_view(view_ply_, snap.racks);
 
     boost::json::object o;
@@ -338,11 +312,7 @@ class ManualGame {
     end_adjustments_.clear();
     status_ = "";
     racks_ = {};
-    bag_ = TileCounts();
-    for (Tile L = Tile::of(0); L < 26; ++L) {
-      for (int i = 0; i < TILE_COUNTS[L]; ++i) bag_.add(L);
-    }
-    for (int i = 0; i < TILE_COUNTS[BLANK]; ++i) bag_.add(BLANK);
+    bag_ = TileCounts::full_distribution();
 
     snapshots_.clear();
     snapshots_.push_back(snapshot_from_live());
@@ -381,7 +351,7 @@ class ManualGame {
       return;
     }
 
-    const Tile t = tile_from_letter(letter, letter == "?");
+    const Tile t = letter == "?" ? BLANK : Tile::letter_from_char(letter[0]);
     if (t.is_empty()) {
       status_ = "Invalid tile letter";
       return;
@@ -402,28 +372,7 @@ class ManualGame {
       status_ = "It is not that player's turn";
       return;
     }
-    const RackSlots before_slots = racks_[player];
-    TurnRecord rec;
-    rec.player = player;
-    rec.rack_before = rack_known_tiles_from_slots(before_slots);
-    rec.bag_size_before = bag_.size();
-    rec.move = Move::pass();
-    rec.score_delta = 0;
-    rec.cumulative_scores = scores_;
-    rec.drawn = Rack();
-
-    ManualTurn turn;
-    turn.record = rec;
-    turn.include_rack_before = rack_fully_known(before_slots);
-    turn.notation = "pass";
-    turn.rack_before_slots = before_slots;
-    turn.racks_after_turn = {racks_[0], racks_[1]};
-    turns_.push_back(std::move(turn));
-
-    turn_player_ = 1 - turn_player_;
-    status_ = "";
-    snapshots_.push_back(snapshot_from_live());
-    view_ply_ = turns_.size();
+    record_turn(player, Move::pass(), racks_[player], bag_.size());
   }
 
   void exchange_turn(int player, const std::vector<int>& slots) {
@@ -466,28 +415,11 @@ class ManualGame {
     }
     if (all_unknown) exchange_field = std::to_string(unique_slots.size());
 
-    TurnRecord rec;
-    rec.player = player;
-    rec.rack_before = rack_known_tiles_from_slots(before_slots);
-    rec.bag_size_before = bag_size_before;
-    rec.move = Move::exchange(exchanged_known);
-    rec.score_delta = 0;
-    rec.cumulative_scores = scores_;
-    rec.drawn = Rack();
-
-    ManualTurn turn;
-    turn.record = rec;
-    turn.include_rack_before = rack_fully_known(before_slots);
+    ManualTurn& turn =
+      record_turn(player, Move::exchange(exchanged_known), before_slots, bag_size_before);
+    // Hidden tiles are written as '_' (or, if all hidden, a count).
     turn.notation = "exch " + exchange_field;
-    turn.rack_before_slots = before_slots;
-    turn.racks_after_turn = {racks_[0], racks_[1]};
     turn.exchange_field = exchange_field;
-    turns_.push_back(std::move(turn));
-
-    turn_player_ = 1 - turn_player_;
-    status_ = "";
-    snapshots_.push_back(snapshot_from_live());
-    view_ply_ = turns_.size();
   }
 
   // Records the legal play that places exactly `placements` (the client's
@@ -510,13 +442,12 @@ class ManualGame {
       p.row = int_field(o, "row");
       p.col = int_field(o, "col");
       p.is_blank = bool_field(o, "isBlank");
-      const std::string letter = str_field(o, "letter");
-      p.tile = tile_from_letter(letter, p.is_blank);
-      p.letter = letter.empty() ? '\0' : upper_ch(letter[0]);
+      p.letter = letter_field(o, "letter");
+      p.tile = p.is_blank ? BLANK : p.letter;
       p.from_rack = str_field(o, "source") == "rack";
       p.rack_slot = int_field(o, "slot");
       if (p.row < 0 || p.col < 0 || p.row >= BOARD_SIZE || p.col >= BOARD_SIZE ||
-          p.tile.is_empty() || p.letter < 'A' || p.letter > 'Z') {
+          p.tile.is_empty() || p.letter.is_empty()) {
         status_ = "Invalid tile placement";
         return;
       }
@@ -528,12 +459,12 @@ class ManualGame {
       status_ = "No placed tiles were provided";
       return;
     }
-
-    Rack gen_rack;
-    for (Tile L = Tile::of(0); L < 26; ++L) {
-      for (int i = 0; i < required.count(L); ++i) gen_rack.add(L);
+    if (required.size() > RACK_SIZE) {
+      status_ = "A play places at most seven tiles";
+      return;
     }
-    for (int i = 0; i < required.count(BLANK); ++i) gen_rack.add(BLANK);
+
+    Rack gen_rack = Rack::from_counts(required);
     while (gen_rack.size() < RACK_SIZE) gen_rack.add(Tile::of(4));  // filler 'E'
 
     std::vector<Move> legal = movegen_.generate(gen_rack);
@@ -572,51 +503,16 @@ class ManualGame {
       }
     }
 
-    for (Tile L = Tile::of(0); L < 26; ++L) {
-      if (bag_needed.count(L) > bag_.count(L)) {
-        status_ = "Bag does not contain all dragged tiles";
-        return;
-      }
-    }
-    if (bag_needed.count(BLANK) > bag_.count(BLANK)) {
+    TileCounts bag_after = bag_;
+    if (!bag_after.remove(bag_needed)) {
       status_ = "Bag does not contain all dragged tiles";
       return;
     }
-
-    for (Tile L = Tile::of(0); L < 26; ++L) {
-      for (int i = 0; i < bag_needed.count(L); ++i) bag_.remove(L);
-    }
-    for (int i = 0; i < bag_needed.count(BLANK); ++i) bag_.remove(BLANK);
+    bag_ = bag_after;
 
     const RackSlots before_slots = racks_[player];
-    const int bag_size_before = bag_.size();
     for (int slot : used_slots) racks_[player][slot] = EMPTY_SQUARE;
-
-    const Board before = board_;
-    TurnRecord rec;
-    rec.player = player;
-    rec.rack_before = rack_known_tiles_from_slots(before_slots);
-    rec.bag_size_before = bag_size_before;
-    rec.move = chosen;
-    rec.score_delta = chosen.score();
-    scores_[player] += chosen.score();
-    rec.cumulative_scores = scores_;
-    rec.drawn = Rack();
-
-    board_.apply(chosen);
-
-    ManualTurn t;
-    t.record = rec;
-    t.include_rack_before = rack_fully_known(before_slots);
-    t.notation = move_to_notation(before, chosen);
-    t.rack_before_slots = before_slots;
-    t.racks_after_turn = {racks_[0], racks_[1]};
-    turns_.push_back(std::move(t));
-
-    turn_player_ = 1 - turn_player_;
-    status_ = "";
-    snapshots_.push_back(snapshot_from_live());
-    view_ply_ = turns_.size();
+    record_turn(player, chosen, before_slots, bag_.size());
   }
 
   // The number of recorded turns. jump_to_ply accepts [0, ply_count()], from
@@ -627,20 +523,14 @@ class ManualGame {
   // notation strings ("8H WAREZ 54"), highest score first.
   std::vector<std::string> list_moves(int ply, const std::string& rack_str) const {
     const Board& board = snapshots_.at(std::size_t(ply)).board;
-    Rack rack;
-    for (const char c : rack_str) {
-      if (c == '?')
-        rack.add(BLANK);
-      else if (c >= 'A' && c <= 'Z')
-        rack.add(Tile::of(c - 'A'));
-    }
+    const Rack rack = Rack::from_string(rack_str);
     MoveGenerator gen(board, dict_);
     std::vector<Move> moves = gen.generate(rack);
     std::sort(moves.begin(), moves.end(),
               [](const Move& a, const Move& b) { return a.score() > b.score(); });
     std::vector<std::string> out;
     out.reserve(moves.size());
-    for (const Move& m : moves) out.push_back(move_to_notation(board, m));
+    for (const Move& m : moves) out.push_back(scored_move_notation(board, m));
     return out;
   }
 
@@ -786,6 +676,33 @@ class ManualGame {
   }
 
  private:
+  // Records `player` making `move` from `before_slots`, their rack before it
+  // (racks_ already lacks the tiles it used), with `bag_size_before` tiles in
+  // the bag; applies it and passes the turn.
+  ManualTurn& record_turn(int player, const Move& move, const RackSlots& before_slots,
+                          int bag_size_before) {
+    ManualTurn turn;
+    turn.record.player = player;
+    turn.record.rack_before = rack_known_tiles_from_slots(before_slots);
+    turn.record.bag_size_before = bag_size_before;
+    turn.record.move = move;
+    turn.record.score_delta = move.score();
+    turn.notation = scored_move_notation(board_, move);
+    board_.apply(move);
+    scores_[player] += move.score();
+    turn.record.cumulative_scores = scores_;
+    turn.include_rack_before = rack_fully_known(before_slots);
+    turn.rack_before_slots = before_slots;
+    turn.racks_after_turn = racks_;
+    turns_.push_back(std::move(turn));
+
+    turn_player_ = 1 - turn_player_;
+    status_ = "";
+    snapshots_.push_back(snapshot_from_live());
+    view_ply_ = turns_.size();
+    return turns_.back();
+  }
+
   Rack rack_known_tiles_from_slots(const RackSlots& slots) const {
     Rack r;
     for (int i = 0; i < RACK_SIZE; ++i) {
@@ -830,12 +747,8 @@ class ManualGame {
     int i = 0;
     for (char ch : letters) {
       if (i >= RACK_SIZE) break;
-      const char up = upper_ch(ch);
-      if (up == '?') {
-        slots[i++] = BLANK;
-      } else if (up >= 'A' && up <= 'Z') {
-        slots[i++] = Tile::from_char(up);
-      }
+      const Tile t = ch == '?' ? BLANK : Tile::letter_from_char(ch);
+      if (!t.is_empty()) slots[i++] = t;
     }
     return slots;
   }
@@ -1009,7 +922,7 @@ class ManualGame {
       const ManualTilePlacement* p = it->second;
       Glyph g = m.glyph(gi++);
       if (g.is_blank() != p->is_blank) return false;
-      if (g.letter().to_char() != p->letter) return false;
+      if (g.letter() != p->letter) return false;
     }
 
     return gi == m.num_glyphs();

@@ -60,6 +60,8 @@
 // come out transposed, with the two kCrossChecks halves swapped since that is
 // the one block whose contents name an axis, and its scalars are unchanged.
 
+#include "game/tile.h"
+
 namespace scribblez {
 
 class Dictionary;
@@ -93,7 +95,7 @@ inline constexpr int kBoardBlockPlanes = 31;  // == BoardPlanes::kPlanes, assert
 inline constexpr int kHorizontalCrossCheckPlanes = 26;
 inline constexpr int kVerticalCrossCheckPlanes = 26;
 inline constexpr int kCrossCheckPlanes = kHorizontalCrossCheckPlanes + kVerticalCrossCheckPlanes;
-inline constexpr int kRackCountFloats = 27;
+inline constexpr int kRackCountFloats = TILE_KINDS;
 inline constexpr int kUnseenPoolThermoFloats = 100;  // == sum(TILE_COUNTS) for English Scrabble
 // The move set evaluation model's post-move score-difference feature uses the
 // same scale, so it is simply this input plus the move's scaled score.
@@ -102,7 +104,7 @@ inline constexpr float kScoreDiffInputScale = 100.0f;
 inline constexpr int kMoveMetaTypeFloats = 3;
 inline constexpr int kMoveMetaFloatsPerMove = kMoveMetaTypeFloats + 1;
 inline constexpr int kMoveMetaFloats = 2 * kMoveMetaFloatsPerMove;
-inline constexpr int kOppLeaveCountFloats = 27;
+inline constexpr int kOppLeaveCountFloats = TILE_KINDS;
 
 // ---- Block registry ---------------------------------------------------------
 

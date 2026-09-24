@@ -22,7 +22,7 @@ inline constexpr tile_set_t kAllTiles = kAllLettersMask | kBlankTile;
 tile_set_t available_tiles(const uint8_t* counts) {
   if (counts == nullptr) return kAllTiles;
   tile_set_t avail = 0;
-  for (int t = 0; t < 27; ++t)
+  for (int t = 0; t < TILE_KINDS; ++t)
     if (counts[t] > 0) avail |= (1u << t);
   return avail;
 }

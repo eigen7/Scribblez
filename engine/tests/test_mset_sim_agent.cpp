@@ -41,7 +41,6 @@ using scribblez::testing::expect_move_features_match;
 using scribblez::testing::make_play_full;
 using scribblez::testing::model_rank;
 using scribblez::testing::opening_dict;
-using scribblez::testing::rack_from;
 using scribblez::testing::script_favouring;
 using scribblez::testing::shortlist_candidates;
 using scribblez::testing::StubMoveSetEvalService;
@@ -80,8 +79,8 @@ class MsetSimAgentTest : public ::testing::Test {
 
   Dictionary dict_ = opening_dict();
   Board board_;
-  Rack my_rack_ = rack_from("CARTES");
-  Rack opp_leave_ = rack_from("AE");
+  Rack my_rack_ = Rack::from_string("CARTES");
+  Rack opp_leave_ = Rack::from_string("AE");
   int bag_size_ = 86;
   std::filesystem::path tmp_;
 };
@@ -222,7 +221,7 @@ TEST_F(MsetSimAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
   MsetSimAgent agent(params(), std::move(stub));
   agent.begin_game({});
 
-  const Rack unplayable = rack_from("QQQQQQ");  // no dict word uses Q
+  const Rack unplayable = Rack::from_string("QQQQQQ");  // no dict word uses Q
   MoveRequest req{board_,          dict_,         unplayable, opp_leave_, /*my_score=*/13,
                   /*opp_score=*/7, /*bag_size=*/3};  // < RACK_SIZE: exchanges illegal
   const Move played = agent.make_move(req).move;

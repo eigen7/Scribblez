@@ -48,7 +48,6 @@ using scribblez::testing::check_pre_move_row_matches_decoder;
 using scribblez::testing::expect_move_features_match;
 using scribblez::testing::make_play_full;
 using scribblez::testing::opening_dict;
-using scribblez::testing::rack_from;
 using scribblez::testing::StubMoveProposalService;
 
 namespace {
@@ -114,8 +113,8 @@ class UltimateBotAgentTest : public ::testing::Test {
 
   Dictionary dict_ = opening_dict();
   Board board_;
-  Rack my_rack_ = rack_from("CARTES");
-  Rack opp_leave_ = rack_from("AE");
+  Rack my_rack_ = Rack::from_string("CARTES");
+  Rack opp_leave_ = Rack::from_string("AE");
   int bag_size_ = 86;
   std::filesystem::path tmp_;
 };
@@ -284,7 +283,7 @@ TEST_F(UltimateBotAgentTest, ABudgetPastTheCandidateCountSimsThemAll) {
   // No legal play in this dictionary, so the candidates are the rack's 35
   // distinct exchanges, few enough to exhaust. The bag must be able to supply
   // the rack, since the sims draw from the bag less these tiles.
-  const Rack rack = rack_from("VVWWXQ");
+  const Rack rack = Rack::from_string("VVWWXQ");
   const MoveRequest req{board_,          dict_,    rack, opp_leave_, /*my_score=*/13,
                         /*opp_score=*/7, bag_size_};
   const std::vector<Move> cands = candidates(req);
@@ -344,7 +343,7 @@ TEST_F(UltimateBotAgentTest, ASoleCandidatePlaysWithoutModelOrRollouts) {
   UltimateBotAgent agent(params(), std::move(stub));
   agent.begin_game({});
 
-  const Rack unplayable = rack_from("QQQQQQ");  // no dict word uses Q
+  const Rack unplayable = Rack::from_string("QQQQQQ");  // no dict word uses Q
   MoveRequest req{board_,          dict_,         unplayable, opp_leave_, /*my_score=*/13,
                   /*opp_score=*/7, /*bag_size=*/3};  // < RACK_SIZE: exchanges illegal
   const Move played = agent.make_move(req).move;

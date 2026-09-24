@@ -1,5 +1,6 @@
 #include "serve/web_server.h"
 
+#include "data/gcg_writer.h"
 #include "game/game.h"
 #include "game/tile.h"
 #include "serve/position_json.h"
@@ -143,54 +144,6 @@ void kill_listening_pids_on_port(int port) {
 
 }  // namespace
 
-// --------------------------- move notation -------------------------------
-
-std::string move_to_notation(const Board& board, const Move& move) {
-  if (move.type() == MoveType::PASS) return "pass";
-  if (move.type() == MoveType::EXCHANGE) {
-    // The surrendered tiles are stored sorted (A..Z then blanks); render blanks
-    // as '?'. e.g. "exch AQWW".
-    std::string letters;
-    for (int i = 0; i < move.num_glyphs(); ++i) {
-      Glyph g = move.glyph(i);
-      letters.push_back(g.is_blank() ? '?' : g.letter().to_char());
-    }
-    return "exch " + letters;
-  }
-
-  auto [sr, sc] = move.word_origin(board);
-  std::string pos;
-  char col_letter = 'A' + sc;
-  if (move.horizontal()) {
-    pos = std::format("{}{}", sr + 1, col_letter);  // e.g. "8H"
-  } else {
-    pos = std::format("{}{}", col_letter, sr + 1);  // e.g. "H8"
-  }
-
-  // Render the main word, lowercasing blank tiles (new or already on board).
-  std::string word;
-  const int dr = move.horizontal() ? 0 : 1, dc = move.horizontal() ? 1 : 0;
-  const int n = move.num_glyphs();
-  int r = sr, c = sc, gi = 0;
-  while (board.in_bounds(r, c)) {
-    Glyph cell = board.at(r, c);
-    Glyph g;
-    if (!cell.is_empty()) {
-      g = cell;  // existing tile
-    } else if (gi < n) {
-      g = move.glyph(gi++);  // newly placed tile
-    } else {
-      break;
-    }
-    char ch = g.letter().to_char();
-    word.push_back(g.is_blank() ? char(ch - 'A' + 'a') : ch);
-    r += dr;
-    c += dc;
-  }
-
-  return std::format("{} {} {}", pos, word, move.score());
-}
-
 // --------------------------- state serialization -------------------------
 
 StateView::StateView(const MoveRequest& req, const std::string& my_name,
@@ -241,7 +194,7 @@ std::string game_state_json(const StateView& v) {
     for (size_t i = 0; i < v.legal_plays->size(); ++i) {
       const Move& m = (*v.legal_plays)[i];
       json::object mo{
-        {"index", int(i)}, {"text", move_to_notation(v.board, m)}, {"score", m.score()}};
+        {"index", int(i)}, {"text", scored_move_notation(v.board, m)}, {"score", m.score()}};
       // equity: null when we have no Macondo evaluation. The front-end
       // renders the null cells blank.
       if (v.legal_play_equities && i < v.legal_play_equities->size()) {

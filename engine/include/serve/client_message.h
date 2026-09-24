@@ -4,6 +4,8 @@
 // mistyped field reads as the fallback, so a handler validates values rather
 // than JSON types.
 
+#include "game/tile.h"
+
 #include <boost/json.hpp>
 
 #include <string>
@@ -17,5 +19,9 @@ std::string str_field(const boost::json::object& msg, boost::json::string_view k
 
 bool bool_field(const boost::json::object& msg, boost::json::string_view key,
                 bool fallback = false);
+
+// The letter A..Z (either case) a string field starts with, or EMPTY_SQUARE if
+// it is absent, empty or not a letter.
+Tile letter_field(const boost::json::object& msg, boost::json::string_view key);
 
 }  // namespace scribblez

@@ -1,7 +1,6 @@
 #include "encoding/position_encoder.h"
 
 #include "encoding/input_encoder.h"
-#include "game/bag.h"
 #include "util/assert.h"
 
 #include <cstdint>
@@ -56,7 +55,7 @@ void encode_candidate_rows(const PositionEncoder& encoder, const GameLog& g, int
 }
 
 int PositionEncoder::bag_size() const {
-  return Bag::kTotalTiles - enc_.board().num_tiles() - racks_[0].size() - racks_[1].size();
+  return enc_.board().unseen_count(racks_[0].size() + racks_[1].size());
 }
 
 int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move) {

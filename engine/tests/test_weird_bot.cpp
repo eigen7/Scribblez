@@ -80,12 +80,6 @@ bool places_letter(const Move& m, char letter) {
   return false;
 }
 
-Rack rack_of(const std::string& letters) {
-  Rack r;
-  for (char ch : letters) r.add(Tile::from_char(ch));
-  return r;
-}
-
 void set_letter(Board& b, int r, int c, char letter) {
   b.set(r, c, Glyph::of(Tile::from_char(letter)));
 }
@@ -104,7 +98,7 @@ TEST(WeirdBot, ForcesHighestLeaveTileOntoBestCrossCheck) {
 
   // Seed the leave with {J}.
   Board b1;
-  const Rack r1 = rack_of("J");
+  const Rack r1 = Rack::from_string("J");
   const MoveRequest req1{b1, dict, r1, opp, 0, 0, /*bag_size=*/0};
   const Move m1 = wb.make_move(req1).move;
   ASSERT_EQ(m1.type(), MoveType::PASS);
@@ -112,7 +106,7 @@ TEST(WeirdBot, ForcesHighestLeaveTileOntoBestCrossCheck) {
   Board b2;
   set_letter(b2, 8, 0, 'O');
   set_letter(b2, 7, 1, 'A');
-  const Rack r2 = rack_of("J");
+  const Rack r2 = Rack::from_string("J");
   const MoveRequest req2{b2, dict, r2, opp, 0, 0, /*bag_size=*/5};
   const Move m2 = wb.make_move(req2).move;
 
@@ -132,12 +126,12 @@ TEST(WeirdBot, FallsBackWhenNoCrossCheckSquare) {
 
   // Seed the leave with {J,Q,Z}.
   Board b1;
-  const Rack r1 = rack_of("JQZ");
+  const Rack r1 = Rack::from_string("JQZ");
   const MoveRequest req1{b1, dict, r1, opp, 0, 0, /*bag_size=*/0};
   ASSERT_EQ(wb.make_move(req1).move.type(), MoveType::PASS);
 
   Board b2;
-  const Rack r2 = rack_of("JQZCAT");
+  const Rack r2 = Rack::from_string("JQZCAT");
   const MoveRequest req2{b2, dict, r2, opp, 0, 0, /*bag_size=*/90};
   const Move m2 = wb.make_move(req2).move;
 
@@ -159,7 +153,7 @@ TEST(WeirdBot, TracksOwnLeaveAcrossMoves) {
 
   Board b1;
   set_letter(b1, 7, 7, 'O');
-  const Rack r1 = rack_of("JA");
+  const Rack r1 = Rack::from_string("JA");
   const MoveRequest req1{b1, dict, r1, opp, 0, 0, /*bag_size=*/3};
   const Move m1 = wb.make_move(req1).move;
   ASSERT_EQ(m1.type(), MoveType::PLAY);
@@ -171,7 +165,7 @@ TEST(WeirdBot, TracksOwnLeaveAcrossMoves) {
   set_letter(b2, 8, 0, 'T');  // AT vertical at (7,0)
   set_letter(b2, 7, 6, 'O');  // JO horizontal at (7,5)
   set_letter(b2, 8, 5, 'O');  // JO vertical at (7,5)
-  const Rack r2 = rack_of("AJ");
+  const Rack r2 = Rack::from_string("AJ");
   const MoveRequest req2{b2, dict, r2, opp, 0, 0, /*bag_size=*/5};
   const Move m2 = wb.make_move(req2).move;
 
@@ -188,7 +182,7 @@ TEST(WeirdBot, FirstMoveFallsBackToHasty) {
   wb.begin_game({});
 
   Board b;
-  const Rack my = rack_of("CAT");
+  const Rack my = Rack::from_string("CAT");
   const Rack opp;
   const MoveRequest req{b, dict, my, opp, 0, 0, /*bag_size=*/90};
   const Move m = wb.make_move(req).move;
@@ -225,7 +219,7 @@ TEST(WeirdBot, ForcesGAtM7OnPos09) {
 
   // Seed the leave with {G}.
   Board seed;
-  const Rack g = rack_of("G");
+  const Rack g = Rack::from_string("G");
   const MoveRequest seed_req{seed, dict, g, opp, 0, 0, /*bag_size=*/0};
   ASSERT_EQ(wb.make_move(seed_req).move.type(), MoveType::PASS);
 

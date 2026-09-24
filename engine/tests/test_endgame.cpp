@@ -37,17 +37,6 @@ using scribblez::testing::move_key;
 
 namespace {
 
-Rack rack_from(const std::string& s) {
-  Rack r;
-  for (char c : s) {
-    if (c == '?')
-      r.add(BLANK);
-    else
-      r.add(Tile::from_char(c));
-  }
-  return r;
-}
-
 bool squares_equal(const Board& a, const Board& b) {
   for (int r = 0; r < BOARD_SIZE; ++r)
     for (int c = 0; c < BOARD_SIZE; ++c)
@@ -367,8 +356,8 @@ TEST(EndgameSolver, OutInOneOptimal) {
   Dictionary d = tiny_dict();
   Board b;  // empty board: "GO" opens across the center and empties the rack
 
-  const Rack my = rack_from("GO");
-  const Rack opp = rack_from("BD");
+  const Rack my = Rack::from_string("GO");
+  const Rack opp = Rack::from_string("BD");
   const int my_score = 30, opp_score = 25;
 
   const std::vector<Move> plays = MoveGenerator(b, d).generate(my);
@@ -390,8 +379,8 @@ TEST(EndgameSolver, OutInOneOptimal) {
 TEST(EndgameSolver, StalematePassPass) {
   Dictionary d = tiny_dict();
   Board b;
-  const Rack my = rack_from("VV");   // V appears in no tiny-dict word
-  const Rack opp = rack_from("WW");  // W appears in no tiny-dict word
+  const Rack my = Rack::from_string("VV");   // V appears in no tiny-dict word
+  const Rack opp = Rack::from_string("WW");  // W appears in no tiny-dict word
   const int my_score = 40, opp_score = 12;
 
   ASSERT_TRUE(MoveGenerator(b, d).generate(my).empty());
@@ -411,8 +400,8 @@ TEST(EndgameSolver, StalematePassPass) {
 TEST(EndgameSolver, StuckOpponentMultiTurnOut) {
   Dictionary d = tiny_dict();
   Board b;
-  const Rack my = rack_from("CATS");
-  const Rack opp = rack_from("VW");  // V and W are in no tiny_dict word
+  const Rack my = Rack::from_string("CATS");
+  const Rack opp = Rack::from_string("VW");  // V and W are in no tiny_dict word
   const int my_score = 10, opp_score = 8;
 
   ASSERT_TRUE(MoveGenerator(b, d).generate(opp).empty());
@@ -972,7 +961,7 @@ TEST(OutplaySet, CollectQueryFilter) {
 // which the other one-tile plays spend.
 TEST(LeaveOutplays, BucketsByLeave) {
   Board b;
-  const Rack rack = rack_from("AA");
+  const Rack rack = Rack::from_string("AA");
   std::vector<Move> plays;
   plays.push_back(vert_play(3, {0, 1}, 30));  // spends AA: an out-play
   plays.push_back(vert_play(9, {7}, 10));     // spends one A
@@ -1156,8 +1145,8 @@ TEST(EndgameSolver, RootFutilityPruningIsSound) {
 TEST(EndgameSolver, RootFutilityProvesLossFromBoundsAlone) {
   Dictionary d = tiny_dict();
   Board b;
-  const Rack my = rack_from("VV");  // V is in no tiny_dict word
-  const Rack opp = rack_from("GO");
+  const Rack my = Rack::from_string("VV");  // V is in no tiny_dict word
+  const Rack opp = Rack::from_string("GO");
   const int my_score = 20, opp_score = 20;
   ASSERT_TRUE(MoveGenerator(b, d).generate(my).empty());
   ASSERT_NE(find_out_move(MoveGenerator(b, d).generate(opp), opp), nullptr);
@@ -1250,19 +1239,21 @@ TEST(EndgameSolver, MovegensCounted) {
 // --- Incremental move-list maintenance (PathMoveLists) ----------------------
 
 TEST(PackedCounts, SubsetRespectsMultiplicityAndBlanks) {
-  const PackedCounts eea = pack_rack(rack_from("EEA"));
+  const PackedCounts eea = pack_rack(Rack::from_string("EEA"));
   EXPECT_TRUE(counts_subset(pack_rack(Rack{}), eea));
-  EXPECT_TRUE(counts_subset(pack_rack(rack_from("E")), eea));
-  EXPECT_TRUE(counts_subset(pack_rack(rack_from("EE")), eea));
-  EXPECT_TRUE(counts_subset(pack_rack(rack_from("EEA")), eea));
-  EXPECT_FALSE(counts_subset(pack_rack(rack_from("EEE")), eea));
-  EXPECT_FALSE(counts_subset(pack_rack(rack_from("B")), eea));
+  EXPECT_TRUE(counts_subset(pack_rack(Rack::from_string("E")), eea));
+  EXPECT_TRUE(counts_subset(pack_rack(Rack::from_string("EE")), eea));
+  EXPECT_TRUE(counts_subset(pack_rack(Rack::from_string("EEA")), eea));
+  EXPECT_FALSE(counts_subset(pack_rack(Rack::from_string("EEE")), eea));
+  EXPECT_FALSE(counts_subset(pack_rack(Rack::from_string("B")), eea));
   // The blank is a tile type of its own, not a wildcard, and lives in the high
   // half together with Q..Z.
-  EXPECT_FALSE(counts_subset(pack_rack(rack_from("?")), eea));
-  EXPECT_TRUE(counts_subset(pack_rack(rack_from("?")), pack_rack(rack_from("A?"))));
-  EXPECT_TRUE(counts_subset(pack_rack(rack_from("ZZ")), pack_rack(rack_from("QZZ"))));
-  EXPECT_FALSE(counts_subset(pack_rack(rack_from("ZZZ")), pack_rack(rack_from("QZZ"))));
+  EXPECT_FALSE(counts_subset(pack_rack(Rack::from_string("?")), eea));
+  EXPECT_TRUE(counts_subset(pack_rack(Rack::from_string("?")), pack_rack(Rack::from_string("A?"))));
+  EXPECT_TRUE(
+    counts_subset(pack_rack(Rack::from_string("ZZ")), pack_rack(Rack::from_string("QZZ"))));
+  EXPECT_FALSE(
+    counts_subset(pack_rack(Rack::from_string("ZZZ")), pack_rack(Rack::from_string("QZZ"))));
 }
 
 namespace {

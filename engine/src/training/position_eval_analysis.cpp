@@ -10,6 +10,7 @@
 #include "serve/position_json.h"
 #include "training/footprint_collapse.h"
 #include "util/assert.h"
+#include "util/exception.h"
 
 #include <boost/json.hpp>
 
@@ -38,25 +39,14 @@ void replay_and_encode(const ParsedGcgPostMove& pos, const Rack& leave, const Ra
   enc.encode_input(pos.start_player, leave, opp_leave, out);
 }
 
-// Parse a leave string into a Rack: A-Z (any case) are letters, '?' is a blank,
-// spaces are ignored. Fails on any other character or more than RACK_SIZE tiles.
-bool parse_leave(const std::string& s, Rack* out, std::string* error) {
-  for (char c : s) {
-    if (c == ' ') continue;
-    if (out->size() >= RACK_SIZE) {
-      if (error) *error = std::format("a leave holds at most {} tiles", RACK_SIZE);
-      return false;
-    }
-    if (c == '?') {
-      out->add(BLANK);
-    } else if (c >= 'A' && c <= 'Z') {
-      out->add(Tile::of(c - 'A'));
-    } else if (c >= 'a' && c <= 'z') {
-      out->add(Tile::of(c - 'a'));
-    } else {
-      if (error) *error = std::format("invalid tile '{}' (use A-Z, or ? for a blank)", c);
-      return false;
-    }
+// Rack::from_string with spaces ignored, reporting failure through `error`.
+bool parse_leave(std::string s, Rack* out, std::string* error) {
+  std::erase(s, ' ');
+  try {
+    *out = Rack::from_string(s);
+  } catch (const util::Exception& e) {
+    if (error) *error = e.what();
+    return false;
   }
   return true;
 }
@@ -110,8 +100,7 @@ bool encode_position_eval_analysis_input_with_leaves(const std::string& gcg_text
 
   // What the alternates may be drawn from: everything off the board, less a
   // recorded opponent leave that stays in force.
-  TileCounts available =
-    unseen_counts(pos.board, opp_leave_str == nullptr ? pos.opp_leave : Rack{});
+  TileCounts available = pos.board.unseen_tiles(opp_leave_str == nullptr ? pos.opp_leave : Rack{});
   Rack leave;
   if (!parse_alternate_leave(leave_str, pos.leave, "POV", &available, &leave, error)) return false;
   Rack opp_leave = pos.opp_leave;
@@ -135,7 +124,7 @@ bool collapse_position_eval_analysis_placement(const std::string& gcg_text,
   // tiles less the board and the mover's leave. Masking with it matches the
   // availability-masked belief the model was trained on; a Y hook with no Y
   // unseen gets exactly zero.
-  uint8_t available_counts[27];
+  uint8_t available_counts[TILE_KINDS];
   compute_unseen_pool(available_counts, pos.board, pos.leave);
   collapse_footprint_planes(pos.board, *spec.dict, available_counts, raw, out);
   return true;
@@ -146,7 +135,7 @@ bool masked_position_eval_analysis_placement(const std::string& gcg_text,
                                              float* out, std::string* error) {
   ParsedGcgPostMove pos;
   if (!read_gcg_post_move(gcg_text, &pos, error)) return false;
-  uint8_t available_counts[27];
+  uint8_t available_counts[TILE_KINDS];
   compute_unseen_pool(available_counts, pos.board, pos.leave);
   masked_placement_distributions(pos.board, *spec.dict, available_counts, raw, out);
   return true;
@@ -157,7 +146,7 @@ bool legal_position_eval_analysis_placement(const std::string& gcg_text,
                                             std::string* error) {
   ParsedGcgPostMove pos;
   if (!read_gcg_post_move(gcg_text, &pos, error)) return false;
-  uint8_t available_counts[27];
+  uint8_t available_counts[TILE_KINDS];
   compute_unseen_pool(available_counts, pos.board, pos.leave);
   collapse_footprint_legal_cells(pos.board, *spec.dict, available_counts, out);
   return true;

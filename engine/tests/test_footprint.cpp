@@ -41,8 +41,8 @@ Glyph G(int letter_index) { return Glyph::of(Tile::of(letter_index)); }
 
 // A 27-count availability array (A..Z, then blank at 26) with one of each
 // listed letter; '?' adds a blank. Unlisted letters are out of stock.
-std::array<uint8_t, 27> available_of(const std::string& letters) {
-  std::array<uint8_t, 27> s{};
+std::array<uint8_t, TILE_KINDS> available_of(const std::string& letters) {
+  std::array<uint8_t, TILE_KINDS> s{};
   for (char ch : letters) {
     if (ch == '?')
       s[26] = 1;
@@ -52,7 +52,7 @@ std::array<uint8_t, 27> available_of(const std::string& letters) {
   return s;
 }
 
-bool opp_admits(const Board& b, const std::array<uint8_t, 27>& available_counts, int cls) {
+bool opp_admits(const Board& b, const std::array<uint8_t, TILE_KINDS>& available_counts, int cls) {
   FootprintMask m;
   opp_footprint_mask(b, available_counts.data(), RACK_SIZE, /*win_head=*/false, m);
   return m[cls];
@@ -197,7 +197,7 @@ TEST(FootprintMask, TransposedBoardMaskIsTheTransposedMask) {
   b.set(9, 2, G(2));
   const Dictionary d = Dictionary::build_from_words({"AX", "AY", "CAT"});
   b.ensure_movegen_caches(d);
-  const std::array<uint8_t, 27> avail = available_of("CATXY");
+  const std::array<uint8_t, TILE_KINDS> avail = available_of("CATXY");
   FootprintMask m, mt;
   opp_footprint_mask(b, avail.data(), 7, /*win_head=*/false, m);
   opp_footprint_mask(b.transpose(), avail.data(), 7, /*win_head=*/false, mt);
@@ -394,11 +394,11 @@ TEST(SelfFootprintMask, OppStageGatesReachTheMoverStageDoesNot) {
   FootprintMask m;
 
   // With Y in the pool the opponent can fill (7,7), which (8,7) then abuts.
-  const std::array<uint8_t, 27> with_y = available_of("YE");
+  const std::array<uint8_t, TILE_KINDS> with_y = available_of("YE");
   self_footprint_mask(b, /*self_budget=*/1, /*opp_budget=*/1, with_y.data(), false, m);
   EXPECT_TRUE(m[lone_8_7]);
 
-  const std::array<uint8_t, 27> no_y = available_of("EIO");
+  const std::array<uint8_t, TILE_KINDS> no_y = available_of("EIO");
   self_footprint_mask(b, 1, 1, no_y.data(), false, m);
   EXPECT_FALSE(m[lone_8_7]);
   // The mover's own tile at (7,7) stays legal: the mover's rack is not drawn
@@ -447,14 +447,14 @@ void sweep_game(const ParsedGcgGame& game, const Dictionary* dict) {
         // Everything off the board: a superset of the mover's rack, so a sound
         // pool that still exercises availability gating, and binds in the
         // fixtures' endgames.
-        uint8_t available_counts[27];
+        uint8_t available_counts[TILE_KINDS];
         compute_unseen_pool(available_counts, board, Rack{});
         FootprintMask opp;
         opp_footprint_mask(board, available_counts, RACK_SIZE, /*win_head=*/false, opp);
         EXPECT_TRUE(opp[cls]) << "opp mask excluded a real move (class " << cls << ")";
       }
       if (two_plies_ago) {
-        uint8_t opp_available_counts[27];
+        uint8_t opp_available_counts[TILE_KINDS];
         compute_unseen_pool(opp_available_counts, *two_plies_ago, Rack{});
         FootprintMask self;
         self_footprint_mask(*two_plies_ago, RACK_SIZE, RACK_SIZE, opp_available_counts,
@@ -565,12 +565,12 @@ TEST(FootprintCollapse, OppAvailabilityDropsUnsatisfiableFootprint) {
   raw[0 * kFootprintClasses + cls] = 20.0f;  // head 0 (opp_next); dwarfs the rest
   std::vector<float> out(kPlacementHeads * kFootprintSide * kFootprintSide, 0.0f);
 
-  const std::array<uint8_t, 27> with_y = available_of("YE");
+  const std::array<uint8_t, TILE_KINDS> with_y = available_of("YE");
   collapse_footprint_planes(b, d, with_y.data(), raw.data(), out.data());
   const float lit = out[7 * kFootprintSide + 7];
   EXPECT_GT(lit, 0.9f);
 
-  const std::array<uint8_t, 27> no_y = available_of("EIO");  // no Y, no blank
+  const std::array<uint8_t, TILE_KINDS> no_y = available_of("EIO");  // no Y, no blank
   collapse_footprint_planes(b, d, no_y.data(), raw.data(), out.data());
   const float gated = out[7 * kFootprintSide + 7];
   EXPECT_LT(gated, 0.5f);
@@ -661,7 +661,7 @@ TEST(FootprintReachable, EmptyBoardCoversEverythingAndNullIsFullStock) {
   footprint_reachable_cells(b, /*available_counts=*/nullptr, kMaskTileBudget, null_pool.data());
   for (int i = 0; i < kFootprintCells; ++i) EXPECT_EQ(null_pool[i], 1.0f) << "cell " << i;
 
-  std::array<uint8_t, 27> all_stock;
+  std::array<uint8_t, TILE_KINDS> all_stock;
   all_stock.fill(9);
   std::vector<float> full_pool(kFootprintCells, -1.0f);
   footprint_reachable_cells(b, all_stock.data(), kMaskTileBudget, full_pool.data());
@@ -680,18 +680,18 @@ TEST(FootprintReachable, OccupancyAndAvailabilityGateCells) {
   const Dictionary d = Dictionary::build_from_words({"AYA"});
   b.ensure_movegen_caches(d);
 
-  const auto reach_at = [&](const std::array<uint8_t, 27>& pool, int r, int c) {
+  const auto reach_at = [&](const std::array<uint8_t, TILE_KINDS>& pool, int r, int c) {
     std::vector<float> plane(kFootprintCells, -1.0f);
     footprint_reachable_cells(b, pool.data(), kMaskTileBudget, plane.data());
     return plane[r * kFootprintSide + c];
   };
 
-  const std::array<uint8_t, 27> with_y = available_of("YE");
+  const std::array<uint8_t, TILE_KINDS> with_y = available_of("YE");
   EXPECT_EQ(reach_at(with_y, 7, 7), 1.0f);
   EXPECT_EQ(reach_at(with_y, 6, 7), 0.0f);    // occupied
   EXPECT_EQ(reach_at(with_y, 14, 14), 0.0f);  // not connected
 
-  const std::array<uint8_t, 27> no_y = available_of("EIO");  // no Y, no blank
+  const std::array<uint8_t, TILE_KINDS> no_y = available_of("EIO");  // no Y, no blank
   EXPECT_EQ(reach_at(no_y, 7, 7), 0.0f);
   EXPECT_EQ(reach_at(no_y, 14, 14), 0.0f);
 }
@@ -705,7 +705,7 @@ TEST(FootprintReachable, TransposedBoardIsTheTranspose) {
   b.set(9, 2, G(2));
   const Dictionary d = Dictionary::build_from_words({"CAT", "AY"});
   b.ensure_movegen_caches(d);
-  const std::array<uint8_t, 27> pool = available_of("CATY");
+  const std::array<uint8_t, TILE_KINDS> pool = available_of("CATY");
 
   std::vector<float> normal(kFootprintCells, 0.0f), flipped(kFootprintCells, 0.0f);
   footprint_reachable_cells(b, pool.data(), kMaskTileBudget, normal.data());

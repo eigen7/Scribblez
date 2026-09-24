@@ -105,7 +105,7 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
   // opponent's sampled tiles, is the same for every candidate (CRN). A known
   // opp_leave is seated directly and the refill draws only the rest, which is
   // the correct conditional given the mover's information.
-  Bag pool = unseen_pool(pos.board, pos.rack, seed);
+  Bag pool(seed, pos.board.unseen_tiles(pos.rack));
   std::array<Rack, 2> known_racks = a.known_racks;
   if (pos.opp_leave.size() > 0) {
     known_racks[opponent] = pos.opp_leave;
@@ -314,17 +314,6 @@ SimPosition sim_position_from(const MoveRequest& req) {
   return pos;
 }
 
-Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed) {
-  Bag pool(seed);
-  for (int r = 0; r < BOARD_SIZE; ++r)
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      const Glyph g = board.at(r, c);
-      if (!g.is_empty()) pool.remove(g.is_blank() ? BLANK : g.letter());
-    }
-  for (int i = 0; i < rack.size(); ++i) pool.remove(rack.tiles()[i]);
-  return pool;
-}
-
 // Zero rollouts would make best_observation_index silently return the first
 // candidate every time.
 void SimRunner::validate(const Params& params) {
@@ -379,7 +368,7 @@ std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
   if (candidates.empty()) return {};
   // A non-empty bag: the pool holds the bag plus the opponent's (up to
   // RACK_SIZE) tiles, known or not.
-  DEBUG_ASSERT(unseen_pool(pos.board, pos.rack, 0).size() > RACK_SIZE);
+  DEBUG_ASSERT(pos.board.unseen_tiles(pos.rack).size() > RACK_SIZE);
 
   std::vector<AppliedCandidate> applied;
   applied.reserve(candidates.size());

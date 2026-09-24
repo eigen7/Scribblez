@@ -14,27 +14,14 @@
 
 namespace scribblez {
 
-// TILE_COUNTS minus the tiles on `board` and, if non-null, in `held`.
-static void tiles_off_board_and_hand(uint8_t out[27], const Board& board, const Rack* held) {
-  for (int i = 0; i < 27; ++i) out[i] = uint8_t(TILE_COUNTS[i]);
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      Glyph g = board.at(r, c);
-      if (g.is_empty()) continue;
-      Tile t = g.rack_tile();
-      DEBUG_ASSERT(out[t] > 0);
-      --out[t];
-    }
-  }
-  if (held == nullptr) return;
-  for (Tile t : held->tiles()) {
-    if (t.is_empty()) continue;
-    DEBUG_ASSERT(out[t] > 0);
-    --out[t];
-  }
+// Board::unseen_tiles(), with a null `held` holding nothing, as counts.
+static void tiles_off_board_and_hand(uint8_t out[TILE_KINDS], const Board& board,
+                                     const Rack* held) {
+  const TileCounts unseen = board.unseen_tiles(held == nullptr ? Rack() : *held);
+  for (int i = 0; i < TILE_KINDS; ++i) out[i] = uint8_t(unseen.count(Tile::of(i)));
 }
 
-void compute_unseen_pool(uint8_t out[27], const Board& board, const Rack& my_rack) {
+void compute_unseen_pool(uint8_t out[TILE_KINDS], const Board& board, const Rack& my_rack) {
   tiles_off_board_and_hand(out, board, &my_rack);
 }
 
@@ -45,7 +32,7 @@ namespace {
 // hold (`known_opp`, their open leave; null for a hidden-leaves spec). This
 // includes the POV player's own rack, and the bag and the opponent's unknown
 // tiles, which the POV player could still draw.
-void compute_self_reach_pool(uint8_t out[27], const Board& board, const Rack* known_opp) {
+void compute_self_reach_pool(uint8_t out[TILE_KINDS], const Board& board, const Rack* known_opp) {
   tiles_off_board_and_hand(out, board, known_opp);
 }
 
@@ -56,8 +43,8 @@ struct PovCtx {
   const Move& self_move;
   const Move& opp_move;
   int score_diff;
-  const uint8_t* unseen;     // 27 per-tile counts, from compute_unseen_pool
-  const uint8_t* self_pool;  // 27 per-tile counts, from compute_self_reach_pool
+  const uint8_t* unseen;     // TILE_KINDS per-tile counts, from compute_unseen_pool
+  const uint8_t* self_pool;  // TILE_KINDS per-tile counts, from compute_self_reach_pool
   const Rack* opp_leave;     // null iff the spec excludes the open-leaves block
 };
 
@@ -106,9 +93,9 @@ int encode_rack_counts(const Rack& my_rack, float* out) {
   return kRackCountFloats;
 }
 
-int encode_unseen_pool_thermometer(const uint8_t unseen[27], float* out) {
+int encode_unseen_pool_thermometer(const uint8_t unseen[TILE_KINDS], float* out) {
   int offset = 0;
-  for (int i = 0; i < 27; ++i) {
+  for (int i = 0; i < TILE_KINDS; ++i) {
     for (int j = 0; j < unseen[i]; ++j) out[offset + j] = 1.0f;
     offset += TILE_COUNTS[i];
   }
@@ -209,9 +196,9 @@ void encode_pov(const InputEncodingSpec& spec, const Board& board, const Rack& m
   // A no-op if they are already built.
   board.ensure_movegen_caches(*spec.dict);
   const Rack* known_opp = spec.opp_leave_input ? opp_leave : nullptr;
-  uint8_t unseen[27];
+  uint8_t unseen[TILE_KINDS];
   compute_unseen_pool(unseen, board, my_rack);
-  uint8_t self_pool[27];
+  uint8_t self_pool[TILE_KINDS];
   compute_self_reach_pool(self_pool, board, known_opp);
   const PovCtx ctx{board, my_rack, self_move, opp_move, score_diff, unseen, self_pool, known_opp};
 
