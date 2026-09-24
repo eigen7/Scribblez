@@ -43,8 +43,8 @@ struct PovCtx {
   const Move& self_move;
   const Move& opp_move;
   int score_diff;
-  const uint8_t* unseen;     // 27 per-tile counts, from compute_unseen_pool
-  const uint8_t* self_pool;  // 27 per-tile counts, from compute_self_reach_pool
+  const uint8_t* unseen;     // TILE_KINDS per-tile counts, from compute_unseen_pool
+  const uint8_t* self_pool;  // TILE_KINDS per-tile counts, from compute_self_reach_pool
   const Rack* opp_leave;     // null iff the spec excludes the open-leaves block
 };
 
