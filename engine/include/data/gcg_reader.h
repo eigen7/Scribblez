@@ -28,6 +28,8 @@ struct ParsedGcgSnapshot {
   Board board;
   std::array<int, 2> scores = {0, 0};
   std::array<Rack, 2> racks;
+  // The tiles neither on the board nor known to be on a rack: the bag plus
+  // the racks' unrevealed tiles.
   TileCounts bag;
   int turn_player = 0;
 };

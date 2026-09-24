@@ -109,6 +109,16 @@ int rack_pragma_player(const std::string& line) {
   return -1;
 }
 
+// The tiles neither on the snapshot's board nor known to be on a rack. A file
+// that overdraws a tile leaves its count at 0: unparseable input is skipped,
+// never an error.
+TileCounts unaccounted_tiles(const ParsedGcgSnapshot& snapshot) {
+  TileCounts tiles = TileCounts::full_distribution();
+  tiles.remove(snapshot.board.tile_counts());
+  for (const Rack& rack : snapshot.racks) tiles.remove(rack.counts());
+  return tiles;
+}
+
 class GcgReader {
  public:
   bool Read(const std::string& gcg_text, ParsedGcgGame* out_game, std::string* error_message) {
@@ -130,6 +140,7 @@ class GcgReader {
     }
 
     ApplyResumeRacks();
+    FillBags();
     FillResult(out_game);
     return true;
   }
@@ -142,7 +153,6 @@ class GcgReader {
     scores_ = {0, 0};
     racks_ = {};
     resume_racks_ = {};
-    bag_ = TileCounts::full_distribution();
     turns_.clear();
     snapshots_.clear();
     snapshots_.push_back(CurrentSnapshot());
@@ -428,6 +438,11 @@ class GcgReader {
     }
   }
 
+  // Last, since rack pragmas revise a snapshot's racks after it is taken.
+  void FillBags() {
+    for (ParsedGcgSnapshot& snapshot : snapshots_) snapshot.bag = unaccounted_tiles(snapshot);
+  }
+
   int BagSizeEstimate() const { return std::max(0, 100 - board_tile_count(board_) - 14); }
 
   ParsedGcgSnapshot CurrentSnapshot(int turn_player = 0) const {
@@ -435,7 +450,6 @@ class GcgReader {
     snapshot.board = board_;
     snapshot.scores = scores_;
     snapshot.racks = racks_;
-    snapshot.bag = bag_;
     snapshot.turn_player = turn_player;
     return snapshot;
   }
@@ -454,7 +468,6 @@ class GcgReader {
   std::array<int, 2> scores_ = {0, 0};
   std::array<Rack, 2> racks_;
   std::array<std::optional<Rack>, 2> resume_racks_;
-  TileCounts bag_;
   std::vector<ParsedGcgTurn> turns_;
   std::vector<ParsedGcgSnapshot> snapshots_;
   std::vector<ParsedGcgEndAdjustment> end_adjustments_;

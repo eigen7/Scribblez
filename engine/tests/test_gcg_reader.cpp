@@ -4,6 +4,7 @@
 
 #include "data/gcg_post_move.h"
 #include "data/gcg_reader.h"
+#include "game/bag.h"
 #include "game/tile.h"
 #include "game/tile_counts.h"
 #include "training/lane_analysis.h"
@@ -80,6 +81,25 @@ TEST(GcgReaderTest, NoRackPragmaLeavesFinalRackCleared) {
   const ParsedGcgGame game = parse_or_fail(gcg);
   ASSERT_FALSE(game.snapshots.empty());
   EXPECT_EQ(game.snapshots.back().racks[0].to_string(), "");
+}
+
+// A snapshot's bag is every tile not on its board or known to be on a rack,
+// including racks a later pragma revealed.
+TEST(GcgReaderTest, SnapshotBagExcludesBoardAndKnownRacks) {
+  const std::string gcg =
+    "#player1 Alice Alice\n"
+    "#player2 Bob Bob\n"
+    ">Alice: CATSXYZ 8H CAT +10 10\n"
+    "#Rack2 QU\n";
+
+  const ParsedGcgGame game = parse_or_fail(gcg);
+  ASSERT_EQ(game.snapshots.size(), 2u);
+  EXPECT_EQ(game.snapshots[0].bag.size(), Bag::kTotalTiles);
+  const TileCounts& bag = game.snapshots[1].bag;
+  EXPECT_EQ(bag.size(), Bag::kTotalTiles - 5);
+  EXPECT_EQ(bag.count(Tile::from_char('C')), TILE_COUNTS[Tile::from_char('C')] - 1);
+  EXPECT_EQ(bag.count(Tile::from_char('Q')), 0);
+  EXPECT_EQ(bag.count(Tile::from_char('U')), TILE_COUNTS[Tile::from_char('U')] - 1);
 }
 
 // A position-set .gcg is read at its final recorded state, with the side to
