@@ -1,12 +1,15 @@
 """The optimizer arm for the generational trainers: which optimizer runs, and
 how -- or whether -- its learning rate is scheduled.
 
-Two arms, selected by a frozen task param:
+Three arms, selected by a frozen task param:
 
 - `wsd`: AdamW driven by the rows-clock warmup-stable-decay schedule
   (controls.WsdSchedule). The rate is a function of rows trained, so a
   checkpoint's quality depends on where in the cycle it was exported: the good
   ones are those at the end of a decay.
+- `muon`: the same schedule driving Muon on the transformer tower's weight
+  matrices and AdamW on everything else (generational/muon.py), at one shared
+  rate.
 - `schedule_free`: AdamWScheduleFree (Defazio et al., 2024), which drops the
   schedule in favour of an averaged iterate. Nothing has to be timed against a
   horizon the open-ended runs do not have, and every generation's export is
@@ -23,13 +26,13 @@ had badly under-confident placement heads (calibration slope 1.44 instead of
 ~1.05) and a 10% worse win MAE. So eval_mode also recomputes every BatchNorm
 layer's statistics at `x` over a few training batches, which restores both.
 The trainer brackets its phases with train_mode / eval_mode without knowing
-which arm needs them; under `wsd` they do nothing, because the live weights
-are the only weights and the statistics already match them.
+which arm needs them; under the scheduled arms they do nothing, because the live
+weights are the only weights and the statistics already match them.
 
-Both arms decay only the tensors weight decay is meant for (decay_groups):
-the optimizer gets a decay group and a no-decay group, in that order.
+Every arm decays only the tensors weight decay is meant for (decay_groups):
+the AdamW parameters form a decay group and a no-decay group, in that order.
 
-Both arms present one surface: the per-step `lr_fn` run_epoch applies (None
+Every arm presents one surface: the per-step `lr_fn` run_epoch applies (None
 when the arm imposes no schedule), the `current` rate for the metrics row, any
 extra `metrics()` the arm wants recorded alongside it, and the two mode hooks.
 """
@@ -39,8 +42,10 @@ from __future__ import annotations
 import torch
 from schedulefree import AdamWScheduleFree
 
+from ..transformer_tower import TransformerTower
 from .controls import WsdLrController, WsdSchedule
-from .optimizer_arms import DEFAULT_LR, OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
+from .muon import MuonAdamW
+from .optimizer_arms import DEFAULT_LR, OPTIMIZER_MUON, OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 
 
 def arm_lr(params) -> float:
@@ -65,15 +70,27 @@ def decays(name: str, param: torch.Tensor) -> bool:
     return param.ndim >= 2 and not name.endswith(_GEOMETRY_SUFFIXES)
 
 
-def decay_groups(model, weight_decay: float) -> list[dict]:
-    """`model`'s parameters as [decay group, no-decay group], the decay group
-    at `weight_decay`, the other at 0 (see decays). The decay group comes
-    first: ScheduleFreeArm reads its rate and averaging weight off
+def decay_groups(named: list[tuple[str, torch.Tensor]], weight_decay: float) -> list[dict]:
+    """The (name, parameter) pairs `named` as [decay group, no-decay group],
+    the decay group at `weight_decay`, the other at 0 (see decays). The decay
+    group comes first: ScheduleFreeArm reads its rate and averaging weight off
     param_groups[0]."""
-    named = list(model.named_parameters())
     return [
         {"params": [p for n, p in named if decays(n, p)], "weight_decay": weight_decay},
         {"params": [p for n, p in named if not decays(n, p)], "weight_decay": 0.0},
+    ]
+
+
+def tower_matrices(model) -> list[torch.Tensor]:
+    """The weight matrices of every nn.Linear inside `model`'s transformer
+    towers: the hidden matrices Muon is meant for. The stem, the register
+    embeddings and the heads sit outside the towers."""
+    return [
+        m.weight
+        for tower in model.modules()
+        if isinstance(tower, TransformerTower)
+        for m in tower.modules()
+        if isinstance(m, torch.nn.Linear)
     ]
 
 
@@ -82,8 +99,8 @@ def build_optimizer(model, params, rows_per_step: int | None = None):
 
     Built before the rolling checkpoint is resumed, so it carries no rows-clock
     state: the schedule-free arm's own warmup is counted in optimizer steps,
-    converted here from the same `lr_warmup_rows` the WSD arm ramps over so one
-    knob covers both.
+    converted here from the same `lr_warmup_rows` the scheduled arms ramp over
+    so one knob covers all of them.
 
     `rows_per_step` is the mean training rows per optimizer step, which turns
     that row-count warmup into the step count AdamWScheduleFree wants. It
@@ -93,11 +110,13 @@ def build_optimizer(model, params, rows_per_step: int | None = None):
     (move_set_eval counts candidate moves but batches by position, so a step is
     many rows)."""
     lr = arm_lr(params)
-    groups = decay_groups(model, params.weight_decay)
     betas = (0.9, params.adam_beta2)
-    if rows_per_step is None:
-        rows_per_step = params.batch_size
+    if params.optimizer == OPTIMIZER_MUON:
+        return _muon_optimizer(model, params, lr, betas)
+    groups = decay_groups(list(model.named_parameters()), params.weight_decay)
     if params.optimizer == OPTIMIZER_SCHEDULE_FREE:
+        if rows_per_step is None:
+            rows_per_step = params.batch_size
         return AdamWScheduleFree(
             groups,
             lr=lr,
@@ -105,6 +124,22 @@ def build_optimizer(model, params, rows_per_step: int | None = None):
             warmup_steps=int(params.lr_warmup_rows // max(rows_per_step, 1)),
         )
     return torch.optim.AdamW(groups, lr=lr, betas=betas)
+
+
+def _muon_optimizer(model, params, lr: float, betas: tuple[float, float]) -> MuonAdamW:
+    """MuonAdamW with the tower matrices as its Muon group (decaying at the
+    run's weight decay) and everything else in AdamW decay groups. Only the
+    transformer trunk has tower matrices."""
+    matrices = tower_matrices(model)
+    if not matrices:
+        raise ValueError("the muon optimizer needs the transformer trunk")
+    muon_ids = {id(p) for p in matrices}
+    rest = [(n, p) for n, p in model.named_parameters() if id(p) not in muon_ids]
+    groups = [
+        {"params": matrices, "muon": True, "weight_decay": params.weight_decay},
+        *({**group, "muon": False} for group in decay_groups(rest, params.weight_decay)),
+    ]
+    return MuonAdamW(groups, lr=lr, betas=betas)
 
 
 def _model_forward(model, spatial, scalar):
@@ -116,7 +151,8 @@ def _model_forward(model, spatial, scalar):
 
 
 class WsdArm:
-    """AdamW under the rows-clock WSD schedule, with no mode to switch."""
+    """A scheduled optimizer (AdamW, or MuonAdamW under `muon`) on the rows-clock
+    WSD schedule, with no mode to switch."""
 
     #: No metrics beyond `current`.
     metrics = staticmethod(dict)
