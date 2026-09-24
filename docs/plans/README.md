@@ -61,6 +61,11 @@ moved on. New plans go here, not in `docs/` proper.
   Running trainers on rented GPUs, several tags in parallel: the trainer's
   record/controls contract, the torch runtime and the bucket legs (all still
   in use), and a Runpod train slot, since replaced by cloud_machines.md.
+- **[tag_queue.md](tag_queue.md)**: *proposed, not reviewed.* A machine
+  pool and an ordered tag queue: each free pool machine takes the next
+  eligible queued tag, with slots made from the workload's layout and
+  eligibility checked against GPU memory, and releases it when every slot
+  has finished. Makes an end condition mandatory for every workload.
 - **[cloud_machines.md](cloud_machines.md)**: *landed.* AWS instances as
   task-scoped ssh machines that the dashboard launches, idles and terminates;
   the trainer on the ssh kind; spot; Runpod's removal. The provider lives in
