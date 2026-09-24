@@ -125,7 +125,16 @@ class PositionEvalParams:
         "(~25 default generations; the last fifth of each cycle decays); "
         "unused by schedule_free",
     )
-    weight_decay: float = param(1e-4, "AdamW weight decay")
+    weight_decay: float = param(
+        1e-4,
+        "AdamW weight decay, applied to weight matrices and conv kernels only (not to norm "
+        "gains, biases or the transformer's positional parameters)",
+    )
+    adam_beta2: float = param(
+        0.999,
+        "Adam's second-moment decay rate (beta2); 0.95 adapts faster to shifts in gradient "
+        "scale and is the usual choice for transformers",
+    )
     grad_clip: float = param(
         0.0, "clip each step's gradient to this global norm (clip_grad_norm_); 0 = no clipping"
     )

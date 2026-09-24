@@ -12,13 +12,21 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-from scribblez.generational.checkpoint import GenerationalState, resume, save
+from schedulefree import AdamWScheduleFree
+from scribblez.generational.checkpoint import (
+    GenerationalState,
+    regroup_optimizer_state,
+    resume,
+    save,
+)
 from scribblez.generational.optim import (
     ScheduleFreeArm,
     WsdArm,
     arm_lr,
     build_optim_arm,
     build_optimizer,
+    decay_groups,
+    decays,
     recalibrate_batchnorm,
 )
 from scribblez.generational.optimizer_arms import (
@@ -27,6 +35,9 @@ from scribblez.generational.optimizer_arms import (
     OPTIMIZER_WSD,
 )
 from scribblez.paths import POSITION_EVAL, TagPaths
+from scribblez.position_eval.model import PositionEvalModel
+from scribblez.supply_registers import SCALAR_SIZE_OPEN_LEAVES
+from scribblez.transformer_tower import TransformerConfig
 
 _CPU = torch.device("cpu")
 
@@ -38,6 +49,7 @@ class _Params:
     optimizer: str = OPTIMIZER_SCHEDULE_FREE
     lr: float = 0.0
     weight_decay: float = 1e-4
+    adam_beta2: float = 0.999
     batch_size: int = 8
     lr_warmup_rows: int = 80
     lr_cycle_rows: int = 800
@@ -300,3 +312,125 @@ def test_the_reported_rate_is_the_one_the_optimizer_applied():
     assert arm.current == pytest.approx(nominal / 10)  # one step into the ramp
     _step(model, opt, n=19)
     assert arm.current == nominal  # past it
+
+
+def _transformer_model() -> torch.nn.Module:
+    torch.manual_seed(0)
+    return PositionEvalModel(
+        87,
+        SCALAR_SIZE_OPEN_LEAVES,
+        trunk_channels=16,
+        num_blocks=2,
+        transformer=TransformerConfig(mid_channels=8, num_heads=2, ffn_channels=16),
+    )
+
+
+def _conv_model() -> torch.nn.Module:
+    return PositionEvalModel(87, SCALAR_SIZE_OPEN_LEAVES, trunk_channels=16, num_blocks=2)
+
+
+@pytest.mark.parametrize("make_model", [_transformer_model, _conv_model])
+def test_decay_groups_partition_the_model(make_model):
+    """Every parameter lands in exactly one group, the decay group first, and
+    only matrices and kernels decay."""
+    model = make_model()
+    decay, no_decay = decay_groups(model, 0.05)
+    assert (decay["weight_decay"], no_decay["weight_decay"]) == (0.05, 0.0)
+    ids = [id(p) for p in decay["params"] + no_decay["params"]]
+    assert sorted(ids) == sorted(id(p) for p in model.parameters())
+    assert all(p.ndim >= 2 for p in decay["params"])
+    no_decay_ids = {id(p) for p in no_decay["params"]}
+    assert all(id(p) in no_decay_ids for p in model.parameters() if p.ndim < 2)
+
+
+def test_decay_groups_spare_the_transformers_positional_geometry():
+    """RoPE frequencies and register positions are matrices by shape but
+    geometry by meaning; the register embedding table is an ordinary matrix."""
+    names = {n: p for n, p in _transformer_model().named_parameters()}
+    geometry = [n for n in names if n.endswith(("rope_freqs", "register_pos"))]
+    assert any(n.endswith("rope_freqs") for n in geometry)
+    assert any(n.endswith("register_pos") for n in geometry)
+    for n in geometry:
+        assert names[n].ndim >= 2 and not decays(n, names[n])
+    embeds = [n for n in names if "registers" in n and names[n].ndim == 2]
+    assert embeds and all(decays(n, names[n]) for n in embeds)
+
+
+@pytest.mark.parametrize("optimizer", [OPTIMIZER_SCHEDULE_FREE, OPTIMIZER_WSD])
+def test_build_optimizer_uses_the_decay_groups_and_beta2(optimizer):
+    params = _Params(optimizer=optimizer, weight_decay=0.05, adam_beta2=0.95)
+    opt = build_optimizer(_ln_model(), params)
+    assert [g["weight_decay"] for g in opt.param_groups] == [0.05, 0.0]
+    assert all(g["betas"] == (0.9, 0.95) for g in opt.param_groups)
+
+
+def _ln_model() -> torch.nn.Module:
+    """Matrices and vectors interleaved in parameter order (weight, bias, gain,
+    bias, weight, bias), so a state regrouping that confused positions would
+    hand a tensor another's state."""
+    torch.manual_seed(0)
+    return torch.nn.Sequential(torch.nn.Linear(4, 3), torch.nn.LayerNorm(3), torch.nn.Linear(3, 2))
+
+
+def test_a_single_group_checkpoint_resumes_into_the_split_groups(tmp_path):
+    """A rolling checkpoint written by a one-group optimizer (every run before
+    the no-decay split) resumes into the two groups and continues exactly as
+    the one-group optimizer would have. Weight decay is 0 so the two agree."""
+    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
+    legacy_model = _ln_model()
+    legacy = AdamWScheduleFree(legacy_model.parameters(), lr=1e-2, weight_decay=0.0)
+    legacy.train()
+    _step(legacy_model, legacy)
+    save(paths, legacy_model, legacy, GenerationalState(3, 1), {})
+
+    model = _ln_model()
+    opt = build_optimizer(model, _Params(lr=1e-2, weight_decay=0.0, lr_warmup_rows=0))
+    assert len(opt.param_groups) == 2
+    resume(paths, model, opt, _CPU)
+    opt.train()
+    assert [g["k"] for g in opt.param_groups] == [3, 3]  # the saved step count, per group
+
+    _step(legacy_model, legacy, n=3)
+    _step(model, opt, n=3)
+    for a, b in zip(legacy_model.parameters(), model.parameters(), strict=True):
+        assert torch.equal(a, b), "a regrouped tensor lost or swapped its optimizer state"
+
+
+def test_regrouping_keeps_each_groups_own_weight_decay(tmp_path):
+    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
+    legacy_model = _ln_model()
+    legacy = AdamWScheduleFree(legacy_model.parameters(), weight_decay=1e-4)
+    save(paths, legacy_model, legacy, GenerationalState(), {})
+
+    model = _ln_model()
+    opt = build_optimizer(model, _Params(weight_decay=0.1))
+    resume(paths, model, opt, _CPU)
+    assert [g["weight_decay"] for g in opt.param_groups] == [0.1, 0.0]
+
+
+def test_regrouping_passes_a_matching_state_dict_through():
+    model = _ln_model()
+    opt = build_optimizer(model, _Params())
+    saved = opt.state_dict()
+    assert regroup_optimizer_state(saved, model, opt) is saved
+
+
+def test_schedule_free_mode_swaps_cover_both_groups():
+    """eval()/train() must move the no-decay tensors between the training and
+    averaged iterates too, or the deployed model would mix the two."""
+    model = _ln_model()
+    opt = build_optimizer(model, _Params(lr_warmup_rows=0))
+    opt.train()
+    _step(model, opt)
+    training = [p.detach().clone() for p in model.parameters()]
+    opt.eval()
+    for group in opt.param_groups:
+        assert any(
+            not torch.equal(p, training[i])
+            for i, q in enumerate(model.parameters())
+            for p in group["params"]
+            if p is q
+        )
+    opt.train()
+    for a, b in zip(training, model.parameters(), strict=True):
+        assert torch.allclose(a, b, atol=1e-6)

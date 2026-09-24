@@ -248,7 +248,11 @@ def test_schedule_free_recalibrates_the_mset_trunk_batchnorm():
         num_heads=2,
     )
     params = SimpleNamespace(
-        optimizer=OPTIMIZER_SCHEDULE_FREE, lr=1e-3, weight_decay=1e-4, lr_warmup_rows=0
+        optimizer=OPTIMIZER_SCHEDULE_FREE,
+        lr=1e-3,
+        weight_decay=1e-4,
+        adam_beta2=0.999,
+        lr_warmup_rows=0,
     )
     opt = build_optimizer(model, params, rows_per_step=64)
     arm = ScheduleFreeArm(params, opt)
