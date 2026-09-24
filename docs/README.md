@@ -16,6 +16,11 @@ decision, in [plans/](plans/README.md)).
   (one-pass candidate scoring, then a sequential sim loop driven by a
   proves-best head over evidence), the status of each item, and the three
   models that feed it.
+- **[simulation_levels.md](simulation_levels.md)**: a taxonomy of
+  simulation-based agents by how far one simulation's information travels in
+  the game tree, from independent per-candidate averages (Level 1, where
+  Macondo's BestBot sits) to sideways and backward flow between branches.
+  The motivation behind the sim-evidence and sim-labeled-candidates plans.
 - **[evaluation_plan.md](evaluation_plan.md)**: the measurement half. What past
   measurements established, the match and evaluation machinery and its known
   gaps, and the evaluation to run once the agent is built. Kept separate

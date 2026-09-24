@@ -21,7 +21,9 @@ candidate's post-move state as a training row with soft targets. A later,
 gated phase lets the sim's pick steer the self-play game past the sampled
 turn. The roadmap carries the first half as the teacher's "planned second
 target stream" ([roadmap.md](../roadmap.md), *The position evaluation
-model*); this is the concrete route to it.
+model*); this is the concrete route to it. Why the search levels above
+BestBot's need sibling-accurate values is argued in
+[simulation_levels.md](../simulation_levels.md).
 
 ## The finding
 
