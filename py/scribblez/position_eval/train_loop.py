@@ -16,12 +16,13 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import torch
+from torch.nn.utils import clip_grads_with_norm_, get_total_norm
 
 # Re-exported: callers import LossConfig from here. The loss itself, and the
 # loss and target keys this loop iterates, come from the model's head registry.
 from .model import LossConfig
 
-__all__ = ["LossConfig", "EpochResult", "run_epoch"]
+__all__ = ["LossConfig", "EpochResult", "GradNormTracker", "run_epoch"]
 
 
 @dataclass
@@ -33,6 +34,43 @@ class EpochResult:
     n_batches: int
     samples: int
     rows_trained: int
+    grad_norm: dict[str, float]  # GradNormTracker.summary(), keyed by metric name
+
+
+class GradNormTracker:
+    """Clips each step's gradient to a global norm and keeps the epoch's
+    statistics of the norm as measured before clipping, so a run shows whether
+    its clip is a rare spike guard or rescales most steps (in which case it
+    changes the effective learning rate). The statistics stay on the device
+    until summary() (see the module docstring)."""
+
+    def __init__(self, device, clip: float):
+        self._clip = clip
+        self._sum = torch.zeros((), device=device)
+        self._max = torch.zeros((), device=device)
+        self._clipped = torch.zeros((), device=device)
+        self._steps = 0
+
+    def clip_and_record(self, params: list[torch.Tensor]):
+        """Measure the global gradient norm over `params`, record it, and clip
+        the gradients to the tracker's norm when that is > 0."""
+        norm = get_total_norm([p.grad for p in params if p.grad is not None])
+        if self._clip > 0:
+            clip_grads_with_norm_(params, self._clip, norm)
+            self._clipped += norm > self._clip
+        self._sum += norm
+        self._max = torch.maximum(self._max, norm)
+        self._steps += 1
+
+    def summary(self) -> dict[str, float]:
+        """The epoch's mean and max pre-clip norm, and the fraction of steps
+        clipped (0 when the tracker does not clip)."""
+        steps = max(self._steps, 1)
+        return {
+            "grad_norm_mean": self._sum.item() / steps,
+            "grad_norm_max": self._max.item(),
+            "clip_frac": self._clipped.item() / steps,
+        }
 
 
 def _to_device(batch: dict, device, target_keys: tuple[str, ...]):
@@ -63,9 +101,12 @@ def run_epoch(
         updated count.
     on_batch: progress callback (done_batches, samples, elapsed_s,
         rows_trained), called at most about once per second.
-    grad_clip: if > 0, the global gradient-norm clip.
+    grad_clip: if > 0, the global gradient-norm clip. The norm is recorded
+        either way (EpochResult.grad_norm).
     """
     model.train()
+    params = list(model.parameters())
+    grad_norms = GradNormTracker(device, grad_clip)
     target_keys = model.target_keys()
     sums = {k: torch.zeros((), device=device) for k in model.loss_keys()}
     n_batches = 0
@@ -89,8 +130,7 @@ def run_epoch(
         losses = model.compute_loss(outputs, targets, loss_cfg)
         optimizer.zero_grad()
         losses["total"].backward()
-        if grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        grad_norms.clip_and_record(params)
         optimizer.step()
 
         bs = input_spatial.shape[0]
@@ -111,4 +151,5 @@ def run_epoch(
         n_batches=n_batches,
         samples=samples,
         rows_trained=rows_trained,
+        grad_norm=grad_norms.summary(),
     )
