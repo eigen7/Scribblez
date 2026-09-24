@@ -1,5 +1,7 @@
 #include "game/tile_counts.h"
 
+#include "util/exception.h"
+
 #include <algorithm>
 
 namespace scribblez {
@@ -8,6 +10,16 @@ TileCounts TileCounts::full_distribution() {
   TileCounts all;
   all.counts_ = TILE_COUNTS;
   return all;
+}
+
+TileCounts TileCounts::from_string(std::string_view letters) {
+  TileCounts tiles;
+  for (const char c : letters) {
+    const Tile t = c == '?' ? BLANK : Tile::letter_from_char(c);
+    if (t.is_empty()) throw util::Exception("invalid tile '{}' (use A-Z, or ? for a blank)", c);
+    tiles.add(t);
+  }
+  return tiles;
 }
 
 bool TileCounts::remove(const TileCounts& other) {

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <string>
+#include <string_view>
 
 namespace scribblez {
 
@@ -13,6 +14,9 @@ class TileCounts {
  public:
   // Every tile of the game: TILE_COUNTS as a histogram.
   static TileCounts full_distribution();
+  // Tiles from their letters: A..Z in either case, '?' for a blank. Throws
+  // util::Exception on any other character.
+  static TileCounts from_string(std::string_view letters);
 
   void add(Tile t) { ++counts_[t]; }
   void add(Tile t, int n) { counts_[t] += n; }

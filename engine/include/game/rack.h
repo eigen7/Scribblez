@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 
 namespace scribblez {
 
@@ -14,6 +15,13 @@ namespace scribblez {
 // a canonical multiset key. TileCounts is the histogram counterpart.
 class Rack {
  public:
+  // `counts` as a rack. Throws util::Exception if it holds more than
+  // RACK_SIZE tiles.
+  static Rack from_counts(const TileCounts& counts);
+  // TileCounts::from_string as a rack; throws as it and from_counts do.
+  static Rack from_string(std::string_view letters) {
+    return from_counts(TileCounts::from_string(letters));
+  }
   void add(Tile t);
   bool remove(Tile t);  // false if absent
   int count(Tile t) const;

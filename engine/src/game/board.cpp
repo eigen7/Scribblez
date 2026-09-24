@@ -350,14 +350,10 @@ int Board::pov_bag_size(int held_tiles) const {
 }
 
 Rack Board::hidden_rack(const Rack& known) const {
-  const TileCounts hidden_counts = unseen_tiles(known);
-  if (hidden_counts.size() > RACK_SIZE)
+  const TileCounts hidden = unseen_tiles(known);
+  if (hidden.size() > RACK_SIZE)
     throw util::Exception("more than a rackful of tiles is unaccounted for: the bag is not empty");
-  Rack hidden;
-  for (int t = 0; t < TILE_KINDS; ++t) {
-    for (int i = 0; i < hidden_counts.count(Tile::of(t)); ++i) hidden.add(Tile::of(t));
-  }
-  return hidden;
+  return Rack::from_counts(hidden);
 }
 
 }  // namespace scribblez

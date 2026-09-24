@@ -31,12 +31,6 @@ using namespace scribblez;
 
 namespace {
 
-Rack rack_from(const std::string& s) {
-  Rack r;
-  for (char c : s) r.add(c == '?' ? BLANK : Tile::from_char(c));
-  return r;
-}
-
 Dictionary opening_dict() {
   return Dictionary::build_from_words(
     {"AE",   "AR",    "AT",    "ARC",    "ARCS",   "ARE",   "ART",  "ARTS",  "ATE",
@@ -75,8 +69,8 @@ class SimAgentTest : public ::testing::Test {
 
   Dictionary dict_ = opening_dict();
   Board board_;
-  Rack my_rack_ = rack_from("CARTES");
-  Rack opp_leave_ = rack_from("AE");
+  Rack my_rack_ = Rack::from_string("CARTES");
+  Rack opp_leave_ = Rack::from_string("AE");
   int bag_size_ = 86;
   std::filesystem::path tmp_;
 };
@@ -146,7 +140,7 @@ TEST_F(SimAgentTest, SimulatesAgainstTheOpponentsPublicLeave) {
 
   bool discriminated = false;
   for (const std::string& text : leaves) {
-    const Rack leave = rack_from(text);
+    const Rack leave = Rack::from_string(text);
     const MoveRequest req{board_, dict_, my_rack_, leave, 13, 7, bag_size_};
     const std::vector<Move> candidates = equity_top_k(req, p.top_k);
     ASSERT_GT(candidates.size(), 1u);

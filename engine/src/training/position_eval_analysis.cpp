@@ -10,6 +10,7 @@
 #include "serve/position_json.h"
 #include "training/footprint_collapse.h"
 #include "util/assert.h"
+#include "util/exception.h"
 
 #include <boost/json.hpp>
 
@@ -38,25 +39,14 @@ void replay_and_encode(const ParsedGcgPostMove& pos, const Rack& leave, const Ra
   enc.encode_input(pos.start_player, leave, opp_leave, out);
 }
 
-// Parse a leave string into a Rack: A-Z (any case) are letters, '?' is a blank,
-// spaces are ignored. Fails on any other character or more than RACK_SIZE tiles.
-bool parse_leave(const std::string& s, Rack* out, std::string* error) {
-  for (char c : s) {
-    if (c == ' ') continue;
-    if (out->size() >= RACK_SIZE) {
-      if (error) *error = std::format("a leave holds at most {} tiles", RACK_SIZE);
-      return false;
-    }
-    if (c == '?') {
-      out->add(BLANK);
-    } else if (c >= 'A' && c <= 'Z') {
-      out->add(Tile::of(c - 'A'));
-    } else if (c >= 'a' && c <= 'z') {
-      out->add(Tile::of(c - 'a'));
-    } else {
-      if (error) *error = std::format("invalid tile '{}' (use A-Z, or ? for a blank)", c);
-      return false;
-    }
+// Rack::from_string with spaces ignored, reporting failure through `error`.
+bool parse_leave(std::string s, Rack* out, std::string* error) {
+  std::erase(s, ' ');
+  try {
+    *out = Rack::from_string(s);
+  } catch (const util::Exception& e) {
+    if (error) *error = e.what();
+    return false;
   }
   return true;
 }

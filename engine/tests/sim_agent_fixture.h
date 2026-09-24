@@ -23,12 +23,6 @@
 
 namespace scribblez::testing {
 
-inline Rack rack_from(const std::string& s) {
-  Rack r;
-  for (char c : s) r.add(c == '?' ? BLANK : Tile::from_char(c));
-  return r;
-}
-
 // Dense enough in one rack's letters (CARTES, in these suites) to give many
 // opening plays of differing scores.
 inline Dictionary opening_dict() {

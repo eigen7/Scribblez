@@ -50,17 +50,6 @@ using scribblez::testing::make_play_full;
 using scribblez::testing::three_turn_mover_rack;
 using scribblez::testing::three_turn_moves;
 
-static Rack rack_from(const std::string& s) {
-  Rack r;
-  for (char c : s) {
-    if (c == '?')
-      r.add(BLANK);
-    else
-      r.add(Tile::from_char(c));
-  }
-  return r;
-}
-
 // A modest word list with enough overlapping racks to yield many opening plays
 // of differing scores -- the candidate sets the selection tests rank and prune.
 static Dictionary medium_dict() {
@@ -96,7 +85,7 @@ struct OpeningPosition {
   Rack opp;
   int bag_size = 50;
 
-  explicit OpeningPosition(const std::string& rack) : my_rack(rack_from(rack)) {}
+  explicit OpeningPosition(const std::string& rack) : my_rack(Rack::from_string(rack)) {}
 
   MoveRequest request() const {
     return MoveRequest{board, dict, my_rack, opp, /*my_score=*/0, /*opp_score=*/0, bag_size};
@@ -398,7 +387,7 @@ TEST(NeuralAgent, EncodeCandidateMatchesReplay) {
   Move candidate =
     make_play_full(0, 0, /*horizontal=*/true, 0b11, 8,
                    {Glyph::of(Tile::from_char('D')), Glyph::of(Tile::from_char('O'))});
-  Rack my_rack = rack_from("DONERST");
+  Rack my_rack = Rack::from_string("DONERST");
 
   std::vector<float> agent_row(kInputFloats);
   agent.encode_candidate(candidate, my_rack, my_seat, Rack{}, agent_row.data());

@@ -117,17 +117,6 @@ TEST(Dictionary, Basic) {
   ASSERT_TRUE(d.contains("AERIES"));
 }
 
-static Rack rack_from(const std::string& s) {
-  Rack r;
-  for (char c : s) {
-    if (c == '?')
-      r.add(BLANK);
-    else
-      r.add(Tile::from_char(c));
-  }
-  return r;
-}
-
 // A PLAY of consecutive newly placed glyphs starting at (row, col). Score is 0.
 static Move make_play(int row, int col, bool horizontal, std::initializer_list<Glyph> gs) {
   std::array<Glyph, RACK_SIZE> played{};
@@ -163,7 +152,7 @@ TEST(Movegen, Opening) {
   Dictionary d = tiny_dict();
   Board b;
   MoveGenerator gen(b, d);
-  Rack r = rack_from("CATSOHE");
+  Rack r = Rack::from_string("CATSOHE");
   auto moves = gen.generate(r);
   ASSERT_FALSE(moves.empty());
   // Every opening move must cover the center square.
@@ -205,7 +194,7 @@ TEST(Movegen, CrossWord) {
                       Glyph::of(Tile::from_char('T')),
                     }));
   MoveGenerator gen(b, d);
-  Rack r = rack_from("SSSSSSS");
+  Rack r = Rack::from_string("SSSSSSS");
   auto moves = gen.generate(r);
   ASSERT_FALSE(moves.empty());
   bool found_cats = false;
@@ -219,7 +208,7 @@ TEST(Movegen, BingoBonus) {
   Dictionary d = Dictionary::build_from_words({"PARTIED"});
   Board b;
   MoveGenerator gen(b, d);
-  auto moves = gen.generate(rack_from("PARTIED"));
+  auto moves = gen.generate(Rack::from_string("PARTIED"));
   // The opening PARTIED on row 7 from the center star rightward: P on the DWS
   // center, I on the DLS at column 11.
   const uint16_t cols_7_to_13 = uint16_t(0x7Fu << CENTER);
@@ -737,7 +726,7 @@ TEST(Encoder, ReachabilityPlanes) {
   enc.apply_move(p0_play);
   enc.apply_move(p1_play);
 
-  Rack active_rack = rack_from("QESTUV");
+  Rack active_rack = Rack::from_string("QESTUV");
   std::vector<float> out(kInputFloats, -1.0f);
   enc.encode_input(enc.active_player(), active_rack, out.data());
 
@@ -917,8 +906,8 @@ TEST(PositionEncoder, CrossCheckPlanesLexical) {
   Dictionary d = medium_dict();
 
   GameLogStorage storage;
-  storage.initial_racks[0] = rack_from("QIAAAAA");
-  storage.initial_racks[1] = rack_from("SAINTED");
+  storage.initial_racks[0] = Rack::from_string("QIAAAAA");
+  storage.initial_racks[1] = Rack::from_string("SAINTED");
   TurnRecord rec{};
   rec.move = make_play_full(7, 7, /*horizontal=*/true, 0b11, 22,
                             {Glyph::of(Tile::from_char('Q')), Glyph::of(Tile::from_char('I'))});
@@ -1142,8 +1131,8 @@ TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
   GameStateEncoder open_enc{open};
   base_enc.apply_move(cat);
   open_enc.apply_move(cat);
-  const Rack rack = rack_from("RSE");
-  const Rack opp = rack_from("QIZAA");
+  const Rack rack = Rack::from_string("RSE");
+  const Rack opp = Rack::from_string("QIZAA");
 
   std::vector<float> base_row(input_floats(base), -1.0f);
   std::vector<float> open_row(input_floats(open), -1.0f);
@@ -1171,12 +1160,12 @@ TEST(InputLayout, HiddenLeavesIgnoresOppLeave) {
   enc.apply_move(make_play_full(7, 7, /*horizontal=*/true, 0b111, 12,
                                 {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                                  Glyph::of(Tile::from_char('T'))}));
-  const Rack rack = rack_from("RSE");
+  const Rack rack = Rack::from_string("RSE");
 
   std::vector<float> plain(input_floats(spec), -1.0f);
   std::vector<float> with_leave(input_floats(spec), -1.0f);
   enc.encode_input(enc.active_player(), rack, plain.data());
-  enc.encode_input(enc.active_player(), rack, rack_from("QIZAA"), with_leave.data());
+  enc.encode_input(enc.active_player(), rack, Rack::from_string("QIZAA"), with_leave.data());
   ASSERT_EQ(plain, with_leave);
 }
 
@@ -1776,7 +1765,7 @@ TEST(Movegen, BlankScoresZero) {
 
   MoveGenerator gen(b, d);
 
-  Rack rack_real = rack_from("CXXXXXX");
+  Rack rack_real = Rack::from_string("CXXXXXX");
   auto moves_real = gen.generate(rack_real);
   int score_real = 0;
   for (const auto& m : moves_real) {
@@ -1787,7 +1776,7 @@ TEST(Movegen, BlankScoresZero) {
   }
   ASSERT_GT(score_real, 0);
 
-  Rack rack_blank = rack_from("???????");
+  Rack rack_blank = Rack::from_string("???????");
   auto moves_blank = gen.generate(rack_blank);
   int score_blank = -1;
   for (const auto& m : moves_blank) {
@@ -2107,7 +2096,7 @@ TEST(Game, PlayFrom) {
 
   const Dictionary d = medium_dict();
   const Board board;
-  const Rack leave = rack_from("ING");  // seat 0 just moved and kept ING
+  const Rack leave = Rack::from_string("ING");  // seat 0 just moved and kept ING
   const std::array<Rack, 2> known = {leave, Rack{}};
   const std::array<int, 2> scores = {120, 95};
 
@@ -2138,7 +2127,7 @@ TEST(Game, PlayFrom) {
 TEST(Game, MaxPliesTruncation) {
   const Dictionary d = medium_dict();
   const Board board;
-  const Rack leave = rack_from("ING");
+  const Rack leave = Rack::from_string("ING");
   const std::array<Rack, 2> known = {leave, Rack{}};
   const std::array<int, 2> scores = {120, 95};
   constexpr int kPlies = 3;
@@ -2185,7 +2174,7 @@ TEST(Game, MaxPliesSparesTheEndgame) {
   const Board board;
   // Both racks known and two tiles in the bag, so the bag empties within the
   // first couple of plies.
-  const std::array<Rack, 2> known = {rack_from("CATSEIQ"), rack_from("RATESIN")};
+  const std::array<Rack, 2> known = {Rack::from_string("CATSEIQ"), Rack::from_string("RATESIN")};
   const uint64_t seed = 7;
   Bag pool(seed);
   {
@@ -3613,7 +3602,7 @@ TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
   Dictionary d = tiny_dict();
   Board board;
   MoveGenerator gen(board, d);
-  Rack my_rack = rack_from("CATSOHE");
+  Rack my_rack = Rack::from_string("CATSOHE");
   std::vector<Move> plays = gen.generate(my_rack);
   ASSERT_GE(plays.size(), 2);
 
@@ -3658,7 +3647,7 @@ TEST(HastyBotAgent, ExchangesInsteadOfPassingWithNoLegalPlay) {
 
   Dictionary dict = tiny_dict();
   Board board;
-  Rack rack = rack_from("DDGPTWZ");
+  Rack rack = Rack::from_string("DDGPTWZ");
   Rack opp;
 
   MoveRequest req{board, dict, rack, opp, 0, 0, /*bag_size=*/80};
@@ -3753,7 +3742,7 @@ TEST(HastyBotAgent, ExchangesDuplicateHeavyRackOverItsOnlyPlay) {
   Dictionary dict = Dictionary::load_kwg(kwg_path);
 
   Board board;
-  Rack rack = rack_from("IIIIIIH");
+  Rack rack = Rack::from_string("IIIIIIH");
   Rack opp;
 
   MoveRequest req{board, dict, rack, opp, 0, 0, /*bag_size=*/80};
@@ -3776,7 +3765,7 @@ TEST(Game, PlayFromReturnedToBag) {
   const Board board;
 
   // Seat 0 exchanged Q and Z and kept AB.
-  const Rack leave = rack_from("AB");
+  const Rack leave = Rack::from_string("AB");
   Rack returned;
   returned.add(Tile::from_char('Q'));
   returned.add(Tile::from_char('Z'));
@@ -3824,7 +3813,7 @@ TEST(SimRunner, Basic) {
   SimPosition pos;
   pos.scores = {30, 45};
   pos.mover = 0;
-  pos.rack = rack_from("CATSEIQ");
+  pos.rack = Rack::from_string("CATSEIQ");
 
   // Candidates of all three move types.
   MoveGenerator gen(pos.board, d);
@@ -4039,7 +4028,7 @@ TEST(SimRunner, TruncatedPovParity) {
   SimPosition pos;
   pos.scores = {30, 45};
   pos.mover = 0;
-  pos.rack = rack_from("CATSEIQ");
+  pos.rack = Rack::from_string("CATSEIQ");
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
   ASSERT_GE(plays.size(), 2);
@@ -4099,7 +4088,7 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
   SimPosition pos;
   pos.scores = {30, 45};
   pos.mover = 0;
-  pos.rack = rack_from("CATSEIQ");
+  pos.rack = Rack::from_string("CATSEIQ");
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
   ASSERT_GE(plays.size(), 2);
@@ -4153,7 +4142,7 @@ TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
   SimPosition pos;
   pos.scores = {30, 45};
   pos.mover = 0;
-  pos.rack = rack_from("CATSEIQ");
+  pos.rack = Rack::from_string("CATSEIQ");
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
   ASSERT_GE(plays.size(), 1);
@@ -4212,7 +4201,7 @@ TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
   SimPosition pos;
   pos.scores = {30, 45};
   pos.mover = 0;
-  pos.rack = rack_from("CATSEIQ");
+  pos.rack = Rack::from_string("CATSEIQ");
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
   ASSERT_GE(plays.size(), 1);
@@ -4257,8 +4246,8 @@ TEST(SimRunner, KnownOppRack) {
   SimPosition pos;
   pos.scores = {30, 45};
   pos.mover = 0;
-  pos.rack = rack_from("CATSEIQ");
-  pos.opp_leave = rack_from("DOGSTAR");
+  pos.rack = Rack::from_string("CATSEIQ");
+  pos.opp_leave = Rack::from_string("DOGSTAR");
 
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
@@ -4310,8 +4299,8 @@ TEST(SimRunner, PartialLeave) {
   SimPosition pos;
   pos.scores = {10, 5};
   pos.mover = 0;
-  pos.rack = rack_from("CATSEIQ");
-  pos.opp_leave = rack_from("ZI");
+  pos.rack = Rack::from_string("CATSEIQ");
+  pos.opp_leave = Rack::from_string("ZI");
 
   MoveGenerator gen(pos.board, d);
   const std::vector<Move> plays = gen.generate(pos.rack);
@@ -4336,15 +4325,15 @@ TEST(SimRunner, OppLeaveFromReplay) {
   using scribblez::binlog::opp_leave_from_replay;
   TurnRecord records[2] = {};
   records[0].player = 1;  // the opponent's move at turn 0
-  records[0].drawn = rack_from("AB");
+  records[0].drawn = Rack::from_string("AB");
   GameLog g{};
   g.records = records;
   g.num_records = 2;
 
-  const Rack now = rack_from("CABDEFG");
+  const Rack now = Rack::from_string("CABDEFG");
   const Rack leave = opp_leave_from_replay(g, /*sampled_turn=*/1, now);
   ASSERT_EQ(leave.size(), 5);
-  Rack expect = rack_from("CDEFG");
+  Rack expect = Rack::from_string("CDEFG");
   for (int i = 0; i < expect.size(); ++i) ASSERT_TRUE(rack_contains(leave, expect.tiles()[i]));
 
   ASSERT_EQ(opp_leave_from_replay(g, /*sampled_turn=*/0, now).size(), 0);
@@ -5328,7 +5317,7 @@ TEST(Lane, Targets) {
     b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
                       {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                        Glyph::of(Tile::from_char('T'))}));
-    const Rack r = rack_from("S");
+    const Rack r = Rack::from_string("S");
     const LaneTargets t = compute_lane_targets(b, r, d);
 
     MoveGenerator gen(b, d);
@@ -5348,7 +5337,7 @@ TEST(Lane, Targets) {
     Board b;
     b.set(CENTER, CENTER - 1, Glyph::of(Tile::from_char('A')));  // A to S's left
     b.set(CENTER - 1, CENTER, Glyph::of(Tile::from_char('A')));  // A above S
-    const Rack r = rack_from("S");
+    const Rack r = Rack::from_string("S");
     const LaneTargets t = compute_lane_targets(b, r, d);
     const int sk = Tile::from_char('S').index();
 
@@ -5362,7 +5351,7 @@ TEST(Lane, Targets) {
   // A single tile cannot open the game, so every lane is empty.
   {
     Board b;
-    const LaneTargets t = compute_lane_targets(b, rack_from("S"), d);
+    const LaneTargets t = compute_lane_targets(b, Rack::from_string("S"), d);
     for (const auto& lane : t.rows) ASSERT_FALSE(lane.has_move);
     for (const auto& lane : t.cols) ASSERT_FALSE(lane.has_move);
   }
@@ -5374,7 +5363,7 @@ TEST(Lane, Targets) {
     b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
                       {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                        Glyph::of(Tile::from_char('T'))}));
-    const LaneTargets t = compute_lane_targets(b, rack_from("S"), d);
+    const LaneTargets t = compute_lane_targets(b, Rack::from_string("S"), d);
     std::vector<float> row(kLaneLabelFloats, -1.0f);
     encode_lane_targets(t, row.data());
 
@@ -5399,7 +5388,8 @@ TEST(Lane, Targets) {
     // On the transposed board the play is vertical, so it moves to the axis-1
     // lane CENTER, same cell.
     std::vector<float> frow(kLaneLabelFloats, -1.0f);
-    encode_lane_targets(compute_lane_targets(b.transpose(), rack_from("S"), d), frow.data());
+    encode_lane_targets(compute_lane_targets(b.transpose(), Rack::from_string("S"), d),
+                        frow.data());
     const float* focc = frow.data();
     const float* v_lane = focc + (kLanesPerAxis + CENTER) * kLaneLen * kLaneTileKinds;
     const float* h_lane = focc + CENTER * kLaneLen * kLaneTileKinds;
@@ -5447,7 +5437,7 @@ TEST(Lane, BestMoves) {
   b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
                     {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                      Glyph::of(Tile::from_char('T'))}));
-  const Rack r = rack_from("S");
+  const Rack r = Rack::from_string("S");
 
   const LaneTargets t = compute_lane_targets(b, r, d);
   const LaneBestMovesSet bm = compute_lane_best_moves(b, r, d);
@@ -5494,7 +5484,7 @@ TEST(Lane, Analysis) {
   std::string error;
   ASSERT_TRUE(parse_gcg_analysis_position(gcg, &pos, &error));
   ASSERT_EQ(pos.on_move, 1);
-  ASSERT_EQ(pos.rack, rack_from("EINRSTU"));
+  ASSERT_EQ(pos.rack, Rack::from_string("EINRSTU"));
   ASSERT_FALSE(pos.board.at(CENTER, CENTER).is_empty());      // C
   ASSERT_FALSE(pos.board.at(CENTER, CENTER + 2).is_empty());  // T
   ASSERT_TRUE(pos.board.at(CENTER, CENTER + 3).is_empty());
@@ -5504,7 +5494,7 @@ TEST(Lane, Analysis) {
   b.apply(make_play(CENTER, CENTER, /*horizontal=*/true,
                     {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                      Glyph::of(Tile::from_char('T'))}));
-  const std::string js = lane_analysis_json(b, rack_from("S"), /*on_move=*/0, d);
+  const std::string js = lane_analysis_json(b, Rack::from_string("S"), /*on_move=*/0, d);
   const boost::json::value v = boost::json::parse(js);
   const boost::json::object& o = v.as_object();
   ASSERT_TRUE(o.contains("board"));
@@ -5537,7 +5527,7 @@ TEST(MaxMovePerLane, InputEncoder) {
   b.set(7, 8, Glyph::of(Tile::from_char('A')));
   b.set(7, 9, Glyph::of(Tile::from_char('T')));
   b.set(5, 5, Glyph::played(Tile::from_char('S'), /*is_blank=*/true));
-  const Rack rack = rack_from("AAB?");
+  const Rack rack = Rack::from_string("AAB?");
 
   using Enc = MaxMovePerLaneInputEncoder;
   const int A = Tile::from_char('A').index();
@@ -5595,7 +5585,7 @@ TEST(MaxMovePerLane, TaskRow) {
   gse.apply_move(make_play(CENTER, CENTER, /*horizontal=*/true,
                            {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),
                             Glyph::of(Tile::from_char('T'))}));
-  const Rack rack = rack_from("S");
+  const Rack rack = Rack::from_string("S");
 
   for (bool transposed : {false, true}) {
     const GameStateEncoder enc = transposed ? gse.transpose() : gse;

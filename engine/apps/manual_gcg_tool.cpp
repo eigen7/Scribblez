@@ -596,13 +596,7 @@ class ManualGame {
   // notation strings ("8H WAREZ 54"), highest score first.
   std::vector<std::string> list_moves(int ply, const std::string& rack_str) const {
     const Board& board = snapshots_.at(std::size_t(ply)).board;
-    Rack rack;
-    for (const char c : rack_str) {
-      if (c == '?')
-        rack.add(BLANK);
-      else if (c >= 'A' && c <= 'Z')
-        rack.add(Tile::of(c - 'A'));
-    }
+    const Rack rack = Rack::from_string(rack_str);
     MoveGenerator gen(board, dict_);
     std::vector<Move> moves = gen.generate(rack);
     std::sort(moves.begin(), moves.end(),
