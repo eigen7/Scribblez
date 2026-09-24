@@ -11,9 +11,15 @@ namespace scribblez {
 // compactness for O(1) count().
 class TileCounts {
  public:
+  // Every tile of the game: TILE_COUNTS as a histogram.
+  static TileCounts full_distribution();
+
   void add(Tile t) { ++counts_[t]; }
   void add(Tile t, int n) { counts_[t] += n; }
   bool remove(Tile t);
+  // Removes each of `other`'s tiles. False if some tile ran short, whose count
+  // then stops at 0.
+  bool remove(const TileCounts& other);
   int count(Tile t) const { return counts_[t]; }
   int blanks() const { return counts_[BLANK]; }
 

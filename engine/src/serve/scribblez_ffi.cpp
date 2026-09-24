@@ -249,7 +249,7 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
   // opponent bingoed, or has not moved yet) is valid.
   if (open_leaves) pos.opp_leave = scribblez::retained_leave(game, 1 - pos.mover);
 
-  const int pool_size = scribblez::unseen_pool(pos.board, pos.rack, 0).size();
+  const int pool_size = pos.board.unseen_tiles(pos.rack).size();
   if (pool_size <= scribblez::RACK_SIZE) return -1;  // endgame: SimRunner's non-empty-bag rule
 
   scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());

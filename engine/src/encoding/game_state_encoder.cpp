@@ -14,25 +14,11 @@
 
 namespace scribblez {
 
-// TILE_COUNTS minus the tiles on `board` and, if non-null, in `held`.
+// Board::unseen_tiles(), with a null `held` holding nothing, as counts.
 static void tiles_off_board_and_hand(uint8_t out[TILE_KINDS], const Board& board,
                                      const Rack* held) {
-  for (int i = 0; i < TILE_KINDS; ++i) out[i] = uint8_t(TILE_COUNTS[i]);
-  for (int r = 0; r < BOARD_SIZE; ++r) {
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      Glyph g = board.at(r, c);
-      if (g.is_empty()) continue;
-      Tile t = g.rack_tile();
-      DEBUG_ASSERT(out[t] > 0);
-      --out[t];
-    }
-  }
-  if (held == nullptr) return;
-  for (Tile t : held->tiles()) {
-    if (t.is_empty()) continue;
-    DEBUG_ASSERT(out[t] > 0);
-    --out[t];
-  }
+  const TileCounts unseen = board.unseen_tiles(held == nullptr ? Rack() : *held);
+  for (int i = 0; i < TILE_KINDS; ++i) out[i] = uint8_t(unseen.count(Tile::of(i)));
 }
 
 void compute_unseen_pool(uint8_t out[TILE_KINDS], const Board& board, const Rack& my_rack) {

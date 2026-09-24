@@ -44,8 +44,4 @@ struct ParsedGcgPostMove {
 // or its final move is not a tile placement.
 bool read_gcg_post_move(const std::string& gcg_text, ParsedGcgPostMove* out, std::string* error);
 
-// The tiles the holder of `rack` cannot see: the full distribution minus the
-// board and `rack`. A designated blank on the board counts as a blank.
-TileCounts unseen_counts(const Board& board, const Rack& rack);
-
 }  // namespace scribblez

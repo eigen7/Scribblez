@@ -109,15 +109,6 @@ int rack_pragma_player(const std::string& line) {
   return -1;
 }
 
-TileCounts full_bag() {
-  TileCounts bag;
-  for (Tile l = Tile::of(0); l < 26; ++l) {
-    for (int i = 0; i < TILE_COUNTS[l]; ++i) bag.add(l);
-  }
-  for (int i = 0; i < TILE_COUNTS[BLANK]; ++i) bag.add(BLANK);
-  return bag;
-}
-
 class GcgReader {
  public:
   bool Read(const std::string& gcg_text, ParsedGcgGame* out_game, std::string* error_message) {
@@ -151,7 +142,7 @@ class GcgReader {
     scores_ = {0, 0};
     racks_ = {};
     resume_racks_ = {};
-    bag_ = full_bag();
+    bag_ = TileCounts::full_distribution();
     turns_.clear();
     snapshots_.clear();
     snapshots_.push_back(CurrentSnapshot());

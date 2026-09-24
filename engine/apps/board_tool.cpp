@@ -45,15 +45,6 @@ Tile letter_tile(const std::string& s) {
   return Tile::from_char(c);
 }
 
-TileCounts full_bag() {
-  TileCounts bag;
-  for (Tile L = Tile::of(0); L < 26; ++L) {
-    for (int i = 0; i < TILE_COUNTS[L]; ++i) bag.add(L);
-  }
-  for (int i = 0; i < TILE_COUNTS[BLANK]; ++i) bag.add(BLANK);
-  return bag;
-}
-
 // A board word the dictionary rejects. `square` is its starting square in GCG
 // notation: row number first for across words, column letter first for down.
 struct InvalidWord {
@@ -70,7 +61,7 @@ class BoardEditor {
 
   void reset() {
     board_ = Board();
-    bag_ = full_bag();
+    bag_ = TileCounts::full_distribution();
     validation_.reset();
     status_.clear();
   }

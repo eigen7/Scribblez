@@ -30,7 +30,7 @@ std::optional<belief::OppMoveObservation> observe_opp_move(const ParsedGcgGame& 
   const ParsedGcgTurn& opp_turn = game.turns[n - 2];
   return belief::OppMoveObservation{
     game.snapshots[n - 2].board, opp_turn.record.move,
-    unseen_counts(game.snapshots[n - 2].board, game.turns[n - 1].record.rack_before)};
+    game.snapshots[n - 2].board.unseen_tiles(game.turns[n - 1].record.rack_before)};
 }
 
 }  // namespace
@@ -56,23 +56,6 @@ bool read_gcg_post_move(const std::string& gcg_text, ParsedGcgPostMove* out, std
   out->opp_leave = retained_leave(game, 1 - out->start_player);
   out->opp_observation = observe_opp_move(game, out->start_player);
   return true;
-}
-
-TileCounts unseen_counts(const Board& board, const Rack& rack) {
-  TileCounts unseen;
-  for (int t = 0; t < TILE_KINDS; ++t) unseen.add(Tile::of(t), TILE_COUNTS[t]);
-  for (int r = 0; r < BOARD_SIZE; ++r)
-    for (int c = 0; c < BOARD_SIZE; ++c) {
-      const Glyph g = board.at(r, c);
-      if (g.is_empty()) continue;
-      const bool ok = unseen.remove(g.is_blank() ? BLANK : g.letter());
-      RELEASE_ASSERT(ok, "the board holds more of a tile than the distribution has");
-    }
-  for (int i = 0; i < rack.size(); ++i) {
-    const bool ok = unseen.remove(rack.tiles()[i]);
-    RELEASE_ASSERT(ok, "the rack holds a tile the board already exhausted");
-  }
-  return unseen;
 }
 
 }  // namespace scribblez

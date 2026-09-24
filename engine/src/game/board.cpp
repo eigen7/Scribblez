@@ -319,35 +319,33 @@ void Board::ensure_movegen_caches(const Dictionary& dict) const {
   caches_valid_ = true;
 }
 
-Rack Board::hidden_rack(const Rack& known) const {
-  TileCounts remaining;
-  for (int l = 0; l < 26; ++l)
-    for (int i = 0; i < TILE_COUNTS[l]; ++i) remaining.add(Tile::of(l));
-  for (int i = 0; i < TILE_COUNTS[BLANK]; ++i) remaining.add(BLANK);
-
+TileCounts Board::tile_counts() const {
+  TileCounts tiles;
   for (int r = 0; r < BOARD_SIZE; ++r) {
     for (int c = 0; c < BOARD_SIZE; ++c) {
       const Glyph g = at(r, c);
-      if (!g.has_letter()) continue;
-      if (!remaining.remove(g.rack_tile()))
-        throw util::Exception("board holds more copies of a tile than the distribution allows");
+      if (g.has_letter()) tiles.add(g.rack_tile());
     }
   }
-  for (int i = 0; i < known.size(); ++i) {
-    if (!remaining.remove(known.tiles()[i]))
-      throw util::Exception("the known rack holds a tile the distribution has run out of");
-  }
+  return tiles;
+}
 
+TileCounts Board::unseen_tiles(const Rack& held) const {
+  TileCounts unseen = TileCounts::full_distribution();
+  if (!unseen.remove(tile_counts()))
+    throw util::Exception("board holds more copies of a tile than the distribution allows");
+  if (!unseen.remove(held.counts()))
+    throw util::Exception("the held rack holds a tile the distribution has run out of");
+  return unseen;
+}
+
+Rack Board::hidden_rack(const Rack& known) const {
+  const TileCounts hidden_counts = unseen_tiles(known);
+  if (hidden_counts.size() > RACK_SIZE)
+    throw util::Exception("more than a rackful of tiles is unaccounted for: the bag is not empty");
   Rack hidden;
-  int count = 0;
-  for (int l = 0; l <= 26; ++l) {
-    const Tile t = l == 26 ? BLANK : Tile::of(l);
-    for (int i = 0; i < remaining.count(t); ++i) {
-      if (++count > RACK_SIZE)
-        throw util::Exception(
-          "more than a rackful of tiles is unaccounted for: the bag is not empty");
-      hidden.add(t);
-    }
+  for (int t = 0; t < TILE_KINDS; ++t) {
+    for (int i = 0; i < hidden_counts.count(Tile::of(t)); ++i) hidden.add(Tile::of(t));
   }
   return hidden;
 }

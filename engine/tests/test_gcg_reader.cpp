@@ -284,7 +284,7 @@ TEST(UnseenCountsTest, FullDistributionMinusBoardAndRack) {
   ParsedGcgPostMove p;
   std::string error;
   ASSERT_TRUE(read_gcg_post_move(gcg, &p, &error)) << error;
-  const TileCounts unseen = unseen_counts(p.board, p.leave);
+  const TileCounts unseen = p.board.unseen_tiles(p.leave);
   EXPECT_EQ(unseen.size(), 100 - 3 - 4);
   EXPECT_EQ(unseen.count(Tile::from_char('A')), 9 - 2 - 4);
   EXPECT_EQ(unseen.blanks(), 1);  // the designated blank on the board counts as a blank

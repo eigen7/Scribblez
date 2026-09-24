@@ -1,6 +1,23 @@
 #include "game/tile_counts.h"
 
+#include <algorithm>
+
 namespace scribblez {
+
+TileCounts TileCounts::full_distribution() {
+  TileCounts all;
+  all.counts_ = TILE_COUNTS;
+  return all;
+}
+
+bool TileCounts::remove(const TileCounts& other) {
+  bool ok = true;
+  for (int t = 0; t < TILE_KINDS; ++t) {
+    ok &= counts_[t] >= other.counts_[t];
+    counts_[t] = std::max(0, counts_[t] - other.counts_[t]);
+  }
+  return ok;
+}
 
 std::string TileCounts::to_string() const {
   std::string s;

@@ -263,10 +263,6 @@ class SimRunner {
 SimRunner::Params make_runner_params(SimRunner::Params sim, int horizon_plies,
                                      nn::PositionEvalService* leaf);
 
-// A full bag, its draw RNG seeded by `seed`, minus the tiles on the board and
-// in the player's own rack.
-Bag unseen_pool(const Board& board, const Rack& rack, uint64_t seed);
-
 // The top `k` legal plays and exchanges by HastyBot static equity, best first,
 // or a lone PASS when nothing is legal. HastyEquity must be initialized.
 // Throws util::Exception on k < 1; for no cap, pass INT_MAX.

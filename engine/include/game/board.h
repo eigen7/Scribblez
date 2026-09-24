@@ -2,6 +2,7 @@
 
 #include "game/glyph.h"
 #include "game/rack.h"
+#include "game/tile_counts.h"
 
 #include <array>
 #include <cstdint>
@@ -129,10 +130,17 @@ class Board {
 
   std::string to_string() const;
 
+  // The tiles on this board, a designated blank counting as a blank.
+  TileCounts tile_counts() const;
+
   // The tiles of the full distribution that are neither on this board nor in
-  // `known`: with an empty bag, exactly the other player's rack. Throws if that
-  // is more than a rackful (the bag isn't empty) or if board + known overdraw
-  // the distribution.
+  // `held`: what the holder of `held` cannot see. Throws if board + held
+  // overdraw the distribution.
+  TileCounts unseen_tiles(const Rack& held) const;
+
+  // unseen_tiles(known) as a rack: with an empty bag, exactly the other
+  // player's rack. Throws as unseen_tiles does, or if that is more than a
+  // rackful (the bag isn't empty).
   Rack hidden_rack(const Rack& known) const;
 
   // ---- Move-generation caches ----

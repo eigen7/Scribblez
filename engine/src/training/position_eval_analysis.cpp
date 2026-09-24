@@ -110,8 +110,7 @@ bool encode_position_eval_analysis_input_with_leaves(const std::string& gcg_text
 
   // What the alternates may be drawn from: everything off the board, less a
   // recorded opponent leave that stays in force.
-  TileCounts available =
-    unseen_counts(pos.board, opp_leave_str == nullptr ? pos.opp_leave : Rack{});
+  TileCounts available = pos.board.unseen_tiles(opp_leave_str == nullptr ? pos.opp_leave : Rack{});
   Rack leave;
   if (!parse_alternate_leave(leave_str, pos.leave, "POV", &available, &leave, error)) return false;
   Rack opp_leave = pos.opp_leave;

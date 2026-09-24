@@ -71,7 +71,7 @@ RolloutResult rollout(const ParsedGcgPostMove& pos, const Dictionary& dict, Agen
   std::array<Rack, 2> known;
   known[pos.start_player] = pos.leave;
   known[opponent] = sampler.leave(seed);
-  Bag pool = unseen_pool(pos.board, pos.leave, seed);
+  Bag pool(seed, pos.board.unseen_tiles(pos.leave));
   for (int i = 0; i < known[opponent].size(); ++i) pool.remove(known[opponent].tiles()[i]);
   Game game(a0, a1, dict, seed);
   game.set_face_up_leaves(face_up);

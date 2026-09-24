@@ -338,11 +338,7 @@ class ManualGame {
     end_adjustments_.clear();
     status_ = "";
     racks_ = {};
-    bag_ = TileCounts();
-    for (Tile L = Tile::of(0); L < 26; ++L) {
-      for (int i = 0; i < TILE_COUNTS[L]; ++i) bag_.add(L);
-    }
-    for (int i = 0; i < TILE_COUNTS[BLANK]; ++i) bag_.add(BLANK);
+    bag_ = TileCounts::full_distribution();
 
     snapshots_.clear();
     snapshots_.push_back(snapshot_from_live());

@@ -1667,15 +1667,14 @@ TEST(Rack, Invariants) {
 // ===========================================================================
 
 TEST(Bag, Basics) {
-  // Bag::kTotalTiles must match TILE_COUNTS. The constructor checks this only
-  // with a DEBUG_ASSERT, so this test is what pins it in release builds.
+  // Bag::kTotalTiles must match TILE_COUNTS; this test is what pins it.
   Bag b(/*seed=*/42);
   int total = 0;
   for (int c : TILE_COUNTS) total += c;
   ASSERT_EQ(b.size(), total);
   ASSERT_EQ(b.size(), 100);
   ASSERT_EQ(b.size(), Bag::kTotalTiles);
-  for (int i = 0; i < TILE_KINDS; ++i) ASSERT_EQ(b.counts()[i], TILE_COUNTS[i]);
+  for (int i = 0; i < TILE_KINDS; ++i) ASSERT_EQ(b.counts().count(Tile::of(i)), TILE_COUNTS[i]);
 
   // The draw sequence is reproducible from the seed.
   Bag b1(/*seed=*/12345);
@@ -2094,8 +2093,8 @@ TEST(Game, PlayFrom) {
   {
     Bag bag(123);
     const Tile a = Tile::from_char('A');
-    for (int i = bag.counts()[a.index()]; i > 0; --i) bag.remove(a);
-    ASSERT_EQ(bag.counts()[a.index()], 0);
+    for (int i = bag.counts().count(a); i > 0; --i) bag.remove(a);
+    ASSERT_EQ(bag.counts().count(a), 0);
     while (bag.size() > 0) ASSERT_NE(bag.draw(), a);
   }
 
