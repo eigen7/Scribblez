@@ -73,6 +73,35 @@ def peek_state(paths: TagPaths, state_cls: type = GenerationalState) -> Generati
     return _load(paths, "cpu", state_cls)[1]
 
 
+def regroup_optimizer_state(saved: dict, model, optimizer) -> dict:
+    """`saved`, an optimizer state dict, made loadable into `optimizer` when
+    it holds a single group over all of `model.parameters()` and `optimizer`
+    splits those same parameters into several groups. Checkpoints written
+    before the optimizers split out a no-decay group (generational/optim.py)
+    are of that kind. Any other state dict comes back unchanged.
+
+    torch keys a state dict's per-parameter state by position in the
+    flattened group order, and the single saved group's order is
+    model.parameters(). So each current group is described by its tensors'
+    positions in model.parameters(): every tensor keeps its own state. Each
+    group takes the saved group's hyperparameters (step counts, schedule-free
+    averaging sums) except its own weight decay."""
+    (saved_group, *rest) = saved["param_groups"]
+    n_params = sum(1 for _ in model.parameters())
+    if rest or len(optimizer.param_groups) == 1 or len(saved_group["params"]) != n_params:
+        return saved
+    position = {id(p): i for i, p in enumerate(model.parameters())}
+    groups = [
+        {
+            **saved_group,
+            "weight_decay": group["weight_decay"],
+            "params": [position[id(p)] for p in group["params"]],
+        }
+        for group in optimizer.param_groups
+    ]
+    return {"state": saved["state"], "param_groups": groups}
+
+
 def resume(
     paths: TagPaths, model, optimizer, device, state_cls: type = GenerationalState
 ) -> GenerationalState:
@@ -82,7 +111,9 @@ def resume(
     if ckpt is None:
         return state
     model.load_state_dict(ckpt["model_state_dict"])
-    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    optimizer.load_state_dict(
+        regroup_optimizer_state(ckpt["optimizer_state_dict"], model, optimizer)
+    )
     print(
         f"Resuming from {paths.rolling_checkpoint.name}: generation {state.generation_index}, "
         f"{state.rows_trained} rows trained"

@@ -26,6 +26,9 @@ The trainer brackets its phases with train_mode / eval_mode without knowing
 which arm needs them; under `wsd` they do nothing, because the live weights
 are the only weights and the statistics already match them.
 
+Both arms decay only the tensors weight decay is meant for (decay_groups):
+the optimizer gets a decay group and a no-decay group, in that order.
+
 Both arms present one surface: the per-step `lr_fn` run_epoch applies (None
 when the arm imposes no schedule), the `current` rate for the metrics row, any
 extra `metrics()` the arm wants recorded alongside it, and the two mode hooks.
@@ -47,6 +50,33 @@ def arm_lr(params) -> float:
     return params.lr or DEFAULT_LR[params.optimizer]
 
 
+# Parameters that hold positional geometry rather than features: the
+# transformer tower's learnable RoPE frequencies and register-token positions.
+# Decay would pull them toward zero, coarsening every head's positional
+# resolution and collapsing the registers onto the origin.
+_GEOMETRY_SUFFIXES = ("rope_freqs", "register_pos")
+
+
+def decays(name: str, param: torch.Tensor) -> bool:
+    """Whether weight decay applies to the parameter `name`: to weight
+    matrices and convolution kernels, but not to vectors (norm gains, biases)
+    or positional geometry (_GEOMETRY_SUFFIXES). The register tokens' embedding
+    table is a matrix and decays like any other."""
+    return param.ndim >= 2 and not name.endswith(_GEOMETRY_SUFFIXES)
+
+
+def decay_groups(model, weight_decay: float) -> list[dict]:
+    """`model`'s parameters as [decay group, no-decay group], the decay group
+    at `weight_decay`, the other at 0 (see decays). The decay group comes
+    first: ScheduleFreeArm reads its rate and averaging weight off
+    param_groups[0]."""
+    named = list(model.named_parameters())
+    return [
+        {"params": [p for n, p in named if decays(n, p)], "weight_decay": weight_decay},
+        {"params": [p for n, p in named if not decays(n, p)], "weight_decay": 0.0},
+    ]
+
+
 def build_optimizer(model, params, rows_per_step: int | None = None):
     """The run's optimizer, per `params.optimizer`.
 
@@ -63,16 +93,18 @@ def build_optimizer(model, params, rows_per_step: int | None = None):
     (move_set_eval counts candidate moves but batches by position, so a step is
     many rows)."""
     lr = arm_lr(params)
+    groups = decay_groups(model, params.weight_decay)
+    betas = (0.9, params.adam_beta2)
     if rows_per_step is None:
         rows_per_step = params.batch_size
     if params.optimizer == OPTIMIZER_SCHEDULE_FREE:
         return AdamWScheduleFree(
-            model.parameters(),
+            groups,
             lr=lr,
-            weight_decay=params.weight_decay,
+            betas=betas,
             warmup_steps=int(params.lr_warmup_rows // max(rows_per_step, 1)),
         )
-    return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=params.weight_decay)
+    return torch.optim.AdamW(groups, lr=lr, betas=betas)
 
 
 def _model_forward(model, spatial, scalar):
