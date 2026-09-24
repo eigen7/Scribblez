@@ -2,6 +2,11 @@
 
 The gradient step lives here, apart from the trainer (trainer.py), which owns
 the data lifecycle, learning-rate policy, evaluation and checkpointing.
+
+The loop never waits on the GPU: per-step statistics accumulate in device
+tensors and are read back once, when the epoch ends. A per-step read (`.item()`)
+blocks the host until that step's kernels finish, so the next batch, which the
+data loader fills on this same thread, could not be prepared while the GPU works.
 """
 
 from __future__ import annotations
@@ -62,9 +67,9 @@ def run_epoch(
     """
     model.train()
     target_keys = model.target_keys()
-    sums = {k: 0.0 for k in model.loss_keys()}
+    sums = {k: torch.zeros((), device=device) for k in model.loss_keys()}
     n_batches = 0
-    correct = 0
+    correct = torch.zeros((), dtype=torch.long, device=device)
     samples = 0
     t0 = time.time()
     last_progress = 0.0
@@ -93,16 +98,16 @@ def run_epoch(
         samples += bs
         rows_trained += bs
         for k in sums:
-            sums[k] += losses[k].item()
-        correct += (outputs["wld"].argmax(1) == targets["wld"].argmax(1)).sum().item()
+            sums[k] += losses[k].detach()
+        correct += (outputs["wld"].argmax(1) == targets["wld"].argmax(1)).sum()
 
         if on_batch is not None and time.time() - last_progress > 1.0:
             on_batch(n_batches, samples, time.time() - t0, rows_trained)
             last_progress = time.time()
 
     return EpochResult(
-        losses={k: v / max(n_batches, 1) for k, v in sums.items()},
-        wld_acc=correct / max(samples, 1),
+        losses={k: v.item() / max(n_batches, 1) for k, v in sums.items()},
+        wld_acc=correct.item() / max(samples, 1),
         n_batches=n_batches,
         samples=samples,
         rows_trained=rows_trained,
