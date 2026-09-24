@@ -12,11 +12,12 @@ caller (e.g. supply_registers.py's tile-supply tokens). Registers get learnable
 2D positions, initialized just off the board, so the same rotary machinery
 covers them.
 
-Training memory: each (attention, FFN) pair is activation-checkpointed, so
-backward recomputes the pair's internal activations instead of storing them.
-For the default position-eval config (10 blocks x 2 pairs, width 192, 252
-tokens) at batch 256 in fp32 this cuts memory from ~25 GiB to ~5 GiB for about
-25% more step time.
+Training memory: with `checkpoint_pairs`, each (attention, FFN) pair is
+activation-checkpointed, so backward recomputes the pair's internal
+activations instead of storing them. For the default position-eval config (10
+blocks x 2 pairs, width 192, 252 tokens) at batch 256 under the trainer's bf16
+autocast and torch.compile, that takes peak training memory from ~10 GiB to
+~4 GiB and costs ~30% of throughput (1250 -> 900 rows/s on an RTX 5000 Ada).
 
 ONNX export (onnx_export_util.py): the attention projections are separate
 nn.Linears and RMSNorm is written elementwise, so every weight exports as a
@@ -39,12 +40,15 @@ from torch.utils.checkpoint import checkpoint
 class TransformerConfig:
     """Shape of one nested-bottleneck block. The head dim
     (mid_channels / num_heads) must be even, since RoPE rotates channel pairs.
-    inner_length is the number of (attention, FFN) pairs per block."""
+    inner_length is the number of (attention, FFN) pairs per block.
+    checkpoint_pairs trades training speed for memory (see the module
+    docstring); it does not change the model."""
 
     mid_channels: int
     num_heads: int
     ffn_channels: int
     inner_length: int = 2
+    checkpoint_pairs: bool = True
 
     def __post_init__(self):
         if self.mid_channels % self.num_heads != 0:
@@ -186,13 +190,14 @@ class NestedBottleneckTransformerBlock(nn.Module):
         self.up_norm = RMSNorm(cfg.mid_channels)
         self.up = nn.Linear(cfg.mid_channels, channels, bias=False)
         nn.init.zeros_(self.up.weight)
+        self.checkpoint_pairs = cfg.checkpoint_pairs
 
     def _run_pair(
         self, pair: TransformerPair, out: torch.Tensor, pos_x: torch.Tensor, pos_y: torch.Tensor
     ) -> torch.Tensor:
-        """The pair's forward, activation-checkpointed when training with grad
-        (see the module docstring)."""
-        if self.training and torch.is_grad_enabled():
+        """The pair's forward, activation-checkpointed when the config asks for
+        it and the pass is training with grad (see the module docstring)."""
+        if self.checkpoint_pairs and self.training and torch.is_grad_enabled():
             return checkpoint(pair, out, pos_x, pos_y, use_reentrant=False)
         return pair(out, pos_x, pos_y)
 

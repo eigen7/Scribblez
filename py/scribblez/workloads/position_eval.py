@@ -49,7 +49,11 @@ TRAINER_STATS = StatsSpec(
 # standard transformer safeguard, is the first such setting. The conv profile
 # is what conv runs have always trained under.
 PROFILES = {
-    TRUNK_TRANSFORMER: {"trunk": TRUNK_TRANSFORMER, "grad_clip": 1.0},
+    TRUNK_TRANSFORMER: {
+        "trunk": TRUNK_TRANSFORMER,
+        "grad_clip": 1.0,
+        "activation_checkpointing": False,
+    },
     TRUNK_CONV: {"trunk": TRUNK_CONV},
 }
 
@@ -149,6 +153,12 @@ class PositionEvalParams:
         6, "transformer trunk: attention heads per layer (head dim = mid channels / heads)"
     )
     transformer_ffn_channels: int = param(512, "transformer trunk: SwiGLU FFN hidden width")
+    activation_checkpointing: bool = param(
+        True,
+        "transformer trunk: recompute each attention/FFN pair's activations in backward "
+        "instead of storing them; position_eval at batch 256 needs ~4 GiB instead of ~10 GiB "
+        "but trains ~30% slower. The transformer profile turns it off",
+    )
     # Loss.
     lambda_wld: float = param(
         1.0, "win/draw/loss (value) loss weight; lower it to isolate other heads"

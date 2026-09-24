@@ -243,7 +243,9 @@ def _checkpoint_and_eval(
     ci = gen
     timed_print(
         f"[gen {gen}] rows={state.rows_trained} loss={avg['total']:.4f} "
-        f"wld_acc={result.wld_acc:.4f} lr={lr_now:.2e} {elapsed:.1f}s"
+        f"wld_acc={result.wld_acc:.4f} lr={lr_now:.2e} "
+        f"grad_norm={result.grad_norm['grad_norm_mean']:.3f} "
+        f"clipped={result.grad_norm['clip_frac']:.0%} {elapsed:.1f}s"
     )
     record = {
         "epoch": ci,
@@ -259,6 +261,7 @@ def _checkpoint_and_eval(
         "loss_self_win_placement": avg["self_win_placement"],
         "wld_acc": result.wld_acc,
         "lr": lr_now,
+        **result.grad_norm,
         "elapsed_s": elapsed,
         # Arm-specific metrics, e.g. schedule-free's averaging weight, which
         # anneals in place of the learning rate.

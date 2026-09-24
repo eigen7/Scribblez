@@ -169,10 +169,14 @@ def _series_figure(
 # schedule-free runs record the averaging weight (a WSD run's panel is absent):
 # they hold the rate constant and anneal by giving each new iterate a smaller
 # share of the deployed average, so the weight is the curve that shows the
-# anneal.
+# anneal. The gradient-norm panels come from runs that record them (the
+# position-evaluation trainer): the norm is measured before clipping, and the
+# clipped fraction says whether the clip is a spike guard or a constant rescale.
 TRAINING = [
     ("Learning rate", ["lr"], {"log": True}),
     ("Iterate averaging weight", ["averaging_weight"], {"log": True}),
+    ("Gradient norm before clipping", ["grad_norm_mean", "grad_norm_max"], {"log": True}),
+    ("Fraction of steps clipped", ["clip_frac"]),
     ("Epoch time (s)", ["elapsed_s"]),
 ]
 # The evidence trainer's go/no-go read: the conditioned pass against the plain

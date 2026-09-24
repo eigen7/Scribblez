@@ -7,6 +7,7 @@ handling, and drives the per-head loss registry through compute_loss.
 
 from dataclasses import replace
 
+import pytest
 import torch
 import torch.nn.functional as F
 from scribblez.position_eval.model import (
@@ -19,7 +20,7 @@ from scribblez.position_eval.model import (
     _head_legal_mask,
     _placement_ce,
 )
-from scribblez.position_eval.train_loop import EpochResult, LossConfig, run_epoch
+from scribblez.position_eval.train_loop import EpochResult, GradNormTracker, LossConfig, run_epoch
 
 _LOSS_CFG = LossConfig(
     lambda_wld=1.0,
@@ -78,6 +79,43 @@ def test_run_epoch_accumulates_and_counts():
     assert 0.0 <= result.wld_acc <= 1.0
     assert set(result.losses) >= {"total", "wld", "score_diff", *PLACEMENT_HEAD_NAMES}
     assert result.losses["total"] > 0.0
+
+
+def _param_with_grad(grad: list[float]) -> torch.Tensor:
+    p = torch.zeros(len(grad), requires_grad=True)
+    p.grad = torch.tensor(grad)
+    return p
+
+
+def test_grad_norm_tracker_records_pre_clip_norms_and_clips():
+    tracker = GradNormTracker(_CPU, clip=1.0)
+    small = _param_with_grad([0.3, 0.4])  # norm 0.5: under the clip, untouched
+    tracker.clip_and_record([small])
+    assert torch.allclose(small.grad, torch.tensor([0.3, 0.4]))
+    big = _param_with_grad([3.0, 4.0])  # norm 5: rescaled to the clip
+    tracker.clip_and_record([big])
+    assert torch.allclose(big.grad.norm(), torch.tensor(1.0), atol=1e-5)
+    summary = tracker.summary()
+    assert summary["grad_norm_mean"] == pytest.approx(2.75)  # pre-clip norms 0.5 and 5
+    assert summary["grad_norm_max"] == pytest.approx(5.0)
+    assert summary["clip_frac"] == pytest.approx(0.5)
+
+
+def test_grad_norm_tracker_without_clip_only_records():
+    tracker = GradNormTracker(_CPU, clip=0.0)
+    p = _param_with_grad([3.0, 4.0])
+    tracker.clip_and_record([p])
+    assert torch.equal(p.grad, torch.tensor([3.0, 4.0]))
+    assert tracker.summary() == {"grad_norm_mean": 5.0, "grad_norm_max": 5.0, "clip_frac": 0.0}
+
+
+def test_run_epoch_reports_grad_norm():
+    torch.manual_seed(0)
+    model = _model()
+    opt = torch.optim.SGD(model.parameters(), lr=0.1)
+    result = run_epoch(model, opt, [_batch(), _batch()], _CPU, _LOSS_CFG, grad_clip=1e-6)
+    assert result.grad_norm["grad_norm_max"] >= result.grad_norm["grad_norm_mean"] > 0.0
+    assert result.grad_norm["clip_frac"] == 1.0  # every step exceeds a 1e-6 clip
 
 
 def test_run_epoch_takes_a_gradient_step():
