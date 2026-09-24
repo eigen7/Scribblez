@@ -3,7 +3,6 @@
 #include "game/tile.h"
 
 #include <array>
-#include <optional>
 #include <random>
 
 namespace scribblez {
@@ -16,7 +15,7 @@ class Bag {
 
   explicit Bag(uint64_t seed);
 
-  std::optional<Tile> draw();
+  Tile draw();  // the bag must not be empty
   void put_back(Tile t);
   // `t` must be present. For carving an unseen-tile pool out of a full bag.
   void remove(Tile t);

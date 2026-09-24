@@ -2,6 +2,8 @@
 
 #include "util/assert.h"
 
+#include <cstdlib>
+
 namespace scribblez {
 
 Bag::Bag(uint64_t seed) : rng_(seed) {
@@ -10,8 +12,8 @@ Bag::Bag(uint64_t seed) : rng_(seed) {
   DEBUG_ASSERT(remaining_ == kTotalTiles);
 }
 
-std::optional<Tile> Bag::draw() {
-  if (remaining_ == 0) return std::nullopt;
+Tile Bag::draw() {
+  DEBUG_ASSERT(remaining_ > 0);
   std::uniform_int_distribution<int> dist(0, remaining_ - 1);
   int k = dist(rng_);
   for (Tile l = Tile::of(0); l < counts_.size(); ++l) {
@@ -22,7 +24,7 @@ std::optional<Tile> Bag::draw() {
     }
     k -= counts_[l];
   }
-  return std::nullopt;  // unreachable
+  std::abort();  // unreachable: remaining_ is the sum of counts_
 }
 
 void Bag::put_back(Tile t) {

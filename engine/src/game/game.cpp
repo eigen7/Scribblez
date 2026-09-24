@@ -57,11 +57,10 @@ const Rack& Game::visible_opp_rack(int mover) const {
 }
 
 void Game::refill_rack(int p, Rack* drawn_out) {
-  while (racks_[p].size() < RACK_SIZE) {
-    auto t = bag_.draw();
-    if (!t) break;
-    racks_[p].add(*t);
-    if (drawn_out) drawn_out->add(*t);
+  while (racks_[p].size() < RACK_SIZE && bag_.size() > 0) {
+    const Tile t = bag_.draw();
+    racks_[p].add(t);
+    if (drawn_out) drawn_out->add(t);
   }
 }
 
