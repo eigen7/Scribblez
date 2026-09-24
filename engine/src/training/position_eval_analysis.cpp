@@ -135,7 +135,7 @@ bool collapse_position_eval_analysis_placement(const std::string& gcg_text,
   // tiles less the board and the mover's leave. Masking with it matches the
   // availability-masked belief the model was trained on; a Y hook with no Y
   // unseen gets exactly zero.
-  uint8_t available_counts[27];
+  uint8_t available_counts[TILE_KINDS];
   compute_unseen_pool(available_counts, pos.board, pos.leave);
   collapse_footprint_planes(pos.board, *spec.dict, available_counts, raw, out);
   return true;
@@ -146,7 +146,7 @@ bool masked_position_eval_analysis_placement(const std::string& gcg_text,
                                              float* out, std::string* error) {
   ParsedGcgPostMove pos;
   if (!read_gcg_post_move(gcg_text, &pos, error)) return false;
-  uint8_t available_counts[27];
+  uint8_t available_counts[TILE_KINDS];
   compute_unseen_pool(available_counts, pos.board, pos.leave);
   masked_placement_distributions(pos.board, *spec.dict, available_counts, raw, out);
   return true;
@@ -157,7 +157,7 @@ bool legal_position_eval_analysis_placement(const std::string& gcg_text,
                                             std::string* error) {
   ParsedGcgPostMove pos;
   if (!read_gcg_post_move(gcg_text, &pos, error)) return false;
-  uint8_t available_counts[27];
+  uint8_t available_counts[TILE_KINDS];
   compute_unseen_pool(available_counts, pos.board, pos.leave);
   collapse_footprint_legal_cells(pos.board, *spec.dict, available_counts, out);
   return true;

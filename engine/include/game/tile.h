@@ -40,9 +40,13 @@ inline constexpr Tile EMPTY_SQUARE = Tile::empty();
 
 constexpr int RACK_SIZE = 7;
 
+// The kinds of tile a player can hold: the letters A..Z and the blank, i.e. the
+// Tile codes below the empty sentinel.
+constexpr int TILE_KINDS = 27;
+
 // Standard English point values and tile distribution, indexed by Tile code.
 extern const std::array<int, 26> TILE_VALUES;
-extern const std::array<int, 27> TILE_COUNTS;
+extern const std::array<int, TILE_KINDS> TILE_COUNTS;
 
 }  // namespace scribblez
 

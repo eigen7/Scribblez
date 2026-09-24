@@ -35,7 +35,7 @@ class TurnLeaves {
   const LeaveValues& lv_;
   int size_;
   std::array<Tile, RACK_SIZE> tile_of_bit_{};
-  std::array<uint8_t, 27> indices_{};
+  std::array<uint8_t, TILE_KINDS> indices_{};
   uint8_t full_ = 0;
   std::array<float, 128> value_{};
   std::array<int16_t, 128> pv_{};

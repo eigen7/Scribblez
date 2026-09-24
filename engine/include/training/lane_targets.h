@@ -19,7 +19,7 @@ namespace scribblez {
 
 // Tile kinds in a lane union: 0..25 are letters A..Z; 26 is any blank,
 // whatever letter it designates.
-inline constexpr int kLaneTileKinds = 27;
+inline constexpr int kLaneTileKinds = TILE_KINDS;
 inline constexpr int kLaneBlankKind = 26;
 inline constexpr int kLaneLen = BOARD_SIZE;       // cells along one lane
 inline constexpr int kLanesPerAxis = BOARD_SIZE;  // 15 rows, 15 cols

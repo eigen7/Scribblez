@@ -743,7 +743,7 @@ TEST(Encoder, ReachabilityPlanes) {
 
   Board board = enc.board();
   board.ensure_movegen_caches(d);
-  uint8_t opp_pool[27], self_pool[27];
+  uint8_t opp_pool[TILE_KINDS], self_pool[TILE_KINDS];
   compute_unseen_pool(opp_pool, board, active_rack);
   Rack empty;
   compute_unseen_pool(self_pool, board, empty);
@@ -1655,7 +1655,7 @@ TEST(Rack, Invariants) {
   ASSERT_FALSE(r.remove(BLANK));
 
   TileCounts tc = r.counts();
-  for (Tile t = Tile::of(0); t < 27; ++t) {
+  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
     int via_tc = tc.count(t);
     int via_probe = r.count(t);
     ASSERT_EQ(via_tc, via_probe);
@@ -1675,7 +1675,7 @@ TEST(Bag, Basics) {
   ASSERT_EQ(b.size(), total);
   ASSERT_EQ(b.size(), 100);
   ASSERT_EQ(b.size(), Bag::kTotalTiles);
-  for (int i = 0; i < 27; ++i) ASSERT_EQ(b.counts()[i], TILE_COUNTS[i]);
+  for (int i = 0; i < TILE_KINDS; ++i) ASSERT_EQ(b.counts()[i], TILE_COUNTS[i]);
 
   // The draw sequence is reproducible from the seed.
   Bag b1(/*seed=*/12345);
@@ -1691,10 +1691,10 @@ TEST(Bag, Basics) {
   ASSERT_TRUE(any_diff);
 
   // Draining the bag yields exactly TILE_COUNTS.
-  std::array<int, 27> drawn{};
+  std::array<int, TILE_KINDS> drawn{};
   Bag b3(/*seed=*/777);
   while (b3.size() > 0) ++drawn[b3.draw()];
-  for (int i = 0; i < 27; ++i) ASSERT_EQ(drawn[i], TILE_COUNTS[i]);
+  for (int i = 0; i < TILE_KINDS; ++i) ASSERT_EQ(drawn[i], TILE_COUNTS[i]);
   ASSERT_EQ(b3.size(), 0);
 
   Bag b4(/*seed=*/9999);

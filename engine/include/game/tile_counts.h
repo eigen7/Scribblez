@@ -27,7 +27,7 @@ class TileCounts {
   std::string to_string() const;
 
  private:
-  std::array<int, 27> counts_{};  // index 0..25 = A..Z, 26 = blank
+  std::array<int, TILE_KINDS> counts_{};  // index 0..25 = A..Z, 26 = blank
 };
 
 }  // namespace scribblez

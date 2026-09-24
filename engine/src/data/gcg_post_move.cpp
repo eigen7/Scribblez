@@ -60,7 +60,7 @@ bool read_gcg_post_move(const std::string& gcg_text, ParsedGcgPostMove* out, std
 
 TileCounts unseen_counts(const Board& board, const Rack& rack) {
   TileCounts unseen;
-  for (int t = 0; t < 27; ++t) unseen.add(Tile::of(t), TILE_COUNTS[t]);
+  for (int t = 0; t < TILE_KINDS; ++t) unseen.add(Tile::of(t), TILE_COUNTS[t]);
   for (int r = 0; r < BOARD_SIZE; ++r)
     for (int c = 0; c < BOARD_SIZE; ++c) {
       const Glyph g = board.at(r, c);

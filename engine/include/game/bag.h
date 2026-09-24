@@ -20,10 +20,10 @@ class Bag {
   // `t` must be present. For carving an unseen-tile pool out of a full bag.
   void remove(Tile t);
   int size() const { return remaining_; }
-  const std::array<int, 27>& counts() const { return counts_; }
+  const std::array<int, TILE_KINDS>& counts() const { return counts_; }
 
  private:
-  std::array<int, 27> counts_{};
+  std::array<int, TILE_KINDS> counts_{};
   int remaining_ = 0;
   std::mt19937_64 rng_;
 };
