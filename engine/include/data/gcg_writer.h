@@ -60,7 +60,7 @@ std::string spelled_move_notation(const Board& board_before, const Move& m);
 // A move as the UIs list it, e.g. "8H WAREZ 54" (horizontal) or "H8 WAREZ 54"
 // (vertical): played-through tiles spelled out unmarked, a blank lowercase,
 // then the score. Non-plays render as "exch AQWW" ('?' for a blank) or "pass".
-std::string move_to_notation(const Board& board_before, const Move& m);
+std::string scored_move_notation(const Board& board_before, const Move& m);
 
 std::string game_log_to_gcg(const GameLog& log);
 std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options);

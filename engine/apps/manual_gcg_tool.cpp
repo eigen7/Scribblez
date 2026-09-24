@@ -577,7 +577,7 @@ class ManualGame {
     ManualTurn t;
     t.record = rec;
     t.include_rack_before = rack_fully_known(before_slots);
-    t.notation = move_to_notation(before, chosen);
+    t.notation = scored_move_notation(before, chosen);
     t.rack_before_slots = before_slots;
     t.racks_after_turn = {racks_[0], racks_[1]};
     turns_.push_back(std::move(t));
@@ -603,7 +603,7 @@ class ManualGame {
               [](const Move& a, const Move& b) { return a.score() > b.score(); });
     std::vector<std::string> out;
     out.reserve(moves.size());
-    for (const Move& m : moves) out.push_back(move_to_notation(board, m));
+    for (const Move& m : moves) out.push_back(scored_move_notation(board, m));
     return out;
   }
 

@@ -201,7 +201,7 @@ std::string spelled_move_notation(const Board& board_before, const Move& m) {
   return position(board_before, m) + " " + played_word(board_before, m, ThroughTiles::BRACKETED);
 }
 
-std::string move_to_notation(const Board& board, const Move& move) {
+std::string scored_move_notation(const Board& board, const Move& move) {
   switch (move.type()) {
     case MoveType::PLAY:
       return std::format("{} {} {}", position(board, move),

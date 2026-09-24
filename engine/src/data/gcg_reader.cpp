@@ -384,7 +384,7 @@ class GcgReader {
     turn.record.score_delta = *score;
     scores_[player] = *cumulative;
     turn.record.cumulative_scores = scores_;
-    turn.notation = move_to_notation(before, move);
+    turn.notation = scored_move_notation(before, move);
 
     racks_[player] = Rack();
     turn.racks_after_turn = racks_;

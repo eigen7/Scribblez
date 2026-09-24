@@ -194,7 +194,7 @@ std::string game_state_json(const StateView& v) {
     for (size_t i = 0; i < v.legal_plays->size(); ++i) {
       const Move& m = (*v.legal_plays)[i];
       json::object mo{
-        {"index", int(i)}, {"text", move_to_notation(v.board, m)}, {"score", m.score()}};
+        {"index", int(i)}, {"text", scored_move_notation(v.board, m)}, {"score", m.score()}};
       // equity: null when we have no Macondo evaluation. The front-end
       // renders the null cells blank.
       if (v.legal_play_equities && i < v.legal_play_equities->size()) {
