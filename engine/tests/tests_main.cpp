@@ -1680,39 +1680,28 @@ TEST(Bag, Basics) {
   // The draw sequence is reproducible from the seed.
   Bag b1(/*seed=*/12345);
   Bag b2(/*seed=*/12345);
-  for (int i = 0; i < 100; ++i) {
-    auto t1 = b1.draw();
-    auto t2 = b2.draw();
-    ASSERT_TRUE(t1.has_value() && t2.has_value());
-    ASSERT_EQ(*t1, *t2);
-  }
+  for (int i = 0; i < 100; ++i) ASSERT_EQ(b1.draw(), b2.draw());
   ASSERT_EQ(b1.size(), 0);
-  ASSERT_FALSE(b1.draw().has_value());
 
   Bag bA(1), bB(2);
   bool any_diff = false;
   for (int i = 0; i < 100; ++i) {
-    auto a = bA.draw();
-    auto bb = bB.draw();
-    if (a != bb) any_diff = true;
+    if (bA.draw() != bB.draw()) any_diff = true;
   }
   ASSERT_TRUE(any_diff);
 
   // Draining the bag yields exactly TILE_COUNTS.
   std::array<int, 27> drawn{};
   Bag b3(/*seed=*/777);
-  while (auto t = b3.draw()) ++drawn[*t];
+  while (b3.size() > 0) ++drawn[b3.draw()];
   for (int i = 0; i < 27; ++i) ASSERT_EQ(drawn[i], TILE_COUNTS[i]);
   ASSERT_EQ(b3.size(), 0);
 
   Bag b4(/*seed=*/9999);
-  while (b4.draw().has_value()) {
-  }
-  ASSERT_EQ(b4.size(), 0);
+  while (b4.size() > 0) b4.draw();
   b4.put_back(Tile::from_char('Q'));
   ASSERT_EQ(b4.size(), 1);
-  auto got = b4.draw();
-  ASSERT_TRUE(got.has_value() && *got == Tile::from_char('Q'));
+  ASSERT_EQ(b4.draw(), Tile::from_char('Q'));
 }
 
 // Board::apply places glyphs only on the square mask's cells, skipping tiles
@@ -2107,7 +2096,7 @@ TEST(Game, PlayFrom) {
     const Tile a = Tile::from_char('A');
     for (int i = bag.counts()[a.index()]; i > 0; --i) bag.remove(a);
     ASSERT_EQ(bag.counts()[a.index()], 0);
-    while (auto t = bag.draw()) ASSERT_NE(t->index(), a.index());
+    while (bag.size() > 0) ASSERT_NE(bag.draw(), a);
   }
 
   const Dictionary d = medium_dict();

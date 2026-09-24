@@ -109,15 +109,6 @@ int rack_pragma_player(const std::string& line) {
   return -1;
 }
 
-// The known tiles of `slots`.
-Rack rack_from_slots(const ParsedRackSlots& slots) {
-  Rack rack;
-  for (const std::optional<Tile>& tile : slots) {
-    if (tile.has_value()) rack.add(*tile);
-  }
-  return rack;
-}
-
 TileCounts full_bag() {
   TileCounts bag;
   for (Tile l = Tile::of(0); l < 26; ++l) {
@@ -158,10 +149,8 @@ class GcgReader {
     nick_to_player_.clear();
     board_ = Board();
     scores_ = {0, 0};
-    for (int p = 0; p < 2; ++p) {
-      ClearRackSlots(p);
-      resume_racks_[p].reset();
-    }
+    racks_ = {};
+    resume_racks_ = {};
     bag_ = full_bag();
     turns_.clear();
     snapshots_.clear();
@@ -191,14 +180,14 @@ class GcgReader {
 
     const std::size_t space = line.find(' ');
     const std::string token = space == std::string::npos ? "" : line.substr(space + 1);
-    const ParsedRackSlots slots = SlotsFromRackToken(token);
+    const Rack rack = RackFromToken(token);
 
     if (!saw_turn_) {
-      resume_racks_[player] = slots;
+      resume_racks_[player] = rack;
     } else {
-      racks_[player] = slots;
-      snapshots_.back().racks[player] = slots;
-      turns_.back().racks_after_turn[player] = slots;
+      racks_[player] = rack;
+      snapshots_.back().racks[player] = rack;
+      turns_.back().racks_after_turn[player] = rack;
     }
     return true;
   }
@@ -238,7 +227,7 @@ class GcgReader {
 
     if (TryParseEndAdjustment(player, tok)) return;
 
-    SetRackSlotsFromToken(player, tok[0]);
+    racks_[player] = RackFromToken(tok[0]);
     if (tok[1] == "-") {
       ParsePassTurn(player, tok);
       return;
@@ -297,16 +286,15 @@ class GcgReader {
     if (!cumulative.has_value()) return;
 
     ParsedGcgTurn turn;
-    turn.rack_before_slots = racks_[player];
     turn.record.player = player;
-    turn.record.rack_before = rack_from_slots(turn.rack_before_slots);
+    turn.record.rack_before = racks_[player];
     turn.record.bag_size_before = BagSizeEstimate();
     turn.record.move = Move::pass();
     turn.record.score_delta = 0;
     scores_[player] = *cumulative;
     turn.record.cumulative_scores = scores_;
     turn.notation = "pass";
-    turn.racks_after_turn = {racks_[0], racks_[1]};
+    turn.racks_after_turn = racks_;
 
     turns_.push_back(std::move(turn));
     snapshots_.push_back(CurrentSnapshot(1 - player));
@@ -319,9 +307,8 @@ class GcgReader {
     if (!cumulative.has_value()) return;
 
     ParsedGcgTurn turn;
-    turn.rack_before_slots = racks_[player];
     turn.record.player = player;
-    turn.record.rack_before = rack_from_slots(turn.rack_before_slots);
+    turn.record.rack_before = racks_[player];
     turn.record.bag_size_before = BagSizeEstimate();
 
     TileCounts exchanged;
@@ -342,8 +329,8 @@ class GcgReader {
     turn.notation = "exch " + exchange_letters;
     turn.exchange_field = exchange_letters;
 
-    ClearRackSlots(player);
-    turn.racks_after_turn = {racks_[0], racks_[1]};
+    racks_[player] = Rack();
+    turn.racks_after_turn = racks_;
 
     turns_.push_back(std::move(turn));
     snapshots_.push_back(CurrentSnapshot(1 - player));
@@ -410,9 +397,8 @@ class GcgReader {
     board_.apply(move);
 
     ParsedGcgTurn turn;
-    turn.rack_before_slots = racks_[player];
     turn.record.player = player;
-    turn.record.rack_before = rack_from_slots(turn.rack_before_slots);
+    turn.record.rack_before = racks_[player];
     turn.record.bag_size_before = bag_size_before;
     turn.record.move = move;
     turn.record.score_delta = *score;
@@ -420,44 +406,29 @@ class GcgReader {
     turn.record.cumulative_scores = scores_;
     turn.notation = move_to_notation(before, move);
 
-    ClearRackSlots(player);
-    turn.racks_after_turn = {racks_[0], racks_[1]};
+    racks_[player] = Rack();
+    turn.racks_after_turn = racks_;
 
     turns_.push_back(std::move(turn));
     snapshots_.push_back(CurrentSnapshot(1 - player));
     saw_turn_ = true;
   }
 
-  void ClearRackSlots(int player) {
-    for (int i = 0; i < RACK_SIZE; ++i) racks_[player][i].reset();
-  }
-
-  // 'A'..'Z' are tiles, '?', '*' and lowercase are blanks, '_' is an unknown
-  // tile (left empty), and '.' is skipped.
-  static ParsedRackSlots SlotsFromRackToken(const std::string& rack_token) {
-    ParsedRackSlots slots;
+  // The known tiles of a GCG rack field. 'A'..'Z' are tiles; '?', '*' and
+  // lowercase are blanks; '_' is an unknown tile or empty slot, which takes one
+  // of the RACK_SIZE slots but adds no tile; anything else ('.') is skipped.
+  static Rack RackFromToken(const std::string& rack_token) {
+    Rack rack;
     int slot = 0;
     for (char ch : rack_token) {
       if (slot >= RACK_SIZE) break;
-      if (ch == '.') continue;
       const char up = upper_ch(ch);
-      if (up == '_') {
-        ++slot;
-        continue;
-      }
-      if (up == '?' || ch == '*' || (ch >= 'a' && ch <= 'z')) {
-        slots[slot++] = BLANK;
-        continue;
-      }
-      if (up >= 'A' && up <= 'Z') {
-        slots[slot++] = Tile::from_char(up);
-      }
+      const bool blank = up == '?' || ch == '*' || (ch >= 'a' && ch <= 'z');
+      if (!blank && up != '_' && (up < 'A' || up > 'Z')) continue;
+      ++slot;
+      if (up != '_') rack.add(blank ? BLANK : Tile::from_char(up));
     }
-    return slots;
-  }
-
-  void SetRackSlotsFromToken(int player, const std::string& rack_token) {
-    racks_[player] = SlotsFromRackToken(rack_token);
+    return rack;
   }
 
   void ApplyResumeRacks() {
@@ -490,8 +461,8 @@ class GcgReader {
   std::map<std::string, int> nick_to_player_;
   Board board_;
   std::array<int, 2> scores_ = {0, 0};
-  std::array<ParsedRackSlots, 2> racks_;
-  std::array<std::optional<ParsedRackSlots>, 2> resume_racks_;
+  std::array<Rack, 2> racks_;
+  std::array<std::optional<Rack>, 2> resume_racks_;
   TileCounts bag_;
   std::vector<ParsedGcgTurn> turns_;
   std::vector<ParsedGcgSnapshot> snapshots_;
@@ -511,7 +482,7 @@ GameLogStorage ParsedGcgGame::to_game_log_storage() const {
 
   if (!snapshots.empty()) {
     storage.final_scores = snapshots.back().scores;
-    for (int p = 0; p < 2; ++p) storage.final_racks[p] = rack_from_slots(snapshots.back().racks[p]);
+    storage.final_racks = snapshots.back().racks;
   }
 
   return storage;
@@ -540,12 +511,6 @@ Rack retained_leave(const ParsedGcgGame& game, int player) {
   return Rack{};
 }
 
-std::optional<Rack> header_rack(const ParsedGcgGame& game, int player) {
-  const std::optional<ParsedRackSlots>& slots = game.header_racks[player];
-  if (!slots.has_value()) return std::nullopt;
-  return rack_from_slots(*slots);
-}
-
 namespace {
 
 // The final recorded state, the side to move, and its pragma rack: the common
@@ -560,7 +525,7 @@ bool final_state(const std::string& gcg_text, ParsedGcgGame* game,
   }
   *snapshot = &game->snapshots.back();
   *mover = (*snapshot)->turn_player;
-  const std::optional<Rack> rack = header_rack(*game, *mover);
+  const std::optional<Rack>& rack = game->header_racks[*mover];
   if (!rack.has_value()) {
     *error_message = std::format("the mover's rack is unknown: add a #Rack{} pragma", *mover + 1);
     return false;
@@ -581,7 +546,7 @@ bool read_gcg_endgame(const std::string& gcg_text, ParsedGcgEndgame* out,
     return false;
   }
   const ParsedGcgSnapshot& snapshot = *snapshot_ptr;
-  std::optional<Rack> opp_rack = header_rack(game, 1 - mover);
+  std::optional<Rack> opp_rack = game.header_racks[1 - mover];
   if (!opp_rack.has_value()) {
     try {
       opp_rack = snapshot.board.hidden_rack(mover_rack);

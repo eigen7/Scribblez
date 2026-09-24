@@ -15,14 +15,6 @@
 namespace scribblez {
 namespace {
 
-std::string rack_letters(const ParsedRackSlots& slots) {
-  std::string out;
-  for (const auto& slot : slots) {
-    if (slot.has_value()) out.push_back(slot->to_char());
-  }
-  return out;
-}
-
 ParsedGcgGame parse_or_fail(const std::string& gcg) {
   ParsedGcgGame game;
   std::string error;
@@ -43,7 +35,7 @@ TEST(GcgReaderTest, InitialRackPragmaRestoresFinalRack) {
 
   const ParsedGcgGame game = parse_or_fail(gcg);
   ASSERT_FALSE(game.snapshots.empty());
-  EXPECT_EQ(rack_letters(game.snapshots.back().racks[0]), "ADEIMRZ");
+  EXPECT_EQ(game.snapshots.back().racks[0].to_string(), "ADEIMRZ");
 }
 
 TEST(GcgReaderTest, InitialRackPragmaRestoresSecondPlayerRack) {
@@ -56,7 +48,7 @@ TEST(GcgReaderTest, InitialRackPragmaRestoresSecondPlayerRack) {
 
   const ParsedGcgGame game = parse_or_fail(gcg);
   ASSERT_FALSE(game.snapshots.empty());
-  EXPECT_EQ(rack_letters(game.snapshots.back().racks[1]), "QUARTZY");
+  EXPECT_EQ(game.snapshots.back().racks[1].to_string(), "AQRTUYZ");
 }
 
 // A #Rack1 pragma after an event line is that player's rack just after the
@@ -71,9 +63,9 @@ TEST(GcgReaderTest, PostEventRackPragmaUpdatesThatTurn) {
 
   const ParsedGcgGame game = parse_or_fail(gcg);
   ASSERT_EQ(game.turns.size(), 2u);
-  EXPECT_EQ(rack_letters(game.turns[0].racks_after_turn[0]), "EEIORST");
+  EXPECT_EQ(game.turns[0].racks_after_turn[0].to_string(), "EEIORST");
   ASSERT_GE(game.snapshots.size(), 2u);
-  EXPECT_EQ(rack_letters(game.snapshots[1].racks[0]), "EEIORST");
+  EXPECT_EQ(game.snapshots[1].racks[0].to_string(), "EEIORST");
 }
 
 // The baseline the pragma tests correct: with no pragma, the final snapshot
@@ -87,7 +79,7 @@ TEST(GcgReaderTest, NoRackPragmaLeavesFinalRackCleared) {
 
   const ParsedGcgGame game = parse_or_fail(gcg);
   ASSERT_FALSE(game.snapshots.empty());
-  EXPECT_EQ(rack_letters(game.snapshots.back().racks[0]), "");
+  EXPECT_EQ(game.snapshots.back().racks[0].to_string(), "");
 }
 
 // A position-set .gcg is read at its final recorded state, with the side to

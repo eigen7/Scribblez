@@ -117,10 +117,10 @@ struct StateView {
   // The human's-turn view. `display_moves` fills the UI's move list (legal
   // plays plus any synthesized exchanges) and must outlive the view.
   // `legal_play_equities`, if non-null, runs parallel to it and supplies each
-  // move's `equity` field (null where it has no value).
+  // move's `equity` field (null for every move if it is null).
   StateView(const MoveRequest& req, const std::string& my_name, const std::string& opp_name,
             const std::vector<Move>& display_moves,
-            const std::vector<std::optional<double>>* legal_play_equities = nullptr);
+            const std::vector<double>* legal_play_equities = nullptr);
 
   StateView(const Game& game, int my_seat, const std::string& my_name, const std::string& opp_name,
             bool your_turn, bool game_over);
@@ -134,7 +134,7 @@ struct StateView {
   std::string my_name;
   std::string opp_name;
   const std::vector<Move>* legal_plays;
-  const std::vector<std::optional<double>>* legal_play_equities;
+  const std::vector<double>* legal_play_equities;
   bool your_turn;
   bool game_over;
 };

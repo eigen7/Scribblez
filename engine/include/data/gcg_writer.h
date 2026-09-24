@@ -24,17 +24,14 @@ struct GcgWriteOptions {
     std::optional<std::string> rack2;
   };
 
-  // Emitted as '#lexicon <name>'.
-  std::optional<std::string> lexicon_name;
+  // Emitted as '#lexicon <name>' unless empty.
+  std::string lexicon_name;
 
   // Emitted as '#note ...' lines in the header.
   std::vector<std::string> notes;
 
-  // Per turn, whether its line includes the rack. Empty includes them all.
-  std::vector<bool> include_rack_before;
-
   // Per turn, the rack field to write, or nullopt to omit it. If non-empty,
-  // replaces both include_rack_before and the TurnRecord's rack.
+  // replaces the TurnRecords' racks; if empty, every line has its record's.
   std::vector<std::optional<std::string>> rack_before_fields;
 
   // Per turn, the exchanged-tile field without its leading '-', overriding the

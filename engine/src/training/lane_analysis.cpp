@@ -86,7 +86,7 @@ bool parse_gcg_analysis_position(const std::string& gcg_text, GcgAnalysisPositio
   out->board = final_pos.board;
   out->on_move = final_pos.turn_player;
 
-  const std::optional<Rack> rack = header_rack(game, out->on_move);
+  const std::optional<Rack>& rack = game.header_racks[out->on_move];
   if (!rack) {
     if (error) *error = "missing #Rack header for the on-move player";
     return false;
