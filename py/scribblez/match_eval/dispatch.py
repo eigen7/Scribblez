@@ -32,6 +32,7 @@ import json
 from pathlib import Path
 
 from scribblez.dashboard import db
+from scribblez.generational import lifecycle
 from scribblez.paths import DONE_SUFFIX, ONNX_PREFIX, TagPaths
 
 # Fields a delivered result must carry (the controller adds the rest itself).
@@ -187,8 +188,10 @@ def _assign(paths: TagPaths, conn, every: int, slot):
     slot.put(model, f"{inbox}/{model.name}")
 
 
-def tick(spec, tag: str, params, slots):
+def tick(spec, tag: str, params, slots) -> bool:
     """One controller-side pass for one task (the RoleSpec.dispatch hook).
+    Returns whether match work may still be outstanding (see _outstanding); the
+    dashboard finishes the role once it is not and the trainer has finished.
 
     Every task is ticked on every reconcile pass, including long-finished ones,
     so the cheap filesystem checks come before opening the database. Opening it
@@ -197,15 +200,29 @@ def tick(spec, tag: str, params, slots):
     """
     paths = spec.paths(tag)
     if not paths.dashboard_db.is_file():
-        return  # the trainer has not started; there is nothing to match or record
+        return True  # the trainer has not started; there is nothing to match yet
     if not slots and not _delivered_results(paths):
-        return  # no worker to assign to, and nothing waiting to be recorded
+        return True  # nothing to assign or record; not worth opening the database
     conn = db.connect(paths.dashboard_db)
     try:
         ingest(paths, conn)
         if params.match_every_generations <= 0:
-            return  # match eval is disabled for this tag
+            return False  # match eval is disabled for this tag
         for slot in slots:
             _assign(paths, conn, params.match_every_generations, slot)
+        return _outstanding(paths, conn, params.match_every_generations)
     finally:
         conn.close()
+
+
+def _outstanding(paths: TagPaths, conn, every: int) -> bool:
+    """Whether a match may still be owed: a due generation has no recorded
+    result (it is unassigned, being played, or its result is in transit), or
+    the exports have not caught up with the trainer's cursor. The second case
+    covers a remote trainer whose final export is still on its way to the
+    controller when the trainer is already seen to have finished."""
+    if pending_generation(paths, recorded_generations(conn), every) is not None:
+        return True
+    cursor = lifecycle.read_train_state(paths).get("generation_index", 0)
+    exported = paths.exported_generations()
+    return cursor > 0 and (not exported or exported[-1] < cursor - 1)
