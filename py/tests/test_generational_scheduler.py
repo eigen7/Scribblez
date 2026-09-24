@@ -4,12 +4,15 @@ Chunk game-counting is faked (each fake chunk's text is its game count), so the
 assignment/completion/gating logic is exercised without the C++ loader.
 """
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from scribblez.generational import lifecycle, scheduler
 from scribblez.paths import POSITION_EVAL, TagPaths
 from scribblez.workloads.base import SchedulerHooks
+from scribblez.workloads.position_eval import PositionEvalParams
 
 
 @pytest.fixture
@@ -168,3 +171,39 @@ def test_without_a_publish_hook_nothing_is_marked(paths):
     _stage(paths, "a", 100)
     _tick(paths, hooks)
     assert not lifecycle.is_published(paths.generation_dir(0))
+
+
+class _FinishHooks(Hooks):
+    def __init__(self):
+        super().__init__()
+        self.finished: list[str] = []
+        self.finish = self.finished.append
+
+
+def _task_tick(tmp_path, *, max_rows: int, rows_trained: int | None):
+    """One tick_for_task on a position_eval task under tmp_path, with the
+    trainer's cursor at `rows_trained` (None: no cursor yet)."""
+    spec = SimpleNamespace(
+        params_cls=PositionEvalParams,
+        paths=lambda tag: TagPaths(tag, POSITION_EVAL, mount_root=tmp_path),
+    )
+    paths = spec.paths("t")
+    if rows_trained is not None:
+        paths.train_state_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.train_state_path.write_text(json.dumps({"rows_trained": rows_trained}))
+    hooks = _FinishHooks()
+    scheduler.tick_for_task(spec, SimpleNamespace(tag="t", params={"max_rows": max_rows}), hooks)
+    return hooks
+
+
+def test_finishes_the_generators_once_the_trainer_reaches_max_rows(tmp_path):
+    hooks = _task_tick(tmp_path, max_rows=1000, rows_trained=1000)
+    assert hooks.finished == ["generate"]
+    assert "generate" not in hooks.gates  # no scheduling after the end
+
+
+@pytest.mark.parametrize(("max_rows", "rows_trained"), [(1000, 999), (1000, None), (0, 10**9)])
+def test_keeps_scheduling_short_of_max_rows_or_without_one(tmp_path, max_rows, rows_trained):
+    hooks = _task_tick(tmp_path, max_rows=max_rows, rows_trained=rows_trained)
+    assert hooks.finished == []
+    assert hooks.gates["generate"] is None  # the ordinary tick ran and opened a generation

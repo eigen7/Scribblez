@@ -15,6 +15,8 @@ server's reconcile loop, is the single writer of generation structure:
   3. It recomputes committed game counts from .slog headers every tick rather
      than tracking them, so a crash between a rename and a manifest write heals
      itself.
+  4. Once the trainer has reached the task's `max_rows`, it finishes the
+     generate role for good (tick_for_task).
 
 An ingest ledger (one chunk name per line) keeps a chunk from being assigned
 twice: a chunk that reappears in staging, because cloud sync downloaded it
@@ -63,13 +65,30 @@ class SchedulerConfig:
 
 
 def tick_for_task(spec, task, hooks):
-    """The WorkloadSpec.scheduler entry: one tick for one task."""
+    """The WorkloadSpec.scheduler entry: one tick for one task, or, once the
+    trainer has trained the task's `max_rows`, the end of its generators.
+
+    The trainer exits on its own at max_rows, but the generators would only be
+    gated once they ran `open_ahead` generations ahead, and a gated slot still
+    wants to run, so the dashboard's idle rule would never stop a rented
+    machine. Finishing the role stops its containers and lets the machines go.
+    """
     params = params_mod.validate(spec.params_cls, task.params)
+    paths = spec.paths(task.tag)
+    if _trainer_done(paths, params.max_rows):
+        hooks.finish(GENERATE_ROLE)
+        return
     cfg = SchedulerConfig(
         games_per_generation=params.games_per_generation,
         open_ahead=params.open_ahead,
     )
-    tick(spec.paths(task.tag), cfg, hooks)
+    tick(paths, cfg, hooks)
+
+
+def _trainer_done(paths: TagPaths, max_rows: int) -> bool:
+    """Whether the trainer's published cursor has reached `max_rows` (0 =
+    no limit)."""
+    return max_rows > 0 and lifecycle.read_train_state(paths).get("rows_trained", 0) >= max_rows
 
 
 def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn = _header_games):
