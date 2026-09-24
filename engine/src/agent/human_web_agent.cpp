@@ -79,13 +79,10 @@ MoveDecision HumanWebAgent::make_move(const MoveRequest& req) {
 
   // Each displayed move's HastyBot equity, for the cheat-mode move list. The
   // column stays blank when the equity tables failed to load (see from_spec).
-  std::vector<std::optional<double>> equities;
+  std::vector<double> equities;
   try {
-    const HastyEquity& eq = HastyEquity::instance();
-    const std::vector<double> vals =
-      eq.equities(display_moves, req.board, req.bag_size, req.opp_rack, req.my_rack);
-    equities.resize(vals.size());
-    for (size_t i = 0; i < vals.size(); ++i) equities[i] = vals[i];
+    equities = HastyEquity::instance().equities(display_moves, req.board, req.bag_size,
+                                                req.opp_rack, req.my_rack);
   } catch (const std::exception&) {
     equities.clear();
   }

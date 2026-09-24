@@ -195,7 +195,7 @@ std::string move_to_notation(const Board& board, const Move& move) {
 
 StateView::StateView(const MoveRequest& req, const std::string& my_name,
                      const std::string& opp_name, const std::vector<Move>& display_moves,
-                     const std::vector<std::optional<double>>* equities)
+                     const std::vector<double>* equities)
     : board(req.board),
       my_rack(req.my_rack),
       my_score(req.my_score),
@@ -242,11 +242,10 @@ std::string game_state_json(const StateView& v) {
       const Move& m = (*v.legal_plays)[i];
       json::object mo{
         {"index", int(i)}, {"text", move_to_notation(v.board, m)}, {"score", m.score()}};
-      // equity: null when we have no Macondo evaluation (or no value for
-      // this particular play). The front-end renders the null cells blank.
-      if (v.legal_play_equities && i < v.legal_play_equities->size() &&
-          (*v.legal_play_equities)[i].has_value()) {
-        mo["equity"] = (*v.legal_play_equities)[i].value();
+      // equity: null when we have no Macondo evaluation. The front-end
+      // renders the null cells blank.
+      if (v.legal_play_equities && i < v.legal_play_equities->size()) {
+        mo["equity"] = (*v.legal_play_equities)[i];
       } else {
         mo["equity"] = nullptr;
       }
