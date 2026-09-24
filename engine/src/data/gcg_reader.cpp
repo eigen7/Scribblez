@@ -269,31 +269,13 @@ class GcgReader {
     const auto cumulative = parse_signed_int(tok.back());
     if (!cumulative.has_value()) return;
 
-    ParsedGcgTurn turn;
-    turn.record.player = player;
-    turn.record.rack_before = racks_[player];
-    turn.record.bag_size_before = BagSizeEstimate();
-    turn.record.move = Move::pass();
-    turn.record.score_delta = 0;
-    scores_[player] = *cumulative;
-    turn.record.cumulative_scores = scores_;
-    turn.notation = "pass";
-    turn.racks_after_turn = racks_;
-
-    turns_.push_back(std::move(turn));
-    snapshots_.push_back(CurrentSnapshot(1 - player));
-    saw_turn_ = true;
+    RecordTurn(player, Move::pass(), *cumulative);
   }
 
   void ParseExchangeTurn(int player, const std::vector<std::string>& tok) {
     if (tok.size() < 3) return;
     const auto cumulative = parse_signed_int(tok.back());
     if (!cumulative.has_value()) return;
-
-    ParsedGcgTurn turn;
-    turn.record.player = player;
-    turn.record.rack_before = racks_[player];
-    turn.record.bag_size_before = BagSizeEstimate();
 
     TileCounts exchanged;
     const std::string exchange_letters = tok[1].substr(1);
@@ -302,19 +284,10 @@ class GcgReader {
       if (!t.is_empty()) exchanged.add(t);
     }
 
-    turn.record.move = Move::exchange(exchanged);
-    turn.record.score_delta = 0;
-    scores_[player] = *cumulative;
-    turn.record.cumulative_scores = scores_;
+    ParsedGcgTurn& turn = RecordTurn(player, Move::exchange(exchanged), *cumulative);
+    // The field as written, since it may record hidden tiles as '_' or a count.
     turn.notation = "exch " + exchange_letters;
     turn.exchange_field = exchange_letters;
-
-    racks_[player] = Rack();
-    turn.racks_after_turn = racks_;
-
-    turns_.push_back(std::move(turn));
-    snapshots_.push_back(CurrentSnapshot(1 - player));
-    saw_turn_ = true;
   }
 
   void ParsePlayTurn(int player, const std::vector<std::string>& tok) {
@@ -369,29 +342,32 @@ class GcgReader {
     if (malformed) return;
 
     const int start = horizontal ? row : col;
-    const Move move =
-      Move::play(horizontal, start, mask, uint16_t(*score), glyphs.data(), num_glyphs);
+    RecordTurn(player,
+               Move::play(horizontal, start, mask, uint16_t(*score), glyphs.data(), num_glyphs),
+               *cumulative);
+  }
 
-    const Board before = board_;
-    const int bag_size_before = BagSizeEstimate();
-    board_.apply(move);
-
+  // Records `player` making `move`, which leaves their score at `cumulative`,
+  // and applies it. A play or exchange empties the rack: the tiles drawn after
+  // it are unknown until the player's next rack field or pragma.
+  ParsedGcgTurn& RecordTurn(int player, const Move& move, int cumulative) {
     ParsedGcgTurn turn;
     turn.record.player = player;
     turn.record.rack_before = racks_[player];
-    turn.record.bag_size_before = bag_size_before;
+    turn.record.bag_size_before = BagSizeEstimate();
     turn.record.move = move;
-    turn.record.score_delta = *score;
-    scores_[player] = *cumulative;
+    turn.record.score_delta = move.score();
+    turn.notation = scored_move_notation(board_, move);
+    board_.apply(move);
+    scores_[player] = cumulative;
     turn.record.cumulative_scores = scores_;
-    turn.notation = scored_move_notation(before, move);
-
-    racks_[player] = Rack();
+    if (move.type() != MoveType::PASS) racks_[player] = Rack();
     turn.racks_after_turn = racks_;
 
     turns_.push_back(std::move(turn));
     snapshots_.push_back(CurrentSnapshot(1 - player));
     saw_turn_ = true;
+    return turns_.back();
   }
 
   // The known tiles of a GCG rack field. 'A'..'Z' are tiles; '?', '*' and
