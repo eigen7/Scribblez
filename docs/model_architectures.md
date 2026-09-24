@@ -120,7 +120,8 @@ tokens of §2.
 `transformer_mid_channels`, `transformer_heads` and `transformer_ffn_channels`
 size the inside of a block. Both models select the tower with their workload's
 `trunk` param, and the `transformer` and `conv` parameter profiles pick an arm
-together with its recipe (the transformer profile adds `grad_clip = 1`). The
+together with its recipe (the transformer profile adds `grad_clip = 1` and, in
+position_eval, turns activation checkpointing off). The
 per-lane model always uses the conv tower.
 
 ---

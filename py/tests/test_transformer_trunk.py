@@ -9,6 +9,8 @@ exports through the pinned legacy ONNX exporter and matches torch at a batch
 size other than the traced one.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import onnxruntime as ort
 import pytest
@@ -36,10 +38,10 @@ C = 32
 CFG = TransformerConfig(mid_channels=16, num_heads=4, ffn_channels=32)
 
 
-def _model(scalar_size=SCALAR_SIZE_OPEN_LEAVES, num_blocks=2):
+def _model(scalar_size=SCALAR_SIZE_OPEN_LEAVES, num_blocks=2, cfg=CFG):
     torch.manual_seed(0)
     return PositionEvalModel(
-        P, scalar_size, trunk_channels=C, num_blocks=num_blocks, transformer=CFG
+        P, scalar_size, trunk_channels=C, num_blocks=num_blocks, transformer=cfg
     ).eval()
 
 
@@ -190,3 +192,28 @@ def test_onnx_export_matches_torch(tmp_path):
         ref = model(sp, sc)
     for name in ["wld", "score_diff", *PLACEMENT_HEAD_NAMES]:
         assert np.abs(outs[name] - ref[name].numpy()).max() < 1e-4, name
+
+
+def test_activation_checkpointing_changes_nothing_but_memory():
+    """The same weights give the same loss and gradients either way."""
+    grads = []
+    for checkpoint_pairs in (True, False):
+        model = _model(cfg=replace(CFG, checkpoint_pairs=checkpoint_pairs)).train()
+        with torch.no_grad():
+            for block in model.trunk.tower.blocks:
+                block.up.weight.normal_(std=0.1, generator=torch.Generator().manual_seed(3))
+        model(*_inputs(2))["wld"].sum().backward()
+        grads.append([p.grad.clone() for p in model.parameters() if p.grad is not None])
+    for a, b in zip(*grads, strict=True):
+        assert torch.allclose(a, b, atol=1e-6)
+
+
+def test_configs_without_the_checkpointing_key_keep_checkpointing():
+    cfg = {
+        "trunk": TRUNK_TRANSFORMER,
+        "transformer_mid_channels": 16,
+        "transformer_heads": 4,
+        "transformer_ffn_channels": 32,
+    }
+    assert transformer_config(cfg).checkpoint_pairs is True
+    assert transformer_config({**cfg, "activation_checkpointing": False}).checkpoint_pairs is False

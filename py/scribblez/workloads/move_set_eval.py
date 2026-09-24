@@ -217,6 +217,11 @@ class MoveSetEvalParams:
         6, "transformer trunk: attention heads per layer (head dim = mid channels / heads)"
     )
     transformer_ffn_channels: int = param(512, "transformer trunk: SwiGLU FFN hidden width")
+    activation_checkpointing: bool = param(
+        True,
+        "transformer trunk: recompute each attention/FFN pair's activations in backward "
+        "instead of storing them, trading training speed for memory",
+    )
     num_heads: int = param(
         4, "attention heads of the move-to-board cross-attention and the evidence fusion stage"
     )
