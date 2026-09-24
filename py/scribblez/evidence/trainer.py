@@ -36,7 +36,7 @@ from pathlib import Path
 
 import torch
 
-from scribblez.evidence.checkpoints import STUDENT_CONFIG_KEYS, EvidenceCheckpoint, load_student
+from scribblez.evidence.checkpoints import EvidenceCheckpoint, load_student, student_config
 from scribblez.evidence.dataset import (
     TrajectoryDataset,
     adopt_information_condition,
@@ -510,7 +510,7 @@ def run(ctx: WorkerContext) -> int:
     run_ctx = {
         "config": {
             **asdict(params),
-            "student": {k: student_cfg[k] for k in STUDENT_CONFIG_KEYS},
+            "student": student_config(student_cfg),
             "open_leaves": train_ds.open_leaves,
             "proposer_hash": train_ds.proposer_hash,
         },

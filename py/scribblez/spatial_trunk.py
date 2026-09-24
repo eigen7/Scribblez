@@ -223,8 +223,9 @@ def transformer_config(cfg: Mapping) -> TransformerConfig | None:
     """The TransformerConfig a workload's `trunk` and `transformer_*` params
     select, or None for the conv tower. `cfg` is the params as a dict or a
     checkpoint's config; sharing this function keeps trainers and checkpoint
-    loaders in agreement. A config written before `activation_checkpointing`
-    existed lacks it and gets the checkpointing every earlier run trained with."""
+    loaders in agreement. A config written before `activation_checkpointing` or
+    `transformer_qk_norm` existed lacks the key and gets what every earlier run
+    trained with: checkpointing on, no QK norm."""
     if cfg["trunk"] != TRUNK_TRANSFORMER:
         return None
     return TransformerConfig(
@@ -232,4 +233,5 @@ def transformer_config(cfg: Mapping) -> TransformerConfig | None:
         num_heads=cfg["transformer_heads"],
         ffn_channels=cfg["transformer_ffn_channels"],
         checkpoint_pairs=cfg.get("activation_checkpointing", True),
+        qk_norm=cfg.get("transformer_qk_norm", False),
     )

@@ -16,6 +16,7 @@ import onnxruntime as ort
 import pytest
 import torch
 import torch.nn.functional as F
+from scribblez.evidence.checkpoints import STUDENT_CONFIG_KEYS, student_config
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES, PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
@@ -30,7 +31,7 @@ from scribblez.supply_registers import (
     TileSupplyRegisters,
     _thermometer_to_count_matrix,
 )
-from scribblez.transformer_tower import TransformerConfig
+from scribblez.transformer_tower import AttentionBlock, TransformerConfig
 from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER
 
 P = 87
@@ -174,11 +175,18 @@ def test_registers_read_the_right_scalar_slices():
     assert not torch.allclose(contents[0], contents[2])
 
 
-def test_onnx_export_matches_torch(tmp_path):
+@pytest.mark.parametrize("qk_norm", [False, True])
+def test_onnx_export_matches_torch(tmp_path, qk_norm):
     """The tower exports through the pinned legacy exporter (manual attention,
     elementwise RMSNorm, in-graph RoPE tables) and matches torch at a batch size
-    other than the traced one."""
-    model = _model()
+    other than the traced one, with and without QK norm."""
+    model = _model(cfg=replace(CFG, qk_norm=qk_norm))
+    if qk_norm:  # gains off their init of 1, so the export must carry them
+        with torch.no_grad():
+            for block in model.trunk.tower.blocks:
+                for pair in block.pairs:
+                    pair.attention.q_norm.weight.uniform_(0.5, 2.0)
+                    pair.attention.k_norm.weight.uniform_(0.5, 2.0)
     with torch.no_grad():
         for block in model.trunk.tower.blocks:
             block.up.weight.normal_(std=0.1)
@@ -206,6 +214,39 @@ def test_activation_checkpointing_changes_nothing_but_memory():
         grads.append([p.grad.clone() for p in model.parameters() if p.grad is not None])
     for a, b in zip(*grads, strict=True):
         assert torch.allclose(a, b, atol=1e-6)
+
+
+def test_qk_norm_bounds_the_attention_logits():
+    """With QK norm, scaling the query and key projections up does not change
+    the attention: every head's q and k come out of the norm at unit RMS."""
+    torch.manual_seed(0)
+    block = AttentionBlock(16, num_heads=4, qk_norm=True)
+    x = torch.randn(2, 10, 16)
+    pos = torch.arange(10).float()
+    with torch.no_grad():
+        before = block(x, pos, pos)
+        block.q_proj.weight.mul_(50.0)
+        block.k_proj.weight.mul_(50.0)
+        after = block(x, pos, pos)
+    assert torch.allclose(before, after, atol=1e-4)
+
+
+def test_a_config_without_the_qk_norm_key_builds_the_tower_it_was_trained_with():
+    """Checkpoint configs written before transformer_qk_norm existed lack it."""
+    cfg = {
+        "trunk": TRUNK_TRANSFORMER,
+        "transformer_mid_channels": 16,
+        "transformer_heads": 4,
+        "transformer_ffn_channels": 32,
+    }
+    assert transformer_config(cfg).qk_norm is False
+    assert transformer_config({**cfg, "transformer_qk_norm": True}).qk_norm is True
+    assert (
+        student_config({k: 0 for k in STUDENT_CONFIG_KEYS if k != "transformer_qk_norm"})[
+            "transformer_qk_norm"
+        ]
+        is False
+    )
 
 
 def test_configs_without_the_checkpointing_key_keep_checkpointing():

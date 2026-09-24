@@ -159,6 +159,11 @@ class PositionEvalParams:
         "instead of storing them; position_eval at batch 256 needs ~4 GiB instead of ~10 GiB "
         "but trains ~30% slower. The transformer profile turns it off",
     )
+    transformer_qk_norm: bool = param(
+        False,
+        "transformer trunk: RMS-normalize each attention head's queries and keys, which "
+        "bounds the attention logits and guards against loss spikes at high learning rates",
+    )
     # Loss.
     lambda_wld: float = param(
         1.0, "win/draw/loss (value) loss weight; lower it to isolate other heads"
