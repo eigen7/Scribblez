@@ -40,7 +40,8 @@ from torch.utils.checkpoint import checkpoint
 class TransformerConfig:
     """Shape of one nested-bottleneck block. The head dim
     (mid_channels / num_heads) must be even, since RoPE rotates channel pairs.
-    inner_length is the number of (attention, FFN) pairs per block.
+    inner_length is the number of (attention, FFN) pairs per block. qk_norm
+    RMS-normalizes each head's queries and keys (AttentionBlock).
     checkpoint_pairs trades training speed for memory (see the module
     docstring); it does not change the model."""
 
@@ -49,6 +50,7 @@ class TransformerConfig:
     ffn_channels: int
     inner_length: int = 2
     checkpoint_pairs: bool = True
+    qk_norm: bool = False
 
     def __post_init__(self):
         if self.mid_channels % self.num_heads != 0:
@@ -115,9 +117,15 @@ def apply_rope(t: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
 
 class AttentionBlock(nn.Module):
     """Pre-norm multi-head self-attention over the token sequence, with 2D RoPE on
-    the queries and keys. forward returns the residual; the caller adds it."""
+    the queries and keys. forward returns the residual; the caller adds it.
 
-    def __init__(self, channels: int, num_heads: int):
+    With `qk_norm`, each head's queries and keys are RMS-normalized (with a
+    learned per-channel gain) before RoPE, as in OLMo 2, Gemma 3 and Qwen 3.
+    That bounds every attention logit by the gains rather than by the
+    projection weights, which otherwise can grow until the softmax saturates
+    and training spikes."""
+
+    def __init__(self, channels: int, num_heads: int, qk_norm: bool = False):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = channels // num_heads
@@ -127,6 +135,8 @@ class AttentionBlock(nn.Module):
         self.v_proj = nn.Linear(channels, channels, bias=False)
         self.out_proj = nn.Linear(channels, channels, bias=False)
         self.rope_freqs = nn.Parameter(rope_init_freqs(num_heads, self.head_dim // 2))
+        self.q_norm = RMSNorm(self.head_dim) if qk_norm else nn.Identity()
+        self.k_norm = RMSNorm(self.head_dim) if qk_norm else nn.Identity()
 
     def _heads(self, t: torch.Tensor) -> torch.Tensor:
         """(B, S, C) -> (B, S, H, D)."""
@@ -135,8 +145,10 @@ class AttentionBlock(nn.Module):
     def forward(self, x: torch.Tensor, pos_x: torch.Tensor, pos_y: torch.Tensor) -> torch.Tensor:
         xn = self.norm(x)
         cos, sin = rope_tables(pos_x, pos_y, self.rope_freqs)
-        q = apply_rope(self._heads(self.q_proj(xn)), cos, sin).transpose(1, 2)  # (B, H, S, D)
-        k = apply_rope(self._heads(self.k_proj(xn)), cos, sin).transpose(1, 2)
+        q = apply_rope(self.q_norm(self._heads(self.q_proj(xn))), cos, sin).transpose(1, 2)
+        k = apply_rope(self.k_norm(self._heads(self.k_proj(xn))), cos, sin).transpose(
+            1, 2
+        )  # (B, H, S, D)
         v = self._heads(self.v_proj(xn)).transpose(1, 2)
         # Fused attention avoids storing the (B, H, S, S) score matrix for
         # backward, about 400 MB per layer at batch 256 over 252 tokens.
@@ -163,10 +175,10 @@ class SwiGluBlock(nn.Module):
 class TransformerPair(nn.Module):
     """One (attention, FFN) pair, each on its own residual connection."""
 
-    def __init__(self, channels: int, num_heads: int, ffn_channels: int):
+    def __init__(self, cfg: TransformerConfig):
         super().__init__()
-        self.attention = AttentionBlock(channels, num_heads)
-        self.ffn = SwiGluBlock(channels, ffn_channels)
+        self.attention = AttentionBlock(cfg.mid_channels, cfg.num_heads, cfg.qk_norm)
+        self.ffn = SwiGluBlock(cfg.mid_channels, cfg.ffn_channels)
 
     def forward(self, x: torch.Tensor, pos_x: torch.Tensor, pos_y: torch.Tensor) -> torch.Tensor:
         x = x + self.attention(x, pos_x, pos_y)
@@ -183,10 +195,7 @@ class NestedBottleneckTransformerBlock(nn.Module):
         super().__init__()
         self.down_norm = RMSNorm(channels)
         self.down = nn.Linear(channels, cfg.mid_channels, bias=False)
-        self.pairs = nn.ModuleList(
-            TransformerPair(cfg.mid_channels, cfg.num_heads, cfg.ffn_channels)
-            for _ in range(cfg.inner_length)
-        )
+        self.pairs = nn.ModuleList(TransformerPair(cfg) for _ in range(cfg.inner_length))
         self.up_norm = RMSNorm(cfg.mid_channels)
         self.up = nn.Linear(cfg.mid_channels, channels, bias=False)
         nn.init.zeros_(self.up.weight)

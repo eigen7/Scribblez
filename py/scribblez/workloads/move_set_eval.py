@@ -233,6 +233,11 @@ class MoveSetEvalParams:
         "transformer trunk: recompute each attention/FFN pair's activations in backward "
         "instead of storing them, trading training speed for memory",
     )
+    transformer_qk_norm: bool = param(
+        False,
+        "transformer trunk: RMS-normalize each attention head's queries and keys, which "
+        "bounds the attention logits and guards against loss spikes at high learning rates",
+    )
     num_heads: int = param(
         4, "attention heads of the move-to-board cross-attention and the evidence fusion stage"
     )

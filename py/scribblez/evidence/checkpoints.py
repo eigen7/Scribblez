@@ -31,9 +31,22 @@ STUDENT_CONFIG_KEYS = (
     "transformer_mid_channels",
     "transformer_heads",
     "transformer_ffn_channels",
+    "transformer_qk_norm",
     "open_leaves",
     "move_encoding_version",
 )
+
+
+# Student-config keys newer than some student checkpoints, with the value a
+# checkpoint that predates the key implies.
+_LATER_KEYS = {"transformer_qk_norm": False}
+
+
+def student_config(cfg: dict) -> dict:
+    """The STUDENT_CONFIG_KEYS of a move_set_eval checkpoint config."""
+    return {
+        k: cfg.get(k, _LATER_KEYS[k]) if k in _LATER_KEYS else cfg[k] for k in STUDENT_CONFIG_KEYS
+    }
 
 
 def build_model(student_cfg: dict) -> MoveSetEvalModel:

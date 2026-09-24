@@ -108,7 +108,9 @@ channel pair of a head is rotated by `ω_x·x + ω_y·y` with per-head, per-pair
 **learnable** frequencies, initialised log-uniform between one radian per cell
 and one per fifty cells, so a head can become as local or as global as it
 needs. The board has no off-board cells, so none of KataGo's off-board masking
-is needed.
+is needed. With `transformer_qk_norm` (off by default), each head's queries
+and keys are RMS-normalized before the rotation, which bounds the attention
+logits by learned gains rather than by the projection weights.
 
 The sequence may carry `R` **register tokens** after the cells: extra tokens
 the model supplies, with learnable 2D positions initialised just off the
