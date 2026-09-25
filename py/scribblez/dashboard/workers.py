@@ -63,15 +63,17 @@ SYNC_INTERVAL_SECONDS = 30
 def _slot_sink(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
     """Where slot `w`'s worker delivers (SCZ_SINK, cloud/sinks.py).
 
-    "local": a local subprocess, or an ssh container on the operator's own
-    machine, whose output the reconcile pass pulls over ssh
-    (cloud/ssh_transfer.py).
+    "local": a local subprocess, or an ssh container whose output the reconcile
+    pass pulls over ssh (cloud/ssh_transfer.py): any container on the
+    operator's own machines, and a dispatch-driven role's container anywhere.
+    Dispatch reads results only from the slot's filesystem, and they are a few
+    small files, so a rented match-eval worker is collected the same way.
 
-    "r2", the results bucket: an ssh container on a rented machine, whose
-    datacenter link to the bucket beats hauling every chunk to the controller
-    and publishing it back up from a home uplink; and an ssh trainer (a role
-    with an ingest tick) anywhere, whose generations arrive and whose exports,
-    checkpoints and records leave through the bucket
+    "r2", the results bucket: any other ssh container on a rented machine,
+    whose datacenter link to the bucket beats hauling every chunk to the
+    controller and publishing it back up from a home uplink; and an ssh trainer
+    (a role with an ingest tick) anywhere, whose generations arrive and whose
+    exports, checkpoints and records leave through the bucket
     (docs/plans/cloud_machines.md).
 
     Everything the controller does for bucket-delivering slots (the sync
@@ -79,7 +81,8 @@ def _slot_sink(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.Wo
     off this, not off the slot kind."""
     if w.kind == "local":
         return "local"
-    if w.kind == "ssh" and not spec.role(w.role).ingest and not _rented(task, w):
+    role = spec.role(w.role)
+    if w.kind == "ssh" and not role.ingest and (role.dispatch or not _rented(task, w)):
         return "local"
     return "r2"
 
@@ -276,6 +279,13 @@ def _note_finished(w: tasks.WorkerRecord) -> bool:
     w.desired_state = "paused"
     w.finished = True
     return True
+
+
+def _trainer_finished(spec: workloads.WorkloadSpec, task: tasks.TaskRecord) -> bool:
+    """Whether the task has a trainer slot (a role with an ingest tick) and
+    every one has finished: exited at its terminal condition, e.g. max_rows."""
+    trainers = [w for w in task.workers if spec.role(w.role).ingest]
+    return bool(trainers) and all(w.finished for w in trainers)
 
 
 def _finish_role(task: tasks.TaskRecord, role: str) -> bool:
@@ -862,15 +872,6 @@ class WorkerManager:
             # and a count of them would pin nothing. An unknown count (a
             # manual machine) is not checked, as a bare host never was.
             raise AssertionError(f"machine '{machine.name}' has no GPU for role '{role}'")
-        # A rented slot delivers through the bucket (_slot_sink), but a
-        # dispatch-driven role's results are collected only from the slot's
-        # filesystem: a rented match_eval worker would play one match whose
-        # result never arrives, then wait on it forever.
-        assert not (role_spec.dispatch and machine is not None and machine.instance_id), (
-            f"role '{role}' cannot run on rented machine '{machine.name}': its results are "
-            "collected over ssh, and a rented machine delivers through the bucket; "
-            "use a local slot or a registered machine"
-        )
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
@@ -1623,7 +1624,9 @@ class WorkerManager:
 
     def _dispatch_role(self, spec, task: tasks.TaskRecord, role, status: list[dict]):
         """Run one role's dispatch tick: hand its running slots their next piece
-        of work, and take in what they have delivered.
+        of work, and take in what they have delivered. Once the tick reports
+        nothing outstanding and the task's trainer has finished, finish the
+        role, so an idle worker does not hold its rented machine up forever.
 
         Only running slots are offered, since a paused container cannot be
         written to. The tick runs even with no slots, because results already
@@ -1637,7 +1640,9 @@ class WorkerManager:
             and info["observed_running"]
         ]
         params = params_mod.validate(spec.params_cls, task.params)
-        workloads.resolve(role.dispatch)(spec, task.tag, params, slots)
+        outstanding = workloads.resolve(role.dispatch)(spec, task.tag, params, slots)
+        if not outstanding and _trainer_finished(spec, task) and _finish_role(task, role.name):
+            tasks.save_task(spec, task)
 
     def _slot_files(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """The way into slot `w`'s filesystem (dashboard/slot_files.py)."""

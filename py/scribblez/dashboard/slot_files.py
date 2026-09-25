@@ -12,9 +12,9 @@ Paths are relative to the tag root. A container runs the controller's own
 layout under the same mount root, so a relative path names the same thing on
 either machine.
 
-An ssh slot here is on a registered machine: a container on a rented machine
-delivers through the bucket, which dispatch never reads, so a dispatch-driven
-role is refused there when its slot is added (WorkerManager._check_role).
+An ssh slot here may be on a registered or a rented machine: a dispatch-driven
+role's container keeps its results for the reconcile pass to pull over ssh
+even where other roles deliver through the bucket (workers._slot_sink).
 """
 
 import os
