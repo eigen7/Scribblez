@@ -129,7 +129,7 @@ class FirstEndgameCapturer : public Agent {
   void begin_game(const BeginGameRequest& /*req*/) override { scoreless_ = 0; }
 
  private:
-  HastyBotAgent bot_;
+  HastyBot bot_;
   CapturedEndgame& sink_;
   bool& captured_;
   int scoreless_ = 0;
@@ -192,8 +192,8 @@ Bag empty_pool(const CapturedEndgame& cap) {
 // Mean wall time of a HastyBot-vs-HastyBot game over the timed games' seeds:
 // the cost table's unit, a self-play game with no endgame solving.
 double hasty_game_ms(const Dictionary& dict, uint64_t base_seed, int games) {
-  HastyBotAgent a0(HastyBotAgent::Params{.thread_id = 0, .name = "A"});
-  HastyBotAgent a1(HastyBotAgent::Params{.thread_id = 0, .name = "B"});
+  HastyBot a0(HastyBot::Params{.thread_id = 0, .name = "A"});
+  HastyBot a1(HastyBot::Params{.thread_id = 0, .name = "B"});
   const auto t0 = Clock::now();
   for (int i = 0; i < games; ++i) {
     Game g(a0, a1, dict, base_seed + uint64_t(i));
@@ -235,12 +235,12 @@ struct SolverPlayout {
 SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& cap, int margin,
                                  const EndgameSolver::Params& params, int thread_id,
                                  bool incremental, bool projections) {
-  EndgameAgent<HastyBotAgent>::Params ep;
-  ep.base = HastyBotAgent::Params{.thread_id = thread_id, .name = "EndgameHastyBot"};
+  EndgameAgent<HastyBot>::Params ep;
+  ep.base = HastyBot::Params{.thread_id = thread_id, .name = "EndgameHastyBot"};
   ep.solver = params;
-  EndgameAgent<HastyBotAgent> eg(ep);
+  EndgameAgent<HastyBot> eg(ep);
   eg.endgame().set_incremental_movegen(incremental);
-  HastyBotAgent opp(HastyBotAgent::Params{.thread_id = thread_id, .name = "HastyBot"});
+  HastyBot opp(HastyBot::Params{.thread_id = thread_id, .name = "HastyBot"});
 
   const Bag pool = empty_pool(cap);
   Game g(eg, opp, dict, /*seed=*/1);
@@ -257,8 +257,8 @@ SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& 
 // captured endgame. HastyBot never reads scores, so this one number gives the
 // baseline at every margin: the final spread at margin m is m + delta.
 int baseline_delta(const Dictionary& dict, const CapturedEndgame& cap, int thread_id) {
-  HastyBotAgent a0(HastyBotAgent::Params{.thread_id = thread_id, .name = "A"});
-  HastyBotAgent a1(HastyBotAgent::Params{.thread_id = thread_id, .name = "B"});
+  HastyBot a0(HastyBot::Params{.thread_id = thread_id, .name = "A"});
+  HastyBot a1(HastyBot::Params{.thread_id = thread_id, .name = "B"});
   const Bag pool = empty_pool(cap);
   Game g(a0, a1, dict, /*seed=*/1);
   g.play_from(cap.board, {0, 0}, {cap.my_rack, cap.opp_rack}, pool, /*to_move=*/0);
@@ -470,17 +470,16 @@ double run_config(const Dictionary& dict, uint64_t base_seed, int games, int thr
 
 AgentFactory hasty_factory() {
   return [](int tid) -> std::unique_ptr<Agent> {
-    return std::make_unique<HastyBotAgent>(
-      HastyBotAgent::Params{.thread_id = tid, .name = "HastyBot"});
+    return std::make_unique<HastyBot>(HastyBot::Params{.thread_id = tid, .name = "HastyBot"});
   };
 }
 
 AgentFactory endgame_factory(const EndgameSolver::Params& params, bool incremental) {
   return [params, incremental](int tid) -> std::unique_ptr<Agent> {
-    EndgameAgent<HastyBotAgent>::Params p;
-    p.base = HastyBotAgent::Params{.thread_id = tid, .name = "EndgameHastyBot"};
+    EndgameAgent<HastyBot>::Params p;
+    p.base = HastyBot::Params{.thread_id = tid, .name = "EndgameHastyBot"};
     p.solver = params;
-    auto agent = std::make_unique<EndgameAgent<HastyBotAgent>>(p);
+    auto agent = std::make_unique<EndgameAgent<HastyBot>>(p);
     agent->endgame().set_incremental_movegen(incremental);
     return agent;
   };

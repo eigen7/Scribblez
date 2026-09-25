@@ -37,7 +37,7 @@ Move hasty_best_move_wmp(const MoveRequest& req);
 // softmax(equity / temperature) over the top-K moves, the exploration that
 // self-play data generation wants. Equity is in points, so a temperature of a
 // few points spreads probability across near-best moves.
-class HastyBotAgent : public Agent {
+class HastyBot : public Agent {
  public:
   static constexpr const char* kType = "hastybot";
 
@@ -50,14 +50,14 @@ class HastyBotAgent : public Agent {
     uint64_t seed = 0;
   };
 
-  explicit HastyBotAgent(const Params& params);
+  explicit HastyBot(const Params& params);
 
   MoveDecision make_move(const MoveRequest& req) override;
 
   // Build from `--player "--type=hastybot [options]"` tokens, with --type and
   // --name already stripped. Throws on bad input.
-  static std::unique_ptr<HastyBotAgent> from_spec(const std::vector<std::string>& tokens,
-                                                  int thread_id, const std::string& name);
+  static std::unique_ptr<HastyBot> from_spec(const std::vector<std::string>& tokens, int thread_id,
+                                             const std::string& name);
 
   static std::string options_help();
 

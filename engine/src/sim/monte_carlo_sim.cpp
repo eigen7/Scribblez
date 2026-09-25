@@ -127,12 +127,12 @@ void monte_carlo_worker(const ParsedGcgPostMove& pos, const Dictionary& dict, in
                         MonteCarloResult* out) {
   // Default solver params, as in self-play generation (py/scribblez/selfplay.py):
   // the ground truth must come from the policy the training targets come from.
-  EndgameAgent<HastyBotAgent>::Params p0;
+  EndgameAgent<HastyBot>::Params p0;
   p0.base.thread_id = t;
   p0.base.name = "H0";
-  EndgameAgent<HastyBotAgent>::Params p1 = p0;
+  EndgameAgent<HastyBot>::Params p1 = p0;
   p1.base.name = "H1";
-  EndgameAgent<HastyBotAgent> a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
+  EndgameAgent<HastyBot> a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
   for (int g = t + 1; g <= n; g += threads)
     accumulate_rollout(pos.board, rollout(pos, dict, a0, a1, sampler, face_up, uint64_t(g)), out);
 }

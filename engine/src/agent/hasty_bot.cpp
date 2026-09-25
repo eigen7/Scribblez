@@ -21,7 +21,7 @@
 
 namespace scribblez {
 
-HastyBotAgent::HastyBotAgent(const Params& params)
+HastyBot::HastyBot(const Params& params)
     : Agent(params.thread_id, params.name),
       top_k_(params.top_k),
       temperature_(params.temperature),
@@ -363,7 +363,7 @@ boost::program_options::options_description hastybot_options(int& top_k, double&
 
 }  // namespace
 
-MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
+MoveDecision HastyBot::make_move(const MoveRequest& req) {
   if (temperature_ <= 0.0) {
     return hasty_best_move_wmp_impl(req);
   }
@@ -392,9 +392,10 @@ MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
 
 Move hasty_best_move_wmp(const MoveRequest& req) { return hasty_best_move_wmp_impl(req); }
 
-HastyBotAgent::Params HastyBotAgent::parse_params(
-  const std::vector<std::string>& tokens, int thread_id, const std::string& name,
-  boost::program_options::options_description& extra, const char* type_label) {
+HastyBot::Params HastyBot::parse_params(const std::vector<std::string>& tokens, int thread_id,
+                                        const std::string& name,
+                                        boost::program_options::options_description& extra,
+                                        const char* type_label) {
   namespace po = boost::program_options;
 
   int top_k = 10;
@@ -418,20 +419,20 @@ HastyBotAgent::Params HastyBotAgent::parse_params(
   // loaded them already; otherwise load Macondo's defaults for the lexicon.
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   const uint64_t resolved_seed = have_seed ? seed : SeedProducer::instance().next();
-  return HastyBotAgent::Params{.thread_id = thread_id,
-                               .name = name,
-                               .top_k = top_k,
-                               .temperature = temperature,
-                               .seed = resolved_seed};
+  return HastyBot::Params{.thread_id = thread_id,
+                          .name = name,
+                          .top_k = top_k,
+                          .temperature = temperature,
+                          .seed = resolved_seed};
 }
 
-std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
-                                                        int thread_id, const std::string& name) {
+std::unique_ptr<HastyBot> HastyBot::from_spec(const std::vector<std::string>& tokens, int thread_id,
+                                              const std::string& name) {
   boost::program_options::options_description no_extra;
-  return std::make_unique<HastyBotAgent>(parse_params(tokens, thread_id, name, no_extra, kType));
+  return std::make_unique<HastyBot>(parse_params(tokens, thread_id, name, no_extra, kType));
 }
 
-std::string HastyBotAgent::options_help() {
+std::string HastyBot::options_help() {
   int top_k = 10;
   double temperature = 0.0;
   uint64_t seed = 0;  // binding targets; only the defaults are read
