@@ -1,6 +1,7 @@
 #include "agent/player_factory.h"
 
 #include "agent/agent.h"
+#include "agent/best_bot.h"
 #include "agent/endgame_agent.h"
 #include "agent/greedy_agent.h"
 #include "agent/hasty_bot.h"
@@ -50,7 +51,10 @@ std::unique_ptr<Agent> build_human(const std::vector<std::string>& tokens, int t
 }
 
 // Adding a player type takes only a new row here.
-constexpr std::array<PlayerType, 10> kPlayerTypes{{
+constexpr std::array<PlayerType, 12> kPlayerTypes{{
+  {"bestbot", "BestBot", &BestBot::options_help, &build_agent<&BestBot::from_spec>},
+  {"bestbot-endgame", "EndgameBestBot", &EndgameAgent<BestBot>::options_help,
+   &build_agent<&EndgameAgent<BestBot>::from_spec>},
   {"greedy", "Greedy", &GreedyAgent::options_help, &build_agent<&GreedyAgent::from_spec>},
   {"human", "You", &HumanWebAgent::options_help, &build_human},
   {"hastybot", "HastyBot", &HastyBot::options_help, &build_agent<&HastyBot::from_spec>},

@@ -137,7 +137,9 @@ TEST_F(GameRunnerTest, PairedRequiresEvenGames) {
 namespace {
 
 // Every player type paired with its default display name (no explicit --name).
-const std::array<std::pair<const char*, const char*>, 10> kTypeDefaults{{
+const std::array<std::pair<const char*, const char*>, 12> kTypeDefaults{{
+  {"bestbot", "BestBot"},
+  {"bestbot-endgame", "EndgameBestBot"},
   {"greedy", "Greedy"},
   {"human", "You"},
   {"hastybot", "HastyBot"},
