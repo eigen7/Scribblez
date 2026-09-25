@@ -87,21 +87,30 @@ static void pack(const float* wld, const float* sd, float* dst) {
   dst[5] = sd[1];
 }
 
+using PositionEvalParams = scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec>;
+
+// Params for serving the fixture model to `n` rows. Parity checks the inference
+// plumbing, not kernel-tactic quality, so build at optimization level 0 to keep
+// a cold engine build to a few seconds. Every case uses these, so after the
+// first build each case finds its plan in the cache.
+static PositionEvalParams fixture_params(const std::string& onnx_path,
+                                         scribblez::nn::Precision precision, int n) {
+  PositionEvalParams params;
+  params.onnx_path = onnx_path;
+  params.max_rows = n;
+  params.precision = precision;
+  params.fast_build = true;
+  return params;
+}
+
 // Evaluates every row at `precision` and bounds the worst per-field deviation
 // from the reference.
 static void check_precision(const std::string& onnx_path, scribblez::nn::Precision precision,
                             const char* label, float prob_tol, float sd_tol,
                             const std::vector<float>& inputs, const std::vector<float>& expected,
                             int n) {
-  using Spec = scribblez::nn::PositionEvaluationSpec;
-  scribblez::nn::NeuralNetParams<Spec> params;
-  params.onnx_path = onnx_path;
-  params.max_rows = n;
-  params.precision = precision;
-  // Parity checks the inference plumbing, not kernel-tactic quality, so build
-  // at optimization level 0 to keep the cold engine build to a few seconds.
-  params.fast_build = true;
-  scribblez::nn::TrtEvalService<Spec> service(params);
+  scribblez::nn::TrtEvalService<scribblez::nn::PositionEvaluationSpec> service(
+    fixture_params(onnx_path, precision, n));
   service.load();
 
   std::vector<float> wld(size_t(n) * scribblez::nn::WldOutput::kRowElems);
@@ -215,12 +224,18 @@ TEST_P(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
 
 // PositionEvalService::create() returns one shared instance for equal params,
 // so a run's threads share one loaded engine and its execution-context memory,
-// and a distinct instance when an engine-determining field differs. It lives in
-// this suite because create() needs a real model to build.
+// and a distinct instance when any field differs. It lives in this suite
+// because create() needs a real model to load.
+//
+// The params match the BF16 case's, and the differing field (copy_aux) does not
+// select a different plan, so both loads hit the plan cache. Varying an
+// engine-determining field such as max_rows would force another cold build.
 TEST_P(NnInferenceParityTest, CreateSharesOneServicePerParams) {
-  scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> params;
-  params.onnx_path = dir_ + "/model.onnx";
-  params.precision = scribblez::nn::Precision::kBF16;
+  std::vector<float> inputs, expected;
+  const int n = load_fixture(dir_, &inputs, &expected);
+  ASSERT_GT(n, 0);
+  const PositionEvalParams params =
+    fixture_params(dir_ + "/model.onnx", scribblez::nn::Precision::kBF16, n);
 
   std::shared_ptr<scribblez::nn::PositionEvalService> a =
     scribblez::nn::PositionEvalService::create(params);
@@ -228,8 +243,8 @@ TEST_P(NnInferenceParityTest, CreateSharesOneServicePerParams) {
     scribblez::nn::PositionEvalService::create(params);
   EXPECT_EQ(a.get(), b.get()) << "equal params must share one loaded service";
 
-  scribblez::nn::NeuralNetParams<scribblez::nn::PositionEvaluationSpec> other = params;
-  other.max_rows = params.max_rows + 1;  // engine-determining
+  PositionEvalParams other = params;
+  other.copy_aux = !params.copy_aux;
   std::shared_ptr<scribblez::nn::PositionEvalService> c =
     scribblez::nn::PositionEvalService::create(other);
   EXPECT_NE(a.get(), c.get()) << "differing params must not share";
