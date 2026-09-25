@@ -346,7 +346,7 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req) {
   return bm.have ? bm.move : Move::pass();
 }
 
-// Shared by parse_hasty_params() and options_help(), so the parsed and
+// Shared by parse_params() and options_help(), so the parsed and
 // documented options cannot drift.
 boost::program_options::options_description hastybot_options(int& top_k, double& temperature,
                                                              uint64_t& seed) {
@@ -392,7 +392,7 @@ MoveDecision HastyBotAgent::make_move(const MoveRequest& req) {
 
 Move hasty_best_move_wmp(const MoveRequest& req) { return hasty_best_move_wmp_impl(req); }
 
-HastyBotAgent::Params HastyBotAgent::parse_hasty_params(
+HastyBotAgent::Params HastyBotAgent::parse_params(
   const std::vector<std::string>& tokens, int thread_id, const std::string& name,
   boost::program_options::options_description& extra, const char* type_label) {
   namespace po = boost::program_options;
@@ -428,8 +428,7 @@ HastyBotAgent::Params HastyBotAgent::parse_hasty_params(
 std::unique_ptr<HastyBotAgent> HastyBotAgent::from_spec(const std::vector<std::string>& tokens,
                                                         int thread_id, const std::string& name) {
   boost::program_options::options_description no_extra;
-  return std::make_unique<HastyBotAgent>(
-    parse_hasty_params(tokens, thread_id, name, no_extra, "hastybot"));
+  return std::make_unique<HastyBotAgent>(parse_params(tokens, thread_id, name, no_extra, kType));
 }
 
 std::string HastyBotAgent::options_help() {

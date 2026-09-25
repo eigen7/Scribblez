@@ -2,7 +2,7 @@
 
 #include "agent/agent.h"
 #include "agent/candidate_evaluator.h"
-#include "agent/endgame_hasty_bot.h"
+#include "agent/endgame_agent.h"
 #include "agent/hasty_bot.h"
 #include "encoding/game_state_encoder.h"
 #include "game/game.h"
@@ -131,10 +131,10 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
   stage_horizon_leaf(pos, candidate, log, game, *leaf_spec, batcher, slot);
 }
 
-std::unique_ptr<HastyBotAgent> make_rollout_agent(bool solve_endgames,
-                                                  const EndgameHastyBotAgent::Params& params) {
-  if (solve_endgames) return std::make_unique<EndgameHastyBotAgent>(params);
-  return std::make_unique<HastyBotAgent>(params.hasty);
+std::unique_ptr<HastyBotAgent> make_rollout_agent(
+  bool solve_endgames, const EndgameAgent<HastyBotAgent>::Params& params) {
+  if (solve_endgames) return std::make_unique<EndgameAgent<HastyBotAgent>>(params);
+  return std::make_unique<HastyBotAgent>(params.base);
 }
 
 // Worker t plays rollout indices t, t+threads, ... of every candidate. Workers
@@ -150,9 +150,9 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
   p1.thread_id = t;
   p1.name = "H1";
   // Default temperature 0: deterministic greedy play.
-  EndgameHastyBotAgent::Params e0, e1;
-  e0.hasty = p0;
-  e1.hasty = p1;
+  EndgameAgent<HastyBotAgent>::Params e0, e1;
+  e0.base = p0;
+  e1.base = p1;
   std::unique_ptr<HastyBotAgent> a0_owner = make_rollout_agent(params.solve_endgames, e0);
   std::unique_ptr<HastyBotAgent> a1_owner = make_rollout_agent(params.solve_endgames, e1);
   HastyBotAgent& a0 = *a0_owner;

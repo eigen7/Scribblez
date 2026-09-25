@@ -26,7 +26,7 @@
 // self-play generation does; --projections 0 turns that off in endgames mode.
 
 #include "agent/agent.h"
-#include "agent/endgame_hasty_bot.h"
+#include "agent/endgame_agent.h"
 #include "agent/endgame_turn_policy.h"
 #include "agent/hasty_bot.h"
 #include "endgame/endgame_solver.h"
@@ -235,10 +235,10 @@ struct SolverPlayout {
 SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& cap, int margin,
                                  const EndgameSolver::Params& params, int thread_id,
                                  bool incremental, bool projections) {
-  EndgameHastyBotAgent::Params ep;
-  ep.hasty = HastyBotAgent::Params{.thread_id = thread_id, .name = "EndgameHastyBot"};
+  EndgameAgent<HastyBotAgent>::Params ep;
+  ep.base = HastyBotAgent::Params{.thread_id = thread_id, .name = "EndgameHastyBot"};
   ep.solver = params;
-  EndgameHastyBotAgent eg(ep);
+  EndgameAgent<HastyBotAgent> eg(ep);
   eg.endgame().set_incremental_movegen(incremental);
   HastyBotAgent opp(HastyBotAgent::Params{.thread_id = thread_id, .name = "HastyBot"});
 
@@ -477,10 +477,10 @@ AgentFactory hasty_factory() {
 
 AgentFactory endgame_factory(const EndgameSolver::Params& params, bool incremental) {
   return [params, incremental](int tid) -> std::unique_ptr<Agent> {
-    EndgameHastyBotAgent::Params p;
-    p.hasty = HastyBotAgent::Params{.thread_id = tid, .name = "EndgameHastyBot"};
+    EndgameAgent<HastyBotAgent>::Params p;
+    p.base = HastyBotAgent::Params{.thread_id = tid, .name = "EndgameHastyBot"};
     p.solver = params;
-    auto agent = std::make_unique<EndgameHastyBotAgent>(p);
+    auto agent = std::make_unique<EndgameAgent<HastyBotAgent>>(p);
     agent->endgame().set_incremental_movegen(incremental);
     return agent;
   };

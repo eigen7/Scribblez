@@ -206,7 +206,7 @@ class SimRunner {
     int horizon_plies = 0;
     nn::PositionEvalService* leaf_service = nullptr;
     // Rollouts are HastyBot vs HastyBot. With this set, both sides hand the
-    // endgame to the solver (EndgameHastyBotAgent) instead of playing it
+    // endgame to the solver (EndgameAgent<HastyBotAgent>) instead of playing it
     // greedily. Greedy endgames can misjudge a late-game candidate by tens of
     // percentage points of win rate; solving costs several times as much per
     // rollout.
