@@ -241,7 +241,7 @@ const Move& EndgameSolver::greedy_pick(const std::vector<Move>& plays) const {
   double best_adj = playout_adjusted(plays[0]);
   for (size_t i = 1; i < plays.size(); ++i) {
     const double adj = playout_adjusted(plays[i]);
-    if (hasty_move_better(adj, plays[i], best_adj, plays[best])) {
+    if (hasty_move_better(board_, adj, plays[i], best_adj, plays[best])) {
       best = i;
       best_adj = adj;
     }

@@ -265,8 +265,10 @@ TEST_F(MsetSimAgentTest, AnEmptyBagFallsBackToStaticEquity) {
 TEST_F(MsetSimAgentTest, TheRolloutSeedFollowsTheAdvancingPly) {
   // The other rollout tests decide at ply 0, where seeding from the current ply
   // and a hardcoded ply 0 look the same. Here two moves are observed first, and
-  // the position is chosen so the two seeds pick different candidates.
-  const MsetSimAgent::Params p = params();
+  // the position and agent seed are chosen so the two seeds pick different
+  // candidates.
+  MsetSimAgent::Params p = params();
+  p.seed = 1;
   const Move opening =
     make_play_full(7, 7, /*horizontal=*/true, 0b111, 10,
                    {Glyph::of(Tile::from_char('C')), Glyph::of(Tile::from_char('A')),

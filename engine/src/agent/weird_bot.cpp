@@ -122,7 +122,7 @@ const Move* best_forcing_play(const std::vector<Move>& plays, const ForcingTarge
     if (m.horizontal() != want_horizontal) continue;
     if (!play_forces_tile(m, tgt.r, tgt.c, t)) continue;
     const double e = eq.equity(m, req.board, req.bag_size, req.opp_rack, leaves);
-    if (best == nullptr || hasty_move_better(e, m, best_eq, *best)) {
+    if (best == nullptr || hasty_move_better(req.board, e, m, best_eq, *best)) {
       best = &m;
       best_eq = e;
     }

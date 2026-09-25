@@ -32,25 +32,71 @@ HastyBot::HastyBot(const Params& params)
 
 namespace {
 
-// Canonical total order on distinct PLAY moves (orientation, lane, placed
-// squares, then placed glyphs), used only to break exact-equity ties.
-bool move_order_less(const Move& a, const Move& b) {
-  if (a.horizontal() != b.horizontal()) return a.horizontal() < b.horizontal();
-  if (a.start() != b.start()) return a.start() < b.start();
-  if (a.square_mask() != b.square_mask()) return a.square_mask() < b.square_mask();
-  const int na = a.num_glyphs(), nb = b.num_glyphs();
-  if (na != nb) return na < nb;
-  for (int i = 0; i < na; ++i) {
-    if (a.glyph(i).code() != b.glyph(i).code()) return a.glyph(i).code() < b.glyph(i).code();
+// A move's tiles as Macondo's Move.Tiles() holds them, in its machine-letter
+// codes: a PLAY's whole word, 0 for each played-through square and 0x80 set on
+// a blank; an EXCHANGE's surrendered tiles, blank as 0, sorted.
+std::vector<uint8_t> macondo_tiles(const Board& board, const Move& m) {
+  std::vector<uint8_t> tiles;
+  if (m.type() == MoveType::EXCHANGE) {
+    for (int i = 0; i < m.num_glyphs(); ++i) {
+      const Tile t = m.glyph(i).rack_tile();
+      tiles.push_back(t == BLANK ? 0 : uint8_t(t.index() + 1));
+    }
+    std::sort(tiles.begin(), tiles.end());
+    return tiles;
   }
-  return false;
+  if (m.type() != MoveType::PLAY) return tiles;
+  auto [r, c] = m.word_origin(board);
+  const int dr = m.horizontal() ? 0 : 1, dc = m.horizontal() ? 1 : 0;
+  for (int gi = 0; board.in_bounds(r, c); r += dr, c += dc) {
+    if (!board.at(r, c).is_empty()) {
+      tiles.push_back(0);
+    } else if (gi < m.num_glyphs()) {
+      const Glyph g = m.glyph(gi++);
+      tiles.push_back(uint8_t(g.letter().index() + 1) | (g.is_blank() ? 0x80 : 0));
+    } else {
+      break;
+    }
+  }
+  return tiles;
+}
+
+// The word's first square, and whether it runs down; a non-PLAY has neither,
+// which Macondo reads as (0, 0) across.
+struct MacondoCoords {
+  int row = 0;
+  int col = 0;
+  bool vertical = false;
+};
+
+MacondoCoords macondo_coords(const Board& board, const Move& m) {
+  if (m.type() != MoveType::PLAY) return {};
+  const auto [r, c] = m.word_origin(board);
+  return {r, c, !m.horizontal()};
+}
+
+// Macondo's Move.TiebreaksBetter: the higher score, then PLAY before EXCHANGE
+// before PASS, then the word's start square (row, then column), across before
+// down, fewer tiles placed, a shorter word, and the lower tile sequence. A
+// total order on distinct moves.
+bool macondo_tiebreaks_better(const Board& board, const Move& a, const Move& b) {
+  if (a.score() != b.score()) return a.score() > b.score();
+  if (a.type() != b.type()) return a.type() < b.type();
+  const MacondoCoords ca = macondo_coords(board, a), cb = macondo_coords(board, b);
+  if (ca.row != cb.row) return ca.row < cb.row;
+  if (ca.col != cb.col) return ca.col < cb.col;
+  if (ca.vertical != cb.vertical) return !ca.vertical;
+  if (a.num_glyphs() != b.num_glyphs()) return a.num_glyphs() < b.num_glyphs();
+  const std::vector<uint8_t> ta = macondo_tiles(board, a), tb = macondo_tiles(board, b);
+  if (ta.size() != tb.size()) return ta.size() < tb.size();
+  return ta < tb;
 }
 
 }  // namespace
 
-bool hasty_move_better(double eq_a, const Move& a, double eq_b, const Move& b) {
+bool hasty_move_better(const Board& board, double eq_a, const Move& a, double eq_b, const Move& b) {
   if (eq_a != eq_b) return eq_a > eq_b;
-  return move_order_less(a, b);
+  return macondo_tiebreaks_better(board, a, b);
 }
 
 Move hasty_best_move_reference(const MoveRequest& req) {
@@ -64,7 +110,7 @@ Move hasty_best_move_reference(const MoveRequest& req) {
   double best_eq = 0.0;
   for (const Move& m : candidates) {
     const double e = eq.equity(m, req.board, req.bag_size, req.opp_rack, leaves);
-    if (!have || hasty_move_better(e, m, best_eq, best)) {
+    if (!have || hasty_move_better(req.board, e, m, best_eq, best)) {
       best = m;
       best_eq = e;
       have = true;
@@ -116,7 +162,7 @@ void consider_moves(const HastyEquity& eq, const MoveRequest& req, TurnLeaves& l
                     const std::vector<Move>& moves, BestMove& bm) {
   for (const Move& m : moves) {
     const double e = eq.equity(m, req.board, req.bag_size, req.opp_rack, leaves);
-    if (!bm.have || hasty_move_better(e, m, bm.eq, bm.move)) {
+    if (!bm.have || hasty_move_better(req.board, e, m, bm.eq, bm.move)) {
       bm.move = m;
       bm.eq = e;
       bm.have = true;

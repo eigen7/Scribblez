@@ -15,9 +15,11 @@ class options_description;
 
 namespace scribblez {
 
-// Total order on (equity, move): higher equity wins, exact ties broken by a
-// canonical move ordering so the choice never depends on generation order.
-bool hasty_move_better(double eq_a, const Move& a, double eq_b, const Move& b);
+// Total order on (equity, move) for moves about to be played on `board`:
+// higher equity wins, and exact ties go the way Macondo's move generator
+// breaks them (the higher score first; see Move.TiebreaksBetter), so the
+// choice never depends on generation order and matches Macondo's.
+bool hasty_move_better(const Board& board, double eq_a, const Move& a, double eq_b, const Move& b);
 
 // HastyBot's greedy move by brute force: generate every legal move and take
 // the hasty_move_better argmax. The specification hasty_best_move_wmp is
