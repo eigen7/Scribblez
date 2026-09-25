@@ -1,7 +1,7 @@
 #include "agent/player_factory.h"
 
 #include "agent/agent.h"
-#include "agent/endgame_hasty_bot.h"
+#include "agent/endgame_agent.h"
 #include "agent/greedy_agent.h"
 #include "agent/hasty_bot.h"
 #include "agent/human_web_agent.h"
@@ -53,9 +53,9 @@ std::unique_ptr<Agent> build_human(const std::vector<std::string>& tokens, int t
 constexpr std::array<PlayerType, 10> kPlayerTypes{{
   {"greedy", "Greedy", &GreedyAgent::options_help, &build_agent<&GreedyAgent::from_spec>},
   {"human", "You", &HumanWebAgent::options_help, &build_human},
-  {"hastybot", "HastyBot", &HastyBotAgent::options_help, &build_agent<&HastyBotAgent::from_spec>},
-  {"hastybot-endgame", "EndgameHastyBot", &EndgameHastyBotAgent::options_help,
-   &build_agent<&EndgameHastyBotAgent::from_spec>},
+  {"hastybot", "HastyBot", &HastyBot::options_help, &build_agent<&HastyBot::from_spec>},
+  {"hastybot-endgame", "EndgameHastyBot", &EndgameAgent<HastyBot>::options_help,
+   &build_agent<&EndgameAgent<HastyBot>::from_spec>},
   {"mset-sim", "MsetSim", &MsetSimAgent::options_help, &build_agent<&MsetSimAgent::from_spec>},
   {"neural", "Neural", &NeuralAgent::options_help, &build_agent<&NeuralAgent::from_spec>},
   {"neural-sim", "NeuralSim", &NeuralSimAgent::options_help,

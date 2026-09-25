@@ -2,7 +2,7 @@
 
 #include "agent/agent.h"
 #include "agent/candidate_evaluator.h"
-#include "agent/endgame_hasty_bot.h"
+#include "agent/endgame_agent.h"
 #include "agent/hasty_bot.h"
 #include "encoding/game_state_encoder.h"
 #include "game/game.h"
@@ -97,7 +97,7 @@ bool passed(const GameLog& log, int player) {
 // a truncated one stages its horizon leaf, and the batcher completes `out`
 // when it flushes.
 void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& candidate,
-                 const Dictionary& dict, HastyBotAgent& a0, HastyBotAgent& a1, uint64_t seed,
+                 const Dictionary& dict, HastyBot& a0, HastyBot& a1, uint64_t seed,
                  int horizon_plies, const InputEncodingSpec* leaf_spec, LeafBatcher* batcher,
                  size_t slot, RolloutResult* out) {
   const int opponent = 1 - pos.mover;
@@ -131,10 +131,10 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
   stage_horizon_leaf(pos, candidate, log, game, *leaf_spec, batcher, slot);
 }
 
-std::unique_ptr<HastyBotAgent> make_rollout_agent(bool solve_endgames,
-                                                  const EndgameHastyBotAgent::Params& params) {
-  if (solve_endgames) return std::make_unique<EndgameHastyBotAgent>(params);
-  return std::make_unique<HastyBotAgent>(params.hasty);
+std::unique_ptr<HastyBot> make_rollout_agent(bool solve_endgames,
+                                             const EndgameAgent<HastyBot>::Params& params) {
+  if (solve_endgames) return std::make_unique<EndgameAgent<HastyBot>>(params);
+  return std::make_unique<HastyBot>(params.base);
 }
 
 // Worker t plays rollout indices t, t+threads, ... of every candidate. Workers
@@ -143,20 +143,20 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
                     const std::vector<Move>& candidates, const Dictionary& dict,
                     SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
                     uint64_t base_seed, std::vector<RolloutResult>* results) {
-  HastyBotAgent::Params p0;
+  HastyBot::Params p0;
   p0.thread_id = t;
   p0.name = "H0";
-  HastyBotAgent::Params p1;
+  HastyBot::Params p1;
   p1.thread_id = t;
   p1.name = "H1";
   // Default temperature 0: deterministic greedy play.
-  EndgameHastyBotAgent::Params e0, e1;
-  e0.hasty = p0;
-  e1.hasty = p1;
-  std::unique_ptr<HastyBotAgent> a0_owner = make_rollout_agent(params.solve_endgames, e0);
-  std::unique_ptr<HastyBotAgent> a1_owner = make_rollout_agent(params.solve_endgames, e1);
-  HastyBotAgent& a0 = *a0_owner;
-  HastyBotAgent& a1 = *a1_owner;
+  EndgameAgent<HastyBot>::Params e0, e1;
+  e0.base = p0;
+  e1.base = p1;
+  std::unique_ptr<HastyBot> a0_owner = make_rollout_agent(params.solve_endgames, e0);
+  std::unique_ptr<HastyBot> a1_owner = make_rollout_agent(params.solve_endgames, e1);
+  HastyBot& a0 = *a0_owner;
+  HastyBot& a1 = *a1_owner;
   std::optional<LeafBatcher> batcher;
   if (params.horizon_plies > 0) batcher.emplace(params.leaf_service, *leaf_spec, results);
   for (int i = t; i < params.rollouts; i += params.threads) {

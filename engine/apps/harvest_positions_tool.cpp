@@ -80,8 +80,8 @@ std::string harvested_gcg(GameLogStorage log, int last, uint64_t seed, const std
 // Play game `seed` and return the GCG for one uniformly sampled qualifying turn,
 // or an empty string if there is none. The sample is seeded by the game seed,
 // so a harvest is reproducible.
-std::string harvest_from_game(HastyBotAgent& a0, HastyBotAgent& a1, const Dictionary& dict,
-                              uint64_t seed, const std::string& lexicon) {
+std::string harvest_from_game(HastyBot& a0, HastyBot& a1, const Dictionary& dict, uint64_t seed,
+                              const std::string& lexicon) {
   Game game(a0, a1, dict, seed);
   game.play();
   GameLogStorage log = game.extract_log();
@@ -133,11 +133,11 @@ int main(int argc, char** argv) {
     const std::filesystem::path dir = std::filesystem::path("positions") / lexicon / dataset_name;
     std::filesystem::create_directories(dir);
 
-    scribblez::HastyBotAgent::Params p0;
+    scribblez::HastyBot::Params p0;
     p0.name = "Hasty_1";
-    scribblez::HastyBotAgent::Params p1;
+    scribblez::HastyBot::Params p1;
     p1.name = "Hasty_2";
-    scribblez::HastyBotAgent a0(p0), a1(p1);
+    scribblez::HastyBot a0(p0), a1(p1);
 
     std::vector<std::string> gcgs;
     long seed = base_seed;
