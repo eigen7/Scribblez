@@ -8,8 +8,9 @@ a machine is free, the dashboard places the first queued tag that fits on
 it: it adds the machine to the tag, creates the tag's slots from its
 workload's **layout**, and starts them. When every slot of the tag has
 finished, the dashboard releases the machine to the next tag. Every
-workload must define an **end condition**, so every tag eventually
-releases its machine.
+workload can take an **end condition**. It stays optional, but "run
+forever" is spelled the same way everywhere (-1), and the dashboard warns
+when the queue holds a tag without one.
 
 ## Why
 
@@ -29,44 +30,48 @@ the first day of the tuning campaign:
 
 ## Design
 
-### 1. Every workload has an end condition
+### 1. End conditions: optional, uniform, and warned about
 
-A tag whose roles never finish would hold its machine forever and stall
-the queue. This is also a cost risk: a rented machine only idle-stops once
-its slots have finished (#270, #271). So the rule applies to every
-workload, not just to queued tags:
+A tag that never ends holds its pool machine until the operator releases
+it by hand. An open-ended run is legitimate, so an end condition stays
+optional. What changes is that it becomes uniform and visible:
 
-- **Every role reaches a terminal state on its own.** A trainer exits at
-  its budget. Generators are finished by the scheduler once the trainer is
-  done or the store is full. Match eval is finished once nothing is owed and
-  the trainer is done (#271).
-- **The end parameters cannot be "never".** `param()` gains a `minimum`,
-  enforced by validation, by argparse and by the form. Each end parameter
-  declares `minimum=1` and loses its "0 = run until paused" meaning.
-- **A registry test pins the contract.** Each `WorkloadSpec` names its end
-  parameters (`end_params`), and a test checks that every registered
-  workload declares at least one, each with a minimum of at least 1.
+- **Every workload names its end parameters** (`WorkloadSpec.end_params`),
+  and every role finishes on its own once they are reached. A trainer exits
+  at its budget. Generators are finished by the scheduler once the trainer
+  is done or the store is full (#270). Match eval is finished once nothing
+  is owed and the trainer is done (#271). A registry test checks that every
+  workload names at least one end parameter.
+- **"Run forever" is -1 in every end parameter, and it is the default.**
+  Today "never" is 0, which reads like "stop now" and differs from workload
+  to workload. `param()` gains an `end=True` marker, and validation accepts
+  -1 or a positive value. The create form shows a "run forever" checkbox
+  beside each end parameter.
+- **Stored tags holding 0 are migrated to -1** with
+  [migrate_tag_params.py](../../py/scripts/migrate_tag_params.py). A
+  remote worker of a live tag needs a bundle redeploy afterwards, as with
+  any param migration.
 
 Changes per workload:
 
-| workload | end condition today | change |
+| workload | end parameters today | change |
 |---|---|---|
-| position_eval | `max_rows`, default 0 (never) | default 24,000,000 (~300 generations at the default window); minimum 1 |
-| max_move_per_lane | `max_rows`, default 0 | a positive default (to be measured); minimum 1 |
-| move_set_eval | `target_pairs` 600, `train_epochs` 20; both allow 0 | minimum 1 on both |
-| evidence_trajectories | `target_pairs` default 0, so generators run until paused; `train_epochs` 20 | a positive `target_pairs` default; minimum 1 on both. The "no pair for 15 minutes means final" rule goes away with the 0 case. |
-| blind_spots | `target_positions` 100, allows 0 | minimum 1 |
-| kill_test | none: generators cycle forever | new `target_pairs`, with the scheduler finishing the generators at the target, the way blind_spots does |
-| match_arms | `pairs_per_arm`, finite | already conforms |
+| position_eval | `max_rows`, default 0 (never) | default -1 |
+| max_move_per_lane | `max_rows`, default 0 | default -1 |
+| move_set_eval | `target_pairs` 600, `train_epochs` 20; 0 = never | 0 becomes -1; defaults kept |
+| evidence_trajectories | `target_pairs` default 0 (generate until paused; the trainer calls the corpus final after 15 idle minutes), `train_epochs` 20 | `target_pairs` default -1, keeping the 15-minute rule for it |
+| blind_spots | `target_positions` 100; 0 = never | 0 becomes -1 |
+| kill_test | none: generators cycle forever | new `target_pairs`, default -1, with the scheduler finishing the generators at the target, as blind_spots does |
+| match_arms | `pairs_per_arm`, finite | none |
 
 **A tag is complete when every one of its slots has finished.** That is
-the release signal.
+the release signal. A tag without an end condition completes only when the
+operator **releases** it from its task view, which finishes all its slots.
 
-**Existing tags.** Stored params keep their explicit 0s. The minimum is
-enforced when a task is created and when it is enqueued, not when a stored
-task is loaded, so archived and running tags keep loading
-([tag-param migration](../../py/scripts/migrate_tag_params.py) is not
-needed). A stored tag with a 0 can be edited before it is enqueued.
+**The warning.** Enqueueing a tag when it, or any tag already queued or
+placed by the queue, has no end condition asks for confirmation. The
+confirmation lists those tags and says that each will hold its machine
+until it is released by hand. The queue view marks such tags with ∞.
 
 ### 2. The pool
 
@@ -122,8 +127,9 @@ default is "any eligible machine".
 
 `queue.json` is an ordered list of `{workload, tag, machines}`, FIFO, and
 the operator can reorder it. A tag enters the queue from the create form
-("Create & enqueue") or from its task view ("Enqueue"). Enqueueing checks
-the end-condition minimum and that the tag has no slots yet.
+("Create & enqueue") or from its task view ("Enqueue"). Enqueueing requires
+that the tag has no slots yet, and warns about tags without an end
+condition (§1).
 
 Each reconcile pass places tags. It visits free pool machines in a fixed
 order, and gives each the first queued tag it is eligible for. Placing a
@@ -199,17 +205,20 @@ and "Requeue".
 
 | PR | Content |
 |---|---|
-| 1 | End-condition contract: `param(minimum=)`, `WorkloadSpec.end_params` plus the registry test, the per-workload changes above (kill_test's target and scheduler finish), and create-time validation. Independent of the rest, and useful on its own. |
+| 1 | Uniform end conditions: `param(end=True)` with its -1-or-positive validation and the form checkbox, `WorkloadSpec.end_params` plus the registry test, the per-workload changes above (kill_test's target and scheduler finish), and the migration of stored 0s. Independent of the rest. |
 | 2 | Pool: `pool.json`, localhost and registered entries, the GPU-memory probe, the catalog's `gpu_memory_gb`, the pool UI, and busy detection. Tasks can also add a pool machine by hand from the task view. |
 | 3 | Layouts, eligibility, and the queue with placement, release and requeue, for localhost and registered machines. The laptops can then run the campaign unattended. |
 | 4 | Rental capacity: renting up to the cap on demand, hand-over of running instances, and termination when idle. |
 
-## Open questions for review
+## Review record
 
-- evidence_trajectories' `target_pairs` default: the corpus size its runs
-  actually use.
-- A tag that wants more than one machine (a rented trainer plus extra
-  generator machines) has no layout here; hand-added slots still work
-  alongside a placement. Is that enough?
-- Should the queue be global or per workload? It is global here, with
-  eligibility doing the filtering, since the machines are shared.
+The operator's comments on the first draft (PR #272):
+
+- **End conditions are optional, not required.** The default is -1 (run
+  forever), and the dashboard warns when a tag without one is queued (§1).
+  The first draft made them mandatory for every workload.
+- **One machine per placement is enough for now.** A tag that wants more
+  (a rented trainer plus extra generator machines) takes hand-added slots
+  alongside its placement.
+- **The queue is global**, with eligibility doing the filtering, because
+  the machines are shared across workloads.

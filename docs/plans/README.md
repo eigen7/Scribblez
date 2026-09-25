@@ -65,7 +65,8 @@ moved on. New plans go here, not in `docs/` proper.
   pool and an ordered tag queue: each free pool machine takes the next
   eligible queued tag, with slots made from the workload's layout and
   eligibility checked against GPU memory, and releases it when every slot
-  has finished. Makes an end condition mandatory for every workload.
+  has finished. End conditions become uniform (-1 = run forever) and
+  optional, with a warning when the queue holds a tag without one.
 - **[cloud_machines.md](cloud_machines.md)**: *landed.* AWS instances as
   task-scoped ssh machines that the dashboard launches, idles and terminates;
   the trainer on the ssh kind; spot; Runpod's removal. The provider lives in
