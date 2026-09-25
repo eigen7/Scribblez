@@ -1,8 +1,8 @@
-// EndgameHastyBotAgent: HastyBot while the bag holds tiles, the endgame solver
+// EndgameAgent<HastyBot>: HastyBot while the bag holds tiles, the endgame solver
 // once it is empty. Compiled into test_endgame alongside the solver suite.
 // Every case needs the Macondo-bundled NWL23 leave table and skips without it.
 
-#include "agent/endgame_hasty_bot.h"
+#include "agent/endgame_agent.h"
 #include "agent/hasty_bot.h"
 #include "endgame/endgame_solver.h"
 #include "endgame_positions.h"
@@ -86,9 +86,9 @@ class PromptCountingAgent : public Agent {
   Agent& inner_;
 };
 
-EndgameHastyBotAgent::Params endgame_params(uint64_t budget, int plies) {
-  EndgameHastyBotAgent::Params p;
-  p.hasty = HastyBotAgent::Params{.thread_id = 0, .name = "EndgameHastyBot"};
+EndgameAgent<HastyBot>::Params endgame_params(uint64_t budget, int plies) {
+  EndgameAgent<HastyBot>::Params p;
+  p.base = HastyBot::Params{.thread_id = 0, .name = "EndgameHastyBot"};
   p.solver.budget = budget;
   p.solver.plies = plies;
   return p;
@@ -102,8 +102,8 @@ TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
   Dictionary d = tiny_dict();
 
   std::mt19937 rng(0x1234ABCDu);
-  EndgameHastyBotAgent eg(endgame_params(50000, 25));
-  HastyBotAgent hasty({.thread_id = 0, .name = "HastyBot"});
+  EndgameAgent<HastyBot> eg(endgame_params(50000, 25));
+  HastyBot hasty({.thread_id = 0, .name = "HastyBot"});
 
   int checked = 0;
   for (int i = 0; i < 30; ++i) {
@@ -145,11 +145,11 @@ TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
       {kSolveBudget, kSolvePlies, false});
     if (r.best == greedy) continue;
 
-    EndgameHastyBotAgent solving(endgame_params(kSolveBudget, kSolvePlies));
+    EndgameAgent<HastyBot> solving(endgame_params(kSolveBudget, kSolvePlies));
     EXPECT_EQ(solving.make_move(req).move, r.best);
     EXPECT_NE(solving.make_move(req).move, greedy);
 
-    EndgameHastyBotAgent disabled(endgame_params(/*nodes=*/0, kSolvePlies));
+    EndgameAgent<HastyBot> disabled(endgame_params(/*nodes=*/0, kSolvePlies));
     EXPECT_EQ(disabled.make_move(req).move, greedy);
 
     found = true;
@@ -165,8 +165,8 @@ TEST(EndgameAgent, ShallowSolveFallsBackToHasty) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xFA11BACCu);
 
-  EndgameHastyBotAgent tiny(endgame_params(/*nodes=*/1, kSolvePlies));
-  HastyBotAgent hasty({.thread_id = 0, .name = "HastyBot"});
+  EndgameAgent<HastyBot> tiny(endgame_params(/*nodes=*/1, kSolvePlies));
+  HastyBot hasty({.thread_id = 0, .name = "HastyBot"});
   int checked = 0;
   for (int i = 0; i < 30; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
@@ -184,7 +184,7 @@ TEST(EndgameAgent, EndgameMoveIsLegal) {
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xBADF00D1u);
 
-  EndgameHastyBotAgent agent(endgame_params(20000, 20));
+  EndgameAgent<HastyBot> agent(endgame_params(20000, 20));
   int checked = 0;
   for (int i = 0; i < 60; ++i) {
     const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
@@ -207,8 +207,8 @@ TEST(EndgameAgent, FullGameTinyDict) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
   for (uint64_t seed = 1; seed <= 8; ++seed) {
-    EndgameHastyBotAgent a0(endgame_params(20000, 25));
-    HastyBotAgent a1({.thread_id = 0, .name = "HastyBot"});
+    EndgameAgent<HastyBot> a0(endgame_params(20000, 25));
+    HastyBot a1({.thread_id = 0, .name = "HastyBot"});
     Game g(a0, a1, d, seed);
     g.play();
     check_log_consistency(g.log());
@@ -220,8 +220,8 @@ TEST(EndgameAgent, FullGameRealLexicon) {
   if (!std::ifstream(kwg).good() || !ensure_equity()) GTEST_SKIP() << "no NWL23 kwg/leaves";
   Dictionary d = Dictionary::load_kwg(kwg);
   for (uint64_t seed = 1; seed <= 6; ++seed) {
-    EndgameHastyBotAgent a0(endgame_params(50000, 25));
-    HastyBotAgent a1({.thread_id = 0, .name = "HastyBot"});
+    EndgameAgent<HastyBot> a0(endgame_params(50000, 25));
+    HastyBot a1({.thread_id = 0, .name = "HastyBot"});
     Game g(a0, a1, d, seed);
     g.play();
     check_log_consistency(g.log());
@@ -233,11 +233,11 @@ TEST(EndgameAgent, FullGameRealLexicon) {
 TEST(EndgameAgent, FromSpecParsing) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
-  EXPECT_NE(EndgameHastyBotAgent::from_spec(
+  EXPECT_NE(EndgameAgent<HastyBot>::from_spec(
               {"--endgame-budget=1234", "--endgame-plies=7", "--temperature=0"}, 0, "X"),
             nullptr);
   EXPECT_NE(
-    EndgameHastyBotAgent::from_spec({"--top-k=5", "--temperature=1.5", "--seed=42"}, 0, "Y"),
+    EndgameAgent<HastyBot>::from_spec({"--top-k=5", "--temperature=1.5", "--seed=42"}, 0, "Y"),
     nullptr);
 
   // A parsed --endgame-budget=0 must disable the solver.
@@ -245,23 +245,23 @@ TEST(EndgameAgent, FromSpecParsing) {
   std::mt19937 rng(0x0FF5E7u);
   const EndgamePos p = random_endgame(rng, d, /*rack_tiles=*/3);
   const MoveRequest req = endgame_request(p, d);
-  auto disabled = EndgameHastyBotAgent::from_spec({"--endgame-budget=0"}, 0, "Z");
+  auto disabled = EndgameAgent<HastyBot>::from_spec({"--endgame-budget=0"}, 0, "Z");
   EXPECT_EQ(disabled->make_move(req).move, hasty_best_move_wmp(req));
 
-  EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-plies=notanint"}, 0, "B"),
+  EXPECT_THROW(EndgameAgent<HastyBot>::from_spec({"--endgame-plies=notanint"}, 0, "B"),
                std::runtime_error);
-  EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--bogus-option=1"}, 0, "C"), std::runtime_error);
+  EXPECT_THROW(EndgameAgent<HastyBot>::from_spec({"--bogus-option=1"}, 0, "C"), std::runtime_error);
 }
 
 TEST(EndgameAgent, SpreadMattersFromSpec) {
   if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
-  EXPECT_NE(
-    EndgameHastyBotAgent::from_spec({"--endgame-spread-matters=1", "--endgame-budget=777"}, 0, "W"),
-    nullptr);
-  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-spread-matters=0"}, 0, "X"), nullptr);
-  EXPECT_NE(EndgameHastyBotAgent::from_spec({"--endgame-budget=777"}, 0, "V"), nullptr);
-  EXPECT_THROW(EndgameHastyBotAgent::from_spec({"--endgame-spread-matters=maybe"}, 0, "B"),
+  EXPECT_NE(EndgameAgent<HastyBot>::from_spec(
+              {"--endgame-spread-matters=1", "--endgame-budget=777"}, 0, "W"),
+            nullptr);
+  EXPECT_NE(EndgameAgent<HastyBot>::from_spec({"--endgame-spread-matters=0"}, 0, "X"), nullptr);
+  EXPECT_NE(EndgameAgent<HastyBot>::from_spec({"--endgame-budget=777"}, 0, "V"), nullptr);
+  EXPECT_THROW(EndgameAgent<HastyBot>::from_spec({"--endgame-spread-matters=maybe"}, 0, "B"),
                std::runtime_error);
 }
 
@@ -277,10 +277,10 @@ TEST(EndgameAgent, FirstWinProjectsCertificates) {
   std::mt19937 rng(0x105510FFu);
 
   EndgameSolver ref;
-  HastyBotAgent hasty({.thread_id = 0, .name = "HastyBot"});
-  EndgameHastyBotAgent::Params wp = endgame_params(kSolveBudget, kSolvePlies);
+  HastyBot hasty({.thread_id = 0, .name = "HastyBot"});
+  EndgameAgent<HastyBot>::Params wp = endgame_params(kSolveBudget, kSolvePlies);
   wp.solver.spread_matters = false;
-  EndgameHastyBotAgent wld(wp);
+  EndgameAgent<HastyBot> wld(wp);
 
   int projected = 0, loss_fallbacks = 0, checked = 0;
   for (int i = 0; i < 200; ++i) {
@@ -326,9 +326,9 @@ TEST(EndgameAgent, FastTrackReducesPrompts) {
   int prompts_with = 0, prompts_without = 0, fast_tracked = 0;
   for (int mode = 0; mode < 2; ++mode) {
     const bool respect = mode == 0;
-    EndgameHastyBotAgent::Params params = endgame_params(1600, 25);
+    EndgameAgent<HastyBot>::Params params = endgame_params(1600, 25);
     params.solver.spread_matters = false;
-    EndgameHastyBotAgent inner0(params), inner1(params);
+    EndgameAgent<HastyBot> inner0(params), inner1(params);
     PromptCountingAgent a0(inner0), a1(inner1);
     // These games are the whole cost of the test. Ten is plenty: most games
     // reach a proven endgame, so the prompt gap is many times the

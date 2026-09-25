@@ -42,7 +42,7 @@ it is trying to move (only its fallback, when no proof lands, is). Skill is
 deterministic, since greedy tie-breaks are fixed and each cell is a pure
 function of position, margin and budget. It is averaged over all 1000 games.
 
-**Cost** is measured, not modeled: `EndgameHastyBotAgent` times its own
+**Cost** is measured, not modeled: `EndgameAgent<HastyBot>` times its own
 `solve()` calls and the sweep sums them over a playout. It is quoted as a
 multiple of a plain HastyBot-vs-HastyBot game timed under the same conditions
 (4.14 ms/game here), because the question is what solving the endgame costs

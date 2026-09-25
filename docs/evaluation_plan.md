@@ -60,10 +60,12 @@ opponent knows. So our agent in the face-up-leaves variant, playing a
 leave-ignoring BestBot equivalent, measures the same thing. Only self-play
 differs, since there both seats read the leave.
 
-Our BestBot equivalent is the sim agent
-([sim_agent.h](../engine/include/agent/sim_agent.h), `--type=sim`): simming
-plus the endgame solver. It is both the baseline and the opponent that makes
-published results comparable.
+Our BestBot is a port of Macondo's
+([best_bot.h](../engine/include/agent/best_bot.h), `--type=bestbot-endgame`):
+its simmer, stopping rule and win-percentage table, plus our endgame solver in
+place of Macondo's. It is the opponent that makes published results
+comparable. The sim agent ([sim_agent.h](../engine/include/agent/sim_agent.h),
+`--type=sim`) is a BestBot-shaped simmer of our own and the project's baseline.
 
 ## What the kill-test established
 
@@ -153,7 +155,7 @@ nothing is gated on it, and the direct measurement below replaces it.
 
 In rough order of what each answers.
 
-1. **The finished agent against the sim agent**, face-up leaves, paired. The
+1. **The finished agent against BestBot**, face-up leaves, paired. The
    headline number, and the one comparable to published results by the
    BestBot argument above.
 2. **The finished agent against `--type=mset-sim`**, the same stack with the

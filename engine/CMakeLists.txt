@@ -46,12 +46,15 @@ add_library(scribblez_core STATIC
   src/lexicon/lexicon.cpp
   src/agent/hasty_bot.cpp
   src/agent/endgame_turn_policy.cpp
-  src/agent/endgame_hasty_bot.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
   src/sim/slog_position_simmer.cpp
   src/sim/setup_plays.cpp
   src/sim/rollout_summary.cpp
+  src/sim/win_pct_table.cpp
+  src/sim/macondo_autostopper.cpp
+  src/sim/macondo_simmer.cpp
+  src/agent/best_bot.cpp
   src/agent/candidate_evaluator.cpp
   # A GPU-free decorator over the EvalService interface, so it lives here and is
   # unit-tested against a scripted stub.
@@ -335,6 +338,13 @@ if(SCRIBBLEZ_BUILD_TESTS)
     SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
     SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   gtest_discover_tests(test_endgame)
+
+  add_executable(test_best_bot tests/test_best_bot.cpp)
+  target_link_libraries(test_best_bot PRIVATE
+    scribblez_core Boost::program_options Threads::Threads GTest::gtest_main)
+  target_compile_definitions(test_best_bot PRIVATE
+    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
+  gtest_discover_tests(test_best_bot)
 
   # The model-driven agent tests compile the agent's selection TU without its
   # factory. The factory is what builds the TensorRT service
