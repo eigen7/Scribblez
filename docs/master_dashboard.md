@@ -235,8 +235,11 @@ reads them again. Each entry also takes:
 - **generator threads**: overrides the thread count a layout would pick.
 
 A pool machine without a lease is **busy** while any slot on it, from any
-tag, wants to run or is still alive; paused and finished slots do not count.
-That keeps the queue off a machine the operator is using by hand.
+tag, is alive or gated. A slot meant to run that is down (`exited`, or not yet
+started) counts only for ten minutes after it was last alive, which covers a
+restart; past that it is dead weight and no longer holds the machine. Paused
+and finished slots never count. That keeps the queue off a machine the
+operator is using by hand, and not off one an old crashed slot sits on.
 
 **Rental capacity** lets the pool rent: an entry names a catalog type, spot or
 on-demand, and a cap (set it to what the AWS quota allows). The queue rents
