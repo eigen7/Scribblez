@@ -184,6 +184,34 @@ class TagQueue:
         m.lease.requeue = True
         self._start_release(m, pool, REQUEUED)
 
+    def plan(self, workload: str, tag: str) -> dict:
+        """What the queue would start for a tag, shown before and after it is
+        enqueued: the roles its layout asks for (they follow from its params),
+        and for each pool machine and capacity entry the slots it would get
+        there, their summed GPU need, and why it could not go there, if so."""
+        spec, task = _lookup(workload, tag)
+        assert spec.layout, f"{workload} tags are not queueable yet (no layout)"
+        assert task is not None, f"tag '{tag}' has no task record"
+        params = _params(spec, task)
+        pool = pool_mod.load_pool()
+        entry = queue_mod.load_queue().find(workload, tag) or QueueEntry(workload, tag, 0.0)
+        targets = [(m.name, m) for m in pool.machines] + [
+            (f"rent {c.name}", self._rentals.prospect(c)) for c in pool.capacity
+        ]
+        machines = []
+        for name, m in targets:
+            slots = placement.plan_for(spec, params, m)
+            machines.append(
+                {
+                    "machine": name,
+                    "slots": [{"role": p.role, "threads": p.threads} for p in slots],
+                    "gpu_gb": placement.gpu_total(spec, slots, entry),
+                    "refusal": placement.refusal(spec, params, entry, m, need_bundle=False),
+                }
+            )
+        roles = [p.role for p in workloads.resolve(spec.layout)(params, 1, None)]
+        return {"roles": roles, "machines": machines}
+
     def refuse_hand_placement(self, workload: str, tag: str):
         """Refuse a slot added by hand to a queued or placed tag. Its slots are
         the queue's to create: a queued tag with slots elsewhere would be

@@ -448,6 +448,14 @@ class QueueHandler(_MasterBase):
         await self.guarded_offload(self.tag_queue.status)
 
 
+class QueuePlanHandler(_MasterBase):
+    """What the queue would start for a tag (TagQueue.plan)."""
+
+    async def get(self):
+        workload, tag = self.get_argument("workload"), self.get_argument("tag")
+        await self.guarded_offload(lambda: self.tag_queue.plan(workload, tag))
+
+
 class EnqueueHandler(_MasterBase):
     """Queue a tag. Answers {"queued": false, "warnings": [...]} when the
     operator should confirm first; the form resends with confirm=true."""
@@ -585,6 +593,7 @@ MASTER_ROUTES = [
     (r"/api/pool", PoolHandler),
     (r"/api/queue", QueueHandler),
     (r"/api/queue/enqueue", EnqueueHandler),
+    (r"/api/queue/plan", QueuePlanHandler),
     (r"/api/queue/action", QueueActionHandler),
     (r"/api/pool/machines", PoolMachineAddHandler),
     (r"/api/pool/machine_action", PoolMachineActionHandler),
