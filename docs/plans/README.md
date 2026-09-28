@@ -61,8 +61,8 @@ moved on. New plans go here, not in `docs/` proper.
   Running trainers on rented GPUs, several tags in parallel: the trainer's
   record/controls contract, the torch runtime and the bucket legs (all still
   in use), and a Runpod train slot, since replaced by cloud_machines.md.
-- **[tag_queue.md](tag_queue.md)**: *proposed, plan-reviewed; three
-  operator calls open.* A pool that owns its machines (laptops, and
+- **[tag_queue.md](tag_queue.md)**: *proposed, plan-reviewed, operator
+  calls settled.* A pool that owns its machines (laptops, and
   instances it rents up to a cap) and a global FIFO tag queue. Tags lease
   machines, slots come from the workload's layout, eligibility is checked
   against kinds and summed GPU memory, and release drains before it removes.

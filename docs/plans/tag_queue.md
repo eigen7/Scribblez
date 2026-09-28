@@ -1,9 +1,9 @@
 # Plan: a tag queue over a machine pool
 
-**Status: proposed and plan-reviewed (2026-09-25); three calls remain open
-for the operator (see the dissent log).** Nothing here is built.
-**Prerequisite:** #271 (match eval on rented machines, and finishing match
-eval once training ends) must be merged first. It is open.
+**Status: proposed, plan-reviewed (2026-09-25), and the operator's calls
+settled (2026-09-28).** Nothing here is built. The prerequisite, #271
+(match eval on rented machines, and finishing match eval once training
+ends), is merged.
 
 **Decision.** The dashboard gets one **machine pool** and one global,
 ordered **tag queue**.
@@ -223,20 +223,24 @@ object per process, mtime-checked, atomically replaced.
 **Code pinning.** A queued tag's bundle is built and pinned **at enqueue**,
 for the archs of every eligible pool machine. Remote slots then run the
 code the operator enqueued, not whatever the tree holds hours later.
-Local slots run the live checkout today and would still do so (see the
-dissent log).
+Local slots keep running the live checkout. Enqueueing a tag that may be
+placed on localhost warns that its local slots will run whatever
+`/workspace/repo` holds when they start (operator's call).
 
 ### 5. Release, failure and hand-over
 
 **Release drains before it removes.** When the tag is complete, the lease
 enters a `releasing` phase:
 
-1. For each stopped ssh container on the local sink, its last output is
+1. Every remote slot's full `docker logs` is saved into the tag's
+   `logs/<worker_id>.log`. Today only the last line reaches the dashboard,
+   and the container, with its log, is about to be removed.
+2. For each stopped ssh container on the local sink, its last output is
    swept, and release requires `undelivered == 0`.
-2. For bucket-delivering slots, one non-watching `cloud_sync` pass for the
+3. For bucket-delivering slots, one non-watching `cloud_sync` pass for the
    tag runs to completion, so the remote trainer's final export,
    checkpoint and records land locally.
-3. Only then are the slots removed and the lease closed. The machine's
+4. Only then are the slots removed and the lease closed. The machine's
    lease-period spend goes to the task.
 
 A tag whose final output cannot be drained keeps its lease, and the queue
@@ -246,10 +250,25 @@ view shows why.
 backoff for ssh slots and none for local ones. A slot becomes `failed`
 after N consecutive non-zero exits within a window. A failed trainer marks
 the placement failed, with the exit reason (for example the CUDA OOM
-line), and pauses the tag's other roles. The release drain then runs, and
-the machine goes to the next tag, so one broken tag cannot stall an
-unattended queue. The failed tag leaves the queue with its data intact.
-**Requeue** puts it back at the head, optionally with narrowed eligibility.
+line), and pauses the tag's other roles. Then:
+
+- **If a queued tag can take the machine**, the release drain runs (saving
+  the logs above) and the machine goes to that tag, so one broken tag
+  cannot stall an unattended queue.
+- **If no queued tag can take it, the machine is held for investigation.**
+  The failed slots' containers are kept and the machine is not terminated.
+  A rented instance is **stopped**: stopped EC2 instances, spot ones
+  included (ours are persistent requests that stop on interruption), bill
+  only for their disk, about $8/month for the 100 GB volume. A held
+  machine stays in the pool and is removed only by the operator. If a
+  queued tag arrives that it can take, the drain runs first (logs saved),
+  and then it is placed.
+
+The failed tag leaves the queue with its data and logs intact.
+**Requeue** puts it back at the head, optionally with narrowed
+eligibility. A tag that completes normally releases as before: with
+nothing to place, the machine is stopped, then terminated after the idle
+timeout.
 
 **Hand-over.** Because the pool owns the instance, handing a running
 rented machine to the next tag is only a lease change. It keeps the booted
@@ -297,7 +316,7 @@ The create form gains "Create & enqueue". The task view gains "Enqueue",
 
 | PR | Content |
 |---|---|
-| 0 | #271 merged (prerequisite). |
+| 0 | #271 (prerequisite): merged. |
 | 1 | Uniform end conditions: `param(end=True)`, -1 as the new default with 0 as an accepted alias, `params.unbounded`/`reached` routed through every enumerated call site, a run-until-end test with -1 per workload, and the form checkbox. No migration. Independent of the rest. |
 | 2 | Pool ownership: `pool.json` with the tasks.py discipline, localhost and registered entries with aliases, the GPU-memory probe and reserve, machine lookup through the pool, pool-level instance lifecycle and orphan accounting, the busy rule (tested against the current mount), the GPU-memory check in `_check_role`, and the catalog's `gpu_memory_gb`. |
 | 3 | The measured requirement table, the position_eval layout, eligibility, `queue.json`, matching, the journaled placement on its own executor, pinning at enqueue, drain-then-release, the failed state, requeue and release. For localhost and registered machines: the laptops can then run the campaign unattended. |
@@ -354,20 +373,13 @@ Minor critiques:
   - *Hard-code the rental cap to 1* (scope). The operator asked for a cap they set, and quota is expected to grow; the cap is one number.
   - *Hand-edit pool.json and queue.json instead of forms* (scope). The operator drives the campaign from the dashboard, and reordering is the feature he asked for. The forms are small next to the placement logic.
 
-**Open — human calls:**
+**Operator's calls on the open questions (2026-09-28):**
 
-1. **Code pinning of local slots.** Remote slots of a queued tag run the
-   bundle pinned at enqueue. Local slots on localhost run the live
-   checkout, as they do today, so a queued local arm picks up whatever is
-   in `/workspace/repo` when it is placed. The options:
-   - accept that and show a warning (cheap);
-   - make local slots run from an unpacked copy of the pinned bundle (a
-     real change to local spawning).
-2. **What a failed tag does to its machine.** The plan releases it to the
-   next tag, so the queue keeps moving unattended. The alternative is to
-   hold the machine so the failure can be inspected in place.
-3. **Scope growth.** The lease model makes PR 2 larger than the first
-   draft's: machine lookup through the pool, and pool-level instance
-   lifecycle. The rival designer and two other seats judged it necessary.
-   The cheaper path is the first draft's ownership transfer, whose failure
-   modes are critiques 4, 5 and 7.
+1. **Code pinning of local slots:** a warning for now; local slots run the
+   live checkout (§4).
+2. **A failed tag's machine** goes to the next queued tag. When nothing is
+   queued, it is held for investigation, stopped (paying only for its
+   disk), until the operator removes it (§5). Keeping the failure
+   inspectable after a hand-over is what the log capture in the release
+   drain is for.
+3. **The larger PR 2** that the lease model needs is accepted.
