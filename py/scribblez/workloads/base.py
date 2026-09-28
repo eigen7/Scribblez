@@ -233,7 +233,7 @@ class WorkloadSpec:
     @property
     def tags_root(self) -> Path:
         """Parent directory of every tag of this workload."""
-        return TagPaths("placeholder", self.name).root.parent
+        return self.paths("placeholder").root.parent
 
     def role(self, name: str) -> RoleSpec:
         for r in self.roles:

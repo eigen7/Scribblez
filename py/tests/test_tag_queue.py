@@ -390,7 +390,6 @@ def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypat
     swept, synced = [], []
     monkeypatch.setattr(tq_mod, "sweep_stopped", lambda machine, **target: swept.append(target))
     monkeypatch.setattr(tq_mod.subprocess, "run", lambda argv, **kw: synced.append(argv))
-    monkeypatch.setattr(manager, "_ensure_sync", lambda spec, task: None)
     manager.remove_pool_machine("localhost")
     manager.add_pool_machine("gpu-box", "me@gpu-box")
     make("a")
