@@ -3395,7 +3395,7 @@ class ShadowCheckAgent : public scribblez::Agent {
   long comparisons = 0;
 
  private:
-  scribblez::HastyBotAgent bot_;
+  scribblez::HastyBot bot_;
 };
 }  // namespace
 
@@ -3500,7 +3500,7 @@ class CapturingAgent : public scribblez::Agent {
   }
 
  private:
-  scribblez::HastyBotAgent bot_;
+  scribblez::HastyBot bot_;
   std::vector<CapturedPos>& sink_;
   std::vector<CapturedPos>& blanked_sink_;
 };
@@ -3531,13 +3531,13 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
   }
 
   // Racks with a blank fall back to the GADDAG path.
-  HastyBotAgent blank_bot({.thread_id = 0, .name = "blankcheck"});
+  HastyBot blank_bot({.thread_id = 0, .name = "blankcheck"});
   for (const CapturedPos& p : blanked) {
     const MoveRequest req{p.board, dict, p.rack, p.opp_rack, p.my_score, p.opp_score, p.bag_size};
     ASSERT_EQ(move_key(blank_bot.make_move(req).move), move_key(hasty_best_move_wmp(req)));
   }
 
-  HastyBotAgent bot({.thread_id = 0, .name = "wmpcheck"});
+  HastyBot bot({.thread_id = 0, .name = "wmpcheck"});
   long total_moves = 0;
   for (const CapturedPos& p : positions) {
     MoveGenerator gen(p.board, dict);
@@ -3633,7 +3633,7 @@ TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
 // With no legal PLAY, HastyBot exchanges rather than passes whenever the bag
 // allows it: both score 0, but an exchange gives a chance at a better rack.
 // DDGPTWZ has no play on an empty board with tiny_dict().
-TEST(HastyBotAgent, ExchangesInsteadOfPassingWithNoLegalPlay) {
+TEST(HastyBot, ExchangesInsteadOfPassingWithNoLegalPlay) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_hasty_exchange_XXXXXX";
   fs::create_directories(tmp);
@@ -3653,7 +3653,7 @@ TEST(HastyBotAgent, ExchangesInsteadOfPassingWithNoLegalPlay) {
   MoveRequest req{board, dict, rack, opp, 0, 0, /*bag_size=*/80};
   ASSERT_TRUE(generate_legal_plays(req).empty());
 
-  HastyBotAgent agent(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty"});
+  HastyBot agent(HastyBot::Params{.thread_id = 0, .name = "Hasty"});
   const Move chosen = agent.make_move(req).move;
   ASSERT_EQ(chosen.type(), MoveType::EXCHANGE);
 
@@ -3663,7 +3663,7 @@ TEST(HastyBotAgent, ExchangesInsteadOfPassingWithNoLegalPlay) {
 // The same on a real mid-game board, from HastyBot self-play on NWL23: after
 // these 26 turns the mover's AEFIORX has no legal PLAY. Skipped without the
 // NWL23 lexicon and leaves.
-TEST(HastyBotAgent, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
+TEST(HastyBot, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
   const std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
   const std::string leaves_path = HastyEquity::default_leaves_path("NWL23");
   if (!std::ifstream(kwg_path).good() || !std::ifstream(leaves_path).good()) {
@@ -3721,7 +3721,7 @@ TEST(HastyBotAgent, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
   MoveRequest req{pos.board, dict, pos.rack, pos.opp_leave, my_score, opp_score, pos.bag_size};
   ASSERT_TRUE(generate_legal_plays(req).empty());
 
-  HastyBotAgent agent(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty"});
+  HastyBot agent(HastyBot::Params{.thread_id = 0, .name = "Hasty"});
   const Move chosen = agent.make_move(req).move;
   ASSERT_EQ(chosen.type(), MoveType::EXCHANGE);
 }
@@ -3729,7 +3729,7 @@ TEST(HastyBotAgent, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
 // HastyBot weighs exchanges against plays by equity, not only as a fallback
 // when no play exists. IIIIIIH's only play, HI, keeps IIIII, and with the real
 // NWL23 leaves that is bad enough that exchanging must win.
-TEST(HastyBotAgent, ExchangesDuplicateHeavyRackOverItsOnlyPlay) {
+TEST(HastyBot, ExchangesDuplicateHeavyRackOverItsOnlyPlay) {
   const std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
   const std::string leaves_path = HastyEquity::default_leaves_path("NWL23");
   if (!std::ifstream(kwg_path).good() || !std::ifstream(leaves_path).good()) {
@@ -3748,7 +3748,7 @@ TEST(HastyBotAgent, ExchangesDuplicateHeavyRackOverItsOnlyPlay) {
   MoveRequest req{board, dict, rack, opp, 0, 0, /*bag_size=*/80};
   ASSERT_FALSE(generate_legal_plays(req).empty());
 
-  HastyBotAgent agent(HastyBotAgent::Params{.thread_id = 0, .name = "Hasty"});
+  HastyBot agent(HastyBot::Params{.thread_id = 0, .name = "Hasty"});
   const Move chosen = agent.make_move(req).move;
   ASSERT_EQ(chosen.type(), MoveType::EXCHANGE);
 }

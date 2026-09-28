@@ -46,7 +46,6 @@ add_library(scribblez_core STATIC
   src/lexicon/lexicon.cpp
   src/agent/hasty_bot.cpp
   src/agent/endgame_turn_policy.cpp
-  src/agent/endgame_hasty_bot.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
   src/sim/slog_position_simmer.cpp
