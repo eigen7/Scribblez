@@ -54,6 +54,10 @@ class PoolRentals:
         self._m = manager
         # Rented pool machine name -> when it was first seen unleased.
         self._idle_since: dict[str, float] = {}
+        # Whether this pass's listing succeeded. is_gone answers only from a
+        # fresh listing: after a restart the cached one is empty, and reading
+        # that as "every instance is gone" would drop live, billing rentals.
+        self._listed = False
 
     # ---- the catalog's view of a capacity entry ------------------------------
 
@@ -141,6 +145,7 @@ class PoolRentals:
     def reconcile(self, pool: Pool):
         """Drive every rented pool machine toward what its lease wants (see
         the module docstring). Contained per machine."""
+        self._listed = False
         rented = [m for m in pool.machines if m.capacity is not None]
         if not rented:
             return
@@ -151,6 +156,7 @@ class PoolRentals:
             # steps (owned machines, placement) must still run this pass.
             print(f"pool rentals: listing failed: {e}")
             return
+        self._listed = True
         for m in list(rented):
             try:
                 self._reconcile_one(m, pool, index)
@@ -194,11 +200,12 @@ class PoolRentals:
 
     def is_gone(self, m: PoolMachine) -> bool:
         """Whether rented pool machine `m`'s instance no longer exists, from
-        the last listing: terminated outside the dashboard, say. Not within
+        this pass's listing: terminated outside the dashboard, say. Never
+        without a listing that succeeded this pass (see _listed). Not within
         BOOT_GRACE_SECONDS of its launch, when an eventually consistent listing
         may simply not show it yet."""
         record = m.machine
-        if m.capacity is None or record.instance_id is None:
+        if not self._listed or m.capacity is None or record.instance_id is None:
             return False
         if time.time() - (record.launched_at or 0.0) < BOOT_GRACE_SECONDS:
             return False

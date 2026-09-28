@@ -368,3 +368,43 @@ def test_the_task_view_does_not_accrue_a_pool_rentals_spend(renting, monkeypatch
     monkeypatch.setattr(workers_mod, "_accrue_machine", lambda m, billing: accrued.append(m.name))
     (info,) = manager.machine_status(SPEC, tasks.load_task(SPEC, "a"), observe=True)
     assert info["pool"] is True and accrued == []
+
+
+def test_a_failed_listing_never_reads_as_every_rental_gone(renting):
+    """After a restart the cached listing is empty; if the pass's own listing
+    then fails, an aged rental must not be taken for gone and dropped while its
+    instance keeps billing."""
+    q, manager, provider, enqueue = renting
+    enqueue("a")
+    q.tick()
+    pool = pool_mod.load_pool()
+    pool.machine("g6-1").machine.launched_at = 0.0
+    pool_mod.save_pool(pool)
+
+    def throttled():
+        raise ProviderError("RequestLimitExceeded")
+
+    provider.describe = throttled
+    manager._instances = ({}, 0.0)  # a fresh process
+    q.tick()
+    assert _pool_machine("g6-1").lease.tag == "a"
+    assert len(tasks.load_task(SPEC, "a").workers) == 2
+
+
+def test_a_vanished_instance_does_not_rerun_a_completed_tag(renting, monkeypatch):
+    q, manager, provider, enqueue = renting
+    enqueue("a")
+    q.tick()
+    a = tasks.load_task(SPEC, "a")
+    for w in a.workers:
+        w.finished, w.desired_state = True, "paused"
+    monkeypatch.setattr(q, "_drain", lambda spec, task: (_ for _ in ()).throw(OSError("slow")))
+    q.tick()  # completed: releasing, its drain failing
+    pool = pool_mod.load_pool()
+    pool.machine("g6-1").machine.launched_at = 0.0
+    pool_mod.save_pool(pool)
+    provider.instances["i-1"].state = "terminated"
+    manager._instances = ({}, 0.0)
+    q.tick()
+    assert _pool_machine("g6-1") is None
+    assert queue_mod.load_queue().entries == []

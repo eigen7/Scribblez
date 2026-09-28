@@ -494,9 +494,11 @@ class TagQueue:
     def _lose_rental(self, m: PoolMachine, pool: Pool, queue: Queue, spec, task):
         """End the lease of a rental whose instance is gone: its containers
         went with the instance, so the slots are removed outright rather than
-        drained, the lease's spend is retired, and the tag goes back to the
-        head of the queue with its eligibility (its trainer resumes from its
-        checkpoint wherever it lands next)."""
+        drained, and the lease's spend is retired. A tag that still wanted to
+        run (reserved, running, or being requeued) goes back to the head of
+        the queue with its eligibility, its trainer resuming from its
+        checkpoint wherever it lands next; a completed or failed one does not
+        run again."""
         key = _machine_key(spec, task.tag, m.name)
         self._m._machine_states[key] = "gone"  # remove_worker skips a gone machine's probe
         for w in list(task.workers):
@@ -506,9 +508,13 @@ class TagQueue:
         lease = m.lease
         pool.machines.remove(m)
         pool_mod.save_pool(pool)
-        queue.entries.insert(0, _requeued(lease, task))
-        queue_mod.save_queue(queue)
-        print(f"tag queue: {m.name}'s instance is gone; {lease.workload}/{lease.tag} requeued")
+        if lease.requeue or lease.phase in (RESERVED, RUNNING):
+            queue.entries.insert(0, _requeued(lease, task))
+            queue_mod.save_queue(queue)
+            print(f"tag queue: {m.name}'s instance is gone; {lease.workload}/{lease.tag} requeued")
+        else:
+            who = f"{lease.workload}/{lease.tag}, {lease.phase}"
+            print(f"tag queue: {m.name}'s instance is gone ({who}); not requeued")
 
     def _failure(self, spec, task) -> str | None:
         """The first slot that crashed FAIL_AFTER times within the window, as

@@ -110,11 +110,6 @@ class Capacity:
     spot: bool = False
     cap: int = 1
 
-    @property
-    def gpu_capacity_gb(self) -> float:
-        """GPU memory slots may use: memory per GPU less the reserve."""
-        return (self.hardware.gpu_memory_gb or 0.0) - self.gpu_reserve_gb
-
 
 @dataclass
 class Pool:
