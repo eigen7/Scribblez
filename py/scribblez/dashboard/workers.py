@@ -946,6 +946,7 @@ class WorkerManager:
         kind: str,
         machine: tasks.MachineRecord | None = None,
         host: str | None = None,
+        check_gpu: bool = True,
     ):
         role_spec = spec.role(role)
         assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
@@ -961,7 +962,7 @@ class WorkerManager:
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
-        if role_spec.gpu:
+        if role_spec.gpu and check_gpu:
             refusal = self._gpu_fit_refusal(spec, task, role, kind, machine, host)
             assert refusal is None, refusal
         return role_spec
@@ -1002,16 +1003,24 @@ class WorkerManager:
         target = _slot_target(kind, machine, host)
         for m in pool_mod.load_pool().machines:
             if _is_pool_machine(m, target):
-                return (m.hardware.gpu_memory_gb or 0.0) - m.gpu_reserve_gb
+                return m.gpu_capacity_gb
         if machine is not None and machine.instance_type:
             mtype = next((t for t in AWS_CATALOG if t.id == machine.instance_type), None)
             return mtype.gpu_memory_gb if mtype is not None else None
         return None
 
     def add_local(
-        self, spec, task: tasks.TaskRecord, role: str, threads: int | None
+        self,
+        spec,
+        task: tasks.TaskRecord,
+        role: str,
+        threads: int | None,
+        *,
+        check_gpu: bool = True,
     ) -> tasks.WorkerRecord:
-        self._check_role(spec, task, role, "local")
+        """A local slot. `check_gpu` False skips the GPU-fit check, for the tag
+        queue, whose placement has already made it (with any override)."""
+        self._check_role(spec, task, role, "local", check_gpu=check_gpu)
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "local"),
             role=role,
@@ -1032,12 +1041,14 @@ class WorkerManager:
         host: str | None = None,
         machine: str | None = None,
         threads: int | None,
+        check_gpu: bool = True,
     ) -> tasks.WorkerRecord:
         """An ssh slot on a bare host string, or on one of the task's
-        machines by name (exactly one of the two)."""
+        machines by name (exactly one of the two). `check_gpu` as for
+        add_local."""
         assert (host is None) != (machine is None), "an ssh slot names a host or a machine"
         record = _machine_record(task, machine) if machine is not None else None
-        self._check_role(spec, task, role, "ssh", machine=record, host=host)
+        self._check_role(spec, task, role, "ssh", machine=record, host=host, check_gpu=check_gpu)
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "ssh"),
             role=role,
@@ -1653,6 +1664,8 @@ class WorkerManager:
                 reason = self._slot_reason(spec, task, w)
                 if reason and not alive:
                     info["exit_reason"] = reason
+            if w.failed and not alive:
+                info["exit_reason"] = w.failed  # why the tag queue gave up on it
             # Real liveness, for reconcile's desired-vs-observed enforcement.
             info["observed_running"] = alive
             out.append(info)

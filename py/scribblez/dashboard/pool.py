@@ -43,6 +43,12 @@ class Lease:
     phase: str
     since: float
     reason: str = ""  # why a failed or held lease is where it is
+    # Put the tag back at the head of the queue once released (Requeue). Its
+    # own field, so no reason text (a drain error, say) can erase it.
+    requeue: bool = False
+    # The queue entry's eligibility, kept so a requeued tag returns with it.
+    machines: list[str] = field(default_factory=list)
+    memory_override_gb: float | None = None
 
     def held_by(self, workload: str, tag: str) -> bool:
         return (self.workload, self.tag) == (workload, tag)
@@ -78,6 +84,11 @@ class PoolMachine:
     # vCPU arithmetic (docs/plans/tag_queue.md §3).
     generator_threads: int | None = None
     lease: Lease | None = None
+
+    @property
+    def gpu_capacity_gb(self) -> float:
+        """GPU memory slots may use: memory per GPU less the reserve."""
+        return (self.hardware.gpu_memory_gb or 0.0) - self.gpu_reserve_gb
 
 
 @dataclass

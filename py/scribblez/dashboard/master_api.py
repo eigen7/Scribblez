@@ -20,6 +20,7 @@ from cloud.ssh_machine import SshMachineError
 
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tasks, worker_stats_figures
 
 # Exception types that describe a bad request or unavailable dependency, not a
@@ -200,6 +201,15 @@ class TaskHandler(_MasterBase):
                 "spend": spend,
                 "bundle_id": task.bundle_id if task else None,
                 "bundle_drift": self.manager.bundle_drift(task) if task else False,
+                # 1-based place in the tag queue, or None when not queued.
+                "queued": next(
+                    (
+                        i + 1
+                        for i, e in enumerate(queue_mod.load_queue().entries)
+                        if e.key == (spec.name, tag)
+                    ),
+                    None,
+                ),
             }
 
         self.guarded(info)

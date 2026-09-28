@@ -151,6 +151,9 @@ def test_a_crash_looping_tag_fails_and_holds_its_machine(queued):
     a = tasks.load_task(SPEC, "a")
     assert all(w.desired_state == "paused" for w in a.workers)
     assert a.worker("local-0").failed.startswith("local-0: exit 1")
+    status = {i["worker_id"]: i for i in manager.worker_status(SPEC, a)}
+    assert status["local-0"]["state"] == "failed"
+    assert status["local-0"]["exit_reason"].startswith("local-0: exit 1")
     # Held means kept: nothing is drained or removed while nothing needs it.
     q.tick()
     assert _lease().phase == HELD and len(tasks.load_task(SPEC, "a").workers) == 2
@@ -312,3 +315,104 @@ def test_one_lease_failing_does_not_stall_placement(queued, monkeypatch):
     pool_mod.save_pool(pool)
     q.tick()  # the lease raises; the tick still reaches placement and returns
     assert q.status()["entries"][0]["refusals"]["localhost"].startswith("leased by")
+
+
+def test_a_requeue_survives_a_failed_first_drain_with_its_eligibility(queued, monkeypatch):
+    """Requeue drains at once, before reconcile has stopped the workers, so
+    the first drain fails. The drain error must not erase the requeue, and the
+    tag must come back with the entry's machine list and memory override."""
+    q, _, make = queued
+    make("a")
+    q.enqueue("position_eval", "a", machines=["localhost"], memory_override_gb=9.0, confirm=True)
+    q.tick()
+    alive = iter([True, False])
+    monkeypatch.setattr(tq_mod, "worker_pid_alive", lambda *a: next(alive, False))
+    q.requeue("position_eval", "a")
+    _drain_then_tick_allowing_failure(q)
+    assert _lease().phase == RELEASING and _lease().reason.startswith("draining")
+    for _ in range(3):  # the retry is submitted one pass, acted on the next
+        _drain_then_tick_allowing_failure(q)
+        if _lease().phase != RELEASING:
+            break
+    lease = _lease()
+    assert lease.tag == "a" and lease.phase == RUNNING  # placed again at once
+    assert lease.machines == ["localhost"] and lease.memory_override_gb == 9.0
+
+
+def _drain_then_tick_allowing_failure(q: TagQueue):
+    for future in list(q._drains.values()):
+        future.exception(timeout=10)
+    q.tick()
+
+
+def test_an_override_below_the_measured_need_is_placed(queued):
+    """The operator's override decides the fit; slot creation must not re-check
+    against the measured figure and leave the lease reserved forever."""
+    q, manager, make = queued
+    manager.edit_pool_machine("localhost", gpu_reserve_gb=6.0)  # 10 GiB < 14.03 measured
+    make("a")
+    q.enqueue("position_eval", "a", memory_override_gb=9.0, confirm=True)
+    q.tick()
+    assert _lease().phase == RUNNING
+    assert len(tasks.load_task(SPEC, "a").workers) == 2
+
+
+class _StoppedLink(_Link):
+    """A registered machine whose containers have all stopped, each with a log."""
+
+    def container_state(self, name: str) -> str:
+        return "stopped"
+
+    def container_logs(self, name: str) -> str:
+        return f"log of {name}\n"
+
+    def container_exit(self, name: str) -> str:
+        return "exit 0: done"
+
+    def remove_container(self, name: str):
+        pass
+
+
+def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypatch, tmp_path):
+    """The ssh half of a release: every container's full log saved into the
+    tag, a local-sink slot (the generator) swept, and one final bucket sync
+    for the bucket-delivering trainer, all before the slots are removed."""
+    from scribblez.dashboard import workers as workers_mod
+    from scribblez.paths import POSITION_EVAL, TagPaths
+
+    q, manager, make = queued
+    monkeypatch.setattr(workers_mod, "SshMachine", _StoppedLink)
+    monkeypatch.setattr(
+        type(SPEC),
+        "paths",
+        lambda self, tag, mount_root=None: TagPaths(tag, POSITION_EVAL, tmp_path),
+    )
+    swept, synced = [], []
+    monkeypatch.setattr(tq_mod, "sweep_stopped", lambda machine, **target: swept.append(target))
+    monkeypatch.setattr(tq_mod.subprocess, "run", lambda argv, **kw: synced.append(argv))
+    monkeypatch.setattr(manager, "_ensure_sync", lambda spec, task: None)
+    manager.remove_pool_machine("localhost")
+    manager.add_pool_machine("gpu-box", "me@gpu-box")
+    make("a")
+    q.enqueue("position_eval", "a", confirm=True)
+    queue = queue_mod.load_queue()
+    queue.entry("position_eval", "a").bundle = queue_mod.BUNDLE_READY
+    queue_mod.save_queue(queue)
+    q._builds.clear()
+    q.tick()
+    a = tasks.load_task(SPEC, "a")
+    for w in a.workers:
+        w.finished, w.desired_state = True, "paused"
+    q.tick()
+    _drain_then_tick(q)
+
+    logs = TagPaths("a", POSITION_EVAL, tmp_path).logs_dir
+    assert sorted(p.name for p in logs.glob("*.container.log")) == [
+        "ssh-0.container.log",
+        "ssh-1.container.log",
+    ]
+    assert [t["container"] for t in swept] == ["scz-position_eval-a-ssh-1"]  # the generator
+    (argv,) = synced
+    assert argv[-1] == "--trainer-outputs" and "-t" in argv and "a" in argv
+    assert tasks.load_task(SPEC, "a").workers == []
+    assert _lease("gpu-box") is None

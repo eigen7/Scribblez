@@ -93,11 +93,12 @@ type TaskInfo = {
   profile: string; profile_diff: ProfileChange[];
   created_at: number | null; progress: [string, string | number][]; gates: Record<string, string>;
   data_dir: string; workers: WorkerInfo[]; machines: MachineInfo[]; spend: number;
+  queued: number | null;  // 1-based place in the tag queue; null when not queued
   bundle_id: string | null; bundle_drift: boolean;
 };
 
 const stateColors: Record<string, string> = {
-  running: '#2a7a2a', paused: '#8494a5', exited: '#b23b3b', finished: '#446e9b',
+  running: '#2a7a2a', paused: '#8494a5', exited: '#b23b3b', failed: '#b23b3b', finished: '#446e9b',
   up: '#2a7a2a', 'no docker': '#b23b3b', launching: '#1f77b4', preparing: '#1f77b4',
   stopped: '#8494a5', gone: '#b23b3b',
   waiting: '#a05a00',
@@ -735,13 +736,17 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
             <Button label="Start all" disabled={!anyStartable} onClick={() => act({ action: 'start' })} />
             <Button label="Pause all" disabled={!anyPausable} onClick={() => act({ action: 'pause' })} />
-            {info.workers.length === 0 && (
+            {info.workers.length === 0 && (info.queued != null ? (
+              <span style={{ fontSize: 13, color: '#556070', alignSelf: 'center' }}>
+                queued #{info.queued} (Machine pool page)
+              </span>
+            ) : (
               <span title="place this tag on the first free pool machine that fits it (Machine pool page)">
                 <Button label="Enqueue" onClick={() => {
                   enqueueTag(workload.name, tag).catch((e) => window.alert(String(e.message ?? e)));
                 }} />
               </span>
-            )}
+            ))}
             <span title={anyAlive ? 'pause all workers before removing them' : undefined}>
               <Button
                 label="Remove all" tone="danger"

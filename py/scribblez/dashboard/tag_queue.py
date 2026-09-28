@@ -48,9 +48,9 @@ from scribblez.dashboard.workers import (
 )
 
 RESERVED, RUNNING, RELEASING, HELD = "reserved", "running", "releasing", "held"
-# The reason on a lease released by Requeue: its tag goes back to the head of
-# the queue once the release is done. Kept on the lease, so it survives a
-# dashboard restart mid-release.
+# The reason shown on a lease released by Requeue. What sends the tag back to
+# the head of the queue is Lease.requeue, which survives a restart mid-release
+# and cannot be overwritten by a drain error's reason.
 REQUEUED = "requeued"
 
 # A queue-placed slot that crashes this many times within the window is
@@ -157,6 +157,7 @@ class TagQueue:
         for w in task.workers:
             w.desired_state = "paused"
         tasks.save_task(spec, task)
+        m.lease.requeue = True
         self._start_release(m, pool, REQUEUED)
 
     def status(self) -> dict:
@@ -322,6 +323,8 @@ class TagQueue:
         for e in queue.entries:
             spec, task = _lookup(e.workload, e.tag)
             params[e.key] = (spec, _params(spec, task))
+        # Why each machine cannot take each entry, None where it can: once per
+        # pair, shared by the queue view and the matching.
         self._refusals = {
             e.key: {
                 m.name: self._why_not(m, busy[m.name]) or placement.refusal(*params[e.key], e, m)
@@ -331,14 +334,21 @@ class TagQueue:
         }
 
         def eligible(e: QueueEntry, m: PoolMachine) -> bool:
-            return placement.refusal(*params[e.key], e, m) is None
+            return self._refusals[e.key][m.name] is None
 
         matches = placement.match(queue.entries, free, eligible)
         for e in list(queue.entries):
             if e.key not in matches:
                 continue
             m = pool.machine(matches[e.key])
-            m.lease = Lease(e.workload, e.tag, RESERVED, time.time())
+            m.lease = Lease(
+                e.workload,
+                e.tag,
+                RESERVED,
+                time.time(),
+                machines=list(e.machines),
+                memory_override_gb=e.memory_override_gb,
+            )
             pool_mod.save_pool(pool)
             queue.entries.remove(e)
             queue_mod.save_queue(queue)
@@ -360,10 +370,13 @@ class TagQueue:
         for p in placement.plan_for(spec, _params(spec, task), m):
             if any(w.role == p.role for w in task.workers):
                 continue
+            # Placement already checked the fit, with the entry's override.
             if m.kind == "local":
-                w = self._m.add_local(spec, task, p.role, p.threads)
+                w = self._m.add_local(spec, task, p.role, p.threads, check_gpu=False)
             else:
-                w = self._m.add_ssh(spec, task, p.role, machine=m.name, threads=p.threads)
+                w = self._m.add_ssh(
+                    spec, task, p.role, machine=m.name, threads=p.threads, check_gpu=False
+                )
             w.desired_state = "running"
             # A requeued tag's new slots reuse its old worker ids.
             self._m.forget_crashes(spec, task.tag, w.worker_id)
@@ -454,13 +467,20 @@ class TagQueue:
             return
         for w in list(task.workers):
             self._m.remove_worker(spec, task, w.worker_id)
-        key = (m.lease.workload, m.lease.tag)
-        requeued = m.lease.reason == REQUEUED
+        lease = m.lease
         m.lease = None
         pool_mod.save_pool(pool)
-        if requeued:
+        if lease.requeue:
             bundle = queue_mod.BUNDLE_READY if task.bundle_id else queue_mod.BUNDLE_NONE
-            queue.entries.insert(0, QueueEntry(*key, time.time(), bundle=bundle))
+            entry = QueueEntry(
+                lease.workload,
+                lease.tag,
+                time.time(),
+                list(lease.machines),
+                lease.memory_override_gb,
+                bundle,
+            )
+            queue.entries.insert(0, entry)
             queue_mod.save_queue(queue)
 
     def _drain(self, spec, task: tasks.TaskRecord):
