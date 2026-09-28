@@ -31,10 +31,15 @@ export function gpuText(h: PoolMachine['hardware']): string {
   return `${h.gpu_count} × ${(h.gpu_memory_gb ?? 0).toFixed(1)} GiB`;
 }
 
+// The lease, and any slots outside it on the same machine: a tag placed there
+// by hand alongside a leased one is a double booking the operator should see.
 function stateText(m: PoolMachine): string {
-  if (m.lease) return `${m.lease.workload}/${m.lease.tag} (${m.lease.phase})`;
-  if (m.occupants.length) return `busy: ${m.occupants.join(', ')}`;
-  return 'free';
+  const others = m.occupants.join(', ');
+  if (m.lease) {
+    const leased = `${m.lease.workload}/${m.lease.tag} (${m.lease.phase})`;
+    return others ? `${leased}; also ${others}` : leased;
+  }
+  return others ? `busy: ${others}` : 'free';
 }
 
 // Add this machine (host left blank) or a registered ssh machine. The server

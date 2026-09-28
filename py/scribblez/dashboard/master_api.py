@@ -280,7 +280,7 @@ class MachineAddHandler(_MasterBase):
                     name,
                     (body.get("host") or "").strip(),
                     (body.get("identity_file") or "").strip() or None,
-                    int(body["gpu_count"]) if body.get("gpu_count") not in (None, "") else None,
+                    _number(body, "gpu_count", int),
                 )
             return {"name": m.name}
 
@@ -348,8 +348,17 @@ class PoolHandler(_MasterBase):
         await self.guarded_offload(lambda: {"machines": self.manager.pool_status()})
 
 
-def _optional_int(value) -> int | None:
-    return int(value) if value not in (None, "") else None
+def _number(body: dict, key: str, kind: type, default=None):
+    """`body[key]` as `kind` (int or float), `default` when absent or empty.
+    A value that does not parse is the operator's typo, answered with a 400
+    naming the field rather than a bare 500."""
+    value = body.get(key)
+    if value in (None, ""):
+        return default
+    try:
+        return kind(value)
+    except (TypeError, ValueError):
+        raise AssertionError(f"{key}: expected a number, got {value!r}") from None
 
 
 def _aliases(value) -> list[str]:
@@ -371,8 +380,8 @@ class PoolMachineAddHandler(_MasterBase):
                 (body.get("host") or "").strip() or None,
                 identity_file=(body.get("identity_file") or "").strip() or None,
                 aliases=_aliases(body.get("aliases")),
-                gpu_reserve_gb=float(body.get("gpu_reserve_gb") or 0.0),
-                generator_threads=_optional_int(body.get("generator_threads")),
+                gpu_reserve_gb=_number(body, "gpu_reserve_gb", float, 0.0),
+                generator_threads=_number(body, "generator_threads", int),
             )
             return {"name": m.name}
 
@@ -396,9 +405,9 @@ class PoolMachineActionHandler(_MasterBase):
                 if "aliases" in body:
                     changes["aliases"] = _aliases(body["aliases"])
                 if "gpu_reserve_gb" in body:
-                    changes["gpu_reserve_gb"] = float(body["gpu_reserve_gb"] or 0.0)
+                    changes["gpu_reserve_gb"] = _number(body, "gpu_reserve_gb", float, 0.0)
                 if "generator_threads" in body:
-                    changes["generator_threads"] = _optional_int(body["generator_threads"])
+                    changes["generator_threads"] = _number(body, "generator_threads", int)
                 self.manager.edit_pool_machine(name, **changes)
             else:
                 raise AssertionError(f"unknown action '{action}'")

@@ -4,8 +4,8 @@ What must hold:
 - a pool machine survives a save/load round trip;
 - a leased machine's name resolves for the leasing task's slots and for no
   other task, since the pool rather than the task owns it;
-- the busy rule counts only slots that want to run or are alive, across the
-  spellings tags use for one host.
+- the busy rule counts slots that are alive or gated, and slots meant to run
+  only within a grace period, across the spellings tags use for one host.
 """
 
 import pytest
@@ -80,7 +80,7 @@ def test_a_pool_round_trips_through_pool_json(pooled):
     pool = pool_mod.load_pool()
     pool.machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
     pool_mod.save_pool(pool)
-    pool_mod._held.clear()  # a fresh process
+    pool_mod.forget_loaded()  # a fresh process
     m = pool_mod.load_pool().machine("asus")
     assert m.kind == "ssh" and m.machine.host == "dshin@asus-laptop"
     assert m.hardware == Hardware(8, 1, 23034 / 1024) and m.machine.gpu_count == 1
@@ -226,3 +226,44 @@ def test_a_slot_meant_to_run_but_long_dead_does_not_hold_its_machine(pooled, mon
 
     t.gates["generate"] = "waiting for the trainer"
     assert _occupied(manager, listed, "localhost")["state"] == "busy"
+
+
+def test_nvidia_smi_failure_text_is_no_gpu():
+    """nvidia-smi prints its failures on stdout; a machine whose driver is not
+    loaded has no usable GPU, and the probe must say so, not crash."""
+    report = "8\nNVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver.\n"
+    assert pool_mod.parse_hardware(report) == Hardware(8, 0, 0.0)
+
+
+def test_a_pool_machine_a_slot_names_cannot_be_removed(pooled):
+    manager, listed = pooled
+    from scribblez.workloads.position_eval import SPEC
+
+    manager.add_pool_machine("asus", "asus-laptop")
+    t = _task("stale")
+    t.workers.append(_slot("ssh-0", "ssh", "paused", machine="asus"))
+    listed.append((SPEC, t))
+    with pytest.raises(AssertionError, match="slots still name asus: position_eval/stale/ssh-0"):
+        manager.remove_pool_machine("asus")
+
+
+def test_a_detected_arch_is_saved_to_the_pool(pooled, monkeypatch):
+    """A leased pool machine's arch, detected at its first slot start, lands in
+    pool.json rather than only in this process's copy."""
+    manager, _ = pooled
+    from scribblez.workloads.position_eval import SPEC
+
+    manager.add_pool_machine("asus", "asus-laptop")
+    pool = pool_mod.load_pool()
+    pool.machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
+    pool_mod.save_pool(pool)
+    monkeypatch.setattr(_FakeSshMachine, "pull_image", lambda self, image: None, raising=False)
+    monkeypatch.setattr(_FakeSshMachine, "detect_arch", lambda self, image: "znver2", raising=False)
+    registry = type("R", (), {"image_for": staticmethod(lambda runtime: "img")})
+    monkeypatch.setattr(manager, "_creds", lambda: type("C", (), {"registry": registry})())
+    t = _task("t")
+    w = _slot("ssh-0", "ssh", "running", machine="asus")
+    t.workers.append(w)
+    assert manager._slot_arch(SPEC, t, w) == "znver2"
+    pool_mod.forget_loaded()
+    assert pool_mod.load_pool().machine("asus").machine.arch == "znver2"
