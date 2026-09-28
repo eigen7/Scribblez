@@ -11,6 +11,7 @@
 #include "game/move.h"
 #include "game/movegen.h"
 #include "game/rack.h"
+#include "hasty_positions.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "sim/macondo_autostopper.h"
@@ -31,6 +32,9 @@
 #include <vector>
 
 using namespace scribblez;
+using scribblez::testing::find_position;
+using scribblez::testing::hasty_position;
+using scribblez::testing::Position;
 
 namespace {
 
@@ -71,44 +75,6 @@ SimmedPlay simmed(const util::RunningStat& win_prob, const util::RunningStat& eq
   p.win_prob = win_prob;
   p.equity = equity;
   return p;
-}
-
-// A decision point: the board, the mover's rack, and the scores from the
-// mover's point of view.
-struct Position {
-  Board board;
-  Rack rack;
-  int my_score = 0;
-  int opp_score = 0;
-  int bag_size = 0;
-
-  MoveRequest request(const Dictionary& dict) const {
-    static const Rack kHidden;
-    return MoveRequest{board, dict, rack, kHidden, my_score, opp_score, bag_size};
-  }
-};
-
-// The position after `plies` HastyBot-vs-HastyBot moves of game `seed`, or
-// nullopt if the game did not stop there (it ended, or the bag was already
-// empty).
-std::optional<Position> hasty_position(const Dictionary& dict, uint64_t seed, int plies) {
-  HastyBot a0({.thread_id = 0, .name = "A"}), a1({.thread_id = 0, .name = "B"});
-  Game g(a0, a1, dict, seed);
-  g.set_max_plies(plies);
-  g.play();
-  if (!g.truncated()) return std::nullopt;
-  const int mover = plies % 2;
-  return Position{g.board(), g.rack(mover), g.score(mover), g.score(1 - mover), g.bag_size()};
-}
-
-// The first position of game `seed` whose bag size satisfies `want`.
-std::optional<Position> find_position(const Dictionary& dict, uint64_t seed,
-                                      const std::function<bool(int)>& want) {
-  for (int plies = 1; plies < 40; ++plies) {
-    const std::optional<Position> p = hasty_position(dict, seed, plies);
-    if (p && want(p->bag_size)) return p;
-  }
-  return std::nullopt;
 }
 
 void expect_same_results(const MacondoSimmer::Result& a, const MacondoSimmer::Result& b) {
