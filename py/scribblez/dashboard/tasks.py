@@ -50,6 +50,10 @@ class WorkerRecord:
     # reconcile does not restart it forever, and it displays as `finished`
     # rather than `paused`. Cleared by a Start.
     finished: bool = False
+    # Why the tag queue gave up on the slot: it crashed repeatedly
+    # (dashboard/tag_queue.py). Its desired state is then paused and it
+    # displays as `failed`. Cleared by a Start.
+    failed: str | None = None
     # ssh: whether the slot's container is known to exist. False from add until a
     # start confirms it, or a probe finds the container an in-doubt start (ssh
     # lost mid-command) did create. While False, an unreachable probe reads as

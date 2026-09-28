@@ -35,7 +35,7 @@ from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIM
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR
 from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
-from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
+from scribblez.workloads.base import RoleSpec, SlotPlan, StatsSpec, WorkerContext, WorkloadSpec
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
 
 TRAINER_STATS = StatsSpec(
@@ -194,6 +194,67 @@ class PositionEvalParams:
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
 
 
+# The trainer's peak GPU memory in GiB, measured 2026-09-28 on the RTX 5000
+# Ada: the whole process as nvidia-smi sees it (the CUDA context included),
+# over a generation's training on transformer-clipped data (compiled, bf16)
+# and the quality eval that follows it. The eval, not the training step, sets
+# the peak. The figure in the table is that peak plus TRAINER_GPU_HEADROOM_GB.
+#
+#   transformer, activation checkpointing off  13.53 GiB  (training alone 10.58)
+#   transformer, activation checkpointing on    8.46 GiB  (training alone  4.94)
+#   conv                                        2.86 GiB  (training alone  1.46)
+#
+# Measured at the default architecture and batch size only (TRAINER_GPU_KEY);
+# any other configuration has no figure, and the queue refuses to place it.
+# The optimizer arm and QK-norm move memory by well under the headroom.
+TRAINER_GPU_HEADROOM_GB = 0.5
+# Match eval: a 40-pair match of a transformer-clipped export against
+# HastyBot-endgame at 28 threads peaked at 1.06 GiB, with the TensorRT plan
+# already cached. On a machine without the cached plan the engine first builds
+# one, whose scratch is capped at 1 GiB (NeuralNet's workspace_bytes); that part
+# is a bound from the cap, not a measurement.
+MATCH_EVAL_GPU_GB = 1.06 + 1.0 + TRAINER_GPU_HEADROOM_GB
+_MEASURED_GB = {
+    (TRUNK_TRANSFORMER, False): 13.53,
+    (TRUNK_TRANSFORMER, True): 8.46,
+    (TRUNK_CONV, False): 2.86,
+    (TRUNK_CONV, True): 2.86,  # checkpointing only affects the transformer tower
+}
+# The params the measurements held fixed, at their defaults.
+TRAINER_GPU_KEY = (
+    "batch_size",
+    "num_blocks",
+    "trunk_channels",
+    "transformer_mid_channels",
+    "transformer_heads",
+    "transformer_ffn_channels",
+)
+
+
+def gpu_need(params, role: str) -> float | None:
+    """The WorkloadSpec.gpu_need hook: GiB one slot of `role` needs."""
+    if role == "generate":
+        return 0.0
+    if role == "match_eval":
+        return MATCH_EVAL_GPU_GB
+    defaults = PositionEvalParams()
+    if any(getattr(params, k) != getattr(defaults, k) for k in TRAINER_GPU_KEY):
+        return None
+    peak = _MEASURED_GB[(params.trunk, params.activation_checkpointing)]
+    return peak + TRAINER_GPU_HEADROOM_GB
+
+
+def layout(params, vcpus: int, generator_threads: int | None) -> list[SlotPlan]:
+    """The WorkloadSpec.layout hook: a trainer and a generator per machine,
+    plus match eval when its cadence is on. The generator gets every vCPU,
+    as tags placed by hand do: the trainer's loader competes for them only
+    while it trains, and the scheduler parks the generator once it runs
+    open_ahead generations ahead."""
+    roles = ["train", "generate"] + (["match_eval"] if params.match_every_generations > 0 else [])
+    threads = {"generate": generator_threads or vcpus}
+    return [SlotPlan(r, threads.get(r), gpu_need(params, r)) for r in roles]
+
+
 def fetch_train_deps(params):
     """Runtime data the trainer needs beyond the bundle: the engine's default
     lexicon (the FFI session loads it before the model is built) and the
@@ -247,6 +308,8 @@ SPEC = WorkloadSpec(
         ),
     ),
     scheduler="scribblez.generational.scheduler:tick_for_task",
+    layout="scribblez.workloads.position_eval:layout",
+    gpu_need="scribblez.workloads.position_eval:gpu_need",
     progress="scribblez.generational.scheduler:progress",
     sync_data_dirs=(STAGING_DIR,),
     local_data_dirs=(MATCH_RESULTS_DIR,),

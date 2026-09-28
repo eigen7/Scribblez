@@ -39,6 +39,7 @@ from pathlib import Path
 from cloud import runtime_abi
 from cloud.bundles import BundleManifest, deploy_current_tree, source_hash
 from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
+from cloud.providers.aws import CATALOG as AWS_CATALOG
 from cloud.providers.aws import AwsProvider
 from cloud.providers.base import Instance, LaunchRequest, Provider, ProviderError
 from cloud.r2 import bucket_path, rclone
@@ -277,6 +278,29 @@ def _rented_state(m: tasks.MachineRecord, inst: Instance | None, probe: str | No
     return probe or "checking"
 
 
+# The target key of every local slot (_slot_target).
+LOCAL_TARGET = "localhost"
+
+
+def _slot_target(kind: str, machine: tasks.MachineRecord | None, host: str | None) -> str:
+    """Which physical machine a slot runs on, comparable across tasks and
+    spellings: LOCAL_TARGET for a local slot, else the canonical host name."""
+    if kind == "local":
+        return LOCAL_TARGET
+    return pool_mod.canonical_host(machine.host if machine is not None else host)
+
+
+def _is_pool_machine(m: pool_mod.PoolMachine, target: str) -> bool:
+    """Whether the slot target `target` (_slot_target) is pool machine `m`."""
+    if m.kind == "local":
+        return target == LOCAL_TARGET
+    return target in pool_mod.host_names(m)
+
+
+def _slot_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
+    return _ssh_host(task, w) if w.kind == "ssh" else None
+
+
 def _ssh_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
     return w.host if w.machine is None else _machine_record(task, w.machine).host
 
@@ -419,7 +443,9 @@ def worker_pid_alive(pid: int | None, worker_id: str, tag: str) -> bool:
     return env.get(b"SCZ_WORKER_ID") == worker_id.encode() and env.get(b"SCZ_TAG") == tag.encode()
 
 
-def _local_state(desired: str, alive: bool, gated: bool, finished: bool = False) -> str:
+def _local_state(
+    desired: str, alive: bool, gated: bool, finished: bool = False, failed: bool = False
+) -> str:
     """A local slot's display state, from operator intent, real liveness and
     gating. `stopping` is a paused slot whose process has not exited yet;
     `exited` is an unexpected death of a slot that should be running
@@ -430,11 +456,15 @@ def _local_state(desired: str, alive: bool, gated: bool, finished: bool = False)
     if desired == "paused":
         if finished and not alive:
             return "finished"
+        if failed and not alive:
+            return "failed"
         return "stopping" if alive else "paused"
     return "running" if alive else "exited"
 
 
-def _ssh_state(desired: str, probe: str, gated: bool, finished: bool = False) -> str:
+def _ssh_state(
+    desired: str, probe: str, gated: bool, finished: bool = False, failed: bool = False
+) -> str:
     """An ssh slot's display state, from its container probe
     (cloud/ssh_machine.py's states, plus "unknown" before the reconcile pass
     has observed it), operator intent and gating.
@@ -457,6 +487,8 @@ def _ssh_state(desired: str, probe: str, gated: bool, finished: bool = False) ->
     if desired == "paused":
         if finished and probe == "stopped":
             return "finished"
+        if failed and probe in ("stopped", "missing"):
+            return "failed"
         return "stopping" if probe in ("running", "paused") else "paused"
     if probe == "missing":
         return "starting"
@@ -492,6 +524,9 @@ class WorkerManager:
         self._exits: dict[str, str] = {}
         # Slot key -> (consecutive restarts, when the next one is allowed).
         self._restarts: dict[str, tuple[int, float]] = {}
+        # Slot key -> [(when, why)] of each restart after a crash (a non-zero
+        # exit), which the tag queue reads to fail a crash-looping slot.
+        self._crashes: dict[str, list[tuple[float, str]]] = {}
         # Slot key -> when a slot meant to run was first seen down since it was
         # last alive (see _holds_machine).
         self._down_since: dict[str, float] = {}
@@ -827,6 +862,20 @@ class WorkerManager:
             return "missing"
         return probe
 
+    def _note_crash(self, key: str, why: str):
+        """Record that slot `key` is being restarted after exiting non-zero."""
+        self._crashes.setdefault(key, []).append((time.time(), why))
+
+    def forget_crashes(self, spec, tag: str, worker_id: str):
+        self._crashes.pop(_key(spec, tag, worker_id), None)
+
+    def recent_crashes(self, spec, tag: str, worker_id: str, window: float) -> list[str]:
+        """Why slot `worker_id` crashed, for each crash in the last `window`
+        seconds (see _note_crash)."""
+        cutoff = time.time() - window
+        crashes = self._crashes.get(_key(spec, tag, worker_id), [])
+        return [why for when, why in crashes if when >= cutoff]
+
     def _restart_allowed(self, key: str) -> bool:
         """Whether slot or machine `key` may be (re)started now. Attempts back
         off, so a broken worker costs one ssh round trip every few minutes
@@ -896,6 +945,8 @@ class WorkerManager:
         role: str,
         kind: str,
         machine: tasks.MachineRecord | None = None,
+        host: str | None = None,
+        check_gpu: bool = True,
     ):
         role_spec = spec.role(role)
         assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
@@ -911,12 +962,65 @@ class WorkerManager:
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
+        if role_spec.gpu and check_gpu:
+            refusal = self._gpu_fit_refusal(spec, task, role, kind, machine, host)
+            assert refusal is None, refusal
         return role_spec
 
+    def _gpu_fit_refusal(self, spec, task, role: str, kind: str, machine, host) -> str | None:
+        """Why a new `role` slot would not fit the target machine's GPU memory
+        alongside the task's other GPU slots there, or None. The same measured
+        needs as placement (WorkloadSpec.gpu_need); checked only when every need
+        and the machine's memory are known, so a hand placement is refused
+        only on evidence."""
+        if not spec.gpu_need:
+            return None
+        capacity = self._gpu_capacity(kind, machine, host)
+        if capacity is None:
+            return None
+        need = workloads.resolve(spec.gpu_need)
+        params = params_mod.validate(spec.params_cls, task.params)
+        target = _slot_target(kind, machine, host)
+        roles = [role] + [
+            w.role
+            for w in task.workers
+            if spec.role(w.role).gpu and _slot_target(w.kind, None, _slot_host(task, w)) == target
+        ]
+        needs = [need(params, r) for r in roles]
+        if any(n is None for n in needs):
+            return None
+        if sum(needs) > capacity:
+            return (
+                f"{role} would need {sum(needs):.1f} GiB of GPU memory on this machine "
+                f"with the task's other GPU slots, and it has {capacity:.1f}"
+            )
+        return None
+
+    def _gpu_capacity(self, kind: str, machine, host) -> float | None:
+        """GiB of GPU memory slots may use on the target: a pool machine's
+        memory per GPU less its reserve, or a rented type's catalog figure;
+        None when unknown (a bare host or registered machine not in the pool)."""
+        target = _slot_target(kind, machine, host)
+        for m in pool_mod.load_pool().machines:
+            if _is_pool_machine(m, target):
+                return m.gpu_capacity_gb
+        if machine is not None and machine.instance_type:
+            mtype = next((t for t in AWS_CATALOG if t.id == machine.instance_type), None)
+            return mtype.gpu_memory_gb if mtype is not None else None
+        return None
+
     def add_local(
-        self, spec, task: tasks.TaskRecord, role: str, threads: int | None
+        self,
+        spec,
+        task: tasks.TaskRecord,
+        role: str,
+        threads: int | None,
+        *,
+        check_gpu: bool = True,
     ) -> tasks.WorkerRecord:
-        self._check_role(spec, task, role, "local")
+        """A local slot. `check_gpu` False skips the GPU-fit check, for the tag
+        queue, whose placement has already made it (with any override)."""
+        self._check_role(spec, task, role, "local", check_gpu=check_gpu)
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "local"),
             role=role,
@@ -937,12 +1041,14 @@ class WorkerManager:
         host: str | None = None,
         machine: str | None = None,
         threads: int | None,
+        check_gpu: bool = True,
     ) -> tasks.WorkerRecord:
         """An ssh slot on a bare host string, or on one of the task's
-        machines by name (exactly one of the two)."""
+        machines by name (exactly one of the two). `check_gpu` as for
+        add_local."""
         assert (host is None) != (machine is None), "an ssh slot names a host or a machine"
         record = _machine_record(task, machine) if machine is not None else None
-        self._check_role(spec, task, role, "ssh", machine=record)
+        self._check_role(spec, task, role, "ssh", machine=record, host=host, check_gpu=check_gpu)
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "ssh"),
             role=role,
@@ -1127,7 +1233,7 @@ class WorkerManager:
         """Every task's machines by the ownership tag each carries."""
         return {
             _owner(spec, task.tag, m.name): m
-            for spec, task in self._all_tasks()
+            for spec, task in self.all_tasks()
             for m in task.machines
         }
 
@@ -1302,6 +1408,8 @@ class WorkerManager:
         w.desired_state = "running" if run else "paused"
         if run:
             w.finished = False
+            w.failed = None
+            self._crashes.pop(_key(spec, task.tag, worker_id), None)
         tasks.save_task(spec, task)
         start = run and w.role not in task.gates  # a gated slot starts when released
         if w.kind == "local":
@@ -1442,7 +1550,7 @@ class WorkerManager:
         assert m.lease is None, f"{name} is leased by {m.lease.workload}/{m.lease.tag}"
         naming = [
             f"{spec.name}/{task.tag}/{w.worker_id}"
-            for spec, task in self._all_tasks()
+            for spec, task in self.all_tasks()
             for w in task.workers
             if w.machine == name and task.find_machine(name) is None
         ]
@@ -1452,32 +1560,29 @@ class WorkerManager:
 
     def pool_status(self) -> list[dict]:
         """One dict per pool machine: its record, and `occupants`, the slots
-        outside its lease that make it busy (see _occupants). Reads only
+        outside its lease that make it busy (see occupants). Reads only
         remembered observations, like every status request."""
-        tasks_now = list(self._all_tasks())
+        tasks_now = list(self.all_tasks())
         out = []
         for m in pool_mod.load_pool().machines:
-            occupants = self._occupants(m, tasks_now)
+            occupants = self.occupants(m, tasks_now)
             info = asdict(m)
             info["occupants"] = occupants
             info["state"] = "leased" if m.lease else "busy" if occupants else "free"
             out.append(info)
         return out
 
-    def _occupants(self, m: pool_mod.PoolMachine, tasks_now) -> list[str]:
+    def occupants(self, m: pool_mod.PoolMachine, tasks_now) -> list[str]:
         """The slots on pool machine `m`, outside the tag leasing it, that make
         it busy: `workload/tag/worker_id` of each _holds_machine counts.
         Matching an ssh slot to `m` goes by canonical host name, since tags
         spell one machine several ways."""
-        names = pool_mod.host_names(m) if m.kind == "ssh" else set()
         out = []
         for spec, task in tasks_now:
             if m.lease and m.lease.held_by(spec.name, task.tag):
                 continue
             for w in task.workers:
-                if w.kind != m.kind:
-                    continue
-                if m.kind == "ssh" and pool_mod.canonical_host(_ssh_host(task, w)) not in names:
+                if not _is_pool_machine(m, _slot_target(w.kind, None, _slot_host(task, w))):
                     continue
                 if self._holds_machine(spec, task, w):
                     out.append(f"{spec.name}/{task.tag}/{w.worker_id}")
@@ -1536,6 +1641,7 @@ class WorkerManager:
                 # Zero means drained, None means unknown; the Remove dialog
                 # tells them apart.
                 "undelivered": w.undelivered,
+                "failed": w.failed,
             }
             if gated:
                 info["gate_reason"] = task.gates[w.role]
@@ -1543,17 +1649,23 @@ class WorkerManager:
                 alive = self._local_alive(spec, task, w)
                 if not alive and self._local_exit_code(spec, task, w) == 0:
                     _note_finished(w)
-                info["state"] = _local_state(w.desired_state, alive, gated, w.finished)
+                info["state"] = _local_state(
+                    w.desired_state, alive, gated, w.finished, w.failed is not None
+                )
             else:
                 _holds_nothing(spec, task, w)
                 probe = self._probe_container(spec, task, w, observe=observe)
                 alive = probe == "running"
-                info["state"] = _ssh_state(w.desired_state, probe, gated, w.finished)
+                info["state"] = _ssh_state(
+                    w.desired_state, probe, gated, w.finished, w.failed is not None
+                )
                 info["ssh_probe"] = probe  # reconcile keys its enforcement off this
                 info["ssh"] = f"ssh {_ssh_host(task, w)}"
                 reason = self._slot_reason(spec, task, w)
                 if reason and not alive:
                     info["exit_reason"] = reason
+            if w.failed and not alive:
+                info["exit_reason"] = w.failed  # why the tag queue gave up on it
             # Real liveness, for reconcile's desired-vs-observed enforcement.
             info["observed_running"] = alive
             out.append(info)
@@ -1665,7 +1777,7 @@ class WorkerManager:
 
     # ---- reconciliation ----------------------------------------------------
 
-    def _all_tasks(self):
+    def all_tasks(self):
         for spec in workloads.WORKLOADS.values():
             for row in tasks.list_tags(spec):
                 if not row["has_task"]:
@@ -1716,7 +1828,7 @@ class WorkerManager:
         the spend-accrual heartbeat when no browser is polling.
         """
         await self.offload(self._list_fleet)
-        for spec, task in self._all_tasks():
+        for spec, task in self.all_tasks():
             if spec.scheduler:
                 try:
                     await self.offload(self._tick_scheduler, spec, task)
@@ -1846,6 +1958,9 @@ class WorkerManager:
             # A local worker restarts in about a second, so parking it and
             # stopping it are the same thing.
             if intent == RUN and not alive:
+                code = self._local_exit_code(spec, task, w)
+                if code not in (None, 0):
+                    self._note_crash(_key(spec, task.tag, w.worker_id), f"exit {code}")
                 self._spawn_local(spec, task, w)
             elif intent != RUN and alive:
                 self._stop_local(spec, task, w)
@@ -1877,6 +1992,9 @@ class WorkerManager:
             elif probe in ("missing", "stopped") and self._restart_allowed(key):
                 # Unreachable or unobserved: nothing this pass can act on.
                 self._note_restart(key)
+                why = self._exits.get(key, "")
+                if probe == "stopped" and not why.startswith("exit 0:"):
+                    self._note_crash(key, why)
                 self._start_or_replace(machine, name, spec, task, w, probe)
         elif intent == PARK and probe == "running":
             machine.pause_container(name)

@@ -20,6 +20,7 @@ from cloud.ssh_machine import SshMachineError
 
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tasks, worker_stats_figures
 
 # Exception types that describe a bad request or unavailable dependency, not a
@@ -127,6 +128,10 @@ class _MasterBase(tornado.web.RequestHandler):
             self.set_status(400)
             self.write({"error": "; ".join(str(a) for a in e.args) or repr(e)})
 
+    @property
+    def tag_queue(self):
+        return self.settings["tag_queue"]
+
     def task_or_fail(self, spec, tag: str) -> tasks.TaskRecord:
         task = tasks.load_task(spec, tag)
         assert task is not None, f"tag '{tag}' has no task record"
@@ -196,6 +201,15 @@ class TaskHandler(_MasterBase):
                 "spend": spend,
                 "bundle_id": task.bundle_id if task else None,
                 "bundle_drift": self.manager.bundle_drift(task) if task else False,
+                # 1-based place in the tag queue, or None when not queued.
+                "queued": next(
+                    (
+                        i + 1
+                        for i, e in enumerate(queue_mod.load_queue().entries)
+                        if e.key == (spec.name, tag)
+                    ),
+                    None,
+                ),
             }
 
         self.guarded(info)
@@ -416,6 +430,55 @@ class PoolMachineActionHandler(_MasterBase):
         await self.guarded_offload(act)
 
 
+class QueueHandler(_MasterBase):
+    """The tag queue in order (dashboard/tag_queue.py)."""
+
+    async def get(self):
+        await self.guarded_offload(self.tag_queue.status)
+
+
+class EnqueueHandler(_MasterBase):
+    """Queue a tag. Answers {"queued": false, "warnings": [...]} when the
+    operator should confirm first; the form resends with confirm=true."""
+
+    async def post(self):
+        body = self.body()
+
+        def enqueue():
+            override = body.get("memory_override_gb")
+            return self.tag_queue.enqueue(
+                body["workload"],
+                body["tag"],
+                machines=list(body.get("machines") or []),
+                memory_override_gb=float(override) if override not in (None, "") else None,
+                confirm=bool(body.get("confirm")),
+            )
+
+        await self.guarded_offload(enqueue)
+
+
+class QueueActionHandler(_MasterBase):
+    """Dequeue or reorder a queued tag; release or requeue a placed one."""
+
+    async def post(self):
+        body = self.body()
+
+        def act():
+            q, workload, tag, action = self.tag_queue, body["workload"], body["tag"], body["action"]
+            actions = {
+                "dequeue": lambda: q.dequeue(workload, tag),
+                "up": lambda: q.move(workload, tag, -1),
+                "down": lambda: q.move(workload, tag, 1),
+                "release": lambda: q.release(workload, tag),
+                "requeue": lambda: q.requeue(workload, tag),
+            }
+            assert action in actions, f"unknown action '{action}'"
+            actions[action]()
+            return {"ok": True}
+
+        await self.guarded_offload(act)
+
+
 class WorkerActionHandler(_MasterBase):
     async def post(self):
         body = self.body()
@@ -481,6 +544,9 @@ MASTER_ROUTES = [
     (r"/api/task/machines", MachineAddHandler),
     (r"/api/task/machine_action", MachineActionHandler),
     (r"/api/pool", PoolHandler),
+    (r"/api/queue", QueueHandler),
+    (r"/api/queue/enqueue", EnqueueHandler),
+    (r"/api/queue/action", QueueActionHandler),
     (r"/api/pool/machines", PoolMachineAddHandler),
     (r"/api/pool/machine_action", PoolMachineActionHandler),
     (r"/api/cloud/rental_offer", RentalOfferHandler),

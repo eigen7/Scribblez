@@ -50,7 +50,7 @@ def pooled(tmp_path, monkeypatch):
     monkeypatch.setattr(pool_mod, "canonical_host", lambda h: h.split("@", 1)[-1].lower())
     manager = WorkerManager()
     listed: list = []
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter(listed))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter(listed))
     return manager, listed
 
 

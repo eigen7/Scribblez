@@ -93,6 +93,16 @@ class RoleSpec:
 
 
 @dataclass(frozen=True)
+class SlotPlan:
+    """One slot a layout asks for: its role, its engine thread count (None:
+    the worker's default), and its GPU need in GiB (gpu_need)."""
+
+    role: str
+    threads: int | None
+    gpu_gb: float | None
+
+
+@dataclass(frozen=True)
 class WorkloadSpec:
     name: str
     title: str  # human-readable, shown in the dashboard's workload picker
@@ -111,6 +121,17 @@ class WorkloadSpec:
     # generation so a worker restart cannot pick up a newer one. "" leaves the
     # params as validated.
     finalize: str = ""
+    # Dotted path to layout(params, vcpus, generator_threads) -> [SlotPlan]:
+    # the slots the tag queue creates for a tag placed on a machine with
+    # `vcpus` (docs/plans/tag_queue.md §3). `generator_threads` is the pool
+    # machine's override, or None. "" for a workload the queue cannot place.
+    layout: str = ""
+    # Dotted path to gpu_need(params, role) -> GiB | None: the GPU memory one
+    # slot of `role` needs at its peak, from a measured table; None when the
+    # configuration was never measured, 0.0 for a role without a GPU.
+    # Placement refuses an unmeasured GPU role rather than guess; a slot added
+    # by hand is checked only when the figure is known. "" means unmeasured.
+    gpu_need: str = ""
     # data/ subdirectories bucket-delivering workers write into.
     # scripts/cloud_sync.py pulls exactly these bucket prefixes (plus stats/
     # and params/) down to the local mount.

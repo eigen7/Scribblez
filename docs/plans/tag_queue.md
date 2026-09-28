@@ -1,9 +1,10 @@
 # Plan: a tag queue over a machine pool
 
-**Status: proposed, plan-reviewed (2026-09-25), and the operator's calls
-settled (2026-09-28).** Nothing here is built. The prerequisite, #271
-(match eval on rented machines, and finishing match eval once training
-ends), is merged.
+**Status: plan-reviewed (2026-09-25), operator's calls settled
+(2026-09-28), being built:** PR 1 end conditions (#276), PR 2 the pool (#277),
+PR 3 the queue (this plan's §3-5 for localhost and registered machines); PR 4
+rental capacity not yet. The prerequisite, #271 (match eval on rented
+machines, and finishing match eval once training ends), is merged.
 
 **Decision.** The dashboard gets one **machine pool** and one global,
 ordered **tag queue**.
