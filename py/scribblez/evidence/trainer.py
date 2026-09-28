@@ -36,6 +36,7 @@ from pathlib import Path
 
 import torch
 
+from scribblez import params as params_mod
 from scribblez.evidence.checkpoints import EvidenceCheckpoint, load_student, student_config
 from scribblez.evidence.dataset import (
     TrajectoryDataset,
@@ -99,7 +100,7 @@ def store_is_ready(store, params) -> tuple[bool, str]:
     and a held-out pair if one is wanted, unless the store has reached
     `target_pairs`."""
     pairs = complete_pairs(store) if store.is_dir() else []
-    if params.target_pairs and len(pairs) >= params.target_pairs:
+    if params_mod.reached(len(pairs), params.target_pairs):
         return True, ""
     needed = max(1, params.warmup_pairs)
     if len(pairs) < needed:
@@ -161,8 +162,13 @@ def absorb_new_pairs(store, params, train_ds, holdout_ds, ext: str = ".sobs") ->
     return added
 
 
+def _epoch_budget(params) -> str:
+    """The epoch budget as the progress line shows it."""
+    return "unbounded" if params_mod.unbounded(params.train_epochs) else str(params.train_epochs)
+
+
 def epochs_left(params, state: EvidenceTrainState) -> bool:
-    return params.train_epochs == 0 or state.settled_epochs < params.train_epochs
+    return not params_mod.reached(state.settled_epochs, params.train_epochs)
 
 
 def build_optimizer(model, params) -> torch.optim.AdamW:
@@ -342,7 +348,7 @@ def _holdout_metrics(model, device, params, ctx) -> dict:
 
 def _pass_line(epoch, state, params, result, m, lr_now, train_s, settled, ctx) -> str:
     budget = (
-        f"{state.settled_epochs}/{params.train_epochs}"
+        f"{state.settled_epochs}/{_epoch_budget(params)}"
         if settled
         else f"corpus still growing, {ctx['train_ds'].num_positions} positions"
     )

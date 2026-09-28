@@ -135,10 +135,11 @@ class EvidenceTrajectoriesParams:
         "models (the tools refuse the mismatch)",
     )
     target_pairs: int = param(
-        0,
-        "stop generating once the store holds this many pairs (0 = generate until paused). "
-        "Reaching it also tells the trainer its corpus is final; with 0 the trainer "
+        -1,
+        "stop generating once the store holds this many pairs (-1 = generate until paused). "
+        "Reaching it also tells the trainer its corpus is final; with -1 the trainer "
         "treats the corpus as final once no pair has arrived for 15 minutes",
+        end=True,
     )
     # Move proposal training (the train role; scribblez/evidence/trainer.py).
     student_checkpoint: str = param(
@@ -162,8 +163,9 @@ class EvidenceTrajectoriesParams:
     )
     train_epochs: int = param(
         20,
-        "epochs over the finished corpus before the trainer stops (0 = run until paused); "
+        "epochs over the finished corpus before the trainer stops (-1 = run until paused); "
         "passes over a still-growing corpus do not spend the budget",
+        end=True,
     )
     warmup_pairs: int = param(50, "pairs the store must hold before training starts")
     holdout_every: int = param(

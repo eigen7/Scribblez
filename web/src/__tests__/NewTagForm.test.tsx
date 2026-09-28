@@ -16,9 +16,9 @@ const workload: Workload = {
   roles: [],
   primary_params: ['optimizer'],
   params: [
-    { name: 'optimizer', kind: 'str', default: 'wsd', help: 'the arm', choices: ['wsd', 'schedule_free'] },
-    { name: 'lr', kind: 'float', default: 0, help: "0 = the arm's own default", choices: null },
-    { name: 'batch_size', kind: 'int', default: 256, help: 'batch', choices: null },
+    { name: 'optimizer', kind: 'str', default: 'wsd', help: 'the arm', choices: ['wsd', 'schedule_free'], end: false },
+    { name: 'lr', kind: 'float', default: 0, help: "0 = the arm's own default", choices: null, end: false },
+    { name: 'batch_size', kind: 'int', default: 256, help: 'batch', choices: null, end: false },
   ],
   profiles: {},
   default_profile: '',
@@ -68,6 +68,50 @@ describe('NewTagForm with a closed parameter', () => {
       tag: 'tryit',
       params: { optimizer: 'schedule_free', lr: 0.0003, batch_size: 256 },
     }));
+  });
+});
+
+// An end parameter (a budget; -1 runs until paused) with its forever checkbox.
+const budgeted: Workload = {
+  ...workload,
+  primary_params: ['max_rows'],
+  params: [
+    ...workload.params,
+    { name: 'max_rows', kind: 'int', default: -1, help: 'row budget', choices: null, end: true },
+  ],
+};
+
+describe('NewTagForm end parameter', () => {
+  beforeEach(() => {
+    postJSON.mockReset();
+    window.localStorage.clear();
+  });
+
+  const rows = () => screen.getByLabelText('max_rows') as HTMLInputElement;
+  const forever = () => screen.getByLabelText('max_rows forever') as HTMLInputElement;
+
+  it('starts as forever at a -1 default, its budget box disabled', () => {
+    setup(budgeted);
+    expect(forever().checked).toBe(true);
+    expect(rows().disabled).toBe(true);
+  });
+
+  it('submits a typed budget, and -1 once forever is checked again', async () => {
+    postJSON.mockResolvedValue({ tag: 'tryit' });
+    setup(budgeted);
+    fireEvent.click(forever());
+    expect(rows().disabled).toBe(false);
+    fireEvent.change(rows(), { target: { value: '24000000' } });
+    fireEvent.click(createButton());
+    await waitFor(() => expect(postJSON).toHaveBeenLastCalledWith('/api/tasks', expect.objectContaining({
+      params: expect.objectContaining({ max_rows: 24000000 }),
+    })));
+    fireEvent.click(forever());
+    expect(rows().disabled).toBe(true);
+    fireEvent.click(createButton());
+    await waitFor(() => expect(postJSON).toHaveBeenLastCalledWith('/api/tasks', expect.objectContaining({
+      params: expect.objectContaining({ max_rows: -1 }),
+    })));
   });
 });
 

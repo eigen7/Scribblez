@@ -526,11 +526,12 @@ def _params(**kw):
     return EvidenceTrajectoriesParams(**kw)
 
 
-def test_store_readiness_waits_for_warmup_and_a_holdout_unless_at_target(tmp_path):
+@pytest.mark.parametrize("unbounded", [-1, 0])  # 0: the legacy alias
+def test_store_readiness_waits_for_warmup_and_a_holdout_unless_at_target(tmp_path, unbounded):
     from scribblez.evidence import trainer
 
     store = tmp_path / "slogs"
-    params = _params(warmup_pairs=3, holdout_every=4, target_pairs=0)
+    params = _params(warmup_pairs=3, holdout_every=4, target_pairs=unbounded)
     assert not trainer.store_is_ready(store, params)[0]  # no store yet
     stems = [f"{1786038233456124324 + i * 4_800_000_000}-local-0" for i in range(12)]
     for s in stems[:2]:

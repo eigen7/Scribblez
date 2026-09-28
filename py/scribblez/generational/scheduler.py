@@ -86,9 +86,8 @@ def tick_for_task(spec, task, hooks):
 
 
 def _trainer_done(paths: TagPaths, max_rows: int) -> bool:
-    """Whether the trainer's published cursor has reached `max_rows` (0 =
-    no limit)."""
-    return max_rows > 0 and lifecycle.read_train_state(paths).get("rows_trained", 0) >= max_rows
+    """Whether the trainer's published cursor has reached `max_rows`."""
+    return params_mod.reached(lifecycle.read_train_state(paths).get("rows_trained", 0), max_rows)
 
 
 def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn = _header_games):

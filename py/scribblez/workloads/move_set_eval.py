@@ -143,17 +143,19 @@ class MoveSetEvalParams:
     )
     target_pairs: int = param(
         600,
-        "stop generating once the store holds this many pairs (0 = generate until paused). "
+        "stop generating once the store holds this many pairs (-1 = generate until paused). "
         "Reaching it also tells the trainer its corpus is final, so a tag with both workers "
         "started runs to completion unattended",
+        end=True,
     )
     # Student training (the train role; scribblez/move_set_eval/trainer.py).
     train_epochs: int = param(
         20,
-        "epochs over the finished corpus before the trainer stops (0 = run until paused). "
+        "epochs over the finished corpus before the trainer stops (-1 = run until paused). "
         "Passes taken while the store is still growing do not spend this budget, so it "
-        "always buys passes over the whole corpus. With target_pairs = 0 the corpus counts "
+        "always buys passes over the whole corpus. With target_pairs = -1 the corpus counts "
         "as finished once no pair has arrived for 15 minutes",
+        end=True,
     )
     warmup_pairs: int = param(
         100,
