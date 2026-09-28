@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getJSON, postJSON } from '../../lib/api';
 import { Button } from './MasterApp';
+import { RentalOffer, rateText } from './rentalOffer';
 
 // The machine pool (docs/plans/tag_queue.md §2): the machines the tag queue
 // places tags on, owned by the pool rather than by any tag. Each row shows the
@@ -28,7 +29,6 @@ export type PoolMachine = {
 
 // Machines the pool may rent (pool.Capacity): up to `cap` of `instance_type`.
 export type Capacity = { name: string; instance_type: string; spot: boolean; cap: number };
-type CatalogType = { id: string; vcpus: number; gpu_count: number; gpu: string; cost_per_hr: number };
 
 const POLL_MS = 5000;
 const cell = { padding: '6px 14px 6px 0', fontSize: 13.5, verticalAlign: 'top' } as const;
@@ -123,7 +123,7 @@ function CapacitySection({ capacity, machines, post, busy }: {
   capacity: Capacity[]; machines: PoolMachine[];
   post: (url: string, body: unknown) => void; busy: boolean;
 }) {
-  const [types, setTypes] = useState<CatalogType[]>([]);
+  const [offer, setOffer] = useState<RentalOffer | null>(null);
   // Why the catalog could not be read (no cloud credentials, say), as the task
   // view's rent form reports it.
   const [unavailable, setUnavailable] = useState<string | null>(null);
@@ -133,9 +133,9 @@ function CapacitySection({ capacity, machines, post, busy }: {
   const [cap, setCap] = useState('1');
   useEffect(() => {
     getJSON('/api/cloud/rental_offer')
-      .then((d) => {
-        const gpus = d.types.filter((t: CatalogType) => t.gpu_count > 0);
-        setTypes(gpus);
+      .then((d: RentalOffer) => {
+        const gpus = d.types.filter((t) => t.gpu_count > 0);
+        setOffer({ ...d, types: gpus });
         if (gpus.length) setTypeId(gpus[0].id);
         else setUnavailable('the provider offers no GPU types');
       })
@@ -157,7 +157,7 @@ function CapacitySection({ capacity, machines, post, busy }: {
               return (
                 <tr key={c.name} style={{ borderTop: '1px solid #e6eaef' }}>
                   <td style={cell}><b>{c.name}</b></td>
-                  <td style={cell}>{c.instance_type}{c.spot ? ' spot' : ''}</td>
+                  <td style={cell}>{c.instance_type}{c.spot ? ' spot' : ''}{offer && `, ${rateText(offer, c.instance_type, c.spot)}`}</td>
                   <td style={cell} data-testid={`capacity-${c.name}`}>{rented} of {c.cap} rented</td>
                   <td style={{ ...cell, whiteSpace: 'nowrap' }}>
                     <span style={{ display: 'inline-flex', gap: 6 }}>
@@ -187,8 +187,8 @@ function CapacitySection({ capacity, machines, post, busy }: {
         </label>
         <label style={{ fontSize: 13 }}>type<br />
           <select style={inputStyle} aria-label="capacity type" value={typeId} onChange={(e) => setTypeId(e.target.value)}>
-            {types.map((t) => (
-              <option key={t.id} value={t.id}>{t.id} ({t.vcpus} vCPU, {t.gpu}, ${t.cost_per_hr}/hr)</option>
+            {offer?.types.map((t) => (
+              <option key={t.id} value={t.id}>{t.id} ({t.vcpus} vCPU, {t.gpu}, {rateText(offer, t.id, spot)})</option>
             ))}
           </select>
         </label>
