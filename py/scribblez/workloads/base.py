@@ -66,11 +66,13 @@ class RoleSpec:
     # training stack. Independent of `gpu`: match eval uses a GPU on the engine
     # image.
     runtime: str = RUNTIME_ENGINE
-    # Dotted path to a controller-side tick, dispatch(spec, tag, params, slots),
-    # for a role whose work the controller assigns and whose results it
-    # collects (match eval). `slots` holds one scribblez/dashboard/slot_files.py
+    # Dotted path to a controller-side tick, dispatch(spec, tag, params, slots)
+    # -> bool, for a role whose work the controller assigns and whose results
+    # it collects (match eval). `slots` holds one scribblez/dashboard/slot_files.py
     # handle per running slot, the controller's only way into a worker's
-    # filesystem. "" for roles that pick their own work, like generators.
+    # filesystem. The tick returns whether work may still be outstanding; once
+    # it does not and the trainer has finished, the dashboard finishes the
+    # role. "" for roles that pick their own work, like generators.
     dispatch: str = ""
     # Dotted path to a controller-side tick, ingest(spec, tag), that writes what
     # the role has delivered under the tag into dashboard.db (a trainer's

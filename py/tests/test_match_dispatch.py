@@ -306,3 +306,42 @@ def test_assign_delivers_a_move_proposal_pair_and_clears_it_when_spent(tmp_path)
     dispatch._assign(paths, conn, 5, _slot(paths))
     assert sorted(p.name for p in inbox.iterdir()) == [paths.onnx_path(10).name, "step"]
     assert list((inbox / "step").iterdir()) == []
+
+
+def _cursor(paths: TagPaths, generation_index: int):
+    paths.train_state_path.write_text(json.dumps({"generation_index": generation_index}))
+
+
+def test_tick_reports_work_owed_until_every_due_generation_is_recorded(tmp_path):
+    """The dashboard finishes the role once nothing is owed and the trainer is
+    done, so a due generation without a row -- assigned, being played, or its
+    result in transit -- must keep the answer at True."""
+    paths = _paths(tmp_path)
+    db.connect(paths.dashboard_db).close()
+    for gen in (5, 6):
+        paths.onnx_path(gen).touch()
+    _cursor(paths, 7)
+    params = PositionEvalParams(match_every_generations=5)
+
+    assert dispatch.tick(_Spec(tmp_path), "t", params, [_slot(paths)])  # gen 5 assigned
+    _deliver(paths, _result(5))
+    assert not dispatch.tick(_Spec(tmp_path), "t", params, [_slot(paths)])  # recorded
+
+
+def test_tick_reports_work_owed_while_exports_trail_the_trainer(tmp_path):
+    """A remote trainer's last export can still be on its way after its slot
+    is seen to finish; until it lands, the match due on it is not visible."""
+    paths = _paths(tmp_path)
+    db.connect(paths.dashboard_db).close()
+    paths.onnx_path(4).touch()
+    _cursor(paths, 11)  # the trainer exported up to gen 10, which is due
+    params = PositionEvalParams(match_every_generations=5)
+    assert dispatch.tick(_Spec(tmp_path), "t", params, [_slot(paths)])
+
+
+def test_tick_owes_nothing_when_match_eval_is_disabled(tmp_path):
+    paths = _paths(tmp_path)
+    db.connect(paths.dashboard_db).close()
+    paths.onnx_path(10).touch()
+    params = PositionEvalParams(match_every_generations=0)
+    assert not dispatch.tick(_Spec(tmp_path), "t", params, [_slot(paths)])

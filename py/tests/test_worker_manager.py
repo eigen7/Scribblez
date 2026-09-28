@@ -455,11 +455,45 @@ def test_renting_records_the_instance_and_its_key_material(rented, spec, task, t
     assert provider.instances["i-1"].owner == f"{spec.name}/t/m1"
 
 
-def test_a_dispatch_role_is_refused_on_a_rented_machine(rented, manager, task):
-    """A rented slot delivers through the bucket, which a dispatch-driven
-    role's results never come back through."""
-    with pytest.raises(AssertionError, match="cannot run on rented machine 'm1'"):
-        manager.add_ssh(_GpuRoles(), task, "match_eval", machine="m1", threads=None)
+def test_a_dispatch_role_on_a_rented_machine_is_collected_over_ssh(rented, manager, task):
+    """Dispatch reads results only from the slot's filesystem, so a rented
+    match-eval slot keeps them there for the ssh pull while the machine's other
+    slots deliver through the bucket."""
+    match = manager.add_ssh(_GpuRoles(), task, "match_eval", machine="m1", threads=None)
+    assert workers_mod._slot_sink(_GpuRoles(), task, match) == "local"
+    gen = tasks.WorkerRecord(
+        worker_id="g", role="generate", kind="ssh", desired_state="paused", machine="m1"
+    )
+    assert workers_mod._slot_sink(POSITION_EVAL_SPEC, task, gen) == "r2"
+
+
+def _dispatch_task(train_finished: bool) -> tasks.TaskRecord:
+    """A position_eval task with a trainer slot and a running match slot."""
+    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
+    train = tasks.WorkerRecord(worker_id="tr", role="train", kind="local", desired_state="paused")
+    train.finished = train_finished
+    match = tasks.WorkerRecord(
+        worker_id="me", role="match_eval", kind="local", desired_state="running"
+    )
+    task.workers = [train, match]
+    return task
+
+
+@pytest.mark.parametrize(
+    ("outstanding", "train_finished", "finishes"),
+    [(False, True, True), (True, True, False), (False, False, False)],
+)
+def test_dispatch_finishes_its_role_once_the_trainer_is_done_and_nothing_is_owed(
+    manager, monkeypatch, outstanding, train_finished, finishes
+):
+    """An idle match slot would otherwise keep its rented machine up forever."""
+    task = _dispatch_task(train_finished)
+    monkeypatch.setattr(workers_mod.workloads, "resolve", lambda path: lambda *a: outstanding)
+    role = POSITION_EVAL_SPEC.role("match_eval")
+    manager._dispatch_role(POSITION_EVAL_SPEC, task, role, [])
+    match = task.worker("me")
+    assert match.finished == finishes
+    assert match.desired_state == ("paused" if finishes else "running")
 
 
 def test_a_rented_machine_without_a_name_gets_one(rented, manager, spec, task):
