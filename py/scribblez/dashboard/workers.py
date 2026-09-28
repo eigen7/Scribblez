@@ -256,6 +256,40 @@ def _accrue_machine(m: tasks.MachineRecord, billing: bool):
         m.observed_up = billing
 
 
+def _record_instance(
+    record: tasks.MachineRecord, provider, inst: Instance, mtype, *, spot: bool, known_hosts: Path
+):
+    """Fill `record` from a rented instance just launched or adopted: its
+    address and key material, type, rate and launch time, and start its spend
+    accrual. `known_hosts` is emptied, since a new instance has a new host key.
+    Until the instance has an address its host is a placeholder unique to it,
+    so two machines still coming up never read as the same host."""
+    known_hosts.parent.mkdir(parents=True, exist_ok=True)
+    known_hosts.write_text("")
+    record.provider = provider.name
+    record.host = f"{provider.ssh_user}@{inst.address or f'pending-{inst.id}'}"
+    record.identity_file = provider.identity_file
+    record.known_hosts_file = str(known_hosts)
+    record.arch = mtype.arch
+    record.gpu_count = mtype.gpu_count
+    record.instance_id = inst.id
+    record.instance_type = mtype.id
+    record.spot = spot
+    record.region = getattr(provider, "region", None)
+    record.cost_per_hr = inst.cost_per_hr if inst.cost_per_hr is not None else mtype.cost_per_hr
+    record.launched_at = inst.launched_at or time.time()
+    _accrue_machine(record, True)
+
+
+def _moved_host(record: tasks.MachineRecord, inst: Instance | None) -> str | None:
+    """`record`'s host at `inst`'s current address when it has moved (a
+    stop/start, or the first address after launch); None otherwise."""
+    if inst is None or not inst.address:
+        return None
+    host = f"{record.host.split('@')[0]}@{inst.address}"
+    return host if host != record.host else None
+
+
 def _rented_state(m: tasks.MachineRecord, inst: Instance | None, probe: str | None) -> str:
     """A rented machine's display state, from the provider's listing and, once
     the instance runs, its ssh probe:
@@ -1125,25 +1159,9 @@ class WorkerManager:
         # Add it to the cached listing now; otherwise the machine reads `gone`
         # until the next pass relists.
         self._instances[0][inst.id] = inst
+        m = tasks.MachineRecord(name=name, provider=provider.name, host="")
         known_hosts = MACHINES_DIR / spec.name / task.tag / name / "known_hosts"
-        known_hosts.parent.mkdir(parents=True, exist_ok=True)
-        known_hosts.write_text("")  # a relaunch is a new name, so never a stale key
-        m = tasks.MachineRecord(
-            name=name,
-            provider=provider.name,
-            host=f"{provider.ssh_user}@{inst.address or 'pending'}",
-            identity_file=provider.identity_file,
-            known_hosts_file=str(known_hosts),
-            arch=mtype.arch,
-            gpu_count=mtype.gpu_count,
-            instance_id=inst.id,
-            instance_type=mtype.id,
-            spot=spot,
-            region=getattr(provider, "region", None),
-            cost_per_hr=inst.cost_per_hr if inst.cost_per_hr is not None else mtype.cost_per_hr,
-            launched_at=inst.launched_at or time.time(),
-        )
-        _accrue_machine(m, True)
+        _record_instance(m, provider, inst, mtype, spot=spot, known_hosts=known_hosts)
         task.machines.append(m)
         tasks.save_task(spec, task)
         return m
@@ -1297,12 +1315,9 @@ class WorkerManager:
             pooled = any(m is x for x in leased)
             key = _machine_key(spec, task.tag, m.name)
             inst = index.get(m.instance_id) if m.instance_id is not None else None
-            if (
-                inst is not None
-                and inst.address
-                and m.host != f"{m.host.split('@')[0]}@{inst.address}"
-            ):
-                m.host = f"{m.host.split('@')[0]}@{inst.address}"  # it moved on a stop/start
+            moved = _moved_host(m, inst)
+            if moved is not None:
+                m.host = moved
             probe, at = self._machine_probes.get(key, (None, 0.0))
             if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
                 # A probe is worth making only on a machine that can answer.

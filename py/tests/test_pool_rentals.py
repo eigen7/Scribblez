@@ -260,3 +260,111 @@ def test_capacity_names_and_caps_are_validated(renting):
     assert pool_mod.load_pool().capacity[0].cap == 3
     manager.remove_capacity("g6")
     assert pool_mod.load_pool().capacity == []
+
+
+def test_a_listing_failure_does_not_stall_the_queue(renting):
+    """AWS throttling or expired credentials: the rentals step skips this pass,
+    and the queue's leases still advance."""
+    q, manager, provider, enqueue = renting
+    enqueue("a")
+    q.tick()
+    a = tasks.load_task(SPEC, "a")
+    for w in a.workers:
+        w.finished, w.desired_state = True, "paused"
+
+    def throttled():
+        raise ProviderError("RequestLimitExceeded")
+
+    provider.describe = throttled
+    manager._instances = ({}, 0.0)
+    q.tick()
+    assert _pool_machine("g6-1").lease.phase == "releasing"
+
+
+def test_a_rental_whose_instance_vanished_requeues_its_tag(renting):
+    """Terminated outside the dashboard (the EC2 console): the slots go without
+    a drain (their containers went with the instance), the spend is retired,
+    the machine is dropped, and the tag is back at the head of the queue with
+    its eligibility."""
+    q, manager, provider, enqueue = renting
+    enqueue("a")
+    queue = queue_mod.load_queue()
+    queue.entry("position_eval", "a").memory_override_gb = 18.0
+    queue_mod.save_queue(queue)
+    q.tick()
+    pool = pool_mod.load_pool()
+    record = pool.machine("g6-1").machine
+    record.launched_at, record.spend = 0.0, 2.0  # long past its boot grace
+    pool_mod.save_pool(pool)
+    provider.instances["i-1"].state = "terminated"
+    manager._instances = ({}, 0.0)
+    q.tick()
+    assert _pool_machine("g6-1") is None
+    a = tasks.load_task(SPEC, "a")
+    assert a.workers == [] and a.retired_spend == pytest.approx(2.0, abs=1e-3)
+    (entry,) = queue_mod.load_queue().entries
+    assert entry.tag == "a" and entry.memory_override_gb == 18.0
+
+
+def test_a_just_launched_instance_missing_from_the_listing_is_not_gone(renting):
+    q, manager, provider, enqueue = renting
+    enqueue("a")
+    q.tick()
+    del provider.instances["i-1"]  # an eventually consistent listing
+    manager._instances = ({}, 0.0)
+    q.tick()
+    assert _pool_machine("g6-1").lease.tag == "a"
+
+
+def test_removing_an_unleased_rental_terminates_it(renting):
+    q, manager, provider, enqueue = renting
+    enqueue("a")
+    q.tick()
+    pool = pool_mod.load_pool()
+    pool.machine("g6-1").lease = None
+    pool_mod.save_pool(pool)
+    tasks.load_task(SPEC, "a").workers.clear()  # say its slots were removed
+    manager.remove_pool_machine("g6-1")
+    assert ("terminate", "i-1") in provider.calls
+    assert _pool_machine("g6-1") is None
+
+
+def _record_without_instance(q, capacity: str | None):
+    pool = pool_mod.load_pool()
+    m = q._rentals.prospect(pool.capacity[0])
+    m.name = m.machine.name = "g6-1"
+    m.capacity = capacity
+    m.lease = Lease("position_eval", "a", "reserved", 0.0)
+    pool.machines.append(m)
+    pool_mod.save_pool(pool)
+
+
+def test_a_recorded_rental_with_no_instance_is_launched(renting):
+    """The dashboard died between recording the machine and launching it."""
+    q, _, provider, enqueue = renting
+    enqueue("a")
+    _record_without_instance(q, "g6")
+    q.tick()
+    assert provider.calls[0] == ("launch", "pool/g6-1")
+    assert _pool_machine("g6-1").machine.instance_id == "i-1"
+
+
+def test_a_recorded_rental_whose_capacity_is_gone_is_dropped(renting):
+    q, manager, provider, enqueue = renting
+    enqueue("a")
+    _record_without_instance(q, "retired")
+    q._rentals.reconcile(pool_mod.load_pool())
+    assert _pool_machine("g6-1") is None
+    assert not any(c[0] == "launch" for c in provider.calls)
+
+
+def test_the_task_view_does_not_accrue_a_pool_rentals_spend(renting, monkeypatch):
+    """Only the pool's own step accrues a rental; the leasing task's machine
+    status must not accrue it a second time."""
+    q, manager, _, enqueue = renting
+    enqueue("a")
+    q.tick()
+    accrued = []
+    monkeypatch.setattr(workers_mod, "_accrue_machine", lambda m, billing: accrued.append(m.name))
+    (info,) = manager.machine_status(SPEC, tasks.load_task(SPEC, "a"), observe=True)
+    assert info["pool"] is True and accrued == []

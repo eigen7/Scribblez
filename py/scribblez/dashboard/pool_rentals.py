@@ -31,11 +31,15 @@ from cloud.providers.base import LaunchRequest, ProviderError
 from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import tasks
 from scribblez.dashboard.pool import Capacity, Hardware, Lease, Pool, PoolMachine
+from scribblez.dashboard.queue import QueueEntry
 from scribblez.dashboard.workers import (
+    BOOT_GRACE_SECONDS,
     IDLE_STOP_SECONDS,
     MACHINES_DIR,
     WorkerManager,
     _accrue_machine,
+    _moved_host,
+    _record_instance,
 )
 
 # An unleased rented machine is terminated after this long, like a task's
@@ -91,14 +95,21 @@ class PoolRentals:
 
     # ---- renting -------------------------------------------------------------
 
-    def rent(self, cap: Capacity, pool: Pool, workload: str, tag: str) -> PoolMachine:
-        """Rent a machine under `cap` for (workload, tag): record it with a
-        reserved lease, then launch. A refused launch removes the record and
-        raises with the provider's explanation."""
+    def rent(self, cap: Capacity, pool: Pool, entry: QueueEntry) -> PoolMachine:
+        """Rent a machine under `cap` for the queued `entry`: record it with a
+        reserved lease carrying the entry's eligibility, then launch. A refused
+        launch removes the record and raises with the provider's explanation."""
         m = self.prospect(cap)
         m.name = _next_name(pool, cap.name)
         m.machine.name = m.name
-        m.lease = Lease(workload, tag, "reserved", time.time())
+        m.lease = Lease(
+            entry.workload,
+            entry.tag,
+            "reserved",
+            time.time(),
+            machines=list(entry.machines),
+            memory_override_gb=entry.memory_override_gb,
+        )
         pool.machines.append(m)
         pool_mod.save_pool(pool)
         try:
@@ -121,22 +132,9 @@ class PoolRentals:
     def _adopt(self, m: PoolMachine, inst, spot: bool):
         """Make `inst` the instance behind rented pool machine `m`."""
         provider = self._m._provider()
-        known_hosts = MACHINES_DIR / "pool" / m.name / "known_hosts"
-        known_hosts.parent.mkdir(parents=True, exist_ok=True)
-        known_hosts.write_text("")  # a new instance: never a stale key
         mtype = next(t for t in provider.catalog() if t.id == inst.type_id)
-        record = m.machine
-        record.provider = provider.name
-        record.host = f"{provider.ssh_user}@{inst.address or 'pending'}"
-        record.identity_file = provider.identity_file
-        record.known_hosts_file = str(known_hosts)
-        record.instance_id = inst.id
-        record.instance_type = inst.type_id
-        record.spot = spot
-        record.region = getattr(provider, "region", None)
-        record.cost_per_hr = inst.cost_per_hr if inst.cost_per_hr is not None else mtype.cost_per_hr
-        record.launched_at = inst.launched_at or time.time()
-        _accrue_machine(record, True)
+        known_hosts = MACHINES_DIR / "pool" / m.name / "known_hosts"
+        _record_instance(m.machine, provider, inst, mtype, spot=spot, known_hosts=known_hosts)
 
     # ---- the pass ------------------------------------------------------------
 
@@ -146,7 +144,13 @@ class PoolRentals:
         rented = [m for m in pool.machines if m.capacity is not None]
         if not rented:
             return
-        index = self._m._instance_index(True)
+        try:
+            index = self._m._instance_index(True)
+        except Exception as e:  # noqa: BLE001 -- throttling, expired credentials, no network
+            # Without a listing nothing here can be decided; the queue's other
+            # steps (owned machines, placement) must still run this pass.
+            print(f"pool rentals: listing failed: {e}")
+            return
         for m in list(rented):
             try:
                 self._reconcile_one(m, pool, index)
@@ -163,11 +167,12 @@ class PoolRentals:
         if inst is None or inst.state == "terminated":
             if m.lease is None:
                 pool.machines.remove(m)  # terminated and unleased: nothing left to track
-            else:
-                m.lease.reason = "its instance is gone"
+            # A leased one is ended by the tag queue (is_gone), which also owns
+            # its tag's slots.
             return
-        if inst.address and record.host != f"{record.host.split('@')[0]}@{inst.address}":
-            record.host = f"{record.host.split('@')[0]}@{inst.address}"  # moved on a stop/start
+        moved = _moved_host(record, inst)
+        if moved is not None:
+            record.host = moved
         _accrue_machine(record, inst.state in BILLING)
         provider = self._m._provider()
         if m.lease is None:
@@ -186,6 +191,19 @@ class PoolRentals:
             self._m._note_restart(f"pool:{m.name}")
             provider.start(record.instance_id)
             record.launched_at = time.time()
+
+    def is_gone(self, m: PoolMachine) -> bool:
+        """Whether rented pool machine `m`'s instance no longer exists, from
+        the last listing: terminated outside the dashboard, say. Not within
+        BOOT_GRACE_SECONDS of its launch, when an eventually consistent listing
+        may simply not show it yet."""
+        record = m.machine
+        if m.capacity is None or record.instance_id is None:
+            return False
+        if time.time() - (record.launched_at or 0.0) < BOOT_GRACE_SECONDS:
+            return False
+        inst = self._m._instance_index(False).get(record.instance_id)
+        return inst is None or inst.state == "terminated"
 
     def _recover_launch(self, m: PoolMachine, pool: Pool, index: dict):
         """A machine recorded without an instance: a launch a crash cut short,

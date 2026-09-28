@@ -124,6 +124,9 @@ function CapacitySection({ capacity, machines, post, busy }: {
   post: (url: string, body: unknown) => void; busy: boolean;
 }) {
   const [types, setTypes] = useState<CatalogType[]>([]);
+  // Why the catalog could not be read (no cloud credentials, say), as the task
+  // view's rent form reports it.
+  const [unavailable, setUnavailable] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [typeId, setTypeId] = useState('');
   const [spot, setSpot] = useState(true);
@@ -134,8 +137,9 @@ function CapacitySection({ capacity, machines, post, busy }: {
         const gpus = d.types.filter((t: CatalogType) => t.gpu_count > 0);
         setTypes(gpus);
         if (gpus.length) setTypeId(gpus[0].id);
+        else setUnavailable('the provider offers no GPU types');
       })
-      .catch(() => {});  // no credentials: the section says so by listing no types
+      .catch((e) => setUnavailable(String(e.message ?? e)));
   }, []);
   const act = (body: object) => post('/api/pool/capacity', body);
   return (
@@ -171,6 +175,11 @@ function CapacitySection({ capacity, machines, post, busy }: {
           </tbody>
         </table>
       )}
+      {unavailable && (
+        <div style={{ fontSize: 13, color: '#a05a00', marginBottom: 6 }}>
+          renting unavailable: {unavailable}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <label style={{ fontSize: 13 }}>name<br />
           <input style={{ ...inputStyle, width: 90 }} aria-label="capacity name" value={name}
@@ -190,7 +199,7 @@ function CapacitySection({ capacity, machines, post, busy }: {
           <input style={{ ...inputStyle, width: 40 }} aria-label="capacity cap" value={cap}
             onChange={(e) => setCap(e.target.value)} />
         </label>
-        <Button label="Add capacity" disabled={busy || !name.trim() || !typeId}
+        <Button label="Add capacity" disabled={busy || !name.trim() || !typeId || !cap.trim()}
           onClick={() => act({ action: 'add', name: name.trim(), instance_type: typeId, spot, cap })} />
       </div>
     </div>

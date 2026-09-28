@@ -502,11 +502,15 @@ class PoolCapacityHandler(_MasterBase):
         def act():
             name, action = (body.get("name") or "").strip(), body["action"]
             if action == "add":
+                cap = _number(body, "cap", int)
+                assert cap is not None, "cap: a number is required"
                 self.manager.add_capacity(
-                    name, body["instance_type"], spot=bool(body.get("spot")), cap=int(body["cap"])
+                    name, body["instance_type"], spot=bool(body.get("spot")), cap=cap
                 )
             elif action == "set_cap":
-                self.manager.set_capacity_cap(name, int(body["cap"]))
+                cap = _number(body, "cap", int)
+                assert cap is not None, "cap: a number is required"
+                self.manager.set_capacity_cap(name, cap)
             elif action == "remove":
                 self.manager.remove_capacity(name)
             else:

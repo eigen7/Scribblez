@@ -135,6 +135,26 @@ describe('rental capacity', () => {
   });
 });
 
+describe('rental capacity without a provider', () => {
+  beforeEach(() => {
+    getJSON.mockReset();
+    postJSON.mockReset();
+  });
+
+  it('says why renting is unavailable and will not add without a cap', async () => {
+    getJSON.mockImplementation((url: string) => (
+      url === '/api/cloud/rental_offer'
+        ? Promise.reject(new Error('no cloud credentials'))
+        : Promise.resolve(url === '/api/queue' ? { entries: [] } : { machines: [], capacity: [] })
+    ));
+    render(<PoolView />);
+    await waitFor(() => expect(screen.getByText('renting unavailable: no cloud credentials')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('capacity name'), { target: { value: 'g6' } });
+    fireEvent.change(screen.getByLabelText('capacity cap'), { target: { value: '' } });
+    expect((screen.getByText('Add capacity').closest('button') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
 describe('PoolView row actions', () => {
   beforeEach(() => {
     getJSON.mockReset();

@@ -41,6 +41,7 @@ from scribblez.dashboard.workers import (
     WorkerManager,
     _bucket_trainer,
     _container_name,
+    _machine_key,
     _machine_link,
     _slot_sink,
     _ssh_machine,
@@ -77,6 +78,20 @@ def _lookup(workload: str, tag: str):
 
 def _params(spec, task: tasks.TaskRecord):
     return params_mod.validate(spec.params_cls, task.params)
+
+
+def _requeued(lease: Lease, task: tasks.TaskRecord) -> QueueEntry:
+    """The queue entry a released lease's tag goes back in with: the lease's
+    eligibility, and the task's pinned bundle if it has one."""
+    bundle = queue_mod.BUNDLE_READY if task.bundle_id else queue_mod.BUNDLE_NONE
+    return QueueEntry(
+        lease.workload,
+        lease.tag,
+        time.time(),
+        list(lease.machines),
+        lease.memory_override_gb,
+        bundle,
+    )
 
 
 class TagQueue:
@@ -401,7 +416,7 @@ class TagQueue:
                 if placement.refusal(*params[e.key], e, self._rentals.prospect(c)) is not None:
                     continue
                 try:
-                    m = self._rentals.rent(c, pool, e.workload, e.tag)
+                    m = self._rentals.rent(c, pool, e)
                 except AssertionError as ex:  # the provider refused: quota, capacity
                     self._rent_refused[c.name] = (str(ex), time.time() + RENT_RETRY_SECONDS)
                     continue
@@ -459,6 +474,9 @@ class TagQueue:
             m.lease = None
             pool_mod.save_pool(pool)
             return
+        if self._rentals.is_gone(m):
+            self._lose_rental(m, pool, queue, spec, task)
+            return
         phase = m.lease.phase
         if phase == RESERVED:
             self._start_slots(m, pool)
@@ -472,6 +490,25 @@ class TagQueue:
             self._finish_release(m, pool, queue)
         elif phase == HELD and self._wanted(m, queue):
             self._start_release(m, pool, m.lease.reason)
+
+    def _lose_rental(self, m: PoolMachine, pool: Pool, queue: Queue, spec, task):
+        """End the lease of a rental whose instance is gone: its containers
+        went with the instance, so the slots are removed outright rather than
+        drained, the lease's spend is retired, and the tag goes back to the
+        head of the queue with its eligibility (its trainer resumes from its
+        checkpoint wherever it lands next)."""
+        key = _machine_key(spec, task.tag, m.name)
+        self._m._machine_states[key] = "gone"  # remove_worker skips a gone machine's probe
+        for w in list(task.workers):
+            self._m.remove_worker(spec, task, w.worker_id)
+        task.retired_spend += pool_mod.lease_spend(m)
+        tasks.save_task(spec, task)
+        lease = m.lease
+        pool.machines.remove(m)
+        pool_mod.save_pool(pool)
+        queue.entries.insert(0, _requeued(lease, task))
+        queue_mod.save_queue(queue)
+        print(f"tag queue: {m.name}'s instance is gone; {lease.workload}/{lease.tag} requeued")
 
     def _failure(self, spec, task) -> str | None:
         """The first slot that crashed FAIL_AFTER times within the window, as
@@ -540,16 +577,7 @@ class TagQueue:
         m.lease = None
         pool_mod.save_pool(pool)
         if lease.requeue:
-            bundle = queue_mod.BUNDLE_READY if task.bundle_id else queue_mod.BUNDLE_NONE
-            entry = QueueEntry(
-                lease.workload,
-                lease.tag,
-                time.time(),
-                list(lease.machines),
-                lease.memory_override_gb,
-                bundle,
-            )
-            queue.entries.insert(0, entry)
+            queue.entries.insert(0, _requeued(lease, task))
             queue_mod.save_queue(queue)
 
     def _drain(self, spec, task: tasks.TaskRecord):
