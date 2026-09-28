@@ -122,6 +122,11 @@ OBSERVATION_TTL_SECONDS = 5.0
 # its disk, so a paused or finished run stops paying the provider's rate.
 IDLE_STOP_SECONDS = 600.0
 
+# How long a slot meant to run but not alive still keeps the tag queue off its
+# machine (WorkerManager._holds_machine): long enough to cover a restart or a
+# slow start, short of holding a machine for a slot that never comes back.
+DEAD_SLOT_GRACE_SECONDS = 600.0
+
 # The nice level local workers run at. A worker is the long-running background
 # job on this machine; everything else that competes with it -- a bundle build
 # for a fleet that is billing while it waits, the test suite, an editor's build
@@ -487,6 +492,9 @@ class WorkerManager:
         self._exits: dict[str, str] = {}
         # Slot key -> (consecutive restarts, when the next one is allowed).
         self._restarts: dict[str, tuple[int, float]] = {}
+        # Slot key -> when a slot meant to run was first seen down since it was
+        # last alive (see _holds_machine).
+        self._down_since: dict[str, float] = {}
         # Machine key -> (probe state, when observed): SshMachine.probe for
         # each of a task's machines, refreshed by the reconcile pass ahead of
         # its slots (see machine_status).
@@ -1450,10 +1458,9 @@ class WorkerManager:
 
     def _occupants(self, m: pool_mod.PoolMachine, tasks_now) -> list[str]:
         """The slots on pool machine `m`, outside the tag leasing it, that make
-        it busy: `workload/tag/worker_id` of each that wants to run or is seen
-        alive. Paused and finished slots do not count, so a laptop is not held
-        forever by old tags' idle slots. Matching an ssh slot to `m` goes by
-        canonical host name, since tags spell one machine several ways."""
+        it busy: `workload/tag/worker_id` of each _holds_machine counts.
+        Matching an ssh slot to `m` goes by canonical host name, since tags
+        spell one machine several ways."""
         names = pool_mod.host_names(m) if m.kind == "ssh" else set()
         out = []
         for spec, task in tasks_now:
@@ -1464,9 +1471,28 @@ class WorkerManager:
                     continue
                 if m.kind == "ssh" and pool_mod.canonical_host(_ssh_host(task, w)) not in names:
                     continue
-                if w.desired_state == "running" or self._seen_alive(spec, task, w):
+                if self._holds_machine(spec, task, w):
                     out.append(f"{spec.name}/{task.tag}/{w.worker_id}")
         return out
+
+    def _holds_machine(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
+        """Whether slot `w` keeps the queue off its machine: it is alive, or
+        gated (its gate will lift), or meant to run and down for less than
+        DEAD_SLOT_GRACE_SECONDS. The grace covers a slot between restarts or
+        just started. Past it, a slot meant to run that never comes up (an
+        `exited` one) is dead weight, and holding a machine for it would idle
+        the machine indefinitely. Paused and finished slots hold nothing."""
+        key = _key(spec, task.tag, w.worker_id)
+        if self._seen_alive(spec, task, w):
+            self._down_since.pop(key, None)
+            return True
+        if w.desired_state != "running":
+            self._down_since.pop(key, None)
+            return False
+        if w.role in task.gates:
+            return True
+        since = self._down_since.setdefault(key, time.time())
+        return time.time() - since < DEAD_SLOT_GRACE_SECONDS
 
     def _seen_alive(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
         """Whether slot `w`'s worker is alive, from what is already known: its
