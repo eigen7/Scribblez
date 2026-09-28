@@ -331,6 +331,15 @@ def _is_pool_machine(m: pool_mod.PoolMachine, target: str) -> bool:
     return target in pool_mod.host_names(m)
 
 
+def _gpu_need(spec, task: tasks.TaskRecord, role: str) -> float | None:
+    """The measured GiB a `role` slot of `task` needs (WorkloadSpec.gpu_need),
+    None when its workload has no figure for it."""
+    if not spec.gpu_need:
+        return None
+    params = params_mod.validate(spec.params_cls, task.params)
+    return workloads.resolve(spec.gpu_need)(params, role)
+
+
 def _slot_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
     return _ssh_host(task, w) if w.kind == "ssh" else None
 
@@ -1003,30 +1012,30 @@ class WorkerManager:
 
     def _gpu_fit_refusal(self, spec, task, role: str, kind: str, machine, host) -> str | None:
         """Why a new `role` slot would not fit the target machine's GPU memory
-        alongside the task's other GPU slots there, or None. The same measured
+        alongside the GPU slots already there, or None: the task's own, and
+        other tags' while they hold the machine (_holds_machine), so a paused
+        or long-dead slot elsewhere does not refuse it. The same measured
         needs as placement (WorkloadSpec.gpu_need); checked only when every need
         and the machine's memory are known, so a hand placement is refused
         only on evidence."""
-        if not spec.gpu_need:
-            return None
         capacity = self._gpu_capacity(kind, machine, host)
         if capacity is None:
             return None
-        need = workloads.resolve(spec.gpu_need)
-        params = params_mod.validate(spec.params_cls, task.params)
         target = _slot_target(kind, machine, host)
-        roles = [role] + [
-            w.role
-            for w in task.workers
-            if spec.role(w.role).gpu and _slot_target(w.kind, None, _slot_host(task, w)) == target
-        ]
-        needs = [need(params, r) for r in roles]
+        others = [(s, t) for s, t in self.all_tasks() if (s.name, t.tag) != (spec.name, task.tag)]
+        needs = [_gpu_need(spec, task, role)]
+        for s, t in [(spec, task), *others]:
+            for w in t.workers:
+                if not s.role(w.role).gpu or _slot_target(w.kind, None, _slot_host(t, w)) != target:
+                    continue
+                if t is task or self._holds_machine(s, t, w):
+                    needs.append(_gpu_need(s, t, w.role))
         if any(n is None for n in needs):
             return None
         if sum(needs) > capacity:
             return (
                 f"{role} would need {sum(needs):.1f} GiB of GPU memory on this machine "
-                f"with the task's other GPU slots, and it has {capacity:.1f}"
+                f"with the GPU slots already there, and it has {capacity:.1f}"
             )
         return None
 
