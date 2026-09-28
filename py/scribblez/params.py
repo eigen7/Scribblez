@@ -18,6 +18,15 @@ A field may declare `choices`, closing its value set. Validation and argparse
 both enforce the set, so a bad value is refused where it is entered rather than
 crashing a worker later, and the dashboard form renders a selector.
 
+A field may declare itself an *end parameter* (`end=True`): a budget at which
+the tag's work finishes on its own, such as a trainer's row budget or a
+store's target size. An end parameter is an int. UNBOUNDED (-1) means "run
+until paused", and 0 is accepted as a legacy alias for it, since tags stored
+before -1 existed say 0 and bundles already in the field read 0 that way.
+Every comparison against an end parameter goes through unbounded() and
+reached(): a bare truthiness or `== 0` test would read -1 as a budget already
+spent, and the worker would exit cleanly at once.
+
 A workload may also define *profiles* (WorkloadSpec.profiles): named partial
 value sets, such as a per-trunk training recipe, that the new-tag form and the
 CLI's --profile start from. Precedence, lowest first: dataclass defaults, the
@@ -34,15 +43,34 @@ ENV_PREFIX = "SCZ_"
 
 _KINDS = ("int", "float", "str", "bool")
 
+# An end parameter's "run until paused" (see the module docstring).
+UNBOUNDED = -1
 
-def param(default, help: str, choices=None) -> dataclasses.Field:
+
+def param(default, help: str, choices=None, end: bool = False) -> dataclasses.Field:
     """Declare one parameter field: `x: int = param(200, "what x means")`.
 
-    `choices`, when given, is the closed set of values the field accepts."""
+    `choices`, when given, is the closed set of values the field accepts.
+    `end` marks an end parameter (see the module docstring)."""
     return dataclasses.field(
         default=default,
-        metadata={"help": help, "choices": tuple(choices) if choices is not None else None},
+        metadata={
+            "help": help,
+            "choices": tuple(choices) if choices is not None else None,
+            "end": end,
+        },
     )
+
+
+def unbounded(limit: int) -> bool:
+    """Whether the end parameter value `limit` means "run until paused"."""
+    return limit <= 0
+
+
+def reached(value: int, limit: int) -> bool:
+    """Whether `value` has reached the end parameter `limit`; never, when the
+    limit is unbounded."""
+    return not unbounded(limit) and value >= limit
 
 
 @dataclasses.dataclass(frozen=True)
@@ -52,6 +80,7 @@ class ParamField:
     default: object
     help: str
     choices: tuple | None = None  # the closed set of accepted values, if the field has one
+    end: bool = False  # an end parameter (see the module docstring)
 
 
 class ParamsError(Exception):
@@ -68,7 +97,11 @@ def schema(params_cls: type) -> list[ParamField]:
             assert kind != "bool", f"{f.name}: a bool field is already a closed set"
             assert f.default in choices, f"{f.name}: default {f.default!r} is not among its choices"
             assert len(set(choices)) == len(choices), f"{f.name}: duplicate choices"
-        out.append(ParamField(f.name, kind, f.default, f.metadata.get("help", ""), choices))
+        end = f.metadata.get("end", False)
+        if end:
+            assert kind == "int", f"{f.name}: an end parameter is an int"
+            assert f.default >= UNBOUNDED, f"{f.name}: default {f.default} is below {UNBOUNDED}"
+        out.append(ParamField(f.name, kind, f.default, f.metadata.get("help", ""), choices, end))
     return out
 
 
@@ -197,6 +230,15 @@ def _check_choice(f: ParamField, value):
     return value
 
 
+def _check_end(f: ParamField, value):
+    """Reject an end parameter below UNBOUNDED."""
+    if f.end and value < UNBOUNDED:
+        raise ValueError(
+            f"{f.name}: expected {UNBOUNDED} (run until paused) or a budget, got {value}"
+        )
+    return value
+
+
 def validate(params_cls: type, raw: dict, base: dict | None = None):
     """Build params from a JSON-ish dict, raising ParamsError naming every
     unknown field and type mismatch. A field `raw` omits takes `base`'s value
@@ -209,7 +251,7 @@ def validate(params_cls: type, raw: dict, base: dict | None = None):
         if name not in merged:
             continue
         try:
-            kwargs[name] = _check_choice(f, _coerce(f, merged[name]))
+            kwargs[name] = _check_end(f, _check_choice(f, _coerce(f, merged[name])))
         except ValueError as e:
             errors.append(str(e))
     if errors:

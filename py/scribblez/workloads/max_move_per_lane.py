@@ -35,7 +35,9 @@ class MaxMovePerLaneParams:
     # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")
     turns_per_game: int = param(1, "turns sampled per game per generation; 0 = every turn")
-    max_rows: int = param(0, "stop the trainer after this many rows (0 = run until paused)")
+    max_rows: int = param(
+        -1, "stop the trainer after this many rows (-1 = run until paused)", end=True
+    )
     # Optimization.
     batch_size: int = param(256, "minibatch size")
     lr: float = param(1e-3, "peak learning rate of the warmup-stable-decay schedule")

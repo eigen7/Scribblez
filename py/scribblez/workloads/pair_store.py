@@ -13,6 +13,7 @@ import time
 import zlib
 from pathlib import Path
 
+from scribblez import params as params_mod
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 
@@ -44,7 +45,7 @@ def run_pair_generate(
     run_cycle,
     sidecar_ext: str,
     dest_dir: str,
-    target_pairs: int = 0,
+    target_pairs: int = params_mod.UNBOUNDED,
     extra_sidecar_exts: tuple[str, ...] = (),
 ) -> int:
     """The generate-role loop shared by the pair-producing workloads.
@@ -55,10 +56,11 @@ def run_pair_generate(
     cycle's timings keyed as in the role's StatsSpec; the delivery time is
     added as `upload_s`. A nonzero returncode ends the run with that code.
 
-    `target_pairs` (0 = unbounded) is a size for the whole store, not a count
-    for this worker. It is checked against the store as the sink sees it (the
-    tag's data tree, or the bucket's listing of it), so a restarted worker
-    resumes toward the same total and several workers on one tag stop together.
+    `target_pairs` (an end parameter; UNBOUNDED = no target) is a size for
+    the whole store, not a count for this worker. It is checked against the
+    store as the sink sees it (the tag's data tree, or the bucket's listing of
+    it), so a restarted worker resumes toward the same total and several
+    workers on one tag stop together.
     """
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -73,7 +75,7 @@ def run_pair_generate(
     try:
         deliver_pairs(ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts)
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
-            if target_pairs and held() >= target_pairs:
+            if params_mod.reached(held(), target_pairs):
                 print(f"target of {target_pairs} pair(s) reached; exiting")
                 return 0
             cycle += 1
@@ -84,8 +86,8 @@ def run_pair_generate(
                 ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts
             )
             stats.cycle_done({**phases, "upload_s": secs}, units=moved, nbytes=nbytes)
-            toward = f"/{target_pairs}" if target_pairs else ""
-            in_store = f", {held()}{toward} in store" if target_pairs else ""
+            bounded = not params_mod.unbounded(target_pairs)
+            in_store = f", {held()}/{target_pairs} in store" if bounded else ""
             print(f"cycle {cycle}: {moved} pair(s) delivered{in_store}")
     except WorkerStopped:
         moved, _, _ = deliver_pairs(
@@ -159,7 +161,7 @@ class CorpusClock:
         self._sidecar_ext = sidecar_ext
 
     def is_final(self, absorbed: int) -> bool:
-        if self._target:
+        if not params_mod.unbounded(self._target):
             held = len(complete_pairs(self._store, self._sidecar_ext))
             return not absorbed and held >= self._target
         return time.time() - self._last_delivery() >= QUIET_SECONDS

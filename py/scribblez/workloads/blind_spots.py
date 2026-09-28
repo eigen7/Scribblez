@@ -49,7 +49,9 @@ GCG_DIR = "gcg"
 @dataclass(frozen=True)
 class BlindSpotsParams:
     target_positions: int = param(
-        100, "stop every worker once the tag holds this many found positions (0: never)"
+        100,
+        "stop every worker once the tag holds this many found positions (-1: never)",
+        end=True,
     )
     face_up_leaves: bool = param(True, "play and sim with the opponent's kept tiles known")
     cut: int = param(10, "HastyBot's top-K moves by static equity that a play must beat")
@@ -176,7 +178,7 @@ def tick(spec: WorkloadSpec, task, hooks):
     dashboard's idle policy counts as nothing running, so the rented machines
     are stopped ten minutes later (dashboard/workers.py, IDLE_STOP_SECONDS)."""
     target = params_mod.validate(spec.params_cls, task.params).target_positions
-    if target > 0 and positions_found(spec.paths(task.tag).data_dir) >= target:
+    if params_mod.reached(positions_found(spec.paths(task.tag).data_dir), target):
         hooks.finish("generate")
 
 

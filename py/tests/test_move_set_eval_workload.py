@@ -603,7 +603,8 @@ def test_pair_generate_stops_once_the_store_holds_the_target(tmp_path):
     assert len(cycles) == 3
 
 
-def test_pair_generate_without_a_target_is_unbounded(tmp_path):
+@pytest.mark.parametrize("target", [-1, 0])  # UNBOUNDED, and its legacy alias
+def test_pair_generate_without_a_target_is_unbounded(tmp_path, target):
     """The shared loop is used by workloads that declare no size; they must
     keep the run-until-paused behavior, and must not have their store counted."""
     calls = []
@@ -616,7 +617,7 @@ def test_pair_generate_without_a_target_is_unbounded(tmp_path):
         return 0, {}
 
     ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=4)
-    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs") == 0
+    assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target) == 0
     assert len(calls) == 4
 
 

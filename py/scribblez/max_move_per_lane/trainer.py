@@ -27,6 +27,7 @@ from dataclasses import asdict
 import torch
 
 from scribblez import lane_analysis
+from scribblez import params as params_mod
 from scribblez.dataset import SlogDataset
 from scribblez.ffi import get_max_move_per_lane_input_shapes
 from scribblez.generational import checkpoint, lifecycle
@@ -49,7 +50,7 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 
 def _rows_left(params, state: GenerationalState) -> bool:
-    return params.max_rows == 0 or state.rows_trained < params.max_rows
+    return not params_mod.reached(state.rows_trained, params.max_rows)
 
 
 def _checkpoint_and_eval(
