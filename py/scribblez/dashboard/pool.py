@@ -14,22 +14,16 @@ ssh machine. Each records the facts placement checks: vCPUs, GPU count, memory
 per GPU, and a GPU reserve for memory no slot accounts for (the dashboard's
 inference and the test suite on localhost).
 
-pool.json lives under the mount root beside the workload tag trees. As with
-task records (tasks.py), a process holds one Pool object, reread only when the
-file changes under it, and saves write that object atomically, so a reconcile
-pass and a request handler cannot overwrite each other's edits.
+pool.json lives under the mount root beside the workload tag trees, held as
+one shared object per process (shared_json.py).
 """
 
-import json
-import os
 import subprocess
-import tempfile
-import threading
-from dataclasses import asdict, dataclass, field, fields
-from pathlib import Path
+from dataclasses import dataclass, field, fields
 
 from cloud.ssh_machine import HARDWARE_COMMAND
 
+from scribblez.dashboard.shared_json import SharedJson
 from scribblez.dashboard.tasks import MachineRecord
 from scribblez.paths import DEFAULT_MOUNT_ROOT
 
@@ -48,6 +42,7 @@ class Lease:
     tag: str
     phase: str
     since: float
+    reason: str = ""  # why a failed or held lease is where it is
 
 
 @dataclass
@@ -148,19 +143,12 @@ def leased_record(pool: Pool, workload: str, tag: str, name: str) -> MachineReco
     return m.machine
 
 
-# The process's shared Pool per path, with the file mtime it matches (see the
-# module docstring); 0 stands for "no file yet".
-_held: dict[Path, tuple[Pool, int]] = {}
-_lock = threading.Lock()
-
-
 def _from_stored(cls, raw: dict):
     known = {f.name for f in fields(cls)}
     return cls(**{k: v for k, v in raw.items() if k in known})
 
 
-def _read(path: Path) -> Pool:
-    raw = json.loads(path.read_text())
+def _decode(raw: dict) -> Pool:
     machines = []
     for m in raw.get("machines", []):
         m = dict(m)
@@ -171,27 +159,14 @@ def _read(path: Path) -> Pool:
     return Pool(machines=machines)
 
 
+_store = SharedJson(lambda: POOL_PATH, _decode, Pool)
+
+
 def load_pool() -> Pool:
     """The process's shared Pool; an empty one before pool.json exists."""
-    path = POOL_PATH
-    with _lock:
-        try:
-            stamp = path.stat().st_mtime_ns
-        except FileNotFoundError:
-            stamp = 0
-        held = _held.get(path)
-        if held is None or held[1] != stamp:
-            _held[path] = held = (_read(path) if stamp else Pool(), stamp)
-        return held[0]
+    return _store.load()
 
 
 def save_pool(pool: Pool):
     """Write `pool` atomically and keep it as the shared object."""
-    path = POOL_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".pool.", suffix=".json")
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(asdict(pool), indent=2) + "\n")
-    with _lock:
-        os.replace(tmp, path)
-        _held[path] = (pool, path.stat().st_mtime_ns)
+    _store.save(pool)

@@ -50,7 +50,7 @@ def pooled(tmp_path, monkeypatch):
     monkeypatch.setattr(pool_mod, "canonical_host", lambda h: h.split("@", 1)[-1].lower())
     manager = WorkerManager()
     listed: list = []
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter(listed))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter(listed))
     return manager, listed
 
 
@@ -80,7 +80,7 @@ def test_a_pool_round_trips_through_pool_json(pooled):
     pool = pool_mod.load_pool()
     pool.machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
     pool_mod.save_pool(pool)
-    pool_mod._held.clear()  # a fresh process
+    pool_mod._store.forget()  # a fresh process
     m = pool_mod.load_pool().machine("asus")
     assert m.kind == "ssh" and m.machine.host == "dshin@asus-laptop"
     assert m.hardware == Hardware(8, 1, 23034 / 1024) and m.machine.gpu_count == 1
