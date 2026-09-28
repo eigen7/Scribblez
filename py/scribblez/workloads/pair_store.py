@@ -163,7 +163,7 @@ class CorpusClock:
     def is_final(self, absorbed: int) -> bool:
         if not params_mod.unbounded(self._target):
             held = len(complete_pairs(self._store, self._sidecar_ext))
-            return not absorbed and held >= self._target
+            return not absorbed and params_mod.reached(held, self._target)
         return time.time() - self._last_delivery() >= QUIET_SECONDS
 
     def _last_delivery(self) -> float:
@@ -172,3 +172,15 @@ class CorpusClock:
             return 0.0
         files = self._store.glob(f"*{self._sidecar_ext}")
         return max((f.stat().st_mtime for f in files), default=0.0)
+
+
+def epochs_left(params, state) -> bool:
+    """Whether a pair-trained tag's epoch budget (`params.train_epochs`, an end
+    parameter) has passes left, counting `state.settled_epochs`: the passes
+    taken over the finished corpus, the only ones that spend the budget."""
+    return not params_mod.reached(state.settled_epochs, params.train_epochs)
+
+
+def epoch_budget(params) -> str:
+    """The epoch budget as a progress line shows it."""
+    return "unbounded" if params_mod.unbounded(params.train_epochs) else str(params.train_epochs)
