@@ -68,6 +68,7 @@ from scribblez.workloads.evidence_trajectories import (
     max_pool_width,
     recipe_of,
 )
+from scribblez.workloads.pair_store import epoch_budget, epochs_left
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 POLL_SECONDS = 30
@@ -160,15 +161,6 @@ def absorb_new_pairs(store, params, train_ds, holdout_ds, ext: str = ".sobs") ->
     if holdout_ds is not train_ds:
         added += holdout_ds.absorb(sorted(f for f in holdout_files if f not in seen))
     return added
-
-
-def _epoch_budget(params) -> str:
-    """The epoch budget as the progress line shows it."""
-    return "unbounded" if params_mod.unbounded(params.train_epochs) else str(params.train_epochs)
-
-
-def epochs_left(params, state: EvidenceTrainState) -> bool:
-    return not params_mod.reached(state.settled_epochs, params.train_epochs)
 
 
 def build_optimizer(model, params) -> torch.optim.AdamW:
@@ -348,7 +340,7 @@ def _holdout_metrics(model, device, params, ctx) -> dict:
 
 def _pass_line(epoch, state, params, result, m, lr_now, train_s, settled, ctx) -> str:
     budget = (
-        f"{state.settled_epochs}/{_epoch_budget(params)}"
+        f"{state.settled_epochs}/{epoch_budget(params)}"
         if settled
         else f"corpus still growing, {ctx['train_ds'].num_positions} positions"
     )

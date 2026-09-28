@@ -193,9 +193,9 @@ def _machine_record(task: tasks.TaskRecord, name: str) -> tasks.MachineRecord:
     a pool machine the task leases (dashboard/pool.py). Pool machines are
     resolved here rather than copied into the task, so the pool stays their
     one owner."""
-    for m in task.machines:
-        if m.name == name:
-            return m
+    own = task.find_machine(name)
+    if own is not None:
+        return own
     record = pool_mod.leased_record(pool_mod.load_pool(), task.workload, task.tag, name)
     if record is None:
         raise KeyError(f"no machine '{name}'")
@@ -209,7 +209,7 @@ def _leased_records(task: tasks.TaskRecord) -> list[tasks.MachineRecord]:
         for m in pool_mod.load_pool().machines
         if m.machine is not None
         and m.lease is not None
-        and (m.lease.workload, m.lease.tag) == (task.workload, task.tag)
+        and m.lease.held_by(task.workload, task.tag)
     ]
 
 
@@ -608,7 +608,7 @@ class WorkerManager:
         machine.pull_image(image)
         holder.arch = machine.detect_arch(image)
         tasks.save_task(spec, task)
-        if w.machine is not None and not any(holder is m for m in task.machines):
+        if w.machine is not None and task.find_machine(w.machine) is None:
             pool_mod.save_pool(pool_mod.load_pool())  # a leased pool machine's record
         return holder.arch
 
@@ -946,6 +946,7 @@ class WorkerManager:
         kind: str,
         machine: tasks.MachineRecord | None = None,
         host: str | None = None,
+        check_gpu: bool = True,
     ):
         role_spec = spec.role(role)
         assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
@@ -961,7 +962,7 @@ class WorkerManager:
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
-        if role_spec.gpu:
+        if role_spec.gpu and check_gpu:
             refusal = self._gpu_fit_refusal(spec, task, role, kind, machine, host)
             assert refusal is None, refusal
         return role_spec
@@ -1002,16 +1003,24 @@ class WorkerManager:
         target = _slot_target(kind, machine, host)
         for m in pool_mod.load_pool().machines:
             if _is_pool_machine(m, target):
-                return (m.hardware.gpu_memory_gb or 0.0) - m.gpu_reserve_gb
+                return m.gpu_capacity_gb
         if machine is not None and machine.instance_type:
             mtype = next((t for t in AWS_CATALOG if t.id == machine.instance_type), None)
             return mtype.gpu_memory_gb if mtype is not None else None
         return None
 
     def add_local(
-        self, spec, task: tasks.TaskRecord, role: str, threads: int | None
+        self,
+        spec,
+        task: tasks.TaskRecord,
+        role: str,
+        threads: int | None,
+        *,
+        check_gpu: bool = True,
     ) -> tasks.WorkerRecord:
-        self._check_role(spec, task, role, "local")
+        """A local slot. `check_gpu` False skips the GPU-fit check, for the tag
+        queue, whose placement has already made it (with any override)."""
+        self._check_role(spec, task, role, "local", check_gpu=check_gpu)
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "local"),
             role=role,
@@ -1032,12 +1041,14 @@ class WorkerManager:
         host: str | None = None,
         machine: str | None = None,
         threads: int | None,
+        check_gpu: bool = True,
     ) -> tasks.WorkerRecord:
         """An ssh slot on a bare host string, or on one of the task's
-        machines by name (exactly one of the two)."""
+        machines by name (exactly one of the two). `check_gpu` as for
+        add_local."""
         assert (host is None) != (machine is None), "an ssh slot names a host or a machine"
         record = _machine_record(task, machine) if machine is not None else None
-        self._check_role(spec, task, role, "ssh", machine=record, host=host)
+        self._check_role(spec, task, role, "ssh", machine=record, host=host, check_gpu=check_gpu)
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "ssh"),
             role=role,
@@ -1539,11 +1550,19 @@ class WorkerManager:
 
     def remove_pool_machine(self, name: str):
         """Take a machine out of the pool, terminating it if the pool rented
-        it. Refused while a tag leases it: the lease's slots name it, and would
-        lose their machine."""
+        it. Refused while a tag leases it or any slot names it: those slots
+        would lose their machine, and every lookup of it (the pool page, the
+        reconcile pass) would fail."""
         pool = pool_mod.load_pool()
         m = pool.machine(name)
         assert m.lease is None, f"{name} is leased by {m.lease.workload}/{m.lease.tag}"
+        naming = [
+            f"{spec.name}/{task.tag}/{w.worker_id}"
+            for spec, task in self.all_tasks()
+            for w in task.workers
+            if w.machine == name and task.find_machine(name) is None
+        ]
+        assert not naming, f"slots still name {name}: {', '.join(naming)}; remove them first"
         if m.capacity is not None and m.machine.instance_id is not None:
             self._terminate(m.machine.instance_id, m.machine.instance_type)
             _accrue_machine(m.machine, False)
@@ -1613,7 +1632,7 @@ class WorkerManager:
         spell one machine several ways."""
         out = []
         for spec, task in tasks_now:
-            if m.lease and (m.lease.workload, m.lease.tag) == (spec.name, task.tag):
+            if m.lease and m.lease.held_by(spec.name, task.tag):
                 continue
             for w in task.workers:
                 if not _is_pool_machine(m, _slot_target(w.kind, None, _slot_host(task, w))):
@@ -1698,6 +1717,8 @@ class WorkerManager:
                 reason = self._slot_reason(spec, task, w)
                 if reason and not alive:
                     info["exit_reason"] = reason
+            if w.failed and not alive:
+                info["exit_reason"] = w.failed  # why the tag queue gave up on it
             # Real liveness, for reconcile's desired-vs-observed enforcement.
             info["observed_running"] = alive
             out.append(info)

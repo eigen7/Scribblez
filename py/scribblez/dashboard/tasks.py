@@ -155,10 +155,14 @@ class TaskRecord:
         return None
 
     def machine(self, name: str) -> MachineRecord:
-        for m in self.machines:
-            if m.name == name:
-                return m
-        raise KeyError(f"no machine '{name}'")
+        m = self.find_machine(name)
+        if m is None:
+            raise KeyError(f"no machine '{name}'")
+        return m
+
+    def find_machine(self, name: str) -> MachineRecord | None:
+        """The task's own machine `name`, or None."""
+        return next((m for m in self.machines if m.name == name), None)
 
     def slots_on(self, machine: str) -> list[WorkerRecord]:
         return [w for w in self.workers if w.machine == machine]

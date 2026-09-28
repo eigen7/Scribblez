@@ -2055,3 +2055,33 @@ def test_a_slot_on_a_down_machine_reports_the_machine_not_its_stale_reason(
     manager._machine_states[mkey] = "up"  # its own reason again, once it can be acted on
     (info,) = manager.worker_status(spec, task)
     assert info["exit_reason"] == "building the worker bundle"
+
+
+def test_restarts_after_a_crash_are_recorded_and_clean_exits_are_not(
+    manager, spec, task, monkeypatch
+):
+    """The tag queue fails a crash-looping slot from these records, so a
+    restart after a non-zero exit must be recorded, a restart after exit 0
+    must not, and records fall out of the window."""
+    local = manager.add_local(spec, task, "generate", 4)
+    ssh = manager.add_ssh(spec, task, "generate", host="h", threads=None)
+    monkeypatch.setattr(manager, "_spawn_local", lambda *a: None)
+    monkeypatch.setattr(manager, "_start_or_replace", lambda *a: None)
+    down = {"observed_running": False}
+
+    monkeypatch.setattr(manager, "_local_exit_code", lambda *a: 1)
+    manager._reconcile_worker(spec, task, local, workers_mod.RUN, down)
+    monkeypatch.setattr(manager, "_local_exit_code", lambda *a: 0)
+    manager._reconcile_worker(spec, task, local, workers_mod.RUN, down)
+    assert manager.recent_crashes(spec, "t", local.worker_id, 60) == ["exit 1"]
+
+    manager._exits[_key(spec, "t", ssh.worker_id)] = "exit 1: CUDA out of memory"
+    manager._reconcile_ssh(spec, task, ssh, workers_mod.RUN, "stopped")
+    manager._restarts.clear()
+    manager._exits[_key(spec, "t", ssh.worker_id)] = "exit 0: done"
+    manager._reconcile_ssh(spec, task, ssh, workers_mod.RUN, "stopped")
+    assert manager.recent_crashes(spec, "t", ssh.worker_id, 60) == ["exit 1: CUDA out of memory"]
+
+    later = time.time() + 120
+    monkeypatch.setattr(workers_mod.time, "time", lambda: later)
+    assert manager.recent_crashes(spec, "t", ssh.worker_id, 60) == []

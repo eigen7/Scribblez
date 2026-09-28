@@ -134,3 +134,36 @@ describe('rental capacity', () => {
     }));
   });
 });
+
+describe('PoolView row actions', () => {
+  beforeEach(() => {
+    getJSON.mockReset();
+    postJSON.mockReset();
+  });
+
+  it('saves an edit with the edited fields', async () => {
+    serve([machine({})]);
+    postJSON.mockResolvedValue({ ok: true });
+    render(<PoolView />);
+    await waitFor(() => screen.getByTestId('pool-state-asus'));
+    fireEvent.click(screen.getByText('Edit'));
+    fireEvent.change(screen.getByLabelText('asus reserve'), { target: { value: '1.5' } });
+    fireEvent.change(screen.getByLabelText('asus threads'), { target: { value: '6' } });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/pool/machine_action', {
+      name: 'asus', action: 'edit', aliases: '', gpu_reserve_gb: '1.5', generator_threads: '6',
+    }));
+  });
+
+  it('refuses Remove on a leased machine and shows who else is on it', async () => {
+    serve([machine({
+      lease: { workload: 'position_eval', tag: 'a', phase: 'running', since: 0, reason: '' },
+      occupants: ['position_eval/hand/local-0'], state: 'leased',
+    })]);
+    render(<PoolView />);
+    await waitFor(() => expect(screen.getByTestId('pool-state-asus').textContent).toBe(
+      'position_eval/a (running); also position_eval/hand/local-0',
+    ));
+    expect((screen.getByText('Remove').closest('button') as HTMLButtonElement).disabled).toBe(true);
+  });
+});

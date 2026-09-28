@@ -47,7 +47,7 @@ def refusal(
     need = gpu_total(spec, plan, entry)
     if need is None:
         return "no GPU memory figure for this configuration (set an override)"
-    have = (m.hardware.gpu_memory_gb or 0.0) - m.gpu_reserve_gb
+    have = m.gpu_capacity_gb
     if need > have:
         return f"needs {need:.1f} GiB of GPU memory, has {have:.1f}"
     if need_bundle and m.kind == "ssh" and entry.bundle != BUNDLE_READY:

@@ -49,9 +49,9 @@ from scribblez.dashboard.workers import (
 )
 
 RESERVED, RUNNING, RELEASING, HELD = "reserved", "running", "releasing", "held"
-# The reason on a lease released by Requeue: its tag goes back to the head of
-# the queue once the release is done. Kept on the lease, so it survives a
-# dashboard restart mid-release.
+# The reason shown on a lease released by Requeue. What sends the tag back to
+# the head of the queue is Lease.requeue, which survives a restart mid-release
+# and cannot be overwritten by a drain error's reason.
 REQUEUED = "requeued"
 
 # A queue-placed slot that crashes this many times within the window is
@@ -165,6 +165,7 @@ class TagQueue:
         for w in task.workers:
             w.desired_state = "paused"
         tasks.save_task(spec, task)
+        m.lease.requeue = True
         self._start_release(m, pool, REQUEUED)
 
     def status(self) -> dict:
@@ -336,9 +337,16 @@ class TagQueue:
         for e in queue.entries:
             spec, task = _lookup(e.workload, e.tag)
             params[e.key] = (spec, _params(spec, task))
+        # Whether each free machine can take each entry: once per pair. The
+        # queue view's reasons are computed after the pass acts (_note_refusals).
+        fits = {
+            (e.key, m.name): placement.refusal(*params[e.key], e, m) is None
+            for e in queue.entries
+            for m in free
+        }
 
         def eligible(e: QueueEntry, m: PoolMachine) -> bool:
-            return placement.refusal(*params[e.key], e, m) is None
+            return fits[(e.key, m.name)]
 
         matches = placement.match(queue.entries, free, eligible)
         for e in list(queue.entries):
@@ -346,7 +354,15 @@ class TagQueue:
                 continue
             m = pool.machine(matches[e.key])
             spend = m.machine.spend if m.capacity is not None else 0.0
-            m.lease = Lease(e.workload, e.tag, RESERVED, time.time(), spend_start=spend)
+            m.lease = Lease(
+                e.workload,
+                e.tag,
+                RESERVED,
+                time.time(),
+                spend_start=spend,
+                machines=list(e.machines),
+                memory_override_gb=e.memory_override_gb,
+            )
             pool_mod.save_pool(pool)
             queue.entries.remove(e)
             queue_mod.save_queue(queue)
@@ -421,10 +437,13 @@ class TagQueue:
         for p in placement.plan_for(spec, _params(spec, task), m):
             if any(w.role == p.role for w in task.workers):
                 continue
+            # Placement already checked the fit, with the entry's override.
             if m.kind == "local":
-                w = self._m.add_local(spec, task, p.role, p.threads)
+                w = self._m.add_local(spec, task, p.role, p.threads, check_gpu=False)
             else:
-                w = self._m.add_ssh(spec, task, p.role, machine=m.name, threads=p.threads)
+                w = self._m.add_ssh(
+                    spec, task, p.role, machine=m.name, threads=p.threads, check_gpu=False
+                )
             w.desired_state = "running"
             # A requeued tag's new slots reuse its old worker ids.
             self._m.forget_crashes(spec, task.tag, w.worker_id)
@@ -517,13 +536,20 @@ class TagQueue:
             self._m.remove_worker(spec, task, w.worker_id)
         task.retired_spend += pool_mod.lease_spend(m)
         tasks.save_task(spec, task)
-        key = (m.lease.workload, m.lease.tag)
-        requeued = m.lease.reason == REQUEUED
+        lease = m.lease
         m.lease = None
         pool_mod.save_pool(pool)
-        if requeued:
+        if lease.requeue:
             bundle = queue_mod.BUNDLE_READY if task.bundle_id else queue_mod.BUNDLE_NONE
-            queue.entries.insert(0, QueueEntry(*key, time.time(), bundle=bundle))
+            entry = QueueEntry(
+                lease.workload,
+                lease.tag,
+                time.time(),
+                list(lease.machines),
+                lease.memory_override_gb,
+                bundle,
+            )
+            queue.entries.insert(0, entry)
             queue_mod.save_queue(queue)
 
     def _drain(self, spec, task: tasks.TaskRecord):
