@@ -19,7 +19,6 @@ export type PoolMachine = {
   } | null;
   aliases: string[];
   hardware: { vcpus: number | null; gpu_count: number | null; gpu_memory_gb: number | null };
-  gpu_reserve_gb: number;
   generator_threads: number | null;
   lease: { workload: string; tag: string; phase: string; since: number; reason: string } | null;
   occupants: string[];  // "<workload>/<tag>/<worker_id>" of slots outside the lease
@@ -206,37 +205,36 @@ function CapacitySection({ capacity, machines, post, busy }: {
   );
 }
 
-// Add this machine (host left blank) or a registered ssh machine. The server
-// probes its vCPUs and GPU memory before recording it.
-function AddForm({ post, busy }: { post: (url: string, body: unknown) => void; busy: boolean }) {
+// Add this machine in one click, while it is not pooled, or a registered ssh
+// machine. The server probes its vCPUs and GPU memory before recording it.
+function AddForm({ post, busy, localPooled }: {
+  post: (url: string, body: unknown) => void; busy: boolean; localPooled: boolean;
+}) {
   const [name, setName] = useState('');
   const [host, setHost] = useState('');
   const [aliases, setAliases] = useState('');
-  const [reserve, setReserve] = useState('0');
   return (
     <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 12 }}>
+      {!localPooled && (
+        <Button label="Add this machine" disabled={busy}
+          onClick={() => post('/api/pool/machines', { name: 'localhost', host: null })} />
+      )}
       <label style={{ fontSize: 13 }}>name<br />
         <input style={{ ...inputStyle, width: 130 }} aria-label="pool name" value={name}
           onChange={(e) => setName(e.target.value)} placeholder="asus-laptop" />
       </label>
-      <label style={{ fontSize: 13 }} title="blank: this machine, running local slots">ssh host<br />
+      <label style={{ fontSize: 13 }}>ssh host<br />
         <input style={{ ...inputStyle, width: 170 }} aria-label="pool host" value={host}
-          onChange={(e) => setHost(e.target.value)} placeholder="(this machine)" />
+          onChange={(e) => setHost(e.target.value)} placeholder="asus-laptop" />
       </label>
       <label style={{ fontSize: 13 }} title="other spellings tags use for this host, comma-separated">aliases<br />
         <input style={{ ...inputStyle, width: 170 }} aria-label="pool aliases" value={aliases}
           onChange={(e) => setAliases(e.target.value)} placeholder="dshin@asus-laptop" />
       </label>
-      <label style={{ fontSize: 13 }} title="GPU memory (GiB) taken by things no slot accounts for">GPU reserve<br />
-        <input style={{ ...inputStyle, width: 60 }} aria-label="pool reserve" value={reserve}
-          onChange={(e) => setReserve(e.target.value)} />
-      </label>
       <Button
-        label={busy ? 'Probing…' : 'Add to pool'}
-        disabled={busy || !name.trim()}
-        onClick={() => post('/api/pool/machines', {
-          name: name.trim(), host: host.trim() || null, aliases, gpu_reserve_gb: reserve,
-        })}
+        label={busy ? 'Probing…' : 'Add ssh machine'}
+        disabled={busy || !name.trim() || !host.trim()}
+        onClick={() => post('/api/pool/machines', { name: name.trim(), host: host.trim(), aliases })}
       />
     </div>
   );
@@ -247,7 +245,6 @@ function EditRow({ m, post, busy, onDone }: {
   m: PoolMachine; post: (url: string, body: unknown) => void; busy: boolean; onDone: () => void;
 }) {
   const [aliases, setAliases] = useState(m.aliases.join(', '));
-  const [reserve, setReserve] = useState(String(m.gpu_reserve_gb));
   const [threads, setThreads] = useState(m.generator_threads == null ? '' : String(m.generator_threads));
   return (
     <tr style={{ borderTop: '1px solid #e6eaef', background: '#f7f9fb' }}>
@@ -259,10 +256,6 @@ function EditRow({ m, post, busy, onDone }: {
       <td style={cell}>{m.hardware.vcpus ?? '—'}</td>
       <td style={cell}>{gpuText(m.hardware)}</td>
       <td style={cell}>
-        <input style={{ ...inputStyle, width: 55 }} aria-label={`${m.name} reserve`} value={reserve}
-          onChange={(e) => setReserve(e.target.value)} />
-      </td>
-      <td style={cell}>
         <input style={{ ...inputStyle, width: 55 }} aria-label={`${m.name} threads`} value={threads}
           placeholder="auto" onChange={(e) => setThreads(e.target.value)} />
       </td>
@@ -271,7 +264,7 @@ function EditRow({ m, post, busy, onDone }: {
         <span style={{ display: 'inline-flex', gap: 6 }}>
           <Button label="Save" tone="primary" disabled={busy} onClick={() => {
             post('/api/pool/machine_action', {
-              name: m.name, action: 'edit', aliases, gpu_reserve_gb: reserve, generator_threads: threads,
+              name: m.name, action: 'edit', aliases, generator_threads: threads,
             });
             onDone();
           }} />
@@ -326,7 +319,7 @@ export default function PoolView() {
         <table style={{ borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              {['machine', 'host', 'vCPUs', 'GPU', 'reserve', 'gen. threads', 'state', ''].map((h) => (
+              {['machine', 'host', 'vCPUs', 'GPU', 'gen. threads', 'state', ''].map((h) => (
                 <th key={h} style={{ ...cell, textAlign: 'left', color: '#556070', fontWeight: 600 }}>{h}</th>
               ))}
             </tr>
@@ -349,7 +342,6 @@ export default function PoolView() {
                 </td>
                 <td style={cell}>{m.hardware.vcpus ?? '—'}</td>
                 <td style={cell}>{gpuText(m.hardware)}</td>
-                <td style={cell}>{m.gpu_reserve_gb ? `${m.gpu_reserve_gb} GiB` : '—'}</td>
                 <td style={cell}>{m.generator_threads ?? 'auto'}</td>
                 <td style={cell} data-testid={`pool-state-${m.name}`}>{stateText(m)}</td>
                 <td style={{ ...cell, whiteSpace: 'nowrap' }}>
@@ -382,7 +374,7 @@ export default function PoolView() {
           </tbody>
         </table>
       )}
-      <AddForm post={post} busy={busy} />
+      <AddForm post={post} busy={busy} localPooled={(machines ?? []).some((m) => m.kind === 'local')} />
       <CapacitySection capacity={capacity} machines={machines ?? []} post={post} busy={busy} />
       <QueueSection rows={queue} post={post} busy={busy} />
     </div>

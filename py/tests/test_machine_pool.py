@@ -74,9 +74,7 @@ def test_parse_hardware():
 
 def test_a_pool_round_trips_through_pool_json(pooled):
     manager, _ = pooled
-    manager.add_pool_machine(
-        "asus", "dshin@asus-laptop", aliases=["asus-laptop"], gpu_reserve_gb=0.5
-    )
+    manager.add_pool_machine("asus", "dshin@asus-laptop", aliases=["asus-laptop"])
     pool = pool_mod.load_pool()
     pool.machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
     pool_mod.save_pool(pool)
@@ -84,7 +82,7 @@ def test_a_pool_round_trips_through_pool_json(pooled):
     m = pool_mod.load_pool().machine("asus")
     assert m.kind == "ssh" and m.machine.host == "dshin@asus-laptop"
     assert m.hardware == Hardware(8, 1, 23034 / 1024) and m.machine.gpu_count == 1
-    assert m.aliases == ["asus-laptop"] and m.gpu_reserve_gb == 0.5
+    assert m.aliases == ["asus-laptop"]
     assert m.lease == Lease("position_eval", "t", "running", 1.0)
 
 
@@ -113,9 +111,9 @@ def test_a_leased_machine_cannot_be_removed(pooled):
 def test_edit_changes_only_operator_fields(pooled):
     manager, _ = pooled
     manager.add_pool_machine("asus", "asus-laptop")
-    manager.edit_pool_machine("asus", gpu_reserve_gb=1.0, generator_threads=6, aliases=["a"])
+    manager.edit_pool_machine("asus", generator_threads=6, aliases=["a"])
     m = pool_mod.load_pool().machine("asus")
-    assert (m.gpu_reserve_gb, m.generator_threads, m.aliases) == (1.0, 6, ["a"])
+    assert (m.generator_threads, m.aliases) == (6, ["a"])
     with pytest.raises(AssertionError, match="not editable"):
         manager.edit_pool_machine("asus", hardware=None)
 

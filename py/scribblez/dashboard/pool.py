@@ -10,9 +10,8 @@ machine's slots name it like any machine, and the dashboard resolves the name
 through the pool (`leased_record`).
 
 An entry is `localhost` (this machine, running local slots) or a registered
-ssh machine. Each records the facts placement checks: vCPUs, GPU count, memory
-per GPU, and a GPU reserve for memory no slot accounts for (the dashboard's
-inference and the test suite on localhost).
+ssh machine. Each records the facts placement checks: vCPUs, GPU count, and
+memory per GPU.
 
 pool.json lives under the mount root beside the workload tag trees, held as
 one shared object per process (shared_json.py).
@@ -83,7 +82,6 @@ class PoolMachine:
     machine: MachineRecord | None = None
     aliases: list[str] = field(default_factory=list)
     hardware: Hardware = field(default_factory=Hardware)
-    gpu_reserve_gb: float = 0.0
     # The generator threads a layout gives this machine, when not its own
     # vCPU arithmetic (docs/plans/tag_queue.md §3).
     generator_threads: int | None = None
@@ -94,8 +92,8 @@ class PoolMachine:
 
     @property
     def gpu_capacity_gb(self) -> float:
-        """GPU memory slots may use: memory per GPU less the reserve."""
-        return (self.hardware.gpu_memory_gb or 0.0) - self.gpu_reserve_gb
+        """GPU memory slots may use: the memory per GPU."""
+        return self.hardware.gpu_memory_gb or 0.0
 
 
 @dataclass

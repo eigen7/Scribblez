@@ -407,7 +407,6 @@ class PoolMachineAddHandler(_MasterBase):
                 (body.get("host") or "").strip() or None,
                 identity_file=(body.get("identity_file") or "").strip() or None,
                 aliases=_aliases(body.get("aliases")),
-                gpu_reserve_gb=_number(body, "gpu_reserve_gb", float, 0.0),
                 generator_threads=_number(body, "generator_threads", int),
             )
             return {"name": m.name}
@@ -431,8 +430,6 @@ class PoolMachineActionHandler(_MasterBase):
                 changes = {}
                 if "aliases" in body:
                     changes["aliases"] = _aliases(body["aliases"])
-                if "gpu_reserve_gb" in body:
-                    changes["gpu_reserve_gb"] = _number(body, "gpu_reserve_gb", float, 0.0)
                 if "generator_threads" in body:
                     changes["generator_threads"] = _number(body, "generator_threads", int)
                 self.manager.edit_pool_machine(name, **changes)
