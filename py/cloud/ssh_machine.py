@@ -335,6 +335,15 @@ class SshMachine:
             stdin_text=env_file(env),
         )
 
+    def container_logs(self, name: str) -> str:
+        """Container `name`'s whole log, stdout and stderr interleaved."""
+        res = self._run(
+            ["sh", "-c", f"docker logs {shlex.quote(name)} 2>&1"], timeout=_READ_TIMEOUT
+        )
+        if res.returncode != 0:
+            raise SshMachineError(f"{self.host}: reading {name}'s log failed: {res.stdout[-300:]}")
+        return res.stdout
+
     def container_exit(self, name: str) -> str:
         """Why container `name` is not running: its exit code and last log
         line, as one line. Empty when the container is gone or the machine is

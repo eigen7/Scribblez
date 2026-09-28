@@ -238,6 +238,37 @@ A pool machine without a lease is **busy** while any slot on it, from any
 tag, wants to run or is still alive; paused and finished slots do not count.
 That keeps the queue off a machine the operator is using by hand.
 
+### The tag queue
+
+A tag with no slots can be **enqueued** (Enqueue on its Workers card, or
+Create & enqueue on the new-tag form); the queue is listed on the Machine pool
+page, in order, with ↑/↓ and Dequeue. Only workloads with a layout are
+queueable (position_eval so far). Every reconcile pass first matches queued
+tags to free pool machines, in queue order: an earlier tag may move to another
+machine it fits when that lets a later one start, but never loses its place.
+A placed tag gets its workload's layout as slots (for position_eval: a
+trainer, a generator on every vCPU, and match eval if its cadence is on), set
+running, under a lease on the machine.
+
+**Fit.** A machine takes a tag only if its GPU memory, less its reserve, holds
+the sum of the tag's GPU roles' measured needs (position_eval's table is in
+`workloads/position_eval.py`). A configuration with no measured figure waits,
+saying so, unless its queue entry carries a memory override. The same figures
+refuse a GPU slot added by hand that the machine cannot fit. A tag that may
+land on an ssh machine has its bundle built and pinned when it is enqueued;
+local slots run the checkout as it is when they start, and enqueueing warns
+about that, and about any tag in the queue with no end condition.
+
+**Release.** When every slot of the tag has finished, its machine is drained
+(each remote slot's full container log saved to the tag's
+`logs/<worker>.container.log`, stopped containers swept, one final bucket sync
+for bucket-delivering slots), the slots are removed, and the next tag takes
+it. A slot that crashes three times within half an hour is **failed**: the
+tag's slots are paused, and the machine goes to the next queued tag that fits,
+or is **held** with the failed containers intact until one does. Requeue
+takes a placed or held tag off its machine and puts it back at the head of the
+queue; Release finishes every slot of a tag with no end condition.
+
 ### Container lifecycle
 
 **Bundles.** Code reaches a container as a bundle picked by the machine's CPU

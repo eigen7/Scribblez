@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import PoolView, { type PoolMachine } from '../components/master/PoolView';
+import PoolView, { enqueueTag, type PoolMachine, type QueueRow } from '../components/master/PoolView';
 
 // The pool page: each machine's hardware and why it is or is not free, and the
 // add form's request.
@@ -22,6 +22,16 @@ const machine = (over: Partial<PoolMachine>): PoolMachine => ({
   ...over,
 });
 
+// Answer the page's two polls: the pool, and the queue.
+const serve = (machines: PoolMachine[], entries: QueueRow[] = []) =>
+  getJSON.mockImplementation((url: string) =>
+    Promise.resolve(url === '/api/queue' ? { entries } : { machines }));
+
+const row = (over: Partial<QueueRow>): QueueRow => ({
+  workload: 'position_eval', tag: 'tune-a', machines: [], memory_override_gb: null,
+  bundle: 'none', end_condition: true, refusals: {}, ...over,
+});
+
 describe('PoolView', () => {
   beforeEach(() => {
     getJSON.mockReset();
@@ -29,11 +39,11 @@ describe('PoolView', () => {
   });
 
   it('shows each machine with its GPU and what holds it', async () => {
-    getJSON.mockResolvedValue({ machines: [
+    serve([
       machine({}),
       machine({ name: 'localhost', kind: 'local', machine: null, occupants: ['move_set_eval/x/local-0'], state: 'busy' }),
-      machine({ name: 'l4', lease: { workload: 'position_eval', tag: 'tune-wsd', phase: 'running', since: 0 }, state: 'leased' }),
-    ] });
+      machine({ name: 'l4', lease: { workload: 'position_eval', tag: 'tune-wsd', phase: 'running', since: 0, reason: '' }, state: 'leased' }),
+    ]);
     render(<PoolView />);
     await waitFor(() => expect(screen.getByTestId('pool-state-asus').textContent).toBe('free'));
     expect(screen.getByTestId('pool-state-localhost').textContent).toBe('busy: move_set_eval/x/local-0');
@@ -42,7 +52,7 @@ describe('PoolView', () => {
   });
 
   it('adds a registered machine with its aliases and reserve', async () => {
-    getJSON.mockResolvedValue({ machines: [] });
+    serve([]);
     postJSON.mockResolvedValue({ name: 'asus' });
     render(<PoolView />);
     fireEvent.change(screen.getByLabelText('pool name'), { target: { value: 'asus' } });
@@ -52,5 +62,40 @@ describe('PoolView', () => {
     await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/pool/machines', {
       name: 'asus', host: 'asus-laptop', aliases: 'dshin@asus-laptop', gpu_reserve_gb: '0',
     }));
+  });
+});
+
+describe('the queue', () => {
+  beforeEach(() => {
+    getJSON.mockReset();
+    postJSON.mockReset();
+  });
+
+  it('lists entries in order, marking endless ones and saying why they wait', async () => {
+    serve([machine({})], [
+      row({ tag: 'tune-a', refusals: { asus: 'needs 14.0 GiB of GPU memory, has 4.0' } }),
+      row({ tag: 'endless', end_condition: false }),
+    ]);
+    render(<PoolView />);
+    await waitFor(() => expect(screen.getByTestId('queue-tune-a').textContent).toBe('position_eval/tune-a'));
+    expect(screen.getByTestId('queue-endless').textContent).toBe('position_eval/endless ∞');
+    expect(screen.getByText('asus: needs 14.0 GiB of GPU memory, has 4.0')).toBeTruthy();
+  });
+
+  it('enqueues after the operator confirms the warnings', async () => {
+    postJSON
+      .mockResolvedValueOnce({ queued: false, warnings: ['no end condition: position_eval/x'] })
+      .mockResolvedValueOnce({ queued: true, warnings: [] });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    expect(await enqueueTag('position_eval', 'x')).toBe(true);
+    expect(confirm.mock.calls[0][0]).toContain('no end condition');
+    expect(postJSON).toHaveBeenLastCalledWith('/api/queue/enqueue', { workload: 'position_eval', tag: 'x', confirm: true });
+
+    postJSON.mockReset();
+    postJSON.mockResolvedValueOnce({ queued: false, warnings: ['w'] });
+    confirm.mockReturnValue(false);
+    expect(await enqueueTag('position_eval', 'x')).toBe(false);
+    expect(postJSON).toHaveBeenCalledTimes(1);
+    confirm.mockRestore();
   });
 });

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getJSON, postJSON } from '../../lib/api';
 import BurnStrip from './BurnStrip';
-import PoolView from './PoolView';
+import PoolView, { enqueueTag } from './PoolView';
 import TaskView from './TaskView';
 
 // The master dashboard: the entrypoint for all work. Pick a workload, then a
@@ -309,13 +309,16 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
     return parseInt(String(raw), 10);
   };
 
-  const create = async () => {
+  // `enqueue`: also queue the new tag for the machine pool (PoolView's
+  // enqueueTag, which asks to confirm any warnings).
+  const create = async (enqueue = false) => {
     setBusy(true);
     setError('');
     const params = Object.fromEntries(workload.params.map((p) => [p.name, coerce(p)]));
     const body = { workload: workload.name, tag, params, ...(hasProfiles(workload) ? { profile } : {}) };
     try {
       await postJSON('/api/tasks', body);
+      if (enqueue) await enqueueTag(workload.name, tag);
       onCreated(tag);
     } catch (e) {
       setError(String(e));
@@ -339,7 +342,8 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
           />
         </label>
         <ParamFields params={standardPrimary} {...fieldProps} />
-        <Button label={busy ? 'Creating…' : 'Create'} onClick={create} disabled={!canCreate} />
+        <Button label={busy ? 'Creating…' : 'Create'} onClick={() => create()} disabled={!canCreate} />
+        <Button label="Create & enqueue" onClick={() => create(true)} disabled={!canCreate} />
       </div>
       {profileNames.length > 0 && (
         <div style={{ ...paramRowStyle, marginTop: 10 }}>

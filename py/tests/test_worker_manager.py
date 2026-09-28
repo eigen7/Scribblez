@@ -21,6 +21,7 @@ from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
 from scribblez import workloads
 from scribblez.dashboard import db, tasks
+from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.workers import (
     WorkerManager,
@@ -58,6 +59,7 @@ def task() -> tasks.TaskRecord:
 @pytest.fixture
 def manager(tmp_path, monkeypatch) -> WorkerManager:
     monkeypatch.setattr(tasks, "task_path", lambda spec, tag: tmp_path / f"{tag}.task.json")
+    monkeypatch.setattr(pool_mod, "POOL_PATH", tmp_path / "pool.json")
     monkeypatch.setattr(WorkerManager, "_ensure_sync", lambda self, spec, task: None)
     for name in ("_spawn_local", "_run_ssh_container", "_creds"):
         monkeypatch.setattr(WorkerManager, name, _fail)
@@ -158,7 +160,7 @@ def test_reconcile_contains_per_slot_failures(manager, spec, task, monkeypatch):
         raise RuntimeError("docker: no such image")
 
     monkeypatch.setattr(WorkerManager, "_reconcile_ssh", boom)
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task)]))
     asyncio.run(manager.reconcile())
     assert attempted == [w.worker_id for w in added]
 
@@ -213,7 +215,7 @@ def test_reconcile_skips_a_slot_removed_between_its_steps(manager, spec, task, m
     monkeypatch.setattr(
         WorkerManager, "_reconcile_worker", lambda self, spec, task, w, *a: enforced.append(w)
     )
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task)]))
     asyncio.run(manager.reconcile())
     assert enforced == [kept]
 
@@ -277,6 +279,7 @@ class _GpuRoles:
     check sees, without the singleton rule speaking first."""
 
     name = "position_eval"
+    gpu_need = ""  # no measured figures: the GPU-fit check stays out of these tests
     _roles = {
         r.name: r
         for r in (
@@ -342,7 +345,7 @@ def test_reconcile_leaves_slots_on_a_machine_that_is_not_up_alone(manager, spec,
     monkeypatch.setattr(
         WorkerManager, "_reconcile_worker", lambda self, spec, task, w, *a: enforced.append(w)
     )
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task)]))
     asyncio.run(manager.reconcile())
     assert enforced == []
     monkeypatch.setattr(_FakeSshMachine, "machine_state", "up")
@@ -700,7 +703,7 @@ def test_the_listing_follows_a_rent_and_a_remove_without_waiting_for_a_pass(
     want of its instance there, and a just-removed one's instance must not
     show on the burn strip as a running orphan."""
     provider, m = rented
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task)]))
     (info,) = manager.machine_status(spec, task)  # no observation: the listing as cached
     assert info["state"] == "launching"
     provider.instances["i-1"].state = "running"
@@ -758,7 +761,7 @@ def test_orphans_are_our_instances_no_task_names(rented, manager, spec, task, mo
         address=None,
         launched_at=None,
     )
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task)]))
     manager._instances = ({}, 0.0)
     orphans = manager.orphans(observe=True)
     assert [o["instance_id"] for o in orphans] == ["i-7"]
@@ -785,7 +788,7 @@ def test_fleet_adds_up_what_bills_whoever_tracks_it(rented, manager, spec, task,
         id="i-9", state="terminated", type_id="c7a.4xlarge", owner=None, address=None,
         launched_at=None,
     )  # fmt: skip
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task)]))
     manager._instances = ({}, 0.0)
     manager._list_fleet()
     fleet = manager.fleet()
@@ -809,7 +812,7 @@ def test_fleet_step_lists_without_rented_machines_and_keeps_a_failure(manager, m
         address=None, launched_at=time.time(),
     )  # fmt: skip
     monkeypatch.setattr(manager, "_provider", lambda: provider)
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([]))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([]))
     manager._list_fleet()
     fleet = manager.fleet()
     assert [r["instance_id"] for r in fleet["instances"]] == ["i-3"]
@@ -1483,6 +1486,7 @@ class _DispatchSpec:
 
     name = "position_eval"
     scheduler = ""
+    gpu_need = ""
     params_cls = PositionEvalParams
     roles = (POSITION_EVAL_SPEC.role("match_eval"),)
 
@@ -1514,7 +1518,7 @@ def test_reconcile_dispatches_to_running_slots_only(manager, tmp_path, monkeypat
             worker_id="local-1", role="match_eval", kind="local", desired_state="paused"
         )
     )
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task)]))
     monkeypatch.setattr(WorkerManager, "_local_alive", lambda self, spec, task, w: w is running)
     monkeypatch.setattr(WorkerManager, "_reconcile_worker", lambda *a, **k: None)
     asyncio.run(manager.reconcile())
@@ -1686,19 +1690,19 @@ def test_a_restart_does_not_inherit_a_zero_it_cannot_vouch_for(manager, spec, ta
     holding.undelivered = 900
     tasks.save_task(spec, task)
 
-    # The walk is pinned to this task: _all_tasks otherwise lists the real
+    # The walk is pinned to this task: all_tasks otherwise lists the real
     # mount, and a test that reads it passes or fails on what happens to be
     # there.
     monkeypatch.setattr(tasks, "list_tags", lambda spec: [{"tag": "t", "has_task": True}])
     fresh = WorkerManager()  # the dashboard comes back up
     monkeypatch.setattr(fresh, "_creds", _fail)
-    reloaded = next(t for _, t in fresh._all_tasks() if t.tag == "t")
+    reloaded = next(t for _, t in fresh.all_tasks() if t.tag == "t")
     assert reloaded.worker(drained.worker_id).undelivered is None
     assert reloaded.worker(holding.worker_id).undelivered == 900
     # Vetted once, then left alone: a count this process recorded stands.
     reloaded.worker(drained.worker_id).undelivered = 0
     tasks.save_task(spec, reloaded)
-    again = next(t for _, t in fresh._all_tasks() if t.tag == "t")
+    again = next(t for _, t in fresh.all_tasks() if t.tag == "t")
     assert again.worker(drained.worker_id).undelivered == 0
 
 
@@ -1918,7 +1922,7 @@ def test_reconcile_collects_from_the_generator_but_not_the_trainer(manager, tmp_
     monkeypatch.setattr(WorkerManager, "_reconcile_worker", lambda *a, **k: None)
     monkeypatch.setattr(WorkerManager, "_ensure_sync", lambda *a: None)
     monkeypatch.setattr(WorkerManager, "_push_controls", lambda *a: None)
-    monkeypatch.setattr(manager, "_all_tasks", lambda: iter([(spec, task)]))
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task)]))
     asyncio.run(manager.reconcile())
     assert collected == ["g"]
     (_, tr) = manager.worker_status(spec, task)

@@ -34,6 +34,7 @@ from bokeh.embed import json_item
 from scribblez import lane_analysis, workloads
 from scribblez import params as params_mod
 from scribblez.dashboard import db, figure_delta, master_api, plots, tasks, trajectories_api
+from scribblez.dashboard.tag_queue import TagQueue
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
     InputArm,
@@ -855,7 +856,7 @@ class PositionEvalAltLeaveHandler(_Base):
         )
 
 
-def make_app(mount_root: str, worker_manager=None) -> tornado.web.Application:
+def make_app(mount_root: str, worker_manager=None, tag_queue=None) -> tornado.web.Application:
     """The API app: the training data plane plus the master control plane,
     whose handlers need `worker_manager`."""
     return tornado.web.Application(
@@ -878,6 +879,7 @@ def make_app(mount_root: str, worker_manager=None) -> tornado.web.Application:
         ],
         mount_root=mount_root,
         worker_manager=worker_manager,
+        tag_queue=tag_queue,
     )
 
 
@@ -928,10 +930,16 @@ def run(port: int, mount_root: str):
     """
     _acquire_control_lock(mount_root)
     manager = WorkerManager()
-    make_app(mount_root, manager).listen(port, address="127.0.0.1")
+    tag_queue = TagQueue(manager)
+    make_app(mount_root, manager, tag_queue).listen(port, address="127.0.0.1")
     loop = tornado.ioloop.IOLoop.current()
 
     async def reconcile():
+        # The queue goes first, so the slots a placement creates start this pass.
+        try:
+            await manager.offload(tag_queue.tick)
+        except Exception as e:  # noqa: BLE001 -- the queue must not stop reconciliation
+            print(f"tag queue: {e}")
         try:
             await manager.reconcile()
         except Exception as e:  # noqa: BLE001 -- reconciliation must keep ticking
@@ -946,6 +954,7 @@ def run(port: int, mount_root: str):
     try:
         loop.start()
     finally:
+        tag_queue.shutdown()
         manager.shutdown()
 
 
