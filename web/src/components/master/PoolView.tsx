@@ -31,13 +31,16 @@ export function gpuText(h: PoolMachine['hardware']): string {
   return `${h.gpu_count} × ${(h.gpu_memory_gb ?? 0).toFixed(1)} GiB`;
 }
 
+// The lease, and any slots outside it on the same machine: a tag placed there
+// by hand alongside a leased one is a double booking the operator should see.
 function stateText(m: PoolMachine): string {
+  const others = m.occupants.join(', ');
   if (m.lease) {
     const why = m.lease.reason ? `: ${m.lease.reason}` : '';
-    return `${m.lease.workload}/${m.lease.tag} (${m.lease.phase}${why})`;
+    const leased = `${m.lease.workload}/${m.lease.tag} (${m.lease.phase}${why})`;
+    return others ? `${leased}; also ${others}` : leased;
   }
-  if (m.occupants.length) return `busy: ${m.occupants.join(', ')}`;
-  return 'free';
+  return others ? `busy: ${others}` : 'free';
 }
 
 // One queued tag (dashboard/tag_queue.py's status): its order, whether it

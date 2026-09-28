@@ -44,6 +44,9 @@ class Lease:
     since: float
     reason: str = ""  # why a failed or held lease is where it is
 
+    def held_by(self, workload: str, tag: str) -> bool:
+        return (self.workload, self.tag) == (workload, tag)
+
 
 @dataclass
 class Hardware:
@@ -92,14 +95,25 @@ class Pool:
 
 
 def parse_hardware(report: str) -> Hardware:
-    """Hardware from HARDWARE_COMMAND's output (cloud/ssh_machine.py)."""
+    """Hardware from HARDWARE_COMMAND's output (cloud/ssh_machine.py). Only
+    numeric lines after the first are GPUs: nvidia-smi prints its failures
+    ("couldn't communicate with the NVIDIA driver") on stdout, and a machine in
+    that state has no usable GPU."""
     lines = [line.strip() for line in report.splitlines() if line.strip()]
-    gpus = [float(line) / 1024 for line in lines[1:]]
+    gpus = [float(line) / 1024 for line in lines[1:] if _is_number(line)]
     return Hardware(
         vcpus=int(lines[0]),
         gpu_count=len(gpus),
         gpu_memory_gb=min(gpus) if gpus else 0.0,
     )
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
 
 
 def local_hardware() -> Hardware:
@@ -136,9 +150,7 @@ def leased_record(pool: Pool, workload: str, tag: str, name: str) -> MachineReco
     """The machine record of pool machine `name`, if (workload, tag) holds its
     lease: how a leased machine's name resolves for that task's slots."""
     m = pool.find(name)
-    if m is None or m.machine is None or m.lease is None:
-        return None
-    if (m.lease.workload, m.lease.tag) != (workload, tag):
+    if m is None or m.machine is None or m.lease is None or not m.lease.held_by(workload, tag):
         return None
     return m.machine
 
@@ -170,3 +182,8 @@ def load_pool() -> Pool:
 def save_pool(pool: Pool):
     """Write `pool` atomically and keep it as the shared object."""
     _store.save(pool)
+
+
+def forget_loaded():
+    """Drop the held Pool, as a fresh process starts (tests)."""
+    _store.forget()

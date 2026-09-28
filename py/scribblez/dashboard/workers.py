@@ -193,9 +193,9 @@ def _machine_record(task: tasks.TaskRecord, name: str) -> tasks.MachineRecord:
     a pool machine the task leases (dashboard/pool.py). Pool machines are
     resolved here rather than copied into the task, so the pool stays their
     one owner."""
-    for m in task.machines:
-        if m.name == name:
-            return m
+    own = task.find_machine(name)
+    if own is not None:
+        return own
     record = pool_mod.leased_record(pool_mod.load_pool(), task.workload, task.tag, name)
     if record is None:
         raise KeyError(f"no machine '{name}'")
@@ -209,7 +209,7 @@ def _leased_records(task: tasks.TaskRecord) -> list[tasks.MachineRecord]:
         for m in pool_mod.load_pool().machines
         if m.machine is not None
         and m.lease is not None
-        and (m.lease.workload, m.lease.tag) == (task.workload, task.tag)
+        and m.lease.held_by(task.workload, task.tag)
     ]
 
 
@@ -608,7 +608,7 @@ class WorkerManager:
         machine.pull_image(image)
         holder.arch = machine.detect_arch(image)
         tasks.save_task(spec, task)
-        if w.machine is not None and not any(holder is m for m in task.machines):
+        if w.machine is not None and task.find_machine(w.machine) is None:
             pool_mod.save_pool(pool_mod.load_pool())  # a leased pool machine's record
         return holder.arch
 
@@ -1531,11 +1531,19 @@ class WorkerManager:
         pool_mod.save_pool(pool)
 
     def remove_pool_machine(self, name: str):
-        """Take a machine out of the pool. Refused while a tag leases it: the
-        lease's slots name it, and would lose their machine."""
+        """Take a machine out of the pool. Refused while a tag leases it or
+        any slot names it: those slots would lose their machine, and every
+        lookup of it (the pool page, the reconcile pass) would fail."""
         pool = pool_mod.load_pool()
         m = pool.machine(name)
         assert m.lease is None, f"{name} is leased by {m.lease.workload}/{m.lease.tag}"
+        naming = [
+            f"{spec.name}/{task.tag}/{w.worker_id}"
+            for spec, task in self.all_tasks()
+            for w in task.workers
+            if w.machine == name and task.find_machine(name) is None
+        ]
+        assert not naming, f"slots still name {name}: {', '.join(naming)}; remove them first"
         pool.machines.remove(m)
         pool_mod.save_pool(pool)
 
@@ -1560,7 +1568,7 @@ class WorkerManager:
         spell one machine several ways."""
         out = []
         for spec, task in tasks_now:
-            if m.lease and (m.lease.workload, m.lease.tag) == (spec.name, task.tag):
+            if m.lease and m.lease.held_by(spec.name, task.tag):
                 continue
             for w in task.workers:
                 if not _is_pool_machine(m, _slot_target(w.kind, None, _slot_host(task, w))):
