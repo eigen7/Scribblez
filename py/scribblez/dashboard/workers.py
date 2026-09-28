@@ -256,6 +256,40 @@ def _accrue_machine(m: tasks.MachineRecord, billing: bool):
         m.observed_up = billing
 
 
+def _record_instance(
+    record: tasks.MachineRecord, provider, inst: Instance, mtype, *, spot: bool, known_hosts: Path
+):
+    """Fill `record` from a rented instance just launched or adopted: its
+    address and key material, type, rate and launch time, and start its spend
+    accrual. `known_hosts` is emptied, since a new instance has a new host key.
+    Until the instance has an address its host is a placeholder unique to it,
+    so two machines still coming up never read as the same host."""
+    known_hosts.parent.mkdir(parents=True, exist_ok=True)
+    known_hosts.write_text("")
+    record.provider = provider.name
+    record.host = f"{provider.ssh_user}@{inst.address or f'pending-{inst.id}'}"
+    record.identity_file = provider.identity_file
+    record.known_hosts_file = str(known_hosts)
+    record.arch = mtype.arch
+    record.gpu_count = mtype.gpu_count
+    record.instance_id = inst.id
+    record.instance_type = mtype.id
+    record.spot = spot
+    record.region = getattr(provider, "region", None)
+    record.cost_per_hr = inst.cost_per_hr if inst.cost_per_hr is not None else mtype.cost_per_hr
+    record.launched_at = inst.launched_at or time.time()
+    _accrue_machine(record, True)
+
+
+def _moved_host(record: tasks.MachineRecord, inst: Instance | None) -> str | None:
+    """`record`'s host at `inst`'s current address when it has moved (a
+    stop/start, or the first address after launch); None otherwise."""
+    if inst is None or not inst.address:
+        return None
+    host = f"{record.host.split('@')[0]}@{inst.address}"
+    return host if host != record.host else None
+
+
 def _rented_state(m: tasks.MachineRecord, inst: Instance | None, probe: str | None) -> str:
     """A rented machine's display state, from the provider's listing and, once
     the instance runs, its ssh probe:
@@ -1125,25 +1159,9 @@ class WorkerManager:
         # Add it to the cached listing now; otherwise the machine reads `gone`
         # until the next pass relists.
         self._instances[0][inst.id] = inst
+        m = tasks.MachineRecord(name=name, provider=provider.name, host="")
         known_hosts = MACHINES_DIR / spec.name / task.tag / name / "known_hosts"
-        known_hosts.parent.mkdir(parents=True, exist_ok=True)
-        known_hosts.write_text("")  # a relaunch is a new name, so never a stale key
-        m = tasks.MachineRecord(
-            name=name,
-            provider=provider.name,
-            host=f"{provider.ssh_user}@{inst.address or 'pending'}",
-            identity_file=provider.identity_file,
-            known_hosts_file=str(known_hosts),
-            arch=mtype.arch,
-            gpu_count=mtype.gpu_count,
-            instance_id=inst.id,
-            instance_type=mtype.id,
-            spot=spot,
-            region=getattr(provider, "region", None),
-            cost_per_hr=inst.cost_per_hr if inst.cost_per_hr is not None else mtype.cost_per_hr,
-            launched_at=inst.launched_at or time.time(),
-        )
-        _accrue_machine(m, True)
+        _record_instance(m, provider, inst, mtype, spot=spot, known_hosts=known_hosts)
         task.machines.append(m)
         tasks.save_task(spec, task)
         return m
@@ -1230,12 +1248,17 @@ class WorkerManager:
         return mtype.cost_per_hr if mtype is not None else None
 
     def _owned(self) -> dict[str, tasks.MachineRecord]:
-        """Every task's machines by the ownership tag each carries."""
-        return {
+        """Every task's machines and every pool rental, by the ownership tag
+        each carries."""
+        owned = {
             _owner(spec, task.tag, m.name): m
             for spec, task in self.all_tasks()
             for m in task.machines
         }
+        for m in pool_mod.load_pool().machines:
+            if m.capacity is not None:
+                owned[pool_mod.owner_tag(m.name)] = m.machine
+        return owned
 
     def orphans(self, observe: bool = False) -> list[dict]:
         """Instances tagged ours that no task machine names. They are shown with
@@ -1285,18 +1308,16 @@ class WorkerManager:
         saves, but a poll's accrual is not lost: the record is the pass's own
         shared object, so the next pass saves it."""
         out = []
-        rented = any(m.instance_id is not None for m in task.machines)
-        index = self._instance_index(observe) if rented else {}
         leased = _leased_records(task)
+        rented = any(m.instance_id is not None for m in [*task.machines, *leased])
+        index = self._instance_index(observe) if rented else {}
         for m in [*task.machines, *leased]:
+            pooled = any(m is x for x in leased)
             key = _machine_key(spec, task.tag, m.name)
             inst = index.get(m.instance_id) if m.instance_id is not None else None
-            if (
-                inst is not None
-                and inst.address
-                and m.host != f"{m.host.split('@')[0]}@{inst.address}"
-            ):
-                m.host = f"{m.host.split('@')[0]}@{inst.address}"  # it moved on a stop/start
+            moved = _moved_host(m, inst)
+            if moved is not None:
+                m.host = moved
             probe, at = self._machine_probes.get(key, (None, 0.0))
             if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
                 # A probe is worth making only on a machine that can answer.
@@ -1308,7 +1329,8 @@ class WorkerManager:
                 state = probe or "checking"
             else:
                 state = _rented_state(m, inst, probe)
-                _accrue_machine(m, inst is not None and inst.state in ("pending", "running"))
+                if not pooled:  # a pool rental accrues in the pool's own step
+                    _accrue_machine(m, inst is not None and inst.state in ("pending", "running"))
             self._machine_states[key] = state
             info = {
                 "name": m.name,
@@ -1324,7 +1346,7 @@ class WorkerManager:
                 "slots": [w.worker_id for w in task.slots_on(m.name)],
                 # A pool machine this task leases: the pool, not the task,
                 # owns it, so the task view offers no Remove.
-                "pool": any(m is x for x in leased),
+                "pool": pooled,
             }
             reason = self._exits.get(key)
             if reason:
@@ -1542,9 +1564,10 @@ class WorkerManager:
         pool_mod.save_pool(pool)
 
     def remove_pool_machine(self, name: str):
-        """Take a machine out of the pool. Refused while a tag leases it or
-        any slot names it: those slots would lose their machine, and every
-        lookup of it (the pool page, the reconcile pass) would fail."""
+        """Take a machine out of the pool, terminating it if the pool rented
+        it. Refused while a tag leases it or any slot names it: those slots
+        would lose their machine, and every lookup of it (the pool page, the
+        reconcile pass) would fail."""
         pool = pool_mod.load_pool()
         m = pool.machine(name)
         assert m.lease is None, f"{name} is leased by {m.lease.workload}/{m.lease.tag}"
@@ -1555,8 +1578,53 @@ class WorkerManager:
             if w.machine == name and task.find_machine(name) is None
         ]
         assert not naming, f"slots still name {name}: {', '.join(naming)}; remove them first"
+        if m.capacity is not None and m.machine.instance_id is not None:
+            self._terminate(m.machine.instance_id, m.machine.instance_type)
+            _accrue_machine(m.machine, False)
         pool.machines.remove(m)
         pool_mod.save_pool(pool)
+
+    def add_capacity(self, name: str, instance_type: str, *, spot: bool, cap: int):
+        """Let the pool rent up to `cap` instances of `instance_type`
+        (pool.Capacity). The name also prefixes its machines' names and owner
+        tags, so it is restricted to letters, digits and underscores."""
+        assert name and all(c.isalnum() or c == "_" for c in name), (
+            "a capacity name uses only letters, digits and underscores"
+        )
+        assert cap >= 1, "the cap is at least 1"
+        assert any(t.id == instance_type for t in self._provider().catalog()), (
+            f"no machine type '{instance_type}'"
+        )
+        pool = pool_mod.load_pool()
+        assert all(c.name != name for c in pool.capacity), f"capacity '{name}' exists"
+        assert pool.find(name) is None, f"'{name}' names a pool machine"
+        pool.capacity.append(pool_mod.Capacity(name, instance_type, spot, cap))
+        pool_mod.save_pool(pool)
+
+    def set_capacity_cap(self, name: str, cap: int):
+        """Change a capacity entry's cap. Lowering it rents no more; machines
+        already rented finish their tags and are terminated once idle."""
+        assert cap >= 0, "the cap is at least 0"
+        pool = pool_mod.load_pool()
+        entry = next((c for c in pool.capacity if c.name == name), None)
+        assert entry is not None, f"no capacity '{name}'"
+        entry.cap = cap
+        pool_mod.save_pool(pool)
+
+    def remove_capacity(self, name: str):
+        """Stop renting under a capacity entry. Its rented machines stay until
+        their tags finish and they idle out."""
+        pool = pool_mod.load_pool()
+        pool.capacity = [c for c in pool.capacity if c.name != name]
+        pool_mod.save_pool(pool)
+
+    def lease_spend(self, task: tasks.TaskRecord) -> float:
+        """What the task's current leases of pool rentals have cost so far."""
+        return sum(
+            pool_mod.lease_spend(m)
+            for m in pool_mod.load_pool().machines
+            if m.lease is not None and (m.lease.workload, m.lease.tag) == (task.workload, task.tag)
+        )
 
     def pool_status(self) -> list[dict]:
         """One dict per pool machine: its record, and `occupants`, the slots

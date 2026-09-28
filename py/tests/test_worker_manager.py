@@ -450,7 +450,7 @@ def test_renting_records_the_instance_and_its_key_material(rented, spec, task, t
     provider, m = rented
     assert provider.calls == [("launch", "g6.2xlarge")]
     assert m.instance_id == "i-1" and m.instance_type == "g6.2xlarge"
-    assert m.host == "ubuntu@pending" and m.identity_file == "/k/scribblez.pem"
+    assert m.host == "ubuntu@pending-i-1" and m.identity_file == "/k/scribblez.pem"
     known_hosts = tmp_path / "machines" / spec.name / "t" / "m1" / "known_hosts"
     assert m.known_hosts_file == str(known_hosts) and known_hosts.read_text() == ""
     assert m.gpu_count == 1 and m.arch == "znver3" and m.cost_per_hr == 1.0

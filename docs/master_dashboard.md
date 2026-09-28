@@ -241,6 +241,18 @@ restart; past that it is dead weight and no longer holds the machine. Paused
 and finished slots never count. That keeps the queue off a machine the
 operator is using by hand, and not off one an old crashed slot sits on.
 
+**Rental capacity** lets the pool rent: an entry names a catalog type, spot or
+on-demand, and a cap (set it to what the AWS quota allows). The queue rents
+under it only for a queued tag that no free machine above can take and that
+fits the type, in queue order, never past the cap; the cap also counts any
+instance tagged as one of its machines that the pool lost track of. A refused
+rental (quota, capacity) shows on the tag's queue row and is retried after
+five minutes. A rented machine is a pool machine like the others, named
+`<capacity>-N` and tagged `pool/<name>` with the provider. Its lifecycle runs
+at pool level: started if stopped while leased, stopped (disk only) while
+held for a failed tag, and terminated ten minutes after its lease ends with
+nothing queued for it. What a lease costs goes to its tag's spend.
+
 ### The tag queue
 
 A tag with no slots can be **enqueued** (Enqueue on its Workers card, or

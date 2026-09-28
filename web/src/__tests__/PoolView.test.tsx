@@ -19,13 +19,16 @@ const machine = (over: Partial<PoolMachine>): PoolMachine => ({
   name: 'asus', kind: 'ssh', machine: { host: 'asus-laptop', identity_file: null },
   aliases: [], hardware: { vcpus: 12, gpu_count: 1, gpu_memory_gb: 4 },
   gpu_reserve_gb: 0, generator_threads: null, lease: null, occupants: [], state: 'free',
-  ...over,
+  capacity: null, ...over,
 });
 
 // Answer the page's two polls: the pool, and the queue.
 const serve = (machines: PoolMachine[], entries: QueueRow[] = []) =>
   getJSON.mockImplementation((url: string) =>
-    Promise.resolve(url === '/api/queue' ? { entries } : { machines }));
+    Promise.resolve(
+      url === '/api/queue' ? { entries }
+        : url === '/api/cloud/rental_offer' ? { types: [] }
+          : { machines, capacity: [] }));
 
 const row = (over: Partial<QueueRow>): QueueRow => ({
   workload: 'position_eval', tag: 'tune-a', machines: [], memory_override_gb: null,
@@ -97,6 +100,58 @@ describe('the queue', () => {
     expect(await enqueueTag('position_eval', 'x')).toBe(false);
     expect(postJSON).toHaveBeenCalledTimes(1);
     confirm.mockRestore();
+  });
+});
+
+describe('rental capacity', () => {
+  beforeEach(() => {
+    getJSON.mockReset();
+    postJSON.mockReset();
+  });
+
+  it('counts each entry against its cap and adds one from the GPU catalog', async () => {
+    getJSON.mockImplementation((url: string) => Promise.resolve(
+      url === '/api/queue' ? { entries: [] }
+        : url === '/api/cloud/rental_offer'
+          ? { types: [
+            { id: 'c7a.4xlarge', vcpus: 16, gpu_count: 0, gpu: '', cost_per_hr: 0.8 },
+            { id: 'g6.2xlarge', vcpus: 8, gpu_count: 1, gpu: 'L4 24 GB', cost_per_hr: 0.98 },
+          ] }
+          : {
+            machines: [machine({ name: 'g6-1', capacity: 'g6', machine: { host: 'ubuntu@1.2.3.4', identity_file: null, instance_type: 'g6.2xlarge', spot: true, spend: 1.5 } })],
+            capacity: [{ name: 'g6', instance_type: 'g6.2xlarge', spot: true, cap: 2 }],
+          }));
+    postJSON.mockResolvedValue({ ok: true });
+    render(<PoolView />);
+    await waitFor(() => expect(screen.getByTestId('capacity-g6').textContent).toBe('1 of 2 rented'));
+    expect(screen.getByText(/rented g6.2xlarge spot/)).toBeTruthy();
+    // Only GPU types are offered.
+    await waitFor(() => expect((screen.getByLabelText('capacity type') as HTMLSelectElement).value).toBe('g6.2xlarge'));
+    fireEvent.change(screen.getByLabelText('capacity name'), { target: { value: 'g6b' } });
+    fireEvent.click(screen.getByText('Add capacity'));
+    await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/pool/capacity', {
+      action: 'add', name: 'g6b', instance_type: 'g6.2xlarge', spot: true, cap: '1',
+    }));
+  });
+});
+
+describe('rental capacity without a provider', () => {
+  beforeEach(() => {
+    getJSON.mockReset();
+    postJSON.mockReset();
+  });
+
+  it('says why renting is unavailable and will not add without a cap', async () => {
+    getJSON.mockImplementation((url: string) => (
+      url === '/api/cloud/rental_offer'
+        ? Promise.reject(new Error('no cloud credentials'))
+        : Promise.resolve(url === '/api/queue' ? { entries: [] } : { machines: [], capacity: [] })
+    ));
+    render(<PoolView />);
+    await waitFor(() => expect(screen.getByText('renting unavailable: no cloud credentials')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('capacity name'), { target: { value: 'g6' } });
+    fireEvent.change(screen.getByLabelText('capacity cap'), { target: { value: '' } });
+    expect((screen.getByText('Add capacity').closest('button') as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
