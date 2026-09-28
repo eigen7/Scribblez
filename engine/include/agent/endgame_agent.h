@@ -18,6 +18,8 @@ namespace scribblez {
 // Base supplies the command-line surface the endgame variant extends:
 //   - Params, carrying the thread_id the pooled solver is keyed by;
 //   - kType, its --type value (the variant's is kType + "-endgame");
+//   - kPreEndgameByDefault, whether the variant also solves the turn with one
+//     tile in the bag unless --peg says otherwise;
 //   - parse_params(tokens, thread_id, name, extra, type_label), parsing its
 //     own options plus any registered in `extra` in one pass;
 //   - options_help().
@@ -27,6 +29,7 @@ class EndgameAgent : public Base {
   struct Params {
     typename Base::Params base;
     EndgameSolver::Params solver;
+    PreEndgameTurnParams peg{.enabled = Base::kPreEndgameByDefault};
   };
 
   explicit EndgameAgent(const Params& params);
@@ -41,7 +44,8 @@ class EndgameAgent : public Base {
 
   // Build from `--player "--type=<kType>-endgame [options]"` tokens, with
   // --type and --name already stripped: every Base option, plus the solver
-  // Params under an "endgame-" prefix. Throws on bad input.
+  // Params under an "endgame-" prefix and the pre-endgame's under "peg".
+  // Throws on bad input.
   static std::unique_ptr<EndgameAgent> from_spec(const std::vector<std::string>& tokens,
                                                  int thread_id, const std::string& name);
 

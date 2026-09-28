@@ -4,13 +4,11 @@
 // static equity, roll each out under common random numbers, and play whichever
 // the rollouts liked best. Bag-empty turns go to the endgame solver.
 //
-// This is the project's baseline opponent and its stand-in for Macondo's
-// BestBot (simming plus an endgame solver, no rack inference), which is what
-// makes win rates against it comparable to published results
-// (docs/evaluation_plan.md). The resemblance is in shape, not detail: Macondo's
-// rollouts stop at a fixed ply and read static equity, where ours run to the
-// game's end or to a learned leaf evaluation (sim_horizon), and Macondo prunes
-// weak candidates as it sims where we sim every candidate equally.
+// This is the project's baseline simming opponent. It resembles Macondo's
+// BestBot in shape, not detail: Macondo's rollouts stop at a fixed ply and read
+// static equity, where ours run to the game's end or to a learned leaf
+// evaluation (sim_horizon), and Macondo prunes weak candidates as it sims where
+// we sim every candidate equally. BestBot itself is ported in best_bot.h.
 
 #include "agent/agent.h"
 #include "agent/endgame_turn_policy.h"

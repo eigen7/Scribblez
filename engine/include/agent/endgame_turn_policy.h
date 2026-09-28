@@ -2,12 +2,26 @@
 
 #include "agent/agent.h"
 #include "endgame/endgame_solver.h"
+#include "endgame/pre_endgame_solver.h"
 
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace scribblez {
+
+// EndgameTurnPolicy's pre-endgame settings.
+struct PreEndgameTurnParams {
+  bool enabled = false;
+  // Node budget for each endgame the pre-endgame solver evaluates.
+  uint64_t budget = 2000;
+  PreEndgameSolver::Params solver{};
+
+  // Register the options under `prefix`, bound to this object's fields,
+  // whose current values become the defaults.
+  void add_options(boost::program_options::options_description& desc, const std::string& prefix);
+};
 
 // The endgame half of an agent: an agent that plays heuristically while the
 // bag holds tiles hands its bag-empty turns here, so it converts won endgames
@@ -19,6 +33,10 @@ namespace scribblez {
 // arbitrary fraction of the root, and the owning agent's own move is the
 // better policy. The node budget therefore tunes how often an endgame gets a
 // real search, never how noisy a search is.
+//
+// Optionally it also takes the turn with one tile in the bag, which
+// PreEndgameSolver solves (as Macondo's BestBot does), evaluating its endgames
+// through the same solver.
 //
 // The two seats of a game thread share one pooled EndgameSolver, keyed by
 // thread id. The solver's hash is seat-agnostic, so one seat's solves reuse
@@ -32,11 +50,13 @@ class EndgameTurnPolicy {
   // the win/draw/loss proof and relies on a projection-respecting game loop to
   // end the game there. Set it for games played to the end, where points still
   // matter.
-  EndgameTurnPolicy(int thread_id, const EndgameSolver::Params& params);
+  EndgameTurnPolicy(int thread_id, const EndgameSolver::Params& params,
+                    const PreEndgameTurnParams& peg = {});
 
   // The solver's move, with its proof certificate (if any) as the decision's
-  // projection. Nullopt means the owning agent should play its own move: the
-  // bag still holds tiles, solving is disabled, or the solve is untrusted.
+  // projection, or with one tile in the bag the pre-endgame solver's move.
+  // Nullopt means the owning agent should play its own move: neither solver
+  // applies or is enabled, or the endgame solve is untrusted.
   std::optional<MoveDecision> try_solve(const MoveRequest& req);
 
   // Clears the per-game state and the shared transposition table.
@@ -66,7 +86,11 @@ class EndgameTurnPolicy {
   void set_incremental_movegen(bool on) { solver_->set_incremental_movegen(on); }
 
  private:
+  // The pre-endgame solver's best play.
+  MoveDecision solve_pre_endgame(const MoveRequest& req);
+
   EndgameSolver::Params params_;
+  PreEndgameTurnParams peg_;
   int scoreless_turns_ = 0;
   std::shared_ptr<EndgameSolver> solver_;  // shared with the seat-mate
   SolveTotals solve_totals_;
