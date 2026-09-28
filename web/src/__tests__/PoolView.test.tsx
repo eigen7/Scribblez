@@ -109,14 +109,14 @@ describe('rental capacity', () => {
     postJSON.mockReset();
   });
 
-  it('counts each entry against its cap and adds one from the GPU catalog', async () => {
+  it('counts each entry against its cap and adds one from the GPU catalog at its market rate', async () => {
     getJSON.mockImplementation((url: string) => Promise.resolve(
       url === '/api/queue' ? { entries: [] }
         : url === '/api/cloud/rental_offer'
           ? { types: [
             { id: 'c7a.4xlarge', vcpus: 16, gpu_count: 0, gpu: '', cost_per_hr: 0.8 },
             { id: 'g6.2xlarge', vcpus: 8, gpu_count: 1, gpu: 'L4 24 GB', cost_per_hr: 0.98 },
-          ] }
+          ], spot_prices: { 'g6.2xlarge': 0.41 } }
           : {
             machines: [machine({ name: 'g6-1', capacity: 'g6', machine: { host: 'ubuntu@1.2.3.4', identity_file: null, instance_type: 'g6.2xlarge', spot: true, spend: 1.5 } })],
             capacity: [{ name: 'g6', instance_type: 'g6.2xlarge', spot: true, cap: 2 }],
@@ -127,6 +127,12 @@ describe('rental capacity', () => {
     expect(screen.getByText(/rented g6.2xlarge spot/)).toBeTruthy();
     // Only GPU types are offered.
     await waitFor(() => expect((screen.getByLabelText('capacity type') as HTMLSelectElement).value).toBe('g6.2xlarge'));
+    expect(screen.getByText('g6.2xlarge spot, $0.410/hr')).toBeTruthy();
+    const option = () => (screen.getByLabelText('capacity type') as HTMLSelectElement).options[0].textContent;
+    expect(option()).toContain('$0.410/hr');
+    fireEvent.click(screen.getByLabelText('capacity spot'));
+    expect(option()).toContain('$0.980/hr');
+    fireEvent.click(screen.getByLabelText('capacity spot'));
     fireEvent.change(screen.getByLabelText('capacity name'), { target: { value: 'g6b' } });
     fireEvent.click(screen.getByText('Add capacity'));
     await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/pool/capacity', {

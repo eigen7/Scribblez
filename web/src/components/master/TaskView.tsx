@@ -3,6 +3,7 @@ import { getJSON, postJSON } from '../../lib/api';
 import { WORKLOAD_TABS } from '../../workloads';
 import { Button, Role, Workload } from './MasterApp';
 import { enqueueTag } from './PoolView';
+import { loadRentalOffer, RentalOffer, rateText } from './rentalOffer';
 import StatsTab from './StatsTab';
 import { TabActiveContext } from '../TabActiveContext';
 
@@ -30,15 +31,6 @@ type MachineInfo = {
   cost_per_hr: number | null; spend: number;
   state: string; slots: string[]; exit_reason?: string; retry_in_s?: number;
   pool: boolean;  // a pool machine this task leases; the pool owns it, so no Remove here
-};
-
-// The provider, the account it rents as, and its catalog (GET /api/cloud/rental_offer).
-type MachineType = {
-  id: string; vcpus: number; gpu_count: number; gpu: string; arch: string; cost_per_hr: number;
-};
-type RentalOffer = {
-  provider: string; account: string; types: MachineType[];
-  spot_prices: Record<string, number>;  // current spot rate by type id, where readable
 };
 
 // An instance the provider tagged ours that no task names (GET /api/cloud/orphans).
@@ -246,19 +238,6 @@ function SshForm({ machines, add, busy, disabled }: {
 // its address and key; the reconcile pass probes it (ssh + Docker) like it
 // probes the slots. Removing a machine removes the slots on it, under the
 // slot rule (nothing running, nothing unreachable, output discards confirmed).
-// The rental offer, fetched once per page load and shared by every task's
-// rent form; a failed fetch (no aws credentials yet) leaves the form out
-// rather than broken, with the reason shown once.
-let offerPromise: Promise<RentalOffer> | null = null;
-function loadRentalOffer(): Promise<RentalOffer> {
-  if (!offerPromise) {
-    offerPromise = getJSON('/api/cloud/rental_offer').catch((e) => {
-      offerPromise = null;
-      throw e;
-    });
-  }
-  return offerPromise;
-}
 
 // Renting: pick a type from the catalog; the machine appears as `launching`
 // and reads `up` once its first-boot script has pulled the worker images.
@@ -273,12 +252,6 @@ function RentForm({ offer, busy, onRent }: {
   const [market, setMarket] = useState<'on-demand' | 'spot'>('on-demand');
   const spot = market === 'spot';
   const t = types.find((x) => x.id === typeId) ?? types[0];
-  // The type's rate under the chosen market; a spot rate the account may
-  // not read (or the region has none of) is unknown, not the list price.
-  const priceOf = (x: MachineType): string => {
-    const rate = spot ? offer.spot_prices[x.id] : x.cost_per_hr;
-    return rate != null ? `$${rate.toFixed(3)}/hr` : 'rate unknown';
-  };
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ fontSize: 13, fontWeight: 600 }}>
@@ -306,7 +279,7 @@ function RentForm({ offer, busy, onRent }: {
           <select style={{ ...numInput, width: 'auto', minWidth: 300 }} value={t?.id ?? ''} onChange={(e) => setTypeId(e.target.value)}>
             {types.map((x) => (
               <option key={x.id} value={x.id}>
-                {x.id} — {x.vcpus} vCPU{x.gpu ? `, ${x.gpu_count}× ${x.gpu}` : ''} — {priceOf(x)}
+                {x.id} — {x.vcpus} vCPU{x.gpu ? `, ${x.gpu_count}× ${x.gpu}` : ''} — {rateText(offer, x.id, spot)}
               </option>
             ))}
           </select>
