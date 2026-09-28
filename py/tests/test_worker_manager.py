@@ -60,7 +60,6 @@ def task() -> tasks.TaskRecord:
 def manager(tmp_path, monkeypatch) -> WorkerManager:
     monkeypatch.setattr(tasks, "task_path", lambda spec, tag: tmp_path / f"{tag}.task.json")
     monkeypatch.setattr(pool_mod, "POOL_PATH", tmp_path / "pool.json")
-    monkeypatch.setattr(WorkerManager, "_ensure_sync", lambda self, spec, task: None)
     for name in ("_spawn_local", "_run_ssh_container", "_creds"):
         monkeypatch.setattr(WorkerManager, name, _fail)
     return WorkerManager()
