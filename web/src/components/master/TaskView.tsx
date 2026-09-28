@@ -28,6 +28,7 @@ type MachineInfo = {
   instance_type: string | null; instance_id: string | null; spot: boolean;
   cost_per_hr: number | null; spend: number;
   state: string; slots: string[]; exit_reason?: string; retry_in_s?: number;
+  pool: boolean;  // a pool machine this task leases; the pool owns it, so no Remove here
 };
 
 // The provider, the account it rents as, and its catalog (GET /api/cloud/rental_offer).
@@ -404,9 +405,13 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
                   <td style={{ padding: '6px 14px 6px 0' }}>{m.cost_per_hr != null ? `$${m.cost_per_hr}` : '—'}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{m.instance_id ? `$${m.spend.toFixed(2)}` : '—'}</td>
                   <td style={{ padding: '6px 0' }}>
-                    <span title={busySlots ? 'pause the slots on it before removing the machine' : undefined}>
-                      <Button label="Remove" tone="danger" disabled={busy || busySlots} onClick={() => remove(m)} />
-                    </span>
+                    {m.pool ? (
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>leased from the pool</span>
+                    ) : (
+                      <span title={busySlots ? 'pause the slots on it before removing the machine' : undefined}>
+                        <Button label="Remove" tone="danger" disabled={busy || busySlots} onClick={() => remove(m)} />
+                      </span>
+                    )}
                   </td>
                 </tr>
               );

@@ -35,6 +35,10 @@ class MachineType:
     gpu: str  # "" for a CPU-only type
     arch: str  # GCC -march value for its CPU family; selects the bundle it runs
     cost_per_hr: float  # on-demand list price, dated in the provider module
+    # Memory per GPU in GiB, as nvidia-smi reports it on the instance (a little
+    # under the marketed size); 0 for a CPU-only type. Placement checks a
+    # tag's GPU roles against it (docs/plans/tag_queue.md §3).
+    gpu_memory_gb: float = 0.0
 
 
 @dataclass(frozen=True)

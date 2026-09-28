@@ -49,6 +49,7 @@ from tornado.ioloop import IOLoop
 
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import tasks
 from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
 from scribblez.generational.lifecycle import MANIFEST_NAME
@@ -88,7 +89,7 @@ def _slot_sink(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.Wo
 
 
 def _rented(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
-    return w.machine is not None and task.machine(w.machine).instance_id is not None
+    return w.machine is not None and _machine_record(task, w.machine).instance_id is not None
 
 
 def _has_bucket_slots(spec: workloads.WorkloadSpec, task) -> bool:
@@ -120,6 +121,11 @@ OBSERVATION_TTL_SECONDS = 5.0
 # A rented machine on which nothing has run for this long is stopped, keeping
 # its disk, so a paused or finished run stops paying the provider's rate.
 IDLE_STOP_SECONDS = 600.0
+
+# How long a slot meant to run but not alive still keeps the tag queue off its
+# machine (WorkerManager._holds_machine): long enough to cover a restart or a
+# slow start, short of holding a machine for a slot that never comes back.
+DEAD_SLOT_GRACE_SECONDS = 600.0
 
 # The nice level local workers run at. A worker is the long-running background
 # job on this machine; everything else that competes with it -- a bundle build
@@ -181,12 +187,37 @@ def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dic
     }
 
 
+def _machine_record(task: tasks.TaskRecord, name: str) -> tasks.MachineRecord:
+    """The machine `name` a slot of `task` runs on: one of the task's own, or
+    a pool machine the task leases (dashboard/pool.py). Pool machines are
+    resolved here rather than copied into the task, so the pool stays their
+    one owner."""
+    own = task.find_machine(name)
+    if own is not None:
+        return own
+    record = pool_mod.leased_record(pool_mod.load_pool(), task.workload, task.tag, name)
+    if record is None:
+        raise KeyError(f"no machine '{name}'")
+    return record
+
+
+def _leased_records(task: tasks.TaskRecord) -> list[tasks.MachineRecord]:
+    """The records of the ssh pool machines `task` leases."""
+    return [
+        m.machine
+        for m in pool_mod.load_pool().machines
+        if m.machine is not None
+        and m.lease is not None
+        and m.lease.held_by(task.workload, task.tag)
+    ]
+
+
 def _ssh_machine(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> SshMachine:
-    """The ssh link to slot `w`'s machine: its task machine's address and key
-    material, or its bare host string."""
+    """The ssh link to slot `w`'s machine: its machine record's address and
+    key material, or its bare host string."""
     if w.machine is None:
         return SshMachine(w.host)
-    return _machine_link(task.machine(w.machine))
+    return _machine_link(_machine_record(task, w.machine))
 
 
 def _machine_link(m: tasks.MachineRecord) -> SshMachine:
@@ -247,7 +278,7 @@ def _rented_state(m: tasks.MachineRecord, inst: Instance | None, probe: str | No
 
 
 def _ssh_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
-    return w.host if w.machine is None else task.machine(w.machine).host
+    return w.host if w.machine is None else _machine_record(task, w.machine).host
 
 
 def _forget_empty(w: tasks.WorkerRecord):
@@ -461,6 +492,9 @@ class WorkerManager:
         self._exits: dict[str, str] = {}
         # Slot key -> (consecutive restarts, when the next one is allowed).
         self._restarts: dict[str, tuple[int, float]] = {}
+        # Slot key -> when a slot meant to run was first seen down since it was
+        # last alive (see _holds_machine).
+        self._down_since: dict[str, float] = {}
         # Machine key -> (probe state, when observed): SshMachine.probe for
         # each of a task's machines, refreshed by the reconcile pass ahead of
         # its slots (see machine_status).
@@ -531,7 +565,7 @@ class WorkerManager:
         rented machine's comes from the catalog. A registered machine or bare
         host is asked once over ssh, through the worker image's own start-up
         detection, and the answer is kept on its record."""
-        holder = task.machine(w.machine) if w.machine is not None else w
+        holder = _machine_record(task, w.machine) if w.machine is not None else w
         if holder.arch:
             return holder.arch
         image = self._creds().registry.image_for(spec.role(w.role).runtime)
@@ -539,6 +573,8 @@ class WorkerManager:
         machine.pull_image(image)
         holder.arch = machine.detect_arch(image)
         tasks.save_task(spec, task)
+        if w.machine is not None and task.find_machine(w.machine) is None:
+            pool_mod.save_pool(pool_mod.load_pool())  # a leased pool machine's record
         return holder.arch
 
     def _needed_archs(self, spec, task: tasks.TaskRecord) -> list[str]:
@@ -905,7 +941,7 @@ class WorkerManager:
         """An ssh slot on a bare host string, or on one of the task's
         machines by name (exactly one of the two)."""
         assert (host is None) != (machine is None), "an ssh slot names a host or a machine"
-        record = task.machine(machine) if machine is not None else None
+        record = _machine_record(task, machine) if machine is not None else None
         self._check_role(spec, task, role, "ssh", machine=record)
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "ssh"),
@@ -1145,7 +1181,8 @@ class WorkerManager:
         out = []
         rented = any(m.instance_id is not None for m in task.machines)
         index = self._instance_index(observe) if rented else {}
-        for m in task.machines:
+        leased = _leased_records(task)
+        for m in [*task.machines, *leased]:
             key = _machine_key(spec, task.tag, m.name)
             inst = index.get(m.instance_id) if m.instance_id is not None else None
             if (
@@ -1179,6 +1216,9 @@ class WorkerManager:
                 "spend": m.spend,
                 "state": state,
                 "slots": [w.worker_id for w in task.slots_on(m.name)],
+                # A pool machine this task leases: the pool, not the task,
+                # owns it, so the task view offers no Remove.
+                "pool": any(m is x for x in leased),
             }
             reason = self._exits.get(key)
             if reason:
@@ -1334,6 +1374,141 @@ class WorkerManager:
             for w in list(task.workers):
                 self.remove_worker(spec, task, w.worker_id)
         tasks.delete_tag(spec, tag)
+
+    # ---- the machine pool (dashboard/pool.py) -----------------------------
+
+    def add_pool_machine(
+        self,
+        name: str,
+        host: str | None = None,
+        *,
+        identity_file: str | None = None,
+        aliases: list[str] | None = None,
+        gpu_reserve_gb: float = 0.0,
+        generator_threads: int | None = None,
+    ) -> pool_mod.PoolMachine:
+        """Add a machine to the pool: this one (no `host`) or a registered ssh
+        machine, whose hardware is probed now so eligibility never has to
+        guess. A registered machine must already be prepared as for any ssh
+        slot (docs/master_dashboard.md)."""
+        pool = pool_mod.load_pool()
+        assert name, "a pool machine needs a name"
+        assert pool.find(name) is None, f"pool machine '{name}' exists"
+        if host is None:
+            assert all(m.kind != "local" for m in pool.machines), "this machine is already pooled"
+            m = pool_mod.PoolMachine(name=name, kind="local", hardware=pool_mod.local_hardware())
+        else:
+            record = tasks.MachineRecord(
+                name=name, provider="manual", host=host, identity_file=identity_file or None
+            )
+            hardware = pool_mod.parse_hardware(_machine_link(record).hardware_report())
+            record.gpu_count = hardware.gpu_count
+            m = pool_mod.PoolMachine(name=name, kind="ssh", machine=record, hardware=hardware)
+        m.aliases = list(aliases or [])
+        m.gpu_reserve_gb = gpu_reserve_gb
+        m.generator_threads = generator_threads
+        pool.machines.append(m)
+        pool_mod.save_pool(pool)
+        return m
+
+    def edit_pool_machine(self, name: str, **changes):
+        """Change a pool machine's operator-set fields (aliases, GPU reserve,
+        generator threads)."""
+        editable = {"aliases", "gpu_reserve_gb", "generator_threads"}
+        assert set(changes) <= editable, f"not editable: {sorted(set(changes) - editable)}"
+        pool = pool_mod.load_pool()
+        m = pool.machine(name)
+        for key, value in changes.items():
+            setattr(m, key, value)
+        pool_mod.save_pool(pool)
+
+    def reprobe_pool_machine(self, name: str):
+        """Re-read a pool machine's hardware (after a GPU swap, say)."""
+        pool = pool_mod.load_pool()
+        m = pool.machine(name)
+        if m.machine is None:
+            m.hardware = pool_mod.local_hardware()
+        else:
+            m.hardware = pool_mod.parse_hardware(_machine_link(m.machine).hardware_report())
+            m.machine.gpu_count = m.hardware.gpu_count
+        pool_mod.save_pool(pool)
+
+    def remove_pool_machine(self, name: str):
+        """Take a machine out of the pool. Refused while a tag leases it or
+        any slot names it: those slots would lose their machine, and every
+        lookup of it (the pool page, the reconcile pass) would fail."""
+        pool = pool_mod.load_pool()
+        m = pool.machine(name)
+        assert m.lease is None, f"{name} is leased by {m.lease.workload}/{m.lease.tag}"
+        naming = [
+            f"{spec.name}/{task.tag}/{w.worker_id}"
+            for spec, task in self._all_tasks()
+            for w in task.workers
+            if w.machine == name and task.find_machine(name) is None
+        ]
+        assert not naming, f"slots still name {name}: {', '.join(naming)}; remove them first"
+        pool.machines.remove(m)
+        pool_mod.save_pool(pool)
+
+    def pool_status(self) -> list[dict]:
+        """One dict per pool machine: its record, and `occupants`, the slots
+        outside its lease that make it busy (see _occupants). Reads only
+        remembered observations, like every status request."""
+        tasks_now = list(self._all_tasks())
+        out = []
+        for m in pool_mod.load_pool().machines:
+            occupants = self._occupants(m, tasks_now)
+            info = asdict(m)
+            info["occupants"] = occupants
+            info["state"] = "leased" if m.lease else "busy" if occupants else "free"
+            out.append(info)
+        return out
+
+    def _occupants(self, m: pool_mod.PoolMachine, tasks_now) -> list[str]:
+        """The slots on pool machine `m`, outside the tag leasing it, that make
+        it busy: `workload/tag/worker_id` of each _holds_machine counts.
+        Matching an ssh slot to `m` goes by canonical host name, since tags
+        spell one machine several ways."""
+        names = pool_mod.host_names(m) if m.kind == "ssh" else set()
+        out = []
+        for spec, task in tasks_now:
+            if m.lease and m.lease.held_by(spec.name, task.tag):
+                continue
+            for w in task.workers:
+                if w.kind != m.kind:
+                    continue
+                if m.kind == "ssh" and pool_mod.canonical_host(_ssh_host(task, w)) not in names:
+                    continue
+                if self._holds_machine(spec, task, w):
+                    out.append(f"{spec.name}/{task.tag}/{w.worker_id}")
+        return out
+
+    def _holds_machine(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
+        """Whether slot `w` keeps the queue off its machine: it is alive, or
+        gated (its gate will lift), or meant to run and down for less than
+        DEAD_SLOT_GRACE_SECONDS. The grace covers a slot between restarts or
+        just started. Past it, a slot meant to run that never comes up (an
+        `exited` one) is dead weight, and holding a machine for it would idle
+        the machine indefinitely. Paused and finished slots hold nothing."""
+        key = _key(spec, task.tag, w.worker_id)
+        if self._seen_alive(spec, task, w):
+            self._down_since.pop(key, None)
+            return True
+        if w.desired_state != "running":
+            self._down_since.pop(key, None)
+            return False
+        if w.role in task.gates:
+            return True
+        since = self._down_since.setdefault(key, time.time())
+        return time.time() - since < DEAD_SLOT_GRACE_SECONDS
+
+    def _seen_alive(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
+        """Whether slot `w`'s worker is alive, from what is already known: its
+        pid for a local slot, its last probe for an ssh one."""
+        if w.kind == "local":
+            return worker_pid_alive(w.pid, w.worker_id, task.tag)
+        probe, _ = self._probes.get(_key(spec, task.tag, w.worker_id), ("unknown", 0.0))
+        return probe in ("running", "paused")
 
     # ---- observation -----------------------------------------------------
 

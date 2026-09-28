@@ -280,7 +280,7 @@ class MachineAddHandler(_MasterBase):
                     name,
                     (body.get("host") or "").strip(),
                     (body.get("identity_file") or "").strip() or None,
-                    int(body["gpu_count"]) if body.get("gpu_count") not in (None, "") else None,
+                    _number(body, "gpu_count", int),
                 )
             return {"name": m.name}
 
@@ -335,6 +335,82 @@ class MachineActionHandler(_MasterBase):
             task = self.task_or_fail(spec, body["tag"])
             assert body["action"] == "remove", f"unknown action '{body['action']}'"
             self.manager.remove_machine(spec, task, body["name"])
+            return {"ok": True}
+
+        await self.guarded_offload(act)
+
+
+class PoolHandler(_MasterBase):
+    """The machine pool (dashboard/pool.py): each machine, its lease, and what
+    else is using it. Offloaded because it reads every task record."""
+
+    async def get(self):
+        await self.guarded_offload(lambda: {"machines": self.manager.pool_status()})
+
+
+def _number(body: dict, key: str, kind: type, default=None):
+    """`body[key]` as `kind` (int or float), `default` when absent or empty.
+    A value that does not parse is the operator's typo, answered with a 400
+    naming the field rather than a bare 500."""
+    value = body.get(key)
+    if value in (None, ""):
+        return default
+    try:
+        return kind(value)
+    except (TypeError, ValueError):
+        raise AssertionError(f"{key}: expected a number, got {value!r}") from None
+
+
+def _aliases(value) -> list[str]:
+    """Aliases as the form sends them: a list, or one comma-separated string."""
+    items = value if isinstance(value, list) else str(value or "").split(",")
+    return [a.strip() for a in items if a.strip()]
+
+
+class PoolMachineAddHandler(_MasterBase):
+    """Add this machine (no host) or a registered ssh machine to the pool.
+    Offloaded because the hardware probe is an ssh round trip."""
+
+    async def post(self):
+        body = self.body()
+
+        def add():
+            m = self.manager.add_pool_machine(
+                (body.get("name") or "").strip(),
+                (body.get("host") or "").strip() or None,
+                identity_file=(body.get("identity_file") or "").strip() or None,
+                aliases=_aliases(body.get("aliases")),
+                gpu_reserve_gb=_number(body, "gpu_reserve_gb", float, 0.0),
+                generator_threads=_number(body, "generator_threads", int),
+            )
+            return {"name": m.name}
+
+        await self.guarded_offload(add)
+
+
+class PoolMachineActionHandler(_MasterBase):
+    """Edit, re-probe or remove a pool machine."""
+
+    async def post(self):
+        body = self.body()
+
+        def act():
+            name, action = body["name"], body["action"]
+            if action == "remove":
+                self.manager.remove_pool_machine(name)
+            elif action == "reprobe":
+                self.manager.reprobe_pool_machine(name)
+            elif action == "edit":
+                changes = {}
+                if "aliases" in body:
+                    changes["aliases"] = _aliases(body["aliases"])
+                if "gpu_reserve_gb" in body:
+                    changes["gpu_reserve_gb"] = _number(body, "gpu_reserve_gb", float, 0.0)
+                if "generator_threads" in body:
+                    changes["generator_threads"] = _number(body, "generator_threads", int)
+                self.manager.edit_pool_machine(name, **changes)
+            else:
+                raise AssertionError(f"unknown action '{action}'")
             return {"ok": True}
 
         await self.guarded_offload(act)
@@ -404,6 +480,9 @@ MASTER_ROUTES = [
     (r"/api/task/worker_action", WorkerActionHandler),
     (r"/api/task/machines", MachineAddHandler),
     (r"/api/task/machine_action", MachineActionHandler),
+    (r"/api/pool", PoolHandler),
+    (r"/api/pool/machines", PoolMachineAddHandler),
+    (r"/api/pool/machine_action", PoolMachineActionHandler),
     (r"/api/cloud/rental_offer", RentalOfferHandler),
     (r"/api/cloud/fleet", FleetHandler),
     (r"/api/cloud/orphans", OrphansHandler),

@@ -41,15 +41,18 @@ READY_FILE = "/var/lib/scribblez/ready"
 # images, a bundle, and a trainer's generation window.
 ROOT_VOLUME_GB = 100
 
+# An L4's memory as nvidia-smi reports it: 23034 MiB.
+L4_GIB = 23034 / 1024
+
 # us-east-1 on-demand list prices, checked 2026-09-15.
 CATALOG = [
     MachineType("c7a.xlarge", 4, 0, "", "znver4", 0.205),
     MachineType("c7a.2xlarge", 8, 0, "", "znver4", 0.411),
     MachineType("c7a.4xlarge", 16, 0, "", "znver4", 0.821),
     MachineType("c7a.8xlarge", 32, 0, "", "znver4", 1.642),
-    MachineType("g6.2xlarge", 8, 1, "L4 24 GB", "znver3", 0.978),
-    MachineType("g6.4xlarge", 16, 1, "L4 24 GB", "znver3", 1.323),
-    MachineType("g6.8xlarge", 32, 1, "L4 24 GB", "znver3", 2.014),
+    MachineType("g6.2xlarge", 8, 1, "L4 24 GB", "znver3", 0.978, L4_GIB),
+    MachineType("g6.4xlarge", 16, 1, "L4 24 GB", "znver3", 1.323, L4_GIB),
+    MachineType("g6.8xlarge", 32, 1, "L4 24 GB", "znver3", 2.014, L4_GIB),
 ]
 
 _STATES = {

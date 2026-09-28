@@ -214,6 +214,33 @@ A machine you own is prepared once, by hand:
 
 Keep a laptop from sleeping on lid-close.
 
+### The machine pool
+
+The **Machine pool** page (header link, `?view=pool`) lists the machines the
+tag queue may place tags on ([plans/tag_queue.md](plans/tag_queue.md)). Unlike
+a task's machines, a pool machine belongs to no tag: it lives in
+`<mount>/pool.json`, and a tag uses it under a **lease** that later passes to
+the next tag. A leased machine appears on its tag's Machines card, marked
+"leased from the pool", and resolves for that tag's slots like one of its own.
+
+Add this machine (leave the host blank) or a registered ssh machine prepared
+as for any ssh slot. Adding it runs `nproc` and `nvidia-smi` on it, recording
+its vCPUs and memory per GPU, which placement checks tags against; Re-probe
+reads them again. Each entry also takes:
+
+- **aliases**: other spellings tags use for its host (`dshin@asus-laptop`
+  for `asus-laptop`). Hosts are compared after `ssh -G` resolves them.
+- **GPU reserve**: GiB of GPU memory taken by things no slot accounts for,
+  such as the dashboard's own inference on this machine.
+- **generator threads**: overrides the thread count a layout would pick.
+
+A pool machine without a lease is **busy** while any slot on it, from any
+tag, is alive or gated. A slot meant to run that is down (`exited`, or not yet
+started) counts only for ten minutes after it was last alive, which covers a
+restart; past that it is dead weight and no longer holds the machine. Paused
+and finished slots never count. That keeps the queue off a machine the
+operator is using by hand, and not off one an old crashed slot sits on.
+
 ### Container lifecycle
 
 **Bundles.** Code reaches a container as a bundle picked by the machine's CPU
