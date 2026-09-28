@@ -467,3 +467,26 @@ def test_a_hand_placed_trainer_counts_other_tags_on_the_gpu(queued):
         manager.add_local(SPEC, second, "train", None)
     w.desired_state = "paused"
     manager.add_local(SPEC, second, "train", None)
+
+
+def test_the_plan_shows_the_roles_and_each_machines_slots(queued):
+    """What the queue would start for a tag, before and after enqueueing: the
+    roles come from its params (match eval only with a cadence), and each
+    machine gets its own thread count and fit."""
+    q, manager, make = queued
+    make("a", match_every_generations=0)
+    plan = q.plan("position_eval", "a")
+    assert plan["roles"] == ["train", "generate"]
+    [local] = plan["machines"]
+    assert local["machine"] == "localhost" and local["refusal"] is None
+    assert local["slots"] == [
+        {"role": "train", "threads": None},
+        {"role": "generate", "threads": 28},
+    ]
+    make("b", match_every_generations=5)
+    plan = q.plan("position_eval", "b")
+    assert plan["roles"] == ["train", "generate", "match_eval"]
+    assert "needs 16.6 GiB" in plan["machines"][0]["refusal"]
+    q.enqueue("position_eval", "a", confirm=True)
+    manager.remove_pool_machine("localhost")
+    assert q.plan("position_eval", "a")["machines"] == []  # still answers once queued

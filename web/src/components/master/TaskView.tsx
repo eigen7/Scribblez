@@ -2,7 +2,7 @@ import { useContext, Component, ReactNode, useCallback, useEffect, useState } fr
 import { getJSON, postJSON } from '../../lib/api';
 import { WORKLOAD_TABS } from '../../workloads';
 import { Button, Role, Workload } from './MasterApp';
-import { enqueueTag } from './PoolView';
+import { QueuePanel } from './QueuePanel';
 import { loadRentalOffer, RentalOffer, rateText } from './rentalOffer';
 import StatsTab from './StatsTab';
 import { TabActiveContext } from '../TabActiveContext';
@@ -709,17 +709,6 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
             <Button label="Start all" disabled={!anyStartable} onClick={() => act({ action: 'start' })} />
             <Button label="Pause all" disabled={!anyPausable} onClick={() => act({ action: 'pause' })} />
-            {info.queued != null ? (
-              <span style={{ fontSize: 13, color: '#556070', alignSelf: 'center' }}>
-                queued #{info.queued} (Machine pool page)
-              </span>
-            ) : info.workers.length === 0 && (
-              <span title="place this tag on the first free pool machine that fits it (Machine pool page)">
-                <Button label="Enqueue" onClick={() => {
-                  enqueueTag(workload.name, tag).catch((e) => window.alert(String(e.message ?? e)));
-                }} />
-              </span>
-            )}
             <span title={anyAlive ? 'pause all workers before removing them' : undefined}>
               <Button
                 label="Remove all" tone="danger"
@@ -728,6 +717,9 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
               />
             </span>
           </div>
+          {(info.queued != null || info.workers.length === 0) && (
+            <QueuePanel workload={workload} tag={tag} queued={info.queued} onChanged={refresh} />
+          )}
           <WorkersTable
             workers={info.workers} taskBundle={info.bundle_id}
             onAction={(workerId, action) => act({ worker_id: workerId, action })}
