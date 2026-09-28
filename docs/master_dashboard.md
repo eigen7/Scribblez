@@ -223,15 +223,14 @@ a task's machines, a pool machine belongs to no tag: it lives in
 the next tag. A leased machine appears on its tag's Machines card, marked
 "leased from the pool", and resolves for that tag's slots like one of its own.
 
-Add this machine (leave the host blank) or a registered ssh machine prepared
-as for any ssh slot. Adding it runs `nproc` and `nvidia-smi` on it, recording
-its vCPUs and memory per GPU, which placement checks tags against; Re-probe
-reads them again. Each entry also takes:
+Add this machine with one click (**Add this machine**, offered while it is
+not pooled) or a registered ssh machine prepared as for any ssh slot. Adding
+it runs `nproc` and `nvidia-smi` on it, recording its vCPUs and memory per
+GPU, which placement checks tags against; Re-probe reads them again. Each
+entry also takes:
 
 - **aliases**: other spellings tags use for its host (`dshin@asus-laptop`
   for `asus-laptop`). Hosts are compared after `ssh -G` resolves them.
-- **GPU reserve**: GiB of GPU memory taken by things no slot accounts for,
-  such as the dashboard's own inference on this machine.
 - **generator threads**: overrides the thread count a layout would pick.
 
 A pool machine without a lease is **busy** while any slot on it, from any
@@ -265,7 +264,7 @@ A placed tag gets its workload's layout as slots (for position_eval: a
 trainer, a generator on every vCPU, and match eval if its cadence is on), set
 running, under a lease on the machine.
 
-**Fit.** A machine takes a tag only if its GPU memory, less its reserve, holds
+**Fit.** A machine takes a tag only if its GPU memory holds
 the sum of the tag's GPU roles' measured needs (position_eval's table is in
 `workloads/position_eval.py`). A configuration with no measured figure waits,
 saying so, unless its queue entry carries a memory override. The same figures

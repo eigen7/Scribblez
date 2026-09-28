@@ -44,7 +44,7 @@ def queued(tmp_path, monkeypatch):
     manager = WorkerManager()
     created: list = []
     monkeypatch.setattr(manager, "all_tasks", lambda: [(SPEC, t) for t in created])
-    manager.add_pool_machine("localhost", gpu_reserve_gb=1.5)
+    manager.add_pool_machine("localhost")
 
     def make(tag: str, **params) -> tasks.TaskRecord:
         task = tasks.TaskRecord(
@@ -297,18 +297,25 @@ def test_an_ssh_machine_takes_the_tag_once_its_bundle_is_pinned(queued, monkeypa
     assert workers_mod._machine_record(a, "gpu-box").host == "me@gpu-box"
 
 
+def _local_gpu(gb: float):
+    """Give the pooled localhost a GPU of `gb` GiB."""
+    pool = pool_mod.load_pool()
+    pool.machine("localhost").hardware = Hardware(28, 1, gb)
+    pool_mod.save_pool(pool)
+
+
 def test_a_hand_placed_trainer_is_checked_against_the_pool_machine(queued):
     """The asus-laptop OOM by hand: the same measured need refuses a slot the
     machine cannot fit. An unmeasured configuration is not refused."""
     _, manager, make = queued
-    manager.edit_pool_machine("localhost", gpu_reserve_gb=3.0)  # 13 GiB < 14.03
+    _local_gpu(13.0)  # < 14.03
     task = make("hand")
     with pytest.raises(AssertionError, match="would need 14.0 GiB"):
         manager.add_local(SPEC, task, "train", None)
-    manager.edit_pool_machine("localhost", gpu_reserve_gb=1.5)
+    _local_gpu(16.0)
     manager.add_local(SPEC, task, "train", None)
     unmeasured = make("unmeasured", batch_size=512)
-    manager.edit_pool_machine("localhost", gpu_reserve_gb=15.0)
+    _local_gpu(1.0)
     manager.add_local(SPEC, unmeasured, "train", None)
 
 
@@ -356,7 +363,7 @@ def test_an_override_below_the_measured_need_is_placed(queued):
     """The operator's override decides the fit; slot creation must not re-check
     against the measured figure and leave the lease reserved forever."""
     q, manager, make = queued
-    manager.edit_pool_machine("localhost", gpu_reserve_gb=6.0)  # 10 GiB < 14.03 measured
+    _local_gpu(10.0)  # < 14.03 measured
     make("a")
     q.enqueue("position_eval", "a", memory_override_gb=9.0, confirm=True)
     q.tick()

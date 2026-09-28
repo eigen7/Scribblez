@@ -20,11 +20,8 @@ CAMPAIGN = PositionEvalParams(
 )
 
 
-def _machine(name, kind="ssh", gpu_gb=22.5, reserve=0.0, vcpus=8) -> PoolMachine:
-    return PoolMachine(
-        name=name, kind=kind, hardware=Hardware(vcpus, 1 if gpu_gb else 0, gpu_gb),
-        gpu_reserve_gb=reserve,
-    )  # fmt: skip
+def _machine(name, kind="ssh", gpu_gb=22.5, vcpus=8) -> PoolMachine:
+    return PoolMachine(name=name, kind=kind, hardware=Hardware(vcpus, 1 if gpu_gb else 0, gpu_gb))
 
 
 def _entry(tag="t", **kw) -> QueueEntry:
@@ -51,17 +48,16 @@ def test_the_layout_gives_the_generator_the_machine():
 
 def test_gpu_memory_decides_eligibility():
     """The asus-laptop OOM: a 4 GiB GPU cannot take the campaign trainer, an
-    L4 can, and the 16 GiB laptop can once its reserve is counted."""
+    L4 can, and so can the 16 GiB laptop, but not a 12.3 GiB one."""
     params = CAMPAIGN
     assert "needs 14.0 GiB" in placement.refusal(
         SPEC, params, _entry(), _machine("asus", gpu_gb=4.0)
     )
     assert placement.refusal(SPEC, params, _entry(), _machine("l4")) is None
-    local = _machine("localhost", "local", gpu_gb=16.0, reserve=1.7)
+    local = _machine("localhost", "local", gpu_gb=16.0)
     assert placement.refusal(SPEC, params, _entry(), local) is None
-    assert "has 12.3" in placement.refusal(
-        SPEC, params, _entry(), replace(local, gpu_reserve_gb=3.7)
-    )
+    small = _machine("localhost", "local", gpu_gb=12.3)
+    assert "has 12.3" in placement.refusal(SPEC, params, _entry(), small)
 
 
 def test_an_unmeasured_config_waits_for_an_override():
@@ -75,7 +71,7 @@ def test_match_eval_shares_the_gpu():
     16 GiB laptop, which fits the trainer alone."""
     params = replace(CAMPAIGN, match_every_generations=5)
     assert placement.refusal(SPEC, params, _entry(), _machine("l4")) is None
-    laptop = _machine("localhost", "local", gpu_gb=16.0, reserve=1.7)
+    laptop = _machine("localhost", "local", gpu_gb=16.0)
     assert "needs 16.6 GiB" in placement.refusal(SPEC, params, _entry(), laptop)
 
 

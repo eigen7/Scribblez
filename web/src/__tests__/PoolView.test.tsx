@@ -18,7 +18,7 @@ vi.mock('../components/master/TaskView', () => ({ default: () => null }));
 const machine = (over: Partial<PoolMachine>): PoolMachine => ({
   name: 'asus', kind: 'ssh', machine: { host: 'asus-laptop', identity_file: null },
   aliases: [], hardware: { vcpus: 12, gpu_count: 1, gpu_memory_gb: 4 },
-  gpu_reserve_gb: 0, generator_threads: null, lease: null, occupants: [], state: 'free',
+  generator_threads: null, lease: null, occupants: [], state: 'free',
   capacity: null, ...over,
 });
 
@@ -54,16 +54,32 @@ describe('PoolView', () => {
     expect(screen.getAllByText('1 × 4.0 GiB').length).toBe(3);
   });
 
-  it('adds a registered machine with its aliases and reserve', async () => {
+  it('adds this machine in one click, offered only while it is not pooled', async () => {
+    serve([]);
+    postJSON.mockResolvedValue({ name: 'localhost' });
+    const { unmount } = render(<PoolView />);
+    await waitFor(() => screen.getByText('The pool is empty.'));
+    fireEvent.click(screen.getByText('Add this machine'));
+    await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/pool/machines', {
+      name: 'localhost', host: null,
+    }));
+    unmount();
+    serve([machine({ name: 'localhost', kind: 'local', machine: null })]);
+    render(<PoolView />);
+    await waitFor(() => screen.getByTestId('pool-state-localhost'));
+    expect(screen.queryByText('Add this machine')).toBeNull();
+  });
+
+  it('adds a registered machine with its aliases', async () => {
     serve([]);
     postJSON.mockResolvedValue({ name: 'asus' });
     render(<PoolView />);
     fireEvent.change(screen.getByLabelText('pool name'), { target: { value: 'asus' } });
     fireEvent.change(screen.getByLabelText('pool host'), { target: { value: 'asus-laptop' } });
     fireEvent.change(screen.getByLabelText('pool aliases'), { target: { value: 'dshin@asus-laptop' } });
-    fireEvent.click(screen.getByText('Add to pool'));
+    fireEvent.click(screen.getByText('Add ssh machine'));
     await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/pool/machines', {
-      name: 'asus', host: 'asus-laptop', aliases: 'dshin@asus-laptop', gpu_reserve_gb: '0',
+      name: 'asus', host: 'asus-laptop', aliases: 'dshin@asus-laptop',
     }));
   });
 });
@@ -173,11 +189,10 @@ describe('PoolView row actions', () => {
     render(<PoolView />);
     await waitFor(() => screen.getByTestId('pool-state-asus'));
     fireEvent.click(screen.getByText('Edit'));
-    fireEvent.change(screen.getByLabelText('asus reserve'), { target: { value: '1.5' } });
     fireEvent.change(screen.getByLabelText('asus threads'), { target: { value: '6' } });
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/pool/machine_action', {
-      name: 'asus', action: 'edit', aliases: '', gpu_reserve_gb: '1.5', generator_threads: '6',
+      name: 'asus', action: 'edit', aliases: '', generator_threads: '6',
     }));
   });
 

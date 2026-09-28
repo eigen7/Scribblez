@@ -1041,7 +1041,7 @@ class WorkerManager:
 
     def _gpu_capacity(self, kind: str, machine, host) -> float | None:
         """GiB of GPU memory slots may use on the target: a pool machine's
-        memory per GPU less its reserve, or a rented type's catalog figure;
+        memory per GPU, or a rented type's catalog figure;
         None when unknown (a bare host or registered machine not in the pool)."""
         target = _slot_target(kind, machine, host)
         for m in pool_mod.load_pool().machines:
@@ -1523,7 +1523,6 @@ class WorkerManager:
         *,
         identity_file: str | None = None,
         aliases: list[str] | None = None,
-        gpu_reserve_gb: float = 0.0,
         generator_threads: int | None = None,
     ) -> pool_mod.PoolMachine:
         """Add a machine to the pool: this one (no `host`) or a registered ssh
@@ -1544,16 +1543,15 @@ class WorkerManager:
             record.gpu_count = hardware.gpu_count
             m = pool_mod.PoolMachine(name=name, kind="ssh", machine=record, hardware=hardware)
         m.aliases = list(aliases or [])
-        m.gpu_reserve_gb = gpu_reserve_gb
         m.generator_threads = generator_threads
         pool.machines.append(m)
         pool_mod.save_pool(pool)
         return m
 
     def edit_pool_machine(self, name: str, **changes):
-        """Change a pool machine's operator-set fields (aliases, GPU reserve,
-        generator threads)."""
-        editable = {"aliases", "gpu_reserve_gb", "generator_threads"}
+        """Change a pool machine's operator-set fields (aliases, generator
+        threads)."""
+        editable = {"aliases", "generator_threads"}
         assert set(changes) <= editable, f"not editable: {sorted(set(changes) - editable)}"
         pool = pool_mod.load_pool()
         m = pool.machine(name)
