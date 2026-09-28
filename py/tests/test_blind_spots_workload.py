@@ -103,7 +103,8 @@ def test_the_scheduler_finishes_the_surveyors_at_the_target(tmp_path):
     the run is over."""
     assert finished_after_tick(tmp_path, target=3, found=2) == []
     assert finished_after_tick(tmp_path, target=3, found=3) == ["generate"]
-    # A target of 0 never finishes them.
+    # An unbounded target, -1 or its legacy alias 0, never finishes them.
+    assert finished_after_tick(tmp_path, target=-1, found=3) == []
     assert finished_after_tick(tmp_path, target=0, found=3) == []
 
 

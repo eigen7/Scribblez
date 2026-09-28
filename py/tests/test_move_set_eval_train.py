@@ -1078,7 +1078,8 @@ def test_corpus_clock_waits_for_the_target_and_for_the_stragglers(tmp_path):
     assert clock.is_final(absorbed=0)  # quiet at the target
 
 
-def test_corpus_clock_reads_staleness_off_the_store_not_its_own_history(tmp_path):
+@pytest.mark.parametrize("unbounded", [-1, 0])  # 0: the legacy alias
+def test_corpus_clock_reads_staleness_off_the_store_not_its_own_history(tmp_path, unbounded):
     """With no declared size, whether the corpus is done is a property of the
     store: one written to moments ago has a generator behind it, one whose
     newest pair is old does not. Judging it from what this worker has watched
@@ -1092,7 +1093,7 @@ def test_corpus_clock_reads_staleness_off_the_store_not_its_own_history(tmp_path
     store = tmp_path / "slogs"
     store.mkdir()
     _pair(store, "s0")
-    params = _params(target_pairs=0)
+    params = _params(target_pairs=unbounded)
 
     # A store just delivered into, seen by a worker that has watched nothing.
     assert not trainer.corpus_clock(store, params).is_final(absorbed=0)

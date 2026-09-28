@@ -12,6 +12,9 @@ export type ParamField = {
   name: string; kind: 'int' | 'float' | 'str' | 'bool';
   default: number | boolean | string; help: string;
   choices: string[] | null;  // the closed set of accepted values; null if open
+  // An end parameter: a budget at which the tag's work finishes on its own,
+  // where -1 (0 in older tags) means run until paused (scribblez/params.py).
+  end: boolean;
 };
 export type Role = {
   name: string; title: string; singleton: boolean; kinds: string[];
@@ -63,8 +66,13 @@ export function Button({ label, onClick, disabled, tone }: {
   );
 }
 
+// The value an end parameter takes for "run until paused".
+export const UNBOUNDED = '-1';
+
 // One control per schema field: a checkbox for a bool, a selector for a field
-// whose value set is closed, a text box otherwise.
+// whose value set is closed, a text box otherwise. An end parameter's text box
+// comes with a "forever" checkbox that sets it to UNBOUNDED; unchecking it
+// clears the box for a budget.
 function ParamInput({ p, value, bad, onChange }: {
   p: ParamField; value: string | boolean; bad: boolean; onChange: (v: string | boolean) => void;
 }) {
@@ -90,11 +98,26 @@ function ParamInput({ p, value, bad, onChange }: {
       </select>
     );
   }
-  return (
+  const box = (disabled: boolean) => (
     <input
-      style={style} aria-label={p.name} value={String(value ?? '')}
+      style={style} aria-label={p.name} value={disabled ? '' : String(value ?? '')}
+      disabled={disabled} placeholder={disabled ? '∞' : undefined}
       onChange={(e) => onChange(e.target.value)}
     />
+  );
+  if (!p.end) return box(false);
+  const forever = Number(value) <= 0 && String(value ?? '').trim() !== '';
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+      {box(forever)}
+      <label style={{ fontSize: 12 }} title="run until paused">
+        <input
+          type="checkbox" aria-label={`${p.name} forever`} checked={forever}
+          onChange={(e) => onChange(e.target.checked ? UNBOUNDED : '')}
+        />
+        forever
+      </label>
+    </span>
   );
 }
 

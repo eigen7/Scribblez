@@ -35,6 +35,7 @@ from dataclasses import asdict, dataclass
 import torch
 from cloud import worker_deps
 
+from scribblez import params as params_mod
 from scribblez.generational import checkpoint
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import progress_line
@@ -52,6 +53,7 @@ from scribblez.train_common import timed_print
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SLOGS_DIR, split_pairs
+from scribblez.workloads.pair_store import epoch_budget, epochs_left
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 POLL_SECONDS = 30
@@ -98,7 +100,7 @@ def store_is_ready(store, params) -> tuple[bool, str]:
     more is coming; this keeps a small run from waiting forever.
     """
     pairs = complete_pairs(store) if store.is_dir() else []
-    if params.target_pairs and len(pairs) >= params.target_pairs:
+    if params_mod.reached(len(pairs), params.target_pairs):
         return True, ""
     needed = max(1, params.warmup_pairs)
     if len(pairs) < needed:
@@ -259,12 +261,6 @@ def corpus_clock(store, params) -> pair_store.CorpusClock:
     return pair_store.CorpusClock(store, params.target_pairs, ".mset")
 
 
-def epochs_left(params, state: MsetTrainState) -> bool:
-    """Whether the epoch budget (0 = unlimited) has passes left; see
-    MsetTrainState.settled_epochs."""
-    return params.train_epochs == 0 or state.settled_epochs < params.train_epochs
-
-
 # Batches the schedule-free arm recomputes BatchNorm statistics over before
 # evaluation and export (optim.ScheduleFreeArm.eval_mode). As in position_eval,
 # a short forward-only prefix of a fresh pass suffices.
@@ -343,7 +339,7 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
     lr_now = optim_arm.current
     recall = " ".join(f"r@{k}={metrics[f'recall@{k}']:.3f}" for k in (1, 3, 5))
     budget = (
-        f"{state.settled_epochs}/{params.train_epochs}"
+        f"{state.settled_epochs}/{epoch_budget(params)}"
         if settled
         else f"corpus still growing, {ctx['train_ds'].num_positions} positions"
     )

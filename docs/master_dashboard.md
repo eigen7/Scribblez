@@ -78,6 +78,12 @@ paused and reads `finished` instead of being restarted forever; Start clears
 it. The worker entrypoint exits non-zero when SIGTERM ended the run, so a stop
 or a machine reboot never reads as completion.
 
+**End parameters.** The budgets that make a tag finish on its own
+(`max_rows`, `target_pairs`, `train_epochs`, `target_positions`) are marked
+`end=True` in their workload's params. Each takes a positive budget or -1
+for "run until paused"; tags created before -1 existed store 0, which still
+means the same. The new-tag form shows a "forever" checkbox beside each one.
+
 **Gates.** A workload's scheduler can *park* a role without touching the
 operator's desired state, for example the training workloads' generators once
 they are far enough ahead of the trainer. Gated workers show

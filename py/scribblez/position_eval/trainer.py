@@ -56,6 +56,7 @@ from pathlib import Path
 
 import torch
 
+from scribblez import params as params_mod
 from scribblez.dataset import SlogDataset
 from scribblez.ffi import (
     get_input_shapes,
@@ -129,7 +130,7 @@ def ensure_window(paths: TagPaths, sink, cursor: int, window: int):
 
 
 def _rows_left(params, state: GenerationalState) -> bool:
-    return params.max_rows == 0 or state.rows_trained < params.max_rows
+    return not params_mod.reached(state.rows_trained, params.max_rows)
 
 
 # How many generations' deliveries may queue behind the one in flight before
