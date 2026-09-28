@@ -340,6 +340,73 @@ class MachineActionHandler(_MasterBase):
         await self.guarded_offload(act)
 
 
+class PoolHandler(_MasterBase):
+    """The machine pool (dashboard/pool.py): each machine, its lease, and what
+    else is using it. Offloaded because it reads every task record."""
+
+    async def get(self):
+        await self.guarded_offload(lambda: {"machines": self.manager.pool_status()})
+
+
+def _optional_int(value) -> int | None:
+    return int(value) if value not in (None, "") else None
+
+
+def _aliases(value) -> list[str]:
+    """Aliases as the form sends them: a list, or one comma-separated string."""
+    items = value if isinstance(value, list) else str(value or "").split(",")
+    return [a.strip() for a in items if a.strip()]
+
+
+class PoolMachineAddHandler(_MasterBase):
+    """Add this machine (no host) or a registered ssh machine to the pool.
+    Offloaded because the hardware probe is an ssh round trip."""
+
+    async def post(self):
+        body = self.body()
+
+        def add():
+            m = self.manager.add_pool_machine(
+                (body.get("name") or "").strip(),
+                (body.get("host") or "").strip() or None,
+                identity_file=(body.get("identity_file") or "").strip() or None,
+                aliases=_aliases(body.get("aliases")),
+                gpu_reserve_gb=float(body.get("gpu_reserve_gb") or 0.0),
+                generator_threads=_optional_int(body.get("generator_threads")),
+            )
+            return {"name": m.name}
+
+        await self.guarded_offload(add)
+
+
+class PoolMachineActionHandler(_MasterBase):
+    """Edit, re-probe or remove a pool machine."""
+
+    async def post(self):
+        body = self.body()
+
+        def act():
+            name, action = body["name"], body["action"]
+            if action == "remove":
+                self.manager.remove_pool_machine(name)
+            elif action == "reprobe":
+                self.manager.reprobe_pool_machine(name)
+            elif action == "edit":
+                changes = {}
+                if "aliases" in body:
+                    changes["aliases"] = _aliases(body["aliases"])
+                if "gpu_reserve_gb" in body:
+                    changes["gpu_reserve_gb"] = float(body["gpu_reserve_gb"] or 0.0)
+                if "generator_threads" in body:
+                    changes["generator_threads"] = _optional_int(body["generator_threads"])
+                self.manager.edit_pool_machine(name, **changes)
+            else:
+                raise AssertionError(f"unknown action '{action}'")
+            return {"ok": True}
+
+        await self.guarded_offload(act)
+
+
 class WorkerActionHandler(_MasterBase):
     async def post(self):
         body = self.body()
@@ -404,6 +471,9 @@ MASTER_ROUTES = [
     (r"/api/task/worker_action", WorkerActionHandler),
     (r"/api/task/machines", MachineAddHandler),
     (r"/api/task/machine_action", MachineActionHandler),
+    (r"/api/pool", PoolHandler),
+    (r"/api/pool/machines", PoolMachineAddHandler),
+    (r"/api/pool/machine_action", PoolMachineActionHandler),
     (r"/api/cloud/rental_offer", RentalOfferHandler),
     (r"/api/cloud/fleet", FleetHandler),
     (r"/api/cloud/orphans", OrphansHandler),

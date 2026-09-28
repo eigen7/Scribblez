@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getJSON, postJSON } from '../../lib/api';
 import BurnStrip from './BurnStrip';
+import PoolView from './PoolView';
 import TaskView from './TaskView';
 
 // The master dashboard: the entrypoint for all work. Pick a workload, then a
@@ -461,6 +462,8 @@ export default function MasterApp() {
   const [workloads, setWorkloads] = useState<Workload[]>([]);
   const [workloadName, setWorkloadName] = useState(initial.get('workload') ?? 'kill_test');
   const [openTag, setOpenTag] = useState<string | null>(initial.get('tag'));
+  // The machine pool page, in place of the workload's tags (?view=pool).
+  const [poolOpen, setPoolOpen] = useState(initial.get('view') === 'pool');
 
   useEffect(() => {
     getJSON('/api/workloads').then((d) => setWorkloads(d.workloads)).catch(() => {});
@@ -472,8 +475,10 @@ export default function MasterApp() {
     params.set('workload', workloadName);
     if (openTag) params.set('tag', openTag);
     else params.delete('tag');
+    if (poolOpen) params.set('view', 'pool');
+    else params.delete('view');
     window.history.replaceState(null, '', `${window.location.pathname}?${params}`);
-  }, [workloadName, openTag]);
+  }, [workloadName, openTag, poolOpen]);
 
   const workload = workloads.find((w) => w.name === workloadName);
 
@@ -483,20 +488,26 @@ export default function MasterApp() {
       background: '#f4f6f8', minHeight: '100vh',
     }}>
       <div className="page-cap">
-        <BurnStrip onOpen={(w, tag) => { setWorkloadName(w); setOpenTag(tag); }} />
+        <BurnStrip onOpen={(w, tag) => { setWorkloadName(w); setOpenTag(tag); setPoolOpen(false); }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
           <strong style={{ fontSize: 19 }}>Scribblez</strong>
           <label style={{ fontSize: 15 }}>
             Workload{' '}
             <select
               value={workloadName}
-              onChange={(e) => { setWorkloadName(e.target.value); setOpenTag(null); }}
+              onChange={(e) => { setWorkloadName(e.target.value); setOpenTag(null); setPoolOpen(false); }}
             >
               {workloads.map((w) => (
                 <option key={w.name} value={w.name}>{w.title}</option>
               ))}
             </select>
           </label>
+          <span
+            onClick={() => { setPoolOpen(!poolOpen); setOpenTag(null); }}
+            style={{ color: '#1f77b4', cursor: 'pointer', fontSize: 14 }}
+          >
+            {poolOpen ? '← tags' : 'Machine pool'}
+          </span>
           {openTag && (
             <>
               <span
@@ -509,7 +520,9 @@ export default function MasterApp() {
             </>
           )}
         </div>
-        {!workload ? (
+        {poolOpen ? (
+          <PoolView />
+        ) : !workload ? (
           <div style={{ color: '#556070', fontStyle: 'italic' }}>Connecting to the data API…</div>
         ) : openTag ? (
           <TaskView workload={workload} tag={openTag} />

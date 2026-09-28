@@ -106,6 +106,16 @@ def env_file(env: dict[str, str]) -> str:
     return "".join(f"{k}={v}\n" for k, v in env.items())
 
 
+# Prints the vCPU count, then each GPU's memory in MiB; a machine without an
+# NVIDIA driver prints only the first line. Run on the host, not in a
+# container, so it needs neither Docker nor the worker image.
+HARDWARE_COMMAND = [
+    "sh",
+    "-c",
+    "nproc; nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || true",
+]
+
+
 class SshMachine:
     def __init__(
         self, host: str, identity_file: str | None = None, known_hosts_file: str | None = None
@@ -224,6 +234,14 @@ class SshMachine:
             ["docker", "inspect", "-f", "{{.State.Status}}", name], timeout=_PROBE_TIMEOUT
         )
         return classify_probe(res.returncode, res.stdout, res.stderr)
+
+    def hardware_report(self) -> str:
+        """The machine's HARDWARE_COMMAND output: its vCPU count, then one line
+        per GPU with its memory in MiB (none without a GPU or a driver)."""
+        res = self._run(HARDWARE_COMMAND, timeout=_PROBE_TIMEOUT)
+        if res.returncode != 0:
+            raise SshMachineError(f"{self.host}: hardware query failed: {res.stderr.strip()}")
+        return res.stdout
 
     def detect_arch(self, image: str) -> str:
         """The machine's CPU microarchitecture as a GCC -march value. It asks
