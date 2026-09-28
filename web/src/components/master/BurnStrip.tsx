@@ -43,7 +43,10 @@ function InstanceChip({ inst, onOpen }: {
   inst: FleetInstance; onOpen: (workload: string, tag: string) => void;
 }) {
   const billing = BILLING.has(inst.state);
-  const [workload, tag, machine] = inst.owner?.split('/') ?? [];
+  // A task machine's owner tag is "<workload>/<tag>/<machine>"; a pool
+  // rental's is "pool/<machine>", which belongs to no tag to open.
+  const pooled = inst.owner?.startsWith('pool/') ?? false;
+  const [workload, tag, machine] = pooled ? [] : inst.owner?.split('/') ?? [];
   const canOpen = inst.tracked && workload && tag;
   return (
     <span style={{
@@ -63,6 +66,8 @@ function InstanceChip({ inst, onOpen }: {
         >
           {workload}/{tag}
         </span>
+      ) : pooled && inst.tracked ? (
+        <span style={{ color: '#556070' }}>pool · {inst.owner!.slice('pool/'.length)}</span>
       ) : (
         <span style={{ color: '#a05a00' }} title={inst.owner ?? 'no owner tag'}>orphan · no task tracks it</span>
       )}

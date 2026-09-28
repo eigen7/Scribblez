@@ -29,6 +29,7 @@ from scribblez.paths import DEFAULT_MOUNT_ROOT
 
 POOL_PATH = DEFAULT_MOUNT_ROOT / "pool.json"
 LOCALHOST = "localhost"
+POOL_OWNER_PREFIX = "pool/"
 KINDS = ("local", "ssh")
 
 
@@ -43,6 +44,9 @@ class Lease:
     phase: str
     since: float
     reason: str = ""  # why a failed or held lease is where it is
+    # A rented machine's spend when the lease began: what the lease costs the
+    # tag is the machine's spend since.
+    spend_start: float = 0.0
 
 
 @dataclass
@@ -75,11 +79,28 @@ class PoolMachine:
     # vCPU arithmetic (docs/plans/tag_queue.md §3).
     generator_threads: int | None = None
     lease: Lease | None = None
+    # The Capacity entry a machine the pool rented belongs to; None for a
+    # machine the operator added. A rented one is terminated once idle.
+    capacity: str | None = None
+
+
+@dataclass
+class Capacity:
+    """Machines the pool may rent (docs/plans/tag_queue.md §2, §4): up to
+    `cap` instances of catalog type `instance_type` at a time, rented only for
+    a queued tag that no free owned machine can take. The operator sets the
+    cap to what the account's quota allows."""
+
+    name: str
+    instance_type: str
+    spot: bool = False
+    cap: int = 1
 
 
 @dataclass
 class Pool:
     machines: list[PoolMachine] = field(default_factory=list)
+    capacity: list[Capacity] = field(default_factory=list)
 
     def find(self, name: str) -> PoolMachine | None:
         return next((m for m in self.machines if m.name == name), None)
@@ -132,6 +153,22 @@ def host_names(m: PoolMachine) -> set[str]:
     return {canonical_host(h) for h in [m.machine.host, *m.aliases]}
 
 
+def owner_tag(name: str) -> str:
+    """The ownership tag of the instance behind rented pool machine `name`:
+    how the provider's listing names it, and how an instance a crash left
+    unrecorded is found again. Task machines' tags have three parts
+    (workload/tag/machine); a pool machine's has this one prefix."""
+    return f"{POOL_OWNER_PREFIX}{name}"
+
+
+def lease_spend(m: PoolMachine) -> float:
+    """What pool machine `m`'s current lease has cost its tag: a rented
+    machine's spend since the lease began; 0 for an owned machine."""
+    if m.lease is None or m.machine is None or m.machine.instance_id is None:
+        return 0.0
+    return max(0.0, m.machine.spend - m.lease.spend_start)
+
+
 def leased_record(pool: Pool, workload: str, tag: str, name: str) -> MachineRecord | None:
     """The machine record of pool machine `name`, if (workload, tag) holds its
     lease: how a leased machine's name resolves for that task's slots."""
@@ -156,7 +193,8 @@ def _decode(raw: dict) -> Pool:
         m["hardware"] = _from_stored(Hardware, m.get("hardware") or {})
         m["lease"] = _from_stored(Lease, m["lease"]) if m.get("lease") else None
         machines.append(_from_stored(PoolMachine, m))
-    return Pool(machines=machines)
+    capacity = [_from_stored(Capacity, c) for c in raw.get("capacity", [])]
+    return Pool(machines=machines, capacity=capacity)
 
 
 _store = SharedJson(lambda: POOL_PATH, _decode, Pool)

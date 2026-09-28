@@ -33,7 +33,8 @@ from scribblez import workloads
 from scribblez.dashboard import placement, tasks
 from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import queue as queue_mod
-from scribblez.dashboard.pool import Lease, Pool, PoolMachine
+from scribblez.dashboard.pool import Capacity, Lease, Pool, PoolMachine
+from scribblez.dashboard.pool_rentals import PoolRentals
 from scribblez.dashboard.queue import Queue, QueueEntry
 from scribblez.dashboard.workers import (
     CLOUD_SYNC,
@@ -57,6 +58,10 @@ REQUEUED = "requeued"
 # failed rather than restarted forever.
 FAIL_AFTER = 3
 FAIL_WINDOW_SECONDS = 1800.0
+
+# After the provider refuses a rental (quota, capacity), how long before the
+# queue asks again under that capacity entry.
+RENT_RETRY_SECONDS = 300.0
 
 LOCAL_CODE_WARNING = (
     "local slots on this machine run the checkout in /workspace/repo as it is when they "
@@ -86,6 +91,9 @@ class TagQueue:
         # Entry key -> {pool machine: why it cannot take the entry}, from the
         # last pass, for the queue view.
         self._refusals: dict[tuple[str, str], dict[str, str]] = {}
+        self._rentals = PoolRentals(manager)
+        # Capacity entry -> (why its last rental was refused, retry after).
+        self._rent_refused: dict[str, tuple[str, float]] = {}
 
     # ---- operator actions ----------------------------------------------------
 
@@ -186,6 +194,7 @@ class TagQueue:
         pool, queue = pool_mod.load_pool(), queue_mod.load_queue()
         self._drop_stale_entries(queue, pool)
         self._advance_builds(queue, pool)
+        self._rentals.reconcile(pool)
         # Contained per lease, as reconcile contains per slot: one machine
         # that cannot be reached must not stall every other lease, nor the
         # placements behind them.
@@ -240,11 +249,16 @@ class TagQueue:
         return out
 
     def _ssh_targets(self, spec, task, entry: QueueEntry, pool: Pool) -> list[PoolMachine]:
-        """The ssh pool machines the tag could run on, bundle aside."""
+        """The ssh machines the tag could run on, bundle aside: the pool's own,
+        and what each capacity entry would rent."""
         params = _params(spec, task)
+        candidates = [
+            *pool.machines,
+            *(self._rentals.prospect(c) for c in pool.capacity),
+        ]
         return [
             m
-            for m in pool.machines
+            for m in candidates
             if m.kind == "ssh"
             and placement.refusal(spec, params, entry, m, need_bundle=False) is None
         ]
@@ -322,13 +336,6 @@ class TagQueue:
         for e in queue.entries:
             spec, task = _lookup(e.workload, e.tag)
             params[e.key] = (spec, _params(spec, task))
-        self._refusals = {
-            e.key: {
-                m.name: self._why_not(m, busy[m.name]) or placement.refusal(*params[e.key], e, m)
-                for m in pool.machines
-            }
-            for e in queue.entries
-        }
 
         def eligible(e: QueueEntry, m: PoolMachine) -> bool:
             return placement.refusal(*params[e.key], e, m) is None
@@ -338,11 +345,65 @@ class TagQueue:
             if e.key not in matches:
                 continue
             m = pool.machine(matches[e.key])
-            m.lease = Lease(e.workload, e.tag, RESERVED, time.time())
+            spend = m.machine.spend if m.capacity is not None else 0.0
+            m.lease = Lease(e.workload, e.tag, RESERVED, time.time(), spend_start=spend)
             pool_mod.save_pool(pool)
             queue.entries.remove(e)
             queue_mod.save_queue(queue)
             self._start_slots(m, pool)
+        self._rent_for(pool, queue, params)
+        self._note_refusals(pool, queue, params, busy)
+
+    def _note_refusals(self, pool: Pool, queue: Queue, params: dict, busy: dict):
+        """Why each still-queued tag is still queued, per machine and capacity
+        entry, after this pass's placements and rentals (the queue view)."""
+        self._refusals = {
+            e.key: {
+                **{
+                    m.name: self._why_not(m, busy.get(m.name, []))
+                    or placement.refusal(*params[e.key], e, m)
+                    for m in pool.machines
+                },
+                **{
+                    f"rent {c.name}": self._why_not_rent(c, pool)
+                    or placement.refusal(*params[e.key], e, self._rentals.prospect(c))
+                    for c in pool.capacity
+                },
+            }
+            for e in queue.entries
+        }
+
+    def _rent_for(self, pool: Pool, queue: Queue, params: dict):
+        """Rent for queued tags no owned machine took, in queue order: each gets
+        the first capacity entry below its cap whose type it fits. The machine
+        is leased from the start, so placement proceeds as on any machine; its
+        slots start once it is up."""
+        for e in list(queue.entries):
+            for c in pool.capacity:
+                if self._why_not_rent(c, pool) is not None:
+                    continue
+                if placement.refusal(*params[e.key], e, self._rentals.prospect(c)) is not None:
+                    continue
+                try:
+                    m = self._rentals.rent(c, pool, e.workload, e.tag)
+                except AssertionError as ex:  # the provider refused: quota, capacity
+                    self._rent_refused[c.name] = (str(ex), time.time() + RENT_RETRY_SECONDS)
+                    continue
+                self._rent_refused.pop(c.name, None)
+                queue.entries.remove(e)
+                queue_mod.save_queue(queue)
+                self._start_slots(m, pool)
+                break
+
+    def _why_not_rent(self, c: Capacity, pool: Pool) -> str | None:
+        """Why capacity entry `c` may not rent now, or None."""
+        in_use = self._rentals.in_use(c, pool)
+        if in_use >= c.cap:
+            return f"at its cap ({in_use} of {c.cap} rented)"
+        why, retry_at = self._rent_refused.get(c.name, ("", 0.0))
+        if time.time() < retry_at:
+            return f"refused: {why}"
+        return None
 
     @staticmethod
     def _why_not(m: PoolMachine, occupants: list[str]) -> str | None:
@@ -454,6 +515,8 @@ class TagQueue:
             return
         for w in list(task.workers):
             self._m.remove_worker(spec, task, w.worker_id)
+        task.retired_spend += pool_mod.lease_spend(m)
+        tasks.save_task(spec, task)
         key = (m.lease.workload, m.lease.tag)
         requeued = m.lease.reason == REQUEUED
         m.lease = None

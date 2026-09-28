@@ -11,6 +11,7 @@ provider refusals) return 400 with {"error": ...} rather than a stack trace.
 """
 
 import json
+from dataclasses import asdict
 
 import tornado.web
 from bokeh.embed import json_item
@@ -20,6 +21,7 @@ from cloud.ssh_machine import SshMachineError
 
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import tasks, worker_stats_figures
 
 # Exception types that describe a bad request or unavailable dependency, not a
@@ -183,7 +185,13 @@ class TaskHandler(_MasterBase):
         def info():
             task = tasks.load_task(spec, tag)
             workers = self.manager.worker_status(spec, task) if task else []
-            spend = task.retired_spend + sum(m.spend for m in task.machines) if task else 0.0
+            spend = (
+                task.retired_spend
+                + sum(m.spend for m in task.machines)
+                + self.manager.lease_spend(task)
+                if task
+                else 0.0
+            )
             return {
                 "workload": spec.name,
                 "tag": tag,
@@ -349,7 +357,12 @@ class PoolHandler(_MasterBase):
     else is using it. Offloaded because it reads every task record."""
 
     async def get(self):
-        await self.guarded_offload(lambda: {"machines": self.manager.pool_status()})
+        await self.guarded_offload(
+            lambda: {
+                "machines": self.manager.pool_status(),
+                "capacity": [asdict(c) for c in pool_mod.load_pool().capacity],
+            }
+        )
 
 
 def _optional_int(value) -> int | None:
@@ -460,6 +473,30 @@ class QueueActionHandler(_MasterBase):
         await self.guarded_offload(act)
 
 
+class PoolCapacityHandler(_MasterBase):
+    """Add, re-cap or remove a pool capacity entry (machines the pool may rent).
+    Offloaded because checking the type reads the provider's catalog."""
+
+    async def post(self):
+        body = self.body()
+
+        def act():
+            name, action = (body.get("name") or "").strip(), body["action"]
+            if action == "add":
+                self.manager.add_capacity(
+                    name, body["instance_type"], spot=bool(body.get("spot")), cap=int(body["cap"])
+                )
+            elif action == "set_cap":
+                self.manager.set_capacity_cap(name, int(body["cap"]))
+            elif action == "remove":
+                self.manager.remove_capacity(name)
+            else:
+                raise AssertionError(f"unknown action '{action}'")
+            return {"ok": True}
+
+        await self.guarded_offload(act)
+
+
 class WorkerActionHandler(_MasterBase):
     async def post(self):
         body = self.body()
@@ -530,6 +567,7 @@ MASTER_ROUTES = [
     (r"/api/queue/action", QueueActionHandler),
     (r"/api/pool/machines", PoolMachineAddHandler),
     (r"/api/pool/machine_action", PoolMachineActionHandler),
+    (r"/api/pool/capacity", PoolCapacityHandler),
     (r"/api/cloud/rental_offer", RentalOfferHandler),
     (r"/api/cloud/fleet", FleetHandler),
     (r"/api/cloud/orphans", OrphansHandler),
