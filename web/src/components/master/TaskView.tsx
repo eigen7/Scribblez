@@ -709,17 +709,17 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
             <Button label="Start all" disabled={!anyStartable} onClick={() => act({ action: 'start' })} />
             <Button label="Pause all" disabled={!anyPausable} onClick={() => act({ action: 'pause' })} />
-            {info.workers.length === 0 && (info.queued != null ? (
+            {info.queued != null ? (
               <span style={{ fontSize: 13, color: '#556070', alignSelf: 'center' }}>
                 queued #{info.queued} (Machine pool page)
               </span>
-            ) : (
+            ) : info.workers.length === 0 && (
               <span title="place this tag on the first free pool machine that fits it (Machine pool page)">
                 <Button label="Enqueue" onClick={() => {
                   enqueueTag(workload.name, tag).catch((e) => window.alert(String(e.message ?? e)));
                 }} />
               </span>
-            ))}
+            )}
             <span title={anyAlive ? 'pause all workers before removing them' : undefined}>
               <Button
                 label="Remove all" tone="danger"

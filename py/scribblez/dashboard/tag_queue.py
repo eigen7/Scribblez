@@ -50,6 +50,7 @@ from scribblez.dashboard.workers import (
 )
 
 RESERVED, RUNNING, RELEASING, HELD = "reserved", "running", "releasing", "held"
+EMPTY_POOL = "no machines or rental capacity; add one above"
 # The reason shown on a lease released by Requeue. What sends the tag back to
 # the head of the queue is Lease.requeue, which survives a restart mid-release
 # and cannot be overwritten by a drain error's reason.
@@ -182,6 +183,16 @@ class TagQueue:
         tasks.save_task(spec, task)
         m.lease.requeue = True
         self._start_release(m, pool, REQUEUED)
+
+    def refuse_hand_placement(self, workload: str, tag: str):
+        """Refuse a slot added by hand to a queued or placed tag. Its slots are
+        the queue's to create: a queued tag with slots elsewhere would be
+        placed with those roles skipped, leaving the machine leased and idle."""
+        assert queue_mod.load_queue().find(workload, tag) is None, (
+            f"{workload}/{tag} is queued; dequeue it to add slots by hand"
+        )
+        m = self._leased(pool_mod.load_pool(), workload, tag)
+        assert m is None, f"{workload}/{tag} is placed on pool machine {m.name}; requeue it first"
 
     def status(self) -> dict:
         """The queue in order, each entry with whether it ends on its own, its
@@ -388,6 +399,9 @@ class TagQueue:
     def _note_refusals(self, pool: Pool, queue: Queue, params: dict, busy: dict):
         """Why each still-queued tag is still queued, per machine and capacity
         entry, after this pass's placements and rentals (the queue view)."""
+        if not pool.machines and not pool.capacity:
+            self._refusals = {e.key: {"pool": EMPTY_POOL} for e in queue.entries}
+            return
         self._refusals = {
             e.key: {
                 **{

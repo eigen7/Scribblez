@@ -10,7 +10,14 @@ from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tag_queue as tq_mod
 from scribblez.dashboard.pool import Hardware, Lease
-from scribblez.dashboard.tag_queue import HELD, RELEASING, RESERVED, RUNNING, TagQueue
+from scribblez.dashboard.tag_queue import (
+    EMPTY_POOL,
+    HELD,
+    RELEASING,
+    RESERVED,
+    RUNNING,
+    TagQueue,
+)
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.workloads.position_eval import SPEC
 
@@ -415,3 +422,41 @@ def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypat
     assert argv[-1] == "--trainer-outputs" and "-t" in argv and "a" in argv
     assert tasks.load_task(SPEC, "a").workers == []
     assert _lease("gpu-box") is None
+
+
+def test_a_queued_or_placed_tag_refuses_slots_added_by_hand(queued):
+    """Hand-added slots on a queued tag would be skipped at placement, leaving
+    the machine leased while the tag runs elsewhere."""
+    q, _, make = queued
+    make("a")
+    q.refuse_hand_placement("position_eval", "a")  # neither queued nor placed
+    q.enqueue("position_eval", "a", confirm=True)
+    with pytest.raises(AssertionError, match="is queued"):
+        q.refuse_hand_placement("position_eval", "a")
+    q.tick()
+    assert _lease().tag == "a"
+    with pytest.raises(AssertionError, match="placed on pool machine localhost"):
+        q.refuse_hand_placement("position_eval", "a")
+
+
+def test_an_empty_pool_says_so(queued):
+    q, manager, make = queued
+    manager.remove_pool_machine("localhost")
+    make("a")
+    q.enqueue("position_eval", "a", confirm=True)
+    q.tick()
+    assert q.status()["entries"][0]["refusals"] == {"pool": EMPTY_POOL}
+
+
+def test_a_hand_placed_trainer_counts_other_tags_on_the_gpu(queued):
+    """Two tags' trainers by hand on one GPU: the second is refused while the
+    first is meant to run, and allowed once it is paused."""
+    _, manager, make = queued
+    first = make("first")
+    w = manager.add_local(SPEC, first, "train", None)
+    w.desired_state = "running"
+    second = make("second")
+    with pytest.raises(AssertionError, match="would need 28.1 GiB"):
+        manager.add_local(SPEC, second, "train", None)
+    w.desired_state = "paused"
+    manager.add_local(SPEC, second, "train", None)

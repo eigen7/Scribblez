@@ -260,6 +260,7 @@ class WorkerAddHandler(_MasterBase):
 
         def add():
             task = self.task_or_fail(spec, body["tag"])
+            self.tag_queue.refuse_hand_placement(spec.name, task.tag)
             role = body.get("role", spec.roles[0].name)
             if body.get("kind") == "local":
                 added = [self.manager.add_local(spec, task, role, body.get("threads"))]
