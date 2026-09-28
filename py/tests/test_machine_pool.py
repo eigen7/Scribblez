@@ -205,3 +205,24 @@ def test_canonical_host_strips_the_user_and_lowercases():
 def test_pool_machine_defaults():
     m = PoolMachine(name="x", kind="local")
     assert m.lease is None and m.aliases == [] and m.hardware == Hardware()
+
+
+def test_a_slot_meant_to_run_but_long_dead_does_not_hold_its_machine(pooled, monkeypatch):
+    """An `exited` slot (meant to run, not alive) holds its machine only for a
+    grace period, which covers a restart; one that never comes back, like a
+    month-old crashed generator, stops counting. A gated slot keeps counting:
+    its gate lifts."""
+    manager, listed = pooled
+    from scribblez.workloads.position_eval import SPEC
+
+    manager.add_pool_machine("localhost")
+    t = _task("stale")
+    t.workers.append(_slot("local-0", "local", "running"))  # no pid: not alive
+    listed.append((SPEC, t))
+    assert _occupied(manager, listed, "localhost")["state"] == "busy"  # within the grace
+
+    monkeypatch.setattr(workers_mod, "DEAD_SLOT_GRACE_SECONDS", 0.0)
+    assert _occupied(manager, listed, "localhost")["state"] == "free"
+
+    t.gates["generate"] = "waiting for the trainer"
+    assert _occupied(manager, listed, "localhost")["state"] == "busy"
