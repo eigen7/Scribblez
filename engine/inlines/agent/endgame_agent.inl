@@ -15,7 +15,7 @@ namespace scribblez {
 
 template <class Base>
 EndgameAgent<Base>::EndgameAgent(const Params& params)
-    : Base(params.base), endgame_(params.base.thread_id, params.solver) {}
+    : Base(params.base), endgame_(params.base.thread_id, params.solver, params.peg) {}
 
 template <class Base>
 MoveDecision EndgameAgent<Base>::make_move(const MoveRequest& req) {
@@ -42,6 +42,7 @@ std::unique_ptr<EndgameAgent<Base>> EndgameAgent<Base>::from_spec(
   Params params;
   boost::program_options::options_description extra(type + " options");
   params.solver.add_options(extra, "endgame-");
+  params.peg.add_options(extra, "peg");
   params.base = Base::parse_params(tokens, thread_id, name, extra, type.c_str());
   return std::make_unique<EndgameAgent>(params);
 }
@@ -49,9 +50,10 @@ std::unique_ptr<EndgameAgent<Base>> EndgameAgent<Base>::from_spec(
 template <class Base>
 std::string EndgameAgent<Base>::options_help() {
   const std::string_view type = Base::kType;
-  EndgameSolver::Params defaults;  // scratch binding targets; only the defaults are read
+  Params defaults;  // scratch binding targets; only the defaults are read
   boost::program_options::options_description desc(std::format("{}-endgame options", type));
-  defaults.add_options(desc, "endgame-");
+  defaults.solver.add_options(desc, "endgame-");
+  defaults.peg.add_options(desc, "peg");
   const std::string description = std::format(
     "  {0} that solves the endgame once the bag empties: it plays exactly as\n"
     "  --type={0} while tiles remain, then hands the fully-known endgame to an\n"

@@ -10,6 +10,8 @@ add_library(scribblez_core STATIC
   src/endgame/endgame_solver.cpp
   src/endgame/outplays.cpp
   src/endgame/path_move_lists.cpp
+  src/endgame/endgame_oracle.cpp
+  src/endgame/pre_endgame_solver.cpp
   src/training/lane_targets.cpp
   src/training/lane_analysis.cpp
   src/encoding/input_encoder.cpp
@@ -331,7 +333,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
   gtest_discover_tests(test_monte_carlo_sim)
 
-  add_executable(test_endgame tests/test_endgame.cpp tests/test_endgame_agent.cpp)
+  add_executable(test_endgame tests/test_endgame.cpp tests/test_endgame_agent.cpp
+    tests/test_pre_endgame.cpp)
   target_link_libraries(test_endgame PRIVATE
     scribblez_core Boost::program_options GTest::gtest_main)
   target_compile_definitions(test_endgame PRIVATE

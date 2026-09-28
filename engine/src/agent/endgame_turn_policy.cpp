@@ -1,6 +1,9 @@
 #include "agent/endgame_turn_policy.h"
 
+#include "endgame/endgame_oracle.h"
 #include "game/move.h"
+
+#include <boost/program_options.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -25,12 +28,32 @@ std::shared_ptr<EndgameSolver> pooled_solver(int thread_id) {
 
 }  // namespace
 
-EndgameTurnPolicy::EndgameTurnPolicy(int thread_id, const EndgameSolver::Params& params)
-    : params_(params), solver_(pooled_solver(thread_id)) {
+void PreEndgameTurnParams::add_options(boost::program_options::options_description& desc,
+                                       const std::string& prefix) {
+  namespace po = boost::program_options;
+  desc.add_options()                                                        //
+    (prefix.c_str(), po::value<bool>(&enabled)->default_value(enabled),     //
+     "solve the turn with one tile in the bag, as Macondo's BestBot does")  //
+    ((prefix + "-budget").c_str(), po::value<uint64_t>(&budget)->default_value(budget),
+     "node budget for each endgame the pre-endgame solver evaluates");
+  solver.add_options(desc, prefix + "-");
+}
+
+EndgameTurnPolicy::EndgameTurnPolicy(int thread_id, const EndgameSolver::Params& params,
+                                     const PreEndgameTurnParams& peg)
+    : params_(params), peg_(peg), solver_(pooled_solver(thread_id)) {
   solver_->clear();
 }
 
+MoveDecision EndgameTurnPolicy::solve_pre_endgame(const MoveRequest& req) {
+  SolverEndgameOracle oracle(*solver_, peg_.budget);
+  const PreEndgamePosition pos{&req.dict,    req.board,     req.my_rack,     req.opp_rack,
+                               req.my_score, req.opp_score, scoreless_turns_};
+  return PreEndgameSolver(oracle).solve(pos, peg_.solver).front().move;
+}
+
 std::optional<MoveDecision> EndgameTurnPolicy::try_solve(const MoveRequest& req) {
+  if (req.bag_size == 1 && peg_.enabled) return solve_pre_endgame(req);
   if (req.bag_size != 0 || params_.budget == 0) return std::nullopt;
 
   const auto t0 = std::chrono::steady_clock::now();

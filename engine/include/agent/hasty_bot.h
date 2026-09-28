@@ -42,6 +42,8 @@ Move hasty_best_move_wmp(const MoveRequest& req);
 class HastyBot : public Agent {
  public:
   static constexpr const char* kType = "hastybot";
+  // Self-play leaves the one-tile-in-the-bag turn to HastyBot itself.
+  static constexpr bool kPreEndgameByDefault = false;
 
   // The defaults describe greedy HastyBot.
   struct Params {

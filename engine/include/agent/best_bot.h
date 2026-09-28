@@ -14,8 +14,9 @@ class options_description;
 namespace scribblez {
 
 // A port of Macondo's BestBot (its SIMMING_BOT, ai/bot/elite.go) without its
-// endgame engines, i.e. SIMMING_BOT_NO_EG; EndgameAgent<BestBot> adds the
-// endgame solver. The phase follows the tiles unseen by the mover (bag plus
+// endgame engines, i.e. SIMMING_BOT_NO_EG; EndgameAgent<BestBot> adds them: the
+// endgame solver, and the pre-endgame solver for the turn with one tile in the
+// bag. The phase follows the tiles unseen by the mover (bag plus
 // opponent's rack):
 //   - more than 14: sim HastyBot's top 40 moves by static equity, with
 //     rollouts of max(min_sim_plies, 2) plies;
@@ -33,6 +34,8 @@ namespace scribblez {
 class BestBot : public Agent {
  public:
   static constexpr const char* kType = "bestbot";
+  // Macondo's BestBot solves the one-tile-in-the-bag turn.
+  static constexpr bool kPreEndgameByDefault = true;
 
   struct Params {
     int thread_id = 0;

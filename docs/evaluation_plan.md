@@ -62,8 +62,8 @@ differs, since there both seats read the leave.
 
 Our BestBot is a port of Macondo's
 ([best_bot.h](../engine/include/agent/best_bot.h), `--type=bestbot-endgame`):
-its simmer, stopping rule and win-percentage table, plus our endgame solver in
-place of Macondo's. It is the opponent that makes published results
+its simmer, stopping rule, win-percentage table and pre-endgame solver, with our
+endgame solver in place of Macondo's. It is the opponent that makes published results
 comparable. The sim agent ([sim_agent.h](../engine/include/agent/sim_agent.h),
 `--type=sim`) is a BestBot-shaped simmer of our own and the project's baseline.
 
