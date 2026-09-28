@@ -53,6 +53,7 @@ from scribblez.train_common import timed_print
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SLOGS_DIR, split_pairs
+from scribblez.workloads.pair_store import epoch_budget, epochs_left
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 POLL_SECONDS = 30
@@ -260,17 +261,6 @@ def corpus_clock(store, params) -> pair_store.CorpusClock:
     return pair_store.CorpusClock(store, params.target_pairs, ".mset")
 
 
-def _epoch_budget(params) -> str:
-    """The epoch budget as the progress line shows it."""
-    return "unbounded" if params_mod.unbounded(params.train_epochs) else str(params.train_epochs)
-
-
-def epochs_left(params, state: MsetTrainState) -> bool:
-    """Whether the epoch budget has passes left; see
-    MsetTrainState.settled_epochs."""
-    return not params_mod.reached(state.settled_epochs, params.train_epochs)
-
-
 # Batches the schedule-free arm recomputes BatchNorm statistics over before
 # evaluation and export (optim.ScheduleFreeArm.eval_mode). As in position_eval,
 # a short forward-only prefix of a fresh pass suffices.
@@ -349,7 +339,7 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
     lr_now = optim_arm.current
     recall = " ".join(f"r@{k}={metrics[f'recall@{k}']:.3f}" for k in (1, 3, 5))
     budget = (
-        f"{state.settled_epochs}/{_epoch_budget(params)}"
+        f"{state.settled_epochs}/{epoch_budget(params)}"
         if settled
         else f"corpus still growing, {ctx['train_ds'].num_positions} positions"
     )
