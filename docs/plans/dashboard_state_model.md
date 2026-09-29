@@ -2,7 +2,8 @@
 
 **Status: plan-reviewed 2026-09-29 and revised (§Review record); every
 operator's call settled (§Operator's calls); being built: PR 0 (the paths
-context) landed as #294; PR 1 (the schema and the shadow import) in review.**
+context) landed as #294; PR 1 (the schema and the shadow import) as #295 and
+#297; PR 2 (the fake world and the simulation) in review.**
 
 - **Review.** Four independent panelists: hidden complexity, a rival design
   (a Codex seat), scope, and integration. They raised 2 blocking, 16 serious
