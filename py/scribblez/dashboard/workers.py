@@ -45,6 +45,7 @@ from cloud.providers.base import Instance, LaunchRequest, Provider, ProviderErro
 from cloud.r2 import bucket_path, rclone
 from cloud.ssh_machine import SshMachine, SshMachineError
 from cloud.ssh_transfer import pull_results, push_file, sweep_stopped
+from cloud.worker_entrypoint import EXIT_INTERRUPTED
 from cloud.worker_env import bundle_worker_env
 from tornado.ioloop import IOLoop
 
@@ -110,6 +111,22 @@ BOOT_GRACE_SECONDS = 300.0
 # ssh container is frozen rather than stopped, because restarting one is
 # expensive (see _reconcile_ssh).
 RUN, PARK, STOP = "run", "park", "stop"
+
+
+def _is_crash(code: int | None) -> bool:
+    """Whether a worker's exit code is a crash, which counts toward failing
+    its tag: non-zero, and not EXIT_INTERRUPTED. That one is a SIGTERM from
+    outside the worker, which a worker never sends itself: a gate or pause
+    from this dashboard, a docker stop, or its host stopping under a spot
+    interruption (found by the simulation, test_simulation.py). None, an exit
+    not observed, is no crash either."""
+    return code not in (None, 0, EXIT_INTERRUPTED)
+
+
+def _exit_code(reason: str) -> int | None:
+    """The code in a container's exit reason, "exit <code>: <message>"."""
+    head = reason.split(":", 1)[0]
+    return int(head[5:]) if head.startswith("exit ") and head[5:].lstrip("-").isdigit() else None
 
 
 def _role_inputs(spec, role, params, mount_root: Path) -> dict[str, Path]:
@@ -466,9 +483,6 @@ class WorkerManager:
         # Slot key -> [(when, why)] of each restart after a crash (a non-zero
         # exit), which the tag queue reads to fail a crash-looping slot.
         self._crashes: dict[str, list[tuple[float, str]]] = {}
-        # Local slots this process SIGTERMed (a gate, a pause): their worker
-        # exits EXIT_INTERRUPTED by design, which is not a crash.
-        self._stopped_local: set[str] = set()
         # Slot key -> when a slot meant to run was first seen down since it was
         # last alive (see _holds_machine).
         self._down_since: dict[str, float] = {}
@@ -748,7 +762,6 @@ class WorkerManager:
         """SIGTERM slot `w`'s worker, which flushes completed output and exits.
         No-op if it is not running."""
         if worker_pid_alive(w.pid, w.worker_id, task.tag):
-            self._stopped_local.add(_key(spec, task.tag, w.worker_id))
             try:
                 os.kill(w.pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -821,6 +834,21 @@ class WorkerManager:
     def _note_crash(self, key: str, why: str):
         """Record that slot `key` is being restarted after exiting non-zero."""
         self._crashes.setdefault(key, []).append((time.time(), why))
+
+    def _forget_slot(self, key: str):
+        """Drop everything remembered about removed slot `key`. A later slot
+        reuses the key (_next_worker_id hands out the freed id again, a requeued
+        tag gets its layout's ids back, a deleted tag can be recreated), and
+        must not inherit the old worker's process handle, its container's last
+        probe and exit reason, its backoff, crashes or downtime: a stale
+        "stopped" probe read as the new slot's own became a phantom crash and
+        a start of a container that does not exist (found by the simulation,
+        test_simulation.py)."""
+        for memory in (
+            self._local, self._exits, self._restarts, self._probes, self._crashes,
+            self._down_since,
+        ):  # fmt: skip
+            memory.pop(key, None)
 
     def forget_crashes(self, spec, tag: str, worker_id: str):
         self._crashes.pop(_key(spec, tag, worker_id), None)
@@ -1412,7 +1440,6 @@ class WorkerManager:
         w = task.worker(worker_id)
         if w.kind == "local":
             assert not self._local_alive(spec, task, w), f"{worker_id} is running; pause it first"
-            self._local.pop(_key(spec, task.tag, worker_id), None)
         elif w.kind == "ssh" and self._machine_gone(spec, task, w):
             pass  # its container went with the instance's disk; nothing to check or clean
         elif w.kind == "ssh":
@@ -1429,12 +1456,7 @@ class WorkerManager:
                 self._ssh_machine(task, w).remove_container(
                     _container_name(spec, task.tag, w.worker_id)
                 )
-            # A later slot can reuse this key (_next_worker_id hands out the
-            # freed id again, and a deleted tag can be recreated), and must not
-            # inherit the old container's exit reason and backoff.
-            key = _key(spec, task.tag, worker_id)
-            self._exits.pop(key, None)
-            self._restarts.pop(key, None)
+        self._forget_slot(_key(spec, task.tag, worker_id))
         task.workers.remove(w)
         self.tasks.save(spec, task)
         self._ensure_sync(spec, task)
@@ -1867,7 +1889,14 @@ class WorkerManager:
                     await self.offload(self._tick_scheduler, spec, task)
                 except Exception as e:  # noqa: BLE001 -- scheduling must keep ticking
                     print(f"scheduler {spec.name}/{task.tag}: {e}")
-            machines = await self.offload(self.machine_status, spec, task, observe=True)
+            # An unobservable fleet (a failed provider listing, say) must not stop
+            # enforcement for this tag's slots or any later tag's; its machines
+            # are left alone this pass.
+            try:
+                machines = await self.offload(self.machine_status, spec, task, observe=True)
+            except Exception as e:  # noqa: BLE001 -- see above
+                print(f"machines {spec.name}/{task.tag}: {e}")
+                machines = []
             try:
                 await self.offload(self._reconcile_machines, spec, task, machines)
             except Exception as e:  # noqa: BLE001 -- one task's machines must not stop the pass
@@ -1995,11 +2024,9 @@ class WorkerManager:
             # A local worker restarts in about a second, so parking it and
             # stopping it are the same thing.
             if intent == RUN and not alive:
-                key = _key(spec, task.tag, w.worker_id)
                 code = self._local_exit_code(spec, task, w)
-                if code not in (None, 0) and key not in self._stopped_local:
-                    self._note_crash(key, f"exit {code}")
-                self._stopped_local.discard(key)
+                if _is_crash(code):
+                    self._note_crash(_key(spec, task.tag, w.worker_id), f"exit {code}")
                 self._spawn_local(spec, task, w)
             elif intent != RUN and alive:
                 self._stop_local(spec, task, w)
@@ -2032,7 +2059,7 @@ class WorkerManager:
                 # Unreachable or unobserved: nothing this pass can act on.
                 self._note_restart(key)
                 why = self._exits.get(key, "")
-                if probe == "stopped" and not why.startswith("exit 0:"):
+                if probe == "stopped" and _is_crash(_exit_code(why)):
                     self._note_crash(key, why)
                 self._start_or_replace(machine, name, spec, task, w, probe)
         elif intent == PARK and probe == "running":
