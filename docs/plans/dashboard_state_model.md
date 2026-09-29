@@ -3,7 +3,7 @@
 **Status: proposed, not reviewed; operator's calls recorded 2026-09-29**
 (§Operator's calls): a SQLite control store; machines rented and registered
 only on the Machine pool page; Requeue and Release keep their names; moving a
-tag's training state is automatic (recommended, awaiting confirmation).
+tag's training state is an automatic step of placement.
 Written after the first live run of the tag queue (#276-#280) needed eleven
 follow-up PRs (#281-#291). The running campaign is unaffected. Each PR here
 lands between campaign arms, with a dashboard restart.
@@ -356,5 +356,5 @@ between campaign arms with a dashboard restart.
    hand on a pool machine (§4).
 3. **Verb names:** Requeue and Release stay. Both get a tooltip and a
    confirmation that say what happens to the machine (§6).
-4. **Move home:** automatic, as a step of placement (§5). Recommended, with
-   the tradeoffs given to the operator; awaiting confirmation.
+4. **Move home:** automatic, as a step of placement (§5), confirmed after
+   weighing the measured cost (about 170 MB per tag) against a manual step.
