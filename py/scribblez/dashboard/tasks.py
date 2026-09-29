@@ -4,8 +4,9 @@ A task is one (workload, tag) pair with frozen params, worker slots and
 machines, persisted as task.json in the tag's root. A tag directory without a
 task.json still appears in listings, read-only.
 
-A process holds one TaskRecord per task: load_task returns the same object
-until the file changes under it, and save_task writes that object. The
+A TaskStore, one per dashboard process and mount root, holds one TaskRecord per
+task: load returns the same object until the file changes under it, and save
+writes that object. The
 dashboard reads and mutates a task from several places at once (the reconcile
 pass across its blocking steps, request handlers, status polls). With a copy
 each, the last save would win: an operator's pause, saved by its handler,
@@ -23,7 +24,9 @@ import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+from scribblez import params as params_mod
 from scribblez.dashboard.worker_stats_figures import read_stats
+from scribblez.paths import TagPaths
 from scribblez.workloads import WorkloadSpec, resolve
 
 
@@ -175,17 +178,6 @@ class TaskRecord:
         return [w for w in self.workers if w.machine == machine]
 
 
-def task_path(spec: WorkloadSpec, tag: str) -> Path:
-    return spec.data_dir(tag) / "task.json"
-
-
-# The process's shared records (see the module docstring), by path, each with
-# the file mtime it matches. A file whose mtime has moved was written by
-# someone else, such as a CLI tool migrating params, and is read afresh.
-_records: dict[Path, tuple[TaskRecord, int]] = {}
-_records_lock = threading.Lock()
-
-
 def _declared(cls, raw: dict) -> dict:
     """`raw` restricted to `cls`'s fields, so a stored field the dataclass no
     longer declares is dropped (and gone after the next save) instead of
@@ -203,85 +195,6 @@ def _read_task(path: Path) -> TaskRecord:
     raw["workers"] = [_from_stored(WorkerRecord, w) for w in raw.get("workers", [])]
     raw["machines"] = [_from_stored(MachineRecord, m) for m in raw.get("machines", [])]
     return TaskRecord(**raw)
-
-
-def load_task(spec: WorkloadSpec, tag: str) -> TaskRecord | None:
-    path = task_path(spec, tag)
-    with _records_lock:
-        try:
-            stamp = path.stat().st_mtime_ns
-        except FileNotFoundError:
-            _records.pop(path, None)
-            return None
-        held = _records.get(path)
-        if held is not None and held[1] == stamp:
-            return held[0]
-        task = _read_task(path)
-        _records[path] = (task, stamp)
-        return task
-
-
-def save_task(spec: WorkloadSpec, task: TaskRecord):
-    """Write the record atomically, so two threads saving at once (the pass and
-    a handler) never interleave in the file."""
-    path = task_path(spec, task.tag)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".task.", suffix=".json")
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(asdict(task), indent=2) + "\n")
-    with _records_lock:
-        os.replace(tmp, path)
-        _records[path] = (task, path.stat().st_mtime_ns)
-
-
-def create_task(
-    spec: WorkloadSpec, tag: str, raw_params: dict, profile: str | None = None
-) -> TaskRecord:
-    """Create and persist a task. Params resolve as `raw_params` over `profile`
-    (the workload's default profile when None) over the workload's defaults.
-    Raises params.ParamsError on bad values, AssertionError on a taken tag or
-    unknown profile.
-
-    The workload's `finalize` hook runs on the validated params: its last
-    chance to resolve derived fields, since workers read task.json verbatim."""
-    assert tag and all(c.isalnum() or c in "._-" for c in tag), f"invalid tag name '{tag}'"
-    assert load_task(spec, tag) is None, f"tag '{tag}' already has a task"
-    profile_name, validated = spec.resolve_params(profile, raw_params)
-    if spec.finalize:
-        validated = resolve(spec.finalize)(spec, tag, validated)
-    task = TaskRecord(
-        workload=spec.name,
-        tag=tag,
-        params=asdict(validated),
-        created_at=time.time(),
-        profile=profile_name,
-    )
-    save_task(spec, task)
-    return task
-
-
-def delete_tag(spec: WorkloadSpec, tag: str):
-    """Delete a tag's local dir (task record, data, stats, logs). The tag's
-    copy in the results bucket is deliberately left alone; purge it by hand.
-
-    The tag must have no worker slots left, since the task record is what
-    tracks their containers and machines. Callers go through
-    WorkerManager.delete_task, which removes the slots first.
-    """
-    task = load_task(spec, tag)
-    assert task is None or not task.workers, "remove the tag's workers first"
-    tag_dir = spec.data_dir(tag)
-    assert tag_dir.is_dir(), f"no such tag '{tag}'"
-    shutil.rmtree(tag_dir)
-    with _records_lock:
-        _records.pop(task_path(spec, tag), None)
-
-
-def progress(spec: WorkloadSpec, tag: str) -> list:
-    """The workload's [label, value] progress counters for the tag."""
-    if not spec.progress:
-        return []
-    return [list(pair) for pair in resolve(spec.progress)(spec, tag)]
 
 
 def _last_active(tag_dir: Path) -> float:
@@ -307,29 +220,127 @@ def _last_active(tag_dir: Path) -> float:
     return max(stamps, default=0)
 
 
-def list_tags(spec: WorkloadSpec) -> list[dict]:
-    """Every tag under the workload's tags root, with listing metadata."""
-    tags_root = spec.tags_root
-    if not tags_root.is_dir():
-        return []
-    out = []
-    for tag_dir in tags_root.iterdir():
-        if not tag_dir.is_dir():
-            continue
-        task = load_task(spec, tag_dir.name)
-        workers = task.workers if task else []
-        out.append(
-            {
-                "tag": tag_dir.name,
-                "has_task": task is not None,
-                "created_at": task.created_at if task else None,
-                "workers": len(workers),
-                # Slots the operator wants running, gated ones included (the
-                # scheduler resumes those itself). Desired rather than observed
-                # state, so listing tags costs no ssh or cloud round trips.
-                "active_workers": sum(w.desired_state == "running" for w in workers),
-                "progress": progress(spec, tag_dir.name),
-                "last_active": _last_active(tag_dir),
-            }
+class TaskStore:
+    """The task records under one mount root (see the module docstring). A
+    store is the only way in: nothing in the dashboard resolves a tag's
+    directory without it, so a test or simulation gives it a scratch root and
+    never reaches the live trees."""
+
+    def __init__(self, mount_root: Path):
+        self.mount_root = Path(mount_root)
+        # Shared records by path, each with the file mtime it matches. A file
+        # whose mtime has moved was written by someone else, such as a CLI tool
+        # migrating params, and is read afresh.
+        self._records: dict[Path, tuple[TaskRecord, int]] = {}
+        self._lock = threading.Lock()
+
+    def paths(self, spec: WorkloadSpec, tag: str) -> TagPaths:
+        return spec.paths(tag, self.mount_root)
+
+    def task_path(self, spec: WorkloadSpec, tag: str) -> Path:
+        return self.paths(spec, tag).root / "task.json"
+
+    def load(self, spec: WorkloadSpec, tag: str) -> TaskRecord | None:
+        path = self.task_path(spec, tag)
+        with self._lock:
+            try:
+                stamp = path.stat().st_mtime_ns
+            except FileNotFoundError:
+                self._records.pop(path, None)
+                return None
+            held = self._records.get(path)
+            if held is not None and held[1] == stamp:
+                return held[0]
+            task = _read_task(path)
+            self._records[path] = (task, stamp)
+            return task
+
+    def save(self, spec: WorkloadSpec, task: TaskRecord):
+        """Write the record atomically, so two threads saving at once (the pass
+        and a handler) never interleave in the file."""
+        path = self.task_path(spec, task.tag)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".task.", suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(asdict(task), indent=2) + "\n")
+        with self._lock:
+            os.replace(tmp, path)
+            self._records[path] = (task, path.stat().st_mtime_ns)
+
+    def create(
+        self, spec: WorkloadSpec, tag: str, raw_params: dict, profile: str | None = None
+    ) -> TaskRecord:
+        """Create and persist a task. Params resolve as `raw_params` over
+        `profile` (the workload's default profile when None) over the
+        workload's defaults. Raises params.ParamsError on bad values,
+        AssertionError on a taken tag or unknown profile.
+
+        The workload's `finalize` hook runs on the validated params: its last
+        chance to resolve derived fields, since workers read task.json
+        verbatim."""
+        assert tag and all(c.isalnum() or c in "._-" for c in tag), f"invalid tag name '{tag}'"
+        assert self.load(spec, tag) is None, f"tag '{tag}' already has a task"
+        profile_name, validated = spec.resolve_params(profile, raw_params)
+        if spec.finalize:
+            validated = resolve(spec.finalize)(spec, self.paths(spec, tag), validated)
+        task = TaskRecord(
+            workload=spec.name,
+            tag=tag,
+            params=asdict(validated),
+            created_at=time.time(),
+            profile=profile_name,
         )
-    return sorted(out, key=lambda r: r["tag"])
+        self.save(spec, task)
+        return task
+
+    def delete(self, spec: WorkloadSpec, tag: str):
+        """Delete a tag's local dir (task record, data, stats, logs). The tag's
+        copy in the results bucket is deliberately left alone; purge it by hand.
+
+        The tag must have no worker slots left, since the task record is what
+        tracks their containers and machines. Callers go through
+        WorkerManager.delete_task, which removes the slots first.
+        """
+        task = self.load(spec, tag)
+        assert task is None or not task.workers, "remove the tag's workers first"
+        tag_dir = self.paths(spec, tag).root
+        assert tag_dir.is_dir(), f"no such tag '{tag}'"
+        shutil.rmtree(tag_dir)
+        with self._lock:
+            self._records.pop(self.task_path(spec, tag), None)
+
+    def progress(self, spec: WorkloadSpec, task: TaskRecord) -> list:
+        """The workload's [label, value] progress counters for the task."""
+        if not spec.progress:
+            return []
+        params = params_mod.validate(spec.params_cls, task.params)
+        paths = self.paths(spec, task.tag)
+        return [list(pair) for pair in resolve(spec.progress)(spec, paths, params)]
+
+    def list_tags(self, spec: WorkloadSpec) -> list[dict]:
+        """Every tag under the workload's tags root, with listing metadata."""
+        tags_root = spec.tags_root(self.mount_root)
+        if not tags_root.is_dir():
+            return []
+        out = []
+        for tag_dir in tags_root.iterdir():
+            if not tag_dir.is_dir():
+                continue
+            task = self.load(spec, tag_dir.name)
+            workers = task.workers if task else []
+            out.append(
+                {
+                    "tag": tag_dir.name,
+                    "has_task": task is not None,
+                    "created_at": task.created_at if task else None,
+                    "workers": len(workers),
+                    # Slots the operator wants running, gated ones included (the
+                    # scheduler resumes those itself). Desired rather than
+                    # observed state, so listing tags costs no ssh or cloud
+                    # round trips.
+                    "active_workers": sum(w.desired_state == "running" for w in workers),
+                    "progress": self.progress(spec, task) if task else [],
+                    "last_active": _last_active(tag_dir),
+                }
+            )
+        return sorted(out, key=lambda r: r["tag"])

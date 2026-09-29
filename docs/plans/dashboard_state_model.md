@@ -1,7 +1,8 @@
 # Plan: one state model for the dashboard's control plane
 
 **Status: plan-reviewed 2026-09-29 and revised (§Review record); every
-operator's call settled (§Operator's calls); not built.**
+operator's call settled (§Operator's calls); being built: PR 0 (the paths
+context) in review.**
 
 - **Review.** Four independent panelists: hidden complexity, a rival design
   (a Codex seat), scope, and integration. They raised 2 blocking, 16 serious

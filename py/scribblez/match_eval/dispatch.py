@@ -188,7 +188,7 @@ def _assign(paths: TagPaths, conn, every: int, slot):
     slot.put(model, f"{inbox}/{model.name}")
 
 
-def tick(spec, tag: str, params, slots) -> bool:
+def tick(spec, paths: TagPaths, params, slots) -> bool:
     """One controller-side pass for one task (the RoleSpec.dispatch hook).
     Returns whether match work may still be outstanding (see _outstanding); the
     dashboard finishes the role once it is not and the trainer has finished.
@@ -198,7 +198,6 @@ def tick(spec, tag: str, params, slots) -> bool:
     applies the schema and commits, which on an archived tag would recreate its
     write-ahead log every few seconds.
     """
-    paths = spec.paths(tag)
     if not paths.dashboard_db.is_file():
         return True  # the trainer has not started; there is nothing to match yet
     if not slots and not _delivered_results(paths):

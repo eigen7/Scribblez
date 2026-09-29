@@ -84,11 +84,12 @@ def set_dir(name: str) -> Path:
     return d
 
 
-def tag_params(tag: str) -> EvidenceTrajectoriesParams:
+def tag_params(paths: TagPaths) -> EvidenceTrajectoriesParams:
     """The tag's frozen params (its task.json)."""
-    task = tasks.load_task(workloads.get(EVIDENCE_TRAJECTORIES), tag)
+    store = tasks.TaskStore(paths.mount_root)
+    task = store.load(workloads.get(EVIDENCE_TRAJECTORIES), paths.tag)
     if task is None:
-        raise KeyError(f"tag {tag!r} has no task.json")
+        raise KeyError(f"tag {paths.tag!r} has no task.json")
     return params_mod.validate(EvidenceTrajectoriesParams, task.params)
 
 
@@ -161,8 +162,8 @@ def position_payload(
     """The tab's view of one position. `prefix` None means the largest evidence
     prefix; `slot` None means the prefix's last candidate (slot 0 at prefix
     0)."""
-    params = tag_params(tag)
     paths = TagPaths(tag, task, mount_root)
+    params = tag_params(paths)
     gcgs = set_gcgs(set_dir(set_name))
     if not 0 <= position < len(gcgs):
         raise KeyError("position out of range")
@@ -226,12 +227,13 @@ class GenerationsHandler(_Base):
 
     def get(self):
         tag, task = self.get_query_argument("tag"), self.get_query_argument("task")
+        paths = TagPaths(tag, task, self.mount_root)
         try:
-            params = tag_params(tag)
+            params = tag_params(paths)
         except KeyError:
             self.write({"generations": []})
             return
-        gens = generations(TagPaths(tag, task, self.mount_root), params)
+        gens = generations(paths, params)
         self.write(
             {"generations": [{"generation": g["generation"], "epoch": g["epoch"]} for g in gens]}
         )
@@ -245,8 +247,9 @@ class PositionHandler(_Base):
         tag, task = self.get_query_argument("tag"), self.get_query_argument("task")
         set_name = self.get_query_argument("set", DEFAULT_SET)
         try:
-            params = tag_params(tag)
-            gens = generations(TagPaths(tag, task, self.mount_root), params)
+            paths = TagPaths(tag, task, self.mount_root)
+            params = tag_params(paths)
+            gens = generations(paths, params)
             gen_arg = self.get_query_argument("generation", "latest")
             if not gens:
                 self.fail(404, "no checkpoints yet")

@@ -36,7 +36,19 @@ documented in generational/records.py).
 
 from pathlib import Path
 
+# Where the tag trees live in the dev container. Only entry points (the
+# dashboard server, CLI scripts, the worker entrypoint) read it, to pick the
+# root they pass down; library code always takes the root as an argument, so
+# a test or simulation can never reach the live trees by omission.
 DEFAULT_MOUNT_ROOT = Path("/workspace/mount")
+
+
+def add_mount_root_argument(parser):
+    """An entry point's --mount-root: where the tag trees it works on live."""
+    parser.add_argument(
+        "--mount-root", type=Path, default=DEFAULT_MOUNT_ROOT, help="root of the tag trees"
+    )
+
 
 # The checkout this package was imported from, so code running in a git
 # worktree uses the worktree's own binaries and data.
@@ -105,7 +117,7 @@ DONE_SUFFIX = ".done"
 class TagPaths:
     """Resolves every per-tag artifact path under `<mount_root>/tags/<task>/<tag>/`."""
 
-    def __init__(self, tag: str, task: str, mount_root: str | Path = DEFAULT_MOUNT_ROOT):
+    def __init__(self, tag: str, task: str, mount_root: str | Path):
         self.tag = tag
         self.task = task
         self.mount_root = Path(mount_root)

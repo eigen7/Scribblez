@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from scribblez.dashboard import db
 from scribblez.params import ParamsError, param
+from scribblez.paths import TagPaths
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
 
 
@@ -92,22 +93,12 @@ class MatchArmsParams:
             raise ParamsError("round_pairs must be >= 1")
 
 
-def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
+def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, object]]:
     """Arms measured / total, read the same way the runner decides what is left."""
-    task_params = _task_params(spec, tag)
-    if task_params is None:
-        return []
-    total = len(parse_arms(task_params.arms))
-    db_path = spec.paths(tag).dashboard_db
+    total = len(parse_arms(params.arms))
+    db_path = paths.dashboard_db
     done = len(db.read_all_match_arms(db.connect(db_path))) if db_path.is_file() else 0
     return [("arms", f"{done}/{total} measured")]
-
-
-def _task_params(spec: WorkloadSpec, tag: str):
-    from scribblez.dashboard import tasks  # tasks imports the workload registry
-
-    task = tasks.load_task(spec, tag)
-    return None if task is None else MatchArmsParams(**task.params)
 
 
 SPEC = WorkloadSpec(

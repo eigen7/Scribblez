@@ -58,7 +58,7 @@ from pathlib import Path
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez.params import ParamsError, param
-from scribblez.paths import ENGINE_DIR, MATCH_RESULTS_DIR
+from scribblez.paths import ENGINE_DIR, MATCH_RESULTS_DIR, TagPaths
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.sim_evidence.position_sets import TrajectoryRecipe
 from scribblez.workloads import mset_targets, pair_store
@@ -385,13 +385,13 @@ def run_generate(ctx: WorkerContext) -> int:
     )
 
 
-def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
-    return [("pairs", pair_store.count_pairs(spec.paths(tag).data_dir / SLOGS_DIR, ".mset"))]
+def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, object]]:
+    return [("pairs", pair_store.count_pairs(paths.data_dir / SLOGS_DIR, ".mset"))]
 
 
-def slog_dir(tag: str) -> Path:
+def slog_dir(tag: str, mount_root: Path) -> Path:
     """The tag's pair store (complete .slog/.sobs/.mset triples)."""
-    return SPEC.paths(tag).data_dir / SLOGS_DIR
+    return SPEC.paths(tag, mount_root).data_dir / SLOGS_DIR
 
 
 SPEC = WorkloadSpec(

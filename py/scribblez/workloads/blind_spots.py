@@ -33,7 +33,7 @@ from pathlib import Path
 
 from scribblez import params as params_mod
 from scribblez.params import param
-from scribblez.paths import ENGINE_DIR
+from scribblez.paths import ENGINE_DIR, TagPaths
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.sim_candidate_survey import SURVEY_SUFFIX, gcg_name, slim_survey_file
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
@@ -178,19 +178,19 @@ def tick(spec: WorkloadSpec, task, hooks):
     dashboard's idle policy counts as nothing running, so the rented machines
     are stopped ten minutes later (dashboard/workers.py, IDLE_STOP_SECONDS)."""
     target = params_mod.validate(spec.params_cls, task.params).target_positions
-    if params_mod.reached(positions_found(spec.paths(task.tag).data_dir), target):
+    if params_mod.reached(positions_found(hooks.paths.data_dir), target):
         hooks.finish("generate")
 
 
-def survey_dirs(tag: str) -> tuple[Path, Path]:
+def survey_dirs(tag: str, mount_root: Path) -> tuple[Path, Path]:
     """The tag's (survey files, .gcg exports) directories, for the viewer and the
     collection script."""
-    data_dir = SPEC.paths(tag).data_dir
+    data_dir = SPEC.paths(tag, mount_root).data_dir
     return data_dir / SURVEY_DIR, data_dir / GCG_DIR
 
 
-def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
-    data_dir = spec.paths(tag).data_dir
+def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, object]]:
+    data_dir = paths.data_dir
     return [
         ("positions found", positions_found(data_dir)),
         ("games surveyed", sum(1 for _ in (data_dir / SURVEY_DIR).glob(f"*{SURVEY_SUFFIX}"))),

@@ -180,7 +180,9 @@ class PositionSetProbe:
     Optional: if the set or its sidecars are unavailable it reports nothing
     rather than failing training."""
 
-    def __init__(self, params, proposer: Path | None, student_cfg: dict, threads: int):
+    def __init__(
+        self, params, proposer: Path | None, student_cfg: dict, threads: int, mount_root: Path
+    ):
         self.student_cfg = student_cfg
         self.max_e = max_evidence_width(params)
         self.positions: list[tuple[str, object]] = []  # (gcg text, SobsPosition)
@@ -188,7 +190,7 @@ class PositionSetProbe:
         if proposer is None or not set_gcgs(set_dir):
             return
         try:
-            sobs = ensure_sobs(set_dir, proposer, recipe_of(params), threads)
+            sobs = ensure_sobs(set_dir, proposer, recipe_of(params), threads, mount_root)
         except Exception as e:  # noqa: BLE001 -- an optional readout
             timed_print(f"position-set metric disabled: {e}")
             return
@@ -517,7 +519,9 @@ def run(ctx: WorkerContext) -> int:
         "loss_cfg": LossConfig.from_args(params),
         "max_e": max_e,
         "stats": WorkerStats(ctx),
-        "posset": PositionSetProbe(params, proposer, student_cfg, threads=ctx.threads),
+        "posset": PositionSetProbe(
+            params, proposer, student_cfg, threads=ctx.threads, mount_root=ctx.mount_root
+        ),
         "student_ref": _student_reference(params, device, max_e),
     }
 

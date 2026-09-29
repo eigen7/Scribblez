@@ -13,20 +13,19 @@ An entry is `localhost` (this machine, running local slots) or a registered
 ssh machine. Each records the facts placement checks: vCPUs, GPU count, and
 memory per GPU.
 
-pool.json lives under the mount root beside the workload tag trees, held as
-one shared object per process (shared_json.py).
+pool.json lives under the mount root beside the workload tag trees, held by
+the dashboard's pool store (pool_store, shared_json.py).
 """
 
 import subprocess
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 
 from cloud.ssh_machine import HARDWARE_COMMAND
 
 from scribblez.dashboard.shared_json import SharedJson
 from scribblez.dashboard.tasks import MachineRecord
-from scribblez.paths import DEFAULT_MOUNT_ROOT
 
-POOL_PATH = DEFAULT_MOUNT_ROOT / "pool.json"
 LOCALHOST = "localhost"
 POOL_OWNER_PREFIX = "pool/"
 KINDS = ("local", "ssh")
@@ -221,19 +220,7 @@ def _decode(raw: dict) -> Pool:
     return Pool(machines=machines, capacity=capacity)
 
 
-_store = SharedJson(lambda: POOL_PATH, _decode, Pool)
-
-
-def load_pool() -> Pool:
-    """The process's shared Pool; an empty one before pool.json exists."""
-    return _store.load()
-
-
-def save_pool(pool: Pool):
-    """Write `pool` atomically and keep it as the shared object."""
-    _store.save(pool)
-
-
-def forget_loaded():
-    """Drop the held Pool, as a fresh process starts (tests)."""
-    _store.forget()
+def pool_store(mount_root: Path) -> SharedJson:
+    """The store of pool.json under `mount_root`: load() gives the shared Pool
+    (an empty one before the file exists), save(pool) writes it atomically."""
+    return SharedJson(Path(mount_root) / "pool.json", _decode, Pool)

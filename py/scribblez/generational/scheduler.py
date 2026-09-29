@@ -74,7 +74,7 @@ def tick_for_task(spec, task, hooks):
     machine. Finishing the role stops its containers and lets the machines go.
     """
     params = params_mod.validate(spec.params_cls, task.params)
-    paths = spec.paths(task.tag)
+    paths = hooks.paths
     if _trainer_done(paths, params.max_rows):
         hooks.finish(GENERATE_ROLE)
         return
@@ -235,8 +235,7 @@ def _next_index(paths: TagPaths, cursor: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def progress(spec, tag: str) -> list[tuple[str, object]]:
-    paths = spec.paths(tag)
+def progress(spec, paths: TagPaths, params) -> list[tuple[str, object]]:
     out: list[tuple[str, object]] = []
     open_index = _open_index(paths)
     if open_index is not None:

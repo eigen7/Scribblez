@@ -11,6 +11,7 @@ from scribblez.dashboard import tasks
 from scribblez.dashboard.pool import PoolMachine
 from scribblez.dashboard.queue import BUNDLE_READY, QueueEntry
 from scribblez.generational import lifecycle
+from scribblez.paths import TagPaths
 from scribblez.workloads import WorkloadSpec, resolve
 from scribblez.workloads.base import SlotPlan
 
@@ -33,13 +34,13 @@ def gpu_total(spec: WorkloadSpec, plan: list[SlotPlan], entry: QueueEntry) -> fl
     return None if any(n is None for n in needs) else sum(needs)
 
 
-def state_home(spec: WorkloadSpec, task: tasks.TaskRecord) -> str | None:
+def state_home(paths: TagPaths, task: tasks.TaskRecord) -> str | None:
     """Where the tag's training state (checkpoint, cursor, generations) lives,
     once it has any: HOME_BUCKET when its trainer delivered through the
     results bucket, where a trainer on any machine resumes it (and localhost
     holds the copy the sync pulls back); else HOME_LOCAL, only this machine's
     tag dir. None before any row is trained, when a tag may start anywhere."""
-    if not lifecycle.read_train_state(spec.paths(task.tag)).get("rows_trained"):
+    if not lifecycle.read_train_state(paths).get("rows_trained"):
         return None
     return HOME_BUCKET if task.trainer_sink == "r2" else HOME_LOCAL
 
