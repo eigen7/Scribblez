@@ -28,7 +28,7 @@ from scribblez.dashboard.workers import (
     _container_name,
     _key,
 )
-from scribblez.paths import TagPaths
+from scribblez.paths import DEFAULT_MOUNT_ROOT, TagPaths
 from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
 from scribblez.workloads.position_eval import PositionEvalParams
 
@@ -2084,3 +2084,13 @@ def test_restarts_after_a_crash_are_recorded_and_clean_exits_are_not(
     later = time.time() + 120
     monkeypatch.setattr(workers_mod.time, "time", lambda: later)
     assert manager.recent_crashes(spec, "t", ssh.worker_id, 60) == []
+
+
+def test_cloud_sync_is_told_the_tag_dirs_mount_root(spec, task):
+    """cloud_sync resolves the tag dir itself; naming the root keeps its pull
+    where this process puts the tag (a test's redirected root, here), never
+    the live tags under the default one."""
+    argv = workers_mod.cloud_sync_argv(spec, task)
+    root = argv[argv.index("--mount-root") + 1]
+    assert root == str(spec.paths(task.tag).mount_root)
+    assert not root.startswith(str(DEFAULT_MOUNT_ROOT))

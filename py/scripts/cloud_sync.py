@@ -26,16 +26,21 @@ import time
 from cloud.credentials import load_credentials
 from cloud.r2 import bucket_path, rclone
 from scribblez import workloads
-from scribblez.paths import TRAINER_OUTPUT_DIRS, TRAINER_OUTPUT_FILES, TRAINER_OUTPUT_IMMUTABLE
+from scribblez.paths import (
+    DEFAULT_MOUNT_ROOT,
+    TRAINER_OUTPUT_DIRS,
+    TRAINER_OUTPUT_FILES,
+    TRAINER_OUTPUT_IMMUTABLE,
+    TagPaths,
+)
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
-def _targets(spec: workloads.WorkloadSpec, tag: str, trainer_outputs: bool):
+def _targets(spec: workloads.WorkloadSpec, paths: TagPaths, trainer_outputs: bool):
     """(bucket sub-prefix, local dir, extra rclone flags) for every directory
     a sync pulls. Prefixes whose objects never change are compared by size
     alone: on an S3-style remote the listing carries no modtime, so the
     default comparison would ask for every unchanged export one by one."""
-    paths = spec.paths(tag)
     targets = [(sub, paths.data_dir / sub, ()) for sub in spec.sync_data_dirs]
     targets += [("stats", paths.stats_dir, ()), ("params", paths.root / "params", ())]
     if trainer_outputs:
@@ -55,18 +60,20 @@ def _targets(spec: workloads.WorkloadSpec, tag: str, trainer_outputs: bool):
 MIRRORED_OUTPUT_DIRS = ("models",)
 
 
-def _pull_file(r2, spec: workloads.WorkloadSpec, tag: str, name: str) -> int:
+def _pull_file(r2, spec: workloads.WorkloadSpec, paths: TagPaths, name: str) -> int:
     """Pull one root-level file the trainer rewrites in place, if the bucket
     has it yet (a trainer that has not checkpointed has published nothing)."""
-    src = bucket_path(r2, spec.name, tag, name)
+    src = bucket_path(r2, spec.name, paths.tag, name)
     if not rclone(r2, "lsf", src, capture=True).stdout.strip():
         return 0
-    return rclone(r2, "copyto", src, str(spec.paths(tag).root / name)).returncode
+    return rclone(r2, "copyto", src, str(paths.root / name)).returncode
 
 
-def sync_once(r2, spec: workloads.WorkloadSpec, tag: str, trainer_outputs: bool = False) -> int:
-    paths = spec.paths(tag)
-    targets = _targets(spec, tag, trainer_outputs)
+def sync_once(
+    r2, spec: workloads.WorkloadSpec, paths: TagPaths, trainer_outputs: bool = False
+) -> int:
+    tag = paths.tag
+    targets = _targets(spec, paths, trainer_outputs)
     for sub, dest, flags in targets:
         dest.mkdir(parents=True, exist_ok=True)
         verb = "sync" if trainer_outputs and sub in MIRRORED_OUTPUT_DIRS else "copy"
@@ -76,7 +83,7 @@ def sync_once(r2, spec: workloads.WorkloadSpec, tag: str, trainer_outputs: bool 
             return res.returncode
     if trainer_outputs:
         for name in TRAINER_OUTPUT_FILES:
-            rc = _pull_file(r2, spec, tag, name)
+            rc = _pull_file(r2, spec, paths, name)
             if rc != 0:
                 print(f"sync of {name} failed", file=sys.stderr)
                 return rc
@@ -97,6 +104,9 @@ def main() -> int:
         default="kill_test",
         help="tag's workload",
     )
+    p.add_argument(
+        "--mount-root", default=str(DEFAULT_MOUNT_ROOT), help="root the tag dir lives under"
+    )
     p.add_argument("--watch", action="store_true", help="keep syncing until Ctrl-C")
     p.add_argument("--interval", type=int, default=60, help="seconds between --watch syncs")
     p.add_argument(
@@ -110,7 +120,7 @@ def main() -> int:
     spec = workloads.get(args.workload)
     r2 = load_credentials().r2
     while True:
-        rc = sync_once(r2, spec, args.tag, args.trainer_outputs)
+        rc = sync_once(r2, spec, spec.paths(args.tag, args.mount_root), args.trainer_outputs)
         if rc != 0 or not args.watch:
             return rc
         try:
