@@ -4,27 +4,24 @@ A task is one (workload, tag) pair with frozen params, worker slots and
 machines, persisted as task.json in the tag's root. A tag directory without a
 task.json still appears in listings, read-only.
 
-A TaskStore, one per dashboard process and mount root, holds one TaskRecord per
-task: load returns the same object until the file changes under it, and save
-writes that object. The
-dashboard reads and mutates a task from several places at once (the reconcile
-pass across its blocking steps, request handlers, status polls). With a copy
-each, the last save would win: an operator's pause, saved by its handler,
-would be overwritten seconds later by the pass's copy, loaded as "running"
-before the click, and the worker started again. With one shared object there
-is nothing stale to save.
+A TaskStore, one per dashboard process and mount root, keeps each task.json
+as a SharedJson: the writer thread gets one live TaskRecord per task, the same
+object until the file changes under it, and saves that object; every other
+thread reads the last committed copy. With a copy per caller, the last save
+would win: an operator's pause, saved by its command, would be overwritten
+seconds later by the pass's copy, loaded as "running" before the click, and
+the worker started again. With one live object there is nothing stale to
+save.
 """
 
-import json
-import os
 import shutil
-import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from scribblez import params as params_mod
+from scribblez.dashboard.shared_json import SharedJson, Writer
 from scribblez.dashboard.worker_stats_figures import read_stats
 from scribblez.paths import TagPaths
 from scribblez.workloads import WORKLOADS, WorkloadSpec, resolve
@@ -114,6 +111,14 @@ class MachineRecord:
     observed_at: float | None = None
     observed_up: bool = False
 
+    def spend_now(self, now: float) -> float:
+        """`spend` advanced to `now`: the interval since the last observation
+        is charged if the machine was billing then. Recording it is the
+        observing pass's (workers._accrue_machine); a status read shows it."""
+        if not self.observed_up or self.observed_at is None:
+            return self.spend
+        return self.spend + (now - self.observed_at) / 3600 * (self.cost_per_hr or 0.0)
+
 
 @dataclass
 class TaskRecord:
@@ -190,8 +195,8 @@ def _from_stored(cls, raw: dict):
     return cls(**_declared(cls, raw))
 
 
-def _read_task(path: Path) -> TaskRecord:
-    raw = _declared(TaskRecord, json.loads(path.read_text()))
+def _decode_task(stored: dict) -> TaskRecord:
+    raw = _declared(TaskRecord, stored)
     raw["workers"] = [_from_stored(WorkerRecord, w) for w in raw.get("workers", [])]
     raw["machines"] = [_from_stored(MachineRecord, m) for m in raw.get("machines", [])]
     return TaskRecord(**raw)
@@ -226,12 +231,10 @@ class TaskStore:
     directory without it, so a test or simulation gives it a scratch root and
     never reaches the live trees."""
 
-    def __init__(self, mount_root: Path):
+    def __init__(self, mount_root: Path, writer: Writer | None = None):
         self.mount_root = Path(mount_root)
-        # Shared records by path, each with the file mtime it matches. A file
-        # whose mtime has moved was written by someone else, such as a CLI tool
-        # migrating params, and is read afresh.
-        self._records: dict[Path, tuple[TaskRecord, int]] = {}
+        self._writer = writer or Writer()
+        self._files: dict[Path, SharedJson] = {}
         self._lock = threading.Lock()
 
     def paths(self, spec: WorkloadSpec, tag: str) -> TagPaths:
@@ -241,31 +244,11 @@ class TaskStore:
         return self.paths(spec, tag).root / "task.json"
 
     def load(self, spec: WorkloadSpec, tag: str) -> TaskRecord | None:
-        path = self.task_path(spec, tag)
-        with self._lock:
-            try:
-                stamp = path.stat().st_mtime_ns
-            except FileNotFoundError:
-                self._records.pop(path, None)
-                return None
-            held = self._records.get(path)
-            if held is not None and held[1] == stamp:
-                return held[0]
-            task = _read_task(path)
-            self._records[path] = (task, stamp)
-            return task
+        """The task, or None when the tag has no task.json."""
+        return self._file(self.task_path(spec, tag)).load()
 
     def save(self, spec: WorkloadSpec, task: TaskRecord):
-        """Write the record atomically, so two threads saving at once (the pass
-        and a handler) never interleave in the file."""
-        path = self.task_path(spec, task.tag)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".task.", suffix=".json")
-        with os.fdopen(fd, "w") as f:
-            f.write(json.dumps(asdict(task), indent=2) + "\n")
-        with self._lock:
-            os.replace(tmp, path)
-            self._records[path] = (task, path.stat().st_mtime_ns)
+        self._file(self.task_path(spec, task.tag)).save(task)
 
     def create(
         self, spec: WorkloadSpec, tag: str, raw_params: dict, profile: str | None = None
@@ -305,9 +288,16 @@ class TaskStore:
         assert task is None or not task.workers, "remove the tag's workers first"
         tag_dir = self.paths(spec, tag).root
         assert tag_dir.is_dir(), f"no such tag '{tag}'"
+        self._writer.check(tag_dir)
         shutil.rmtree(tag_dir)
+        self._file(self.task_path(spec, tag)).forget()
+
+    def _file(self, path: Path) -> SharedJson:
         with self._lock:
-            self._records.pop(self.task_path(spec, tag), None)
+            f = self._files.get(path)
+            if f is None:
+                f = self._files[path] = SharedJson(path, _decode_task, lambda: None, self._writer)
+            return f
 
     def progress(self, spec: WorkloadSpec, task: TaskRecord) -> list:
         """The workload's [label, value] progress counters for the task."""
