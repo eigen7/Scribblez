@@ -408,3 +408,36 @@ def test_a_vanished_instance_does_not_rerun_a_completed_tag(renting, monkeypatch
     q.tick()
     assert _pool_machine("g6-1") is None
     assert queue_mod.load_queue().entries == []
+
+
+def test_stop_all_cloud_spending_requeues_the_tag_and_terminates_the_rental(renting, monkeypatch):
+    """The burn strip's one button. Release alone handed the rental to the next
+    queued tag; stopping must requeue the tag, never place on the machine
+    again, terminate it once free, and rent nothing more."""
+    q, manager, provider, enqueue = renting
+    enqueue("a")
+    enqueue("b")  # waits: the cap is 1
+    q.tick()
+    provider.instances["i-1"].state = "running"
+    manager._instances = ({}, 0.0)
+    manager._instance_index(True)
+    report = q.stop_cloud(dry_run=True)
+    assert report == {
+        "caps": ["g6"], "requeue": ["position_eval/a"], "terminate": ["g6-1"],
+        "stop": [], "orphans": [],
+    }  # fmt: skip
+    assert pool_mod.load_pool().capacity[0].cap == 1  # a dry run changes nothing
+
+    monkeypatch.setattr(q, "_drain", lambda spec, task: None)
+    q.stop_cloud()
+    assert pool_mod.load_pool().capacity[0].cap == 0
+    assert _pool_machine("g6-1").retiring
+    for _ in range(4):
+        for future in list(q._drains.values()):
+            future.result(timeout=10)
+        manager._instances = ({}, 0.0)
+        q.tick()
+    assert ("terminate", "i-1") in provider.calls
+    assert _pool_machine("g6-1") is None
+    assert [e.tag for e in queue_mod.load_queue().entries] == ["a", "b"]
+    assert [c for c in provider.calls if c[0] == "launch"] == [("launch", "pool/g6-1")]

@@ -183,7 +183,7 @@ class PoolRentals:
         provider = self._m._provider()
         if m.lease is None:
             since = self._idle_since.setdefault(m.name, time.time())
-            if time.time() - since >= IDLE_TERMINATE_SECONDS:
+            if m.retiring or time.time() - since >= IDLE_TERMINATE_SECONDS:
                 provider.terminate(record.instance_id)
                 _accrue_machine(record, False)
                 pool.machines.remove(m)

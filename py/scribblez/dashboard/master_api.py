@@ -448,6 +448,17 @@ class QueueHandler(_MasterBase):
         await self.guarded_offload(self.tag_queue.status)
 
 
+class StopCloudHandler(_MasterBase):
+    """Stop all cloud spending (TagQueue.stop_cloud): GET says what it would
+    do, for the confirmation; POST does it."""
+
+    async def get(self):
+        await self.guarded_offload(lambda: self.tag_queue.stop_cloud(dry_run=True))
+
+    async def post(self):
+        await self.guarded_offload(self.tag_queue.stop_cloud)
+
+
 class QueuePlanHandler(_MasterBase):
     """What the queue would start for a tag (TagQueue.plan)."""
 
@@ -600,6 +611,7 @@ MASTER_ROUTES = [
     (r"/api/pool/capacity", PoolCapacityHandler),
     (r"/api/cloud/rental_offer", RentalOfferHandler),
     (r"/api/cloud/fleet", FleetHandler),
+    (r"/api/cloud/stop_all", StopCloudHandler),
     (r"/api/cloud/orphans", OrphansHandler),
     (r"/api/cloud/orphan_action", OrphanActionHandler),
     (r"/api/task/stats", TaskStatsHandler),

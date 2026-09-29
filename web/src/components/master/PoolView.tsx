@@ -24,6 +24,7 @@ export type PoolMachine = {
   occupants: string[];  // "<workload>/<tag>/<worker_id>" of slots outside the lease
   state: 'free' | 'busy' | 'leased';
   capacity: string | null;  // the capacity entry a machine the pool rented belongs to
+  retiring: boolean;  // being given up (Stop all cloud spending)
 };
 
 // Machines the pool may rent (pool.Capacity): up to `cap` of `instance_type`.
@@ -42,6 +43,11 @@ export function gpuText(h: PoolMachine['hardware']): string {
 // The lease, and any slots outside it on the same machine: a tag placed there
 // by hand alongside a leased one is a double booking the operator should see.
 function stateText(m: PoolMachine): string {
+  const retiring = m.retiring ? ' — retiring: terminated once free' : '';
+  return baseState(m) + retiring;
+}
+
+function baseState(m: PoolMachine): string {
   const others = m.occupants.join(', ');
   if (m.lease) {
     const why = m.lease.reason ? `: ${m.lease.reason}` : '';

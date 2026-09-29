@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getJSON } from '../../lib/api';
+import { getJSON, postJSON } from '../../lib/api';
 import { relTime } from './MasterApp';
 
 // The cloud burn strip: what the provider bills right now, pinned to the top
@@ -38,6 +38,53 @@ export function fmtUptime(s: number | null): string {
 }
 
 const money = (x: number) => `$${x.toFixed(2)}`;
+
+// What Stop all cloud spending does, by kind (GET /api/cloud/stop_all is the
+// dry run the confirmation lists; POST does it).
+type StopReport = {
+  caps: string[]; requeue: string[]; terminate: string[]; stop: string[]; orphans: string[];
+};
+
+export function stopConfirmation(r: StopReport): string {
+  const lines = [
+    r.terminate.length && `• Terminate rented machines: ${r.terminate.join(', ')}`,
+    r.requeue.length && `• Put back in the queue (data kept): ${r.requeue.join(', ')}`,
+    r.stop.length && `• Stop task machines (slots paused, disk kept): ${r.stop.join(', ')}`,
+    r.orphans.length && `• Terminate untracked instances: ${r.orphans.join(', ')}`,
+    r.caps.length && `• Set rental capacity to 0: ${r.caps.join(', ')} (raise it again to rent)`,
+  ].filter(Boolean);
+  return ['Stop all cloud spending?', '', ...lines].join('\n');
+}
+
+// The one control that always gets the burn to zero, wherever it comes from.
+function StopAllButton({ onStarted }: { onStarted: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const stop = async () => {
+    setBusy(true);
+    try {
+      const plan: StopReport = await getJSON('/api/cloud/stop_all');
+      if (!window.confirm(stopConfirmation(plan))) return;
+      await postJSON('/api/cloud/stop_all', {});
+      onStarted();
+    } catch (e) {
+      window.alert(`Could not stop cloud spending: ${(e as Error).message ?? e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      onClick={stop} disabled={busy}
+      style={{
+        marginLeft: 'auto', fontSize: 15, fontWeight: 700, padding: '6px 16px',
+        color: 'white', background: '#b23b3b', border: 'none', borderRadius: 6,
+        cursor: busy ? 'wait' : 'pointer',
+      }}
+    >
+      ■ Stop all cloud spending
+    </button>
+  );
+}
 
 function InstanceChip({ inst, onOpen }: {
   inst: FleetInstance; onOpen: (workload: string, tag: string) => void;
@@ -78,6 +125,8 @@ function InstanceChip({ inst, onOpen }: {
 export default function BurnStrip({ onOpen }: { onOpen: (workload: string, tag: string) => void }) {
   const [fleet, setFleet] = useState<Fleet | null>(null);
   const [unreachable, setUnreachable] = useState(false);
+  // Set once Stop all cloud spending was confirmed, until nothing bills.
+  const [stopping, setStopping] = useState(false);
   useEffect(() => {
     const poll = () => getJSON('/api/cloud/fleet')
       .then((f: Fleet) => { setFleet(f); setUnreachable(false); })
@@ -90,6 +139,9 @@ export default function BurnStrip({ onOpen }: { onOpen: (workload: string, tag: 
   const billing = fleet?.instances.filter((i) => BILLING.has(i.state)) ?? [];
   const idle = fleet?.instances.filter((i) => !BILLING.has(i.state)) ?? [];
   const burning = billing.length > 0;
+  useEffect(() => {
+    if (!burning) setStopping(false);
+  }, [burning]);
   const stale = fleet != null
     && (fleet.observed_at == null || Date.now() / 1000 - fleet.observed_at > STALE_S);
   const warn = unreachable || stale || fleet?.error != null;
@@ -131,6 +183,12 @@ export default function BurnStrip({ onOpen }: { onOpen: (workload: string, tag: 
               </span>
             )}
             {!warn && <span>· listed {relTime(fleet.observed_at)}</span>}
+            {burning && stopping && (
+              <b style={{ marginLeft: 'auto' }}>
+                stopping… reaches $0 once running tags have handed over their data (a few minutes)
+              </b>
+            )}
+            {burning && !stopping && <StopAllButton onStarted={() => setStopping(true)} />}
           </>
         )}
       </div>

@@ -186,6 +186,49 @@ class TagQueue:
         m.lease.requeue = True
         self._start_release(m, pool, REQUEUED)
 
+    def stop_cloud(self, dry_run: bool = False) -> dict:
+        """Get the cloud burn to zero (the burn strip's Stop all cloud
+        spending), or with `dry_run` only say what that would do, for the
+        confirmation. Every capacity cap goes to 0, so nothing more is
+        rented. Every pool rental retires: its tag, if one runs there, goes
+        back to the head of the queue with its data (requeue), and the machine
+        is terminated once free, never placed on again. Every task-owned
+        rented machine has its slots paused and stops once they are down.
+        Every orphan instance is terminated. Returns what was (or would be)
+        done, by kind."""
+        pool = pool_mod.load_pool()
+        rentals = [m for m in pool.machines if m.capacity is not None]
+        report = {
+            "caps": [c.name for c in pool.capacity if c.cap > 0],
+            "requeue": [
+                f"{m.lease.workload}/{m.lease.tag}"
+                for m in rentals
+                if m.lease is not None and m.lease.phase in (RESERVED, RUNNING)
+            ],
+            "terminate": [m.name for m in rentals],
+            "stop": [f"{s.name}/{t.tag}/{m.name}" for s, t, m in self._m.task_rentals()],
+            "orphans": [o["instance_id"] for o in self._m.orphans()],
+        }
+        if dry_run:
+            return report
+        for c in pool.capacity:
+            c.cap = 0
+        for m in rentals:
+            m.retiring = True
+        pool_mod.save_pool(pool)
+        for m in rentals:
+            if m.lease is None:
+                self._m.remove_pool_machine(m.name)  # terminates it
+            elif m.lease.phase in (RESERVED, RUNNING):
+                self.requeue(m.lease.workload, m.lease.tag)
+            elif m.lease.phase == HELD:
+                self._start_release(m, pool, "released: stopping all cloud spending")
+            # A releasing one is terminated once its release completes.
+        self._m.stop_task_rentals()
+        for instance_id in report["orphans"]:
+            self._m.terminate_orphan(instance_id)
+        return report
+
     def plan(self, workload: str, tag: str) -> dict:
         """What the queue would start for a tag, shown before and after it is
         enqueued: the roles its layout asks for (they follow from its params),
@@ -390,7 +433,7 @@ class TagQueue:
         match: lease first, then the queue entry goes, then the slots."""
         tasks_now = list(self._m.all_tasks())
         busy = {m.name: self._m.occupants(m, tasks_now) for m in pool.machines}
-        free = [m for m in pool.machines if m.lease is None and not busy[m.name]]
+        free = [m for m in pool.machines if m.lease is None and not m.retiring and not busy[m.name]]
         args = {}  # entry key -> placement.refusal's tag-side arguments
         for e in queue.entries:
             spec, task = _lookup(e.workload, e.tag)
@@ -590,6 +633,8 @@ class TagQueue:
 
     def _wanted(self, m: PoolMachine, queue: Queue) -> bool:
         """Whether some queued tag could run on `m` once it is released."""
+        if m.retiring:
+            return False
         for e in queue.entries:
             spec, task = _lookup(e.workload, e.tag)
             if placement.refusal(*_fit_args(spec, task), e, m) is None:

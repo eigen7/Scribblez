@@ -578,6 +578,24 @@ def test_spend_accrues_while_the_instance_bills(rented, manager, spec, task, mon
     assert tasks.load_task(spec, "t").machine("m1").spend == m.spend
 
 
+def test_stopping_task_rentals_pauses_their_slots_and_skips_the_idle_wait(
+    rented, manager, spec, task, monkeypatch
+):
+    """Stop all cloud spending: a task's own rented machine has its slots
+    paused and stops as soon as they are down, not IDLE_STOP_SECONDS later."""
+    provider, m = rented
+    provider.instances["i-1"].state = "running"
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.desired_state = "running"
+    monkeypatch.setattr(manager, "all_tasks", lambda: [(spec, task)])
+    manager._instance_index(True)
+    assert manager.stop_task_rentals() == [f"{spec.name}/t/m1"]
+    assert w.desired_state == "paused"
+    monkeypatch.setattr(_FakeSshMachine, "state", "stopped")
+    _observe(manager, spec, task)
+    assert ("stop", "i-1") in provider.calls
+
+
 def test_an_idle_machine_is_stopped_after_the_timeout(rented, manager, spec, task, monkeypatch):
     """Nothing running on it: an operator-paused or finished slot with an
     exited container. A slot that wants running and has no container is a

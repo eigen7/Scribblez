@@ -19,7 +19,7 @@ const machine = (over: Partial<PoolMachine>): PoolMachine => ({
   name: 'asus', kind: 'ssh', machine: { host: 'asus-laptop', identity_file: null },
   aliases: [], hardware: { vcpus: 12, gpu_count: 1, gpu_memory_gb: 4 },
   generator_threads: null, lease: null, occupants: [], state: 'free',
-  capacity: null, ...over,
+  capacity: null, retiring: false, ...over,
 });
 
 // Answer the page's two polls: the pool, and the queue.
