@@ -11,6 +11,7 @@ provider refusals) return 400 with {"error": ...} rather than a stack trace.
 """
 
 import json
+import time
 from dataclasses import asdict
 
 import tornado.web
@@ -107,7 +108,9 @@ class _MasterBase(tornado.web.RequestHandler):
         return workloads.get(name)
 
     def guarded(self, fn):
-        """Run `fn` and write its dict result; expected failures become 400s."""
+        """Run `fn` and write its dict result; expected failures become 400s.
+        Here, on the event loop, `fn` must only read: it sees the stores'
+        committed copies (shared_json), and a save fails."""
         try:
             self.write(fn())
         except _CLIENT_ERRORS as e:
@@ -115,9 +118,10 @@ class _MasterBase(tornado.web.RequestHandler):
             self.write({"error": "; ".join(str(a) for a in e.args) or repr(e)})
 
     async def guarded_offload(self, fn):
-        """`guarded`, with `fn` run off the event loop in the worker manager's
-        executor. Launching and removing take seconds of ssh and cloud API work,
-        and the loop must stay free to serve the status polls meanwhile."""
+        """`guarded`, with `fn` run as a command on the writer thread
+        (WorkerManager.offload): the only way a handler changes a record.
+        Launching and removing take seconds of ssh and cloud API work, and the
+        loop stays free to serve the status reads meanwhile."""
         await self.guarded_await(self.manager.offload(fn))
 
     async def guarded_await(self, awaitable):
@@ -164,7 +168,7 @@ class WorkloadTagsHandler(_MasterBase):
 
 
 class TaskCreateHandler(_MasterBase):
-    def post(self):
+    async def post(self):
         body = self.body()
 
         def create():
@@ -173,7 +177,7 @@ class TaskCreateHandler(_MasterBase):
             )
             return {"tag": task.tag}
 
-        self.guarded(create)
+        await self.guarded_offload(create)
 
 
 class TaskHandler(_MasterBase):
@@ -186,7 +190,7 @@ class TaskHandler(_MasterBase):
             workers = self.manager.worker_status(spec, task) if task else []
             spend = (
                 task.retired_spend
-                + sum(m.spend for m in task.machines)
+                + sum(m.spend_now(time.time()) for m in task.machines)
                 + self.manager.lease_spend(task)
                 if task
                 else 0.0
@@ -245,14 +249,14 @@ class TaskDeployHandler(_MasterBase):
         spec = self.spec(body)
 
         async def deploy():
-            task = self.task_or_fail(spec, body["tag"])
+            task = await self.manager.offload(self.task_or_fail, spec, body["tag"])
             return {"bundle_id": await self.manager.redeploy(spec, task)}
 
         await self.guarded_await(deploy())
 
 
 class WorkerAddHandler(_MasterBase):
-    def post(self):
+    async def post(self):
         body = self.body()
         spec = self.spec(body)
 
@@ -275,7 +279,7 @@ class WorkerAddHandler(_MasterBase):
                 raise AssertionError(f"unknown worker kind '{body.get('kind')}'")
             return {"added": [w.worker_id for w in added]}
 
-        self.guarded(add)
+        await self.guarded_offload(add)
 
 
 class MachineAddHandler(_MasterBase):
@@ -363,10 +367,10 @@ class MachineActionHandler(_MasterBase):
 
 class PoolHandler(_MasterBase):
     """The machine pool (dashboard/pool.py): each machine, its lease, and what
-    else is using it. Offloaded because it reads every task record."""
+    else is using it."""
 
-    async def get(self):
-        await self.guarded_offload(
+    def get(self):
+        self.guarded(
             lambda: {
                 "machines": self.manager.pool_status(),
                 "capacity": [asdict(c) for c in self.manager.pool_store.load().capacity],
@@ -442,8 +446,8 @@ class PoolMachineActionHandler(_MasterBase):
 class QueueHandler(_MasterBase):
     """The tag queue in order (dashboard/tag_queue.py)."""
 
-    async def get(self):
-        await self.guarded_offload(self.tag_queue.status)
+    def get(self):
+        self.guarded(self.tag_queue.status)
 
 
 class ControlShadowHandler(_MasterBase):
@@ -458,8 +462,8 @@ class StopCloudHandler(_MasterBase):
     """Stop all cloud spending (TagQueue.stop_cloud): GET says what it would
     do, for the confirmation; POST does it."""
 
-    async def get(self):
-        await self.guarded_offload(lambda: self.tag_queue.stop_cloud(dry_run=True))
+    def get(self):
+        self.guarded(lambda: self.tag_queue.stop_cloud(dry_run=True))
 
     async def post(self):
         await self.guarded_offload(self.tag_queue.stop_cloud)
@@ -468,9 +472,9 @@ class StopCloudHandler(_MasterBase):
 class QueuePlanHandler(_MasterBase):
     """What the queue would start for a tag (TagQueue.plan)."""
 
-    async def get(self):
+    def get(self):
         workload, tag = self.get_argument("workload"), self.get_argument("tag")
-        await self.guarded_offload(lambda: self.tag_queue.plan(workload, tag))
+        self.guarded(lambda: self.tag_queue.plan(workload, tag))
 
 
 class EnqueueHandler(_MasterBase):

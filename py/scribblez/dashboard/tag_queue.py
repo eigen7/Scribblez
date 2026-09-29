@@ -21,9 +21,11 @@ stopped container's last output is swept, and a tag whose output travels
 through the bucket gets one final sync before its slots go.
 """
 
+import copy
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 
+from cloud.bundles import BundleManifest
 from cloud.ssh_transfer import sweep_stopped
 
 from scribblez import params as params_mod
@@ -358,20 +360,25 @@ class TagQueue:
 
     def _submit_build(self, spec, task, entry: QueueEntry, pool: Pool):
         """Build the tag's bundle for its ssh machines' archs on the build
-        thread; _advance_builds pins it when done. Detecting a machine's arch
-        pulls the worker image there, which is why this is not done inline."""
-        targets = self._ssh_targets(spec, task, entry, pool)
+        thread; _advance_builds records the archs it detected and pins the
+        bundle when done. Detecting a machine's arch pulls the worker image
+        there, which is why this is not done inline. The thread gets its own
+        copies of what it reads, and changes no record."""
+        targets = [
+            (m.name, _machine_link(m.machine), m.machine.arch)
+            for m in self._ssh_targets(spec, task, entry, pool)
+        ]
+        known = set(task.bundle_archs) | {arch for _, _, arch in targets if arch}
         # Any worker image carries the compiler detect_arch asks.
         image = self._m._creds().registry.image_for(spec.roles[0].runtime)
 
-        def build():
-            for m in targets:
-                if m.machine.arch is None:
-                    link = _machine_link(m.machine)
+        def build() -> tuple[dict[str, str], BundleManifest]:
+            detected = {}
+            for name, link, arch in targets:
+                if arch is None:
                     link.pull_image(image)
-                    m.machine.arch = link.detect_arch(image)
-            archs = sorted(set(task.bundle_archs) | {m.machine.arch for m in targets})
-            return self._m._build_bundle(archs)
+                    detected[name] = link.detect_arch(image)
+            return detected, self._m._build_bundle(sorted(known | set(detected.values())))
 
         self._builds[entry.key] = self._m._builds.submit(build)
 
@@ -400,7 +407,12 @@ class TagQueue:
                 continue
             del self._builds[e.key]
             try:
-                self._m._pin_bundle(spec, task, future.result())
+                detected, manifest = future.result()
+                for name, arch in detected.items():
+                    m = pool.find(name)
+                    if m is not None and m.machine is not None:
+                        m.machine.arch = arch
+                self._m._pin_bundle(spec, task, manifest)
                 e.bundle = queue_mod.BUNDLE_READY
             except Exception as ex:  # noqa: BLE001 -- shown on the entry, retried on re-enqueue
                 e.bundle = f"failed: {ex}"
@@ -643,8 +655,7 @@ class TagQueue:
         m.lease.phase = RELEASING
         m.lease.reason = reason
         self._m.pool_store.save(pool)
-        spec, task = self._lookup(m.lease.workload, m.lease.tag)
-        self._drains[m.name] = self._drain_thread.submit(self._drain, spec, task)
+        self._submit_drain(m)
 
     def _finish_release(self, m: PoolMachine, pool: Pool, queue: Queue):
         """Once the drain has succeeded, remove the tag's slots and end the
@@ -653,7 +664,7 @@ class TagQueue:
         spec, task = self._lookup(m.lease.workload, m.lease.tag)
         future = self._drains.get(m.name)
         if future is None:  # in flight when the dashboard restarted
-            self._drains[m.name] = self._drain_thread.submit(self._drain, spec, task)
+            self._submit_drain(m)
             return
         if not future.done():
             return
@@ -674,6 +685,13 @@ class TagQueue:
         if lease.requeue:
             queue.entries.insert(0, _requeued(lease, task))
             self._m.queue_store.save(queue)
+
+    def _submit_drain(self, m: PoolMachine):
+        """Drain the tag leasing `m` on the drain thread, from a copy of its
+        task: the thread only reads it, while the writer goes on changing the
+        record."""
+        spec, task = self._lookup(m.lease.workload, m.lease.tag)
+        self._drains[m.name] = self._drain_thread.submit(self._drain, spec, copy.deepcopy(task))
 
     def _drain(self, spec, task: tasks.TaskRecord):
         """Everything the tag's slots hold, off the machine (drain thread). Raises

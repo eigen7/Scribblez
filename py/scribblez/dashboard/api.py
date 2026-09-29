@@ -934,6 +934,7 @@ def run(port: int, mount_root: str):
     """
     _acquire_control_lock(mount_root)
     manager = WorkerManager(Path(mount_root))
+    manager.claim_writer()
     tag_queue = TagQueue(manager)
     shadow = ShadowControl(manager)
     make_app(mount_root, manager, tag_queue, shadow).listen(port, address="127.0.0.1")

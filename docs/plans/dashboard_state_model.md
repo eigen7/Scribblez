@@ -3,7 +3,8 @@
 **Status: plan-reviewed 2026-09-29 and revised (§Review record); every
 operator's call settled (§Operator's calls); being built: PR 0 (the paths
 context) landed as #294; PR 1 (the schema and the shadow import) as #295 and
-#297; PR 2 (the fake world and the simulation) in review.**
+#297; PR 2 (the fake world and the simulation) as #299; PR 3a (one writer)
+in review.**
 
 - **Review.** Four independent panelists: hidden complexity, a rival design
   (a Codex seat), scope, and integration. They raised 2 blocking, 16 serious
@@ -486,10 +487,19 @@ simulation green on the invariants it claims, from PR 2 on.
    controller. The invariants are read from the shadow projection, so they
    carry through the switch unchanged. Known violations are marked as
    expected failures.
-3. **The switch.** SQLite becomes authoritative, with one writer, commands,
-   control-state snapshots and the writer-thread check. JSON mutation goes,
-   and the database-to-JSON export arrives for rollback. Fixes I1, I7 and
-   the race sites under "Why".
+3. **The switch,** in two parts:
+   - **3a. One writer, over the JSON stores.** Every change a handler makes
+     is a command on the writer thread; status reads run on the event loop
+     against each store's last committed copy and change nothing; a save off
+     the writer thread fails, and so does saving a reader's copy. Helper
+     threads (builds, drains) get copies and return results. The committed
+     copy is the file as last saved, decoded once per save for readers: a
+     per-store snapshot, never a full rebuild. Fixes I7 and the race sites
+     under "Why".
+   - **3b. SQLite authoritative.** The stores move into the control
+     database, a transition that spans them becomes one transaction, and
+     readers get their snapshot from a read connection. JSON mutation goes,
+     and the database-to-JSON export arrives for rollback. Fixes I1.
 4. **Operations:** the outbox, the local exit file in the worker entrypoint,
    stop operations recorded at shutdown, exit classification, and crash
    history as a table. Fixes I4 and the restart gaps.

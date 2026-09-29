@@ -364,6 +364,13 @@ alongside the read-only training data plane:
   task view). `py/scripts/dashboard.py` starts it alongside the API
   (`scribblez.dashboard.react_server`).
 
+Control state (the task records, `pool.json`, `queue.json`) has one writer:
+the `WorkerManager`'s blocking thread. It runs the reconcile pass and every
+change a request makes, as a command (`WorkerManager.offload`). Status reads
+run on the event loop, see only what was last saved, and change nothing, so a
+page never waits behind a slow step such as an upload. A save from any other
+thread fails (`py/scribblez/dashboard/shared_json.py`).
+
 The API binds to localhost only, because it holds cloud credentials and
 launches processes. The browser reaches it through the Vite dev server's
 proxy, which the dev-container gateway serves.

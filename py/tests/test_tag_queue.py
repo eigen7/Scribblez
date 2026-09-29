@@ -279,7 +279,7 @@ def test_an_ssh_machine_takes_the_tag_once_its_bundle_is_pinned(queued, monkeypa
     assert _lease(manager, "gpu-box") is None
 
     done: Future = Future()
-    done.set_result("manifest")
+    done.set_result(({}, "manifest"))  # (the archs it detected, the bundle)
     q._builds[("position_eval", "a")] = done
     q.tick()
     assert pinned == ["manifest"]
