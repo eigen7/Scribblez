@@ -68,13 +68,14 @@ moved on. New plans go here, not in `docs/` proper.
   eligibility is checked against kinds and summed GPU memory, and release
   drains before it removes. End conditions become uniform (-1 = run forever)
   and optional.
-- **[dashboard_state_model.md](dashboard_state_model.md)**: *proposed, not
-  reviewed.* What the queue's first live run taught: one stored lifecycle
-  state per tag, slot and machine; one writer thread with snapshot reads;
-  intent recorded before every action on the world; the pool owning every
-  machine; a recorded home for each tag's training state; fewer operator
-  verbs; and a simulation test that checks the invariants through random
-  events and restarts.
+- **[dashboard_state_model.md](dashboard_state_model.md)**: *plan-reviewed,
+  revised, not built.* What the queue's first live run taught: normalized
+  control records in one SQLite database, with constraints, and the tag state
+  the operator sees as a projection of them; one writer with snapshot reads;
+  an outbox of operations recorded before every action on the world; the pool
+  owning every machine; a recorded home for each tag's training state, moved
+  automatically by placement; and a simulation over a fake world that checks
+  the invariants through random events and restarts.
 - **[cloud_machines.md](cloud_machines.md)**: *landed.* AWS instances as
   task-scoped ssh machines that the dashboard launches, idles and terminates;
   the trainer on the ssh kind; spot; Runpod's removal. The provider lives in
