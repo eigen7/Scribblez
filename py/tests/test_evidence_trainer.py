@@ -670,8 +670,8 @@ def _ctx(tmp_path, tag, params):
         threads=2,
         max_cycles=0,
         sink=LocalSink(paths.root),
+        mount_root=tmp_path,
     )
-    ctx.tag_paths = lambda: paths
     return SimpleNamespace(ctx=ctx, paths=paths)
 
 

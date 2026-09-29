@@ -106,21 +106,21 @@ def test_resolve_and_diff():
 
 
 def test_create_task_resolves_and_records_the_profile(tmp_path, monkeypatch):
-    monkeypatch.setattr(tasks, "task_path", lambda spec, tag: tmp_path / f"{tag}.task.json")
+    store = tasks.TaskStore(tmp_path)
     spec = _spec(profiles=PROFILE_SET, default_profile="big")
-    task = tasks.create_task(spec, "t1", {"rate": 2})
+    task = store.create(spec, "t1", {"rate": 2})
     assert task.profile == "big" and task.params == {
         "depth": 12,
         "rate": 2.0,
         "arch": "big",
         "clip": True,
     }
-    task = tasks.create_task(spec, "t2", {}, profile="small")
+    task = store.create(spec, "t2", {}, profile="small")
     assert task.profile == "small" and task.params["arch"] == "small" and task.params["depth"] == 4
     # the record round-trips, profile included
-    assert tasks.load_task(spec, "t2").profile == "small"
+    assert store.load(spec, "t2").profile == "small"
     with pytest.raises(AssertionError, match="no profile"):
-        tasks.create_task(spec, "t3", {}, profile="huge")
+        store.create(spec, "t3", {}, profile="huge")
 
 
 @pytest.mark.parametrize("workload", ["position_eval", "move_set_eval"])

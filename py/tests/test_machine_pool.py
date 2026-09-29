@@ -13,7 +13,7 @@ from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import tasks
 from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.pool import Hardware, Lease, PoolMachine
-from scribblez.dashboard.workers import WorkerManager, _key, _machine_record, _ssh_machine
+from scribblez.dashboard.workers import WorkerManager, _key
 
 L4_REPORT = "8\n23034\n"
 
@@ -39,16 +39,14 @@ class _FakeSshMachine:
 
 @pytest.fixture
 def pooled(tmp_path, monkeypatch):
-    """A WorkerManager whose pool.json and task records live under tmp_path,
-    with ssh faked and the task listing limited to what the test registers."""
-    monkeypatch.setattr(pool_mod, "POOL_PATH", tmp_path / "pool.json")
-    monkeypatch.setattr(tasks, "task_path", lambda spec, tag: tmp_path / f"{tag}.task.json")
+    """A WorkerManager rooted at tmp_path, with ssh faked and the task
+    listing limited to what the test registers."""
     monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     monkeypatch.setattr(_FakeSshMachine, "built", [])
     monkeypatch.setattr(pool_mod, "local_hardware", lambda: Hardware(24, 1, 16.0))
     # ssh -G is config evaluation only, but keep the test off the real config.
     monkeypatch.setattr(pool_mod, "canonical_host", lambda h: h.split("@", 1)[-1].lower())
-    manager = WorkerManager()
+    manager = WorkerManager(tmp_path)
     listed: list = []
     monkeypatch.setattr(manager, "all_tasks", lambda: iter(listed))
     return manager, listed
@@ -75,11 +73,10 @@ def test_parse_hardware():
 def test_a_pool_round_trips_through_pool_json(pooled):
     manager, _ = pooled
     manager.add_pool_machine("asus", "dshin@asus-laptop", aliases=["asus-laptop"])
-    pool = pool_mod.load_pool()
+    pool = manager.pool_store.load()
     pool.machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
-    pool_mod.save_pool(pool)
-    pool_mod.forget_loaded()  # a fresh process
-    m = pool_mod.load_pool().machine("asus")
+    manager.pool_store.save(pool)
+    m = pool_mod.pool_store(manager.mount_root).load().machine("asus")  # a fresh process
     assert m.kind == "ssh" and m.machine.host == "dshin@asus-laptop"
     assert m.hardware == Hardware(8, 1, 23034 / 1024) and m.machine.gpu_count == 1
     assert m.aliases == ["asus-laptop"]
@@ -99,20 +96,20 @@ def test_adding_probes_and_refuses_duplicates(pooled):
 def test_a_leased_machine_cannot_be_removed(pooled):
     manager, _ = pooled
     manager.add_pool_machine("asus", "asus-laptop")
-    pool = pool_mod.load_pool()
+    pool = manager.pool_store.load()
     pool.machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
     with pytest.raises(AssertionError, match="leased"):
         manager.remove_pool_machine("asus")
     pool.machine("asus").lease = None
     manager.remove_pool_machine("asus")
-    assert pool_mod.load_pool().find("asus") is None
+    assert manager.pool_store.load().find("asus") is None
 
 
 def test_edit_changes_only_operator_fields(pooled):
     manager, _ = pooled
     manager.add_pool_machine("asus", "asus-laptop")
     manager.edit_pool_machine("asus", generator_threads=6, aliases=["a"])
-    m = pool_mod.load_pool().machine("asus")
+    m = manager.pool_store.load().machine("asus")
     assert (m.generator_threads, m.aliases) == (6, ["a"])
     with pytest.raises(AssertionError, match="not editable"):
         manager.edit_pool_machine("asus", hardware=None)
@@ -121,25 +118,25 @@ def test_edit_changes_only_operator_fields(pooled):
 def test_a_leased_name_resolves_only_for_the_leasing_task(pooled):
     manager, _ = pooled
     manager.add_pool_machine("asus", "dshin@asus-laptop")
-    pool = pool_mod.load_pool()
+    pool = manager.pool_store.load()
     pool.machine("asus").lease = Lease("position_eval", "leaser", "running", 1.0)
     leaser, other = _task("leaser"), _task("other")
-    assert _machine_record(leaser, "asus").host == "dshin@asus-laptop"
+    assert manager._machine_record(leaser, "asus").host == "dshin@asus-laptop"
     with pytest.raises(KeyError):
-        _machine_record(other, "asus")
+        manager._machine_record(other, "asus")
     w = _slot("ssh-0", "ssh", "running", machine="asus")
     leaser.workers.append(w)
-    _ssh_machine(leaser, w)
+    manager._ssh_machine(leaser, w)
     assert _FakeSshMachine.built[-1] == "dshin@asus-laptop"
     # A task's own machine of the same name wins: it is the task's to name.
     leaser.machines.append(tasks.MachineRecord(name="asus", provider="manual", host="elsewhere"))
-    assert _machine_record(leaser, "asus").host == "elsewhere"
+    assert manager._machine_record(leaser, "asus").host == "elsewhere"
 
 
 def test_the_leasing_tasks_status_lists_the_pool_machine(pooled, monkeypatch):
     manager, _ = pooled
     manager.add_pool_machine("asus", "asus-laptop")
-    pool_mod.load_pool().machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
+    manager.pool_store.load().machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
     from scribblez.workloads.position_eval import SPEC
 
     (info,) = manager.machine_status(SPEC, _task("t"))
@@ -186,7 +183,9 @@ def test_the_leasing_tags_own_slots_do_not_make_it_busy(pooled):
     from scribblez.workloads.position_eval import SPEC
 
     manager.add_pool_machine("asus", "asus-laptop")
-    pool_mod.load_pool().machine("asus").lease = Lease("position_eval", "placed", "running", 1.0)
+    manager.pool_store.load().machine("asus").lease = Lease(
+        "position_eval", "placed", "running", 1.0
+    )
     placed = _task("placed")
     placed.workers.append(_slot("ssh-0", "ssh", "running", machine="asus"))
     listed.append((SPEC, placed))
@@ -252,9 +251,9 @@ def test_a_detected_arch_is_saved_to_the_pool(pooled, monkeypatch):
     from scribblez.workloads.position_eval import SPEC
 
     manager.add_pool_machine("asus", "asus-laptop")
-    pool = pool_mod.load_pool()
+    pool = manager.pool_store.load()
     pool.machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
-    pool_mod.save_pool(pool)
+    manager.pool_store.save(pool)
     monkeypatch.setattr(_FakeSshMachine, "pull_image", lambda self, image: None, raising=False)
     monkeypatch.setattr(_FakeSshMachine, "detect_arch", lambda self, image: "znver2", raising=False)
     registry = type("R", (), {"image_for": staticmethod(lambda runtime: "img")})
@@ -263,5 +262,5 @@ def test_a_detected_arch_is_saved_to_the_pool(pooled, monkeypatch):
     w = _slot("ssh-0", "ssh", "running", machine="asus")
     t.workers.append(w)
     assert manager._slot_arch(SPEC, t, w) == "znver2"
-    pool_mod.forget_loaded()
-    assert pool_mod.load_pool().machine("asus").machine.arch == "znver2"
+    fresh = pool_mod.pool_store(manager.mount_root)  # a fresh process
+    assert fresh.load().machine("asus").machine.arch == "znver2"

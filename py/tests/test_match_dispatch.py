@@ -10,20 +10,6 @@ from scribblez.paths import DONE_SUFFIX, POSITION_EVAL, TagPaths
 from scribblez.workloads.position_eval import SPEC, PositionEvalParams
 
 
-class _Spec:
-    """The position_eval spec with its tag tree rooted in the test's tmp dir --
-    the only thing dispatch.tick asks of a spec."""
-
-    name = SPEC.name
-    params_cls = SPEC.params_cls
-
-    def __init__(self, mount_root):
-        self._mount_root = mount_root
-
-    def paths(self, tag: str) -> TagPaths:
-        return TagPaths(tag, POSITION_EVAL, mount_root=self._mount_root)
-
-
 def _paths(tmp_path) -> TagPaths:
     paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
     paths.onnx_dir.mkdir(parents=True)
@@ -181,9 +167,7 @@ def test_tick_assigns_nothing_when_the_cadence_disables_match_eval(tmp_path):
     paths.onnx_path(10).touch()
     _deliver(paths, _result(10))
 
-    dispatch.tick(
-        _Spec(tmp_path), "t", PositionEvalParams(match_every_generations=0), [_slot(paths)]
-    )
+    dispatch.tick(SPEC, paths, PositionEvalParams(match_every_generations=0), [_slot(paths)])
     assert not paths.match_inbox_dir("w0").exists()
     # Ingest still runs: a result already delivered belongs in the database
     # however the cadence has since been set.
@@ -209,7 +193,7 @@ def test_tick_ingests_before_assigning(tmp_path):
     _deliver(paths, _result(10))
 
     params = PositionEvalParams(match_every_generations=5)
-    dispatch.tick(_Spec(tmp_path), "t", params, [_slot(paths)])
+    dispatch.tick(SPEC, paths, params, [_slot(paths)])
     assert not paths.match_inbox_dir("w0").exists()
     conn = db.connect(paths.dashboard_db)
     assert [r["epoch"] for r in db.read_all_match_eval(conn)] == [10]
@@ -218,7 +202,7 @@ def test_tick_ingests_before_assigning(tmp_path):
 def test_tick_is_a_no_op_before_the_trainer_has_run(tmp_path):
     paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
     paths.root.mkdir(parents=True)
-    dispatch.tick(_Spec(tmp_path), "t", PositionEvalParams(), [_slot(paths)])
+    dispatch.tick(SPEC, paths, PositionEvalParams(), [_slot(paths)])
     assert not paths.dashboard_db.exists()
 
 
@@ -264,7 +248,7 @@ def test_tick_records_delivered_results_with_no_worker_left(tmp_path):
     db.connect(paths.dashboard_db).close()
     _deliver(paths, _result(10))
 
-    dispatch.tick(_Spec(tmp_path), "t", PositionEvalParams(), [])
+    dispatch.tick(SPEC, paths, PositionEvalParams(), [])
     conn = db.connect(paths.dashboard_db)
     assert [r["epoch"] for r in db.read_all_match_eval(conn)] == [10]
 
@@ -278,7 +262,7 @@ def test_tick_leaves_an_idle_tag_alone(tmp_path):
     for stray in paths.root.glob("dashboard.db-*"):
         stray.unlink()
 
-    dispatch.tick(_Spec(tmp_path), "t", PositionEvalParams(), [])
+    dispatch.tick(SPEC, paths, PositionEvalParams(), [])
     assert not list(paths.root.glob("dashboard.db-*"))
 
 
@@ -323,9 +307,9 @@ def test_tick_reports_work_owed_until_every_due_generation_is_recorded(tmp_path)
     _cursor(paths, 7)
     params = PositionEvalParams(match_every_generations=5)
 
-    assert dispatch.tick(_Spec(tmp_path), "t", params, [_slot(paths)])  # gen 5 assigned
+    assert dispatch.tick(SPEC, paths, params, [_slot(paths)])  # gen 5 assigned
     _deliver(paths, _result(5))
-    assert not dispatch.tick(_Spec(tmp_path), "t", params, [_slot(paths)])  # recorded
+    assert not dispatch.tick(SPEC, paths, params, [_slot(paths)])  # recorded
 
 
 def test_tick_reports_work_owed_while_exports_trail_the_trainer(tmp_path):
@@ -336,7 +320,7 @@ def test_tick_reports_work_owed_while_exports_trail_the_trainer(tmp_path):
     paths.onnx_path(4).touch()
     _cursor(paths, 11)  # the trainer exported up to gen 10, which is due
     params = PositionEvalParams(match_every_generations=5)
-    assert dispatch.tick(_Spec(tmp_path), "t", params, [_slot(paths)])
+    assert dispatch.tick(SPEC, paths, params, [_slot(paths)])
 
 
 def test_tick_owes_nothing_when_match_eval_is_disabled(tmp_path):
@@ -344,4 +328,4 @@ def test_tick_owes_nothing_when_match_eval_is_disabled(tmp_path):
     db.connect(paths.dashboard_db).close()
     paths.onnx_path(10).touch()
     params = PositionEvalParams(match_every_generations=0)
-    assert not dispatch.tick(_Spec(tmp_path), "t", params, [_slot(paths)])
+    assert not dispatch.tick(SPEC, paths, params, [_slot(paths)])

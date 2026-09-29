@@ -21,7 +21,6 @@ from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
 from scribblez import workloads
 from scribblez.dashboard import db, tasks
-from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.workers import (
     WorkerManager,
@@ -37,9 +36,6 @@ from scribblez.workloads.position_eval import PositionEvalParams
 _REAL_RUN_SSH_CONTAINER = WorkerManager._run_ssh_container
 _REAL_SPAWN_LOCAL = WorkerManager._spawn_local
 _REAL_ENSURE_SYNC = WorkerManager._ensure_sync
-# ... and redirects task.json out of the tag dir; the deletion tests, which
-# care where the record lives, put this back too.
-_REAL_TASK_PATH = tasks.task_path
 
 
 def _fail(*args, **kwargs):
@@ -58,28 +54,23 @@ def task() -> tasks.TaskRecord:
 
 @pytest.fixture
 def manager(tmp_path, monkeypatch) -> WorkerManager:
-    monkeypatch.setattr(tasks, "task_path", lambda spec, tag: tmp_path / f"{tag}.task.json")
-    monkeypatch.setattr(pool_mod, "POOL_PATH", tmp_path / "pool.json")
     for name in ("_spawn_local", "_run_ssh_container", "_creds"):
         monkeypatch.setattr(WorkerManager, name, _fail)
-    return WorkerManager()
+    return WorkerManager(tmp_path)
 
 
 @pytest.fixture
-def tags_root(manager, tmp_path, monkeypatch) -> Path:
-    """Point the workload's tag dirs at tmp_path, with task.json back inside
-    them: deleting a tag removes that tree for real."""
-    root = tmp_path / "tags"
-    monkeypatch.setattr(workloads.WorkloadSpec, "data_dir", lambda self, tag: root / tag)
-    monkeypatch.setattr(tasks, "task_path", _REAL_TASK_PATH)
-    return root
+def tags_root(manager, spec) -> Path:
+    """The workload's tag dirs under the manager's root: deleting a tag
+    removes that tree for real."""
+    return spec.tags_root(manager.mount_root)
 
 
 def test_add_local_is_paused_and_not_spawned(manager, spec, task):
     w = manager.add_local(spec, task, "generate", threads=2)
     assert w.desired_state == "paused"
     assert w.pid is None
-    assert tasks.load_task(spec, "t").workers[0].desired_state == "paused"
+    assert manager.tasks.load(spec, "t").workers[0].desired_state == "paused"
 
 
 def test_add_ssh_is_paused_and_runs_no_container(manager, spec, task):
@@ -171,15 +162,15 @@ def test_a_pause_survives_a_pass_that_looked_at_the_task_before_it(manager, spec
     shared record per task, the pass saves the pause it did not know about."""
     w = manager.add_local(spec, task, "generate", threads=1)
     w.desired_state = "running"
-    tasks.save_task(spec, task)
+    manager.tasks.save(spec, task)
 
-    in_pass = tasks.load_task(spec, "t")
-    clicked = tasks.load_task(spec, "t")
+    in_pass = manager.tasks.load(spec, "t")
+    clicked = manager.tasks.load(spec, "t")
     manager.set_worker_state(spec, clicked, w.worker_id, run=False)
     manager.worker_status(spec, in_pass, observe=True)  # the pass's later save
 
-    assert tasks.load_task(spec, "t").worker(w.worker_id).desired_state == "paused"
-    raw = json.loads(tasks.task_path(spec, "t").read_text())
+    assert manager.tasks.load(spec, "t").worker(w.worker_id).desired_state == "paused"
+    raw = json.loads(manager.tasks.task_path(spec, "t").read_text())
     assert raw["workers"][0]["desired_state"] == "paused"
 
 
@@ -188,7 +179,7 @@ def test_a_status_poll_writes_nothing(manager, spec, task):
     must not race the pass's saves on the file. Only the observing pass
     saves."""
     manager.add_local(spec, task, "generate", threads=1)
-    path = tasks.task_path(spec, "t")
+    path = manager.tasks.task_path(spec, "t")
     before = path.stat().st_mtime_ns
     manager.worker_status(spec, task)
     assert path.stat().st_mtime_ns == before
@@ -239,7 +230,7 @@ def test_redeploy_builds_off_the_blocking_thread_then_pins(manager, spec, task, 
     assert seen["archs"] == ["znver3"]  # what the laptop reported
     assert seen["thread"].startswith("scz-build")
     assert seen["blocking_free"]
-    assert tasks.load_task(spec, "t").bundle_id == "b2"
+    assert manager.tasks.load(spec, "t").bundle_id == "b2"
 
 
 # ---- machines ----------------------------------------------------------------
@@ -263,7 +254,7 @@ def test_a_slot_on_a_machine_dials_with_the_machines_key(manager, spec, task, mo
     assert info["host"] == "ubuntu@1.2.3.4"
     assert info["ssh"] == "ssh ubuntu@1.2.3.4"
     assert ("ubuntu@1.2.3.4", "/k/m1.pem", None) in _FakeSshMachine.built
-    assert tasks.load_task(spec, "t").worker(w.worker_id).machine == "m1"
+    assert manager.tasks.load(spec, "t").worker(w.worker_id).machine == "m1"
 
 
 def test_an_ssh_slot_names_exactly_one_of_host_and_machine(manager, spec, task):
@@ -289,6 +280,9 @@ class _GpuRoles:
 
     def role(self, name: str):
         return self._roles[name]
+
+    def paths(self, tag: str, mount_root: Path) -> TagPaths:
+        return TagPaths(tag, self.name, mount_root)
 
 
 def test_a_gpu_role_is_refused_only_on_a_machine_without_a_gpu(manager, monkeypatch):
@@ -332,7 +326,7 @@ def test_removing_a_machine_removes_its_slots_under_the_slot_rule(manager, spec,
     manager._probes.clear()
     manager.remove_machine(spec, task, "m1")
     assert task.machines == [] and task.workers == []
-    assert tasks.load_task(spec, "t").find(w.worker_id) is None
+    assert manager.tasks.load(spec, "t").find(w.worker_id) is None
 
 
 def test_reconcile_leaves_slots_on_a_machine_that_is_not_up_alone(manager, spec, task, monkeypatch):
@@ -445,7 +439,7 @@ def _observe(manager, spec, task):
     return status
 
 
-def test_renting_records_the_instance_and_its_key_material(rented, spec, task, tmp_path):
+def test_renting_records_the_instance_and_its_key_material(rented, manager, spec, task, tmp_path):
     provider, m = rented
     assert provider.calls == [("launch", "g6.2xlarge")]
     assert m.instance_id == "i-1" and m.instance_type == "g6.2xlarge"
@@ -453,7 +447,7 @@ def test_renting_records_the_instance_and_its_key_material(rented, spec, task, t
     known_hosts = tmp_path / "machines" / spec.name / "t" / "m1" / "known_hosts"
     assert m.known_hosts_file == str(known_hosts) and known_hosts.read_text() == ""
     assert m.gpu_count == 1 and m.arch == "znver3" and m.cost_per_hr == 1.0
-    assert tasks.load_task(spec, "t").machine("m1").instance_id == "i-1"
+    assert manager.tasks.load(spec, "t").machine("m1").instance_id == "i-1"
     assert provider.instances["i-1"].owner == f"{spec.name}/t/m1"
 
 
@@ -462,11 +456,11 @@ def test_a_dispatch_role_on_a_rented_machine_is_collected_over_ssh(rented, manag
     match-eval slot keeps them there for the ssh pull while the machine's other
     slots deliver through the bucket."""
     match = manager.add_ssh(_GpuRoles(), task, "match_eval", machine="m1", threads=None)
-    assert workers_mod._slot_sink(_GpuRoles(), task, match) == "local"
+    assert manager._slot_sink(_GpuRoles(), task, match) == "local"
     gen = tasks.WorkerRecord(
         worker_id="g", role="generate", kind="ssh", desired_state="paused", machine="m1"
     )
-    assert workers_mod._slot_sink(POSITION_EVAL_SPEC, task, gen) == "r2"
+    assert manager._slot_sink(POSITION_EVAL_SPEC, task, gen) == "r2"
 
 
 def _dispatch_task(train_finished: bool) -> tasks.TaskRecord:
@@ -575,7 +569,7 @@ def test_spend_accrues_while_the_instance_bills(rented, manager, spec, task, mon
     m.observed_at = time.time() - 3600
     _observe(manager, spec, task)  # stopped: not billing
     assert m.spend < 1.02
-    assert tasks.load_task(spec, "t").machine("m1").spend == m.spend
+    assert manager.tasks.load(spec, "t").machine("m1").spend == m.spend
 
 
 def test_stopping_task_rentals_pauses_their_slots_and_skips_the_idle_wait(
@@ -644,7 +638,7 @@ def test_finishing_a_role_releases_its_machine(rented, manager, spec, task, monk
     monkeypatch.setattr(manager, "_make_publish", lambda spec, task: None)
     manager._scheduler_hooks(spec, task).finish("generate")
     assert (w.desired_state, w.finished, task.gates) == ("paused", True, {})
-    assert tasks.load_task(spec, "t").worker(w.worker_id).finished  # saved
+    assert manager.tasks.load(spec, "t").worker(w.worker_id).finished  # saved
     monkeypatch.setattr(_FakeSshMachine, "state", "stopped")
     manager.worker_status(spec, task, observe=True)
     _observe(manager, spec, task)
@@ -858,7 +852,7 @@ def test_an_ssh_worker_that_exits_zero_is_finished_not_restarted(manager, spec, 
     (info,) = manager.worker_status(spec, task, observe=True)
     assert info["state"] == "finished"
     assert w.desired_state == "paused" and w.finished
-    assert tasks.load_task(spec, "t").worker(w.worker_id).finished
+    assert manager.tasks.load(spec, "t").worker(w.worker_id).finished
     # Start is the way back: it clears the mark and runs the slot again.
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", lambda *a: None)
     manager._probes.clear()
@@ -1340,7 +1334,7 @@ def test_collecting_records_what_the_container_still_holds(manager, spec, task, 
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     manager._collect_ssh(spec, task, w)
     assert w.undelivered == 87
-    assert tasks.load_task(spec, "t").worker(w.worker_id).undelivered == 87  # survives a restart
+    assert manager.tasks.load(spec, "t").worker(w.worker_id).undelivered == 87  # survives a restart
 
 
 def test_status_reports_the_backlog_including_none_left(manager, spec, task, monkeypatch):
@@ -1439,11 +1433,11 @@ def test_deleting_a_tag_refuses_while_a_worker_is_meant_to_run(manager, spec, ta
     w = manager.add_local(spec, task, "generate", threads=1)
     w.desired_state = "running"
     task.gates = {"generate": "waiting for data"}
-    tasks.save_task(spec, task)
+    manager.tasks.save(spec, task)
 
     with pytest.raises(AssertionError, match=f"pause {w.worker_id} first"):
         manager.delete_task(spec, "t")
-    assert tasks.load_task(spec, "t").workers  # the tag survives intact
+    assert manager.tasks.load(spec, "t").workers  # the tag survives intact
 
 
 def test_a_reused_worker_id_does_not_inherit_a_backlog(manager, spec, task, monkeypatch):
@@ -1510,8 +1504,8 @@ class _DispatchSpec:
     def __init__(self, mount_root):
         self._mount_root = mount_root
 
-    def paths(self, tag: str) -> TagPaths:
-        return TagPaths(tag, "position_eval", mount_root=self._mount_root)
+    def paths(self, tag: str, mount_root: Path) -> TagPaths:
+        return TagPaths(tag, "position_eval", mount_root)
 
     def role(self, name: str):
         return POSITION_EVAL_SPEC.role(name)
@@ -1524,7 +1518,7 @@ def test_reconcile_dispatches_to_running_slots_only(manager, tmp_path, monkeypat
     match in flight."""
     spec = _DispatchSpec(tmp_path)
     task = tasks.TaskRecord(workload=spec.name, tag="t", params={}, created_at=0.0)
-    paths = spec.paths("t")
+    paths = manager.tasks.paths(spec, "t")
     paths.onnx_dir.mkdir(parents=True)
     paths.onnx_path(10).write_bytes(b"onnx")
     db.connect(paths.dashboard_db).close()
@@ -1705,20 +1699,20 @@ def test_a_restart_does_not_inherit_a_zero_it_cannot_vouch_for(manager, spec, ta
     drained.undelivered = 0
     holding = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     holding.undelivered = 900
-    tasks.save_task(spec, task)
+    manager.tasks.save(spec, task)
 
     # The walk is pinned to this task: all_tasks otherwise lists the real
     # mount, and a test that reads it passes or fails on what happens to be
     # there.
-    monkeypatch.setattr(tasks, "list_tags", lambda spec: [{"tag": "t", "has_task": True}])
-    fresh = WorkerManager()  # the dashboard comes back up
+    monkeypatch.setattr(manager.tasks, "list_tags", lambda spec: [{"tag": "t", "has_task": True}])
+    fresh = WorkerManager(manager.mount_root)  # the dashboard comes back up
     monkeypatch.setattr(fresh, "_creds", _fail)
     reloaded = next(t for _, t in fresh.all_tasks() if t.tag == "t")
     assert reloaded.worker(drained.worker_id).undelivered is None
     assert reloaded.worker(holding.worker_id).undelivered == 900
     # Vetted once, then left alone: a count this process recorded stands.
     reloaded.worker(drained.worker_id).undelivered = 0
-    tasks.save_task(spec, reloaded)
+    manager.tasks.save(spec, reloaded)
     again = next(t for _, t in fresh.all_tasks() if t.tag == "t")
     assert again.worker(drained.worker_id).undelivered == 0
 
@@ -1764,15 +1758,12 @@ def test_publish_copies_the_chunks_by_size_and_then_the_manifest(manager, tmp_pa
     rented trainer uploads every generation it has, and the dashboard must
     keep serving meanwhile. The hook says 'not yet' until the copy is done."""
     spec = workloads.get("position_eval")
-    monkeypatch.setattr(
-        workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
-    )
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
     rc = _Rclone()
     monkeypatch.setattr(workers_mod, "rclone", rc)
     task = _train_task()
     publish = manager._make_publish(spec, task)
-    gen_dir = spec.paths("t").generation_dir(3)
+    gen_dir = manager.tasks.paths(spec, "t").generation_dir(3)
     assert publish("generations/gen_000003") is False  # started
     manager._publishing[(_key(spec, task.tag), "generations/gen_000003")].result(timeout=10)
     assert publish("generations/gen_000003") is True  # collected
@@ -1813,16 +1804,16 @@ def _all_ssh_task(tag="t"):
     return task
 
 
-def test_an_ssh_trainer_delivers_through_the_bucket_and_a_generator_does_not():
+def test_an_ssh_trainer_delivers_through_the_bucket_and_a_generator_does_not(manager):
     """The sink is the role's, not the kind's: a trainer has inputs as well
     as outputs and takes them from the bucket wherever it runs; a generator
     on the same machine hands its chunks over the control link."""
     spec = workloads.get("position_eval")
     task = _all_ssh_task()
-    assert workers_mod._slot_sink(spec, task, task.worker("g")) == "local"
-    assert workers_mod._slot_sink(spec, task, task.worker("tr")) == "r2"
-    assert workers_mod._bucket_trainer(spec, task)
-    assert not workers_mod._bucket_trainer(spec, _train_task(kinds=("local",)))
+    assert manager._slot_sink(spec, task, task.worker("g")) == "local"
+    assert manager._slot_sink(spec, task, task.worker("tr")) == "r2"
+    assert manager._bucket_trainer(spec, task)
+    assert not manager._bucket_trainer(spec, _train_task(kinds=("local",)))
 
 
 def test_a_generator_on_a_rented_machine_delivers_through_the_bucket(rented, manager, spec, task):
@@ -1833,9 +1824,9 @@ def test_a_generator_on_a_rented_machine_delivers_through_the_bucket(rented, man
     manager.add_machine(spec, task, "laptop", "u@h")
     on_rented = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
     on_laptop = manager.add_ssh(spec, task, "generate", machine="laptop", threads=None)
-    assert workers_mod._slot_sink(spec, task, on_rented) == "r2"
-    assert workers_mod._slot_sink(spec, task, on_laptop) == "local"
-    assert workers_mod._has_bucket_slots(spec, task)
+    assert manager._slot_sink(spec, task, on_rented) == "r2"
+    assert manager._slot_sink(spec, task, on_laptop) == "local"
+    assert manager._has_bucket_slots(spec, task)
 
 
 def test_local_workers_run_niced(manager, spec, task, monkeypatch, tmp_path):
@@ -1868,9 +1859,6 @@ def test_an_all_ssh_task_with_a_trainer_gets_every_bucket_leg(manager, tmp_path,
     scheduler's publish and mirror hooks and the controls push all exist for
     the ssh trainer -- and none of them for a task whose slots are local."""
     spec = workloads.get("position_eval")
-    monkeypatch.setattr(
-        workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
-    )
     monkeypatch.setattr(WorkerManager, "_ensure_sync", _REAL_ENSURE_SYNC)
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
     spawned = []
@@ -1887,7 +1875,7 @@ def test_an_all_ssh_task_with_a_trainer_gets_every_bucket_leg(manager, tmp_path,
     assert len(spawned) == 1 and "--trainer-outputs" in spawned[0].argv
     assert manager._make_publish(spec, task) is not None
     assert manager._make_mirror(spec, task) is not None
-    path = spec.paths("t").controls_path
+    path = manager.tasks.paths(spec, "t").controls_path
     path.parent.mkdir(parents=True, exist_ok=True)  # the watcher's log dir made it
     path.write_text("{}")
     manager._push_controls(spec, task)
@@ -1960,9 +1948,11 @@ def _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink: str):
     src = tmp_path / "teacher.onnx"
     src.write_bytes(b"onnx")
     monkeypatch.setattr(
-        workers_mod, "_role_inputs", lambda spec, role, params: {"inputs/teacher.onnx": src}
+        workers_mod,
+        "_role_inputs",
+        lambda spec, role, params, mount_root: {"inputs/teacher.onnx": src},
     )
-    monkeypatch.setattr(workers_mod, "_slot_sink", lambda spec, task, w: sink)
+    monkeypatch.setattr(manager, "_slot_sink", lambda spec, task, w: sink)
     # The bundle is someone else's concern here: pinned, never built.
     monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, *a, **k: "b1")
     w = _starting_ssh_slot(manager, spec, task, monkeypatch)
@@ -2005,11 +1995,11 @@ def test_an_own_machine_slots_inputs_are_pushed_into_its_container(
     assert rc.calls == []
     # Into the container, so after it exists; under the tag root there.
     assert [op for op, _ in _RecordingSshMachine.ops] == ["pull", "run", "push"]
-    assert pushed == [(str(spec.paths("t").root), "inputs/teacher.onnx", src)]
+    assert pushed == [(str(manager.tasks.paths(spec, "t").root), "inputs/teacher.onnx", src)]
 
 
 def test_a_role_without_inputs_stages_nothing(manager, spec, task, monkeypatch):
-    assert workers_mod._role_inputs(spec, spec.role("generate"), None) == {}
+    assert workers_mod._role_inputs(spec, spec.role("generate"), None, manager.mount_root) == {}
 
 
 def test_a_missing_input_is_the_slots_reason_not_a_reconcile_exception(
@@ -2130,11 +2120,11 @@ def test_a_gated_local_worker_stopped_by_the_dashboard_is_not_a_crash(
     assert manager.recent_crashes(spec, "t", w.worker_id, 60) == ["exit 143"]
 
 
-def test_cloud_sync_is_told_the_tag_dirs_mount_root(spec, task):
+def test_cloud_sync_is_told_the_tag_dirs_mount_root(manager, spec, task):
     """cloud_sync resolves the tag dir itself; naming the root keeps its pull
     where this process puts the tag (a test's redirected root, here), never
     the live tags under the default one."""
-    argv = workers_mod.cloud_sync_argv(spec, task)
+    argv = manager.cloud_sync_argv(spec, task)
     root = argv[argv.index("--mount-root") + 1]
-    assert root == str(spec.paths(task.tag).mount_root)
+    assert root == str(manager.mount_root)
     assert not root.startswith(str(DEFAULT_MOUNT_ROOT))

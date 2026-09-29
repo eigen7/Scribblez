@@ -19,6 +19,7 @@ def _ctx(tmp_path, **overrides):
         threads=4,
         max_cycles=0,
         sink=LocalSink(tmp_path),
+        mount_root=tmp_path,
         kind="ssh",
     )
     return WorkerContext(**(fields | overrides))

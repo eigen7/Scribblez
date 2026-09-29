@@ -85,9 +85,6 @@ _ARMS = "a=--type=greedy --name=A; b=--type=sim --top-k=4"
 def _ctx(tmp_path, monkeypatch, max_cycles=0, **param_overrides) -> WorkerContext:
     from cloud.sinks import LocalSink
 
-    monkeypatch.setattr(
-        WorkerContext, "tag_paths", lambda self: SPEC.paths(self.tag, mount_root=tmp_path)
-    )
     params = MatchArmsParams(
         **{"arms": _ARMS, "pairs_per_arm": 4, "round_pairs": 2, **param_overrides}
     )
@@ -101,6 +98,7 @@ def _ctx(tmp_path, monkeypatch, max_cycles=0, **param_overrides) -> WorkerContex
         threads=2,
         max_cycles=max_cycles,
         sink=LocalSink(paths.root),
+        mount_root=tmp_path,
     )
 
 

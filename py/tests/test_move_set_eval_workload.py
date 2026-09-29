@@ -13,16 +13,6 @@ from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SPEC, MoveSetEvalParams
 
 
-def _teacher_under(monkeypatch, mount_root):
-    """Point teacher resolution at a position_eval tag tree under `mount_root`,
-    so a test can stand one up without writing to the real mount."""
-    monkeypatch.setattr(
-        move_set_eval,
-        "_teacher_paths",
-        lambda params, mr=None: TagPaths(params.teacher_tag, POSITION_EVAL, mount_root=mount_root),
-    )
-
-
 def _write_teacher_export(mount_root, tag, generation):
     """Create an exported-ONNX file for a position_eval tag under `mount_root`."""
     paths = TagPaths(tag, POSITION_EVAL, mount_root=mount_root)
@@ -355,7 +345,6 @@ def test_cycle_propagates_generator_failure(tmp_path, monkeypatch):
 
 
 def test_run_generate_requires_a_readable_teacher(tmp_path, monkeypatch):
-    _teacher_under(monkeypatch, tmp_path)  # a teacher tag whose export is absent
     ctx = WorkerContext(
         spec=SPEC,
         role=SPEC.role("generate"),
@@ -365,6 +354,7 @@ def test_run_generate_requires_a_readable_teacher(tmp_path, monkeypatch):
         threads=1,
         max_cycles=1,
         sink=RecordingSink(),
+        mount_root=tmp_path,
     )
     assert move_set_eval.run_generate(ctx) == 1  # the pinned export does not exist
 
@@ -383,7 +373,7 @@ def test_teacher_resolution_pins_the_latest_export(tmp_path):
 
 def test_teacher_resolution_requires_a_tag_and_an_export(tmp_path):
     with pytest.raises(params_mod.ParamsError, match="teacher_tag is required"):
-        move_set_eval.resolved_teacher_generation(MoveSetEvalParams())
+        move_set_eval.resolved_teacher_generation(MoveSetEvalParams(), mount_root=tmp_path)
     TagPaths("empty", POSITION_EVAL, mount_root=tmp_path).onnx_dir.mkdir(parents=True)
     with pytest.raises(params_mod.ParamsError, match="no exported model"):
         move_set_eval.resolved_teacher_generation(
@@ -392,20 +382,23 @@ def test_teacher_resolution_requires_a_tag_and_an_export(tmp_path):
     # -1 is the sole "latest" sentinel; a stray negative is a typo, not "latest".
     with pytest.raises(params_mod.ParamsError, match="teacher_generation must be"):
         move_set_eval.resolved_teacher_generation(
-            MoveSetEvalParams(teacher_tag="empty", teacher_generation=-5)
+            MoveSetEvalParams(teacher_tag="empty", teacher_generation=-5), mount_root=tmp_path
         )
 
 
 def test_finalize_pins_the_teacher_generation(tmp_path, monkeypatch):
-    _teacher_under(monkeypatch, tmp_path)
     for generation in (2, 5):
         _write_teacher_export(tmp_path, "teach", generation)
-    pinned = move_set_eval.finalize(SPEC, "run1", MoveSetEvalParams(teacher_tag="teach"))
+    pinned = move_set_eval.finalize(
+        SPEC, SPEC.paths("run1", tmp_path), MoveSetEvalParams(teacher_tag="teach")
+    )
     assert pinned.teacher_generation == 5  # the latest at creation, frozen
     # A generation whose export is missing fails at creation, where it is seen.
     with pytest.raises(params_mod.ParamsError, match="no generation 9 exported"):
         move_set_eval.finalize(
-            SPEC, "run1", MoveSetEvalParams(teacher_tag="teach", teacher_generation=9)
+            SPEC,
+            SPEC.paths("run1", tmp_path),
+            MoveSetEvalParams(teacher_tag="teach", teacher_generation=9),
         )
 
 
@@ -414,9 +407,10 @@ def test_a_teacher_pinned_at_generation_zero_is_not_re_resolved(tmp_path, monkey
     latest export at creation is generation 0 must stay pinned to 0 after newer
     generations land; otherwise a worker restart drifts the teacher and splits
     the corpus's stamped teacher hash."""
-    _teacher_under(monkeypatch, tmp_path)
     _write_teacher_export(tmp_path, "teach", 0)
-    pinned = move_set_eval.finalize(SPEC, "run1", MoveSetEvalParams(teacher_tag="teach"))
+    pinned = move_set_eval.finalize(
+        SPEC, SPEC.paths("run1", tmp_path), MoveSetEvalParams(teacher_tag="teach")
+    )
     assert pinned.teacher_generation == 0  # pinned, not left as the "latest" sentinel
     _write_teacher_export(tmp_path, "teach", 5)  # a newer export lands
     assert move_set_eval.resolved_teacher_generation(pinned, mount_root=tmp_path) == 0
@@ -427,13 +421,9 @@ def test_create_task_runs_the_finalize_hook(tmp_path, monkeypatch):
     later worker restart cannot resolve a newer one."""
     from scribblez.dashboard import tasks
 
-    _teacher_under(monkeypatch, tmp_path)
     _write_teacher_export(tmp_path, "teach", 5)
-    saved = {}
-    monkeypatch.setattr(tasks, "load_task", lambda spec, tag: None)
-    monkeypatch.setattr(tasks, "save_task", lambda spec, task: saved.update(task.params))
-    tasks.create_task(SPEC, "run1", {"teacher_tag": "teach"})
-    assert saved["teacher_generation"] == 5
+    task = tasks.TaskStore(tmp_path).create(SPEC, "run1", {"teacher_tag": "teach"})
+    assert task.params["teacher_generation"] == 5
 
 
 class StubCtx:
@@ -486,7 +476,6 @@ def test_run_generate_binds_the_resolved_teacher_into_the_cycle(tmp_path, monkey
     """run_generate resolves the pinned (tag, generation) to a concrete ONNX
     path and binds THAT into the cycle -- not the tag name -- so every cycle the
     loop runs labels against the one teacher."""
-    _teacher_under(monkeypatch, tmp_path)
     _write_teacher_export(tmp_path, "teach", 3)
     bound = []
 
@@ -641,10 +630,9 @@ class _StagingSink(RecordingSink):
 
 
 def test_the_generate_role_declares_the_pinned_teacher_as_its_input(tmp_path, monkeypatch):
-    _teacher_under(monkeypatch, tmp_path)
     params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
     expected = TagPaths("teach", POSITION_EVAL, mount_root=tmp_path).onnx_path(3)
-    assert move_set_eval.inputs(params) == {move_set_eval.TEACHER_INPUT: expected}
+    assert move_set_eval.inputs(params, tmp_path) == {move_set_eval.TEACHER_INPUT: expected}
     assert SPEC.role("generate").inputs == "scribblez.workloads.move_set_eval:inputs"
     assert "ssh" in SPEC.role("generate").kinds
     assert "ssh" in SPEC.role("train").kinds
@@ -654,7 +642,6 @@ def test_the_generate_role_declares_the_pinned_teacher_as_its_input(tmp_path, mo
 def test_a_remote_generator_takes_the_teacher_the_controller_staged(tmp_path, monkeypatch):
     """No position_eval tag on the machine: the teacher comes through the sink
     under the tag root, and THAT path is bound into the cycle."""
-    _teacher_under(monkeypatch, tmp_path)  # the export is not there
     bound = []
 
     def fake_cycle(model, work_dir, params, threads):
@@ -674,7 +661,6 @@ def test_a_remote_generator_takes_the_teacher_the_controller_staged(tmp_path, mo
 
 
 def test_a_local_generator_does_not_wait_for_a_teacher_nobody_stages(tmp_path, monkeypatch):
-    _teacher_under(monkeypatch, tmp_path)
     ctx = StubCtx(tmp_path, _StagingSink({}), max_cycles=1)  # kind "local"
     ctx.params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
     assert move_set_eval.run_generate(ctx) == 1

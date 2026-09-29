@@ -33,13 +33,14 @@ def _stage(paths: TagPaths, name: str, games: int):
 
 
 class Hooks(SchedulerHooks):
-    def __init__(self, publish: bool = False):
+    def __init__(self, publish: bool = False, paths: TagPaths | None = None):
         self.gates: dict[str, str | None] = {}
         self.mirrored: list[tuple[str, str]] = []
         self.published: list[str] = []
         self.publish_fails = False
         self.uploading = False  # the upload is still running
         super().__init__(
+            paths=paths,
             gate=lambda role, reason: self.gates.__setitem__(role, reason),
             finish=lambda role: None,
             mirror=lambda name, dest: self.mirrored.append((name, dest)),
@@ -192,8 +193,8 @@ def test_without_a_publish_hook_nothing_is_marked(paths):
 
 
 class _FinishHooks(Hooks):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, paths: TagPaths):
+        super().__init__(paths=paths)
         self.finished: list[str] = []
         self.finish = self.finished.append
 
@@ -201,15 +202,12 @@ class _FinishHooks(Hooks):
 def _task_tick(tmp_path, *, max_rows: int, rows_trained: int | None):
     """One tick_for_task on a position_eval task under tmp_path, with the
     trainer's cursor at `rows_trained` (None: no cursor yet)."""
-    spec = SimpleNamespace(
-        params_cls=PositionEvalParams,
-        paths=lambda tag: TagPaths(tag, POSITION_EVAL, mount_root=tmp_path),
-    )
-    paths = spec.paths("t")
+    spec = SimpleNamespace(params_cls=PositionEvalParams)
+    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
     if rows_trained is not None:
         paths.train_state_path.parent.mkdir(parents=True, exist_ok=True)
         paths.train_state_path.write_text(json.dumps({"rows_trained": rows_trained}))
-    hooks = _FinishHooks()
+    hooks = _FinishHooks(paths)
     scheduler.tick_for_task(spec, SimpleNamespace(tag="t", params={"max_rows": max_rows}), hooks)
     return hooks
 
