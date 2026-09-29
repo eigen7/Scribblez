@@ -155,6 +155,33 @@ def test_reconcile_contains_per_slot_failures(manager, spec, task, monkeypatch):
     assert attempted == [w.worker_id for w in added]
 
 
+def test_a_failed_listing_does_not_stop_the_pass(rented, manager, spec, task, monkeypatch):
+    """A failed provider listing (expired credentials, say) leaves a rented
+    tag's machines unobserved for the pass, but the pass goes on: that tag's
+    other slots and every later tag's still get their tick. A slot on one of
+    the unobserved machines gets none, since nothing says the machine is up."""
+    provider, _ = rented
+
+    def expired():
+        raise ProviderError("expired")
+
+    monkeypatch.setattr(provider, "describe", expired)
+    manager._instances = ({}, 0.0)  # the next observation must list afresh
+    later = tasks.TaskRecord(workload=spec.name, tag="later", params={}, created_at=0.0)
+    for t in (task, later):
+        manager.add_local(spec, t, "generate", threads=1)
+    manager.add_ssh(spec, task, "generate", machine="m1", threads=1, check_gpu=False)
+    ticked = []
+    monkeypatch.setattr(
+        WorkerManager,
+        "_reconcile_worker",
+        lambda self, spec, t, w, intent, info: ticked.append((t.tag, w.worker_id)),
+    )
+    monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task), (spec, later)]))
+    asyncio.run(manager.reconcile())
+    assert ticked == [("t", "local-0"), ("later", "local-0")]
+
+
 def test_a_pause_survives_a_pass_that_looked_at_the_task_before_it(manager, spec, task):
     """The failure mode: "Pause all" lands in the handler's copy of the task,
     while the reconcile pass, having loaded its own copy before the click, saves
@@ -2099,25 +2126,59 @@ def test_restarts_after_a_crash_are_recorded_and_clean_exits_are_not(
     assert manager.recent_crashes(spec, "t", ssh.worker_id, 60) == []
 
 
-def test_a_gated_local_worker_stopped_by_the_dashboard_is_not_a_crash(
-    manager, spec, task, monkeypatch
-):
-    """A gate parks a local generator by SIGTERM, and the worker exits 143 by
-    design. Counted as crashes, three gates in half an hour failed every tag
-    the queue placed on localhost; a crash is an exit this process did not
-    ask for."""
+def test_an_interrupted_worker_is_not_a_crash(manager, spec, task, monkeypatch):
+    """A worker that exits 143 was SIGTERMed from outside: a gate or pause
+    from the dashboard (three gates in half an hour once failed every tag on
+    localhost), a docker stop, or a spot interruption stopping its host.
+    Neither counts toward failing its tag; an exit the worker makes itself
+    does."""
     w = manager.add_local(spec, task, "generate", 4)
     monkeypatch.setattr(manager, "_spawn_local", lambda *a: None)
-    monkeypatch.setattr(workers_mod, "worker_pid_alive", lambda *a: True)
-    monkeypatch.setattr(workers_mod.os, "kill", lambda pid, sig: None)
-    monkeypatch.setattr(manager, "_local_exit_code", lambda *a: 143)
+    exit_code = 143
+    monkeypatch.setattr(manager, "_local_exit_code", lambda *a: exit_code)
     down = {"observed_running": False}
-    for _ in range(3):  # gated, then released
-        manager._stop_local(spec, task, w)
+    for _ in range(3):  # gated, then released; or interrupted with its host
         manager._reconcile_worker(spec, task, w, workers_mod.RUN, down)
     assert manager.recent_crashes(spec, "t", w.worker_id, 60) == []
-    manager._reconcile_worker(spec, task, w, workers_mod.RUN, down)  # died unasked
-    assert manager.recent_crashes(spec, "t", w.worker_id, 60) == ["exit 143"]
+    exit_code = 1  # its own failure
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, down)
+    assert manager.recent_crashes(spec, "t", w.worker_id, 60) == ["exit 1"]
+
+
+def test_a_container_interrupted_with_its_host_is_not_a_crash(manager, spec, task, monkeypatch):
+    """The ssh side: a container stopped with exit 143 (its spot host was
+    interrupted) is restarted without a crash; one that failed on its own is
+    counted, and so is one whose exit reason could not be read."""
+    ssh = manager.add_ssh(spec, task, "generate", host="h", threads=None)
+    monkeypatch.setattr(manager, "_start_or_replace", lambda *a: None)
+    key = _key(spec, "t", ssh.worker_id)
+    manager._exits[key] = "exit 143: host stopped"
+    manager._reconcile_ssh(spec, task, ssh, workers_mod.RUN, "stopped")
+    assert manager.recent_crashes(spec, "t", ssh.worker_id, 60) == []
+    manager._restarts.clear()
+    manager._exits[key] = "exit 2: out of disk"
+    manager._reconcile_ssh(spec, task, ssh, workers_mod.RUN, "stopped")
+    assert manager.recent_crashes(spec, "t", ssh.worker_id, 60) == ["exit 2: out of disk"]
+    for unreadable in ("", "exit : no such container"):
+        manager._restarts.clear()
+        manager._exits[key] = unreadable
+        manager._reconcile_ssh(spec, task, ssh, workers_mod.RUN, "stopped")
+    assert len(manager.recent_crashes(spec, "t", ssh.worker_id, 60)) == 3
+
+
+def test_a_removed_slots_memory_does_not_pass_to_the_next_slot_with_its_id(manager, spec, task):
+    """A requeued tag gets its layout's worker ids back. The old container's
+    last probe, read as the new slot's, was a phantom crash and a start of a
+    container that did not exist."""
+    w = manager.add_local(spec, task, "generate", 1)
+    key = _key(spec, "t", w.worker_id)
+    manager._probes[key] = ("stopped", 0.0)
+    manager._exits[key] = "exit 143: stopped"
+    manager._crashes[key] = [(0.0, "exit 1")]
+    manager._down_since[key] = 0.0
+    manager.remove_worker(spec, task, w.worker_id)
+    for memory in (manager._probes, manager._exits, manager._crashes, manager._down_since):
+        assert key not in memory
 
 
 def test_cloud_sync_is_told_the_tag_dirs_mount_root(manager, spec, task):

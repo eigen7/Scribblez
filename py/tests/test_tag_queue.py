@@ -10,7 +10,7 @@ from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tag_queue as tq_mod
 from scribblez.dashboard import workers as workers_mod
-from scribblez.dashboard.pool import Hardware, Lease
+from scribblez.dashboard.pool import Hardware, Lease, PoolMachine
 from scribblez.dashboard.tag_queue import (
     EMPTY_POOL,
     HELD,
@@ -517,3 +517,10 @@ def test_the_state_home_follows_the_trainers_sink_once_it_has_trained(queued):
     assert placement.state_home(manager.tasks.paths(SPEC, "a"), task) == placement.HOME_LOCAL
     task.trainer_sink = "r2"  # a trainer on a rented machine delivered through the bucket
     assert placement.state_home(manager.tasks.paths(SPEC, "a"), task) == placement.HOME_BUCKET
+
+
+def test_a_retiring_machine_says_so_on_the_queue_row():
+    """Stop all cloud spending retires a rental; until it is terminated the
+    queue must not show it as a machine that would take a waiting tag."""
+    m = PoolMachine(name="cap-1", kind="ssh", retiring=True)
+    assert "retiring" in TagQueue._why_not(m, [])

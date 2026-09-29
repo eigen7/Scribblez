@@ -525,6 +525,8 @@ class TagQueue:
     def _why_not(m: PoolMachine, occupants: list[str]) -> str | None:
         if m.lease is not None:
             return f"leased by {m.lease.workload}/{m.lease.tag} ({m.lease.phase})"
+        if m.retiring:
+            return "retiring: terminated once free (Stop all cloud spending)"
         if occupants:
             return f"busy: {', '.join(occupants)}"
         return None
