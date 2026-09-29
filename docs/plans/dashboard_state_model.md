@@ -1,7 +1,7 @@
 # Plan: one state model for the dashboard's control plane
 
-**Status: plan-reviewed 2026-09-29 and revised (§Review record); operator's
-calls recorded (§Operator's calls); one question open for the operator.**
+**Status: plan-reviewed 2026-09-29 and revised (§Review record); every
+operator's call settled (§Operator's calls); not built.**
 
 - **Review.** Four independent panelists: hidden complexity, a rival design
   (a Codex seat), scope, and integration. They raised 2 blocking, 16 serious
@@ -525,12 +525,10 @@ simulation green on the invariants it claims, from PR 2 on.
 4. **Move home:** automatic, as a phase of placement (§5). Confirmed after
    weighing the measured cost (about 170 MB per tag) against a manual step.
 
-**Open, for the operator:**
-
-5. **An operator-rented machine left idle: stop it (disk kept) or terminate
-   it?** The plan says stop (§4), since the operator chose to rent it and a
-   later "Run by hand on…" would want it back. Terminating would make every
-   rental's idle behavior the same, and cost nothing when idle.
+5. **An operator-rented machine left idle:** stopped, disk kept (§4). The
+   operator chose to rent it, and a later "Run by hand on…" would want it
+   back. Rentals the queue made under a capacity entry are still terminated
+   when idle.
 
 ## Review record (2026-09-29)
 
@@ -541,8 +539,8 @@ simulation green on the invariants it claims, from PR 2 on.
 - integration (Sonnet subagent).
 
 Each saw only the plan, the repo and its lens. Every blocking and serious
-critique is below with its resolution. None is left open. The one open
-question above is new policy the review surfaced, not a disputed critique.
+critique is below with its resolution. None is left open. Call 5 above is
+new policy the review surfaced, not a disputed critique.
 
 | Critique (panel) | Severity | Resolution |
 |---|---|---|
