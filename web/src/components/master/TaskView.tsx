@@ -7,9 +7,9 @@ import { loadRentalOffer, RentalOffer, rateText } from './rentalOffer';
 import StatsTab from './StatsTab';
 import { TabActiveContext } from '../TabActiveContext';
 
-// One task's view in the master dashboard: an Overview tab (frozen params,
-// progress counters, the worker slots with per-role add/pause/start/remove
-// controls), a generic Stats tab whenever the workload's roles publish stats,
+// One task's view in the master dashboard: an Overview tab (progress
+// counters, the worker slots with per-role add/pause/start/remove controls),
+// a generic Stats tab whenever the workload's roles publish stats,
 // and the workload's own tabs from the client registry (web/src/workloads.tsx)
 // -- e.g. the training workloads' Loss/Positions/Controls views.
 
@@ -659,38 +659,19 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           be attached. Generate into it with the CLI, or create a new tag.
         </div>
       )}
-      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-        <Card title="Task">
-          <KV items={[
-            ['workload', workload.title],
-            ['created', info.created_at ? new Date(info.created_at * 1000).toLocaleString() : '—'],
-            ...info.progress.map(([k, v]): [string, React.ReactNode] => [k, String(v)]),
-            ['data dir', info.data_dir],
-            ['bundle', info.bundle_id
-              ? <span title={info.bundle_id}>{info.bundle_id.split('-')[0]}</span>
-              : 'none yet (deployed when the first remote worker starts)'],
-            ['cloud burn rate', `$${cloudCost.toFixed(3)}/hr`],
-            ['cloud spend (est. total)', `$${info.spend.toFixed(2)}`],
-          ]} />
-        </Card>
-        <Card title="Parameters (frozen)">
-          {info.params && (
-            <div style={{ fontSize: 13, color: '#556070', marginBottom: 8 }}>
-              {info.profile ? <>profile <b>{info.profile}</b></> : 'no profile'}
-              {info.profile_diff.length > 0
-                ? <>, changed: {info.profile_diff.map((c) => (
-                    <span key={c.name} style={{ marginLeft: 6 }}>
-                      <b>{c.name}</b> {String(c.profile)} → {String(c.task)}
-                    </span>
-                  ))}</>
-                : info.profile ? ', unchanged' : ''}
-            </div>
-          )}
-          {info.params
-            ? <KV items={Object.entries(info.params).map(([k, v]) => [k, String(v)])} />
-            : <span style={{ color: '#556070' }}>unknown (pre-dashboard tag)</span>}
-        </Card>
-      </div>
+      <Card title="Task">
+        <KV items={[
+          ['workload', workload.title],
+          ['created', info.created_at ? new Date(info.created_at * 1000).toLocaleString() : '—'],
+          ...info.progress.map(([k, v]): [string, React.ReactNode] => [k, String(v)]),
+          ['data dir', info.data_dir],
+          ['bundle', info.bundle_id
+            ? <span title={info.bundle_id}>{info.bundle_id.split('-')[0]}</span>
+            : 'none yet (deployed when the first remote worker starts)'],
+          ['cloud burn rate', `$${cloudCost.toFixed(3)}/hr`],
+          ['cloud spend (est. total)', `$${info.spend.toFixed(2)}`],
+        ]} />
+      </Card>
       {info.bundle_drift && (
         <div className="card" style={{ color: '#a05a00', marginTop: 14, display: 'flex', gap: 12, alignItems: 'center' }}>
           <span>
