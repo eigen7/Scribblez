@@ -135,7 +135,7 @@ statistic.
 | root candidate | the move's footprint, tiles, score and leave; the prior's value prediction for it |
 | opponent history | one per past opponent turn: the move's footprint, tiles and score, and its static-equity rank among the legal moves on the board it was played from (computed by the engine when the move was played); exchanges as a tile count, passes as a flag |
 | action step | the mover; the move as footprint cells, tiles, score and leave; the tiles left in the bag; a rank and value, whose source depends on the node ([below](#what-an-action-step-costs)) |
-| option | one move from a node's recorded subset ([Move lists](#move-lists-local-and-global)): footprint, tiles, score, leave, static equity |
+| option | one move recorded at a board ([Move lists](#move-lists-local-and-global)): footprint, tiles and blank designations, tile count, score. Nothing that depends on a rack |
 | chance step | who drew; the tiles drawn; the resulting rack; the draw's log-probability under the uninformed prior (exact hypergeometric over the unseen pool) and under the distribution it was actually sampled from |
 | leaf | the horizon outcome (WLD and score-difference moments, root-mover POV); terminal or truncated; the prior's prediction for the probe's root candidate, so the residual forms inside the model |
 
@@ -164,36 +164,57 @@ tokens in the context. So the list is used in two ways:
 
 | | what it sees | stored in the record |
 |---|---|---|
-| the decision at the node | the full legal list | no: the move generator is deterministic given board and rack, so replay regenerates it |
+| the decision at the node | the full legal list, exchanges and pass included | no: the move generator is deterministic given board and rack, so replay regenerates it |
 | the global context | a recorded subset of **option** tokens, plus the move played | yes |
+
+Full generation and scoring every legal move at a node is not new: UltimateBot
+does it at the root today (`equity_top_k` with no limit, then
+`encode_candidates`, [ultimate_bot_agent.cpp](../../engine/src/agent/ultimate_bot_agent.cpp)).
 
 The played move always enters the context as its action step, so the record
 covers everything any probe actually played. The subset only has to cover the
 alternatives worth reasoning about globally. That is its limit: the reader can
 reason only about alternatives that were recorded or played, so choosing the
-subset is a design question in its own right. The first rule is the prior's
-top k at each in-scope node, plus a few slots reserved for plays in other
-board regions. A top k by value alone would drop the setup plays the design
-exists to find. Later, what to record can become a writer decision, trained
-by the same reward as the others ([Open questions](#open-questions)).
+subset is a design question in its own right.
 
-**Shared boards.** Every probe through root candidate X sees the same board
-after X; only the opponent's rack differs. A move's placement and score
-depend only on the board, and whether a rack can play it is multiset
-containment, which is exact and needs no lexicon. So at a shared board each
-distinct move is recorded once, the first time any rack's subset includes it.
-With racks encoded as cumulative tile counts ("at least two E's"),
-containment is a single dot product, which one attention head can compute. So
-the reader can tell whether ZIT is playable on QUIZATH before any probe draws
-QUIZATH. Past the opponent's reply the boards differ per probe, and each
-node records its own subset.
+**The selection rule** is static equity's top k plus a few slots reserved for
+plays in other board regions: a top k by value alone would drop the setup
+plays the design exists to find. Static equity is available at every node
+without a trunk pass, so the rule is the same at M1, where the writer is hasty
+and there is no prior at ply one, as at M3. Later, what to record can become a
+writer decision, trained by the same reward as the others ([Open
+questions](#open-questions)). Exchanges and passes are never recorded as
+options: they need no lexical knowledge, since an exchange is a keep-set of
+the rack, legal when at least seven tiles are in the bag. An exchange still
+becomes a token as a root candidate, so a pick query can value it (Richards's
+EELLT), and as an action step when a probe plays one.
 
-**Exchanges and passes are never listed.** They need no lexical knowledge: an
-exchange is a keep-set of the rack, legal when at least seven tiles are in
-the bag, and the network can reason about that mechanically. Decisions choose
-them through a separate head ([The network](#the-network)). An exchange still
-becomes a token when it matters: as a root candidate, so a pick query can
-value it (Richards's EELLT), or as an action step when a probe plays one.
+**Options are rack-free and recorded once per board.** Every probe through
+root candidate X sees the same board after X; only the opponent's rack
+differs. An option token carries only what the board determines: placement,
+tiles, tile count and score. Leave and equity depend on the rack, so they are
+not in the token; the reader derives them from the move's tiles and the rack
+it is asking about, as the student already does for leaves
+([move_set_encoder.h](../../engine/include/training/move_set_encoder.h)). So at
+a shared board each distinct move is recorded once, the first time any rack's
+selection includes it.
+
+Whether a rack can play an option is multiset containment, exact and free of
+lexicon. With racks encoded as cumulative tile counts ("at least two E's"),
+as the unseen-pool thermometer already is, the dot product of the move's
+requirement with the rack equals the move's tile count exactly when the rack
+contains the move. That is one dot product and one comparison against the tile
+count the token carries, which an attention head can compute. Blanks relax it:
+the rack plays the move when the shortfall is at most its blank count. So the
+reader can tell whether ZIT is playable on QUIZATH before any probe draws
+QUIZATH. Past the opponent's reply the boards differ per probe, and each node
+records its own options.
+
+**Rows and replay.** An option belongs to its board, but the record also
+lists which probes selected it. When subset assembly drops probes, the row
+builder recomputes the option set from the probes it keeps, and an option's
+tick becomes that of its earliest kept selector. Probes in one tick that
+select the same move produce one option, in recorded order.
 
 **Context size.** Rough, at 2,000 probes and 3–4 action nodes per probe; the
 typical list length and how fast each shared board's recorded set stops
@@ -205,6 +226,7 @@ growing are measured before M0:
 | top 16 at every node | ~128,000 | ~150,000 |
 | top 16 at in-scope nodes (ply one, first own move) | ~64,000 | ~85,000 |
 | the same, ply-one options once per shared board | ~40,000 | ~60,000 |
+| M1: ply-one options only, once per shared board | the saturated set per board, times 16 boards | measured before M0 |
 
 ### What an action step costs
 
@@ -247,15 +269,20 @@ themselves appended to it.
 
 - **Move queries** at an action node, a two-level readout over the node's
   full legal list. First a few node-summary queries (say 8) read the context,
-  masked to the mover's information set
-  ([Information sets](#information-sets)). Then every legal move, as engine
-  features only, is scored against those summaries with a cheap
-  cross-attention, the shape of the student's candidate scoring. Scoring each
+  together with the node's trunk board tokens as a side input where the node
+  is in scope. Then every legal move, as engine features only, is scored
+  against those summaries with a cheap cross-attention, the shape of the
+  student's candidate scoring. Scoring each
   of N moves against the whole context would cost N times as much: at an
   assumed 500 moves, about a second per turn for ply one alone. The limit is
   that a move's score can use only what the summaries picked up; the recorded
-  options are in the context for them to read. A separate exchange head
-  decides whether to exchange, then which tiles to keep.
+  options are in the context for them to read. Exchanges and pass are
+  candidates in the same list, scored by the same scorer, as the student
+  scores them (the `is_play` flag); a separate exchange head was considered
+  and rejected ([review record](#review-record)). The move-set runtime takes
+  up to 4,096 rows per chunk
+  ([model_specs.h](../../engine/include/nn/model_specs.h)), so blank-heavy
+  lists run in extra chunks rather than being cut.
 - **Draw queries** at a chance node. The output is a proposal distribution
   over draws. It starts as the uninformed prior and stays there until M4
   ([Build order](#build-order)). Draws are sampled from the proposal, and both
@@ -389,58 +416,73 @@ through it. This is strategy fusion, the known flaw of searching over
 determinized worlds: a player's policy has to be a function of their
 information set, not of the hidden state.
 
-The plan leaks hidden information in four places:
+### Where the requirement lands
 
-1. **Bob's decisions read our actual leave.** At the root we are Alice, and
-   our rack is known to us, so it is the same in every probe and it is in the
-   root prefix. A move query for Bob at ply one that attends to it plays an
-   omniscient Bob.
-2. **Bob's decisions read other probes' outcomes.** Even with our rack masked,
-   every ordinary probe was played from our true leave, so their outcomes
-   carry it. A Bob who reads that the fishing lane pays off whenever he fails
-   to block has learned our leave indirectly.
-3. **Our own later decisions read Bob's sampled rack.** At ply two, a move
-   query for us that attends to the probe's own chance step for Bob's rack
-   plays an omniscient Alice. This is the classic overestimate of
-   determinized search.
-4. **Labels.** Reply-searched labels ([The writer](#the-writer)) run nested
-   sims for Bob's reply. Played from our true leave, they encode an
-   omniscient Bob.
+SupremeBot's values do not come from backing up the moves its probes play.
+They come from the reader, trained against labels, and the probes are
+experiments ([Probes are experiments, not
+samples](#probes-are-experiments-not-samples)). The writer that chooses Bob's
+moves in a probe is rewarded for informative experiments, not for modeling
+Bob, and an experiment chosen with knowledge of our leave is still a valid
+experiment. So information-set correctness is required of the two things that
+define value:
 
-### Who may read what
+- **The labels.** Reply-searched labels ([The writer](#the-writer)) run nested
+  sims for Bob's reply. Played from our true leave, they encode an omniscient
+  Bob, and a reader trained on them values the decoy at nothing. So the nested
+  sims draw our leave from Bob's belief. This is required from the first
+  reply-searched labels.
+- **The evidence the reader gets within the turn.** To value the decoy, the
+  reader has to know what Bob's best response is from where he stands. That
+  evidence comes from **counterfactual probes**, below.
 
-Every token is tagged with who may see it: public (board, moves, scores,
-bag count), the root mover only (our rack), or hidden inside its probe (a
-sampled rack). A move query's summaries attend only to tokens its mover's
-information set allows. Other probes' sampled racks for Bob are allowed to our
-queries: they are samples from our belief, not Bob's actual rack.
+The writer's own moves are not masked. An earlier draft masked every move
+query to its mover's information set; the plan review showed that masking the
+queries alone does not work, because in a causal transformer every token's
+deeper layers have already read the private tokens before it, and the root
+board encoding itself reads our rack. Doing it properly means computing each
+token under a mask of its own viewer class at every layer, splitting action
+steps into public and private parts, and giving Bob his own board encoding.
+That is a separate context per viewer in all but name. It is the fallback,
+built only if M3's fishing-decoy check fails without it.
+
+**The test for both.** Change our hidden leave while holding Bob's
+observations and the sampling randomness fixed: Bob's reply in the label
+generator must not change. The same paired-world test gates the fallback, if
+it is ever built.
 
 ### Counterfactual probes, and traveling up the tree
 
-Masking stops Bob from seeing our leave, but his policy still has to be good
-on average over the leaves he thinks we might hold. So some probes replace our
-leave with one drawn from **Bob's belief**, and Bob's decisions read only
-those probes plus public tokens. Ordinary probes are masked from them, which
-closes the second leak. Both kinds live in one context: the reader, making our
-pick, reads both, and a chance-step flag says which leave is counterfactual.
+A counterfactual probe replaces our leave with one drawn from **Bob's
+belief**, and plays on from there. Its outcomes say what Bob's options are
+worth in the worlds Bob thinks possible, which is what his response depends on.
+The probes sit in the one context beside the ordinary ones, and a chance-step
+flag says which leave is counterfactual.
 
 Bob's belief comes from traveling up the tree to our root decision. After
 candidate move m:
 
 P(our leave | m) ∝ P(we play m | m's tiles + that leave) · P₀(leave)
 
-where P₀ is the uninformed prior. The likelihood needs a model of our
-policy at the root, evaluated on counterfactual racks:
+where P₀ is the uninformed prior. The likelihood needs a model of our policy
+at the root, evaluated on counterfactual racks:
 
 - **To start:** the static-equity likelihood of the ported rack inference
-  ([belief/rack_inference.h](../../engine/include/belief/rack_inference.h)),
-  which computes exactly this, cheaply.
+  (`EquityLikelihood`, [belief/move_likelihood.h](../../engine/include/belief/move_likelihood.h)),
+  which computes exactly this. Its `RackPosterior`
+  ([belief/rack_inference.h](../../engine/include/belief/rack_inference.h))
+  samples the posterior directly, with a uniform variate for common random
+  numbers, so counterfactual leaves are drawn from it rather than from P₀. The
+  chance step records both log-probabilities, as for any other proposal draw.
 - **Then:** the student's policy over the root's legal moves on each
   counterfactual rack, one trunk pass per rack, batched.
 
-Counterfactual leaves are drawn from P₀ and carry the log-likelihood in their
-chance step, so the draw is importance sampling, as for any other draw
-([Probes are experiments, not samples](#probes-are-experiments-not-samples)).
+The world is sampled in a fixed order, so the log-probabilities describe it
+exactly: Bob's rack from our unseen pool; then our counterfactual leave from
+Bob's posterior over his unseen pool; then the bag from what remains. Our
+true leave's tiles return to the pool, and a tile-conservation assertion
+checks every world.
+
 This is the same computation as our own inference about Bob from his past
 plays ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)),
 with the seats exchanged, so one policy model serves both.
@@ -456,12 +498,12 @@ self-labeling improves the prior (M5), Bob's model of us improves with it.
 ### When it matters
 
 Under face-up leaves Bob legitimately sees our leave; only draws are hidden,
-and leave bluffs do not exist. At M1 the writer is hasty, whose moves depend
-only on the mover's rack, so it neither peeks nor infers. The masks and
-counterfactual probes therefore become necessary at M3, with learned move
-choices, and the reply-searched labels need them from the start. They cost
-part of the probe budget, spent only where the opponent's decision is in the
-query scope.
+and leave bluffs do not exist. At M1 the writer is hasty and the labels are
+plain averaging sims, so nothing here applies before M3. At M3 the
+reply-searched labels need belief-drawn leaves from the start. Counterfactual
+probes come in M3's second slice, measured on the fishing-decoy check against
+the first slice without them. They cost part of the probe budget, spent only
+where the opponent's decision matters to a root candidate.
 
 ## Training
 
@@ -520,9 +562,6 @@ inserted into the sequence under a mask: each query attends to the context
 tokens of ticks before its own, and no token attends to a query. The mask is
 block-causal by tick, which is why the record stores tick ids.
 
-The mask also enforces information sets: a move query's summaries attend only
-to tokens its mover may see ([Information sets](#information-sets)).
-
 Query counts dominate the sequence. Pick queries after every one of 2,000
 leaves with 16 candidates each would be 32,000 query tokens against a
 context of 60,000 or more, and each M3 decision adds its summary queries and
@@ -541,7 +580,10 @@ readings, and recomputing them means rerunning the student and leaf model
 across thousands of probes. So the record stores its inputs, and the
 invariant is waived for it. The full move lists are the exception: the
 engine regenerates them exactly, so they are recomputed as the invariant
-intends. Every record carries the versions of the prior
+intends. Regeneration depends on the lexicon and the generator, so the record
+header carries the lexicon hash and the move generator's version, and the
+training loader rebuilds each sampled decision's board and calls the engine.
+That call's throughput is part of the training-graph prototype. Every record carries the versions of the prior
 and the leaf model that produced it. A corpus is invalid for a reader
 deployed with a different prior, because the prior's outputs are what the
 reader learns to calibrate against. Corpus generation therefore waits until
@@ -558,8 +600,8 @@ its prior is frozen; records made earlier are for pipeline shakeout only.
   labels must be able to see what the writer is meant to find. **Reply-searched
   labels** do that: at each labeling rollout's ply one, the opponent's reply
   is the best of a shortlist by nested sims, not hasty's argmax. The nested
-  sims draw our leave from the opponent's belief, not the true one
-  ([Information sets](#information-sets)). That is
+  sims draw our leave from the opponent's belief, not the true one, and pass
+  the paired-world test ([Information sets](#information-sets)). That is
   expensive, but it is paid for labels only. Self-labeling by a larger-budget
   SupremeBot is a second such source, and it waits until the writer has shown
   it finds replies the labels missed.
@@ -691,9 +733,16 @@ Each milestone produces a working agent, measured before the next begins.
   size ([The reader](#the-reader)). The masked training graph prototyped on
   one synthetic row ([The training graph](#the-training-graph)). The
   throughput microbenchmark ([Cost](#cost)), which decides whether M3 is
-  affordable. With it, two move-list counts: the typical legal-list length
-  per node, and how fast each shared board's recorded set stops growing as
-  racks accumulate ([Move lists](#move-lists-local-and-global)).
+  affordable. Both run at the grown context, 85,000 tokens, with concurrent
+  turns and the TensorRT models resident, and report peak GPU memory as a
+  gate beside probes per second. With them come two move-list counts, the
+  typical legal-list length per node and how fast each shared board's
+  recorded set stops growing as racks accumulate
+  ([Move lists](#move-lists-local-and-global)), and the cost of
+  reply-searched labels: outer rollouts × reply shortlist × inner rollouts ×
+  one inference per leave draw, times the position count the noise-floor
+  estimate asks for. If that is unaffordable, M3 cannot be funded, and the
+  plan must know before M0.
 - **In parallel: the standard-Scrabble prior.** The teacher, student and
   move proposal model retrained with `face_up_leaves` off. This is new tags,
   not new code. It runs on the dashboard from now on, and is needed from M1b.
@@ -715,8 +764,11 @@ Each milestone produces a working agent, measured before the next begins.
   | shrinkage | per candidate: the prior and the probe mean, combined with fitted variances |
   | averaging | mean per candidate |
 
-  Beside the arms run the synthetic single-fact transfer tests: QUIZETH to
-  QUIZATH, with the no-T control.
+  Ply-one options are recorded by the static-equity rule
+  ([Move lists](#move-lists-local-and-global)). Beside the arms run the
+  synthetic single-fact transfer tests, built as production records with
+  option tokens: QUIZETH to QUIZATH, the no-T control, a near miss (one tile
+  short) and a blank-bearing case.
   *Kill criterion:* if the reader does not beat shrinkage on identical records
   at matched budgets, or fails the transfer tests, transfer is not being
   learned: stop.
@@ -736,12 +788,12 @@ Each milestone produces a working agent, measured before the next begins.
   match play against BestBot.
 - **M2: the known positions.** The Richards–Johnson position and the ACETA
   family in `positions/NWL23/interesting-positions/`.
-- **M3: learned move choices.** Four parts, in order: the serving runtime
-  ([Cost](#cost)); information-set masks and counterfactual probes
-  ([Information sets](#information-sets)); reply-searched labels
+- **M3: learned move choices,** in two slices. The first: the serving runtime
+  ([Cost](#cost)); reply-searched labels with belief-drawn leaves
   ([The writer](#the-writer)); then the writer, trained with the telescoping
-  reward and alternating with the reader. A known fishing-decoy position
-  joins M2's set as its check.
+  reward and alternating with the reader. The second: counterfactual probes
+  ([Information sets](#information-sets)), measured against the first slice
+  on a known fishing-decoy position added to M2's set.
   Measured in match play against M1b at equal wall-clock time, not equal
   probes, because steering costs time.
 - **M4: learned draws.** Proposal distributions at chance nodes: the rack
@@ -759,6 +811,8 @@ Each milestone produces a working agent, measured before the next begins.
   representation-limited.
 - **The recorded subset:** k, the region-diversity slots, and whether the
   writer should learn what to record.
+- **Masked opponent contexts:** whether M3's fishing-decoy check needs them
+  (the fallback in [Information sets](#information-sets)).
 - **Counterfactual probe share:** how much of the budget models the
   opponent's view, and at which plies.
 - **How deep the opponent reasoning goes:** level one (the opponent models us
@@ -809,3 +863,28 @@ serious critique, and each minor one, with its resolution:
 | Minor: M1 builds two deep-node representations. | Revised: move deltas only, unless M1 looks representation-limited. |
 | Minor: the sampled-distribution log-probability is constant until M4. | Rejected: it costs one field, and keeping it avoids a record format change at M4. |
 | Minor: "extends layer 1" implies layer 1 exists. | Revised: M0 builds it. |
+
+Plan review, round 2, 2026-09-29, of the move-list, exchange and
+information-set additions: the same four seats (hidden complexity, rival
+design on codex, scope, integration).
+
+| Critique | Resolution |
+|---|---|
+| **Blocking.** Masking the move queries does not enforce information sets: every token's deeper layers have already read the private tokens before it, and the root board encoding reads our rack. Raised by two panelists; the rival proposed separate per-viewer contexts that share weights. | Revised, by relocating the requirement. Values come from labels and the reader, not from the writer's moves, so information-set correctness is required of the labels (belief-drawn leaves, a paired-world test) and supplied to the reader as counterfactual-probe evidence. Writer masking is dropped. The properly built version (viewer classes at every layer, public/private token split, a Bob-view board) is the documented fallback if the fishing-decoy check fails. **Human call to confirm:** this changes the mechanism from the one agreed in conversation, though it keeps traveling up the tree. |
+| No objective makes a masked opponent policy a best response over his belief; the writer is rewarded for informative experiments, which benefit from reading our leave. | Revised: this critique is the reason for the relocation above. |
+| **Blocking.** Options deduplicated per board carry leave and static equity, which depend on the rack that first selected them. Raised by three panelists. | Revised. Options are rack-free (placement, tiles, tile count, score); the reader derives leave from the querying rack, as `MoveFeatureArrays` does. |
+| Selection by the prior does not match the static-equity field stored. | Revised: selection is by static equity plus region slots, and the token stores neither value. |
+| **Blocking.** M1a's transfer test needs options, but M1's hasty writer has no prior to select them by. | Revised: the static-equity rule works at M1 without a trunk pass; the synthetic tests are built as production records with options, plus near-miss and blank cases. |
+| Record options only from M3, and hand-inject them into M1a's synthetic tests. | Rejected: M1a's reader would then be tested on a mechanism it never trained on. Options are recorded from M0, ply-one boards only at M1. |
+| Keep lexical facts in an engine-managed, board-keyed index with retrieval, instead of the causal context. | Rejected in favor of rack-free options plus containment, which is exact linear algebra given the tile count; retrieval would add misses and a second store. The index's separation of rack-free and rack-dependent facts is adopted. |
+| The separate exchange head reverses the closed A4 verdict, breaks the empty-context floor, and diverges from the single-scorer `is_play` convention. Raised by three panelists. | Revised: exchanges and pass are candidates in the one scored list; they are still never recorded as options. |
+| The two-level readout's summaries need the node's trunk tokens, and list lengths exceed the runtime's 512-row cap. | Revised in part: trunk tokens are a side input at in-scope nodes. The cap does not exist: 512 is the optimization profile, the maximum is 4,096 rows per chunk, and longer lists take extra chunks. |
+| The prototypes and microbenchmark are sized to the old 20,000-token context. | Revised: 85,000 tokens, concurrent turns, models resident, peak memory as a gate. |
+| The reply-searched label cost is never estimated. | Revised: added to the pre-M0 estimates, with its consequence for M3 stated. |
+| Split counterfactual probes out of M3's first slice. | Revised: M3 has two slices; the belief-drawn labels stay in the first, since without them the labels encode an omniscient opponent. |
+| Minor: counterfactual leaves drawn from P₀ waste probes. | Revised: drawn from `RackPosterior`. |
+| Minor: the joint sampling order of a counterfactual world is unspecified. | Revised: order fixed, tile conservation asserted. |
+| Minor: containment is a dot product and a comparison, and blanks relax it. | Revised: tile count in the token; blank rule stated; tests added. |
+| Minor: regeneration needs lexicon and generator versions, and a loader-side engine call. | Revised. |
+| Minor: cite the existing full-list precedent. | Revised: UltimateBot's root. |
+| Minor: split the exchange head into its own step. | Moot: no exchange head. |

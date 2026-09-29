@@ -91,10 +91,11 @@ The build order, with the plan's milestones:
    history-ablated reader and the ported-inference arm. Then match play
    against BestBot.
 6. **M2: the known positions,** Richards–Johnson and the ACETA family.
-7. **M3: learned move choices:** the KV-cached serving runtime,
-   information-set masks and counterfactual probes (so modeled opponents
-   cannot see our leave), reply-searched labels, then the writer by the
-   telescoping reward.
+7. **M3: learned move choices,** in two slices: the KV-cached serving
+   runtime, reply-searched labels whose modeled opponent cannot see our
+   leave, and the writer by the telescoping reward; then counterfactual
+   probes, which show the reader the opponent's view, checked on a
+   fishing-decoy position.
 8. **M4: learned draws,** which is SupremeBot's rack inference.
 9. **M5: self-labeling,** where SupremeBot can outgrow its first labels.
 
