@@ -317,27 +317,27 @@ class TaskStore:
         paths = self.paths(spec, task.tag)
         return [list(pair) for pair in resolve(spec.progress)(spec, paths, params)]
 
+    def _tag_dirs(self, spec: WorkloadSpec):
+        """(tag dir, its task or None) for every tag dir of the workload, in
+        name order."""
+        tags_root = spec.tags_root(self.mount_root)
+        if not tags_root.is_dir():
+            return
+        for tag_dir in sorted(tags_root.iterdir()):
+            if tag_dir.is_dir():
+                yield tag_dir, self.load(spec, tag_dir.name)
+
     def load_all(self):
         """(spec, task) for every task of every workload, read and nothing else."""
         for spec in WORKLOADS.values():
-            tags_root = spec.tags_root(self.mount_root)
-            if not tags_root.is_dir():
-                continue
-            for tag_dir in sorted(tags_root.iterdir()):
-                task = self.load(spec, tag_dir.name) if tag_dir.is_dir() else None
+            for _, task in self._tag_dirs(spec):
                 if task is not None:
                     yield spec, task
 
     def list_tags(self, spec: WorkloadSpec) -> list[dict]:
         """Every tag under the workload's tags root, with listing metadata."""
-        tags_root = spec.tags_root(self.mount_root)
-        if not tags_root.is_dir():
-            return []
         out = []
-        for tag_dir in tags_root.iterdir():
-            if not tag_dir.is_dir():
-                continue
-            task = self.load(spec, tag_dir.name)
+        for tag_dir, task in self._tag_dirs(spec):
             workers = task.workers if task else []
             out.append(
                 {
@@ -354,4 +354,4 @@ class TaskStore:
                     "last_active": _last_active(tag_dir),
                 }
             )
-        return sorted(out, key=lambda r: r["tag"])
+        return out
