@@ -1815,13 +1815,9 @@ class WorkerManager:
     # ---- reconciliation ----------------------------------------------------
 
     def all_tasks(self):
-        for spec in workloads.WORKLOADS.values():
-            for row in self.tasks.list_tags(spec):
-                if not row["has_task"]:
-                    continue
-                task = self.tasks.load(spec, row["tag"])
-                self._forget_stale_counts(spec, task)
-                yield spec, task
+        for spec, task in self.tasks.load_all():
+            self._forget_stale_counts(spec, task)
+            yield spec, task
 
     def _forget_stale_counts(self, spec, task: tasks.TaskRecord):
         """The first time this process sees a task, forget its slots' recorded

@@ -34,6 +34,7 @@ from bokeh.embed import json_item
 from scribblez import lane_analysis, workloads
 from scribblez import params as params_mod
 from scribblez.dashboard import db, figure_delta, master_api, plots, tasks, trajectories_api
+from scribblez.dashboard.control_db import ShadowControl
 from scribblez.dashboard.tag_queue import TagQueue
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
@@ -856,7 +857,9 @@ class PositionEvalAltLeaveHandler(_Base):
         )
 
 
-def make_app(mount_root: str, worker_manager=None, tag_queue=None) -> tornado.web.Application:
+def make_app(
+    mount_root: str, worker_manager=None, tag_queue=None, control_shadow=None
+) -> tornado.web.Application:
     """The API app: the training data plane plus the master control plane,
     whose handlers need `worker_manager`."""
     return tornado.web.Application(
@@ -880,6 +883,7 @@ def make_app(mount_root: str, worker_manager=None, tag_queue=None) -> tornado.we
         mount_root=mount_root,
         worker_manager=worker_manager,
         tag_queue=tag_queue,
+        control_shadow=control_shadow,
     )
 
 
@@ -931,7 +935,8 @@ def run(port: int, mount_root: str):
     _acquire_control_lock(mount_root)
     manager = WorkerManager(Path(mount_root))
     tag_queue = TagQueue(manager)
-    make_app(mount_root, manager, tag_queue).listen(port, address="127.0.0.1")
+    shadow = ShadowControl(manager)
+    make_app(mount_root, manager, tag_queue, shadow).listen(port, address="127.0.0.1")
     loop = tornado.ioloop.IOLoop.current()
 
     async def reconcile():
@@ -944,6 +949,12 @@ def run(port: int, mount_root: str):
             await manager.reconcile()
         except Exception as e:  # noqa: BLE001 -- reconciliation must keep ticking
             print(f"reconcile: {e}")
+        # The control database in shadow mode (control_db.py): last, so it
+        # reads what this pass left in the JSON stores.
+        try:
+            await manager.offload(shadow.sync)
+        except Exception as e:  # noqa: BLE001 -- the shadow must never stop the dashboard
+            print(f"control db (shadow): {e}")
 
     def stop(signum, frame):
         loop.add_callback_from_signal(loop.stop)

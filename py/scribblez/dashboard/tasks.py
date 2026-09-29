@@ -27,7 +27,7 @@ from pathlib import Path
 from scribblez import params as params_mod
 from scribblez.dashboard.worker_stats_figures import read_stats
 from scribblez.paths import TagPaths
-from scribblez.workloads import WorkloadSpec, resolve
+from scribblez.workloads import WORKLOADS, WorkloadSpec, resolve
 
 
 @dataclass
@@ -316,6 +316,17 @@ class TaskStore:
         params = params_mod.validate(spec.params_cls, task.params)
         paths = self.paths(spec, task.tag)
         return [list(pair) for pair in resolve(spec.progress)(spec, paths, params)]
+
+    def load_all(self):
+        """(spec, task) for every task of every workload, read and nothing else."""
+        for spec in WORKLOADS.values():
+            tags_root = spec.tags_root(self.mount_root)
+            if not tags_root.is_dir():
+                continue
+            for tag_dir in sorted(tags_root.iterdir()):
+                task = self.load(spec, tag_dir.name) if tag_dir.is_dir() else None
+                if task is not None:
+                    yield spec, task
 
     def list_tags(self, spec: WorkloadSpec) -> list[dict]:
         """Every tag under the workload's tags root, with listing metadata."""
