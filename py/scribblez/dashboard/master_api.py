@@ -446,6 +446,14 @@ class QueueHandler(_MasterBase):
         await self.guarded_offload(self.tag_queue.status)
 
 
+class ControlShadowHandler(_MasterBase):
+    """The control database's shadow projection and findings
+    (control_db.ShadowControl), as of the last reconcile pass."""
+
+    def get(self):
+        self.write(self.settings["control_shadow"].status())
+
+
 class StopCloudHandler(_MasterBase):
     """Stop all cloud spending (TagQueue.stop_cloud): GET says what it would
     do, for the confirmation; POST does it."""
@@ -612,6 +620,7 @@ MASTER_ROUTES = [
     (r"/api/cloud/rental_offer", RentalOfferHandler),
     (r"/api/cloud/fleet", FleetHandler),
     (r"/api/cloud/stop_all", StopCloudHandler),
+    (r"/api/control/shadow", ControlShadowHandler),
     (r"/api/cloud/orphans", OrphansHandler),
     (r"/api/cloud/orphan_action", OrphanActionHandler),
     (r"/api/task/stats", TaskStatsHandler),
