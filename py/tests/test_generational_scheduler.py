@@ -38,6 +38,7 @@ class Hooks(SchedulerHooks):
         self.mirrored: list[tuple[str, str]] = []
         self.published: list[str] = []
         self.publish_fails = False
+        self.uploading = False  # the upload is still running
         super().__init__(
             gate=lambda role, reason: self.gates.__setitem__(role, reason),
             finish=lambda role: None,
@@ -45,10 +46,13 @@ class Hooks(SchedulerHooks):
             publish=self._publish if publish else None,
         )
 
-    def _publish(self, dest_rel: str):
+    def _publish(self, dest_rel: str) -> bool:
         if self.publish_fails:
             raise RuntimeError("bucket unreachable")
+        if self.uploading:
+            return False
         self.published.append(dest_rel)
+        return True
 
 
 def _tick(paths, hooks, *, games=100, ahead=1):
@@ -164,6 +168,20 @@ def test_a_failed_publish_is_retried_next_tick(paths):
     _tick(paths, hooks)
     assert lifecycle.is_published(gen0)
     assert hooks.published == ["generations/gen_000000"]
+
+
+def test_a_generation_still_uploading_is_marked_once_it_is_there(paths):
+    """The dashboard uploads in the background; a generation is recorded as
+    published only once the hook says it is in the bucket."""
+    hooks = Hooks(publish=True)
+    hooks.uploading = True
+    _stage(paths, "a", 100)
+    _tick(paths, hooks)
+    gen0 = paths.generation_dir(0)
+    assert lifecycle.is_complete(gen0) and not lifecycle.is_published(gen0)
+    hooks.uploading = False
+    _tick(paths, hooks)
+    assert lifecycle.is_published(gen0)
 
 
 def test_without_a_publish_hook_nothing_is_marked(paths):

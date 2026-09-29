@@ -272,17 +272,19 @@ class SchedulerHooks:
         Repeat a local staging ingest (a chunk moved into a generation) in the
         results bucket. The bucket keeps mirroring the local corpus, so the
         sync watcher never downloads an ingested chunk a second time.
-    publish(dest_rel), optional
-        Upload a complete generation to the bucket, chunks first and manifest
-        last, for a trainer that runs elsewhere and reads it from there. The
-        scheduler calls it once per generation and records success in the
-        manifest, so a failed call is retried on the next tick.
+    publish(dest_rel) -> bool, optional
+        See that a complete generation is uploaded to the bucket, chunks first
+        and manifest last, for a trainer that runs elsewhere and reads it from
+        there, and say whether it is there yet. The upload may run in the
+        background: the scheduler asks again each tick and records the
+        generation as published in its manifest only once the answer is True.
+        A failed upload raises, and the next tick's call starts it again.
     """
 
     gate: object  # callable(role: str, reason: str | None)
     finish: object  # callable(role: str)
     mirror: object = None  # callable(chunk_name: str, dest_rel: str) | None
-    publish: object = None  # callable(dest_rel: str) | None
+    publish: object = None  # callable(dest_rel: str) -> bool | None
 
 
 @dataclass
