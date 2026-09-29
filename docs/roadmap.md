@@ -29,11 +29,12 @@ milestone has a kill criterion.
 | The standard-Scrabble prior (in parallel) | Not started (compute: new tags) |
 | M0: the probe record | Not started |
 | M1a: learned reader over fixed probes, face-up leaves (the kill gate) | Not started |
-| M1b: the same in standard Scrabble, with the inference arms | Not started |
-| M2: the known positions | Not started |
-| M3: learned move choices | Not started |
-| M4: learned draws (rack inference) | Not started |
+| M2: the known positions (face-up) | Not started |
+| M3a: learned move choices, face-up leaves | Not started |
 | M5: self-labeling | Not started |
+| M1b: the reader in standard Scrabble, with the inference arms | Not started |
+| M3b: information sets (belief-drawn labels, counterfactual probes) | Not started |
+| M4: learned draws (rack inference) | Not started |
 | [The evidence-loop agent](#on-hiatus-the-evidence-loop-agent), items [1](#1-per-move-placement-planes)–[5](#5-the-move-proposal-model) and [8](#8-cloud-generation) | Done; kept, partly reused |
 | [Item 6, the sequential agent (UltimateBot)](#6-the-sequential-agent) | Built; on hiatus before training |
 | [Item 7, self-model plies and the endgame solver](#7-self-model-plies-and-the-endgame-solver-d2-d3) | D2 not started, D3 partly built; on hiatus |
@@ -53,12 +54,15 @@ history implies, and the learned draws learn where to sample
 A variant that removes the problem would hide one of the design's main
 arguments, so the destination is standard Scrabble.
 
-Face-up leaves stays in one role: the test bed for SupremeBot's kill gate.
-M1a asks whether the reader learns transfer at all, which needs no hidden
-racks, and running it on the existing face-up prior keeps the
+Face-up leaves stays in one role: the test bed for SupremeBot's core. M1a
+asks whether the reader learns transfer at all and M3a whether learned
+steering pays, and neither needs hidden racks. Under face-up leaves,
+deferring each draw until its player next decides removes strategy fusion by
+construction, so the core runs without the information-set machinery hidden
+leaves require. Running it on the existing face-up prior also keeps the
 standard-Scrabble retrain off its critical path. The retrain runs in
-parallel, and M1b repeats the measurement in standard Scrabble with the
-inference arms. `face_up_leaves` stays a workload and agent parameter, and
+parallel, and the standard track then repeats the reader in standard
+Scrabble and adds that machinery. `face_up_leaves` stays a workload and agent parameter, and
 face-up tags, checkpoints and results remain valid for that variant.
 
 ## The destination: SupremeBot
@@ -72,29 +76,42 @@ finding on one branch reaches decisions on unrelated branches. No statistics
 are kept per node. [plans/supreme_bot.md](plans/supreme_bot.md) is the design:
 tokens, training, cost, risks and open questions.
 
-The build order, with the plan's milestones:
+The build order runs in two tracks. The face-up track tests the core bet,
+transfer and learned steering, where deferring each draw until its player next
+decides makes information sets free
+([deferred draws](plans/supreme_bot.md#face-up-leaves-deferred-draws)). The
+standard track then adds hidden leaves and the machinery they need.
 
-1. **Before M0: three estimates.** The label noise floor and labeling cost,
-   which set the training budgets and the corpus size; the masked training
-   graph, prototyped on one synthetic row; and a throughput microbenchmark,
-   which decides whether learned move choices are affordable.
-2. **In parallel: the standard-Scrabble prior.** The teacher, student and move
-   proposal model retrained with `face_up_leaves` off. SupremeBot uses them as
-   its prior (the root shortlist, the move-query shortlists, the empty-context
-   floor) and the teacher as its leaf model. This is new tags, not new code.
-3. **M0: the probe record.** Per-step logging with tick ids and model
-   versions, the token encoder, and the opponent-history tokens.
-4. **M1a: a learned reader over fixed probes, face-up leaves.** Against
-   shrinkage toward the prior and plain averaging on identical records, with
-   synthetic single-fact transfer tests. The kill gate.
-5. **M1b: the same in standard Scrabble,** with true-rack labels, the
+The face-up track:
+
+1. **Before M0: the estimates.** The label noise floor and labeling cost, the
+   masked training graph prototyped at the grown context, a throughput and
+   GPU-memory microbenchmark, the move-list counts, and the cost of
+   reply-searched labels.
+2. **M0: the probe record.** Per-step logging with tick ids, model and
+   lexicon versions, deferred draws, and the token encoder.
+3. **M1a: a learned reader over fixed probes.** Against shrinkage toward the
+   prior and plain averaging on identical records, with synthetic single-fact
+   transfer tests. The kill gate.
+4. **M2: the known positions** that exist under face-up leaves.
+5. **M3a: learned move choices:** the KV-cached serving runtime,
+   reply-searched labels, then the writer by the telescoping reward.
+6. **M5: self-labeling,** where SupremeBot can outgrow its first labels.
+
+The standard track:
+
+1. **From now, in parallel: the standard-Scrabble prior.** The teacher,
+   student and move proposal model retrained with `face_up_leaves` off.
+   SupremeBot uses them as its prior (the root shortlist, the move-list
+   scorer, the empty-context floor) and the teacher as its leaf model. This
+   is new tags, not new code.
+2. **M1b: the reader in standard Scrabble,** with true-rack labels, the
    history-ablated reader and the ported-inference arm. Then match play
    against BestBot.
-6. **M2: the known positions,** Richards–Johnson and the ACETA family.
-7. **M3: learned move choices:** the KV-cached serving runtime,
-   reply-searched labels, then the writer by the telescoping reward.
-8. **M4: learned draws,** which is SupremeBot's rack inference.
-9. **M5: self-labeling,** where SupremeBot can outgrow its first labels.
+3. **M3b: information sets:** reply-searched labels whose modeled opponent
+   cannot see our leave, then counterfactual probes, checked on a
+   fishing-decoy position and Richards–Johnson.
+4. **M4: learned draws,** which is SupremeBot's rack inference.
 
 ## What is already built
 
