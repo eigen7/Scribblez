@@ -289,12 +289,12 @@ def _position_eval_board_for(gcg_key: tuple[str, int]) -> tuple:
     return gcg.stem, position_eval_board_json(gcg.read_text())
 
 
-def _position_eval_face_up_leaves(task: str, tag: str) -> bool:
+def _position_eval_face_up_leaves(task: str, tag: str, mount_root) -> bool:
     """The information condition a position_eval tag trains under (its frozen
     `face_up_leaves` param). It decides which Monte-Carlo truth the tag is
     measured against and how much of the opponent's rack the Positions tab
     shows. KeyError for a tag with no task.json."""
-    record = tasks.load_task(workloads.get(task), tag)
+    record = tasks.TaskStore(Path(mount_root)).load(workloads.get(task), tag)
     if record is None:
         raise KeyError(f"tag {tag!r} has no task.json")
     return params_mod.validate(PositionEvalParams, record.params).face_up_leaves
@@ -373,7 +373,7 @@ def position_eval_position_payload(position: int, generation, tag, task, mount_r
     leave's tiles are sent only under face-up leaves; under hidden leaves the
     client gets just its size, so it never receives tiles the condition says it
     cannot see."""
-    face_up_leaves = _position_eval_face_up_leaves(task, tag)
+    face_up_leaves = _position_eval_face_up_leaves(task, tag, mount_root)
     name, bundle = _position_eval_board(position)
     pred = _position_eval_prediction(tag, task, mount_root, generation, position)
     return {
@@ -929,7 +929,7 @@ def run(port: int, mount_root: str):
     containers keep running.
     """
     _acquire_control_lock(mount_root)
-    manager = WorkerManager()
+    manager = WorkerManager(Path(mount_root))
     tag_queue = TagQueue(manager)
     make_app(mount_root, manager, tag_queue).listen(port, address="127.0.0.1")
     loop = tornado.ioloop.IOLoop.current()

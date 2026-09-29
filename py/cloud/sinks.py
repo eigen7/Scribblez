@@ -262,7 +262,7 @@ def r2_from_env() -> R2Credentials:
     )
 
 
-def make_sink(spec, tag: str, mount_root=None):
+def make_sink(spec, tag: str, mount_root: Path):
     """The sink SCZ_SINK selects: "r2" (the default) or "local". The tag root
     is under `mount_root`, the mount dir by default."""
     if os.environ.get("SCZ_SINK", "r2") == "local":

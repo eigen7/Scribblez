@@ -24,6 +24,7 @@ from pathlib import Path
 from threading import Thread
 
 from scribblez.dashboard.react_server import WEB_DIR, reclaim_port
+from scribblez.paths import add_mount_root_argument
 from scribblez.service_urls import service_url
 from scribblez.sim_candidate_survey import MIN_SIGMA
 from scribblez.sim_survey_viewer import viewer_data
@@ -51,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--api-port", type=int, default=DEFAULT_API_PORT, help="survey API server port")
     p.add_argument("--dev-port", type=int, default=DEFAULT_DEV_PORT, help="Vite dev server port")
+    add_mount_root_argument(p)
     return p.parse_args()
 
 
@@ -77,7 +79,7 @@ def survey_handler(payload: bytes) -> type[BaseHTTPRequestHandler]:
 def main() -> int:
     args = parse_args()
     if args.tag:
-        args.survey_dir, args.gcg_dir = blind_spots.survey_dirs(args.tag)
+        args.survey_dir, args.gcg_dir = blind_spots.survey_dirs(args.tag, args.mount_root)
     elif not args.survey_dir:
         raise SystemExit("pass --survey-dir or --tag")
     data = viewer_data(args.survey_dir, args.min_sigmas, args.gcg_dir)

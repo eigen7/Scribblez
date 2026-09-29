@@ -27,11 +27,11 @@ from cloud.credentials import load_credentials
 from cloud.r2 import bucket_path, rclone
 from scribblez import workloads
 from scribblez.paths import (
-    DEFAULT_MOUNT_ROOT,
     TRAINER_OUTPUT_DIRS,
     TRAINER_OUTPUT_FILES,
     TRAINER_OUTPUT_IMMUTABLE,
     TagPaths,
+    add_mount_root_argument,
 )
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -104,9 +104,7 @@ def main() -> int:
         default="kill_test",
         help="tag's workload",
     )
-    p.add_argument(
-        "--mount-root", default=str(DEFAULT_MOUNT_ROOT), help="root the tag dir lives under"
-    )
+    add_mount_root_argument(p)
     p.add_argument("--watch", action="store_true", help="keep syncing until Ctrl-C")
     p.add_argument("--interval", type=int, default=60, help="seconds between --watch syncs")
     p.add_argument(

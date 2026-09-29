@@ -51,64 +51,16 @@ from tornado.ioloop import IOLoop
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard import pool as pool_mod
+from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tasks
 from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
 from scribblez.generational.lifecycle import MANIFEST_NAME
 from scribblez.hardware import default_thread_count
-from scribblez.paths import CONTROLS_REL, DEFAULT_MOUNT_ROOT, REPO_ROOT
+from scribblez.paths import CONTROLS_REL, REPO_ROOT
 from scribblez.workloads.base import SchedulerHooks
 
 CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
 SYNC_INTERVAL_SECONDS = 30
-
-
-def _note_trainer_sink(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-    """Record where new slot `w` delivers, if it is a trainer (a role with an
-    ingest tick): where the task's training state will live from now on."""
-    if spec.role(w.role).ingest:
-        task.trainer_sink = _slot_sink(spec, task, w)
-
-
-def _slot_sink(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
-    """Where slot `w`'s worker delivers (SCZ_SINK, cloud/sinks.py).
-
-    "local": a local subprocess, or an ssh container whose output the reconcile
-    pass pulls over ssh (cloud/ssh_transfer.py): any container on the
-    operator's own machines, and a dispatch-driven role's container anywhere.
-    Dispatch reads results only from the slot's filesystem, and they are a few
-    small files, so a rented match-eval worker is collected the same way.
-
-    "r2", the results bucket: any other ssh container on a rented machine,
-    whose datacenter link to the bucket beats hauling every chunk to the
-    controller and publishing it back up from a home uplink; and an ssh trainer
-    (a role with an ingest tick) anywhere, whose generations arrive and whose
-    exports, checkpoints and records leave through the bucket
-    (docs/plans/cloud_machines.md).
-
-    Everything the controller does for bucket-delivering slots (the sync
-    watcher, the scheduler's publish and mirror hooks, the controls push) keys
-    off this, not off the slot kind."""
-    if w.kind == "local":
-        return "local"
-    role = spec.role(w.role)
-    if w.kind == "ssh" and not role.ingest and (role.dispatch or not _rented(task, w)):
-        return "local"
-    return "r2"
-
-
-def _rented(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
-    return w.machine is not None and _machine_record(task, w.machine).instance_id is not None
-
-
-def _has_bucket_slots(spec: workloads.WorkloadSpec, task) -> bool:
-    return any(_slot_sink(spec, task, w) == "r2" for w in task.workers)
-
-
-def _bucket_trainer(spec: workloads.WorkloadSpec, task) -> bool:
-    """Whether the task has a trainer (a role the controller ingests) running
-    through the bucket, which needs its outputs synced down and the controls
-    file pushed up."""
-    return any(_slot_sink(spec, task, w) == "r2" and spec.role(w.role).ingest for w in task.workers)
 
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
@@ -160,10 +112,10 @@ BOOT_GRACE_SECONDS = 300.0
 RUN, PARK, STOP = "run", "park", "stop"
 
 
-def _role_inputs(spec, role, params) -> dict[str, Path]:
+def _role_inputs(spec, role, params, mount_root: Path) -> dict[str, Path]:
     """The files a slot of `role` reads from outside its tag (RoleSpec.inputs),
     resolved against the controller's mount; empty for a role with none."""
-    return workloads.resolve(role.inputs)(params) if role.inputs else {}
+    return workloads.resolve(role.inputs)(params, mount_root) if role.inputs else {}
 
 
 def _require_inputs(inputs: dict[str, Path]):
@@ -171,61 +123,6 @@ def _require_inputs(inputs: dict[str, Path]):
     for rel, src in inputs.items():
         if not src.is_file():
             raise SshMachineError(f"input {rel} is missing: {src} is not a readable file")
-
-
-def _stage_inputs_in_container(machine, container: str, spec, tag: str, inputs: dict[str, Path]):
-    """Push a role's inputs into a freshly created container on the operator's
-    own machine, under the tag root there. Its runner waits for them."""
-    root = str(spec.paths(tag).root)
-    for rel, src in inputs.items():
-        push_file(machine, container, remote_root=root, rel_dest=rel, src=src)
-
-
-def _transfer_target(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dict:
-    """Where slot `w`'s output lives on both machines, as the collection calls
-    (a batched pull, a sweep of a stopped container) take it. The two roots
-    read alike, since the container uses the controller's layout, but they are
-    paths on different machines."""
-    paths = spec.paths(task.tag)
-    return {
-        "container": _container_name(spec, task.tag, w.worker_id),
-        "remote_root": str(paths.root),
-        "local_root": paths.root,
-        "data_dirs": [f"data/{sub}" for sub in spec.collected_dirs],
-    }
-
-
-def _machine_record(task: tasks.TaskRecord, name: str) -> tasks.MachineRecord:
-    """The machine `name` a slot of `task` runs on: one of the task's own, or
-    a pool machine the task leases (dashboard/pool.py). Pool machines are
-    resolved here rather than copied into the task, so the pool stays their
-    one owner."""
-    own = task.find_machine(name)
-    if own is not None:
-        return own
-    record = pool_mod.leased_record(pool_mod.load_pool(), task.workload, task.tag, name)
-    if record is None:
-        raise KeyError(f"no machine '{name}'")
-    return record
-
-
-def _leased_records(task: tasks.TaskRecord) -> list[tasks.MachineRecord]:
-    """The records of the ssh pool machines `task` leases."""
-    return [
-        m.machine
-        for m in pool_mod.load_pool().machines
-        if m.machine is not None
-        and m.lease is not None
-        and m.lease.held_by(task.workload, task.tag)
-    ]
-
-
-def _ssh_machine(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> SshMachine:
-    """The ssh link to slot `w`'s machine: its machine record's address and
-    key material, or its bare host string."""
-    if w.machine is None:
-        return SshMachine(w.host)
-    return _machine_link(_machine_record(task, w.machine))
 
 
 def _machine_link(m: tasks.MachineRecord) -> SshMachine:
@@ -347,27 +244,6 @@ def _gpu_need(spec, task: tasks.TaskRecord, role: str) -> float | None:
     return workloads.resolve(spec.gpu_need)(params, role)
 
 
-def cloud_sync_argv(spec, task: tasks.TaskRecord, *extra: str) -> list[str]:
-    """The cloud_sync command pulling what `task`'s bucket slots deliver. It
-    names the tag's mount root, so the pull lands wherever this process
-    resolves the tag dir (a test's redirected root included)."""
-    return [
-        sys.executable, str(CLOUD_SYNC),
-        "--workload", spec.name, "-t", task.tag,
-        "--mount-root", str(spec.paths(task.tag).mount_root),
-        *(["--trainer-outputs"] if _bucket_trainer(spec, task) else []),
-        *extra,
-    ]  # fmt: skip
-
-
-def _slot_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
-    return _ssh_host(task, w) if w.kind == "ssh" else None
-
-
-def _ssh_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
-    return w.host if w.machine is None else _machine_record(task, w.machine).host
-
-
 def _forget_empty(w: tasks.WorkerRecord):
     """Downgrade an `undelivered` count of zero to unknown, keeping any other.
 
@@ -378,13 +254,6 @@ def _forget_empty(w: tasks.WorkerRecord):
     """
     if w.undelivered == 0:
         w.undelivered = None
-
-
-def _holds_nothing(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-    """Set a bucket-delivering ssh slot's `undelivered` to zero: its container
-    holds nothing for the controller to collect."""
-    if w.kind == "ssh" and _slot_sink(spec, task, w) == "r2":
-        w.undelivered = 0
 
 
 def _note_finished(w: tasks.WorkerRecord) -> bool:
@@ -429,7 +298,7 @@ def _intent(w: tasks.WorkerRecord, task: tasks.TaskRecord) -> str:
     return PARK if w.role in task.gates else RUN
 
 
-def check_worker_images_current():
+def check_worker_images_current(mount_root: Path):
     """Refuse to deploy a bundle a published worker image cannot load.
 
     Bundles are compiled in the dev container but run against the worker
@@ -442,7 +311,7 @@ def check_worker_images_current():
     no image push has recorded its library versions, since then nothing is
     known.
     """
-    records = runtime_abi.read_records(DEFAULT_MOUNT_ROOT)
+    records = runtime_abi.read_records(mount_root)
     if records is None:
         return
     local = runtime_abi.local_versions()
@@ -566,7 +435,14 @@ _ACCRUE_LOCK = threading.Lock()
 
 
 class WorkerManager:
-    def __init__(self):
+    def __init__(self, mount_root: Path):
+        """Everything this manager reads and writes lives under `mount_root`:
+        the tag trees, pool.json and queue.json. The dashboard passes its
+        --mount-root; a test or simulation passes a scratch dir."""
+        self.mount_root = Path(mount_root)
+        self.tasks = tasks.TaskStore(self.mount_root)
+        self.pool_store = pool_mod.pool_store(self.mount_root)
+        self.queue_store = queue_mod.queue_store(self.mount_root)
         self._local: dict[str, subprocess.Popen] = {}  # slot key -> live process
         # task key -> (sync watcher, the argv it runs): a watcher is replaced
         # when what it should pull changes.
@@ -660,7 +536,7 @@ class WorkerManager:
         return await self.offload(self._pin_bundle, spec, task, manifest)
 
     def _build_bundle(self, archs: list[str]) -> BundleManifest:
-        check_worker_images_current()
+        check_worker_images_current(self.mount_root)
         creds = self._creds()
         return deploy_current_tree(creds.r2, archs, cache=self._source_digests)
 
@@ -668,7 +544,7 @@ class WorkerManager:
         task.bundle_id = manifest.bundle_id
         task.bundle_source_hash = manifest.source_hash
         task.bundle_archs = list(manifest.archs)
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
         return manifest.bundle_id
 
     def _slot_arch(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
@@ -676,16 +552,16 @@ class WorkerManager:
         rented machine's comes from the catalog. A registered machine or bare
         host is asked once over ssh, through the worker image's own start-up
         detection, and the answer is kept on its record."""
-        holder = _machine_record(task, w.machine) if w.machine is not None else w
+        holder = self._machine_record(task, w.machine) if w.machine is not None else w
         if holder.arch:
             return holder.arch
         image = self._creds().registry.image_for(spec.role(w.role).runtime)
-        machine = _ssh_machine(task, w)
+        machine = self._ssh_machine(task, w)
         machine.pull_image(image)
         holder.arch = machine.detect_arch(image)
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
         if w.machine is not None and task.find_machine(w.machine) is None:
-            pool_mod.save_pool(pool_mod.load_pool())  # a leased pool machine's record
+            self.pool_store.save(self.pool_store.load())  # a leased pool machine's record
         return holder.arch
 
     def _needed_archs(self, spec, task: tasks.TaskRecord) -> list[str]:
@@ -774,8 +650,8 @@ class WorkerManager:
         slots, pulling what those slots deliver: a watcher whose argv no
         longer matches (a trainer slot appeared) is replaced."""
         key = _key(spec, task.tag)
-        has_bucket = _has_bucket_slots(spec, task)
-        argv = cloud_sync_argv(spec, task, "--watch", "--interval", str(SYNC_INTERVAL_SECONDS))
+        has_bucket = self._has_bucket_slots(spec, task)
+        argv = self.cloud_sync_argv(spec, task, "--watch", "--interval", str(SYNC_INTERVAL_SECONDS))
         entry = self._sync.get(key)
         if entry is not None and (
             not has_bucket or entry[0].poll() is not None or entry[1] != argv
@@ -792,15 +668,15 @@ class WorkerManager:
     def sync_once(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
         """Pull what `task`'s bucket slots delivered, once, raising on failure
         (the tag queue's drain, before a lease's slots are removed)."""
-        subprocess.run(cloud_sync_argv(spec, task), check=True, capture_output=True, text=True)
+        subprocess.run(self.cloud_sync_argv(spec, task), check=True, capture_output=True, text=True)
 
     def _push_controls(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
         """Copy the operator's controls file to the bucket when it has changed,
         for a trainer that runs through the bucket and reads it there
         (generational/records.py)."""
-        if not _bucket_trainer(spec, task):
+        if not self._bucket_trainer(spec, task):
             return
-        path = spec.paths(task.tag).controls_path
+        path = self.tasks.paths(spec, task.tag).controls_path
         try:
             stamp = path.stat().st_mtime_ns
         except FileNotFoundError:
@@ -827,7 +703,7 @@ class WorkerManager:
     # ---- local plumbing --------------------------------------------------
 
     def _log_file(self, spec: workloads.WorkloadSpec, tag: str, name: str):
-        log_dir = spec.paths(tag).logs_dir
+        log_dir = self.tasks.paths(spec, tag).logs_dir
         log_dir.mkdir(parents=True, exist_ok=True)
         return open(log_dir / f"{name}.log", "ab")
 
@@ -835,6 +711,7 @@ class WorkerManager:
         params = params_mod.validate(spec.params_cls, task.params)
         env = os.environ | spec.worker_env(task.tag, params, w.role) | {
             "SCZ_SINK": "local",
+            "SCZ_MOUNT_ROOT": str(self.mount_root),
             "SCZ_THREADS": str(w.threads),
             "SCZ_WORKER_ID": w.worker_id,
             "SCZ_WORKER_KIND": "local",
@@ -849,7 +726,7 @@ class WorkerManager:
         )
         self._local[_key(spec, task.tag, w.worker_id)] = proc
         w.pid = proc.pid  # durable, so any instance can observe and stop this worker
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
 
     def _local_alive(self, spec, task: tasks.TaskRecord, w) -> bool:
         """Whether slot `w`'s worker process is really running. Reaps our own
@@ -887,12 +764,14 @@ class WorkerManager:
         An unlaunched slot is probed too: an in-doubt first start (ssh lost
         after `docker run` was sent) may have left a live container, and
         finding one marks the slot launched."""
-        tag, host = task.tag, _ssh_host(task, w)
+        tag, host = task.tag, self._ssh_host(task, w)
         down_since = self._ssh_down.get(host)
         if down_since is not None and time.time() - down_since < SSH_REPROBE_SECONDS:
             probe = "unreachable"
         else:
-            probe = _ssh_machine(task, w).container_state(_container_name(spec, tag, w.worker_id))
+            probe = self._ssh_machine(task, w).container_state(
+                _container_name(spec, tag, w.worker_id)
+            )
             if probe == "unreachable":
                 self._ssh_down[host] = time.time()
             else:
@@ -902,7 +781,7 @@ class WorkerManager:
         key = _key(spec, tag, w.worker_id)
         self._probes[key] = (probe, time.time())
         if probe == "stopped":
-            self._exits[key] = _ssh_machine(task, w).container_exit(
+            self._exits[key] = self._ssh_machine(task, w).container_exit(
                 _container_name(spec, tag, w.worker_id)
             )
             if self._exits[key].startswith("exit 0:"):
@@ -982,12 +861,12 @@ class WorkerManager:
             creds, spec, task.tag, params,
             role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id,
         )  # fmt: skip
-        env["SCZ_SINK"] = _slot_sink(spec, task, w)
+        env["SCZ_SINK"] = self._slot_sink(spec, task, w)
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
-        machine = _ssh_machine(task, w)
+        machine = self._ssh_machine(task, w)
         role = spec.role(w.role)
-        inputs = _role_inputs(spec, role, params)
+        inputs = _role_inputs(spec, role, params, self.mount_root)
         try:
             # A missing input becomes the slot's exit reason, shown on its row
             # and paced by the restart backoff.
@@ -1001,7 +880,7 @@ class WorkerManager:
             name = _container_name(spec, task.tag, w.worker_id)
             machine.run_container(name, image, env, gpus=role.gpu)
             if env["SCZ_SINK"] != "r2":
-                _stage_inputs_in_container(machine, name, spec, task.tag, inputs)
+                self._stage_inputs_in_container(machine, name, spec, task.tag, inputs)
         except SshMachineError as e:
             # The slot reads `starting` until this succeeds. Recording why shows
             # the operator what the machine lacks (an NVIDIA toolkit, a
@@ -1011,7 +890,7 @@ class WorkerManager:
         self._exits.pop(key, None)
         w.launched = True
         w.undelivered = 0  # a container just created is holding nothing
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
 
     # ---- slot operations -------------------------------------------------
 
@@ -1060,7 +939,10 @@ class WorkerManager:
         needs = [_gpu_need(spec, task, role)]
         for s, t in [(spec, task), *others]:
             for w in t.workers:
-                if not s.role(w.role).gpu or _slot_target(w.kind, None, _slot_host(t, w)) != target:
+                if (
+                    not s.role(w.role).gpu
+                    or _slot_target(w.kind, None, self._slot_host(t, w)) != target
+                ):
                     continue
                 if t is task or self._holds_machine(s, t, w):
                     needs.append(_gpu_need(s, t, w.role))
@@ -1078,7 +960,7 @@ class WorkerManager:
         memory per GPU, or a rented type's catalog figure;
         None when unknown (a bare host or registered machine not in the pool)."""
         target = _slot_target(kind, machine, host)
-        for m in pool_mod.load_pool().machines:
+        for m in self.pool_store.load().machines:
             if _is_pool_machine(m, target):
                 return m.gpu_capacity_gb
         if machine is not None and machine.instance_type:
@@ -1106,8 +988,8 @@ class WorkerManager:
             threads=threads or default_thread_count(),
         )
         task.workers.append(w)
-        _note_trainer_sink(spec, task, w)
-        tasks.save_task(spec, task)
+        self._note_trainer_sink(spec, task, w)
+        self.tasks.save(spec, task)
         return w
 
     def add_ssh(
@@ -1125,7 +1007,7 @@ class WorkerManager:
         machines by name (exactly one of the two). `check_gpu` as for
         add_local."""
         assert (host is None) != (machine is None), "an ssh slot names a host or a machine"
-        record = _machine_record(task, machine) if machine is not None else None
+        record = self._machine_record(task, machine) if machine is not None else None
         self._check_role(spec, task, role, "ssh", machine=record, host=host, check_gpu=check_gpu)
         w = tasks.WorkerRecord(
             worker_id=_next_worker_id(task, "ssh"),
@@ -1138,8 +1020,8 @@ class WorkerManager:
             threads=threads,
         )
         task.workers.append(w)
-        _note_trainer_sink(spec, task, w)
-        tasks.save_task(spec, task)
+        self._note_trainer_sink(spec, task, w)
+        self.tasks.save(spec, task)
         self._ensure_sync(spec, task)
         return w
 
@@ -1167,7 +1049,7 @@ class WorkerManager:
             gpu_count=gpu_count,
         )
         task.machines.append(m)
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
         return m
 
     def rental_offer(self) -> dict:
@@ -1208,7 +1090,7 @@ class WorkerManager:
         known_hosts = MACHINES_DIR / spec.name / task.tag / name / "known_hosts"
         _record_instance(m, provider, inst, mtype, spot=spot, known_hosts=known_hosts)
         task.machines.append(m)
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
         return m
 
     def remove_machine(self, spec, task: tasks.TaskRecord, name: str):
@@ -1228,7 +1110,7 @@ class WorkerManager:
         _accrue_machine(m, False)
         task.retired_spend += m.spend
         task.machines.remove(m)
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
 
     def _machine_gone(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
         return (
@@ -1300,7 +1182,7 @@ class WorkerManager:
             for spec, task in self.all_tasks()
             for m in task.machines
         }
-        for m in pool_mod.load_pool().machines:
+        for m in self.pool_store.load().machines:
             if m.capacity is not None:
                 owned[pool_mod.owner_tag(m.name)] = m.machine
         return owned
@@ -1342,7 +1224,7 @@ class WorkerManager:
         for spec, task, m in self.task_rentals():
             for w in task.slots_on(m.name):
                 w.desired_state = "paused"
-            tasks.save_task(spec, task)
+            self.tasks.save(spec, task)
             self._stop_now.add(_machine_key(spec, task.tag, m.name))
             out.append(f"{spec.name}/{task.tag}/{m.name}")
         return out
@@ -1378,7 +1260,7 @@ class WorkerManager:
         saves, but a poll's accrual is not lost: the record is the pass's own
         shared object, so the next pass saves it."""
         out = []
-        leased = _leased_records(task)
+        leased = self._leased_records(task)
         rented = any(m.instance_id is not None for m in [*task.machines, *leased])
         index = self._instance_index(observe) if rented else {}
         for m in [*task.machines, *leased]:
@@ -1425,7 +1307,7 @@ class WorkerManager:
                 info["retry_in_s"] = max(0, int(next_at - time.time()))
             out.append(info)
         if observe and rented:
-            tasks.save_task(spec, task)
+            self.tasks.save(spec, task)
         return out
 
     def _reconcile_machines(self, spec, task: tasks.TaskRecord, status: list[dict]):
@@ -1461,7 +1343,7 @@ class WorkerManager:
                     self._restarts.pop(key, None)
                     m.launched_at = time.time()
                     self._instances = ({}, 0.0)  # relisted next pass
-                    tasks.save_task(spec, task)
+                    self.tasks.save(spec, task)
                 continue
             if info["state"] != "up":
                 self._idle_since.pop(key, None)
@@ -1503,7 +1385,7 @@ class WorkerManager:
             w.finished = False
             w.failed = None
             self._crashes.pop(_key(spec, task.tag, worker_id), None)
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
         start = run and w.role not in task.gates  # a gated slot starts when released
         if w.kind == "local":
             if start and not self._local_alive(spec, task, w):
@@ -1518,11 +1400,11 @@ class WorkerManager:
             probe = self._probe_container(spec, task, w, observe=True)
             name = _container_name(spec, task.tag, w.worker_id)
             if start and probe == "stopped":
-                _ssh_machine(task, w).start_container(name)
+                self._ssh_machine(task, w).start_container(name)
             elif start and probe == "missing":
                 self._run_ssh_container(spec, task, w)
             elif not run and probe == "running":
-                _ssh_machine(task, w).stop_container(name)
+                self._ssh_machine(task, w).stop_container(name)
 
     def remove_worker(self, spec, task: tasks.TaskRecord, worker_id: str):
         """Remove a slot. Its worker must not be running, so a removal never
@@ -1540,11 +1422,13 @@ class WorkerManager:
             # Removing while unreachable could orphan a live container that
             # keeps generating into the tag with nothing tracking it.
             assert probe != "unreachable", (
-                f"{_ssh_host(task, w)} is unreachable; bring it online (or clean up its "
+                f"{self._ssh_host(task, w)} is unreachable; bring it online (or clean up its "
                 f"container by hand) before removing {worker_id}"
             )
             if probe == "stopped":
-                _ssh_machine(task, w).remove_container(_container_name(spec, task.tag, w.worker_id))
+                self._ssh_machine(task, w).remove_container(
+                    _container_name(spec, task.tag, w.worker_id)
+                )
             # A later slot can reuse this key (_next_worker_id hands out the
             # freed id again, and a deleted tag can be recreated), and must not
             # inherit the old container's exit reason and backoff.
@@ -1552,7 +1436,7 @@ class WorkerManager:
             self._exits.pop(key, None)
             self._restarts.pop(key, None)
         task.workers.remove(w)
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
         self._ensure_sync(spec, task)
 
     def delete_task(self, spec, tag: str):
@@ -1568,13 +1452,13 @@ class WorkerManager:
         case (the fleet was not paused) before anything is removed; only a
         paused slot whose process is still alive is discovered midway.
         """
-        task = tasks.load_task(spec, tag)
+        task = self.tasks.load(spec, tag)
         if task is not None:
             running = [w.worker_id for w in task.workers if w.desired_state == "running"]
             assert not running, f"pause {', '.join(running)} first"
             for w in list(task.workers):
                 self.remove_worker(spec, task, w.worker_id)
-        tasks.delete_tag(spec, tag)
+        self.tasks.delete(spec, tag)
 
     # ---- the machine pool (dashboard/pool.py) -----------------------------
 
@@ -1591,7 +1475,7 @@ class WorkerManager:
         machine, whose hardware is probed now so eligibility never has to
         guess. A registered machine must already be prepared as for any ssh
         slot (docs/master_dashboard.md)."""
-        pool = pool_mod.load_pool()
+        pool = self.pool_store.load()
         assert name, "a pool machine needs a name"
         assert pool.find(name) is None, f"pool machine '{name}' exists"
         if host is None:
@@ -1607,7 +1491,7 @@ class WorkerManager:
         m.aliases = list(aliases or [])
         m.generator_threads = generator_threads
         pool.machines.append(m)
-        pool_mod.save_pool(pool)
+        self.pool_store.save(pool)
         return m
 
     def edit_pool_machine(self, name: str, **changes):
@@ -1615,29 +1499,29 @@ class WorkerManager:
         threads)."""
         editable = {"aliases", "generator_threads"}
         assert set(changes) <= editable, f"not editable: {sorted(set(changes) - editable)}"
-        pool = pool_mod.load_pool()
+        pool = self.pool_store.load()
         m = pool.machine(name)
         for key, value in changes.items():
             setattr(m, key, value)
-        pool_mod.save_pool(pool)
+        self.pool_store.save(pool)
 
     def reprobe_pool_machine(self, name: str):
         """Re-read a pool machine's hardware (after a GPU swap, say)."""
-        pool = pool_mod.load_pool()
+        pool = self.pool_store.load()
         m = pool.machine(name)
         if m.machine is None:
             m.hardware = pool_mod.local_hardware()
         else:
             m.hardware = pool_mod.parse_hardware(_machine_link(m.machine).hardware_report())
             m.machine.gpu_count = m.hardware.gpu_count
-        pool_mod.save_pool(pool)
+        self.pool_store.save(pool)
 
     def remove_pool_machine(self, name: str):
         """Take a machine out of the pool, terminating it if the pool rented
         it. Refused while a tag leases it or any slot names it: those slots
         would lose their machine, and every lookup of it (the pool page, the
         reconcile pass) would fail."""
-        pool = pool_mod.load_pool()
+        pool = self.pool_store.load()
         m = pool.machine(name)
         assert m.lease is None, f"{name} is leased by {m.lease.workload}/{m.lease.tag}"
         naming = [
@@ -1651,7 +1535,7 @@ class WorkerManager:
             self._terminate(m.machine.instance_id, m.machine.instance_type)
             _accrue_machine(m.machine, False)
         pool.machines.remove(m)
-        pool_mod.save_pool(pool)
+        self.pool_store.save(pool)
 
     def add_capacity(self, name: str, instance_type: str, *, spot: bool, cap: int):
         """Let the pool rent up to `cap` instances of `instance_type`
@@ -1664,34 +1548,34 @@ class WorkerManager:
         assert any(t.id == instance_type for t in self._provider().catalog()), (
             f"no machine type '{instance_type}'"
         )
-        pool = pool_mod.load_pool()
+        pool = self.pool_store.load()
         assert all(c.name != name for c in pool.capacity), f"capacity '{name}' exists"
         assert pool.find(name) is None, f"'{name}' names a pool machine"
         pool.capacity.append(pool_mod.Capacity(name, instance_type, spot, cap))
-        pool_mod.save_pool(pool)
+        self.pool_store.save(pool)
 
     def set_capacity_cap(self, name: str, cap: int):
         """Change a capacity entry's cap. Lowering it rents no more; machines
         already rented finish their tags and are terminated once idle."""
         assert cap >= 0, "the cap is at least 0"
-        pool = pool_mod.load_pool()
+        pool = self.pool_store.load()
         entry = next((c for c in pool.capacity if c.name == name), None)
         assert entry is not None, f"no capacity '{name}'"
         entry.cap = cap
-        pool_mod.save_pool(pool)
+        self.pool_store.save(pool)
 
     def remove_capacity(self, name: str):
         """Stop renting under a capacity entry. Its rented machines stay until
         their tags finish and they idle out."""
-        pool = pool_mod.load_pool()
+        pool = self.pool_store.load()
         pool.capacity = [c for c in pool.capacity if c.name != name]
-        pool_mod.save_pool(pool)
+        self.pool_store.save(pool)
 
     def lease_spend(self, task: tasks.TaskRecord) -> float:
         """What the task's current leases of pool rentals have cost so far."""
         return sum(
             pool_mod.lease_spend(m)
-            for m in pool_mod.load_pool().machines
+            for m in self.pool_store.load().machines
             if m.lease is not None and (m.lease.workload, m.lease.tag) == (task.workload, task.tag)
         )
 
@@ -1701,7 +1585,7 @@ class WorkerManager:
         remembered observations, like every status request."""
         tasks_now = list(self.all_tasks())
         out = []
-        for m in pool_mod.load_pool().machines:
+        for m in self.pool_store.load().machines:
             occupants = self.occupants(m, tasks_now)
             info = asdict(m)
             info["occupants"] = occupants
@@ -1719,7 +1603,7 @@ class WorkerManager:
             if m.lease and m.lease.held_by(spec.name, task.tag):
                 continue
             for w in task.workers:
-                if not _is_pool_machine(m, _slot_target(w.kind, None, _slot_host(task, w))):
+                if not _is_pool_machine(m, _slot_target(w.kind, None, self._slot_host(task, w))):
                     continue
                 if self._holds_machine(spec, task, w):
                     out.append(f"{spec.name}/{task.tag}/{w.worker_id}")
@@ -1771,7 +1655,7 @@ class WorkerManager:
                 "kind": w.kind,
                 "desired_state": w.desired_state,
                 "threads": w.threads,
-                "host": _ssh_host(task, w) if w.kind == "ssh" else None,
+                "host": self._ssh_host(task, w) if w.kind == "ssh" else None,
                 "machine": w.machine,
                 "bundle_id": w.bundle_id,
                 "launched": w.launched,
@@ -1790,14 +1674,14 @@ class WorkerManager:
                     w.desired_state, alive, gated, w.finished, w.failed is not None
                 )
             else:
-                _holds_nothing(spec, task, w)
+                self._holds_nothing(spec, task, w)
                 probe = self._probe_container(spec, task, w, observe=observe)
                 alive = probe == "running"
                 info["state"] = _ssh_state(
                     w.desired_state, probe, gated, w.finished, w.failed is not None
                 )
                 info["ssh_probe"] = probe  # reconcile keys its enforcement off this
-                info["ssh"] = f"ssh {_ssh_host(task, w)}"
+                info["ssh"] = f"ssh {self._ssh_host(task, w)}"
                 reason = self._slot_reason(spec, task, w)
                 if reason and not alive:
                     info["exit_reason"] = reason
@@ -1807,7 +1691,7 @@ class WorkerManager:
             info["observed_running"] = alive
             out.append(info)
         if observe and task.workers:
-            tasks.save_task(spec, task)
+            self.tasks.save(spec, task)
         return out
 
     def _slot_reason(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
@@ -1834,13 +1718,14 @@ class WorkerManager:
             if reason is not None:
                 task.gates[role] = reason
             if changed:
-                tasks.save_task(spec, task)
+                self.tasks.save(spec, task)
 
         def finish(role: str):
             if _finish_role(task, role):
-                tasks.save_task(spec, task)
+                self.tasks.save(spec, task)
 
         return SchedulerHooks(
+            paths=self.tasks.paths(spec, task.tag),
             gate=gate,
             finish=finish,
             mirror=self._make_mirror(spec, task),
@@ -1858,14 +1743,14 @@ class WorkerManager:
         again. Chunks that came through the bucket are already there after
         the mirror move and are skipped by size; the rest upload. The manifest
         goes last, so a manifest in the bucket means the whole generation is."""
-        if not _has_bucket_slots(spec, task):
+        if not self._has_bucket_slots(spec, task):
             return None
         try:
             creds = self._creds()
         except (CredentialsError, FileNotFoundError):
             return None
         r2 = creds.r2
-        paths = spec.paths(task.tag)
+        paths = self.tasks.paths(spec, task.tag)
 
         def upload(dest_rel: str):
             gen_dir = paths.data_dir / dest_rel
@@ -1900,7 +1785,7 @@ class WorkerManager:
         the bucket) to the same generation prefix. The bucket then mirrors the
         local corpus, and the sync watcher never re-downloads an assigned
         chunk. None for a task without bucket-delivering slots."""
-        if not _has_bucket_slots(spec, task):
+        if not self._has_bucket_slots(spec, task):
             return None
         try:
             creds = self._creds()
@@ -1931,10 +1816,10 @@ class WorkerManager:
 
     def all_tasks(self):
         for spec in workloads.WORKLOADS.values():
-            for row in tasks.list_tags(spec):
+            for row in self.tasks.list_tags(spec):
                 if not row["has_task"]:
                     continue
-                task = tasks.load_task(spec, row["tag"])
+                task = self.tasks.load(spec, row["tag"])
                 self._forget_stale_counts(spec, task)
                 yield spec, task
 
@@ -1952,7 +1837,7 @@ class WorkerManager:
         for w in task.workers:
             if w.kind == "ssh":
                 _forget_empty(w)
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
 
     async def offload(self, fn, *args, **kwargs):
         """Run one blocking step off the event loop, one at a time.
@@ -2005,7 +1890,7 @@ class WorkerManager:
                 if (
                     w.kind == "ssh"
                     and info["ssh_probe"] == "running"
-                    and _slot_sink(spec, task, w) == "local"
+                    and self._slot_sink(spec, task, w) == "local"
                 ):
                     try:
                         await self.offload(self._collect_ssh, spec, task, w)
@@ -2028,7 +1913,9 @@ class WorkerManager:
                         print(f"dispatch {spec.name}/{task.tag}/{role.name}: {e}")
                 if role.ingest:
                     try:
-                        await self.offload(workloads.resolve(role.ingest), spec, task.tag)
+                        await self.offload(
+                            workloads.resolve(role.ingest), spec, self.tasks.paths(spec, task.tag)
+                        )
                     except Exception as e:  # noqa: BLE001 -- one role must not stop the pass
                         print(f"ingest {spec.name}/{task.tag}/{role.name}: {e}")
             self._ensure_sync(spec, task)
@@ -2046,20 +1933,20 @@ class WorkerManager:
         finds the container stopped or gone, what it flushed on the way down
         waits for the next start, or for the sweep before a replacement. Any
         other failure propagates."""
-        machine = _ssh_machine(task, w)
+        machine = self._ssh_machine(task, w)
         # Unknown until this pull succeeds: a failing collection (a link too
         # slow for the transfer timeout while probes still pass) must not
         # leave an old zero claiming "drained" while the container fills up.
         w.undelivered = None
         try:
-            result = pull_results(machine, **_transfer_target(spec, task, w))
+            result = pull_results(machine, **self._transfer_target(spec, task, w))
         except SshMachineError:
             name = _container_name(spec, task.tag, w.worker_id)
             if machine.container_state(name) not in ("stopped", "missing"):
                 raise
             return
         w.undelivered = result.remaining
-        tasks.save_task(spec, task)
+        self.tasks.save(spec, task)
 
     def _dispatch_role(self, spec, task: tasks.TaskRecord, role, status: list[dict]):
         """Run one role's dispatch tick: hand its running slots their next piece
@@ -2079,13 +1966,15 @@ class WorkerManager:
             and info["observed_running"]
         ]
         params = params_mod.validate(spec.params_cls, task.params)
-        outstanding = workloads.resolve(role.dispatch)(spec, task.tag, params, slots)
+        outstanding = workloads.resolve(role.dispatch)(
+            spec, self.tasks.paths(spec, task.tag), params, slots
+        )
         if not outstanding and _trainer_finished(spec, task) and _finish_role(task, role.name):
-            tasks.save_task(spec, task)
+            self.tasks.save(spec, task)
 
     def _slot_files(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """The way into slot `w`'s filesystem (dashboard/slot_files.py)."""
-        paths = spec.paths(task.tag)
+        paths = self.tasks.paths(spec, task.tag)
         assert w.kind in ("local", "ssh"), (
             f"a {w.kind} slot has no reachable filesystem; a dispatch-driven role's "
             "kinds are local and ssh"
@@ -2093,7 +1982,7 @@ class WorkerManager:
         if w.kind == "ssh":
             return SshSlotFiles(
                 w.worker_id,
-                _ssh_machine(task, w),
+                self._ssh_machine(task, w),
                 _container_name(spec, task.tag, w.worker_id),
                 str(paths.root),
             )
@@ -2131,7 +2020,7 @@ class WorkerManager:
         flips every minute costs about a third of the machine's time. A pause
         is instant both ways and resumes mid-chunk.
         """
-        machine = _ssh_machine(task, w)
+        machine = self._ssh_machine(task, w)
         name = _container_name(spec, task.tag, w.worker_id)
         key = _key(spec, task.tag, w.worker_id)
         if intent == RUN:
@@ -2185,7 +2074,7 @@ class WorkerManager:
 
     def _sweep_ssh(self, machine, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Collect from a stopped container, the last chance to do so."""
-        sweep_stopped(machine, **_transfer_target(spec, task, w))
+        sweep_stopped(machine, **self._transfer_target(spec, task, w))
 
     def shutdown(self):
         """SIGTERM this process's local workers (they flush and exit) and sync
@@ -2196,3 +2085,134 @@ class WorkerManager:
         for proc in [*self._local.values(), *(p for p, _ in self._sync.values())]:
             if proc.poll() is None:
                 proc.send_signal(signal.SIGTERM)
+
+    # ---- a slot's machine and delivery (read through the pool store) -----
+
+    def _slot_sink(
+        self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
+    ) -> str:
+        """Where slot `w`'s worker delivers (SCZ_SINK, cloud/sinks.py).
+
+        "local": a local subprocess, or an ssh container whose output the reconcile
+        pass pulls over ssh (cloud/ssh_transfer.py): any container on the
+        operator's own machines, and a dispatch-driven role's container anywhere.
+        Dispatch reads results only from the slot's filesystem, and they are a few
+        small files, so a rented match-eval worker is collected the same way.
+
+        "r2", the results bucket: any other ssh container on a rented machine,
+        whose datacenter link to the bucket beats hauling every chunk to the
+        controller and publishing it back up from a home uplink; and an ssh trainer
+        (a role with an ingest tick) anywhere, whose generations arrive and whose
+        exports, checkpoints and records leave through the bucket
+        (docs/plans/cloud_machines.md).
+
+        Everything the controller does for bucket-delivering slots (the sync
+        watcher, the scheduler's publish and mirror hooks, the controls push) keys
+        off this, not off the slot kind."""
+        if w.kind == "local":
+            return "local"
+        role = spec.role(w.role)
+        if w.kind == "ssh" and not role.ingest and (role.dispatch or not self._rented(task, w)):
+            return "local"
+        return "r2"
+
+    def _rented(self, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
+        return (
+            w.machine is not None and self._machine_record(task, w.machine).instance_id is not None
+        )
+
+    def _has_bucket_slots(self, spec: workloads.WorkloadSpec, task) -> bool:
+        return any(self._slot_sink(spec, task, w) == "r2" for w in task.workers)
+
+    def _bucket_trainer(self, spec: workloads.WorkloadSpec, task) -> bool:
+        """Whether the task has a trainer (a role the controller ingests) running
+        through the bucket, which needs its outputs synced down and the controls
+        file pushed up."""
+        return any(
+            self._slot_sink(spec, task, w) == "r2" and spec.role(w.role).ingest
+            for w in task.workers
+        )
+
+    def _holds_nothing(
+        self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
+    ):
+        """Set a bucket-delivering ssh slot's `undelivered` to zero: its container
+        holds nothing for the controller to collect."""
+        if w.kind == "ssh" and self._slot_sink(spec, task, w) == "r2":
+            w.undelivered = 0
+
+    def _note_trainer_sink(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Record where new slot `w` delivers, if it is a trainer (a role with an
+        ingest tick): where the task's training state will live from now on."""
+        if spec.role(w.role).ingest:
+            task.trainer_sink = self._slot_sink(spec, task, w)
+
+    def cloud_sync_argv(self, spec, task: tasks.TaskRecord, *extra: str) -> list[str]:
+        """The cloud_sync command pulling what `task`'s bucket slots deliver. It
+        names the tag's mount root, so the pull lands wherever this process
+        resolves the tag dir (a test's redirected root included)."""
+        return [
+            sys.executable, str(CLOUD_SYNC),
+            "--workload", spec.name, "-t", task.tag,
+            "--mount-root", str(self.tasks.paths(spec, task.tag).mount_root),
+            *(["--trainer-outputs"] if self._bucket_trainer(spec, task) else []),
+            *extra,
+        ]  # fmt: skip
+
+    def _machine_record(self, task: tasks.TaskRecord, name: str) -> tasks.MachineRecord:
+        """The machine `name` a slot of `task` runs on: one of the task's own, or
+        a pool machine the task leases (dashboard/pool.py). Pool machines are
+        resolved here rather than copied into the task, so the pool stays their
+        one owner."""
+        own = task.find_machine(name)
+        if own is not None:
+            return own
+        record = pool_mod.leased_record(self.pool_store.load(), task.workload, task.tag, name)
+        if record is None:
+            raise KeyError(f"no machine '{name}'")
+        return record
+
+    def _leased_records(self, task: tasks.TaskRecord) -> list[tasks.MachineRecord]:
+        """The records of the ssh pool machines `task` leases."""
+        return [
+            m.machine
+            for m in self.pool_store.load().machines
+            if m.machine is not None
+            and m.lease is not None
+            and m.lease.held_by(task.workload, task.tag)
+        ]
+
+    def _ssh_machine(self, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> SshMachine:
+        """The ssh link to slot `w`'s machine: its machine record's address and
+        key material, or its bare host string."""
+        if w.machine is None:
+            return SshMachine(w.host)
+        return _machine_link(self._machine_record(task, w.machine))
+
+    def _ssh_host(self, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
+        return w.host if w.machine is None else self._machine_record(task, w.machine).host
+
+    def _slot_host(self, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
+        return self._ssh_host(task, w) if w.kind == "ssh" else None
+
+    def _transfer_target(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> dict:
+        """Where slot `w`'s output lives on both machines, as the collection calls
+        (a batched pull, a sweep of a stopped container) take it. The two roots
+        read alike, since the container uses the controller's layout, but they are
+        paths on different machines."""
+        paths = self.tasks.paths(spec, task.tag)
+        return {
+            "container": _container_name(spec, task.tag, w.worker_id),
+            "remote_root": str(paths.root),
+            "local_root": paths.root,
+            "data_dirs": [f"data/{sub}" for sub in spec.collected_dirs],
+        }
+
+    def _stage_inputs_in_container(
+        self, machine, container: str, spec, tag: str, inputs: dict[str, Path]
+    ):
+        """Push a role's inputs into a freshly created container on the operator's
+        own machine, under the tag root there. Its runner waits for them."""
+        root = str(self.tasks.paths(spec, tag).root)
+        for rel, src in inputs.items():
+            push_file(machine, container, remote_root=root, rel_dest=rel, src=src)

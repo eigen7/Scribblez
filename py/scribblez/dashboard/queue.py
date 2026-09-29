@@ -1,17 +1,15 @@
 """The tag queue's records (docs/plans/tag_queue.md §4): tags waiting for a
 pool machine, in the order they are to be placed.
 
-queue.json lives under the mount root beside pool.json, held as one shared
-object per process (shared_json.py). The queue is global across workloads;
+queue.json lives under the mount root beside pool.json, held by the
+dashboard's queue store (queue_store, shared_json.py). The queue is global across workloads;
 each entry's eligibility decides which pool machines may take it.
 """
 
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 
 from scribblez.dashboard.shared_json import SharedJson
-from scribblez.paths import DEFAULT_MOUNT_ROOT
-
-QUEUE_PATH = DEFAULT_MOUNT_ROOT / "queue.json"
 
 # The states of a queued tag's bundle (QueueEntry.bundle). A tag that may land
 # on an ssh machine has its bundle built and pinned when it is enqueued, so
@@ -64,13 +62,7 @@ def _decode(raw: dict) -> Queue:
     )
 
 
-_store = SharedJson(lambda: QUEUE_PATH, _decode, Queue)
-
-
-def load_queue() -> Queue:
-    """The process's shared Queue; an empty one before queue.json exists."""
-    return _store.load()
-
-
-def save_queue(queue: Queue):
-    _store.save(queue)
+def queue_store(mount_root: Path) -> SharedJson:
+    """The store of queue.json under `mount_root`: load() gives the shared
+    Queue (an empty one before the file exists), save(queue) writes it."""
+    return SharedJson(Path(mount_root) / "queue.json", _decode, Queue)

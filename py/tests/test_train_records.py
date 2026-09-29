@@ -7,6 +7,7 @@ import json
 import numpy as np
 import pytest
 from cloud.sinks import LocalSink
+from scribblez import workloads
 from scribblez.dashboard import db
 from scribblez.generational import train_ingest
 from scribblez.generational.records import TrainRecorder, read_controls, write_controls_file
@@ -15,17 +16,6 @@ from scribblez.paths import POSITION_EVAL, TagPaths
 PARAMS = {"trunk": "transformer", "lr": 0.001, "window": 4}
 LOSS_WEIGHTS = {"loss_wld": 1.0, "loss_score_diff": 0.0002}
 CONTROLS = {"dataloader_workers": 4, "torch_threads": 12}
-
-
-class _Spec:
-    """A workload spec as train_ingest.tick asks of one: the tag tree rooted
-    in the test's tmp dir."""
-
-    def __init__(self, mount_root):
-        self._mount_root = mount_root
-
-    def paths(self, tag: str) -> TagPaths:
-        return TagPaths(tag, POSITION_EVAL, mount_root=self._mount_root)
 
 
 @pytest.fixture
@@ -165,23 +155,23 @@ def test_unreadable_record_is_skipped_and_retried(paths):
 
 
 def test_tick_opens_the_database_only_when_something_landed(paths, monkeypatch):
-    spec = _Spec(paths.mount_root)
-    train_ingest.tick(spec, "t")  # no records dir: nothing, not even a database
+    spec = workloads.get(POSITION_EVAL)
+    train_ingest.tick(spec, paths)  # no records dir: nothing, not even a database
     assert not paths.dashboard_db.exists()
 
     recorder = TrainRecorder(LocalSink(paths.root))
     recorder.publish_run("t", PARAMS, 0, LOSS_WEIGHTS, CONTROLS)
-    train_ingest.tick(spec, "t")
+    train_ingest.tick(spec, paths)
     assert db.read_meta(db.connect(paths.dashboard_db))["tag"] == "t"
 
     def refuse(*a, **k):
         raise AssertionError("opened the database with nothing new")
 
     monkeypatch.setattr(db, "connect", refuse)
-    train_ingest.tick(spec, "t")  # quiet pass
+    train_ingest.tick(spec, paths)  # quiet pass
     monkeypatch.undo()
     recorder.commit_generation(0, 1000, _metrics(0))
-    train_ingest.tick(spec, "t")
+    train_ingest.tick(spec, paths)
     assert list(db.read_metric_series(db.connect(paths.dashboard_db), "loss")[0]) == [0]
 
 
@@ -198,7 +188,7 @@ def test_controls_file_round_trips_and_is_seeded_from_an_older_database(paths):
     conn = db.connect(other.dashboard_db)
     db.write_control(conn, "torch_threads", 6)
     TrainRecorder(LocalSink(other.root)).publish_run("old", PARAMS, 0, LOSS_WEIGHTS, CONTROLS)
-    train_ingest.tick(_Spec(paths.mount_root), "old")
+    train_ingest.tick(workloads.get(POSITION_EVAL), other)
     assert read_controls(LocalSink(other.root)) == {"torch_threads": 6.0}
 
 

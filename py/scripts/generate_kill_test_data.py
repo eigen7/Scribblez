@@ -20,6 +20,7 @@ import sys
 
 from scribblez import params as params_mod
 from scribblez.hardware import default_thread_count
+from scribblez.paths import add_mount_root_argument
 from scribblez.workloads.kill_test import KillTestParams, run_one_cycle, slog_dir
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -39,10 +40,11 @@ def main() -> int:
         help="engine threads for self-play and sims (default: all logical processors)",
     )
     params_mod.add_arguments(p, KillTestParams)
+    add_mount_root_argument(p)
     args = p.parse_args()
     params = params_mod.from_args(KillTestParams, args)
 
-    out_dir = slog_dir(args.tag)
+    out_dir = slog_dir(args.tag, args.mount_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Accumulating kill-test data under {out_dir} (Ctrl-C to stop)")
 

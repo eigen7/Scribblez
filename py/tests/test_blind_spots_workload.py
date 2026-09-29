@@ -3,6 +3,7 @@ parks the surveyors."""
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from scribblez.sim_candidate_survey import SURVEY_SUFFIX, load_survey, slim_survey_file
 from scribblez.workloads import blind_spots
@@ -62,12 +63,11 @@ def test_a_cycle_delivers_found_positions_and_clears_the_game(tmp_path):
     assert list(tmp_path.iterdir()) == []  # the .slog and the unkept .gcg are cleared away
 
 
-class StubSpec:
+class StubPaths:
+    """The one piece of a tag's TagPaths these hooks read."""
+
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
-
-    def paths(self, tag: str):
-        return self
 
 
 def test_progress_counts_the_tags_store(tmp_path):
@@ -75,7 +75,7 @@ def test_progress_counts_the_tags_store(tmp_path):
     (tmp_path / "survey").mkdir()
     (tmp_path / "gcg" / "a.gcg").touch()
     (tmp_path / "survey" / f"a{SURVEY_SUFFIX}").touch()
-    counts = blind_spots.progress(StubSpec(tmp_path), "t")
+    counts = blind_spots.progress(blind_spots.SPEC, StubPaths(tmp_path), None)
     assert counts == [("positions found", 1), ("games surveyed", 1)]
 
 
@@ -91,10 +91,8 @@ def finished_after_tick(tmp_path, target: int, found: int) -> list[str]:
     for i in range(found):
         (tmp_path / "gcg" / f"{i}.gcg").touch()
     finished = []
-    spec = StubSpec(tmp_path)
-    spec.params_cls = blind_spots.BlindSpotsParams
-    hooks = type("Hooks", (), {"finish": staticmethod(finished.append)})
-    blind_spots.tick(spec, Task(target), hooks)
+    hooks = SimpleNamespace(paths=StubPaths(tmp_path), finish=finished.append)
+    blind_spots.tick(blind_spots.SPEC, Task(target), hooks)
     return finished
 
 

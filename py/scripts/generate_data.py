@@ -24,7 +24,7 @@ from pathlib import Path
 
 from scribblez.ffi import read_file_header
 from scribblez.hardware import default_thread_count
-from scribblez.paths import POSITION_EVAL, TagPaths
+from scribblez.paths import POSITION_EVAL, TagPaths, add_mount_root_argument
 from scribblez.selfplay import hasty_player_spec, run_games
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -113,13 +113,14 @@ def main() -> int:
         "are excluded from the training-eligible region.",
     )
     parser.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
+    add_mount_root_argument(parser)
     args = parser.parse_args()
 
     if not 0.0 <= args.test_ratio < 1.0:
         print("--test-ratio must be in [0, 1).", file=sys.stderr)
         return 2
 
-    paths = TagPaths(args.tag, POSITION_EVAL)
+    paths = TagPaths(args.tag, POSITION_EVAL, args.mount_root)
     player_spec = build_player_spec(args)
     test_games = round(args.num_games * args.test_ratio)
     train_games = args.num_games - test_games

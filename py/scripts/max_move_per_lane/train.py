@@ -21,6 +21,7 @@ import sys
 
 from cloud.sinks import LocalSink
 from scribblez import workloads
+from scribblez.paths import add_mount_root_argument
 from scribblez.workloads.base import WorkerContext
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -33,6 +34,7 @@ def main() -> int:
     )
     p.add_argument("--device", type=str, default="cuda", help="Device (cpu or cuda).")
     spec.add_cli_arguments(p)
+    add_mount_root_argument(p)
     args = p.parse_args()
     params = spec.params_from_args(args)
 
@@ -46,7 +48,8 @@ def main() -> int:
         worker_id=f"cli-{socket.gethostname()}",
         threads=0,
         max_cycles=0,
-        sink=LocalSink(spec.data_dir(args.tag)),
+        sink=LocalSink(spec.data_dir(args.tag, args.mount_root)),
+        mount_root=args.mount_root,
     )
     return workloads.resolve(role.runner)(ctx)
 

@@ -56,6 +56,7 @@ from pathlib import Path
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.hardware import default_thread_count
+from scribblez.paths import DEFAULT_MOUNT_ROOT
 from scribblez.workloads.worker import WorkerStopped
 
 from cloud.sinks import make_sink
@@ -134,7 +135,7 @@ def main() -> int:
         tag = os.environ["SCZ_TAG"]
         params = params_mod.from_env(spec.params_cls)
         threads = int(os.environ.get("SCZ_THREADS", 0)) or default_thread_count()
-        mount_root = Path(os.environ["SCZ_MOUNT_ROOT"]) if "SCZ_MOUNT_ROOT" in os.environ else None
+        mount_root = Path(os.environ.get("SCZ_MOUNT_ROOT", DEFAULT_MOUNT_ROOT))
         sink = make_sink(spec, tag, mount_root)
         kind = os.environ.get("SCZ_WORKER_KIND") or sink.kind
         if role.deps:

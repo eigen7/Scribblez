@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from scribblez.params import param
-from scribblez.paths import ENGINE_DIR
+from scribblez.paths import ENGINE_DIR, TagPaths
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
@@ -106,13 +106,13 @@ def run_generate(ctx: WorkerContext) -> int:
     return pair_store.run_pair_generate(ctx, _cycle, ".sobs", SLOGS_DIR)
 
 
-def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
-    return [("pairs", pair_store.count_pairs(spec.paths(tag).data_dir / SLOGS_DIR, ".sobs"))]
+def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, object]]:
+    return [("pairs", pair_store.count_pairs(paths.data_dir / SLOGS_DIR, ".sobs"))]
 
 
-def slog_dir(tag: str) -> Path:
+def slog_dir(tag: str, mount_root: Path) -> Path:
     """The tag's pair store of .slog/.sobs pairs, for analysis tools."""
-    return SPEC.paths(tag).data_dir / SLOGS_DIR
+    return SPEC.paths(tag, mount_root).data_dir / SLOGS_DIR
 
 
 SPEC = WorkloadSpec(

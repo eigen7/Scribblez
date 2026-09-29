@@ -134,7 +134,7 @@ def test_match_eval_figure_is_serializable(tmp_path):
     assert {"doc", "root_id", "target_id"} <= set(item)
 
 
-def _ctx(sink=None, **param_overrides) -> WorkerContext:
+def _ctx(mount_root: Path, sink=None, **param_overrides) -> WorkerContext:
     return WorkerContext(
         spec=SPEC,
         role=SPEC.role("match_eval"),
@@ -144,13 +144,14 @@ def _ctx(sink=None, **param_overrides) -> WorkerContext:
         threads=2,
         max_cycles=1,
         sink=sink,
+        mount_root=mount_root,
     )
 
 
 _MODEL = Path("/models/model_epoch_0003.onnx")
 
 
-def test_play_match_plays_the_whole_fixed_budget(monkeypatch):
+def test_play_match_plays_the_whole_fixed_budget(tmp_path, monkeypatch):
     calls = []
 
     def fake_round(spec0, spec1, num_pairs, threads, seed, results_file, face_up_leaves):
@@ -158,7 +159,7 @@ def test_play_match_plays_the_whole_fixed_budget(monkeypatch):
         return RoundResult([1.0] * num_pairs, wins=2 * num_pairs, draws=0, losses=0)
 
     monkeypatch.setattr(runner.harness, "play_round", fake_round)
-    outcome = runner._play_match(_ctx(match_pairs=5, match_seed=7), _MODEL)
+    outcome = runner._play_match(_ctx(tmp_path, match_pairs=5, match_seed=7), _MODEL)
     assert calls == [(5, 7)]
     assert outcome.pair_counts == [0, 0, 0, 0, 5]
     assert (outcome.wins, outcome.draws, outcome.losses) == (10, 0, 0)
@@ -189,7 +190,6 @@ def test_run_delivers_the_result_and_marks_the_model_played(tmp_path, monkeypatc
     inbox.mkdir(parents=True)
     model = inbox / paths.onnx_path(20).name
     model.touch()
-    monkeypatch.setattr(WorkerContext, "tag_paths", lambda self: paths)
 
     played = []
 
@@ -198,7 +198,7 @@ def test_run_delivers_the_result_and_marks_the_model_played(tmp_path, monkeypatc
         return RoundResult([1.0] * num_pairs, wins=2 * num_pairs, draws=0, losses=0)
 
     monkeypatch.setattr(runner.harness, "play_round", fake_round)
-    ctx = _ctx(sink=LocalSink(paths.root), match_pairs=4)
+    ctx = _ctx(tmp_path, sink=LocalSink(paths.root), match_pairs=4)
     assert runner.run(ctx) == 0
 
     assert str(model) in played[0]  # the assigned model is what was played

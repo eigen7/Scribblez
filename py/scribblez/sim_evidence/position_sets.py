@@ -18,7 +18,7 @@ import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from scribblez.paths import DEFAULT_MOUNT_ROOT, ENGINE_DIR, REPO_ROOT
+from scribblez.paths import ENGINE_DIR, REPO_ROOT
 
 TRAJECTORY_GENERATOR = ENGINE_DIR / "evidence_trajectory_generator"
 # DEFAULT_SET is the set the dashboard opens on and the trainer's
@@ -72,10 +72,9 @@ def set_gcgs(set_dir: Path) -> list[Path]:
 
 
 def cache_dir(
-    set_dir: Path, proposer_model: Path, recipe: TrajectoryRecipe, mount_root=None
+    set_dir: Path, proposer_model: Path, recipe: TrajectoryRecipe, mount_root: Path
 ) -> Path:
-    root = Path(mount_root or DEFAULT_MOUNT_ROOT)
-    return root / CACHE_DIR / Path(set_dir).name / cache_key(proposer_model, recipe)
+    return Path(mount_root) / CACHE_DIR / Path(set_dir).name / cache_key(proposer_model, recipe)
 
 
 def _load_manifest(d: Path) -> dict:
@@ -103,7 +102,7 @@ def ensure_sobs(
     proposer_model: Path,
     recipe: TrajectoryRecipe,
     threads: int,
-    mount_root=None,
+    mount_root: Path,
 ) -> dict[str, Path]:
     """Every position's trajectory sidecar for (set, proposer, recipe), running
     evidence_trajectory_generator for any that are missing or stale. Returns

@@ -258,12 +258,12 @@ class CycleResult:
     mset_seconds: float  # target-generator wall time
 
 
-def _teacher_paths(params: MoveSetEvalParams, mount_root=None) -> TagPaths:
+def _teacher_paths(params: MoveSetEvalParams, mount_root: Path) -> TagPaths:
     """The position_eval tag `params.teacher_tag` lives in."""
-    return TagPaths(params.teacher_tag, POSITION_EVAL, *([mount_root] if mount_root else []))
+    return TagPaths(params.teacher_tag, POSITION_EVAL, mount_root)
 
 
-def resolved_teacher_generation(params: MoveSetEvalParams, mount_root=None) -> int:
+def resolved_teacher_generation(params: MoveSetEvalParams, mount_root: Path) -> int:
     """The concrete teacher generation for `params`: `teacher_generation`
     itself when it is >= 0, else (-1) the teacher tag's latest export. Raises
     ParamsError if teacher_tag is unset or the tag has no export."""
@@ -284,19 +284,19 @@ def resolved_teacher_generation(params: MoveSetEvalParams, mount_root=None) -> i
     return max(gens)
 
 
-def teacher_onnx(params: MoveSetEvalParams, mount_root=None) -> Path:
+def teacher_onnx(params: MoveSetEvalParams, mount_root: Path) -> Path:
     """The teacher ONNX in the position_eval tag's models/ dir."""
     return _teacher_paths(params, mount_root).onnx_path(
         resolved_teacher_generation(params, mount_root)
     )
 
 
-def finalize(spec: WorkloadSpec, tag: str, params: MoveSetEvalParams) -> MoveSetEvalParams:
+def finalize(spec: WorkloadSpec, paths: TagPaths, params: MoveSetEvalParams) -> MoveSetEvalParams:
     """Pin the teacher to a concrete exported generation at task creation (see
     the module docstring). Fails here, where the operator sees it, if the
     named tag has no such export."""
-    generation = resolved_teacher_generation(params)
-    if not _teacher_paths(params).onnx_path(generation).is_file():
+    generation = resolved_teacher_generation(params, paths.mount_root)
+    if not _teacher_paths(params, paths.mount_root).onnx_path(generation).is_file():
         raise params_mod.ParamsError(
             f"position_eval tag '{params.teacher_tag}' has no generation {generation} exported"
         )
@@ -378,9 +378,9 @@ def _cycle(model: str, work_dir: Path, params: MoveSetEvalParams, threads: int) 
 TEACHER_INPUT = "inputs/teacher.onnx"
 
 
-def inputs(params: MoveSetEvalParams) -> dict[str, Path]:
+def inputs(params: MoveSetEvalParams, mount_root: Path) -> dict[str, Path]:
     """The generate role's one out-of-tag input: the pinned teacher export."""
-    return {TEACHER_INPUT: teacher_onnx(params)}
+    return {TEACHER_INPUT: teacher_onnx(params, mount_root)}
 
 
 def run_generate(ctx: WorkerContext) -> int:
@@ -400,14 +400,14 @@ def run_generate(ctx: WorkerContext) -> int:
     )
 
 
-def progress(spec: WorkloadSpec, tag: str) -> list[tuple[str, object]]:
-    return [("pairs", pair_store.count_pairs(spec.paths(tag).data_dir / SLOGS_DIR, ".mset"))]
+def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, object]]:
+    return [("pairs", pair_store.count_pairs(paths.data_dir / SLOGS_DIR, ".mset"))]
 
 
-def slog_dir(tag: str) -> Path:
+def slog_dir(tag: str, mount_root: Path) -> Path:
     """The tag's pair store of .slog/.mset pairs: what MsetDataset takes as a
     data dir."""
-    return SPEC.paths(tag).data_dir / SLOGS_DIR
+    return SPEC.paths(tag, mount_root).data_dir / SLOGS_DIR
 
 
 def split_pairs(store: Path, holdout_every: int) -> tuple[list[Path], list[Path]]:

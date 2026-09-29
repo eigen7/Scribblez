@@ -115,14 +115,14 @@ class PoolRentals:
             memory_override_gb=entry.memory_override_gb,
         )
         pool.machines.append(m)
-        pool_mod.save_pool(pool)
+        self._m.pool_store.save(pool)
         try:
             self._launch(m, cap)
         except ProviderError as e:
             pool.machines.remove(m)
-            pool_mod.save_pool(pool)
+            self._m.pool_store.save(pool)
             raise AssertionError(self._m._provider().refusal(e, cap.instance_type)) from e
-        pool_mod.save_pool(pool)
+        self._m.pool_store.save(pool)
         return m
 
     def _launch(self, m: PoolMachine, cap: Capacity):
@@ -162,7 +162,7 @@ class PoolRentals:
                 self._reconcile_one(m, pool, index)
             except Exception as e:  # noqa: BLE001 -- retried next pass
                 print(f"pool rental {m.name}: {e}")
-        pool_mod.save_pool(pool)
+        self._m.pool_store.save(pool)
 
     def _reconcile_one(self, m: PoolMachine, pool: Pool, index: dict):
         record = m.machine

@@ -110,9 +110,8 @@ def _controls_file_current(paths: TagPaths, conn):
         write_controls_file(paths, db.read_controls(conn))
 
 
-def tick(spec, tag: str):
+def tick(spec, paths: TagPaths):
     """The RoleSpec.ingest entry: one controller-side pass for one task."""
-    paths = spec.paths(tag)
     records = paths.records_dir
     if not records.is_dir():
         return  # the trainer has never run

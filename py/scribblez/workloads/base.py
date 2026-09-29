@@ -66,7 +66,7 @@ class RoleSpec:
     # training stack. Independent of `gpu`: match eval uses a GPU on the engine
     # image.
     runtime: str = RUNTIME_ENGINE
-    # Dotted path to a controller-side tick, dispatch(spec, tag, params, slots)
+    # Dotted path to a controller-side tick, dispatch(spec, paths, params, slots)
     # -> bool, for a role whose work the controller assigns and whose results
     # it collects (match eval). `slots` holds one scribblez/dashboard/slot_files.py
     # handle per running slot, the controller's only way into a worker's
@@ -74,13 +74,13 @@ class RoleSpec:
     # it does not and the trainer has finished, the dashboard finishes the
     # role. "" for roles that pick their own work, like generators.
     dispatch: str = ""
-    # Dotted path to a controller-side tick, ingest(spec, tag), that writes what
+    # Dotted path to a controller-side tick, ingest(spec, paths), that writes what
     # the role has delivered under the tag into dashboard.db (a trainer's
     # records: generational/train_ingest.py). It reads only the tag on the
     # controller's mount, so unlike dispatch it works for a slot of any kind.
     # "" for roles that deliver nothing the controller has to write.
     ingest: str = ""
-    # Dotted path to inputs(params) -> {rel: Path}: files the role reads from
+    # Dotted path to inputs(params, mount_root) -> {rel: Path}: files the role reads from
     # outside its own tag (another tag's model export, say), keyed by the
     # tag-relative name the worker looks for them under. A local worker reads
     # each source in place. For a remote slot the controller stages a copy
@@ -112,10 +112,10 @@ class WorkloadSpec:
     # tick(spec, task, hooks: SchedulerHooks), run by the dashboard server's
     # reconcile loop. "" for workloads with nothing to schedule.
     scheduler: str = ""
-    # Dotted path to progress(spec, tag) -> list[(label, value)]: the counters
+    # Dotted path to progress(spec, paths, params) -> list[(label, value)]: the counters
     # shown in the tag listing and the task Overview.
     progress: str = ""
-    # Dotted path to finalize(spec, tag, params) -> params, run at task creation
+    # Dotted path to finalize(spec, paths, params) -> params, run at task creation
     # before the params are frozen into task.json. It resolves fields that must
     # not drift later, such as pinning a "latest" reference to a concrete
     # generation so a worker restart cannot pick up a newer one. "" leaves the
@@ -223,17 +223,16 @@ class WorkloadSpec:
         from an ssh container looks through."""
         return self.sync_data_dirs + self.local_data_dirs
 
-    def paths(self, tag: str, mount_root=None) -> TagPaths:
-        return TagPaths(tag, self.name, *([mount_root] if mount_root else []))
+    def paths(self, tag: str, mount_root: Path) -> TagPaths:
+        return TagPaths(tag, self.name, mount_root)
 
-    def data_dir(self, tag: str) -> Path:
+    def data_dir(self, tag: str, mount_root: Path) -> Path:
         """The tag's root (task.json, logs/, stats/, data/, ...)."""
-        return self.paths(tag).root
+        return self.paths(tag, mount_root).root
 
-    @property
-    def tags_root(self) -> Path:
+    def tags_root(self, mount_root: Path) -> Path:
         """Parent directory of every tag of this workload."""
-        return self.paths("placeholder").root.parent
+        return self.paths("placeholder", mount_root).root.parent
 
     def role(self, name: str) -> RoleSpec:
         for r in self.roles:
@@ -258,6 +257,8 @@ class WorkloadSpec:
 class SchedulerHooks:
     """The narrow surface a scheduler tick gets from the dashboard server.
 
+    paths
+        The task's TagPaths, under the dashboard's mount root.
     gate(role, reason)
         Park every worker of `role`, shown as "waiting" with the reason; this is
         separate from an operator pause. reason=None releases the gate. A gate
@@ -281,6 +282,7 @@ class SchedulerHooks:
         A failed upload raises, and the next tick's call starts it again.
     """
 
+    paths: TagPaths
     gate: object  # callable(role: str, reason: str | None)
     finish: object  # callable(role: str)
     mirror: object = None  # callable(chunk_name: str, dest_rel: str) | None
@@ -302,12 +304,12 @@ class WorkerContext:
     # The slot kind, reported in stats and consulted by resolve_input.
     # In-process runners (CLI tools, tests) are local; only a launcher of
     # remote workers overrides it.
-    kind: str = "local"
-    provenance: dict = field(default_factory=dict)
-    # Root of the tag tree this worker reads and writes: the mount dir, unless
+    # Root of the tag trees this worker reads and writes: the mount dir, unless
     # the launcher points it elsewhere (a bucket-delivering trainer on a
     # machine whose mount dir belongs to the controller).
-    mount_root: Path | None = None
+    mount_root: Path
+    kind: str = "local"
+    provenance: dict = field(default_factory=dict)
 
     def tag_paths(self) -> TagPaths:
         return self.spec.paths(self.tag, self.mount_root)

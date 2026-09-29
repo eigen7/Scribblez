@@ -21,8 +21,6 @@ from cloud.ssh_machine import SshMachineError
 
 from scribblez import params as params_mod
 from scribblez import workloads
-from scribblez.dashboard import pool as pool_mod
-from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tasks, worker_stats_figures
 
 # Exception types that describe a bad request or unavailable dependency, not a
@@ -68,11 +66,11 @@ def _pending_summary(worker: tasks.WorkerRecord) -> dict:
     }
 
 
-def _stats_by_role(spec: workloads.WorkloadSpec, tag: str) -> dict:
+def _stats_by_role(store: tasks.TaskStore, spec: workloads.WorkloadSpec, tag: str) -> dict:
     """The Stats tab payload: per-role schemas plus every worker's summary,
     including workers that have not reported yet, so the tab shows the whole
     fleet."""
-    records = worker_stats_figures.read_stats(spec.paths(tag).stats_dir)
+    records = worker_stats_figures.read_stats(store.paths(spec, tag).stats_dir)
     roles = {r.name: r for r in spec.roles if r.stats}
     summaries = [
         worker_stats_figures.worker_summary(rec, roles[rec["role"]].stats)
@@ -80,7 +78,7 @@ def _stats_by_role(spec: workloads.WorkloadSpec, tag: str) -> dict:
         if rec.get("role") in roles
     ]
     reported = {s["worker_id"] for s in summaries}
-    task = tasks.load_task(spec, tag)
+    task = store.load(spec, tag)
     summaries += [
         _pending_summary(w)
         for w in (task.workers if task else [])
@@ -135,7 +133,7 @@ class _MasterBase(tornado.web.RequestHandler):
         return self.settings["tag_queue"]
 
     def task_or_fail(self, spec, tag: str) -> tasks.TaskRecord:
-        task = tasks.load_task(spec, tag)
+        task = self.manager.tasks.load(spec, tag)
         assert task is not None, f"tag '{tag}' has no task record"
         return task
 
@@ -162,7 +160,7 @@ class WorkloadsHandler(_MasterBase):
 
 class WorkloadTagsHandler(_MasterBase):
     def get(self):
-        self.guarded(lambda: {"tags": tasks.list_tags(self.spec())})
+        self.guarded(lambda: {"tags": self.manager.tasks.list_tags(self.spec())})
 
 
 class TaskCreateHandler(_MasterBase):
@@ -170,7 +168,7 @@ class TaskCreateHandler(_MasterBase):
         body = self.body()
 
         def create():
-            task = tasks.create_task(
+            task = self.manager.tasks.create(
                 self.spec(body), body.get("tag", ""), body.get("params", {}), body.get("profile")
             )
             return {"tag": task.tag}
@@ -184,7 +182,7 @@ class TaskHandler(_MasterBase):
         tag = self.get_query_argument("tag")
 
         def info():
-            task = tasks.load_task(spec, tag)
+            task = self.manager.tasks.load(spec, tag)
             workers = self.manager.worker_status(spec, task) if task else []
             spend = (
                 task.retired_spend
@@ -201,9 +199,9 @@ class TaskHandler(_MasterBase):
                 "profile": task.profile if task else "",
                 "profile_diff": spec.profile_diff(task.profile, task.params) if task else [],
                 "created_at": task.created_at if task else None,
-                "progress": tasks.progress(spec, tag),
+                "progress": self.manager.tasks.progress(spec, task) if task else [],
                 "gates": task.gates if task else {},
-                "data_dir": str(spec.data_dir(tag)),
+                "data_dir": str(self.manager.tasks.paths(spec, tag).root),
                 "workers": workers,
                 "machines": self.manager.machine_status(spec, task) if task else [],
                 "spend": spend,
@@ -213,7 +211,7 @@ class TaskHandler(_MasterBase):
                 "queued": next(
                     (
                         i + 1
-                        for i, e in enumerate(queue_mod.load_queue().entries)
+                        for i, e in enumerate(self.manager.queue_store.load().entries)
                         if e.key == (spec.name, tag)
                     ),
                     None,
@@ -371,7 +369,7 @@ class PoolHandler(_MasterBase):
         await self.guarded_offload(
             lambda: {
                 "machines": self.manager.pool_status(),
-                "capacity": [asdict(c) for c in pool_mod.load_pool().capacity],
+                "capacity": [asdict(c) for c in self.manager.pool_store.load().capacity],
             }
         )
 
@@ -563,7 +561,7 @@ class TaskStatsHandler(_MasterBase):
     def get(self):
         spec = self.spec()
         tag = self.get_query_argument("tag")
-        self.guarded(lambda: _stats_by_role(spec, tag))
+        self.guarded(lambda: _stats_by_role(self.manager.tasks, spec, tag))
 
 
 class TaskFigureHandler(_MasterBase):
@@ -581,7 +579,9 @@ class TaskFigureHandler(_MasterBase):
             assert role.stats is not None, f"role '{role_name}' publishes no stats"
             records = [
                 r
-                for r in worker_stats_figures.read_stats(spec.paths(tag).stats_dir)
+                for r in worker_stats_figures.read_stats(
+                    self.manager.tasks.paths(spec, tag).stats_dir
+                )
                 if r.get("role") == role_name
             ]
             model = worker_stats_figures.cumulative(records, role.stats, worker)
