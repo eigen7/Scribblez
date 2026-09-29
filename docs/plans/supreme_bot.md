@@ -76,7 +76,7 @@ rules MCTS assumes are what make it converge with no training at all
   each observation, and an empty context reduces the model to the plain
   student.
 - **[design.md §3](../design.md)** (the public belief system) and
-  [roadmap.md's parked rack inference](../roadmap.md#rack-inference-parked)
+  [roadmap.md's rack inference](../roadmap.md#rack-inference)
   are what SupremeBot's learned draws replace once the project leaves
   face-up leaves ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)).
 - **[design.md §8.1](../design.md)** (search-derived knowledge buffers)

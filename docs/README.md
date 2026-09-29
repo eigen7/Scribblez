@@ -11,11 +11,11 @@ decision, in [plans/](plans/README.md)).
   beatable (context-blind leave evaluation, naive rack inference), and the
   target architecture: a public belief system, a unified Q/V network, GADDAG
   move generation and Monte Carlo search.
-- **[roadmap.md](roadmap.md)**: the implementation plan. The variant
-  development runs in (face-up leaves), the agent everything converges on
-  (one-pass candidate scoring, then a sequential sim loop driven by a
-  proves-best head over evidence), the status of each item, and the three
-  models that feed it.
+- **[roadmap.md](roadmap.md)**: the implementation plan. The direction
+  (SupremeBot, a learned search over a context of every probe, in standard
+  Scrabble), its build order and status, what is already built, the three
+  models that feed it, and the evidence-loop agent that preceded it, now on
+  hiatus.
 - **[simulation_information_flow.md](simulation_information_flow.md)**: how
   far one simulation's information travels in the game tree. An idealized
   agent works through the Richards–Johnson exchange, then the vocabulary
@@ -25,8 +25,8 @@ decision, in [plans/](plans/README.md)).
   sim-evidence and sim-labeled-candidates plans.
 - **[evaluation_plan.md](evaluation_plan.md)**: the measurement half. What past
   measurements established, the match and evaluation machinery and its known
-  gaps, and the evaluation to run once the agent is built. Kept separate
-  because nothing in the roadmap is gated on a result.
+  gaps, and the evaluation planned for the evidence-loop agent, now on
+  hiatus. SupremeBot's measurements live in its own build order.
 
 ## The system as built
 
