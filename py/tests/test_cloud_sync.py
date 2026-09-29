@@ -39,7 +39,7 @@ def _pulled(rc):
 def test_a_generator_only_tag_pulls_staging_stats_and_params(spec, monkeypatch):
     rc = _Rclone()
     monkeypatch.setattr(cloud_sync, "rclone", rc)
-    assert cloud_sync.sync_once(R2, spec, "t") == 0
+    assert cloud_sync.sync_once(R2, spec, spec.paths("t")) == 0
     root = spec.paths("t").root
     assert _pulled(rc) == [
         ("copy", "r2:b/position_eval/t/staging", str(root / "data" / "staging")),
@@ -55,7 +55,7 @@ def test_trainer_outputs_are_pulled_immutable_ones_by_size(spec, monkeypatch):
     so it is not. The cursor file is pulled only once the bucket has it."""
     rc = _Rclone()
     monkeypatch.setattr(cloud_sync, "rclone", rc)
-    assert cloud_sync.sync_once(R2, spec, "t", trainer_outputs=True) == 0
+    assert cloud_sync.sync_once(R2, spec, spec.paths("t"), trainer_outputs=True) == 0
     root = spec.paths("t").root
     assert _pulled(rc)[3:] == [
         ("copy", "--size-only", "r2:b/position_eval/t/records", str(root / "records")),
@@ -65,7 +65,7 @@ def test_trainer_outputs_are_pulled_immutable_ones_by_size(spec, monkeypatch):
     ]
     rc = _Rclone(present={"train_state.json"})
     monkeypatch.setattr(cloud_sync, "rclone", rc)
-    assert cloud_sync.sync_once(R2, spec, "t", trainer_outputs=True) == 0
+    assert cloud_sync.sync_once(R2, spec, spec.paths("t"), trainer_outputs=True) == 0
     assert _pulled(rc)[-1] == (
         "copyto", "r2:b/position_eval/t/train_state.json", str(root / "train_state.json")
     )  # fmt: skip

@@ -9,6 +9,7 @@ from scribblez.dashboard import placement, tasks
 from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tag_queue as tq_mod
+from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.pool import Hardware, Lease
 from scribblez.dashboard.tag_queue import (
     EMPTY_POOL,
@@ -265,8 +266,6 @@ def test_an_ssh_machine_takes_the_tag_once_its_bundle_is_pinned(queued, monkeypa
     by its pool name, which resolves through the lease."""
     from concurrent.futures import Future
 
-    from scribblez.dashboard import workers as workers_mod
-
     q, manager, make = queued
     monkeypatch.setattr(workers_mod, "SshMachine", _Link)
     manager.remove_pool_machine("localhost")
@@ -391,7 +390,6 @@ def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypat
     """The ssh half of a release: every container's full log saved into the
     tag, a local-sink slot (the generator) swept, and one final bucket sync
     for the bucket-delivering trainer, all before the slots are removed."""
-    from scribblez.dashboard import workers as workers_mod
     from scribblez.paths import POSITION_EVAL, TagPaths
 
     q, manager, make = queued
@@ -403,7 +401,11 @@ def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypat
     )
     swept, synced = [], []
     monkeypatch.setattr(tq_mod, "sweep_stopped", lambda machine, **target: swept.append(target))
-    monkeypatch.setattr(tq_mod.subprocess, "run", lambda argv, **kw: synced.append(argv))
+
+    def record_sync(spec, task):
+        synced.append(workers_mod.cloud_sync_argv(spec, task))
+
+    monkeypatch.setattr(manager, "sync_once", record_sync)
     manager.remove_pool_machine("localhost")
     manager.add_pool_machine("gpu-box", "me@gpu-box")
     make("a")
@@ -426,7 +428,7 @@ def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypat
     ]
     assert [t["container"] for t in swept] == ["scz-position_eval-a-ssh-1"]  # the generator
     (argv,) = synced
-    assert argv[-1] == "--trainer-outputs" and "-t" in argv and "a" in argv
+    assert "--trainer-outputs" in argv and argv[argv.index("-t") + 1] == "a"
     assert tasks.load_task(SPEC, "a").workers == []
     assert _lease("gpu-box") is None
 

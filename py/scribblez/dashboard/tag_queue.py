@@ -21,8 +21,6 @@ stopped container's last output is swept, and a tag whose output travels
 through the bucket gets one final sync before its slots go.
 """
 
-import subprocess
-import sys
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 
@@ -37,9 +35,7 @@ from scribblez.dashboard.pool import Capacity, Lease, Pool, PoolMachine
 from scribblez.dashboard.pool_rentals import PoolRentals
 from scribblez.dashboard.queue import Queue, QueueEntry
 from scribblez.dashboard.workers import (
-    CLOUD_SYNC,
     WorkerManager,
-    _bucket_trainer,
     _container_name,
     _machine_key,
     _machine_link,
@@ -647,7 +643,4 @@ class TagQueue:
             if _slot_sink(spec, task, w) == "local":
                 sweep_stopped(machine, **_transfer_target(spec, task, w))
         if any(w.kind == "ssh" and _slot_sink(spec, task, w) == "r2" for w in task.workers):
-            argv = [sys.executable, str(CLOUD_SYNC), "--workload", spec.name, "-t", task.tag]
-            if _bucket_trainer(spec, task):
-                argv.append("--trainer-outputs")
-            subprocess.run(argv, check=True, capture_output=True, text=True)
+            self._m.sync_once(spec, task)

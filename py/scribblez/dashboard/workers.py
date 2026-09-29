@@ -340,6 +340,19 @@ def _gpu_need(spec, task: tasks.TaskRecord, role: str) -> float | None:
     return workloads.resolve(spec.gpu_need)(params, role)
 
 
+def cloud_sync_argv(spec, task: tasks.TaskRecord, *extra: str) -> list[str]:
+    """The cloud_sync command pulling what `task`'s bucket slots deliver. It
+    names the tag's mount root, so the pull lands wherever this process
+    resolves the tag dir (a test's redirected root included)."""
+    return [
+        sys.executable, str(CLOUD_SYNC),
+        "--workload", spec.name, "-t", task.tag,
+        "--mount-root", str(spec.paths(task.tag).mount_root),
+        *(["--trainer-outputs"] if _bucket_trainer(spec, task) else []),
+        *extra,
+    ]  # fmt: skip
+
+
 def _slot_host(task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
     return _ssh_host(task, w) if w.kind == "ssh" else None
 
@@ -742,12 +755,7 @@ class WorkerManager:
         longer matches (a trainer slot appeared) is replaced."""
         key = _key(spec, task.tag)
         has_bucket = _has_bucket_slots(spec, task)
-        argv = [
-            sys.executable, str(CLOUD_SYNC),
-            "--workload", spec.name, "-t", task.tag,
-            "--watch", "--interval", str(SYNC_INTERVAL_SECONDS),
-            *(["--trainer-outputs"] if _bucket_trainer(spec, task) else []),
-        ]  # fmt: skip
+        argv = cloud_sync_argv(spec, task, "--watch", "--interval", str(SYNC_INTERVAL_SECONDS))
         entry = self._sync.get(key)
         if entry is not None and (
             not has_bucket or entry[0].poll() is not None or entry[1] != argv
@@ -760,6 +768,11 @@ class WorkerManager:
             log = self._log_file(spec, task.tag, "cloud_sync")
             proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
             self._sync[key] = (proc, argv)
+
+    def sync_once(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
+        """Pull what `task`'s bucket slots delivered, once, raising on failure
+        (the tag queue's drain, before a lease's slots are removed)."""
+        subprocess.run(cloud_sync_argv(spec, task), check=True, capture_output=True, text=True)
 
     def _push_controls(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
         """Copy the operator's controls file to the bucket when it has changed,
