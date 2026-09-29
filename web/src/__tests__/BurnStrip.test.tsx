@@ -7,9 +7,10 @@ import BurnStrip, { fmtUptime, type Fleet, type FleetInstance } from '../compone
 // listing it reads has stopped refreshing.
 
 const getJSON = vi.fn();
+const postJSON = vi.fn();
 vi.mock('../lib/api', () => ({
   getJSON: (...a: unknown[]) => getJSON(...a),
-  postJSON: vi.fn(),
+  postJSON: (...a: unknown[]) => postJSON(...a),
 }));
 vi.mock('../components/master/TaskView', () => ({ default: () => null }));
 
@@ -33,7 +34,10 @@ const setup = async (f: Fleet, onOpen = vi.fn()) => {
 };
 
 describe('the cloud burn strip', () => {
-  beforeEach(() => getJSON.mockReset());
+  beforeEach(() => {
+    getJSON.mockReset();
+    postJSON.mockReset();
+  });
 
   it('adds up what bills and opens the task that owns an instance', async () => {
     const onOpen = await setup(fleet({
@@ -72,6 +76,32 @@ describe('the cloud burn strip', () => {
     await setup(fleet({ observed_at: null, error: 'No credentials file at /x' }));
     await waitFor(() => screen.getByText('never listed'));
     expect(screen.getByText(/listing failed: No credentials/)).toBeInTheDocument();
+  });
+
+  it('stops all cloud spending in one click, saying what it will do first', async () => {
+    const billing = fleet({ burn_per_hr: 0.9, instances: [inst({ owner: 'pool/aws1-1', spot: true })] });
+    getJSON.mockImplementation((url: string) => Promise.resolve(
+      url === '/api/cloud/stop_all'
+        ? { caps: ['aws1'], requeue: ['position_eval/tune-wsd'], terminate: ['aws1-1'], stop: [], orphans: [] }
+        : billing));
+    postJSON.mockResolvedValue({});
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<BurnStrip onOpen={vi.fn()} />);
+    fireEvent.click(await screen.findByText('■ Stop all cloud spending'));
+    await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/cloud/stop_all', {}));
+    const text = confirm.mock.calls[0][0] as string;
+    expect(text).toContain('Terminate rented machines: aws1-1');
+    expect(text).toContain('Put back in the queue (data kept): position_eval/tune-wsd');
+    expect(text).toContain('Set rental capacity to 0: aws1');
+    expect(text).not.toContain('untracked');
+    await screen.findByText(/stopping… reaches \$0/);
+    expect(screen.queryByText('■ Stop all cloud spending')).toBeNull();
+  });
+
+  it('offers no stop button when nothing bills', async () => {
+    await setup(fleet({ instances: [inst({ state: 'stopped' })] }));
+    await waitFor(() => screen.getByText('nothing billing'));
+    expect(screen.queryByText('■ Stop all cloud spending')).toBeNull();
   });
 
   it('formats uptime by the scale that matters', () => {

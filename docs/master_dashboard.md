@@ -188,6 +188,15 @@ provider design are in [plans/cloud_machines.md](plans/cloud_machines.md).
   moved on from stays visible. The strip is quiet when nothing bills, and
   turns amber when the listing has stopped refreshing or failed, rather than
   showing a zero it cannot vouch for.
+- **Stop all cloud spending.** While anything bills, the strip shows one red
+  button that gets the burn to zero, after a confirmation listing exactly what
+  it will do: every rental capacity cap goes to 0; every tag on a pool rental
+  goes back to the head of the queue with its data; every pool rental retires
+  (nothing is placed on it again, and it is terminated once its tag has
+  handed over its data); every task-owned rented machine has its slots
+  paused and stops as soon as they are down (its disk is kept); every orphan
+  is terminated. Release alone is not the way: it frees the machine, and the
+  queue gives it to the next tag that fits.
 
 ### Preparing your own machine
 

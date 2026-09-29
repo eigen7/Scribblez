@@ -623,6 +623,9 @@ class WorkerManager:
         # Where bundle builds run (see redeploy and _bundle_for_start): off the
         # blocking thread, which a build would otherwise hold for minutes.
         self._builds = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-build")
+        # Machine keys of task rentals to stop as soon as their slots are down,
+        # without the IDLE_STOP_SECONDS wait (stop_task_rentals).
+        self._stop_now: set[str] = set()
         # Where generation uploads run (_make_publish), also off the blocking
         # thread: a tag moving onto a rented trainer uploads every generation
         # it has, which held every request behind it for minutes.
@@ -1319,6 +1322,31 @@ class WorkerManager:
             if inst.state != "terminated" and inst.owner not in owned
         ]
 
+    def task_rentals(self) -> list[tuple]:
+        """(spec, task, machine) for every task-owned rented machine whose
+        instance bills or may: not yet known stopped."""
+        states = {i.id: i.state for i in self._instance_index(False).values()}
+        return [
+            (spec, task, m)
+            for spec, task in self.all_tasks()
+            for m in task.machines
+            if m.instance_id is not None and states.get(m.instance_id) in ("pending", "running")
+        ]
+
+    def stop_task_rentals(self) -> list[str]:
+        """Pause every slot on a task-owned rented machine and stop the machine
+        as soon as its slots are down (Stop all cloud spending). Stopped keeps
+        its disk, and the task's data on it, for a later Start. Returns
+        "<workload>/<tag>/<machine>" of each."""
+        out = []
+        for spec, task, m in self.task_rentals():
+            for w in task.slots_on(m.name):
+                w.desired_state = "paused"
+            tasks.save_task(spec, task)
+            self._stop_now.add(_machine_key(spec, task.tag, m.name))
+            out.append(f"{spec.name}/{task.tag}/{m.name}")
+        return out
+
     def terminate_orphan(self, instance_id: str):
         inst = self._instance_index(False).get(instance_id)
         assert inst is not None, f"no instance {instance_id} in the last listing"
@@ -1447,10 +1475,11 @@ class WorkerManager:
                 self._idle_since.pop(key, None)
                 continue
             since = self._idle_since.setdefault(key, time.time())
-            if time.time() - since >= IDLE_STOP_SECONDS:
+            if key in self._stop_now or time.time() - since >= IDLE_STOP_SECONDS:
                 provider = provider or self._provider()
                 provider.stop(m.instance_id)
                 self._idle_since.pop(key, None)
+                self._stop_now.discard(key)
                 self._instances = ({}, 0.0)
 
     def _observe_machine(self, m: tasks.MachineRecord) -> str:

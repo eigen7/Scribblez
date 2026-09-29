@@ -89,6 +89,9 @@ class PoolMachine:
     # The Capacity entry a machine the pool rented belongs to; None for a
     # machine the operator added. A rented one is terminated once idle.
     capacity: str | None = None
+    # A rental being given up (Stop all cloud spending): the queue places
+    # nothing more on it, and it is terminated as soon as no lease holds it.
+    retiring: bool = False
 
     @property
     def gpu_capacity_gb(self) -> float:
