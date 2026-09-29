@@ -344,7 +344,7 @@ same positions, regardless of which physical tile is the blank) are collapsed.
 This eliminates the majority of blank-induced duplicates. (The roadmap scores
 every legal move without filtering instead: its one-pass Q-head makes large
 move sets cheap, and blanks with different letters produce genuinely
-different boards. See [roadmap.md](roadmap.md#the-destination).)
+different boards. See [roadmap.md](roadmap.md#its-destination).)
 
 **Batch evaluation.** After deduplication, the remaining `N` moves are encoded
 and passed to the Q-head in a single forward pass. Typical `N` after
