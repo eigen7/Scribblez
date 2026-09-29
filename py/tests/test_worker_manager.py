@@ -2086,6 +2086,27 @@ def test_restarts_after_a_crash_are_recorded_and_clean_exits_are_not(
     assert manager.recent_crashes(spec, "t", ssh.worker_id, 60) == []
 
 
+def test_a_gated_local_worker_stopped_by_the_dashboard_is_not_a_crash(
+    manager, spec, task, monkeypatch
+):
+    """A gate parks a local generator by SIGTERM, and the worker exits 143 by
+    design. Counted as crashes, three gates in half an hour failed every tag
+    the queue placed on localhost; a crash is an exit this process did not
+    ask for."""
+    w = manager.add_local(spec, task, "generate", 4)
+    monkeypatch.setattr(manager, "_spawn_local", lambda *a: None)
+    monkeypatch.setattr(workers_mod, "worker_pid_alive", lambda *a: True)
+    monkeypatch.setattr(workers_mod.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(manager, "_local_exit_code", lambda *a: 143)
+    down = {"observed_running": False}
+    for _ in range(3):  # gated, then released
+        manager._stop_local(spec, task, w)
+        manager._reconcile_worker(spec, task, w, workers_mod.RUN, down)
+    assert manager.recent_crashes(spec, "t", w.worker_id, 60) == []
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, down)  # died unasked
+    assert manager.recent_crashes(spec, "t", w.worker_id, 60) == ["exit 143"]
+
+
 def test_cloud_sync_is_told_the_tag_dirs_mount_root(spec, task):
     """cloud_sync resolves the tag dir itself; naming the root keeps its pull
     where this process puts the tag (a test's redirected root, here), never
