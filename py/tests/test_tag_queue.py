@@ -509,3 +509,19 @@ def test_an_ssh_machine_added_after_enqueueing_gets_the_tag_built(queued, monkey
     manager.add_pool_machine("gpu-box", "me@gpu-box")
     q.tick()
     assert queue_mod.load_queue().entry("position_eval", "a").bundle == queue_mod.BUNDLE_BUILDING
+
+
+def test_the_state_home_follows_the_trainers_sink_once_it_has_trained(queued):
+    """Where a tag may go depends on where its last trainer delivered, and only
+    once it has trained: before that, anywhere."""
+    _, manager, make = queued
+    task = make("a")
+    assert placement.state_home(SPEC, task) is None
+    manager.add_local(SPEC, task, "train", None)
+    assert task.trainer_sink == "local"
+    paths = SPEC.paths("a")
+    paths.root.mkdir(parents=True, exist_ok=True)
+    paths.train_state_path.write_text('{"rows_trained": 256, "generation_index": 0}')
+    assert placement.state_home(SPEC, task) == placement.HOME_LOCAL
+    task.trainer_sink = "r2"  # a trainer on a rented machine delivered through the bucket
+    assert placement.state_home(SPEC, task) == placement.HOME_BUCKET

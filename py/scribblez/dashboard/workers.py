@@ -62,6 +62,13 @@ CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
 SYNC_INTERVAL_SECONDS = 30
 
 
+def _note_trainer_sink(spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+    """Record where new slot `w` delivers, if it is a trainer (a role with an
+    ingest tick): where the task's training state will live from now on."""
+    if spec.role(w.role).ingest:
+        task.trainer_sink = _slot_sink(spec, task, w)
+
+
 def _slot_sink(spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
     """Where slot `w`'s worker delivers (SCZ_SINK, cloud/sinks.py).
 
@@ -1096,6 +1103,7 @@ class WorkerManager:
             threads=threads or default_thread_count(),
         )
         task.workers.append(w)
+        _note_trainer_sink(spec, task, w)
         tasks.save_task(spec, task)
         return w
 
@@ -1127,6 +1135,7 @@ class WorkerManager:
             threads=threads,
         )
         task.workers.append(w)
+        _note_trainer_sink(spec, task, w)
         tasks.save_task(spec, task)
         self._ensure_sync(spec, task)
         return w
