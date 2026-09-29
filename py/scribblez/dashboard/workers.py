@@ -118,15 +118,21 @@ def _is_crash(code: int | None) -> bool:
     its tag: non-zero, and not EXIT_INTERRUPTED. That one is a SIGTERM from
     outside the worker, which a worker never sends itself: a gate or pause
     from this dashboard, a docker stop, or its host stopping under a spot
-    interruption (found by the simulation, test_simulation.py). None, an exit
-    not observed, is no crash either."""
+    interruption. None, an exit not observed, is no crash either."""
     return code not in (None, 0, EXIT_INTERRUPTED)
 
 
-def _exit_code(reason: str) -> int | None:
-    """The code in a container's exit reason, "exit <code>: <message>"."""
+def _is_ssh_crash(reason: str) -> bool:
+    """Whether a stopped container's exit reason, "exit <code>: <message>", is
+    a crash. A reason with no readable code (the read failed, or the container
+    went between the probe and the read) counts as one: the container did
+    stop, and a slot that keeps stopping for unreadable reasons must still
+    fail its tag rather than restart forever."""
     head = reason.split(":", 1)[0]
-    return int(head[5:]) if head.startswith("exit ") and head[5:].lstrip("-").isdigit() else None
+    code = head.removeprefix("exit ")
+    if code == head or not code.lstrip("-").isdigit():
+        return True
+    return _is_crash(int(code))
 
 
 def _role_inputs(spec, role, params, mount_root: Path) -> dict[str, Path]:
@@ -842,8 +848,7 @@ class WorkerManager:
         must not inherit the old worker's process handle, its container's last
         probe and exit reason, its backoff, crashes or downtime: a stale
         "stopped" probe read as the new slot's own became a phantom crash and
-        a start of a container that does not exist (found by the simulation,
-        test_simulation.py)."""
+        a start of a container that does not exist."""
         for memory in (
             self._local, self._exits, self._restarts, self._probes, self._crashes,
             self._down_since,
@@ -1890,26 +1895,27 @@ class WorkerManager:
                 except Exception as e:  # noqa: BLE001 -- scheduling must keep ticking
                     print(f"scheduler {spec.name}/{task.tag}: {e}")
             # An unobservable fleet (a failed provider listing, say) must not stop
-            # enforcement for this tag's slots or any later tag's; its machines
-            # are left alone this pass.
+            # enforcement for this tag's slots or any later tag's; its machines,
+            # and every slot on one, are left alone this pass.
             try:
                 machines = await self.offload(self.machine_status, spec, task, observe=True)
             except Exception as e:  # noqa: BLE001 -- see above
                 print(f"machines {spec.name}/{task.tag}: {e}")
-                machines = []
-            try:
-                await self.offload(self._reconcile_machines, spec, task, machines)
-            except Exception as e:  # noqa: BLE001 -- one task's machines must not stop the pass
-                print(f"machines {spec.name}/{task.tag}: {e}")
-            down = {m["name"] for m in machines if m["state"] != "up"}
+                machines = None
+            if machines is not None:
+                try:
+                    await self.offload(self._reconcile_machines, spec, task, machines)
+                except Exception as e:  # noqa: BLE001 -- one task's machines must not stop the pass
+                    print(f"machines {spec.name}/{task.tag}: {e}")
+            down = {m["name"] for m in machines or () if m["state"] != "up"}
             status = await self.offload(self.worker_status, spec, task, observe=True)
             for info in status:
                 # A handler may have removed the slot between this pass's steps.
                 w = task.find(info["worker_id"])
                 if w is None:
                     continue
-                if w.machine is not None and w.machine in down:
-                    continue  # nothing on a machine that is not up can be acted on
+                if w.machine is not None and (machines is None or w.machine in down):
+                    continue  # nothing on a machine not known to be up can be acted on
                 # Collect before enforcing: this slot may be about to be
                 # parked, and a pull needs its container running.
                 if (
@@ -2059,7 +2065,7 @@ class WorkerManager:
                 # Unreachable or unobserved: nothing this pass can act on.
                 self._note_restart(key)
                 why = self._exits.get(key, "")
-                if probe == "stopped" and _is_crash(_exit_code(why)):
+                if probe == "stopped" and _is_ssh_crash(why):
                     self._note_crash(key, why)
                 self._start_or_replace(machine, name, spec, task, w, probe)
         elif intent == PARK and probe == "running":

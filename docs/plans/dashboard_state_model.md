@@ -101,7 +101,7 @@ thread (`WorkerManager.offload`). The code does not keep to it:
 ### What a restart forgets
 
 These are held only in memory:
-- **WorkerManager:** `_crashes`, `_stopped_local`, `_down_since`,
+- **WorkerManager:** `_crashes`, `_down_since`,
   `_idle_since`, `_stop_now`, `_exits`, `_restarts`, `_probes`,
   `_machine_states`, `_publishing`, `_pending_builds`.
 - **TagQueue:** `_builds`, `_drains`, `_rent_refused`.
@@ -109,9 +109,7 @@ These are held only in memory:
 
 Each was judged fine to lose when it was added, one at a time. No one has
 judged the whole set. `_stop_now` is one lapse: after a restart, Stop all
-cloud spending falls back to the 10-minute idle stop. `_stopped_local` is
-correct only because a process started before the restart has no exit code
-to read.
+cloud spending falls back to the 10-minute idle stop.
 
 ### A tag's state is inferred from three stores
 

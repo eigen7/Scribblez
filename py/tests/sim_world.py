@@ -32,6 +32,7 @@ from cloud.bundles import BundleManifest
 from cloud.credentials import RegistryConfig
 from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
+from cloud.worker_entrypoint import EXIT_INTERRUPTED
 from scribblez import params as params_mod
 from scribblez.workloads.base import RoleSpec, SlotPlan, WorkloadSpec
 
@@ -41,7 +42,6 @@ ROWS_PER_GENERATION = 200  # what one generator step feeds
 AHEAD_LIMIT = 3  # generations a generator may run ahead before its gate closes
 STEP_SECONDS = 5.0
 TRAIN_GPU_GB = 8.0
-EXIT_INTERRUPTED = 143  # the worker entrypoint's exit on SIGTERM
 
 
 # ---- the workload ----------------------------------------------------------

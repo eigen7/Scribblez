@@ -521,7 +521,6 @@ def test_the_state_home_follows_the_trainers_sink_once_it_has_trained(queued):
 
 def test_a_retiring_machine_says_so_on_the_queue_row():
     """Stop all cloud spending retires a rental; until it is terminated the
-    queue must not show it as a machine that would take a waiting tag (the
-    simulation's find: it showed no reason at all)."""
+    queue must not show it as a machine that would take a waiting tag."""
     m = PoolMachine(name="cap-1", kind="ssh", retiring=True)
     assert "retiring" in TagQueue._why_not(m, [])
