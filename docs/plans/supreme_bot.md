@@ -73,6 +73,10 @@ rules MCTS assumes are what make it converge with no training at all
   principles SupremeBot keeps. The model sees its prior's prediction next to
   each observation, and an empty context reduces the model to the plain
   student.
+- **[design.md §3](../design.md)** (the public belief system) and
+  [roadmap.md's parked rack inference](../roadmap.md#rack-inference-parked)
+  are what SupremeBot's learned draws replace once the project leaves
+  face-up leaves ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)).
 - **[design.md §8.1](../design.md)** (search-derived knowledge buffers)
   describes the idea in the abstract. In SupremeBot, the buffer is the
   context itself.
@@ -116,7 +120,7 @@ statistic.
 | root board | the trunk's board tokens for the root position, computed once per turn |
 | root candidate | the move's footprint, tiles, score and leave; the prior's value prediction for it |
 | action step | the mover; the move as footprint cells, tiles, score and leave; its rank and value under the prior among the legal moves at that node; the tiles left in the bag |
-| chance step | who drew; the tiles drawn; the resulting rack; the draw's log-probability under the true distribution (exact hypergeometric over the unseen pool) and under the distribution it was actually sampled from |
+| chance step | who drew; the tiles drawn; the resulting rack; the draw's log-probability under the uninformed prior (exact hypergeometric over the unseen pool) and under the distribution it was actually sampled from |
 | leaf | the horizon outcome (WLD and score-difference moments, root-mover POV); terminal or truncated; the prior's prediction for the probe's root candidate, so the residual forms inside the model |
 
 Every step also carries its **address**: the probe id, the step's depth, the
@@ -153,7 +157,7 @@ themselves appended to it.
   not scale with the full move list. Each shortlisted move becomes a query
   token built like an action step. The output is a logit per move.
 - **Draw queries** at a chance node. The output is a proposal distribution
-  over draws. It starts as the true distribution and stays there until M4
+  over draws. It starts as the uninformed prior and stays there until M4
   ([Build order](#build-order)). Draws are sampled from the proposal, and both
   log-probabilities go into the chance-step token.
 - **Pick queries**, one per root candidate. The output is the candidate's
@@ -207,6 +211,52 @@ The reader learns it, because its labels are true values and its inputs state
 how each probe was chosen. The correction holds only for probe policies the
 reader has been trained against, so the reader and the probe policy are
 trained together ([Training](#training)).
+
+## Rack inference is a draw decision
+
+Under face-up leaves, the only hidden tiles are fresh draws, and the
+hypergeometric prior over the unseen pool is the true distribution. In
+standard Scrabble, the opponent's kept tiles are hidden too, and the true
+distribution is a posterior: the opponent's past plays, exchanges and passes
+say which racks they probably hold. Existing engines compute that posterior in
+a separate module and sample from it. Macondo's `SIMMING_INFER_BOT` does this,
+and so does the port in
+[belief/rack_inference.h](../../engine/include/belief/rack_inference.h).
+SupremeBot needs no such module, because inference falls to two parts it
+already has.
+
+- **The reader weights.** Chance steps carry the uninformed prior's
+  log-probability, not the posterior's. The pick labels are values against
+  the rack the opponent actually held in the recorded game, so a reader
+  trained on them values candidates under the posterior the training games
+  actually produced. It learns to discount probes on racks the opponent's
+  history rules out, with no likelihood model anywhere. The root prefix
+  carries that history: the opponent's past moves as tokens.
+- **The writer samples.** A reader that only reweights is doing importance
+  sampling from the uninformed prior. That wastes most probes when the
+  posterior is sharp, for example after a play that tells which five tiles the
+  opponent kept. A learned draw proposal puts probes where the posterior
+  mass is. It is trained by the same telescoping reward as the move choices,
+  so it learns what to sample, not a likelihood. That can differ from the
+  posterior: the proposal should favor racks where candidates disagree, and
+  avoid racks where the posterior is high but every candidate does the same.
+  A separate inference module cannot make that trade, because it does not
+  know what the search is trying to decide.
+
+The costs of this approach:
+
+- **The posterior is the one the training opponents produce.** Inference is
+  only as good as the match between training opponents and real ones. A
+  separate module has the same dependence through its likelihood model, but
+  there it is a stated parameter, the likelihood temperature. Here it is
+  implicit in the training data, which is an argument for opponent diversity
+  in the corpus, and possibly for an opponent-identity token.
+- **The labels are noisy.** A value against the one rack the opponent held is
+  one sample from the posterior. It is unbiased, and it needs many positions.
+- **There is a baseline to beat.** The ported inference makes a comparison
+  arm, with draws sampled from its posterior and a reader trained over them.
+  Its log-probability can also go into the chance-step token as a hint the
+  network is free to ignore.
 
 ## Training
 
@@ -366,9 +416,12 @@ Each milestone produces a working agent, measured before the next begins.
 - **M3: learned move choices.** The writer is trained with the telescoping
   reward, alternating with the reader. Measured in match play against M1 at
   equal wall-clock time, not equal probes, because steering costs time.
-- **M4: learned draws.** Proposal distributions at chance nodes. This comes
-  last, because it distorts the reader's input distribution the most and
-  matters least.
+- **M4: learned draws.** Proposal distributions at chance nodes. Under
+  face-up leaves this comes last, because it distorts the reader's input
+  distribution the most and matters least there. It is also the gateway to
+  standard Scrabble, where it becomes the rack inference
+  ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)),
+  measured against the ported posterior.
 - **M5: self-labeling.** SupremeBot at many times the budget labels
   SupremeBot's training positions.
 
@@ -389,6 +442,8 @@ Each milestone produces a working agent, measured before the next begins.
   scheme so far. Carrying over the probes that remain legal is deferred until a
   case needs it.
 - **Standard Scrabble:** under face-up leaves, a chance step draws the
-  opponent's replenishment tiles only. Nothing in the tokens assumes that, so
-  hidden full racks, and inference from the opponent's past plays, enter as
-  chance steps and root-prefix tokens without redesign.
+  opponent's replenishment tiles only. Nothing in the tokens assumes that. The
+  hidden full rack is one more chance step, and the opponent's history goes
+  in the root prefix, so the move is a corpus regeneration, not a redesign.
+  What is open is whether the reader's implicit posterior is good enough
+  before M4, or whether standard Scrabble has to wait for learned draws.
