@@ -1742,6 +1742,9 @@ def _train_task(tag="t", kinds=("ssh",)):
 
 
 def test_publish_copies_the_chunks_by_size_and_then_the_manifest(manager, tmp_path, monkeypatch):
+    """On the upload thread, never the blocking one: a tag moving onto a
+    rented trainer uploads every generation it has, and the dashboard must
+    keep serving meanwhile. The hook says 'not yet' until the copy is done."""
     spec = workloads.get("position_eval")
     monkeypatch.setattr(
         workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
@@ -1752,7 +1755,9 @@ def test_publish_copies_the_chunks_by_size_and_then_the_manifest(manager, tmp_pa
     task = _train_task()
     publish = manager._make_publish(spec, task)
     gen_dir = spec.paths("t").generation_dir(3)
-    publish("generations/gen_000003")
+    assert publish("generations/gen_000003") is False  # started
+    manager._publishing[(_key(spec, task.tag), "generations/gen_000003")].result(timeout=10)
+    assert publish("generations/gen_000003") is True  # collected
     assert rc.calls == [
         ("copy", "--size-only", "--exclude", "manifest.json", str(gen_dir),
          "r2:b/position_eval/t/generations/gen_000003"),

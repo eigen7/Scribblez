@@ -102,14 +102,15 @@ def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn
 
 def _publish_complete(paths: TagPaths, hooks):
     """Publish every complete generation whose manifest does not yet record
-    it, marking each only after the hook returns: a failed upload is retried
-    next tick, and a controller restart picks up where it left off. Window
-    eviction keeps the scan short."""
+    it, marking each only once the hook says it is in the bucket: an upload
+    still running is asked about again next tick, a failed one is retried,
+    and a controller restart picks up where it left off. Window eviction
+    keeps the scan short."""
     for index in lifecycle.list_generation_indices(paths):
         gen_dir = paths.generation_dir(index)
         if lifecycle.is_complete(gen_dir) and not lifecycle.is_published(gen_dir):
-            hooks.publish(f"generations/{gen_dir.name}")
-            lifecycle.mark_published(gen_dir)
+            if hooks.publish(f"generations/{gen_dir.name}"):
+                lifecycle.mark_published(gen_dir)
 
 
 def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn):

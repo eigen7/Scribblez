@@ -616,6 +616,13 @@ class WorkerManager:
         # Where bundle builds run (see redeploy and _bundle_for_start): off the
         # blocking thread, which a build would otherwise hold for minutes.
         self._builds = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-build")
+        # Where generation uploads run (_make_publish), also off the blocking
+        # thread: a tag moving onto a rented trainer uploads every generation
+        # it has, which held every request behind it for minutes.
+        self._uploads = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-upload")
+        # (task key, dest_rel) -> its upload in flight or finished but not yet
+        # collected by the scheduler's next publish call.
+        self._publishing: dict[tuple[str, str], Future] = {}
         # Task key -> its first-use bundle build in flight (_bundle_for_start).
         self._pending_builds: dict[str, Future] = {}
         # Per-file digests behind source_hash, so the drift check every status
@@ -1807,9 +1814,12 @@ class WorkerManager:
         bucket, where a remote trainer reads it (docs/plans/cloud_training.md).
         None for a task without bucket-delivering slots.
 
-        Chunks that came through the bucket are already there after the
-        mirror move and are skipped by size; the rest upload. The manifest goes
-        last, so a manifest in the bucket means the whole generation is."""
+        The copy runs on the upload thread, so the hook only starts it and
+        reports whether it is done (SchedulerHooks.publish); a failed copy
+        raises on the call that collects it, and the next call starts it
+        again. Chunks that came through the bucket are already there after
+        the mirror move and are skipped by size; the rest upload. The manifest
+        goes last, so a manifest in the bucket means the whole generation is."""
         if not _has_bucket_slots(spec, task):
             return None
         try:
@@ -1819,7 +1829,7 @@ class WorkerManager:
         r2 = creds.r2
         paths = spec.paths(task.tag)
 
-        def publish(dest_rel: str):
+        def upload(dest_rel: str):
             gen_dir = paths.data_dir / dest_rel
             dest = bucket_path(r2, spec.name, task.tag, *dest_rel.split("/"))
             res = rclone(
@@ -1831,6 +1841,18 @@ class WorkerManager:
                 r2, "copyto", str(gen_dir / MANIFEST_NAME), f"{dest}/{MANIFEST_NAME}", capture=True
             )
             assert res.returncode == 0, f"publishing {dest_rel}'s manifest failed: {res.stderr}"
+
+        def publish(dest_rel: str) -> bool:
+            key = (_key(spec, task.tag), dest_rel)
+            future = self._publishing.get(key)
+            if future is None:
+                self._publishing[key] = self._uploads.submit(upload, dest_rel)
+                return False
+            if not future.done():
+                return False
+            del self._publishing[key]
+            future.result()  # a failure raises; the next call uploads again
+            return True
 
         return publish
 
@@ -2132,6 +2154,7 @@ class WorkerManager:
         watchers. ssh containers keep running across a dashboard restart."""
         self._blocking.shutdown(wait=False, cancel_futures=True)
         self._builds.shutdown(wait=False, cancel_futures=True)
+        self._uploads.shutdown(wait=False, cancel_futures=True)
         for proc in [*self._local.values(), *(p for p, _ in self._sync.values())]:
             if proc.poll() is None:
                 proc.send_signal(signal.SIGTERM)
