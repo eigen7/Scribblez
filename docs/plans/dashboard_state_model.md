@@ -1,9 +1,12 @@
 # Plan: one state model for the dashboard's control plane
 
-**Status: proposed, not reviewed.** Written 2026-09-29, after the first live
-run of the tag queue (#276-#280) needed eleven follow-up PRs (#281-#291). The
-running campaign is unaffected. Each PR here lands between campaign arms,
-with a dashboard restart.
+**Status: proposed, not reviewed; operator's calls recorded 2026-09-29**
+(§Operator's calls): a SQLite control store; machines rented and registered
+only on the Machine pool page; Requeue and Release keep their names; moving a
+tag's training state is automatic (recommended, awaiting confirmation).
+Written after the first live run of the tag queue (#276-#280) needed eleven
+follow-up PRs (#281-#291). The running campaign is unaffected. Each PR here
+lands between campaign arms, with a dashboard restart.
 
 **Decision.**
 
@@ -18,13 +21,14 @@ with a dashboard restart.
   process, pauses a container, terminates an instance), it saves why. What it
   observes afterwards is read against that record, and the record survives a
   restart.
-- **The pool owns every machine.** Renting or registering a machine from a
-  tag's page puts it in the pool and leases it to that tag. A tag placed by
-  hand holds a *manual* lease that the queue never touches. The task-owned
-  machine model, with its separate lifecycle, goes away.
-- **A tag's training state has a recorded home**, local or bucket, and moves
-  between them only by an explicit operation.
-- **Fewer operator verbs, each named by its effect on the machine.**
+- **The pool owns every machine.** Machines are rented and registered only on
+  the Machine pool page. A tag run by hand holds a *manual* lease on a pool
+  machine, which the queue never touches. The task-owned machine model, with
+  its separate lifecycle, goes away.
+- **A tag's training state has a recorded home**, local or bucket. The queue
+  moves it, as a step of placement, when it places a local tag on a rental.
+- **Operator verbs that each say what happens to the machine,** offered only
+  in the tag states where they apply.
 - **A simulation test** drives random event sequences through the real
   control code, including dashboard restarts at any step, and checks the
   invariants in §7 after every step. It is the argument that the design has no
@@ -100,9 +104,9 @@ vanished when the lease closed.
 
 ```
             enqueue             place
-    idle ───────────▶ queued ─────────▶ running ──── all slots finished, or Finish ──▶ releasing(finish) ──▶ done
+    idle ───────────▶ queued ─────────▶ running ──── all slots finished, or Release ──▶ releasing(release) ──▶ done
     ▲ ▲ ◀── dequeue ──┘ ▲                 │  │
-    │ │                 │                 │  └── Give back ──▶ releasing(give-back) ──▶ queued (at the head)
+    │ │                 │                 │  └── Requeue ───▶ releasing(requeue) ───▶ queued (at the head)
     │ │                 └─────────────────┼───── (the machine goes to the next fitting tag)
     │ │                                   └── 3 crashes in 30 min ──▶ releasing(fail) ──▶ failed (machine held)
     │ └──────────────── Dismiss ─────────────────────────────────────────────────────────────────┘
@@ -111,9 +115,9 @@ vanished when the lease closed.
 
 `placing` (the current lease phase `reserved`) is a sub-state of `running`
 until the slots exist. Pause parks a running tag's slots without changing
-its state, and keeps its machine. `releasing` records why it was entered (finish, give
-back, fail, stop-all), and that reason decides where it goes next. Invariants
-tie the stores together:
+its state, and keeps its machine. `releasing` records why it was entered
+(release, requeue, fail, stop-all), and that reason decides where it goes
+next. Invariants tie the stores together:
 
 - A tag is `queued` if and only if it is in the queue order.
 - A tag is `running`, `releasing` or `failed` if and only if exactly one lease
@@ -128,7 +132,7 @@ tie the stores together:
 - **crashed:** it exited any other way with no stop intent recorded. A crash
   feeds the failure count.
 - **An exit that matches a recorded intent** is the expected result of that
-  action (a gate park, an operator pause, a give-back). It sets no outcome.
+  action (a gate park, an operator pause, a requeue). It sets no outcome.
 
 **Machine.** Every machine is a pool machine:
 
@@ -187,9 +191,12 @@ upload.
 
 ### 4. The pool owns every machine
 
-- **Rent** on a tag's page rents into the pool and gives the tag a *manual*
-  lease. **Register** does the same for a machine you own. The queue never
-  places on a manually leased machine, and never moves a manual tag.
+- **Machines come from one place, the Machine pool page:** rent, register,
+  and rental capacity. The tag page's Machines card and rent form go. Instead,
+  **Run by hand on…** picks any free pool machine (or rents one there and
+  then) and gives the tag a *manual* lease on it. The queue never places on a
+  manually leased machine, and never moves a manual tag. Every machine and
+  every dollar is then on one page.
 - **What goes away:**
   - task-owned `MachineRecord`s and `_reconcile_machines`;
   - the second idle policy (stop after 10 minutes, versus the pool's
@@ -207,13 +214,22 @@ upload.
 
 - **Recording the home.** The tag's stored `home ∈ {local, bucket}` replaces
   `trainer_sink` (#290). It is set when the first trainer slot is created, and
-  changed only by **move home**. Placement refuses a machine that cannot reach
-  the home, as #290 does today.
-- **Move home: local to bucket.** Upload the checkpoint, the cursor and the
-  current window of generations, confirm, then flip `home`. A tag that ran on
-  localhost can then continue on a rental. The move is a command with an
-  intent (§3), so an interrupted move resumes or rolls back. Moving from bucket
-  to local is the pull `cloud_sync` already does, followed by the flip.
+  changed only by **move home**.
+- **Move home: local to bucket, done by the queue.** When the queue places a
+  local tag on an ssh machine, placement first moves its home: upload the
+  checkpoint, the cursor and the current window of generations, confirm, then
+  flip `home`, and only then start the slots. Measured on `tune-wd0.01`, that
+  is about 170 MB (a 117 MB checkpoint plus four generations of about 12 MB).
+  That is seconds to minutes once per tag, against an arm of about four
+  hours. The queue row shows the move while it runs. The move is a command
+  with an intent (§3), so an interrupted move resumes or rolls back. Moving
+  from bucket to local is the pull `cloud_sync` already does, followed by the
+  flip.
+- **Why automatic.** The capacity cap is already the operator's decision to
+  rent. A second, manual step to let a tag use a rental would bring back the
+  "why won't my tag go there" confusion the live run hit. A tag the operator
+  wants kept on localhost says so with its queue entry's machine list, which
+  already exists.
 - **Pulls never regress progress.** `cloud_sync` refuses to replace a
   checkpoint whose cursor is ahead of the incoming one. This guards the
   failure mode behind the `tune-wd0.1` backup.
@@ -224,17 +240,20 @@ upload.
 |---|---|---|---|
 | Enqueue / Dequeue | idle / queued | queued / idle | — |
 | Pause / Resume | running | running (slots parked) | kept |
-| Give back | running | queued, at the head | freed for the next tag |
-| Finish | running | done | freed |
+| Requeue | running | queued, at the head | freed for the next tag |
+| Release | running | done (slots finished) | freed for the next tag |
 | Dismiss | failed | idle (data kept, re-enqueue when fixed) | the held machine is freed, or retired if rented |
 | Place by hand / Unmanage | idle / manual | manual / idle | manual lease taken / released |
 | Remove machine | — | — | only when unleased; a rental is retired |
-| Stop all cloud spending | any | tags on rentals given back | every rental retired; caps to 0 |
+| Stop all cloud spending | any | tags on rentals requeued | every rental retired; caps to 0 |
 
-Give back replaces Requeue, and Finish replaces Release. The old name
-"Release" read as "release the machine", and meant "this tag is done". Each
-button says what happens to the machine in its label or tooltip. The tag
-page shows the tag's one `state`, and offers only the verbs valid in it.
+Requeue and Release keep their names (operator's call). Release is the one
+that misled in the live run: it reads as "release the machine", but means
+"this tag is done, give its machine to the next tag". So both buttons get a
+tooltip and a confirmation that say what happens to the tag and to the
+machine, and the Machine pool page points at Stop all cloud spending for
+"I want this machine gone". The tag page shows the tag's one `state`, and
+offers only the verbs valid in it.
 
 ### 7. The simulation test
 
@@ -291,19 +310,16 @@ bug from #281-#291 would have broken at least one invariant: #286 breaks I6,
   all interactions. Even if everything else here is rejected, **the
   simulation test (§7) is worth landing on its own**, against the current
   code, with the known violations marked as expected failures.
-- **Control store: JSON files or SQLite.** Transitions that span stores
-  (placement writes a lease, then a tag state, then the queue) need either
-  ordered writes plus a startup repair pass, or transactions.
-  - **JSON:** keeps today's files and tools (`migrate_tag_params.py`, hand
-    inspection), at the cost of a repair pass for each transition that spans
-    stores.
-  - **SQLite:** a single control database (tags, slots, leases, queue,
-    machines, intents) makes each transition one transaction, and the repair
-    pass disappears.
-
-  This plan leans SQLite, and it is the main call for review (§Open
-  questions). Per-tag data (generations, checkpoints, metrics in
-  `dashboard.db`) stays where it is either way.
+- **Control store: JSON files (rejected) or SQLite (chosen).** Transitions
+  that span stores (placement writes a lease, then a tag state, then the
+  queue) need either ordered writes plus a startup repair pass, or
+  transactions. JSON would keep today's files and tools
+  (`migrate_tag_params.py`, hand inspection), at the cost of a repair pass for
+  each transition that spans stores. One SQLite control database (tags,
+  slots, leases, queue, machines, intents) makes each transition one
+  transaction, and the repair pass disappears. `migrate_tag_params.py` moves to
+  the database. Per-tag data (generations, checkpoints, metrics in
+  `dashboard.db`) stays where it is.
 - **Actors or locks instead of one writer.** Finer-grained concurrency buys
   nothing at this scale (dozens of tags, a pass every few seconds). A single
   writer is the model that fits in one sentence.
@@ -321,22 +337,24 @@ between campaign arms with a dashboard restart.
    threads returning results. Fixes I7, and the race sites listed under "Why".
 3. **Intents:** stored, with exits classified against them. Fixes I4, and the
    restart gaps.
-4. **Explicit tag state and the control store** (whichever the review picks),
-   with a migration from `task.json`, `queue.json` and `pool.json`. Fixes I1.
-5. **The pool owns every machine:** tag-page renting and registering become
-   pool machines with manual leases, and existing task machines are migrated.
-   This is the largest PR.
+4. **Explicit tag state and the SQLite control store,** with a one-time
+   migration from `task.json`, `queue.json` and `pool.json`. Fixes I1.
+5. **The pool owns every machine:** the tag page's Machines card and rent form
+   go, Run by hand on… arrives, and existing task machines are migrated into
+   the pool with manual leases. This is the largest PR.
 6. **Operator verbs and the tag page:** one `state`, and only valid verbs.
-7. **Tag home and move home**, plus the no-regress rule for pulls. Fixes I5
-   fully, and lets localhost tags continue on rentals.
+7. **Tag home, and the queue's automatic move home,** plus the no-regress rule
+   for pulls. Fixes I5 fully, and lets localhost tags continue on rentals.
 8. **The paths context, the stale-code banner, and refusing to enqueue a
    finished tag.** These are independent and can go any time.
 
-## Open questions for the operator
+## Operator's calls (2026-09-29)
 
-1. **The control store:** JSON with a repair pass, or one SQLite database?
-2. **Renting from a tag's page:** keep it as a shortcut (a pool rental with a
-   manual lease), or rent only from the Machine pool page?
-3. **Verb names:** "Give back" and "Finish" instead of Requeue and Release?
-4. **Move home:** only when the operator asks, or automatically when a rental
-   is the only machine that fits a queued local tag?
+1. **The control store:** one SQLite database (§Alternatives).
+2. **Renting from a tag's page:** left to this plan, which removes it.
+   Machines come only from the Machine pool page, and a tag page runs a tag by
+   hand on a pool machine (§4).
+3. **Verb names:** Requeue and Release stay. Both get a tooltip and a
+   confirmation that say what happens to the machine (§6).
+4. **Move home:** automatic, as a step of placement (§5). Recommended, with
+   the tradeoffs given to the operator; awaiting confirmation.
