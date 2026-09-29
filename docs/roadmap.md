@@ -92,7 +92,9 @@ The build order, with the plan's milestones:
    against BestBot.
 6. **M2: the known positions,** Richards–Johnson and the ACETA family.
 7. **M3: learned move choices:** the KV-cached serving runtime,
-   reply-searched labels, then the writer by the telescoping reward.
+   information-set masks and counterfactual probes (so modeled opponents
+   cannot see our leave), reply-searched labels, then the writer by the
+   telescoping reward.
 8. **M4: learned draws,** which is SupremeBot's rack inference.
 9. **M5: self-labeling,** where SupremeBot can outgrow its first labels.
 
