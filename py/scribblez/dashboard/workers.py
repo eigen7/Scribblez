@@ -583,6 +583,9 @@ class WorkerManager:
         # Slot key -> [(when, why)] of each restart after a crash (a non-zero
         # exit), which the tag queue reads to fail a crash-looping slot.
         self._crashes: dict[str, list[tuple[float, str]]] = {}
+        # Local slots this process SIGTERMed (a gate, a pause): their worker
+        # exits EXIT_INTERRUPTED by design, which is not a crash.
+        self._stopped_local: set[str] = set()
         # Slot key -> when a slot meant to run was first seen down since it was
         # last alive (see _holds_machine).
         self._down_since: dict[str, float] = {}
@@ -851,6 +854,7 @@ class WorkerManager:
         """SIGTERM slot `w`'s worker, which flushes completed output and exits.
         No-op if it is not running."""
         if worker_pid_alive(w.pid, w.worker_id, task.tag):
+            self._stopped_local.add(_key(spec, task.tag, w.worker_id))
             try:
                 os.kill(w.pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -2046,9 +2050,11 @@ class WorkerManager:
             # A local worker restarts in about a second, so parking it and
             # stopping it are the same thing.
             if intent == RUN and not alive:
+                key = _key(spec, task.tag, w.worker_id)
                 code = self._local_exit_code(spec, task, w)
-                if code not in (None, 0):
-                    self._note_crash(_key(spec, task.tag, w.worker_id), f"exit {code}")
+                if code not in (None, 0) and key not in self._stopped_local:
+                    self._note_crash(key, f"exit {code}")
+                self._stopped_local.discard(key)
                 self._spawn_local(spec, task, w)
             elif intent != RUN and alive:
                 self._stop_local(spec, task, w)
