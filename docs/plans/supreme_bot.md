@@ -1,6 +1,8 @@
 # SupremeBot: a learned search over a probe context
 
-**Status: proposed; not plan-reviewed; nothing built.**
+**Status: the project's direction as of 2026-09-29; plan review in progress;
+nothing built.** Development leaves face-up leaves for standard Scrabble, and
+the other roadmap items are on hiatus ([roadmap.md](../roadmap.md)).
 
 **Goal.** An agent whose search is read and steered by one network that sees
 everything the turn's search has done so far. Any probe can then change any
@@ -63,12 +65,11 @@ rules MCTS assumes are what make it converge with no training at all
   the same row as the idealized agent's. The difference is that every cell is
   learned rather than engineered.
 - **[rack_conditional_evidence.md](rack_conditional_evidence.md)** is the
-  nearest engineered design. It commits to late fusion so that the context
-  is read once per block, not once per rollout, and to a learned policy at ply
-  one only. SupremeBot drops both commitments: the context is read at every
-  decision, at every ply. Its first layers are prerequisites here too
-  ([Build order](#build-order)). Past them, the two designs compete for the
-  same slot ([Open questions](#open-questions)).
+  nearest engineered design, now on hiatus. It commits to late fusion so
+  that the context is read once per block, not once per rollout, and to a
+  learned policy at ply one only. SupremeBot drops both commitments: the
+  context is read at every decision, at every ply. Its per-rollout logging
+  (layer 1) is the starting point for M0 here ([Build order](#build-order)).
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** supplies
   principles SupremeBot keeps. The model sees its prior's prediction next to
   each observation, and an empty context reduces the model to the plain
@@ -397,18 +398,36 @@ them.
 
 Each milestone produces a working agent, measured before the next begins.
 
-- **M0: the record.** Per-step probe logging (tiles, moves, outcomes, the
-  prior's ranks and both draw probabilities), extending
+- **Prerequisite: the standard-Scrabble prior.** The teacher, student and
+  move proposal model retrained with `face_up_leaves` off. This is new tags,
+  not new code, and it runs on the dashboard while M0 is built. It is the
+  longest step before M1.
+- **M0: the record.** Per-step probe logging: tiles, moves, outcomes, the
+  prior's ranks, and both draw probabilities. This extends
   rack_conditional_evidence.md's layer 1 from per-rollout to per-step. Plus
-  the token encoder, and turns replayable from the record.
+  the token encoder, the opponent-history tokens, and turns replayable from
+  the record.
 - **M1: learned reader, fixed writer.** The writer is the plain student at
-  ply one, then hasty, with true draws. It is measured on **identical
-  records**: the reader and plain averaging value the same probes, so the
-  comparison isolates the valuation. The report is regret against budget.
-  *Kill criterion:* if the reader does not beat averaging on identical records
-  at matched budgets, stop. If it passes, match play against UltimateBot and
-  BestBot. This milestone also measures deep-node boards as move deltas
-  against per-node encodes.
+  ply one, then hasty, with draws from the uninformed prior. It is measured on
+  **identical records**: the reader and plain averaging value the same
+  probes, so the comparison isolates the valuation. The report is regret
+  against budget, in four arms:
+
+  | arm | valuation | draws |
+  |---|---|---|
+  | reader | learned, with opponent history | uninformed prior |
+  | reader, history ablated | learned, without opponent history | uninformed prior |
+  | averaging | mean per candidate | uninformed prior |
+  | averaging with inference | mean per candidate | the ported posterior ([belief/rack_inference.h](../../engine/include/belief/rack_inference.h)) |
+
+  The ablated reader against plain averaging measures transfer alone. The full
+  reader against the ablated one measures the implicit inference, and the
+  last arm is what that inference has to match. So a failure of the full
+  reader says which half failed.
+  *Kill criterion:* if the ablated reader does not beat averaging on
+  identical records at matched budgets, transfer is not being learned: stop.
+  If the full reader passes, match play against BestBot. This milestone also
+  measures deep-node boards as move deltas against per-node encodes.
 - **M2: transfer tests.** Synthetic contexts, each built to contain exactly
   one fact, plus its control: QUIZETH to QUIZATH, and the no-T control. Then
   the Richards–Johnson position and the ACETA family in
@@ -416,21 +435,15 @@ Each milestone produces a working agent, measured before the next begins.
 - **M3: learned move choices.** The writer is trained with the telescoping
   reward, alternating with the reader. Measured in match play against M1 at
   equal wall-clock time, not equal probes, because steering costs time.
-- **M4: learned draws.** Proposal distributions at chance nodes. Under
-  face-up leaves this comes last, because it distorts the reader's input
-  distribution the most and matters least there. It is also the gateway to
-  standard Scrabble, where it becomes the rack inference
-  ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)),
-  measured against the ported posterior.
+- **M4: learned draws.** Proposal distributions at chance nodes: the rack
+  inference ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)),
+  measured against M1's averaging-with-inference arm. It comes after learned
+  moves because it distorts the reader's input distribution the most.
 - **M5: self-labeling.** SupremeBot at many times the budget labels
   SupremeBot's training positions.
 
 ## Open questions
 
-- **SupremeBot and rack_conditional_evidence.md.** Their first layers are
-  shared, namely per-rollout logging and the plain student at ply one. After
-  that, both designs claim the next build slot. One option: M1 is built in
-  place of that plan's layer 4, with its aggregate model as M1's baseline.
 - **Deep-node boards:** move deltas over the root board, or a trunk encode per
   node. M1 measures both.
 - **Summary tokens:** whether causal revision needs them, and if so, their
@@ -441,9 +454,5 @@ Each milestone produces a working agent, measured before the next begins.
 - **Context across turns:** discarded at the end of each turn, as in every
   scheme so far. Carrying over the probes that remain legal is deferred until a
   case needs it.
-- **Standard Scrabble:** under face-up leaves, a chance step draws the
-  opponent's replenishment tiles only. Nothing in the tokens assumes that. The
-  hidden full rack is one more chance step, and the opponent's history goes
-  in the root prefix, so the move is a corpus regeneration, not a redesign.
-  What is open is whether the reader's implicit posterior is good enough
-  before M4, or whether standard Scrabble has to wait for learned draws.
+- **The reader's implicit posterior before M4:** how close it comes to the
+  ported posterior, M1's fourth arm, and so how much M4 has to add.
