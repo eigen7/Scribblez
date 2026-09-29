@@ -181,7 +181,7 @@ subset is a design question in its own right.
 plays in other board regions: a top k by value alone would drop the setup
 plays the design exists to find. Static equity is available at every node
 without a trunk pass, so the rule is the same at M1, where the writer is hasty
-and there is no prior at ply one, as at M3. Later, what to record can become a
+and there is no prior at ply one, as at M3a. Later, what to record can become a
 writer decision, trained by the same reward as the others ([Open
 questions](#open-questions)). Exchanges and passes are never recorded as
 options: they need no lexical knowledge, since an exchange is a keep-set of
@@ -290,7 +290,7 @@ themselves appended to it.
 - **Pick queries**, one per root candidate. The output is the candidate's
   value. The final pick is the argmax.
 
-M1 needs only pick queries. Move queries are built with M3 and draw queries
+M1 needs only pick queries. Move queries are built with M3a and draw queries
 with M4, where each is first used.
 
 **Why causal attention.** This was chosen over bidirectional recomputation for
@@ -430,8 +430,9 @@ define value:
 - **The labels.** Reply-searched labels ([The writer](#the-writer)) run nested
   sims for Bob's reply. Played from our true leave, they encode an omniscient
   Bob, and a reader trained on them values the decoy at nothing. So the nested
-  sims draw our leave from Bob's belief. This is required from the first
-  reply-searched labels.
+  sims draw our leave from Bob's belief. On the standard track this is
+  required from the first reply-searched labels (M3b); under face-up leaves,
+  deferred draws make it automatic.
 - **The evidence the reader gets within the turn.** To value the decoy, the
   reader has to know what Bob's best response is from where he stands. That
   evidence comes from **counterfactual probes**, below.
@@ -444,7 +445,7 @@ board encoding itself reads our rack. Doing it properly means computing each
 token under a mask of its own viewer class at every layer, splitting action
 steps into public and private parts, and giving Bob his own board encoding.
 That is a separate context per viewer in all but name. It is the fallback,
-built only if M3's fishing-decoy check fails without it.
+built only if M3b's fishing-decoy check fails without it.
 
 **The test for both.** Change our hidden leave while holding Bob's
 observations and the sampling randomness fixed: Bob's reply in the label
@@ -495,15 +496,39 @@ reasoning over belief states, the territory of ReBeL and Student of Games,
 and it is not planned. Generational training raises the level cheaply: as
 self-labeling improves the prior (M5), Bob's model of us improves with it.
 
-### When it matters
+### Face-up leaves: deferred draws
 
-Under face-up leaves Bob legitimately sees our leave; only draws are hidden,
-and leave bluffs do not exist. At M1 the writer is hasty and the labels are
-plain averaging sims, so nothing here applies before M3. At M3 the
-reply-searched labels need belief-drawn leaves from the start. Counterfactual
-probes come in M3's second slice, measured on the fishing-decoy check against
-the first slice without them. They cost part of the probe budget, spent only
-where the opponent's decision matters to a root candidate.
+Under face-up leaves the problem nearly disappears. Each leave is public, so
+leave bluffs such as the fishing decoy do not exist, and the only hidden tiles
+are fresh draws. A draw is chosen by the bag, not by a player, so the
+opponent's belief about it is the uninformed prior: exact, and independent of
+anyone's policy. No inference, no traveling up the tree, and no
+counterfactual probes are needed.
+
+What remains is omniscience about draws: a modeled Bob whose reply depends on
+the tiles Alice just drew. It is removed by construction with the principle
+of deferred decisions: **a player's draw is sampled when that player next
+decides, not when the rules say it happens.** Bob never observes Alice's draw
+before his move, so sampling it after his move changes nothing he could
+condition on, and the joint distribution of the draws is unchanged. The root
+already works this way: the opponent's hidden refill is the first thing a
+probe samples after our move.
+
+Two guards keep deferral exact:
+
+- **Exchanges.** Legality uses the bag count net of pending draws, and an
+  exchange resolves every pending draw before its tiles return to the bag.
+  In the real game the earlier draw came first, so it can never receive the
+  exchanged tiles.
+- **The bag emptying.** Pending draws are resolved before the bag would empty
+  and before the endgame solver takes over, when both racks become known. The
+  bag count every token shows is net of pending draws.
+
+With deferral, no decision in a face-up probe can depend on tiles its player
+has not seen. That holds for the writer, for our own later moves, and for the
+reply-searched labels, whose nested sims defer draws too. The paired-world
+test ([Where the requirement lands](#where-the-requirement-lands)) checks it
+cheaply. The rest of this section applies to the standard track only.
 
 ## Training
 
@@ -564,7 +589,7 @@ block-causal by tick, which is why the record stores tick ids.
 
 Query counts dominate the sequence. Pick queries after every one of 2,000
 leaves with 16 candidates each would be 32,000 query tokens against a
-context of 60,000 or more, and each M3 decision adds its summary queries and
+context of 60,000 or more, and each M3a decision adds its summary queries and
 a full legal list. So each row carries pick queries at a sample of leaf
 positions, and move queries at a sample of decisions, with their lists
 regenerated by the engine. Standard fused attention kernels do not take a mask of
@@ -615,7 +640,7 @@ its prior is frozen; records made earlier are for pipeline shakeout only.
   whose value lies in steering later probes, not in its own probe's leaf, gets
   no direct credit this way; that is a known limit ([Open
   questions](#open-questions)). The definition is checked on a toy bandit
-  before M3. This needs a label for every candidate the reader may pick, so
+  before M3a. This needs a label for every candidate the reader may pick, so
   during training the pick is restricted to labeled candidates.
 - **Alternate the two roles.** A new writer changes the reader's input
   distribution, so the reader retrains on the new writer's turns before the
@@ -682,9 +707,9 @@ At ply one, the scope also costs one trunk pass per probe
 incremental append, and no way to query without appending, and concurrent
 self-play games would each need their own cache. M1 does not need it: its
 writer is fixed, and its reader can run one full forward pass at pick time.
-M3 does, so the runtime is a work item of its own, with the choice between
+M3a does, so the runtime is a work item of its own, with the choice between
 TensorRT with dynamic KV bindings and in-process PyTorch serving made there.
-Whether M3 is affordable at all is settled earlier, by a throughput
+Whether M3a is affordable at all is settled earlier, by a throughput
 microbenchmark alongside M0: a random-weight model at the planned width and
 depth, real tick batching, full generation at the queried nodes and the
 ply-one trunk pass, reported as probes per second against hasty.
@@ -726,37 +751,41 @@ them.
 
 ## Build order
 
-Each milestone produces a working agent, measured before the next begins.
+Each milestone produces a working agent, measured before the next begins. The
+work runs in two tracks. The **face-up track** tests the core bet, transfer
+and learned steering, where deferred draws make information sets free. The
+**standard track** then adds hidden leaves and the machinery they need. The
+destination is standard Scrabble; the order defers its complexity until the
+core has been shown to work.
+
+**The face-up track**
 
 - **Before M0: three estimates.** The label noise floor and labeling cost
   from existing survey data, which sets the training budgets and M1's corpus
   size ([The reader](#the-reader)). The masked training graph prototyped on
   one synthetic row ([The training graph](#the-training-graph)). The
-  throughput microbenchmark ([Cost](#cost)), which decides whether M3 is
+  throughput microbenchmark ([Cost](#cost)), which decides whether M3a is
   affordable. Both run at the grown context, 85,000 tokens, with concurrent
   turns and the TensorRT models resident, and report peak GPU memory as a
   gate beside probes per second. With them come two move-list counts, the
   typical legal-list length per node and how fast each shared board's
   recorded set stops growing as racks accumulate
   ([Move lists](#move-lists-local-and-global)), and the cost of
-  reply-searched labels: outer rollouts × reply shortlist × inner rollouts ×
-  one inference per leave draw, times the position count the noise-floor
-  estimate asks for. If that is unaffordable, M3 cannot be funded, and the
-  plan must know before M0.
-- **In parallel: the standard-Scrabble prior.** The teacher, student and
-  move proposal model retrained with `face_up_leaves` off. This is new tags,
-  not new code. It runs on the dashboard from now on, and is needed from M1b.
+  reply-searched labels: outer rollouts × reply shortlist × inner rollouts,
+  times the position count the noise-floor estimate asks for. If that is
+  unaffordable, M3a cannot be funded, and the plan must know before M0.
 - **M0: the record.** Per-step probe logging, with the fields in
-  [Tokens](#tokens), tick ids, and the prior and leaf-model versions. This
+  [Tokens](#tokens), tick ids, the prior and leaf-model versions, and the
+  lexicon and move-generator versions. Draws are deferred
+  ([Face-up leaves: deferred draws](#face-up-leaves-deferred-draws)). This
   builds rack_conditional_evidence.md's layer 1, which was never built,
-  generalized from per-rollout to per-step. Plus the token encoder and the
-  opponent-history tokens.
-- **M1a: learned reader, fixed writer, face-up leaves.** It uses the existing
-  face-up prior, so it waits on no retraining. The writer is hasty at every
-  node, with draws from the uninformed prior, which is exact under face-up
-  leaves. The reader is measured on **identical records**: every arm values
-  the same probes, so the comparison isolates the valuation. The report is
-  regret against budget, in three arms:
+  generalized from per-rollout to per-step. Plus the token encoder.
+- **M1a: learned reader, fixed writer, face-up leaves. The kill gate.** It
+  uses the existing face-up prior, so it waits on no retraining. The writer is
+  hasty at every node, with draws from the uninformed prior, which is exact
+  under face-up leaves. The reader is measured on **identical records**:
+  every arm values the same probes, so the comparison isolates the valuation.
+  The report is regret against budget, in three arms:
 
   | arm | valuation |
   |---|---|
@@ -771,10 +800,27 @@ Each milestone produces a working agent, measured before the next begins.
   short) and a blank-bearing case.
   *Kill criterion:* if the reader does not beat shrinkage on identical records
   at matched budgets, or fails the transfer tests, transfer is not being
-  learned: stop.
-- **M1b: the same, in standard Scrabble.** It needs the standard-Scrabble prior
-  and true-rack labels. It adds the opponent-history tokens and the inference
-  arms:
+  learned: stop. If it passes, match play against BestBot under face-up
+  leaves.
+- **M2: the known positions** that exist under face-up leaves, among them the
+  ACETA family in `positions/NWL23/interesting-positions/`.
+- **M3a: learned move choices.** The serving runtime ([Cost](#cost)), then
+  reply-searched labels with deferred draws ([The writer](#the-writer)), then
+  the writer, trained with the telescoping reward and alternating with the
+  reader. Measured in match play against M1a at equal wall-clock time, not
+  equal probes, because steering costs time.
+- **M5: self-labeling.** SupremeBot at many times the budget labels
+  SupremeBot's training positions, once M3a has shown it finds replies the
+  labels missed. It applies again on the standard track.
+
+**The standard track**
+
+- **From now, in parallel: the standard-Scrabble prior.** The teacher,
+  student and move proposal model retrained with `face_up_leaves` off. This
+  is new tags, not new code, and it is ready long before the track needs it.
+- **M1b: the reader in standard Scrabble.** It needs the standard-Scrabble
+  prior, true-rack labels and the opponent-history tokens. It adds the
+  inference arms:
 
   | arm | valuation | draws |
   |---|---|---|
@@ -786,23 +832,15 @@ Each milestone produces a working agent, measured before the next begins.
   The full reader against the ablated one measures the implicit inference,
   and the last arm is what that inference has to match. If the reader passes,
   match play against BestBot.
-- **M2: the known positions.** The Richards–Johnson position and the ACETA
-  family in `positions/NWL23/interesting-positions/`.
-- **M3: learned move choices,** in two slices. The first: the serving runtime
-  ([Cost](#cost)); reply-searched labels with belief-drawn leaves
-  ([The writer](#the-writer)); then the writer, trained with the telescoping
-  reward and alternating with the reader. The second: counterfactual probes
-  ([Information sets](#information-sets)), measured against the first slice
-  on a known fishing-decoy position added to M2's set.
-  Measured in match play against M1b at equal wall-clock time, not equal
-  probes, because steering costs time.
+- **M3b: information sets.** Reply-searched labels with leaves drawn from the
+  opponent's belief, and the paired-world test; then counterfactual probes
+  ([Information sets](#information-sets)), measured against the version
+  without them on a known fishing-decoy position. The Richards–Johnson
+  position joins the known set here, since its read depends on hidden leaves.
 - **M4: learned draws.** Proposal distributions at chance nodes: the rack
   inference ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)),
   measured against M1b's shrinkage-with-inference arm. It comes after learned
   moves because it distorts the reader's input distribution the most.
-- **M5: self-labeling.** SupremeBot at many times the budget labels
-  SupremeBot's training positions, once M3 has shown it finds replies the
-  labels missed.
 
 ## Open questions
 
@@ -811,7 +849,7 @@ Each milestone produces a working agent, measured before the next begins.
   representation-limited.
 - **The recorded subset:** k, the region-diversity slots, and whether the
   writer should learn what to record.
-- **Masked opponent contexts:** whether M3's fishing-decoy check needs them
+- **Masked opponent contexts:** whether M3b's fishing-decoy check needs them
   (the fallback in [Information sets](#information-sets)).
 - **Counterfactual probe share:** how much of the budget models the
   opponent's view, and at which plies.
@@ -844,9 +882,9 @@ serious critique, and each minor one, with its resolution:
 |---|---|
 | **Blocking.** The first labels cannot teach implicit inference: with leaves hidden, the survey sims draw the opponent's whole rack uniformly, so M1's history arms would converge by construction. | Revised. Verified in `slog_position_simmer.cpp`. True-rack labels are defined (a small sim-mode extension), the history arms move to M1b where those labels exist, and the label noise is sized first. |
 | **Blocking.** Every action-step token asks for the prior's rank at its node, which is the per-node trunk pass the design claims to avoid, at ply one included. | Revised. The fields depend on the node (the prior inside the query scope, static equity outside it); the ply-one trunk pass is costed; M1's writer is hasty everywhere. |
-| No stronger rival than averaging: a hybrid that keeps explicit, probability-weighted valuation over a shared, periodically rebuilt latent would give global transfer without asking one reader to learn probability correction and value together. | Partly revised: the cheap core of that rival, per-candidate estimation that uses the prior, is M1's shrinkage arm and the kill criterion's bar. The full hybrid is close to rack_conditional_evidence.md, which the direction has put on hiatus, so it is not built. **Open, human call:** whether a hybrid arm must be beaten before the learned valuation is committed to past M1. |
+| No stronger rival than averaging: a hybrid that keeps explicit, probability-weighted valuation over a shared, periodically rebuilt latent would give global transfer without asking one reader to learn probability correction and value together. | Partly revised: the cheap core of that rival, per-candidate estimation that uses the prior, is M1's shrinkage arm and the kill criterion's bar. The full hybrid is close to rack_conditional_evidence.md, which the direction has put on hiatus, so it is not built. **Human call, decided 2026-09-29:** no hybrid gate. |
 | The writer would train against hasty-biased labels, which score a correct YEET discovery as a loss; self-labeling cannot correct that later. | Revised. Reply-searched labels come before the writer trains, and self-labeling waits until the writer has shown it finds replies the labels missed. |
-| The standard-Scrabble retrain, the longest step, sits in front of the milestone that can kill the project; the kill test does not need hidden racks. Raised by two panelists. | Revised: M1a runs on face-up leaves with the existing prior; the retrain runs in parallel and M1b follows. **Human call to confirm:** this departs from the sequencing agreed before the review ("standard Scrabble from the start"), though not from the direction. |
+| The standard-Scrabble retrain, the longest step, sits in front of the milestone that can kill the project; the kill test does not need hidden racks. Raised by two panelists. | Revised: M1a runs on face-up leaves with the existing prior; the retrain runs in parallel and M1b follows. **Human call, decided 2026-09-29:** confirmed, and extended: the whole core (M0 to M3a) runs on face-up leaves, where deferred draws make information sets free, before the standard track. |
 | The history ablation does not isolate transfer: a history-free reader can beat averaging by calibration alone. | Revised, together with the next row. |
 | The kill criterion passes through shrinkage toward the prior, with no transfer. | Revised. The criterion is "beats shrinkage", and the synthetic transfer tests move into M1a. |
 | roadmap.md still describes the evidence-loop agent as active, contradicting the plan's status. | Revised. roadmap.md is rewritten in the same PR. |
