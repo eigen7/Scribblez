@@ -33,7 +33,7 @@ milestone has a kill criterion.
 | M3a: learned move choices, face-up leaves | Not started |
 | M5: self-labeling | Not started |
 | M1b: the reader in standard Scrabble, with the inference arms | Not started |
-| M3b: information sets (belief-drawn labels, counterfactual probes) | Not started |
+| M3b: information sets (belief-drawn labels, opponent contexts) | Not started |
 | M4: learned draws (rack inference) | Not started |
 | [The evidence-loop agent](#on-hiatus-the-evidence-loop-agent), items [1](#1-per-move-placement-planes)–[5](#5-the-move-proposal-model) and [8](#8-cloud-generation) | Done; kept, partly reused |
 | [Item 6, the sequential agent (UltimateBot)](#6-the-sequential-agent) | Built; on hiatus before training |
@@ -109,8 +109,9 @@ The standard track:
    history-ablated reader and the ported-inference arm. Then match play
    against BestBot.
 3. **M3b: information sets:** reply-searched labels whose modeled opponent
-   cannot see our leave, then counterfactual probes, checked on a
-   fishing-decoy position and Richards–Johnson.
+   cannot see our leave, then a separate search context per opponent view
+   for the top root candidates, checked on a fishing-decoy position and
+   Richards–Johnson.
 4. **M4: learned draws,** which is SupremeBot's rack inference.
 
 ## What is already built

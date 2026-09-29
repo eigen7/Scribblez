@@ -416,86 +416,6 @@ through it. This is strategy fusion, the known flaw of searching over
 determinized worlds: a player's policy has to be a function of their
 information set, not of the hidden state.
 
-### Where the requirement lands
-
-SupremeBot's values do not come from backing up the moves its probes play.
-They come from the reader, trained against labels, and the probes are
-experiments ([Probes are experiments, not
-samples](#probes-are-experiments-not-samples)). The writer that chooses Bob's
-moves in a probe is rewarded for informative experiments, not for modeling
-Bob, and an experiment chosen with knowledge of our leave is still a valid
-experiment. So information-set correctness is required of the two things that
-define value:
-
-- **The labels.** Reply-searched labels ([The writer](#the-writer)) run nested
-  sims for Bob's reply. Played from our true leave, they encode an omniscient
-  Bob, and a reader trained on them values the decoy at nothing. So the nested
-  sims draw our leave from Bob's belief. On the standard track this is
-  required from the first reply-searched labels (M3b); under face-up leaves,
-  deferred draws make it automatic.
-- **The evidence the reader gets within the turn.** To value the decoy, the
-  reader has to know what Bob's best response is from where he stands. That
-  evidence comes from **counterfactual probes**, below.
-
-The writer's own moves are not masked. An earlier draft masked every move
-query to its mover's information set; the plan review showed that masking the
-queries alone does not work, because in a causal transformer every token's
-deeper layers have already read the private tokens before it, and the root
-board encoding itself reads our rack. Doing it properly means computing each
-token under a mask of its own viewer class at every layer, splitting action
-steps into public and private parts, and giving Bob his own board encoding.
-That is a separate context per viewer in all but name. It is the fallback,
-built only if M3b's fishing-decoy check fails without it.
-
-**The test for both.** Change our hidden leave while holding Bob's
-observations and the sampling randomness fixed: Bob's reply in the label
-generator must not change. The same paired-world test gates the fallback, if
-it is ever built.
-
-### Counterfactual probes, and traveling up the tree
-
-A counterfactual probe replaces our leave with one drawn from **Bob's
-belief**, and plays on from there. Its outcomes say what Bob's options are
-worth in the worlds Bob thinks possible, which is what his response depends on.
-The probes sit in the one context beside the ordinary ones, and a chance-step
-flag says which leave is counterfactual.
-
-Bob's belief comes from traveling up the tree to our root decision. After
-candidate move m:
-
-P(our leave | m) ∝ P(we play m | m's tiles + that leave) · P₀(leave)
-
-where P₀ is the uninformed prior. The likelihood needs a model of our policy
-at the root, evaluated on counterfactual racks:
-
-- **To start:** the static-equity likelihood of the ported rack inference
-  (`EquityLikelihood`, [belief/move_likelihood.h](../../engine/include/belief/move_likelihood.h)),
-  which computes exactly this. Its `RackPosterior`
-  ([belief/rack_inference.h](../../engine/include/belief/rack_inference.h))
-  samples the posterior directly, with a uniform variate for common random
-  numbers, so counterfactual leaves are drawn from it rather than from P₀. The
-  chance step records both log-probabilities, as for any other proposal draw.
-- **Then:** the student's policy over the root's legal moves on each
-  counterfactual rack, one trunk pass per rack, batched.
-
-The world is sampled in a fixed order, so the log-probabilities describe it
-exactly: Bob's rack from our unseen pool; then our counterfactual leave from
-Bob's posterior over his unseen pool; then the bag from what remains. Our
-true leave's tiles return to the pool, and a tile-conservation assertion
-checks every world.
-
-This is the same computation as our own inference about Bob from his past
-plays ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)),
-with the seats exchanged, so one policy model serves both.
-
-**How deep the reasoning goes.** Bob models us as the prior, not as
-SupremeBot. That is level-one reasoning: a decoy has value exactly when the
-prior would make that play while holding a real threat. A Bob who knew that
-SupremeBot bluffs, and a SupremeBot that knew Bob knew, is equilibrium
-reasoning over belief states, the territory of ReBeL and Student of Games,
-and it is not planned. Generational training raises the level cheaply: as
-self-labeling improves the prior (M5), Bob's model of us improves with it.
-
 ### Face-up leaves: deferred draws
 
 Under face-up leaves the problem nearly disappears. Each leave is public, so
@@ -503,7 +423,7 @@ leave bluffs such as the fishing decoy do not exist, and the only hidden tiles
 are fresh draws. A draw is chosen by the bag, not by a player, so the
 opponent's belief about it is the uninformed prior: exact, and independent of
 anyone's policy. No inference, no traveling up the tree, and no
-counterfactual probes are needed.
+opponent contexts are needed.
 
 What remains is omniscience about draws: a modeled Bob whose reply depends on
 the tiles Alice just drew. It is removed by construction with the principle
@@ -526,9 +446,116 @@ Two guards keep deferral exact:
 
 With deferral, no decision in a face-up probe can depend on tiles its player
 has not seen. That holds for the writer, for our own later moves, and for the
-reply-searched labels, whose nested sims defer draws too. The paired-world
-test ([Where the requirement lands](#where-the-requirement-lands)) checks it
-cheaply. The rest of this section applies to the standard track only.
+reply-searched labels, whose nested sims defer draws too. A **paired-world
+test** checks it cheaply: change a hidden draw while holding the deciding
+player's observations and the sampling randomness fixed, and the decision
+must not change.
+
+
+### Standard Scrabble: a context per opponent view
+
+With hidden leaves, deferral is not enough: Bob has to reason about Alice's
+leave, which was fixed before her move, so it cannot be sampled after his.
+One context cannot hold both views. Masking Bob's queries inside our context
+does not work: in a causal transformer every token's deeper layers have
+already read the private tokens before it, and the root board encoding reads
+our rack. And nothing would reward a masked Bob for playing a best response,
+since the writer is rewarded for informative experiments. So Bob gets his own
+context.
+
+**Opponent contexts.** For each of a few root candidates m, the ones where a
+decoy question can arise, an **opponent context** runs a SupremeBot search
+rooted at Bob's information set after m: the public board, the move history,
+and the bag count, with no token derived from our true leave. It is the same
+network. Isolation is structural: change our leave, and every opponent context
+is byte-identical, which is the paired-world test in its strongest form.
+
+Bob's rack is unknown to us, so the opponent context varies it across its
+probes, and its pick queries are **rack-conditioned**: they return Bob's
+valuation of his replies given a rack. Bob's reader is trained on labels from
+his point of view, so its argmax is a best response over his belief, the
+objective a masked writer lacked.
+
+**Deferral inside the opponent context.** Each of its probes is ordered so
+that Bob decides before anything he must not see exists:
+
+1. Bob's rack, drawn from our unseen pool as our own probes draw it. To Bob it
+   is his own information.
+2. Bob's decision, reading public tokens, his rack, and the context's earlier
+   probes.
+3. Our leave, drawn from Bob's belief, weighted by the likelihood of m (below).
+4. The continuation and the leaf.
+
+The weight does not depend on Bob's move, so sampling our leave after it
+changes nothing in distribution, and causal order alone keeps Bob's decision
+clean: no masks anywhere. The earlier probes' leaves for us are hypothetical
+samples, and reading them is Bob reasoning over his belief. This is the
+principle of deferred decisions again, generalized: sample hidden information
+after the decisions that must not see it, and use importance weights to stay
+consistent with what was observed. The world keeps a fixed sampling order,
+Bob's rack, then our leave from Bob's posterior over his unseen pool, then the
+bag from what remains, and a tile-conservation assertion checks every world.
+
+**How our search uses it.** At ply one of our own probes after a candidate
+with an opponent context, Bob's reply comes from that context: a
+rack-conditioned query with the probe's sampled Bob rack. So those probes play
+a realistic Bob, not a writer experiment. Our reader may read the opponent
+contexts too: simulating Bob's reasoning is legitimately something we can
+know.
+
+**The labels.** Bob's reader trains on values from his point of view: sims
+from his information set with our leave drawn from his belief. Our own
+reply-searched labels ([The writer](#the-writer)) choose the opponent's reply
+the same way. Played from our true leave, either would encode an omniscient
+Bob, and a reader trained on them would value the decoy at nothing. The
+paired-world test gates the label generators.
+
+### Traveling up the tree
+
+Bob's belief comes from traveling up the tree to our root decision. After
+candidate move m:
+
+P(our leave | m) ∝ P(we play m | m's tiles + that leave) · P₀(leave)
+
+where P₀ is the uninformed prior. The likelihood needs a model of our policy
+at the root, evaluated on counterfactual racks:
+
+- **To start:** the static-equity likelihood of the ported rack inference
+  (`EquityLikelihood`, [belief/move_likelihood.h](../../engine/include/belief/move_likelihood.h)),
+  which computes exactly this. Its `RackPosterior`
+  ([belief/rack_inference.h](../../engine/include/belief/rack_inference.h))
+  samples the posterior directly, with a uniform variate for common random
+  numbers, so our leaves in opponent contexts are drawn from it rather than
+  from P₀. The chance step records both log-probabilities, as for any other
+  proposal draw.
+- **Then:** the student's policy over the root's legal moves on each
+  counterfactual rack, one trunk pass per rack, batched.
+
+This is the same computation as our own inference about Bob from his past
+plays ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)),
+with the seats exchanged, so one policy model serves both.
+
+### How deep the reasoning goes
+
+- **One level of opponent context.** After Bob moves, Alice's next decision
+  inside his context would read Bob's rack, which had to be drawn before his
+  move. Keeping it clean would need an Alice context inside Bob's, and so on.
+  So the recursion stops: past Bob's modeled reply, moves inside an opponent
+  context are hasty, whose moves depend only on its own rack and so are safe
+  by construction. Our own ply-two moves in our context stay writer
+  experiments, valued by our reader, where information-set correctness is not
+  required.
+- **Level-one beliefs.** Bob models us as the prior, not as SupremeBot: a
+  decoy has value exactly when the prior would make that play while holding a
+  real threat. A Bob who knew that SupremeBot bluffs, and a SupremeBot that
+  knew Bob knew, is equilibrium reasoning over belief states, the territory
+  of ReBeL and Student of Games, and it is not planned. Generational training
+  raises the level cheaply: as self-labeling improves the prior (M5), Bob's
+  model of us improves with it.
+
+**Cost.** Each opponent context has its own probe budget and KV cache, so the
+memory limit in [Cost](#cost) tightens with every candidate that gets one.
+How many candidates, and what share of the budget, is measured at M3b.
 
 ## Training
 
@@ -626,7 +653,8 @@ its prior is frozen; records made earlier are for pipeline shakeout only.
   labels** do that: at each labeling rollout's ply one, the opponent's reply
   is the best of a shortlist by nested sims, not hasty's argmax. The nested
   sims draw our leave from the opponent's belief, not the true one, and pass
-  the paired-world test ([Information sets](#information-sets)). That is
+  the paired-world test
+  ([Standard Scrabble: a context per opponent view](#standard-scrabble-a-context-per-opponent-view)). That is
   expensive, but it is paid for labels only. Self-labeling by a larger-budget
   SupremeBot is a second such source, and it waits until the writer has shown
   it finds replies the labels missed.
@@ -832,10 +860,12 @@ core has been shown to work.
   The full reader against the ablated one measures the implicit inference,
   and the last arm is what that inference has to match. If the reader passes,
   match play against BestBot.
-- **M3b: information sets.** Reply-searched labels with leaves drawn from the
-  opponent's belief, and the paired-world test; then counterfactual probes
-  ([Information sets](#information-sets)), measured against the version
-  without them on a known fishing-decoy position. The Richards–Johnson
+- **M3b: information sets.** Reply-searched labels with our leave drawn from
+  the opponent's belief, gated by the paired-world test; then opponent
+  contexts ([Standard Scrabble: a context per opponent
+  view](#standard-scrabble-a-context-per-opponent-view)), measured against the
+  version without them on a known fishing-decoy position, with the number of
+  candidates that get one and their budget share. The Richards–Johnson
   position joins the known set here, since its read depends on hidden leaves.
 - **M4: learned draws.** Proposal distributions at chance nodes: the rack
   inference ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)),
@@ -849,10 +879,8 @@ core has been shown to work.
   representation-limited.
 - **The recorded subset:** k, the region-diversity slots, and whether the
   writer should learn what to record.
-- **Masked opponent contexts:** whether M3b's fishing-decoy check needs them
-  (the fallback in [Information sets](#information-sets)).
-- **Counterfactual probe share:** how much of the budget models the
-  opponent's view, and at which plies.
+- **Opponent contexts:** how many root candidates get one, and their share
+  of the probe budget and GPU memory.
 - **How deep the opponent reasoning goes:** level one (the opponent models us
   as the prior) is planned; equilibrium over belief states is not.
 - **Opponent history:** every past opponent turn, or only the last few.
@@ -926,3 +954,10 @@ design on codex, scope, integration).
 | Minor: regeneration needs lexicon and generator versions, and a loader-side engine call. | Revised. |
 | Minor: cite the existing full-list precedent. | Revised: UltimateBot's root. |
 | Minor: split the exchange head into its own step. | Moot: no exchange head. |
+
+After round 2, the open call on relocating information-set correctness into
+the labels was resolved differently: David proposed separate trees and
+contexts per viewer, the rival's round-1 and round-2 proposal. The standard
+track now uses a context per opponent view, ordered so that deferral keeps
+each decision clean without masks, and the counterfactual probes and writer
+masks are superseded.
