@@ -23,6 +23,13 @@ moved on. New plans go here, not in `docs/` proper.
   rollouts, outdated rollouts re-priced or re-run rather than discarded, and
   one acquisition rule over (candidate, rack indices). Built one layer at a
   time against an expert-labeled evaluation set.
+- **[supreme_bot.md](supreme_bot.md)**: *proposed, not reviewed, not
+  built.* The unconstrained form of the same goal: every step of every probe
+  becomes a token in one context, and a causal transformer reads it to choose
+  the moves and draws inside probes and the final pick. No per-node statistics
+  or backup rule. Tokens describe content, not tree position, so any probe can
+  inform any decision. Built as a learned reader over fixed probes first, then
+  learned move choices, then learned draws.
 - **[sim_labeled_candidates.md](sim_labeled_candidates.md)**: *proposed;
   the measurement (PR 0) landed.* A second target stream for the teacher: sim
   outcomes over every simmed candidate at sampled self-play positions, stored

@@ -122,6 +122,9 @@ has landed.
 - **[plans/rack_conditional_evidence.md](plans/rack_conditional_evidence.md)**:
   keeping evidence per sampled opponent rack so knowledge found simming one
   candidate transfers to the rest of the turn.
+- **[plans/supreme_bot.md](plans/supreme_bot.md)**: a search whose every
+  decision, and the final pick, is made by one network reading every probe
+  run so far this turn, with no per-node statistics.
 - **[plans/sim_labeled_candidates.md](plans/sim_labeled_candidates.md)**: the
   teacher's second target stream, sim outcomes over every simmed candidate at
   sampled self-play positions.
