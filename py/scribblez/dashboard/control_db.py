@@ -313,19 +313,16 @@ def project(conn: sqlite3.Connection) -> dict[tuple[str, str], str]:
     for workload, name, desire, result in conn.execute(
         "SELECT workload, name, desire, result FROM tag"
     ):
-        phases = [
-            (kind, phase, reason)
-            for kind, phase, reason in conn.execute(
-                "SELECT kind, phase, reason FROM assignment WHERE workload = ? AND tag = ?",
-                (workload, name),
-            )
-        ]
-        queue = next(((p, r) for k, p, r in phases if k == "queue"), None)
-        if result == "failed" or (queue and queue[0] == "held"):
+        row = conn.execute(
+            "SELECT phase FROM assignment WHERE workload = ? AND tag = ? AND kind = 'queue'",
+            (workload, name),
+        ).fetchone()
+        phase = row[0] if row else None
+        if result == "failed" or phase == "held":
             state = "failed"
-        elif queue and queue[0] == "releasing":
+        elif phase == "releasing":
             state = "releasing"
-        elif queue and queue[0] in _RUNNING_PHASES:
+        elif phase in _RUNNING_PHASES:
             state = "running"
         elif result == "done":
             state = "done"
@@ -385,10 +382,9 @@ class ShadowControl:
                         f"projected {projected.get(key)}, stores say {legacy.get(key)}",
                     )
                 )
-        if findings != self.findings:
-            for f in findings:
-                if f not in self.findings:
-                    print(f"control db (shadow): {f}")
+        for f in findings:
+            if f not in self.findings:
+                print(f"control db (shadow): {f}")
         self.findings = findings
         self.projected = projected
         return findings

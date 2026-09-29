@@ -187,8 +187,9 @@ def test_the_schema_refuses_a_second_queue_assignment_on_a_machine(tmp_path):
     conn.execute("INSERT INTO machine VALUES ('n', 'ssh', 'pool', NULL, NULL, 0)")
     conn.execute("INSERT INTO assignment VALUES ('w', 'a', 'n', 'manual', 'running', '', 0)")
     conn.execute("INSERT INTO assignment VALUES ('w', 'b', 'n', 'manual', 'running', '', 0)")
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO assignment VALUES ('w', 'a', 'm', 'manual', 'running', '', 0)")
+    conn.execute("INSERT INTO tag VALUES ('w', 'c', 'manual', NULL, NULL, NULL, NULL)")
+    with pytest.raises(sqlite3.IntegrityError, match="shares its machine"):
+        conn.execute("INSERT INTO assignment VALUES ('w', 'c', 'm', 'manual', 'running', '', 0)")
 
 
 def test_the_shadow_rebuilds_each_pass_and_reports_a_finding_once(manager, capsys):
@@ -213,3 +214,43 @@ def test_the_import_only_reads_the_tag_records(manager, tmp_path):
     fresh = WorkerManager(manager.mount_root)
     _run(fresh, tmp_path)
     assert path.stat().st_mtime_ns == before
+
+
+def test_a_disagreement_between_the_projection_and_the_stores_is_a_finding(
+    manager, monkeypatch, capsys
+):
+    """The point of shadow mode: where the database's projection and the
+    stores' own reading of a tag differ, the pass says so."""
+    _task(manager, "a")
+    monkeypatch.setattr(control_db, "legacy_states", lambda m: {("position_eval", "a"): "running"})
+    findings = control_db.ShadowControl(manager).sync()
+    assert [(f.tag, f.kind) for f in findings] == [("a", "disagreement")]
+    assert "projected idle, stores say running" in findings[0].detail
+    assert "disagreement" in capsys.readouterr().out
+
+
+def test_a_tags_home_follows_its_training_state(manager, tmp_path):
+    """None before any training; local or bucket after, by where its trainer
+    delivered (placement.state_home)."""
+    _task(manager, "fresh")
+    for tag, sink in (("local", "local"), ("bucket", "r2")):
+        task = _task(manager, tag)
+        task.trainer_sink = sink
+        manager.tasks.save(SPEC, task)
+        paths = manager.tasks.paths(SPEC, tag)
+        paths.train_state_path.write_text('{"rows_trained": 256, "generation_index": 0}')
+    conn, _, _ = _run(manager, tmp_path)
+    homes = dict(conn.execute("SELECT name, home FROM tag").fetchall())
+    assert homes == {"fresh": None, "local": "local", "bucket": "bucket"}
+
+
+def test_a_finished_tag_projects_as_done_unless_it_still_holds_a_machine(tmp_path):
+    """The result decides once no queue assignment says otherwise."""
+    conn = control_db.connect(tmp_path / "control.db")
+    conn.execute("INSERT INTO machine VALUES ('m', 'ssh', 'pool', NULL, NULL, 0)")
+    for tag in ("finished", "releasing"):
+        conn.execute("INSERT INTO tag VALUES ('w', ?, 'queued', NULL, 'done', NULL, NULL)", (tag,))
+    conn.execute(
+        "INSERT INTO assignment VALUES ('w', 'releasing', 'm', 'queue', 'releasing', '', 0)"
+    )
+    assert control_db.project(conn) == {("w", "finished"): "done", ("w", "releasing"): "releasing"}
