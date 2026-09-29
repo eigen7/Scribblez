@@ -338,13 +338,18 @@ class TagQueue:
         self._builds[entry.key] = self._m._builds.submit(build)
 
     def _advance_builds(self, queue: Queue, pool: Pool):
-        """Pin every finished enqueue-time build to its task. A build that was
-        in flight when the dashboard restarted is submitted again."""
+        """Start a build for every entry with no bundle that an ssh machine or
+        capacity entry could now take (one added after the tag was enqueued),
+        and pin every finished build to its task. A build that was in flight
+        when the dashboard restarted is submitted again."""
         changed = False
         for e in queue.entries:
+            spec, task = _lookup(e.workload, e.tag)
+            if e.bundle == queue_mod.BUNDLE_NONE and self._ssh_targets(spec, task, e, pool):
+                e.bundle = queue_mod.BUNDLE_BUILDING
+                changed = True
             if e.bundle != queue_mod.BUNDLE_BUILDING:
                 continue
-            spec, task = _lookup(e.workload, e.tag)
             future = self._builds.get(e.key)
             if future is None:
                 try:

@@ -9,6 +9,7 @@ from scribblez.dashboard import placement, tasks
 from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tag_queue as tq_mod
+from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.pool import Hardware, Lease
 from scribblez.dashboard.tag_queue import (
     EMPTY_POOL,
@@ -265,8 +266,6 @@ def test_an_ssh_machine_takes_the_tag_once_its_bundle_is_pinned(queued, monkeypa
     by its pool name, which resolves through the lease."""
     from concurrent.futures import Future
 
-    from scribblez.dashboard import workers as workers_mod
-
     q, manager, make = queued
     monkeypatch.setattr(workers_mod, "SshMachine", _Link)
     manager.remove_pool_machine("localhost")
@@ -490,3 +489,20 @@ def test_the_plan_shows_the_roles_and_each_machines_slots(queued):
     q.enqueue("position_eval", "a", confirm=True)
     manager.remove_pool_machine("localhost")
     assert q.plan("position_eval", "a")["machines"] == []  # still answers once queued
+
+
+def test_an_ssh_machine_added_after_enqueueing_gets_the_tag_built(queued, monkeypatch):
+    """Tags enqueued while the pool had only localhost need no bundle; one
+    added later (a registered machine, or rental capacity) must start the
+    build, or the tag waits on 'its bundle is none' forever."""
+    q, manager, make = queued
+    monkeypatch.setattr(q, "_submit_build", lambda spec, task, e, pool: None)
+    make("a", match_every_generations=5)  # 16.6 GiB: not localhost's 16
+    q.enqueue("position_eval", "a", confirm=True)
+    assert queue_mod.load_queue().entry("position_eval", "a").bundle == queue_mod.BUNDLE_NONE
+    q.tick()
+    assert queue_mod.load_queue().entry("position_eval", "a").bundle == queue_mod.BUNDLE_NONE
+    monkeypatch.setattr(workers_mod, "SshMachine", _Link)
+    manager.add_pool_machine("gpu-box", "me@gpu-box")
+    q.tick()
+    assert queue_mod.load_queue().entry("position_eval", "a").bundle == queue_mod.BUNDLE_BUILDING
