@@ -22,7 +22,7 @@ import torch
 from scribblez import paths as paths_mod
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.onnx_export import export_onnx, legacy_checkpoint_condition
-from scribblez.paths import TagPaths
+from scribblez.paths import TagPaths, add_mount_root_argument
 from scribblez.spatial_trunk import transformer_config
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -31,9 +31,10 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument("-t", "--tag", required=True, help="move_set_eval tag to export.")
     p.add_argument("--out", default="", help="Output path (default: the tag's models/ dir).")
+    add_mount_root_argument(p)
     args = p.parse_args()
 
-    paths = TagPaths(args.tag, paths_mod.MOVE_SET_EVAL)
+    paths = TagPaths(args.tag, paths_mod.MOVE_SET_EVAL, args.mount_root)
     ckpt_path = paths.rolling_checkpoint
     if not ckpt_path.exists():
         sys.exit(f"error: no rolling checkpoint at {ckpt_path}")

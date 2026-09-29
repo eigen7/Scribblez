@@ -32,7 +32,7 @@ from scribblez import workloads
 from scribblez.dashboard import db
 from scribblez.ffi import get_input_shapes, set_opp_leave_input
 from scribblez.onnx_export_util import load_onnx_initializers
-from scribblez.paths import TagPaths
+from scribblez.paths import TagPaths, add_mount_root_argument
 from scribblez.position_eval import analysis
 from scribblez.position_eval.model import PositionEvalModel
 from scribblez.position_eval.trainer import eval_position_eval_quality, load_position_eval_quality
@@ -126,9 +126,10 @@ def main() -> int:
     p.add_argument("-t", "--tag", required=True, help="the tag whose exports to backfill")
     p.add_argument("--device", default="cuda", help="torch device for the evaluation")
     p.add_argument("--force", action="store_true", help="recompute generations already recorded")
+    add_mount_root_argument(p)
     args = p.parse_args()
 
-    paths = TagPaths(args.tag, WORKLOAD)
+    paths = TagPaths(args.tag, WORKLOAD, args.mount_root)
     params = _tag_params(paths)
     device = torch.device(args.device)
     torch.set_float32_matmul_precision("high")

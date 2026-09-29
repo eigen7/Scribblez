@@ -42,7 +42,7 @@ from scribblez import paths as paths_mod
 from scribblez.move_set_eval.cross_check_diagnostic import ERRORS, FEATURES, collect, format_table
 from scribblez.move_set_eval.dataset import MsetDataset, adopt_information_condition
 from scribblez.move_set_eval.model import MoveSetEvalModel
-from scribblez.paths import TagPaths
+from scribblez.paths import TagPaths, add_mount_root_argument
 from scribblez.spatial_trunk import transformer_config
 from scribblez.workloads.move_set_eval import SLOGS_DIR, split_pairs
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
@@ -72,9 +72,10 @@ def main() -> int:
         "--slice", choices=("holdout", "train"), default="holdout", help="pairs to score"
     )
     p.add_argument("--max-positions", type=int, default=20000, help="positions to score at most")
+    add_mount_root_argument(p)
     args = p.parse_args()
 
-    paths = TagPaths(args.tag, paths_mod.MOVE_SET_EVAL)
+    paths = TagPaths(args.tag, paths_mod.MOVE_SET_EVAL, args.mount_root)
     device = torch.device("cuda")
     model, config = load_model(paths, device)
     train_files, holdout_files = split_pairs(paths.data_dir / SLOGS_DIR, config["holdout_every"])

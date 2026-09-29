@@ -35,7 +35,7 @@ from pathlib import Path
 
 from scribblez import params as params_mod
 from scribblez import workloads
-from scribblez.paths import DEFAULT_MOUNT_ROOT, TagPaths
+from scribblez.paths import TagPaths, add_mount_root_argument
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
@@ -197,7 +197,7 @@ def main():
         dest="sets",
         help="set a param, value parsed as JSON then coerced (repeatable)",
     )
-    ap.add_argument("--mount-root", default=str(DEFAULT_MOUNT_ROOT))
+    add_mount_root_argument(ap)
     ap.add_argument("--dry-run", action="store_true", help="report changes without writing")
     args = ap.parse_args()
 

@@ -17,6 +17,7 @@ import sys
 
 from scribblez import workloads
 from scribblez.dashboard import react_server
+from scribblez.paths import add_mount_root_argument
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
@@ -29,9 +30,7 @@ def main() -> int:
         help="open the dashboard on this workload's tag list",
     )
     p.add_argument("--tag", default=None, help="open the dashboard on this tag's task view")
-    p.add_argument(
-        "--mount-root", default="/workspace/mount", help="persistent data mount (holds tags/)"
-    )
+    add_mount_root_argument(p)
     p.add_argument(
         "--api-port", type=int, default=react_server.DEFAULT_API_PORT, help="Python API server port"
     )
@@ -39,7 +38,7 @@ def main() -> int:
         "--dev-port", type=int, default=react_server.DEFAULT_DEV_PORT, help="Vite dev server port"
     )
     args = p.parse_args()
-    react_server.launch(args.mount_root, args.api_port, args.dev_port, args.workload, args.tag)
+    react_server.launch(str(args.mount_root), args.api_port, args.dev_port, args.workload, args.tag)
     return 0
 
 

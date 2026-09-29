@@ -17,6 +17,7 @@ import sys
 from scribblez import workloads
 from scribblez.dashboard import db
 from scribblez.generational import train_ingest
+from scribblez.paths import add_mount_root_argument
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
@@ -24,8 +25,9 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=ArgumentDefaultsHelpFormatter)
     p.add_argument("-w", "--workload", required=True, choices=sorted(workloads.WORKLOADS))
     p.add_argument("-t", "--tag", required=True, help="Tag whose records to ingest.")
+    add_mount_root_argument(p)
     args = p.parse_args()
-    paths = workloads.get(args.workload).paths(args.tag)
+    paths = workloads.get(args.workload).paths(args.tag, args.mount_root)
     if not paths.records_dir.is_dir():
         print(f"no records under {paths.records_dir}")
         return 1

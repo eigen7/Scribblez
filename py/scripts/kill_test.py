@@ -64,6 +64,7 @@ import torch
 import torch.nn.functional as F
 from scribblez.dataset import row_layout
 from scribblez.ffi import decode_rows, get_input_shapes, set_opp_leave_input
+from scribblez.paths import add_mount_root_argument
 from scribblez.position_eval.model import LossConfig
 from scribblez.sim_evidence.model import NUM_EVIDENCE_PLANES, EvidencePositionEvalModel
 from scribblez.sim_evidence.slog_meta import position_meta
@@ -529,9 +530,10 @@ def main():
         "input block and require open-leaves .sobs files (a separate tag generated with "
         "generate_kill_test_data.py --open-leaves)",
     )
+    add_mount_root_argument(p)
     args = p.parse_args()
 
-    root = kill_test_workload.SPEC.data_dir(args.tag)
+    root = kill_test_workload.SPEC.data_dir(args.tag, args.mount_root)
     cache = root / "cache"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     results_dir = cache / "results"
@@ -545,8 +547,8 @@ def main():
         return
 
     build_cache(
-        kill_test_workload.slog_dir(args.tag), cache, args.holdout_every, args.max_k,
-        args.open_leaves,
+        kill_test_workload.slog_dir(args.tag, args.mount_root), cache,
+        args.holdout_every, args.max_k, args.open_leaves,
     )  # fmt: skip
     results_dir.mkdir(exist_ok=True)
 

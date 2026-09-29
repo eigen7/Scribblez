@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-from scribblez.paths import REPO_ROOT
+from scribblez.paths import REPO_ROOT, add_mount_root_argument
 from scribblez.sim_candidate_survey import SURVEY_SUFFIX, load_survey, report, write_review_dir
 from scribblez.workloads import blind_spots
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
@@ -51,12 +51,13 @@ def parse_args() -> argparse.Namespace:
         help="keep only outside plays that gain at least this many win%% over the best top move "
         "(on top of the survey's 2-sigma bar, which a large sim passes on tiny edges)",
     )
+    add_mount_root_argument(p)
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    survey_dir, gcg_dir = blind_spots.survey_dirs(args.tag)
+    survey_dir, gcg_dir = blind_spots.survey_dirs(args.tag, args.mount_root)
     paths = sorted(survey_dir.glob(f"*{SURVEY_SUFFIX}"))
     if not paths:
         print(f"no survey files in {survey_dir}", file=sys.stderr)
