@@ -145,8 +145,10 @@ function CapacitySection({ capacity, machines, post, busy }: {
     <div style={{ marginTop: 18 }}>
       <strong>Rental capacity</strong>
       <div style={{ fontSize: 13, color: '#556070', margin: '4px 0 10px' }}>
-        Machines the pool rents for a queued tag no machine above can take, up to each cap; one
-        is terminated once idle. Set the cap to what your quota allows.
+        The queue rents here on its own, whenever a queued tag fits no free machine above, up to
+        each entry's cap; a rented machine is terminated once idle. Removing a rented machine
+        does not stop this: set the cap to 0, or remove the entry. Set the cap to what your
+        quota allows.
       </div>
       {capacity.length > 0 && (
         <table style={{ borderCollapse: 'collapse', marginBottom: 8 }}>
@@ -334,7 +336,7 @@ export default function PoolView() {
                   {m.machine ? m.machine.host : 'this machine'}
                   {m.capacity && m.machine && (
                     <div style={{ color: '#7c8694' }}>
-                      rented {m.machine.instance_type}{m.machine.spot ? ' spot' : ''},
+                      rented {m.machine.instance_type}{m.machine.spot ? ' spot' : ''} by capacity {m.capacity},
                       ${(m.machine.spend ?? 0).toFixed(2)} so far
                     </div>
                   )}

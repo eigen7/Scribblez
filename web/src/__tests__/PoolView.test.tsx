@@ -140,7 +140,7 @@ describe('rental capacity', () => {
     postJSON.mockResolvedValue({ ok: true });
     render(<PoolView />);
     await waitFor(() => expect(screen.getByTestId('capacity-g6').textContent).toBe('1 of 2 rented'));
-    expect(screen.getByText(/rented g6.2xlarge spot/)).toBeTruthy();
+    expect(screen.getByText(/rented g6.2xlarge spot by capacity g6/)).toBeTruthy();
     // Only GPU types are offered.
     await waitFor(() => expect((screen.getByLabelText('capacity type') as HTMLSelectElement).value).toBe('g6.2xlarge'));
     expect(screen.getByText('g6.2xlarge spot, $0.410/hr')).toBeTruthy();

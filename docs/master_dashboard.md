@@ -268,7 +268,12 @@ running, under a lease on the machine.
 the sum of the tag's GPU roles' measured needs (position_eval's table is in
 `workloads/position_eval.py`). A configuration with no measured figure waits,
 saying so, unless its queue entry carries a memory override. The same figures
-refuse a GPU slot added by hand that the machine cannot fit. A tag that may
+refuse a GPU slot added by hand that the machine cannot fit. A tag that has
+trained goes only where a trainer can resume it: one whose trainer ran on
+localhost has its checkpoint and generations only there, so no ssh machine
+takes it (a trainer there would start over, and its checkpoints would replace
+the local ones); one whose trainer delivered through the bucket may go
+anywhere. A tag that may
 land on an ssh machine has its bundle built and pinned when it is enqueued;
 local slots run the checkout as it is when they start, and enqueueing warns
 about that, and about any tag in the queue with no end condition.

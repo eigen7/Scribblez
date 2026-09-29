@@ -77,6 +77,12 @@ def _params(spec, task: tasks.TaskRecord):
     return params_mod.validate(spec.params_cls, task.params)
 
 
+def _fit_args(spec, task: tasks.TaskRecord) -> tuple:
+    """The tag-side arguments placement.refusal takes: spec, params, and
+    where its training state lives."""
+    return spec, _params(spec, task), placement.state_home(spec, task)
+
+
 def _requeued(lease: Lease, task: tasks.TaskRecord) -> QueueEntry:
     """The queue entry a released lease's tag goes back in with: the lease's
     eligibility, and the task's pinned bundle if it has one."""
@@ -188,7 +194,8 @@ class TagQueue:
         spec, task = _lookup(workload, tag)
         assert spec.layout, f"{workload} tags are not queueable yet (no layout)"
         assert task is not None, f"tag '{tag}' has no task record"
-        params = _params(spec, task)
+        fit = _fit_args(spec, task)
+        params = fit[1]
         pool = pool_mod.load_pool()
         entry = queue_mod.load_queue().find(workload, tag) or QueueEntry(workload, tag, 0.0)
         targets = [(m.name, m) for m in pool.machines] + [
@@ -202,7 +209,7 @@ class TagQueue:
                     "machine": name,
                     "slots": [{"role": p.role, "threads": p.threads} for p in slots],
                     "gpu_gb": placement.gpu_total(spec, slots, entry),
-                    "refusal": placement.refusal(spec, params, entry, m, need_bundle=False),
+                    "refusal": placement.refusal(*fit, entry, m, need_bundle=False),
                 }
             )
         roles = [p.role for p in workloads.resolve(spec.layout)(params, 1, None)]
@@ -290,19 +297,16 @@ class TagQueue:
                 f"no end condition: {', '.join(endless)}; each holds its machine until "
                 "released by hand"
             )
-        params = _params(spec, task)
+        fit = _fit_args(spec, task)
         for m in pool.machines:
-            if (
-                m.kind == "local"
-                and placement.refusal(spec, params, entry, m, need_bundle=False) is None
-            ):
+            if m.kind == "local" and placement.refusal(*fit, entry, m, need_bundle=False) is None:
                 out.append(f"{m.name}: {LOCAL_CODE_WARNING}")
         return out
 
     def _ssh_targets(self, spec, task, entry: QueueEntry, pool: Pool) -> list[PoolMachine]:
         """The ssh machines the tag could run on, bundle aside: the pool's own,
         and what each capacity entry would rent."""
-        params = _params(spec, task)
+        fit = _fit_args(spec, task)
         candidates = [
             *pool.machines,
             *(self._rentals.prospect(c) for c in pool.capacity),
@@ -310,8 +314,7 @@ class TagQueue:
         return [
             m
             for m in candidates
-            if m.kind == "ssh"
-            and placement.refusal(spec, params, entry, m, need_bundle=False) is None
+            if m.kind == "ssh" and placement.refusal(*fit, entry, m, need_bundle=False) is None
         ]
 
     def _submit_build(self, spec, task, entry: QueueEntry, pool: Pool):
@@ -388,14 +391,14 @@ class TagQueue:
         tasks_now = list(self._m.all_tasks())
         busy = {m.name: self._m.occupants(m, tasks_now) for m in pool.machines}
         free = [m for m in pool.machines if m.lease is None and not busy[m.name]]
-        params = {}
+        args = {}  # entry key -> placement.refusal's tag-side arguments
         for e in queue.entries:
             spec, task = _lookup(e.workload, e.tag)
-            params[e.key] = (spec, _params(spec, task))
+            args[e.key] = _fit_args(spec, task)
         # Whether each free machine can take each entry: once per pair. The
         # queue view's reasons are computed after the pass acts (_note_refusals).
         fits = {
-            (e.key, m.name): placement.refusal(*params[e.key], e, m) is None
+            (e.key, m.name): placement.refusal(*args[e.key], e, m) is None
             for e in queue.entries
             for m in free
         }
@@ -422,10 +425,10 @@ class TagQueue:
             queue.entries.remove(e)
             queue_mod.save_queue(queue)
             self._start_slots(m, pool)
-        self._rent_for(pool, queue, params)
-        self._note_refusals(pool, queue, params, busy)
+        self._rent_for(pool, queue, args)
+        self._note_refusals(pool, queue, args, busy)
 
-    def _note_refusals(self, pool: Pool, queue: Queue, params: dict, busy: dict):
+    def _note_refusals(self, pool: Pool, queue: Queue, args: dict, busy: dict):
         """Why each still-queued tag is still queued, per machine and capacity
         entry, after this pass's placements and rentals (the queue view)."""
         if not pool.machines and not pool.capacity:
@@ -435,19 +438,19 @@ class TagQueue:
             e.key: {
                 **{
                     m.name: self._why_not(m, busy.get(m.name, []))
-                    or placement.refusal(*params[e.key], e, m)
+                    or placement.refusal(*args[e.key], e, m)
                     for m in pool.machines
                 },
                 **{
                     f"rent {c.name}": self._why_not_rent(c, pool)
-                    or placement.refusal(*params[e.key], e, self._rentals.prospect(c))
+                    or placement.refusal(*args[e.key], e, self._rentals.prospect(c))
                     for c in pool.capacity
                 },
             }
             for e in queue.entries
         }
 
-    def _rent_for(self, pool: Pool, queue: Queue, params: dict):
+    def _rent_for(self, pool: Pool, queue: Queue, args: dict):
         """Rent for queued tags no owned machine took, in queue order: each gets
         the first capacity entry below its cap whose type it fits. The machine
         is leased from the start, so placement proceeds as on any machine; its
@@ -456,7 +459,7 @@ class TagQueue:
             for c in pool.capacity:
                 if self._why_not_rent(c, pool) is not None:
                     continue
-                if placement.refusal(*params[e.key], e, self._rentals.prospect(c)) is not None:
+                if placement.refusal(*args[e.key], e, self._rentals.prospect(c)) is not None:
                     continue
                 try:
                     m = self._rentals.rent(c, pool, e)
@@ -589,7 +592,7 @@ class TagQueue:
         """Whether some queued tag could run on `m` once it is released."""
         for e in queue.entries:
             spec, task = _lookup(e.workload, e.tag)
-            if placement.refusal(spec, _params(spec, task), e, m) is None:
+            if placement.refusal(*_fit_args(spec, task), e, m) is None:
                 return True
         return False
 

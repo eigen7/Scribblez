@@ -139,6 +139,13 @@ class TaskRecord:
     # view shows how they depart from the profile. "" for a workload without
     # profiles.
     profile: str = ""
+    # Where the task's most recently added trainer slot delivers (_slot_sink):
+    # "r2" when its checkpoint and generations go through the results bucket,
+    # so a trainer on any machine can resume them; "local" when they are only
+    # in this machine's tag dir. "" before any trainer slot, read as "local".
+    # The tag queue places a tag with training progress only where its state
+    # is (placement.state_home).
+    trainer_sink: str = ""
 
     def worker(self, worker_id: str) -> WorkerRecord:
         w = self.find(worker_id)
