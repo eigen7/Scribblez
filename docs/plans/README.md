@@ -9,20 +9,29 @@ moved on. New plans go here, not in `docs/` proper.
 
 ## Modeling and training
 
-- **[sim_residual_feedback.md](sim_residual_feedback.md)**: *built, waiting
-  on training.* Feeding Monte Carlo rollout evidence back into the value
+- **[sim_residual_feedback.md](sim_residual_feedback.md)**: *built; on
+  hiatus before training, superseded by supreme_bot.md.* Feeding Monte Carlo rollout evidence back into the value
   models, re-evaluating the move set conditioned on it, and choosing the next
   candidate to sim with a learned expected-gain ("proves-best") head. The
   kill-test passed; the fusion stage, the move proposal model and the
   sequential agent (UltimateBot) exist. The gen-1 frozen-backbone trial is
   the recorded floor.
 - **[rack_conditional_evidence.md](rack_conditional_evidence.md)**:
-  *proposed, plan-reviewed, not built.* Extends the sim-residual loop so that
+  *proposed, plan-reviewed, not built; on hiatus, superseded by
+  supreme_bot.md.* Extends the sim-residual loop so that
   what the sims of one candidate find transfers to the rest of the turn:
   evidence kept per rack index, an evidence-conditioned reply policy inside
   rollouts, outdated rollouts re-priced or re-run rather than discarded, and
   one acquisition rule over (candidate, rack indices). Built one layer at a
   time against an expert-labeled evaluation set.
+- **[supreme_bot.md](supreme_bot.md)**: *the project's direction;
+  plan-reviewed, not built.* The unconstrained form of the same goal: every step of every probe
+  becomes a token in one context, and a causal transformer reads it to choose
+  the moves and draws inside probes and the final pick. No per-node statistics
+  or backup rule. Tokens describe content, not tree position, so any probe can
+  inform any decision. Built as a learned reader over fixed probes first
+  (gated against shrinkage on face-up leaves, then repeated in standard
+  Scrabble), then learned move choices, then learned draws.
 - **[sim_labeled_candidates.md](sim_labeled_candidates.md)**: *proposed;
   the measurement (PR 0) landed.* A second target stream for the teacher: sim
   outcomes over every simmed candidate at sampled self-play positions, stored

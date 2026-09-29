@@ -1,6 +1,8 @@
 # Rack-conditional evidence: transferring sim knowledge across the tree
 
-**Status: proposed, plan-reviewed (2026-09-23); nothing built.** Two human
+**Status: proposed, plan-reviewed (2026-09-23); nothing built; on hiatus
+since 2026-09-29, superseded by [supreme_bot.md](supreme_bot.md) as the
+project's direction.** Two human
 calls from the review are open (see the [review record](#review-record)): who
 labels the layer-0 evaluation positions and how many are needed, and whether
 the learned design proceeds only if it beats an explicit reply catalogue.

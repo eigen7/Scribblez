@@ -7,59 +7,233 @@ belief-aware evaluation ([design.md](design.md)). This document is the
 the models that have to be trained to feed it. Read it to know where a piece
 of work fits and why the pieces are ordered as they are.
 
-It contains no experiments. What past measurements established, and how the
-finished agent will be evaluated, is in
-[evaluation_plan.md](evaluation_plan.md). The plan is committed to, not gated:
-every item is part of the destination agent, and nothing here exists to decide
-whether to build something else.
+**Direction, as of 2026-09-29: SupremeBot.** The project is building a learned
+search in which one network reads every probe of the turn so far and makes
+every decision ([plans/supreme_bot.md](plans/supreme_bot.md)). Development
+moves from face-up leaves to standard Scrabble. The evidence-loop agent this
+roadmap previously built toward, and the items that led to it, are
+[on hiatus](#on-hiatus-the-evidence-loop-agent); much of what they built is
+reused. Architecture experiments on the position models continue, because
+their findings inform SupremeBot's network.
+
+What past measurements established, and how the evidence-loop agent would have
+been evaluated, is in [evaluation_plan.md](evaluation_plan.md). SupremeBot's
+measurements are part of its build order: unlike the items below, its first
+milestone has a kill criterion.
 
 ## Status at a glance
 
-| Item | Status |
+| Step | Status |
 |------|--------|
-| [1. Per-move placement planes](#1-per-move-placement-planes) | Done |
-| [2. Value-truncated rollouts (D1)](#2-value-truncated-rollouts-d1) | Done |
-| [3. Engine runtime for the evidence path](#3-engine-runtime-for-the-evidence-path) | Done |
-| [4. Evidence-trajectory generation](#4-evidence-trajectory-generation) | Done; regenerated as improvements are tested |
-| [5. The move proposal model](#5-the-move-proposal-model) | Done; retrained as improvements are tested |
-| [6. The sequential agent](#6-the-sequential-agent) | Built; waits on a trained model from item 5 |
-| [7. Self-model plies and the endgame solver (D2, D3)](#7-self-model-plies-and-the-endgame-solver-d2-d3) | D2 not started; D3 partly built |
-| [8. Cloud generation](#8-cloud-generation) | Done for `move_set_eval`; `evidence_trajectories` is local-only |
+| Before M0: label noise, training graph and throughput estimates | Not started |
+| The standard-Scrabble prior (in parallel) | Not started (compute: new tags) |
+| M0: the probe record | Not started |
+| M1a: learned reader over fixed probes, face-up leaves (the kill gate) | Not started |
+| M1b: the same in standard Scrabble, with the inference arms | Not started |
+| M2: the known positions | Not started |
+| M3: learned move choices | Not started |
+| M4: learned draws (rack inference) | Not started |
+| M5: self-labeling | Not started |
+| [The evidence-loop agent](#on-hiatus-the-evidence-loop-agent), items [1](#1-per-move-placement-planes)–[5](#5-the-move-proposal-model) and [8](#8-cloud-generation) | Done; kept, partly reused |
+| [Item 6, the sequential agent (UltimateBot)](#6-the-sequential-agent) | Built; on hiatus before training |
+| [Item 7, self-model plies and the endgame solver](#7-self-model-plies-and-the-endgame-solver-d2-d3) | D2 not started, D3 partly built; on hiatus |
 
-What remains is mostly compute: generate the item-4 corpus, train the item-5
-model on it, then run the measurements in
-[evaluation_plan.md](evaluation_plan.md).
+## The variant: standard Scrabble
 
-**Track labels.** Code comments and older documents refer to work by track
-label. The numbering in this document is implementation order; the labels map
-as follows:
+Until 2026-09-29, development ran in **face-up-leaves Scrabble**: each player
+revealed their leave after every turn, and only the replenishment draws stayed
+hidden. That removed rack uncertainty, the dominant confound, so the effort
+went to the move set evaluation model, evidence conditioning and sim
+scheduling.
 
-- **A** — the move set evaluation track. A1 the match harness, A2 `.mset`
-  target generation, A3 the distilled student and its gate metrics, A4 engine
-  inference and the `mset-sim` agent.
-- **B** — rack inference ([parked](#rack-inference-parked)).
-- **C** — sim candidate selection. C1 was an interim diversity heuristic, now
-  [rejected](#what-is-deliberately-not-here).
-- **D** — the rollout-policy ladder: D1 value truncation (item 2), D2
-  self-model plies and D3 the endgame solver (item 7).
-- **E** — infrastructure: E1 the cloud fleet, E2 match discipline.
+SupremeBot changes the reason for the variant. It makes rack inference the
+network's job: the reader learns to weight probes by what the opponent's
+history implies, and the learned draws learn where to sample
+([Rack inference is a draw decision](plans/supreme_bot.md#rack-inference-is-a-draw-decision)).
+A variant that removes the problem would hide one of the design's main
+arguments, so the destination is standard Scrabble.
 
-## The variant: face-up leaves
+Face-up leaves stays in one role: the test bed for SupremeBot's kill gate.
+M1a asks whether the reader learns transfer at all, which needs no hidden
+racks, and running it on the existing face-up prior keeps the
+standard-Scrabble retrain off its critical path. The retrain runs in
+parallel, and M1b repeats the measurement in standard Scrabble with the
+inference arms. `face_up_leaves` stays a workload and agent parameter, and
+face-up tags, checkpoints and results remain valid for that variant.
 
-Development happens in **face-up-leaves Scrabble**: each player reveals their
-leave after every turn, and only the replenishment draws stay hidden. Both
-seats see, and may use, the other's retained tiles.
+## The destination: SupremeBot
 
-Rack uncertainty is the dominant confound in everything downstream. Removing it
-by rule puts the effort where the novelty is: the move set evaluation model,
-evidence conditioning, and sim scheduling. None of those components depends on
-the information condition, so returning to standard Scrabble later means
-regenerating data, not redesigning.
+Per turn, SupremeBot runs probes from the root to shallow value-truncated
+leaves. Every step of every probe (each move, each draw, each leaf outcome) is
+appended as a token to one context, and one causal transformer reads that
+context to choose the moves and draws inside probes and, when the budget is
+spent, the move to play. Tokens describe content, not tree position, so a
+finding on one branch reaches decisions on unrelated branches. No statistics
+are kept per node. [plans/supreme_bot.md](plans/supreme_bot.md) is the design:
+tokens, training, cost, risks and open questions.
 
-This parks the *belief* half of [design.md](design.md). That is a sequencing
-decision, not a retraction; see [rack inference](#rack-inference-parked).
+The build order, with the plan's milestones:
 
-## The destination
+1. **Before M0: three estimates.** The label noise floor and labeling cost,
+   which set the training budgets and the corpus size; the masked training
+   graph, prototyped on one synthetic row; and a throughput microbenchmark,
+   which decides whether learned move choices are affordable.
+2. **In parallel: the standard-Scrabble prior.** The teacher, student and move
+   proposal model retrained with `face_up_leaves` off. SupremeBot uses them as
+   its prior (the root shortlist, the move-query shortlists, the empty-context
+   floor) and the teacher as its leaf model. This is new tags, not new code.
+3. **M0: the probe record.** Per-step logging with tick ids and model
+   versions, the token encoder, and the opponent-history tokens.
+4. **M1a: a learned reader over fixed probes, face-up leaves.** Against
+   shrinkage toward the prior and plain averaging on identical records, with
+   synthetic single-fact transfer tests. The kill gate.
+5. **M1b: the same in standard Scrabble,** with true-rack labels, the
+   history-ablated reader and the ported-inference arm. Then match play
+   against BestBot.
+6. **M2: the known positions,** Richards–Johnson and the ACETA family.
+7. **M3: learned move choices:** the KV-cached serving runtime,
+   reply-searched labels, then the writer by the telescoping reward.
+8. **M4: learned draws,** which is SupremeBot's rack inference.
+9. **M5: self-labeling,** where SupremeBot can outgrow its first labels.
+
+## What is already built
+
+Most of it was built for the evidence-loop agent. SupremeBot reuses the
+position models as its prior and leaf, the value-truncated rollouts, the
+item-3 cache graph for its root prefix, the sim runner, the survey tooling for
+its first labels, and the BestBot port as its match baseline.
+
+
+- **The position evaluation model**, the teacher. It evaluates a post-move,
+  pre-draw board from the mover's point of view: WLD, a Gaussian over the final
+  score differential, and four footprint-categorical placement heads (where
+  each seat's next move lands, and the same conjoined with that seat winning).
+  Trained on HastyBot self-play under the generational lifecycle
+  ([architecture.md](architecture.md),
+  [generational_training.md](generational_training.md)).
+- **The move set evaluation model**, the student. The board trunk runs once,
+  each candidate gets one cheap vector, and cross-attention scores all `N` in
+  one pass ([model_architectures.md](model_architectures.md)). It carries the
+  per-move placement readouts of item 1.
+- **Target generation** (A2): the `.mset` sidecar, its generator, and the
+  `move_set_eval` dashboard workload, run in-variant against a teacher pinned
+  by content hash.
+- **Engine inference** (A4): the move-set arm of `NeuralNet<Spec>` and its
+  evaluation service ([model_specs.h](../engine/include/nn/model_specs.h)), the
+  P = 1 ONNX export
+  ([onnx_export.py](../py/scribblez/move_set_eval/onnx_export.py)), and the
+  `--type=mset-sim` agent
+  ([mset_sim_agent.h](../engine/include/agent/mset_sim_agent.h)), which scores
+  a turn's whole candidate set in one pass and sims the model's top K: the
+  destination agent without the evidence loop.
+- **Sim machinery**: [sim_runner.h](../engine/include/sim/sim_runner.h) runs
+  common-random-number (CRN) rollouts, to game end or value-truncated;
+  [sim_observation_log.h](../engine/include/data/sim_observation_log.h) stores
+  them in `.sobs` sidecars.
+- **The evidence path**: the fusion stage
+  ([evidence_fusion.py](../py/scribblez/evidence_fusion.py)), the proves-best
+  head, the trajectory generator and the `evidence_trajectories` workload, the
+  evidence trainer (`py/scribblez/evidence/`), the engine runtime, and the
+  UltimateBot agent (items 3–6).
+- **The sim agent baseline**, the endgame solver, and face-up leaves in the
+  game loop.
+- **Infrastructure**: the master dashboard and workload registry, the match
+  harness (A1/E2), and the cloud fleet (E1).
+
+## Models and how they are trained
+
+Three networks, trained in this order; each depends on the one above it.
+SupremeBot uses the teacher and the student as its leaf model and prior; the
+move proposal model's evidence head belongs to the paused track, but its cache
+graph builds SupremeBot's root prefix. All three are retrained for standard
+Scrabble.
+
+### The position evaluation model (teacher)
+
+- **Trained on**: HastyBot self-play `.slog` data, generational generate→train
+  ([generational_training.md](generational_training.md)).
+- **Predicts**: WLD, a score-differential Gaussian, and four footprint
+  placement heads.
+- **Roles**: the teacher for the student's distillation, and the rollout leaf
+  evaluator of item 2. The leaf role puts it inside the generational
+  improvement loop: stronger self-play, better value, better leaves, better
+  sims, better labels.
+- **Planned second target stream: sim values.** A simmed candidate's `.sobs`
+  record is a many-rollout estimate of the value at its post-move state. Under
+  face-up leaves the sim samples the same draw distribution the game did, so it
+  is the same target as the game outcome at a fraction of the variance.
+  Positions with sims would train on both streams. Constraint: the stream must
+  come from untruncated sims, because a truncated sim value embeds the model's
+  own leaf readouts and the model must not train on its own outputs. The plan
+  is [sim_labeled_candidates.md](plans/sim_labeled_candidates.md).
+- **Advancing it** by promotion, rather than by a new tag and full
+  regeneration, is [generational_teacher.md](plans/generational_teacher.md),
+  deferred.
+
+### The move set evaluation model (student)
+
+- **Trained on**: `.mset` sidecars, the teacher's readouts at each candidate's
+  post-move state (WLD, score differential, the four placement
+  distributions), paired with pre-move board inputs reconstructed by replay.
+  Distillation only: the student has no sim-outcome losses, and the fusion
+  stage its code hosts trains only in the move proposal copy.
+- **Predicts**: per candidate, WLD, score differential, and the four placement
+  distributions.
+- **Roles**: the dense prior over full candidate sets; the backbone the move
+  proposal model is copied from; under D2, the rollout policy.
+
+### The move proposal model
+
+- **Is**: the student copy plus the proves-best head
+  ([item 5](#5-the-move-proposal-model)), the model at the root of the
+  deployed loop.
+- **Trained on**: evidence-set rows assembled from item 4's pools, under item
+  5's loss: gain first (best-so-far fed as an input), with the sim-outcome
+  auxiliaries.
+- **Bootstrapping**: the gen-0 pool's on-policy side is selected by the plain
+  student (a temperature softmax over the full candidate set). That is correct
+  at the empty evidence set, and the greedy anchor supplies the first sim
+  regardless of proposer. Later generations select with the current move
+  proposal model, and each new student generation refreshes the copy's
+  starting point.
+
+## Rack inference
+
+In SupremeBot, rack inference is the network's job, not a module's: the
+reader learns to weight probes by the opponent's history, and the learned
+draws (M4) learn where to sample
+([Rack inference is a draw decision](plans/supreme_bot.md#rack-inference-is-a-draw-decision)).
+
+What exists: a port of the algorithm behind Macondo's `SIMMING_INFER_BOT`
+([belief/rack_inference.h](../engine/include/belief/rack_inference.h)). It
+combines a hypergeometric prior over draws from the unseen pool with a
+temperature-softened static-equity likelihood, enumerates small leave spaces
+exhaustively and importance-samples above them, and yields the posterior a
+simulation would sample opponent racks from. It is tested, and its one consumer
+is offline: the hidden-leaves Monte Carlo ground truth of the position
+evaluation test sets samples the opponent's leave from this posterior
+([sim/monte_carlo_sim.h](../engine/include/sim/monte_carlo_sim.h)), at the
+default (Macondo) temperature. Nothing in play uses it.
+
+Its role now is the baseline: M1b's shrinkage-with-inference arm samples its
+draws from this posterior, and M4's learned draws are measured against it.
+Beyond both lies the learned belief system of [design.md](design.md) §3, which
+SupremeBot replaces with implicit inference.
+
+## On hiatus: the evidence-loop agent
+
+Until 2026-09-29 this roadmap built toward UltimateBot: an agent that sims
+candidates one at a time, each chosen by a learned expected-gain
+("proves-best") head reading the evidence of the sims so far
+([plans/sim_residual_feedback.md](plans/sim_residual_feedback.md)), with
+[plans/rack_conditional_evidence.md](plans/rack_conditional_evidence.md) as its
+proposed next step. Both are on hiatus. SupremeBot generalizes them: they fix
+in code which information flows exist and what carries each, and SupremeBot
+learns them all from one context. What they built is kept, and much of it is
+reused ([What is already built](#what-is-already-built)). What follows is the
+paused track as it stood, with each item's status at the pause.
+
+### Its destination
 
 The agent this plan builds, per turn:
 
@@ -137,49 +311,11 @@ The design choices behind the loop:
   happens once per decision, at the root; a neural *rollout* policy prunes
   instead, for the reasons under [D2](#7-self-model-plies-and-the-endgame-solver-d2-d3).
 
-## What is already built
-
-- **The position evaluation model**, the teacher. It evaluates a post-move,
-  pre-draw board from the mover's point of view: WLD, a Gaussian over the final
-  score differential, and four footprint-categorical placement heads (where
-  each seat's next move lands, and the same conjoined with that seat winning).
-  Trained on HastyBot self-play under the generational lifecycle
-  ([architecture.md](architecture.md),
-  [generational_training.md](generational_training.md)).
-- **The move set evaluation model**, the student. The board trunk runs once,
-  each candidate gets one cheap vector, and cross-attention scores all `N` in
-  one pass ([model_architectures.md](model_architectures.md)). It carries the
-  per-move placement readouts of item 1.
-- **Target generation** (A2): the `.mset` sidecar, its generator, and the
-  `move_set_eval` dashboard workload, run in-variant against a teacher pinned
-  by content hash.
-- **Engine inference** (A4): the move-set arm of `NeuralNet<Spec>` and its
-  evaluation service ([model_specs.h](../engine/include/nn/model_specs.h)), the
-  P = 1 ONNX export
-  ([onnx_export.py](../py/scribblez/move_set_eval/onnx_export.py)), and the
-  `--type=mset-sim` agent
-  ([mset_sim_agent.h](../engine/include/agent/mset_sim_agent.h)), which scores
-  a turn's whole candidate set in one pass and sims the model's top K: the
-  destination agent without the evidence loop.
-- **Sim machinery**: [sim_runner.h](../engine/include/sim/sim_runner.h) runs
-  common-random-number (CRN) rollouts, to game end or value-truncated;
-  [sim_observation_log.h](../engine/include/data/sim_observation_log.h) stores
-  them in `.sobs` sidecars.
-- **The evidence path**: the fusion stage
-  ([evidence_fusion.py](../py/scribblez/evidence_fusion.py)), the proves-best
-  head, the trajectory generator and the `evidence_trajectories` workload, the
-  evidence trainer (`py/scribblez/evidence/`), the engine runtime, and the
-  UltimateBot agent (items 3–6).
-- **The sim agent baseline**, the endgame solver, and face-up leaves in the
-  game loop.
-- **Infrastructure**: the master dashboard and workload registry, the match
-  harness (A1/E2), and the cloud fleet (E1).
-
-## The items
+### The items
 
 In dependency order.
 
-### 1. Per-move placement planes
+#### 1. Per-move placement planes
 
 **Done.** [move_set_eval_v2_results.md](move_set_eval_v2_results.md) records
 the corpus, the trained student, and its gate metrics.
@@ -205,7 +341,7 @@ depends on them.
 - **Consequence**: adding planes invalidated every existing corpus, which is
   why the format was settled before regenerating.
 
-### 2. Value-truncated rollouts (D1)
+#### 2. Value-truncated rollouts (D1)
 
 **Done.** `SimRunner` truncates at a configurable horizon and reads the
 position evaluation model there, at the post-move, pre-draw state of the last
@@ -240,7 +376,7 @@ sims exist to observe, and the leaf value stands for everything after.
 - **Costs accepted**: `.sobs` artifacts become model-versioned, and sims
   contend for the GPU.
 
-### 3. Engine runtime for the evidence path
+#### 3. Engine runtime for the evidence path
 
 **Done.** The move proposal model runs incrementally in the engine as two
 graphs; [model_architectures.md](model_architectures.md#4-side-by-side) has
@@ -276,7 +412,7 @@ This item precedes data generation because item 4's on-policy side *is* the
 deployment loop, so the generator needs the runtime before the corpus can be
 made.
 
-### 4. Evidence-trajectory generation
+#### 4. Evidence-trajectory generation
 
 **Done.** Corpora are regenerated continually as improvements are tested. The
 `evidence_trajectories` workload's generate role runs self-play, then the
@@ -330,7 +466,7 @@ its coverage at no cost to the input distribution.
   value labels would stay at the static strata's rate while the proposer
   explores elsewhere.
 
-### 5. The move proposal model
+#### 5. The move proposal model
 
 **Done.** The model is retrained continually as improvements are tested. The
 trainer is `py/scribblez/evidence/`, the `evidence_trajectories` workload's
@@ -402,11 +538,11 @@ A proposed extension, keeping evidence per sampled opponent rack so knowledge
 transfers across candidates and rollouts, is
 [rack_conditional_evidence.md](plans/rack_conditional_evidence.md).
 
-### 6. The sequential agent
+#### 6. The sequential agent
 
 **Built; waits on a trained model from item 5.** `--player
 "--type=ultimatebot"` ([ultimate_bot_agent.h](../engine/include/agent/ultimate_bot_agent.h))
-is the loop from [the destination](#the-destination) as a playing agent, over
+is the loop from [the destination](#its-destination) as a playing agent, over
 the item-3 runtime. It reuses `mset-sim`'s candidate generation, encoding, and
 endgame handoff. The loop itself
 ([evidence_loop.h](../engine/include/agent/evidence_loop.h)) holds no network
@@ -437,7 +573,7 @@ truncation leaf model can be shipped to an ssh worker.
 What remains is compute: a trained head, then the budget and threshold
 measurements in [evaluation_plan.md](evaluation_plan.md).
 
-### 7. Self-model plies and the endgame solver (D2, D3)
+#### 7. Self-model plies and the endgame solver (D2, D3)
 
 The rest of the rollout-policy ladder. Each rung changes what a sim means, so
 each lands behind a `.sobs` flag.
@@ -463,7 +599,7 @@ each lands behind a `.sobs` flag.
 D2 comes before D3: D2 depends on the trained student and carries the
 generational payoff; D3's payoff is more localized.
 
-### 8. Cloud generation
+#### 8. Cloud generation
 
 **Done for `move_set_eval`.** The engine worker image hosts TensorRT, and the
 generate role declares its teacher export as an out-of-tag input
@@ -474,82 +610,7 @@ with only the dashboard local. The `evidence_trajectories` roles (which need
 the teacher, the proposer and the leaf model) remain local-only because they do
 not declare their inputs yet.
 
-## Models and how they are trained
-
-Three networks, trained in this order; each depends on the one above it.
-
-### The position evaluation model (teacher)
-
-- **Trained on**: HastyBot self-play `.slog` data, generational generate→train
-  ([generational_training.md](generational_training.md)).
-- **Predicts**: WLD, a score-differential Gaussian, and four footprint
-  placement heads.
-- **Roles**: the teacher for the student's distillation, and the rollout leaf
-  evaluator of item 2. The leaf role puts it inside the generational
-  improvement loop: stronger self-play, better value, better leaves, better
-  sims, better labels.
-- **Planned second target stream: sim values.** A simmed candidate's `.sobs`
-  record is a many-rollout estimate of the value at its post-move state. Under
-  face-up leaves the sim samples the same draw distribution the game did, so it
-  is the same target as the game outcome at a fraction of the variance.
-  Positions with sims would train on both streams. Constraint: the stream must
-  come from untruncated sims, because a truncated sim value embeds the model's
-  own leaf readouts and the model must not train on its own outputs. The plan
-  is [sim_labeled_candidates.md](plans/sim_labeled_candidates.md).
-- **Advancing it** by promotion, rather than by a new tag and full
-  regeneration, is [generational_teacher.md](plans/generational_teacher.md),
-  deferred.
-
-### The move set evaluation model (student)
-
-- **Trained on**: `.mset` sidecars, the teacher's readouts at each candidate's
-  post-move state (WLD, score differential, the four placement
-  distributions), paired with pre-move board inputs reconstructed by replay.
-  Distillation only: the student has no sim-outcome losses, and the fusion
-  stage its code hosts trains only in the move proposal copy.
-- **Predicts**: per candidate, WLD, score differential, and the four placement
-  distributions.
-- **Roles**: the dense prior over full candidate sets; the backbone the move
-  proposal model is copied from; under D2, the rollout policy.
-
-### The move proposal model
-
-- **Is**: the student copy plus the proves-best head
-  ([item 5](#5-the-move-proposal-model)), the model at the root of the
-  deployed loop.
-- **Trained on**: evidence-set rows assembled from item 4's pools, under item
-  5's loss: gain first (best-so-far fed as an input), with the sim-outcome
-  auxiliaries.
-- **Bootstrapping**: the gen-0 pool's on-policy side is selected by the plain
-  student (a temperature softmax over the full candidate set). That is correct
-  at the empty evidence set, and the greedy anchor supplies the first sim
-  regardless of proposer. Later generations select with the current move
-  proposal model, and each new student generation refreshes the copy's
-  starting point.
-
-## Rack inference (parked)
-
-Face-up leaves removes the need to infer anything, so this is dormant until
-the project returns to standard Scrabble.
-
-What exists: a port of the algorithm behind Macondo's `SIMMING_INFER_BOT`
-([belief/rack_inference.h](../engine/include/belief/rack_inference.h)). It
-combines a hypergeometric prior over draws from the unseen pool with a
-temperature-softened static-equity likelihood, enumerates small leave spaces
-exhaustively and importance-samples above them, and yields the posterior a
-simulation would sample opponent racks from. It is tested, and its one consumer
-is offline: the hidden-leaves Monte Carlo ground truth of the position
-evaluation test sets samples the opponent's leave from this posterior
-([sim/monte_carlo_sim.h](../engine/include/sim/monte_carlo_sim.h)), at the
-default (Macondo) temperature. Nothing in play uses it.
-
-Resuming means pricing the posterior against ground truth (a `.slog` replay
-recovers the leave the opponent actually held), which also sets the likelihood
-temperature, and then wiring it into `SimRunner`, whose per-rollout-index
-sampling already preserves common random numbers. Beyond that lies the learned
-belief system of [design.md](design.md) §3.
-
-## What is deliberately not here
+### What it deliberately left out
 
 - **Batched multi-round scheduling.** The sequential loop subsumes it; batch
   mode returns only if sequential proposal underperforms it.
@@ -569,8 +630,3 @@ belief system of [design.md](design.md) §3.
   different candidate. It needs a `.slog` branch-point extension and a
   branching `GameRunner` mode, and is parked until training signal is
   demonstrably limited by data diversity.
-- **Standard (hidden-leave) Scrabble**, and with it everything belief.
-  Returning means regenerating data and retraining, not redesigning.
-- **Search-derived knowledge buffers** beyond the evidence loop
-  ([design.md](design.md) §8.1): still the long-range shape, but every nearer
-  rung must fail first.

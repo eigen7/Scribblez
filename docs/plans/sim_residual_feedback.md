@@ -1,6 +1,7 @@
 # Sim-residual feedback: re-evaluating moves with Monte Carlo evidence
 
-**Status: built; waiting on training.** All six steps of the [implementation
+**Status: built; on hiatus before training since 2026-09-29, superseded by
+[supreme_bot.md](supreme_bot.md) as the project's direction.** All six steps of the [implementation
 roadmap](#implementation-roadmap) have code in the tree. The kill-test passed;
 the fusion stage, the move proposal model and its trainer, the engine runtime
 and the sequential agent (UltimateBot, `--type=ultimatebot`) exist. What

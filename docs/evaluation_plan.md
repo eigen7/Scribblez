@@ -1,5 +1,10 @@
 # Evaluation plan
 
+**Status: on hiatus with the evidence-loop agent it was written for.** Since
+2026-09-29 the direction is SupremeBot, whose measurements are part of its
+build order ([plans/supreme_bot.md](plans/supreme_bot.md#build-order)). The
+machinery and past measurements below still apply.
+
 [roadmap.md](roadmap.md) is an implementation plan and contains no
 experiments. This document holds the other half: the machinery that produces
 measurements, the measurements that already shaped the design, and the
