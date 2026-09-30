@@ -1064,7 +1064,7 @@ class _RecordingSshMachine(_FakeSshMachine):
     def pull_image(self, image):
         self.ops.append(("pull", image))
 
-    def run_container(self, name, image, env, *, gpus=False):
+    def run_container(self, name, image, env, *, gpus=False, volume=None):
         self.ops.append(("run", "gpu" if gpus else name))
 
     def copy_from_container(self, name, path, dest):
@@ -1954,7 +1954,7 @@ def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
         def pull_image(self, image):
             pass
 
-        def run_container(self, name, image, env, *, gpus=False):
+        def run_container(self, name, image, env, *, gpus=False, volume=None):
             envs[name] = (image, env["SCZ_SINK"], gpus, env.get("SCZ_DATA_SINK"))
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
@@ -1982,7 +1982,7 @@ def test_a_data_sink_differing_from_the_records_sink_reaches_the_container(
         def pull_image(self, image):
             pass
 
-        def run_container(self, name, image, env, *, gpus=False):
+        def run_container(self, name, image, env, *, gpus=False, volume=None):
             envs[name] = (env["SCZ_SINK"], env.get("SCZ_DATA_SINK"))
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
@@ -2278,21 +2278,176 @@ def test_the_data_plane_moves_only_while_every_slot_is_stopped(manager, monkeypa
     assert manager.tasks.load(spec, "t").data_plane == "legacy"
 
 
-def test_a_data_home_needs_a_local_trainer(manager, monkeypatch):
-    spec = workloads.get("position_eval")
-    monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: False)
-    task = _all_ssh_task()
-    for w in task.workers:
-        w.desired_state = "paused"
-    with pytest.raises(AssertionError, match="must be a local slot"):
-        manager.set_data_plane(spec, task, "home")
+def _rented_home_task(manager, monkeypatch) -> tasks.TaskRecord:
+    """A data-home position_eval task whose trainer and a generator share rented
+    machine m1, with a second generator on rented m2 and one on localhost; a
+    match slot on m1 too."""
+    monkeypatch.setattr(WorkerManager, "_rented", lambda self, task, w: w.kind == "ssh")
+    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
+    task.data_plane = "home"
+    for wid, role, kind, machine in (
+        ("tr", "train", "ssh", "m1"),
+        ("g1", "generate", "ssh", "m1"),
+        ("g2", "generate", "ssh", "m2"),
+        ("gl", "generate", "local", None),
+        ("me", "match_eval", "ssh", "m1"),
+    ):
+        task.workers.append(
+            tasks.WorkerRecord(
+                worker_id=wid, role=role, kind=kind, desired_state="paused", machine=machine
+            )
+        )
+    return task
 
-    task = _local_training_task()
-    task.workers = [w for w in task.workers if w.role != "train"]
-    manager.set_data_plane(spec, task, "home")
-    with pytest.raises(AssertionError, match="must be a local slot"):
+
+def test_a_rented_data_homes_slots_deliver_by_machine(manager, monkeypatch):
+    """On the home machine: the shared volume, and records through the bucket so
+    nothing is collected from it. Elsewhere: bucket staging, which the home
+    ingests. Match eval keeps its own filesystem, where dispatch reads it."""
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    sinks = {
+        w.worker_id: (
+            manager._slot_data_sink(spec, task, w),
+            manager._slot_records_sink(spec, task, w),
+            manager._collected(spec, task, w) if w.kind == "ssh" else None,
+        )
+        for w in task.workers
+    }
+    assert sinks == {
+        "tr": ("home", "r2", False),
+        "g1": ("home", "r2", False),
+        "g2": ("r2", "r2", False),
+        "gl": ("r2", "local", None),
+        "me": ("local", "local", True),
+    }
+    task.data_plane = "legacy"  # the routing is unchanged for a legacy tag
+    assert manager._slot_data_sink(spec, task, task.worker("g1")) == "r2"
+
+
+def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    task.bundle_id, task.bundle_archs = "b1", ["znver3"]
+    runs, volumes = {}, []
+
+    class _Recording(_FakeSshMachine):
+        def pull_image(self, image):
+            pass
+
+        def create_volume(self, name):
+            volumes.append(name)
+
+        def run_container(self, name, image, env, *, gpus=False, volume=None):
+            runs[name.rsplit("-", 1)[-1]] = (
+                volume,
+                env.get("SCZ_DATA_SINK"),
+                env.get("SCZ_DATA_PLANE"),
+            )
+
+    monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(
+        WorkerManager,
+        "_machine_record",
+        lambda self, task, name: SimpleNamespace(
+            host=f"u@{name}",
+            identity_file=None,
+            known_hosts_file=None,
+            arch="znver3",
+            instance_id="i",
+        ),
+    )
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    for w in task.workers:
+        if w.kind == "ssh":
+            manager._run_ssh_container(spec, task, w)
+    root = str(spec.paths("t", workers_mod.DEFAULT_MOUNT_ROOT).root)
+    vol = "scz-position_eval-t-data"
+    assert runs["tr"] == ((vol, root), "local", "home")
+    assert runs["g1"] == ((vol, root), "local", None)
+    assert runs["g2"] == (None, None, None)  # data and records both the bucket
+    assert runs["me"] == (None, None, None)
+    assert set(volumes) == {vol}
+
+
+def test_a_data_home_tags_trainer_comes_first(manager, monkeypatch):
+    spec = workloads.get("position_eval")
+    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
+    task.data_plane = "home"
+    with pytest.raises(AssertionError, match="add this tag's trainer first"):
+        manager._check_role(spec, task, "generate", "ssh", check_gpu=False)
+    manager._check_role(spec, task, "match_eval", "ssh", check_gpu=False)  # not a data-plane slot
+    manager._check_role(spec, task, "train", "ssh", check_gpu=False)
+    task.workers.append(
+        tasks.WorkerRecord(worker_id="g", role="generate", kind="local", desired_state="paused")
+    )
+    with pytest.raises(AssertionError, match="before its other slots"):
         manager._check_role(spec, task, "train", "ssh", check_gpu=False)
-    manager._check_role(spec, task, "generate", "ssh", check_gpu=False)  # generators anywhere
+
+
+def test_a_rented_data_home_cannot_go_back_to_legacy(manager, monkeypatch):
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: False)
+    with pytest.raises(AssertionError, match="cannot go back to legacy"):
+        manager.set_data_plane(spec, task, "legacy")
+
+
+def test_switching_recreates_the_ssh_containers_on_a_fresh_bundle(manager, monkeypatch):
+    """A stopped container keeps the sinks and mount it was created with, so the
+    switch removes it (collecting what it holds first) for the next start to
+    recreate on a bundle that has the data home."""
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    task.data_plane = "legacy"
+    task.bundle_id = "old"
+    monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: False)
+    monkeypatch.setattr(
+        WorkerManager, "_machine_gone", lambda self, spec, task, w: w.machine == "m2"
+    )
+    monkeypatch.setattr(WorkerManager, "_refresh_probe", lambda self, spec, task, w: "stopped")
+    monkeypatch.setattr(
+        WorkerManager,
+        "_ssh_machine",
+        lambda self, task, w: SimpleNamespace(remove_container=lambda name: removed.append(name)),
+    )
+    monkeypatch.setattr(workers_mod, "sweep_stopped", lambda machine, **k: swept.append(k))
+    monkeypatch.setattr(
+        WorkerManager, "_transfer_target", lambda self, spec, task, w: {"w": w.worker_id}
+    )
+    removed, swept = [], []
+    manager.set_data_plane(spec, task, "home")
+    assert sorted(n.rsplit("-", 1)[-1] for n in removed) == [
+        "g1",
+        "me",
+        "tr",
+    ]  # m2's machine is gone
+    assert [s["w"] for s in swept] == ["me"]  # only a collected slot holds output
+    assert task.bundle_id is None and task.data_plane == "home"
+    assert not any(w.launched for w in task.workers if w.machine == "m1")
+
+
+def test_the_tag_volume_goes_with_the_last_slot_on_its_machine(manager, monkeypatch):
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    manager.tasks.save(spec, task)
+    monkeypatch.setattr(WorkerManager, "_refresh_probe", lambda self, spec, task, w: "missing")
+    monkeypatch.setattr(WorkerManager, "_machine_gone", lambda self, spec, task, w: False)
+    gone = []
+    monkeypatch.setattr(
+        WorkerManager,
+        "_ssh_machine",
+        lambda self, task, w: SimpleNamespace(
+            remove_volume=lambda name: gone.append((w.machine, name))
+        ),
+    )
+    for wid in ("tr", "g1", "g2"):  # the trainer first, as the tag queue's release goes
+        manager.remove_worker(spec, task, wid)
+    assert gone == [("m2", "scz-position_eval-t-data")]  # m2 had only g2; me stays on m1
+    manager.remove_worker(spec, task, "me")
+    assert gone[-1] == ("m1", "scz-position_eval-t-data")
 
 
 def test_only_a_generational_workload_has_a_data_plane_to_move(manager, spec, task):

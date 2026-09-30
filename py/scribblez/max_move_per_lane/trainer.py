@@ -174,7 +174,13 @@ def run_generational_training(model, optimizer, recorder, paths, device, params,
             cpu,
             ctx,
         )
-        evicted = lifecycle.evict_beyond_window(paths, state.generation_index - 1, params.window)
+        home = ctx["data_home"]
+        evicted = lifecycle.evict_beyond_window(
+            paths,
+            state.generation_index - 1,
+            params.window,
+            keep_unpublished=home is not None and home.uploads,
+        )
         if evicted:
             timed_print(f"evicted generations {evicted} (window={params.window})")
     timed_print(f"Stopped at {state.rows_trained} rows (generation {state.generation_index}).")

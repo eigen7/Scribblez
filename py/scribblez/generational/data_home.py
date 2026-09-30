@@ -16,6 +16,21 @@ A thread of the trainer (DataHome) does the rest, every POLL_SECONDS:
     controller parks and releases generators from that record instead of
     ticking the scheduler itself (scheduler.tick_for_task).
 
+A data home on an ssh machine, whose trainer's records go to the bucket, can
+vanish with its disk (a spot loss, a released machine). So it also keeps the
+bucket able to resume it:
+
+  - Each complete generation is uploaded, chunks first and manifest last, so a
+    manifest in the bucket means the whole generation is there. It is then
+    marked published, and the trainer evicts no unpublished generation.
+  - Generations older than the window behind the trainer's cursor are deleted
+    from the bucket.
+  - At start, before the thread runs, `restore` pulls the uploaded generations
+    from the window onward that the machine lacks. A fresh home thereby holds
+    the highest generation uploaded, and numbers new ones after it rather than
+    reusing an index. The checkpoint and cursor come back through the records
+    sink as before (position_eval.trainer.restore_from_sink).
+
 So to the trainer every chunk arrives the way a colocated generator's does,
 and its generation reads are the local sink's no-ops. A failed bucket call is
 retried on the next pass. Any other failure stops the thread and is re-raised
@@ -32,12 +47,12 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from cloud.r2 import bucket_path, rclone
-from cloud.sinks import r2_from_env
+from cloud.sinks import R2Sink, r2_from_env
 
 from scribblez.paths import SCHEDULER_STATE_REL, TagPaths
 from scribblez.workloads.base import SchedulerHooks
 
-from . import scheduler
+from . import lifecycle, scheduler
 
 POLL_SECONDS = 5
 
@@ -51,14 +66,18 @@ LOCK_NAME = "scheduler.lock"
 def start_for(ctx, paths: TagPaths, params) -> "DataHome | None":
     """Start the data home beside trainer `ctx` when its tag's data plane is
     home (ctx.data_plane); None otherwise. It ingests from the bucket when the
-    worker has bucket credentials."""
+    worker has bucket credentials, and keeps the bucket able to resume it
+    (restore, then uploads) when the trainer's records go there."""
     if ctx.data_plane != scheduler.DATA_PLANE_HOME:
         return None
     cfg = scheduler.SchedulerConfig(
         games_per_generation=params.games_per_generation, open_ahead=params.open_ahead
     )
     r2 = r2_from_env() if "R2_BUCKET" in os.environ else None
-    home = DataHome(paths, cfg, ctx.records_sink, r2)
+    uploads = isinstance(ctx.records_sink, R2Sink)
+    home = DataHome(paths, cfg, ctx.records_sink, r2, window=params.window, uploads=uploads)
+    if uploads:
+        home.restore()
     home.start()
     return home
 
@@ -86,12 +105,19 @@ class DataHome:
         records_sink,
         r2=None,
         chunk_games: scheduler.ChunkGamesFn = scheduler._header_games,
+        *,
+        window: int = 0,
+        uploads: bool = False,
     ):
+        assert r2 is not None or not uploads, "uploading needs the bucket"
         self._paths = paths
         self._cfg = cfg
         self._records = records_sink
         self._r2 = r2
         self._chunk_games = chunk_games
+        self._window = window
+        self.uploads = uploads  # whether the bucket keeps the generations (see restore)
+        self._pruned_below = 0  # bucket generations below this index are gone
         self._gate: str | None = None
         self._error: Exception | None = None
         # Nothing is mirrored or published: the bucket holds no copy of this
@@ -116,7 +142,30 @@ class DataHome:
             if self._r2 is not None:
                 self._ingest()
             scheduler.tick(self._paths, self._cfg, self._hooks, self._chunk_games)
+            if self.uploads:
+                self._upload_complete()
+                self._prune_bucket()
         self._publish_state()
+
+    def restore(self):
+        """Pull the uploaded generations from the window behind the trainer's
+        cursor onward that this machine lacks. Run before `start`, after the
+        cursor is restored; a failure raises, as a trainer that resumed on a
+        partial window would silently diverge."""
+        cursor = lifecycle.read_train_state(self._paths).get("generation_index", 0)
+        indices = self._bucket_generations()
+        assert indices is not None, "listing the bucket's generations failed"
+        for index in indices:
+            gen_dir = self._paths.generation_dir(index)
+            if index < cursor - self._window or lifecycle.is_complete(gen_dir):
+                continue
+            prefix = self._generation_prefix(gen_dir)
+            if not _listed(self._r2, f"{prefix}/{lifecycle.MANIFEST_NAME}"):
+                continue  # an upload that never finished
+            got = rclone(self._r2, "copy", prefix, str(gen_dir), capture=True)
+            assert got.returncode == 0, f"restoring {gen_dir.name} failed: {got.stderr}"
+            lifecycle.mark_published(gen_dir)
+            print(f"data home: restored {gen_dir.name} from the bucket")
 
     def _run(self):
         while True:
@@ -163,6 +212,68 @@ class DataHome:
             return False
         return True
 
+    def _generation_prefix(self, gen_dir: Path) -> str:
+        return bucket_path(self._r2, self._paths.task, self._paths.tag, "generations", gen_dir.name)
+
+    def _bucket_generations(self) -> list[int] | None:
+        """Indices of the generation directories in the bucket, or None when
+        the listing fails."""
+        root = bucket_path(self._r2, self._paths.task, self._paths.tag, "generations")
+        listing = rclone(self._r2, "lsf", "--dirs-only", root, capture=True)
+        if listing.returncode != 0:
+            print(f"data home: listing bucket generations failed: {listing.stderr.strip()}")
+            return None
+        return sorted(
+            int(name.rstrip("/").removeprefix("gen_"))
+            for name in listing.stdout.split()
+            if name.startswith("gen_")
+        )
+
+    def _upload_complete(self):
+        """Upload every complete generation not yet published, oldest first,
+        stopping at a failure for the next pass to retry."""
+        for index in lifecycle.list_generation_indices(self._paths):
+            gen_dir = self._paths.generation_dir(index)
+            if lifecycle.is_complete(gen_dir) and not lifecycle.is_published(gen_dir):
+                if not self._upload(gen_dir):
+                    return
+                lifecycle.mark_published(gen_dir)
+
+    def _upload(self, gen_dir: Path) -> bool:
+        prefix = self._generation_prefix(gen_dir)
+        manifest = lifecycle.MANIFEST_NAME
+        res = rclone(
+            self._r2, "copy", "--size-only", "--exclude", manifest, str(gen_dir), prefix,
+            capture=True,
+        )  # fmt: skip
+        if res.returncode == 0:
+            res = rclone(
+                self._r2, "copyto", str(gen_dir / manifest), f"{prefix}/{manifest}", capture=True
+            )
+        if res.returncode != 0:
+            print(f"data home: uploading {gen_dir.name} failed: {res.stderr.strip()}")
+        return res.returncode == 0
+
+    def _prune_bucket(self):
+        """Delete bucket generations older than the window behind the trainer's
+        cursor, which no restore needs any more. A failure waits for the next
+        cursor move."""
+        if self._window <= 0:
+            return  # an unbounded corpus: every generation stays
+        cursor = lifecycle.read_train_state(self._paths).get("generation_index", 0)
+        keep_from = cursor - self._window
+        indices = self._bucket_generations() if keep_from > self._pruned_below else None
+        if indices is None:
+            return
+        for index in indices:
+            if self._pruned_below <= index < keep_from:
+                gen_dir = self._paths.generation_dir(index)
+                gone = rclone(self._r2, "purge", self._generation_prefix(gen_dir), capture=True)
+                if gone.returncode != 0:
+                    print(f"data home: pruning {gen_dir.name} failed: {gone.stderr.strip()}")
+                    return
+        self._pruned_below = keep_from
+
     def _publish_state(self):
         record = {"gate": self._gate, "heartbeat": time.time()}
         try:
@@ -173,3 +284,8 @@ class DataHome:
 
 def _no_finish(role: str):
     raise AssertionError("a data home never finishes a role; the controller does")
+
+
+def _listed(r2, path: str) -> bool:
+    """Whether the bucket holds the object at `path`."""
+    return bool(rclone(r2, "lsf", path, capture=True).stdout.strip())

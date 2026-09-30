@@ -551,7 +551,7 @@ class FakeSshMachine:
     def container_logs(self, name: str) -> str:
         return ""
 
-    def run_container(self, name, image, env, gpus=False):
+    def run_container(self, name, image, env, gpus=False, volume=None):
         host = self._host()
         worker = _worker_from_env(env, "r2")
         host.containers[name] = Container("running", worker, dict(env))

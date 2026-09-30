@@ -308,7 +308,15 @@ class SshMachine:
             return False
         raise SshMachineError(f"{self.host}: {stderr.strip()}")
 
-    def run_container(self, name: str, image: str, env: dict[str, str], *, gpus: bool = False):
+    def run_container(
+        self,
+        name: str,
+        image: str,
+        env: dict[str, str],
+        *,
+        gpus: bool = False,
+        volume: tuple[str, str] | None = None,
+    ):
         """Create and start container `name` from `image`. The environment,
         which includes bucket credentials, travels over the ssh pipe as an
         --env-file rather than on the remote command line, where the machine's
@@ -318,7 +326,11 @@ class SshMachine:
 
         `gpus` gives the container the machine's GPUs, for roles that use one
         (e.g. match eval's neural agents). Without the NVIDIA container toolkit
-        on the machine, `docker run` fails immediately with a clear error."""
+        on the machine, `docker run` fails immediately with a clear error.
+
+        `volume` is (named volume, mount point): a volume shared with the
+        machine's other containers that mount it (create_volume)."""
+        mount = ["--mount", f"source={volume[0]},target={volume[1]}"] if volume else []
         self._mutate(
             [
                 "docker",
@@ -326,6 +338,7 @@ class SshMachine:
                 "--detach",
                 "--pull=never",
                 *(["--gpus", "all"] if gpus else []),
+                *mount,
                 "--name",
                 name,
                 "--env-file",
@@ -334,6 +347,15 @@ class SshMachine:
             ],
             stdin_text=env_file(env),
         )
+
+    def create_volume(self, name: str):
+        """Create named volume `name`, or keep it as it is if it exists."""
+        self._mutate(["docker", "volume", "create", name])
+
+    def remove_volume(self, name: str):
+        """Remove named volume `name` and everything in it; absent is success.
+        Docker refuses while any container, even a stopped one, mounts it."""
+        self._mutate(["docker", "volume", "rm", "--force", name])
 
     def container_logs(self, name: str) -> str:
         """Container `name`'s whole log, stdout and stderr interleaved."""
