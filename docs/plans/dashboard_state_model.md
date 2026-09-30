@@ -4,7 +4,7 @@
 operator's call settled (§Operator's calls); being built: PR 0 (the paths
 context) landed as #294; PR 1 (the schema and the shadow import) as #295 and
 #297; PR 2 (the fake world and the simulation) as #299; PR 3a (one writer)
-in review.**
+as #301; PR 3b (the control store) in review.**
 
 - **Review.** Four independent panelists: hidden complexity, a rival design
   (a Codex seat), scope, and integration. They raised 2 blocking, 16 serious
@@ -360,8 +360,9 @@ under test (they monkeypatch `all_tasks`, `_submit_build`, `_advance_lease`,
 (clean, crash, OOM, or vanishing with no exit record), a gate flip, an
 instance vanishing, a listing failure, a slow or failed upload, a stale
 earlier run left in the bucket, and a **dashboard restart**. A restart drops
-all in-memory state and the module-level caches (`tasks._records`,
-`SharedJson._held`, `pool._canonical`), then rebuilds from disk.
+all in-memory state (the stores' live objects and readers' copies, and the
+module-level `pool._canonical`), then rebuilds from the control database and
+the tag trees.
 
 **What it checks, after every step:**
 - **I1.** The projection gives each tag exactly one state. The database
@@ -496,10 +497,16 @@ simulation green on the invariants it claims, from PR 2 on.
      copy is the file as last saved, decoded once per save for readers: a
      per-store snapshot, never a full rebuild. Fixes I7 and the race sites
      under "Why".
-   - **3b. SQLite authoritative.** The stores move into the control
-     database, a transition that spans them becomes one transaction, and
-     readers get their snapshot from a read connection. JSON mutation goes,
-     and the database-to-JSON export arrives for rollback. Fixes I1.
+   - **3b. SQLite authoritative.** The records move into the control
+     database, one row each (the pool, the queue, each tag's control state)
+     with the frozen params left in `task.json`; a transition that spans
+     records (placing a tag, finishing a release, a requeue) commits in one
+     transaction; readers read over a connection of their own. The dashboard
+     imports the JSON files on its first start, and a database-to-JSON
+     export arrives for rollback.
+   - **3c. The constraints enforced.** The normalized tables are rebuilt in
+     each committing transaction, and a commit that would break a
+     constraint is refused. Fixes I1.
 4. **Operations:** the outbox, the local exit file in the worker entrypoint,
    stop operations recorded at shutdown, exit classification, and crash
    history as a table. Fixes I4 and the restart gaps.

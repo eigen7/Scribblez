@@ -31,7 +31,9 @@ cannot drift.
   changing a profile never touches an existing task's frozen params.
 
 **Task.** One (workload, tag) pair with a fixed parameter set, recorded in
-`task.json` at the tag's root (`<mount>/tags/<workload>/<tag>/`). Parameters
+`task.json` at the tag's root (`<mount>/tags/<workload>/<tag>/`). Its slots,
+machines, gates and spend are control state, kept in `<mount>/control.db`
+(see Server architecture). Parameters
 freeze at task creation because every worker on a tag must run identical
 settings for its output to be analyzable as one corpus. Tags created outside
 the dashboard appear in the tag list read-only.
@@ -131,7 +133,7 @@ while keeping the stem-based pair matching downstream tools rely on.
 
 An ssh slot names its machine one of two ways: a bare host string typed into
 the slot's form, or one of the task's **machines**. A machine is a record in
-the task's `task.json` (`task.machines`) carrying the address, an optional
+the task's record (`task.machines`) carrying the address, an optional
 private key with its own known_hosts file, and its GPU count. Register one on
 the Overview's Machines card (name, host, key file, GPUs); it can host any
 number of the task's slots.
@@ -227,8 +229,8 @@ Keep a laptop from sleeping on lid-close.
 
 The **Machine pool** page (header link, `?view=pool`) lists the machines the
 tag queue may place tags on ([plans/tag_queue.md](plans/tag_queue.md)). Unlike
-a task's machines, a pool machine belongs to no tag: it lives in
-`<mount>/pool.json`, and a tag uses it under a **lease** that later passes to
+a task's machines, a pool machine belongs to no tag: it lives in the pool's
+record, and a tag uses it under a **lease** that later passes to
 the next tag. A leased machine appears on its tag's Machines card, marked
 "leased from the pool", and resolves for that tag's slots like one of its own.
 
@@ -364,12 +366,20 @@ alongside the read-only training data plane:
   task view). `py/scripts/dashboard.py` starts it alongside the API
   (`scribblez.dashboard.react_server`).
 
-Control state (the task records, `pool.json`, `queue.json`) has one writer:
-the `WorkerManager`'s blocking thread. It runs the reconcile pass and every
-change a request makes, as a command (`WorkerManager.offload`). Status reads
-run on the event loop, see only what was last saved, and change nothing, so a
-page never waits behind a slow step such as an upload. A save from any other
-thread fails (`py/scribblez/dashboard/shared_json.py`).
+Control state (each tag's slots, machines, gates and spend, the pool, the tag
+queue) is kept in one SQLite database, `<mount>/control.db`, one row per
+record (`py/scribblez/dashboard/control_store.py`). A tag's frozen params stay
+in its `task.json`, which tools outside the dashboard read. The dashboard
+moves any older `pool.json`, `queue.json` and `task.json` control state into
+the database on its first start; `py/scripts/export_control_db.py` moves it
+back, to run code from before the database.
+
+It has one writer: the `WorkerManager`'s blocking thread, which runs the
+reconcile pass and every change a request makes, as a command
+(`WorkerManager.offload`). A transition that changes several records, such as
+placing a tag, commits them in one transaction. Status reads run on the event
+loop, see only what was committed, and change nothing, so a page never waits
+behind a slow step such as an upload. A save from any other thread fails.
 
 The API binds to localhost only, because it holds cloud credentials and
 launches processes. The browser reaches it through the Vite dev server's

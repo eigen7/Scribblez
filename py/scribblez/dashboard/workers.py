@@ -25,6 +25,7 @@ Cloud operations need <mount>/cloud/credentials.json. Credentials load lazily,
 so a local-only dashboard works without them.
 """
 
+import json
 import os
 import signal
 import subprocess
@@ -54,7 +55,7 @@ from scribblez import workloads
 from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tasks
-from scribblez.dashboard.shared_json import Writer
+from scribblez.dashboard.control_store import IMPORTED_JSON, ControlStore
 from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
 from scribblez.generational.lifecycle import MANIFEST_NAME
 from scribblez.hardware import default_thread_count
@@ -455,15 +456,15 @@ def _ssh_state(
 class WorkerManager:
     def __init__(self, mount_root: Path):
         """Everything this manager reads and writes lives under `mount_root`:
-        the tag trees, pool.json and queue.json. The dashboard passes its
+        the tag trees and the control database (control_store.py). The dashboard passes its
         --mount-root; a test or simulation passes a scratch dir."""
         self.mount_root = Path(mount_root)
-        # The one thread allowed to write the stores, once claim_writer names
-        # it; every other thread reads their last committed copies.
-        self.writer = Writer()
-        self.tasks = tasks.TaskStore(self.mount_root, self.writer)
-        self.pool_store = pool_mod.pool_store(self.mount_root, self.writer)
-        self.queue_store = queue_mod.queue_store(self.mount_root, self.writer)
+        # The control records (control_store.py), written only by the thread
+        # claim_writer names; every other thread reads committed copies.
+        self.control = ControlStore(self.mount_root)
+        self.tasks = tasks.TaskStore(self.mount_root, self.control)
+        self.pool_store = pool_mod.pool_store(self.control)
+        self.queue_store = queue_mod.queue_store(self.control)
         self._local: dict[str, subprocess.Popen] = {}  # slot key -> live process
         # task key -> (sync watcher, the argv it runs): a watcher is replaced
         # when what it should pull changes.
@@ -1887,9 +1888,54 @@ class WorkerManager:
         """Make the blocking thread the only one that may write the stores:
         every change is then a command or a pass step run through offload,
         and a status read, served on the event loop, reads committed copies
-        (shared_json). The dashboard claims it at startup; a test that calls
-        the manager from one thread need not."""
-        self.writer.claim(self._blocking.submit(threading.current_thread).result())
+        (control_store.py). The dashboard claims it at startup; a test that
+        calls the manager from one thread need not."""
+        self.control.writer.claim(self._blocking.submit(threading.current_thread).result())
+
+    def import_json_stores(self) -> list[str]:
+        """Move the control state kept in JSON files before the control store
+        existed into it, once (docs/plans/dashboard_state_model.md §10):
+        pool.json, queue.json, and every task.json's slots, machines, gates
+        and spend, in one transaction. The two store files are then renamed
+        aside (*.pre-control-db), kept for reference; task.json files lose
+        their control fields on their next save. What it moved, one line
+        each; empty once done."""
+        if self.control.meta(IMPORTED_JSON) is not None:
+            return []
+        moved = []
+        with self.control.transaction():
+            for name, store, decode in (
+                ("pool.json", self.pool_store, pool_mod.decode),
+                ("queue.json", self.queue_store, queue_mod.decode),
+            ):
+                path = self.mount_root / name
+                if path.is_file():
+                    store.save(decode(json.loads(path.read_text())))
+                    moved.append(name)
+            moved += self.tasks.import_json()
+            self.control.set_meta(IMPORTED_JSON, str(time.time()))
+        for name in ("pool.json", "queue.json"):
+            path = self.mount_root / name
+            if path.is_file():
+                path.rename(path.with_suffix(".pre-control-db.json"))
+        return moved
+
+    def export_json_stores(self) -> list[str]:
+        """Undo import_json_stores, to run code from before the control store:
+        write every task's whole record to its task.json, and the pool and
+        queue to pool.json and queue.json, then clear the store's records and
+        its import mark, so that a later start imports the JSON files afresh.
+        For a stopped dashboard only (py/scripts/export_control_db.py). What
+        it wrote, one line each."""
+        written = []
+        for spec, task in list(self.all_tasks()):
+            self.tasks.export_json(spec, task)
+            written.append(f"{spec.name}/{task.tag}")
+        for name, store in (("pool.json", self.pool_store), ("queue.json", self.queue_store)):
+            (self.mount_root / name).write_text(json.dumps(asdict(store.load()), indent=2) + "\n")
+            written.append(name)
+        self.control.clear()
+        return written
 
     async def offload(self, fn, *args, **kwargs):
         """Run one blocking step off the event loop, one at a time.
@@ -1917,7 +1963,7 @@ class WorkerManager:
         accrues rented machines' spend.
         """
         await self.offload(self._list_fleet)
-        # Loaded on the writer, for its live records (shared_json).
+        # Loaded on the writer, for its live records (control_store.py).
         for spec, task in await self.offload(lambda: list(self.all_tasks())):
             await self.offload(self._forget_stale_counts, spec, task)
             if spec.scheduler:

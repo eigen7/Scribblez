@@ -4,9 +4,13 @@ A task is one (workload, tag) pair with frozen params, worker slots and
 machines, persisted as task.json in the tag's root. A tag directory without a
 task.json still appears in listings, read-only.
 
-A TaskStore, one per dashboard process and mount root, keeps each task.json
-as a SharedJson: the writer thread gets one live TaskRecord per task, the same
-object until the file changes under it, and saves that object; every other
+A task's record lives in two places. Its frozen fields (params, profile,
+bundle pin) stay in task.json, which tools outside the dashboard read and
+migrate_tag_params edits. Its control state (slots, machines, gates, spend)
+is a row of the control store (control_store.py), which the dashboard alone
+writes. A TaskStore, one per dashboard process and mount root, joins the two
+into one TaskRecord: the writer thread gets the same live object on every
+load until task.json changes under it, and saves that object; every other
 thread reads the last committed copy. With a copy per caller, the last save
 would win: an operator's pause, saved by its command, would be overwritten
 seconds later by the pass's copy, loaded as "running" before the click, and
@@ -14,14 +18,17 @@ the worker started again. With one live object there is nothing stale to
 save.
 """
 
+import json
+import os
 import shutil
+import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from scribblez import params as params_mod
-from scribblez.dashboard.shared_json import SharedJson, Writer
+from scribblez.dashboard.control_store import ControlStore
 from scribblez.dashboard.worker_stats_figures import read_stats
 from scribblez.paths import TagPaths
 from scribblez.workloads import WORKLOADS, WorkloadSpec, resolve
@@ -83,7 +90,7 @@ class MachineRecord:
     """A machine the task's ssh slots run on, either registered by the operator
     (`manual`) or rented for the task from a cloud provider (`aws`). It belongs
     to the task, living and dying with it like a slot, so nothing outside
-    task.json has to agree with it."""
+    the task's record has to agree with it."""
 
     name: str
     provider: str  # "manual" | "aws"
@@ -195,6 +202,22 @@ def _from_stored(cls, raw: dict):
     return cls(**_declared(cls, raw))
 
 
+# The TaskRecord fields kept in task.json: fixed once the tag is created (the
+# bundle pin aside), and read by tools outside the dashboard. The rest is
+# control state, kept in the control store.
+FROZEN_FIELDS = (
+    "workload", "tag", "params", "created_at", "bundle_id", "bundle_source_hash", "bundle_archs",
+    "profile",
+)  # fmt: skip
+
+
+def read_params(spec: WorkloadSpec, tag: str, mount_root: Path) -> dict | None:
+    """The tag's frozen params, from its task.json alone; None when it has
+    none. For readers that need nothing else, such as a data-plane request."""
+    path = spec.paths(tag, mount_root).root / "task.json"
+    return json.loads(path.read_text())["params"] if path.is_file() else None
+
+
 def _decode_task(stored: dict) -> TaskRecord:
     raw = _declared(TaskRecord, stored)
     raw["workers"] = [_from_stored(WorkerRecord, w) for w in raw.get("workers", [])]
@@ -225,16 +248,109 @@ def _last_active(tag_dir: Path) -> float:
     return max(stamps, default=0)
 
 
+class _TaskEntry:
+    """One tag's record: its frozen fields in task.json, its control state in
+    the control store's row. The writer holds one live TaskRecord, reread
+    when task.json changes under it (migrate_tag_params editing its params,
+    say); readers get the committed copy, as a SharedRecord gives."""
+
+    def __init__(self, path: Path, control: ControlStore, key: str):
+        self.path = path
+        self._control = control
+        self._key = key
+        self._held: tuple[TaskRecord | None, int] | None = None  # (live, task.json mtime)
+        # (readers' copy, task.json mtime, control version it reflects)
+        self._copy: tuple[TaskRecord | None, int, int] | None = None
+        self._written: str | None = None  # task.json as this process last wrote it
+        self._lock = threading.Lock()
+
+    def load(self) -> TaskRecord | None:
+        with self._lock:
+            stamp = _mtime(self.path)
+            if not self._control.writer.here():
+                # The version before the read: a commit landing during it
+                # makes the next load read again, never keeps a stale copy.
+                version = self._control.version
+                c = self._copy
+                if c is None or c[1] != stamp or c[2] != version:
+                    c = self._copy = (self._read(stamp), stamp, version)
+                return c[0]
+            if self._held is None or self._held[1] != stamp:
+                self._held = (self._read(stamp), stamp)
+            return self._held[0]
+
+    def save(self, task: TaskRecord):
+        """Write the control row, then task.json if its frozen fields changed.
+        A crash between the two leaves a row with no task.json for a new tag
+        (no tag, as before), or an older bundle pin (redeployed again)."""
+        assert self._copy is None or task is not self._copy[0], (
+            f"{self.path}: saving a reader's copy; load the record on the writer thread"
+        )
+        stored = asdict(task)
+        self._control.put("task", self._key, json.dumps(_control_part(stored)))
+        frozen = json.dumps({f: stored[f] for f in FROZEN_FIELDS}, indent=2) + "\n"
+        if frozen != self._written:
+            _write_atomic(self.path, frozen)
+            self._written = frozen
+        with self._lock:
+            self._held = (task, _mtime(self.path))
+
+    def import_json(self) -> bool:
+        """Adopt the control state of a task.json written before the control
+        store existed, unless the store already has a row for the tag. The
+        file itself is left as it is: its next save drops those fields, once
+        the row is committed. Whether it adopted one."""
+        if self._control.get("task", self._key) is not None or not self.path.is_file():
+            return False
+        stored = asdict(_decode_task(json.loads(self.path.read_text())))
+        self._control.put("task", self._key, json.dumps(_control_part(stored)))
+        return True
+
+    def forget(self):
+        """Delete the control row and both copies, the tag dir being gone."""
+        self._control.delete("task", self._key)
+        with self._lock:
+            self._held = self._copy = None
+            self._written = None
+
+    def _read(self, stamp: int) -> TaskRecord | None:
+        if not stamp:
+            return None
+        frozen = json.loads(self.path.read_text())
+        body = self._control.get("task", self._key)
+        control = json.loads(body) if body is not None else {}
+        return _decode_task({**control, **{f: frozen[f] for f in FROZEN_FIELDS if f in frozen}})
+
+
+def _control_part(stored: dict) -> dict:
+    return {k: v for k, v in stored.items() if k not in FROZEN_FIELDS}
+
+
+def _mtime(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return 0
+
+
+def _write_atomic(path: Path, text: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".json")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
 class TaskStore:
     """The task records under one mount root (see the module docstring). A
     store is the only way in: nothing in the dashboard resolves a tag's
     directory without it, so a test or simulation gives it a scratch root and
     never reaches the live trees."""
 
-    def __init__(self, mount_root: Path, writer: Writer | None = None):
+    def __init__(self, mount_root: Path, control: ControlStore | None = None):
         self.mount_root = Path(mount_root)
-        self._writer = writer or Writer()
-        self._files: dict[Path, SharedJson] = {}
+        self._control = control or ControlStore(self.mount_root)
+        self._entries: dict[tuple[str, str], _TaskEntry] = {}
         self._lock = threading.Lock()
 
     def paths(self, spec: WorkloadSpec, tag: str) -> TagPaths:
@@ -245,10 +361,27 @@ class TaskStore:
 
     def load(self, spec: WorkloadSpec, tag: str) -> TaskRecord | None:
         """The task, or None when the tag has no task.json."""
-        return self._file(self.task_path(spec, tag)).load()
+        return self._entry(spec, tag).load()
 
     def save(self, spec: WorkloadSpec, task: TaskRecord):
-        self._file(self.task_path(spec, task.tag)).save(task)
+        self._entry(spec, task.tag).save(task)
+
+    def export_json(self, spec: WorkloadSpec, task: TaskRecord):
+        """Write the whole record to task.json, control state included, as it
+        was kept before the control store (WorkerManager.export_json_stores)."""
+        _write_atomic(self.task_path(spec, task.tag), json.dumps(asdict(task), indent=2) + "\n")
+
+    def import_json(self) -> list[str]:
+        """Adopt every task.json's control state the control store lacks (the
+        migration, docs/plans/dashboard_state_model.md §10). The tags adopted,
+        as workload/tag."""
+        adopted = []
+        for spec in WORKLOADS.values():
+            tags_root = spec.tags_root(self.mount_root)
+            for tag_dir in sorted(tags_root.iterdir()) if tags_root.is_dir() else []:
+                if self._entry(spec, tag_dir.name).import_json():
+                    adopted.append(f"{spec.name}/{tag_dir.name}")
+        return adopted
 
     def create(
         self, spec: WorkloadSpec, tag: str, raw_params: dict, profile: str | None = None
@@ -283,21 +416,27 @@ class TaskStore:
         The tag must have no worker slots left, since the task record is what
         tracks their containers and machines. Callers go through
         WorkerManager.delete_task, which removes the slots first.
+
+        The control row goes before the directory: a removal that fails
+        partway leaves a tag with its frozen params and no control state,
+        nothing that could run.
         """
         task = self.load(spec, tag)
         assert task is None or not task.workers, "remove the tag's workers first"
         tag_dir = self.paths(spec, tag).root
         assert tag_dir.is_dir(), f"no such tag '{tag}'"
-        self._writer.check(tag_dir)
+        self._control.writer.check(tag_dir)
+        self._entry(spec, tag).forget()
         shutil.rmtree(tag_dir)
-        self._file(self.task_path(spec, tag)).forget()
 
-    def _file(self, path: Path) -> SharedJson:
+    def _entry(self, spec: WorkloadSpec, tag: str) -> _TaskEntry:
         with self._lock:
-            f = self._files.get(path)
-            if f is None:
-                f = self._files[path] = SharedJson(path, _decode_task, lambda: None, self._writer)
-            return f
+            e = self._entries.get((spec.name, tag))
+            if e is None:
+                e = self._entries[(spec.name, tag)] = _TaskEntry(
+                    self.task_path(spec, tag), self._control, f"{spec.name}/{tag}"
+                )
+            return e
 
     def progress(self, spec: WorkloadSpec, task: TaskRecord) -> list:
         """The workload's [label, value] progress counters for the task."""

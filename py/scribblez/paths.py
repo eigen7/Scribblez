@@ -4,7 +4,8 @@ A tag is one run of a workload. Tags are namespaced by workload, and every
 artifact tied to a tag lives under one root, `<mount_root>/tags/<task>/<tag>/`:
 
     tags/<task>/<tag>/
-      task.json                   frozen params + worker slots (written by the dashboard)
+      task.json                   frozen params (written by the dashboard; slots are in
+                                  <mount_root>/control.db)
       logs/                       per-worker process logs
       stats/                      per-worker stats records (the Stats tab)
       params/                     per-worker provenance manifests

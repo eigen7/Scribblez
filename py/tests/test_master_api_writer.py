@@ -1,5 +1,5 @@
 """The control plane's handlers under the writer rule, as the dashboard runs
-them: a manager whose blocking thread is the one writer (shared_json). Every
+them: a manager whose blocking thread is the one writer (control_store.py). Every
 change must reach the stores as a command, and every read, served on the event
 loop, must change nothing; either mistake trips the writer check, which a
 handler answers with a 400."""

@@ -160,7 +160,7 @@ class SyncExecutor:
 class WriterThread:
     """The manager's blocking executor as one real thread that runs each job
     to completion before submit returns. The dashboard's writer rule then
-    holds as it does live (shared_json): the pass and every command run on
+    holds as it does live (control_store.py): the pass and every command run on
     this thread, and the sim's own reads, on the main thread, see committed
     copies. A run stays a pure function of its seed."""
 

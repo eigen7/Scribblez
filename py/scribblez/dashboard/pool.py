@@ -1,7 +1,7 @@
 """The machine pool (docs/plans/tag_queue.md §2): the machines the tag queue
 may place tags on, owned by the pool rather than by any task.
 
-A task-owned machine (tasks.MachineRecord in a task.json) lives and dies with
+A task-owned machine (tasks.MachineRecord in a task record) lives and dies with
 its task. A pool machine outlives every tag that uses it: a tag holds it under
 a `Lease`, and the lease, not the machine, moves from tag to tag. So nothing
 about the machine (its address, key material, arch, rented instance) has to be
@@ -13,17 +13,15 @@ An entry is `localhost` (this machine, running local slots) or a registered
 ssh machine. Each records the facts placement checks: vCPUs, GPU count, and
 memory per GPU.
 
-pool.json lives under the mount root beside the workload tag trees, held by
-the dashboard's pool store (pool_store, shared_json.py).
+The pool is one record of the control store (pool_store, control_store.py).
 """
 
 import subprocess
 from dataclasses import dataclass, field, fields
-from pathlib import Path
 
 from cloud.ssh_machine import HARDWARE_COMMAND
 
-from scribblez.dashboard.shared_json import SharedJson, Writer
+from scribblez.dashboard.control_store import ControlStore, SharedRecord
 from scribblez.dashboard.tasks import MachineRecord
 
 LOCALHOST = "localhost"
@@ -208,7 +206,7 @@ def _from_stored(cls, raw: dict):
     return cls(**{k: v for k, v in raw.items() if k in known})
 
 
-def _decode(raw: dict) -> Pool:
+def decode(raw: dict) -> Pool:
     machines = []
     for m in raw.get("machines", []):
         m = dict(m)
@@ -220,8 +218,8 @@ def _decode(raw: dict) -> Pool:
     return Pool(machines=machines, capacity=capacity)
 
 
-def pool_store(mount_root: Path, writer: Writer | None = None) -> SharedJson:
-    """The store of pool.json under `mount_root`: load() gives the Pool (an
-    empty one before the file exists), live on the writer thread and the last
-    committed copy elsewhere (shared_json); save(pool) writes it atomically."""
-    return SharedJson(Path(mount_root) / "pool.json", _decode, Pool, writer or Writer())
+def pool_store(control: ControlStore) -> SharedRecord:
+    """The pool's record: load() gives the Pool (an empty one before the first
+    save), live on the writer thread and the last committed copy elsewhere
+    (control_store.py); save(pool) writes it."""
+    return SharedRecord(control, "pool", "", decode, Pool)

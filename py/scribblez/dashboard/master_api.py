@@ -110,7 +110,7 @@ class _MasterBase(tornado.web.RequestHandler):
     def guarded(self, fn):
         """Run `fn` and write its dict result; expected failures become 400s.
         Here, on the event loop, `fn` must only read: it sees the stores'
-        committed copies (shared_json), and a save fails."""
+        committed copies (control_store.py), and a save fails."""
         try:
             self.write(fn())
         except _CLIENT_ERRORS as e:
