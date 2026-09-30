@@ -7,6 +7,8 @@ The bucket is a dict behind a fake rclone, and chunk game counts are faked
 
 import json
 import subprocess
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -158,8 +160,8 @@ def test_any_other_failure_stops_the_thread_and_reaches_the_trainer(paths, monke
     monkeypatch.setattr(data_home, "POLL_SECONDS", 0)
     home = _home(paths)
     home.start()
-    home._thread.join(timeout=5)
-    assert not home._thread.is_alive()
+    home._threads[0].join(timeout=5)  # the scheduler's
+    assert not home._threads[0].is_alive()
     with pytest.raises(RuntimeError, match="scheduler bug"):
         home.check()
 
@@ -268,9 +270,57 @@ def test_start_for_restores_and_uploads_only_for_a_bucket_trainer(paths, monkeyp
         monkeypatch.setenv(var, "x")
     monkeypatch.setattr(data_home.DataHome, "start", lambda self: None)
     restored = []
-    monkeypatch.setattr(data_home.DataHome, "restore", lambda self: restored.append(self))
+    monkeypatch.setattr(
+        data_home.DataHome, "restore", lambda self, required: restored.append(required)
+    )
     ctx = SimpleNamespace(data_plane=scheduler.DATA_PLANE_HOME, records_sink=LocalSink(paths.root))
     assert not data_home.start_for(ctx, paths, PositionEvalParams()).uploads
     ctx.records_sink = R2Sink(R2, "position_eval", "t", paths.root)
-    home = data_home.start_for(ctx, paths, PositionEvalParams())
-    assert home.uploads and restored == [home]
+    assert data_home.start_for(ctx, paths, PositionEvalParams()).uploads
+    # A localhost home restores what a previous home uploaded, but does not
+    # need the bucket; a bucket trainer's home does.
+    assert restored == [False, True]
+
+
+def test_an_optional_restore_survives_an_unreachable_bucket(paths, monkeypatch):
+    bucket = FakeBucket({})
+    bucket.fail = "lsf"
+    _home(paths, bucket, monkeypatch).restore(required=False)  # no raise
+    assert lifecycle.list_generation_indices(paths) == []
+
+
+def test_a_hung_upload_holds_up_neither_scheduling_nor_the_heartbeat(paths, monkeypatch):
+    """Seen live on a laptop data home: an upload stuck on a dead connection
+    stalled the one-pass loop, so chunks sat in staging and the heartbeat went
+    stale until the controller parked the generators."""
+    bucket = FakeBucket({})
+    release = threading.Event()
+    copy = bucket._copy
+
+    def hung_copy(flags, src, dst):
+        release.wait(timeout=10)
+        copy(flags, src, dst)
+
+    monkeypatch.setattr(bucket, "_copy", hung_copy)
+    monkeypatch.setattr(data_home, "POLL_SECONDS", 0.01)
+    _stage(paths, 100)
+    home = _home(paths, bucket, monkeypatch, uploads=True)
+    home.start()
+    try:
+        _wait_for(lambda: lifecycle.is_complete(paths.generation_dir(0)))  # upload now hangs
+        first = _state(paths)["heartbeat"]
+        (paths.staging_dir / "late.slog").write_text("100")
+        _wait_for(lambda: lifecycle.is_complete(paths.generation_dir(1)))
+        _wait_for(lambda: _state(paths)["heartbeat"] > first)
+        assert not lifecycle.is_published(paths.generation_dir(0))  # still uploading
+    finally:
+        release.set()
+    _wait_for(lambda: lifecycle.is_published(paths.generation_dir(0)))
+    home.check()
+
+
+def _wait_for(condition, timeout=5.0):
+    deadline = time.time() + timeout
+    while not condition():
+        assert time.time() < deadline, "timed out"
+        time.sleep(0.01)
