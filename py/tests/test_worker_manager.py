@@ -2555,3 +2555,16 @@ def test_the_scheduler_hooks_say_whether_a_role_is_running(manager, monkeypatch)
     hooks = manager._scheduler_hooks(spec, task)
     assert hooks.role_running("train") and not hooks.role_running("generate")
 
+
+def test_a_paused_slot_reads_paused_even_while_its_role_is_gated(manager):
+    """Pausing a data home's trainer gates its generators ("trainer not
+    running"); a generator the operator paused too must not read `waiting`."""
+    spec = workloads.get("position_eval")
+    task = _local_training_task()
+    task.gates["generate"] = "trainer not running"
+    task.worker("g").desired_state = "running"
+    rows = {r["worker_id"]: r for r in manager.worker_status(spec, task, observe=False)}
+    assert rows["g"]["state"] == "waiting" and rows["g"]["gate_reason"] == "trainer not running"
+    task.worker("g").desired_state = "paused"
+    rows = {r["worker_id"]: r for r in manager.worker_status(spec, task, observe=False)}
+    assert rows["g"]["state"] == "paused" and "gate_reason" not in rows["g"]

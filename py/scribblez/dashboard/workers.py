@@ -1837,7 +1837,10 @@ class WorkerManager:
         seen = self._observe_slots(spec, task) if observe else {}
         out = []
         for w in task.workers:
-            gated = w.role in task.gates
+            # Shown only on a slot meant to run: pausing the trainer gates the
+            # generators too, and a slot the operator paused must read paused,
+            # not waiting to resume.
+            gated = w.role in task.gates and w.desired_state == "running"
             info = {
                 "worker_id": w.worker_id,
                 "role": w.role,
