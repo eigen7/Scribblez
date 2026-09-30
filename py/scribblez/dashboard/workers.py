@@ -1016,19 +1016,46 @@ class WorkerManager:
         return role_spec
 
     def _check_data_home_order(self, spec, task: tasks.TaskRecord, role: workloads.RoleSpec):
-        """A data-home tag's trainer comes before its other data-plane slots:
-        where it runs decides where each of them delivers, and a running slot
-        cannot move (its sink and mount are fixed at start)."""
-        others = [w.worker_id for w in task.workers if not spec.role(w.role).dispatch]
+        """A data-home tag's trainer decides where its other data-plane slots
+        deliver, and a running slot cannot move (its sinks and mount are fixed
+        when its worker starts). So a generator needs a trainer, and a trainer
+        joins only while the others are stopped; _rehome then moves them."""
         if role.ingest:
-            assert not others, (
-                "add this tag's trainer before its other slots: its machine is where they "
-                f"deliver (remove {', '.join(others)} first)"
+            moving = [
+                w.worker_id
+                for w in task.workers
+                if not spec.role(w.role).dispatch
+                and (w.desired_state == "running" or self._seen_alive(spec, task, w))
+            ]
+            assert not moving, (
+                "pause this tag's other slots before adding its trainer: where it runs "
+                f"decides where they deliver ({', '.join(moving)} still running)"
             )
         else:
             assert _trainer_slot(spec, task) is not None, (
                 "add this tag's trainer first: its machine is where the generators deliver"
             )
+
+    def _rehome(self, spec, task: tasks.TaskRecord, joined: tasks.WorkerRecord):
+        """After data-home trainer `joined` is added to a tag that already has
+        other slots: recreate their stopped ssh containers at their next start,
+        with the sinks and mount the new home gives them, and remove the tag's
+        volume wherever no slot now works in it. What a moved generator had
+        staged in the old home's volume goes with it; generations and the
+        checkpoint come back from the bucket."""
+        if not _home_trainer(task, spec.role(joined.role)):
+            return
+        for w in task.workers:
+            if w is not joined and w.kind == "ssh" and not self._machine_gone(spec, task, w):
+                self._discard_container(spec, task, w)
+        homes = {
+            (w.machine, w.host) for w in task.workers if self._on_remote_data_home(spec, task, w)
+        }
+        for w in task.workers:
+            if w.kind == "ssh" and (w.machine, w.host) not in homes:
+                if not self._machine_gone(spec, task, w):
+                    self._ssh_machine(task, w).remove_volume(_tag_volume(spec, task))
+                homes.add((w.machine, w.host))  # once per machine
 
     def _gpu_fit_refusal(self, spec, task, role: str, kind: str, machine, host) -> str | None:
         """Why a new `role` slot would not fit the target machine's GPU memory
@@ -1095,6 +1122,7 @@ class WorkerManager:
             threads=threads or default_thread_count(),
         )
         task.workers.append(w)
+        self._rehome(spec, task, w)
         self._note_trainer_sink(spec, task, w)
         self.tasks.save(spec, task)
         return w
@@ -1127,6 +1155,7 @@ class WorkerManager:
             threads=threads,
         )
         task.workers.append(w)
+        self._rehome(spec, task, w)
         self._note_trainer_sink(spec, task, w)
         self.tasks.save(spec, task)
         self._ensure_sync(spec, task)
@@ -1569,6 +1598,11 @@ class WorkerManager:
                 self._ssh_machine(task, w).remove_container(
                     _container_name(spec, task.tag, w.worker_id)
                 )
+        if spec.role(w.role).ingest and self._slot_records_sink(spec, task, w) == "r2":
+            # Its final checkpoint and cursor, uploaded as it stopped, may be
+            # newer than the watcher's last pull, and the watcher stops pulling
+            # trainer outputs once the slot is gone.
+            self.sync_once(spec, task)
         if task.data_plane == DATA_PLANE_HOME and w.kind == "ssh":
             self._release_tag_volume(spec, task, w)
         self._forget_slot(_key(spec, task.tag, worker_id))
@@ -1803,7 +1837,10 @@ class WorkerManager:
         seen = self._observe_slots(spec, task) if observe else {}
         out = []
         for w in task.workers:
-            gated = w.role in task.gates
+            # Shown only on a slot meant to run: pausing the trainer gates the
+            # generators too, and a slot the operator paused must read paused,
+            # not waiting to resume.
+            gated = w.role in task.gates and w.desired_state == "running"
             info = {
                 "worker_id": w.worker_id,
                 "role": w.role,

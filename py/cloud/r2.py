@@ -31,6 +31,11 @@ def rclone_env(r2: R2Credentials) -> dict[str, str]:
         # Silences the NOTICE rclone otherwise prints on every invocation
         # about the config file it did not find.
         "RCLONE_CONFIG": "/dev/null",
+        # A connection that goes quiet (a laptop's network blip) is dropped
+        # and retried after a minute, not rclone's default five. These bound
+        # idle time, not transfer time, so a large upload is unaffected.
+        "RCLONE_TIMEOUT": "60s",
+        "RCLONE_CONTIMEOUT": "15s",
     }
 
 

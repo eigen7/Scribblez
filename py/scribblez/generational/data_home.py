@@ -16,6 +16,10 @@ A thread of the trainer (DataHome) does the rest, every POLL_SECONDS:
     controller parks and releases generators from that record instead of
     ticking the scheduler itself (scheduler.tick_for_task).
 
+Each of these runs on a thread of its own, so a slow or stuck bucket transfer
+never holds up the scheduler or its heartbeat: a colocated generator's chunks
+keep flowing into generations while an upload waits on the network.
+
 A data home on an ssh machine, whose trainer's records go to the bucket, can
 vanish with its disk (a spot loss, a released machine). So it also keeps the
 bucket able to resume it:
@@ -76,8 +80,10 @@ def start_for(ctx, paths: TagPaths, params) -> "DataHome | None":
     r2 = r2_from_env() if "R2_BUCKET" in os.environ else None
     uploads = isinstance(ctx.records_sink, R2Sink)
     home = DataHome(paths, cfg, ctx.records_sink, r2, window=params.window, uploads=uploads)
-    if uploads:
-        home.restore()
+    if r2 is not None:
+        # A trainer that moved here from another data home finds its window in
+        # the bucket; one whose resume depends on the bucket must find it.
+        home.restore(required=uploads)
     home.start()
     return home
 
@@ -125,35 +131,67 @@ class DataHome:
         self._hooks = SchedulerHooks(
             paths=paths, gate=self._set_gate, finish=_no_finish, mirror=None, publish=None
         )
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        loops = [self.schedule]
+        if r2 is not None:
+            loops.append(self.ingest)
+        if uploads:
+            loops.append(self.upload)
+        self._threads = [threading.Thread(target=self._run, args=(f,), daemon=True) for f in loops]
 
     def start(self):
         shutil.rmtree(self._ingress_dir, ignore_errors=True)  # partial downloads
-        self._thread.start()
+        for t in self._threads:
+            t.start()
 
     def check(self):
-        """Raise the thread's failure, if it has stopped on one."""
+        """Raise a thread's failure, if one has stopped on one."""
         if self._error is not None:
             raise self._error
 
     def step(self):
-        """One pass: ingest, schedule, publish the state."""
+        """One pass of every loop, in order: ingest, schedule, upload."""
+        if self._r2 is not None:
+            self.ingest()
+        self.schedule()
+        if self.uploads:
+            self.upload()
+
+    def ingest(self):
+        """Move bucket staging's chunks into local staging. The renames need
+        no lock: the scheduler only ever takes whole files out of staging."""
+        prefix = self._staging_prefix()
+        listing = rclone(self._r2, "lsf", "--files-only", prefix, capture=True)
+        if listing.returncode != 0:
+            print(f"data home: listing bucket staging failed: {listing.stderr.strip()}")
+            return
+        self._ingress_dir.mkdir(parents=True, exist_ok=True)
+        self._paths.staging_dir.mkdir(parents=True, exist_ok=True)
+        for name in sorted(n for n in listing.stdout.split() if n.endswith(".slog")):
+            if not self._ingest_one(prefix, name):
+                return  # the bucket is failing; the next pass retries
+
+    def schedule(self):
+        """Assign staged chunks to generations, then publish the gate and a
+        heartbeat. Local disk only, apart from the one small record."""
         with _tree_lock(self._paths):
-            if self._r2 is not None:
-                self._ingest()
             scheduler.tick(self._paths, self._cfg, self._hooks, self._chunk_games)
-            if self.uploads:
-                self._upload_complete()
-                self._prune_bucket()
         self._publish_state()
 
-    def restore(self):
+    def upload(self):
+        """Upload complete generations and prune the bucket's old ones."""
+        self._upload_complete()
+        self._prune_bucket()
+
+    def restore(self, required: bool = True):
         """Pull the uploaded generations from the window behind the trainer's
         cursor onward that this machine lacks. Run before `start`, after the
-        cursor is restored; a failure raises, as a trainer that resumed on a
-        partial window would silently diverge."""
+        cursor is restored. When `required`, a failure raises, as a trainer
+        that resumed on a partial window would silently diverge; otherwise an
+        unreachable bucket leaves the window to what is on disk."""
         cursor = lifecycle.read_train_state(self._paths).get("generation_index", 0)
         indices = self._bucket_generations()
+        if indices is None and not required:
+            return
         assert indices is not None, "listing the bucket's generations failed"
         for index in indices:
             gen_dir = self._paths.generation_dir(index)
@@ -167,10 +205,10 @@ class DataHome:
             lifecycle.mark_published(gen_dir)
             print(f"data home: restored {gen_dir.name} from the bucket")
 
-    def _run(self):
+    def _run(self, loop):
         while True:
             try:
-                self.step()
+                loop()
             except Exception as e:  # noqa: BLE001 -- re-raised by check(), not lost
                 self._error = e
                 return
@@ -186,18 +224,6 @@ class DataHome:
 
     def _staging_prefix(self) -> str:
         return bucket_path(self._r2, self._paths.task, self._paths.tag, "staging")
-
-    def _ingest(self):
-        prefix = self._staging_prefix()
-        listing = rclone(self._r2, "lsf", "--files-only", prefix, capture=True)
-        if listing.returncode != 0:
-            print(f"data home: listing bucket staging failed: {listing.stderr.strip()}")
-            return
-        self._ingress_dir.mkdir(parents=True, exist_ok=True)
-        self._paths.staging_dir.mkdir(parents=True, exist_ok=True)
-        for name in sorted(n for n in listing.stdout.split() if n.endswith(".slog")):
-            if not self._ingest_one(prefix, name):
-                return  # the bucket is failing; the next pass retries
 
     def _ingest_one(self, prefix: str, name: str) -> bool:
         tmp = self._ingress_dir / name
