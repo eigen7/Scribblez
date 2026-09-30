@@ -460,6 +460,7 @@ SPEC = WorkloadSpec(
         ),
     ),
     progress="scribblez.workloads.move_set_eval:progress",
+    pace_role="train",
     sync_data_dirs=(SLOGS_DIR,),
     finalize="scribblez.workloads.move_set_eval:finalize",
     profiles=PROFILES,

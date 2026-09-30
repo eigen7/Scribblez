@@ -20,6 +20,12 @@ from scribblez.workloads.base import StatsSpec
 # cycles, so they track current behavior rather than the whole run.
 WINDOW = 20
 
+# A worker is stale once its last sample is older than this many cycle times,
+# and never sooner than STALE_FLOOR_S: a slow-cycling worker is not dead just
+# because a minute passed.
+STALE_CYCLES = 5
+STALE_FLOOR_S = 120.0
+
 
 def read_stats(stats_dir: Path) -> list[dict]:
     """All worker stats records under the tag, newest-updated first."""
@@ -33,19 +39,26 @@ def _recent(record: dict) -> list[dict]:
     return record.get("recent", [])[-WINDOW:]
 
 
-def worker_summary(record: dict, stats: StatsSpec) -> dict:
-    """One worker's row in the Stats tab: recent-window rate and phase means,
-    plus its cumulative counters."""
+def _mean(recent: list[dict], key: str) -> float:
+    return sum(s.get(key, 0.0) for s in recent) / len(recent) if recent else 0.0
+
+
+def worker_summary(record: dict, stats: StatsSpec, now: float) -> dict:
+    """One worker's row in the Stats tab: recent-window rate, cycle time and
+    phase means, plus its cumulative counters.
+
+    The rate and cycle time come from the samples' wall-clock timestamps, so
+    they count everything a cycle waits on, including time no phase tracks
+    (reported as `other_s`), and never count a background phase twice."""
     recent = _recent(record)
     span = recent[-1]["t"] - recent[0]["t"] if len(recent) > 1 else 0.0
     # The first sample's units predate the span, so they are left out.
     units_recent = sum(s["units"] for s in recent[1:])
     upload_bytes = sum(s["bytes"] for s in recent)
     upload_s = sum(s.get("upload_s", 0.0) for s in recent)
-
-    def mean(key: str) -> float:
-        return sum(s.get(key, 0.0) for s in recent) / len(recent) if recent else 0.0
-
+    phases = {p: _mean(recent, p) for p in stats.phases}
+    cycle_s = span / (len(recent) - 1) if span > 0 else None
+    foreground = sum(v for p, v in phases.items() if p not in stats.background)
     return {
         "worker_id": record["worker_id"],
         "role": record.get("role"),
@@ -57,10 +70,21 @@ def worker_summary(record: dict, stats: StatsSpec) -> dict:
         "units_total": record["units_total"],
         "cycles_total": record["cycles_total"],
         "updated_at": record["updated_at"],
+        "stale": now - record["updated_at"] > max(STALE_FLOOR_S, STALE_CYCLES * (cycle_s or 0.0)),
         "units_per_hour": units_recent / span * 3600 if span > 0 else None,
-        "phases": {p: mean(p) for p in stats.phases},
+        "cycle_s": cycle_s,
+        "phases": phases,
+        "other_s": max(0.0, cycle_s - foreground) if cycle_s is not None else None,
         "upload_mbps": (upload_bytes / 1e6) / upload_s if upload_s > 0 else None,
     }
+
+
+def pace(records: list[dict], role: str, stats: StatsSpec, now: float) -> float | None:
+    """The fleet rate of `role`'s live workers, in units per hour, or None when
+    none has a rate: the number that compares one tag's speed with another's."""
+    rows = [worker_summary(r, stats, now) for r in records if r.get("role") == role]
+    rates = [w["units_per_hour"] for w in rows if not w["stale"] and w["units_per_hour"]]
+    return sum(rates) if rates else None
 
 
 # The figure's worker selector value that plots the fleet total.

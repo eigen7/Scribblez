@@ -3,6 +3,7 @@ import { getJSON, postJSON } from '../../lib/api';
 import BurnStrip from './BurnStrip';
 import PoolView, { enqueueTag } from './PoolView';
 import TaskView from './TaskView';
+import { fmtCompact } from './ui';
 
 // The master dashboard: the entrypoint for all work. Pick a workload, then a
 // tag (or create one, configuring its parameters via the workload's schema);
@@ -36,7 +37,19 @@ type TagRow = {
   tag: string; has_task: boolean; created_at: number | null;
   workers: number; active_workers: number;
   progress: [string, string | number][]; last_active: number;
+  // The workload's pace role's live fleet rate (WorkloadSpec.pace_role): the
+  // number that compares tags' speeds. Null with no live rate.
+  pace: { unit: string; per_hour: number } | null;
 };
+
+type TagSort = 'name' | 'last-ran' | 'pace';
+
+// Tag order for the listing; tags with no pace sort after those with one.
+function compareTags(sortBy: TagSort, a: TagRow, b: TagRow): number {
+  if (sortBy === 'name') return a.tag.localeCompare(b.tag);
+  if (sortBy === 'pace') return (b.pace?.per_hour ?? -1) - (a.pace?.per_hour ?? -1);
+  return b.last_active - a.last_active;
+}
 
 export function relTime(epochSeconds: number | null): string {
   if (!epochSeconds) return '—';
@@ -385,7 +398,7 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
 
 export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: string) => void }) {
   const [rows, setRows] = useState<TagRow[]>([]);
-  const [sortBy, setSortBy] = useState<'name' | 'last-ran'>('last-ran');
+  const [sortBy, setSortBy] = useState<TagSort>('last-ran');
   const [error, setError] = useState('');
 
   const refresh = useCallback(() => {
@@ -417,9 +430,7 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
     }
   };
 
-  const sorted = [...rows].sort((a, b) =>
-    sortBy === 'name' ? a.tag.localeCompare(b.tag) : b.last_active - a.last_active,
-  );
+  const sorted = [...rows].sort((a, b) => compareTags(sortBy, a, b));
 
   return (
     <>
@@ -428,9 +439,10 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
           <b style={{ fontSize: 15 }}>Tags</b>
           <label style={{ fontSize: 13 }}>
             sort by{' '}
-            <select value={sortBy} onChange={(e) => setSortBy(e.target.value as 'name' | 'last-ran')}>
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value as TagSort)}>
               <option value="last-ran">last ran</option>
               <option value="name">name</option>
+              <option value="pace">pace</option>
             </select>
           </label>
         </div>
@@ -442,6 +454,7 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
               <tr style={{ textAlign: 'left', color: '#445063' }}>
                 <th style={{ padding: '4px 14px 4px 0' }}>tag</th>
                 <th style={{ padding: '4px 14px 4px 0' }}>progress</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>pace</th>
                 <th style={{ padding: '4px 14px 4px 0' }}>workers</th>
                 <th style={{ padding: '4px 14px 4px 0' }}>last ran</th>
                 <th style={{ padding: '4px 14px 4px 0' }} />
@@ -458,6 +471,9 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
                   <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{r.tag}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>
                     {r.progress.map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}
+                  </td>
+                  <td style={{ padding: '6px 14px 6px 0', whiteSpace: 'nowrap' }}>
+                    {r.pace ? `${fmtCompact(r.pace.per_hour)} ${r.pace.unit}/hr` : '—'}
                   </td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{r.workers}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{relTime(r.last_active)}</td>

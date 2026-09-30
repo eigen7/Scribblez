@@ -36,6 +36,10 @@ _CLIENT_ERRORS = (
 )
 
 
+def _stats_payload(stats: workloads.StatsSpec) -> dict:
+    return {"unit": stats.unit, "phases": stats.phases, "background": sorted(stats.background)}
+
+
 def _role_payload(role: workloads.RoleSpec) -> dict:
     return {
         "name": role.name,
@@ -43,7 +47,7 @@ def _role_payload(role: workloads.RoleSpec) -> dict:
         "singleton": role.singleton,
         "kinds": list(role.kinds),
         "gpu": role.gpu,
-        "stats": ({"unit": role.stats.unit, "phases": role.stats.phases} if role.stats else None),
+        "stats": (_stats_payload(role.stats) if role.stats else None),
     }
 
 
@@ -61,8 +65,11 @@ def _pending_summary(worker: tasks.WorkerRecord) -> dict:
         "units_total": 0,
         "cycles_total": 0,
         "updated_at": None,
+        "stale": False,
         "units_per_hour": None,
+        "cycle_s": None,
         "phases": {},
+        "other_s": None,
         "upload_mbps": None,
     }
 
@@ -74,7 +81,7 @@ def _stats_by_role(store: tasks.TaskStore, spec: workloads.WorkloadSpec, tag: st
     records = worker_stats_figures.read_stats(store.paths(spec, tag).stats_dir)
     roles = {r.name: r for r in spec.roles if r.stats}
     summaries = [
-        worker_stats_figures.worker_summary(rec, roles[rec["role"]].stats)
+        worker_stats_figures.worker_summary(rec, roles[rec["role"]].stats, time.time())
         for rec in records
         if rec.get("role") in roles
     ]
@@ -86,10 +93,7 @@ def _stats_by_role(store: tasks.TaskStore, spec: workloads.WorkloadSpec, tag: st
         if w.role in roles and w.worker_id not in reported
     ]
     return {
-        "roles": {
-            name: {"title": r.title, "unit": r.stats.unit, "phases": r.stats.phases}
-            for name, r in roles.items()
-        },
+        "roles": {name: {"title": r.title, **_stats_payload(r.stats)} for name, r in roles.items()},
         "workers": summaries,
         "updated_at": max((r["updated_at"] for r in records), default=0),
     }

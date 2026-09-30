@@ -132,5 +132,6 @@ SPEC = WorkloadSpec(
         ),
     ),
     progress="scribblez.workloads.kill_test:progress",
+    pace_role="generate",
     sync_data_dirs=(SLOGS_DIR,),
 )
