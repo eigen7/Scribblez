@@ -2,7 +2,7 @@ import { useContext, ReactNode, useEffect, useRef, useState } from 'react';
 import { TabActiveContext } from '../TabActiveContext';
 import { getJSON } from '../../lib/api';
 import BokehFigure from '../BokehFigure';
-import { HealthBadge, Tile, fmtCompact, isStale } from './ui';
+import { HealthBadge, Tile, fmtCompact } from './ui';
 
 // The generic worker Stats tab, driven entirely by the stats schema the API
 // reports (each role's unit noun and timing phases), so any workload role
@@ -11,21 +11,37 @@ import { HealthBadge, Tile, fmtCompact, isStale } from './ui';
 // or the fleet (picked from a pulldown), and a compact per-worker detail
 // table. A worker still in its first cycle has no stats record yet; the API
 // lists it with a null `updated_at` so the fleet count and table are complete.
+//
+// Cycle time is wall-clock (the API's `cycle_s`, from sample timestamps), not
+// a sum of phases: background phases overlap the next cycle, and `other`
+// is the part of the cycle no foreground phase accounts for.
 
-type RoleStats = { title: string; unit: string; phases: Record<string, string> };
+type RoleStats = {
+  title: string; unit: string; phases: Record<string, string>; background: string[];
+};
 type WorkerRow = {
   worker_id: string; role: string | null; kind: string; threads: number | null;
   bundle_id: string | null; host_arch: string | null; bundle_arch: string | null;
-  units_total: number; cycles_total: number; updated_at: number | null;
-  units_per_hour: number | null; phases: Record<string, number>; upload_mbps: number | null;
+  units_total: number; cycles_total: number; updated_at: number | null; stale: boolean;
+  units_per_hour: number | null; cycle_s: number | null; phases: Record<string, number>;
+  other_s: number | null; upload_mbps: number | null;
 };
 type StatsPayload = { roles: Record<string, RoleStats>; workers: WorkerRow[]; updated_at: number };
 
 const fmt = (v: number | null | undefined, digits = 1) => (v == null ? '—' : v.toFixed(digits));
 
-const cycleSeconds = (w: WorkerRow) => Object.values(w.phases).reduce((a, b) => a + b, 0);
 const workerPending = (w: WorkerRow) => w.updated_at == null;
-const workerStale = (w: WorkerRow) => w.updated_at != null && isStale(w.updated_at, cycleSeconds(w));
+const workerStale = (w: WorkerRow) => w.stale;
+
+// Mean of the non-null values, or null when there are none.
+function meanOf(values: (number | null)[]): number | null {
+  const xs = values.filter((v): v is number => v != null);
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+}
+
+// A phase's display label, marked when it overlaps the next cycle.
+const phaseLabel = (stats: RoleStats, key: string) =>
+  stats.background.includes(key) ? `${stats.phases[key]} (bg)` : stats.phases[key];
 
 // The figure's worker selector value that plots the fleet total (the API's
 // worker_stats_figures.FLEET).
@@ -73,22 +89,25 @@ function aggregates(workers: WorkerRow[]) {
     pendingCount: workers.filter(workerPending).length,
     rate: rates.length ? rates.reduce((a, b) => a + b, 0) : null,
     total: workers.reduce((a, w) => a + w.units_total, 0),
-    cycle: fresh.length
-      ? fresh.reduce((a, w) => a + cycleSeconds(w), 0) / fresh.length
-      : null,
+    cycle: meanOf(fresh.map((w) => w.cycle_s)),
     upload: uploads.length ? uploads.reduce((a, b) => a + b, 0) : null,
   };
 }
 
-// "self-play 1.0 · deliver 0.1": the cycle tile's per-phase mean split.
+// "self-play 2.4 · other 1.3 · deliver (bg) 1.7": the cycle tile's per-phase
+// mean split, foreground phases and `other` (which sum to the cycle time)
+// before the background ones.
 function phaseSplit(stats: RoleStats, fresh: WorkerRow[]): string {
   if (fresh.length === 0) return '';
-  return Object.entries(stats.phases)
-    .map(([key, label]) => {
-      const mean = fresh.reduce((a, w) => a + (w.phases[key] ?? 0), 0) / fresh.length;
-      return `${label} ${fmt(mean)}`;
-    })
-    .join(' · ');
+  const keys = Object.keys(stats.phases);
+  const part = (label: string, v: number | null) => `${label} ${fmt(v)}`;
+  const phase = (key: string) =>
+    part(phaseLabel(stats, key), meanOf(fresh.map((w) => w.phases[key] ?? null)));
+  return [
+    ...keys.filter((k) => !stats.background.includes(k)).map(phase),
+    part('other', meanOf(fresh.map((w) => w.other_s))),
+    ...keys.filter((k) => stats.background.includes(k)).map(phase),
+  ].join(' · ');
 }
 
 // The workers tile's health line: stale and first-cycle counts, or all fresh.
@@ -154,9 +173,11 @@ function columns(stats: RoleStats): Col[] {
       header: `${stats.unit}/hr`, key: (w) => w.units_per_hour, numeric: true,
       render: (w) => (workerStale(w) ? dim('—') : fmtCompact(w.units_per_hour)),
     },
-    ...Object.entries(stats.phases).map(([key, label]): Col => ({
-      header: `${label} s`, key: (w) => w.phases[key] ?? null, numeric: true,
+    { header: 'cycle s', key: (w) => w.cycle_s, numeric: true },
+    ...Object.keys(stats.phases).map((key): Col => ({
+      header: `${phaseLabel(stats, key)} s`, key: (w) => w.phases[key] ?? null, numeric: true,
     })),
+    { header: 'other s', key: (w) => w.other_s, numeric: true },
     { header: 'upload MB/s', key: (w) => w.upload_mbps, numeric: true },
     {
       header: 'updated', key: (w) => w.updated_at,

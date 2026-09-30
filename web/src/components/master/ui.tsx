@@ -26,12 +26,6 @@ export function fmtCompact(v: number | null | undefined): string {
   return String(Math.round(v));
 }
 
-// A worker is stale when its stats record hasn't updated for several cycle
-// lengths (long-cycle roles get a proportionally longer allowance).
-export function isStale(updatedAt: number, cycleSeconds: number): boolean {
-  return Date.now() / 1000 - updatedAt > Math.max(120, 5 * cycleSeconds);
-}
-
 export function HealthBadge({ updatedAt, stale }: { updatedAt: number; stale: boolean }) {
   if (stale) return <span className="pill-stale">stale · {relTime(updatedAt)}</span>;
   return (

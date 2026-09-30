@@ -39,7 +39,9 @@ from scribblez.workloads.base import RoleSpec, SlotPlan, StatsSpec, WorkerContex
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
 
 TRAINER_STATS = StatsSpec(
-    unit="rows", phases={"train_s": "train", "eval_s": "eval", "upload_s": "upload"}
+    unit="rows",
+    phases={"train_s": "train", "eval_s": "eval", "upload_s": "upload"},
+    background=frozenset({"upload_s"}),  # the trainer's OutputDeliverer thread
 )
 
 # Parameter profiles (WorkloadSpec.profiles): one recipe per trunk. Each

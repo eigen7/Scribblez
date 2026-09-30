@@ -43,6 +43,9 @@ class StatsSpec:
 
     unit: str  # what a cycle delivers: "pairs", "games", "rows"
     phases: dict[str, str]  # sample key -> display label, in stacking order
+    # Phases that run on a background thread, overlapping the next cycle's
+    # work. They are shown, but a cycle's wall time does not include them.
+    background: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

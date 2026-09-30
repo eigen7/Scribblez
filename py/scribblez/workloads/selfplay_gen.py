@@ -43,7 +43,11 @@ STAGING_DIR = "staging"
 # kGamesPerFile), so one cycle delivers exactly one chunk.
 GAMES_PER_CHUNK = 1000
 
-GENERATOR_STATS = StatsSpec(unit="games", phases={"gen_s": "self-play", "upload_s": "deliver"})
+GENERATOR_STATS = StatsSpec(
+    unit="games",
+    phases={"gen_s": "self-play", "upload_s": "deliver"},
+    background=frozenset({"upload_s"}),  # Deliverer's thread
+)
 
 
 def hasty_spec(params) -> str:
