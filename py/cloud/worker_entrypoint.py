@@ -32,6 +32,10 @@ All configuration comes from environment variables:
                                           predating it keeps starting.
     SCZ_<PARAM>                           workload params (scribblez/params.py
                                           encoding; defaults from the dataclass)
+    SCZ_DATA_PLANE                        "home" when the tag's data plane runs
+                                          beside its trainer
+                                          (generational/data_home.py);
+                                          default "legacy", and set only then
     SCZ_THREADS                           worker threads (default: all cores)
     SCZ_MAX_CYCLES                        stop after N cycles (default 0 = run
                                           until stopped)
@@ -77,6 +81,7 @@ WORKER_ENV_VARS = (
     "SCZ_TAG",
     "SCZ_SINK",
     "SCZ_DATA_SINK",
+    "SCZ_DATA_PLANE",
     "SCZ_THREADS",
     "SCZ_MAX_CYCLES",
     "SCZ_WORKER_ID",
@@ -175,6 +180,7 @@ def main() -> int:
             records_sink=records_sink,
             provenance=provenance(),
             mount_root=mount_root,
+            data_plane=os.environ.get("SCZ_DATA_PLANE", "legacy"),
         )
         code = workloads.resolve(role.runner)(ctx)
     except WorkerStopped:

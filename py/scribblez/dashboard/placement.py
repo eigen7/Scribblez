@@ -11,6 +11,7 @@ from scribblez.dashboard import tasks
 from scribblez.dashboard.pool import PoolMachine
 from scribblez.dashboard.queue import BUNDLE_READY, QueueEntry
 from scribblez.generational import lifecycle
+from scribblez.generational.scheduler import DATA_PLANE_HOME
 from scribblez.paths import TagPaths
 from scribblez.workloads import WorkloadSpec, resolve
 from scribblez.workloads.base import SlotPlan
@@ -39,7 +40,11 @@ def state_home(paths: TagPaths, task: tasks.TaskRecord) -> str | None:
     once it has any: HOME_BUCKET when its trainer delivered through the
     results bucket, where a trainer on any machine resumes it (and localhost
     holds the copy the sync pulls back); else HOME_LOCAL, only this machine's
-    tag dir. None before any row is trained, when a tag may start anywhere."""
+    tag dir. None before any row is trained, when a tag may start anywhere.
+    A tag whose data plane runs beside its trainer is HOME_LOCAL from the
+    start: its trainer must be a local slot (WorkerManager._check_role)."""
+    if task.data_plane == DATA_PLANE_HOME:
+        return HOME_LOCAL
     if not lifecycle.read_train_state(paths).get("rows_trained"):
         return None
     return HOME_BUCKET if task.trainer_sink == "r2" else HOME_LOCAL
@@ -64,7 +69,7 @@ def refusal(
     if entry.machines and m.name not in entry.machines:
         return "not among the machines this tag may use"
     if home == HOME_LOCAL and m.kind == "ssh":
-        return "its training state is only on localhost; a trainer here would start over"
+        return "its training state is only on localhost, so its trainer must stay there"
     plan = plan_for(spec, params, m)
     for p in plan:
         role = spec.role(p.role)

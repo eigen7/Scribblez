@@ -30,7 +30,7 @@ from scribblez import lane_analysis
 from scribblez import params as params_mod
 from scribblez.dataset import SlogDataset
 from scribblez.ffi import get_max_move_per_lane_input_shapes
-from scribblez.generational import checkpoint, lifecycle
+from scribblez.generational import checkpoint, data_home, lifecycle
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
     CpuController,
@@ -160,7 +160,7 @@ def run_generational_training(model, optimizer, recorder, paths, device, params,
     cpu = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
-        wait_for_generation(paths, state.generation_index, ctx["data_sink"])
+        wait_for_generation(paths, state.generation_index, ctx["data_sink"], ctx["data_home"])
         train_one_generation(
             model,
             optimizer,
@@ -271,6 +271,7 @@ def run(ctx: WorkerContext) -> int:
     state = checkpoint.resume(paths, model, optimizer, device)
     ensure_window(paths, ctx.data_sink, state.generation_index, params.window)
     lifecycle.write_train_state(paths, asdict(state))
+    run_ctx["data_home"] = data_home.start_for(ctx, paths, params)
     try:
         run_generational_training(model, optimizer, recorder, paths, device, params, state, run_ctx)
     except (KeyboardInterrupt, WorkerStopped):

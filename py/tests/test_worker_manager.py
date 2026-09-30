@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from cloud.credentials import RegistryConfig
+from cloud.credentials import R2Credentials, RegistryConfig
 from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
 from scribblez import workloads
@@ -2242,3 +2242,105 @@ def test_cloud_sync_is_told_the_tag_dirs_mount_root(manager, spec, task):
     root = argv[argv.index("--mount-root") + 1]
     assert root == str(manager.mount_root)
     assert not root.startswith(str(DEFAULT_MOUNT_ROOT))
+
+
+# ---- the generation data plane (generational/data_home.py) -------------------------
+
+
+def _local_training_task(desired: str = "paused") -> tasks.TaskRecord:
+    """A position_eval task with a local generator and a local trainer."""
+    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
+    for wid, role in (("g", "generate"), ("tr", "train")):
+        task.workers.append(
+            tasks.WorkerRecord(worker_id=wid, role=role, kind="local", desired_state=desired)
+        )
+    return task
+
+
+def test_the_data_plane_moves_only_while_every_slot_is_stopped(manager, monkeypatch):
+    """Two schedulers must never run on one tag: the controller's until the
+    switch, the data home's after it."""
+    spec = workloads.get("position_eval")
+    task = _local_training_task(desired="running")
+    with pytest.raises(AssertionError, match="pause every slot first"):
+        manager.set_data_plane(spec, task, "home")
+
+    task = _local_training_task()
+    monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: w.role == "train")
+    with pytest.raises(AssertionError, match="still alive"):
+        manager.set_data_plane(spec, task, "home")
+
+    monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: False)
+    task.gates["generate"] = "ahead of trainer"
+    manager.set_data_plane(spec, task, "home")
+    assert task.data_plane == "home" and task.gates == {}  # the new scheduler decides
+    manager.set_data_plane(spec, task, "legacy")
+    assert manager.tasks.load(spec, "t").data_plane == "legacy"
+
+
+def test_a_data_home_needs_a_local_trainer(manager, monkeypatch):
+    spec = workloads.get("position_eval")
+    monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: False)
+    task = _all_ssh_task()
+    for w in task.workers:
+        w.desired_state = "paused"
+    with pytest.raises(AssertionError, match="must be a local slot"):
+        manager.set_data_plane(spec, task, "home")
+
+    task = _local_training_task()
+    task.workers = [w for w in task.workers if w.role != "train"]
+    manager.set_data_plane(spec, task, "home")
+    with pytest.raises(AssertionError, match="must be a local slot"):
+        manager._check_role(spec, task, "train", "ssh", check_gpu=False)
+    manager._check_role(spec, task, "generate", "ssh", check_gpu=False)  # generators anywhere
+
+
+def test_only_a_generational_workload_has_a_data_plane_to_move(manager, spec, task):
+    with pytest.raises(AssertionError, match="has no data home"):
+        manager.set_data_plane(spec, task, "home")
+
+
+def test_a_data_home_gets_no_bucket_mirror_publish_or_staging_pull(manager, monkeypatch):
+    """The data home moves bucket chunks in itself; the controller's copy of
+    them, and its re-upload for a remote trainer, would be a second data plane."""
+    spec = workloads.get("position_eval")
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    task = _all_ssh_task()
+    assert "--no-data" not in manager.cloud_sync_argv(spec, task)
+    task.data_plane = "home"
+    assert manager._make_mirror(spec, task) is None
+    assert manager._make_publish(spec, task) is None
+    assert "--no-data" in manager.cloud_sync_argv(spec, task)
+
+
+def test_a_data_homes_trainer_is_told_so_and_given_the_bucket(manager, monkeypatch, tmp_path):
+    spec = workloads.get("position_eval")
+    monkeypatch.setattr(WorkerManager, "_spawn_local", _REAL_SPAWN_LOCAL)
+    r2 = R2Credentials(account_id="a", access_key_id="k", secret_access_key="s", bucket="b")
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: SimpleNamespace(r2=r2))
+    monkeypatch.setattr(
+        WorkerManager, "_log_file", lambda self, spec, tag, name: open(tmp_path / "log", "ab")
+    )
+    monkeypatch.setattr(workers_mod.os, "nice", lambda n: n)
+    envs = {}
+    monkeypatch.setattr(
+        workers_mod.subprocess,
+        "Popen",
+        lambda argv, env, **k: (
+            envs.__setitem__(env["SCZ_WORKER_ID"], env) or SimpleNamespace(pid=1)
+        ),
+    )
+    task = _local_training_task()
+    task.data_plane = "home"
+    for w in task.workers:
+        manager._spawn_local(spec, task, w)
+    assert envs["tr"]["SCZ_DATA_PLANE"] == "home" and envs["tr"]["R2_BUCKET"] == "b"
+    assert "SCZ_DATA_PLANE" not in envs["g"]  # a generator just delivers locally
+
+
+def test_the_scheduler_hooks_say_whether_a_role_is_running(manager, monkeypatch):
+    spec = workloads.get("position_eval")
+    task = _local_training_task()
+    monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: w.role == "train")
+    hooks = manager._scheduler_hooks(spec, task)
+    assert hooks.role_running("train") and not hooks.role_running("generate")

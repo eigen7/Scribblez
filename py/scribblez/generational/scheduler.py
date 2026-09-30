@@ -32,18 +32,37 @@ that, and so does the training design's bound on how often a game is reused
 
 from __future__ import annotations
 
+import json
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from scribblez import params as params_mod
-from scribblez.paths import TagPaths
+from scribblez.paths import SCHEDULER_STATE_REL, TagPaths
 
 from . import lifecycle
 
+# TaskRecord.data_plane's values: the controller ticks this scheduler on its
+# own tag tree ("legacy"), or a data home beside the trainer does
+# (generational/data_home.py) and the controller only gates generators.
+DATA_PLANE_LEGACY, DATA_PLANE_HOME = "legacy", "home"
+
+# The WorkloadSpec.scheduler of the workloads this module schedules.
+TICK_FOR_TASK = "scribblez.generational.scheduler:tick_for_task"
+
 GENERATE_ROLE = "generate"
+TRAIN_ROLE = "train"
 GATE_REASON_AHEAD = "ahead of trainer"
+GATE_REASON_NO_TRAINER = "trainer not running"
+GATE_REASON_NO_HEARTBEAT = "no heartbeat from the trainer's data home"
+
+# How old a data home's heartbeat may be before its generators are parked. It
+# publishes every data_home.POLL_SECONDS (5 s); the margin covers the controller's
+# sync of a record that comes through the bucket (SYNC_INTERVAL_SECONDS, 30 s)
+# three times over.
+HEARTBEAT_STALE_SECONDS = 120
 
 # One ingested-chunk name per line, under the tag's data/ dir.
 LEDGER_NAME = "ingest_log.txt"
@@ -78,11 +97,29 @@ def tick_for_task(spec, task, hooks):
     if _trainer_done(paths, params.max_rows):
         hooks.finish(GENERATE_ROLE)
         return
+    if task.data_plane == DATA_PLANE_HOME:
+        hooks.gate(GENERATE_ROLE, home_gate(paths, hooks.role_running(TRAIN_ROLE), time.time()))
+        return
     cfg = SchedulerConfig(
         games_per_generation=params.games_per_generation,
         open_ahead=params.open_ahead,
     )
     tick(paths, cfg, hooks)
+
+
+def home_gate(paths: TagPaths, trainer_running: bool, now: float) -> str | None:
+    """The gate on a data-home tag's generators: parked while the trainer is
+    not running or its data home's heartbeat is stale or absent, since nothing
+    would take their chunks; otherwise whatever its scheduler decided."""
+    if not trainer_running:
+        return GATE_REASON_NO_TRAINER
+    try:
+        record = json.loads((paths.root / SCHEDULER_STATE_REL).read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return GATE_REASON_NO_HEARTBEAT
+    if now - record["heartbeat"] > HEARTBEAT_STALE_SECONDS:
+        return GATE_REASON_NO_HEARTBEAT
+    return record["gate"]
 
 
 def _trainer_done(paths: TagPaths, max_rows: int) -> bool:

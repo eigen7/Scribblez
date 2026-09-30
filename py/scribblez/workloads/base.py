@@ -291,6 +291,8 @@ class SchedulerHooks:
         background: the scheduler asks again each tick and records the
         generation as published in its manifest only once the answer is True.
         A failed upload raises, and the next tick's call starts it again.
+    role_running(role) -> bool
+        Whether a worker of `role` is alive, as the reconcile pass last saw it.
     """
 
     paths: TagPaths
@@ -298,6 +300,7 @@ class SchedulerHooks:
     finish: object  # callable(role: str)
     mirror: object = None  # callable(chunk_name: str, dest_rel: str) | None
     publish: object = None  # callable(dest_rel: str) -> bool | None
+    role_running: object = None  # callable(role: str) -> bool
 
 
 @dataclass
@@ -324,6 +327,9 @@ class WorkerContext:
     mount_root: Path
     kind: str = "local"
     provenance: dict = field(default_factory=dict)
+    # Where the tag's generation data plane runs (generational/data_home.py):
+    # "legacy" on the controller, "home" beside this worker's trainer.
+    data_plane: str = "legacy"  # generational.scheduler.DATA_PLANE_*
 
     def tag_paths(self) -> TagPaths:
         return self.spec.paths(self.tag, self.mount_root)
