@@ -1264,7 +1264,7 @@ paths = SimpleNamespace(
 )
 ctx = SimpleNamespace(
     params=params, tag="t", worker_id="w0", threads=1, kind="local",
-    data_sink=_DriveSink(root), sink=_DriveSink(root),
+    data_sink=_DriveSink(root), records_sink=_DriveSink(root),
     role=SimpleNamespace(name="train"), provenance={},
     tag_paths=lambda: paths,
 )

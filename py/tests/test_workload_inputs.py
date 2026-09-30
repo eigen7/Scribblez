@@ -24,7 +24,7 @@ class _Sink:
 
 def _ctx(tmp_path, sink, kind="ssh"):
     return SimpleNamespace(
-        kind=kind, sink=sink, tag_paths=lambda: SimpleNamespace(root=tmp_path / "tag")
+        kind=kind, records_sink=sink, tag_paths=lambda: SimpleNamespace(root=tmp_path / "tag")
     )
 
 

@@ -144,7 +144,7 @@ def _ctx(mount_root: Path, sink=None, **param_overrides) -> WorkerContext:
         threads=2,
         max_cycles=1,
         data_sink=sink,
-        sink=sink,
+        records_sink=sink,
         mount_root=mount_root,
     )
 

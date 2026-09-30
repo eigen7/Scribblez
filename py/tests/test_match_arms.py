@@ -98,7 +98,7 @@ def _ctx(tmp_path, monkeypatch, max_cycles=0, **param_overrides) -> WorkerContex
         threads=2,
         max_cycles=max_cycles,
         data_sink=LocalSink(paths.root),
-        sink=LocalSink(paths.root),
+        records_sink=LocalSink(paths.root),
         mount_root=tmp_path,
     )
 

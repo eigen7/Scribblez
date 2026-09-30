@@ -892,7 +892,7 @@ class WorkerManager:
             creds, spec, task.tag, params,
             role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id,
         )  # fmt: skip
-        env["SCZ_SINK"] = self._slot_sink(spec, task, w)
+        env["SCZ_SINK"] = self._slot_records_sink(spec, task, w)
         data_sink = self._slot_data_sink(spec, task, w)
         if data_sink != env["SCZ_SINK"]:
             # Only when it differs: a bundle predating SCZ_DATA_SINK refuses
@@ -2216,7 +2216,7 @@ class WorkerManager:
 
     # ---- a slot's machine and delivery (read through the pool store) -----
 
-    def _slot_sink(
+    def _slot_records_sink(
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
     ) -> str:
         """Where slot `w`'s worker sends its records (SCZ_SINK, cloud/sinks.py):
@@ -2253,14 +2253,17 @@ class WorkerManager:
         """Where slot `w`'s worker delivers into and reads from the tag's data/
         store (SCZ_DATA_SINK, cloud/sinks.py). The same as its records sink for
         every slot today."""
-        return self._slot_sink(spec, task, w)
+        return self._slot_records_sink(spec, task, w)
 
     def _collected(
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
     ) -> bool:
         """Whether ssh slot `w`'s container holds output for the reconcile pass
         to pull over ssh: data or records it delivers locally."""
-        return "local" in (self._slot_data_sink(spec, task, w), self._slot_sink(spec, task, w))
+        return "local" in (
+            self._slot_data_sink(spec, task, w),
+            self._slot_records_sink(spec, task, w),
+        )
 
     def _rented(self, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
         return (
@@ -2271,7 +2274,7 @@ class WorkerManager:
         """Whether any slot sends data or records through the bucket, for the
         sync watcher to pull down."""
         return any(
-            "r2" in (self._slot_data_sink(spec, task, w), self._slot_sink(spec, task, w))
+            "r2" in (self._slot_data_sink(spec, task, w), self._slot_records_sink(spec, task, w))
             for w in task.workers
         )
 
@@ -2285,7 +2288,7 @@ class WorkerManager:
         through the bucket, which needs its outputs synced down and the controls
         file pushed up."""
         return any(
-            self._slot_sink(spec, task, w) == "r2" and spec.role(w.role).ingest
+            self._slot_records_sink(spec, task, w) == "r2" and spec.role(w.role).ingest
             for w in task.workers
         )
 
@@ -2301,7 +2304,7 @@ class WorkerManager:
         """Record where new slot `w` delivers, if it is a trainer (a role with an
         ingest tick): where the task's training state will live from now on."""
         if spec.role(w.role).ingest:
-            task.trainer_sink = self._slot_sink(spec, task, w)
+            task.trainer_sink = self._slot_records_sink(spec, task, w)
 
     def cloud_sync_argv(self, spec, task: tasks.TaskRecord, *extra: str) -> list[str]:
         """The cloud_sync command pulling what `task`'s bucket slots deliver. It

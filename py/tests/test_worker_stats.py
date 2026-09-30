@@ -19,7 +19,7 @@ def _ctx(tmp_path, **overrides):
         threads=4,
         max_cycles=0,
         data_sink=LocalSink(tmp_path),
-        sink=LocalSink(tmp_path),
+        records_sink=LocalSink(tmp_path),
         mount_root=tmp_path,
         kind="ssh",
     )

@@ -354,7 +354,7 @@ def test_run_generate_requires_a_readable_teacher(tmp_path, monkeypatch):
         threads=1,
         max_cycles=1,
         data_sink=RecordingSink(),
-        sink=RecordingSink(),
+        records_sink=RecordingSink(),
         mount_root=tmp_path,
     )
     assert move_set_eval.run_generate(ctx) == 1  # the pinned export does not exist
@@ -440,7 +440,7 @@ class StubCtx:
         self.threads = 1
         self.max_cycles = max_cycles
         self.data_sink = sink
-        self.sink = sink
+        self.records_sink = sink
         self.provenance = {}
         self.mount_root = tmp_path
         self._paths = SPEC.paths("t", mount_root=tmp_path)
@@ -585,7 +585,7 @@ def test_pair_generate_stops_once_the_store_holds_the_target(tmp_path):
 
     ctx = StubCtx(tmp_path, None, max_cycles=0)  # unbounded but for the target
     ctx.data_sink = StoringSink(ctx.tag_paths().data_dir)
-    ctx.sink = ctx.data_sink
+    ctx.records_sink = ctx.data_sink
     assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target_pairs=3) == 0
     assert len(cycles) == 3
     assert pair_store.count_pairs(ctx.tag_paths().data_dir / "slogs", ".mset") == 3

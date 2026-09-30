@@ -55,7 +55,7 @@ def main() -> int:
         threads=0,
         max_cycles=0,
         data_sink=LocalSink(spec.data_dir(args.tag, args.mount_root)),
-        sink=LocalSink(spec.data_dir(args.tag, args.mount_root)),
+        records_sink=LocalSink(spec.data_dir(args.tag, args.mount_root)),
         mount_root=args.mount_root,
     )
     return workloads.resolve(role.runner)(ctx)

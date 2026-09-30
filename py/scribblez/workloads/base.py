@@ -314,7 +314,7 @@ class WorkerContext:
     # cloud.sinks.LocalSink | R2Sink: the tag's data/ store, and everything
     # else under the tag root (cloud/sinks.py).
     data_sink: object
-    sink: object
+    records_sink: object
     # The slot kind, reported in stats and consulted by resolve_input.
     # In-process runners (CLI tools, tests) are local; only a launcher of
     # remote workers overrides it.
@@ -341,9 +341,9 @@ def resolve_input(ctx: WorkerContext, rel: str, source: Path) -> Path:
 
     `source` itself when it exists, as it does for a local worker sharing the
     controller's mount. Otherwise the staged copy at `rel` under the tag root:
-    either pushed into the container already, or fetched through the sink by a
+    either pushed into the container already, or fetched through the records sink by a
     bucket-delivering slot. A remote slot polls until the copy arrives; a local
-    worker, for which nothing is staged, checks once and never asks the sink.
+    worker, for which nothing is staged, checks once and never asks the records sink.
     Raises FileNotFoundError when no copy turns up."""
     if source.is_file():
         return source
@@ -354,7 +354,7 @@ def resolve_input(ctx: WorkerContext, rel: str, source: Path) -> Path:
             return staged
         raise missing
     deadline = time.monotonic() + INPUT_WAIT_SECONDS
-    while not (staged.is_file() or ctx.sink.fetch_file(rel, staged)):
+    while not (staged.is_file() or ctx.records_sink.fetch_file(rel, staged)):
         if time.monotonic() >= deadline:
             raise missing
         time.sleep(INPUT_POLL_SECONDS)

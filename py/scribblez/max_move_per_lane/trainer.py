@@ -86,9 +86,9 @@ def _checkpoint_and_eval(
     if ctx["lane_eval"] is not None:
         preds = {"lane_pred": eval_lane_analysis(model, ctx["lane_eval"], device)}
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
-    ctx["sink"].deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
+    ctx["records_sink"].deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
     lifecycle.write_train_state(paths, asdict(state))
-    ctx["sink"].deliver_output(paths.train_state_path, "train_state.json", keep=True)
+    ctx["records_sink"].deliver_output(paths.train_state_path, "train_state.json", keep=True)
     recorder.commit_generation(ci, state.rows_trained, record, preds)
     return time.time() - t_eval
 
@@ -242,7 +242,7 @@ def run(ctx: WorkerContext) -> int:
         model.parameters(), lr=params.lr, weight_decay=params.weight_decay
     )
 
-    recorder = TrainRecorder(ctx.sink)
+    recorder = TrainRecorder(ctx.records_sink)
     # Each loss term's weight in compute_loss's total, so the dashboard can stack
     # the weighted contributions.
     recorder.publish_run(
@@ -261,13 +261,13 @@ def run(ctx: WorkerContext) -> int:
     run_ctx = {
         "config": asdict(params),
         "data_sink": ctx.data_sink,
-        "sink": ctx.sink,
-        "read_controls": functools.partial(read_controls, ctx.sink),
+        "records_sink": ctx.records_sink,
+        "read_controls": functools.partial(read_controls, ctx.records_sink),
         "lane_eval": load_lane_eval(params, spatial_planes),
         "stats": WorkerStats(ctx),
     }
 
-    restore_from_sink(paths, ctx.sink)
+    restore_from_sink(paths, ctx.records_sink)
     state = checkpoint.resume(paths, model, optimizer, device)
     ensure_window(paths, ctx.data_sink, state.generation_index, params.window)
     lifecycle.write_train_state(paths, asdict(state))

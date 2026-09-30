@@ -4,7 +4,7 @@ subprocess of the dashboard.
 
 In a container, the image's bootstrap (docker-setup/worker/bootstrap.py)
 starts this after unpacking the bundle; for a local slot, the dashboard starts
-it directly. It handles the process concerns (environment, results sink,
+it directly. It handles the process concerns (environment, sinks,
 SIGTERM, the params/provenance record) and then hands off to the role's runner
 from the workload registry (scribblez/workloads/).
 
@@ -144,12 +144,12 @@ def main() -> int:
         params = params_mod.from_env(spec.params_cls)
         threads = int(os.environ.get("SCZ_THREADS", 0)) or default_thread_count()
         mount_root = Path(os.environ.get("SCZ_MOUNT_ROOT", DEFAULT_MOUNT_ROOT))
-        data_sink, sink = make_sinks(spec, tag, mount_root)
-        kind = os.environ.get("SCZ_WORKER_KIND") or sink.kind
+        data_sink, records_sink = make_sinks(spec, tag, mount_root)
+        kind = os.environ.get("SCZ_WORKER_KIND") or records_sink.kind
         if role.deps:
             workloads.resolve(role.deps)(params)
         wid = worker_id()
-        sink.push_json(
+        records_sink.push_json(
             f"params/{wid}.json",
             {
                 "worker_id": wid,
@@ -172,7 +172,7 @@ def main() -> int:
             threads=threads,
             max_cycles=int(os.environ.get("SCZ_MAX_CYCLES", 0)),
             data_sink=data_sink,
-            sink=sink,
+            records_sink=records_sink,
             provenance=provenance(),
             mount_root=mount_root,
         )
