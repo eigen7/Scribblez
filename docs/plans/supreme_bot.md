@@ -595,9 +595,16 @@ the budget being trained.
   The result is one noisy sample, useless as a label for ranking candidates
   but unbiased, and it keeps the reader's values calibrated to real outcomes.
 - **Labels, face-up leaves (M1a):** large-budget averaging simulations over
-  every shortlisted candidate, the target stream of
+  every candidate, the target stream of
   [sim_labeled_candidates.md](sim_labeled_candidates.md), with the opponent's
-  known leave seated as the survey sims already do.
+  known leave seated as the survey sims already do. They are **the same
+  estimator as the probes at a much larger budget**: the same policy, horizon
+  and leaf model. A label is then the infinite-budget limit of the probes, so
+  the test compares how well each arm reads the same kind of evidence, and
+  the rollout policy's bias is shared by both sides. The label sims record
+  every output the reader predicts: the win/draw/loss counts, the
+  score-difference mean and standard deviation, and each rollout's reply
+  footprint, which the survey does not log today.
 - **Labels, standard Scrabble (M1b):** the same sims with the opponent's full
   recorded rack seated ([Rack inference is a draw
   decision](#rack-inference-is-a-draw-decision)).
@@ -783,6 +790,133 @@ floor, and the headline curve is regret against budget. It must keep falling
 past the largest training budget. A curve that flattens there means
 SupremeBot has learned a budget-specific routine rather than how to search.
 
+## The transfer test (M1a)
+
+M1a's question is whether evidence about some moves improves predictions of
+**other** moves: sideways valuation, the flow the design exists for. A test
+that probes every candidate and scores the final pick mostly measures how
+well each move is estimated from its own probes, where shrinkage toward the
+prior is already strong, and dilutes the transfer. So M1a holds moves out.
+
+### Positions and candidates
+
+Positions come from face-up self-play, split into train and test by game.
+Each position gets K = 16 candidates, **stratified** so that transfer is
+tested between unlike moves, not only among near-duplicates of the favorite:
+
+| stratum | count | drawn from |
+|---|---|---|
+| top | 6 | the prior's ranks 1–10 |
+| middle | 5 | ranks about 11–100 |
+| exchanges | 3 | distinct keep-sets, when at least seven tiles are in the bag; otherwise more middle moves |
+| low | 2 | random from the rest |
+
+A few **coupled pairs** per position are injected among them, each sharing
+one factor and differing in another, so that what should transfer is known in
+advance:
+
+| coupling | shared | differs | tests |
+|---|---|---|---|
+| play the tiles vs exchange them (play AERT, exchange AERT) | the leave | the board, the score, the bag | leave transfer |
+| the same tiles in two different placements | the leave | the lane opened or used | board-region transfer |
+| the same lane, different tiles (RAT vs RATE) | the board region | the leave, by one tile | how a leave difference shifts a shared lane's value |
+| a move that blocks a hot lane vs a similar-scoring move that does not | most of the board | the lane | lane transfer, the QUIZ/ZIT kind in real positions |
+
+Couplings stay a minority of the candidates, so the reader cannot learn that
+pairs are always present. Every candidate is labeled ([The reader](#the-reader)).
+
+### The held-out design
+
+In each position a subset H of one to four candidates, drawn from every
+stratum, is **held out**: the context holds probes of the other candidates
+only, round-robin, with common random numbers and ply-one options as
+everywhere. The target is each held-out move's label. A graded variant gives a
+held-out move one to five probes of its own, to test whether the other moves'
+evidence sharpens a thin estimate. Rows are subset-assembled as in
+[The reader](#the-reader), and every arm sees identical records.
+
+### Arms
+
+Each arm rules out a cheaper explanation of any gain:
+
+| arm | predicts the held-out move as | beating it shows |
+|---|---|---|
+| prior | the prior's prediction | the evidence helps at all |
+| common shift | the prior plus the probed moves' average residual (probe mean minus prior) | more than "this position is worse than the prior thinks, for every move" |
+| similarity-weighted shift | the prior plus the probed moves' residuals weighted by similarity to it (same leave, footprint overlap, same lane, score), weights fitted on training data | learned transfer beats a hand-built rule |
+| summary-token model | the evidence-loop model ([sim_residual_feedback.md](sim_residual_feedback.md)), one summary token per probed move | the content of probes (the rack, the reply, the lane) matters, not only their outcomes |
+| shrinkage (graded variant only) | the prior and the move's own probe mean, combined with fitted variances | the other moves' evidence adds to the move's own |
+| reader | μ, and the other heads | |
+
+### Metrics
+
+**Primary: the plain error on the held-out move, per output head.** It is
+dense, since every held-out move in every position contributes, and it shows
+what transferred:
+
+- win/draw/loss: cross-entropy against the label's empirical distribution;
+- score difference: Gaussian negative log-likelihood of the label's mean and
+  standard deviation;
+- footprints: cross-entropy against the label rollouts' reply footprint
+  distribution. "The opponent bingos in this lane" is a footprint fact, so
+  this head may show transfer most directly.
+
+**Centered and decomposed.** Plain error rewards a common-mode shift: if the
+probes show that every move in a position is worse than the prior thinks,
+every held-out estimate improves with no move-specific transfer at all. That
+shift is a **row effect** in the matrix of positions by candidates, so it is
+removed per position, not across the test set. For the scalar heads (the
+expected score W + D/2 from the win/draw/loss head, the score-difference
+mean, and the log of its standard deviation), labels and predictions are
+centered on their position's mean over its K candidates, and each arm's
+squared error splits exactly into:
+
+- a **row part**: how well the arm got the position's overall offset;
+- a **within-row part**: how well it got the move relative to its siblings.
+
+The common-shift arm can gain only in the row part. **The within-row error of
+the expected score is the headline number**: it is move-specific transfer and
+nothing else. Footprints have a common mode too, a lane the opponent uses
+whatever we play, but centering a distribution per square is awkward, so for
+that head the common-shift arm is the control.
+
+Every metric is reported per stratum, since low-ranked moves are easy and
+would dominate a pooled average; and against the number of probes on the
+other moves, with paired bootstrap intervals over positions. Label noise adds
+the same floor to every arm, so it does not bias the comparison, but it sets
+the smallest detectable difference; the pre-M0 noise measurement sizes the
+test from that.
+
+**Secondary readouts:** how often a held-out move that truly beats every
+probed move is ranked above them, and how often one is ranked there wrongly;
+the error in the held-out move's gap to the best probed move; and the regret
+of the final pick against budget, with every candidate probed.
+
+### Controls
+
+- **Partner ablation.** For a coupled pair with one move held out, compare
+  the held-out move's error in two contexts identical but for one thing: its
+  partner's probes, or the same number of probes of an uncoupled move. The
+  difference is the coupling transfer, measured causally and per coupling
+  kind. It should appear in the within-row part.
+- **Shuffled evidence.** A context from a different position must leave the
+  reader at the prior: transfer must not invent information.
+- **Similar and dissimilar held-out moves.** Gains should concentrate where the
+  held-out move shares a lane, footprint or leave with probed moves, and be
+  near zero where it shares nothing.
+- **Synthetic single-fact tests,** the clean-room version of the same ability:
+  QUIZETH to QUIZATH, the no-T control, a near miss (one tile short) and a
+  blank-bearing case, built as production records with option tokens.
+
+### The kill criterion
+
+The reader must beat the similarity-weighted shift and the summary-token
+model on the headline, the within-row error of the held-out move's expected
+score, at matched probe counts; show a positive partner-ablation effect for
+the play-versus-exchange coupling; keep the shuffled control at the prior;
+and pass the synthetic tests. Otherwise per-probe reading is not buying
+transfer, and the project stops.
+
 ## Cost
 
 Reading the context is cheap. Here is an order-of-magnitude estimate under
@@ -879,13 +1013,16 @@ prior's quality, not improvement over it. The budget curve is the guard.
 
 **Transfer can go wrong in both directions.** The reader may fail to transfer
 what should transfer (ZIT to QUIZATH), or transfer what should not (ZIT to a
-rack without a T). Both are measured directly at M1 with synthetic contexts
-built to contain exactly one such fact.
+rack without a T). Both are measured directly at M1, in real positions by the
+partner ablation and the similar-versus-dissimilar split, and in synthetic
+contexts built to contain exactly one such fact.
 
-**A reader can beat averaging without transferring anything.** Shrinking each
-candidate's probe mean toward its prior already beats plain averaging at small
-budgets. So M1's kill criterion is measured against a shrinkage estimator, not
-against averaging.
+**A reader can look good without transferring anything.** Shrinking each
+candidate's probe mean toward its prior already beats plain averaging, and a
+common-mode shift improves every held-out estimate in a position at once. So
+M1's kill criterion holds moves out, scores the within-row error, and
+compares against a hand-built similarity-weighted shift, not against
+averaging.
 
 **Throughput.** If full move generation, the round trips and the deep-node
 boards hold probes per second far below hasty rollouts even at ply-one scope,
@@ -938,31 +1075,18 @@ core has been shown to work.
 - **M1a: learned reader, fixed writer, face-up leaves. The kill gate.** It
   uses the existing face-up prior, so it waits on no retraining. The writer is
   hasty at every node, with draws from the uninformed prior, which is exact
-  under face-up leaves. The reader is measured on **identical records**:
-  every arm values the same probes, so the comparison isolates the valuation.
-  The report is regret against budget, in three arms:
-
-  | arm | valuation |
-  |---|---|
-  | reader | learned |
-  | shrinkage | per candidate: the prior and the probe mean, combined with fitted variances |
-  | averaging | mean per candidate |
-
-  Ply-one options are recorded by the static-equity rule
-  ([Move lists](#move-lists-local-and-global)). Beside the arms run the
-  synthetic single-fact transfer tests, built as production records with
-  option tokens: QUIZETH to QUIZATH, the no-T control, a near miss (one tile
-  short) and a blank-bearing case.
-  *Kill criterion:* if the reader does not beat shrinkage on identical records
-  at matched budgets, or fails the transfer tests, transfer is not being
-  learned: stop. If it passes, match play against BestBot under face-up
-  leaves.
+  under face-up leaves, and ply-one options by the static-equity rule
+  ([Move lists](#move-lists-local-and-global)). The test and its kill
+  criterion are [the transfer test](#the-transfer-test-m1a): held-out moves,
+  stratified candidates with injected couplings, and the within-row error of
+  the held-out move as the headline. If the reader passes, match play against
+  BestBot under face-up leaves.
   **The size sweep.** Readers at four sizes across the range in [Cost](#cost)
   (about 1M, 5M, 25M and 100M parameters), each on two corpus sizes, report
-  regret at fixed budgets. If regret keeps falling with size, capacity
-  limits; if it falls only with data, labels do. The sweep is cheap, since
-  every reader trains on the same records, and it sets the network size and
-  the KV strategy together.
+  the headline error. If it keeps falling with size, capacity limits; if it
+  falls only with data, labels do. The sweep is cheap, since every reader
+  trains on the same records, and it sets the network size and the KV
+  strategy together.
 - **M2: the known positions** that exist under face-up leaves, among them the
   ACETA family in `positions/NWL23/interesting-positions/`.
 - **M3a: learned move choices.** The serving runtime ([Cost](#cost)), then
@@ -983,20 +1107,15 @@ core has been shown to work.
 - **From now, in parallel: the standard-Scrabble prior.** The teacher,
   student and move proposal model retrained with `face_up_leaves` off. This
   is new tags, not new code, and it is ready long before the track needs it.
-- **M1b: the reader in standard Scrabble.** It needs the standard-Scrabble
-  prior, true-rack labels and the opponent-history tokens. It adds the
-  inference arms:
-
-  | arm | valuation | draws |
-  |---|---|---|
-  | reader | learned, with opponent history | uninformed prior |
-  | reader, history ablated | learned, without opponent history | uninformed prior |
-  | shrinkage | as in M1a | uninformed prior |
-  | shrinkage with inference | as in M1a | the ported posterior ([belief/rack_inference.h](../../engine/include/belief/rack_inference.h)) |
-
+- **M1b: the reader in standard Scrabble.** The transfer test repeated with
+  hidden leaves. It needs the standard-Scrabble prior, true-rack labels and
+  the opponent-history tokens, and it adds two arms: the reader with the
+  history tokens ablated, and the similarity-weighted shift with draws from
+  the ported posterior
+  ([belief/rack_inference.h](../../engine/include/belief/rack_inference.h)).
   The full reader against the ablated one measures the implicit inference,
-  and the last arm is what that inference has to match. If the reader passes,
-  match play against BestBot.
+  and the posterior arm is what that inference has to match. If the reader
+  passes, match play against BestBot.
 - **M3b: information sets.** Reply-searched labels with our leave drawn from
   the opponent's belief, gated by the paired-world test; then opponent
   contexts ([Standard Scrabble: a context per opponent
@@ -1006,7 +1125,7 @@ core has been shown to work.
   position joins the known set here, since its read depends on hidden leaves.
 - **M4: learned draws.** Proposal distributions at chance nodes: the rack
   inference ([Rack inference is a draw decision](#rack-inference-is-a-draw-decision)),
-  measured against M1b's shrinkage-with-inference arm. It comes after learned
+  measured against M1b's posterior arm. It comes after learned
   moves because it distorts the reader's input distribution the most.
 
 ## Open questions
@@ -1036,7 +1155,7 @@ core has been shown to work.
   scheme so far. Carrying over the probes that remain legal is deferred until a
   case needs it.
 - **The reader's implicit posterior before M4:** how close it comes to the
-  ported posterior, M1b's fourth arm, and so how much M4 has to add.
+  ported posterior, M1b's posterior arm, and so how much M4 has to add.
 
 ## Review record
 

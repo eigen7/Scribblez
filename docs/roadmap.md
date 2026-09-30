@@ -90,10 +90,12 @@ The face-up track:
    reply-searched labels.
 2. **M0: the probe record.** Per-step logging with tick ids, model and
    lexicon versions, deferred draws, and the token encoder.
-3. **M1a: a learned reader over fixed probes.** Against shrinkage toward the
-   prior and plain averaging on identical records, with synthetic single-fact
-   transfer tests. The kill gate. A size sweep of readers here sets the
-   network size.
+3. **M1a: a learned reader over fixed probes, the kill gate.** The transfer
+   test: moves are held out, and the reader must predict them from probes of
+   other moves (stratified candidates, injected couplings such as a play
+   against the exchange of the same tiles) better than hand-built transfer,
+   scored on the error that a common-mode shift cannot explain. A size sweep
+   of readers here sets the network size.
 4. **M2: the known positions** that exist under face-up leaves.
 5. **M3a: learned move choices:** the KV-cached serving runtime,
    reply-searched labels, then the writer in stages: a supervised gain head
@@ -240,7 +242,7 @@ evaluation test sets samples the opponent's leave from this posterior
 ([sim/monte_carlo_sim.h](../engine/include/sim/monte_carlo_sim.h)), at the
 default (Macondo) temperature. Nothing in play uses it.
 
-Its role now is the baseline: M1b's shrinkage-with-inference arm samples its
+Its role now is the baseline: M1b's posterior arm samples its
 draws from this posterior, and M4's learned draws are measured against it.
 Beyond both lies the learned belief system of [design.md](design.md) §3, which
 SupremeBot replaces with implicit inference.
