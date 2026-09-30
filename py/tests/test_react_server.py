@@ -1,5 +1,7 @@
-"""Test the React dashboard launcher's port reclamation (mirrors the C++ web
-server: a stale dashboard holding the port is killed before relaunch)."""
+"""Test the React dashboard launcher: port reclamation (mirrors the C++ web
+server: a stale dashboard holding the port is killed before relaunch), and a
+stop that returns only once its processes are gone, so a restart never races
+the dashboard it replaces."""
 
 import shutil
 import subprocess
@@ -9,12 +11,11 @@ import time
 import pytest
 from scribblez.dashboard import react_server
 
-# Generous ceilings on how long the listener takes to come up and to die: both
-# are normally reached in milliseconds, so waiting on the condition rather than
+# A generous ceiling on how long the listener takes to come up: it is normally
+# reached in milliseconds, so waiting on the condition rather than
 # sleeping a fixed span costs nothing when it holds and still fails the test
 # (rather than hanging) when it does not.
 _APPEAR_TIMEOUT = 5.0
-_VANISH_TIMEOUT = 5.0
 
 
 def _wait_until(predicate, timeout: float) -> bool:
@@ -53,6 +54,38 @@ def test_reclaim_port_kills_listener():
             lambda: holder.pid in react_server._listening_pids(port), _APPEAR_TIMEOUT
         )
         react_server.reclaim_port(port)
-        assert _wait_until(lambda: react_server._listening_pids(port) == [], _VANISH_TIMEOUT)
+        assert react_server._listening_pids(port) == []  # free by the time it returns
     finally:
         holder.kill()
+
+
+# A process that answers SIGTERM by finishing what it is doing for a second,
+# as the API finishes its step in flight, and one that never exits on it.
+_SLOW_TO_STOP = (
+    "import signal,sys,time;"
+    "signal.signal(signal.SIGTERM, lambda *a: (time.sleep(1), sys.exit(0)));"
+    "print('ready',flush=True);time.sleep(30)"
+)
+_DEAF_TO_STOP = (
+    "import signal,time;signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+    "print('ready',flush=True);time.sleep(30)"
+)
+
+
+def _started(code: str) -> subprocess.Popen:
+    p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    assert p.stdout.readline().strip() == "ready"  # its handler is installed
+    return p
+
+
+def test_a_stop_returns_only_once_the_process_has_exited():
+    p = _started(_SLOW_TO_STOP)
+    react_server._stop([p], {p.pid: "The API"})
+    assert p.returncode == 0  # it finished and exited; it was not killed
+
+
+def test_a_stop_kills_a_process_that_overstays(monkeypatch):
+    monkeypatch.setattr(react_server, "STOP_SECONDS", 0.5)
+    p = _started(_DEAF_TO_STOP)
+    react_server._stop([p], {p.pid: "The API"})
+    assert p.returncode == -9
