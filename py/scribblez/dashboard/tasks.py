@@ -316,7 +316,10 @@ class _TaskEntry:
     def _read(self, stamp: int) -> TaskRecord | None:
         if not stamp:
             return None
-        frozen = json.loads(self.path.read_text())
+        try:
+            frozen = json.loads(self.path.read_text())
+        except FileNotFoundError:
+            return None  # deleted since the stat: a status read racing a Delete
         body = self._control.get("task", self._key)
         control = json.loads(body) if body is not None else {}
         return _decode_task({**control, **{f: frozen[f] for f in FROZEN_FIELDS if f in frozen}})

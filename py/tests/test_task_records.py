@@ -121,3 +121,14 @@ def test_a_task_json_from_before_the_control_store_is_imported_once(store, spec)
     path.write_text(json.dumps({**old, "retired_spend": 9.0}))  # a stale copy restored
     assert store.import_json() == []
     assert tasks.TaskStore(store.mount_root).load(spec, "t").retired_spend == 4.0
+
+
+def test_a_tag_deleted_while_it_is_read_reads_as_gone(store, spec):
+    """A status read lists the tag dirs, then loads each; a Delete landing in
+    between leaves a task.json that was there at the stat and is gone at the
+    read. The read sees no tag, rather than failing the whole page."""
+    _save(store, spec)
+    entry = store._entry(spec, "t")
+    stamp = tasks._mtime(entry.path)
+    entry.path.unlink()
+    assert entry._read(stamp) is None
