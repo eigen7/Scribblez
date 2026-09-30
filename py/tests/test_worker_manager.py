@@ -479,11 +479,11 @@ def test_a_dispatch_role_on_a_rented_machine_is_collected_over_ssh(rented, manag
     match-eval slot keeps them there for the ssh pull while the machine's other
     slots deliver through the bucket."""
     match = manager.add_ssh(_GpuRoles(), task, "match_eval", machine="m1", threads=None)
-    assert manager._slot_sink(_GpuRoles(), task, match) == "local"
+    assert manager._slot_records_sink(_GpuRoles(), task, match) == "local"
     gen = tasks.WorkerRecord(
         worker_id="g", role="generate", kind="ssh", desired_state="paused", machine="m1"
     )
-    assert manager._slot_sink(POSITION_EVAL_SPEC, task, gen) == "r2"
+    assert manager._slot_records_sink(POSITION_EVAL_SPEC, task, gen) == "r2"
 
 
 def _dispatch_task(train_finished: bool) -> tasks.TaskRecord:
@@ -1858,8 +1858,8 @@ def test_an_ssh_trainer_delivers_through_the_bucket_and_a_generator_does_not(man
     on the same machine hands its chunks over the control link."""
     spec = workloads.get("position_eval")
     task = _all_ssh_task()
-    assert manager._slot_sink(spec, task, task.worker("g")) == "local"
-    assert manager._slot_sink(spec, task, task.worker("tr")) == "r2"
+    assert manager._slot_records_sink(spec, task, task.worker("g")) == "local"
+    assert manager._slot_records_sink(spec, task, task.worker("tr")) == "r2"
     assert manager._bucket_trainer(spec, task)
     assert not manager._bucket_trainer(spec, _train_task(kinds=("local",)))
 
@@ -1872,8 +1872,8 @@ def test_a_generator_on_a_rented_machine_delivers_through_the_bucket(rented, man
     manager.add_machine(spec, task, "laptop", "u@h")
     on_rented = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
     on_laptop = manager.add_ssh(spec, task, "generate", machine="laptop", threads=None)
-    assert manager._slot_sink(spec, task, on_rented) == "r2"
-    assert manager._slot_sink(spec, task, on_laptop) == "local"
+    assert manager._slot_records_sink(spec, task, on_rented) == "r2"
+    assert manager._slot_records_sink(spec, task, on_laptop) == "local"
     assert manager._has_bucket_slots(spec, task)
 
 
@@ -1955,7 +1955,7 @@ def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
             pass
 
         def run_container(self, name, image, env, *, gpus=False):
-            envs[name] = (image, env["SCZ_SINK"], gpus)
+            envs[name] = (image, env["SCZ_SINK"], gpus, env.get("SCZ_DATA_SINK"))
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
@@ -1964,8 +1964,37 @@ def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
     for w in task.workers:
         manager._run_ssh_container(spec, task, w)
     by_role = {k.rsplit("-", 1)[-1]: v for k, v in envs.items()}
-    assert by_role["tr"] == ("repo/worker:latest-torch", "r2", True)
-    assert by_role["g"] == ("repo/worker", "local", False)
+    # The data sink matches the records sink, so it is left unset: a bundle
+    # predating SCZ_DATA_SINK would refuse to start on it.
+    assert by_role["tr"] == ("repo/worker:latest-torch", "r2", True, None)
+    assert by_role["g"] == ("repo/worker", "local", False, None)
+
+
+def test_a_data_sink_differing_from_the_records_sink_reaches_the_container(
+    manager, tmp_path, monkeypatch
+):
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    task.bundle_id, task.bundle_archs = "b1", ["znver3"]
+    envs = {}
+
+    class _Recording(_FakeSshMachine):
+        def pull_image(self, image):
+            pass
+
+        def run_container(self, name, image, env, *, gpus=False):
+            envs[name] = (env["SCZ_SINK"], env.get("SCZ_DATA_SINK"))
+
+    monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    monkeypatch.setattr(WorkerManager, "_slot_data_sink", lambda self, spec, task, w: "r2")
+    for w in task.workers:
+        manager._run_ssh_container(spec, task, w)
+    by_role = {k.rsplit("-", 1)[-1]: v for k, v in envs.items()}
+    assert by_role["tr"] == ("r2", None)
+    assert by_role["g"] == ("local", "r2")
 
 
 def test_reconcile_collects_from_the_generator_but_not_the_trainer(manager, tmp_path, monkeypatch):
@@ -2003,7 +2032,7 @@ def _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink: str):
         "_role_inputs",
         lambda spec, role, params, mount_root: {"inputs/teacher.onnx": src},
     )
-    monkeypatch.setattr(manager, "_slot_sink", lambda spec, task, w: sink)
+    monkeypatch.setattr(manager, "_slot_records_sink", lambda spec, task, w: sink)
     # The bundle is someone else's concern here: pinned, never built.
     monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, *a, **k: "b1")
     w = _starting_ssh_slot(manager, spec, task, monkeypatch)

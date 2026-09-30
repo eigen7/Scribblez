@@ -669,7 +669,8 @@ def _ctx(tmp_path, tag, params):
         worker_id="local-0",
         threads=2,
         max_cycles=0,
-        sink=LocalSink(paths.root),
+        data_sink=LocalSink(paths.root),
+        records_sink=LocalSink(paths.root),
         mount_root=tmp_path,
     )
     return SimpleNamespace(ctx=ctx, paths=paths)

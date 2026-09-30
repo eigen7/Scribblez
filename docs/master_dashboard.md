@@ -390,10 +390,11 @@ launches processes. The browser reaches it through the Vite dev server's
 proxy, which the dev-container gateway serves.
 
 The worker entrypoint (`py/cloud/worker_entrypoint.py`) is the one worker loop
-for both kinds and every role. It is parameterized by a results sink (bucket
-or local; `py/cloud/sinks.py`) and dispatches to the role's runner from the
+for both kinds and every role. It is parameterized by two sinks, each bucket
+or local (`py/cloud/sinks.py`): a data sink for the tag's `data/` store and a
+records sink for everything else. It dispatches to the role's runner from the
 workload registry. Runners cycle in a private per-worker work dir and deliver
-whole output files through the sink.
+whole output files through the sinks.
 
 ## Not yet built
 

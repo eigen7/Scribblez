@@ -143,7 +143,8 @@ def _ctx(mount_root: Path, sink=None, **param_overrides) -> WorkerContext:
         worker_id="w0",
         threads=2,
         max_cycles=1,
-        sink=sink,
+        data_sink=sink,
+        records_sink=sink,
         mount_root=mount_root,
     )
 

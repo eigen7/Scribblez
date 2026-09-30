@@ -1251,6 +1251,23 @@ class _DriveSink(LocalSink):
         return None
 
 
+# Distinct instances that log which sink each operation went through, so a
+# call routed to the wrong one (the two share a root here) fails the run.
+_LOGGED = ("fetch_data_files", "remove_outputs", "deliver_output", "fetch_file")
+
+
+class _LoggingSink(_DriveSink):
+    def __init__(self, root):
+        super().__init__(root)
+        self.calls = set()
+
+    def __getattribute__(self, name):
+        if name in _LOGGED:
+            object.__getattribute__(self, "calls").add(name)
+        return object.__getattribute__(self, name)
+
+
+data_sink, records_sink = _LoggingSink(root), _LoggingSink(root)
 paths = SimpleNamespace(
     root=root,
     data_dir=root / "data",
@@ -1264,11 +1281,15 @@ paths = SimpleNamespace(
 )
 ctx = SimpleNamespace(
     params=params, tag="t", worker_id="w0", threads=1, kind="local",
-    sink=_DriveSink(root),
+    data_sink=data_sink, records_sink=records_sink,
     role=SimpleNamespace(name="train"), provenance={},
     tag_paths=lambda: paths,
 )
 assert trainer.run(ctx) == 0, "run() did not exit cleanly"
+# The pair store (pulled, then its training pairs retired) is data; the
+# checkpoint restore and the exports are records.
+assert data_sink.calls == {"fetch_data_files", "remove_outputs"}, data_sink.calls
+assert records_sink.calls == {"fetch_file", "deliver_output"}, records_sink.calls
 
 # The finished run retired its training pairs and kept the held-out (swept)
 # ones; a resumed run learns it is finished from the checkpoint and exits 0.

@@ -163,7 +163,8 @@ The `train` role runs on the `ssh` kind; nothing in the trainer changed, and
 neither `cloud_sync` nor the ingest tick knows which machine the records came
 from.
 
-One predicate, `_slot_sink(spec, task, w)`, decides where a slot delivers:
+One predicate, `_slot_records_sink(spec, task, w)`, decides where a slot
+delivers:
 
 - **Through the bucket** for a slot whose role has an `ingest` hook (a
   trainer), wherever it runs; and for every slot on a rented machine, since
@@ -173,13 +174,22 @@ One predicate, `_slot_sink(spec, task, w)`, decides where a slot delivers:
   operator's own machine.
 - **Locally** for a local slot.
 
-Everything the controller does for a bucket-delivering slot keys off this
-predicate, not off the worker kind: whether the sync watcher runs, the
-`--trainer-outputs` flag and the controls push, and the scheduler's publish
-and mirror hooks. The container's `SCZ_SINK` comes from the same predicate,
-and ssh collection skips a bucket-delivering slot, whose outputs are not on
-the machine to collect. Written in terms of roles and machines rather than
-kinds, the predicate survived the deletion of `cloud`.
+A worker has two sinks (`py/cloud/sinks.py`): a data sink for the tag's
+`data/` store and a records sink for everything else. `_slot_data_sink`
+chooses the first and today always returns the records sink's answer. The
+container gets `SCZ_SINK` from `_slot_records_sink`, and `SCZ_DATA_SINK` only
+when the two differ.
+
+Everything the controller does for a bucket-delivering slot keys off these
+predicates, not off the worker kind:
+- whether the sync watcher runs: either sink is the bucket;
+- the scheduler's publish and mirror hooks: the data sink;
+- the `--trainer-outputs` flag and the controls push: the records sink;
+- ssh collection: it skips a slot whose two sinks are both the bucket, since
+  nothing it delivers is on the machine to collect.
+
+Written in terms of roles and machines rather than kinds, the predicates
+survived the deletion of `cloud`.
 
 ## One-time setup (the operator, once)
 

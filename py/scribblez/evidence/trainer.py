@@ -503,7 +503,7 @@ def run(ctx: WorkerContext) -> int:
     n_train = _report_model(model, params)
     optimizer = build_optimizer(model, params)
 
-    recorder = TrainRecorder(ctx.sink)
+    recorder = TrainRecorder(ctx.records_sink)
     recorder.publish_run(
         ctx.tag, asdict(params), n_train, _loss_weights(params), default_controls()
     )

@@ -14,7 +14,7 @@ either machine.
 
 An ssh slot here may be on a registered or a rented machine: a dispatch-driven
 role's container keeps its results for the reconcile pass to pull over ssh
-even where other roles deliver through the bucket (workers._slot_sink).
+even where other roles deliver through the bucket (workers._slot_records_sink).
 """
 
 import os

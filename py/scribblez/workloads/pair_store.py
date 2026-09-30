@@ -67,13 +67,18 @@ def run_pair_generate(
     stats = WorkerStats(ctx)
 
     def held() -> int:
-        return ctx.sink.count_data_files(dest_dir, sidecar_ext)
+        return ctx.data_sink.count_data_files(dest_dir, sidecar_ext)
 
-    print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {ctx.params}")
+    print(
+        f"worker {ctx.worker_id} ({ctx.data_sink.kind}): "
+        f"generating tag '{ctx.tag}' with {ctx.params}"
+    )
 
     cycle = 0
     try:
-        deliver_pairs(ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts)
+        deliver_pairs(
+            ctx.data_sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts
+        )
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
             if params_mod.reached(held(), target_pairs):
                 print(f"target of {target_pairs} pair(s) reached; exiting")
@@ -83,7 +88,7 @@ def run_pair_generate(
             if returncode != 0:
                 return returncode
             moved, nbytes, secs = deliver_pairs(
-                ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts
+                ctx.data_sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts
             )
             stats.cycle_done({**phases, "upload_s": secs}, units=moved, nbytes=nbytes)
             bounded = not params_mod.unbounded(target_pairs)
@@ -91,7 +96,7 @@ def run_pair_generate(
             print(f"cycle {cycle}: {moved} pair(s) delivered{in_store}")
     except WorkerStopped:
         moved, _, _ = deliver_pairs(
-            ctx.sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts
+            ctx.data_sink, work_dir, ctx.worker_id, sidecar_ext, dest_dir, extra_sidecar_exts
         )
         print(f"SIGTERM: flushed {moved} completed pair(s); exiting")
     return 0

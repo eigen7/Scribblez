@@ -40,6 +40,7 @@ def main() -> int:
 
     os.environ["SCZ_DEVICE"] = args.device
     role = spec.role("train")
+    sink = LocalSink(spec.data_dir(args.tag, args.mount_root))
     ctx = WorkerContext(
         spec=spec,
         role=role,
@@ -48,7 +49,8 @@ def main() -> int:
         worker_id=f"cli-{socket.gethostname()}",
         threads=0,
         max_cycles=0,
-        sink=LocalSink(spec.data_dir(args.tag, args.mount_root)),
+        data_sink=sink,
+        records_sink=sink,
         mount_root=args.mount_root,
     )
     return workloads.resolve(role.runner)(ctx)

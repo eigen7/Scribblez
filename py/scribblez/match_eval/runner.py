@@ -116,7 +116,7 @@ def _deliver(ctx: WorkerContext, record: dict) -> int:
     path = ctx.tag_paths().work_dir(ctx.worker_id) / f"gen_{gen:06d}-{ctx.worker_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2) + "\n")
-    return ctx.sink.deliver(path, f"{MATCH_RESULTS_DIR}/{path.name}")
+    return ctx.data_sink.deliver(path, f"{MATCH_RESULTS_DIR}/{path.name}")
 
 
 def run(ctx: WorkerContext) -> int:

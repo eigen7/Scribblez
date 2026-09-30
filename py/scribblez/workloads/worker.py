@@ -51,8 +51,8 @@ class WorkerStats:
     """
 
     def __init__(self, ctx):
-        self._sink = ctx.sink
-        prior = ctx.sink.read_json(stats_rel_path(ctx.worker_id)) or {}
+        self._sink = ctx.records_sink
+        prior = ctx.records_sink.read_json(stats_rel_path(ctx.worker_id)) or {}
         now = time.time()
         self._record = {
             "worker_id": ctx.worker_id,
