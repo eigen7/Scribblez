@@ -30,12 +30,12 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
 
 from cloud.r2 import bucket_path, rclone
 from cloud.sinks import r2_from_env
 
 from scribblez.paths import SCHEDULER_STATE_REL, TagPaths
+from scribblez.workloads.base import SchedulerHooks
 
 from . import scheduler
 
@@ -94,9 +94,11 @@ class DataHome:
         self._chunk_games = chunk_games
         self._gate: str | None = None
         self._error: Exception | None = None
-        # The part of workloads.SchedulerHooks a tick uses. Nothing is mirrored
-        # or published: the bucket holds no copy of this tree.
-        self._hooks = SimpleNamespace(paths=paths, gate=self._set_gate, mirror=None, publish=None)
+        # Nothing is mirrored or published: the bucket holds no copy of this
+        # tree. Finishing the generators stays the controller's (tick_for_task).
+        self._hooks = SchedulerHooks(
+            paths=paths, gate=self._set_gate, finish=_no_finish, mirror=None, publish=None
+        )
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
@@ -167,3 +169,7 @@ class DataHome:
             self._records.push_json(SCHEDULER_STATE_REL, record)
         except AssertionError as e:  # a bucket sink's failed upload; retried next pass
             print(f"data home: publishing the scheduler state failed: {e}")
+
+
+def _no_finish(role: str):
+    raise AssertionError("a data home never finishes a role; the controller does")
