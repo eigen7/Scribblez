@@ -1,6 +1,7 @@
 """What the per-task sync pulls (py/scripts/cloud_sync.py), with and without a
 trainer delivering through the bucket."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -27,7 +28,9 @@ class _Rclone:
 @pytest.fixture
 def spec(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        workloads.WorkloadSpec, "paths", lambda self, tag: TagPaths(tag, self.name, tmp_path)
+        workloads.WorkloadSpec,
+        "paths",
+        lambda self, tag, mount_root=None: TagPaths(tag, self.name, tmp_path),
     )
     return workloads.get("position_eval")
 
@@ -43,6 +46,23 @@ def test_a_generator_only_tag_pulls_staging_stats_and_params(spec, monkeypatch):
     root = spec.paths("t").root
     assert _pulled(rc) == [
         ("copy", "r2:b/position_eval/t/staging", str(root / "data" / "staging")),
+        ("copy", "r2:b/position_eval/t/stats", str(root / "stats")),
+        ("copy", "r2:b/position_eval/t/params", str(root / "params")),
+    ]
+
+
+def test_without_data_a_data_homes_staging_is_left_in_the_bucket(spec, monkeypatch):
+    """A data home moves bucket staging chunks in itself; a pull here would
+    bring back chunks it already assigned. The records still come down."""
+    rc = _Rclone()
+    monkeypatch.setattr(cloud_sync, "rclone", rc)
+    monkeypatch.setattr(cloud_sync, "load_credentials", lambda: SimpleNamespace(r2=R2))
+    monkeypatch.setattr(
+        sys, "argv", ["cloud_sync", "--workload", "position_eval", "-t", "t", "--no-data"]
+    )
+    assert cloud_sync.main() == 0
+    root = spec.paths("t").root
+    assert _pulled(rc) == [
         ("copy", "r2:b/position_eval/t/stats", str(root / "stats")),
         ("copy", "r2:b/position_eval/t/params", str(root / "params")),
     ]

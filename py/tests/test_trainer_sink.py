@@ -179,6 +179,21 @@ def test_wait_pulls_the_generation_through_the_sink(paths, monkeypatch):
     assert sink.fetched == []
 
 
+def test_a_failed_data_home_ends_the_wait(paths, monkeypatch):
+    """Nothing would ever complete the generation, so the trainer must fail
+    rather than wait forever with its generators parked."""
+    pytest.importorskip("torch")
+    from scribblez.position_eval import trainer
+
+    class _DeadHome:
+        def check(self):
+            raise RuntimeError("data home died")
+
+    monkeypatch.setattr(trainer.time, "sleep", lambda _: pytest.fail("waited on a dead home"))
+    with pytest.raises(RuntimeError, match="data home died"):
+        trainer.wait_for_generation(paths, 4, _FakeSink(), home=_DeadHome())
+
+
 def test_a_fresh_machine_restores_and_takes_the_window(paths):
     pytest.importorskip("torch")
     from scribblez.position_eval import trainer
