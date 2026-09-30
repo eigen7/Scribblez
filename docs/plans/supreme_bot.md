@@ -575,8 +575,25 @@ the budget being trained.
 
 - Pick queries are applied at sampled leaf positions, so one sequence
   supervises the reader at many budgets from one probe to the full record.
-  The loss is value regression plus a pairwise ranking term, and the regret
-  of the argmax is the headline metric.
+  The regret of the argmax is the headline metric.
+- **The pick output is a mean and a spread.** For each candidate the pick
+  query returns μ, its estimate of the label, and σ, its uncertainty. The
+  loss is the Gaussian negative log-likelihood of the label, so σ learns the
+  reader's typical error in situations like this one: large where the context
+  holds weak evidence about a move, shrinking as probes accumulate. The
+  labels' own variance, known from the noise-floor estimate, is added to σ²
+  inside the loss, so σ measures only what more probes can reduce. The writer
+  needs that ([The writer](#the-writer)). The teacher's score-difference head
+  is the same construction.
+- **A ranking term, weighted by the label gap.** A pairwise term sharpens the
+  order of close candidates, but each pair is weighted by its label gap, and
+  pairs closer than the label noise floor do not count. An unweighted term
+  would force an order between tied moves, or between moves whose labels
+  differ only by noise.
+- **A game-result anchor.** The reader's value for the move actually played
+  is also trained, as an auxiliary, to predict that game's final result.
+  The result is one noisy sample, useless as a label for ranking candidates
+  but unbiased, and it keeps the reader's values calibrated to real outcomes.
 - **Labels, face-up leaves (M1a):** large-budget averaging simulations over
   every shortlisted candidate, the target stream of
   [sim_labeled_candidates.md](sim_labeled_candidates.md), with the opponent's
@@ -588,7 +605,23 @@ the budget being trained.
   hasty would not play
   ([simulation_information_flow.md](../simulation_information_flow.md#what-the-sideways-flows-need-from-the-model)).
   So they can teach the reader to match a large-budget averager at a fraction
-  of its budget, but not to beat it.
+  of its budget, but not to beat it. They are the bootstrap.
+- **Labels, the loop (M5 onward):** a SupremeBot search at many times the
+  training budget, whose probes are played by SupremeBot's writer and end at
+  a leaf model retrained on SupremeBot's own self-play results. This is the
+  AlphaZero loop: game results anchor the value model, and search makes the
+  labels. Each generation's labels then carry only the leaf model's error,
+  and the next generation's game results correct it.
+
+**Why not label with game results directly.** A game played out by
+SupremeBot has no rollout-policy bias, but it cannot be the label. It values
+only the move that was played, while the reader and the writer's reward need
+a value for every candidate the reader might pick. It is one win-or-loss
+sample with a standard deviation near 0.5: telling apart two moves 0.02
+apart at one standard error takes 625 games per candidate. And it spans
+every later draw and decision in the game. The unbiased label with
+counterfactuals would be a sim whose rollouts are played by SupremeBot
+itself, which is unaffordable; the loop above approximates it.
 - **Subset assembly** is valid while the writer is fixed: probes are then
   independent given the root, so any subset of a turn's probes, in any order,
   is a context the deployed agent could have produced. This multiplies rows,
@@ -643,37 +676,104 @@ its prior is frozen; records made earlier are for pipeline shakeout only.
 
 ### The writer
 
-- **Start fixed.** At M1 the writer is hasty at every node, with draws from
-  the uninformed prior: no trunk pass per probe, and no move queries.
-- **An independent improvement signal first.** The hasty-policy labels cannot
-  recognize a reply hasty misses. Trained against them, a probe that
-  discovers YEET and correctly overturns the root ranking is scored as a loss,
-  because the label disagrees with it. So before the writer trains, the
-  labels must be able to see what the writer is meant to find. **Reply-searched
-  labels** do that: at each labeling rollout's ply one, the opponent's reply
-  is the best of a shortlist by nested sims, not hasty's argmax. The nested
-  sims draw our leave from the opponent's belief, not the true one, and pass
-  the paired-world test
-  ([Standard Scrabble: a context per opponent view](#standard-scrabble-a-context-per-opponent-view)). That is
-  expensive, but it is paid for labels only. Self-labeling by a larger-budget
-  SupremeBot is a second such source, and it waits until the writer has shown
-  it finds replies the labels missed.
-- **Then reinforcement learning.** The writer's purpose is to make the pick
-  better. Define the potential of a prefix as the label value of the reader's
-  current argmax, measured by a pick query placed immediately after each leaf
-  token, in recorded order. A leaf's reward is the change in potential it
-  causes. The rewards telescope over leaf tokens: summed over a turn, they
-  equal the final pick's label value minus the prior's pick's. The reward is
-  credited to the decisions of the probe that produced the leaf. A decision
-  whose value lies in steering later probes, not in its own probe's leaf, gets
-  no direct credit this way; that is a known limit ([Open
-  questions](#open-questions)). The definition is checked on a toy bandit
-  before M3a. This needs a label for every candidate the reader may pick, so
-  during training the pick is restricted to labeled candidates.
-- **Alternate the two roles.** A new writer changes the reader's input
-  distribution, so the reader retrains on the new writer's turns before the
-  writer steps again, in the manner of AlphaZero's generations
-  ([generational_training.md](../generational_training.md)).
+**The objective.** The writer's decisions (which candidate to probe, the moves
+inside probes, the draws) exist to make the final pick better. Their objective
+is the expected label value of the final pick, less a cost per probe once
+stopping is learned. This is the value of computation, in Russell and
+Wefald's sense: a probe is worth what it is expected to add to the quality of
+the decision.
+
+**The potential and the reward.** The potential of a context C is the label
+value of the reader's pick, softened so that it moves with the reader's
+confidence and not only when the argmax flips:
+
+Φ(C) = Σₐ softmax(μ(C) / τ)ₐ · Q(a)
+
+where μ is the reader's mean and Q the label. It is measured by a pick query
+placed immediately after each leaf token, in recorded order, and a leaf's
+reward is the change in Φ it causes. The rewards telescope: summed over a
+turn, they equal Φ at the end minus Φ at the empty context. The hard argmax
+(τ → 0) gives exactly the final pick's label value minus the prior's pick's,
+and it moves only when the argmax flips, so a small τ gives the same
+objective with a denser signal. This needs a label for every candidate the
+reader may pick, so during training the pick is restricted to labeled
+candidates.
+
+The reward is **signed and anchored to the labels**, deliberately:
+
+- **Bad news that is true is rewarded.** The reader's own estimates never
+  enter Φ. A probe that exposes an overrated leader, so that the reader moves
+  toward the truly better move, raises Φ. Measuring against the reader's
+  estimate of its own pick instead would punish that probe, and a writer
+  could game it by making the reader optimistic.
+- **Movement is not rewarded.** An absolute or squared change would pay
+  equally for moving the reader away from the truth, and would pay for noise.
+- **Uncertainty reduction is not rewarded for itself.** Reducing uncertainty
+  between two moves with equal labels changes Φ by nothing, because picking
+  either costs nothing; the same holds for precision about moves that cannot
+  become the pick. Uncertainty is an input to the writer, not its target.
+
+**A worked example.** Three candidates, labeled A 0.52, B 0.55, C 0.40. After
+30 probes the reader says A 0.56 ± 0.04, B 0.53 ± 0.02, C 0.41 ± 0.02, so it
+favors the overrated A. At τ = 0.02 the softmax weights are A 0.817, B 0.182,
+C about 0, and Φ = 0.5254. One further probe on each, one random outcome
+apiece:
+
+| probe on | what it showed | reader afterwards | Φ | ΔΦ |
+|---|---|---|---|---|
+| A | the opponent bingos after A | A 0.56 → 0.535 | 0.5330 | +0.0076 |
+| B | B holds up | B 0.53 → 0.54 | 0.5280 | +0.0026 |
+| C | C still loses | C 0.41 → 0.40 | 0.5254 | 0 |
+
+The bad news about A scores best, because it moved the reader toward B.
+
+**Training in stages.** Full reinforcement learning over turns thousands of
+decisions long is the least certain part of this plan, so it comes last, and
+each stage is the next one's baseline.
+
+1. **Fixed (M1).** Hasty at every node, draws from the uninformed prior: no
+   trunk pass per probe, and no move queries.
+2. **An independent improvement signal first.** The hasty-policy labels
+   cannot recognize a reply hasty misses. Trained against them, a probe that
+   discovers YEET and correctly overturns the root ranking is scored as a
+   loss, because the label disagrees with it. So before the writer trains,
+   the labels must be able to see what the writer is meant to find.
+   **Reply-searched labels** do that: at each labeling rollout's ply one, the
+   opponent's reply is the best of a shortlist by nested sims, not hasty's
+   argmax. On the standard track the nested sims draw our leave from the
+   opponent's belief and pass the paired-world test
+   ([Standard Scrabble: a context per opponent view](#standard-scrabble-a-context-per-opponent-view)).
+   That is expensive, but it is paid for labels only.
+3. **Where to probe: the gain head, supervised.** A head predicts, for each
+   possible next probe, the ΔΦ it will produce: the myopic value of
+   information, the knowledge-gradient policy of the literature and the
+   generalization of UltimateBot's proves-best head. It reads the reader's μ
+   and σ, since the value of a probe is roughly uncertainty, times the chance
+   it flips the decision, times the stakes. Its targets come from
+   **branching**: at a sampled decision point in a recorded turn, one extra
+   probe is run on each option from the same context, and each realized ΔΦ
+   is that option's target. One outcome per branch is noisy; squared error
+   makes the head learn the average. The reader is frozen while the gain head
+   trains, because Φ is defined through it. The weakness is known: a probe
+   that pays only in combination with another (drilling an overrated leader
+   when the reader also underrates the better move) looks worthless on its
+   own.
+4. **Realistic moves inside probes, supervised.** Move queries start at the
+   floor, the plain student's policy, and are trained to imitate the replies
+   the reply-searched labels chose. Probes then show plausible play, and the
+   choice of where to probe carries the experimentation.
+5. **Reinforcement learning.** Actor-critic over the whole turn, with the gain
+   head as the critic. A decision's credit is its **return-to-go**, the sum of
+   ΔΦ from that decision to the end of the turn, less the critic's
+   prediction. That credits a probe whose value lies in steering later probes,
+   such as the drill on the overrated leader that led to the switch, which a
+   probe's own leaf cannot. The definition is checked on a toy bandit first.
+6. **Learned draws (M4).** The same reward trains draw proposals.
+
+**Alternate the two roles.** A new writer changes the reader's input
+distribution, so the reader retrains on the new writer's turns before the
+writer steps again, in the manner of AlphaZero's generations
+([generational_training.md](../generational_training.md)).
 
 ### Budget generalization
 
@@ -696,6 +796,8 @@ stated assumptions, to be replaced by the throughput microbenchmark
   per turn.
 - At model width 128, counting both the score and the value products, that
   is about 6.6 × 10¹¹ FLOPs per layer, and about 4 × 10¹² for six layers.
+  That model is about 1.2M parameters, the small end of the size sweep below;
+  the attention cost grows with width and depth.
 - A 4090 peaks around 1.65 × 10¹⁴ bf16 FLOP/s, so the ideal time is about
   25 ms per turn. The achieved time is several times that, and still small
   against the rollouts.
@@ -704,9 +806,34 @@ stated assumptions, to be replaced by the throughput microbenchmark
 
 Recorded options ([Move lists](#move-lists-local-and-global)) grow the context
 to 60,000–85,000 tokens. Reading stays cheap, about 100 ms per turn at peak at
-85,000, because attention per decision is linear in the context. **Memory is
-what binds:** the KV cache grows to about 260 MB per turn at 85,000 tokens,
-and self-play holds many turns at once, about 8 GB for 32 concurrent turns.
+85,000 for the small model, because attention per decision is linear in the
+context. **Memory is what binds.** Self-play holds many turns at once, and the
+KV cache grows with the model (parameters ≈ 12 · layers · width², bf16,
+full multi-head attention):
+
+| layers × width | parameters | KV per turn at 85,000 tokens | 32 concurrent turns |
+|---|---|---|---|
+| 6 × 128 | ~1.2M | 0.26 GB | 8 GB |
+| 8 × 256 | ~6M | 0.7 GB | 22 GB |
+| 12 × 416 | ~25M | 1.7 GB | 54 GB |
+| 24 × 576 | ~100M | 4.7 GB | 150 GB |
+
+So the network uses **grouped-query attention** by default, sharing keys and
+values across heads, which divides the cache by the group factor, typically 4
+to 8. Past about 10M parameters, the concurrent turn count or the context
+length also has to give. Compute does not bind: appending 85,000 tokens
+through a 100M-parameter model is about 10¹³ FLOPs, well under a second per
+turn at peak.
+
+**How big the network must be** is not derivable in advance. For scale: the
+current teacher and student trunks are about 7M parameters (10 residual
+blocks of 192 channels), and chess transformers trained to play without search
+have reached master strength at a few hundred million. The design moves the
+exact work to the engine (move generation, probabilities, containment, the
+search itself), and what remains for the network is mostly matching and
+reweighting across probes, which small transformers learn. Multi-step reading
+needs depth more than width. Labels are the likelier limit before size is, so
+the size is measured, not guessed ([Build order](#build-order)).
 
 So rack_conditional_evidence.md's argument for late fusion, that the context
 must not be read per rollout, does not bind at these sizes once a read is
@@ -830,16 +957,26 @@ core has been shown to work.
   at matched budgets, or fails the transfer tests, transfer is not being
   learned: stop. If it passes, match play against BestBot under face-up
   leaves.
+  **The size sweep.** Readers at four sizes across the range in [Cost](#cost)
+  (about 1M, 5M, 25M and 100M parameters), each on two corpus sizes, report
+  regret at fixed budgets. If regret keeps falling with size, capacity
+  limits; if it falls only with data, labels do. The sweep is cheap, since
+  every reader trains on the same records, and it sets the network size and
+  the KV strategy together.
 - **M2: the known positions** that exist under face-up leaves, among them the
   ACETA family in `positions/NWL23/interesting-positions/`.
 - **M3a: learned move choices.** The serving runtime ([Cost](#cost)), then
-  reply-searched labels with deferred draws ([The writer](#the-writer)), then
-  the writer, trained with the telescoping reward and alternating with the
-  reader. Measured in match play against M1a at equal wall-clock time, not
-  equal probes, because steering costs time.
-- **M5: self-labeling.** SupremeBot at many times the budget labels
-  SupremeBot's training positions, once M3a has shown it finds replies the
-  labels missed. It applies again on the standard track.
+  reply-searched labels with deferred draws, then the writer's stages in
+  order: the gain head, realistic moves inside probes, then reinforcement
+  learning ([The writer](#the-writer)), alternating with the reader. Each
+  stage is measured in match play against the one before, and the first
+  against M1a, at equal wall-clock time, not equal probes, because steering
+  costs time. The size sweep repeats for the writer.
+- **M5: the label loop.** SupremeBot at many times the budget labels
+  SupremeBot's training positions, and the leaf model retrains on SupremeBot's
+  self-play results ([The reader](#the-reader)). It starts once M3a has shown
+  the writer finds replies the labels missed, and from then on it is the main
+  label source, not a late addition. It applies again on the standard track.
 
 **The standard track**
 
@@ -885,14 +1022,15 @@ core has been shown to work.
   as the prior) is planned; equilibrium over belief states is not.
 - **Opponent history:** every past opponent turn, or only the last few.
   RackInferrer conditions on the last move only.
-- **Credit for steering:** how a decision whose value is in changing later
-  probes, not its own leaf, gets credit.
 - **The serving runtime:** TensorRT with dynamic KV bindings, or in-process
   PyTorch.
 - **Summary tokens:** whether causal revision needs them, and if so, their
   schedule and what trains them.
 - **Stopping:** a fixed budget first. A learned stop head fits the same
-  query mechanism and the telescoping reward, less a cost per probe.
+  query mechanism and the telescoping reward, less a cost per probe: stop
+  when no probe's predicted gain exceeds its cost.
+- **The softmax temperature τ** in the potential: small enough to track the
+  pick, large enough to give a dense signal.
 - **Tick size:** the batching staleness against throughput.
 - **Context across turns:** discarded at the end of each turn, as in every
   scheme so far. Carrying over the probes that remain legal is deferred until a
