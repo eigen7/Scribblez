@@ -170,16 +170,22 @@ def window_dirs(paths: TagPaths, latest_index: int, window: int) -> list[Path]:
     return [paths.generation_dir(i) for i in complete]
 
 
-def evict_beyond_window(paths: TagPaths, latest_index: int, window: int) -> list[int]:
+def evict_beyond_window(
+    paths: TagPaths, latest_index: int, window: int, *, keep_unpublished: bool = False
+) -> list[int]:
     """Delete complete generations older than the window ending at
     `latest_index`, returning their indices. Never touches incomplete
-    generations or any past `latest_index`. `window <= 0` evicts nothing."""
+    generations or any past `latest_index`. `window <= 0` evicts nothing.
+    With `keep_unpublished`, a generation not yet in the bucket stays too, for
+    a data home whose upload is behind (generational/data_home.py)."""
     if window <= 0:
         return []
     complete = complete_indices_upto(paths, latest_index)
     kept = set(complete[-window:])
     evicted = []
     for idx in complete:
+        if keep_unpublished and not is_published(paths.generation_dir(idx)):
+            continue
         if idx not in kept:
             shutil.rmtree(paths.generation_dir(idx), ignore_errors=True)
             evicted.append(idx)

@@ -12,38 +12,70 @@ from types import SimpleNamespace
 
 import pytest
 from cloud.credentials import R2Credentials
-from cloud.sinks import LocalSink
+from cloud.sinks import LocalSink, R2Sink
 from scribblez.generational import data_home, lifecycle, scheduler
 from scribblez.paths import POSITION_EVAL, SCHEDULER_STATE_REL, TagPaths
 from scribblez.workloads.position_eval import PositionEvalParams
 
 R2 = R2Credentials(account_id="a", access_key_id="k", secret_access_key="s", bucket="b")
-STAGING = "r2:b/position_eval/t/staging"
+PREFIX = "r2:b/position_eval/t"
 
 
 class FakeBucket:
-    """The staging prefix as {name: text}, served through rclone's lsf,
-    copyto and deletefile. `fail` names a verb that fails from now on."""
+    """The tag's bucket prefix as {key under the prefix: text}, served through
+    the rclone verbs the data home uses. `fail` names a verb that fails from
+    now on."""
 
     def __init__(self, objects: dict[str, str]):
         self.objects = dict(objects)
         self.fail: str | None = None
 
+    def _key(self, path: str) -> str:
+        assert path.startswith(PREFIX), path
+        return path[len(PREFIX) :].lstrip("/")
+
     def rclone(self, r2, verb, *args, capture=False, input_text=None):
         if verb == self.fail:
             return subprocess.CompletedProcess([verb], 1, "", "simulated failure")
-        if verb == "lsf":
-            assert args == ("--files-only", STAGING), args
-            return subprocess.CompletedProcess(
-                [verb], 0, "".join(f"{n}\n" for n in self.objects), ""
-            )
-        name = args[0].removeprefix(f"{STAGING}/")
-        if verb == "copyto":
-            Path(args[1]).write_text(self.objects[name])
+        flags = [a for a in args if a.startswith("--")]
+        args = [a for a in args if not a.startswith("--") and a != lifecycle.MANIFEST_NAME]
+        out = getattr(self, "_" + verb)(flags, *args)
+        return subprocess.CompletedProcess([verb], 0, out or "", "")
+
+    def _lsf(self, flags, path):
+        key = self._key(path)
+        if key in self.objects:
+            return key.rsplit("/", 1)[-1] + "\n"
+        under = [k[len(key) + 1 :] for k in self.objects if k.startswith(key + "/")]
+        if "--dirs-only" in flags:
+            return "".join(sorted({u.split("/")[0] + "/\n" for u in under if "/" in u}))
+        return "".join(f"{u}\n" for u in sorted(under) if "/" not in u)
+
+    def _copyto(self, flags, src, dst):
+        if src.startswith(PREFIX):
+            Path(dst).write_text(self.objects[self._key(src)])
         else:
-            assert verb == "deletefile", verb
-            del self.objects[name]
-        return subprocess.CompletedProcess([verb], 0, "", "")
+            self.objects[self._key(dst)] = Path(src).read_text()
+
+    def _copy(self, flags, src, dst):
+        if src.startswith(PREFIX):  # bucket dir -> local dir
+            key = self._key(src)
+            for k, text in self.objects.items():
+                if k.startswith(key + "/"):
+                    out = Path(dst) / k[len(key) + 1 :]
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_text(text)
+        else:  # local dir -> bucket dir, the manifest excluded (see rclone())
+            for f in Path(src).iterdir():
+                if f.name != lifecycle.MANIFEST_NAME:
+                    self.objects[f"{self._key(dst)}/{f.name}"] = f.read_text()
+
+    def _deletefile(self, flags, path):
+        del self.objects[self._key(path)]
+
+    def _purge(self, flags, path):
+        key = self._key(path)
+        self.objects = {k: v for k, v in self.objects.items() if not k.startswith(key + "/")}
 
 
 @pytest.fixture
@@ -51,7 +83,7 @@ def paths(tmp_path: Path) -> TagPaths:
     return TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
 
 
-def _home(paths, bucket=None, monkeypatch=None, games=100, ahead=1):
+def _home(paths, bucket=None, monkeypatch=None, games=100, ahead=1, window=0, uploads=False):
     if bucket is not None:
         monkeypatch.setattr(data_home, "rclone", bucket.rclone)
     cfg = scheduler.SchedulerConfig(games_per_generation=games, open_ahead=ahead)
@@ -61,6 +93,8 @@ def _home(paths, bucket=None, monkeypatch=None, games=100, ahead=1):
         LocalSink(paths.root),
         r2=R2 if bucket is not None else None,
         chunk_games=lambda chunk: int(chunk.read_text()),
+        window=window,
+        uploads=uploads,
     )
 
 
@@ -69,13 +103,13 @@ def _state(paths) -> dict:
 
 
 def test_remote_chunks_are_moved_out_of_the_bucket_into_a_generation(paths, monkeypatch):
-    bucket = FakeBucket({"a.slog": "60", "b.slog": "60", "notes.txt": "x"})
+    bucket = FakeBucket({"staging/a.slog": "60", "staging/b.slog": "60", "staging/notes.txt": "x"})
     _home(paths, bucket, monkeypatch).step()
 
     gen0 = paths.generation_dir(0)
     assert lifecycle.is_complete(gen0)
     assert sorted(f.name for f in gen0.glob("*.slog")) == ["a.slog", "b.slog"]
-    assert bucket.objects == {"notes.txt": "x"}  # ingested chunks leave the bucket
+    assert bucket.objects == {"staging/notes.txt": "x"}  # ingested chunks leave the bucket
     assert not any((paths.data_dir / "work" / data_home.INGRESS_WORK_DIR).iterdir())
 
 
@@ -104,7 +138,7 @@ def test_the_state_carries_the_schedulers_gate_and_a_heartbeat(paths):
 
 @pytest.mark.parametrize("verb", ["lsf", "copyto", "deletefile"])
 def test_a_failing_bucket_is_retried_not_raised(paths, monkeypatch, verb):
-    bucket = FakeBucket({"a.slog": "100"})
+    bucket = FakeBucket({"staging/a.slog": "100"})
     bucket.fail = verb
     home = _home(paths, bucket, monkeypatch)
     home.step()  # does not raise; the state is still published
@@ -141,3 +175,102 @@ def test_start_for_runs_only_for_a_home_tag(paths, monkeypatch):
     ctx.data_plane = scheduler.DATA_PLANE_HOME
     home = data_home.start_for(ctx, paths, PositionEvalParams())
     assert started == [home] and home._r2 is None  # no credentials: colocated generators only
+
+
+# ---- a data home that can vanish: the bucket keeps it resumable -----------------
+
+
+def _stage(paths, *games):
+    paths.staging_dir.mkdir(parents=True, exist_ok=True)
+    for i, g in enumerate(games):
+        (paths.staging_dir / f"c{i}.slog").write_text(str(g))
+
+
+def test_complete_generations_are_uploaded_manifest_last_and_marked(paths, monkeypatch):
+    bucket = FakeBucket({})
+    order = []
+    copyto = bucket._copyto
+    monkeypatch.setattr(
+        bucket, "_copyto", lambda f, src, dst: order.append(dst) or copyto(f, src, dst)
+    )
+    monkeypatch.setattr(
+        bucket, "_copy", lambda f, src, dst, _c=bucket._copy: order.append(dst) or _c(f, src, dst)
+    )
+    _stage(paths, 100, 40)  # gen 0 completes; gen 1 stays open
+    _home(paths, bucket, monkeypatch, uploads=True).step()
+
+    assert bucket.objects["generations/gen_000000/c0.slog"] == "100"
+    assert (
+        json.loads(bucket.objects["generations/gen_000000/manifest.json"])["status"] == "complete"
+    )
+    assert order == [
+        f"{PREFIX}/generations/gen_000000",
+        f"{PREFIX}/generations/gen_000000/manifest.json",
+    ]
+    assert lifecycle.is_published(paths.generation_dir(0))
+    assert not any(k.startswith("generations/gen_000001") for k in bucket.objects)  # still open
+
+
+def test_a_failed_upload_is_retried_and_its_generation_kept(paths, monkeypatch):
+    bucket = FakeBucket({})
+    bucket.fail = "copy"
+    _stage(paths, 100, 100, 100)
+    home = _home(paths, bucket, monkeypatch, ahead=5, window=1, uploads=True)
+    home.step()
+    assert not lifecycle.is_published(paths.generation_dir(0))
+    # The trainer is past gen 0, but gen 0 is not in the bucket yet: it stays.
+    lifecycle.write_train_state(paths, {"generation_index": 3})
+    assert lifecycle.evict_beyond_window(paths, 2, 1, keep_unpublished=True) == []
+    bucket.fail = None
+    home.step()
+    assert all(lifecycle.is_published(paths.generation_dir(i)) for i in range(3))
+    assert lifecycle.evict_beyond_window(paths, 2, 1, keep_unpublished=True) == [0, 1]
+
+
+def test_generations_behind_the_window_leave_the_bucket(paths, monkeypatch):
+    bucket = FakeBucket({f"generations/gen_00000{i}/manifest.json": "{}" for i in range(5)})
+    lifecycle.write_train_state(paths, {"generation_index": 4})
+    _home(paths, bucket, monkeypatch, window=2, uploads=True).step()
+    kept = sorted({k.split("/")[1] for k in bucket.objects if k.startswith("generations/")})
+    assert kept == ["gen_000002", "gen_000003", "gen_000004"]
+
+
+def test_a_fresh_home_restores_the_window_and_numbers_after_the_bucket(paths, monkeypatch):
+    """A new machine resumes from the bucket: the window behind the cursor and
+    the uploaded generations ahead of it, and new generations take the next
+    free index, never one the bucket already holds."""
+    manifest = json.dumps({"status": "complete", "committed_games": 100, "target_games": 100})
+    bucket = FakeBucket({})
+    for i in range(1, 6):
+        bucket.objects[f"generations/gen_00000{i}/c.slog"] = "100"
+        bucket.objects[f"generations/gen_00000{i}/manifest.json"] = manifest
+    bucket.objects["generations/gen_000006/c.slog"] = "100"  # an upload that died mid-way
+    lifecycle.write_train_state(paths, {"generation_index": 4})
+    home = _home(paths, bucket, monkeypatch, ahead=5, window=2, uploads=True)
+    home.restore()
+
+    assert lifecycle.list_generation_indices(paths) == [2, 3, 4, 5]  # 1 is behind the window
+    assert all(lifecycle.is_published(paths.generation_dir(i)) for i in (2, 3, 4, 5))
+    home.step()
+    assert lifecycle.read_manifest(paths.generation_dir(6))["status"] == lifecycle.GENERATING
+
+
+def test_a_failing_listing_at_restore_stops_the_trainer(paths, monkeypatch):
+    """Resuming on a partial window would silently diverge."""
+    bucket = FakeBucket({})
+    bucket.fail = "lsf"
+    with pytest.raises(AssertionError, match="listing"):
+        _home(paths, bucket, monkeypatch, uploads=True).restore()
+
+
+def test_start_for_restores_and_uploads_only_for_a_bucket_trainer(paths, monkeypatch):
+    for var in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"):
+        monkeypatch.setenv(var, "x")
+    monkeypatch.setattr(data_home.DataHome, "start", lambda self: None)
+    restored = []
+    monkeypatch.setattr(data_home.DataHome, "restore", lambda self: restored.append(self))
+    ctx = SimpleNamespace(data_plane=scheduler.DATA_PLANE_HOME, records_sink=LocalSink(paths.root))
+    assert not data_home.start_for(ctx, paths, PositionEvalParams()).uploads
+    ctx.records_sink = R2Sink(R2, "position_eval", "t", paths.root)
+    home = data_home.start_for(ctx, paths, PositionEvalParams())
+    assert home.uploads and restored == [home]
