@@ -159,15 +159,27 @@ def canonical_host(host: str) -> str:
     """The hostname ssh would connect to for `host`, which may be an ssh-config
     alias and may carry a `user@`. Slots spell one machine several ways (today's
     tags have both `asus-laptop` and `dshin@asus-laptop`); this is what makes
-    them compare equal. `ssh -G` only evaluates the config, never connects."""
+    them compare equal. `ssh -G` only evaluates the config, never connects.
+
+    A rental's record has no host until its launch returns an address; its
+    name is "", which no slot's host matches."""
     bare = host.split("@", 1)[-1]
+    if not bare:
+        return ""
     if bare not in _canonical:
         res = subprocess.run(["ssh", "-G", bare], capture_output=True, text=True)
-        names = [
-            ln.split(None, 1)[1] for ln in res.stdout.splitlines() if ln.startswith("hostname ")
-        ]
-        _canonical[bare] = names[0].lower() if res.returncode == 0 and names else bare.lower()
+        name = _ssh_hostname(res.stdout) if res.returncode == 0 else None
+        _canonical[bare] = (name or bare).lower()
     return _canonical[bare]
+
+
+def _ssh_hostname(config: str) -> str | None:
+    """The `hostname` value in `ssh -G` output, or None when it has none."""
+    for line in config.splitlines():
+        key, _, value = line.partition(" ")
+        if key == "hostname" and value.strip():
+            return value.strip()
+    return None
 
 
 def host_names(m: PoolMachine) -> set[str]:
