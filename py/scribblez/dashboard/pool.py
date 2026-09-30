@@ -23,7 +23,7 @@ from pathlib import Path
 
 from cloud.ssh_machine import HARDWARE_COMMAND
 
-from scribblez.dashboard.shared_json import SharedJson
+from scribblez.dashboard.shared_json import SharedJson, Writer
 from scribblez.dashboard.tasks import MachineRecord
 
 LOCALHOST = "localhost"
@@ -220,7 +220,8 @@ def _decode(raw: dict) -> Pool:
     return Pool(machines=machines, capacity=capacity)
 
 
-def pool_store(mount_root: Path) -> SharedJson:
-    """The store of pool.json under `mount_root`: load() gives the shared Pool
-    (an empty one before the file exists), save(pool) writes it atomically."""
-    return SharedJson(Path(mount_root) / "pool.json", _decode, Pool)
+def pool_store(mount_root: Path, writer: Writer | None = None) -> SharedJson:
+    """The store of pool.json under `mount_root`: load() gives the Pool (an
+    empty one before the file exists), live on the writer thread and the last
+    committed copy elsewhere (shared_json); save(pool) writes it atomically."""
+    return SharedJson(Path(mount_root) / "pool.json", _decode, Pool, writer or Writer())

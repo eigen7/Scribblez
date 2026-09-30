@@ -9,7 +9,7 @@ each entry's eligibility decides which pool machines may take it.
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
-from scribblez.dashboard.shared_json import SharedJson
+from scribblez.dashboard.shared_json import SharedJson, Writer
 
 # The states of a queued tag's bundle (QueueEntry.bundle). A tag that may land
 # on an ssh machine has its bundle built and pinned when it is enqueued, so
@@ -62,7 +62,8 @@ def _decode(raw: dict) -> Queue:
     )
 
 
-def queue_store(mount_root: Path) -> SharedJson:
-    """The store of queue.json under `mount_root`: load() gives the shared
-    Queue (an empty one before the file exists), save(queue) writes it."""
-    return SharedJson(Path(mount_root) / "queue.json", _decode, Queue)
+def queue_store(mount_root: Path, writer: Writer | None = None) -> SharedJson:
+    """The store of queue.json under `mount_root`: load() gives the Queue (an
+    empty one before the file exists), live on the writer thread and the last
+    committed copy elsewhere (shared_json); save(queue) writes it."""
+    return SharedJson(Path(mount_root) / "queue.json", _decode, Queue, writer or Writer())

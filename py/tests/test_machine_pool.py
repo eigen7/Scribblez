@@ -216,6 +216,8 @@ def test_a_slot_meant_to_run_but_long_dead_does_not_hold_its_machine(pooled, mon
     t = _task("stale")
     t.workers.append(_slot("local-0", "local", "running"))  # no pid: not alive
     listed.append((SPEC, t))
+    assert _occupied(manager, listed, "localhost")["state"] == "busy"  # no pass has seen it down
+    manager.worker_status(SPEC, t, observe=True)  # a pass starts its down clock
     assert _occupied(manager, listed, "localhost")["state"] == "busy"  # within the grace
 
     monkeypatch.setattr(workers_mod, "DEAD_SLOT_GRACE_SECONDS", 0.0)

@@ -24,7 +24,7 @@ import dataclasses
 import json
 import signal
 import subprocess
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -155,6 +155,25 @@ class SyncExecutor:
 
     def shutdown(self, wait=True, cancel_futures=False):
         pass
+
+
+class WriterThread:
+    """The manager's blocking executor as one real thread that runs each job
+    to completion before submit returns. The dashboard's writer rule then
+    holds as it does live (shared_json): the pass and every command run on
+    this thread, and the sim's own reads, on the main thread, see committed
+    copies. A run stays a pure function of its seed."""
+
+    def __init__(self):
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sim-writer")
+
+    def submit(self, fn, *args, **kwargs) -> Future:
+        future = self._pool.submit(fn, *args, **kwargs)
+        wait([future])
+        return future
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        self._pool.shutdown(wait=wait, cancel_futures=cancel_futures)
 
 
 # ---- the world -------------------------------------------------------------
@@ -627,5 +646,6 @@ def wire_manager(monkeypatch, manager, world: World):
             bundle_id="b-sim", git_sha="0", git_dirty=False, archs=list(archs), source_hash="sim"
         ),
     )
-    for name in ("_blocking", "_builds", "_uploads"):
+    manager._blocking = WriterThread()
+    for name in ("_builds", "_uploads"):
         setattr(manager, name, SyncExecutor())

@@ -54,6 +54,7 @@ from scribblez import workloads
 from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tasks
+from scribblez.dashboard.shared_json import Writer
 from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
 from scribblez.generational.lifecycle import MANIFEST_NAME
 from scribblez.hardware import default_thread_count
@@ -172,15 +173,12 @@ def _owner(spec: workloads.WorkloadSpec, tag: str, name: str) -> str:
 
 
 def _accrue_machine(m: tasks.MachineRecord, billing: bool):
-    """Advance a rented machine's spend to now: the interval since the last
-    observation is charged if the machine was billing then (pending or
-    running, not stopped)."""
-    with _ACCRUE_LOCK:
-        now = time.time()
-        if m.observed_up and m.observed_at is not None:
-            m.spend += (now - m.observed_at) / 3600 * (m.cost_per_hr or 0.0)
-        m.observed_at = now
-        m.observed_up = billing
+    """Advance a rented machine's spend to now (MachineRecord.spend_now), and
+    record whether it bills from here on (pending or running, not stopped)."""
+    now = time.time()
+    m.spend = m.spend_now(now)
+    m.observed_at = now
+    m.observed_up = billing
 
 
 def _record_instance(
@@ -454,18 +452,18 @@ def _ssh_state(
     return "starting" if probe == "paused" else "exited"
 
 
-_ACCRUE_LOCK = threading.Lock()
-
-
 class WorkerManager:
     def __init__(self, mount_root: Path):
         """Everything this manager reads and writes lives under `mount_root`:
         the tag trees, pool.json and queue.json. The dashboard passes its
         --mount-root; a test or simulation passes a scratch dir."""
         self.mount_root = Path(mount_root)
-        self.tasks = tasks.TaskStore(self.mount_root)
-        self.pool_store = pool_mod.pool_store(self.mount_root)
-        self.queue_store = queue_mod.queue_store(self.mount_root)
+        # The one thread allowed to write the stores, once claim_writer names
+        # it; every other thread reads their last committed copies.
+        self.writer = Writer()
+        self.tasks = tasks.TaskStore(self.mount_root, self.writer)
+        self.pool_store = pool_mod.pool_store(self.mount_root, self.writer)
+        self.queue_store = queue_mod.queue_store(self.mount_root, self.writer)
         self._local: dict[str, subprocess.Popen] = {}  # slot key -> live process
         # task key -> (sync watcher, the argv it runs): a watcher is replaced
         # when what it should pull changes.
@@ -749,13 +747,8 @@ class WorkerManager:
         self.tasks.save(spec, task)
 
     def _local_alive(self, spec, task: tasks.TaskRecord, w) -> bool:
-        """Whether slot `w`'s worker process is really running. Reaps our own
-        exited child first so it does not linger as a zombie, then checks the
-        durable pid, which also covers workers another dashboard instance
-        spawned."""
-        proc = self._local.get(_key(spec, task.tag, w.worker_id))
-        if proc is not None:
-            proc.poll()
+        """Whether slot `w`'s worker process is really running, by its durable
+        pid, which also covers workers another dashboard instance spawned."""
         return worker_pid_alive(w.pid, w.worker_id, task.tag)
 
     def _local_exit_code(self, spec, task: tasks.TaskRecord, w) -> int | None:
@@ -815,24 +808,24 @@ class WorkerManager:
             _forget_empty(w)
         return probe
 
-    def _probe_container(
-        self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, *, observe: bool
-    ) -> str:
-        """Slot `w`'s container probe state, freshly observed or remembered.
+    def _refresh_probe(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
+        """_probe_container, observed afresh unless the last observation is
+        younger than OBSERVATION_TTL_SECONDS. For the writer only."""
+        _, at = self._probes.get(_key(spec, task.tag, w.worker_id), ("unknown", 0.0))
+        if time.time() - at >= OBSERVATION_TTL_SECONDS:
+            self._observe_container(spec, task, w)
+        return self._probe_container(spec, task, w)
 
-        Only the reconcile pass observes (`observe=True`). Status requests read
-        what it left, so browser polling costs no ssh and cannot be stalled by
-        a slow machine. A slot no pass has reached yet reads "unknown".
+    def _probe_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
+        """Slot `w`'s container probe state, as the pass last observed it
+        (_observe_slots). Status requests read it too, so browser polling costs
+        no ssh and cannot be stalled by a slow machine. A slot no pass has
+        reached yet reads "unknown".
 
         An unlaunched slot's `unreachable` reads as `missing`: with no
         container known to exist, the slot must stay removable even when its
         host is bogus or offline."""
-        key = _key(spec, task.tag, w.worker_id)
-        remembered, at = self._probes.get(key, ("unknown", 0.0))
-        if observe and time.time() - at >= OBSERVATION_TTL_SECONDS:
-            probe = self._observe_container(spec, task, w)
-        else:
-            probe = remembered
+        probe, _ = self._probes.get(_key(spec, task.tag, w.worker_id), ("unknown", 0.0))
         if not w.launched and probe == "unreachable":
             return "missing"
         return probe
@@ -1286,12 +1279,9 @@ class WorkerManager:
         """One dict per machine: the record plus its display state. A registered
         machine's state is its ssh probe (`up`, `preparing`, `no docker`,
         `unreachable`; `checking` before the first pass); a rented one's is
-        _rented_state. Only the reconcile pass observes; a status request reads
-        what it left.
-
-        Every call accrues rented machines' spend. Only an observing call
-        saves, but a poll's accrual is not lost: the record is the pass's own
-        shared object, so the next pass saves it."""
+        _rented_state. Only the reconcile pass observes, and records what it
+        learns: a moved host, the spend accrued, the state the slots read. A
+        status request changes nothing; it shows spend advanced to now."""
         out = []
         leased = self._leased_records(task)
         rented = any(m.instance_id is not None for m in [*task.machines, *leased])
@@ -1300,7 +1290,7 @@ class WorkerManager:
             pooled = any(m is x for x in leased)
             key = _machine_key(spec, task.tag, m.name)
             inst = index.get(m.instance_id) if m.instance_id is not None else None
-            moved = _moved_host(m, inst)
+            moved = _moved_host(m, inst) if observe else None
             if moved is not None:
                 m.host = moved
             probe, at = self._machine_probes.get(key, (None, 0.0))
@@ -1314,9 +1304,10 @@ class WorkerManager:
                 state = probe or "checking"
             else:
                 state = _rented_state(m, inst, probe)
-                if not pooled:  # a pool rental accrues in the pool's own step
+                if observe and not pooled:  # a pool rental accrues in the pool's own step
                     _accrue_machine(m, inst is not None and inst.state in ("pending", "running"))
-            self._machine_states[key] = state
+            if observe:
+                self._machine_states[key] = state
             info = {
                 "name": m.name,
                 "provider": m.provider,
@@ -1326,7 +1317,7 @@ class WorkerManager:
                 "instance_id": m.instance_id,
                 "spot": m.spot,
                 "cost_per_hr": m.cost_per_hr,
-                "spend": m.spend,
+                "spend": m.spend_now(time.time()),
                 "state": state,
                 "slots": [w.worker_id for w in task.slots_on(m.name)],
                 # A pool machine this task leases: the pool, not the task,
@@ -1430,7 +1421,7 @@ class WorkerManager:
             # or none for a slot no pass has reached. An unreachable machine
             # gets no command; reconcile enforces the saved desired state once
             # it answers.
-            probe = self._probe_container(spec, task, w, observe=True)
+            probe = self._refresh_probe(spec, task, w)
             name = _container_name(spec, task.tag, w.worker_id)
             if start and probe == "stopped":
                 self._ssh_machine(task, w).start_container(name)
@@ -1449,7 +1440,7 @@ class WorkerManager:
             pass  # its container went with the instance's disk; nothing to check or clean
         elif w.kind == "ssh":
             # Observe afresh: a removal must not act on a remembered state.
-            probe = self._probe_container(spec, task, w, observe=True)
+            probe = self._refresh_probe(spec, task, w)
             assert probe not in ("running", "paused"), f"{worker_id} is running; pause it first"
             # Removing while unreachable could orphan a live container that
             # keeps generating into the tag with nothing tracking it.
@@ -1643,17 +1634,24 @@ class WorkerManager:
         just started. Past it, a slot meant to run that never comes up (an
         `exited` one) is dead weight, and holding a machine for it would idle
         the machine indefinitely. Paused and finished slots hold nothing."""
-        key = _key(spec, task.tag, w.worker_id)
         if self._seen_alive(spec, task, w):
-            self._down_since.pop(key, None)
             return True
         if w.desired_state != "running":
-            self._down_since.pop(key, None)
             return False
         if w.role in task.gates:
             return True
-        since = self._down_since.setdefault(key, time.time())
-        return time.time() - since < DEAD_SLOT_GRACE_SECONDS
+        since = self._down_since.get(_key(spec, task.tag, w.worker_id))
+        return since is None or time.time() - since < DEAD_SLOT_GRACE_SECONDS
+
+    def _note_down(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Start or clear slot `w`'s down clock, which _holds_machine's grace
+        runs on: it starts when a slot meant to run is first seen down, and a
+        gated slot's is left as it was."""
+        key = _key(spec, task.tag, w.worker_id)
+        if self._seen_alive(spec, task, w) or w.desired_state != "running":
+            self._down_since.pop(key, None)
+        elif w.role not in task.gates:
+            self._down_since.setdefault(key, time.time())
 
     def _seen_alive(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
         """Whether slot `w`'s worker is alive, from what is already known: its
@@ -1669,10 +1667,11 @@ class WorkerManager:
         """One dict per slot: the durable record plus observed live state.
 
         Only the reconcile pass passes `observe`: it probes the machines and
-        saves what it learns. Every other caller, such as a browser's status
-        poll, reads those observations, so serving the dashboard never waits on
-        ssh.
+        records what it learns (_observe_slots). Every other caller, such as a
+        browser's status poll, reads those observations and changes nothing,
+        so serving the dashboard never waits on ssh.
         """
+        seen = self._observe_slots(spec, task) if observe else {}
         out = []
         for w in task.workers:
             gated = w.role in task.gates
@@ -1694,15 +1693,12 @@ class WorkerManager:
             if gated:
                 info["gate_reason"] = task.gates[w.role]
             if w.kind == "local":
-                alive = self._local_alive(spec, task, w)
-                if not alive and self._local_exit_code(spec, task, w) == 0:
-                    _note_finished(w)
+                alive = seen[w.worker_id] if observe else self._local_alive(spec, task, w)
                 info["state"] = _local_state(
                     w.desired_state, alive, gated, w.finished, w.failed is not None
                 )
             else:
-                self._holds_nothing(spec, task, w)
-                probe = self._probe_container(spec, task, w, observe=observe)
+                probe = self._probe_container(spec, task, w)
                 alive = probe == "running"
                 info["state"] = _ssh_state(
                     w.desired_state, probe, gated, w.finished, w.failed is not None
@@ -1717,9 +1713,35 @@ class WorkerManager:
             # Real liveness, for reconcile's desired-vs-observed enforcement.
             info["observed_running"] = alive
             out.append(info)
-        if observe and task.workers:
-            self.tasks.save(spec, task)
         return out
+
+    def _observe_slots(self, spec, task: tasks.TaskRecord) -> dict[str, bool]:
+        """The pass's look at every slot, and what it records: each container's
+        fresh probe (at most once per OBSERVATION_TTL_SECONDS), that a bucket
+        slot's container holds nothing to collect, that a local worker which
+        exited 0 finished, and since when a slot meant to run has been down
+        (_holds_machine). Returns each local slot's liveness as observed here,
+        for the pass to act on: a worker seen alive and then found gone
+        without its exit read would be respawned though it finished. The
+        local slots go last, after the seconds of ssh the probes take."""
+        for w in task.workers:
+            if w.kind == "ssh":
+                self._holds_nothing(spec, task, w)
+                self._refresh_probe(spec, task, w)
+        seen = {}
+        for w in task.workers:
+            if w.kind == "local":
+                proc = self._local.get(_key(spec, task.tag, w.worker_id))
+                if proc is not None:
+                    proc.poll()  # reap our own exited child, so it is not seen alive
+                seen[w.worker_id] = self._local_alive(spec, task, w)
+                if not seen[w.worker_id] and self._local_exit_code(spec, task, w) == 0:
+                    _note_finished(w)
+        for w in task.workers:
+            self._note_down(spec, task, w)
+        if task.workers:
+            self.tasks.save(spec, task)
+        return seen
 
     def _slot_reason(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
         """Why ssh slot `w` is not running. While its machine is not up the
@@ -1842,9 +1864,8 @@ class WorkerManager:
     # ---- reconciliation ----------------------------------------------------
 
     def all_tasks(self):
-        for spec, task in self.tasks.load_all():
-            self._forget_stale_counts(spec, task)
-            yield spec, task
+        """(spec, task) for every task; changes nothing."""
+        return self.tasks.load_all()
 
     def _forget_stale_counts(self, spec, task: tasks.TaskRecord):
         """The first time this process sees a task, forget its slots' recorded
@@ -1861,6 +1882,14 @@ class WorkerManager:
             if w.kind == "ssh":
                 _forget_empty(w)
         self.tasks.save(spec, task)
+
+    def claim_writer(self):
+        """Make the blocking thread the only one that may write the stores:
+        every change is then a command or a pass step run through offload,
+        and a status read, served on the event loop, reads committed copies
+        (shared_json). The dashboard claims it at startup; a test that calls
+        the manager from one thread need not."""
+        self.writer.claim(self._blocking.submit(threading.current_thread).result())
 
     async def offload(self, fn, *args, **kwargs):
         """Run one blocking step off the event loop, one at a time.
@@ -1884,11 +1913,13 @@ class WorkerManager:
         so it holds a paused worker down even across a dashboard restart.
 
         This pass is the only observer: it refreshes the container probes and
-        the instance listing that everything else reads, which also makes it
-        the spend-accrual heartbeat when no browser is polling.
+        the instance listing that everything else reads, and it alone
+        accrues rented machines' spend.
         """
         await self.offload(self._list_fleet)
-        for spec, task in self.all_tasks():
+        # Loaded on the writer, for its live records (shared_json).
+        for spec, task in await self.offload(lambda: list(self.all_tasks())):
+            await self.offload(self._forget_stale_counts, spec, task)
             if spec.scheduler:
                 try:
                     await self.offload(self._tick_scheduler, spec, task)

@@ -73,8 +73,7 @@ def test_machines_round_trip(store, spec):
         tasks.MachineRecord(name="m1", provider="manual", host="ubuntu@1.2.3.4", gpu_count=1)
     )
     store.save(spec, task)
-    store._records.clear()  # force a re-read
-    loaded = store.load(spec, "t")
+    loaded = tasks.TaskStore(store.mount_root).load(spec, "t")  # a fresh read
     assert loaded.machine("m1").host == "ubuntu@1.2.3.4"
     assert loaded.machine("m1").gpu_count == 1
     assert loaded.slots_on("m1") == []

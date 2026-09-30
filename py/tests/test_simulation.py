@@ -58,11 +58,11 @@ class Sim:
         monkeypatch.setattr(WorkerManager, "sync_once", _REAL_SYNC_ONCE)
         self.world.add_host("box")
         self._boot()
-        self.manager.add_pool_machine("localhost")
-        self.manager.add_pool_machine("box", "me@box")
-        self.manager.add_capacity("cap", "g6.2xlarge", spot=True, cap=1)
+        self.command(self.manager.add_pool_machine, "localhost")
+        self.command(self.manager.add_pool_machine, "box", "me@box")
+        self.command(self.manager.add_capacity, "cap", "g6.2xlarge", spot=True, cap=1)
         for tag, max_rows in TAGS.items():
-            self.manager.tasks.create(SPEC, tag, {"max_rows": max_rows})
+            self.command(self.manager.tasks.create, SPEC, tag, {"max_rows": max_rows})
         self.step_no = 0
         self.log: list[str] = []
         self.rows_seen: dict[str, int] = {}
@@ -76,6 +76,7 @@ class Sim:
         in memory, over the stores on disk."""
         self.manager = WorkerManager(self.world.mount_root)
         sim_world.wire_manager(self.monkeypatch, self.manager, self.world)
+        self.manager.claim_writer()
         self.queue = TagQueue(self.manager)
         self.queue._drain_thread = sim_world.SyncExecutor()
 
@@ -84,9 +85,17 @@ class Sim:
         self.queue.shutdown()
         self._boot()
 
+    def command(self, fn, *args, **kwargs):
+        """Run `fn` as the dashboard runs a handler's change: a command on its
+        writer thread. The sim's own reads stay on this thread."""
+        return asyncio.run(self.manager.offload(fn, *args, **kwargs))
+
     def dashboard_pass(self):
-        self.queue.tick()
-        asyncio.run(self.manager.reconcile())
+        async def run():
+            await self.manager.offload(self.queue.tick)
+            await self.manager.reconcile()
+
+        asyncio.run(run())
 
     # -- one step
 
@@ -114,7 +123,7 @@ class Sim:
     def _operator(self, fn, *args, **kwargs):
         """An operator action; one the dashboard refuses is just refused."""
         try:
-            fn(*args, **kwargs)
+            self.command(fn, *args, **kwargs)
         except (AssertionError, KeyError) as e:
             self.log.append(f"   refused: {e}")
 
@@ -146,7 +155,7 @@ class Sim:
             self._operator(self.queue.release, SPEC.name, tag)
 
     def _do_stop_all(self):
-        self.queue.stop_cloud()
+        self.command(self.queue.stop_cloud)
         now = self.world.clock.now
         for m in self.manager.pool_store.load().machines:
             if m.retiring:
@@ -154,7 +163,7 @@ class Sim:
         self.stopped_all_at = self.step_no
 
     def _do_rent_again(self):
-        self.manager.set_capacity_cap("cap", 1)
+        self.command(self.manager.set_capacity_cap, "cap", 1)
         self.stopped_all_at = None
 
     def _do_crash_local(self):
@@ -322,16 +331,11 @@ def test_a_seed_replays_exactly(tmp_path_factory, monkeypatch):
     assert runs[0] == runs[1]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known (plan §Why): worker_status marks slots finished and zeroes a bucket "
-    "slot's undelivered count on the shared record; PR 3 moves both into reconcile",
-)
 def test_status_reads_change_nothing(sim):
     """I7: serving the dashboard's pages and polls changes no record."""
     run = sim(0)
     for tag in TAGS:
-        run.queue.enqueue(SPEC.name, tag, confirm=True)
+        run.command(run.queue.enqueue, SPEC.name, tag, confirm=True)
     for _ in range(40):
         run.step("pass")
         before = _snapshot(run)
@@ -362,7 +366,7 @@ def test_a_restart_changes_no_outcome(sim, restart_at, tmp_path_factory, monkeyp
     for restart in (False, True):
         run = Sim(tmp_path_factory.mktemp("run"), monkeypatch, seed=0)
         for tag in TAGS:
-            run.queue.enqueue(SPEC.name, tag, confirm=True)
+            run.command(run.queue.enqueue, SPEC.name, tag, confirm=True)
         for _ in range(restart_at):
             run.step("pass")
         if restart:
