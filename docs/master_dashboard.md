@@ -7,7 +7,11 @@ analysis. Workers can run on the local machine, on your own machines over ssh,
 or on machines the dashboard rents from a cloud provider.
 
 Launch it with `./py/scripts/dashboard.py` (optionally `--workload W --tag T`
-to open straight onto a tag).
+to open straight onto a tag). Stop it with Ctrl-C: the launcher returns once
+the dashboard has exited, after finishing the step in flight and stopping its
+local workers (they flush what they have), so launching again at once is safe.
+A dashboard started while another still holds the mount waits up to a minute
+for it to exit, and says so.
 
 ## Concepts
 

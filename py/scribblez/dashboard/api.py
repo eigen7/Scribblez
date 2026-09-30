@@ -22,6 +22,7 @@ import os
 import signal
 import sqlite3
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -891,6 +892,12 @@ def make_app(
 # collection; the kernel releases it automatically when the process exits.
 _CONTROL_LOCK = None
 
+# How long a starting dashboard waits for the previous one to exit. A stopped
+# dashboard finishes the step it is in (an ssh command, an upload) first, and
+# a restart typically begins before it has.
+LOCK_WAIT_SECONDS = 60
+LOCK_POLL_SECONDS = 5
+
 
 def acquire_control_lock(mount_root: str):
     """Exit unless this is the only dashboard managing `mount_root`.
@@ -900,24 +907,39 @@ def acquire_control_lock(mount_root: str):
     react_server's port reclaim does not prevent that (a second dashboard can
     use other ports), so an exclusive flock on <mount>/.dashboard.lock does.
     The kernel drops the lock when its holder dies, so a crashed dashboard
-    never leaves a stale one."""
+    never leaves a stale one. A holder is waited for up to LOCK_WAIT_SECONDS,
+    for a restart that began while the previous dashboard was still exiting."""
     global _CONTROL_LOCK
     path = Path(mount_root) / ".dashboard.lock"
     path.touch(exist_ok=True)
     fd = open(path, "r+")
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+    while not _try_lock(fd):
+        fd.seek(0)
         holder = fd.read().strip() or "unknown"
-        sys.exit(
-            f"A dashboard is already managing {mount_root} (pid {holder}). Stop it first, "
-            f"or point this one at a different --mount-root."
+        if time.monotonic() >= deadline:
+            sys.exit(
+                f"A dashboard is still managing {mount_root} (pid {holder}) after "
+                f"{LOCK_WAIT_SECONDS} s. Stop it first, or point this one at a different "
+                f"--mount-root."
+            )
+        print(
+            f"Waiting for the dashboard managing {mount_root} (pid {holder}) to exit...", flush=True
         )
+        time.sleep(LOCK_POLL_SECONDS)
     fd.seek(0)
     fd.truncate()
     fd.write(str(os.getpid()))
     fd.flush()
     _CONTROL_LOCK = fd
+
+
+def _try_lock(fd) -> bool:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
 
 
 def run(port: int, mount_root: str):
@@ -962,7 +984,10 @@ def run(port: int, mount_root: str):
     def stop(signum, frame):
         loop.add_callback_from_signal(loop.stop)
 
+    # An interrupt (Ctrl-C in the launcher's terminal reaches this process
+    # too) stops the dashboard as SIGTERM does, rather than mid-step.
     signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
     loop.add_callback(reconcile)
     tornado.ioloop.PeriodicCallback(reconcile, RECONCILE_SECONDS * 1000).start()
     try:

@@ -1863,11 +1863,12 @@ def test_a_generator_on_a_rented_machine_delivers_through_the_bucket(rented, man
     assert manager._has_bucket_slots(spec, task)
 
 
-def test_local_workers_run_niced(manager, spec, task, monkeypatch, tmp_path):
+def test_local_workers_run_niced_in_their_own_session(manager, spec, task, monkeypatch, tmp_path):
     """A local worker yields the machine to whatever short job competes with it
     -- a bundle build for a billing fleet above all -- by running at
     LOCAL_WORKER_NICE, applied in the child before exec so its threads inherit
-    it."""
+    it. It runs in a session of its own, so only the dashboard's SIGTERM, which
+    it answers by flushing, stops it."""
     monkeypatch.setattr(WorkerManager, "_spawn_local", _REAL_SPAWN_LOCAL)
     monkeypatch.setattr(
         WorkerManager, "_log_file", lambda self, spec, tag, name: open(tmp_path / "log", "ab")
@@ -1879,6 +1880,7 @@ def test_local_workers_run_niced(manager, spec, task, monkeypatch, tmp_path):
     def popen(argv, **kwargs):
         kwargs["preexec_fn"]()  # what the child would run
         spawned["argv"] = argv
+        spawned["new_session"] = kwargs.get("start_new_session")
         return SimpleNamespace(pid=4242)
 
     monkeypatch.setattr(workers_mod.subprocess, "Popen", popen)
@@ -1886,6 +1888,7 @@ def test_local_workers_run_niced(manager, spec, task, monkeypatch, tmp_path):
     manager._spawn_local(spec, task, w)
     assert niced == [workers_mod.LOCAL_WORKER_NICE] and w.pid == 4242
     assert spawned["argv"][-1] == "cloud.worker_entrypoint"
+    assert spawned["new_session"]  # out of reach of a Ctrl-C in the dashboard's terminal
 
 
 def test_an_all_ssh_task_with_a_trainer_gets_every_bucket_leg(manager, tmp_path, monkeypatch):

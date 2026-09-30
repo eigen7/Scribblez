@@ -12,6 +12,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+import time
+from pathlib import Path
 from urllib.parse import quote
 
 from scribblez.paths import REPO_ROOT
@@ -24,6 +27,13 @@ WEB_DIR = REPO_ROOT / "web"
 # reached through Vite's proxy.
 DEFAULT_API_PORT = 8090
 DEFAULT_DEV_PORT = 5180
+
+# How long a killed listener may take to release its port.
+PORT_RELEASE_SECONDS = 10
+# How long a stopping dashboard's processes get to exit before they are
+# killed. The API finishes the step in flight (an ssh command, an upload) and
+# SIGTERMs its local workers first; killing it sooner would lose that step.
+STOP_SECONDS = 120
 
 
 def _listening_pids(port: int) -> list[int]:
@@ -53,6 +63,11 @@ def reclaim_port(port: int):
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    # A kill returns before the port is free, and a server started meanwhile
+    # would fail to bind.
+    deadline = time.monotonic() + PORT_RELEASE_SECONDS
+    while _listening_pids(port) and time.monotonic() < deadline:
+        time.sleep(0.2)
 
 
 def _dashboard_banner(url: str) -> str:
@@ -93,15 +108,16 @@ def spawn(
         "VITE_DEV_PORT": str(dev_port),
         "VITE_API_PORT": str(api_port),
     }
-    # Vite's output is discarded: it is startup noise (including a transient
-    # proxy ECONNREFUSED while the API binds), and its bare "Local:" URL would
-    # tempt a click on a tag-less page. The URL worth clicking is printed below.
+    # Vite's output goes to a log rather than the terminal: it is startup
+    # noise (including a transient proxy ECONNREFUSED while the API binds), and
+    # its bare "Local:" URL would tempt a click on a tag-less page. The URL
+    # worth clicking is printed below; the log's tail is printed if Vite exits.
     vite = subprocess.Popen(
         ["npm", "run", "dev"],
         cwd=WEB_DIR,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=_vite_log(dev_port),
+        stderr=subprocess.STDOUT,
     )
     url = service_url("dash", dev_port, DEFAULT_DEV_PORT)
     query = [
@@ -121,12 +137,55 @@ def launch(
     workload: str | None = None,
     tag: str | None = None,
 ):
-    """The CLI entry point: run the dashboard until interrupted."""
-    procs = spawn(mount_root, api_port, dev_port, workload, tag)
+    """The CLI entry point: run the dashboard until interrupted (Ctrl-C or
+    SIGTERM) or until either process exits, then stop both and return only
+    once they are gone, so a restart never races the dashboard it replaces."""
+    signal.signal(signal.SIGTERM, _interrupt)
+    api, vite = spawn(mount_root, api_port, dev_port, workload, tag)
+    names = {api.pid: "The API", vite.pid: "Vite"}
     try:
-        procs[-1].wait()  # the Vite process
+        while (ended := next((p for p in (api, vite) if p.poll() is not None), None)) is None:
+            time.sleep(0.5)
+        print(f"\n{names[ended.pid]} exited (code {ended.returncode}).", file=sys.stderr)
+        if ended is vite:
+            print(_tail(_vite_log_path(dev_port)), file=sys.stderr)
     except KeyboardInterrupt:
         pass
     finally:
-        for p in procs:
+        _stop([api, vite], names)
+
+
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
+def _stop(procs: list[subprocess.Popen], names: dict[int, str]):
+    """Terminate each process and wait for it to exit, killing one that takes
+    longer than STOP_SECONDS."""
+    for p in procs:
+        if p.poll() is None:
             p.terminate()
+    for p in procs:
+        try:
+            p.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            print(f"Waiting for {names[p.pid]} (pid {p.pid}) to exit...", file=sys.stderr)
+            try:
+                p.wait(timeout=STOP_SECONDS)
+            except subprocess.TimeoutExpired:
+                print(f"Killing {names[p.pid]} (pid {p.pid}).", file=sys.stderr)
+                p.kill()
+                p.wait()
+
+
+def _vite_log_path(dev_port: int) -> Path:
+    return Path(tempfile.gettempdir()) / f"scribblez-dashboard-vite-{dev_port}.log"
+
+
+def _vite_log(dev_port: int):
+    return open(_vite_log_path(dev_port), "w")
+
+
+def _tail(path: Path, lines: int = 20) -> str:
+    text = path.read_text(errors="replace") if path.exists() else ""
+    return "\n".join(text.splitlines()[-lines:]) or f"({path} is empty)"

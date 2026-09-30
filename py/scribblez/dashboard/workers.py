@@ -742,6 +742,10 @@ class WorkerManager:
             stdout=log,
             stderr=subprocess.STDOUT,
             preexec_fn=lambda: os.nice(LOCAL_WORKER_NICE),  # inherited by its sim threads
+            # Its own session: a Ctrl-C in the dashboard's terminal must not
+            # interrupt it mid-step. The dashboard's shutdown SIGTERMs it, which
+            # it answers by flushing what it has and exiting.
+            start_new_session=True,
         )
         self._local[_key(spec, task.tag, w.worker_id)] = proc
         w.pid = proc.pid  # durable, so any instance can observe and stop this worker
