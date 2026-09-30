@@ -40,6 +40,7 @@ def main() -> int:
     params = spec.params_from_args(args)
 
     role = spec.role("arms")
+    sink = LocalSink(spec.data_dir(args.tag, args.mount_root))
     ctx = WorkerContext(
         spec=spec,
         role=role,
@@ -48,8 +49,8 @@ def main() -> int:
         worker_id=f"cli-{socket.gethostname()}",
         threads=args.threads,
         max_cycles=0,
-        data_sink=LocalSink(spec.data_dir(args.tag, args.mount_root)),
-        records_sink=LocalSink(spec.data_dir(args.tag, args.mount_root)),
+        data_sink=sink,
+        records_sink=sink,
         mount_root=args.mount_root,
     )
     return workloads.resolve(role.runner)(ctx)
