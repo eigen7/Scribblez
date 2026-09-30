@@ -118,8 +118,7 @@ def test_a_placement_is_committed_whole(queued, monkeypatch):
 
     def start_then_look(m, pool):
         start_slots(m, pool)
-        with ThreadPoolExecutor(max_workers=1) as reader:
-            seen.append(reader.submit(_placement, manager).result())
+        seen.append(_elsewhere(_placement, manager))
 
     monkeypatch.setattr(q, "_start_slots", start_then_look)
     manager._blocking.submit(q.tick).result()
@@ -233,6 +232,64 @@ def test_requeue_puts_the_tag_back_at_the_head(queued):
     _drain_then_tick(q)
     assert _lease(manager).tag == "a" and _lease(manager).phase == RUNNING
     assert [e.tag for e in manager.queue_store.load().entries] == ["b"]
+
+
+def test_a_requeue_is_committed_whole(queued, monkeypatch):
+    """Pausing the slots and turning the lease to a requeue commit together:
+    no reader or restart finds the slots paused on a lease still running."""
+    q, manager, make = queued
+    make("a")
+    q.enqueue("position_eval", "a", confirm=True)
+    q.tick()
+    manager.claim_writer()
+    seen = []
+    submit_drain = q._submit_drain
+
+    def look_then_drain(m):
+        seen.append(_elsewhere(_release_state, manager))
+        submit_drain(m)
+
+    monkeypatch.setattr(q, "_submit_drain", look_then_drain)
+    manager._blocking.submit(q.requeue, "position_eval", "a").result()
+    assert seen == [(RUNNING, {"running"}, [])]
+    assert _release_state(manager) == (RELEASING, {"paused"}, [])
+
+
+def test_a_finished_release_is_committed_whole(queued, monkeypatch):
+    """Ending a requeued tag's lease and putting it back in the queue commit
+    together: a crash between them would lose the tag from both."""
+    q, manager, make = queued
+    make("a")
+    q.enqueue("position_eval", "a", confirm=True)
+    q.tick()
+    q.requeue("position_eval", "a")
+    manager.claim_writer()
+    seen = []
+    save_queue = manager.queue_store.save
+
+    def look_then_save(queue):
+        if not seen:
+            seen.append(_elsewhere(_release_state, manager))
+        save_queue(queue)
+
+    monkeypatch.setattr(manager.queue_store, "save", look_then_save)
+    manager._blocking.submit(_drain_then_tick, q).result()
+    assert seen == [(RELEASING, {"paused"}, [])]  # the lease not yet ended
+
+
+def _release_state(manager) -> tuple:
+    """(localhost's lease phase, tag a's slots' desired states, the queued
+    tags), as a reader sees them."""
+    lease = manager.pool_store.load().machine("localhost").lease
+    a = manager.tasks.load(SPEC, "a")
+    queued = [e.tag for e in manager.queue_store.load().entries]
+    return lease and lease.phase, {w.desired_state for w in a.workers}, queued
+
+
+def _elsewhere(fn, *args):
+    """`fn(*args)` on a thread of its own: off the writer, as a reader."""
+    with ThreadPoolExecutor(max_workers=1) as reader:
+        return reader.submit(fn, *args).result()
 
 
 def test_a_reserved_lease_is_completed_after_a_restart(queued):

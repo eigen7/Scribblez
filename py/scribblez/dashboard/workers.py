@@ -456,7 +456,7 @@ def _ssh_state(
 class WorkerManager:
     def __init__(self, mount_root: Path):
         """Everything this manager reads and writes lives under `mount_root`:
-        the tag trees, pool.json and queue.json. The dashboard passes its
+        the tag trees and the control database (control_store.py). The dashboard passes its
         --mount-root; a test or simulation passes a scratch dir."""
         self.mount_root = Path(mount_root)
         # The control records (control_store.py), written only by the thread

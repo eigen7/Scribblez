@@ -360,8 +360,9 @@ under test (they monkeypatch `all_tasks`, `_submit_build`, `_advance_lease`,
 (clean, crash, OOM, or vanishing with no exit record), a gate flip, an
 instance vanishing, a listing failure, a slow or failed upload, a stale
 earlier run left in the bucket, and a **dashboard restart**. A restart drops
-all in-memory state and the module-level caches (`tasks._records`,
-`SharedJson._held`, `pool._canonical`), then rebuilds from disk.
+all in-memory state (the stores' live objects and readers' copies, and the
+module-level `pool._canonical`), then rebuilds from the control database and
+the tag trees.
 
 **What it checks, after every step:**
 - **I1.** The projection gives each tag exactly one state. The database

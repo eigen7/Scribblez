@@ -2,6 +2,7 @@
 objects; every other thread reads the last committed copy, and cannot write;
 a transaction commits several records together."""
 
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -96,6 +97,31 @@ def test_a_transaction_that_raises_still_commits_what_it_wrote(writer):
     with pytest.raises(RuntimeError):
         on_writer(fail_midway)
     assert [m.name for m in store.load().machines] == ["box"]
+
+
+def test_a_commit_during_a_read_is_seen_by_the_next_read(writer, tmp_path, monkeypatch):
+    """A reader caches its copy under the version from before its read, so a
+    commit landing mid-read is picked up next time, not hidden until some
+    unrelated commit."""
+    control, on_writer = writer
+    store = tasks.TaskStore(tmp_path, control)
+    on_writer(store.create, SPEC, "t", {})
+    entry = store._entry(SPEC, "t")
+    read = entry._read
+
+    def read_then_commit(stamp):
+        copy = read(stamp)
+        # The operator's command commits meanwhile. It writes the row alone:
+        # a save would wait on the entry lock this read holds, which a live
+        # reader never keeps while waiting on the writer.
+        stored = {**json.loads(control.get("task", f"{SPEC.name}/t")), "retired_spend": 42.0}
+        on_writer(control.put, "task", f"{SPEC.name}/t", json.dumps(stored))
+        return copy
+
+    monkeypatch.setattr(entry, "_read", read_then_commit)
+    assert store.load(SPEC, "t").retired_spend == 0.0  # read before the commit
+    monkeypatch.setattr(entry, "_read", read)
+    assert store.load(SPEC, "t").retired_spend == 42.0
 
 
 def test_a_task_is_deleted_only_on_the_writer(writer, tmp_path):

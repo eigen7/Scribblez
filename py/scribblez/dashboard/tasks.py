@@ -268,9 +268,12 @@ class _TaskEntry:
         with self._lock:
             stamp = _mtime(self.path)
             if not self._control.writer.here():
+                # The version before the read: a commit landing during it
+                # makes the next load read again, never keeps a stale copy.
+                version = self._control.version
                 c = self._copy
-                if c is None or c[1] != stamp or c[2] != self._control.version:
-                    c = self._copy = (self._read(stamp), stamp, self._control.version)
+                if c is None or c[1] != stamp or c[2] != version:
+                    c = self._copy = (self._read(stamp), stamp, version)
                 return c[0]
             if self._held is None or self._held[1] != stamp:
                 self._held = (self._read(stamp), stamp)

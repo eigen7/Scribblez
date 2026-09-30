@@ -100,9 +100,9 @@ class ControlStore:
         self._committed()
 
     def meta(self, name: str) -> str | None:
-        row = (
-            self._write_conn().execute("SELECT value FROM meta WHERE name = ?", (name,)).fetchone()
-        )
+        """A meta row's value, read as get() reads a record."""
+        conn = self._write_conn() if self.writer.here() else self._read_conn()
+        row = conn.execute("SELECT value FROM meta WHERE name = ?", (name,)).fetchone()
         return row[0] if row else None
 
     def set_meta(self, name: str, value: str):
