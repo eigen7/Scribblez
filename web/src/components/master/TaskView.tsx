@@ -599,17 +599,18 @@ function WorkersTable({ workers, taskBundle, onAction }: {
 }
 
 // The data-plane row of the Task card: where generations are assembled, and
-// the switch, enabled only while every slot is stopped.
-function DataPlaneRow({ dataPlane, stopped, onSet }: {
-  dataPlane: 'legacy' | 'home'; stopped: boolean; onSet: (d: 'legacy' | 'home') => void;
+// the switch, enabled only while every slot is stopped. `blocked` says why it
+// is not, in the server's words (WorkerManager.set_data_plane); null when it is.
+function DataPlaneRow({ dataPlane, blocked, onSet }: {
+  dataPlane: 'legacy' | 'home'; blocked: string | null; onSet: (d: 'legacy' | 'home') => void;
 }) {
   const other = dataPlane === 'home' ? 'legacy' : 'home';
   const label = { legacy: 'on this controller (legacy)', home: 'beside the trainer (home)' };
   return (
     <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
       {label[dataPlane]}
-      <span title={stopped ? undefined : 'pause every slot first'}>
-        <Button label={`Switch to ${other}`} disabled={!stopped} onClick={() => onSet(other)} />
+      <span title={blocked ?? undefined}>
+        <Button label={`Switch to ${other}`} disabled={blocked != null} onClick={() => onSet(other)} />
       </span>
     </span>
   );
@@ -698,7 +699,12 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           ['data dir', info.data_dir],
           ...(info.data_plane ? [['data plane', (
             <DataPlaneRow
-              dataPlane={info.data_plane} stopped={!anyPausable && !anyAlive} onSet={setDataPlane}
+              dataPlane={info.data_plane}
+              blocked={
+                anyPausable ? 'pause every slot first'
+                  : anyAlive ? 'wait for every slot to stop' : null
+              }
+              onSet={setDataPlane}
             />
           )] as [string, React.ReactNode]] : []),
           ['bundle', info.bundle_id
