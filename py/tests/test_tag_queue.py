@@ -510,8 +510,11 @@ def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypat
         "ssh-1.container.log",
     ]
     assert [t["container"] for t in swept] == ["scz-position_eval-a-ssh-1"]  # the generator
-    (argv,) = synced
-    assert "--trainer-outputs" in argv and argv[argv.index("-t") + 1] == "a"
+    # The drain's sync, then the trainer's removal pulling its outputs once more
+    # (WorkerManager.remove_worker): both while the trainer still defines them.
+    assert len(synced) == 2
+    for argv in synced:
+        assert "--trainer-outputs" in argv and argv[argv.index("-t") + 1] == "a"
     assert manager.tasks.load(SPEC, "a").workers == []
     assert _lease(manager, "gpu-box") is None
 

@@ -2372,19 +2372,74 @@ def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
     assert set(volumes) == {vol}
 
 
-def test_a_data_home_tags_trainer_comes_first(manager, monkeypatch):
+def test_a_data_home_tags_trainer_joins_while_the_others_are_stopped(manager, monkeypatch):
     spec = workloads.get("position_eval")
     task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
     task.data_plane = "home"
+    monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: False)
     with pytest.raises(AssertionError, match="add this tag's trainer first"):
         manager._check_role(spec, task, "generate", "ssh", check_gpu=False)
     manager._check_role(spec, task, "match_eval", "ssh", check_gpu=False)  # not a data-plane slot
     manager._check_role(spec, task, "train", "ssh", check_gpu=False)
-    task.workers.append(
-        tasks.WorkerRecord(worker_id="g", role="generate", kind="local", desired_state="paused")
-    )
-    with pytest.raises(AssertionError, match="before its other slots"):
+    g = tasks.WorkerRecord(worker_id="g", role="generate", kind="local", desired_state="running")
+    task.workers.append(g)
+    with pytest.raises(AssertionError, match="pause this tag's other slots"):
         manager._check_role(spec, task, "train", "ssh", check_gpu=False)
+    g.desired_state = "paused"
+    manager._check_role(spec, task, "train", "local", check_gpu=False)
+
+
+def test_moving_the_trainer_rehomes_the_other_slots(manager, monkeypatch):
+    """Your scenario: the trainer leaves m1 for localhost. The generators' stopped
+    containers are recreated at their next start (m1's now delivers to the
+    bucket), and m1's volume, which nothing works in any more, goes."""
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    task.workers = [w for w in task.workers if w.worker_id != "tr"]  # removed from m1
+    monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: False)
+    monkeypatch.setattr(WorkerManager, "_machine_gone", lambda self, spec, task, w: False)
+    discarded, volumes_gone = [], []
+    monkeypatch.setattr(
+        WorkerManager,
+        "_discard_container",
+        lambda self, spec, task, w: discarded.append(w.worker_id),
+    )
+    monkeypatch.setattr(
+        WorkerManager,
+        "_ssh_machine",
+        lambda self, task, w: SimpleNamespace(
+            remove_volume=lambda name: volumes_gone.append(w.machine)
+        ),
+    )
+    manager.add_local(spec, task, "train", threads=4, check_gpu=False)
+    assert sorted(discarded) == ["g1", "g2", "me"]
+    assert sorted(volumes_gone) == ["m1", "m2"]  # once per machine
+    g1 = task.worker("g1")
+    assert manager._slot_data_sink(spec, task, g1) == "r2"  # away from the new home
+    assert manager._slot_data_sink(spec, task, task.worker("gl")) == "local"  # now at home
+
+
+def test_removing_a_bucket_trainer_pulls_its_last_outputs_first(manager, monkeypatch):
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    manager.tasks.save(spec, task)
+    monkeypatch.setattr(WorkerManager, "_refresh_probe", lambda self, spec, task, w: "missing")
+    monkeypatch.setattr(WorkerManager, "_machine_gone", lambda self, spec, task, w: False)
+    synced = []
+    monkeypatch.setattr(
+        WorkerManager,
+        "sync_once",
+        lambda self, spec, task: synced.append([w.worker_id for w in task.workers]),
+    )
+    monkeypatch.setattr(
+        WorkerManager,
+        "_ssh_machine",
+        lambda self, task, w: SimpleNamespace(remove_volume=lambda name: None),
+    )
+    manager.remove_worker(spec, task, "g2")
+    assert synced == []  # only a trainer's removal needs it
+    manager.remove_worker(spec, task, "tr")
+    assert synced and "tr" in synced[0]  # pulled while the slot still says what to pull
 
 
 def test_a_rented_data_home_cannot_go_back_to_legacy(manager, monkeypatch):
@@ -2499,3 +2554,4 @@ def test_the_scheduler_hooks_say_whether_a_role_is_running(manager, monkeypatch)
     monkeypatch.setattr(WorkerManager, "_seen_alive", lambda self, spec, task, w: w.role == "train")
     hooks = manager._scheduler_hooks(spec, task)
     assert hooks.role_running("train") and not hooks.role_running("generate")
+
