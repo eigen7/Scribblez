@@ -15,6 +15,7 @@ from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.control_store import ControlStore
 from scribblez.dashboard.pool import Hardware, Lease, PoolMachine
 from scribblez.dashboard.workers import WorkerManager, _key
+from scribblez.workloads.position_eval import SPEC
 
 L4_REPORT = "8\n23034\n"
 
@@ -36,6 +37,10 @@ class _FakeSshMachine:
 
     def container_state(self, name: str) -> str:
         return self.state
+
+
+# The real one, which the fixture below replaces to keep tests off the real ssh config.
+_REAL_CANONICAL_HOST = pool_mod.canonical_host
 
 
 @pytest.fixture
@@ -267,3 +272,26 @@ def test_a_detected_arch_is_saved_to_the_pool(pooled, monkeypatch):
     assert manager._slot_arch(SPEC, t, w) == "znver2"
     fresh = pool_mod.pool_store(ControlStore(manager.mount_root))  # a restart
     assert fresh.load().machine("asus").machine.arch == "znver2"
+
+
+def test_ssh_hostname_is_read_only_when_it_has_a_value():
+    assert pool_mod._ssh_hostname("user me\nhostname Box.lan\nport 22\n") == "Box.lan"
+    assert pool_mod._ssh_hostname("user me\nhostname \nport 22\n") is None  # ssh -G ""
+
+
+def test_a_rental_mid_launch_does_not_fail_the_pool_view(pooled, monkeypatch):
+    """A rental is recorded before its launch returns an address, with no
+    host. The pool view compares it against every ssh slot's host all the
+    while (by the real canonical_host: `ssh -G` evaluates config, never
+    connects), and must neither fail nor match a slot to it."""
+    manager, listed = pooled
+    monkeypatch.setattr(pool_mod, "canonical_host", _REAL_CANONICAL_HOST)
+    pool = manager.pool_store.load()
+    record = tasks.MachineRecord(name="aws-1", provider="aws", host="")
+    pool.machines.append(PoolMachine(name="aws-1", kind="ssh", machine=record, capacity="aws"))
+    manager.pool_store.save(pool)
+    t = _task("elsewhere")
+    t.workers.append(_slot("ssh-0", "ssh", "running", host="me@box"))
+    listed.append((SPEC, t))
+    (row,) = [m for m in manager.pool_status() if m["name"] == "aws-1"]
+    assert row["occupants"] == [] and row["state"] == "free"
