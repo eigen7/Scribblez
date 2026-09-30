@@ -907,6 +907,21 @@ def test_a_local_child_that_exits_zero_is_finished(manager, spec, task, monkeypa
     assert w.desired_state == "paused"
 
 
+def test_the_pass_acts_on_the_liveness_it_observed(manager, spec, task, monkeypatch):
+    """A local worker seen alive, then gone before the pass acts, is left for
+    the next pass: judged gone with its exit unread, a worker that finished
+    would be respawned."""
+    w = manager.add_local(spec, task, "generate", threads=1)
+    w.desired_state = "running"
+    manager._local[_key(spec, "t", w.worker_id)] = SimpleNamespace(
+        poll=lambda: None, returncode=None
+    )
+    checks = iter([True])  # alive when observed, gone on any later look
+    monkeypatch.setattr(workers_mod, "worker_pid_alive", lambda *a: next(checks, False))
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert info["observed_running"] is True
+
+
 def _starting_ssh_slot(manager, spec, task, monkeypatch):
     monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
     _RecordingSshMachine.ops = []

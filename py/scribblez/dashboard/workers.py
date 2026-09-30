@@ -1671,8 +1671,7 @@ class WorkerManager:
         browser's status poll, reads those observations and changes nothing,
         so serving the dashboard never waits on ssh.
         """
-        if observe:
-            self._observe_slots(spec, task)
+        seen = self._observe_slots(spec, task) if observe else {}
         out = []
         for w in task.workers:
             gated = w.role in task.gates
@@ -1694,7 +1693,7 @@ class WorkerManager:
             if gated:
                 info["gate_reason"] = task.gates[w.role]
             if w.kind == "local":
-                alive = self._local_alive(spec, task, w)
+                alive = seen[w.worker_id] if observe else self._local_alive(spec, task, w)
                 info["state"] = _local_state(
                     w.desired_state, alive, gated, w.finished, w.failed is not None
                 )
@@ -1716,28 +1715,33 @@ class WorkerManager:
             out.append(info)
         return out
 
-    def _observe_slots(self, spec, task: tasks.TaskRecord):
-        """The pass's look at every slot, and what it records: a local worker
-        that exited 0 finished, a bucket slot's container holds nothing to
-        collect, each container's fresh probe (at most once per
-        OBSERVATION_TTL_SECONDS), and since when a slot meant to run has been
-        down (_holds_machine)."""
+    def _observe_slots(self, spec, task: tasks.TaskRecord) -> dict[str, bool]:
+        """The pass's look at every slot, and what it records: each container's
+        fresh probe (at most once per OBSERVATION_TTL_SECONDS), that a bucket
+        slot's container holds nothing to collect, that a local worker which
+        exited 0 finished, and since when a slot meant to run has been down
+        (_holds_machine). Returns each local slot's liveness as observed here,
+        for the pass to act on: a worker seen alive and then found gone
+        without its exit read would be respawned though it finished. The
+        local slots go last, after the seconds of ssh the probes take."""
+        for w in task.workers:
+            if w.kind == "ssh":
+                self._holds_nothing(spec, task, w)
+                self._refresh_probe(spec, task, w)
+        seen = {}
         for w in task.workers:
             if w.kind == "local":
                 proc = self._local.get(_key(spec, task.tag, w.worker_id))
                 if proc is not None:
                     proc.poll()  # reap our own exited child, so it is not seen alive
-                if (
-                    not self._local_alive(spec, task, w)
-                    and self._local_exit_code(spec, task, w) == 0
-                ):
+                seen[w.worker_id] = self._local_alive(spec, task, w)
+                if not seen[w.worker_id] and self._local_exit_code(spec, task, w) == 0:
                     _note_finished(w)
-            else:
-                self._holds_nothing(spec, task, w)
-                self._refresh_probe(spec, task, w)
+        for w in task.workers:
             self._note_down(spec, task, w)
         if task.workers:
             self.tasks.save(spec, task)
+        return seen
 
     def _slot_reason(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
         """Why ssh slot `w` is not running. While its machine is not up the

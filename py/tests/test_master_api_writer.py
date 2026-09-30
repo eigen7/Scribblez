@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 
 import tornado.testing
+from cloud.bundles import BundleManifest
 from scribblez.dashboard import api
 from scribblez.dashboard.tag_queue import TagQueue
 from scribblez.dashboard.workers import WorkerManager
@@ -57,6 +58,16 @@ class WriterRuleTest(tornado.testing.AsyncHTTPTestCase):
         self.get("/api/queue/plan?workload=position_eval&tag=t")
         self.get("/api/cloud/stop_all")
         self.get("/api/workload_tags?workload=position_eval")
+
+    def test_redeploy_pins_the_live_task(self):
+        """Redeploy loads the task on the writer: pinning a reader's copy
+        would save it over the live record."""
+        self.manager._build_bundle = lambda archs: BundleManifest(
+            bundle_id="b-1", git_sha="0", git_dirty=False, archs=archs, source_hash="h"
+        )
+        self.post("/api/tasks", {**_TAG, "params": {}})
+        assert self.post("/api/task/deploy", _TAG) == {"bundle_id": "b-1"}
+        assert self.get("/api/task?workload=position_eval&tag=t")["bundle_id"] == "b-1"
 
     def test_a_read_is_answered_while_a_command_holds_the_writer(self):
         """A read waits on nothing the writer is doing: the Machine pool page

@@ -279,10 +279,13 @@ def test_an_ssh_machine_takes_the_tag_once_its_bundle_is_pinned(queued, monkeypa
     assert _lease(manager, "gpu-box") is None
 
     done: Future = Future()
-    done.set_result(({}, "manifest"))  # (the archs it detected, the bundle)
+    # The build thread only reports the arch it detected; the pass records it.
+    done.set_result(({"gpu-box": "znver3"}, "manifest"))
     q._builds[("position_eval", "a")] = done
     q.tick()
     assert pinned == ["manifest"]
+    fresh = pool_mod.pool_store(manager.mount_root).load()  # as saved
+    assert fresh.machine("gpu-box").machine.arch == "znver3"
     lease = _lease(manager, "gpu-box")
     assert lease.tag == "a" and lease.phase == RUNNING
     a = manager.tasks.load(SPEC, "a")
