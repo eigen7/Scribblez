@@ -8,7 +8,6 @@ fail, so anything that launches where it should not breaks loudly.
 """
 
 import asyncio
-import json
 import threading
 import time
 from dataclasses import replace
@@ -197,22 +196,19 @@ def test_a_pause_survives_a_pass_that_looked_at_the_task_before_it(manager, spec
     manager.worker_status(spec, in_pass, observe=True)  # the pass's later save
 
     assert manager.tasks.load(spec, "t").worker(w.worker_id).desired_state == "paused"
-    raw = json.loads(manager.tasks.task_path(spec, "t").read_text())
-    assert raw["workers"][0]["desired_state"] == "paused"
+    stored = tasks.TaskStore(manager.mount_root).load(spec, "t")  # as a restart reads it
+    assert stored.worker(w.worker_id).desired_state == "paused"
 
 
 def test_a_status_poll_writes_nothing(manager, spec, task):
-    """The browser polls every second on the request thread; those reads
-    must not race the pass's saves on the file. Only the observing pass
-    saves."""
+    """The browser polls every second; those reads must not race the pass's
+    saves. Only the observing pass saves."""
     manager.add_local(spec, task, "generate", threads=1)
-    path = manager.tasks.task_path(spec, "t")
-    before = path.stat().st_mtime_ns
+    before = manager.control.version
     manager.worker_status(spec, task)
-    assert path.stat().st_mtime_ns == before
-    time.sleep(0.02)  # file mtimes tick coarsely; a save within the tick reads equal
+    assert manager.control.version == before
     manager.worker_status(spec, task, observe=True)
-    assert path.stat().st_mtime_ns != before
+    assert manager.control.version != before
 
 
 def test_reconcile_skips_a_slot_removed_between_its_steps(manager, spec, task, monkeypatch):

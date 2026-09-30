@@ -178,11 +178,12 @@ class TagQueue:
         m = self._leased(pool, workload, tag)
         assert m is not None and m.lease.phase != RELEASING, f"{workload}/{tag} is not placed"
         spec, task = self._lookup(workload, tag)
-        for w in task.workers:
-            w.desired_state = "paused"
-        self._m.tasks.save(spec, task)
-        m.lease.requeue = True
-        self._start_release(m, pool, REQUEUED)
+        with self._m.control.transaction():
+            for w in task.workers:
+                w.desired_state = "paused"
+            self._m.tasks.save(spec, task)
+            m.lease.requeue = True
+            self._start_release(m, pool, REQUEUED)
 
     def stop_cloud(self, dry_run: bool = False) -> dict:
         """Get the cloud burn to zero (the burn strip's Stop all cloud
@@ -438,7 +439,9 @@ class TagQueue:
 
     def _place(self, pool: Pool, queue: Queue):
         """Match queued tags to free machines (placement.match) and place each
-        match: lease first, then the queue entry goes, then the slots."""
+        match: the lease, the queue entry's removal and the slots commit
+        together (control_store.py), so a crash never leaves a tag both
+        queued and placed."""
         tasks_now = list(self._m.all_tasks())
         busy = {m.name: self._m.occupants(m, tasks_now) for m in pool.machines}
         free = [m for m in pool.machines if m.lease is None and not m.retiring and not busy[m.name]]
@@ -463,19 +466,20 @@ class TagQueue:
                 continue
             m = pool.machine(matches[e.key])
             spend = m.machine.spend if m.capacity is not None else 0.0
-            m.lease = Lease(
-                e.workload,
-                e.tag,
-                RESERVED,
-                time.time(),
-                spend_start=spend,
-                machines=list(e.machines),
-                memory_override_gb=e.memory_override_gb,
-            )
-            self._m.pool_store.save(pool)
-            queue.entries.remove(e)
-            self._m.queue_store.save(queue)
-            self._start_slots(m, pool)
+            with self._m.control.transaction():
+                m.lease = Lease(
+                    e.workload,
+                    e.tag,
+                    RESERVED,
+                    time.time(),
+                    spend_start=spend,
+                    machines=list(e.machines),
+                    memory_override_gb=e.memory_override_gb,
+                )
+                self._m.pool_store.save(pool)
+                queue.entries.remove(e)
+                self._m.queue_store.save(queue)
+                self._start_slots(m, pool)
         self._rent_for(pool, queue, args)
         self._note_refusals(pool, queue, args, busy)
 
@@ -518,9 +522,11 @@ class TagQueue:
                     self._rent_refused[c.name] = (str(ex), time.time() + RENT_RETRY_SECONDS)
                     continue
                 self._rent_refused.pop(c.name, None)
-                queue.entries.remove(e)
-                self._m.queue_store.save(queue)
-                self._start_slots(m, pool)
+                # The lease committed before the launch (PoolRentals.rent).
+                with self._m.control.transaction():
+                    queue.entries.remove(e)
+                    self._m.queue_store.save(queue)
+                    self._start_slots(m, pool)
                 break
 
     def _why_not_rent(self, c: Capacity, pool: Pool) -> str | None:
@@ -675,16 +681,19 @@ class TagQueue:
             m.lease.reason = f"draining: {e}"
             self._m.pool_store.save(pool)
             return
-        for w in list(task.workers):
-            self._m.remove_worker(spec, task, w.worker_id)
-        task.retired_spend += pool_mod.lease_spend(m)
-        self._m.tasks.save(spec, task)
-        lease = m.lease
-        m.lease = None
-        self._m.pool_store.save(pool)
-        if lease.requeue:
-            queue.entries.insert(0, _requeued(lease, task))
-            self._m.queue_store.save(queue)
+        # One transaction: a crash must not end the lease of a requeued tag
+        # before its entry is back in the queue.
+        with self._m.control.transaction():
+            for w in list(task.workers):
+                self._m.remove_worker(spec, task, w.worker_id)
+            task.retired_spend += pool_mod.lease_spend(m)
+            self._m.tasks.save(spec, task)
+            lease = m.lease
+            m.lease = None
+            self._m.pool_store.save(pool)
+            if lease.requeue:
+                queue.entries.insert(0, _requeued(lease, task))
+                self._m.queue_store.save(queue)
 
     def _submit_drain(self, m: PoolMachine):
         """Drain the tag leasing `m` on the drain thread, from a copy of its

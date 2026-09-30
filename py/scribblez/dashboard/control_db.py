@@ -1,18 +1,18 @@
-"""The control database (docs/plans/dashboard_state_model.md §1, §10), in
-shadow mode.
+"""The control database's normalized tables (docs/plans/dashboard_state_model.md
+§1, §10), in shadow mode.
 
-The plan moves the dashboard's control state out of task.json, pool.json and
-queue.json into one SQLite database of normalized records with constraints:
-tags, machines, assignments (a tag on a machine, queue or manual), slots and
-operations. The state the operator sees for a tag is a projection of those
-records, not a stored field.
+The plan keeps the dashboard's control state as normalized records with
+constraints: tags, machines, assignments (a tag on a machine, queue or
+manual), slots and operations. The state the operator sees for a tag is a
+projection of those records, not a stored field.
 
-In shadow mode the JSON files stay authoritative. Each reconcile pass imports
-them into the database (a full rebuild, in one transaction), projects every
-tag's state, and compares it with the state the JSON stores imply today. What
-it cannot import cleanly, or where the two disagree, becomes a finding. So
-the schema, its constraints and the migration's decision table (§10) meet the
-live stores long before the database becomes authoritative (PR 3).
+In shadow mode the control store's records (control_store.py: the pool, the
+queue, each task's control state) stay authoritative. Each reconcile pass
+imports them into these tables (a full rebuild, in one transaction), projects
+every tag's state, and compares it with the state the records imply. What it
+cannot import cleanly, or where the two disagree, becomes a finding. So the
+schema, its constraints and the decision table (§10) meet the live records
+before the constraints are enforced at commit.
 """
 
 import sqlite3
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS tag (
 CREATE TABLE IF NOT EXISTS machine (
     name TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('local', 'ssh')),
-    -- 'pool': in pool.json; 'task': a task-owned machine (PR 5 moves these
+    -- 'pool': a pool machine; 'task': a task-owned machine (PR 5 moves these
     -- into the pool); 'host': a bare ssh host string no machine record names.
     origin TEXT NOT NULL CHECK (origin IN ('pool', 'task', 'host')),
     capacity TEXT,  -- the capacity entry a pool rental belongs to
@@ -123,7 +123,7 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def import_stores(conn: sqlite3.Connection, manager: WorkerManager) -> list[Finding]:
-    """Rebuild the control records from the manager's JSON stores, in one
+    """Rebuild the normalized tables from the manager's stores, in one
     transaction. Returns what could not be imported cleanly, per the
     decision table in docs/plans/dashboard_state_model.md §10."""
     findings: list[Finding] = []

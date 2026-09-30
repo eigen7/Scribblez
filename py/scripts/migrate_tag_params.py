@@ -35,6 +35,7 @@ from pathlib import Path
 
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.dashboard.control_store import ControlStore
 from scribblez.paths import TagPaths, add_mount_root_argument
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -87,12 +88,19 @@ def param_files(root: Path) -> list[Path]:
     return files
 
 
-def alive_workers(root: Path) -> list[str]:
-    task_file = root / "task.json"
-    if not task_file.is_file():
+def alive_workers(spec, tag: str, mount_root: str) -> list[str]:
+    """The tag's slots whose worker process is alive. The slots are in the
+    dashboard's control store, or, before the dashboard first moved them
+    there, still in task.json."""
+    body = ControlStore(Path(mount_root)).get("task", f"{spec.name}/{tag}")
+    task_file = TagPaths(tag, spec.name, mount_root).root / "task.json"
+    if body is not None:
+        stored = json.loads(body)
+    elif task_file.is_file():
+        stored = json.loads(task_file.read_text())
+    else:
         return []
-    task = json.loads(task_file.read_text())
-    return [w["worker_id"] for w in task.get("workers", []) if _pid_alive(w.get("pid"))]
+    return [w["worker_id"] for w in stored.get("workers", []) if _pid_alive(w.get("pid"))]
 
 
 def migrate_tag(spec, tag, mount_root, renames, drops, sets, dry_run) -> int:
@@ -100,7 +108,7 @@ def migrate_tag(spec, tag, mount_root, renames, drops, sets, dry_run) -> int:
     root = TagPaths(tag, spec.name, mount_root).root
     if not root.is_dir():
         sys.exit(f"error: no such tag dir {root}")
-    alive = alive_workers(root)
+    alive = alive_workers(spec, tag, mount_root)
     if alive and not dry_run:
         # A live worker holds the old params and would rewrite its snapshot on top
         # of the migration. A dry run touches nothing, so it may still preview.

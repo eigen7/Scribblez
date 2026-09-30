@@ -1,15 +1,14 @@
 """The tag queue's records (docs/plans/tag_queue.md §4): tags waiting for a
 pool machine, in the order they are to be placed.
 
-queue.json lives under the mount root beside pool.json, held by the
-dashboard's queue store (queue_store, shared_json.py). The queue is global across workloads;
-each entry's eligibility decides which pool machines may take it.
+The queue is one record of the control store (queue_store, control_store.py).
+It is global across workloads; each entry's eligibility decides which pool
+machines may take it.
 """
 
 from dataclasses import dataclass, field, fields
-from pathlib import Path
 
-from scribblez.dashboard.shared_json import SharedJson, Writer
+from scribblez.dashboard.control_store import ControlStore, SharedRecord
 
 # The states of a queued tag's bundle (QueueEntry.bundle). A tag that may land
 # on an ssh machine has its bundle built and pinned when it is enqueued, so
@@ -55,15 +54,15 @@ class Queue:
         return e
 
 
-def _decode(raw: dict) -> Queue:
+def decode(raw: dict) -> Queue:
     known = {f.name for f in fields(QueueEntry)}
     return Queue(
         entries=[QueueEntry(**{k: v for k, v in e.items() if k in known}) for e in raw["entries"]]
     )
 
 
-def queue_store(mount_root: Path, writer: Writer | None = None) -> SharedJson:
-    """The store of queue.json under `mount_root`: load() gives the Queue (an
-    empty one before the file exists), live on the writer thread and the last
-    committed copy elsewhere (shared_json); save(queue) writes it."""
-    return SharedJson(Path(mount_root) / "queue.json", _decode, Queue, writer or Writer())
+def queue_store(control: ControlStore) -> SharedRecord:
+    """The queue's record: load() gives the Queue (an empty one before the
+    first save), live on the writer thread and the last committed copy
+    elsewhere (control_store.py); save(queue) writes it."""
+    return SharedRecord(control, "queue", "", decode, Queue)

@@ -12,6 +12,7 @@ import pytest
 from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import tasks
 from scribblez.dashboard import workers as workers_mod
+from scribblez.dashboard.control_store import ControlStore
 from scribblez.dashboard.pool import Hardware, Lease, PoolMachine
 from scribblez.dashboard.workers import WorkerManager, _key
 
@@ -70,13 +71,13 @@ def test_parse_hardware():
     assert pool_mod.parse_hardware("32\n24000\n16000\n").gpu_memory_gb == 16000 / 1024
 
 
-def test_a_pool_round_trips_through_pool_json(pooled):
+def test_a_pool_round_trips_through_its_record(pooled):
     manager, _ = pooled
     manager.add_pool_machine("asus", "dshin@asus-laptop", aliases=["asus-laptop"])
     pool = manager.pool_store.load()
     pool.machine("asus").lease = Lease("position_eval", "t", "running", 1.0)
     manager.pool_store.save(pool)
-    m = pool_mod.pool_store(manager.mount_root).load().machine("asus")  # a fresh process
+    m = pool_mod.pool_store(ControlStore(manager.mount_root)).load().machine("asus")  # a restart
     assert m.kind == "ssh" and m.machine.host == "dshin@asus-laptop"
     assert m.hardware == Hardware(8, 1, 23034 / 1024) and m.machine.gpu_count == 1
     assert m.aliases == ["asus-laptop"]
@@ -248,7 +249,7 @@ def test_a_pool_machine_a_slot_names_cannot_be_removed(pooled):
 
 def test_a_detected_arch_is_saved_to_the_pool(pooled, monkeypatch):
     """A leased pool machine's arch, detected at its first slot start, lands in
-    pool.json rather than only in this process's copy."""
+    the pool's record rather than only in this process's copy."""
     manager, _ = pooled
     from scribblez.workloads.position_eval import SPEC
 
@@ -264,5 +265,5 @@ def test_a_detected_arch_is_saved_to_the_pool(pooled, monkeypatch):
     w = _slot("ssh-0", "ssh", "running", machine="asus")
     t.workers.append(w)
     assert manager._slot_arch(SPEC, t, w) == "znver2"
-    fresh = pool_mod.pool_store(manager.mount_root)  # a fresh process
+    fresh = pool_mod.pool_store(ControlStore(manager.mount_root))  # a restart
     assert fresh.load().machine("asus").machine.arch == "znver2"

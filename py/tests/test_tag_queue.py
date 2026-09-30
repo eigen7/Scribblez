@@ -4,12 +4,15 @@ and release, failure (hand-over or hold), requeue, and recovery of a placement
 a restart interrupted. The pass is driven by calling tick() directly; the
 slots it creates are never actually started."""
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from scribblez.dashboard import placement, tasks
 from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tag_queue as tq_mod
 from scribblez.dashboard import workers as workers_mod
+from scribblez.dashboard.control_store import ControlStore
 from scribblez.dashboard.pool import Hardware, Lease, PoolMachine
 from scribblez.dashboard.tag_queue import (
     EMPTY_POOL,
@@ -100,6 +103,36 @@ def test_a_placed_tag_gets_its_layout_and_its_machine(queued):
         ("generate", "local", 28, "running"),
     ]
     assert manager.queue_store.load().entries == []
+
+
+def test_a_placement_is_committed_whole(queued, monkeypatch):
+    """The lease, the queue entry's removal and the slots commit together: no
+    reader, and no restart, finds the tag both queued and placed, or placed
+    with no slots."""
+    q, manager, make = queued
+    make("a")
+    q.enqueue("position_eval", "a", confirm=True)
+    manager.claim_writer()  # the test's own thread now reads committed copies
+    seen = []
+    start_slots = q._start_slots
+
+    def start_then_look(m, pool):
+        start_slots(m, pool)
+        with ThreadPoolExecutor(max_workers=1) as reader:
+            seen.append(reader.submit(_placement, manager).result())
+
+    monkeypatch.setattr(q, "_start_slots", start_then_look)
+    manager._blocking.submit(q.tick).result()
+    assert seen == [(None, ["a"], 0)]  # mid-placement, nothing of it
+    assert _placement(manager) == ("a", [], 2)
+
+
+def _placement(manager) -> tuple:
+    """(the tag leasing localhost, the queued tags, tag a's slot count), as a
+    reader sees them."""
+    lease = manager.pool_store.load().machine("localhost").lease
+    queued = [e.tag for e in manager.queue_store.load().entries]
+    return lease and lease.tag, queued, len(manager.tasks.load(SPEC, "a").workers)
 
 
 def test_a_tag_that_does_not_fit_waits_with_its_reason(queued):
@@ -284,7 +317,7 @@ def test_an_ssh_machine_takes_the_tag_once_its_bundle_is_pinned(queued, monkeypa
     q._builds[("position_eval", "a")] = done
     q.tick()
     assert pinned == ["manifest"]
-    fresh = pool_mod.pool_store(manager.mount_root).load()  # as saved
+    fresh = pool_mod.pool_store(ControlStore(manager.mount_root)).load()  # as saved
     assert fresh.machine("gpu-box").machine.arch == "znver3"
     lease = _lease(manager, "gpu-box")
     assert lease.tag == "a" and lease.phase == RUNNING

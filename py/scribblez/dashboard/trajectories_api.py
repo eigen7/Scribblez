@@ -86,11 +86,10 @@ def set_dir(name: str) -> Path:
 
 def tag_params(paths: TagPaths) -> EvidenceTrajectoriesParams:
     """The tag's frozen params (its task.json)."""
-    store = tasks.TaskStore(paths.mount_root)
-    task = store.load(workloads.get(EVIDENCE_TRAJECTORIES), paths.tag)
-    if task is None:
+    params = tasks.read_params(workloads.get(EVIDENCE_TRAJECTORIES), paths.tag, paths.mount_root)
+    if params is None:
         raise KeyError(f"tag {paths.tag!r} has no task.json")
-    return params_mod.validate(EvidenceTrajectoriesParams, task.params)
+    return params_mod.validate(EvidenceTrajectoriesParams, params)
 
 
 def generations(paths: TagPaths, params: EvidenceTrajectoriesParams) -> list[dict]:

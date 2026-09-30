@@ -8,6 +8,7 @@ import os
 import pytest
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.dashboard.control_store import ControlStore
 from scribblez.paths import REPO_ROOT
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -115,6 +116,17 @@ def test_refuses_while_a_worker_is_alive(tmp_path):
             }
         )
     )
+    spec = workloads.get(_WORKLOAD)
+    with pytest.raises(SystemExit, match="still running"):
+        mig.migrate_tag(spec, "t", str(tmp_path), {}, ["mask_placement"], {}, dry_run=False)
+
+
+def test_refuses_while_a_worker_in_the_control_store_is_alive(tmp_path):
+    """Once the dashboard has moved a tag's slots into its control store,
+    task.json no longer lists them; the check reads them there."""
+    _tag_dir(tmp_path, "t", worker_ids=(), extra_params={"mask_placement": True})
+    workers = [{"worker_id": "local-0", "role": "generate", "pid": os.getpid()}]
+    ControlStore(tmp_path).put("task", f"{_WORKLOAD}/t", json.dumps({"workers": workers}))
     spec = workloads.get(_WORKLOAD)
     with pytest.raises(SystemExit, match="still running"):
         mig.migrate_tag(spec, "t", str(tmp_path), {}, ["mask_placement"], {}, dry_run=False)

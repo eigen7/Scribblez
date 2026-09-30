@@ -295,10 +295,10 @@ def _position_eval_face_up_leaves(task: str, tag: str, mount_root) -> bool:
     `face_up_leaves` param). It decides which Monte-Carlo truth the tag is
     measured against and how much of the opponent's rack the Positions tab
     shows. KeyError for a tag with no task.json."""
-    record = tasks.TaskStore(Path(mount_root)).load(workloads.get(task), tag)
-    if record is None:
+    params = tasks.read_params(workloads.get(task), tag, Path(mount_root))
+    if params is None:
         raise KeyError(f"tag {tag!r} has no task.json")
-    return params_mod.validate(PositionEvalParams, record.params).face_up_leaves
+    return params_mod.validate(PositionEvalParams, params).face_up_leaves
 
 
 @lru_cache(maxsize=2)
@@ -892,7 +892,7 @@ def make_app(
 _CONTROL_LOCK = None
 
 
-def _acquire_control_lock(mount_root: str):
+def acquire_control_lock(mount_root: str):
     """Exit unless this is the only dashboard managing `mount_root`.
 
     Two dashboards on one mount would fight over the same slots,
@@ -932,8 +932,10 @@ def run(port: int, mount_root: str):
     shutdown, local workers get SIGTERM and flush; remote machines and their
     containers keep running.
     """
-    _acquire_control_lock(mount_root)
+    acquire_control_lock(mount_root)
     manager = WorkerManager(Path(mount_root))
+    for moved in manager.import_json_stores():
+        print(f"control store: imported {moved}")
     manager.claim_writer()
     tag_queue = TagQueue(manager)
     shadow = ShadowControl(manager)
