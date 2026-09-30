@@ -12,7 +12,10 @@ local files only in the mirrored export dir (MIRRORED_OUTPUT_DIRS); the
 bucket stays the durable archive.
 
 Prefixes this host itself writes to the bucket, such as the generation dirs the
-scheduler publishes, are not pulled: the local mount already holds them.
+scheduler publishes, are not pulled: the local mount already holds them. With
+--no-data it skips the sync_data_dirs too, for a tag whose data home ingests
+bucket staging itself (generational/data_home.py): a copy here would bring back
+chunks the data home has already moved into generations.
 
 Usage:
     ./py/scripts/cloud_sync.py -t hello            one sync
@@ -36,12 +39,12 @@ from scribblez.paths import (
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
-def _targets(spec: workloads.WorkloadSpec, paths: TagPaths, trainer_outputs: bool):
+def _targets(spec: workloads.WorkloadSpec, paths: TagPaths, trainer_outputs: bool, data: bool):
     """(bucket sub-prefix, local dir, extra rclone flags) for every directory
     a sync pulls. Prefixes whose objects never change are compared by size
     alone: on an S3-style remote the listing carries no modtime, so the
     default comparison would ask for every unchanged export one by one."""
-    targets = [(sub, paths.data_dir / sub, ()) for sub in spec.sync_data_dirs]
+    targets = [(sub, paths.data_dir / sub, ()) for sub in spec.sync_data_dirs] if data else []
     targets += [("stats", paths.stats_dir, ()), ("params", paths.root / "params", ())]
     if trainer_outputs:
         targets += [
@@ -70,10 +73,14 @@ def _pull_file(r2, spec: workloads.WorkloadSpec, paths: TagPaths, name: str) -> 
 
 
 def sync_once(
-    r2, spec: workloads.WorkloadSpec, paths: TagPaths, trainer_outputs: bool = False
+    r2,
+    spec: workloads.WorkloadSpec,
+    paths: TagPaths,
+    trainer_outputs: bool = False,
+    data: bool = True,
 ) -> int:
     tag = paths.tag
-    targets = _targets(spec, paths, trainer_outputs)
+    targets = _targets(spec, paths, trainer_outputs, data)
     for sub, dest, flags in targets:
         dest.mkdir(parents=True, exist_ok=True)
         verb = "sync" if trainer_outputs and sub in MIRRORED_OUTPUT_DIRS else "copy"
@@ -113,12 +120,18 @@ def main() -> int:
         help="also pull what a trainer running elsewhere delivers "
         "(records, exports, checkpoint, cursor)",
     )
+    p.add_argument(
+        "--no-data",
+        action="store_true",
+        help="skip the workload's data dirs, which a data home ingests itself",
+    )
     args = p.parse_args()
 
     spec = workloads.get(args.workload)
     r2 = load_credentials().r2
     while True:
-        rc = sync_once(r2, spec, spec.paths(args.tag, args.mount_root), args.trainer_outputs)
+        paths = spec.paths(args.tag, args.mount_root)
+        rc = sync_once(r2, spec, paths, args.trainer_outputs, data=not args.no_data)
         if rc != 0 or not args.watch:
             return rc
         try:

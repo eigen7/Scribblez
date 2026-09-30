@@ -87,6 +87,9 @@ type TaskInfo = {
   data_dir: string; workers: WorkerInfo[]; machines: MachineInfo[]; spend: number;
   queued: number | null;  // 1-based place in the tag queue; null when not queued
   bundle_id: string | null; bundle_drift: boolean;
+  // Where the generation data plane runs: 'legacy' (this controller) or
+  // 'home' (beside the trainer); null for a workload without one.
+  data_plane: 'legacy' | 'home' | null;
 };
 
 const stateColors: Record<string, string> = {
@@ -595,6 +598,23 @@ function WorkersTable({ workers, taskBundle, onAction }: {
   );
 }
 
+// The data-plane row of the Task card: where generations are assembled, and
+// the switch, enabled only while every slot is stopped.
+function DataPlaneRow({ dataPlane, stopped, onSet }: {
+  dataPlane: 'legacy' | 'home'; stopped: boolean; onSet: (d: 'legacy' | 'home') => void;
+}) {
+  const other = dataPlane === 'home' ? 'legacy' : 'home';
+  const label = { legacy: 'on this controller (legacy)', home: 'beside the trainer (home)' };
+  return (
+    <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+      {label[dataPlane]}
+      <span title={stopped ? undefined : 'pause every slot first'}>
+        <Button label={`Switch to ${other}`} disabled={!stopped} onClick={() => onSet(other)} />
+      </span>
+    </span>
+  );
+}
+
 function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
   const tabActive = useContext(TabActiveContext);
   const [info, setInfo] = useState<TaskInfo | null>(null);
@@ -638,6 +658,17 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
       setDeploying(false);
     }
   };
+  // Moving the data plane needs every slot stopped, so two schedulers never run
+  // on the tag at once; the server refuses otherwise and says why.
+  const setDataPlane = async (dataPlane: 'legacy' | 'home') => {
+    setError('');
+    try {
+      await postJSON('/api/task/data_plane', { workload: workload.name, tag, data_plane: dataPlane });
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   const removeAll = () => {
     const warning = discardWarning(info.workers);
     if (warning && !window.confirm(warning)) return;
@@ -665,6 +696,11 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           ['created', info.created_at ? new Date(info.created_at * 1000).toLocaleString() : '—'],
           ...info.progress.map(([k, v]): [string, React.ReactNode] => [k, String(v)]),
           ['data dir', info.data_dir],
+          ...(info.data_plane ? [['data plane', (
+            <DataPlaneRow
+              dataPlane={info.data_plane} stopped={!anyPausable && !anyAlive} onSet={setDataPlane}
+            />
+          )] as [string, React.ReactNode]] : []),
           ['bundle', info.bundle_id
             ? <span title={info.bundle_id}>{info.bundle_id.split('-')[0]}</span>
             : 'none yet (deployed when the first remote worker starts)'],

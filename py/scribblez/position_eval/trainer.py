@@ -63,7 +63,7 @@ from scribblez.ffi import (
     session_input_arm,
     set_opp_leave_input,
 )
-from scribblez.generational import checkpoint, lifecycle
+from scribblez.generational import checkpoint, data_home, lifecycle
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import CpuController, default_controls, progress_line
 from scribblez.generational.optim import build_optim_arm, build_optimizer
@@ -98,11 +98,15 @@ def _generation_ready(paths: TagPaths, sink, index: int) -> bool:
     )
 
 
-def wait_for_generation(paths: TagPaths, index: int, sink):
+def wait_for_generation(paths: TagPaths, index: int, sink, home=None):
     """Block until generation `index` is complete on disk. Time spent here
-    shows in the Stats tab as generation being the bottleneck."""
+    shows in the Stats tab as generation being the bottleneck. A data `home`
+    (data_home.DataHome) that has failed is raised here, since nothing would
+    then complete the generation."""
     announced = False
     while not _generation_ready(paths, sink, index):
+        if home is not None:
+            home.check()
         if not announced:
             timed_print(f"waiting for generation {index} to complete ...")
             announced = True
@@ -423,7 +427,7 @@ def run_generational_training(
     cpu = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
-        wait_for_generation(paths, state.generation_index, ctx["data_sink"])
+        wait_for_generation(paths, state.generation_index, ctx["data_sink"], ctx["data_home"])
         train_one_generation(
             model,
             train_model,
@@ -560,6 +564,7 @@ def run(ctx: WorkerContext) -> int:
     state = checkpoint.resume(paths, model, optimizer, device)
     ensure_window(paths, ctx.data_sink, state.generation_index, params.window)
     _publish_train_state(paths, state)
+    run_ctx["data_home"] = data_home.start_for(ctx, paths, params)
     try:
         run_generational_training(
             model, train_model, optimizer, recorder, paths, device, params, state, run_ctx

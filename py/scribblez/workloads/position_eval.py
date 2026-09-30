@@ -32,6 +32,7 @@ from cloud import worker_deps
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
+from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR
 from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
@@ -309,7 +310,7 @@ SPEC = WorkloadSpec(
             stats=StatsSpec(unit="games", phases={"match_s": "match play"}),
         ),
     ),
-    scheduler="scribblez.generational.scheduler:tick_for_task",
+    scheduler=TICK_FOR_TASK,
     layout="scribblez.workloads.position_eval:layout",
     gpu_need="scribblez.workloads.position_eval:gpu_need",
     progress="scribblez.generational.scheduler:progress",

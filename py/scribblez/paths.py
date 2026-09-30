@@ -93,6 +93,11 @@ TRAINER_OUTPUT_DIRS = ("records", "models", "checkpoints")
 TRAINER_OUTPUT_IMMUTABLE = ("records", "models")
 TRAINER_OUTPUT_FILES = ("train_state.json",)
 
+# A data home's scheduler state (generational/data_home.py), relative to the
+# tag root: the gate on the generate role and a heartbeat, which the controller
+# gates generators by.
+SCHEDULER_STATE_REL = "scheduler_state.json"
+
 # The trainer's record stream (generational/records.py), relative to the tag
 # root because the trainer writes through a results sink that maps them either
 # under the local tag root or under the tag's prefix in the bucket.

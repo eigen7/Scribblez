@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from cloud.runtime_abi import RUNTIME_TORCH
 
+from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.params import param
 from scribblez.workloads.base import RoleSpec, WorkloadSpec
 from scribblez.workloads.position_eval import TRAINER_STATS
@@ -95,7 +96,7 @@ SPEC = WorkloadSpec(
             stats=TRAINER_STATS,
         ),
     ),
-    scheduler="scribblez.generational.scheduler:tick_for_task",
+    scheduler=TICK_FOR_TASK,
     progress="scribblez.generational.scheduler:progress",
     pace_role="train",
     sync_data_dirs=(STAGING_DIR,),

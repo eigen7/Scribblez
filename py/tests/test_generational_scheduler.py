@@ -5,12 +5,15 @@ assignment/completion/gating logic is exercised without the C++ loader.
 """
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from scribblez.dashboard.workers import SYNC_INTERVAL_SECONDS
 from scribblez.generational import lifecycle, scheduler
-from scribblez.paths import POSITION_EVAL, TagPaths
+from scribblez.generational.data_home import POLL_SECONDS
+from scribblez.paths import POSITION_EVAL, SCHEDULER_STATE_REL, TagPaths
 from scribblez.workloads.base import SchedulerHooks
 from scribblez.workloads.position_eval import PositionEvalParams
 
@@ -199,7 +202,14 @@ class _FinishHooks(Hooks):
         self.finish = self.finished.append
 
 
-def _task_tick(tmp_path, *, max_rows: int, rows_trained: int | None):
+def _task_tick(
+    tmp_path,
+    *,
+    max_rows: int,
+    rows_trained: int | None,
+    data_plane: str = scheduler.DATA_PLANE_LEGACY,
+    trainer_running: bool = True,
+):
     """One tick_for_task on a position_eval task under tmp_path, with the
     trainer's cursor at `rows_trained` (None: no cursor yet)."""
     spec = SimpleNamespace(params_cls=PositionEvalParams)
@@ -208,7 +218,9 @@ def _task_tick(tmp_path, *, max_rows: int, rows_trained: int | None):
         paths.train_state_path.parent.mkdir(parents=True, exist_ok=True)
         paths.train_state_path.write_text(json.dumps({"rows_trained": rows_trained}))
     hooks = _FinishHooks(paths)
-    scheduler.tick_for_task(spec, SimpleNamespace(tag="t", params={"max_rows": max_rows}), hooks)
+    hooks.role_running = lambda role: role == "train" and trainer_running
+    task = SimpleNamespace(tag="t", params={"max_rows": max_rows}, data_plane=data_plane)
+    scheduler.tick_for_task(spec, task, hooks)
     return hooks
 
 
@@ -223,3 +235,51 @@ def test_keeps_scheduling_short_of_max_rows_or_without_one(tmp_path, max_rows, r
     hooks = _task_tick(tmp_path, max_rows=max_rows, rows_trained=rows_trained)
     assert hooks.finished == []
     assert hooks.gates["generate"] is None  # the ordinary tick ran and opened a generation
+
+
+# ---- a data home's tag: the controller only gates ------------------------------
+
+
+def _write_state(paths: TagPaths, gate: str | None, heartbeat: float):
+    paths.root.mkdir(parents=True, exist_ok=True)
+    (paths.root / SCHEDULER_STATE_REL).write_text(
+        json.dumps({"gate": gate, "heartbeat": heartbeat})
+    )
+
+
+def test_a_data_home_tag_is_gated_from_its_record_and_never_ticked(tmp_path):
+    """The data home runs the scheduler; the controller must not touch the tree
+    (a second scheduler), only carry the home's gate to the generators."""
+    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
+    _write_state(paths, scheduler.GATE_REASON_AHEAD, time.time())
+    hooks = _task_tick(tmp_path, max_rows=0, rows_trained=5, data_plane="home")
+    assert hooks.gates["generate"] == scheduler.GATE_REASON_AHEAD
+    assert lifecycle.list_generation_indices(paths) == []  # no generation opened here
+
+
+def test_a_data_home_tag_still_finishes_at_max_rows(tmp_path):
+    hooks = _task_tick(tmp_path, max_rows=1000, rows_trained=1000, data_plane="home")
+    assert hooks.finished == ["generate"]
+
+
+@pytest.mark.parametrize(
+    ("trainer_running", "record_age", "expected"),
+    [
+        (True, 1.0, None),  # fresh and ungated: generate
+        (False, 1.0, scheduler.GATE_REASON_NO_TRAINER),  # nothing would take the chunks
+        (True, scheduler.HEARTBEAT_STALE_SECONDS + 1, scheduler.GATE_REASON_NO_HEARTBEAT),
+        (True, None, scheduler.GATE_REASON_NO_HEARTBEAT),  # no record yet (trainer starting)
+    ],
+)
+def test_home_gate(paths, trainer_running, record_age, expected):
+    now = 1_000_000.0
+    if record_age is not None:
+        _write_state(paths, None, now - record_age)
+    assert scheduler.home_gate(paths, trainer_running, now) == expected
+
+
+def test_the_heartbeat_outlasts_a_bucket_synced_record():
+    """A remote data home's record reaches the controller through the sync
+    watcher; a heartbeat judged stale inside a few sync rounds would park its
+    generators while it is healthy."""
+    assert scheduler.HEARTBEAT_STALE_SECONDS >= 3 * (SYNC_INTERVAL_SECONDS + POLL_SECONDS)

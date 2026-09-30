@@ -4,9 +4,10 @@ to free machines."""
 
 from dataclasses import replace
 
-from scribblez.dashboard import placement
+from scribblez.dashboard import placement, tasks
 from scribblez.dashboard.pool import Hardware, PoolMachine
 from scribblez.dashboard.queue import BUNDLE_BUILDING, BUNDLE_READY, QueueEntry
+from scribblez.paths import POSITION_EVAL, TagPaths
 from scribblez.workloads import position_eval as pe
 from scribblez.workloads.position_eval import SPEC, PositionEvalParams
 
@@ -126,3 +127,12 @@ def test_a_tag_goes_only_where_its_training_state_is():
     for home in (placement.HOME_BUCKET, None):
         assert placement.refusal(SPEC, CAMPAIGN, home, _entry(), rental) is None
         assert placement.refusal(SPEC, CAMPAIGN, home, _entry(), local) is None
+
+
+def test_a_data_home_tag_stays_on_localhost_from_the_start(tmp_path):
+    """Its trainer must be a local slot, before it has trained a row as after."""
+    task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
+    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
+    assert placement.state_home(paths, task) is None
+    task.data_plane = "home"
+    assert placement.state_home(paths, task) == placement.HOME_LOCAL

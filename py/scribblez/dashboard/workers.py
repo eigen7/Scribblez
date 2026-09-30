@@ -47,7 +47,7 @@ from cloud.r2 import bucket_path, rclone
 from cloud.ssh_machine import SshMachine, SshMachineError
 from cloud.ssh_transfer import pull_results, push_file, sweep_stopped
 from cloud.worker_entrypoint import EXIT_INTERRUPTED
-from cloud.worker_env import bundle_worker_env
+from cloud.worker_env import bundle_worker_env, r2_env
 from tornado.ioloop import IOLoop
 
 from scribblez import params as params_mod
@@ -58,6 +58,12 @@ from scribblez.dashboard import tasks
 from scribblez.dashboard.control_store import IMPORTED_JSON, ControlStore
 from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
 from scribblez.generational.lifecycle import MANIFEST_NAME
+from scribblez.generational.scheduler import (
+    DATA_PLANE_HOME,
+    DATA_PLANE_LEGACY,
+    GENERATE_ROLE,
+    TICK_FOR_TASK,
+)
 from scribblez.hardware import default_thread_count
 from scribblez.paths import CONTROLS_REL, REPO_ROOT
 from scribblez.workloads.base import SchedulerHooks
@@ -295,6 +301,11 @@ def _trainer_finished(spec: workloads.WorkloadSpec, task: tasks.TaskRecord) -> b
     every one has finished: exited at its terminal condition, e.g. max_rows."""
     trainers = [w for w in task.workers if spec.role(w.role).ingest]
     return bool(trainers) and all(w.finished for w in trainers)
+
+
+def _home_trainer(task: tasks.TaskRecord, role: workloads.RoleSpec) -> bool:
+    """Whether `role` is the trainer of a tag whose data plane runs beside it."""
+    return task.data_plane == DATA_PLANE_HOME and bool(role.ingest)
 
 
 def _finish_role(task: tasks.TaskRecord, role: str) -> bool:
@@ -645,6 +656,14 @@ class WorkerManager:
 
     # ---- cloud plumbing --------------------------------------------------
 
+    def _bucket_env(self) -> dict[str, str]:
+        """Bucket credentials for a worker, or none when the controller has no
+        credentials file: a data home then ingests only colocated generators."""
+        try:
+            return r2_env(self._creds())
+        except (CredentialsError, FileNotFoundError):
+            return {}
+
     def _creds(self) -> CloudCredentials:
         if self._creds_cache is None:
             self._creds_cache = load_credentials()
@@ -735,6 +754,8 @@ class WorkerManager:
             "SCZ_WORKER_ID": w.worker_id,
             "SCZ_WORKER_KIND": "local",
         }  # fmt: skip
+        if _home_trainer(task, spec.role(w.role)):
+            env |= {"SCZ_DATA_PLANE": DATA_PLANE_HOME, **self._bucket_env()}
         log = self._log_file(spec, task.tag, w.worker_id)
         proc = subprocess.Popen(
             [sys.executable, "-m", "cloud.worker_entrypoint"],
@@ -954,6 +975,10 @@ class WorkerManager:
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
+        assert not (_home_trainer(task, role_spec) and kind == "ssh"), (
+            "this tag's data plane runs beside its trainer, which must be a local slot "
+            "until data homes on ssh machines are supported"
+        )
         if role_spec.gpu and check_gpu:
             refusal = self._gpu_fit_refusal(spec, task, role, kind, machine, host)
             assert refusal is None, refusal
@@ -1440,6 +1465,25 @@ class WorkerManager:
             elif not run and probe == "running":
                 self._ssh_machine(task, w).stop_container(name)
 
+    def set_data_plane(self, spec, task: tasks.TaskRecord, data_plane: str):
+        """Move the tag's generation data plane (TaskRecord.data_plane). Only
+        while every slot is stopped, so the old and new schedulers never run
+        side by side, and only for a workload whose scheduler has a data home."""
+        assert spec.scheduler == TICK_FOR_TASK, f"workload '{spec.name}' has no data home"
+        assert data_plane in (DATA_PLANE_LEGACY, DATA_PLANE_HOME), f"no data plane '{data_plane}'"
+        running = [w.worker_id for w in task.workers if w.desired_state == "running"]
+        assert not running, f"pause every slot first ({', '.join(running)} still set to run)"
+        alive = [w.worker_id for w in task.workers if self._seen_alive(spec, task, w)]
+        assert not alive, f"wait for every slot to stop ({', '.join(alive)} still alive)"
+        if data_plane == DATA_PLANE_HOME:
+            ssh = [
+                w.worker_id for w in task.workers if w.kind == "ssh" and spec.role(w.role).ingest
+            ]
+            assert not ssh, f"its trainer must be a local slot ({ssh[0]} is ssh)"
+        task.data_plane = data_plane
+        task.gates.pop(GENERATE_ROLE, None)  # the new scheduler decides afresh
+        self.tasks.save(spec, task)
+
     def remove_worker(self, spec, task: tasks.TaskRecord, worker_id: str):
         """Remove a slot. Its worker must not be running, so a removal never
         silently discards an in-flight cycle."""
@@ -1789,6 +1833,9 @@ class WorkerManager:
             finish=finish,
             mirror=self._make_mirror(spec, task),
             publish=self._make_publish(spec, task),
+            role_running=lambda role: any(
+                self._seen_alive(spec, task, w) for w in task.workers if w.role == role
+            ),
         )
 
     def _make_publish(self, spec, task: tasks.TaskRecord):
@@ -1801,8 +1848,9 @@ class WorkerManager:
         raises on the call that collects it, and the next call starts it
         again. Chunks that came through the bucket are already there after
         the mirror move and are skipped by size; the rest upload. The manifest
-        goes last, so a manifest in the bucket means the whole generation is."""
-        if not self._has_bucket_data(spec, task):
+        goes last, so a manifest in the bucket means the whole generation is.
+        None for a data home, whose trainer reads its own tree."""
+        if task.data_plane == DATA_PLANE_HOME or not self._has_bucket_data(spec, task):
             return None
         try:
             creds = self._creds()
@@ -1843,8 +1891,9 @@ class WorkerManager:
         generation locally, move the chunk's bucket copy (if it came through
         the bucket) to the same generation prefix. The bucket then mirrors the
         local corpus, and the sync watcher never re-downloads an assigned
-        chunk. None for a task without bucket-delivering slots."""
-        if not self._has_bucket_data(spec, task):
+        chunk. None for a task without bucket-delivering slots, and for a data
+        home, which ingests bucket chunks by moving them."""
+        if task.data_plane == DATA_PLANE_HOME or not self._has_bucket_data(spec, task):
             return None
         try:
             creds = self._creds()
@@ -2315,6 +2364,8 @@ class WorkerManager:
             "--workload", spec.name, "-t", task.tag,
             "--mount-root", str(self.tasks.paths(spec, task.tag).mount_root),
             *(["--trainer-outputs"] if self._bucket_trainer(spec, task) else []),
+            # A data home ingests bucket staging itself, by moving each chunk.
+            *(["--no-data"] if task.data_plane == DATA_PLANE_HOME else []),
             *extra,
         ]  # fmt: skip
 
