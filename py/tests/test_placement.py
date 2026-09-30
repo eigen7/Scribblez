@@ -129,10 +129,17 @@ def test_a_tag_goes_only_where_its_training_state_is():
         assert placement.refusal(SPEC, CAMPAIGN, home, _entry(), local) is None
 
 
-def test_a_data_home_tag_stays_on_localhost_from_the_start(tmp_path):
-    """Its trainer must be a local slot, before it has trained a row as after."""
+def test_a_data_home_tags_state_is_where_its_trainer_delivered(tmp_path):
+    """A data home on an ssh machine uploads its generations and checkpoint,
+    so its state is in the bucket like a legacy remote trainer's; one on
+    localhost has it only here."""
     task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
-    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
-    assert placement.state_home(paths, task) is None
     task.data_plane = "home"
+    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
+    assert placement.state_home(paths, task) is None  # nothing trained: anywhere
+    paths.train_state_path.parent.mkdir(parents=True)
+    paths.train_state_path.write_text('{"rows_trained": 5}')
+    task.trainer_sink = "r2"
+    assert placement.state_home(paths, task) == placement.HOME_BUCKET
+    task.trainer_sink = "local"
     assert placement.state_home(paths, task) == placement.HOME_LOCAL

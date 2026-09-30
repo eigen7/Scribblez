@@ -65,7 +65,7 @@ from scribblez.generational.scheduler import (
     TICK_FOR_TASK,
 )
 from scribblez.hardware import default_thread_count
-from scribblez.paths import CONTROLS_REL, REPO_ROOT
+from scribblez.paths import CONTROLS_REL, DEFAULT_MOUNT_ROOT, REPO_ROOT
 from scribblez.workloads.base import SchedulerHooks
 
 CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
@@ -306,6 +306,25 @@ def _trainer_finished(spec: workloads.WorkloadSpec, task: tasks.TaskRecord) -> b
 def _home_trainer(task: tasks.TaskRecord, role: workloads.RoleSpec) -> bool:
     """Whether `role` is the trainer of a tag whose data plane runs beside it."""
     return task.data_plane == DATA_PLANE_HOME and bool(role.ingest)
+
+
+# The data sink of a slot on its tag's data home on an ssh machine: the tag's
+# named volume there, shared with the other slots on that machine and handed
+# to the worker as SCZ_DATA_SINK=local.
+DATA_SINK_HOME = "home"
+
+
+def _trainer_slot(spec, task: tasks.TaskRecord) -> tasks.WorkerRecord | None:
+    return next((w for w in task.workers if spec.role(w.role).ingest), None)
+
+
+def _same_machine(a: tasks.WorkerRecord, b: tasks.WorkerRecord) -> bool:
+    return (a.kind, a.machine, a.host) == (b.kind, b.machine, b.host)
+
+
+def _tag_volume(spec, task: tasks.TaskRecord) -> str:
+    """The named volume holding a tag's tree on its data home."""
+    return _container_name(spec, task.tag, "data")
 
 
 def _finish_role(task: tasks.TaskRecord, role: str) -> bool:
@@ -756,6 +775,8 @@ class WorkerManager:
         }  # fmt: skip
         if _home_trainer(task, spec.role(w.role)):
             env |= {"SCZ_DATA_PLANE": DATA_PLANE_HOME, **self._bucket_env()}
+        if self._slot_data_sink(spec, task, w) == "r2":  # away from its tag's data home
+            env |= {"SCZ_DATA_SINK": "r2", **self._bucket_env()}
         log = self._log_file(spec, task.tag, w.worker_id)
         proc = subprocess.Popen(
             [sys.executable, "-m", "cloud.worker_entrypoint"],
@@ -915,10 +936,20 @@ class WorkerManager:
         )  # fmt: skip
         env["SCZ_SINK"] = self._slot_records_sink(spec, task, w)
         data_sink = self._slot_data_sink(spec, task, w)
-        if data_sink != env["SCZ_SINK"]:
+        data_env = "local" if data_sink == DATA_SINK_HOME else data_sink
+        if data_env != env["SCZ_SINK"]:
             # Only when it differs: a bundle predating SCZ_DATA_SINK refuses
             # to start on an SCZ_* variable it does not know.
-            env["SCZ_DATA_SINK"] = data_sink
+            env["SCZ_DATA_SINK"] = data_env
+        if _home_trainer(task, spec.role(w.role)):
+            env["SCZ_DATA_PLANE"] = DATA_PLANE_HOME
+        # The whole tag tree, where the worker's default mount root puts it,
+        # so every rename stays within one filesystem.
+        volume = (
+            (_tag_volume(spec, task), str(spec.paths(task.tag, DEFAULT_MOUNT_ROOT).root))
+            if data_sink == DATA_SINK_HOME
+            else None
+        )
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
         machine = self._ssh_machine(task, w)
@@ -935,7 +966,9 @@ class WorkerManager:
             image = creds.registry.image_for(role.runtime)
             machine.pull_image(image)
             name = _container_name(spec, task.tag, w.worker_id)
-            machine.run_container(name, image, env, gpus=role.gpu)
+            if volume is not None:
+                machine.create_volume(volume[0])
+            machine.run_container(name, image, env, gpus=role.gpu, volume=volume)
             if env["SCZ_SINK"] != "r2":
                 self._stage_inputs_in_container(machine, name, spec, task.tag, inputs)
         except SshMachineError as e:
@@ -975,14 +1008,27 @@ class WorkerManager:
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
-        assert not (_home_trainer(task, role_spec) and kind == "ssh"), (
-            "this tag's data plane runs beside its trainer, which must be a local slot "
-            "until data homes on ssh machines are supported"
-        )
+        if task.data_plane == DATA_PLANE_HOME and not role_spec.dispatch:
+            self._check_data_home_order(spec, task, role_spec)
         if role_spec.gpu and check_gpu:
             refusal = self._gpu_fit_refusal(spec, task, role, kind, machine, host)
             assert refusal is None, refusal
         return role_spec
+
+    def _check_data_home_order(self, spec, task: tasks.TaskRecord, role: workloads.RoleSpec):
+        """A data-home tag's trainer comes before its other data-plane slots:
+        where it runs decides where each of them delivers, and a running slot
+        cannot move (its sink and mount are fixed at start)."""
+        others = [w.worker_id for w in task.workers if not spec.role(w.role).dispatch]
+        if role.ingest:
+            assert not others, (
+                "add this tag's trainer before its other slots: its machine is where they "
+                f"deliver (remove {', '.join(others)} first)"
+            )
+        else:
+            assert _trainer_slot(spec, task) is not None, (
+                "add this tag's trainer first: its machine is where the generators deliver"
+            )
 
     def _gpu_fit_refusal(self, spec, task, role: str, kind: str, machine, host) -> str | None:
         """Why a new `role` slot would not fit the target machine's GPU memory
@@ -1475,14 +1521,31 @@ class WorkerManager:
         assert not running, f"pause every slot first ({', '.join(running)} still set to run)"
         alive = [w.worker_id for w in task.workers if self._seen_alive(spec, task, w)]
         assert not alive, f"wait for every slot to stop ({', '.join(alive)} still alive)"
-        if data_plane == DATA_PLANE_HOME:
-            ssh = [
-                w.worker_id for w in task.workers if w.kind == "ssh" and spec.role(w.role).ingest
-            ]
-            assert not ssh, f"its trainer must be a local slot ({ssh[0]} is ssh)"
+        assert data_plane == DATA_PLANE_HOME or self._remote_data_home(spec, task) is None, (
+            "a data home on an ssh machine cannot go back to legacy: the bucket holds "
+            "generations it numbered, which the controller's scheduler would reuse"
+        )
+        for w in task.workers:
+            if w.kind == "ssh" and not self._machine_gone(spec, task, w):
+                self._discard_container(spec, task, w)
+        if any(w.kind == "ssh" for w in task.workers):
+            task.bundle_id = None  # built afresh at the next start, with data home support
         task.data_plane = data_plane
         task.gates.pop(GENERATE_ROLE, None)  # the new scheduler decides afresh
         self.tasks.save(spec, task)
+
+    def _discard_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Remove stopped ssh slot `w`'s container, collecting what it holds
+        first, so its next start creates one with the sinks and mount it now
+        gets."""
+        probe = self._refresh_probe(spec, task, w)
+        assert probe in ("stopped", "missing"), f"{w.worker_id} is {probe}"
+        if probe == "stopped":
+            machine = self._ssh_machine(task, w)
+            if self._collected(spec, task, w):
+                sweep_stopped(machine, **self._transfer_target(spec, task, w))
+            machine.remove_container(_container_name(spec, task.tag, w.worker_id))
+        w.launched = False
 
     def remove_worker(self, spec, task: tasks.TaskRecord, worker_id: str):
         """Remove a slot. Its worker must not be running, so a removal never
@@ -1506,10 +1569,22 @@ class WorkerManager:
                 self._ssh_machine(task, w).remove_container(
                     _container_name(spec, task.tag, w.worker_id)
                 )
+        if task.data_plane == DATA_PLANE_HOME and w.kind == "ssh":
+            self._release_tag_volume(spec, task, w)
         self._forget_slot(_key(spec, task.tag, worker_id))
         task.workers.remove(w)
         self.tasks.save(spec, task)
         self._ensure_sync(spec, task)
+
+    def _release_tag_volume(self, spec, task: tasks.TaskRecord, leaving: tasks.WorkerRecord):
+        """Remove a data-home tag's volume from the machine ssh slot `leaving`
+        is about to leave, when no other slot of the tag stays there to mount
+        it. Keyed on the machine rather than on the trainer, which may already
+        be gone; removing a volume that was never made is harmless."""
+        if self._machine_gone(spec, task, leaving):
+            return  # the volume went with the instance's disk
+        if not any(_same_machine(w, leaving) for w in task.workers if w is not leaving):
+            self._ssh_machine(task, leaving).remove_volume(_tag_volume(spec, task))
 
     def delete_task(self, spec, tag: str):
         """Delete a tag: remove its worker slots, then its local dir.
@@ -2292,6 +2367,8 @@ class WorkerManager:
         if w.kind == "local":
             return "local"
         role = spec.role(w.role)
+        if self._on_remote_data_home(spec, task, w):
+            return "r2"  # never collected: its data/ is the shared volume
         if w.kind == "ssh" and not role.ingest and (role.dispatch or not self._rented(task, w)):
             return "local"
         return "r2"
@@ -2300,9 +2377,27 @@ class WorkerManager:
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
     ) -> str:
         """Where slot `w`'s worker delivers into and reads from the tag's data/
-        store (SCZ_DATA_SINK, cloud/sinks.py). The same as its records sink for
-        every slot today."""
+        store (SCZ_DATA_SINK, cloud/sinks.py). For a tag whose data home is an
+        ssh machine: DATA_SINK_HOME on that machine, and the bucket anywhere
+        else, whose staging the home ingests. Otherwise, and for a
+        dispatch-driven role, whose results the controller reads from the
+        slot's own filesystem, the same as the records sink."""
+        if not spec.role(w.role).dispatch and self._remote_data_home(spec, task) is not None:
+            return DATA_SINK_HOME if self._on_remote_data_home(spec, task, w) else "r2"
         return self._slot_records_sink(spec, task, w)
+
+    def _remote_data_home(self, spec, task: tasks.TaskRecord) -> tasks.WorkerRecord | None:
+        """The trainer slot of a tag whose data plane runs beside it on an ssh
+        machine; None for any other tag."""
+        if task.data_plane != DATA_PLANE_HOME:
+            return None
+        trainer = _trainer_slot(spec, task)
+        return trainer if trainer is not None and trainer.kind == "ssh" else None
+
+    def _on_remote_data_home(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
+        """Whether slot `w` works in its tag's data home on an ssh machine."""
+        home = self._remote_data_home(spec, task)
+        return home is not None and not spec.role(w.role).dispatch and _same_machine(w, home)
 
     def _collected(
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord

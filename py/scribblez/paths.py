@@ -85,18 +85,18 @@ MATCH_RESULTS_DIR = "match_results"
 # from the shared blobs beside them in models/ (see onnx_sidecars).
 ONNX_PREFIX = "model_epoch_"
 
+# A data home's scheduler state (generational/data_home.py), relative to the
+# tag root: the gate on the generate role and a heartbeat, which the controller
+# gates generators by.
+SCHEDULER_STATE_REL = "scheduler_state.json"
+
 # What a trainer on a rented machine delivers through the results bucket,
 # relative to the tag root, for scripts/cloud_sync.py to pull back. Records and
 # exports never change once written, so they are synced by size alone; the
 # rolling checkpoint and train_state.json are rewritten in place.
 TRAINER_OUTPUT_DIRS = ("records", "models", "checkpoints")
 TRAINER_OUTPUT_IMMUTABLE = ("records", "models")
-TRAINER_OUTPUT_FILES = ("train_state.json",)
-
-# A data home's scheduler state (generational/data_home.py), relative to the
-# tag root: the gate on the generate role and a heartbeat, which the controller
-# gates generators by.
-SCHEDULER_STATE_REL = "scheduler_state.json"
+TRAINER_OUTPUT_FILES = ("train_state.json", SCHEDULER_STATE_REL)
 
 # The trainer's record stream (generational/records.py), relative to the tag
 # root because the trainer writes through a results sink that maps them either
