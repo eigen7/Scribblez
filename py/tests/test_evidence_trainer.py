@@ -669,6 +669,7 @@ def _ctx(tmp_path, tag, params):
         worker_id="local-0",
         threads=2,
         max_cycles=0,
+        data_sink=LocalSink(paths.root),
         sink=LocalSink(paths.root),
         mount_root=tmp_path,
     )

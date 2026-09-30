@@ -48,6 +48,7 @@ def main() -> int:
         worker_id=f"cli-{socket.gethostname()}",
         threads=0,
         max_cycles=0,
+        data_sink=LocalSink(spec.data_dir(args.tag, args.mount_root)),
         sink=LocalSink(spec.data_dir(args.tag, args.mount_root)),
         mount_root=args.mount_root,
     )

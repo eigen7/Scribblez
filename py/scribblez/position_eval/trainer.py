@@ -423,7 +423,7 @@ def run_generational_training(
     cpu = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
-        wait_for_generation(paths, state.generation_index, ctx["sink"])
+        wait_for_generation(paths, state.generation_index, ctx["data_sink"])
         train_one_generation(
             model,
             train_model,
@@ -546,6 +546,7 @@ def run(ctx: WorkerContext) -> int:
 
     run_ctx = {
         "config": asdict(params),
+        "data_sink": ctx.data_sink,
         "sink": ctx.sink,
         "read_controls": functools.partial(read_controls, ctx.sink),
         "spatial_planes": spatial_planes,
@@ -557,7 +558,7 @@ def run(ctx: WorkerContext) -> int:
 
     restore_from_sink(paths, ctx.sink)
     state = checkpoint.resume(paths, model, optimizer, device)
-    ensure_window(paths, ctx.sink, state.generation_index, params.window)
+    ensure_window(paths, ctx.data_sink, state.generation_index, params.window)
     _publish_train_state(paths, state)
     try:
         run_generational_training(

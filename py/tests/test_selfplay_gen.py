@@ -53,6 +53,7 @@ def _ctx(tmp_path, sink, max_cycles=0, worker_id="local-0"):
         worker_id=worker_id,
         threads=2,
         max_cycles=max_cycles,
+        data_sink=sink,
         sink=sink,
         mount_root=tmp_path,
     )

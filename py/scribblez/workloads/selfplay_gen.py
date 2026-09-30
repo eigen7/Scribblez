@@ -163,9 +163,9 @@ def generate(ctx: WorkerContext, player_spec: str) -> int:
     shutil.rmtree(work_dir, ignore_errors=True)
     work_dir.mkdir(parents=True)
     stats = WorkerStats(ctx)
-    print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {p}")
+    print(f"worker {ctx.worker_id} ({ctx.data_sink.kind}): generating tag '{ctx.tag}' with {p}")
 
-    deliverer = Deliverer(ctx.sink, ctx.worker_id)
+    deliverer = Deliverer(ctx.data_sink, ctx.worker_id)
     cycle = 0
     try:
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:

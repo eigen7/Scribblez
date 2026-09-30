@@ -205,9 +205,26 @@ def test_the_local_sink_follows_the_worker_mount_root(tmp_path, monkeypatch):
 
     monkeypatch.setenv("SCZ_SINK", "local")
     spec = workloads.get("position_eval")
-    sink = sinks.make_sink(spec, "t", tmp_path)
+    _, sink = sinks.make_sinks(spec, "t", tmp_path)
     sink.push_json("records/run.json", {})
     assert (tmp_path / "tags" / "position_eval" / "t" / "records" / "run.json").exists()
+
+
+def test_the_data_sink_defaults_to_the_records_sinks_kind(tmp_path, monkeypatch):
+    """A controller sets SCZ_DATA_SINK only when it differs from SCZ_SINK, so a
+    bundle predating it keeps starting (worker_entrypoint)."""
+    from scribblez import workloads
+
+    spec = workloads.get("position_eval")
+    monkeypatch.setenv("SCZ_SINK", "local")
+    data, records = sinks.make_sinks(spec, "t", tmp_path)
+    assert isinstance(data, LocalSink) and isinstance(records, LocalSink)
+
+    monkeypatch.setenv("SCZ_DATA_SINK", "r2")
+    for var in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"):
+        monkeypatch.setenv(var, "x")
+    data, records = sinks.make_sinks(spec, "t", tmp_path)
+    assert isinstance(data, R2Sink) and isinstance(records, LocalSink)
 
 
 def test_the_local_sink_removes_an_output_and_has_nothing_to_pull(paths):

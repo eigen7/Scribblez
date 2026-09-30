@@ -1,7 +1,7 @@
 """Results sinks: where a worker's outputs go, independent of how they are made.
 
-A role runner writes files in a private work dir and hands them to its sink
-(chosen by SCZ_SINK; see make_sink):
+A role runner writes files in a private work dir and hands them to its sinks
+(chosen by SCZ_DATA_SINK and SCZ_SINK; see make_sinks):
 
     LocalSink   the tag tree on this machine's mount dir is the destination:
                 data files are renamed into it, records written in place
@@ -26,6 +26,15 @@ where the argument is `data_rel`, to its data/ tree):
 The fetch and deliver_output calls let a trainer run wherever its sink points.
 Under LocalSink they are no-ops, since the files are already where the
 trainer reads and writes them.
+
+A worker holds two sinks, which may be of different kinds:
+
+    data sink       the tag's data/ store: what generators deliver and
+                    trainers read (deliver, count_data_files, fetch_data_dir,
+                    fetch_data_files, and removing store files)
+    records sink    everything else under the tag root: stats and params
+                    records, trainer records and outputs, the checkpoint and
+                    cursor, controls, staged inputs
 
 In the bucket, the tag prefix flattens the tag root and its data/ tree
 (data/slogs and stats sit side by side), so a root-relative path's key drops
@@ -262,9 +271,21 @@ def r2_from_env() -> R2Credentials:
     )
 
 
-def make_sink(spec, tag: str, mount_root: Path):
-    """The sink SCZ_SINK selects: "r2" (the default) or "local". The tag root
-    is under `mount_root`, the mount dir by default."""
-    if os.environ.get("SCZ_SINK", "r2") == "local":
-        return LocalSink(spec.paths(tag, mount_root).root)
-    return R2Sink(r2_from_env(), spec.name, tag, spec.paths(tag, mount_root).root)
+def _make_sink(kind: str, spec, tag: str, mount_root: Path):
+    root = spec.paths(tag, mount_root).root
+    if kind == "local":
+        return LocalSink(root)
+    return R2Sink(r2_from_env(), spec.name, tag, root)
+
+
+def make_sinks(spec, tag: str, mount_root: Path) -> tuple:
+    """(data sink, records sink). SCZ_SINK selects the records sink, "r2" (the
+    default) or "local"; SCZ_DATA_SINK selects the data sink and defaults to
+    the records sink's kind. The tag root is under `mount_root`, the mount dir
+    by default."""
+    records_kind = os.environ.get("SCZ_SINK", "r2")
+    data_kind = os.environ.get("SCZ_DATA_SINK", records_kind)
+    return (
+        _make_sink(data_kind, spec, tag, mount_root),
+        _make_sink(records_kind, spec, tag, mount_root),
+    )

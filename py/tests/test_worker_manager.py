@@ -1955,7 +1955,7 @@ def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
             pass
 
         def run_container(self, name, image, env, *, gpus=False):
-            envs[name] = (image, env["SCZ_SINK"], gpus)
+            envs[name] = (image, env["SCZ_SINK"], gpus, env.get("SCZ_DATA_SINK"))
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
@@ -1964,8 +1964,37 @@ def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
     for w in task.workers:
         manager._run_ssh_container(spec, task, w)
     by_role = {k.rsplit("-", 1)[-1]: v for k, v in envs.items()}
-    assert by_role["tr"] == ("repo/worker:latest-torch", "r2", True)
-    assert by_role["g"] == ("repo/worker", "local", False)
+    # The data sink matches the records sink, so it is left unset: a bundle
+    # predating SCZ_DATA_SINK would refuse to start on it.
+    assert by_role["tr"] == ("repo/worker:latest-torch", "r2", True, None)
+    assert by_role["g"] == ("repo/worker", "local", False, None)
+
+
+def test_a_data_sink_differing_from_the_records_sink_reaches_the_container(
+    manager, tmp_path, monkeypatch
+):
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    task.bundle_id, task.bundle_archs = "b1", ["znver3"]
+    envs = {}
+
+    class _Recording(_FakeSshMachine):
+        def pull_image(self, image):
+            pass
+
+        def run_container(self, name, image, env, *, gpus=False):
+            envs[name] = (env["SCZ_SINK"], env.get("SCZ_DATA_SINK"))
+
+    monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    monkeypatch.setattr(WorkerManager, "_slot_data_sink", lambda self, spec, task, w: "r2")
+    for w in task.workers:
+        manager._run_ssh_container(spec, task, w)
+    by_role = {k.rsplit("-", 1)[-1]: v for k, v in envs.items()}
+    assert by_role["tr"] == ("r2", None)
+    assert by_role["g"] == ("local", "r2")
 
 
 def test_reconcile_collects_from_the_generator_but_not_the_trainer(manager, tmp_path, monkeypatch):

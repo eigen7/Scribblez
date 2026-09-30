@@ -893,6 +893,11 @@ class WorkerManager:
             role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id,
         )  # fmt: skip
         env["SCZ_SINK"] = self._slot_sink(spec, task, w)
+        data_sink = self._slot_data_sink(spec, task, w)
+        if data_sink != env["SCZ_SINK"]:
+            # Only when it differs: a bundle predating SCZ_DATA_SINK refuses
+            # to start on an SCZ_* variable it does not know.
+            env["SCZ_DATA_SINK"] = data_sink
         if w.threads:
             env["SCZ_THREADS"] = str(w.threads)
         machine = self._ssh_machine(task, w)
@@ -1797,7 +1802,7 @@ class WorkerManager:
         again. Chunks that came through the bucket are already there after
         the mirror move and are skipped by size; the rest upload. The manifest
         goes last, so a manifest in the bucket means the whole generation is."""
-        if not self._has_bucket_slots(spec, task):
+        if not self._has_bucket_data(spec, task):
             return None
         try:
             creds = self._creds()
@@ -1839,7 +1844,7 @@ class WorkerManager:
         the bucket) to the same generation prefix. The bucket then mirrors the
         local corpus, and the sync watcher never re-downloads an assigned
         chunk. None for a task without bucket-delivering slots."""
-        if not self._has_bucket_slots(spec, task):
+        if not self._has_bucket_data(spec, task):
             return None
         try:
             creds = self._creds()
@@ -2002,7 +2007,7 @@ class WorkerManager:
                 if (
                     w.kind == "ssh"
                     and info["ssh_probe"] == "running"
-                    and self._slot_sink(spec, task, w) == "local"
+                    and self._collected(spec, task, w)
                 ):
                     try:
                         await self.offload(self._collect_ssh, spec, task, w)
@@ -2214,7 +2219,9 @@ class WorkerManager:
     def _slot_sink(
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
     ) -> str:
-        """Where slot `w`'s worker delivers (SCZ_SINK, cloud/sinks.py).
+        """Where slot `w`'s worker sends its records (SCZ_SINK, cloud/sinks.py):
+        stats, params and trainer records and outputs. Its data sink
+        (_slot_data_sink) carries the tag's data/ store.
 
         "local": a local subprocess, or an ssh container whose output the reconcile
         pass pulls over ssh (cloud/ssh_transfer.py): any container on the
@@ -2229,9 +2236,10 @@ class WorkerManager:
         exports, checkpoints and records leave through the bucket
         (docs/plans/cloud_machines.md).
 
-        Everything the controller does for bucket-delivering slots (the sync
-        watcher, the scheduler's publish and mirror hooks, the controls push) keys
-        off this, not off the slot kind."""
+        What the controller does for a slot keys off its two sinks, not off its
+        kind: the sync watcher and collection off either, the scheduler's
+        publish and mirror hooks off the data sink, the controls push, trainer
+        outputs and the state's location off the records sink."""
         if w.kind == "local":
             return "local"
         role = spec.role(w.role)
@@ -2239,13 +2247,38 @@ class WorkerManager:
             return "local"
         return "r2"
 
+    def _slot_data_sink(
+        self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
+    ) -> str:
+        """Where slot `w`'s worker delivers into and reads from the tag's data/
+        store (SCZ_DATA_SINK, cloud/sinks.py). The same as its records sink for
+        every slot today."""
+        return self._slot_sink(spec, task, w)
+
+    def _collected(
+        self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
+    ) -> bool:
+        """Whether ssh slot `w`'s container holds output for the reconcile pass
+        to pull over ssh: data or records it delivers locally."""
+        return "local" in (self._slot_data_sink(spec, task, w), self._slot_sink(spec, task, w))
+
     def _rented(self, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
         return (
             w.machine is not None and self._machine_record(task, w.machine).instance_id is not None
         )
 
     def _has_bucket_slots(self, spec: workloads.WorkloadSpec, task) -> bool:
-        return any(self._slot_sink(spec, task, w) == "r2" for w in task.workers)
+        """Whether any slot sends data or records through the bucket, for the
+        sync watcher to pull down."""
+        return any(
+            "r2" in (self._slot_data_sink(spec, task, w), self._slot_sink(spec, task, w))
+            for w in task.workers
+        )
+
+    def _has_bucket_data(self, spec: workloads.WorkloadSpec, task) -> bool:
+        """Whether any slot's data/ store runs through the bucket, which the
+        scheduler's publish and mirror hooks keep in step with the local one."""
+        return any(self._slot_data_sink(spec, task, w) == "r2" for w in task.workers)
 
     def _bucket_trainer(self, spec: workloads.WorkloadSpec, task) -> bool:
         """Whether the task has a trainer (a role the controller ingests) running
@@ -2259,9 +2292,9 @@ class WorkerManager:
     def _holds_nothing(
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
     ):
-        """Set a bucket-delivering ssh slot's `undelivered` to zero: its container
-        holds nothing for the controller to collect."""
-        if w.kind == "ssh" and self._slot_sink(spec, task, w) == "r2":
+        """Set an ssh slot's `undelivered` to zero when its container holds
+        nothing for the controller to collect: both its sinks are the bucket."""
+        if w.kind == "ssh" and not self._collected(spec, task, w):
             w.undelivered = 0
 
     def _note_trainer_sink(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
