@@ -117,4 +117,5 @@ SPEC = WorkloadSpec(
         ),
     ),
     progress="scribblez.workloads.match_arms:progress",
+    pace_role="arms",
 )

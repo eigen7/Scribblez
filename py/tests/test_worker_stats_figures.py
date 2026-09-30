@@ -103,3 +103,15 @@ def test_staleness_scales_with_cycle_time_above_a_floor():
     slow = _timed_record([T0, T0 + 100], gen_s=100.0, upload_s=0.0)
     assert figs.worker_summary(slow, GEN_STATS, now=T0 + 100 + 499)["stale"] is False
     assert figs.worker_summary(slow, GEN_STATS, now=T0 + 100 + 501)["stale"] is True
+
+
+def test_pace_sums_the_roles_live_workers_only():
+    a = _timed_record([T0, T0 + 4], gen_s=4.0, upload_s=0.0)  # 900K games/hr
+    b = {**_timed_record([T0, T0 + 4], gen_s=4.0, upload_s=0.0), "worker_id": "ssh-2"}
+    dead = {**_timed_record([T0 - 900, T0 - 896], gen_s=4.0, upload_s=0.0), "worker_id": "ssh-3"}
+    trainer = {**a, "worker_id": "ssh-0", "role": "train"}
+    for r in (a, b, dead):
+        r["role"] = "generate"
+    now = T0 + 5
+    assert figs.pace([a, b, dead, trainer], "generate", GEN_STATS, now) == 2 * 900_000
+    assert figs.pace([dead], "generate", GEN_STATS, now) is None

@@ -79,6 +79,14 @@ def worker_summary(record: dict, stats: StatsSpec, now: float) -> dict:
     }
 
 
+def pace(records: list[dict], role: str, stats: StatsSpec, now: float) -> float | None:
+    """The fleet rate of `role`'s live workers, in units per hour, or None when
+    none has a rate: the number that compares one tag's speed with another's."""
+    rows = [worker_summary(r, stats, now) for r in records if r.get("role") == role]
+    rates = [w["units_per_hour"] for w in rows if not w["stale"] and w["units_per_hour"]]
+    return sum(rates) if rates else None
+
+
 # The figure's worker selector value that plots the fleet total.
 FLEET = "fleet"
 

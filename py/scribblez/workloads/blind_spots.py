@@ -215,6 +215,7 @@ SPEC = WorkloadSpec(
     ),
     scheduler="scribblez.workloads.blind_spots:tick",
     progress="scribblez.workloads.blind_spots:progress",
+    pace_role="generate",
     primary_params=("target_positions",),
     sync_data_dirs=(SURVEY_DIR, GCG_DIR),
 )

@@ -28,8 +28,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from scribblez import params as params_mod
+from scribblez.dashboard import worker_stats_figures
 from scribblez.dashboard.control_store import ControlStore
-from scribblez.dashboard.worker_stats_figures import read_stats
 from scribblez.paths import TagPaths
 from scribblez.workloads import WORKLOADS, WorkloadSpec, resolve
 
@@ -238,7 +238,7 @@ def _last_active(tag_dir: Path) -> float:
     its files one level further (`data/generations/gen_NNNNNN/`), and a file
     landing there bumps only its own directory's mtime.
     """
-    stamps = [r["updated_at"] for r in read_stats(tag_dir / "stats")]
+    stamps = [r["updated_at"] for r in worker_stats_figures.read_stats(tag_dir / "stats")]
     data = tag_dir / "data"
     if data.is_dir():
         for p in data.iterdir():
@@ -246,6 +246,18 @@ def _last_active(tag_dir: Path) -> float:
             if p.is_dir():
                 stamps += [c.stat().st_mtime for c in p.iterdir()]
     return max(stamps, default=0)
+
+
+def _pace(spec: WorkloadSpec, tag_dir: Path) -> dict | None:
+    """The tag listing's pace: the pace role's fleet rate, or None when the
+    workload names no pace role or its workers show no live rate."""
+    if not spec.pace_role:
+        return None
+    stats = spec.role(spec.pace_role).stats
+    per_hour = worker_stats_figures.pace(
+        worker_stats_figures.read_stats(tag_dir / "stats"), spec.pace_role, stats, time.time()
+    )
+    return None if per_hour is None else {"unit": stats.unit, "per_hour": per_hour}
 
 
 class _TaskEntry:
@@ -483,6 +495,7 @@ class TaskStore:
                     # round trips.
                     "active_workers": sum(w.desired_state == "running" for w in workers),
                     "progress": self.progress(spec, task) if task else [],
+                    "pace": _pace(spec, tag_dir),
                     "last_active": _last_active(tag_dir),
                 }
             )

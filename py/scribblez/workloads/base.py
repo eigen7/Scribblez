@@ -118,6 +118,10 @@ class WorkloadSpec:
     # Dotted path to progress(spec, paths, params) -> list[(label, value)]: the counters
     # shown in the tag listing and the task Overview.
     progress: str = ""
+    # The role whose fleet rate is the tag's pace in the tag listing: the one
+    # that bounds how fast the tag advances (a trainer, not the generators it
+    # gates). It must publish stats. "" shows no pace.
+    pace_role: str = ""
     # Dotted path to finalize(spec, paths, params) -> params, run at task creation
     # before the params are frozen into task.json. It resolves fields that must
     # not drift later, such as pinning a "latest" reference to a concrete
@@ -162,6 +166,10 @@ class WorkloadSpec:
         for role in self.roles:
             assert role.runtime in RUNTIMES, (
                 f"workload '{self.name}': role '{role.name}' names no such runtime {role.runtime!r}"
+            )
+        if self.pace_role:
+            assert self.role(self.pace_role).stats, (
+                f"workload '{self.name}': pace_role publishes no stats"
             )
         names = {f.name for f in params_mod.schema(self.params_cls)}
         unknown = [n for n in self.primary_params if n not in names]
