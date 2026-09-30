@@ -565,15 +565,18 @@ class FakeSshMachine:
         if c is not None and c.state in ("running", "paused"):
             c.state, c.exit_reason = "stopped", f"exit {EXIT_INTERRUPTED}: stopped"
 
+    # Docker refuses a pause or unpause that would not change the state.
     def pause_container(self, name: str):
         c = self._host().containers[name]
-        if c.state == "running":
-            c.state = "paused"
+        if c.state != "running":
+            raise SshMachineError(f"{self.spelling}: container {name} is {c.state}")
+        c.state = "paused"
 
     def unpause_container(self, name: str):
         c = self._host().containers[name]
-        if c.state == "paused":
-            c.state = "running"
+        if c.state != "paused":
+            raise SshMachineError(f"{self.spelling}: container {name} is not paused")
+        c.state = "running"
 
     def remove_container(self, name: str):
         self._host().containers.pop(name, None)

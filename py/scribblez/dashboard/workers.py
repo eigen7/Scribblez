@@ -2135,12 +2135,14 @@ class WorkerManager:
         key = _key(spec, task.tag, w.worker_id)
         if intent == RUN:
             if probe == "paused":
+                self._expire_probe(key)
                 machine.unpause_container(name)  # resuming a parked worker is not a restart
             elif probe == "running":
                 if _replaceable(w, task):
                     # The task has redeployed past this container and it holds
                     # nothing: stop it, and the next pass replaces it. As with
                     # any stop, the cycle in flight is lost.
+                    self._expire_probe(key)
                     machine.stop_container(name)
             elif probe in ("missing", "stopped") and self._restart_allowed(key):
                 # Unreachable or unobserved: nothing this pass can act on.
@@ -2148,13 +2150,24 @@ class WorkerManager:
                 why = self._exits.get(key, "")
                 if probe == "stopped" and _is_ssh_crash(why):
                     self._note_crash(key, why)
+                self._expire_probe(key)
                 self._start_or_replace(machine, name, spec, task, w, probe)
         elif intent == PARK and probe == "running":
+            self._expire_probe(key)
             machine.pause_container(name)
         elif intent == STOP and probe in ("running", "paused"):
+            self._expire_probe(key)
             if probe == "paused":
                 machine.unpause_container(name)  # docker stop cannot signal a frozen process
             machine.stop_container(name)
+
+    def _expire_probe(self, key: str):
+        """Make the next pass observe slot `key`'s container afresh, before a
+        command changes its state. The pass cadence matches the probe TTL, so
+        without this the next pass could read the probe from before the
+        command and repeat it: a second pause fails with "already paused"."""
+        probe, _ = self._probes.get(key, ("unknown", 0.0))
+        self._probes[key] = (probe, 0.0)
 
     def _start_or_replace(self, machine, name, spec, task: tasks.TaskRecord, w, probe: str):
         """Bring a container that is not running back up, replacing it when
