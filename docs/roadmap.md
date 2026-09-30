@@ -31,7 +31,7 @@ milestone has a kill criterion.
 | M1a: learned reader over fixed probes, face-up leaves (the kill gate) | Not started |
 | M2: the known positions (face-up) | Not started |
 | M3a: learned move choices, face-up leaves | Not started |
-| M5: self-labeling | Not started |
+| M5: the label loop (self-labeling, leaf model on SupremeBot results) | Not started |
 | M1b: the reader in standard Scrabble, with the inference arms | Not started |
 | M3b: information sets (belief-drawn labels, opponent contexts) | Not started |
 | M4: learned draws (rack inference) | Not started |
@@ -92,11 +92,18 @@ The face-up track:
    lexicon versions, deferred draws, and the token encoder.
 3. **M1a: a learned reader over fixed probes.** Against shrinkage toward the
    prior and plain averaging on identical records, with synthetic single-fact
-   transfer tests. The kill gate.
+   transfer tests. The kill gate. A size sweep of readers here sets the
+   network size.
 4. **M2: the known positions** that exist under face-up leaves.
 5. **M3a: learned move choices:** the KV-cached serving runtime,
-   reply-searched labels, then the writer by the telescoping reward.
-6. **M5: self-labeling,** where SupremeBot can outgrow its first labels.
+   reply-searched labels, then the writer in stages: a supervised gain head
+   choosing where to probe, supervised realistic moves inside probes, then
+   reinforcement learning on the signed, label-anchored change in decision
+   quality.
+6. **M5: the label loop:** SupremeBot labels its own training positions at a
+   larger budget, and the leaf model retrains on SupremeBot's self-play
+   results. From here on it is the main label source, where SupremeBot can
+   outgrow its first labels.
 
 The standard track:
 
