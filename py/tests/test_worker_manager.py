@@ -1177,6 +1177,20 @@ def test_a_released_gate_unpauses_rather_than_starting(manager, spec, task, monk
     assert [op for op, _ in _RecordingSshMachine.ops] == ["unpause"]
 
 
+def test_a_pass_after_a_pause_observes_the_container_afresh(manager, spec, task, monkeypatch):
+    """The pass cadence matches the probe TTL, so the pass after a pause can
+    fall inside it; reading the probe from before the pause, it would pause
+    again, and docker refuses with "already paused"."""
+    w, _ = _ssh_slot(manager, spec, task, monkeypatch, probe="running")
+    monkeypatch.setattr(_RecordingSshMachine, "state", "running")
+    probe = manager._refresh_probe(spec, task, w)
+    manager._reconcile_worker(
+        spec, task, w, workers_mod.PARK, {"observed_running": True, "ssh_probe": probe}
+    )
+    monkeypatch.setattr(_RecordingSshMachine, "state", "paused")
+    assert manager._refresh_probe(spec, task, w) == "paused"
+
+
 def test_an_operator_pause_stops_a_parked_container(manager, spec, task, monkeypatch):
     """docker stop cannot signal a frozen process, so a paused container is
     thawed before it is asked to exit cleanly."""
