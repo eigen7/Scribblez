@@ -2736,6 +2736,35 @@ def test_a_slot_is_parked_or_replaced_only_once_its_pull_is_done(manager, monkey
     assert [op for op, _ in _RecordingSshMachine.ops] == ["pause"]
 
 
+def test_a_redeployed_slot_is_replaced_only_once_its_pull_is_done(manager, monkeypatch):
+    """A redeploy that lands while a pull runs must not stop the container
+    under it; the stop comes on the pass that records the pull's zero."""
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    w = task.worker("g")
+    w.undelivered = 0
+    release = threading.Event()
+
+    def slow_pull(self, spec, task, w):
+        release.wait(timeout=5)
+        return SimpleNamespace(remaining=0, pulled=[])
+
+    monkeypatch.setattr(WorkerManager, "_pull_ssh", slow_pull)
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    _RecordingSshMachine.ops = []
+    key = _key_of(spec, task, w)
+    manager._collect_step(spec, task, w)
+    task.bundle_id = "new"  # the redeploy, while the pull runs
+    manager._reconcile_ssh(spec, task, w, workers_mod.RUN, "running")
+    assert _RecordingSshMachine.ops == []
+    release.set()
+    manager._collecting[key].result(timeout=5)
+    manager._collect_step(spec, task, w)  # records the zero; no next pull
+    assert not manager._pulling(key)
+    manager._reconcile_ssh(spec, task, w, workers_mod.RUN, "running")
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["stop"]
+
+
 def _collect(manager, spec, task, w):
     """One collection by the pass's path, run on the calling thread."""
     manager._new_transfer_pool = SyncExecutor
