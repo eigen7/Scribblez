@@ -177,8 +177,9 @@ sink for everything else.
   the control link from an ssh container, rented or not. The slots on a
   remote data home's machine share its volume (generational/data_home.py),
   into which the controller relays the chunks it collects from generators
-  elsewhere. Only an ssh trainer on the legacy data plane still reads its
-  generations from the bucket, published by the scheduler's publish hook.
+  elsewhere. Nothing reads its generations from the bucket any more: the
+  legacy data plane, where the controller published them for an ssh
+  trainer, is retired.
 
 The controls push goes into a running ssh trainer's container over ssh.
 

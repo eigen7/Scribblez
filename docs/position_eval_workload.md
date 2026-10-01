@@ -39,14 +39,15 @@ Knobs split the same way across workloads:
 | **Live controls** | the tag's `controls.json`, written by the Controls tab | adopted by the trainer at its natural cadence |
 | **Slot resources** | the worker slot (threads) | per slot, any time |
 
-The scheduler tick runs inside the dashboard server's reconcile loop, the one
-always-on controller process. It receives `SchedulerHooks`:
+The workload's scheduler entry runs inside the dashboard server's reconcile
+loop, the one always-on controller process. It receives `SchedulerHooks`:
 
 - `gate(role, reason)` parks a role's workers, distinct from an operator
   pause;
-- `mirror(chunk, dest)` replays a local ingest in the bucket;
-- `publish(dest)` uploads a completed generation for a trainer running
-  elsewhere.
+- `finish(role)` ends a role for good, once the run's end condition holds.
+
+For the generational workloads that entry only gates and finishes the
+generators; the scheduling itself runs beside the trainer (below).
 
 The same loop runs a role's `dispatch` tick, if it declares one. That is the
 controller-side half of a role whose work the controller assigns rather than
@@ -74,19 +75,22 @@ between them through the slots' thread counts. Putting the match_eval slot
 on a second machine is how the eval matches stop competing with training for
 the GPU (see [The match_eval roundtrip](#the-match_eval-roundtrip)).
 
-## Data flow: staging and controller-side ingest
+## Data flow: staging and the data home
 
 ```
-generator (local)  ──chunk──►  tags/position_eval/<tag>/data/staging/     ─┐
-generator (remote) ──chunk──►  bucket: position_eval/<tag>/staging/ ─sync─► ─┤
-                                                                            │ scheduler ingest
-                                                                            ▼ (single writer)
+generator beside the trainer ──chunk──► <tag>/data/staging/ (on the trainer's machine) ─┐
+generator elsewhere ──chunk──► its own tree ─collected over ssh─► controller ─relayed──►─┤
+                                                                                        │ scheduler
+                                                                                        ▼ (single writer)
                                               data/test/*.slog          (filled first, then frozen)
                                               data/generations/gen_000000/{manifest.json, *.slog}
                                               data/generations/gen_000001/...
-                                                                            │
-                                                              trainer: SlogDataset(window dirs)
+                                                                                        │
+                                                                  trainer: SlogDataset(window dirs)
 ```
+
+For a trainer on the controller the relay is a no-op: what is collected
+lands in the staging the trainer's own data home reads.
 
 Generators are **generation-agnostic** (`scribblez/workloads/selfplay_gen.py`,
 shared by both workloads). One cycle writes one whole `.slog` chunk in the
@@ -110,20 +114,13 @@ makes the invariants easy to hold:
   delete failed) is deleted, not assigned twice;
 - a chunk whose header cannot be read is quarantined as `.bad`.
 
-Where the scheduler runs is the tag's *data plane* (`TaskRecord.data_plane`).
-On the legacy plane the controller ticks it over its own tag tree. On a
-*data home* it runs beside the trainer, on the trainer's machine
-(`scribblez/generational/data_home.py`), and the controller only gates the
-generators from the home's published gate and heartbeat. Generators on that
-machine deliver into its staging by rename; for a home on an ssh machine, the
-controller relays in the chunks it collects from generators elsewhere.
-
-On the legacy plane, when the tag has an ssh trainer, the scheduler also
-*publishes* each completed generation to the bucket (the `publish` hook):
-first the chunks, then the manifest, so a manifest in the bucket means the
-whole generation is there. That is what the trainer reads
-([plans/cloud_training.md](plans/cloud_training.md)). The manifest records
-publication, so a failed upload is retried on the next tick.
+The scheduler runs in the tag's *data home*, a thread of the trainer on the
+trainer's machine (`scribblez/generational/data_home.py`), which publishes its
+gate and a heartbeat; the controller gates the generators from that record.
+Generators on that machine deliver into its staging by rename; for a home on
+an ssh machine, the controller relays in the chunks it collects from
+generators elsewhere. So a tag's trainer is added before its generators, and
+moves only while they are stopped: where it runs decides where they deliver.
 
 ## Generation lifecycle and pacing
 
@@ -195,11 +192,10 @@ half over the control link:
 - `controls.json` is pushed into its container whenever the Controls tab
   rewrites it.
 
-On a data home it assembles its own generations; on the legacy plane they
-still come through the bucket, assembled and published by the controller.
-Match eval runs locally or over ssh against the collected exports, and the
-tabs read what collection brought home. Several tags with remote trainers can
-run side by side from one dashboard.
+Its data home assembles its own generations on that machine. Match eval runs
+locally or over ssh against the collected exports, and the tabs read what
+collection brought home. Several tags with remote trainers can run side by
+side from one dashboard.
 
 The runner lives with the training code and is referenced by dotted path, so
 generator bundles never import torch. `py/scripts/position_eval/train.py` is
