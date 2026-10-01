@@ -45,7 +45,6 @@ from cloud.credentials import CloudCredentials, CredentialsError, load_credentia
 from cloud.providers.aws import CATALOG as AWS_CATALOG
 from cloud.providers.aws import AwsProvider
 from cloud.providers.base import Instance, LaunchRequest, Provider, ProviderError
-from cloud.r2 import bucket_path, rclone
 from cloud.ssh_machine import SshMachine, SshMachineError
 from cloud.ssh_transfer import pull_results, push_file, relay_files, sweep_stopped
 from cloud.worker_entrypoint import EXIT_INTERRUPTED
@@ -60,11 +59,7 @@ from scribblez.dashboard import tasks
 from scribblez.dashboard.control_store import IMPORTED_JSON, ControlStore
 from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
 from scribblez.generational import state_pair
-from scribblez.generational.lifecycle import MANIFEST_NAME
 from scribblez.generational.scheduler import (
-    DATA_PLANE_HOME,
-    DATA_PLANE_LEGACY,
-    GENERATE_ROLE,
     TICK_FOR_TASK,
 )
 from scribblez.hardware import default_thread_count
@@ -307,14 +302,15 @@ def _trainer_finished(spec: workloads.WorkloadSpec, task: tasks.TaskRecord) -> b
     return bool(trainers) and all(w.finished for w in trainers)
 
 
-def _home_trainer(task: tasks.TaskRecord, role: workloads.RoleSpec) -> bool:
-    """Whether `role` is the trainer of a tag whose data plane runs beside it."""
-    return task.data_plane == DATA_PLANE_HOME and bool(role.ingest)
+def _home_trainer(spec: workloads.WorkloadSpec, role: workloads.RoleSpec) -> bool:
+    """Whether `role` is the trainer of a generational tag, whose data home
+    (generational/data_home.py) runs beside it."""
+    return spec.scheduler == TICK_FOR_TASK and bool(role.ingest)
 
 
 # The data sink of a slot on its tag's data home on an ssh machine: the tag's
-# named volume there, shared with the other slots on that machine and handed
-# to the worker as SCZ_DATA_SINK=local.
+# named volume there, shared with the other slots on that machine. The worker
+# sees it as its local data sink.
 DATA_SINK_HOME = "home"
 
 
@@ -552,13 +548,6 @@ class WorkerManager:
         # Machine keys of task rentals to stop as soon as their slots are down,
         # without the IDLE_STOP_SECONDS wait (stop_task_rentals).
         self._stop_now: set[str] = set()
-        # Where generation uploads run (_make_publish), also off the blocking
-        # thread: a tag moving onto a rented trainer uploads every generation
-        # it has, which held every request behind it for minutes.
-        self._uploads = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scz-upload")
-        # (task key, dest_rel) -> its upload in flight or finished but not yet
-        # collected by the scheduler's next publish call.
-        self._publishing: dict[tuple[str, str], Future] = {}
         # Task key -> its first-use bundle build in flight (_bundle_for_start).
         self._pending_builds: dict[str, Future] = {}
         # Where collections run (_collect_step), one thread per slot: a trainer's
@@ -754,8 +743,8 @@ class WorkerManager:
             "SCZ_WORKER_ID": w.worker_id,
             "SCZ_WORKER_KIND": "local",
         }  # fmt: skip
-        if _home_trainer(task, spec.role(w.role)):
-            env |= {"SCZ_DATA_PLANE": DATA_PLANE_HOME, **self._bucket_env()}
+        if _home_trainer(spec, spec.role(w.role)):
+            env |= self._bucket_env()
         log = self._log_file(spec, task.tag, w.worker_id)
         proc = subprocess.Popen(
             [sys.executable, "-m", "cloud.worker_entrypoint"],
@@ -919,13 +908,7 @@ class WorkerManager:
         )  # fmt: skip
         env["SCZ_SINK"] = self._slot_records_sink(spec, task, w)
         data_sink = self._slot_data_sink(spec, task, w)
-        data_env = "local" if data_sink == DATA_SINK_HOME else data_sink
-        if data_env != env["SCZ_SINK"]:
-            # Only when it differs: a bundle predating SCZ_DATA_SINK refuses
-            # to start on an SCZ_* variable it does not know.
-            env["SCZ_DATA_SINK"] = data_env
-        if _home_trainer(task, spec.role(w.role)):
-            env["SCZ_DATA_PLANE"] = DATA_PLANE_HOME
+        if _home_trainer(spec, spec.role(w.role)):
             # Its generations reach the bucket only from the home itself.
             env["SCZ_HOME_UPLOADS"] = "1"
         # A new trainer container starts from the controller's copy of the
@@ -1001,7 +984,7 @@ class WorkerManager:
         if role_spec.singleton:
             taken = [w.worker_id for w in task.workers if w.role == role]
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
-        if task.data_plane == DATA_PLANE_HOME and not role_spec.dispatch:
+        if spec.scheduler == TICK_FOR_TASK and not role_spec.dispatch:
             self._check_data_home_order(spec, task, role_spec)
         if role_spec.gpu and check_gpu:
             refusal = self._gpu_fit_refusal(spec, task, role, kind, machine, host)
@@ -1009,8 +992,8 @@ class WorkerManager:
         return role_spec
 
     def _check_data_home_order(self, spec, task: tasks.TaskRecord, role: workloads.RoleSpec):
-        """A data-home tag's trainer decides where its other data-plane slots
-        deliver, and a running slot cannot move (its sinks and mount are fixed
+        """A generational tag's trainer decides where its other data-plane
+        slots deliver, and a running slot cannot move (its sinks and mount are fixed
         when its worker starts). So a generator needs a trainer, and a trainer
         joins only while the others are stopped; _rehome then moves them."""
         if role.ingest:
@@ -1036,7 +1019,7 @@ class WorkerManager:
         volume wherever no slot now works in it. What a moved generator had
         staged in the old home's volume goes with it; generations come back
         from the bucket, and the checkpoint from the controller (_seed_state)."""
-        if not _home_trainer(task, spec.role(joined.role)):
+        if not _home_trainer(spec, spec.role(joined.role)):
             return
         for w in task.workers:
             if w is not joined and w.kind == "ssh" and not self._machine_gone(spec, task, w):
@@ -1537,29 +1520,6 @@ class WorkerManager:
                 self._expire_probe(key)
                 self._ssh_machine(task, w).stop_container(name)
 
-    def set_data_plane(self, spec, task: tasks.TaskRecord, data_plane: str):
-        """Move the tag's generation data plane (TaskRecord.data_plane). Only
-        while every slot is stopped, so the old and new schedulers never run
-        side by side, and only for a workload whose scheduler has a data home."""
-        assert spec.scheduler == TICK_FOR_TASK, f"workload '{spec.name}' has no data home"
-        assert data_plane in (DATA_PLANE_LEGACY, DATA_PLANE_HOME), f"no data plane '{data_plane}'"
-        running = [w.worker_id for w in task.workers if w.desired_state == "running"]
-        assert not running, f"pause every slot first ({', '.join(running)} still set to run)"
-        alive = [w.worker_id for w in task.workers if self._seen_alive(spec, task, w)]
-        assert not alive, f"wait for every slot to stop ({', '.join(alive)} still alive)"
-        assert data_plane == DATA_PLANE_HOME or self._remote_data_home(spec, task) is None, (
-            "a data home on an ssh machine cannot go back to legacy: the bucket holds "
-            "generations it numbered, which the controller's scheduler would reuse"
-        )
-        for w in task.workers:
-            if w.kind == "ssh" and not self._machine_gone(spec, task, w):
-                self._discard_container(spec, task, w)
-        if any(w.kind == "ssh" for w in task.workers):
-            task.bundle_id = None  # built afresh at the next start, with data home support
-        task.data_plane = data_plane
-        task.gates.pop(GENERATE_ROLE, None)  # the new scheduler decides afresh
-        self.tasks.save(spec, task)
-
     def _discard_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Remove stopped ssh slot `w`'s container, collecting what it holds
         first, so its next start creates one with the sinks and mount it now
@@ -1602,7 +1562,7 @@ class WorkerManager:
                     # backlog (the Remove dialog warns about that).
                     self._sweep_ssh(machine, spec, task, w)
                 machine.remove_container(_container_name(spec, task.tag, w.worker_id))
-        if task.data_plane == DATA_PLANE_HOME and w.kind == "ssh":
+        if spec.scheduler == TICK_FOR_TASK and w.kind == "ssh":
             self._release_tag_volume(spec, task, w)
         self._forget_slot(_key(spec, task.tag, worker_id))
         task.workers.remove(w)
@@ -1939,58 +1899,10 @@ class WorkerManager:
             paths=self.tasks.paths(spec, task.tag),
             gate=gate,
             finish=finish,
-            publish=self._make_publish(spec, task),
             role_running=lambda role: any(
                 self._seen_alive(spec, task, w) for w in task.workers if w.role == role
             ),
         )
-
-    def _make_publish(self, spec, task: tasks.TaskRecord):
-        """The scheduler's publish hook: copy a completed generation to the
-        bucket, where an ssh trainer on the legacy data plane reads it
-        (docs/plans/cloud_training.md). None for a task without one, and for a
-        data home, whose trainer reads its own tree.
-
-        The copy runs on the upload thread, so the hook only starts it and
-        reports whether it is done (SchedulerHooks.publish); a failed copy
-        raises on the call that collects it, and the next call starts it
-        again. Chunks already uploaded are skipped by size. The manifest goes
-        last, so a manifest in the bucket means the whole generation is."""
-        if task.data_plane == DATA_PLANE_HOME or not self._has_bucket_data(spec, task):
-            return None
-        try:
-            creds = self._creds()
-        except (CredentialsError, FileNotFoundError):
-            return None
-        r2 = creds.r2
-        paths = self.tasks.paths(spec, task.tag)
-
-        def upload(dest_rel: str):
-            gen_dir = paths.data_dir / dest_rel
-            dest = bucket_path(r2, spec.name, task.tag, *dest_rel.split("/"))
-            res = rclone(
-                r2, "copy", "--size-only", "--exclude", MANIFEST_NAME, str(gen_dir), dest,
-                capture=True,
-            )  # fmt: skip
-            assert res.returncode == 0, f"publishing {dest_rel} failed: {res.stderr}"
-            res = rclone(
-                r2, "copyto", str(gen_dir / MANIFEST_NAME), f"{dest}/{MANIFEST_NAME}", capture=True
-            )
-            assert res.returncode == 0, f"publishing {dest_rel}'s manifest failed: {res.stderr}"
-
-        def publish(dest_rel: str) -> bool:
-            key = (_key(spec, task.tag), dest_rel)
-            future = self._publishing.get(key)
-            if future is None:
-                self._publishing[key] = self._uploads.submit(upload, dest_rel)
-                return False
-            if not future.done():
-                return False
-            del self._publishing[key]
-            future.result()  # a failure raises; the next call uploads again
-            return True
-
-        return publish
 
     # ---- reconciliation ----------------------------------------------------
 
@@ -2436,7 +2348,6 @@ class WorkerManager:
         watchers. ssh containers keep running across a dashboard restart."""
         self._blocking.shutdown(wait=False, cancel_futures=True)
         self._builds.shutdown(wait=False, cancel_futures=True)
-        self._uploads.shutdown(wait=False, cancel_futures=True)
         for pool in self._transfer_pools.values():
             pool.shutdown(wait=False, cancel_futures=True)
         for proc in self._local.values():
@@ -2460,23 +2371,20 @@ class WorkerManager:
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
     ) -> str:
         """Where slot `w`'s worker delivers into and reads from the tag's data/
-        store (SCZ_DATA_SINK, cloud/sinks.py). DATA_SINK_HOME on the machine of
-        a tag's data home on an ssh machine. Otherwise "local": a local slot
-        delivers into the tag tree here, and an ssh slot into its container,
-        which the reconcile pass collects (and, for a data home elsewhere,
-        relays on: _relay_staging). The one exception is an ssh trainer on the
-        legacy data plane, which reads the generations the controller
-        publishes to the bucket."""
+        store: DATA_SINK_HOME on the machine of a tag's data home on an ssh
+        machine, whose volume the slots there share. Otherwise "local": a
+        local slot delivers into the tag tree here, and an ssh slot into its
+        container, which the reconcile pass collects (and, for a data home
+        elsewhere, relays on: _relay_staging). Either way the worker's data
+        sink is local (SCZ_DATA_SINK unset)."""
         if self._on_remote_data_home(spec, task, w):
             return DATA_SINK_HOME
-        if w.kind == "ssh" and spec.role(w.role).ingest:
-            return "r2"
         return "local"
 
     def _remote_data_home(self, spec, task: tasks.TaskRecord) -> tasks.WorkerRecord | None:
-        """The trainer slot of a tag whose data plane runs beside it on an ssh
-        machine; None for any other tag."""
-        if task.data_plane != DATA_PLANE_HOME:
+        """The trainer slot of a generational tag whose trainer, and so its data
+        home, is on an ssh machine; None for any other tag."""
+        if spec.scheduler != TICK_FOR_TASK:
             return None
         trainer = _trainer_slot(spec, task)
         return trainer if trainer is not None and trainer.kind == "ssh" else None
@@ -2485,11 +2393,6 @@ class WorkerManager:
         """Whether slot `w` works in its tag's data home on an ssh machine."""
         home = self._remote_data_home(spec, task)
         return home is not None and not spec.role(w.role).dispatch and _same_machine(w, home)
-
-    def _has_bucket_data(self, spec: workloads.WorkloadSpec, task) -> bool:
-        """Whether any slot reads the tag's data/ store from the bucket, which
-        the scheduler's publish hook keeps in step with the local one."""
-        return any(self._slot_data_sink(spec, task, w) == "r2" for w in task.workers)
 
     def _machine_record(self, task: tasks.TaskRecord, name: str) -> tasks.MachineRecord:
         """The machine `name` a slot of `task` runs on: one of the task's own, or

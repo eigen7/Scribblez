@@ -2,12 +2,13 @@
 """Run the position_eval trainer on a tag without the dashboard, for debugging.
 
 Normally the dashboard runs training: create a position_eval task, attach
-generator workers and the singleton trainer, and the dashboard's generation
-scheduler assembles generations from the workers' staged chunks. This CLI calls
-the same train-role runner (scribblez/position_eval/trainer.py) directly. It
-trains on the tag's complete generations exactly as the dashboard's trainer
-does, so something must still be producing them: a dashboard server with
-generator workers attached to the same tag.
+the singleton trainer and then generator workers, and the trainer's data home
+assembles generations from the workers' staged chunks. This CLI calls the same
+train-role runner (scribblez/position_eval/trainer.py) directly, data home
+included, so it trains on the tag's complete generations and on what it can
+assemble from chunks already staged. Nothing new arrives: the dashboard parks a
+tag's generators while the tag has no running trainer slot. So the CLI is for
+training on data already on disk.
 
 The workload flags are generated from its params dataclass, so they always
 match the dashboard's task form.

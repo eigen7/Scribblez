@@ -154,12 +154,6 @@ class TaskRecord:
     # view shows how they depart from the profile. "" for a workload without
     # profiles.
     profile: str = ""
-    # Where the generation data plane runs (generational/data_home.py): on this
-    # controller's tag tree, ticked by the reconcile pass ("legacy"), or beside
-    # the trainer, which the controller only gates generators from ("home").
-    # Changed only while every slot is stopped (WorkerManager.set_data_plane),
-    # so the tag never has two schedulers.
-    data_plane: str = "legacy"
 
     def worker(self, worker_id: str) -> WorkerRecord:
         w = self.find(worker_id)

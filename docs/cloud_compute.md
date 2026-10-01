@@ -16,7 +16,7 @@ parallel; output files are uniquely named and land atomically, so batches
 from any number of machines merge by copying and a killed worker loses at
 most its in-flight cycle; data volumes are small; and runtime deps are light
 and fetched from public upstreams. A position_eval trainer distributes too:
-on a data home (its tag's data plane beside it) it assembles its own
+its data home (the tag's data plane, beside it) assembles its own
 generations, the controller relaying in the chunks of generators elsewhere,
 and its exports, records and checkpoint come out over ssh, collected like any
 slot's records and installed under the cursor rule
@@ -64,8 +64,7 @@ Every slot's output (a generator's data, its stats and params, and a
 trainer's exports, records and checkpoint) is collected over ssh straight
 out of its container, wherever it runs (see "Results collection" below).
 The bucket's only data leg is a remote data home's generations, kept there
-so a vanished home can resume; an ssh trainer on the legacy data plane also
-reads its generations from there.
+so a vanished home can resume.
 
 ## The pieces
 

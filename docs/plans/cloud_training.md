@@ -12,7 +12,8 @@ deleted. The trainer contract and the bucket legs carried over unchanged,
 until the ssh-only transport work (#313-#316) replaced the trainer-output
 pull and the controls push with collection and pushes over ssh, and removed
 the chunk mirror and `cloud_sync` with every bucket-delivering generator.
-Generation publish remains, for an ssh trainer on the legacy data plane.
+Generation publish went with the legacy data plane: a trainer anywhere
+assembles its own generations in its data home.
 
 **Goal.** Run several position_eval training runs at once on rented GPUs, so
 A/B experiments (trunk, optimizer, loss weights, ...) stop queueing behind
