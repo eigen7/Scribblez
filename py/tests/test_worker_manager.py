@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from cloud.credentials import RegistryConfig
+from cloud.credentials import R2Credentials, RegistryConfig
 from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
 from scribblez import workloads
@@ -1082,6 +1082,29 @@ class _RecordingSshMachine(_FakeSshMachine):
 
     def remove_container(self, name):
         self.ops.append(("remove", name))
+
+
+def test_a_start_right_after_a_discard_creates_the_container_afresh(
+    manager, spec, task, monkeypatch
+):
+    """Seen live: moving a data home's trainer discards the generators'
+    containers, and a Start seconds later acted on the cached "stopped" probe,
+    sending `docker start` to a container that was gone."""
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    monkeypatch.setattr(_RecordingSshMachine, "state", "stopped")
+    _RecordingSshMachine.ops = []
+    w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
+    w.launched = True
+    manager._refresh_probe(spec, task, w)
+    manager._discard_container(spec, task, w)
+    monkeypatch.setattr(_RecordingSshMachine, "state", "missing")
+    created = []
+    monkeypatch.setattr(
+        WorkerManager, "_run_ssh_container", lambda self, spec, task, w: created.append(w.worker_id)
+    )
+    manager.set_worker_state(spec, task, w.worker_id, run=True)
+    assert created == [w.worker_id]
+    assert not any(op == "start" for op, _ in _RecordingSshMachine.ops)
 
 
 def _stopped_ssh_slot(manager, spec, task, monkeypatch, *, slot_bundle, task_bundle):
@@ -2538,10 +2561,13 @@ def test_a_data_home_gets_no_bucket_publish(manager, monkeypatch):
     assert manager._make_publish(spec, task) is None
 
 
-def test_a_local_data_homes_trainer_is_told_so_and_needs_no_bucket(manager, monkeypatch, tmp_path):
+def test_a_local_data_homes_trainer_is_told_so_and_given_the_bucket(manager, monkeypatch, tmp_path):
+    """It restores the window a remote home uploaded, should the trainer have
+    moved here; no other local slot gets the bucket."""
     spec = workloads.get("position_eval")
     monkeypatch.setattr(WorkerManager, "_spawn_local", _REAL_SPAWN_LOCAL)
-    monkeypatch.setattr(WorkerManager, "_creds", _fail)
+    r2 = R2Credentials(account_id="a", access_key_id="k", secret_access_key="s", bucket="b")
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: SimpleNamespace(r2=r2))
     monkeypatch.setattr(
         WorkerManager, "_log_file", lambda self, spec, tag, name: open(tmp_path / "log", "ab")
     )
@@ -2558,9 +2584,10 @@ def test_a_local_data_homes_trainer_is_told_so_and_needs_no_bucket(manager, monk
     task.data_plane = "home"
     for w in task.workers:
         manager._spawn_local(spec, task, w)
-    assert envs["tr"]["SCZ_DATA_PLANE"] == "home"
+    assert envs["tr"]["SCZ_DATA_PLANE"] == "home" and envs["tr"]["R2_BUCKET"] == "b"
+    assert "R2_BUCKET" not in envs["g"]
     for env in envs.values():
-        assert "R2_BUCKET" not in env and "SCZ_DATA_SINK" not in env
+        assert "SCZ_DATA_SINK" not in env
     assert "SCZ_DATA_PLANE" not in envs["g"]  # a generator just delivers locally
 
 

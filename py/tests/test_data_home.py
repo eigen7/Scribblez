@@ -86,7 +86,7 @@ def paths(tmp_path: Path) -> TagPaths:
     return TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
 
 
-def _home(paths, bucket=None, monkeypatch=None, games=100, ahead=1, window=0):
+def _home(paths, bucket=None, monkeypatch=None, games=100, ahead=1, window=0, uploads=False):
     if bucket is not None:
         monkeypatch.setattr(data_home, "rclone", bucket.rclone)
     cfg = scheduler.SchedulerConfig(games_per_generation=games, open_ahead=ahead)
@@ -97,6 +97,7 @@ def _home(paths, bucket=None, monkeypatch=None, games=100, ahead=1, window=0):
         r2=R2 if bucket is not None else None,
         chunk_games=lambda chunk: int(chunk.read_text()),
         window=window,
+        uploads=uploads,
     )
 
 
@@ -142,6 +143,7 @@ def test_any_other_failure_stops_the_thread_and_reaches_the_trainer(paths, monke
 
 
 def test_start_for_runs_only_for_a_home_tag(paths, monkeypatch):
+    monkeypatch.delenv("R2_BUCKET", raising=False)
     monkeypatch.delenv("SCZ_HOME_UPLOADS", raising=False)
     started = []
     monkeypatch.setattr(data_home.DataHome, "start", lambda self: started.append(self))
@@ -174,7 +176,7 @@ def test_complete_generations_are_uploaded_manifest_last_and_marked(paths, monke
         bucket, "_copy", lambda f, src, dst, _c=bucket._copy: order.append(dst) or _c(f, src, dst)
     )
     _stage(paths, 100, 40)  # gen 0 completes; gen 1 stays open
-    _home(paths, bucket, monkeypatch).step()
+    _home(paths, bucket, monkeypatch, uploads=True).step()
 
     assert bucket.objects["generations/gen_000000/c0.slog"] == "100"
     assert (
@@ -192,7 +194,7 @@ def test_a_failed_upload_is_retried_and_its_generation_kept(paths, monkeypatch):
     bucket = FakeBucket({})
     bucket.fail = "copy"
     _stage(paths, 100, 100, 100)
-    home = _home(paths, bucket, monkeypatch, ahead=5, window=1)
+    home = _home(paths, bucket, monkeypatch, ahead=5, window=1, uploads=True)
     home.step()
     assert not lifecycle.is_published(paths.generation_dir(0))
     # The trainer is past gen 0, but gen 0 is not in the bucket yet: it stays.
@@ -207,7 +209,7 @@ def test_a_failed_upload_is_retried_and_its_generation_kept(paths, monkeypatch):
 def test_generations_behind_the_window_leave_the_bucket(paths, monkeypatch):
     bucket = FakeBucket({f"generations/gen_00000{i}/manifest.json": "{}" for i in range(5)})
     lifecycle.write_train_state(paths, {"generation_index": 4})
-    _home(paths, bucket, monkeypatch, window=2).step()
+    _home(paths, bucket, monkeypatch, window=2, uploads=True).step()
     kept = sorted({k.split("/")[1] for k in bucket.objects if k.startswith("generations/")})
     assert kept == ["gen_000002", "gen_000003", "gen_000004"]
 
@@ -223,7 +225,7 @@ def test_a_fresh_home_restores_the_window_and_numbers_after_the_bucket(paths, mo
         bucket.objects[f"generations/gen_00000{i}/manifest.json"] = manifest
     bucket.objects["generations/gen_000006/c.slog"] = "100"  # an upload that died mid-way
     lifecycle.write_train_state(paths, {"generation_index": 4})
-    home = _home(paths, bucket, monkeypatch, ahead=5, window=2)
+    home = _home(paths, bucket, monkeypatch, ahead=5, window=2, uploads=True)
     home.restore()
 
     assert lifecycle.list_generation_indices(paths) == [2, 3, 4, 5]  # 1 is behind the window
@@ -247,14 +249,24 @@ def test_start_for_restores_and_uploads_only_for_a_remote_home(paths, monkeypatc
         monkeypatch.setenv(var, "x")
     monkeypatch.setattr(data_home.DataHome, "start", lambda self: None)
     restored = []
-    monkeypatch.setattr(data_home.DataHome, "restore", lambda self: restored.append(self))
+    monkeypatch.setattr(
+        data_home.DataHome, "restore", lambda self, required: restored.append(required)
+    )
     ctx = SimpleNamespace(data_plane=scheduler.DATA_PLANE_HOME, records_sink=LocalSink(paths.root))
     monkeypatch.delenv("SCZ_HOME_UPLOADS", raising=False)
     assert not data_home.start_for(ctx, paths, PositionEvalParams()).uploads
-    assert restored == []  # bucket credentials or not, a localhost home ignores the bucket
     monkeypatch.setenv("SCZ_HOME_UPLOADS", "1")
-    remote = data_home.start_for(ctx, paths, PositionEvalParams())
-    assert remote.uploads and restored == [remote]
+    assert data_home.start_for(ctx, paths, PositionEvalParams()).uploads
+    # A localhost home restores what a remote home uploaded (a trainer moved
+    # here), but does not need the bucket; a remote home's resume does.
+    assert restored == [False, True]
+
+
+def test_an_optional_restore_survives_an_unreachable_bucket(paths, monkeypatch):
+    bucket = FakeBucket({})
+    bucket.fail = "lsf"
+    _home(paths, bucket, monkeypatch).restore(required=False)  # no raise
+    assert lifecycle.list_generation_indices(paths) == []
 
 
 def test_a_hung_upload_holds_up_neither_scheduling_nor_the_heartbeat(paths, monkeypatch):
@@ -272,7 +284,7 @@ def test_a_hung_upload_holds_up_neither_scheduling_nor_the_heartbeat(paths, monk
     monkeypatch.setattr(bucket, "_copy", hung_copy)
     monkeypatch.setattr(data_home, "POLL_SECONDS", 0.01)
     _stage(paths, 100)
-    home = _home(paths, bucket, monkeypatch)
+    home = _home(paths, bucket, monkeypatch, uploads=True)
     home.start()
     try:
         _wait_for(lambda: lifecycle.is_complete(paths.generation_dir(0)))  # upload now hangs

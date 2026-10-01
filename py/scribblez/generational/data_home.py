@@ -58,18 +58,21 @@ LOCK_NAME = "scheduler.lock"
 
 def start_for(ctx, paths: TagPaths, params) -> "DataHome | None":
     """Start the data home beside trainer `ctx` when its tag's data plane is
-    home (ctx.data_plane); None otherwise. When the controller says the home is
-    remote (SCZ_HOME_UPLOADS), it keeps the bucket able to resume it: restore,
-    then uploads."""
+    home (ctx.data_plane); None otherwise. With bucket credentials it restores
+    the window a previous home uploaded, so a trainer that moved here from a
+    remote home finds it. When the controller says this home is remote
+    (SCZ_HOME_UPLOADS), that restore is required, and the home then keeps the
+    bucket able to resume it with uploads."""
     if ctx.data_plane != scheduler.DATA_PLANE_HOME:
         return None
     cfg = scheduler.SchedulerConfig(
         games_per_generation=params.games_per_generation, open_ahead=params.open_ahead
     )
-    r2 = r2_from_env() if os.environ.get("SCZ_HOME_UPLOADS") == "1" else None
-    home = DataHome(paths, cfg, ctx.records_sink, r2, window=params.window)
+    r2 = r2_from_env() if "R2_BUCKET" in os.environ else None
+    uploads = os.environ.get("SCZ_HOME_UPLOADS") == "1"
+    home = DataHome(paths, cfg, ctx.records_sink, r2, window=params.window, uploads=uploads)
     if r2 is not None:
-        home.restore()
+        home.restore(required=uploads)
     home.start()
     return home
 
@@ -86,8 +89,8 @@ def _tree_lock(paths: TagPaths):
 
 class DataHome:
     """The data plane's threads beside a trainer (see the module docstring).
-    `r2` is the bucket that keeps a remote home's generations, or None for a
-    home with no copy elsewhere."""
+    `r2` is the bucket a remote home's generations are kept in, for `restore`
+    and, with `uploads`, for the upload thread; None when there is none."""
 
     def __init__(
         self,
@@ -98,24 +101,25 @@ class DataHome:
         chunk_games: scheduler.ChunkGamesFn = scheduler._header_games,
         *,
         window: int = 0,
+        uploads: bool = False,
     ):
+        assert r2 is not None or not uploads, "uploading needs the bucket"
         self._paths = paths
         self._cfg = cfg
         self._records = records_sink
         self._r2 = r2
         self._chunk_games = chunk_games
         self._window = window
-        self.uploads = r2 is not None  # whether the bucket keeps the generations (see restore)
+        self.uploads = uploads  # whether the bucket keeps the generations (see restore)
         self._pruned_below = 0  # bucket generations below this index are gone
         self._gate: str | None = None
         self._error: Exception | None = None
-        # Nothing is published: uploads (when r2 is set) are the upload
-        # thread's. Finishing the generators stays the controller's
-        # (tick_for_task).
+        # Nothing is published: uploads are the upload thread's. Finishing the
+        # generators stays the controller's (tick_for_task).
         self._hooks = SchedulerHooks(
             paths=paths, gate=self._set_gate, finish=_no_finish, publish=None
         )
-        loops = [self.schedule] if r2 is None else [self.schedule, self.upload]
+        loops = [self.schedule, self.upload] if uploads else [self.schedule]
         self._threads = [threading.Thread(target=self._run, args=(f,), daemon=True) for f in loops]
 
     def start(self):
@@ -130,7 +134,7 @@ class DataHome:
     def step(self):
         """One pass of every loop, in order: schedule, then upload."""
         self.schedule()
-        if self._r2 is not None:
+        if self.uploads:
             self.upload()
 
     def schedule(self):
@@ -145,13 +149,16 @@ class DataHome:
         self._upload_complete()
         self._prune_bucket()
 
-    def restore(self):
+    def restore(self, required: bool = True):
         """Pull the uploaded generations from the window behind the trainer's
         cursor onward that this machine lacks. Run before `start`, after the
-        cursor is restored. A failure raises, as a trainer that resumed on a
-        partial window would silently diverge."""
+        cursor is restored. When `required`, a failure raises, as a trainer
+        that resumed on a partial window would silently diverge; otherwise an
+        unreachable bucket leaves the window to what is on disk."""
         cursor = lifecycle.read_train_state(self._paths).get("generation_index", 0)
         indices = self._bucket_generations()
+        if indices is None and not required:
+            return
         assert indices is not None, "listing the bucket's generations failed"
         for index in indices:
             gen_dir = self._paths.generation_dir(index)

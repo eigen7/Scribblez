@@ -49,7 +49,7 @@ from cloud.r2 import bucket_path, rclone
 from cloud.ssh_machine import SshMachine, SshMachineError
 from cloud.ssh_transfer import pull_results, push_file, relay_files, sweep_stopped
 from cloud.worker_entrypoint import EXIT_INTERRUPTED
-from cloud.worker_env import bundle_worker_env
+from cloud.worker_env import bundle_worker_env, r2_env
 from tornado.ioloop import IOLoop
 
 from scribblez import params as params_mod
@@ -686,6 +686,15 @@ class WorkerManager:
 
     # ---- cloud plumbing --------------------------------------------------
 
+    def _bucket_env(self) -> dict[str, str]:
+        """Bucket credentials for a local data home's trainer, which restores
+        the window a remote home uploaded; none when the controller has no
+        credentials file."""
+        try:
+            return r2_env(self._creds())
+        except (CredentialsError, FileNotFoundError):
+            return {}
+
     def _creds(self) -> CloudCredentials:
         if self._creds_cache is None:
             self._creds_cache = load_credentials()
@@ -746,7 +755,7 @@ class WorkerManager:
             "SCZ_WORKER_KIND": "local",
         }  # fmt: skip
         if _home_trainer(task, spec.role(w.role)):
-            env["SCZ_DATA_PLANE"] = DATA_PLANE_HOME
+            env |= {"SCZ_DATA_PLANE": DATA_PLANE_HOME, **self._bucket_env()}
         log = self._log_file(spec, task.tag, w.worker_id)
         proc = subprocess.Popen(
             [sys.executable, "-m", "cloud.worker_entrypoint"],
@@ -1554,6 +1563,10 @@ class WorkerManager:
             machine = self._ssh_machine(task, w)
             self._sweep_ssh(machine, spec, task, w)
             machine.remove_container(_container_name(spec, task.tag, w.worker_id))
+            # The cached probe still says "stopped": a Start acting on it
+            # within OBSERVATION_TTL_SECONDS would `docker start` a container
+            # that is gone.
+            self._expire_probe(_key(spec, task.tag, w.worker_id))
         w.launched = False
 
     def remove_worker(self, spec, task: tasks.TaskRecord, worker_id: str):
