@@ -198,8 +198,8 @@ half over the control link:
 On a data home it assembles its own generations; on the legacy plane they
 still come through the bucket, assembled and published by the controller.
 Match eval runs locally or over ssh against the collected exports, and the
-tabs read what collection brought home. Several tags with remote trainers can run side by side from one
-dashboard.
+tabs read what collection brought home. Several tags with remote trainers can
+run side by side from one dashboard.
 
 The runner lives with the training code and is referenced by dotted path, so
 generator bundles never import torch. `py/scripts/position_eval/train.py` is
