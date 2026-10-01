@@ -36,7 +36,7 @@ import torch
 from cloud import worker_deps
 
 from scribblez import params as params_mod
-from scribblez.generational import checkpoint
+from scribblez.generational import checkpoint, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import progress_line
 from scribblez.generational.optim import build_optim_arm, build_optimizer
@@ -183,22 +183,27 @@ def prune_exports(
     sink.remove_output(f"models/{paths.onnx_path(stale).name}")
 
 
-def deliver_pass(paths, sink, epoch: int):
-    """Hand pass `epoch`'s export and the rolling checkpoint to the sink. A
-    bucket sink uploads both and deletes the local export; the checkpoint
-    stays local for resume."""
+def deliver_pass(paths, sink, epoch: int, state: MsetTrainState):
+    """Hand pass `epoch`'s export, then the rolling checkpoint and its cursor
+    as a state pair (generational/state_pair.py), to the sink. A bucket sink
+    uploads them and deletes the local export; the checkpoint and cursor stay
+    local for resume."""
     export = paths.onnx_path(epoch)
     sink.deliver_output(export, f"models/{export.name}")
-    sink.deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
+    lifecycle.write_train_state(paths, asdict(state))
+    state_pair.deliver(
+        sink,
+        state_pair.snapshot(paths.rolling_checkpoint, epoch),
+        state_pair.snapshot(paths.train_state_path, epoch),
+        epoch,
+    )
 
 
 def restore_checkpoint(paths, sink):
-    """Fetch the rolling checkpoint through the sink if this machine has none
-    (a fresh rented machine)."""
-    if paths.rolling_checkpoint.exists():
-        return
-    if sink.fetch_file("checkpoints/model.pt", paths.rolling_checkpoint):
-        timed_print(f"restored the rolling checkpoint through the {sink.kind} sink")
+    """Install the newest checkpoint and cursor the sink holds when they beat
+    the ones on this machine (state_pair's cursor rule)."""
+    if state_pair.restore(paths, sink):
+        timed_print(f"restored the checkpoint and cursor through the {sink.kind} sink")
 
 
 def retire_training_pairs(train_ds: MsetDataset, sink) -> int:
@@ -395,7 +400,7 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
         move_encoding_version=cfg["move_encoding_version"],
     )
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
-    deliver_pass(paths, ctx["records_sink"], epoch)
+    deliver_pass(paths, ctx["records_sink"], epoch, state)
     prune_exports(paths, ctx["records_sink"], epoch)
     recorder.commit_generation(epoch, state.rows_trained, record)
     ctx["stats"].cycle_done(

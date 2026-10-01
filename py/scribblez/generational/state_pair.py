@@ -72,6 +72,16 @@ def install(pair_dir: Path, paths: TagPaths) -> bool:
     return newer
 
 
+def snapshot(path: Path, generation: int) -> Path:
+    """A hard link to `path`'s current version, for a delivery that may run
+    after the trainer has rewritten `path`. Rewrites replace the file rather
+    than modifying it, so the link keeps this version."""
+    snap = path.with_name(f"{path.name}.gen{generation}")
+    snap.unlink(missing_ok=True)
+    os.link(path, snap)
+    return snap
+
+
 def deliver(sink, model_snapshot: Path, cursor_snapshot: Path, generation: int):
     """Send a generation's state pair through `sink`: the model, then the cursor
     (the pair's commit marker), each moved or uploaded from its snapshot. Then

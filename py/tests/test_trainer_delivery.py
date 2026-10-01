@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from cloud.sinks import LocalSink
+from scribblez.generational import state_pair
 from scribblez.generational.records import TrainRecorder
 from scribblez.paths import TagPaths
 from scribblez.position_eval import trainer
@@ -96,8 +97,8 @@ def test_a_generations_deliveries_end_with_its_record(tmp_path):
     paths.onnx_path(4).write_bytes(b"onnx")
     paths.rolling_checkpoint.write_bytes(b"ckpt-4")
     paths.train_state_path.write_text('{"generation_index": 5}')
-    ckpt_snap = trainer._snapshot(paths.rolling_checkpoint, 4)
-    state_snap = trainer._snapshot(paths.train_state_path, 4)
+    ckpt_snap = state_pair.snapshot(paths.rolling_checkpoint, 4)
+    state_snap = state_pair.snapshot(paths.train_state_path, 4)
     paths.rolling_checkpoint.write_bytes(b"ckpt-5")  # the next generation rewrites it
     sink = _RecordingSink()
     recorder = TrainRecorder(sink)
@@ -124,7 +125,7 @@ def test_the_local_sink_drops_a_snapshot_and_keeps_the_original(tmp_path):
     (root / "checkpoints").mkdir(parents=True)
     ckpt = root / "checkpoints" / "model.pt"
     ckpt.write_bytes(b"x")
-    snap = trainer._snapshot(ckpt, 1)
+    snap = state_pair.snapshot(ckpt, 1)
     LocalSink(root).deliver_output(snap, "checkpoints/model.pt")
     assert not snap.exists() and ckpt.read_bytes() == b"x"
     LocalSink(root).deliver_output(ckpt, "checkpoints/model.pt", keep=True)

@@ -52,7 +52,6 @@ import sys
 import threading
 import time
 from dataclasses import asdict
-from pathlib import Path
 
 import torch
 
@@ -205,16 +204,6 @@ class OutputDeliverer:
             self._done.put((what, time.monotonic() - t0))
 
 
-def _snapshot(path: Path, gen: int) -> Path:
-    """A hard link to `path`'s current version, for a delivery that may run
-    after the trainer has rewritten `path`. Rewrites replace the file rather
-    than modifying it, so the link keeps this version."""
-    snap = path.with_name(f"{path.name}.gen{gen}")
-    snap.unlink(missing_ok=True)
-    os.link(path, snap)
-    return snap
-
-
 def _deliver_generation(
     sink, paths: TagPaths, gen: int, checkpoint_snap, state_snap, recorder, staged
 ):
@@ -300,8 +289,8 @@ def _checkpoint_and_eval(
             ctx["records_sink"],
             paths,
             ci,
-            _snapshot(paths.rolling_checkpoint, ci),
-            _snapshot(paths.train_state_path, ci),
+            state_pair.snapshot(paths.rolling_checkpoint, ci),
+            state_pair.snapshot(paths.train_state_path, ci),
             recorder,
             staged,
         ),
