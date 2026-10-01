@@ -2344,7 +2344,10 @@ class WorkerManager:
         if w.kind == "local":
             # A local worker restarts in about a second, so parking it and
             # stopping it are the same thing.
-            if intent == RUN and not alive:
+            # Liveness afresh before a spawn: an operator's Start runs between
+            # the pass's look and this step, on the same thread, and acting on
+            # the look would start a second worker beside the one it spawned.
+            if intent == RUN and not alive and not self._local_alive(spec, task, w):
                 code = self._local_exit_code(spec, task, w)
                 if _is_crash(code):
                     self._note_crash(_key(spec, task.tag, w.worker_id), f"exit {code}")

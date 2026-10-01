@@ -135,6 +135,25 @@ def test_a_task_is_deleted_only_on_the_writer(writer, tmp_path):
     assert store.load(SPEC, "t") is None
 
 
+def test_a_late_save_of_a_deleted_tag_does_not_bring_it_back(writer, tmp_path):
+    """Seen live: a Delete ran between two steps of a reconcile pass, and the
+    pass's next save of the record it had loaded re-created the tag. A new
+    tag of the same name is a new record, and saves as usual."""
+    control, on_writer = writer
+    store = tasks.TaskStore(tmp_path, control)
+    on_writer(store.create, SPEC, "t", {})
+    held = on_writer(store.load, SPEC, "t")
+    on_writer(store.delete, SPEC, "t")
+    on_writer(store.save, SPEC, held)
+    assert on_writer(store.load, SPEC, "t") is None
+    assert not store.task_path(SPEC, "t").exists()
+    on_writer(store.create, SPEC, "t", {})
+    fresh = on_writer(store.load, SPEC, "t")
+    fresh.retired_spend = 1.0
+    on_writer(store.save, SPEC, fresh)
+    assert store.load(SPEC, "t").retired_spend == 1.0
+
+
 def test_unclaimed_every_thread_reads_and_writes_the_live_object(tmp_path):
     """A single-threaded test or tool never claims a writer."""
     store = pool_mod.pool_store(ControlStore(tmp_path))

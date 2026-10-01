@@ -1264,6 +1264,26 @@ def test_a_collect_failure_on_a_running_container_propagates(manager, spec, task
         manager._pull_ssh(spec, task, w)
 
 
+def test_a_pass_does_not_respawn_a_worker_a_start_spawned_since_its_look(
+    manager, spec, task, monkeypatch
+):
+    """Seen live: a Start ran between the pass's look (not alive) and its turn
+    for the slot, and the pass spawned a second trainer beside the first."""
+    w = manager.add_local(spec, task, "generate", 1)
+    w.desired_state = "running"
+    spawned = []
+    monkeypatch.setattr(
+        WorkerManager, "_spawn_local", lambda self, spec, task, w: spawned.append(w)
+    )
+    monkeypatch.setattr(WorkerManager, "_local_alive", lambda self, spec, task, w: True)
+    manager._reconcile_worker(spec, task, w, "run", {"observed_running": False})
+    assert spawned == []
+    monkeypatch.setattr(WorkerManager, "_local_alive", lambda self, spec, task, w: False)
+    monkeypatch.setattr(WorkerManager, "_local_exit_code", lambda self, spec, task, w: None)
+    manager._reconcile_worker(spec, task, w, "run", {"observed_running": False})
+    assert spawned == [w]
+
+
 def test_a_parked_local_worker_is_simply_stopped(manager, spec, task, monkeypatch):
     """A local worker restarts in about a second; there is nothing to save."""
     stopped = []
