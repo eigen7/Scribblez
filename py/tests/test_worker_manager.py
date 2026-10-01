@@ -30,6 +30,7 @@ from scribblez.dashboard.workers import (
 from scribblez.paths import DEFAULT_MOUNT_ROOT, TagPaths
 from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
 from scribblez.workloads.position_eval import PositionEvalParams
+from sim_world import SyncExecutor
 
 # The fixture below replaces the launch paths with _fail; a test that wants to
 # exercise one for real puts this back.
@@ -1204,7 +1205,7 @@ def test_an_operator_pause_stops_a_parked_container(manager, spec, task, monkeyp
 
 def _collectable_ssh_slot(manager, spec, task, monkeypatch, *, probe: str):
     """A running ssh slot wired to a machine whose re-probe returns `probe`,
-    for exercising _collect_ssh's response to a pull that raced a stop."""
+    for exercising a collection's response to a pull that raced a stop."""
     monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
     monkeypatch.setattr(_RecordingSshMachine, "state", probe)
     _RecordingSshMachine.ops = []
@@ -1225,7 +1226,8 @@ def test_a_collect_that_raced_a_stop_is_not_an_error(manager, spec, task, monkey
     the next start (or a replacement's sweep) will take."""
     monkeypatch.setattr(workers_mod, "pull_results", _raise_stopped)
     w = _collectable_ssh_slot(manager, spec, task, monkeypatch, probe="stopped")
-    manager._collect_ssh(spec, task, w)  # does not raise
+    assert manager._pull_ssh(spec, task, w) is None  # does not raise
+    _collect(manager, spec, task, w)
     assert w.undelivered is None
 
 
@@ -1236,7 +1238,7 @@ def test_a_collect_failure_on_a_running_container_propagates(manager, spec, task
     monkeypatch.setattr(workers_mod, "pull_results", _raise_stopped)
     w = _collectable_ssh_slot(manager, spec, task, monkeypatch, probe="running")
     with pytest.raises(SshMachineError):
-        manager._collect_ssh(spec, task, w)
+        manager._pull_ssh(spec, task, w)
 
 
 def test_a_parked_local_worker_is_simply_stopped(manager, spec, task, monkeypatch):
@@ -1387,7 +1389,7 @@ def test_collecting_records_what_the_container_still_holds(manager, spec, task, 
         lambda *a, **k: PullResult(pulled=["data/staging/c1.slog"], remaining=87),
     )
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
-    manager._collect_ssh(spec, task, w)
+    _collect(manager, spec, task, w)
     assert w.undelivered == 87
     assert manager.tasks.load(spec, "t").worker(w.worker_id).undelivered == 87  # survives a restart
 
@@ -1683,8 +1685,7 @@ def test_a_failed_collection_gives_up_the_count_rather_than_keeping_a_stale_one(
     monkeypatch.setattr(workers_mod, "pull_results", boom)
     w = manager.add_ssh(spec, task, "generate", host="user@laptop", threads=None)
     w.undelivered = 0  # what creation recorded
-    with pytest.raises(SshMachineError):
-        manager._collect_ssh(spec, task, w)
+    _collect(manager, spec, task, w)  # reported, not raised: the next pass pulls again
     assert w.undelivered is None
 
 
@@ -2291,9 +2292,9 @@ def _rented_home_task(manager, monkeypatch) -> tasks.TaskRecord:
 
 
 def test_a_rented_data_homes_slots_deliver_by_machine(manager, monkeypatch):
-    """On the home machine: the shared volume, and records through the bucket so
-    nothing is collected from it. Elsewhere: bucket staging, which the home
-    ingests. Match eval keeps its own filesystem, where dispatch reads it."""
+    """On the home machine: the shared volume for data. Elsewhere: bucket
+    staging, which the home ingests. Match eval keeps its own filesystem, where
+    dispatch reads it. Every slot's records are collected over ssh."""
     spec = workloads.get("position_eval")
     task = _rented_home_task(manager, monkeypatch)
     sinks = {
@@ -2311,8 +2312,38 @@ def test_a_rented_data_homes_slots_deliver_by_machine(manager, monkeypatch):
         "gl": ("r2", "local", None),
         "me": ("local", "local", True),
     }
+    # The home takes bucket staging itself, so cloud_sync (the watcher, or a
+    # drain's last pull) never copies it here.
+    assert manager._has_bucket_data(spec, task) and not manager._has_bucket_slots(spec, task)
     task.data_plane = "legacy"  # the routing is unchanged for a legacy tag
     assert manager._slot_data_sink(spec, task, task.worker("g1")) == "r2"
+    assert manager._has_bucket_slots(spec, task)
+
+
+def test_a_remote_homes_scheduler_record_is_copied_here(manager, monkeypatch):
+    """Generators are gated by the home's record (its gate and heartbeat), read
+    in a small call of its own; an empty read (no record written yet) leaves
+    the last copy in place."""
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    reads = [b'{"gate": "full", "heartbeat": 5}', b""]
+    commands = []
+
+    class _Home:
+        def read_from_container(self, container, command, timeout=None):
+            commands.append((container, command[-1]))
+            return reads.pop(0)
+
+    monkeypatch.setattr(WorkerManager, "_ssh_machine", lambda self, task, w: _Home())
+    record = manager.tasks.paths(spec, "t").root / "scheduler_state.json"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    manager._pull_scheduler_state(spec, task, task.worker("tr"))
+    assert json.loads(record.read_text()) == {"gate": "full", "heartbeat": 5}
+    assert commands[0][0] == "scz-position_eval-t-tr"
+    assert str(record) in commands[0][1]
+    manager._pull_scheduler_state(spec, task, task.worker("tr"))
+    assert json.loads(record.read_text())["heartbeat"] == 5
+    assert not list(record.parent.glob(".scheduler_state.json.tmp"))
 
 
 def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
@@ -2623,7 +2654,7 @@ def test_a_trainers_collection_takes_its_outputs_and_installs_pairs(manager, mon
 
     monkeypatch.setattr(workers_mod, "pull_results", pull)
     monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
-    manager._collect_ssh(spec, task, task.worker("tr"))
+    _collect(manager, spec, task, task.worker("tr"))
     assert paths.rolling_checkpoint.read_text() == "w7"
     assert json.loads(paths.train_state_path.read_text())["rows_trained"] == 700
 
@@ -2662,17 +2693,53 @@ def test_a_slow_pull_runs_off_the_blocking_thread_and_is_recorded_when_done(mana
     manager._collect_step(spec, task, w)  # starts it and returns at once
     first = manager._collecting[key]
     manager._collect_step(spec, task, w)  # still running: no second pull
-    assert manager._collecting[key] is first and w.undelivered is None
+    assert manager._collecting[key] is first and manager._pulling(key)
     release.set()
     first.result(timeout=5)
     manager._collect_step(spec, task, w)  # records it, then starts the next
     assert saved == [3]
     manager._collecting[key].result(timeout=5)
     manager._collect_step(spec, task, w)
-    assert w.undelivered is None  # a third pull is in flight again
+    assert w.undelivered == 3  # the last count stands while the next pull runs
     manager._collecting[key].result(timeout=5)
     assert len(threads) >= 2 and all(n.startswith("scz-transfer") for n in threads)
     assert threading.current_thread().name not in threads
+
+
+def test_a_slot_is_parked_or_replaced_only_once_its_pull_is_done(manager, monkeypatch):
+    """A pause would freeze a pull in flight until it timed out, and a
+    replacement needs the count of a pull that has finished. So enforcement
+    waits for the pull, and no further pull is started for a slot on its way
+    to being parked or replaced."""
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    w = task.worker("g")
+    release = threading.Event()
+
+    def slow_pull(self, spec, task, w):
+        release.wait(timeout=5)
+        return SimpleNamespace(remaining=0, pulled=[])
+
+    monkeypatch.setattr(WorkerManager, "_pull_ssh", slow_pull)
+    monkeypatch.setattr(workers_mod, "SshMachine", _RecordingSshMachine)
+    _RecordingSshMachine.ops = []
+    key = _key_of(spec, task, w)
+    manager._collect_step(spec, task, w)
+    manager._reconcile_ssh(spec, task, w, workers_mod.PARK, "running")
+    assert _RecordingSshMachine.ops == []  # the pull is still running
+    release.set()
+    manager._collecting[key].result(timeout=5)
+    task.gates = [w.role]
+    manager._collect_step(spec, task, w)  # records it; parking, so no next pull
+    assert not manager._pulling(key) and key not in manager._collecting
+    manager._reconcile_ssh(spec, task, w, workers_mod.PARK, "running")
+    assert [op for op, _ in _RecordingSshMachine.ops] == ["pause"]
+
+
+def _collect(manager, spec, task, w):
+    """One collection by the pass's path, run on the calling thread."""
+    manager._new_transfer_pool = SyncExecutor
+    manager._collect_step(spec, task, w)
 
 
 def _key_of(spec, task, w):

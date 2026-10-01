@@ -568,10 +568,10 @@ class WorkerManager:
         self._publishing: dict[tuple[str, str], Future] = {}
         # Task key -> its first-use bundle build in flight (_bundle_for_start).
         self._pending_builds: dict[str, Future] = {}
-        # Where collections run (_collect_step), one thread per tag: a trainer's
+        # Where collections run (_collect_step), one thread per slot: a trainer's
         # exports and checkpoints are tens to hundreds of megabytes, which on the
         # blocking thread would hold every other tag's pass behind them, and one
-        # tag's slow link must not hold up another's.
+        # slot's slow link must not hold up another slot's collection.
         self._transfer_pools: dict[str, Executor] = {}
         self._new_transfer_pool = lambda: ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="scz-transfer"
@@ -725,8 +725,7 @@ class WorkerManager:
         slots, pulling what those slots deliver: a watcher whose argv no
         longer matches (a trainer slot appeared) is replaced."""
         key = _key(spec, task.tag)
-        # A data home ingests bucket staging itself, by moving each chunk.
-        has_bucket = task.data_plane != DATA_PLANE_HOME and self._has_bucket_slots(spec, task)
+        has_bucket = self._has_bucket_slots(spec, task)
         argv = self.cloud_sync_argv(spec, task, "--watch", "--interval", str(SYNC_INTERVAL_SECONDS))
         entry = self._sync.get(key)
         if entry is not None and (
@@ -908,6 +907,9 @@ class WorkerManager:
         ):  # fmt: skip
             memory.pop(key, None)
         self._collecting.pop(key, None)
+        pool = self._transfer_pools.pop(key, None)
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def forget_crashes(self, spec, tag: str, worker_id: str):
         self._crashes.pop(_key(spec, tag, worker_id), None)
@@ -2234,45 +2236,45 @@ class WorkerManager:
 
     def _collect_step(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """The pass's collection for slot `w` (blocking thread): record the
-        last pull if it has finished, and start the next on the tag's transfer
-        thread unless one is still running. The bytes move off this thread; the
-        slot's record changes only here."""
+        last pull if it has finished, and start the next on the slot's transfer
+        thread unless one is still running or the slot is about to be parked
+        or replaced, which _reconcile_ssh does only once no pull is in flight
+        (a stop needs no wait: a pull it cuts short is the benign stop race
+        _pull_ssh describes). The bytes move off this thread; the slot's record
+        changes only here."""
         key = _key(spec, task.tag, w.worker_id)
         running = self._collecting.get(key)
         if running is not None and not running.done():
             return
         if running is not None:
             self._record_pull(spec, task, w, self._collecting.pop(key))
-        # Unknown until this pull succeeds: a failing collection (a link too
-        # slow for the transfer timeout while probes still pass) must not
-        # leave an old zero claiming "drained" while the container fills up.
-        w.undelivered = None
-        pool = self._transfer_pools.setdefault(_key(spec, task.tag), self._new_transfer_pool())
+        if _intent(w, task) == PARK or _replaceable(w, task):
+            return
+        pool = self._transfer_pools.setdefault(key, self._new_transfer_pool())
         future = pool.submit(self._pull_ssh, spec, task, w)
         if future.done():  # a synchronous pool (the simulation's)
             self._record_pull(spec, task, w, future)
         else:
             self._collecting[key] = future
 
+    def _pulling(self, key: str) -> bool:
+        """Whether slot `key` has a collection in flight."""
+        running = self._collecting.get(key)
+        return running is not None and not running.done()
+
     def _record_pull(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, done: Future):
-        """Record a finished pull's count of what the container still holds; a
-        failed one is reported and leaves the count unknown."""
+        """Record a finished pull's count of what the container still holds.
+        A failed pull, or one the container stopped under, leaves the count
+        unknown: a failing collection (a link too slow for the transfer timeout
+        while probes still pass) must not leave an old zero claiming "drained"
+        while the container fills up."""
         try:
             result = done.result()
         except Exception as e:  # noqa: BLE001 -- the next pass pulls again
             print(f"collect {spec.name}/{task.tag}/{w.worker_id}: {e}")
-            return
-        if result is not None:
-            w.undelivered = result.remaining
-            self.tasks.save(spec, task)
-
-    def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """One collection from slot `w`, start to finish on this thread."""
-        w.undelivered = None
-        result = self._pull_ssh(spec, task, w)
-        if result is not None:
-            w.undelivered = result.remaining
-            self.tasks.save(spec, task)
+            result = None
+        w.undelivered = None if result is None else result.remaining
+        self.tasks.save(spec, task)
 
     def _pull_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Pull a batch of slot `w`'s finished output from its container into
@@ -2402,7 +2404,7 @@ class WorkerManager:
                 self._expire_probe(key)
                 machine.unpause_container(name)  # resuming a parked worker is not a restart
             elif probe == "running":
-                if _replaceable(w, task):
+                if _replaceable(w, task) and not self._pulling(key):
                     # The task has redeployed past this container and it holds
                     # nothing: stop it, and the next pass replaces it. As with
                     # any stop, the cycle in flight is lost.
@@ -2416,7 +2418,9 @@ class WorkerManager:
                     self._note_crash(key, why)
                 self._expire_probe(key)
                 self._start_or_replace(machine, name, spec, task, w, probe)
-        elif intent == PARK and probe == "running":
+        elif intent == PARK and probe == "running" and not self._pulling(key):
+            # A pause would freeze a pull in flight until it times out, so the
+            # park waits for it; _collect_step starts no further pull.
             self._expire_probe(key)
             machine.pause_container(name)
         elif intent == STOP and probe in ("running", "paused"):
@@ -2472,6 +2476,8 @@ class WorkerManager:
         self._blocking.shutdown(wait=False, cancel_futures=True)
         self._builds.shutdown(wait=False, cancel_futures=True)
         self._uploads.shutdown(wait=False, cancel_futures=True)
+        for pool in self._transfer_pools.values():
+            pool.shutdown(wait=False, cancel_futures=True)
         for proc in [*self._local.values(), *(p for p, _ in self._sync.values())]:
             if proc.poll() is None:
                 proc.send_signal(signal.SIGTERM)
@@ -2537,9 +2543,11 @@ class WorkerManager:
         )
 
     def _has_bucket_slots(self, spec: workloads.WorkloadSpec, task) -> bool:
-        """Whether any slot delivers data through the bucket, for the sync
-        watcher to pull down."""
-        return any(self._slot_data_sink(spec, task, w) == "r2" for w in task.workers)
+        """Whether any slot delivers data through the bucket for cloud_sync to
+        pull down (the watcher, and the tag queue's drain). Never for a data
+        home, which ingests bucket staging itself by moving each chunk: a copy
+        pulled here would be ingested again if the home came to this machine."""
+        return task.data_plane != DATA_PLANE_HOME and self._has_bucket_data(spec, task)
 
     def _has_bucket_data(self, spec: workloads.WorkloadSpec, task) -> bool:
         """Whether any slot's data/ store runs through the bucket, which the
