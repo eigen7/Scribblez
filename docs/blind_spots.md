@@ -44,9 +44,8 @@ comes out. What the survey measures, and what it has found, is in
 
 ## What a worker delivers
 
-Into `/workspace/mount/tags/blind_spots/<tag>/data/`, by whichever route the
-slot uses (a rename for a local worker, over ssh from an operator's machine,
-through the bucket from a rented one):
+Into `/workspace/mount/tags/blind_spots/<tag>/data/`, by a rename for a local
+worker, or collected over ssh from a remote one's container:
 
 - `survey/<stem>.simsurvey.json`: one per game, slimmed to the positions
   found. Each position lists the top moves and the outside picks with their

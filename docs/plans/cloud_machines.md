@@ -163,8 +163,8 @@ The `train` role runs on the `ssh` kind; nothing in the trainer changed, and
 neither `cloud_sync` nor the ingest tick knows which machine the records came
 from.
 
-*Superseded in part by the ssh-only transport work: records no longer go
-through the bucket.* A worker has two sinks (`py/cloud/sinks.py`): a data sink
+*Superseded in part by the ssh-only transport work: records and generators'
+data no longer go through the bucket.* A worker has two sinks (`py/cloud/sinks.py`): a data sink
 for the tag's `data/` store and a records sink for everything else.
 
 - **Records** (`_slot_records_sink`) are local for every slot: a local worker
@@ -172,15 +172,14 @@ for the tag's `data/` store and a records sink for everything else.
   reconcile pass collects over ssh. A trainer's exports, records and state
   pairs come home this way, and a new trainer container is seeded with the
   controller's checkpoint and cursor.
-- **Data** (`_slot_data_sink`) still goes through the bucket for a trainer
-  (its generations) and for a generator on a rented machine. It goes over
-  the control link for any other slot on the operator's own machine, and
-  stays local for a local slot. A data home's slots use its volume or bucket
-  staging (generational/data_home.py).
+- **Data** (`_slot_data_sink`) is local for every slot too, collected over
+  the control link from an ssh container, rented or not. The slots on a
+  remote data home's machine share its volume (generational/data_home.py),
+  into which the controller relays the chunks it collects from generators
+  elsewhere. Only an ssh trainer on the legacy data plane still reads its
+  generations from the bucket, published by the scheduler's publish hook.
 
-The sync watcher runs when some slot's data goes through the bucket, and the
-scheduler's publish and mirror hooks key off the data sink. The controls
-push goes into a running ssh trainer's container over ssh.
+The controls push goes into a running ssh trainer's container over ssh.
 
 ## One-time setup (the operator, once)
 

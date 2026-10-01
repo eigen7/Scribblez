@@ -24,8 +24,8 @@ workload in the same package, with the registry in `__init__.py`. A
   ticks, out-of-tag `inputs`, and a stats schema;
 - an optional controller-side scheduler;
 - a progress callable;
-- the `data/` subdirectories remote workers deliver into, which is what
-  `cloud_sync` pulls.
+- the `data/` subdirectories workers deliver into (`collected_dirs`), which
+  is what a collection from an ssh container takes.
 
 Registry modules stay import-light. Heavy code is referenced by dotted path
 and imported only when it runs, so a CPU-only worker container can import the
@@ -91,8 +91,8 @@ generator (remote) ──chunk──►  bucket: position_eval/<tag>/staging/ �
 Generators are **generation-agnostic** (`scribblez/workloads/selfplay_gen.py`,
 shared by both workloads). One cycle writes one whole `.slog` chunk in the
 worker's private work dir and hands it to the results sink, which lands it in
-the tag's `staging/`: by rename locally, or through the bucket's staging
-prefix and the sync watcher for remote workers. The work dir is wiped on
+the tag's `staging/`: by rename locally, or into the container's own tree for
+a remote worker, from where the controller collects it over ssh. The work dir is wiped on
 worker start and chunks are written in one shot, so a crash loses at most the
 in-flight chunk and leftovers are never delivered.
 
@@ -106,24 +106,24 @@ makes the invariants easy to hold:
 - completion is a recorded fact (`manifest.json`), and committed counts are
   recomputed from `.slog` headers each tick, so crashes self-heal;
 - an ingest ledger written before each rename makes assignment idempotent: a
-  chunk that reappears in staging (a cloud sync racing an ingest) is deleted,
-  not assigned twice;
+  chunk that reappears in staging (a collection or relay repeated after its
+  delete failed) is deleted, not assigned twice;
 - a chunk whose header cannot be read is quarantined as `.bad`.
 
-For chunks that arrived through the bucket, the scheduler mirrors the
-assignment there (a server-side move via the `mirror` hook). The bucket thus
-keeps the same layout as the local corpus, so disaster recovery is an
-`rclone copy` of the tag prefix, and the sync watcher never re-downloads an
-ingested chunk.
+Where the scheduler runs is the tag's *data plane* (`TaskRecord.data_plane`).
+On the legacy plane the controller ticks it over its own tag tree. On a
+*data home* it runs beside the trainer, on the trainer's machine
+(`scribblez/generational/data_home.py`), and the controller only gates the
+generators from the home's published gate and heartbeat. Generators on that
+machine deliver into its staging by rename; for a home on an ssh machine, the
+controller relays in the chunks it collects from generators elsewhere.
 
-When the tag has any bucket-delivering slot, the scheduler also *publishes*
-each completed generation (the `publish` hook): first the chunks not yet in
-the bucket (those from local and ssh-collected workers), then the manifest,
-so a manifest in the bucket means the whole generation is there. That is what
-a trainer running elsewhere reads
-([plans/cloud_training.md](plans/cloud_training.md)), and it makes the bucket
-archive complete. The manifest records publication, so a failed upload is
-retried on the next tick.
+On the legacy plane, when the tag has an ssh trainer, the scheduler also
+*publishes* each completed generation to the bucket (the `publish` hook):
+first the chunks, then the manifest, so a manifest in the bucket means the
+whole generation is there. That is what the trainer reads
+([plans/cloud_training.md](plans/cloud_training.md)). The manifest records
+publication, so a failed upload is retried on the next tick.
 
 ## Generation lifecycle and pacing
 
@@ -195,8 +195,8 @@ half over the control link:
 - `controls.json` is pushed into its container whenever the Controls tab
   rewrites it.
 
-Its generations still come through the bucket: the scheduler assembles and
-publishes them locally, and the trainer pulls them. Match eval runs locally or
+On a data home it assembles its own generations; on the legacy plane they
+still come through the bucket, assembled and published by the controller. Match eval runs locally or
 over ssh against the collected exports, and the tabs read what collection
 brought home. Several tags with remote trainers can run side by side from one
 dashboard.
@@ -273,9 +273,9 @@ currently exposes it.
 | Failure | Effect | Recovery |
 |---|---|---|
 | generator crash or machine loss | loses at most the in-flight chunk | reconcile respawns or restarts it |
-| dashboard server down | no ingest, no gating; local workers die; remote containers keep producing into bucket staging | on restart, reconcile respawns local workers and ingest drains staging |
+| dashboard server down | no ingest, no gating; local workers die; remote containers keep producing into their own trees | on restart, reconcile respawns local workers and collection drains the containers |
 | trainer crash | training halts; generation continues up to the ahead-limit gate | respawn resumes from the rolling checkpoint |
-| sync lag | chunks reach staging late | ingest is idempotent; late chunks join the open generation |
+| collection lag | chunks reach staging late | ingest is idempotent; late chunks join the open generation |
 | corrupt staged chunk | quarantined as `.bad`, never assigned | none needed |
 | match_eval worker or container dies mid-match | the model is still in its inbox unmarked, so the match counts as unplayed | it replays from the same fixed seeds on the next start |
 | a push is cut off mid-model | the size check fails, so nothing lands under the name the worker polls for | the next pass re-pushes |

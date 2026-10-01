@@ -162,11 +162,9 @@ provider design are in [plans/cloud_machines.md](plans/cloud_machines.md).
   task's, and runs a first-boot script that logs in to the image registry and
   pulls both worker images. The machine reads `launching` until ssh answers,
   `preparing` until that script finishes, then `up`.
-- **Delivery.** A slot on a rented machine delivers its data (a generator's
-  chunks) through the results bucket rather than over ssh. The machine has a
-  datacenter link to the bucket, and the controller downloads each chunk once
-  instead of hauling it home and uploading it again. Its records, a trainer's
-  exports and checkpoint included, are collected over ssh like any slot's.
+- **Delivery.** A slot on a rented machine delivers into its container and is
+  collected over ssh, like a slot on the operator's own machine: its data, its
+  records, and a trainer's exports and checkpoint.
 - **Idle stop.** A rented machine on which nothing has run for ten minutes is
   **stopped**: its disk is kept and its hourly rate stops. A gated generator
   is a paused container and a finished trainer an exited one, so a run that
@@ -341,14 +339,10 @@ taken in the workers table, where Remove states what would be lost. Removing
 any slot discards whatever its container still holds, and the dashboard says
 how much first.
 
-**Rented generators and remote trainers** drain the same way. A rented
-generator's chunks are already in the bucket, so only its records are left to
-collect, and it is replaced as soon as they are. A trainer's last state pair
-is swept from its stopped container and installed under the cursor rule, and
-the replacement container is seeded with the controller's checkpoint and
-cursor, so it loses at most its in-flight generation. While a task has any
-slot delivering data through the bucket, the server runs a sync watcher that
-streams that data into the local mount.
+**Rented generators and remote trainers** drain the same way. A trainer's
+last state pair is swept from its stopped container and installed under the
+cursor rule, and the replacement container is seeded with the controller's
+checkpoint and cursor, so it loses at most its in-flight generation.
 
 **Pauses.** A scheduler gate pauses the container rather than stopping it, so
 a gate that flips every minute costs nothing: no bundle refetch, and the
@@ -363,8 +357,8 @@ alongside the read-only training data plane:
 - `py/scribblez/dashboard/tasks.py`: task records, tag enumeration, progress.
 - `py/scribblez/dashboard/workers.py`: the `WorkerManager`. Local subprocesses
   (spawn, interrupt, respawn; logs under the tag's `logs/`), ssh containers
-  and rented machines via `py/cloud`, the per-task sync watcher, scheduler
-  ticks, and gate enforcement.
+  and rented machines via `py/cloud`, collection over ssh, scheduler ticks,
+  and gate enforcement.
 - `py/scribblez/dashboard/worker_stats_figures.py`: the schema-driven Stats
   figures.
 - `web/src/components/master/MasterApp.tsx`: the React shell (home page and

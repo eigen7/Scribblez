@@ -237,12 +237,10 @@ enters a `releasing` phase:
 1. Every remote slot's full `docker logs` is saved into the tag's
    `logs/<worker_id>.log`. Today only the last line reaches the dashboard,
    and the container, with its log, is about to be removed.
-2. For each stopped ssh container on the local sink, its last output is
-   swept, and release requires `undelivered == 0`.
-3. For bucket-delivering slots, one non-watching `cloud_sync` pass for the
-   tag runs to completion, so the remote trainer's final export,
-   checkpoint and records land locally.
-4. Only then are the slots removed and the lease closed. The machine's
+2. Each stopped ssh container's last output is swept (every slot delivers
+   into its container), a trainer's final state pair included, and release
+   requires `undelivered == 0`.
+3. Only then are the slots removed and the lease closed. The machine's
    lease-period spend goes to the task.
 
 A tag whose final output cannot be drained keeps its lease, and the queue
