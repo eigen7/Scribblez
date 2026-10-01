@@ -2345,11 +2345,11 @@ def test_chunks_collected_here_are_relayed_into_a_remote_home(manager, monkeypat
         "relay_files",
         lambda machine, container, **kw: relayed.append((machine, container, kw["rel"])),
     )
-    for wid in ("tr", "g1", "g2", "me"):
-        manager._transfer_ssh(spec, task, task.worker(wid))
+    for wid in ("tr", "g1", "g2", "me"):  # through the pass's own collection step
+        _collect(manager, spec, task, task.worker(wid))
     assert relayed == [("link-m1", "scz-position_eval-t-tr", "data/staging")]
     task.data_plane = "legacy"
-    manager._transfer_ssh(spec, task, task.worker("tr"))
+    _collect(manager, spec, task, task.worker("tr"))
     assert len(relayed) == 1
 
 
