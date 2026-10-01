@@ -91,11 +91,26 @@ def take_seed(paths: TagPaths, expected: bool) -> bool:
     marker. A restarted container, or a home volume that already holds state,
     starts at once. Returns whether the seed was installed."""
     seed = paths.root / SEED_DIR
+    if _awaiting_seed(paths, expected):
+        print(f"waiting up to {SEED_WAIT_SECONDS} s for the controller's checkpoint and cursor")
     deadline = time.monotonic() + SEED_WAIT_SECONDS
-    while expected and not paths.rolling_checkpoint.exists() and not (seed / CURSOR_NAME).exists():
-        assert time.monotonic() < deadline, f"no state seed arrived in {SEED_WAIT_SECONDS} s"
+    while _awaiting_seed(paths, expected):
+        assert time.monotonic() < deadline, (
+            f"no state seed arrived in {SEED_WAIT_SECONDS} s: the controller's push into this "
+            "container failed (the slot's row shows why); remove and re-add the slot to retry"
+        )
         time.sleep(SEED_POLL_SECONDS)
     return (seed / CURSOR_NAME).exists() and install(seed, paths)
+
+
+def _awaiting_seed(paths: TagPaths, expected: bool) -> bool:
+    """Whether a trainer told a seed is coming still lacks both its own
+    checkpoint and the seed's cursor."""
+    return (
+        expected
+        and not paths.rolling_checkpoint.exists()
+        and not (paths.root / SEED_DIR / CURSOR_NAME).exists()
+    )
 
 
 def snapshot(path: Path, generation: int) -> Path:
