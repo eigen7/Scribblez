@@ -229,6 +229,7 @@ class Container:
     worker: Worker
     env: dict
     exit_reason: str = ""
+    payload: bool = False  # its bundle was copied in
 
 
 class Host:
@@ -528,13 +529,17 @@ class FakeSshMachine:
     def container_logs(self, name: str) -> str:
         return ""
 
-    def run_container(self, name, image, env, gpus=False, volume=None):
+    def create_container(self, name, image, env, gpus=False, volume=None):
         host = self._host()
-        worker = _worker_from_env(env, "r2")
-        host.containers[name] = Container("running", worker, dict(env))
+        worker = _worker_from_env(env, "local")
+        host.containers[name] = Container("stopped", worker, dict(env))
+
+    def copy_into_container(self, name, dest_dir, archive):
+        self._host().containers[name].payload = True
 
     def start_container(self, name: str):
         c = self._host().containers[name]
+        assert c.payload, f"{name} started without its bundle"
         c.state, c.exit_reason = "running", ""
 
     def stop_container(self, name: str):
@@ -623,3 +628,12 @@ def wire_manager(monkeypatch, manager, world: World):
     manager._blocking = WriterThread()
     manager._builds = SyncExecutor()
     manager._new_transfer_pool = SyncExecutor
+    # The world's machines take the payload as a flag; the bundle store,
+    # which _build_bundle above never fills, is not consulted.
+    monkeypatch.setattr(
+        manager,
+        "_copy_payload",
+        lambda machine, container, role, bundle_id, arch: machine.copy_into_container(
+            container, "/opt/scribblez", None
+        ),
+    )

@@ -9,13 +9,15 @@ fail, so anything that launches where it should not breaks loudly.
 
 import asyncio
 import json
+import tarfile
 import threading
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cloud.bundles import BundleManifest
 from cloud.credentials import RegistryConfig
 from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
@@ -57,6 +59,16 @@ def task() -> tasks.TaskRecord:
 def manager(tmp_path, monkeypatch) -> WorkerManager:
     for name in ("_spawn_local", "_run_ssh_container", "_creds"):
         monkeypatch.setattr(WorkerManager, name, _fail)
+    # The bundle store is empty here: a container creation just hands the
+    # machine a stand-in payload (test_a_containers_payload_is_its_bundle
+    # covers the real one).
+    monkeypatch.setattr(
+        WorkerManager,
+        "_copy_payload",
+        lambda self, machine, container, role, bundle_id, arch: machine.copy_into_container(
+            container, "/opt/scribblez", None
+        ),
+    )
     return WorkerManager(tmp_path)
 
 
@@ -108,6 +120,12 @@ class _FakeSshMachine:
 
     def detect_arch(self, image) -> str:
         return "znver3"
+
+    def copy_into_container(self, name, dest_dir, archive):
+        pass
+
+    def start_container(self, name):
+        pass
 
 
 def test_unlaunched_ssh_slot_stays_manageable_when_unreachable(manager, spec, task, monkeypatch):
@@ -966,7 +984,13 @@ def test_first_remote_worker_builds_the_bundle_off_the_blocking_thread(
     assert seen["thread"].startswith("scz-build")
     assert seen["archs"] == ["znver3"]  # the laptop's, asked once and kept
     assert (w.arch, task.bundle_archs) == ("znver3", ["znver3"])
-    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull", "pull", "run"]
+    assert [op for op, _ in _RecordingSshMachine.ops] == [
+        "pull",
+        "pull",
+        "create",
+        "payload",
+        "start",
+    ]
     assert (task.bundle_id, w.bundle_id, w.launched) == ("b1", "b1", True)
     assert key not in manager._exits
     # A second slot joins the pinned bundle without another build.
@@ -1064,8 +1088,11 @@ class _RecordingSshMachine(_FakeSshMachine):
     def pull_image(self, image):
         self.ops.append(("pull", image))
 
-    def run_container(self, name, image, env, *, gpus=False, volume=None):
-        self.ops.append(("run", "gpu" if gpus else name))
+    def create_container(self, name, image, env, *, gpus=False, volume=None):
+        self.ops.append(("create", "gpu" if gpus else name))
+
+    def copy_into_container(self, name, dest_dir, archive):
+        self.ops.append(("payload", name))
 
     def copy_from_container(self, name, path, dest, timeout=None):
         self.ops.append(("copy", path))
@@ -1412,11 +1439,93 @@ def test_deploy_refuses_a_worker_image_that_cannot_load_this_tree(manager, spec,
         manager.deploy(spec, task)
 
 
+def test_deploy_refuses_an_image_whose_bootstrap_predates_the_payload(
+    manager, spec, task, monkeypatch
+):
+    """An image recorded before the bootstrap took the bundle the dashboard
+    copies in would look for it in the bucket and never start."""
+    local = {"libstdc++.so.6": "libstdc++.so.6.0.35"}
+    old = {"image": "w", "versions": local}  # no "bootstrap": an older push
+    monkeypatch.setattr(workers_mod.runtime_abi, "read_records", lambda root: {"engine": old})
+    monkeypatch.setattr(workers_mod.runtime_abi, "local_versions", lambda: local)
+    with pytest.raises(AssertionError, match="older bootstrap"):
+        manager.deploy(spec, task)
+    current = old | {"bootstrap": workers_mod.runtime_abi.BOOTSTRAP_PROTOCOL}
+    monkeypatch.setattr(workers_mod.runtime_abi, "read_records", lambda root: {"engine": current})
+    monkeypatch.setattr(workers_mod.bundles, "deploy_current_tree", _fail)
+    with pytest.raises(AssertionError, match="launched compute"):  # past the gate
+        manager.deploy(spec, task)
+
+
+def _store_bundle(store: Path, bundle_id: str, arch: str, positions: str):
+    """A bundle in the store: its manifest, one arch's tarball, and its eval
+    datasets' tarball."""
+    (store / bundle_id).mkdir(parents=True)
+    manifest = BundleManifest(
+        bundle_id=bundle_id, git_sha="s", git_dirty=False, archs=[arch], eval_positions=positions
+    )
+    (store / bundle_id / "manifest.json").write_text(json.dumps(asdict(manifest)))
+    (store / bundle_id / f"bundle-{arch}.tar.gz").write_bytes(b"bundle bytes")
+    deps = workers_mod.bundles.eval_positions_path(store, positions)
+    deps.parent.mkdir(parents=True, exist_ok=True)
+    deps.write_bytes(b"positions bytes")
+
+
+def test_a_containers_payload_is_its_bundle_and_a_trainers_datasets(tmp_path, monkeypatch):
+    """Copied in before the container starts, where the image's bootstrap
+    looks (runtime_abi.PAYLOAD_DIR): the tarball for the slot's arch, and for
+    a trainer the eval datasets it scores against."""
+    manager = WorkerManager(tmp_path)
+    store = tmp_path / workers_mod.bundles.STORE_REL
+    _store_bundle(store, "b1", "znver3", "p1")
+    copied = {}
+
+    class _Machine:
+        def copy_into_container(self, name, dest_dir, archive):
+            with tarfile.open(archive) as tar:
+                copied[name] = (
+                    dest_dir,
+                    {m.name: tar.extractfile(m).read() for m in tar.getmembers()},
+                )
+
+    spec = workloads.get("position_eval")
+    manager._copy_payload(_Machine(), "gen", spec.role("generate"), "b1", "znver3")
+    manager._copy_payload(_Machine(), "tr", spec.role("train"), "b1", "znver3")
+    assert copied["gen"] == ("/opt/scribblez", {"payload/bundle.tar.gz": b"bundle bytes"})
+    assert copied["tr"][1] == {
+        "payload/bundle.tar.gz": b"bundle bytes",
+        "payload/positions.tar.gz": b"positions bytes",
+    }
+    assert not list(store.glob(".payload-*"))  # the archive is gone
+
+
+def test_a_container_whose_payload_did_not_arrive_is_removed(tmp_path):
+    """Started as it is, it would have nothing to run; removed, the next
+    start creates it afresh."""
+    manager = WorkerManager(tmp_path)
+    _store_bundle(tmp_path / workers_mod.bundles.STORE_REL, "b1", "znver3", "p1")
+    removed = []
+
+    class _Machine:
+        def copy_into_container(self, name, dest_dir, archive):
+            raise SshMachineError("link dropped")
+
+        def remove_container(self, name):
+            removed.append(name)
+
+    with pytest.raises(SshMachineError):
+        manager._copy_payload(
+            _Machine(), "gen", workloads.get("position_eval").role("generate"), "b1", "znver3"
+        )
+    assert removed == ["gen"]
+
+
 def test_deploy_says_nothing_about_an_image_no_push_has_described(manager, spec, task, monkeypatch):
     """The record only exists once a push has written one; its absence is not
     evidence of a stale image."""
     monkeypatch.setattr(workers_mod.runtime_abi, "read_records", lambda root: None)
-    # _cloud is the fixture's tripwire: reaching it means the check passed.
+    # The store write is the tripwire: reaching it means the check passed.
+    monkeypatch.setattr(workers_mod.bundles, "deploy_current_tree", _fail)
     with pytest.raises(AssertionError, match="launched compute"):
         manager.deploy(spec, task)
 
@@ -1699,7 +1808,7 @@ def test_a_gpu_role_gets_the_machines_gpus(manager, monkeypatch):
     matcher = manager.add_ssh(spec, task, "match_eval", host="user@laptop", threads=None)
     manager._run_ssh_container(spec, task, matcher)
 
-    assert [arg for op, arg in _RecordingSshMachine.ops if op == "run"] == [
+    assert [arg for op, arg in _RecordingSshMachine.ops if op == "create"] == [
         _container_name(spec, "t", generator.worker_id),
         "gpu",
     ]
@@ -1944,7 +2053,7 @@ def test_an_ssh_trainers_container_runs_the_torch_image_with_local_records(
         def create_volume(self, name):
             pass
 
-        def run_container(self, name, image, env, *, gpus=False, volume=None):
+        def create_container(self, name, image, env, *, gpus=False, volume=None):
             envs[name] = (image, env["SCZ_SINK"], gpus, env.get("SCZ_DATA_SINK"))
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
@@ -2008,7 +2117,16 @@ def test_an_own_machine_slots_inputs_are_pushed_into_its_container(
 
     manager._run_ssh_container(spec, task, w)
     # Into the container, so after it exists; under the tag root there.
-    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull", "run", "push"]
+    # The payload goes in before the container starts; inputs, after. (The
+    # second pull is the arch survey the stubbed bundle step skipped.)
+    assert [op for op, _ in _RecordingSshMachine.ops] == [
+        "pull",
+        "pull",
+        "create",
+        "payload",
+        "start",
+        "push",
+    ]
     assert pushed == [(str(manager.tasks.paths(spec, "t").root), "inputs/teacher.onnx", src)]
 
 
@@ -2347,7 +2465,7 @@ def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
         def create_volume(self, name):
             volumes.append(name)
 
-        def run_container(self, name, image, env, *, gpus=False, volume=None):
+        def create_container(self, name, image, env, *, gpus=False, volume=None):
             runs[name.rsplit("-", 1)[-1]] = (
                 len(seeded),
                 volume,
@@ -2553,7 +2671,7 @@ def test_a_new_trainer_container_is_seeded_with_the_controllers_state(manager, m
         def create_volume(self, name):
             pass
 
-        def run_container(self, name, image, env, *, gpus=False, volume=None):
+        def create_container(self, name, image, env, *, gpus=False, volume=None):
             envs[name.rsplit("-", 1)[-1]] = env.get("SCZ_STATE_SEED")
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)

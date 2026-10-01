@@ -1,5 +1,8 @@
-"""Tests for bundle deployment: the source fingerprint and the deploy path
-that keeps the bucket's LATEST equal to the controller's tree."""
+"""Tests for bundle deployment: the source fingerprint, the deploy path that
+keeps the store's LATEST equal to the controller's tree, and the store."""
+
+import json
+import os
 
 from cloud import bundles
 
@@ -59,49 +62,49 @@ def _manifest(source_hash: str, bundle_id: str = "old") -> bundles.BundleManifes
 
 
 def _deploy_harness(monkeypatch, *, latest, local_hash="local"):
-    calls = {"built": 0, "pushed": 0, "archs": []}
+    calls = {"built": 0, "written": 0, "archs": []}
 
     def build(archs, jobs=None):
         calls["built"] += 1
         calls["archs"].append(archs)
 
-    def push(r2, archs):
-        calls["pushed"] += 1
+    def write(store, archs):
+        calls["written"] += 1
         return bundles.BundleManifest(
             bundle_id="new", git_sha="s", git_dirty=False, archs=archs, source_hash=local_hash
         )
 
     monkeypatch.setattr(bundles, "build_archs", build)
     monkeypatch.setattr(bundles, "source_hash", lambda archs, cache=None: local_hash)
-    monkeypatch.setattr(bundles, "latest_manifest", lambda r2: latest)
-    monkeypatch.setattr(bundles, "push_bundle", push)
+    monkeypatch.setattr(bundles, "latest_manifest", lambda store: latest)
+    monkeypatch.setattr(bundles, "write_bundle", write)
     return calls
 
 
-def test_deploy_pushes_when_the_bucket_is_behind(monkeypatch):
+def test_deploy_writes_when_the_store_is_behind(monkeypatch):
     calls = _deploy_harness(monkeypatch, latest=_manifest("stale"))
     assert bundles.deploy_current_tree(None, ["x86-64"]).bundle_id == "new"
-    assert (calls["built"], calls["pushed"]) == (1, 1)
+    assert (calls["built"], calls["written"]) == (1, 1)
 
 
-def test_deploy_skips_the_push_when_the_bucket_already_has_this_tree(monkeypatch):
+def test_deploy_skips_writing_when_the_store_already_has_this_tree(monkeypatch):
     """An id that changed on every deploy would unpin every task that shares
     it, replacing containers to run identical code."""
     calls = _deploy_harness(monkeypatch, latest=_manifest("local"))
     assert bundles.deploy_current_tree(None, ["x86-64"]).bundle_id == "old"
-    assert (calls["built"], calls["pushed"]) == (1, 0)
+    assert (calls["built"], calls["written"]) == (1, 0)
 
 
-def test_deploy_pushes_when_nothing_has_ever_been_pushed(monkeypatch):
+def test_deploy_writes_when_nothing_has_ever_been_written(monkeypatch):
     calls = _deploy_harness(monkeypatch, latest=None)
     assert bundles.deploy_current_tree(None, ["x86-64"]).bundle_id == "new"
-    assert calls["pushed"] == 1
+    assert calls["written"] == 1
 
 
-def test_deploy_pushes_over_a_manifest_that_predates_source_hashes(monkeypatch):
+def test_deploy_writes_over_a_manifest_that_predates_source_hashes(monkeypatch):
     calls = _deploy_harness(monkeypatch, latest=_manifest(""))
     assert bundles.deploy_current_tree(None, ["x86-64"]).bundle_id == "new"
-    assert calls["pushed"] == 1
+    assert calls["written"] == 1
 
 
 def test_deploy_always_builds_before_deciding(monkeypatch):
@@ -121,10 +124,54 @@ def test_deploy_builds_and_ships_only_the_archs_asked_for(monkeypatch):
     assert manifest.archs == ["znver3", "znver4"]
 
 
-def test_deploy_pushes_when_the_bucket_lacks_an_arch(monkeypatch):
+def test_deploy_writes_when_the_store_lacks_an_arch(monkeypatch):
     """LATEST carrying this tree is not enough: it must carry it for every
     arch asked for, or a znver4 machine would find nothing to run."""
     calls = _deploy_harness(monkeypatch, latest=_manifest("local"))  # x86-64 only
     assert bundles.deploy_current_tree(None, ["x86-64"]).bundle_id == "old"
     assert bundles.deploy_current_tree(None, ["znver4"]).bundle_id == "new"
-    assert calls["pushed"] == 1
+    assert calls["written"] == 1
+
+
+def _stored(store, bundle_id: str, positions: str, age: int):
+    """A bundle in the store, its manifest `age` seconds old."""
+    d = store / bundle_id
+    d.mkdir(parents=True)
+    manifest = bundles.BundleManifest(
+        bundle_id=bundle_id, git_sha="s", git_dirty=False, archs=["znver3"],
+        eval_positions=positions,
+    )  # fmt: skip
+    (d / "manifest.json").write_text(json.dumps(manifest.__dict__))
+    (d / bundles.arch_tarball_name("znver3")).write_bytes(b"tar")
+    os.utime(d / "manifest.json", (1000 + age, 1000 + age))
+    bundles.eval_positions_path(store, positions).parent.mkdir(exist_ok=True)
+    bundles.eval_positions_path(store, positions).write_bytes(b"pos")
+
+
+def test_the_store_reads_back_its_bundles(tmp_path):
+    _stored(tmp_path, "b1", "p1", 0)
+    assert bundles.latest_manifest(tmp_path) is None
+    (tmp_path / bundles.LATEST_NAME).write_text("b1\n")
+    assert bundles.latest_manifest(tmp_path).eval_positions == "p1"
+    assert bundles.arch_tarball(tmp_path, "b1", "znver3").read_bytes() == b"tar"
+    assert bundles.read_manifest(tmp_path, "nope") is None
+
+
+def test_pruning_keeps_pinned_and_recent_bundles_and_their_datasets(tmp_path, monkeypatch):
+    """A task pinned to an old bundle must still find it to create a
+    container; the rest go, beyond the newest few, and so does any eval
+    dataset no remaining bundle names."""
+    monkeypatch.setattr(bundles, "KEEP_NEWEST", 2)
+    for i in range(5):
+        _stored(tmp_path, f"b{i}", f"p{i}", i)
+    bundles.prune(tmp_path, keep={"b0"})
+    assert sorted(d.name for d in tmp_path.iterdir() if d.name.startswith("b")) == [
+        "b0",
+        "b3",
+        "b4",
+    ]
+    assert sorted(p.name for p in (tmp_path / bundles.DEPS_DIR).iterdir()) == [
+        "positions-p0.tar.gz",
+        "positions-p3.tar.gz",
+        "positions-p4.tar.gz",
+    ]

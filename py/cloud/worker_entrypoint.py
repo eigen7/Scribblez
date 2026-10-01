@@ -48,10 +48,10 @@ All configuration comes from environment variables:
     SCZ_WORKER_KIND                       slot kind reported in stats: "local"
                                           or "ssh" (default: the records
                                           sink's)
-    SCZ_BUNDLE                            bundle reference for the bootstrap
-                                          ("latest" or a bundle_id); unused here
-    SCZ_BUNDLE_ID, SCZ_HOST_ARCH,         set by the bootstrap; recorded in the
-    SCZ_BUNDLE_ARCH                       params record and stats
+    SCZ_BUNDLE_ID, SCZ_BUNDLE_ARCH        the bundle the dashboard copied in;
+                                          recorded in the params record and
+                                          stats
+    SCZ_HOST_ARCH                         set by the bootstrap; recorded too
     SCZ_DEVICE                            torch device for a train role
                                           (default "cuda"; read by the trainers)
     SCZ_MOUNT_ROOT                        root of the tag trees (default: the
@@ -91,7 +91,6 @@ WORKER_ENV_VARS = (
     "SCZ_MAX_CYCLES",
     "SCZ_WORKER_ID",
     "SCZ_WORKER_KIND",
-    "SCZ_BUNDLE",
     "SCZ_BUNDLE_ID",
     "SCZ_HOST_ARCH",
     "SCZ_BUNDLE_ARCH",

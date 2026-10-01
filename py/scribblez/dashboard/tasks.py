@@ -145,7 +145,7 @@ class TaskRecord:
     # The bundle every ssh worker of this task runs, pinned when the first one
     # launches, so the fleet stays homogeneous and code edited mid-run does not
     # silently reach it. The source digest it was built from is kept so drift
-    # is a local comparison (WorkerManager.bundle_drift), not a bucket read.
+    # is a comparison of digests (WorkerManager.bundle_drift), not a rebuild.
     bundle_id: str | None = None
     bundle_source_hash: str = ""
     bundle_archs: list[str] = field(default_factory=list)  # the archs the bundle was built for
@@ -428,8 +428,7 @@ class TaskStore:
         return task
 
     def delete(self, spec: WorkloadSpec, tag: str):
-        """Delete a tag's local dir (task record, data, stats, logs). The tag's
-        copy in the results bucket is deliberately left alone; purge it by hand.
+        """Delete a tag's dir (task record, data, stats, logs).
 
         The tag must have no worker slots left, since the task record is what
         tracks their containers and machines. Callers go through

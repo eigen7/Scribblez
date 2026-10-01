@@ -116,15 +116,15 @@ Selecting a tag opens its task view:
   now, the workers table, one add-worker form per role, the Machines card,
   and per-worker and task-level start/pause/remove. Only a non-running worker
   can be removed, so removal never silently discards an in-flight cycle.
-  Deleting a tag removes the local data dir only (the bucket archive is kept)
-  and is refused while the tag has workers.
+  Deleting a tag removes its data dir and is refused while the tag has
+  workers.
 - **Stats.** Generic per-role worker statistics driven by the role's stats
   schema: fleet-aggregate tiles (units/hour, totals, cycle time, worker
   health), Bokeh figures (units/hour over time, per-phase cycle-time
   breakdown), and a per-worker table. Each worker maintains a stats JSON under
   the tag (cumulative counters plus a bounded window of per-cycle samples).
-  Bucket-delivering workers upload it every cycle and it arrives with the
-  normal sync, so the dashboard reads only the local mount.
+  A remote worker's arrives with each collection, so the dashboard reads
+  only the local mount.
 - **Workload tabs**, from the client registry `web/src/workloads.tsx`. The
   training workloads' analysis tabs are described in
   [react_dashboard.md](react_dashboard.md).
@@ -304,11 +304,11 @@ queue; Release finishes every slot of a tag with no end condition.
 
 ### Container lifecycle
 
-**Bundles.** Code reaches a container as a bundle picked by the machine's CPU
-arch (generic `x86-64` as fallback), fetched from the bucket at container
-start ([cloud_compute.md](cloud_compute.md)). The dashboard deploys it for
-you: when a task's first remote worker starts, it builds and pushes the
-controller's tree and pins the task to the result. Every worker of a task
+**Bundles.** Code reaches a container as a bundle built for the machine's CPU
+arch, which the dashboard copies into the container over ssh before starting
+it ([cloud_compute.md](cloud_compute.md)). The dashboard deploys it for you:
+when a task's first remote worker starts, it builds the controller's tree into
+its bundle store and pins the task to the result. Every worker of a task
 therefore runs identical code, and editing code mid-run does not change what
 the fleet executes. The Overview badges the tree having moved on and offers
 **Redeploy**, which repins the task and replaces its containers (a
@@ -318,10 +318,9 @@ a container that died (for example on a machine reboot), pulling the current
 worker image as part of creating one, so a rebuilt image reaches the machine
 without anyone logging in.
 
-**Collection on your own machines.** A slot on a machine you own skips the
-bucket. It delivers into its own container, and the reconcile pass reads
-finished output back over the control link (`py/cloud/ssh_transfer.py`); only
-the bundle fetch touches the bucket. Each pass collects a bounded batch, so a
+**Collection.** A slot delivers into its own container, and the reconcile
+pass reads finished output back over the control link
+(`py/cloud/ssh_transfer.py`). Each pass collects a bounded batch, so a
 backlog drains at a steady rate instead of each attempt moving everything
 that has piled up, and the workers table shows what a container still holds.
 Delivered chunks are deleted from the container only once they are safely on

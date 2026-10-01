@@ -3,6 +3,7 @@
 import subprocess
 
 from cloud import runtime_abi
+from scribblez.paths import REPO_ROOT
 
 DEV = {
     "libstdc++.so.6": "libstdc++.so.6.0.35",
@@ -48,14 +49,14 @@ def test_a_library_the_dev_container_lacks_is_not_judged():
 def test_the_record_round_trips_per_runtime(tmp_path):
     """One record per image: a push of one runtime's image keeps what the
     other's push recorded."""
-    runtime_abi.write_record(tmp_path, "engine", "repo/worker", DEV)
+    runtime_abi.write_record(tmp_path, "engine", "repo/worker", DEV, 2)
     torch_versions = DEV | {"libstdc++.so.6": "libstdc++.so.6.0.36"}
-    runtime_abi.write_record(tmp_path, "torch", "repo/worker:latest-torch", torch_versions)
+    runtime_abi.write_record(tmp_path, "torch", "repo/worker:latest-torch", torch_versions, 2)
     assert runtime_abi.read_records(tmp_path) == {
-        "engine": {"image": "repo/worker", "versions": DEV},
-        "torch": {"image": "repo/worker:latest-torch", "versions": torch_versions},
+        "engine": {"image": "repo/worker", "versions": DEV, "bootstrap": 2},
+        "torch": {"image": "repo/worker:latest-torch", "versions": torch_versions, "bootstrap": 2},
     }
-    runtime_abi.write_record(tmp_path, "engine", "repo/worker", torch_versions)
+    runtime_abi.write_record(tmp_path, "engine", "repo/worker", torch_versions, 2)
     assert runtime_abi.read_records(tmp_path)["engine"]["versions"] == torch_versions
 
 
@@ -75,3 +76,12 @@ def test_the_image_probe_agrees_with_reading_the_filesystem():
     assert runtime_abi.parse_versions(res.stdout) == {
         name: version for name, version in runtime_abi.local_versions().items() if version
     }
+
+
+def test_the_dashboard_and_the_baked_bootstrap_speak_one_protocol():
+    """runtime_abi's copy of the protocol and bootstrap.py's must move
+    together, or an image built from this tree would be refused, or accepted
+    while unable to find the bundle it is handed."""
+    text = (REPO_ROOT / "docker-setup" / "worker" / "bootstrap.py").read_text()
+    assert f"BOOTSTRAP_PROTOCOL = {runtime_abi.BOOTSTRAP_PROTOCOL}\n" in text
+    assert f'PAYLOAD_DIR = Path("{runtime_abi.PAYLOAD_DIR}")\n' in text
