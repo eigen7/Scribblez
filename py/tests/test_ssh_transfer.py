@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from cloud import ssh_transfer
+from cloud import ssh_machine, ssh_transfer
 from cloud.ssh_machine import SshMachineError
 from cloud.ssh_transfer import (
     BATCH,
@@ -654,18 +654,24 @@ def test_a_torn_generation_pull_installs_and_acknowledges_nothing(tmp_path):
     assert _pull_dirs(_FakeMachine(remote), remote, local) == [f"{GENS}/gen_000000"]
 
 
-def test_a_home_sweep_replaces_each_generation_here(tmp_path):
+def test_a_home_sweep_replaces_each_generation_here(tmp_path, monkeypatch):
     """Before a home moves, its generations, open ones included, replace the
     copies here: a stale copy of an index the home went on filling must not
-    survive beside it."""
+    survive beside it. The copy gets time for the bytes here on top of the
+    fixed limit, which covers only a pull's lag."""
+    monkeypatch.setattr(ssh_transfer, "MIN_RATE", 1)  # a second per byte
     remote = _container(tmp_path)
     _generation(remote, "gen_000004", "complete", "a.slog", acked=True)
     _generation(remote, "gen_000005", "generating", "b.slog")
     local = tmp_path / "local"
     _generation(local, "gen_000005", "generating", "stale.slog")
 
+    local_bytes = sum(p.stat().st_size for p in (local / GENS).rglob("*") if p.is_file())
+    timeouts = []
+
     class _Copier(_FakeMachine):
-        def copy_from_container(self, container, path, dest):
+        def copy_from_container(self, container, path, dest, timeout):
+            timeouts.append(timeout)
             src = Path(path)
             if not src.exists():
                 return False
@@ -676,6 +682,7 @@ def test_a_home_sweep_replaces_each_generation_here(tmp_path):
     installed = sweep_dirs(
         _Copier(remote), "c", remote_root=str(remote), local_root=local, rel=GENS
     )
+    assert timeouts == [ssh_machine.COPY_TIMEOUT + ssh_transfer.transfer_seconds(local_bytes)]
     assert installed == [f"{GENS}/gen_000004", f"{GENS}/gen_000005"]
     assert sorted(p.name for p in (local / GENS / "gen_000005").iterdir()) == [
         "b.slog",
@@ -696,8 +703,12 @@ def test_a_seed_fills_only_what_the_volume_lacks(tmp_path):
     (volume / "data" / "ingest_log.txt").write_text("c.slog\n")
 
     class _Volume(_FakeMachine):
-        def write_to_volume(self, name, mount, image, command, src):
+        def write_to_volume(self, name, mount, image, command, src, timeout):
             assert (name, mount, image) == ("vol", str(volume), "img")
+            # The whole archive gets its time (transfer_seconds), never a fixed cap.
+            assert timeout == (
+                ssh_transfer.transfer_seconds(src.stat().st_size) + ssh_transfer.READ_MARGIN_SECONDS
+            )
             self.write_to_container(name, command, src)
 
     seed_volume(

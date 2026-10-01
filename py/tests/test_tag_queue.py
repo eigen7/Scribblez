@@ -522,6 +522,7 @@ def test_the_drain_saves_logs_and_sweeps_before_removing(queued, monkeypatch):
         "scz-position_eval-a-ssh-0",
         "scz-position_eval-a-ssh-0",
     ]
+    assert swept[-1]["data_dirs"] == ["data/staging", "data/ingest_log.txt"]
     assert [(t["container"], t["rel"]) for t in homes] == [
         ("scz-position_eval-a-ssh-0", "data/generations")
     ]

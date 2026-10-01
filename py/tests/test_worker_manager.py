@@ -1067,7 +1067,7 @@ class _RecordingSshMachine(_FakeSshMachine):
     def run_container(self, name, image, env, *, gpus=False, volume=None):
         self.ops.append(("run", "gpu" if gpus else name))
 
-    def copy_from_container(self, name, path, dest):
+    def copy_from_container(self, name, path, dest, timeout=None):
         self.ops.append(("copy", path))
         return False
 

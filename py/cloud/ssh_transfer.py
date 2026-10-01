@@ -49,6 +49,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import IO
 
+from cloud.ssh_machine import COPY_TIMEOUT
+
 # Records the worker rewrites and reads back: copied, never removed.
 RECORD_DIRS = ("stats", "params")
 
@@ -582,12 +584,17 @@ def sweep_dirs(
 ) -> list[str]:
     """Copy every subdirectory of `rel` out of a stopped container, each
     replacing any copy here (_install_dirs), as a sweep before the container
-    and its volume go. Returns the paths installed, relative to the tag root."""
+    and its volume go. Returns the paths installed, relative to the tag root.
+
+    The container holds what the copy here does plus at most a pull's lag,
+    which COPY_TIMEOUT covers; the copy here's bytes get their time on top
+    (transfer_seconds), however large an unbounded window grows it."""
     incoming = local_root / INCOMING_DIR
     incoming.mkdir(parents=True, exist_ok=True)
     archive = incoming / f"{SPOOL_PREFIX}{Path(rel).name}.tar"
+    timeout = COPY_TIMEOUT + transfer_seconds(_tree_bytes(local_root / rel))
     try:
-        if not machine.copy_from_container(container, f"{remote_root}/{rel}", archive):
+        if not machine.copy_from_container(container, f"{remote_root}/{rel}", archive, timeout):
             return []
         with open(archive, "rb") as stream:
             # docker cp names members relative to the copied directory's parent.
@@ -659,9 +666,15 @@ def seed_volume(
             for f in present_files:
                 tar.add(local_root / f, arcname=f)
         command = seed_command(remote_root, dirs, present_files, ack_name)
-        machine.write_to_volume(volume, remote_root, image, command, archive)
+        timeout = transfer_seconds(archive.stat().st_size) + READ_MARGIN_SECONDS
+        machine.write_to_volume(volume, remote_root, image, command, archive, timeout)
     finally:
         archive.unlink(missing_ok=True)
+
+
+def _tree_bytes(root: Path) -> int:
+    """The bytes of the files under `root`; 0 when it does not exist."""
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
 def _without(name: str):

@@ -10,9 +10,8 @@ coordinate entirely through these files.
 
 The manifest is the authority on a directory's status. Completeness (status
 plus committed game count) is a recorded fact, never inferred from a file
-listing. Everything here reads manifests
-only, never .slog headers, so it stays cheap and independent of the C++
-loader.
+listing. Everything here reads manifests only, never .slog headers, so it
+stays cheap and independent of the C++ loader.
 
 See docs/position_eval_workload.md for the surrounding protocol.
 """
