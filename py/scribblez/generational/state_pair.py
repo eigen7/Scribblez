@@ -30,6 +30,7 @@ from pathlib import Path
 
 from scribblez.generational import lifecycle
 from scribblez.paths import TagPaths
+from scribblez.train_common import timed_print
 
 STATE_DIR = "state"
 MODEL_NAME = "model.pt"
@@ -92,7 +93,9 @@ def take_seed(paths: TagPaths, expected: bool) -> bool:
     starts at once. Returns whether the seed was installed."""
     seed = paths.root / SEED_DIR
     if _awaiting_seed(paths, expected):
-        print(f"waiting up to {SEED_WAIT_SECONDS} s for the controller's checkpoint and cursor")
+        timed_print(
+            f"waiting up to {SEED_WAIT_SECONDS} s for the controller's checkpoint and cursor"
+        )
     deadline = time.monotonic() + SEED_WAIT_SECONDS
     while _awaiting_seed(paths, expected):
         assert time.monotonic() < deadline, (
