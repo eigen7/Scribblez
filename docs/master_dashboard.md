@@ -162,10 +162,11 @@ provider design are in [plans/cloud_machines.md](plans/cloud_machines.md).
   task's, and runs a first-boot script that logs in to the image registry and
   pulls both worker images. The machine reads `launching` until ssh answers,
   `preparing` until that script finishes, then `up`.
-- **Delivery.** Every slot on a rented machine delivers through the results
-  bucket rather than being collected over ssh. The machine has a datacenter
-  link to the bucket, and the controller downloads each chunk once instead of
-  hauling it home and uploading it again.
+- **Delivery.** A slot on a rented machine delivers its data (a generator's
+  chunks) through the results bucket rather than over ssh. The machine has a
+  datacenter link to the bucket, and the controller downloads each chunk once
+  instead of hauling it home and uploading it again. Its records, a trainer's
+  exports and checkpoint included, are collected over ssh like any slot's.
 - **Idle stop.** A rented machine on which nothing has run for ten minutes is
   **stopped**: its disk is kept and its hourly rate stops. A gated generator
   is a paused container and a finished trainer an exited one, so a run that
@@ -283,12 +284,10 @@ running, under a lease on the machine.
 the sum of the tag's GPU roles' measured needs (position_eval's table is in
 `workloads/position_eval.py`). A configuration with no measured figure waits,
 saying so, unless its queue entry carries a memory override. The same figures
-refuse a GPU slot added by hand that the machine cannot fit. A tag that has
-trained goes only where a trainer can resume it: one whose trainer ran on
-localhost has its checkpoint and generations only there, so no ssh machine
-takes it (a trainer there would start over, and its checkpoints would replace
-the local ones); one whose trainer delivered through the bucket may go
-anywhere. A tag that may
+refuse a GPU slot added by hand that the machine cannot fit. Where a tag
+trained before does not limit where it goes next: the controller holds every
+trainer's checkpoint and cursor (collected over ssh) and seeds a trainer on
+any machine with them. A tag that may
 land on an ssh machine has its bundle built and pinned when it is enqueued;
 local slots run the checkout as it is when they start, and enqueueing warns
 about that, and about any tag in the queue with no end condition.
@@ -342,12 +341,14 @@ taken in the workers table, where Remove states what would be lost. Removing
 any slot discards whatever its container still holds, and the dashboard says
 how much first.
 
-**Bucket-delivering containers** (rented machines, and remote trainers) are
-replaced outright: their outputs are already in the bucket, so a generator
-loses only its in-flight chunk and a trainer its in-flight generation, coming
-back on the bucket's last committed checkpoint. While a task has any such
-slot, the server runs a sync watcher that streams their results into the
-local mount.
+**Rented generators and remote trainers** drain the same way. A rented
+generator's chunks are already in the bucket, so only its records are left to
+collect, and it is replaced as soon as they are. A trainer's last state pair
+is swept from its stopped container and installed under the cursor rule, and
+the replacement container is seeded with the controller's checkpoint and
+cursor, so it loses at most its in-flight generation. While a task has any
+slot delivering data through the bucket, the server runs a sync watcher that
+streams that data into the local mount.
 
 **Pauses.** A scheduler gate pauses the container rather than stopping it, so
 a gate that flips every minute costs nothing: no bundle refetch, and the

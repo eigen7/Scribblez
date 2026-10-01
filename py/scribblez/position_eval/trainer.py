@@ -115,9 +115,12 @@ def wait_for_generation(paths: TagPaths, index: int, sink, home=None):
 
 
 def restore_from_sink(paths: TagPaths, sink):
-    """Install the newest checkpoint and cursor the sink holds when they beat
-    the ones on this machine (state_pair's cursor rule): a fresh machine
-    takes the sink's, and a machine holding fresher state keeps its own."""
+    """Install the newest checkpoint and cursor on offer when they beat the
+    ones on this machine (state_pair's cursor rule): the seed the controller
+    pushed into a new container, then whatever the sink holds. A fresh
+    machine takes them, and a machine holding fresher state keeps its own."""
+    if state_pair.take_seed(paths, expected=os.environ.get("SCZ_STATE_SEED") == "1"):
+        timed_print("installed the controller's checkpoint and cursor")
     if state_pair.restore(paths, sink):
         timed_print(f"restored the checkpoint and cursor through the {sink.kind} sink")
 

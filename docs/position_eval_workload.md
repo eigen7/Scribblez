@@ -183,16 +183,23 @@ the controller's machine or on a rented one:
   machine therefore takes the sink's state; one holding fresher state keeps
   its own.
 
-Under the local sink all of this is a no-op. Under the bucket sink it is the
-trainer's entire cloud contract. The controller supplies the other half for a
-bucket-delivering trainer (an ssh slot on a rented GPU machine, on the torch
-worker image): the sync watcher also pulls its outputs (`records/`, `models/`, and the
-newest state pair under the cursor rule), and the reconcile pass pushes
-`controls.json` up whenever the Controls tab rewrites it. Everything else is
-unchanged: the scheduler assembles and publishes generations locally, match
-eval runs locally or over ssh against the pulled exports, and the tabs read
-what the sync brought down. Several tags with cloud trainers can run side by
-side from one dashboard.
+A trainer's records sink is local wherever it runs, so all of this writes
+into its own tag tree. For an ssh trainer (an ssh slot on a rented or owned
+GPU machine, on the torch worker image) the controller supplies the other
+half over the control link:
+- each pass collects its `models/`, `records/` and newest complete state pair,
+  installing the pair under the cursor rule;
+- a new container is seeded with the controller's checkpoint and cursor
+  (`SCZ_STATE_SEED`), which the trainer installs under the rule before
+  resuming;
+- `controls.json` is pushed into its container whenever the Controls tab
+  rewrites it.
+
+Its generations still come through the bucket: the scheduler assembles and
+publishes them locally, and the trainer pulls them. Match eval runs locally or
+over ssh against the collected exports, and the tabs read what collection
+brought home. Several tags with remote trainers can run side by side from one
+dashboard.
 
 The runner lives with the training code and is referenced by dotted path, so
 generator bundles never import torch. `py/scripts/position_eval/train.py` is

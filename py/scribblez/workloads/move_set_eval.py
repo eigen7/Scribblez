@@ -455,6 +455,9 @@ SPEC = WorkloadSpec(
             deps="scribblez.move_set_eval.trainer:fetch_train_deps",
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
+            # Local only: it reads its pair store, which rented generators
+            # deliver to the controller, straight from the controller's tree.
+            kinds=("local",),
             gpu=True,
             stats=StatsSpec(unit="rows", phases={"train_s": "train", "eval_s": "eval"}),
         ),

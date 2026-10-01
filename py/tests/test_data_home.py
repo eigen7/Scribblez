@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from cloud.credentials import R2Credentials
-from cloud.sinks import LocalSink, R2Sink
+from cloud.sinks import LocalSink
 from scribblez.generational import data_home, lifecycle, scheduler
 from scribblez.paths import POSITION_EVAL, SCHEDULER_STATE_REL, TagPaths
 from scribblez.workloads.position_eval import PositionEvalParams
@@ -265,7 +265,9 @@ def test_a_failing_listing_at_restore_stops_the_trainer(paths, monkeypatch):
         _home(paths, bucket, monkeypatch, uploads=True).restore()
 
 
-def test_start_for_restores_and_uploads_only_for_a_bucket_trainer(paths, monkeypatch):
+def test_start_for_restores_and_uploads_only_for_a_remote_home(paths, monkeypatch):
+    """The controller says so (SCZ_HOME_UPLOADS): a trainer's records are
+    local wherever it runs, so the sink no longer tells."""
     for var in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"):
         monkeypatch.setenv(var, "x")
     monkeypatch.setattr(data_home.DataHome, "start", lambda self: None)
@@ -274,8 +276,9 @@ def test_start_for_restores_and_uploads_only_for_a_bucket_trainer(paths, monkeyp
         data_home.DataHome, "restore", lambda self, required: restored.append(required)
     )
     ctx = SimpleNamespace(data_plane=scheduler.DATA_PLANE_HOME, records_sink=LocalSink(paths.root))
+    monkeypatch.delenv("SCZ_HOME_UPLOADS", raising=False)
     assert not data_home.start_for(ctx, paths, PositionEvalParams()).uploads
-    ctx.records_sink = R2Sink(R2, "position_eval", "t", paths.root)
+    monkeypatch.setenv("SCZ_HOME_UPLOADS", "1")
     assert data_home.start_for(ctx, paths, PositionEvalParams()).uploads
     # A localhost home restores what a previous home uploaded, but does not
     # need the bucket; a bucket trainer's home does.

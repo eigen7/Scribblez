@@ -200,12 +200,15 @@ class SshMachine:
             raise SshMachineError(f"{self.host}: {res.stderr.decode(errors='replace').strip()}")
         return res.stdout
 
-    def read_from_container(self, name: str, command: list[str]) -> bytes:
+    def read_from_container(
+        self, name: str, command: list[str], *, timeout: int = _READ_TIMEOUT
+    ) -> bytes:
         """Run `command` inside container `name` and return its stdout; how
-        cloud/ssh_transfer.py reads results out of a worker."""
+        cloud/ssh_transfer.py reads results out of a worker. `timeout` is for a
+        read sized to a large transfer (ssh_transfer.transfer_seconds)."""
         return self._exec(
             ["docker", "exec", name, *command],
-            timeout=_READ_TIMEOUT,
+            timeout=timeout,
             doing=f"reading from {name}",
         )
 

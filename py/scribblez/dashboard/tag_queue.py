@@ -26,7 +26,6 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from cloud.bundles import BundleManifest
-from cloud.ssh_transfer import sweep_stopped
 
 from scribblez import params as params_mod
 from scribblez import workloads
@@ -106,10 +105,8 @@ class TagQueue:
         return spec, self._m.tasks.load(spec, tag)
 
     def _fit_args(self, spec, task: tasks.TaskRecord) -> tuple:
-        """The tag-side arguments placement.refusal takes: spec, params, and
-        where its training state lives."""
-        paths = self._m.tasks.paths(spec, task.tag)
-        return spec, _params(spec, task), placement.state_home(paths, task)
+        """The tag-side arguments placement.refusal takes: spec and params."""
+        return spec, _params(spec, task)
 
     # ---- operator actions ----------------------------------------------------
 
@@ -719,6 +716,6 @@ class TagQueue:
                 continue
             (logs / f"{w.worker_id}.container.log").write_text(machine.container_logs(name))
             if self._m._collected(spec, task, w):
-                sweep_stopped(machine, **self._m._transfer_target(spec, task, w))
+                self._m._sweep_ssh(machine, spec, task, w)
         if self._m._has_bucket_slots(spec, task):
             self._m.sync_once(spec, task)

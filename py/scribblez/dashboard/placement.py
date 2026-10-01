@@ -16,7 +16,7 @@ from scribblez.workloads import WorkloadSpec, resolve
 from scribblez.workloads.base import SlotPlan
 
 # Where a tag's training state lives (state_home).
-HOME_LOCAL, HOME_BUCKET = "local", "bucket"
+HOME_LOCAL = "local"
 
 
 def plan_for(spec: WorkloadSpec, params, m: PoolMachine) -> list[SlotPlan]:
@@ -35,39 +35,32 @@ def gpu_total(spec: WorkloadSpec, plan: list[SlotPlan], entry: QueueEntry) -> fl
 
 
 def state_home(paths: TagPaths, task: tasks.TaskRecord) -> str | None:
-    """Where the tag's training state (checkpoint, cursor, generations) lives,
-    once it has any: HOME_BUCKET when its trainer delivered through the
-    results bucket, where a trainer on any machine resumes it (and localhost
-    holds the copy the sync pulls back); else HOME_LOCAL, only this machine's
-    tag dir. None before any row is trained, when a tag may start anywhere.
-    A tag with a data home follows the same rule: on an ssh machine its
-    trainer uploads its checkpoint and its generations to the bucket
-    (generational/data_home.py), where a fresh home restores them."""
+    """Where the tag's training state lives, once it has any: always this
+    machine, since every trainer's checkpoint and cursor are collected here
+    (WorkerManager._transfer_target) and a trainer anywhere is seeded from
+    them. None before any row is trained. The control store's shadow import
+    records it; placement no longer depends on it."""
     if not lifecycle.read_train_state(paths).get("rows_trained"):
         return None
-    return HOME_BUCKET if task.trainer_sink == "r2" else HOME_LOCAL
+    return HOME_LOCAL
 
 
 def refusal(
     spec: WorkloadSpec,
     params,
-    home: str | None,
     entry: QueueEntry,
     m: PoolMachine,
     *,
     need_bundle: bool = True,
 ) -> str | None:
     """Why pool machine `m` cannot take the queued tag, or None if it can.
-    Checks the entry's machine list, where the tag's training state is (`home`,
-    state_home: a trainer on an ssh machine cannot resume state that is only
-    on localhost; it would start over, and its checkpoints would then replace
-    the local ones), the kinds each planned role allows, and GPU memory; with
-    `need_bundle`, also that an ssh machine has the tag's pinned bundle to
-    run. Whether `m` is free is the caller's concern."""
+    Checks the entry's machine list, the kinds each planned role allows, and
+    GPU memory; with `need_bundle`, also that an ssh machine has the tag's
+    pinned bundle to run. Whether `m` is free is the caller's concern. Where
+    the tag trained before does not matter: its state is on the controller,
+    which seeds a trainer on any machine (state_pair)."""
     if entry.machines and m.name not in entry.machines:
         return "not among the machines this tag may use"
-    if home == HOME_LOCAL and m.kind == "ssh":
-        return "its training state is only on localhost, so its trainer must stay there"
     plan = plan_for(spec, params, m)
     for p in plan:
         role = spec.role(p.role)

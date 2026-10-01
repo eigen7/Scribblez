@@ -154,13 +154,6 @@ class TaskRecord:
     # view shows how they depart from the profile. "" for a workload without
     # profiles.
     profile: str = ""
-    # Where the task's most recently added trainer slot delivers (_slot_records_sink):
-    # "r2" when its checkpoint and generations go through the results bucket,
-    # so a trainer on any machine can resume them; "local" when they are only
-    # in this machine's tag dir. "" before any trainer slot, read as "local".
-    # The tag queue places a tag with training progress only where its state
-    # is (placement.state_home).
-    trainer_sink: str = ""
     # Where the generation data plane runs (generational/data_home.py): on this
     # controller's tag tree, ticked by the reconcile pass ("legacy"), or beside
     # the trainer, which the controller only gates generators from ("home").

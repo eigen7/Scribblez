@@ -15,12 +15,11 @@ Generation-style roles distribute trivially. Their cycles are embarrassingly
 parallel; output files are uniquely named and land atomically, so batches
 from any number of machines merge by copying and a killed worker loses at
 most its in-flight cycle; data volumes are small; and runtime deps are light
-and fetched from public upstreams. Trainers distribute too, through the
-bucket: generations (position_eval) or the pair store (move_set_eval) go in,
-exports and checkpoints come out ([plans/cloud_training.md](plans/cloud_training.md)).
-A move_set_eval trainer prunes its exports, and when its run completes it
-also deletes its training pairs from the bucket. The controller's `models/`
-copy mirrors the bucket; its `slogs/` copy is the archive and stays.
+and fetched from public upstreams. A position_eval trainer distributes too:
+its generations go in through the bucket, and its exports, records and
+checkpoint come out over ssh, collected like any slot's records and installed
+under the cursor rule ([plans/cloud_training.md](plans/cloud_training.md)). A
+move_set_eval trainer runs only locally.
 
 ## Architecture
 
@@ -57,9 +56,11 @@ Principles:
    the local mount holds a synced copy for analysis. A machine can be stopped
    or terminated at any time; a trainer resumes from its checkpoint.
 
-Machines you own are the exception to the bucket's inbound leg: their results
-are collected over ssh straight out of the container (see "Results sync"
-below).
+Every slot's records (stats, params, and a trainer's exports, records and
+checkpoint) are collected over ssh straight out of its container, wherever
+it runs (see "Results sync" below). Only data takes the bucket's inbound
+leg, and only from a rented machine: a generator's chunks there, and a
+trainer's generations on their way in.
 
 ## The pieces
 
@@ -151,24 +152,21 @@ mistaken for the role's terminal condition.
 `RoleSpec.inputs`. A role that reads a file outside its own tag (the
 move_set_eval generator's teacher, a position_eval export) names it under a
 tag-relative key. A local worker reads the source in place. For a remote
-slot, the controller stages a copy where the slot will look before it needs
-it: the tag's bucket prefix for a bucket-delivering slot, or pushed into the
-container over the control link otherwise. The runner resolves either through
-`workloads.base.resolve_input`.
+slot, the controller pushes a copy into the container over the control link
+right after creating it, and the runner waits for it there
+(`workloads.base.resolve_input`).
 
 ### Results sync
 
-`./py/scripts/cloud_sync.py` pulls the workload's inbound bucket prefixes into
-`<mount>/tags/<workload>/<tag>/`, merging with locally generated data for the
-same tag. For a tag whose trainer delivers through the bucket, it also pulls
-the trainer's outputs (`--trainer-outputs`, which the dashboard passes for
-such a tag). Prefixes the controller itself maintains in the bucket are not
-pulled.
-
-Only bucket-delivering slots use it. A slot on your own machine has its
-results read straight out of its container over the control link
-(`py/cloud/ssh_transfer.py`), which is faster and keeps them in one fewer
-place.
+`./py/scripts/cloud_sync.py` pulls the data rented generators deliver
+through the bucket into `<mount>/tags/<workload>/<tag>/`, merging with locally
+generated data for the same tag. That is all it pulls: every ssh worker's
+records (stats, params) and a trainer's outputs (records, exports, its
+checkpoint and cursor as a state pair) are collected straight out of its
+container over the control link (`py/cloud/ssh_transfer.py`), wherever it
+runs. A trainer's checkpoint and cursor are installed under the cursor rule
+(`generational/state_pair.py`), and a new trainer container is seeded with
+the controller's copy, so a tag can move to any machine.
 
 ### Credentials
 
