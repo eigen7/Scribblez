@@ -20,6 +20,8 @@ where the argument is `data_rel`, to its data/ tree):
     fetch_data_dir          bring a published directory (manifest last)
     fetch_data_files        bring a directory of independently delivered files
     fetch_file              bring one file
+    list_dirs               the subdirectories of a root-relative directory
+    remove_tree             delete a root-relative directory and its files
     deliver_output          send back an artifact a trainer wrote in place
     remove_output(s)        delete artifacts wherever the sink keeps them
 
@@ -117,6 +119,15 @@ class LocalSink:
     def remove_output(self, rel_path: str):
         """Delete <tag>/<rel_path>; absent is success."""
         (self._root / rel_path).unlink(missing_ok=True)
+
+    def list_dirs(self, rel_path: str) -> list[str]:
+        """Names of the directories in <tag>/<rel_path>, sorted."""
+        d = self._root / rel_path
+        return sorted(c.name for c in d.iterdir() if c.is_dir()) if d.is_dir() else []
+
+    def remove_tree(self, rel_path: str):
+        """Delete <tag>/<rel_path> and everything in it; absent is success."""
+        shutil.rmtree(self._root / rel_path, ignore_errors=True)
 
     def remove_outputs(self, rel_paths: list[str]):
         for rel in rel_paths:
@@ -238,6 +249,20 @@ class R2Sink:
             os.unlink(f.name)
         for rel in rel_paths:
             self._unlink_local(rel)
+
+    def list_dirs(self, rel_path: str) -> list[str]:
+        """Names of the directories under <workload>/<tag>/<rel_path>, sorted."""
+        res = rclone(self._r2, "lsf", "--dirs-only", self._path(*rel_path.split("/")), capture=True)
+        assert res.returncode == 0, f"listing {rel_path} failed: {res.stderr}"
+        return sorted(name.rstrip("/") for name in res.stdout.split())
+
+    def remove_tree(self, rel_path: str):
+        """Delete everything under <workload>/<tag>/<rel_path>; absent is
+        success."""
+        res = rclone(self._r2, "purge", self._path(*rel_path.split("/")), capture=True)
+        assert res.returncode == 0 or "not found" in res.stderr.lower(), (
+            f"delete of {rel_path} failed: {res.stderr}"
+        )
 
     def _unlink_local(self, rel_path: str):
         if self._root is not None:

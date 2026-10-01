@@ -71,22 +71,21 @@ def test_without_data_a_data_homes_staging_is_left_in_the_bucket(spec, monkeypat
 def test_trainer_outputs_are_pulled_immutable_ones_by_size(spec, monkeypatch):
     """Records and exports never change once written, so they are compared by
     size alone: an S3 listing carries no modtime, and rclone's default check
-    would HEAD every export on every pass. The checkpoint is rewritten in place,
-    so it is not. The cursor file is pulled only once the bucket has it."""
+    would HEAD every export on every pass. The checkpoint and cursor come as a
+    state pair under the cursor rule (state_pair.restore), never as files a
+    stale bucket could overwrite fresher local state with."""
     rc = _Rclone()
     monkeypatch.setattr(cloud_sync, "rclone", rc)
+    restored = []
+    monkeypatch.setattr(
+        cloud_sync.state_pair, "restore", lambda paths, sink: restored.append((paths.tag, sink))
+    )
     assert cloud_sync.sync_once(R2, spec, spec.paths("t"), trainer_outputs=True) == 0
     root = spec.paths("t").root
     assert _pulled(rc)[3:] == [
         ("copy", "--size-only", "r2:b/position_eval/t/records", str(root / "records")),
         ("sync", "--size-only", "r2:b/position_eval/t/models", str(root / "models")),
-        ("copy", "r2:b/position_eval/t/checkpoints", str(root / "checkpoints")),
-        ("lsf", "r2:b/position_eval/t/train_state.json"),
         ("lsf", "r2:b/position_eval/t/scheduler_state.json"),  # a data home's heartbeat
     ]
-    rc = _Rclone(present={"train_state.json"})
-    monkeypatch.setattr(cloud_sync, "rclone", rc)
-    assert cloud_sync.sync_once(R2, spec, spec.paths("t"), trainer_outputs=True) == 0
-    assert _pulled(rc)[-2] == (
-        "copyto", "r2:b/position_eval/t/train_state.json", str(root / "train_state.json")
-    )  # fmt: skip
+    [(tag, sink)] = restored
+    assert tag == "t" and isinstance(sink, cloud_sync.R2Sink)

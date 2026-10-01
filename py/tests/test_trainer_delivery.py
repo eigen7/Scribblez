@@ -29,6 +29,13 @@ class _RecordingSink:
 
     def push_file(self, src: Path, rel_path: str):
         self.calls.append(("file", rel_path))
+        src.unlink(missing_ok=True)
+
+    def list_dirs(self, rel_path: str) -> list[str]:
+        return ["gen_000003", "gen_000004"]  # the previous pair, then this one
+
+    def remove_tree(self, rel_path: str):
+        self.calls.append(("remove", rel_path))
 
 
 def test_steps_run_in_submission_order_on_another_thread():
@@ -101,8 +108,10 @@ def test_a_generations_deliveries_end_with_its_record(tmp_path):
     assert sink.calls == [
         ("deliver", "models/shared.bin", "shared.bin", True),
         ("deliver", "models/model_epoch_0004.onnx", "model_epoch_0004.onnx", False),
-        ("deliver", "checkpoints/model.pt", "model.pt.gen4", False),
-        ("deliver", "train_state.json", "train_state.json.gen4", False),
+        # The state pair, cursor last; then the older pair goes.
+        ("file", "state/gen_000004/model.pt"),
+        ("file", "state/gen_000004/train_state.json"),
+        ("remove", "state/gen_000003"),
         ("json", "records/gen_000004.json", 4, 1),
     ]
     assert not ckpt_snap.exists() and not state_snap.exists()
