@@ -181,7 +181,7 @@ def _import_tag(conn, manager, spec, task, waiting, leases) -> list[Finding]:
             queued_at if lease_machine is None else None,
             "failed" if failed else None,
             lease_machine.lease.reason if failed else None,
-            {placement.HOME_LOCAL: "local"}.get(home),
+            "local" if home == placement.HOME_LOCAL else None,
         ),
     )
     if lease_machine is not None:

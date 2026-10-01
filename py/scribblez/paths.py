@@ -92,7 +92,7 @@ SCHEDULER_STATE_REL = "scheduler_state.json"
 
 # A trainer's outputs the controller collects from an ssh trainer's container
 # and moves home (WorkerManager._transfer_target): exports, then the records
-# that announce them. Its state pairs come the same way.
+# that announce them.
 TRAINER_OUTPUT_DIRS = ("models", "records")
 
 # The trainer's record stream (generational/records.py), relative to the tag
