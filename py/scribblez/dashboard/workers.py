@@ -309,8 +309,8 @@ def _home_trainer(spec: workloads.WorkloadSpec, role: workloads.RoleSpec) -> boo
 
 
 # The data sink of a slot on its tag's data home on an ssh machine: the tag's
-# named volume there, shared with the other slots on that machine and handed
-# to the worker as SCZ_DATA_SINK=local.
+# named volume there, shared with the other slots on that machine. The worker
+# sees it as its local data sink.
 DATA_SINK_HOME = "home"
 
 

@@ -2,9 +2,11 @@
 """Run the max_move_per_lane trainer on a tag without the dashboard, for debugging.
 
 Normally the dashboard runs training. This CLI calls the same train-role runner
-(scribblez/max_move_per_lane/trainer.py) directly. It trains on the tag's
-complete generations, so something must still be producing them: a dashboard
-server with generator workers attached to the same tag.
+(scribblez/max_move_per_lane/trainer.py) directly, data home included, so it
+trains on the tag's complete generations and on what it can assemble from
+chunks already staged. Nothing new arrives: the dashboard parks a tag's
+generators while the tag has no running trainer slot. So the CLI is for
+training on data already on disk.
 
 The trainer writes its metrics as records under the tag's records/ dir. A
 running dashboard server ingests them into dashboard.db; with none up, run
