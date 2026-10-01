@@ -1,5 +1,6 @@
-"""Tests for a tag's data home (scribblez.generational.data_home): bucket
-ingest, the scheduler run beside the trainer, and its published state.
+"""Tests for a tag's data home (scribblez.generational.data_home): the
+scheduler run beside the trainer, its published state, and a remote home's
+bucket copy.
 
 The bucket is a dict behind a fake rclone, and chunk game counts are faked
 (each chunk's text is its count), as in test_generational_scheduler.py.
@@ -104,18 +105,7 @@ def _state(paths) -> dict:
     return json.loads((paths.root / SCHEDULER_STATE_REL).read_text())
 
 
-def test_remote_chunks_are_moved_out_of_the_bucket_into_a_generation(paths, monkeypatch):
-    bucket = FakeBucket({"staging/a.slog": "60", "staging/b.slog": "60", "staging/notes.txt": "x"})
-    _home(paths, bucket, monkeypatch).step()
-
-    gen0 = paths.generation_dir(0)
-    assert lifecycle.is_complete(gen0)
-    assert sorted(f.name for f in gen0.glob("*.slog")) == ["a.slog", "b.slog"]
-    assert bucket.objects == {"staging/notes.txt": "x"}  # ingested chunks leave the bucket
-    assert not any((paths.data_dir / "work" / data_home.INGRESS_WORK_DIR).iterdir())
-
-
-def test_a_colocated_generators_chunk_needs_no_bucket(paths):
+def test_a_staged_chunk_needs_no_bucket(paths):
     paths.staging_dir.mkdir(parents=True)
     (paths.staging_dir / "a.slog").write_text("100")
     _home(paths).step()
@@ -138,20 +128,6 @@ def test_the_state_carries_the_schedulers_gate_and_a_heartbeat(paths):
     assert _state(paths)["heartbeat"] >= first
 
 
-@pytest.mark.parametrize("verb", ["lsf", "copyto", "deletefile"])
-def test_a_failing_bucket_is_retried_not_raised(paths, monkeypatch, verb):
-    bucket = FakeBucket({"staging/a.slog": "100"})
-    bucket.fail = verb
-    home = _home(paths, bucket, monkeypatch)
-    home.step()  # does not raise; the state is still published
-    assert _state(paths)["gate"] is None
-
-    bucket.fail = None
-    home.step()
-    assert lifecycle.is_complete(paths.generation_dir(0))
-    assert bucket.objects == {}
-
-
 def test_any_other_failure_stops_the_thread_and_reaches_the_trainer(paths, monkeypatch):
     def broken_tick(*a, **k):
         raise RuntimeError("scheduler bug")
@@ -168,6 +144,7 @@ def test_any_other_failure_stops_the_thread_and_reaches_the_trainer(paths, monke
 
 def test_start_for_runs_only_for_a_home_tag(paths, monkeypatch):
     monkeypatch.delenv("R2_BUCKET", raising=False)
+    monkeypatch.delenv("SCZ_HOME_UPLOADS", raising=False)
     started = []
     monkeypatch.setattr(data_home.DataHome, "start", lambda self: started.append(self))
     ctx = SimpleNamespace(
@@ -176,7 +153,7 @@ def test_start_for_runs_only_for_a_home_tag(paths, monkeypatch):
     assert data_home.start_for(ctx, paths, PositionEvalParams()) is None
     ctx.data_plane = scheduler.DATA_PLANE_HOME
     home = data_home.start_for(ctx, paths, PositionEvalParams())
-    assert started == [home] and home._r2 is None  # no credentials: colocated generators only
+    assert started == [home] and not home.uploads  # a localhost home keeps no bucket copy
 
 
 # ---- a data home that can vanish: the bucket keeps it resumable -----------------
@@ -262,7 +239,7 @@ def test_a_failing_listing_at_restore_stops_the_trainer(paths, monkeypatch):
     bucket = FakeBucket({})
     bucket.fail = "lsf"
     with pytest.raises(AssertionError, match="listing"):
-        _home(paths, bucket, monkeypatch, uploads=True).restore()
+        _home(paths, bucket, monkeypatch).restore()
 
 
 def test_start_for_restores_and_uploads_only_for_a_remote_home(paths, monkeypatch):
@@ -280,8 +257,8 @@ def test_start_for_restores_and_uploads_only_for_a_remote_home(paths, monkeypatc
     assert not data_home.start_for(ctx, paths, PositionEvalParams()).uploads
     monkeypatch.setenv("SCZ_HOME_UPLOADS", "1")
     assert data_home.start_for(ctx, paths, PositionEvalParams()).uploads
-    # A localhost home restores what a previous home uploaded, but does not
-    # need the bucket; a bucket trainer's home does.
+    # A localhost home restores what a remote home uploaded (a trainer moved
+    # here), but does not need the bucket; a remote home's resume does.
     assert restored == [False, True]
 
 

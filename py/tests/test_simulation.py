@@ -31,11 +31,6 @@ from scribblez.dashboard.tag_queue import TagQueue
 from scribblez.dashboard.workers import WorkerManager
 from sim_world import SPEC, World
 
-# The real bucket-sync launchers, which conftest stubs for every test: here
-# they launch fake watchers inside the world.
-_REAL_ENSURE_SYNC = WorkerManager._ensure_sync
-_REAL_SYNC_ONCE = WorkerManager.sync_once
-
 TAGS = {"t0": 600, "t1": 800, "t2": 1000, "t3": 700}  # tag -> max_rows
 STOP_ALL_GRACE = 8  # passes after Stop all cloud spending for the burn to reach zero
 
@@ -54,8 +49,6 @@ class Sim:
         self.monkeypatch = monkeypatch
         self.world = World(tmp_path)
         sim_world.install(monkeypatch, self.world)
-        monkeypatch.setattr(WorkerManager, "_ensure_sync", _REAL_ENSURE_SYNC)
-        monkeypatch.setattr(WorkerManager, "sync_once", _REAL_SYNC_ONCE)
         self.world.add_host("box")
         self._boot()
         self.command(self.manager.add_pool_machine, "localhost")

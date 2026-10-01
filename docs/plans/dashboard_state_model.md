@@ -6,6 +6,13 @@ context) landed as #294; PR 1 (the schema and the shadow import) as #295 and
 #297; PR 2 (the fake world and the simulation) as #299; PR 3a (one writer)
 as #301; PR 3b (the control store) in review.**
 
+*Partly overtaken by the ssh-only transport work (#313-#316).* The
+`cloud_sync` watcher, its `sync_once`, `_holds_nothing` and the bucket as a
+tag's state home, which "Why" and §2 and §5 below describe, are gone: every
+slot's output, a trainer's checkpoint and cursor included, is collected over
+ssh, and a checkpoint is installed only under the cursor rule
+(`generational/state_pair.py`), which is the no-regress rule §5 asks for.
+
 - **Review.** Four independent panelists: hidden complexity, a rival design
   (a Codex seat), scope, and integration. They raised 2 blocking, 16 serious
   and 8 minor critiques; all were revised in, and none was rejected outright.

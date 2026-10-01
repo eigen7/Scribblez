@@ -6,7 +6,7 @@ machines reached over ssh. Results flow back to the local mount, where
 analysis runs unchanged.
 
 This document covers the plumbing every remote worker shares: the worker
-image, the code bundles, and the results bucket. The machine model (renting,
+image, the code bundles, and how results come back. The machine model (renting,
 idling, terminating, the provider seam) is in
 [plans/cloud_machines.md](plans/cloud_machines.md), and operating machines
 from the dashboard is in [master_dashboard.md](master_dashboard.md).
@@ -16,16 +16,19 @@ parallel; output files are uniquely named and land atomically, so batches
 from any number of machines merge by copying and a killed worker loses at
 most its in-flight cycle; data volumes are small; and runtime deps are light
 and fetched from public upstreams. A position_eval trainer distributes too:
-its generations go in through the bucket, and its exports, records and
-checkpoint come out over ssh, collected like any slot's records and installed
-under the cursor rule ([plans/cloud_training.md](plans/cloud_training.md)). A
+on a data home (its tag's data plane beside it) it assembles its own
+generations, the controller relaying in the chunks of generators elsewhere,
+and its exports, records and checkpoint come out over ssh, collected like any
+slot's records and installed under the cursor rule
+([plans/cloud_training.md](plans/cloud_training.md)). A
 move_set_eval trainer runs only locally.
 
 ## Architecture
 
 Three stores decouple everything: a **container registry** (the stable worker
-images), the **R2 bucket** (code bundles outbound, results inbound), and the
-**local mount dir** (where analysis runs).
+images), the **R2 bucket** (code bundles outbound, and a remote data home's
+generations), and the **local mount dir** (where results are collected and
+analysis runs).
 
 ```
  dev container                                    remote machine
@@ -36,8 +39,9 @@ images), the **R2 bucket** (code bundles outbound, results inbound), and the
                                                    └─ bootstrap.py: fetch the bundle for its
                                                       CPU arch, exec the worker entrypoint
                                                    └─ loop: run a cycle, deliver output
+                                                      into the container's own tree
                                                           │
- cloud_sync.py (dashboard) ◄──────────────────  R2: <workload>/<tag>/...
+ dashboard: collect ◄──────────────(ssh)──────────────────┘
       │
  <mount>/tags/<workload>/<tag>/data/   ◄── analysis runs here, locally, as always
 ```
@@ -52,15 +56,16 @@ Principles:
    changes included (flagged `-dirty` in the bundle id). Workers need no repo
    credentials and never compile.
 3. **Workers are stateless and disposable.** A worker fetches its bundle and
-   data deps and loops until terminated. The bucket is the durable archive and
-   the local mount holds a synced copy for analysis. A machine can be stopped
-   or terminated at any time; a trainer resumes from its checkpoint.
+   data deps and loops until terminated. Its output is collected into the
+   local mount, the durable copy. A machine can be stopped or terminated at
+   any time; a trainer resumes from the controller's copy of its checkpoint.
 
-Every slot's records (stats, params, and a trainer's exports, records and
-checkpoint) are collected over ssh straight out of its container, wherever
-it runs (see "Results sync" below). Only data takes the bucket's inbound
-leg, and only from a rented machine: a generator's chunks there, and a
-trainer's generations on their way in.
+Every slot's output (a generator's data, its stats and params, and a
+trainer's exports, records and checkpoint) is collected over ssh straight
+out of its container, wherever it runs (see "Results collection" below).
+The bucket's only data leg is a remote data home's generations, kept there
+so a vanished home can resume; an ssh trainer on the legacy data plane also
+reads its generations from there.
 
 ## The pieces
 
@@ -156,15 +161,19 @@ slot, the controller pushes a copy into the container over the control link
 right after creating it, and the runner waits for it there
 (`workloads.base.resolve_input`).
 
-### Results sync
+### Results collection
 
-`./py/scripts/cloud_sync.py` pulls the data rented generators deliver
-through the bucket into `<mount>/tags/<workload>/<tag>/`, merging with locally
-generated data for the same tag. That is all it pulls: every ssh worker's
-records (stats, params) and a trainer's outputs (records, exports, its
-checkpoint and cursor as a state pair) are collected straight out of its
-container over the control link (`py/cloud/ssh_transfer.py`), wherever it
-runs. A trainer's checkpoint and cursor are installed under the cursor rule
+Every ssh worker delivers into its own container, and each reconcile pass
+collects from it over the control link (`py/cloud/ssh_transfer.py`): its data
+(`WorkloadSpec.collected_dirs`) into `<mount>/tags/<workload>/<tag>/data/`,
+merging with locally generated data for the same tag, its records (stats,
+params) and a trainer's outputs (records, exports, its checkpoint and cursor
+as a state pair). A generator cannot count a store it never sees whole, so a
+target on the store's size (blind_spots' positions, move_set_eval's pairs)
+is enforced by the workload's scheduler tick on the controller. For a tag
+whose data home is an ssh machine, the chunks collected from its other
+generators are relayed on into the home's staging after each pull from its
+trainer. A trainer's checkpoint and cursor are installed under the cursor rule
 (`generational/state_pair.py`), and a new trainer container is seeded with
 the controller's copy, so a tag can move to any machine.
 

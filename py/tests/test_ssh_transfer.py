@@ -6,6 +6,7 @@ filesystem -- everything but the `ssh ... docker exec` wrapper is exercised.
 """
 
 import subprocess
+import threading
 
 import pytest
 from cloud import ssh_transfer
@@ -17,6 +18,7 @@ from cloud.ssh_transfer import (
     list_dir,
     pull_results,
     push_file,
+    relay_files,
     remove_file,
     sweep_stopped,
 )
@@ -489,3 +491,90 @@ def test_a_pulls_time_limit_scales_with_its_bytes(tmp_path, monkeypatch):
     collect, timeout = next((c, t) for c, t in reads if " tar " in c)
     assert "timeout 100 tar" in collect
     assert timeout == 100 + ssh_transfer.READ_MARGIN_SECONDS
+
+
+# ---- relaying collected files on into another container ---------------------
+
+
+def _staged_here(tmp_path, *names):
+    local = tmp_path / "controller"
+    staging = local / "data" / "staging"
+    staging.mkdir(parents=True)
+    for name in names:
+        (staging / name).write_text(name)
+    return local, staging
+
+
+def _relay(machine, remote, local, **bounds):
+    return relay_files(
+        machine, "c", remote_root=str(remote), local_root=local, rel="data/staging", **bounds
+    )
+
+
+def test_a_relay_moves_a_bounded_batch_oldest_first(tmp_path):
+    """The oldest chunks land in the container's staging, whole, and leave the
+    controller; a write still in progress here stays for a later relay."""
+    remote = _container(tmp_path)
+    local, staging = _staged_here(tmp_path, "c.slog", "a.slog", "b.slog", ".d.slog", "e.slog.tmp")
+    machine = _FakeMachine(remote)
+    assert _relay(machine, remote, local, batch=2) == ["a.slog", "b.slog"]
+    assert sorted(p.name for p in (remote / "data" / "staging").iterdir()) == ["a.slog", "b.slog"]
+    assert (remote / "data" / "staging" / "a.slog").read_text() == "a.slog"
+    assert sorted(p.name for p in staging.iterdir()) == [".d.slog", "c.slog", "e.slog.tmp"]
+    assert _relay(machine, remote, local) == ["c.slog"]
+    assert _relay(machine, remote, local) == []
+    assert not (remote / "data" / "work").exists() or not any((remote / "data" / "work").iterdir())
+    assert not (local / INCOMING_DIR / ssh_transfer.RELAY_SPOOL).exists()
+
+
+def test_a_relay_cut_off_midway_lands_nothing_and_keeps_the_files(tmp_path):
+    """The container's scheduler takes every file in staging as whole, so a
+    torn stream must leave none of the batch there; the next relay sends it
+    again."""
+    remote = _container(tmp_path)
+    local, staging = _staged_here(tmp_path, "a.slog", "b.slog")
+    # Only the gzip trailer is lost, so tar has already unpacked the files:
+    # they must still not reach staging.
+    with pytest.raises(SshMachineError):
+        _relay(_FakeMachine(remote, push_bytes=-12), remote, local)
+    assert not (remote / "data" / "staging").exists() or not any(
+        (remote / "data" / "staging").iterdir()
+    )
+    assert not any((remote / "data" / "work").iterdir())  # the push's work dir is gone
+    assert sorted(p.name for p in staging.iterdir()) == ["a.slog", "b.slog"]
+    assert _relay(_FakeMachine(remote), remote, local) == ["a.slog", "b.slog"]
+
+
+def test_nothing_to_relay_makes_no_call(tmp_path):
+    class _NoCalls:
+        def write_to_container(self, *a):
+            raise AssertionError("pushed an empty batch")
+
+    local = tmp_path / "controller"
+    assert _relay(_NoCalls(), tmp_path, local) == []
+    (local / "data" / "staging").mkdir(parents=True)
+    assert _relay(_NoCalls(), tmp_path, local) == []
+
+
+def test_concurrent_pulls_of_the_same_record_files_do_not_collide(tmp_path):
+    """A data home's slots share a volume, so their pulls, each on its own
+    transfer thread, carry the same stats/ files at the same moment."""
+    remote = _container(tmp_path, **{f"stats/w{i}.json": "{}" for i in range(20)})
+    local = tmp_path / "local"
+    errors = []
+
+    def pull():
+        try:
+            for _ in range(10):
+                _pull(tmp_path, remote, local, machine=_FakeMachine(remote))
+        except Exception as e:  # noqa: BLE001 -- reported below
+            errors.append(e)
+
+    threads = [threading.Thread(target=pull) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(list((local / "stats").iterdir())) == 20
+    assert not any((local / INCOMING_DIR).iterdir())

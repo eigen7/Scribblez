@@ -2,9 +2,10 @@
 paces the generators against the trainer.
 
 Generators know nothing about generations. They deliver whole .slog chunks
-into the tag's staging area, directly for local workers and via cloud sync
-for bucket-delivering ones. The scheduler, ticked per task by the dashboard
-server's reconcile loop, is the single writer of generation structure:
+into the tag's staging area: directly for local workers, through the
+controller's collection over ssh for remote ones. The scheduler, ticked per
+task by the dashboard server's reconcile loop (or beside the trainer, on a
+data home), is the single writer of generation structure:
 
   1. It keeps one generation open at a time, moving staged chunks into it by
      atomic rename and marking it complete in its manifest once it holds the
@@ -19,8 +20,8 @@ server's reconcile loop, is the single writer of generation structure:
      generate role for good (tick_for_task).
 
 An ingest ledger (one chunk name per line) keeps a chunk from being assigned
-twice: a chunk that reappears in staging, because cloud sync downloaded it
-again before the bucket-side move landed, is deleted. The ledger line is
+twice: a chunk that reappears in staging, because a collection or relay
+delivered it again after its delete failed, is deleted. The ledger line is
 written before the rename, so a crash between the two loses that chunk rather
 than duplicating it.
 
@@ -59,9 +60,9 @@ GATE_REASON_NO_TRAINER = "trainer not running"
 GATE_REASON_NO_HEARTBEAT = "no heartbeat from the trainer's data home"
 
 # How old a data home's heartbeat may be before its generators are parked. It
-# publishes every data_home.POLL_SECONDS (5 s); the margin covers the controller's
-# sync of a record that comes through the bucket (SYNC_INTERVAL_SECONDS, 30 s)
-# three times over.
+# publishes every data_home.POLL_SECONDS (5 s), and the controller reads a
+# remote home's record once per reconcile pass; the margin covers passes slowed
+# by other tags' ssh calls.
 HEARTBEAT_STALE_SECONDS = 120
 
 # One ingested-chunk name per line, under the tag's data/ dir.
@@ -177,9 +178,7 @@ def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGames
             open_index = next_index
         hooks.gate(GENERATE_ROLE, None)
         gen_dir = paths.generation_dir(open_index)
-        dest_rel = f"generations/{gen_dir.name}"
-        staged = _fill(paths, gen_dir, dest_rel, cfg.games_per_generation, staged, hooks,
-                       chunk_games)  # fmt: skip
+        staged = _fill(paths, gen_dir, cfg.games_per_generation, staged, chunk_games)
         if not lifecycle.is_complete(gen_dir):
             return  # needs more chunks; staging is drained
 
@@ -225,10 +224,8 @@ def _committed_games(dest_dir: Path, chunk_games: ChunkGamesFn) -> int:
 def _fill(
     paths: TagPaths,
     dest_dir: Path,
-    dest_rel: str,
     target: int,
     staged: list[Path],
-    hooks,
     chunk_games: ChunkGamesFn,
 ) -> list[Path]:
     """Assign staged chunks into `dest_dir` until its target game count is
@@ -247,8 +244,6 @@ def _fill(
             continue
         _append_ledger(paths, chunk.name)
         os.replace(chunk, dest_dir / chunk.name)
-        if hooks.mirror:
-            hooks.mirror(chunk.name, dest_rel)
         committed += games
     if committed >= target:
         lifecycle.mark_complete(dest_dir, committed)

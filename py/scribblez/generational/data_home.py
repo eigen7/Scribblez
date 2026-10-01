@@ -2,27 +2,22 @@
 
 For a tag whose data plane is "home" (TaskRecord.data_plane), the machine its
 trainer runs on holds the whole data plane. Generators on that machine deliver
-into its staging dir by rename; generators elsewhere deliver to bucket staging.
-A thread of the trainer (DataHome) does the rest, every POLL_SECONDS:
+into its staging dir by rename. Generators elsewhere deliver where they run;
+the controller collects their chunks and, for a home on an ssh machine, pushes
+them into its staging (WorkerManager._relay_staging). So every chunk arrives
+the way a colocated generator's does. A thread of the trainer (DataHome) does
+the rest, every POLL_SECONDS:
 
-  - It ingests bucket staging. Each chunk is downloaded beside staging, renamed
-    in, and then deleted from the bucket, so the bucket never holds an ingested
-    chunk and none is downloaded twice. If the bucket delete fails, the next
-    pass downloads the chunk again, and the scheduler's ingest ledger drops the
-    copy once the chunk is assigned.
   - It runs the generation scheduler (scheduler.tick) over the local tree.
   - It publishes the scheduler's state (its gate on the generate role and a
     heartbeat) through the trainer's records sink as scheduler_state.json. The
     controller parks and releases generators from that record instead of
     ticking the scheduler itself (scheduler.tick_for_task).
 
-Each of these runs on a thread of its own, so a slow or stuck bucket transfer
-never holds up the scheduler or its heartbeat: a colocated generator's chunks
-keep flowing into generations while an upload waits on the network.
-
-A data home on an ssh machine, whose trainer's records go to the bucket, can
-vanish with its disk (a spot loss, a released machine). So it also keeps the
-bucket able to resume it:
+A data home on an ssh machine can vanish with its disk (a spot loss, a
+released machine). So it also keeps the bucket able to resume it, on a thread
+of its own, so a slow or stuck upload never holds up the scheduler or its
+heartbeat:
 
   - Each complete generation is uploaded, chunks first and manifest last, so a
     manifest in the bucket means the whole generation is there. It is then
@@ -35,16 +30,14 @@ bucket able to resume it:
     reusing an index. The checkpoint and cursor come back through the records
     sink as before (position_eval.trainer.restore_from_sink).
 
-So to the trainer every chunk arrives the way a colocated generator's does,
-and its generation reads are the local sink's no-ops. A failed bucket call is
-retried on the next pass. Any other failure stops the thread and is re-raised
+The trainer's generation reads are the local sink's no-ops. A failed bucket
+call is retried on the next pass. Any other failure stops the thread and is re-raised
 by `check`, which the training loop calls: the runner fails rather than leave
 the generators parked behind a heartbeat that has gone quiet.
 """
 
 import fcntl
 import os
-import shutil
 import threading
 import time
 from contextlib import contextmanager
@@ -60,19 +53,16 @@ from . import lifecycle, scheduler
 
 POLL_SECONDS = 5
 
-# Where a chunk lands while it downloads, under data/work, so the rename into
-# staging stays on one filesystem.
-INGRESS_WORK_DIR = "ingress"
-
 LOCK_NAME = "scheduler.lock"
 
 
 def start_for(ctx, paths: TagPaths, params) -> "DataHome | None":
     """Start the data home beside trainer `ctx` when its tag's data plane is
-    home (ctx.data_plane); None otherwise. It ingests from the bucket when the
-    worker has bucket credentials, and keeps the bucket able to resume it
-    (restore, then uploads) when the controller says the home is remote
-    (SCZ_HOME_UPLOADS)."""
+    home (ctx.data_plane); None otherwise. With bucket credentials it restores
+    the window a previous home uploaded, so a trainer that moved here from a
+    remote home finds it. When the controller says this home is remote
+    (SCZ_HOME_UPLOADS), that restore is required, and the home then keeps the
+    bucket able to resume it with uploads."""
     if ctx.data_plane != scheduler.DATA_PLANE_HOME:
         return None
     cfg = scheduler.SchedulerConfig(
@@ -82,8 +72,6 @@ def start_for(ctx, paths: TagPaths, params) -> "DataHome | None":
     uploads = os.environ.get("SCZ_HOME_UPLOADS") == "1"
     home = DataHome(paths, cfg, ctx.records_sink, r2, window=params.window, uploads=uploads)
     if r2 is not None:
-        # A trainer that moved here from another data home finds its window in
-        # the bucket; one whose resume depends on the bucket must find it.
         home.restore(required=uploads)
     home.start()
     return home
@@ -100,10 +88,9 @@ def _tree_lock(paths: TagPaths):
 
 
 class DataHome:
-    """The data plane's thread beside a trainer (see the module docstring).
-    `r2` is the bucket to ingest remote generators' chunks from, or None when
-    no credentials are available, in which case only colocated generators can
-    feed the tag."""
+    """The data plane's threads beside a trainer (see the module docstring).
+    `r2` is the bucket a remote home's generations are kept in, for `restore`
+    and, with `uploads`, for the upload thread; None when there is none."""
 
     def __init__(
         self,
@@ -127,20 +114,15 @@ class DataHome:
         self._pruned_below = 0  # bucket generations below this index are gone
         self._gate: str | None = None
         self._error: Exception | None = None
-        # Nothing is mirrored or published: the bucket holds no copy of this
-        # tree. Finishing the generators stays the controller's (tick_for_task).
+        # Nothing is published: uploads are the upload thread's. Finishing the
+        # generators stays the controller's (tick_for_task).
         self._hooks = SchedulerHooks(
-            paths=paths, gate=self._set_gate, finish=_no_finish, mirror=None, publish=None
+            paths=paths, gate=self._set_gate, finish=_no_finish, publish=None
         )
-        loops = [self.schedule]
-        if r2 is not None:
-            loops.append(self.ingest)
-        if uploads:
-            loops.append(self.upload)
+        loops = [self.schedule, self.upload] if uploads else [self.schedule]
         self._threads = [threading.Thread(target=self._run, args=(f,), daemon=True) for f in loops]
 
     def start(self):
-        shutil.rmtree(self._ingress_dir, ignore_errors=True)  # partial downloads
         for t in self._threads:
             t.start()
 
@@ -150,26 +132,10 @@ class DataHome:
             raise self._error
 
     def step(self):
-        """One pass of every loop, in order: ingest, schedule, upload."""
-        if self._r2 is not None:
-            self.ingest()
+        """One pass of every loop, in order: schedule, then upload."""
         self.schedule()
         if self.uploads:
             self.upload()
-
-    def ingest(self):
-        """Move bucket staging's chunks into local staging. The renames need
-        no lock: the scheduler only ever takes whole files out of staging."""
-        prefix = self._staging_prefix()
-        listing = rclone(self._r2, "lsf", "--files-only", prefix, capture=True)
-        if listing.returncode != 0:
-            print(f"data home: listing bucket staging failed: {listing.stderr.strip()}")
-            return
-        self._ingress_dir.mkdir(parents=True, exist_ok=True)
-        self._paths.staging_dir.mkdir(parents=True, exist_ok=True)
-        for name in sorted(n for n in listing.stdout.split() if n.endswith(".slog")):
-            if not self._ingest_one(prefix, name):
-                return  # the bucket is failing; the next pass retries
 
     def schedule(self):
         """Assign staged chunks to generations, then publish the gate and a
@@ -218,26 +184,6 @@ class DataHome:
     def _set_gate(self, role: str, reason: str | None):
         assert role == scheduler.GENERATE_ROLE, role
         self._gate = reason
-
-    @property
-    def _ingress_dir(self) -> Path:
-        return self._paths.data_dir / "work" / INGRESS_WORK_DIR
-
-    def _staging_prefix(self) -> str:
-        return bucket_path(self._r2, self._paths.task, self._paths.tag, "staging")
-
-    def _ingest_one(self, prefix: str, name: str) -> bool:
-        tmp = self._ingress_dir / name
-        got = rclone(self._r2, "copyto", f"{prefix}/{name}", str(tmp), capture=True)
-        if got.returncode != 0:
-            print(f"data home: downloading {name} failed: {got.stderr.strip()}")
-            return False
-        os.replace(tmp, self._paths.staging_dir / name)
-        gone = rclone(self._r2, "deletefile", f"{prefix}/{name}", capture=True)
-        if gone.returncode != 0:
-            print(f"data home: deleting {name} from the bucket failed: {gone.stderr.strip()}")
-            return False
-        return True
 
     def _generation_prefix(self, gen_dir: Path) -> str:
         return bucket_path(self._r2, self._paths.task, self._paths.tag, "generations", gen_dir.name)

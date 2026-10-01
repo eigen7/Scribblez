@@ -715,7 +715,4 @@ class TagQueue:
             if state == "missing":
                 continue
             (logs / f"{w.worker_id}.container.log").write_text(machine.container_logs(name))
-            if self._m._collected(spec, task, w):
-                self._m._sweep_ssh(machine, spec, task, w)
-        if self._m._has_bucket_slots(spec, task):
-            self._m.sync_once(spec, task)
+            self._m._sweep_ssh(machine, spec, task, w)

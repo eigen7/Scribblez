@@ -139,16 +139,9 @@ class WorkloadSpec:
     # Placement refuses an unmeasured GPU role rather than guess; a slot added
     # by hand is checked only when the figure is known. "" means unmeasured.
     gpu_need: str = ""
-    # data/ subdirectories bucket-delivering workers write into.
-    # scripts/cloud_sync.py pulls exactly these bucket prefixes (plus stats/
-    # and params/) down to the local mount.
-    sync_data_dirs: tuple[str, ...] = ()
-    # data/ subdirectories that only local and ssh workers write into. A
-    # collection from an ssh container takes these too (collected_dirs), but
-    # they never exist in the bucket, so they are kept out of sync_data_dirs:
-    # cloud_sync would otherwise spend an rclone call per cycle on a prefix
-    # nothing writes.
-    local_data_dirs: tuple[str, ...] = ()
+    # Every data/ subdirectory a worker delivers into: what a collection from
+    # an ssh container looks through (WorkerManager._transfer_target).
+    collected_dirs: tuple[str, ...] = ()
     # The parameters the dashboard's new-tag form shows up front, in this
     # order; the rest fold into its collapsed "Advanced" section. The dataclass
     # groups fields by subject, so this order is independent of it. Empty
@@ -228,12 +221,6 @@ class WorkloadSpec:
             if name in params and params[name] != value
         ]
 
-    @property
-    def collected_dirs(self) -> tuple[str, ...]:
-        """Every data/ subdirectory a worker delivers into: what a collection
-        from an ssh container looks through."""
-        return self.sync_data_dirs + self.local_data_dirs
-
     def paths(self, tag: str, mount_root: Path) -> TagPaths:
         return TagPaths(tag, self.name, mount_root)
 
@@ -280,10 +267,6 @@ class SchedulerHooks:
         any gate on the role is dropped. Its workers are stopped and its rented
         machines then stop once idle. A later Start on a finished slot is
         finished again on the next tick while the condition still holds.
-    mirror(chunk_name, dest_rel), optional
-        Repeat a local staging ingest (a chunk moved into a generation) in the
-        results bucket. The bucket keeps mirroring the local corpus, so the
-        sync watcher never downloads an ingested chunk a second time.
     publish(dest_rel) -> bool, optional
         See that a complete generation is uploaded to the bucket, chunks first
         and manifest last, for a trainer that runs elsewhere and reads it from
@@ -298,7 +281,6 @@ class SchedulerHooks:
     paths: TagPaths
     gate: object  # callable(role: str, reason: str | None)
     finish: object  # callable(role: str)
-    mirror: object = None  # callable(chunk_name: str, dest_rel: str) | None
     publish: object = None  # callable(dest_rel: str) -> bool | None
     role_running: object = None  # callable(role: str) -> bool
 

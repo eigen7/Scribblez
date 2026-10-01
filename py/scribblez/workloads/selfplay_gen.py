@@ -4,14 +4,14 @@
 Generators know nothing about generations. Each cycle plays one .slog chunk of
 self-play games into its own subdirectory of the worker's private work dir and
 hands it to a background Deliverer, which moves it into the tag's staging area
-(a rename for a local worker, an upload for a bucket-delivering one) while the
-next cycle starts. The generation scheduler on the controller then assigns
-staged chunks to generations (scribblez/generational/scheduler.py).
+by rename (on a remote worker, its own container's, from where the controller
+collects it) while the next cycle starts. The generation scheduler then
+assigns staged chunks to generations (scribblez/generational/scheduler.py).
 
-Delivery runs off the generation path because on a bucket-delivering worker an
-upload (one rclone process per file) can cost a sizeable fraction of the time
-it took to generate the chunk. Each cycle gets its own subdirectory so its
-files never collide with a chunk still waiting to be delivered.
+Delivery runs off the generation path so that a slow sink never holds up the
+next cycle; the bucket sink this was built for cost one rclone process per
+file. Each cycle gets its own subdirectory so its files never collide with a
+chunk still waiting to be delivered.
 
 play_game always runs with seed 0, which makes the binary seed itself from
 std::random_device. Any deterministic seed partition across a fleet would risk
