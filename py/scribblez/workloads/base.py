@@ -280,10 +280,6 @@ class SchedulerHooks:
         any gate on the role is dropped. Its workers are stopped and its rented
         machines then stop once idle. A later Start on a finished slot is
         finished again on the next tick while the condition still holds.
-    mirror(chunk_name, dest_rel), optional
-        Repeat a local staging ingest (a chunk moved into a generation) in the
-        results bucket. The bucket keeps mirroring the local corpus, so the
-        sync watcher never downloads an ingested chunk a second time.
     publish(dest_rel) -> bool, optional
         See that a complete generation is uploaded to the bucket, chunks first
         and manifest last, for a trainer that runs elsewhere and reads it from
@@ -298,7 +294,6 @@ class SchedulerHooks:
     paths: TagPaths
     gate: object  # callable(role: str, reason: str | None)
     finish: object  # callable(role: str)
-    mirror: object = None  # callable(chunk_name: str, dest_rel: str) | None
     publish: object = None  # callable(dest_rel: str) -> bool | None
     role_running: object = None  # callable(role: str) -> bool
 

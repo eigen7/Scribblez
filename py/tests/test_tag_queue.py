@@ -476,22 +476,16 @@ class _StoppedLink(_Link):
         pass
 
 
-def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypatch):
+def test_the_drain_saves_logs_and_sweeps_before_removing(queued, monkeypatch):
     """The ssh half of a release: every container's full log saved into the
-    tag, every container swept (records are collected from all of them, a
-    trainer's state pairs included), and one final sync of the data the
-    trainer's generations come through, all before the slots are removed."""
+    tag and every container swept (each delivers locally, a trainer's state
+    pairs included), all before the slots are removed."""
     q, manager, make = queued
     monkeypatch.setattr(workers_mod, "SshMachine", _StoppedLink)
-    swept, synced = [], []
+    swept = []
     monkeypatch.setattr(
         workers_mod, "sweep_stopped", lambda machine, **target: swept.append(target) or []
     )
-
-    def record_sync(spec, task):
-        synced.append(manager.cloud_sync_argv(spec, task))
-
-    monkeypatch.setattr(manager, "sync_once", record_sync)
     manager.remove_pool_machine("localhost")
     manager.add_pool_machine("gpu-box", "me@gpu-box")
     make("a")
@@ -519,8 +513,6 @@ def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypat
         "scz-position_eval-a-ssh-1",
         "scz-position_eval-a-ssh-0",
     ]
-    [argv] = synced
-    assert argv[argv.index("-t") + 1] == "a"
     assert manager.tasks.load(SPEC, "a").workers == []
     assert _lease(manager, "gpu-box") is None
 

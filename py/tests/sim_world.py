@@ -4,17 +4,16 @@
 The real WorkerManager, TagQueue and PoolRentals run against it unchanged;
 everything they touch outside the process is faked here: a clock, local worker
 processes (Popen, /proc liveness, signals), ssh machines and their containers,
-the cloud provider's instances, the results bucket and the cloud_sync watchers
-that pull from it, and the thread pools, which run each job at once so a seed
-replays exactly.
+the cloud provider's instances, the results bucket, and the thread pools,
+which run each job at once so a seed replays exactly.
 
 The workload is a stand-in with position_eval's shape: a trainer and a
 generator placed by a layout, a row budget as the end condition, and a
 scheduler that gates the generator while it runs ahead and finishes it once
 the trainer is done. Its workers do nothing but advance counters, each step
-the world takes, in the files a real trainer writes: train_state.json (the
-cursor placement's state_home reads) in the tag dir for a local trainer, in
-the bucket for a bucket-delivering one, from where a watcher pulls it.
+the world takes, in the files a real worker writes: train_state.json (the
+cursor placement's state_home reads) and the generator's count of
+generations, in the tag dir, where an ssh worker's would be collected to.
 
 What it checks is orderings and restarts at step granularity; the executors
 are synchronous, so thread interleavings are out of its reach.
@@ -197,12 +196,11 @@ class Worker:
 class FakeProc:
     """A local worker process (subprocess.Popen's surface the manager uses)."""
 
-    def __init__(self, world, pid: int, env: dict, worker: Worker | None, watcher=None):
+    def __init__(self, world, pid: int, env: dict, worker: Worker | None):
         self.world = world
         self.pid = pid
         self.env = env
         self.worker = worker
-        self.watcher = watcher  # the tag, for a cloud_sync watcher
         self.returncode = None
         self._exit_pending: int | None = None
 
@@ -316,31 +314,14 @@ class World:
 
     def subprocess_module(self):
         """A stand-in for the `subprocess` module, for workers.py: Popen starts
-        a simulated worker or watcher, and run (the drain's one-off
-        cloud_sync) pulls once."""
-        return SimpleNamespace(
-            Popen=self.popen,
-            run=self.run,
-            STDOUT=subprocess.STDOUT,
-            PIPE=subprocess.PIPE,
-            CalledProcessError=subprocess.CalledProcessError,
-        )
-
-    def run(self, argv, check=False, **kwargs):
-        if any("cloud_sync" in str(a) for a in argv):
-            tag = argv[argv.index("-t") + 1]
-            self._sync_down(tag)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        a simulated worker."""
+        return SimpleNamespace(Popen=self.popen, STDOUT=subprocess.STDOUT)
 
     def popen(self, argv, env=None, **kwargs) -> FakeProc:
         env = env or {}
         pid = self._next_pid
         self._next_pid += 1
-        if any("cloud_sync" in str(a) for a in argv):
-            tag = argv[argv.index("-t") + 1]
-            proc = FakeProc(self, pid, env, None, watcher=tag)
-        else:
-            proc = FakeProc(self, pid, env, _worker_from_env(env, "local"))
+        proc = FakeProc(self, pid, env, _worker_from_env(env, "local"))
         self.procs[pid] = proc
         return proc
 
@@ -406,8 +387,6 @@ class World:
                 continue
             if proc._exit_pending is not None:
                 proc.exit(proc._exit_pending)
-            elif proc.watcher is not None:
-                self._sync_down(proc.watcher)
             elif proc.worker is not None:
                 code = self._work(proc.worker)
                 if code is not None:
@@ -492,15 +471,6 @@ class World:
         state["rows_trained"] += ROWS_PER_STEP
         self._write(w, "train_state.json", json.dumps(state))
         return None
-
-    def _sync_down(self, tag: str):
-        """A cloud_sync watcher's pass: pull the data bucket slots delivered."""
-        for rel in ["data/generations"]:
-            text = self.bucket.get(f"{tag}/{rel}")
-            if text is not None:
-                path = self._tag_root(tag) / rel
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(text)
 
     def billing(self) -> list[Instance]:
         return [i for i in self.provider.instances.values() if i.state in ("pending", "running")]

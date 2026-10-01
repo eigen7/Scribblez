@@ -8,7 +8,9 @@ out of the worker's cycle (a bucket round trip per cycle would dwarf work that
 takes seconds) and needs no bucket or extra credential. The same link runs the
 other way for roles whose work the controller assigns: push_file drops a file
 where the worker polls for it (match eval: the ONNX of the generation to
-play), and list_dir reads back what is there.
+play), and list_dir reads back what is there. relay_files pushes a batch of
+delivered files on into another container (chunks collected here for a data
+home on an ssh machine).
 
 Only the controller initiates. The dev container runs no sshd, and a worker
 that pushed would need a route, a stable address and a key for the
@@ -40,6 +42,7 @@ it: the scheduler's ingest ledger for chunks, the cursor rule for state pairs.
 
 import shlex
 import tarfile
+import uuid
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -86,6 +89,10 @@ INCOMING_DIR = ".incoming"
 # Prefix of the spool file a sweep streams through, so the next sweep can
 # recognize and remove one left by a process that died mid-copy.
 SPOOL_PREFIX = "sweep-"
+
+# The archive a relay builds before streaming it, overwritten by the next
+# (a tag has one relay at a time: its data home's).
+RELAY_SPOOL = "relay.tar.gz"
 
 
 @dataclass(frozen=True)
@@ -238,6 +245,90 @@ def list_dir(machine, container: str, *, remote_root: str, rel: str) -> list[str
 def remove_file(machine, container: str, *, remote_root: str, rel: str):
     """Delete `rel` under the container's tag root; absent is success."""
     machine.exec_in_container(container, ["rm", "-f", f"{remote_root}/{rel}"])
+
+
+def _batch(files: list[Path], batch: int, batch_bytes: int) -> list[Path]:
+    """The prefix of `files` a pull of the same bounds would take: at most
+    `batch` files and, past the first, at most `batch_bytes`."""
+    taken, total = [], 0
+    for f in files:
+        size = f.stat().st_size
+        if len(taken) == batch or (taken and total + size > batch_bytes):
+            break
+        taken.append(f)
+        total += size
+    return taken
+
+
+def unpack_command(root: str, dest_rel: str, count: int) -> list[str]:
+    """The in-container command unpacking a gzipped tar of `count` files off
+    stdin into `dest_rel`.
+
+    The files unpack into a work directory beside the destination, and are
+    renamed in only once all `count` are there, so a stream cut short leaves
+    nothing in the destination, and the worker reading it (a data home's
+    scheduler, which takes every file in staging as whole) never sees a
+    partial file. The work directory is named per push and removed on any
+    failure."""
+    dest = f"{root}/{dest_rel}"
+    work = f"{root}/data/work/relay-{uuid.uuid4().hex[:12]}"
+    return [
+        "sh",
+        "-c",
+        f"w={shlex.quote(work)}; d={shlex.quote(dest)}\n"
+        "trap 'rm -rf \"$w\"' EXIT\n"
+        'mkdir -p "$w" "$d"\n'
+        'tar -xz -C "$w" -f - || exit 1\n'
+        'n=$(ls -A "$w" | wc -l)\n'
+        f'[ "$n" -eq {count} ] || {{ echo "got $n of {count} files" >&2; exit 1; }}\n'
+        'mv "$w"/* "$d"/',
+    ]
+
+
+def relay_files(
+    machine,
+    container: str,
+    *,
+    remote_root: str,
+    local_root: Path,
+    rel: str,
+    batch: int = BATCH,
+    batch_bytes: int = BATCH_BYTES,
+) -> list[str]:
+    """Push a batch of the files in `rel` under the controller's tag root into
+    the same directory of the container's, then delete them here. Returns the
+    names moved.
+
+    The batch is the oldest files by name, bounded as a pull is. Dotted and
+    `.tmp` names are writes still in progress and stay. The local copies go
+    only once the container has every file of the batch in place, so a push
+    that fails is pushed again whole on the next call; a file that arrives
+    twice (the deletes here failed) is deduplicated by its consumer, as a
+    pulled one is."""
+    src = local_root / rel
+    if not src.is_dir():
+        return []
+    ready = sorted(
+        f
+        for f in src.iterdir()
+        if f.is_file() and not f.name.startswith(".") and not f.name.endswith(".tmp")
+    )
+    files = _batch(ready, batch, batch_bytes)
+    if not files:
+        return []
+    incoming = local_root / INCOMING_DIR
+    incoming.mkdir(parents=True, exist_ok=True)
+    archive = incoming / RELAY_SPOOL
+    try:
+        with tarfile.open(archive, "w:gz", compresslevel=1) as tar:
+            for f in files:
+                tar.add(f, arcname=f.name)
+        machine.write_to_container(container, unpack_command(remote_root, rel, len(files)), archive)
+    finally:
+        archive.unlink(missing_ok=True)
+    for f in files:
+        f.unlink()
+    return [f.name for f in files]
 
 
 def _extract(

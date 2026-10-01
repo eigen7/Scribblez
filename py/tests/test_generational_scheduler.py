@@ -10,9 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from scribblez.dashboard.workers import SYNC_INTERVAL_SECONDS
 from scribblez.generational import lifecycle, scheduler
-from scribblez.generational.data_home import POLL_SECONDS
 from scribblez.paths import POSITION_EVAL, SCHEDULER_STATE_REL, TagPaths
 from scribblez.workloads.base import SchedulerHooks
 from scribblez.workloads.position_eval import PositionEvalParams
@@ -38,7 +36,6 @@ def _stage(paths: TagPaths, name: str, games: int):
 class Hooks(SchedulerHooks):
     def __init__(self, publish: bool = False, paths: TagPaths | None = None):
         self.gates: dict[str, str | None] = {}
-        self.mirrored: list[tuple[str, str]] = []
         self.published: list[str] = []
         self.publish_fails = False
         self.uploading = False  # the upload is still running
@@ -46,7 +43,6 @@ class Hooks(SchedulerHooks):
             paths=paths,
             gate=lambda role, reason: self.gates.__setitem__(role, reason),
             finish=lambda role: None,
-            mirror=lambda name, dest: self.mirrored.append((name, dest)),
             publish=self._publish if publish else None,
         )
 
@@ -125,13 +121,6 @@ def test_unreadable_chunk_is_quarantined(paths):
     assert lifecycle.is_complete(paths.generation_dir(0))
     assert (paths.staging_dir / "bad.bad").exists()
     assert not (paths.staging_dir / "bad.slog").exists()
-
-
-def test_mirror_replays_ingest(paths):
-    hooks = Hooks()
-    _stage(paths, "a", 100)
-    _tick(paths, hooks)
-    assert hooks.mirrored == [("a.slog", "generations/gen_000000")]
 
 
 def test_committed_count_self_heals(paths):
@@ -291,10 +280,3 @@ def test_the_heartbeat_is_judged_on_the_controllers_clock(paths):
     assert scheduler.home_gate(paths, True, later) == scheduler.GATE_REASON_NO_HEARTBEAT
     _write_state(paths, None, 2.0)  # it beat again
     assert scheduler.home_gate(paths, True, later) is None
-
-
-def test_the_heartbeat_outlasts_a_bucket_synced_record():
-    """A remote data home's record reaches the controller through the sync
-    watcher; a heartbeat judged stale inside a few sync rounds would park its
-    generators while it is healthy."""
-    assert scheduler.HEARTBEAT_STALE_SECONDS >= 3 * (SYNC_INTERVAL_SECONDS + POLL_SECONDS)

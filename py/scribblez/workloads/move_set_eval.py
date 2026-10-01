@@ -404,6 +404,18 @@ def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, obj
     return [("pairs", pair_store.count_pairs(paths.data_dir / SLOGS_DIR, ".mset"))]
 
 
+def tick(spec: WorkloadSpec, task, hooks):
+    """The scheduler entry: finish the generators once the store holds
+    `target_pairs`. A generator on this machine stops itself there, but an ssh
+    one delivers into its own container and cannot count the store, which only
+    this controller sees whole."""
+    target = params_mod.validate(spec.params_cls, task.params).target_pairs
+    if params_mod.reached(
+        pair_store.count_pairs(hooks.paths.data_dir / SLOGS_DIR, ".mset"), target
+    ):
+        hooks.finish("generate")
+
+
 def slog_dir(tag: str, mount_root: Path) -> Path:
     """The tag's pair store of .slog/.mset pairs: what MsetDataset takes as a
     data dir."""
@@ -463,6 +475,7 @@ SPEC = WorkloadSpec(
         ),
     ),
     progress="scribblez.workloads.move_set_eval:progress",
+    scheduler="scribblez.workloads.move_set_eval:tick",
     pace_role="train",
     sync_data_dirs=(SLOGS_DIR,),
     finalize="scribblez.workloads.move_set_eval:finalize",

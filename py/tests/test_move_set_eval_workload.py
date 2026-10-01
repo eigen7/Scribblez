@@ -1,6 +1,8 @@
 """Tests for the move_set_eval target-generation workload and the shared
 pair-store delivery it uses."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from scribblez import params as params_mod
@@ -668,3 +670,22 @@ def test_a_local_generator_does_not_wait_for_a_teacher_nobody_stages(tmp_path, m
     ctx = StubCtx(tmp_path, _StagingSink({}), max_cycles=1)  # kind "local"
     ctx.params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
     assert move_set_eval.run_generate(ctx) == 1
+
+
+def test_the_scheduler_finishes_the_generators_at_target_pairs(tmp_path):
+    """An ssh generator delivers into its own container and cannot count the
+    store; the controller, which holds it whole, stops them all."""
+    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
+    store = paths.data_dir / move_set_eval.SLOGS_DIR
+
+    def finished_after_tick(target: int) -> list[str]:
+        finished = []
+        task = SimpleNamespace(params={"teacher_tag": "x", "target_pairs": target})
+        move_set_eval.tick(SPEC, task, SimpleNamespace(paths=paths, finish=finished.append))
+        return finished
+
+    write_empty_pair(store, "a")
+    write_empty_pair(store, "b")
+    assert finished_after_tick(3) == []
+    assert finished_after_tick(2) == ["generate"]
+    assert finished_after_tick(params_mod.UNBOUNDED) == []
