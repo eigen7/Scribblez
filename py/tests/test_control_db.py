@@ -230,18 +230,15 @@ def test_a_disagreement_between_the_projection_and_the_stores_is_a_finding(
 
 
 def test_a_tags_home_follows_its_training_state(manager, tmp_path):
-    """None before any training; local or bucket after, by where its trainer
-    delivered (placement.state_home)."""
+    """None before any training; local after, since every trainer's state is
+    collected here (placement.state_home)."""
     _task(manager, "fresh")
-    for tag, sink in (("local", "local"), ("bucket", "r2")):
-        task = _task(manager, tag)
-        task.trainer_sink = sink
-        manager.tasks.save(SPEC, task)
-        paths = manager.tasks.paths(SPEC, tag)
-        paths.train_state_path.write_text('{"rows_trained": 256, "generation_index": 0}')
+    _task(manager, "trained")
+    paths = manager.tasks.paths(SPEC, "trained")
+    paths.train_state_path.write_text('{"rows_trained": 256, "generation_index": 0}')
     conn, _, _ = _run(manager, tmp_path)
     homes = dict(conn.execute("SELECT name, home FROM tag").fetchall())
-    assert homes == {"fresh": None, "local": "local", "bucket": "bucket"}
+    assert homes == {"fresh": None, "trained": "local"}
 
 
 def test_a_finished_tag_projects_as_done_unless_it_still_holds_a_machine(tmp_path):

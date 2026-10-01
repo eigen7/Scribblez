@@ -272,10 +272,25 @@ def test_a_data_home_tag_still_finishes_at_max_rows(tmp_path):
     ],
 )
 def test_home_gate(paths, trainer_running, record_age, expected):
-    now = 1_000_000.0
+    """`record_age`: how long ago this controller saw the heartbeat change."""
+    start = 1_000_000.0
     if record_age is not None:
-        _write_state(paths, None, now - record_age)
-    assert scheduler.home_gate(paths, trainer_running, now) == expected
+        _write_state(paths, None, 12345.0)  # the home's clock: irrelevant
+        scheduler.home_gate(paths, True, start)  # first seen now
+    assert scheduler.home_gate(paths, trainer_running, start + (record_age or 0)) == expected
+
+
+def test_the_heartbeat_is_judged_on_the_controllers_clock(paths):
+    """A home whose clock is far off (or simply another machine's) neither
+    parks its generators nor hides a dead heartbeat: what counts is when the
+    controller saw the value change."""
+    t = 2_000_000.0
+    _write_state(paths, None, 1.0)  # a heartbeat from 1970, by the home's clock
+    assert scheduler.home_gate(paths, True, t) is None
+    later = t + scheduler.HEARTBEAT_STALE_SECONDS + 1
+    assert scheduler.home_gate(paths, True, later) == scheduler.GATE_REASON_NO_HEARTBEAT
+    _write_state(paths, None, 2.0)  # it beat again
+    assert scheduler.home_gate(paths, True, later) is None
 
 
 def test_the_heartbeat_outlasts_a_bucket_synced_record():

@@ -1,7 +1,6 @@
 """What the per-task sync pulls (py/scripts/cloud_sync.py), with and without a
 trainer delivering through the bucket."""
 
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -39,64 +38,20 @@ def _pulled(rc):
     return [(a[0], *a[1:]) for a in rc.calls]
 
 
-def test_a_generator_only_tag_pulls_staging_stats_and_params(spec, monkeypatch):
+def test_only_the_data_rented_generators_deliver_is_pulled(spec, monkeypatch):
+    """Records and a trainer's outputs reach the controller over ssh
+    (WorkerManager._transfer_target); the bucket carries only generator data."""
     rc = _Rclone()
     monkeypatch.setattr(cloud_sync, "rclone", rc)
     assert cloud_sync.sync_once(R2, spec, spec.paths("t")) == 0
     root = spec.paths("t").root
-    assert _pulled(rc) == [
-        ("copy", "r2:b/position_eval/t/staging", str(root / "data" / "staging")),
-        ("copy", "r2:b/position_eval/t/stats", str(root / "stats")),
-        ("copy", "r2:b/position_eval/t/params", str(root / "params")),
-    ]
+    assert _pulled(rc) == [("copy", "r2:b/position_eval/t/staging", str(root / "data" / "staging"))]
 
 
-def test_without_data_a_data_homes_staging_is_left_in_the_bucket(spec, monkeypatch):
-    """A data home moves bucket staging chunks in itself; a pull here would
-    bring back chunks it already assigned. The records still come down."""
-    rc = _Rclone()
-    monkeypatch.setattr(cloud_sync, "rclone", rc)
-    monkeypatch.setattr(cloud_sync, "load_credentials", lambda: SimpleNamespace(r2=R2))
+def test_a_failed_pull_fails_the_pass(spec, monkeypatch):
     monkeypatch.setattr(
-        sys, "argv", ["cloud_sync", "--workload", "position_eval", "-t", "t", "--no-data"]
+        cloud_sync,
+        "rclone",
+        lambda r2, *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="x"),
     )
-    assert cloud_sync.main() == 0
-    root = spec.paths("t").root
-    assert _pulled(rc) == [
-        ("copy", "r2:b/position_eval/t/stats", str(root / "stats")),
-        ("copy", "r2:b/position_eval/t/params", str(root / "params")),
-    ]
-
-
-def test_trainer_outputs_are_pulled_immutable_ones_by_size(spec, monkeypatch):
-    """Records and exports never change once written, so they are compared by
-    size alone: an S3 listing carries no modtime, and rclone's default check
-    would HEAD every export on every pass. The checkpoint and cursor come as a
-    state pair under the cursor rule (state_pair.restore), never as files a
-    stale bucket could overwrite fresher local state with."""
-    rc = _Rclone()
-    monkeypatch.setattr(cloud_sync, "rclone", rc)
-    restored = []
-    monkeypatch.setattr(
-        cloud_sync.state_pair, "restore", lambda paths, sink: restored.append((paths.tag, sink))
-    )
-    assert cloud_sync.sync_once(R2, spec, spec.paths("t"), trainer_outputs=True) == 0
-    root = spec.paths("t").root
-    assert _pulled(rc)[3:] == [
-        ("copy", "--size-only", "r2:b/position_eval/t/records", str(root / "records")),
-        ("sync", "--size-only", "r2:b/position_eval/t/models", str(root / "models")),
-        ("lsf", "r2:b/position_eval/t/scheduler_state.json"),  # a data home's heartbeat
-    ]
-    [(tag, sink)] = restored
-    assert tag == "t" and isinstance(sink, cloud_sync.R2Sink)
-
-
-def test_a_failed_state_pair_pull_fails_the_pass(spec, monkeypatch, capsys):
-    monkeypatch.setattr(cloud_sync, "rclone", _Rclone())
-
-    def failing_restore(paths, sink):
-        raise AssertionError("listing state failed")
-
-    monkeypatch.setattr(cloud_sync.state_pair, "restore", failing_restore)
-    assert cloud_sync.sync_once(R2, spec, spec.paths("t"), trainer_outputs=True) == 1
-    assert "listing state failed" in capsys.readouterr().err
+    assert cloud_sync.sync_once(R2, spec, spec.paths("t")) == 1

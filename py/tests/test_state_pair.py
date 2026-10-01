@@ -132,3 +132,39 @@ def test_a_fresher_machine_keeps_its_own_state(paths, tmp_path):
 
 def test_a_local_sink_has_nothing_newer_to_offer(paths):
     assert not state_pair.restore(paths, LocalSink(paths.root))
+
+
+def test_a_seed_installs_under_the_rule(paths):
+    seed = _pair(paths.root / state_pair.SEED_DIR, 500, "w-controller")
+    assert state_pair.take_seed(paths, expected=True)
+    assert _installed(paths) == ("w-controller", 500) and not seed.exists()
+    # A home volume already ahead of the controller's copy keeps its own.
+    _pair(paths.root / state_pair.SEED_DIR, 400, "w-older")
+    assert not state_pair.take_seed(paths, expected=True)
+    assert _installed(paths) == ("w-controller", 500)
+
+
+def test_a_fresh_container_waits_for_its_seed_and_a_restarted_one_does_not(paths, monkeypatch):
+    slept = []
+
+    def arrive(_):  # the controller's push lands while the trainer waits
+        slept.append(1)
+        _pair(paths.root / state_pair.SEED_DIR, 300, "w-seed")
+
+    monkeypatch.setattr(state_pair.time, "sleep", arrive)
+    assert state_pair.take_seed(paths, expected=True)
+    assert slept == [1] and _installed(paths) == ("w-seed", 300)
+    # Restarted: its own checkpoint is there, so nothing is awaited.
+    monkeypatch.setattr(state_pair.time, "sleep", lambda _: pytest.fail("waited"))
+    assert not state_pair.take_seed(paths, expected=True)
+    # Not told a seed is coming: never waits.
+    paths.rolling_checkpoint.unlink()
+    assert not state_pair.take_seed(paths, expected=False)
+
+
+def test_a_seed_that_never_comes_fails_the_trainer(paths, monkeypatch):
+    clock = iter(range(0, 10_000, 1000))
+    monkeypatch.setattr(state_pair.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(state_pair.time, "sleep", lambda _: None)
+    with pytest.raises(AssertionError, match="no state seed"):
+        state_pair.take_seed(paths, expected=True)

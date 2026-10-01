@@ -268,7 +268,13 @@ def _extract(
 
 
 def sweep_stopped(
-    machine, container: str, *, remote_root: str, local_root: Path, data_dirs: list[str]
+    machine,
+    container: str,
+    *,
+    remote_root: str,
+    local_root: Path,
+    data_dirs: list[str],
+    pair_dirs: dict[str, str] | None = None,
 ) -> list[str]:
     """Take everything a stopped container still holds, before it is destroyed.
 
@@ -284,14 +290,15 @@ def sweep_stopped(
     flush, a few megabytes. On a container with a real backlog it would move
     gigabytes in one call. The copy is spooled through a file rather than held
     in memory all the same, and it is uncompressed; copy_from_container
-    explains why.
+    explains why. Pair directories are taken whole too, a pair still being
+    written included; its consumer discards a pair without its marker.
     """
     names = []
     incoming = local_root / INCOMING_DIR
     incoming.mkdir(parents=True, exist_ok=True)
     for stale in incoming.glob(f"{SPOOL_PREFIX}*"):
         stale.unlink()  # a spool from a sweep whose process died mid-copy
-    for data_dir in data_dirs:
+    for data_dir in [*data_dirs, *(pair_dirs or {})]:
         archive = incoming / f"{SPOOL_PREFIX}{Path(data_dir).name}.tar"
         try:
             path = f"{remote_root}/{data_dir}"

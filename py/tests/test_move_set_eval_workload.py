@@ -64,7 +64,9 @@ def test_workload_is_registered_with_a_valid_schema():
 
 def test_train_role_is_registered():
     role = SPEC.role("train")
-    assert role.singleton and role.gpu and role.kinds == ("local", "ssh")
+    assert role.singleton and role.gpu
+    # Local only: it reads its pair store straight from the controller's tree.
+    assert role.kinds == ("local",)
     assert role.runner == "scribblez.move_set_eval.trainer:run"
     assert set(role.stats.phases) == {"train_s", "eval_s"}
 
@@ -638,7 +640,6 @@ def test_the_generate_role_declares_the_pinned_teacher_as_its_input(tmp_path, mo
     assert move_set_eval.inputs(params, tmp_path) == {move_set_eval.TEACHER_INPUT: expected}
     assert SPEC.role("generate").inputs == "scribblez.workloads.move_set_eval:inputs"
     assert "ssh" in SPEC.role("generate").kinds
-    assert "ssh" in SPEC.role("train").kinds
     assert SPEC.role("train").deps == "scribblez.move_set_eval.trainer:fetch_train_deps"
 
 

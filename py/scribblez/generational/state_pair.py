@@ -17,13 +17,15 @@ as a bucket that fell behind the machine it came from or a volume left over
 from an earlier assignment, therefore can never overwrite fresher state.
 
 `deliver` sends a trainer's pair through its records sink. `install` applies
-the rule. `restore` fetches through a sink the newest pair that beats the
-installed state, then installs it.
+the rule. `take_seed` installs the pair the controller pushes into a new
+trainer container (SEED_DIR). `restore` fetches through a sink the newest pair
+that beats the installed state, then installs it.
 """
 
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 
 from scribblez.generational import lifecycle
@@ -32,6 +34,16 @@ from scribblez.paths import TagPaths
 STATE_DIR = "state"
 MODEL_NAME = "model.pt"
 CURSOR_NAME = "train_state.json"
+
+# Where the controller pushes its copy of the state into a new trainer
+# container, under the tag root (WorkerManager._seed_state).
+SEED_DIR = ".seed"
+
+# How long a trainer told a seed is coming waits for it. The controller pushes
+# it right after creating the container, so a wait this long means the push
+# failed.
+SEED_WAIT_SECONDS = 600
+SEED_POLL_SECONDS = 2
 
 
 def pair_rel(generation: int) -> str:
@@ -70,6 +82,20 @@ def install(pair_dir: Path, paths: TagPaths) -> bool:
         os.replace(pair_dir / CURSOR_NAME, paths.train_state_path)
     shutil.rmtree(pair_dir, ignore_errors=True)
     return newer
+
+
+def take_seed(paths: TagPaths, expected: bool) -> bool:
+    """Install the pair the controller pushed into this trainer's container,
+    under the cursor rule. When `expected` (SCZ_STATE_SEED) and this machine
+    holds no checkpoint of its own, wait for the seed's cursor, its commit
+    marker. A restarted container, or a home volume that already holds state,
+    starts at once. Returns whether the seed was installed."""
+    seed = paths.root / SEED_DIR
+    deadline = time.monotonic() + SEED_WAIT_SECONDS
+    while expected and not paths.rolling_checkpoint.exists() and not (seed / CURSOR_NAME).exists():
+        assert time.monotonic() < deadline, f"no state seed arrived in {SEED_WAIT_SECONDS} s"
+        time.sleep(SEED_POLL_SECONDS)
+    return (seed / CURSOR_NAME).exists() and install(seed, paths)
 
 
 def snapshot(path: Path, generation: int) -> Path:

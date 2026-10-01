@@ -8,6 +8,7 @@ fail, so anything that launches where it should not breaks loudly.
 """
 
 import asyncio
+import json
 import threading
 import time
 from dataclasses import replace
@@ -474,16 +475,18 @@ def test_renting_records_the_instance_and_its_key_material(rented, manager, spec
     assert provider.instances["i-1"].owner == f"{spec.name}/t/m1"
 
 
-def test_a_dispatch_role_on_a_rented_machine_is_collected_over_ssh(rented, manager, task):
+def test_a_dispatch_role_on_a_rented_machine_keeps_its_data_local(rented, manager, task):
     """Dispatch reads results only from the slot's filesystem, so a rented
-    match-eval slot keeps them there for the ssh pull while the machine's other
-    slots deliver through the bucket."""
+    match-eval slot keeps its data there for the ssh pull while the machine's
+    generator delivers its chunks through the bucket. Records are local for
+    both: every ssh slot's are collected."""
     match = manager.add_ssh(_GpuRoles(), task, "match_eval", machine="m1", threads=None)
-    assert manager._slot_records_sink(_GpuRoles(), task, match) == "local"
+    assert manager._slot_data_sink(_GpuRoles(), task, match) == "local"
     gen = tasks.WorkerRecord(
         worker_id="g", role="generate", kind="ssh", desired_state="paused", machine="m1"
     )
-    assert manager._slot_records_sink(POSITION_EVAL_SPEC, task, gen) == "r2"
+    assert manager._slot_data_sink(POSITION_EVAL_SPEC, task, gen) == "r2"
+    assert manager._slot_records_sink(POSITION_EVAL_SPEC, task, gen) == "local"
 
 
 def _dispatch_task(train_finished: bool) -> tasks.TaskRecord:
@@ -1852,28 +1855,30 @@ def _all_ssh_task(tag="t"):
     return task
 
 
-def test_an_ssh_trainer_delivers_through_the_bucket_and_a_generator_does_not(manager):
-    """The sink is the role's, not the kind's: a trainer has inputs as well
-    as outputs and takes them from the bucket wherever it runs; a generator
-    on the same machine hands its chunks over the control link."""
+def test_an_ssh_trainer_reads_generations_from_the_bucket_and_sends_records_home(manager):
+    """A legacy-plane trainer's generations come through the bucket wherever
+    it runs; its records, exports and state pairs are collected over ssh,
+    like the generator's chunks on the same machine."""
     spec = workloads.get("position_eval")
     task = _all_ssh_task()
-    assert manager._slot_records_sink(spec, task, task.worker("g")) == "local"
-    assert manager._slot_records_sink(spec, task, task.worker("tr")) == "r2"
-    assert manager._bucket_trainer(spec, task)
-    assert not manager._bucket_trainer(spec, _train_task(kinds=("local",)))
+    assert manager._slot_data_sink(spec, task, task.worker("g")) == "local"
+    assert manager._slot_data_sink(spec, task, task.worker("tr")) == "r2"
+    for w in task.workers:
+        assert manager._slot_records_sink(spec, task, w) == "local"
+        assert manager._collected(spec, task, w)
 
 
 def test_a_generator_on_a_rented_machine_delivers_through_the_bucket(rented, manager, spec, task):
-    """A rented machine has a datacenter link to the bucket; collecting its
-    chunks over ssh would haul them to the controller and publish them back
-    up from a home uplink. A registered machine keeps the control link."""
+    """A rented machine's chunks go through the bucket until data moves over
+    ssh too; a registered machine keeps the control link. Records come home
+    over ssh from both."""
     provider, m = rented
     manager.add_machine(spec, task, "laptop", "u@h")
     on_rented = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
     on_laptop = manager.add_ssh(spec, task, "generate", machine="laptop", threads=None)
-    assert manager._slot_records_sink(spec, task, on_rented) == "r2"
-    assert manager._slot_records_sink(spec, task, on_laptop) == "local"
+    assert manager._slot_data_sink(spec, task, on_rented) == "r2"
+    assert manager._slot_data_sink(spec, task, on_laptop) == "local"
+    assert manager._slot_records_sink(spec, task, on_rented) == "local"
     assert manager._has_bucket_slots(spec, task)
 
 
@@ -1905,32 +1910,40 @@ def test_local_workers_run_niced_in_their_own_session(manager, spec, task, monke
     assert spawned["new_session"]  # out of reach of a Ctrl-C in the dashboard's terminal
 
 
-def test_an_all_ssh_task_with_a_trainer_gets_every_bucket_leg(manager, tmp_path, monkeypatch):
-    """No cloud slot anywhere: the watcher (with the trainer's outputs), the
-    scheduler's publish and mirror hooks and the controls push all exist for
-    the ssh trainer -- and none of them for a task whose slots are local."""
+def test_an_all_ssh_task_with_a_trainer_gets_its_bucket_legs(manager, tmp_path, monkeypatch):
+    """No cloud slot anywhere: the data watcher and the scheduler's publish and
+    mirror hooks exist for the ssh trainer, whose generations come through the
+    bucket; its controls go over ssh into its container -- and none of this
+    exists for a task whose slots are local."""
     spec = workloads.get("position_eval")
     monkeypatch.setattr(WorkerManager, "_ensure_sync", _REAL_ENSURE_SYNC)
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     spawned = []
     monkeypatch.setattr(
         workers_mod.subprocess,
         "Popen",
         lambda argv, **k: spawned.append(_FakeWatcher(argv)) or spawned[-1],
     )
-    rc = _Rclone()
-    monkeypatch.setattr(workers_mod, "rclone", rc)
+    pushed = []
+    monkeypatch.setattr(
+        workers_mod,
+        "push_file",
+        lambda machine, container, **kw: pushed.append((container, kw["rel_dest"])),
+    )
 
     task = _all_ssh_task()
     manager._ensure_sync(spec, task)
-    assert len(spawned) == 1 and "--trainer-outputs" in spawned[0].argv
+    assert len(spawned) == 1
     assert manager._make_publish(spec, task) is not None
     assert manager._make_mirror(spec, task) is not None
     path = manager.tasks.paths(spec, "t").controls_path
     path.parent.mkdir(parents=True, exist_ok=True)  # the watcher's log dir made it
     path.write_text("{}")
-    manager._push_controls(spec, task)
-    assert rc.calls == [("copyto", str(path), "r2:b/position_eval/t/controls.json")]
+    status = [{"worker_id": w.worker_id, "ssh_probe": "running"} for w in task.workers]
+    manager._push_controls(spec, task, status)
+    manager._push_controls(spec, task, status)  # unchanged: not pushed again
+    assert pushed == [("scz-position_eval-t-tr", "controls.json")]
 
     local = tasks.TaskRecord(workload="position_eval", tag="u", params={}, created_at=0.0)
     local.workers.append(
@@ -1942,7 +1955,7 @@ def test_an_all_ssh_task_with_a_trainer_gets_every_bucket_leg(manager, tmp_path,
     assert manager._make_mirror(spec, local) is None
 
 
-def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
+def test_an_ssh_trainers_container_runs_the_torch_image_with_local_records(
     manager, tmp_path, monkeypatch
 ):
     spec = workloads.get("position_eval")
@@ -1964,9 +1977,10 @@ def test_an_ssh_trainers_container_runs_the_torch_image_on_the_r2_sink(
     for w in task.workers:
         manager._run_ssh_container(spec, task, w)
     by_role = {k.rsplit("-", 1)[-1]: v for k, v in envs.items()}
-    # The data sink matches the records sink, so it is left unset: a bundle
+    # Records are local for both; the trainer's generations come through the
+    # bucket. A data sink matching the records sink is left unset: a bundle
     # predating SCZ_DATA_SINK would refuse to start on it.
-    assert by_role["tr"] == ("repo/worker:latest-torch", "r2", True, None)
+    assert by_role["tr"] == ("repo/worker:latest-torch", "local", True, "r2")
     assert by_role["g"] == ("repo/worker", "local", False, None)
 
 
@@ -1993,33 +2007,27 @@ def test_a_data_sink_differing_from_the_records_sink_reaches_the_container(
     for w in task.workers:
         manager._run_ssh_container(spec, task, w)
     by_role = {k.rsplit("-", 1)[-1]: v for k, v in envs.items()}
-    assert by_role["tr"] == ("r2", None)
+    assert by_role["tr"] == ("local", "r2")
     assert by_role["g"] == ("local", "r2")
 
 
-def test_reconcile_collects_from_the_generator_but_not_the_trainer(manager, tmp_path, monkeypatch):
-    """The trainer's outputs are in the bucket, not its container; pulling
-    from it would find nothing, and a count of "never collected from" would
-    stand in the Remove dialog for a slot that holds nothing by design."""
+def test_reconcile_collects_from_every_ssh_slot(manager, tmp_path, monkeypatch):
+    """A trainer's outputs are in its container now, like a generator's
+    chunks, and both are collected over ssh."""
     spec = workloads.get("position_eval")
     task = _all_ssh_task()
     monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
     monkeypatch.setattr(_FakeSshMachine, "state", "running")
     collected = []
     monkeypatch.setattr(
-        WorkerManager, "_collect_ssh", lambda self, spec, task, w: collected.append(w.worker_id)
+        WorkerManager, "_collect_step", lambda self, spec, task, w: collected.append(w.worker_id)
     )
     monkeypatch.setattr(WorkerManager, "_reconcile_worker", lambda *a, **k: None)
     monkeypatch.setattr(WorkerManager, "_ensure_sync", lambda *a: None)
     monkeypatch.setattr(WorkerManager, "_push_controls", lambda *a: None)
     monkeypatch.setattr(manager, "all_tasks", lambda: iter([(spec, task)]))
     asyncio.run(manager.reconcile())
-    assert collected == ["g"]
-    (_, tr) = manager.worker_status(spec, task)
-    assert tr["undelivered"] == 0
-
-
-# ---- out-of-tag inputs (RoleSpec.inputs) ----------------------------------------
+    assert collected == ["g", "tr"]
 
 
 def _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink: str):
@@ -2037,24 +2045,6 @@ def _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink: str):
     monkeypatch.setattr(WorkerManager, "_bundle_for_start", lambda self, *a, **k: "b1")
     w = _starting_ssh_slot(manager, spec, task, monkeypatch)
     return w, src
-
-
-def test_a_bucket_slots_inputs_are_staged_in_the_bucket_before_it_starts(
-    manager, spec, task, monkeypatch, tmp_path
-):
-    rc = _Rclone()
-    monkeypatch.setattr(workers_mod, "rclone", rc)
-    pushed = []
-    monkeypatch.setattr(workers_mod, "push_file", lambda *a, **k: pushed.append(k))
-    w, src = _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path, sink="r2")
-    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)  # a bucket to stage in
-
-    manager._run_ssh_container(spec, task, w)
-    assert rc.calls == [
-        ("copyto", "--size-only", str(src), f"r2:b/{spec.name}/t/inputs/teacher.onnx")
-    ]
-    assert pushed == []
-    assert [op for op, _ in _RecordingSshMachine.ops] == ["pull", "run"]
 
 
 def test_an_own_machine_slots_inputs_are_pushed_into_its_container(
@@ -2315,9 +2305,9 @@ def test_a_rented_data_homes_slots_deliver_by_machine(manager, monkeypatch):
         for w in task.workers
     }
     assert sinks == {
-        "tr": ("home", "r2", False),
-        "g1": ("home", "r2", False),
-        "g2": ("r2", "r2", False),
+        "tr": ("home", "local", True),
+        "g1": ("home", "local", True),
+        "g2": ("r2", "local", True),
         "gl": ("r2", "local", None),
         "me": ("local", "local", True),
     }
@@ -2365,9 +2355,10 @@ def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
             manager._run_ssh_container(spec, task, w)
     root = str(spec.paths("t", workers_mod.DEFAULT_MOUNT_ROOT).root)
     vol = "scz-position_eval-t-data"
-    assert runs["tr"] == ((vol, root), "local", "home")
-    assert runs["g1"] == ((vol, root), "local", None)
-    assert runs["g2"] == (None, None, None)  # data and records both the bucket
+    # SCZ_DATA_SINK=local matches the records sink, so it is left unset.
+    assert runs["tr"] == ((vol, root), None, "home")
+    assert runs["g1"] == ((vol, root), None, None)
+    assert runs["g2"] == (None, "r2", None)  # away from the home: bucket staging
     assert runs["me"] == (None, None, None)
     assert set(volumes) == {vol}
 
@@ -2419,27 +2410,24 @@ def test_moving_the_trainer_rehomes_the_other_slots(manager, monkeypatch):
     assert manager._slot_data_sink(spec, task, task.worker("gl")) == "local"  # now at home
 
 
-def test_removing_a_bucket_trainer_pulls_its_last_outputs_first(manager, monkeypatch):
+def test_removing_a_stopped_trainer_takes_its_final_state_pair(manager, monkeypatch):
+    """A trainer's last flush, after the last collection, holds its final state
+    pair; removal sweeps it, and installs it under the cursor rule. A
+    generator's backlog is the Remove dialog's to warn about."""
     spec = workloads.get("position_eval")
     task = _rented_home_task(manager, monkeypatch)
     manager.tasks.save(spec, task)
-    monkeypatch.setattr(WorkerManager, "_refresh_probe", lambda self, spec, task, w: "missing")
+    monkeypatch.setattr(WorkerManager, "_refresh_probe", lambda self, spec, task, w: "stopped")
     monkeypatch.setattr(WorkerManager, "_machine_gone", lambda self, spec, task, w: False)
-    synced = []
+    machine = SimpleNamespace(remove_container=lambda name: None, remove_volume=lambda name: None)
+    monkeypatch.setattr(WorkerManager, "_ssh_machine", lambda self, task, w: machine)
+    swept = []
     monkeypatch.setattr(
-        WorkerManager,
-        "sync_once",
-        lambda self, spec, task: synced.append([w.worker_id for w in task.workers]),
-    )
-    monkeypatch.setattr(
-        WorkerManager,
-        "_ssh_machine",
-        lambda self, task, w: SimpleNamespace(remove_volume=lambda name: None),
+        WorkerManager, "_sweep_ssh", lambda self, m, spec, task, w: swept.append(w.worker_id)
     )
     manager.remove_worker(spec, task, "g2")
-    assert synced == []  # only a trainer's removal needs it
     manager.remove_worker(spec, task, "tr")
-    assert synced and "tr" in synced[0]  # pulled while the slot still says what to pull
+    assert swept == ["tr"]
 
 
 def test_a_rented_data_home_cannot_go_back_to_legacy(manager, monkeypatch):
@@ -2468,7 +2456,7 @@ def test_switching_recreates_the_ssh_containers_on_a_fresh_bundle(manager, monke
         "_ssh_machine",
         lambda self, task, w: SimpleNamespace(remove_container=lambda name: removed.append(name)),
     )
-    monkeypatch.setattr(workers_mod, "sweep_stopped", lambda machine, **k: swept.append(k))
+    monkeypatch.setattr(workers_mod, "sweep_stopped", lambda machine, **k: swept.append(k) or [])
     monkeypatch.setattr(
         WorkerManager, "_transfer_target", lambda self, spec, task, w: {"w": w.worker_id}
     )
@@ -2479,7 +2467,7 @@ def test_switching_recreates_the_ssh_containers_on_a_fresh_bundle(manager, monke
         "me",
         "tr",
     ]  # m2's machine is gone
-    assert [s["w"] for s in swept] == ["me"]  # only a collected slot holds output
+    assert [s["w"] for s in swept] == ["tr", "g1", "me"]  # every collected container
     assert task.bundle_id is None and task.data_plane == "home"
     assert not any(w.launched for w in task.workers if w.machine == "m1")
 
@@ -2510,17 +2498,24 @@ def test_only_a_generational_workload_has_a_data_plane_to_move(manager, spec, ta
         manager.set_data_plane(spec, task, "home")
 
 
-def test_a_data_home_gets_no_bucket_mirror_publish_or_staging_pull(manager, monkeypatch):
+def test_a_data_home_gets_no_bucket_mirror_publish_or_sync_watcher(manager, monkeypatch):
     """The data home moves bucket chunks in itself; the controller's copy of
     them, and its re-upload for a remote trainer, would be a second data plane."""
     spec = workloads.get("position_eval")
     monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(WorkerManager, "_ensure_sync", _REAL_ENSURE_SYNC)
+    spawned = []
+    monkeypatch.setattr(
+        workers_mod.subprocess,
+        "Popen",
+        lambda argv, **k: spawned.append(argv) or _FakeWatcher(argv),
+    )
     task = _all_ssh_task()
-    assert "--no-data" not in manager.cloud_sync_argv(spec, task)
     task.data_plane = "home"
     assert manager._make_mirror(spec, task) is None
     assert manager._make_publish(spec, task) is None
-    assert "--no-data" in manager.cloud_sync_argv(spec, task)
+    manager._ensure_sync(spec, task)
+    assert spawned == []
 
 
 def test_a_data_homes_trainer_is_told_so_and_given_the_bucket(manager, monkeypatch, tmp_path):
@@ -2568,3 +2563,117 @@ def test_a_paused_slot_reads_paused_even_while_its_role_is_gated(manager):
     task.worker("g").desired_state = "paused"
     rows = {r["worker_id"]: r for r in manager.worker_status(spec, task, observe=False)}
     assert rows["g"]["state"] == "paused" and "gate_reason" not in rows["g"]
+
+
+# ---- records and state over ssh ------------------------------------------------------
+
+
+def test_a_new_trainer_container_is_seeded_with_the_controllers_state(manager, monkeypatch):
+    """The controller's checkpoint and cursor are the state a trainer anywhere
+    resumes from; they go in right after the container is created, the cursor
+    last as the pair's commit marker."""
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    task.bundle_id, task.bundle_archs = "b1", ["znver3"]
+    paths = manager.tasks.paths(spec, "t")
+    paths.rolling_checkpoint.parent.mkdir(parents=True)
+    paths.rolling_checkpoint.write_text("w")
+    paths.train_state_path.write_text('{"rows_trained": 5}')
+    envs, pushed = {}, []
+
+    class _Recording(_FakeSshMachine):
+        def pull_image(self, image):
+            pass
+
+        def run_container(self, name, image, env, *, gpus=False, volume=None):
+            envs[name.rsplit("-", 1)[-1]] = env.get("SCZ_STATE_SEED")
+
+    monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    monkeypatch.setattr(
+        workers_mod, "push_file", lambda m, c, **kw: pushed.append((c, kw["rel_dest"]))
+    )
+    for w in task.workers:
+        manager._run_ssh_container(spec, task, w)
+    assert envs == {"tr": "1", "g": None}
+    assert pushed == [
+        ("scz-position_eval-t-tr", ".seed/model.pt"),
+        ("scz-position_eval-t-tr", ".seed/train_state.json"),
+    ]
+
+
+def test_a_trainers_collection_takes_its_outputs_and_installs_pairs(manager, monkeypatch):
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    target = manager._transfer_target(spec, task, task.worker("tr"))
+    assert target["data_dirs"][-2:] == ["models", "records"]
+    assert target["pair_dirs"] == {"state": "train_state.json"}
+    assert "pair_dirs" not in manager._transfer_target(spec, task, task.worker("g"))
+
+    paths = manager.tasks.paths(spec, "t")
+
+    def pull(machine, **target):  # a pull that brought a pair home
+        pair = paths.root / "state" / "gen_000007"
+        pair.mkdir(parents=True)
+        (pair / "model.pt").write_text("w7")
+        (pair / "train_state.json").write_text('{"rows_trained": 700}')
+        return SimpleNamespace(pulled=["state/gen_000007/model.pt"], remaining=0)
+
+    monkeypatch.setattr(workers_mod, "pull_results", pull)
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    manager._collect_ssh(spec, task, task.worker("tr"))
+    assert paths.rolling_checkpoint.read_text() == "w7"
+    assert json.loads(paths.train_state_path.read_text())["rows_trained"] == 700
+
+
+def test_a_data_homes_slots_leave_its_staging_alone(manager, monkeypatch):
+    """The home's scheduler takes from its staging; a collection must never
+    pull those chunks away, from the trainer or from a colocated generator."""
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    assert manager._transfer_target(spec, task, task.worker("tr"))["data_dirs"] == [
+        "models",
+        "records",
+    ]
+    assert manager._transfer_target(spec, task, task.worker("g1"))["data_dirs"] == []
+    assert manager._transfer_target(spec, task, task.worker("g2"))["data_dirs"] != []
+
+
+def test_a_slow_pull_runs_off_the_blocking_thread_and_is_recorded_when_done(manager, monkeypatch):
+    """A trainer's checkpoint can take minutes over a home link; the pass starts
+    it on the tag's transfer thread, skips the slot while it runs, and records
+    its count on a later pass."""
+    spec = workloads.get("position_eval")
+    task = _all_ssh_task()
+    w = task.worker("tr")
+    release, threads = threading.Event(), []
+
+    def slow_pull(self, spec, task, w):
+        threads.append(threading.current_thread().name)
+        release.wait(timeout=5)
+        return SimpleNamespace(remaining=3, pulled=[])
+
+    monkeypatch.setattr(WorkerManager, "_pull_ssh", slow_pull)
+    saved = []
+    monkeypatch.setattr(manager.tasks, "save", lambda spec, task: saved.append(w.undelivered))
+    key = _key_of(spec, task, w)
+    manager._collect_step(spec, task, w)  # starts it and returns at once
+    first = manager._collecting[key]
+    manager._collect_step(spec, task, w)  # still running: no second pull
+    assert manager._collecting[key] is first and w.undelivered is None
+    release.set()
+    first.result(timeout=5)
+    manager._collect_step(spec, task, w)  # records it, then starts the next
+    assert saved == [3]
+    manager._collecting[key].result(timeout=5)
+    manager._collect_step(spec, task, w)
+    assert w.undelivered is None  # a third pull is in flight again
+    manager._collecting[key].result(timeout=5)
+    assert len(threads) >= 2 and all(n.startswith("scz-transfer") for n in threads)
+    assert threading.current_thread().name not in threads
+
+
+def _key_of(spec, task, w):
+    return workers_mod._key(spec, task.tag, w.worker_id)

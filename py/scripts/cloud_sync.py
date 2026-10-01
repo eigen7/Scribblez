@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 """Pull a tag's cloud-delivered data from the bucket into the local tag dir.
 
-Copies the prefixes remote workers write to: the workload's sync_data_dirs
-(e.g. kill_test's slogs/, the training workloads' staging/) plus the workers'
-stats/ and params/ records. Files merge with anything generated locally under
-the same tag; output filenames carry per-worker suffixes, so they never
-collide. With --trainer-outputs it also pulls what a remotely running trainer
-delivers (scribblez/paths.py TRAINER_OUTPUT_*): records and exports, and its
-newest checkpoint and cursor, which are installed only if they beat this
-machine's (the cursor rule, generational/state_pair.py). It never uploads, and it deletes
-local files only in the mirrored export dir (MIRRORED_OUTPUT_DIRS); the
-bucket stays the durable archive.
+Copies the prefixes rented generators deliver to: the workload's
+sync_data_dirs (e.g. kill_test's slogs/, the training workloads' staging/).
+Files merge with anything generated locally under the same tag; output
+filenames carry per-worker suffixes, so they never collide. Workers' records
+and trainers' outputs do not come this way: the controller collects them over
+ssh (WorkerManager._transfer_target). It never uploads or deletes; the bucket
+copy stays until its generator's data reaches the controller another way.
 
-Prefixes this host itself writes to the bucket, such as the generation dirs the
-scheduler publishes, are not pulled: the local mount already holds them. With
---no-data it skips the sync_data_dirs too, for a tag whose data home ingests
-bucket staging itself (generational/data_home.py): a copy here would bring back
-chunks the data home has already moved into generations.
+A tag whose data home ingests bucket staging itself (generational/data_home.py)
+gets no watcher at all (WorkerManager._ensure_sync): a copy here would bring
+back chunks the data home has already moved into generations.
 
 Usage:
     ./py/scripts/cloud_sync.py -t hello            one sync
@@ -29,82 +24,21 @@ import time
 
 from cloud.credentials import load_credentials
 from cloud.r2 import bucket_path, rclone
-from cloud.sinks import R2Sink
 from scribblez import workloads
-from scribblez.generational import state_pair
-from scribblez.paths import (
-    TRAINER_OUTPUT_DIRS,
-    TRAINER_OUTPUT_FILES,
-    TRAINER_OUTPUT_IMMUTABLE,
-    TagPaths,
-    add_mount_root_argument,
-)
+from scribblez.paths import TagPaths, add_mount_root_argument
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 
-def _targets(spec: workloads.WorkloadSpec, paths: TagPaths, trainer_outputs: bool, data: bool):
-    """(bucket sub-prefix, local dir, extra rclone flags) for every directory
-    a sync pulls. Prefixes whose objects never change are compared by size
-    alone: on an S3-style remote the listing carries no modtime, so the
-    default comparison would ask for every unchanged export one by one."""
-    targets = [(sub, paths.data_dir / sub, ()) for sub in spec.sync_data_dirs] if data else []
-    targets += [("stats", paths.stats_dir, ()), ("params", paths.root / "params", ())]
-    if trainer_outputs:
-        targets += [
-            (sub, paths.root / sub, ("--size-only",) if sub in TRAINER_OUTPUT_IMMUTABLE else ())
-            for sub in TRAINER_OUTPUT_DIRS
-        ]
-    return targets
-
-
-# Trainer-output directories the local copy MIRRORS rather than accumulates:
-# a trainer that prunes its exports (move_set_eval's retention) deletes them
-# from the bucket, and a copy that only ever added would keep every one it
-# had pulled before the prune. rclone sync deletes locally what the bucket
-# no longer has; the directory is the trainer's alone, so nothing else's is
-# at risk.
-MIRRORED_OUTPUT_DIRS = ("models",)
-
-
-def _pull_file(r2, spec: workloads.WorkloadSpec, paths: TagPaths, name: str) -> int:
-    """Pull one root-level file the trainer rewrites in place, if the bucket
-    has it yet (a trainer that has not checkpointed has published nothing)."""
-    src = bucket_path(r2, spec.name, paths.tag, name)
-    if not rclone(r2, "lsf", src, capture=True).stdout.strip():
-        return 0
-    return rclone(r2, "copyto", src, str(paths.root / name)).returncode
-
-
-def sync_once(
-    r2,
-    spec: workloads.WorkloadSpec,
-    paths: TagPaths,
-    trainer_outputs: bool = False,
-    data: bool = True,
-) -> int:
-    tag = paths.tag
-    targets = _targets(spec, paths, trainer_outputs, data)
-    for sub, dest, flags in targets:
+def sync_once(r2, spec: workloads.WorkloadSpec, paths: TagPaths) -> int:
+    for sub in spec.sync_data_dirs:
+        dest = paths.data_dir / sub
         dest.mkdir(parents=True, exist_ok=True)
-        verb = "sync" if trainer_outputs and sub in MIRRORED_OUTPUT_DIRS else "copy"
-        res = rclone(r2, verb, *flags, bucket_path(r2, spec.name, tag, sub), str(dest))
+        res = rclone(r2, "copy", bucket_path(r2, spec.name, paths.tag, sub), str(dest))
         if res.returncode != 0:
             print(f"sync of {sub}/ failed", file=sys.stderr)
             return res.returncode
-    if trainer_outputs:
-        for name in TRAINER_OUTPUT_FILES:
-            rc = _pull_file(r2, spec, paths, name)
-            if rc != 0:
-                print(f"sync of {name} failed", file=sys.stderr)
-                return rc
-        try:
-            state_pair.restore(paths, R2Sink(r2, spec.name, tag, paths.root))
-        except AssertionError as e:  # a failed bucket call
-            print(f"sync of the checkpoint and cursor failed: {e}", file=sys.stderr)
-            return 1
     counts = ", ".join(
-        f"{sub}: {sum(1 for _ in dest.iterdir()) if dest.is_dir() else 0}"
-        for sub, dest, _ in targets
+        f"{sub}: {sum(1 for _ in (paths.data_dir / sub).iterdir())}" for sub in spec.sync_data_dirs
     )
     print(f"{paths.root}: {counts}")
     return 0
@@ -122,24 +56,12 @@ def main() -> int:
     add_mount_root_argument(p)
     p.add_argument("--watch", action="store_true", help="keep syncing until Ctrl-C")
     p.add_argument("--interval", type=int, default=60, help="seconds between --watch syncs")
-    p.add_argument(
-        "--trainer-outputs",
-        action="store_true",
-        help="also pull what a trainer running elsewhere delivers "
-        "(records, exports, checkpoint, cursor)",
-    )
-    p.add_argument(
-        "--no-data",
-        action="store_true",
-        help="skip the workload's data dirs, which a data home ingests itself",
-    )
     args = p.parse_args()
 
     spec = workloads.get(args.workload)
     r2 = load_credentials().r2
     while True:
-        paths = spec.paths(args.tag, args.mount_root)
-        rc = sync_once(r2, spec, paths, args.trainer_outputs, data=not args.no_data)
+        rc = sync_once(r2, spec, spec.paths(args.tag, args.mount_root))
         if rc != 0 or not args.watch:
             return rc
         try:

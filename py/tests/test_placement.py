@@ -52,42 +52,42 @@ def test_gpu_memory_decides_eligibility():
     L4 can, and so can the 16 GiB laptop, but not a 12.3 GiB one."""
     params = CAMPAIGN
     assert "needs 14.0 GiB" in placement.refusal(
-        SPEC, params, None, _entry(), _machine("asus", gpu_gb=4.0)
+        SPEC, params, _entry(), _machine("asus", gpu_gb=4.0)
     )
-    assert placement.refusal(SPEC, params, None, _entry(), _machine("l4")) is None
+    assert placement.refusal(SPEC, params, _entry(), _machine("l4")) is None
     local = _machine("localhost", "local", gpu_gb=16.0)
-    assert placement.refusal(SPEC, params, None, _entry(), local) is None
+    assert placement.refusal(SPEC, params, _entry(), local) is None
     small = _machine("localhost", "local", gpu_gb=12.3)
-    assert "has 12.3" in placement.refusal(SPEC, params, None, _entry(), small)
+    assert "has 12.3" in placement.refusal(SPEC, params, _entry(), small)
 
 
 def test_an_unmeasured_config_waits_for_an_override():
     params = replace(CAMPAIGN, batch_size=512)
-    assert "no GPU memory figure" in placement.refusal(SPEC, params, None, _entry(), _machine("l4"))
+    assert "no GPU memory figure" in placement.refusal(SPEC, params, _entry(), _machine("l4"))
     override = _entry(memory_override_gb=18.0)
-    assert placement.refusal(SPEC, params, None, override, _machine("l4")) is None
+    assert placement.refusal(SPEC, params, override, _machine("l4")) is None
 
 
 def test_match_eval_shares_the_gpu():
     """Trainer and match eval sum on one GPU: 16.6 GiB fits an L4 but not the
     16 GiB laptop, which fits the trainer alone."""
     params = replace(CAMPAIGN, match_every_generations=5)
-    assert placement.refusal(SPEC, params, None, _entry(), _machine("l4")) is None
+    assert placement.refusal(SPEC, params, _entry(), _machine("l4")) is None
     laptop = _machine("localhost", "local", gpu_gb=16.0)
-    assert "needs 16.6 GiB" in placement.refusal(SPEC, params, None, _entry(), laptop)
+    assert "needs 16.6 GiB" in placement.refusal(SPEC, params, _entry(), laptop)
 
 
 def test_named_machines_and_bundles():
     assert "not among" in placement.refusal(
-        SPEC, CAMPAIGN, None, _entry(machines=["other"]), _machine("l4")
+        SPEC, CAMPAIGN, _entry(machines=["other"]), _machine("l4")
     )
     building = _entry(bundle=BUNDLE_BUILDING)
-    assert "bundle is building" in placement.refusal(SPEC, CAMPAIGN, None, building, _machine("l4"))
+    assert "bundle is building" in placement.refusal(SPEC, CAMPAIGN, building, _machine("l4"))
     l4 = _machine("l4")
-    assert placement.refusal(SPEC, CAMPAIGN, None, building, l4, need_bundle=False) is None
+    assert placement.refusal(SPEC, CAMPAIGN, building, l4, need_bundle=False) is None
     # Local slots run the checkout, so localhost needs no bundle.
     local = _machine("localhost", "local", gpu_gb=16.0)
-    assert placement.refusal(SPEC, CAMPAIGN, None, building, local) is None
+    assert placement.refusal(SPEC, CAMPAIGN, building, local) is None
 
 
 def test_matching_moves_an_earlier_tag_so_a_later_one_starts():
@@ -113,33 +113,14 @@ def test_end_condition():
     assert not placement.has_end_condition(SPEC, replace(CAMPAIGN, max_rows=0))
 
 
-def test_a_tag_goes_only_where_its_training_state_is():
-    """State only on localhost (a local trainer's): an ssh machine would start
-    the trainer over and then overwrite the local checkpoint. State in the
-    bucket, or none yet: anywhere."""
-    local = _machine("localhost", "local", gpu_gb=16.0)
-    rental = _machine("l4")
-    home = placement.HOME_LOCAL
-    assert "training state is only on localhost" in placement.refusal(
-        SPEC, CAMPAIGN, home, _entry(), rental
-    )
-    assert placement.refusal(SPEC, CAMPAIGN, home, _entry(), local) is None
-    for home in (placement.HOME_BUCKET, None):
-        assert placement.refusal(SPEC, CAMPAIGN, home, _entry(), rental) is None
-        assert placement.refusal(SPEC, CAMPAIGN, home, _entry(), local) is None
-
-
-def test_a_data_home_tags_state_is_where_its_trainer_delivered(tmp_path):
-    """A data home on an ssh machine uploads its generations and checkpoint,
-    so its state is in the bucket like a legacy remote trainer's; one on
-    localhost has it only here."""
+def test_a_trained_tag_may_go_anywhere(tmp_path):
+    """Its state is on the controller, which seeds a trainer on any machine
+    (state_pair), so where it trained before refuses nothing."""
     task = tasks.TaskRecord(workload="position_eval", tag="t", params={}, created_at=0.0)
-    task.data_plane = "home"
     paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
-    assert placement.state_home(paths, task) is None  # nothing trained: anywhere
+    assert placement.state_home(paths, task) is None  # nothing trained yet
     paths.train_state_path.parent.mkdir(parents=True)
     paths.train_state_path.write_text('{"rows_trained": 5}')
-    task.trainer_sink = "r2"
-    assert placement.state_home(paths, task) == placement.HOME_BUCKET
-    task.trainer_sink = "local"
     assert placement.state_home(paths, task) == placement.HOME_LOCAL
+    for m in (_machine("localhost", "local", gpu_gb=16.0), _machine("l4")):
+        assert placement.refusal(SPEC, CAMPAIGN, _entry(), m) is None

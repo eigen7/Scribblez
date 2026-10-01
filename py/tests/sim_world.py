@@ -182,11 +182,15 @@ class WriterThread:
 @dataclasses.dataclass
 class Worker:
     """What a simulated worker is doing wherever it runs: its role, tag, and
-    where it delivers ("local": the tag dir; "r2": the bucket)."""
+    where it delivers ("local": the tag dir; "r2": the bucket) its data
+    (generations) and its records (the trainer's cursor). An ssh worker's
+    "local" stands for its container's tree, collected here; the simulation
+    writes straight to the tag dir."""
 
     role: str
     tag: str
-    sink: str
+    data_sink: str
+    records_sink: str
     max_rows: int
 
 
@@ -198,7 +202,7 @@ class FakeProc:
         self.pid = pid
         self.env = env
         self.worker = worker
-        self.watcher = watcher  # (tag, trainer_outputs) for a cloud_sync watcher
+        self.watcher = watcher  # the tag, for a cloud_sync watcher
         self.returncode = None
         self._exit_pending: int | None = None
 
@@ -325,7 +329,7 @@ class World:
     def run(self, argv, check=False, **kwargs):
         if any("cloud_sync" in str(a) for a in argv):
             tag = argv[argv.index("-t") + 1]
-            self._sync_down(tag, "--trainer-outputs" in argv)
+            self._sync_down(tag)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     def popen(self, argv, env=None, **kwargs) -> FakeProc:
@@ -334,7 +338,7 @@ class World:
         self._next_pid += 1
         if any("cloud_sync" in str(a) for a in argv):
             tag = argv[argv.index("-t") + 1]
-            proc = FakeProc(self, pid, env, None, watcher=(tag, "--trainer-outputs" in argv))
+            proc = FakeProc(self, pid, env, None, watcher=tag)
         else:
             proc = FakeProc(self, pid, env, _worker_from_env(env, "local"))
         self.procs[pid] = proc
@@ -403,7 +407,7 @@ class World:
             if proc._exit_pending is not None:
                 proc.exit(proc._exit_pending)
             elif proc.watcher is not None:
-                self._sync_down(*proc.watcher)
+                self._sync_down(proc.watcher)
             elif proc.worker is not None:
                 code = self._work(proc.worker)
                 if code is not None:
@@ -459,13 +463,17 @@ class World:
         return self.mount_root / "tags" / WORKLOAD / tag
 
     def _read(self, w: Worker, rel: str) -> str | None:
-        if w.sink == "r2":
+        if self._sink(w, rel) == "r2":
             return self.bucket.get(f"{w.tag}/{rel}")
         path = self._tag_root(w.tag) / rel
         return path.read_text() if path.is_file() else None
 
+    @staticmethod
+    def _sink(w: Worker, rel: str) -> str:
+        return w.data_sink if rel.startswith("data/") else w.records_sink
+
     def _write(self, w: Worker, rel: str, text: str):
-        if w.sink == "r2":
+        if self._sink(w, rel) == "r2":
             self.bucket[f"{w.tag}/{rel}"] = text
             return
         path = self._tag_root(w.tag) / rel
@@ -485,11 +493,9 @@ class World:
         self._write(w, "train_state.json", json.dumps(state))
         return None
 
-    def _sync_down(self, tag: str, trainer_outputs: bool):
-        """A cloud_sync watcher's pass: pull what bucket slots delivered, the
-        trainer's cursor included (as the real one does, whatever is local)."""
-        rels = ["data/generations"] + (["train_state.json"] if trainer_outputs else [])
-        for rel in rels:
+    def _sync_down(self, tag: str):
+        """A cloud_sync watcher's pass: pull the data bucket slots delivered."""
+        for rel in ["data/generations"]:
             text = self.bucket.get(f"{tag}/{rel}")
             if text is not None:
                 path = self._tag_root(tag) / rel
@@ -506,7 +512,8 @@ def _worker_from_env(env: dict, default_sink: str) -> Worker | None:
     return Worker(
         role=env["SCZ_ROLE"],
         tag=env["SCZ_TAG"],
-        sink=env.get("SCZ_SINK", default_sink),
+        data_sink=env.get("SCZ_DATA_SINK", env.get("SCZ_SINK", default_sink)),
+        records_sink=env.get("SCZ_SINK", default_sink),
         max_rows=int(env.get("SCZ_MAX_ROWS", "0") or 0),
     )
 
@@ -628,7 +635,6 @@ def install(monkeypatch, world: World):
     for mod, name, fn in (
         (workers_mod, "pull_results", pull_results),
         (workers_mod, "sweep_stopped", sweep_stopped),
-        (tq_mod, "sweep_stopped", sweep_stopped),
         (workers_mod, "push_file", push_file),
         (workers_mod, "rclone", fake_rclone),
     ):
@@ -652,3 +658,4 @@ def wire_manager(monkeypatch, manager, world: World):
     manager._blocking = WriterThread()
     for name in ("_builds", "_uploads"):
         setattr(manager, name, SyncExecutor())
+    manager._new_transfer_pool = SyncExecutor

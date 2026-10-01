@@ -27,12 +27,13 @@ so a local-only dashboard works without them.
 
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
@@ -57,6 +58,7 @@ from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tasks
 from scribblez.dashboard.control_store import IMPORTED_JSON, ControlStore
 from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
+from scribblez.generational import state_pair
 from scribblez.generational.lifecycle import MANIFEST_NAME
 from scribblez.generational.scheduler import (
     DATA_PLANE_HOME,
@@ -65,7 +67,13 @@ from scribblez.generational.scheduler import (
     TICK_FOR_TASK,
 )
 from scribblez.hardware import default_thread_count
-from scribblez.paths import CONTROLS_REL, DEFAULT_MOUNT_ROOT, REPO_ROOT
+from scribblez.paths import (
+    CONTROLS_REL,
+    DEFAULT_MOUNT_ROOT,
+    REPO_ROOT,
+    SCHEDULER_STATE_REL,
+    TRAINER_OUTPUT_DIRS,
+)
 from scribblez.workloads.base import SchedulerHooks
 
 CLOUD_SYNC = REPO_ROOT / "py" / "scripts" / "cloud_sync.py"
@@ -560,6 +568,16 @@ class WorkerManager:
         self._publishing: dict[tuple[str, str], Future] = {}
         # Task key -> its first-use bundle build in flight (_bundle_for_start).
         self._pending_builds: dict[str, Future] = {}
+        # Where collections run (_collect_step), one thread per tag: a trainer's
+        # exports and checkpoints are tens to hundreds of megabytes, which on the
+        # blocking thread would hold every other tag's pass behind them, and one
+        # tag's slow link must not hold up another's.
+        self._transfer_pools: dict[str, Executor] = {}
+        self._new_transfer_pool = lambda: ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="scz-transfer"
+        )
+        # Slot key -> its collection in flight, or done and not yet recorded.
+        self._collecting: dict[str, Future] = {}
         # Per-file digests behind source_hash, so the drift check every status
         # poll makes costs a stat walk rather than 20 MB of hashing.
         self._source_digests: dict = {}
@@ -707,7 +725,8 @@ class WorkerManager:
         slots, pulling what those slots deliver: a watcher whose argv no
         longer matches (a trainer slot appeared) is replaced."""
         key = _key(spec, task.tag)
-        has_bucket = self._has_bucket_slots(spec, task)
+        # A data home ingests bucket staging itself, by moving each chunk.
+        has_bucket = task.data_plane != DATA_PLANE_HOME and self._has_bucket_slots(spec, task)
         argv = self.cloud_sync_argv(spec, task, "--watch", "--interval", str(SYNC_INTERVAL_SECONDS))
         entry = self._sync.get(key)
         if entry is not None and (
@@ -727,37 +746,31 @@ class WorkerManager:
         (the tag queue's drain, before a lease's slots are removed)."""
         subprocess.run(self.cloud_sync_argv(spec, task), check=True, capture_output=True, text=True)
 
-    def _push_controls(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord):
-        """Copy the operator's controls file to the bucket when it has changed,
-        for a trainer that runs through the bucket and reads it there
-        (generational/records.py)."""
-        if not self._bucket_trainer(spec, task):
-            return
+    def _push_controls(self, spec, task: tasks.TaskRecord, status: list[dict]):
+        """Copy the operator's controls file into each running ssh trainer's
+        container when it has changed since that container last got it; the
+        trainer reads it from its own tree each generation
+        (generational/records.py). A local trainer reads the controller's."""
         path = self.tasks.paths(spec, task.tag).controls_path
         try:
             stamp = path.stat().st_mtime_ns
         except FileNotFoundError:
             return
-        key = _key(spec, task.tag)
-        if self._controls_pushed.get(key) == stamp:
-            return
-        creds = self._creds()
-        dest = bucket_path(creds.r2, spec.name, task.tag, CONTROLS_REL)
-        res = rclone(creds.r2, "copyto", str(path), dest, capture=True)
-        assert res.returncode == 0, f"pushing {CONTROLS_REL} failed: {res.stderr}"
-        self._controls_pushed[key] = stamp
-
-    def _stage_inputs_in_bucket(self, r2, spec, tag: str, inputs: dict[str, Path]):
-        """Upload a bucket-delivering slot's out-of-tag inputs (RoleSpec.inputs)
-        under the tag's prefix before its container is created. A copy already
-        there at the same size is skipped."""
-        for rel, src in inputs.items():
-            dest = bucket_path(r2, spec.name, tag, *rel.split("/"))
-            res = rclone(r2, "copyto", "--size-only", str(src), dest, capture=True)
-            if res.returncode != 0:
-                raise SshMachineError(f"staging input {rel} in the bucket failed: {res.stderr}")
-
-    # ---- local plumbing --------------------------------------------------
+        for info in status:
+            w = task.find(info["worker_id"])
+            if w is None or w.kind != "ssh" or not spec.role(w.role).ingest:
+                continue
+            key = _key(spec, task.tag, w.worker_id)
+            if info.get("ssh_probe") != "running" or self._controls_pushed.get(key) == stamp:
+                continue
+            push_file(
+                self._ssh_machine(task, w),
+                _container_name(spec, task.tag, w.worker_id),
+                remote_root=str(self.tasks.paths(spec, task.tag).root),
+                rel_dest=CONTROLS_REL,
+                src=path,
+            )
+            self._controls_pushed[key] = stamp
 
     def _log_file(self, spec: workloads.WorkloadSpec, tag: str, name: str):
         log_dir = self.tasks.paths(spec, tag).logs_dir
@@ -894,6 +907,7 @@ class WorkerManager:
             self._down_since,
         ):  # fmt: skip
             memory.pop(key, None)
+        self._collecting.pop(key, None)
 
     def forget_crashes(self, spec, tag: str, worker_id: str):
         self._crashes.pop(_key(spec, tag, worker_id), None)
@@ -943,6 +957,17 @@ class WorkerManager:
             env["SCZ_DATA_SINK"] = data_env
         if _home_trainer(task, spec.role(w.role)):
             env["SCZ_DATA_PLANE"] = DATA_PLANE_HOME
+            # Its generations reach the bucket only from the home itself.
+            env["SCZ_HOME_UPLOADS"] = "1"
+        # A new trainer container starts from the controller's copy of the
+        # state (state_pair's cursor rule decides against what it may hold).
+        seed = (
+            spec.role(w.role).ingest
+            and self.tasks.paths(spec, task.tag).rolling_checkpoint.exists()
+        )
+        if seed:
+            env["SCZ_STATE_SEED"] = "1"
+        self._controls_pushed.pop(_key(spec, task.tag, w.worker_id), None)
         # The whole tag tree, where the worker's default mount root puts it,
         # so every rename stays within one filesystem.
         volume = (
@@ -959,8 +984,6 @@ class WorkerManager:
             # A missing input becomes the slot's exit reason, shown on its row
             # and paced by the restart backoff.
             _require_inputs(inputs)
-            if env["SCZ_SINK"] == "r2":
-                self._stage_inputs_in_bucket(creds.r2, spec, task.tag, inputs)
             # Pull here so a new container picks up a rebuilt worker image;
             # run_container then never pulls on its own.
             image = creds.registry.image_for(role.runtime)
@@ -969,8 +992,9 @@ class WorkerManager:
             if volume is not None:
                 machine.create_volume(volume[0])
             machine.run_container(name, image, env, gpus=role.gpu, volume=volume)
-            if env["SCZ_SINK"] != "r2":
-                self._stage_inputs_in_container(machine, name, spec, task.tag, inputs)
+            self._stage_inputs_in_container(machine, name, spec, task.tag, inputs)
+            if seed:
+                self._seed_state(machine, name, spec, task)
         except SshMachineError as e:
             # The slot reads `starting` until this succeeds. Recording why shows
             # the operator what the machine lacks (an NVIDIA toolkit, a
@@ -1123,7 +1147,6 @@ class WorkerManager:
         )
         task.workers.append(w)
         self._rehome(spec, task, w)
-        self._note_trainer_sink(spec, task, w)
         self.tasks.save(spec, task)
         return w
 
@@ -1156,7 +1179,6 @@ class WorkerManager:
         )
         task.workers.append(w)
         self._rehome(spec, task, w)
-        self._note_trainer_sink(spec, task, w)
         self.tasks.save(spec, task)
         self._ensure_sync(spec, task)
         return w
@@ -1572,7 +1594,7 @@ class WorkerManager:
         if probe == "stopped":
             machine = self._ssh_machine(task, w)
             if self._collected(spec, task, w):
-                sweep_stopped(machine, **self._transfer_target(spec, task, w))
+                self._sweep_ssh(machine, spec, task, w)
             machine.remove_container(_container_name(spec, task.tag, w.worker_id))
         w.launched = False
 
@@ -1595,14 +1617,13 @@ class WorkerManager:
                 f"container by hand) before removing {worker_id}"
             )
             if probe == "stopped":
-                self._ssh_machine(task, w).remove_container(
-                    _container_name(spec, task.tag, w.worker_id)
-                )
-        if spec.role(w.role).ingest and self._slot_records_sink(spec, task, w) == "r2":
-            # Its final checkpoint and cursor, uploaded as it stopped, may be
-            # newer than the watcher's last pull, and the watcher stops pulling
-            # trainer outputs once the slot is gone.
-            self.sync_once(spec, task)
+                machine = self._ssh_machine(task, w)
+                if spec.role(w.role).ingest:
+                    # A trainer's last flush holds its final state pair, which
+                    # no collection reached; it is small, unlike a generator's
+                    # backlog (the Remove dialog warns about that).
+                    self._sweep_ssh(machine, spec, task, w)
+                machine.remove_container(_container_name(spec, task.tag, w.worker_id))
         if task.data_plane == DATA_PLANE_HOME and w.kind == "ssh":
             self._release_tag_volume(spec, task, w)
         self._forget_slot(_key(spec, task.tag, worker_id))
@@ -2168,10 +2189,19 @@ class WorkerManager:
                 if (
                     w.kind == "ssh"
                     and info["ssh_probe"] == "running"
+                    and self._remote_data_home(spec, task) is w
+                ):
+                    try:
+                        await self.offload(self._pull_scheduler_state, spec, task, w)
+                    except Exception as e:  # noqa: BLE001 -- the gate then reads a stale record
+                        print(f"scheduler state {spec.name}/{task.tag}/{w.worker_id}: {e}")
+                if (
+                    w.kind == "ssh"
+                    and info["ssh_probe"] == "running"
                     and self._collected(spec, task, w)
                 ):
                     try:
-                        await self.offload(self._collect_ssh, spec, task, w)
+                        await self.offload(self._collect_step, spec, task, w)
                     except Exception as e:  # noqa: BLE001 -- one slot must not stop the pass
                         print(f"collect {spec.name}/{task.tag}/{w.worker_id}: {e}")
                 # Contained per slot: one slot's failure (a machine vanishing
@@ -2198,13 +2228,57 @@ class WorkerManager:
                         print(f"ingest {spec.name}/{task.tag}/{role.name}: {e}")
             self._ensure_sync(spec, task)
             try:
-                await self.offload(self._push_controls, spec, task)
+                await self.offload(self._push_controls, spec, task, status)
             except Exception as e:  # noqa: BLE001 -- one task must not stop the pass
                 print(f"controls push {spec.name}/{task.tag}: {e}")
 
+    def _collect_step(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """The pass's collection for slot `w` (blocking thread): record the
+        last pull if it has finished, and start the next on the tag's transfer
+        thread unless one is still running. The bytes move off this thread; the
+        slot's record changes only here."""
+        key = _key(spec, task.tag, w.worker_id)
+        running = self._collecting.get(key)
+        if running is not None and not running.done():
+            return
+        if running is not None:
+            self._record_pull(spec, task, w, self._collecting.pop(key))
+        # Unknown until this pull succeeds: a failing collection (a link too
+        # slow for the transfer timeout while probes still pass) must not
+        # leave an old zero claiming "drained" while the container fills up.
+        w.undelivered = None
+        pool = self._transfer_pools.setdefault(_key(spec, task.tag), self._new_transfer_pool())
+        future = pool.submit(self._pull_ssh, spec, task, w)
+        if future.done():  # a synchronous pool (the simulation's)
+            self._record_pull(spec, task, w, future)
+        else:
+            self._collecting[key] = future
+
+    def _record_pull(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, done: Future):
+        """Record a finished pull's count of what the container still holds; a
+        failed one is reported and leaves the count unknown."""
+        try:
+            result = done.result()
+        except Exception as e:  # noqa: BLE001 -- the next pass pulls again
+            print(f"collect {spec.name}/{task.tag}/{w.worker_id}: {e}")
+            return
+        if result is not None:
+            w.undelivered = result.remaining
+            self.tasks.save(spec, task)
+
     def _collect_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """One collection from slot `w`, start to finish on this thread."""
+        w.undelivered = None
+        result = self._pull_ssh(spec, task, w)
+        if result is not None:
+            w.undelivered = result.remaining
+            self.tasks.save(spec, task)
+
+    def _pull_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Pull a batch of slot `w`'s finished output from its container into
-        the tag, and record how much it still holds.
+        the tag, installing any state pairs it brought; None when the container
+        stopped under it. Touches only files, so it runs off the blocking
+        thread.
 
         A pull can race an operator's pause, which stops the container
         between the pass's probe and the pull. That is benign: if a re-probe
@@ -2212,19 +2286,43 @@ class WorkerManager:
         waits for the next start, or for the sweep before a replacement. Any
         other failure propagates."""
         machine = self._ssh_machine(task, w)
-        # Unknown until this pull succeeds: a failing collection (a link too
-        # slow for the transfer timeout while probes still pass) must not
-        # leave an old zero claiming "drained" while the container fills up.
-        w.undelivered = None
         try:
             result = pull_results(machine, **self._transfer_target(spec, task, w))
         except SshMachineError:
             name = _container_name(spec, task.tag, w.worker_id)
             if machine.container_state(name) not in ("stopped", "missing"):
                 raise
-            return
-        w.undelivered = result.remaining
-        self.tasks.save(spec, task)
+            return None
+        self._install_pulled_pairs(spec, task, result.pulled)
+        return result
+
+    def _install_pulled_pairs(self, spec, task: tasks.TaskRecord, pulled: list[str]):
+        """Install the state pairs a pull brought in, oldest first, each under
+        the cursor rule; a pair that loses (or arrived torn) is discarded."""
+        paths = self.tasks.paths(spec, task.tag)
+        pairs = sorted(
+            {"/".join(n.split("/")[:2]) for n in pulled if n.startswith(f"{state_pair.STATE_DIR}/")}
+        )
+        for rel in pairs:
+            state_pair.install(paths.root / rel, paths)
+
+    def _pull_scheduler_state(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Copy a remote data home's scheduler record (its gate and heartbeat)
+        into the tag here, in a small read of its own each pass, so a slow
+        bulk collection never makes the heartbeat look dead."""
+        paths = self.tasks.paths(spec, task.tag)
+        record = self._ssh_machine(task, w).read_from_container(
+            _container_name(spec, task.tag, w.worker_id),
+            [
+                "sh",
+                "-c",
+                f"cat {shlex.quote(str(paths.root / SCHEDULER_STATE_REL))} 2>/dev/null || true",
+            ],
+        )
+        if record.strip():
+            tmp = paths.root / f".{SCHEDULER_STATE_REL}.tmp"
+            tmp.write_bytes(record)
+            os.replace(tmp, paths.root / SCHEDULER_STATE_REL)
 
     def _dispatch_role(self, spec, task: tasks.TaskRecord, role, status: list[dict]):
         """Run one role's dispatch tick: hand its running slots their next piece
@@ -2362,8 +2460,11 @@ class WorkerManager:
         self._run_ssh_container(spec, task, w)
 
     def _sweep_ssh(self, machine, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Collect from a stopped container, the last chance to do so."""
-        sweep_stopped(machine, **self._transfer_target(spec, task, w))
+        """Collect from a stopped container, the last chance to do so: what it
+        flushed on the way down, a trainer's final state pair included, which
+        is installed under the cursor rule."""
+        pulled = sweep_stopped(machine, **self._transfer_target(spec, task, w))
+        self._install_pulled_pairs(spec, task, pulled)
 
     def shutdown(self):
         """SIGTERM this process's local workers (they flush and exit) and sync
@@ -2381,34 +2482,12 @@ class WorkerManager:
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
     ) -> str:
         """Where slot `w`'s worker sends its records (SCZ_SINK, cloud/sinks.py):
-        stats, params and trainer records and outputs. Its data sink
-        (_slot_data_sink) carries the tag's data/ store.
-
-        "local": a local subprocess, or an ssh container whose output the reconcile
-        pass pulls over ssh (cloud/ssh_transfer.py): any container on the
-        operator's own machines, and a dispatch-driven role's container anywhere.
-        Dispatch reads results only from the slot's filesystem, and they are a few
-        small files, so a rented match-eval worker is collected the same way.
-
-        "r2", the results bucket: any other ssh container on a rented machine,
-        whose datacenter link to the bucket beats hauling every chunk to the
-        controller and publishing it back up from a home uplink; and an ssh trainer
-        (a role with an ingest tick) anywhere, whose generations arrive and whose
-        exports, checkpoints and records leave through the bucket
-        (docs/plans/cloud_machines.md).
-
-        What the controller does for a slot keys off its two sinks, not off its
-        kind: the sync watcher and collection off either, the scheduler's
-        publish and mirror hooks off the data sink, the controls push, trainer
-        outputs and the state's location off the records sink."""
-        if w.kind == "local":
-            return "local"
-        role = spec.role(w.role)
-        if self._on_remote_data_home(spec, task, w):
-            return "r2"  # never collected: its data/ is the shared volume
-        if w.kind == "ssh" and not role.ingest and (role.dispatch or not self._rented(task, w)):
-            return "local"
-        return "r2"
+        stats, params, a trainer's records, exports and state pairs. Always
+        "local": a local subprocess writes the tag tree here, and an ssh
+        container writes its own, which the reconcile pass collects over ssh
+        (cloud/ssh_transfer.py; _transfer_target says what is taken). The
+        controller is the hub every record reaches it through."""
+        return "local"
 
     def _slot_data_sink(
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
@@ -2416,12 +2495,18 @@ class WorkerManager:
         """Where slot `w`'s worker delivers into and reads from the tag's data/
         store (SCZ_DATA_SINK, cloud/sinks.py). For a tag whose data home is an
         ssh machine: DATA_SINK_HOME on that machine, and the bucket anywhere
-        else, whose staging the home ingests. Otherwise, and for a
-        dispatch-driven role, whose results the controller reads from the
-        slot's own filesystem, the same as the records sink."""
-        if not spec.role(w.role).dispatch and self._remote_data_home(spec, task) is not None:
+        else, whose staging the home ingests. Otherwise "local" for a local
+        slot, for a dispatch-driven role (whose results the controller reads
+        from the slot's own filesystem) and for any non-trainer on the
+        operator's own machines, all collected over ssh; and the bucket for the
+        rest: a generator on a rented machine, and an ssh trainer, whose
+        generations arrive through it."""
+        role = spec.role(w.role)
+        if not role.dispatch and self._remote_data_home(spec, task) is not None:
             return DATA_SINK_HOME if self._on_remote_data_home(spec, task, w) else "r2"
-        return self._slot_records_sink(spec, task, w)
+        if w.kind == "local" or (not role.ingest and (role.dispatch or not self._rented(task, w))):
+            return "local"
+        return "r2"
 
     def _remote_data_home(self, spec, task: tasks.TaskRecord) -> tasks.WorkerRecord | None:
         """The trainer slot of a tag whose data plane runs beside it on an ssh
@@ -2452,26 +2537,14 @@ class WorkerManager:
         )
 
     def _has_bucket_slots(self, spec: workloads.WorkloadSpec, task) -> bool:
-        """Whether any slot sends data or records through the bucket, for the
-        sync watcher to pull down."""
-        return any(
-            "r2" in (self._slot_data_sink(spec, task, w), self._slot_records_sink(spec, task, w))
-            for w in task.workers
-        )
+        """Whether any slot delivers data through the bucket, for the sync
+        watcher to pull down."""
+        return any(self._slot_data_sink(spec, task, w) == "r2" for w in task.workers)
 
     def _has_bucket_data(self, spec: workloads.WorkloadSpec, task) -> bool:
         """Whether any slot's data/ store runs through the bucket, which the
         scheduler's publish and mirror hooks keep in step with the local one."""
         return any(self._slot_data_sink(spec, task, w) == "r2" for w in task.workers)
-
-    def _bucket_trainer(self, spec: workloads.WorkloadSpec, task) -> bool:
-        """Whether the task has a trainer (a role the controller ingests) running
-        through the bucket, which needs its outputs synced down and the controls
-        file pushed up."""
-        return any(
-            self._slot_records_sink(spec, task, w) == "r2" and spec.role(w.role).ingest
-            for w in task.workers
-        )
 
     def _holds_nothing(
         self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
@@ -2481,12 +2554,6 @@ class WorkerManager:
         if w.kind == "ssh" and not self._collected(spec, task, w):
             w.undelivered = 0
 
-    def _note_trainer_sink(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
-        """Record where new slot `w` delivers, if it is a trainer (a role with an
-        ingest tick): where the task's training state will live from now on."""
-        if spec.role(w.role).ingest:
-            task.trainer_sink = self._slot_records_sink(spec, task, w)
-
     def cloud_sync_argv(self, spec, task: tasks.TaskRecord, *extra: str) -> list[str]:
         """The cloud_sync command pulling what `task`'s bucket slots deliver. It
         names the tag's mount root, so the pull lands wherever this process
@@ -2495,9 +2562,6 @@ class WorkerManager:
             sys.executable, str(CLOUD_SYNC),
             "--workload", spec.name, "-t", task.tag,
             "--mount-root", str(self.tasks.paths(spec, task.tag).mount_root),
-            *(["--trainer-outputs"] if self._bucket_trainer(spec, task) else []),
-            # A data home ingests bucket staging itself, by moving each chunk.
-            *(["--no-data"] if task.data_plane == DATA_PLANE_HOME else []),
             *extra,
         ]  # fmt: skip
 
@@ -2543,12 +2607,38 @@ class WorkerManager:
         read alike, since the container uses the controller's layout, but they are
         paths on different machines."""
         paths = self.tasks.paths(spec, task.tag)
-        return {
+        target = {
             "container": _container_name(spec, task.tag, w.worker_id),
             "remote_root": str(paths.root),
             "local_root": paths.root,
-            "data_dirs": [f"data/{sub}" for sub in spec.collected_dirs],
+            # A data home's staging is its own scheduler's to take.
+            "data_dirs": []
+            if self._slot_data_sink(spec, task, w) == DATA_SINK_HOME
+            else [f"data/{sub}" for sub in spec.collected_dirs],
         }
+        if spec.role(w.role).ingest:
+            target["data_dirs"] += list(TRAINER_OUTPUT_DIRS)
+            target["pair_dirs"] = {state_pair.STATE_DIR: state_pair.CURSOR_NAME}
+        return target
+
+    def _seed_state(self, machine, container: str, spec, task: tasks.TaskRecord):
+        """Push the controller's checkpoint and cursor into a freshly created
+        trainer container as a state pair (state_pair.SEED_DIR), the cursor
+        last as its commit marker. Its trainer installs it under the cursor
+        rule before resuming."""
+        paths = self.tasks.paths(spec, task.tag)
+        root = str(paths.root)
+        for src, name in (
+            (paths.rolling_checkpoint, state_pair.MODEL_NAME),
+            (paths.train_state_path, state_pair.CURSOR_NAME),
+        ):
+            push_file(
+                machine,
+                container,
+                remote_root=root,
+                rel_dest=f"{state_pair.SEED_DIR}/{name}",
+                src=src,
+            )
 
     def _stage_inputs_in_container(
         self, machine, container: str, spec, tag: str, inputs: dict[str, Path]

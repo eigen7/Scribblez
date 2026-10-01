@@ -478,12 +478,15 @@ class _StoppedLink(_Link):
 
 def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypatch):
     """The ssh half of a release: every container's full log saved into the
-    tag, a local-sink slot (the generator) swept, and one final bucket sync
-    for the bucket-delivering trainer, all before the slots are removed."""
+    tag, every container swept (records are collected from all of them, a
+    trainer's state pairs included), and one final sync of the data the
+    trainer's generations come through, all before the slots are removed."""
     q, manager, make = queued
     monkeypatch.setattr(workers_mod, "SshMachine", _StoppedLink)
     swept, synced = [], []
-    monkeypatch.setattr(tq_mod, "sweep_stopped", lambda machine, **target: swept.append(target))
+    monkeypatch.setattr(
+        workers_mod, "sweep_stopped", lambda machine, **target: swept.append(target) or []
+    )
 
     def record_sync(spec, task):
         synced.append(manager.cloud_sync_argv(spec, task))
@@ -509,12 +512,15 @@ def test_the_drain_saves_logs_sweeps_and_syncs_before_removing(queued, monkeypat
         "ssh-0.container.log",
         "ssh-1.container.log",
     ]
-    assert [t["container"] for t in swept] == ["scz-position_eval-a-ssh-1"]  # the generator
-    # The drain's sync, then the trainer's removal pulling its outputs once more
-    # (WorkerManager.remove_worker): both while the trainer still defines them.
-    assert len(synced) == 2
-    for argv in synced:
-        assert "--trainer-outputs" in argv and argv[argv.index("-t") + 1] == "a"
+    # The drain sweeps both; removing the trainer sweeps it once more for a
+    # final state pair (WorkerManager.remove_worker).
+    assert [t["container"] for t in swept] == [
+        "scz-position_eval-a-ssh-0",
+        "scz-position_eval-a-ssh-1",
+        "scz-position_eval-a-ssh-0",
+    ]
+    [argv] = synced
+    assert argv[argv.index("-t") + 1] == "a"
     assert manager.tasks.load(SPEC, "a").workers == []
     assert _lease(manager, "gpu-box") is None
 
@@ -597,22 +603,6 @@ def test_an_ssh_machine_added_after_enqueueing_gets_the_tag_built(queued, monkey
     assert (
         manager.queue_store.load().entry("position_eval", "a").bundle == queue_mod.BUNDLE_BUILDING
     )
-
-
-def test_the_state_home_follows_the_trainers_sink_once_it_has_trained(queued):
-    """Where a tag may go depends on where its last trainer delivered, and only
-    once it has trained: before that, anywhere."""
-    q, manager, make = queued
-    task = make("a")
-    assert placement.state_home(manager.tasks.paths(SPEC, "a"), task) is None
-    manager.add_local(SPEC, task, "train", None)
-    assert task.trainer_sink == "local"
-    paths = manager.tasks.paths(SPEC, "a")
-    paths.root.mkdir(parents=True, exist_ok=True)
-    paths.train_state_path.write_text('{"rows_trained": 256, "generation_index": 0}')
-    assert placement.state_home(manager.tasks.paths(SPEC, "a"), task) == placement.HOME_LOCAL
-    task.trainer_sink = "r2"  # a trainer on a rented machine delivered through the bucket
-    assert placement.state_home(manager.tasks.paths(SPEC, "a"), task) == placement.HOME_BUCKET
 
 
 def test_a_retiring_machine_says_so_on_the_queue_row():

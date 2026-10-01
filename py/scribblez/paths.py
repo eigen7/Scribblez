@@ -90,14 +90,10 @@ ONNX_PREFIX = "model_epoch_"
 # gates generators by.
 SCHEDULER_STATE_REL = "scheduler_state.json"
 
-# What a trainer on a rented machine delivers through the results bucket,
-# relative to the tag root, for scripts/cloud_sync.py to pull back. Records and
-# exports never change once written, so they are synced by size alone. The
-# checkpoint and cursor come back as a state pair, under the cursor rule
-# (generational/state_pair.py), not as files.
-TRAINER_OUTPUT_DIRS = ("records", "models")
-TRAINER_OUTPUT_IMMUTABLE = ("records", "models")
-TRAINER_OUTPUT_FILES = (SCHEDULER_STATE_REL,)
+# A trainer's outputs the controller collects from an ssh trainer's container
+# and moves home (WorkerManager._transfer_target): exports, then the records
+# that announce them. Its state pairs come the same way.
+TRAINER_OUTPUT_DIRS = ("models", "records")
 
 # The trainer's record stream (generational/records.py), relative to the tag
 # root because the trainer writes through a results sink that maps them either

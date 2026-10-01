@@ -107,17 +107,29 @@ def tick_for_task(spec, task, hooks):
     tick(paths, cfg, hooks)
 
 
+# Per data-home record: (the last heartbeat value seen, when this controller
+# first saw it). Freshness is judged on this controller's clock alone, so a
+# home machine's clock never matters. A controller restart forgets it, which
+# counts every home fresh for one threshold rather than parking them all.
+_heartbeats: dict[Path, tuple[float, float]] = {}
+
+
 def home_gate(paths: TagPaths, trainer_running: bool, now: float) -> str | None:
     """The gate on a data-home tag's generators: parked while the trainer is
-    not running or its data home's heartbeat is stale or absent, since nothing
-    would take their chunks; otherwise whatever its scheduler decided."""
+    not running or its data home's heartbeat has not changed for
+    HEARTBEAT_STALE_SECONDS (or there is no record), since nothing would take
+    their chunks; otherwise whatever its scheduler decided."""
     if not trainer_running:
         return GATE_REASON_NO_TRAINER
+    path = paths.root / SCHEDULER_STATE_REL
     try:
-        record = json.loads((paths.root / SCHEDULER_STATE_REL).read_text())
+        record = json.loads(path.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return GATE_REASON_NO_HEARTBEAT
-    if now - record["heartbeat"] > HEARTBEAT_STALE_SECONDS:
+    seen = _heartbeats.get(path)
+    if seen is None or seen[0] != record["heartbeat"]:
+        seen = _heartbeats[path] = (record["heartbeat"], now)
+    if now - seen[1] > HEARTBEAT_STALE_SECONDS:
         return GATE_REASON_NO_HEARTBEAT
     return record["gate"]
 

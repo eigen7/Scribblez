@@ -51,7 +51,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from cloud.r2 import bucket_path, rclone
-from cloud.sinks import R2Sink, r2_from_env
+from cloud.sinks import r2_from_env
 
 from scribblez.paths import SCHEDULER_STATE_REL, TagPaths
 from scribblez.workloads.base import SchedulerHooks
@@ -71,14 +71,15 @@ def start_for(ctx, paths: TagPaths, params) -> "DataHome | None":
     """Start the data home beside trainer `ctx` when its tag's data plane is
     home (ctx.data_plane); None otherwise. It ingests from the bucket when the
     worker has bucket credentials, and keeps the bucket able to resume it
-    (restore, then uploads) when the trainer's records go there."""
+    (restore, then uploads) when the controller says the home is remote
+    (SCZ_HOME_UPLOADS)."""
     if ctx.data_plane != scheduler.DATA_PLANE_HOME:
         return None
     cfg = scheduler.SchedulerConfig(
         games_per_generation=params.games_per_generation, open_ahead=params.open_ahead
     )
     r2 = r2_from_env() if "R2_BUCKET" in os.environ else None
-    uploads = isinstance(ctx.records_sink, R2Sink)
+    uploads = os.environ.get("SCZ_HOME_UPLOADS") == "1"
     home = DataHome(paths, cfg, ctx.records_sink, r2, window=params.window, uploads=uploads)
     if r2 is not None:
         # A trainer that moved here from another data home finds its window in
