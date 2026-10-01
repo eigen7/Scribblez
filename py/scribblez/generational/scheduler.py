@@ -163,19 +163,19 @@ def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGames
 # ---------------------------------------------------------------------------
 
 
-def _ledger_path(paths: TagPaths) -> Path:
+def ledger_path(paths: TagPaths) -> Path:
     return paths.data_dir / LEDGER_NAME
 
 
 def _read_ledger(paths: TagPaths) -> set[str]:
     try:
-        return set(_ledger_path(paths).read_text().split())
+        return set(ledger_path(paths).read_text().split())
     except FileNotFoundError:
         return set()
 
 
 def _append_ledger(paths: TagPaths, name: str):
-    with open(_ledger_path(paths), "a") as f:
+    with open(ledger_path(paths), "a") as f:
         f.write(name + "\n")
 
 

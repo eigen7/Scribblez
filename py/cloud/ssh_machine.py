@@ -69,8 +69,9 @@ _WRITE_TIMEOUT = 600
 
 # Copying a stopped container's output out before it is destroyed. Generous
 # because the size cannot be asked first, and a failure cancels the
-# replacement and repeats the whole copy next pass.
-_COPY_TIMEOUT = 1800
+# replacement and repeats the whole copy next pass. A caller that can bound
+# the size passes more (copy_from_container's `timeout`).
+COPY_TIMEOUT = 1800
 
 
 class SshMachineError(Exception):
@@ -274,7 +275,9 @@ class SshMachine:
         if res.returncode != 0:
             raise SshMachineError(f"{self.host}: pulling {image} failed: {res.stderr.strip()}")
 
-    def copy_from_container(self, name: str, path: str, dest: Path) -> bool:
+    def copy_from_container(
+        self, name: str, path: str, dest: Path, timeout: int = COPY_TIMEOUT
+    ) -> bool:
         """Copy `path` out of container `name` into `dest` as a tar whose
         member names are relative to the path's parent. Returns whether
         anything was written. Unlike exec, this works on a stopped container,
@@ -298,7 +301,7 @@ class SshMachine:
                     self.argv(["docker", "cp", f"{name}:{path}", "-"]),
                     stdout=out,
                     stderr=subprocess.PIPE,
-                    timeout=_COPY_TIMEOUT,
+                    timeout=timeout,
                 )
             except subprocess.TimeoutExpired:
                 raise SshMachineError(
@@ -350,6 +353,26 @@ class SshMachine:
             ],
             stdin_text=env_file(env),
         )
+
+    def write_to_volume(
+        self, volume: str, mount: str, image: str, command: list[str], src: Path, timeout: int
+    ):
+        """Run `command` in a throwaway container of `image` with named volume
+        `volume` mounted at `mount` and `src` streamed to its stdin, within
+        `timeout` seconds: how cloud/ssh_transfer.py fills a volume before any
+        worker mounts it. The image must already be on the machine
+        (pull_image)."""
+        with open(src, "rb") as f:
+            self._exec(
+                [
+                    "docker", "run", "--rm", "-i", "--pull=never",
+                    "--mount", f"source={volume},target={mount}",
+                    "--entrypoint", command[0], image, *command[1:],
+                ],
+                timeout=timeout,
+                doing=f"writing to volume {volume}",
+                stdin=f,
+            )  # fmt: skip
 
     def create_volume(self, name: str):
         """Create named volume `name`, or keep it as it is if it exists."""

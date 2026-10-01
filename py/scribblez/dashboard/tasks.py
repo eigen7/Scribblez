@@ -267,6 +267,9 @@ class _TaskEntry:
         # (readers' copy, task.json mtime, control version it reflects)
         self._copy: tuple[TaskRecord | None, int, int] | None = None
         self._written: str | None = None  # task.json as this process last wrote it
+        # The live record of the tag as it was when deleted (forget), whose
+        # late saves are dropped.
+        self._deleted: TaskRecord | None = None
         self._lock = threading.Lock()
 
     def load(self) -> TaskRecord | None:
@@ -291,6 +294,11 @@ class _TaskEntry:
         assert self._copy is None or task is not self._copy[0], (
             f"{self.path}: saving a reader's copy; load the record on the writer thread"
         )
+        if task is self._deleted:
+            # A step that loaded the tag before a Delete ran between the steps
+            # of its pass, on the same thread: writing would bring the
+            # deleted tag back.
+            return
         stored = asdict(task)
         self._control.put("task", self._key, json.dumps(_control_part(stored)))
         frozen = json.dumps({f: stored[f] for f in FROZEN_FIELDS}, indent=2) + "\n"
@@ -315,6 +323,8 @@ class _TaskEntry:
         """Delete the control row and both copies, the tag dir being gone."""
         self._control.delete("task", self._key)
         with self._lock:
+            if self._held is not None:
+                self._deleted = self._held[0]
             self._held = self._copy = None
             self._written = None
 

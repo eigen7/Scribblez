@@ -41,14 +41,22 @@ from pathlib import Path
 
 from cloud import runtime_abi
 from cloud.bundles import BundleManifest, deploy_current_tree, source_hash
-from cloud.credentials import CloudCredentials, CredentialsError, load_credentials
+from cloud.credentials import CloudCredentials, load_credentials
 from cloud.providers.aws import CATALOG as AWS_CATALOG
 from cloud.providers.aws import AwsProvider
 from cloud.providers.base import Instance, LaunchRequest, Provider, ProviderError
 from cloud.ssh_machine import SshMachine, SshMachineError
-from cloud.ssh_transfer import pull_results, push_file, relay_files, sweep_stopped
+from cloud.ssh_transfer import (
+    pull_ready_dirs,
+    pull_results,
+    push_file,
+    relay_files,
+    seed_volume,
+    sweep_dirs,
+    sweep_stopped,
+)
 from cloud.worker_entrypoint import EXIT_INTERRUPTED
-from cloud.worker_env import bundle_worker_env, r2_env
+from cloud.worker_env import bundle_worker_env
 from tornado.ioloop import IOLoop
 
 from scribblez import params as params_mod
@@ -58,7 +66,7 @@ from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tasks
 from scribblez.dashboard.control_store import IMPORTED_JSON, ControlStore
 from scribblez.dashboard.slot_files import LocalSlotFiles, SshSlotFiles
-from scribblez.generational import state_pair
+from scribblez.generational import lifecycle, scheduler, state_pair
 from scribblez.generational.scheduler import (
     TICK_FOR_TASK,
 )
@@ -322,6 +330,16 @@ def _same_machine(a: tasks.WorkerRecord, b: tasks.WorkerRecord) -> bool:
     return (a.kind, a.machine, a.host) == (b.kind, b.machine, b.host)
 
 
+def _generations_rel(paths) -> str:
+    """The tag's generations directory, relative to its root."""
+    return str(paths.generation_dir(0).parent.relative_to(paths.root))
+
+
+def _ledger_rel(paths) -> str:
+    """The data plane's ingest ledger, relative to the tag's root."""
+    return str(scheduler.ledger_path(paths).relative_to(paths.root))
+
+
 def _tag_volume(spec, task: tasks.TaskRecord) -> str:
     """The named volume holding a tag's tree on its data home."""
     return _container_name(spec, task.tag, "data")
@@ -496,7 +514,7 @@ class WorkerManager:
         self.pool_store = pool_mod.pool_store(self.control)
         self.queue_store = queue_mod.queue_store(self.control)
         self._local: dict[str, subprocess.Popen] = {}  # slot key -> live process
-        # task key -> controls.json mtime as last pushed to the bucket.
+        # slot key -> controls.json mtime as last pushed into its container.
         self._controls_pushed: dict[str, int] = {}
         self._creds_cache: CloudCredentials | None = None
         self._ssh_down: dict[str, float] = {}  # host -> time of last failed probe
@@ -675,15 +693,6 @@ class WorkerManager:
 
     # ---- cloud plumbing --------------------------------------------------
 
-    def _bucket_env(self) -> dict[str, str]:
-        """Bucket credentials for a local data home's trainer, which restores
-        the window a remote home uploaded; none when the controller has no
-        credentials file."""
-        try:
-            return r2_env(self._creds())
-        except (CredentialsError, FileNotFoundError):
-            return {}
-
     def _creds(self) -> CloudCredentials:
         if self._creds_cache is None:
             self._creds_cache = load_credentials()
@@ -743,8 +752,6 @@ class WorkerManager:
             "SCZ_WORKER_ID": w.worker_id,
             "SCZ_WORKER_KIND": "local",
         }  # fmt: skip
-        if _home_trainer(spec, spec.role(w.role)):
-            env |= self._bucket_env()
         log = self._log_file(spec, task.tag, w.worker_id)
         proc = subprocess.Popen(
             [sys.executable, "-m", "cloud.worker_entrypoint"],
@@ -908,9 +915,10 @@ class WorkerManager:
         )  # fmt: skip
         env["SCZ_SINK"] = self._slot_records_sink(spec, task, w)
         data_sink = self._slot_data_sink(spec, task, w)
-        if _home_trainer(spec, spec.role(w.role)):
-            # Its generations reach the bucket only from the home itself.
-            env["SCZ_HOME_UPLOADS"] = "1"
+        home = _home_trainer(spec, spec.role(w.role))
+        if home:
+            # Its trainer keeps each generation until the controller pulls it.
+            env["SCZ_REMOTE_HOME"] = "1"
         # A new trainer container starts from the controller's copy of the
         # state (state_pair's cursor rule decides against what it may hold).
         seed = (
@@ -943,6 +951,8 @@ class WorkerManager:
             name = _container_name(spec, task.tag, w.worker_id)
             if volume is not None:
                 machine.create_volume(volume[0])
+            if home:
+                self._seed_home(machine, image, volume, spec, task)
             machine.run_container(name, image, env, gpus=role.gpu, volume=volume)
             self._stage_inputs_in_container(machine, name, spec, task.tag, inputs)
             if seed:
@@ -1016,9 +1026,9 @@ class WorkerManager:
         """After data-home trainer `joined` is added to a tag that already has
         other slots: recreate their stopped ssh containers at their next start,
         with the sinks and mount the new home gives them, and remove the tag's
-        volume wherever no slot now works in it. What a moved generator had
-        staged in the old home's volume goes with it; generations come back
-        from the bucket, and the checkpoint from the controller (_seed_state)."""
+        volume wherever no slot now works in it. The old home's data plane was
+        swept here when its trainer was removed (_sweep_home); the new home is
+        seeded from that copy (_seed_home, _seed_state)."""
         if not _home_trainer(spec, spec.role(joined.role)):
             return
         for w in task.workers:
@@ -1561,6 +1571,8 @@ class WorkerManager:
                     # no collection reached; it is small, unlike a generator's
                     # backlog (the Remove dialog warns about that).
                     self._sweep_ssh(machine, spec, task, w)
+                if self._remote_data_home(spec, task) is w:
+                    self._sweep_home(machine, spec, task, w)
                 machine.remove_container(_container_name(spec, task.tag, w.worker_id))
         if spec.scheduler == TICK_FOR_TASK and w.kind == "ssh":
             self._release_tag_volume(spec, task, w)
@@ -1995,7 +2007,7 @@ class WorkerManager:
         tick; start and stop rented machines as their slots want; collect from
         ssh slots; drive each worker toward its intent, respawning, parking or
         stopping it; run dispatch ticks (RoleSpec.dispatch) and ingest ticks
-        (RoleSpec.ingest); keep the bucket sync and controls push current.
+        (RoleSpec.ingest); push changed controls into ssh trainers.
 
         Enforcement keys off real liveness (durable pid or container probe),
         so it holds a paused worker down even across a dashboard restart.
@@ -2123,10 +2135,13 @@ class WorkerManager:
     def _transfer_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """One collection for slot `w`, on its transfer thread: the pull, then,
         when `w` is the trainer of a remote data home, the relay of chunks
-        staged here into it (_relay_staging). Returns the pull's result."""
+        staged here into it (_relay_staging) and the copy of its complete
+        generations (_pull_generations). Returns the pull's result."""
         result = self._pull_ssh(spec, task, w)
         if result is not None and self._remote_data_home(spec, task) is w:
-            self._relay_staging(self._ssh_machine(task, w), spec, task, w)
+            machine = self._ssh_machine(task, w)
+            self._relay_staging(machine, spec, task, w)
+            self._pull_generations(machine, spec, task, w)
         return result
 
     def _pull_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
@@ -2157,8 +2172,9 @@ class WorkerManager:
         tag's generators elsewhere delivered, a local slot's directly and an
         ssh slot's through collection. It runs after each pull from the home's
         trainer (_transfer_ssh), so only while that container runs, and the
-        chunks wait here while it does not. A failed relay keeps them here for the next one; it
-        must not fail the pull before it, whose output is already in place."""
+        chunks wait here while it does not. A failed relay keeps them here for
+        the next one; it must not fail the pull before it, whose output is
+        already in place."""
         paths = self.tasks.paths(spec, task.tag)
         try:
             relay_files(
@@ -2170,6 +2186,85 @@ class WorkerManager:
             )
         except SshMachineError as e:
             print(f"relay {spec.name}/{task.tag}/{home.worker_id}: {e}")
+
+    def _pull_generations(self, machine, spec, task: tasks.TaskRecord, home: tasks.WorkerRecord):
+        """Copy a batch of a remote data home's complete generations here and
+        acknowledge them there (lifecycle.ACK_NAME), which is what lets its
+        trainer evict them: the copy here is the durable one, from which a
+        new home is seeded (_seed_home). Then drop copies here older than the
+        window behind the trainer's cursor, which no seed needs. A failure is
+        retried with the next pull, and must not fail the one before it."""
+        paths = self.tasks.paths(spec, task.tag)
+        try:
+            pull_ready_dirs(
+                machine,
+                _container_name(spec, task.tag, home.worker_id),
+                remote_root=str(paths.root),
+                local_root=paths.root,
+                rel=_generations_rel(paths),
+                ready=lifecycle.COMPLETE_MARK,
+                ack_name=lifecycle.ACK_NAME,
+            )
+        except SshMachineError as e:
+            print(f"generations {spec.name}/{task.tag}/{home.worker_id}: {e}")
+            return
+        params = params_mod.validate(spec.params_cls, task.params)
+        cursor = lifecycle.read_train_state(paths).get("generation_index", 0)
+        lifecycle.evict_beyond_window(paths, cursor - 1, params.window)
+
+    def _seed_home(self, machine, image: str, volume: tuple[str, str], spec, task):
+        """Fill the tag's volume on a remote data home's machine from the copy
+        here, before its trainer's container starts and mounts it: the
+        generations from the window behind the trainer's cursor onward, and
+        the ingest ledger. Complete generations arrive acknowledged, as the
+        copy here already holds them; an open one goes too, so the home goes
+        on filling it rather than numbering past it. A generation the volume
+        already holds is left alone: on a home restarting in place, the
+        volume's copy is the newer."""
+        paths = self.tasks.paths(spec, task.tag)
+        params = params_mod.validate(spec.params_cls, task.params)
+        cursor = lifecycle.read_train_state(paths).get("generation_index", 0)
+        indices = [
+            i
+            for i in lifecycle.list_generation_indices(paths)
+            if params.window <= 0 or i >= cursor - params.window
+        ]
+        rel = _generations_rel(paths)
+        seed_volume(
+            machine,
+            volume[0],
+            image=image,
+            remote_root=volume[1],
+            local_root=paths.root,
+            dirs=[f"{rel}/{paths.generation_dir(i).name}" for i in indices],
+            ack_dirs=[
+                f"{rel}/{paths.generation_dir(i).name}"
+                for i in indices
+                if lifecycle.is_complete(paths.generation_dir(i))
+            ],
+            ack_name=lifecycle.ACK_NAME,
+            append_files=[_ledger_rel(paths)],
+        )
+
+    def _sweep_home(self, machine, spec, task: tasks.TaskRecord, home: tasks.WorkerRecord):
+        """Take a remote data home's whole data plane out of its stopped
+        trainer's container before the home moves: its generations, each
+        replacing the copy here (the home's is the newer), the chunks still in
+        its staging, and its ingest ledger. A home that comes here then picks
+        up exactly where the old one stopped, and one elsewhere is seeded from
+        it (_seed_home)."""
+        paths = self.tasks.paths(spec, task.tag)
+        target = {
+            "container": _container_name(spec, task.tag, home.worker_id),
+            "remote_root": str(paths.root),
+            "local_root": paths.root,
+        }
+        sweep_dirs(machine, **target, rel=_generations_rel(paths))
+        sweep_stopped(
+            machine,
+            **target,
+            data_dirs=[str(paths.staging_dir.relative_to(paths.root)), _ledger_rel(paths)],
+        )
 
     def _install_pulled_pairs(self, spec, task: tasks.TaskRecord, pulled: list[str]):
         """Install the state pairs a pull brought in, oldest first, each under
@@ -2249,7 +2344,10 @@ class WorkerManager:
         if w.kind == "local":
             # A local worker restarts in about a second, so parking it and
             # stopping it are the same thing.
-            if intent == RUN and not alive:
+            # Liveness afresh before a spawn: an operator's Start runs between
+            # the pass's look and this step, on the same thread, and acting on
+            # the look would start a second worker beside the one it spawned.
+            if intent == RUN and not alive and not self._local_alive(spec, task, w):
                 code = self._local_exit_code(spec, task, w)
                 if _is_crash(code):
                     self._note_crash(_key(spec, task.tag, w.worker_id), f"exit {code}")
