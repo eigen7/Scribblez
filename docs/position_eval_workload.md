@@ -175,15 +175,19 @@ the controller's machine or on a rented one:
   generation through the sink (a pull of the published generation from the
   bucket; nothing under the local sink, whose mount dir already holds it).
 - After writing each generation's outputs (the ONNX export, the rolling
-  checkpoint, the cursor, then the record), it delivers them through the sink.
-- A fresh start on a machine with none of the tag restores the checkpoint and
-  cursor the same way, then the window's generations.
+  checkpoint and cursor as one state pair, then the record), it delivers them
+  through the sink.
+- Every start restores the newest state pair the sink holds when it has
+  trained more rows than this machine's copy (the cursor rule,
+  `generational/state_pair.py`), then the window's generations. A fresh
+  machine therefore takes the sink's state; one holding fresher state keeps
+  its own.
 
 Under the local sink all of this is a no-op. Under the bucket sink it is the
 trainer's entire cloud contract. The controller supplies the other half for a
 bucket-delivering trainer (an ssh slot on a rented GPU machine, on the torch
-worker image): the sync watcher also pulls its outputs (`records/`, `models/`,
-`checkpoints/`, `train_state.json`), and the reconcile pass pushes
+worker image): the sync watcher also pulls its outputs (`records/`, `models/`, and the
+newest state pair under the cursor rule), and the reconcile pass pushes
 `controls.json` up whenever the Controls tab rewrites it. Everything else is
 unchanged: the scheduler assembles and publishes generations locally, match
 eval runs locally or over ssh against the pulled exports, and the tabs read
