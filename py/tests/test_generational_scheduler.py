@@ -34,25 +34,13 @@ def _stage(paths: TagPaths, name: str, games: int):
 
 
 class Hooks(SchedulerHooks):
-    def __init__(self, publish: bool = False, paths: TagPaths | None = None):
+    def __init__(self, paths: TagPaths | None = None):
         self.gates: dict[str, str | None] = {}
-        self.published: list[str] = []
-        self.publish_fails = False
-        self.uploading = False  # the upload is still running
         super().__init__(
             paths=paths,
             gate=lambda role, reason: self.gates.__setitem__(role, reason),
             finish=lambda role: None,
-            publish=self._publish if publish else None,
         )
-
-    def _publish(self, dest_rel: str) -> bool:
-        if self.publish_fails:
-            raise RuntimeError("bucket unreachable")
-        if self.uploading:
-            return False
-        self.published.append(dest_rel)
-        return True
 
 
 def _tick(paths, hooks, *, games=100, ahead=1):
@@ -135,55 +123,6 @@ def test_committed_count_self_heals(paths):
     assert lifecycle.read_manifest(gen0)["committed_games"] == 100
 
 
-def test_a_complete_generation_is_published_once(paths):
-    hooks = Hooks(publish=True)
-    _stage(paths, "a", 100)
-    _tick(paths, hooks)
-    gen0 = paths.generation_dir(0)
-    assert lifecycle.is_complete(gen0) and lifecycle.is_published(gen0)
-    assert hooks.published == ["generations/gen_000000"]
-    _tick(paths, hooks)  # the open gen 1 is not complete: nothing more to publish
-    assert hooks.published == ["generations/gen_000000"]
-    assert not lifecycle.is_published(paths.generation_dir(1))
-
-
-def test_a_failed_publish_is_retried_next_tick(paths):
-    """The manifest records publication only once the hook returned, so an
-    upload that failed (or a controller that died mid-way) is redone."""
-    hooks = Hooks(publish=True)
-    hooks.publish_fails = True
-    _stage(paths, "a", 100)
-    with pytest.raises(RuntimeError):
-        _tick(paths, hooks)
-    gen0 = paths.generation_dir(0)
-    assert lifecycle.is_complete(gen0) and not lifecycle.is_published(gen0)
-    hooks.publish_fails = False
-    _tick(paths, hooks)
-    assert lifecycle.is_published(gen0)
-    assert hooks.published == ["generations/gen_000000"]
-
-
-def test_a_generation_still_uploading_is_marked_once_it_is_there(paths):
-    """The dashboard uploads in the background; a generation is recorded as
-    published only once the hook says it is in the bucket."""
-    hooks = Hooks(publish=True)
-    hooks.uploading = True
-    _stage(paths, "a", 100)
-    _tick(paths, hooks)
-    gen0 = paths.generation_dir(0)
-    assert lifecycle.is_complete(gen0) and not lifecycle.is_published(gen0)
-    hooks.uploading = False
-    _tick(paths, hooks)
-    assert lifecycle.is_published(gen0)
-
-
-def test_without_a_publish_hook_nothing_is_marked(paths):
-    hooks = Hooks()
-    _stage(paths, "a", 100)
-    _tick(paths, hooks)
-    assert not lifecycle.is_published(paths.generation_dir(0))
-
-
 class _FinishHooks(Hooks):
     def __init__(self, paths: TagPaths):
         super().__init__(paths=paths)
@@ -196,7 +135,6 @@ def _task_tick(
     *,
     max_rows: int,
     rows_trained: int | None,
-    data_plane: str = scheduler.DATA_PLANE_LEGACY,
     trainer_running: bool = True,
 ):
     """One tick_for_task on a position_eval task under tmp_path, with the
@@ -208,7 +146,7 @@ def _task_tick(
         paths.train_state_path.write_text(json.dumps({"rows_trained": rows_trained}))
     hooks = _FinishHooks(paths)
     hooks.role_running = lambda role: role == "train" and trainer_running
-    task = SimpleNamespace(tag="t", params={"max_rows": max_rows}, data_plane=data_plane)
+    task = SimpleNamespace(tag="t", params={"max_rows": max_rows})
     scheduler.tick_for_task(spec, task, hooks)
     return hooks
 
@@ -219,14 +157,7 @@ def test_finishes_the_generators_once_the_trainer_reaches_max_rows(tmp_path):
     assert "generate" not in hooks.gates  # no scheduling after the end
 
 
-@pytest.mark.parametrize(("max_rows", "rows_trained"), [(1000, 999), (1000, None), (0, 10**9)])
-def test_keeps_scheduling_short_of_max_rows_or_without_one(tmp_path, max_rows, rows_trained):
-    hooks = _task_tick(tmp_path, max_rows=max_rows, rows_trained=rows_trained)
-    assert hooks.finished == []
-    assert hooks.gates["generate"] is None  # the ordinary tick ran and opened a generation
-
-
-# ---- a data home's tag: the controller only gates ------------------------------
+# ---- the controller only gates: the data home schedules ----------------------
 
 
 def _write_state(paths: TagPaths, gate: str | None, heartbeat: float):
@@ -236,19 +167,17 @@ def _write_state(paths: TagPaths, gate: str | None, heartbeat: float):
     )
 
 
-def test_a_data_home_tag_is_gated_from_its_record_and_never_ticked(tmp_path):
-    """The data home runs the scheduler; the controller must not touch the tree
-    (a second scheduler), only carry the home's gate to the generators."""
+@pytest.mark.parametrize(("max_rows", "rows_trained"), [(1000, 999), (1000, None), (0, 10**9)])
+def test_the_tag_is_gated_from_its_record_and_never_ticked(tmp_path, max_rows, rows_trained):
+    """Short of max_rows (or without one), the data home runs the scheduler;
+    the controller must not touch the tree (a second scheduler), only carry
+    the home's gate to the generators."""
     paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
     _write_state(paths, scheduler.GATE_REASON_AHEAD, time.time())
-    hooks = _task_tick(tmp_path, max_rows=0, rows_trained=5, data_plane="home")
+    hooks = _task_tick(tmp_path, max_rows=max_rows, rows_trained=rows_trained)
+    assert hooks.finished == []
     assert hooks.gates["generate"] == scheduler.GATE_REASON_AHEAD
     assert lifecycle.list_generation_indices(paths) == []  # no generation opened here
-
-
-def test_a_data_home_tag_still_finishes_at_max_rows(tmp_path):
-    hooks = _task_tick(tmp_path, max_rows=1000, rows_trained=1000, data_plane="home")
-    assert hooks.finished == ["generate"]
 
 
 @pytest.mark.parametrize(

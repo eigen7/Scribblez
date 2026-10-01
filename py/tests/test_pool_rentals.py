@@ -83,6 +83,9 @@ class _Link:
     def container_state(self, name: str) -> str:
         return "missing"
 
+    def remove_volume(self, name: str):
+        pass  # the tag's data-home volume, released as its slots leave
+
 
 @pytest.fixture
 def renting(tmp_path, monkeypatch):

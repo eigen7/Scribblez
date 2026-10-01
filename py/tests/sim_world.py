@@ -571,10 +571,6 @@ def push_file(machine, container, **kw):
     pass
 
 
-def fake_rclone(r2, *args, capture=False, input_text=None):
-    return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-
 SIM_CREDS = SimpleNamespace(
     registry=RegistryConfig(worker_image="repo/worker"),
     r2=SimpleNamespace(account_id="a", access_key_id="k", secret_access_key="s", bucket="sim"),
@@ -606,7 +602,6 @@ def install(monkeypatch, world: World):
         (workers_mod, "pull_results", pull_results),
         (workers_mod, "sweep_stopped", sweep_stopped),
         (workers_mod, "push_file", push_file),
-        (workers_mod, "rclone", fake_rclone),
     ):
         monkeypatch.setattr(mod, name, fn)
     monkeypatch.setattr(pool_mod, "canonical_host", lambda h: h.split("@", 1)[-1].lower())
@@ -626,6 +621,5 @@ def wire_manager(monkeypatch, manager, world: World):
         ),
     )
     manager._blocking = WriterThread()
-    for name in ("_builds", "_uploads"):
-        setattr(manager, name, SyncExecutor())
+    manager._builds = SyncExecutor()
     manager._new_transfer_pool = SyncExecutor

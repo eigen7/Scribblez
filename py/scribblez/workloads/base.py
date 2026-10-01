@@ -267,13 +267,6 @@ class SchedulerHooks:
         any gate on the role is dropped. Its workers are stopped and its rented
         machines then stop once idle. A later Start on a finished slot is
         finished again on the next tick while the condition still holds.
-    publish(dest_rel) -> bool, optional
-        See that a complete generation is uploaded to the bucket, chunks first
-        and manifest last, for a trainer that runs elsewhere and reads it from
-        there, and say whether it is there yet. The upload may run in the
-        background: the scheduler asks again each tick and records the
-        generation as published in its manifest only once the answer is True.
-        A failed upload raises, and the next tick's call starts it again.
     role_running(role) -> bool
         Whether a worker of `role` is alive, as the reconcile pass last saw it.
     """
@@ -281,7 +274,6 @@ class SchedulerHooks:
     paths: TagPaths
     gate: object  # callable(role: str, reason: str | None)
     finish: object  # callable(role: str)
-    publish: object = None  # callable(dest_rel: str) -> bool | None
     role_running: object = None  # callable(role: str) -> bool
 
 
@@ -309,9 +301,6 @@ class WorkerContext:
     mount_root: Path
     kind: str = "local"
     provenance: dict = field(default_factory=dict)
-    # Where the tag's generation data plane runs (generational/data_home.py):
-    # "legacy" on the controller, "home" beside this worker's trainer.
-    data_plane: str = "legacy"  # generational.scheduler.DATA_PLANE_*
 
     def tag_paths(self) -> TagPaths:
         return self.spec.paths(self.tag, self.mount_root)

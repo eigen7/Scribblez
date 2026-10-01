@@ -3,9 +3,9 @@ paces the generators against the trainer.
 
 Generators know nothing about generations. They deliver whole .slog chunks
 into the tag's staging area: directly for local workers, through the
-controller's collection over ssh for remote ones. The scheduler, ticked per
-task by the dashboard server's reconcile loop (or beside the trainer, on a
-data home), is the single writer of generation structure:
+controller's collection over ssh for remote ones. The scheduler, ticked by
+the tag's data home beside its trainer (generational/data_home.py), is the
+single writer of generation structure:
 
   1. It keeps one generation open at a time, moving staged chunks into it by
      atomic rename and marking it complete in its manifest once it holds the
@@ -16,7 +16,8 @@ data home), is the single writer of generation structure:
   3. It recomputes committed game counts from .slog headers every tick rather
      than tracking them, so a crash between a rename and a manifest write heals
      itself.
-  4. Once the trainer has reached the task's `max_rows`, it finishes the
+  4. The controller gates the generators from the data home's published state
+     and, once the trainer has reached the task's `max_rows`, finishes the
      generate role for good (tick_for_task).
 
 An ingest ledger (one chunk name per line) keeps a chunk from being assigned
@@ -44,11 +45,6 @@ from scribblez import params as params_mod
 from scribblez.paths import SCHEDULER_STATE_REL, TagPaths
 
 from . import lifecycle
-
-# TaskRecord.data_plane's values: the controller ticks this scheduler on its
-# own tag tree ("legacy"), or a data home beside the trainer does
-# (generational/data_home.py) and the controller only gates generators.
-DATA_PLANE_LEGACY, DATA_PLANE_HOME = "legacy", "home"
 
 # The WorkloadSpec.scheduler of the workloads this module schedules.
 TICK_FOR_TASK = "scribblez.generational.scheduler:tick_for_task"
@@ -85,8 +81,10 @@ class SchedulerConfig:
 
 
 def tick_for_task(spec, task, hooks):
-    """The WorkloadSpec.scheduler entry: one tick for one task, or, once the
-    trainer has trained the task's `max_rows`, the end of its generators.
+    """The WorkloadSpec.scheduler entry, run by the controller: gate the
+    generators from the data home's record (home_gate), or, once the trainer
+    has trained the task's `max_rows`, finish them. The scheduling itself
+    (`tick`) runs beside the trainer (generational/data_home.py).
 
     The trainer exits on its own at max_rows, but the generators would only be
     gated once they ran `open_ahead` generations ahead, and a gated slot still
@@ -98,14 +96,7 @@ def tick_for_task(spec, task, hooks):
     if _trainer_done(paths, params.max_rows):
         hooks.finish(GENERATE_ROLE)
         return
-    if task.data_plane == DATA_PLANE_HOME:
-        hooks.gate(GENERATE_ROLE, home_gate(paths, hooks.role_running(TRAIN_ROLE), time.time()))
-        return
-    cfg = SchedulerConfig(
-        games_per_generation=params.games_per_generation,
-        open_ahead=params.open_ahead,
-    )
-    tick(paths, cfg, hooks)
+    hooks.gate(GENERATE_ROLE, home_gate(paths, hooks.role_running(TRAIN_ROLE), time.time()))
 
 
 # Per data-home record: (the last heartbeat value seen, when this controller
@@ -116,7 +107,7 @@ _heartbeats: dict[Path, tuple[float, float]] = {}
 
 
 def home_gate(paths: TagPaths, trainer_running: bool, now: float) -> str | None:
-    """The gate on a data-home tag's generators: parked while the trainer is
+    """The gate on a tag's generators: parked while the trainer is
     not running or its data home's heartbeat has not changed for
     HEARTBEAT_STALE_SECONDS (or there is no record), since nothing would take
     their chunks; otherwise whatever its scheduler decided."""
@@ -142,25 +133,9 @@ def _trainer_done(paths: TagPaths, max_rows: int) -> bool:
 
 def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn = _header_games):
     """One scheduling pass: move staged chunks into generations as far as
-    pacing allows, updating manifests and the generate-role gate; then publish
-    any complete generation not yet in the bucket."""
+    pacing allows, updating manifests and the generate-role gate."""
     paths.staging_dir.mkdir(parents=True, exist_ok=True)
     _drain(paths, cfg, hooks, chunk_games)
-    if hooks.publish:
-        _publish_complete(paths, hooks)
-
-
-def _publish_complete(paths: TagPaths, hooks):
-    """Publish every complete generation whose manifest does not yet record
-    it, marking each only once the hook says it is in the bucket: an upload
-    still running is asked about again next tick, a failed one is retried,
-    and a controller restart picks up where it left off. Window eviction
-    keeps the scan short."""
-    for index in lifecycle.list_generation_indices(paths):
-        gen_dir = paths.generation_dir(index)
-        if lifecycle.is_complete(gen_dir) and not lifecycle.is_published(gen_dir):
-            if hooks.publish(f"generations/{gen_dir.name}"):
-                lifecycle.mark_published(gen_dir)
 
 
 def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn):

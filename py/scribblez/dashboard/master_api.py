@@ -23,7 +23,6 @@ from cloud.ssh_machine import SshMachineError
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard import tasks, worker_stats_figures
-from scribblez.generational.scheduler import TICK_FOR_TASK
 
 # Exception types that describe a bad request or unavailable dependency, not a
 # server bug; their message is the response.
@@ -216,10 +215,6 @@ class TaskHandler(_MasterBase):
                 "spend": spend,
                 "bundle_id": task.bundle_id if task else None,
                 "bundle_drift": self.manager.bundle_drift(task) if task else False,
-                # None for a workload with no data home to move.
-                "data_plane": (
-                    task.data_plane if task and spec.scheduler == TICK_FOR_TASK else None
-                ),
                 # 1-based place in the tag queue, or None when not queued.
                 "queued": next(
                     (
@@ -556,22 +551,6 @@ class PoolCapacityHandler(_MasterBase):
         await self.guarded_offload(act)
 
 
-class TaskDataPlaneHandler(_MasterBase):
-    """Move a tag's generation data plane between the controller and its
-    trainer's machine (WorkerManager.set_data_plane)."""
-
-    async def post(self):
-        body = self.body()
-        spec = self.spec(body)
-
-        def act():
-            task = self.task_or_fail(spec, body["tag"])
-            self.manager.set_data_plane(spec, task, body["data_plane"])
-            return {"ok": True}
-
-        await self.guarded_offload(act)
-
-
 class WorkerActionHandler(_MasterBase):
     async def post(self):
         body = self.body()
@@ -634,7 +613,6 @@ MASTER_ROUTES = [
     (r"/api/task", TaskHandler),
     (r"/api/task/delete", TaskDeleteHandler),
     (r"/api/task/deploy", TaskDeployHandler),
-    (r"/api/task/data_plane", TaskDataPlaneHandler),
     (r"/api/task/workers", WorkerAddHandler),
     (r"/api/task/worker_action", WorkerActionHandler),
     (r"/api/task/machines", MachineAddHandler),

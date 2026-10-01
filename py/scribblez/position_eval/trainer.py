@@ -436,7 +436,7 @@ def run_generational_training(
             paths,
             state.generation_index - 1,
             params.window,
-            keep_unpublished=home is not None and home.uploads,
+            keep_unpublished=home.uploads,
         )
         if evicted:
             timed_print(f"evicted generations {evicted} (window={params.window})")

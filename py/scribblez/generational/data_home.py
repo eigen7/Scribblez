@@ -1,7 +1,7 @@
 """A tag's data home: the generation data plane, run beside its trainer.
 
-For a tag whose data plane is "home" (TaskRecord.data_plane), the machine its
-trainer runs on holds the whole data plane. Generators on that machine deliver
+The machine a generational tag's trainer runs on holds the tag's whole data
+plane: its staging, generations and ingest ledger. Generators on that machine deliver
 into its staging dir by rename. Generators elsewhere deliver where they run;
 the controller collects their chunks and, for a home on an ssh machine, pushes
 them into its staging (WorkerManager._relay_staging). So every chunk arrives
@@ -11,8 +11,8 @@ the rest, every POLL_SECONDS:
   - It runs the generation scheduler (scheduler.tick) over the local tree.
   - It publishes the scheduler's state (its gate on the generate role and a
     heartbeat) through the trainer's records sink as scheduler_state.json. The
-    controller parks and releases generators from that record instead of
-    ticking the scheduler itself (scheduler.tick_for_task).
+    controller parks and releases generators from that record
+    (scheduler.tick_for_task).
 
 A data home on an ssh machine can vanish with its disk (a spot loss, a
 released machine). So it also keeps the bucket able to resume it, on a thread
@@ -31,9 +31,9 @@ heartbeat:
     sink as before (position_eval.trainer.restore_from_sink).
 
 The trainer's generation reads are the local sink's no-ops. A failed bucket
-call is retried on the next pass. Any other failure stops the thread and is re-raised
-by `check`, which the training loop calls: the runner fails rather than leave
-the generators parked behind a heartbeat that has gone quiet.
+call is retried on the next pass. Any other failure stops the thread and is
+re-raised by `check`, which the training loop calls: the runner fails rather
+than leave the generators parked behind a heartbeat that has gone quiet.
 """
 
 import fcntl
@@ -56,15 +56,12 @@ POLL_SECONDS = 5
 LOCK_NAME = "scheduler.lock"
 
 
-def start_for(ctx, paths: TagPaths, params) -> "DataHome | None":
-    """Start the data home beside trainer `ctx` when its tag's data plane is
-    home (ctx.data_plane); None otherwise. With bucket credentials it restores
-    the window a previous home uploaded, so a trainer that moved here from a
-    remote home finds it. When the controller says this home is remote
+def start_for(ctx, paths: TagPaths, params) -> "DataHome":
+    """Start the data home beside trainer `ctx`. With bucket credentials it
+    restores the window a previous home uploaded, so a trainer that moved here
+    from a remote home finds it. When the controller says this home is remote
     (SCZ_HOME_UPLOADS), that restore is required, and the home then keeps the
     bucket able to resume it with uploads."""
-    if ctx.data_plane != scheduler.DATA_PLANE_HOME:
-        return None
     cfg = scheduler.SchedulerConfig(
         games_per_generation=params.games_per_generation, open_ahead=params.open_ahead
     )
@@ -114,11 +111,8 @@ class DataHome:
         self._pruned_below = 0  # bucket generations below this index are gone
         self._gate: str | None = None
         self._error: Exception | None = None
-        # Nothing is published: uploads are the upload thread's. Finishing the
-        # generators stays the controller's (tick_for_task).
-        self._hooks = SchedulerHooks(
-            paths=paths, gate=self._set_gate, finish=_no_finish, publish=None
-        )
+        # Finishing the generators stays the controller's (tick_for_task).
+        self._hooks = SchedulerHooks(paths=paths, gate=self._set_gate, finish=_no_finish)
         loops = [self.schedule, self.upload] if uploads else [self.schedule]
         self._threads = [threading.Thread(target=self._run, args=(f,), daemon=True) for f in loops]
 

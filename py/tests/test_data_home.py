@@ -142,18 +142,14 @@ def test_any_other_failure_stops_the_thread_and_reaches_the_trainer(paths, monke
         home.check()
 
 
-def test_start_for_runs_only_for_a_home_tag(paths, monkeypatch):
+def test_start_for_starts_a_localhost_home_without_the_bucket(paths, monkeypatch):
     monkeypatch.delenv("R2_BUCKET", raising=False)
     monkeypatch.delenv("SCZ_HOME_UPLOADS", raising=False)
     started = []
     monkeypatch.setattr(data_home.DataHome, "start", lambda self: started.append(self))
-    ctx = SimpleNamespace(
-        data_plane=scheduler.DATA_PLANE_LEGACY, records_sink=LocalSink(paths.root)
-    )
-    assert data_home.start_for(ctx, paths, PositionEvalParams()) is None
-    ctx.data_plane = scheduler.DATA_PLANE_HOME
+    ctx = SimpleNamespace(records_sink=LocalSink(paths.root))
     home = data_home.start_for(ctx, paths, PositionEvalParams())
-    assert started == [home] and not home.uploads  # a localhost home keeps no bucket copy
+    assert started == [home] and not home.uploads
 
 
 # ---- a data home that can vanish: the bucket keeps it resumable -----------------
@@ -252,7 +248,7 @@ def test_start_for_restores_and_uploads_only_for_a_remote_home(paths, monkeypatc
     monkeypatch.setattr(
         data_home.DataHome, "restore", lambda self, required: restored.append(required)
     )
-    ctx = SimpleNamespace(data_plane=scheduler.DATA_PLANE_HOME, records_sink=LocalSink(paths.root))
+    ctx = SimpleNamespace(records_sink=LocalSink(paths.root))
     monkeypatch.delenv("SCZ_HOME_UPLOADS", raising=False)
     assert not data_home.start_for(ctx, paths, PositionEvalParams()).uploads
     monkeypatch.setenv("SCZ_HOME_UPLOADS", "1")

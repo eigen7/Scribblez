@@ -48,7 +48,8 @@ class WriterRuleTest(tornado.testing.AsyncHTTPTestCase):
 
     def test_commands_change_the_records_and_reads_see_them(self):
         self.post("/api/tasks", {**_TAG, "params": {}})
-        added = self.post("/api/task/workers", {**_TAG, "kind": "local", "threads": 1})
+        # The trainer first: a generational tag's generators deliver to its machine.
+        added = self.post("/api/task/workers", {**_TAG, "role": "train", "kind": "local"})
         self.post("/api/pool/machines", {"name": "localhost"})
         task = self.get("/api/task?workload=position_eval&tag=t")
         assert [w["worker_id"] for w in task["workers"]] == added["added"]

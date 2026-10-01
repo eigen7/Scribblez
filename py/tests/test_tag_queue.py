@@ -86,7 +86,7 @@ def test_enqueue_warns_before_queueing(queued):
 def test_enqueue_refuses_a_tag_with_slots(queued):
     q, manager, make = queued
     task = make("busy")
-    manager.add_local(SPEC, task, "generate", 4)
+    manager.add_local(SPEC, task, "train", 4, check_gpu=False)
     with pytest.raises(AssertionError, match="already has slots"):
         q.enqueue("position_eval", "busy", confirm=True)
 
@@ -147,7 +147,7 @@ def test_a_tag_that_does_not_fit_waits_with_its_reason(queued):
 def test_a_busy_machine_is_not_placed_on(queued):
     q, manager, make = queued
     hand = make("hand")
-    w = manager.add_local(SPEC, hand, "generate", 4)
+    w = manager.add_local(SPEC, hand, "train", 4, check_gpu=False)
     w.desired_state = "running"
     make("a")
     q.enqueue("position_eval", "a", confirm=True)
@@ -345,6 +345,9 @@ class _Link:
 
     def hardware_report(self) -> str:
         return "8\n23034\n"
+
+    def remove_volume(self, name: str):
+        pass  # the tag's data-home volume, released as its slots leave
 
 
 def test_an_ssh_machine_takes_the_tag_once_its_bundle_is_pinned(queued, monkeypatch):
