@@ -6,6 +6,7 @@ filesystem -- everything but the `ssh ... docker exec` wrapper is exercised.
 """
 
 import subprocess
+import threading
 
 import pytest
 from cloud import ssh_transfer
@@ -551,3 +552,27 @@ def test_nothing_to_relay_makes_no_call(tmp_path):
     assert _relay(_NoCalls(), tmp_path, local) == []
     (local / "data" / "staging").mkdir(parents=True)
     assert _relay(_NoCalls(), tmp_path, local) == []
+
+
+def test_concurrent_pulls_of_the_same_record_files_do_not_collide(tmp_path):
+    """A data home's slots share a volume, so their pulls, each on its own
+    transfer thread, carry the same stats/ files at the same moment."""
+    remote = _container(tmp_path, **{f"stats/w{i}.json": "{}" for i in range(20)})
+    local = tmp_path / "local"
+    errors = []
+
+    def pull():
+        try:
+            for _ in range(10):
+                _pull(tmp_path, remote, local, machine=_FakeMachine(remote))
+        except Exception as e:  # noqa: BLE001 -- reported below
+            errors.append(e)
+
+    threads = [threading.Thread(target=pull) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(list((local / "stats").iterdir())) == 20
+    assert not any((local / INCOMING_DIR).iterdir())

@@ -41,6 +41,7 @@ it: the scheduler's ingest ledger for chunks, the cursor rule for state pairs.
 """
 
 import shlex
+import shutil
 import tarfile
 import uuid
 from dataclasses import dataclass
@@ -89,6 +90,9 @@ INCOMING_DIR = ".incoming"
 # Prefix of the spool file a sweep streams through, so the next sweep can
 # recognize and remove one left by a process that died mid-copy.
 SPOOL_PREFIX = "sweep-"
+
+# Prefix of the directory one extraction stages its files in (_extract).
+EXTRACT_PREFIX = "x-"
 
 # The archive a relay builds before streaming it, overwritten by the next
 # (a tag has one relay at a time: its data home's).
@@ -336,27 +340,36 @@ def _extract(
 ) -> list[str]:
     """Unpack `archive` (bytes, or a file object) under `root`, each file
     atomically, and return the paths written relative to `root`. `prefix` is
-    prepended to every member name."""
+    prepended to every member name.
+
+    Each call stages under a directory of its own: the slots of a data home
+    share one volume, so their concurrent pulls carry the same record files
+    (stats/), and a shared staging path would let one pull rename away the
+    file another is about to."""
     if isinstance(archive, bytes):
         if not archive:
             return []
         archive = BytesIO(archive)
     names = []
-    with tarfile.open(fileobj=archive, mode=mode) as tar:
-        # Iterate rather than call getmembers(): a stream ("r|", as
-        # sweep_stopped uses) allows one forward pass, and building the member
-        # list would consume the data before extraction.
-        for member in tar:
-            if not member.isfile():
-                continue
-            name = f"{prefix}{member.name}"
-            staged = root / INCOMING_DIR / name
-            staged.parent.mkdir(parents=True, exist_ok=True)
-            staged.write_bytes(tar.extractfile(member).read())
-            dest = root / name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            staged.replace(dest)
-            names.append(name)
+    stage = root / INCOMING_DIR / f"{EXTRACT_PREFIX}{uuid.uuid4().hex[:12]}"
+    try:
+        with tarfile.open(fileobj=archive, mode=mode) as tar:
+            # Iterate rather than call getmembers(): a stream ("r|", as
+            # sweep_stopped uses) allows one forward pass, and building the
+            # member list would consume the data before extraction.
+            for member in tar:
+                if not member.isfile():
+                    continue
+                name = f"{prefix}{member.name}"
+                staged = stage / name
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(tar.extractfile(member).read())
+                dest = root / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                staged.replace(dest)
+                names.append(name)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
     return names
 
 

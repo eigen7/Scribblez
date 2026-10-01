@@ -1523,11 +1523,17 @@ class WorkerManager:
             # it answers.
             probe = self._refresh_probe(spec, task, w)
             name = _container_name(spec, task.tag, w.worker_id)
+            # Each command makes the probe just taken stale: the next pass
+            # must observe afresh, or it would repeat the command (a second
+            # `docker run` fails on the name now in use).
             if start and probe == "stopped":
+                self._expire_probe(_key(spec, task.tag, worker_id))
                 self._ssh_machine(task, w).start_container(name)
             elif start and probe == "missing":
+                self._expire_probe(_key(spec, task.tag, worker_id))
                 self._run_ssh_container(spec, task, w)
             elif not run and probe == "running":
+                self._expire_probe(_key(spec, task.tag, worker_id))
                 self._ssh_machine(task, w).stop_container(name)
 
     def set_data_plane(self, spec, task: tasks.TaskRecord, data_plane: str):

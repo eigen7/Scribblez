@@ -1105,6 +1105,10 @@ def test_a_start_right_after_a_discard_creates_the_container_afresh(
     manager.set_worker_state(spec, task, w.worker_id, run=True)
     assert created == [w.worker_id]
     assert not any(op == "start" for op, _ in _RecordingSshMachine.ops)
+    # The container now exists: the next pass observes it rather than acting
+    # on the "missing" this Start saw, which would create it a second time.
+    monkeypatch.setattr(_RecordingSshMachine, "state", "running")
+    assert manager._refresh_probe(spec, task, w) == "running"
 
 
 def _stopped_ssh_slot(manager, spec, task, monkeypatch, *, slot_bundle, task_bundle):
