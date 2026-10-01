@@ -681,7 +681,8 @@ def test_the_scheduler_finishes_the_generators_at_target_pairs(tmp_path):
     def finished_after_tick(target: int) -> list[str]:
         finished = []
         task = SimpleNamespace(params={"teacher_tag": "x", "target_pairs": target})
-        move_set_eval.tick(SPEC, task, SimpleNamespace(paths=paths, finish=finished.append))
+        hooks = SimpleNamespace(paths=paths, finish=finished.append)
+        workloads.resolve(SPEC.scheduler)(SPEC, task, hooks)
         return finished
 
     write_empty_pair(store, "a")

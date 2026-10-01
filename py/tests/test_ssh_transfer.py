@@ -533,8 +533,10 @@ def test_a_relay_cut_off_midway_lands_nothing_and_keeps_the_files(tmp_path):
     again."""
     remote = _container(tmp_path)
     local, staging = _staged_here(tmp_path, "a.slog", "b.slog")
+    # Only the gzip trailer is lost, so tar has already unpacked the files:
+    # they must still not reach staging.
     with pytest.raises(SshMachineError):
-        _relay(_FakeMachine(remote, push_bytes=20), remote, local)
+        _relay(_FakeMachine(remote, push_bytes=-12), remote, local)
     assert not (remote / "data" / "staging").exists() or not any(
         (remote / "data" / "staging").iterdir()
     )

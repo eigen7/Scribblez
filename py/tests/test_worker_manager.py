@@ -2346,10 +2346,10 @@ def test_chunks_collected_here_are_relayed_into_a_remote_home(manager, monkeypat
         lambda machine, container, **kw: relayed.append((machine, container, kw["rel"])),
     )
     for wid in ("tr", "g1", "g2", "me"):
-        manager._pull_ssh(spec, task, task.worker(wid))
+        manager._transfer_ssh(spec, task, task.worker(wid))
     assert relayed == [("link-m1", "scz-position_eval-t-tr", "data/staging")]
     task.data_plane = "legacy"
-    manager._pull_ssh(spec, task, task.worker("tr"))
+    manager._transfer_ssh(spec, task, task.worker("tr"))
     assert len(relayed) == 1
 
 
@@ -2368,7 +2368,7 @@ def test_a_failed_relay_neither_fails_its_pull_nor_loses_the_pulls_state_pair(ma
         "_install_pulled_pairs",
         lambda self, spec, task, pulled: installed.append(pulled),
     )
-    assert manager._pull_ssh(spec, task, task.worker("tr")) is result
+    assert manager._transfer_ssh(spec, task, task.worker("tr")) is result
     assert installed == [result.pulled]
 
 

@@ -1523,17 +1523,18 @@ class WorkerManager:
             # it answers.
             probe = self._refresh_probe(spec, task, w)
             name = _container_name(spec, task.tag, w.worker_id)
+            key = _key(spec, task.tag, worker_id)
             # Each command makes the probe just taken stale: the next pass
             # must observe afresh, or it would repeat the command (a second
             # `docker run` fails on the name now in use).
             if start and probe == "stopped":
-                self._expire_probe(_key(spec, task.tag, worker_id))
+                self._expire_probe(key)
                 self._ssh_machine(task, w).start_container(name)
             elif start and probe == "missing":
-                self._expire_probe(_key(spec, task.tag, worker_id))
+                self._expire_probe(key)
                 self._run_ssh_container(spec, task, w)
             elif not run and probe == "running":
-                self._expire_probe(_key(spec, task.tag, worker_id))
+                self._expire_probe(key)
                 self._ssh_machine(task, w).stop_container(name)
 
     def set_data_plane(self, spec, task: tasks.TaskRecord, data_plane: str):
@@ -2182,7 +2183,7 @@ class WorkerManager:
         if _intent(w, task) == PARK or _replaceable(w, task):
             return
         pool = self._transfer_pools.setdefault(key, self._new_transfer_pool())
-        future = pool.submit(self._pull_ssh, spec, task, w)
+        future = pool.submit(self._transfer_ssh, spec, task, w)
         if future.done():  # a synchronous pool (the simulation's)
             self._record_pull(spec, task, w, future)
         else:
@@ -2207,6 +2208,15 @@ class WorkerManager:
         w.undelivered = None if result is None else result.remaining
         self.tasks.save(spec, task)
 
+    def _transfer_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """One collection for slot `w`, on its transfer thread: the pull, then,
+        when `w` is the trainer of a remote data home, the relay of chunks
+        staged here into it (_relay_staging). Returns the pull's result."""
+        result = self._pull_ssh(spec, task, w)
+        if result is not None and self._remote_data_home(spec, task) is w:
+            self._relay_staging(self._ssh_machine(task, w), spec, task, w)
+        return result
+
     def _pull_ssh(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Pull a batch of slot `w`'s finished output from its container into
         the tag, installing any state pairs it brought; None when the container
@@ -2227,8 +2237,6 @@ class WorkerManager:
                 raise
             return None
         self._install_pulled_pairs(spec, task, result.pulled)
-        if self._remote_data_home(spec, task) is w:
-            self._relay_staging(machine, spec, task, w)
         return result
 
     def _relay_staging(self, machine, spec, task: tasks.TaskRecord, home: tasks.WorkerRecord):
@@ -2236,8 +2244,8 @@ class WorkerManager:
         data home on an ssh machine, whose scheduler assigns them: what the
         tag's generators elsewhere delivered, a local slot's directly and an
         ssh slot's through collection. It runs after each pull from the home's
-        trainer, so only while that container runs, and the chunks wait here
-        while it does not. A failed relay keeps them here for the next one; it
+        trainer (_transfer_ssh), so only while that container runs, and the
+        chunks wait here while it does not. A failed relay keeps them here for the next one; it
         must not fail the pull before it, whose output is already in place."""
         paths = self.tasks.paths(spec, task.tag)
         try:
