@@ -444,6 +444,5 @@ SPEC = WorkloadSpec(
     ),
     progress="scribblez.workloads.evidence_trajectories:progress",
     pace_role="train",
-    sync_data_dirs=(SLOGS_DIR,),
-    local_data_dirs=(MATCH_RESULTS_DIR,),
+    collected_dirs=(SLOGS_DIR, MATCH_RESULTS_DIR),
 )

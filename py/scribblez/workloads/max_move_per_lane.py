@@ -99,5 +99,5 @@ SPEC = WorkloadSpec(
     scheduler=TICK_FOR_TASK,
     progress="scribblez.generational.scheduler:progress",
     pace_role="train",
-    sync_data_dirs=(STAGING_DIR,),
+    collected_dirs=(STAGING_DIR,),
 )
