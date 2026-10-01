@@ -665,8 +665,10 @@ def test_a_home_sweep_replaces_each_generation_here(tmp_path, monkeypatch):
     _generation(remote, "gen_000005", "generating", "b.slog")
     local = tmp_path / "local"
     _generation(local, "gen_000005", "generating", "stale.slog")
+    (local / GENS / "gen_000005" / "stale.slog").write_bytes(bytes(1000))
 
     local_bytes = sum(p.stat().st_size for p in (local / GENS).rglob("*") if p.is_file())
+    assert local_bytes > ssh_transfer.COLLECT_TIMEOUT_SECONDS  # scaling, not the floor
     timeouts = []
 
     class _Copier(_FakeMachine):
