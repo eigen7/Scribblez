@@ -351,6 +351,23 @@ class SshMachine:
             stdin_text=env_file(env),
         )
 
+    def write_to_volume(self, volume: str, mount: str, image: str, command: list[str], src: Path):
+        """Run `command` in a throwaway container of `image` with named volume
+        `volume` mounted at `mount` and `src` streamed to its stdin: how
+        cloud/ssh_transfer.py fills a volume before any worker mounts it. The
+        image must already be on the machine (pull_image)."""
+        with open(src, "rb") as f:
+            self._exec(
+                [
+                    "docker", "run", "--rm", "-i", "--pull=never",
+                    "--mount", f"source={volume},target={mount}",
+                    "--entrypoint", command[0], image, *command[1:],
+                ],
+                timeout=_WRITE_TIMEOUT,
+                doing=f"writing to volume {volume}",
+                stdin=f,
+            )  # fmt: skip
+
     def create_volume(self, name: str):
         """Create named volume `name`, or keep it as it is if it exists."""
         self._mutate(["docker", "volume", "create", name])

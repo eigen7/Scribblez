@@ -5,8 +5,12 @@ here runs them for real against a directory standing in for the container's
 filesystem -- everything but the `ssh ... docker exec` wrapper is exercised.
 """
 
+import json
+import os
 import subprocess
+import tarfile
 import threading
+from pathlib import Path
 
 import pytest
 from cloud import ssh_transfer
@@ -16,10 +20,13 @@ from cloud.ssh_transfer import (
     INCOMING_DIR,
     collect_command,
     list_dir,
+    pull_ready_dirs,
     pull_results,
     push_file,
     relay_files,
     remove_file,
+    seed_volume,
+    sweep_dirs,
     sweep_stopped,
 )
 
@@ -578,3 +585,136 @@ def test_concurrent_pulls_of_the_same_record_files_do_not_collide(tmp_path):
     assert errors == []
     assert len(list((local / "stats").iterdir())) == 20
     assert not any((local / INCOMING_DIR).iterdir())
+
+
+# ---- whole directories: a data home's generations ---------------------------
+
+GENS = "data/generations"
+COMPLETE = ("manifest.json", '"status": "complete"')
+
+
+def _generation(root, name, status, *chunks, acked=False):
+    gen = root / GENS / name
+    gen.mkdir(parents=True, exist_ok=True)
+    (gen / "manifest.json").write_text(json.dumps({"status": status}, indent=2))
+    for c in chunks:
+        (gen / c).write_text(c)
+    if acked:
+        (gen / "pulled").touch()
+    return gen
+
+
+def _pull_dirs(machine, remote, local, **bounds):
+    return pull_ready_dirs(
+        machine, "c", remote_root=str(remote), local_root=local, rel=GENS, ready=COMPLETE,
+        ack_name="pulled", **bounds,
+    )  # fmt: skip
+
+
+def test_complete_generations_are_copied_whole_then_acknowledged(tmp_path):
+    """Only a complete, unacknowledged generation is taken; the copy here
+    replaces any older one whole, and the home keeps its own until the
+    acknowledgement lets its trainer evict it."""
+    remote = _container(tmp_path)
+    _generation(remote, "gen_000000", "complete", "a.slog", acked=True)
+    _generation(remote, "gen_000001", "complete", "b.slog", "c.slog")
+    _generation(remote, "gen_000002", "generating", "d.slog")
+    local = tmp_path / "local"
+    _generation(local, "gen_000001", "generating", "stale.slog")  # an old copy here
+    machine = _FakeMachine(remote)
+
+    assert _pull_dirs(machine, remote, local) == [f"{GENS}/gen_000001"]
+    here = local / GENS / "gen_000001"
+    assert sorted(p.name for p in here.iterdir()) == ["b.slog", "c.slog", "manifest.json"]
+    assert (remote / GENS / "gen_000001" / "pulled").exists()
+    assert (remote / GENS / "gen_000001" / "b.slog").exists()  # the home keeps it
+    assert not (local / GENS / "gen_000000").exists()  # acknowledged before: not again
+    assert not (local / GENS / "gen_000002").exists()  # still filling
+    assert _pull_dirs(machine, remote, local) == []
+    assert not any((local / INCOMING_DIR).iterdir())
+
+
+def test_a_torn_generation_pull_installs_and_acknowledges_nothing(tmp_path):
+    """A stream cut inside a chunk's bytes: the copy fails before anything is
+    installed, so no partial generation lands here and none is acknowledged."""
+    remote = _container(tmp_path)
+    _generation(remote, "gen_000000", "complete", "a.slog")
+    (remote / GENS / "gen_000000" / "a.slog").write_bytes(os.urandom(200_000))
+
+    class _Torn(_FakeMachine):
+        def read_from_container(self, container, command, timeout=None):
+            out = super().read_from_container(container, command, timeout)
+            return out[: len(out) // 2] if "tar -c" in command[2] else out
+
+    local = tmp_path / "local"
+    with pytest.raises((EOFError, tarfile.ReadError, OSError)):
+        _pull_dirs(_Torn(remote), remote, local)
+    assert not (local / GENS / "gen_000000").exists()
+    assert not (remote / GENS / "gen_000000" / "pulled").exists()
+    assert _pull_dirs(_FakeMachine(remote), remote, local) == [f"{GENS}/gen_000000"]
+
+
+def test_a_home_sweep_replaces_each_generation_here(tmp_path):
+    """Before a home moves, its generations, open ones included, replace the
+    copies here: a stale copy of an index the home went on filling must not
+    survive beside it."""
+    remote = _container(tmp_path)
+    _generation(remote, "gen_000004", "complete", "a.slog", acked=True)
+    _generation(remote, "gen_000005", "generating", "b.slog")
+    local = tmp_path / "local"
+    _generation(local, "gen_000005", "generating", "stale.slog")
+
+    class _Copier(_FakeMachine):
+        def copy_from_container(self, container, path, dest):
+            src = Path(path)
+            if not src.exists():
+                return False
+            with tarfile.open(dest, "w") as tar:
+                tar.add(src, arcname=src.name)
+            return True
+
+    installed = sweep_dirs(
+        _Copier(remote), "c", remote_root=str(remote), local_root=local, rel=GENS
+    )
+    assert installed == [f"{GENS}/gen_000004", f"{GENS}/gen_000005"]
+    assert sorted(p.name for p in (local / GENS / "gen_000005").iterdir()) == [
+        "b.slog",
+        "manifest.json",
+    ]
+
+
+def test_a_seed_fills_only_what_the_volume_lacks(tmp_path):
+    """A new home gets the window from here, complete generations
+    acknowledged; a generation the volume already holds is its newer copy and
+    stays, and the ledger is appended to."""
+    local = tmp_path / "local"
+    _generation(local, "gen_000001", "complete", "a.slog")
+    _generation(local, "gen_000002", "generating", "b.slog")
+    (local / "data" / "ingest_log.txt").write_text("a.slog\n")
+    volume = tmp_path / "volume"
+    _generation(volume, "gen_000002", "generating", "b.slog", "c.slog")  # newer, in place
+    (volume / "data" / "ingest_log.txt").write_text("c.slog\n")
+
+    class _Volume(_FakeMachine):
+        def write_to_volume(self, name, mount, image, command, src):
+            assert (name, mount, image) == ("vol", str(volume), "img")
+            self.write_to_container(name, command, src)
+
+    seed_volume(
+        _Volume(volume), "vol", image="img", remote_root=str(volume), local_root=local,
+        dirs=[f"{GENS}/gen_000001", f"{GENS}/gen_000002"], ack_dirs=[f"{GENS}/gen_000001"],
+        ack_name="pulled", append_files=["data/ingest_log.txt"],
+    )  # fmt: skip
+    assert sorted(p.name for p in (volume / GENS / "gen_000001").iterdir()) == [
+        "a.slog",
+        "manifest.json",
+        "pulled",
+    ]
+    assert sorted(p.name for p in (volume / GENS / "gen_000002").iterdir()) == [
+        "b.slog",
+        "c.slog",
+        "manifest.json",
+    ]
+    assert (volume / "data" / "ingest_log.txt").read_text() == "c.slog\na.slog\n"
+    assert [p.name for p in volume.iterdir()] == ["data"]  # the work dir is gone
+    assert not (local / INCOMING_DIR / ssh_transfer.SEED_SPOOL).exists()

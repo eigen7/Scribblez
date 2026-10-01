@@ -36,8 +36,9 @@ All configuration comes from environment variables:
                                           checkpoint and cursor into this
                                           trainer's container to resume from
                                           (generational/state_pair.py)
-    SCZ_HOME_UPLOADS                      "1": this trainer's data home is
-                                          remote and uploads its generations
+    SCZ_REMOTE_HOME                       "1": this trainer's data home is on
+                                          an ssh machine, whose generations the
+                                          controller pulls
                                           (generational/data_home.py)
     SCZ_THREADS                           worker threads (default: all cores)
     SCZ_MAX_CYCLES                        stop after N cycles (default 0 = run
@@ -85,7 +86,7 @@ WORKER_ENV_VARS = (
     "SCZ_SINK",
     "SCZ_DATA_SINK",
     "SCZ_STATE_SEED",
-    "SCZ_HOME_UPLOADS",
+    "SCZ_REMOTE_HOME",
     "SCZ_THREADS",
     "SCZ_MAX_CYCLES",
     "SCZ_WORKER_ID",

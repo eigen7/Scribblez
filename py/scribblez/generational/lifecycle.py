@@ -9,8 +9,8 @@ generations from staged chunks, and the trainer, which consumes them,
 coordinate entirely through these files.
 
 The manifest is the authority on a directory's status. Completeness (status
-plus committed game count) and publication to the results bucket are recorded
-facts, never inferred from a file listing. Everything here reads manifests
+plus committed game count) is a recorded fact, never inferred from a file
+listing. Everything here reads manifests
 only, never .slog headers, so it stays cheap and independent of the C++
 loader.
 
@@ -32,8 +32,16 @@ MANIFEST_NAME = "manifest.json"
 GENERATING = "generating"
 COMPLETE = "complete"
 
-# Manifest key set once the generation is in the results bucket.
-PUBLISHED = "published"
+# The file the controller creates in a remote data home's complete generation
+# once it holds its own copy (WorkerManager._pull_generations): until then the
+# home's trainer must not evict it. A separate file rather than a manifest key,
+# so the controller never rewrites a file the home's scheduler owns.
+ACK_NAME = "pulled"
+
+# How a complete generation is recognized from its manifest's text alone, by a
+# shell listing on a remote machine (WorkerManager._pull_generations): the
+# file, and the line write_manifest's formatting gives the complete status.
+COMPLETE_MARK = (MANIFEST_NAME, f'"status": "{COMPLETE}"')
 
 # The gen_<NNNNNN> directory-name prefix produced by TagPaths.generation_dir.
 _DIR_PREFIX = "gen_"
@@ -117,18 +125,9 @@ def is_complete(gen_dir: Path) -> bool:
     return manifest is not None and manifest.get("status") == COMPLETE
 
 
-def mark_published(gen_dir: Path):
-    """Record that the complete generation is in the results bucket, whole."""
-    manifest = read_manifest(gen_dir)
-    if manifest is None:
-        raise FileNotFoundError(f"no manifest to mark published in {gen_dir}")
-    manifest[PUBLISHED] = True
-    write_manifest(gen_dir, manifest)
-
-
-def is_published(gen_dir: Path) -> bool:
-    manifest = read_manifest(gen_dir)
-    return manifest is not None and bool(manifest.get(PUBLISHED))
+def is_pulled(gen_dir: Path) -> bool:
+    """Whether the controller holds its own copy of the generation (ACK_NAME)."""
+    return (gen_dir / ACK_NAME).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -171,20 +170,20 @@ def window_dirs(paths: TagPaths, latest_index: int, window: int) -> list[Path]:
 
 
 def evict_beyond_window(
-    paths: TagPaths, latest_index: int, window: int, *, keep_unpublished: bool = False
+    paths: TagPaths, latest_index: int, window: int, *, keep_unpulled: bool = False
 ) -> list[int]:
     """Delete complete generations older than the window ending at
     `latest_index`, returning their indices. Never touches incomplete
     generations or any past `latest_index`. `window <= 0` evicts nothing.
-    With `keep_unpublished`, a generation not yet in the bucket stays too, for
-    a data home whose upload is behind (generational/data_home.py)."""
+    With `keep_unpulled`, a generation the controller has not yet pulled stays
+    too, for a remote data home (generational/data_home.py)."""
     if window <= 0:
         return []
     complete = complete_indices_upto(paths, latest_index)
     kept = set(complete[-window:])
     evicted = []
     for idx in complete:
-        if keep_unpublished and not is_published(paths.generation_dir(idx)):
+        if keep_unpulled and not is_pulled(paths.generation_dir(idx)):
             continue
         if idx not in kept:
             shutil.rmtree(paths.generation_dir(idx), ignore_errors=True)

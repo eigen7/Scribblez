@@ -482,12 +482,16 @@ class _StoppedLink(_Link):
 def test_the_drain_saves_logs_and_sweeps_before_removing(queued, monkeypatch):
     """The ssh half of a release: every container's full log saved into the
     tag and every container swept (each delivers locally, a trainer's state
-    pairs included), all before the slots are removed."""
+    pairs included), and the trainer's machine, the tag's data home, swept of
+    its generations, all before the slots are removed."""
     q, manager, make = queued
     monkeypatch.setattr(workers_mod, "SshMachine", _StoppedLink)
-    swept = []
+    swept, homes = [], []
     monkeypatch.setattr(
         workers_mod, "sweep_stopped", lambda machine, **target: swept.append(target) or []
+    )
+    monkeypatch.setattr(
+        workers_mod, "sweep_dirs", lambda machine, **target: homes.append(target) or []
     )
     manager.remove_pool_machine("localhost")
     manager.add_pool_machine("gpu-box", "me@gpu-box")
@@ -510,11 +514,16 @@ def test_the_drain_saves_logs_and_sweeps_before_removing(queued, monkeypatch):
         "ssh-1.container.log",
     ]
     # The drain sweeps both; removing the trainer sweeps it once more for a
-    # final state pair (WorkerManager.remove_worker).
+    # final state pair, and then its home's staging and ledger
+    # (WorkerManager.remove_worker).
     assert [t["container"] for t in swept] == [
         "scz-position_eval-a-ssh-0",
         "scz-position_eval-a-ssh-1",
         "scz-position_eval-a-ssh-0",
+        "scz-position_eval-a-ssh-0",
+    ]
+    assert [(t["container"], t["rel"]) for t in homes] == [
+        ("scz-position_eval-a-ssh-0", "data/generations")
     ]
     assert manager.tasks.load(SPEC, "a").workers == []
     assert _lease(manager, "gpu-box") is None

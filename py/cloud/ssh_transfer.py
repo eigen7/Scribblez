@@ -98,11 +98,26 @@ EXTRACT_PREFIX = "x-"
 # (a tag has one relay at a time: its data home's).
 RELAY_SPOOL = "relay.tar.gz"
 
+# The archive a volume seed builds, overwritten by the next (a tag seeds one
+# home at a time, from the blocking thread).
+SEED_SPOOL = "seed.tar.gz"
+
 
 @dataclass(frozen=True)
 class PullResult:
     pulled: list[str]  # paths relative to the tag root, as extracted
     remaining: int | None  # delivered files still waiting; None if unknown
+
+
+def _take(batch: int, batch_bytes: int) -> str:
+    """The awk program that takes a listing's batch from "<bytes> <name>"
+    lines sorted by name: a prefix of at most `batch` entries and, past the
+    first, at most `batch_bytes`; then "TOTAL <n>" and "BYTES <b>"."""
+    return (
+        f"!stop && taken < {batch} && (taken == 0 || sum + $1 <= {batch_bytes})"
+        " { print $2; taken++; sum += $1; next } { stop = 1 }"
+        ' END { print "TOTAL", NR+0; print "BYTES", sum+0 }'
+    )
 
 
 def list_command(
@@ -132,11 +147,6 @@ def list_command(
         f'[ -f "$p/{marker}" ] && echo "$(du -sb "$p" | cut -f1) $p"; done\n'
         for d, marker in (pair_dirs or {}).items()
     )
-    take = (
-        f"!stop && taken < {batch} && (taken == 0 || sum + $1 <= {batch_bytes})"
-        " { print $2; taken++; sum += $1; next } { stop = 1 }"
-        ' END { print "TOTAL", NR+0; print "BYTES", sum+0 }'
-    )
     return [
         "sh",
         "-c",
@@ -146,7 +156,7 @@ def list_command(
         "find \"$d\" -mindepth 1 -maxdepth 1 -type f ! -name '.*' ! -name '*.tmp' "
         "-printf '%s %p\\n'; done\n"
         f"{pairs}"
-        f"}} | sort -k2 | awk '{take}'",
+        f"}} | sort -k2 | awk '{_take(batch, batch_bytes)}'",
     ]
 
 
@@ -460,3 +470,202 @@ def pull_results(
         machine.exec_in_container(container, ["rm", "-rf", *paths])
     remaining = None if listing.total is None else listing.total - len(delivered)
     return PullResult(pulled=names, remaining=remaining)
+
+
+# ---- whole directories: a data home's generations ---------------------------
+
+
+def ready_dirs_command(
+    root: str, rel: str, ready: tuple[str, str], ack_name: str, batch_bytes: int
+) -> list[str]:
+    """The in-container command listing the next batch of the subdirectories
+    of `rel` that are ready and not yet acknowledged, oldest name first, then
+    "TOTAL" and "BYTES" as list_command does. `ready` is (file, text): a
+    subdirectory is ready once that file of it contains the text (a
+    generation's manifest saying complete), and acknowledged once it holds a
+    file named `ack_name`."""
+    ready_file, ready_text = ready
+    return [
+        "sh",
+        "-c",
+        f"cd {shlex.quote(root)} 2>/dev/null || exit 0\n"
+        "{\n"
+        f'[ -d {shlex.quote(rel)} ] && for d in {shlex.quote(rel)}/*/; do d="${{d%/}}"; '
+        f'[ -e "$d/{ack_name}" ] && continue; '
+        f'grep -qsF {shlex.quote(ready_text)} "$d/{ready_file}" || continue; '
+        'echo "$(du -sb "$d" | cut -f1) $d"; done\n'
+        f"}} | sort -k2 | awk '{_take(BATCH, batch_bytes)}'",
+    ]
+
+
+def _install_dirs(stage: Path, root: Path, rel: str) -> list[str]:
+    """Move each directory unpacked under `stage`/`rel` to `root`/`rel`,
+    replacing what is there: a directory's copy arrives whole, as one rename,
+    and nothing of an older copy survives in it. Returns the paths installed,
+    relative to `root`."""
+    src = stage / rel
+    if not src.is_dir():
+        return []
+    dest_parent = root / rel
+    dest_parent.mkdir(parents=True, exist_ok=True)
+    installed = []
+    for d in sorted(p for p in src.iterdir() if p.is_dir()):
+        dest = dest_parent / d.name
+        old = dest_parent / f".{d.name}.old-{uuid.uuid4().hex[:12]}"
+        if dest.exists():
+            dest.rename(old)
+        d.rename(dest)
+        shutil.rmtree(old, ignore_errors=True)
+        installed.append(f"{rel}/{d.name}")
+    return installed
+
+
+def _unpack_dirs(
+    archive: IO[bytes], root: Path, rel: str, mode: str, prefix: str = ""
+) -> list[str]:
+    """Unpack `archive` into a staging directory of its own under `root`, then
+    install the directories it holds under `rel` (_install_dirs). `prefix` is
+    the tag-relative directory the members are named relative to."""
+    stage = root / INCOMING_DIR / f"{EXTRACT_PREFIX}{uuid.uuid4().hex[:12]}"
+    try:
+        target = stage / prefix if prefix else stage
+        target.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(fileobj=archive, mode=mode) as tar:
+            tar.extractall(target, filter="data")
+        return _install_dirs(stage, root, rel)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def pull_ready_dirs(
+    machine,
+    container: str,
+    *,
+    remote_root: str,
+    local_root: Path,
+    rel: str,
+    ready: tuple[str, str],
+    ack_name: str,
+    batch_bytes: int = BATCH_BYTES,
+) -> list[str]:
+    """Copy a batch of the container's ready, unacknowledged subdirectories of
+    `rel` (ready_dirs_command) to the same place here, each replacing any copy
+    already here, then acknowledge them in the container. Returns the paths
+    copied, relative to the tag root.
+
+    The container keeps its directories: the acknowledgement is what lets its
+    worker delete one. It comes only after the copies are installed, so a pull
+    that dies midway is repeated whole by the next, and a copy installed
+    twice (the acknowledgement failed) just replaces itself."""
+    listing = parse_listing(
+        machine.read_from_container(
+            container, ready_dirs_command(remote_root, rel, ready, ack_name, batch_bytes)
+        )
+    )
+    if not listing.names:
+        return []
+    seconds = transfer_seconds(listing.nbytes)
+    archive = machine.read_from_container(
+        container,
+        collect_command(remote_root, listing.names, seconds),
+        timeout=seconds + READ_MARGIN_SECONDS,
+    )
+    installed = _unpack_dirs(BytesIO(archive), local_root, rel, "r:gz")
+    acks = " ".join(shlex.quote(f"{remote_root}/{d}/{ack_name}") for d in installed)
+    if acks:
+        machine.exec_in_container(container, ["sh", "-c", f"touch {acks}"])
+    return installed
+
+
+def sweep_dirs(
+    machine, container: str, *, remote_root: str, local_root: Path, rel: str
+) -> list[str]:
+    """Copy every subdirectory of `rel` out of a stopped container, each
+    replacing any copy here (_install_dirs), as a sweep before the container
+    and its volume go. Returns the paths installed, relative to the tag root."""
+    incoming = local_root / INCOMING_DIR
+    incoming.mkdir(parents=True, exist_ok=True)
+    archive = incoming / f"{SPOOL_PREFIX}{Path(rel).name}.tar"
+    try:
+        if not machine.copy_from_container(container, f"{remote_root}/{rel}", archive):
+            return []
+        with open(archive, "rb") as stream:
+            # docker cp names members relative to the copied directory's parent.
+            return _unpack_dirs(stream, local_root, rel, "r|", prefix=str(Path(rel).parent))
+    finally:
+        archive.unlink(missing_ok=True)
+
+
+def seed_command(root: str, dirs: list[str], append_files: list[str], ack_name: str) -> list[str]:
+    """The command, run in a throwaway container with a volume mounted at
+    `root`, unpacking a gzipped tar off stdin into the volume: each of `dirs`
+    lands only where the volume lacks it, since what the volume holds is the
+    newer copy, and each of `append_files` is appended to its namesake. The
+    tar unpacks into a work directory in the volume first, so every move is a
+    rename, and nothing lands from a stream cut short."""
+    work = f"{root}/.seed-{uuid.uuid4().hex[:12]}"
+    moves = "".join(
+        f"[ -e {shlex.quote(f'{root}/{d}')} ] || "
+        f"{{ mkdir -p {shlex.quote(str(Path(root, d).parent))}; "
+        f'mv "$w"/{shlex.quote(d)} {shlex.quote(f"{root}/{d}")}; }}\n'
+        for d in dirs
+    )
+    appends = "".join(
+        f'[ -f "$w"/{shlex.quote(f)} ] && {{ mkdir -p {shlex.quote(str(Path(root, f).parent))}; '
+        f'cat "$w"/{shlex.quote(f)} >> {shlex.quote(f"{root}/{f}")}; }}\n'
+        for f in append_files
+    )
+    return [
+        "sh",
+        "-c",
+        f"set -e\nw={shlex.quote(work)}\n"
+        "trap 'rm -rf \"$w\"' EXIT\n"
+        'mkdir -p "$w"\n'
+        'tar -xz -C "$w" -f -\n'
+        f"{moves}{appends}",
+    ]
+
+
+def seed_volume(
+    machine,
+    volume: str,
+    *,
+    image: str,
+    remote_root: str,
+    local_root: Path,
+    dirs: list[str],
+    ack_dirs: list[str],
+    ack_name: str,
+    append_files: list[str],
+):
+    """Push `dirs` and `append_files` (tag-relative, under `local_root`) into
+    named volume `volume`, mounted at `remote_root`, before any worker
+    container mounts it (seed_command says how each lands). Each of
+    `ack_dirs` carries an `ack_name` file, as the copy here already holds it.
+    Runs through a throwaway container of `image`, which must be on the
+    machine."""
+    present_files = [f for f in append_files if (local_root / f).is_file()]
+    if not dirs and not present_files:
+        return
+    incoming = local_root / INCOMING_DIR
+    incoming.mkdir(parents=True, exist_ok=True)
+    archive = incoming / SEED_SPOOL
+    try:
+        with tarfile.open(archive, "w:gz", compresslevel=1) as tar:
+            for d in dirs:
+                tar.add(local_root / d, arcname=d, filter=_without(ack_name))
+            for d in ack_dirs:
+                tar.addfile(tarfile.TarInfo(f"{d}/{ack_name}"))
+            for f in present_files:
+                tar.add(local_root / f, arcname=f)
+        command = seed_command(remote_root, dirs, present_files, ack_name)
+        machine.write_to_volume(volume, remote_root, image, command, archive)
+    finally:
+        archive.unlink(missing_ok=True)
+
+
+def _without(name: str):
+    """A tarfile.add filter dropping members named `name`: an acknowledgement
+    left in a copy here (a sweep brings them along) is added afresh or not at
+    all."""
+    return lambda info: None if Path(info.name).name == name else info

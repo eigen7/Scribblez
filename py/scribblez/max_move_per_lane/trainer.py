@@ -179,7 +179,7 @@ def run_generational_training(model, optimizer, recorder, paths, device, params,
             paths,
             state.generation_index - 1,
             params.window,
-            keep_unpublished=home.uploads,
+            keep_unpulled=home.remote,
         )
         if evicted:
             timed_print(f"evicted generations {evicted} (window={params.window})")

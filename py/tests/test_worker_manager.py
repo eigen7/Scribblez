@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from cloud.credentials import R2Credentials, RegistryConfig
+from cloud.credentials import RegistryConfig
 from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
 from scribblez import workloads
@@ -27,6 +27,7 @@ from scribblez.dashboard.workers import (
     _container_name,
     _key,
 )
+from scribblez.generational import lifecycle
 from scribblez.paths import TagPaths
 from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
 from scribblez.workloads.position_eval import PositionEvalParams
@@ -2232,6 +2233,7 @@ def test_chunks_collected_here_are_relayed_into_a_remote_home(manager, monkeypat
     other generators delivered here goes on into the home's staging; a pull
     from any other slot relays nothing."""
     spec = workloads.get("position_eval")
+    monkeypatch.setattr(WorkerManager, "_pull_generations", lambda self, m, spec, task, w: None)
     task = _rented_home_task(manager, monkeypatch)
     monkeypatch.setattr(
         workers_mod, "pull_results", lambda machine, **t: SimpleNamespace(pulled=[], remaining=0)
@@ -2252,6 +2254,7 @@ def test_a_failed_relay_neither_fails_its_pull_nor_loses_the_pulls_state_pair(ma
     """The pull before it already moved a state pair out of the container; it
     is installed, and the pull's count recorded, whatever the relay does."""
     spec = workloads.get("position_eval")
+    monkeypatch.setattr(WorkerManager, "_pull_generations", lambda self, m, spec, task, w: None)
     task = _rented_home_task(manager, monkeypatch)
     result = SimpleNamespace(pulled=["state/gen_000004/train_state.json"], remaining=0)
     monkeypatch.setattr(workers_mod, "pull_results", lambda machine, **t: result)
@@ -2265,6 +2268,50 @@ def test_a_failed_relay_neither_fails_its_pull_nor_loses_the_pulls_state_pair(ma
     )
     assert manager._transfer_ssh(spec, task, task.worker("tr")) is result
     assert installed == [result.pulled]
+
+
+def _generations_here(manager, spec, task, complete: int, open_: bool, cursor: int):
+    """`complete` complete generations from 0 in the tag here, then an open one
+    when `open_`, with the trainer's cursor at `cursor`."""
+    paths = manager.tasks.paths(spec, task.tag)
+    for i in range(complete + open_):
+        lifecycle.open_generation(paths, i, target_games=1)
+        if i < complete:
+            lifecycle.mark_complete(paths.generation_dir(i), 1)
+    lifecycle.write_train_state(paths, {"generation_index": cursor, "rows_trained": 1})
+    return paths
+
+
+def test_a_new_home_is_seeded_with_the_window_from_here(manager, monkeypatch):
+    """The window behind the cursor onward, complete generations acknowledged
+    (the copy here already holds them) and the open one too, so the home goes
+    on filling it; older ones stay behind."""
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    task.params = {"window": 2}
+    _generations_here(manager, spec, task, complete=4, open_=True, cursor=4)
+    seeded = {}
+    monkeypatch.setattr(workers_mod, "seed_volume", lambda machine, volume, **kw: seeded.update(kw))
+    manager._seed_home("link", "img", ("vol", "/mnt/t"), spec, task)
+    assert seeded["dirs"] == [f"data/generations/gen_00000{i}" for i in (2, 3, 4)]
+    assert seeded["ack_dirs"] == [f"data/generations/gen_00000{i}" for i in (2, 3)]
+    assert seeded["append_files"] == ["data/ingest_log.txt"]
+    assert (seeded["remote_root"], seeded["image"]) == ("/mnt/t", "img")
+
+
+def test_a_generation_pull_drops_copies_here_behind_the_window(manager, monkeypatch):
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    task.params = {"window": 2}
+    paths = _generations_here(manager, spec, task, complete=5, open_=False, cursor=4)
+    pulled = []
+    monkeypatch.setattr(
+        workers_mod, "pull_ready_dirs", lambda machine, container, **kw: pulled.append(container)
+    )
+    manager._pull_generations("link", spec, task, task.worker("tr"))
+    assert pulled == ["scz-position_eval-t-tr"]
+    # Gens 2 and 3 are the window behind cursor 4; gen 4 is ahead of it.
+    assert lifecycle.list_generation_indices(paths) == [2, 3, 4]
 
 
 def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
@@ -2282,9 +2329,10 @@ def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
 
         def run_container(self, name, image, env, *, gpus=False, volume=None):
             runs[name.rsplit("-", 1)[-1]] = (
+                len(seeded),
                 volume,
                 env.get("SCZ_DATA_SINK"),
-                env.get("SCZ_HOME_UPLOADS"),
+                env.get("SCZ_REMOTE_HOME"),
             )
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
@@ -2302,16 +2350,24 @@ def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
         ),
     )
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
+    seeded = []
+    monkeypatch.setattr(
+        WorkerManager,
+        "_seed_home",
+        lambda self, machine, image, volume, spec, task: seeded.append((image, volume)),
+    )
     for w in task.workers:
         if w.kind == "ssh":
             manager._run_ssh_container(spec, task, w)
     root = str(spec.paths("t", workers_mod.DEFAULT_MOUNT_ROOT).root)
     vol = "scz-position_eval-t-data"
-    # Every data sink is local, so SCZ_DATA_SINK is left unset.
-    assert runs["tr"] == ((vol, root), None, "1")
-    assert runs["g1"] == ((vol, root), None, None)
-    assert runs["g2"] == (None, None, None)  # away from the home: collected and relayed
-    assert runs["me"] == (None, None, None)
+    # Every data sink is local, so SCZ_DATA_SINK is left unset. The trainer's
+    # volume is seeded before its container starts, and only for it.
+    assert runs["tr"] == (1, (vol, root), None, "1")
+    assert runs["g1"] == (1, (vol, root), None, None)
+    assert runs["g2"] == (1, None, None, None)  # away from the home: collected and relayed
+    assert runs["me"] == (1, None, None, None)
+    assert seeded == [("repo/worker:latest-torch", (vol, root))]
     assert set(volumes) == {vol}
 
 
@@ -2372,13 +2428,17 @@ def test_removing_a_stopped_trainer_takes_its_final_state_pair(manager, monkeypa
     monkeypatch.setattr(WorkerManager, "_machine_gone", lambda self, spec, task, w: False)
     machine = SimpleNamespace(remove_container=lambda name: None, remove_volume=lambda name: None)
     monkeypatch.setattr(WorkerManager, "_ssh_machine", lambda self, task, w: machine)
-    swept = []
+    swept, homes = [], []
     monkeypatch.setattr(
         WorkerManager, "_sweep_ssh", lambda self, m, spec, task, w: swept.append(w.worker_id)
+    )
+    monkeypatch.setattr(
+        WorkerManager, "_sweep_home", lambda self, m, spec, task, w: homes.append(w.worker_id)
     )
     manager.remove_worker(spec, task, "g2")
     manager.remove_worker(spec, task, "tr")
     assert swept == ["tr"]
+    assert homes == ["tr"]  # the home's data plane comes here before it moves
 
 
 def test_the_tag_volume_goes_with_the_last_slot_on_its_machine(manager, monkeypatch):
@@ -2402,13 +2462,12 @@ def test_the_tag_volume_goes_with_the_last_slot_on_its_machine(manager, monkeypa
     assert gone[-1] == ("m1", "scz-position_eval-t-data")
 
 
-def test_a_local_trainer_is_given_the_bucket(manager, monkeypatch, tmp_path):
-    """It restores the window a remote home uploaded, should the trainer have
-    moved here; no other local slot gets the bucket."""
+def test_no_local_slot_needs_the_bucket(manager, monkeypatch, tmp_path):
+    """A trainer that moved here finds its home's data plane already swept
+    here (_sweep_home), not in the bucket."""
     spec = workloads.get("position_eval")
     monkeypatch.setattr(WorkerManager, "_spawn_local", _REAL_SPAWN_LOCAL)
-    r2 = R2Credentials(account_id="a", access_key_id="k", secret_access_key="s", bucket="b")
-    monkeypatch.setattr(WorkerManager, "_creds", lambda self: SimpleNamespace(r2=r2))
+    monkeypatch.setattr(WorkerManager, "_creds", _fail)
     monkeypatch.setattr(
         WorkerManager, "_log_file", lambda self, spec, tag, name: open(tmp_path / "log", "ab")
     )
@@ -2424,10 +2483,9 @@ def test_a_local_trainer_is_given_the_bucket(manager, monkeypatch, tmp_path):
     task = _local_training_task()
     for w in task.workers:
         manager._spawn_local(spec, task, w)
-    assert envs["tr"]["R2_BUCKET"] == "b"
-    assert "R2_BUCKET" not in envs["g"]  # a generator just delivers locally
     for env in envs.values():
-        assert "SCZ_DATA_SINK" not in env
+        assert "R2_BUCKET" not in env and "SCZ_DATA_SINK" not in env
+        assert "SCZ_REMOTE_HOME" not in env
 
 
 def test_the_scheduler_hooks_say_whether_a_role_is_running(manager, monkeypatch):
