@@ -52,7 +52,6 @@ import sys
 import threading
 import time
 from dataclasses import asdict
-from pathlib import Path
 
 import torch
 
@@ -63,7 +62,7 @@ from scribblez.ffi import (
     session_input_arm,
     set_opp_leave_input,
 )
-from scribblez.generational import checkpoint, data_home, lifecycle
+from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import CpuController, default_controls, progress_line
 from scribblez.generational.optim import build_optim_arm, build_optimizer
@@ -116,13 +115,11 @@ def wait_for_generation(paths: TagPaths, index: int, sink, home=None):
 
 
 def restore_from_sink(paths: TagPaths, sink):
-    """On a machine with no local checkpoint, fetch the rolling checkpoint and
-    cursor through the sink, if it has them."""
-    if paths.rolling_checkpoint.exists():
-        return
-    if sink.fetch_file("checkpoints/model.pt", paths.rolling_checkpoint):
-        sink.fetch_file("train_state.json", paths.train_state_path)
-        timed_print(f"restored the rolling checkpoint through the {sink.kind} sink")
+    """Install the newest checkpoint and cursor the sink holds when they beat
+    the ones on this machine (state_pair's cursor rule): a fresh machine
+    takes the sink's, and a machine holding fresher state keeps its own."""
+    if state_pair.restore(paths, sink):
+        timed_print(f"restored the checkpoint and cursor through the {sink.kind} sink")
 
 
 def ensure_window(paths: TagPaths, sink, cursor: int, window: int):
@@ -207,16 +204,6 @@ class OutputDeliverer:
             self._done.put((what, time.monotonic() - t0))
 
 
-def _snapshot(path: Path, gen: int) -> Path:
-    """A hard link to `path`'s current version, for a delivery that may run
-    after the trainer has rewritten `path`. Rewrites replace the file rather
-    than modifying it, so the link keeps this version."""
-    snap = path.with_name(f"{path.name}.gen{gen}")
-    snap.unlink(missing_ok=True)
-    os.link(path, snap)
-    return snap
-
-
 def _deliver_generation(
     sink, paths: TagPaths, gen: int, checkpoint_snap, state_snap, recorder, staged
 ):
@@ -226,8 +213,7 @@ def _deliver_generation(
     for sidecar in paths.onnx_sidecars:
         sink.deliver_output(sidecar, f"models/{sidecar.name}", keep=True)
     sink.deliver_output(paths.onnx_path(gen), f"models/{paths.onnx_path(gen).name}")
-    sink.deliver_output(checkpoint_snap, "checkpoints/model.pt")
-    sink.deliver_output(state_snap, "train_state.json")
+    state_pair.deliver(sink, checkpoint_snap, state_snap, gen)
     recorder.deliver_staged(staged)
 
 
@@ -303,8 +289,8 @@ def _checkpoint_and_eval(
             ctx["records_sink"],
             paths,
             ci,
-            _snapshot(paths.rolling_checkpoint, ci),
-            _snapshot(paths.train_state_path, ci),
+            state_pair.snapshot(paths.rolling_checkpoint, ci),
+            state_pair.snapshot(paths.train_state_path, ci),
             recorder,
             staged,
         ),

@@ -31,6 +31,15 @@ class _Rclone:
     def __call__(self, r2, *args, capture=False, input_text=None):
         self.calls.append(args)
         op = args[0]
+        if op == "lsf" and args[1] == "--dirs-only":
+            key = self._key(args[2])
+            under = {
+                k[len(key) + 1 :].split("/")[0] for k in self.objects if k.startswith(key + "/")
+            }
+            dirs = sorted(
+                d for d in under if any(k.startswith(f"{key}/{d}/") for k in self.objects)
+            )
+            return SimpleNamespace(returncode=0, stdout="".join(f"{d}/\n" for d in dirs), stderr="")
         if op == "lsf":
             key = self._key(args[1])
             under = sorted(k[len(key) + 1 :] for k in self.objects if k.startswith(key + "/"))
@@ -51,6 +60,10 @@ class _Rclone:
             for k in self.objects:
                 if k.startswith(prefix + "/"):
                     (dest / k[len(prefix) + 1 :]).write_text(k)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if op == "purge":
+            key = self._key(args[1])
+            self.objects = {k for k in self.objects if not k.startswith(key + "/")}
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if op == "deletefile":
             key = self._key(args[1])
@@ -149,12 +162,17 @@ class _FakeSink:
         return True
 
     def fetch_file(self, rel, dest):
+        """The bucket's state in the pre-pair layout, if it has one."""
         self.fetched.append(rel)
-        if not self.checkpoint:
+        if not self.checkpoint or rel not in ("checkpoints/model.pt", "train_state.json"):
             return False
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(json.dumps({"generation_index": 7}) if rel.endswith(".json") else "pt")
+        state = {"generation_index": 7, "rows_trained": 700}
+        dest.write_text(json.dumps(state) if rel.endswith(".json") else "pt")
         return True
+
+    def list_dirs(self, rel):
+        return []  # no state pairs
 
 
 def test_wait_pulls_the_generation_through_the_sink(paths, monkeypatch):
@@ -201,7 +219,7 @@ def test_a_fresh_machine_restores_and_takes_the_window(paths):
     sink = _FakeSink(generations={4, 5, 6}, checkpoint=True)
     trainer.restore_from_sink(paths, sink)
     assert paths.rolling_checkpoint.read_text() == "pt"
-    assert json.loads(paths.train_state_path.read_text()) == {"generation_index": 7}
+    assert json.loads(paths.train_state_path.read_text())["generation_index"] == 7
     trainer.ensure_window(paths, sink, cursor=7, window=4)
     # Generations 3..6 were asked for; 3 was never published (evicted) and
     # the window is just shorter for it.
@@ -209,10 +227,10 @@ def test_a_fresh_machine_restores_and_takes_the_window(paths):
         f"generations/gen_{i:06d}" for i in (3, 4, 5, 6)
     ]
     assert lifecycle.window_dirs(paths, 6, 4) == [paths.generation_dir(i) for i in (4, 5, 6)]
-    # A machine with its own checkpoint keeps it.
+    # A machine holding the same state reads only the bucket's small cursor.
     sink.fetched.clear()
     trainer.restore_from_sink(paths, sink)
-    assert sink.fetched == []
+    assert sink.fetched == ["train_state.json"]
 
 
 def test_the_local_sink_follows_the_worker_mount_root(tmp_path, monkeypatch):
@@ -289,3 +307,14 @@ def test_the_r2_sink_addresses_the_flattened_store(paths, monkeypatch):
     assert list(store.iterdir()) == []
     trainer.remove_outputs([])  # nothing to run for nothing
     assert len(rc.calls) == calls_before + 1
+
+
+def test_the_r2_sink_lists_and_removes_directories(monkeypatch):
+    rc = _Rclone(
+        {"position_eval/t/state/gen_000003/model.pt", "position_eval/t/state/gen_000004/model.pt"}
+    )
+    monkeypatch.setattr(sinks, "rclone", rc)
+    sink = R2Sink(R2, "position_eval", "t")
+    assert sink.list_dirs("state") == ["gen_000003", "gen_000004"]
+    sink.remove_tree("state/gen_000003")
+    assert sink.list_dirs("state") == ["gen_000004"]

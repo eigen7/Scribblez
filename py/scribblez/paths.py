@@ -92,11 +92,12 @@ SCHEDULER_STATE_REL = "scheduler_state.json"
 
 # What a trainer on a rented machine delivers through the results bucket,
 # relative to the tag root, for scripts/cloud_sync.py to pull back. Records and
-# exports never change once written, so they are synced by size alone; the
-# rolling checkpoint and train_state.json are rewritten in place.
-TRAINER_OUTPUT_DIRS = ("records", "models", "checkpoints")
+# exports never change once written, so they are synced by size alone. The
+# checkpoint and cursor come back as a state pair, under the cursor rule
+# (generational/state_pair.py), not as files.
+TRAINER_OUTPUT_DIRS = ("records", "models")
 TRAINER_OUTPUT_IMMUTABLE = ("records", "models")
-TRAINER_OUTPUT_FILES = ("train_state.json", SCHEDULER_STATE_REL)
+TRAINER_OUTPUT_FILES = (SCHEDULER_STATE_REL,)
 
 # The trainer's record stream (generational/records.py), relative to the tag
 # root because the trainer writes through a results sink that maps them either

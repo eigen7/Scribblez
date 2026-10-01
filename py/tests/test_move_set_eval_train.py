@@ -4,6 +4,7 @@ tiny generated .mset/.slog corpus (GPU, since the target generator builds a
 TensorRT engine).
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -919,6 +920,16 @@ class _OutputSink:
     def deliver_output(self, src, rel, *, keep=False):
         self.delivered.append((rel, keep))
 
+    def push_file(self, src, rel):
+        self.delivered.append((rel, False))
+        src.unlink()
+
+    def list_dirs(self, rel):
+        return []
+
+    def remove_tree(self, rel):
+        self.removed.append(rel)
+
 
 def test_prune_exports_drops_the_one_export_leaving_the_window_off_the_ladder(tmp_path):
     """Applied per pass through the sink: pass N removes export N-keep_last
@@ -952,18 +963,27 @@ def test_the_local_sink_prunes_the_file_itself(tmp_path):
     assert paths.exported_generations() == [0, *range(2, 12)]  # 1 left the window; 0 is a rung
 
 
-def test_deliver_pass_hands_the_export_and_keeps_the_checkpoint(tmp_path):
+def test_deliver_pass_hands_the_export_then_the_state_pair(tmp_path):
     from scribblez import paths as paths_mod
+    from scribblez.generational import lifecycle
     from scribblez.move_set_eval import trainer
     from scribblez.paths import TagPaths
 
     paths = TagPaths("t", paths_mod.MOVE_SET_EVAL, tmp_path)
+    paths.rolling_checkpoint.parent.mkdir(parents=True)
+    paths.rolling_checkpoint.write_bytes(b"ckpt")
     sink = _OutputSink()
-    trainer.deliver_pass(paths, sink, 7)
+    state = trainer.MsetTrainState(rows_trained=700, generation_index=8)
+    trainer.deliver_pass(paths, sink, 7, state)
     assert sink.delivered == [
         ("models/model_epoch_0007.onnx", False),
-        ("checkpoints/model.pt", True),
+        ("state/gen_000007/model.pt", False),
+        ("state/gen_000007/train_state.json", False),  # the cursor, last
     ]
+    # The checkpoint and the cursor stay for resume; only the snapshots went.
+    assert paths.rolling_checkpoint.read_bytes() == b"ckpt"
+    assert lifecycle.read_train_state(paths)["rows_trained"] == 700
+    assert sorted(p.name for p in paths.rolling_checkpoint.parent.iterdir()) == ["model.pt"]
 
 
 def test_retire_training_pairs_deletes_the_training_side_only(tmp_path):
@@ -990,8 +1010,10 @@ def test_retire_training_pairs_deletes_the_training_side_only(tmp_path):
 
 def test_a_remote_trainer_pulls_its_store_and_restores_through_the_sink(tmp_path):
     """The store is taken through the sink before each look, and a fresh
-    machine takes the checkpoint the same way."""
+    machine takes the checkpoint and cursor the same way."""
+    from scribblez import paths as paths_mod
     from scribblez.move_set_eval import trainer
+    from scribblez.paths import TagPaths
 
     class _StoreSink(_OutputSink):
         def __init__(self, staged):
@@ -1003,10 +1025,19 @@ def test_a_remote_trainer_pulls_its_store_and_restores_through_the_sink(tmp_path
             for stem in self.staged:
                 _pair(dest, stem)
 
+        def list_dirs(self, rel):
+            return ["gen_000007"]
+
         def fetch_file(self, rel, dest):
+            """One state pair, at 700 rows."""
             self.fetched.append(rel)
+            if not rel.startswith("state/"):
+                return False
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(b"ckpt")
+            if rel.endswith(".json"):
+                dest.write_text(json.dumps({"rows_trained": 700, "generation_index": 8}))
+            else:
+                dest.write_bytes(b"ckpt")
             return True
 
     store = tmp_path / "data" / "slogs"
@@ -1014,11 +1045,17 @@ def test_a_remote_trainer_pulls_its_store_and_restores_through_the_sink(tmp_path
     trainer.wait_for_store(store, _params(warmup_pairs=2, sweep_every=0, holdout_every=0), sink)
     assert sink.pulls == 1 and sorted(p.stem for p in store.glob("*.mset")) == ["a", "b"]
 
-    paths = SimpleNamespace(rolling_checkpoint=tmp_path / "checkpoints" / "model.pt")
+    paths = TagPaths("t", paths_mod.MOVE_SET_EVAL, tmp_path)
     trainer.restore_checkpoint(paths, sink)
-    assert sink.fetched == ["checkpoints/model.pt"] and paths.rolling_checkpoint.exists()
-    trainer.restore_checkpoint(paths, sink)  # a machine holding one keeps its own
-    assert sink.fetched == ["checkpoints/model.pt"]
+    assert sink.fetched == [
+        "state/gen_000007/train_state.json",
+        "train_state.json",
+        "state/gen_000007/model.pt",  # only the winner's weights
+    ]
+    assert paths.rolling_checkpoint.read_bytes() == b"ckpt"
+    sink.fetched.clear()
+    trainer.restore_checkpoint(paths, sink)  # a machine holding it keeps its own
+    assert not any(rel.endswith(".pt") for rel in sink.fetched)
 
 
 def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
@@ -1253,7 +1290,10 @@ class _DriveSink(LocalSink):
 
 # Distinct instances that log which sink each operation went through, so a
 # call routed to the wrong one (the two share a root here) fails the run.
-_LOGGED = ("fetch_data_files", "remove_outputs", "deliver_output", "fetch_file")
+_LOGGED = (
+    "fetch_data_files", "remove_outputs", "deliver_output", "fetch_file", "push_file",
+    "list_dirs", "remove_tree",
+)
 
 
 class _LoggingSink(_DriveSink):
@@ -1273,6 +1313,7 @@ paths = SimpleNamespace(
     data_dir=root / "data",
     dashboard_db=root / "dashboard.db",
     rolling_checkpoint=root / "checkpoints" / "model.pt",
+    train_state_path=root / "train_state.json",
     onnx_dir=root / "models",
     onnx_path=lambda epoch: root / "models" / f"model_epoch_{epoch:04d}.onnx",
     exported_generations=lambda: sorted(
@@ -1287,9 +1328,11 @@ ctx = SimpleNamespace(
 )
 assert trainer.run(ctx) == 0, "run() did not exit cleanly"
 # The pair store (pulled, then its training pairs retired) is data; the
-# checkpoint restore and the exports are records.
+# exports and the state pairs are records. A local sink has nothing to restore.
 assert data_sink.calls == {"fetch_data_files", "remove_outputs"}, data_sink.calls
-assert records_sink.calls == {"fetch_file", "deliver_output"}, records_sink.calls
+assert records_sink.calls == {
+    "deliver_output", "push_file", "list_dirs", "remove_tree"
+}, records_sink.calls
 
 # The finished run retired its training pairs and kept the held-out (swept)
 # ones; a resumed run learns it is finished from the checkpoint and exits 0.

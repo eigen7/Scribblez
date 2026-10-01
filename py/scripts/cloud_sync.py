@@ -6,8 +6,9 @@ Copies the prefixes remote workers write to: the workload's sync_data_dirs
 stats/ and params/ records. Files merge with anything generated locally under
 the same tag; output filenames carry per-worker suffixes, so they never
 collide. With --trainer-outputs it also pulls what a remotely running trainer
-delivers (scribblez/paths.py TRAINER_OUTPUT_*): records, exports, the rolling
-checkpoint and the train_state.json cursor. It never uploads, and it deletes
+delivers (scribblez/paths.py TRAINER_OUTPUT_*): records and exports, and its
+newest checkpoint and cursor, which are installed only if they beat this
+machine's (the cursor rule, generational/state_pair.py). It never uploads, and it deletes
 local files only in the mirrored export dir (MIRRORED_OUTPUT_DIRS); the
 bucket stays the durable archive.
 
@@ -28,7 +29,9 @@ import time
 
 from cloud.credentials import load_credentials
 from cloud.r2 import bucket_path, rclone
+from cloud.sinks import R2Sink
 from scribblez import workloads
+from scribblez.generational import state_pair
 from scribblez.paths import (
     TRAINER_OUTPUT_DIRS,
     TRAINER_OUTPUT_FILES,
@@ -94,6 +97,11 @@ def sync_once(
             if rc != 0:
                 print(f"sync of {name} failed", file=sys.stderr)
                 return rc
+        try:
+            state_pair.restore(paths, R2Sink(r2, spec.name, tag, paths.root))
+        except AssertionError as e:  # a failed bucket call
+            print(f"sync of the checkpoint and cursor failed: {e}", file=sys.stderr)
+            return 1
     counts = ", ".join(
         f"{sub}: {sum(1 for _ in dest.iterdir()) if dest.is_dir() else 0}"
         for sub, dest, _ in targets
