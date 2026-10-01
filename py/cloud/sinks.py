@@ -15,8 +15,8 @@ where the argument is `data_rel`, to its data/ tree):
     push_json, read_json    write / read back a small record (stats,
                             provenance, trainer records); read_json is how a
                             restarted worker recovers its counters
-    count_data_files        count a data directory's files by suffix, for a
-                            generator that cannot see the store on disk
+    count_data_files        count a data directory's files by suffix (a
+                            generator's progress toward a store size)
     fetch_data_dir          bring a published directory (manifest last)
     fetch_data_files        bring a directory of independently delivered files
     fetch_file              bring one file

@@ -8,7 +8,11 @@ cloud train slot (3c). The slot and its machine model (the "machines, slots"
 section below) are superseded by [cloud_machines.md](cloud_machines.md):
 Runpod gave way to AWS instances driven as ssh machines, and the Runpod
 client, the `cloud` worker kind and the pod forms described here are
-deleted. The trainer contract and the bucket legs carried over unchanged.
+deleted. The trainer contract and the bucket legs carried over unchanged,
+until the ssh-only transport work (#313-#316) replaced the trainer-output
+pull and the controls push with collection and pushes over ssh, and removed
+the chunk mirror and `cloud_sync` with every bucket-delivering generator.
+Generation publish remains, for an ssh trainer on the legacy data plane.
 
 **Goal.** Run several position_eval training runs at once on rented GPUs, so
 A/B experiments (trunk, optimizer, loss weights, ...) stop queueing behind

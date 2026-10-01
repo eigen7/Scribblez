@@ -164,8 +164,9 @@ neither `cloud_sync` nor the ingest tick knows which machine the records came
 from.
 
 *Superseded in part by the ssh-only transport work: records and generators'
-data no longer go through the bucket.* A worker has two sinks (`py/cloud/sinks.py`): a data sink
-for the tag's `data/` store and a records sink for everything else.
+data no longer go through the bucket.* A worker has two sinks
+(`py/cloud/sinks.py`): a data sink for the tag's `data/` store and a records
+sink for everything else.
 
 - **Records** (`_slot_records_sink`) are local for every slot: a local worker
   writes the tag tree here, and an ssh container writes its own, which the

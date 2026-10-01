@@ -3,8 +3,9 @@ paces the generators against the trainer.
 
 Generators know nothing about generations. They deliver whole .slog chunks
 into the tag's staging area: directly for local workers, through the
-controller's collection over ssh for remote ones. The scheduler, ticked per task by the dashboard
-server's reconcile loop, is the single writer of generation structure:
+controller's collection over ssh for remote ones. The scheduler, ticked per
+task by the dashboard server's reconcile loop (or beside the trainer, on a
+data home), is the single writer of generation structure:
 
   1. It keeps one generation open at a time, moving staged chunks into it by
      atomic rename and marking it complete in its manifest once it holds the

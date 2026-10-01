@@ -92,9 +92,9 @@ Generators are **generation-agnostic** (`scribblez/workloads/selfplay_gen.py`,
 shared by both workloads). One cycle writes one whole `.slog` chunk in the
 worker's private work dir and hands it to the results sink, which lands it in
 the tag's `staging/`: by rename locally, or into the container's own tree for
-a remote worker, from where the controller collects it over ssh. The work dir is wiped on
-worker start and chunks are written in one shot, so a crash loses at most the
-in-flight chunk and leftovers are never delivered.
+a remote worker, from where the controller collects it over ssh. The work dir
+is wiped on worker start and chunks are written in one shot, so a crash loses
+at most the in-flight chunk and leftovers are never delivered.
 
 The **scheduler** (`scribblez/generational/scheduler.py`) is the only writer
 of generation structure. Each tick it moves staged chunks into the open
@@ -196,9 +196,9 @@ half over the control link:
   rewrites it.
 
 On a data home it assembles its own generations; on the legacy plane they
-still come through the bucket, assembled and published by the controller. Match eval runs locally or
-over ssh against the collected exports, and the tabs read what collection
-brought home. Several tags with remote trainers can run side by side from one
+still come through the bucket, assembled and published by the controller.
+Match eval runs locally or over ssh against the collected exports, and the
+tabs read what collection brought home. Several tags with remote trainers can run side by side from one
 dashboard.
 
 The runner lives with the training code and is referenced by dotted path, so

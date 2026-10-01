@@ -292,9 +292,8 @@ about that, and about any tag in the queue with no end condition.
 
 **Release.** When every slot of the tag has finished, its machine is drained
 (each remote slot's full container log saved to the tag's
-`logs/<worker>.container.log`, stopped containers swept, one final bucket sync
-for bucket-delivering slots), the slots are removed, and the next tag takes
-it. A slot that crashes three times within half an hour is **failed**: the
+`logs/<worker>.container.log` and its stopped container swept), the slots are
+removed, and the next tag takes it. A slot that crashes three times within half an hour is **failed**: the
 tag's slots are paused, and the machine goes to the next queued tag that fits,
 or is **held** with the failed containers intact until one does. An exit
 143 is not a crash: the worker was SIGTERMed from outside (a gate, a pause,

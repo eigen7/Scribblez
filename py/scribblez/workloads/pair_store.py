@@ -58,9 +58,10 @@ def run_pair_generate(
 
     `target_pairs` (an end parameter; UNBOUNDED = no target) is a size for
     the whole store, not a count for this worker. It is checked against the
-    store as the sink sees it (the tag's data tree, or the bucket's listing of
-    it), so a restarted worker resumes toward the same total and several
-    workers on one tag stop together.
+    store as the sink sees it, so a restarted local worker resumes toward the
+    same total and several local workers on one tag stop together. An ssh
+    worker sees only its own container, which the controller keeps draining;
+    the workload's scheduler tick stops it instead (move_set_eval.tick).
     """
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     work_dir.mkdir(parents=True, exist_ok=True)
