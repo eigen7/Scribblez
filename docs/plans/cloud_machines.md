@@ -163,33 +163,24 @@ The `train` role runs on the `ssh` kind; nothing in the trainer changed, and
 neither `cloud_sync` nor the ingest tick knows which machine the records came
 from.
 
-One predicate, `_slot_records_sink(spec, task, w)`, decides where a slot
-delivers:
+*Superseded in part by the ssh-only transport work: records no longer go
+through the bucket.* A worker has two sinks (`py/cloud/sinks.py`): a data sink
+for the tag's `data/` store and a records sink for everything else.
 
-- **Through the bucket** for a slot whose role has an `ingest` hook (a
-  trainer), wherever it runs; and for every slot on a rented machine, since
-  collecting over ssh would haul each chunk to the controller and publish it
-  back up from a home uplink.
-- **Over the control link** (collected over ssh) for any other slot on the
-  operator's own machine.
-- **Locally** for a local slot.
+- **Records** (`_slot_records_sink`) are local for every slot: a local worker
+  writes the tag tree here, and an ssh container writes its own, which the
+  reconcile pass collects over ssh. A trainer's exports, records and state
+  pairs come home this way, and a new trainer container is seeded with the
+  controller's checkpoint and cursor.
+- **Data** (`_slot_data_sink`) still goes through the bucket for a trainer
+  (its generations) and for a generator on a rented machine. It goes over
+  the control link for any other slot on the operator's own machine, and
+  stays local for a local slot. A data home's slots use its volume or bucket
+  staging (generational/data_home.py).
 
-A worker has two sinks (`py/cloud/sinks.py`): a data sink for the tag's
-`data/` store and a records sink for everything else. `_slot_data_sink`
-chooses the first and today always returns the records sink's answer. The
-container gets `SCZ_SINK` from `_slot_records_sink`, and `SCZ_DATA_SINK` only
-when the two differ.
-
-Everything the controller does for a bucket-delivering slot keys off these
-predicates, not off the worker kind:
-- whether the sync watcher runs: either sink is the bucket;
-- the scheduler's publish and mirror hooks: the data sink;
-- the `--trainer-outputs` flag and the controls push: the records sink;
-- ssh collection: it skips a slot whose two sinks are both the bucket, since
-  nothing it delivers is on the machine to collect.
-
-Written in terms of roles and machines rather than kinds, the predicates
-survived the deletion of `cloud`.
+The sync watcher runs when some slot's data goes through the bucket, and the
+scheduler's publish and mirror hooks key off the data sink. The controls
+push goes into a running ssh trainer's container over ssh.
 
 ## One-time setup (the operator, once)
 

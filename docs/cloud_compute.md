@@ -151,24 +151,21 @@ mistaken for the role's terminal condition.
 `RoleSpec.inputs`. A role that reads a file outside its own tag (the
 move_set_eval generator's teacher, a position_eval export) names it under a
 tag-relative key. A local worker reads the source in place. For a remote
-slot, the controller stages a copy where the slot will look before it needs
-it: the tag's bucket prefix for a bucket-delivering slot, or pushed into the
-container over the control link otherwise. The runner resolves either through
-`workloads.base.resolve_input`.
+slot, the controller pushes a copy into the container over the control link
+right after creating it, and the runner waits for it there
+(`workloads.base.resolve_input`).
 
 ### Results sync
 
-`./py/scripts/cloud_sync.py` pulls the workload's inbound bucket prefixes into
-`<mount>/tags/<workload>/<tag>/`, merging with locally generated data for the
-same tag. For a tag whose trainer delivers through the bucket, it also pulls
-the trainer's outputs (`--trainer-outputs`, which the dashboard passes for
-such a tag). Prefixes the controller itself maintains in the bucket are not
-pulled.
-
-Only bucket-delivering slots use it. A slot on your own machine has its
-results read straight out of its container over the control link
-(`py/cloud/ssh_transfer.py`), which is faster and keeps them in one fewer
-place.
+`./py/scripts/cloud_sync.py` pulls the data rented generators deliver
+through the bucket into `<mount>/tags/<workload>/<tag>/`, merging with locally
+generated data for the same tag. That is all it pulls: every ssh worker's
+records (stats, params) and a trainer's outputs (records, exports, its
+checkpoint and cursor as a state pair) are collected straight out of its
+container over the control link (`py/cloud/ssh_transfer.py`), wherever it
+runs. A trainer's checkpoint and cursor are installed under the cursor rule
+(`generational/state_pair.py`), and a new trainer container is seeded with
+the controller's copy, so a tag can move to any machine.
 
 ### Credentials
 
