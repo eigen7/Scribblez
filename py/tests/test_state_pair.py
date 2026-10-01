@@ -38,6 +38,8 @@ def test_a_pair_installs_only_if_it_has_trained_at_least_as_far(paths, tmp_path)
     assert not (tmp_path / "b").exists()  # consumed either way
     assert state_pair.install(_pair(tmp_path / "c", 600, "w600"), paths)
     assert _installed(paths) == ("w600", 600)
+    assert state_pair.install(_pair(tmp_path / "d", 600, "w600'"), paths)  # a tie installs
+    assert _installed(paths) == ("w600'", 600)
 
 
 def test_a_torn_pair_never_installs(paths, tmp_path):
@@ -107,6 +109,16 @@ def test_a_restore_takes_the_newest_copy_and_reads_only_cursors_otherwise(paths)
     assert not state_pair.restore(paths, sink)  # this machine already holds 900
     assert all(f.endswith(".json") for f in sink.fetched)
     assert _installed(paths) == ("w-legacy", 900)
+
+
+def test_a_pair_pruned_after_its_cursor_was_read_is_skipped(paths):
+    """The trainer can prune a listed pair between the restore's cursor read
+    and its weights fetch; the restore installs nothing and the next one
+    looks again."""
+    sink = _BucketSink(_bucket_pair(7, 700))
+    del sink.objects[f"{state_pair.pair_rel(7)}/model.pt"]
+    assert not state_pair.restore(paths, sink)
+    assert not paths.rolling_checkpoint.exists()
 
 
 def test_a_fresher_machine_keeps_its_own_state(paths, tmp_path):

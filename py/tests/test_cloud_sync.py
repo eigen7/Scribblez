@@ -89,3 +89,14 @@ def test_trainer_outputs_are_pulled_immutable_ones_by_size(spec, monkeypatch):
     ]
     [(tag, sink)] = restored
     assert tag == "t" and isinstance(sink, cloud_sync.R2Sink)
+
+
+def test_a_failed_state_pair_pull_fails_the_pass(spec, monkeypatch, capsys):
+    monkeypatch.setattr(cloud_sync, "rclone", _Rclone())
+
+    def failing_restore(paths, sink):
+        raise AssertionError("listing state failed")
+
+    monkeypatch.setattr(cloud_sync.state_pair, "restore", failing_restore)
+    assert cloud_sync.sync_once(R2, spec, spec.paths("t"), trainer_outputs=True) == 1
+    assert "listing state failed" in capsys.readouterr().err
