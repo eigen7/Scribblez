@@ -16,18 +16,26 @@ controller. This also degrades well: while the controller is down, the worker
 keeps generating into its own filesystem and the next pass collects the
 backlog.
 
-A pull takes a bounded batch (BATCH files), not the whole backlog. If a pull's
-cost grew with the backlog, one slow pull could exceed its timeout, skip the
-deletes that follow extraction, and leave a larger backlog for the next pull,
-which then also times out; the backlog would grow without bound. With a fixed
-batch, every pull costs the same and drains at a steady rate.
+A pull takes a bounded batch (at most BATCH entries and BATCH_BYTES, but
+always at least one entry), not the whole backlog. If a pull's cost grew with
+the backlog, one slow pull could exceed its timeout, skip the deletes that
+follow extraction, and leave a larger backlog for the next pull, which then
+also times out; the backlog would grow without bound. With a bounded batch,
+every pull costs about the same and drains at a steady rate. Its time limit
+scales with the bytes it carries (MIN_RATE), so a lone 117 MB checkpoint gets
+the time it needs.
 
 Delivered data is moved: deleted from the container once it is on disk here.
-The worker's stats and params records are copied instead, because the worker
-reads its counters back from them on restart. The delete runs only after
-extraction succeeds, so a transfer that dies mid-stream loses nothing. A file
-pulled twice (the delete failed, or the container restarted first) is
-deduplicated by the scheduler's ingest ledger.
+That covers the flat data directories (chunks, pairs, a trainer's exports and
+records) and the *pair directories*: a subdirectory, such as a trainer's
+state/gen_NNNNNN pair, taken whole once its marker file (the cursor, written
+last) exists, so a pair is never pulled half-written. The worker's stats and
+params records, and root record files such as a data home's
+scheduler_state.json, are copied instead, because the worker reads or
+rewrites them in place. The delete runs only after extraction succeeds, so a
+transfer that dies mid-stream loses nothing. A file pulled twice (the delete
+failed, or the container restarted first) is deduplicated by whatever consumes
+it: the scheduler's ingest ledger for chunks, the cursor rule for state pairs.
 """
 
 import shlex
@@ -46,6 +54,16 @@ RECORD_DIRS = ("stats", "params")
 # pass, draining ~29 net files per pass against one worker's ~2.5.
 BATCH = 32
 
+# Bytes moved per pull, past the first entry: a trainer's 40 MB export and
+# 117 MB checkpoint each go in a pull of their own rather than with a batch
+# of chunks behind them.
+BATCH_BYTES = 64 * 1024 * 1024
+
+# The slowest link a pull is given time for, in bytes per second. A pull's
+# time limit is its bytes at this rate, and never less than
+# COLLECT_TIMEOUT_SECONDS.
+MIN_RATE = 1024 * 1024
+
 # The worker machine's CPU is busy playing games and is scarcer than the link.
 # On real chunks, level 1 takes 0.2 s against the default's 0.7 s, for only
 # 13% more bytes: a net win at this bandwidth.
@@ -55,6 +73,10 @@ COMPRESSION = "gzip -1"
 # overrunning transfer dies with its ssh client. Otherwise an abandoned tar
 # keeps running, and one more accumulates each pass.
 COLLECT_TIMEOUT_SECONDS = 60
+
+# How long the ssh read waits beyond the in-container tar's own limit, so the
+# tar always times out first and dies with its client.
+READ_MARGIN_SECONDS = 30
 
 # Where a pulled file is written before it is moved into place. It is under
 # the tag root, so the move is a same-filesystem rename and a file appears at
@@ -72,52 +94,97 @@ class PullResult:
     remaining: int | None  # delivered files still waiting; None if unknown
 
 
-def list_command(root: str, data_dirs: list[str], batch: int) -> list[str]:
-    """The in-container command listing the next `batch` delivered files, then
-    a "TOTAL <n>" line counting everything waiting.
+def list_command(
+    root: str,
+    data_dirs: list[str],
+    batch: int,
+    pair_dirs: dict[str, str] | None = None,
+    batch_bytes: int = BATCH_BYTES,
+) -> list[str]:
+    """The in-container command listing the next batch of delivered entries,
+    then "TOTAL <n>" counting every entry waiting and "BYTES <b>" summing the
+    batch's sizes.
 
-    Names begin with their chunk's write timestamp, so sorting drains in
-    production order. The command trims the list in the container so only the
-    batch's names cross the wire, however large the backlog."""
+    An entry is a file in a data directory, or a subdirectory of a pair
+    directory whose marker file exists (`pair_dirs`: directory -> marker).
+    Entries are sorted by path, so chunks (named by write timestamp) drain in
+    production order, and a trainer's exports (models/) come before the
+    records (records/) that announce them. The batch is a prefix of that
+    order: at most `batch` entries, and past the first, at most
+    `batch_bytes`. The command trims the list in the container, so only the
+    batch's names cross the wire however large the backlog. Dotted names are
+    in-progress writes and are skipped."""
     dirs = " ".join(shlex.quote(d) for d in data_dirs)
+    pairs = "".join(
+        f'[ -d {shlex.quote(d)} ] && for p in {shlex.quote(d)}/*/; do p="${{p%/}}"; '
+        f'[ -f "$p/{marker}" ] && echo "$(du -sb "$p" | cut -f1) $p"; done\n'
+        for d, marker in (pair_dirs or {}).items()
+    )
+    take = (
+        f"!stop && taken < {batch} && (taken == 0 || sum + $1 <= {batch_bytes})"
+        " { print $2; taken++; sum += $1; next } { stop = 1 }"
+        ' END { print "TOTAL", NR+0; print "BYTES", sum+0 }'
+    )
     return [
         "sh",
         "-c",
         f"cd {shlex.quote(root)} 2>/dev/null || exit 0\n"
-        f'for d in {dirs}; do [ -d "$d" ] && ls -1 "$d" | sed "s|^|$d/|"; done | sort'
-        f" | awk -v n={batch} 'NR<=n {{ print }} END {{ print \"TOTAL\", NR+0 }}'",
+        "{\n"
+        f'for d in {dirs}; do [ -d "$d" ] && '
+        "find \"$d\" -mindepth 1 -maxdepth 1 -type f ! -name '.*' -printf '%s %p\\n'; done\n"
+        f"{pairs}"
+        f"}} | sort -k2 | awk '{take}'",
     ]
 
 
-def parse_listing(output: bytes) -> tuple[list[str], int | None]:
-    """The batch of names and the total waiting, from list_command's output.
+@dataclass(frozen=True)
+class Listing:
+    names: list[str]  # the batch, in order
+    total: int | None  # every entry waiting; None if the listing was cut off
+    nbytes: int  # the batch's size
+
+
+def parse_listing(output: bytes) -> Listing:
+    """The batch, the total waiting and the batch's bytes, from list_command's
+    output.
 
     Empty output means the tag root does not exist yet: a true zero. Output
-    without the TOTAL line gives a total of None, never 0, because the total
-    decides whether a container may be destroyed."""
+    without the trailing lines gives a total of None, never 0, because the
+    total decides whether a container may be destroyed."""
     if not output.strip():
-        return [], 0
+        return Listing([], 0, 0)
     lines = output.decode(errors="replace").split()
-    if len(lines) < 2 or lines[-2] != "TOTAL":
-        return [], None
-    return lines[:-2], int(lines[-1])
+    if len(lines) < 4 or lines[-4] != "TOTAL" or lines[-2] != "BYTES":
+        return Listing([], None, 0)
+    return Listing(lines[:-4], int(lines[-3]), int(lines[-1]))
 
 
-def collect_command(root: str, names: list[str], seconds: int) -> list[str]:
+def collect_command(
+    root: str, names: list[str], seconds: int, record_files: tuple[str, ...] = ()
+) -> list[str]:
     """The in-container command streaming `names` plus the record directories
-    as a gzipped tar. Emits nothing when there is nothing to send, since tar
-    refuses to create an empty archive."""
+    and `record_files` as a gzipped tar. Emits nothing when there is nothing
+    to send, since tar refuses to create an empty archive. A file the worker
+    removes between the listing and the tar (an older state pair it pruned)
+    is skipped rather than failing the pull; what it was part of arrives
+    torn, and its consumer discards it."""
     quoted = " ".join(shlex.quote(name) for name in names)
-    records = " ".join(RECORD_DIRS)
+    records = " ".join([*RECORD_DIRS, *(shlex.quote(f) for f in record_files)])
     return [
         "sh",
         "-c",
         f"cd {shlex.quote(root)} 2>/dev/null || exit 0\n"
         f"set -- {quoted}\n"
-        f'for d in {records}; do [ -d "$d" ] && set -- "$@" "$d"; done\n'
+        f'for d in {records}; do [ -e "$d" ] && set -- "$@" "$d"; done\n'
         '[ "$#" -eq 0 ] && exit 0\n'
-        f"exec timeout {seconds} tar -c --use-compress-program='{COMPRESSION}' -f - \"$@\"",
+        f"exec timeout {seconds} tar -c --ignore-failed-read"
+        f" --use-compress-program='{COMPRESSION}' -f - \"$@\"",
     ]
+
+
+def transfer_seconds(nbytes: int) -> int:
+    """The time limit for a pull carrying `nbytes` (MIN_RATE)."""
+    return max(COLLECT_TIMEOUT_SECONDS, nbytes // MIN_RATE)
 
 
 def write_command(root: str, rel_dest: str, size: int) -> list[str]:
@@ -246,25 +313,34 @@ def pull_results(
     remote_root: str,
     local_root: Path,
     data_dirs: list[str],
+    pair_dirs: dict[str, str] | None = None,
+    record_files: tuple[str, ...] = (),
     batch: int = BATCH,
+    batch_bytes: int = BATCH_BYTES,
 ) -> PullResult:
-    """Collect up to `batch` of one ssh worker's finished outputs, plus its
-    records, into the tag's local tree.
+    """Collect a batch of one ssh worker's finished outputs, plus its records,
+    into the tag's local tree (see the module docstring for what is moved and
+    what copied).
 
     `remote_root` is the tag root inside the container; `local_root` is the
     controller's. In production they are the same string, since both sides
     use the same mount layout, but they name paths on different machines.
     """
-    listing = machine.read_from_container(container, list_command(remote_root, data_dirs, batch))
-    taking, waiting = parse_listing(listing)
-
+    listing = parse_listing(
+        machine.read_from_container(
+            container, list_command(remote_root, data_dirs, batch, pair_dirs, batch_bytes)
+        )
+    )
+    seconds = transfer_seconds(listing.nbytes)
     archive = machine.read_from_container(
-        container, collect_command(remote_root, taking, COLLECT_TIMEOUT_SECONDS)
+        container,
+        collect_command(remote_root, listing.names, seconds, record_files),
+        timeout=seconds + READ_MARGIN_SECONDS,
     )
     names = _extract(archive, local_root)
-    delivered = [name for name in names if name in taking]
+    delivered = [e for e in listing.names if any(n == e or n.startswith(e + "/") for n in names)]
     if delivered:
-        paths = [f"{remote_root}/{name}" for name in delivered]
-        machine.exec_in_container(container, ["rm", "-f", *paths])
-    remaining = None if waiting is None else waiting - len(delivered)
+        paths = [f"{remote_root}/{entry}" for entry in delivered]
+        machine.exec_in_container(container, ["rm", "-rf", *paths])
+    remaining = None if listing.total is None else listing.total - len(delivered)
     return PullResult(pulled=names, remaining=remaining)

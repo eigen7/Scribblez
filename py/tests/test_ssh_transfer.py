@@ -31,7 +31,7 @@ class _FakeMachine:
         self.execs = []
         self.push_bytes = push_bytes  # None: the whole file arrives
 
-    def read_from_container(self, container: str, command: list[str]) -> bytes:
+    def read_from_container(self, container: str, command: list[str], timeout=None) -> bytes:
         assert command[:2] == ["sh", "-c"]
         return subprocess.run(
             ["sh", "-c", command[2]], cwd=self.root, capture_output=True, check=True
@@ -147,7 +147,7 @@ def test_a_failed_read_leaves_the_container_untouched(tmp_path):
     """Nothing is deleted until it is safely on disk here."""
 
     class _Broken(_FakeMachine):
-        def read_from_container(self, container, command):
+        def read_from_container(self, container, command, timeout=None):
             raise RuntimeError("ssh died mid-stream")
 
     remote = _container(tmp_path, **{"data/staging/c1.slog": "x"})
@@ -275,9 +275,10 @@ def test_an_unparseable_listing_is_reported_as_unknown(tmp_path):
     nobody can vouch for must not read as empty."""
     from cloud.ssh_transfer import parse_listing
 
-    assert parse_listing(b"") == ([], 0)  # no tag root there yet: a real zero
-    assert parse_listing(b"data/staging/a.slog\n") == ([], None)  # sentinel missing
-    assert parse_listing(b"data/staging/a.slog\nTOTAL 9\n") == (["data/staging/a.slog"], 9)
+    assert parse_listing(b"").total == 0  # no tag root there yet: a real zero
+    assert parse_listing(b"data/staging/a.slog\n").total is None  # sentinel missing
+    listing = parse_listing(b"data/staging/a.slog\nTOTAL 9\nBYTES 12\n")
+    assert (listing.names, listing.total, listing.nbytes) == (["data/staging/a.slog"], 9, 12)
 
 
 def test_a_sweep_clears_a_spool_left_by_a_process_that_died(tmp_path):
@@ -351,3 +352,60 @@ def test_removing_a_file_from_a_container(tmp_path):
     assert list_dir(machine, "c", remote_root=remote_root, rel=inbox) == []
     # Absent is success: the mark may have gone with a replaced container.
     remove_file(machine, "c", remote_root=remote_root, rel=f"{inbox}/{played.name}")
+
+
+# ---- a trainer's outputs: byte-bounded batches, state pairs, root records ------
+
+
+def _pull_outputs(tmp_path, remote, local, *, batch_bytes=None, record_files=()):
+    extra = {} if batch_bytes is None else {"batch_bytes": batch_bytes}
+    return pull_results(
+        _FakeMachine(tmp_path), "c", remote_root=str(remote), local_root=local,
+        data_dirs=["models", "records"], pair_dirs={"state": "train_state.json"},
+        record_files=record_files, **extra,
+    )  # fmt: skip
+
+
+def test_a_large_entry_goes_alone_and_the_batch_stays_a_prefix(tmp_path):
+    """Past the first entry the batch stops at BATCH_BYTES, so a checkpoint-sized
+    file never rides with a backlog behind it, and nothing later in the order
+    jumps ahead of what was left (exports before the records announcing them)."""
+    remote = _container(
+        tmp_path,
+        **{
+            "models/model_epoch_0001.onnx": "x" * 100,
+            "models/model_epoch_0002.onnx": "x" * 10,
+            "records/gen_000001.json": "{}",
+        },
+    )
+    local = tmp_path / "local"
+    local.mkdir()
+    first = _pull_outputs(tmp_path, remote, local, batch_bytes=50)
+    assert first.pulled == ["models/model_epoch_0001.onnx"] and first.remaining == 2
+    second = _pull_outputs(tmp_path, remote, local, batch_bytes=50)
+    assert second.pulled == ["models/model_epoch_0002.onnx", "records/gen_000001.json"]
+    assert second.remaining == 0
+
+
+def test_a_state_pair_is_taken_whole_and_only_once_its_cursor_is_there(tmp_path):
+    remote = _container(
+        tmp_path,
+        **{
+            "state/gen_000003/model.pt": "w3",
+            "state/gen_000003/train_state.json": '{"rows_trained": 3}',
+            "state/gen_000004/model.pt": "w4",  # its cursor is still being written
+            "scheduler_state.json": '{"gate": null}',
+        },
+    )
+    local = tmp_path / "local"
+    local.mkdir()
+    result = _pull_outputs(tmp_path, remote, local, record_files=("scheduler_state.json",))
+    assert sorted(result.pulled) == [
+        "scheduler_state.json",
+        "state/gen_000003/model.pt",
+        "state/gen_000003/train_state.json",
+    ]
+    assert result.remaining == 0  # gen 4 is not a pair yet
+    assert not (remote / "state/gen_000003").exists()  # moved, whole
+    assert (remote / "state/gen_000004/model.pt").exists()
+    assert (remote / "scheduler_state.json").exists()  # a record: copied, never removed
