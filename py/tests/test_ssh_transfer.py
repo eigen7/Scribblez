@@ -8,6 +8,7 @@ filesystem -- everything but the `ssh ... docker exec` wrapper is exercised.
 import subprocess
 
 import pytest
+from cloud import ssh_transfer
 from cloud.ssh_machine import SshMachineError
 from cloud.ssh_transfer import (
     BATCH,
@@ -409,3 +410,82 @@ def test_a_state_pair_is_taken_whole_and_only_once_its_cursor_is_there(tmp_path)
     assert not (remote / "state/gen_000003").exists()  # moved, whole
     assert (remote / "state/gen_000004/model.pt").exists()
     assert (remote / "scheduler_state.json").exists()  # a record: copied, never removed
+
+
+def test_a_file_still_being_written_is_left_in_the_container(tmp_path):
+    """A trainer writes each export and record beside its final name with a
+    `.tmp` suffix; a pull that moved one would tear it and pull the file out
+    from under the trainer's rename."""
+    remote = _container(
+        tmp_path,
+        **{
+            "models/model_epoch_0005.onnx.tmp": "half",
+            "records/gen_000005.json.tmp": "{",
+            "records/gen_000004.json": "{}",
+        },
+    )
+    local = tmp_path / "local"
+    local.mkdir()
+    result = _pull_outputs(tmp_path, remote, local)
+    assert result.pulled == ["records/gen_000004.json"] and result.remaining == 0
+    assert (remote / "models/model_epoch_0005.onnx.tmp").exists()
+    assert (remote / "records/gen_000005.json.tmp").exists()
+
+
+def test_a_sweep_names_a_top_level_pair_by_its_tag_relative_path(tmp_path):
+    """docker cp names a top-level directory's members from the directory
+    itself, so the names come back as "state/...", which is how the caller
+    recognizes the pair to install."""
+    import io
+    import tarfile
+
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as tar:
+        for name, data in (("model.pt", b"w9"), ("train_state.json", b"{}")):
+            info = tarfile.TarInfo(f"state/gen_000009/{name}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+    class _Stopped:
+        def copy_from_container(self, container, path, dest):
+            if not path.endswith("/state"):
+                return False
+            dest.write_bytes(payload.getvalue())
+            return True
+
+    local = tmp_path / "local"
+    local.mkdir()
+    names = sweep_stopped(
+        _Stopped(), "c", remote_root="/tag", local_root=local, data_dirs=["models"],
+        pair_dirs={"state": "train_state.json"},
+    )  # fmt: skip
+    assert sorted(names) == ["state/gen_000009/model.pt", "state/gen_000009/train_state.json"]
+    assert (local / "state/gen_000009/model.pt").read_bytes() == b"w9"
+
+
+def test_a_pulls_time_limit_scales_with_its_bytes(tmp_path, monkeypatch):
+    """A lone checkpoint over a home link takes minutes, more than the fixed
+    floor: the in-container tar and the ssh read both get a limit from the
+    batch's size, the read a margin longer so the tar is the one that stops."""
+    assert ssh_transfer.transfer_seconds(0) == ssh_transfer.COLLECT_TIMEOUT_SECONDS
+    big = 300 * ssh_transfer.MIN_RATE
+    assert ssh_transfer.transfer_seconds(big) == 300
+
+    monkeypatch.setattr(ssh_transfer, "MIN_RATE", 1)  # so 100 bytes take 100 s
+    remote = _container(tmp_path, **{"models/model_epoch_0001.onnx": "x" * 100})
+    local = tmp_path / "local"
+    local.mkdir()
+    reads = []
+
+    class _Timed(_FakeMachine):
+        def read_from_container(self, container, command, timeout=None):
+            reads.append((command[2], timeout))
+            return super().read_from_container(container, command, timeout)
+
+    pull_results(
+        _Timed(tmp_path), "c", remote_root=str(remote), local_root=local,
+        data_dirs=["models"],
+    )  # fmt: skip
+    collect, timeout = next((c, t) for c, t in reads if " tar " in c)
+    assert "timeout 100 tar" in collect
+    assert timeout == 100 + ssh_transfer.READ_MARGIN_SECONDS

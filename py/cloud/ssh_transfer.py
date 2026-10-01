@@ -112,8 +112,9 @@ def list_command(
     records (records/) that announce them. The batch is a prefix of that
     order: at most `batch` entries, and past the first, at most
     `batch_bytes`. The command trims the list in the container, so only the
-    batch's names cross the wire however large the backlog. Dotted names are
-    in-progress writes and are skipped."""
+    batch's names cross the wire however large the backlog. Dotted names and
+    `.tmp` names are in-progress writes (a trainer's exports and records are
+    written beside their final name, with a `.tmp` suffix) and are skipped."""
     dirs = " ".join(shlex.quote(d) for d in data_dirs)
     pairs = "".join(
         f'[ -d {shlex.quote(d)} ] && for p in {shlex.quote(d)}/*/; do p="${{p%/}}"; '
@@ -131,7 +132,8 @@ def list_command(
         f"cd {shlex.quote(root)} 2>/dev/null || exit 0\n"
         "{\n"
         f'for d in {dirs}; do [ -d "$d" ] && '
-        "find \"$d\" -mindepth 1 -maxdepth 1 -type f ! -name '.*' -printf '%s %p\\n'; done\n"
+        "find \"$d\" -mindepth 1 -maxdepth 1 -type f ! -name '.*' ! -name '*.tmp' "
+        "-printf '%s %p\\n'; done\n"
         f"{pairs}"
         f"}} | sort -k2 | awk '{take}'",
     ]
@@ -306,8 +308,11 @@ def sweep_stopped(
                 continue
             with open(archive, "rb") as stream:
                 # docker cp names members relative to the copied directory's
-                # parent; "r|" streams without seeking.
-                names += _extract(stream, local_root, mode="r|", prefix=f"{Path(data_dir).parent}/")
+                # parent, which for a top-level directory is the root itself;
+                # "r|" streams without seeking.
+                parent = Path(data_dir).parent
+                prefix = "" if parent == Path(".") else f"{parent}/"
+                names += _extract(stream, local_root, mode="r|", prefix=prefix)
         finally:
             archive.unlink(missing_ok=True)
     return names

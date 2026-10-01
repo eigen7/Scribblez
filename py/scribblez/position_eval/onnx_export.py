@@ -6,6 +6,7 @@ placement head; consumers apply masking and softmax), with a dynamic batch
 dimension.
 """
 
+import os
 import warnings
 from pathlib import Path
 
@@ -58,7 +59,11 @@ def _externalize_frozen_lexicon(path: Path, frozen_names: set[str]):
         chunks.append(raw)
         offset += len(raw)
     if not blob.exists() or blob.stat().st_size != offset:
-        blob.write_bytes(b"".join(chunks))
+        # Beside and renamed over, like the export: a collection must never
+        # take a half-written blob (cloud/ssh_transfer.py skips `.tmp` names).
+        tmp = blob.with_name(blob.name + ".tmp")
+        tmp.write_bytes(b"".join(chunks))
+        os.replace(tmp, blob)
 
     for init, off, length in layout:
         init.ClearField("raw_data")
