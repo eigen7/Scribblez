@@ -1073,7 +1073,8 @@ core has been shown to work.
   builds rack_conditional_evidence.md's layer 1, which was never built,
   generalized from per-rollout to per-step. Plus the token encoder.
 - **M1a: learned reader, fixed writer, face-up leaves. The kill gate.** It
-  uses the existing face-up prior, so it waits on no retraining. The writer is
+  uses the face-up teacher as its prior, so it waits on no retraining; the
+  build is [supreme_bot_m1a.md](supreme_bot_m1a.md). The writer is
   hasty at every node, with draws from the uninformed prior, which is exact
   under face-up leaves, and ply-one options by the static-equity rule
   ([Move lists](#move-lists-local-and-global)). The test and its kill

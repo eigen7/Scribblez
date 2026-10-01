@@ -125,6 +125,9 @@ has landed.
 - **[plans/supreme_bot.md](plans/supreme_bot.md)**: a search whose every
   decision, and the final pick, is made by one network reading every probe
   run so far this turn, with no per-node statistics.
+- **[plans/supreme_bot_m1a.md](plans/supreme_bot_m1a.md)**: how M1a, the
+  held-out transfer test, gets built: the engine changes, the record format,
+  the reader and the evaluation harness.
 - **[plans/sim_labeled_candidates.md](plans/sim_labeled_candidates.md)**: the
   teacher's second target stream, sim outcomes over every simmed candidate at
   sampled self-play positions.

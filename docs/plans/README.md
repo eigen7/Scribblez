@@ -32,6 +32,12 @@ moved on. New plans go here, not in `docs/` proper.
   inform any decision. Built as a learned reader over fixed probes first
   (gated against shrinkage on face-up leaves, then repeated in standard
   Scrabble), then learned move choices, then learned draws.
+- **[supreme_bot_m1a.md](supreme_bot_m1a.md)**: *proposed, not built.*
+  The build plan for M1a, SupremeBot's held-out transfer test: probe traces
+  in the sim runner, a generator workload writing labels and a new `.sprobe`
+  probe sidecar, the reader with the face-up teacher as its prior, and the
+  evaluation harness. A noise and saturation measurement sets the corpus size
+  first.
 - **[sim_labeled_candidates.md](sim_labeled_candidates.md)**: *proposed;
   the measurement (PR 0) landed.* A second target stream for the teacher: sim
   outcomes over every simmed candidate at sampled self-play positions, stored
