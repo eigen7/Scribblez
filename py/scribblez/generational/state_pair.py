@@ -26,6 +26,7 @@ import os
 import shutil
 from pathlib import Path
 
+from scribblez.generational import lifecycle
 from scribblez.paths import TagPaths
 
 STATE_DIR = "state"
@@ -51,8 +52,7 @@ def installed_rows(paths: TagPaths) -> int:
     that any pair beats it."""
     if not paths.rolling_checkpoint.exists():
         return -1
-    rows = rows_trained(paths.train_state_path)
-    return -1 if rows is None else rows
+    return int(lifecycle.read_train_state(paths).get("rows_trained", -1))
 
 
 def install(pair_dir: Path, paths: TagPaths) -> bool:
