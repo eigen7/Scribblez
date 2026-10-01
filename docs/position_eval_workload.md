@@ -190,7 +190,14 @@ half over the control link:
   (`SCZ_STATE_SEED`), which the trainer installs under the rule before
   resuming;
 - `controls.json` is pushed into its container whenever the Controls tab
-  rewrites it.
+  rewrites it;
+- each pass copies its data home's complete generations here and then
+  acknowledges them there (a `pulled` file in the generation), and the
+  trainer evicts no generation that lacks it (`SCZ_REMOTE_HOME`);
+- a new home's volume is seeded with the window of generations held here and
+  the ingest ledger before the trainer's container starts, and a home the
+  trainer leaves is swept here first, so a move in either direction keeps
+  the window and the numbering.
 
 Its data home assembles its own generations on that machine. Match eval runs
 locally or over ssh against the collected exports, and the tabs read what

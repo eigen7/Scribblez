@@ -26,9 +26,8 @@ move_set_eval trainer runs only locally.
 ## Architecture
 
 Three stores decouple everything: a **container registry** (the stable worker
-images), the **R2 bucket** (code bundles outbound, and a remote data home's
-generations), and the **local mount dir** (where results are collected and
-analysis runs).
+images), the **R2 bucket** (code bundles and data deps outbound), and the
+**local mount dir** (where results are collected and analysis runs).
 
 ```
  dev container                                    remote machine
@@ -63,8 +62,7 @@ Principles:
 Every slot's output (a generator's data, its stats and params, and a
 trainer's exports, records and checkpoint) is collected over ssh straight
 out of its container, wherever it runs (see "Results collection" below).
-The bucket's only data leg is a remote data home's generations, kept there
-so a vanished home can resume.
+No result travels through the bucket.
 
 ## The pieces
 
@@ -170,11 +168,17 @@ params) and a trainer's outputs (records, exports, its checkpoint and cursor
 as a state pair). A generator cannot count a store it never sees whole, so a
 target on the store's size (blind_spots' positions, move_set_eval's pairs)
 is enforced by the workload's scheduler tick on the controller. For a tag
-whose data home is an ssh machine, the chunks collected from its other
-generators are relayed on into the home's staging after each pull from its
-trainer. A trainer's checkpoint and cursor are installed under the cursor rule
-(`generational/state_pair.py`), and a new trainer container is seeded with
-the controller's copy, so a tag can move to any machine.
+whose data home is an ssh machine, each pull from its trainer is followed by
+two more legs: the chunks collected from its other generators are relayed on
+into the home's staging, and the home's complete generations are copied
+here and then acknowledged there, which is what lets its trainer evict them.
+The controller's tree is thereby the durable copy of every tag. A trainer's
+checkpoint and cursor are installed under the cursor rule
+(`generational/state_pair.py`); a new trainer container is seeded with the
+controller's copy, and a new remote home's volume with its window of
+generations and ingest ledger, before the container starts. When a trainer
+leaves a remote home, its generations, staged chunks and ledger are swept
+here first. So a tag can move to any machine and pick up where it stopped.
 
 ### Credentials
 
