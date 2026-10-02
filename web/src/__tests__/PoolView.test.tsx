@@ -7,6 +7,7 @@ import PoolView, { enqueueTag, type PoolMachine, type QueueRow } from '../compon
 
 const getJSON = vi.fn();
 const postJSON = vi.fn();
+const openTag = vi.fn();
 vi.mock('../lib/api', () => ({
   getJSON: (...a: unknown[]) => getJSON(...a),
   postJSON: (...a: unknown[]) => postJSON(...a),
@@ -39,6 +40,7 @@ describe('PoolView', () => {
   beforeEach(() => {
     getJSON.mockReset();
     postJSON.mockReset();
+    openTag.mockReset();
   });
 
   it('shows each machine with its GPU and what holds it', async () => {
@@ -47,17 +49,31 @@ describe('PoolView', () => {
       machine({ name: 'localhost', kind: 'local', machine: null, occupants: ['move_set_eval/x/local-0'], state: 'busy' }),
       machine({ name: 'l4', lease: { workload: 'position_eval', tag: 'tune-wsd', phase: 'running', since: 0, reason: '' }, state: 'leased' }),
     ]);
-    render(<PoolView />);
+    render(<PoolView onOpenTag={openTag} />);
     await waitFor(() => expect(screen.getByTestId('pool-state-asus').textContent).toBe('free'));
     expect(screen.getByTestId('pool-state-localhost').textContent).toBe('busy: move_set_eval/x/local-0');
     expect(screen.getByTestId('pool-state-l4').textContent).toBe('position_eval/tune-wsd (running)');
     expect(screen.getAllByText('1 × 4.0 GiB').length).toBe(3);
   });
 
+  it('opens a tag named in a machine\'s state or the queue', async () => {
+    serve([
+      machine({ name: 'localhost', kind: 'local', machine: null, occupants: ['move_set_eval/x/local-0'], state: 'busy' }),
+      machine({ name: 'l4', lease: { workload: 'position_eval', tag: 'tune-wsd', phase: 'running', since: 0, reason: '' }, state: 'leased' }),
+    ], [row({})]);
+    render(<PoolView onOpenTag={openTag} />);
+    fireEvent.click(await screen.findByText('position_eval/tune-wsd'));
+    expect(openTag).toHaveBeenLastCalledWith('position_eval', 'tune-wsd');
+    fireEvent.click(screen.getByText('move_set_eval/x'));
+    expect(openTag).toHaveBeenLastCalledWith('move_set_eval', 'x');
+    fireEvent.click(screen.getByText('position_eval/tune-a'));
+    expect(openTag).toHaveBeenLastCalledWith('position_eval', 'tune-a');
+  });
+
   it('adds this machine in one click, offered only while it is not pooled', async () => {
     serve([]);
     postJSON.mockResolvedValue({ name: 'localhost' });
-    const { unmount } = render(<PoolView />);
+    const { unmount } = render(<PoolView onOpenTag={openTag} />);
     await waitFor(() => screen.getByText('The pool is empty.'));
     fireEvent.click(screen.getByText('Add this machine'));
     await waitFor(() => expect(postJSON).toHaveBeenCalledWith('/api/pool/machines', {
@@ -65,7 +81,7 @@ describe('PoolView', () => {
     }));
     unmount();
     serve([machine({ name: 'localhost', kind: 'local', machine: null })]);
-    render(<PoolView />);
+    render(<PoolView onOpenTag={openTag} />);
     await waitFor(() => screen.getByTestId('pool-state-localhost'));
     expect(screen.queryByText('Add this machine')).toBeNull();
   });
@@ -73,7 +89,7 @@ describe('PoolView', () => {
   it('adds a registered machine with its aliases', async () => {
     serve([]);
     postJSON.mockResolvedValue({ name: 'asus' });
-    render(<PoolView />);
+    render(<PoolView onOpenTag={openTag} />);
     fireEvent.change(screen.getByLabelText('pool name'), { target: { value: 'asus' } });
     fireEvent.change(screen.getByLabelText('pool host'), { target: { value: 'asus-laptop' } });
     fireEvent.change(screen.getByLabelText('pool aliases'), { target: { value: 'dshin@asus-laptop' } });
@@ -95,7 +111,7 @@ describe('the queue', () => {
       row({ tag: 'tune-a', refusals: { asus: 'needs 14.0 GiB of GPU memory, has 4.0' } }),
       row({ tag: 'endless', end_condition: false }),
     ]);
-    render(<PoolView />);
+    render(<PoolView onOpenTag={openTag} />);
     await waitFor(() => expect(screen.getByTestId('queue-tune-a').textContent).toBe('position_eval/tune-a'));
     expect(screen.getByTestId('queue-endless').textContent).toBe('position_eval/endless ∞');
     expect(screen.getByText('asus: needs 14.0 GiB of GPU memory, has 4.0')).toBeTruthy();
@@ -138,7 +154,7 @@ describe('rental capacity', () => {
             capacity: [{ name: 'g6', instance_type: 'g6.2xlarge', spot: true, cap: 2 }],
           }));
     postJSON.mockResolvedValue({ ok: true });
-    render(<PoolView />);
+    render(<PoolView onOpenTag={openTag} />);
     await waitFor(() => expect(screen.getByTestId('capacity-g6').textContent).toBe('1 of 2 rented'));
     expect(screen.getByText(/rented g6.2xlarge spot by capacity g6/)).toBeTruthy();
     // Only GPU types are offered.
@@ -169,7 +185,7 @@ describe('rental capacity without a provider', () => {
         ? Promise.reject(new Error('no cloud credentials'))
         : Promise.resolve(url === '/api/queue' ? { entries: [] } : { machines: [], capacity: [] })
     ));
-    render(<PoolView />);
+    render(<PoolView onOpenTag={openTag} />);
     await waitFor(() => expect(screen.getByText('renting unavailable: no cloud credentials')).toBeTruthy());
     fireEvent.change(screen.getByLabelText('capacity name'), { target: { value: 'g6' } });
     fireEvent.change(screen.getByLabelText('capacity cap'), { target: { value: '' } });
@@ -186,7 +202,7 @@ describe('PoolView row actions', () => {
   it('saves an edit with the edited fields', async () => {
     serve([machine({})]);
     postJSON.mockResolvedValue({ ok: true });
-    render(<PoolView />);
+    render(<PoolView onOpenTag={openTag} />);
     await waitFor(() => screen.getByTestId('pool-state-asus'));
     fireEvent.click(screen.getByText('Edit'));
     fireEvent.change(screen.getByLabelText('asus threads'), { target: { value: '6' } });
@@ -201,7 +217,7 @@ describe('PoolView row actions', () => {
       lease: { workload: 'position_eval', tag: 'a', phase: 'running', since: 0, reason: '' },
       occupants: ['position_eval/hand/local-0'], state: 'leased',
     })]);
-    render(<PoolView />);
+    render(<PoolView onOpenTag={openTag} />);
     await waitFor(() => expect(screen.getByTestId('pool-state-asus').textContent).toBe(
       'position_eval/a (running); also position_eval/hand/local-0',
     ));

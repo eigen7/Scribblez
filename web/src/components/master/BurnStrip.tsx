@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getJSON, postJSON } from '../../lib/api';
 import { relTime } from './MasterApp';
+import { TagLink } from './ui';
 
 // The cloud burn strip: what the provider bills right now, pinned to the top
 // of every dashboard page. Fed by GET /api/cloud/fleet -- the reconcile
@@ -106,13 +107,8 @@ function InstanceChip({ inst, onOpen }: {
       {billing && <span>{fmtUptime(inst.uptime_s)}</span>}
       <span>{inst.cost_per_hr != null ? `${money(inst.cost_per_hr)}/hr` : 'rate unknown'}</span>
       {canOpen ? (
-        <span
-          onClick={() => onOpen(workload, tag)}
-          title={`open ${workload}/${tag} (machine ${machine})`}
-          style={{ color: '#1f77b4', cursor: 'pointer' }}
-        >
-          {workload}/{tag}
-        </span>
+        <TagLink workload={workload} tag={tag} onOpen={onOpen}
+          title={`open ${workload}/${tag} (machine ${machine})`} />
       ) : pooled && inst.tracked ? (
         <span style={{ color: '#556070' }}>pool · {inst.owner!.slice('pool/'.length)}</span>
       ) : (
