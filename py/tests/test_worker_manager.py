@@ -9,6 +9,7 @@ fail, so anything that launches where it should not breaks loudly.
 
 import asyncio
 import json
+import os
 import tarfile
 import threading
 import time
@@ -962,6 +963,7 @@ def test_first_remote_worker_builds_the_bundle_off_the_blocking_thread(
         seen["thread"] = threading.current_thread().name
         seen["archs"] = archs
         release.wait(timeout=5)
+        _in_store(self, "b1", archs)
         return SimpleNamespace(bundle_id="b1", source_hash="h1", archs=archs)
 
     monkeypatch.setattr(WorkerManager, "_build_bundle", build)
@@ -1013,10 +1015,12 @@ def test_a_slot_whose_arch_the_bundle_lacks_rebuilds_with_it_added(
     def build(self, archs):
         builds.append(archs)
         release.wait(timeout=5)
+        _in_store(self, f"b-{'+'.join(archs)}", archs)
         return SimpleNamespace(bundle_id=f"b-{'+'.join(archs)}", source_hash="h", archs=archs)
 
     monkeypatch.setattr(WorkerManager, "_build_bundle", build)
     task.bundle_id, task.bundle_source_hash, task.bundle_archs = "b-znver3", "h", ["znver3"]
+    _in_store(manager, "b-znver3", ["znver3"])
     task.machines.append(
         tasks.MachineRecord(name="m4", provider="aws", host="ubuntu@x", arch="znver4")
     )
@@ -1035,6 +1039,28 @@ def test_a_slot_whose_arch_the_bundle_lacks_rebuilds_with_it_added(
     assert builds == [["znver3", "znver4"]]
     assert (task.bundle_id, task.bundle_archs) == ("b-znver3+znver4", ["znver3", "znver4"])
     assert w4.bundle_id == "b-znver3+znver4"
+
+
+def test_a_pinned_bundle_the_store_lacks_is_rebuilt(manager, spec, task, monkeypatch):
+    """A pin from before the store (or a pruned bundle) cannot be copied into
+    a container, so the slot's start builds the tree afresh and repins."""
+    builds = []
+
+    def build(self, archs):
+        builds.append(archs)
+        _in_store(self, "fresh", archs)
+        return SimpleNamespace(bundle_id="fresh", source_hash="h", archs=archs)
+
+    monkeypatch.setattr(WorkerManager, "_build_bundle", build)
+    task.bundle_id, task.bundle_source_hash, task.bundle_archs = "r2-era", "h", ["znver3"]
+    w = _starting_ssh_slot(manager, spec, task, monkeypatch)
+    missing = {"observed_running": False, "ssh_probe": "missing"}
+
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)  # kicks off the build
+    manager._pending_builds[f"{spec.name}/t"].result(timeout=5)
+    manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)
+    assert builds == [["znver3"]]
+    assert task.bundle_id == w.bundle_id == "fresh"
 
 
 def test_a_failed_bundle_build_is_the_slots_exit_reason(manager, spec, task, monkeypatch):
@@ -1457,6 +1483,15 @@ def test_deploy_refuses_an_image_whose_bootstrap_predates_the_payload(
         manager.deploy(spec, task)
 
 
+def _in_store(manager, bundle_id: str, archs: list[str]):
+    """Write bundle `bundle_id`'s manifest into the manager's store: a task
+    stays pinned to a bundle only while the store holds it."""
+    d = manager.mount_root / workers_mod.bundles.STORE_REL / bundle_id
+    d.mkdir(parents=True, exist_ok=True)
+    manifest = BundleManifest(bundle_id=bundle_id, git_sha="s", git_dirty=False, archs=archs)
+    (d / "manifest.json").write_text(json.dumps(asdict(manifest)))
+
+
 def _store_bundle(store: Path, bundle_id: str, arch: str, positions: str):
     """A bundle in the store: its manifest, one arch's tarball, and its eval
     datasets' tarball."""
@@ -1514,6 +1549,46 @@ def test_a_container_whose_payload_did_not_arrive_is_removed(tmp_path):
             removed.append(name)
 
     with pytest.raises(SshMachineError):
+        manager._copy_payload(
+            _Machine(), "gen", workloads.get("position_eval").role("generate"), "b1", "znver3"
+        )
+    assert removed == ["gen"]
+
+
+def test_a_build_prunes_the_store_to_pinned_and_recent_bundles(manager, spec, task, monkeypatch):
+    """The keep set comes from the tasks' pins plus the bundle just built: an
+    old bundle a task still runs survives, and so do the newest few."""
+    store = manager.mount_root / workers_mod.bundles.STORE_REL
+    for i in range(7):
+        _in_store(manager, f"b{i}", ["znver3"])
+        os.utime(store / f"b{i}" / "manifest.json", (i, i))
+    task.bundle_id = "b0"
+    manager.tasks.save(spec, task)
+    monkeypatch.setattr(workers_mod, "check_worker_images_current", lambda root: None)
+
+    def deploy(store, archs, cache):
+        _in_store(manager, "new", archs)
+        return workers_mod.bundles.read_manifest(store, "new")
+
+    monkeypatch.setattr(workers_mod.bundles, "deploy_current_tree", deploy)
+    assert manager._build_bundle(["znver3"]).bundle_id == "new"
+    assert sorted(d.name for d in store.iterdir()) == ["b0", "b3", "b4", "b5", "b6", "new"]
+
+
+def test_a_container_whose_bundle_the_store_lacks_is_removed(tmp_path):
+    """Any failure to assemble the payload, not only a dropped link, leaves
+    no payload-less container for a later pass to start."""
+    manager = WorkerManager(tmp_path)
+    removed = []
+
+    class _Machine:
+        def copy_into_container(self, name, dest_dir, archive):
+            raise AssertionError("never reached")
+
+        def remove_container(self, name):
+            removed.append(name)
+
+    with pytest.raises(AssertionError, match="has no znver3 build"):
         manager._copy_payload(
             _Machine(), "gen", workloads.get("position_eval").role("generate"), "b1", "znver3"
         )
@@ -2044,6 +2119,7 @@ def test_an_ssh_trainers_container_runs_the_torch_image_with_local_records(
     spec = workloads.get("position_eval")
     task = _all_ssh_task()
     task.bundle_id, task.bundle_archs = "b1", ["znver3"]  # the fake machines' arch
+    _in_store(manager, "b1", ["znver3"])
     envs = {}
 
     class _Recording(_FakeSshMachine):
@@ -2456,6 +2532,7 @@ def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
     spec = workloads.get("position_eval")
     task = _rented_home_task(manager, monkeypatch)
     task.bundle_id, task.bundle_archs = "b1", ["znver3"]
+    _in_store(manager, "b1", ["znver3"])
     runs, volumes = {}, []
 
     class _Recording(_FakeSshMachine):
@@ -2658,6 +2735,7 @@ def test_a_new_trainer_container_is_seeded_with_the_controllers_state(manager, m
     spec = workloads.get("position_eval")
     task = _all_ssh_task()
     task.bundle_id, task.bundle_archs = "b1", ["znver3"]
+    _in_store(manager, "b1", ["znver3"])
     paths = manager.tasks.paths(spec, "t")
     paths.rolling_checkpoint.parent.mkdir(parents=True)
     paths.rolling_checkpoint.write_text("w")

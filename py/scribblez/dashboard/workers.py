@@ -674,6 +674,8 @@ class WorkerManager:
         redeploy. The one exception is a later slot whose arch the bundle
         lacks: the tree is rebuilt with that arch added and the task repinned.
         Containers on the old bundle then get replaced as after any redeploy.
+        So does a pinned bundle the store no longer holds (one from before the
+        store, or pruned), since a container could not be given it.
 
         A build takes minutes, and slot starts run on the blocking thread, so
         the build goes to the build thread instead. Meanwhile the slot shows
@@ -683,7 +685,8 @@ class WorkerManager:
         """
         arch = self._slot_arch(spec, task, w)
         if task.bundle_id and arch in task.bundle_archs:
-            return task.bundle_id
+            if bundles.read_manifest(self._bundle_store, task.bundle_id) is not None:
+                return task.bundle_id
         task_key = f"{spec.name}/{task.tag}"
         future = self._pending_builds.get(task_key)
         if future is None:
@@ -2576,21 +2579,21 @@ class WorkerManager:
         """Copy a created container's payload into it before it starts: the
         bundle's tarball for its machine's arch, and for a trainer the eval
         datasets it scores against (docker-setup/worker/bootstrap.py unpacks
-        both). A container whose copy failed is removed, since started as it
-        is it would have nothing to run."""
-        files = {"bundle.tar.gz": bundles.arch_tarball(self._bundle_store, bundle_id, arch)}
-        if role.ingest:
-            manifest = bundles.read_manifest(self._bundle_store, bundle_id)
-            files["positions.tar.gz"] = bundles.eval_positions_path(
-                self._bundle_store, manifest.eval_positions
-            )
+        both). A container whose copy failed, however, is removed: started as
+        it is it would have nothing to run, and a later pass would start it."""
         archive = self._bundle_store / f".payload-{uuid.uuid4().hex[:12]}.tar"
         try:
+            files = {"bundle.tar.gz": bundles.arch_tarball(self._bundle_store, bundle_id, arch)}
+            if role.ingest:
+                manifest = bundles.read_manifest(self._bundle_store, bundle_id)
+                files["positions.tar.gz"] = bundles.eval_positions_path(
+                    self._bundle_store, manifest.eval_positions
+                )
             with tarfile.open(archive, "w") as tar:
                 for name, path in files.items():
                     tar.add(path, arcname=f"{runtime_abi.PAYLOAD_DIR.name}/{name}")
             machine.copy_into_container(container, str(runtime_abi.PAYLOAD_DIR.parent), archive)
-        except SshMachineError:
+        except Exception:
             machine.remove_container(container)
             raise
         finally:
