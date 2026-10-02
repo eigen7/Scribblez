@@ -632,7 +632,6 @@ def test_publish_config_records_params_before_the_model_exists(tmp_path):
     """The Info tab's params are published up front, with the parameter count
     re-stamped once the model is built, so the dashboard shows the run's config
     while the trainer waits for warmup_pairs rather than staying blank."""
-    import json
 
     from cloud.sinks import LocalSink
     from scribblez.dashboard import db
@@ -1006,56 +1005,6 @@ def test_retire_training_pairs_deletes_the_training_side_only(tmp_path):
     sink = _OutputSink()
     trainer.retire_training_pairs(train_ds, sink)
     assert sink.removed == [f"data/slogs/s{i}.{ext}" for i in range(3) for ext in ("mset", "slog")]
-
-
-def test_a_remote_trainer_pulls_its_store_and_restores_through_the_sink(tmp_path):
-    """The store is taken through the sink before each look, and a fresh
-    machine takes the checkpoint and cursor the same way."""
-    from scribblez import paths as paths_mod
-    from scribblez.move_set_eval import trainer
-    from scribblez.paths import TagPaths
-
-    class _StoreSink(_OutputSink):
-        def __init__(self, staged):
-            super().__init__()
-            self.staged, self.pulls, self.fetched = staged, 0, []
-
-        def fetch_data_files(self, data_rel, dest):
-            self.pulls += 1
-            for stem in self.staged:
-                _pair(dest, stem)
-
-        def list_dirs(self, rel):
-            return ["gen_000007"]
-
-        def fetch_file(self, rel, dest):
-            """One state pair, at 700 rows."""
-            self.fetched.append(rel)
-            if not rel.startswith("state/"):
-                return False
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if rel.endswith(".json"):
-                dest.write_text(json.dumps({"rows_trained": 700, "generation_index": 8}))
-            else:
-                dest.write_bytes(b"ckpt")
-            return True
-
-    store = tmp_path / "data" / "slogs"
-    sink = _StoreSink(["a", "b"])
-    trainer.wait_for_store(store, _params(warmup_pairs=2, sweep_every=0, holdout_every=0), sink)
-    assert sink.pulls == 1 and sorted(p.stem for p in store.glob("*.mset")) == ["a", "b"]
-
-    paths = TagPaths("t", paths_mod.MOVE_SET_EVAL, tmp_path)
-    trainer.restore_checkpoint(paths, sink)
-    assert sink.fetched == [
-        "state/gen_000007/train_state.json",
-        "train_state.json",
-        "state/gen_000007/model.pt",  # only the winner's weights
-    ]
-    assert paths.rolling_checkpoint.read_bytes() == b"ckpt"
-    sink.fetched.clear()
-    trainer.restore_checkpoint(paths, sink)  # a machine holding it keeps its own
-    assert not any(rel.endswith(".pt") for rel in sink.fetched)
 
 
 def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):

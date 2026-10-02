@@ -176,8 +176,8 @@ def tick(spec: WorkloadSpec, task, hooks):
     """The scheduler entry: finish the surveyors once the tag holds its target.
 
     The stop comes from the controller rather than a worker exit because only
-    the controller sees the whole store; a rented worker delivers to the bucket
-    and cannot count it. A finished worker's container is stopped, which the
+    the controller sees the whole store; a remote worker delivers into its own
+    container and cannot count it. A finished worker's container is stopped, which the
     dashboard's idle policy counts as nothing running, so the rented machines
     are stopped ten minutes later (dashboard/workers.py, IDLE_STOP_SECONDS)."""
     target = params_mod.validate(spec.params_cls, task.params).target_positions

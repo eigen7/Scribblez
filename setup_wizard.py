@@ -60,12 +60,13 @@ PHONY_LEXICA_DIR = Path(__file__).resolve().parent / "phonies"
 CLOUD_CREDENTIALS_TEMPLATE = {
     "registry": {
         "worker_image": "FILL_ME",
+        "username": "FILL_ME",
+        "pull_token": "FILL_ME",
     },
-    "r2": {
-        "account_id": "FILL_ME",
+    "aws": {
+        "region": "us-east-1",
         "access_key_id": "FILL_ME",
         "secret_access_key": "FILL_ME",
-        "bucket": "scribblez",
     },
 }
 

@@ -9,8 +9,7 @@ collects it) while the next cycle starts. The generation scheduler then
 assigns staged chunks to generations (scribblez/generational/scheduler.py).
 
 Delivery runs off the generation path so that a slow sink never holds up the
-next cycle; the bucket sink this was built for cost one rclone process per
-file. Each cycle gets its own subdirectory so its files never collide with a
+next cycle. Each cycle gets its own subdirectory so its files never collide with a
 chunk still waiting to be delivered.
 
 play_game always runs with seed 0, which makes the binary seed itself from
@@ -36,7 +35,7 @@ from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads.base import StatsSpec, WorkerContext
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
-# The staging area under the tag's data/ dir (locally and in the bucket).
+# The staging area under the tag's data/ dir.
 STAGING_DIR = "staging"
 
 # Games per generator cycle. play_game writes one .slog per 1000 games (its

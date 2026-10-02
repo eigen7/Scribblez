@@ -617,25 +617,6 @@ def test_pair_generate_without_a_target_is_unbounded(tmp_path, target):
     assert len(calls) == 4
 
 
-class _StagingSink(RecordingSink):
-    """A sink whose bucket holds one file, delivered on fetch."""
-
-    kind = "ssh"
-
-    def __init__(self, staged: dict[str, bytes]):
-        super().__init__()
-        self.staged = staged
-        self.fetched = []
-
-    def fetch_file(self, rel_path, dest):
-        self.fetched.append(rel_path)
-        if rel_path not in self.staged:
-            return False
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(self.staged[rel_path])
-        return True
-
-
 def test_the_generate_role_declares_the_pinned_teacher_as_its_input(tmp_path, monkeypatch):
     params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
     expected = TagPaths("teach", POSITION_EVAL, mount_root=tmp_path).onnx_path(3)
@@ -646,8 +627,9 @@ def test_the_generate_role_declares_the_pinned_teacher_as_its_input(tmp_path, mo
 
 
 def test_a_remote_generator_takes_the_teacher_the_controller_staged(tmp_path, monkeypatch):
-    """No position_eval tag on the machine: the teacher comes through the sink
-    under the tag root, and THAT path is bound into the cycle."""
+    """No position_eval tag on the machine: the teacher is the copy the
+    controller pushed under the tag root, and THAT path is bound into the
+    cycle."""
     bound = []
 
     def fake_cycle(model, work_dir, params, threads):
@@ -655,19 +637,19 @@ def test_a_remote_generator_takes_the_teacher_the_controller_staged(tmp_path, mo
         return 0, {"gen_s": 0.0, "mset_s": 0.0}
 
     monkeypatch.setattr(move_set_eval, "_cycle", fake_cycle)
-    sink = _StagingSink({move_set_eval.TEACHER_INPUT: b"onnx"})
-    ctx = StubCtx(tmp_path, sink, max_cycles=1)
+    ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=1)
     ctx.kind = "ssh"
     ctx.params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
+    staged = ctx.tag_paths().root / move_set_eval.TEACHER_INPUT
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"onnx")
 
     assert move_set_eval.run_generate(ctx) == 0
-    staged = ctx.tag_paths().root / move_set_eval.TEACHER_INPUT
-    assert bound == [str(staged)] and staged.read_bytes() == b"onnx"
-    assert sink.fetched == [move_set_eval.TEACHER_INPUT]
+    assert bound == [str(staged)]
 
 
 def test_a_local_generator_does_not_wait_for_a_teacher_nobody_stages(tmp_path, monkeypatch):
-    ctx = StubCtx(tmp_path, _StagingSink({}), max_cycles=1)  # kind "local"
+    ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=1)  # kind "local"
     ctx.params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
     assert move_set_eval.run_generate(ctx) == 1
 

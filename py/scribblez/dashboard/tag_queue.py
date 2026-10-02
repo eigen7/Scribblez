@@ -16,9 +16,8 @@ moves through these phases:
              queued tag can use it or the operator removes the machine
 
 Draining before removal is what keeps a hand-over from losing anything:
-every remote slot's full container log is saved into the tag's logs/, a
-stopped container's last output is swept, and a tag whose output travels
-through the bucket gets one final sync before its slots go.
+every remote slot's full container log is saved into the tag's logs/, and a
+stopped container's last output is swept, before its slots go.
 """
 
 import copy

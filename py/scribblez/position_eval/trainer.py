@@ -114,15 +114,13 @@ def wait_for_generation(paths: TagPaths, index: int, sink, home=None):
         timed_print(f"generation {index} is complete")
 
 
-def restore_from_sink(paths: TagPaths, sink):
-    """Install the newest checkpoint and cursor on offer when they beat the
-    ones on this machine (state_pair's cursor rule): the seed the controller
-    pushed into a new container, then whatever the sink holds. A fresh
-    machine takes them, and a machine holding fresher state keeps its own."""
+def install_seed(paths: TagPaths):
+    """Install the checkpoint and cursor the controller pushed into a new
+    container (SCZ_STATE_SEED) when they beat the ones on this machine
+    (state_pair's cursor rule): a fresh machine takes them, and a machine
+    holding fresher state keeps its own."""
     if state_pair.take_seed(paths, expected=os.environ.get("SCZ_STATE_SEED") == "1"):
         timed_print("installed the controller's checkpoint and cursor")
-    if state_pair.restore(paths, sink):
-        timed_print(f"restored the checkpoint and cursor through the {sink.kind} sink")
 
 
 def ensure_window(paths: TagPaths, sink, cursor: int, window: int):
@@ -555,7 +553,7 @@ def run(ctx: WorkerContext) -> int:
         "deliverer": OutputDeliverer(),
     }
 
-    restore_from_sink(paths, ctx.records_sink)
+    install_seed(paths)
     state = checkpoint.resume(paths, model, optimizer, device)
     ensure_window(paths, ctx.data_sink, state.generation_index, params.window)
     _publish_train_state(paths, state)

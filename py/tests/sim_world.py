@@ -4,8 +4,8 @@
 The real WorkerManager, TagQueue and PoolRentals run against it unchanged;
 everything they touch outside the process is faked here: a clock, local worker
 processes (Popen, /proc liveness, signals), ssh machines and their containers,
-the cloud provider's instances, the results bucket, and the thread pools,
-which run each job at once so a seed replays exactly.
+the cloud provider's instances, and the thread pools, which run each job at
+once so a seed replays exactly.
 
 The workload is a stand-in with position_eval's shape: a trainer and a
 generator placed by a layout, a row budget as the end condition, and a
@@ -94,7 +94,7 @@ def progress(spec, paths, params) -> list[tuple[str, object]]:
 
 def ingest(spec, paths):
     """The trainer's controller-side tick: nothing to ingest here, but its
-    presence is what makes the trainer a trainer (bucket delivery on ssh)."""
+    presence is what makes the trainer a trainer."""
 
 
 def never_run(ctx) -> int:
@@ -180,16 +180,13 @@ class WriterThread:
 
 @dataclasses.dataclass
 class Worker:
-    """What a simulated worker is doing wherever it runs: its role, tag, and
-    where it delivers ("local": the tag dir; "r2": the bucket) its data
-    (generations) and its records (the trainer's cursor). An ssh worker's
-    "local" stands for its container's tree, collected here; the simulation
-    writes straight to the tag dir."""
+    """What a simulated worker is doing wherever it runs: its role and tag. It
+    writes its output (generations, the trainer's cursor) to the tag dir: an
+    ssh worker's container tree, collected here, which the simulation
+    short-circuits."""
 
     role: str
     tag: str
-    data_sink: str
-    records_sink: str
     max_rows: int
 
 
@@ -307,7 +304,6 @@ class World:
         self._next_pid = 1000
         self.hosts: dict[str, Host] = {}
         self.provider = FakeProvider(self)
-        self.bucket: dict[str, str] = {}
         self.exited: list[tuple] = []  # (tag, worker id, code) of every process exit
         self.crashed: set[tuple[str, str]] = set()  # (tag, worker id) the world crashed
 
@@ -322,7 +318,7 @@ class World:
         env = env or {}
         pid = self._next_pid
         self._next_pid += 1
-        proc = FakeProc(self, pid, env, _worker_from_env(env, "local"))
+        proc = FakeProc(self, pid, env, _worker_from_env(env))
         self.procs[pid] = proc
         return proc
 
@@ -443,19 +439,10 @@ class World:
         return self.mount_root / "tags" / WORKLOAD / tag
 
     def _read(self, w: Worker, rel: str) -> str | None:
-        if self._sink(w, rel) == "r2":
-            return self.bucket.get(f"{w.tag}/{rel}")
         path = self._tag_root(w.tag) / rel
         return path.read_text() if path.is_file() else None
 
-    @staticmethod
-    def _sink(w: Worker, rel: str) -> str:
-        return w.data_sink if rel.startswith("data/") else w.records_sink
-
     def _write(self, w: Worker, rel: str, text: str):
-        if self._sink(w, rel) == "r2":
-            self.bucket[f"{w.tag}/{rel}"] = text
-            return
         path = self._tag_root(w.tag) / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
@@ -477,14 +464,12 @@ class World:
         return [i for i in self.provider.instances.values() if i.state in ("pending", "running")]
 
 
-def _worker_from_env(env: dict, default_sink: str) -> Worker | None:
+def _worker_from_env(env: dict) -> Worker | None:
     if env.get("SCZ_WORKLOAD") != WORKLOAD:
         return None
     return Worker(
         role=env["SCZ_ROLE"],
         tag=env["SCZ_TAG"],
-        data_sink=env.get("SCZ_DATA_SINK", env.get("SCZ_SINK", default_sink)),
-        records_sink=env.get("SCZ_SINK", default_sink),
         max_rows=int(env.get("SCZ_MAX_ROWS", "0") or 0),
     )
 
@@ -531,7 +516,7 @@ class FakeSshMachine:
 
     def create_container(self, name, image, env, gpus=False, volume=None):
         host = self._host()
-        worker = _worker_from_env(env, "local")
+        worker = _worker_from_env(env)
         host.containers[name] = Container("stopped", worker, dict(env))
 
     def copy_into_container(self, name, dest_dir, archive):
@@ -578,7 +563,6 @@ def push_file(machine, container, **kw):
 
 SIM_CREDS = SimpleNamespace(
     registry=RegistryConfig(worker_image="repo/worker"),
-    r2=SimpleNamespace(account_id="a", access_key_id="k", secret_access_key="s", bucket="sim"),
     aws=None,
 )
 

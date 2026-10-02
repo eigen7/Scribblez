@@ -174,9 +174,7 @@ def prune_exports(
 ):
     """After pass `epoch`'s export, delete the export that just left the
     `keep_last` window unless it is a multiple of `keep_every`. Pruning one
-    export per pass needs no listing of what is kept, which a
-    bucket-delivering trainer has no local copy of. The sink removes both the
-    bucket copy and the local one."""
+    export per pass needs no listing of what is kept."""
     stale = epoch - keep_last
     if stale < 0 or (keep_every > 0 and stale % keep_every == 0):
         return
@@ -185,9 +183,7 @@ def prune_exports(
 
 def deliver_pass(paths, sink, epoch: int, state: MsetTrainState):
     """Hand pass `epoch`'s export, then the rolling checkpoint and its cursor
-    as a state pair (generational/state_pair.py), to the sink. A bucket sink
-    uploads them and deletes the local export; the checkpoint and cursor stay
-    local for resume."""
+    as a state pair (generational/state_pair.py), to the sink."""
     export = paths.onnx_path(epoch)
     sink.deliver_output(export, f"models/{export.name}")
     lifecycle.write_train_state(paths, asdict(state))
@@ -199,22 +195,13 @@ def deliver_pass(paths, sink, epoch: int, state: MsetTrainState):
     )
 
 
-def restore_checkpoint(paths, sink):
-    """Install the newest checkpoint and cursor the sink holds when they beat
-    the ones on this machine (state_pair's cursor rule)."""
-    if state_pair.restore(paths, sink):
-        timed_print(f"restored the checkpoint and cursor through the {sink.kind} sink")
-
-
 def retire_training_pairs(train_ds: MsetDataset, sink) -> int:
     """Delete the finished run's training pairs (.mset and .slog) through the
     sink, returning the count.
 
     Params are frozen, so a finished run cannot be extended and nothing reads
     these pairs again; they are the bulk of a tag's disk footprint. Held-out
-    pairs stay for later re-evaluation of the exports. Going through the sink
-    also deletes the bucket copies, which later syncs would otherwise pull
-    back."""
+    pairs stay for later re-evaluation of the exports."""
     sink.remove_outputs(
         [
             f"data/{SLOGS_DIR}/{path.name}"
@@ -442,7 +429,6 @@ def run(ctx: WorkerContext) -> int:
 
     # A finished run has retired its training pairs, so check the checkpoint
     # first rather than wait on a store that will never refill.
-    restore_checkpoint(paths, ctx.records_sink)
     if not epochs_left(params, checkpoint.peek_state(paths, state_cls=MsetTrainState)):
         timed_print("Training complete (the epoch budget was spent in an earlier session).")
         return 0

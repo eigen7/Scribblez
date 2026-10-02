@@ -13,13 +13,12 @@ state only if its `rows_trained` is at least the installed one's. Rows trained
 only ever grow, so this is a logical clock. No machine's wall clock is
 involved, and the controller never has to load a torch file to compare. A
 restore takes the copy with the most rows, wherever it is. A stale copy, such
-as a bucket that fell behind the machine it came from or a volume left over
-from an earlier assignment, therefore can never overwrite fresher state.
+as a volume left over from an earlier assignment, therefore can never
+overwrite fresher state.
 
-`deliver` sends a trainer's pair through its records sink. `install` applies
-the rule. `take_seed` installs the pair the controller pushes into a new
-trainer container (SEED_DIR). `restore` fetches through a sink the newest pair
-that beats the installed state, then installs it.
+`deliver` sends a trainer's pair through its sink. `install` applies the rule.
+`take_seed` installs the pair the controller pushes into a new trainer
+container (SEED_DIR).
 """
 
 import json
@@ -48,7 +47,7 @@ SEED_POLL_SECONDS = 2
 
 
 def pair_rel(generation: int) -> str:
-    """The pair's path under the tag root (or the bucket's tag prefix)."""
+    """The pair's path under the tag root."""
     return f"{STATE_DIR}/gen_{generation:06d}"
 
 
@@ -137,42 +136,3 @@ def deliver(sink, model_snapshot: Path, cursor_snapshot: Path, generation: int):
     for name in sink.list_dirs(STATE_DIR):
         if f"{STATE_DIR}/{name}" < rel:
             sink.remove_tree(f"{STATE_DIR}/{name}")
-
-
-# The pre-pair layout: the checkpoint and cursor as two separate objects.
-# Trainers on bundles from before the pairs still write it, so a restore
-# considers it as one more candidate. It goes when the bucket does.
-LEGACY_PAIR = ("checkpoints/model.pt", "train_state.json")
-
-
-def restore(paths: TagPaths, sink) -> bool:
-    """Install the newest pair the sink holds if it beats the installed state
-    (the cursor rule), reading only the candidates' small cursors until one
-    wins. Returns whether one was installed. A local sink holds the installed
-    state itself, so it has nothing newer to offer."""
-    if sink.kind == "local":
-        return False
-    incoming = paths.root / ".incoming" / STATE_DIR
-    shutil.rmtree(incoming, ignore_errors=True)
-    candidates = [
-        (f"{STATE_DIR}/{name}/{MODEL_NAME}", f"{STATE_DIR}/{name}/{CURSOR_NAME}")
-        for name in sink.list_dirs(STATE_DIR)
-    ] + [LEGACY_PAIR]
-    best, best_rows = None, installed_rows(paths)
-    for i, (model_rel, cursor_rel) in enumerate(candidates):
-        cursor = incoming / f"{i}.json"
-        if sink.fetch_file(cursor_rel, cursor):
-            rows = rows_trained(cursor)
-            if rows is not None and rows > best_rows:
-                best, best_rows = (model_rel, cursor), rows
-    if best is None:
-        return False
-    model_rel, cursor = best
-    pair = incoming / "pair"
-    pair.mkdir(parents=True, exist_ok=True)
-    if not sink.fetch_file(model_rel, pair / MODEL_NAME):
-        return False  # removed since it was listed; the next restore looks again
-    os.replace(cursor, pair / CURSOR_NAME)
-    installed = install(pair, paths)
-    shutil.rmtree(incoming, ignore_errors=True)
-    return installed

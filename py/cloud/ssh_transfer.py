@@ -1,11 +1,10 @@
 """Moving files between the controller and a worker's container over the ssh
 link the controller already uses to manage it.
 
-A worker with the local sink (SCZ_SINK=local) delivers into its own
-container, and the controller collects: each pass streams a `docker exec tar`
-of finished output back over the open ssh connection. This keeps the network
-out of the worker's cycle (a bucket round trip per cycle would dwarf work that
-takes seconds) and needs no bucket or extra credential. The same link runs the
+A worker delivers into its own container, and the controller collects: each
+pass streams a `docker exec tar` of finished output back over the open ssh
+connection. This keeps the network out of the worker's cycle and needs no
+credential beyond the ssh link itself. The same link runs the
 other way for roles whose work the controller assigns: push_file drops a file
 where the worker polls for it (match eval: the ONNX of the generation to
 play), and list_dir reads back what is there. relay_files pushes a batch of

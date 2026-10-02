@@ -6,9 +6,9 @@ Three roles share a tag:
     self-play chunks into the tag's staging area (workloads/selfplay_gen.py).
   - train: a singleton that trains over a sliding window of complete
     generations, one epoch per generation, exporting ONNX and dashboard
-    records per generation. It runs on this machine's GPU or on a rented one;
-    a rented trainer reads its generations from the bucket and delivers its
-    outputs there (docs/plans/cloud_training.md).
+    records per generation. It runs on this machine's GPU or over ssh on
+    another's, with its tag's data plane beside it
+    (generational/data_home.py).
   - match_eval: a singleton that plays exported generations against a fixed
     opponent (scribblez/match_eval/runner.py). It may run on another machine
     (kind "ssh") so the matches do not compete with training for this host's
