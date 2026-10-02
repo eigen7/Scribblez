@@ -165,15 +165,13 @@ def _series_figure(
 
 # Metric groups for series_grid(): each entry is (figure title, metric names)
 # or (title, names, {"log": True}) for a log y-axis.
-# The learning rate spans orders of magnitude, hence the log y-axis. Only
-# schedule-free runs record the averaging weight (a WSD run's panel is absent):
-# they hold the rate constant and anneal by giving each new iterate a smaller
-# share of the deployed average, so the weight is the curve that shows the
-# anneal. The gradient-norm panels come from runs that record them (the
+# Only schedule-free runs record the averaging weight (a WSD run's panel is
+# absent): they hold the rate constant and anneal by giving each new iterate a
+# smaller share of the deployed average, so the weight is the curve that shows
+# the anneal. The gradient-norm panels come from runs that record them (the
 # position-evaluation trainer): the norm is measured before clipping, and the
 # clipped fraction says whether the clip is a spike guard or a constant rescale.
 TRAINING = [
-    ("Learning rate", ["lr"], {"log": True}),
     ("Iterate averaging weight", ["averaging_weight"], {"log": True}),
     ("Gradient norm before clipping", ["grad_norm_mean", "grad_norm_max"], {"log": True}),
     ("Fraction of steps clipped", ["clip_frac"]),
