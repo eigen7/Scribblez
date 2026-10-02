@@ -524,6 +524,7 @@ export default function MasterApp() {
   }, [workloadName, openTag, poolOpen]);
 
   const workload = workloads.find((w) => w.name === workloadName);
+  const openTask = (w: string, tag: string) => { setWorkloadName(w); setOpenTag(tag); setPoolOpen(false); };
 
   return (
     <div style={{
@@ -531,7 +532,7 @@ export default function MasterApp() {
       background: '#f4f6f8', minHeight: '100vh',
     }}>
       <div className="page-cap">
-        <BurnStrip onOpen={(w, tag) => { setWorkloadName(w); setOpenTag(tag); setPoolOpen(false); }} />
+        <BurnStrip onOpen={openTask} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
           <strong style={{ fontSize: 19 }}>Scribblez</strong>
           <label style={{ fontSize: 15 }}>
@@ -564,7 +565,7 @@ export default function MasterApp() {
           )}
         </div>
         {poolOpen ? (
-          <PoolView />
+          <PoolView onOpenTag={openTask} />
         ) : !workload ? (
           <div style={{ color: '#556070', fontStyle: 'italic' }}>Connecting to the data API…</div>
         ) : openTag ? (

@@ -2,7 +2,7 @@ import { ReactNode } from 'react';
 import { relTime } from './MasterApp';
 
 // Shared master-dashboard primitives: KPI stat tiles, worker-health badges,
-// and compact-count formatting. Styled by the .tile / .pill-stale / .dot-ok
+// tag links, and compact-count formatting. Styled by the .tile / .pill-stale / .dot-ok
 // classes in index.css.
 
 export function Tile({ label, value, unit, sub }: {
@@ -31,6 +31,21 @@ export function HealthBadge({ updatedAt, stale }: { updatedAt: number; stale: bo
   return (
     <span className="health-ok">
       <span className="dot-ok" /> {relTime(updatedAt)}
+    </span>
+  );
+}
+
+// A workload/tag name that opens the tag's task view.
+export function TagLink({ workload, tag, onOpen, title }: {
+  workload: string; tag: string; onOpen: (workload: string, tag: string) => void; title?: string;
+}) {
+  return (
+    <span
+      onClick={() => onOpen(workload, tag)}
+      title={title ?? `open ${workload}/${tag}`}
+      style={{ color: '#1f77b4', cursor: 'pointer' }}
+    >
+      {workload}/{tag}
     </span>
   );
 }

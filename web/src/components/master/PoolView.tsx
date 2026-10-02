@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getJSON, postJSON } from '../../lib/api';
 import { Button } from './MasterApp';
 import { RentalOffer, rateText } from './rentalOffer';
+import { TagLink } from './ui';
 
 // The machine pool (docs/plans/tag_queue.md §2): the machines the tag queue
 // places tags on, owned by the pool rather than by any tag. Each row shows the
@@ -40,21 +41,45 @@ export function gpuText(h: PoolMachine['hardware']): string {
   return `${h.gpu_count} × ${(h.gpu_memory_gb ?? 0).toFixed(1)} GiB`;
 }
 
+type OpenTag = (workload: string, tag: string) => void;
+
 // The lease, and any slots outside it on the same machine: a tag placed there
 // by hand alongside a leased one is a double booking the operator should see.
-function stateText(m: PoolMachine): string {
-  const retiring = m.retiring ? ' — retiring: terminated once free' : '';
-  return baseState(m) + retiring;
+// Each tag named opens its task view.
+function StateText({ m, onOpenTag }: { m: PoolMachine; onOpenTag: OpenTag }) {
+  return (
+    <>
+      <BaseState m={m} onOpenTag={onOpenTag} />
+      {m.retiring && ' — retiring: terminated once free'}
+    </>
+  );
 }
 
-function baseState(m: PoolMachine): string {
-  const others = m.occupants.join(', ');
+function BaseState({ m, onOpenTag }: { m: PoolMachine; onOpenTag: OpenTag }) {
+  const others = <Occupants occupants={m.occupants} onOpenTag={onOpenTag} />;
   if (m.lease) {
     const why = m.lease.reason ? `: ${m.lease.reason}` : '';
-    const leased = `${m.lease.workload}/${m.lease.tag} (${m.lease.phase}${why})`;
-    return others ? `${leased}; also ${others}` : leased;
+    return (
+      <>
+        <TagLink workload={m.lease.workload} tag={m.lease.tag} onOpen={onOpenTag} /> ({m.lease.phase}{why})
+        {m.occupants.length > 0 && <>; also {others}</>}
+      </>
+    );
   }
-  return others ? `busy: ${others}` : 'free';
+  return m.occupants.length > 0 ? <>busy: {others}</> : <>free</>;
+}
+
+// Slots as "<workload>/<tag>/<worker_id>", the workload/tag part linked.
+function Occupants({ occupants, onOpenTag }: { occupants: string[]; onOpenTag: OpenTag }) {
+  return occupants.map((o, i) => {
+    const [workload, tag, worker] = o.split('/');
+    return (
+      <span key={o}>
+        {i > 0 && ', '}
+        <TagLink workload={workload} tag={tag} onOpen={onOpenTag} />/{worker}
+      </span>
+    );
+  });
 }
 
 // One queued tag (dashboard/tag_queue.py's status): its order, whether it
@@ -76,8 +101,8 @@ export async function enqueueTag(workload: string, tag: string): Promise<boolean
   return true;
 }
 
-function QueueSection({ rows, post, busy }: {
-  rows: QueueRow[]; post: (url: string, body: unknown) => void; busy: boolean;
+function QueueSection({ rows, post, busy, onOpenTag }: {
+  rows: QueueRow[]; post: (url: string, body: unknown) => void; busy: boolean; onOpenTag: OpenTag;
 }) {
   const act = (r: QueueRow, action: string) =>
     post('/api/queue/action', { workload: r.workload, tag: r.tag, action });
@@ -97,7 +122,7 @@ function QueueSection({ rows, post, busy }: {
               <tr key={`${r.workload}/${r.tag}`} style={{ borderTop: '1px solid #e6eaef' }}>
                 <td style={cell}>{i + 1}</td>
                 <td style={cell} data-testid={`queue-${r.tag}`}>
-                  <b>{r.workload}/{r.tag}</b>{r.end_condition ? '' : ' ∞'}
+                  <b><TagLink workload={r.workload} tag={r.tag} onOpen={onOpenTag} /></b>{r.end_condition ? '' : ' ∞'}
                   {r.machines.length > 0 && <div style={{ color: '#7c8694' }}>only {r.machines.join(', ')}</div>}
                 </td>
                 <td style={cell}>bundle {r.bundle}</td>
@@ -249,8 +274,9 @@ function AddForm({ post, busy, localPooled }: {
 }
 
 // The operator-set fields of one machine, edited in place of its row's cells.
-function EditRow({ m, post, busy, onDone }: {
+function EditRow({ m, post, busy, onDone, onOpenTag }: {
   m: PoolMachine; post: (url: string, body: unknown) => void; busy: boolean; onDone: () => void;
+  onOpenTag: OpenTag;
 }) {
   const [aliases, setAliases] = useState(m.aliases.join(', '));
   const [threads, setThreads] = useState(m.generator_threads == null ? '' : String(m.generator_threads));
@@ -267,7 +293,7 @@ function EditRow({ m, post, busy, onDone }: {
         <input style={{ ...inputStyle, width: 55 }} aria-label={`${m.name} threads`} value={threads}
           placeholder="auto" onChange={(e) => setThreads(e.target.value)} />
       </td>
-      <td style={cell}>{stateText(m)}</td>
+      <td style={cell}><StateText m={m} onOpenTag={onOpenTag} /></td>
       <td style={{ ...cell, whiteSpace: 'nowrap' }}>
         <span style={{ display: 'inline-flex', gap: 6 }}>
           <Button label="Save" tone="primary" disabled={busy} onClick={() => {
@@ -283,7 +309,7 @@ function EditRow({ m, post, busy, onDone }: {
   );
 }
 
-export default function PoolView() {
+export default function PoolView({ onOpenTag }: { onOpenTag: OpenTag }) {
   const [machines, setMachines] = useState<PoolMachine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -334,7 +360,7 @@ export default function PoolView() {
           </thead>
           <tbody>
             {machines.map((m) => editing === m.name ? (
-              <EditRow key={m.name} m={m} post={post} busy={busy} onDone={() => setEditing(null)} />
+              <EditRow key={m.name} m={m} post={post} busy={busy} onDone={() => setEditing(null)} onOpenTag={onOpenTag} />
             ) : (
               <tr key={m.name} style={{ borderTop: '1px solid #e6eaef' }}>
                 <td style={cell}><b>{m.name}</b></td>
@@ -351,7 +377,7 @@ export default function PoolView() {
                 <td style={cell}>{m.hardware.vcpus ?? '—'}</td>
                 <td style={cell}>{gpuText(m.hardware)}</td>
                 <td style={cell}>{m.generator_threads ?? 'auto'}</td>
-                <td style={cell} data-testid={`pool-state-${m.name}`}>{stateText(m)}</td>
+                <td style={cell} data-testid={`pool-state-${m.name}`}><StateText m={m} onOpenTag={onOpenTag} /></td>
                 <td style={{ ...cell, whiteSpace: 'nowrap' }}>
                   <span style={{ display: 'inline-flex', gap: 6 }}>
                     {m.lease && (
@@ -384,7 +410,7 @@ export default function PoolView() {
       )}
       <AddForm post={post} busy={busy} localPooled={(machines ?? []).some((m) => m.kind === 'local')} />
       <CapacitySection capacity={capacity} machines={machines ?? []} post={post} busy={busy} />
-      <QueueSection rows={queue} post={post} busy={busy} />
+      <QueueSection rows={queue} post={post} busy={busy} onOpenTag={onOpenTag} />
     </div>
   );
 }
