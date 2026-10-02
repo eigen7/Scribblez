@@ -85,6 +85,7 @@ type TaskInfo = {
   // the frozen params depart from it -- provenance, not live configuration.
   profile: string; profile_diff: ProfileChange[];
   created_at: number | null; state: string; progress: [string, string | number][];
+  failure: string | null;  // why the tag queue failed the tag, kept after its slots go
   gates: Record<string, string>;
   data_dir: string; workers: WorkerInfo[]; machines: MachineInfo[]; spend: number;
   queued: number | null;  // 1-based place in the tag queue; null when not queued
@@ -654,6 +655,7 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           ['workload', workload.title],
           ['created', info.created_at ? new Date(info.created_at * 1000).toLocaleString() : '—'],
           ['state', <StateText state={info.state} />],
+          ...(info.failure ? [['failure', info.failure] as [string, React.ReactNode]] : []),
           ...info.progress.map(([k, v]): [string, React.ReactNode] => [k, String(v)]),
           ['data dir', info.data_dir],
           ['bundle', info.bundle_id

@@ -168,7 +168,11 @@ class WorkloadsHandler(_MasterBase):
 
 class WorkloadTagsHandler(_MasterBase):
     def get(self):
-        self.guarded(lambda: {"tags": self.manager.tasks.list_tags(self.spec())})
+        self.guarded(
+            lambda: {
+                "tags": self.manager.tasks.list_tags(self.spec(), self.manager.queue_store.load())
+            }
+        )
 
 
 class TaskCreateHandler(_MasterBase):
@@ -191,6 +195,7 @@ class TaskHandler(_MasterBase):
 
         def info():
             task = self.manager.tasks.load(spec, tag)
+            queue = self.manager.queue_store.load()
             workers = self.manager.worker_status(spec, task) if task else []
             spend = (
                 task.retired_spend
@@ -207,7 +212,8 @@ class TaskHandler(_MasterBase):
                 "profile": task.profile if task else "",
                 "profile_diff": spec.profile_diff(task.profile, task.params) if task else [],
                 "created_at": task.created_at if task else None,
-                "state": self.manager.tasks.state(spec, task),
+                "state": self.manager.tasks.state(spec, task, queue.find(spec.name, tag)),
+                "failure": task.failure if task else None,
                 "progress": self.manager.tasks.progress(spec, task) if task else [],
                 "gates": task.gates if task else {},
                 "data_dir": str(self.manager.tasks.paths(spec, tag).root),
@@ -218,11 +224,7 @@ class TaskHandler(_MasterBase):
                 "bundle_drift": self.manager.bundle_drift(task) if task else False,
                 # 1-based place in the tag queue, or None when not queued.
                 "queued": next(
-                    (
-                        i + 1
-                        for i, e in enumerate(self.manager.queue_store.load().entries)
-                        if e.key == (spec.name, tag)
-                    ),
+                    (i + 1 for i, e in enumerate(queue.entries) if e.key == (spec.name, tag)),
                     None,
                 ),
             }

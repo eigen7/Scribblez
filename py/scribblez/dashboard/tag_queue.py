@@ -135,8 +135,11 @@ class TagQueue:
         if self._ssh_targets(spec, task, entry, pool):
             entry.bundle = queue_mod.BUNDLE_BUILDING
             self._submit_build(spec, task, entry, pool)
-        queue.entries.append(entry)
-        self._m.queue_store.save(queue)
+        with self._m.control.transaction():
+            task.failure = None
+            self._m.tasks.save(spec, task)
+            queue.entries.append(entry)
+            self._m.queue_store.save(queue)
         return {"queued": True, "warnings": warnings}
 
     def dequeue(self, workload: str, tag: str):
@@ -397,7 +400,7 @@ class TagQueue:
                 try:
                     self._submit_build(spec, task, e, pool)
                 except Exception as ex:  # noqa: BLE001 -- e.g. no cloud credentials
-                    e.bundle = f"failed: {ex}"
+                    e.bundle = f"{queue_mod.BUNDLE_FAILED_PREFIX}{ex}"
                     changed = True
                 continue
             if not future.done():
@@ -412,7 +415,7 @@ class TagQueue:
                 self._m._pin_bundle(spec, task, manifest)
                 e.bundle = queue_mod.BUNDLE_READY
             except Exception as ex:  # noqa: BLE001 -- shown on the entry, retried on re-enqueue
-                e.bundle = f"failed: {ex}"
+                e.bundle = f"{queue_mod.BUNDLE_FAILED_PREFIX}{ex}"
             changed = True
         if changed:
             self._m.pool_store.save(pool)  # the archs the builds detected
@@ -631,6 +634,7 @@ class TagQueue:
         machine to a queued tag that can use it, or hold it for investigation
         (docs/plans/tag_queue.md §5)."""
         crashing = failure.split(":", 1)[0]
+        task.failure = failure
         for w in task.workers:
             w.desired_state = "paused"
             if w.worker_id == crashing:

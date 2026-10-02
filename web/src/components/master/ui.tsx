@@ -21,7 +21,7 @@ export function Tile({ label, value, unit, sub }: {
 // in the body color.
 export const stateColors: Record<string, string> = {
   running: '#2a7a2a', paused: '#8494a5', exited: '#b23b3b', failed: '#b23b3b', finished: '#446e9b',
-  complete: '#446e9b', idle: '#8494a5',
+  complete: '#446e9b', idle: '#8494a5', queued: '#a05a00',
   up: '#2a7a2a', 'no docker': '#b23b3b', launching: '#1f77b4', preparing: '#1f77b4',
   stopped: '#8494a5', gone: '#b23b3b',
   waiting: '#a05a00',

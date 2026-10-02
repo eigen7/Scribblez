@@ -1524,6 +1524,7 @@ class WorkerManager:
         if run:
             w.finished = False
             w.failed = None
+            task.failure = None
             self._crashes.pop(_key(spec, task.tag, worker_id), None)
         self.tasks.save(spec, task)
         start = run and w.role not in task.gates  # a gated slot starts when released

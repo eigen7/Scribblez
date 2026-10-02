@@ -17,6 +17,8 @@ from scribblez.dashboard.control_store import ControlStore, SharedRecord
 BUNDLE_NONE = "none"  # only localhost is eligible: local slots run the checkout
 BUNDLE_BUILDING = "building"
 BUNDLE_READY = "ready"
+# A failed build's state is this prefix and why: "failed: <why>".
+BUNDLE_FAILED_PREFIX = "failed: "
 
 
 @dataclass

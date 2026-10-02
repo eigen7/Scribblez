@@ -30,11 +30,19 @@ from pathlib import Path
 from scribblez import params as params_mod
 from scribblez.dashboard import worker_stats_figures
 from scribblez.dashboard.control_store import ControlStore
+from scribblez.dashboard.queue import BUNDLE_FAILED_PREFIX, Queue, QueueEntry
 from scribblez.paths import TagPaths
 from scribblez.workloads import WORKLOADS, WorkloadSpec, resolve
 
 # A tag's states (TaskStore.state).
-COMPLETE, RUNNING, PAUSED, IDLE = "complete", "running", "paused", "idle"
+COMPLETE, FAILED, RUNNING, QUEUED, PAUSED, IDLE = (
+    "complete",
+    "failed",
+    "running",
+    "queued",
+    "paused",
+    "idle",
+)
 
 
 @dataclass
@@ -145,6 +153,10 @@ class TaskRecord:
     # Estimated spend of machines that have since been removed, so the
     # task's cumulative total survives slot removal.
     retired_spend: float = 0.0
+    # Why the tag queue failed the tag (dashboard/tag_queue.py), kept after its
+    # slots are released to another tag so the listing still shows it failed.
+    # Cleared when the tag is queued again or a slot of it is started.
+    failure: str | None = None
     # The bundle every ssh worker of this task runs, pinned when the first one
     # launches, so the fleet stays homogeneous and code edited mid-run does not
     # silently reach it. The source digest it was built from is kept so drift
@@ -275,6 +287,15 @@ def _disk_bytes(tag_dir: Path) -> int:
                 seen.add((st.st_dev, st.st_ino))
             total += st.st_blocks * 512
     return total
+
+
+def _failed(task: TaskRecord, entry: QueueEntry | None) -> bool:
+    """Whether the tag is stuck on a failure the operator has to act on."""
+    return (
+        task.failure is not None
+        or any(w.failed is not None for w in task.workers)
+        or (entry is not None and entry.bundle.startswith(BUNDLE_FAILED_PREFIX))
+    )
 
 
 class _TaskEntry:
@@ -479,13 +500,17 @@ class TaskStore:
                 )
             return e
 
-    def state(self, spec: WorkloadSpec, task: TaskRecord | None) -> str:
-        """The tag's state, common to every workload:
+    def state(self, spec: WorkloadSpec, task: TaskRecord | None, entry: QueueEntry | None) -> str:
+        """The tag's state, common to every workload; `entry` is its place in
+        the tag queue, or None. The first that holds:
 
         complete  the workload's end condition holds (WorkloadSpec.complete),
                   or, for a workload without one, every slot is finished
+        failed    the tag queue failed it, a slot of it is failed, or its
+                  queue entry's bundle build failed (retried on re-enqueue)
         running   a slot wants to run (a gated one included: the scheduler
                   resumes it itself)
+        queued    it waits in the tag queue for a machine
         paused    it has slots, none of which wants to run
         idle      it has no slots
 
@@ -493,15 +518,21 @@ class TaskStore:
         trips."""
         if task is None:
             return IDLE
-        if spec.complete:
-            params = params_mod.validate(spec.params_cls, task.params)
-            if resolve(spec.complete)(spec, self.paths(spec, task.tag), params):
-                return COMPLETE
-        elif task.workers and all(w.finished for w in task.workers):
+        if self._complete(spec, task):
             return COMPLETE
+        if _failed(task, entry):
+            return FAILED
         if any(w.desired_state == "running" for w in task.workers):
             return RUNNING
+        if entry is not None:
+            return QUEUED
         return PAUSED if task.workers else IDLE
+
+    def _complete(self, spec: WorkloadSpec, task: TaskRecord) -> bool:
+        if not spec.complete:
+            return bool(task.workers) and all(w.finished for w in task.workers)
+        params = params_mod.validate(spec.params_cls, task.params)
+        return resolve(spec.complete)(spec, self.paths(spec, task.tag), params)
 
     def progress(self, spec: WorkloadSpec, task: TaskRecord) -> list:
         """The workload's [label, value] progress counters for the task."""
@@ -528,7 +559,7 @@ class TaskStore:
                 if task is not None:
                     yield spec, task
 
-    def list_tags(self, spec: WorkloadSpec) -> list[dict]:
+    def list_tags(self, spec: WorkloadSpec, queue: Queue) -> list[dict]:
         """Every tag under the workload's tags root, with listing metadata."""
         out = []
         for tag_dir, task in self._tag_dirs(spec):
@@ -544,7 +575,7 @@ class TaskStore:
                     # observed state, so listing tags costs no ssh or cloud
                     # round trips.
                     "active_workers": sum(w.desired_state == "running" for w in workers),
-                    "state": self.state(spec, task),
+                    "state": self.state(spec, task, queue.find(spec.name, tag_dir.name)),
                     "progress": self.progress(spec, task) if task else [],
                     "disk_bytes": _disk_bytes(tag_dir),
                     "pace": _pace(spec, tag_dir),

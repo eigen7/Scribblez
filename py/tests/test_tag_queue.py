@@ -204,6 +204,14 @@ def test_a_crash_looping_tag_fails_and_holds_its_machine(queued):
     q.tick()
     assert _lease(manager).tag == "b"
 
+    # Its slots gone with the machine, the tag still reads failed, until the
+    # operator queues it again.
+    a = manager.tasks.load(SPEC, "a")
+    assert not a.workers and manager.tasks.state(SPEC, a, None) == tasks.FAILED
+    q.enqueue("position_eval", "a", confirm=True)
+    entry = manager.queue_store.load().find("position_eval", "a")
+    assert manager.tasks.state(SPEC, manager.tasks.load(SPEC, "a"), entry) == tasks.QUEUED
+
 
 def test_a_failed_tag_hands_over_at_once_when_a_tag_is_waiting(queued):
     q, manager, make = queued

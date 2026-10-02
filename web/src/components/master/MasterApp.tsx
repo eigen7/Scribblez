@@ -36,8 +36,8 @@ export type Workload = {
 type TagRow = {
   tag: string; has_task: boolean; created_at: number | null;
   workers: number; active_workers: number;
-  // complete | running | paused | idle, common to every workload
-  // (TaskStore.state).
+  // complete | failed | running | queued | paused | idle, common to every
+  // workload (TaskStore.state).
   state: string;
   progress: [string, string | number][]; last_active: number;
   disk_bytes: number;  // the tag's tree on the controller's disk
