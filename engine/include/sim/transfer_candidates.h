@@ -58,10 +58,13 @@ std::vector<CoupledPair> find_couplings(const std::vector<Move>& moves);
 using AnchoredCouplings = std::array<std::vector<std::array<int, 2>>, kCouplingKinds>;
 AnchoredCouplings anchored_couplings(const std::vector<Move>& ranked, const TransferRecipe& recipe);
 
-// Selects up to recipe.size() candidates from `ranked`: first one coupled
-// pair of each kind the position offers, anchored in the top and middle ranks,
-// then each stratum filled to its quota, a short stratum's slots going to
-// random remaining moves. Candidates come back in rank order.
+// Selects recipe.size() candidates from `ranked` (fewer only if the position
+// has fewer legal moves). The coupled pairs are part of that total, not added
+// to it: first one pair of each kind the position offers is taken, each member
+// counting toward its own stratum (a play-exchange pair fills one play slot and
+// one exchange slot); then each stratum is filled up to its quota; then any
+// slots a short stratum left go to random remaining moves. Candidates come back
+// in rank order.
 SimCandidateSelector transfer_selector(const TransferRecipe& recipe);
 
 }  // namespace scribblez
