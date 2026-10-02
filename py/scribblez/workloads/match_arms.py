@@ -93,12 +93,24 @@ class MatchArmsParams:
             raise ParamsError("round_pairs must be >= 1")
 
 
-def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, object]]:
-    """Arms measured / total, read the same way the runner decides what is left."""
+def _arms_measured(paths: TagPaths, params) -> tuple[int, int]:
+    """(arms measured, arms total), read the same way the runner decides what
+    is left."""
     total = len(parse_arms(params.arms))
     db_path = paths.dashboard_db
     done = len(db.read_all_match_arms(db.connect(db_path))) if db_path.is_file() else 0
+    return done, total
+
+
+def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, object]]:
+    done, total = _arms_measured(paths, params)
     return [("arms", f"{done}/{total} measured")]
+
+
+def complete(spec: WorkloadSpec, paths: TagPaths, params) -> bool:
+    """The WorkloadSpec.complete entry: whether every arm is measured."""
+    done, total = _arms_measured(paths, params)
+    return done >= total
 
 
 SPEC = WorkloadSpec(
@@ -117,5 +129,6 @@ SPEC = WorkloadSpec(
         ),
     ),
     progress="scribblez.workloads.match_arms:progress",
+    complete="scribblez.workloads.match_arms:complete",
     pace_role="arms",
 )

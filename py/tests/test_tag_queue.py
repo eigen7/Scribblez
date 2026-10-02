@@ -204,6 +204,14 @@ def test_a_crash_looping_tag_fails_and_holds_its_machine(queued):
     q.tick()
     assert _lease(manager).tag == "b"
 
+    # Its slots gone with the machine, the tag still reads failed, until the
+    # operator queues it again.
+    a = manager.tasks.load(SPEC, "a")
+    assert not a.workers and manager.tasks.state(SPEC, a, None) == tasks.FAILED
+    q.enqueue("position_eval", "a", confirm=True)
+    entry = manager.queue_store.load().find("position_eval", "a")
+    assert manager.tasks.state(SPEC, manager.tasks.load(SPEC, "a"), entry) == tasks.QUEUED
+
 
 def test_a_failed_tag_hands_over_at_once_when_a_tag_is_waiting(queued):
     q, manager, make = queued
@@ -216,6 +224,25 @@ def test_a_failed_tag_hands_over_at_once_when_a_tag_is_waiting(queued):
         manager._note_crash("position_eval/a/local-0", "exit 1")
     q.tick()
     assert _lease(manager).phase == RELEASING
+
+
+def test_requeuing_a_held_failed_tag_clears_its_failure(queued):
+    """Requeue is the operator running the tag again: it reads running once
+    placed, not failed."""
+    q, manager, make = queued
+    make("a")
+    q.enqueue("position_eval", "a", confirm=True)
+    q.tick()
+    for _ in range(tq_mod.FAIL_AFTER):
+        manager._note_crash("position_eval/a/local-0", "exit 1")
+    q.tick()
+    assert _lease(manager).phase == HELD
+    q.requeue("position_eval", "a")
+    assert manager.tasks.load(SPEC, "a").failure is None
+    _drain_then_tick(q)
+    a = manager.tasks.load(SPEC, "a")
+    assert _lease(manager).phase == RUNNING
+    assert manager.tasks.state(SPEC, a, None) == tasks.RUNNING
 
 
 def test_requeue_puts_the_tag_back_at_the_head(queued):

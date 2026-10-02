@@ -177,9 +177,13 @@ def tick(spec: WorkloadSpec, task, hooks):
     container and cannot count it. A finished worker's container is stopped, which the
     dashboard's idle policy counts as nothing running, so the rented machines
     are stopped ten minutes later (dashboard/workers.py, IDLE_STOP_SECONDS)."""
-    target = params_mod.validate(spec.params_cls, task.params).target_positions
-    if params_mod.reached(positions_found(hooks.paths.data_dir), target):
+    if complete(spec, hooks.paths, params_mod.validate(spec.params_cls, task.params)):
         hooks.finish("generate")
+
+
+def complete(spec: WorkloadSpec, paths: TagPaths, params) -> bool:
+    """The WorkloadSpec.complete entry: whether the tag holds its target."""
+    return params_mod.reached(positions_found(paths.data_dir), params.target_positions)
 
 
 def survey_dirs(tag: str, mount_root: Path) -> tuple[Path, Path]:
@@ -215,6 +219,7 @@ SPEC = WorkloadSpec(
     ),
     scheduler="scribblez.workloads.blind_spots:tick",
     progress="scribblez.workloads.blind_spots:progress",
+    complete="scribblez.workloads.blind_spots:complete",
     pace_role="generate",
     primary_params=("target_positions",),
     collected_dirs=(SURVEY_DIR, GCG_DIR),

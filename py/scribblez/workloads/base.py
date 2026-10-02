@@ -117,6 +117,12 @@ class WorkloadSpec:
     # Dotted path to progress(spec, paths, params) -> list[(label, value)]: the counters
     # shown in the tag listing and the task Overview.
     progress: str = ""
+    # Dotted path to complete(spec, paths, params) -> bool: whether the tag has
+    # reached its end condition, read from its data. The tag listing's state
+    # (dashboard/tasks.py, TaskStore.state) says "complete" from it even once the
+    # tag's slots are gone. "" for a workload with no end condition the data
+    # shows; the tag is then complete while every slot is finished.
+    complete: str = ""
     # The role whose fleet rate is the tag's pace in the tag listing: the one
     # that bounds how fast the tag advances (a trainer, not the generators it
     # gates). It must publish stats. "" shows no pace.

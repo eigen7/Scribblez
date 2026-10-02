@@ -7,8 +7,11 @@ import os
 
 import pytest
 from scribblez import workloads
+from scribblez.dashboard import queue as queue_mod
 from scribblez.dashboard import tasks
 from scribblez.dashboard.control_store import ControlStore
+from scribblez.dashboard.queue import QueueEntry
+from scribblez.generational import lifecycle
 
 
 @pytest.fixture
@@ -132,3 +135,83 @@ def test_a_tag_deleted_while_it_is_read_reads_as_gone(store, spec):
     stamp = tasks._mtime(entry.path)
     entry.path.unlink()
     assert entry._read(stamp) is None
+
+
+def _slot(worker_id: str, desired_state: str, finished: bool = False) -> tasks.WorkerRecord:
+    return tasks.WorkerRecord(worker_id, "generate", "local", desired_state, finished=finished)
+
+
+def _failed_slot() -> tasks.WorkerRecord:
+    w = _slot("b", "paused")
+    w.failed = "crashed 3 times"
+    return w
+
+
+@pytest.mark.parametrize(
+    ("slots", "expected"),
+    [
+        ([], tasks.IDLE),
+        ([_slot("a", "paused")], tasks.PAUSED),
+        ([_slot("a", "paused"), _slot("b", "running")], tasks.RUNNING),
+        ([_slot("a", "paused", finished=True), _slot("b", "paused")], tasks.PAUSED),
+        ([_slot("a", "paused", finished=True)], tasks.COMPLETE),
+    ],
+)
+def test_state_of_a_workload_without_an_end_condition(store, spec, slots, expected):
+    """kill_test has no WorkloadSpec.complete: it is complete while every slot
+    is finished."""
+    assert store.state(spec, _save(store, spec, workers=slots), None) == expected
+
+
+def _entry(bundle: str = queue_mod.BUNDLE_NONE) -> QueueEntry:
+    return QueueEntry("kill_test", "t", 0.0, bundle=bundle)
+
+
+@pytest.mark.parametrize(
+    ("fields", "entry", "expected"),
+    [
+        ({}, _entry(), tasks.QUEUED),
+        ({"workers": [_slot("a", "running")]}, _entry(), tasks.RUNNING),
+        ({}, _entry(queue_mod.BUNDLE_FAILED_PREFIX + "no credentials"), tasks.FAILED),
+        ({"failure": "gen-0: exited 3 times"}, None, tasks.FAILED),
+        ({"workers": [_slot("a", "running"), _failed_slot()]}, None, tasks.FAILED),
+        ({"workers": [_slot("a", "paused", finished=True)], "failure": "x"}, None, tasks.COMPLETE),
+    ],
+)
+def test_queued_and_failed_states(store, spec, fields, entry, expected):
+    """Complete outranks failed, and failed outranks running and queued: a
+    failure waits on the operator whatever else the tag is doing."""
+    assert store.state(spec, _save(store, spec, **fields), entry) == expected
+
+
+@pytest.mark.parametrize(
+    ("fields", "entry", "expected"),
+    [
+        ({}, _entry(), None),
+        ({"failure": "gen-0: exited 3 times"}, None, "gen-0: exited 3 times"),
+        ({"workers": [_failed_slot()]}, None, "crashed 3 times"),
+        ({}, _entry(queue_mod.BUNDLE_FAILED_PREFIX + "no creds"), "bundle build failed: no creds"),
+    ],
+)
+def test_failure_reason_names_why(store, spec, fields, entry, expected):
+    """What the task Overview shows beside a failed state."""
+    assert tasks.failure_reason(_save(store, spec, **fields), entry) == expected
+
+
+def test_state_is_complete_from_the_data_once_the_slots_are_gone(store):
+    """The tag queue removes a completed tag's slots; its end condition still
+    shows it complete."""
+    spec = workloads.get("position_eval")
+    task = tasks.TaskRecord(spec.name, "t", {"max_rows": 1000}, 0.0)
+    store.save(spec, task)
+    assert store.state(spec, task, None) == tasks.IDLE
+    lifecycle.write_train_state(store.paths(spec, "t"), {"rows_trained": 1000})
+    assert store.state(spec, task, None) == tasks.COMPLETE
+
+
+def test_disk_bytes_counts_a_hard_linked_file_once(tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "a").write_bytes(b"x" * 100_000)
+    os.link(tmp_path / "a", tmp_path / "sub" / "a_link")
+    one = os.lstat(tmp_path / "a").st_blocks * 512
+    assert tasks._disk_bytes(tmp_path) == one

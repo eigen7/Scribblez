@@ -314,6 +314,7 @@ SPEC = WorkloadSpec(
     layout="scribblez.workloads.position_eval:layout",
     gpu_need="scribblez.workloads.position_eval:gpu_need",
     progress="scribblez.generational.scheduler:progress",
+    complete="scribblez.generational.scheduler:complete",
     pace_role="train",
     collected_dirs=(STAGING_DIR, MATCH_RESULTS_DIR),
     profiles=PROFILES,

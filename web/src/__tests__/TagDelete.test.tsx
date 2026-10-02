@@ -20,7 +20,8 @@ const workload: Workload = {
 
 const row = (tag: string, workers: number, active_workers: number) => ({
   tag, has_task: true, created_at: 0, workers, active_workers,
-  progress: [] as [string, string | number][], last_active: 0, pace: null,
+  state: active_workers > 0 ? 'running' : workers > 0 ? 'paused' : 'idle', progress: [] as [string, string | number][], last_active: 0, pace: null,
+  disk_bytes: 0,
 });
 
 const deleteButton = (tag: string) =>

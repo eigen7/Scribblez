@@ -30,8 +30,17 @@ from pathlib import Path
 from scribblez import params as params_mod
 from scribblez.dashboard import worker_stats_figures
 from scribblez.dashboard.control_store import ControlStore
+from scribblez.dashboard.queue import BUNDLE_FAILED_PREFIX, Queue, QueueEntry
 from scribblez.paths import TagPaths
 from scribblez.workloads import WORKLOADS, WorkloadSpec, resolve
+
+# A tag's states (TaskStore.state).
+COMPLETE = "complete"
+FAILED = "failed"
+RUNNING = "running"
+QUEUED = "queued"
+PAUSED = "paused"
+IDLE = "idle"
 
 
 @dataclass
@@ -142,6 +151,11 @@ class TaskRecord:
     # Estimated spend of machines that have since been removed, so the
     # task's cumulative total survives slot removal.
     retired_spend: float = 0.0
+    # Why the tag queue failed the tag (dashboard/tag_queue.py), kept after its
+    # slots are released to another tag so the listing still shows it failed.
+    # Cleared when the operator runs the tag again: Queue, Requeue, or a slot's
+    # Start.
+    failure: str | None = None
     # The bundle every ssh worker of this task runs, pinned when the first one
     # launches, so the fleet stays homogeneous and code edited mid-run does not
     # silently reach it. The source digest it was built from is kept so drift
@@ -251,6 +265,41 @@ def _pace(spec: WorkloadSpec, tag_dir: Path) -> dict | None:
         worker_stats_figures.read_stats(tag_dir / "stats"), spec.pace_role, stats, time.time()
     )
     return None if per_hour is None else {"unit": stats.unit, "per_hour": per_hour}
+
+
+def _disk_bytes(tag_dir: Path) -> int:
+    """The bytes the tag's tree occupies on the controller's disk, counting
+    each inode once as du does (a trainer's snapshot pair is hard links). A
+    remote data home's window and output not yet collected are not counted:
+    the controller's tree is the durable copy, and the rest is transient."""
+    seen: set[tuple[int, int]] = set()
+    total = 0
+    for root, _, files in os.walk(tag_dir):
+        for name in files:
+            try:
+                st = os.lstat(os.path.join(root, name))
+            except FileNotFoundError:  # renamed or evicted mid-walk
+                continue
+            if st.st_nlink > 1:
+                if (st.st_dev, st.st_ino) in seen:
+                    continue
+                seen.add((st.st_dev, st.st_ino))
+            total += st.st_blocks * 512
+    return total
+
+
+def failure_reason(task: TaskRecord, entry: QueueEntry | None) -> str | None:
+    """Why the tag is stuck on a failure the operator has to act on, or None:
+    the tag queue failed it, a slot of it is failed, or its queue entry's
+    bundle build failed."""
+    if task.failure is not None:
+        return task.failure
+    failed = next((w.failed for w in task.workers if w.failed is not None), None)
+    if failed is not None:
+        return failed
+    if entry is not None and entry.bundle.startswith(BUNDLE_FAILED_PREFIX):
+        return f"bundle build {entry.bundle}"
+    return None
 
 
 class _TaskEntry:
@@ -455,6 +504,39 @@ class TaskStore:
                 )
             return e
 
+    def state(self, spec: WorkloadSpec, task: TaskRecord | None, entry: QueueEntry | None) -> str:
+        """The tag's state, common to every workload; `entry` is its place in
+        the tag queue, or None. The first that holds:
+
+        complete  the workload's end condition holds (WorkloadSpec.complete),
+                  or, for a workload without one, every slot is finished
+        failed    it is stuck on a failure (failure_reason)
+        running   a slot wants to run (a gated one included: the scheduler
+                  resumes it itself)
+        queued    it waits in the tag queue for a machine
+        paused    it has slots, none of which wants to run
+        idle      it has no slots
+
+        It reads the slots' desired state, as active_workers does in
+        list_tags."""
+        if task is None:
+            return IDLE
+        if self._complete(spec, task):
+            return COMPLETE
+        if failure_reason(task, entry) is not None:
+            return FAILED
+        if any(w.desired_state == "running" for w in task.workers):
+            return RUNNING
+        if entry is not None:
+            return QUEUED
+        return PAUSED if task.workers else IDLE
+
+    def _complete(self, spec: WorkloadSpec, task: TaskRecord) -> bool:
+        if not spec.complete:
+            return bool(task.workers) and all(w.finished for w in task.workers)
+        params = params_mod.validate(spec.params_cls, task.params)
+        return resolve(spec.complete)(spec, self.paths(spec, task.tag), params)
+
     def progress(self, spec: WorkloadSpec, task: TaskRecord) -> list:
         """The workload's [label, value] progress counters for the task."""
         if not spec.progress:
@@ -480,7 +562,7 @@ class TaskStore:
                 if task is not None:
                     yield spec, task
 
-    def list_tags(self, spec: WorkloadSpec) -> list[dict]:
+    def list_tags(self, spec: WorkloadSpec, queue: Queue) -> list[dict]:
         """Every tag under the workload's tags root, with listing metadata."""
         out = []
         for tag_dir, task in self._tag_dirs(spec):
@@ -496,7 +578,9 @@ class TaskStore:
                     # observed state, so listing tags costs no ssh or cloud
                     # round trips.
                     "active_workers": sum(w.desired_state == "running" for w in workers),
+                    "state": self.state(spec, task, queue.find(spec.name, tag_dir.name)),
                     "progress": self.progress(spec, task) if task else [],
+                    "disk_bytes": _disk_bytes(tag_dir),
                     "pace": _pace(spec, tag_dir),
                     "last_active": _last_active(tag_dir),
                 }
