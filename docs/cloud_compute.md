@@ -25,18 +25,21 @@ move_set_eval trainer runs only locally.
 
 ## Architecture
 
-Three stores decouple everything: a **container registry** (the stable worker
-images), the **R2 bucket** (code bundles and data deps outbound), and the
-**local mount dir** (where results are collected and analysis runs).
+Two stores decouple everything: a **container registry** (the stable worker
+images) and the **local mount dir** (the bundle store, and where results are
+collected and analysis runs). Everything between them moves over the ssh link
+the dashboard already uses to manage each machine.
 
 ```
  dev container                                    remote machine
  ─────────────                                    ──────────────
- dashboard: deploy (build + push) ─────────────►  R2: bundles/<id>/bundle-<arch>.tar.gz
+ dashboard: deploy (build) ──► <mount>/cloud/bundles/<id>/bundle-<arch>.tar.gz
  build_and_push_worker_image.py ──(deps only, rare)─►  registry: worker images
- dashboard: start a slot ──────────(ssh)───────►  docker run <worker image>
-                                                   └─ bootstrap.py: fetch the bundle for its
-                                                      CPU arch, exec the worker entrypoint
+ dashboard: start a slot ──────────(ssh)───────►  docker create <worker image>
+            copy the bundle for its CPU arch ─(ssh)►  docker cp into the container
+                                                   docker start
+                                                   └─ bootstrap.py: unpack the bundle,
+                                                      exec the worker entrypoint
                                                    └─ loop: run a cycle, deliver output
                                                       into the container's own tree
                                                           │
@@ -50,10 +53,10 @@ Principles:
 1. **The registry images hold dependencies only, and rarely change.** They
    are rebuilt only when worker *dependencies* change, never for code
    iteration, so a machine pulls them once.
-2. **Code travels as bundles through R2, not through Docker or git.** What
+2. **Code travels as bundles over ssh, not through Docker or git.** What
    runs remotely is bit-for-bit what was last built locally, uncommitted
-   changes included (flagged `-dirty` in the bundle id). Workers need no repo
-   credentials and never compile.
+   changes included (flagged `-dirty` in the bundle id). Workers need no
+   credentials at all and never compile.
 3. **Workers are stateless and disposable.** A worker fetches its bundle and
    data deps and loops until terminated. Its output is collected into the
    local mount, the durable copy. A machine can be stopped or terminated at
@@ -107,24 +110,25 @@ from the provider catalog, one of your own asked once, through the worker
 image's compiler, at its first slot start.
 
 Deploying is automatic. When a task's first remote slot starts,
-`deploy_current_tree` builds those archs and pushes a bundle unless the
-bucket's `LATEST` already carries this tree for them, and the task pins the
-result. No fleet runs code you forgot to deploy. A later slot whose arch the
+`deploy_current_tree` builds those archs and writes a bundle to the store
+(`<mount>/cloud/bundles/`) unless its `LATEST` already carries this tree for
+them, and the task pins the result. The store keeps every pinned bundle and
+the few newest, and drops the rest. No fleet runs code you forgot to deploy. A later slot whose arch the
 pinned bundle lacks triggers a rebuild with its arch added.
 
 The "already deployed?" test is the manifest's `source_hash`, a digest of the
 files a bundle ships. The bundle id cannot serve: it is deliberately fresh on
-every push, and a `-dirty` git sha says the tree changed without saying into
-what.
+every bundle, and a `-dirty` git sha says the tree changed without saying
+into what.
 
-At container start, `bootstrap.py` detects the machine's arch, downloads the
-matching tarball (falling back to generic `x86-64`), unpacks it, and execs the
-bundle's worker entrypoint, so even the worker-loop logic can change without
-touching the image.
-
-To push a bundle without launching anything, build the archs
-(`py/build.py --archs <a,b>`) and run `./py/scripts/cloud_push_binaries.py
---archs <a,b>`.
+A container is created, then given its payload, then started. The dashboard
+copies in the pinned bundle's tarball for the slot's arch and, for a trainer,
+the eval datasets (written once per content version under the store's
+`deps/`, rather than into every tarball). At start, `bootstrap.py` unpacks
+them and execs the bundle's worker entrypoint, so even the worker-loop logic
+can change without touching the image. How the payload is handed over is the
+image's *bootstrap protocol*. The image push records it, and the dashboard
+refuses to deploy to an image of an older one, naming the rebuild.
 
 ### Worker entrypoint
 
@@ -137,14 +141,12 @@ To push a bundle without launching anything, build the archs
    fleetmates');
 2. dispatches to the (workload, role) runner from the workload registry;
 3. fetches the runner's declared data deps (`py/cloud/worker_deps.py`):
-   lexica and Macondo tables from their public upstreams, and for a train
-   role the eval datasets from the bucket's `deps/` prefix, at the content
-   version the bundle's manifest names (uploaded once per version rather than
-   copied into every per-arch tarball);
-4. writes a provenance manifest to the bucket;
-5. loops the runner's cycle, delivering whole output files through the
-   results sink (`py/cloud/sinks.py`), which orders uploads so the bucket
-   only ever presents complete outputs.
+   lexica and Macondo tables from their public upstreams; a train role's eval
+   datasets came in with its payload;
+4. writes a provenance record through its records sink;
+5. loops the runner's cycle, delivering whole output files through its data
+   sink (`py/cloud/sinks.py`) into the container's own tree, from where the
+   dashboard collects them.
 
 SIGTERM flushes completed output and exits non-zero, so a stop is never
 mistaken for the role's terminal condition.
@@ -186,8 +188,8 @@ here first. So a tag can move to any machine and pick up where it stopped.
 `setup_wizard.py`, validated end-to-end by
 `./py/scripts/cloud_check_credentials.py`): the R2 bucket, the image registry
 with a read-only pull token, and the provider's access key. Workers receive
-only the R2 subset, through their container's environment; a rented machine
-receives the pull token at first boot.
+none of them; a rented machine receives the pull token at first boot. Nothing
+uses the R2 bucket any more, and its credentials go with it.
 
 ### Providers
 
@@ -198,8 +200,8 @@ reported. AWS is implemented in `aws.py`; its one-time account setup is
 
 ## Economics
 
-R2 storage and transfer cost is negligible (no egress fees). Compute is the
-machine's hourly rate for as long as it is up. The dashboard stops a machine
+Transfer costs nothing beyond the provider's egress for collected results.
+Compute is the machine's hourly rate for as long as it is up. The dashboard stops a machine
 nothing has run on for ten minutes and shows what a task's machines bill. The
 first measured run is recorded in [plans/cloud_machines.md](plans/cloud_machines.md).
 
@@ -207,7 +209,7 @@ first measured run is recorded in [plans/cloud_machines.md](plans/cloud_machines
 
 A volunteer is, to first order, someone running the worker image with a
 participation token. The image contains no redistribution-restricted data, so
-it could be made publicly pullable. The one necessary change is credentials: raw bucket keys cannot go to
-strangers. Uploads already funnel through the results sink, which is where
-direct bucket writes would become token-authenticated HTTPS ingest with
-server-side validation.
+it could be made publicly pullable, and workers hold no credentials. What
+would change is the transfer: the dashboard reaches its workers over ssh,
+which a stranger's machine would not offer, so their results would need an
+ingest service the volunteer pushes to, with server-side validation.

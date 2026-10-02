@@ -32,15 +32,17 @@ import shlex
 import signal
 import subprocess
 import sys
+import tarfile
 import threading
 import time
+import uuid
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 
-from cloud import runtime_abi
-from cloud.bundles import BundleManifest, deploy_current_tree, source_hash
+from cloud import bundles, runtime_abi
+from cloud.bundles import BundleManifest, source_hash
 from cloud.credentials import CloudCredentials, load_credentials
 from cloud.providers.aws import CATALOG as AWS_CATALOG
 from cloud.providers.aws import AwsProvider
@@ -377,8 +379,9 @@ def check_worker_images_current(mount_root: Path):
     rebuilt by hand after such a change; this catches a forgotten rebuild.
 
     Every recorded image is checked, whichever runtime this deploy's slots use:
-    a task's slots can run either, and both are rebuilt together. Passes when
-    no image push has recorded its library versions, since then nothing is
+    a task's slots can run either, and both are rebuilt together. The same
+    goes for the image's bootstrap protocol, which must be the dashboard's.
+    Passes when no image push has recorded anything, since then nothing is
     known.
     """
     records = runtime_abi.read_records(mount_root)
@@ -391,6 +394,11 @@ def check_worker_images_current(mount_root: Path):
             f"the worker image ({record.get('image')}) is older than this dev container on "
             f"{', '.join(stale)}; bundles built here will not load on it. Rebuild it from the "
             "host: ./build_and_push_worker_image.py"
+        )
+        assert record.get("bootstrap", 1) >= runtime_abi.BOOTSTRAP_PROTOCOL, (
+            f"the worker image ({record.get('image')}) has an older bootstrap, which does not "
+            "take the bundle the dashboard copies in. Rebuild it from the host: "
+            "./build_and_push_worker_image.py"
         )
 
 
@@ -602,10 +610,22 @@ class WorkerManager:
         manifest = await IOLoop.current().run_in_executor(self._builds, self._build_bundle, archs)
         return await self.offload(self._pin_bundle, spec, task, manifest)
 
+    @property
+    def _bundle_store(self) -> Path:
+        return self.mount_root / bundles.STORE_REL
+
     def _build_bundle(self, archs: list[str]) -> BundleManifest:
+        """Bring the bundle store up to the current tree for `archs` (build
+        thread), dropping bundles no task is pinned to beyond the newest few.
+        Pins are read from the tasks' committed copies; one pinned to the
+        bundle this call makes is safe, as the newest is always kept."""
         check_worker_images_current(self.mount_root)
-        creds = self._creds()
-        return deploy_current_tree(creds.r2, archs, cache=self._source_digests)
+        manifest = bundles.deploy_current_tree(
+            self._bundle_store, archs, cache=self._source_digests
+        )
+        pinned = {t.bundle_id for _, t in self.all_tasks() if t.bundle_id}
+        bundles.prune(self._bundle_store, pinned | {manifest.bundle_id})
+        return manifest
 
     def _pin_bundle(self, spec, task: tasks.TaskRecord, manifest: BundleManifest) -> str:
         task.bundle_id = manifest.bundle_id
@@ -654,6 +674,8 @@ class WorkerManager:
         redeploy. The one exception is a later slot whose arch the bundle
         lacks: the tree is rebuilt with that arch added and the task repinned.
         Containers on the old bundle then get replaced as after any redeploy.
+        So does a pinned bundle the store no longer holds (one from before the
+        store, or pruned), since a container could not be given it.
 
         A build takes minutes, and slot starts run on the blocking thread, so
         the build goes to the build thread instead. Meanwhile the slot shows
@@ -662,7 +684,11 @@ class WorkerManager:
         the slot's exit reason, and the restart backoff paces the retry.
         """
         arch = self._slot_arch(spec, task, w)
-        if task.bundle_id and arch in task.bundle_archs:
+        if (
+            task.bundle_id
+            and arch in task.bundle_archs
+            and bundles.read_manifest(self._bundle_store, task.bundle_id) is not None
+        ):
             return task.bundle_id
         task_key = f"{spec.name}/{task.tag}"
         future = self._pending_builds.get(task_key)
@@ -910,9 +936,8 @@ class WorkerManager:
         creds = self._creds()
         params = params_mod.validate(spec.params_cls, task.params)
         env = bundle_worker_env(
-            creds, spec, task.tag, params,
-            role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id,
-        )  # fmt: skip
+            spec, task.tag, params, role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id
+        )
         env["SCZ_SINK"] = self._slot_records_sink(spec, task, w)
         data_sink = self._slot_data_sink(spec, task, w)
         home = _home_trainer(spec, spec.role(w.role))
@@ -945,7 +970,7 @@ class WorkerManager:
             # and paced by the restart backoff.
             _require_inputs(inputs)
             # Pull here so a new container picks up a rebuilt worker image;
-            # run_container then never pulls on its own.
+            # create_container then never pulls on its own.
             image = creds.registry.image_for(role.runtime)
             machine.pull_image(image)
             name = _container_name(spec, task.tag, w.worker_id)
@@ -953,7 +978,12 @@ class WorkerManager:
                 machine.create_volume(volume[0])
             if home:
                 self._seed_home(machine, image, volume, spec, task)
-            machine.run_container(name, image, env, gpus=role.gpu, volume=volume)
+            # _bundle_for_start saw the bundle cover this slot's arch.
+            arch = self._slot_arch(spec, task, w)
+            env["SCZ_BUNDLE_ARCH"] = arch
+            machine.create_container(name, image, env, gpus=role.gpu, volume=volume)
+            self._copy_payload(machine, name, role, w.bundle_id, arch)
+            machine.start_container(name)
             self._stage_inputs_in_container(machine, name, spec, task.tag, inputs)
             if seed:
                 self._seed_state(machine, name, spec, task)
@@ -2547,6 +2577,30 @@ class WorkerManager:
             target["data_dirs"] += list(TRAINER_OUTPUT_DIRS)
             target["pair_dirs"] = {state_pair.STATE_DIR: state_pair.CURSOR_NAME}
         return target
+
+    def _copy_payload(self, machine, container: str, role, bundle_id: str, arch: str):
+        """Copy a created container's payload into it before it starts: the
+        bundle's tarball for its machine's arch, and for a trainer the eval
+        datasets it scores against (docker-setup/worker/bootstrap.py unpacks
+        both). A container whose copy failed, however, is removed: started as
+        it is it would have nothing to run, and a later pass would start it."""
+        archive = self._bundle_store / f".payload-{uuid.uuid4().hex[:12]}.tar"
+        try:
+            files = {"bundle.tar.gz": bundles.arch_tarball(self._bundle_store, bundle_id, arch)}
+            if role.ingest:
+                manifest = bundles.read_manifest(self._bundle_store, bundle_id)
+                files["positions.tar.gz"] = bundles.eval_positions_path(
+                    self._bundle_store, manifest.eval_positions
+                )
+            with tarfile.open(archive, "w") as tar:
+                for name, path in files.items():
+                    tar.add(path, arcname=f"{runtime_abi.PAYLOAD_DIR.name}/{name}")
+            machine.copy_into_container(container, str(runtime_abi.PAYLOAD_DIR.parent), archive)
+        except Exception:
+            machine.remove_container(container)
+            raise
+        finally:
+            archive.unlink(missing_ok=True)
 
     def _seed_state(self, machine, container: str, spec, task: tasks.TaskRecord):
         """Push the controller's checkpoint and cursor into a freshly created

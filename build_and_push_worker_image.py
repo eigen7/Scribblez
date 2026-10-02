@@ -11,8 +11,8 @@ Two images come out of one Dockerfile, one per runtime a role declares
 (py/cloud/runtime_abi.py): the engine runtime, and the torch runtime layered
 on it for the train roles, pushed under the engine image's tag with "-torch"
 appended. Both contain dependencies only -- code and binaries reach workers
-through R2 bundles (py/scripts/cloud_push_binaries.py) -- but those
-dependencies are the dev image's, so the images are a matched set: bundles
+as bundles the dashboard copies into each container (py/cloud/bundles.py) --
+but those dependencies are the dev image's, so the images are a matched set: bundles
 built in a dev image whose libraries have moved cannot load on a worker image
 built before they did. So rerun this after every dev-image rebuild that
 moves a runtime library; each push records what its image provides
@@ -51,6 +51,15 @@ def load_registry(config):
     from cloud.credentials import load_credentials
 
     return load_credentials(mount_dir(config) / "cloud" / "credentials.json").registry
+
+
+def bootstrap_protocol() -> int:
+    """The BOOTSTRAP_PROTOCOL of the bootstrap.py this build bakes in, read
+    from the file rather than imported: it is not on any import path."""
+    for line in (WORKER_CONTEXT / "bootstrap.py").read_text().splitlines():
+        if line.startswith("BOOTSTRAP_PROTOCOL = "):
+            return int(line.split("=", 1)[1])
+    raise AssertionError("docker-setup/worker/bootstrap.py declares no BOOTSTRAP_PROTOCOL")
 
 
 def probe_versions(image: str) -> dict[str, str]:
@@ -112,7 +121,7 @@ def build_and_push(config) -> list[str]:
             print(f"$ {' '.join(cmd)}")
             subprocess.run(cmd, check=True)
         versions = probe_versions(image)
-        runtime_abi.write_record(mount_dir(config), runtime, image, versions)
+        runtime_abi.write_record(mount_dir(config), runtime, image, versions, bootstrap_protocol())
         print(f"Pushed {image} ({runtime} runtime), providing {json.dumps(versions)}.")
         images.append(image)
     return images

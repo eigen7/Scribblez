@@ -314,7 +314,7 @@ class SshMachine:
             return False
         raise SshMachineError(f"{self.host}: {stderr.strip()}")
 
-    def run_container(
+    def create_container(
         self,
         name: str,
         image: str,
@@ -323,16 +323,17 @@ class SshMachine:
         gpus: bool = False,
         volume: tuple[str, str] | None = None,
     ):
-        """Create and start container `name` from `image`. The environment,
-        which includes bucket credentials, travels over the ssh pipe as an
-        --env-file rather than on the remote command line, where the machine's
-        process list would show it. --pull=never makes a missing image an
+        """Create container `name` from `image`, without starting it: its
+        payload is copied in first (copy_into_container), and start_container
+        runs it. The environment travels over the ssh pipe as an --env-file
+        rather than on the remote command line, where the machine's process
+        list would show it. --pull=never makes a missing image an
         immediate error rather than a long pull under the dashboard; pulling
         is pull_image's job.
 
         `gpus` gives the container the machine's GPUs, for roles that use one
         (e.g. match eval's neural agents). Without the NVIDIA container toolkit
-        on the machine, `docker run` fails immediately with a clear error.
+        on the machine, starting the container fails with a clear error.
 
         `volume` is (named volume, mount point): a volume shared with the
         machine's other containers that mount it (create_volume)."""
@@ -340,8 +341,7 @@ class SshMachine:
         self._mutate(
             [
                 "docker",
-                "run",
-                "--detach",
+                "create",
                 "--pull=never",
                 *(["--gpus", "all"] if gpus else []),
                 *mount,
@@ -373,6 +373,19 @@ class SshMachine:
                 doing=f"writing to volume {volume}",
                 stdin=f,
             )  # fmt: skip
+
+    def copy_into_container(self, name: str, dest_dir: str, archive: Path):
+        """Unpack tar `archive` into `dest_dir` of container `name`, which may
+        be created and not yet started (`docker cp` works on either). Streamed
+        from the file, since it carries a bundle and possibly the eval
+        datasets, tens of megabytes."""
+        with open(archive, "rb") as f:
+            self._exec(
+                ["docker", "cp", "-", f"{name}:{dest_dir}"],
+                timeout=_WRITE_TIMEOUT,
+                doing=f"copying into {name}",
+                stdin=f,
+            )
 
     def create_volume(self, name: str):
         """Create named volume `name`, or keep it as it is if it exists."""

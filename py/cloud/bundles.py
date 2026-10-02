@@ -2,36 +2,39 @@
 
 A bundle holds one tarball per CPU microarchitecture its machines need (the
 engine is compiled per arch under target/archs/<arch>/; see py/build.py).
-Each tarball has that arch's binaries plus the arch-independent py/ tree. At
-startup a worker container downloads the tarball matching its CPU, or the
-generic x86-64 one (docker-setup/worker/bootstrap.py). Code changes therefore
-never require rebuilding the worker Docker image.
+Each tarball has that arch's binaries plus the arch-independent py/ tree. The
+dashboard copies the tarball for a container's machine into the container
+before starting it, and the image's bootstrap unpacks it
+(docker-setup/worker/bootstrap.py). Code changes therefore never require
+rebuilding the worker Docker image.
 
-Bucket layout:
+Bundles live in a store on the controller (STORE_REL under the mount):
 
-    bundles/LATEST                             the newest bundle_id
-    bundles/<bundle_id>/manifest.json          BundleManifest
-    bundles/<bundle_id>/bundle-<arch>.tar.gz   one per arch in the manifest
-    deps/positions-<digest>.tar.gz             the eval datasets, by content
+    LATEST                             the newest bundle_id
+    <bundle_id>/manifest.json          BundleManifest
+    <bundle_id>/bundle-<arch>.tar.gz   one per arch in the manifest
+    deps/positions-<digest>.tar.gz     the eval datasets, by content
 
 The eval datasets (EVAL_POSITIONS_DIRS in scribblez/paths.py, ~40 MB) stay
-out of the tarballs, where every deploy would upload a copy per arch. They are
-uploaded once per content version under deps/, before the manifest that names
-that version, so a manifest never points at a missing object. Train roles
-fetch them in cloud/worker_deps.py.
+out of the tarballs, where every bundle would hold a copy per arch. They are
+written once per content version under deps/, and copied only into the
+containers of the roles that read them
+(scribblez/dashboard/workers.py WorkerManager._copy_payload).
 
 A bundle_id is "<git-sha-12>[-dirty]-<content-hash-8>"; the content hash keeps
-successive pushes from the same dirty tree distinct.
+successive bundles of the same dirty tree distinct.
 
 The dashboard calls `deploy_current_tree` before it launches a worker that
-runs from a bundle, so deploying is never a manual step. It pushes only when
-LATEST does not already hold this tree, judged by the manifest's
+runs from a bundle, so deploying is never a manual step. It writes a bundle
+only when LATEST does not already hold this tree, judged by the manifest's
 `source_hash` (a digest of exactly the files a bundle ships) rather than by
-the bundle_id, which is new on every push.
+the bundle_id, which is new on every bundle.
 """
 
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -43,9 +46,6 @@ from build import arch_build_dir, build_all_archs, detect_host_arch
 from scribblez.hardware import default_thread_count
 from scribblez.paths import EVAL_POSITIONS_DIRS, REPO_ROOT
 
-from cloud.credentials import R2Credentials
-from cloud.r2 import bucket_path, rclone
-
 # Engine artifacts shipped to workers, placed at target/engine/<name> in the
 # tarball: the path all Python and C++ tooling expects them at.
 BUNDLE_BINARY_NAMES = [
@@ -56,13 +56,14 @@ BUNDLE_BINARY_NAMES = [
     "libscribblez_ffi.so",
 ]
 
-# The baseline arch any x86-64 CPU can run: the fallback for a worker whose
-# own arch has no tarball.
-GENERIC_ARCH = "x86-64"
-
-BUNDLES_PREFIX = "bundles"
+# The bundle store, relative to the mount root.
+STORE_REL = "cloud/bundles"
 LATEST_NAME = "LATEST"
-DEPS_PREFIX = "deps"
+DEPS_DIR = "deps"
+
+# Bundles kept in the store beyond those a task is pinned to: the newest few,
+# so a redeploy back to recent code finds its bundle without a rebuild.
+KEEP_NEWEST = 5
 
 _TAR_EXCLUDE_DIRS = {"__pycache__", ".pytest_cache", ".ruff_cache"}
 
@@ -77,8 +78,7 @@ class BundleManifest:
     # without it never matches a local tree, so deploying over it pushes.
     source_hash: str = ""
     # Digest of the eval datasets this bundle was deployed with; it names their
-    # deps/ object (eval_positions_object). A train role refuses a bundle
-    # without it.
+    # tarball under deps/ (eval_positions_path).
     eval_positions: str = ""
 
 
@@ -147,9 +147,9 @@ def eval_positions_digest(files=None) -> str:
     return digest.hexdigest()[:16]
 
 
-def eval_positions_object(digest: str) -> str:
-    """The deps/ object holding the eval datasets at `digest`."""
-    return f"{DEPS_PREFIX}/positions-{digest}.tar.gz"
+def eval_positions_path(store: Path, digest: str) -> Path:
+    """The tarball of the eval datasets at `digest`, in the store."""
+    return store / DEPS_DIR / f"positions-{digest}.tar.gz"
 
 
 def create_eval_positions_tarball(out_dir: Path) -> Path:
@@ -161,16 +161,15 @@ def create_eval_positions_tarball(out_dir: Path) -> Path:
     return tar_path
 
 
-def push_eval_positions(r2: R2Credentials, digest: str):
-    """Upload the eval datasets under their digest, unless the bucket already
-    has an object by that name (content-addressed, so the same bytes)."""
-    dest = bucket_path(r2, eval_positions_object(digest))
-    if rclone(r2, "lsf", dest, capture=True).stdout.strip():
+def write_eval_positions(store: Path, digest: str):
+    """Write the eval datasets' tarball under its digest, unless the store
+    already has it (content-addressed, so the same bytes)."""
+    dest = eval_positions_path(store, digest)
+    if dest.is_file():
         return
-    with tempfile.TemporaryDirectory(prefix="scribblez-positions-") as tmp:
-        tar_path = create_eval_positions_tarball(Path(tmp))
-        res = rclone(r2, "copyto", str(tar_path), dest)
-        assert res.returncode == 0, "upload of the eval datasets failed"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=dest.parent, prefix=".tmp-") as work:
+        create_eval_positions_tarball(Path(work)).replace(dest)
 
 
 def source_hash(archs: list[str], cache: dict | None = None) -> str | None:
@@ -222,43 +221,71 @@ def create_bundle(out_dir: Path, archs: list[str]) -> tuple[list[Path], BundleMa
     return tarballs, manifest
 
 
-def push_bundle(r2: R2Credentials, archs: list[str]) -> BundleManifest:
-    """Create a bundle of `archs` from the current tree, upload it, and point
-    LATEST at it."""
-    with tempfile.TemporaryDirectory(prefix="scribblez-bundle-") as tmp:
-        tmp_dir = Path(tmp)
-        tarballs, manifest = create_bundle(tmp_dir, archs)
-        push_eval_positions(r2, manifest.eval_positions)
-        dest = bucket_path(r2, BUNDLES_PREFIX, manifest.bundle_id)
-        for path in [*tarballs, tmp_dir / "manifest.json"]:
-            res = rclone(r2, "copyto", str(path), f"{dest}/{path.name}")
-            assert res.returncode == 0, f"upload of {path.name} failed"
-        res = rclone(
-            r2,
-            "rcat",
-            bucket_path(r2, BUNDLES_PREFIX, LATEST_NAME),
-            capture=True,
-            input_text=manifest.bundle_id + "\n",
-        )
-        assert res.returncode == 0, f"updating {LATEST_NAME} failed: {res.stderr}"
+def write_bundle(store: Path, archs: list[str]) -> BundleManifest:
+    """Create a bundle of `archs` from the current tree in the store, and
+    point LATEST at it. The bundle's directory appears whole, by one rename."""
+    store.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=store, prefix=".tmp-") as work:
+        out = Path(work) / "bundle"
+        out.mkdir()
+        _, manifest = create_bundle(out, archs)
+        write_eval_positions(store, manifest.eval_positions)
+        dest = store / manifest.bundle_id
+        if not dest.exists():
+            out.rename(dest)
+    _write_atomic(store / LATEST_NAME, manifest.bundle_id + "\n")
     return manifest
 
 
-def read_manifest(r2: R2Credentials, bundle_id: str) -> BundleManifest | None:
-    """Bundle `bundle_id`'s manifest, or None if the bucket has no such bundle."""
-    path = bucket_path(r2, BUNDLES_PREFIX, bundle_id, "manifest.json")
-    res = rclone(r2, "cat", path, capture=True)
-    if res.returncode != 0:
+def _write_atomic(path: Path, text: str):
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def read_manifest(store: Path, bundle_id: str) -> BundleManifest | None:
+    """Bundle `bundle_id`'s manifest, or None if the store has no such bundle."""
+    try:
+        fields = json.loads((store / bundle_id / "manifest.json").read_text())
+    except FileNotFoundError:
         return None
-    fields = json.loads(res.stdout)
     known = {f.name for f in fields_of(BundleManifest)}
     return BundleManifest(**{k: v for k, v in fields.items() if k in known})
 
 
-def latest_manifest(r2: R2Credentials) -> BundleManifest | None:
-    """The manifest of the bundle at LATEST, or None if nothing is pushed."""
-    res = rclone(r2, "cat", bucket_path(r2, BUNDLES_PREFIX, LATEST_NAME), capture=True)
-    return read_manifest(r2, res.stdout.strip()) if res.returncode == 0 else None
+def latest_manifest(store: Path) -> BundleManifest | None:
+    """The manifest of the bundle at LATEST, or None if none was written."""
+    try:
+        bundle_id = (store / LATEST_NAME).read_text().strip()
+    except FileNotFoundError:
+        return None
+    return read_manifest(store, bundle_id)
+
+
+def arch_tarball(store: Path, bundle_id: str, arch: str) -> Path:
+    """Bundle `bundle_id`'s tarball for `arch`, which must exist."""
+    path = store / bundle_id / arch_tarball_name(arch)
+    assert path.is_file(), f"bundle {bundle_id} has no {arch} build; redeploy"
+    return path
+
+
+def prune(store: Path, keep: set[str]):
+    """Delete the store's bundles other than `keep` and the KEEP_NEWEST
+    newest, and the eval-dataset tarballs no remaining bundle names."""
+    if not store.is_dir():
+        return
+    bundle_dirs = sorted(
+        (d for d in store.iterdir() if d.is_dir() and (d / "manifest.json").is_file()),
+        key=lambda d: (d / "manifest.json").stat().st_mtime,
+    )
+    keep = set(keep) | {d.name for d in bundle_dirs[-KEEP_NEWEST:]}
+    for d in bundle_dirs:
+        if d.name not in keep:
+            shutil.rmtree(d, ignore_errors=True)
+    named = {m.eval_positions for b in keep if (m := read_manifest(store, b)) is not None}
+    for tarball in (store / DEPS_DIR).glob("positions-*.tar.gz"):
+        if tarball.name.removeprefix("positions-").removesuffix(".tar.gz") not in named:
+            tarball.unlink(missing_ok=True)
 
 
 def build_archs(archs: list[str], jobs: int | None = None):
@@ -271,34 +298,22 @@ def build_archs(archs: list[str], jobs: int | None = None):
 
 
 def deploy_current_tree(
-    r2: R2Credentials, archs: list[str], *, jobs: int | None = None, cache=None
+    store: Path, archs: list[str], *, jobs: int | None = None, cache=None
 ) -> BundleManifest:
     """Point LATEST at the current tree built for `archs` (the archs of the
     machines that will run it) and return its manifest.
 
     It always builds first. Otherwise a stale binary for some arch would ship
-    under a fresh bundle id, which looks current but is not. The upload is
-    skipped when LATEST already covers every arch in `archs` and its
+    under a fresh bundle id, which looks current but is not. Writing a bundle
+    is skipped when LATEST already covers every arch in `archs` and its
     source_hash matches this tree (hashed over LATEST's own arch list), so
     redeploying unchanged code leaves running tasks on the bundle they have.
     """
     archs = sorted(set(archs))
     assert archs, "a bundle needs at least one arch: the machines that will run it"
     build_archs(archs, jobs)
-    latest = latest_manifest(r2)
+    latest = latest_manifest(store)
     if latest is not None and set(archs) <= set(latest.archs):
         if source_hash(latest.archs, cache) == latest.source_hash:
             return latest
-    return push_bundle(r2, archs)
-
-
-def resolve_bundle_id(r2: R2Credentials, ref: str) -> str:
-    """Resolve "latest" or a bundle_id to a bundle_id whose manifest exists
-    in the bucket."""
-    if ref == "latest":
-        res = rclone(r2, "cat", bucket_path(r2, BUNDLES_PREFIX, LATEST_NAME), capture=True)
-        assert res.returncode == 0, "no bundles pushed yet (bundles/LATEST missing)"
-        ref = res.stdout.strip()
-    res = rclone(r2, "cat", bucket_path(r2, BUNDLES_PREFIX, ref, "manifest.json"), capture=True)
-    assert res.returncode == 0, f"bundle '{ref}' not found in bucket"
-    return ref
+    return write_bundle(store, archs)

@@ -5,12 +5,6 @@ import subprocess
 
 import pytest
 from cloud import ssh_machine
-from cloud.credentials import (
-    AwsCredentials,
-    CloudCredentials,
-    R2Credentials,
-    RegistryConfig,
-)
 from cloud.ssh_machine import (
     SshMachine,
     SshMachineError,
@@ -134,21 +128,17 @@ def test_container_name_qualified_by_workload_and_tag():
 
 
 def test_bundle_worker_env_composition():
-    creds = CloudCredentials(
-        registry=RegistryConfig(worker_image="docker.io/u/scribblez-worker"),
-        r2=R2Credentials(account_id="acct", access_key_id="ak", secret_access_key="sk", bucket="b"),
-        aws=AwsCredentials(region="us-east-1", access_key_id="ak", secret_access_key="sk"),
-    )
     spec = workloads.get("kill_test")
     params = params_mod.validate(spec.params_cls, {})
     env = bundle_worker_env(
-        creds, spec, "run1", params, role="generate", bundle_id="bid", worker_id="ssh-0",
+        spec, "run1", params,
+        role="generate", bundle_id="bid", worker_id="ssh-0",
     )  # fmt: skip
-    assert env["R2_ACCESS_KEY_ID"] == "ak"
+    assert not any(k.startswith("R2_") for k in env)  # no worker reads the bucket
     assert env["SCZ_WORKLOAD"] == "kill_test"
     assert env["SCZ_ROLE"] == "generate"
     assert env["SCZ_TAG"] == "run1"
-    assert env["SCZ_BUNDLE"] == "bid"
+    assert env["SCZ_BUNDLE_ID"] == "bid"
     assert env["SCZ_WORKER_ID"] == "ssh-0"
     assert env["SCZ_WORKER_KIND"] == "ssh"
 

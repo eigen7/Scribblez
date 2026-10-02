@@ -26,6 +26,11 @@ There is one image per *runtime* a role declares (RoleSpec.runtime):
 A library's version is the name of the file its soname symlink resolves to
 ("libstdc++.so.6" -> "libstdc++.so.6.0.35"). That can be read on either side
 without a compiler, a package manager or docker.
+
+The record also holds the image's bootstrap protocol: how the dashboard hands
+a container its bundle (docker-setup/worker/bootstrap.py). The dashboard
+refuses to deploy to an image of an older protocol, which would not find the
+bundle it is given.
 """
 
 import json
@@ -54,8 +59,19 @@ AT_LEAST = ("libstdc++.so.6", "libgcc_s.so.1")
 EXACTLY = ("libnvinfer.so.10", "libcudart.so.12")
 
 # The push's record, relative to the shared mount root. Format:
-# {"images": {runtime: {"image": name, "versions": {soname: file}}}}.
+# {"images": {runtime: {"image": name, "versions": {soname: file},
+# "bootstrap": protocol}}}.
 RECORD_REL = "cloud/worker_image.json"
+
+# The bootstrap protocol this dashboard speaks: the payload it copies into a
+# container before starting it. Mirrors docker-setup/worker/bootstrap.py's
+# BOOTSTRAP_PROTOCOL, which the image push records; bump both together.
+BOOTSTRAP_PROTOCOL = 2
+
+# Where that payload goes in a container: the bundle as bundle.tar.gz, and the
+# eval datasets as positions.tar.gz for the roles that read them. Mirrors
+# bootstrap.py's PAYLOAD_DIR.
+PAYLOAD_DIR = Path("/opt/scribblez/payload")
 
 
 def _version(soname: str, lib_dirs) -> str:
@@ -117,13 +133,16 @@ def record_path(mount_root: Path) -> Path:
     return Path(mount_root) / RECORD_REL
 
 
-def write_record(mount_root: Path, runtime: str, image: str, versions: dict[str, str]):
-    """Record the versions in the just-pushed `runtime` image, keeping the
-    other runtimes' entries."""
+def write_record(
+    mount_root: Path, runtime: str, image: str, versions: dict[str, str], bootstrap: int
+):
+    """Record the versions and bootstrap protocol of the just-pushed `runtime`
+    image, keeping the other runtimes' entries."""
     assert runtime in RUNTIMES, runtime
     path = record_path(mount_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    images = (read_records(mount_root) or {}) | {runtime: {"image": image, "versions": versions}}
+    entry = {"image": image, "versions": versions, "bootstrap": bootstrap}
+    images = (read_records(mount_root) or {}) | {runtime: entry}
     path.write_text(json.dumps({"images": images}, indent=2) + "\n")
 
 

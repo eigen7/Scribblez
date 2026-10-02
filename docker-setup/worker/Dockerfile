@@ -3,9 +3,9 @@
 # Slim headless runtime for machines the dashboard drives over ssh. Contains
 # dependencies ONLY -- no repo code, no compiled binaries, no lexica -- so the
 # registry image stays stable and code iteration never requires an image
-# rebuild or re-pull. At container start the baked-in bootstrap.py downloads a
-# code+binary bundle (pushed by py/scripts/cloud_push_binaries.py) from the R2
-# bucket into /workspace/repo and hands off to the bundle's worker entrypoint.
+# rebuild or re-pull. The dashboard copies a code+binary bundle into each
+# container before starting it, and the baked-in bootstrap.py unpacks it into
+# /workspace/repo and hands off to the bundle's worker entrypoint.
 # See docker-setup/README.md and docs/cloud_compute.md.
 #
 # Built and pushed by ./build_and_push_worker_image.py, which requires the local dev
@@ -41,13 +41,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libboost-program-options1.83.0 libboost-filesystem1.83.0 \
       libboost-json1.83.0 libprotobuf32t64 zlib1g && \
     rm -rf /var/lib/apt/lists/*
-
-# rclone (pinned; Ubuntu's packaged 1.60 mishandles Cloudflare R2 uploads).
-RUN curl -fsSL https://downloads.rclone.org/v1.74.3/rclone-v1.74.3-linux-amd64.zip \
-      -o /tmp/rclone.zip && \
-    python3 -c "import zipfile; zipfile.ZipFile('/tmp/rclone.zip').extractall('/tmp')" && \
-    install -m 755 /tmp/rclone-v1.74.3-linux-amd64/rclone /usr/local/bin/rclone && \
-    rm -rf /tmp/rclone.zip /tmp/rclone-v1.74.3-linux-amd64
 
 # NVIDIA/onnx runtime libraries the engine binaries link against, copied from
 # the dev image (versions pinned by its TensorRT 25.06 base). COPY would
