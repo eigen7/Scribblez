@@ -16,7 +16,7 @@
 //
 // The fixture comes from py/scripts/move_set_eval/gen_proposal_parity_fixture.py:
 // one model's cache/step pair, a candidate set with its raw Move and
-// SimObservation records, and evidence cases (empty; partial, with scattered
+// RolloutStats records, and evidence cases (empty; partial, with scattered
 // and duplicate indices; full, at the padding boundary). Run with no
 // arguments, the binary generates it through the Python generator at
 // SCRIBBLEZ_PY_DIR and skips if that fails (no torch/onnx). Pass a fixture
@@ -46,7 +46,7 @@
 #include <vector>
 
 using scribblez::Move;
-using scribblez::SimObservation;
+using scribblez::RolloutStats;
 using scribblez::agent::EvidenceSet;
 using scribblez::agent::MoveProposalNets;
 using scribblez::agent::MoveProposalPredictions;
@@ -181,7 +181,7 @@ class ProposalInferenceParityTest : public ::testing::Test {
   std::vector<float> board_;
   scribblez::move_set::MoveFeatureArrays moves_;
   std::vector<Move> sobs_moves_;
-  std::vector<SimObservation> obs_;
+  std::vector<RolloutStats> obs_;
   std::vector<float> plain_planes_;  // M x kPlaneFloats
   std::vector<EvidenceCase> cases_;
 };
@@ -209,7 +209,7 @@ void ProposalInferenceParityTest::SetUp() {
   moves_.count = int(moves_.scalars.size() / scribblez::move_set::kMoveScalars);
   num_moves_ = moves_.count;
   sobs_moves_ = read_binary<Move>(dir_ + "/moves_sobs.bin");
-  obs_ = read_binary<SimObservation>(dir_ + "/obs.bin");
+  obs_ = read_binary<RolloutStats>(dir_ + "/obs.bin");
   plain_planes_ = read_binary<float>(dir_ + "/plain_planes.bin");
 
   ASSERT_GT(num_moves_, 0);

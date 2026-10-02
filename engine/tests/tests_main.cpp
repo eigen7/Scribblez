@@ -28,7 +28,7 @@
 #include "lexicon/leave_values.h"
 #include "lexicon/lexicon.h"
 #include "move_key.h"
-#include "sim/rollout_summary.h"
+#include "sim/rollout_report.h"
 #include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
 #include "sim/slog_position_simmer.h"
@@ -3829,15 +3829,15 @@ TEST(SimRunner, Basic) {
   params.threads = 3;
   const SimRunner runner(d, params);
   const uint64_t base_seed = 400;
-  const std::vector<SimObservation> obs = runner.run(pos, candidates, base_seed);
+  const std::vector<RolloutStats> obs = runner.run(pos, candidates, base_seed);
   ASSERT_EQ(obs.size(), candidates.size());
 
-  for (const SimObservation& o : obs) {
+  for (const RolloutStats& o : obs) {
     ASSERT_EQ(int(o.n), params.rollouts);
     ASSERT_EQ(o.wins + o.draws + o.losses, o.n);
     // Cauchy-Schwarz on the delta moments: (sum d)^2 <= n * sum d^2.
     ASSERT_LE(o.delta_sum * o.delta_sum, int64_t(o.n) * o.delta_sq_sum);
-    for (int i = 0; i < SimObservation::kClasses; ++i) {
+    for (int i = 0; i < RolloutStats::kClasses; ++i) {
       ASSERT_LE(o.opp_win_count[i], o.opp_next_count[i]);
       ASSERT_LE(o.self_win_count[i], o.self_next_count[i]);
       ASSERT_LE(o.opp_next_count[i], o.n);
@@ -3855,18 +3855,18 @@ TEST(SimRunner, Basic) {
   {
     SimRunner::Params p1 = params;
     p1.threads = 1;
-    const std::vector<SimObservation> obs1 = SimRunner(d, p1).run(pos, candidates, base_seed);
+    const std::vector<RolloutStats> obs1 = SimRunner(d, p1).run(pos, candidates, base_seed);
     ASSERT_EQ(obs1.size(), obs.size());
     for (size_t c = 0; c < obs.size(); ++c)
-      ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(SimObservation)), 0);
+      ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(RolloutStats)), 0);
   }
 
   // Common random numbers: a candidate's observation depends only on the
   // position and the base seed, never on which other candidates were simmed.
   {
-    const std::vector<SimObservation> alone = runner.run(pos, {candidates[1]}, base_seed);
+    const std::vector<RolloutStats> alone = runner.run(pos, {candidates[1]}, base_seed);
     ASSERT_EQ(alone.size(), 1);
-    ASSERT_EQ(std::memcmp(&alone[0], &obs[1], sizeof(SimObservation)), 0);
+    ASSERT_EQ(std::memcmp(&alone[0], &obs[1], sizeof(RolloutStats)), 0);
   }
 
   fs::remove_all(tmp);
@@ -3880,7 +3880,7 @@ TEST(SimRunner, Basic) {
 TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
   const Glyph g[3] = {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
                       Glyph::of(Tile::from_char('C'))};
-  RolloutResult r;
+  Rollout r;
   // Horizontal, 2 tiles at row 3, cols 6-7: anchor (3,6), slot 1.
   r.opp_reply = Move::play(/*horizontal=*/true, /*start=*/3,
                            /*square_mask=*/uint16_t((1 << 6) | (1 << 7)), /*score=*/10, g, 2);
@@ -3895,7 +3895,7 @@ TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
   r.delta = 7.0;
   r.delta_sq = 53.0;
 
-  SimObservation obs;
+  RolloutStats obs;
   accumulate_rollout(r, &obs);
   const int opp_cls = (3 * BOARD_SIZE + 6) * kSlotsPerCell + 1;
   const int self_cls = (2 * BOARD_SIZE + 5) * kSlotsPerCell + (kFootprintMaxK + 1);
@@ -3904,7 +3904,7 @@ TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
   EXPECT_EQ(obs.self_next_count[self_cls], 1);
   EXPECT_FLOAT_EQ(obs.self_win_count[self_cls], 0.25f);  // p_win
   int64_t opp_total = 0, self_total = 0;
-  for (int i = 0; i < SimObservation::kClasses; ++i) {
+  for (int i = 0; i < RolloutStats::kClasses; ++i) {
     opp_total += obs.opp_next_count[i];
     self_total += obs.self_next_count[i];
   }
@@ -3913,7 +3913,7 @@ TEST(SimRunner, AccumulateRolloutBucketsFootprints) {
 
   // A 1-tile play takes the orientation-free slot 0 whichever axis it declares,
   // and a missing move (a default Move is a PASS) buckets into kPassClass.
-  RolloutResult r2;
+  Rollout r2;
   r2.opp_reply = Move::play(/*horizontal=*/false, /*start=*/9,
                             /*square_mask=*/uint16_t(1 << 4), /*score=*/4, g, 1);
   r2.p_win = 1.0;
@@ -4041,7 +4041,7 @@ TEST(SimRunner, TruncatedPovParity) {
     params.threads = 2;
     params.horizon_plies = horizon;
     params.leaf_service = &leaf;
-    const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, 400);
+    const std::vector<RolloutStats> obs = SimRunner(d, params).run(pos, candidates, 400);
     ASSERT_EQ(leaf.rows_seen, params.rollouts * int(candidates.size()));
     // The leaf reads the position after the horizon ply from that ply's
     // mover's POV. The opponent moves first, so at horizon 4 the last ply is
@@ -4050,7 +4050,7 @@ TEST(SimRunner, TruncatedPovParity) {
     const double p_win = horizon % 2 == 0 ? double(0.7f) : double(0.2f);
     const double p_loss = horizon % 2 == 0 ? double(0.2f) : double(0.7f);
     const double delta = horizon % 2 == 0 ? 100.0 : -100.0;
-    for (const SimObservation& o : obs) {
+    for (const RolloutStats& o : obs) {
       ASSERT_EQ(int(o.n), params.rollouts);
       ASSERT_DOUBLE_EQ(o.wins, o.n * p_win);
       ASSERT_DOUBLE_EQ(o.draws, o.n * double(0.1f));
@@ -4059,7 +4059,7 @@ TEST(SimRunner, TruncatedPovParity) {
       // The stub predicts sigma = 5, so the second moment is mean^2 + sigma^2,
       // unaffected by the POV flip.
       ASSERT_DOUBLE_EQ(o.delta_sq_sum, o.n * (100.0 * 100.0 + 5.0 * 5.0));
-      for (int i = 0; i < SimObservation::kClasses; ++i) {
+      for (int i = 0; i < RolloutStats::kClasses; ++i) {
         ASSERT_NEAR(o.opp_win_count[i], p_loss * o.opp_next_count[i], 1e-3);
         ASSERT_NEAR(o.self_win_count[i], p_win * o.self_next_count[i], 1e-3);
       }
@@ -4101,25 +4101,25 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
   params.horizon_plies = 4;
   params.leaf_service = &leaf;
   const uint64_t base_seed = 400;
-  const std::vector<SimObservation> obs = SimRunner(d, params).run(pos, candidates, base_seed);
+  const std::vector<RolloutStats> obs = SimRunner(d, params).run(pos, candidates, base_seed);
 
-  for (const SimObservation& o : obs) {
+  for (const RolloutStats& o : obs) {
     ASSERT_EQ(int(o.n), params.rollouts);
     ASSERT_NEAR(o.wins + o.draws + o.losses, double(o.n), 1e-5);
   }
-  ASSERT_EQ(std::memcmp(&obs[0], &obs[1], sizeof(SimObservation)), 0);
+  ASSERT_EQ(std::memcmp(&obs[0], &obs[1], sizeof(RolloutStats)), 0);
 
   {
     SimRunner::Params p1 = params;
     p1.threads = 1;
-    const std::vector<SimObservation> obs1 = SimRunner(d, p1).run(pos, candidates, base_seed);
+    const std::vector<RolloutStats> obs1 = SimRunner(d, p1).run(pos, candidates, base_seed);
     for (size_t c = 0; c < obs.size(); ++c)
-      ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(SimObservation)), 0);
+      ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(RolloutStats)), 0);
   }
   {
-    const std::vector<SimObservation> alone =
+    const std::vector<RolloutStats> alone =
       SimRunner(d, params).run(pos, {candidates[2]}, base_seed);
-    ASSERT_EQ(std::memcmp(&alone[0], &obs[2], sizeof(SimObservation)), 0);
+    ASSERT_EQ(std::memcmp(&alone[0], &obs[2], sizeof(RolloutStats)), 0);
   }
   fs::remove_all(tmp);
 }
@@ -4150,18 +4150,17 @@ TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
 
   SimRunner::Params terminal;
   terminal.rollouts = 8;
-  const std::vector<SimObservation> obs_terminal = SimRunner(d, terminal).run(pos, candidates, 400);
+  const std::vector<RolloutStats> obs_terminal = SimRunner(d, terminal).run(pos, candidates, 400);
 
   RowLeafService leaf;
   SimRunner::Params truncated = terminal;
   truncated.horizon_plies = 350;
   truncated.leaf_service = &leaf;
-  const std::vector<SimObservation> obs_truncated =
-    SimRunner(d, truncated).run(pos, candidates, 400);
+  const std::vector<RolloutStats> obs_truncated = SimRunner(d, truncated).run(pos, candidates, 400);
 
   ASSERT_EQ(leaf.rows_seen, 0);
   for (size_t c = 0; c < obs_terminal.size(); ++c)
-    ASSERT_EQ(std::memcmp(&obs_terminal[c], &obs_truncated[c], sizeof(SimObservation)), 0);
+    ASSERT_EQ(std::memcmp(&obs_terminal[c], &obs_truncated[c], sizeof(RolloutStats)), 0);
   fs::remove_all(tmp);
 }
 
@@ -4258,11 +4257,11 @@ TEST(SimRunner, KnownOppRack) {
   params.rollouts = 12;
   params.threads = 3;
   const SimRunner runner(d, params);
-  const std::vector<SimObservation> obs = runner.run(pos, candidates, /*base_seed=*/9);
+  const std::vector<RolloutStats> obs = runner.run(pos, candidates, /*base_seed=*/9);
   bool any_reply = false;
-  for (const SimObservation& o : obs) {
+  for (const RolloutStats& o : obs) {
     ASSERT_EQ(int(o.n), params.rollouts);
-    for (int i = 0; i < SimObservation::kClasses; ++i)
+    for (int i = 0; i < RolloutStats::kClasses; ++i)
       ASSERT_TRUE(o.opp_next_count[i] == 0 || o.opp_next_count[i] == o.n);
     // For some candidate the reply is a real placement, not a pass.
     for (int i = 0; i < kAnchoredFootprints; ++i)
@@ -4272,9 +4271,9 @@ TEST(SimRunner, KnownOppRack) {
 
   SimRunner::Params p1 = params;
   p1.threads = 1;
-  const std::vector<SimObservation> obs1 = SimRunner(d, p1).run(pos, candidates, /*base_seed=*/9);
+  const std::vector<RolloutStats> obs1 = SimRunner(d, p1).run(pos, candidates, /*base_seed=*/9);
   for (size_t c = 0; c < obs.size(); ++c)
-    ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(SimObservation)), 0);
+    ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(RolloutStats)), 0);
 
   fs::remove_all(tmp);
 }
@@ -4308,11 +4307,11 @@ TEST(SimRunner, PartialLeave) {
   SimRunner::Params params;
   params.rollouts = 10;
   params.threads = 2;
-  const std::vector<SimObservation> obs =
+  const std::vector<RolloutStats> obs =
     SimRunner(d, params).run(pos, {plays.front()}, /*base_seed=*/4);
   ASSERT_EQ(int(obs[0].n), params.rollouts);
   ASSERT_EQ(obs[0].wins + obs[0].draws + obs[0].losses, obs[0].n);
-  for (int i = 0; i < SimObservation::kClasses; ++i) {
+  for (int i = 0; i < RolloutStats::kClasses; ++i) {
     ASSERT_LE(obs[0].opp_win_count[i], obs[0].opp_next_count[i]);
   }
 
@@ -4382,8 +4381,7 @@ TEST(FormatLayout, DescribesTheSidecarStructs) {
 
   const bj::object& structs = doc.at("structs").as_object();
   EXPECT_EQ(structs.at("Move").at("itemsize").to_number<size_t>(), sizeof(Move));
-  EXPECT_EQ(structs.at("SimObservation").at("itemsize").to_number<size_t>(),
-            sizeof(SimObservation));
+  EXPECT_EQ(structs.at("RolloutStats").at("itemsize").to_number<size_t>(), sizeof(RolloutStats));
   EXPECT_EQ(structs.at("SobsRecord").at("itemsize").to_number<size_t>(), sizeof(SimObsRecord));
   EXPECT_EQ(structs.at("MsetFileHeader").at("itemsize").to_number<size_t>(),
             sizeof(move_set_eval::TargetFileHeader));
@@ -4399,17 +4397,17 @@ TEST(FormatLayout, DescribesTheSidecarStructs) {
   // A subarray field carries its element code and shape. The next-move
   // histograms are integer counts; the win histograms and outcome sums are
   // fractional because truncated rollouts add leaf probabilities.
-  const bj::array& obs_fields = structs.at("SimObservation").at("fields").as_array();
+  const bj::array& obs_fields = structs.at("RolloutStats").at("fields").as_array();
   bool found_counts = false, found_win = false, found_wins = false;
   for (const bj::value& f : obs_fields) {
     if (f.at("name").as_string() == "opp_next_count") {
       found_counts = true;
       EXPECT_EQ(f.at("dtype").as_string(), "<u2");
-      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kClasses);
+      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), RolloutStats::kClasses);
     } else if (f.at("name").as_string() == "opp_win_count") {
       found_win = true;
       EXPECT_EQ(f.at("dtype").as_string(), "<f4");
-      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), SimObservation::kClasses);
+      EXPECT_EQ(f.at("shape").as_array().at(0).to_number<int>(), RolloutStats::kClasses);
     } else if (f.at("name").as_string() == "wins") {
       found_wins = true;
       EXPECT_EQ(f.at("dtype").as_string(), "<f8");
@@ -4698,16 +4696,16 @@ TEST(SimCandidates, UnrankedPlayedMoveGetsMinusOne) {
   EXPECT_EQ(sel.equity_ranks[0], -1);
 }
 
-// summarize_rollouts: outcome and margin sums, histogram bin edges, and the
+// report_rollouts: outcome and margin sums, histogram bin edges, and the
 // adjacency count of next moves played next to the candidate's own tiles.
-TEST(RolloutSummary, ReducesOutcomesScoresAndAdjacency) {
+TEST(RolloutReport, ReducesOutcomesScoresAndAdjacency) {
   const Glyph a = Glyph::of(Tile::from_char('A'));
   const Move candidate = make_play_full(7, 7, /*horizontal=*/true, 0b1, 10, {a});
   const Move hook = make_play_full(7, 8, true, 0b1, 35, {a});  // beside it
   const Move far = make_play_full(0, 0, true, 0b1, 104, {a});
   const Move bingo = make_play_full(14, 0, true, 0b1111111, 72, {a, a, a, a, a, a, a});
 
-  std::vector<RolloutResult> rollouts(3);
+  std::vector<Rollout> rollouts(3);
   rollouts[0] = {.opp_reply = far, .self_next = hook, .p_win = 1, .delta = 30, .delta_sq = 900};
   rollouts[1] = {
     .opp_reply = bingo, .self_next = Move{}, .p_loss = 1, .delta = -201, .delta_sq = 40401};
@@ -4716,7 +4714,7 @@ TEST(RolloutSummary, ReducesOutcomesScoresAndAdjacency) {
   rollouts[1].self_stranded = 30;  // the opponent played out: -60, below the floor
   rollouts[2].self_stranded = 3;   // nobody played out: 5 - 3 = +2
   rollouts[2].opp_stranded = 5;
-  const RolloutSummary s = summarize_rollouts(candidate, rollouts);
+  const RolloutReport s = report_rollouts(candidate, rollouts);
 
   EXPECT_EQ(s.n, 3u);
   EXPECT_EQ(s.wins, 1);
@@ -4743,8 +4741,8 @@ TEST(RolloutSummary, ReducesOutcomesScoresAndAdjacency) {
 }
 
 // paired_win_diff: win = 1, draw = 1/2, differenced rollout by rollout.
-TEST(RolloutSummary, PairedWinDiffMoments) {
-  std::vector<RolloutResult> a(3), b(3);
+TEST(RolloutReport, PairedWinDiffMoments) {
+  std::vector<Rollout> a(3), b(3);
   a[0].p_win = 1;   // vs a loss: +1
   a[1].p_draw = 1;  // vs a win: -1/2
   b[1].p_win = 1;
@@ -5161,7 +5159,7 @@ TEST(SimObservationLog, Roundtrip) {
 
   // Synthetic observations with distinct values in every field, so a layout
   // mixup cannot round-trip cleanly.
-  SimObservation o1{};
+  RolloutStats o1{};
   o1.n = 16;
   o1.wins = 9.25;  // fractional, as truncated rollouts produce
   o1.draws = 1.5;
@@ -5172,7 +5170,7 @@ TEST(SimObservationLog, Roundtrip) {
   o1.opp_win_count[7 * 15 + 7] = 5.5f;
   o1.self_next_count[3] = 2;
   o1.self_win_count[3] = 1.25f;
-  SimObservation o2{};
+  RolloutStats o2{};
   o2.n = 16;
   o2.draws = 16;
 
@@ -5208,11 +5206,11 @@ TEST(SimObservationLog, Roundtrip) {
   SimObsRecord rec;                 // copied out of the packed file view before comparing
   std::memcpy(&rec, &p0.records[0], sizeof(rec));
   ASSERT_EQ(std::memcmp(&rec.move, &m1, sizeof(Move)), 0);
-  ASSERT_EQ(std::memcmp(&rec.obs, &o1, sizeof(SimObservation)), 0);
+  ASSERT_EQ(std::memcmp(&rec.obs, &o1, sizeof(RolloutStats)), 0);
   ASSERT_EQ(rec.role, SimObsRole::kAnchor);
   std::memcpy(&rec, &p0.records[1], sizeof(rec));
   ASSERT_EQ(std::memcmp(&rec.move, &m2, sizeof(Move)), 0);
-  ASSERT_EQ(std::memcmp(&rec.obs, &o2, sizeof(SimObservation)), 0);
+  ASSERT_EQ(std::memcmp(&rec.obs, &o2, sizeof(RolloutStats)), 0);
   ASSERT_EQ(rec.role, SimObsRole::kOffPolicy);
   const SimObsReader::Position p1 = r.position(1);
   ASSERT_EQ(p1.header->game_index, 4);
@@ -5684,7 +5682,7 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   // Evidence candidate 0 == scored 2: a one-tile horizontal play at (7,7);
   // observations with rollouts n=4. Histogram classes are (cell, slot) pairs:
   // opp replies at (cell 5, slot 2), self next moves at (cell 10, slot 0).
-  SimObservation obs0;
+  RolloutStats obs0;
   obs0.n = 4;
   obs0.wins = 3.0;
   obs0.draws = 0.0;
@@ -5700,14 +5698,14 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
                                /*score=*/20, &g, /*num_played=*/1);
 
   // Evidence candidate 1 == scored 0: a PASS (empty footprint), n=2, all draws.
-  SimObservation obs1;
+  RolloutStats obs1;
   obs1.n = 2;
   obs1.draws = 2.0;
   obs1.delta_sum = -20.0;     // mean -10
   obs1.delta_sq_sum = 200.0;  // var 0, std 0
 
   const std::vector<Move> moves = {play, Move{}};
-  const std::vector<SimObservation> observations = {obs0, obs1};
+  const std::vector<RolloutStats> observations = {obs0, obs1};
   const std::vector<int> scored_indices = {2, 0};
 
   constexpr int kMaxE = 4;
@@ -5823,19 +5821,19 @@ TEST(EvidenceStaging, RejectsOversizedSetAndAcceptsFullWidth) {
 
   // One more candidate than the padded width throws.
   const std::vector<Move> too_many(kMaxE + 1);
-  const std::vector<SimObservation> obs_many(kMaxE + 1);
+  const std::vector<RolloutStats> obs_many(kMaxE + 1);
   const std::vector<int> idx_many(kMaxE + 1, 0);
   EXPECT_THROW(stage_evidence(too_many, obs_many, idx_many, pred, kMaxE, out), std::runtime_error);
   // So does a length mismatch, in either the observations or scored_indices.
-  EXPECT_THROW(stage_evidence(std::vector<Move>(2), std::vector<SimObservation>(1),
+  EXPECT_THROW(stage_evidence(std::vector<Move>(2), std::vector<RolloutStats>(1),
                               std::vector<int>(2), pred, kMaxE, out),
                std::runtime_error);
-  EXPECT_THROW(stage_evidence(std::vector<Move>(2), std::vector<SimObservation>(2),
+  EXPECT_THROW(stage_evidence(std::vector<Move>(2), std::vector<RolloutStats>(2),
                               std::vector<int>(1), pred, kMaxE, out),
                std::runtime_error);
 
   // Exactly the padded width is accepted.
-  stage_evidence(std::vector<Move>(kMaxE), std::vector<SimObservation>(kMaxE),
+  stage_evidence(std::vector<Move>(kMaxE), std::vector<RolloutStats>(kMaxE),
                  std::vector<int>(kMaxE, 0), pred, kMaxE, out);
   for (int j = 0; j < kMaxE; ++j) EXPECT_EQ(mk[j], 1);
 }
@@ -5854,11 +5852,11 @@ TEST(EvidenceStaging, ClampsNegativeVarianceAndHandlesEmptySet) {
 
   // delta_sq_sum / n (75) below mean^2 (100) gives a negative variance; the std
   // must clamp to exactly 0, never NaN.
-  SimObservation neg_var;
+  RolloutStats neg_var;
   neg_var.n = 2;
   neg_var.delta_sum = 20.0;      // mean 10
   neg_var.delta_sq_sum = 150.0;  // 150/2 - 100 = -25
-  stage_evidence(std::vector<Move>(1), std::vector<SimObservation>{neg_var}, std::vector<int>{0},
+  stage_evidence(std::vector<Move>(1), std::vector<RolloutStats>{neg_var}, std::vector<int>{0},
                  pred, kMaxE, out);
   EXPECT_FLOAT_EQ(sc[4], 0.0f);  // delta_std, clamped
   EXPECT_TRUE(std::isfinite(sc[4]));
@@ -5870,7 +5868,7 @@ TEST(EvidenceStaging, ClampsNegativeVarianceAndHandlesEmptySet) {
   std::fill(pl.begin(), pl.end(), -1.0f);
   std::fill(me.begin(), me.end(), -1.0f);
   const std::vector<Move> none;
-  const std::vector<SimObservation> no_obs;
+  const std::vector<RolloutStats> no_obs;
   const std::vector<int> no_idx;
   stage_evidence(none, no_obs, no_idx, pred, kMaxE, out);
   for (int j = 0; j < kMaxE; ++j) {

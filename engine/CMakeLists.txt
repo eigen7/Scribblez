@@ -52,7 +52,7 @@ add_library(scribblez_core STATIC
   src/sim/sim_runner.cpp
   src/sim/slog_position_simmer.cpp
   src/sim/setup_plays.cpp
-  src/sim/rollout_summary.cpp
+  src/sim/rollout_report.cpp
   src/sim/win_pct_table.cpp
   src/sim/macondo_autostopper.cpp
   src/sim/macondo_simmer.cpp

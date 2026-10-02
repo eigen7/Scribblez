@@ -19,9 +19,9 @@ What exists, and what that changes:
   ([sim_runner.cpp](../../engine/src/sim/sim_runner.cpp)) builds a full
   `GameLog`: the opponent's sampled rack, and per turn the mover, the move,
   the rack before it, the bag count and the tiles drawn. It returns only
-  `RolloutResult` (the reply, our next move, the leaf reading). Recording
+  `Rollout` (the reply, our next move, the leaf reading). Recording
   probes is a change to what that function returns, not a new simulator.
-- **Labels already have a record.** `SimObservation`
+- **Labels already have a record.** `RolloutStats`
   ([sim_runner.h](../../engine/include/sim/sim_runner.h)) holds win, draw and
   loss counts, the score-difference sum and sum of squares (so its mean and
   standard deviation), and 2927-class footprint histograms for all four
@@ -78,7 +78,7 @@ differences under common random numbers. It reports:
 
 In [sim_runner](../../engine/include/sim/sim_runner.h):
 
-- A rollout variant returning a `RolloutTrace` beside the `RolloutResult`: the
+- A rollout variant returning a `RolloutTrace` beside the `Rollout`: the
   opponent's sampled rack; per turn, the mover, move, rack before, bag count
   before, score change and tiles drawn; the leaf's win/draw/loss and score
   readings before reduction; and whether the rollout ended at the horizon or
@@ -88,7 +88,7 @@ In [sim_runner](../../engine/include/sim/sim_runner.h):
   generation; every later ply stays greedy hasty.
 - No per-step static-equity rank. Hasty's move is always its own rank 1, so
   the field carries nothing until the writer is learned.
-- Tests: a trace reproduces its `RolloutResult` exactly, and traces are
+- Tests: a trace reproduces its `Rollout` exactly, and traces are
   identical across thread counts.
 
 ## PR 2: the generator and the record format
@@ -105,7 +105,7 @@ A new tool, `transfer_test_generator`, and its workload:
   exchanges, 2 low, by hasty equity) and the coupled pairs. Each candidate is
   tagged with its stratum and coupling id.
 - **Labels.** L rollouts per candidate through `SimRunner`, reduced to
-  `SimObservation` and written as a `.sobs` v5 file with a new flag marking it
+  `RolloutStats` and written as a `.sobs` v5 file with a new flag marking it
   as labels.
 - **Probes.** P probes per candidate, written to a new **`.sprobe`** sidecar:
   - file header: magic, version, the face-up flag, the teacher and leaf

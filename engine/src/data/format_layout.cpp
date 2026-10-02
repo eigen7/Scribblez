@@ -58,7 +58,7 @@ consteval const char* scalar_code(std::meta::info t) {
 // Member types that are themselves served structs become nested references,
 // keyed by the type's own identifier (build_structs serves them under it).
 consteval bool is_served_struct(std::meta::info t) {
-  return util::type_is<Move>(t) || util::type_is<SimObservation>(t);
+  return util::type_is<Move>(t) || util::type_is<RolloutStats>(t);
 }
 
 // Fills in the dtype of one field: a nested struct reference, a char array
@@ -122,7 +122,7 @@ json::object struct_json() {
 json::object build_structs() {
   json::object s;
   s["Move"] = struct_json<Move>();
-  s["SimObservation"] = struct_json<SimObservation>();
+  s["RolloutStats"] = struct_json<RolloutStats>();
   s["SobsFileHeader"] = struct_json<SimObsFileHeader>();
   s["SobsPositionHeader"] = struct_json<SimObsPositionHeader>();
   s["SobsRecord"] = struct_json<SimObsRecord>();
@@ -166,7 +166,7 @@ json::object build_constants() {
                     {"exchange", int(MoveType::EXCHANGE)},
                     {"pass", int(MoveType::PASS)}};
   // The four placement heads in declaration order (training_targets.h). This is
-  // also the .mset plane order and the SimObservation count-plane order.
+  // also the .mset plane order and the RolloutStats count-plane order.
   c["placement_head_names"] = {OppNextPlacementTarget::kName, SelfNextPlacementTarget::kName,
                                OppWinPlacementTarget::kName, SelfWinPlacementTarget::kName};
   // The per-side legality-mask targets (opp, self), in row order. There is one

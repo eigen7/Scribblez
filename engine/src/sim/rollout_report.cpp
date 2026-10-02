@@ -1,4 +1,4 @@
-#include "sim/rollout_summary.h"
+#include "sim/rollout_report.h"
 
 #include "game/board.h"
 
@@ -59,7 +59,7 @@ int end_swing_bin(int swing) {
   return std::clamp(bin, 0, kEndSwingBins - 1);
 }
 
-void add_game_end(const RolloutResult& r, RolloutSummary* s) {
+void add_game_end(const Rollout& r, RolloutReport* s) {
   s->self_stranded_sum += r.self_stranded;
   s->opp_stranded_sum += r.opp_stranded;
   s->self_went_out += r.self_stranded == 0;
@@ -87,7 +87,7 @@ std::string bingo_spot_name(uint16_t spot) {
   return spot >> 8 ? std::format("{}{}", row, col) : std::format("{}{}", col, row);
 }
 
-PairedWinDiff paired_win_diff(std::span<const RolloutResult> a, std::span<const RolloutResult> b) {
+PairedWinDiff paired_win_diff(std::span<const Rollout> a, std::span<const Rollout> b) {
   PairedWinDiff out;
   for (size_t i = 0; i < a.size(); ++i) {
     const double d = (a[i].p_win + 0.5 * a[i].p_draw) - (b[i].p_win + 0.5 * b[i].p_draw);
@@ -103,10 +103,10 @@ bool clearly_below(const PairedWinDiff& d, size_t n, double sigmas) {
   return mean + sigmas * se < 0;
 }
 
-RolloutSummary summarize_rollouts(const Move& candidate, std::span<const RolloutResult> rollouts) {
+RolloutReport report_rollouts(const Move& candidate, std::span<const Rollout> rollouts) {
   const SquareSet beside = neighbor_squares(candidate);
-  RolloutSummary s;
-  for (const RolloutResult& r : rollouts) {
+  RolloutReport s;
+  for (const Rollout& r : rollouts) {
     ++s.n;
     s.wins += r.p_win;
     s.draws += r.p_draw;

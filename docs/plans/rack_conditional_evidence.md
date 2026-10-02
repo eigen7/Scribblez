@@ -210,7 +210,7 @@ shipped surface, and this plan replaces most of it rather than extending it.
 
 | Piece | Today | Under this plan |
 |---|---|---|
-| Evidence unit | `EvidenceSet`: one `SimObservation` per simmed candidate ([move_proposal_service.h](../../engine/include/agent/move_proposal_service.h)) | Rack-index tokens, each a variable-size set of per-candidate sub-records, plus nested-sim tokens. The sub-record encoder is new. |
+| Evidence unit | `EvidenceSet`: one `RolloutStats` per simmed candidate ([move_proposal_service.h](../../engine/include/agent/move_proposal_service.h)) | Rack-index tokens, each a variable-size set of per-candidate sub-records, plus nested-sim tokens. The sub-record encoder is new. |
 | Fusion | Self-attention over at most 64 padded evidence tokens ([evidence_fusion.py](../../py/scribblez/evidence_fusion.py)) | Cross-attention into board tokens or inducing points, over a context of thousands. The exported graph needs a dynamic evidence axis. |
 | Evidence encoding | Board tokens gathered from the root board's map, cached once | Encoded against each candidate's post-move board. |
 | Serving | `MoveProposalService` holds one encoded position | A session holding each contender's fused encoding at once, for reader 2. |

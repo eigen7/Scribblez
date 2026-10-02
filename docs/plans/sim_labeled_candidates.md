@@ -97,7 +97,7 @@ numbers and leave the hole intact.
   (`sim_obs_tool` for equity-top-K candidates, `evidence_trajectory_generator`
   for the anchor / on-policy / off-policy recipe). A `.sobs` record per
   candidate carries wins, draws, losses, the delta sum and second moment, and
-  the four footprint-class histograms (`SimObservation`, `sim_runner.h`):
+  the four footprint-class histograms (`RolloutStats`, `sim_runner.h`):
   exactly the teacher's target set, as distributions instead of one draw.
 - Encoding a candidate's post-move state from a replayed `.slog` position is
   what `move_set_eval_target_generator` already does per candidate

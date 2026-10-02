@@ -51,7 +51,7 @@ SimObsWriter::~SimObsWriter() {
 
 void SimObsWriter::add_position(uint32_t game_index, uint32_t turn_index,
                                 const std::vector<Move>& candidates,
-                                const std::vector<SimObservation>& observations, uint32_t rollouts,
+                                const std::vector<RolloutStats>& observations, uint32_t rollouts,
                                 uint64_t base_seed, uint32_t num_legal_moves,
                                 const std::vector<SimObsRole>& roles) {
   RELEASE_ASSERT(!closed_);

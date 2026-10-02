@@ -1,7 +1,7 @@
 #pragma once
 
 // A compact reduction of one candidate's rollouts, for analysis rather than
-// training. A SimObservation keeps per-footprint placement histograms (35 KB);
+// training. A RolloutStats keeps per-footprint placement histograms (35 KB);
 // this keeps what explains why a candidate sims as it does: how the final
 // margin is distributed, what each side's next move scored, and whether it
 // played off the candidate's tiles. A candidate that sims well because the
@@ -51,7 +51,7 @@ struct NextMoveStats {
   uint32_t adjacent = 0;
 };
 
-struct RolloutSummary {
+struct RolloutReport {
   uint32_t n = 0;
   double wins = 0;
   double draws = 0;
@@ -96,9 +96,9 @@ struct PairedWinDiff {
 // standard errors below b's: the early-stopping test of a racing sim.
 bool clearly_below(const PairedWinDiff& d, size_t n, double sigmas);
 
-PairedWinDiff paired_win_diff(std::span<const RolloutResult> a, std::span<const RolloutResult> b);
+PairedWinDiff paired_win_diff(std::span<const Rollout> a, std::span<const Rollout> b);
 
 // Reduce `candidate`'s rollouts, in order.
-RolloutSummary summarize_rollouts(const Move& candidate, std::span<const RolloutResult> rollouts);
+RolloutReport report_rollouts(const Move& candidate, std::span<const Rollout> rollouts);
 
 }  // namespace scribblez

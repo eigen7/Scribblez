@@ -150,8 +150,7 @@ TEST_F(MsetSimAgentTest, SimsTheModelsTopKAndPlaysTheRolloutsFavourite) {
   pos.scores = {13, 7};
   pos.rack = my_rack_;
   pos.opp_leave = opp_leave_;
-  const std::vector<SimObservation> obs =
-    SimRunner(dict_, p.sim).run(pos, simmed, agent.sim_seed(0));
+  const std::vector<RolloutStats> obs = SimRunner(dict_, p.sim).run(pos, simmed, agent.sim_seed(0));
 
   EXPECT_TRUE(played == simmed[size_t(best_observation_index(obs, p.sim_objective))]);
 }

@@ -61,7 +61,7 @@ struct SimJob {
 };
 
 // Each candidate's rollouts, in rollout-index order.
-using CandidateRollouts = std::vector<std::vector<RolloutResult>>;
+using CandidateRollouts = std::vector<std::vector<Rollout>>;
 
 // Append rollouts [done, upto) of the `alive` candidates.
 void run_instalment(const SimRunner& runner, const SimmedPosition& res,
@@ -70,7 +70,7 @@ void run_instalment(const SimRunner& runner, const SimmedPosition& res,
   std::vector<Move> moves;
   for (const size_t c : alive) moves.push_back(res.candidates.moves[c]);
   const int count = upto - done;
-  const std::vector<RolloutResult> flat =
+  const std::vector<Rollout> flat =
     runner.run_rollouts(res.position, moves, res.base_seed + uint64_t(done), count);
   for (size_t k = 0; k < alive.size(); ++k)
     (*rollouts)[alive[k]].insert((*rollouts)[alive[k]].end(), flat.begin() + k * size_t(count),
@@ -83,7 +83,7 @@ size_t race_leader(const std::vector<size_t>& alive, const CandidateRollouts& ro
   double best = -1;
   for (const size_t c : alive) {
     double wins = 0;
-    for (const RolloutResult& r : rollouts[c]) wins += r.p_win + 0.5 * r.p_draw;
+    for (const Rollout& r : rollouts[c]) wins += r.p_win + 0.5 * r.p_draw;
     if (wins > best) {
       best = wins;
       leader = c;
@@ -96,7 +96,7 @@ size_t race_leader(const std::vector<size_t>& alive, const CandidateRollouts& ro
 // SlogSimConfig::race_checkpoints).
 void stop_the_beaten(const SlogSimConfig& config, const CandidateRollouts& rollouts,
                      std::vector<size_t>* alive) {
-  const std::vector<RolloutResult>& lead = rollouts[race_leader(*alive, rollouts)];
+  const std::vector<Rollout>& lead = rollouts[race_leader(*alive, rollouts)];
   std::erase_if(*alive, [&](size_t c) {
     if (c < size_t(config.race_protected)) return false;
     return clearly_below(paired_win_diff(rollouts[c], lead), lead.size(), config.race_sigmas);
@@ -121,21 +121,21 @@ CandidateRollouts sim_candidates(const SlogSimConfig& config, const SimRunner& r
   return rollouts;
 }
 
-void summarize_position(const SlogSimConfig& config, const CandidateRollouts& rollouts,
-                        SimmedPosition* res) {
+void report_position(const SlogSimConfig& config, const CandidateRollouts& rollouts,
+                     SimmedPosition* res) {
   const size_t n = rollouts.size();
   const size_t refs = std::min(n, size_t(config.paired_references));
   res->paired.assign(n, std::vector<PairedWinDiff>(refs));
   for (size_t c = 0; c < n; ++c) {
-    res->summaries.push_back(summarize_rollouts(res->candidates.moves[c], rollouts[c]));
+    res->reports.push_back(report_rollouts(res->candidates.moves[c], rollouts[c]));
     for (size_t r = 0; r < refs; ++r) res->paired[c][r] = paired_win_diff(rollouts[c], rollouts[r]);
   }
 }
 
 // Sim the position's candidates and keep what the config asks for.
 void reduce_rollouts(const SlogSimConfig& config, const SimRunner& runner, SimmedPosition* res) {
-  if (config.keep_summaries) {
-    summarize_position(config, sim_candidates(config, runner, *res), res);
+  if (config.keep_reports) {
+    report_position(config, sim_candidates(config, runner, *res), res);
   } else {
     res->observations = runner.run(res->position, res->candidates.moves, res->base_seed);
   }

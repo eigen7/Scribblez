@@ -31,7 +31,7 @@ MSET_VERSION = _CONST["mset"]["version"]
 TARGET_NAMES_V1 = tuple(_CONST["mset"]["target_names_v1"])
 
 # A record's placement planes, one per teacher placement head in this order
-# (also the SimObservation plane order): the teacher's legality-masked
+# (also the RolloutStats plane order): the teacher's legality-masked
 # footprint softmax over PLANE_WIDTH classes at the candidate's post-move
 # state. Stored absmax-quantized as a float scale plus PLANE_WIDTH bytes per
 # plane, value = byte * scale with scale = plane max / 255.

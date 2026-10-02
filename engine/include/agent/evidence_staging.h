@@ -80,7 +80,7 @@ struct EvidenceStagingOutputs {
 // candidate j in `predictions`. Rows past the evidence are zeroed, and
 // `out.mask` marks the real ones. Throws if the spans differ in length or hold
 // more than `max_evidence` entries.
-void stage_evidence(std::span<const Move> moves, std::span<const SimObservation> observations,
+void stage_evidence(std::span<const Move> moves, std::span<const RolloutStats> observations,
                     std::span<const int> scored_indices, const CachePredictions& predictions,
                     int max_evidence, const EvidenceStagingOutputs& out);
 

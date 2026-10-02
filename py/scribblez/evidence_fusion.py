@@ -46,7 +46,7 @@ from scribblez.spatial_trunk import mean_max_pool
 # this layout and must change in lockstep. Each placement head contributes
 # SLOTS_PER_CELL board-shaped channels, anchored footprint class (cell, slot) at
 # channel head * SLOTS_PER_CELL + slot. The blocks, in order:
-#   - observed: the four heads' rollout frequencies (SimObservation counts / rollouts)
+#   - observed: the four heads' rollout frequencies (RolloutStats counts / rollouts)
 #   - predicted: the model's four evidence-free footprint distributions
 #   - the candidate's own footprint, one-hot
 # Heads follow the FFI's placement-head order (move_set_eval.targets.PLANE_NAMES).

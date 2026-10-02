@@ -9,7 +9,7 @@
 namespace scribblez {
 namespace agent {
 
-SimObservation SimRunnerCandidateSimmer::sim(const Move& candidate) {
+RolloutStats SimRunnerCandidateSimmer::sim(const Move& candidate) {
   return runner_.run(pos_, {candidate}, base_seed_).front();
 }
 

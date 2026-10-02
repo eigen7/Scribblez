@@ -123,7 +123,7 @@ MoveDecision MsetSimAgent::make_move(const MoveRequest& req) {
 
   const SimPosition pos = sim_position_from(req);
 
-  const std::vector<SimObservation> observations = runner_.run(pos, sim_moves_, sim_seed(ply_));
+  const std::vector<RolloutStats> observations = runner_.run(pos, sim_moves_, sim_seed(ply_));
   // Ties go to the earlier candidate, the better model rank.
   return sim_moves_[size_t(best_observation_index(observations, sim_objective_))];
 }
