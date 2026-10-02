@@ -1000,8 +1000,7 @@ def test_retire_training_pairs_deletes_the_training_side_only(tmp_path):
     assert trainer.retire_training_pairs(train_ds, LocalSink(tmp_path)) == 3
     assert complete_pairs(store) == [store / "sweep0.mset"]
     assert sorted(store.glob("*.slog")) == [store / "sweep0.slog"]
-    # Through the sink, by tag-relative name: a bucket trainer retires the
-    # bucket's copies too.
+    # Through the sink, by tag-relative name.
     sink = _OutputSink()
     trainer.retire_training_pairs(train_ds, sink)
     assert sink.removed == [f"data/slogs/s{i}.{ext}" for i in range(3) for ext in ("mset", "slog")]

@@ -2631,9 +2631,9 @@ def test_the_tag_volume_goes_with_the_last_slot_on_its_machine(manager, monkeypa
     assert gone[-1] == ("m1", "scz-position_eval-t-data")
 
 
-def test_no_local_slot_needs_the_bucket(manager, monkeypatch, tmp_path):
-    """A trainer that moved here finds its home's data plane already swept
-    here (_sweep_home), not in the bucket."""
+def test_a_local_slot_needs_no_cloud_credentials(manager, monkeypatch, tmp_path):
+    """A local slot, a trainer included, starts without the credentials file
+    and is told of no remote home."""
     spec = workloads.get("position_eval")
     monkeypatch.setattr(WorkerManager, "_spawn_local", _REAL_SPAWN_LOCAL)
     monkeypatch.setattr(WorkerManager, "_creds", _fail)
