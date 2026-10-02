@@ -43,7 +43,7 @@ class RecordingSink:
         return None
 
 
-def _ctx(tmp_path, sink, max_cycles=0, worker_id="local-0", records_sink=None):
+def _ctx(tmp_path, sink, max_cycles=0, worker_id="local-0"):
     spec = workloads.get("position_eval")
     return WorkerContext(
         spec=spec,
@@ -53,8 +53,7 @@ def _ctx(tmp_path, sink, max_cycles=0, worker_id="local-0", records_sink=None):
         worker_id=worker_id,
         threads=2,
         max_cycles=max_cycles,
-        data_sink=sink,
-        records_sink=records_sink or sink,
+        sink=sink,
         mount_root=tmp_path,
     )
 
@@ -72,35 +71,6 @@ def _fake_run_games(calls: list):
         return 0
 
     return run_games
-
-
-class RecordsSink:
-    """A records sink that keeps what is pushed and refuses data deliveries."""
-
-    kind = "ssh"
-
-    def __init__(self):
-        self.pushed: list[str] = []
-
-    def deliver(self, src, data_rel) -> int:
-        raise AssertionError(f"{data_rel} went to the records sink")
-
-    def push_json(self, rel_path, obj):
-        self.pushed.append(rel_path)
-
-    def read_json(self, rel_path):
-        return None
-
-
-def test_chunks_go_to_the_data_sink_and_stats_to_the_records_sink(tmp_path, monkeypatch):
-    data, records = RecordingSink(), RecordsSink()
-    monkeypatch.setattr(selfplay_gen, "run_games", _fake_run_games([]))
-
-    rc = selfplay_gen.run_generate(_ctx(tmp_path, data, max_cycles=2, records_sink=records))
-
-    assert rc == 0
-    assert [d[1].split("/")[0] for d in data.delivered] == ["staging", "staging"]
-    assert records.pushed and all(r.startswith("stats/") for r in records.pushed)
 
 
 def test_deliveries_happen_in_order(tmp_path, monkeypatch):

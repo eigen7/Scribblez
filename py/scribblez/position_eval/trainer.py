@@ -287,7 +287,7 @@ def _checkpoint_and_eval(
         f"generation {ci}",
         functools.partial(
             _deliver_generation,
-            ctx["records_sink"],
+            ctx["sink"],
             paths,
             ci,
             state_pair.snapshot(paths.rolling_checkpoint, ci),
@@ -414,7 +414,7 @@ def run_generational_training(
     cpu = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
-        wait_for_generation(paths, state.generation_index, ctx["data_sink"], ctx["data_home"])
+        wait_for_generation(paths, state.generation_index, ctx["sink"], ctx["data_home"])
         train_one_generation(
             model,
             train_model,
@@ -525,7 +525,7 @@ def run(ctx: WorkerContext) -> int:
     torch.set_float32_matmul_precision("high")
     train_model = torch.compile(model)
 
-    recorder = TrainRecorder(ctx.records_sink)
+    recorder = TrainRecorder(ctx.sink)
     recorder.publish_run(
         ctx.tag,
         asdict(params),
@@ -543,9 +543,8 @@ def run(ctx: WorkerContext) -> int:
 
     run_ctx = {
         "config": asdict(params),
-        "data_sink": ctx.data_sink,
-        "records_sink": ctx.records_sink,
-        "read_controls": functools.partial(read_controls, ctx.records_sink),
+        "sink": ctx.sink,
+        "read_controls": functools.partial(read_controls, ctx.sink),
         "spatial_planes": spatial_planes,
         "scalar_size": scalar_size,
         "position_eval_quality": load_position_eval_quality(spatial_planes, params.face_up_leaves),
@@ -555,7 +554,7 @@ def run(ctx: WorkerContext) -> int:
 
     install_seed(paths)
     state = checkpoint.resume(paths, model, optimizer, device)
-    ensure_window(paths, ctx.data_sink, state.generation_index, params.window)
+    ensure_window(paths, ctx.sink, state.generation_index, params.window)
     _publish_train_state(paths, state)
     run_ctx["data_home"] = data_home.start_for(ctx, paths, params)
     try:

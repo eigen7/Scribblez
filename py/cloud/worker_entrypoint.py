@@ -165,8 +165,7 @@ def main() -> int:
             kind=kind,
             threads=threads,
             max_cycles=int(os.environ.get("SCZ_MAX_CYCLES", 0)),
-            data_sink=sink,
-            records_sink=sink,
+            sink=sink,
             provenance=provenance(),
             mount_root=mount_root,
         )

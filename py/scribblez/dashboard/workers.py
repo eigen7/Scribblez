@@ -1025,9 +1025,10 @@ class WorkerManager:
 
     def _check_data_home_order(self, spec, task: tasks.TaskRecord, role: workloads.RoleSpec):
         """A generational tag's trainer decides where its other data-plane
-        slots deliver, and a running slot cannot move (its sinks and mount are fixed
-        when its worker starts). So a generator needs a trainer, and a trainer
-        joins only while the others are stopped; _rehome then moves them."""
+        slots deliver, and a running slot cannot move (its mount and
+        environment are fixed when its worker starts). So a generator needs a
+        trainer, and a trainer joins only while the others are stopped;
+        _rehome then moves them."""
         if role.ingest:
             moving = [
                 w.worker_id
@@ -1047,7 +1048,7 @@ class WorkerManager:
     def _rehome(self, spec, task: tasks.TaskRecord, joined: tasks.WorkerRecord):
         """After data-home trainer `joined` is added to a tag that already has
         other slots: recreate their stopped ssh containers at their next start,
-        with the sinks and mount the new home gives them, and remove the tag's
+        with the mount and environment the new home gives them, and remove the tag's
         volume wherever no slot now works in it. The old home's data plane was
         swept here when its trainer was removed (_sweep_home); the new home is
         seeded from that copy (_seed_home, _seed_state)."""
@@ -1554,7 +1555,7 @@ class WorkerManager:
 
     def _discard_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Remove stopped ssh slot `w`'s container, collecting what it holds
-        first, so its next start creates one with the sinks and mount it now
+        first, so its next start creates one with the mount and environment it now
         gets."""
         probe = self._refresh_probe(spec, task, w)
         assert probe in ("stopped", "missing"), f"{w.worker_id} is {probe}"

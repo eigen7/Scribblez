@@ -1256,7 +1256,7 @@ class _LoggingSink(_DriveSink):
         return object.__getattribute__(self, name)
 
 
-data_sink, records_sink = _LoggingSink(root), _LoggingSink(root)
+sink = _LoggingSink(root)
 paths = SimpleNamespace(
     root=root,
     data_dir=root / "data",
@@ -1271,17 +1271,17 @@ paths = SimpleNamespace(
 )
 ctx = SimpleNamespace(
     params=params, tag="t", worker_id="w0", threads=1, kind="local",
-    data_sink=data_sink, records_sink=records_sink,
+    sink=sink,
     role=SimpleNamespace(name="train"), provenance={},
     tag_paths=lambda: paths,
 )
 assert trainer.run(ctx) == 0, "run() did not exit cleanly"
-# The pair store (pulled, then its training pairs retired) is data; the
-# exports and the state pairs are records. A local sink has nothing to restore.
-assert data_sink.calls == {"fetch_data_files", "remove_outputs"}, data_sink.calls
-assert records_sink.calls == {
-    "deliver_output", "push_file", "list_dirs", "remove_tree"
-}, records_sink.calls
+# The pair store (pulled, then its training pairs retired), the exports and
+# the state pairs all go through the one sink.
+assert sink.calls == {
+    "fetch_data_files", "remove_outputs", "deliver_output", "push_file", "list_dirs",
+    "remove_tree",
+}, sink.calls
 
 # The finished run retired its training pairs and kept the held-out (swept)
 # ones; a resumed run learns it is finished from the checkpoint and exits 0.

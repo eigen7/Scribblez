@@ -49,8 +49,7 @@ def main() -> int:
         worker_id=f"cli-{socket.gethostname()}",
         threads=args.threads,
         max_cycles=0,
-        data_sink=sink,
-        records_sink=sink,
+        sink=sink,
         mount_root=args.mount_root,
     )
     return workloads.resolve(role.runner)(ctx)

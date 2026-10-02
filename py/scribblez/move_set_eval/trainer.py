@@ -387,8 +387,8 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
         move_encoding_version=cfg["move_encoding_version"],
     )
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
-    deliver_pass(paths, ctx["records_sink"], epoch, state)
-    prune_exports(paths, ctx["records_sink"], epoch)
+    deliver_pass(paths, ctx["sink"], epoch, state)
+    prune_exports(paths, ctx["sink"], epoch)
     recorder.commit_generation(epoch, state.rows_trained, record)
     ctx["stats"].cycle_done(
         {"train_s": train_s, "eval_s": eval_s},
@@ -424,7 +424,7 @@ def run(ctx: WorkerContext) -> int:
     print(f"Tag root: {paths.root}\nDevice: {device}")
 
     # Before the warmup wait, so the Info tab is populated while the store fills.
-    recorder = TrainRecorder(ctx.records_sink)
+    recorder = TrainRecorder(ctx.sink)
     publish_config(recorder, ctx.tag, params)
 
     # A finished run has retired its training pairs, so check the checkpoint
@@ -432,7 +432,7 @@ def run(ctx: WorkerContext) -> int:
     if not epochs_left(params, checkpoint.peek_state(paths, state_cls=MsetTrainState)):
         timed_print("Training complete (the epoch budget was spent in an earlier session).")
         return 0
-    wait_for_store(paths.data_dir / SLOGS_DIR, params, ctx.data_sink)
+    wait_for_store(paths.data_dir / SLOGS_DIR, params, ctx.sink)
     train_ds, holdout_ds = load_datasets(paths, params)
     print(
         f"train: {train_ds.num_positions} positions / {train_ds.num_candidates} candidates; "
@@ -470,7 +470,7 @@ def run(ctx: WorkerContext) -> int:
         "holdout_ds": holdout_ds,
         "loss_cfg": LossConfig.from_args(params),
         "stats": WorkerStats(ctx),
-        "records_sink": ctx.records_sink,
+        "sink": ctx.sink,
     }
 
     state = checkpoint.resume(paths, model, optimizer, device, state_cls=MsetTrainState)
@@ -479,7 +479,7 @@ def run(ctx: WorkerContext) -> int:
         clock = corpus_clock(paths.data_dir / SLOGS_DIR, params)
         while epochs_left(params, state):
             # Absorb before asking whether the corpus is final.
-            absorbed = absorb_new_pairs(paths, params, train_ds, holdout_ds, ctx.data_sink)
+            absorbed = absorb_new_pairs(paths, params, train_ds, holdout_ds, ctx.sink)
             settled = clock.is_final(absorbed)
             train_one_epoch(
                 model, optimizer, recorder, paths, device, params, state, run_ctx, settled
@@ -491,7 +491,7 @@ def run(ctx: WorkerContext) -> int:
             "needs a new tag; params are frozen)."
         )
         if holdout_ds is not train_ds:
-            n = retire_training_pairs(train_ds, ctx.data_sink)
+            n = retire_training_pairs(train_ds, ctx.sink)
             timed_print(f"Retired {n} training pair(s); the held-out pairs remain in the store.")
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")

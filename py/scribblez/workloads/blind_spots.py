@@ -141,10 +141,7 @@ def run_generate(ctx: WorkerContext) -> int:
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     work_dir.mkdir(parents=True, exist_ok=True)
     stats = WorkerStats(ctx)
-    print(
-        f"worker {ctx.worker_id} ({ctx.data_sink.kind}): "
-        f"surveying tag '{ctx.tag}' with {ctx.params}"
-    )
+    print(f"worker {ctx.worker_id} ({ctx.sink.kind}): surveying tag '{ctx.tag}' with {ctx.params}")
 
     cycle = 0
     try:
@@ -158,7 +155,7 @@ def run_generate(ctx: WorkerContext) -> int:
             if code != 0:
                 return code
             t2 = time.monotonic()
-            found, nbytes, secs = deliver_surveyed(ctx.data_sink, work_dir)
+            found, nbytes, secs = deliver_surveyed(ctx.sink, work_dir)
             stats.cycle_done(
                 {"gen_s": t1 - t0, "sim_s": t2 - t1, "upload_s": secs}, units=found, nbytes=nbytes
             )

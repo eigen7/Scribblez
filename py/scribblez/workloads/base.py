@@ -289,8 +289,7 @@ class WorkerContext:
     max_cycles: int  # 0 = run until stopped
     # cloud.sinks.LocalSink over the tag tree: the tag's data/ store, and
     # everything else under the tag root (cloud/sinks.py).
-    data_sink: object
-    records_sink: object
+    sink: object
     # The slot kind, reported in stats and consulted by resolve_input.
     # In-process runners (CLI tools, tests) are local; only a launcher of
     # remote workers overrides it.

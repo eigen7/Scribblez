@@ -2113,7 +2113,6 @@ def test_an_ssh_trainers_container_runs_the_torch_image_with_local_records(
     for w in task.workers:
         manager._run_ssh_container(spec, task, w)
     by_role = {k.rsplit("-", 1)[-1]: v for k, v in envs.items()}
-    # Every sink is local: the data sink, the home's volume, is left unset.
     assert by_role["tr"] == ("repo/worker:latest-torch", True)
     assert by_role["g"] == ("repo/worker", False)
 
