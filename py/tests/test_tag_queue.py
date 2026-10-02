@@ -226,6 +226,25 @@ def test_a_failed_tag_hands_over_at_once_when_a_tag_is_waiting(queued):
     assert _lease(manager).phase == RELEASING
 
 
+def test_requeuing_a_held_failed_tag_clears_its_failure(queued):
+    """Requeue is the operator running the tag again: it reads running once
+    placed, not failed."""
+    q, manager, make = queued
+    make("a")
+    q.enqueue("position_eval", "a", confirm=True)
+    q.tick()
+    for _ in range(tq_mod.FAIL_AFTER):
+        manager._note_crash("position_eval/a/local-0", "exit 1")
+    q.tick()
+    assert _lease(manager).phase == HELD
+    q.requeue("position_eval", "a")
+    assert manager.tasks.load(SPEC, "a").failure is None
+    _drain_then_tick(q)
+    a = manager.tasks.load(SPEC, "a")
+    assert _lease(manager).phase == RUNNING
+    assert manager.tasks.state(SPEC, a, None) == tasks.RUNNING
+
+
 def test_requeue_puts_the_tag_back_at_the_head(queued):
     """Its release done, the requeued tag is back at the head of the queue, and
     the same pass places it again on the machine it just freed."""

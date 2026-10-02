@@ -180,6 +180,7 @@ class TagQueue:
         with self._m.control.transaction():
             for w in task.workers:
                 w.desired_state = "paused"
+            task.failure = None
             self._m.tasks.save(spec, task)
             m.lease.requeue = True
             self._start_release(m, pool, REQUEUED)
