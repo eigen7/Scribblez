@@ -109,7 +109,7 @@ SlogSimConfig screen_config(const Options& opt, const Dictionary& dict) {
     c.selector = opt.recipe == "setup" ? setup_selector(dict, opt.cut, cap)
                                        : all_plays_selector(dict, opt.cut, opt.max_plays);
   }
-  c.keep_reports = true;
+  c.output = SimOutput::kReports;
   c.runner.rollouts = opt.rollouts;
   if (opt.race) {
     // Checkpoints at 10%, 20%, 40% and 70% of the screen. At three paired

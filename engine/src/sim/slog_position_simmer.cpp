@@ -134,10 +134,16 @@ void report_position(const SlogSimConfig& config, const CandidateRollouts& rollo
 
 // Sim the position's candidates and keep what the config asks for.
 void reduce_rollouts(const SlogSimConfig& config, const SimRunner& runner, SimmedPosition* res) {
-  if (config.keep_reports) {
-    report_position(config, sim_candidates(config, runner, *res), res);
-  } else {
-    res->observations = runner.run(res->position, res->candidates.moves, res->base_seed);
+  switch (config.output) {
+    case SimOutput::kStats:
+      res->observations = runner.run(res->position, res->candidates.moves, res->base_seed);
+      break;
+    case SimOutput::kReports:
+      report_position(config, sim_candidates(config, runner, *res), res);
+      break;
+    case SimOutput::kRollouts:
+      res->rollouts = sim_candidates(config, runner, *res);
+      break;
   }
 }
 

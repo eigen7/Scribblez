@@ -114,6 +114,10 @@ struct Rollout {
   // Move (PASS), which places nothing.
   Move opp_reply{};
   Move self_next{};
+  // The rack the opponent replied from: their known leave plus the sampled
+  // refill. Under common random numbers, rollout i deals every candidate the
+  // same one.
+  Rack opp_rack{};
   double p_win = 0;
   double p_draw = 0;
   double p_loss = 0;
