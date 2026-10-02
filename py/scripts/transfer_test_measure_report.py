@@ -22,7 +22,13 @@ def budgets_for(rollouts: int) -> list[int]:
 
 
 def report_budgets(
-    label: str, ns: list[tm.NoiseSignal], rollouts: int, target: float, quantile: float, rate: float
+    label: str,
+    ns: list[tm.NoiseSignal],
+    rollouts: int,
+    candidates: int,
+    target: float,
+    quantile: float,
+    rate: float,
 ):
     """Print the noise/signal table, and the rollouts a label needs with what
     a position labeled at that count costs."""
@@ -47,9 +53,9 @@ def report_budgets(
         f"  rollouts for noise/signal <= {target} at the {quantile:.0%} quantile: "
         f"{label_rollouts:,.0f} (p75 {np.quantile(needed, 0.75):,.0f})"
     )
-    seconds = 16 * label_rollouts / rate
+    seconds = candidates * label_rollouts / rate
     print(
-        f"  labeling a 16-candidate position at that count: {seconds:,.0f} s, "
+        f"  labeling a {candidates}-candidate position at that count: {seconds:,.0f} s, "
         f"{3600 / seconds:,.1f} positions/hour"
     )
 
@@ -99,6 +105,7 @@ def main():
     if not positions:
         raise SystemExit(f"no measured positions in {store}")
     rollouts = files[0].header["rollouts"]
+    candidates = sum(files[0].header["recipe"][s] for s in ("top", "middle", "exchanges", "low"))
     print(f"{len(files)} files, {len(positions)} positions, {rollouts} rollouts per candidate")
 
     rate = tm.rollouts_per_second(files)
@@ -113,11 +120,23 @@ def main():
     for label, values in (("Expected score", "expected"), ("Score difference", "delta")):
         every = [tm.noise_signal(getattr(p, values)) for p in positions]
         report_budgets(
-            f"{label}, every candidate", every, rollouts, args.target, args.quantile, rate
+            f"{label}, every candidate",
+            every,
+            rollouts,
+            candidates,
+            args.target,
+            args.quantile,
+            rate,
         )
         top = [tm.noise_signal(tm.rows_in(p, getattr(p, values), plausible)) for p in positions]
         report_budgets(
-            f"{label}, top and middle only", top, rollouts, args.target, args.quantile, rate
+            f"{label}, top and middle only",
+            top,
+            rollouts,
+            candidates,
+            args.target,
+            args.quantile,
+            rate,
         )
     report_saturation(files)
     report_couplings(files)

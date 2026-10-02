@@ -2,9 +2,12 @@
 (scribblez/transfer_test_measure.py)."""
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from scribblez import params as params_mod
 from scribblez import transfer_test_measure as tm
 from scribblez import workloads
 from scribblez.workloads import transfer_test
@@ -26,6 +29,60 @@ def test_registered_and_queueable():
 def test_target_files_covers_the_target_positions(positions, per_batch, files):
     params = transfer_test.TransferTestParams(target_positions=positions, games_per_batch=per_batch)
     assert transfer_test.target_files(params) == files
+
+
+def test_generator_command(monkeypatch):
+    commands = []
+
+    def fake_run(cmd):
+        commands.append(cmd)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(transfer_test.subprocess, "run", fake_run)
+    # Distinct values per field, so a flag wired to the wrong param fails.
+    params = transfer_test.TransferTestParams(
+        rollouts=1000, horizon=4, saturation_probes=64, option_k=12
+    )
+    slogs = [Path("/data/a.slog"), Path("/data/b.slog")]
+    assert transfer_test.run_generator(slogs, params, threads=8, model="/m/leaf.onnx") == 0
+    assert len(commands) == 2
+    cmd = commands[0]
+    assert cmd[0] == transfer_test.TRANSFER_TEST_GENERATOR
+    flags = dict(arg.split("=", 1) for arg in cmd[1:])
+    assert flags == {
+        "--mode": "measure",
+        "--slog-file": "/data/a.slog",
+        "--leaf-model": "/m/leaf.onnx",
+        "--horizon": "4",
+        "--rollouts": "1000",
+        "--saturation-probes": "64",
+        "--option-k": "12",
+        "--seed": flags["--seed"],
+        "--threads": "8",
+    }
+    # Each file is measured under a seed of its own.
+    assert flags["--seed"] != dict(arg.split("=", 1) for arg in commands[1][1:])["--seed"]
+
+
+def test_the_scheduler_finishes_the_generators_at_target_positions(tmp_path):
+    """An ssh generator delivers into its own container and cannot count the
+    store; the controller, which holds it whole, stops them all."""
+    store = tmp_path / transfer_test.STORE_DIR
+    store.mkdir()
+    for stem in ("a", "b"):
+        (store / f"{stem}{transfer_test.JSON_EXT}").touch()
+    spec = transfer_test.SPEC
+
+    def finished_after_tick(target_positions: int) -> list[str]:
+        finished = []
+        params = {"target_positions": target_positions, "games_per_batch": 20}
+        hooks = SimpleNamespace(paths=SimpleNamespace(data_dir=tmp_path), finish=finished.append)
+        workloads.resolve(spec.scheduler)(spec, SimpleNamespace(params=params), hooks)
+        return finished
+
+    assert finished_after_tick(41) == []  # 3 files
+    assert finished_after_tick(40) == ["generate"]  # 2 files
+    assert finished_after_tick(params_mod.UNBOUNDED) == []
 
 
 def _synthetic(rng, means, luck_sd, noise_sd, rollouts):
@@ -51,13 +108,18 @@ def test_noise_to_signal_scales_with_the_budget():
     ns = tm.NoiseSignal(noise_per_rollout=0.01, signal=0.001)
     assert tm.noise_to_signal(ns, 100) == pytest.approx(0.1)
     assert tm.noise_to_signal(tm.NoiseSignal(0.01, -0.001), 100) == float("inf")
-    ratios = {
-        100: np.array([0.3, 0.2]),
-        1000: np.array([0.05, 0.08]),
-        10000: np.array([0.01, 0.01]),
-    }
-    assert tm.required_rollouts(ratios, target=0.1, quantile=0.5) == 1000
-    assert tm.required_rollouts(ratios, target=0.001, quantile=0.5) is None
+
+
+def test_noise_signal_reads_no_signal_where_there_is_none():
+    """Unbiased at a small budget: the centered labels' spread carries
+    K/(K-1) times the per-candidate noise, all of which is removed."""
+    rng = np.random.default_rng(1)
+    signals = [
+        tm.noise_signal(_synthetic(rng, [0.5] * 4, luck_sd=0.3, noise_sd=0.1, rollouts=100)).signal
+        for _ in range(4000)
+    ]
+    # Removing only var_i(d[c]) / n, without the K/(K-1), would leave a 2.5e-5 bias.
+    assert abs(np.mean(signals)) < 5e-6
 
 
 def test_read_file_round_trips_the_sidecars(tmp_path):
@@ -76,7 +138,7 @@ def test_read_file_round_trips_the_sidecars(tmp_path):
                 "candidates": [{"stratum": "top"}, {"stratum": "exchange"}],
                 "couplings": [{"a": 0, "b": 1, "kind": "play_exchange"}],
                 "offered_couplings": {"play_exchange": 2},
-                "saturation": {"0": [[1, 10], [2, 14]], "1": [[1, 9], [2, 9]]},
+                "saturation": [[[1, 10], [2, 14]], [[1, 9], [2, 9]]],
             }
         ],
     }
@@ -101,7 +163,7 @@ def test_rows_in_selects_candidates_by_stratum():
         delta=np.zeros((3, 2)),
         couplings=[],
         offered={},
-        saturation={},
+        saturation=[],
     )
     values = np.arange(6.0).reshape(3, 2)
     assert tm.rows_in(position, values, {"top", "middle"}).tolist() == [[0, 1], [4, 5]]

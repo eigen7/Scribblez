@@ -95,11 +95,13 @@ SlogSimConfig sim_config(const Options& opt, nn::PositionEvalService* leaf) {
   c.open_leaves = true;
   c.selector = transfer_selector(kRecipe);
   c.runner.rollouts = opt.rollouts;
-  c.runner.threads = 1;
+  // A file holds fewer positions than a machine has cores, and their costs
+  // vary, so the threads go to one position's rollouts, not across positions.
+  c.runner.threads = opt.threads;
   c.runner.horizon_plies = opt.horizon;
   c.runner.leaf_service = leaf;
   c.seed = opt.seed;
-  c.threads = opt.threads;
+  c.threads = 1;
   c.output = SimOutput::kRollouts;
   return c;
 }
@@ -209,13 +211,22 @@ json::object offered_json(const SimmedPosition& r, const Dictionary& dict) {
   return out;
 }
 
-// One position's measurement record. Runs the saturation curves, the costly
-// part, so callers spread positions over threads.
+// Every candidate's saturation curve, parallel to the candidates, each on a
+// thread of its own: the costly part of a position's record.
+json::array saturation_curves(const SimmedPosition& r, const Dictionary& dict, const Options& opt) {
+  std::vector<json::array> curves(r.candidates.moves.size());
+  std::vector<std::thread> workers;
+  for (size_t c = 0; c < curves.size(); ++c)
+    workers.emplace_back([&, c] { curves[c] = saturation_curve(r, dict, int(c), opt); });
+  for (std::thread& t : workers) t.join();
+  json::array out;
+  for (json::array& curve : curves) out.push_back(std::move(curve));
+  return out;
+}
+
+// One position's measurement record.
 json::object position_json(const SimmedPosition& r, const Dictionary& dict, const Options& opt,
                            uint64_t float_offset) {
-  json::object saturation;
-  for (size_t c = 0; c < r.candidates.moves.size(); ++c)
-    saturation[std::to_string(c)] = saturation_curve(r, dict, int(c), opt);
   return {{"game", r.pos.game_idx},
           {"turn", r.pos.turn_idx},
           {"bag_size", r.bag_size},
@@ -226,7 +237,7 @@ json::object position_json(const SimmedPosition& r, const Dictionary& dict, cons
           {"candidates", candidates_json(r)},
           {"couplings", couplings_json(r)},
           {"offered_couplings", offered_json(r, dict)},
-          {"saturation", saturation}};
+          {"saturation", saturation_curves(r, dict, opt)}};
 }
 
 void append_rollouts(const SimmedPosition& r, std::vector<float>* floats) {
@@ -236,22 +247,6 @@ void append_rollouts(const SimmedPosition& r, std::vector<float>* floats) {
       floats->push_back(float(o.delta));
     }
   }
-}
-
-// Measure every simmed position of `results` on its own thread, in order.
-std::vector<json::object> measure_positions(const std::vector<SimmedPosition>& results,
-                                            const Dictionary& dict, const Options& opt,
-                                            uint64_t first_offset) {
-  std::vector<json::object> out(results.size());
-  std::vector<std::thread> workers;
-  uint64_t offset = first_offset;
-  for (size_t i = 0; i < results.size(); ++i) {
-    if (results[i].candidates.moves.empty()) continue;
-    workers.emplace_back([&, i, offset] { out[i] = position_json(results[i], dict, opt, offset); });
-    offset += 2ull * results[i].candidates.moves.size() * opt.rollouts;
-  }
-  for (std::thread& t : workers) t.join();
-  return out;
 }
 
 void write_atomically(const fs::path& path, const char* data, size_t size) {
@@ -302,8 +297,8 @@ double seconds_since(std::chrono::steady_clock::time_point t0) {
   return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
 
-// Sim and measure one .slog's positions, `opt.threads` at a time so only a
-// batch's unreduced rollouts are ever held, and write its two sidecars.
+// Sim and measure one .slog's positions one at a time, so only one position's
+// unreduced rollouts are ever held, and write its two sidecars.
 void process_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt,
                   nn::PositionEvalService* leaf, const std::string& leaf_hash,
                   util::ProgressMeter* meter) {
@@ -312,21 +307,16 @@ void process_file(const binlog::PendingSlog& slog, const Dictionary& dict, const
   json::array positions;
   std::vector<float> floats;
   double sim_s = 0, measure_s = 0;
-  for (size_t begin = 0; begin < work.size(); begin += size_t(opt.threads)) {
-    const std::vector<binlog::GamePositionIndex> batch(
-      work.begin() + begin, work.begin() + std::min(work.size(), begin + size_t(opt.threads)));
+  for (const binlog::GamePositionIndex& at : work) {
     const auto t0 = std::chrono::steady_clock::now();
-    const std::vector<SimmedPosition> results =
-      sim_slog_positions(slog.bytes, dict, config, batch, meter);
+    const SimmedPosition r =
+      std::move(sim_slog_positions(slog.bytes, dict, config, {at}, meter)[0]);
     sim_s += seconds_since(t0);
+    if (r.candidates.moves.empty()) continue;
     const auto t1 = std::chrono::steady_clock::now();
-    std::vector<json::object> measured = measure_positions(results, dict, opt, floats.size());
+    positions.push_back(position_json(r, dict, opt, floats.size()));
     measure_s += seconds_since(t1);
-    for (size_t i = 0; i < results.size(); ++i) {
-      if (results[i].candidates.moves.empty()) continue;
-      append_rollouts(results[i], &floats);
-      positions.push_back(std::move(measured[i]));
-    }
+    append_rollouts(r, &floats);
   }
   json::object doc = header_json(opt, leaf_hash);
   doc["sim_seconds"] = sim_s;

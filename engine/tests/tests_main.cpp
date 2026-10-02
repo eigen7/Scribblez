@@ -3797,17 +3797,23 @@ TEST(Game, PlayFromReturnedToBag) {
   ASSERT_EQ(on_board + g.rack(0).size() + g.rack(1).size() + g.bag_size(), in_circulation);
 }
 
-TEST(SimRunner, Basic) {
-  namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_runner";
-  fs::create_directories(tmp);
+// HastyEquity over a synthetic leave table and an empty pre-endgame table,
+// both written under `tmp`.
+void init_synthetic_equity(const std::filesystem::path& tmp) {
+  std::filesystem::create_directories(tmp);
   KlvFixture fix = write_synthetic_klv(tmp);
-  fs::path peg_path = tmp / "peg.json";
+  const std::filesystem::path peg_path = tmp / "peg.json";
   {
     std::ofstream pf(peg_path);
     pf << "[]";
   }
   HastyEquity::init(fix.path.string(), peg_path.string());
+}
+
+TEST(SimRunner, Basic) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_runner";
+  init_synthetic_equity(tmp);
 
   const Dictionary d = medium_dict();
   SimPosition pos;
@@ -3867,6 +3873,36 @@ TEST(SimRunner, Basic) {
     const std::vector<RolloutStats> alone = runner.run(pos, {candidates[1]}, base_seed);
     ASSERT_EQ(alone.size(), 1);
     ASSERT_EQ(std::memcmp(&alone[0], &obs[1], sizeof(RolloutStats)), 0);
+  }
+
+  fs::remove_all(tmp);
+}
+
+// Each rollout records the rack the opponent replied from: their known leave
+// plus the refill, the same for every candidate under common random numbers.
+TEST(SimRunner, RolloutKeepsTheOpponentsRack) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_runner_opp_rack";
+  init_synthetic_equity(tmp);
+
+  const Dictionary d = medium_dict();
+  SimPosition pos;
+  pos.rack = Rack::from_string("CATSEIQ");
+  pos.opp_leave = Rack::from_string("ZX");
+  const std::vector<Move> plays = MoveGenerator(pos.board, d).generate(pos.rack);
+  ASSERT_GE(plays.size(), 2);
+  const std::vector<Move> candidates = {plays.front(), plays.back()};
+
+  SimRunner::Params params;
+  params.rollouts = 8;
+  const std::vector<Rollout> rollouts = SimRunner(d, params).run_rollouts(pos, candidates, 7);
+  ASSERT_EQ(int(rollouts.size()), 2 * params.rollouts);
+  for (int i = 0; i < params.rollouts; ++i) {
+    const Rack& opp = rollouts[i].opp_rack;
+    EXPECT_EQ(opp.size(), RACK_SIZE);
+    EXPECT_TRUE(rack_contains(opp, Tile::from_char('Z')));
+    EXPECT_TRUE(rack_contains(opp, Tile::from_char('X')));
+    EXPECT_EQ(opp.to_string(), rollouts[params.rollouts + i].opp_rack.to_string());
   }
 
   fs::remove_all(tmp);

@@ -25,6 +25,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from scribblez import params as params_mod
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
 from scribblez.selfplay import hasty_player_spec, run_games
@@ -172,6 +173,17 @@ def run_generate(ctx: WorkerContext) -> int:
     )
 
 
+def tick(spec: WorkloadSpec, task, hooks):
+    """The scheduler entry: finish the generators once the store holds
+    `target_positions`. A generator on this machine stops itself there, but an
+    ssh one delivers into its own container and cannot count the store."""
+    params = params_mod.validate(spec.params_cls, task.params)
+    if params_mod.reached(
+        pair_store.count_pairs(hooks.paths.data_dir / STORE_DIR, JSON_EXT), target_files(params)
+    ):
+        hooks.finish("generate")
+
+
 def gpu_need(params, role: str) -> float | None:
     """The WorkloadSpec.gpu_need hook: GiB one slot of `role` needs."""
     return GENERATOR_GPU_GB
@@ -209,6 +221,7 @@ SPEC = WorkloadSpec(
     finalize="scribblez.workloads.move_set_eval:finalize",
     layout="scribblez.workloads.transfer_test:layout",
     gpu_need="scribblez.workloads.transfer_test:gpu_need",
+    scheduler="scribblez.workloads.transfer_test:tick",
     progress="scribblez.workloads.transfer_test:progress",
     pace_role="generate",
     collected_dirs=(STORE_DIR,),

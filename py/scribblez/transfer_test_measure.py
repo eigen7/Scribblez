@@ -13,8 +13,9 @@ For one position, with d[c, i] the centered expected score of candidate c in
 rollout i, the label at budget n is the mean of d[c, :n]. Its noise variance is
 var_i(d[c]) / n, averaged over the candidates. Its signal variance is the
 spread of the labels across the candidates at the full budget, less the noise
-still in them. A budget resolves a position when noise / signal falls below a
-target ratio.
+still in them: centered over K candidates, the labels' spread carries K/(K-1)
+times the per-candidate noise var_i(d[c]) / n. A budget resolves a position
+when noise / signal falls below a target ratio.
 
 Exchanges and low-ranked plays sit far below the best plays, so a spread over
 every candidate is dominated by them. The comparisons that are hard to
@@ -41,7 +42,7 @@ class MeasuredPosition:
     delta: np.ndarray  # (K, R) final score difference
     couplings: list[dict]  # the coupled pairs among the candidates
     offered: dict[str, int]  # the coupled pairs the position offered, by kind
-    saturation: dict[str, list[list[int]]]  # candidate -> [[probes, options], ...]
+    saturation: list[list[list[int]]]  # per candidate: [[probes, options], ...]
 
 
 @dataclass(frozen=True)
@@ -99,26 +100,16 @@ class NoiseSignal:
 def noise_signal(values: np.ndarray) -> NoiseSignal:
     """The noise and signal variances of one position's centered labels."""
     d = centered(values)
-    r = d.shape[1]
+    k, r = d.shape
     per_rollout = float(d.var(axis=1, ddof=1).mean())
     labels = d.mean(axis=1)
-    signal = float(labels.var(ddof=1)) - per_rollout / r
+    signal = float(labels.var(ddof=1)) - per_rollout / r * k / (k - 1)
     return NoiseSignal(per_rollout, signal)
 
 
 def noise_to_signal(ns: NoiseSignal, n: int) -> float:
     """noise / signal at budget n; inf when the position has no resolvable signal."""
     return ns.noise_per_rollout / n / ns.signal if ns.signal > 0 else float("inf")
-
-
-def required_rollouts(
-    ratios_by_n: dict[int, np.ndarray], target: float, quantile: float
-) -> int | None:
-    """The smallest budget whose `quantile` noise/signal ratio is at most `target`."""
-    for n in sorted(ratios_by_n):
-        if np.quantile(ratios_by_n[n], quantile) <= target:
-            return n
-    return None
 
 
 def independent_to_paired_variance(values: np.ndarray) -> float:
@@ -139,8 +130,8 @@ def saturation_by_stratum(files: list[MeasuredFile]) -> dict[str, dict[int, list
     out: dict[str, dict[int, list[int]]] = {}
     for f in files:
         for p in f.positions:
-            for c, curve in p.saturation.items():
-                by_n = out.setdefault(p.strata[int(c)], {})
+            for stratum, curve in zip(p.strata, p.saturation, strict=True):
+                by_n = out.setdefault(stratum, {})
                 for probes, options in curve:
                     by_n.setdefault(probes, []).append(options)
     return out
