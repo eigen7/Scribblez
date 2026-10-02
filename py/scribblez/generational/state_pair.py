@@ -18,7 +18,7 @@ overwrite fresher state.
 
 `deliver` sends a trainer's pair through its sink. `install` applies the rule.
 `take_seed` installs the pair the controller pushes into a new trainer
-container (SEED_DIR).
+container (SEED_DIR), and `install_seed` is every trainer's call to it.
 """
 
 import json
@@ -82,6 +82,15 @@ def install(pair_dir: Path, paths: TagPaths) -> bool:
         os.replace(pair_dir / CURSOR_NAME, paths.train_state_path)
     shutil.rmtree(pair_dir, ignore_errors=True)
     return newer
+
+
+def install_seed(paths: TagPaths):
+    """A trainer's first step: install the checkpoint and cursor the controller
+    pushed into a new container (SCZ_STATE_SEED) when they beat the ones on
+    this machine (the cursor rule). A fresh machine takes them, and a machine
+    holding fresher state keeps its own."""
+    if take_seed(paths, expected=os.environ.get("SCZ_STATE_SEED") == "1"):
+        timed_print("installed the controller's checkpoint and cursor")
 
 
 def take_seed(paths: TagPaths, expected: bool) -> bool:

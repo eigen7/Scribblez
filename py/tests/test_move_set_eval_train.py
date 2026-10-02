@@ -1397,3 +1397,33 @@ def test_a_late_swept_pair_cannot_reshuffle_the_sides_or_crash_the_run(tmp_path)
     assert set(holdout_ds.files) == held_before  # nothing left the holdout
     assert set(train_ds.files) == trained_before  # and nothing joined training
     assert not set(train_ds.files) & set(holdout_ds.files)  # no pair on both sides
+
+
+def test_a_new_trainer_container_takes_the_controllers_seed(tmp_path, monkeypatch):
+    """A trainer that moved to a fresh machine resumes from the checkpoint and
+    cursor the controller pushed in (SCZ_STATE_SEED), not from epoch 0: here
+    the seed says the budget is spent, so the run ends without touching the
+    store."""
+    from cloud.sinks import make_sink
+    from scribblez import workloads
+    from scribblez.generational import state_pair
+    from scribblez.move_set_eval import trainer
+    from scribblez.workloads.base import WorkerContext
+
+    spec = workloads.get("move_set_eval")
+    sink = make_sink(spec, "t", tmp_path)
+    seed = spec.paths("t", tmp_path).root / state_pair.SEED_DIR
+    seed.mkdir(parents=True)
+    torch.save({"settled_epochs": 2, "generation_index": 5, "rows_trained": 9}, seed / "model.pt")
+    (seed / state_pair.CURSOR_NAME).write_text('{"generation_index": 5, "rows_trained": 9}')
+    monkeypatch.setenv("SCZ_STATE_SEED", "1")
+    monkeypatch.setattr(trainer, "wait_for_store", _fail_store_wait)
+    ctx = WorkerContext(
+        spec=spec, role=spec.role("train"), tag="t", params=_params(train_epochs=2),
+        worker_id="tr", threads=1, max_cycles=0, sink=sink, mount_root=tmp_path, kind="ssh",
+    )  # fmt: skip
+    assert trainer.run(ctx) == 0
+
+
+def _fail_store_wait(*args, **kwargs):
+    raise AssertionError("the trainer waited for its store instead of taking its seed")

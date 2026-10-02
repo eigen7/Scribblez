@@ -114,15 +114,6 @@ def wait_for_generation(paths: TagPaths, index: int, sink, home=None):
         timed_print(f"generation {index} is complete")
 
 
-def install_seed(paths: TagPaths):
-    """Install the checkpoint and cursor the controller pushed into a new
-    container (SCZ_STATE_SEED) when they beat the ones on this machine
-    (state_pair's cursor rule): a fresh machine takes them, and a machine
-    holding fresher state keeps its own."""
-    if state_pair.take_seed(paths, expected=os.environ.get("SCZ_STATE_SEED") == "1"):
-        timed_print("installed the controller's checkpoint and cursor")
-
-
 def ensure_window(paths: TagPaths, sink, cursor: int, window: int):
     """Fetch any missing generations of the window ending before `cursor`, so
     a restored trainer's first epoch matches a local resume. A generation that
@@ -552,7 +543,7 @@ def run(ctx: WorkerContext) -> int:
         "deliverer": OutputDeliverer(),
     }
 
-    install_seed(paths)
+    state_pair.install_seed(paths)
     state = checkpoint.resume(paths, model, optimizer, device)
     ensure_window(paths, ctx.sink, state.generation_index, params.window)
     _publish_train_state(paths, state)

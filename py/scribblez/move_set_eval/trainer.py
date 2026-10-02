@@ -429,6 +429,7 @@ def run(ctx: WorkerContext) -> int:
 
     # A finished run has retired its training pairs, so check the checkpoint
     # first rather than wait on a store that will never refill.
+    state_pair.install_seed(paths)
     if not epochs_left(params, checkpoint.peek_state(paths, state_cls=MsetTrainState)):
         timed_print("Training complete (the epoch budget was spent in an earlier session).")
         return 0

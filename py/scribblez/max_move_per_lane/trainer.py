@@ -30,7 +30,7 @@ from scribblez import lane_analysis
 from scribblez import params as params_mod
 from scribblez.dataset import SlogDataset
 from scribblez.ffi import get_max_move_per_lane_input_shapes
-from scribblez.generational import checkpoint, data_home, lifecycle
+from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
     CpuController,
@@ -43,7 +43,7 @@ from scribblez.generational.records import TrainRecorder, read_controls
 from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.max_move_per_lane.model import MaxMovePerLaneModel
 from scribblez.max_move_per_lane.train_loop import LossConfig, run_epoch
-from scribblez.position_eval.trainer import ensure_window, install_seed, wait_for_generation
+from scribblez.position_eval.trainer import ensure_window, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
@@ -272,7 +272,7 @@ def run(ctx: WorkerContext) -> int:
         "stats": WorkerStats(ctx),
     }
 
-    install_seed(paths)
+    state_pair.install_seed(paths)
     state = checkpoint.resume(paths, model, optimizer, device)
     ensure_window(paths, ctx.sink, state.generation_index, params.window)
     lifecycle.write_train_state(paths, asdict(state))
