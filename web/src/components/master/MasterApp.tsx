@@ -470,7 +470,7 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
                 >
                   <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{r.tag}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>
-                    {r.progress.map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}
+                    {r.progress.map(([k, v]) => `${k}: ${typeof v === 'number' ? fmtCompact(v) : v}`).join(' · ') || '—'}
                   </td>
                   <td style={{ padding: '6px 14px 6px 0', whiteSpace: 'nowrap' }}>
                     {r.pace ? `${fmtCompact(r.pace.per_hour)} ${r.pace.unit}/hr` : '—'}

@@ -268,9 +268,8 @@ def progress(spec, paths: TagPaths, params) -> list[tuple[str, object]]:
         if lifecycle.is_complete(paths.generation_dir(i))
     ]
     if complete:
-        out.append(("generations", f"{len(complete)} complete (latest gen {max(complete)})"))
+        out.append(("generation", max(complete)))
     state = lifecycle.read_train_state(paths)
     if state:
-        out.append(("trainer", f"gen {state.get('generation_index', 0)}"))
         out.append(("rows", state.get("rows_trained", 0)))
     return out
