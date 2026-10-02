@@ -2,8 +2,6 @@
 fetch_file / deliver_output, and position_eval/trainer.py's use of them): a
 trainer touches nothing it does not already have on its machine."""
 
-import json
-
 import pytest
 from cloud import sinks
 from cloud.sinks import LocalSink
@@ -34,14 +32,13 @@ def test_the_local_sink_finds_artifacts_where_they_are(paths):
 
 
 class _FakeSink:
-    """A sink whose bucket holds complete generations and, optionally, a
-    checkpoint; records what was asked of it."""
+    """A sink holding the complete generations `generations`; records which
+    it was asked for."""
 
     kind = "ssh"
 
-    def __init__(self, generations=(), checkpoint=False):
+    def __init__(self, generations=()):
         self.generations = set(generations)
-        self.checkpoint = checkpoint
         self.fetched = []
 
     def fetch_data_dir(self, data_rel, dest):
@@ -52,19 +49,6 @@ class _FakeSink:
         dest.mkdir(parents=True, exist_ok=True)
         lifecycle.write_manifest(dest, {"index": index, "status": lifecycle.COMPLETE})
         return True
-
-    def fetch_file(self, rel, dest):
-        """The bucket's state in the pre-pair layout, if it has one."""
-        self.fetched.append(rel)
-        if not self.checkpoint or rel not in ("checkpoints/model.pt", "train_state.json"):
-            return False
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        state = {"generation_index": 7, "rows_trained": 700}
-        dest.write_text(json.dumps(state) if rel.endswith(".json") else "pt")
-        return True
-
-    def list_dirs(self, rel):
-        return []  # no state pairs
 
 
 def test_wait_pulls_the_generation_through_the_sink(paths, monkeypatch):

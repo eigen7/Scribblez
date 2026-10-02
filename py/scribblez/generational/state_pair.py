@@ -12,9 +12,8 @@ The **cursor rule** decides between copies: a pair replaces the installed
 state only if its `rows_trained` is at least the installed one's. Rows trained
 only ever grow, so this is a logical clock. No machine's wall clock is
 involved, and the controller never has to load a torch file to compare. A
-restore takes the copy with the most rows, wherever it is. A stale copy, such
-as a volume left over from an earlier assignment, therefore can never
-overwrite fresher state.
+stale copy, such as a volume left over from an earlier assignment, therefore
+can never overwrite fresher state.
 
 `deliver` sends a trainer's pair through its sink. `install` applies the rule.
 `take_seed` installs the pair the controller pushes into a new trainer

@@ -547,16 +547,10 @@ class StoringSink:
         return None
 
 
-class BucketSink(RecordingSink):
-    """A bucket-style sink: delivery takes the file off the machine, and the
-    store's size is read back by listing what was delivered."""
-
-    kind = "ssh"
-
-
-def test_a_bucket_generator_reads_the_target_through_its_sink(tmp_path):
-    """A worker uploading to a bucket has no store on disk to count; the
-    target is read through the sink, or a rented generator never stops."""
+def test_a_generator_reads_the_target_through_its_sink(tmp_path):
+    """The target is the store's size as the sink counts it
+    (count_data_files), not what the worker's work dir holds: here every
+    delivery leaves the work dir empty."""
     cycles = []
 
     def fake_cycle(work_dir, params, threads):
@@ -566,7 +560,7 @@ def test_a_bucket_generator_reads_the_target_through_its_sink(tmp_path):
         (work_dir / f"{stem}.mset").write_bytes(b"m")
         return 0, {"gen_s": 0.1, "mset_s": 0.2}
 
-    ctx = StubCtx(tmp_path, BucketSink(), max_cycles=0)
+    ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=0)
     ctx.kind = "ssh"
     assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target_pairs=2) == 0
     assert len(cycles) == 2
