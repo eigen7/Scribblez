@@ -143,8 +143,8 @@ refuses to deploy to an image of an older one, naming the rebuild.
    lexica and Macondo tables from their public upstreams; a train role's eval
    datasets came in with its payload;
 4. writes a provenance record through its sink;
-5. loops the runner's cycle, delivering whole output files through its data
-   sink (`py/cloud/sinks.py`) into the container's own tree, from where the
+5. loops the runner's cycle, delivering whole output files through its sink
+   (`py/cloud/sinks.py`) into the container's own tree, from where the
    dashboard collects them.
 
 SIGTERM flushes completed output and exits non-zero, so a stop is never

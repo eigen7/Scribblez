@@ -12,8 +12,8 @@ from scribblez.workloads.base import WorkerContext
 
 class RecordingSink:
     """A sink whose `deliver` records order and, on request, blocks a given
-    call number until released -- standing in for LocalSink/R2Sink without
-    touching a filesystem tree or the network."""
+    call number until released -- standing in for LocalSink without
+    touching a filesystem tree."""
 
     kind = "local"
 

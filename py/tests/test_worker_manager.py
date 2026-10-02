@@ -1,7 +1,7 @@
 """Unit tests for the dashboard's WorkerManager: the slot lifecycle and its reconcile
 pass, registered and rented machines, bundle deployment and container replacement,
-output collection and backlog accounting, and the bucket legs of a task whose
-trainer runs off the controller.
+output collection and backlog accounting, and a task whose trainer runs off
+the controller.
 
 Every path that would launch compute or touch cloud credentials is patched to
 fail, so anything that launches where it should not breaks loudly.
@@ -1087,7 +1087,7 @@ def test_bundle_drift_compares_tree_against_pinned_bundle(manager, spec, task, m
 
 
 # Enough of a credentials object for the container-creation path.
-_CREDS = SimpleNamespace(registry=RegistryConfig(worker_image="repo/worker"), r2=None)
+_CREDS = SimpleNamespace(registry=RegistryConfig(worker_image="repo/worker"))
 
 
 class _RecordingSshMachine(_FakeSshMachine):
@@ -1989,10 +1989,7 @@ def test_a_restart_does_not_inherit_a_zero_it_cannot_vouch_for(manager, spec, ta
     assert reloaded.worker(drained.worker_id).undelivered == 0
 
 
-# --- the bucket legs for a trainer running elsewhere --------------------------
-
-_R2 = SimpleNamespace(bucket="b")
-_BUCKET_CREDS = SimpleNamespace(registry=RegistryConfig(worker_image="repo/worker"), r2=_R2)
+# --- a trainer running elsewhere ---------------------------------------------
 
 
 def _train_task(tag="t", kinds=("ssh",)):
@@ -2016,8 +2013,7 @@ def _train_task(tag="t", kinds=("ssh",)):
 
 def _all_ssh_task(tag="t"):
     """A position_eval task with an ssh generator and an ssh trainer and no
-    cloud slot: the shape a rented machine hosts (docs/plans/cloud_machines.md).
-    The bucket legs must not read it as having nothing to do."""
+    cloud slot: the shape a rented machine hosts (docs/plans/cloud_machines.md)."""
     task = tasks.TaskRecord(workload="position_eval", tag=tag, params={}, created_at=0.0)
     for wid, role in (("g", "generate"), ("tr", "train")):
         task.workers.append(
@@ -2108,7 +2104,7 @@ def test_an_ssh_trainers_container_runs_the_torch_image_with_local_records(
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
-    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     for w in task.workers:
         manager._run_ssh_container(spec, task, w)
@@ -2189,7 +2185,7 @@ def test_a_missing_input_is_the_slots_reason_not_a_reconcile_exception(
     machine that cannot serve the role says so, instead of an assertion in
     the reconcile log and a slot reading `starting` forever."""
     w, src = _slot_with_inputs(manager, spec, task, monkeypatch, tmp_path)
-    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
     src.unlink()
 
     with pytest.raises(workers_mod.SshMachineError, match="inputs/teacher.onnx is missing"):
@@ -2510,7 +2506,7 @@ def test_a_home_machine_container_mounts_the_tag_volume(manager, monkeypatch):
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
-    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
     monkeypatch.setattr(
         WorkerManager,
         "_machine_record",
@@ -2712,7 +2708,7 @@ def test_a_new_trainer_container_is_seeded_with_the_controllers_state(manager, m
 
     monkeypatch.setattr(workers_mod, "SshMachine", _Recording)
     monkeypatch.setattr(WorkerManager, "_run_ssh_container", _REAL_RUN_SSH_CONTAINER)
-    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _BUCKET_CREDS)
+    monkeypatch.setattr(WorkerManager, "_creds", lambda self: _CREDS)
     monkeypatch.setattr(workers_mod, "bundle_worker_env", lambda *a, **k: {})
     monkeypatch.setattr(
         workers_mod, "push_file", lambda m, c, **kw: pushed.append((c, kw["rel_dest"]))
