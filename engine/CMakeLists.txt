@@ -260,8 +260,7 @@ target_link_libraries(monte_carlo_sim_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-# Sim-observation (.sobs) sidecars for .slog data
-# (docs/plans/sim_residual_feedback.md).
+# SupremeBot M1a's transfer-test data (docs/plans/supreme_bot_m1a.md).
 add_executable(transfer_test_generator apps/transfer_test_generator.cpp)
 target_link_libraries(transfer_test_generator PRIVATE
   scribblez_core
@@ -272,6 +271,8 @@ target_link_libraries(transfer_test_generator PRIVATE
   Boost::system
   Threads::Threads)
 
+# Sim-observation (.sobs) sidecars for .slog data
+# (docs/plans/sim_residual_feedback.md).
 add_executable(sim_obs_tool apps/sim_obs_tool.cpp)
 target_link_libraries(sim_obs_tool PRIVATE
   scribblez_core
@@ -383,12 +384,12 @@ if(SCRIBBLEZ_BUILD_TESTS)
     scribblez_core Boost::json GTest::gtest_main)
   gtest_discover_tests(test_rack_inference)
 
-  # Runs off a synthetic leave table, so it needs no lexicon or Macondo data.
   add_executable(test_transfer_candidates tests/test_transfer_candidates.cpp)
   target_link_libraries(test_transfer_candidates PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_transfer_candidates)
 
+  # Runs off a synthetic leave table, so it needs no lexicon or Macondo data.
   add_executable(test_sim_agent tests/test_sim_agent.cpp)
   target_link_libraries(test_sim_agent PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
