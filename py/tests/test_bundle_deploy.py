@@ -175,3 +175,33 @@ def test_pruning_keeps_pinned_and_recent_bundles_and_their_datasets(tmp_path, mo
         "positions-p3.tar.gz",
         "positions-p4.tar.gz",
     ]
+
+
+def test_a_written_bundle_lands_whole_and_leaves_no_work_dir(tmp_path, monkeypatch):
+    """The bundle's directory and its datasets' tarball appear by rename, LATEST
+    names the bundle, and writing the same bundle again changes nothing."""
+    manifest = bundles.BundleManifest(
+        bundle_id="b1", git_sha="s", git_dirty=False, archs=["znver3"], eval_positions="p1"
+    )
+
+    def create_bundle(out_dir, archs):
+        (out_dir / bundles.arch_tarball_name("znver3")).write_bytes(b"tar")
+        (out_dir / "manifest.json").write_text(json.dumps(manifest.__dict__))
+        return [], manifest
+
+    def create_positions(out_dir):
+        (out_dir / "positions.tar.gz").write_bytes(b"pos")
+        return out_dir / "positions.tar.gz"
+
+    monkeypatch.setattr(bundles, "create_bundle", create_bundle)
+    monkeypatch.setattr(bundles, "create_eval_positions_tarball", create_positions)
+    for _ in range(2):
+        assert bundles.write_bundle(tmp_path, ["znver3"]) == manifest
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["LATEST", "b1", "deps"]
+    assert sorted(p.name for p in (tmp_path / "b1").iterdir()) == [
+        bundles.arch_tarball_name("znver3"),
+        "manifest.json",
+    ]
+    assert bundles.latest_manifest(tmp_path) == manifest
+    assert bundles.eval_positions_path(tmp_path, "p1").read_bytes() == b"pos"
+    assert [p.name for p in (tmp_path / "deps").iterdir()] == ["positions-p1.tar.gz"]

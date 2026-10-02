@@ -684,9 +684,12 @@ class WorkerManager:
         the slot's exit reason, and the restart backoff paces the retry.
         """
         arch = self._slot_arch(spec, task, w)
-        if task.bundle_id and arch in task.bundle_archs:
-            if bundles.read_manifest(self._bundle_store, task.bundle_id) is not None:
-                return task.bundle_id
+        if (
+            task.bundle_id
+            and arch in task.bundle_archs
+            and bundles.read_manifest(self._bundle_store, task.bundle_id) is not None
+        ):
+            return task.bundle_id
         task_key = f"{spec.name}/{task.tag}"
         future = self._pending_builds.get(task_key)
         if future is None:
