@@ -98,9 +98,12 @@ class NoiseSignal:
 
 
 def noise_signal(values: np.ndarray) -> NoiseSignal:
-    """The noise and signal variances of one position's centered labels."""
+    """The noise and signal variances of one position's centered labels; nan
+    when fewer than two candidates leave no spread to measure."""
     d = centered(values)
     k, r = d.shape
+    if k < 2:
+        return NoiseSignal(float("nan"), float("nan"))
     per_rollout = float(d.var(axis=1, ddof=1).mean())
     labels = d.mean(axis=1)
     signal = float(labels.var(ddof=1)) - per_rollout / r * k / (k - 1)

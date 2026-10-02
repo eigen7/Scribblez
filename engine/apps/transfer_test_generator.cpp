@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -211,13 +212,18 @@ json::object offered_json(const SimmedPosition& r, const Dictionary& dict) {
   return out;
 }
 
-// Every candidate's saturation curve, parallel to the candidates, each on a
-// thread of its own: the costly part of a position's record.
+// Every candidate's saturation curve, parallel to the candidates, spread over
+// up to opt.threads workers: the costly part of a position's record.
 json::array saturation_curves(const SimmedPosition& r, const Dictionary& dict, const Options& opt) {
   std::vector<json::array> curves(r.candidates.moves.size());
+  std::atomic<size_t> next{0};
   std::vector<std::thread> workers;
-  for (size_t c = 0; c < curves.size(); ++c)
-    workers.emplace_back([&, c] { curves[c] = saturation_curve(r, dict, int(c), opt); });
+  for (size_t w = 0; w < std::min(curves.size(), size_t(opt.threads)); ++w) {
+    workers.emplace_back([&] {
+      for (size_t c; (c = next++) < curves.size();)
+        curves[c] = saturation_curve(r, dict, int(c), opt);
+    });
+  }
   for (std::thread& t : workers) t.join();
   json::array out;
   for (json::array& curve : curves) out.push_back(std::move(curve));

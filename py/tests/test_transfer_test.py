@@ -108,6 +108,8 @@ def test_noise_to_signal_scales_with_the_budget():
     ns = tm.NoiseSignal(noise_per_rollout=0.01, signal=0.001)
     assert tm.noise_to_signal(ns, 100) == pytest.approx(0.1)
     assert tm.noise_to_signal(tm.NoiseSignal(0.01, -0.001), 100) == float("inf")
+    # One candidate (a stratum filter can leave one) has no spread: not resolvable.
+    assert tm.noise_to_signal(tm.noise_signal(np.ones((1, 50))), 100) == float("inf")
 
 
 def test_noise_signal_reads_no_signal_where_there_is_none():
