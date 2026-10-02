@@ -33,6 +33,9 @@ from scribblez.dashboard.control_store import ControlStore
 from scribblez.paths import TagPaths
 from scribblez.workloads import WORKLOADS, WorkloadSpec, resolve
 
+# A tag's states (TaskStore.state).
+COMPLETE, RUNNING, PAUSED, IDLE = "complete", "running", "paused", "idle"
+
 
 @dataclass
 class WorkerRecord:
@@ -253,6 +256,27 @@ def _pace(spec: WorkloadSpec, tag_dir: Path) -> dict | None:
     return None if per_hour is None else {"unit": stats.unit, "per_hour": per_hour}
 
 
+def _disk_bytes(tag_dir: Path) -> int:
+    """The bytes the tag's tree occupies on the controller's disk, counting
+    each inode once as du does (a trainer's snapshot pair is hard links). A
+    remote data home's window and output not yet collected are not counted:
+    the controller's tree is the durable copy, and the rest is transient."""
+    seen: set[tuple[int, int]] = set()
+    total = 0
+    for root, _, files in os.walk(tag_dir):
+        for name in files:
+            try:
+                st = os.lstat(os.path.join(root, name))
+            except FileNotFoundError:  # renamed or evicted mid-walk
+                continue
+            if st.st_nlink > 1:
+                if (st.st_dev, st.st_ino) in seen:
+                    continue
+                seen.add((st.st_dev, st.st_ino))
+            total += st.st_blocks * 512
+    return total
+
+
 class _TaskEntry:
     """One tag's record: its frozen fields in task.json, its control state in
     the control store's row. The writer holds one live TaskRecord, reread
@@ -455,6 +479,30 @@ class TaskStore:
                 )
             return e
 
+    def state(self, spec: WorkloadSpec, task: TaskRecord | None) -> str:
+        """The tag's state, common to every workload:
+
+        complete  the workload's end condition holds (WorkloadSpec.complete),
+                  or, for a workload without one, every slot is finished
+        running   a slot wants to run (a gated one included: the scheduler
+                  resumes it itself)
+        paused    it has slots, none of which wants to run
+        idle      it has no slots
+
+        Desired rather than observed state, so it costs no ssh or cloud round
+        trips."""
+        if task is None:
+            return IDLE
+        if spec.complete:
+            params = params_mod.validate(spec.params_cls, task.params)
+            if resolve(spec.complete)(spec, self.paths(spec, task.tag), params):
+                return COMPLETE
+        elif task.workers and all(w.finished for w in task.workers):
+            return COMPLETE
+        if any(w.desired_state == "running" for w in task.workers):
+            return RUNNING
+        return PAUSED if task.workers else IDLE
+
     def progress(self, spec: WorkloadSpec, task: TaskRecord) -> list:
         """The workload's [label, value] progress counters for the task."""
         if not spec.progress:
@@ -496,7 +544,9 @@ class TaskStore:
                     # observed state, so listing tags costs no ssh or cloud
                     # round trips.
                     "active_workers": sum(w.desired_state == "running" for w in workers),
+                    "state": self.state(spec, task),
                     "progress": self.progress(spec, task) if task else [],
+                    "disk_bytes": _disk_bytes(tag_dir),
                     "pace": _pace(spec, tag_dir),
                     "last_active": _last_active(tag_dir),
                 }

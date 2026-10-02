@@ -104,5 +104,5 @@ def test_the_scheduler_keeps_the_generators_when_unbounded(tmp_path, limit):
     paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
     paths.train_state_path.parent.mkdir(parents=True)
     paths.train_state_path.write_text(json.dumps({"rows_trained": 10**9}))
-    assert not scheduler._trainer_done(paths, limit)
-    assert scheduler._trainer_done(paths, 100)
+    assert not scheduler.complete(None, paths, SimpleNamespace(max_rows=limit))
+    assert scheduler.complete(None, paths, SimpleNamespace(max_rows=100))

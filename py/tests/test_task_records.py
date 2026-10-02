@@ -9,6 +9,7 @@ import pytest
 from scribblez import workloads
 from scribblez.dashboard import tasks
 from scribblez.dashboard.control_store import ControlStore
+from scribblez.generational import lifecycle
 
 
 @pytest.fixture
@@ -132,3 +133,42 @@ def test_a_tag_deleted_while_it_is_read_reads_as_gone(store, spec):
     stamp = tasks._mtime(entry.path)
     entry.path.unlink()
     assert entry._read(stamp) is None
+
+
+def _slot(worker_id: str, desired_state: str, finished: bool = False) -> tasks.WorkerRecord:
+    return tasks.WorkerRecord(worker_id, "generate", "local", desired_state, finished=finished)
+
+
+@pytest.mark.parametrize(
+    ("slots", "expected"),
+    [
+        ([], tasks.IDLE),
+        ([_slot("a", "paused")], tasks.PAUSED),
+        ([_slot("a", "paused"), _slot("b", "running")], tasks.RUNNING),
+        ([_slot("a", "paused", finished=True), _slot("b", "paused")], tasks.PAUSED),
+        ([_slot("a", "paused", finished=True)], tasks.COMPLETE),
+    ],
+)
+def test_state_of_a_workload_without_an_end_condition(store, spec, slots, expected):
+    """kill_test has no WorkloadSpec.complete: it is complete while every slot
+    is finished."""
+    assert store.state(spec, _save(store, spec, workers=slots)) == expected
+
+
+def test_state_is_complete_from_the_data_once_the_slots_are_gone(store):
+    """The tag queue removes a completed tag's slots; its end condition still
+    shows it complete."""
+    spec = workloads.get("position_eval")
+    task = tasks.TaskRecord(spec.name, "t", {"max_rows": 1000}, 0.0)
+    store.save(spec, task)
+    assert store.state(spec, task) == tasks.IDLE
+    lifecycle.write_train_state(store.paths(spec, "t"), {"rows_trained": 1000})
+    assert store.state(spec, task) == tasks.COMPLETE
+
+
+def test_disk_bytes_counts_a_hard_linked_file_once(tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "a").write_bytes(b"x" * 100_000)
+    os.link(tmp_path / "a", tmp_path / "sub" / "a_link")
+    one = os.lstat(tmp_path / "a").st_blocks * 512
+    assert tasks._disk_bytes(tmp_path) == one

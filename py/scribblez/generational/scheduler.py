@@ -93,7 +93,7 @@ def tick_for_task(spec, task, hooks):
     """
     params = params_mod.validate(spec.params_cls, task.params)
     paths = hooks.paths
-    if _trainer_done(paths, params.max_rows):
+    if complete(spec, paths, params):
         hooks.finish(GENERATE_ROLE)
         return
     hooks.gate(GENERATE_ROLE, home_gate(paths, hooks.role_running(TRAIN_ROLE), time.time()))
@@ -126,9 +126,11 @@ def home_gate(paths: TagPaths, trainer_running: bool, now: float) -> str | None:
     return record["gate"]
 
 
-def _trainer_done(paths: TagPaths, max_rows: int) -> bool:
-    """Whether the trainer's published cursor has reached `max_rows`."""
-    return params_mod.reached(lifecycle.read_train_state(paths).get("rows_trained", 0), max_rows)
+def complete(spec, paths: TagPaths, params) -> bool:
+    """The WorkloadSpec.complete entry: whether the trainer's published cursor
+    has reached the task's `max_rows`."""
+    rows = lifecycle.read_train_state(paths).get("rows_trained", 0)
+    return params_mod.reached(rows, params.max_rows)
 
 
 def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn = _header_games):
@@ -255,18 +257,8 @@ def _next_index(paths: TagPaths, cursor: int) -> int:
 
 
 def progress(spec, paths: TagPaths, params) -> list[tuple[str, object]]:
-    """The tag's progress counters. A tag whose trainer has reached `max_rows`
-    shows as complete in place of a filling generation, which nothing will
-    finish once the generators are finished."""
+    """The latest complete generation and the rows trained."""
     out: list[tuple[str, object]] = []
-    open_index = _open_index(paths)
-    if _trainer_done(paths, params.max_rows):
-        out.append(("status", "complete"))
-    elif open_index is not None:
-        m = lifecycle.read_manifest(paths.generation_dir(open_index))
-        out.append(
-            ("filling", f"gen {open_index}: {m['committed_games']}/{m['target_games']} games")
-        )
     complete = [
         i
         for i in lifecycle.list_generation_indices(paths)
