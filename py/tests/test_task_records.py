@@ -184,6 +184,20 @@ def test_queued_and_failed_states(store, spec, fields, entry, expected):
     assert store.state(spec, _save(store, spec, **fields), entry) == expected
 
 
+@pytest.mark.parametrize(
+    ("fields", "entry", "expected"),
+    [
+        ({}, _entry(), None),
+        ({"failure": "gen-0: exited 3 times"}, None, "gen-0: exited 3 times"),
+        ({"workers": [_failed_slot()]}, None, "crashed 3 times"),
+        ({}, _entry(queue_mod.BUNDLE_FAILED_PREFIX + "no creds"), "bundle build failed: no creds"),
+    ],
+)
+def test_failure_reason_names_why(store, spec, fields, entry, expected):
+    """What the task Overview shows beside a failed state."""
+    assert tasks.failure_reason(_save(store, spec, **fields), entry) == expected
+
+
 def test_state_is_complete_from_the_data_once_the_slots_are_gone(store):
     """The tag queue removes a completed tag's slots; its end condition still
     shows it complete."""

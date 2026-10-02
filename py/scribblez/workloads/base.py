@@ -119,7 +119,7 @@ class WorkloadSpec:
     progress: str = ""
     # Dotted path to complete(spec, paths, params) -> bool: whether the tag has
     # reached its end condition, read from its data. The tag listing's state
-    # (dashboard/tasks.py, tag_state) says "complete" from it even once the
+    # (dashboard/tasks.py, TaskStore.state) says "complete" from it even once the
     # tag's slots are gone. "" for a workload with no end condition the data
     # shows; the tag is then complete while every slot is finished.
     complete: str = ""

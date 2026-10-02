@@ -85,7 +85,7 @@ type TaskInfo = {
   // the frozen params depart from it -- provenance, not live configuration.
   profile: string; profile_diff: ProfileChange[];
   created_at: number | null; state: string; progress: [string, string | number][];
-  failure: string | null;  // why the tag queue failed the tag, kept after its slots go
+  failure: string | null;  // why the tag is failed (tasks.failure_reason), or null
   gates: Record<string, string>;
   data_dir: string; workers: WorkerInfo[]; machines: MachineInfo[]; spend: number;
   queued: number | null;  // 1-based place in the tag queue; null when not queued

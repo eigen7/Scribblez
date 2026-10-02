@@ -196,6 +196,7 @@ class TaskHandler(_MasterBase):
         def info():
             task = self.manager.tasks.load(spec, tag)
             queue = self.manager.queue_store.load()
+            entry = queue.find(spec.name, tag)
             workers = self.manager.worker_status(spec, task) if task else []
             spend = (
                 task.retired_spend
@@ -212,8 +213,8 @@ class TaskHandler(_MasterBase):
                 "profile": task.profile if task else "",
                 "profile_diff": spec.profile_diff(task.profile, task.params) if task else [],
                 "created_at": task.created_at if task else None,
-                "state": self.manager.tasks.state(spec, task, queue.find(spec.name, tag)),
-                "failure": task.failure if task else None,
+                "state": self.manager.tasks.state(spec, task, entry),
+                "failure": tasks.failure_reason(task, entry) if task else None,
                 "progress": self.manager.tasks.progress(spec, task) if task else [],
                 "gates": task.gates if task else {},
                 "data_dir": str(self.manager.tasks.paths(spec, tag).root),

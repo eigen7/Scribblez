@@ -35,14 +35,12 @@ from scribblez.paths import TagPaths
 from scribblez.workloads import WORKLOADS, WorkloadSpec, resolve
 
 # A tag's states (TaskStore.state).
-COMPLETE, FAILED, RUNNING, QUEUED, PAUSED, IDLE = (
-    "complete",
-    "failed",
-    "running",
-    "queued",
-    "paused",
-    "idle",
-)
+COMPLETE = "complete"
+FAILED = "failed"
+RUNNING = "running"
+QUEUED = "queued"
+PAUSED = "paused"
+IDLE = "idle"
 
 
 @dataclass
@@ -155,7 +153,8 @@ class TaskRecord:
     retired_spend: float = 0.0
     # Why the tag queue failed the tag (dashboard/tag_queue.py), kept after its
     # slots are released to another tag so the listing still shows it failed.
-    # Cleared when the tag is queued again or a slot of it is started.
+    # Cleared when the operator runs the tag again: Queue, Requeue, or a slot's
+    # Start.
     failure: str | None = None
     # The bundle every ssh worker of this task runs, pinned when the first one
     # launches, so the fleet stays homogeneous and code edited mid-run does not
@@ -289,13 +288,18 @@ def _disk_bytes(tag_dir: Path) -> int:
     return total
 
 
-def _failed(task: TaskRecord, entry: QueueEntry | None) -> bool:
-    """Whether the tag is stuck on a failure the operator has to act on."""
-    return (
-        task.failure is not None
-        or any(w.failed is not None for w in task.workers)
-        or (entry is not None and entry.bundle.startswith(BUNDLE_FAILED_PREFIX))
-    )
+def failure_reason(task: TaskRecord, entry: QueueEntry | None) -> str | None:
+    """Why the tag is stuck on a failure the operator has to act on, or None:
+    the tag queue failed it, a slot of it is failed, or its queue entry's
+    bundle build failed."""
+    if task.failure is not None:
+        return task.failure
+    failed = next((w.failed for w in task.workers if w.failed is not None), None)
+    if failed is not None:
+        return failed
+    if entry is not None and entry.bundle.startswith(BUNDLE_FAILED_PREFIX):
+        return f"bundle build {entry.bundle}"
+    return None
 
 
 class _TaskEntry:
@@ -506,21 +510,20 @@ class TaskStore:
 
         complete  the workload's end condition holds (WorkloadSpec.complete),
                   or, for a workload without one, every slot is finished
-        failed    the tag queue failed it, a slot of it is failed, or its
-                  queue entry's bundle build failed (retried on re-enqueue)
+        failed    it is stuck on a failure (failure_reason)
         running   a slot wants to run (a gated one included: the scheduler
                   resumes it itself)
         queued    it waits in the tag queue for a machine
         paused    it has slots, none of which wants to run
         idle      it has no slots
 
-        Desired rather than observed state, so it costs no ssh or cloud round
-        trips."""
+        It reads the slots' desired state, as active_workers does in
+        list_tags."""
         if task is None:
             return IDLE
         if self._complete(spec, task):
             return COMPLETE
-        if _failed(task, entry):
+        if failure_reason(task, entry) is not None:
             return FAILED
         if any(w.desired_state == "running" for w in task.workers):
             return RUNNING

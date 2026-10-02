@@ -8,7 +8,7 @@ from scribblez.match_eval import arms as arms_runner
 from scribblez.match_eval.harness import RoundResult
 from scribblez.params import ParamsError
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.match_arms import SPEC, MatchArmsParams, parse_arms
+from scribblez.workloads.match_arms import SPEC, MatchArmsParams, complete, parse_arms
 
 # ---------------------------------------------------------------------------
 # The arms mini-format
@@ -191,6 +191,18 @@ def test_match_arm_db_roundtrip(tmp_path):
     assert [r["arm"] for r in rows] == ["k5", "k10"]
     assert rows[0]["score"] == 0.50
     assert rows[0]["pair_counts"] == [4, 8, 12, 10, 6]
+
+
+def test_complete_once_every_arm_is_measured(tmp_path):
+    paths = SPEC.paths("t", tmp_path)
+    params = params_mod.validate(MatchArmsParams, {"arms": "k5=--type=greedy; k10=--type=sim"})
+    assert not complete(SPEC, paths, params)  # no dashboard.db yet
+    paths.dashboard_db.parent.mkdir(parents=True)
+    conn = db.connect(paths.dashboard_db)
+    db.write_match_arm(conn, "k5", _arm_record())
+    assert not complete(SPEC, paths, params)
+    db.write_match_arm(conn, "k10", _arm_record())
+    assert complete(SPEC, paths, params)
 
 
 def test_match_arms_figure_is_serializable(tmp_path):

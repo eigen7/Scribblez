@@ -259,13 +259,13 @@ def _next_index(paths: TagPaths, cursor: int) -> int:
 def progress(spec, paths: TagPaths, params) -> list[tuple[str, object]]:
     """The latest complete generation and the rows trained."""
     out: list[tuple[str, object]] = []
-    complete = [
+    complete_gens = [
         i
         for i in lifecycle.list_generation_indices(paths)
         if lifecycle.is_complete(paths.generation_dir(i))
     ]
-    if complete:
-        out.append(("generation", max(complete)))
+    if complete_gens:
+        out.append(("generation", max(complete_gens)))
     state = lifecycle.read_train_state(paths)
     if state:
         out.append(("rows", state.get("rows_trained", 0)))
