@@ -5,6 +5,7 @@ import { Button, Role, Workload } from './MasterApp';
 import { QueuePanel } from './QueuePanel';
 import { loadRentalOffer, RentalOffer, rateText } from './rentalOffer';
 import StatsTab from './StatsTab';
+import { stateColors, StateText } from './ui';
 import { TabActiveContext } from '../TabActiveContext';
 
 // One task's view in the master dashboard: an Overview tab (progress
@@ -83,22 +84,11 @@ type TaskInfo = {
   // The parameter profile the params were resolved from ('' if none), and how
   // the frozen params depart from it -- provenance, not live configuration.
   profile: string; profile_diff: ProfileChange[];
-  created_at: number | null; progress: [string, string | number][]; gates: Record<string, string>;
+  created_at: number | null; state: string; progress: [string, string | number][];
+  gates: Record<string, string>;
   data_dir: string; workers: WorkerInfo[]; machines: MachineInfo[]; spend: number;
   queued: number | null;  // 1-based place in the tag queue; null when not queued
   bundle_id: string | null; bundle_drift: boolean;
-};
-
-const stateColors: Record<string, string> = {
-  running: '#2a7a2a', paused: '#8494a5', exited: '#b23b3b', failed: '#b23b3b', finished: '#446e9b',
-  up: '#2a7a2a', 'no docker': '#b23b3b', launching: '#1f77b4', preparing: '#1f77b4',
-  stopped: '#8494a5', gone: '#b23b3b',
-  waiting: '#a05a00',
-  unreachable: '#a05a00',
-  starting: '#1f77b4', stopping: '#1f77b4',
-  // No reconcile pass has observed this slot yet (only that pass talks to the
-  // machines; a status request reads what it left behind).
-  checking: '#8494a5',
 };
 
 type Busy = 'local' | 'ssh' | null;
@@ -663,6 +653,7 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
         <KV items={[
           ['workload', workload.title],
           ['created', info.created_at ? new Date(info.created_at * 1000).toLocaleString() : '—'],
+          ['state', <StateText state={info.state} />],
           ...info.progress.map(([k, v]): [string, React.ReactNode] => [k, String(v)]),
           ['data dir', info.data_dir],
           ['bundle', info.bundle_id

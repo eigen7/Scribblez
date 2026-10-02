@@ -3,7 +3,7 @@ import { getJSON, postJSON } from '../../lib/api';
 import BurnStrip from './BurnStrip';
 import PoolView, { enqueueTag } from './PoolView';
 import TaskView from './TaskView';
-import { fmtCompact } from './ui';
+import { fmtBytes, fmtCompact, StateText } from './ui';
 
 // The master dashboard: the entrypoint for all work. Pick a workload, then a
 // tag (or create one, configuring its parameters via the workload's schema);
@@ -36,7 +36,11 @@ export type Workload = {
 type TagRow = {
   tag: string; has_task: boolean; created_at: number | null;
   workers: number; active_workers: number;
+  // complete | running | paused | idle, common to every workload
+  // (TaskStore.state).
+  state: string;
   progress: [string, string | number][]; last_active: number;
+  disk_bytes: number;  // the tag's tree on the controller's disk
   // The workload's pace role's live fleet rate (WorkloadSpec.pace_role): the
   // number that compares tags' speeds. Null with no live rate.
   pace: { unit: string; per_hour: number } | null;
@@ -453,9 +457,11 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
             <thead>
               <tr style={{ textAlign: 'left', color: '#445063' }}>
                 <th style={{ padding: '4px 14px 4px 0' }}>tag</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>state</th>
                 <th style={{ padding: '4px 14px 4px 0' }}>progress</th>
                 <th style={{ padding: '4px 14px 4px 0' }}>pace</th>
                 <th style={{ padding: '4px 14px 4px 0' }}>workers</th>
+                <th style={{ padding: '4px 14px 4px 0' }}>disk</th>
                 <th style={{ padding: '4px 14px 4px 0' }}>last ran</th>
                 <th style={{ padding: '4px 14px 4px 0' }} />
                 <th style={{ padding: '4px 14px 4px 0' }} />
@@ -469,6 +475,7 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
                   style={{ cursor: 'pointer', borderTop: '1px solid #e2e8ee' }}
                 >
                   <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{r.tag}</td>
+                  <td style={{ padding: '6px 14px 6px 0' }}><StateText state={r.state} /></td>
                   <td style={{ padding: '6px 14px 6px 0' }}>
                     {r.progress.map(([k, v]) => `${k}: ${typeof v === 'number' ? fmtCompact(v) : v}`).join(' · ') || '—'}
                   </td>
@@ -476,6 +483,7 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
                     {r.pace ? `${fmtCompact(r.pace.per_hour)} ${r.pace.unit}/hr` : '—'}
                   </td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{r.workers}</td>
+                  <td style={{ padding: '6px 14px 6px 0', whiteSpace: 'nowrap' }}>{fmtBytes(r.disk_bytes)}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{relTime(r.last_active)}</td>
                   <td style={{ padding: '6px 14px 6px 0', fontSize: 12, color: '#8494a5' }}>
                     {r.has_task ? '' : 'pre-dashboard tag (read-only)'}
