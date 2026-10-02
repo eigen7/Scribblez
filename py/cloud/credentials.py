@@ -1,17 +1,16 @@
 """Loader for the operator's cloud credentials file.
 
-Every controller-side cloud tool (the dashboard, bundle pushes, result
-syncing, AWS setup) reads its secrets from one hand-filled JSON file:
+Every controller-side cloud tool (the dashboard, AWS setup, the credentials
+check) reads its secrets from one hand-filled JSON file:
 
     /workspace/mount/cloud/credentials.json
 
 py/scripts/cloud_check_credentials.py writes a placeholder template when the
 file is absent, and checks a filled-in one against the live services.
 
-The file never leaves the controller. Remote machines get only what they
-need: each worker container gets the R2 object credentials in its
-environment, and a rented machine gets the read-only registry pull token in
-its first-boot script (cloud/providers/aws.py user_data).
+The file never leaves the controller, and worker containers get none of it.
+A rented machine gets only the read-only registry pull token, in its
+first-boot script (cloud/providers/aws.py user_data).
 """
 
 import json

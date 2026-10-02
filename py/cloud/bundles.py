@@ -18,7 +18,8 @@ Bundles live in a store on the controller (STORE_REL under the mount):
 The eval datasets (EVAL_POSITIONS_DIRS in scribblez/paths.py, ~40 MB) stay
 out of the tarballs, where every bundle would hold a copy per arch. They are
 written once per content version under deps/, and copied only into the
-containers of the roles that read them (cloud/worker_deps.py).
+containers of the roles that read them
+(scribblez/dashboard/workers.py WorkerManager._copy_payload).
 
 A bundle_id is "<git-sha-12>[-dirty]-<content-hash-8>"; the content hash keeps
 successive bundles of the same dirty tree distinct.
@@ -36,7 +37,7 @@ import os
 import shutil
 import subprocess
 import tarfile
-import uuid
+import tempfile
 from dataclasses import asdict, dataclass
 from dataclasses import fields as fields_of
 from pathlib import Path
@@ -167,12 +168,8 @@ def write_eval_positions(store: Path, digest: str):
     if dest.is_file():
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
-    work = dest.parent / f".tmp-{uuid.uuid4().hex[:12]}"
-    work.mkdir()
-    try:
-        create_eval_positions_tarball(work).replace(dest)
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
+    with tempfile.TemporaryDirectory(dir=dest.parent, prefix=".tmp-") as work:
+        create_eval_positions_tarball(Path(work)).replace(dest)
 
 
 def source_hash(archs: list[str], cache: dict | None = None) -> str | None:
@@ -228,16 +225,14 @@ def write_bundle(store: Path, archs: list[str]) -> BundleManifest:
     """Create a bundle of `archs` from the current tree in the store, and
     point LATEST at it. The bundle's directory appears whole, by one rename."""
     store.mkdir(parents=True, exist_ok=True)
-    work = store / f".tmp-{uuid.uuid4().hex[:12]}"
-    work.mkdir()
-    try:
-        _, manifest = create_bundle(work, archs)
+    with tempfile.TemporaryDirectory(dir=store, prefix=".tmp-") as work:
+        out = Path(work) / "bundle"
+        out.mkdir()
+        _, manifest = create_bundle(out, archs)
         write_eval_positions(store, manifest.eval_positions)
         dest = store / manifest.bundle_id
         if not dest.exists():
-            work.rename(dest)
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
+            out.rename(dest)
     _write_atomic(store / LATEST_NAME, manifest.bundle_id + "\n")
     return manifest
 
