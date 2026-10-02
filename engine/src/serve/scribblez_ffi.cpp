@@ -270,14 +270,14 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
   params.rollouts = rollouts;
   params.threads = threads;
   const scribblez::SimRunner runner(*spec.dict, params);
-  const std::vector<scribblez::SimObservation> obs = runner.run(pos, candidates, seed);
+  const std::vector<scribblez::RolloutStats> obs = runner.run(pos, candidates, seed);
 
   *played_rank = -1;
   for (size_t i = 0; i < candidates.size(); ++i) {
     if (candidates[i] == final_turn.move) *played_rank = int(i);
     char* rec = out_records + i * sizeof(scribblez::SimObsRecord);
     std::memcpy(rec, &candidates[i], sizeof(scribblez::Move));
-    std::memcpy(rec + sizeof(scribblez::Move), &obs[i], sizeof(scribblez::SimObservation));
+    std::memcpy(rec + sizeof(scribblez::Move), &obs[i], sizeof(scribblez::RolloutStats));
   }
   return candidates.size();
 }

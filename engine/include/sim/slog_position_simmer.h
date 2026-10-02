@@ -10,7 +10,7 @@
 
 #include "data/slog_sampling.h"
 #include "game/move.h"
-#include "sim/rollout_summary.h"
+#include "sim/rollout_report.h"
 #include "sim/sim_runner.h"
 #include "training/move_set_eval_candidates.h"
 #include "util/progress.h"
@@ -105,14 +105,14 @@ struct SlogSimConfig {
   // base + i, so offsets must be at least a rollout count apart.
   uint64_t rollout_seed_offset = 0;
   int threads = 1;  // position workers
-  // Reduce each candidate's rollouts to a RolloutSummary (sim/rollout_summary.h),
+  // Reduce each candidate's rollouts to a RolloutReport (sim/rollout_report.h),
   // cheap enough to keep for every legal play, instead of a 35 KB
-  // SimObservation.
-  bool keep_summaries = false;
-  // With summaries: the first this-many candidates are references, and every
+  // RolloutStats.
+  bool keep_reports = false;
+  // With reports: the first this-many candidates are references, and every
   // candidate gets its paired win difference against each of them.
   int paired_references = 0;
-  // With summaries: race the candidates instead of simming each to the full
+  // With reports: race the candidates instead of simming each to the full
   // count. `race_checkpoints` are ascending cumulative rollout counts. At each
   // one, a candidate whose win rate is more than `race_sigmas` paired standard
   // errors below the leader's stops, keeping the rollouts it got. The first
@@ -135,8 +135,8 @@ struct SimmedPosition {
   bool solved_endgames = false;  // the rollouts solved their endgames
   Move played;                   // the move the game made here
   // Parallel to candidates.moves; each filled per SlogSimConfig.
-  std::vector<SimObservation> observations;
-  std::vector<RolloutSummary> summaries;
+  std::vector<RolloutStats> observations;
+  std::vector<RolloutReport> reports;
   // paired[c][r]: candidate c's win value minus reference r's, over the rollouts.
   std::vector<std::vector<PairedWinDiff>> paired;
 };

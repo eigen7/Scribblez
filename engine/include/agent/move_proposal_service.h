@@ -36,12 +36,12 @@ struct MoveProposalPredictions {
 // predicted planes.
 struct EvidenceSet {
   std::vector<Move> moves;
-  std::vector<SimObservation> observations;
+  std::vector<RolloutStats> observations;
   std::vector<int> scored_indices;
 
   int size() const { return int(moves.size()); }
   void clear() { *this = EvidenceSet{}; }
-  void add(const Move& move, const SimObservation& observation, int scored_index) {
+  void add(const Move& move, const RolloutStats& observation, int scored_index) {
     moves.push_back(move);
     observations.push_back(observation);
     scored_indices.push_back(scored_index);

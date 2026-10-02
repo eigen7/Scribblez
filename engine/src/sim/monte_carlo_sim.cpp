@@ -24,7 +24,7 @@ namespace scribblez {
 namespace {
 
 // A missing first move stays a default Move (PASS), which places nothing.
-struct RolloutResult {
+struct Rollout {
   int delta = 0;  // start_player's final score minus the opponent's
   Move opp_first{};
   Move self_first{};
@@ -66,8 +66,8 @@ Rack OppLeaveSampler::leave(uint64_t seed) const {
 
 // The opponent moved just before start_player's decision point, so in the
 // rollout it moves first.
-RolloutResult rollout(const ParsedGcgPostMove& pos, const Dictionary& dict, Agent& a0, Agent& a1,
-                      const OppLeaveSampler& sampler, bool face_up, uint64_t seed) {
+Rollout rollout(const ParsedGcgPostMove& pos, const Dictionary& dict, Agent& a0, Agent& a1,
+                const OppLeaveSampler& sampler, bool face_up, uint64_t seed) {
   const int opponent = 1 - pos.start_player;
   std::array<Rack, 2> known;
   known[pos.start_player] = pos.leave;
@@ -79,7 +79,7 @@ RolloutResult rollout(const ParsedGcgPostMove& pos, const Dictionary& dict, Agen
   game.play_from(pos.board, pos.scores, known, pool, /*to_move=*/opponent);
   const GameLog log = game.log();
 
-  RolloutResult r;
+  Rollout r;
   r.delta = log.final_scores[pos.start_player] - log.final_scores[opponent];
   if (log.num_records >= 1 && log.records[0].player == opponent) r.opp_first = log.records[0].move;
   if (log.num_records >= 2 && log.records[1].player == pos.start_player)
@@ -108,7 +108,7 @@ void accumulate_self_placement(const Move& move, const Board& board, bool won,
     credit_cell(cells[i].first, cells[i].second, won, out.self_next, out.self_win);
 }
 
-void accumulate_rollout(const Board& board, const RolloutResult& r, MonteCarloResult* out) {
+void accumulate_rollout(const Board& board, const Rollout& r, MonteCarloResult* out) {
   ++out->n;
   if (r.delta > 0)
     ++out->wins;

@@ -59,7 +59,7 @@ AppliedCandidate apply_candidate(const SimPosition& pos, const Move& m) {
   return a;
 }
 
-void set_terminal_outcome(int delta, RolloutResult* r) {
+void set_terminal_outcome(int delta, Rollout* r) {
   r->p_win = delta > 0 ? 1.0 : 0.0;
   r->p_draw = delta == 0 ? 1.0 : 0.0;
   r->p_loss = delta < 0 ? 1.0 : 0.0;
@@ -99,7 +99,7 @@ bool passed(const GameLog& log, int player) {
 void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& candidate,
                  const Dictionary& dict, HastyBot& a0, HastyBot& a1, uint64_t seed,
                  int horizon_plies, const InputEncodingSpec* leaf_spec, LeafBatcher* batcher,
-                 size_t slot, RolloutResult* out) {
+                 size_t slot, Rollout* out) {
   const int opponent = 1 - pos.mover;
   // Built from the pre-move board and full rack, so the pool, and with it the
   // opponent's sampled tiles, is the same for every candidate (CRN). A known
@@ -142,7 +142,7 @@ std::unique_ptr<HastyBot> make_rollout_agent(bool solve_endgames,
 void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
                     const std::vector<Move>& candidates, const Dictionary& dict,
                     SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
-                    uint64_t base_seed, std::vector<RolloutResult>* results) {
+                    uint64_t base_seed, std::vector<Rollout>* results) {
   HastyBot::Params p0;
   p0.thread_id = t;
   p0.name = "H0";
@@ -176,7 +176,7 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
 void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
                 const std::vector<Move>& candidates, const Dictionary& dict,
                 SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
-                uint64_t base_seed, std::vector<RolloutResult>* results, std::exception_ptr* err) {
+                uint64_t base_seed, std::vector<Rollout>* results, std::exception_ptr* err) {
   try {
     run_sim_worker(pos, applied, candidates, dict, params, leaf_spec, t, base_seed, results);
   } catch (...) {
@@ -186,7 +186,7 @@ void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& app
 
 }  // namespace
 
-int end_rack_swing(const RolloutResult& r) {
+int end_rack_swing(const Rollout& r) {
   if (r.self_stranded == 0) return 2 * r.opp_stranded;
   if (r.opp_stranded == 0) return -2 * r.self_stranded;
   return r.opp_stranded - r.self_stranded;
@@ -194,7 +194,7 @@ int end_rack_swing(const RolloutResult& r) {
 
 // The opponent's reply is weighted by p_loss: the opponent wins iff the mover
 // loses.
-void accumulate_rollout(const RolloutResult& o, SimObservation* obs) {
+void accumulate_rollout(const Rollout& o, RolloutStats* obs) {
   ++obs->n;
   obs->wins += o.p_win;
   obs->draws += o.p_draw;
@@ -235,7 +235,7 @@ void LeafBatcher::flush() {
         "sim runner: the leaf model returned a non-finite value at a rollout horizon "
         "(off-distribution input, or a broken model)");
     }
-    RolloutResult& r = (*results_)[pending_[j].slot];
+    Rollout& r = (*results_)[pending_[j].slot];
     if (pending_[j].root_pov) {
       r.p_win = wld[0];
       r.p_draw = wld[1];
@@ -253,15 +253,14 @@ void LeafBatcher::flush() {
   pending_.clear();
 }
 
-double sim_objective_value(const SimObservation& o, SimObjective objective) {
+double sim_objective_value(const RolloutStats& o, SimObjective objective) {
   if (o.n == 0) return 0.0;
   const double n = o.n;
   if (objective == SimObjective::kWinRate) return (o.wins + 0.5 * o.draws) / n;
   return double(o.delta_sum) / n;
 }
 
-int best_observation_index(const std::vector<SimObservation>& observations,
-                           SimObjective objective) {
+int best_observation_index(const std::vector<RolloutStats>& observations, SimObjective objective) {
   int best = 0;
   for (size_t i = 1; i < observations.size(); ++i) {
     if (sim_objective_value(observations[i], objective) >
@@ -356,15 +355,15 @@ SimRunner::SimRunner(const Dictionary& dict, const Params& params) : dict_(dict)
   }
 }
 
-std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
-                                                   const std::vector<Move>& candidates,
-                                                   uint64_t base_seed) const {
+std::vector<Rollout> SimRunner::run_rollouts(const SimPosition& pos,
+                                             const std::vector<Move>& candidates,
+                                             uint64_t base_seed) const {
   return run_rollouts(pos, candidates, base_seed, params_.rollouts);
 }
 
-std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
-                                                   const std::vector<Move>& candidates,
-                                                   uint64_t base_seed, int rollouts) const {
+std::vector<Rollout> SimRunner::run_rollouts(const SimPosition& pos,
+                                             const std::vector<Move>& candidates,
+                                             uint64_t base_seed, int rollouts) const {
   if (candidates.empty()) return {};
   // A non-empty bag: the pool holds the bag plus the opponent's (up to
   // RACK_SIZE) tiles, known or not.
@@ -378,7 +377,7 @@ std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
   params.rollouts = rollouts;
   params.threads = std::clamp(params_.threads, 1, std::max(1, rollouts));
   const InputEncodingSpec* leaf_spec = params.horizon_plies > 0 ? &leaf_spec_ : nullptr;
-  std::vector<RolloutResult> results(candidates.size() * size_t(params.rollouts));
+  std::vector<Rollout> results(candidates.size() * size_t(params.rollouts));
   std::vector<std::thread> workers;
   std::vector<std::exception_ptr> errors(params.threads);
   for (int t = 0; t < params.threads; ++t)
@@ -390,14 +389,14 @@ std::vector<RolloutResult> SimRunner::run_rollouts(const SimPosition& pos,
   return results;
 }
 
-std::vector<SimObservation> SimRunner::run(const SimPosition& pos,
-                                           const std::vector<Move>& candidates,
-                                           uint64_t base_seed) const {
-  const std::vector<RolloutResult> results = run_rollouts(pos, candidates, base_seed);
+std::vector<RolloutStats> SimRunner::run(const SimPosition& pos,
+                                         const std::vector<Move>& candidates,
+                                         uint64_t base_seed) const {
+  const std::vector<Rollout> results = run_rollouts(pos, candidates, base_seed);
   // Reduce in a fixed order: with fractional contributions, floating-point
   // sums in an order that followed the thread partition would depend on the
   // thread count.
-  std::vector<SimObservation> out(candidates.size());
+  std::vector<RolloutStats> out(candidates.size());
   for (size_t c = 0; c < out.size(); ++c)
     for (int i = 0; i < params_.rollouts; ++i)
       accumulate_rollout(results[c * size_t(params_.rollouts) + size_t(i)], &out[c]);

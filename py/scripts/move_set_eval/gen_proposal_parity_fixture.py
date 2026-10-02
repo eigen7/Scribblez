@@ -35,8 +35,8 @@ Files written into --out-dir:
   * move_{letters,blanks,squares,tile_mask,scalars}.bin -- the M candidates in
     move_set_encoder.h's dtypes, encoded with the single pre-move differential.
   * moves_sobs.bin -- the M candidates as 16-byte Move records (MOVE_DTYPE), for
-    the C++ Move footprint; obs.bin -- their SimObservation records (verbatim
-    layout), for the C++ SimObservation. M is recovered C++-side from board /
+    the C++ Move footprint; obs.bin -- their RolloutStats records (verbatim
+    layout), for the C++ RolloutStats. M is recovered C++-side from board /
     scalars sizes and obs.bin.
   * plain_planes.bin -- M x 52 x 225 f32 footprint slot-channel planes of the
     evidence-free pass (what the cache graph serves, and what every evidence
@@ -142,7 +142,7 @@ def synthetic_moves(num_moves: int, seed: int) -> np.ndarray:
 
 
 def synthetic_observations(num_moves: int, seed: int) -> np.ndarray:
-    """M SimObservation records with plausible rollout aggregates -- distinct
+    """M RolloutStats records with plausible rollout aggregates -- distinct
     per candidate so a mis-gather is visible."""
     rng = np.random.default_rng(seed + 1)
     obs = np.zeros(num_moves, dtype=OBS_DTYPE)

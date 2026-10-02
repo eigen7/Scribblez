@@ -219,7 +219,7 @@ def move_footprint_class(move: np.void) -> int:
     return (r * BOARD + c) * SLOTS_PER_CELL + slot
 
 
-# SimObservation's footprint histogram fields, in placement-head order (the
+# RolloutStats's footprint histogram fields, in placement-head order (the
 # order of evidence_fusion.EVIDENCE_PLANE_NAMES' observed block).
 COUNT_HEADS = ("opp_next_count", "self_next_count", "opp_win_count", "self_win_count")
 

@@ -74,8 +74,8 @@ std::vector<int> picks_avoiding(int anchor, int n, int count) {
   return out;
 }
 
-bool same_observation(const SimObservation& a, const SimObservation& b) {
-  return std::memcmp(&a, &b, sizeof(SimObservation)) == 0;
+bool same_observation(const RolloutStats& a, const RolloutStats& b) {
+  return std::memcmp(&a, &b, sizeof(RolloutStats)) == 0;
 }
 
 class UltimateBotAgentTest : public ::testing::Test {
@@ -183,7 +183,7 @@ TEST_F(UltimateBotAgentTest, TheAnchorIsSimmedFirstAndLaterSimsFollowTheConditio
   // Replay the three sims as one batch with the agent's seed.
   const std::vector<Move> simmed = {cands[size_t(anchor)], cands[size_t(picks[0])],
                                     cands[size_t(picks[1])]};
-  const std::vector<SimObservation> obs =
+  const std::vector<RolloutStats> obs =
     SimRunner(dict_, p.sim).run(sim_position_from(request()), simmed, agent.sim_seed(0));
   EXPECT_TRUE(played == simmed[size_t(best_observation_index(obs, SimObjective::kWinRate))]);
 }
@@ -497,7 +497,7 @@ TEST_F(UltimateBotAgentTest, OneAtATimeSimsEqualOneBatchedRun) {
 
   const EvidenceSet evidence = agent::run_evidence_loop(cands, stub, simmer, policy, 4);
   const auto t0 = std::chrono::steady_clock::now();
-  const std::vector<SimObservation> batched = runner.run(pos, evidence.moves, seed);
+  const std::vector<RolloutStats> batched = runner.run(pos, evidence.moves, seed);
   const auto t1 = std::chrono::steady_clock::now();
 
   ASSERT_EQ(evidence.size(), 4);

@@ -3,7 +3,7 @@
 // The .sobs sidecar format for Monte-Carlo sim observations. One .sobs file
 // accompanies one .slog file (binary_log.h). For a subset of that file's
 // positions it holds the candidate moves simmed there and each candidate's
-// SimObservation (sim/sim_runner.h). Training reads these as the sim-evidence
+// RolloutStats (sim/sim_runner.h). Training reads these as the sim-evidence
 // inputs described in docs/plans/sim_residual_feedback.md.
 //
 // Observations are raw counts and moments, never residuals relative to a
@@ -80,10 +80,10 @@ static_assert(sizeof(SimObsPositionHeader) == 32, "SimObsPositionHeader must be 
 
 struct SimObsRecord {
   Move move;  // 16 B; the simmed candidate
-  SimObservation obs;
+  RolloutStats obs;
   SimObsRole role;  // meaningful only in trajectory files
 };
-static_assert(sizeof(SimObsRecord) == 16 + sizeof(SimObservation) + 1,
+static_assert(sizeof(SimObsRecord) == 16 + sizeof(RolloutStats) + 1,
               "SimObsRecord must pack move + observation + role byte with no padding");
 
 #pragma pack(pop)
@@ -108,7 +108,7 @@ class SimObsWriter {
   // non-trajectory writer leaves `roles` empty, and every record then stores
   // kAnchor, which readers of such files ignore.
   void add_position(uint32_t game_index, uint32_t turn_index, const std::vector<Move>& candidates,
-                    const std::vector<SimObservation>& observations, uint32_t rollouts,
+                    const std::vector<RolloutStats>& observations, uint32_t rollouts,
                     uint64_t base_seed, uint32_t num_legal_moves = 0,
                     const std::vector<SimObsRole>& roles = {});
 

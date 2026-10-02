@@ -30,7 +30,7 @@
 // ----------------
 // A record's planes are the teacher's four placement heads at the candidate's
 // post-move state, in kPlacementHeads order (opp_next, self_next, opp_win,
-// self_win; also the SimObservation order). Each is a distribution over the
+// self_win; also the RolloutStats order). Each is a distribution over the
 // kFootprintClasses footprint classes (training/footprint.h): the teacher's
 // softmax masked by board legality only, illegal footprints at zero
 // (masked_placement_distributions with no availability counts).

@@ -57,7 +57,7 @@ MoveDecision SimAgent::make_move(const MoveRequest& req) {
 
   const SimPosition pos = sim_position_from(req);
 
-  const std::vector<SimObservation> observations = runner_.run(pos, candidates, sim_seed(ply_));
+  const std::vector<RolloutStats> observations = runner_.run(pos, candidates, sim_seed(ply_));
   return candidates[size_t(best_observation_index(observations, objective_))];
 }
 

@@ -38,7 +38,7 @@ namespace agent {
 class CandidateSimmer {
  public:
   virtual ~CandidateSimmer() = default;
-  virtual SimObservation sim(const Move& candidate) = 0;
+  virtual RolloutStats sim(const Move& candidate) = 0;
 };
 
 // The production simmer: one single-candidate SimRunner::run per call, every
@@ -49,7 +49,7 @@ class SimRunnerCandidateSimmer : public CandidateSimmer {
   SimRunnerCandidateSimmer(const SimRunner& runner, const SimPosition& pos, uint64_t base_seed)
       : runner_(runner), pos_(pos), base_seed_(base_seed) {}
 
-  SimObservation sim(const Move& candidate) override;
+  RolloutStats sim(const Move& candidate) override;
 
  private:
   const SimRunner& runner_;

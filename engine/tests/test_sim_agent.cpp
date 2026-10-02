@@ -121,7 +121,7 @@ TEST_F(SimAgentTest, PlaysTheCandidateItsOwnRolloutsRankBest) {
     pos.scores = {13, 7};
     pos.rack = my_rack_;
     pos.opp_leave = opp_leave_;
-    const std::vector<SimObservation> obs =
+    const std::vector<RolloutStats> obs =
       SimRunner(dict_, p.sim).run(pos, candidates, agent.sim_seed(0));
 
     EXPECT_TRUE(played == candidates[size_t(best_observation_index(obs, objective))])
@@ -227,7 +227,7 @@ TEST_F(SimAgentTest, TruncatedRolloutsReproduceThroughSimRunner) {
   SimRunner::Params sp = p.sim;
   sp.horizon_plies = p.sim_horizon;
   sp.leaf_service = &replay_leaf;
-  const std::vector<SimObservation> obs =
+  const std::vector<RolloutStats> obs =
     SimRunner(dict_, sp).run(pos, candidates, agent.sim_seed(0));
   EXPECT_TRUE(played == candidates[size_t(best_observation_index(obs, p.objective))]);
 }

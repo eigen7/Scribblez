@@ -27,9 +27,9 @@
 //
 // Each .slog gets a same-stem .simsurvey.json; files that already have one are
 // skipped. Per position it records the rack, scores and bag; per candidate its
-// notation, equity, rank, leave, and a RolloutSummary (sim/rollout_summary.h)
+// notation, equity, rank, leave, and a RolloutReport (sim/rollout_report.h)
 // from each stage that simmed it; and for each confirmed move its paired win
-// difference against every cut move. The summaries carry what a later
+// difference against every cut move. The reports carry what a later
 // classifier needs to say why a move outside the cut sims well: the opponent's
 // replies score less (defense), the mover's next move scores more off its own
 // tiles (setup), or only the shape of the margin distribution changes
@@ -109,7 +109,7 @@ SlogSimConfig screen_config(const Options& opt, const Dictionary& dict) {
     c.selector = opt.recipe == "setup" ? setup_selector(dict, opt.cut, cap)
                                        : all_plays_selector(dict, opt.cut, opt.max_plays);
   }
-  c.keep_summaries = true;
+  c.keep_reports = true;
   c.runner.rollouts = opt.rollouts;
   if (opt.race) {
     // Checkpoints at 10%, 20%, 40% and 70% of the screen. At three paired
@@ -240,7 +240,7 @@ json::object to_json(const NextMoveStats& s) {
           {"non_plays", s.non_plays}, {"adjacent", s.adjacent}};
 }
 
-json::object to_json(const RolloutSummary& s) {
+json::object to_json(const RolloutReport& s) {
   return {{"n", s.n},
           {"wins", s.wins},
           {"draws", s.draws},
@@ -266,7 +266,7 @@ std::string leave_after(Rack rack, const Move& m) {
   return rack.to_string();
 }
 
-double win_equity(const RolloutSummary& s) { return (s.wins + 0.5 * s.draws) / s.n; }
+double win_equity(const RolloutReport& s) { return (s.wins + 0.5 * s.draws) / s.n; }
 
 // The screen's best --confirm-picks candidates outside the cut (setup plays
 // only, under the setup recipe), best first by win rate, then mean margin, then
@@ -274,14 +274,14 @@ double win_equity(const RolloutSummary& s) { return (s.wins + 0.5 * s.draws) / s
 // already clearly below the leader.
 std::vector<int> best_outside_cut(const SimmedPosition& r, const Options& opt) {
   std::vector<int> outside;
-  for (size_t c = 0; c < r.summaries.size(); ++c) {
+  for (size_t c = 0; c < r.reports.size(); ++c) {
     const int32_t rank = r.candidates.equity_ranks[c];
     const bool beyond = rank < 0 || rank >= opt.cut;
     const bool wanted = opt.recipe != "setup" || r.candidates.highlighted[c];
-    if (beyond && wanted && int(r.summaries[c].n) == opt.rollouts) outside.push_back(int(c));
+    if (beyond && wanted && int(r.reports[c].n) == opt.rollouts) outside.push_back(int(c));
   }
   const auto key = [&](int c) {
-    const RolloutSummary& s = r.summaries[size_t(c)];
+    const RolloutReport& s = r.reports[size_t(c)];
     return std::tuple(-win_equity(s), -s.delta_sum, c);
   };
   std::sort(outside.begin(), outside.end(), [&](int a, int b) { return key(a) < key(b); });
@@ -329,7 +329,7 @@ json::object candidate_json(const SimmedPosition& r, size_t c) {
           {"tiles_played", m.type() == MoveType::PLAY ? m.num_glyphs() : 0},
           {"leave", leave_after(r.position.rack, m)},
           {"is_setup", bool(r.candidates.highlighted[c])},
-          {"screen", to_json(r.summaries[c])}};
+          {"screen", to_json(r.reports[c])}};
 }
 
 // The confirming sim, in confirm_indices order. Per re-simmed move: its index
@@ -344,7 +344,7 @@ json::array confirm_json(const SurveyedPosition& p, const Options& opt) {
     for (const PairedWinDiff& d : p.confirm->paired[k])
       vs_cut.push_back(json::array{d.sum, d.sq_sum});
     out.push_back(json::object{{"candidate", indices[k]},
-                               {"summary", to_json(p.confirm->summaries[k])},
+                               {"summary", to_json(p.confirm->reports[k])},
                                {"win_diff_vs_cut", std::move(vs_cut)}});
   }
   return out;

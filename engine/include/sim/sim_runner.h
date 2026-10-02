@@ -69,7 +69,7 @@ struct SimPosition {
 // class each. `*_win_count` weights that credit by the probability that the
 // move's player won. Stored dense; the anchored classes reshape to
 // (15, 15, slots).
-struct SimObservation {
+struct RolloutStats {
   static constexpr int kClasses = kFootprintClasses;
 
   // Doubles first, so the layout carries no alignment padding to serialize.
@@ -77,7 +77,7 @@ struct SimObservation {
   double draws = 0;
   double losses = 0;
   double delta_sum = 0;  // final delta: mover's score minus the opponent's
-  // Sum of the final delta's second moment (see RolloutResult::delta_sq). The
+  // Sum of the final delta's second moment (see Rollout::delta_sq). The
   // variance recovered from it is predictive in both configurations: by the
   // law of total variance, the spread of the rollout means plus the mean leaf
   // variance.
@@ -89,18 +89,18 @@ struct SimObservation {
   std::array<float, kClasses> opp_win_count{};
   std::array<float, kClasses> self_win_count{};
 };
-static_assert(sizeof(SimObservation) == 44 + (2 + 2 + 4 + 4) * SimObservation::kClasses,
-              "SimObservation is serialized verbatim; its layout must stay packed");
+static_assert(sizeof(RolloutStats) == 44 + (2 + 2 + 4 + 4) * RolloutStats::kClasses,
+              "RolloutStats is serialized verbatim; its layout must stay packed");
 
 // What ranks simulated candidates: win rate (draws count half) or mean final
 // spread.
 enum class SimObjective { kWinRate, kSpread };
 
-double sim_objective_value(const SimObservation& o, SimObjective objective);
+double sim_objective_value(const RolloutStats& o, SimObjective objective);
 
 // Index of the best observation under `objective`. Ties go to the lower index,
 // so the caller's own candidate order breaks them.
-int best_observation_index(const std::vector<SimObservation>& observations, SimObjective objective);
+int best_observation_index(const std::vector<RolloutStats>& observations, SimObjective objective);
 
 // Parses "winrate" or "spread"; anything else throws util::CleanException
 // naming `flag`.
@@ -109,7 +109,7 @@ SimObjective parse_sim_objective(const std::string& name, const std::string& fla
 // One rollout's outcome, from the root mover's point of view. A terminal
 // rollout has 0/1 probabilities and an exact delta; a truncated one carries
 // the leaf model's outcome probabilities and final-delta Gaussian.
-struct RolloutResult {
+struct Rollout {
   // The two moves the placement histograms read. A missing move is a default
   // Move (PASS), which places nothing.
   Move opp_reply{};
@@ -137,10 +137,10 @@ struct RolloutResult {
 // How much the end-of-game rack settlement moved the final delta, from the
 // root mover's point of view: twice the other side's tiles to whoever played
 // out, or each side docked its own when nobody did.
-int end_rack_swing(const RolloutResult& r);
+int end_rack_swing(const Rollout& r);
 
 // Fold one rollout into the candidate's observation.
-void accumulate_rollout(const RolloutResult& o, SimObservation* obs);
+void accumulate_rollout(const Rollout& o, RolloutStats* obs);
 
 // One rollout worker's buffer of horizon leaves awaiting evaluation. Rows are
 // flushed through the shared leaf service kRows at a time, and the readouts
@@ -151,7 +151,7 @@ class LeafBatcher {
   static constexpr int kRows = 64;
 
   LeafBatcher(nn::PositionEvalService* service, const InputEncodingSpec& spec,
-              std::vector<RolloutResult>* results)
+              std::vector<Rollout>* results)
       : service_(service),
         results_(results),
         row_floats_(input_floats(spec)),
@@ -175,7 +175,7 @@ class LeafBatcher {
   };
 
   nn::PositionEvalService* service_;
-  std::vector<RolloutResult>* results_;
+  std::vector<Rollout>* results_;
   size_t row_floats_;
   std::vector<float> rows_;
   std::vector<float> wld_;
@@ -232,20 +232,18 @@ class SimRunner {
 
   // Rollout i of every candidate is seeded by `base_seed + i`. Requires a
   // non-empty bag at the decision point, so no candidate can end the game.
-  std::vector<SimObservation> run(const SimPosition& pos, const std::vector<Move>& candidates,
-                                  uint64_t base_seed) const;
+  std::vector<RolloutStats> run(const SimPosition& pos, const std::vector<Move>& candidates,
+                                uint64_t base_seed) const;
 
   // The rollouts behind run(), unreduced, for a consumer that reduces them
-  // differently (sim/rollout_summary.h). Candidate c's rollout i is at
+  // differently (sim/rollout_report.h). Candidate c's rollout i is at
   // [c * rollouts + i].
-  std::vector<RolloutResult> run_rollouts(const SimPosition& pos,
-                                          const std::vector<Move>& candidates,
-                                          uint64_t base_seed) const;
+  std::vector<Rollout> run_rollouts(const SimPosition& pos, const std::vector<Move>& candidates,
+                                    uint64_t base_seed) const;
   // As above with `rollouts` in place of the params' count, so a caller can sim
   // in instalments: rollouts [a, b) are run_rollouts(..., base_seed + a, b - a).
-  std::vector<RolloutResult> run_rollouts(const SimPosition& pos,
-                                          const std::vector<Move>& candidates, uint64_t base_seed,
-                                          int rollouts) const;
+  std::vector<Rollout> run_rollouts(const SimPosition& pos, const std::vector<Move>& candidates,
+                                    uint64_t base_seed, int rollouts) const;
   int rollouts() const { return params_.rollouts; }
 
  private:

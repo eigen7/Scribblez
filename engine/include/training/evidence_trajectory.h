@@ -55,7 +55,7 @@ struct TrajectoryResult {
   uint32_t num_legal_moves = 0;
   std::vector<Move> candidates;   // trajectory order: anchor, on-policy, off-policy
   std::vector<SimObsRole> roles;  // parallel to candidates
-  std::vector<SimObservation> observations;
+  std::vector<RolloutStats> observations;
 };
 
 // Runs every student evaluation on one dedicated thread, which serializes the

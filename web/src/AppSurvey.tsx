@@ -54,7 +54,7 @@ function openingSelection(position: SurveyPosition): Selection {
   return { outside: outside >= 0 ? outside : null, hasty: top >= 0 ? top : null };
 }
 
-// What each bin of the tool's histograms covers (sim/rollout_summary.h).
+// What each bin of the tool's histograms covers (sim/rollout_report.h).
 const scoreBinLabel = (bin: number, bins: number) =>
   bin === bins - 1 ? 'scored 100 or more' : `scored ${10 * bin}–${10 * bin + 9}`;
 const marginBinLabel = (bin: number, bins: number) => {

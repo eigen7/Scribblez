@@ -419,7 +419,7 @@ their inputs and outputs.
   plans it is tolerance-bounded.
 - **Evidence staging**
   ([evidence_staging.h](../engine/include/agent/evidence_staging.h)): turns
-  `SimObservation`s, moves and the cache's per-candidate predictions into the
+  `RolloutStats`s, moves and the cache's per-candidate predictions into the
   fusion stage's padded `(1, E, …)` inputs.
 - **Runtime**: two specs beside `MoveSetEvaluationSpec`
   (`MoveProposalCacheSpec`, `MoveProposalStepSpec`), served at FP32 through

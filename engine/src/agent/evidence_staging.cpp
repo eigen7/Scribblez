@@ -29,8 +29,7 @@ void scatter_histogram(const T* hist, float inv_n, float* out) {
 
 // One token's planes, in the layout of evidence_staging.h. `out` arrives
 // zeroed.
-void stage_planes(const SimObservation& obs, const Move& move, const float* plane_probs,
-                  float* out) {
+void stage_planes(const RolloutStats& obs, const Move& move, const float* plane_probs, float* out) {
   const float inv_n = 1.0f / float(std::max<std::uint32_t>(obs.n, 1));
   scatter_histogram(obs.opp_next_count.data(), inv_n, out + 0 * kSlotsPerCell * kCells);
   scatter_histogram(obs.self_next_count.data(), inv_n, out + 1 * kSlotsPerCell * kCells);
@@ -47,7 +46,7 @@ void stage_planes(const SimObservation& obs, const Move& move, const float* plan
 }
 
 // One token's scalars, in the order of evidence_staging.h.
-void stage_scalars(const SimObservation& obs, const float* wld_logits, const float* score_diff,
+void stage_scalars(const RolloutStats& obs, const float* wld_logits, const float* score_diff,
                    float* out) {
   const double n = std::max<double>(obs.n, 1.0);
   const double delta_mean = obs.delta_sum / n;
@@ -66,7 +65,7 @@ void stage_scalars(const SimObservation& obs, const float* wld_logits, const flo
 
 }  // namespace
 
-void stage_evidence(std::span<const Move> moves, std::span<const SimObservation> observations,
+void stage_evidence(std::span<const Move> moves, std::span<const RolloutStats> observations,
                     std::span<const int> scored_indices, const CachePredictions& predictions,
                     int max_evidence, const EvidenceStagingOutputs& out) {
   const int num_evidence = int(moves.size());

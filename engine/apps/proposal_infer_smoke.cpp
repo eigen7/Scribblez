@@ -41,22 +41,22 @@
 namespace {
 
 using scribblez::Move;
-using scribblez::SimObservation;
+using scribblez::RolloutStats;
 using scribblez::agent::EvidenceSet;
 using scribblez::agent::MoveProposalNets;
 using scribblez::agent::MoveProposalPredictions;
 using scribblez::agent::MoveProposalSession;
 
 // A plausible rollout observation, varied slightly by `j`.
-SimObservation synthetic_observation(int j) {
-  SimObservation obs;
+RolloutStats synthetic_observation(int j) {
+  RolloutStats obs;
   obs.n = 40 + j;
   obs.wins = 20 + j;
   obs.draws = 5;
   obs.losses = obs.n - obs.wins - obs.draws;
   obs.delta_sum = 12.0 * obs.n;
   obs.delta_sq_sum = (12.0 * 12.0 + 25.0) * obs.n;
-  for (int cls = 0; cls < SimObservation::kClasses; ++cls) {
+  for (int cls = 0; cls < RolloutStats::kClasses; ++cls) {
     obs.opp_next_count[cls] = uint16_t(cls % 7);
     obs.self_next_count[cls] = uint16_t(cls % 3);
   }

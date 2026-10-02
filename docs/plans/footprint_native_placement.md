@@ -85,7 +85,7 @@ contradicts the "peaked" assumption for one of them.
   footprints however broad the teacher's predicted distribution is. The plan
   was sparse top-k at a fixed padded width.
 
-  *BC2 deviation: stored dense.* Keeping `SimObservation` a verbatim
+  *BC2 deviation: stored dense.* Keeping `RolloutStats` a verbatim
   fixed-stride POD avoids a format rewrite: v4 → v5 is an ordinary version
   bump over the same layout machinery. The 13× is accepted on disk, and a
   sparse re-encode remains a later, purely mechanical change. The 13× must
@@ -101,7 +101,7 @@ one encoding; there is no dual dense/sparse path.
 The planned sparse `.sobs` would have required **accumulating dense and
 sparsifying on write**: the in-memory accumulator (`accumulate_rollout` in
 `sim/sim_runner.h`) cannot know the top k until every rollout is folded in,
-so the in-memory `SimObservation` stays a dense histogram and only the
+so the in-memory `RolloutStats` stays a dense histogram and only the
 serialized record is padded top-k. That makes the record no longer a
 verbatim POD, which is a format rewrite (new `sizeof` and `static_assert`s)
 rather than a version bump. Storing dense made the rewrite unnecessary.

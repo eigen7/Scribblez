@@ -49,7 +49,7 @@ worker, or collected over ssh from a remote one's container:
 
 - `survey/<stem>.simsurvey.json`: one per game, slimmed to the positions
   found. Each position lists the top moves and the outside picks with their
-  confirming-sim summaries (`engine/include/sim/rollout_summary.h`). The file
+  confirming-sim summaries (`engine/include/sim/rollout_report.h`). The file
   also records `positions_surveyed`, the number of turns surveyed, so rates
   stay computable.
 - `gcg/<stem>-g0-turn<N>.gcg`: the game up to each found position.
