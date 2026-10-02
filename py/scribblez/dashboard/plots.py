@@ -12,7 +12,7 @@ from __future__ import annotations
 from functools import partial
 
 import numpy as np
-from bokeh.layouts import column, row
+from bokeh.layouts import column, gridplot
 from bokeh.models import (
     ColumnDataSource,
     Div,
@@ -27,7 +27,11 @@ from bokeh.plotting import figure
 
 from . import db
 
-SERIES_SIZE = 800  # side of a square learning-curve figure, in pixels
+# Figures are sized by the page, not in pixels: each scales to the width its
+# grid cell gets and keeps this width:height ratio, so a grid always fits the
+# dashboard's capped column.
+SQUARE = 1
+WIDE = 2
 
 
 # ---------------------------------------------------------------------------
@@ -124,8 +128,8 @@ def _series_figure(
     epoch axis logarithmic; a log epoch axis gets an explicit positive range so
     an epoch-0 point does not break it."""
     fig = figure(
-        width=SERIES_SIZE,
-        height=SERIES_SIZE,
+        sizing_mode="scale_width",
+        aspect_ratio=SQUARE,
         title=title,
         x_axis_label="epoch",
         x_axis_type="log" if log_x else "linear",
@@ -253,11 +257,23 @@ POST_MOVE_QUALITY = [
         ],
     ),
 ]
-# Figures per row of the value-quality panel.
-QUALITY_NCOLS = 2
+# Figures per row of every learning-curve grid.
+SERIES_NCOLS = 2
 
 
-def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
+def _grid(figs):
+    """`figs` laid out SERIES_NCOLS to a row, stretched to the page's width.
+    Each figure keeps its own toolbar; the grid gets none."""
+    return gridplot(
+        figs,
+        ncols=SERIES_NCOLS,
+        sizing_mode="stretch_width",
+        merge_tools=False,
+        toolbar_location=None,
+    )
+
+
+def series_grid(conn, groups, smooth: bool = False):
     """A grid of learning-curve figures for one tag, one per metric group that
     has data. `smooth` draws each curve as its EMA."""
     sources = [(conn, "")]
@@ -269,8 +285,7 @@ def series_grid(conn, groups, ncols: int = 3, smooth: bool = False):
             figs.append(f)
     if not figs:
         return Div(text="<i>No scalar metrics recorded yet.</i>")
-    rows = [row(*figs[i : i + ncols]) for i in range(0, len(figs), ncols)]
-    return column(*rows)
+    return _grid(figs)
 
 
 # The Loss tab's figures carry every knob variant as a pre-built named row, so
@@ -293,7 +308,7 @@ def _variant_rows(builders):
         r = build()
         r.name = name
         rows.append(r)
-    return column(*rows)
+    return column(*rows, sizing_mode="stretch_width")
 
 
 def _quality_row(sources, smooth, log_x):
@@ -303,7 +318,7 @@ def _quality_row(sources, smooth, log_x):
         for title, group in POST_MOVE_QUALITY
         if (f := _series_figure(sources, title, group, smooth=smooth, log_x=log_x))
     ]
-    return column(*(row(*figs[i : i + QUALITY_NCOLS]) for i in range(0, len(figs), QUALITY_NCOLS)))
+    return _grid(figs)
 
 
 def eval_quality_grid(conn, tag: str, smooth: bool = False, secondary=None):
@@ -367,8 +382,8 @@ def match_eval_grid(conn):
     opponents = " / ".join(sorted({r["opponent"] for r in rows}))
 
     fig = figure(
-        width=2 * SERIES_SIZE,
-        height=SERIES_SIZE,
+        sizing_mode="scale_width",
+        aspect_ratio=WIDE,
         title=f"Match win rate vs {opponents}",
         x_axis_label="generation",
         y_axis_label="pair score",
@@ -402,8 +417,8 @@ def match_arms_grid(conn):
     )
     opponents = " / ".join(sorted({r["opponent"] for r in rows}))
     fig = figure(
-        width=2 * SERIES_SIZE,
-        height=SERIES_SIZE,
+        sizing_mode="scale_width",
+        aspect_ratio=WIDE,
         x_range=names,
         title=f"Arm win rates vs {opponents}",
         x_axis_label="arm",
@@ -437,8 +452,8 @@ def _epoch_figure(title: str, x, y_label: str, log_x: bool):
     """An empty square Loss-tab figure over the epoch axis `x`. A log axis gets
     an explicit positive range so an epoch-0 point does not break it."""
     fig = figure(
-        width=SERIES_SIZE,
-        height=SERIES_SIZE,
+        sizing_mode="scale_width",
+        aspect_ratio=SQUARE,
         title=title,
         x_axis_label="epoch",
         y_axis_label=y_label,
@@ -543,7 +558,7 @@ def _loss_accuracy_row(x, series, weights, normalized, conn, pos_by_epoch, log_x
         figs.append(
             _step_figure("Accuracy", x, [(series[k], k) for k in acc_names], "accuracy", log_x)
         )
-    return row(*figs)
+    return _grid(figs)
 
 
 def add_control_markers(fig, conn, epochs, pos_by_epoch):

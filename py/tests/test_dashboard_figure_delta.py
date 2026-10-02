@@ -85,6 +85,16 @@ def test_ranges_cover_explicit_axes_only(tmp_path):
                 assert panel["x"] is None  # auto -- BokehJS follows the streamed data
 
 
+def test_ranges_reach_grid_panels(tmp_path):
+    """Panels nested in a variant row's grid get their padded y ranges moved."""
+    state, model, _ = _grown(tmp_path, lambda conn: plots.eval_quality_grid(conn, "t"))
+    ranges = figure_delta.delta_response(model, state)["ranges"]
+    assert set(ranges) == {plots.X_AXIS_LINEAR, plots.X_AXIS_LOG}
+    for panels in ranges.values():
+        assert len(panels) == 1  # only the WLD panel has data
+        assert panels[0]["y"] is not None
+
+
 def test_new_series_forces_refetch(tmp_path):
     state, _, conn = _grown(tmp_path, plots.metrics_loss_grid)
     db.write_metrics(conn, 5, {"positions": 600, "loss": 1.0, "loss_new": 0.5})

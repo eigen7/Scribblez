@@ -32,10 +32,23 @@ def _named_sources(model) -> dict:
     return out
 
 
-def _row_panels(child) -> list:
+def _row_panels(layout) -> list:
     """A figure row's Plot panels in layout order, which is how the client zips
-    them. Bokeh's `select` would return them in no fixed order."""
-    return [p for p in getattr(child, "children", []) if isinstance(p, Plot)]
+    them (bokehDoc.ts's collectPlots). Bokeh's `select` would return them in no
+    fixed order."""
+    if isinstance(layout, Plot):
+        return [layout]
+    panels = []
+    for child in getattr(layout, "children", []):
+        # A GridPlot's children are (panel, row, column) tuples.
+        panels += _row_panels(child[0] if isinstance(child, tuple) else child)
+    return panels
+
+
+def _variant_rows(model) -> list:
+    """The model's named knob-variant rows (plots.py's _variant_rows), the units
+    the client addresses ranges by. A figure without knobs has none."""
+    return [c for c in getattr(model, "children", []) if getattr(c, "name", None)]
 
 
 def structure_key(model) -> str:
@@ -44,8 +57,7 @@ def structure_key(model) -> str:
     The client echoes it back; a mismatch means the document must be rebuilt."""
     names = sorted(_named_sources(model))
     rows = [
-        (child.name, [p.title.text for p in _row_panels(child)])
-        for child in getattr(model, "children", [])
+        (child.name, [p.title.text for p in _row_panels(child)]) for child in _variant_rows(model)
     ]
     markers = len(list(model.select({"type": Span})))
     return hashlib.md5(repr((names, rows, markers)).encode()).hexdigest()
@@ -76,7 +88,7 @@ def _explicit_ranges(model) -> dict:
         child.name: [
             {"x": endpoints(p.x_range), "y": endpoints(p.y_range)} for p in _row_panels(child)
         ]
-        for child in getattr(model, "children", [])
+        for child in _variant_rows(model)
     }
 
 
