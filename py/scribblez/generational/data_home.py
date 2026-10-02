@@ -10,7 +10,7 @@ chunk arrives the way a colocated generator's does. A thread of the trainer
 
   - It runs the generation scheduler (scheduler.tick) over the local tree.
   - It publishes the scheduler's state (its gate on the generate role and a
-    heartbeat) through the trainer's records sink as scheduler_state.json. The
+    heartbeat) through the trainer's sink as scheduler_state.json. The
     controller parks and releases generators from that record
     (scheduler.tick_for_task).
 
@@ -52,7 +52,7 @@ def start_for(ctx, paths: TagPaths, params) -> "DataHome":
         games_per_generation=params.games_per_generation, open_ahead=params.open_ahead
     )
     remote = os.environ.get("SCZ_REMOTE_HOME") == "1"
-    home = DataHome(paths, cfg, ctx.records_sink, remote=remote)
+    home = DataHome(paths, cfg, ctx.sink, remote=remote)
     home.start()
     return home
 
@@ -76,14 +76,14 @@ class DataHome:
         self,
         paths: TagPaths,
         cfg: scheduler.SchedulerConfig,
-        records_sink,
+        sink,
         chunk_games: scheduler.ChunkGamesFn = scheduler._header_games,
         *,
         remote: bool = False,
     ):
         self._paths = paths
         self._cfg = cfg
-        self._records = records_sink
+        self._sink = sink
         self._chunk_games = chunk_games
         self.remote = remote
         self._gate: str | None = None
@@ -121,7 +121,7 @@ class DataHome:
         self._gate = reason
 
     def _publish_state(self):
-        self._records.push_json(SCHEDULER_STATE_REL, {"gate": self._gate, "heartbeat": time.time()})
+        self._sink.push_json(SCHEDULER_STATE_REL, {"gate": self._gate, "heartbeat": time.time()})
 
 
 def _no_finish(role: str):

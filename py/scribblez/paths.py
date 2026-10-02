@@ -96,8 +96,7 @@ SCHEDULER_STATE_REL = "scheduler_state.json"
 TRAINER_OUTPUT_DIRS = ("models", "records")
 
 # The trainer's record stream (generational/records.py), relative to the tag
-# root because the trainer writes through a results sink that maps them either
-# under the local tag root or under the tag's prefix in the bucket.
+# root, which the trainer writes through its results sink.
 RECORDS_DIR = "records"
 RUN_RECORD_REL = f"{RECORDS_DIR}/run.json"
 CONTROLS_REL = "controls.json"

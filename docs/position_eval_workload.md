@@ -165,23 +165,10 @@ Live controls travel the other way as one file. The Controls tab writes every
 control's value to the tag's `controls.json`, which the trainer reads through
 the same sink once per generation.
 
-**Everything crosses the sink**, which is what lets the same trainer run on
-the controller's machine or on a rented one:
-
-- Before waiting on a generation's manifest, the trainer fetches the
-  generation through the sink (a pull of the published generation from the
-  bucket; nothing under the local sink, whose mount dir already holds it).
-- After writing each generation's outputs (the ONNX export, the rolling
-  checkpoint and cursor as one state pair, then the record), it delivers them
-  through the sink.
-- Every start restores the newest state pair the sink holds when it has
-  trained more rows than this machine's copy (the cursor rule,
-  `generational/state_pair.py`), then the window's generations. A fresh
-  machine therefore takes the sink's state; one holding fresher state keeps
-  its own.
-
-A trainer's records sink is local wherever it runs, so all of this writes
-into its own tag tree. For an ssh trainer (an ssh slot on a rented or owned
+After writing each generation's outputs (the ONNX export, the rolling
+checkpoint and cursor as one state pair, then the record), the trainer
+delivers them through its sink into its own tag tree, wherever it runs. For
+an ssh trainer (an ssh slot on a rented or owned
 GPU machine, on the torch worker image) the controller supplies the other
 half over the control link:
 - each pass collects its `models/`, `records/` and newest complete state pair,

@@ -318,12 +318,6 @@ def _home_trainer(spec: workloads.WorkloadSpec, role: workloads.RoleSpec) -> boo
     return spec.scheduler == TICK_FOR_TASK and bool(role.ingest)
 
 
-# The data sink of a slot on its tag's data home on an ssh machine: the tag's
-# named volume there, shared with the other slots on that machine. The worker
-# sees it as its local data sink.
-DATA_SINK_HOME = "home"
-
-
 def _trainer_slot(spec, task: tasks.TaskRecord) -> tasks.WorkerRecord | None:
     return next((w for w in task.workers if spec.role(w.role).ingest), None)
 
@@ -593,9 +587,9 @@ class WorkerManager:
     # ---- bundle deployment -------------------------------------------------
 
     def deploy(self, spec, task: tasks.TaskRecord) -> str:
-        """Build the controller's tree for the task's archs, push it unless
-        the bucket already has it, and pin the task to the result. Returns
-        the bundle id."""
+        """Build the controller's tree for the task's archs, write a bundle of
+        it unless the store already has one, and pin the task to the result.
+        Returns the bundle id."""
         return self._pin_bundle(spec, task, self._build_bundle(self._needed_archs(spec, task)))
 
     async def redeploy(self, spec, task: tasks.TaskRecord) -> str:
@@ -772,7 +766,6 @@ class WorkerManager:
     def _spawn_local(self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w):
         params = params_mod.validate(spec.params_cls, task.params)
         env = os.environ | spec.worker_env(task.tag, params, w.role) | {
-            "SCZ_SINK": "local",
             "SCZ_MOUNT_ROOT": str(self.mount_root),
             "SCZ_THREADS": str(w.threads),
             "SCZ_WORKER_ID": w.worker_id,
@@ -938,8 +931,7 @@ class WorkerManager:
         env = bundle_worker_env(
             spec, task.tag, params, role=w.role, bundle_id=w.bundle_id, worker_id=w.worker_id
         )
-        env["SCZ_SINK"] = self._slot_records_sink(spec, task, w)
-        data_sink = self._slot_data_sink(spec, task, w)
+        on_home = self._on_remote_data_home(spec, task, w)
         home = _home_trainer(spec, spec.role(w.role))
         if home:
             # Its trainer keeps each generation until the controller pulls it.
@@ -957,7 +949,7 @@ class WorkerManager:
         # so every rename stays within one filesystem.
         volume = (
             (_tag_volume(spec, task), str(spec.paths(task.tag, DEFAULT_MOUNT_ROOT).root))
-            if data_sink == DATA_SINK_HOME
+            if on_home
             else None
         )
         if w.threads:
@@ -1033,9 +1025,10 @@ class WorkerManager:
 
     def _check_data_home_order(self, spec, task: tasks.TaskRecord, role: workloads.RoleSpec):
         """A generational tag's trainer decides where its other data-plane
-        slots deliver, and a running slot cannot move (its sinks and mount are fixed
-        when its worker starts). So a generator needs a trainer, and a trainer
-        joins only while the others are stopped; _rehome then moves them."""
+        slots deliver, and a running slot cannot move (its mount and
+        environment are fixed when its worker starts). So a generator needs a
+        trainer, and a trainer joins only while the others are stopped;
+        _rehome then moves them."""
         if role.ingest:
             moving = [
                 w.worker_id
@@ -1055,7 +1048,7 @@ class WorkerManager:
     def _rehome(self, spec, task: tasks.TaskRecord, joined: tasks.WorkerRecord):
         """After data-home trainer `joined` is added to a tag that already has
         other slots: recreate their stopped ssh containers at their next start,
-        with the sinks and mount the new home gives them, and remove the tag's
+        with the mount and environment the new home gives them, and remove the tag's
         volume wherever no slot now works in it. The old home's data plane was
         swept here when its trainer was removed (_sweep_home); the new home is
         seeded from that copy (_seed_home, _seed_state)."""
@@ -1562,7 +1555,7 @@ class WorkerManager:
 
     def _discard_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Remove stopped ssh slot `w`'s container, collecting what it holds
-        first, so its next start creates one with the sinks and mount it now
+        first, so its next start creates one with the mount and environment it now
         gets."""
         probe = self._refresh_probe(spec, task, w)
         assert probe in ("stopped", "missing"), f"{w.worker_id} is {probe}"
@@ -2024,8 +2017,8 @@ class WorkerManager:
     async def offload(self, fn, *args, **kwargs):
         """Run one blocking step off the event loop, one at a time.
 
-        Everything reconcile does is blocking IO measured in seconds: ssh,
-        rclone, the provider's API. Inline, it would freeze every request the
+        Everything reconcile does is blocking IO measured in seconds: ssh and
+        the provider's API. Inline, it would freeze every request the
         dashboard serves (a scheduler gate flip alone can take 8 seconds). The
         executor has a single thread, so the steps stay serialized with each
         other, as they mutate the same task records.
@@ -2484,31 +2477,6 @@ class WorkerManager:
 
     # ---- a slot's machine and delivery (read through the pool store) -----
 
-    def _slot_records_sink(
-        self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
-    ) -> str:
-        """Where slot `w`'s worker sends its records (SCZ_SINK, cloud/sinks.py):
-        stats, params, a trainer's records, exports and state pairs. Always
-        "local": a local subprocess writes the tag tree here, and an ssh
-        container writes its own, which the reconcile pass collects over ssh
-        (cloud/ssh_transfer.py; _transfer_target says what is taken). The
-        controller is the hub every record reaches it through."""
-        return "local"
-
-    def _slot_data_sink(
-        self, spec: workloads.WorkloadSpec, task: tasks.TaskRecord, w: tasks.WorkerRecord
-    ) -> str:
-        """Where slot `w`'s worker delivers into and reads from the tag's data/
-        store: DATA_SINK_HOME on the machine of a tag's data home on an ssh
-        machine, whose volume the slots there share. Otherwise "local": a
-        local slot delivers into the tag tree here, and an ssh slot into its
-        container, which the reconcile pass collects (and, for a data home
-        elsewhere, relays on: _relay_staging). Either way the worker's data
-        sink is local (SCZ_DATA_SINK unset)."""
-        if self._on_remote_data_home(spec, task, w):
-            return DATA_SINK_HOME
-        return "local"
-
     def _remote_data_home(self, spec, task: tasks.TaskRecord) -> tasks.WorkerRecord | None:
         """The trainer slot of a generational tag whose trainer, and so its data
         home, is on an ssh machine; None for any other tag."""
@@ -2570,7 +2538,7 @@ class WorkerManager:
             "local_root": paths.root,
             # A data home's staging is its own scheduler's to take.
             "data_dirs": []
-            if self._slot_data_sink(spec, task, w) == DATA_SINK_HOME
+            if self._on_remote_data_home(spec, task, w)
             else [f"data/{sub}" for sub in spec.collected_dirs],
         }
         if spec.role(w.role).ingest:

@@ -26,7 +26,7 @@ from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, Workloa
 
 SIM_OBS_TOOL = str(ENGINE_DIR / "sim_obs_tool")
 
-# The tag's pair store, under the tag's data/ dir (locally and in the bucket).
+# The tag's pair store, under the tag's data/ dir.
 SLOGS_DIR = "slogs"
 
 

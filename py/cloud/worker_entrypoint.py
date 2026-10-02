@@ -12,24 +12,15 @@ SIGTERM (docker stop, a spot interruption, a slot paused in the dashboard)
 raises WorkerStopped out of the runner's loop. Runners flush completed output
 and exit, losing at most the cycle in flight.
 
-The sinks (SCZ_DATA_SINK and SCZ_SINK, cloud/sinks.py) decide where output
-goes: "r2" uploads it to the bucket, "local" moves it into the tag's tree on
-this machine's mount dir. The data sink carries the tag's data/ store, the
-records sink everything else.
+Output goes into the tag's tree on this machine's mount dir (the sink,
+cloud/sinks.py). In a container that tree is the container's own, which the
+dashboard collects over ssh.
 
 All configuration comes from environment variables:
 
-    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,      bucket credentials (r2 sink only)
-    R2_SECRET_ACCESS_KEY, R2_BUCKET
     SCZ_WORKLOAD                          workload name (default "kill_test")
     SCZ_ROLE                              role name (default: the workload's first)
     SCZ_TAG                               run tag (required)
-    SCZ_SINK                              records sink: "r2" (default) or
-                                          "local"
-    SCZ_DATA_SINK                         data sink: "r2" or "local" (default:
-                                          SCZ_SINK's). The controller sets it
-                                          only when it differs, so a bundle
-                                          predating it keeps starting.
     SCZ_<PARAM>                           workload params (scribblez/params.py
                                           encoding; defaults from the dataclass)
     SCZ_STATE_SEED                        "1": the controller is pushing its
@@ -46,8 +37,7 @@ All configuration comes from environment variables:
     SCZ_WORKER_ID                         manifest/stats identity (default: the
                                           hostname)
     SCZ_WORKER_KIND                       slot kind reported in stats: "local"
-                                          or "ssh" (default: the records
-                                          sink's)
+                                          (the default) or "ssh"
     SCZ_BUNDLE_ID, SCZ_BUNDLE_ARCH        the bundle the dashboard copied in;
                                           recorded in the params record and
                                           stats
@@ -55,10 +45,7 @@ All configuration comes from environment variables:
     SCZ_DEVICE                            torch device for a train role
                                           (default "cuda"; read by the trainers)
     SCZ_MOUNT_ROOT                        root of the tag trees (default: the
-                                          mount dir). Lets an r2-sink trainer
-                                          run on the controller's own machine
-                                          without writing into the tag tree
-                                          the controller manages.
+                                          mount dir)
 """
 
 import os
@@ -74,7 +61,7 @@ from scribblez.hardware import default_thread_count
 from scribblez.paths import DEFAULT_MOUNT_ROOT
 from scribblez.workloads.worker import WorkerStopped
 
-from cloud.sinks import make_sinks
+from cloud.sinks import make_sink
 
 # The SCZ_* variables that configure the worker rather than the workload
 # (documented in the module docstring). Every other SCZ_* variable must be a
@@ -83,8 +70,6 @@ WORKER_ENV_VARS = (
     "SCZ_WORKLOAD",
     "SCZ_ROLE",
     "SCZ_TAG",
-    "SCZ_SINK",
-    "SCZ_DATA_SINK",
     "SCZ_STATE_SEED",
     "SCZ_REMOTE_HOME",
     "SCZ_THREADS",
@@ -153,12 +138,12 @@ def main() -> int:
         params = params_mod.from_env(spec.params_cls)
         threads = int(os.environ.get("SCZ_THREADS", 0)) or default_thread_count()
         mount_root = Path(os.environ.get("SCZ_MOUNT_ROOT", DEFAULT_MOUNT_ROOT))
-        data_sink, records_sink = make_sinks(spec, tag, mount_root)
-        kind = os.environ.get("SCZ_WORKER_KIND") or records_sink.kind
+        sink = make_sink(spec, tag, mount_root)
+        kind = os.environ.get("SCZ_WORKER_KIND", "local")
         if role.deps:
             workloads.resolve(role.deps)(params)
         wid = worker_id()
-        records_sink.push_json(
+        sink.push_json(
             f"params/{wid}.json",
             {
                 "worker_id": wid,
@@ -180,8 +165,7 @@ def main() -> int:
             kind=kind,
             threads=threads,
             max_cycles=int(os.environ.get("SCZ_MAX_CYCLES", 0)),
-            data_sink=data_sink,
-            records_sink=records_sink,
+            sink=sink,
             provenance=provenance(),
             mount_root=mount_root,
         )

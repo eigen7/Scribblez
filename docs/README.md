@@ -66,8 +66,8 @@ Dashboard and compute:
   figures, and the interactive Positions, Trajectories and Lane analysis tabs.
 - **[cloud_compute.md](cloud_compute.md)**: how work runs on machines
   Scribblez does not own. The dependency-only worker image, per-arch code
-  bundles, and the bucket that brings results back to the local mount so
-  analysis runs unchanged.
+  bundles copied into each container, and the ssh collection that brings
+  results back to the local mount so analysis runs unchanged.
 - **[blind_spots.md](blind_spots.md)**: collecting positions where a play from
   outside HastyBot's top moves out-sims all of them. Running the `blind_spots`
   workload across a fleet, what workers deliver, and turning a tag into a

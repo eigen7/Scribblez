@@ -114,17 +114,6 @@ def wait_for_generation(paths: TagPaths, index: int, sink, home=None):
         timed_print(f"generation {index} is complete")
 
 
-def restore_from_sink(paths: TagPaths, sink):
-    """Install the newest checkpoint and cursor on offer when they beat the
-    ones on this machine (state_pair's cursor rule): the seed the controller
-    pushed into a new container, then whatever the sink holds. A fresh
-    machine takes them, and a machine holding fresher state keeps its own."""
-    if state_pair.take_seed(paths, expected=os.environ.get("SCZ_STATE_SEED") == "1"):
-        timed_print("installed the controller's checkpoint and cursor")
-    if state_pair.restore(paths, sink):
-        timed_print(f"restored the checkpoint and cursor through the {sink.kind} sink")
-
-
 def ensure_window(paths: TagPaths, sink, cursor: int, window: int):
     """Fetch any missing generations of the window ending before `cursor`, so
     a restored trainer's first epoch matches a local resume. A generation that
@@ -289,7 +278,7 @@ def _checkpoint_and_eval(
         f"generation {ci}",
         functools.partial(
             _deliver_generation,
-            ctx["records_sink"],
+            ctx["sink"],
             paths,
             ci,
             state_pair.snapshot(paths.rolling_checkpoint, ci),
@@ -416,7 +405,7 @@ def run_generational_training(
     cpu = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
-        wait_for_generation(paths, state.generation_index, ctx["data_sink"], ctx["data_home"])
+        wait_for_generation(paths, state.generation_index, ctx["sink"], ctx["data_home"])
         train_one_generation(
             model,
             train_model,
@@ -527,7 +516,7 @@ def run(ctx: WorkerContext) -> int:
     torch.set_float32_matmul_precision("high")
     train_model = torch.compile(model)
 
-    recorder = TrainRecorder(ctx.records_sink)
+    recorder = TrainRecorder(ctx.sink)
     recorder.publish_run(
         ctx.tag,
         asdict(params),
@@ -545,9 +534,8 @@ def run(ctx: WorkerContext) -> int:
 
     run_ctx = {
         "config": asdict(params),
-        "data_sink": ctx.data_sink,
-        "records_sink": ctx.records_sink,
-        "read_controls": functools.partial(read_controls, ctx.records_sink),
+        "sink": ctx.sink,
+        "read_controls": functools.partial(read_controls, ctx.sink),
         "spatial_planes": spatial_planes,
         "scalar_size": scalar_size,
         "position_eval_quality": load_position_eval_quality(spatial_planes, params.face_up_leaves),
@@ -555,9 +543,9 @@ def run(ctx: WorkerContext) -> int:
         "deliverer": OutputDeliverer(),
     }
 
-    restore_from_sink(paths, ctx.records_sink)
+    state_pair.install_seed(paths)
     state = checkpoint.resume(paths, model, optimizer, device)
-    ensure_window(paths, ctx.data_sink, state.generation_index, params.window)
+    ensure_window(paths, ctx.sink, state.generation_index, params.window)
     _publish_train_state(paths, state)
     run_ctx["data_home"] = data_home.start_for(ctx, paths, params)
     try:

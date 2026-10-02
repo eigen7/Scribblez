@@ -632,7 +632,6 @@ def test_publish_config_records_params_before_the_model_exists(tmp_path):
     """The Info tab's params are published up front, with the parameter count
     re-stamped once the model is built, so the dashboard shows the run's config
     while the trainer waits for warmup_pairs rather than staying blank."""
-    import json
 
     from cloud.sinks import LocalSink
     from scribblez.dashboard import db
@@ -1001,61 +1000,10 @@ def test_retire_training_pairs_deletes_the_training_side_only(tmp_path):
     assert trainer.retire_training_pairs(train_ds, LocalSink(tmp_path)) == 3
     assert complete_pairs(store) == [store / "sweep0.mset"]
     assert sorted(store.glob("*.slog")) == [store / "sweep0.slog"]
-    # Through the sink, by tag-relative name: a bucket trainer retires the
-    # bucket's copies too.
+    # Through the sink, by tag-relative name.
     sink = _OutputSink()
     trainer.retire_training_pairs(train_ds, sink)
     assert sink.removed == [f"data/slogs/s{i}.{ext}" for i in range(3) for ext in ("mset", "slog")]
-
-
-def test_a_remote_trainer_pulls_its_store_and_restores_through_the_sink(tmp_path):
-    """The store is taken through the sink before each look, and a fresh
-    machine takes the checkpoint and cursor the same way."""
-    from scribblez import paths as paths_mod
-    from scribblez.move_set_eval import trainer
-    from scribblez.paths import TagPaths
-
-    class _StoreSink(_OutputSink):
-        def __init__(self, staged):
-            super().__init__()
-            self.staged, self.pulls, self.fetched = staged, 0, []
-
-        def fetch_data_files(self, data_rel, dest):
-            self.pulls += 1
-            for stem in self.staged:
-                _pair(dest, stem)
-
-        def list_dirs(self, rel):
-            return ["gen_000007"]
-
-        def fetch_file(self, rel, dest):
-            """One state pair, at 700 rows."""
-            self.fetched.append(rel)
-            if not rel.startswith("state/"):
-                return False
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if rel.endswith(".json"):
-                dest.write_text(json.dumps({"rows_trained": 700, "generation_index": 8}))
-            else:
-                dest.write_bytes(b"ckpt")
-            return True
-
-    store = tmp_path / "data" / "slogs"
-    sink = _StoreSink(["a", "b"])
-    trainer.wait_for_store(store, _params(warmup_pairs=2, sweep_every=0, holdout_every=0), sink)
-    assert sink.pulls == 1 and sorted(p.stem for p in store.glob("*.mset")) == ["a", "b"]
-
-    paths = TagPaths("t", paths_mod.MOVE_SET_EVAL, tmp_path)
-    trainer.restore_checkpoint(paths, sink)
-    assert sink.fetched == [
-        "state/gen_000007/train_state.json",
-        "train_state.json",
-        "state/gen_000007/model.pt",  # only the winner's weights
-    ]
-    assert paths.rolling_checkpoint.read_bytes() == b"ckpt"
-    sink.fetched.clear()
-    trainer.restore_checkpoint(paths, sink)  # a machine holding it keeps its own
-    assert not any(rel.endswith(".pt") for rel in sink.fetched)
 
 
 def test_training_waits_for_a_corpus_worth_starting_on(tmp_path):
@@ -1307,7 +1255,7 @@ class _LoggingSink(_DriveSink):
         return object.__getattribute__(self, name)
 
 
-data_sink, records_sink = _LoggingSink(root), _LoggingSink(root)
+sink = _LoggingSink(root)
 paths = SimpleNamespace(
     root=root,
     data_dir=root / "data",
@@ -1322,17 +1270,17 @@ paths = SimpleNamespace(
 )
 ctx = SimpleNamespace(
     params=params, tag="t", worker_id="w0", threads=1, kind="local",
-    data_sink=data_sink, records_sink=records_sink,
+    sink=sink,
     role=SimpleNamespace(name="train"), provenance={},
     tag_paths=lambda: paths,
 )
 assert trainer.run(ctx) == 0, "run() did not exit cleanly"
-# The pair store (pulled, then its training pairs retired) is data; the
-# exports and the state pairs are records. A local sink has nothing to restore.
-assert data_sink.calls == {"fetch_data_files", "remove_outputs"}, data_sink.calls
-assert records_sink.calls == {
-    "deliver_output", "push_file", "list_dirs", "remove_tree"
-}, records_sink.calls
+# The pair store (pulled, then its training pairs retired), the exports and
+# the state pairs all go through the one sink.
+assert sink.calls == {
+    "fetch_data_files", "remove_outputs", "deliver_output", "push_file", "list_dirs",
+    "remove_tree",
+}, sink.calls
 
 # The finished run retired its training pairs and kept the held-out (swept)
 # ones; a resumed run learns it is finished from the checkpoint and exits 0.
@@ -1448,3 +1396,33 @@ def test_a_late_swept_pair_cannot_reshuffle_the_sides_or_crash_the_run(tmp_path)
     assert set(holdout_ds.files) == held_before  # nothing left the holdout
     assert set(train_ds.files) == trained_before  # and nothing joined training
     assert not set(train_ds.files) & set(holdout_ds.files)  # no pair on both sides
+
+
+def test_a_new_trainer_container_takes_the_controllers_seed(tmp_path, monkeypatch):
+    """A trainer that moved to a fresh machine resumes from the checkpoint and
+    cursor the controller pushed in (SCZ_STATE_SEED), not from epoch 0: here
+    the seed says the budget is spent, so the run ends without touching the
+    store."""
+    from cloud.sinks import make_sink
+    from scribblez import workloads
+    from scribblez.generational import state_pair
+    from scribblez.move_set_eval import trainer
+    from scribblez.workloads.base import WorkerContext
+
+    spec = workloads.get("move_set_eval")
+    sink = make_sink(spec, "t", tmp_path)
+    seed = spec.paths("t", tmp_path).root / state_pair.SEED_DIR
+    seed.mkdir(parents=True)
+    torch.save({"settled_epochs": 2, "generation_index": 5, "rows_trained": 9}, seed / "model.pt")
+    (seed / state_pair.CURSOR_NAME).write_text('{"generation_index": 5, "rows_trained": 9}')
+    monkeypatch.setenv("SCZ_STATE_SEED", "1")
+    monkeypatch.setattr(trainer, "wait_for_store", _fail_store_wait)
+    ctx = WorkerContext(
+        spec=spec, role=spec.role("train"), tag="t", params=_params(train_epochs=2),
+        worker_id="tr", threads=1, max_cycles=0, sink=sink, mount_root=tmp_path, kind="ssh",
+    )  # fmt: skip
+    assert trainer.run(ctx) == 0
+
+
+def _fail_store_wait(*args, **kwargs):
+    raise AssertionError("the trainer waited for its store instead of taking its seed")

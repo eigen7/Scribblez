@@ -4,7 +4,6 @@
 If the file is absent, writes a placeholder template and exits. Otherwise
 checks each credential by exercising it:
 
-  - R2: writes, reads back, and deletes a probe object in the bucket.
   - Worker image name: shape check only (a private repo's existence can't be
     probed without pulling; the first image push exercises it).
   - Registry pull token: asks Docker Hub's token service for pull access to
@@ -19,7 +18,6 @@ Usage:
 
 import base64
 import json
-import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -33,32 +31,11 @@ from cloud.credentials import (
 )
 from cloud.providers.aws import AwsProvider
 from cloud.providers.base import ProviderError
-from cloud.r2 import bucket_path, rclone
-
-PROBE_OBJECT = "_credentials_check/probe.txt"
-PROBE_CONTENT = "scribblez credentials probe\n"
 
 
 def report(ok: bool, what: str, detail: str = "") -> bool:
     print(f"  {'ok  ' if ok else 'FAIL'}  {what}{f': {detail}' if detail else ''}")
     return ok
-
-
-def check_r2_round_trip(creds: CloudCredentials) -> bool:
-    if shutil.which("rclone") is None:
-        return report(False, "r2", "rclone not installed in this container")
-    probe = bucket_path(creds.r2, PROBE_OBJECT)
-
-    write = rclone(creds.r2, "rcat", probe, capture=True, input_text=PROBE_CONTENT)
-    if write.returncode != 0:
-        return report(False, "r2 write", write.stderr.strip().splitlines()[-1])
-    read = rclone(creds.r2, "cat", probe, capture=True)
-    if read.returncode != 0 or read.stdout != PROBE_CONTENT:
-        return report(False, "r2 read-back", read.stderr.strip().splitlines()[-1])
-    delete = rclone(creds.r2, "deletefile", probe, capture=True)
-    if delete.returncode != 0:
-        return report(False, "r2 delete", delete.stderr.strip().splitlines()[-1])
-    return report(True, "r2", f"write/read/delete round-trip in bucket '{creds.r2.bucket}'")
 
 
 def check_worker_image_name(creds: CloudCredentials) -> bool:
@@ -116,7 +93,6 @@ def main() -> int:
 
     print(f"Checking credentials from {CREDENTIALS_PATH} ...")
     results = [
-        check_r2_round_trip(creds),
         check_worker_image_name(creds),
         check_registry_pull_token(creds),
         check_aws(creds),

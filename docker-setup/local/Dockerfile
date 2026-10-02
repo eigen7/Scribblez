@@ -102,21 +102,13 @@ RUN npx --yes playwright@1.61.0 install --with-deps chromium && \
     chmod -R a+rx /opt/ms-playwright && \
     rm -rf /var/lib/apt/lists/*
 
-# 6) rclone for the R2 results bucket, from rclone.org (Ubuntu's 1.60
-#    mishandles R2 uploads).
-RUN curl -fsSL https://downloads.rclone.org/v1.74.3/rclone-v1.74.3-linux-amd64.zip \
-      -o /tmp/rclone.zip && \
-    python3 -c "import zipfile; zipfile.ZipFile('/tmp/rclone.zip').extractall('/tmp')" && \
-    install -m 755 /tmp/rclone-v1.74.3-linux-amd64/rclone /usr/local/bin/rclone && \
-    rm -rf /tmp/rclone.zip /tmp/rclone-v1.74.3-linux-amd64
-
-# 7) Make py/ importable without PYTHONPATH (which conflicts with pytest's
+# 6) Make py/ importable without PYTHONPATH (which conflicts with pytest's
 #    rootdir resolution).
 RUN python3 -c "import site; \
     open(site.getsitepackages()[0]+'/scribblez.pth','w').write('/workspace/repo/py\n')"
 
 
-# 8) Temporary home for install targets that belong above. Putting new stuff
+# 7) Temporary home for install targets that belong above. Putting new stuff
 #    here helps to make image rebuilds faster thanks to Docker caching
 #    mechanics. These items should occasionally be moved above.
 RUN pip3 install --no-cache-dir schedulefree
@@ -132,7 +124,7 @@ RUN mkdir -p /etc/apt/keyrings && \
     apt-get install -y --no-install-recommends gh && \
     rm -rf /var/lib/apt/lists/*
 
-# 9) Macondo's data-path env var, so it finds its kwg/leaves when the engine
+# 8) Macondo's data-path env var, so it finds its kwg/leaves when the engine
 #    launches it as a subprocess.
 ENV MACONDO_CONFIG_DATA_PATH=/workspace/mount/macondo/data
 

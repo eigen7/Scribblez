@@ -72,7 +72,7 @@ def test_any_failure_stops_the_thread_and_reaches_the_trainer(paths, monkeypatch
 
 def test_start_for_is_remote_only_when_the_controller_says_so(paths, monkeypatch):
     monkeypatch.setattr(data_home.DataHome, "start", lambda self: None)
-    ctx = SimpleNamespace(records_sink=LocalSink(paths.root))
+    ctx = SimpleNamespace(sink=LocalSink(paths.root))
     monkeypatch.delenv("SCZ_REMOTE_HOME", raising=False)
     assert not data_home.start_for(ctx, paths, PositionEvalParams()).remote
     monkeypatch.setenv("SCZ_REMOTE_HOME", "1")

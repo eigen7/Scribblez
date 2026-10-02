@@ -86,11 +86,10 @@ class RoleSpec:
     # Dotted path to inputs(params, mount_root) -> {rel: Path}: files the role reads from
     # outside its own tag (another tag's model export, say), keyed by the
     # tag-relative name the worker looks for them under. A local worker reads
-    # each source in place. For a remote slot the controller stages a copy
-    # before the slot needs it: into the bucket for a bucket-delivering slot,
-    # into the container otherwise. resolve_input below finds whichever copy
-    # exists. "" when every input is in the bundle, the runtime deps, or the
-    # tag itself.
+    # each source in place. For a remote slot the controller pushes a copy into
+    # its container before the slot needs it, where resolve_input below finds
+    # it. "" when every input is in the bundle, the runtime deps, or the tag
+    # itself.
     inputs: str = ""
     stats: StatsSpec | None = None
 
@@ -240,8 +239,8 @@ class WorkloadSpec:
 
     def worker_env(self, tag: str, params, role: str) -> dict[str, str]:
         """The SCZ_* environment that tells a worker entrypoint what to run. The
-        launcher adds worker-level settings (sink, threads, worker id) and the
-        bucket credentials on top."""
+        launcher adds worker-level settings (threads, worker id, bundle) on
+        top."""
         self.role(role)  # validate
         return {
             "SCZ_WORKLOAD": self.name,
@@ -288,16 +287,14 @@ class WorkerContext:
     worker_id: str
     threads: int
     max_cycles: int  # 0 = run until stopped
-    # cloud.sinks.LocalSink | R2Sink: the tag's data/ store, and everything
-    # else under the tag root (cloud/sinks.py).
-    data_sink: object
-    records_sink: object
+    # cloud.sinks.LocalSink over the tag tree: the tag's data/ store, and
+    # everything else under the tag root (cloud/sinks.py).
+    sink: object
     # The slot kind, reported in stats and consulted by resolve_input.
     # In-process runners (CLI tools, tests) are local; only a launcher of
     # remote workers overrides it.
     # Root of the tag trees this worker reads and writes: the mount dir, unless
-    # the launcher points it elsewhere (a bucket-delivering trainer on a
-    # machine whose mount dir belongs to the controller).
+    # the launcher points it elsewhere (a test's scratch dir).
     mount_root: Path
     kind: str = "local"
     provenance: dict = field(default_factory=dict)
@@ -317,11 +314,10 @@ def resolve_input(ctx: WorkerContext, rel: str, source: Path) -> Path:
     """Where a runner reads input `rel` (a RoleSpec.inputs key) from.
 
     `source` itself when it exists, as it does for a local worker sharing the
-    controller's mount. Otherwise the staged copy at `rel` under the tag root:
-    either pushed into the container already, or fetched through the records sink by a
-    bucket-delivering slot. A remote slot polls until the copy arrives; a local
-    worker, for which nothing is staged, checks once and never asks the records sink.
-    Raises FileNotFoundError when no copy turns up."""
+    controller's mount. Otherwise the copy the controller pushed to `rel`
+    under the container's tag root. A remote slot polls until the copy
+    arrives; a local worker, for which nothing is staged, checks once. Raises
+    FileNotFoundError when no copy turns up."""
     if source.is_file():
         return source
     staged = ctx.tag_paths().root / rel
@@ -331,7 +327,7 @@ def resolve_input(ctx: WorkerContext, rel: str, source: Path) -> Path:
             return staged
         raise missing
     deadline = time.monotonic() + INPUT_WAIT_SECONDS
-    while not (staged.is_file() or ctx.records_sink.fetch_file(rel, staged)):
+    while not staged.is_file():
         if time.monotonic() >= deadline:
             raise missing
         time.sleep(INPUT_POLL_SECONDS)

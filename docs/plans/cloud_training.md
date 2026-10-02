@@ -13,7 +13,9 @@ until the ssh-only transport work (#313-#316) replaced the trainer-output
 pull and the controls push with collection and pushes over ssh, and removed
 the chunk mirror and `cloud_sync` with every bucket-delivering generator.
 Generation publish went with the legacy data plane: a trainer anywhere
-assembles its own generations in its data home.
+assembles its own generations in its data home. Since the bundles moved to
+ssh too (#319), the bucket, its sink and its credentials are retired
+entirely.
 
 **Goal.** Run several position_eval training runs at once on rented GPUs, so
 A/B experiments (trunk, optimizer, loss weights, ...) stop queueing behind

@@ -3,7 +3,8 @@
 **Status: landed in full.** m1 machines on the ssh kind (#199), m2 the
 trainer on ssh (#200), m3 the AWS provider (#201), m3b spot (#213), m4
 Runpod removed (#214); slots on rented machines deliver through the bucket
-(#211). The first dashboard-rented run trained on 2026-09-16. The provider
+(#211), since superseded: every slot is collected over ssh and the bucket is
+retired (#313-#320). The first dashboard-rented run trained on 2026-09-16. The provider
 lives in `py/cloud/providers/`, the machine lifecycle in
 `py/scribblez/dashboard/workers.py`, and the operator's view in
 [cloud_compute.md](../cloud_compute.md).

@@ -43,15 +43,6 @@ TEMPLATE = {
         "access_key_id": PLACEHOLDER,
         "secret_access_key": PLACEHOLDER,
     },
-    "r2": {
-        # Cloudflare dashboard -> R2; the account ID appears in the bucket
-        # endpoint URL.
-        "account_id": PLACEHOLDER,
-        # An R2 API token scoped to the bucket with Object Read & Write.
-        "access_key_id": PLACEHOLDER,
-        "secret_access_key": PLACEHOLDER,
-        "bucket": "scribblez",
-    },
 }
 
 
@@ -93,18 +84,6 @@ def _split_tag(image: str) -> tuple[str, str]:
 
 
 @dataclass(frozen=True)
-class R2Credentials:
-    account_id: str
-    access_key_id: str
-    secret_access_key: str
-    bucket: str
-
-    @property
-    def endpoint(self) -> str:
-        return f"https://{self.account_id}.r2.cloudflarestorage.com"
-
-
-@dataclass(frozen=True)
 class AwsCredentials:
     region: str
     access_key_id: str
@@ -114,7 +93,6 @@ class AwsCredentials:
 @dataclass(frozen=True)
 class CloudCredentials:
     registry: RegistryConfig
-    r2: R2Credentials
     aws: AwsCredentials
 
 
@@ -137,7 +115,9 @@ def _collect(raw: dict, section: str, field: str, problems: list[str]) -> str:
 
 def load_credentials(path: Path = CREDENTIALS_PATH) -> CloudCredentials:
     """Parse `path`. Raises CredentialsError if the file is absent or not
-    JSON, or naming every field that is missing or still a placeholder."""
+    JSON, or naming every field that is missing or still a placeholder. A
+    section the file has and this loader does not read (the retired "r2") is
+    ignored."""
     if not path.is_file():
         raise CredentialsError(
             f"No credentials file at {path}. "
@@ -159,12 +139,6 @@ def load_credentials(path: Path = CREDENTIALS_PATH) -> CloudCredentials:
             region=_collect(raw, "aws", "region", problems),
             access_key_id=_collect(raw, "aws", "access_key_id", problems),
             secret_access_key=_collect(raw, "aws", "secret_access_key", problems),
-        ),
-        r2=R2Credentials(
-            account_id=_collect(raw, "r2", "account_id", problems),
-            access_key_id=_collect(raw, "r2", "access_key_id", problems),
-            secret_access_key=_collect(raw, "r2", "secret_access_key", problems),
-            bucket=_collect(raw, "r2", "bucket", problems),
         ),
     )
     if problems:

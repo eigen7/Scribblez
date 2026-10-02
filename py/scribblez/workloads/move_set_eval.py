@@ -18,8 +18,8 @@ newer generation lands still resolves the pinned one.
 The generate role runs on a GPU slot of either kind. A local slot reads the
 teacher ONNX in place. A remote slot has no position_eval tag to read, so the
 role declares the pinned export as an input (RoleSpec.inputs): the controller
-stages a copy for it (in the bucket for a rented machine, in the container on
-the operator's own), and run_generate finds it through base.resolve_input.
+pushes a copy into its container, and run_generate finds it through
+base.resolve_input.
 
 Every `sweep_every`-th pair is labeled in the generator's full-sweep mode
 instead: every legal candidate of a few positions per game, capped. These
@@ -66,7 +66,7 @@ from scribblez.workloads.base import (
     resolve_input,
 )
 
-# The tag's pair store, under the tag's data/ dir (locally and in the bucket).
+# The tag's pair store, under the tag's data/ dir.
 SLOGS_DIR = "slogs"
 
 

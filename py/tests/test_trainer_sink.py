@@ -1,83 +1,12 @@
 """The trainer's artifacts through its sink (cloud/sinks.py fetch_data_dir /
 fetch_file / deliver_output, and position_eval/trainer.py's use of them): a
-trainer on the controller's machine touches nothing it does not already
-have; one speaking to the bucket pulls generations and restores from it,
-and delivers its outputs back."""
-
-import json
-from pathlib import Path
-from types import SimpleNamespace
+trainer touches nothing it does not already have on its machine."""
 
 import pytest
 from cloud import sinks
-from cloud.sinks import LocalSink, R2Sink
+from cloud.sinks import LocalSink
 from scribblez.generational import lifecycle
 from scribblez.paths import POSITION_EVAL, TagPaths
-
-R2 = SimpleNamespace(bucket="b")
-
-
-class _Rclone:
-    """rclone over a dict of objects; copy/copyto land real files."""
-
-    def __init__(self, objects=()):
-        self.objects = set(objects)  # bucket keys (without the "r2:b/" head)
-        self.calls = []
-
-    @staticmethod
-    def _key(path):
-        return path.split("/", 1)[1]
-
-    def __call__(self, r2, *args, capture=False, input_text=None):
-        self.calls.append(args)
-        op = args[0]
-        if op == "lsf" and args[1] == "--dirs-only":
-            key = self._key(args[2])
-            under = {
-                k[len(key) + 1 :].split("/")[0] for k in self.objects if k.startswith(key + "/")
-            }
-            dirs = sorted(
-                d for d in under if any(k.startswith(f"{key}/{d}/") for k in self.objects)
-            )
-            return SimpleNamespace(returncode=0, stdout="".join(f"{d}/\n" for d in dirs), stderr="")
-        if op == "lsf":
-            key = self._key(args[1])
-            under = sorted(k[len(key) + 1 :] for k in self.objects if k.startswith(key + "/"))
-            listing = (
-                "".join(f"{n}\n" for n in under)
-                if under
-                else ("x\n" if key in self.objects else "")
-            )
-            return SimpleNamespace(returncode=0, stdout=listing, stderr="")
-        if op == "delete":  # a prefix, --files-from a list of keys under it
-            prefix, names = self._key(args[1]), Path(args[3]).read_text().split()
-            for n in names:
-                self.objects.discard(f"{prefix}/{n}")
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if op == "copy":  # bucket prefix -> local dir, whole
-            prefix, dest = self._key(args[-2]), Path(args[-1])
-            dest.mkdir(parents=True, exist_ok=True)
-            for k in self.objects:
-                if k.startswith(prefix + "/"):
-                    (dest / k[len(prefix) + 1 :]).write_text(k)
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if op == "purge":
-            key = self._key(args[1])
-            self.objects = {k for k in self.objects if not k.startswith(key + "/")}
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if op == "deletefile":
-            key = self._key(args[1])
-            self.objects.discard(key)
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        if op == "copyto":
-            src, dst = args[1], args[2]
-            if src.startswith("r2:"):
-                Path(dst).parent.mkdir(parents=True, exist_ok=True)
-                Path(dst).write_text(self._key(src))
-            else:
-                self.objects.add(self._key(dst))
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        raise AssertionError(args)
 
 
 @pytest.fixture
@@ -102,54 +31,14 @@ def test_the_local_sink_finds_artifacts_where_they_are(paths):
         sink.fetch_file("train_state.json", paths.root / "elsewhere.json")
 
 
-def test_the_r2_sink_pulls_a_generation_only_once_its_manifest_is_there(paths, monkeypatch):
-    rc = _Rclone({"position_eval/t/generations/gen_000002/a.slog"})
-    monkeypatch.setattr(sinks, "rclone", rc)
-    sink = R2Sink(R2, "position_eval", "t")
-    gen = paths.generation_dir(2)
-    assert not sink.fetch_data_dir("generations/gen_000002", gen)  # chunks but no manifest yet
-    assert not gen.exists()
-    rc.objects.add("position_eval/t/generations/gen_000002/manifest.json")
-    assert sink.fetch_data_dir("generations/gen_000002", gen)
-    assert sorted(p.name for p in gen.iterdir()) == ["a.slog", "manifest.json"]
-    assert rc.calls[-1][:2] == ("copy", "--size-only")
-
-
-def test_the_r2_sink_fetches_and_delivers_root_files(paths, monkeypatch):
-    rc = _Rclone()
-    monkeypatch.setattr(sinks, "rclone", rc)
-    sink = R2Sink(R2, "position_eval", "t")
-    assert not sink.fetch_file("checkpoints/model.pt", paths.rolling_checkpoint)
-    export = paths.onnx_dir / "model_epoch_0003.onnx"
-    export.parent.mkdir(parents=True)
-    export.write_bytes(b"onnx")
-    sink.deliver_output(export, "models/model_epoch_0003.onnx")
-    assert not export.exists()  # the bucket is where exports live; the machine's disk is scratch
-    paths.checkpoints_dir.mkdir()
-    paths.rolling_checkpoint.write_bytes(b"pt")
-    sink.deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
-    assert paths.rolling_checkpoint.exists()  # a resume needs it
-    assert {
-        "position_eval/t/models/model_epoch_0003.onnx",
-        "position_eval/t/checkpoints/model.pt",
-    } <= rc.objects
-    other = TagPaths("t", POSITION_EVAL, mount_root=paths.mount_root / "other")
-    assert sink.fetch_file("checkpoints/model.pt", other.rolling_checkpoint)
-    assert other.rolling_checkpoint.read_text() == "position_eval/t/checkpoints/model.pt"
-
-
-# --- the trainer's use of them ------------------------------------------------
-
-
 class _FakeSink:
-    """A sink whose bucket holds complete generations and, optionally, a
-    checkpoint; records what was asked of it."""
+    """A sink holding the complete generations `generations`; records which
+    it was asked for."""
 
     kind = "ssh"
 
-    def __init__(self, generations=(), checkpoint=False):
+    def __init__(self, generations=()):
         self.generations = set(generations)
-        self.checkpoint = checkpoint
         self.fetched = []
 
     def fetch_data_dir(self, data_rel, dest):
@@ -160,19 +49,6 @@ class _FakeSink:
         dest.mkdir(parents=True, exist_ok=True)
         lifecycle.write_manifest(dest, {"index": index, "status": lifecycle.COMPLETE})
         return True
-
-    def fetch_file(self, rel, dest):
-        """The bucket's state in the pre-pair layout, if it has one."""
-        self.fetched.append(rel)
-        if not self.checkpoint or rel not in ("checkpoints/model.pt", "train_state.json"):
-            return False
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        state = {"generation_index": 7, "rows_trained": 700}
-        dest.write_text(json.dumps(state) if rel.endswith(".json") else "pt")
-        return True
-
-    def list_dirs(self, rel):
-        return []  # no state pairs
 
 
 def test_wait_pulls_the_generation_through_the_sink(paths, monkeypatch):
@@ -212,14 +88,11 @@ def test_a_failed_data_home_ends_the_wait(paths, monkeypatch):
         trainer.wait_for_generation(paths, 4, _FakeSink(), home=_DeadHome())
 
 
-def test_a_fresh_machine_restores_and_takes_the_window(paths):
+def test_a_fresh_machine_takes_the_window(paths):
     pytest.importorskip("torch")
     from scribblez.position_eval import trainer
 
-    sink = _FakeSink(generations={4, 5, 6}, checkpoint=True)
-    trainer.restore_from_sink(paths, sink)
-    assert paths.rolling_checkpoint.read_text() == "pt"
-    assert json.loads(paths.train_state_path.read_text())["generation_index"] == 7
+    sink = _FakeSink(generations={4, 5, 6})
     trainer.ensure_window(paths, sink, cursor=7, window=4)
     # Generations 3..6 were asked for; 3 was never published (evicted) and
     # the window is just shorter for it.
@@ -227,37 +100,15 @@ def test_a_fresh_machine_restores_and_takes_the_window(paths):
         f"generations/gen_{i:06d}" for i in (3, 4, 5, 6)
     ]
     assert lifecycle.window_dirs(paths, 6, 4) == [paths.generation_dir(i) for i in (4, 5, 6)]
-    # A machine holding the same state reads only the bucket's small cursor.
-    sink.fetched.clear()
-    trainer.restore_from_sink(paths, sink)
-    assert sink.fetched == ["train_state.json"]
 
 
 def test_the_local_sink_follows_the_worker_mount_root(tmp_path, monkeypatch):
     from scribblez import workloads
 
-    monkeypatch.setenv("SCZ_SINK", "local")
     spec = workloads.get("position_eval")
-    _, sink = sinks.make_sinks(spec, "t", tmp_path)
+    sink = sinks.make_sink(spec, "t", tmp_path)
     sink.push_json("records/run.json", {})
     assert (tmp_path / "tags" / "position_eval" / "t" / "records" / "run.json").exists()
-
-
-def test_the_data_sink_defaults_to_the_records_sinks_kind(tmp_path, monkeypatch):
-    """A controller sets SCZ_DATA_SINK only when it differs from SCZ_SINK, so a
-    bundle predating it keeps starting (worker_entrypoint)."""
-    from scribblez import workloads
-
-    spec = workloads.get("position_eval")
-    monkeypatch.setenv("SCZ_SINK", "local")
-    data, records = sinks.make_sinks(spec, "t", tmp_path)
-    assert isinstance(data, LocalSink) and isinstance(records, LocalSink)
-
-    monkeypatch.setenv("SCZ_DATA_SINK", "r2")
-    for var in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"):
-        monkeypatch.setenv(var, "x")
-    data, records = sinks.make_sinks(spec, "t", tmp_path)
-    assert isinstance(data, R2Sink) and isinstance(records, LocalSink)
 
 
 def test_the_local_sink_removes_an_output_and_has_nothing_to_pull(paths):
@@ -274,47 +125,3 @@ def test_the_local_sink_removes_an_output_and_has_nothing_to_pull(paths):
     sink.remove_output("data/slogs/a.mset")
     sink.remove_output("data/slogs/a.mset")  # absent is success
     assert not (store / "a.mset").exists()
-
-
-def test_the_r2_sink_addresses_the_flattened_store(paths, monkeypatch):
-    """The bucket flattens data/: a generator delivers data/slogs/x at
-    slogs/x, and the trainer's pull, count and removals must read the same
-    keys, or a bucket trainer sees an empty store and retires nothing."""
-    rc = _Rclone()
-    monkeypatch.setattr(sinks, "rclone", rc)
-    generator = R2Sink(R2, "position_eval", "t")
-    for name in ("a.mset", "a.slog", "b.mset", "b.slog"):
-        src = paths.root / name
-        src.write_text(name)
-        generator.deliver(src, f"slogs/{name}")
-    assert "position_eval/t/slogs/a.mset" in rc.objects
-
-    trainer = R2Sink(R2, "position_eval", "t", paths.root)
-    store = paths.data_dir / "slogs"
-    trainer.fetch_data_files("slogs", store)
-    assert sorted(p.name for p in store.iterdir()) == ["a.mset", "a.slog", "b.mset", "b.slog"]
-    assert rc.calls[-1][:2] == ("copy", "--size-only")
-    assert trainer.count_data_files("slogs", ".mset") == 2
-
-    trainer.remove_output("data/slogs/a.mset")
-    assert "position_eval/t/slogs/a.mset" not in rc.objects
-    assert not (store / "a.mset").exists() and (store / "a.slog").exists()
-    # A batch removal is one rclone run, and takes the local copies too.
-    calls_before = len(rc.calls)
-    trainer.remove_outputs(["data/slogs/a.slog", "data/slogs/b.mset", "data/slogs/b.slog"])
-    assert len(rc.calls) == calls_before + 1 and rc.calls[-1][0] == "delete"
-    assert not any(k.startswith("position_eval/t/slogs/") for k in rc.objects)
-    assert list(store.iterdir()) == []
-    trainer.remove_outputs([])  # nothing to run for nothing
-    assert len(rc.calls) == calls_before + 1
-
-
-def test_the_r2_sink_lists_and_removes_directories(monkeypatch):
-    rc = _Rclone(
-        {"position_eval/t/state/gen_000003/model.pt", "position_eval/t/state/gen_000004/model.pt"}
-    )
-    monkeypatch.setattr(sinks, "rclone", rc)
-    sink = R2Sink(R2, "position_eval", "t")
-    assert sink.list_dirs("state") == ["gen_000003", "gen_000004"]
-    sink.remove_tree("state/gen_000003")
-    assert sink.list_dirs("state") == ["gen_000004"]

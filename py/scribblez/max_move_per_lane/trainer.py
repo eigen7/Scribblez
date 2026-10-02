@@ -30,7 +30,7 @@ from scribblez import lane_analysis
 from scribblez import params as params_mod
 from scribblez.dataset import SlogDataset
 from scribblez.ffi import get_max_move_per_lane_input_shapes
-from scribblez.generational import checkpoint, data_home, lifecycle
+from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import (
     CpuController,
@@ -43,7 +43,7 @@ from scribblez.generational.records import TrainRecorder, read_controls
 from scribblez.lexical_tool.modules import LexiconArgs
 from scribblez.max_move_per_lane.model import MaxMovePerLaneModel
 from scribblez.max_move_per_lane.train_loop import LossConfig, run_epoch
-from scribblez.position_eval.trainer import ensure_window, restore_from_sink, wait_for_generation
+from scribblez.position_eval.trainer import ensure_window, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
@@ -86,9 +86,9 @@ def _checkpoint_and_eval(
     if ctx["lane_eval"] is not None:
         preds = {"lane_pred": eval_lane_analysis(model, ctx["lane_eval"], device)}
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
-    ctx["records_sink"].deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
+    ctx["sink"].deliver_output(paths.rolling_checkpoint, "checkpoints/model.pt", keep=True)
     lifecycle.write_train_state(paths, asdict(state))
-    ctx["records_sink"].deliver_output(paths.train_state_path, "train_state.json", keep=True)
+    ctx["sink"].deliver_output(paths.train_state_path, "train_state.json", keep=True)
     recorder.commit_generation(ci, state.rows_trained, record, preds)
     return time.time() - t_eval
 
@@ -160,7 +160,7 @@ def run_generational_training(model, optimizer, recorder, paths, device, params,
     cpu = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
         cpu.refresh(state.rows_trained)
-        wait_for_generation(paths, state.generation_index, ctx["data_sink"], ctx["data_home"])
+        wait_for_generation(paths, state.generation_index, ctx["sink"], ctx["data_home"])
         train_one_generation(
             model,
             optimizer,
@@ -248,7 +248,7 @@ def run(ctx: WorkerContext) -> int:
         model.parameters(), lr=params.lr, weight_decay=params.weight_decay
     )
 
-    recorder = TrainRecorder(ctx.records_sink)
+    recorder = TrainRecorder(ctx.sink)
     # Each loss term's weight in compute_loss's total, so the dashboard can stack
     # the weighted contributions.
     recorder.publish_run(
@@ -266,16 +266,15 @@ def run(ctx: WorkerContext) -> int:
 
     run_ctx = {
         "config": asdict(params),
-        "data_sink": ctx.data_sink,
-        "records_sink": ctx.records_sink,
-        "read_controls": functools.partial(read_controls, ctx.records_sink),
+        "sink": ctx.sink,
+        "read_controls": functools.partial(read_controls, ctx.sink),
         "lane_eval": load_lane_eval(params, spatial_planes),
         "stats": WorkerStats(ctx),
     }
 
-    restore_from_sink(paths, ctx.records_sink)
+    state_pair.install_seed(paths)
     state = checkpoint.resume(paths, model, optimizer, device)
-    ensure_window(paths, ctx.data_sink, state.generation_index, params.window)
+    ensure_window(paths, ctx.sink, state.generation_index, params.window)
     lifecycle.write_train_state(paths, asdict(state))
     run_ctx["data_home"] = data_home.start_for(ctx, paths, params)
     try:

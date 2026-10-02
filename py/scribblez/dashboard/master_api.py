@@ -244,8 +244,8 @@ class TaskDeleteHandler(_MasterBase):
 
 
 class TaskDeployHandler(_MasterBase):
-    """Move a task onto the controller's current tree: build, push if the
-    bucket lacks it, repin. Reconcile then replaces each remote worker with
+    """Move a task onto the controller's current tree: build, write a bundle
+    if the store lacks it, repin. Reconcile then replaces each remote worker with
     one on the new bundle once it holds no undelivered output."""
 
     async def post(self):

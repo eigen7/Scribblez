@@ -66,7 +66,7 @@ from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, Workloa
 
 TRAJECTORY_GENERATOR = str(ENGINE_DIR / "evidence_trajectory_generator")
 
-# The tag's pair store, under the tag's data/ dir (locally and in the bucket).
+# The tag's pair store, under the tag's data/ dir.
 SLOGS_DIR = "slogs"
 
 

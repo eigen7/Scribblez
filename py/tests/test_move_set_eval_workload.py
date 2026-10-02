@@ -357,8 +357,7 @@ def test_run_generate_requires_a_readable_teacher(tmp_path, monkeypatch):
         worker_id="w0",
         threads=1,
         max_cycles=1,
-        data_sink=RecordingSink(),
-        records_sink=RecordingSink(),
+        sink=RecordingSink(),
         mount_root=tmp_path,
     )
     assert move_set_eval.run_generate(ctx) == 1  # the pinned export does not exist
@@ -443,8 +442,7 @@ class StubCtx:
         self.kind = "local"
         self.threads = 1
         self.max_cycles = max_cycles
-        self.data_sink = sink
-        self.records_sink = sink
+        self.sink = sink
         self.provenance = {}
         self.mount_root = tmp_path
         self._paths = SPEC.paths("t", mount_root=tmp_path)
@@ -549,16 +547,10 @@ class StoringSink:
         return None
 
 
-class BucketSink(RecordingSink):
-    """A bucket-style sink: delivery takes the file off the machine, and the
-    store's size is read back by listing what was delivered."""
-
-    kind = "ssh"
-
-
-def test_a_bucket_generator_reads_the_target_through_its_sink(tmp_path):
-    """A worker uploading to a bucket has no store on disk to count; the
-    target is read through the sink, or a rented generator never stops."""
+def test_a_generator_reads_the_target_through_its_sink(tmp_path):
+    """The target is the store's size as the sink counts it
+    (count_data_files), not what the worker's work dir holds: here every
+    delivery leaves the work dir empty."""
     cycles = []
 
     def fake_cycle(work_dir, params, threads):
@@ -568,7 +560,7 @@ def test_a_bucket_generator_reads_the_target_through_its_sink(tmp_path):
         (work_dir / f"{stem}.mset").write_bytes(b"m")
         return 0, {"gen_s": 0.1, "mset_s": 0.2}
 
-    ctx = StubCtx(tmp_path, BucketSink(), max_cycles=0)
+    ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=0)
     ctx.kind = "ssh"
     assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target_pairs=2) == 0
     assert len(cycles) == 2
@@ -588,8 +580,7 @@ def test_pair_generate_stops_once_the_store_holds_the_target(tmp_path):
         return 0, {"gen_s": 0.1, "mset_s": 0.2}
 
     ctx = StubCtx(tmp_path, None, max_cycles=0)  # unbounded but for the target
-    ctx.data_sink = StoringSink(ctx.tag_paths().data_dir)
-    ctx.records_sink = ctx.data_sink
+    ctx.sink = StoringSink(ctx.tag_paths().data_dir)
     assert pair_store.run_pair_generate(ctx, fake_cycle, ".mset", "slogs", target_pairs=3) == 0
     assert len(cycles) == 3
     assert pair_store.count_pairs(ctx.tag_paths().data_dir / "slogs", ".mset") == 3
@@ -617,25 +608,6 @@ def test_pair_generate_without_a_target_is_unbounded(tmp_path, target):
     assert len(calls) == 4
 
 
-class _StagingSink(RecordingSink):
-    """A sink whose bucket holds one file, delivered on fetch."""
-
-    kind = "ssh"
-
-    def __init__(self, staged: dict[str, bytes]):
-        super().__init__()
-        self.staged = staged
-        self.fetched = []
-
-    def fetch_file(self, rel_path, dest):
-        self.fetched.append(rel_path)
-        if rel_path not in self.staged:
-            return False
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(self.staged[rel_path])
-        return True
-
-
 def test_the_generate_role_declares_the_pinned_teacher_as_its_input(tmp_path, monkeypatch):
     params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
     expected = TagPaths("teach", POSITION_EVAL, mount_root=tmp_path).onnx_path(3)
@@ -646,8 +618,9 @@ def test_the_generate_role_declares_the_pinned_teacher_as_its_input(tmp_path, mo
 
 
 def test_a_remote_generator_takes_the_teacher_the_controller_staged(tmp_path, monkeypatch):
-    """No position_eval tag on the machine: the teacher comes through the sink
-    under the tag root, and THAT path is bound into the cycle."""
+    """No position_eval tag on the machine: the teacher is the copy the
+    controller pushed under the tag root, and THAT path is bound into the
+    cycle."""
     bound = []
 
     def fake_cycle(model, work_dir, params, threads):
@@ -655,19 +628,19 @@ def test_a_remote_generator_takes_the_teacher_the_controller_staged(tmp_path, mo
         return 0, {"gen_s": 0.0, "mset_s": 0.0}
 
     monkeypatch.setattr(move_set_eval, "_cycle", fake_cycle)
-    sink = _StagingSink({move_set_eval.TEACHER_INPUT: b"onnx"})
-    ctx = StubCtx(tmp_path, sink, max_cycles=1)
+    ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=1)
     ctx.kind = "ssh"
     ctx.params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
+    staged = ctx.tag_paths().root / move_set_eval.TEACHER_INPUT
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"onnx")
 
     assert move_set_eval.run_generate(ctx) == 0
-    staged = ctx.tag_paths().root / move_set_eval.TEACHER_INPUT
-    assert bound == [str(staged)] and staged.read_bytes() == b"onnx"
-    assert sink.fetched == [move_set_eval.TEACHER_INPUT]
+    assert bound == [str(staged)]
 
 
 def test_a_local_generator_does_not_wait_for_a_teacher_nobody_stages(tmp_path, monkeypatch):
-    ctx = StubCtx(tmp_path, _StagingSink({}), max_cycles=1)  # kind "local"
+    ctx = StubCtx(tmp_path, RecordingSink(), max_cycles=1)  # kind "local"
     ctx.params = MoveSetEvalParams(teacher_tag="teach", teacher_generation=3)
     assert move_set_eval.run_generate(ctx) == 1
 
