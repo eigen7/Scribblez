@@ -65,7 +65,6 @@ Principles:
 Every slot's output (a generator's data, its stats and params, and a
 trainer's exports, records and checkpoint) is collected over ssh straight
 out of its container, wherever it runs (see "Results collection" below).
-No result travels through the bucket.
 
 ## The pieces
 
@@ -143,7 +142,7 @@ refuses to deploy to an image of an older one, naming the rebuild.
 3. fetches the runner's declared data deps (`py/cloud/worker_deps.py`):
    lexica and Macondo tables from their public upstreams; a train role's eval
    datasets came in with its payload;
-4. writes a provenance record through its records sink;
+4. writes a provenance record through its sink;
 5. loops the runner's cycle, delivering whole output files through its data
    sink (`py/cloud/sinks.py`) into the container's own tree, from where the
    dashboard collects them.
@@ -186,10 +185,10 @@ here first. So a tag can move to any machine and pick up where it stopped.
 
 `<mount>/cloud/credentials.json` is one operator-filled file (template from
 `setup_wizard.py`, validated end-to-end by
-`./py/scripts/cloud_check_credentials.py`): the R2 bucket, the image registry
-with a read-only pull token, and the provider's access key. Workers receive
-none of them; a rented machine receives the pull token at first boot. Nothing
-uses the R2 bucket any more, and its credentials go with it.
+`./py/scripts/cloud_check_credentials.py`): the image registry with a
+read-only pull token, and the provider's access key. Workers receive none of
+them; a rented machine receives the pull token at first boot. A file from
+before the bucket was retired keeps an "r2" section, which nothing reads.
 
 ### Providers
 
