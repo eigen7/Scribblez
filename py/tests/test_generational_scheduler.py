@@ -157,6 +157,18 @@ def test_finishes_the_generators_once_the_trainer_reaches_max_rows(tmp_path):
     assert "generate" not in hooks.gates  # no scheduling after the end
 
 
+@pytest.mark.parametrize(
+    ("rows_trained", "expected_head"),
+    [(500, ("filling", "gen 1: 0/100 games")), (1000, ("status", "complete"))],
+)
+def test_progress_reports_a_finished_tag_as_complete(paths, rows_trained, expected_head):
+    _stage(paths, "a", 100)
+    _tick(paths, Hooks())  # gen 0 completes, gen 1 opens
+    lifecycle.write_train_state(paths, {"rows_trained": rows_trained})
+    out = scheduler.progress(None, paths, PositionEvalParams(max_rows=1000))
+    assert out == [expected_head, ("generation", 0), ("rows", rows_trained)]
+
+
 # ---- the controller only gates: the data home schedules ----------------------
 
 

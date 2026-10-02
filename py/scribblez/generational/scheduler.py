@@ -255,9 +255,14 @@ def _next_index(paths: TagPaths, cursor: int) -> int:
 
 
 def progress(spec, paths: TagPaths, params) -> list[tuple[str, object]]:
+    """The tag's progress counters. A tag whose trainer has reached `max_rows`
+    shows as complete in place of a filling generation, which nothing will
+    finish once the generators are finished."""
     out: list[tuple[str, object]] = []
     open_index = _open_index(paths)
-    if open_index is not None:
+    if _trainer_done(paths, params.max_rows):
+        out.append(("status", "complete"))
+    elif open_index is not None:
         m = lifecycle.read_manifest(paths.generation_dir(open_index))
         out.append(
             ("filling", f"gen {open_index}: {m['committed_games']}/{m['target_games']} games")
