@@ -14,6 +14,7 @@ from scribblez.workloads import (
     max_move_per_lane,
     move_set_eval,
     position_eval,
+    transfer_test,
 )
 from scribblez.workloads.base import (
     RoleSpec,
@@ -34,6 +35,7 @@ WORKLOADS = {
         evidence_trajectories.SPEC,
         match_arms.SPEC,
         blind_spots.SPEC,
+        transfer_test.SPEC,
     )
 }
 

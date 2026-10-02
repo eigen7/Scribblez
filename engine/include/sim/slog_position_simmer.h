@@ -82,6 +82,13 @@ SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max
 using ChosenMoves = std::map<binlog::GamePositionIndex, std::vector<Move>>;
 SimCandidateSelector chosen_selector(ChosenMoves chosen);
 
+// What sim_slog_positions keeps of each candidate's rollouts.
+enum class SimOutput {
+  kStats,     // a 35 KB RolloutStats per candidate (SimmedPosition::observations)
+  kReports,   // a RolloutReport per candidate, cheap enough for every legal play
+  kRollouts,  // every Rollout, unreduced, for an analysis of its own
+};
+
 struct SlogSimConfig {
   // Sim under face-up leaves: the opponent's kept tiles are known, to the
   // rollouts and to the candidate ranking.
@@ -105,14 +112,11 @@ struct SlogSimConfig {
   // base + i, so offsets must be at least a rollout count apart.
   uint64_t rollout_seed_offset = 0;
   int threads = 1;  // position workers
-  // Reduce each candidate's rollouts to a RolloutReport (sim/rollout_report.h),
-  // cheap enough to keep for every legal play, instead of a 35 KB
-  // RolloutStats.
-  bool keep_reports = false;
-  // With reports: the first this-many candidates are references, and every
+  SimOutput output = SimOutput::kStats;
+  // With kReports: the first this-many candidates are references, and every
   // candidate gets its paired win difference against each of them.
   int paired_references = 0;
-  // With reports: race the candidates instead of simming each to the full
+  // Unless kStats: race the candidates instead of simming each to the full
   // count. `race_checkpoints` are ascending cumulative rollout counts. At each
   // one, a candidate whose win rate is more than `race_sigmas` paired standard
   // errors below the leader's stops, keeping the rollouts it got. The first
@@ -137,6 +141,7 @@ struct SimmedPosition {
   // Parallel to candidates.moves; each filled per SlogSimConfig.
   std::vector<RolloutStats> observations;
   std::vector<RolloutReport> reports;
+  std::vector<std::vector<Rollout>> rollouts;  // rollouts[c][i]: candidate c's rollout i
   // paired[c][r]: candidate c's win value minus reference r's, over the rollouts.
   std::vector<std::vector<PairedWinDiff>> paired;
 };

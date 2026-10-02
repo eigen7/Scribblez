@@ -59,20 +59,39 @@ What exists, and what that changes:
 
 ## Step 0: the noise and saturation estimate
 
-This step sets the corpus size, so it runs first. Using PR 1 and a measurement
-mode of PR 2's tool, on about 300 face-up positions, run the labeling
-estimator (3-ply truncated hasty, the frozen teacher as leaf) on all 16
-candidates at a large rollout count, recording **paired** per-rollout
-differences under common random numbers. It reports:
+This step sets the corpus size, so it runs first. On about 300 face-up
+positions, it runs the labeling estimator (3-ply truncated hasty, the frozen
+teacher as leaf) on all 16 candidates at 10,000 rollouts each, and keeps every
+rollout. It reports:
 
-- per-candidate and paired standard errors against rollout count, and from
-  them the label rollout count L at which within-row differences of the
-  expected score are resolvable;
+- the label rollout count L at which within-position differences of the
+  expected score are resolvable: per position, the noise variance of each
+  candidate's label, centered per rollout on the position's candidates, against
+  the spread of the labels. Every smaller rollout count is read from the same
+  rollouts. It is reported over every candidate and over the top and middle
+  strata alone: exchanges and low-ranked plays sit far below the best plays and
+  dominate a spread over every candidate, and the comparisons that are hard to
+  resolve are among the plausible moves;
 - rollouts per second, and so the cost per position and the corpus size a
   given compute window affords;
-- how quickly the ply-one options saturate: the union of each probe's
-  static-equity top k on a shared board, against probe count;
-- the count of each coupling kind per position.
+- how quickly the ply-one options saturate: on each candidate's board, the
+  union of the opponent's static-equity top k over the racks the rollouts dealt
+  them, against probe count;
+- how many coupled pairs of each kind a position offers, and how many the
+  selection takes.
+
+**As built.** The `transfer_test` workload runs `transfer_test_generator
+--mode=measure`, which the corpus modes of PR 2 extend. Each cycle self-plays a
+face-up hasty batch and measures one position per game, rather than sampling
+another tag's corpus: the self-play is negligible next to the sims, and the
+games come from the same policy. Candidates come from
+[transfer_candidates.h](../../engine/include/sim/transfer_candidates.h). Each
+`.slog` gets two sidecars: `.tmeasure` (JSON: parameters, timings, and per
+position its candidates, couplings and saturation curves) and `.trollouts`
+(every rollout's expected score and score difference, as float32).
+`py/scripts/transfer_test_measure_report.py --tag TAG` prints the report.
+`Rollout` now records the opponent's sampled rack, which PR 1's traces need
+too.
 
 ## PR 1: probe traces in the engine
 

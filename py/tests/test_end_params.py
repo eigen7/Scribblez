@@ -61,6 +61,7 @@ END_PARAMS = {
     "blind_spots": {"target_positions"},
     "kill_test": set(),
     "match_arms": set(),
+    "transfer_test": {"target_positions"},
 }
 
 

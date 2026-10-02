@@ -116,6 +116,7 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
   game.play_from(a.board, a.scores, known_racks, pool, /*to_move=*/opponent, a.returned_to_bag);
   const GameLog log = game.log();
 
+  out->opp_rack = log.initial_racks[opponent];
   if (log.num_records >= 1 && log.records[0].player == opponent)
     out->opp_reply = log.records[0].move;
   if (log.num_records >= 2 && log.records[1].player == pos.mover)
