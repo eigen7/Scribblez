@@ -341,7 +341,11 @@ how much first.
 **Rented generators and remote trainers** drain the same way. A trainer's
 last state pair is swept from its stopped container and installed under the
 cursor rule, and the replacement container is seeded with the controller's
-checkpoint and cursor, so it loses at most its in-flight generation.
+checkpoint and cursor, so it loses at most its in-flight generation. A
+remote trainer that stops on its own at its end condition (max_rows) is
+swept the same way when its exit is first seen, and counts as finished only
+once that sweep succeeds: its last generation, the cursor that completes the
+tag included, is written after the last collection.
 
 **Pauses.** A scheduler gate pauses the container rather than stopping it, so
 a gate that flips every minute costs nothing: no bundle refetch, and the

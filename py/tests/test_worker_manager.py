@@ -914,14 +914,19 @@ def test_an_ssh_trainer_that_exits_zero_is_swept_once(manager, task, monkeypatch
     assert swept == [tr.worker_id]  # finished already: not swept on every pass
 
 
-def test_a_trainer_whose_final_sweep_fails_is_not_finished(manager, task, monkeypatch):
-    """Finishing it unswept would lose its last generation for good."""
+@pytest.mark.parametrize(
+    "error",
+    [SshMachineError("u@h: copying models from c timed out"), OSError("No space left on device")],
+)
+def test_a_trainer_whose_final_sweep_fails_is_not_finished(manager, task, monkeypatch, error):
+    """Finishing it unswept would lose its last generation for good. Any
+    failure, not only an ssh one, is retried rather than aborting the pass."""
     spec = workloads.get("position_eval")
     _fake_ssh(monkeypatch, state="stopped")
     monkeypatch.setattr(_FakeSshMachine, "exit_reason", "exit 0: Stopped at 1000 rows")
 
     def failing_sweep(self, m, spec, task, w):
-        raise SshMachineError("u@h: copying models from c timed out")
+        raise error
 
     monkeypatch.setattr(WorkerManager, "_sweep_ssh", failing_sweep)
     tr = manager.add_ssh(spec, task, "train", host="u@h", threads=None)
