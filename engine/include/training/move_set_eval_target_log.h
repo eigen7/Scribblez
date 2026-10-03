@@ -60,6 +60,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -141,7 +142,9 @@ class TargetWriter {
  public:
   TargetWriter(const std::string& path, uint32_t record_floats, uint32_t record_planes,
                const std::string& model_hash, uint32_t flags = 0);
-  ~TargetWriter();  // closes if close() was not called
+  // Closes if close() was not called, unless an exception is unwinding: a
+  // partial file would pass for a finished one, so it is dropped instead.
+  ~TargetWriter();
 
   TargetWriter(const TargetWriter&) = delete;
   TargetWriter& operator=(const TargetWriter&) = delete;
@@ -163,6 +166,7 @@ class TargetWriter {
   std::vector<char> buffer_;
   uint32_t num_positions_ = 0;
   bool closed_ = false;
+  int uncaught_at_open_ = std::uncaught_exceptions();
 };
 
 // Loads a .mset file into memory and serves per-position views. Throws

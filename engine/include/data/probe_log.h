@@ -29,6 +29,7 @@
 #include "sim/sim_runner.h"
 
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -119,7 +120,9 @@ class ProbeWriter {
  public:
   ProbeWriter(const std::string& path, uint16_t flags, const std::string& leaf_model_hash,
               const std::string& lexicon, int horizon_plies, int probes);
-  ~ProbeWriter();  // closes if close() was not called
+  // Closes if close() was not called, unless an exception is unwinding: a
+  // partial file would pass for a finished one, so it is dropped instead.
+  ~ProbeWriter();
 
   ProbeWriter(const ProbeWriter&) = delete;
   ProbeWriter& operator=(const ProbeWriter&) = delete;
@@ -134,6 +137,7 @@ class ProbeWriter {
   std::vector<char> buffer_;
   uint32_t num_positions_ = 0;
   bool closed_ = false;
+  int uncaught_at_open_ = std::uncaught_exceptions();
 };
 
 // Loads a whole .sprobe file and serves per-position views. Throws

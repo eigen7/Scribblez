@@ -13,6 +13,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -130,6 +131,33 @@ TEST(ProbeLog, RoundTrips) {
     }
   }
   EXPECT_EQ(turn, pos.header->num_turns);
+  std::filesystem::remove_all(dir);
+}
+
+// A writer destroyed by an exception leaves no file: a short one would pass for
+// a finished one, and a resumed run would skip its .slog.
+TEST(ProbeLog, AnUnwindingWriterLeavesNoFile) {
+  const std::filesystem::path dir = scribblez::testing::make_temp_dir("scribblez_test_probe_log3");
+  const std::string path = (dir / "x.sprobe").string();
+  try {
+    ProbeWriter w(path, kProbeFlagFaceUpLeaves, "abc123", "NWL23", 3, 2);
+    w.add_position(position(2, 2));
+    throw std::runtime_error("a leaf readout was not finite");
+  } catch (const std::runtime_error&) {
+  }
+  EXPECT_FALSE(std::filesystem::exists(path));
+  std::filesystem::remove_all(dir);
+}
+
+TEST(ProbeLog, RejectsATruncatedFile) {
+  const std::filesystem::path dir = scribblez::testing::make_temp_dir("scribblez_test_probe_log4");
+  const std::string path = (dir / "x.sprobe").string();
+  {
+    ProbeWriter w(path, kProbeFlagFaceUpLeaves, "abc123", "NWL23", 3, 2);
+    w.add_position(position(2, 2));
+  }
+  std::filesystem::resize_file(path, std::filesystem::file_size(path) - 1);
+  EXPECT_THROW(ProbeReader r(path), util::Exception);
   std::filesystem::remove_all(dir);
 }
 

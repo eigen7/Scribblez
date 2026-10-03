@@ -56,7 +56,7 @@ ProbeWriter::ProbeWriter(const std::string& path, uint16_t flags,
 }
 
 ProbeWriter::~ProbeWriter() {
-  if (!closed_) close();
+  if (!closed_ && std::uncaught_exceptions() == uncaught_at_open_) close();
 }
 
 void ProbeWriter::add_position(const ProbePosition& p) {

@@ -46,7 +46,7 @@ TargetWriter::TargetWriter(const std::string& path, uint32_t record_floats, uint
 }
 
 TargetWriter::~TargetWriter() {
-  if (!closed_) close();
+  if (!closed_ && std::uncaught_exceptions() == uncaught_at_open_) close();
 }
 
 void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
