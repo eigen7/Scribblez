@@ -34,6 +34,7 @@
 #include "sim/sim_runner.h"
 
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,10 @@ inline constexpr uint16_t kSimObsVersion = 5;
 // information condition no consumer supports.
 inline constexpr uint32_t kSimObsFlagOpenLeaves = 2u;  // sims knew the opponent's retained leave
 inline constexpr uint32_t kSimObsFlagTrajectory = 4u;  // record order is trajectory order
+// Labels for SupremeBot M1a's transfer test (docs/plans/supreme_bot_m1a.md):
+// the companion .sprobe's candidates simmed at a larger budget, on rollouts
+// disjoint from its probes.
+inline constexpr uint32_t kSimObsFlagLabels = 8u;
 
 // Width of SimObsFileHeader's hex model-content-hash fields, NUL-padded.
 // All-zero means no model was involved: the equity-top-K proposer, or
@@ -99,7 +104,9 @@ class SimObsWriter {
   explicit SimObsWriter(const std::string& path, uint32_t flags = 0,
                         const std::string& proposer_hash = {},
                         const std::string& leaf_model_hash = {}, int horizon_plies = 0);
-  ~SimObsWriter();  // closes if close() was not called
+  // Closes if close() was not called, unless an exception is unwinding: a
+  // partial file would pass for a finished one, so it is dropped instead.
+  ~SimObsWriter();
 
   SimObsWriter(const SimObsWriter&) = delete;
   SimObsWriter& operator=(const SimObsWriter&) = delete;
@@ -119,6 +126,7 @@ class SimObsWriter {
   std::vector<char> buffer_;
   uint32_t num_positions_ = 0;
   bool closed_ = false;
+  int uncaught_at_open_ = std::uncaught_exceptions();
 };
 
 // Loads a whole .sobs file into memory and serves per-position views. Throws

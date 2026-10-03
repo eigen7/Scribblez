@@ -118,6 +118,7 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
 
   out->opp_rack = log.initial_racks[opponent];
   if (trace) {
+    trace->initial_racks = log.initial_racks;
     trace->turns.assign(log.records, log.records + log.num_records);
     trace->truncated = game.truncated();
   }
@@ -142,8 +143,9 @@ std::unique_ptr<HastyBot> make_rollout_agent(bool solve_endgames,
   return std::make_unique<HastyBot>(params.base);
 }
 
-// Worker t plays rollout indices t, t+threads, ... of every candidate. Workers
-// write disjoint slots of `results`, so they need no synchronization.
+// Worker t plays slots t, t+threads, ... of `results`, candidate-major, so the
+// load splits evenly however few rollouts there are per candidate. Workers
+// write disjoint slots, so they need no synchronization.
 void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
                     const std::vector<Move>& candidates, const Dictionary& dict,
                     SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
@@ -165,14 +167,13 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
   HastyBot& a1 = *a1_owner;
   std::optional<LeafBatcher> batcher;
   if (params.horizon_plies > 0) batcher.emplace(params.leaf_service, *leaf_spec, results);
-  for (int i = t; i < params.rollouts; i += params.threads) {
-    const uint64_t seed = base_seed + uint64_t(i);
-    for (size_t c = 0; c < applied.size(); ++c) {
-      const size_t slot = c * size_t(params.rollouts) + size_t(i);
-      run_rollout(pos, applied[c], candidates[c], dict, a0, a1, seed, params.horizon_plies,
-                  leaf_spec, batcher ? &*batcher : nullptr, slot, &(*results)[slot],
-                  traces ? &(*traces)[slot] : nullptr);
-    }
+  const size_t rollouts = size_t(params.rollouts);
+  for (size_t slot = size_t(t); slot < applied.size() * rollouts; slot += size_t(params.threads)) {
+    const size_t c = slot / rollouts;
+    const uint64_t seed = base_seed + uint64_t(slot % rollouts);
+    run_rollout(pos, applied[c], candidates[c], dict, a0, a1, seed, params.horizon_plies, leaf_spec,
+                batcher ? &*batcher : nullptr, slot, &(*results)[slot],
+                traces ? &(*traces)[slot] : nullptr);
   }
   if (batcher) batcher->flush();
 }
@@ -385,7 +386,7 @@ std::vector<Rollout> SimRunner::run_rollouts(const SimPosition& pos,
 
   Params params = params_;
   params.rollouts = rollouts;
-  params.threads = std::clamp(params_.threads, 1, std::max(1, rollouts));
+  params.threads = std::clamp(params_.threads, 1, std::max(1, int(candidates.size()) * rollouts));
   const InputEncodingSpec* leaf_spec = params.horizon_plies > 0 ? &leaf_spec_ : nullptr;
   std::vector<Rollout> results(candidates.size() * size_t(params.rollouts));
   if (traces) traces->assign(results.size(), {});

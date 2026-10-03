@@ -139,13 +139,15 @@ struct Rollout {
   bool opp_passed = false;
 };
 
-// One rollout step by step, beside its Rollout: every turn after the
-// candidate, in order, each with its mover, rack, bag count, move, score and
-// draw (game/game_log.h). `truncated` tells whether the rollout stopped at the
-// horizon, where the leaf model scored it, or at the game's end. For analyses
-// that read a rollout's course and not only its outcome
-// (docs/plans/supreme_bot_m1a.md).
+// One rollout step by step, beside its Rollout: the racks each side held when
+// it began (the mover's leave plus refill, the opponent's rack), then every
+// turn after the candidate, in order, each with its mover, rack, bag count,
+// move, score and draw (game/game_log.h). `truncated` tells whether the
+// rollout stopped at the horizon, where the leaf model scored it, or at the
+// game's end. For analyses that read a rollout's course and not only its
+// outcome (docs/plans/supreme_bot_m1a.md).
 struct RolloutTrace {
+  std::array<Rack, 2> initial_racks;  // by player index
   std::vector<TurnRecord> turns;
   bool truncated = false;
 };

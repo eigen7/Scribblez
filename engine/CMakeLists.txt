@@ -67,6 +67,8 @@ add_library(scribblez_core STATIC
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
   src/data/sim_observation_log.cpp
+  src/data/sidecar_io.cpp
+  src/data/probe_log.cpp
   src/data/slog_sampling.cpp
   src/data/format_layout.cpp
   src/training/move_set_eval_target_log.cpp
@@ -383,6 +385,11 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_rack_inference PRIVATE
     scribblez_core Boost::json GTest::gtest_main)
   gtest_discover_tests(test_rack_inference)
+
+  add_executable(test_probe_log tests/test_probe_log.cpp)
+  target_link_libraries(test_probe_log PRIVATE
+    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
+  gtest_discover_tests(test_probe_log)
 
   add_executable(test_transfer_candidates tests/test_transfer_candidates.cpp)
   target_link_libraries(test_transfer_candidates PRIVATE
