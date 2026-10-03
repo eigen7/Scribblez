@@ -837,7 +837,9 @@ class WorkerManager:
             self._exits[key] = self._ssh_machine(task, w).container_exit(
                 _container_name(spec, tag, w.worker_id)
             )
-            if self._exits[key].startswith("exit 0:"):
+            if self._exits[key].startswith("exit 0:") and self._final_flush_collected(
+                spec, task, w
+            ):
                 _note_finished(w)
         elif probe in ("running", "paused"):
             self._exits.pop(key, None)
@@ -848,6 +850,27 @@ class WorkerManager:
         if probe == "unreachable":
             _forget_empty(w)
         return probe
+
+    def _final_flush_collected(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
+        """Whether ssh slot `w`, seen exited 0, may be noted finished: at once
+        for a slot that is not a running trainer, and for a trainer once a sweep
+        of its stopped container has succeeded.
+
+        A trainer delivers its last generation (export, record, state pair) on
+        the way down, after the last collection, which needs a running
+        container. Without the sweep the tag's cursor stays one generation
+        short of max_rows, so the workload's completion never holds, its
+        generators are never finished, and its lease never releases the
+        machine. A failed sweep leaves the slot unfinished, so reconcile
+        restarts it; the trainer exits again at once, and that exit is swept."""
+        if w.desired_state != "running" or not spec.role(w.role).ingest:
+            return True
+        try:
+            self._sweep_ssh(self._ssh_machine(task, w), spec, task, w)
+        except Exception as e:  # noqa: BLE001 -- returning False is the retry; the pass goes on
+            print(f"final sweep {spec.name}/{task.tag}/{w.worker_id}: {e}")
+            return False
+        return True
 
     def _refresh_probe(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str:
         """_probe_container, observed afresh unless the last observation is
