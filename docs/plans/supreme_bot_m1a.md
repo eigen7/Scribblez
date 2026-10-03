@@ -1,15 +1,16 @@
 # SupremeBot M1a: implementation plan
 
-**Status: proposed; nothing built.** This is the build plan for M1a, the held-out
+**Status: step 0 built and run (2026-10-03); the rest proposed, not built.**
+This is the build plan for M1a, the held-out
 transfer test that is SupremeBot's kill gate. The test itself (what is
 measured, the arms, the metrics, the controls and the kill criterion) is
 specified in [supreme_bot.md](supreme_bot.md#the-transfer-test-m1a); this
 document says how to build it.
 
 **Goal.** A corpus of face-up positions, each with 16 stratified and coupled
-candidates, hasty probes recorded step by step, and large-budget labels from
-the same estimator; a reader trained on it; and an evaluation harness that
-produces the kill-criterion table.
+candidates, hasty probes recorded step by step, and labels from the same
+estimator at a larger budget; a reader trained on it; and an evaluation
+harness that produces the kill-criterion table.
 
 ## Starting point
 
@@ -56,6 +57,9 @@ What exists, and what that changes:
 | Horizon | 3 plies (our move, the reply, our next move, then the leaf). | Deeper horizons, which cost more per probe without changing what M1a tests. |
 | Couplings | Play vs exchange of the same tiles; the same tiles at two footprints; the same lane with one tile different. All are exact matches in the legal list. | The hot-lane coupling, deferred until a hot lane has a definition. |
 | Running it | A dashboard workload from the start, on the `move_set_eval` pattern: a generate role running the C++ tool, a train role later. | A standalone script. |
+| Labels | Training positions at **L = 100–200** rollouts per candidate; a **test set of 1,000 positions at L = 1,000**; label rollouts on seeds independent of the probes' ([step 0 results](#step-0-results)). | 1,000 rollouts everywhere, which costs ten times as much per training position for noise the headline can absorb. |
+| Options | **None recorded in M1a.** | Ply-one options by the static-equity rule, which step 0 found do not saturate and the tested transfer does not need ([step 0 results](#step-0-results)). |
+| Corpus | 10,000 training positions and the 1,000-position test set to start, grown if M1a's comparisons lack power. | A size fixed in advance, before the reader's advantage is known. |
 
 ## Step 0: the noise and saturation estimate
 
@@ -93,6 +97,93 @@ position its candidates, couplings and saturation curves) and `.trollouts`
 `Rollout` now records the opponent's sampled rack, which PR 1's traces need
 too.
 
+### Step 0 results
+
+Tag `transfer_test/m1a-step0`, 2026-10-03: 300 positions, 16 candidates each,
+10,000 truncated rollouts per candidate with the `transformer-clipped` epoch
+2543 leaf. Seven positions are decided endgames, every rollout the same
+outcome, and are left out of the expected-score figures.
+
+**Label noise.** Among the plausible moves (the top and middle strata), the
+expected score spreads with a median standard deviation of 0.037 within a
+position (interquartile 0.024 to 0.055). A label's standard error at L
+rollouts, and its noise variance against that spread:
+
+| L | standard error | noise / signal variance, median | p75 |
+|---|---|---|---|
+| 100 | about 0.010 | 0.087 | 0.167 |
+| 200 | about 0.007 | 0.043 | 0.084 |
+| 1,000 | 0.0033 | 0.009 | 0.017 |
+| 2,000 | 0.0023 | 0.004 | 0.008 |
+
+Label noise is unbiased: it adds the same floor to every arm's error, costing
+statistical power, not correctness. At L = 100 a training position costs a
+tenth of one at 1,000, and ten times the positions buys more power than the
+noise takes away, which is also what training the reader wants. The test set
+is small, so it can afford L = 1,000 and a headline nearly free of label noise.
+Because L = 100 is no larger than the probe budget, label rollouts must use
+seeds independent of the probes', or a reader could match the labels' noise.
+
+The best and second-best plausible moves differ by a median 0.0137, and a
+quarter of positions by under 0.004: near-ties, where choosing either costs
+almost nothing. At L = 1,000 the top two are not separated at two paired
+standard errors in 37% of positions, at 2,000 in 32%. That limits the secondary
+decision readouts, not the headline, and the gap-weighted ranking term already
+allows for it.
+
+**Common random numbers** shrink the per-rollout variance of the centered
+expected score by a median 1.8x: modest, because only the opponent's first
+rack is shared.
+
+**Cost.** 3,203 rollouts per second on 28 threads. With about 125 probes per
+candidate (2,000 per position), a training position at L = 100 is 3,600
+rollouts, about 1.1 s, and 10,000 of them about 3.1 hours (4.5 hours at
+L = 200). A test position at L = 1,000 is 18,000 rollouts, about 5.6 s, and
+the 1,000-position test set about 1.6 hours.
+
+**Ply-one options do not saturate.** On a plausible move's board, the union
+of the opponent's static-equity top 16 over the racks the probes dealt grows
+by about 1.5x per doubling of the probes: about 950 distinct options at 128
+probes, 1,460 at 256. At a realistic probe count that is about 15,000 option
+tokens per position, and the per-board deduplication saves only about 3x.
+M1a records none, because the transfer it tests does not need them:
+
+- the headline concerns held-out moves, whose boards are never probed and so
+  would have no options anyway;
+- containment transfer such as QUIZETH to QUIZATH needs no options either: a
+  probe's action steps carry each played move's tiles and its chance steps
+  carry each rack, so whether a played move fits another rack is a check
+  between tokens the context already holds. Options add only moves no probe
+  played.
+
+An options ablation can follow if transfer comes out weak.
+
+**Couplings are plentiful.** A play-exchange pair is offered in 92% of
+positions (the rest have fewer than seven tiles in the bag), with a median 97
+play-exchange, 258 same-lane and 463 same-tiles pairs per position. The
+selected sixteen hold on average 1.75 play-exchange, 2.79 same-lane and 4.87
+same-tiles pairs, counting the ones that arise among the stratified picks.
+
+**A first look at transfer.** With no learned model: after removing what
+static equity predicts (65% of the within-position spread of the full-budget
+sim values), the leftover sim values of two moves correlate as follows:
+
+| pair | correlation | pairs |
+|---|---|---|
+| random siblings | -0.12 | 1,336 |
+| same tiles, two placements | +0.21 | 1,418 |
+| same lane, one tile different | +0.17 | 825 |
+| play vs exchange of those tiles | +0.04 | 524 |
+
+The baseline is negative because centering sixteen values on their mean
+anti-correlates unrelated ones. Moves sharing tiles or a lane sit about 0.3
+above it, well beyond the 0.03 to 0.04 standard error: simming one tells you
+something about the other, though at a correlation near 0.2 one partner
+explains only about 4% of the other's leftover variance. Play against exchange
+transfers least, plausibly because static equity already prices the leave
+they share. This is a lower bound on what the reader can find: a weaker prior
+than the teacher, one partner, linear, and outcomes only.
+
 ## PR 1: probe traces in the engine
 
 In [sim_runner](../../engine/include/sim/sim_runner.h):
@@ -102,9 +193,8 @@ In [sim_runner](../../engine/include/sim/sim_runner.h):
   before, score change and tiles drawn; the leaf's win/draw/loss and score
   readings before reduction; and whether the rollout ended at the horizon or
   at the game's end.
-- Ply-one options: on each probe's opponent rack, `equity_top_k` at ply one,
-  keeping the top k plus the region slots. This is the only full move
-  generation; every later ply stays greedy hasty.
+- No options and no full move generation: every ply stays greedy hasty
+  ([step 0 results](#step-0-results)).
 - No per-step static-equity rank. Hasty's move is always its own rank 1, so
   the field carries nothing until the writer is learned.
 - Tests: a trace reproduces its `Rollout` exactly, and traces are
@@ -114,25 +204,25 @@ In [sim_runner](../../engine/include/sim/sim_runner.h):
 
 A new tool, `transfer_test_generator`, and its workload:
 
-- **Positions.** Sampled from the existing face-up `.slog` corpora with
-  `sample_eligible_turns` and `position_seed`, stratified by game phase, split
-  into train and test by game.
+- **Positions.** As in step 0: each cycle self-plays a face-up hasty batch and
+  takes one position per game. The test set is its own tag, so train and test
+  never share a game.
 - **Candidates.** The full legal list with equities
   (`generate_legal_plays` and `generate_legal_exchanges`
   ([agent.h](../../engine/include/agent/agent.h)), scored by
   `HastyEquity::equities`) feeds a selector for the strata (6 top, 5 middle, 3
   exchanges, 2 low, by hasty equity) and the coupled pairs. Each candidate is
   tagged with its stratum and coupling id.
-- **Labels.** L rollouts per candidate through `SimRunner`, reduced to
-  `RolloutStats` and written as a `.sobs` v5 file with a new flag marking it
-  as labels.
+- **Labels.** L rollouts per candidate through `SimRunner` (100 to 200 for
+  training, 1,000 for the test set), on seeds offset past the probes' so the
+  two never share rollouts, reduced to `RolloutStats` and written as a `.sobs`
+  v5 file with a new flag marking it as labels.
 - **Probes.** P probes per candidate, written to a new **`.sprobe`** sidecar:
   - file header: magic, version, the face-up flag, the teacher and leaf
     hashes, the horizon, the lexicon hash and the generator version;
   - per position: the candidates with their stratum and coupling tags;
   - per probe: the candidate index, the rollout index, the opponent's rack
-    and the turn records from the trace;
-  - per shared board: the recorded options.
+    and the turn records from the trace.
 
   Packed structs, published through
   [format_layout.cpp](../../engine/src/data/format_layout.cpp), with a
@@ -160,8 +250,7 @@ A new tool, `transfer_test_generator`, and its workload:
   - chance step: the drawn tiles and the resulting rack, as cumulative counts;
   - action step: move features against the root board, leave counts, bag
     count, mover and depth;
-  - leaf: the win/draw/loss and score readings;
-  - option: move features, tile count, and its board.
+  - leaf: the win/draw/loss and score readings.
 
   Every token also carries its candidate slot (shared with the candidate
   token), its depth and its type.
@@ -214,9 +303,9 @@ can be built at any point after it.
 ## Order
 
 ```
-PR 1 ── PR 2 ──┬── step 0 ── corpus run (labels and probes)
-               ├── PR 3 ── PR 4 ── PR 5 ── verdict
-               └── PR 6
+step 0 (done) ── PR 1 ── PR 2 ──┬── corpus run (labels and probes)
+                                ├── PR 3 ── PR 4 ── PR 5 ── verdict
+                                └── PR 6
 ```
 
 PRs 3 to 5 develop against a small shakeout corpus while the real one
