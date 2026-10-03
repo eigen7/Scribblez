@@ -169,3 +169,20 @@ def test_rows_in_selects_candidates_by_stratum():
     )
     values = np.arange(6.0).reshape(3, 2)
     assert tm.rows_in(position, values, {"top", "middle"}).tolist() == [[0, 1], [4, 5]]
+
+
+def test_decided_positions_are_the_ones_without_any_spread():
+    def position(expected):
+        return tm.MeasuredPosition(
+            game=0,
+            turn=0,
+            strata=["top"] * expected.shape[0],
+            expected=expected,
+            delta=np.zeros_like(expected),
+            couplings=[],
+            offered={},
+            saturation=[],
+        )
+
+    assert tm.decided(position(np.ones((3, 5))))
+    assert not tm.decided(position(np.array([[1.0, 0.0], [1.0, 1.0]])))
