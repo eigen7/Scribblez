@@ -180,8 +180,10 @@ subset is a design question in its own right.
 **The selection rule** is static equity's top k plus a few slots reserved for
 plays in other board regions: a top k by value alone would drop the setup
 plays the design exists to find. Static equity is available at every node
-without a trunk pass, so the rule is the same at M1, where the writer is hasty
-and there is no prior at ply one, as at M3a. Later, what to record can become a
+without a trunk pass, so the rule works wherever options are recorded. M1a
+records none: step 0 found that the ply-one sets do not saturate, and that the
+transfer M1a tests does not need them
+([supreme_bot_m1a.md](supreme_bot_m1a.md#step-0-results)). Later, what to record can become a
 writer decision, trained by the same reward as the others ([Open
 questions](#open-questions)). Exchanges and passes are never recorded as
 options: they need no lexical knowledge, since an exchange is a keep-set of
@@ -226,7 +228,7 @@ growing are measured before M0:
 | top 16 at every node | ~128,000 | ~150,000 |
 | top 16 at in-scope nodes (ply one, first own move) | ~64,000 | ~85,000 |
 | the same, ply-one options once per shared board | ~40,000 | ~60,000 |
-| M1: ply-one options only, once per shared board | the saturated set per board, times 16 boards | measured before M0 |
+| M1a: none (step 0: the ply-one sets do not saturate, about 950 per board at 128 probes) | 0 | ~20,000 |
 
 ### What an action step costs
 
@@ -829,8 +831,7 @@ pairs are always present. Every candidate is labeled ([The reader](#the-reader))
 
 In each position a subset H of one to four candidates, drawn from every
 stratum, is **held out**: the context holds probes of the other candidates
-only, round-robin, with common random numbers and ply-one options as
-everywhere. The target is each held-out move's label. A graded variant gives a
+only, round-robin, with common random numbers. The target is each held-out move's label. A graded variant gives a
 held-out move one to five probes of its own, to test whether the other moves'
 evidence sharpens a thin estimate. Rows are subset-assembled as in
 [The reader](#the-reader), and every arm sees identical records.
@@ -906,7 +907,7 @@ of the final pick against budget, with every candidate probed.
   near zero where it shares nothing.
 - **Synthetic single-fact tests,** the clean-room version of the same ability:
   QUIZETH to QUIZATH, the no-T control, a near miss (one tile short) and a
-  blank-bearing case, built as production records with option tokens.
+  blank-bearing case, built as production records.
 
 ### The kill criterion
 
@@ -1076,8 +1077,8 @@ core has been shown to work.
   uses the face-up teacher as its prior, so it waits on no retraining; the
   build is [supreme_bot_m1a.md](supreme_bot_m1a.md). The writer is
   hasty at every node, with draws from the uninformed prior, which is exact
-  under face-up leaves, and ply-one options by the static-equity rule
-  ([Move lists](#move-lists-local-and-global)). The test and its kill
+  under face-up leaves, and no recorded options
+  ([step 0](supreme_bot_m1a.md#step-0-results)). The test and its kill
   criterion are [the transfer test](#the-transfer-test-m1a): held-out moves,
   stratified candidates with injected couplings, and the within-row error of
   the held-out move as the headline. If the reader passes, match play against
