@@ -67,6 +67,17 @@ class SimAgentTest : public ::testing::Test {
                        /*opp_score=*/7, bag_size_};
   }
 
+  // The request's position as the simulator takes it.
+  SimPosition position() const {
+    SimPosition pos;
+    pos.board = board_;
+    pos.mover = 0;
+    pos.scores = {13, 7};
+    pos.rack = my_rack_;
+    pos.opp_leave = opp_leave_;
+    return pos;
+  }
+
   Dictionary dict_ = opening_dict();
   Board board_;
   Rack my_rack_ = Rack::from_string("CARTES");
@@ -264,4 +275,70 @@ TEST_F(SimAgentTest, AnUnusableCandidateCapIsRejected) {
   EXPECT_THROW(equity_top_k(request(), 0), std::runtime_error);
   EXPECT_THROW(equity_top_k(request(), -1), std::runtime_error);
   EXPECT_EQ(equity_top_k(request(), 1).size(), 1u);
+}
+
+// A rollout's trace is that rollout step by step: the opponent replies first,
+// from the rack the Rollout records, and a truncated rollout stops after the
+// horizon's plies. Asking for traces changes no outcome.
+TEST_F(SimAgentTest, RolloutTracesMatchTheirRollouts) {
+  const std::vector<Move> candidates = equity_top_k(request(), 3);
+  ASSERT_GT(candidates.size(), 1u);
+  LeafStub leaf;
+  for (const int horizon : {0, SimRunner::kMinHorizonPlies}) {
+    SimRunner::Params sp;
+    sp.rollouts = 6;
+    sp.horizon_plies = horizon;
+    sp.leaf_service = horizon > 0 ? &leaf : nullptr;
+    const SimRunner runner(dict_, sp);
+    std::vector<RolloutTrace> traces;
+    const std::vector<Rollout> traced =
+      runner.run_rollouts(position(), candidates, 7, sp.rollouts, &traces);
+    const std::vector<Rollout> plain = runner.run_rollouts(position(), candidates, 7);
+    ASSERT_EQ(traces.size(), traced.size());
+    for (size_t k = 0; k < traced.size(); ++k) {
+      const Rollout& r = traced[k];
+      const RolloutTrace& t = traces[k];
+      EXPECT_EQ(r.p_win, plain[k].p_win);
+      EXPECT_EQ(r.delta, plain[k].delta);
+      ASSERT_GE(t.turns.size(), 2u);
+      EXPECT_EQ(t.turns[0].player, 1);
+      EXPECT_TRUE(t.turns[0].rack_before == r.opp_rack);
+      EXPECT_TRUE(t.turns[0].move == r.opp_reply);
+      EXPECT_TRUE(t.turns[1].move == r.self_next);
+      EXPECT_EQ(t.truncated, horizon > 0);
+      if (horizon > 0) EXPECT_EQ(int(t.turns.size()), horizon);
+    }
+  }
+}
+
+TEST_F(SimAgentTest, RolloutTracesDoNotDependOnTheThreadCount) {
+  const std::vector<Move> candidates = equity_top_k(request(), 3);
+  LeafStub leaf;
+  auto traces_with = [&](int threads) {
+    SimRunner::Params sp;
+    sp.rollouts = 8;
+    sp.threads = threads;
+    sp.horizon_plies = SimRunner::kMinHorizonPlies;
+    sp.leaf_service = &leaf;
+    std::vector<RolloutTrace> traces;
+    SimRunner(dict_, sp).run_rollouts(position(), candidates, 11, sp.rollouts, &traces);
+    return traces;
+  };
+  const std::vector<RolloutTrace> one = traces_with(1);
+  const std::vector<RolloutTrace> many = traces_with(3);
+  ASSERT_EQ(one.size(), many.size());
+  for (size_t k = 0; k < one.size(); ++k) {
+    ASSERT_EQ(one[k].turns.size(), many[k].turns.size());
+    EXPECT_EQ(one[k].truncated, many[k].truncated);
+    for (size_t i = 0; i < one[k].turns.size(); ++i) {
+      const TurnRecord& a = one[k].turns[i];
+      const TurnRecord& b = many[k].turns[i];
+      EXPECT_EQ(a.player, b.player);
+      EXPECT_TRUE(a.rack_before == b.rack_before);
+      EXPECT_EQ(a.bag_size_before, b.bag_size_before);
+      EXPECT_TRUE(a.move == b.move);
+      EXPECT_EQ(a.score_delta, b.score_delta);
+      EXPECT_TRUE(a.drawn == b.drawn);
+    }
+  }
 }

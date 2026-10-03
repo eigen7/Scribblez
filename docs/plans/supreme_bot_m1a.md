@@ -54,7 +54,7 @@ What exists, and what that changes:
 | One frozen teacher | The same checkpoint is the prior, the leaf model and the root encoder, and its hash is stamped in every record. | Separate models, which would add version skew for no benefit at M1a. |
 | The summary-token arm | The reader's own architecture fed one aggregate token per probed candidate (win/draw/loss frequencies, score moments, footprint histograms) instead of per-probe tokens. | The evidence-loop model, which would have to be resurrected along with a student. The ablation answers the same question, whether probe content matters beyond outcomes, with identical capacity and training. |
 | Candidate strata | Ranked by **hasty equity**: CPU-only selection. | Ranking by the teacher. |
-| Horizon | 3 plies (our move, the reply, our next move, then the leaf). | Deeper horizons, which cost more per probe without changing what M1a tests. |
+| Horizon | 3 plies after the candidate (the opponent's reply, our next move, the opponent's next move), then the leaf. | Deeper horizons, which cost more per probe without changing what M1a tests. |
 | Couplings | Play vs exchange of the same tiles; the same tiles at two footprints; the same lane with one tile different. All are exact matches in the legal list. | The hot-lane coupling, deferred until a hot lane has a definition. |
 | Running it | A dashboard workload from the start, on the `move_set_eval` pattern: a generate role running the C++ tool, a train role later. | A standalone script. |
 | Labels | Training positions at **L = 100–200** rollouts per candidate; a **test set of 1,000 positions at L = 1,000**; label rollouts on seeds independent of the probes' ([step 0 results](#step-0-results)). | 1,000 rollouts everywhere, which costs ten times as much per training position for noise the headline can absorb. |
@@ -185,6 +185,11 @@ they share. This is a lower bound on what the reader can find: a weaker prior
 than the teacher, one partner, linear, and outcomes only.
 
 ## PR 1: probe traces in the engine
+
+**As built.** `SimRunner::run_rollouts` takes an optional vector of
+`RolloutTrace`, filled at each rollout's index: the rollout's turns as the game
+log records them, and whether it stopped at the horizon. The leaf readings are
+the `Rollout` beside it.
 
 In [sim_runner](../../engine/include/sim/sim_runner.h):
 
