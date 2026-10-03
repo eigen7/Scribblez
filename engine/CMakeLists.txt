@@ -67,6 +67,7 @@ add_library(scribblez_core STATIC
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
   src/data/sim_observation_log.cpp
+  src/data/sidecar_io.cpp
   src/data/slog_sampling.cpp
   src/data/format_layout.cpp
   src/training/move_set_eval_target_log.cpp

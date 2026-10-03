@@ -1,23 +1,16 @@
 #include "data/sim_observation_log.h"
 
+#include "data/sidecar_io.h"
 #include "util/assert.h"
 #include "util/exception.h"
 
 #include <algorithm>
 #include <cstring>
-#include <filesystem>
-#include <format>
 #include <fstream>
-#include <unistd.h>
 
 namespace scribblez {
 
 namespace {
-
-void append_bytes(std::vector<char>* buffer, const void* data, size_t size) {
-  const char* p = static_cast<const char*>(data);
-  buffer->insert(buffer->end(), p, p + size);
-}
 
 std::string header_hash_field(const char* field, size_t size) {
   return std::string(field, strnlen(field, size));
@@ -81,15 +74,7 @@ void SimObsWriter::close() {
   closed_ = true;
   SimObsFileHeader* hdr = reinterpret_cast<SimObsFileHeader*>(buffer_.data());
   hdr->num_positions = num_positions_;
-  // Write to a temp file and rename, so an interrupted run never leaves a
-  // truncated .sobs that a resume, which skips existing sidecars, would keep.
-  const std::string tmp = std::format("{}.tmp.{}", path_, ::getpid());
-  {
-    std::ofstream f(tmp, std::ios::binary);
-    if (!f) throw util::Exception("SimObsWriter: cannot open {}", tmp);
-    f.write(buffer_.data(), std::streamsize(buffer_.size()));
-  }
-  std::filesystem::rename(tmp, path_);
+  write_atomically(path_, buffer_);
 }
 
 std::string SimObsReader::proposer_hash() const {
