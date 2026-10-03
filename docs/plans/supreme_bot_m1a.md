@@ -240,6 +240,28 @@ A new tool, `transfer_test_generator`, and its workload:
   joins the worker bundle, and the sidecars are delivered through the pair
   store. The step-0 measurement mode is a flag on the same tool.
 
+**As built.** `transfer_test_generator --mode=corpus`, and the
+`transfer_test` workload's `train-corpus` (L = 100, 10,000 positions, the
+default) and `test-corpus` (L = 1,000, 1,000 positions) profiles; `measure` is
+step 0. Where it differs from the list above:
+
+- **The `.sprobe` keeps to the replay rule.** M1a stores no prior outputs, so
+  a record holds what a `.slog` would: the racks each side began the rollout
+  with and each turn's move and draw (`TurnBlob`), plus the outcome. A turn's
+  mover, racks, bag count and score come back by replay from the position
+  after the candidate; PR 3 reads them through the FFI, as `.slog` rows are.
+  The header carries the leaf model's hash, the lexicon's name, the horizon
+  and the probe count. Format: [probe_log.h](../../engine/include/data/probe_log.h).
+- **Coupling tags are not stored.** They are a pure function of the
+  candidates (`find_couplings`), so readers recompute them; each candidate
+  stores its stratum.
+- **Labels reuse the probe pass's position and candidates.** The labels run a
+  second `SimRunner` on the replayed position and the candidates the probe
+  pass selected, seeded at `base_seed + probes`, so label rollout i is rollout
+  probes + i and never one of the probes. The `.sobs` carries
+  `kSimObsFlagLabels` and is written before the `.sprobe`, whose presence marks
+  a file done.
+
 ## PR 3: the data side of the reader
 
 - A numpy reader for `.sprobe`, on the pattern of
