@@ -1,16 +1,20 @@
 """SupremeBot M1a's held-out transfer test data (docs/plans/supreme_bot_m1a.md).
 
-Its one mode so far is step 0's measurement: how many rollouts a label needs
-before within-position differences between candidates are resolvable, what a
-rollout costs, how fast the recorded ply-one options saturate, and how often
-each coupling kind occurs. Step 0 sets the corpus size; the corpus itself is
-a later mode of the same tool.
+Two modes, each with a profile:
+
+- corpus: M1a's records. Per .slog, a .sprobe of every candidate's probes,
+  turn by turn, and a labels .sobs, the same candidates simmed further on
+  rollouts disjoint from the probes. The train-corpus profile labels at
+  L = 100, the test-corpus profile at L = 1,000; the test set is its own tag,
+  so train and test never share a game.
+- measure: step 0, which set the corpus size: every rollout of every candidate
+  at a large count, with option saturation and coupling counts.
+  py/scripts/transfer_test_measure_report.py reads its store.
 
 A cycle plays a HastyBot self-play batch with face-up leaves into a fresh
-.slog, runs transfer_test_generator over every .slog still missing its
-.tmeasure, and delivers each complete set (the .slog, the .tmeasure
-and the .trollouts of every rollout) to the tag's store. One position is
-measured per game. py/scripts/transfer_test_measure_report.py reads the store.
+.slog, runs transfer_test_generator over every .slog still missing its mode's
+sidecars, and delivers each complete set to the tag's store. One position is
+taken per game.
 
 The leaf model is a position_eval export, pinned at task creation as
 move_set_eval pins its teacher, and staged for remote slots the same way.
@@ -41,9 +45,30 @@ from scribblez.workloads.base import (
 from scribblez.workloads.move_set_eval import teacher_onnx
 
 TRANSFER_TEST_GENERATOR = str(ENGINE_DIR / "transfer_test_generator")
+MODE_CORPUS = "corpus"
+MODE_MEASURE = "measure"
 STORE_DIR = "measure"
 JSON_EXT = ".tmeasure"
 FLOATS_EXT = ".trollouts"
+CORPUS_DIR = "corpus"
+PROBE_EXT = ".sprobe"
+LABELS_EXT = ".sobs"
+
+
+@dataclass(frozen=True)
+class Sidecars:
+    """Where a mode's files go: its store dir, the sidecar whose presence marks
+    a .slog done (written last), and the ones delivered with it."""
+
+    store_dir: str
+    done_ext: str
+    extra_exts: tuple[str, ...]
+
+
+SIDECARS = {
+    MODE_CORPUS: Sidecars(CORPUS_DIR, PROBE_EXT, (LABELS_EXT,)),
+    MODE_MEASURE: Sidecars(STORE_DIR, JSON_EXT, (FLOATS_EXT,)),
+}
 # The tag-relative name a remote slot finds its leaf model under (RoleSpec.inputs).
 TEACHER_INPUT = "inputs/teacher.onnx"
 
@@ -75,13 +100,26 @@ class TransferTestParams:
         "stop once the store holds at least this many measured positions (-1 = run until paused)",
         end=True,
     )
-    games_per_batch: int = param(20, "self-play games per cycle; one position is measured per game")
-    rollouts: int = param(10000, "rollouts per candidate; the analysis reads every smaller count")
-    horizon: int = param(3, "plies before the leaf model scores a rollout (at least 3)")
-    saturation_probes: int = param(
-        256, "rollouts whose opponent racks feed the ply-one option saturation curves"
+    games_per_batch: int = param(20, "self-play games per cycle; one position is taken per game")
+    mode: str = param(
+        MODE_MEASURE,
+        "corpus: M1a's probes and labels; measure: step 0's noise and saturation measurement",
+        choices=(MODE_CORPUS, MODE_MEASURE),
     )
-    option_k: int = param(16, "options recorded per opponent rack: its static-equity top k")
+    horizon: int = param(3, "plies after the candidate before the leaf model scores (at least 3)")
+    probes_per_candidate: int = param(125, "corpus: probes recorded per candidate")
+    label_rollouts: int = param(
+        100, "corpus: label rollouts per candidate (100 for training, 1000 for the test set)"
+    )
+    rollouts: int = param(
+        10000, "measure: rollouts per candidate; the analysis reads every smaller count"
+    )
+    saturation_probes: int = param(
+        256, "measure: rollouts whose opponent racks feed the ply-one option saturation curves"
+    )
+    option_k: int = param(
+        16, "measure: options recorded per opponent rack, its static-equity top k"
+    )
     random_opening_mean: float = param(2.0, "mean random opening moves per self-play game")
 
 
@@ -92,19 +130,31 @@ class CycleResult:
     measure_seconds: float  # transfer_test_generator wall time
 
 
+def mode_flags(params: TransferTestParams) -> list[str]:
+    """The generator flags of the tag's mode."""
+    if params.mode == MODE_CORPUS:
+        return [
+            f"--probes={params.probes_per_candidate}",
+            f"--label-rollouts={params.label_rollouts}",
+        ]
+    return [
+        f"--rollouts={params.rollouts}",
+        f"--saturation-probes={params.saturation_probes}",
+        f"--option-k={params.option_k}",
+    ]
+
+
 def run_generator(pending: list[Path], params: TransferTestParams, threads: int, model: str) -> int:
-    """Measure each of `pending` under a seed of its own, so files never share
-    rollout streams."""
+    """Run the generator over each of `pending` under a seed of its own, so
+    files never share rollout streams."""
     for slog in pending:
         cmd = [
             TRANSFER_TEST_GENERATOR,
-            "--mode=measure",
+            f"--mode={params.mode}",
             f"--slog-file={slog}",
             f"--leaf-model={model}",
             f"--horizon={params.horizon}",
-            f"--rollouts={params.rollouts}",
-            f"--saturation-probes={params.saturation_probes}",
-            f"--option-k={params.option_k}",
+            *mode_flags(params),
             f"--seed={zlib.crc32(slog.stem.encode())}",
             f"--threads={threads}",
         ]
@@ -132,7 +182,8 @@ def run_one_cycle(
     if rc != 0:
         print(f"play_game exited with code {rc}", file=sys.stderr)
         return CycleResult(rc, gen_seconds, 0.0)
-    pending = sorted(s for s in out_dir.glob("*.slog") if not s.with_suffix(JSON_EXT).exists())
+    done_ext = SIDECARS[params.mode].done_ext
+    pending = sorted(s for s in out_dir.glob("*.slog") if not s.with_suffix(done_ext).exists())
     t1 = time.monotonic()
     rc = run_generator(pending, params, threads, model)
     return CycleResult(rc, gen_seconds, time.monotonic() - t1)
@@ -165,14 +216,21 @@ def run_generate(ctx: WorkerContext) -> int:
     except FileNotFoundError as e:
         print(f"error: leaf model: {e}", file=sys.stderr)
         return 1
+    sidecars = SIDECARS[ctx.params.mode]
     return pair_store.run_pair_generate(
         ctx,
         functools.partial(_cycle, model),
-        JSON_EXT,
-        STORE_DIR,
+        sidecars.done_ext,
+        sidecars.store_dir,
         target_pairs=target_files(ctx.params),
-        extra_sidecar_exts=(FLOATS_EXT,),
+        extra_sidecar_exts=sidecars.extra_exts,
     )
+
+
+def stored_files(paths: TagPaths, params: TransferTestParams) -> int:
+    """The tag's finished .slog files, counted by its mode's done sidecar."""
+    sidecars = SIDECARS[params.mode]
+    return pair_store.count_pairs(paths.data_dir / sidecars.store_dir, sidecars.done_ext)
 
 
 def tick(spec: WorkloadSpec, task, hooks):
@@ -180,9 +238,7 @@ def tick(spec: WorkloadSpec, task, hooks):
     `target_positions`. A generator on this machine stops itself there, but an
     ssh one delivers into its own container and cannot count the store."""
     params = params_mod.validate(spec.params_cls, task.params)
-    if params_mod.reached(
-        pair_store.count_pairs(hooks.paths.data_dir / STORE_DIR, JSON_EXT), target_files(params)
-    ):
+    if params_mod.reached(stored_files(hooks.paths, params), target_files(params)):
         hooks.finish("generate")
 
 
@@ -197,8 +253,15 @@ def layout(params, vcpus: int, generator_threads: int | None) -> list[SlotPlan]:
 
 
 def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, object]]:
-    files = pair_store.count_pairs(paths.data_dir / STORE_DIR, JSON_EXT)
+    files = stored_files(paths, params)
     return [("files", files), ("positions", files * params.games_per_batch)]
+
+
+PROFILES = {
+    "train-corpus": {"mode": MODE_CORPUS, "label_rollouts": 100, "target_positions": 10000},
+    "test-corpus": {"mode": MODE_CORPUS, "label_rollouts": 1000, "target_positions": 1000},
+    "measure": {"mode": MODE_MEASURE, "target_positions": 300},
+}
 
 
 SPEC = WorkloadSpec(
@@ -215,7 +278,7 @@ SPEC = WorkloadSpec(
             gpu=True,
             stats=StatsSpec(
                 unit="files",
-                phases={"gen_s": "self-play", "measure_s": "measure", "upload_s": "upload"},
+                phases={"gen_s": "self-play", "measure_s": "sims", "upload_s": "upload"},
             ),
         ),
     ),
@@ -226,5 +289,7 @@ SPEC = WorkloadSpec(
     scheduler="scribblez.workloads.transfer_test:tick",
     progress="scribblez.workloads.transfer_test:progress",
     pace_role="generate",
-    collected_dirs=(STORE_DIR,),
+    collected_dirs=(CORPUS_DIR, STORE_DIR),
+    profiles=PROFILES,
+    default_profile="train-corpus",
 )
