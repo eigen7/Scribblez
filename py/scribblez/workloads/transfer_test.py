@@ -257,9 +257,22 @@ def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, obj
     return [("files", files), ("positions", files * params.games_per_batch)]
 
 
+# A corpus file carries only ~20 s of sims per 20 positions, against ~1.7 s of
+# generator startup (leaf plan, dictionary) per file, so the corpus profiles
+# batch 100 games a cycle.
 PROFILES = {
-    "train-corpus": {"mode": MODE_CORPUS, "label_rollouts": 100, "target_positions": 10000},
-    "test-corpus": {"mode": MODE_CORPUS, "label_rollouts": 1000, "target_positions": 1000},
+    "train-corpus": {
+        "mode": MODE_CORPUS,
+        "label_rollouts": 100,
+        "target_positions": 10000,
+        "games_per_batch": 100,
+    },
+    "test-corpus": {
+        "mode": MODE_CORPUS,
+        "label_rollouts": 1000,
+        "target_positions": 1000,
+        "games_per_batch": 100,
+    },
     "measure": {"mode": MODE_MEASURE, "target_positions": 300},
 }
 
@@ -292,4 +305,11 @@ SPEC = WorkloadSpec(
     collected_dirs=(CORPUS_DIR, STORE_DIR),
     profiles=PROFILES,
     default_profile="train-corpus",
+    primary_params=(
+        "teacher_tag",
+        "target_positions",
+        "mode",
+        "probes_per_candidate",
+        "label_rollouts",
+    ),
 )

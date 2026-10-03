@@ -12,10 +12,8 @@
 //                  rollouts after the probes', so the two never share one
 //                  (kSimObsFlagLabels)
 //
-// --mode=measure: step 0, which set the corpus size. For each sampled position of each face-up
-// .slog, select the transfer test's candidates (sim/transfer_candidates.h) and sim them with the
-// labeling estimator: value-truncated HastyBot rollouts scored by the leaf
-// model, under common random numbers. It writes two sidecars per .slog:
+// --mode=measure: step 0, which set the corpus size: every rollout of every
+// candidate at a large count. Per .slog, two sidecars:
 //
 //   <stem>.trollouts   every rollout's expected score (W + D/2) and final
 //                         delta, as float32 pairs: per position, candidate by
@@ -59,6 +57,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <iostream>
 #include <limits>
 #include <set>
@@ -330,6 +329,20 @@ std::vector<binlog::GamePositionIndex> sampled_work(const std::vector<char>& buf
   return work;
 }
 
+// Sim the one position `at` of `slog`; it has no candidates if it was skipped.
+SimmedPosition sim_position(const binlog::PendingSlog& slog, const Dictionary& dict,
+                            const SlogSimConfig& config, const binlog::GamePositionIndex& at,
+                            util::ProgressMeter* meter) {
+  return std::move(sim_slog_positions(slog.bytes, dict, config, {at}, meter)[0]);
+}
+
+// The per-candidate rollout counts of the run, for the startup line.
+std::string budget(const Options& opt) {
+  if (corpus_mode(opt))
+    return std::format("{} probes and {} label rollouts", opt.probes, opt.label_rollouts);
+  return std::format("{} rollouts", opt.rollouts);
+}
+
 double seconds_since(std::chrono::steady_clock::time_point t0) {
   return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
@@ -346,8 +359,7 @@ void measure_file(const binlog::PendingSlog& slog, const Dictionary& dict, const
   double sim_s = 0, measure_s = 0;
   for (const binlog::GamePositionIndex& at : work) {
     const auto t0 = std::chrono::steady_clock::now();
-    const SimmedPosition r =
-      std::move(sim_slog_positions(slog.bytes, dict, config, {at}, meter)[0]);
+    const SimmedPosition r = sim_position(slog, dict, config, at, meter);
     sim_s += seconds_since(t0);
     if (r.candidates.moves.empty()) continue;
     const auto t1 = std::chrono::steady_clock::now();
@@ -397,8 +409,7 @@ void generate_file(const binlog::PendingSlog& slog, const Dictionary& dict, cons
   SimObsWriter labels(slog.sidecar(kLabelsExt).string(), kSimObsFlagOpenLeaves | kSimObsFlagLabels,
                       /*proposer_hash=*/{}, leaf_hash, opt.horizon);
   for (const binlog::GamePositionIndex& at : sampled_work(slog.bytes, opt)) {
-    SimmedPosition r =
-      std::move(sim_slog_positions(slog.bytes, dict, probe_config, {at}, meter)[0]);
+    SimmedPosition r = sim_position(slog, dict, probe_config, at, meter);
     if (r.candidates.moves.empty()) continue;
     // Label rollout i is rollout probes + i, past every probe.
     const uint64_t label_seed = r.base_seed + uint64_t(opt.probes);
@@ -466,8 +477,8 @@ int main(int argc, char** argv) {
     for (const binlog::PendingSlog& p : pending)
       total += binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
     std::cerr << "transfer-test " << opt.mode << ": " << pending.size() << " file(s), " << total
-              << " positions, " << kRecipe.size() << " candidates each, " << opt.threads
-              << " threads\n";
+              << " positions; " << kRecipe.size() << " candidates each x " << budget(opt) << ", "
+              << opt.threads << " threads\n";
     const std::shared_ptr<nn::PositionEvalService> leaf =
       nn::load_leaf_position_service(opt.leaf_model);
     const std::string leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
