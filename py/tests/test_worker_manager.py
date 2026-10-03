@@ -891,6 +891,45 @@ def test_an_ssh_worker_that_exits_zero_is_finished_not_restarted(manager, spec, 
     assert not w.finished and w.desired_state == "running"
 
 
+def test_an_ssh_trainer_that_exits_zero_is_swept_once(manager, task, monkeypatch):
+    """The trainer delivers its last generation (the cursor at max_rows
+    included) on the way down, after the last collection; without a sweep the
+    tag's completion never holds and its lease never releases the machine."""
+    spec = workloads.get("position_eval")
+    _fake_ssh(monkeypatch, state="stopped")
+    monkeypatch.setattr(_FakeSshMachine, "exit_reason", "exit 0: Stopped at 1000 rows")
+    swept = []
+    monkeypatch.setattr(
+        WorkerManager, "_sweep_ssh", lambda self, m, spec, task, w: swept.append(w.worker_id)
+    )
+    tr = manager.add_ssh(spec, task, "train", host="u@h", threads=None)
+    gen = manager.add_ssh(spec, task, "generate", host="u@h", threads=None)
+    for w in (tr, gen):
+        w.desired_state, w.launched = "running", True
+    manager.worker_status(spec, task, observe=True)
+    assert swept == [tr.worker_id]  # a generator's backlog was collected while it ran
+    assert tr.finished and gen.finished
+    manager._probes.clear()
+    manager.worker_status(spec, task, observe=True)
+    assert swept == [tr.worker_id]  # finished already: not swept on every pass
+
+
+def test_a_trainer_whose_final_sweep_fails_is_not_finished(manager, task, monkeypatch):
+    """Finishing it unswept would lose its last generation for good."""
+    spec = workloads.get("position_eval")
+    _fake_ssh(monkeypatch, state="stopped")
+    monkeypatch.setattr(_FakeSshMachine, "exit_reason", "exit 0: Stopped at 1000 rows")
+
+    def failing_sweep(self, m, spec, task, w):
+        raise SshMachineError("u@h: copying models from c timed out")
+
+    monkeypatch.setattr(WorkerManager, "_sweep_ssh", failing_sweep)
+    tr = manager.add_ssh(spec, task, "train", host="u@h", threads=None)
+    tr.desired_state, tr.launched = "running", True
+    manager.worker_status(spec, task, observe=True)
+    assert tr.desired_state == "running" and not tr.finished
+
+
 def test_an_ssh_worker_that_died_is_exited_and_restarted(manager, spec, task, monkeypatch):
     _fake_ssh(monkeypatch, state="stopped")
     monkeypatch.setattr(_FakeSshMachine, "exit_reason", "exit 143: SIGTERM: drained")
