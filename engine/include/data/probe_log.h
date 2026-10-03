@@ -74,7 +74,7 @@ struct ProbeCandidate {
   float equity;         // HastyBot static equity
   int32_t equity_rank;  // 0-based rank in the static-equity ranking
   uint8_t stratum;      // a Stratum (sim/transfer_candidates.h)
-  uint8_t reserved[3];  // 0
+  char reserved[3];     // 0
 };
 static_assert(sizeof(ProbeCandidate) == 28, "ProbeCandidate must be 28 bytes");
 
@@ -92,7 +92,7 @@ struct ProbeRecord {
   uint16_t probe;  // the rollout's index among the candidate's probes
   uint8_t truncated;
   uint8_t num_turns;
-  uint8_t reserved[2];  // 0
+  char reserved[2];  // 0
 };
 static_assert(sizeof(ProbeRecord) == 44, "ProbeRecord must be 44 bytes");
 
