@@ -99,7 +99,7 @@ bool passed(const GameLog& log, int player) {
 void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& candidate,
                  const Dictionary& dict, HastyBot& a0, HastyBot& a1, uint64_t seed,
                  int horizon_plies, const InputEncodingSpec* leaf_spec, LeafBatcher* batcher,
-                 size_t slot, Rollout* out) {
+                 size_t slot, Rollout* out, RolloutTrace* trace) {
   const int opponent = 1 - pos.mover;
   // Built from the pre-move board and full rack, so the pool, and with it the
   // opponent's sampled tiles, is the same for every candidate (CRN). A known
@@ -117,6 +117,10 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
   const GameLog log = game.log();
 
   out->opp_rack = log.initial_racks[opponent];
+  if (trace) {
+    trace->turns.assign(log.records, log.records + log.num_records);
+    trace->truncated = game.truncated();
+  }
   if (log.num_records >= 1 && log.records[0].player == opponent)
     out->opp_reply = log.records[0].move;
   if (log.num_records >= 2 && log.records[1].player == pos.mover)
@@ -143,7 +147,8 @@ std::unique_ptr<HastyBot> make_rollout_agent(bool solve_endgames,
 void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
                     const std::vector<Move>& candidates, const Dictionary& dict,
                     SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
-                    uint64_t base_seed, std::vector<Rollout>* results) {
+                    uint64_t base_seed, std::vector<Rollout>* results,
+                    std::vector<RolloutTrace>* traces) {
   HastyBot::Params p0;
   p0.thread_id = t;
   p0.name = "H0";
@@ -165,7 +170,8 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
     for (size_t c = 0; c < applied.size(); ++c) {
       const size_t slot = c * size_t(params.rollouts) + size_t(i);
       run_rollout(pos, applied[c], candidates[c], dict, a0, a1, seed, params.horizon_plies,
-                  leaf_spec, batcher ? &*batcher : nullptr, slot, &(*results)[slot]);
+                  leaf_spec, batcher ? &*batcher : nullptr, slot, &(*results)[slot],
+                  traces ? &(*traces)[slot] : nullptr);
     }
   }
   if (batcher) batcher->flush();
@@ -177,9 +183,11 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
 void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
                 const std::vector<Move>& candidates, const Dictionary& dict,
                 SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
-                uint64_t base_seed, std::vector<Rollout>* results, std::exception_ptr* err) {
+                uint64_t base_seed, std::vector<Rollout>* results,
+                std::vector<RolloutTrace>* traces, std::exception_ptr* err) {
   try {
-    run_sim_worker(pos, applied, candidates, dict, params, leaf_spec, t, base_seed, results);
+    run_sim_worker(pos, applied, candidates, dict, params, leaf_spec, t, base_seed, results,
+                   traces);
   } catch (...) {
     *err = std::current_exception();
   }
@@ -364,7 +372,8 @@ std::vector<Rollout> SimRunner::run_rollouts(const SimPosition& pos,
 
 std::vector<Rollout> SimRunner::run_rollouts(const SimPosition& pos,
                                              const std::vector<Move>& candidates,
-                                             uint64_t base_seed, int rollouts) const {
+                                             uint64_t base_seed, int rollouts,
+                                             std::vector<RolloutTrace>* traces) const {
   if (candidates.empty()) return {};
   // A non-empty bag: the pool holds the bag plus the opponent's (up to
   // RACK_SIZE) tiles, known or not.
@@ -379,11 +388,13 @@ std::vector<Rollout> SimRunner::run_rollouts(const SimPosition& pos,
   params.threads = std::clamp(params_.threads, 1, std::max(1, rollouts));
   const InputEncodingSpec* leaf_spec = params.horizon_plies > 0 ? &leaf_spec_ : nullptr;
   std::vector<Rollout> results(candidates.size() * size_t(params.rollouts));
+  if (traces) traces->assign(results.size(), {});
   std::vector<std::thread> workers;
   std::vector<std::exception_ptr> errors(params.threads);
   for (int t = 0; t < params.threads; ++t)
     workers.emplace_back(sim_worker, std::cref(pos), std::cref(applied), std::cref(candidates),
-                         std::cref(dict_), params, leaf_spec, t, base_seed, &results, &errors[t]);
+                         std::cref(dict_), params, leaf_spec, t, base_seed, &results, traces,
+                         &errors[t]);
   for (auto& w : workers) w.join();
   for (const std::exception_ptr& e : errors)
     if (e) std::rethrow_exception(e);

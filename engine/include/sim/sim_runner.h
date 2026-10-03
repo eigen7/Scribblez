@@ -25,6 +25,7 @@
 
 #include "game/bag.h"
 #include "game/board.h"
+#include "game/game_log.h"
 #include "game/move.h"
 #include "game/rack.h"
 #include "nn/eval_service.h"
@@ -138,6 +139,17 @@ struct Rollout {
   bool opp_passed = false;
 };
 
+// One rollout step by step, beside its Rollout: every turn after the
+// candidate, in order, each with its mover, rack, bag count, move, score and
+// draw (game/game_log.h). `truncated` tells whether the rollout stopped at the
+// horizon, where the leaf model scored it, or at the game's end. For analyses
+// that read a rollout's course and not only its outcome
+// (docs/plans/supreme_bot_m1a.md).
+struct RolloutTrace {
+  std::vector<TurnRecord> turns;
+  bool truncated = false;
+};
+
 // How much the end-of-game rack settlement moved the final delta, from the
 // root mover's point of view: twice the other side's tiles to whoever played
 // out, or each side docked its own when nobody did.
@@ -246,8 +258,10 @@ class SimRunner {
                                     uint64_t base_seed) const;
   // As above with `rollouts` in place of the params' count, so a caller can sim
   // in instalments: rollouts [a, b) are run_rollouts(..., base_seed + a, b - a).
+  // With `traces`, each rollout's trace is written at its rollout's index.
   std::vector<Rollout> run_rollouts(const SimPosition& pos, const std::vector<Move>& candidates,
-                                    uint64_t base_seed, int rollouts) const;
+                                    uint64_t base_seed, int rollouts,
+                                    std::vector<RolloutTrace>* traces = nullptr) const;
   int rollouts() const { return params_.rollouts; }
 
  private:
