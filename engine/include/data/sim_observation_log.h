@@ -48,6 +48,10 @@ inline constexpr uint16_t kSimObsVersion = 5;
 // information condition no consumer supports.
 inline constexpr uint32_t kSimObsFlagOpenLeaves = 2u;  // sims knew the opponent's retained leave
 inline constexpr uint32_t kSimObsFlagTrajectory = 4u;  // record order is trajectory order
+// Labels for SupremeBot M1a's transfer test (docs/plans/supreme_bot_m1a.md):
+// the companion .sprobe's candidates simmed at a larger budget, on rollouts
+// disjoint from its probes.
+inline constexpr uint32_t kSimObsFlagLabels = 8u;
 
 // Width of SimObsFileHeader's hex model-content-hash fields, NUL-padded.
 // All-zero means no model was involved: the equity-top-K proposer, or

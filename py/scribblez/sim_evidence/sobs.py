@@ -35,6 +35,9 @@ SOBS_FLAG_OPEN_LEAVES = _CONST["sobs"]["flag_open_leaves"]
 # Records are in trajectory order (docs/roadmap.md item 4); see
 # SobsPosition.num_evidence for which prefixes are valid evidence sets.
 SOBS_FLAG_TRAJECTORY = _CONST["sobs"]["flag_trajectory"]
+# Labels for SupremeBot M1a's transfer test: the companion .sprobe's candidates
+# simmed at a larger budget.
+SOBS_FLAG_LABELS = _CONST["sobs"]["flag_labels"]
 
 # SimObsRole values (data/sim_obs_role.h). Anchor and on-policy records may
 # serve as evidence; off-policy draws are labels only and never do.

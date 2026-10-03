@@ -29,6 +29,9 @@ def test_struct_dtypes_pin_known_layouts():
 
     assert struct_dtype("MsetFileHeader").fields["model_hash"][0] == np.dtype("S64")
     assert struct_dtype("SlogTurnBlob").itemsize == 24
+    assert struct_dtype("ProbeFileHeader").itemsize == 96
+    assert struct_dtype("ProbeCandidate").fields["move"][0] == move
+    assert struct_dtype("ProbeRecord").itemsize == 44
 
 
 def test_magics_spell_their_extensions():
@@ -39,6 +42,9 @@ def test_magics_spell_their_extensions():
     assert MSET_MAGIC == int.from_bytes(b"MSET", "little")
     assert SOBS_MAGIC == int.from_bytes(b"SOBS", "little")
     assert SLOG_MAGIC == int.from_bytes(b"SLOG", "little")
+    from scribblez.ffi import format_layout
+
+    assert format_layout()["constants"]["sprobe"]["magic"] == int.from_bytes(b"SPRB", "little")
 
 
 def test_glyph_char_follows_the_engine_code_table():

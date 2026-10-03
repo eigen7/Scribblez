@@ -1,6 +1,7 @@
 #include "data/format_layout.h"
 
 #include "data/binary_log.h"
+#include "data/probe_log.h"
 #include "data/sim_observation_log.h"
 #include "encoding/input_encoder.h"
 #include "game/glyph.h"
@@ -132,6 +133,10 @@ json::object build_structs() {
   s["SlogGameMetadata"] = struct_json<binlog::GameMetadata>();
   s["SlogInitialRacks"] = struct_json<binlog::InitialRacks>();
   s["SlogTurnBlob"] = struct_json<binlog::TurnBlob>();
+  s["ProbeFileHeader"] = struct_json<ProbeFileHeader>();
+  s["ProbePositionHeader"] = struct_json<ProbePositionHeader>();
+  s["ProbeCandidate"] = struct_json<ProbeCandidate>();
+  s["ProbeRecord"] = struct_json<ProbeRecord>();
   return s;
 }
 
@@ -146,9 +151,13 @@ json::object build_constants() {
                {"flag_retired_open_rack", 1},
                {"flag_open_leaves", kSimObsFlagOpenLeaves},
                {"flag_trajectory", kSimObsFlagTrajectory},
+               {"flag_labels", kSimObsFlagLabels},
                {"role_anchor", static_cast<uint8_t>(SimObsRole::kAnchor)},
                {"role_on_policy", static_cast<uint8_t>(SimObsRole::kOnPolicy)},
                {"role_off_policy", static_cast<uint8_t>(SimObsRole::kOffPolicy)}};
+  c["sprobe"] = {{"magic", kProbeMagic},
+                 {"version", kProbeVersion},
+                 {"flag_face_up_leaves", kProbeFlagFaceUpLeaves}};
   {
     json::array target_names;
     for (const char* name : move_set_eval::kTargetNamesV1) target_names.emplace_back(name);

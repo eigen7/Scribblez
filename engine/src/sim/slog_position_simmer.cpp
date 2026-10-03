@@ -132,6 +132,19 @@ void report_position(const SlogSimConfig& config, const CandidateRollouts& rollo
   }
 }
 
+// Sim the position's candidates to runner.rollouts() and keep every rollout
+// and its trace, split by candidate.
+void trace_position(const SimRunner& runner, SimmedPosition* res) {
+  std::vector<RolloutTrace> traces;
+  const std::vector<Rollout> flat = runner.run_rollouts(res->position, res->candidates.moves,
+                                                        res->base_seed, runner.rollouts(), &traces);
+  const size_t n = size_t(runner.rollouts());
+  for (size_t c = 0; c < res->candidates.moves.size(); ++c) {
+    res->rollouts.emplace_back(flat.begin() + c * n, flat.begin() + (c + 1) * n);
+    res->traces.emplace_back(traces.begin() + c * n, traces.begin() + (c + 1) * n);
+  }
+}
+
 // Sim the position's candidates and keep what the config asks for.
 void reduce_rollouts(const SlogSimConfig& config, const SimRunner& runner, SimmedPosition* res) {
   switch (config.output) {
@@ -143,6 +156,9 @@ void reduce_rollouts(const SlogSimConfig& config, const SimRunner& runner, Simme
       break;
     case SimOutput::kRollouts:
       res->rollouts = sim_candidates(config, runner, *res);
+      break;
+    case SimOutput::kTraces:
+      trace_position(runner, res);
       break;
   }
 }

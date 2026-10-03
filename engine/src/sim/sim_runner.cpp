@@ -118,6 +118,7 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
 
   out->opp_rack = log.initial_racks[opponent];
   if (trace) {
+    trace->initial_racks = log.initial_racks;
     trace->turns.assign(log.records, log.records + log.num_records);
     trace->truncated = game.truncated();
   }
