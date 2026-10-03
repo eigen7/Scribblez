@@ -386,7 +386,7 @@ std::vector<Rollout> SimRunner::run_rollouts(const SimPosition& pos,
 
   Params params = params_;
   params.rollouts = rollouts;
-  params.threads = std::clamp(params_.threads, 1, std::max(1, rollouts));
+  params.threads = std::clamp(params_.threads, 1, std::max(1, int(candidates.size()) * rollouts));
   const InputEncodingSpec* leaf_spec = params.horizon_plies > 0 ? &leaf_spec_ : nullptr;
   std::vector<Rollout> results(candidates.size() * size_t(params.rollouts));
   if (traces) traces->assign(results.size(), {});
