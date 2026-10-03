@@ -55,7 +55,7 @@ def report_budgets(
     )
     seconds = candidates * label_rollouts / rate
     print(
-        f"  labeling a {candidates}-candidate position at that count: {seconds:,.0f} s, "
+        f"  labeling a {candidates}-candidate position at that count: {seconds:,.1f} s, "
         f"{3600 / seconds:,.1f} positions/hour"
     )
 
@@ -110,7 +110,9 @@ def main():
 
     rate = tm.rollouts_per_second(files)
     print(f"\nCost: {rate:,.0f} rollouts/s on {files[0].header['threads']} threads")
-    shrink = [tm.independent_to_paired_variance(p.expected) for p in positions]
+    undecided = [p for p in positions if not tm.decided(p)]
+    print(f"Decided positions (every rollout the same outcome): {len(positions) - len(undecided)}")
+    shrink = [tm.independent_to_paired_variance(p.expected) for p in undecided]
     print(
         "Centering per rollout shrinks the expected score's per-rollout variance "
         f"{np.median(shrink):.1f}x (median)"

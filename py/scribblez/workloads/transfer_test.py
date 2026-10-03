@@ -47,11 +47,13 @@ FLOATS_EXT = ".trollouts"
 # The tag-relative name a remote slot finds its leaf model under (RoleSpec.inputs).
 TEACHER_INPUT = "inputs/teacher.onnx"
 
-# The generator's peak GPU memory in GiB: the leaf service. Not yet measured
-# for this tool; this is the bound position_eval uses for the same export
-# served by match eval (1.06 GiB at 28 threads, plus the 1 GiB TensorRT build
-# scratch and 0.5 headroom). Replace it with the first run's measurement.
-GENERATOR_GPU_GB = 1.06 + 1.0 + 0.5
+# The generator's peak GPU memory in GiB: the leaf service. Measured 2026-10-03
+# on the RTX 5000 Ada with the transformer-clipped epoch-2543 export at 28
+# threads, as the rise in device memory over the baseline: 0.77-1.15 GiB, the
+# range being a concurrent trainer's own drift. The figure takes the top of it,
+# plus the 1 GiB TensorRT build scratch on a machine without a cached plan (a
+# bound from NeuralNet's workspace cap) and 0.5 headroom.
+GENERATOR_GPU_GB = 1.15 + 1.0 + 0.5
 
 
 @dataclass(frozen=True)

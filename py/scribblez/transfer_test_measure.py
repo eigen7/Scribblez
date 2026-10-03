@@ -115,6 +115,12 @@ def noise_to_signal(ns: NoiseSignal, n: int) -> float:
     return ns.noise_per_rollout / n / ns.signal if ns.signal > 0 else float("inf")
 
 
+def decided(position: MeasuredPosition) -> bool:
+    """Whether every rollout of every candidate came out the same: a decided
+    endgame, whose expected-score labels carry no information."""
+    return bool(np.all(position.expected.var(axis=1) == 0))
+
+
 def independent_to_paired_variance(values: np.ndarray) -> float:
     """How much centering per rollout shrinks the per-rollout variance: the mean
     variance of the raw values over that of the centered ones."""
