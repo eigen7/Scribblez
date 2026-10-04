@@ -112,6 +112,12 @@ class LeafStub : public nn::PositionEvalService {
   }
 };
 
+// Whether `rack` holds every tile of `part`.
+bool holds(const Rack& rack, const Rack& part) {
+  TileCounts counts = rack.counts();
+  return counts.remove(part.counts());
+}
+
 }  // namespace
 
 TEST_F(SimAgentTest, PlaysTheCandidateItsOwnRolloutsRankBest) {
@@ -277,9 +283,11 @@ TEST_F(SimAgentTest, AnUnusableCandidateCapIsRejected) {
   EXPECT_EQ(equity_top_k(request(), 1).size(), 1u);
 }
 
-// A rollout's trace is that rollout step by step: the opponent replies first,
-// from the rack the Rollout records, and a truncated rollout stops after the
-// horizon's plies. Asking for traces changes no outcome.
+// A rollout's trace is that rollout step by step: it begins from both sides'
+// full racks, the mover's leave and the opponent's known leave each refilled;
+// the opponent replies first, from the rack the Rollout records; and a
+// truncated rollout stops after the horizon's plies. Asking for traces changes
+// no outcome.
 TEST_F(SimAgentTest, RolloutTracesMatchTheirRollouts) {
   const std::vector<Move> candidates = equity_top_k(request(), 3);
   ASSERT_GT(candidates.size(), 1u);
@@ -300,6 +308,14 @@ TEST_F(SimAgentTest, RolloutTracesMatchTheirRollouts) {
       const RolloutTrace& t = traces[k];
       EXPECT_EQ(r.p_win, plain[k].p_win);
       EXPECT_EQ(r.delta, plain[k].delta);
+      const Move& candidate = candidates[k / size_t(sp.rollouts)];
+      Rack leave = my_rack_;
+      for (int g = 0; g < candidate.num_glyphs(); ++g) leave.remove(candidate.glyph(g).rack_tile());
+      EXPECT_EQ(t.initial_racks[0].size(), RACK_SIZE);
+      EXPECT_TRUE(holds(t.initial_racks[0], leave));
+      EXPECT_EQ(t.initial_racks[1].size(), RACK_SIZE);
+      EXPECT_TRUE(holds(t.initial_racks[1], opp_leave_));
+      EXPECT_TRUE(t.initial_racks[1] == r.opp_rack);
       ASSERT_GE(t.turns.size(), 2u);
       EXPECT_EQ(t.turns[0].player, 1);
       EXPECT_TRUE(t.turns[0].rack_before == r.opp_rack);

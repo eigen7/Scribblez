@@ -1,6 +1,7 @@
 #include "training/move_set_eval_target_log.h"
 
 #include "data/binary_log.h"
+#include "data/sidecar_io.h"
 #include "util/assert.h"
 #include "util/exception.h"
 
@@ -8,22 +9,10 @@
 
 #include <array>
 #include <cstring>
-#include <filesystem>
-#include <format>
 #include <fstream>
-#include <unistd.h>
 
 namespace scribblez {
 namespace move_set_eval {
-
-namespace {
-
-void append_bytes(std::vector<char>* buffer, const void* data, size_t size) {
-  const char* p = static_cast<const char*>(data);
-  buffer->insert(buffer->end(), p, p + size);
-}
-
-}  // namespace
 
 uint32_t target_flags_from_slog(uint16_t slog_flags) {
   return (slog_flags & binlog::kFlagFaceUpLeaves) != 0 ? kTargetFlagOpenLeaves : 0u;
@@ -57,7 +46,7 @@ TargetWriter::TargetWriter(const std::string& path, uint32_t record_floats, uint
 }
 
 TargetWriter::~TargetWriter() {
-  if (!closed_) close();
+  if (!closed_ && std::uncaught_exceptions() == uncaught_at_open_) close();
 }
 
 void TargetWriter::add_position(uint32_t game_index, uint32_t turn_index,
@@ -97,14 +86,7 @@ void TargetWriter::close() {
   closed_ = true;
   TargetFileHeader* hdr = reinterpret_cast<TargetFileHeader*>(buffer_.data());
   hdr->num_positions = num_positions_;
-  // Temp file + rename, so the .mset appears atomically.
-  const std::string tmp = std::format("{}.tmp.{}", path_, ::getpid());
-  {
-    std::ofstream f(tmp, std::ios::binary);
-    if (!f) throw util::Exception("TargetWriter: cannot open {}", tmp);
-    f.write(buffer_.data(), std::streamsize(buffer_.size()));
-  }
-  std::filesystem::rename(tmp, path_);
+  write_atomically(path_, buffer_);
 }
 
 TargetReader::TargetReader(const std::string& path) {

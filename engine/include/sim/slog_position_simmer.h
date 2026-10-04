@@ -87,6 +87,7 @@ enum class SimOutput {
   kStats,     // a 35 KB RolloutStats per candidate (SimmedPosition::observations)
   kReports,   // a RolloutReport per candidate, cheap enough for every legal play
   kRollouts,  // every Rollout, unreduced, for an analysis of its own
+  kTraces,    // every Rollout and its RolloutTrace, unraced
 };
 
 struct SlogSimConfig {
@@ -116,7 +117,7 @@ struct SlogSimConfig {
   // With kReports: the first this-many candidates are references, and every
   // candidate gets its paired win difference against each of them.
   int paired_references = 0;
-  // Unless kStats: race the candidates instead of simming each to the full
+  // With kReports or kRollouts: race the candidates instead of simming each to the full
   // count. `race_checkpoints` are ascending cumulative rollout counts. At each
   // one, a candidate whose win rate is more than `race_sigmas` paired standard
   // errors below the leader's stops, keeping the rollouts it got. The first
@@ -141,7 +142,8 @@ struct SimmedPosition {
   // Parallel to candidates.moves; each filled per SlogSimConfig.
   std::vector<RolloutStats> observations;
   std::vector<RolloutReport> reports;
-  std::vector<std::vector<Rollout>> rollouts;  // rollouts[c][i]: candidate c's rollout i
+  std::vector<std::vector<Rollout>> rollouts;     // rollouts[c][i]: candidate c's rollout i
+  std::vector<std::vector<RolloutTrace>> traces;  // traces[c][i], with kTraces
   // paired[c][r]: candidate c's win value minus reference r's, over the rollouts.
   std::vector<std::vector<PairedWinDiff>> paired;
 };

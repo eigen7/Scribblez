@@ -64,6 +64,47 @@ def test_generator_command(monkeypatch):
     assert flags["--seed"] != dict(arg.split("=", 1) for arg in commands[1][1:])["--seed"]
 
 
+def test_corpus_generator_command(monkeypatch):
+    commands = []
+    monkeypatch.setattr(
+        transfer_test.subprocess,
+        "run",
+        lambda cmd: commands.append(cmd) or SimpleNamespace(returncode=0),
+    )
+    params = transfer_test.TransferTestParams(
+        mode=transfer_test.MODE_CORPUS, probes_per_candidate=64, label_rollouts=1000
+    )
+    assert transfer_test.run_generator([Path("/d/a.slog")], params, 4, "/m/leaf.onnx") == 0
+    flags = dict(arg.split("=", 1) for arg in commands[0][1:])
+    assert flags["--mode"] == "corpus"
+    assert flags["--probes"] == "64"
+    assert flags["--label-rollouts"] == "1000"
+    assert "--rollouts" not in flags and "--saturation-probes" not in flags
+
+
+def test_profiles_set_up_the_corpus_runs():
+    spec = workloads.get("transfer_test")
+    assert spec.default_profile == "train-corpus"
+    train = params_mod.validate(spec.params_cls, spec.profiles["train-corpus"])
+    test = params_mod.validate(spec.params_cls, spec.profiles["test-corpus"])
+    assert (train.mode, train.label_rollouts) == (transfer_test.MODE_CORPUS, 100)
+    assert (test.mode, test.label_rollouts) == (transfer_test.MODE_CORPUS, 1000)
+    # A tag stored before modes existed keeps measuring.
+    assert params_mod.validate(spec.params_cls, {}).mode == transfer_test.MODE_MEASURE
+
+
+def test_the_scheduler_counts_the_corpus_store_in_corpus_mode(tmp_path):
+    store = tmp_path / transfer_test.CORPUS_DIR
+    store.mkdir()
+    (store / f"a{transfer_test.PROBE_EXT}").touch()
+    finished = []
+    params = {"mode": "corpus", "target_positions": 20, "games_per_batch": 20}
+    hooks = SimpleNamespace(paths=SimpleNamespace(data_dir=tmp_path), finish=finished.append)
+    spec = transfer_test.SPEC
+    workloads.resolve(spec.scheduler)(spec, SimpleNamespace(params=params), hooks)
+    assert finished == ["generate"]
+
+
 def test_the_scheduler_finishes_the_generators_at_target_positions(tmp_path):
     """An ssh generator delivers into its own container and cannot count the
     store; the controller, which holds it whole, stops them all."""
