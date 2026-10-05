@@ -32,6 +32,11 @@ def test_struct_dtypes_pin_known_layouts():
     assert struct_dtype("ProbeFileHeader").itemsize == 96
     assert struct_dtype("ProbeCandidate").fields["move"][0] == move
     assert struct_dtype("ProbeRecord").itemsize == 44
+    # Replayed probe state: racks are tile-code strings, padded with no-tile codes.
+    assert struct_dtype("ProbeRootState").itemsize == 18
+    assert struct_dtype("ProbeCandidateState").fields["leave"][0] == np.dtype("S7")
+    assert struct_dtype("ProbeStartState").itemsize == 28
+    assert struct_dtype("ProbeTurnState").fields["score_diff"][1] == 24
 
 
 def test_magics_spell_their_extensions():

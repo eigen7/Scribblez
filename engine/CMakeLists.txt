@@ -69,6 +69,7 @@ add_library(scribblez_core STATIC
   src/data/sim_observation_log.cpp
   src/data/sidecar_io.cpp
   src/data/probe_log.cpp
+  src/data/probe_replay.cpp
   src/data/slog_sampling.cpp
   src/data/format_layout.cpp
   src/training/move_set_eval_target_log.cpp

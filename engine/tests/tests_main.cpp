@@ -3290,6 +3290,45 @@ TEST(PositionEncoder, LiveLogMatchesDecodedSlog) {
   std::cout << "  live/decoded encode equivalence OK (" << compared << " rows)\n";
 }
 
+// A replay from a mid-game state: player 1 moves first, a play's draw drains
+// the bag and an exchange's does not, and the returned state follows the last
+// draw.
+TEST(BinaryLog, ReplayTurnRecordsFromAMidGameStart) {
+  using namespace scribblez;
+  using namespace scribblez::binlog;
+
+  const std::array<Glyph, RACK_SIZE> zit = {Glyph::of(Tile::letter_from_char('Z')),
+                                            Glyph::of(Tile::letter_from_char('I')),
+                                            Glyph::of(Tile::letter_from_char('T'))};
+  std::array<TurnRecord, 2> recs{};
+  recs[0].move = Move::play(/*horizontal=*/true, 7, 0b111 << 5, /*score=*/24, zit.data(), 3);
+  recs[0].drawn = Rack::from_string("ABE");
+  recs[1].move = Move::exchange(TileCounts::from_string("QV"));
+  recs[1].drawn = Rack::from_string("OU");
+
+  ReplayStart start;
+  start.racks = {Rack::from_string("AEINQRV"), Rack::from_string("DIOTUZS")};
+  start.scores = {100, 90};
+  start.bag_size = 40;
+  start.first_player = 1;
+  const ReplayStart end = replay_turn_records(start, recs.data(), int(recs.size()));
+
+  EXPECT_EQ(recs[0].player, 1);
+  EXPECT_TRUE(recs[0].rack_before == start.racks[1]);
+  EXPECT_EQ(recs[0].bag_size_before, 40);
+  EXPECT_EQ(recs[0].score_delta, 24);
+  EXPECT_EQ(recs[0].cumulative_scores, (std::array<int, 2>{100, 114}));
+  EXPECT_EQ(recs[1].player, 0);
+  EXPECT_EQ(recs[1].bag_size_before, 37);
+  EXPECT_EQ(recs[1].score_delta, 0);
+
+  EXPECT_TRUE(end.racks[1] == Rack::from_string("DOUSABE"));
+  EXPECT_TRUE(end.racks[0] == Rack::from_string("AEINROU"));
+  EXPECT_EQ(end.bag_size, 37);
+  EXPECT_EQ(end.scores, (std::array<int, 2>{100, 114}));
+  EXPECT_EQ(end.first_player, 1);
+}
+
 // pick_sampled_turn chooses only turns in the eligible region (see
 // GameMetadata::eligible_begin) and returns -1 when it is empty.
 TEST(BinaryLog, PickSampledTurnEligibility) {

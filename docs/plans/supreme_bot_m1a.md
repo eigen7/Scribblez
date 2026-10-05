@@ -1,6 +1,7 @@
 # SupremeBot M1a: implementation plan
 
-**Status: step 0 built and run (2026-10-03); the rest proposed, not built.**
+**Status: step 0 and PRs 1 to 3 built, and the corpus generated (2026-10-05);
+PRs 4 to 6 proposed, not built.**
 This is the build plan for M1a, the held-out
 transfer test that is SupremeBot's kill gate. The test itself (what is
 measured, the arms, the metrics, the controls and the kill criterion) is
@@ -285,6 +286,47 @@ step 0. Where it differs from the list above:
   across strata, drop H's probes, subset-assemble the rest (random subsets and
   orders), and place pick queries at sampled prefix lengths. The graded
   variant keeps one to five of each held-out move's probes.
+
+**As built.** The package `scribblez.transfer_test` (probes, prior, corpus,
+rows, tokens) and `py/scripts/transfer_test_prior.py`. Where it differs from
+the list above, or settles what the list left open:
+
+- **The replay is the engine's.** `data/probe_replay` replays each probe from
+  the position after its candidate with the `.slog` turn-replay rules
+  (`binlog::replay_turn_records`, now startable from any state), and the FFI
+  serves the result per file: the root, each candidate's leave, score and
+  bag, each probe's two opening deals (the root mover's refill, the
+  opponent's rack beyond their known leave), and per turn the mover, ply,
+  bag, score difference, leave, draw and rack. Racks cross as tile codes. A
+  record whose racks do not follow from its position fails the replay. A
+  100-position file replays in about 0.1 s.
+- **The prior comes from the teacher's torch checkpoint.** The root tokens are
+  the trunk's hidden state, which the ONNX export does not expose. The tag's
+  rolling checkpoint must hold the pinned generation, and before any cache
+  is written its value heads are checked against that generation's ONNX,
+  the leaf model the probes ran. The check rejects a neighbouring export
+  (generation 2400 is off by 1.1 in win/draw/loss logits). The cache stores
+  the trunk's 225 cell tokens and its scalar projection for the root, and per
+  candidate the win/draw/loss probabilities, the score mean and standard
+  deviation, and the four footprint heads as raw logits. Footprint masking
+  is left to PR 5, which compares footprint distributions; the reader takes
+  their unmasked log-softmax. On the test corpus the prior's expected score
+  correlates 0.995 with the labels.
+- **The root summary is a token.** The context opens with 226 root tokens: the
+  225 cells, then the scalar projection.
+- **Queries are listed apart from the context.** Each names its candidate and
+  the number of context tokens it may see, always a probe boundary; the
+  full context is always one of the prefixes, and every candidate is asked at
+  each. PR 4 appends them after the context under that mask.
+- **A token budget bounds a row.** Each kept candidate keeps a uniform 0 to 32
+  of its probes, the kept probes are interleaved at random, and probes are
+  taken in that order while they fit 2,048 context tokens. A chance token
+  follows only a turn that drew tiles.
+- **Labels are slimmed** to the outcome counts, the score moments and the two
+  next-move footprint histograms, about a third of a `.sobs` record.
+- **Both corpora have their caches** (4.4 GB for the training corpus, under 4 minutes
+  on the local GPU). The training corpus loads in 27 s at 11.7 GB resident,
+  and one core assembles about 400 rows a second.
 
 ## PR 4: the reader and its trainer
 

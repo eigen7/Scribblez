@@ -2,12 +2,14 @@
 
 #include "data/binary_log.h"
 #include "data/probe_log.h"
+#include "data/probe_replay.h"
 #include "data/sim_observation_log.h"
 #include "encoding/input_encoder.h"
 #include "game/glyph.h"
 #include "game/move.h"
 #include "game/rack.h"
 #include "sim/sim_runner.h"
+#include "sim/transfer_candidates.h"
 #include "training/move_set_eval_target_log.h"
 #include "training/training_targets.h"
 #include "util/metaprogramming.h"
@@ -137,8 +139,14 @@ json::object build_structs() {
   s["ProbePositionHeader"] = struct_json<ProbePositionHeader>();
   s["ProbeCandidate"] = struct_json<ProbeCandidate>();
   s["ProbeRecord"] = struct_json<ProbeRecord>();
+  s["ProbeRootState"] = struct_json<ProbeRootState>();
+  s["ProbeCandidateState"] = struct_json<ProbeCandidateState>();
+  s["ProbeStartState"] = struct_json<ProbeStartState>();
+  s["ProbeTurnState"] = struct_json<ProbeTurnState>();
   return s;
 }
+
+constexpr size_t kStrata = std::meta::enumerators_of(^^Stratum).size();
 
 json::object build_constants() {
   json::object c;
@@ -157,7 +165,8 @@ json::object build_constants() {
                {"role_off_policy", static_cast<uint8_t>(SimObsRole::kOffPolicy)}};
   c["sprobe"] = {{"magic", kProbeMagic},
                  {"version", kProbeVersion},
-                 {"flag_face_up_leaves", kProbeFlagFaceUpLeaves}};
+                 {"flag_face_up_leaves", kProbeFlagFaceUpLeaves},
+                 {"strata", kStrata}};
   {
     json::array target_names;
     for (const char* name : move_set_eval::kTargetNamesV1) target_names.emplace_back(name);

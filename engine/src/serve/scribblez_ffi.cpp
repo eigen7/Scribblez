@@ -6,9 +6,12 @@
 #include "data/data_loader.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
+#include "data/probe_log.h"
+#include "data/probe_replay.h"
 #include "data/sim_observation_log.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
+#include "encoding/position_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "sim/sim_runner.h"
@@ -53,6 +56,9 @@ struct ScribblezSession {
 
   int decode_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx, int64_t n,
                   bool post_move, float* out) const;
+  int encode_candidate_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
+                            const int64_t* move_counts, int64_t n_positions, const void* moves,
+                            float* out) const;
   int move_set_cross_check_deltas(const char* path, const int64_t* game_idx,
                                   const int64_t* turn_idx, const int64_t* move_counts,
                                   int64_t n_positions, const void* moves, uint8_t* out_axes,
@@ -223,6 +229,24 @@ int emit_string(const std::string& s, char* out, int out_cap) {
   return len;
 }
 
+// `n` Moves starting `first` moves into a caller's buffer of serialized
+// Moves, copied out because the buffer is not guaranteed to be aligned for
+// Move.
+std::vector<scribblez::Move> copy_moves(const void* moves, int64_t first, int64_t n) {
+  std::vector<scribblez::Move> out(static_cast<size_t>(n));
+  std::memcpy(out.data(), static_cast<const char*>(moves) + first * sizeof(scribblez::Move),
+              out.size() * sizeof(scribblez::Move));
+  return out;
+}
+
+// Copies `count` elements of `size` bytes from `data` to `out` if `count` is
+// `expected`. Not a template: this file's helpers sit in the C ABI's linkage.
+bool emit_exact(const void* data, size_t count, size_t size, int64_t expected, void* out) {
+  if (int64_t(count) != expected) return false;
+  std::memcpy(out, data, count * size);
+  return true;
+}
+
 }  // namespace
 
 int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads,
@@ -337,14 +361,9 @@ int ScribblezSession::move_set_cross_check_deltas(
   std::vector<char> buf;
   if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
-  // Copied out for alignment, as in scribblez_move_set_encode_moves.
-  const char* bytes = static_cast<const char*>(moves);
-  std::vector<scribblez::Move> candidates;
   int64_t done = 0;
   for (int64_t j = 0; j < n_positions; ++j) {
-    candidates.resize(size_t(move_counts[j]));
-    std::memcpy(candidates.data(), bytes + done * sizeof(scribblez::Move),
-                candidates.size() * sizeof(scribblez::Move));
+    const std::vector<scribblez::Move> candidates = copy_moves(moves, done, move_counts[j]);
     const scribblez::Board& board =
       decoder.replay_board(buf.data(), uint32_t(game_idx[j]), uint32_t(turn_idx[j]));
     const int64_t at = done * mset::kMoveMaxCrossDeltas;
@@ -365,6 +384,64 @@ int scribblez_move_set_cross_check_deltas(ScribblezSession* s, const char* path,
   return s->move_set_cross_check_deltas(path, game_idx, turn_idx, move_counts, n_positions, moves,
                                         out_axes, out_squares, out_old_masks, out_new_masks,
                                         out_delta_mask);
+}
+
+int ScribblezSession::encode_candidate_rows(const char* path, const int64_t* game_idx,
+                                            const int64_t* turn_idx, const int64_t* move_counts,
+                                            int64_t n_positions, const void* moves,
+                                            float* out) const {
+  if (!game_idx || !turn_idx || !move_counts || !out || n_positions < 0) return -1;
+  std::vector<char> buf;
+  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
+  scribblez::binlog::PositionEncoder encoder(spec);
+  std::vector<scribblez::TurnRecord> scratch;
+  int64_t done = 0;
+  for (int64_t j = 0; j < n_positions; ++j) {
+    const scribblez::GameLog g =
+      scribblez::binlog::make_game_view(buf.data(), uint32_t(game_idx[j]), scratch, nullptr);
+    const int turn = int(turn_idx[j]);
+    const int mover = encoder.replay_to_sampled(g, turn, /*post_move=*/false);
+    scribblez::binlog::encode_candidate_rows(encoder, g, turn, mover,
+                                             copy_moves(moves, done, move_counts[j]),
+                                             out + done * input_floats());
+    done += move_counts[j];
+  }
+  return 0;
+}
+
+int scribblez_encode_candidate_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                                    const int64_t* turn_idx, const int64_t* move_counts,
+                                    int64_t n_positions, const void* moves, float* out) {
+  return s->encode_candidate_rows(path, game_idx, turn_idx, move_counts, n_positions, moves, out);
+}
+
+int scribblez_probe_replay(const char* slog_path, const char* sprobe_path, int64_t n_positions,
+                           int64_t n_candidates, int64_t n_records, int64_t n_turns,
+                           void* out_roots, void* out_candidates, void* out_starts, void* out_turns,
+                           char* out_err, int err_cap) {
+  try {
+    std::vector<char> buf;
+    if (load_slog(slog_path, /*game_idx=*/0, buf) != 0) {
+      emit_string(std::format("cannot load {}", slog_path ? slog_path : "(null)"), out_err,
+                  err_cap);
+      return -1;
+    }
+    const scribblez::ProbeReplay r =
+      scribblez::replay_probe_file(buf.data(), scribblez::ProbeReader(sprobe_path));
+    if (!emit_exact(r.roots.data(), r.roots.size(), sizeof(r.roots[0]), n_positions, out_roots) ||
+        !emit_exact(r.candidates.data(), r.candidates.size(), sizeof(r.candidates[0]), n_candidates,
+                    out_candidates) ||
+        !emit_exact(r.starts.data(), r.starts.size(), sizeof(r.starts[0]), n_records, out_starts) ||
+        !emit_exact(r.turns.data(), r.turns.size(), sizeof(r.turns[0]), n_turns, out_turns)) {
+      emit_string(std::format("{} does not match the caller's counts", sprobe_path), out_err,
+                  err_cap);
+      return -1;
+    }
+    return 0;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
 }
 
 int32_t scribblez_move_set_max_cross_deltas(void) {
