@@ -93,8 +93,13 @@ def store_dir(params, mount_root: Path) -> Path:
 
 
 def finalize(spec: WorkloadSpec, paths: TagPaths, params):
-    """Refuse a corpus tag without probes or with a missing prior cache, at
-    task creation where the operator sees it."""
+    """Refuse a corpus tag without probes or with a missing prior cache, and
+    a run with no validation positions, at task creation where the operator
+    sees it."""
+    if not 0 < params.val_fraction < 1:
+        raise params_mod.ParamsError(
+            f"val_fraction must be in (0, 1), not {params.val_fraction}: every eval cycle validates"
+        )
     corpus = store_dir(params, paths.mount_root)
     files = pair_store.complete_pairs(corpus, PROBE_EXT)
     if not files:
