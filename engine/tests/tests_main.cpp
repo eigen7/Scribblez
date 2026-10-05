@@ -3290,8 +3290,6 @@ TEST(PositionEncoder, LiveLogMatchesDecodedSlog) {
   std::cout << "  live/decoded encode equivalence OK (" << compared << " rows)\n";
 }
 
-// pick_sampled_turn chooses only turns in the eligible region (see
-// GameMetadata::eligible_begin) and returns -1 when it is empty.
 // A replay from a mid-game state: player 1 moves first, a play's draw drains
 // the bag and an exchange's does not, and the returned state follows the last
 // draw.
@@ -3331,6 +3329,8 @@ TEST(BinaryLog, ReplayTurnRecordsFromAMidGameStart) {
   EXPECT_EQ(end.first_player, 1);
 }
 
+// pick_sampled_turn chooses only turns in the eligible region (see
+// GameMetadata::eligible_begin) and returns -1 when it is empty.
 TEST(BinaryLog, PickSampledTurnEligibility) {
   using namespace scribblez;
   using namespace scribblez::binlog;

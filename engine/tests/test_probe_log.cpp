@@ -277,6 +277,55 @@ TEST(ProbeReplay, FollowsTheRecordFromThePosition) {
   std::filesystem::remove_all(dir);
 }
 
+// Records are candidate-major: candidate c's probe i is record c * probes + i,
+// so each record's deals and turn replay against its own candidate's leave.
+TEST(ProbeReplay, AddressesEachRecordByCandidateAndProbe) {
+  const std::filesystem::path dir =
+    scribblez::testing::make_temp_dir("scribblez_test_probe_replay3");
+  const std::string path = (dir / "x.sprobe").string();
+  const std::array<const char*, 2> leaves = {"DOUS", "ITZS"};
+  const std::array<std::array<const char*, 2>, 2> refills = {{{"AEE", "AEI"}, {"OEI", "AAE"}}};
+  const std::array<std::array<const char*, 2>, 2> opp_deals = {{{"XY", "LM"}, {"GH", "JK"}}};
+  ProbePosition p = zit_position();
+  p.moves = {play_scored(3, "ZIT", 24), play_scored(3, "DUO", 8)};
+  p.equities = {20.0f, 5.0f};
+  p.equity_ranks = {0, 1};
+  p.strata = {0, 0};
+  p.rollouts.assign(2, std::vector<Rollout>(2));
+  p.traces.assign(2, {});
+  for (int c = 0; c < 2; ++c) {
+    for (int i = 0; i < 2; ++i) {
+      RolloutTrace t;
+      t.initial_racks = {Rack::from_string(std::string("EINRS") + opp_deals[c][i]),
+                         Rack::from_string(std::string(leaves[c]) + refills[c][i])};
+      t.turns.push_back(turn(0, play_scored(1, opp_deals[c][i], 10), "VW"));
+      t.truncated = true;
+      p.traces[size_t(c)].push_back(t);
+    }
+  }
+  {
+    ProbeWriter w(path, kProbeFlagFaceUpLeaves, "abc123", "NWL23", 3, 2);
+    w.add_position(p);
+  }
+  const ProbeReader r(path);
+  ProbeReplay out;
+  replay_probe_position(one_turn_game().view(), r.position(0), r.probes(), &out);
+
+  ASSERT_EQ(out.candidates.size(), 2u);
+  ASSERT_EQ(out.starts.size(), 4u);
+  ASSERT_EQ(out.turns.size(), 4u);
+  for (int c = 0; c < 2; ++c) {
+    EXPECT_TRUE(rack_of(out.candidates[size_t(c)].leave) == Rack::from_string(leaves[c]));
+    for (int i = 0; i < 2; ++i) {
+      const size_t k = size_t(c * 2 + i);
+      EXPECT_TRUE(rack_of(out.starts[k].mover_drawn) == Rack::from_string(refills[c][i]));
+      EXPECT_TRUE(rack_of(out.starts[k].opp_drawn) == Rack::from_string(opp_deals[c][i]));
+      EXPECT_TRUE(rack_of(out.turns[k].rack_after) == Rack::from_string("EINRSVW"));
+    }
+  }
+  std::filesystem::remove_all(dir);
+}
+
 TEST(ProbeReplay, RejectsARecordThatDoesNotFollowFromThePosition) {
   const std::filesystem::path dir =
     scribblez::testing::make_temp_dir("scribblez_test_probe_replay2");
