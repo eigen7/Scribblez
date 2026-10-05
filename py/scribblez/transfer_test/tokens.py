@@ -48,6 +48,7 @@ from scribblez.transfer_test.rows import (
     ROOT_TOKENS,
     Row,
 )
+from scribblez.transformer_tower import RMSNorm
 
 NUM_STRATA = format_layout()["constants"]["sprobe"]["strata"]
 QUERY = NUM_KINDS  # the query's kind embedding, after the context kinds
@@ -55,6 +56,10 @@ MAX_PLY = 15  # larger plies share the last ply embedding
 # Each placement head's footprint distribution is compressed to this many
 # features, by one projection shared across the heads.
 PLACEMENT_FEATURES = 32
+# The kind, slot, ply and stratum embeddings' initial scale, against content
+# normalized to unit RMS.
+EMBEDDING_STD = 0.5
+KIND_TABLES = (ROOT, CANDIDATE, CHANCE, ACTION, LEAF)
 
 
 @dataclass
@@ -69,8 +74,12 @@ class MoveBatch:
     scalars: torch.Tensor  # (M, num_scalars) float32
     row: torch.Tensor  # (M,) int64
 
+    def apply(self, fn) -> MoveBatch:
+        """The batch with `fn` applied to every array."""
+        return MoveBatch(**{k: fn(v) for k, v in vars(self).items()})
+
     def to(self, device: torch.device) -> MoveBatch:
-        return MoveBatch(**{k: v.to(device) for k, v in vars(self).items()})
+        return self.apply(lambda t: t.to(device))
 
 
 @dataclass
@@ -97,14 +106,21 @@ class TokenBatch:
     held_out: torch.Tensor  # (Kf,) bool, flat over candidates
     target: dict[str, torch.Tensor]  # (Kf, ...) each
 
-    def to(self, device: torch.device) -> TokenBatch:
-        moved = {}
+    def apply(self, fn) -> TokenBatch:
+        """The batch with `fn` applied to every array, such as a move to a
+        device, or to numpy and back for a trip between processes."""
+        out = {}
         for name, value in vars(self).items():
             if isinstance(value, dict):
-                moved[name] = {k: v.to(device) for k, v in value.items()}
+                out[name] = {k: fn(v) for k, v in value.items()}
+            elif isinstance(value, MoveBatch):
+                out[name] = value.apply(fn)
             else:
-                moved[name] = value.to(device)
-        return TokenBatch(**moved)
+                out[name] = fn(value)
+        return TokenBatch(**out)
+
+    def to(self, device: torch.device) -> TokenBatch:
+        return self.apply(lambda t: t.to(device))
 
 
 def _encode_moves(moves: np.ndarray, pre_move_diffs: np.ndarray, rows: np.ndarray) -> MoveBatch:
@@ -129,8 +145,10 @@ def _offsets(tables: list) -> np.ndarray:
     return np.concatenate([[0], np.cumsum(lengths)[:-1]])
 
 
-def _padded(columns: list[np.ndarray], fill: int) -> torch.Tensor:
-    width = max(len(c) for c in columns)
+def _padded(columns: list[np.ndarray], fill: int, width: int = 0) -> torch.Tensor:
+    """The columns as rows of a (len(columns), W) tensor, padded with `fill`
+    to W, the longest column or `width`, whichever is larger."""
+    width = max(width, *(len(c) for c in columns))
     out = np.full((len(columns), width), fill, dtype=np.int64)
     for i, c in enumerate(columns):
         out[i, : len(c)] = c
@@ -175,15 +193,18 @@ def _features(tables: list[dict[str, np.ndarray]]) -> dict[str, torch.Tensor]:
     return {k: torch.from_numpy(v) for k, v in flat.items() if k not in ("move", "pre_move_diff")}
 
 
-def collate(rows: list[Row]) -> TokenBatch:
-    """Stack rows into a TokenBatch (see the module docstring)."""
+def collate(rows: list[Row], context_len: int = 0, query_len: int = 0) -> TokenBatch:
+    """Stack rows into a TokenBatch (see the module docstring), padding the
+    context to at least `context_len` tokens and the queries to `query_len`,
+    so a compiled model can see one shape."""
+    t, q = context_len, query_len
     candidate_start = _offsets([r.candidate["move"] for r in rows])
     return TokenBatch(
-        kind=_padded([r.kind for r in rows], 0),
-        slot=_padded([r.slot for r in rows], NO_SLOT),
-        ply=_padded([r.ply for r in rows], 0),
-        ref=_padded(_flat_refs(rows), 0),
-        pad=_padded([np.zeros(len(r.kind)) for r in rows], 1).bool(),
+        kind=_padded([r.kind for r in rows], 0, t),
+        slot=_padded([r.slot for r in rows], NO_SLOT, t),
+        ply=_padded([r.ply for r in rows], 0, t),
+        ref=_padded(_flat_refs(rows), 0, t),
+        pad=_padded([np.zeros(len(r.kind)) for r in rows], 1, t).bool(),
         root=torch.from_numpy(np.stack([r.root for r in rows])),
         candidate_moves=_moves(rows, "candidate"),
         candidate=_features([r.candidate for r in rows]),
@@ -191,10 +212,12 @@ def collate(rows: list[Row]) -> TokenBatch:
         action=_features([r.action for r in rows]),
         chance=_features([r.chance for r in rows]),
         leaf=torch.from_numpy(np.concatenate([r.leaf for r in rows])),
-        query_candidate=_padded([candidate_start[i] + r.query_slot for i, r in enumerate(rows)], 0),
-        query_slot=_padded([r.query_slot for r in rows], 0),
-        query_prefix=_padded([r.query_prefix for r in rows], 0),
-        query_pad=_padded([np.zeros(len(r.query_slot)) for r in rows], 1).bool(),
+        query_candidate=_padded(
+            [candidate_start[i] + r.query_slot for i, r in enumerate(rows)], 0, q
+        ),
+        query_slot=_padded([r.query_slot for r in rows], 0, q),
+        query_prefix=_padded([r.query_prefix for r in rows], 0, q),
+        query_pad=_padded([np.zeros(len(r.query_slot)) for r in rows], 1, q).bool(),
         held_out=torch.from_numpy(np.concatenate([r.held_out for r in rows])),
         target={k: torch.from_numpy(v) for k, v in _flat([r.target for r in rows]).items()},
     )
@@ -220,6 +243,10 @@ class TokenEncoder(nn.Module):
         self.kind = nn.Embedding(NUM_KINDS + 1, width)
         self.slot = nn.Embedding(max_slots + 1, width)  # slot + 1; 0 is NO_SLOT
         self.ply = nn.Embedding(MAX_PLY + 1, width)
+        self.placement_norm = nn.LayerNorm(len(PLACEMENT_HEAD_NAMES) * PLACEMENT_FEATURES)
+        self.content_norm = nn.ModuleDict({str(k): RMSNorm(width) for k in KIND_TABLES})
+        for emb in (self.stratum, self.kind, self.slot, self.ply):
+            nn.init.normal_(emb.weight, std=EMBEDDING_STD)
 
     def _moves(self, moves: MoveBatch, root: torch.Tensor) -> torch.Tensor:
         # Exchange tiles carry letters but square 0 (move_set_encoder.h), so the
@@ -231,7 +258,7 @@ class TokenEncoder(nn.Module):
     def _candidates(self, b: TokenBatch, root: torch.Tensor) -> torch.Tensor:
         c = b.candidate
         log_probs = torch.log_softmax(c["prior_placement"].float(), dim=-1)
-        placement = self.placement(log_probs).flatten(1)
+        placement = self.placement_norm(self.placement(log_probs).flatten(1))
         features = torch.cat([c["leave"].float(), c["scalars"], c["prior_value"], placement], dim=1)
         return (
             self._moves(b.candidate_moves, root)
@@ -250,14 +277,17 @@ class TokenEncoder(nn.Module):
 
     def _kind_tables(self, b: TokenBatch, root: torch.Tensor) -> dict[int, torch.Tensor]:
         """Each kind's flat content embeddings, in kind order: `ref` indexes
-        them end to end."""
-        return {
+        them end to end. Each kind is RMS-normalized on its own, so no kind's
+        content swamps another's (a leaf's few outcome features against a
+        candidate's thousands of prior placements) or the position embeddings."""
+        tables = {
             ROOT: root.flatten(0, 1),
             CANDIDATE: self._candidates(b, root),
             CHANCE: self._chances(b),
             ACTION: self._actions(b, root),
             LEAF: self.leaf(b.leaf),
         }
+        return {k: self.content_norm[str(k)](t) for k, t in tables.items()}
 
     def forward(self, b: TokenBatch) -> tuple[torch.Tensor, torch.Tensor]:
         root = self.root(b.root.float())  # (B, ROOT_TOKENS, C)

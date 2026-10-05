@@ -257,6 +257,27 @@ POST_MOVE_QUALITY = [
         ],
     ),
 ]
+# The SupremeBot M1a reader's validation read (scribblez/transfer_test/loss.py):
+# the within-row expected-score error at the full context, on held-out and
+# probed candidates, against the teacher prior's (the reader starts there), and
+# the validation losses. The training losses are on the Loss tab. The score and
+# expected terms are beta-NLL, weighted by the predicted variance, so their
+# values compare only with themselves over a run.
+TRANSFER_READER_QUALITY = [
+    (
+        "Held-out candidates: within-row expected-score RMSE",
+        ["heldout_rmse_reader", "heldout_rmse_prior"],
+    ),
+    (
+        "Probed candidates: within-row expected-score RMSE",
+        ["probed_rmse_reader", "probed_rmse_prior"],
+    ),
+    ("Validation loss", ["val_total"]),
+    (
+        "Validation loss terms",
+        ["val_wld", "val_score", "val_expected", "val_footprint", "val_rank"],
+    ),
+]
 # Figures per row of every learning-curve grid.
 SERIES_NCOLS = 2
 

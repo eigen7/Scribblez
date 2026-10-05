@@ -62,6 +62,7 @@ END_PARAMS = {
     "kill_test": set(),
     "match_arms": set(),
     "transfer_test": {"target_positions"},
+    "transfer_reader": {"train_steps"},
 }
 
 

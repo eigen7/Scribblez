@@ -1,7 +1,7 @@
 # SupremeBot M1a: implementation plan
 
-**Status: step 0 and PRs 1 to 3 built, and the corpus generated (2026-10-05);
-PRs 4 to 6 proposed, not built.**
+**Status: step 0 and PRs 1 to 4 built, and the corpus generated (2026-10-05);
+PRs 5 and 6 proposed, not built.**
 This is the build plan for M1a, the held-out
 transfer test that is SupremeBot's kill gate. The test itself (what is
 measured, the arms, the metrics, the controls and the kill criterion) is
@@ -344,6 +344,53 @@ the list above, or settles what the list left open:
   as the workload's train role.
 - **The size sweep:** width and depth flags for readers of about 1M, 5M, 25M
   and 100M parameters, on two corpus sizes.
+
+**As built.** `scribblez.transfer_test` gains reader, loss and trainer, and
+a new workload, `transfer_reader`, runs one reader per tag on a corpus tag.
+Its profiles are the sweep's shapes: `reader-1m`, `reader-5m` (the
+default), `reader-25m` and `reader-100m`, at 1.3M, 5.0M, 23.6M and 90.9M
+parameters; `train_positions` takes a fixed subset for the second corpus
+size. Where it differs from the list above, or settles what the list left
+open:
+
+- **Its own workload.** A reader tag names its corpus tag rather than sharing
+  `transfer_test`'s tags, since each sweep run is a tag and generator and
+  trainer parameters do not mix. Creating a tag refuses a corpus without
+  prior caches.
+- **Every head is a correction to the prior.** The heads answer the teacher's
+  prior for the query's candidate plus a learned correction that starts at
+  zero, so an untrained reader is exactly the prior and training learns what
+  the evidence adds.
+- **The likelihoods are beta-NLL.** Plain Gaussian NLL let the expected-score
+  head lower its loss by widening its spread instead of moving its mean: the
+  reader could not overfit 32 rows with it, and did with squared error.
+  Weighting each term by its own detached variance (beta-NLL, beta = 1) gives
+  the mean a squared-error gradient and keeps the spread learning the misfit.
+- **A fixed same-candidate attention bias.** Each head adds a fixed bias, 0 to
+  4 across the heads, between tokens of the same candidate. Without it the
+  reader learned nothing in 3,000 steps even on a synthetic target that was
+  exactly the mean of each candidate's probe outcomes in the row (error 0.064
+  to 0.063); with it, the same target fell to 0.019 in 2,000 steps. A
+  learned bias trained at least twice as slowly, its gradient a reduction over
+  every score.
+- **Token content is normalized per kind.** A candidate's thousands of prior
+  placements had swamped a leaf's few outcome features; each kind's content
+  is now RMS-normalized on its own.
+- **Validation.** 5% of the corpus's positions, chosen by a hash of file and
+  position, so every run on a corpus validates on the same ones. Each pass
+  records the within-row expected-score error at the full context, on
+  held-out and probed candidates, for the reader and the prior.
+- **The first read**, `reader-5m` for 3,000 steps on the training corpus:
+  on probed candidates the error fell from the prior's 0.0284 to 0.0233,
+  past the best fixed shrinkage of probe means toward the prior (0.0256, at a
+  weight of 32 probes); on held-out candidates it stayed near the prior's
+  0.0259. Probe means alone do worse than the prior (0.057). All against L =
+  100 labels, whose own noise is about 0.015.
+- **Cost.** About 0.19 s a step for `reader-5m` with six row workers, so 20,000
+  steps take about an hour; `reader-100m` needs activation checkpointing to fit
+  16 GiB and takes about 1.5 s a step. Batches leave the row workers as numpy
+  arrays: as tensors they would pass through `/dev/shm`, which a container
+  holds to 64 MB.
 
 ## PR 5: the evaluation harness
 
