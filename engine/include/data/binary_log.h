@@ -23,6 +23,7 @@
 #include "game/move.h"
 #include "game/rack.h"
 
+#include <array>
 #include <cstdint>
 #include <mutex>
 #include <random>
@@ -107,10 +108,22 @@ static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecord>& scratch,
                        uint32_t* sampled_turn);
 
-// Fills in the rest of the first `num_turns` records of a make_game_view view:
-// each turn's player, pre-move rack, bag size, score delta and running scores,
-// derived by replay. Training does not need this, since its encoder re-derives
-// the state itself; a GCG export needs whole records.
+// The state a run of turns starts from, for replay_turn_records.
+struct ReplayStart {
+  std::array<Rack, 2> racks;
+  std::array<int, 2> scores{0, 0};
+  int bag_size = 0;
+  int first_player = 0;  // who makes the first turn; players alternate after it
+};
+
+// Fills in each of `records`' player, pre-move rack, bag size, score delta and
+// running scores, given only its move and draw, by replaying them from `start`.
+// Returns the state after the last turn, its draw included.
+ReplayStart replay_turn_records(const ReplayStart& start, TurnRecord* records, int num_turns);
+
+// replay_turn_records over the first `num_turns` records of a make_game_view
+// view, from the game's start. Training does not need this, since its encoder
+// re-derives the state itself; a GCG export needs whole records.
 void complete_turn_records(const GameLog& g, int num_turns, std::vector<TurnRecord>& scratch);
 
 // A game's training-eligible turn region, with the bounds described at

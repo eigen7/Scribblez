@@ -64,27 +64,35 @@ GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecor
   return g;
 }
 
-void complete_turn_records(const GameLog& g, int num_turns, std::vector<TurnRecord>& scratch) {
-  std::array<Rack, 2> racks = g.initial_racks;
-  std::array<int, 2> scores = g.initial_scores;
-  int bag = Bag::kTotalTiles - racks[0].size() - racks[1].size();
+ReplayStart replay_turn_records(const ReplayStart& start, TurnRecord* records, int num_turns) {
+  ReplayStart s = start;
   for (int k = 0; k < num_turns; ++k) {
-    TurnRecord& rec = scratch[size_t(k)];
-    rec.player = k % 2;
-    rec.rack_before = racks[rec.player];
-    rec.bag_size_before = bag;
+    TurnRecord& rec = records[k];
+    rec.player = (start.first_player + k) % 2;
+    rec.rack_before = s.racks[rec.player];
+    rec.bag_size_before = s.bag_size;
     rec.score_delta = rec.move.type() == MoveType::PLAY ? rec.move.score() : 0;
-    scores[rec.player] += rec.score_delta;
-    rec.cumulative_scores = scores;
+    s.scores[rec.player] += rec.score_delta;
+    rec.cumulative_scores = s.scores;
     for (int i = 0; i < rec.move.num_glyphs(); ++i)
-      racks[rec.player].remove(rec.move.glyph(i).rack_tile());
+      s.racks[rec.player].remove(rec.move.glyph(i).rack_tile());
     // An exchange returns as many tiles as it draws, so only a play drains the bag.
     for (const Tile t : rec.drawn.tiles()) {
       if (t.is_empty()) break;
-      racks[rec.player].add(t);
-      if (rec.move.type() == MoveType::PLAY) --bag;
+      s.racks[rec.player].add(t);
+      if (rec.move.type() == MoveType::PLAY) --s.bag_size;
     }
   }
+  s.first_player = (start.first_player + num_turns) % 2;
+  return s;
+}
+
+void complete_turn_records(const GameLog& g, int num_turns, std::vector<TurnRecord>& scratch) {
+  ReplayStart start;
+  start.racks = g.initial_racks;
+  start.scores = g.initial_scores;
+  start.bag_size = Bag::kTotalTiles - g.initial_racks[0].size() - g.initial_racks[1].size();
+  replay_turn_records(start, scratch.data(), num_turns);
 }
 
 EligibleSpan eligible_span(const GameLog& log) {
