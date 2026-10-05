@@ -234,6 +234,16 @@ def test_finalize_refuses_a_corpus_without_prior_caches(tmp_path):
     assert transfer_reader.finalize(transfer_reader.SPEC, paths, params) == params
 
 
+@pytest.mark.parametrize("val_fraction", [0.0, 1.0])
+def test_finalize_refuses_a_run_with_no_validation_or_no_training(tmp_path, val_fraction):
+    """Every eval cycle validates; a run with no validation positions would
+    crash at its first and restart forever."""
+    paths = transfer_reader.TagPaths("reader", "transfer_reader", tmp_path)
+    params = transfer_reader.TransferReaderParams(corpus_tag="c", val_fraction=val_fraction)
+    with pytest.raises(params_mod.ParamsError, match="val_fraction"):
+        transfer_reader.finalize(transfer_reader.SPEC, paths, params)
+
+
 def test_the_scheduler_finishes_the_trainer_at_its_step_budget(tmp_path):
     spec = transfer_reader.SPEC
     paths = transfer_reader.TagPaths("reader", spec.name, tmp_path)
