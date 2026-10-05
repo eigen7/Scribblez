@@ -54,6 +54,11 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
+  transfer_reader: [
+    { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
+    trainingTab('transfer_reader_metrics', 'metrics', 'No validation passes yet.'),
+    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
+  ],
   evidence_trajectories: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
     { name: 'Trajectories', render: (w, t) => <EvidenceTrajectories task={w} tag={t} /> },
