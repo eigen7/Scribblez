@@ -57,7 +57,9 @@ ROOT_TOKENS = 226
 class RowConfig:
     max_held_out: int = 4
     max_probes: int = 32  # per kept candidate; each keeps a uniform 0..max_probes
-    max_tokens: int = 2048  # context tokens, root board included
+    # Context tokens, root board included; a held-out candidate's graded probes
+    # are kept even past it.
+    max_tokens: int = 2048
     query_points: int = 4  # prefix lengths queried, the full context always one of them
     graded_max: int = 0  # graded variant: each held-out candidate keeps 1..graded_max probes
 
@@ -117,16 +119,30 @@ def _probe_tokens(f: CorpusFile, turns: np.ndarray) -> int:
 
 
 def _fit_budget(
-    f: CorpusFile, c0: int, picks: list[tuple[int, int]], header: int, cfg: RowConfig
+    f: CorpusFile,
+    c0: int,
+    picks: list[tuple[int, int]],
+    held: np.ndarray,
+    header: int,
+    cfg: RowConfig,
 ) -> list[tuple[int, int, np.ndarray]]:
-    """The leading picks that fit the token budget, as (slot, record, turns)."""
-    kept, used = [], header
+    """The picks that fit the token budget, as (slot, record, turns), in pick
+    order. A held-out candidate's graded probes are always kept, their tokens
+    reserved first; the kept candidates' picks fill the rest until one does
+    not fit."""
+    probes = []
     for slot, i in picks:
         record = (c0 + slot) * f.probes.probes + i
         turns = np.arange(f.probes.turn_start[record], f.probes.turn_start[record + 1])
-        used += _probe_tokens(f, turns)
-        if used > cfg.max_tokens:
-            break
+        probes.append((slot, record, turns))
+    used = header + sum(_probe_tokens(f, t) for slot, _, t in probes if held[slot])
+    kept, full = [], False
+    for slot, record, turns in probes:
+        if not held[slot]:
+            full = full or used + _probe_tokens(f, turns) > cfg.max_tokens
+            if full:
+                continue
+            used += _probe_tokens(f, turns)
         kept.append((slot, record, turns))
     return kept
 
@@ -140,7 +156,7 @@ def assemble_row(
     held = choose_held_out(k, cfg, rng)
     picks = choose_probes(held, f.probes.probes, cfg, rng)
     ctx = _Context(k)
-    for slot, record, turns in _fit_budget(f, c0, picks, len(ctx), cfg):
+    for slot, record, turns in _fit_budget(f, c0, picks, held, len(ctx), cfg):
         ctx.add_probe(f, slot, record, turns)
     query_prefix = _query_prefixes(ctx.boundaries, cfg, rng)
     return Row(
@@ -210,7 +226,6 @@ def _query_prefixes(boundaries: list[int], cfg: RowConfig, rng: np.random.Genera
 
 def _candidate_table(f: CorpusFile, p: int, c0: int, c1: int) -> dict[str, np.ndarray]:
     state = f.replay.candidates[c0:c1]
-    placement = f.prior.placement[c0:c1].astype(np.float32)
     return {
         "move": f.probes.candidates["move"][c0:c1],
         "pre_move_diff": np.full(c1 - c0, f.replay.roots["score_diff"][p], dtype=np.int32),
@@ -222,13 +237,9 @@ def _candidate_table(f: CorpusFile, p: int, c0: int, c1: int) -> dict[str, np.nd
         "prior_value": np.concatenate(
             [f.prior.wld[c0:c1], f.prior.score[c0:c1] / SCORE_SCALE], axis=1
         ).astype(np.float32),
-        "prior_placement": placement - _logsumexp(placement),
+        # Raw float16 logits: the encoder normalizes them on the device.
+        "prior_placement": f.prior.placement[c0:c1],
     }
-
-
-def _logsumexp(x: np.ndarray) -> np.ndarray:
-    m = x.max(axis=-1, keepdims=True)
-    return m + np.log(np.exp(x - m).sum(axis=-1, keepdims=True))
 
 
 def _chance_table(f: CorpusFile, rows: np.ndarray) -> dict[str, np.ndarray]:

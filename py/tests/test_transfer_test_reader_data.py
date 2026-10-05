@@ -130,6 +130,15 @@ def test_graded_rows_keep_a_few_held_out_probes(tmp_path):
             assert 1 <= leaves <= 2
 
 
+def test_a_full_budget_never_drops_a_graded_probe(tmp_path):
+    f = fake_file(tmp_path)
+    rng = np.random.default_rng(7)
+    for _ in range(50):
+        row = assemble_row(f, 0, 0, RowConfig(graded_max=2, max_tokens=300), rng)
+        for slot in np.flatnonzero(row.held_out):
+            assert np.sum((row.kind == LEAF) & (row.slot == slot)) >= 1
+
+
 def test_rows_fit_the_budget_and_index_their_tables_in_order(tmp_path):
     f = fake_file(tmp_path)
     cfg = RowConfig(max_tokens=300)
@@ -160,12 +169,16 @@ def test_collated_refs_point_at_each_rows_features(tmp_path):
     rng = np.random.default_rng(5)
     rows = [assemble_row(f, i, 0, RowConfig(), rng) for i, f in enumerate(files)]
     b = collate(rows)
+    # The kinds' flat tables lie end to end: root, candidate, chance, action, leaf.
+    candidate_base = len(rows) * ROOT_TOKENS
+    leaf_base = candidate_base + len(b.held_out) + len(b.chance["drawn"]) + len(b.action["leave"])
     for i, row in enumerate(rows):
         n = len(row.kind)
         leaf = (b.kind[i, :n] == LEAF).numpy()
-        np.testing.assert_array_equal(b.leaf[b.ref[i, :n][leaf]].numpy(), row.leaf[row.ref[leaf]])
+        flat = b.ref[i, :n][leaf].numpy() - leaf_base
+        np.testing.assert_array_equal(b.leaf[flat].numpy(), row.leaf[row.ref[leaf]])
         cand = (b.kind[i, :n] == CANDIDATE).numpy()
-        flat = b.ref[i, :n][cand].numpy()
+        flat = b.ref[i, :n][cand].numpy() - candidate_base
         np.testing.assert_array_equal(b.held_out[flat].numpy(), row.held_out)
         assert b.pad[i, n:].all() and not b.pad[i, :n].any()
     assert b.query_candidate[1, 0] == 3  # the second row's candidates follow the first's three
