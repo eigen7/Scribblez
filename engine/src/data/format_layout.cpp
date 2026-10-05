@@ -9,6 +9,7 @@
 #include "game/move.h"
 #include "game/rack.h"
 #include "sim/sim_runner.h"
+#include "sim/transfer_candidates.h"
 #include "training/move_set_eval_target_log.h"
 #include "training/training_targets.h"
 #include "util/metaprogramming.h"
@@ -145,6 +146,8 @@ json::object build_structs() {
   return s;
 }
 
+constexpr size_t kStrata = std::meta::enumerators_of(^^Stratum).size();
+
 json::object build_constants() {
   json::object c;
   c["board_size"] = BOARD_SIZE;
@@ -162,7 +165,8 @@ json::object build_constants() {
                {"role_off_policy", static_cast<uint8_t>(SimObsRole::kOffPolicy)}};
   c["sprobe"] = {{"magic", kProbeMagic},
                  {"version", kProbeVersion},
-                 {"flag_face_up_leaves", kProbeFlagFaceUpLeaves}};
+                 {"flag_face_up_leaves", kProbeFlagFaceUpLeaves},
+                 {"strata", kStrata}};
   {
     json::array target_names;
     for (const char* name : move_set_eval::kTargetNamesV1) target_names.emplace_back(name);

@@ -247,6 +247,34 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int),
     ]
 
+    lib.scribblez_encode_candidate_rows.restype = ctypes.c_int
+    lib.scribblez_encode_candidate_rows.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # .slog path
+        ctypes.POINTER(ctypes.c_int64),  # game_idx
+        ctypes.POINTER(ctypes.c_int64),  # turn_idx
+        ctypes.POINTER(ctypes.c_int64),  # move_counts
+        ctypes.c_int64,  # n_positions
+        ctypes.c_void_p,  # moves
+        ctypes.POINTER(ctypes.c_float),  # out
+    ]
+
+    lib.scribblez_probe_replay.restype = ctypes.c_int
+    lib.scribblez_probe_replay.argtypes = [
+        ctypes.c_char_p,  # .slog path
+        ctypes.c_char_p,  # .sprobe path
+        ctypes.c_int64,  # n_positions
+        ctypes.c_int64,  # n_candidates
+        ctypes.c_int64,  # n_records
+        ctypes.c_int64,  # n_turns
+        ctypes.c_void_p,  # out_roots
+        ctypes.c_void_p,  # out_candidates
+        ctypes.c_void_p,  # out_starts
+        ctypes.c_void_p,  # out_turns
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
+
     lib.scribblez_read_file_header.restype = ctypes.c_int
     lib.scribblez_read_file_header.argtypes = [
         ctypes.c_char_p,
@@ -623,6 +651,82 @@ def cross_check_deltas(
         "new_masks": new_masks,
         "delta_mask": delta_mask.astype(bool),
     }
+
+
+def encode_candidate_rows(
+    path: str | Path,
+    game_idx: np.ndarray,
+    turn_idx: np.ndarray,
+    move_counts: np.ndarray,
+    moves: np.ndarray,
+) -> np.ndarray:
+    """Post-move input rows for candidate moves, as a position-evaluation model
+    scores them: per candidate, the position after it and before the refill,
+    from the mover's point of view, under the session's arm.
+
+    Positions and moves are addressed as in cross_check_deltas. Returns
+    (M, input_floats()) float32, the spatial planes then the scalars.
+    """
+    from scribblez.sim_evidence.sobs import MOVE_DTYPE
+
+    games = np.ascontiguousarray(game_idx, dtype=np.int64)
+    turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
+    counts = np.ascontiguousarray(move_counts, dtype=np.int64)
+    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
+    if not (games.shape == turns.shape == counts.shape) or games.ndim != 1:
+        raise ValueError(f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape}")
+    if counts.sum() != len(moves):
+        raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
+    out = np.empty((len(moves), input_floats()), dtype=np.float32)
+    rc = _lib().scribblez_encode_candidate_rows(
+        _session(),
+        str(path).encode("utf-8"),
+        games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        turns.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        len(games),
+        moves.ctypes.data_as(ctypes.c_void_p),
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+    )
+    if rc != 0:
+        raise OSError(f"encode_candidate_rows failed (rc={rc}) for {path}")
+    return out
+
+
+def probe_replay(
+    slog_path: str | Path,
+    sprobe_path: str | Path,
+    n_positions: int,
+    n_candidates: int,
+    n_records: int,
+    n_turns: int,
+) -> dict[str, np.ndarray]:
+    """The game state along every probe of a .sprobe file, replayed against its
+    companion .slog (engine data/probe_replay.h). The counts are the file's
+    totals, which size the outputs. Returns structured arrays keyed "roots"
+    (ProbeRootState), "candidates" (ProbeCandidateState), "starts"
+    (ProbeStartState) and "turns" (ProbeTurnState)."""
+    out = {
+        "roots": np.zeros(n_positions, dtype=struct_dtype("ProbeRootState")),
+        "candidates": np.zeros(n_candidates, dtype=struct_dtype("ProbeCandidateState")),
+        "starts": np.zeros(n_records, dtype=struct_dtype("ProbeStartState")),
+        "turns": np.zeros(n_turns, dtype=struct_dtype("ProbeTurnState")),
+    }
+    err = ctypes.create_string_buffer(512)
+    rc = _lib().scribblez_probe_replay(
+        str(slog_path).encode("utf-8"),
+        str(sprobe_path).encode("utf-8"),
+        n_positions,
+        n_candidates,
+        n_records,
+        n_turns,
+        *(a.ctypes.data_as(ctypes.c_void_p) for a in out.values()),
+        err,
+        len(err),
+    )
+    if rc != 0:
+        raise OSError(f"probe_replay failed for {sprobe_path}: {err.value.decode('utf-8')}")
+    return out
 
 
 def gcg_sim_evidence(
