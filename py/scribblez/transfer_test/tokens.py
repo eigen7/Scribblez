@@ -20,8 +20,9 @@ the teacher saw. Every token then adds embeddings of its kind, its candidate
 slot and its ply. A query is the query kind's embedding, its slot's, and its
 candidate's content.
 
-Collation flattens each kind's feature table across the batch, shifting
-`ref` to index the flat table, and pads the context and the queries.
+Collation flattens each kind's feature table across the batch and shifts
+`ref` to index all of them laid end to end, in kind order, so the encoder
+fills the context with one gather. It pads the context and the queries.
 """
 
 from __future__ import annotations
@@ -80,9 +81,9 @@ class TokenBatch:
     kind: torch.Tensor  # (B, T) int64
     slot: torch.Tensor  # (B, T) int64, NO_SLOT for root tokens and padding
     ply: torch.Tensor  # (B, T) int64
-    ref: torch.Tensor  # (B, T) int64 into the kind's flat table
+    ref: torch.Tensor  # (B, T) int64 into the kinds' flat tables, end to end
     pad: torch.Tensor  # (B, T) bool, True on padding
-    root: torch.Tensor  # (B, ROOT_TOKENS, Ct) float32
+    root: torch.Tensor  # (B, ROOT_TOKENS, Ct) float16
     candidate_moves: MoveBatch
     candidate: dict[str, torch.Tensor]  # flat over the batch's candidates
     action_moves: MoveBatch
@@ -137,15 +138,19 @@ def _padded(columns: list[np.ndarray], fill: int) -> torch.Tensor:
 
 
 def _flat_refs(rows: list[Row]) -> list[np.ndarray]:
-    """Each row's refs shifted to index the flat tables of the batch (ROOT
-    refs to the flat (B * ROOT_TOKENS) root table)."""
-    offsets = {
-        ROOT: np.arange(len(rows)) * ROOT_TOKENS,
-        CANDIDATE: _offsets([r.candidate["move"] for r in rows]),
-        CHANCE: _offsets([r.chance["drawn"] for r in rows]),
-        ACTION: _offsets([r.action["move"] for r in rows]),
-        LEAF: _offsets([r.leaf for r in rows]),
+    """Each row's refs shifted to index the batch's flat tables laid end to
+    end in kind order (ROOT's being the flat (B * ROOT_TOKENS) root table)."""
+    tables = {
+        ROOT: [np.empty(ROOT_TOKENS) for _ in rows],
+        CANDIDATE: [r.candidate["move"] for r in rows],
+        CHANCE: [r.chance["drawn"] for r in rows],
+        ACTION: [r.action["move"] for r in rows],
+        LEAF: [r.leaf for r in rows],
     }
+    offsets, base = {}, 0
+    for kind, per_row in tables.items():
+        offsets[kind] = base + _offsets(per_row)
+        base += sum(len(t) for t in per_row)
     out = []
     for i, r in enumerate(rows):
         shift = np.zeros(len(r.ref), dtype=np.int64)
@@ -179,7 +184,7 @@ def collate(rows: list[Row]) -> TokenBatch:
         ply=_padded([r.ply for r in rows], 0),
         ref=_padded(_flat_refs(rows), 0),
         pad=_padded([np.zeros(len(r.kind)) for r in rows], 1).bool(),
-        root=torch.from_numpy(np.stack([r.root for r in rows]).astype(np.float32)),
+        root=torch.from_numpy(np.stack([r.root for r in rows])),
         candidate_moves=_moves(rows, "candidate"),
         candidate=_features([r.candidate for r in rows]),
         action_moves=_moves(rows, "action"),
@@ -217,12 +222,16 @@ class TokenEncoder(nn.Module):
         self.ply = nn.Embedding(MAX_PLY + 1, width)
 
     def _moves(self, moves: MoveBatch, root: torch.Tensor) -> torch.Tensor:
+        # Exchange tiles carry letters but square 0 (move_set_encoder.h), so the
+        # is_play scalar zeroes their gathered tokens, as the move set model does.
         board = root[moves.row.unsqueeze(1).expand_as(moves.squares), moves.squares]
+        board = board * moves.scalars[:, 2].view(-1, 1, 1)  # scalars[:, 2] = is_play
         return self.moves(moves.letters, moves.blanks, moves.tile_mask, moves.scalars, board)
 
     def _candidates(self, b: TokenBatch, root: torch.Tensor) -> torch.Tensor:
         c = b.candidate
-        placement = self.placement(c["prior_placement"]).flatten(1)
+        log_probs = torch.log_softmax(c["prior_placement"].float(), dim=-1)
+        placement = self.placement(log_probs).flatten(1)
         features = torch.cat([c["leave"].float(), c["scalars"], c["prior_value"], placement], dim=1)
         return (
             self._moves(b.candidate_moves, root)
@@ -240,7 +249,8 @@ class TokenEncoder(nn.Module):
         return self._moves(b.action_moves, root) + self.action(features)
 
     def _kind_tables(self, b: TokenBatch, root: torch.Tensor) -> dict[int, torch.Tensor]:
-        """Each kind's flat content embeddings, which `ref` indexes."""
+        """Each kind's flat content embeddings, in kind order: `ref` indexes
+        them end to end."""
         return {
             ROOT: root.flatten(0, 1),
             CANDIDATE: self._candidates(b, root),
@@ -250,12 +260,10 @@ class TokenEncoder(nn.Module):
         }
 
     def forward(self, b: TokenBatch) -> tuple[torch.Tensor, torch.Tensor]:
-        root = self.root(b.root)  # (B, ROOT_TOKENS, C)
+        root = self.root(b.root.float())  # (B, ROOT_TOKENS, C)
         tables = self._kind_tables(b, root)
-        context = root.new_zeros((*b.kind.shape, root.shape[-1]))
-        for kind, table in tables.items():
-            at = (b.kind == kind) & ~b.pad
-            context[at] = table[b.ref[at]].to(context.dtype)
+        content = torch.cat([t.to(root.dtype) for t in tables.values()])
+        context = content[b.ref] * ~b.pad.unsqueeze(-1)
         context = (
             context + self.kind(b.kind) + self.slot(b.slot + 1) + self.ply(b.ply.clamp(max=MAX_PLY))
         )
