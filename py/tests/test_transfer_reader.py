@@ -2,15 +2,18 @@
 its workload (scribblez/workloads/transfer_reader.py), on synthetic corpora."""
 
 import dataclasses
+import math
 
 import numpy as np
 import pytest
 import torch
 from scribblez import params as params_mod
 from scribblez import workloads
+from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
 from scribblez.transfer_test import loss as loss_mod
 from scribblez.transfer_test import trainer
 from scribblez.transfer_test.reader import (
+    FOOTPRINT_HEADS,
     Reader,
     ReaderConfig,
     _same_slot_bias,
@@ -84,6 +87,40 @@ def test_an_untrained_reader_answers_with_the_prior(tmp_path):
         torch.testing.assert_close(value, prior[name])
 
 
+def test_the_prior_is_the_teachers_prediction_for_each_querys_candidate(tmp_path):
+    b = _batch(tmp_path)
+    k = len(b.held_out)
+    gen = torch.Generator().manual_seed(0)
+    wld = torch.softmax(torch.randn(k, 3, generator=gen), dim=1)
+    mean_sd = torch.stack([torch.randn(k, generator=gen), torch.rand(k, generator=gen) + 0.1], 1)
+    b.candidate["prior_value"] = torch.cat([wld, mean_sd], dim=1)
+    b.candidate["prior_placement"] = torch.randn(
+        b.candidate["prior_placement"].shape, generator=gen
+    ).half()
+    prior = prior_outputs(b)
+    for i, j in [(0, 0), (1, int((~b.query_pad[1]).sum()) - 1)]:
+        c = int(b.query_candidate[i, j])
+        w, d, loss, mean, sd = b.candidate["prior_value"][c].tolist()
+        torch.testing.assert_close(prior["wld"][i, j], torch.log(torch.tensor([w, d, loss])))
+        torch.testing.assert_close(prior["score"][i, j], torch.tensor([mean, math.log(sd)]))
+        torch.testing.assert_close(prior["expected"][i, j, 0], torch.tensor(w + d / 2))
+        for head in FOOTPRINT_HEADS:
+            logits = b.candidate["prior_placement"][
+                c, PLACEMENT_HEAD_NAMES.index(f"{head}_placement")
+            ]
+            torch.testing.assert_close(prior[head][i, j], torch.log_softmax(logits.float(), dim=0))
+
+
+def test_footprint_loss_skips_queries_with_no_next_move():
+    logits = torch.zeros(3, 4)
+    target = torch.tensor([[2.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 1.0]])
+    both = loss_mod._soft_ce(logits, target)
+    assert torch.isfinite(both)
+    # The empty row adds nothing and does not count toward the mean.
+    torch.testing.assert_close(both, loss_mod._soft_ce(logits[[0, 2]], target[[0, 2]]))
+    assert loss_mod._soft_ce(logits[[1]], target[[1]]) == 0
+
+
 def test_beta_nll_gives_the_mean_a_squared_error_gradient_at_any_spread():
     grads = []
     for log_sd in (-4.0, 0.0):
@@ -145,8 +182,8 @@ def test_training_steps_lower_the_loss_on_a_fixed_batch(tmp_path):
     optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr)
     state = trainer.ReaderTrainState()
     batches = iter([b.apply(torch.Tensor.numpy)] * 30)
-    first = trainer.train_steps(model, model.tower, optimizer, batches, "cuda", params, state, 1)
-    last = trainer.train_steps(model, model.tower, optimizer, batches, "cuda", params, state, 29)
+    first = trainer.run_steps(model, model.tower, optimizer, batches, "cuda", params, state, 1)
+    last = trainer.run_steps(model, model.tower, optimizer, batches, "cuda", params, state, 29)
     assert state.steps == 30 and last["total"] < first["total"]
 
 
