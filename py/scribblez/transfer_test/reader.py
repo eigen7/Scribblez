@@ -7,7 +7,7 @@ mask with it: a context token sees the context tokens up to itself, a query
 sees the context prefix it was asked at and itself, and nothing sees a query.
 Positions are rotary, over the token index; a query sits at its prefix
 length, right after what it sees. Attention is grouped-query, through
-FlexAttention, with a learned per-head bias between tokens of the same
+FlexAttention, with a fixed per-head bias between tokens of the same
 candidate (SLOT_BIAS_MAX).
 
 Every head answers as a correction to the frozen teacher's prior for the
@@ -61,6 +61,9 @@ SLOT_BIAS_MAX = 4.0
 EXPECTED_LOG_SPREAD = math.log(0.03)
 
 _flex_attention = torch.compile(flex_attention, dynamic=False)
+# Eager create_block_mask materializes the dense (B, S, S) mask every step
+# (~1.6 GiB and ~11 ms at the trainer's shapes); compiled, it does not.
+_create_block_mask = torch.compile(create_block_mask)
 
 
 @dataclass(frozen=True)
@@ -212,7 +215,7 @@ def mask_mod_of(b: TokenBatch):
 def reader_mask(b: TokenBatch) -> BlockMask:
     batch, t = b.kind.shape
     s = t + b.query_slot.shape[1]
-    return create_block_mask(mask_mod_of(b), batch, None, s, s, device=b.kind.device)
+    return _create_block_mask(mask_mod_of(b), batch, None, s, s, device=b.kind.device)
 
 
 def positions(b: TokenBatch) -> torch.Tensor:

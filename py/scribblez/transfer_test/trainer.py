@@ -12,9 +12,13 @@ warmup and a cosine decay to a tenth, in bf16 autocast. The tower, the part
 of the reader whose shapes are fixed by the padding, is compiled.
 
 Every eval_every steps: a validation pass (the losses and the held-out
-readout, loss.readout), the dashboard record, the rolling checkpoint and the
-step cursor (train_state.json), in that order, so a recorded pass has its
-resume point. A stopped worker resumes at the last pass.
+readout, loss.readout), the rolling checkpoint and the step cursor
+(train_state.json), then the dashboard record, in that order, so a recorded
+pass has its resume point. A stopped worker resumes at the last pass.
+
+The training steps keep their losses and gradient norms on the device, read
+once per eval cycle: a per-step read would stall the host on the GPU and
+leave the next batch's receive from the row workers unoverlapped.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from scribblez.generational import checkpoint, lifecycle
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.optim import decay_groups
 from scribblez.generational.records import TrainRecorder
+from scribblez.position_eval.train_loop import GradNormTracker
 from scribblez.train_common import timed_print
 from scribblez.transfer_test.corpus import CorpusFile, load_corpus
 from scribblez.transfer_test.loss import (
@@ -169,11 +174,14 @@ class Averages:
         return {k: v / max(self.count, 1) for k, v in self.sums.items()}
 
 
-def train_steps(model, tower, optimizer, batches, device, params, state, n: int) -> dict:
-    """`n` optimizer steps; the mean losses and gradient-norm statistics."""
+def run_steps(model, tower, optimizer, batches, device, params, state, n: int) -> dict:
+    """`n` optimizer steps; the mean losses and gradient-norm statistics, read
+    from the device once at the end (see the module docstring)."""
     model.train()
     weights = loss_weights(params)
-    avg, norms = Averages(), []
+    parameters = [p for p in model.parameters() if p.requires_grad]
+    norms = GradNormTracker(device, params.grad_clip)
+    sums: dict[str, torch.Tensor] = {}
     for _ in range(n):
         b = next(batches).apply(torch.from_numpy).to(device)
         for group in optimizer.param_groups:
@@ -182,17 +190,13 @@ def train_steps(model, tower, optimizer, batches, device, params, state, n: int)
             terms = losses(model(b, tower=tower), b, weights)
         optimizer.zero_grad(set_to_none=True)
         terms["total"].backward()
-        norms.append(float(torch.nn.utils.clip_grad_norm_(model.parameters(), params.grad_clip)))
+        norms.clip_and_record(parameters)
         optimizer.step()
-        avg.add({k: float(v.detach()) for k, v in terms.items()})
+        for k, v in terms.items():
+            sums[k] = sums.get(k, 0) + v.detach().float()
         state.steps += 1
         state.rows_trained += params.batch_rows
-    return {
-        **avg.means(),
-        "grad_norm_mean": float(np.mean(norms)),
-        "grad_norm_max": float(np.max(norms)),
-        "clip_frac": float(np.mean(np.array(norms) > params.grad_clip)),
-    }
+    return {**{k: v.item() / n for k, v in sums.items()}, **norms.summary()}
 
 
 @torch.no_grad()
@@ -303,7 +307,7 @@ def run(ctx: WorkerContext) -> int:
             if not params_mod.unbounded(params.train_steps):
                 n = min(n, params.train_steps - state.steps)
             t0 = time.time()
-            train_metrics = train_steps(model, tower, optimizer, batches, device, params, state, n)
+            train_metrics = run_steps(model, tower, optimizer, batches, device, params, state, n)
             train_s = time.time() - t0
             val_metrics = validate(model, tower, val_batches, device, params)
             eval_s = time.time() - t0 - train_s
