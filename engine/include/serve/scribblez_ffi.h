@@ -128,6 +128,33 @@ int scribblez_move_set_cross_check_deltas(ScribblezSession* s, const char* path,
                                           int32_t* out_squares, uint32_t* out_old_masks,
                                           uint32_t* out_new_masks, uint8_t* out_delta_mask);
 
+// Post-move input rows for candidate moves, the rows a position-evaluation
+// model scores them from: per candidate, the position after it and before the
+// refill, from the mover's point of view, under the session's arm (as
+// training/move_set_eval_target_generator encodes them). Positions and moves
+// are addressed as in scribblez_move_set_cross_check_deltas; `out` takes one
+// row of scribblez_input_floats() per move. Returns 0 on success, -1 on an I/O
+// or header error.
+int scribblez_encode_candidate_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                                    const int64_t* turn_idx, const int64_t* move_counts,
+                                    int64_t n_positions, const void* moves, float* out);
+
+// The game state along every probe of the .sprobe at `sprobe_path`
+// (data/probe_replay.h), replayed against its companion .slog. The counts are
+// the caller's sizing of the outputs, totals over the file; the call fails if
+// the file does not match them. Outputs are packed structs whose layouts
+// scribblez_format_layout_json publishes:
+//   out_roots       ProbeRootState[n_positions]
+//   out_candidates  ProbeCandidateState[n_candidates]
+//   out_starts      ProbeStartState[n_records]
+//   out_turns       ProbeTurnState[n_turns]
+// Needs no session. Returns 0 on success, -1 on failure with the reason in
+// out_err.
+int scribblez_probe_replay(const char* slog_path, const char* sprobe_path, int64_t n_positions,
+                           int64_t n_candidates, int64_t n_records, int64_t n_turns,
+                           void* out_roots, void* out_candidates, void* out_starts, void* out_turns,
+                           char* out_err, int err_cap);
+
 // Cross-check delta slots per move (cross_check_delta.h kMoveMaxCrossDeltas).
 int32_t scribblez_move_set_max_cross_deltas(void);
 

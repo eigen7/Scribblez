@@ -2,6 +2,7 @@
 
 #include "data/binary_log.h"
 #include "data/probe_log.h"
+#include "data/probe_replay.h"
 #include "data/sim_observation_log.h"
 #include "encoding/input_encoder.h"
 #include "game/glyph.h"
@@ -137,6 +138,10 @@ json::object build_structs() {
   s["ProbePositionHeader"] = struct_json<ProbePositionHeader>();
   s["ProbeCandidate"] = struct_json<ProbeCandidate>();
   s["ProbeRecord"] = struct_json<ProbeRecord>();
+  s["ProbeRootState"] = struct_json<ProbeRootState>();
+  s["ProbeCandidateState"] = struct_json<ProbeCandidateState>();
+  s["ProbeStartState"] = struct_json<ProbeStartState>();
+  s["ProbeTurnState"] = struct_json<ProbeTurnState>();
   return s;
 }
 
