@@ -33,6 +33,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import uuid
@@ -80,6 +81,7 @@ from scribblez.paths import (
     TRAINER_OUTPUT_DIRS,
 )
 from scribblez.workloads.base import SchedulerHooks, uses_gpu
+from scribblez.workloads.worker import stats_rel_path
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
 # before probing again, so a powered-off machine costs one connect timeout per
@@ -1004,6 +1006,7 @@ class WorkerManager:
             gpus = _uses_gpu(spec, task, w.role)
             machine.create_container(name, image, env, gpus=gpus, volume=volume)
             self._copy_payload(machine, name, role, w.bundle_id, arch)
+            self._seed_stats(machine, name, spec, task, w.worker_id)
             machine.start_container(name)
             self._stage_inputs_in_container(machine, name, spec, task.tag, inputs)
             if seed:
@@ -2619,6 +2622,24 @@ class WorkerManager:
                 rel_dest=f"{state_pair.SEED_DIR}/{name}",
                 src=src,
             )
+
+    def _seed_stats(self, machine, container: str, spec, task: tasks.TaskRecord, worker_id: str):
+        """Copy the slot's last stats record into its created container before
+        it starts. WorkerStats resumes the totals it finds in its own tree, and
+        a fresh container's is empty: without the copy, a replaced container
+        (a redeploy onto a new bundle, say) would count from zero and its
+        first publish would overwrite the slot's record, dropping everything
+        the slot delivered before. A slot that has published nothing yet has
+        nothing to copy."""
+        record = self.tasks.paths(spec, task.tag).root / stats_rel_path(worker_id)
+        if not record.is_file():
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "stats.tar"
+            with tarfile.open(archive, "w") as tar:
+                # Containers see the tag tree at the controller's own path.
+                tar.add(record, arcname=str(record.relative_to("/")))
+            machine.copy_into_container(container, "/", archive)
 
     def _stage_inputs_in_container(
         self, machine, container: str, spec, tag: str, inputs: dict[str, Path]

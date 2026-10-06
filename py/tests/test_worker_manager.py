@@ -34,6 +34,7 @@ from scribblez.generational import lifecycle
 from scribblez.paths import TagPaths
 from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
 from scribblez.workloads.position_eval import PositionEvalParams
+from scribblez.workloads.worker import stats_rel_path
 from sim_world import SyncExecutor
 
 # The fixture below replaces the launch paths with _fail; a test that wants to
@@ -960,6 +961,29 @@ def test_an_ssh_worker_that_died_is_exited_and_restarted(manager, spec, task, mo
     (info,) = manager.worker_status(spec, task, observe=True)
     assert info["state"] == "exited"
     assert w.desired_state == "running" and not w.finished
+
+
+def test_a_new_container_resumes_its_slots_stats(manager, spec, task):
+    """A replaced container gets the slot's last stats record before it
+    starts, at the record's own path, so its counters carry on rather than
+    restart (and overwrite the slot's record) from zero."""
+    record = manager.tasks.paths(spec, "t").root / stats_rel_path("ssh-0")
+    copies = []
+
+    class Machine:
+        def copy_into_container(self, name, dest_dir, archive):
+            with tarfile.open(archive) as tar:
+                (member,) = tar.getmembers()
+                copies.append((name, dest_dir, member.name, json.load(tar.extractfile(member))))
+
+    manager._seed_stats(Machine(), "c", spec, task, "ssh-0")
+    assert copies == []  # nothing published yet: nothing to resume
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps({"units_total": 32, "cycles_total": 32}))
+    manager._seed_stats(Machine(), "c", spec, task, "ssh-0")
+    assert copies == [
+        ("c", "/", str(record.relative_to("/")), {"units_total": 32, "cycles_total": 32})
+    ]
 
 
 def test_a_local_child_that_exits_zero_is_finished(manager, spec, task, monkeypatch):
