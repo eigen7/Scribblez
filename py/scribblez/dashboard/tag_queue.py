@@ -589,7 +589,11 @@ class TagQueue:
             failure = self._failure(spec, task)
             if failure is not None:
                 self._fail(m, pool, queue, spec, task, failure)
-            elif task.workers and all(w.finished for w in task.workers):
+            elif all(w.finished for w in task.workers):
+                # A tag with no slots left counts as finished: placement
+                # creates a lease together with its slots, so a running lease
+                # without any lost them some other way, and only a release
+                # frees its machine.
                 self._start_release(m, pool, "completed")
         elif phase == RELEASING:
             self._finish_release(m, pool, queue)
