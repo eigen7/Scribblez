@@ -148,12 +148,18 @@ def _fit_budget(
 
 
 def assemble_row(
-    f: CorpusFile, file_index: int, p: int, cfg: RowConfig, rng: np.random.Generator
+    f: CorpusFile,
+    file_index: int,
+    p: int,
+    cfg: RowConfig,
+    rng: np.random.Generator,
+    held: np.ndarray | None = None,
 ) -> Row:
-    """A random row for position `p` of `f`."""
+    """A random row for position `p` of `f`, holding out `held` ((K,) bool)
+    when given, else a random choice (choose_held_out)."""
     c0, c1 = int(f.probes.candidate_start[p]), int(f.probes.candidate_start[p + 1])
     k = c1 - c0
-    held = choose_held_out(k, cfg, rng)
+    held = choose_held_out(k, cfg, rng) if held is None else np.asarray(held, dtype=bool)
     picks = choose_probes(held, f.probes.probes, cfg, rng)
     ctx = _Context(k)
     for slot, record, turns in _fit_budget(f, c0, picks, held, len(ctx), cfg):
