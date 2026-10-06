@@ -1,5 +1,6 @@
 #include "data/slog_sampling.h"
 
+#include "game/game_log.h"
 #include "util/exception.h"
 #include "util/math.h"
 
@@ -13,21 +14,48 @@
 namespace scribblez {
 namespace binlog {
 
+namespace {
+
+// The game's eligible turns: in order when `positions_per_game` <= 0 (every
+// one is taken), else in the game's sample order.
+std::vector<uint32_t> eligible_order(const GameMetadata& gm, uint32_t game_idx, uint64_t run_seed,
+                                     int positions_per_game) {
+  std::vector<uint32_t> turns(size_t(std::max(0, gm.eligible_end - gm.eligible_begin)));
+  std::iota(turns.begin(), turns.end(), uint32_t(gm.eligible_begin));
+  if (positions_per_game > 0) {
+    std::mt19937_64 rng(util::splitmix64(run_seed ^ util::splitmix64(0xC0FFEEull + game_idx)));
+    std::shuffle(turns.begin(), turns.end(), rng);
+  }
+  return turns;
+}
+
+// Appends the first `positions_per_game` of `turns` (all when <= 0).
+void take(const std::vector<uint32_t>& turns, uint32_t game_idx, int positions_per_game,
+          std::vector<GamePositionIndex>* out) {
+  const size_t n =
+    positions_per_game <= 0 ? turns.size() : std::min(turns.size(), size_t(positions_per_game));
+  for (size_t i = 0; i < n; ++i) out->push_back({game_idx, turns[i]});
+}
+
+}  // namespace
+
 void sample_eligible_turns(const GameMetadata& gm, uint32_t game_idx, uint64_t run_seed,
                            int positions_per_game, std::vector<GamePositionIndex>* out) {
-  const int begin = gm.eligible_begin;
-  const int end = gm.eligible_end;
-  if (begin >= end) return;
-  if (positions_per_game <= 0) {
-    for (int t = begin; t < end; ++t) out->push_back({game_idx, uint32_t(t)});
-    return;
-  }
-  std::vector<uint32_t> turns(size_t(end - begin));
-  std::iota(turns.begin(), turns.end(), uint32_t(begin));
-  std::mt19937_64 rng(util::splitmix64(run_seed ^ util::splitmix64(0xC0FFEEull + game_idx)));
-  std::shuffle(turns.begin(), turns.end(), rng);
-  const int take = std::min<int>(positions_per_game, int(turns.size()));
-  for (int i = 0; i < take; ++i) out->push_back({game_idx, turns[i]});
+  take(eligible_order(gm, game_idx, run_seed, positions_per_game), game_idx, positions_per_game,
+       out);
+}
+
+void sample_eligible_turns(const char* buf, uint32_t game_idx, uint64_t run_seed,
+                           int positions_per_game, const BagRange& bags,
+                           std::vector<GamePositionIndex>* out) {
+  const GameMetadata& gm =
+    reinterpret_cast<const GameMetadata*>(buf + sizeof(FileHeader))[game_idx];
+  std::vector<TurnRecord> scratch;
+  const GameLog g = make_game_view(buf, game_idx, scratch, nullptr);
+  complete_turn_records(g, gm.eligible_end, scratch);
+  std::vector<uint32_t> turns = eligible_order(gm, game_idx, run_seed, positions_per_game);
+  std::erase_if(turns, [&](uint32_t t) { return !bags.contains(scratch[t].bag_size_before); });
+  take(turns, game_idx, positions_per_game, out);
 }
 
 int count_eligible_sample(const GameMetadata& gm, int positions_per_game) {
