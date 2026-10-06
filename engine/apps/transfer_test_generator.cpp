@@ -91,6 +91,8 @@ struct Options {
   int threads = util::default_thread_count();
   uint64_t seed = 0;
   int limit_games = 0;
+  binlog::BagRange bags;
+  int solve_max_unseen = -1;
 };
 
 const TransferRecipe kRecipe{};
@@ -115,7 +117,7 @@ void validate(const Options& opt) {
   if (opt.mode != "measure" && !corpus_mode(opt))
     throw util::CleanException("--mode must be corpus or measure");
   SimRunner::validate_horizon("transfer-test-generator", opt.horizon, !opt.leaf_model.empty());
-  if (opt.horizon <= 0) throw util::CleanException("--horizon must be > 0: labels are truncated");
+  if (opt.bags.min > opt.bags.max) throw util::CleanException("--min-bag exceeds --max-bag");
   if (corpus_mode(opt)) {
     validate_corpus(opt);
   } else {
@@ -142,6 +144,7 @@ SlogSimConfig sim_config(const Options& opt, nn::PositionEvalService* leaf, SimO
   c.open_leaves = true;
   c.selector = transfer_selector(kRecipe);
   c.runner = runner_params(opt, leaf, rollouts);
+  c.solve_endgames_max_unseen = opt.solve_max_unseen;
   c.seed = opt.seed;
   c.threads = 1;
   c.output = output;
@@ -304,6 +307,9 @@ json::object header_json(const Options& opt, const std::string& leaf_hash) {
           {"leaf_model_hash", leaf_hash},
           {"seed", opt.seed},
           {"positions_per_game", opt.positions_per_game},
+          {"min_bag", opt.bags.min},
+          {"max_bag", opt.bags.max},
+          {"solve_max_unseen", opt.solve_max_unseen},
           {"saturation_probes", opt.saturation_probes},
           {"option_k", opt.option_k},
           {"recipe",
@@ -318,13 +324,11 @@ json::object header_json(const Options& opt, const std::string& leaf_hash) {
 std::vector<binlog::GamePositionIndex> sampled_work(const std::vector<char>& buf,
                                                     const Options& opt) {
   const auto* hdr = reinterpret_cast<const binlog::FileHeader*>(buf.data());
-  const auto* metas =
-    reinterpret_cast<const binlog::GameMetadata*>(buf.data() + sizeof(binlog::FileHeader));
   uint32_t games = hdr->num_games;
   if (opt.limit_games > 0) games = std::min<uint32_t>(games, opt.limit_games);
   std::vector<binlog::GamePositionIndex> work;
   for (uint32_t g = 0; g < games; ++g)
-    binlog::sample_eligible_turns(metas[g], g, opt.seed, opt.positions_per_game, &work);
+    binlog::sample_eligible_turns(buf.data(), g, opt.seed, opt.positions_per_game, opt.bags, &work);
   std::ranges::sort(work);
   return work;
 }
@@ -397,13 +401,30 @@ ProbePosition probe_position(SimmedPosition&& r) {
   return p;
 }
 
+SimRunner::Params solving_endgames(SimRunner::Params params) {
+  params.solve_endgames = true;
+  return params;
+}
+
+// The label pass's runners: the plain one, and one that solves endgames, for
+// the positions whose probes did (SimmedPosition::solved_endgames).
+struct Labelers {
+  Labelers(const Dictionary& dict, const SimRunner::Params& params)
+      : plain(dict, params), solving(dict, solving_endgames(params)) {}
+
+  const SimRunner& of(const SimmedPosition& r) const { return r.solved_endgames ? solving : plain; }
+
+  SimRunner plain;
+  SimRunner solving;
+};
+
 // Probe and label one .slog's positions one at a time, and write its two
 // sidecars, the .sprobe last: a resumed run takes a file with a .sprobe as done.
 void generate_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt,
                    nn::PositionEvalService* leaf, const std::string& leaf_hash,
                    util::ProgressMeter* meter) {
   const SlogSimConfig probe_config = sim_config(opt, leaf, SimOutput::kTraces, opt.probes);
-  const SimRunner labeler(dict, runner_params(opt, leaf, opt.label_rollouts));
+  const Labelers labelers(dict, runner_params(opt, leaf, opt.label_rollouts));
   ProbeWriter probes(slog.sidecar(kProbeExt).string(), kProbeFlagFaceUpLeaves, leaf_hash,
                      Lexicon::instance().name(), opt.horizon, opt.probes);
   SimObsWriter labels(slog.sidecar(kLabelsExt).string(), kSimObsFlagOpenLeaves | kSimObsFlagLabels,
@@ -414,7 +435,7 @@ void generate_file(const binlog::PendingSlog& slog, const Dictionary& dict, cons
     // Label rollout i is rollout probes + i, past every probe.
     const uint64_t label_seed = r.base_seed + uint64_t(opt.probes);
     labels.add_position(at.game_idx, at.turn_idx, r.candidates.moves,
-                        labeler.run(r.position, r.candidates.moves, label_seed),
+                        labelers.of(r).run(r.position, r.candidates.moves, label_seed),
                         uint32_t(opt.label_rollouts), label_seed, r.candidates.num_legal_moves);
     probes.add_position(probe_position(std::move(r)));
   }
@@ -436,10 +457,10 @@ int main(int argc, char** argv) {
       "directory of face-up .slog files; each without its mode's sidecars gets them")(
       "slog-file", po::value<std::vector<std::string>>(&opt.slog_files),
       "explicit .slog file to process (repeatable; overrides --slog-dir)")(
-      "leaf-model", po::value<std::string>(&opt.leaf_model)->required(),
-      "position evaluation model (.onnx) scoring rollout horizons")(
+      "leaf-model", po::value<std::string>(&opt.leaf_model),
+      "position evaluation model (.onnx) scoring rollout horizons; omit with --horizon 0")(
       "horizon", po::value<int>(&opt.horizon)->default_value(opt.horizon),
-      "plies before the leaf model scores a rollout")(
+      "plies before the leaf model scores a rollout (0 = play every rollout to the end)")(
       "rollouts", po::value<int>(&opt.rollouts)->default_value(opt.rollouts),
       "measure: rollouts per candidate")("probes",
                                          po::value<int>(&opt.probes)->default_value(opt.probes),
@@ -458,7 +479,15 @@ int main(int argc, char** argv) {
       "seed", po::value<uint64_t>(&opt.seed)->default_value(opt.seed),
       "run seed (drives position sampling, selection and rollout seeds)")(
       "limit-games", po::value<int>(&opt.limit_games)->default_value(opt.limit_games),
-      "process only the first N games of each file (0 = all); for smoke runs");
+      "process only the first N games of each file (0 = all); for smoke runs")(
+      "min-bag", po::value<int>(&opt.bags.min)->default_value(opt.bags.min),
+      "sample only turns with at least this many tiles in the bag before the move")(
+      "max-bag", po::value<int>(&opt.bags.max)->default_value(opt.bags.max),
+      "sample only turns with at most this many tiles in the bag before the move")(
+      "solve-max-unseen",
+      po::value<int>(&opt.solve_max_unseen)->default_value(opt.solve_max_unseen),
+      "probes and labels solve rollout endgames at positions with at most this many unseen "
+      "tiles (-1 = never; greedy endgames misjudge the late game)");
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
     validate(opt);
@@ -474,14 +503,17 @@ int main(int argc, char** argv) {
     }
     if (pending.empty()) return 0;
     uint64_t total = 0;
-    for (const binlog::PendingSlog& p : pending)
-      total += binlog::count_sampled_positions(p.bytes, opt.positions_per_game, opt.limit_games);
+    for (const binlog::PendingSlog& p : pending) total += sampled_work(p.bytes, opt).size();
     std::cerr << "transfer-test " << opt.mode << ": " << pending.size() << " file(s), " << total
               << " positions; " << kRecipe.size() << " candidates each x " << budget(opt) << ", "
               << opt.threads << " threads\n";
-    const std::shared_ptr<nn::PositionEvalService> leaf =
-      nn::load_leaf_position_service(opt.leaf_model);
-    const std::string leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
+    // Terminal rollouts (--horizon 0) need no leaf model.
+    std::shared_ptr<nn::PositionEvalService> leaf;
+    std::string leaf_hash;
+    if (opt.horizon > 0) {
+      leaf = nn::load_leaf_position_service(opt.leaf_model);
+      leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
+    }
     util::ProgressMeter meter(total, "positions");
     for (const binlog::PendingSlog& p : pending) {
       if (corpus_mode(opt)) {

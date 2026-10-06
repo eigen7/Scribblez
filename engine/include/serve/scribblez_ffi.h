@@ -73,7 +73,8 @@ int scribblez_row_size_floats(ScribblezSession* s);
 // recorded move, take the mover's top-K moves by static equity, and run
 // SimRunner over them. With open_leaves != 0, every rollout starts the opponent
 // from the leave their last recorded move kept; otherwise their whole rack is
-// sampled.
+// sampled. With solve_endgames != 0, rollouts solve their endgames instead of
+// playing them greedily, which misjudges the late game.
 //
 // `out_records` must hold top_k SimObsRecord blobs (data/sim_observation_log.h).
 // *played_rank receives the index of the move the GCG actually played among
@@ -81,8 +82,8 @@ int scribblez_row_size_floats(ScribblezSession* s);
 // or -1 on a parse error or an endgame position (SimRunner needs tiles in the
 // bag).
 int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
-                               int threads, uint64_t seed, int open_leaves, char* out_records,
-                               int* played_rank);
+                               int threads, uint64_t seed, int open_leaves, int solve_endgames,
+                               char* out_records, int* played_rank);
 
 // Training rows for specific positions: row j is (game_idx[j], turn_idx[j]),
 // encoded exactly as the DataLoader would, minus the symmetry transpose. `out`
