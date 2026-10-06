@@ -13,7 +13,7 @@ from scribblez.dashboard.queue import BUNDLE_READY, QueueEntry
 from scribblez.generational import lifecycle
 from scribblez.paths import TagPaths
 from scribblez.workloads import WorkloadSpec, resolve
-from scribblez.workloads.base import SlotPlan
+from scribblez.workloads.base import SlotPlan, uses_gpu
 
 # Where a tag's training state lives (state_home).
 HOME_LOCAL = "local"
@@ -30,7 +30,7 @@ def gpu_total(spec: WorkloadSpec, plan: list[SlotPlan], entry: QueueEntry) -> fl
     measured needs, None if any GPU role has no figure."""
     if entry.memory_override_gb is not None:
         return entry.memory_override_gb
-    needs = [p.gpu_gb for p in plan if spec.role(p.role).gpu]
+    needs = [p.gpu_gb for p in plan if uses_gpu(spec.role(p.role), p.gpu_gb)]
     return None if any(n is None for n in needs) else sum(needs)
 
 
@@ -66,7 +66,7 @@ def refusal(
         role = spec.role(p.role)
         if m.kind not in role.kinds:
             return f"role {p.role} cannot run on a {m.kind} machine"
-        if role.gpu and not m.hardware.gpu_count:
+        if uses_gpu(role, p.gpu_gb) and not m.hardware.gpu_count:
             return f"role {p.role} needs a GPU"
     need = gpu_total(spec, plan, entry)
     if need is None:
