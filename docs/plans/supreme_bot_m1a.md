@@ -1,7 +1,7 @@
 # SupremeBot M1a: implementation plan
 
-**Status: step 0 and PRs 1 to 4 built, and the corpus generated (2026-10-05);
-PRs 5 and 6 proposed, not built.**
+**Status: step 0, PRs 1 to 4 and part of PR 5 built; the near-endgame corpus
+generated (2026-10-06); first reader evaluated: no transfer yet.**
 This is the build plan for M1a, the held-out
 transfer test that is SupremeBot's kill gate. The test itself (what is
 measured, the arms, the metrics, the controls and the kill criterion) is
@@ -466,6 +466,38 @@ hours on one such machine.
   dissimilar held-out moves.
 - **Output:** one report with the kill-criterion table and the secondary
   readouts.
+
+**Built so far (PR 5a).** `scribblez/transfer_test/evaluate.py` and
+`py/scripts/transfer_test_evaluate.py`: the prior, shrinkage, common-shift and
+reader arms, and the shuffled-outcomes control (each row's probe outcomes
+permuted among its probes); held-out and probed within-row error and
+held-out pair accuracy (pairs resolved beyond twice the label noise),
+overall and by bag, decided positions counted but not scored, bootstrap
+intervals against the prior. The shrinkage weight is fitted on the test
+rows' probed candidates, which favours the baselines. The trainer now keeps
+`checkpoints/best.pt` at the lowest validation held-out error. Still to
+build: the similarity-weighted shift, the summary-token arm, the partner
+ablation, and the hand-built exhibits (pos-09, egotize-lane), which need a
+path from a GCG to probe records with chosen candidates.
+
+**First result.** `endgame-reader-5m` (10,000 steps on `m1a-endgame-train`,
+last checkpoint; validation's probed error was lowest at steps 2,500-4,000
+and rose after),
+on `m1a-endgame-test`, 825 scored positions (175 decided), four rows each:
+
+| Arm | Held-out error | Probed error | Held-out pair accuracy |
+|---|---|---|---|
+| Prior | 0.0520 | 0.0535 | 0.880 |
+| Shrinkage (32 probes) | 0.0520 | 0.0455 | 0.880 |
+| Common shift | 0.0519 | 0.0455 | 0.880 |
+| Reader | 0.0566 | 0.0455 | 0.864 |
+| Reader, shuffled outcomes | 0.0564 | 0.0605 | 0.864 |
+
+The reader reads its own candidates' probes (shuffling them costs it 0.015)
+but no better than shrinkage by the last checkpoint, and it shows no
+transfer: on held-out candidates it is worse than the prior (by 0.003 to
+0.007 at 95%) and indistinguishable from the shuffled control, so its
+held-out answers do not use the evidence.
 
 ## PR 6: the synthetic single-fact tests
 
