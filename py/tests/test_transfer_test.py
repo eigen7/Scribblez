@@ -41,7 +41,13 @@ def test_generator_command(monkeypatch):
     monkeypatch.setattr(transfer_test.subprocess, "run", fake_run)
     # Distinct values per field, so a flag wired to the wrong param fails.
     params = transfer_test.TransferTestParams(
-        rollouts=1000, horizon=4, saturation_probes=64, option_k=12
+        rollouts=1000,
+        horizon=4,
+        saturation_probes=64,
+        option_k=12,
+        min_bag=2,
+        max_bag=50,
+        solve_max_unseen=9,
     )
     slogs = [Path("/data/a.slog"), Path("/data/b.slog")]
     assert transfer_test.run_generator(slogs, params, threads=8, model="/m/leaf.onnx") == 0
@@ -54,6 +60,9 @@ def test_generator_command(monkeypatch):
         "--slog-file": "/data/a.slog",
         "--leaf-model": "/m/leaf.onnx",
         "--horizon": "4",
+        "--min-bag": "2",
+        "--max-bag": "50",
+        "--solve-max-unseen": "9",
         "--rollouts": "1000",
         "--saturation-probes": "64",
         "--option-k": "12",
@@ -82,6 +91,21 @@ def test_corpus_generator_command(monkeypatch):
     assert "--rollouts" not in flags and "--saturation-probes" not in flags
 
 
+def test_terminal_rollouts_need_no_leaf_model_or_gpu(monkeypatch):
+    commands = []
+    monkeypatch.setattr(
+        transfer_test.subprocess,
+        "run",
+        lambda cmd: commands.append(cmd) or SimpleNamespace(returncode=0),
+    )
+    params = transfer_test.TransferTestParams(mode=transfer_test.MODE_CORPUS, horizon=0)
+    assert transfer_test.run_generator([Path("/d/a.slog")], params, 4, "/m/leaf.onnx") == 0
+    flags = dict(arg.split("=", 1) for arg in commands[0][1:])
+    assert flags["--horizon"] == "0" and "--leaf-model" not in flags
+    assert transfer_test.gpu_need(params, "generate") == 0.0
+    assert transfer_test.gpu_need(transfer_test.TransferTestParams(), "generate") > 0
+
+
 def test_profiles_set_up_the_corpus_runs():
     spec = workloads.get("transfer_test")
     assert spec.default_profile == "train-corpus"
@@ -89,6 +113,10 @@ def test_profiles_set_up_the_corpus_runs():
     test = params_mod.validate(spec.params_cls, spec.profiles["test-corpus"])
     assert (train.mode, train.label_rollouts) == (transfer_test.MODE_CORPUS, 100)
     assert (test.mode, test.label_rollouts) == (transfer_test.MODE_CORPUS, 1000)
+    for name, labels in (("endgame-train-corpus", 300), ("endgame-test-corpus", 1000)):
+        endgame = params_mod.validate(spec.params_cls, spec.profiles[name])
+        assert (endgame.min_bag, endgame.max_bag, endgame.horizon) == (1, 15, 0)
+        assert (endgame.solve_max_unseen, endgame.label_rollouts) == (100, labels)
     # A tag stored before modes existed keeps measuring.
     assert params_mod.validate(spec.params_cls, {}).mode == transfer_test.MODE_MEASURE
 
