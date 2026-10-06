@@ -79,7 +79,7 @@ from scribblez.paths import (
     SCHEDULER_STATE_REL,
     TRAINER_OUTPUT_DIRS,
 )
-from scribblez.workloads.base import SchedulerHooks
+from scribblez.workloads.base import SchedulerHooks, uses_gpu
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
 # before probing again, so a powered-off machine costs one connect timeout per
@@ -270,6 +270,11 @@ def _is_pool_machine(m: pool_mod.PoolMachine, target: str) -> bool:
     if m.kind == "local":
         return target == LOCAL_TARGET
     return target in pool_mod.host_names(m)
+
+
+def _uses_gpu(spec, task: tasks.TaskRecord, role: str) -> bool:
+    """Whether a `role` slot of `task` uses a GPU (workloads.base.uses_gpu)."""
+    return uses_gpu(spec.role(role), _gpu_need(spec, task, role))
 
 
 def _gpu_need(spec, task: tasks.TaskRecord, role: str) -> float | None:
@@ -996,7 +1001,8 @@ class WorkerManager:
             # _bundle_for_start saw the bundle cover this slot's arch.
             arch = self._slot_arch(spec, task, w)
             env["SCZ_BUNDLE_ARCH"] = arch
-            machine.create_container(name, image, env, gpus=role.gpu, volume=volume)
+            gpus = _uses_gpu(spec, task, w.role)
+            machine.create_container(name, image, env, gpus=gpus, volume=volume)
             self._copy_payload(machine, name, role, w.bundle_id, arch)
             machine.start_container(name)
             self._stage_inputs_in_container(machine, name, spec, task.tag, inputs)
@@ -1027,7 +1033,8 @@ class WorkerManager:
     ):
         role_spec = spec.role(role)
         assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
-        if machine is not None and role_spec.gpu and machine.gpu_count == 0:
+        gpu = _uses_gpu(spec, task, role)
+        if machine is not None and gpu and machine.gpu_count == 0:
             # Refused here rather than by `docker run --gpus all` on the
             # remote, after a bundle deploy. Only a machine known to have no
             # GPU is refused: every GPU container runs under `--gpus all`, so
@@ -1041,7 +1048,7 @@ class WorkerManager:
             assert not taken, f"role '{role}' already has a worker ({taken[0]})"
         if spec.scheduler == TICK_FOR_TASK and not role_spec.dispatch:
             self._check_data_home_order(spec, task, role_spec)
-        if role_spec.gpu and check_gpu:
+        if gpu and check_gpu:
             refusal = self._gpu_fit_refusal(spec, task, role, kind, machine, host)
             assert refusal is None, refusal
         return role_spec
@@ -1106,7 +1113,7 @@ class WorkerManager:
         for s, t in [(spec, task), *others]:
             for w in t.workers:
                 if (
-                    not s.role(w.role).gpu
+                    not _uses_gpu(s, t, w.role)
                     or _slot_target(w.kind, None, self._slot_host(t, w)) != target
                 ):
                     continue

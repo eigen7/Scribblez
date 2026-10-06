@@ -124,3 +124,18 @@ def test_a_trained_tag_may_go_anywhere(tmp_path):
     assert placement.state_home(paths, task) == placement.HOME_LOCAL
     for m in (_machine("localhost", "local", gpu_gb=16.0), _machine("l4")):
         assert placement.refusal(SPEC, CAMPAIGN, _entry(), m) is None
+
+
+def test_a_configuration_that_needs_no_gpu_runs_on_a_cpu_machine():
+    """transfer_test's terminal rollouts load no model: a need of 0 makes its
+    GPU-capable generator a CPU slot, so a machine without a GPU takes it,
+    while a truncated-rollout tag still needs one."""
+    from scribblez.workloads import transfer_test as tt
+
+    cpu = _machine("aws-cpu", gpu_gb=0.0)
+    entry = QueueEntry("transfer_test", "t", 0.0, bundle=BUNDLE_READY)
+    endgame = tt.TransferTestParams(**tt.PROFILES["endgame-train-corpus"])
+    assert placement.refusal(tt.SPEC, endgame, entry, cpu) is None
+    assert placement.refusal(tt.SPEC, tt.TransferTestParams(), entry, cpu) == (
+        "role generate needs a GPU"
+    )

@@ -346,6 +346,23 @@ def test_a_gpu_role_is_refused_only_on_a_machine_without_a_gpu(manager, monkeypa
     manager.add_ssh(spec, task, "match_b", machine="unknown", threads=None)
 
 
+def test_a_slot_whose_tag_needs_no_gpu_takes_a_machine_without_one(manager):
+    """A GPU-capable role is a CPU slot when its tag's measured need is 0, as
+    for transfer_test's terminal rollouts."""
+    from scribblez.workloads import transfer_test as tt
+
+    def task(tag: str, params: dict) -> tasks.TaskRecord:
+        return tasks.TaskRecord(workload=tt.SPEC.name, tag=tag, params=params, created_at=0.0)
+
+    endgame = task("endgame", tt.PROFILES["endgame-train-corpus"])
+    manager.add_machine(tt.SPEC, endgame, "cpu", "u@h", gpu_count=0)
+    manager.add_ssh(tt.SPEC, endgame, "generate", machine="cpu", threads=None)
+    truncated = task("truncated", {})
+    manager.add_machine(tt.SPEC, truncated, "cpu2", "u@h2", gpu_count=0)
+    with pytest.raises(AssertionError, match="has no GPU for role 'generate'"):
+        manager.add_ssh(tt.SPEC, truncated, "generate", machine="cpu2", threads=None)
+
+
 def test_machine_status_is_observed_by_the_pass_and_read_by_everyone_else(
     manager, spec, task, monkeypatch
 ):
