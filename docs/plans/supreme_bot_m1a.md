@@ -392,6 +392,65 @@ open:
   arrays: as tensors they would pass through `/dev/shm`, which a container
   holds to 64 MB.
 
+## The near-endgame corpus
+
+**Why.** The first sweep runs (`reader-1m`, `reader-5m`, 20,000 steps on the
+training corpus) showed no transfer: held-out error never beat the prior
+beyond noise and grew worse once the reader began memorizing the 9,479
+positions' labels (training ranking loss falling to 0.053 while validation
+rose to 0.139). Two findings moved the corpus to the near endgame.
+
+- **Where the teacher is wrong.** The teacher's within-row error against the
+  labels, by tiles in the bag before the move. On the training corpus (L =
+  100, truncated rollouts, greedy endgames):
+
+  | Bag | Positions | Teacher error | Label spread |
+  |---|---|---|---|
+  | 0-6 | 556 | 0.093 | 0.099 |
+  | 7-14 | 982 | 0.040 | 0.050 |
+  | 15-24 | 1,234 | 0.023 | 0.042 |
+  | 25-59 | 3,949 | 0.016-0.018 | 0.040 |
+  | 60-89 | 3,060 | 0.014 | 0.039 |
+
+  Past 15 tiles the teacher's error is near the labels' own noise (about
+  0.010-0.015 at L = 100), so there is little for a reader to learn there.
+  On 300 near-endgame positions relabelled with rollouts played to the end
+  (no leaf model) and endgames solved, the error stands: 0.078 at bags 1-3,
+  0.054 at 4-7, 0.039 at 8-11, 0.033 at 12-15, against a label-noise bound of
+  0.020. Greedy endgames move the labels by up to 0.05 but leave the
+  teacher's error within 0.003, so it is the teacher's, not the labels'.
+- **The exhibits.** Two hand-built positions where the right move blocks a
+  threat that only other moves' rollouts reveal; candidates simmed with
+  solved endgames and face-up leaves:
+  - **pos-09** (position-eval test set): the opponent's G hook at M7 forming
+    GNU, with -ING words down column M. The teacher puts the opponent on M7
+    at 0.27 against the Monte-Carlo 0.67. The six column-N plays that kill
+    the lane sim at 0.953 against the teacher's 0.829; the 22 moves that
+    leave it open sim at 0.814 against 0.858: the teacher under-prices
+    blocking by 0.17.
+  - **egotize-lane** (face-up trajectory set): GAVE opens row 13 to EGOTIZE.
+    The four clean blockers sim at 1.000 and the open moves at 0.909, while
+    the teacher rates both groups about 0.97-0.99: an under-pricing of about
+    0.09. The teacher places the opponent's reply there correctly (0.36 vs
+    0.34); it misses that the reply wins the game.
+
+**Decisions.** The `endgame-train-corpus` and `endgame-test-corpus` profiles
+of the `transfer_test` workload:
+
+- positions with 1 to 15 tiles in the bag (`min_bag`, `max_bag`), sampled
+  from the same per-game order as before, filtered;
+- rollouts played to the end (`horizon` 0), so probes show real endings and
+  labels owe nothing to the teacher, and no leaf model, so no GPU;
+- endgames solved in every rollout (`solve_max_unseen` 100): the gate is the
+  root's unseen count, and the old threshold of 14 left bags 8-15 greedy;
+- L = 300 for training and 1,000 for the test set, since a finished game's
+  0/1 outcome is noisier than a leaf reading.
+
+Measured cost on 28 threads at 4 probes and 200 labels per candidate: 3.2
+positions a second with greedy endgames, 0.48 with every endgame solved. At
+125 probes and 300 labels the 10,000-position training corpus is about 12
+hours on one such machine.
+
 ## PR 5: the evaluation harness
 
 - **Arms**, all on identical records: the teacher prior; the common shift; the

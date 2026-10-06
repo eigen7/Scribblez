@@ -243,6 +243,7 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,
         ctypes.c_uint64,
         ctypes.c_int,  # open_leaves
+        ctypes.c_int,  # solve_endgames
         ctypes.POINTER(ctypes.c_char),
         ctypes.POINTER(ctypes.c_int),
     ]
@@ -736,12 +737,14 @@ def gcg_sim_evidence(
     threads: int = 8,
     seed: int = 0,
     open_leaves: bool = False,
+    solve_endgames: bool = False,
 ) -> tuple[np.ndarray, int]:
     """Sim the top-K moves by HastyBot equity at the decision point before a
     GCG's final recorded move, with common random numbers.
 
     With `open_leaves`, each rollout's opponent starts from the leave their last
-    recorded move kept, with draws still sampled. Returns (records,
+    recorded move kept, with draws still sampled. With `solve_endgames`, rollouts
+    solve their endgames rather than play them greedily. Returns (records,
     played_rank): .sobs records (sim_evidence.sobs.RECORD_DTYPE) and the index
     of the GCG's final move among them, or -1 if it is outside the top K.
     Raises on a parse error or an endgame decision point.
@@ -758,6 +761,7 @@ def gcg_sim_evidence(
         int(threads),
         int(seed),
         int(open_leaves),
+        int(solve_endgames),
         buf,
         ctypes.byref(played_rank),
     )

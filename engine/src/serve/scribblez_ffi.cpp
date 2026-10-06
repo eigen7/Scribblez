@@ -65,7 +65,8 @@ struct ScribblezSession {
                                   int32_t* out_squares, uint32_t* out_old_masks,
                                   uint32_t* out_new_masks, uint8_t* out_delta_mask) const;
   int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads, uint64_t seed,
-                       bool open_leaves, char* out_records, int* played_rank) const;
+                       bool open_leaves, bool solve_endgames, char* out_records,
+                       int* played_rank) const;
   int max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
                                     float* out_input) const;
   int position_eval_analyze_gcg(const char* gcg_text, bool opp_leave_input, float* out_input,
@@ -250,8 +251,8 @@ bool emit_exact(const void* data, size_t count, size_t size, int64_t expected, v
 }  // namespace
 
 int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads,
-                                       uint64_t seed, bool open_leaves, char* out_records,
-                                       int* played_rank) const {
+                                       uint64_t seed, bool open_leaves, bool solve_endgames,
+                                       char* out_records, int* played_rank) const {
   if (!gcg_text || !out_records || top_k < 1) return -1;
   scribblez::ParsedGcgGame game;
   std::string error;
@@ -293,6 +294,7 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
   scribblez::SimRunner::Params params;
   params.rollouts = rollouts;
   params.threads = threads;
+  params.solve_endgames = solve_endgames;
   const scribblez::SimRunner runner(*spec.dict, params);
   const std::vector<scribblez::RolloutStats> obs = runner.run(pos, candidates, seed);
 
@@ -307,10 +309,10 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
 }
 
 int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
-                               int threads, uint64_t seed, int open_leaves, char* out_records,
-                               int* played_rank) {
+                               int threads, uint64_t seed, int open_leaves, int solve_endgames,
+                               char* out_records, int* played_rank) {
   return s->gcg_sim_evidence(gcg_text, top_k, rollouts, threads, seed, open_leaves != 0,
-                             out_records, played_rank);
+                             solve_endgames != 0, out_records, played_rank);
 }
 
 int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,

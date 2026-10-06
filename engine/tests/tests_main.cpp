@@ -4974,6 +4974,35 @@ TEST(SlogSampling, SmallerSamplesArePrefixesOfLarger) {
   }
 }
 
+// Bag-range sampling filters the per-game sample order: the full range samples
+// exactly what the metadata-only sampler does, and a narrower one keeps only
+// turns whose replayed bag lies in it.
+TEST(SlogSampling, BagRangeFiltersTheSampleOrder) {
+  auto fix = write_multi_file_slog(/*games_per_file=*/4, /*num_files=*/1);
+  const std::vector<char> buf = binlog::read_file_bytes(fix.slog_paths[0]);
+  const auto* metas =
+    reinterpret_cast<const binlog::GameMetadata*>(buf.data() + sizeof(binlog::FileHeader));
+  const binlog::BagRange narrow{5, 30};
+  for (uint32_t g = 0; g < 4; ++g) {
+    std::vector<binlog::GamePositionIndex> plain, full, in_range;
+    binlog::sample_eligible_turns(metas[g], g, /*run_seed=*/9, /*positions_per_game=*/3, &plain);
+    binlog::sample_eligible_turns(buf.data(), g, 9, 3, binlog::BagRange{}, &full);
+    EXPECT_EQ(full, plain);
+
+    std::vector<TurnRecord> scratch;
+    const GameLog log = binlog::make_game_view(buf.data(), g, scratch, nullptr);
+    binlog::complete_turn_records(log, metas[g].eligible_end, scratch);
+    binlog::sample_eligible_turns(buf.data(), g, 9, /*positions_per_game=*/0, narrow, &in_range);
+    int expected = 0;
+    for (int t = metas[g].eligible_begin; t < metas[g].eligible_end; ++t)
+      expected += narrow.contains(scratch[size_t(t)].bag_size_before);
+    EXPECT_EQ(int(in_range.size()), expected);
+    for (const binlog::GamePositionIndex& at : in_range)
+      EXPECT_TRUE(narrow.contains(scratch[at.turn_idx].bag_size_before));
+  }
+  std::filesystem::remove_all(fix.dir);
+}
+
 // The stored std stays finite when FP16 teacher inference overflows it to +inf
 // (see kSdStdCap); ordinary values pass through.
 TEST(MoveSetEvalTargetLog, SdStdClamp) {

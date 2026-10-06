@@ -12,6 +12,7 @@
 // item 4) with no coordination beyond the seed.
 
 #include "data/binary_log.h"
+#include "game/bag.h"
 
 #include <compare>
 #include <cstdint>
@@ -42,6 +43,22 @@ void sample_eligible_turns(const GameMetadata& gm, uint32_t game_idx, uint64_t r
 
 // The number of turns sample_eligible_turns would append.
 int count_eligible_sample(const GameMetadata& gm, int positions_per_game);
+
+// An inclusive range of the bag sizes at a turn, before its move.
+struct BagRange {
+  int min = 0;
+  int max = Bag::kTotalTiles;
+
+  bool contains(int bag) const { return bag >= min && bag <= max; }
+};
+
+// sample_eligible_turns restricted to the turns whose bag before the move lies
+// in `bags`: the same per-game shuffle, filtered, so the full range samples
+// exactly what sample_eligible_turns does. Replays game `game_idx` of the
+// loaded .slog `buf` for its bag sizes.
+void sample_eligible_turns(const char* buf, uint32_t game_idx, uint64_t run_seed,
+                           int positions_per_game, const BagRange& bags,
+                           std::vector<GamePositionIndex>* out);
 
 // count_eligible_sample summed over the first `limit_games` games of a loaded
 // .slog (all games if limit_games <= 0).

@@ -6,7 +6,9 @@ Two modes, each with a profile:
   turn by turn, and a labels .sobs, the same candidates simmed further on
   rollouts disjoint from the probes. The train-corpus profile labels at
   L = 100, the test-corpus profile at L = 1,000; the test set is its own tag,
-  so train and test never share a game.
+  so train and test never share a game. The endgame-* profiles sample only
+  positions with 1 to 15 tiles in the bag and play every rollout to the end
+  with solved endgames, needing no leaf model and so no GPU.
 - measure: step 0, which set the corpus size: every rollout of every candidate
   at a large count, with option saturation and coupling counts.
   py/scripts/transfer_test_measure_report.py reads its store.
@@ -106,7 +108,18 @@ class TransferTestParams:
         "corpus: M1a's probes and labels; measure: step 0's noise and saturation measurement",
         choices=(MODE_CORPUS, MODE_MEASURE),
     )
-    horizon: int = param(3, "plies after the candidate before the leaf model scores (at least 3)")
+    horizon: int = param(
+        3,
+        "plies after the candidate before the leaf model scores (at least 3), or 0 to play every "
+        "rollout to the end without a leaf model",
+    )
+    min_bag: int = param(0, "sample only turns with at least this many tiles in the bag")
+    max_bag: int = param(100, "sample only turns with at most this many tiles in the bag")
+    solve_max_unseen: int = param(
+        -1,
+        "rollouts solve their endgames at positions with at most this many unseen tiles "
+        "(-1 = never; greedy endgames misjudge the late game)",
+    )
     probes_per_candidate: int = param(125, "corpus: probes recorded per candidate")
     label_rollouts: int = param(
         100, "corpus: label rollouts per candidate (100 for training, 1000 for the test set)"
@@ -152,8 +165,11 @@ def run_generator(pending: list[Path], params: TransferTestParams, threads: int,
             TRANSFER_TEST_GENERATOR,
             f"--mode={params.mode}",
             f"--slog-file={slog}",
-            f"--leaf-model={model}",
+            *([f"--leaf-model={model}"] if params.horizon > 0 else []),
             f"--horizon={params.horizon}",
+            f"--min-bag={params.min_bag}",
+            f"--max-bag={params.max_bag}",
+            f"--solve-max-unseen={params.solve_max_unseen}",
             *mode_flags(params),
             f"--seed={zlib.crc32(slog.stem.encode())}",
             f"--threads={threads}",
@@ -243,8 +259,9 @@ def tick(spec: WorkloadSpec, task, hooks):
 
 
 def gpu_need(params, role: str) -> float | None:
-    """The WorkloadSpec.gpu_need hook: GiB one slot of `role` needs."""
-    return GENERATOR_GPU_GB
+    """The WorkloadSpec.gpu_need hook: GiB one slot of `role` needs; none
+    when rollouts play to the end without a leaf model."""
+    return GENERATOR_GPU_GB if params.horizon > 0 else 0.0
 
 
 def layout(params, vcpus: int, generator_threads: int | None) -> list[SlotPlan]:
@@ -260,6 +277,15 @@ def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, obj
 # A corpus file carries only ~20 s of sims per 20 positions, against ~1.7 s of
 # generator startup (leaf plan, dictionary) per file, so the corpus profiles
 # batch 100 games a cycle.
+_ENDGAME = {
+    "mode": MODE_CORPUS,
+    "games_per_batch": 100,
+    "min_bag": 1,
+    "max_bag": 15,
+    "horizon": 0,
+    "solve_max_unseen": 100,
+}
+
 PROFILES = {
     "train-corpus": {
         "mode": MODE_CORPUS,
@@ -274,6 +300,13 @@ PROFILES = {
         "games_per_batch": 100,
     },
     "measure": {"mode": MODE_MEASURE, "target_positions": 300},
+    # The near endgame, where the teacher's within-row error is 2-4x the
+    # label noise (docs/plans/supreme_bot_m1a.md, the near-endgame corpus):
+    # bags 1 to 15, rollouts played to the end with solved endgames, so the
+    # labels owe nothing to the teacher, and more label rollouts, since a
+    # finished game's 0/1 outcome is noisier than a leaf model's reading.
+    "endgame-train-corpus": {**_ENDGAME, "label_rollouts": 300, "target_positions": 10000},
+    "endgame-test-corpus": {**_ENDGAME, "label_rollouts": 1000, "target_positions": 1000},
 }
 
 
