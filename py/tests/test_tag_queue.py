@@ -175,6 +175,22 @@ def test_completion_releases_the_machine_to_the_next_tag(queued):
     assert _lease(manager).tag == "b"
 
 
+def test_a_placed_tag_that_lost_its_slots_releases_its_machine(queued):
+    """A running lease whose tag has no slots left would otherwise hold its
+    machine for good: nothing can finish and no slot can be added."""
+    q, manager, make = queued
+    make("a")
+    q.enqueue("position_eval", "a", confirm=True)
+    q.tick()
+    a = manager.tasks.load(SPEC, "a")
+    a.workers = []
+    manager.tasks.save(SPEC, a)
+    q.tick()
+    assert _lease(manager).phase == RELEASING
+    _drain_then_tick(q)
+    assert _lease(manager) is None
+
+
 def test_a_crash_looping_tag_fails_and_holds_its_machine(queued):
     q, manager, make = queued
     make("a")
