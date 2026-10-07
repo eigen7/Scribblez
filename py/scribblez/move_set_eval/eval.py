@@ -129,9 +129,9 @@ def evaluate(
 ) -> dict[str, float]:
     """Run the model over `dataset` and return the metrics named in the module
     docstring (with "_baseline" twins), the "positions" and
-    "positions_with_exchanges" denominators, and "plane_ce" when the slice has
-    plane targets. With a train_loop.LossConfig as `loss_cfg`, also returns
-    the candidate-weighted distillation loss as "loss" and "loss_<term>".
+    "positions_with_exchanges" denominators. With a train_loop.LossConfig as
+    `loss_cfg`, also returns the candidate-weighted distillation loss as
+    "loss" and "loss_<term>".
     """
     model.eval()
     sums = {}
@@ -142,8 +142,6 @@ def evaluate(
         sums[f"regret@{k}"] = sums[f"regret@{k}_baseline"] = 0.0
         exch_sums[f"exch_retention@{k}"] = exch_sums[f"exch_retention@{k}_baseline"] = 0.0
     n_positions = 0
-    plane_ce_sum = 0.0
-    plane_candidates = 0
     spearman_sums = {"spearman": 0.0, "spearman_baseline": 0.0}
     n_ranked = 0
     n_exch = 0  # positions with any exchange candidate (retention denominator)
@@ -157,13 +155,6 @@ def evaluate(
         out = model(*inputs, *move_args)
         if loss_cfg is not None:
             _accumulate_loss(loss_sums, out, batch, device, loss_cfg)
-        if "target_planes" in batch:
-            m = batch["move_pos_id"].shape[0]
-            # Same as compute_loss's plane term.
-            log_pred = torch.nn.functional.log_softmax(out["planes"], dim=-1)
-            ce = -(batch["target_planes"].to(device) * log_pred).sum(dim=-1).mean()
-            plane_ce_sum += ce.item() * m
-            plane_candidates += m
         pred_eq = win_equity(out["wld"].softmax(dim=1)).cpu().numpy()
         teacher_eq = win_equity(batch["target_wld"]).numpy()
         pos_id = batch["move_pos_id"].numpy()
@@ -206,8 +197,6 @@ def evaluate(
         metrics[name] = total / max(denom, 1)
     metrics["positions"] = n_positions
     metrics["positions_with_exchanges"] = n_exch
-    if plane_candidates:
-        metrics["plane_ce"] = plane_ce_sum / plane_candidates
     if loss_cfg is not None:
         n = max(loss_sums.pop("_candidates", 0), 1)
         metrics.update({name: total / n for name, total in loss_sums.items()})

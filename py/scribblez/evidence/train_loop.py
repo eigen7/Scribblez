@@ -2,8 +2,8 @@
 
 The forward follows the model's staged path: board trunk, move encodings, the
 evidence-free first pass, then the fusion stage and the conditioned re-score.
-The first pass only supplies the predicted half of each evidence token and
-never receives gradient. The sole loss is on the held-out simmed candidates
+The first pass only supplies each evidence token's predicted value and never
+receives gradient. The sole loss is on the held-out simmed candidates
 (those outside the evidence subset), against their own sim outcomes.
 
 With the backbone frozen, only EvidenceFusion and the proves-best head learn.
@@ -36,12 +36,11 @@ from scribblez.evidence_fusion import (
     NUM_EVIDENCE_PLANES,
     NUM_EVIDENCE_SCALARS,
     NUM_OBSERVED_PLANES,
-    NUM_PREDICTED_PLANES,
     EvidenceInputs,
     best_so_far,
 )
 from scribblez.move_set_eval.evidence import observed_scalars
-from scribblez.move_set_eval.model import INPUT_KEYS, MOVE_KEYS, footprint_slot_planes, win_equity
+from scribblez.move_set_eval.model import INPUT_KEYS, MOVE_KEYS, win_equity
 from scribblez.sim_evidence.sobs import BOARD, candidate_slot_planes, observed_slot_planes
 
 # The sim-outcome loss terms every epoch reports.
@@ -97,8 +96,8 @@ def batch_evidence_inputs(
     Evidence rows are the batch's own candidate rows marked `in_evidence`,
     scattered to padded slot pos_id * max_e + ev_index. Their move inputs are
     reused as is (same moves and pre-move differential as a fresh encode), the
-    predicted half comes from the plain pass over those rows, and the observed
-    half from the .sobs records selected by the same mask. Both halves thus
+    predicted value comes from the plain pass over those rows, and the
+    observations from the .sobs records selected by the same mask. Both thus
     enumerate members in the same order.
     """
     letters, blanks, squares, tile_mask, scalars, cross_cells, cross_letters, pos_id = move_args
@@ -116,11 +115,9 @@ def batch_evidence_inputs(
     candidate_p = torch.from_numpy(candidate_slot_planes(moves_np)).to(device=device, dtype=dtype)
     observed_s = torch.from_numpy(observed_scalars(obs_np)).to(device=device, dtype=dtype)
 
-    pred_end = NUM_OBSERVED_PLANES + NUM_PREDICTED_PLANES
     planes = observed_p.new_zeros((int(sel.sum()), NUM_EVIDENCE_PLANES, BOARD, BOARD))
     planes[:, :NUM_OBSERVED_PLANES] = observed_p
-    planes[:, NUM_OBSERVED_PLANES:pred_end] = footprint_slot_planes(plain["planes"][sel]).to(dtype)
-    planes[:, pred_end:] = candidate_p
+    planes[:, NUM_OBSERVED_PLANES:] = candidate_p
     predicted_s = torch.cat(
         [torch.softmax(plain["wld"][sel], dim=1), plain["score_diff"][sel] / 100.0], dim=1
     ).to(dtype)
@@ -151,7 +148,7 @@ def conditioned_forward(
 
     The trunk and move encodings carry gradient only when the backbone is
     unfrozen. The plain pass never does: it is an input (the tokens'
-    predicted half), not a training path."""
+    predicted value), not a training path."""
     spatial, scalar = (batch[k].to(device) for k in INPUT_KEYS)
     move_args = tuple(batch[k].to(device) for k in MOVE_KEYS)
     pos_id = move_args[-1]

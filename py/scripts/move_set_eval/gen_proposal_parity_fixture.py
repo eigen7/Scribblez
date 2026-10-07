@@ -39,9 +39,6 @@ Files written into --out-dir:
     the C++ Move footprint; obs.bin -- their RolloutStats records (verbatim
     layout), for the C++ RolloutStats. M is recovered C++-side from board /
     scalars sizes and obs.bin.
-  * plain_planes.bin -- M x 52 x 225 f32 footprint slot-channel planes of the
-    evidence-free pass (what the cache graph serves, and what every evidence
-    token's predicted half is gathered from).
   * cases.txt -- one line per evidence case: "<name> <num_evidence>".
   * case_<name>_indices.bin -- int32 scored indices (empty file for the empty
     case); case_<name>_scalars.bin -- M x 6 f32 [p_win, p_draw, p_loss, sd_mean,
@@ -59,7 +56,7 @@ import torch
 from scribblez.ffi import encode_moves, get_input_shapes
 from scribblez.footprint_spatial import NUM_CLASSES
 from scribblez.move_set_eval.evidence import build_evidence_inputs
-from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_slot_planes
+from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.moves import move_encoding_version, synthetic_cross_checks
 from scribblez.move_set_eval.proposal_export import (
     DEFAULT_MAX_EVIDENCE,
@@ -204,12 +201,6 @@ def decode_scalars(out: dict[str, torch.Tensor]) -> np.ndarray:
     return np.concatenate([wld, sd, gain[:, None]], axis=1).astype(np.float32)
 
 
-def decode_planes(out: dict[str, torch.Tensor]) -> np.ndarray:
-    """forward() outputs -> planes M x 52 x 225, the footprint heads'
-    slot-channel probabilities (what the cache graph serves)."""
-    return footprint_slot_planes(out["planes"]).flatten(2).numpy().astype(np.float32)
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out-dir", required=True, type=Path, help="directory to write the fixture")
@@ -286,14 +277,13 @@ def main() -> int:
     }
 
     first_pass = forward(model, spatial, scalar, enc, args.num_moves)
-    fp = {k: first_pass[k] for k in ("wld", "score_diff", "planes")}
+    fp = {k: first_pass[k] for k in ("wld", "score_diff")}
 
     (args.out_dir / "board.bin").write_bytes(board_row.tobytes())
     for name, array in cache_inputs.items():
         (args.out_dir / f"{name}.bin").write_bytes(np.ascontiguousarray(array).tobytes())
     (args.out_dir / "moves_sobs.bin").write_bytes(np.ascontiguousarray(moves).tobytes())
     (args.out_dir / "obs.bin").write_bytes(np.ascontiguousarray(obs).tobytes())
-    (args.out_dir / "plain_planes.bin").write_bytes(decode_planes(first_pass).tobytes())
 
     cases = evidence_indices(args.num_moves)
     with (args.out_dir / "cases.txt").open("w") as f:

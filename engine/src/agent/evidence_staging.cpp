@@ -29,18 +29,16 @@ void scatter_histogram(const T* hist, float inv_n, float* out) {
 
 // One token's planes, in the layout of evidence_staging.h. `out` arrives
 // zeroed.
-void stage_planes(const RolloutStats& obs, const Move& move, const float* plane_probs, float* out) {
+void stage_planes(const RolloutStats& obs, const Move& move, float* out) {
   const float inv_n = 1.0f / float(std::max<std::uint32_t>(obs.n, 1));
   scatter_histogram(obs.opp_next_count.data(), inv_n, out + 0 * kSlotsPerCell * kCells);
   scatter_histogram(obs.self_next_count.data(), inv_n, out + 1 * kSlotsPerCell * kCells);
   scatter_histogram(obs.opp_win_count.data(), inv_n, out + 2 * kSlotsPerCell * kCells);
   scatter_histogram(obs.self_win_count.data(), inv_n, out + 3 * kSlotsPerCell * kCells);
-  std::memcpy(out + kNumObservedPlanes * kCells, plane_probs,
-              sizeof(float) * kNumPredictedPlanes * kCells);
   // A PASS or EXCHANGE maps to a catch-all class and leaves this block zero.
   const int cls = footprint_class(move);
   if (cls < kAnchoredFootprints) {
-    float* footprint = out + (kNumObservedPlanes + kNumPredictedPlanes) * kCells;
+    float* footprint = out + kNumObservedPlanes * kCells;
     footprint[(cls % kSlotsPerCell) * kCells + cls / kSlotsPerCell] = 1.0f;
   }
 }
@@ -89,7 +87,6 @@ void stage_evidence(std::span<const Move> moves, std::span<const RolloutStats> o
     std::memcpy(out.move_enc + size_t(j) * c, predictions.move_enc + size_t(idx) * c,
                 sizeof(float) * c);
     stage_planes(observations[j], moves[j],
-                 predictions.plane_probs + size_t(idx) * kNumPredictedPlanes * kCells,
                  out.obs_planes + size_t(j) * kNumEvidencePlanes * kCells);
     stage_scalars(observations[j], predictions.wld_logits + size_t(idx) * 3,
                   predictions.score_diff + size_t(idx) * 2,

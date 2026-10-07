@@ -5,10 +5,6 @@
 // uses MoveProposalSession (move_proposal_session.h), tests use scripted stubs.
 // This is the same seam nn::EvalService provides for the position and move-set
 // model families.
-//
-// The predictions carry no placement planes, since no loop consumer reads
-// them. The planes the evidence tokens need are gathered from the session's
-// retained cache when the evidence is staged.
 
 #include "game/move.h"
 #include "nn/eval_service.h"
@@ -33,7 +29,7 @@ struct MoveProposalPredictions {
 
 // The simmed candidates, in sim order. `scored_indices[j]` is candidate j's
 // index in the encoded candidate set, which locates its cached encoding and
-// predicted planes.
+// evidence-free predictions.
 struct EvidenceSet {
   std::vector<Move> moves;
   std::vector<RolloutStats> observations;

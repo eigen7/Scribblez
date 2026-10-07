@@ -19,19 +19,6 @@ import UnseenTiles from './UnseenTiles';
 import { PlacedTile, TileInfo } from '../types';
 import { getJSON } from '../lib/api';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
-import {
-  buildPlacementOverlay,
-  OverlayMode,
-  PlacementData,
-  PlacementHeadKey,
-} from '../lib/placementOverlay';
-import {
-  HeadSelection,
-  NONE_HEAD,
-  PlacementHeadRadios,
-  PlacementLegend,
-  PlacementModeControl,
-} from './PlacementOverlayControls';
 
 const NO_USED: Set<number> = new Set();
 const SIM_COLOR = '#e74c3c'; // sim outcome (red), the Positions tab's Monte-Carlo hue
@@ -93,13 +80,6 @@ interface BoardBundle {
   last_move: [number, number][];
 }
 
-// The selected candidate's overlay planes, in the Positions tab's
-// PlacementData shape (truth = sim count plane / rollouts, pred = the
-// conditioned pass's sigmoid at this prefix).
-interface PlanesBlock extends PlacementData {
-  slot: number;
-}
-
 interface Payload {
   name: string;
   set: string;
@@ -114,7 +94,8 @@ interface Payload {
   next_sim: number | null;
   trajectory: Card[];
   moves: MoveRow[];
-  planes: PlanesBlock | null;
+  // The trajectory slot of the card being previewed, null without one.
+  selected_slot: number | null;
 }
 
 interface Generation {
@@ -250,8 +231,6 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
   const [payload, setPayload] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [headSel, setHeadSel] = useState<HeadSelection>(NONE_HEAD);
-  const [overlayMode, setOverlayMode] = useState<OverlayMode>('residual');
   const tabActive = useContext(TabActiveContext);
   const [generations, setGenerations] = useState<Generation[]>([]);
 
@@ -342,18 +321,9 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
 
   const selectedCard = useMemo(() => {
     if (!payload) return null;
-    const s = payload.planes?.slot;
+    const s = payload.selected_slot;
     return payload.trajectory.find((c) => c.slot === s) ?? null;
   }, [payload]);
-
-  const placementOverlay = useMemo(() => {
-    if (headSel === NONE_HEAD || !payload?.planes) return null;
-    return buildPlacementOverlay(payload.planes.heads, headSel, overlayMode, payload.board.board);
-  }, [headSel, payload, overlayMode]);
-
-  useEffect(() => {
-    if (headSel !== NONE_HEAD && payload && !payload.planes) setHeadSel(NONE_HEAD);
-  }, [payload, headSel]);
 
   if (!tag) return <div className="muted" style={{ padding: 20 }}>Select a tag.</div>;
   if (sets.length === 0) return <div className="muted" style={{ padding: 20 }}>No position sets under positions/NWL23/.</div>;
@@ -456,7 +426,6 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
                 interactive={false}
                 onCellClick={() => {}}
                 onCellDrop={() => {}}
-                cellHalos={placementOverlay?.halos}
               />
             </div>
             <div style={{ width: 320, flexShrink: 0 }}>
@@ -474,21 +443,6 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
                   game_over: false,
                 }}
               />
-              <PlacementHeadRadios placement={payload.planes} selected={headSel} onChange={setHeadSel} />
-              {headSel !== NONE_HEAD && payload.planes && (
-                <PlacementModeControl
-                  head={payload.planes.heads[headSel as PlacementHeadKey]}
-                  mode={overlayMode}
-                  onChange={setOverlayMode}
-                />
-              )}
-              {placementOverlay && <PlacementLegend mode={overlayMode} />}
-              {selectedCard && (
-                <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-                  Overlay for <b>{selectedCard.notation}</b>: sim planes over its {selectedCard.sim.n} rollouts vs the model's
-                  planes {effPrefix === 0 ? '(plain pass)' : `conditioned on the first ${effPrefix}`}.
-                </div>
-              )}
             </div>
           </div>
 
@@ -500,7 +454,7 @@ export default function EvidenceTrajectories({ task, tag }: { task: string; tag:
             <h3>Trajectory — anchor → on-policy → off-policy (click a card to preview it)</h3>
             <div className="traj-strip">
               {payload.trajectory.map((c) => (
-                <TrajectoryCard key={c.slot} card={c} selected={c.slot === payload.planes?.slot} onSelect={() => setSlot(c.slot)} />
+                <TrajectoryCard key={c.slot} card={c} selected={c.slot === payload.selected_slot} onSelect={() => setSlot(c.slot)} />
               ))}
             </div>
             <div className="legend" style={{ marginTop: 6 }}>

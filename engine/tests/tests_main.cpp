@@ -4519,9 +4519,6 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   const std::string path = (tmp / "test.mset").string();
 
   constexpr uint32_t kFloats = move_set_eval::kTargetFloatsV1;
-  constexpr uint32_t kPlanes = move_set_eval::kTargetPlanes;
-  constexpr uint32_t kCells = move_set_eval::kPlaneWidth;
-
   const Move m1 = make_play_full(4, 2, /*horizontal=*/true, 0b111, 24,
                                  {Glyph::of(Tile::from_char('A')), Glyph::of(Tile::from_char('B')),
                                   Glyph::of(Tile::from_char('C'))});
@@ -4530,31 +4527,18 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   const Move m2 = Move::exchange(xchg_tiles);
   const std::vector<float> targets = {0.7f, 0.1f, 0.2f, 33.5f,  41.0f,
                                       0.2f, 0.0f, 0.8f, -12.0f, 55.5f};
-  // Distinct per-plane maxima; candidate 1's last plane is all zero, so its
-  // quantization scale is 0.
-  std::vector<float> planes(2 * kPlanes * kCells, 0.0f);
-  for (uint32_t c = 0; c < 2; ++c) {
-    for (uint32_t h = 0; h < kPlanes; ++h) {
-      if (c == 1 && h == kPlanes - 1) continue;
-      float* plane = planes.data() + (c * kPlanes + h) * kCells;
-      for (uint32_t i = 0; i < kCells; ++i) {
-        plane[i] = (0.9f - 0.2f * h) * float(i) / (kCells - 1);
-      }
-    }
-  }
-
   {
-    move_set_eval::TargetWriter w(path, kFloats, kPlanes, "abc123");
-    w.add_position(3, 11, {m1, m2}, targets, planes);
+    move_set_eval::TargetWriter w(path, kFloats, "abc123");
+    w.add_position(3, 11, {m1, m2}, targets);
     // A swept position records its legal-move count, so a sweep truncated by
     // the candidate cap shows as a shortfall.
-    w.add_position(3, 12, {m1, m2}, targets, planes, /*num_legal_moves=*/9184);
+    w.add_position(3, 12, {m1, m2}, targets, /*num_legal_moves=*/9184);
     w.close();
   }
 
   move_set_eval::TargetReader r(path);
   ASSERT_EQ(r.record_floats(), kFloats);
-  ASSERT_EQ(r.record_planes(), kPlanes);
+  ASSERT_EQ(r.record_planes(), 0u);  // the writer emits value targets only
   ASSERT_EQ(r.model_hash(), "abc123");
   ASSERT_EQ(r.num_positions(), 2);
   const move_set_eval::TargetReader::Position p0 = r.position(0);
@@ -4571,27 +4555,6 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
     }
   }
 
-  // Planes are 8-bit absmax-quantized: each dequantizes within half a step,
-  // and the plane max is exact.
-  for (int c = 0; c < 2; ++c) {
-    const float* scales = r.plane_scales_at(p0, c);
-    const uint8_t* cells = r.planes_at(p0, c);
-    for (uint32_t h = 0; h < kPlanes; ++h) {
-      const float* plane = planes.data() + (c * kPlanes + h) * kCells;
-      const float max = *std::max_element(plane, plane + kCells);
-      ASSERT_FLOAT_EQ(scales[h], max / 255.0f);
-      if (max == 0.0f) {
-        for (uint32_t i = 0; i < kCells; ++i) ASSERT_EQ(cells[h * kCells + i], 0);
-        continue;
-      }
-      for (uint32_t i = 0; i < kCells; ++i) {
-        const float back = move_set_eval::dequantized_plane_value(cells[h * kCells + i], scales[h]);
-        ASSERT_NEAR(back, plane[i], scales[h] / 2 + 1e-6f);
-      }
-      ASSERT_EQ(cells[h * kCells + (kCells - 1)], 255);  // the max cell
-    }
-  }
-
   // A version mismatch throws rather than misparsing a stale file.
   {
     std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
@@ -4604,31 +4567,51 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
   fs::remove_all(tmp);
 }
 
-// Full-sweep files carry no planes: with record_planes 0 a record is just the
-// Move and its value targets.
-TEST(MoveSetEvalTargetLog, RoundtripWithoutPlanes) {
+// A file written before planes were dropped carries four quantized plane
+// blocks per record; the reader steps over them to every record's targets.
+TEST(MoveSetEvalTargetLog, ReadsPastLegacyPlaneBlocks) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_mset_noplanes";
+  auto tmp = fs::temp_directory_path() / "scribblez_test_mset_legacy";
   fs::create_directories(tmp);
   const std::string path = (tmp / "test.mset").string();
 
+  constexpr uint32_t kFloats = move_set_eval::kTargetFloatsV1;
+  constexpr uint32_t kLegacyPlanes = 4;
   const Move m1 =
     make_play_full(4, 2, /*horizontal=*/true, 0b1, 24, {Glyph::of(Tile::from_char('A'))});
-  const std::vector<float> targets = {0.7f, 0.1f, 0.2f, 33.5f, 41.0f};
-  {
-    move_set_eval::TargetWriter w(path, move_set_eval::kTargetFloatsV1, /*record_planes=*/0,
-                                  "abc123", move_set_eval::kTargetFlagFullSweep);
-    w.add_position(0, 5, {m1}, targets, /*planes=*/{}, /*num_legal_moves=*/1);
-    w.close();
+  const Move m2 = Move::pass();
+  const std::vector<float> targets = {0.7f, 0.1f, 0.2f, 33.5f,  41.0f,
+                                      0.2f, 0.0f, 0.8f, -12.0f, 55.5f};
+
+  move_set_eval::TargetFileHeader hdr{};
+  hdr.magic = move_set_eval::kTargetMagic;
+  hdr.version = move_set_eval::kTargetVersion;
+  hdr.num_positions = 1;
+  hdr.record_floats = kFloats;
+  hdr.record_planes = kLegacyPlanes;
+  std::strncpy(hdr.model_hash, "abc123", sizeof(hdr.model_hash) - 1);
+  move_set_eval::TargetPositionHeader ph{3, 11, 2, 0};
+  std::string bytes(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+  bytes.append(reinterpret_cast<const char*>(&ph), sizeof(ph));
+  for (int c = 0; c < 2; ++c) {
+    const Move& m = c == 0 ? m1 : m2;
+    bytes.append(reinterpret_cast<const char*>(&m), sizeof(Move));
+    bytes.append(reinterpret_cast<const char*>(targets.data() + c * kFloats),
+                 sizeof(float) * kFloats);
+    // Plane scales then planes, filled with junk the reader must not land on.
+    bytes.append(kLegacyPlanes * (sizeof(float) + move_set_eval::kPlaneWidth), char(0x7f));
   }
+  std::ofstream(path, std::ios::binary).write(bytes.data(), std::streamsize(bytes.size()));
 
   move_set_eval::TargetReader r(path);
-  ASSERT_EQ(r.record_planes(), 0u);
-  ASSERT_EQ(r.num_positions(), 1);
+  ASSERT_EQ(r.record_planes(), kLegacyPlanes);
   const move_set_eval::TargetReader::Position p0 = r.position(0);
   ASSERT_EQ(r.move_at(p0, 0), m1);
-  for (int j = 0; j < int(move_set_eval::kTargetFloatsV1); ++j) {
-    ASSERT_EQ(r.targets_at(p0, 0)[j], targets[j]);
+  ASSERT_EQ(r.move_at(p0, 1), m2);
+  for (int c = 0; c < 2; ++c) {
+    for (int j = 0; j < int(kFloats); ++j) {
+      ASSERT_EQ(r.targets_at(p0, c)[j], targets[c * kFloats + j]);
+    }
   }
 
   fs::remove_all(tmp);
@@ -5048,10 +5031,10 @@ TEST(MoveSetEvalTargetLog, OpenLeavesFlagFollowsTheSourceLog) {
 
     const std::string mset = (dir / "targets.mset").string();
     {
-      move_set_eval::TargetWriter w(mset, move_set_eval::kTargetFloatsV1, /*record_planes=*/0,
-                                    "abc123", move_set_eval::target_flags_from_slog(hdr.flags));
-      w.add_position(0, 0, {Move::pass()}, std::vector<float>(move_set_eval::kTargetFloatsV1, 0.0f),
-                     /*planes=*/{});
+      move_set_eval::TargetWriter w(mset, move_set_eval::kTargetFloatsV1, "abc123",
+                                    move_set_eval::target_flags_from_slog(hdr.flags));
+      w.add_position(0, 0, {Move::pass()},
+                     std::vector<float>(move_set_eval::kTargetFloatsV1, 0.0f));
       w.close();
     }
     const uint32_t expected = face_up ? move_set_eval::kTargetFlagOpenLeaves : 0u;
@@ -5833,7 +5816,6 @@ TEST(TrajectoryPosition, ExhibitDecisionPoint) {
 TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   using namespace evidence;
   constexpr int kChannels = 2;
-  constexpr int kScored = 3;
   constexpr int kCells = kEvidencePlaneCells;
 
   // Cached model predictions for three scored candidates, gathered by each
@@ -5841,11 +5823,7 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   std::vector<float> move_enc = {1.0f, 2.0f, 3.0f, 4.0f, 7.0f, 8.0f};  // rows 0,1,2
   std::vector<float> wld_logits = {0.0f, 0.0f, 0.0f, 5.0f, 5.0f, 5.0f, 2.0f, 0.0f, 0.0f};
   std::vector<float> score_diff = {-50.0f, 10.0f, 0.0f, 0.0f, 30.0f, 5.0f};  // [mean,std] rows
-  std::vector<float> plane_probs(size_t(kScored) * kNumPredictedPlanes * kCells, 0.0f);
-  // Scored candidate 2, predicted channel 2, cell 7: a non-default probability.
-  plane_probs[(2 * kNumPredictedPlanes + 2) * kCells + 7] = 0.7f;
-  const CachePredictions pred{move_enc.data(), wld_logits.data(), score_diff.data(),
-                              plane_probs.data(), kChannels};
+  const CachePredictions pred{move_enc.data(), wld_logits.data(), score_diff.data(), kChannels};
 
   // Evidence candidate 0 == scored 2: a one-tile horizontal play at (7,7);
   // observations with rollouts n=4. Histogram classes are (cell, slot) pairs:
@@ -5896,7 +5874,7 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   for (int row = 2; row < kMaxE; ++row) {
     const float* pad_planes = ev_planes.data() + size_t(row) * kNumEvidencePlanes * kCells;
     const float* pad_scalars = ev_scalars.data() + size_t(row) * kNumEvidenceScalars;
-    EXPECT_FLOAT_EQ(pad_planes[(kNumObservedPlanes + 2) * kCells + 7], 0.0f);  // a predicted cell
+    EXPECT_FLOAT_EQ(pad_planes[(kNumObservedPlanes + 0) * kCells + 7], 0.0f);  // a footprint cell
     EXPECT_FLOAT_EQ(pad_planes[0], 0.0f);
     EXPECT_FLOAT_EQ(pad_scalars[0], 0.0f);
     EXPECT_FLOAT_EQ(pad_scalars[kNumEvidenceScalars - 1], 0.0f);
@@ -5911,18 +5889,15 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
   EXPECT_FLOAT_EQ(ev_move_enc[7], 0.0f);
 
   // Candidate 0 planes: observed histogram counts / rollouts on channel
-  // (head * kSlotsPerCell + slot) at the class's cell, predicted probabilities
-  // copied through, and the candidate's footprint one-hot at (slot, anchor cell).
+  // (head * kSlotsPerCell + slot) at the class's cell, then the candidate's
+  // footprint one-hot at (slot, anchor cell).
   const float* p0 = ev_planes.data();
-  constexpr int kPredBase = kNumObservedPlanes;
-  constexpr int kFootBase = kNumObservedPlanes + kNumPredictedPlanes;
+  constexpr int kFootBase = kNumObservedPlanes;
   EXPECT_FLOAT_EQ(p0[(0 * kSlotsPerCell + 2) * kCells + 5], 0.5f);   // opp_next 2/4
   EXPECT_FLOAT_EQ(p0[(1 * kSlotsPerCell + 0) * kCells + 10], 1.0f);  // self_next 4/4
   EXPECT_FLOAT_EQ(p0[(2 * kSlotsPerCell + 2) * kCells + 5], 0.25f);  // opp_win 1/4
   EXPECT_FLOAT_EQ(p0[(3 * kSlotsPerCell + 0) * kCells + 10], 0.5f);  // self_win 2/4
   EXPECT_FLOAT_EQ(p0[(0 * kSlotsPerCell + 0) * kCells + 5], 0.0f);   // slot 0 empty at cell 5
-  EXPECT_FLOAT_EQ(p0[(kPredBase + 2) * kCells + 7], 0.7f);  // pred channel 2 (not re-squashed)
-  EXPECT_FLOAT_EQ(p0[(kPredBase + 0) * kCells + 0], 0.0f);  // pred channel 0, default 0
   // The 1-tile play at (7,7) is slot 0 at its anchor cell.
   EXPECT_FLOAT_EQ(p0[(kFootBase + 0) * kCells + (7 * BOARD_SIZE + 7)], 1.0f);
   EXPECT_FLOAT_EQ(p0[(kFootBase + 0) * kCells + 0], 0.0f);
@@ -5962,16 +5937,13 @@ TEST(EvidenceStaging, MatchesHandComputedNormalization) {
 static scribblez::evidence::CachePredictions zero_predictions(int scored, int channels,
                                                               std::vector<float>& storage) {
   using namespace scribblez::evidence;
-  // Per-row widths of CachePredictions' four arrays, packed back-to-back into
-  // one buffer: move_enc (channels), wld_logits (3), score_diff (2), plane
-  // logits (kNumPredictedPlanes * cells).
+  // Per-row widths of CachePredictions' three arrays, packed back-to-back into
+  // one buffer: move_enc (channels), wld_logits (3), score_diff (2).
   constexpr int kWld = 3, kScoreDiff = 2;
-  const int planes = kNumPredictedPlanes * kEvidencePlaneCells;
-  storage.assign(size_t(scored) * (channels + kWld + kScoreDiff + planes), 0.0f);
+  storage.assign(size_t(scored) * (channels + kWld + kScoreDiff), 0.0f);
   float* p = storage.data();
   const CachePredictions pred{p, p + size_t(scored) * channels,
-                              p + size_t(scored) * (channels + kWld),
-                              p + size_t(scored) * (channels + kWld + kScoreDiff), channels};
+                              p + size_t(scored) * (channels + kWld), channels};
   return pred;
 }
 

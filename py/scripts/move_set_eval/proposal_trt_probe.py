@@ -45,19 +45,14 @@ from scribblez.move_set_eval.proposal_export import (
     export_proposal_step,
     proposal_export_id,
 )
-from scribblez.move_set_eval.targets import PLANE_NAMES
 
 MAX_MOVES = 4096
 OPT_MOVES = 512
 PROBE_MS = (1, 37, 512)
 # FP32 TensorRT and FP32 onnxruntime differ only by summation order, while a
-# wrong refit changes outputs by O(1) relative, far above either bound. The
-# scalar heads are small and bounded, so an absolute bound fits them. The raw
-# plane logits are unbounded (tens) and sum over C*225 terms in a different
-# order than onnxruntime, so they are judged by error relative to ORT's
-# magnitude.
+# wrong refit changes outputs by O(1) relative, far above the bound. Every
+# output is small and bounded, so an absolute bound fits them.
 TOLERANCE = 2e-3
-PLANES_RTOL = 5e-2
 BOARD = 15
 
 
@@ -207,12 +202,7 @@ def _probe_graph(trt, ort, name, export_a, export_b, make_inputs, out_shapes, dy
             got = _run_trt(engine, feeds, outputs, set(dyn_widths))
             want = sess.run(list(out_shapes(m)), feeds)
             for (oname, arr), w in zip(got.items(), want, strict=True):
-                abs_diff = float(np.abs(arr - w).max())
-                if oname == "planes":  # unbounded logits: relative error
-                    diff = abs_diff / (float(np.abs(w).max()) + 1e-6)
-                    tol, unit = PLANES_RTOL, "rel"
-                else:
-                    diff, tol, unit = abs_diff, TOLERANCE, "abs"
+                diff, tol, unit = float(np.abs(arr - w).max()), TOLERANCE, "abs"
                 worst = max(worst, diff)
                 status = "OK" if diff < tol else "MISMATCH"
                 print(f"  M={m:4d} {oname:10s} {unit}|TRT-ORT| = {diff:.2e}  {status}")
@@ -275,7 +265,6 @@ def main() -> int:
             "move_enc": (m, channels),
             "wld": (m, 3),
             "score_diff": (m, 2),
-            "planes": (m, len(PLANE_NAMES), BOARD * BOARD),
         },
         move_widths,
     )

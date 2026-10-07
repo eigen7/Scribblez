@@ -8,8 +8,7 @@
 // agent/evidence_staging.h. More can go silently wrong than in the single-graph
 // runtimes: the board/g/move_enc handoff from cache to step through host
 // memory, the leading-1 evidence inputs, the move_enc gather by scored index,
-// and the empty-set fusion gate. The cache graph's placement planes, which the
-// step graph does not re-emit, are checked on the session's retained cache.
+// and the empty-set fusion gate.
 //
 // Parity is tolerance-bounded, not bitwise: independent TensorRT plans reorder
 // float sums.
@@ -55,26 +54,22 @@ using scribblez::agent::MoveProposalSession;
 namespace {
 
 // Per-candidate reference scalars: p_win, p_draw, p_loss, sd_mean, sd_std,
-// gain. The plane reference is a separate file of M rows of kPlaneFloats.
+// gain.
 constexpr int kScalarFields = 6;
-constexpr int kPlaneFloats = scribblez::nn::PlanesOutput::kRowElems;
 
 // Allowed deviation from the PyTorch FP32 reference, set from the measured
 // noise floor. The observed worst deviations on this fixture are ~1e-5 for the
-// WLD probabilities, ~5e-5 for score_diff and gain, and ~3.5e-4 for the planes,
-// the noisiest head (a softmax over 900 cells, then per-cell marginals, on top
-// of a 225-token attention). The bounds leave room for kernel differences
-// across GPUs and builds (~6x on the planes, a rounder 50-100x elsewhere) yet
-// stay orders of magnitude below a real defect such as a dropped evidence
-// field, a mis-strided evidence plane or a mis-bound handoff. The test prints
+// WLD probabilities and ~5e-5 for score_diff and gain. The bounds leave room
+// for kernel differences across GPUs and builds (50-100x) yet stay orders of
+// magnitude below a real defect such as a dropped evidence field, a
+// mis-strided evidence plane or a mis-bound handoff. The test prints
 // the actual deviations, for retuning if a future model legitimately needs it.
 struct Tolerance {
   float prob;        // the three WLD probabilities
-  float planes;      // the per-cell-marginal placement planes (widest head)
   float score_diff;  // the score-diff mean/std, in points
   float gain;        // the proves-best gain, in points
 };
-constexpr Tolerance kFp32Tol{5e-4f, 2e-3f, 5e-3f, 5e-3f};
+constexpr Tolerance kFp32Tol{5e-4f, 5e-3f, 5e-3f};
 
 std::string g_fixture_dir;
 
@@ -122,7 +117,7 @@ struct EvidenceCase {
 
 // The worst deviation of a prediction from the reference, per field group.
 struct Worst {
-  float prob = 0, score_diff = 0, gain = 0, planes = 0;
+  float prob = 0, score_diff = 0, gain = 0;
 };
 
 // Folds one deviation into `worst`, failing on a non-finite one. std::max would
@@ -186,7 +181,6 @@ class ProposalInferenceParityTest : public ::testing::Test {
   scribblez::move_set::MoveFeatureArrays moves_;
   std::vector<Move> sobs_moves_;
   std::vector<RolloutStats> obs_;
-  std::vector<float> plain_planes_;  // M x kPlaneFloats
   std::vector<EvidenceCase> cases_;
 };
 
@@ -216,12 +210,10 @@ void ProposalInferenceParityTest::SetUp() {
   num_moves_ = moves_.count;
   sobs_moves_ = read_binary<Move>(dir_ + "/moves_sobs.bin");
   obs_ = read_binary<RolloutStats>(dir_ + "/obs.bin");
-  plain_planes_ = read_binary<float>(dir_ + "/plain_planes.bin");
 
   ASSERT_GT(num_moves_, 0);
   ASSERT_EQ(int(sobs_moves_.size()), num_moves_);
   ASSERT_EQ(int(obs_.size()), num_moves_);
-  ASSERT_EQ(plain_planes_.size(), size_t(num_moves_) * kPlaneFloats);
 
   std::ifstream cases(dir_ + "/cases.txt");
   ASSERT_TRUE(cases) << "missing cases.txt";
@@ -282,16 +274,6 @@ void expect_case_matches(const MoveProposalPredictions& got, const EvidenceCase&
   EXPECT_LE(worst.gain, tol.gain) << c.name;
 }
 
-void expect_planes_match(const std::vector<float>& got, const std::vector<float>& ref,
-                         int num_moves, Tolerance tol) {
-  ASSERT_EQ(got.size(), size_t(num_moves) * kPlaneFloats);
-  Worst worst;
-  for (size_t i = 0; i < got.size(); ++i)
-    track(worst.planes, got[i], ref[i], "planes", int(i / kPlaneFloats));
-  std::cout << "  [cache planes] max err = " << worst.planes << " (tol " << tol.planes << ")\n";
-  EXPECT_LE(worst.planes, tol.planes);
-}
-
 // Two predictions over the same candidates, held to `tol` on every field.
 void expect_same_predictions(const MoveProposalPredictions& a, const MoveProposalPredictions& b,
                              Tolerance tol, const char* what) {
@@ -314,7 +296,6 @@ TEST_F(ProposalInferenceParityTest, MatchesPyTorchReferenceForEveryEvidenceCase)
   EXPECT_EQ(session.nets().trained_max_evidence(), scribblez::nn::kMaxEvidence);
   const MoveProposalPredictions plain = session.encode(board_.data(), moves_);
   ASSERT_TRUE(plain.gain.empty()) << "the cache graph emits no gain head";
-  expect_planes_match(session.cache().planes, plain_planes_, num_moves_, kFp32Tol);
 
   for (const EvidenceCase& c : cases_) {
     const MoveProposalPredictions& conditioned = session.condition(evidence_of(c));
@@ -345,7 +326,6 @@ TEST_F(ProposalInferenceParityTest, ChunksACandidateSetLargerThanTheEngines) {
 
   MoveProposalSession session(MoveProposalNets::create(nets_params(chunk)));
   session.encode(board_.data(), moves_);
-  expect_planes_match(session.cache().planes, plain_planes_, num_moves_, kFp32Tol);
   for (const EvidenceCase& c : cases_) {
     expect_case_matches(session.condition(evidence_of(c)), c, num_moves_, kFp32Tol);
   }

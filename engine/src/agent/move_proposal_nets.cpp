@@ -24,7 +24,6 @@ namespace {
 using nn::GainOutput;
 using nn::MoveProposalCacheSpec;
 using nn::MoveProposalStepSpec;
-using nn::PlanesOutput;
 using nn::ScoreDiffOutput;
 using nn::WldOutput;
 
@@ -151,7 +150,6 @@ void MoveProposalNets::run_cache(const float* board_row, const move_set::MoveFea
   cache->move_enc.resize(size_t(m) * c);
   cache->wld.resize(size_t(m) * WldOutput::kRowElems);
   cache->score_diff.resize(size_t(m) * ScoreDiffOutput::kRowElems);
-  cache->planes.resize(size_t(m) * PlanesOutput::kRowElems);
   cache->board.resize(size_t(kBoardCells) * c);
   cache->g.resize(size_t(3) * c);
 
@@ -179,8 +177,6 @@ void MoveProposalNets::run_cache(const float* board_row, const move_set::MoveFea
               cache->wld.data() + size_t(start) * WldOutput::kRowElems);
     copy_rows(cache_net_.host<ScoreDiffOutput>(), chunk, ScoreDiffOutput::kRowElems,
               cache->score_diff.data() + size_t(start) * ScoreDiffOutput::kRowElems);
-    copy_rows(cache_net_.host<PlanesOutput>(), chunk, PlanesOutput::kRowElems,
-              cache->planes.data() + size_t(start) * PlanesOutput::kRowElems);
   }
 }
 
@@ -195,7 +191,7 @@ void MoveProposalNets::run_step(const MoveProposalCache& cache, const EvidenceSe
   const int max_rows = step_net_.max_rows();
 
   const evidence::CachePredictions predictions{cache.move_enc.data(), cache.wld.data(),
-                                               cache.score_diff.data(), cache.planes.data(), c};
+                                               cache.score_diff.data(), c};
   const evidence::EvidenceStagingOutputs staged{
     step_net_.host<nn::EvMoveEncInput>(), step_net_.host<nn::EvObsPlanesInput>(),
     step_net_.host<nn::EvObsScalarsInput>(), step_net_.host<nn::EvMaskInput>()};

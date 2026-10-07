@@ -234,22 +234,6 @@ struct MoveEncHandoff {
   static constexpr bool kDynamic = true;
 };
 
-// planes (M, 4 * kSlotsPerCell, 225): the four placement heads' footprint
-// probabilities, softmaxed in-graph with the catch-all classes dropped. Each
-// head is kSlotsPerCell board-shaped channels: anchored class (cell, slot) sits
-// at channel head * kSlotsPerCell + slot, the predicted-channel layout of
-// agent/evidence_staging.h.
-//
-// Only the cache graph emits planes. They feed the "predicted" half of a
-// simmed candidate's evidence token, and nothing reads evidence-conditioned
-// planes, so the step graph omits them and avoids an M x 11,700-float buffer.
-struct PlanesOutput {
-  static constexpr const char* kName = "planes";
-  using Elem = float;
-  static constexpr int kRowElems = kPlacementHeads * kSlotsPerCell * kBoardCells;
-  static constexpr bool kDynamic = true;
-};
-
 // gain (M, 1): the proves-best expected gain, already non-negative (softplus
 // in-graph).
 struct GainOutput {
@@ -266,9 +250,9 @@ struct GainOutput {
 // move_proposal_nets.cpp static_asserts that the two agree, and the loader's
 // width check catches any drift from the exported graph.
 inline constexpr int kMaxEvidence = 64;
-// 117: observed + predicted footprint channels (4 heads x kSlotsPerCell each)
-// plus the candidate's own kSlotsPerCell-channel footprint one-hot.
-inline constexpr int kEvidencePlanes = (2 * kPlacementHeads + 1) * kSlotsPerCell;
+// 65: the observed footprint channels (4 heads x kSlotsPerCell) plus the
+// candidate's own kSlotsPerCell-channel footprint one-hot.
+inline constexpr int kEvidencePlanes = (kPlacementHeads + 1) * kSlotsPerCell;
 inline constexpr int kEvidenceScalars = 11;
 
 // The evidence inputs are static tensors of shape (1, E, ...). Folding E into
@@ -436,23 +420,18 @@ class MoveSetEvaluationSpec {
 // precision has not been validated for the evidence-fusion graph's masked_fill
 // and 4-D einsum.
 //
-// max_rows defaults differ by graph. The cache graph's planes output is 11,700
-// floats per candidate, held on device and in pinned host memory at max_rows:
-// 192 MB per side at 4096 against 48 MB at 1024. So the cache graph takes
-// 1024, and an extra chunk for a rare >1024-candidate turn costs nothing next
-// to the sims that turn runs. The step graph has no planes and only a few
-// C-wide floats per row, and runs once per evidence iteration, so it keeps
-// the move-set graph's 4096.
+// Both graphs take the move-set graph's 4096-row bound: neither emits a wide
+// per-candidate output, so a whole turn's candidate set runs in one chunk.
 
 // The cache graph: one position's board row plus M candidates, in, and the
-// handoff tensors plus the evidence-free predictions (wld, score_diff, planes),
-// out. Its inputs are the move-set graph's, staged the same way.
+// handoff tensors plus the evidence-free predictions (wld, score_diff), out.
+// Its inputs are the move-set graph's, staged the same way.
 class MoveProposalCacheSpec {
  public:
   static constexpr const char* kGraph = kGraphMoveProposalCache;
   static constexpr bool kAcceptUntaggedGraph = false;
   static constexpr const char* kAxisTag = "moves";
-  static constexpr int kDefaultMaxRows = 1024;
+  static constexpr int kDefaultMaxRows = 4096;
   static constexpr int kOptRows = 512;
 
   static constexpr const char* kChannelsTensor = MoveEncHandoff::kName;
@@ -466,8 +445,8 @@ class MoveProposalCacheSpec {
   using MoveInputs =
     TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput,
                MoveScalarsInput, MoveCrossCellsInput, MoveCrossLettersInput>;
-  using Outputs = TensorList<Static<BoardHandoff>, Static<GHandoff>, MoveEncHandoff, WldOutput,
-                             ScoreDiffOutput, PlanesOutput>;
+  using Outputs =
+    TensorList<Static<BoardHandoff>, Static<GHandoff>, MoveEncHandoff, WldOutput, ScoreDiffOutput>;
   using AuxOutputs = TensorList<>;
 };
 

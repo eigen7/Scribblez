@@ -702,7 +702,6 @@ def test_decision_analysis_matches_the_sidecar_and_is_plain_at_prefix_zero(gcg_s
         assert a.num_legal_moves == sobs.num_legal_moves
         assert len(a.sim_index) == len(sobs.moves)
         np.testing.assert_array_equal(a.conditioned(0).value, a.plain.value)
-        np.testing.assert_array_equal(a.conditioned(0).planes, a.plain.planes)
         top = max(sobs.evidence_prefix_sizes())
         if top > 0:
             assert not np.array_equal(a.conditioned(top).value, a.plain.value)
@@ -724,15 +723,8 @@ def test_decision_analysis_matches_the_sidecar_and_is_plain_at_prefix_zero(gcg_s
         marked = [m for m in view["moves"] if m["next_sim"]]
         if view["next_sim"] is not None:
             assert len(marked) == 1 and marked[0]["slot"] is None  # unsimmed
-        planes = view["planes"]
-        assert planes["slot"] == 0 and set(planes["heads"]) == {
-            "opp_next_placement",
-            "self_next_placement",
-            "opp_win_placement",
-            "self_win_placement",
-        }
-        assert np.asarray(planes["heads"]["opp_next_placement"]["truth"]).shape == (15, 15)
-        assert payload(a, notations, top, slot=None)["planes"] is None
+        assert view["selected_slot"] == 0
+        assert payload(a, notations, top, slot=None)["selected_slot"] is None
     metrics = position_set_metrics(analyses)
     assert metrics["posset_rows"] > 0
     assert 0.0 <= metrics["posset_cond_hit"] <= 1.0

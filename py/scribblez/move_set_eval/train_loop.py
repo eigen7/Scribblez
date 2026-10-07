@@ -22,10 +22,8 @@ LOSS_KEYS = (
     "score_diff",
     "score_diff_mean",
     "score_diff_std",
-    "planes",
 )
-# target_planes is present only on a plane-carrying corpus (dataset.has_planes).
-TARGET_KEYS = ("target_wld", "target_score_diff", "target_planes")
+TARGET_KEYS = ("target_wld", "target_score_diff")
 
 
 @dataclass
@@ -35,7 +33,6 @@ class LossConfig:
     lambda_sd: float
     huber_delta_mean: float
     huber_delta_std: float
-    lambda_planes: float
 
     @classmethod
     def from_args(cls, args) -> LossConfig:
@@ -43,7 +40,6 @@ class LossConfig:
             args.lambda_sd,
             args.huber_delta_mean,
             args.huber_delta_std,
-            args.lambda_planes,
         )
 
     def loss(self, outputs: dict, targets: dict) -> dict:
@@ -53,7 +49,6 @@ class LossConfig:
             lambda_sd=self.lambda_sd,
             huber_delta_mean=self.huber_delta_mean,
             huber_delta_std=self.huber_delta_std,
-            lambda_planes=self.lambda_planes,
         )
 
 

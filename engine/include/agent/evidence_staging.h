@@ -10,7 +10,7 @@
 //   - its move encoding, from the cache graph's per-move output;
 //   - its sim observation: the four rollout footprint histograms and the
 //     outcome moments;
-//   - the model's evidence-free prediction for it: footprint planes and value.
+//   - the model's evidence-free prediction for it: its value.
 // Giving the fusion stage observation and prediction side by side lets it
 // learn the residual k*(obs - prior) rather than a correction from the
 // observation alone (docs/plans/sim_residual_feedback.md).
@@ -35,14 +35,12 @@ namespace evidence {
 
 // Per-token spatial channels, in EVIDENCE_PLANE_NAMES order:
 //   - observed: 4 heads x kSlotsPerCell, rollout footprint frequencies;
-//   - predicted: 4 heads x kSlotsPerCell, the model's footprint probabilities;
 //   - the candidate's own footprint: kSlotsPerCell, one-hot.
 // Within a block, anchored footprint class (cell, slot) lands on channel
 // (head * kSlotsPerCell + slot) at that cell. The two catch-all classes (pass,
 // not-win) are dropped and nothing is renormalized.
 inline constexpr int kNumObservedPlanes = kPlacementHeads * kSlotsPerCell;
-inline constexpr int kNumPredictedPlanes = kPlacementHeads * kSlotsPerCell;
-inline constexpr int kNumEvidencePlanes = kNumObservedPlanes + kNumPredictedPlanes + kSlotsPerCell;
+inline constexpr int kNumEvidencePlanes = kNumObservedPlanes + kSlotsPerCell;
 inline constexpr int kEvidencePlaneCells = BOARD_SIZE * BOARD_SIZE;
 
 // Per-token scalars, in EVIDENCE_SCALAR_NAMES order:
@@ -56,14 +54,11 @@ inline constexpr int kNumPredictedScalars = 5;
 inline constexpr int kNumEvidenceScalars = kNumObservedScalars + kNumPredictedScalars;
 
 // The cache graph's raw per-candidate outputs, one row per scored candidate:
-// the evidence-free half of every token. The WLD logits are softmaxed here;
-// the planes arrive already decoded by the graph.
+// the evidence-free half of every token. The WLD logits are softmaxed here.
 struct CachePredictions {
   const float* move_enc;    // (num_scored, channels), row-major
   const float* wld_logits;  // (num_scored, 3)
   const float* score_diff;  // (num_scored, 2) = [mean, std]
-  // Footprint probabilities, already in the predicted-block channel layout.
-  const float* plane_probs;  // (num_scored, kNumPredictedPlanes, kEvidencePlaneCells)
   int channels;
 };
 

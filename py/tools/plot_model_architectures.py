@@ -712,8 +712,8 @@ def evidence_fusion() -> Diagram:
         26,
         [
             title("obs_planes"),
-            sub("52 observed ‖ 52 predicted ‖ 13 footprint"),
-            mono("(P, E, 117, 15, 15)"),
+            sub("52 observed ‖ 13 footprint"),
+            mono("(P, E, 65, 15, 15)"),
         ],
         "input",
     )
@@ -740,7 +740,7 @@ def evidence_fusion() -> Diagram:
         170,
         [
             title("plane_conv"),
-            sub("Conv 9 → d 1×1 → ReLU → Conv d → d 3×3"),
+            sub("Conv 65 → d 1×1 → ReLU → Conv d → d 3×3"),
             mono("feats   (P, E, d, 15, 15)"),
         ],
         "op",

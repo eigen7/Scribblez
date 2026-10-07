@@ -21,7 +21,6 @@ from scribblez.evidence.train_loop import (
     evaluate,
     run_epoch,
 )
-from scribblez.footprint_spatial import NUM_CLASSES
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.move_set_eval import train_loop as mset_train_loop
 from scribblez.move_set_eval.dataset import MsetDataset
@@ -190,14 +189,13 @@ def _fabricated_plain(m: int, seed: int = 0):
     return {
         "wld": torch.randn(m, 3, generator=gen),
         "score_diff": torch.randn(m, 2, generator=gen),
-        "planes": torch.randn(m, 4, NUM_CLASSES, generator=gen),
     }
 
 
 def test_batch_evidence_inputs_aligns_the_halves_for_arbitrary_subsets():
     """The batched builder over non-contiguous subsets equals collating the
     deployment per-position builder over each subset's members: the observed
-    half (raw .sobs records) and the predicted half (the plain pass) are
+    half (raw .sobs records) and the predicted value (the plain pass) are
     gathered in the same enumeration, so a token's observation and prediction
     describe the same candidate."""
     from scribblez.move_set_eval.evidence import build_evidence_inputs, collate_evidence
@@ -221,7 +219,7 @@ def test_batch_evidence_inputs_aligns_the_halves_for_arbitrary_subsets():
         members = np.flatnonzero(mask)
         rows = offset + members
         offset += len(pos.moves)
-        first = {kk: plain[kk][rows] for kk in ("wld", "score_diff", "planes")}
+        first = {kk: plain[kk][rows] for kk in ("wld", "score_diff")}
         cross = {"cells": move_args[5][rows].numpy(), "letters": move_args[6][rows].numpy()}
         items.append(
             build_evidence_inputs(
@@ -428,16 +426,9 @@ def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets
     model = _unfrozen_model(train, device)
     assert not model.backbone_frozen
     before = evaluate(model, hold, device, positions_per_batch=4, max_e=8)
-    plane_heads = ("plane_proj.", "plane_catch.")
-    backbone = [
-        (n, p)
-        for n, p in model.named_parameters()
-        if not model._is_evidence_param(n) and not n.startswith(plane_heads)
-    ]
-    planes = [(n, p) for n, p in model.named_parameters() if n.startswith(plane_heads)]
-    assert backbone and planes
+    backbone = [(n, p) for n, p in model.named_parameters() if not model._is_evidence_param(n)]
+    assert backbone
     backbone_before = [p.detach().clone() for _, p in backbone]
-    planes_before = [p.detach().clone() for _, p in planes]
     params = _unfrozen_params(lr=1e-2, backbone_lr_mult=0.1)
     opt = trainer.build_optimizer(model, params)
     assert len(opt.param_groups) == 2
@@ -447,7 +438,6 @@ def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets
     def recording_step(*a, **k):
         seen_lrs.append(tuple(g["lr"] for g in opt.param_groups))
         assert all(p.grad is not None for _, p in backbone)
-        assert all(p.grad is None for _, p in planes)
         return real_step(*a, **k)
 
     opt.step = recording_step
@@ -457,11 +447,6 @@ def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets
     assert seen_lrs and all(lrs == (1e-2, pytest.approx(1e-3)) for lrs in seen_lrs)
     pairs = zip(backbone_before, [p for _, p in backbone], strict=True)
     assert all(not torch.equal(a, b.detach()) for a, b in pairs if b.numel() > 1)
-    # No gradient means no step, weight decay included (AdamW skips them).
-    assert all(
-        torch.equal(a, b.detach())
-        for a, b in zip(planes_before, [p for _, p in planes], strict=True)
-    )
     after = evaluate(model, hold, device, positions_per_batch=4, max_e=8)
     assert after["plain_wld_ce"] != pytest.approx(before["plain_wld_ce"], abs=1e-6)
     assert after["exact_p0_maxdiff"] == 0.0
@@ -475,7 +460,7 @@ def test_mset_evaluate_loss_is_the_candidate_weighted_distillation_loss(mset_hol
     hold = mset_holdout
     device = torch.device("cuda")
     model = MoveSetEvalModel(hold.spatial_planes, hold.scalar_size, 8, 1, 2).to(device).eval()
-    cfg = mset_train_loop.LossConfig(0.004, 10.0, 10.0, 1.0)
+    cfg = mset_train_loop.LossConfig(0.004, 10.0, 10.0)
     got = mset_eval.evaluate(model, hold, device, positions_per_batch=3, loss_cfg=cfg)
     total = wld = 0.0
     n = 0
@@ -723,7 +708,7 @@ def test_batched_evidence_builder_matches_the_per_position_one(traj_datasets):
                 members = np.flatnonzero(in_ev[offset : offset + len(pos.moves)])
                 rows = torch.from_numpy(offset + members).to(device)
                 offset += len(pos.moves)
-                first = {kk: plain[kk][rows] for kk in ("wld", "score_diff", "planes")}
+                first = {kk: plain[kk][rows] for kk in ("wld", "score_diff")}
                 cross = {
                     "cells": batch["move_cross_cells"][rows.cpu()].numpy(),
                     "letters": batch["move_cross_letters"][rows.cpu()].numpy(),

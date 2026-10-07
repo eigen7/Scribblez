@@ -171,11 +171,9 @@ In rough order of what each answers.
    budget needed for a fixed decision quality, against a fixed-top-K schedule.
    Sims dominate think time, so a 2× budget saving is a 2× stronger agent per
    second. This is where the sequential loop's early stopping shows up.
-4. **The placement-plane ablation.** Evidence tokens with and without the
-   model's predicted planes. The kill-test could not price the planes at a
-   root-WLD readout; promotion is the readout that can. This experiment settles
-   whether the plane-carrying `.mset` record (~950 B against v1's 36 B) earns
-   its size.
+4. **The placement-plane ablation** (retired). The student no longer
+   predicts placement planes, so evidence tokens carry only the observed ones
+   and the `.mset` record is back to its value targets.
 5. **Rollout-ladder rungs**, each behind its `.sobs` flag: value truncation
    against terminal rollouts, then self-model plies, then the endgame solver
    on a slice with at most N tiles in the bag.

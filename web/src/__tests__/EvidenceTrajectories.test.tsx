@@ -32,7 +32,7 @@ function payload(prefix: number, slot: number) {
     next_sim: 2,
     trajectory: [card(0, 0, '8H ANCHOR', prefix > 0), card(1, 1, '8H PROP', prefix > 1), card(2, 5, '8H OFFPOL', false, true)],
     moves: [row(0, '8H ANCHOR', { slot: 0, sim_value: 0.5 }), row(1, '8H PROP', { slot: 1, sim_value: 0.5 }), row(2, '8H NEXT', { next_sim: true })],
-    planes: { slot, n: 8, heads: {} },
+    selected_slot: slot,
   };
 }
 

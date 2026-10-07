@@ -13,14 +13,10 @@
 // raw move_enc handoff tensors. The sharing therefore saves memory (one engine
 // pair per run) but brings no cross-caller batching.
 //
-// Row bounds: the cache graph's `planes` output is 4 * kSlotsPerCell * 225
-// floats per candidate, allocated at the row bound on device and in pinned
-// host memory, so the cache spec defaults to 1024 rows rather than the
-// move-set graph's 4096; a turn with more candidates pays one extra launch.
-// The step graph emits no planes, since nothing reads a conditioned plane, so
-// its rows are cheap. It keeps the 4096 bound because each extra step chunk
-// is paid on every loop iteration, under the shared mutex, and re-runs the
-// position-level fusion.
+// Row bounds: both graphs take the move-set graph's 4096 rows, so a whole
+// turn's candidate set runs in one chunk. An extra step chunk would be paid on
+// every loop iteration, under the shared mutex, re-running the position-level
+// fusion.
 
 #include "agent/move_proposal_service.h"
 #include "nn/model_specs.h"
@@ -44,12 +40,8 @@ struct MoveProposalCache {
   std::vector<float> move_enc;    // (M, C) raw
   std::vector<float> wld;         // (M, 3) raw logits
   std::vector<float> score_diff;  // (M, 2) [mean, std]
-  // (M, 4*kSlotsPerCell, 225) footprint probabilities in evidence-channel
-  // layout (evidence_staging.h), read by scored index when a simmed
-  // candidate's evidence token is staged.
-  std::vector<float> planes;
-  std::vector<float> board;  // (225, C) raw
-  std::vector<float> g;      // (3C,) raw
+  std::vector<float> board;       // (225, C) raw
+  std::vector<float> g;           // (3C,) raw
 };
 
 class MoveProposalNets {
