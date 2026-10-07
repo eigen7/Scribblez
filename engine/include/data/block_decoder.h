@@ -49,6 +49,11 @@ class BlockDecoder {
   // this decoder is next used.
   const Board& board() const { return pos_.enc().board(); }
 
+  // The board just before turn `turn_idx`'s move, replayed without encoding a
+  // row, for consumers that need only the board (e.g. reply blocking). Valid
+  // until this decoder is next used.
+  const Board& replay_board(const char* buf, uint32_t game_idx, uint32_t turn_idx);
+
  private:
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);
 
