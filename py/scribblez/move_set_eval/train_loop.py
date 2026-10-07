@@ -3,6 +3,11 @@ position_eval/train_loop.
 
 Batches hold varying numbers of candidate moves and each batch loss is a mean
 over its moves, so the epoch averages are weighted by candidate count.
+
+The training forward runs under bf16 autocast, with the loss computed in fp32
+on upcast outputs (trainer.py's module docstring has the rationale). The
+epoch's loss sums stay on the device: with no host readback per step, the CPU
+builds the next batch while the GPU still runs the current one.
 """
 
 from __future__ import annotations
@@ -70,10 +75,18 @@ def _forward_args(batch: dict, device):
 
 
 def batch_loss(model, batch: dict, device, loss_cfg: LossConfig) -> dict:
-    """Plain (evidence-free) forward and distillation loss for one batch,
+    """Plain (evidence-free) fp32 forward and distillation loss for one batch,
     as compute_loss' dict."""
     inputs, move_args, targets = _forward_args(batch, device)
     return loss_cfg.loss(model(*inputs, *move_args), targets)
+
+
+def _training_loss(model, batch: dict, device, loss_cfg: LossConfig) -> dict:
+    """batch_loss with the network under bf16 autocast and the loss in fp32."""
+    inputs, move_args, targets = _forward_args(batch, device)
+    with torch.autocast(device.type, dtype=torch.bfloat16):
+        outputs = model(*inputs, *move_args)
+    return loss_cfg.loss({k: v.float() for k, v in outputs.items()}, targets)
 
 
 def run_epoch(
@@ -98,7 +111,7 @@ def run_epoch(
     grad_clip: global gradient-norm clip; 0 disables.
     """
     model.train()
-    sums = {k: 0.0 for k in LOSS_KEYS}
+    sums = {k: torch.zeros((), device=device) for k in LOSS_KEYS}
     weight_sum = 0
     n_batches = 0
     candidates = 0
@@ -111,7 +124,7 @@ def run_epoch(
             for group in optimizer.param_groups:
                 group["lr"] = lr
 
-        losses = batch_loss(model, batch, device, loss_cfg)
+        losses = _training_loss(model, batch, device, loss_cfg)
         optimizer.zero_grad()
         losses["total"].backward()
         if grad_clip > 0:
@@ -124,14 +137,14 @@ def run_epoch(
         weight_sum += m
         rows_trained += m
         for k in sums:
-            sums[k] += losses[k].item() * m
+            sums[k] += losses[k].detach() * m
 
         if on_batch is not None and time.time() - last_progress > 1.0:
             on_batch(n_batches, candidates, time.time() - t0, rows_trained)
             last_progress = time.time()
 
     return EpochResult(
-        losses={k: v / max(weight_sum, 1) for k, v in sums.items()},
+        losses={k: v.item() / max(weight_sum, 1) for k, v in sums.items()},
         n_batches=n_batches,
         candidates=candidates,
         rows_trained=rows_trained,

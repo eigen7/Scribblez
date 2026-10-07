@@ -375,7 +375,7 @@ class MoveSetEvalModel(nn.Module):
         # only on the board and cost ~C times the attention math they feed, so
         # this amortizes them across candidates the same way the trunk is.
         rank, max_k = _rank_within_position(pos_id, board.shape[0])
-        queries = board.new_zeros(board.shape[0], max_k, board.shape[2])  # (P, maxK, C)
+        queries = e.new_zeros(board.shape[0], max_k, board.shape[2])  # (P, maxK, C)
         queries[pos_id, rank] = e
         # Returning the weights would materialize a (P, maxK, 225) tensor, the
         # largest in the grid, and keep the call off the fused kernels.

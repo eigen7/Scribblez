@@ -24,6 +24,26 @@ All reads and writes go through the worker's sink (cloud/sinks.py): the store
 is pulled through it before every look, and exports, checkpoints, records and
 stats are delivered through it. A local worker and one on a rented GPU run the
 same code with different sinks (docs/cloud_compute.md).
+
+Training-step performance. The forward runs under bf16 autocast (fp32
+weights, optimizer state and loss), as in position_eval/trainer.py, and
+remaining fp32 matmuls use TF32. On the transformer trunk the training forward
+is also torch.compile'd, while every other pass (BatchNorm recalibration,
+evals, ONNX export, checkpointing) uses the eager module, so state-dict keys
+and the exported graph are unaffected. The compiled graphs settle after the
+first few batches although every batch has its own candidate count. Together
+with the transformer profile's dropped activation checkpointing this takes
+training from 3.6k to 19.8k rows/s end to end at 64 positions per batch (RTX
+5000 Ada), with gradients matching the eager model's.
+
+Two measured exceptions. The conv trunk is not compiled: its compiled
+gradients are wrong (NaN through the whole trunk when the full model is
+compiled; with only the trunk compiled, one disagrees with eager at cosine
+-0.09), and bf16 eager is already its fastest arm (24k -> 31k rows/s). And
+Inductor's persistent reductions are off: with them, one fused backward
+reduction in the transformer trunk (its sin/cos terms point at the rotary
+embedding) became a 15 MB kernel that ptxas had not assembled after ten
+minutes.
 """
 
 import functools
@@ -33,6 +53,7 @@ import time
 from dataclasses import asdict, dataclass
 
 import torch
+import torch._inductor.config as inductor_config
 from cloud import worker_deps
 
 from scribblez import params as params_mod
@@ -50,6 +71,7 @@ from scribblez.move_set_eval.targets import complete_pairs, read_mset_flags
 from scribblez.move_set_eval.train_loop import LossConfig, run_epoch
 from scribblez.spatial_trunk import transformer_config
 from scribblez.train_common import timed_print
+from scribblez.trunk_arms import TRUNK_TRANSFORMER
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.move_set_eval import SLOGS_DIR, split_pairs
@@ -299,7 +321,7 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
     rows_before = state.rows_trained
     optim_arm.train_mode()
     result = run_epoch(
-        model,
+        ctx["train_model"],
         optimizer,
         batches,
         device,
@@ -450,6 +472,10 @@ def run(ctx: WorkerContext) -> int:
     print(f"Model: {n_params:,} parameters")
     publish_config(recorder, ctx.tag, params, n_params)  # re-stamp with the parameter count
     optimizer = build_optimizer(model, params, _rows_per_step(train_ds, params))
+    # See "Training-step performance" in the module docstring.
+    torch.set_float32_matmul_precision("high")
+    inductor_config.triton.persistent_reductions = False
+    train_model = torch.compile(model) if params.trunk == TRUNK_TRANSFORMER else model
 
     # The checkpoint config also records what the model was built against
     # (information condition, input widths, move-encoding version), so a
@@ -463,6 +489,7 @@ def run(ctx: WorkerContext) -> int:
             "scalar_size": train_ds.scalar_size,
             "move_encoding_version": move_encoding_version(),
         },
+        "train_model": train_model,
         "train_ds": train_ds,
         "holdout_ds": holdout_ds,
         "loss_cfg": LossConfig.from_args(params),
