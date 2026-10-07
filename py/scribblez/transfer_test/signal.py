@@ -29,7 +29,7 @@ import numpy as np
 
 from scribblez.ffi import reply_blocking
 from scribblez.transfer_test.corpus import CorpusFile
-from scribblez.transfer_test.evaluate import BAGS
+from scribblez.transfer_test.evaluate import BAGS, decided
 
 MIN_CANDIDATES = 3
 THREAT_SHARE = 0.03
@@ -70,7 +70,7 @@ def position_columns(f: CorpusFile, blocked: np.ndarray, p: int) -> dict[str, np
     n = lab["n"].astype(np.float64)
     label = (lab["wins"] + 0.5 * lab["draws"]) / n
     plausible = pr.candidates["stratum"][c0:c1] <= 1
-    if k < MIN_CANDIDATES or plausible.sum() < 2 or np.ptp(label[plausible]) < 1e-9:
+    if k < MIN_CANDIDATES or decided(label, plausible):
         return None
     rec = pr.records[c0 * pr.probes : c1 * pr.probes]
     outcome = (rec["p_win"] + 0.5 * rec["p_draw"]).astype(np.float64).reshape(k, pr.probes)
