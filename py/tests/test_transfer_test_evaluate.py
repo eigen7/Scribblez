@@ -9,8 +9,9 @@ import torch
 from scribblez.paths import TagPaths
 from scribblez.transfer_test import evaluate as ev
 from scribblez.transfer_test import trainer
+from scribblez.transfer_test.prior import uninformative
 from scribblez.transfer_test.reader import Reader, ReaderConfig
-from scribblez.transfer_test.rows import LEAF, RowConfig, assemble_row
+from scribblez.transfer_test.rows import CANDIDATE, LEAF, ROOT, ROOT_TOKENS, RowConfig, assemble_row
 from tests.test_transfer_test_reader_data import TEACHER_WIDTH, fake_file
 
 needs_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="FlexAttention needs CUDA")
@@ -106,3 +107,32 @@ def test_an_untrained_reader_scores_as_the_prior(tmp_path):
     reader, prior = result["overall"]["reader"], result["overall"]["prior"]
     assert reader["heldout_rmse"] == pytest.approx(prior["heldout_rmse"], abs=1e-6)
     assert reader["pair_accuracy"] == pytest.approx(prior["pair_accuracy"])
+    no_probes = result["overall"]["no_probes"]
+    assert no_probes["heldout_rmse"] == pytest.approx(prior["heldout_rmse"], abs=1e-6)
+    lo, hi = result["intervals_vs_shuffled"]["reader"]["heldout_rmse"]
+    assert lo == pytest.approx(0, abs=1e-6) and hi == pytest.approx(0, abs=1e-6)
+
+
+def test_without_probes_leaves_the_root_and_the_candidates(tmp_path):
+    f = fake_file(tmp_path, k=5)
+    cfg = RowConfig(max_held_out=2, max_probes=8, max_tokens=2048, query_points=1)
+    row = ev.without_probes(assemble_row(f, 0, 0, cfg, np.random.default_rng(0)))
+    assert len(row.kind) == ROOT_TOKENS + 5
+    assert set(row.kind.tolist()) == {ROOT, CANDIDATE}
+    assert (row.query_prefix == ROOT_TOKENS + 5).all()
+
+
+def test_an_uninformative_prior_says_the_same_of_every_candidate(tmp_path):
+    f = fake_file(tmp_path, k=5)
+    f.prior.wld[:] = np.random.default_rng(0).dirichlet(np.ones(3), size=5)
+    root = f.prior.root_board
+    f.prior = uninformative(f.prior)
+    assert f.prior.root_board is root
+    cfg = RowConfig(max_held_out=2, max_probes=8, max_tokens=2048, query_points=1)
+    row = assemble_row(f, 0, 0, cfg, np.random.default_rng(0))
+    for name in ("prior_value", "prior_placement"):
+        assert (row.candidate[name] == row.candidate[name][0]).all()
+
+
+def test_a_run_without_a_prior_setting_used_the_teacher():
+    assert ev.run_params({**PARAMS, "reader": {}}).prior == "teacher"

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Score a transfer_reader tag's reader and the baseline arms on a
-transfer_test corpus tag (docs/plans/supreme_bot_m1a.md, PR 5): held-out and
-probed within-row error and held-out pair accuracy, overall and by tiles in
-the bag, with bootstrap intervals against the prior. See
+transfer_test corpus tag (docs/plans/supreme_bot_m1a.md, PR 5), loaded under
+the run's prior: held-out and probed within-row error and held-out pair
+accuracy, overall and by tiles in the bag, with bootstrap intervals against
+the prior and against the shuffled control. See
 scribblez/transfer_test/evaluate.py. The report is printed and written as JSON
 under the reader tag's evaluations/.
 
@@ -16,7 +17,7 @@ import json
 import torch
 from scribblez.paths import TagPaths, add_mount_root_argument
 from scribblez.transfer_test.corpus import load_corpus
-from scribblez.transfer_test.evaluate import ARMS, evaluate, load_reader
+from scribblez.transfer_test.evaluate import ARMS, evaluate, load_reader, run_params
 from scribblez.transfer_test.trainer import best_checkpoint_path
 from scribblez.workloads.transfer_reader import SPEC as READER_SPEC
 from scribblez.workloads.transfer_test import CORPUS_DIR
@@ -28,6 +29,7 @@ LABELS = {
     "common_shift": "common shift",
     "reader": "reader",
     "shuffled": "reader, shuffled outcomes",
+    "no_probes": "reader, no probes",
 }
 
 
@@ -38,12 +40,15 @@ def print_report(r: dict):
         f"shrinkage weight {r['shrinkage_probes']} probes"
     )
     header = f"{'arm':<28}{'held-out err':>13}{'probed err':>12}{'pair acc':>10}"
-    print(f"\n{header}   held-out err vs prior")
+    print(f"\n{header}   held-out err vs prior     vs shuffled")
     for arm in ARMS:
-        m, ci = r["overall"][arm], r["intervals_vs_prior"][arm]["heldout_rmse"]
+        m = r["overall"][arm]
+        ci = r["intervals_vs_prior"][arm]["heldout_rmse"]
+        cs = r["intervals_vs_shuffled"][arm]["heldout_rmse"]
         print(
             f"{LABELS[arm]:<28}{m['heldout_rmse']:13.4f}{m['probed_rmse']:12.4f}"
-            f"{m['pair_accuracy']:10.3f}   [{ci[0]:+.4f}, {ci[1]:+.4f}]"
+            f"{m['pair_accuracy']:10.3f}   [{ci[0]:+.4f}, {ci[1]:+.4f}]  "
+            f"[{cs[0]:+.4f}, {cs[1]:+.4f}]"
         )
     print("\nby tiles in the bag (held-out error / pair accuracy):")
     print(f"{'bag':<8}{'positions':>10}" + "".join(f"{a:>20}" for a in ARMS))
@@ -72,11 +77,13 @@ def main():
     )
     device = torch.device(args.device)
     reader, config = load_reader(path, device)
+    prior = run_params(config).prior
     files = load_corpus(
-        TagPaths(args.test_tag, CORPUS_SPEC.name, args.mount_root).data_dir / CORPUS_DIR
+        TagPaths(args.test_tag, CORPUS_SPEC.name, args.mount_root).data_dir / CORPUS_DIR, prior
     )
     result = {
         "reader_tag": args.reader_tag,
+        "prior": prior,
         "checkpoint": str(path),
         "test_tag": args.test_tag,
         "replicates": args.replicates,

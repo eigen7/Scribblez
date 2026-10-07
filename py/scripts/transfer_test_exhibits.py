@@ -6,7 +6,8 @@ See scribblez/transfer_test/exhibits.py.
     transfer_test_exhibits.py build [--out DIR]
         the exhibits' probes, labels and prior cache
     transfer_test_exhibits.py score --reader-tag TAG [--out DIR] [--checkpoint best|last]
-        each exhibit's blocker-minus-open gap: labels, prior and reader
+        each exhibit's blocker-minus-open gap: labels, prior and reader, the
+        exhibits loaded under the run's prior
 """
 
 import argparse
@@ -16,7 +17,7 @@ from pathlib import Path
 import torch
 from scribblez.paths import TagPaths, add_mount_root_argument
 from scribblez.transfer_test import exhibits
-from scribblez.transfer_test.evaluate import load_reader
+from scribblez.transfer_test.evaluate import load_reader, run_params
 from scribblez.transfer_test.trainer import best_checkpoint_path
 from scribblez.workloads.transfer_reader import SPEC as READER_SPEC
 
@@ -24,15 +25,20 @@ DEFAULT_OUT = Path("/workspace/mount/m1a-exhibits")
 
 
 def print_scores(scores: dict):
-    print(f"{'exhibit':<14}{'labels':>9}{'prior':>9}{'reader':>9}{'shuffled':>10}{'probed':>9}")
+    print(
+        f"{'exhibit':<14}{'labels':>9}{'prior':>9}{'reader':>9}{'shuffled':>10}"
+        f"{'no probes':>11}{'probed':>9}"
+    )
     for name, s in scores.items():
         print(
             f"{name:<14}{s['label_gap']:9.3f}{s['prior_gap']:9.3f}{s['reader_gap_held_out']:9.3f}"
-            f"{s['reader_gap_shuffled']:10.3f}{s['reader_gap_probed']:9.3f}"
+            f"{s['reader_gap_shuffled']:10.3f}{s['reader_gap_no_probes']:11.3f}"
+            f"{s['reader_gap_probed']:9.3f}"
         )
     print(
         "\nThe blocker-minus-open gap in expected score: blockers held out (reader), their "
-        "outcomes\nshuffled among the probes (shuffled), or their own probes kept (probed)."
+        "outcomes\nshuffled among the probes (shuffled), every probe removed (no probes), or "
+        "the blockers'\nown probes kept (probed)."
     )
 
 
@@ -57,7 +63,7 @@ def main():
     path = best_checkpoint_path(paths) if args.checkpoint == "best" else paths.rolling_checkpoint
     device = torch.device(args.device)
     reader, config = load_reader(path, device)
-    f, blockers = exhibits.load(args.out)
+    f, blockers = exhibits.load(args.out, run_params(config).prior)
     scores = exhibits.score(reader, config, f, blockers, device)
     print_scores(scores)
     out = paths.root / "evaluations" / f"exhibits.{args.checkpoint}.json"

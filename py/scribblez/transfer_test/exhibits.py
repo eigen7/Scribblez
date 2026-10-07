@@ -36,7 +36,12 @@ from scribblez.ffi import gcg_sim_evidence, position_eval_board_json
 from scribblez.paths import ENGINE_DIR, REPO_ROOT
 from scribblez.sim_evidence.sobs import MOVE_EXCHANGE, glyph_char
 from scribblez.transfer_test.corpus import CorpusFile, load_file
-from scribblez.transfer_test.evaluate import eval_row_config, reader_estimates, shuffled
+from scribblez.transfer_test.evaluate import (
+    eval_row_config,
+    reader_estimates,
+    shuffled,
+    without_probes,
+)
 from scribblez.transfer_test.prior import compute_prior, load_teacher, prior_path, write_prior
 from scribblez.transfer_test.probes import read_sprobe
 from scribblez.transfer_test.reader import Reader
@@ -177,11 +182,13 @@ def build(
     write_prior(compute_prior(model.to(device), read_sprobe(sprobe), device), prior_path(sprobe))
 
 
-def load(out: Path) -> tuple[CorpusFile, dict[str, np.ndarray]]:
+def load(out: Path, prior_kind: str) -> tuple[CorpusFile, dict[str, np.ndarray]]:
+    """The exhibits' probes under a reader run's prior kind, and their
+    blockers."""
     (sprobe,) = out.glob("*.sprobe")
     with np.load(out / "blockers.npz") as z:
         blockers = {k: z[k] for k in z.files}
-    return load_file(sprobe), blockers
+    return load_file(sprobe, prior_kind), blockers
 
 
 @dataclass
@@ -230,7 +237,7 @@ def score(
 ) -> dict:
     """Per exhibit: the blocker-minus-open gap in expected score for the
     labels, the prior and the reader, with the blockers held out, with their
-    probes kept, and with outcomes shuffled."""
+    probes kept, with outcomes shuffled, and with no probes at all."""
     cfg = dataclasses.replace(eval_row_config(params), max_held_out=2 * HELD_PER_GROUP)
     rng = np.random.default_rng(seed)
     result = {}
@@ -249,6 +256,9 @@ def score(
             "reader_gap_held_out": _gap(reader_estimates(reader, held.rows, device), held),
             "reader_gap_shuffled": _gap(
                 reader_estimates(reader, [shuffled(r, rng) for r in held.rows], device), held
+            ),
+            "reader_gap_no_probes": _gap(
+                reader_estimates(reader, [without_probes(r) for r in held.rows], device), held
             ),
             "reader_gap_probed": _gap(reader_estimates(reader, kept.rows, device), kept),
         }

@@ -7,7 +7,7 @@ every arm sees the same held-out moves and the same kept probes.
 
 Arms, each an expected score (win + draw / 2) per candidate:
 
-    prior          the teacher's
+    prior          the teacher's, or a constant under the run's prior "none"
     shrinkage      each probed candidate's mean probe outcome shrunk toward its
                    prior with the weight of `k` probes; held-out candidates keep
                    the prior. `k` is fitted on the test rows' probed candidates,
@@ -19,6 +19,8 @@ Arms, each an expected score (win + draw / 2) per candidate:
     shuffled       the reader with each row's probe outcomes permuted among its
                    probes: evidence of the same shape that no longer belongs to
                    its candidates (a control)
+    no_probes      the reader with every probe removed from the context: what
+                   it knows from the candidates and the board alone (a control)
 
 Metrics, over positions whose plausible candidates' labels differ (decided
 positions are counted, not scored), overall and by tiles in the bag:
@@ -31,7 +33,11 @@ positions are counted, not scored), overall and by tiles in the bag:
                      the arm orders correctly (ties count half)
 
 Each arm's difference from the prior gets a 95% interval by bootstrap over
-positions.
+positions, and so does each from the shuffled control. Without the teacher's
+prior the reader can learn a static evaluator of candidates, which beats a
+constant prior with no transfer at all, so there the headline is the
+reader's held-out error minus the shuffled control's: what the evidence
+itself adds.
 """
 
 from __future__ import annotations
@@ -44,12 +50,15 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from scribblez import params as params_mod
 from scribblez.transfer_test.corpus import CorpusFile
 from scribblez.transfer_test.reader import Reader, ReaderConfig
-from scribblez.transfer_test.rows import LEAF, Row, RowConfig, assemble_row
+from scribblez.transfer_test.rows import LEAF, ROOT_TOKENS, Row, RowConfig, assemble_row
 from scribblez.transfer_test.tokens import collate
+from scribblez.workloads.transfer_reader import TransferReaderParams
 
-ARMS = ("prior", "shrinkage", "common_shift", "reader", "shuffled")
+ARMS = ("prior", "shrinkage", "common_shift", "reader", "shuffled", "no_probes")
+READER_ARMS = ("reader", "shuffled", "no_probes")
 BAGS = ((1, 3), (4, 7), (8, 11), (12, 15))
 SHRINK_GRID = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 PAIR_NOISE_MULTIPLE = 2.0
@@ -64,6 +73,13 @@ def load_reader(path, device) -> tuple[Reader, dict]:
     reader = Reader(ReaderConfig(**ckpt["config"]["reader"]))
     reader.load_state_dict(ckpt["model_state_dict"])
     return reader.to(device).eval(), ckpt["config"]
+
+
+def run_params(config: dict) -> TransferReaderParams:
+    """The run's params from a checkpoint's config, defaults filled in."""
+    return params_mod.validate(
+        TransferReaderParams, {k: v for k, v in config.items() if k != "reader"}
+    )
 
 
 def eval_row_config(params: dict) -> RowConfig:
@@ -165,6 +181,20 @@ def shuffled(row: Row, rng: np.random.Generator) -> Row:
     return dataclasses.replace(row, leaf=row.leaf[rng.permutation(len(row.leaf))])
 
 
+def without_probes(row: Row) -> Row:
+    """`row` with its context cut to the root and candidate tokens, every
+    query asked there. The probes' feature tables stay, unreferenced."""
+    n = ROOT_TOKENS + len(row.held_out)
+    return dataclasses.replace(
+        row,
+        kind=row.kind[:n],
+        slot=row.slot[:n],
+        ply=row.ply[:n],
+        ref=row.ref[:n],
+        query_prefix=np.full_like(row.query_prefix, n),
+    )
+
+
 @torch.no_grad()
 def reader_estimates(reader: Reader, rows: list[Row], device, batch: int = 32) -> list[np.ndarray]:
     """Each row's per-candidate expected score from the reader at the full
@@ -183,17 +213,18 @@ def reader_estimates(reader: Reader, rows: list[Row], device, batch: int = 32) -
 
 
 def assemble(files: list[CorpusFile], cfg: RowConfig, replicates: int, seed: int):
-    """(rows, the same rows with shuffled outcomes, their scored records)."""
+    """(each reader arm's rows, by READER_ARMS name; their scored records)."""
     rng = np.random.default_rng(seed)
-    rows, shuffles, scored = [], [], []
+    rows, scored = {arm: [] for arm in READER_ARMS}, []
     for i, f in enumerate(files):
         for p in range(f.num_positions):
             for _ in range(replicates):
                 row = assemble_row(f, i, p, cfg, rng)
-                rows.append(row)
-                shuffles.append(shuffled(row, rng))
+                rows["reader"].append(row)
+                rows["shuffled"].append(shuffled(row, rng))
+                rows["no_probes"].append(without_probes(row))
                 scored.append(score_row(f, i, row))
-    return rows, shuffles, scored
+    return rows, scored
 
 
 def _per_arm() -> dict[str, float]:
@@ -263,9 +294,11 @@ def metrics(totals: list[PositionTotals]) -> dict[str, dict[str, float]]:
     }
 
 
-def bootstrap_intervals(totals: list[PositionTotals], seed: int) -> dict[str, dict[str, list]]:
-    """95% intervals of each arm's metrics minus the prior's, resampling
-    positions."""
+def bootstrap_intervals(
+    totals: list[PositionTotals], seed: int, baseline: str
+) -> dict[str, dict[str, list]]:
+    """95% intervals of each arm's metrics minus the `baseline` arm's,
+    resampling positions."""
     rng = np.random.default_rng(seed)
     draws = defaultdict(lambda: defaultdict(list))
     for _ in range(BOOTSTRAP):
@@ -273,7 +306,7 @@ def bootstrap_intervals(totals: list[PositionTotals], seed: int) -> dict[str, di
         m = metrics(sample)
         for arm in ARMS:
             for key, value in m[arm].items():
-                draws[arm][key].append(value - m["prior"][key])
+                draws[arm][key].append(value - m[baseline][key])
     return {
         arm: {key: np.percentile(v, [2.5, 97.5]).tolist() for key, v in by_key.items()}
         for arm, by_key in draws.items()
@@ -287,7 +320,8 @@ def report(totals: list[PositionTotals], seed: int) -> dict:
         "heldout_candidates": sum(t.held_n for t in totals),
         "pairs": sum(t.pairs for t in totals),
         "overall": metrics(totals),
-        "intervals_vs_prior": bootstrap_intervals(totals, seed),
+        "intervals_vs_prior": bootstrap_intervals(totals, seed, "prior"),
+        "intervals_vs_shuffled": bootstrap_intervals(totals, seed, "shuffled"),
         "by_bag": {},
     }
     for lo, hi in BAGS:
@@ -307,14 +341,13 @@ def evaluate(
 ) -> dict:
     """Score `reader` and the baseline arms on `files` (see the module
     docstring)."""
-    rows, shuffles, scored = assemble(files, eval_row_config(params), replicates, seed)
+    rows, scored = assemble(files, eval_row_config(params), replicates, seed)
     k = fit_shrinkage(scored)
     for s in scored:
         baseline_arms(s, k)
-    for s, est in zip(scored, reader_estimates(reader, rows, device), strict=True):
-        s.arms["reader"] = est
-    for s, est in zip(scored, reader_estimates(reader, shuffles, device), strict=True):
-        s.arms["shuffled"] = est
+    for arm, arm_rows in rows.items():
+        for s, est in zip(scored, reader_estimates(reader, arm_rows, device), strict=True):
+            s.arms[arm] = est
     totals = position_totals(scored)
     decided = len({(s.file, s.position) for s in scored if s.decided})
     return {"shrinkage_probes": k, "decided_positions": decided, **report(totals, seed)}
