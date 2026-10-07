@@ -131,14 +131,16 @@ def read_mset(path: str | Path) -> MsetFile:
         ph = np.frombuffer(ph_bytes, _POSITION_HEADER)[0]
         off += _POSITION_HEADER.itemsize
         k = int(ph["num_candidates"])
-        records = np.frombuffer(buf[off : off + k * rec_dtype.itemsize].tobytes(), rec_dtype)
+        records = np.frombuffer(buf, rec_dtype, count=k, offset=off)
         off += k * rec_dtype.itemsize
+        # Compact copies: field views would pin the whole file buffer, legacy
+        # plane bytes included, for as long as a dataset holds the position.
         positions.append(
             MsetPosition(
                 game_index=int(ph["game_index"]),
                 turn_index=int(ph["turn_index"]),
-                moves=records["move"],
-                targets=records["targets"],
+                moves=records["move"].copy(),
+                targets=records["targets"].copy(),
                 num_legal_moves=int(ph["num_legal_moves"]),
             )
         )

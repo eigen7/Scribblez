@@ -12,14 +12,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from scribblez.ffi import format_layout, struct_dtype
 from scribblez.move_set_eval.targets import (
     MSET_FLAG_OPEN_LEAVES,
+    MSET_MAGIC,
+    MSET_VERSION,
     TARGET_NAMES_V1,
     read_mset,
 )
 from scribblez.position_eval.model import PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.sim_evidence.slog_meta import game_metas, move_at, read_slog_bytes
+from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
 # This checkout's own binaries, not the primary checkout's, so a worktree's tests
 # exercise the code built beside them. A fixed /workspace/repo path would let a
@@ -136,6 +140,47 @@ def test_mset_includes_the_played_move(mset_dir):
 def test_mset_model_hash_consistent_across_files(mset_dir):
     hashes = {read_mset(p).model_hash for p in mset_dir.glob("*.mset")}
     assert len(hashes) == 1
+
+
+def _write_legacy_mset(path: Path, candidates_per_position: list[int], record_planes: int):
+    """Hand-packs a .mset whose records still carry `record_planes` placement
+    planes, filled with 0xAB so a misaligned read shows up as garbage targets.
+    Returns each position's (moves, targets) as written."""
+    plane_bytes = record_planes * (4 + format_layout()["constants"]["mset"]["plane_width"])
+    hdr = np.zeros(1, struct_dtype("MsetFileHeader"))
+    hdr["magic"] = MSET_MAGIC
+    hdr["version"] = MSET_VERSION
+    hdr["num_positions"] = len(candidates_per_position)
+    hdr["record_floats"] = len(TARGET_NAMES_V1)
+    hdr["record_planes"] = record_planes
+    hdr["model_hash"] = b"legacy"
+    rng = np.random.default_rng(0)
+    chunks, written = [hdr.tobytes()], []
+    for p, k in enumerate(candidates_per_position):
+        ph = np.zeros(1, struct_dtype("MsetPositionHeader"))
+        ph["game_index"], ph["turn_index"], ph["num_candidates"] = p, 2 * p, k
+        chunks.append(ph.tobytes())
+        moves = np.zeros(k, MOVE_DTYPE)
+        moves["score"] = rng.integers(0, 100, k)
+        moves["start"] = rng.integers(0, 225, k)
+        targets = rng.random((k, len(TARGET_NAMES_V1)), dtype=np.float32)
+        for i in range(k):
+            chunks += [moves[i].tobytes(), targets[i].tobytes(), b"\xab" * plane_bytes]
+        written.append((moves, targets))
+    path.write_bytes(b"".join(chunks))
+    return written
+
+
+def test_read_mset_steps_over_legacy_plane_blocks(tmp_path):
+    path = tmp_path / "legacy.mset"
+    written = _write_legacy_mset(path, [3, 0, 2], record_planes=4)
+    parsed = read_mset(path)
+    assert [(p.game_index, p.turn_index) for p in parsed.positions] == [(0, 0), (1, 2), (2, 4)]
+    for pos, (moves, targets) in zip(parsed.positions, written, strict=True):
+        assert pos.moves.tobytes() == moves.tobytes()
+        np.testing.assert_array_equal(pos.targets, targets)
+        # Compact copies, not views pinning the file's plane bytes.
+        assert pos.moves.base is None and pos.targets.base is None
 
 
 def _run_full_sweep(slog_dir: Path, onnx_path: Path, cap: int):
