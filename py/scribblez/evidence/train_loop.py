@@ -101,7 +101,7 @@ def batch_evidence_inputs(
     half from the .sobs records selected by the same mask. Both halves thus
     enumerate members in the same order.
     """
-    letters, blanks, squares, tile_mask, scalars, pos_id = move_args
+    letters, blanks, squares, tile_mask, scalars, cross_cells, cross_letters, pos_id = move_args
     p = len(batch["positions"])
     in_evidence = batch["in_evidence"]
     sel = in_evidence.to(device)
@@ -135,6 +135,8 @@ def batch_evidence_inputs(
         squares=scatter(squares[sel]),
         tile_mask=scatter(tile_mask[sel]),
         scalars=scatter(scalars[sel]),
+        cross_cells=scatter(cross_cells[sel]),
+        cross_letters=scatter(cross_letters[sel]),
         obs_planes=scatter(planes),
         obs_scalars=scatter(obs_scalars),
         mask=mask.view(p, max_e),

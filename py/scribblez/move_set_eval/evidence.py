@@ -2,7 +2,7 @@
 one position.
 
 An evidence token combines a simmed candidate's move encoding (the same
-moves.encode_moves rows candidates use), its raw sim observations (.sobs
+moves.encode_moves rows and cross-check features candidates use), its raw sim observations (.sobs
 records, via scribblez.sim_evidence.sobs), and the model's own evidence-free
 predictions for it. Only the observations are stored: they do not depend on
 any model, so they never go stale. The caller supplies the predictions as
@@ -28,7 +28,7 @@ from scribblez.evidence_fusion import (
 from scribblez.sim_evidence.sobs import BOARD, candidate_slot_planes, observed_slot_planes
 
 from .model import footprint_slot_planes
-from .moves import encode_moves, move_encoding_dims
+from .moves import encode_moves, move_cross_slots, move_encoding_dims
 
 # EVIDENCE_PLANE_NAMES' block boundaries: observed | predicted | candidate.
 _PREDICTED_END = NUM_OBSERVED_PLANES + NUM_PREDICTED_PLANES
@@ -78,6 +78,7 @@ def build_evidence_inputs(
     moves: np.ndarray,
     obs: np.ndarray,
     pre_move_diff: int,
+    cross: dict[str, np.ndarray],
     first_pass: dict[str, torch.Tensor],
     *,
     max_e: int,
@@ -88,7 +89,9 @@ def build_evidence_inputs(
 
     `moves`/`obs` are the simmed candidates' .sobs rows (a SobsPosition's
     arrays or a prefix of them). `pre_move_diff` is the mover's score
-    differential before the move. `first_pass` holds the model's
+    differential before the move. `cross` holds their cross-check features
+    (moves.cross_checks' "cells" and "letters", in the same order). `first_pass`
+    holds the model's
     evidence-free "wld", "score_diff" and "planes" for the same K candidates
     in the same order.
     """
@@ -121,6 +124,8 @@ def build_evidence_inputs(
         squares=_row_tensor(enc["squares"], max_e, torch.int64, device),
         tile_mask=_row_tensor(enc["tile_mask"], max_e, dtype, device),
         scalars=_row_tensor(enc["scalars"], max_e, dtype, device),
+        cross_cells=_row_tensor(cross["cells"], max_e, torch.int64, device),
+        cross_letters=_row_tensor(cross["letters"], max_e, torch.uint8, device),
         obs_planes=_row_tensor(planes, max_e, dtype, device),
         obs_scalars=_row_tensor(scalars, max_e, dtype, device),
         mask=torch.from_numpy(mask).to(device=device).unsqueeze(0),
@@ -133,6 +138,7 @@ def empty_evidence_inputs(
     """The empty evidence set as (1, max_e, ...) inputs, every row masked out,
     under which the model computes exactly its plain pass."""
     max_tiles, num_scalars, _, _ = move_encoding_dims()
+    slots = move_cross_slots()
     zeros = functools.partial(_zero_rows, max_e, dtype=dtype, device=device)
     return EvidenceInputs(
         letters=zeros(max_tiles, dtype=torch.int64),
@@ -140,6 +146,8 @@ def empty_evidence_inputs(
         squares=zeros(max_tiles, dtype=torch.int64),
         tile_mask=zeros(max_tiles),
         scalars=zeros(num_scalars),
+        cross_cells=zeros(slots, dtype=torch.int64),
+        cross_letters=zeros(slots * 26, dtype=torch.uint8),
         obs_planes=zeros(NUM_EVIDENCE_PLANES, BOARD, BOARD),
         obs_scalars=zeros(NUM_EVIDENCE_SCALARS),
         mask=zeros(dtype=torch.bool),

@@ -36,7 +36,12 @@ import numpy as np
 import torch
 from scribblez.ffi import get_input_shapes
 from scribblez.move_set_eval.model import MoveSetEvalModel
-from scribblez.move_set_eval.moves import move_encoding_dims
+from scribblez.move_set_eval.moves import (
+    move_cross_slots,
+    move_encoding_dims,
+    move_encoding_version,
+    synthetic_cross_checks,
+)
 from scribblez.move_set_eval.onnx_export import MOVE_INPUT_NAMES, export_onnx
 
 MAX_MOVES = 4096
@@ -60,13 +65,14 @@ def _export_random(path: Path, seed: int, spatial_planes: int, scalar_size: int)
         spatial_planes,
         scalar_size,
         opp_leave_input=False,
-        move_encoding_version=1,
+        move_encoding_version=move_encoding_version(),
     )
 
 
 def _random_inputs(m: int, spatial_planes: int, scalar_size: int, seed: int) -> dict:
     t, s, letter_vocab, cells = move_encoding_dims()
     rng = np.random.default_rng(seed)
+    cross = synthetic_cross_checks(np.ones(m, dtype=bool), seed)
     return {
         "input_spatial": rng.standard_normal((1, spatial_planes, 15, 15), dtype=np.float32),
         "input_scalar": rng.standard_normal((1, scalar_size), dtype=np.float32),
@@ -75,6 +81,8 @@ def _random_inputs(m: int, spatial_planes: int, scalar_size: int, seed: int) -> 
         "move_squares": rng.integers(0, cells, (m, t), dtype=np.int32),
         "move_tile_mask": rng.integers(0, 2, (m, t)).astype(np.uint8),
         "move_scalars": rng.standard_normal((m, s)).astype(np.float32),
+        "move_cross_cells": cross["cells"].astype(np.int32),
+        "move_cross_letters": cross["letters"],
     }
 
 
@@ -95,9 +103,11 @@ def _build_refittable_engine(trt, onnx_path: Path):
     config.builder_optimization_level = 0  # fastest build; kernel speed is irrelevant here
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 256 << 20)
     t, s, _, _ = move_encoding_dims()
+    k = move_cross_slots()
+    widths = {"move_scalars": s, "move_cross_cells": k, "move_cross_letters": k * 26}
     profile = builder.create_optimization_profile()
     for name in MOVE_INPUT_NAMES:
-        width = s if name == "move_scalars" else t
+        width = widths.get(name, t)
         profile.set_shape(name, (1, width), (OPT_MOVES, width), (MAX_MOVES, width))
     config.add_optimization_profile(profile)
 
@@ -138,6 +148,8 @@ _TORCH_DTYPES = {
     "move_squares": torch.int32,
     "move_tile_mask": torch.uint8,
     "move_scalars": torch.float32,
+    "move_cross_cells": torch.int32,
+    "move_cross_letters": torch.uint8,
 }
 
 

@@ -56,8 +56,8 @@ from scribblez.onnx_export_util import (
 )
 from scribblez.spatial_trunk import mean_max_pool
 
-from .model import MoveSetEvalModel, footprint_slot_planes
-from .moves import move_encoding_dims
+from .model import MoveSetEvalModel, cross_squares, footprint_slot_planes
+from .moves import move_cross_slots, move_encoding_dims
 from .targets import PLANE_NAMES
 
 # The padded evidence-set width E baked into the step graph as a fixed shape;
@@ -83,6 +83,8 @@ CACHE_INPUT_NAMES = (
     "move_squares",
     "move_tile_mask",
     "move_scalars",
+    "move_cross_cells",
+    "move_cross_letters",
 )
 CACHE_OUTPUT_NAMES = ("board", "g", "move_enc", "wld", "score_diff", "planes")
 
@@ -175,6 +177,7 @@ class ProposalCacheExportModel(nn.Module):
         self.trunk = model.trunk
         self.board_pos_emb = model.board_pos_emb
         self.move_encoder = model.move_encoder
+        self.cross_check_encoder = model.cross_check_encoder
         self.heads = _ScoringHeads(model)
 
     def forward(
@@ -186,6 +189,8 @@ class ProposalCacheExportModel(nn.Module):
         move_squares: torch.Tensor,  # (M, T) i32
         move_tile_mask: torch.Tensor,  # (M, T) u8
         move_scalars: torch.Tensor,  # (M, 3) f32
+        move_cross_cells: torch.Tensor,  # (M, K) i32
+        move_cross_letters: torch.Tensor,  # (M, K * 26) u8
     ) -> tuple[torch.Tensor, ...]:
         letters = move_letters.long()
         squares = move_squares.long()
@@ -198,6 +203,11 @@ class ProposalCacheExportModel(nn.Module):
         tile_board = board[0][squares]  # (M, T, C)
         tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)  # is_play gate
         move_enc = self.move_encoder(letters, move_blanks, tile_mask, move_scalars, tile_board)
+        move_enc = move_enc + self.cross_check_encoder(
+            move_cross_cells,
+            move_cross_letters,
+            board[0][cross_squares(move_cross_cells.long(), self.cross_check_encoder.board_cells)],
+        )
 
         attended, wld, score_diff = self.heads.value(board, g, move_enc)
         planes = self.heads.planes(attended, g, board)
@@ -375,6 +385,7 @@ def export_proposal_cache(
     wrapper = ProposalCacheExportModel(model).to(device)
     wrapper.eval()
     t, _, _, _ = move_encoding_dims()
+    k = move_cross_slots()
 
     dummy_m = 5  # any M > 1; the parity tests assert other Ms against it
     dummies = (
@@ -385,6 +396,8 @@ def export_proposal_cache(
         torch.zeros(dummy_m, t, dtype=torch.int32, device=device),
         torch.zeros(dummy_m, t, dtype=torch.uint8, device=device),
         torch.zeros(dummy_m, 3, device=device),
+        torch.zeros(dummy_m, k, dtype=torch.int32, device=device),
+        torch.zeros(dummy_m, k * 26, dtype=torch.uint8, device=device),
     )
     move_and_dyn = (
         "move_letters",
@@ -392,6 +405,8 @@ def export_proposal_cache(
         "move_squares",
         "move_tile_mask",
         "move_scalars",
+        "move_cross_cells",
+        "move_cross_letters",
         "move_enc",
         "wld",
         "score_diff",

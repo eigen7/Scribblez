@@ -20,6 +20,7 @@ import torch
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.evidence.dataset import assemble_subset, gain_targets
+from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.move_set_eval.targets import read_mset
 from scribblez.sim_evidence.sobs import (
     MOVE_DTYPE,
@@ -285,7 +286,7 @@ def _write_student_onnx(path: Path, shapes: dict) -> None:
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
         opp_leave_input=False,
-        move_encoding_version=1,
+        move_encoding_version=move_encoding_version(),
     )
 
 

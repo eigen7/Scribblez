@@ -46,8 +46,8 @@ from scribblez.onnx_export_util import (
 from scribblez.spatial_trunk import mean_max_pool
 
 from .dataset import adopt_information_condition
-from .model import MoveSetEvalModel
-from .moves import move_encoding_dims
+from .model import MoveSetEvalModel, cross_squares
+from .moves import move_cross_slots, move_encoding_dims
 from .targets import MSET_FLAG_OPEN_LEAVES, read_mset_flags
 
 MOVE_INPUT_NAMES = (
@@ -56,6 +56,8 @@ MOVE_INPUT_NAMES = (
     "move_squares",
     "move_tile_mask",
     "move_scalars",
+    "move_cross_cells",
+    "move_cross_letters",
 )
 # No placement planes: this graph serves plain move ranking. The evidence path
 # gets its planes from the proposal cache graph (proposal_export.py).
@@ -73,6 +75,7 @@ class MoveSetEvalExportModel(nn.Module):
         self.trunk = model.trunk
         self.board_pos_emb = model.board_pos_emb
         self.move_encoder = model.move_encoder
+        self.cross_check_encoder = model.cross_check_encoder
         # Rebuilt for the refitter (module docstring); out_proj is already plain.
         mha = model.cross_attn
         c = mha.embed_dim
@@ -98,6 +101,8 @@ class MoveSetEvalExportModel(nn.Module):
         move_squares: torch.Tensor,  # (M, T) i32
         move_tile_mask: torch.Tensor,  # (M, T) u8
         move_scalars: torch.Tensor,  # (M, 3) f32
+        move_cross_cells: torch.Tensor,  # (M, K) i32
+        move_cross_letters: torch.Tensor,  # (M, K * 26) u8
     ) -> tuple[torch.Tensor, torch.Tensor]:
         letters = move_letters.long()
         squares = move_squares.long()
@@ -111,6 +116,11 @@ class MoveSetEvalExportModel(nn.Module):
         tile_board = board[0][squares]  # (M, T, C)
         tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)
         e = self.move_encoder(letters, move_blanks, tile_mask, move_scalars, tile_board)
+        e = e + self.cross_check_encoder(
+            move_cross_cells,
+            move_cross_letters,
+            board[0][cross_squares(move_cross_cells.long(), self.cross_check_encoder.board_cells)],
+        )
 
         attended = self._cross_attention(e, board[0])
         h = F.relu(self.head_attended(attended) + self.head_g(g))
@@ -143,6 +153,7 @@ def export_onnx(
     wrapper = MoveSetEvalExportModel(model).to(device)
     wrapper.eval()
     t, _, _, _ = move_encoding_dims()
+    k = move_cross_slots()
 
     dummy_m = 5  # any M > 1; the parity tests assert other Ms against it
     dummies = (
@@ -153,6 +164,8 @@ def export_onnx(
         torch.zeros(dummy_m, t, dtype=torch.int32, device=device),
         torch.zeros(dummy_m, t, dtype=torch.uint8, device=device),
         torch.zeros(dummy_m, 3, device=device),
+        torch.zeros(dummy_m, k, dtype=torch.int32, device=device),
+        torch.zeros(dummy_m, k * 26, dtype=torch.uint8, device=device),
     )
     input_names = ["input_spatial", "input_scalar", *MOVE_INPUT_NAMES]
 

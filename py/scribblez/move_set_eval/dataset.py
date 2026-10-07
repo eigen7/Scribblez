@@ -35,7 +35,7 @@ import numpy as np
 import torch
 
 from scribblez.dataset import row_layout
-from scribblez.ffi import cross_check_deltas, decode_rows, set_opp_leave_input
+from scribblez.ffi import decode_rows, set_opp_leave_input
 
 from . import moves as move_enc
 from .targets import (
@@ -46,17 +46,6 @@ from .targets import (
     read_mset,
     read_mset_flags,
 )
-
-# Batch key -> scribblez.ffi.cross_check_deltas key, each (M, max_cross_deltas):
-# a move's sparse cross-check changes (axis, square, letter masks before and
-# after) plus the mask marking real entries.
-CROSS_DELTA_KEYS = {
-    "move_cross_axes": "axes",
-    "move_cross_squares": "squares",
-    "move_cross_old_masks": "old_masks",
-    "move_cross_new_masks": "new_masks",
-    "move_cross_mask": "delta_mask",
-}
 
 
 def adopt_information_condition(mset_files: Iterable[str | Path]):
@@ -120,7 +109,6 @@ class MsetDataset:
         *,
         mset_files: Iterable[str | Path] | None = None,
         select: Callable[[Path], set[tuple[int, int]]] | None = None,
-        with_cross_check_deltas: bool = False,
     ):
         """Pass exactly one source: `data_dir` (directories whose complete
         pairs are globbed) or `mset_files` (explicit paths, for when train and
@@ -128,10 +116,7 @@ class MsetDataset:
 
         `select`, given a .mset path, names the (game_index, turn_index)
         positions to keep from it; the evidence trainer uses it to hold only
-        its trajectory positions' labels. `with_cross_check_deltas` adds each
-        move's cross-check changes (CROSS_DELTA_KEYS) to the batches; only
-        cross_check_diagnostic reads them so far."""
-        self._with_cross_check_deltas = with_cross_check_deltas
+        its trajectory positions' labels."""
         assert (data_dir is None) != (mset_files is None), (
             "pass exactly one of data_dir or mset_files"
         )
@@ -367,6 +352,11 @@ class MsetDataset:
         pre_diff_points = np.rint(scalar[:, self._sd_index] * self._sd_scale).astype(np.int32)
         move_pre_diffs = pre_diff_points[pos_id]
         enc = move_enc.encode_moves(all_moves, move_pre_diffs)
+        cross = move_enc.batch_cross_checks(
+            self._slogs,
+            [(pos.file_id, pos.game_index, pos.turn_index) for pos in batch],
+            [pos.moves for pos in batch],
+        )
 
         batch_out = {
             "input_spatial": torch.from_numpy(spatial),
@@ -376,45 +366,15 @@ class MsetDataset:
             "move_squares": torch.from_numpy(enc["squares"]),
             "move_tile_mask": torch.from_numpy(enc["tile_mask"]),
             "move_scalars": torch.from_numpy(enc["scalars"]),
+            "move_cross_cells": torch.from_numpy(cross["cells"]),
+            "move_cross_letters": torch.from_numpy(cross["letters"]),
             "move_pos_id": torch.from_numpy(pos_id),
             "target_wld": torch.from_numpy(all_targets[:, :3].copy()),
             "target_score_diff": torch.from_numpy(all_targets[:, 3:5].copy()),
         }
-        if self._with_cross_check_deltas:
-            batch_out.update(self._cross_check_deltas(batch, by_file))
         if self.has_planes:
             target_planes = np.concatenate(
                 [dequantize_planes(pos.planes, pos.plane_scales) for pos in batch]
             )
             batch_out["target_planes"] = torch.from_numpy(target_planes)
         return batch_out
-
-    def _cross_check_deltas(
-        self, batch: list[_Position], by_file: dict[int, list[int]]
-    ) -> dict[str, torch.Tensor]:
-        """Each move's cross-check entries (scribblez.ffi.cross_check_deltas),
-        one replay call per source file, scattered into the batch's flattened
-        move order."""
-        counts = np.array([len(pos.moves) for pos in batch], dtype=np.int64)
-        starts = np.cumsum(counts) - counts
-        out: dict[str, np.ndarray] = {}
-        for file_id, locals_ in by_file.items():
-            deltas = cross_check_deltas(
-                self._slogs[file_id],
-                np.array([batch[j].game_index for j in locals_], dtype=np.int64),
-                np.array([batch[j].turn_index for j in locals_], dtype=np.int64),
-                counts[locals_],
-                np.concatenate([batch[j].moves for j in locals_]),
-            )
-            rows = np.concatenate([np.arange(starts[j], starts[j] + counts[j]) for j in locals_])
-            for key, values in deltas.items():
-                if key not in out:
-                    out[key] = np.zeros((int(counts.sum()), *values.shape[1:]), dtype=values.dtype)
-                out[key][rows] = values
-        # torch has no usable uint32: the 26-bit letter masks ride as int64.
-        return {
-            batch_key: torch.from_numpy(
-                out[key].astype(np.int64 if "masks" in key else out[key].dtype)
-            )
-            for batch_key, key in CROSS_DELTA_KEYS.items()
-        }
