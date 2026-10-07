@@ -9,14 +9,13 @@
   it bought. Anyone reviving it starts from this document and the deleted
   `engine/{include,src}/encoding/contingent_map.*` (removed in commit
   `d930b59`).
-- **The post-move cross-check delta**: the encoder and a diagnostic have
-  landed, not the model input. `training/cross_check_delta.h` computes each
-  candidate's sparse cross-check change, and the FFI and
-  `MsetDataset(with_cross_check_deltas=True)` expose it. The script
-  `py/scripts/move_set_eval/crosscheck_delta_diagnostic.py` measures whether
-  the student's distillation error concentrates where that delta is large.
-  Feeding the delta into the move set evaluation model waits on that
-  measurement.
+- **The post-move cross-check delta**: a move set evaluation model input
+  (move-encoding version 2). `training/cross_check_delta.h` computes each
+  candidate's sparse cross-check change; `move_set_encoder.h` turns it into
+  per-move `move_cross_cells` / `move_cross_letters`, which the model's
+  CrossCheckEncoder adds to the move embedding. The planned diagnostic
+  (does the student's error concentrate where the delta is large?) was
+  skipped in favour of training with the input directly.
 
 **Goal.** Give the value models board-conditional leave evaluation with
 lexical foresight, without asking the network to learn the lexicon.
