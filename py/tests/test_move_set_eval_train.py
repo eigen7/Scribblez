@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
+from scribblez.ffi import decode_rows
 from scribblez.footprint_spatial import NUM_CLASSES, SIDE, SLOTS_PER_CELL
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.move_set_eval.model import compute_loss, footprint_cell_marginal
@@ -459,10 +460,12 @@ def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
             assert 0.0 <= metrics[f"exch_retention@{k}{suffix}"] <= 1.0
 
 
-def test_dataset_cross_checks_follow_the_flattened_move_order(corpus_dir):
-    """Cross-check features are gathered one replay call per source file and
-    scattered back, so each move's row must be the one a direct per-position
-    call returns -- and a corpus of real plays must actually carry entries."""
+def test_dataset_inputs_follow_the_batch_order(corpus_dir):
+    """Board rows and cross-check features are gathered one replay call per
+    source file and scattered back, so each position's board input must be the
+    row decode_rows returns for it, each move's cross-checks the ones a direct
+    per-position call returns -- and a corpus of real plays must actually carry
+    entries."""
     from scribblez.move_set_eval.dataset import MsetDataset
 
     ds = MsetDataset(corpus_dir)
@@ -471,10 +474,17 @@ def test_dataset_cross_checks_follow_the_flattened_move_order(corpus_dir):
     positions = [ds._positions[i] for i in order]
     batch = ds._build_batch(positions)
     start = 0
-    for pos in positions:
-        direct = move_enc.cross_checks(
-            ds._slogs[pos.file_id], [pos.game_index], [pos.turn_index], [len(pos.moves)], pos.moves
+    for j, pos in enumerate(positions):
+        slog = ds._slogs[pos.file_id]
+        row = decode_rows(slog, [pos.game_index], [pos.turn_index], post_move=False)[0]
+        spatial = batch["input_spatial"][j].numpy().ravel()
+        np.testing.assert_array_equal(spatial, row[: spatial.size])
+        scalar = batch["input_scalar"][j].numpy()
+        np.testing.assert_array_equal(scalar, row[spatial.size : spatial.size + scalar.size])
+        direct = move_enc.move_set_positions(
+            slog, [pos.game_index], [pos.turn_index], [len(pos.moves)], pos.moves
         )
+        np.testing.assert_array_equal(direct["rows"][0], row)
         n = len(pos.moves)
         cells = batch["move_cross_cells"][start : start + n].numpy()
         letters = batch["move_cross_letters"][start : start + n].numpy()

@@ -43,10 +43,11 @@ class BlockDecoder {
   void decode_one(const char* buf, const std::string& path, uint32_t game_idx, uint32_t turn_idx,
                   bool transpose, bool post_move, int64_t output_row, float* output);
 
-  // The board just before turn `turn_idx`'s move, for consumers that derive
-  // per-candidate features from it (e.g. move-set cross-check deltas). Valid
-  // until this decoder is next used.
-  const Board& replay_board(const char* buf, uint32_t game_idx, uint32_t turn_idx);
+  // The board decode_one last encoded, after its transpose, with its
+  // move-generation caches built: for consumers that derive per-candidate
+  // features from the same replay (e.g. move-set cross-checks). Valid until
+  // this decoder is next used.
+  const Board& board() const { return pos_.enc().board(); }
 
  private:
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);

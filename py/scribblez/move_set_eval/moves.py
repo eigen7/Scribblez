@@ -3,9 +3,10 @@
 The engine owns the encoding (engine/include/training/move_set_encoder.h), so
 the training dataset and the in-engine agents share one implementation. This
 module re-exports its FFI bindings: `encode_moves` turns packed Move records
-into per-candidate letter/blank/square/mask/scalar arrays, `cross_checks` /
-`gcg_cross_checks` give each candidate's post-move cross-check entries on its
-position's board, `move_encoding_dims` and `move_cross_slots` report the layout
+into per-candidate letter/blank/square/mask/scalar arrays,
+`move_set_positions` / `gcg_cross_checks` give each candidate's post-move
+cross-check entries on its position's board (the former with the positions'
+board rows, from the same replay), `move_encoding_dims` and `move_cross_slots` report the layout
 constants the model sizes its embeddings from, and `score_diff_input_layout`
 locates the score-diff scalar in the board input so the dataset can read a
 position's pre-move differential from its encoded row.
@@ -19,12 +20,13 @@ from pathlib import Path
 import numpy as np
 
 from scribblez.ffi import (
-    cross_checks,
     encode_moves,
     gcg_cross_checks,
     move_cross_slots,
     move_encoding_dims,
     move_encoding_version,
+    move_set_positions,
+    row_size_floats,
     score_diff_input_layout,
 )
 
@@ -32,31 +34,33 @@ BOARD = 15
 
 __all__ = [
     "BOARD",
-    "batch_cross_checks",
-    "cross_checks",
+    "batch_move_set_positions",
     "encode_moves",
     "gcg_cross_checks",
     "move_cross_slots",
     "move_encoding_dims",
     "move_encoding_version",
+    "move_set_positions",
     "score_diff_input_layout",
     "synthetic_cross_checks",
 ]
 
 
-def batch_cross_checks(
+def batch_move_set_positions(
     slogs: list[Path], positions: list[tuple[int, int, int]], moves: list[np.ndarray]
 ) -> dict[str, np.ndarray]:
-    """cross_checks for a batch whose positions span several .slog files.
+    """move_set_positions for a batch whose positions span several .slog files.
 
     Position j is `positions[j]` = (file_id, game_index, turn_index), its
     .slog `slogs[file_id]`, and its candidates `moves[j]`. One call per file;
-    the result rows follow the batch's own order, position-major."""
+    "rows" follow the batch's position order, and "cells" / "letters" its
+    flattened moves, position-major."""
     counts = np.array([len(m) for m in moves], dtype=np.int64)
     starts = np.cumsum(counts) - counts
     total = int(counts.sum())
     slots = move_cross_slots()
     out = {
+        "rows": np.empty((len(positions), row_size_floats()), dtype=np.float32),
         "cells": np.zeros((total, slots), dtype=np.int64),
         "letters": np.zeros((total, slots * 26), dtype=np.uint8),
     }
@@ -64,16 +68,17 @@ def batch_cross_checks(
     for j, (file_id, _, _) in enumerate(positions):
         by_file[file_id].append(j)
     for file_id, js in by_file.items():
-        got = cross_checks(
+        got = move_set_positions(
             slogs[file_id],
             np.array([positions[j][1] for j in js], dtype=np.int64),
             np.array([positions[j][2] for j in js], dtype=np.int64),
             counts[js],
             np.concatenate([moves[j] for j in js]),
         )
-        rows = np.concatenate([np.arange(starts[j], starts[j] + counts[j]) for j in js])
-        for key, values in got.items():
-            out[key][rows] = values
+        out["rows"][js] = got["rows"]
+        move_rows = np.concatenate([np.arange(starts[j], starts[j] + counts[j]) for j in js])
+        out["cells"][move_rows] = got["cells"]
+        out["letters"][move_rows] = got["letters"]
     return out
 
 

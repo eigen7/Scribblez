@@ -58,9 +58,9 @@ struct ScribblezSession {
   int encode_candidate_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
                             const int64_t* move_counts, int64_t n_positions, const void* moves,
                             float* out) const;
-  int move_set_cross_checks(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
-                            const int64_t* move_counts, int64_t n_positions, const void* moves,
-                            int32_t* out_cells, uint8_t* out_letters) const;
+  int move_set_positions(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
+                         const int64_t* move_counts, int64_t n_positions, const void* moves,
+                         float* out_rows, int32_t* out_cells, uint8_t* out_letters) const;
   int gcg_cross_checks(const char* gcg_text, bool open_leaves, const void* moves, int64_t n,
                        int32_t* out_cells, uint8_t* out_letters, char* out_err, int err_cap) const;
   int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads, uint64_t seed,
@@ -353,21 +353,21 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
   }
 }
 
-int ScribblezSession::move_set_cross_checks(const char* path, const int64_t* game_idx,
-                                            const int64_t* turn_idx, const int64_t* move_counts,
-                                            int64_t n_positions, const void* moves,
-                                            int32_t* out_cells, uint8_t* out_letters) const {
+int ScribblezSession::move_set_positions(const char* path, const int64_t* game_idx,
+                                         const int64_t* turn_idx, const int64_t* move_counts,
+                                         int64_t n_positions, const void* moves, float* out_rows,
+                                         int32_t* out_cells, uint8_t* out_letters) const {
   namespace mset = scribblez::move_set;
-  if (!game_idx || !turn_idx || !move_counts || n_positions < 0) return -1;
+  if (!game_idx || !turn_idx || !move_counts || !out_rows || n_positions < 0) return -1;
   std::vector<char> buf;
   if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
   scribblez::binlog::BlockDecoder decoder(spec);
   int64_t done = 0;
   for (int64_t j = 0; j < n_positions; ++j) {
+    decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
+                       /*transpose=*/false, /*post_move=*/false, /*output_row=*/j, out_rows);
     const std::vector<scribblez::Move> candidates = copy_moves(moves, done, move_counts[j]);
-    const scribblez::Board& board =
-      decoder.replay_board(buf.data(), uint32_t(game_idx[j]), uint32_t(turn_idx[j]));
-    mset::encode_moves_cross_checks(board, *spec.dict, candidates.data(), move_counts[j],
+    mset::encode_moves_cross_checks(decoder.board(), *spec.dict, candidates.data(), move_counts[j],
                                     out_cells + done * mset::kMoveCrossSlots,
                                     out_letters + done * mset::kMoveCrossLetters);
     done += move_counts[j];
@@ -375,12 +375,12 @@ int ScribblezSession::move_set_cross_checks(const char* path, const int64_t* gam
   return 0;
 }
 
-int scribblez_move_set_cross_checks(ScribblezSession* s, const char* path, const int64_t* game_idx,
-                                    const int64_t* turn_idx, const int64_t* move_counts,
-                                    int64_t n_positions, const void* moves, int32_t* out_cells,
-                                    uint8_t* out_letters) {
-  return s->move_set_cross_checks(path, game_idx, turn_idx, move_counts, n_positions, moves,
-                                  out_cells, out_letters);
+int scribblez_move_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                                 const int64_t* turn_idx, const int64_t* move_counts,
+                                 int64_t n_positions, const void* moves, float* out_rows,
+                                 int32_t* out_cells, uint8_t* out_letters) {
+  return s->move_set_positions(path, game_idx, turn_idx, move_counts, n_positions, moves, out_rows,
+                               out_cells, out_letters);
 }
 
 int ScribblezSession::encode_candidate_rows(const char* path, const int64_t* game_idx,
