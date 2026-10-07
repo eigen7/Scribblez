@@ -56,7 +56,7 @@ from scribblez.onnx_export_util import (
 )
 from scribblez.spatial_trunk import mean_max_pool
 
-from .model import MoveSetEvalModel, cross_squares, footprint_slot_planes
+from .model import MoveSetEvalModel, footprint_slot_planes
 from .moves import move_cross_slots, move_encoding_dims
 from .targets import PLANE_NAMES
 
@@ -203,10 +203,8 @@ class ProposalCacheExportModel(nn.Module):
         tile_board = board[0][squares]  # (M, T, C)
         tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)  # is_play gate
         move_enc = self.move_encoder(letters, move_blanks, tile_mask, move_scalars, tile_board)
-        move_enc = move_enc + self.cross_check_encoder(
-            move_cross_cells,
-            move_cross_letters,
-            board[0][cross_squares(move_cross_cells.long(), self.cross_check_encoder.board_cells)],
+        move_enc = move_enc + self.cross_check_encoder.on_position(
+            move_cross_cells, move_cross_letters, board[0]
         )
 
         attended, wld, score_diff = self.heads.value(board, g, move_enc)

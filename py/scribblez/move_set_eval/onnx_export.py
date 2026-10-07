@@ -46,7 +46,7 @@ from scribblez.onnx_export_util import (
 from scribblez.spatial_trunk import mean_max_pool
 
 from .dataset import adopt_information_condition
-from .model import MoveSetEvalModel, cross_squares
+from .model import MoveSetEvalModel
 from .moves import move_cross_slots, move_encoding_dims
 from .targets import MSET_FLAG_OPEN_LEAVES, read_mset_flags
 
@@ -116,11 +116,7 @@ class MoveSetEvalExportModel(nn.Module):
         tile_board = board[0][squares]  # (M, T, C)
         tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)
         e = self.move_encoder(letters, move_blanks, tile_mask, move_scalars, tile_board)
-        e = e + self.cross_check_encoder(
-            move_cross_cells,
-            move_cross_letters,
-            board[0][cross_squares(move_cross_cells.long(), self.cross_check_encoder.board_cells)],
-        )
+        e = e + self.cross_check_encoder.on_position(move_cross_cells, move_cross_letters, board[0])
 
         attended = self._cross_attention(e, board[0])
         h = F.relu(self.head_attended(attended) + self.head_g(g))

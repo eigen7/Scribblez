@@ -107,12 +107,6 @@ class MoveEncoder(nn.Module):
         return self.fuse(torch.cat([tile_pool, scalar_feat], dim=1))
 
 
-def cross_squares(cells: torch.Tensor, board_cells: int) -> torch.Tensor:
-    """The board square of each cross-check cell (1 + axis * board_cells +
-    square; 0 for an empty slot, which maps to square 0 and is masked out)."""
-    return (cells - 1).clamp(min=0) % board_cells
-
-
 class CrossCheckEncoder(nn.Module):
     """Embeds the cross-checks a move changes into a vector added to its move
     embedding.
@@ -152,6 +146,18 @@ class CrossCheckEncoder(nn.Module):
         tok = (self.letter_proj(bits) + self.axis_emb(axis) + board_tokens) * real
         pooled = tok.sum(dim=1) / real.sum(dim=1).clamp(min=1)  # (M, C), 0 when none
         return self.out(pooled)
+
+    def squares(self, cells: torch.Tensor) -> torch.Tensor:
+        """The board square of each cell (1 + axis * board_cells + square; 0
+        for an empty slot, which maps to square 0 and is masked out)."""
+        return (cells.long() - 1).clamp(min=0) % self.board_cells
+
+    def on_position(
+        self, cells: torch.Tensor, letters: torch.Tensor, board: torch.Tensor
+    ) -> torch.Tensor:
+        """forward for moves that all share one position's board tokens
+        (board_cells, C), as in the single-position exports."""
+        return self(cells, letters, board[self.squares(cells)])
 
 
 def _rank_within_position(pos_id: torch.Tensor, num_positions: int) -> tuple[torch.Tensor, int]:
@@ -330,13 +336,12 @@ class MoveSetEvalModel(nn.Module):
         tile_board = board[pos_id.unsqueeze(1).expand(-1, t), squares]  # (M, T, C)
         tile_board = tile_board * scalars[:, 2].view(-1, 1, 1)  # scalars[:, 2] = is_play
         k = cross_cells.shape[1]
-        cross_board = board[pos_id.unsqueeze(1).expand(-1, k), self._cross_squares(cross_cells)]
+        cross_board = board[
+            pos_id.unsqueeze(1).expand(-1, k), self.cross_check_encoder.squares(cross_cells)
+        ]
         return self.move_encoder(
             letters, blanks, tile_mask, scalars, tile_board
         ) + self.cross_check_encoder(cross_cells, cross_letters, cross_board)
-
-    def _cross_squares(self, cells: torch.Tensor) -> torch.Tensor:
-        return cross_squares(cells.long(), self.cross_check_encoder.board_cells)
 
     def encode_evidence(
         self, board: torch.Tensor, evidence: EvidenceInputs
