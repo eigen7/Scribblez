@@ -189,8 +189,8 @@ leave). A square that hooks on S or Y then reads S and Y supply directly in
 every attention layer, graded by the actual counts and distinguishing
 "available to me" from "available to the opponent", which a single gated
 input plane cannot. `MoveSetEvalModel`'s transformer arm carries the same
-tokens, because its placement readout (§3) distills these heads and has the
-same gating to learn.
+tokens, because the teacher value it distills turns on the same hook
+supply.
 
 ### Losses
 
@@ -223,24 +223,6 @@ pass. Moves are flattened with no padding; each carries
 Grouping the queries by position keeps one K/V copy per board, so attention's
 `W_k`/`W_v` projections are amortized across candidates the same way the trunk
 is. The padded `(P, maxK, C)` query grid is the only place padding appears.
-
-### The placement readout
-
-The fused per-move vector (attended embedding + position summary, `4C`) is
-projected to 13 (`SLOTS_PER_CELL`) `C`-wide queries per placement head, each
-dotted against the 225 board tokens: the logit for `(head, cell, slot)` is
-`query_(head, slot) · board_token_cell`. Flattened in that order these are
-the anchored footprint classes (`class = cell·13 + slot`); a small direct head
-adds the two catch-all classes, giving four footprint distributions
-`(M, 4, 2927)`. This is the teacher's `Conv(C → 13)` head recast in the
-student's per-move cross-attention form. The contraction runs over the same
-padded `(P, maxK)` grid as the cross-attention, so the board tokens are read
-once per position. Head order is `PLANE_NAMES` as the FFI serves it, matching
-the teacher distributions quantized into the `.mset` records.
-
-The evidence path (below) reads these distributions as per-slot board
-channels (`footprint_slot_planes`): softmax, drop the catch-alls, and lay each
-head's 13 slots out as 13 `15×15` channels.
 
 ### The move encoder
 
@@ -275,12 +257,10 @@ model starts out exactly as the tile-only encoder.
 | `wld` | teacher probabilities (M, 3) | soft cross-entropy | 1 |
 | `score_diff[:,0]` | teacher mean | Huber (δ=10) | `lambda_sd` = 0.004 |
 | `score_diff[:,1]` | teacher std | Huber (δ=10) | `lambda_sd` = 0.004 |
-| `planes` | teacher footprint distributions, dequantized (M, 4, 2927) | soft softmax cross-entropy | `lambda_planes` = 1 |
 
-Plane targets exist only in stratified (training) records. The full-sweep
-evaluation slice carries none, so its metrics are value-based, and the
-placement readout's quality (`plane_ce`) is read on the stratified fallback
-holdout.
+The student distills only the teacher's value: no placement readout. Its
+consumers want a per-move value, and the planes would cost ~95% of each
+`.mset` record.
 
 Ranking metric: `win_equity = P(win) + 0.5·P(draw)`, applied identically to
 student and teacher probabilities.
@@ -295,17 +275,17 @@ proposal model ([roadmap.md](roadmap.md) item 5).
 Each simmed candidate contributes one token, built from:
 
 - its move encoding (the MoveEncoder, reused);
-- a conv encode of 117 spatial channels: the four observed rollout-frequency
-  footprint histograms and the model's own four evidence-free predicted
-  footprint distributions (each head as 13 slot channels), plus the
-  candidate's own footprint as a one-hot in a final 13;
+- a conv encode of 65 spatial channels: the four observed rollout-frequency
+  footprint histograms (each head as 13 slot channels), plus the candidate's
+  own footprint as a one-hot in a final 13;
 - eleven scalars: the sim's W/D/L frequencies, spread moments and rollout
   count, beside the model's evidence-free value prediction.
 
-Feeding the predictions in as inputs is load-bearing: with observations alone
-the encoder can express `prior + g(obs)` but not the residual
-`prior + k·(obs − prior)`. The channel layout is canonical in
-`EVIDENCE_PLANE_NAMES`, and the engine's staging
+Feeding the value prediction in as an input is load-bearing: with
+observations alone the encoder can express `prior + g(obs)` but not the
+residual `prior + k·(obs − prior)`. The observed planes have no predicted
+counterpart, since the model has no placement readout. The channel layout is
+canonical in `EVIDENCE_PLANE_NAMES`, and the engine's staging
 ([evidence_staging.h](../engine/include/agent/evidence_staging.h)) mirrors it.
 
 ![EvidenceFusion: per-candidate token encode, evidence self-attention, and cross-attention rewriting the board map](images/arch_evidence_fusion.svg)
@@ -336,7 +316,7 @@ divergence guards (below) are the second line of defense.
 ### The proves-best head
 
 `proves_best` is a small softplus MLP reading the same fused per-move vector as
-the value head and the placement readout (`4C`), plus the scalar
+the value head (`4C`), plus the scalar
 **best-so-far** (`4C + 1` in). It outputs `gain` (M,) ≥ 0: the expected
 improvement `E[max(0, v − best-so-far)]` that simming the candidate would add
 over the best candidate simmed so far.
@@ -382,10 +362,7 @@ The trainer has two modes:
   whole model trains on the same loss, with two AdamW groups: the evidence
   path (fusion + proves-best, from zero or random init) at `lr`, and the
   backbone at `lr × backbone_lr_mult` (default 0.1). The WSD schedule scales
-  both, and BatchNorm runs in train mode. The placement readout is the
-  exception: no sim loss reads it, so it receives no gradient and stays the
-  student's, now reading a trunk that trains under it. The predicted half of
-  every evidence token is still its output. The plain student is exported as
+  both, and BatchNorm runs in train mode. The plain student is exported as
   ONNX each pass in this mode only.
 
 There is no distillation anchor in either mode. The empty-subset rows keep the
@@ -417,9 +394,9 @@ is read against.
 | Unit of output | one board | one candidate move |
 | Board encodes per output | 1 | 1 per candidate set |
 | Move conditioning | none (the board is post-move) | tile embeddings + cross-attention |
-| Heads | wld, score_diff, 4 footprint placement heads | wld, score_diff, 4 footprint placement readouts, proves-best gain |
+| Heads | wld, score_diff, 4 footprint placement heads | wld, score_diff, proves-best gain |
 | Supervision | game outcomes and observed spread | teacher readouts (`.mset` sidecar); sim outcomes for the move proposal copy |
-| ONNX outputs | `wld`, `score_diff`, 4 footprint-logit heads | plain graph: `wld`, `score_diff`; the evidence-path graphs (below) add `planes` and `gain` |
+| ONNX outputs | `wld`, `score_diff`, 4 footprint-logit heads | plain graph: `wld`, `score_diff`; the evidence-path step graph (below) adds `gain` |
 
 The move set evaluation model has two ONNX export paths. The plain graph
 ([onnx_export.py](../py/scribblez/move_set_eval/onnx_export.py)) emits `wld`
@@ -430,13 +407,11 @@ incrementally ([sim_residual_feedback.md](plans/sim_residual_feedback.md)):
 
 | Graph | Run | Inputs | Outputs |
 |-------|-----|--------|---------|
-| `move_proposal_cache` | once per turn | board + `M` candidates | `board (1,225,C)`, `g (1,3C)`, `move_enc (M,C)`, plain `wld`, `score_diff`, `planes` |
+| `move_proposal_cache` | once per turn | board + `M` candidates | `board (1,225,C)`, `g (1,3C)`, `move_enc (M,C)`, plain `wld`, `score_diff` |
 | `move_proposal_step` | per evidence-loop iteration | the cache tensors + a padded width-`E` evidence set | evidence-conditioned `wld`, `score_diff`, `gain` |
 
-The step graph emits no `planes`. The predicted planes in a simmed
-candidate's evidence token are the evidence-free ones, taken from the cache
-graph's output, and nothing reads a conditioned plane, so dropping the output
-saves an `M × 11,700`-float buffer per engine.
+The cache graph's plain `wld` and `score_diff` are the evidence-free value
+predictions that a simmed candidate's evidence token carries.
 
 In the engine, [move_proposal_nets.h](../engine/include/agent/move_proposal_nets.h)
 holds the pair of networks (`NeuralNet<MoveProposalCacheSpec>` and
