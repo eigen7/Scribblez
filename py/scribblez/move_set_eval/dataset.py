@@ -5,8 +5,9 @@ A position is a (game_index, turn_index) in a .slog file. Its companion .mset
 sidecar holds a sampled set of candidate moves, each with the teacher's
 readouts for its post-move state (targets.py). The dataset holds those small
 records in memory for every labeled position, shuffles positions across all
-files each epoch, and rebuilds each position's pre-move board input on demand
-with decode_rows(post_move=False). This is the project's replay-reconstruction
+files each epoch, and rebuilds each position's pre-move board input, and its
+candidates' cross-check features, on demand from one replay
+(moves.batch_move_set_positions). This is the project's replay-reconstruction
 invariant (docs/architecture.md): inputs are recomputed from the replay,
 targets come from the sidecar.
 
@@ -27,7 +28,6 @@ by targets.partition_full_sweep before construction.
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -35,7 +35,7 @@ import numpy as np
 import torch
 
 from scribblez.dataset import row_layout
-from scribblez.ffi import decode_rows, set_opp_leave_input
+from scribblez.ffi import set_opp_leave_input
 
 from . import moves as move_enc
 from .targets import (
@@ -324,24 +324,16 @@ class MsetDataset:
             yield chunk
 
     def _build_batch(self, batch: list[_Position]) -> dict[str, torch.Tensor]:
-        p = len(batch)
-        spatial = np.empty((p, *self._spatial_shape), dtype=np.float32)
-        scalar = np.empty((p, self._scalar_width), dtype=np.float32)
-
-        # One decode_rows call per source .slog.
-        by_file: dict[int, list[int]] = defaultdict(list)
-        for local_p, pos in enumerate(batch):
-            by_file[pos.file_id].append(local_p)
-        for file_id, locals_ in by_file.items():
-            games = np.array([batch[j].game_index for j in locals_], dtype=np.int64)
-            turns = np.array([batch[j].turn_index for j in locals_], dtype=np.int64)
-            rows = decode_rows(self._slogs[file_id], games, turns, post_move=False)
-            spatial_block = rows[:, : self._spatial_floats]
-            spatial_block = spatial_block.reshape(len(locals_), *self._spatial_shape)
-            scalar_block = rows[:, self._spatial_floats : self._spatial_floats + self._scalar_width]
-            for k, j in enumerate(locals_):
-                spatial[j] = spatial_block[k]
-                scalar[j] = scalar_block[k]
+        inputs = move_enc.batch_move_set_positions(
+            self._slogs,
+            [(pos.file_id, pos.game_index, pos.turn_index) for pos in batch],
+            [pos.moves for pos in batch],
+        )
+        rows = inputs["rows"]
+        spatial = rows[:, : self._spatial_floats].reshape(len(batch), *self._spatial_shape)
+        scalar = np.ascontiguousarray(
+            rows[:, self._spatial_floats : self._spatial_floats + self._scalar_width]
+        )
 
         all_moves = np.concatenate([pos.moves for pos in batch])
         all_targets = np.concatenate([pos.targets for pos in batch]).astype(np.float32)
@@ -352,11 +344,6 @@ class MsetDataset:
         pre_diff_points = np.rint(scalar[:, self._sd_index] * self._sd_scale).astype(np.int32)
         move_pre_diffs = pre_diff_points[pos_id]
         enc = move_enc.encode_moves(all_moves, move_pre_diffs)
-        cross = move_enc.batch_cross_checks(
-            self._slogs,
-            [(pos.file_id, pos.game_index, pos.turn_index) for pos in batch],
-            [pos.moves for pos in batch],
-        )
 
         batch_out = {
             "input_spatial": torch.from_numpy(spatial),
@@ -366,8 +353,8 @@ class MsetDataset:
             "move_squares": torch.from_numpy(enc["squares"]),
             "move_tile_mask": torch.from_numpy(enc["tile_mask"]),
             "move_scalars": torch.from_numpy(enc["scalars"]),
-            "move_cross_cells": torch.from_numpy(cross["cells"]),
-            "move_cross_letters": torch.from_numpy(cross["letters"]),
+            "move_cross_cells": torch.from_numpy(inputs["cells"]),
+            "move_cross_letters": torch.from_numpy(inputs["letters"]),
             "move_pos_id": torch.from_numpy(pos_id),
             "target_wld": torch.from_numpy(all_targets[:, :3].copy()),
             "target_score_diff": torch.from_numpy(all_targets[:, 3:5].copy()),

@@ -202,8 +202,8 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int32),
     ]
 
-    lib.scribblez_move_set_cross_checks.restype = ctypes.c_int
-    lib.scribblez_move_set_cross_checks.argtypes = [
+    lib.scribblez_move_set_positions.restype = ctypes.c_int
+    lib.scribblez_move_set_positions.argtypes = [
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # .slog path
         ctypes.POINTER(ctypes.c_int64),  # game_idx
@@ -211,6 +211,7 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int64),  # move_counts
         ctypes.c_int64,  # n_positions
         ctypes.c_void_p,  # moves
+        ctypes.POINTER(ctypes.c_float),  # out_rows
         ctypes.POINTER(ctypes.c_int32),  # out_cells
         ctypes.POINTER(ctypes.c_uint8),  # out_letters
     ]
@@ -610,22 +611,25 @@ def _cross_check_result(cells: np.ndarray, letters: np.ndarray) -> dict[str, np.
     return {"cells": cells.astype(np.int64), "letters": letters}
 
 
-def cross_checks(
+def move_set_positions(
     path: str | Path,
     game_idx: np.ndarray,
     turn_idx: np.ndarray,
     move_counts: np.ndarray,
     moves: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """The cross-check features of candidate moves on their positions' boards,
-    in the move set model's layout (engine move_set_encoder.h
-    encode_move_cross_checks).
+    """A move set batch's inputs from one .slog, one replay per position: each
+    position's pre-move training row, and the cross-check features of its
+    candidate moves on that board in the move set model's layout (engine
+    move_set_encoder.h encode_move_cross_checks).
 
     Position j is the pre-move decision point (game_idx[j], turn_idx[j]) of the
     .slog at `path`; its candidates are the next move_counts[j] records of the
-    (M,) MOVE_DTYPE array `moves`, M = sum(move_counts). Returns "cells"
-    (M, slots) int64 -- 1 + axis * 225 + square per entry, 0 in empty slots --
-    and "letters" (M, slots * 26) uint8, each entry's post-move legal letters.
+    (M,) MOVE_DTYPE array `moves`, M = sum(move_counts). Returns "rows"
+    (P, row_size_floats()) float32, as decode_rows(post_move=False) decodes
+    them; "cells" (M, slots) int64 -- 1 + axis * 225 + square per entry, 0 in
+    empty slots; and "letters" (M, slots * 26) uint8, each entry's post-move
+    legal letters.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -637,8 +641,9 @@ def cross_checks(
         raise ValueError(f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape}")
     if counts.sum() != len(moves):
         raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
+    rows = np.empty((len(games), row_size_floats()), dtype=np.float32)
     cells, letters = _cross_check_arrays(len(moves))
-    rc = _lib().scribblez_move_set_cross_checks(
+    rc = _lib().scribblez_move_set_positions(
         _session(),
         str(path).encode("utf-8"),
         games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
@@ -646,19 +651,21 @@ def cross_checks(
         counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
         len(games),
         moves.ctypes.data_as(ctypes.c_void_p),
+        rows.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
         cells.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
         letters.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
     )
     if rc != 0:
-        raise OSError(f"cross_checks failed (rc={rc}) for {path}")
-    return _cross_check_result(cells, letters)
+        raise OSError(f"move_set_positions failed (rc={rc}) for {path}")
+    return {"rows": rows, **_cross_check_result(cells, letters)}
 
 
 def gcg_cross_checks(
     gcg_text: str, moves: np.ndarray, *, open_leaves: bool
 ) -> dict[str, np.ndarray]:
-    """cross_checks for moves of a position-set GCG's decision point, read as
-    gcg_position_inputs reads it. Raises ValueError on an unparseable GCG."""
+    """move_set_positions' cross-check features for moves of a position-set
+    GCG's decision point, read as gcg_position_inputs reads it. Raises
+    ValueError on an unparseable GCG."""
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
     moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
@@ -691,7 +698,7 @@ def encode_candidate_rows(
     scores them: per candidate, the position after it and before the refill,
     from the mover's point of view, under the session's arm.
 
-    Positions and moves are addressed as in cross_checks. Returns
+    Positions and moves are addressed as in move_set_positions. Returns
     (M, input_floats()) float32, the spatial planes then the scalars.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE

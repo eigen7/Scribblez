@@ -112,23 +112,26 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
                                      uint8_t* out_blanks, int32_t* out_squares,
                                      uint8_t* out_tile_mask, float* out_scalars);
 
-// The cross-check features of candidate moves on their positions' boards, in
-// the move set model's layout (training/move_set_encoder.h
-// encode_move_cross_checks). Position j is the pre-move decision point
+// A move set training batch's inputs from one .slog: each position's pre-move
+// training row, as scribblez_decode_rows(post_move=0) writes it, and the
+// cross-check features of its candidate moves on that board, in the move set
+// model's layout (training/move_set_encoder.h encode_move_cross_checks). One
+// replay per position serves both. Position j is the decision point
 // (game_idx[j], turn_idx[j]) of the .slog at `path`. `moves` holds every
 // position's candidates back to back, move_counts[j] for position j; each must
-// be legal on its board. Outputs, in `moves` order:
+// be legal on its board. Outputs, cross-checks in `moves` order:
+//   out_rows     float[n_positions * row_size_floats]
 //   out_cells    int32[n_moves * cross_slots]
 //   out_letters  uint8[n_moves * cross_slots * 26]
 // Returns 0 on success, -1 on an I/O or header error.
-int scribblez_move_set_cross_checks(ScribblezSession* s, const char* path, const int64_t* game_idx,
-                                    const int64_t* turn_idx, const int64_t* move_counts,
-                                    int64_t n_positions, const void* moves, int32_t* out_cells,
-                                    uint8_t* out_letters);
+int scribblez_move_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                                 const int64_t* turn_idx, const int64_t* move_counts,
+                                 int64_t n_positions, const void* moves, float* out_rows,
+                                 int32_t* out_cells, uint8_t* out_letters);
 
-// As scribblez_move_set_cross_checks for the `n` moves of one position-set
-// GCG's decision point (read as scribblez_gcg_position_inputs reads it).
-// Returns 0, or -1 with the reason in out_err.
+// The cross-check outputs of scribblez_move_set_positions for the `n` moves of
+// one position-set GCG's decision point (read as scribblez_gcg_position_inputs
+// reads it). Returns 0, or -1 with the reason in out_err.
 int scribblez_gcg_cross_checks(ScribblezSession* s, const char* gcg_text, int open_leaves,
                                const void* moves, int64_t n, int32_t* out_cells,
                                uint8_t* out_letters, char* out_err, int err_cap);
@@ -137,7 +140,7 @@ int scribblez_gcg_cross_checks(ScribblezSession* s, const char* gcg_text, int op
 // model scores them from: per candidate, the position after it and before the
 // refill, from the mover's point of view, under the session's arm (as
 // training/move_set_eval_target_generator encodes them). Positions and moves
-// are addressed as in scribblez_move_set_cross_checks; `out` takes one
+// are addressed as in scribblez_move_set_positions; `out` takes one
 // row of scribblez_input_floats() per move. Returns 0 on success, -1 on an I/O
 // or header error.
 int scribblez_encode_candidate_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
