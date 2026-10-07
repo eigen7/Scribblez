@@ -29,7 +29,8 @@ Files written into --out-dir:
     refuse to feed, not one it cannot parse.
   * board.bin -- one position's encoder row (spatial floats then scalar floats),
     float32, laid out as GameStateEncoder::encode_input writes it.
-  * move_{letters,blanks,squares,tile_mask,scalars}.bin -- the candidate set, in
+  * move_{letters,blanks,squares,tile_mask,scalars,cross_cells,cross_letters}.bin
+    -- the candidate set, in
     move_set_encoder.h's own dtypes and row-major layout. M is recovered C++-side
     from the scalars file's size.
   * expected_a.bin / expected_b.bin -- M x 6 float32: [win_prob, p_win, p_draw,
@@ -47,7 +48,11 @@ import onnx
 import torch
 from scribblez.ffi import get_input_shapes
 from scribblez.move_set_eval.model import MoveSetEvalModel
-from scribblez.move_set_eval.moves import move_encoding_dims, move_encoding_version
+from scribblez.move_set_eval.moves import (
+    move_encoding_dims,
+    move_encoding_version,
+    synthetic_cross_checks,
+)
 from scribblez.move_set_eval.onnx_export import export_onnx
 
 # A deliberately tiny architecture: the parity check exercises the inference
@@ -78,6 +83,12 @@ def build_model(seed: int, spatial_planes: int, scalar_size: int, board_size: in
         num_heads=NUM_HEADS,
         board_size=board_size,
     )
+    # The cross-check encoder's output is zero-init, which would leave the
+    # served cross-check inputs unread -- perturb it so the parity test
+    # covers them.
+    with torch.no_grad():
+        for p in model.cross_check_encoder.out.parameters():
+            p.add_(0.1 * torch.randn_like(p))
     model.eval()
     return model
 
@@ -105,12 +116,15 @@ def random_candidates(num_moves: int, seed: int) -> dict[str, np.ndarray]:
             squares[m, :n] = rng.integers(0, cells, n)
         scalars[m] = [rng.standard_normal(), n / tiles, is_play]
 
+    cross = synthetic_cross_checks(scalars[:, 2] > 0, seed)
     return {
         "move_letters": letters,
         "move_blanks": blanks,
         "move_squares": squares,
         "move_tile_mask": tile_mask,
         "move_scalars": scalars,
+        "move_cross_cells": cross["cells"].astype(np.int32),
+        "move_cross_letters": cross["letters"],
     }
 
 
@@ -140,6 +154,8 @@ def reference_evals(model, board_row: np.ndarray, moves: dict, shape: tuple[int,
         torch.from_numpy(moves["move_squares"]).long(),
         torch.from_numpy(moves["move_tile_mask"]).float(),
         torch.from_numpy(moves["move_scalars"]),
+        torch.from_numpy(moves["move_cross_cells"]).long(),
+        torch.from_numpy(moves["move_cross_letters"]),
         torch.zeros(num_moves, dtype=torch.long),  # the single position
     )
 

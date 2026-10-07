@@ -120,7 +120,7 @@ void UltimateBotAgent::encode_candidates(const MoveRequest& req,
   // row, so each candidate's resulting differential is exactly the row's
   // score-diff feature plus the move's score (input_encoder.h).
   const int me = encoder_.active_player();
-  move_features_.encode(candidates.data(), int(candidates.size()),
+  move_features_.encode(req.board, req.dict, candidates.data(), int(candidates.size()),
                         encoder_.score(me) - encoder_.score(1 - me));
   service_->encode(board_row_.data(), move_features_);
 }

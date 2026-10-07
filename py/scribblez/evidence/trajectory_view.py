@@ -30,7 +30,7 @@ from scribblez.ffi import GcgPositionInputs, gcg_position_inputs
 from scribblez.footprint_spatial import SLOTS_PER_CELL
 from scribblez.move_set_eval.evidence import build_evidence_inputs
 from scribblez.move_set_eval.model import footprint_cell_marginal, win_equity
-from scribblez.move_set_eval.moves import encode_moves
+from scribblez.move_set_eval.moves import encode_moves, gcg_cross_checks
 from scribblez.move_set_eval.targets import PLANE_NAMES
 from scribblez.sim_evidence.sobs import (
     MOVE_PLAY,
@@ -142,6 +142,7 @@ class DecisionAnalysis:
             spatial_planes=cfg["spatial_planes"],
             scalar_size=cfg["scalar_size"],
         )
+        self._cross = gcg_cross_checks(gcg_text, self.inputs.moves, open_leaves=cfg["open_leaves"])
         self.sim_index = self._locate_candidates()
         self._cond_cache: dict[int, ScoredPass] = {}
         self._run_plain()
@@ -175,7 +176,7 @@ class DecisionAnalysis:
         args = tuple(
             torch.from_numpy(enc[k]).to(self.device)
             for k in ("letters", "blanks", "squares", "tile_mask", "scalars")
-        )
+        ) + tuple(torch.from_numpy(self._cross[k]).to(self.device) for k in ("cells", "letters"))
         self._pos_id = torch.zeros(n, dtype=torch.int64, device=self.device)
         self._board, self._g = model.encode_board(spatial, scalar)
         self._e = model.encode_moves(self._board, *args, self._pos_id)
@@ -200,6 +201,7 @@ class DecisionAnalysis:
             self.sobs.moves[:prefix],
             self.sobs.obs[:prefix],
             self.inputs.score_diff,
+            {k: v[rows] for k, v in self._cross.items()},
             first_pass,
             max_e=self.max_e,
             dtype=self._board.dtype,

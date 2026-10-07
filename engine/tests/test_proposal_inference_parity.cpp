@@ -155,6 +155,10 @@ scribblez::move_set::MoveFeatureArrays truncate_moves(
   out.squares.assign(moves.squares.begin(), moves.squares.begin() + count * kMoveMaxPlaced);
   out.tile_mask.assign(moves.tile_mask.begin(), moves.tile_mask.begin() + count * kMoveMaxPlaced);
   out.scalars.assign(moves.scalars.begin(), moves.scalars.begin() + count * kMoveScalars);
+  out.cross_cells.assign(moves.cross_cells.begin(),
+                         moves.cross_cells.begin() + count * kMoveCrossSlots);
+  out.cross_letters.assign(moves.cross_letters.begin(),
+                           moves.cross_letters.begin() + count * kMoveCrossLetters);
   return out;
 }
 
@@ -206,6 +210,8 @@ void ProposalInferenceParityTest::SetUp() {
   moves_.squares = read_binary<int32_t>(dir_ + "/move_squares.bin");
   moves_.tile_mask = read_binary<uint8_t>(dir_ + "/move_tile_mask.bin");
   moves_.scalars = read_binary<float>(dir_ + "/move_scalars.bin");
+  moves_.cross_cells = read_binary<int32_t>(dir_ + "/move_cross_cells.bin");
+  moves_.cross_letters = read_binary<uint8_t>(dir_ + "/move_cross_letters.bin");
   moves_.count = int(moves_.scalars.size() / scribblez::move_set::kMoveScalars);
   num_moves_ = moves_.count;
   sobs_moves_ = read_binary<Move>(dir_ + "/moves_sobs.bin");

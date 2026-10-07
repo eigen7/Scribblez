@@ -87,9 +87,12 @@ NUM_EVIDENCE_SCALARS = len(EVIDENCE_SCALAR_NAMES)
 class EvidenceInputs:
     """One padded evidence set per position: P positions, E token slots.
 
-    Move encoding (training/move_set_encoder.h layout, T = max placed tiles):
+    Move encoding (training/move_set_encoder.h layout, T = max placed tiles,
+    K = cross-check slots):
         letters, blanks, squares, tile_mask   (P, E, T)
         scalars                               (P, E, kMoveScalars)
+        cross_cells                           (P, E, K)
+        cross_letters                         (P, E, K * 26)
     Observations, in the orders defined above:
         obs_planes    (P, E, NUM_EVIDENCE_PLANES, 15, 15)
         obs_scalars   (P, E, NUM_EVIDENCE_SCALARS)
@@ -101,6 +104,8 @@ class EvidenceInputs:
     squares: torch.Tensor
     tile_mask: torch.Tensor
     scalars: torch.Tensor
+    cross_cells: torch.Tensor
+    cross_letters: torch.Tensor
     obs_planes: torch.Tensor
     obs_scalars: torch.Tensor
     mask: torch.Tensor

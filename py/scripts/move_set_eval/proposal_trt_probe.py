@@ -33,7 +33,12 @@ import torch
 from scribblez.evidence_fusion import NUM_EVIDENCE_PLANES, NUM_EVIDENCE_SCALARS
 from scribblez.ffi import get_input_shapes
 from scribblez.move_set_eval.model import MoveSetEvalModel
-from scribblez.move_set_eval.moves import move_encoding_dims
+from scribblez.move_set_eval.moves import (
+    move_cross_slots,
+    move_encoding_dims,
+    move_encoding_version,
+    synthetic_cross_checks,
+)
 from scribblez.move_set_eval.proposal_export import (
     DEFAULT_MAX_EVIDENCE,
     export_proposal_cache,
@@ -77,6 +82,7 @@ def _random_model(seed: int, spatial_planes: int, scalar_size: int) -> MoveSetEv
 def _cache_inputs(m: int, spatial_planes: int, scalar_size: int, seed: int) -> dict:
     t, s, letter_vocab, cells = move_encoding_dims()
     rng = np.random.default_rng(seed)
+    cross = synthetic_cross_checks(np.ones(m, dtype=bool), seed)
     return {
         "input_spatial": rng.standard_normal((1, spatial_planes, BOARD, BOARD), dtype=np.float32),
         "input_scalar": rng.standard_normal((1, scalar_size), dtype=np.float32),
@@ -85,6 +91,8 @@ def _cache_inputs(m: int, spatial_planes: int, scalar_size: int, seed: int) -> d
         "move_squares": rng.integers(0, cells, (m, t), dtype=np.int32),
         "move_tile_mask": rng.integers(0, 2, (m, t)).astype(np.uint8),
         "move_scalars": rng.standard_normal((m, s)).astype(np.float32),
+        "move_cross_cells": cross["cells"].astype(np.int32),
+        "move_cross_letters": cross["letters"],
     }
 
 
@@ -108,8 +116,8 @@ def _step_inputs(m: int, channels: int, seed: int) -> dict:
 
 
 # Input dtypes by name, shared by both graphs; unlisted inputs are float32.
-_INT32 = {"move_letters", "move_squares"}
-_UINT8 = {"move_blanks", "move_tile_mask", "ev_mask"}
+_INT32 = {"move_letters", "move_squares", "move_cross_cells"}
+_UINT8 = {"move_blanks", "move_tile_mask", "move_cross_letters", "ev_mask"}
 
 
 def _dtype(name: str) -> torch.dtype:
@@ -232,6 +240,8 @@ def main() -> int:
         "move_squares": t,
         "move_tile_mask": t,
         "move_scalars": s,
+        "move_cross_cells": move_cross_slots(),
+        "move_cross_letters": move_cross_slots() * 26,
     }
 
     _probe_graph(
@@ -244,7 +254,7 @@ def main() -> int:
             spatial_planes,
             scalar_size,
             opp_leave_input=False,
-            move_encoding_version=1,
+            move_encoding_version=move_encoding_version(),
             proposal_export_id=proposal_export_id(model_a),
             trained_max_evidence=16,
         ),
@@ -254,7 +264,7 @@ def main() -> int:
             spatial_planes,
             scalar_size,
             opp_leave_input=False,
-            move_encoding_version=1,
+            move_encoding_version=move_encoding_version(),
             proposal_export_id=proposal_export_id(model_b),
             trained_max_evidence=16,
         ),
@@ -277,7 +287,7 @@ def main() -> int:
             model_a,
             p,
             opp_leave_input=False,
-            move_encoding_version=1,
+            move_encoding_version=move_encoding_version(),
             proposal_export_id=proposal_export_id(model_a),
             trained_max_evidence=16,
         ),
@@ -285,7 +295,7 @@ def main() -> int:
             model_b,
             p,
             opp_leave_input=False,
-            move_encoding_version=1,
+            move_encoding_version=move_encoding_version(),
             proposal_export_id=proposal_export_id(model_b),
             trained_max_evidence=16,
         ),

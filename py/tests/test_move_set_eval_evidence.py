@@ -57,12 +57,15 @@ def _random_evidence(p: int, counts: list[int], seed: int = 2, max_e: int | None
     mask = torch.zeros(p, e, dtype=torch.bool)
     for i, k in enumerate(counts):
         mask[i, :k] = True
+    cross = move_enc.synthetic_cross_checks(np.ones(p * e, dtype=bool), seed)
     return EvidenceInputs(
         letters=torch.randint(0, letter_vocab, (p, e, max_tiles), generator=gen),
         blanks=torch.randint(0, 2, (p, e, max_tiles), generator=gen),
         squares=torch.randint(0, cells, (p, e, max_tiles), generator=gen),
         tile_mask=(torch.rand(p, e, max_tiles, generator=gen) > 0.4).double(),
         scalars=torch.randn(p, e, num_scalars, generator=gen, dtype=torch.float64),
+        cross_cells=torch.from_numpy(cross["cells"]).view(p, e, -1),
+        cross_letters=torch.from_numpy(cross["letters"]).view(p, e, -1),
         obs_planes=torch.rand(
             p, e, NUM_EVIDENCE_PLANES, 15, 15, generator=gen, dtype=torch.float64
         ),
@@ -247,13 +250,17 @@ def _first_pass(k: int, seed: int = 5):
     }
 
 
+def _cross(k: int) -> dict[str, np.ndarray]:
+    return move_enc.synthetic_cross_checks(np.ones(k, dtype=bool), seed=k)
+
+
 def test_builder_assembles_both_halves():
     from scribblez.move_set_eval.evidence import build_evidence_inputs
 
     k, max_e = 2, 4
     moves, obs = _synthetic_sobs(k)
     first_pass = _first_pass(k)
-    ev = build_evidence_inputs(moves, obs, 30, first_pass, max_e=max_e)
+    ev = build_evidence_inputs(moves, obs, 30, _cross(k), first_pass, max_e=max_e)
 
     assert ev.mask.shape == (1, max_e)
     assert int(ev.mask.sum()) == k
@@ -293,6 +300,10 @@ def test_builder_assembles_both_halves():
     enc = move_enc.encode_moves(np.asarray(moves), np.full(k, 30, dtype=np.int32))
     np.testing.assert_array_equal(ev.letters[0, :k].numpy(), enc["letters"])
     assert not ev.letters[0, k:].any()  # padding rows are zeroed
+    # The cross-check half is the caller's, row for row.
+    np.testing.assert_array_equal(ev.cross_cells[0, :k].numpy(), _cross(k)["cells"])
+    np.testing.assert_array_equal(ev.cross_letters[0, :k].numpy(), _cross(k)["letters"])
+    assert not ev.cross_cells[0, k:].any()
 
     # Padded rows are unmasked and zero.
     assert not ev.mask[0, k:].any()
@@ -303,9 +314,9 @@ def test_builder_rejects_sets_that_do_not_fit():
 
     moves, obs = _synthetic_sobs(3)
     with pytest.raises(ValueError, match="does not fit"):
-        build_evidence_inputs(moves, obs, 0, _first_pass(3), max_e=2)
+        build_evidence_inputs(moves, obs, 0, _cross(3), _first_pass(3), max_e=2)
     # The empty set is a valid evidence set: every row masked out.
-    empty = build_evidence_inputs(moves[:0], obs[:0], 0, _first_pass(0), max_e=2)
+    empty = build_evidence_inputs(moves[:0], obs[:0], 0, _cross(0), _first_pass(0), max_e=2)
     assert empty.mask.shape == (1, 2) and not empty.mask.any()
     assert empty.obs_planes.shape[1:3] == (2, NUM_EVIDENCE_PLANES)
 
@@ -324,7 +335,9 @@ def test_collated_builder_output_drives_the_model():
     for i, k in enumerate([2, 1]):
         moves, obs = _synthetic_sobs(k)
         per_position.append(
-            build_evidence_inputs(moves, obs, 15 * i, _first_pass(k), max_e=3, dtype=torch.float64)
+            build_evidence_inputs(
+                moves, obs, 15 * i, _cross(k), _first_pass(k), max_e=3, dtype=torch.float64
+            )
         )
     evidence = collate_evidence(per_position)
     assert evidence.mask.shape == (2, 3)

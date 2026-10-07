@@ -24,11 +24,8 @@
 #include "game/rack.h"
 
 #include <cstdint>
-#include <vector>
 
 namespace scribblez {
-
-class Dictionary;
 
 namespace move_set {
 
@@ -52,12 +49,6 @@ inline constexpr int kMoveMaxCrossDeltas = 2 * RACK_SIZE + 2;
 void encode_cross_check_deltas(Board& board, const Move& m, BoardUndo& undo, uint8_t* axes,
                                int32_t* squares, uint32_t* old_masks, uint32_t* new_masks,
                                uint8_t* delta_mask);
-
-// The batch form over one position's candidate set, candidate-major. Works on a
-// copy of `board`, building its move-generation caches from `dict`.
-void encode_cross_check_deltas(const Board& board, const Dictionary& dict, const Move* moves,
-                               int64_t n, uint8_t* axes, int32_t* squares, uint32_t* old_masks,
-                               uint32_t* new_masks, uint8_t* delta_mask);
 
 }  // namespace move_set
 }  // namespace scribblez

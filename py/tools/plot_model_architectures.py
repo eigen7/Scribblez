@@ -598,8 +598,8 @@ def move_set_eval() -> Diagram:
         26,
         [
             title("move inputs"),
-            sub("letters, blanks, squares"),
-            sub("tile_mask, scalars, pos_id"),
+            sub("letters, blanks, squares, tile_mask,"),
+            sub("scalars, cross_cells/letters, pos_id"),
         ],
         "input",
     )
@@ -633,10 +633,15 @@ def move_set_eval() -> Diagram:
     d.edge(feat.bottom, (x_col, 252), (540, 252), (540, g.top))
     d.edge(proj.bottom, (s_col, 252), (590, 252), (590, g.top))
 
-    encoder = d.box(move_col, 392, [title("MoveEncoder"), sub("fig. 4"), mono("e   (M, C)")], "op")
+    encoder = d.box(
+        move_col,
+        392,
+        [title("MoveEncoder + CrossCheckEncoder"), sub("fig. 4, summed"), mono("e   (M, C)")],
+        "op",
+    )
     d.edge(moves_in.bottom, (move_col, encoder.top))
     d.edge(board.bottom, (board_col, 428), (move_col - encoder.w / 2, 428))
-    d.note(board_col + 14, 414, "board token at each placed tile's square")
+    d.note(board_col + 14, 414, "board token at each placed tile's / cross-check's square")
 
     queries = d.box(
         move_col,
@@ -696,8 +701,8 @@ def evidence_fusion() -> Diagram:
         26,
         [
             title("evidence move inputs"),
-            sub("letters, blanks, squares,"),
-            sub("tile_mask, scalars"),
+            sub("letters, blanks, squares, tile_mask,"),
+            sub("scalars, cross_cells/letters"),
             mono("(P, E, ...)"),
         ],
         "input",

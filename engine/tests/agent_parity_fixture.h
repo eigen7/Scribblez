@@ -143,12 +143,22 @@ inline void expect_candidate_features_match(const move_set::MoveFeatureArrays& g
   }
 }
 
-// expect_candidate_features_match over the whole candidate set.
-inline void expect_move_features_match(const move_set::MoveFeatureArrays& got,
-                                       const std::vector<Move>& candidates, int pre_diff) {
+// expect_candidate_features_match over the whole candidate set, and checks
+// that its cross-check features are what encode_moves_cross_checks -- the
+// training rows' encoder -- makes of the set on `board`.
+inline void expect_move_features_match(const move_set::MoveFeatureArrays& got, const Board& board,
+                                       const Dictionary& dict, const std::vector<Move>& candidates,
+                                       int pre_diff) {
   for (size_t i = 0; i < candidates.size(); ++i) {
     expect_candidate_features_match(got, i, candidates[i], pre_diff);
   }
+  const size_t n = candidates.size();
+  std::vector<int32_t> cells(n * move_set::kMoveCrossSlots);
+  std::vector<uint8_t> letters(n * move_set::kMoveCrossLetters);
+  move_set::encode_moves_cross_checks(board, dict, candidates.data(), int64_t(n), cells.data(),
+                                      letters.data());
+  EXPECT_EQ(got.cross_cells, cells);
+  EXPECT_EQ(got.cross_letters, letters);
 }
 
 }  // namespace scribblez::testing

@@ -168,8 +168,13 @@ def _cpu_evidence_batch(units, pre_diffs):
     in_evidence = np.concatenate(masks)
     ev_index = np.concatenate([ED._compact_index(mask) for mask in masks])
     enc = move_enc.encode_moves(all_moves, np.asarray(pre_diffs, np.int32)[pos_id])
+    cross = move_enc.synthetic_cross_checks(np.ones(len(all_moves), dtype=bool), seed=3)
     move_keys = ("letters", "blanks", "squares", "tile_mask", "scalars")
-    move_args = (*(torch.from_numpy(enc[k]) for k in move_keys), torch.from_numpy(pos_id))
+    move_args = (
+        *(torch.from_numpy(enc[k]) for k in move_keys),
+        *(torch.from_numpy(cross[k]) for k in ("cells", "letters")),
+        torch.from_numpy(pos_id),
+    )
     batch = {
         "positions": positions,
         "in_evidence": torch.from_numpy(in_evidence),
@@ -217,8 +222,11 @@ def test_batch_evidence_inputs_aligns_the_halves_for_arbitrary_subsets():
         rows = offset + members
         offset += len(pos.moves)
         first = {kk: plain[kk][rows] for kk in ("wld", "score_diff", "planes")}
+        cross = {"cells": move_args[5][rows].numpy(), "letters": move_args[6][rows].numpy()}
         items.append(
-            build_evidence_inputs(pos.moves[members], pos.obs[members], pre, first, max_e=max_e)
+            build_evidence_inputs(
+                pos.moves[members], pos.obs[members], pre, cross, first, max_e=max_e
+            )
         )
     slow = collate_evidence(items)
 
@@ -716,11 +724,16 @@ def test_batched_evidence_builder_matches_the_per_position_one(traj_datasets):
                 rows = torch.from_numpy(offset + members).to(device)
                 offset += len(pos.moves)
                 first = {kk: plain[kk][rows] for kk in ("wld", "score_diff", "planes")}
+                cross = {
+                    "cells": batch["move_cross_cells"][rows.cpu()].numpy(),
+                    "letters": batch["move_cross_letters"][rows.cpu()].numpy(),
+                }
                 items.append(
                     build_evidence_inputs(
                         pos.moves[members],
                         pos.obs[members],
                         int(batch["pre_move_diff"][p]),
+                        cross,
                         first,
                         max_e=max_e,
                         device=device,

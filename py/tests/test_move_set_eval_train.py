@@ -161,6 +161,7 @@ def _ragged_batch(counts: list[int], seed: int = 0) -> dict[str, torch.Tensor]:
 
     p, m = len(counts), sum(counts)
     gen = torch.Generator().manual_seed(seed)
+    cross = move_enc.synthetic_cross_checks(np.arange(m) % 5 != 0, seed)
     return {
         "input_spatial": torch.rand(p, *spatial_shape, generator=gen, dtype=torch.float64),
         "input_scalar": torch.rand(p, scalar_size, generator=gen, dtype=torch.float64),
@@ -169,6 +170,8 @@ def _ragged_batch(counts: list[int], seed: int = 0) -> dict[str, torch.Tensor]:
         "move_squares": torch.randint(0, cells, (m, max_tiles), generator=gen),
         "move_tile_mask": (torch.rand(m, max_tiles, generator=gen) > 0.4).double(),
         "move_scalars": torch.randn(m, num_scalars, generator=gen, dtype=torch.float64),
+        "move_cross_cells": torch.from_numpy(cross["cells"]),
+        "move_cross_letters": torch.from_numpy(cross["letters"]),
         "move_pos_id": torch.repeat_interleave(torch.arange(p), torch.tensor(counts)),
     }
 
@@ -180,6 +183,8 @@ _MOVE_KEYS = (
     "move_squares",
     "move_tile_mask",
     "move_scalars",
+    "move_cross_cells",
+    "move_cross_letters",
 )
 # MoveSetEvalModel.forward's positional order.
 _FORWARD_KEYS = (*_BOARD_KEYS, *_MOVE_KEYS, "move_pos_id")
@@ -268,6 +273,8 @@ def test_schedule_free_recalibrates_the_mset_trunk_batchnorm():
         batch["move_squares"],
         batch["move_tile_mask"].float(),
         batch["move_scalars"].float(),
+        batch["move_cross_cells"],
+        batch["move_cross_letters"],
         batch["move_pos_id"],
     ]
     first_bn = next(m for m in model.modules() if isinstance(m, torch.nn.BatchNorm2d))
@@ -452,6 +459,66 @@ def test_eval_runs_over_a_full_sweep_holdout(sweep_dir):
             assert 0.0 <= metrics[f"exch_retention@{k}{suffix}"] <= 1.0
 
 
+def test_dataset_cross_checks_follow_the_flattened_move_order(corpus_dir):
+    """Cross-check features are gathered one replay call per source file and
+    scattered back, so each move's row must be the one a direct per-position
+    call returns -- and a corpus of real plays must actually carry entries."""
+    from scribblez.move_set_eval.dataset import MsetDataset
+
+    ds = MsetDataset(corpus_dir)
+    assert len(ds.files) > 1  # the scatter is only exercised across files
+    order = np.random.default_rng(0).permutation(ds.num_positions)[:8]
+    positions = [ds._positions[i] for i in order]
+    batch = ds._build_batch(positions)
+    start = 0
+    for pos in positions:
+        direct = move_enc.cross_checks(
+            ds._slogs[pos.file_id], [pos.game_index], [pos.turn_index], [len(pos.moves)], pos.moves
+        )
+        n = len(pos.moves)
+        cells = batch["move_cross_cells"][start : start + n].numpy()
+        letters = batch["move_cross_letters"][start : start + n].numpy()
+        np.testing.assert_array_equal(cells, direct["cells"])
+        np.testing.assert_array_equal(letters, direct["letters"])
+        start += n
+    assert start == batch["move_pos_id"].shape[0]
+    assert int((batch["move_cross_cells"] > 0).sum()) > 0
+
+
+def test_a_fresh_cross_check_encoder_leaves_the_move_embedding_alone():
+    """Zero-init output: a fresh model reads the cross-check inputs as nothing,
+    so it starts as the tile-only model. Once the output weights move, the
+    inputs change every play's embedding and leave every non-play's alone."""
+    from scribblez.move_set_eval.model import MoveSetEvalModel
+
+    batch = _ragged_batch([3, 4], seed=5)
+    torch.manual_seed(0)
+    model = MoveSetEvalModel(
+        spatial_planes=batch["input_spatial"].shape[1],
+        scalar_size=batch["input_scalar"].shape[1],
+        trunk_channels=8,
+        num_blocks=2,
+        num_heads=2,
+    )
+    model = model.double().eval()
+    board, _ = model.encode_board(batch["input_spatial"], batch["input_scalar"])
+    args = [batch[k] for k in _MOVE_KEYS] + [batch["move_pos_id"]]
+    no_cross = list(args)
+    no_cross[5] = torch.zeros_like(batch["move_cross_cells"])
+    no_cross[6] = torch.zeros_like(batch["move_cross_letters"])
+    with torch.no_grad():
+        torch.testing.assert_close(
+            model.encode_moves(board, *args), model.encode_moves(board, *no_cross)
+        )
+        torch.nn.init.normal_(model.cross_check_encoder.out.weight, std=0.1)
+        changed = (
+            (model.encode_moves(board, *args) - model.encode_moves(board, *no_cross)).abs().sum(1)
+        )
+    has_entries = (batch["move_cross_cells"] > 0).any(dim=1)
+    assert bool((changed[has_entries] > 0).all())
+    assert bool((changed[~has_entries] == 0).all())
+
+
 def test_dataset_batches_flatten_candidates(corpus_dir):
     from scribblez.move_set_eval.dataset import MsetDataset
 
@@ -467,7 +534,7 @@ def test_dataset_batches_flatten_candidates(corpus_dir):
         assert batch["input_scalar"].shape == (p, ds.scalar_size)
         # Flattened move tensors are all length M and map into [0, P).
         move_keys = ("move_letters", "move_blanks", "move_squares", "move_tile_mask")
-        for key in (*move_keys, "move_scalars"):
+        for key in (*move_keys, "move_scalars", "move_cross_cells", "move_cross_letters"):
             assert batch[key].shape[0] == m
         assert int(batch["move_pos_id"].max()) < p
         assert batch["target_wld"].shape == (m, 3)
@@ -481,87 +548,6 @@ def test_dataset_batches_flatten_candidates(corpus_dir):
         assert float(batch["target_planes"].max()) <= 1.0
         seen_positions += p
     assert seen_positions == ds.num_positions
-
-
-def test_cross_check_deltas_address_the_decoded_planes(corpus_dir):
-    """The delta entries' (axis, square, letter) convention, checked against the
-    planes Python actually decodes: every entry's old mask is the pre-move
-    cross-check column at its square. (That the new masks are the teacher's
-    post-move planes is the engine's CrossCheckDelta test.)"""
-    from scribblez.ffi import cross_check_deltas, cross_check_plane0, decode_rows
-    from scribblez.move_set_eval.targets import read_mset
-
-    mset = sorted(corpus_dir.glob("*.mset"))[0]
-    positions = read_mset(mset).positions
-    games = np.array([p.game_index for p in positions], dtype=np.int64)
-    turns = np.array([p.turn_index for p in positions], dtype=np.int64)
-    counts = np.array([len(p.moves) for p in positions], dtype=np.int64)
-    moves = np.concatenate([p.moves for p in positions])
-    slog = mset.with_suffix(".slog")
-    deltas = cross_check_deltas(slog, games, turns, counts, moves)
-
-    planes = decode_rows(slog, games, turns, post_move=False)
-    plane0 = cross_check_plane0()
-    cross = planes[:, plane0 * SIDE * SIDE : (plane0 + 52) * SIDE * SIDE]
-    cross = cross.reshape(len(positions), 2, 26, SIDE * SIDE)
-    pos_id = np.repeat(np.arange(len(positions)), counts)
-    letters = np.arange(26, dtype=np.uint32)
-
-    is_play = moves["type"] == MOVE_PLAY
-    n_entries = deltas["delta_mask"].sum(axis=1)
-    assert (n_entries[is_play] >= 1).all()  # a play always extends some run
-    assert (n_entries[~is_play] == 0).all()
-    assert n_entries.max() > 4
-    for m, d in np.argwhere(deltas["delta_mask"]):
-        old_bits = (deltas["old_masks"][m, d] >> letters) & 1
-        column = cross[pos_id[m], deltas["axes"][m, d], :, deltas["squares"][m, d]]
-        np.testing.assert_array_equal(column, old_bits.astype(np.float32))
-        assert deltas["new_masks"][m, d] != deltas["old_masks"][m, d]
-
-
-def test_dataset_cross_check_deltas_follow_the_flattened_move_order(corpus_dir):
-    """The opt-in delta tensors are scattered back from per-file replay calls, so
-    each move's row must be the one a direct per-position call returns."""
-    from scribblez.ffi import cross_check_deltas
-    from scribblez.move_set_eval.dataset import CROSS_DELTA_KEYS, MsetDataset
-
-    ds = MsetDataset(corpus_dir, with_cross_check_deltas=True)
-    assert len(ds.files) > 1  # the scatter is only exercised across files
-    order = np.random.default_rng(0).permutation(ds.num_positions)[:8]
-    positions = [ds._positions[i] for i in order]
-    batch = ds._build_batch(positions)
-    start = 0
-    for pos in positions:
-        direct = cross_check_deltas(
-            ds._slogs[pos.file_id], [pos.game_index], [pos.turn_index], [len(pos.moves)], pos.moves
-        )
-        for batch_key, key in CROSS_DELTA_KEYS.items():
-            rows = batch[batch_key][start : start + len(pos.moves)].numpy()
-            np.testing.assert_array_equal(rows, direct[key].astype(rows.dtype))
-        start += len(pos.moves)
-    assert start == batch["move_pos_id"].shape[0]
-
-
-def test_cross_check_diagnostic_tabulates_a_slice(corpus_dir, monkeypatch):
-    from scribblez.move_set_eval import cross_check_diagnostic as diag
-    from scribblez.move_set_eval.dataset import MsetDataset
-    from scribblez.move_set_eval.model import MoveSetEvalModel
-
-    ds = MsetDataset(corpus_dir, with_cross_check_deltas=True)
-    torch.manual_seed(0)
-    model = MoveSetEvalModel(ds.spatial_planes, ds.scalar_size, trunk_channels=16, num_blocks=2)
-    data = diag.collect(model.eval(), ds, torch.device("cpu"), max_positions=10**9)
-
-    assert all(len(v) == ds.num_candidates for v in data.values())
-    assert all(np.isfinite(data[e]).all() and (data[e] >= -1e-5).all() for e in diag.ERRORS)
-    plays = data["is_play"]
-    assert (data["changed_bits"][plays] > 0).all()
-    assert (data["changed_bits"][~plays] == 0).all()
-    assert (data["hook_letters"] <= 26 * 4).all()  # at most both ends, each way
-
-    monkeypatch.setattr(diag, "MIN_MOVES_PER_ROW", 3)
-    table = diag.format_table(data, "changed_bits", "equity_abs")
-    assert len(table.splitlines()) > 2
 
 
 def test_train_step_and_eval(corpus_dir):
@@ -625,7 +611,7 @@ def test_move_encoding_version_is_the_engines():
 
     # Pinned so a bump is deliberate: it makes every trained checkpoint
     # unloadable (see kMoveEncodingVersion in move_set_encoder.h).
-    assert move_encoding_version() == 1
+    assert move_encoding_version() == 2
 
 
 def test_publish_config_records_params_before_the_model_exists(tmp_path):
@@ -1211,6 +1197,7 @@ _DRIVE_RUN = """
 import sys, torch
 import onnx
 from cloud.sinks import LocalSink
+from scribblez.move_set_eval.moves import move_encoding_version
 from types import SimpleNamespace
 from pathlib import Path
 from scribblez.move_set_eval import trainer
@@ -1299,7 +1286,7 @@ assert saved["rows_trained"] > 0, saved["rows_trained"]
 for epoch in (0, 1):
     meta = {e.key: e.value for e in onnx.load(str(paths.onnx_path(epoch))).metadata_props}
     assert meta["graph"] == "move_set_eval", meta
-    assert meta["move_encoding_version"] == "1", meta
+    assert meta["move_encoding_version"] == str(move_encoding_version()), meta
     assert meta["opp_leave_input"] == "false", meta
 print("OK")
 """

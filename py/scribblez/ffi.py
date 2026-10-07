@@ -202,8 +202,8 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int32),
     ]
 
-    lib.scribblez_move_set_cross_check_deltas.restype = ctypes.c_int
-    lib.scribblez_move_set_cross_check_deltas.argtypes = [
+    lib.scribblez_move_set_cross_checks.restype = ctypes.c_int
+    lib.scribblez_move_set_cross_checks.argtypes = [
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # .slog path
         ctypes.POINTER(ctypes.c_int64),  # game_idx
@@ -211,18 +211,25 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int64),  # move_counts
         ctypes.c_int64,  # n_positions
         ctypes.c_void_p,  # moves
-        ctypes.POINTER(ctypes.c_uint8),  # out_axes
-        ctypes.POINTER(ctypes.c_int32),  # out_squares
-        ctypes.POINTER(ctypes.c_uint32),  # out_old_masks
-        ctypes.POINTER(ctypes.c_uint32),  # out_new_masks
-        ctypes.POINTER(ctypes.c_uint8),  # out_delta_mask
+        ctypes.POINTER(ctypes.c_int32),  # out_cells
+        ctypes.POINTER(ctypes.c_uint8),  # out_letters
     ]
 
-    lib.scribblez_move_set_max_cross_deltas.restype = ctypes.c_int32
-    lib.scribblez_move_set_max_cross_deltas.argtypes = []
+    lib.scribblez_gcg_cross_checks.restype = ctypes.c_int
+    lib.scribblez_gcg_cross_checks.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # gcg text
+        ctypes.c_int,  # open_leaves
+        ctypes.c_void_p,  # moves
+        ctypes.c_int64,  # n
+        ctypes.POINTER(ctypes.c_int32),  # out_cells
+        ctypes.POINTER(ctypes.c_uint8),  # out_letters
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
 
-    lib.scribblez_cross_check_plane0.restype = ctypes.c_int32
-    lib.scribblez_cross_check_plane0.argtypes = []
+    lib.scribblez_move_set_cross_slots.restype = ctypes.c_int32
+    lib.scribblez_move_set_cross_slots.argtypes = []
 
     lib.scribblez_move_set_encoding_version.restype = ctypes.c_int32
     lib.scribblez_move_set_encoding_version.argtypes = []
@@ -601,30 +608,37 @@ def encode_moves(moves: np.ndarray, pre_move_score_diffs: np.ndarray) -> dict[st
     }
 
 
-def cross_check_plane0() -> int:
-    """Index of the board input's first cross-check plane. A cross_check_deltas
-    entry's (axis, letter) is plane cross_check_plane0() + 26 * axis + letter."""
-    return _lib().scribblez_cross_check_plane0()
+def move_cross_slots() -> int:
+    """Cross-check slots per move (engine move_set_encoder.h kMoveCrossSlots);
+    cross_letters carries 26 flags per slot."""
+    return _lib().scribblez_move_set_cross_slots()
 
 
-def cross_check_deltas(
+def _cross_check_arrays(n: int) -> tuple[np.ndarray, np.ndarray]:
+    slots = move_cross_slots()
+    return np.zeros((n, slots), dtype=np.int32), np.zeros((n, slots * 26), dtype=np.uint8)
+
+
+def _cross_check_result(cells: np.ndarray, letters: np.ndarray) -> dict[str, np.ndarray]:
+    return {"cells": cells.astype(np.int64), "letters": letters}
+
+
+def cross_checks(
     path: str | Path,
     game_idx: np.ndarray,
     turn_idx: np.ndarray,
     move_counts: np.ndarray,
     moves: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """The cross-check entries each candidate move changes: a sparse form of
-    the post-move cross-check planes (engine training/cross_check_delta.h).
+    """The cross-check features of candidate moves on their positions' boards,
+    in the move set model's layout (engine move_set_encoder.h
+    encode_move_cross_checks).
 
     Position j is the pre-move decision point (game_idx[j], turn_idx[j]) of the
-    .slog at `path`; its candidates are the next move_counts[j] records of
-    `moves` (MOVE_DTYPE). Returns, each (M, max_cross_deltas):
-        axes         int64   0 = horizontal-play planes, 1 = vertical-play
-        squares      int64   r*15 + c
-        old_masks    uint32  bit L set iff letter L is legal there before the move
-        new_masks    uint32  ... after the move
-        delta_mask   bool    True on real entries; padding is all-zero
+    .slog at `path`; its candidates are the next move_counts[j] records of the
+    (M,) MOVE_DTYPE array `moves`, M = sum(move_counts). Returns "cells"
+    (M, slots) int64 -- 1 + axis * 225 + square per entry, 0 in empty slots --
+    and "letters" (M, slots * 26) uint8, each entry's post-move legal letters.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -636,13 +650,8 @@ def cross_check_deltas(
         raise ValueError(f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape}")
     if counts.sum() != len(moves):
         raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
-    shape = (len(moves), _lib().scribblez_move_set_max_cross_deltas())
-    axes = np.zeros(shape, dtype=np.uint8)
-    squares = np.zeros(shape, dtype=np.int32)
-    old_masks = np.zeros(shape, dtype=np.uint32)
-    new_masks = np.zeros(shape, dtype=np.uint32)
-    delta_mask = np.zeros(shape, dtype=np.uint8)
-    rc = _lib().scribblez_move_set_cross_check_deltas(
+    cells, letters = _cross_check_arrays(len(moves))
+    rc = _lib().scribblez_move_set_cross_checks(
         _session(),
         str(path).encode("utf-8"),
         games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
@@ -650,21 +659,38 @@ def cross_check_deltas(
         counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
         len(games),
         moves.ctypes.data_as(ctypes.c_void_p),
-        axes.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-        squares.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-        old_masks.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
-        new_masks.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
-        delta_mask.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        cells.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+        letters.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
     )
     if rc != 0:
-        raise OSError(f"cross_check_deltas failed (rc={rc}) for {path}")
-    return {
-        "axes": axes.astype(np.int64),
-        "squares": squares.astype(np.int64),
-        "old_masks": old_masks,
-        "new_masks": new_masks,
-        "delta_mask": delta_mask.astype(bool),
-    }
+        raise OSError(f"cross_checks failed (rc={rc}) for {path}")
+    return _cross_check_result(cells, letters)
+
+
+def gcg_cross_checks(
+    gcg_text: str, moves: np.ndarray, *, open_leaves: bool
+) -> dict[str, np.ndarray]:
+    """cross_checks for moves of a position-set GCG's decision point, read as
+    gcg_position_inputs reads it. Raises ValueError on an unparseable GCG."""
+    from scribblez.sim_evidence.sobs import MOVE_DTYPE
+
+    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
+    cells, letters = _cross_check_arrays(len(moves))
+    err = ctypes.create_string_buffer(512)
+    rc = _lib().scribblez_gcg_cross_checks(
+        _session(),
+        gcg_text.encode("utf-8"),
+        int(open_leaves),
+        moves.ctypes.data_as(ctypes.c_void_p),
+        len(moves),
+        cells.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+        letters.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        err,
+        len(err),
+    )
+    if rc != 0:
+        raise ValueError(err.value.decode("utf-8") or "gcg_cross_checks failed")
+    return _cross_check_result(cells, letters)
 
 
 def encode_candidate_rows(
@@ -678,7 +704,7 @@ def encode_candidate_rows(
     scores them: per candidate, the position after it and before the refill,
     from the mover's point of view, under the session's arm.
 
-    Positions and moves are addressed as in cross_check_deltas. Returns
+    Positions and moves are addressed as in cross_checks. Returns
     (M, input_floats()) float32, the spatial planes then the scalars.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE

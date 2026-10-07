@@ -346,6 +346,11 @@ class TrajectoryDataset:
         slot = np.concatenate([np.arange(k, dtype=np.int64) for k in counts])
         pre_diff_points = np.rint(scalar[:, self._sd_index] * self._sd_scale).astype(np.int32)
         enc = move_enc.encode_moves(all_moves, pre_diff_points[pos_id])
+        cross = move_enc.batch_cross_checks(
+            self._slogs,
+            [(pos.file_id, pos.sobs.game_index, pos.sobs.turn_index) for pos in positions],
+            [pos.sobs.moves for pos in positions],
+        )
         in_evidence = np.concatenate(masks)
         ev_index = np.concatenate([_compact_index(mask) for mask in masks])
         evidence_size = np.array([int(mask.sum()) for mask in masks], dtype=np.int64)
@@ -358,6 +363,8 @@ class TrajectoryDataset:
             "move_squares": torch.from_numpy(enc["squares"]),
             "move_tile_mask": torch.from_numpy(enc["tile_mask"]),
             "move_scalars": torch.from_numpy(enc["scalars"]),
+            "move_cross_cells": torch.from_numpy(cross["cells"]),
+            "move_cross_letters": torch.from_numpy(cross["letters"]),
             "move_pos_id": torch.from_numpy(pos_id),
             "sim_wld": torch.from_numpy(np.concatenate([pos.wld for pos in positions])),
             "sim_delta": torch.from_numpy(np.concatenate([pos.delta for pos in positions])),

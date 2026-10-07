@@ -70,18 +70,5 @@ void encode_cross_check_deltas(Board& board, const Move& m, BoardUndo& undo, uin
   }
 }
 
-void encode_cross_check_deltas(const Board& board, const Dictionary& dict, const Move* moves,
-                               int64_t n, uint8_t* axes, int32_t* squares, uint32_t* old_masks,
-                               uint32_t* new_masks, uint8_t* delta_mask) {
-  Board scratch = board;
-  scratch.ensure_movegen_caches(dict);
-  BoardUndo undo;
-  for (int64_t i = 0; i < n; ++i) {
-    const int64_t at = i * kMoveMaxCrossDeltas;
-    encode_cross_check_deltas(scratch, moves[i], undo, axes + at, squares + at, old_masks + at,
-                              new_masks + at, delta_mask + at);
-  }
-}
-
 }  // namespace move_set
 }  // namespace scribblez

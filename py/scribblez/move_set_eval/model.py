@@ -13,7 +13,9 @@ M candidate moves (concatenated across positions) each carry a `pos_id` into
 
   * embeds the placed tiles (letter + blank-flag embeddings plus the board
     token at the tile's square, masked-mean pooled) fused with the move's
-    scalars;
+    scalars, plus the cross-checks the move changes (CrossCheckEncoder) --
+    the post-move cross-check planes the teacher reads and the pre-move
+    trunk cannot see;
   * cross-attends into its own position's 225 board tokens (the 15x15 trunk
     map flattened, plus a learned per-square embedding);
   * fuses the result with its position's global summary and reads out
@@ -47,7 +49,7 @@ from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 from scribblez.supply_registers import TileSupplyRegisters
 from scribblez.transformer_tower import TransformerConfig
 
-from .moves import move_encoding_dims
+from .moves import move_cross_slots, move_encoding_dims
 from .targets import PLANE_NAMES
 
 # MoveSetEvalModel.forward's positional inputs, in order: the board, then the
@@ -60,6 +62,8 @@ MOVE_KEYS = (
     "move_squares",
     "move_tile_mask",
     "move_scalars",
+    "move_cross_cells",
+    "move_cross_letters",
     "move_pos_id",
 )
 
@@ -101,6 +105,59 @@ class MoveEncoder(nn.Module):
         tile_pool = tile_tok.sum(dim=1) / denom  # (M, C), 0 for exchange/pass
         scalar_feat = self.scalar_mlp(scalars)  # (M, C)
         return self.fuse(torch.cat([tile_pool, scalar_feat], dim=1))
+
+
+class CrossCheckEncoder(nn.Module):
+    """Embeds the cross-checks a move changes into a vector added to its move
+    embedding.
+
+    The trunk sees the pre-move cross-check planes; the teacher scores the
+    post-move ones. A move changes at most `slots` entries (engine
+    move_set_encoder.h), so each changed entry is a token: its 26 post-move
+    legal-letter flags projected, an axis embedding (the horizontal- or
+    vertical-play block), and the board token at its square -- which carries
+    the pre-move letters there, so the token reads as a change. Tokens are
+    masked-mean pooled. The output projection is zero-initialised, so the
+    encoder starts as a no-op on the move embedding and is a strict addition
+    to the tile-only model.
+    """
+
+    def __init__(self, channels: int, slots: int, board_cells: int):
+        super().__init__()
+        self.slots = slots
+        self.board_cells = board_cells
+        self.letter_proj = nn.Linear(26, channels)
+        self.axis_emb = nn.Embedding(2, channels)
+        self.out = nn.Linear(channels, channels)
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+
+    def forward(
+        self, cells: torch.Tensor, letters: torch.Tensor, board_tokens: torch.Tensor
+    ) -> torch.Tensor:
+        """cells (M, K), letters (M, K * 26), board_tokens (M, K, C) at each
+        entry's square -> (M, C)."""
+        cells = cells.long()
+        real = (cells > 0).unsqueeze(-1).to(board_tokens.dtype)  # (M, K, 1)
+        axis = torch.div(cells - 1, self.board_cells, rounding_mode="floor").clamp(min=0)
+        # Cast before any reshape: TensorRT takes uint8 as a graph input but not
+        # as an intermediate tensor.
+        bits = letters.to(board_tokens.dtype).reshape(-1, self.slots, 26)
+        tok = (self.letter_proj(bits) + self.axis_emb(axis) + board_tokens) * real
+        pooled = tok.sum(dim=1) / real.sum(dim=1).clamp(min=1)  # (M, C), 0 when none
+        return self.out(pooled)
+
+    def squares(self, cells: torch.Tensor) -> torch.Tensor:
+        """The board square of each cell (1 + axis * board_cells + square; 0
+        for an empty slot, which maps to square 0 and is masked out)."""
+        return (cells.long() - 1).clamp(min=0) % self.board_cells
+
+    def on_position(
+        self, cells: torch.Tensor, letters: torch.Tensor, board: torch.Tensor
+    ) -> torch.Tensor:
+        """forward for moves that all share one position's board tokens
+        (board_cells, C), as in the single-position exports."""
+        return self(cells, letters, board[self.squares(cells)])
 
 
 def _rank_within_position(pos_id: torch.Tensor, num_positions: int) -> tuple[torch.Tensor, int]:
@@ -157,6 +214,7 @@ class MoveSetEvalModel(nn.Module):
         nn.init.normal_(self.board_pos_emb, std=0.02)
 
         self.move_encoder = MoveEncoder(trunk_channels, letter_vocab, num_scalars)
+        self.cross_check_encoder = CrossCheckEncoder(trunk_channels, move_cross_slots(), cells)
         self.cross_attn = nn.MultiheadAttention(
             trunk_channels, num_heads, dropout=0.0, batch_first=True
         )
@@ -265,17 +323,25 @@ class MoveSetEvalModel(nn.Module):
         squares: torch.Tensor,
         tile_mask: torch.Tensor,
         scalars: torch.Tensor,
+        cross_cells: torch.Tensor,
+        cross_letters: torch.Tensor,
         pos_id: torch.Tensor,
     ) -> torch.Tensor:
         """Embed M flattened moves against the plain board token map -> (M, C)."""
-        # Pad slots gather token 0 and are masked out by the move encoder.
+        # Pad slots gather token 0 and are masked out by the encoders.
         # Exchange tiles carry letters but square 0 (move_set_encoder.h), so the
         # is_play scalar zeroes their gathered tokens: a surrendered tile
         # contributes only its letter and blank embeddings.
         t = squares.shape[1]
         tile_board = board[pos_id.unsqueeze(1).expand(-1, t), squares]  # (M, T, C)
         tile_board = tile_board * scalars[:, 2].view(-1, 1, 1)  # scalars[:, 2] = is_play
-        return self.move_encoder(letters, blanks, tile_mask, scalars, tile_board)
+        k = cross_cells.shape[1]
+        cross_board = board[
+            pos_id.unsqueeze(1).expand(-1, k), self.cross_check_encoder.squares(cross_cells)
+        ]
+        return self.move_encoder(
+            letters, blanks, tile_mask, scalars, tile_board
+        ) + self.cross_check_encoder(cross_cells, cross_letters, cross_board)
 
     def encode_evidence(
         self, board: torch.Tensor, evidence: EvidenceInputs
@@ -294,6 +360,8 @@ class MoveSetEvalModel(nn.Module):
             evidence.squares.flatten(0, 1),
             evidence.tile_mask.flatten(0, 1),
             evidence.scalars.flatten(0, 1),
+            evidence.cross_cells.flatten(0, 1),
+            evidence.cross_letters.flatten(0, 1),
             pos_id,
         ).view(p, k, -1)
         return self.evidence_fusion.encode_tokens(
@@ -370,6 +438,8 @@ class MoveSetEvalModel(nn.Module):
         move_squares: torch.Tensor,
         move_tile_mask: torch.Tensor,
         move_scalars: torch.Tensor,
+        move_cross_cells: torch.Tensor,
+        move_cross_letters: torch.Tensor,
         move_pos_id: torch.Tensor,
         evidence: EvidenceInputs | None = None,
     ) -> dict[str, torch.Tensor]:
@@ -386,6 +456,8 @@ class MoveSetEvalModel(nn.Module):
             move_squares,
             move_tile_mask,
             move_scalars,
+            move_cross_cells,
+            move_cross_letters,
             move_pos_id,
         )
         best = None

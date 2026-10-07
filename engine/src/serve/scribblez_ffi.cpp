@@ -16,7 +16,6 @@
 #include "lexicon/lexicon.h"
 #include "sim/reply_blocking.h"
 #include "sim/sim_runner.h"
-#include "training/cross_check_delta.h"
 #include "training/footprint_collapse.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
@@ -63,11 +62,11 @@ struct ScribblezSession {
   int encode_candidate_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
                             const int64_t* move_counts, int64_t n_positions, const void* moves,
                             float* out) const;
-  int move_set_cross_check_deltas(const char* path, const int64_t* game_idx,
-                                  const int64_t* turn_idx, const int64_t* move_counts,
-                                  int64_t n_positions, const void* moves, uint8_t* out_axes,
-                                  int32_t* out_squares, uint32_t* out_old_masks,
-                                  uint32_t* out_new_masks, uint8_t* out_delta_mask) const;
+  int move_set_cross_checks(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
+                            const int64_t* move_counts, int64_t n_positions, const void* moves,
+                            int32_t* out_cells, uint8_t* out_letters) const;
+  int gcg_cross_checks(const char* gcg_text, bool open_leaves, const void* moves, int64_t n,
+                       int32_t* out_cells, uint8_t* out_letters, char* out_err, int err_cap) const;
   int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads, uint64_t seed,
                        bool open_leaves, bool solve_endgames, char* out_records,
                        int* played_rank) const;
@@ -358,10 +357,10 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
   }
 }
 
-int ScribblezSession::move_set_cross_check_deltas(
-  const char* path, const int64_t* game_idx, const int64_t* turn_idx, const int64_t* move_counts,
-  int64_t n_positions, const void* moves, uint8_t* out_axes, int32_t* out_squares,
-  uint32_t* out_old_masks, uint32_t* out_new_masks, uint8_t* out_delta_mask) const {
+int ScribblezSession::move_set_cross_checks(const char* path, const int64_t* game_idx,
+                                            const int64_t* turn_idx, const int64_t* move_counts,
+                                            int64_t n_positions, const void* moves,
+                                            int32_t* out_cells, uint8_t* out_letters) const {
   namespace mset = scribblez::move_set;
   if (!game_idx || !turn_idx || !move_counts || n_positions < 0) return -1;
   std::vector<char> buf;
@@ -372,24 +371,20 @@ int ScribblezSession::move_set_cross_check_deltas(
     const std::vector<scribblez::Move> candidates = copy_moves(moves, done, move_counts[j]);
     const scribblez::Board& board =
       decoder.replay_board(buf.data(), uint32_t(game_idx[j]), uint32_t(turn_idx[j]));
-    const int64_t at = done * mset::kMoveMaxCrossDeltas;
-    mset::encode_cross_check_deltas(board, *spec.dict, candidates.data(), move_counts[j],
-                                    out_axes + at, out_squares + at, out_old_masks + at,
-                                    out_new_masks + at, out_delta_mask + at);
+    mset::encode_moves_cross_checks(board, *spec.dict, candidates.data(), move_counts[j],
+                                    out_cells + done * mset::kMoveCrossSlots,
+                                    out_letters + done * mset::kMoveCrossLetters);
     done += move_counts[j];
   }
   return 0;
 }
 
-int scribblez_move_set_cross_check_deltas(ScribblezSession* s, const char* path,
-                                          const int64_t* game_idx, const int64_t* turn_idx,
-                                          const int64_t* move_counts, int64_t n_positions,
-                                          const void* moves, uint8_t* out_axes,
-                                          int32_t* out_squares, uint32_t* out_old_masks,
-                                          uint32_t* out_new_masks, uint8_t* out_delta_mask) {
-  return s->move_set_cross_check_deltas(path, game_idx, turn_idx, move_counts, n_positions, moves,
-                                        out_axes, out_squares, out_old_masks, out_new_masks,
-                                        out_delta_mask);
+int scribblez_move_set_cross_checks(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                                    const int64_t* turn_idx, const int64_t* move_counts,
+                                    int64_t n_positions, const void* moves, int32_t* out_cells,
+                                    uint8_t* out_letters) {
+  return s->move_set_cross_checks(path, game_idx, turn_idx, move_counts, n_positions, moves,
+                                  out_cells, out_letters);
 }
 
 int ScribblezSession::encode_candidate_rows(const char* path, const int64_t* game_idx,
@@ -508,13 +503,7 @@ int scribblez_reply_blocking(ScribblezSession* s, const char* slog_path, const c
   }
 }
 
-int32_t scribblez_move_set_max_cross_deltas(void) {
-  return scribblez::move_set::kMoveMaxCrossDeltas;
-}
-
-int32_t scribblez_cross_check_plane0(void) {
-  return scribblez::spatial_block_plane0(scribblez::SpatialBlockId::kCrossChecks);
-}
+int32_t scribblez_move_set_cross_slots(void) { return scribblez::move_set::kMoveCrossSlots; }
 
 void scribblez_move_set_move_dims(int32_t* max_placed, int32_t* num_scalars, int32_t* letter_vocab,
                                   int32_t* cells) {
@@ -770,6 +759,36 @@ int scribblez_gcg_position_inputs(ScribblezSession* s, const char* gcg_text, int
                                   void* out_moves, int moves_cap, char* out_err, int err_cap) {
   return s->gcg_position_inputs(gcg_text, opp_leave_input != 0, out_input, input_cap,
                                 out_score_diff, out_moves, moves_cap, out_err, err_cap);
+}
+
+int ScribblezSession::gcg_cross_checks(const char* gcg_text, bool open_leaves, const void* moves,
+                                       int64_t n, int32_t* out_cells, uint8_t* out_letters,
+                                       char* out_err, int err_cap) const {
+  if (out_err && err_cap > 0) out_err[0] = '\0';
+  if (!gcg_text || n < 0 || (n > 0 && (!moves || !out_cells || !out_letters))) return -1;
+  try {
+    scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+    scribblez::TrajectoryDecision d;
+    std::string error;
+    if (!scribblez::read_trajectory_decision(gcg_text, *spec.dict, open_leaves, &d, &error)) {
+      emit_string(error, out_err, err_cap);
+      return -1;
+    }
+    const std::vector<scribblez::Move> candidates = copy_moves(moves, 0, n);
+    scribblez::move_set::encode_moves_cross_checks(d.position.board, *spec.dict, candidates.data(),
+                                                   n, out_cells, out_letters);
+    return 0;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
+}
+
+int scribblez_gcg_cross_checks(ScribblezSession* s, const char* gcg_text, int open_leaves,
+                               const void* moves, int64_t n, int32_t* out_cells,
+                               uint8_t* out_letters, char* out_err, int err_cap) {
+  return s->gcg_cross_checks(gcg_text, open_leaves != 0, moves, n, out_cells, out_letters, out_err,
+                             err_cap);
 }
 
 int ScribblezSession::gcg_position_board_json(const char* gcg_text, bool open_leaves,

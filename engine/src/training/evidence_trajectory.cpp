@@ -88,7 +88,7 @@ const std::vector<float>& TrajectoryRunner::win_equities(const DecisionPoint& dp
   enc.board().ensure_movegen_caches(*spec_.dict);
   enc.encode_input(mover, dp.pos.rack, visible_opp, board_row_.data());
   const int score_diff = enc.score(mover) - enc.score(1 - mover);
-  move_features_.encode(ranked.data(), n, score_diff);
+  move_features_.encode(enc.board(), *spec_.dict, ranked.data(), n, score_diff);
   wld_buf_.resize(size_t(n) * nn::WldOutput::kRowElems);
   sd_buf_.resize(size_t(n) * nn::ScoreDiffOutput::kRowElems);
   scorer_->score(board_row_.data(), &move_features_, wld_buf_.data(), sd_buf_.data());

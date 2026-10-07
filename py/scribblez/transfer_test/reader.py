@@ -77,6 +77,10 @@ class ReaderConfig:
     ffn_mult: int = 4
     activation_checkpointing: bool = False
 
+    def __post_init__(self):
+        # FlexAttention's compiled kernels need head_dim >= 16.
+        assert self.width // self.heads >= 16, f"head_dim {self.width // self.heads} < 16"
+
     def to_dict(self) -> dict:
         return asdict(self)
 

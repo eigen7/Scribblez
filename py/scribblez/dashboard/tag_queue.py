@@ -265,7 +265,10 @@ class TagQueue:
             f"{workload}/{tag} is queued; dequeue it to add slots by hand"
         )
         m = self._leased(self._m.pool_store.load(), workload, tag)
-        assert m is None, f"{workload}/{tag} is placed on pool machine {m.name}; requeue it first"
+        assert m is None, (
+            f"{workload}/{tag} is placed on pool machine {m.name}; Release it to run it "
+            "by hand (Requeue would place it again)"
+        )
 
     def status(self) -> dict:
         """The queue in order, each entry with whether it ends on its own, its

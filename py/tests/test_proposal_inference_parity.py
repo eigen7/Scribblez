@@ -38,7 +38,11 @@ from scribblez.evidence_fusion import (
 from scribblez.ffi import get_input_shapes
 from scribblez.move_set_eval import proposal_export
 from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_slot_planes
-from scribblez.move_set_eval.moves import move_encoding_dims
+from scribblez.move_set_eval.moves import (
+    move_encoding_dims,
+    move_encoding_version,
+    synthetic_cross_checks,
+)
 from scribblez.move_set_eval.proposal_export import (
     CACHE_INPUT_NAMES,
     CACHE_OUTPUT_NAMES,
@@ -85,11 +89,12 @@ def _random_model(trunk: str = "conv", seed: int = 0) -> MoveSetEvalModel:
         with torch.no_grad():
             for block in model.trunk.tower.blocks:
                 block.up.weight.normal_(std=0.1)
-    # The fusion projections and proves-best head are zero-init, which would make
-    # every conditioned pass equal the plain one -- perturb them so a populated
-    # evidence set genuinely exercises the fusion + gain path.
+    # The fusion projections, proves-best head and cross-check output are
+    # zero-init, which would make every conditioned pass equal the plain one and
+    # leave the cross-check inputs unread -- perturb them so the parity check
+    # exercises the fusion + gain path and the cross-check inputs.
     with torch.no_grad():
-        for module in (model.evidence_fusion, model.proves_best):
+        for module in (model.evidence_fusion, model.proves_best, model.cross_check_encoder):
             for p in module.parameters():
                 p.add_(0.1 * torch.randn_like(p))
     model.eval()
@@ -113,7 +118,9 @@ def _random_moves(m: int, seed: int):
         tile_mask[-1] = 0
         squares[-1] = 0
         scalars[-1, 2] = 0.0
-    return letters, blanks, squares, tile_mask, scalars
+    cross = synthetic_cross_checks(scalars[:, 2] > 0, seed)
+    cross_cells = cross["cells"].astype(np.int32)
+    return letters, blanks, squares, tile_mask, scalars, cross_cells, cross["letters"]
 
 
 def _board_inputs(seed: int):
@@ -148,8 +155,10 @@ def _evidence_inputs(moves, indices: list[int], seed: int):
     the step graph is fed, so the reference and the graph see identical
     evidence. The evidence move data is the scored candidate's own (moves[idx]),
     so the reference's re-encode equals the runtime's gather of move_enc[idx]."""
-    letters, blanks, squares, tile_mask, scalars = moves
+    letters, blanks, squares, tile_mask, scalars, cross_cells, cross_letters = moves
     k = len(indices)
+    ecc = np.zeros((MAX_E, cross_cells.shape[1]), np.int64)
+    ecl = np.zeros((MAX_E, cross_letters.shape[1]), np.uint8)
     el = np.zeros((MAX_E, MAX_PLACED), np.int64)
     eb = np.zeros((MAX_E, MAX_PLACED), np.int64)
     es = np.zeros((MAX_E, MAX_PLACED), np.int64)
@@ -163,6 +172,7 @@ def _evidence_inputs(moves, indices: list[int], seed: int):
             tile_mask[idx],
             scalars[idx],
         )
+        ecc[j], ecl[j] = cross_cells[idx], cross_letters[idx]
 
     rng = np.random.default_rng(seed)
     obs_planes = np.abs(
@@ -178,6 +188,8 @@ def _evidence_inputs(moves, indices: list[int], seed: int):
         squares=torch.from_numpy(es)[None],
         tile_mask=torch.from_numpy(et)[None],
         scalars=torch.from_numpy(esc)[None],
+        cross_cells=torch.from_numpy(ecc)[None],
+        cross_letters=torch.from_numpy(ecl)[None],
         obs_planes=torch.from_numpy(obs_planes),
         obs_scalars=torch.from_numpy(obs_scalars),
         mask=torch.from_numpy(mask),
@@ -197,7 +209,7 @@ def _gather_ev_move_enc(move_enc: np.ndarray, indices: list[int]) -> np.ndarray:
 def _reference(model, spatial, scalar, moves, ev):
     """MoveSetEvalModel.forward over one position's candidate set, optionally
     evidence-conditioned."""
-    letters, blanks, squares, tile_mask, scalars = moves
+    letters, blanks, squares, tile_mask, scalars, cross_cells, cross_letters = moves
     m = len(scalars)
     with torch.no_grad():
         out = dict(
@@ -209,6 +221,8 @@ def _reference(model, spatial, scalar, moves, ev):
                 torch.from_numpy(squares).long(),
                 torch.from_numpy(tile_mask).float(),
                 torch.from_numpy(scalars),
+                torch.from_numpy(cross_cells).long(),
+                torch.from_numpy(cross_letters),
                 torch.zeros(m, dtype=torch.long),
                 evidence=ev,
             )
@@ -237,16 +251,11 @@ def test_wrappers_match_training_forward(kind, trunk):
     ref = _reference(model, spatial, scalar, moves, ev)
     plain_ref = _reference(model, spatial, scalar, moves, None)
 
-    letters, blanks, squares, tile_mask, scalars = moves
     with torch.no_grad():
         board, g, move_enc, c_wld, c_sd, c_planes = cache(
             torch.from_numpy(spatial),
             torch.from_numpy(scalar),
-            torch.from_numpy(letters),
-            torch.from_numpy(blanks),
-            torch.from_numpy(squares),
-            torch.from_numpy(tile_mask),
-            torch.from_numpy(scalars),
+            *(torch.from_numpy(a) for a in moves),
         )
         ev_move_enc = _gather_ev_move_enc(move_enc.numpy(), indices)
         s_wld, s_sd, s_gain = step(
@@ -286,7 +295,7 @@ def _export_pair(tmp_path, model):
         SPATIAL_PLANES,
         SCALAR_SIZE,
         opp_leave_input=False,
-        move_encoding_version=1,
+        move_encoding_version=move_encoding_version(),
         proposal_export_id=xid,
         trained_max_evidence=9,
     )
@@ -294,7 +303,7 @@ def _export_pair(tmp_path, model):
         model,
         step_path,
         opp_leave_input=False,
-        move_encoding_version=1,
+        move_encoding_version=move_encoding_version(),
         proposal_export_id=xid,
         trained_max_evidence=9,
         max_evidence=MAX_E,
@@ -318,19 +327,9 @@ def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, kind, trunk):
         ev, obs_planes, obs_scalars, mask = _evidence_inputs(moves, indices, seed=7 + m)
         ref = _reference(model, spatial, scalar, moves, ev)
         plain_ref = _reference(model, spatial, scalar, moves, None)
-        letters, blanks, squares, tile_mask, scalars = moves
-
         cache_out = cache_sess.run(
             list(CACHE_OUTPUT_NAMES),
-            {
-                "input_spatial": spatial,
-                "input_scalar": scalar,
-                "move_letters": letters,
-                "move_blanks": blanks,
-                "move_squares": squares,
-                "move_tile_mask": tile_mask,
-                "move_scalars": scalars,
-            },
+            dict(zip(CACHE_INPUT_NAMES, (spatial, scalar, *moves), strict=True)),
         )
         cache = dict(zip(CACHE_OUTPUT_NAMES, cache_out, strict=True))
         move_enc = cache["move_enc"]
@@ -371,7 +370,7 @@ def test_exported_file_contract(tmp_path):
     smeta = {e.key: e.value for e in step.metadata_props}
     assert cmeta["graph"] == GRAPH_CACHE
     assert smeta["graph"] == GRAPH_STEP
-    assert cmeta["move_encoding_version"] == "1"
+    assert cmeta["move_encoding_version"] == str(move_encoding_version())
     assert cmeta["opp_leave_input"] == "false"
     assert "model-architecture-signature" in cmeta
     # Both graphs of one exported pair share the fingerprint (its discriminating
@@ -394,6 +393,8 @@ def test_exported_file_contract(tmp_path):
         "move_squares": onnx.TensorProto.INT32,
         "move_tile_mask": onnx.TensorProto.UINT8,
         "move_scalars": onnx.TensorProto.FLOAT,
+        "move_cross_cells": onnx.TensorProto.INT32,
+        "move_cross_letters": onnx.TensorProto.UINT8,
     }
     cin = {i.name: i for i in cache.graph.input}
     for name, dtype in move_dtypes.items():
@@ -463,7 +464,7 @@ def test_pair_export_lands_the_step_graph_first(tmp_path, monkeypatch):
         SPATIAL_PLANES,
         SCALAR_SIZE,
         opp_leave_input=False,
-        move_encoding_version=1,
+        move_encoding_version=move_encoding_version(),
         trained_max_evidence=9,
         max_evidence=MAX_E,
     )
