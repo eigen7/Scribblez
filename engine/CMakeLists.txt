@@ -50,6 +50,7 @@ add_library(scribblez_core STATIC
   src/agent/endgame_turn_policy.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
+  src/sim/reply_blocking.cpp
   src/sim/slog_position_simmer.cpp
   src/sim/setup_plays.cpp
   src/sim/rollout_report.cpp
@@ -402,6 +403,13 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_transfer_candidates PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   gtest_discover_tests(test_transfer_candidates)
+
+  add_executable(test_reply_blocking tests/test_reply_blocking.cpp)
+  target_link_libraries(test_reply_blocking PRIVATE
+    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
+  target_compile_definitions(test_reply_blocking PRIVATE
+    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
+  gtest_discover_tests(test_reply_blocking)
 
   # Runs off a synthetic leave table, so it needs no lexicon or Macondo data.
   add_executable(test_sim_agent tests/test_sim_agent.cpp)
