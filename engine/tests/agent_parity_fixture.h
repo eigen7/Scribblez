@@ -143,9 +143,9 @@ inline void expect_candidate_features_match(const move_set::MoveFeatureArrays& g
   }
 }
 
-// expect_candidate_features_match over the whole candidate set, and its
-// cross-check features what encode_moves_cross_checks -- the training rows'
-// encoder -- makes of the set on `board`.
+// expect_candidate_features_match over the whole candidate set, and checks
+// that its cross-check features are what encode_moves_cross_checks -- the
+// training rows' encoder -- makes of the set on `board`.
 inline void expect_move_features_match(const move_set::MoveFeatureArrays& got, const Board& board,
                                        const Dictionary& dict, const std::vector<Move>& candidates,
                                        int pre_diff) {
