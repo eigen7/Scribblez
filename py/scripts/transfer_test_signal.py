@@ -11,6 +11,7 @@ Usage: transfer_test_signal.py --tag TAG [--threads N]
 import argparse
 import json
 import os
+import sys
 import time
 
 from scribblez.paths import TagPaths, add_mount_root_argument
@@ -51,7 +52,10 @@ def main():
     args = parser.parse_args()
 
     paths = TagPaths(args.tag, CORPUS_SPEC.name, args.mount_root)
-    files = load_corpus(paths.data_dir / CORPUS_DIR)
+    corpus_dir = paths.data_dir / CORPUS_DIR
+    files = load_corpus(corpus_dir)
+    if not files:
+        sys.exit(f"no complete corpus files in {corpus_dir}")
     t0 = time.time()
 
     def progress(done: int, total: int):

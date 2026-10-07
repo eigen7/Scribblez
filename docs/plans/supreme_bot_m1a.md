@@ -530,7 +530,10 @@ probes reveal. A measure that uses no model tells them apart.
 of every candidate deals the opponent the same rack, so a reply that hurt
 candidate a was also open after candidate b unless b blocks it: takes one of
 its squares or spoils a cross-check it needed, decided by move generation on
-b's post-move board with that rack. A candidate's *damage blocked* is the
+b's post-move board with that rack. (A reply through a's own tiles was never
+open after b and counts as blocked by every other candidate: 14% of blocked
+replies on three files, moving the correlation from +0.110 to +0.106 when
+left out.) A candidate's *damage blocked* is the
 sum, over the other candidates' probes whose replies it blocks, of how much
 worse that rollout went than its candidate's mean, divided by the number of
 those probes. This is evidence a reader could transfer to b without

@@ -8,11 +8,15 @@ candidate a would also be open after candidate b, unless b blocks it (engine
 sim/reply_blocking.h). The damage b blocks is then the mean, over the other
 candidates' probes whose replies b blocks, of how much worse that rollout went
 than its candidate's mean, averaged over all the other candidates' probes.
+A reply that plays through or hooks onto a's own tiles was never open after
+b, and counts as blocked by every other candidate; on three corpus files that
+is 14% of the blocked replies, and leaving them out moves the correlation
+below from +0.110 to +0.106.
 
 The test: within each position (centered over its candidates), does the
 damage a candidate blocks predict its label minus the teacher prior, the part
 of its value the prior misses? A positive correlation is signal a reader
-could transfer; the control pairs each candidate with another position's
+could transfer; the control pairs each candidate with a random candidate's
 damage blocked.
 
 Positions whose plausible candidates' labels are all equal are decided (as in
