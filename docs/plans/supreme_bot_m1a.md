@@ -527,6 +527,50 @@ opponent's draw per probe, so each record contains exactly the intended
 fact. Evaluated by the same reader and harness. It depends only on PR 2 and
 can be built at any point after it.
 
+## The uniform-prior control
+
+**Why.** With the teacher as the prior, M1a asks the reader to transfer only
+what the teacher misses, and the model-free measure of the reply-blocking
+signal finds little of that in the near-endgame corpus: the teacher learned
+from hasty-style play, so it already prices most of what hasty rollouts
+reveal. A null there says the signal is small, not that the machinery cannot
+transfer. This control runs the same reader with the dumbest prior, so
+everything the probes show is left to learn, and asks whether the reader
+transfers anything at all.
+
+**As built.** The `transfer_reader` parameter `prior` (`teacher` or `none`).
+Under `none` (`scribblez/transfer_test/prior.py`, `uninformative`):
+
+- every candidate's prior is the same constant: win/draw/loss 0.495 / 0.01 /
+  0.495, score difference 0 with a 37-point spread (about a single
+  endgame's), uniform footprints;
+- the candidate tokens' teacher-prediction features (`prior_value`,
+  `prior_placement`) carry those constants, so they say nothing and the
+  teacher cannot leak through them;
+- the root board tokens (the teacher's trunk) and the move encoder stay: they
+  describe the board, not any candidate's value.
+
+The evaluation harness and the exhibits load the test corpus under the
+run's prior (the prior arm becomes the constant, the exhibits' prior gap 0)
+and gain two things:
+
+- a **no-probes** arm: the reader with every probe removed from its context,
+  what it knows from the board and the candidates alone;
+- intervals of every arm against the **shuffled** control as well as the
+  prior.
+
+**The headline.** Without the teacher's prior, a reader beats the constant
+prior just by learning a static evaluator of candidates from their move
+features, with no transfer at all. The question becomes whether the held-out
+error with the real evidence is below the same with shuffled evidence (and
+below no probes): what the probes themselves add.
+
+**The run.** `endgame-reader-5m-noprior`: profile `reader-5m`, corpus
+`m1a-endgame-train`, `prior` none, about 10,000 steps (expect worse absolute
+accuracy and earlier overfitting than with the teacher; `best.pt` keeps the
+best validation point). Then `transfer_test_evaluate.py --test-tag
+m1a-endgame-test` and `transfer_test_exhibits.py score`.
+
 ## Order
 
 ```
