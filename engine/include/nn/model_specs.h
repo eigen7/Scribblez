@@ -424,8 +424,8 @@ class MoveSetEvaluationSpec {
 // per-candidate output, so a whole turn's candidate set runs in one chunk.
 
 // The cache graph: one position's board row plus M candidates, in, and the
-// handoff tensors plus the evidence-free predictions (wld, score_diff), out. Its inputs are the
-// move-set graph's, staged the same way.
+// handoff tensors plus the evidence-free predictions (wld, score_diff), out.
+// Its inputs are the move-set graph's, staged the same way.
 class MoveProposalCacheSpec {
  public:
   static constexpr const char* kGraph = kGraphMoveProposalCache;

@@ -5,7 +5,6 @@
 // uses MoveProposalSession (move_proposal_session.h), tests use scripted stubs.
 // This is the same seam nn::EvalService provides for the position and move-set
 // model families.
-//
 
 #include "game/move.h"
 #include "nn/eval_service.h"
