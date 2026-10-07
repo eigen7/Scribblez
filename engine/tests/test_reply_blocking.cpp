@@ -128,3 +128,18 @@ TEST(ReplyBlocking, ASingleTileIsTheSamePlacementInEitherDirection) {
   reply_blocking(*dict, root(), p.view(), /*probes=*/1, kStride, out.data());
   EXPECT_EQ(out[0 * kStride + 1], 0);
 }
+
+// A candidate that is not a play leaves the root board as it is, so every
+// reply open there stays open after it.
+TEST(ReplyBlocking, AnExchangeBlocksNothing) {
+  const Dictionary* dict = nwl23();
+  if (!dict) GTEST_SKIP() << "no NWL23 kwg";
+  Probes p;
+  add(&p, play(7, 7, /*horizontal=*/false, "COT"), play(7, 10, /*horizontal=*/true, "S"));
+  add(&p, Move::exchange(TileCounts::from_string("X")),
+      Move::exchange(TileCounts::from_string("X")));
+  seal(&p);
+  std::vector<uint8_t> out(p.records.size() * kStride, 0xff);
+  reply_blocking(*dict, root(), p.view(), /*probes=*/1, kStride, out.data());
+  EXPECT_EQ(out[0 * kStride + 1], 0);
+}
