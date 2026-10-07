@@ -14,7 +14,9 @@ of the reader whose shapes are fixed by the padding, is compiled.
 Every eval_every steps: a validation pass (the losses and the held-out
 readout, loss.readout), the rolling checkpoint and the step cursor
 (train_state.json), then the dashboard record, in that order, so a recorded
-pass has its resume point. A stopped worker resumes at the last pass.
+pass has its resume point. A stopped worker resumes at the last pass. A pass
+that lowers the validation held-out error also writes checkpoints/best.pt,
+the reader evaluation scores (scribblez/transfer_test/evaluate.py).
 
 The training steps keep their losses and gradient norms on the device, read
 once per eval cycle: a per-step read would stall the host on the GPU and
@@ -60,15 +62,19 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 VAL_SEED = 12345  # the validation rows' sampling seed, fixed across runs
 SUBSET_SEED = 0  # the train_positions subset's seed, fixed across runs
 MIN_LR_FRACTION = 0.1
+BEST_CHECKPOINT = "best.pt"
 
 Position = tuple[int, int]  # (file index, position in the file)
 
 
 @dataclass
 class ReaderTrainState(GenerationalState):
-    """generation_index counts validation passes; steps counts optimizer steps."""
+    """generation_index counts validation passes; steps counts optimizer steps;
+    best_heldout is the lowest validation held-out error so far, the one
+    checkpoints/best.pt was taken at."""
 
     steps: int = 0
+    best_heldout: float = math.inf
 
 
 def row_config(params) -> RowConfig:
@@ -244,6 +250,29 @@ def save(ctx, paths, model, optimizer, state, config: dict):
     ctx.sink.deliver_output(paths.train_state_path, "train_state.json", keep=True)
 
 
+def best_checkpoint_path(paths) -> Path:
+    return paths.checkpoints_dir / BEST_CHECKPOINT
+
+
+def save_best(ctx, paths, model, state, config: dict):
+    """The model at its best validation pass so far, which evaluation reads:
+    a run that overfits late keeps its best reader."""
+    path = best_checkpoint_path(paths)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "config": config,
+            "steps": state.steps,
+            "heldout_rmse": state.best_heldout,
+        },
+        tmp,
+    )
+    os.replace(tmp, path)
+    ctx.sink.deliver_output(path, f"checkpoints/{BEST_CHECKPOINT}", keep=True)
+
+
 def build_reader(params, files: list[CorpusFile]) -> Reader:
     cfg = ReaderConfig(
         width=params.width,
@@ -320,6 +349,9 @@ def run(ctx: WorkerContext) -> int:
             )
             generation = state.generation_index
             state.generation_index += 1
+            if val_metrics["heldout_rmse_reader"] < state.best_heldout:
+                state.best_heldout = val_metrics["heldout_rmse_reader"]
+                save_best(ctx, paths, model, state, config)
             save(ctx, paths, model, optimizer, state, config)
             recorder.commit_generation(
                 generation, state.rows_trained, record_of(train_metrics, val_metrics, lr, train_s)
