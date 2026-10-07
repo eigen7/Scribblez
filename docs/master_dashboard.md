@@ -271,7 +271,7 @@ nothing queued for it. What a lease costs goes to its tag's spend.
 A tag with no slots can be **enqueued** (Enqueue on its Workers card, or
 Create & enqueue on the new-tag form); the queue is listed on the Machine pool
 page, in order, with ↑/↓ and Dequeue. Only workloads with a layout are
-queueable (position_eval so far). Every reconcile pass first matches queued
+queueable (position_eval, transfer_test and transfer_reader so far). Every reconcile pass first matches queued
 tags to free pool machines, in queue order: an earlier tag may move to another
 machine it fits when that lets a later one start, but never loses its place.
 A placed tag gets its workload's layout as slots (for position_eval: a
@@ -300,7 +300,9 @@ intact until one does. An exit
 143 is not a crash: the worker was SIGTERMed from outside (a gate, a pause,
 a docker stop, or its host stopping under a spot interruption). Requeue
 takes a placed or held tag off its machine and puts it back at the head of the
-queue; Release finishes every slot of a tag with no end condition.
+queue; Release finishes every slot of a tag with no end condition. To take a
+placed tag off the queue and run it by hand (say, on several machines), use
+Release, then add slots: Requeue would only place it again on the next pass.
 
 ### Container lifecycle
 
@@ -355,7 +357,9 @@ completed output.
 ## Server architecture
 
 One Tornado process (`scribblez.dashboard.api`) hosts the control plane
-alongside the read-only training data plane:
+alongside the read-only training data plane. It loads its code once, at
+startup: after pulling, restart it (`py/scripts/dashboard.py`) to pick up
+server changes.
 
 - `py/scribblez/dashboard/tasks.py`: task records, tag enumeration, progress.
 - `py/scribblez/dashboard/workers.py`: the `WorkerManager`. Local subprocesses
