@@ -164,6 +164,11 @@ priced the danger in or was blind to it, which double-counts confirmations
 and damps genuine surprises toward the average. Feeding the predictions in as
 channels restores the contrast without moving the fusion stage.
 
+*Since removed: the move set evaluation model no longer predicts placement
+planes, so an evidence token pairs its observations with the candidate's
+predicted value only. The spatial prior-observation contrast argued for here
+is not built ([model_architectures.md](../model_architectures.md)).*
+
 An **empty evidence set** must reduce to the plain one-pass model; training
 covers this case explicitly, and the fusion stage hard-gates itself to a
 no-op on an empty set. The fusion stage sits between the shared trunk and the
