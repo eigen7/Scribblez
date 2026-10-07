@@ -72,9 +72,14 @@ SLOGS_DIR = "slogs"
 
 # Parameter profiles (WorkloadSpec.profiles): one recipe per trunk, the same as
 # position_eval's. Each overrides only some of the dataclass defaults below;
-# the transformer profile adds gradient clipping.
+# the transformer profile adds gradient clipping and drops activation
+# checkpointing, whose memory saving a 64-position batch does not need.
 PROFILES = {
-    TRUNK_TRANSFORMER: {"trunk": TRUNK_TRANSFORMER, "grad_clip": 1.0},
+    TRUNK_TRANSFORMER: {
+        "trunk": TRUNK_TRANSFORMER,
+        "grad_clip": 1.0,
+        "activation_checkpointing": False,
+    },
     TRUNK_CONV: {"trunk": TRUNK_CONV},
 }
 
@@ -233,7 +238,8 @@ class MoveSetEvalParams:
     activation_checkpointing: bool = param(
         True,
         "transformer trunk: recompute each attention/FFN pair's activations in backward "
-        "instead of storing them, trading training speed for memory",
+        "instead of storing them; trains ~15% slower for memory a 64-position batch does not "
+        "need (~3 GiB peak without). The transformer profile turns it off",
     )
     transformer_qk_norm: bool = param(
         False,
