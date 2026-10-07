@@ -519,6 +519,53 @@ No transfer here either: with the blockers held out the reader's gap stays at
 the prior's and does not depend on the evidence, though every open move's
 probes show the threat. With their own probes it moves halfway on pos-09.
 
+## Is there signal to transfer?
+
+The null above has two readings: the reader cannot transfer, or the corpus
+gives it nothing to transfer, because the teacher already knows what the
+probes reveal. A measure that uses no model tells them apart.
+
+**The measure** (`scribblez/transfer_test/signal.py`,
+`py/scripts/transfer_test_signal.py`; engine `sim/reply_blocking`). Probe i
+of every candidate deals the opponent the same rack, so a reply that hurt
+candidate a was also open after candidate b unless b blocks it: takes one of
+its squares or spoils a cross-check it needed, decided by move generation on
+b's post-move board with that rack. (A reply through a's own tiles was never
+open after b and counts as blocked by every other candidate: 14% of blocked
+replies on three files, moving the correlation from +0.110 to +0.106 when
+left out.) A candidate's *damage blocked* is the
+sum, over the other candidates' probes whose replies it blocks, of how much
+worse that rollout went than its candidate's mean, divided by the number of
+those probes. This is evidence a reader could transfer to b without
+probing b. The test: within each position, does the damage blocked
+predict the label minus the teacher prior, i.e. what the prior misses?
+
+**Result** on `m1a-endgame-train`, 8,233 positions that are not decided,
+everything centered within each position:
+
+| Slice | Positions | corr(damage blocked, label - prior) | R^2 |
+|---|---|---|---|
+| All | 8,233 | +0.087 | 0.008 |
+| Bag 1-3 | 1,075 | +0.129 | 0.017 |
+| Bag 4-7 | 2,215 | +0.054 | 0.003 |
+| Bag 8-11 | 2,448 | +0.065 | 0.004 |
+| Bag 12-15 | 2,495 | +0.040 | 0.002 |
+| Top 3% by spread of damage blocked | 247 | +0.231 | 0.054 |
+
+The control, which pairs each candidate with another's damage blocked,
+gives -0.000. A perfect linear use of the measure would cut the prior's
+within-row miss from 0.0580 to 0.0578 (label noise 0.018).
+
+**Reading.** The signal is real and points the right way. It is largest
+where blocking matters most (the endgame's last tiles, and positions with
+a strong threat), but it is small: the damage blocked also correlates with
+the prior itself (+0.083), so the teacher already prices most of it. It
+was trained on hasty-style play, so it knows what hasty rollouts reveal,
+and a teacher-prior M1a has almost nothing left to transfer. The null says
+the signal is small, not that the machinery fails. Hence the pivot: a
+positive control with the dumbest prior, which leaves everything the
+probes show for the reader to learn ("The uniform-prior control").
+
 ## PR 6: the synthetic single-fact tests
 
 Constructed `.gcg` positions (the QUIZETH/QUIZATH family, the no-T control, a

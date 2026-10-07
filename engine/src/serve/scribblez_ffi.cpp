@@ -14,6 +14,7 @@
 #include "encoding/position_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "sim/reply_blocking.h"
 #include "sim/sim_runner.h"
 #include "training/footprint_collapse.h"
 #include "training/lane_analysis.h"
@@ -25,16 +26,19 @@
 #include "training/training_targets.h"
 #include "training/trajectory_position.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <exception>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using scribblez::binlog::DataLoader;
@@ -434,6 +438,64 @@ int scribblez_probe_replay(const char* slog_path, const char* sprobe_path, int64
                   err_cap);
       return -1;
     }
+    return 0;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
+}
+
+namespace {
+
+// Where each position's records start among a .sprobe file's, with the total
+// last.
+std::vector<int64_t> record_offsets(const scribblez::ProbeReader& probes) {
+  std::vector<int64_t> first(size_t(probes.num_positions()) + 1, 0);
+  for (int p = 0; p < probes.num_positions(); ++p)
+    first[size_t(p) + 1] =
+      first[size_t(p)] + int64_t(probes.position(p).header->num_candidates) * probes.probes();
+  return first;
+}
+
+// One worker of scribblez_reply_blocking: positions t, t + threads, ...
+void reply_blocking_stripe(const scribblez::InputEncodingSpec& spec, const char* slog,
+                           const scribblez::ProbeReader& probes, const std::vector<int64_t>& first,
+                           int stride, uint8_t* out, int t, int threads) {
+  scribblez::binlog::BlockDecoder decoder(spec);
+  for (int p = t; p < probes.num_positions(); p += threads) {
+    const scribblez::ProbeReader::Position pos = probes.position(p);
+    const scribblez::Board& root =
+      decoder.replay_board(slog, pos.header->game_index, pos.header->turn_index);
+    scribblez::reply_blocking(*spec.dict, root, pos, probes.probes(), stride,
+                              out + first[size_t(p)] * stride);
+  }
+}
+
+}  // namespace
+
+int scribblez_reply_blocking(ScribblezSession* s, const char* slog_path, const char* sprobe_path,
+                             int64_t n_records, int stride, int threads, uint8_t* out,
+                             char* out_err, int err_cap) {
+  try {
+    std::vector<char> buf;
+    if (load_slog(slog_path, /*game_idx=*/0, buf) != 0) {
+      emit_string(std::format("cannot load {}", slog_path ? slog_path : "(null)"), out_err,
+                  err_cap);
+      return -1;
+    }
+    const scribblez::ProbeReader probes(sprobe_path);
+    const std::vector<int64_t> first = record_offsets(probes);
+    if (first.back() != n_records) {
+      emit_string(std::format("{} has {} records, not {}", sprobe_path, first.back(), n_records),
+                  out_err, err_cap);
+      return -1;
+    }
+    threads = std::max(threads, 1);
+    std::vector<std::thread> pool;
+    for (int t = 0; t < threads; ++t)
+      pool.emplace_back(reply_blocking_stripe, std::cref(s->spec), buf.data(), std::cref(probes),
+                        std::cref(first), stride, out, t, threads);
+    for (std::thread& t : pool) t.join();
     return 0;
   } catch (const std::exception& e) {
     emit_string(e.what(), out_err, err_cap);

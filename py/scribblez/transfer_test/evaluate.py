@@ -77,6 +77,12 @@ def eval_row_config(params: dict) -> RowConfig:
     )
 
 
+def decided(label: np.ndarray, plausible: np.ndarray) -> bool:
+    """Whether a position's plausible candidates' labels are all equal, so
+    there is nothing to rank."""
+    return plausible.sum() < 2 or np.ptp(label[plausible]) < 1e-9
+
+
 @dataclass
 class Scored:
     """One assembled row's candidates: labels, the evidence the arms read,
@@ -96,7 +102,7 @@ class Scored:
 
     @property
     def decided(self) -> bool:
-        return self.plausible.sum() < 2 or np.ptp(self.label[self.plausible]) < 1e-9
+        return decided(self.label, self.plausible)
 
 
 def probe_evidence(row: Row, k: int) -> tuple[np.ndarray, np.ndarray]:

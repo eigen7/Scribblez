@@ -163,6 +163,16 @@ int scribblez_probe_replay(const char* slog_path, const char* sprobe_path, int64
                            void* out_roots, void* out_candidates, void* out_starts, void* out_turns,
                            char* out_err, int err_cap);
 
+// For every record of a .sprobe file and every candidate of its position:
+// whether the candidate blocks the record's opponent reply (sim/reply_blocking.h).
+// `out` takes n_records rows of `stride` bytes, the records in file order;
+// stride must be at least every position's candidate count. Positions are
+// split across `threads`. Returns 0 on success, -1 on failure with the reason
+// in out_err.
+int scribblez_reply_blocking(ScribblezSession* s, const char* slog_path, const char* sprobe_path,
+                             int64_t n_records, int stride, int threads, uint8_t* out,
+                             char* out_err, int err_cap);
+
 // Cross-check slots per move (move_set_encoder.h kMoveCrossSlots).
 int32_t scribblez_move_set_cross_slots(void);
 

@@ -284,6 +284,19 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # err_cap
     ]
 
+    lib.scribblez_reply_blocking.restype = ctypes.c_int
+    lib.scribblez_reply_blocking.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # .slog path
+        ctypes.c_char_p,  # .sprobe path
+        ctypes.c_int64,  # n_records
+        ctypes.c_int,  # stride
+        ctypes.c_int,  # threads
+        ctypes.POINTER(ctypes.c_uint8),  # out
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
+
     lib.scribblez_read_file_header.restype = ctypes.c_int
     lib.scribblez_read_file_header.argtypes = [
         ctypes.c_char_p,
@@ -760,6 +773,30 @@ def probe_replay(
     )
     if rc != 0:
         raise OSError(f"probe_replay failed for {sprobe_path}: {err.value.decode('utf-8')}")
+    return out
+
+
+def reply_blocking(
+    slog_path: str | Path, sprobe_path: str | Path, n_records: int, stride: int, threads: int = 8
+) -> np.ndarray:
+    """(n_records, stride) uint8: for each record of a .sprobe file and each
+    candidate of its position, 1 when the candidate blocks the record's
+    opponent reply (engine sim/reply_blocking.h)."""
+    out = np.zeros((n_records, stride), dtype=np.uint8)
+    err = ctypes.create_string_buffer(512)
+    rc = _lib().scribblez_reply_blocking(
+        _session(),
+        str(slog_path).encode("utf-8"),
+        str(sprobe_path).encode("utf-8"),
+        n_records,
+        stride,
+        threads,
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        err,
+        len(err),
+    )
+    if rc != 0:
+        raise OSError(f"reply_blocking failed for {sprobe_path}: {err.value.decode('utf-8')}")
     return out
 
 
