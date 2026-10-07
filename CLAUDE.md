@@ -47,6 +47,13 @@ Scribblez specifics for that workflow:
   baked with the absolute path /workspace/repo/py (see "Python code" below),
   and that path doesn't follow you into a worktree -- without the override,
   Python silently imports the main checkout's py/ instead of the worktree's.
+- A Python-only change can borrow the main checkout's build rather than
+  building its own: `ln -s /workspace/repo/target <worktree>/target`
+  (py/scribblez/paths.py finds the engine at the checkout's target/engine).
+  This holds only while the branch's engine sources match what main's build was
+  built from; a test that cannot find an engine binary or FFI symbol means
+  main's build is stale. Remove the link before running py/build.py in the worktree, which
+  would otherwise build into main's tree through it.
 - Before opening a PR: the engine must build, the affected suites must pass
   (py/run_tests.py --cpp-only for C++ changes, --python-only for Python), and
   changed files must be clang-format/ruff clean. Say what was run in the PR body.
@@ -96,6 +103,20 @@ Layout -- where data lives and what provisions it:
   (C++ tests run through ctest).
 - One C++ test case: `./target/engine/scribblez_tests --gtest_filter=<Suite>.<Name>`
   (same for the other test binaries under target/engine).
+- Stop a process by its PID, never by a `pkill -f`/`pgrep -f` pattern: the
+  dashboard's live workers run as the same user with the same command lines as
+  ad-hoc runs, and a pattern can also match your own shell.
+
+# Recording gotchas
+
+When you discover a gotcha that (1) would have been cheaper to read in
+documentation than to find by trial and error, and (2) seems likely to recur in
+other sessions working on unrelated tasks, tell the user and ask whether they
+want a standalone PR that records it for future sessions. Record it where the
+next session will meet it: an enforcing check or a comment at the code
+involved, docs/ or this file for repo-wide knowledge, devenv_utils for the
+shared workflow. Findings specific to the task belong in the task's own PR or
+plan instead.
 
 # Comments and documentation
 
