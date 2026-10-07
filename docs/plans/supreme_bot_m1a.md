@@ -562,9 +562,110 @@ a strong threat), but it is small: the damage blocked also correlates with
 the prior itself (+0.083), so the teacher already prices most of it. It
 was trained on hasty-style play, so it knows what hasty rollouts reveal,
 and a teacher-prior M1a has almost nothing left to transfer. The null says
-the signal is small, not that the machinery fails. Hence the pivot: a
-positive control with the dumbest prior, which leaves everything the
-probes show for the reader to learn ("The uniform-prior control").
+the signal is small, not that the machinery fails. A uniform-prior control
+(the same reader with a constant prior) was considered and dropped: without
+the teacher, the reader learns a static evaluator from the same data, and
+the result is a race between that learning curve and transfer's. Hence
+"Search evidence" below: evidence the teacher cannot already price.
+
+## Search evidence
+
+The probes so far are hasty rollouts, which the teacher already prices.
+Here the evidence is search: one ply of lookahead at the opponent's best
+reply, picked and valued by the move set model. A static evaluation of a
+candidate has to anticipate that reply, and search finds it. The question
+stays M1a's: can a model read the search results of some candidates and
+revise its estimates of the others?
+
+**Positions.** Self-play positions with 4 to 10 tiles in the bag before the
+move (the generator's existing bag-range sampling), face-up leaves. This
+keeps the opponent's hidden draw small, so racks can often be enumerated,
+and keeps positions typical (no filter on the opponent's last move).
+
+**The search for one candidate m.** Under face-up leaves the opponent's rack
+is their known leave plus h hidden tiles, drawn from the unseen pool (the
+bag plus their hidden tiles, at most 17 tiles here).
+
+1. Play m.
+2. For each opponent rack r: every distinct h-tile multiset from the pool,
+   weighted by its hypergeometric probability, when there are at most
+   `max_enumerated_racks` of them; otherwise `racks` samples, the same
+   samples for every candidate of the position (common random numbers).
+3. Value the reply:
+   - if m empties the bag, both racks are known: the endgame solver gives
+     the exact result. Always, since the move set model is not trained on
+     positions with an empty bag;
+   - otherwise one move set model call scores the opponent's full move list
+     for r; the reply is its best move, and its value is the model's
+     prediction for that move (win/draw/loss and score difference), turned
+     to our point of view. Flag `solve_after_reply` (default off): when the
+     reply empties the bag, solve the endgame instead of trusting the model,
+     which is slower and more exact.
+4. m's search value is the weighted mean over r.
+
+A search record keeps, per (m, r): the rack, its weight, the reply move
+and its value, and whether the solver gave it.
+
+**Rows: evidence and labels from one sample.** Per position, a stratified
+sample S of candidates (the transfer selector) is searched once. Each
+training row splits S at random into an evidence part and a label part
+(`evidence_share`); the evidence part's records go into the context, and
+the loss is on the label part's search values only. A new split per use
+gives many rows per expensive search. A candidate in neither part costs
+nothing, so no move is searched exhaustively.
+
+**The model.** The move set model, revised (cross-check inputs, no placement
+readout), with the evidence-fusion stage (scribblez/evidence_fusion.py) in
+its current role: late fusion, zero-initialized outputs, so with no evidence
+it is the plain model, and the model's own evidence-free prediction for a
+candidate is an input beside its evidence. The tokens change: one per
+(m, r), carrying m's encoding, the reply's encoding, the rack weight and
+the reply's value, so the reply's squares are what the board tokens attend
+to (#343 found the transferable signal in blocking those squares). Its
+evidence-free prediction is the prior; the teacher is back.
+
+**The twin.** The same model, data, labels, steps and trainable parameters,
+trained with every evidence set empty. The evidence model gains over the
+twin only by reading evidence, while both learn whatever the board alone
+teaches about search values. With a frozen backbone the empty-evidence twin
+would have nothing to train, so both runs fine-tune the backbone at the
+same rate.
+
+**Readouts,** at every checkpoint, within-row centered error against the
+search values, with bootstrap intervals over positions:
+
+- twin against the plain model: what the board teaches (the static curve);
+- evidence model against twin, on label moves: transfer, the headline;
+- evidence model on evidence moves: reading, a sanity check (an enumerated
+  candidate's evidence contains its label);
+- by bag, and by whether the solver valued the reply.
+
+**Step 0, before building the model.**
+
+- *Do search values play better?* The labels are worth learning only if
+  acting on them wins more than acting on the plain model. From corpus
+  positions at bags 4-10, play each side's decision by search value or by
+  the plain model, everything after by the same policy (endgames solved),
+  and compare outcomes on positions where the two choices differ. (The
+  near-endgame test labels cannot judge this: they are hasty rollouts, the
+  teacher's own world.)
+- *Is there signal?* On a few hundred positions, every candidate searched:
+  the within-row correlation of #343's damage blocked, computed from the
+  search replies, with search value minus the model's static prediction. It
+  should be clearly larger than for hasty probes.
+- *Cost.* Per position, |S| times the racks per candidate model calls
+  (0.37 ms each at 4,000 moves, measured on the parity fixture), as many
+  move generations, and a solver run per rack for each candidate that empties
+  the bag. Measured on a small batch, and with `solve_after_reply` both ways.
+
+**Gate.** The revised move set model is still training; the corpus is
+generated with it once it matures, pinned by generation. Step 0's tooling
+and the generator can be built now against the current generation.
+
+**Build order.** Engine search (enumerated or sampled racks, model call or
+solver per reply) with its record; step 0's play and signal checks;
+generator workload mode; then the token change to the fusion stage, the
+trainer with the evidence/label split and the twin, and the readouts.
 
 ## PR 6: the synthetic single-fact tests
 
