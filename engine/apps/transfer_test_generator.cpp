@@ -58,8 +58,10 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <limits>
+#include <ranges>
 #include <set>
 #include <string>
 #include <thread>
@@ -93,6 +95,8 @@ struct Options {
   int limit_games = 0;
   binlog::BagRange bags;
   int solve_max_unseen = -1;
+  std::string chosen_moves;  // a file of the positions and candidates to probe, or ""
+  ChosenMoves chosen;        // its contents
 };
 
 const TransferRecipe kRecipe{};
@@ -142,7 +146,7 @@ SlogSimConfig sim_config(const Options& opt, nn::PositionEvalService* leaf, SimO
                          int rollouts) {
   SlogSimConfig c;
   c.open_leaves = true;
-  c.selector = transfer_selector(kRecipe);
+  c.selector = opt.chosen.empty() ? transfer_selector(kRecipe) : chosen_selector(opt.chosen);
   c.runner = runner_params(opt, leaf, rollouts);
   c.solve_endgames_max_unseen = opt.solve_max_unseen;
   c.seed = opt.seed;
@@ -321,8 +325,31 @@ json::object header_json(const Options& opt, const std::string& leaf_hash) {
             {"middle_ranks", kRecipe.middle_ranks}}}};
 }
 
+// The --chosen-moves file: one candidate a line, "GAME TURN MOVE" with MOVE
+// the 16 bytes of a serialized Move in hex. The positions it names are the
+// ones probed, each with exactly its listed candidates, in order.
+ChosenMoves read_chosen_moves(const std::string& path) {
+  std::ifstream f(path);
+  if (!f) throw util::CleanException("cannot open {}", path);
+  ChosenMoves chosen;
+  uint32_t game = 0, turn = 0;
+  std::string hex;
+  while (f >> game >> turn >> hex) {
+    if (hex.size() != 2 * sizeof(Move))
+      throw util::CleanException("{}: a move must be {} hex digits", path, 2 * sizeof(Move));
+    std::array<unsigned char, sizeof(Move)> bytes{};
+    for (size_t i = 0; i < bytes.size(); ++i)
+      bytes[i] = static_cast<unsigned char>(std::stoi(hex.substr(2 * i, 2), nullptr, 16));
+    Move m;
+    std::memcpy(&m, bytes.data(), sizeof(Move));
+    chosen[{game, turn}].push_back(m);
+  }
+  return chosen;
+}
+
 std::vector<binlog::GamePositionIndex> sampled_work(const std::vector<char>& buf,
                                                     const Options& opt) {
+  if (!opt.chosen.empty()) return std::views::keys(opt.chosen) | std::ranges::to<std::vector>();
   const auto* hdr = reinterpret_cast<const binlog::FileHeader*>(buf.data());
   uint32_t games = hdr->num_games;
   if (opt.limit_games > 0) games = std::min<uint32_t>(games, opt.limit_games);
@@ -484,6 +511,10 @@ int main(int argc, char** argv) {
       "sample only turns with at least this many tiles in the bag before the move")(
       "max-bag", po::value<int>(&opt.bags.max)->default_value(opt.bags.max),
       "sample only turns with at most this many tiles in the bag before the move")(
+      "chosen-moves", po::value<std::string>(&opt.chosen_moves),
+      "corpus, one .slog: probe only these positions and candidates (a file of \"GAME TURN MOVE\" "
+      "lines, "
+      "MOVE a serialized Move in hex) instead of sampling and selecting")(
       "solve-max-unseen",
       po::value<int>(&opt.solve_max_unseen)->default_value(opt.solve_max_unseen),
       "probes and labels solve rollout endgames at positions with at most this many unseen "
@@ -491,6 +522,7 @@ int main(int argc, char** argv) {
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
     validate(opt);
+    if (!opt.chosen_moves.empty()) opt.chosen = read_chosen_moves(opt.chosen_moves);
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
     const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(

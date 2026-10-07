@@ -264,6 +264,12 @@ target_link_libraries(monte_carlo_sim_tool PRIVATE
   Threads::Threads)
 
 # SupremeBot M1a's transfer-test data (docs/plans/supreme_bot_m1a.md).
+add_executable(gcg_to_slog apps/gcg_to_slog.cpp)
+target_link_libraries(gcg_to_slog PRIVATE
+  scribblez_core
+  Boost::program_options
+  Threads::Threads)
+
 add_executable(transfer_test_generator apps/transfer_test_generator.cpp)
 target_link_libraries(transfer_test_generator PRIVATE
   scribblez_core

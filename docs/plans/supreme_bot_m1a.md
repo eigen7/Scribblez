@@ -475,10 +475,12 @@ held-out pair accuracy (pairs resolved beyond twice the label noise),
 overall and by bag, decided positions counted but not scored, bootstrap
 intervals against the prior. The shrinkage weight is fitted on the test
 rows' probed candidates, which favours the baselines. The trainer now keeps
-`checkpoints/best.pt` at the lowest validation held-out error. Still to
-build: the similarity-weighted shift, the summary-token arm, the partner
-ablation, and the hand-built exhibits (pos-09, egotize-lane), which need a
-path from a GCG to probe records with chosen candidates.
+`checkpoints/best.pt` at the lowest validation held-out error. The exhibits
+followed (`scribblez/transfer_test/exhibits.py`,
+`py/scripts/transfer_test_exhibits.py`): engine `gcg_to_slog` turns a GCG into
+a .slog game (filling the draws a GCG does not record), and the generator's
+`--chosen-moves` probes exactly the named candidates. Still to build: the
+similarity-weighted shift, the summary-token arm and the partner ablation.
 
 **First result.** `endgame-reader-5m` (10,000 steps on `m1a-endgame-train`,
 last checkpoint; validation's probed error was lowest at steps 2,500-4,000
@@ -498,6 +500,24 @@ but no better than shrinkage by the last checkpoint, and it shows no
 transfer: on held-out candidates it is worse than the prior (by 0.003 to
 0.007 at 95%) and indistinguishable from the shuffled control, so its
 held-out answers do not use the evidence.
+
+**The exhibits.** pos-09 (the opponent's GNU hook with -ING down column M)
+and egotize-lane, both decisions with 2 tiles in the bag. Each has 16
+candidates: the blockers (six column-N plays killing the -ING lane; four
+plays closing row 13), then the best other moves by static equity; 125 probes
+and 1,000 label rollouts each, played to the end with endgames solved. The
+teacher under-prices blocking by 0.22 on pos-09 and 0.08 on egotize-lane.
+`endgame-reader-5m` (last checkpoint), 64 rows each holding out two blockers
+and two open moves, the blocker-minus-open gap in expected score:
+
+| Exhibit | Labels | Prior | Reader, blockers held out | Same, outcomes shuffled | Reader, blockers' probes kept |
+|---|---|---|---|---|---|
+| pos-09 | +0.176 | -0.039 | -0.035 | -0.030 | +0.067 |
+| egotize-lane | +0.076 | -0.001 | +0.010 | +0.010 | +0.017 |
+
+No transfer here either: with the blockers held out the reader's gap stays at
+the prior's and does not depend on the evidence, though every open move's
+probes show the threat. With their own probes it moves halfway on pos-09.
 
 ## PR 6: the synthetic single-fact tests
 
