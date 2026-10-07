@@ -3,12 +3,11 @@ distillation targets.
 
 engine/include/training/move_set_eval_target_log.h owns the layout: a
 TargetFileHeader, then per position a TargetPositionHeader followed by its
-(Move, targets, plane scales, quantized planes) records. The dtypes and
-constants here come from the engine's format-layout document
-(scribblez.ffi.format_layout), whose offsets and sizes the C++ compiler
-produces, so they cannot drift from the packed structs. Target width and plane
-count vary per file (`record_floats`, `record_planes` in the header), so the
-record dtype is built per file.
+(Move, targets) records. The dtypes and constants here come from the engine's
+format-layout document (scribblez.ffi.format_layout), whose offsets and sizes
+the C++ compiler produces, so they cannot drift from the packed structs. Target
+width varies per file (`record_floats` in the header), so the record dtype is
+built per file.
 """
 
 from __future__ import annotations
@@ -30,17 +29,14 @@ MSET_VERSION = _CONST["mset"]["version"]
 # Version-1 target floats per candidate, in record order (mover's POV).
 TARGET_NAMES_V1 = tuple(_CONST["mset"]["target_names_v1"])
 
-# A record's placement planes, one per teacher placement head in this order
-# (also the RolloutStats plane order): the teacher's legality-masked
-# footprint softmax over PLANE_WIDTH classes at the candidate's post-move
-# state. Stored absmax-quantized as a float scale plus PLANE_WIDTH bytes per
-# plane, value = byte * scale with scale = plane max / 255.
-PLANE_NAMES = tuple(_CONST["placement_head_names"])
-PLANE_WIDTH = _CONST["mset"]["plane_width"]
+# Older files carry `record_planes` placement planes per record (a float scale
+# plus PLANE_WIDTH quantized bytes each), which nothing reads any more; the
+# record dtype steps over them so those corpora still load.
+_PLANE_WIDTH = _CONST["mset"]["plane_width"]
 
 # TargetFileHeader.flags bits, mirroring the .sobs convention. A full-sweep
 # file holds a capped sweep of every legal candidate; it is evaluation-only,
-# held out by construction, and carries no placement planes (record_planes 0).
+# held out by construction.
 MSET_FLAG_OPEN_LEAVES = _CONST["mset"]["flag_open_leaves"]
 MSET_FLAG_FULL_SWEEP = _CONST["mset"]["flag_full_sweep"]
 
@@ -49,19 +45,16 @@ _POSITION_HEADER = struct_dtype("MsetPositionHeader")
 
 
 def _record_dtype(record_floats: int, record_planes: int) -> np.dtype:
-    fields = [("move", MOVE_DTYPE), ("targets", "<f4", (record_floats,))]
-    if record_planes:
-        fields += [
-            ("plane_scales", "<f4", (record_planes,)),
-            ("planes", "u1", (record_planes, PLANE_WIDTH)),
-        ]
-    return np.dtype(fields)
-
-
-def dequantize_planes(planes: np.ndarray, plane_scales: np.ndarray) -> np.ndarray:
-    """(..., P, PLANE_WIDTH) uint8 planes with their (..., P) scales -> float32
-    probabilities."""
-    return planes.astype(np.float32) * plane_scales[..., None]
+    fields = np.dtype([("move", MOVE_DTYPE), ("targets", "<f4", (record_floats,))])
+    legacy_plane_bytes = record_planes * (4 + _PLANE_WIDTH)
+    return np.dtype(
+        {
+            "names": fields.names,
+            "formats": [fields.fields[n][0] for n in fields.names],
+            "offsets": [fields.fields[n][1] for n in fields.names],
+            "itemsize": fields.itemsize + legacy_plane_bytes,
+        }
+    )
 
 
 @dataclass
@@ -72,10 +65,6 @@ class MsetPosition:
     turn_index: int
     moves: np.ndarray  # (K,) MOVE_DTYPE
     targets: np.ndarray  # (K, record_floats) float32
-    # Quantized placement planes (see dequantize_planes); None on a full-sweep
-    # file.
-    plane_scales: np.ndarray | None  # (K, record_planes) float32
-    planes: np.ndarray | None  # (K, record_planes, PLANE_WIDTH) uint8
     # Recorded only for swept positions, so a sweep truncated by the
     # generator's cap shows as num_legal_moves > K. 0 on stratified positions.
     num_legal_moves: int = 0
@@ -86,7 +75,6 @@ class MsetFile:
     model_hash: str  # hex content hash of the teacher position evaluation model ONNX
     flags: int
     record_floats: int
-    record_planes: int
     positions: list[MsetPosition]
 
     @property
@@ -134,8 +122,7 @@ def read_mset(path: str | Path) -> MsetFile:
     if hdr["version"] != MSET_VERSION:
         raise ValueError(f".mset version mismatch in {path}: file={hdr['version']}")
     record_floats = int(hdr["record_floats"])
-    record_planes = int(hdr["record_planes"])
-    rec_dtype = _record_dtype(record_floats, record_planes)
+    rec_dtype = _record_dtype(record_floats, int(hdr["record_planes"]))
 
     positions: list[MsetPosition] = []
     off = _FILE_HEADER.itemsize
@@ -152,8 +139,6 @@ def read_mset(path: str | Path) -> MsetFile:
                 turn_index=int(ph["turn_index"]),
                 moves=records["move"],
                 targets=records["targets"],
-                plane_scales=records["plane_scales"] if record_planes else None,
-                planes=records["planes"] if record_planes else None,
                 num_legal_moves=int(ph["num_legal_moves"]),
             )
         )
@@ -163,6 +148,5 @@ def read_mset(path: str | Path) -> MsetFile:
         model_hash=bytes(hdr["model_hash"]).rstrip(b"\x00").decode(),
         flags=int(hdr["flags"]),
         record_floats=record_floats,
-        record_planes=record_planes,
         positions=positions,
     )

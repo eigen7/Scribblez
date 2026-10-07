@@ -27,17 +27,14 @@ import torch
 from scribblez.evidence.checkpoints import EvidenceCheckpoint
 from scribblez.evidence_fusion import best_so_far
 from scribblez.ffi import GcgPositionInputs, gcg_position_inputs
-from scribblez.footprint_spatial import SLOTS_PER_CELL
 from scribblez.move_set_eval.evidence import build_evidence_inputs
-from scribblez.move_set_eval.model import footprint_cell_marginal, win_equity
+from scribblez.move_set_eval.model import win_equity
 from scribblez.move_set_eval.moves import encode_moves, gcg_cross_checks
-from scribblez.move_set_eval.targets import PLANE_NAMES
 from scribblez.sim_evidence.sobs import (
     MOVE_PLAY,
     ROLE_OFF_POLICY,
     SobsPosition,
     glyph_char,
-    observed_slot_planes,
 )
 
 
@@ -92,23 +89,15 @@ def move_lane(move: np.void) -> dict | None:
 
 @dataclass
 class ScoredPass:
-    """One pass's per-legal-move readouts as numpy: value (N,), gain (N,),
-    and planes (N, num_planes, 15, 15), the display-only anchor marginal
-    (model.footprint_cell_marginal)."""
+    """One pass's per-legal-move readouts as numpy: value (N,) and gain (N,)."""
 
     value: np.ndarray
     gain: np.ndarray
-    planes: np.ndarray
 
     @classmethod
     def from_outputs(cls, out: dict[str, torch.Tensor]) -> ScoredPass:
         value = win_equity(torch.softmax(out["wld"].float(), dim=1))
-        planes = footprint_cell_marginal(out["planes"].float())
-        return cls(
-            value=value.cpu().numpy(),
-            gain=out["gain"].float().cpu().numpy(),
-            planes=planes.cpu().numpy(),
-        )
+        return cls(value=value.cpu().numpy(), gain=out["gain"].float().cpu().numpy())
 
 
 def _ranks(value: np.ndarray) -> np.ndarray:
@@ -196,7 +185,7 @@ class DecisionAnalysis:
             raise ValueError(f"prefix {prefix} is not a valid evidence prefix")
         model = self.ckpt.model
         rows = self.sim_index[:prefix]
-        first_pass = {k: self._plain_out[k][rows] for k in ("wld", "score_diff", "planes")}
+        first_pass = {k: self._plain_out[k][rows] for k in ("wld", "score_diff")}
         evidence = build_evidence_inputs(
             self.sobs.moves[:prefix],
             self.sobs.obs[:prefix],
@@ -217,17 +206,6 @@ class DecisionAnalysis:
     def sim_values(self) -> np.ndarray:
         """Each trajectory candidate's sim win value, trajectory order."""
         return np.array([_sim_stats(o)["value"] for o in self.sobs.obs], dtype=np.float64)
-
-    def observed_planes(self) -> np.ndarray:
-        """(K, 4, 15, 15) observed anchor marginals per head, for display:
-        the observed counterpart of footprint_cell_marginal."""
-        planes = observed_slot_planes(self.sobs.obs)  # (K, 4*slots, 15, 15)
-        k = len(self.sobs.obs)
-        return planes.reshape(k, 4, SLOTS_PER_CELL, *planes.shape[-2:]).sum(axis=2)
-
-
-def _round_planes(planes: np.ndarray) -> list:
-    return np.round(planes, 4).tolist()
 
 
 def _next_sim(gain: np.ndarray, sim_index: np.ndarray, prefix: int) -> int | None:
@@ -250,11 +228,10 @@ def payload(
 ) -> dict:
     """The pane's view of one (position, generation, prefix): trajectory
     cards, a move table ranked by conditioned value with the loop's next sim
-    marked, and the observed and predicted planes of the simmed candidate at
-    trajectory `slot`. The table keeps the top `top_n` of either ranking plus
-    every simmed candidate. `notations` is the legal moves' notation in
-    legal-move order (the `moves` list of ffi.gcg_position_board_json, whose
-    board the caller serves)."""
+    marked, and `slot` as the selected card when it names one. The table keeps
+    the top `top_n` of either ranking plus every simmed candidate.
+    `notations` is the legal moves' notation in legal-move order (the `moves`
+    list of ffi.gcg_position_board_json, whose board the caller serves)."""
     sobs = analysis.sobs
     plain, cond = analysis.plain, analysis.conditioned(prefix)
     trained = analysis.ckpt.trained
@@ -315,27 +292,7 @@ def payload(
         "next_sim": next_sim,
         "trajectory": cards,
         "moves": moves,
-        "planes": _planes_block(analysis, cond, slot),
-    }
-
-
-def _planes_block(analysis: DecisionAnalysis, cond: ScoredPass, slot: int | None) -> dict | None:
-    """Per placement head, the observed and conditioned-predicted anchor
-    marginals of the simmed candidate at `slot`; None without a valid slot."""
-    if slot is None or not 0 <= slot < len(analysis.sim_index):
-        return None
-    observed = analysis.observed_planes()
-    i = int(analysis.sim_index[slot])
-    return {
-        "slot": slot,
-        "n": analysis.sobs.rollouts,
-        "heads": {
-            name: {
-                "truth": _round_planes(observed[slot, h]),
-                "pred": _round_planes(cond.planes[i, h]),
-            }
-            for h, name in enumerate(PLANE_NAMES)
-        },
+        "selected_slot": slot if slot is not None and 0 <= slot < len(analysis.sim_index) else None,
     }
 
 

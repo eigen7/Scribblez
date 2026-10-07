@@ -6,12 +6,14 @@ results into the model's board token map so it can re-score every candidate
 
 Each simmed candidate becomes one evidence token, built from its move encoding
 (the move set model's move encoder, reused), its raw sim observations, and the
-model's own evidence-free predictions for it. Observed and predicted placement
-planes are concatenated channel-wise, so the encoder sees both for the same
-square and can form the residual itself. The predictions must be inputs: an
-encoder that reads only observations can express `posterior = prior + g(obs)`
-but not `posterior = prior + k*(obs - prior)`, because nothing downstream of an
-additive merge can separate the summands again.
+model's own evidence-free value prediction for it. The observed and predicted
+values sit side by side in the token's scalars, so the encoder can form the
+value residual itself. The predictions must be inputs: an encoder that reads
+only observations can express `posterior = prior + g(obs)` but not
+`posterior = prior + k*(obs - prior)`, because nothing downstream of an
+additive merge can separate the summands again. The observed placement planes
+have no predicted counterpart: the move set model does not distill the
+teacher's placement heads.
 
 The tokens self-attend, since comparing candidates is a pairwise computation.
 Then the 225 board tokens cross-attend into them, and the per-move scoring reads
@@ -47,26 +49,21 @@ from scribblez.spatial_trunk import mean_max_pool
 # SLOTS_PER_CELL board-shaped channels, anchored footprint class (cell, slot) at
 # channel head * SLOTS_PER_CELL + slot. The blocks, in order:
 #   - observed: the four heads' rollout frequencies (RolloutStats counts / rollouts)
-#   - predicted: the model's four evidence-free footprint distributions
 #   - the candidate's own footprint, one-hot
-# Heads follow the FFI's placement-head order (move_set_eval.targets.PLANE_NAMES).
+# Heads follow the FFI's placement-head order (position_eval.model.PLACEMENT_HEAD_NAMES).
 # The catch-all classes (pass, not-win) are dropped without renormalizing.
 _PLANE_HEADS = ("opp_next", "self_next", "opp_win", "self_win")
 EVIDENCE_PLANE_NAMES = tuple(
-    f"{kind}_{head}_s{slot}"
-    for kind in ("obs", "pred")
-    for head in _PLANE_HEADS
-    for slot in range(SLOTS_PER_CELL)
+    f"obs_{head}_s{slot}" for head in _PLANE_HEADS for slot in range(SLOTS_PER_CELL)
 ) + tuple(f"footprint_s{slot}" for slot in range(SLOTS_PER_CELL))
 NUM_OBSERVED_PLANES = len(_PLANE_HEADS) * SLOTS_PER_CELL
-NUM_PREDICTED_PLANES = len(_PLANE_HEADS) * SLOTS_PER_CELL
-NUM_EVIDENCE_PLANES = len(EVIDENCE_PLANE_NAMES)  # 117
-assert NUM_EVIDENCE_PLANES == NUM_OBSERVED_PLANES + NUM_PREDICTED_PLANES + SLOTS_PER_CELL
+NUM_EVIDENCE_PLANES = len(EVIDENCE_PLANE_NAMES)  # 65
+assert NUM_EVIDENCE_PLANES == NUM_OBSERVED_PLANES + SLOTS_PER_CELL
 
 # Per-token scalars: the sim's value estimate and rollout count (evidence from
 # 40 rollouts and from 2000 warrants different updates), beside the model's own
-# evidence-free value prediction, so the value residual can be formed like the
-# spatial one. The "_100" moments are score points / 100.
+# evidence-free value prediction, so the value residual can be formed. The
+# "_100" moments are score points / 100.
 EVIDENCE_SCALAR_NAMES = (
     "win_freq",
     "draw_freq",

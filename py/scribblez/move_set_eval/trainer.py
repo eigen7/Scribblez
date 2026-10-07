@@ -353,7 +353,6 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
         "loss": avg["total"],
         "loss_wld": avg["wld"],
         "loss_score_diff": avg["score_diff"],
-        "loss_planes": avg["planes"],
         "spearman_acc": metrics["spearman"],
         "spearman_baseline_acc": metrics["spearman_baseline"],
         "lr": lr_now,
@@ -361,8 +360,6 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
         # Arm-specific series, e.g. the schedule-free averaging weight.
         **optim_arm.metrics(),
     }
-    if "plane_ce" in metrics:
-        record["plane_ce"] = metrics["plane_ce"]
     record["exch_rank_regret"] = metrics["exch_rank_regret"]
     record["exch_rank_regret_baseline"] = metrics["exch_rank_regret_baseline"]
     record["positions_with_exchanges"] = metrics["positions_with_exchanges"]
@@ -409,7 +406,6 @@ def publish_config(recorder, tag: str, params, model_params: int = 0):
         {
             "loss_wld": 1.0,
             "loss_score_diff": params.lambda_sd,
-            "loss_planes": params.lambda_planes,
         },
         {},
     )

@@ -37,7 +37,7 @@ from scribblez.evidence_fusion import (
 )
 from scribblez.ffi import get_input_shapes
 from scribblez.move_set_eval import proposal_export
-from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_slot_planes
+from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.moves import (
     move_encoding_dims,
     move_encoding_version,
@@ -212,7 +212,7 @@ def _reference(model, spatial, scalar, moves, ev):
     letters, blanks, squares, tile_mask, scalars, cross_cells, cross_letters = moves
     m = len(scalars)
     with torch.no_grad():
-        out = dict(
+        return dict(
             model(
                 torch.from_numpy(spatial),
                 torch.from_numpy(scalar),
@@ -227,11 +227,6 @@ def _reference(model, spatial, scalar, moves, ev):
                 evidence=ev,
             )
         )
-    # The proposal graphs serve the footprint heads' slot-channel probabilities
-    # (the evidence-plane layout), so the reference decodes its footprint
-    # logits the same way.
-    out["planes"] = footprint_slot_planes(out["planes"]).flatten(2)
-    return out
 
 
 @pytest.mark.parametrize("trunk", TRUNKS)
@@ -252,7 +247,7 @@ def test_wrappers_match_training_forward(kind, trunk):
     plain_ref = _reference(model, spatial, scalar, moves, None)
 
     with torch.no_grad():
-        board, g, move_enc, c_wld, c_sd, c_planes = cache(
+        board, g, move_enc, c_wld, c_sd = cache(
             torch.from_numpy(spatial),
             torch.from_numpy(scalar),
             *(torch.from_numpy(a) for a in moves),
@@ -267,10 +262,10 @@ def test_wrappers_match_training_forward(kind, trunk):
             torch.from_numpy(obs_scalars),
             torch.from_numpy(mask),
         )
-    # The cache graph's heads are the plain forward's, its planes included (the
-    # evidence-free planes every evidence token's predicted half is gathered
-    # from); the step graph's are the conditioned forward's, planes-free.
-    _assert_close({"wld": c_wld, "score_diff": c_sd, "planes": c_planes}, plain_ref)
+    # The cache graph's heads are the plain forward's (the evidence-free value
+    # every evidence token's predicted scalars are gathered from); the step
+    # graph's are the conditioned forward's.
+    _assert_close({"wld": c_wld, "score_diff": c_sd}, plain_ref)
     outputs = {"wld": s_wld, "score_diff": s_sd, "gain": s_gain}
     _assert_close(outputs, ref)
     if kind == "empty":  # and the empty step equals the cache's plain heads, finite
@@ -333,7 +328,7 @@ def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, kind, trunk):
         )
         cache = dict(zip(CACHE_OUTPUT_NAMES, cache_out, strict=True))
         move_enc = cache["move_enc"]
-        for name in ("wld", "score_diff", "planes"):
+        for name in ("wld", "score_diff"):
             assert cache[name].shape[0] == m, name
             np.testing.assert_allclose(
                 cache[name], plain_ref[name].numpy(), atol=1e-5, rtol=1e-4, err_msg=name
@@ -402,11 +397,11 @@ def test_exported_file_contract(tmp_path):
         assert cin[name].type.tensor_type.shape.dim[0].dim_param == "moves", name
     assert cin["input_spatial"].type.tensor_type.shape.dim[0].dim_value == 1
     # The cache emits the handoff tensors as static (1, ...) outputs; wld /
-    # score_diff / planes / move_enc ride "moves".
+    # score_diff / move_enc ride "moves".
     cout = {o.name: o for o in cache.graph.output}
     assert cout["board"].type.tensor_type.shape.dim[0].dim_value == 1
     assert cout["g"].type.tensor_type.shape.dim[0].dim_value == 1
-    for name in ("move_enc", "wld", "score_diff", "planes"):
+    for name in ("move_enc", "wld", "score_diff"):
         assert cout[name].type.tensor_type.shape.dim[0].dim_param == "moves", name
 
     sin = {i.name: i for i in step.graph.input}
@@ -433,11 +428,7 @@ def test_exported_file_contract(tmp_path):
             n for n in graph.graph.node if n.op_type == "Identity" and n.input[0] in init_names
         ]
         assert not aliased
-    cache_inits = {i.name for i in cache.graph.initializer}
     step_inits = {i.name for i in step.graph.initializer}
-    for stem in ("plane_attended", "plane_g"):  # the plane head: cache graph only
-        assert any(stem in n for n in cache_inits), stem
-        assert not any(stem in n for n in step_inits), stem
     for stem in ("sa_q", "sa_k", "sa_v", "pb_attended", "pb_rest"):  # the fusion self-attn + gain
         assert any(stem in n for n in step_inits), stem
 

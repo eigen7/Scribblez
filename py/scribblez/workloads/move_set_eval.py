@@ -244,9 +244,6 @@ class MoveSetEvalParams:
         4, "attention heads of the move-to-board cross-attention and the evidence fusion stage"
     )
     lambda_sd: float = param(0.004, "score-diff loss weight")
-    lambda_planes: float = param(
-        1.0, "placement-plane softmax-CE loss weight (the per-move readouts of roadmap item 1)"
-    )
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
 

@@ -59,13 +59,11 @@ MOVE_INPUT_NAMES = (
     "move_cross_cells",
     "move_cross_letters",
 )
-# No placement planes: this graph serves plain move ranking. The evidence path
-# gets its planes from the proposal cache graph (proposal_export.py).
 OUTPUT_NAMES = ("wld", "score_diff")
 
 
 class MoveSetEvalExportModel(nn.Module):
-    """MoveSetEvalModel.forward at P=1, without evidence or planes, sharing
+    """MoveSetEvalModel.forward at P=1, without evidence, sharing
     the trained model's submodules. Returns (wld (M, 3) logits, score_diff
     (M, 2) [mean, std > 0]) as a tuple to fix the exported output order.
     """

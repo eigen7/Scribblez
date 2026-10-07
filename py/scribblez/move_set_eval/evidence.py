@@ -22,16 +22,11 @@ from scribblez.evidence_fusion import (
     NUM_EVIDENCE_PLANES,
     NUM_EVIDENCE_SCALARS,
     NUM_OBSERVED_PLANES,
-    NUM_PREDICTED_PLANES,
     EvidenceInputs,
 )
 from scribblez.sim_evidence.sobs import BOARD, candidate_slot_planes, observed_slot_planes
 
-from .model import footprint_slot_planes
 from .moves import encode_moves, move_cross_slots, move_encoding_dims
-
-# EVIDENCE_PLANE_NAMES' block boundaries: observed | predicted | candidate.
-_PREDICTED_END = NUM_OBSERVED_PLANES + NUM_PREDICTED_PLANES
 
 
 def observed_scalars(obs: np.ndarray) -> np.ndarray:
@@ -91,14 +86,13 @@ def build_evidence_inputs(
     arrays or a prefix of them). `pre_move_diff` is the mover's score
     differential before the move. `cross` holds their cross-check features
     (moves.cross_checks' "cells" and "letters", in the same order). `first_pass`
-    holds the model's
-    evidence-free "wld", "score_diff" and "planes" for the same K candidates
-    in the same order.
+    holds the model's evidence-free "wld" and "score_diff" for the same K
+    candidates in the same order.
     """
     k = len(moves)
     if k > max_e:
         raise ValueError(f"evidence set of {k} candidates does not fit max_e={max_e}")
-    if first_pass["planes"].shape[0] != k:
+    if first_pass["wld"].shape[0] != k:
         raise ValueError("first-pass rows do not match the evidence candidates")
     if k == 0:
         return empty_evidence_inputs(max_e, dtype=dtype, device=device)
@@ -107,10 +101,7 @@ def build_evidence_inputs(
 
     planes = np.zeros((k, NUM_EVIDENCE_PLANES, BOARD, BOARD), dtype=np.float32)
     planes[:, :NUM_OBSERVED_PLANES] = observed_slot_planes(obs)
-    planes[:, NUM_OBSERVED_PLANES:_PREDICTED_END] = (
-        footprint_slot_planes(first_pass["planes"].detach()).cpu().float().numpy()
-    )
-    planes[:, _PREDICTED_END:] = candidate_slot_planes(moves)
+    planes[:, NUM_OBSERVED_PLANES:] = candidate_slot_planes(moves)
 
     scalars = np.concatenate([observed_scalars(obs), predicted_scalars(first_pass)], axis=1)
     assert scalars.shape[1] == NUM_EVIDENCE_SCALARS

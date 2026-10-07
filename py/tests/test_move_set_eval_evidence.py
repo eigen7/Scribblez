@@ -16,6 +16,7 @@ import torch
 from scribblez.evidence_fusion import (
     NUM_EVIDENCE_PLANES,
     NUM_EVIDENCE_SCALARS,
+    NUM_OBSERVED_PLANES,
     EvidenceInputs,
     best_so_far,
 )
@@ -98,7 +99,7 @@ def test_zero_initialized_fusion_is_the_plain_model():
     evidence = _random_evidence(2, counts)
     evidence.obs_scalars[..., :2] = torch.rand(2, evidence.mask.shape[1], 2, dtype=torch.float64)
     conditioned = _forward(model, batch, evidence)
-    for name in ("wld", "score_diff", "planes"):
+    for name in ("wld", "score_diff"):
         torch.testing.assert_close(conditioned[name], plain[name], rtol=0, atol=0)
     assert not torch.allclose(conditioned["gain"], plain["gain"])
     evidence.obs_scalars[..., :2] = 0.0
@@ -204,7 +205,7 @@ def test_gradients_stay_finite_on_mixed_prefix_batches():
     evidence = _random_evidence(2, [2, 0], max_e=2)
 
     out = model(*(batch[k] for k in _FORWARD_KEYS), evidence=evidence)
-    loss = out["wld"].sum() + out["score_diff"].sum() + out["planes"].sum()
+    loss = out["wld"].sum() + out["score_diff"].sum()
     loss.backward()
     grads = [p.grad for p in model.parameters() if p.grad is not None]
     assert grads
@@ -246,7 +247,6 @@ def _first_pass(k: int, seed: int = 5):
     return {
         "wld": torch.randn(k, 3, generator=gen),
         "score_diff": torch.randn(k, 2, generator=gen),
-        "planes": torch.randn(k, 4, NUM_CLASSES, generator=gen),
     }
 
 
@@ -274,19 +274,9 @@ def test_builder_assembles_both_halves():
     assert ev.obs_planes[0, 0, 2, 0, 5].item() == pytest.approx((cls % 41) / 40.0)
     # self_next (head 1) counts are a constant 3 across all classes.
     assert ev.obs_planes[0, 0, SLOTS_PER_CELL, 3, 3].item() == pytest.approx(3 / 40.0)
-    # ...the prediction half is the first pass's footprint logits softmaxed
-    # into the same slot-channel layout (catch-all dropped, no renorm)...
-    from scribblez.move_set_eval.model import footprint_slot_planes
-
-    obs_end, pred_end = 4 * SLOTS_PER_CELL, 8 * SLOTS_PER_CELL
-    np.testing.assert_allclose(
-        ev.obs_planes[0, 0, obs_end:pred_end].numpy(),
-        footprint_slot_planes(first_pass["planes"][0]).numpy(),
-        atol=1e-6,
-    )
-    # ...and the last block is the candidate's own footprint one-hot: a 2-tile
+    # The last block is the candidate's own footprint one-hot: a 2-tile
     # horizontal play (slot 1) anchored at (7, 3 + i).
-    footprint = ev.obs_planes[0, 1, pred_end:].numpy()
+    footprint = ev.obs_planes[0, 1, NUM_OBSERVED_PLANES:].numpy()
     assert footprint.sum() == 1.0
     assert footprint[1, 7, 4] == 1.0
 
@@ -375,7 +365,7 @@ def test_best_so_far_reaches_the_gain_head_alone():
         zero = model.score_moves(board, g, e, pos_id, torch.zeros(p, dtype=torch.float64))
         lifted = model.score_moves(board, g, e, pos_id, torch.full((p,), 0.5, dtype=torch.float64))
     _assert_equal(omitted, zero)
-    for name in ("wld", "score_diff", "planes"):
+    for name in ("wld", "score_diff"):
         torch.testing.assert_close(lifted[name], zero[name], rtol=0, atol=0)
     assert not torch.allclose(lifted["gain"], zero["gain"])
 
