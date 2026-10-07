@@ -112,28 +112,32 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
                                      uint8_t* out_blanks, int32_t* out_squares,
                                      uint8_t* out_tile_mask, float* out_scalars);
 
-// The cross-check entries each candidate move changes on its position's board
-// (layout owned by training/cross_check_delta.h). Position j is the pre-move
-// decision point (game_idx[j], turn_idx[j]) of the .slog at `path`. `moves`
-// holds every position's candidates back to back, move_counts[j] for position
-// j; each must be legal on its board. Every output holds max_cross_deltas
-// slots per move, in `moves` order:
-//   out_axes, out_delta_mask       uint8
-//   out_squares                    int32
-//   out_old_masks, out_new_masks   uint32
+// The cross-check features of candidate moves on their positions' boards, in
+// the move set model's layout (training/move_set_encoder.h
+// encode_move_cross_checks). Position j is the pre-move decision point
+// (game_idx[j], turn_idx[j]) of the .slog at `path`. `moves` holds every
+// position's candidates back to back, move_counts[j] for position j; each must
+// be legal on its board. Outputs, in `moves` order:
+//   out_cells    int32[n_moves * cross_slots]
+//   out_letters  uint8[n_moves * cross_slots * 26]
 // Returns 0 on success, -1 on an I/O or header error.
-int scribblez_move_set_cross_check_deltas(ScribblezSession* s, const char* path,
-                                          const int64_t* game_idx, const int64_t* turn_idx,
-                                          const int64_t* move_counts, int64_t n_positions,
-                                          const void* moves, uint8_t* out_axes,
-                                          int32_t* out_squares, uint32_t* out_old_masks,
-                                          uint32_t* out_new_masks, uint8_t* out_delta_mask);
+int scribblez_move_set_cross_checks(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                                    const int64_t* turn_idx, const int64_t* move_counts,
+                                    int64_t n_positions, const void* moves, int32_t* out_cells,
+                                    uint8_t* out_letters);
+
+// As scribblez_move_set_cross_checks for the `n` moves of one position-set
+// GCG's decision point (read as scribblez_gcg_position_inputs reads it).
+// Returns 0, or -1 with the reason in out_err.
+int scribblez_gcg_cross_checks(ScribblezSession* s, const char* gcg_text, int open_leaves,
+                               const void* moves, int64_t n, int32_t* out_cells,
+                               uint8_t* out_letters, char* out_err, int err_cap);
 
 // Post-move input rows for candidate moves, the rows a position-evaluation
 // model scores them from: per candidate, the position after it and before the
 // refill, from the mover's point of view, under the session's arm (as
 // training/move_set_eval_target_generator encodes them). Positions and moves
-// are addressed as in scribblez_move_set_cross_check_deltas; `out` takes one
+// are addressed as in scribblez_move_set_cross_checks; `out` takes one
 // row of scribblez_input_floats() per move. Returns 0 on success, -1 on an I/O
 // or header error.
 int scribblez_encode_candidate_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
@@ -156,13 +160,8 @@ int scribblez_probe_replay(const char* slog_path, const char* sprobe_path, int64
                            void* out_roots, void* out_candidates, void* out_starts, void* out_turns,
                            char* out_err, int err_cap);
 
-// Cross-check delta slots per move (cross_check_delta.h kMoveMaxCrossDeltas).
-int32_t scribblez_move_set_max_cross_deltas(void);
-
-// The index of the board input's first cross-check plane. The 26
-// horizontal-play letter planes start here and the 26 vertical-play ones
-// follow, so a delta entry's (axis, letter) is plane this + 26 * axis + letter.
-int32_t scribblez_cross_check_plane0(void);
+// Cross-check slots per move (move_set_encoder.h kMoveCrossSlots).
+int32_t scribblez_move_set_cross_slots(void);
 
 // The move-set encoder's dimensions, so Python never hardcodes them:
 //   max_placed    letter/square array width (tiles per move)

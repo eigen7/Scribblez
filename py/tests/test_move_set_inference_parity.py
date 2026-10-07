@@ -29,7 +29,7 @@ import pytest
 import torch
 from scribblez.ffi import get_input_shapes
 from scribblez.move_set_eval.model import MoveSetEvalModel
-from scribblez.move_set_eval.moves import move_encoding_dims
+from scribblez.move_set_eval.moves import move_encoding_dims, synthetic_cross_checks
 from scribblez.move_set_eval.onnx_export import (
     MOVE_INPUT_NAMES,
     OUTPUT_NAMES,
@@ -67,6 +67,10 @@ def _random_model(trunk: str = "conv", seed: int = 0) -> MoveSetEvalModel:
         with torch.no_grad():
             for block in model.trunk.tower.blocks:
                 block.up.weight.normal_(std=0.1)
+    # Likewise the cross-check encoder's zero-init output, or the export's
+    # cross-check inputs would go unread.
+    with torch.no_grad():
+        model.cross_check_encoder.out.weight.normal_(std=0.1)
     model.eval()
     return model
 
@@ -89,7 +93,9 @@ def _random_moves(m: int, seed: int):
         tile_mask[-1] = 0
         squares[-1] = 0
         scalars[-1, 2] = 0.0
-    return letters, blanks, squares, tile_mask, scalars
+    cross = synthetic_cross_checks(scalars[:, 2] > 0, seed)
+    cross_cells = cross["cells"].astype(np.int32)
+    return letters, blanks, squares, tile_mask, scalars, cross_cells, cross["letters"]
 
 
 def _board_inputs(p: int, seed: int):
@@ -108,7 +114,7 @@ def _training_batch(counts, seed: int = 1):
     return spatial, scalar, per_pos, moves, pos_id
 
 
-def _torch_move_args(letters, blanks, squares, tile_mask, scalars):
+def _torch_move_args(letters, blanks, squares, tile_mask, scalars, cross_cells, cross_letters):
     """The training forward's dtypes (dataset.py upcasts the FFI arrays)."""
     return (
         torch.from_numpy(letters).long(),
@@ -116,6 +122,8 @@ def _torch_move_args(letters, blanks, squares, tile_mask, scalars):
         torch.from_numpy(squares).long(),
         torch.from_numpy(tile_mask).bool(),
         torch.from_numpy(scalars),
+        torch.from_numpy(cross_cells).long(),
+        torch.from_numpy(cross_letters),
     )
 
 
@@ -136,15 +144,10 @@ def test_export_wrapper_matches_training_forward_on_ragged_batches(trunk):
         )
         start = 0
         for i, m in enumerate(counts):
-            letters, blanks, squares, tile_mask, scalars = per_pos[i]
             wld, score_diff = wrapper(
                 torch.from_numpy(spatial[i : i + 1]),
                 torch.from_numpy(scalar[i : i + 1]),
-                torch.from_numpy(letters),
-                torch.from_numpy(blanks),
-                torch.from_numpy(squares),
-                torch.from_numpy(tile_mask),
-                torch.from_numpy(scalars),
+                *(torch.from_numpy(a) for a in per_pos[i]),
             )
             np.testing.assert_allclose(
                 wld.numpy(), ref["wld"][start : start + m].numpy(), atol=1e-5, rtol=1e-4
@@ -158,7 +161,7 @@ def test_export_wrapper_matches_training_forward_on_ragged_batches(trunk):
             start += m
 
 
-def _export(tmp_path, model, move_encoding_version=1):
+def _export(tmp_path, model, move_encoding_version=2):
     path = tmp_path / "mset.onnx"
     export_onnx(
         model,
@@ -182,26 +185,18 @@ def test_onnx_runtime_matches_torch_at_other_ms(tmp_path, trunk):
 
     spatial, scalar = _board_inputs(1, seed=3)
     for m in (1, 37):  # neither is the traced M
-        letters, blanks, squares, tile_mask, scalars = _random_moves(m, seed=40 + m)
+        moves = _random_moves(m, seed=40 + m)
         feeds = {
             "input_spatial": spatial,
             "input_scalar": scalar,
-            "move_letters": letters,
-            "move_blanks": blanks,
-            "move_squares": squares,
-            "move_tile_mask": tile_mask,
-            "move_scalars": scalars,
+            **dict(zip(MOVE_INPUT_NAMES, moves, strict=True)),
         }
         got = sess.run(list(OUTPUT_NAMES), feeds)
         with torch.no_grad():
             want = wrapper(
                 torch.from_numpy(spatial),
                 torch.from_numpy(scalar),
-                torch.from_numpy(letters),
-                torch.from_numpy(blanks),
-                torch.from_numpy(squares),
-                torch.from_numpy(tile_mask),
-                torch.from_numpy(scalars),
+                *(torch.from_numpy(a) for a in moves),
             )
         for got_arr, want_t in zip(got, want, strict=True):
             assert got_arr.shape == tuple(want_t.shape)
@@ -228,6 +223,8 @@ def test_exported_file_contract(tmp_path):
     assert itypes["move_blanks"] == onnx.TensorProto.UINT8
     assert itypes["move_tile_mask"] == onnx.TensorProto.UINT8
     assert itypes["move_scalars"] == onnx.TensorProto.FLOAT
+    assert itypes["move_cross_cells"] == onnx.TensorProto.INT32
+    assert itypes["move_cross_letters"] == onnx.TensorProto.UINT8
     for name in MOVE_INPUT_NAMES:
         dim0 = inputs[name].type.tensor_type.shape.dim[0]
         assert dim0.dim_param == "moves", name

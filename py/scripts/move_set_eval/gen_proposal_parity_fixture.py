@@ -32,7 +32,8 @@ Files written into --out-dir:
     different weights, so a different proposal_export_id), for the runtime's
     cache/step pairing guard.
   * board.bin -- one position's encoder row (spatial then scalar floats), f32.
-  * move_{letters,blanks,squares,tile_mask,scalars}.bin -- the M candidates in
+  * move_{letters,blanks,squares,tile_mask,scalars,cross_cells,cross_letters}.bin
+    -- the M candidates in
     move_set_encoder.h's dtypes, encoded with the single pre-move differential.
   * moves_sobs.bin -- the M candidates as 16-byte Move records (MOVE_DTYPE), for
     the C++ Move footprint; obs.bin -- their RolloutStats records (verbatim
@@ -59,7 +60,7 @@ from scribblez.ffi import encode_moves, get_input_shapes
 from scribblez.footprint_spatial import NUM_CLASSES
 from scribblez.move_set_eval.evidence import build_evidence_inputs
 from scribblez.move_set_eval.model import MoveSetEvalModel, footprint_slot_planes
-from scribblez.move_set_eval.moves import move_encoding_version
+from scribblez.move_set_eval.moves import move_encoding_version, synthetic_cross_checks
 from scribblez.move_set_eval.proposal_export import (
     DEFAULT_MAX_EVIDENCE,
     export_proposal_pair,
@@ -104,11 +105,12 @@ def build_model(seed: int, spatial_planes: int, scalar_size: int, board_size: in
         num_heads=NUM_HEADS,
         board_size=board_size,
     )
-    # The fusion projections and proves-best head are zero-init, which would make
-    # every conditioned pass equal the plain one -- perturb them so a populated
-    # evidence set genuinely exercises the fusion + gain path.
+    # The fusion projections, proves-best head and cross-check output are
+    # zero-init, which would make every conditioned pass equal the plain one and
+    # leave the cross-check inputs unread -- perturb them so the fixture
+    # genuinely exercises the fusion + gain path and the cross-check inputs.
     with torch.no_grad():
-        for module in (model.evidence_fusion, model.proves_best):
+        for module in (model.evidence_fusion, model.proves_best, model.cross_check_encoder):
             for p in module.parameters():
                 p.add_(0.1 * torch.randn_like(p))
     model.eval()
@@ -186,6 +188,8 @@ def forward(model, spatial, scalar, enc, num_moves: int, evidence=None) -> dict[
         torch.from_numpy(enc["squares"]).long(),
         torch.from_numpy(enc["tile_mask"]).float(),
         torch.from_numpy(enc["scalars"]),
+        torch.from_numpy(enc["cross_cells"]).long(),
+        torch.from_numpy(enc["cross_letters"]),
         torch.zeros(num_moves, dtype=torch.long),
         evidence=evidence,
     )
@@ -268,6 +272,8 @@ def main() -> int:
     obs = synthetic_observations(args.num_moves, args.seed)
     pre_diffs = np.full(args.num_moves, PRE_MOVE_DIFF, dtype=np.int32)
     enc = encode_moves(moves, pre_diffs)
+    cross = synthetic_cross_checks(enc["scalars"][:, 2] > 0, args.seed)
+    enc["cross_cells"], enc["cross_letters"] = cross["cells"], cross["letters"]
     # The cache graph's inputs, in move_set_encoder.h's own dtypes.
     cache_inputs = {
         "move_letters": enc["letters"].astype(np.int32),
@@ -275,6 +281,8 @@ def main() -> int:
         "move_squares": enc["squares"].astype(np.int32),
         "move_tile_mask": enc["tile_mask"].astype(np.uint8),
         "move_scalars": enc["scalars"].astype(np.float32),
+        "move_cross_cells": enc["cross_cells"].astype(np.int32),
+        "move_cross_letters": enc["cross_letters"].astype(np.uint8),
     }
 
     first_pass = forward(model, spatial, scalar, enc, args.num_moves)
@@ -296,12 +304,22 @@ def main() -> int:
         k = len(indices)
         if k == 0:
             evidence = build_evidence_inputs(
-                moves[:0], obs[:0], PRE_MOVE_DIFF, {key: fp[key][:0] for key in fp}, max_e=MAX_E
+                moves[:0],
+                obs[:0],
+                PRE_MOVE_DIFF,
+                {key: v[:0] for key, v in cross.items()},
+                {key: fp[key][:0] for key in fp},
+                max_e=MAX_E,
             )
         else:
             idx = np.asarray(indices, dtype=np.int64)
             evidence = build_evidence_inputs(
-                moves[idx], obs[idx], PRE_MOVE_DIFF, {key: fp[key][idx] for key in fp}, max_e=MAX_E
+                moves[idx],
+                obs[idx],
+                PRE_MOVE_DIFF,
+                {key: v[idx] for key, v in cross.items()},
+                {key: fp[key][idx] for key in fp},
+                max_e=MAX_E,
             )
         out = forward(model, spatial, scalar, enc, args.num_moves, evidence)
         (args.out_dir / f"case_{name}_indices.bin").write_bytes(

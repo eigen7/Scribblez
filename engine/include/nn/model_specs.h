@@ -112,6 +112,22 @@ struct MoveScalarsInput {
   static constexpr auto kBatchSource = &move_set::MoveFeatureArrays::scalars;
 };
 
+struct MoveCrossCellsInput {
+  static constexpr const char* kName = "move_cross_cells";
+  using Elem = int32_t;
+  static constexpr int kRowElems = move_set::kMoveCrossSlots;
+  static constexpr bool kDynamic = true;
+  static constexpr auto kBatchSource = &move_set::MoveFeatureArrays::cross_cells;
+};
+
+struct MoveCrossLettersInput {
+  static constexpr const char* kName = "move_cross_letters";
+  using Elem = uint8_t;
+  static constexpr int kRowElems = move_set::kMoveCrossLetters;
+  static constexpr bool kDynamic = true;
+  static constexpr auto kBatchSource = &move_set::MoveFeatureArrays::cross_letters;
+};
+
 // The activation TrtEvalService applies to each row of a head's raw output.
 // It belongs to the head's descriptor, not to the code reading it.
 enum class RowDecode : uint8_t { kIdentity, kSoftmax, kSigmoid };
@@ -390,9 +406,11 @@ class MoveSetEvaluationSpec {
                                                      kMoveEncodingRequirement};
 
   using Inputs = TensorList<Static<SpatialInput>, Static<ScalarInput>, MoveLettersInput,
-                            MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput, MoveScalarsInput>;
-  using MoveInputs = TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput,
-                                MoveTileMaskInput, MoveScalarsInput>;
+                            MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput, MoveScalarsInput,
+                            MoveCrossCellsInput, MoveCrossLettersInput>;
+  using MoveInputs =
+    TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput,
+               MoveScalarsInput, MoveCrossCellsInput, MoveCrossLettersInput>;
   // Deliberately the position model's heads, so an agent's EvalObjective ranks
   // alternatives the same way whichever family produced the value.
   using Outputs = TensorList<WldOutput, ScoreDiffOutput>;
@@ -443,9 +461,11 @@ class MoveProposalCacheSpec {
                                                      kMoveEncodingRequirement};
 
   using Inputs = TensorList<Static<SpatialInput>, Static<ScalarInput>, MoveLettersInput,
-                            MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput, MoveScalarsInput>;
-  using MoveInputs = TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput,
-                                MoveTileMaskInput, MoveScalarsInput>;
+                            MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput, MoveScalarsInput,
+                            MoveCrossCellsInput, MoveCrossLettersInput>;
+  using MoveInputs =
+    TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput,
+               MoveScalarsInput, MoveCrossCellsInput, MoveCrossLettersInput>;
   using Outputs = TensorList<Static<BoardHandoff>, Static<GHandoff>, MoveEncHandoff, WldOutput,
                              ScoreDiffOutput, PlanesOutput>;
   using AuxOutputs = TensorList<>;

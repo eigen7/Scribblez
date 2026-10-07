@@ -194,6 +194,8 @@ void MsetInferenceParityTest::SetUp() {
   moves_.squares = read_binary<int32_t>(dir_ + "/move_squares.bin");
   moves_.tile_mask = read_binary<uint8_t>(dir_ + "/move_tile_mask.bin");
   moves_.scalars = read_binary<float>(dir_ + "/move_scalars.bin");
+  moves_.cross_cells = read_binary<int32_t>(dir_ + "/move_cross_cells.bin");
+  moves_.cross_letters = read_binary<uint8_t>(dir_ + "/move_cross_letters.bin");
   moves_.count = moves_.scalars.size() / scribblez::move_set::kMoveScalars;
   expected_a_ = read_binary<float>(dir_ + "/expected_a.bin");
   expected_b_ = read_binary<float>(dir_ + "/expected_b.bin");

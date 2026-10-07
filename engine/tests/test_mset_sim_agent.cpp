@@ -352,7 +352,7 @@ TEST_F(MsetSimAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
 
   // Each candidate's features must be what encode_move, the encoder the
   // training rows go through, makes of it at this differential.
-  expect_move_features_match(sp->last_moves, candidates, pre_diff);
+  expect_move_features_match(sp->last_moves, req.board, req.dict, candidates, pre_diff);
 }
 
 TEST(MsetSimAgent, ThePreMoveRowMatchesTheTrainingDecoder) {

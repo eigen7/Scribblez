@@ -251,6 +251,23 @@ a separate blank flag, so a natural tile and its blank twin share letter
 semantics. The layout is owned by
 [move_set_encoder.h](../engine/include/training/move_set_encoder.h).
 
+### The cross-check encoder
+
+The trunk encodes the pre-move board, cross-check planes included, but the
+teacher scores each candidate on its post-move board -- and the cross-checks a
+move changes are not inferable from its tiles: the two ends of the word it
+forms carry that word's hooks. A move changes at most 16 cross-check squares
+(two ends per perpendicular run it extends, plus its own word's two ends), so
+each candidate carries them sparsely: `move_cross_cells (M, 16)` holds
+`1 + axis·225 + square` per changed entry (0 in an empty slot; emptiness lives
+there because a real entry can have no legal letter left), and
+`move_cross_letters (M, 16·26)` its post-move legal-letter flags.
+`CrossCheckEncoder` makes each entry a token -- the 26 flags projected, plus an
+axis embedding, plus the board token at its square, which carries the
+pre-move state there -- masked-mean pools them, and adds the result to the
+`MoveEncoder` embedding. Its output projection is zero-initialised, so a fresh
+model starts out exactly as the tile-only encoder.
+
 ### Losses (distillation from the position evaluation teacher)
 
 | Head | Target | Loss | Weight |
