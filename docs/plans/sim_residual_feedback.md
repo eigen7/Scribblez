@@ -76,6 +76,10 @@ head: together they let the network separate the two.
 
 ### Per-move placement planes
 
+*Since removed: the move set evaluation model no longer predicts planes, and
+evidence tokens carry only the observed ones
+([model_architectures.md](../model_architectures.md)).*
+
 The heads read whatever position they are given, so the position evaluation
 model yields a candidate's four distributions when run on that candidate's
 **post-move state**. That is the only form the evidence loop can use (see
@@ -630,10 +634,9 @@ records the condition, so mixing modes within a tag fails loudly.
   prediction-paired evidence, because the effect it is built for is
   *promotion* (a move no earlier round ranked highly rising once a hot square
   is exposed), which a root readout structurally cannot show. The commitment
-  is a bet, settled after the build by the placement-plane ablation in
-  [evaluation_plan.md](../evaluation_plan.md): evidence tokens with and
-  without the model's predicted planes, read at promotion rather than at root
-  WLD. A null there sends the loop back to the scalar rung, not just back a
-  step.
+  was a bet, to be settled by a placement-plane ablation read at promotion
+  rather than at root WLD. It was never run: the predicted planes were
+  removed before the loop trained, so that ablation is retired
+  ([evaluation_plan.md](../evaluation_plan.md)).
 - **Sim reuse across rounds**: candidates kept across rounds keep their
   rollouts; whether to top up their counts as the evidence set grows.

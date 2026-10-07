@@ -35,7 +35,7 @@ milestone has a kill criterion.
 | M1b: the reader in standard Scrabble, with the inference arms | Not started |
 | M3b: information sets (belief-drawn labels, opponent contexts) | Not started |
 | M4: learned draws (rack inference) | Not started |
-| [The evidence-loop agent](#on-hiatus-the-evidence-loop-agent), items [1](#1-per-move-placement-planes)–[5](#5-the-move-proposal-model) and [8](#8-cloud-generation) | Done; kept, partly reused |
+| [The evidence-loop agent](#on-hiatus-the-evidence-loop-agent), items [1](#1-per-move-placement-planes)–[5](#5-the-move-proposal-model) and [8](#8-cloud-generation) | Done; kept, partly reused (item 1's readout since removed) |
 | [Item 6, the sequential agent (UltimateBot)](#6-the-sequential-agent) | Built; on hiatus before training |
 | [Item 7, self-model plies and the endgame solver](#7-self-model-plies-and-the-endgame-solver-d2-d3) | D2 not started, D3 partly built; on hiatus |
 
@@ -140,8 +140,8 @@ its first labels, and the BestBot port as its match baseline.
   [generational_training.md](generational_training.md)).
 - **The move set evaluation model**, the student. The board trunk runs once,
   each candidate gets one cheap vector, and cross-attention scores all `N` in
-  one pass ([model_architectures.md](model_architectures.md)). It carries the
-  per-move placement readouts of item 1.
+  one pass ([model_architectures.md](model_architectures.md)). It predicts
+  per-move value only; item 1's placement readouts were removed.
 - **Target generation** (A2): the `.mset` sidecar, its generator, and the
   `move_set_eval` dashboard workload, run in-variant against a teacher pinned
   by content hash.
@@ -269,13 +269,13 @@ GADDAG generates all N legal moves
       │
       ▼
 move proposal model scores all N in ONE pass
-  → per-candidate WLD, score differential, and placement planes
+  → per-candidate WLD and score differential
       │
       ▼
 sim the highest-SCORING move (the greedy anchor)   ← model-independent
       │
       ▼
-  ┌─→ append (move, sim observation, that move's predicted planes)
+  ┌─→ append (move, sim observation, that move's predicted value)
   │        to the evidence set
   │   │
   │   ▼
@@ -344,8 +344,11 @@ In dependency order.
 
 #### 1. Per-move placement planes
 
-**Done.** [move_set_eval_v2_results.md](move_set_eval_v2_results.md) records
-the corpus, the trained student, and its gate metrics.
+**Done, then removed.** [move_set_eval_v2_results.md](move_set_eval_v2_results.md)
+records the corpus, the trained student, and its gate metrics. The readout was
+later dropped: the student predicts per-move value only, evidence tokens carry
+only the observed planes, and the `.mset` writer no longer records planes. What
+follows describes what was built.
 
 The placement distributions the position evaluation model predicts, predicted
 instead **per candidate**, for that candidate's post-move state. The scoring
