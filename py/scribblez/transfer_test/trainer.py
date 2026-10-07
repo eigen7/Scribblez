@@ -288,11 +288,12 @@ def build_reader(params, files: list[CorpusFile]) -> Reader:
 
 def load(params, mount_root: Path) -> tuple[list[CorpusFile], list[Position], list[Position]]:
     t0 = time.time()
-    files = load_corpus(store_dir(params, mount_root))
+    files = load_corpus(store_dir(params, mount_root), params.prior)
     train, val = split_positions(files, params)
     timed_print(
-        f"Corpus {params.corpus_tag}: {len(files)} files, {len(train)} training and "
-        f"{len(val)} validation positions, loaded in {time.time() - t0:.0f}s"
+        f"Corpus {params.corpus_tag} (prior: {params.prior}): {len(files)} files, "
+        f"{len(train)} training and {len(val)} validation positions, loaded in "
+        f"{time.time() - t0:.0f}s"
     )
     return files, train, val
 

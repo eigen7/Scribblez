@@ -7,6 +7,11 @@ M1a uses one frozen teacher as the prior, the leaf model and the root encoder
 .sprobe file and stored beside it as <stem>.sprior, an uncompressed .npz
 written atomically.
 
+A reader can also run without the teacher's predictions (prior "none"): every
+candidate gets the same constant prior and the teacher only encodes the root
+board (uninformative). The positive control of the M1a plan, "The
+uniform-prior control", runs this way.
+
 The teacher's torch checkpoint is its tag's rolling checkpoint, which holds
 only the latest generation; loading checks that this is the generation the
 corpus was pinned to, and the cache builder checks the torch model against
@@ -38,6 +43,13 @@ from scribblez.transfer_test.probes import ProbeFile
 POSITION_EVAL = "position_eval"
 PRIOR_EXT = ".sprior"
 
+# PRIOR_NONE's constant predictions. An even game, with a little draw mass so
+# the draw logit starts within reach of its rate (0.3% of m1a-endgame-train's
+# label outcomes); the score difference's mean 0 and spread about a single
+# endgame's (median 37 points there).
+UNINFORMATIVE_WLD = (0.495, 0.01, 0.495)
+UNINFORMATIVE_SCORE = (0.0, 37.0)
+
 # The parity check's np.allclose tolerances. The relative term covers the
 # score head, which reads in points; GPU convolutions run in TF32.
 PARITY_ATOL = 2e-3
@@ -54,6 +66,20 @@ class Prior:
     wld: np.ndarray  # (K, 3) float32: win/draw/loss probabilities
     score: np.ndarray  # (K, 2) float32: score-difference mean and std
     placement: np.ndarray  # (K, 4, classes) float16: footprint logits, PLACEMENT_HEAD_NAMES order
+
+
+def uninformative(prior: Prior) -> Prior:
+    """`prior` with the teacher's per-candidate predictions replaced by
+    constants (UNINFORMATIVE_*, uniform footprints), the root tokens kept: a
+    prior that says nothing about any candidate, read-only views."""
+    k = len(prior.wld)
+    return Prior(
+        root_board=prior.root_board,
+        root_summary=prior.root_summary,
+        wld=np.broadcast_to(np.float32(UNINFORMATIVE_WLD), (k, 3)),
+        score=np.broadcast_to(np.float32(UNINFORMATIVE_SCORE), (k, 2)),
+        placement=np.broadcast_to(np.float16(0), prior.placement.shape),
+    )
 
 
 def prior_path(probes_path: Path) -> Path:

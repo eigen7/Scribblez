@@ -3,7 +3,8 @@ the labels and the prior cache, checked against one another as they load.
 
 Labels keep only what the reader trains on (outcome counts, score moments,
 and the opponent's-reply and own-next footprint histograms), about a third of
-a .sobs record; the win-weighted histograms are dropped.
+a .sobs record; the win-weighted histograms are dropped. Loaded under
+PRIOR_NONE, the prior keeps only its root tokens (prior.uninformative).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scribblez.transfer_test.prior import Prior, prior_path, read_prior
+from scribblez.transfer_test.prior import Prior, prior_path, read_prior, uninformative
 from scribblez.transfer_test.probes import (
     ProbeFile,
     ProbeReplay,
@@ -24,6 +25,7 @@ from scribblez.transfer_test.probes import (
     tile_counts,
 )
 from scribblez.workloads.pair_store import complete_pairs
+from scribblez.workloads.transfer_reader import PRIOR_NONE, PRIOR_TEACHER
 from scribblez.workloads.transfer_test import PROBE_EXT
 
 LABEL_FIELDS = (
@@ -59,13 +61,16 @@ def slim_labels(obs: np.ndarray) -> np.ndarray:
     return out
 
 
-def load_file(path: Path) -> CorpusFile:
-    """Load one .sprobe with its .slog replay, labels and prior. Raises if any
-    part is missing or does not match the probes."""
+def load_file(path: Path, prior_kind: str = PRIOR_TEACHER) -> CorpusFile:
+    """Load one .sprobe with its .slog replay, labels and prior of
+    `prior_kind` (workloads/transfer_reader.py PRIORS). Raises if any part is
+    missing or does not match the probes."""
     probes = read_sprobe(path)
     prior = read_prior(prior_path(path))
     if len(prior.root_board) != probes.num_positions or len(prior.wld) != len(probes.candidates):
         raise ValueError(f"{prior_path(path)} does not match {path}")
+    if prior_kind == PRIOR_NONE:
+        prior = uninformative(prior)
     state = replay(probes)
     return CorpusFile(
         probes=probes,
@@ -76,7 +81,7 @@ def load_file(path: Path) -> CorpusFile:
     )
 
 
-def load_corpus(store_dir: Path) -> list[CorpusFile]:
+def load_corpus(store_dir: Path, prior_kind: str = PRIOR_TEACHER) -> list[CorpusFile]:
     """Every complete file in a transfer_test tag's corpus store, in name
     order."""
-    return [load_file(p) for p in complete_pairs(store_dir, PROBE_EXT)]
+    return [load_file(p, prior_kind) for p in complete_pairs(store_dir, PROBE_EXT)]

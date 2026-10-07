@@ -28,6 +28,11 @@ from scribblez.workloads.transfer_test import CORPUS_DIR, PROBE_EXT
 from scribblez.workloads.transfer_test import SPEC as CORPUS_SPEC
 
 PRIOR_EXT = ".sprior"
+# What a reader corrects: the teacher's per-candidate predictions, or none
+# (scribblez/transfer_test/prior.py, uninformative).
+PRIOR_TEACHER = "teacher"
+PRIOR_NONE = "none"
+PRIORS = (PRIOR_TEACHER, PRIOR_NONE)
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,12 @@ class TransferReaderParams:
         -1,
         "train on this many of the corpus's training positions, a fixed random subset "
         "(-1 = all of them)",
+    )
+    prior: str = param(
+        PRIOR_TEACHER,
+        "what the reader corrects: the teacher's per-candidate predictions, or none (a constant "
+        "prior, the teacher encoding only the root board: the positive control)",
+        choices=PRIORS,
     )
     val_fraction: float = param(
         0.05,
@@ -207,5 +218,5 @@ SPEC = WorkloadSpec(
     pace_role="train",
     profiles=PROFILES,
     default_profile="reader-5m",
-    primary_params=("corpus_tag", "train_positions", "train_steps", "width", "depth"),
+    primary_params=("corpus_tag", "prior", "train_positions", "train_steps", "width", "depth"),
 )
