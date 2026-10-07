@@ -175,7 +175,6 @@ json::object build_constants() {
                  {"flag_open_leaves", move_set_eval::kTargetFlagOpenLeaves},
                  {"flag_full_sweep", move_set_eval::kTargetFlagFullSweep},
                  {"target_names_v1", std::move(target_names)},
-                 {"planes", move_set_eval::kTargetPlanes},
                  {"plane_width", move_set_eval::kPlaneWidth}};
   }
   // The version ONNX exporters stamp into model metadata (input_encoder.h).

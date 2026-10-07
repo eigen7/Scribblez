@@ -11,9 +11,9 @@
 // the decision point, selects candidates, encodes each candidate's post-move
 // state exactly as a position evaluation training row, and runs the teacher on
 // the batch under TensorRT. Each .slog gets a same-stem .mset holding the
-// selected moves, the teacher's value readouts (move_set_eval::kTargetFloatsV1)
-// and, on stratified runs, its four placement planes per candidate. Files that
-// already have a sidecar are skipped, so rerunning resumes an interrupted run.
+// selected moves and the teacher's value readouts (move_set_eval::kTargetFloatsV1).
+// Files that already have a sidecar are skipped, so rerunning resumes an
+// interrupted run.
 //
 // --full-sweep picks the selection (training/move_set_eval_candidates.h):
 //   - stratified (default): a small stratified sample of the equity ranking,
@@ -44,7 +44,6 @@
 #include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "sim/sim_runner.h"
-#include "training/footprint_collapse.h"
 #include "training/move_set_eval_candidates.h"
 #include "training/move_set_eval_target_log.h"
 #include "util/assert.h"
@@ -69,7 +68,6 @@
 #include <limits>
 #include <map>
 #include <mutex>
-#include <optional>
 #include <random>
 #include <span>
 #include <string>
@@ -111,32 +109,17 @@ using binlog::GamePositionIndex;
 // gets a value label (docs/roadmap.md item 4).
 using ForcedCandidates = std::map<GamePositionIndex, std::vector<Move>>;
 
-// Placement-plane floats per candidate: one footprint distribution per head,
-// which the writer quantizes into the record's plane block.
-constexpr int kPlaneFloats = kPlacementHeads * move_set_eval::kPlaneWidth;
-
-// Raw placement floats per candidate as the teacher emits them: per head,
-// kFootprintClasses footprint logits. A masked softmax turns each head's logits
-// into its distribution without changing the width. The asserts tie the
-// teacher's shape to the writer's, so a half-done shape change fails to compile
-// instead of silently corrupting the .mset.
-constexpr int kRawPlaneFloats = nn::PositionEvaluationSpec::AuxOutputs::total_row_elems;
-static_assert(int(move_set_eval::kPlaneWidth) == kFootprintClasses);
-static_assert(kRawPlaneFloats == kPlacementHeads * kFootprintClasses);
-static_assert(kPlaneFloats == kRawPlaneFloats);  // mask-softmax preserves the per-head width
-
 bool all_finite(const float* p, size_t n) {
   return std::all_of(p, p + n, [](float v) { return std::isfinite(v); });
 }
 
-// Held as the concrete service type because the evaluate() overload that
-// returns placement logits exists only for specs with aux outputs.
+// Held as the concrete service type: its evaluate() takes an aux-output
+// pointer the generator leaves null, and that overload hides the base one.
 using TeacherService = nn::TrtEvalService<nn::PositionEvaluationSpec>;
 
 // A contiguous run of one position's candidates with their encoded post-move
 // rows. An encoder worker produces it; the inference thread fills `targets`
-// (candidates.size() x kTargetFloatsV1) and, on a stratified run, `planes`
-// (candidates.size() x kPlaneFloats). A position's slices partition its
+// (candidates.size() x kTargetFloatsV1). A position's slices partition its
 // candidate set in order.
 struct CandidateSlice {
   GamePositionIndex pos;
@@ -146,10 +129,6 @@ struct CandidateSlice {
   std::vector<Move> candidates;
   std::vector<float> rows;  // candidates.size() x input_floats(spec)
   std::vector<float> targets;
-  std::vector<float> planes;
-  // The pre-move state, set only on a plane-labelling run: the plane worker
-  // rebuilds each candidate's post-move board from it to mask the logits.
-  std::optional<GameStateEncoder> pre_enc;
 
   bool completes_position() const { return first + candidates.size() == position_candidates; }
 };
@@ -230,7 +209,7 @@ move_set_eval::Selection select_candidates(const std::vector<Move>& ranked, cons
 // the inference thread one slice at a time.
 void encode_slices(const binlog::PositionEncoder& encoder, const GameLog& g,
                    const GamePositionIndex& w, int mover, const move_set_eval::Selection& sel,
-                   int slice_candidates, int row_floats, bool label_planes, SliceQueue* queue) {
+                   int slice_candidates, int row_floats, SliceQueue* queue) {
   const size_t total = sel.candidates.size();
   for (size_t first = 0; first < total; first += size_t(slice_candidates)) {
     const size_t count = std::min(size_t(slice_candidates), total - first);
@@ -244,7 +223,6 @@ void encode_slices(const binlog::PositionEncoder& encoder, const GameLog& g,
     slice.rows.resize(count * size_t(row_floats));
     binlog::encode_candidate_rows(encoder, g, int(w.turn_idx), mover, slice.candidates,
                                   slice.rows.data());
-    if (label_planes) slice.pre_enc = encoder.enc();
     queue->push(std::move(slice));
   }
 }
@@ -282,60 +260,18 @@ void encode_worker(const char* buf, const Dictionary& dict, const InputEncodingS
     }
     const move_set_eval::Selection sel =
       select_candidates(ranked, g.records[w.turn_idx].move, opt, rng, forced_here);
-    encode_slices(encoder, g, w, mover, sel, opt.slice_candidates, row_floats, !opt.full_sweep,
-                  queue);
+    encode_slices(encoder, g, w, mover, sel, opt.slice_candidates, row_floats, queue);
   }
   queue->producer_done();
 }
 
-// One candidate's plane target: its raw footprint logits, masked and softmaxed
-// against its post-move board into the distributions the .mset stores.
-struct PlaneJob {
-  const GameStateEncoder* pre_enc;
-  const Move* move;
-  const float* raw;  // kRawPlaneFloats
-  float* out;        // kPlaneFloats
-};
-
-// Drains `jobs` by atomic index. Masking needs each candidate's post-move board
-// and its movegen caches, which makes it far heavier than copying readouts; on
-// the inference thread alone it would become the bottleneck, so a batch's jobs
-// fan out across threads.
-void plane_worker(const std::vector<PlaneJob>* jobs, const Dictionary* dict,
-                  std::atomic<size_t>* next) {
-  for (size_t i = next->fetch_add(1); i < jobs->size(); i = next->fetch_add(1)) {
-    const PlaneJob& j = (*jobs)[i];
-    GameStateEncoder post = *j.pre_enc;
-    post.apply_move(*j.move);
-    // Mask by board legality only, not by tile availability (null counts). The
-    // student learns the availability belief from the teacher's own near-zero
-    // probabilities, and serving is unmasked anyway, so no per-candidate unseen
-    // pool is needed here.
-    masked_placement_distributions(post.board(), *dict, /*available_counts=*/nullptr, j.raw, j.out);
-  }
-}
-
-// Run `jobs` across up to `num_threads` plane workers (the calling thread is
-// one of them), returning once all plane targets are written.
-void run_plane_jobs(const std::vector<PlaneJob>& jobs, const Dictionary& dict, int num_threads) {
-  if (jobs.empty()) return;
-  std::atomic<size_t> next{0};
-  const int n = std::max(1, std::min(num_threads, int(jobs.size())));
-  std::vector<std::thread> pool;
-  pool.reserve(n - 1);
-  for (int t = 0; t < n - 1; ++t) pool.emplace_back(plane_worker, &jobs, &dict, &next);
-  plane_worker(&jobs, &dict, &next);
-  for (std::thread& t : pool) t.join();
-}
-
 // The inference thread for one file: packs whole queued slices into TensorRT
-// batches, evaluates them, and scatters the teacher's readouts into each slice
-// (plus planes, unless this is a full sweep). run() is the thread body; read
-// done() after it joins.
+// batches, evaluates them, and scatters the teacher's readouts into each slice.
+// run() is the thread body; read done() after it joins.
 class InferenceLoop {
  public:
-  InferenceLoop(TeacherService* service, const Dictionary& dict, int row_floats, int batch_size,
-                bool label_planes, int plane_threads, util::ProgressMeter* meter);
+  InferenceLoop(TeacherService* service, int row_floats, int batch_size,
+                util::ProgressMeter* meter);
 
   void run(SliceQueue* queue);
 
@@ -357,18 +293,14 @@ class InferenceLoop {
   void require_finite_teacher_outputs(int rows) const;
 
   TeacherService* service_;
-  const Dictionary& dict_;  // for the plane worker's per-candidate movegen caches
   int row_floats_;
   int batch_size_;
-  bool label_planes_;
-  int plane_threads_;  // workers the parallel plane masking fans out over
   util::ProgressMeter* meter_;
 
   // Staging buffers, sized once for a full batch and reused across flushes.
   std::vector<float> inputs_;
   std::vector<float> wld_buf_;
   std::vector<float> score_diff_buf_;
-  std::vector<float> masks_;
 
   std::vector<CandidateSlice> pending_;
   int pending_rows_ = 0;
@@ -376,20 +308,15 @@ class InferenceLoop {
   std::exception_ptr failure_;
 };
 
-InferenceLoop::InferenceLoop(TeacherService* service, const Dictionary& dict, int row_floats,
-                             int batch_size, bool label_planes, int plane_threads,
+InferenceLoop::InferenceLoop(TeacherService* service, int row_floats, int batch_size,
                              util::ProgressMeter* meter)
     : service_(service),
-      dict_(dict),
       row_floats_(row_floats),
       batch_size_(batch_size),
-      label_planes_(label_planes),
-      plane_threads_(plane_threads),
       meter_(meter),
       inputs_(size_t(batch_size) * row_floats),
       wld_buf_(size_t(batch_size) * nn::WldOutput::kRowElems),
-      score_diff_buf_(size_t(batch_size) * nn::ScoreDiffOutput::kRowElems),
-      masks_(label_planes ? size_t(batch_size) * kRawPlaneFloats : 0) {}
+      score_diff_buf_(size_t(batch_size) * nn::ScoreDiffOutput::kRowElems) {}
 
 void InferenceLoop::run(SliceQueue* queue) {
   try {
@@ -421,13 +348,11 @@ void InferenceLoop::consume(SliceQueue* queue) {
 }
 
 void InferenceLoop::require_finite_teacher_outputs(int rows) const {
-  const bool ok =
-    all_finite(wld_buf_.data(), size_t(rows) * nn::WldOutput::kRowElems) &&
-    all_finite(score_diff_buf_.data(), size_t(rows) * nn::ScoreDiffOutput::kRowElems) &&
-    (!label_planes_ || all_finite(masks_.data(), size_t(rows) * kRawPlaneFloats));
+  const bool ok = all_finite(wld_buf_.data(), size_t(rows) * nn::WldOutput::kRowElems) &&
+                  all_finite(score_diff_buf_.data(), size_t(rows) * nn::ScoreDiffOutput::kRowElems);
   if (!ok) {
     throw util::CleanException(
-      "the teacher produced non-finite readouts (wld / score-diff / placement logits) in a "
+      "the teacher produced non-finite readouts (wld / score-diff) in a "
       "batch of {} rows. This tool serves the model at the engine's default precision "
       "(BF16, whose range is FP32's), so either the export itself is broken or the default "
       "was changed to FP16, which overflows the value models "
@@ -444,17 +369,12 @@ void InferenceLoop::flush() {
     rows += p.candidates.size();
   }
   float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
-  service_->evaluate({inputs_.data(), rows}, head_out, label_planes_ ? masks_.data() : nullptr);
+  service_->evaluate({inputs_.data(), rows}, head_out, /*aux_out=*/nullptr);
   require_finite_teacher_outputs(rows);
-  // Copy the value readouts inline; collect the plane maskings as jobs pointing
-  // into pending_ and masks_, and run them in parallel below.
-  std::vector<PlaneJob> jobs;
-  if (label_planes_) jobs.reserve(pending_rows_);
   int cursor = 0;
   for (CandidateSlice& p : pending_) {
     const int count = p.candidates.size();
     p.targets.resize(count * move_set_eval::kTargetFloatsV1);
-    if (label_planes_) p.planes.resize(size_t(count) * kPlaneFloats);
     for (int c = 0; c < count; ++c) {
       const float* wld = wld_buf_.data() + size_t(cursor) * nn::WldOutput::kRowElems;
       const float* sd = score_diff_buf_.data() + size_t(cursor) * nn::ScoreDiffOutput::kRowElems;
@@ -464,15 +384,9 @@ void InferenceLoop::flush() {
       t[2] = wld[2];
       t[3] = sd[0];
       t[4] = move_set_eval::clamped_sd_std(sd[1]);
-      if (label_planes_) {
-        jobs.push_back({&*p.pre_enc, &p.candidates[c],
-                        masks_.data() + size_t(cursor) * kRawPlaneFloats,
-                        p.planes.data() + size_t(c) * kPlaneFloats});
-      }
       ++cursor;
     }
   }
-  run_plane_jobs(jobs, dict_, plane_threads_);
   for (CandidateSlice& p : pending_) {
     // done_ accumulates a whole file's slices, so drop the consumed rows.
     p.rows.clear();
@@ -493,7 +407,6 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
     const CandidateSlice& head = slices[i];
     std::vector<Move> candidates;
     std::vector<float> targets;
-    std::vector<float> planes;
     candidates.reserve(head.position_candidates);
     targets.reserve(size_t(head.position_candidates) * move_set_eval::kTargetFloatsV1);
     size_t j = i;
@@ -501,10 +414,9 @@ void write_positions(std::vector<CandidateSlice>& slices, move_set_eval::TargetW
       const CandidateSlice& s = slices[j];
       candidates.insert(candidates.end(), s.candidates.begin(), s.candidates.end());
       targets.insert(targets.end(), s.targets.begin(), s.targets.end());
-      planes.insert(planes.end(), s.planes.begin(), s.planes.end());
     }
     RELEASE_ASSERT(candidates.size() == head.position_candidates);
-    writer->add_position(head.pos.game_idx, head.pos.turn_idx, candidates, targets, planes,
+    writer->add_position(head.pos.game_idx, head.pos.turn_idx, candidates, targets,
                          head.num_legal_moves);
     i = j;
   }
@@ -553,8 +465,7 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
     workers.emplace_back(encode_worker, buf.data(), std::cref(dict), std::cref(spec),
                          std::cref(opt), std::cref(work), forced, &next, &queue);
   const int row_floats = input_floats(spec);
-  InferenceLoop inference(service, dict, row_floats, batch_size, /*label_planes=*/!opt.full_sweep,
-                          /*plane_threads=*/opt.threads, meter);
+  InferenceLoop inference(service, row_floats, batch_size, meter);
   std::thread gpu(&InferenceLoop::run, &inference, &queue);
   for (auto& w : workers) w.join();
   gpu.join();
@@ -562,12 +473,8 @@ void process_file(const std::vector<char>& buf, const fs::path& mset_path, const
 
   const uint32_t flags = move_set_eval::target_flags_from_slog(hdr->flags) |
                          (opt.full_sweep ? move_set_eval::kTargetFlagFullSweep : 0u);
-  // Only stratified (training) files carry placement planes. A full-sweep file
-  // is evaluation-only with value-based metrics, and its positions run to
-  // sweep_cap candidates (move_set_eval_target_log.h).
-  const uint32_t record_planes = opt.full_sweep ? 0u : move_set_eval::kTargetPlanes;
-  move_set_eval::TargetWriter writer(mset_path.string(), move_set_eval::kTargetFloatsV1,
-                                     record_planes, model_hash, flags);
+  move_set_eval::TargetWriter writer(mset_path.string(), move_set_eval::kTargetFloatsV1, model_hash,
+                                     flags);
   write_positions(inference.done(), &writer);
   writer.close();
 }
@@ -637,9 +544,6 @@ int main(int argc, char** argv) {
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
-    // A stratified run labels placement planes, so the teacher's placement
-    // logits must be copied back from the device.
-    params.copy_aux = !opt.full_sweep;
     TeacherService service(params);
     service.load();
     const InputEncodingSpec spec{&dict, service.opp_leave_input()};

@@ -4,8 +4,8 @@
 // MoveProposalNets. Each game thread's agent owns a session, which holds the
 // cache for the position it last encoded and decodes the nets' raw outputs.
 //
-// Not thread-safe. Its memory is the retained cache, dominated by the
-// predicted planes (~47 KB per candidate).
+// Not thread-safe. Its memory is the retained cache: the board/g handoff plus a
+// C-wide move encoding and the value readouts per candidate.
 
 #include "agent/move_proposal_nets.h"
 #include "agent/move_proposal_service.h"

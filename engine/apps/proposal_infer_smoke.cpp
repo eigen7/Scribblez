@@ -91,8 +91,8 @@ double mib(size_t bytes) { return double(bytes) / (1024.0 * 1024.0); }
 
 // The bytes one session's retained cache holds.
 size_t cache_bytes(const scribblez::agent::MoveProposalCache& c) {
-  return sizeof(float) * (c.move_enc.size() + c.wld.size() + c.score_diff.size() + c.planes.size() +
-                          c.board.size() + c.g.size());
+  return sizeof(float) *
+         (c.move_enc.size() + c.wld.size() + c.score_diff.size() + c.board.size() + c.g.size());
 }
 
 }  // namespace
