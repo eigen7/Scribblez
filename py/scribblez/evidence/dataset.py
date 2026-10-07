@@ -34,7 +34,6 @@ one proposer, one information condition and one leaf model throughout.
 from __future__ import annotations
 
 import dataclasses
-from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -42,7 +41,7 @@ import numpy as np
 import torch
 
 from scribblez.dataset import row_layout
-from scribblez.ffi import decode_rows, set_opp_leave_input
+from scribblez.ffi import set_opp_leave_input
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.sim_evidence.sobs import (
     COUNT_HEADS,
@@ -302,22 +301,6 @@ class TrajectoryDataset:
         for start in range(0, len(order), positions_per_batch):
             yield self._build_batch([units[j] for j in order[start : start + positions_per_batch]])
 
-    def _board_inputs(self, batch: list[_TrajPosition]) -> tuple[np.ndarray, np.ndarray]:
-        """Pre-move board inputs, one decode_rows call per source file."""
-        p = len(batch)
-        spatial = np.empty((p, *self._spatial_shape), dtype=np.float32)
-        scalar = np.empty((p, self._scalar_width), dtype=np.float32)
-        by_file: dict[int, list[int]] = defaultdict(list)
-        for local_p, pos in enumerate(batch):
-            by_file[pos.file_id].append(local_p)
-        for file_id, locals_ in by_file.items():
-            games = np.array([batch[j].sobs.game_index for j in locals_], dtype=np.int64)
-            turns = np.array([batch[j].sobs.turn_index for j in locals_], dtype=np.int64)
-            rows = decode_rows(self._slogs[file_id], games, turns, post_move=False)
-            spatial[locals_] = rows[:, : self._spatial_floats].reshape(-1, *self._spatial_shape)
-            scalar[locals_] = rows[:, self._spatial_floats :][:, : self._scalar_width]
-        return spatial, scalar
-
     def _build_batch(self, units: list[tuple[_TrajPosition, np.ndarray]]) -> dict:
         """One batch of P (position, subset) units; a position may recur under
         different subsets. The units' M candidates are flattened, each unit's
@@ -337,7 +320,16 @@ class TrajectoryDataset:
         """
         positions = [pos for pos, _ in units]
         masks = [mask for _, mask in units]
-        spatial, scalar = self._board_inputs(positions)
+        inputs = move_enc.batch_move_set_positions(
+            self._slogs,
+            [(pos.file_id, pos.sobs.game_index, pos.sobs.turn_index) for pos in positions],
+            [pos.sobs.moves for pos in positions],
+        )
+        rows = inputs["rows"]
+        spatial = rows[:, : self._spatial_floats].reshape(len(positions), *self._spatial_shape)
+        scalar = np.ascontiguousarray(
+            rows[:, self._spatial_floats : self._spatial_floats + self._scalar_width]
+        )
         all_moves = np.concatenate([pos.sobs.moves for pos in positions])
         dense_obs = [pos.obs.densify() for pos in positions]
         all_obs = np.concatenate(dense_obs)
@@ -346,11 +338,6 @@ class TrajectoryDataset:
         slot = np.concatenate([np.arange(k, dtype=np.int64) for k in counts])
         pre_diff_points = np.rint(scalar[:, self._sd_index] * self._sd_scale).astype(np.int32)
         enc = move_enc.encode_moves(all_moves, pre_diff_points[pos_id])
-        cross = move_enc.batch_cross_checks(
-            self._slogs,
-            [(pos.file_id, pos.sobs.game_index, pos.sobs.turn_index) for pos in positions],
-            [pos.sobs.moves for pos in positions],
-        )
         in_evidence = np.concatenate(masks)
         ev_index = np.concatenate([_compact_index(mask) for mask in masks])
         evidence_size = np.array([int(mask.sum()) for mask in masks], dtype=np.int64)
@@ -363,8 +350,8 @@ class TrajectoryDataset:
             "move_squares": torch.from_numpy(enc["squares"]),
             "move_tile_mask": torch.from_numpy(enc["tile_mask"]),
             "move_scalars": torch.from_numpy(enc["scalars"]),
-            "move_cross_cells": torch.from_numpy(cross["cells"]),
-            "move_cross_letters": torch.from_numpy(cross["letters"]),
+            "move_cross_cells": torch.from_numpy(inputs["cells"]),
+            "move_cross_letters": torch.from_numpy(inputs["letters"]),
             "move_pos_id": torch.from_numpy(pos_id),
             "sim_wld": torch.from_numpy(np.concatenate([pos.wld for pos in positions])),
             "sim_delta": torch.from_numpy(np.concatenate([pos.delta for pos in positions])),
