@@ -5255,6 +5255,50 @@ TEST(CrossCheckDelta, PatchedPreMovePlanesEqualTheTeachersPostMovePlanes) {
   ASSERT_GT(max_entries, 4) << "no multi-tile play was exercised";
 }
 
+// The model-layout features restate the delta entries -- the ones checked
+// against the teacher's post-move planes above -- and nothing else: a cell per
+// real entry (1 + axis * kMoveCells + square), its post-move legal letters, and
+// zeros in every empty slot.
+TEST(CrossCheckDelta, ModelFeaturesRestateTheEntries) {
+  namespace mset = move_set;
+  Dictionary dict = medium_dict();
+  const GameLogStorage storage = play_test_game(dict, /*seed=*/4242ULL);
+  const GameLog g = storage.view();
+  const InputEncodingSpec spec{&dict};
+  int real_entries = 0;
+  for (int turn = 1; turn < std::min(g.num_records, 8); ++turn) {
+    binlog::PositionEncoder pos(spec);
+    const int mover = pos.replay_to_sampled(g, turn, /*post_move=*/false);
+    const Board& board = pos.enc().board();
+    board.ensure_movegen_caches(dict);
+    std::vector<Move> moves = MoveGenerator(board, dict).generate(pos.rack(mover));
+    moves.push_back(Move::pass());
+    const size_t n = moves.size(), w = mset::kMoveCrossSlots;
+
+    std::vector<uint8_t> axes(n * w), real(n * w);
+    std::vector<int32_t> squares(n * w);
+    std::vector<uint32_t> old_masks(n * w), new_masks(n * w);
+    mset::encode_cross_check_deltas(board, dict, moves.data(), int64_t(n), axes.data(),
+                                    squares.data(), old_masks.data(), new_masks.data(),
+                                    real.data());
+    std::vector<int32_t> cells(n * w);
+    std::vector<uint8_t> letters(n * mset::kMoveCrossLetters);
+    mset::encode_moves_cross_checks(board, dict, moves.data(), int64_t(n), cells.data(),
+                                    letters.data());
+
+    for (size_t k = 0; k < n * w; ++k) {
+      const int32_t want = real[k] ? 1 + axes[k] * mset::kMoveCells + squares[k] : 0;
+      ASSERT_EQ(cells[k], want) << "turn " << turn << " slot " << k;
+      for (int l = 0; l < 26; ++l) {
+        ASSERT_EQ(letters[k * 26 + l], real[k] ? (new_masks[k] >> l) & 1u : 0u)
+          << "turn " << turn << " slot " << k << " letter " << l;
+      }
+      real_entries += real[k];
+    }
+  }
+  ASSERT_GT(real_entries, 0);
+}
+
 TEST(SimObservationLog, Roundtrip) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "scribblez_test_sobs";

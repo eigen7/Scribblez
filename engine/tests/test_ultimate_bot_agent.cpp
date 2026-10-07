@@ -463,7 +463,7 @@ TEST_F(UltimateBotAgentTest, TheWholeCandidateSetGoesToTheModelInOnePass) {
 
   // Each candidate's features must be what encode_move, the encoder the
   // training rows go through, makes of it at this differential.
-  expect_move_features_match(sp->last_moves, cands, pre_diff);
+  expect_move_features_match(sp->last_moves, req.board, req.dict, cands, pre_diff);
 }
 
 // The loop sims one candidate at a time, yet each observation must equal, bit
@@ -490,7 +490,7 @@ TEST_F(UltimateBotAgentTest, OneAtATimeSimsEqualOneBatchedRun) {
                          gains_favouring(n, {picks[2]})};
   std::vector<float> board_row(size_t(kInputFloats), 0.0f);
   move_set::MoveFeatureArrays features;
-  features.encode(cands.data(), n, 0);
+  features.encode(board_, dict_, cands.data(), n, 0);
   stub.encode(board_row.data(), features);
   agent::SimRunnerCandidateSimmer simmer(runner, pos, seed);
   agent::ArgmaxGainPolicy policy(0.0f);

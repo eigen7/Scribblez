@@ -86,7 +86,8 @@ void MsetSimAgent::rank_candidates(const MoveRequest& req, const std::vector<Mov
   // row, so each candidate's resulting differential is exactly the row's
   // score-diff feature plus the move's score (input_encoder.h).
   const int me = encoder_.active_player();
-  move_features_.encode(candidates.data(), n, encoder_.score(me) - encoder_.score(1 - me));
+  move_features_.encode(req.board, req.dict, candidates.data(), n,
+                        encoder_.score(me) - encoder_.score(1 - me));
   wld_buf_.resize(size_t(n) * nn::WldOutput::kRowElems);
   score_diff_buf_.resize(size_t(n) * nn::ScoreDiffOutput::kRowElems);
   float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
