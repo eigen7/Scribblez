@@ -32,15 +32,17 @@ comes out. What the survey measures, and what it has found, is in
 
    ```
    ./py/scripts/sim_survey_viewer.py --tag <tag>
-   ./py/scripts/blind_spots_collect.py --tag <tag> [--min-gain 2]
+   ./py/scripts/blind_spots_collect.py --tag <tag> [--min-gain 8]
    git add positions/NWL23/best-bot-blind-spots
    ```
 
    `blind_spots_collect.py` rebuilds the directory from the tag each time, so
    rerun it as the tag grows. `--min-gain` drops plays whose edge over the
-   best top move is under that many percentage points of win rate. It is
-   needed because, with 5000-rollout confirming sims, the survey's own
-   two-standard-error bar admits edges well under one point.
+   best top move is under that many percentage points of win rate. The tag's
+   own `min_gain` parameter (5 points by default) already applied that bar
+   when the workers kept positions, so the flag only matters above it. Both
+   exist because, with 5000-rollout confirming sims, the survey's
+   two-standard-error bar alone admits edges well under one point.
 
 ## What a worker delivers
 
@@ -48,10 +50,12 @@ Into `/workspace/mount/tags/blind_spots/<tag>/data/`, by a rename for a local
 worker, or collected over ssh from a remote one's container:
 
 - `survey/<stem>.simsurvey.json`: one per game, slimmed to the positions
-  found. Each position lists the top moves and the outside picks with their
-  confirming-sim summaries (`engine/include/sim/rollout_report.h`). The file
-  also records `positions_surveyed`, the number of turns surveyed, so rates
-  stay computable.
+  found: those where an outside play beats the best top move by both the
+  two-standard-error bar and `min_gain`. Each position lists the top moves
+  and the outside picks with their confirming-sim summaries
+  (`engine/include/sim/rollout_report.h`). The file also records
+  `positions_surveyed`, the number of turns surveyed, so rates stay
+  computable.
 - `gcg/<stem>-g0-turn<N>.gcg`: the game up to each found position.
 
 `<stem>` is `<timestamp>-<worker id>`, unique across workers. A game's full

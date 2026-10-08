@@ -165,17 +165,18 @@ def slim_position(position: dict) -> dict:
     }
 
 
-def slim_survey_file(path: Path) -> list[tuple[int, int]]:
+def slim_survey_file(path: Path, min_gain: float) -> list[tuple[int, int]]:
     """Rewrite a finished survey file in place, keeping only (slimmed) positions
-    where an outside move beat the cut. Returns the kept positions'
-    (game, 0-based turn)."""
+    where an outside move beat the cut by at least `min_gain` win percentage
+    points. Returns the kept positions' (game, 0-based turn)."""
     survey = json.loads(path.read_text())
     stem = path.name.removesuffix(SURVEY_SUFFIX)
     found = [
         p
         for p in survey["positions"]
         if any(
-            f.beats_cut for f in position_findings((stem, p["game"], p["turn"]), p, survey["cut"])
+            f.beats_cut and 100 * f.gain >= min_gain
+            for f in position_findings((stem, p["game"], p["turn"]), p, survey["cut"])
         )
     ]
     slim = survey | {
