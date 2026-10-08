@@ -55,6 +55,12 @@ class BlindSpotsParams:
     )
     face_up_leaves: bool = param(True, "play and sim with the opponent's kept tiles known")
     cut: int = param(10, "HastyBot's top-K moves by static equity that a play must beat")
+    min_gain: float = param(
+        5.0,
+        "keep only positions where an outside play beats the best top move by at least this "
+        "many points of win percentage (on top of the 2-sigma bar, which long sims pass on "
+        "tiny edges)",
+    )
     rollouts: int = param(
         1000, "screening rollouts per legal play (clearly beaten plays stop early)"
     )
@@ -116,14 +122,14 @@ def run_survey_tool(work_dir: Path, params: BlindSpotsParams, threads: int) -> i
     return subprocess.run(cmd, capture_output=False).returncode
 
 
-def deliver_surveyed(sink, work_dir: Path) -> tuple[int, int, float]:
+def deliver_surveyed(sink, work_dir: Path, min_gain: float) -> tuple[int, int, float]:
     """Deliver every finished game in `work_dir` -- its slimmed survey file, then
-    the .gcg of each position it kept -- and clear the game's files away.
-    Returns (positions found, bytes, seconds)."""
+    the .gcg of each position it kept (slim_survey_file's `min_gain`) -- and
+    clear the game's files away. Returns (positions found, bytes, seconds)."""
     found, nbytes, t0 = 0, 0, time.monotonic()
     for survey in sorted(work_dir.glob(f"*{SURVEY_SUFFIX}")):
         stem = survey.name.removesuffix(SURVEY_SUFFIX)
-        kept = slim_survey_file(survey)
+        kept = slim_survey_file(survey, min_gain)
         for game, turn in kept:
             name = gcg_name((stem, game, turn))
             nbytes += sink.deliver(work_dir / GCG_DIR / name, f"{GCG_DIR}/{name}")
@@ -155,7 +161,7 @@ def run_generate(ctx: WorkerContext) -> int:
             if code != 0:
                 return code
             t2 = time.monotonic()
-            found, nbytes, secs = deliver_surveyed(ctx.sink, work_dir)
+            found, nbytes, secs = deliver_surveyed(ctx.sink, work_dir, ctx.params.min_gain)
             stats.cycle_done(
                 {"gen_s": t1 - t0, "sim_s": t2 - t1, "upload_s": secs}, units=found, nbytes=nbytes
             )

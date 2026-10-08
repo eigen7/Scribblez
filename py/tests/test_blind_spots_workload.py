@@ -41,7 +41,7 @@ def test_slimming_keeps_the_found_positions_and_their_confirmed_candidates(tmp_p
     found = position([40], {62: 55}) | {"turn": 7}
     found["candidates"].append({"move": "M99", "display": "M99", "equity_rank": 99})  # screened out
     path = write_game(tmp_path, "g", [found, position([40], {62: 41}) | {"turn": 9}])
-    assert slim_survey_file(path) == [(0, 7)]
+    assert slim_survey_file(path, min_gain=0.0) == [(0, 7)]
     slim = json.loads(path.read_text())
     assert slim["positions_surveyed"] == 2
     (kept,) = slim["positions"]
@@ -52,11 +52,18 @@ def test_slimming_keeps_the_found_positions_and_their_confirmed_candidates(tmp_p
     assert survey.winners[0].outside.move == "M62"
 
 
+def test_slimming_drops_positions_whose_edge_is_under_min_gain(tmp_path):
+    # Both edges clear the 2-sigma bar; only the 15-point one clears a 5-point min_gain.
+    wide, narrow = position([40], {62: 55}) | {"turn": 7}, position([40], {62: 44}) | {"turn": 9}
+    path = write_game(tmp_path, "g", [wide, narrow])
+    assert slim_survey_file(path, min_gain=5.0) == [(0, 7)]
+
+
 def test_a_cycle_delivers_found_positions_and_clears_the_game(tmp_path):
     found, dull = position([40], {62: 55}) | {"turn": 7}, position([40], {62: 41}) | {"turn": 9}
     write_game(tmp_path, "123-w1", [found, dull])
     sink = RecordingSink()
-    positions, nbytes, _ = blind_spots.deliver_surveyed(sink, tmp_path)
+    positions, nbytes, _ = blind_spots.deliver_surveyed(sink, tmp_path, min_gain=0.0)
     assert positions == 1 and nbytes > 0
     # The kept position's game first, then the survey file; nothing for the dull one.
     assert sink.delivered == ["gcg/123-w1-g0-turn8.gcg", f"survey/123-w1{SURVEY_SUFFIX}"]

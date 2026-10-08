@@ -10,7 +10,7 @@ docs/blind_spots.md.
 
 Usage:
     ./py/scripts/blind_spots_collect.py --tag seed-corpus
-    ./py/scripts/blind_spots_collect.py --tag seed-corpus --min-gain 2
+    ./py/scripts/blind_spots_collect.py --tag seed-corpus --min-gain 8
 """
 
 import argparse
