@@ -204,10 +204,10 @@ def viewer_data(
 ) -> dict:
     """Everything the viewer loads: the positions in `survey_dir`'s survey files
     where an outside move is at least `min_sigmas` standard errors above the
-    cut's best, strongest first. `gcg_dir` defaults to gcg/ beside the survey
-    files."""
+    cut's best, in name order (by file stem, then game and turn). `gcg_dir`
+    defaults to gcg/ beside the survey files."""
     gcg_dir = gcg_dir or survey_dir / "gcg"
-    positions = []
+    found = []  # (PositionKey, entry)
     header = {}
     for path in sorted(survey_dir.glob(f"*{SURVEY_SUFFIX}")):
         survey = json.loads(path.read_text())
@@ -216,8 +216,9 @@ def viewer_data(
         for position in survey["positions"]:
             entry = position_entry(stem, position, survey["cut"], gcg_dir, min_sigmas)
             if entry:
-                positions.append(entry)
-    positions.sort(key=lambda p: -max(m.get("sigmas", 0) for m in p["moves"]))
+                found.append(((stem, position["game"], position["turn"]), entry))
+    # Turns compare as numbers, so turn9 precedes turn10 unlike in a string sort.
+    positions = [entry for _, entry in sorted(found, key=lambda kv: kv[0])]
     return {
         "survey": header,
         "bonuses": bonuses(),

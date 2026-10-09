@@ -7,7 +7,7 @@ the .simsurvey.json files and gcg/ exports) or a blind_spots dashboard tag.
 The viewer shows one position at a time: the plays from outside HastyBot's top
 moves that out-simmed them, listed above those top moves, with the selected
 move previewed on the board beside its confirming-sim statistics. The left and
-right arrow keys step through the positions, strongest first.
+right arrow keys step through the positions in name order.
 
 Usage:
     ./py/scripts/sim_survey_viewer.py --survey-dir /workspace/mount/sim-surveys/all-plays-seed1
