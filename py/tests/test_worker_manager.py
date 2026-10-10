@@ -806,6 +806,39 @@ def test_a_gone_machines_slots_are_removable_outright(rented, manager, spec, tas
     assert ("terminate", "i-1") not in provider.calls
 
 
+def test_a_stopped_machine_is_removable_with_its_slots(rented, manager, spec, task, monkeypatch):
+    """The idle rule stopped the instance after its slots finished: no ssh
+    reaches it, but nothing on it can be running, and terminating it takes
+    its containers. The unreachable rule would refuse until someone booted
+    it just to remove it."""
+    provider, m = rented
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.launched = True
+    provider.instances["i-1"].state = "stopped"
+    monkeypatch.setattr(_FakeSshMachine, "state", "unreachable")
+    (info,) = _observe(manager, spec, task)
+    assert info["state"] == "stopped"
+    manager.remove_machine(spec, task, "m1")
+    assert task.workers == [] and task.machines == []
+    assert ("terminate", "i-1") in provider.calls
+
+
+def test_a_slot_alone_on_a_stopped_machine_says_to_remove_the_machine(
+    rented, manager, spec, task, monkeypatch
+):
+    """Removing only the slot would leave its container on the disk,
+    untracked, for the instance's next boot."""
+    provider, m = rented
+    w = manager.add_ssh(spec, task, "generate", machine="m1", threads=None)
+    w.launched = True
+    provider.instances["i-1"].state = "stopped"
+    monkeypatch.setattr(_FakeSshMachine, "state", "unreachable")
+    _observe(manager, spec, task)
+    with pytest.raises(AssertionError, match="m1 is stopped; remove the machine instead"):
+        manager.remove_worker(spec, task, w.worker_id)
+    assert task.workers == [w]
+
+
 def test_orphans_are_our_instances_no_task_names(rented, manager, spec, task, monkeypatch):
     provider, m = rented
     provider.instances["i-7"] = Instance(
