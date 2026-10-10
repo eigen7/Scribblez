@@ -36,6 +36,11 @@ _CLIENT_ERRORS = (
 )
 
 
+def _error_text(e: Exception) -> str:
+    """A client error as the operator reads it."""
+    return "; ".join(str(a) for a in e.args) or repr(e)
+
+
 def _stats_payload(stats: workloads.StatsSpec) -> dict:
     return {"unit": stats.unit, "phases": stats.phases, "background": sorted(stats.background)}
 
@@ -119,7 +124,7 @@ class _MasterBase(tornado.web.RequestHandler):
             self.write(fn())
         except _CLIENT_ERRORS as e:
             self.set_status(400)
-            self.write({"error": "; ".join(str(a) for a in e.args) or repr(e)})
+            self.write({"error": _error_text(e)})
 
     async def guarded_offload(self, fn):
         """`guarded`, with `fn` run as a command on the writer thread
@@ -134,7 +139,7 @@ class _MasterBase(tornado.web.RequestHandler):
             self.write(await awaitable)
         except _CLIENT_ERRORS as e:
             self.set_status(400)
-            self.write({"error": "; ".join(str(a) for a in e.args) or repr(e)})
+            self.write({"error": _error_text(e)})
 
     @property
     def tag_queue(self):
@@ -562,19 +567,31 @@ class WorkerActionHandler(_MasterBase):
 
         def act():
             task = self.task_or_fail(spec, body["tag"])
-            action = body["action"]
             worker_ids = [body["worker_id"]] if "worker_id" in body else [
                 w.worker_id for w in list(task.workers)
             ]  # fmt: skip
-            for worker_id in worker_ids:
-                if action == "remove":
-                    self.manager.remove_worker(spec, task, worker_id)
-                else:
-                    assert action in ("start", "pause"), f"unknown action '{action}'"
-                    self.manager.set_worker_state(spec, task, worker_id, run=action == "start")
+            _act_on_workers(self.manager, spec, task, body["action"], worker_ids)
             return {"ok": True, "workers": worker_ids}
 
         await self.guarded_offload(act)
+
+
+def _act_on_workers(manager, spec, task, action: str, worker_ids: list[str]):
+    """Apply a worker action to each slot in turn. A refusal does not stop the
+    rest, so one slot on an unreachable machine leaves the others acted on;
+    the refusals are raised together, each naming its slot, once every slot
+    has been tried."""
+    assert action in ("remove", "start", "pause"), f"unknown action '{action}'"
+    refusals = []
+    for worker_id in worker_ids:
+        try:
+            if action == "remove":
+                manager.remove_worker(spec, task, worker_id)
+            else:
+                manager.set_worker_state(spec, task, worker_id, run=action == "start")
+        except _CLIENT_ERRORS as e:
+            refusals.append(f"{worker_id}: {_error_text(e)}")
+    assert not refusals, "; ".join(refusals)
 
 
 class TaskStatsHandler(_MasterBase):

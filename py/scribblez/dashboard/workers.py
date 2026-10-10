@@ -1271,13 +1271,18 @@ class WorkerManager:
     def remove_machine(self, spec, task: tasks.TaskRecord, name: str):
         """Remove a machine and its slots, terminating it if rented. Each slot
         goes through remove_worker's checks, so a machine is never dropped from
-        under a working container; the slots of a gone instance are removed
-        outright, since their containers went with its disk."""
+        under a working container. The slots of a gone instance are removed
+        outright, since their containers went with its disk, and so are those
+        of a stopped one, whose containers cannot be running and go with its
+        disk at the termination here; what they flushed after their last
+        collection goes too (the Remove dialog warns about that)."""
         m = task.machine(name)
         key = _machine_key(spec, task.tag, name)
+        state = self._machine_states.get(key)
+        disk_lost = state == "gone" or (state == "stopped" and m.instance_id is not None)
         for w in task.slots_on(name):
-            self.remove_worker(spec, task, w.worker_id)
-        if m.instance_id is not None and self._machine_states.get(key) != "gone":
+            self._remove_slot(spec, task, w, disk_lost=disk_lost)
+        if m.instance_id is not None and state != "gone":
             self._terminate(m.instance_id, m.instance_type)
         for cache in (self._machine_probes, self._machine_states, self._idle_since, self._exits):
             cache.pop(key, None)
@@ -1287,11 +1292,15 @@ class WorkerManager:
         task.machines.remove(m)
         self.tasks.save(spec, task)
 
+    def _machine_state(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> str | None:
+        """The last observed state of slot `w`'s named machine; None for a bare
+        host or a machine no pass has observed."""
+        if w.machine is None:
+            return None
+        return self._machine_states.get(_machine_key(spec, task.tag, w.machine))
+
     def _machine_gone(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
-        return (
-            w.machine is not None
-            and self._machine_states.get(_machine_key(spec, task.tag, w.machine)) == "gone"
-        )
+        return self._machine_state(spec, task, w) == "gone"
 
     def _list_fleet(self):
         """The pass's fleet step: list every instance the provider tagged
@@ -1605,45 +1614,62 @@ class WorkerManager:
 
     def remove_worker(self, spec, task: tasks.TaskRecord, worker_id: str):
         """Remove a slot. Its worker must not be running, so a removal never
-        silently discards an in-flight cycle."""
+        silently discards an in-flight cycle.
+
+        A slot on a stopped instance refuses: its container cannot be probed,
+        and removing the slot alone would leave the container on the disk,
+        untracked, for the instance's next boot. Removing the machine takes
+        both (remove_machine)."""
         w = task.worker(worker_id)
+        assert w.kind != "ssh" or self._machine_state(spec, task, w) != "stopped", (
+            f"machine {w.machine} is stopped; remove the machine instead, which terminates "
+            f"it with its containers, or start a slot on it first"
+        )
+        self._remove_slot(spec, task, w, disk_lost=self._machine_gone(spec, task, w))
+
+    def _remove_slot(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, *, disk_lost: bool):
+        """Remove slot `w` after checking its worker is not running. With
+        `disk_lost` (an ssh slot whose instance is gone, or is stopped and about
+        to be terminated) its container and the tag's volume go with the
+        instance's disk, so there is nothing to check or clean."""
         if w.kind == "local":
-            assert not self._local_alive(spec, task, w), f"{worker_id} is running; pause it first"
-        elif w.kind == "ssh" and self._machine_gone(spec, task, w):
-            pass  # its container went with the instance's disk; nothing to check or clean
-        elif w.kind == "ssh":
-            # Observe afresh: a removal must not act on a remembered state.
-            probe = self._refresh_probe(spec, task, w)
-            assert probe not in ("running", "paused"), f"{worker_id} is running; pause it first"
-            # Removing while unreachable could orphan a live container that
-            # keeps generating into the tag with nothing tracking it.
-            assert probe != "unreachable", (
-                f"{self._ssh_host(task, w)} is unreachable; bring it online (or clean up its "
-                f"container by hand) before removing {worker_id}"
-            )
-            if probe == "stopped":
-                machine = self._ssh_machine(task, w)
-                if spec.role(w.role).ingest:
-                    # A trainer's last flush holds its final state pair, which
-                    # no collection reached; it is small, unlike a generator's
-                    # backlog (the Remove dialog warns about that).
-                    self._sweep_ssh(machine, spec, task, w)
-                if self._remote_data_home(spec, task) is w:
-                    self._sweep_home(machine, spec, task, w)
-                machine.remove_container(_container_name(spec, task.tag, w.worker_id))
-        if spec.scheduler == TICK_FOR_TASK and w.kind == "ssh":
-            self._release_tag_volume(spec, task, w)
-        self._forget_slot(_key(spec, task.tag, worker_id))
+            assert not self._local_alive(spec, task, w), f"{w.worker_id} is running; pause it first"
+        elif w.kind == "ssh" and not disk_lost:
+            self._remove_container(spec, task, w)
+            if spec.scheduler == TICK_FOR_TASK:
+                self._release_tag_volume(spec, task, w)
+        self._forget_slot(_key(spec, task.tag, w.worker_id))
         task.workers.remove(w)
         self.tasks.save(spec, task)
+
+    def _remove_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
+        """Remove ssh slot `w`'s container, refusing while it runs or cannot be
+        observed, and sweeping a trainer's last flush first."""
+        # Observe afresh: a removal must not act on a remembered state.
+        probe = self._refresh_probe(spec, task, w)
+        assert probe not in ("running", "paused"), f"{w.worker_id} is running; pause it first"
+        # Removing while unreachable could orphan a live container that
+        # keeps generating into the tag with nothing tracking it.
+        assert probe != "unreachable", (
+            f"{self._ssh_host(task, w)} is unreachable; bring it online (or clean up its "
+            f"container by hand) before removing {w.worker_id}"
+        )
+        if probe == "stopped":
+            machine = self._ssh_machine(task, w)
+            if spec.role(w.role).ingest:
+                # A trainer's last flush holds its final state pair, which
+                # no collection reached; it is small, unlike a generator's
+                # backlog (the Remove dialog warns about that).
+                self._sweep_ssh(machine, spec, task, w)
+            if self._remote_data_home(spec, task) is w:
+                self._sweep_home(machine, spec, task, w)
+            machine.remove_container(_container_name(spec, task.tag, w.worker_id))
 
     def _release_tag_volume(self, spec, task: tasks.TaskRecord, leaving: tasks.WorkerRecord):
         """Remove a data-home tag's volume from the machine ssh slot `leaving`
         is about to leave, when no other slot of the tag stays there to mount
         it. Keyed on the machine rather than on the trainer, which may already
         be gone; removing a volume that was never made is harmless."""
-        if self._machine_gone(spec, task, leaving):
-            return  # the volume went with the instance's disk
         if not any(_same_machine(w, leaving) for w in task.workers if w is not leaving):
             self._ssh_machine(task, leaving).remove_volume(_tag_volume(spec, task))
 
