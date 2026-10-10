@@ -60,6 +60,34 @@ class WriterRuleTest(tornado.testing.AsyncHTTPTestCase):
         self.get("/api/cloud/stop_all")
         self.get("/api/workload_tags?workload=position_eval")
 
+    def test_acting_on_every_slot_tries_each_and_reports_each_refusal(self):
+        """One slot on an unreachable machine must not leave the rest of a
+        Remove-all untouched."""
+        self.post("/api/tasks", {**_TAG, "params": {}})
+        self.post("/api/task/workers", {**_TAG, "role": "train", "kind": "local"})
+        self.post("/api/task/workers", {**_TAG, "role": "generate", "kind": "local", "threads": 1})
+        first, _ = (
+            w["worker_id"] for w in self.get("/api/task?workload=position_eval&tag=t")["workers"]
+        )
+        real_remove = self.manager.remove_worker
+
+        def remove(spec, task, worker_id):
+            if worker_id == first:
+                raise AssertionError("u@h is unreachable")
+            real_remove(spec, task, worker_id)
+
+        self.manager.remove_worker = remove
+        response = self.fetch(
+            "/api/task/worker_action",
+            method="POST",
+            body=json.dumps({**_TAG, "action": "remove"}),
+            raise_error=False,
+        )
+        assert response.code == 400
+        assert json.loads(response.body)["error"] == f"{first}: u@h is unreachable"
+        task = self.get("/api/task?workload=position_eval&tag=t")
+        assert [w["worker_id"] for w in task["workers"]] == [first]  # the other slot went
+
     def test_redeploy_pins_the_live_task(self):
         """Redeploy loads the task on the writer: pinning a reader's copy
         would save it over the live record."""
