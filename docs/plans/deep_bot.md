@@ -2,12 +2,10 @@
 
 **Status: proposed 2026-10-12, rewritten 2026-10-13 around many-tree
 information-set search; plan-reviewed twice ([review record](#review-record));
-not built, and not yet placed in the [roadmap](../roadmap.md).** It is an
-engineered alternative to [supreme_bot.md](supreme_bot.md), the current
-direction. Both aim at the same information flows and differ in what is
-learned ([Where this sits](#where-this-sits)). How DeepBot relates to
-SupremeBot is an open human call. DeepBot plays standard Scrabble, with hidden
-leaves, from its first milestone.
+not built, and not yet placed in the [roadmap](../roadmap.md).** DeepBot
+plays standard Scrabble, with hidden leaves, from its first milestone. This
+document is a design to guide development: its measurements inform the next
+step, and no pass or kill thresholds are fixed in advance.
 
 **Goal.** A search that does what a strong player does at
 [Richards–Johnson](../analysis/richards-johnson-exchange/README.md):
@@ -67,21 +65,6 @@ classical statistics, not something a network has to learn.
 
 ## Where this sits
 
-- **[supreme_bot.md](supreme_bot.md)** learns every flow in one network that
-  reads a context of every probe step. Its opponent contexts, one search per
-  opponent view, are the same many-tree principle. DeepBot fixes the backup
-  rule and the form of the transfer (linear in learned features).
-  - *What DeepBot gains:* with transfer off it is an ordinary convergent
-    search, which addresses SupremeBot's "no free convergence" risk. Its
-    learning problem is far smaller than the reader's, which matters because
-    M1a's reader found no transfer
-    ([supreme_bot_m1a.md](supreme_bot_m1a.md)).
-  - *What it gives up:* any transfer that is not linear in the features, and
-    learned draws.
-  - *Track order:* the roadmap runs SupremeBot's core on face-up leaves first,
-    to avoid information-set machinery. DeepBot starts in standard Scrabble
-    instead, because hidden racks are where its framework applies. It uses
-    the face-up prior as a bridge ([The prior](#the-prior-in-standard-scrabble)).
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** supplies two
   principles DeepBot keeps:
   - residuals are measured against the prior's prediction for the *same*
@@ -95,6 +78,10 @@ classical statistics, not something a network has to learn.
 
   DeepBot evaluates the opponent's replies over the opponent's own beliefs,
   and gives every candidate value from its own evaluations.
+- **Standard Scrabble from the start.** Hidden racks are where the framework
+  applies, so DeepBot does not pass through face-up leaves. Every trained
+  checkpoint is face-up today, so it uses the face-up prior as a bridge
+  ([The prior](#the-prior-in-standard-scrabble)).
 - **[Q-Dispersion Tree Search](https://github.com/shindavid/AlphaZeroArcade/blob/main/docs/Q-Dispersion-Tree-Search.md)**
   adds AlphaZero mechanics and a defense against policy collapse to
   MT-ISMCTS. DeepBot's per-action posterior plays a role like QDTS's utility
@@ -137,6 +124,28 @@ opponent (Mike).
 - **Only chosen moves cross.** A's search asks B's search for B's policy at
   `r_B`, and B's valuations stay in B's search. B's values are computed over
   B's beliefs, which differ from A's.
+
+![Many-tree search at Richards–Johnson: Nigel's tree spawns a tree for Mike at a sampled rack, and only Mike's move crosses back](../images/deep_bot_many_tree.svg)
+
+*Tree spawning, after Cowling et al. (2015). Each triangle is one player's
+search, colored by whose beliefs it runs on: red for Nigel's, blue for
+Mike's. Each node is colored by whose turn it is, and labeled with Nigel's
+tiles, then Mike's, with `?` for tiles unknown to the tree's owner. Nigel's
+tree starts at `x ?`: he holds `x` (AEELLNT) and cannot see Mike's rack. He
+plays ALLEE, then samples Mike's rack from his own belief (`y` or `z`). At
+`x z` it is Mike's turn, and Nigel cannot choose Mike's move with Nigel's own
+values, so he **spawns** Mike's tree rooted at `? z`: Mike holds `z`, an ETS
+rack, and does not know Nigel's tiles. In that tree Mike tries 8K YEET, YENS,
+a bingo and the rest; samples Nigel's leave and draw from Mike's belief (which
+reads what ALLEE reveals), giving `x̂ z`; lets Nigel reply from his prior; and
+evaluates. **Only the move crosses back:** YEET, sampled from Mike's policy
+`π′`, becomes an edge in Nigel's tree, where Nigel samples his own draw and
+evaluates on his own beliefs. Mike's values never enter Nigel's tree. Each
+sampled rack gets its own Mike tree (`y` at right). What one of them learns
+reaches the others through the shared regression `w_B`, which is how one
+YEET discovery informs every ETS rack. The dashed tree, Nigel as Mike imagines
+him, would come from spawning one level deeper. v1 uses Nigel's prior there
+instead.*
 
 In general, each search is a tree whose decision nodes are keyed by their
 player's information set. Searches spawn further searches wherever the other
@@ -405,7 +414,7 @@ match play) therefore force exploration: a fixed fraction of evaluations go to
 uniformly random or reverse-prior replies. Query error is reported stratified
 by prior rank, with the bottom ranks as the headline.
 
-**Controls**, with M1a's discipline:
+**Controls:**
 
 - *shuffled:* residuals permuted among a turn's rows;
 - *mechanical only:* no `g`;
@@ -446,8 +455,8 @@ milestone.
 Values are win equity, `P(win) + ½ P(draw)`, the project's ranking metric.
 The move set model's WLD head collapses to it. Residuals and the Gaussian
 model live in equity space in v1. E0 runs a logit arm (equity clipped to
-[ε, 1 − ε]) as a pre-registered alternative. The search adopts logit only if
-that arm passes its gate and equity fails.
+[ε, 1 − ε]) as an alternative, and the search adopts whichever space E0 shows
+predicts better.
 
 ## Improving the priors
 
@@ -512,8 +521,8 @@ Each step names its PRs and its measurement.
      rest, per rack. That is about 250k solves per position. A pilot (one
      position, 10 racks) measures solve time first, and E0 runs as a tag.
    - *Mid-game diagnostic regime:* truth from rollouts to the end with solved
-     endgames, as in M1a's corpora. It is reported, but not part of the
-     gates.
+     endgames, as in M1a's corpora. It is reported separately, because its
+     truth is far noisier.
    - *Arms:* identity `g` against PCA-64; with and without mechanical
      features; equity against logit space; and a **noisy arm**, where truth
      is replaced by means over 2 to 4 sampled splits, matching E1's
@@ -521,21 +530,24 @@ Each step names its PRs and its measurement.
    - *A side measurement, the clairvoyance gap:* for each rack, Mike's best
      reply on expectation against his best reply per split. This prices the
      leak a per-world design would have.
-   - *Pre-registered gates* (numbers are proposals; see [Open
-     questions](#open-questions)), for the near-endgame regime:
-     - *Pass:* held-out R² of the residual at least 0.15 above the shuffled
-       control, in the exact arm and the noisy arm.
-     - *Pass, Richards:* after two racks, YE\_\_ S-hook replies in held-out
-       racks are predicted within half of their mean absolute residual, and
-       YENS-like replies stay within `2τ` of zero.
-     - *Kill:* R² within 0.05 of shuffled in the exact arm.
+   - *What E0 reports,* per regime and arm:
+     - held-out R² of the residual, against the shuffled control;
+     - for Richards, the predictions for held-out YE\_\_ S-hook replies after
+       YE\_\_ has appeared in one or two racks, and the predictions for
+       YENS-like replies;
+     - calibration of the predictive variances.
+
+     These readings decide what comes next: whether the regression transfer
+     is worth building into a search, which feature arm and residual space
+     to use, and whether the bridge prior is good enough.
 3. **E0.5, the error models and throughput.**
    - Fit `τ²` and the intercept bands from E0's residuals; measure solver
      fallback rates.
    - Microbenchmark: B-side expansion (movegen, encoding, the move set pass,
      reading back `h`), the likelihood pass, solves per second, and one
      refit-plus-recompute at full table size.
-   - *Gate for E1:* calibration, and a turn that fits a match-time budget.
+   - *Informs E1:* how well the error models are calibrated, and how much of
+     a match-time budget a turn needs.
 4. **E1, the response table.** Separate PRs:
    1. Export `h` as an aux output (spec, re-export, parity test).
    2. The table, beliefs, evaluations, `π′`, allocation and the timing floor,
@@ -565,7 +577,7 @@ Each step names its PRs and its measurement.
 - **Linear transfer may be too weak.** The fallback is a Gaussian process
   with a learned kernel, at `O(N³)` per fit.
 - **The variances are the control surface.** Covered under
-  [Uncertainty](#uncertainty), with calibration gated at E0.5.
+  [Uncertainty](#uncertainty), with calibration measured from E0.5 on.
 - **The bridge prior.** If E0's residuals are dominated by the face-up
   mismatch, the standard prior moves onto the critical path.
 - **A one-decision-per-player table** cannot see A's next move. Lines where
@@ -578,13 +590,6 @@ Each step names its PRs and its measurement.
 
 ## Open questions
 
-- **Relation to SupremeBot (human call).** A parallel track against M1a's
-  reader, a replacement, or the hand-built baseline for M1a's "beats
-  hand-built transfer" bar. The roadmap is unchanged until this is decided.
-  If DeepBot is only a baseline, it stops after E1.
-- **The E0 gate numbers (human call).** 0.15 R² over shuffled, half the mean
-  absolute residual, and 0.05 for the kill are proposals, to be settled
-  before E0 runs.
 - **A better model of A's choice** inside B's belief than a HastyBot-equity
   softmax.
 - **Rack inference over more than the last move,** for the two-move reads the
@@ -608,7 +613,7 @@ subagents, and the rival designer on Codex with repository access.
 | E0 is not "Python only": it needs C++ entry points for hypothetical states. | Revised. E0-tool is its own PR, and its conventions carry into the search. |
 | E0's truth is millions of solves per position, and its mid-game truth is the network's own inconsistency. | Revised. Rows subsampled (about 250k solves per position), a pilot first, E0 runs as a tag. Passes are excluded too. The mid-game regime is diagnostic only, with rollout truth. |
 | The first `τ²` fit (M1a corpora) measures a different model, variant and depth. | Revised. `τ²` comes from E0's residuals; M1a serves only as a sanity bound. |
-| E0 tests exact residuals for B only, while E1 uses noisy ones and `w_A`. | Revised. A noisy arm in E0 with a gate. `w_A` moves to E2, because v1 has no A-side decisions. |
+| E0 tests exact residuals for B only, while E1 uses noisy ones and `w_A`. | Revised. A noisy arm in E0. `w_A` moves to E2, because v1 has no A-side decisions. |
 | The residual space must be fixed before E0. | Revised. Equity in v1; logit as a pre-registered E0 arm with a stated adoption rule. |
 | Start with `w_B` only. | Revised, for the same reason as above. |
 | E1 has no intermediate deliverable. | Revised. E1's second PR measures the substrate with transfer off, before transfer lands. |
@@ -616,11 +621,12 @@ subagents, and the rival designer on Codex with repository access.
 | `SimRunner`'s CRN does not transfer as written; `Bag` has no seedable draw interface. | Revised. B's racks pair exactly; refills map variates into a canonical sorted pool and pair where pools coincide. A `DrawSequence` interface. |
 | The solver's interface and ownership are unspecified. | Revised. Class mode, the unproven fallback to the network, per-thread instances with a fresh table per solve. |
 | No tree layer exists; node keys and state copies are unspecified. | Moved to E2 with the trees. The overlap with the pending shared turn-sim core is noted. |
-| Conflicts with the roadmap's track order; E0's compute must be schedulable. | Revised. The track order is stated under Where this sits; E0 runs as a tag after a pilot. |
+| Conflicts with the roadmap's track order; E0's compute must be schedulable. | Revised. The standard-Scrabble start is stated under Where this sits; E0 runs as a tag after a pilot. |
+| E0 pass and kill numbers, proposed by the author for a human call. | **Decided 2026-10-13 (human call):** no thresholds fixed in advance. The plan is a design to guide development, and E0 reports readings that inform the next step. |
 | Fold E0b into E0.5. | Revised. |
 | The perturbation, the `σ` ablation and the variance floor are speculative. | Revised. The perturbation and the ablation move to E2; the floor is a stated hook only. |
 | The log with forced exploration serves only E3. | Revised. A minimal log in E1, exploration added for E3 corpus runs, never in match play. |
-| Scope depends on whether DeepBot is a baseline or an agent. | Recorded in the open human call: as a baseline, it stops after E1. |
+| Scope depends on whether DeepBot is a baseline or an agent. | **Decided 2026-10-13 (human call):** DeepBot is unrelated to SupremeBot; it is an agent. |
 
 ### Round 1, 2026-10-12, on the per-world draft
 
@@ -635,5 +641,5 @@ The main findings, and where they stand after the rewrite:
 | The move set model cannot see the opponent's rack. | Rejected as a defect: an information-set prior should not see it. |
 | `h(a)` is not exported, and `d ≈ 200`. | Kept: an export PR in E1, `d` = 64 in the search. |
 | `EndgameVerdict` has no equity or variance; `PreEndgameSolver` is not a per-world leaf. | Kept: class mode with a network fallback; `PreEndgameSolver` not used. |
-| Shallow residuals carry systematic bias; E1 needs `τ²` before its own corpus exists; selection bias; qualitative gates. | Kept: intercepts, `τ²` from E0, forced exploration, pre-registered gates. |
+| Shallow residuals carry systematic bias; E1 needs `τ²` before its own corpus exists; selection bias; qualitative gates. | Kept: intercepts, `τ²` from E0, forced exploration. Gates: see the round-2 decision. |
 | Defer the training spec; drop the information-set machinery; land the timing floor alone. | Rejected: the request covers training; the many-tree framework is the design; BestBot already simulates EELLT and ranks it 12th to 40th. |
