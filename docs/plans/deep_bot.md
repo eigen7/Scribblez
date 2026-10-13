@@ -1,7 +1,7 @@
 # DeepBot: many-tree information-set search with regression transfer
 
 **Status: proposed 2026-10-12, rewritten 2026-10-13 around many-tree
-information-set search; plan-reviewed twice ([review record](#review-record));
+information-set search; plan-reviewed twice;
 not built, and not yet placed in the [roadmap](../roadmap.md).** DeepBot
 plays standard Scrabble, with hidden leaves, from its first milestone. This
 document is a design to guide development: its measurements inform the next
@@ -564,8 +564,17 @@ Each step names its PRs and its measurement.
    merged information-set nodes with Bayes weights, beliefs at deeper nodes,
    `w_A` (and with it the ALLEE-to-VELATE transfer on A's side), a second
    level of spawning, the per-tree perturbation and the Gumbel-`σ` ablation.
-   Taken only if E1's failures trace to depth. E2 needs its own plan section;
-   the review record lists what it must settle.
+   Taken only if E1's failures trace to depth. E2 needs its own plan section,
+   which must settle:
+   - the belief source at every deeper node class, and whether a node's prior
+     is frozen when the node is expanded, so residuals keep a fixed baseline
+     and logs stay replayable;
+   - how sampled children are reweighted when a merged node's Bayes weights
+     move;
+   - node keys over (public history, own rack), and the cost of copying game
+     state;
+   - a tree library generic over the game, testable on toy games, with a
+     Scrabble binding.
 6. **E3, the learned projection.** Train `g` on logs with forced exploration,
    the controls and the rank stratification. Repeat E1's measurements.
 7. **E4, the generational loop.** The standard-Scrabble prior replaces the
@@ -594,52 +603,3 @@ Each step names its PRs and its measurement.
   softmax.
 - **Rack inference over more than the last move,** for the two-move reads the
   Richards analysis makes.
-
-## Review record
-
-### Round 2, 2026-10-13, on the many-tree rewrite
-
-Four panelists: hidden complexity, scope and integration as Claude
-subagents, and the rival designer on Codex with repository access.
-
-| Critique | Resolution |
-|---|---|
-| **Blocking.** B's belief about A's leave is one `RackInferrer::infer` per (candidate, `r_B`), because B's pool differs per rack: about 4,000 inferences at up to a few hundred milliseconds each, uncosted. | Revised. Factorized: the likelihood is scored once per candidate, the hypergeometric prior once per rack. Costed, and benchmarked in E0.5. |
-| **Blocking.** No belief source below the two roots, with two incompatible answers for A's later nodes; in-tree weights would make `v̂` drift, break replay and need importance reweighting. | Revised by moving v1 to the response table: the only beliefs are A's about B's rack and B's about A's leave, both specified. Deeper beliefs are listed as something E2 must settle. |
-| Gate the tree machinery against a flat response table (Codex). | Revised: v1 *is* the response table, the one-decision-per-player form of the same framework. Trees are E2, conditional on measured failures. |
-| Junctions put B's values into A's search, against "a move, never a value"; most of the junction's mass rests on them. | Revised. A-side values for B's top `m` replies, the tail approximated by B's flipped value with its own `τ²` band, flagged and never fitted. |
-| The raw track is contaminated through a corrected `π′_B`. | Revised. Raw `π′_B` alongside corrected; the raw track and distillation use it. |
-| The variance term costs `d²` per action, `π′` is uncosted Monte Carlo, and the refit cadence is unspecified. | Revised. `d` = 64 in the search, costs recounted with `d²`, `π′` by deterministic quadrature, refit every `R` evaluations, and a full refit benchmarked in E0.5. |
-| E0 is not "Python only": it needs C++ entry points for hypothetical states. | Revised. E0-tool is its own PR, and its conventions carry into the search. |
-| E0's truth is millions of solves per position, and its mid-game truth is the network's own inconsistency. | Revised. Rows subsampled (about 250k solves per position), a pilot first, E0 runs as a tag. Passes are excluded too. The mid-game regime is diagnostic only, with rollout truth. |
-| The first `τ²` fit (M1a corpora) measures a different model, variant and depth. | Revised. `τ²` comes from E0's residuals; M1a serves only as a sanity bound. |
-| E0 tests exact residuals for B only, while E1 uses noisy ones and `w_A`. | Revised. A noisy arm in E0. `w_A` moves to E2, because v1 has no A-side decisions. |
-| The residual space must be fixed before E0. | Revised. Equity in v1; logit as a pre-registered E0 arm with a stated adoption rule. |
-| Start with `w_B` only. | Revised, for the same reason as above. |
-| E1 has no intermediate deliverable. | Revised. E1's second PR measures the substrate with transfer off, before transfer lands. |
-| The marginalized prior's `L` passes multiply the trunk cost and confound E0. | Revised. Evaluations average over the sampled worlds (one pass per sample); the unevaluated prior uses the modal leave (one pass). |
-| `SimRunner`'s CRN does not transfer as written; `Bag` has no seedable draw interface. | Revised. B's racks pair exactly; refills map variates into a canonical sorted pool and pair where pools coincide. A `DrawSequence` interface. |
-| The solver's interface and ownership are unspecified. | Revised. Class mode, the unproven fallback to the network, per-thread instances with a fresh table per solve. |
-| No tree layer exists; node keys and state copies are unspecified. | Moved to E2 with the trees. The overlap with the pending shared turn-sim core is noted. |
-| Conflicts with the roadmap's track order; E0's compute must be schedulable. | Revised. The standard-Scrabble start is stated under Where this sits; E0 runs as a tag after a pilot. |
-| E0 pass and kill numbers, proposed by the author for a human call. | **Decided 2026-10-13 (human call):** no thresholds fixed in advance. The plan is a design to guide development, and E0 reports readings that inform the next step. |
-| Fold E0b into E0.5. | Revised. |
-| The perturbation, the `σ` ablation and the variance floor are speculative. | Revised. The perturbation and the ablation move to E2; the floor is a stated hook only. |
-| The log with forced exploration serves only E3. | Revised. A minimal log in E1, exploration added for E3 corpus runs, never in match play. |
-| Scope depends on whether DeepBot is a baseline or an agent. | **Decided 2026-10-13 (human call):** DeepBot is unrelated to SupremeBot; it is an agent. |
-
-### Round 1, 2026-10-12, on the per-world draft
-
-The main findings, and where they stand after the rewrite:
-
-| Critique | Resolution |
-|---|---|
-| **Blocking.** E0 never fixed face-up or hidden; under face-up, WOE makes six of Mike's tiles public. | Superseded: DeepBot is standard Scrabble throughout, and E0 samples Mike's whole rack. |
-| Separate trees per world are clairvoyant (Codex's two-draw counterexample). Round 1's answer, information-set nodes with deferred draws, still evaluated Mike's nodes with our real leave and about one sample per node. | Superseded by the many-tree framework, in which each player decides over their own beliefs. |
-| "The bag is empty after any reply" is false. | Revised: one-tile replies and passes are excluded from E0's truth and counted. |
-| Test a shallow search before a recursive tree. | Kept, and taken further in round 2: v1 is a table. |
-| The move set model cannot see the opponent's rack. | Rejected as a defect: an information-set prior should not see it. |
-| `h(a)` is not exported, and `d ≈ 200`. | Kept: an export PR in E1, `d` = 64 in the search. |
-| `EndgameVerdict` has no equity or variance; `PreEndgameSolver` is not a per-world leaf. | Kept: class mode with a network fallback; `PreEndgameSolver` not used. |
-| Shallow residuals carry systematic bias; E1 needs `τ²` before its own corpus exists; selection bias; qualitative gates. | Kept: intercepts, `τ²` from E0, forced exploration. Gates: see the round-2 decision. |
-| Defer the training spec; drop the information-set machinery; land the timing floor alone. | Rejected: the request covers training; the many-tree framework is the design; BestBot already simulates EELLT and ranks it 12th to 40th. |
