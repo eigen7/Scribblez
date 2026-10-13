@@ -32,15 +32,15 @@ moved on. New plans go here, not in `docs/` proper.
   inform any decision. Built as a learned reader over fixed probes first
   (gated against shrinkage on face-up leaves, then repeated in standard
   Scrabble), then learned move choices, then learned draws.
-- **[deep_bot.md](deep_bot.md)**: *proposed, plan-reviewed, not built;
-  an engineered alternative to supreme_bot.md, placement an open call.*
-  Information-set search with seeded chance samples shared by every
-  candidate, a Gumbel-style backup with per-action posteriors (values
-  recomputed, never accumulated), and transfer between branches through a
-  per-turn Bayesian linear regression of search residuals on learned move
-  features, meta-trained offline. Starts with a pre-registered offline
-  transfer test at Richards–Johnson, then a search depth-capped at the
-  opponent's reply.
+- **[deep_bot.md](deep_bot.md)**: *proposed, plan-reviewed twice, not
+  built; an engineered alternative to supreme_bot.md, placement an open
+  call.* Many-tree information-set search in standard Scrabble: each player
+  decides over their own beliefs, with a Gumbel-style backup over per-action
+  posteriors and transfer across the opponent's racks through a per-turn
+  Bayesian linear regression on learned move features. v1 is the flat form, a
+  response table of candidates × opponent racks × replies; general trees
+  follow only if measured failures need depth. Starts with a pre-registered
+  offline transfer test at Richards–Johnson.
 - **[supreme_bot_m1a.md](supreme_bot_m1a.md)**: *proposed, not built.*
   The build plan for M1a, SupremeBot's held-out transfer test: probe traces
   in the sim runner, a generator workload writing labels and a new `.sprobe`

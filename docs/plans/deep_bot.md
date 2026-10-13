@@ -1,11 +1,13 @@
-# DeepBot: information-set search with regression transfer
+# DeepBot: many-tree information-set search with regression transfer
 
-**Status: proposed 2026-10-12; plan-reviewed the same day ([review
-record](#review-record)); not built, and not yet placed in the
-[roadmap](../roadmap.md).** It is an engineered alternative to
-[supreme_bot.md](supreme_bot.md), the current direction. The two pursue the
-same flows and differ in what is learned ([Where this sits](#where-this-sits)).
-How DeepBot relates to SupremeBot is an open human call.
+**Status: proposed 2026-10-12, rewritten 2026-10-13 around many-tree
+information-set search; plan-reviewed twice ([review record](#review-record));
+not built, and not yet placed in the [roadmap](../roadmap.md).** It is an
+engineered alternative to [supreme_bot.md](supreme_bot.md), the current
+direction. Both aim at the same information flows and differ in what is
+learned ([Where this sits](#where-this-sits)). How DeepBot relates to
+SupremeBot is an open human call. DeepBot plays standard Scrabble, with hidden
+leaves, from its first milestone.
 
 **Goal.** A search that does what a strong player does at
 [Richards–Johnson](../analysis/richards-johnson-exchange/README.md):
@@ -16,23 +18,30 @@ How DeepBot relates to SupremeBot is an open human call.
 - It revisits a candidate when a later finding changes how its earlier search
   should be read.
 
-**Decision.** Search a tree whose decision nodes are **information sets**: a
-node is keyed by what its mover can observe. Hidden tiles are resolved at
-explicit **chance nodes**, sampled with seeds shared by every candidate.
+Every decision must be made on what its player can see, never on the other
+player's hidden tiles.
 
+**Decision.**
+
+- **Framework: many-tree information-set search** (MT-ISMCTS; Cowling, Powley
+  & Whitehouse, 2015). Each player's decisions are evaluated over that
+  player's own beliefs. Only chosen moves pass between players' searches;
+  each player's values stay with that player.
 - **Backup:** Gumbel MuZero's completed values and improved policy, with a
   per-action posterior in place of visit counts. Values are recomputed from
   current estimates, never accumulated.
-- **Transfer:** a **per-turn Bayesian linear regression** that predicts how
-  far a search result departs from the network's prior, from features the
-  network computes for every move. It sets the estimate and the uncertainty
-  of every action not yet searched. Anything a search has reached overrides
-  it.
+- **Transfer:** a per-turn **Bayesian linear regression** for each player
+  whose decisions are searched. It predicts how far evaluation moves a value
+  from the network's prior, from features the network computes for every
+  move. It sets the estimate and uncertainty of every action not yet refined,
+  and refinement overrides it.
+- **v1 is the flat form of this framework, a response table.** One decision
+  each: ours at the root, and the opponent's reply. The reply is evaluated
+  over the opponent's beliefs, and transfer runs across the opponent's racks.
+  General trees, deeper decisions and the second regression come in E2, if
+  v1's failures call for depth.
 - **Training:** the features are meta-learned offline (a closed-form ridge
-  over logged search residuals), so that this regression works.
-- **Build order:** start shallow. Ply one is searched as a table of
-  candidates × opponent racks × replies, and recursion is added only if
-  measurements call for it.
+  over logged residuals), so that the regression works.
 
 ## Purpose
 
@@ -46,25 +55,22 @@ idealized agent through Richards–Johnson and names what it does:
 - **Revision:** later probes re-price earlier ones.
 
 It also shows why plain node statistics cannot carry those flows in Scrabble:
-below the first draw, most nodes are visited once.
-
-DeepBot gets all three flows from two pieces:
-
-1. **A sound backup.** Each node's value is recomputed from its children's
-   current estimates. Nothing is a running sum of past probes.
-2. **One learned similarity, fitted in closed form.** It decides what a search
-   result says about actions no probe reached.
+below the first draw, most nodes are visited once. In a many-tree search that
+problem has a precise location. There is one opponent search per sampled
+opponent rack, and each is visited rarely. Sharing what one rack's search
+learns with the others is the transfer's whole job, and v1 does exactly that
+job.
 
 The learned part is small: a feature map trained offline, plus a regression
-with a few dozen to a few hundred weights fitted per decision. Aggregation,
-weighting by evidence and shrinkage are classical statistics, not something a
-network has to learn.
+fitted per decision. Aggregation, weighting by evidence and shrinkage are
+classical statistics, not something a network has to learn.
 
 ## Where this sits
 
 - **[supreme_bot.md](supreme_bot.md)** learns every flow in one network that
-  reads a context of every probe step. DeepBot fixes the backup rule and the
-  form of the transfer (linear in learned features).
+  reads a context of every probe step. Its opponent contexts, one search per
+  opponent view, are the same many-tree principle. DeepBot fixes the backup
+  rule and the form of the transfer (linear in learned features).
   - *What DeepBot gains:* with transfer off it is an ordinary convergent
     search, which addresses SupremeBot's "no free convergence" risk. Its
     learning problem is far smaller than the reader's, which matters because
@@ -72,6 +78,10 @@ network has to learn.
     ([supreme_bot_m1a.md](supreme_bot_m1a.md)).
   - *What it gives up:* any transfer that is not linear in the features, and
     learned draws.
+  - *Track order:* the roadmap runs SupremeBot's core on face-up leaves first,
+    to avoid information-set machinery. DeepBot starts in standard Scrabble
+    instead, because hidden racks are where its framework applies. It uses
+    the face-up prior as a bridge ([The prior](#the-prior-in-standard-scrabble)).
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** supplies two
   principles DeepBot keeps:
   - residuals are measured against the prior's prediction for the *same*
@@ -81,500 +91,549 @@ network has to learn.
   It also supplies the root shortlist. Its two shortcomings motivate this
   plan:
   - hasty rollouts never play the reply that matters;
-  - a key move may not be illuminated by the sims of its siblings.
+  - a key move may not be illuminated by its siblings' sims.
 
-  DeepBot searches the opponent's replies instead of rolling them out, and
-  gives every candidate value from its own probes.
-- **[rack_conditional_evidence.md](rack_conditional_evidence.md)** wanted the
-  same per-rack transfer through learned evidence tokens. DeepBot's chance
-  samples play the part of its rack indices, and its regression stands in for
-  the fusion stage.
-- **Information-set search** is the standard answer to strategy fusion in
-  imperfect-information games, as in ISMCTS (Cowling, Powley & Whitehouse,
-  2012). DeepBot keeps the structure and replaces the visit-mean backup.
+  DeepBot evaluates the opponent's replies over the opponent's own beliefs,
+  and gives every candidate value from its own evaluations.
+- **[Q-Dispersion Tree Search](https://github.com/shindavid/AlphaZeroArcade/blob/main/docs/Q-Dispersion-Tree-Search.md)**
+  adds AlphaZero mechanics and a defense against policy collapse to
+  MT-ISMCTS. DeepBot's per-action posterior plays a role like QDTS's utility
+  dispersion ([The opponent model](#the-opponent-model)).
+- **The pending shared turn-sim core** (a follow-up from the sequential-agent
+  work) is the natural home for DeepBot's evaluation loop. DeepBot should not
+  become a fifth copy of turn simulation.
 
-In the flow vocabulary, DeepBot's profile is sideways in every column except
-chance steering, plus revision:
+In the flow vocabulary, v1's profile:
 
 | root steering | steering below root | chance steering | action valuation | chance valuation | revision |
 |---|---|---|---|---|---|
-| sideways | sideways | fixed (seeded samples) | sideways | sideways | yes |
+| sideways | sideways (the opponent's reply) | fixed (seeded samples) | sideways | sideways | yes |
 
 ### Reuse
 
 | Component | Role in DeepBot |
 |---|---|
-| `MoveProposalService` / `MoveSetEvalService` ([agent/](../../engine/include/agent/), [nn/](../../engine/include/nn/)) | root shortlist; per-node priors `v̂(a)`; the hidden state `h(a)` after a new aux output ([Features](#features-and-their-training)) |
+| `MoveProposalService` / `MoveSetEvalService` ([agent/](../../engine/include/agent/), [nn/](../../engine/include/nn/)) | root shortlist; per-move priors `v̂`; the hidden state `h(a)` after a new aux output ([Features](#features-and-their-training)) |
+| `EquityLikelihood` / `RackInferrer` ([belief/](../../engine/include/belief/)) | both beliefs; the B-side posterior is factorized ([Beliefs](#beliefs)) |
 | `CrossCheckEncoder` inputs ([training/cross_check_delta.h](../../engine/include/training/cross_check_delta.h)) | the mechanical features |
-| `RackInferrer` ([belief/rack_inference.h](../../engine/include/belief/rack_inference.h)) | the root chance node's posterior over the opponent's rack (standard Scrabble) |
-| SimRunner's CRN seeding ([sim/sim_runner.h](../../engine/include/sim/sim_runner.h)) | the pattern for draw seeds shared across candidates; a world-seeded draw source replaces `Bag`'s RNG draw |
-| `EndgameSolver` ([endgame/endgame_solver.h](../../engine/include/endgame/endgame_solver.h)) | leaves once the bag is empty |
-| M1a near-endgame corpora (`m1a-endgame-*` tags) | the first fit of the prior's error variance `τ²` |
-| BestBot, `mset-sim` | match baselines, not reused code |
+| `EndgameSolver` ([endgame/endgame_solver.h](../../engine/include/endgame/endgame_solver.h)) | evaluations once the bag is empty |
+| BestBot, `mset-sim` | match baselines |
 
-`PreEndgameSolver` is **not** used. It aggregates over every bag draw itself
-and ranks plays pessimistically. DeepBot's chance nodes take over that job, with
-sampled draws.
+Not used: `PreEndgameSolver`, which aggregates over bag draws with its own
+pessimistic rule, and `Bag`'s private RNG draw, which a seeded draw sequence
+replaces ([Seeds](#seeds)).
 
-## The tree
+## The framework
 
-**Node kinds.**
+Write **A** for the player to move at the root (Nigel) and **B** for the
+opponent (Mike).
 
-- **Decision nodes** are keyed by the mover's information set: the public
-  history plus the mover's own rack. Under face-up leaves, the opponent's
-  public leave is part of the public history.
-- **Chance nodes** resolve tiles hidden from the next mover:
-  - at the root, the opponent's rack, drawn from the posterior (under face-up
-    leaves, only their unseen draws);
-  - after each move, the mover's refill.
+- **A's search** is rooted at A's information set: the public history plus
+  A's rack. It samples what A cannot see (B's rack, A's coming draws) from
+  A's beliefs.
+- **B's searches**, one per sampled B rack `r_B`, are rooted at B's
+  information set after A's move. They sample what B cannot see (A's leave,
+  A's draw) from B's beliefs.
+- **Only chosen moves cross.** A's search asks B's search for B's policy at
+  `r_B`, and B's valuations stay in B's search. B's values are computed over
+  B's beliefs, which differ from A's.
 
-Two different hidden states that lead to the same observations for the next
-mover reach the **same** decision node. After ALLEE, every sampled Mike rack
-that can play YEET reaches one node for Nigel, "ALLEE, YEET, Nigel's rack R".
-That merges chance outcomes wherever the observations are identical. Transfer
-then covers outcomes that are similar but not identical.
+In general, each search is a tree whose decision nodes are keyed by their
+player's information set. Searches spawn further searches wherever the other
+player decides. v1 cuts this at one decision per player, which makes the trees
+flat: a table.
 
-**Deferred draws.** A refill is hidden from the opponent, so the opponent's
-decision must sit *above* the chance node that resolves it. Following
-[supreme_bot.md](supreme_bot.md#face-up-leaves-deferred-draws), a player's
-draw is sampled when that player next decides. In standard Scrabble this holds
-for refills, because no one else observes them before the drawer's next turn.
-It needs a pending-draw state that the engine does not have yet, with
-SupremeBot's two guards:
+## v1: the response table
 
-- **Exchanges:** legality uses the bag count net of pending draws, and an
-  exchange resolves pending draws before its tiles return to the bag.
-- **The bag emptying:** pending draws resolve before the bag would empty and
-  before the solver takes over.
+**Rows.** For each root candidate `a`, each sampled `r_B`, and each legal B
+reply `b`, there is a row `(a, r_B, b)` with two values:
 
-A **paired-world test** checks it. Change a hidden draw while holding the
-deciding player's observations fixed, and the decision must not change.
+- **`Q_B(a, r_B, b)`:** B's value of `b`, over B's belief about A's leave and
+  draw. B chooses on this.
+- **`Q_A(a, r_B, b)`:** A's value of the same continuation, over A's belief
+  given `r_B`. A is valued on this.
 
-**Chance samples.** A chance node's outcomes are drawn from a per-turn seed
-keyed by `(sample index, draw ordinal)`, in the manner of SimRunner. Every
-candidate therefore meets the same draws wherever its draws line up, and luck
-cancels in comparisons. Each chance node holds the outcomes sampled so far,
-with probability weights `ω`. These are importance weights where a proposal
-differs from the true distribution; the first version samples the true
-distribution, so `ω = 1`. A probe walks a `Game` copy with a seeded draw
-source in place of `Bag`'s RNG draw.
+**Decisions.**
 
-**Expansion.** Expanding a decision node costs:
+- **B's policy at `(a, r_B)`** is `π′_B`, computed from the `Q_B` estimates
+  of all B's replies. That is B's choice on B's information.
+- **A's value of `a`** is `q(a) = Σ_{r_B} H(r_B) Σ_b π′_B(b | a, r_B) · Q_A(a, r_B, b)`,
+  where `H` is A's posterior over B's rack. The root picks on `q(a)`, on A's
+  information.
 
-- one move generation;
-- per-move input encoding, including the cross-check deltas;
-- one move set evaluation pass over every legal move `a`.
+No decision is made inside a sampled world. The only decisions are B's choice
+per `(a, r_B)` and A's choice at the root, and each averages over what its
+player cannot see.
 
-The pass returns a value prior `v̂(a)` (win equity, from the mover's
-information set) and a feature vector `φ(a)`. Expansion rolls nothing out.
+**Evaluations.** Refining a row means evaluating its value more precisely.
+Both `Q_B` and `Q_A` are evaluated at the position after `b`:
 
-**Leaves.** Once both racks are known and the bag is empty, a node's value
-comes from the endgame solver at its configured budget (default 400 nodes).
-A verdict maps to `(Q, V)`:
+- **If the bag is empty,** each player's sampled world is a perfect-information
+  endgame, and the endgame solver gives the value
+  ([Evaluations](#evaluations)).
+- **Otherwise,** the network's value after `b`, from the relevant player's
+  side, in each sampled world.
 
-- **Proven:** the class gives 1, 0.5 or 0, with near-zero variance.
-- **Unproven:** the spread maps to win equity through a logistic fitted
-  against high-budget solves. The variance comes from that fit's residuals.
+The value of a row is the weighted mean over its player's samples, and it
+sharpens as more samples are drawn. Rows not yet evaluated use the prior plus
+transfer ([Values](#values)).
 
-At Richards–Johnson after a five-tile play, two tiles are left in the bag.
-Mike's two-tile and seven-tile replies empty it. A one-tile reply leaves one
-tile, a chance node, and then endgames.
+**A's side of each row.** `π′_B` spreads over hundreds of replies, and only a
+few carry most of its mass. `Q_A` is evaluated for B's top `m` replies by
+`π′_B`. The tail is approximated by `1 − Q_B`, B's own value flipped, and
+carries its own `τ²` band. Those tail values come from the wrong player's
+information, so they are flagged and never enter a regression fit.
+
+## Beliefs
+
+**A's belief about B's rack, `H`:** B's leave from `RackInferrer` applied to
+B's last move, plus a refill drawn uniformly from the rest of A's unseen
+pool. It is computed once per turn.
+
+**B's belief about A's leave, given `a` and `r_B`.** B infers A's leave from
+the very move being evaluated, so a fishing play can look different to B than
+to A. A single tree cannot express that.
+
+Naively this is one `RackInferrer::infer` per `(a, r_B)`: 20 candidates × 200
+racks = 4,000 inferences, at up to a few hundred milliseconds each. It
+factorizes instead:
+
+- **The likelihood** `P(a | leave)` (`EquityLikelihood`) depends on the board
+  and the hypothesis, not on the pool. It is scored once per candidate, over
+  every leave that any sampled `r_B` allows.
+- **The prior over leaves** (hypergeometric from B's unseen pool) depends on
+  `r_B`, and is cheap combinatorics.
+
+So a candidate costs one likelihood pass, and each rack costs a reweighting.
+This needs a small `RackInferrer` API split. `EquityLikelihood` models A as a
+HastyBot-equity softmax. That is a weak model of an expert's choice, and a
+known v1 limitation.
+
+`RackInferrer` conditions on one move only. The Richards analysis's read that
+"the C is in the bag" uses two (ZONES and WOE); extending the inferrer is
+separate work.
+
+### Seeds
+
+Samples use variates keyed by `(sample index, draw ordinal)`.
+
+- **B's racks** come from A's unseen pool, which does not depend on the
+  candidate, so every candidate meets exactly the same `r_B`. This is the
+  pairing that matters most.
+- **Refills and B's split samples** map a variate to an index in a canonical
+  sorted pool. Candidates whose pools coincide share draws exactly. Where the
+  pools differ, because candidates play different tiles, the draws differ,
+  and the pairing is approximate.
+
+A `DrawSequence` interface (seeded, indexable) replaces `Bag::draw()` in
+evaluation code.
+
+## Evaluations
+
+**The solver.** `EndgameSolver` in class mode (`spread_matters` off).
+
+- A proven class gives a value of 1, 0.5 or 0, with near-zero variance.
+- An unproven solve falls back to the network's value of the same position.
+  With the bag empty, that position is fully known. The fallback carries the
+  network's `τ²` for that band.
+
+Solver instances are per thread, with a fresh transposition table per solve
+in v1.
+
+**The network** away from the endgame: the face-up move set prior, evaluated
+in each sampled world with that world's opponent leave
+([The prior](#the-prior-in-standard-scrabble)).
 
 ## Values
 
-Each action `a` at a decision node has an estimate `Q(a)` and a variance
-`V(a)`, from the mover's point of view.
+Each row's value, for each player, has an estimate `Q` and a variance `V`.
 
-| action is | `Q(a)` | `V(a)` |
+| row is | `Q` | `V` |
 |---|---|---|
-| searched | the value of the chance node below it, flipped to this mover if the next decider is the other player | propagated |
-| a solver leaf | the mapped verdict | from the verdict mapping |
-| unsearched | `v̂(a) + b(a) + μᵀφ(a)`: prior, plus intercept, plus transferred correction | `φ(a)ᵀΣφ(a) + τ²(a)` |
+| evaluated | the weighted mean over the player's samples | sampling variance of the mean, plus per-sample variances |
+| unevaluated (B's side) | `v̂(b) + c(b) + μᵀφ(b)`: prior, plus intercept, plus transferred correction | `φ(b)ᵀΣφ(b) + τ²(b)` |
+| A's side, outside B's top `m` | `1 − Q_B` | `V_B + τ²_tail` |
 
-`b(a)` is a per-band intercept, and `μ, Σ` are the regression posterior
-([Transfer](#transfer)). `τ²(a)` is the prior's own error variance
+`c(b)` is a per-band intercept, and `μ, Σ` the regression posterior
+([Transfer](#transfer)). `τ²` is the prior's error variance
 ([Uncertainty](#uncertainty)).
 
-**Chance nodes.** A chance node's value is the `ω`-weighted mean of its
-sampled children. Its variance is the sampling variance of that mean (spread
-over the samples divided by the effective sample size), plus the weighted
-children's own variances. Under-sampled chance nodes are uncertain, and
-their uncertainty propagates.
+**The improved policy.** `π′_B(b)` is the probability that `b` is B's best
+reply, under independent Gaussians `N(Q_B(b), V_B(b))`. It is computed by
+one-dimensional quadrature:
 
-A decision node below a chance node can be reached from many hidden states,
-for example Nigel's node after YEET. Each upstream path reaches it with
-weight `ω × π′(YEET)` from its own Mike node, and those weights set the
-posterior over hidden states inside that node's chance children. That is
-Bayesian updating on the opponent's move under the modeled policy.
+`∫ φ_b(x) Π_{b′≠b} Φ_{b′}(x) dx`
 
-**The improved policy.** At each decision node, `π′(a)` is the probability
-that `a` is the mover's best action, under independent Gaussians
-`N(Q(a), V(a))`. It is computed with a fixed per-node seed, so a recompute
-changes `π′` only when the estimates change. It sharpens toward the best
-action as variances shrink, and stays spread over every action that could
-still be best while they are wide.
+This is deterministic, so a recompute changes `π′` only when the estimates
+change, and it costs `O(replies × grid)`. `π′` sharpens toward the best reply
+as variances shrink, and stays spread over every reply that could still be
+best while they are wide. Gumbel MuZero's visit-count `σ` (Danihelka et al.,
+2022) would let effort spent on one reply lend confidence to the others'
+guesses. It stays as an E2 ablation.
 
-**Decision node value:** `Σ_a π′(a) Q(a)`, with variance
-`Σ_a π′(a)² V(a) + Σ_a π′(a)(Q(a) − value)²`. This takes the place of both
-the visit mean and a hard max:
+**Raw and corrected tracks.**
 
-- A **mean over visits** dilutes the value with exploratory children.
-- A **max over estimates** selects the largest error (the optimizer's curse),
-  and the estimates here carry model bias that does not average away.
+- **Raw:** unevaluated rows sit at `v̂ + c`, and `π′_B` is computed from those
+  values (raw `π′`). Regression fits and distillation targets use this track
+  only.
+- **Corrected:** includes the transfer. The corrected `π′_B`, A's `q(a)`,
+  allocation and the pick use this one.
 
-This is Gumbel MuZero's completed-Q construction (Danihelka et al., 2022),
-with one change: Gumbel's `σ` scales with the node's maximum visit count, so
-visits spent on one action lend confidence to the guessed values of the
-others. Per-action variances do not. Gumbel's `σ` form stays as an ablation
-arm.
+Fitting on corrected values would let the regression confirm its own output.
+Computing raw values with a corrected `π′_B` would do the same thing
+indirectly. With transfer off, the tracks coincide.
 
-**Recompute, never accumulate.** Every value is a function of the current
-estimates below it. When the regression changes, every unsearched estimate
-changes, and the expanded tree is recomputed bottom-up. Searches made before a
-finding keep their values, which are still right about what they reached.
-`π′` decides their weight anew.
+**Recompute, never accumulate.** When the regression refits, every
+unevaluated row's estimate changes, then every `π′_B`, then every `q(a)`.
+Rows evaluated before a finding keep their values; `π′_B` decides their
+weight anew. That is how the table revises itself.
+
+## The opponent model
+
+`π′_B` is B's policy, not an argmax. An argmax model of the opponent suffers
+**policy collapse**: a small error in B's values flips B onto a single pure
+move, and A best-responds to that artifact. `π′` built from posterior
+uncertainty mixes among replies whose ranges overlap, which is the role
+QDTS's utility dispersion plays. DeepBot's variances shrink as evaluation
+accumulates, while QDTS keeps a floor from uncertainty about the rack model.
+Scrabble has far less reason for mixed strategies than poker does, so v1
+starts without a floor. A variance floor from the rack model's uncertainty is
+the hook if collapse appears.
 
 ## Transfer
 
-**The model.** For each searched action, the **residual** is
-`δ(a) = Q_raw(a) − v̂(a)`. It measures how far search moved the value from
-the prior, both as expectations over the same information set. Model it as
-`δ(a) = b(a) + wᵀφ(a) + ε`:
+**One regression, `w_B`, shared across all of B's racks and all candidates in
+the turn.** A's side has no decisions below the root in v1, so it has no
+regression. `w_A` arrives with A-side search in E2.
 
-- `b(a)` is an intercept per band of (side to move, depth, bag count), fitted
-  without shrinkage. It absorbs systematic gaps, such as the difference
-  between a one-ply lookahead and the network's own reading of the parent.
-  The transfer weights then carry only what varies between moves.
-- `w ~ N(0, λ⁻¹ I)` is shared by every node and candidate in the turn. `λ` is
-  set by marginal likelihood.
-- `ε ~ N(0, V_raw(a) + τ²(a))`.
+**The model.** For each evaluated row, the residual is
+`δ(b) = Q_B,raw(b) − v̂(b)`: how far evaluation moved B's value from the
+prior, both computed over B's beliefs. Model it as
+`δ(b) = c(b) + wᵀφ(b) + ε`:
 
-Refitting costs `O(N d²)` for `N` residuals and `d` features.
+- `c(b)` is an intercept per band of bag count, fitted without shrinkage, so
+  `w` carries only what varies between replies.
+- `w ~ N(0, λ⁻¹ I)`, with `λ` set by marginal likelihood.
+- `ε ~ N(0, V_raw(b) + τ²(b))`.
 
-**Raw and corrected tracks.** With transfer on, each node keeps two values:
+The regression refits after every batch of `R` new evaluations (`R` ≈ 64 to
+start).
 
-- **Raw:** unsearched actions sit at `v̂ + b`. The fit uses this track only.
-- **Corrected:** includes the transfer. `π′`, allocation and the pick use this
-  one.
+**The Richards case.**
 
-Fitting on corrected values would let the regression confirm its own output.
-With transfer off, the two tracks coincide.
+1. For one ETS rack under ALLEE, refining YEET finds it strong for Mike, a
+   large residual. `w_B` moves along `φ(YEET)`.
+2. For other racks, YETI and YEAN have nearby feature vectors. Their estimates
+   rise before anything is evaluated there, so `π′_B` already leans toward
+   the setup when A's value sums over those racks. YENS, the same footprint
+   without the S hook, lies elsewhere in feature space and barely moves.
+3. Under VELATE, which also plays five tiles, Mike's replies share those
+   directions and inherit the correction. Under the exchange the bag-count
+   feature differs, so they inherit less.
 
-**Why the features never see a hidden rack.** `v̂` and `φ` at Nigel's nodes
-cannot see Mike's rack, because the move set model's input lumps the bag and
-the opponent's rack into one unseen pool
-([game_state_encoder.h](../../engine/include/encoding/game_state_encoder.h)).
-Under information-set nodes that is correct, not a defect. Nigel's decision
-should not depend on Mike's rack, and his node's searched value is already an
-average over Mike's racks. Adding the hidden rack to `φ` would let the
-regression reintroduce clairvoyance.
+Discovery costs about one evaluation per reply *kind*, not one per rack.
 
-**The Richards case.** Under ALLEE, Mike's node for one ETS rack searches
-YEET and finds it a disaster for Nigel, a large residual. The posterior mean
-moves along `φ(YEET)`. Mike's nodes for other racks hold YETI or YEAN with
-nearby feature vectors, so their estimates rise, their variances fall, and
-`π′` shifts toward them. YENS has the same footprint but no S hook, lies
-elsewhere in feature space, and barely moves. Under VELATE, which also plays
-five tiles, Mike's replies share those directions and inherit the correction.
-Under the exchange, the bag-count feature differs, so they inherit less.
+**Transfer yields to evaluation.** Transfer only sets estimates for rows
+nothing has evaluated. A wrong transfer costs efficiency, not correctness.
 
-**Transfer yields to search.** Transfer only sets the estimates of actions
-nothing has reached. In the limit where everything is searched, the
-regression has no effect. A wrong transfer costs efficiency, not
-correctness.
+## Allocation
 
-## Search control
+- **Which candidate:** expected gain over the incumbent,
+  `E[max(0, q(a) − q(best))]`, with variances paired over the shared `r_B`.
+- **The candidate set:** the move proposal shortlist plus a **timing floor**,
+  the best candidate for each number of tiles played (0 through 7) and the
+  top few exchanges. Transfer is weakest along the bag-count axis, so recall
+  there cannot rely on it.
+- **Which rows, within a candidate:** the B rows whose refinement could most
+  change `q(a)`. A reply matters if it has `π′_B` mass now, or could gain mass
+  (a wide variance near the top). Also, the A-side evaluations of B's top `m`
+  replies.
+- **The pick:** the highest corrected `q(a)` among candidates that reached a
+  minimum share of the budget.
 
-A **probe** picks a root candidate, walks down choosing actions at decision
-nodes and seeded samples at chance nodes, expands one node, and backs up
-along its path. Refits and full recomputes run every `B` probes.
+## The prior in standard Scrabble
 
-- **Concurrency.** Workers descend with virtual loss: in-flight probes count
-  toward `N`. The recompute is double-buffered, so readers see a consistent
-  snapshot.
-- **At decision nodes below the root,** choose the action that maximizes
-  `π′(a) − N(a) / (1 + Σ_b N(b))`. This is Gumbel MuZero's interior rule,
-  which pulls visit shares toward `π′`. At the opponent's nodes, add a
-  per-node Gumbel perturbation of `π′`, so that different racks try different
-  low-prior replies and the regression spreads what one finds. The paper's
-  regret guarantee covers only the root, so the perturbation is an E2 arm, on
-  and off.
-- **At chance nodes,** take the next unsampled seed while the node has fewer
-  samples than its share of the budget. Otherwise revisit the child with the
-  largest weighted variance.
-- **At the root,** allocate by expected gain over the incumbent,
-  `E[max(0, q(m) − q(best))]`, using paired variances over the shared draws.
-- **The candidate set** is the move proposal shortlist plus a **timing
-  floor**: the best candidate for each number of tiles played, 0 through 7,
-  plus the top few exchanges. Transfer between candidates is weakest along
-  the bag-count axis, so recall along it cannot rely on transfer.
-- **The pick** is the highest corrected `q(m)` among candidates that have
-  reached a minimum share of the budget.
+Every move set and position checkpoint today is face-up: its input includes
+the opponent's leave. A standard-Scrabble prior is a roadmap track not yet
+started (new tags, not new code). Until it exists, DeepBot evaluates the
+face-up prior **in each sampled world, with that world's opponent leave**, and
+averages over the player's samples. Marginalizing over the belief is then just
+the evaluation's own averaging, with no separate passes. The prior `v̂` for an
+unevaluated row uses the posterior's modal leave: one pass, with the mismatch
+absorbed into `τ²`.
+
+This is a bridge. A face-up model was trained on games where both leaves were
+public, so it values positions as if the rest of the game were played that
+way. The intercepts and `τ²` absorb the average error. When the standard prior
+is trained, it replaces the bridge.
 
 ## Features and their training
 
-**The features.** `φ(a)` concatenates:
+**The features.** `φ(b)` concatenates:
 
-- `g(h(a))`, a projection of the move set model's per-move hidden state
-  `h(a)`: the post-ReLU activation inside its value head, width `C` (192 in
-  current models). No serving graph emits it today. Emitting it needs:
-  - an aux output on `MoveSetEvaluationSpec`
-    ([nn/model_specs.h](../../engine/include/nn/model_specs.h));
-  - a re-export;
-  - parity coverage.
-
-  The output is read back in BF16. E0 reads it from PyTorch directly.
+- `g(h(b))`, a projection of the move set model's per-move hidden state
+  `h(b)`: the post-ReLU activation inside its value head, width `C` (192 in
+  current models). No serving graph emits it today. Emitting it needs an aux
+  output on `MoveSetEvaluationSpec`
+  ([nn/model_specs.h](../../engine/include/nn/model_specs.h)), a re-export and
+  parity coverage. It is read back in BF16.
 - **Mechanical consequence features:**
   - the cross-check change summary: hooks created and destroyed, S hooks in
     particular;
-  - tiles played, the bag count after the move, the score;
-  - the side to move, and the depth.
+  - tiles played, the bag count after the move, the score.
 
-The mechanical features hedge against a blind spot in `h` itself. If `h`
-does not encode "S hook at O8, bag empty, mover holds an S", no `w` can
-express the correction.
+The mechanical features hedge against a blind spot in `h` itself.
 
-**Width.** With an identity `g`, `d ≈ 200`. E0 compares that against a fixed
-PCA to 64 dimensions, fitted on a corpus. The search uses whichever
-generalizes better at equal cost.
+**Width.** The search uses `d = 64`: a fixed PCA of `h`, fitted on a corpus,
+plus the mechanical features. E0 compares PCA-64 with identity (`d ≈ 200`).
 
 **Training `g`** is meta-learning with a closed-form base learner (R2D2,
 Bertinetto et al., 2019):
 
-1. **The corpus is the search log** ([below](#the-search-log)).
-2. **An episode is one logged turn.** Its residuals split into support and
-   query, stratified by root chance sample, so the query tests transfer
-   across racks.
-3. **The base learner** solves the ridge, with intercepts, on the support set
-   in closed form. It is differentiable in `g`.
+1. **The corpus** is logged evaluations ([below](#the-log)).
+2. **An episode is one logged turn.** Its rows split into support and query
+   by `r_B`, so the query tests transfer across racks.
+3. **The base learner** solves the ridge with intercepts on the support set
+   in closed form, differentiable in `g`.
 4. **The loss** is the Gaussian NLL of the query predictions, so `Σ` is
    calibrated as well as `μ`.
 5. **The backbone** stays frozen, so `v̂` cannot drift while `g` learns.
 
-**Selection bias.** What gets searched is chosen by `π′`, so a log holds the
-prior's favorites, while the regression's predictions matter most for the
-actions the prior ranks low. Logging therefore forces exploration: a fixed
-fraction of probes at the opponent's nodes take uniformly random or
-reverse-prior actions. The query error is reported stratified by prior rank.
-The headline is the error on the bottom ranks.
+**Selection bias.** Allocation picks rows the prior likes, while the
+regression matters most for rows it ranks low. Corpus-generation runs (not
+match play) therefore force exploration: a fixed fraction of evaluations go to
+uniformly random or reverse-prior replies. Query error is reported stratified
+by prior rank, with the bottom ranks as the headline.
 
 **Controls**, with M1a's discipline:
 
-- *shuffled:* residuals permuted among a turn's actions;
+- *shuffled:* residuals permuted among a turn's rows;
 - *mechanical only:* no `g`;
 - *frozen `h`:* identity `g`.
 
-Transfer is the query error with real residuals minus the error with
-shuffled ones.
+Transfer is the query error with real residuals minus the error with shuffled
+ones.
 
-### The search log
+### The log
 
-A new sidecar, specified in its own PR:
-
-- **Snapshot at the end of the turn.** `Q_raw` changes while the subtree
-  grows, so only end-of-turn values are logged, with each action's search
-  effort.
-- **Moves and seeds, not features.** Following the replay-reconstruction
-  invariant ([architecture.md](../architecture.md)), the trainer replays a
-  turn from its moves and seeds and recomputes `h` and the mechanical
-  features. A replay test checks the reproduction.
-- **A backbone fingerprint per file,** so training rejects logs whose `v̂`
-  came from a different model.
+Minimal in E1 (moves, seeds, end-of-turn row values and effort, a backbone
+fingerprint), and extended with forced exploration when E3 needs a corpus.
+Following the replay-reconstruction invariant
+([architecture.md](../architecture.md)), the trainer replays rows from moves
+and seeds and recomputes `h` and the mechanical features. A replay test checks
+the reproduction.
 
 ## Uncertainty
 
-Three error models set the variances. Before any search exists, their first
-fits come from existing data:
+Three error models set the variances.
 
-- **`τ²`, the prior's error.** A per-band constant (bag count, side to move).
-  The first fit uses the M1a near-endgame corpora, whose teacher priors sit
-  next to solved-endgame labels. Later fits use search logs. A head that
-  predicts `|δ|` may come later.
-- **The solver's error** on unproven verdicts, by unseen count at the
-  chosen budget, measured against high-budget solves.
-- **The leaf model's error,** if a depth cap evaluates nodes with the teacher.
+- **`τ²`, the prior's error,** per bag band. Its first fit comes from E0's own
+  residuals: the modal-leave prior against truth over B's beliefs. The M1a
+  near-endgame corpora (face-up, teacher at depth 0) serve only as a sanity
+  bound.
+- **`τ²_tail`** for A-side values approximated from B's, fitted from rows
+  where both sides were evaluated.
+- **The solver fallback,** which is the network's `τ²` for bag-empty
+  positions.
 
 These variances are the control surface. An overconfident `τ²` collapses `π′`
 onto the prior's favorite, which is the very blind spot this plan targets.
 Calibration (empirical coverage on held-out residuals) is checked at every
 milestone.
 
+## Residual space
+
+Values are win equity, `P(win) + ½ P(draw)`, the project's ranking metric.
+The move set model's WLD head collapses to it. Residuals and the Gaussian
+model live in equity space in v1. E0 runs a logit arm (equity clipped to
+[ε, 1 − ε]) as a pre-registered alternative. The search adopts logit only if
+that arm passes its gate and equity fails.
+
 ## Improving the priors
 
-Transfer corrects what is specific to a position. Patterns that recur belong
+Transfer corrects what is specific to a position; recurring patterns belong
 in the weights. The priors lack setup patterns because their training data is
 HastyBot-style play ([sim_labeled_candidates.md](sim_labeled_candidates.md)).
 
-- **Student values** distill from raw search values `Q_raw` of well-searched
-  actions, never from corrected ones, which would contain the transfer the
-  target is meant to replace.
-- **The teacher** retrains on DeepBot self-play outcomes once DeepBot plays
-  games, under the [generational lifecycle](../generational_training.md).
+- **Student values** distill from raw evaluated values, never corrected ones.
+- **The teacher** retrains on DeepBot self-play once DeepBot plays games,
+  under the [generational lifecycle](../generational_training.md).
 - **`g`** retrains on each generation's logs. As the priors improve,
   residuals shrink, and transfer covers a narrower remainder.
 
 ## Cost
 
-Expansion dominates. Each expansion runs the trunk once for its position,
-plus per-move encoding over hundreds to thousands of moves. The move set
-service caps a row group at 4,096 moves. Batching across nodes follows the
-`BatchingPositionEvalService` pattern. Solver leaves add one solve each, and
-near the endgame almost every expansion at ply two is a solve.
+Per turn, with `C` candidates, `K` sampled B racks, about `M` legal replies
+per rack, and `S` samples per evaluated row:
 
 | Item | Size |
 |---|---|
-| Ply-one expansions | `C·K` for `C` candidates and `K` root samples: 20 × 200 = 4,000 if every pair is expanded |
-| Recompute | about `E · actions · d` multiply-adds: 4,000 × 500 × 200 = 400M (130M at `d` = 64) |
-| `φ` storage | 4,000 × 500 × 200 × 2 bytes ≈ 0.8 GB in BF16; at `d` = 64, about 0.26 GB |
+| B-side move generation and prior | `C · K` positions: 20 × 200 = 4,000 trunk passes, `C·K·M` ≈ 2M reply rows |
+| Belief inference | `C` likelihood passes, plus `C · K` cheap reweightings |
+| Row evaluations | allocation-driven; each costs `S` network passes or solves |
+| Transfer mean | `C·K·M · d` ≈ 128M multiply-adds per refit at `d` = 64 |
+| Transfer variance | `C·K·M · d²` ≈ 8G multiply-adds per refit, a GPU batch |
+| `π′` | `C · K · M · grid` per refit (quadrature) |
+| `φ` storage | 2M × 64 × 2 bytes ≈ 0.26 GB in BF16 |
 
-Lazy expansion and allocation keep `E` far below the full layer. The
-numbers that decide whether the design is affordable are measured in E0.5:
-expansions per second (mid-game and near-endgame) and solves per second.
+The move set service caps a row group at 4,096 moves, and batching across
+positions follows the `BatchingPositionEvalService` pattern. E0.5 measures
+the numbers that decide affordability.
 
 ## Build order
 
-Each step names its PRs and its measurement. The shallow search (E1) comes
-before recursion, and transfer is measured on/off on the same substrate.
+Each step names its PRs and its measurement.
 
 **Prerequisite.** A named move set checkpoint that meets a maturity bar on
-`eval_win_mae`, from the revised model now training after #346. E0 records
-which checkpoint it used.
+`eval_win_mae`, from the revised model now training after #346.
 
-1. **E0, the offline transfer test.** Python, with no search code.
-   - *Positions:*
-     - Richards–Johnson after ALLEE and after VELATE;
-     - pos-09 and egotize;
-     - the ACETA setup;
-     - a sample of the [blind_spots](../blind_spots.md) tag.
-   - *Hidden information:* Mike's 7-tile rack is sampled from the unseen
-     pool, about 200 samples, uniform, with `RackInferrer` as a second arm.
-     This is not face-up for Mike. Under face-up, WOE would make six of his
-     tiles public and leave almost no rack variation to test. The
-     face-up-trained checkpoint evaluates Mike's nodes, with Nigel's leave as
-     the public opponent leave. That inconsistency is acceptable for a test
-     of the regression, not of a decision.
-   - *Truth:*
-     - For replies that empty the bag: endgame solves at a high budget,
-       using proven verdicts only. The fraction proven is reported.
-     - For one-tile replies: enumerate the last tile and solve each case.
-     - For mid-game positions: a fixed two-ply expansion with teacher
-       leaves, reported as a separate regime.
-   - *Fit:* the ridge with intercepts, `λ` by marginal likelihood, identity
-     `g` against PCA-64, with and without the mechanical features. It is fit
-     on half the root samples and predicts the other half, and also fit
-     after YE\_\_ replies appear in only one or two samples.
-   - *Pre-registered gates* (numbers to be confirmed, see [Open
-     questions](#open-questions)):
-     - *Pass, per regime:* held-out R² of the residual at least 0.15 above
-       the shuffled control.
-     - *Pass, Richards specifically:* after two samples, YE\_\_ S-hook
-       replies in held-out samples are predicted within half of their mean
-       absolute residual, and YENS-like replies stay within `2τ` of zero.
-     - *Kill:* R² within 0.05 of shuffled in every regime. Transfer of this
-       form is then dead. A pass in the near-endgame regime alone gates only
-       near-endgame work.
-2. **E0b, the residual bias table.** It reuses E0's expansion code. In random
-   mid-game positions, expand one and two plies over sampled hidden states,
-   and tabulate the mean `δ` by side, depth and bag. This sets the intercept
-   bands, and shows how large the systematic part is before any search
-   relies on it.
+1. **E0-tool, the engine entry points (one PR).** A C++ tool or FFI for
+   hypothetical states:
+   - move generation from a given rack on a given board;
+   - move set encoding with a given opponent leave;
+   - the factorized `RackInferrer` (likelihood per candidate, prior per pool);
+   - an endgame solve with explicit racks;
+   - the `DrawSequence` mapping.
+
+   These conventions carry into the search.
+2. **E0, the offline transfer test.** It tests exactly `w_B`'s job.
+   - *Positions:* Richards–Johnson after ALLEE and after VELATE. pos-09,
+     egotize, the ACETA setup and a blind_spots sample are reported as a
+     diagnostic regime.
+   - *B's racks:* about 200, uniform over A's unseen pool, with `RackInferrer`
+     on B's last move as a second arm.
+   - *Truth for B's rows:* at Richards after a five-tile play, nine tiles are
+     unseen to Mike. Their split into Nigel's rack and the bag (at most 36
+     splits) is weighted by B's factorized belief. A reply of two or more
+     tiles empties the bag, so each split is a solved endgame, proven
+     verdicts only, and truth is the weighted mean. One-tile replies and
+     passes are excluded and counted.
+   - *Rows:* the prior's top 20, every YE\_\_ reply, and a random 10 from the
+     rest, per rack. That is about 250k solves per position. A pilot (one
+     position, 10 racks) measures solve time first, and E0 runs as a tag.
+   - *Mid-game diagnostic regime:* truth from rollouts to the end with solved
+     endgames, as in M1a's corpora. It is reported, but not part of the
+     gates.
+   - *Arms:* identity `g` against PCA-64; with and without mechanical
+     features; equity against logit space; and a **noisy arm**, where truth
+     is replaced by means over 2 to 4 sampled splits, matching E1's
+     per-evaluation precision.
+   - *A side measurement, the clairvoyance gap:* for each rack, Mike's best
+     reply on expectation against his best reply per split. This prices the
+     leak a per-world design would have.
+   - *Pre-registered gates* (numbers are proposals; see [Open
+     questions](#open-questions)), for the near-endgame regime:
+     - *Pass:* held-out R² of the residual at least 0.15 above the shuffled
+       control, in the exact arm and the noisy arm.
+     - *Pass, Richards:* after two racks, YE\_\_ S-hook replies in held-out
+       racks are predicted within half of their mean absolute residual, and
+       YENS-like replies stay within `2τ` of zero.
+     - *Kill:* R² within 0.05 of shuffled in the exact arm.
 3. **E0.5, the error models and throughput.**
-   - Fit `τ²` from the M1a corpora.
-   - Fit the solver verdict mapping and its error at the chosen budget.
-   - Microbenchmark a full expansion (movegen, encoding, the move set pass,
-     reading back `h`) and solver calls per second.
-   - *Gate for E1:* calibration of both error models, and an expansion rate
-     that fits a match-time budget.
-4. **E1, the shallow search.** Separate PRs:
+   - Fit `τ²` and the intercept bands from E0's residuals; measure solver
+     fallback rates.
+   - Microbenchmark: B-side expansion (movegen, encoding, the move set pass,
+     reading back `h`), the likelihood pass, solves per second, and one
+     refit-plus-recompute at full table size.
+   - *Gate for E1:* calibration, and a turn that fits a match-time budget.
+4. **E1, the response table.** Separate PRs:
    1. Export `h` as an aux output (spec, re-export, parity test).
-   2. The seeded draw source, the pending-draw state with its guards, and
-      the paired-world test.
-   3. Information-set nodes, chance nodes, expansion and solver leaves,
-      tested on toy trees with known values.
-   4. The backup (`π′`, chance aggregation, recompute) and the search
-      control, depth-capped at the opponent's reply, with teacher or solver
-      values below. Includes the timing floor and the root allocation.
-   5. Transfer (the regression, intercepts, both tracks) and the search log
-      with forced exploration.
-
-   *Measure:* transfer on against off at equal time. That is discovery cost
-   (probes until YE\_\_ replies carry their solved share of `π′`), the
-   Richards pick, and the known positions. Matches against BestBot and
-   `mset-sim` come second; a weak substrate must not mask a useful transfer.
-5. **E2, depth.** Recursion below the opponent's reply. Taken only if E1's
-   failures trace to missing depth. Includes the perturbation arm and the
-   Gumbel-`σ` ablation.
-6. **E3, the learned projection.** Train `g` on E1/E2 logs with the controls
-   and the rank stratification. Repeat E1's measurements.
-7. **E4, the generational loop.** Student distillation from raw search
-   values, then DeepBot self-play for the teacher.
-8. **E5, standard Scrabble.** A standard-Scrabble prior, `RackInferrer`
-   extended to more than the last move, and match play.
+   2. The table, beliefs, evaluations, `π′`, allocation and the timing floor,
+      with **transfer off**. Includes a **paired-world test**: change B's
+      hidden split while holding B's observations fixed, and B's policy must
+      not change. *Measure:* the Richards pick, the known positions, and
+      matches against BestBot and `mset-sim` in standard Scrabble. This
+      proves the substrate on its own.
+   3. Transfer (the regression, intercepts, both tracks) and the minimal log.
+      *Measure:* transfer on against off at equal time. Discovery cost is the
+      number of evaluations until YE\_\_ replies carry their solved share of
+      `π′_B` across racks.
+5. **E2, trees.** General many-tree search: A-side decisions after B's reply,
+   merged information-set nodes with Bayes weights, beliefs at deeper nodes,
+   `w_A` (and with it the ALLEE-to-VELATE transfer on A's side), a second
+   level of spawning, the per-tree perturbation and the Gumbel-`σ` ablation.
+   Taken only if E1's failures trace to depth. E2 needs its own plan section;
+   the review record lists what it must settle.
+6. **E3, the learned projection.** Train `g` on logs with forced exploration,
+   the controls and the rank stratification. Repeat E1's measurements.
+7. **E4, the generational loop.** The standard-Scrabble prior replaces the
+   bridge, student distillation from raw values, then DeepBot self-play for
+   the teacher.
 
 ## Risks
 
-- **Linear transfer may be too weak.** Unrelated errors in one turn must lie
-  in separable feature directions. If they interfere, the fallback is a
-  Gaussian process with a learned kernel, at `O(N³)` per fit.
-- **The variances are the control surface.** This is covered under
-  [Uncertainty](#uncertainty), and calibration is gated at E0.5.
-- **Expansion throughput.** Full move generation plus a move set pass per
-  node costs far more than a hasty rollout ply. If E0.5's rate is too low,
-  the budget goes to ply one, where discovery matters most.
-- **Chance coverage.** A reply that appears in no sampled rack is never
-  searched. At best it is priced by transfer. `K` and posterior-weighted
-  sampling set that coverage.
-- **The modeled opponent.** `π′` models the opponent as choosing their
-  believed-best action. The posterior over hidden states at our later nodes
-  inherits that model.
+- **Linear transfer may be too weak.** The fallback is a Gaussian process
+  with a learned kernel, at `O(N³)` per fit.
+- **The variances are the control surface.** Covered under
+  [Uncertainty](#uncertainty), with calibration gated at E0.5.
+- **The bridge prior.** If E0's residuals are dominated by the face-up
+  mismatch, the standard prior moves onto the critical path.
+- **A one-decision-per-player table** cannot see A's next move. Lines where
+  A's reply after B's setup decides the game are valued by the network, not
+  searched. E2 exists for that.
+- **The table's breadth.** `C·K·M` rows is about 2M. If refits are too slow,
+  `K` shrinks first, then the reply set per rack is truncated by `π′_B` mass.
+- **Chance coverage.** A reply on no sampled rack is never evaluated, and at
+  best is priced by transfer.
 
 ## Open questions
 
-- **Relation to SupremeBot (human call).** DeepBot as a parallel track
-  against M1a's reader, a replacement, or the evaluation baseline for M1a's
-  "beats hand-built transfer" bar. The roadmap is unchanged until this is
-  decided.
+- **Relation to SupremeBot (human call).** A parallel track against M1a's
+  reader, a replacement, or the hand-built baseline for M1a's "beats
+  hand-built transfer" bar. The roadmap is unchanged until this is decided.
+  If DeepBot is only a baseline, it stops after E1.
 - **The E0 gate numbers (human call).** 0.15 R² over shuffled, half the mean
-  absolute residual, and 0.05 for the kill are proposals. They should be
-  settled before E0 runs.
-- **A policy prior inside `π′`,** to model a realistic rather than an optimal
-  opponent.
-- **Residual space.** Win equity or logit, where errors near certain wins and
-  losses are comparable.
-- **One `w` per turn or per candidate group.** Sharing across candidates is
-  what moves ALLEE's lesson to VELATE, but it may blur corrections that differ
-  between kinds of candidate.
+  absolute residual, and 0.05 for the kill are proposals, to be settled
+  before E0 runs.
+- **A better model of A's choice** inside B's belief than a HastyBot-equity
+  softmax.
+- **Rack inference over more than the last move,** for the two-move reads the
+  Richards analysis makes.
 
 ## Review record
 
-Plan review, 2026-10-12: four independent panelists. Hidden complexity, scope
-and integration were Claude subagents; the rival designer was Codex, with
-repository access. Every critique, with its resolution:
+### Round 2, 2026-10-13, on the many-tree rewrite
+
+Four panelists: hidden complexity, scope and integration as Claude
+subagents, and the rival designer on Codex with repository access.
 
 | Critique | Resolution |
 |---|---|
-| **Blocking.** E0 never fixes face-up or hidden. Under face-up, WOE makes six of Mike's tiles public, so "200 worlds" collapse to a few racks. | Revised. E0 samples Mike's whole rack (uniform, plus a `RackInferrer` arm), states the checkpoint's input arm, and says why the inconsistency is acceptable for E0. |
-| "The bag is empty after any reply" is false: one-tile replies leave a tile. E0's truth depends on solver settings. | Revised. One-tile replies enumerate the last tile. Truth uses proven verdicts at a high budget, with the fraction proven reported. |
-| Separate trees per world are clairvoyant: a player optimizes against draws they cannot see (Codex's two-draw counterexample). Residuals would learn and transfer that bias. Raised by two panelists. | Revised: decision nodes are information sets, hidden tiles resolve at chance nodes below the decisions that must not see them (deferred draws), and seeded samples keep CRN pairing. The design changed most here. |
-| Test a shallow reply table before building a recursive tree; transfer may be rejected because a new substrate is weak. | Revised. E1 is depth-capped at the opponent's reply, recursion (E2) is conditional, and E1's headline is transfer on against off on the same substrate. |
-| The move set model cannot see the world's opponent rack, so world-specific effects all land in `δ`. | Rejected as a defect, with reasoning: under information-set nodes the prior *should* not see it. A hidden rack in `φ` would reintroduce clairvoyance. Documented under [Transfer](#transfer). |
-| `h(a)` is not exported by any serving graph, and identity `g` makes `d ≈ 200`, not 64. Raised by two panelists. | Revised. An export PR in E1, BF16 readback, PCA-64 as an E0 arm, cost redone at `d` = 200. |
-| `EndgameVerdict` has no equity or variance; `PreEndgameSolver` aggregates over draws, so it is not a per-world leaf. Its cost is missing. Raised by two panelists. | Revised. Verdict-to-`(Q, V)` mapping fitted in E0.5; `PreEndgameSolver` dropped (chance nodes do its job); solver cost in Cost and E0.5. |
-| Shallow residuals carry systematic bias (soft-max lookahead against the network's own reading); E0 cannot see it. | Revised. Unshrunk per-band intercepts in the regression; E0b tabulates the bias first. |
-| E1 needs `τ²` and the solver error model, which only E1's corpus would fit. | Revised. E0.5 fits both from existing data (M1a corpora, high-budget solves), with a calibration gate. |
-| Face-up deferred draws have no engine support and change the core data structure. | Revised. A pending-draw state with its guards and the paired-world test is its own E1 PR. Under the information-set design, deferral is needed in standard Scrabble too. |
-| The meta-learning corpus covers only searched actions; deployment predicts unsearched, low-prior ones. | Revised. Forced exploration in logging, and query error stratified by prior rank, with the bottom ranks as the headline. |
-| E0's pass and kill criteria are qualitative, and the hyperparameters are unset. | Revised. Pre-registered metrics and `λ` by marginal likelihood. The numbers are an **open human call**. |
-| E0 depends on an mset checkpoint that is still training. | Revised. Named prerequisite with a maturity bar. |
-| Expansion cost omits per-move encoding; trunk cost per position dominates; the 4,096-row cap. Raised by two panelists. | Revised. Cost rewritten; E0.5 microbenchmarks a full expansion. |
-| Parallel probes and the global recompute have no concurrency rule; `π′` sampling noise flips argmaxes. | Revised. Virtual loss, a double-buffered recompute, `π′` draws with a fixed per-node seed. |
-| The search log is a new sidecar, not one line. | Revised. Its own section and PR: end-of-turn snapshot, seed replay test, backbone fingerprint. |
-| Worlds need an ordered bag; `Bag` is an RNG container. | Revised. A seeded draw source keyed by (sample, draw ordinal), after SimRunner. |
-| Overlap with existing agents and plans is acknowledged only at the level of documents. | Revised: a [reuse](#reuse) table. Placement against SupremeBot is an **open human call**. |
-| E1 is too large for one PR. | Revised. E1 is five PRs, each with its own test. |
-| Defer the meta-learning spec and the generational loop until E2 shows transfer. | Rejected. The request was a plan covering training as well as decisions. Both stay, gated in the build order (E3 and E4 follow measured transfer). |
-| Drop the information-set machinery and importance weights from v1. | Rejected. The information-set revision makes them core: `ω` carries the opponent-policy weighting at our later nodes. |
-| The perturbation, the Gumbel-`σ` ablation and the GP fallback are speculative extras. | Partly revised. The perturbation and the ablation move to E2 as arms; the GP stays only as a risk line. |
-| The dual tracks and the global recompute are heavier than transfer-off E1 needs. | Revised. The tracks coincide with transfer off; the second track arrives with the transfer PR. |
-| E0 tests mostly the bag-empty regime. | Revised. A mid-game regime with its own gate, and the kill criterion scoped by regime. |
-| Land the timing floor alone in the existing pipeline first. | Rejected. BestBot already sims the top 80, which includes EELLT, and still ranks it 12th to 40th, so recall alone does not fix Richards. The floor matters only with better valuation. |
+| **Blocking.** B's belief about A's leave is one `RackInferrer::infer` per (candidate, `r_B`), because B's pool differs per rack: about 4,000 inferences at up to a few hundred milliseconds each, uncosted. | Revised. Factorized: the likelihood is scored once per candidate, the hypergeometric prior once per rack. Costed, and benchmarked in E0.5. |
+| **Blocking.** No belief source below the two roots, with two incompatible answers for A's later nodes; in-tree weights would make `v̂` drift, break replay and need importance reweighting. | Revised by moving v1 to the response table: the only beliefs are A's about B's rack and B's about A's leave, both specified. Deeper beliefs are listed as something E2 must settle. |
+| Gate the tree machinery against a flat response table (Codex). | Revised: v1 *is* the response table, the one-decision-per-player form of the same framework. Trees are E2, conditional on measured failures. |
+| Junctions put B's values into A's search, against "a move, never a value"; most of the junction's mass rests on them. | Revised. A-side values for B's top `m` replies, the tail approximated by B's flipped value with its own `τ²` band, flagged and never fitted. |
+| The raw track is contaminated through a corrected `π′_B`. | Revised. Raw `π′_B` alongside corrected; the raw track and distillation use it. |
+| The variance term costs `d²` per action, `π′` is uncosted Monte Carlo, and the refit cadence is unspecified. | Revised. `d` = 64 in the search, costs recounted with `d²`, `π′` by deterministic quadrature, refit every `R` evaluations, and a full refit benchmarked in E0.5. |
+| E0 is not "Python only": it needs C++ entry points for hypothetical states. | Revised. E0-tool is its own PR, and its conventions carry into the search. |
+| E0's truth is millions of solves per position, and its mid-game truth is the network's own inconsistency. | Revised. Rows subsampled (about 250k solves per position), a pilot first, E0 runs as a tag. Passes are excluded too. The mid-game regime is diagnostic only, with rollout truth. |
+| The first `τ²` fit (M1a corpora) measures a different model, variant and depth. | Revised. `τ²` comes from E0's residuals; M1a serves only as a sanity bound. |
+| E0 tests exact residuals for B only, while E1 uses noisy ones and `w_A`. | Revised. A noisy arm in E0 with a gate. `w_A` moves to E2, because v1 has no A-side decisions. |
+| The residual space must be fixed before E0. | Revised. Equity in v1; logit as a pre-registered E0 arm with a stated adoption rule. |
+| Start with `w_B` only. | Revised, for the same reason as above. |
+| E1 has no intermediate deliverable. | Revised. E1's second PR measures the substrate with transfer off, before transfer lands. |
+| The marginalized prior's `L` passes multiply the trunk cost and confound E0. | Revised. Evaluations average over the sampled worlds (one pass per sample); the unevaluated prior uses the modal leave (one pass). |
+| `SimRunner`'s CRN does not transfer as written; `Bag` has no seedable draw interface. | Revised. B's racks pair exactly; refills map variates into a canonical sorted pool and pair where pools coincide. A `DrawSequence` interface. |
+| The solver's interface and ownership are unspecified. | Revised. Class mode, the unproven fallback to the network, per-thread instances with a fresh table per solve. |
+| No tree layer exists; node keys and state copies are unspecified. | Moved to E2 with the trees. The overlap with the pending shared turn-sim core is noted. |
+| Conflicts with the roadmap's track order; E0's compute must be schedulable. | Revised. The track order is stated under Where this sits; E0 runs as a tag after a pilot. |
+| Fold E0b into E0.5. | Revised. |
+| The perturbation, the `σ` ablation and the variance floor are speculative. | Revised. The perturbation and the ablation move to E2; the floor is a stated hook only. |
+| The log with forced exploration serves only E3. | Revised. A minimal log in E1, exploration added for E3 corpus runs, never in match play. |
+| Scope depends on whether DeepBot is a baseline or an agent. | Recorded in the open human call: as a baseline, it stops after E1. |
+
+### Round 1, 2026-10-12, on the per-world draft
+
+The main findings, and where they stand after the rewrite:
+
+| Critique | Resolution |
+|---|---|
+| **Blocking.** E0 never fixed face-up or hidden; under face-up, WOE makes six of Mike's tiles public. | Superseded: DeepBot is standard Scrabble throughout, and E0 samples Mike's whole rack. |
+| Separate trees per world are clairvoyant (Codex's two-draw counterexample). Round 1's answer, information-set nodes with deferred draws, still evaluated Mike's nodes with our real leave and about one sample per node. | Superseded by the many-tree framework, in which each player decides over their own beliefs. |
+| "The bag is empty after any reply" is false. | Revised: one-tile replies and passes are excluded from E0's truth and counted. |
+| Test a shallow search before a recursive tree. | Kept, and taken further in round 2: v1 is a table. |
+| The move set model cannot see the opponent's rack. | Rejected as a defect: an information-set prior should not see it. |
+| `h(a)` is not exported, and `d ≈ 200`. | Kept: an export PR in E1, `d` = 64 in the search. |
+| `EndgameVerdict` has no equity or variance; `PreEndgameSolver` is not a per-world leaf. | Kept: class mode with a network fallback; `PreEndgameSolver` not used. |
+| Shallow residuals carry systematic bias; E1 needs `τ²` before its own corpus exists; selection bias; qualitative gates. | Kept: intercepts, `τ²` from E0, forced exploration, pre-registered gates. |
+| Defer the training spec; drop the information-set machinery; land the timing floor alone. | Rejected: the request covers training; the many-tree framework is the design; BestBot already simulates EELLT and ranks it 12th to 40th. |
