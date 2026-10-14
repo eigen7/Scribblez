@@ -145,6 +145,32 @@ set of move tokens. There the tokens carried sim results; here they are
 chosen moves alone. Its proves-best head is the same quantity with "simmed"
 in place of "chosen".
 
+**Selection cost.** Done naively, building `S` takes `N` sequential network
+calls. Two measures bring that down, and they combine:
+
+1. **Cache everything that does not depend on `S`.** The board trunk, the
+   move encodings and the cross-check encodings are computed once per
+   position. Each step reruns only the set-conditioning stage and the gain
+   head, a small fraction of a full pass. This is the cache-graph and
+   step-graph split already used by the evidence path
+   ([evidence_staging.h](../../engine/include/agent/evidence_staging.h)).
+   Total compute is then about one full pass plus `N` light ones, but the
+   steps remain serial.
+2. **Select `k` moves per step.** Each step adds the `k` moves with the
+   highest gain over the current set, so building `S` takes `⌈N / k⌉` steps.
+   The cost is diversity *within* a step: the `k` moves are scored against
+   the same set, not against each other, so two near-copies can enter
+   together. A novelty penalty between the moves of one step limits this,
+   for example discounting a move's gain by its overlap with moves already
+   taken in the step (shared footprint, or the same tiles played). `k = 1`
+   is exact greedy; larger `k` trades set quality for fewer steps, and the
+   right `k` is measured against recall.
+
+Many sets are built at once in practice. Bob's subtrees alone need one set
+per `(a, r)`, about 100 per candidate. Each step is therefore one batched call
+over all the sets in progress, and the number of steps, not the number of
+sets, sets the latency.
+
 **Labels.** A labeled position is a pool of its legal moves with values from
 sims, run from the chooser's information set: the opponent's rack is drawn
 from the chooser's belief, and the sims are paired across moves.
@@ -247,7 +273,8 @@ Each step names what it measures. The measurements guide the next step.
    outside the top 10 matter most.
 2. **PSM v0.** The greedy gain head on the move set architecture, trained by
    subset assembly. *Measure:* recall, meaning how often the pool's sim-best
-   move is in `S`, against the top `N` by value, by bag size and `N`. Recall
+   move is in `S`, against the top `N` by value, by bag size, `N` and the
+   per-step `k`. Recall
    of setups and exchanges, the moves static equity ranks low, is reported
    separately.
 3. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
