@@ -160,7 +160,7 @@ unseen pool. A new flag, `--opp-racks`, sets the belief:
 - `uniform`: today's behavior;
 - `inferrer`: `RackInferrer` on the opponent's last move, plus a uniform
   refill, through the same `OppLeaveSampler` the Monte Carlo ground-truth
-  path uses ([sim/monte_carlo_sim.h](../../engine/include/sim/monte_carlo_sim.h));
+  path uses ([sim/monte_carlo_sim.cpp](../../engine/src/sim/monte_carlo_sim.cpp));
 - `file`: racks supplied per rollout from a file, which is how `belief=lim`
   will feed LIM samples drawn in Python.
 
