@@ -129,66 +129,104 @@ best member, so the objective rewards diversity. Of a strong play and four
 near-copies of it, the set is better with one copy replaced by a different
 kind of move, such as a setup that wins in other worlds.
 
-**Form: greedy selection with a set-conditioned gain head.** The expected max
-of a set of win probabilities is monotone and submodular, so greedy
-construction comes within a factor of `1 − 1/e` of the best set. The PSM picks one move at a
-time, each maximizing its predicted gain over the moves already chosen:
+Two forms of the model meet this objective. Both build on the move set
+model's architecture (the board trunk, the move encoder and the cross-check
+encoder), and both train on the same labeled pools ([Labels](#labels)).
+Which works better is measured.
+
+### Form 1: greedy selection, with cached steps
+
+The expected max of a set of win probabilities is monotone and submodular, so
+greedy construction comes within a factor of `1 − 1/e` of the best set. The
+PSM picks one move at a time, each maximizing its predicted gain over the
+moves already chosen:
 
 `gain(a | S) = E[max(0, v(a) − max_{s∈S} v(s))]`
 
-At `S = ∅` this reduces to ranking by value. The architecture is the move set
-model's: the board trunk, the move encoder and the cross-check encoder, plus
-a stage that conditions each move's query on the tokens of the moves already
-chosen. The evidence-fusion stage built for
-[sim_residual_feedback.md](sim_residual_feedback.md) already conditions on a
-set of move tokens. There the tokens carried sim results; here they are
-chosen moves alone. Its proves-best head is the same quantity with "simmed"
-in place of "chosen".
+At `S = ∅` this reduces to ranking by value. A stage conditions each move's
+query on the tokens of the moves already chosen. The evidence-fusion stage
+built for [sim_residual_feedback.md](sim_residual_feedback.md) already
+conditions on a set of move tokens. There the tokens carried sim results;
+here they are chosen moves alone. Its proves-best head is the same quantity
+with "simmed" in place of "chosen".
 
-**Selection cost.** Done naively, building `S` takes `N` sequential network
-calls. Two measures bring that down, and they combine:
+Built naively, `S` takes `N` sequential network calls. Most of each call does
+not depend on `S`: the board trunk, the move encodings and the cross-check
+encodings are computed once per position and cached. Each step reruns only
+the set-conditioning stage and the gain head, a small fraction of a full
+pass. This is the cache-graph and step-graph split the evidence path already
+uses ([evidence_staging.h](../../engine/include/agent/evidence_staging.h)).
+Total compute is about one full pass plus `N` light ones, but the steps
+remain serial.
 
-1. **Cache everything that does not depend on `S`.** The board trunk, the
-   move encodings and the cross-check encodings are computed once per
-   position. Each step reruns only the set-conditioning stage and the gain
-   head, a small fraction of a full pass. This is the cache-graph and
-   step-graph split already used by the evidence path
-   ([evidence_staging.h](../../engine/include/agent/evidence_staging.h)).
-   Total compute is then about one full pass plus `N` light ones, but the
-   steps remain serial.
-2. **Select `k` moves per step.** Each step adds the `k` moves with the
-   highest gain over the current set, so building `S` takes `⌈N / k⌉` steps.
-   The cost is diversity *within* a step: the `k` moves are scored against
-   the same set, not against each other, so two near-copies can enter
-   together. A novelty penalty between the moves of one step limits this,
-   for example discounting a move's gain by its overlap with moves already
-   taken in the step (shared footprint, or the same tiles played). `k = 1`
-   is exact greedy; larger `k` trades set quality for fewer steps, and the
-   right `k` is measured against recall.
+### Form 2: a one-shot slot decoder
 
-Many sets are built at once in practice. Bob's subtrees alone need one set
-per `(a, r)`, about 100 per candidate. Each step is therefore one batched call
-over all the sets in progress, and the number of steps, not the number of
-sets, sets the latency.
+The network outputs the whole set in one pass, in the manner of set
+prediction (DETR; Carion et al., 2020):
 
-**Labels.** A labeled position is a pool of its legal moves with values from
-sims, run from the chooser's information set: the opponent's rack is drawn
-from the chooser's belief, and the sims are paired across moves.
+- `N_max` learned query slots cross-attend to the encoded moves and
+  self-attend to each other.
+- Each slot points to one move, through a softmax over the legal moves of the
+  dot product between the slot's query and each move's embedding.
+- Because the slots attend to each other within the pass, training teaches
+  them to divide the moves among themselves. Diversity comes from joint
+  training, not from sequential conditioning.
 
-- **Rows by subset assembly.** Any subset `S` of the pool, plus a held-out
-  move `a`, gives a row with target `max(0, v(a) − max_S v)`, computed from
-  the paired values. One pool yields many rows.
+**The loss is coverage of the best move.** Let `q(a)` be the label
+distribution over which move is best, and `p_k(a)` the probability that slot
+`k` points to `a`. With the first `N` slots,
+
+`L_N = −Σ_a q(a) · log(1 − Π_{k ≤ N} (1 − p_k(a)))`
+
+which is the negative log-probability that the set contains the best move.
+Once one slot covers a move, another slot pointing there adds almost nothing,
+so across positions that look alike but have different best moves, the slots
+spread over the plausible winners. This is the mechanism of multiple-choice
+learning: several outputs trained so that at least one is right. The loss
+counts a set whose best move falls just short of the true best as a miss;
+soft labels soften that ([Labels](#labels)), and expected regret,
+`v(a*) − max_{a∈S} v(a)` with softmax pointers, is the alternative if margins
+need more weight.
+
+**Any `N` from one pass.** Training sums the loss over prefixes,
+`Σ_N w_N · L_N`. Slot 1 then learns the best single move, slots 1 and 2 the
+best pair, and so on, so the first `N` slots serve any `N ≤ N_max`: Alice's
+`N_A` and Bob's `N_B` come from the same pass. At inference, a slot whose
+move an earlier slot already took falls back to its next choice.
+
+### Many sets at once
+
+DeepBot builds many sets per turn. Bob's subtrees alone need one per
+`(a, r)`, about 100 per candidate. With either form, each network call is one
+batched call over all the sets in progress. Form 1 makes `N` such calls, all
+but the first of them light; form 2 makes one.
+
+### Labels
+
+A labeled position is a pool of its legal moves with values from sims, run
+from the chooser's information set: the opponent's rack is drawn from the
+chooser's belief, and the sims are paired across moves.
+
 - **Pools need the tail.** A pool must include moves the prior ranks low
   (exchanges, short plays, setups), or the PSM never learns that they can
   win. The exhaustive survey recipe of
   [sim_labeled_candidates.md](sim_labeled_candidates.md) (every legal play,
-  screened at 1,000 rollouts, racing) produces this shape of data. Its
-  existing outputs were run face-up and its rollouts are hasty throughout, so
-  PSM labels need a standard-Scrabble mode.
+  screened at 1,000 rollouts, racing) produces this shape of data, with a
+  value for every legal play. Its existing outputs were run face-up and its
+  rollouts are hasty throughout, so PSM labels need a standard-Scrabble mode.
 - **The labels can see moves the rollout policy never plays.** Every
   candidate is simmed directly, rather than reached by a rollout policy that
   would have to choose it. A setup that static equity ranks low is labeled by
   its own outcome, provided its payoff arrives within the sim's horizon.
+- **Form 1's targets: subset assembly.** Any subset `S` of the pool, plus a
+  held-out move `a`, gives a row with target `max(0, v(a) − max_S v)`,
+  computed from the paired values. One pool yields many rows.
+- **Form 2's targets: a soft best move.** `q(a)` is the probability that `a`
+  is best under the paired sim statistics, estimated by bootstrapping over
+  the paired samples and counting how often each move comes out on top.
+  Near-equal moves share the mass, so the slots learn that either will do.
+  Racing stops weak moves early, on fewer rollouts; the bootstrap accounts
+  for that, since a move far below the leader rarely wins a draw.
 
 **Generations.** Once DeepBot runs, its own evaluations label positions, and
 each PSM generation trains on the previous agent's labels, as the move
@@ -271,10 +309,10 @@ Each step names what it measures. The measurements guide the next step.
    legal play, with solved endgames. Run it as a tag over self-play
    positions, weighted toward small bags, where the survey found plays
    outside the top 10 matter most.
-2. **PSM v0.** The greedy gain head on the move set architecture, trained by
-   subset assembly. *Measure:* recall, meaning how often the pool's sim-best
-   move is in `S`, against the top `N` by value, by bag size, `N` and the
-   per-step `k`. Recall
+2. **PSM v0, both forms.** The greedy gain head and the slot decoder on the
+   move set architecture. *Measure:* recall, meaning how often the pool's
+   sim-best move is in `S`, against the top `N` by value, by form, bag size
+   and `N`; and each form's time per batch of sets. Recall
    of setups and exchanges, the moves static equity ranks low, is reported
    separately.
 3. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
