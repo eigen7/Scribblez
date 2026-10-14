@@ -5,17 +5,17 @@ first two models of [deep_bot.md](deep_bot.md), each trained from
 HastyBot-vs-HastyBot games in standard Scrabble (hidden leaves):
 
 1. **The leave inference model (LIM),** the network form of DeepBot's
-   [beliefs](deep_bot.md#beliefs). It predicts the opponent's rack from the
-   observer's view of the game.
+   [beliefs](deep_bot.md#beliefs). It predicts the opponent's leave (the
+   tiles they kept from their last move) from the observer's view of the
+   game. The opponent's rack is that leave plus a refill drawn uniformly from
+   the rest of the observer's unseen pool.
 2. **The policy-set model (PSM),** in both of the
    [forms](deep_bot.md#the-policy-set-model) the design presents. Training
    both on the same data lets the measurements choose between them.
 
-The LIM comes first. Its labels are free (true racks from replay, no sims),
-so it is the quick way to prove the workload machinery. Its comparison with
-`RackInferrer` also says whether the belief source matters for the PSM's
-labels. The PSM workload takes its belief source as a parameter, so it does
-not wait on a trained LIM.
+The LIM comes first. Its labels are free (true leaves from replay, no sims),
+so it is the quick way to prove the workload machinery, and the PSM's label
+generation then draws opponent leaves from it.
 
 Both models train on positions from the whole game except the endgame, with
 no weighting by bag size.
@@ -38,7 +38,7 @@ metrics after every generation. Both follow the generational shape of
 
 **Roles.**
 
-- **`generate`:** parallel, CPU, local or ssh. Any number of workers.
+- **`generate`:** parallel, local or ssh. Any number of workers.
 - **`train`:** singleton, GPU. It hosts the data home, so the scheduler runs on
   its machine.
 
@@ -60,58 +60,68 @@ positions from it, so the eval set never overlaps training data.
 
 The generator is unchanged self-play: HastyBot against HastyBot, with
 `face_up_leaves=False`. A `.slog` stores the initial racks and every move with
-the tiles drawn after it, so replay reconstructs every player's true rack at
-every turn.
+the tiles drawn after it, so replay reconstructs every player's true rack, and
+so every leave, at every turn.
 
 A row is one turn, before the endgame (the `.slog`'s eligible region, which
 ends where the bag empties):
 
 - **The observer** is the player to move.
-- **The target** is the opponent's rack at that moment, as a sorted sequence
-  of tiles. Its length is public: 7, or fewer near the end.
+- **The target** is the opponent's leave from their last move, as a sorted
+  sequence of tiles. Its length is public: the opponent's rack size minus the
+  tiles that move played or exchanged (a pass keeps the whole rack).
 
 `turns_per_game` sets how many turns of each game a pass draws, as in
 position_eval.
 
 ### Engine work
 
-**A target.** `OppRack` in the `AllTargets` registry
-([training/training_targets.h](../../engine/include/training/training_targets.h)):
-the opponent's rack from replay, as up to 7 sorted tile indices (27 letters
-including the blank) plus a length. It is a label only; nothing feeds it to
-an input.
+The LIM is a standalone model, so its inputs come from their own encoder, not
+from blocks added to the position encoder's `InputEncodingSpec` (which would
+change every position model's inputs).
 
-**An input block for history.** The position encoder's hidden-leaves arm
-already encodes the board, the observer's rack and the unseen pool. The reads
-the LIM exists for span several moves: a short play after a scoring play, or
-a play the opponent passed up. A new block, `OppHistory`, encodes the
-opponent's last `k` moves (`history_moves`, default 3):
+**The input encoder** (`LimInputEncoder`), from the observer's view:
 
-- one plane per move, marking the squares that move placed tiles on;
-- scalars per move: tiles played, whether it was an exchange (and how many
-  tiles) or a pass, its score, and the bag count when it was made.
+- **The current position:** the board, the current cross-checks, the
+  observer's rack, the unseen pool, scores and the bag count. These come from
+  the same helpers the position encoder uses, so conventions match.
+- **The last 5 moves:** the opponent's last 3 and the observer's last 2,
+  interleaved in game order. For each move:
+  - a plane marking the squares it placed tiles on;
+  - the cross-checks as they stood *before* the move was played, so the
+    model sees which hooks and lanes the player had and passed up;
+  - scalars: tiles played, whether it was an exchange (and how many tiles) or
+    a pass, its score, and the bag count when it was made.
 
-The block is registered in `InputEncodingSpec`
-([encoding/input_encoder.h](../../engine/include/encoding/input_encoder.h)),
-so the DataLoader and FFI carry it without new plumbing.
+  Missing moves early in the game are zero, with a presence flag.
+
+**The target.** `OppLeave`: the opponent's leave from replay, as up to 7
+sorted tile indices (27 letters including the blank) plus its length. It is a
+label only.
+
+**FFI.** A DataLoader mode that emits LIM input rows and `OppLeave` targets
+from `.slog` windows, beside position_eval's mode.
 
 ### Model
 
-- **The trunk:** the position evaluation trunk, conv or transformer (a
-  `profile`), on the hidden-leaves input plus `OppHistory`.
-- **The rack head:** autoregressive over the sorted rack. At step `t` it
-  emits a 27-way softmax given the trunk's pooled vector and the letters
-  already emitted. Two masks keep it legal:
+A standalone network in `py/scribblez/lim/`. It has its own architecture and
+does not share another model's trunk or weights.
+
+- **The encoder:** a small spatial tower over the board planes (the current
+  ones and each history move's planes, stacked as channels), plus an MLP over
+  the scalars, fused into a context vector and a set of board tokens.
+- **The leave head:** autoregressive over the sorted leave. At step `t` it
+  emits a 27-way softmax, attending to the board tokens and conditioned on the
+  letters already emitted. A small transformer decoder is the default. Two
+  masks keep it legal:
   - letters the observer's unseen pool has run out of, net of letters already
     emitted;
   - letters that sort before the previous one.
+- **The loss:** the negative log-likelihood of the true sorted leave.
 
-  A small transformer decoder over the steps is the default.
-- **The loss:** the negative log-likelihood of the true sorted rack.
-
-Sampling for DeepBot (inverse CDF from supplied variates, so racks pair
-across candidates) and the ONNX export come with the PSM's `belief=lim` mode,
-not in this workload.
+**Export.** The workload exports each checkpoint to ONNX. The engine serves
+it through its TensorRT runtime as a new `NeuralNet` spec, which is what the
+PSM's label generation loads.
 
 ### Eval metrics
 
@@ -119,21 +129,56 @@ Per generation, on the held-out positions:
 
 | Metric | Meaning |
 |---|---|
-| `eval_nll` | mean NLL of the true rack, nats per rack |
-| `eval_nll_vs_uniform` | `eval_nll` minus the NLL of a uniform draw from the unseen pool (exact, hypergeometric) |
-| `eval_nll_vs_inferrer` | `eval_nll` minus `RackInferrer`'s NLL (its leave posterior from the last move, plus a uniform refill) |
+| `eval_nll` | mean NLL of the true leave, nats per leave |
+| `eval_nll_vs_uniform` | `eval_nll` minus the NLL under the hypergeometric prior over leaves from the unseen pool ([belief/leave_prior.h](../../engine/include/belief/leave_prior.h)) |
+| `eval_nll_vs_inferrer` | `eval_nll` minus `RackInferrer`'s NLL, its leave posterior from the last move |
 | `eval_nll_bag_*` | `eval_nll` by bag band |
 | `eval_letter_calibration` | mean absolute gap between predicted and actual expected count, per letter |
 
-The `RackInferrer` baseline is computed once per held-out set by an engine
-entry point (FFI or tool) and cached, since it does not change with the
-model. Its comparison is what decides the PSM's default belief source.
+The two baselines are computed once per held-out set by an engine entry point
+and cached, since they do not change with the model. `RackInferrer` is the
+reference the LIM should beat: it reads one move under a HastyBot-equity
+model, and in these games the opponent *is* HastyBot.
 
 ### Parameters
 
-`history_moves`, `turns_per_game`, `games_per_generation`, `window`,
-`holdout_every`, `holdout_size`, `max_rows`, plus the trunk's and the
-optimizer's usual parameters through profiles.
+`turns_per_game`, `games_per_generation`, `window`, `holdout_every`,
+`holdout_size`, `max_rows`, plus the network's and the optimizer's usual
+parameters through profiles.
+
+## The rollout leaf: a versioned win table
+
+PSM labels come from many rollouts per candidate. Played to the end of the
+game, each rollout is slow and its outcome is noisy. Instead, following
+Macondo's simmer, a rollout stops after `K` plies (`horizon_plies`), and a
+fast function turns the position there into a win probability:
+
+`P(win) = table(spread + leave value, tiles unseen)`
+
+- **The spread** is from the side to move, plus the leave value of that
+  side's remaining rack, as Macondo adds its "leftover".
+- **Tiles unseen** are the bag plus the opponent's rack, from the side to
+  move.
+- **If the game ends** inside the horizon, the outcome is exact. If the bag
+  empties with few enough tiles unseen (`solve_max_unseen`), the endgame
+  solver values the position.
+
+The engine already reads Macondo's table format
+([sim/win_pct_table.h](../../engine/include/sim/win_pct_table.h)). What is new
+is that the table becomes a **versioned artifact** of our own:
+
+- **Fitting.** `fit_win_table.py` estimates `P(win | spread + leave value,
+  unseen)` from `.slog` outcomes: bucketed, smoothed, and made monotone in
+  spread. It writes the same CSV format.
+- **Versions.** Each version is a file under the mount (`win_tables/v0.csv`,
+  `v1.csv`, ...), with the corpus and policy it was fitted from. v0 is fitted
+  on HastyBot-vs-HastyBot games, which the `lim` workload produces anyway.
+  Later versions are fitted on games of the improved agent, since the win
+  probability at a given spread shifts as play gets stronger. Macondo's
+  bundled table is the sanity check for v0.
+- **Selection.** The survey tool takes the table's path (`--win-table`) and
+  the horizon (`--horizon-plies`), and the pool sidecar records which version
+  labeled it.
 
 ## Workload 2: `psm`
 
@@ -143,35 +188,39 @@ A generator worker's cycle:
 
 1. **Play** one HastyBot-vs-HastyBot game, `face_up_leaves=False`.
 2. **Pick positions.** `positions_per_game` turns (default 2), uniform over
-   the eligible region. Surveying every turn is what makes blind_spots cost
-   about ten minutes per game on 28 threads; two turns spread the same
-   compute over more games.
+   the eligible region.
 3. **Survey each position** with `sim_candidate_survey_tool` in its
-   exhaustive recipe, screen stage only (no confirm stage). The candidates
-   are every legal play without a blank, the equity top cut (which may
-   include blank plays), every distinct exchange, and the pass. Racing stays
-   on.
+   exhaustive recipe, screen stage only (no confirm stage). Rollouts are
+   truncated at the win table. The candidates are below; racing stays on.
 4. **Write a pool record** per position (below).
 
-**Opponent racks: the standard-Scrabble mode.** The survey tool's
-hidden-leaves path today draws the opponent's whole rack uniformly from the
-unseen pool. A new flag, `--opp-racks`, sets the belief:
+**Candidates.** Every legal play and every distinct exchange, plus the pass,
+**including blank plays**. A blank multiplies the moves through its
+designations, so one prune applies: a blank move (a play that places the
+blank, or an exchange that returns it) is dropped when its score is 40 or
+more points below the greedy move's, the highest-scoring play. An exchange
+scores 0 under this rule.
 
-- `uniform`: today's behavior;
-- `inferrer`: `RackInferrer` on the opponent's last move, plus a uniform
-  refill, through the same `OppLeaveSampler` the Monte Carlo ground-truth
-  path uses ([sim/monte_carlo_sim.cpp](../../engine/src/sim/monte_carlo_sim.cpp));
-- `file`: racks supplied per rollout from a file, which is how `belief=lim`
-  will feed LIM samples drawn in Python.
+**Opponent racks.** A new flag, `--lim <path to LIM ONNX>`, sets the
+opponent's leave belief:
+
+- **With the flag,** the tool runs the LIM once per position, from the
+  chooser's view. It samples one leave per rollout by inverse CDF from a
+  seeded variate, and adds a uniform refill from the rest of the unseen pool.
+- **Without it,** the opponent's whole rack is drawn uniformly from the
+  unseen pool, which is today's hidden-leaves behavior.
 
 Rollout `i` uses the same rack sample for every candidate, so the per-move
-values stay paired.
+values stay paired. With `--lim`, the generator role needs a GPU for the
+LIM's TensorRT engine; one evaluation per position makes the need small.
 
 **The pool record** (a new compact sidecar beside the `.slog`, not the
 survey's JSON):
 
+- **per pool:** the win table version, the LIM version (or uniform), and
+  `horizon_plies`;
 - **per position:** the `.slog` game and turn;
-- **per candidate:** the `Move` (16 bytes); mean win equity; rollouts
+- **per candidate:** the `Move` (16 bytes); mean win probability; rollouts
   completed (racing stops some early); the paired standard error against the
   leader; the static-equity rank; and `q(a)`.
 
@@ -184,19 +233,19 @@ of each other, an approximation acceptable for v0.
 eviction work as in `lim`. Pools are expensive, so the window default is
 large.
 
-**Parameters:** `belief` (`uniform`, `inferrer` or `lim`),
-`positions_per_game`, `rollouts` (screen budget, default 300), `race`,
-`solve_max_unseen`, `positions_per_generation`, `window`, `holdout_every`,
-`holdout_size`, `forms`, `max_rows`.
+**Parameters:** `lim_onnx` (empty for uniform), `win_table`,
+`horizon_plies`, `positions_per_game`, `rollouts` (screen budget, default
+300), `race`, `solve_max_unseen`, `positions_per_generation`, `window`,
+`holdout_every`, `holdout_size`, `forms`, `max_rows`.
 
 ### Inputs at train time
 
-Inputs are rebuilt by replay, as `move_set_eval`'s trainer does: the pool's
+Inputs are rebuilt by replay, as `move_set_eval`'s trainer does. The pool's
 `.slog` reference and its candidate moves go to `ffi.move_set_positions`,
-which returns the board rows and per-move cross-check cells and letters.
-The process runs in the hidden-leaves arm (`ffi.set_opp_leave_input`,
-adopted from a header flag in the pool sidecar). No legal-move enumeration is
-needed, because the pool lists the candidates.
+which returns the board rows and per-move cross-check cells and letters. The
+process runs in the hidden-leaves arm (`ffi.set_opp_leave_input`, adopted
+from a header flag in the pool sidecar). No legal-move enumeration is needed,
+because the pool lists the candidates.
 
 ### The two forms
 
@@ -242,7 +291,7 @@ Per generation and form, on held-out pools, for `N` in {1, 2, 4, 8, 16}:
 |---|---|
 | `eval_recall_N` | how often the pool's sim-best move is in `S` |
 | `eval_cover_N` | `Σ_{a∈S} q(a)`, the soft form of recall, P(best ∈ S) |
-| `eval_regret_N` | mean `v(a*) − max_{a∈S} v(a)`, in win equity |
+| `eval_regret_N` | mean `v(a*) − max_{a∈S} v(a)`, in win probability |
 | `eval_tail_recall_N` | recall on pools whose sim-best move is outside the static-equity top 10 |
 | `eval_set_ms` | time to build one batch of 256 sets at `N = 8` |
 
@@ -253,13 +302,14 @@ regret against `N` per form, over generations.
 ### Cost
 
 From the blind_spots measurement, the exhaustive screen at 1,000 rollouts
-costs about 30 seconds of a 28-thread machine per position. At 300 rollouts
-with racing, it is roughly 10 seconds: about 360 pools per machine-hour, or
-10,000 pools in about 28 machine-hours. Generation sets the pace, and it is
-embarrassingly parallel, so the `generate` role is meant for a fleet
-(owned ssh machines and rented CPU machines, as blind_spots runs).
-Mid-game positions have more legal moves than small-bag ones, so the real
-rate is measured on the first generation and shown on the Stats tab.
+played to the end of the game costs about 30 seconds of a 28-thread machine
+per position. Two changes cut that: 300 rollouts instead of 1,000, and
+rollouts truncated at `K` plies instead of played out. Blank plays push the
+other way, by enlarging the candidate set. A guess is several hundred pools
+per machine-hour. The real rate is measured on the first generation and shown
+on the Stats tab. Generation sets the pace and is embarrassingly parallel, so
+the `generate` role is meant for a fleet (owned ssh machines and rented
+machines, as blind_spots runs). With `--lim`, those machines need a GPU.
 
 ## Build order
 
@@ -267,43 +317,47 @@ Each step is a PR with its own tests.
 
 **The LIM:**
 
-1. **Engine:** the `OppRack` target, the `OppHistory` input block, and their
-   FFI exposure, with encoder tests.
-2. **Python:** the LIM model, its generational trainer and eval (the uniform
-   baseline), the `lim` workload spec with held-out chunks, and the dashboard
-   tab and figure.
-3. **The `RackInferrer` baseline** on held-out sets, and `eval_nll_vs_inferrer`.
+1. **Engine:** `LimInputEncoder` (current position, 5-move history with
+   pre-move cross-checks), the `OppLeave` target, and the DataLoader/FFI mode,
+   with encoder tests.
+2. **Python:** the standalone LIM network, its generational trainer and eval
+   (the uniform baseline), the `lim` workload spec with held-out chunks, and
+   the dashboard tab and figure.
+3. **The `RackInferrer` baseline** on held-out sets, and
+   `eval_nll_vs_inferrer`.
+4. **Serving:** the LIM's ONNX export, its `NeuralNet` spec on TensorRT, and
+   seeded leave sampling (inverse CDF from supplied variates), with a parity
+   test against the PyTorch model.
 
-*Measure:* the LIM's NLL against uniform draws and against `RackInferrer`,
-overall and by bag band. This decides the PSM's default belief.
+*Measure:* the LIM's NLL against the uniform prior and against
+`RackInferrer`, overall and by bag band.
+
+**The win table:**
+
+5. **`fit_win_table.py`** and the v0 table, fitted on the `lim` workload's
+   games, compared with Macondo's bundled table.
 
 **The PSM:**
 
-4. **Engine:** `--opp-racks` in the survey tool (`uniform`, `inferrer`,
-   `file`), exchanges and the pass in the exhaustive candidate set, and the
-   pool sidecar with `q(a)`.
-5. **Python:** the `psm` workload's generator, held-out pools, generations,
+6. **Engine:** in the survey tool, `--lim`, `--win-table` and
+   `--horizon-plies`; blank plays with the 40-point prune, exchanges and the
+   pass in the candidate set; and the pool sidecar with `q(a)`.
+7. **Python:** the `psm` workload's generator, held-out pools, generations,
    and the pool reader on `ffi.move_set_positions`.
-6. **The two forms,** their trainers under `forms`, the eval metrics and the
+8. **The two forms,** their trainers under `forms`, the eval metrics and the
    figure.
 
 *Measure:* recall, cover, regret and tail recall against `N` for each form,
 and against static equity; time per batch of sets. This decides the form.
 
-**Later:**
-
-7. **`belief=lim`:** the LIM's ONNX export, seeded sampling, and the `file`
-   rack source fed from it.
-8. **A trainer per form,** if one GPU binds.
+**Later:** a trainer per form, if one GPU binds.
 
 ## Open questions
 
-- **History length** for the LIM, and whether our own recent moves belong in
-  `OppHistory` too: what the opponent drew depends on what we played.
-- **Rack or leave as the LIM's target.** The full rack is simpler and is what
-  DeepBot samples. Predicting the leave and adding the uniform refill is
-  exact for the refill part and may train faster.
-- **Blank plays in the PSM's candidate set.** v0 includes only those in the
-  equity top cut. Every blank designation would multiply the pool.
+- **`horizon_plies`.** Fewer plies are faster and less noisy, but lean harder
+  on the win table. Macondo uses 5 plies with more than 14 tiles unseen.
 - **`rollouts` against pool count.** Fewer rollouts per pool means noisier
   `q(a)` but more positions. The soft labels absorb some of the noise.
+- **A CPU path for the LIM** in the generator, if renting GPU machines for
+  the fleet proves costly. One evaluation per position is cheap enough for a
+  CPU runtime, but the engine serves networks only through TensorRT today.
