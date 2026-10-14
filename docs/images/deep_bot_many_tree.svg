@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="660" viewBox="0 0 1180 660" font-family="Helvetica, Arial, sans-serif" font-size="14">
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="680" viewBox="0 0 1180 680" font-family="Helvetica, Arial, sans-serif" font-size="14">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#222"/>
@@ -7,29 +7,24 @@
       <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
     </marker>
   </defs>
-  <rect width="1180" height="660" fill="#ffffff"/>
+  <rect width="1180" height="680" fill="#ffffff"/>
 
-  <!-- Nigel's tree -->
-  <polygon points="330,20 10,630 650,630" fill="#fdd8d8"/>
-  <text x="330" y="612" text-anchor="middle" font-weight="bold">Nigel's tree (Nigel's beliefs)</text>
+  <!-- Nigel's level -->
+  <polygon points="330,20 10,650 650,650" fill="#fdd8d8"/>
+  <text x="330" y="632" text-anchor="middle" font-weight="bold">Nigel's evaluation (Nigel's beliefs)</text>
 
-  <!-- Mike's tree for rack z -->
-  <polygon points="860,95 665,590 1055,590" fill="#dadafb"/>
-  <text x="860" y="572" text-anchor="middle" font-weight="bold">Mike's tree for rack z</text>
-  <text x="860" y="590" text-anchor="middle" dy="-2" font-size="12">(Mike's beliefs)</text>
+  <!-- Mike's subtree for rack z -->
+  <polygon points="880,80 655,620 1105,620" fill="#dadafb"/>
+  <text x="880" y="600" text-anchor="middle" font-weight="bold">Mike's subtree for rack z</text>
+  <text x="880" y="616" text-anchor="middle" font-size="12">(Mike's beliefs)</text>
 
-  <!-- Mike's tree for rack y -->
-  <polygon points="1115,150 1072,248 1158,248" fill="#dadafb"/>
-  <text x="1115" y="268" text-anchor="middle" font-size="12">Mike's tree</text>
-  <text x="1115" y="283" text-anchor="middle" font-size="12">for rack y</text>
-
-  <!-- E2: third-level tree, not in v1 -->
-  <polygon points="1115,400 1072,498 1158,498" fill="none" stroke="#d66" stroke-width="1.5" stroke-dasharray="5,4"/>
-  <text x="1115" y="518" text-anchor="middle" font-size="12">E2: Nigel as</text>
-  <text x="1115" y="533" text-anchor="middle" font-size="12">Mike imagines him</text>
+  <!-- Mike's subtree for rack y -->
+  <polygon points="1130,110 1092,195 1168,195" fill="#dadafb"/>
+  <text x="1130" y="213" text-anchor="middle" font-size="12">Mike's subtree</text>
+  <text x="1130" y="228" text-anchor="middle" font-size="12">for rack y</text>
 
   <g stroke="#222" stroke-width="1.6" fill="none">
-    <!-- Nigel: root ACT -->
+    <!-- Nigel: candidates from the PSM -->
     <line x1="330" y1="109" x2="330" y2="135"/>
     <line x1="330" y1="135" x2="268" y2="198" marker-end="url(#arrow)"/>
     <line x1="330" y1="135" x2="372" y2="182" marker-end="url(#arrow)"/>
@@ -37,21 +32,22 @@
     <line x1="250" y1="239" x2="250" y2="265"/>
     <line x1="250" y1="265" x2="197" y2="318" marker-end="url(#arrow)"/>
     <line x1="250" y1="265" x2="303" y2="318" marker-end="url(#arrow)"/>
-    <!-- Nigel: junction, Mike's move -->
-    <line x1="320" y1="359" x2="320" y2="385"/>
-    <line x1="320" y1="385" x2="272" y2="436" marker-end="url(#arrow)"/>
-    <line x1="320" y1="385" x2="373" y2="438" marker-end="url(#arrow)"/>
-    <!-- Nigel: SAMPLE Nigel's draw -->
-    <line x1="390" y1="479" x2="390" y2="508"/>
-    <!-- Mike: root ACT -->
-    <line x1="860" y1="184" x2="860" y2="210"/>
-    <line x1="860" y1="210" x2="807" y2="263" marker-end="url(#arrow)"/>
-    <line x1="860" y1="210" x2="913" y2="263" marker-end="url(#arrow)"/>
-    <!-- Mike: SAMPLE Nigel's leave and draw -->
-    <line x1="790" y1="304" x2="790" y2="330"/>
-    <line x1="790" y1="330" x2="790" y2="374" marker-end="url(#arrow)"/>
-    <!-- Mike's tree: Nigel replies from prior -->
-    <line x1="790" y1="424" x2="790" y2="452"/>
+    <!-- Nigel: Mike's chosen move -->
+    <line x1="320" y1="359" x2="320" y2="420" marker-end="url(#arrow)"/>
+    <!-- Nigel's sim continuation -->
+    <line x1="320" y1="468" x2="320" y2="540"/>
+    <!-- Mike: candidates from the PSM -->
+    <line x1="880" y1="164" x2="880" y2="190"/>
+    <line x1="880" y1="190" x2="802" y2="258" marker-end="url(#arrow)"/>
+    <line x1="880" y1="190" x2="880" y2="252" marker-end="url(#arrow)"/>
+    <line x1="880" y1="190" x2="958" y2="258" marker-end="url(#arrow)"/>
+    <!-- Mike: SAMPLE Nigel's rack under YEET -->
+    <line x1="785" y1="300" x2="785" y2="326"/>
+    <line x1="785" y1="326" x2="745" y2="372" marker-end="url(#arrow)"/>
+    <line x1="785" y1="326" x2="825" y2="372" marker-end="url(#arrow)"/>
+    <!-- Mike's sim continuations -->
+    <line x1="735" y1="414" x2="735" y2="470"/>
+    <line x1="835" y1="414" x2="835" y2="470"/>
   </g>
 
   <!-- Nodes: red = Nigel to move, blue = Mike to move. Labels: (Nigel's tiles, Mike's tiles). -->
@@ -60,61 +56,63 @@
     <circle cx="250" cy="215" r="24" fill="#99f"/>
     <circle cx="180" cy="335" r="24" fill="#99f"/>
     <circle cx="320" cy="335" r="24" fill="#99f"/>
-    <circle cx="390" cy="455" r="24" fill="#f99"/>
-    <circle cx="860" cy="160" r="24" fill="#99f"/>
-    <circle cx="790" cy="280" r="24" fill="#f99"/>
-    <circle cx="930" cy="280" r="24" fill="#f99"/>
-    <circle cx="790" cy="400" r="24" fill="#f99"/>
+    <circle cx="320" cy="444" r="24" fill="#f99"/>
+    <circle cx="880" cy="140" r="24" fill="#99f"/>
+    <circle cx="785" cy="276" r="24" fill="#f99"/>
+    <circle cx="880" cy="276" r="24" fill="#f99"/>
+    <circle cx="975" cy="276" r="24" fill="#f99"/>
+    <circle cx="735" cy="390" r="24" fill="#f99"/>
+    <circle cx="835" cy="390" r="24" fill="#f99"/>
   </g>
   <g text-anchor="middle" font-style="italic" font-size="16">
     <text x="330" y="91">x ?</text>
     <text x="250" y="221">x ?</text>
     <text x="180" y="341">x y</text>
     <text x="320" y="341">x z</text>
-    <text x="390" y="461">x z</text>
-    <text x="860" y="166">? z</text>
-    <text x="790" y="286">? z</text>
-    <text x="930" y="286">? z</text>
-    <text x="790" y="406">x̂ z</text>
+    <text x="320" y="450">x z</text>
+    <text x="880" y="146">? z</text>
+    <text x="785" y="282">? z</text>
+    <text x="880" y="282">? z</text>
+    <text x="975" y="282">? z</text>
+    <text x="735" y="396">x̂₁ z</text>
+    <text x="835" y="396">x̂₂ z</text>
   </g>
 
-  <!-- Edge and step labels -->
+  <!-- Labels -->
   <g font-size="13">
-    <text x="338" y="128">ACT</text>
+    <text x="338" y="128">PSM picks candidates</text>
     <text x="284" y="168" text-anchor="end">ALLEE</text>
     <text x="378" y="174">VELATE, EELLT, …</text>
-    <text x="258" y="258">SAMPLE Mike's rack</text>
+    <text x="258" y="258">SAMPLE Mike's rack (R_A)</text>
     <text x="208" y="294" text-anchor="end">Pr[y]</text>
     <text x="287" y="300">Pr[z]</text>
-    <text x="328" y="378">Mike's move</text>
-    <text x="276" y="420" text-anchor="end">bingo</text>
-    <text x="356" y="410" text-anchor="end" dx="40" dy="2">8K YEET</text>
-    <text x="398" y="498">SAMPLE Nigel's draw</text>
-    <text x="390" y="530" text-anchor="middle">leaf: network or solver</text>
-    <text x="868" y="203">ACT</text>
-    <text x="826" y="232" text-anchor="end">8K YEET</text>
-    <text x="896" y="232">YENS, bingo, …</text>
-    <text x="798" y="322">SAMPLE Nigel's</text>
-    <text x="798" y="338">leave and draw</text>
-    <text x="798" y="442">Nigel replies from his prior</text>
-    <text x="790" y="474" text-anchor="middle">leaf: network or solver</text>
+    <text x="312" y="392" text-anchor="end">Mike plays his</text>
+    <text x="312" y="408" text-anchor="end">argmax: YEET</text>
+    <text x="328" y="490">SAMPLE replenishments</text>
+    <text x="328" y="507">Nigel: hasty, Mike: hasty</text>
+    <text x="320" y="560" text-anchor="middle">leaf: network or solver</text>
+    <text x="320" y="578" text-anchor="middle">→ averaged into q(ALLEE)</text>
+
+    <text x="888" y="182">PSM picks Mike's set</text>
+    <text x="826" y="230" text-anchor="end">8K YEET</text>
+    <text x="884" y="244" text-anchor="middle" dx="26">bingo</text>
+    <text x="935" y="230">YENS, …</text>
+    <text x="793" y="318">SAMPLE Nigel's rack (R_B)</text>
+    <text x="785" y="365" text-anchor="middle" font-size="12">…</text>
+    <text x="743" y="438">Nigel: hasty</text>
+    <text x="743" y="454">Mike: hasty</text>
+    <text x="785" y="490" text-anchor="middle">leaf: network or solver</text>
+    <text x="785" y="520" text-anchor="middle">score(b) = mean over Nigel's racks</text>
+    <text x="785" y="538" text-anchor="middle">Mike's move = argmax score(b)</text>
   </g>
 
-  <!-- Cross-tree links -->
+  <!-- Cross-level links -->
   <g stroke="#555" stroke-width="1.3" stroke-dasharray="2,4" fill="none">
-    <line x1="344" y1="327" x2="836" y2="166" marker-end="url(#arrow-dot)"/>
-    <line x1="768" y1="290" x2="414" y2="448" marker-end="url(#arrow-dot)"/>
-  </g>
-  <g stroke="#7777cc" stroke-width="1.5" stroke-dasharray="7,4" fill="none">
-    <line x1="1000" y1="230" x2="1080" y2="215" marker-start="url(#arrow-dot)" marker-end="url(#arrow-dot)"/>
-  </g>
-  <g stroke="#d66" stroke-width="1.3" stroke-dasharray="2,4" fill="none">
-    <line x1="814" y1="404" x2="1075" y2="460" marker-end="url(#arrow-dot)"/>
+    <line x1="344" y1="327" x2="856" y2="146" marker-end="url(#arrow-dot)"/>
+    <line x1="700" y1="530" x2="328" y2="396" marker-end="url(#arrow-dot)"/>
   </g>
   <g font-size="13" fill="#333">
-    <text x="560" y="230" transform="rotate(-18 560 230)" text-anchor="middle">spawn: Mike's tree at his information set</text>
-    <text x="585" y="390" transform="rotate(-24 585 390)" text-anchor="middle">only the move crosses: sampled from π′</text>
-    <text x="1040" y="205" text-anchor="middle" fill="#5555aa">w_B shared</text>
-    <text x="950" y="420" fill="#c44" font-size="12">not in v1</text>
+    <text x="575" y="220" transform="rotate(-19 575 220)" text-anchor="middle">spawn: Mike's subtree at his information set</text>
+    <text x="520" y="455" transform="rotate(20 520 455)" text-anchor="middle">only Mike's chosen move crosses back</text>
   </g>
 </svg>
