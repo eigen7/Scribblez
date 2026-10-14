@@ -38,7 +38,7 @@ moved on. New plans go here, not in `docs/` proper.
   opponent's own beliefs, over a diverse candidate set from a policy-set model
   (PSM) that picks N moves to maximize the expected best value. Mechanical
   continuations, solved endgames, and a generational rack-inference network.
-  Starts with PSM labels and PSM recall at Richards–Johnson.
+  Starts with PSM labels and PSM recall.
 - **[supreme_bot_m1a.md](supreme_bot_m1a.md)**: *proposed, not built.*
   The build plan for M1a, SupremeBot's held-out transfer test: probe traces
   in the sim runner, a generator workload writing labels and a new `.sprobe`

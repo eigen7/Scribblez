@@ -5,13 +5,7 @@
 leaves. This document is a design to guide development. Its measurements
 inform the next step; no pass or kill thresholds are fixed in advance.
 
-Write **Alice** for the player to move and **Bob** for the opponent. The
-running example is the [Richards–Johnson
-exchange](../analysis/richards-johnson-exchange/README.md): Nigel (Alice)
-holds AEELLNT with seven tiles in the bag. The engines' favorite is ALLEE.
-Mike (Bob) can answer it with a bingo, or with a two-tile setup such as 8K
-YEET, YETI or YEAN, which opens a second S lane that Nigel cannot block
-alongside WOES.
+Write **Alice** for the player to move and **Bob** for the opponent.
 
 ## The turn
 
@@ -32,12 +26,6 @@ alongside WOES.
 
    Her value `q(a)` is the mean over racks and sims.
 5. **The pick.** Alice plays the candidate with the highest `q(a)`.
-
-At Richards, some of the `R_A` racks give Mike a bingo in reply to ALLEE.
-Others give him an ET rack, where a good PSM proposes YEET, YETI or YEAN, and
-his subtree finds the setup best. Both lines then cost ALLEE in Nigel's own
-sims. Under the exchange, the bag still holds seven tiles after Mike's bingo,
-so Mike cannot go out, and Nigel's sims show the difference.
 
 ## Bob's subtree
 
@@ -64,29 +52,29 @@ scores. Bob's scores are expectations over Bob's belief about Alice's rack,
 not over Alice's actual rack, so they belong to Bob's decision and nowhere
 else.
 
-![Two-level simulation at Richards–Johnson: Nigel's evaluation spawns a subtree for Mike at each sampled rack, and only Mike's chosen move crosses back](../images/deep_bot_many_tree.svg)
+![Two-level simulation: Alice's evaluation spawns a subtree for Bob at each sampled rack, and only Bob's chosen move crosses back](../images/deep_bot_many_tree.svg)
 
 *Each triangle is one player's evaluation, colored by whose beliefs it runs
-on: red for Nigel's, blue for Mike's. Each node is colored by whose turn it
-is, and labeled with Nigel's tiles, then Mike's, with `?` for tiles unknown to
-the evaluation's owner.*
+on: red for Alice's, blue for Bob's. Each node is colored by whose turn it is,
+and labeled with Alice's tiles, then Bob's, with `?` for tiles unknown to the
+evaluation's owner.*
 
-*Nigel starts at `x ?`. He holds `x` (AEELLNT) and cannot see Mike's rack.
-The PSM proposes ALLEE among his candidates. Nigel samples Mike's rack from
-his own belief, `y` or `z`. At `x z` it is Mike's turn, and Nigel cannot
-choose Mike's move with Nigel's own values, so he **spawns** Mike's subtree,
-rooted at `? z`: Mike holds `z`, an ET rack, and does not know Nigel's tiles.*
+*Alice starts at `x ?`. She holds `x` and cannot see Bob's rack. The PSM
+proposes `a` among her candidates. Alice samples Bob's rack from her own
+belief, `y` or `z`. At `x z` it is Bob's turn, and Alice cannot choose Bob's
+move with her own values, so she **spawns** Bob's subtree, rooted at `? z`:
+Bob holds `z` and does not know Alice's tiles.*
 
-*In that subtree, the PSM proposes Mike's set: 8K YEET, a bingo, YENS and
-others. Mike samples racks for Nigel from his own belief, which reads what
-ALLEE reveals (`x̂₁`, `x̂₂`, …). For each of his candidates, he sims: Nigel
-plays hasty, Mike plays hasty, and the leaf is evaluated by the network, or
-by the solver once the bag is empty. Each candidate scores the mean over
-Nigel's sampled racks. Mike's move is the argmax, here YEET.*
+*In that subtree, the PSM proposes Bob's set, `b₁`, `b₂`, `b₃` and others.
+Bob samples racks for Alice from his own belief, which reads what `a` reveals
+(`x̂₁`, `x̂₂`, …). For each of his candidates, he sims: Alice plays hasty, Bob
+plays hasty, and the leaf is evaluated by the network, or by the solver once
+the bag is empty. Each candidate scores the mean over Alice's sampled racks,
+and Bob's move is the argmax, here `b₁`.*
 
-*Only that move crosses back. In Nigel's evaluation Mike plays YEET; Nigel
+*Only that move crosses back. In Alice's evaluation Bob plays `b₁`; Alice
 samples replenishments, both players continue with hasty moves, and the leaf
-values average into `q(ALLEE)`. Every sampled rack gets its own Mike subtree
+values average into `q(a)`. Every sampled rack gets its own subtree for Bob
 (`y` at right).*
 
 ## Sims
@@ -102,9 +90,9 @@ on its own player's information.
 - **Bag empty:** if the bag is empty when a player is to move, anywhere in a
   sim, the sim stops and the endgame solver values the position. Within a
   sampled world both racks are known, so the endgame is
-  perfect-information. At Richards, ALLEE followed by YEET empties the bag, so
-  every sim of that line ends in a solve. That is where Mike's payoff is
-  decided: Nigel can block one S lane, and Mike goes out through the other.
+  perfect-information. When a candidate and a reply empty the bag between
+  them, every sim of that line ends in a solve, so endgame tactics the
+  mechanical rule would misplay (a block, a two-way out) are valued exactly.
 - **Otherwise,** after the sim's fixed moves, the position evaluation network
   reads the position from the side that owns the evaluation. Within a sampled
   world the opponent's leave is known, so today's face-up checkpoints can
@@ -137,9 +125,9 @@ moves and a size `N`, return a set `S` of `N` moves.
 `E[max_{a∈S} v(a)]`, where `v` is the move's value under the chooser's
 uncertainty about it. This differs from taking the `N` moves most likely to
 be best one at a time: a set of near-identical moves adds little over its
-best member, so the objective rewards diversity. Of a bingo and four
-variations on it, the set is better with one variation replaced by a setup
-that wins in different worlds.
+best member, so the objective rewards diversity. Of a strong play and four
+near-copies of it, the set is better with one copy replaced by a different
+kind of move, such as a setup that wins in other worlds.
 
 **Form: greedy selection with a set-conditioned gain head.** The expected max
 of a set of win probabilities is monotone and submodular, so greedy
@@ -171,9 +159,10 @@ from the chooser's belief, and the sims are paired across moves.
   screened at 1,000 rollouts, racing) produces this shape of data. Its
   existing outputs were run face-up and its rollouts are hasty throughout, so
   PSM labels need a standard-Scrabble mode.
-- **The labels can see YEET.** Every candidate is simmed directly, rather
-  than reached by a rollout policy that would have to choose it, and YEET's
-  payoff arrives within the sim's horizon.
+- **The labels can see moves the rollout policy never plays.** Every
+  candidate is simmed directly, rather than reached by a rollout policy that
+  would have to choose it. A setup that static equity ranks low is labeled by
+  its own outcome, provided its payoff arrives within the sim's horizon.
 
 **Generations.** Once DeepBot runs, its own evaluations label positions, and
 each PSM generation trains on the previous agent's labels, as the move
@@ -212,9 +201,9 @@ games, and those games train an inference network `I_k`.
   has run out of masked. That gives exact likelihoods, needs no enumeration,
   and samples by inverse CDF from a supplied variate, which keeps racks
   paired across candidates.
-- **History as input.** The reads that matter span several moves: at
-  Richards, ZONES then WOE point to a bingo-prone rack and to the C still
-  being in the bag. The opponent's last few moves enter as tokens (tiles,
+- **History as input.** The reads that matter span several moves: a short
+  play after a scoring play can point to a bingo-prone rack, and a play the
+  opponent passed up can show that a tile is still in the bag. The opponent's last few moves enter as tokens (tiles,
   exchanges, scores), which the transformer trunk takes naturally.
 - **Conditioning on Alice's candidate** is one forward pass per `(a, r)`,
   batched on the GPU.
@@ -258,24 +247,24 @@ Each step names what it measures. The measurements guide the next step.
    outside the top 10 matter most.
 2. **PSM v0.** The greedy gain head on the move set architecture, trained by
    subset assembly. *Measure:* recall, meaning how often the pool's sim-best
-   move is in `S`, against the top `N` by value, by bag size and `N`. At
-   Richards, for ET racks after ALLEE, is a YE\_\_ setup in Mike's set at
-   `N_B = 8`?
-3. **Bob's subtree, offline at Richards.** For Mike's sampled racks after
-   ALLEE, after VELATE and after the exchange: Mike's chosen replies, how
-   often each kind (bingo, YE\_\_ setup, other) is chosen, and how stable
-   the choice is in `R_B`.
+   move is in `S`, against the top `N` by value, by bag size and `N`. Recall
+   of setups and exchanges, the moves static equity ranks low, is reported
+   separately.
+3. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
+   after each of Alice's top candidates: Bob's chosen replies, how often
+   each kind (bingo, setup, other) is chosen, and how stable the choice is
+   in `R_B`.
 4. **The agent.**
    - The seeded draw sequence, the sim with solver leaves, pairing,
      two-level evaluation, `RackInferrer` factorized, and the cache.
-   - *Measure:* the Richards pick and the known positions
+   - *Measure:* the picks at the known positions
      (`positions/NWL23/interesting-positions/`, the blind_spots tag), turn
      time, and matches against BestBot and `mset-sim` in standard Scrabble.
 5. **Allocation.** Successive halving and racing. *Measure:* the strength
    lost against the time saved.
 6. **The inference network `I_0`,** from `P_0`'s games. *Measure:* held-out
    log-likelihood of the true rack against `RackInferrer` and uniform
-   draws, and the Richards reads. Then swap it into the agent.
+   draws, by number of history moves. Then swap it into the agent.
 7. **Generations.** DeepBot labels positions for the next PSM, its games
    train the next `I_k`, and a standard-Scrabble teacher replaces the
    face-up leaf model.
@@ -304,12 +293,13 @@ Each step names what it measures. The measurements guide the next step.
   DeepBot's online search is local in that document's vocabulary: each
   candidate and each Bob decision is valued by its own sims. What the
   idealized agent there learns across racks and candidates, DeepBot learns
-  offline into the PSM and the inference network. Recognizing that ET racks
-  near a YE\_\_ spot have a setup is the PSM's job, trained across many
+  offline into the PSM and the inference network. Recognizing which racks
+  have a setup in a given spot is the PSM's job, trained across many
   positions, not something rediscovered in each search.
 - **Macondo's BestBot** runs the same outer loop: candidates, sampled
   opponent racks, sims. Its opponent plays the static-equity argmax, so he
-  never tries YEET, and his rack is drawn uniformly. DeepBot replaces that
+  never tries a setup that equity ranks low, and his rack is drawn
+  uniformly. DeepBot replaces that
   opponent with a decision made on the opponent's own information, over a
   diverse candidate set.
 - **Many-tree information-set search** (Cowling, Powley & Whitehouse, 2015)
