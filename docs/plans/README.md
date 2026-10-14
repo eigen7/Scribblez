@@ -43,7 +43,8 @@ moved on. New plans go here, not in `docs/` proper.
   implementation plan for DeepBot's first two models, trained from
   HastyBot-vs-HastyBot games in standard Scrabble. First, a standalone leave
   inference model, with free labels from replay, a 5-move history with
-  pre-move cross-checks, and an autoregressive leave head. Then the
+  pre-move cross-checks, and a 29-float output (a weight per letter plus a
+  tilt on absolute leave value) over the exact pool prior. Then the
   policy-set model in both forms, on exhaustively simmed pools whose rollouts
   stop at a versioned win table, with opponent leaves drawn from the LIM.
   Each is one dashboard workload that generates, trains, slides its window

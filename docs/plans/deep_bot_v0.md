@@ -107,21 +107,127 @@ from `.slog` windows, beside position_eval's mode.
 A standalone network in `py/scribblez/lim/`. It has its own architecture and
 does not share another model's trunk or weights.
 
-- **The encoder:** a small spatial tower over the board planes (the current
-  ones and each history move's planes, stacked as channels), plus an MLP over
-  the scalars, fused into a context vector and a set of board tokens.
-- **The leave head:** autoregressive over the sorted leave. At step `t` it
-  emits a 27-way softmax, attending to the board tokens and conditioned on the
-  letters already emitted. A small transformer decoder is the default. Two
-  masks keep it legal:
-  - letters the observer's unseen pool has run out of, net of letters already
-    emitted;
-  - letters that sort before the previous one.
-- **The loss:** the negative log-likelihood of the true sorted leave.
+**The encoder:** a small spatial tower over the board planes (the current
+ones and each history move's planes, stacked as channels), plus an MLP over
+the scalars, fused into a context vector.
+
+**The output: 29 floats.** The context vector feeds a linear layer that emits:
+
+- **`θ_l`, one per letter (27):** a log-weight for "the leave contains `l`".
+  Positive means likely has it, negative means likely doesn't, so one number
+  covers both reads.
+- **`a` and `b ≥ 0`:** a tilt on the leave's absolute quality `v(ℓ)`, its
+  static leave value in equity points (HastyBot's leave values,
+  `HastyEquity::default_leaves_path()`).
+
+Those numbers define the leave distribution as the pool prior, tilted:
+
+`log p(ℓ) = log P_prior(ℓ | pool) + Σ_{l ∈ ℓ} θ_l + a·v(ℓ) − b·v(ℓ)² − log Z`
+
+over leaves `ℓ` of the public length `L` that the observer's unseen pool can
+supply. `P_prior` is the hypergeometric draw from that pool:
+`Π_l C(n_l, c_l)` up to a constant, where `n_l` is the pool's count of `l` and
+`c_l` the leave's.
+
+- **`a = b = 0` is exactly "no information":** the leave is a uniform draw
+  from the pool. `a > 0` shifts belief toward better leaves, `a < 0` toward
+  worse ones, and `b > 0` concentrates it around a value.
+- **The quality term carries the interactions.** Leave value already folds in
+  balance, synergy, duplication and stems, so one tilt moves a whole class of
+  leaves at once: raising `a` favors well-balanced, bingo-prone leaves and
+  leaves unbalanced ones down. The letter terms stay per-letter, which is all
+  the has-it and doesn't-have-it reads need.
+- **Quality is absolute.** The tilt acts on leave value in points, against
+  whatever the current pool can produce. With both blanks unseen, a positive
+  `a` reaches up to blank leaves; with both played, it favors the best leaves
+  that remain.
+
+For v0 data the quality term fits especially well: HastyBot chooses its leave
+by score plus exactly this leave value.
+
+### The leave tables
+
+Static, built once offline, one per length `L` from 1 to 6. Each row is a
+leave: its 27 counts, a 27-bit presence mask, and `v(ℓ)`. The 6-tile table has
+737,311 rows (about 30 MB); the 4-tile table has 25,254. A 7-tile leave arises
+only from a pass, and v0 samples it from the prior alone. If leave values
+later become board-aware, only the `v(ℓ)` column changes, per position.
+
+### Likelihood and training
+
+One pass over the table for the leave's length gives the exact
+log-likelihood:
+
+1. **Per-letter prior terms:** `log C(n_l, c)` for each letter and count, at
+   most 27 × 8 values.
+2. **Each row's log-weight:** skip the row if some `c_l > n_l`; otherwise
+   `Σ_l logC[l][c_l] + Σ_{l ∈ mask} θ_l + a·v − b·v²`, about 28 additions.
+3. **`log Z`** is the log-sum-exp of the log-weights, and the loss is
+   `log Z` minus the true leave's log-weight.
+
+In PyTorch, the pass is a gather and sum over the table's columns, batched over
+rows and computed in chunks, and gradients flow to the 29 outputs. Training
+directly on this likelihood matters. Per-letter has-it classifiers and a
+separate quality regressor, trained independently, would give marginals that
+are not the weights to multiply together. Trained jointly, the outputs *are*
+the weights, and the readable per-letter probabilities ("likely has an S")
+come out of the same pass as marginals, along with the implied mean and spread
+of the opponent's leave value.
+
+### Sampling
+
+**Algorithm 1: enumerate, then inverse CDF.** The default.
+
+1. Compute every row's log-weight, as above.
+2. Exponentiate against the maximum and take a running sum in the table's
+   fixed order, which gives the CDF.
+3. For each sample's variate `u ∈ [0, 1)`, binary-search the CDF for
+   `u × total`. That row is the leave.
+4. Add the refill: `7 − L` tiles drawn uniformly from the pool minus the leave.
+
+A 6-tile query is about 20M additions, 10–20 ms on one CPU thread, and each
+sample after that is a binary search. Shorter leaves are far cheaper, and rows
+the pool cannot supply drop out. Because the order is fixed and sampling
+inverts a CDF, one variate gives the same leave whenever two queries have the
+same distribution, so samples pair across candidates as everywhere else in
+the design. The same pass computes `log Z`, so training, evaluation and
+sampling share one implementation.
+
+**Algorithm 2: per-letter proposal, then rejection.** An optimization for
+many unbatched CPU queries, built only if profiling calls for it.
+
+1. **Proposal:** drop the quality factor. What remains,
+   `Π_l C(n_l, c_l) · exp(θ_l [c_l > 0])` at fixed length, factors over
+   letters. A small table of partial sums over (letter, tiles still to place),
+   about 27 × 7 × 7 operations, gives exact sampling by walking the letters.
+2. **Accept** with probability `exp(a·v − b·v² − M)`, where `v` comes from a
+   static index keyed by the leave's packed counts and `M` bounds the quality
+   term over that length's range of values. If rejected, draw again.
+
+Accepted samples are exact. The acceptance rate falls when the quality tilt
+is strong, so the sampler estimates it from a few trial draws and falls back
+to Algorithm 1 below about 5%. Pairing is looser, since a varying number of
+variates is consumed.
+
+**Where each runs:**
+
+| Use | Volume | Algorithm |
+|---|---|---|
+| PSM label generation | one query per position, ~300 samples | Algorithm 1 on the CPU; 20 ms against tens of seconds of rollouts |
+| The agent, Bob's beliefs | ~2,000 queries per turn, ~20 samples each | Algorithm 1 batched on the GPU, one pass over the table for all queries |
+| Many unbatched CPU queries | — | Algorithm 2, falling back to 1 |
+
+### The comparison head
+
+A second profile, `head = autoregressive`, replaces the 29-float output with
+an autoregressive decoder over the sorted leave: a 27-way softmax per step,
+masked by the pool and by sort order, with the same encoder. It is flexible
+where the tilted prior is constrained, so held-out NLL between the two
+measures what the compact output gives up, overall and for 6-tile leaves.
 
 **Export.** The workload exports each checkpoint to ONNX. The engine serves
-it through its TensorRT runtime as a new `NeuralNet` spec, which is what the
-PSM's label generation loads.
+the encoder through its TensorRT runtime as a new `NeuralNet` spec, which
+emits the 29 floats; the sampling pass is engine code, not part of the graph.
 
 ### Eval metrics
 
@@ -133,7 +239,8 @@ Per generation, on the held-out positions:
 | `eval_nll_vs_uniform` | `eval_nll` minus the NLL under the hypergeometric prior over leaves from the unseen pool ([belief/leave_prior.h](../../engine/include/belief/leave_prior.h)) |
 | `eval_nll_vs_inferrer` | `eval_nll` minus `RackInferrer`'s NLL, its leave posterior from the last move |
 | `eval_nll_bag_*` | `eval_nll` by bag band |
-| `eval_letter_calibration` | mean absolute gap between predicted and actual expected count, per letter |
+| `eval_letter_calibration` | mean absolute gap between predicted and actual presence probability, per letter |
+| `eval_value_calibration` | the implied mean leave value against the true leave's value, and the coverage of the implied spread |
 
 The two baselines are computed once per held-out set by an engine entry point
 and cached, since they do not change with the model. `RackInferrer` is the
@@ -205,8 +312,9 @@ scores 0 under this rule.
 opponent's leave belief:
 
 - **With the flag,** the tool runs the LIM once per position, from the
-  chooser's view. It samples one leave per rollout by inverse CDF from a
-  seeded variate, and adds a uniform refill from the rest of the unseen pool.
+  chooser's view, and samples one leave per rollout by [Algorithm
+  1](#sampling) from a seeded variate, with a uniform refill from the rest of
+  the unseen pool.
 - **Without it,** the opponent's whole rack is drawn uniformly from the
   unseen pool, which is today's hidden-leaves behavior.
 
@@ -320,31 +428,33 @@ Each step is a PR with its own tests.
 1. **Engine:** `LimInputEncoder` (current position, 5-move history with
    pre-move cross-checks), the `OppLeave` target, and the DataLoader/FFI mode,
    with encoder tests.
-2. **Python:** the standalone LIM network, its generational trainer and eval
+2. **Python:** the leave tables, the standalone LIM network with the
+   tilted-prior head and the table pass, its generational trainer and eval
    (the uniform baseline), the `lim` workload spec with held-out chunks, and
    the dashboard tab and figure.
 3. **The `RackInferrer` baseline** on held-out sets, and
    `eval_nll_vs_inferrer`.
 4. **Serving:** the LIM's ONNX export, its `NeuralNet` spec on TensorRT, and
-   seeded leave sampling (inverse CDF from supplied variates), with a parity
-   test against the PyTorch model.
+   Algorithm 1 in the engine (CPU, and batched on the GPU), with parity tests
+   against the PyTorch model and its table pass.
+5. **The comparison head:** `head = autoregressive`.
 
 *Measure:* the LIM's NLL against the uniform prior and against
-`RackInferrer`, overall and by bag band.
+`RackInferrer`, overall and by bag band, for both heads.
 
 **The win table:**
 
-5. **`fit_win_table.py`** and the v0 table, fitted on the `lim` workload's
+6. **`fit_win_table.py`** and the v0 table, fitted on the `lim` workload's
    games, compared with Macondo's bundled table.
 
 **The PSM:**
 
-6. **Engine:** in the survey tool, `--lim`, `--win-table` and
+7. **Engine:** in the survey tool, `--lim`, `--win-table` and
    `--horizon-plies`; blank plays with the 40-point prune, exchanges and the
    pass in the candidate set; and the pool sidecar with `q(a)`.
-7. **Python:** the `psm` workload's generator, held-out pools, generations,
+8. **Python:** the `psm` workload's generator, held-out pools, generations,
    and the pool reader on `ffi.move_set_positions`.
-8. **The two forms,** their trainers under `forms`, the eval metrics and the
+9. **The two forms,** their trainers under `forms`, the eval metrics and the
    figure.
 
 *Measure:* recall, cover, regret and tail recall against `N` for each form,
