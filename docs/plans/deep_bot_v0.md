@@ -4,14 +4,16 @@
 first two models of [deep_bot.md](deep_bot.md), each trained from
 HastyBot-vs-HastyBot games in standard Scrabble (hidden leaves):
 
-1. **The leave inference model (LIM),** the network form of DeepBot's
-   [beliefs](deep_bot.md#beliefs). It predicts the opponent's leave (the
-   tiles they kept from their last move) from the observer's view of the
-   game. The opponent's rack is that leave plus a refill drawn uniformly from
-   the rest of the observer's unseen pool.
-2. **The policy-set model (PSM),** in both of the
-   [forms](deep_bot.md#the-policy-set-model) the design presents. Training
-   both on the same data lets the measurements choose between them.
+1. **[The leave inference model](deep_bot.md#the-leave-inference-model)
+   (LIM),** `I_0`.
+2. **[The policy-set model](deep_bot.md#the-policy-set-model) (PSM),** in
+   both of its forms. Training both on the same data lets the measurements
+   choose between them.
+
+The design of each model is in [deep_bot.md](deep_bot.md). This document
+covers what is specific to v0: the data source, the dashboard workloads, the
+engine and Python work, the v0 choices of size and parameter, and the
+measurements.
 
 The LIM comes first. Its labels are free (true leaves from replay, no sims),
 so it is the quick way to prove the workload machinery, and the PSM's label
@@ -59,171 +61,54 @@ positions from it, so the eval set never overlaps training data.
 ### Data and rows
 
 The generator is unchanged self-play: HastyBot against HastyBot, with
-`face_up_leaves=False`. A `.slog` stores the initial racks and every move with
-the tiles drawn after it, so replay reconstructs every player's true rack, and
-so every leave, at every turn.
-
-A row is one turn, before the endgame (the `.slog`'s eligible region, which
-ends where the bag empties):
-
-- **The observer** is the player to move.
-- **The target** is the opponent's leave from their last move, as a sorted
-  sequence of tiles. Its length is public: the opponent's rack size minus the
-  tiles that move played or exchanged (a pass keeps the whole rack).
-
-`turns_per_game` sets how many turns of each game a pass draws, as in
-position_eval.
+`face_up_leaves=False`. Replay reconstructs every player's true leave at
+every turn. A row is one turn before the endgame (the `.slog`'s eligible
+region, which ends where the bag empties). The observer is the player to
+move, and the target is the opponent's leave. `turns_per_game` sets how many
+turns of each game a pass draws, as in position_eval.
 
 ### Engine work
 
-The LIM is a standalone model, so its inputs come from their own encoder, not
-from blocks added to the position encoder's `InputEncodingSpec` (which would
-change every position model's inputs).
-
-**The input encoder** (`LimInputEncoder`), from the observer's view:
-
-- **The current position:** the board, the current cross-checks, the
-  observer's rack, the unseen pool, scores and the bag count. These come from
-  the same helpers the position encoder uses, so conventions match.
-- **The last 5 moves:** the opponent's last 3 and the observer's last 2,
-  interleaved in game order. For each move:
-  - a plane marking the squares it placed tiles on;
-  - the cross-checks as they stood *before* the move was played, so the
-    model sees which hooks and lanes the player had and passed up;
-  - scalars: tiles played, whether it was an exchange (and how many tiles) or
-    a pass, its score, and the bag count when it was made.
-
-  Missing moves early in the game are zero, with a presence flag.
-
-**The target.** `OppLeave`: the opponent's leave from replay, as up to 7
-sorted tile indices (27 letters including the blank) plus its length. It is a
-label only.
-
-**FFI.** A DataLoader mode that emits LIM input rows and `OppLeave` targets
-from `.slog` windows, beside position_eval's mode.
+- **`LimInputEncoder`** implements the design's inputs (the current position,
+  and the last 5 moves with their pre-move cross-checks). It is its own
+  encoder, not blocks added to the position encoder's `InputEncodingSpec`,
+  which would change every position model's inputs. It builds the board and
+  cross-check planes with the position encoder's helpers, so conventions
+  match. History moves missing early in the game are zero, with a presence
+  flag.
+- **`OppLeave`,** a target: the opponent's leave from replay, as up to 7
+  sorted tile indices (27 letters including the blank) plus its length. It is
+  a label only.
+- **FFI:** a DataLoader mode that emits LIM input rows and `OppLeave` targets
+  from `.slog` windows, beside position_eval's mode.
+- **The leave tables,** written by an engine tool from HastyBot's leave
+  values (`HastyEquity::default_leaves_path()`), and read by both the trainer
+  and the sampler.
+- **Algorithm 1** for sampling, on the CPU and batched on the GPU. v0 does
+  not build Algorithm 2.
 
 ### Model
 
-A standalone network in `py/scribblez/lim/`. It has its own architecture and
-does not share another model's trunk or weights.
+A standalone network in `py/scribblez/lim/`:
 
-**The encoder:** a small spatial tower over the board planes (the current
-ones and each history move's planes, stacked as channels), plus an MLP over
-the scalars, fused into a context vector.
-
-**The output: 29 floats.** The context vector feeds a linear layer that emits:
-
-- **`θ_l`, one per letter (27):** a log-weight for "the leave contains `l`".
-  Positive means likely has it, negative means likely doesn't, so one number
-  covers both reads.
-- **`a` and `b ≥ 0`:** a tilt on the leave's absolute quality `v(ℓ)`, its
-  static leave value in equity points (HastyBot's leave values,
-  `HastyEquity::default_leaves_path()`).
-
-Those numbers define the leave distribution as the pool prior, tilted:
-
-`log p(ℓ) = log P_prior(ℓ | pool) + Σ_{l ∈ ℓ} θ_l + a·v(ℓ) − b·v(ℓ)² − log Z`
-
-over leaves `ℓ` of the public length `L` that the observer's unseen pool can
-supply. `P_prior` is the hypergeometric draw from that pool:
-`Π_l C(n_l, c_l)` up to a constant, where `n_l` is the pool's count of `l` and
-`c_l` the leave's.
-
-- **`a = b = 0` is exactly "no information":** the leave is a uniform draw
-  from the pool. `a > 0` shifts belief toward better leaves, `a < 0` toward
-  worse ones, and `b > 0` concentrates it around a value.
-- **The quality term carries the interactions.** Leave value already folds in
-  balance, synergy, duplication and stems, so one tilt moves a whole class of
-  leaves at once: raising `a` favors well-balanced, bingo-prone leaves and
-  leaves unbalanced ones down. The letter terms stay per-letter, which is all
-  the has-it and doesn't-have-it reads need.
-- **Quality is absolute.** The tilt acts on leave value in points, against
-  whatever the current pool can produce. With both blanks unseen, a positive
-  `a` reaches up to blank leaves; with both played, it favors the best leaves
-  that remain.
+- **The encoder:** a small spatial tower over the board planes (the current
+  ones and each history move's planes, stacked as channels), plus an MLP over
+  the scalars, fused into a context vector.
+- **The head (`head = tilted`, the default):** a linear layer from the
+  context vector to the design's 29 floats, with `b` kept non-negative by a
+  softplus.
+- **The loss:** the exact NLL by the table pass, written in PyTorch as a
+  gather and sum over the table's columns, batched over rows and computed in
+  chunks.
 
 For v0 data the quality term fits especially well: HastyBot chooses its leave
-by score plus exactly this leave value.
+by score plus exactly the leave value the tilt acts on.
 
-### The leave tables
-
-Static, built once offline, one per length `L` from 1 to 6. Each row is a
-leave: its 27 counts, a 27-bit presence mask, and `v(ℓ)`. The 6-tile table has
-737,311 rows (about 30 MB); the 4-tile table has 25,254. A 7-tile leave arises
-only from a pass, and v0 samples it from the prior alone. If leave values
-later become board-aware, only the `v(ℓ)` column changes, per position.
-
-### Likelihood and training
-
-One pass over the table for the leave's length gives the exact
-log-likelihood:
-
-1. **Per-letter prior terms:** `log C(n_l, c)` for each letter and count, at
-   most 27 × 8 values.
-2. **Each row's log-weight:** skip the row if some `c_l > n_l`; otherwise
-   `Σ_l logC[l][c_l] + Σ_{l ∈ mask} θ_l + a·v − b·v²`, about 28 additions.
-3. **`log Z`** is the log-sum-exp of the log-weights, and the loss is
-   `log Z` minus the true leave's log-weight.
-
-In PyTorch, the pass is a gather and sum over the table's columns, batched over
-rows and computed in chunks, and gradients flow to the 29 outputs. Training
-directly on this likelihood matters. Per-letter has-it classifiers and a
-separate quality regressor, trained independently, would give marginals that
-are not the weights to multiply together. Trained jointly, the outputs *are*
-the weights, and the readable per-letter probabilities ("likely has an S")
-come out of the same pass as marginals, along with the implied mean and spread
-of the opponent's leave value.
-
-### Sampling
-
-**Algorithm 1: enumerate, then inverse CDF.** The default.
-
-1. Compute every row's log-weight, as above.
-2. Exponentiate against the maximum and take a running sum in the table's
-   fixed order, which gives the CDF.
-3. For each sample's variate `u ∈ [0, 1)`, binary-search the CDF for
-   `u × total`. That row is the leave.
-4. Add the refill: `7 − L` tiles drawn uniformly from the pool minus the leave.
-
-A 6-tile query is about 20M additions, 10–20 ms on one CPU thread, and each
-sample after that is a binary search. Shorter leaves are far cheaper, and rows
-the pool cannot supply drop out. Because the order is fixed and sampling
-inverts a CDF, one variate gives the same leave whenever two queries have the
-same distribution, so samples pair across candidates as everywhere else in
-the design. The same pass computes `log Z`, so training, evaluation and
-sampling share one implementation.
-
-**Algorithm 2: per-letter proposal, then rejection.** An optimization for
-many unbatched CPU queries, built only if profiling calls for it.
-
-1. **Proposal:** drop the quality factor. What remains,
-   `Π_l C(n_l, c_l) · exp(θ_l [c_l > 0])` at fixed length, factors over
-   letters. A small table of partial sums over (letter, tiles still to place),
-   about 27 × 7 × 7 operations, gives exact sampling by walking the letters.
-2. **Accept** with probability `exp(a·v − b·v² − M)`, where `v` comes from a
-   static index keyed by the leave's packed counts and `M` bounds the quality
-   term over that length's range of values. If rejected, draw again.
-
-Accepted samples are exact. The acceptance rate falls when the quality tilt
-is strong, so the sampler estimates it from a few trial draws and falls back
-to Algorithm 1 below about 5%. Pairing is looser, since a varying number of
-variates is consumed.
-
-**Where each runs:**
-
-| Use | Volume | Algorithm |
-|---|---|---|
-| PSM label generation | one query per position, ~300 samples | Algorithm 1 on the CPU; 20 ms against tens of seconds of rollouts |
-| The agent, Bob's beliefs | ~2,000 queries per turn, ~20 samples each | Algorithm 1 batched on the GPU, one pass over the table for all queries |
-| Many unbatched CPU queries | — | Algorithm 2, falling back to 1 |
-
-### The comparison head
-
-A second profile, `head = autoregressive`, replaces the 29-float output with
-an autoregressive decoder over the sorted leave: a 27-way softmax per step,
-masked by the pool and by sort order, with the same encoder. It is flexible
-where the tilted prior is constrained, so held-out NLL between the two
-measures what the compact output gives up, overall and for 6-tile leaves.
+**The comparison head, `head = autoregressive`,** replaces the 29-float
+output with an autoregressive decoder over the sorted leave: a 27-way softmax
+per step, masked by the pool and by sort order, with the same encoder. It is
+flexible where the tilted prior is constrained, so held-out NLL between the
+two measures what the compact output gives up, overall and for 6-tile leaves.
 
 **Export.** The workload exports each checkpoint to ONNX. The engine serves
 the encoder through its TensorRT runtime as a new `NeuralNet` spec, which
@@ -253,39 +138,19 @@ model, and in these games the opponent *is* HastyBot.
 `holdout_size`, `max_rows`, plus the network's and the optimizer's usual
 parameters through profiles.
 
-## The rollout leaf: a versioned win table
+## The v0 win table
 
-PSM labels come from many rollouts per candidate. Played to the end of the
-game, each rollout is slow and its outcome is noisy. Instead, following
-Macondo's simmer, a rollout stops after `K` plies (`horizon_plies`), and a
-fast function turns the position there into a win probability:
+The PSM's label rollouts stop at a [versioned win
+table](deep_bot.md#labels). v0 builds the tooling and the first version:
 
-`P(win) = table(spread + leave value, tiles unseen)`
-
-- **The spread** is from the side to move, plus the leave value of that
-  side's remaining rack, as Macondo adds its "leftover".
-- **Tiles unseen** are the bag plus the opponent's rack, from the side to
-  move.
-- **If the game ends** inside the horizon, the outcome is exact. If the bag
-  empties with few enough tiles unseen (`solve_max_unseen`), the endgame
-  solver values the position.
-
-The engine already reads Macondo's table format
-([sim/win_pct_table.h](../../engine/include/sim/win_pct_table.h)). What is new
-is that the table becomes a **versioned artifact** of our own:
-
-- **Fitting.** `fit_win_table.py` estimates `P(win | spread + leave value,
-  unseen)` from `.slog` outcomes: bucketed, smoothed, and made monotone in
-  spread. It writes the same CSV format.
-- **Versions.** Each version is a file under the mount (`win_tables/v0.csv`,
-  `v1.csv`, ...), with the corpus and policy it was fitted from. v0 is fitted
-  on HastyBot-vs-HastyBot games, which the `lim` workload produces anyway.
-  Later versions are fitted on games of the improved agent, since the win
-  probability at a given spread shifts as play gets stronger. Macondo's
-  bundled table is the sanity check for v0.
-- **Selection.** The survey tool takes the table's path (`--win-table`) and
-  the horizon (`--horizon-plies`), and the pool sidecar records which version
-  labeled it.
+- **`fit_win_table.py`** estimates `P(win | spread + leave value, unseen)`
+  from `.slog` outcomes, bucketed, smoothed and made monotone in spread, and
+  writes the CSV format `WinPctTable` reads
+  ([sim/win_pct_table.h](../../engine/include/sim/win_pct_table.h)).
+- **Versions** are files under the mount (`win_tables/v0.csv`, `v1.csv`,
+  ...), each recording the corpus and policy it was fitted from.
+- **v0** is fitted on HastyBot-vs-HastyBot games, which the `lim` workload
+  produces anyway. Macondo's bundled table is its sanity check.
 
 ## Workload 2: `psm`
 
@@ -297,24 +162,25 @@ A generator worker's cycle:
 2. **Pick positions.** `positions_per_game` turns (default 2), uniform over
    the eligible region.
 3. **Survey each position** with `sim_candidate_survey_tool` in its
-   exhaustive recipe, screen stage only (no confirm stage). Rollouts are
-   truncated at the win table. The candidates are below; racing stays on.
+   exhaustive recipe, screen stage only (no confirm stage), over the design's
+   [candidate set](deep_bot.md#labels). Rollouts stop at the win table;
+   racing stays on.
 4. **Write a pool record** per position (below).
 
-**Candidates.** Every legal play and every distinct exchange, plus the pass,
-**including blank plays**. A blank multiplies the moves through its
-designations, so one prune applies: a blank move (a play that places the
-blank, or an exchange that returns it) is dropped when its score is 40 or
-more points below the greedy move's, the highest-scoring play. An exchange
-scores 0 under this rule.
+**Survey-tool changes.**
+
+- **Candidates:** blank plays (with the design's 40-point prune), every
+  distinct exchange, and the pass, added to the exhaustive recipe.
+- **`--win-table <path>` and `--horizon-plies K`:** rollouts stop after `K`
+  plies at the table's win probability, with the leave value of the side to
+  move added to the spread.
 
 **Opponent racks.** A new flag, `--lim <path to LIM ONNX>`, sets the
 opponent's leave belief:
 
 - **With the flag,** the tool runs the LIM once per position, from the
-  chooser's view, and samples one leave per rollout by [Algorithm
-  1](#sampling) from a seeded variate, with a uniform refill from the rest of
-  the unseen pool.
+  chooser's view, and samples one leave per rollout by Algorithm 1 from a
+  seeded variate, with a uniform refill from the rest of the unseen pool.
 - **Without it,** the opponent's whole rack is drawn uniformly from the
   unseen pool, which is today's hidden-leaves behavior.
 
@@ -332,10 +198,10 @@ survey's JSON):
   completed (racing stops some early); the paired standard error against the
   leader; the static-equity rank; and `q(a)`.
 
-`q(a)` is the soft best-move label: the probability that `a` is best,
-computed at generation time from the paired differences against the leader
-under a normal approximation. It treats the non-leader moves as independent
-of each other, an approximation acceptable for v0.
+v0 computes `q(a)` at generation time by the normal approximation to the
+paired differences against the leader, since the per-rollout outcomes are not
+kept. It treats the non-leader moves as independent of each other, an
+approximation acceptable for v0.
 
 **Generations** are `positions_per_generation` pools. The window and
 eviction work as in `lim`. Pools are expensive, so the window default is
@@ -357,7 +223,8 @@ because the pool lists the candidates.
 
 ### The two forms
 
-Both use the move set model's encoders (the board trunk, `MoveEncoder`,
+The forms are defined in the [design](deep_bot.md#the-policy-set-model);
+these are v0's choices. Both use the move set model's encoders (the board trunk, `MoveEncoder`,
 `CrossCheckEncoder`), trained from scratch. Today's move set checkpoints are
 face-up and differ in their input blocks.
 
@@ -426,10 +293,10 @@ Each step is a PR with its own tests.
 **The LIM:**
 
 1. **Engine:** `LimInputEncoder` (current position, 5-move history with
-   pre-move cross-checks), the `OppLeave` target, and the DataLoader/FFI mode,
-   with encoder tests.
-2. **Python:** the leave tables, the standalone LIM network with the
-   tilted-prior head and the table pass, its generational trainer and eval
+   pre-move cross-checks), the `OppLeave` target, the DataLoader/FFI mode, and
+   the leave-table tool, with encoder tests.
+2. **Python:** the standalone LIM network with the tilted-prior head and the
+   table pass, its generational trainer and eval
    (the uniform baseline), the `lim` workload spec with held-out chunks, and
    the dashboard tab and figure.
 3. **The `RackInferrer` baseline** on held-out sets, and
