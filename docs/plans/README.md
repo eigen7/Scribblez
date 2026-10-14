@@ -39,6 +39,14 @@ moved on. New plans go here, not in `docs/` proper.
   (PSM) that picks N moves to maximize the expected best value. Mechanical
   continuations, solved endgames, and a generational rack-inference network.
   Starts with PSM labels and PSM recall.
+- **[deep_bot_v0.md](deep_bot_v0.md)**: *proposed, not built.* The
+  implementation plan for DeepBot's first two models, trained from
+  HastyBot-vs-HastyBot games in standard Scrabble. The leave inference model
+  comes first, with free labels from replay, an opponent-history input block
+  and an autoregressive rack head. Then the policy-set model, in both forms,
+  on exhaustively simmed pools with a selectable opponent-rack belief. Each is
+  one dashboard workload that generates, trains, slides its window and
+  publishes eval metrics.
 - **[supreme_bot_m1a.md](supreme_bot_m1a.md)**: *proposed, not built.*
   The build plan for M1a, SupremeBot's held-out transfer test: probe traces
   in the sim runner, a generator workload writing labels and a new `.sprobe`
