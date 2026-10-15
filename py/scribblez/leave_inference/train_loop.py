@@ -17,6 +17,8 @@ import torch
 
 from scribblez.ffi import format_layout
 from scribblez.leave_inference import loss
+from scribblez.leave_inference.autoregressive import sequence_nll
+from scribblez.leave_inference.model import HEAD_AUTOREGRESSIVE
 
 LAYOUT = format_layout()["constants"]["leave_inference"]
 CAUSES = LAYOUT["cause"]
@@ -31,7 +33,8 @@ class Batch:
     spatial: torch.Tensor
     scalar: torch.Tensor
     valid: torch.Tensor  # (B,) bool
-    leave_counts: torch.Tensor  # (V, 27), valid rows only
+    tiles: torch.Tensor  # (V, 7) sorted, padded with -1; valid rows only
+    leave_counts: torch.Tensor  # (V, 27)
     length: torch.Tensor  # (V,)
     pool: torch.Tensor  # (V, 27)
 
@@ -42,6 +45,7 @@ def to_device(batch: dict, device) -> Batch:
         spatial=batch["input_spatial"].to(device, non_blocking=True),
         scalar=batch["input_scalar"].to(device, non_blocking=True),
         valid=valid.to(device),
+        tiles=batch["opp_leave_tiles"][valid].to(device),
         leave_counts=loss.counts_from_tiles(batch["opp_leave_tiles"][valid]).to(device),
         length=batch["opp_leave_length"][valid, 0].long().to(device),
         pool=batch["unseen_pool"][valid].long().to(device),
@@ -49,9 +53,14 @@ def to_device(batch: dict, device) -> Batch:
 
 
 def batch_nll(model, table: loss.TableTensors, b: Batch) -> loss.TiltedResult:
+    """The valid rows' NLL under the model's head. The autoregressive head
+    has no implied readouts, so its result carries the NLL alone."""
     with torch.autocast(device_type=b.spatial.device.type, dtype=torch.bfloat16):
         out = model(b.spatial, b.scalar)
     v = b.valid
+    if model.head_kind == HEAD_AUTOREGRESSIVE:
+        nll = sequence_nll(model.head, out["context"][v], b.tiles, b.length, b.pool)
+        return loss.TiltedResult(nll=nll)
     return loss.tilted_nll(
         table, out["theta"][v], out["a"][v], out["b"][v], b.leave_counts, b.length, b.pool
     )
@@ -146,19 +155,23 @@ def evaluate(model, table: loss.TableTensors, batches: Iterable[dict], device) -
             continue
         r = batch_nll(model, table, b)
         bag = raw["bag_size"][raw["opp_leave_valid"][:, 0] > 0.5, 0]
-        for key, value in (
+        fields = [
             ("nll", r.nll),
             ("uniform", loss.uniform_nll(b.leave_counts, b.length, b.pool)),
             ("length", b.length),
             ("bag", bag),
-            ("presence", r.presence),
-            ("true_presence", (b.leave_counts > 0).float()),
-            ("value_mean", r.value_mean),
-            ("value_sd", r.value_var.sqrt()),
-            ("true_value", r.true_value),
-        ):
+        ]
+        if r.presence is not None:
+            fields += [
+                ("presence", r.presence),
+                ("true_presence", (b.leave_counts > 0).float()),
+                ("value_mean", r.value_mean),
+                ("value_sd", r.value_var.sqrt()),
+                ("true_value", r.true_value),
+            ]
+        for key, value in fields:
             parts[key].append(value.float().cpu().numpy())
-    return eval_metrics({k: np.concatenate(v) for k, v in parts.items()}, cause_counts)
+    return eval_metrics({k: np.concatenate(v) for k, v in parts.items() if v}, cause_counts)
 
 
 def eval_metrics(rows: dict[str, np.ndarray], cause_counts: dict[str, int]) -> dict[str, float]:
@@ -168,14 +181,16 @@ def eval_metrics(rows: dict[str, np.ndarray], cause_counts: dict[str, int]) -> d
         "eval_nll": float(rows["nll"].mean()),
         "eval_nll_uniform": float(rows["uniform"].mean()),
         "eval_nll_vs_uniform": float(gap.mean()),
-        "eval_letter_calibration": float(
-            np.abs(rows["presence"].mean(axis=0) - rows["true_presence"].mean(axis=0)).mean()
-        ),
-        "eval_value_bias": float((rows["value_mean"] - rows["true_value"]).mean()),
-        "eval_value_coverage": float(
-            (np.abs(rows["true_value"] - rows["value_mean"]) <= rows["value_sd"]).mean()
-        ),
     }
+    # The tilted head's implied readouts; the autoregressive head has none.
+    if "presence" in rows:
+        m["eval_letter_calibration"] = float(
+            np.abs(rows["presence"].mean(axis=0) - rows["true_presence"].mean(axis=0)).mean()
+        )
+        m["eval_value_bias"] = float((rows["value_mean"] - rows["true_value"]).mean())
+        m["eval_value_coverage"] = float(
+            (np.abs(rows["true_value"] - rows["value_mean"]) <= rows["value_sd"]).mean()
+        )
     for k in range(1, LAYOUT["max_leave_length"] + 1):
         sel = rows["length"] == k
         if sel.any():

@@ -190,10 +190,10 @@ class TiltedResult:
     implied presence probabilities and leave-value mean and variance (points)."""
 
     nll: torch.Tensor  # (N,)
-    presence: torch.Tensor  # (N, 27)
-    value_mean: torch.Tensor  # (N,)
-    value_var: torch.Tensor  # (N,)
-    true_value: torch.Tensor  # (N,), the true leave's
+    presence: torch.Tensor | None = None  # (N, 27)
+    value_mean: torch.Tensor | None = None  # (N,)
+    value_var: torch.Tensor | None = None  # (N,)
+    true_value: torch.Tensor | None = None  # (N,), the true leave's
 
 
 def tilted_nll(
