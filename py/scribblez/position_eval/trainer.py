@@ -297,7 +297,7 @@ def _checkpoint_and_eval(
 BN_RECALIBRATION_BATCHES = 32
 
 
-def _recalibration_batches(ds, params, gen, device):
+def recalibration_batches(ds, params, gen, device):
     """(spatial, scalar) input pairs on `device` for BatchNorm recalibration,
     drawn from `ds` under a seed distinct from the epoch's."""
     batches = ds.iter_batches(
@@ -366,7 +366,7 @@ def train_one_generation(
     state.rows_trained = result.rows_trained
     state.generation_index = gen + 1
     elapsed = time.time() - t0
-    optim_arm.eval_mode(model, _recalibration_batches(ds, params, gen, device))
+    optim_arm.eval_mode(model, recalibration_batches(ds, params, gen, device))
     eval_seconds = _checkpoint_and_eval(
         model,
         optimizer,
