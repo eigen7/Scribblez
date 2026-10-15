@@ -95,6 +95,16 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
 int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
                           const int64_t* turn_idx, int64_t n, int post_move, float* out);
 
+// The win table's fitting samples from one .slog (sim/win_table_feature.h):
+// one per fittable pre-move position of every game, as its feature (the
+// spread plus own leave value, and the tiles unseen) and its side to move's
+// outcome (1, 0.5 or 0). Writes the first min(count, cap) samples and returns
+// the count, so a call with cap 0 sizes the buffers. Returns -1 on an I/O or
+// header error, and -2 for a face-up-leaves file: win tables model
+// hidden-leaves play only.
+int64_t scribblez_win_table_samples(ScribblezSession* s, const char* path, int32_t* out_spread,
+                                    int32_t* out_tiles_unseen, float* out_outcome, int64_t cap);
+
 // Encode `n` candidate moves into the move-set model's per-move input arrays
 // (layout owned by training/move_set_encoder.h, which the agent also uses at
 // inference). Needs no session.
