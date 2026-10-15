@@ -18,6 +18,7 @@
 #include "sim/macondo_simmer.h"
 #include "sim/sim_runner.h"
 #include "sim/win_pct_table.h"
+#include "util/exception.h"
 #include "util/running_stat.h"
 
 #include <gtest/gtest.h>
@@ -119,6 +120,56 @@ TEST(WinPctTable, ReadsMacondoTable) {
   EXPECT_EQ(t.win_prob(1000, 50), t.win_prob(300, 50));
   EXPECT_EQ(t.win_prob(-1000, 50), t.win_prob(-300, 50));
   EXPECT_EQ(t.win_prob(40, 200), t.win_prob(40, 93));
+}
+
+namespace {
+
+// A scribblez win table whose cells are all `p`, under a header of
+// `header_lines`.
+std::string versioned_table_text(const std::string& header_lines, float p) {
+  std::string text = header_lines;
+  for (int u = 0; u <= WinPctTable::kMaxUnseen; ++u) text += "," + std::to_string(u);
+  text += "\n";
+  for (int s = WinPctTable::kMaxSpread; s >= -WinPctTable::kMaxSpread; --s) {
+    text += std::to_string(s);
+    for (int u = 0; u <= WinPctTable::kMaxUnseen; ++u) text += "," + std::to_string(p);
+    text += "\n";
+  }
+  return text;
+}
+
+std::string write_temp_table(const std::string& name, const std::string& text) {
+  const std::string path = ::testing::TempDir() + name;
+  std::ofstream(path) << text;
+  return path;
+}
+
+std::string header_with_version(int version) {
+  return std::string(kWinTableMagicLine) + "\n# format_version=" + std::to_string(version) +
+         "\n# generation=7\n";
+}
+
+}  // namespace
+
+TEST(WinPctTable, LoadsVersionedTableWithItsHeader) {
+  const std::string path = write_temp_table(
+    "versioned.csv", versioned_table_text(header_with_version(kWinTableFormatVersion), 0.25f));
+  const WinPctTable t = WinPctTable::load_versioned(path);
+  EXPECT_FLOAT_EQ(t.win_prob(10, 40), 0.25f);
+  EXPECT_EQ(t.header().at("format_version"), std::to_string(kWinTableFormatVersion));
+  EXPECT_EQ(t.header().at("generation"), "7");
+}
+
+TEST(WinPctTable, RejectsOtherFormatVersions) {
+  const std::string path = write_temp_table(
+    "stale.csv", versioned_table_text(header_with_version(kWinTableFormatVersion + 1), 0.5f));
+  EXPECT_THROW(WinPctTable::load_versioned(path), util::Exception);
+}
+
+TEST(WinPctTable, VersionedReaderRejectsMacondoFile) {
+  const std::string path = write_temp_table("unversioned.csv", versioned_table_text("", 0.5f));
+  EXPECT_THROW(WinPctTable::load_versioned(path), util::Exception);
+  EXPECT_FLOAT_EQ(WinPctTable::load_macondo(path).win_prob(0, 0), 0.5f);
 }
 
 TEST(MacondoAutoStopper, StopsPastTheIterationCap) {
