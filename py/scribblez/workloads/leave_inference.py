@@ -6,9 +6,8 @@ refitted from the same games as a side product.
 It is generational, like position_eval: any number of generators deliver
 hidden-leaves HastyBot self-play into staging, and the singleton trainer
 trains one epoch per generation over a sliding window, hosting the tag's data
-home. Self-play has no random openings by default: a random ply in a row's
-history, or as the move that set its target leave, is not the policy the
-model learns.
+home. Self-play has no random openings: a random ply in a row's history, or
+as the move that set its target leave, is not the policy the model learns.
 """
 
 from dataclasses import dataclass
@@ -32,16 +31,8 @@ class LeaveInferenceParams:
     )
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
-    random_opening_mean: float = param(
-        0.0,
-        "open each game with K uniformly random plies (K ~ round(Exp(mean))); 0 disables, "
-        "since a random ply is not the policy the model learns",
-    )
     # Held-out games, played by the trainer itself (leave_inference/holdout.py).
     holdout_games: int = param(2000, "held-out self-play games the trainer evaluates on")
-    holdout_seed: int = param(
-        1, "base game seed of the held-out games, so every machine plays the same ones; nonzero"
-    )
     # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")
     turns_per_game: int = param(1, "turns trained per game per generation; 0 = every eligible turn")
@@ -69,8 +60,9 @@ class LeaveInferenceParams:
 
 
 def run_generate(ctx: WorkerContext) -> int:
-    """Hidden-leaves HastyBot self-play: the leave is what the model infers."""
-    return generate(ctx, hasty_spec(ctx.params), face_up_leaves=False)
+    """Hidden-leaves HastyBot self-play without random openings: the leave is
+    what the model infers, from the policy's own moves."""
+    return generate(ctx, hasty_spec(ctx.params), face_up_leaves=False, random_opening_mean=0.0)
 
 
 SPEC = WorkloadSpec(

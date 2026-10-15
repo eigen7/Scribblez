@@ -308,9 +308,7 @@ def run(ctx: WorkerContext) -> int:
     print(f"Tag root: {paths.root}\nDevice: {device}")
 
     table = loss.TableTensors(LeaveValueArrays(), device)
-    held = holdout.ensure(
-        paths.holdout_dir, params.holdout_games, params.holdout_seed, hasty_spec(params)
-    )
+    held = holdout.ensure(paths.holdout_dir, params.holdout_games, holdout.SEED, hasty_spec(params))
     timed_print(
         f"leave values {table.klv_hash}; held-out set {held.content_hash} ({len(held.slogs)} files)"
     )

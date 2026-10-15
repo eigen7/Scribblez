@@ -112,12 +112,13 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
     monkeypatch.setattr(
         leave_inference,
         "generate",
-        lambda ctx, player, face_up_leaves: calls.append(face_up_leaves),
+        lambda ctx, player, face_up_leaves, random_opening_mean: calls.append(
+            (face_up_leaves, random_opening_mean)
+        ),
     )
 
     class Ctx:
         params = leave_inference.LeaveInferenceParams()
 
     leave_inference.run_generate(Ctx())
-    assert calls == [False]
-    assert spec.params_cls().random_opening_mean == 0.0
+    assert calls == [(False, 0.0)]
