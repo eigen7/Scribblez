@@ -82,7 +82,7 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
 
 // Training rows of `task` for specific positions: row j is (game_idx[j],
 // turn_idx[j]), encoded exactly as the DataLoader would, minus the symmetry
-// transpose. `out` takes n rows of scribblez_task_row_floats(task). Returns 0
+// transpose. `out` takes n rows of scribblez_task_row_floats(s, task). Returns 0
 // on success, -1 on an I/O or header error or an unknown task.
 //
 // For consumers that pair rows with per-position data (such as .sobs sim
