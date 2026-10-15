@@ -2,7 +2,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -40,7 +42,9 @@ class ProgressMeter {
   const std::string noun_;
   std::atomic<uint64_t> done_{0};
   const std::chrono::steady_clock::time_point start_;
-  std::atomic<bool> stop_{false};
+  std::mutex stop_mutex_;
+  std::condition_variable stop_cv_;  // wakes the monitor to stop at once
+  bool stop_ = false;                // guarded by stop_mutex_
   std::thread monitor_;
 };
 

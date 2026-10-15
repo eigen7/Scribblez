@@ -31,15 +31,20 @@ void ProgressMeter::render() const {
 }
 
 void ProgressMeter::monitor_loop() {
-  while (!stop_.load(std::memory_order_relaxed)) {
+  std::unique_lock lock(stop_mutex_);
+  while (!stop_) {
     render();
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    stop_cv_.wait_for(lock, std::chrono::milliseconds(200), [this] { return stop_; });
   }
 }
 
 void ProgressMeter::stop_monitor() {
   if (!monitor_.joinable()) return;
-  stop_.store(true, std::memory_order_relaxed);
+  {
+    std::lock_guard lock(stop_mutex_);
+    stop_ = true;
+  }
+  stop_cv_.notify_one();
   monitor_.join();
 }
 
