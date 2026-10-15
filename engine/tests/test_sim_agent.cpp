@@ -322,7 +322,9 @@ TEST_F(SimAgentTest, RolloutTracesMatchTheirRollouts) {
       EXPECT_TRUE(t.turns[0].move == r.opp_reply);
       EXPECT_TRUE(t.turns[1].move == r.self_next);
       EXPECT_EQ(t.truncated, horizon > 0);
-      if (horizon > 0) EXPECT_EQ(int(t.turns.size()), horizon);
+      if (horizon > 0) {
+        EXPECT_EQ(int(t.turns.size()), horizon);
+      }
     }
   }
 }
