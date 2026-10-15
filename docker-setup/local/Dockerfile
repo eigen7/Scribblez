@@ -111,7 +111,7 @@ RUN python3 -c "import site; \
 # 7) Temporary home for install targets that belong above. Putting new stuff
 #    here helps to make image rebuilds faster thanks to Docker caching
 #    mechanics. These items should occasionally be moved above.
-RUN pip3 install --no-cache-dir schedulefree
+RUN pip3 install --no-cache-dir schedulefree pytest-xdist
 
 # gh (GitHub CLI) from GitHub's own apt repo, so coding agents can read PR
 # comments / diffs directly instead of hand-rolling API calls.

@@ -5,8 +5,9 @@ Usage:
     py/run_tests.py [--cpp-only | --python-only | --web-only] [--verbose]
 
 C++: CTest in the build dir behind target/engine (run py/build.py first).
-Python: pytest over py/tests/, importing this checkout's py/ (so it is safe
-to run from a git worktree). Web: `npm run test:run` (vitest) in web/.
+Python: pytest over py/tests/ on pytest-xdist workers, importing this
+checkout's py/ (so it is safe to run from a git worktree). Web:
+`npm run test:run` (vitest) in web/.
 """
 
 import argparse
@@ -22,6 +23,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE_LINK = os.path.join(ROOT, "target", "engine")
 WEB_DIR = os.path.join(ROOT, "web")
 PYTHON_DIR = os.path.join(ROOT, "py")
+# pytest-xdist workers for the Python suite. loadfile keeps each file on one
+# worker, so module fixtures (engine-built corpora, compiled graphs) are built
+# once. Measured on 28 cores: 67 s serial -> 25 s at 4 workers for +24% total
+# CPU; 8 workers reach 19 s for +75%, a poor trade when several agents test
+# at once. Each worker stays near one core: py/tests/conftest.py caps the math
+# libraries' threads.
+PYTEST_WORKERS = 4
 
 
 def run(cmd, cwd=None):
@@ -79,7 +87,7 @@ def run_python_tests(verbose: bool) -> int:
     if not os.path.isdir(test_dir):
         print(f"ERROR: python test directory not found at {test_dir}.", file=sys.stderr)
         return 1
-    flags = "-v" if verbose else ""
+    flags = f"-n {PYTEST_WORKERS} --dist loadfile" + (" -v" if verbose else "")
     env = os.environ.copy()
     env["PYTHONPATH"] = PYTHON_DIR
     cmd = f"python3 -m pytest {test_dir} {flags}".strip()
