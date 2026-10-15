@@ -212,8 +212,8 @@ but the first of them light; form 2 makes one.
 
 A labeled position is a pool of candidate moves with values from sims, run
 from the chooser's information set: the opponent's leave is drawn from the
-chooser's [LIM](#the-leave-inference-model) belief, with a uniform refill,
-and the sims are paired across moves.
+chooser's [leave inference](#the-leave-inference-model) belief, with a
+uniform refill, and the sims are paired across moves.
 
 - **Candidates: every legal play and every distinct exchange, plus the pass,
   including blank plays.** A blank multiplies the moves through its
@@ -258,15 +258,15 @@ model.
 
 ### The leave inference model
 
-The **leave inference model** (LIM) predicts the opponent's **leave**, the
+The **leave inference model** predicts the opponent's **leave**, the
 tiles they kept from their last move, from the observer's view of the game.
 The opponent's rack is that leave plus a refill drawn uniformly from the rest
 of the observer's unseen pool, which is exact: the refill is a uniform draw.
 The leave's length is public: the opponent's rack size minus the tiles their
 last move played or exchanged (a pass keeps the whole rack).
 
-**Inputs.** The LIM is a standalone model, with its own encoder and network,
-sharing no trunk or weights with another model. From the observer's view, it
+**Inputs.** The leave inference model is a standalone model, with its own
+encoder and network, sharing no trunk or weights with another model. From the observer's view, it
 reads:
 
 - **the current position:** the board, the current cross-checks, the
@@ -358,14 +358,14 @@ spread of the opponent's leave value.
 | The agent, Bob's beliefs | ~2,000 queries per turn, ~20 samples each | 1, batched on the GPU |
 | Many unbatched CPU queries | — | 2, falling back to 1 |
 
-**Conditioning on Alice's candidate.** Bob's belief about Alice is the LIM
-run from Bob's view, with Alice's candidate `a` as the most recent move of
+**Conditioning on Alice's candidate.** Bob's belief about Alice is the leave inference
+model run from Bob's view, with Alice's candidate `a` as the most recent move of
 its history. That is one forward pass per `(a, r)`, batched on the GPU.
 
 ### Generations
 
 A frozen policy `P_k` generates games, and those games train `I_k`, the
-`k`-th LIM.
+`k`-th leave inference model.
 
 - **The labels are free.** A `.slog` stores the initial racks and every move
   with the tiles drawn after it, so replay reconstructs every player's true
@@ -377,10 +377,7 @@ A frozen policy `P_k` generates games, and those games train `I_k`, the
 
 `I_k` models opponents who play like `P_k`. Against Macondo or human players
 that is a mismatch. Fine-tuning on recorded games with known racks is the
-later remedy. `RackInferrer`
-([belief/rack_inference.h](../../engine/include/belief/rack_inference.h)),
-which reads one move under a HastyBot-equity model, is the reference each
-LIM is measured against.
+later remedy.
 
 ## Cost and allocation
 
@@ -404,7 +401,7 @@ At roughly 0.1 to 0.3 ms each, that is 60 to 200 CPU-seconds, or very roughly
   is clear on the paired samples.
 - **Caching `β(a, r)`.** Every replenishment sim of `(a, r)` reuses Bob's
   choice.
-- **Batching** the network calls (the PSM's sets and the LIM's beliefs)
+- **Batching** the network calls (the PSM's sets and the leave beliefs)
   across subtrees, following the `BatchingPositionEvalService` pattern.
 
 ## Build order
@@ -412,11 +409,11 @@ At roughly 0.1 to 0.3 ms each, that is 60 to 200 CPU-seconds, or very roughly
 Each step names what it measures. The measurements guide the next step.
 Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
 
-1. **The LIM, `I_0`,** from HastyBot games, and the v0 win table.
-   *Measure:* held-out log-likelihood of the true leave against
-   `RackInferrer` and uniform draws.
+1. **The leave inference model, `I_0`,** from HastyBot games, and the v0
+   win table. *Measure:* held-out log-likelihood of the true leave against
+   uniform draws.
 2. **PSM labels.** Pools over positions from the whole game except the
-   endgame, with opponent leaves from the LIM and rollouts stopped at the
+   endgame, with opponent leaves from the leave inference model and rollouts stopped at the
    win table.
 3. **PSM v0, both forms.** *Measure:* recall, meaning how often the pool's
    sim-best move is in `S`, against the top `N` by value, by form, bag size
@@ -428,14 +425,14 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
    in `R_B`.
 5. **The agent.**
    - The seeded draw sequence, the sim with win-table leaves, pairing,
-     two-level evaluation with LIM beliefs, and the cache.
+     two-level evaluation with inferred-leave beliefs, and the cache.
    - *Measure:* the picks at the known positions
      (`positions/NWL23/interesting-positions/`, the blind_spots tag), turn
      time, and matches against BestBot and `mset-sim` in standard Scrabble.
 6. **Allocation.** Successive halving and racing. *Measure:* the strength
    lost against the time saved.
 7. **Generations.** DeepBot labels positions for the next PSM, its games
-   train the next LIM and fit the next win table.
+   train the next leave inference model and fit the next win table.
 
 ## Limits
 
