@@ -173,7 +173,7 @@ A generator worker's cycle:
   distinct exchange, and the pass, added to the exhaustive recipe.
 - **`--win-table <path>` and `--horizon-plies K`:** rollouts stop after `K`
   plies at the table's win probability, with the leave value of the side to
-  move added to the spread.
+  move added to the spread. The tool's endgame solves are not used.
 
 **Opponent racks.** A new flag, `--lim <path to LIM ONNX>`, sets the
 opponent's leave belief:
@@ -209,7 +209,7 @@ large.
 
 **Parameters:** `lim_onnx` (empty for uniform), `win_table`,
 `horizon_plies`, `positions_per_game`, `rollouts` (screen budget, default
-300), `race`, `solve_max_unseen`, `positions_per_generation`, `window`,
+300), `race`, `positions_per_generation`, `window`,
 `holdout_every`, `holdout_size`, `forms`, `max_rows`.
 
 ### Inputs at train time

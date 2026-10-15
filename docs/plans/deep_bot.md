@@ -68,8 +68,7 @@ Bob holds `z` and does not know Alice's tiles.*
 *In that subtree, the PSM proposes Bob's set, `b₁`, `b₂`, `b₃` and others.
 Bob samples racks for Alice from his own belief, which reads what `a` reveals
 (`x̂₁`, `x̂₂`, …). For each of his candidates, he sims: Alice plays hasty, Bob
-plays hasty, and the leaf is evaluated by the network, or by the solver once
-the bag is empty. Each candidate scores the mean over Alice's sampled racks,
+plays hasty, and the win table values the leaf. Each candidate scores the mean over Alice's sampled racks,
 and Bob's move is the argmax, here `b₁`.*
 
 *Only that move crosses back. In Alice's evaluation Bob plays `b₁`; Alice
@@ -85,22 +84,30 @@ depend on the opponent's hidden tiles. In the whole design, only two
 decisions search: Alice's at the root and Bob's in his subtree. Each is made
 on its own player's information.
 
-**The leaf.**
+**The leaf: a win table.** After a sim's fixed moves, a fast function turns
+the position into a win probability, as Macondo's simmer does:
 
-- **Bag empty:** if the bag is empty when a player is to move, anywhere in a
-  sim, the sim stops and the endgame solver values the position. Within a
-  sampled world both racks are known, so the endgame is
-  perfect-information. When a candidate and a reply empty the bag between
-  them, every sim of that line ends in a solve, so endgame tactics the
-  mechanical rule would misplay (a block, a two-way out) are valued exactly.
-- **Otherwise,** after the sim's fixed moves, the position evaluation network
-  reads the position from the side that owns the evaluation. Within a sampled
-  world the opponent's leave is known, so today's face-up checkpoints can
-  read it. They value the rest of the game as if leaves were public, a bias
-  that lasts until a standard-Scrabble teacher is trained.
+`P(win) = table(spread + leave value, tiles unseen)`
 
-The solver runs in class mode. A proven class gives 1, ½ or 0. An unproven
-solve falls back to the network's reading of the same position.
+- **The spread** is from the side to move, plus the static leave value of
+  that side's remaining rack, as Macondo adds its "leftover".
+- **Tiles unseen** are the bag plus the opponent's rack, from the side to
+  move.
+- **If the game ends** inside the sim, the outcome is exact.
+
+The probability is then taken from the side that owns the evaluation (Bob in
+his subtree, Alice in hers), as `1 − P` when the other side is to move. The
+leaf never reads the opponent's hidden tiles beyond their count, so it
+fits a game in which neither player sees the other's leave. It is a table
+lookup, so a sim's cost is its mechanical moves.
+
+**The win table is versioned.** It is fitted from `.slog` outcomes of the
+current policy: `P(win | spread + leave value, unseen)`, bucketed, smoothed and
+made monotone in spread, in the CSV format the engine already reads
+([sim/win_pct_table.h](../../engine/include/sim/win_pct_table.h)). The win
+probability at a given spread shifts as play gets stronger, so each policy
+generation gets a new version, and everything it values records the version
+it used. A trained network that reads the board may replace the table later.
 
 **Pairing.** Samples come from variates keyed by `(sample index, draw
 ordinal)`:
@@ -234,28 +241,10 @@ and the sims are paired across moves.
   estimates account for that, since a move far below the leader rarely comes
   out on top.
 
-**Label rollouts stop at a win table.** Played to the end of the game, each
-rollout is slow and its outcome is noisy. Following Macondo's simmer, a label
-rollout stops after `K` plies, and a fast function turns the position there
-into a win probability:
-
-`P(win) = table(spread + leave value, tiles unseen)`
-
-- **The spread** is from the side to move, plus the leave value of that
-  side's remaining rack, as Macondo adds its "leftover".
-- **Tiles unseen** are the bag plus the opponent's rack, from the side to
-  move.
-- **If the game ends** inside the horizon, the outcome is exact. If the bag
-  empties with few enough tiles unseen, the endgame solver values the
-  position.
-
-**The win table is versioned.** It is fitted from `.slog` outcomes of the
-current policy: `P(win | spread + leave value, unseen)`, bucketed, smoothed and
-made monotone in spread, in the CSV format the engine already reads
-([sim/win_pct_table.h](../../engine/include/sim/win_pct_table.h)). The win
-probability at a given spread shifts as play gets stronger, so each policy
-generation gets a new version, and every pool records the version that
-labeled it.
+**Label rollouts stop at the win table.** Played to the end of the game, a
+rollout is slow and its outcome noisy. A label rollout instead plays `K`
+plies by the mechanical rule and ends at the [win table](#sims), whose version
+the pool records.
 
 **Generations.** Once DeepBot runs, its own evaluations label positions, and
 each PSM generation trains on the previous agent's labels, as the move
@@ -404,9 +393,10 @@ Per Alice candidate:
 | Alice's sims | `R_A ·` sims per rack: about 400 |
 
 Modeling Bob dominates, at about 40 to 1. With 20 candidates, a turn is
-about 320,000 short sims. Each one is two mechanical moves plus a batched
-network evaluation or a solve, which puts a turn at very roughly 10 to 20
-seconds on the development machine. Four levers:
+about 320,000 short sims. Each one is two mechanical moves plus a table
+lookup, so move generation dominates: about 640,000 HastyBot moves per turn.
+At roughly 0.1 to 0.3 ms each, that is 60 to 200 CPU-seconds, or very roughly
+2 to 7 seconds on 28 threads. Four levers:
 
 - **Successive halving over Alice's candidates.** A cheap first pass models
   Bob as the PSM's top-1. The full subtree runs only for survivors.
@@ -414,8 +404,8 @@ seconds on the development machine. Four levers:
   is clear on the paired samples.
 - **Caching `β(a, r)`.** Every replenishment sim of `(a, r)` reuses Bob's
   choice.
-- **Batching** network evaluations across sims and subtrees, following the
-  `BatchingPositionEvalService` pattern.
+- **Batching** the network calls (the PSM's sets and the LIM's beliefs)
+  across subtrees, following the `BatchingPositionEvalService` pattern.
 
 ## Build order
 
@@ -437,7 +427,7 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
    each kind (bingo, setup, other) is chosen, and how stable the choice is
    in `R_B`.
 5. **The agent.**
-   - The seeded draw sequence, the sim with solver leaves, pairing,
+   - The seeded draw sequence, the sim with win-table leaves, pairing,
      two-level evaluation with LIM beliefs, and the cache.
    - *Measure:* the picks at the known positions
      (`positions/NWL23/interesting-positions/`, the blind_spots tag), turn
@@ -445,8 +435,7 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
 6. **Allocation.** Successive halving and racing. *Measure:* the strength
    lost against the time saved.
 7. **Generations.** DeepBot labels positions for the next PSM, its games
-   train the next LIM and fit the next win table, and a standard-Scrabble
-   teacher replaces the face-up leaf model.
+   train the next LIM and fit the next win table.
 
 ## Limits
 
@@ -456,15 +445,17 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
   if recall turns out to be the bottleneck.
 - **Depth.** After the two searched decisions, every move is mechanical.
   Setups that pay off later than the sim's horizon are valued only by the
-  leaf network. In Bob's sims, Alice's reply is hasty, so Bob's model of
+  win table. In Bob's sims, Alice's reply is hasty, so Bob's model of
   Alice does not look for blocks.
 - **Bob's argmax.** A deterministic model of Bob, over paired means of about
   20 samples, is slightly biased toward moves that drew lucky samples.
   Scrabble gives little reason for mixed strategies, so v1 keeps the argmax.
   Mixing (a softmax, or sampling between the top two) is the easy change if
   Alice's model of Bob proves brittle.
-- **The face-up leaf model.** It values the rest of the game as if leaves
-  were public, until the standard-Scrabble teacher exists.
+- **The win table is a coarse leaf.** It sees the spread, the side to move's
+  leave value and the tiles unseen, not the board: a wide-open board and a
+  closed one read the same. A trained leaf network is the later
+  replacement.
 
 ## Where this sits
 
