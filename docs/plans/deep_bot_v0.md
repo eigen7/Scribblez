@@ -86,10 +86,10 @@ recorded beside the format version but never checked as a format.
 
 | Artifact | Format version | Provenance |
 |---|---|---|
-| Leave table (`.ltab`) | `kLeaveTableFormatVersion` in the file header, after the magic. It covers the row layout and the row order | header: the lexicon, and the content hash of the KLV its values came from |
+| Leave table (`LeaveValueArrays`) | none of its own: it is built in memory from the leave values and never stored. Its rows are fixed by the leave values (the KLV's content hash, which models record) and by its layout and order, which `leave_inference_format_version` covers | — |
 | Win table | `kWinTableFormatVersion` in a `#`-prefixed header ahead of the CSV grid. It covers the grid's shape and the feature definition, so a change to `win_table_feature` bumps it | header lines: `tag` and `generation` (or the CLI's corpus), `policy`, `games`, `positions` |
-| Leave inference ONNX | metadata `leave_inference_format_version`, covering the encoder's inputs and the 29-float output layout. `LeaveInferenceSpec::kVersions` gates it and rejects a missing entry. Also stamped: `leave_table`, the content hash of the `.ltab` it was trained against, checked at load | metadata `tag`, `generation`, `policy` (the `hasty_spec` string), `head` |
-| Leave inference checkpoint | `leave_inference_format_version` and the `leave_table` hash in the checkpoint config. Resuming with a different value is refused, as the evidence trainer refuses a mismatched `move_encoding_version` | `GenerationalState` |
+| Leave inference ONNX | metadata `leave_inference_format_version`, covering the encoder's inputs and the 29-float output layout. `LeaveInferenceSpec::kVersions` gates it and rejects a missing entry. Also stamped: `leave_values`, the content hash of the KLV whose values it was trained against, checked at load | metadata `tag`, `generation`, `policy` (the `hasty_spec` string), `head` |
+| Leave inference checkpoint | `leave_inference_format_version` and the `leave_values` hash in the checkpoint config. Resuming with a different value is refused, as the evidence trainer refuses a mismatched `move_encoding_version` | `GenerationalState` |
 | Pool sidecar | `kPoolFormatVersion` in its header, after the magic | header: the win table's and the leave inference model's identities (tag, generation, format version), or uniform beliefs; `horizon_plies` |
 | PSM ONNX and checkpoints | the existing `input_encoding_version` and `move_encoding_version`, plus `psm_format_version` for each form's set-conditioning stage and outputs | `tag`, `generation`, `form` |
 
@@ -298,41 +298,37 @@ the replay.
   position task's row width. It takes the task too, so the held-out eval can
   decode a fixed list of `(game, turn)` rows.
 
-#### The leave table
+#### The leave table: `LeaveValueArrays`
 
-The leave table is a file, `.ltab`, holding every leave drawable from a full
-bag, for each length from 1 to 6, in `walk_multisets` order.
+`LeaveValueArrays` (`lexicon/leave_value_arrays.h`) holds the same leaves and
+values as `LeaveValues`, laid out for a different query. `LeaveValues`
+answers "what is this leave worth?" by lookup. `LeaveValueArrays` holds every
+leave of each length 1–6 in one flat array, for the passes that scan a whole
+length. The 6-tile array has 737,311 rows; the 4-tile array has 25,254.
 
-- **Header:**
-  - the magic and `kLeaveTableFormatVersion`;
-  - the lexicon;
-  - the content hash of the KLV the values came from;
-  - each length's row count.
-- **Rows:** 27 `uint8` counts, a 32-bit presence mask, and `v(ℓ)` as a
-  float. The 6-tile table has 737,311 rows, about 26 MB; the 4-tile table
-  has 25,254.
-
-`leave_table_tool` writes it. The rows come from
-`belief::enumerate_leaves(TILE_COUNTS, k)`, unchanged, and the values from
-`HastyEquity::leave_value`. `HastyEquity` gains a content hash of the KLV it
-loaded, for the header.
-
-`belief::LeaveTable::load` reads the file in the engine, and
-`leave_table.py` reads it in Python. Both check the magic and the version.
-Every consumer reads the same file, so the row order that sampling's pairing
-and the parity tests depend on cannot drift.
-
-The trainer runs the tool once per tag at startup. It delivers the file to
-`models/leave_table/` with the first generation's outputs, and stamps the
-file's content hash into every checkpoint and ONNX. Consumers that pin a
-generation get the file with it. A consumer that loads a model checks that
-the table's hash matches the model's `leave_table` entry. A model reads its
-tilt `a` and `b` on the values it was trained against, or not at all.
+- **Rows are 8 bytes:** six tile codes, ascending and padded, and the value
+  as an `int16` in hundredths of a point. Each length has its own array, so
+  the length is implicit. Counts and presence are derived from the tiles
+  where a pass needs them.
+- **Built in memory** from `LeaveValues`, by iterating its entries in the
+  leave values file's own order, so the order is fixed by the file. The
+  constructor refuses leave values that lack a leave drawable from a full
+  bag, since the model normalizes over these rows.
+- **Python reaches it through the FFI**, through the `ffi.LeaveValueArrays`
+  class, which copies a length's rows out. The trainer and the engine's
+  sampler therefore see the same rows in the same order, which sampling's
+  pairing and the parity tests depend on.
+- **Its identity is the KLV's.** `LeaveValues` records the content hash of
+  the KLV it loaded. The trainer stamps that hash, as `leave_values`, into
+  every checkpoint and ONNX. A consumer that loads a model checks it against
+  its own leave values. A model reads its tilt `a` and `b` on the values it
+  was trained against, or not at all. A change to the row layout or order is
+  a `leave_inference_format_version` bump.
 
 #### Sampling: Algorithm 1, on the CPU
 
 `belief::LeaveSampler` takes the 29 floats, the leave's length, the
-observer's unseen pool, and the loaded leave table.
+observer's unseen pool, and the leave table.
 
 - **One pass over the table** for that length gives each row's log weight,
   the CDF in table order, and `log Z`. Each row costs about 28 additions, as
@@ -358,17 +354,16 @@ parity reference.
     kLeaveInferenceFormatVersion, -1}}`.
 - **`LeaveInferenceNet`** drives `NeuralNet<LeaveInferenceSpec>` directly, as
   `move_proposal_nets` does. TrtEvalService's batching earns nothing at one
-  call per position. At load, it checks the model's `leave_table` entry
-  against the table it is given.
+  call per position. At load, it checks the model's `leave_values` entry
+  against the loaded leave values' KLV hash.
 
 ### Python work: `py/scribblez/leave_inference/`
 
 | File | Contents |
 |---|---|
 | `model.py` | The encoder (a conv tower over the 348 planes, an MLP over the scalars, fused into a context vector) and the heads |
-| `leave_table.py` | The `.ltab` reader, giving device tensors, one per length |
 | `loss.py` | The tilted-prior NLL ([below](#the-loss)) |
-| `win_table.py` | The win-table fit, the file writer and the CLI |
+| `win_table.py` | The win-table fit; the engine writes and evaluates the tables through the FFI |
 | `trainer.py` | The generational loop, the held-out eval, and the win-table refit |
 | `holdout.py` | The held-out games |
 | `onnx_export.py` | Export, stamped through `onnx_export_util` |
@@ -449,8 +444,7 @@ comparison measures what it gives up; it does not compete to replace it.
     `leave_inference_metrics`, and `InfoTab`;
   - a `FIGURES["leave_inference_metrics"]` builder in `dashboard/api.py`;
   - `LEAVE_INFERENCE_QUALITY` metric groups in `dashboard/plots.py`.
-- **Outputs per generation:** the ONNX, the win table and the checkpoint,
-  plus the leave table once.
+- **Outputs per generation:** the ONNX, the win table and the checkpoint.
 
 ### Held-out data: regenerated
 
@@ -529,14 +523,14 @@ A generator worker's cycle:
   move added to the spread. The table is passed to the simmer, in place of
   `macondo_default()`. The tool's endgame solves are not used.
 
-**Opponent racks.** Two new flags, `--leave-inference <ONNX path>` and
-`--leave-table <.ltab path>`, set the opponent's leave belief:
+**Opponent racks.** A new flag, `--leave-inference <ONNX path>`, sets the
+opponent's leave belief:
 
-- **With the flags,** the tool runs the leave inference model once per
+- **With the flag,** the tool runs the leave inference model once per
   position, from the chooser's view. It samples one leave per rollout with
   `LeaveSampler`, from a seeded variate, and adds a uniform refill from the
   rest of the unseen pool.
-- **Without them,** the opponent's whole rack is drawn uniformly from the
+- **Without it,** the opponent's whole rack is drawn uniformly from the
   unseen pool, which is today's hidden-leaves behavior.
 
 Rollout `i` uses the same rack sample for every candidate, so the per-move
@@ -570,7 +564,7 @@ default is large.
 **The source tag.** `leave_inference_tag` and `leave_inference_generation`
 pin a generation of a `leave_inference` tag through `finalize`, as
 `move_set_eval` pins its teacher. The pin supplies the win table and, with
-`leave_beliefs = inferred`, the model and the leave table. With
+`leave_beliefs = inferred`, the model. With
 `leave_beliefs = uniform`, it supplies the win table alone.
 
 **Parameters:**
@@ -689,7 +683,7 @@ Each step is a PR with its own tests.
 
 **The leave inference model:**
 
-2. **Engine rows and the leave table.**
+2. **Engine rows, and the leave table.**
    - A mechanical commit moves the shared encoder helpers into
      `board_planes.h`.
    - Then:
@@ -699,9 +693,8 @@ Each step is a PR with its own tests.
      - the rows: `OppLeaveTarget` with validity, `LeaveInferenceTask`,
        `DecodeTask::kLeaveInference` with its FFI shapes, the task-aware
        `decode_rows`, and `kLeaveInferenceFormatVersion` in `format_layout`;
-     - the leave table: the `.ltab` format, `leave_table_tool`,
-       `LeaveTable::load`, `HastyEquity`'s KLV hash, and
-       `kLeaveTableFormatVersion` in `format_layout`.
+     - the leave table: `LeaveValueArrays` built in memory, its FFI class,
+       and the KLV hash on `LeaveValues`.
    - Tests:
      - the history slots line up with the replay;
      - pre-move cross-checks equal the board's cross-checks before the move;
@@ -713,15 +706,15 @@ Each step is a PR with its own tests.
      - the position tasks' rows are byte-identical with and without the
        recorder change;
      - the leave table has the stated row counts, a fixed order, and
-       `HastyEquity`'s values, and a reader rejects a wrong version.
+       `HastyEquity`'s values.
 3. **The trainer and workload.**
-   - The `leave_inference` package: the tilted head, the `.ltab` reader, and
-     the streaming loss with its gradcheck.
+   - The `leave_inference` package: the tilted head, the leave table's
+     arrays, and the streaming loss with its gradcheck.
    - The trainer:
      - the generational loop and the regenerated held-out set;
      - the eval, with the uniform baseline and calibration;
      - the checkpoint version gate;
-     - the per-generation win-table refit, and delivery of both tables.
+     - the per-generation win-table refit and its delivery.
    - The face-up refusal, the `generate` signature change, the workload spec
      and registration, and the dashboard tab and figure.
    - *Reports:* the loss pass's throughput by leave length and its device
@@ -732,7 +725,7 @@ Each step is a PR with its own tests.
      step 5's output layout.
 5. **Serving.**
    - ONNX export with its metadata, `LeaveInferenceSpec`,
-     `LeaveInferenceNet` with the `leave_table` check, and `LeaveSampler`.
+     `LeaveInferenceNet` with the `leave_values` check, and `LeaveSampler`.
    - Parity fixtures through `add_parity_fixture` (registered in
      `parity_fixtures_cleanup`): ONNX output against PyTorch, and
      `LeaveSampler`'s `log Z` and `log_prob` against the PyTorch table pass.
@@ -748,8 +741,7 @@ before serving fixes the layout.
 **The PSM:**
 
 6. **Engine:** in the survey tool:
-   - `--win-table`, `--horizon-plies`, `--leave-inference` and
-     `--leave-table`;
+   - `--win-table`, `--horizon-plies` and `--leave-inference`;
    - blank plays with the 40-point prune, exchanges and the pass in the
      candidate set;
    - the pool sidecar with `q(a)`, and `kPoolFormatVersion`.

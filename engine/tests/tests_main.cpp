@@ -5023,7 +5023,7 @@ TEST(SlogSampling, SmallerSamplesArePrefixesOfLarger) {
 // turns whose replayed bag lies in it.
 TEST(SlogSampling, BagRangeFiltersTheSampleOrder) {
   auto fix = write_multi_file_slog(/*games_per_file=*/4, /*num_files=*/1);
-  const std::vector<char> buf = binlog::read_file_bytes(fix.slog_paths[0]);
+  const std::vector<char> buf = util::read_file_bytes(fix.slog_paths[0]);
   const auto* metas =
     reinterpret_cast<const binlog::GameMetadata*>(buf.data() + sizeof(binlog::FileHeader));
   const binlog::BagRange narrow{5, 30};

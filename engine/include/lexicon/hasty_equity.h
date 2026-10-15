@@ -92,8 +92,9 @@ class HastyEquity {
   double leave_value(const Rack& leave) const { return leave_values_.lookup(leave); }
 
   // Exposed for LeaveValues' incremental cursor, which prices many leaves
-  // more cheaply than one lookup() each.
-  const LeaveValues& leave_table() const { return leave_values_; }
+  // more cheaply than one lookup() each, and for whole-table views
+  // (LeaveValueArrays).
+  const LeaveValues& leave_values() const { return leave_values_; }
 
  private:
   HastyEquity() = default;

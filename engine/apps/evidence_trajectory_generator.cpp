@@ -38,6 +38,7 @@
 #include "training/evidence_trajectory.h"
 #include "util/assert.h"
 #include "util/exception.h"
+#include "util/hash.h"
 #include "util/misc.h"
 #include "util/progress.h"
 
@@ -487,13 +488,12 @@ int main(int argc, char** argv) {
         service.opp_leave_input(), opt.open_leaves);
     }
     const InputEncodingSpec spec{&dict, service.opp_leave_input()};
-    const std::string proposer_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
+    const std::string proposer_hash = util::file_content_hash(params.onnx_path);
 
     std::shared_ptr<nn::PositionEvalService> leaf_eval_service =
       nn::load_leaf_position_service(opt.leaf_model, params.cuda_device_id);
     std::string leaf_hash;
-    if (!opt.leaf_model.empty())
-      leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
+    if (!opt.leaf_model.empty()) leaf_hash = util::file_content_hash(opt.leaf_model);
 
     if (opt.gcg_mode()) {
       run_gcg_mode(dict, spec, opt, &service, proposer_hash, leaf_eval_service.get(), leaf_hash);

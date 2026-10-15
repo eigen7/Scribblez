@@ -66,6 +66,7 @@ add_library(scribblez_core STATIC
   src/nn/batching_position_eval_service.cpp
   src/agent/evidence_staging.cpp
   src/belief/leave_prior.cpp
+  src/lexicon/leave_value_arrays.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
   src/data/sim_observation_log.cpp
@@ -87,6 +88,7 @@ add_library(scribblez_core STATIC
   src/serve/web_server.cpp
   src/util/string.cpp
   src/util/io.cpp
+  src/util/hash.cpp
   src/util/math.cpp
   src/util/misc.cpp
   src/util/progress.cpp
@@ -394,6 +396,11 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_rack_inference PRIVATE
     scribblez_core Boost::json GTest::gtest_main)
   gtest_discover_tests(test_rack_inference)
+
+  add_executable(test_leave_value_arrays tests/test_leave_value_arrays.cpp)
+  target_link_libraries(test_leave_value_arrays PRIVATE
+    scribblez_core Boost::json GTest::gtest_main)
+  gtest_discover_tests(test_leave_value_arrays)
 
   add_executable(test_probe_log tests/test_probe_log.cpp)
   target_link_libraries(test_probe_log PRIVATE

@@ -3,6 +3,7 @@
 #include "nn/cuda_util.h"
 #include "nn/onnx_metadata.h"
 #include "util/exception.h"
+#include "util/io.h"
 
 #include <boost/program_options.hpp>
 
@@ -422,7 +423,7 @@ void NeuralNetBase::load() {
   if (m.params.max_rows < 1) throw util::CleanException("NeuralNet: max_rows must be >= 1");
   set_device(m.params.cuda_device_id);
 
-  std::vector<char> onnx_bytes = read_file_bytes(m.params.onnx_path);
+  std::vector<char> onnx_bytes = util::read_file_bytes(m.params.onnx_path);
   OnnxMetadata meta = parse_onnx_metadata(onnx_bytes);
   check_graph(m.spec, meta, m.params.onnx_path);
   check_versions(m.spec, meta, m.params.onnx_path);
@@ -437,7 +438,7 @@ void NeuralNetBase::load() {
   // right structure with, in general, another checkpoint's weights. Refitting
   // swaps in this model's weights at a fraction of the cost of a build.
   if (std::filesystem::exists(cache_path)) {
-    m.deserialize_engine(read_file_bytes(cache_path));
+    m.deserialize_engine(util::read_file_bytes(cache_path));
     m.refit_engine(onnx_bytes);
   } else {
     std::vector<char> plan = m.build_plan(onnx_bytes);

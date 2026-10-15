@@ -26,6 +26,14 @@ class LeaveValues {
   // 0.0 for an empty leave or one absent from the table.
   float lookup(const Rack& leave) const;
 
+  // Calls f(leave, value) for every leave in the table, in the file's order
+  // (its word index, below), so the order is fixed by the file.
+  template <typename F>
+  void for_each(F&& f) const;
+
+  // The util::content_hash of the .klv2 file: which leave values these are.
+  const std::string& content_hash() const { return content_hash_; }
+
   // ---- Incremental cursor ----
   // The KWG is minimized, so suffix nodes are shared and a node can't carry a
   // value. Instead a leave's value is indexed by its word index: its position
@@ -51,12 +59,21 @@ class LeaveValues {
     return index < values_.size() ? values_[index] : 0.0f;
   }
 
+  // The tile a leave-KWG code stands for: the inverse of klv_code.
+  static Tile klv_tile(uint8_t code) { return code == 0u ? BLANK : Tile::of(int(code) - 1); }
+
  private:
+  // for_each's walk of the leaves under arc list `node`. `acc` holds the
+  // current prefix and `index` the running word index into values_.
+  template <typename F>
+  void walk(uint32_t node, Rack& acc, uint32_t& index, F& f) const;
+
   std::unordered_map<Rack, float> values_by_leave_;  // leave -> value
   std::vector<uint32_t> nodes_;                      // KWG arc nodes
   std::vector<float> values_;                        // leave values, indexed by word index
   std::vector<uint32_t> subtree_words_;              // per arc: words at or below it
   uint32_t root_arc_list_ = 0;
+  std::string content_hash_;
 };
 
 }  // namespace scribblez

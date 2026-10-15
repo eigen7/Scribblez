@@ -104,6 +104,27 @@ int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* 
 int64_t scribblez_win_table_samples(ScribblezSession* s, const char* path, void* out_samples,
                                     int64_t cap);
 
+// The session lexicon's HastyBot leave values laid out for whole-length scans
+// (lexicon/leave_value_arrays.h): every leave of each length 1..6 drawable
+// from a full bag, in the leave values file's order. Free with
+// scribblez_leave_value_arrays_delete.
+typedef struct LeaveValueArraysHandle LeaveValueArraysHandle;
+LeaveValueArraysHandle* scribblez_leave_value_arrays_new(ScribblezSession* s);
+void scribblez_leave_value_arrays_delete(LeaveValueArraysHandle* a);
+
+// The number of length-k leaves, or -1 for k outside 1..6.
+int64_t scribblez_leave_value_arrays_rows(const LeaveValueArraysHandle* a, int k);
+
+// Copies the length-k leaves, in order: their tile codes into out_tiles
+// (rows x 6, ascending, 255 past the leave's length) and their values, in
+// points, into out_values. Returns 0, or -1 for k outside 1..6.
+int scribblez_leave_value_arrays_copy(const LeaveValueArraysHandle* a, int k, uint8_t* out_tiles,
+                                      float* out_values);
+
+// The content hash of the .klv2 the values came from: the identity models
+// trained against them record. Owned by the handle.
+const char* scribblez_leave_value_arrays_content_hash(const LeaveValueArraysHandle* a);
+
 // Writes a scribblez win table (sim/win_pct_table.h) from `grid`, the
 // fitter's kRows x kCols floats in file order, and `header`, its provenance as
 // "key=value" lines separated by '\n'. Returns 0, or -1 with a message in

@@ -5,11 +5,16 @@
 #include <cstddef>
 #include <ostream>
 #include <string>
+#include <vector>
 
 namespace scribblez::util {
 
 // Returns an empty string if the file can't be opened.
 std::string read_file(const std::string& path);
+
+// The file's exact bytes. Throws util::CleanException naming the file if it
+// cannot be opened.
+std::vector<char> read_file_bytes(const std::string& path);
 
 // Receive/send exactly n bytes on a socket (recv/send, so not usable on
 // plain files), looping over short transfers. Returns false on EOF or error.

@@ -44,6 +44,7 @@
 #include "sim/slog_position_simmer.h"
 #include "sim/transfer_candidates.h"
 #include "util/exception.h"
+#include "util/hash.h"
 #include "util/misc.h"
 #include "util/progress.h"
 
@@ -544,7 +545,7 @@ int main(int argc, char** argv) {
     std::string leaf_hash;
     if (opt.horizon > 0) {
       leaf = nn::load_leaf_position_service(opt.leaf_model);
-      leaf_hash = nn::content_hash(binlog::read_file_bytes(opt.leaf_model));
+      leaf_hash = util::file_content_hash(opt.leaf_model);
     }
     util::ProgressMeter meter(total, "positions");
     for (const binlog::PendingSlog& p : pending) {

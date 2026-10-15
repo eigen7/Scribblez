@@ -13,6 +13,7 @@
 #include "encoding/input_encoder.h"
 #include "encoding/position_encoder.h"
 #include "lexicon/hasty_equity.h"
+#include "lexicon/leave_value_arrays.h"
 #include "lexicon/lexicon.h"
 #include "sim/reply_blocking.h"
 #include "sim/sim_runner.h"
@@ -381,6 +382,40 @@ std::map<std::string, std::string> parse_header_lines(const char* text) {
 }
 
 }  // namespace
+
+struct LeaveValueArraysHandle {
+  scribblez::LeaveValueArrays arrays;
+};
+
+LeaveValueArraysHandle* scribblez_leave_value_arrays_new(ScribblezSession* /*s*/) {
+  // The session has set the lexicon whose leave values these are.
+  scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+  return new LeaveValueArraysHandle{
+    scribblez::LeaveValueArrays(scribblez::HastyEquity::instance().leave_values())};
+}
+
+void scribblez_leave_value_arrays_delete(LeaveValueArraysHandle* a) { delete a; }
+
+int64_t scribblez_leave_value_arrays_rows(const LeaveValueArraysHandle* a, int k) {
+  if (k < 1 || k > scribblez::kLeaveArraysMaxLength) return -1;
+  return int64_t(a->arrays.of_length(k).size());
+}
+
+int scribblez_leave_value_arrays_copy(const LeaveValueArraysHandle* a, int k, uint8_t* out_tiles,
+                                      float* out_values) {
+  if (k < 1 || k > scribblez::kLeaveArraysMaxLength) return -1;
+  const auto rows = a->arrays.of_length(k);
+  for (size_t i = 0; i < rows.size(); ++i) {
+    std::memcpy(out_tiles + i * scribblez::kLeaveArraysMaxLength, rows[i].tiles.data(),
+                scribblez::kLeaveArraysMaxLength);
+    out_values[i] = rows[i].value();
+  }
+  return 0;
+}
+
+const char* scribblez_leave_value_arrays_content_hash(const LeaveValueArraysHandle* a) {
+  return a->arrays.content_hash().c_str();
+}
 
 int scribblez_win_table_write(const char* path, const float* grid, const char* header,
                               char* out_err, int err_cap) {

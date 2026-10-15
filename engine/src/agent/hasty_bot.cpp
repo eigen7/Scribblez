@@ -311,7 +311,7 @@ Move hasty_best_move_wmp_impl(const MoveRequest& req) {
       rack_tiles += c;
     }
   }
-  const LeaveValues& lv = eq.leave_table();
+  const LeaveValues& lv = eq.leave_values();
   const SubrackLeaveDFS dfs{lv, letters, num_letters, subracks, sub_leaves};
   dfs.recurse(0, lv.klv_root(), /*index=*/0, /*val=*/0.0f, /*alive=*/true, BitRack{}, 0);
 
