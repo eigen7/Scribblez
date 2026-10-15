@@ -11,12 +11,15 @@ import pytest
 import torch
 
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
+LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
 if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
     pytest.skip("libscribblez_ffi.so not built -- run py/build.py first", allow_module_level=True)
 
 from scribblez import ffi, workloads  # noqa: E402
-from scribblez.leave_inference import holdout, train_loop, trainer  # noqa: E402
+from scribblez.dataset import SlogDataset  # noqa: E402
+from scribblez.leave_inference import holdout, loss, train_loop, trainer  # noqa: E402
+from scribblez.leave_inference.model import LeaveInferenceModel  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.workloads import leave_inference  # noqa: E402
 
@@ -122,3 +125,37 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
 
     leave_inference.run_generate(Ctx())
     assert calls == [(False, 0.0)]
+
+
+def test_epoch_and_eval_run_a_model_from_the_uniform_prior(tmp_path):
+    binary = _ENGINE_DIR / "test_slog_writer"
+    if not binary.is_file():
+        pytest.skip("test_slog_writer not built")
+    if not LEAVES.exists():
+        pytest.skip("HastyBot leave values not installed")
+    subprocess.run([str(binary), str(tmp_path), "12", "6"], check=True, capture_output=True)
+    ds = SlogDataset(
+        tmp_path, task="leave_inference", post_move=False, apply_symmetry=False, num_workers=1
+    )
+    shapes = {s.name: s.dims for s in ffi.task_input_shapes("leave_inference")}
+    torch.manual_seed(0)
+    model = LeaveInferenceModel(shapes["input_spatial"][0], shapes["input_scalar"][0], 8, 1)
+    table = loss.TableTensors(ffi.LeaveValueArrays(), "cpu")
+
+    def batches():
+        return ds.iter_batches(64, seed=0)
+
+    before = train_loop.evaluate(model, table, batches(), "cpu")
+    # The zero-initialized head is the uniform prior, up to b's small start.
+    assert abs(before["eval_nll_vs_uniform"]) < 1e-2
+    assert {"eval_nll", "eval_letter_calibration", "eval_invalid_no_opponent_move"} <= set(before)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+    rows = sum(len(b["opp_leave_valid"]) for b in batches())
+    for _ in range(3):
+        result = train_loop.run_epoch(
+            model, optimizer, table, batches(), "cpu", lr_fn=None, rows_trained=0, grad_clip=1.0
+        )
+        assert result.rows_trained == rows
+        assert 0 < result.valid_frac < 1 and np.isfinite(result.loss)
+    after = train_loop.evaluate(model, table, batches(), "cpu")
+    assert after["eval_nll"] < before["eval_nll"]
