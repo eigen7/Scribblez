@@ -1,5 +1,6 @@
 #include "data/format_layout.h"
 
+#include "belief/leave_table.h"
 #include "data/binary_log.h"
 #include "data/probe_log.h"
 #include "data/probe_replay.h"
@@ -143,6 +144,8 @@ json::object build_structs() {
   s["ProbeCandidateState"] = struct_json<ProbeCandidateState>();
   s["ProbeStartState"] = struct_json<ProbeStartState>();
   s["ProbeTurnState"] = struct_json<ProbeTurnState>();
+  s["LeaveTableHeader"] = struct_json<belief::LeaveTableHeader>();
+  s["LeaveTableRow"] = struct_json<belief::LeaveTableRow>();
   return s;
 }
 
@@ -167,6 +170,9 @@ json::object build_constants() {
                  {"version", kProbeVersion},
                  {"flag_face_up_leaves", kProbeFlagFaceUpLeaves},
                  {"strata", kStrata}};
+  c["ltab"] = {{"magic", belief::kLeaveTableMagic},
+               {"version", belief::kLeaveTableFormatVersion},
+               {"max_length", belief::kLeaveTableMaxLength}};
   {
     json::array target_names;
     for (const char* name : move_set_eval::kTargetNamesV1) target_names.emplace_back(name);

@@ -65,6 +65,7 @@ add_library(scribblez_core STATIC
   src/nn/batching_position_eval_service.cpp
   src/agent/evidence_staging.cpp
   src/belief/leave_prior.cpp
+  src/belief/leave_table.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
   src/data/sim_observation_log.cpp
@@ -394,6 +395,11 @@ if(SCRIBBLEZ_BUILD_TESTS)
   target_link_libraries(test_rack_inference PRIVATE
     scribblez_core Boost::json GTest::gtest_main)
   gtest_discover_tests(test_rack_inference)
+
+  add_executable(test_leave_table tests/test_leave_table.cpp)
+  target_link_libraries(test_leave_table PRIVATE
+    scribblez_core Boost::json GTest::gtest_main)
+  gtest_discover_tests(test_leave_table)
 
   add_executable(test_probe_log tests/test_probe_log.cpp)
   target_link_libraries(test_probe_log PRIVATE
