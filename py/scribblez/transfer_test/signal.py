@@ -128,6 +128,9 @@ def within_row_spread(x: np.ndarray, group: np.ndarray) -> np.ndarray:
 
 
 def correlation(x: np.ndarray, y: np.ndarray) -> float:
+    """Pearson's r; NaN when either side is constant, where it is undefined."""
+    if x.std() == 0 or y.std() == 0:
+        return float("nan")
     return float(np.corrcoef(x, y)[0, 1])
 
 
