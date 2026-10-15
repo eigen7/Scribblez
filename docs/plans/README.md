@@ -44,19 +44,14 @@ moved on. New plans go here, not in `docs/` proper.
   HastyBot-vs-HastyBot games in standard Scrabble. First, a standalone leave
   inference model, with free labels from replay, a 5-move history with
   pre-move cross-checks, and a 29-float output (a weight per letter plus a
-  tilt on absolute leave value) over the exact pool prior. Then the
-  policy-set model in both forms, on exhaustively simmed pools whose rollouts
-  stop at a versioned win table, with opponent leaves drawn from the LIM.
-  Each is one dashboard workload that generates, trains, slides its window
-  and publishes eval metrics.
-- **[deep_bot_v0_lim.md](deep_bot_v0_lim.md)**: *proposed, not built.* The
-  build plan for the LIM half of deep_bot_v0.md: the standalone encoder and
-  its DataLoader mode, an in-memory leave table, a streaming
-  exponential-family loss, the `lim` workload with a held-out set it
-  regenerates from a fixed seed, the `RackInferrer` baseline, serving and
-  the CPU sampler. The win table is a standalone fit that the workload also
-  refits each generation as a side product, and every artifact carries a
-  format version distinct from its generation.
+  tilt on absolute leave value) over the exact pool prior, trained by a
+  streaming pass over a versioned on-disk leave table. Then the policy-set
+  model in both forms, on exhaustively simmed pools whose rollouts stop at a
+  win table, with opponent leaves drawn from the leave inference model. Each
+  is one dashboard workload that generates, trains, slides its window and
+  publishes eval metrics. The win table is a standalone fit that the leave
+  inference workload also refits each generation, and every artifact carries
+  a format version distinct from its generation.
 - **[supreme_bot_m1a.md](supreme_bot_m1a.md)**: *proposed, not built.*
   The build plan for M1a, SupremeBot's held-out transfer test: probe traces
   in the sim runner, a generator workload writing labels and a new `.sprobe`
