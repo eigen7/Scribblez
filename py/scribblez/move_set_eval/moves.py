@@ -26,8 +26,8 @@ from scribblez.ffi import (
     move_encoding_dims,
     move_encoding_version,
     move_set_positions,
-    row_size_floats,
     score_diff_input_layout,
+    task_row_floats,
 )
 
 BOARD = 15
@@ -60,7 +60,7 @@ def batch_move_set_positions(
     total = int(counts.sum())
     slots = move_cross_slots()
     out = {
-        "rows": np.empty((len(positions), row_size_floats()), dtype=np.float32),
+        "rows": np.empty((len(positions), task_row_floats()), dtype=np.float32),
         "cells": np.zeros((total, slots), dtype=np.int64),
         "letters": np.zeros((total, slots * 26), dtype=np.uint8),
     }

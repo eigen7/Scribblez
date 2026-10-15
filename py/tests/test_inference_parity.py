@@ -14,7 +14,7 @@ so the tests stay hermetic (no checkpoint, CPU only).
 import numpy as np
 import pytest
 import torch
-from scribblez.ffi import get_input_shapes
+from scribblez.ffi import task_input_shapes
 from scribblez.position_eval.model import (
     FOOTPRINT_CLASSES,
     PLACEMENT_HEAD_NAMES,
@@ -26,7 +26,7 @@ from scribblez.transformer_tower import TransformerConfig
 # The engine encoder's real input shapes, served by the FFI. The export does not
 # depend on them numerically, but using them keeps the test in step with the
 # encoder when a plane count changes.
-_input_shapes = {s.name: s.dims for s in get_input_shapes()}
+_input_shapes = {s.name: s.dims for s in task_input_shapes()}
 SPATIAL_PLANES, BOARD_SIZE, _BOARD_WIDTH = _input_shapes["input_spatial"]
 assert BOARD_SIZE == _BOARD_WIDTH, "the model assumes a square board"
 SCALAR_SIZE = _input_shapes["input_scalar"][0]

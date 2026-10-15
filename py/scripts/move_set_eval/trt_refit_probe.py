@@ -34,7 +34,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from scribblez.ffi import get_input_shapes
+from scribblez.ffi import task_input_shapes
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.moves import (
     move_cross_slots,
@@ -51,7 +51,7 @@ TOLERANCE = 2e-3  # FP32 TRT vs FP32 ORT differ only by kernel summation order
 
 
 def _shapes():
-    dims = {s.name: s.dims for s in get_input_shapes()}
+    dims = {s.name: s.dims for s in task_input_shapes()}
     return dims["input_spatial"][0], dims["input_scalar"][0]
 
 

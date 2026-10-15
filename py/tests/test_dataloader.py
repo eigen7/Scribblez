@@ -11,10 +11,10 @@ from scribblez.dataset import SlogDataset, row_layout, slice_row_batch
 from scribblez.ffi import (
     NativeDataLoader,
     format_layout,
-    get_input_shapes,
-    get_target_shapes,
     read_file_header,
-    row_size_floats,
+    task_input_shapes,
+    task_row_floats,
+    task_target_shapes,
 )
 
 # This checkout's own binaries, not the primary checkout's -- see the note in
@@ -129,7 +129,7 @@ class TestStreamingDataset:
 
         # Input dims come from the session rather than literals, so a layout
         # change cannot leave a stale magic number here.
-        in_shapes = {s.name: tuple(s.dims) for s in get_input_shapes()}
+        in_shapes = {s.name: tuple(s.dims) for s in task_input_shapes()}
         for b in batches:
             assert "input_spatial" in b
             assert "input_scalar" in b
@@ -218,22 +218,22 @@ def test_slice_row_batch_matches_dataset():
     named tensor at its advertised shape and loses no values."""
     if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
         pytest.skip("libscribblez_ffi.so not built -- run py/build.py first")
-    rf = row_size_floats()
+    rf = task_row_floats()
     rng = np.random.default_rng(0)
     batch = rng.standard_normal((5, rf)).astype(np.float32)
 
     input_shapes, targets = row_layout()
     out = slice_row_batch(batch, input_shapes, targets)
 
-    expected = {s.name: (5, *s.dims) for s in get_input_shapes()}
-    expected.update({s.name: (5, *s.dims) for s in get_target_shapes()})
+    expected = {s.name: (5, *s.dims) for s in task_input_shapes()}
+    expected.update({s.name: (5, *s.dims) for s in task_target_shapes()})
     assert set(out) == set(expected)
     for name, shape in expected.items():
         assert tuple(out[name].shape) == shape
 
     # The flat concatenation of all regions reconstructs the original row.
     flat = np.concatenate(
-        [out[s.name].numpy().reshape(5, -1) for s in get_input_shapes()]
+        [out[s.name].numpy().reshape(5, -1) for s in task_input_shapes()]
         + [out[name].numpy().reshape(5, -1) for name, *_ in targets],
         axis=1,
     )

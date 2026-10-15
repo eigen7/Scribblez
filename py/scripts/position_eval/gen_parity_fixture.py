@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from scribblez.ffi import get_input_shapes
+from scribblez.ffi import task_input_shapes
 from scribblez.position_eval.model import PositionEvalModel
 from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.transformer_tower import TransformerConfig
@@ -40,7 +40,7 @@ from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER
 # The row layout is owned by the C++ encoder (engine/include/encoding/input_encoder.h)
 # and read through the FFI, so the fixture always matches what the C++ test
 # expects.
-_input_shapes = {s.name: s.dims for s in get_input_shapes()}
+_input_shapes = {s.name: s.dims for s in task_input_shapes()}
 SPATIAL_PLANES, BOARD_SIZE, _BOARD_WIDTH = _input_shapes["input_spatial"]
 assert BOARD_SIZE == _BOARD_WIDTH, "the model assumes a square board"
 SCALAR_SIZE = _input_shapes["input_scalar"][0]

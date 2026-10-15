@@ -58,9 +58,9 @@ import torch
 from scribblez import params as params_mod
 from scribblez.dataset import SlogDataset
 from scribblez.ffi import (
-    get_input_shapes,
     session_input_arm,
     set_opp_leave_input,
+    task_input_shapes,
 )
 from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
@@ -498,7 +498,7 @@ def run(ctx: WorkerContext) -> int:
     device = torch.device(os.environ.get("SCZ_DEVICE", "cuda"))
     print(f"Tag root: {paths.root}\nDevice: {device}")
 
-    in_shapes = {s.name: s.dims for s in get_input_shapes()}
+    in_shapes = {s.name: s.dims for s in task_input_shapes()}
     spatial_planes = in_shapes["input_spatial"][0]
     scalar_size = in_shapes["input_scalar"][0]
     model = PositionEvalModel(

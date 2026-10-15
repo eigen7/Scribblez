@@ -13,7 +13,7 @@ import pytest
 import torch
 from scribblez.dataset import row_layout
 from scribblez.evidence.dataset import TrajectoryDataset
-from scribblez.ffi import decode_rows, get_input_shapes, row_size_floats
+from scribblez.ffi import decode_rows, task_input_shapes, task_row_floats
 from scribblez.footprint_spatial import MAX_K, PASS_CLASS, SLOTS_PER_CELL
 from scribblez.sim_evidence.model import NUM_EVIDENCE_PLANES, EvidencePositionEvalModel
 from scribblez.sim_evidence.sobs import (
@@ -125,7 +125,7 @@ def test_sobs_positions_decode_as_training_rows(sobs_dir):
     games = np.array([p.game_index for p in positions], dtype=np.int64)
     turns = np.array([p.turn_index for p in positions], dtype=np.int64)
     rows = decode_rows(slog, games, turns, post_move=True)
-    assert rows.shape == (len(positions), row_size_floats())
+    assert rows.shape == (len(positions), task_row_floats())
     # The WLD one-hot (located via the row layout): exactly one of 3 set per row.
     _, targets = row_layout()
     start, end = next((s, e) for name, s, e, _ in targets if name == "wld")
@@ -274,13 +274,13 @@ def test_open_leaves_sobs_and_input_arm(sobs_dir, tmp_path):
     # The open-leaves input arm appends the 27 opponent-leave counts. The FFI
     # session's layout is fixed at creation, so probe it in a subprocess.
     code = (
-        "from scribblez.ffi import set_opp_leave_input, get_input_shapes\n"
+        "from scribblez.ffi import set_opp_leave_input, task_input_shapes\n"
         "set_opp_leave_input(True)\n"
-        "print({s.name: s.dims for s in get_input_shapes()}['input_scalar'][0])\n"
+        "print({s.name: s.dims for s in task_input_shapes()}['input_scalar'][0])\n"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
-    base = {s.name: s.dims for s in get_input_shapes()}["input_scalar"][0]
+    base = {s.name: s.dims for s in task_input_shapes()}["input_scalar"][0]
     assert int(out.stdout.strip()) == base + 27
 
 
@@ -306,7 +306,7 @@ def test_position_meta_flags(sobs_dir):
 
 
 def _tiny_model() -> EvidencePositionEvalModel:
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     torch.manual_seed(0)
     return EvidencePositionEvalModel(
         spatial_planes=shapes["input_spatial"][0],
@@ -318,7 +318,7 @@ def _tiny_model() -> EvidencePositionEvalModel:
 
 def test_model_ignores_masked_evidence():
     model = _tiny_model().eval()
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     b, k = 2, 4
     spatial = torch.randn(b, *shapes["input_spatial"])
     scalar = torch.randn(b, shapes["input_scalar"][0])
@@ -344,7 +344,7 @@ def test_model_ignores_masked_evidence():
 
 def test_model_trains_on_evidence():
     model = _tiny_model()
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     b, k = 3, 4
     spatial = torch.randn(b, *shapes["input_spatial"])
     scalar = torch.randn(b, shapes["input_scalar"][0])
@@ -365,7 +365,7 @@ def test_model_trains_on_evidence():
 def test_empty_evidence_is_finite():
     # An all-padding evidence set exercises the empty-attention guard.
     model = _tiny_model().eval()
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     spatial = torch.randn(1, *shapes["input_spatial"])
     scalar = torch.randn(1, shapes["input_scalar"][0])
     mask = torch.zeros(1, 3, dtype=torch.bool)

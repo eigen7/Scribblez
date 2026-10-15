@@ -12,7 +12,7 @@ trip -- export, scramble, reload, same outputs.
 import numpy as np
 import pytest
 import torch
-from scribblez.ffi import get_input_shapes, session_input_arm
+from scribblez.ffi import session_input_arm, task_input_shapes
 from scribblez.onnx_export_util import load_onnx_initializers
 from scribblez.position_eval import analysis
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES, PositionEvalModel
@@ -23,7 +23,7 @@ _H = len(PLACEMENT_HEAD_NAMES)
 
 
 def _tiny_model() -> PositionEvalModel:
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     torch.manual_seed(0)
     return PositionEvalModel(
         spatial_planes=shapes["input_spatial"][0],
@@ -93,7 +93,7 @@ def test_collapse_over_dataset_positions():
     items = analysis._dataset_items(analysis.LARGE_DATASET)[:4]
     texts = [text for _, text in items]
     inputs = np.stack([analysis.analyze_position_eval_gcg(t, session_input_arm()) for t in texts])
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     model = _tiny_model()
     preds = analysis.predict(model, inputs, shapes["input_spatial"][0], _CPU)
     assert preds["placement_logits"].shape[:2] == (4, _H)
@@ -112,7 +112,7 @@ def test_load_onnx_initializers_round_trip(tmp_path):
     """Export -> scramble the weights -> reload from the graph -> outputs equal
     the original's; a graph from a different architecture is refused."""
     model = _tiny_model()
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     path = tmp_path / "m.onnx"
     export_onnx(
         model, path, shapes["input_spatial"][0], shapes["input_scalar"][0], opp_leave_input=True

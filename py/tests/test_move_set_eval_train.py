@@ -243,11 +243,11 @@ def test_schedule_free_recalibrates_the_mset_trunk_batchnorm():
 def _export_teacher(onnx_path: Path, *, poison: bool = False) -> Path:
     """A tiny randomly-initialized position-eval teacher exported to ONNX;
     `poison` gives it an inf bias, so every readout is non-finite."""
-    from scribblez.ffi import get_input_shapes
+    from scribblez.ffi import task_input_shapes
     from scribblez.position_eval.model import PositionEvalModel
     from scribblez.position_eval.onnx_export import export_onnx
 
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     torch.manual_seed(0)
     teacher = PositionEvalModel(
         spatial_planes=shapes["input_spatial"][0],

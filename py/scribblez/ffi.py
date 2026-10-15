@@ -536,23 +536,6 @@ def task_input_floats(task: str = "position_eval") -> int:
     return sum(int(np.prod(s.dims)) for s in task_input_shapes(task))
 
 
-def get_input_shapes() -> list[ShapeInfo]:
-    return task_input_shapes("position_eval")
-
-
-def get_target_shapes() -> list[ShapeInfo]:
-    return task_target_shapes("position_eval")
-
-
-def row_size_floats() -> int:
-    return task_row_floats("position_eval")
-
-
-def input_floats() -> int:
-    """Floats in one flat position-evaluation input row (spatial + scalar)."""
-    return task_input_floats("position_eval")
-
-
 def decode_rows(
     path: str | Path,
     game_idx: np.ndarray,
@@ -797,7 +780,7 @@ def move_set_positions(
     Position j is the pre-move decision point (game_idx[j], turn_idx[j]) of the
     .slog at `path`; its candidates are the next move_counts[j] records of the
     (M,) MOVE_DTYPE array `moves`, M = sum(move_counts). Returns "rows"
-    (P, row_size_floats()) float32, as decode_rows(post_move=False) decodes
+    (P, task_row_floats()) float32, as decode_rows(post_move=False) decodes
     them; "cells" (M, slots) int64 -- 1 + axis * 225 + square per entry, 0 in
     empty slots; and "letters" (M, slots * 26) uint8, each entry's post-move
     legal letters.
@@ -812,7 +795,7 @@ def move_set_positions(
         raise ValueError(f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape}")
     if counts.sum() != len(moves):
         raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
-    rows = np.empty((len(games), row_size_floats()), dtype=np.float32)
+    rows = np.empty((len(games), task_row_floats()), dtype=np.float32)
     cells, letters = _cross_check_arrays(len(moves))
     rc = _lib().scribblez_move_set_positions(
         _session(),
@@ -870,7 +853,7 @@ def encode_candidate_rows(
     from the mover's point of view, under the session's arm.
 
     Positions and moves are addressed as in move_set_positions. Returns
-    (M, input_floats()) float32, the spatial planes then the scalars.
+    (M, task_input_floats()) float32, the spatial planes then the scalars.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -882,7 +865,7 @@ def encode_candidate_rows(
         raise ValueError(f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape}")
     if counts.sum() != len(moves):
         raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
-    out = np.empty((len(moves), input_floats()), dtype=np.float32)
+    out = np.empty((len(moves), task_input_floats()), dtype=np.float32)
     rc = _lib().scribblez_encode_candidate_rows(
         _session(),
         str(path).encode("utf-8"),
@@ -1052,7 +1035,7 @@ class InputArm:
 
 def session_input_arm() -> InputArm:
     """The arm the process-wide session encodes under, with its widths."""
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     return InputArm(
         _OPP_LEAVE_INPUT,
         shapes["input_spatial"][0],
