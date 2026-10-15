@@ -61,6 +61,12 @@ def _seed_rngs():
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config):
+    # torch.utils.mkldnn, which torch imports itself, decorates 14 methods with
+    # torch.jit.script_method, which torch now deprecates: 14 warnings per
+    # process that no code of ours can address.
+    config.addinivalue_line(
+        "filterwarnings", "ignore:`torch.jit.script_method` is deprecated:DeprecationWarning"
+    )
     # trylast: the stock reporter is registered by _pytest.terminal's own
     # pytest_configure, which would otherwise run after this one. The reporter
     # object itself is kept, its class swapped, because other plugins hold it
