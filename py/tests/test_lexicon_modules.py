@@ -104,7 +104,12 @@ def test_oracle_crosscheck_signals_and_integration():
 
 
 def test_kv_memory_retrieval_and_integration():
-    kv = KvMemoryLexicon(channels=8, compiled=_lexicon())
+    # Nine words with distinct letter counts fill the 3x3 slot grid: with
+    # WORDS' six, the top-3 retrieval can land on the three empty slots, and
+    # then every gradient is zero.
+    lexicon = CompiledLexicon.from_words([*WORDS, "ACE", "EAR", "TEA"])
+    kv = KvMemoryLexicon(channels=8, compiled=lexicon)
+    assert kv.codebook**2 == len(lexicon.words())
     feats = torch.randn(2, 15, 8, requires_grad=True)
     out = kv(feats, torch.zeros(2, 15, N_LETTERS))
     assert out.tokens.shape == (2, 2, 8)
