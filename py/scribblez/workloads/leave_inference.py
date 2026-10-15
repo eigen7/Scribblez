@@ -66,6 +66,13 @@ class LeaveInferenceParams:
     # Model.
     num_blocks: int = param(8, "conv tower residual blocks")
     trunk_channels: int = param(128, "conv tower width")
+    head: str = param(
+        "tilted",
+        "output head (leave_inference/model.py): 'tilted' is the design's 29 floats over the "
+        "leave table; 'autoregressive' decodes the leave tile by tile, a Python-only comparison "
+        "that measures what the compact head gives up",
+        choices=("tilted", "autoregressive"),
+    )
 
 
 def run_generate(ctx: WorkerContext) -> int:
