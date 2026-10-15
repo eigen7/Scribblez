@@ -4,12 +4,15 @@ tiny generated .mset/.slog corpus (GPU, since the target generator builds a
 TensorRT engine).
 """
 
+import functools
 import json
+import multiprocessing
 import os
 import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,6 +24,7 @@ from scribblez.ffi import decode_rows
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.move_set_eval.model import compute_loss
 from scribblez.sim_evidence.sobs import MOVE_DTYPE, MOVE_PLAY, move_footprint
+from scribblez.workloads import mset_targets
 
 # This checkout's own binaries, not the primary checkout's; see
 # test_move_set_eval_targets.py.
@@ -782,8 +786,6 @@ def test_a_spent_budget_is_read_off_the_checkpoint_before_the_store(tmp_path):
 
 
 def test_pin_model_copies_once_and_survives_the_source_being_pruned(tmp_path):
-    from scribblez.workloads import mset_targets
-
     source = tmp_path / "models" / "model_epoch_0523.onnx"
     source.parent.mkdir()
     source.write_bytes(b"weights")
@@ -801,25 +803,21 @@ def test_pin_model_copies_once_and_survives_the_source_being_pruned(tmp_path):
 def test_pin_model_survives_concurrent_first_use(tmp_path):
     """A tag's local workers start together and the dashboard may pin at the
     same moment: every caller must land a whole copy, none may fail."""
-    from concurrent.futures import ProcessPoolExecutor
-
     source = tmp_path / "model_epoch_0001.onnx"
     source.write_bytes(os.urandom(4 << 20))
     root = tmp_path / "tag"
-    with ProcessPoolExecutor(8) as pool:
-        results = list(pool.map(_pin_in_process, [(str(source), str(root))] * 8))
-    assert results == [str(root / "pinned" / source.name)] * 8
+    pin = functools.partial(
+        mset_targets.pin_model, str(source), SimpleNamespace(root=str(root)), "proposer_model"
+    )
+    # spawn, not fork: this process runs threads (torch's among them), and a
+    # forked child can inherit a lock one of them held. The children import
+    # only pin_model's module, which is light.
+    with ProcessPoolExecutor(8, mp_context=multiprocessing.get_context("spawn")) as pool:
+        futures = [pool.submit(pin) for _ in range(8)]
+        results = [f.result() for f in futures]
+    assert results == [root / "pinned" / source.name] * 8
     assert (root / "pinned" / source.name).read_bytes() == source.read_bytes()
     assert not list((root / "pinned").glob("*.tmp"))
-
-
-def _pin_in_process(args) -> str:
-    from types import SimpleNamespace
-
-    from scribblez.workloads import mset_targets
-
-    source, root = args
-    return str(mset_targets.pin_model(source, SimpleNamespace(root=root), "proposer_model"))
 
 
 class _OutputSink:
