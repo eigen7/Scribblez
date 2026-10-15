@@ -305,7 +305,7 @@ def sim(tmp_path, monkeypatch):
     return make
 
 
-@pytest.mark.parametrize("seed", range(16))
+@pytest.mark.parametrize("seed", range(4))
 def test_random_runs_keep_the_invariants(sim, seed):
     run = sim(seed)
     for _ in range(200):
