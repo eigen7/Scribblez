@@ -24,17 +24,22 @@ Move in_frame(const Move& m, bool transposed) { return transposed ? m.transpose(
 
 }  // namespace
 
-Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_rack_now) {
-  // The opponent last moved at sampled_turn - 1 and has not moved since, so
-  // everything they drew then is still on their rack.
-  if (sampled_turn == 0) return Rack{};
-  Rack leave = opp_rack_now;
-  for (Tile t : g.records[sampled_turn - 1].drawn.tiles()) {
+Rack leave_from_replay(const GameLog& g, int move_turn, const Rack& rack_now) {
+  // The mover has not moved since, so everything they drew then is still on
+  // their rack.
+  Rack leave = rack_now;
+  for (Tile t : g.records[move_turn].drawn.tiles()) {
     if (t.is_empty()) break;
     const bool ok = leave.remove(t);
     RELEASE_ASSERT(ok);
   }
   return leave;
+}
+
+Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_rack_now) {
+  // The opponent last moved at sampled_turn - 1.
+  if (sampled_turn == 0) return Rack{};
+  return leave_from_replay(g, sampled_turn - 1, opp_rack_now);
 }
 
 void encode_candidate_rows(const PositionEncoder& encoder, const GameLog& g, int turn, int mover,

@@ -21,10 +21,15 @@ class Dictionary;
 
 namespace binlog {
 
+// The leave kept at the move of turn `move_turn`: `rack_now`, the mover's
+// rack at any point before their next move, minus what they drew after it.
+// The one definition of a player's leave, for either side of a position.
+Rack leave_from_replay(const GameLog& g, int move_turn, const Rack& rack_now);
+
 // The leave the opponent of turn `sampled_turn`'s mover kept at their last
-// move: `opp_rack_now` minus what they drew after it. This is the part of
-// their rack that open leaves makes public. Empty if they have not moved yet.
-// The same for the turn's pre- and post-move positions.
+// move. This is the part of their rack that open leaves makes public. Empty
+// if they have not moved yet. The same for the turn's pre- and post-move
+// positions.
 Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_rack_now);
 
 class PositionEncoder {
