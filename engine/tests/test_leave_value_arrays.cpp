@@ -1,5 +1,5 @@
 // LeaveValueArrays (lexicon/leave_value_arrays.h): every leave of each length,
-// with the value LeaveValues gives it, sorted by value, in 8-byte rows; and
+// with the value LeaveValues gives it, in LeaveValues' own order, in 8-byte rows; and
 // refusal of leave values that lack a drawable leave. The full-table cases
 // read HastyBot's NWL23 leave values and skip without the Macondo checkout.
 
@@ -19,7 +19,7 @@
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
-#include <set>
+#include <vector>
 
 using namespace scribblez;
 
@@ -39,10 +39,10 @@ class LeaveValueArraysTest : public ::testing::Test {
 };
 LeaveValues* LeaveValueArraysTest::values_ = nullptr;
 
-Rack rack_of(const LeaveValueRow& row) {
+Rack rack_of(const LeaveValueArrays::Row& row) {
   Rack r;
   for (uint8_t t : row.tiles) {
-    if (t != LeaveValueRow::kNoTile) r.add(Tile::of(t));
+    if (t != LeaveValueArrays::Row::kNoTile) r.add(Tile::of(t));
   }
   return r;
 }
@@ -57,22 +57,28 @@ TEST_F(LeaveValueArraysTest, RowCountsPerLength) {
   EXPECT_THROW(arrays.of_length(kLeaveArraysMaxLength + 1), util::Exception);
 }
 
-TEST_F(LeaveValueArraysTest, RowsAreDistinctLeavesWithTheirValuesSortedByValue) {
+TEST_F(LeaveValueArraysTest, RowsAreTheLeavesWithTheirValuesInFileOrder) {
   const LeaveValueArrays arrays(*values_);
+  std::array<std::vector<Rack>, kLeaveArraysMaxLength> order;
+  values_->for_each([&](const Rack& leave, float) {
+    if (leave.size() <= kLeaveArraysMaxLength) order[leave.size() - 1].push_back(leave);
+  });
   for (int k = 1; k <= kLeaveArraysMaxLength; ++k) {
-    std::set<std::array<uint8_t, kLeaveArraysMaxLength>> seen;
-    const LeaveValueRow* prev = nullptr;
-    for (const LeaveValueRow& row : arrays.of_length(k)) {
+    const auto rows = arrays.of_length(k);
+    ASSERT_EQ(rows.size(), order[k - 1].size());
+    for (size_t i = 0; i < rows.size(); ++i) {
+      const LeaveValueArrays::Row& row = rows[i];
       const Rack leave = rack_of(row);
-      ASSERT_EQ(leave.size(), k);
-      for (int i = 1; i < k; ++i) ASSERT_LE(row.tiles[i - 1], row.tiles[i]);
-      for (int i = k; i < kLeaveArraysMaxLength; ++i)
-        ASSERT_EQ(row.tiles[i], LeaveValueRow::kNoTile);
+      for (int l = 0; l < TILE_KINDS; ++l) {
+        ASSERT_EQ(leave.counts().count(Tile::of(l)), order[k - 1][i].counts().count(Tile::of(l)))
+          << "length " << k << " row " << i;
+      }
+      for (int j = 1; j < k; ++j) ASSERT_LE(row.tiles[j - 1], row.tiles[j]);
+      for (int j = k; j < kLeaveArraysMaxLength; ++j) {
+        ASSERT_EQ(row.tiles[j], LeaveValueArrays::Row::kNoTile);
+      }
       // Rounded to the nearest hundredth; a tie may round either way in float.
-      ASSERT_NEAR(row.value(), values_->lookup(leave), 0.501f / LeaveValueRow::kValueScale);
-      ASSERT_TRUE(seen.insert(row.tiles).second);
-      if (prev) ASSERT_LE(prev->centi_value, row.centi_value);
-      prev = &row;
+      ASSERT_NEAR(row.value(), values_->lookup(leave), 0.00501f);
     }
   }
 }

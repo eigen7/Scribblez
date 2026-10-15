@@ -1,5 +1,5 @@
 """The engine's LeaveValueArrays through the FFI (scribblez.ffi): row counts,
-leaves of each length sorted by value, and the leave values' identity."""
+the distinct leaves of each length, and the leave values' identity."""
 
 from pathlib import Path
 
@@ -25,7 +25,7 @@ def arrays() -> LeaveValueArrays:
     return LeaveValueArrays()
 
 
-def test_rows_are_distinct_leaves_sorted_by_value(arrays):
+def test_rows_are_distinct_leaves_of_their_length(arrays):
     for k, count in ROW_COUNTS.items():
         tiles, values = arrays.of_length(k)
         assert tiles.shape == (count, 6) and values.shape == (count,)
@@ -33,7 +33,6 @@ def test_rows_are_distinct_leaves_sorted_by_value(arrays):
         assert (real < 27).all() and (tiles[:, k:] == LeaveValueArrays.NO_TILE).all()
         assert (np.diff(real.astype(int), axis=1) >= 0).all()
         assert len(np.unique(real, axis=0)) == count
-        assert (np.diff(values) >= 0).all()
 
 
 def test_known_values(arrays):

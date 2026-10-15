@@ -26,7 +26,8 @@ class LeaveValues {
   // 0.0 for an empty leave or one absent from the table.
   float lookup(const Rack& leave) const;
 
-  // Calls f(leave, value) for every leave in the table, in no fixed order.
+  // Calls f(leave, value) for every leave in the table, in the file's order
+  // (its word index, below), so the order is fixed by the file.
   template <typename F>
   void for_each(F&& f) const;
 
@@ -58,7 +59,15 @@ class LeaveValues {
     return index < values_.size() ? values_[index] : 0.0f;
   }
 
+  // The tile a leave-KWG code stands for: the inverse of klv_code.
+  static Tile klv_tile(uint8_t code) { return code == 0u ? BLANK : Tile::of(int(code) - 1); }
+
  private:
+  // for_each's walk of the leaves under arc list `node`. `acc` holds the
+  // current prefix and `index` the running word index into values_.
+  template <typename F>
+  void walk(uint32_t node, Rack& acc, uint32_t& index, F& f) const;
+
   std::unordered_map<Rack, float> values_by_leave_;  // leave -> value
   std::vector<uint32_t> nodes_;                      // KWG arc nodes
   std::vector<float> values_;                        // leave values, indexed by word index

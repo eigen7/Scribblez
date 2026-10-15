@@ -310,8 +310,8 @@ length. The 6-tile array has 737,311 rows; the 4-tile array has 25,254.
   as an `int16` in hundredths of a point. Each length has its own array, so
   the length is implicit. Counts and presence are derived from the tiles
   where a pass needs them.
-- **Built in memory** from `LeaveValues`, by iterating its entries, then
-  sorted by value with ties broken by tiles, so the order is fixed. The
+- **Built in memory** from `LeaveValues`, by iterating its entries in the
+  leave values file's own order, so the order is fixed by the file. The
   constructor refuses leave values that lack a leave drawable from a full
   bag, since the model normalizes over these rows.
 - **Python reaches it through the FFI**, through the `ffi.LeaveValueArrays`

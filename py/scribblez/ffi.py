@@ -596,8 +596,8 @@ def win_table_samples(path: str | Path) -> np.ndarray:
 class LeaveValueArrays:
     """The engine's LeaveValueArrays (lexicon/leave_value_arrays.h) for the
     session's lexicon: every leave of each length 1..6 with its HastyBot
-    value, sorted by value. Owns the engine object; close() or garbage
-    collection frees it."""
+    value, in the leave values file's order. Owns the engine object; close()
+    or garbage collection frees it."""
 
     MAX_LENGTH = 6
     NO_TILE = 255

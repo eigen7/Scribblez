@@ -7,19 +7,18 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <tuple>
 
 namespace scribblez {
 
 namespace {
 
-LeaveValueRow make_row(const Rack& leave, float value) {
-  const float centi = std::round(value * LeaveValueRow::kValueScale);
+LeaveValueArrays::Row make_row(const Rack& leave, float value) {
+  const float centi = std::round(value * 100.0f);
   if (std::abs(centi) > float(std::numeric_limits<int16_t>::max())) {
-    throw util::Exception("leave value {} does not fit LeaveValueRow", value);
+    throw util::Exception("leave value {} does not fit a LeaveValueArrays row", value);
   }
-  LeaveValueRow row{};
-  row.tiles.fill(LeaveValueRow::kNoTile);
+  LeaveValueArrays::Row row{};
+  row.tiles.fill(LeaveValueArrays::Row::kNoTile);
   int n = 0;
   for (Tile t : leave.tiles()) {
     if (!t.is_empty()) row.tiles[n++] = uint8_t(t.index());
@@ -27,10 +26,6 @@ LeaveValueRow make_row(const Rack& leave, float value) {
   std::sort(row.tiles.begin(), row.tiles.begin() + n);
   row.centi_value = int16_t(centi);
   return row;
-}
-
-bool by_value_then_tiles(const LeaveValueRow& a, const LeaveValueRow& b) {
-  return std::tie(a.centi_value, a.tiles) < std::tie(b.centi_value, b.tiles);
 }
 
 }  // namespace
@@ -50,11 +45,10 @@ LeaveValueArrays::LeaveValueArrays(const LeaveValues& values)
       throw util::Exception("leave values have {} leaves of length {}, but {} are drawable",
                             rows_[k - 1].size(), k, drawable);
     }
-    std::sort(rows_[k - 1].begin(), rows_[k - 1].end(), by_value_then_tiles);
   }
 }
 
-std::span<const LeaveValueRow> LeaveValueArrays::of_length(int k) const {
+std::span<const LeaveValueArrays::Row> LeaveValueArrays::of_length(int k) const {
   if (k < 1 || k > kLeaveArraysMaxLength) throw util::Exception("no leaves of length {}", k);
   return rows_[k - 1];
 }

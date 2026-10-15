@@ -106,7 +106,7 @@ int64_t scribblez_win_table_samples(ScribblezSession* s, const char* path, void*
 
 // The session lexicon's HastyBot leave values laid out for whole-length scans
 // (lexicon/leave_value_arrays.h): every leave of each length 1..6 drawable
-// from a full bag, sorted by value. Free with
+// from a full bag, in the leave values file's order. Free with
 // scribblez_leave_value_arrays_delete.
 typedef struct LeaveValueArraysHandle LeaveValueArraysHandle;
 LeaveValueArraysHandle* scribblez_leave_value_arrays_new(ScribblezSession* s);
