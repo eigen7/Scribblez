@@ -1,5 +1,6 @@
 """Suite-wide pytest setup: one CPU thread per math library and for
-torch.compile, and per-file progress lines for the default (non -v/-q) output.
+torch.compile, seeded RNGs per test, and per-file progress lines for the
+default (non -v/-q) output.
 
 Tests are often run beside other CPU work. Torch's CPU ops default to one
 thread per core, and on the tiny tensors tests use those threads spend their
@@ -29,19 +30,33 @@ under -s, whose prints would interleave). -v and -q keep the stock output.
 """
 
 import os
-import time
-from dataclasses import dataclass, field
 
-import pytest
-from _pytest.pathlib import bestrelpath
-from _pytest.reports import TestReport
-from _pytest.terminal import TerminalReporter, TestShortLogReport
-
+# Before numpy or torch load (both below), which read them once.
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = "1"
 
+import random  # noqa: E402
+import time  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
+import torch  # noqa: E402
+from _pytest.pathlib import bestrelpath  # noqa: E402
+from _pytest.reports import TestReport  # noqa: E402
+from _pytest.terminal import TerminalReporter, TestShortLogReport  # noqa: E402
+
 PREFIX_WIDTH = len("[100%] [9999.999s] ")
+
+
+@pytest.fixture(autouse=True)
+def _seed_rngs():
+    """Every test starts from the same RNG state, whatever ran before it in
+    its process: under xdist that set of tests changes from run to run."""
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
 
 
 @pytest.hookimpl(trylast=True)
