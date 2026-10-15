@@ -1263,6 +1263,17 @@ TEST(LeaveInference, TargetIsTheOpponentsLeave) {
                                                                   : LeaveRowCause::kValid;
     EXPECT_EQ(cause, float(want)) << turn;
     EXPECT_EQ(target[OppLeaveTarget::kValidOffset], want == LeaveRowCause::kValid ? 1.0f : 0.0f);
+    // The pool is what the observer cannot see, the bag plus the opponent's
+    // rack, and holds the leave.
+    EXPECT_EQ(target[OppLeaveTarget::kBagOffset], float(log.turns[turn].bag_size_before));
+    const Rack& opp_rack = turn + 1 < int(log.turns.size()) ? log.turns[turn + 1].rack_before
+                                                            : log.final_racks[last.player];
+    float pool_size = 0.0f;
+    for (int l = 0; l < TILE_KINDS; ++l) {
+      pool_size += target[OppLeaveTarget::kPoolOffset + l];
+      EXPECT_GE(target[OppLeaveTarget::kPoolOffset + l], float(leave.counts().count(Tile::of(l))));
+    }
+    EXPECT_EQ(pool_size, float(log.turns[turn].bag_size_before + opp_rack.size()));
   }
 }
 

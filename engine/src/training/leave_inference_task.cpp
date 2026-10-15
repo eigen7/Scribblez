@@ -27,6 +27,10 @@ void OppLeaveTarget::encode(const EncodeContext& ctx, float* out) {
   const LeaveRowCause c = cause(ctx);
   out[kValidOffset] = c == LeaveRowCause::kValid ? 1.0f : 0.0f;
   out[kCauseOffset] = float(c);
+  uint8_t pool[TILE_KINDS];
+  compute_unseen_pool(pool, ctx.enc->board(), *ctx.pov_rack);
+  for (int l = 0; l < TILE_KINDS; ++l) out[kPoolOffset + l] = float(pool[l]);
+  out[kBagOffset] = float(ctx.bag_size);
 }
 
 void LeaveInferenceTask::encode_row(const EncodeContext& ctx, float* out_row) {

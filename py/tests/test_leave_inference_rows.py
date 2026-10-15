@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from scribblez import ffi
-from scribblez.dataset import SlogDataset
+from scribblez.dataset import SlogDataset, row_layout
 
 # This checkout's own binaries, not the primary checkout's -- see the note in
 # test_move_set_eval_targets.py.
@@ -34,6 +34,8 @@ def test_shapes_cover_the_row():
         "opp_leave_length",
         "opp_leave_valid",
         "opp_leave_cause",
+        "unseen_pool",
+        "bag_size",
     ]
     total = sum(int(np.prod(s.dims)) for s in inputs + targets)
     assert total == ffi.task_row_floats("leave_inference")
@@ -68,5 +70,10 @@ def test_decode_rows_matches_the_task_width(slogs):
     turns = np.array([0, 2, 5], dtype=np.int64)
     rows = ffi.decode_rows(slogs[0], games, turns, post_move=False, task="leave_inference")
     assert rows.shape == (3, ffi.task_row_floats("leave_inference"))
-    cause = rows[:, -1]
-    assert cause[0] == _LAYOUT["cause"]["no_opponent_move"]
+    _, targets = row_layout(
+        ffi.task_input_shapes("leave_inference"), ffi.task_target_shapes("leave_inference")
+    )
+    start = {name: begin for name, begin, _, _ in targets}
+    assert rows[0, start["opp_leave_cause"]] == _LAYOUT["cause"]["no_opponent_move"]
+    pool = rows[:, start["unseen_pool"] : start["unseen_pool"] + 27]
+    assert (pool.sum(axis=1) >= rows[:, start["bag_size"]] + 7).all()

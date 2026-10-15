@@ -200,7 +200,9 @@ const ScribblezShape kLeaveInferenceInputShapes[] = {
 
 constexpr int kOppLeaveTilesDims[1] = {scribblez::OppLeaveTarget::kTiles};
 constexpr int kScalarTargetDims[1] = {1};
-static_assert(scribblez::OppLeaveTarget::kFloats == scribblez::OppLeaveTarget::kTiles + 3,
+constexpr int kPoolTargetDims[1] = {scribblez::TILE_KINDS};
+static_assert(scribblez::OppLeaveTarget::kFloats ==
+                scribblez::OppLeaveTarget::kTiles + 4 + scribblez::TILE_KINDS,
               "the target shapes below must cover OppLeaveTarget's floats");
 
 const ScribblezShape kLeaveInferenceTargetShapes[] = {
@@ -208,6 +210,8 @@ const ScribblezShape kLeaveInferenceTargetShapes[] = {
   {"opp_leave_length", kScalarTargetDims, 1, 1},
   {"opp_leave_valid", kScalarTargetDims, 1, 2},
   {"opp_leave_cause", kScalarTargetDims, 1, 3},
+  {"unseen_pool", kPoolTargetDims, 1, 4},
+  {"bag_size", kScalarTargetDims, 1, 5},
   {nullptr, nullptr, 0, 0},
 };
 

@@ -24,13 +24,17 @@ enum class LeaveRowCause : uint8_t {
 };
 
 // The opponent's leave: its tiles as sorted tile indices padded with -1, its
-// length, whether the row carries loss (1 or 0), and the LeaveRowCause.
+// length, whether the row carries loss (1 or 0), and the LeaveRowCause. Then
+// what the loss and the eval read besides the input: the observer's unseen
+// pool as per-tile counts, which the leave's prior is over, and the bag size.
 struct OppLeaveTarget {
   static constexpr int kTiles = RACK_SIZE;
   static constexpr int kLengthOffset = kTiles;
   static constexpr int kValidOffset = kLengthOffset + 1;
   static constexpr int kCauseOffset = kValidOffset + 1;
-  static constexpr int kFloats = kCauseOffset + 1;
+  static constexpr int kPoolOffset = kCauseOffset + 1;
+  static constexpr int kBagOffset = kPoolOffset + TILE_KINDS;
+  static constexpr int kFloats = kBagOffset + 1;
 
   static LeaveRowCause cause(const EncodeContext& ctx);
   static void encode(const EncodeContext& ctx, float* out);
