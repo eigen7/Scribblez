@@ -27,21 +27,6 @@ typedef struct ScribblezShape {
   int target_index;  // -1 for inputs; 0..N-1 for targets, in row layout order
 } ScribblezShape;
 
-// The position-evaluation training targets, in row order, generated from
-// AllTargets in training/training_targets.h. Unlike the input shapes
-// (scribblez_input_shapes), they do not depend on the session's encoding arm.
-const ScribblezShape* scribblez_target_shapes(void);
-
-// The row layout of the max-move-per-lane task. Input: a (31, 15, 15)
-// board-plane tensor and a 27-float rack-count vector. Targets, in row order:
-//   target_index=0  "lane_occupancy" (30, 15, 27)
-//   target_index=1  "lane_score"     (30,)
-//   target_index=2  "lane_mask"      (30,)
-const ScribblezShape* scribblez_max_move_per_lane_input_shapes(void);
-const ScribblezShape* scribblez_max_move_per_lane_target_shapes(void);
-int scribblez_max_move_per_lane_row_size_floats(void);
-int scribblez_max_move_per_lane_input_floats(void);
-
 // ===========================================================================
 // Lexicon-bound session
 // ===========================================================================
@@ -63,11 +48,21 @@ typedef struct ScribblezSession ScribblezSession;
 ScribblezSession* scribblez_session_new(const char* lexicon_name, int opp_leave_input);
 void scribblez_session_delete(ScribblezSession* s);
 
-// The session's input tensor shapes, its total input floats, and its total
-// floats per training row (inputs plus all targets).
-const ScribblezShape* scribblez_input_shapes(ScribblezSession* s);
-int scribblez_input_floats(ScribblezSession* s);
-int scribblez_row_size_floats(ScribblezSession* s);
+// Training tasks, by code: the row a DataLoader (scribblez_dl_new) or
+// scribblez_decode_rows decodes.
+//   0  position evaluation: the session's input arm (spatial + scalar), then
+//      the targets of AllTargets in training/training_targets.h
+//   1  max-move-per-lane: a (31, 15, 15) board tensor and a 27-float rack;
+//      targets "lane_occupancy" (30, 15, 27), "lane_score" (30,),
+//      "lane_mask" (30,)
+//   2  leave inference: training/leave_inference_task.h's input; targets
+//      "opp_leave_tiles" (7,), "opp_leave_length", "opp_leave_valid",
+//      "opp_leave_cause" (1,) each
+// The shape lists are in row order and owned by the library. Each query
+// returns NULL or -1 for an unknown task code.
+const ScribblezShape* scribblez_task_input_shapes(ScribblezSession* s, int task);
+const ScribblezShape* scribblez_task_target_shapes(int task);
+int scribblez_task_row_floats(ScribblezSession* s, int task);
 
 // Sim the final decision of a GCG: replay to the state before its last
 // recorded move, take the mover's top-K moves by static equity, and run
@@ -85,14 +80,15 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
                                int threads, uint64_t seed, int open_leaves, int solve_endgames,
                                char* out_records, int* played_rank);
 
-// Training rows for specific positions: row j is (game_idx[j], turn_idx[j]),
-// encoded exactly as the DataLoader would, minus the symmetry transpose. `out`
-// takes n rows of scribblez_row_size_floats(). Returns 0 on success, -1 on an
-// I/O or header error.
+// Training rows of `task` for specific positions: row j is (game_idx[j],
+// turn_idx[j]), encoded exactly as the DataLoader would, minus the symmetry
+// transpose. `out` takes n rows of scribblez_task_row_floats(task). Returns 0
+// on success, -1 on an I/O or header error or an unknown task.
 //
-// For consumers that pair rows with per-position sidecar data (such as .sobs
-// sim observations) and so must address positions directly.
-int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
+// For consumers that pair rows with per-position data (such as .sobs sim
+// observations, or a held-out set's cached results) and so must address
+// positions directly.
+int scribblez_decode_rows(ScribblezSession* s, int task, const char* path, const int64_t* game_idx,
                           const int64_t* turn_idx, int64_t n, int post_move, float* out);
 
 // The win table's fitting samples from one .slog (sim/win_table_feature.h):
@@ -342,11 +338,10 @@ const char* scribblez_format_layout_json(void);
 
 typedef struct DataLoaderHandle DataLoaderHandle;
 
-// `task` selects the training row the loader decodes:
-//   0  position evaluation, scribblez_row_size_floats() per row, over each
-//      game's turns while the bag is non-empty
-//   1  max-move-per-lane, scribblez_max_move_per_lane_row_size_floats() per
-//      row, over every turn
+// `task` selects the training row the loader decodes (see
+// scribblez_task_input_shapes), and which turns become rows: every turn for
+// max-move-per-lane, each game's turns while the bag is non-empty otherwise.
+// Returns NULL for an unknown task.
 DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
                                    int num_worker_threads, int num_prefetch_threads, int task);
 

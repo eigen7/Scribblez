@@ -12,6 +12,7 @@
 #include "sim/transfer_candidates.h"
 #include "sim/win_pct_table.h"
 #include "sim/win_table_feature.h"
+#include "training/leave_inference_task.h"
 #include "training/move_set_eval_target_log.h"
 #include "training/training_targets.h"
 #include "util/metaprogramming.h"
@@ -182,6 +183,16 @@ json::object build_constants() {
                  {"target_names_v1", std::move(target_names)},
                  {"plane_width", move_set_eval::kPlaneWidth}};
   }
+  // The leave inference row (training/leave_inference_task.h): the version
+  // models stamp, and the codes of a row's LeaveRowCause target.
+  c["leave_inference"] = {{"format_version", kLeaveInferenceFormatVersion},
+                          {"max_leave_length", LeaveInferenceInputEncoder::kMaxLeaveLength},
+                          {"history_slots", LeaveHistory::kSlots},
+                          {"cause",
+                           {{"valid", int(LeaveRowCause::kValid)},
+                            {"no_opponent_move", int(LeaveRowCause::kNoOpponentMove)},
+                            {"empty_leave", int(LeaveRowCause::kEmptyLeave)},
+                            {"pass", int(LeaveRowCause::kPass)}}}};
   // The grid a fitter hands to scribblez_win_table_write.
   c["win_table"] = {{"max_spread", WinPctTable::kMaxSpread},
                     {"max_unseen", WinPctTable::kMaxUnseen}};

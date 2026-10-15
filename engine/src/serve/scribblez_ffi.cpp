@@ -22,6 +22,7 @@
 #include "training/footprint_collapse.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
+#include "training/leave_inference_task.h"
 #include "training/max_move_per_lane_input_encoder.h"
 #include "training/max_move_per_lane_task.h"
 #include "training/move_set_encoder.h"
@@ -61,10 +62,9 @@ struct ScribblezSession {
 
   const ScribblezShape* input_shapes() const { return input_shapes_; }
   int input_floats() const { return scribblez::input_floats(spec); }
-  int row_size_floats() const { return input_floats() + scribblez::kLabelFloats; }
 
-  int decode_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx, int64_t n,
-                  bool post_move, float* out) const;
+  int decode_rows(int task, const char* path, const int64_t* game_idx, const int64_t* turn_idx,
+                  int64_t n, bool post_move, float* out) const;
   int64_t win_table_samples(const char* path, void* out, int64_t cap) const;
   int encode_candidate_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
                             const int64_t* move_counts, int64_t n_positions, const void* moves,
@@ -186,30 +186,82 @@ const ScribblezShape kMaxMovePerLaneTargetShapes[] = {
   {nullptr, nullptr, 0, 0},
 };
 
+// The leave inference task's shapes (training/leave_inference_task.h).
+constexpr int kLeaveInferenceSpatialDims[3] = {
+  scribblez::LeaveInferenceInputEncoder::kSpatialPlanes, scribblez::kBoardSide,
+  scribblez::kBoardSide};
+constexpr int kLeaveInferenceScalarDims[1] = {scribblez::LeaveInferenceInputEncoder::kScalarFloats};
+
+const ScribblezShape kLeaveInferenceInputShapes[] = {
+  {"input_spatial", kLeaveInferenceSpatialDims, 3, -1},
+  {"input_scalar", kLeaveInferenceScalarDims, 1, -1},
+  {nullptr, nullptr, 0, 0},
+};
+
+constexpr int kOppLeaveTilesDims[1] = {scribblez::OppLeaveTarget::kTiles};
+constexpr int kScalarTargetDims[1] = {1};
+static_assert(scribblez::OppLeaveTarget::kFloats == scribblez::OppLeaveTarget::kTiles + 3,
+              "the target shapes below must cover OppLeaveTarget's floats");
+
+const ScribblezShape kLeaveInferenceTargetShapes[] = {
+  {"opp_leave_tiles", kOppLeaveTilesDims, 1, 0},
+  {"opp_leave_length", kScalarTargetDims, 1, 1},
+  {"opp_leave_valid", kScalarTargetDims, 1, 2},
+  {"opp_leave_cause", kScalarTargetDims, 1, 3},
+  {nullptr, nullptr, 0, 0},
+};
+
+// The DecodeTask a C ABI task code names, if any.
+std::optional<scribblez::binlog::DecodeTask> decode_task(int code) {
+  using scribblez::binlog::DecodeTask;
+  switch (code) {
+    case 0:
+      return DecodeTask::kPositionEval;
+    case 1:
+      return DecodeTask::kMaxMovePerLane;
+    case 2:
+      return DecodeTask::kLeaveInference;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 extern "C" {
 
-const ScribblezShape* scribblez_input_shapes(ScribblezSession* s) { return s->input_shapes(); }
-const ScribblezShape* scribblez_target_shapes(void) { return kTargetShapesArr.data(); }
-
-int scribblez_row_size_floats(ScribblezSession* s) { return s->row_size_floats(); }
-
-int scribblez_input_floats(ScribblezSession* s) { return s->input_floats(); }
-
-const ScribblezShape* scribblez_max_move_per_lane_input_shapes(void) {
-  return kMaxMovePerLaneInputShapes;
-}
-const ScribblezShape* scribblez_max_move_per_lane_target_shapes(void) {
-  return kMaxMovePerLaneTargetShapes;
-}
-
-int scribblez_max_move_per_lane_row_size_floats(void) {
-  return scribblez::MaxMovePerLaneTask::kRowFloats;
+const ScribblezShape* scribblez_task_input_shapes(ScribblezSession* s, int task) {
+  using scribblez::binlog::DecodeTask;
+  const std::optional<DecodeTask> t = decode_task(task);
+  if (!t) return nullptr;
+  switch (*t) {
+    case DecodeTask::kPositionEval:
+      return s->input_shapes();
+    case DecodeTask::kMaxMovePerLane:
+      return kMaxMovePerLaneInputShapes;
+    case DecodeTask::kLeaveInference:
+      return kLeaveInferenceInputShapes;
+  }
+  return nullptr;
 }
 
-int scribblez_max_move_per_lane_input_floats(void) {
-  return scribblez::MaxMovePerLaneInputEncoder::kInputFloats;
+const ScribblezShape* scribblez_task_target_shapes(int task) {
+  using scribblez::binlog::DecodeTask;
+  const std::optional<DecodeTask> t = decode_task(task);
+  if (!t) return nullptr;
+  switch (*t) {
+    case DecodeTask::kPositionEval:
+      return kTargetShapesArr.data();
+    case DecodeTask::kMaxMovePerLane:
+      return kMaxMovePerLaneTargetShapes;
+    case DecodeTask::kLeaveInference:
+      return kLeaveInferenceTargetShapes;
+  }
+  return nullptr;
+}
+
+int scribblez_task_row_floats(ScribblezSession* s, int task) {
+  const std::optional<scribblez::binlog::DecodeTask> t = decode_task(task);
+  return t ? scribblez::binlog::BlockDecoder::row_floats_for(*t, s->spec) : -1;
 }
 
 namespace {
@@ -325,14 +377,15 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
                              solve_endgames != 0, out_records, played_rank);
 }
 
-int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
+int ScribblezSession::decode_rows(int task, const char* path, const int64_t* game_idx,
                                   const int64_t* turn_idx, int64_t n, bool post_move,
                                   float* out) const {
-  if (!game_idx || !turn_idx || !out || n < 0) return -1;
+  const std::optional<scribblez::binlog::DecodeTask> t = decode_task(task);
+  if (!t || !game_idx || !turn_idx || !out || n < 0) return -1;
   std::vector<char> buf;
   if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
-  scribblez::binlog::BlockDecoder decoder(spec);
-  const int64_t row_floats = scribblez::input_floats(spec) + scribblez::kLabelFloats;
+  scribblez::binlog::BlockDecoder decoder(spec, *t);
+  const int64_t row_floats = scribblez::binlog::BlockDecoder::row_floats_for(*t, spec);
   for (int64_t j = 0; j < n; ++j) {
     decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
                        /*transpose=*/false, post_move,
@@ -341,9 +394,9 @@ int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
   return 0;
 }
 
-int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
+int scribblez_decode_rows(ScribblezSession* s, int task, const char* path, const int64_t* game_idx,
                           const int64_t* turn_idx, int64_t n, int post_move, float* out) {
-  return s->decode_rows(path, game_idx, turn_idx, n, post_move != 0, out);
+  return s->decode_rows(task, path, game_idx, turn_idx, n, post_move != 0, out);
 }
 
 int64_t ScribblezSession::win_table_samples(const char* path, void* out, int64_t cap) const {
@@ -947,10 +1000,11 @@ struct DataLoaderHandle {
 
 DataLoaderHandle* ScribblezSession::dl_new(int64_t memory_budget, int num_worker_threads,
                                            int num_prefetch_threads, int task) const {
+  const std::optional<scribblez::binlog::DecodeTask> t = decode_task(task);
+  if (!t) return nullptr;
   DataLoader::Params p;
   p.spec = spec;
-  p.task = task == 1 ? scribblez::binlog::DecodeTask::kMaxMovePerLane
-                     : scribblez::binlog::DecodeTask::kPositionEval;
+  p.task = *t;
   p.memory_budget = memory_budget;
   p.num_worker_threads = num_worker_threads;
   p.num_prefetch_threads = num_prefetch_threads;

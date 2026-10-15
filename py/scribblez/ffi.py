@@ -75,27 +75,14 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_session_delete.restype = None
     lib.scribblez_session_delete.argtypes = [ctypes.c_void_p]
 
-    lib.scribblez_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
-    lib.scribblez_input_shapes.argtypes = [ctypes.c_void_p]  # session
+    lib.scribblez_task_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
+    lib.scribblez_task_input_shapes.argtypes = [ctypes.c_void_p, ctypes.c_int]  # session, task
 
-    lib.scribblez_target_shapes.restype = ctypes.POINTER(_ScribblezShape)
-    lib.scribblez_target_shapes.argtypes = []
+    lib.scribblez_task_target_shapes.restype = ctypes.POINTER(_ScribblezShape)
+    lib.scribblez_task_target_shapes.argtypes = [ctypes.c_int]  # task
 
-    lib.scribblez_row_size_floats.restype = ctypes.c_int
-    lib.scribblez_row_size_floats.argtypes = [ctypes.c_void_p]  # session
-
-    lib.scribblez_input_floats.restype = ctypes.c_int
-    lib.scribblez_input_floats.argtypes = [ctypes.c_void_p]  # session
-
-    # Max-move-per-lane task: sibling shape/size queries.
-    lib.scribblez_max_move_per_lane_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
-    lib.scribblez_max_move_per_lane_input_shapes.argtypes = []
-    lib.scribblez_max_move_per_lane_target_shapes.restype = ctypes.POINTER(_ScribblezShape)
-    lib.scribblez_max_move_per_lane_target_shapes.argtypes = []
-    lib.scribblez_max_move_per_lane_row_size_floats.restype = ctypes.c_int
-    lib.scribblez_max_move_per_lane_row_size_floats.argtypes = []
-    lib.scribblez_max_move_per_lane_input_floats.restype = ctypes.c_int
-    lib.scribblez_max_move_per_lane_input_floats.argtypes = []
+    lib.scribblez_task_row_floats.restype = ctypes.c_int
+    lib.scribblez_task_row_floats.argtypes = [ctypes.c_void_p, ctypes.c_int]  # session, task
 
     lib.scribblez_max_move_per_lane_analyze_gcg.restype = ctypes.c_int
     lib.scribblez_max_move_per_lane_analyze_gcg.argtypes = [
@@ -174,6 +161,7 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_decode_rows.restype = ctypes.c_int
     lib.scribblez_decode_rows.argtypes = [
         ctypes.c_void_p,  # session
+        ctypes.c_int,  # task
         ctypes.c_char_p,
         ctypes.POINTER(ctypes.c_int64),
         ctypes.POINTER(ctypes.c_int64),
@@ -516,33 +504,53 @@ def _read_shapes(ptr) -> list[ShapeInfo]:
     return shapes
 
 
+# The training tasks a DataLoader or decode_rows decodes, by their engine
+# codes (scribblez_ffi.h, scribblez_task_input_shapes).
+TASK_CODES = {"position_eval": 0, "max_move_per_lane": 1, "leave_inference": 2}
+
+
+def _task_code(task: str) -> int:
+    if task not in TASK_CODES:
+        raise ValueError(f"unknown training task {task!r}")
+    return TASK_CODES[task]
+
+
+def task_input_shapes(task: str = "position_eval") -> list[ShapeInfo]:
+    """A task's input tensors, in row order. Position evaluation's follow the
+    session's input arm."""
+    return _read_shapes(_lib().scribblez_task_input_shapes(_session(), _task_code(task)))
+
+
+def task_target_shapes(task: str = "position_eval") -> list[ShapeInfo]:
+    """A task's target tensors, in row order after the inputs."""
+    return _read_shapes(_lib().scribblez_task_target_shapes(_task_code(task)))
+
+
+def task_row_floats(task: str = "position_eval") -> int:
+    """Floats in one training row of `task`: inputs plus targets."""
+    return _lib().scribblez_task_row_floats(_session(), _task_code(task))
+
+
+def task_input_floats(task: str = "position_eval") -> int:
+    """Floats in one flat input row of `task`."""
+    return sum(int(np.prod(s.dims)) for s in task_input_shapes(task))
+
+
 def get_input_shapes() -> list[ShapeInfo]:
-    return _read_shapes(_lib().scribblez_input_shapes(_session()))
+    return task_input_shapes("position_eval")
 
 
 def get_target_shapes() -> list[ShapeInfo]:
-    return _read_shapes(_lib().scribblez_target_shapes())
+    return task_target_shapes("position_eval")
 
 
 def row_size_floats() -> int:
-    return _lib().scribblez_row_size_floats(_session())
+    return task_row_floats("position_eval")
 
 
 def input_floats() -> int:
-    """Floats in one flat input row (spatial + scalar)."""
-    return _lib().scribblez_input_floats(_session())
-
-
-def get_max_move_per_lane_input_shapes() -> list[ShapeInfo]:
-    return _read_shapes(_lib().scribblez_max_move_per_lane_input_shapes())
-
-
-def get_max_move_per_lane_target_shapes() -> list[ShapeInfo]:
-    return _read_shapes(_lib().scribblez_max_move_per_lane_target_shapes())
-
-
-def max_move_per_lane_row_size_floats() -> int:
-    return _lib().scribblez_max_move_per_lane_row_size_floats()
+    """Floats in one flat position-evaluation input row (spatial + scalar)."""
+    return task_input_floats("position_eval")
 
 
 def decode_rows(
@@ -550,21 +558,24 @@ def decode_rows(
     game_idx: np.ndarray,
     turn_idx: np.ndarray,
     post_move: bool = True,
+    task: str = "position_eval",
 ) -> np.ndarray:
-    """Decode specific training rows of one .slog, addressed by
+    """Decode specific training rows of `task` from one .slog, addressed by
     (game_idx[j], turn_idx[j]).
 
     Rows are encoded exactly as the DataLoader encodes them, without symmetry
-    augmentation: (n, row_size_floats()) float32. For consumers that pair rows
-    with per-position sidecar data such as .sobs sim observations.
+    augmentation: (n, task_row_floats(task)) float32. For consumers that pair
+    rows with per-position data such as .sobs sim observations. The
+    max-move-per-lane and leave inference tasks are always pre-move.
     """
     games = np.ascontiguousarray(game_idx, dtype=np.int64)
     turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
     if games.shape != turns.shape or games.ndim != 1:
         raise ValueError(f"game/turn index shapes differ: {games.shape} vs {turns.shape}")
-    out = np.empty((len(games), row_size_floats()), dtype=np.float32)
+    out = np.empty((len(games), task_row_floats(task)), dtype=np.float32)
     rc = _lib().scribblez_decode_rows(
         _session(),
+        _task_code(task),
         str(path).encode("utf-8"),
         games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
         turns.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
@@ -1002,7 +1013,7 @@ def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
     lib = _lib()
     fn = lib.scribblez_max_move_per_lane_analyze_gcg
     encoded = gcg_text.encode("utf-8")
-    inp = np.zeros(lib.scribblez_max_move_per_lane_input_floats(), dtype=np.float32)
+    inp = np.zeros(task_input_floats("max_move_per_lane"), dtype=np.float32)
     inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
 
     cap = 1 << 16
@@ -1340,11 +1351,10 @@ def read_file_header(path: str | Path) -> tuple[int, int]:
 class NativeDataLoader:
     """The C++ DataLoader (engine/include/data/data_loader.h).
 
-    `task` fixes which training row it decodes: "position_eval" (over each
-    game's training-eligible turns) or "max_move_per_lane" (over every turn).
+    `task` fixes which training row it decodes (TASK_CODES):
+    "max_move_per_lane" over every turn, the others over each game's
+    training-eligible turns.
     """
-
-    _TASK_CODES = {"position_eval": 0, "max_move_per_lane": 1}
 
     def __init__(
         self,
@@ -1353,17 +1363,11 @@ class NativeDataLoader:
         num_prefetch: int = 2,
         task: str = "position_eval",
     ):
-        if task not in self._TASK_CODES:
-            raise ValueError(f"unknown dataloader task {task!r}")
         self._lib = _lib()
         self._handle = self._lib.scribblez_dl_new(
-            _session(), memory_budget, num_workers, num_prefetch, self._TASK_CODES[task]
+            _session(), memory_budget, num_workers, num_prefetch, _task_code(task)
         )
-        self._row_floats = (
-            max_move_per_lane_row_size_floats()
-            if task == "max_move_per_lane"
-            else self._lib.scribblez_row_size_floats(_session())
-        )
+        self._row_floats = task_row_floats(task)
 
     def __del__(self):
         if hasattr(self, "_handle") and self._handle:

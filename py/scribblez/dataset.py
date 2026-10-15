@@ -9,10 +9,10 @@ import torch
 from .ffi import (
     NativeDataLoader,
     get_input_shapes,
-    get_max_move_per_lane_input_shapes,
-    get_max_move_per_lane_target_shapes,
     get_target_shapes,
     read_file_header,
+    task_input_shapes,
+    task_target_shapes,
 )
 
 
@@ -95,13 +95,8 @@ class SlogDataset:
         # One row per eligible turn, so the row count exceeds the game count.
         self._total = self._loader.num_positions
         self._row_floats = self._loader.row_floats
-        if task == "max_move_per_lane":
-            self._input_shapes = get_max_move_per_lane_input_shapes()
-            target_shapes = get_max_move_per_lane_target_shapes()
-        else:
-            self._input_shapes = get_input_shapes()
-            target_shapes = get_target_shapes()
-        self._input_layout, self._targets = row_layout(self._input_shapes, target_shapes)
+        self._input_shapes = task_input_shapes(task)
+        self._input_layout, self._targets = row_layout(self._input_shapes, task_target_shapes(task))
 
     @property
     def num_samples(self) -> int:
