@@ -329,8 +329,6 @@ def run(ctx: WorkerContext) -> int:
         TABLE_KEY: table.klv_hash,
         "holdout_hash": held.content_hash,
     }
-    check_resumable(paths, config)
-
     recorder = TrainRecorder(ctx.sink)
     recorder.publish_run(ctx.tag, asdict(params), n_params, {"loss": 1.0}, default_controls())
 
@@ -353,6 +351,8 @@ def run(ctx: WorkerContext) -> int:
     }
 
     state_pair.install_seed(paths)
+    # After the seed, which may be what puts a rolling checkpoint in place.
+    check_resumable(paths, config)
     state = checkpoint.resume(paths, model, optimizer, device)
     ensure_window(paths, ctx.sink, state.generation_index, params.window)
     lifecycle.write_train_state(paths, asdict(state))
