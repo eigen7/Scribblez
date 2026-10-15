@@ -364,9 +364,10 @@ parity reference.
 | `model.py` | The encoder (a conv tower over the 348 planes, an MLP over the scalars, fused into a context vector) and the heads |
 | `loss.py` | The tilted-prior NLL ([below](#the-loss)) |
 | `win_table.py` | The win-table fit; the engine writes and evaluates the tables through the FFI |
-| `trainer.py` | The generational loop, the held-out eval, and the win-table refit |
+| `trainer.py` | The generational loop and the win-table refit |
+| `train_loop.py` | One epoch, and the held-out eval |
 | `holdout.py` | The held-out games |
-| `onnx_export.py` | Export, stamped through `onnx_export_util` |
+| `onnx_export.py` | Export, stamped through `onnx_export_util` (build step 5) |
 
 The conv tower reuses `spatial_trunk.py` if its constructor takes the plane
 count. Otherwise it is a small local tower. The input channel count is the
@@ -444,12 +445,13 @@ comparison measures what it gives up; it does not compete to replace it.
     `leave_inference_metrics`, and `InfoTab`;
   - a `FIGURES["leave_inference_metrics"]` builder in `dashboard/api.py`;
   - `LEAVE_INFERENCE_QUALITY` metric groups in `dashboard/plots.py`.
-- **Outputs per generation:** the ONNX, the win table and the checkpoint.
+- **Outputs per generation:** the win table and the checkpoint, and from
+  build step 5 the ONNX.
 
 ### Held-out data: regenerated
 
 The held-out set is `holdout_games` games that the trainer plays itself at
-startup. It runs `run_games` at the fixed `holdout_seed`, HastyBot against
+startup. It runs `run_games` at the fixed seed `holdout.SEED`, HastyBot against
 HastyBot, and writes to a scratch directory on its machine.
 
 - **Reproducible.** `play_game` plays game `g` at seed `base + g`, and the
@@ -468,8 +470,8 @@ HastyBot, and writes to a scratch directory on its machine.
   run's control events. A home whose regeneration differs, for example
   across CPU architectures, shows up there.
 
-The eval decodes the held-out rows through the addressable `decode_rows`, in
-a fixed order.
+The eval reads the held-out rows through a `SlogDataset` without symmetry, in
+a fixed seeded order.
 
 ### Eval metrics
 
@@ -494,8 +496,7 @@ calibration metrics are left out.
 - `hasty_temperature` (default 0, greedy) and `hasty_top_k`, which
   `hasty_spec` reads;
 - `window` and `turns_per_game`;
-- `random_opening_mean`, default 0;
-- `holdout_games` and `holdout_seed`;
+- `holdout_games`;
 - `head` (from the comparison head on);
 - the network's and the optimizer's usual parameters, through profiles.
 
