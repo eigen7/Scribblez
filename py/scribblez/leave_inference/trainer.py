@@ -15,7 +15,6 @@ against other leave values or another format is refused rather than resumed.
 """
 
 import functools
-import itertools
 import os
 import sys
 import time
@@ -37,7 +36,12 @@ from scribblez.leave_inference import holdout, loss, win_table
 from scribblez.leave_inference.model import LeaveInferenceModel
 from scribblez.leave_inference.train_loop import LAYOUT, evaluate, run_epoch
 from scribblez.paths import TagPaths
-from scribblez.position_eval.trainer import OutputDeliverer, ensure_window, wait_for_generation
+from scribblez.position_eval.trainer import (
+    OutputDeliverer,
+    ensure_window,
+    recalibration_batches,
+    wait_for_generation,
+)
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.selfplay_gen import hasty_spec
@@ -45,9 +49,6 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 TASK = "leave_inference"
 EVAL_BATCH = 1024
-# Batches the schedule-free arm recomputes BatchNorm statistics over, as in
-# position_eval/trainer.py.
-BN_RECALIBRATION_BATCHES = 32
 FACE_UP_FLAG = format_layout()["constants"]["slog"]["flag_face_up_leaves"]
 # The checkpoint-config entries a resume must match.
 FORMAT_KEY = "leave_inference_format_version"
@@ -95,12 +96,6 @@ class FaceUpGuard:
 
 def _rows_left(params, state: GenerationalState) -> bool:
     return not params_mod.reached(state.rows_trained, params.max_rows)
-
-
-def _recalibration_batches(ds, params, gen, device):
-    batches = ds.iter_batches(params.batch_size, seed=gen * 1000003 + 1, epoch_index=gen)
-    for batch in itertools.islice(batches, BN_RECALIBRATION_BATCHES):
-        yield batch["input_spatial"].to(device), batch["input_scalar"].to(device)
 
 
 def _holdout_batches(held: holdout.HoldoutSet, cpu):
@@ -152,6 +147,7 @@ def _checkpoint_and_eval(
     state,
     gen,
     result,
+    elapsed,
     window,
     optim_arm,
     cpu,
@@ -168,7 +164,7 @@ def _checkpoint_and_eval(
         "train_nll_vs_uniform": result.loss_vs_uniform,
         "valid_frac": result.valid_frac,
         "grad_norm_mean": result.grad_norm,
-        "elapsed_s": ctx["epoch_seconds"],
+        "elapsed_s": elapsed,
         "lr": optim_arm.current,
         **optim_arm.metrics(),
     }
@@ -239,8 +235,7 @@ def train_one_generation(
     state.rows_trained = result.rows_trained
     state.generation_index = gen + 1
     elapsed = time.time() - t0
-    ctx["epoch_seconds"] = elapsed
-    optim_arm.eval_mode(model, _recalibration_batches(ds, params, gen, device))
+    optim_arm.eval_mode(model, recalibration_batches(ds, params, gen, device))
     eval_seconds = _checkpoint_and_eval(
         model,
         optimizer,
@@ -251,6 +246,7 @@ def train_one_generation(
         state,
         gen,
         result,
+        elapsed,
         window,
         optim_arm,
         cpu,
