@@ -63,6 +63,7 @@ END_PARAMS = {
     "match_arms": set(),
     "transfer_test": {"target_positions"},
     "transfer_reader": {"train_steps"},
+    "leave_inference": {"max_rows"},
 }
 
 

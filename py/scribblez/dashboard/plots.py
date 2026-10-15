@@ -278,6 +278,32 @@ TRANSFER_READER_QUALITY = [
         ["val_wld", "val_score", "val_expected", "val_footprint", "val_rank"],
     ),
 ]
+# The leave inference model's read (the record scribblez/leave_inference/
+# trainer.py assembles, its eval metrics from train_loop.py):
+# held-out NLL of the opponent's true leave against the uniform prior (negative
+# is better), broken down by leave length and bag size, the calibration of its
+# implied letter presence and leave value, and the win table it refits each
+# generation against Macondo's.
+LEAVE_INFERENCE_QUALITY = [
+    ("NLL vs the uniform prior (nats per leave)", ["eval_nll_vs_uniform", "train_nll_vs_uniform"]),
+    ("Held-out NLL (nats per leave)", ["eval_nll", "eval_nll_uniform"]),
+    (
+        "Held-out NLL vs uniform, by leave length",
+        [f"eval_nll_vs_uniform_len_{k}" for k in range(1, 7)],
+    ),
+    (
+        "Held-out NLL vs uniform, by bag size",
+        [f"eval_nll_vs_uniform_bag_{b}" for b in ("1_20", "21_40", "41_60", "61_100")],
+    ),
+    ("Letter calibration: mean |predicted - actual| presence", ["eval_letter_calibration"]),
+    ("Leave value: mean predicted - true (points)", ["eval_value_bias"]),
+    ("Leave value: true within one predicted sd", ["eval_value_coverage"]),
+    ("Win table held-out log loss", ["eval_wintable_logloss", "eval_wintable_logloss_macondo"]),
+    (
+        "Rows without information",
+        ["eval_invalid_no_opponent_move", "eval_invalid_empty_leave", "eval_invalid_pass"],
+    ),
+]
 # Figures per row of every learning-curve grid.
 SERIES_NCOLS = 2
 

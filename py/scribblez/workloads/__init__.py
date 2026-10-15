@@ -10,6 +10,7 @@ from scribblez.workloads import (
     blind_spots,
     evidence_trajectories,
     kill_test,
+    leave_inference,
     match_arms,
     max_move_per_lane,
     move_set_eval,
@@ -38,6 +39,7 @@ WORKLOADS = {
         blind_spots.SPEC,
         transfer_test.SPEC,
         transfer_reader.SPEC,
+        leave_inference.SPEC,
     )
 }
 
