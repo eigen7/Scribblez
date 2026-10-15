@@ -115,7 +115,7 @@ class Finding:
         return f"{self.workload}/{self.tag}: {self.kind}: {self.detail}"
 
 
-def connect(path: Path) -> sqlite3.Connection:
+def connect(path: Path | str) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)

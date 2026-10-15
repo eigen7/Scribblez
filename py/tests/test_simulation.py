@@ -211,7 +211,7 @@ class Sim:
         self._check_i6()
 
     def _check_i1(self):
-        conn = control_db.connect(self.world.mount_root / "sim-check.db")
+        conn = control_db.connect(":memory:")
         try:
             findings = control_db.import_stores(conn, self.manager)
         finally:
@@ -283,7 +283,7 @@ class Sim:
 
     def outcome(self) -> dict:
         """What a run achieved: each tag's trained rows and projected state."""
-        conn = control_db.connect(self.world.mount_root / "sim-outcome.db")
+        conn = control_db.connect(":memory:")
         try:
             control_db.import_stores(conn, self.manager)
             states = control_db.project(conn)
