@@ -56,6 +56,7 @@ add_library(scribblez_core STATIC
   src/sim/rollout_report.cpp
   src/sim/transfer_candidates.cpp
   src/sim/win_pct_table.cpp
+  src/sim/win_table_feature.cpp
   src/sim/macondo_autostopper.cpp
   src/sim/macondo_simmer.cpp
   src/agent/best_bot.cpp

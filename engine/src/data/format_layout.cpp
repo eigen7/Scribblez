@@ -11,6 +11,8 @@
 #include "game/rack.h"
 #include "sim/sim_runner.h"
 #include "sim/transfer_candidates.h"
+#include "sim/win_pct_table.h"
+#include "sim/win_table_feature.h"
 #include "training/move_set_eval_target_log.h"
 #include "training/training_targets.h"
 #include "util/metaprogramming.h"
@@ -62,7 +64,8 @@ consteval const char* scalar_code(std::meta::info t) {
 // Member types that are themselves served structs become nested references,
 // keyed by the type's own identifier (build_structs serves them under it).
 consteval bool is_served_struct(std::meta::info t) {
-  return util::type_is<Move>(t) || util::type_is<RolloutStats>(t);
+  return util::type_is<Move>(t) || util::type_is<RolloutStats>(t) ||
+         util::type_is<WinTableFeature>(t);
 }
 
 // Fills in the dtype of one field: a nested struct reference, a char array
@@ -133,6 +136,8 @@ json::object build_structs() {
   s["MsetFileHeader"] = struct_json<move_set_eval::TargetFileHeader>();
   s["MsetPositionHeader"] = struct_json<move_set_eval::TargetPositionHeader>();
   s["SlogFileHeader"] = struct_json<binlog::FileHeader>();
+  s["WinTableFeature"] = struct_json<WinTableFeature>();
+  s["WinTableSample"] = struct_json<WinTableSample>();
   s["SlogGameMetadata"] = struct_json<binlog::GameMetadata>();
   s["SlogInitialRacks"] = struct_json<binlog::InitialRacks>();
   s["SlogTurnBlob"] = struct_json<binlog::TurnBlob>();
@@ -183,6 +188,9 @@ json::object build_constants() {
                  {"target_names_v1", std::move(target_names)},
                  {"plane_width", move_set_eval::kPlaneWidth}};
   }
+  // The grid a fitter hands to scribblez_win_table_write.
+  c["win_table"] = {{"max_spread", WinPctTable::kMaxSpread},
+                    {"max_unseen", WinPctTable::kMaxUnseen}};
   // The version ONNX exporters stamp into model metadata (input_encoder.h).
   c["input_encoding_version"] = kInputEncodingVersion;
   c["move_type"] = {{"play", int(MoveType::PLAY)},
