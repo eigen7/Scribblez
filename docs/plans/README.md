@@ -49,6 +49,13 @@ moved on. New plans go here, not in `docs/` proper.
   stop at a versioned win table, with opponent leaves drawn from the LIM.
   Each is one dashboard workload that generates, trains, slides its window
   and publishes eval metrics.
+- **[deep_bot_v0_lim.md](deep_bot_v0_lim.md)**: *proposed, not built.* The
+  build plan for the LIM half of deep_bot_v0.md: the standalone encoder and
+  its DataLoader mode, an in-memory leave table, a streaming
+  exponential-family loss, the `lim` workload with a frozen held-out set,
+  the `RackInferrer` baseline, serving and the CPU sampler. The win table is
+  refitted each generation as the workload's side product, and every
+  artifact carries a format version distinct from its generation.
 - **[supreme_bot_m1a.md](supreme_bot_m1a.md)**: *proposed, not built.*
   The build plan for M1a, SupremeBot's held-out transfer test: probe traces
   in the sim runner, a generator workload writing labels and a new `.sprobe`

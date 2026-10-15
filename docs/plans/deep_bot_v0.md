@@ -10,7 +10,9 @@ HastyBot-vs-HastyBot games in standard Scrabble (hidden leaves):
    both of its forms. Training both on the same data lets the measurements
    choose between them.
 
-The design of each model is in [deep_bot.md](deep_bot.md). This document
+The design of each model is in [deep_bot.md](deep_bot.md). The LIM's build
+plan, with the win table and the format versions of every artifact, is
+[deep_bot_v0_lim.md](deep_bot_v0_lim.md). This document
 covers what is specific to v0: the data source, the dashboard workloads, the
 engine and Python work, the v0 choices of size and parameter, and the
 measurements.
@@ -147,10 +149,13 @@ table](deep_bot.md#labels). v0 builds the tooling and the first version:
   from `.slog` outcomes, bucketed, smoothed and made monotone in spread, and
   writes the CSV format `WinPctTable` reads
   ([sim/win_pct_table.h](../../engine/include/sim/win_pct_table.h)).
-- **Versions** are files under the mount (`win_tables/v0.csv`, `v1.csv`,
-  ...), each recording the corpus and policy it was fitted from.
-- **v0** is fitted on HastyBot-vs-HastyBot games, which the `lim` workload
-  produces anyway. Macondo's bundled table is its sanity check.
+- **It is a side product of the `lim` workload:** the trainer refits it from
+  its window every generation and delivers it beside the LIM's ONNX, with a
+  format version and its provenance in a header. A consumer pins a
+  `(lim tag, generation)` pair, so its table and its LIM come from the same
+  games ([deep_bot_v0_lim.md](deep_bot_v0_lim.md#the-win-table-a-side-product)).
+- **v0** is fitted on HastyBot-vs-HastyBot games. Macondo's bundled table is
+  its sanity check.
 
 ## Workload 2: `psm`
 
