@@ -1,8 +1,18 @@
-"""Per-file progress lines for the default (non -v/-q) pytest output.
+"""Suite-wide pytest setup: one CPU thread per math library, and per-file
+progress lines for the default (non -v/-q) output.
 
-Stock pytest right-aligns each file's percentage to the terminal edge, which
-leaves a wide gap on a wide terminal, and reports no time. This replaces the
-terminal reporter with one that prints each test file as
+Tests are often run beside other CPU work. Torch's CPU ops default to one
+thread per core, and on the tiny tensors tests use those threads spend their
+time synchronizing; when other processes hold most cores, that turns a 1 s test
+into a 90 s one (test_rack_best's overfit loop, measured with 24 of 28 cores
+busy). One thread is faster even on an idle machine. The cap is set through
+the environment before anything imports torch or numpy, so subprocesses
+spawned by tests inherit it too.
+
+For the progress lines: stock pytest right-aligns each file's percentage to
+the terminal edge, which leaves a wide gap on a wide terminal, and reports no
+time. This replaces the terminal reporter with one that prints each test file
+as
 
     [ 69%] [   7.241s] py/tests/test_transfer_test_evaluate.py ......
 
@@ -13,6 +23,7 @@ would interleave) the line is written once, complete. -v and -q keep the
 stock output.
 """
 
+import os
 import sys
 import time
 
@@ -21,6 +32,9 @@ from _pytest.config import Config
 from _pytest.pathlib import bestrelpath
 from _pytest.reports import TestReport
 from _pytest.terminal import TerminalReporter, TestShortLogReport
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
 PREFIX_WIDTH = len("[100%] [9999.999s] ")
 
