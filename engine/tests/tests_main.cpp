@@ -40,6 +40,7 @@
 #include "training/footprint_mask.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
+#include "training/leave_inference_task.h"
 #include "training/max_move_per_lane_input_encoder.h"
 #include "training/max_move_per_lane_task.h"
 #include "training/move_set_encoder.h"
@@ -1117,6 +1118,310 @@ void check_movegen_equiv(const scribblez::Dictionary& dict, const scribblez::Boa
   }
 }
 }  // anonymous namespace
+
+// A board's cross-check masks, transposed, are the transposed board's: the
+// leave inference history transposes stored masks rather than re-deriving
+// them from a board.
+TEST(CrossCheckMasks, TransposeMatchesTransposedBoard) {
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = play_test_game(dict, /*seed=*/77);
+  Board board;
+  int plays = 0;
+  for (const auto& turn : log.turns) {
+    if (turn.move.type() != MoveType::PLAY) continue;
+    board.apply(turn.move);
+    ++plays;
+  }
+  ASSERT_GE(plays, 2);
+  board.ensure_movegen_caches(dict);
+  const Board transposed = board.transpose();
+  transposed.ensure_movegen_caches(dict);
+  const CrossCheckMasks masks = CrossCheckMasks::of(board);
+  EXPECT_EQ(CrossCheckMasks::of(transposed), masks.transpose());
+  EXPECT_EQ(masks.transpose().transpose(), masks);
+  // The board constrains some empty square on each axis, so the check is not
+  // vacuous.
+  bool h_constrained = false, v_constrained = false;
+  for (int cell = 0; cell < CrossCheckMasks::kCells; ++cell) {
+    if (!board.at(cell / BOARD_SIZE, cell % BOARD_SIZE).is_empty()) continue;
+    h_constrained |= masks.horizontal[cell] != kAllLettersMask;
+    v_constrained |= masks.vertical[cell] != kAllLettersMask;
+  }
+  EXPECT_TRUE(h_constrained);
+  EXPECT_TRUE(v_constrained);
+}
+
+// ---- Leave inference rows (training/leave_inference_task.h) ----------------
+
+namespace leave_inference_test {
+
+using Encoder = LeaveInferenceInputEncoder;
+
+// A test game long enough that a late turn has a full history.
+scribblez::GameLogStorage long_game(const Dictionary& dict) {
+  for (uint64_t seed = 40;; ++seed) {
+    scribblez::GameLogStorage log = play_test_game(dict, seed);
+    if (log.turns.size() >= 8) return log;
+  }
+}
+
+// The leave inference row at `turn` of `g`, decoded as the DataLoader would.
+std::vector<float> decode_row(const Dictionary& dict, const scribblez::GameLog& g, int turn,
+                              bool transpose) {
+  scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
+  std::vector<float> row(LeaveInferenceTask::kRowFloats);
+  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, transpose, row.data());
+  return row;
+}
+
+// The tiles turn `k`'s mover kept: their rack before it minus what it played
+// or exchanged.
+Rack kept_at(const TurnRecord& rec) {
+  Rack kept = rec.rack_before;
+  for (int i = 0; i < rec.move.num_glyphs(); ++i) kept.remove(rec.move.glyph(i).rack_tile());
+  return kept;
+}
+
+}  // namespace leave_inference_test
+
+// Each history slot is the move that many turns back, with its score, the bag
+// before it, and the board's cross-checks just before it; slots before the
+// game's first move are absent.
+TEST(LeaveInference, HistorySlotsMatchReplay) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = long_game(dict);
+  const scribblez::GameLog g = log.view();
+  scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
+  scribblez::binlog::PositionEncoder earlier(InputEncodingSpec{&dict});
+  for (int turn : {2, 7}) {
+    LeaveHistory history;
+    enc.replay_to_sampled(g, turn, /*post_move=*/false, &history);
+    for (int s = 0; s < LeaveHistory::kSlots; ++s) {
+      const int k = turn - 1 - s;
+      const LeaveHistorySlot& slot = history.slots[s];
+      ASSERT_EQ(slot.present, k >= 0) << turn << " " << s;
+      if (k < 0) continue;
+      const TurnRecord& rec = log.turns[k];
+      EXPECT_EQ(slot.move, rec.move);
+      EXPECT_EQ(slot.score, rec.move.type() == MoveType::PLAY ? rec.move.score() : 0);
+      EXPECT_EQ(slot.bag_before, rec.bag_size_before);
+      earlier.replay_to_sampled(g, k, /*post_move=*/false);
+      earlier.enc().board().ensure_movegen_caches(dict);
+      EXPECT_EQ(slot.cross_checks, CrossCheckMasks::of(earlier.enc().board()));
+    }
+  }
+}
+
+// Recording the history leaves the replayed state as it was, so the position
+// task's rows cannot change with it.
+TEST(LeaveInference, RecordingLeavesReplayUnchanged) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = long_game(dict);
+  const scribblez::GameLog g = log.view();
+  const InputEncodingSpec spec{&dict};
+  scribblez::binlog::PositionEncoder plain(spec), recording(spec);
+  LeaveHistory history;
+  const int turn = 7;
+  const int mover = plain.replay_to_sampled(g, turn, /*post_move=*/false);
+  ASSERT_EQ(recording.replay_to_sampled(g, turn, /*post_move=*/false, &history), mover);
+  std::vector<float> a(input_floats(spec)), b(input_floats(spec));
+  plain.enc().encode_input(mover, plain.rack(mover), a.data());
+  recording.enc().encode_input(mover, recording.rack(mover), b.data());
+  EXPECT_EQ(a, b);
+  EXPECT_EQ(plain.bag_size(), recording.bag_size());
+}
+
+// The target is the opponent's true leave, sorted and padded, with its length;
+// turn 0 has no leave to predict.
+TEST(LeaveInference, TargetIsTheOpponentsLeave) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = long_game(dict);
+  const scribblez::GameLog g = log.view();
+  for (int turn = 0; turn < int(log.turns.size()); ++turn) {
+    const std::vector<float> row = decode_row(dict, g, turn, /*transpose=*/false);
+    const float* target = row.data() + LeaveInferenceTask::kInputFloats;
+    const float cause = target[OppLeaveTarget::kCauseOffset];
+    if (turn == 0) {
+      EXPECT_EQ(cause, float(LeaveRowCause::kNoOpponentMove));
+      EXPECT_EQ(target[OppLeaveTarget::kValidOffset], 0.0f);
+      continue;
+    }
+    const TurnRecord& last = log.turns[turn - 1];
+    const Rack leave = kept_at(last);
+    std::vector<int> expect;
+    for (int i = 0; i < leave.size(); ++i) expect.push_back(leave.tiles()[i].index());
+    std::sort(expect.begin(), expect.end());
+    for (int i = 0; i < OppLeaveTarget::kTiles; ++i) {
+      EXPECT_EQ(target[i], i < int(expect.size()) ? float(expect[i]) : -1.0f) << turn;
+    }
+    EXPECT_EQ(target[OppLeaveTarget::kLengthOffset], float(leave.size()));
+    const LeaveRowCause want = last.move.type() == MoveType::PASS ? LeaveRowCause::kPass
+                               : leave.size() == 0                ? LeaveRowCause::kEmptyLeave
+                                                                  : LeaveRowCause::kValid;
+    EXPECT_EQ(cause, float(want)) << turn;
+    EXPECT_EQ(target[OppLeaveTarget::kValidOffset], want == LeaveRowCause::kValid ? 1.0f : 0.0f);
+    // The pool is what the observer cannot see, the bag plus the opponent's
+    // rack, and holds the leave.
+    EXPECT_EQ(target[OppLeaveTarget::kBagOffset], float(log.turns[turn].bag_size_before));
+    const Rack& opp_rack = turn + 1 < int(log.turns.size()) ? log.turns[turn + 1].rack_before
+                                                            : log.final_racks[last.player];
+    float pool_size = 0.0f;
+    for (int l = 0; l < TILE_KINDS; ++l) {
+      pool_size += target[OppLeaveTarget::kPoolOffset + l];
+      EXPECT_GE(target[OppLeaveTarget::kPoolOffset + l], float(leave.counts().count(Tile::of(l))));
+    }
+    EXPECT_EQ(pool_size, float(log.turns[turn].bag_size_before + opp_rack.size()));
+  }
+}
+
+// A transposed row is the original with every plane mirrored across the
+// diagonal and each cross-check block's halves swapped; scalars and targets
+// are unchanged.
+TEST(LeaveInference, TransposedRowMirrorsPlanes) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = long_game(dict);
+  const scribblez::GameLog g = log.view();
+  const int turn = 7;
+  const std::vector<float> row = decode_row(dict, g, turn, /*transpose=*/false);
+  const std::vector<float> t_row = decode_row(dict, g, turn, /*transpose=*/true);
+
+  // The plane a transposed row's plane `p` comes from.
+  const auto source_plane = [](int p) {
+    const auto in_checks = [](int q) { return q >= 0 && q < kCrossCheckPlanes; };
+    const auto swap_halves = [](int q) {
+      return q < kHorizontalCrossCheckPlanes ? q + kHorizontalCrossCheckPlanes
+                                             : q - kHorizontalCrossCheckPlanes;
+    };
+    if (p < Encoder::kCurrentPlanes) {
+      const int q = p - BoardPlanes::kPlanes;
+      return in_checks(q) ? BoardPlanes::kPlanes + swap_halves(q) : p;
+    }
+    const int base = p - (p - Encoder::kCurrentPlanes) % Encoder::kSlotPlanes;
+    const int q = p - base - 1;
+    return in_checks(q) ? base + 1 + swap_halves(q) : p;
+  };
+  int nonzero = 0;
+  for (int p = 0; p < Encoder::kSpatialPlanes; ++p) {
+    for (int r = 0; r < kBoardSide; ++r) {
+      for (int c = 0; c < kBoardSide; ++c) {
+        const float v = t_row[p * kBoardCells + r * kBoardSide + c];
+        ASSERT_EQ(v, row[source_plane(p) * kBoardCells + c * kBoardSide + r]) << p;
+        nonzero += v != 0.0f;
+      }
+    }
+  }
+  EXPECT_GT(nonzero, 0);
+  EXPECT_TRUE(std::equal(row.begin() + Encoder::kSpatialFloats, row.end(),
+                         t_row.begin() + Encoder::kSpatialFloats));
+}
+
+// An opponent's exchange shows only how many tiles went back; the observer's
+// own exchange shows which.
+TEST(LeaveInference, OpponentExchangeTilesStayHidden) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  Board board;
+  const auto encode_with = [&](int slot, const char* tiles) {
+    LeaveHistory history;
+    history.slots[slot].present = true;
+    history.slots[slot].move = Move::exchange(TileCounts::from_string(tiles));
+    const LeaveInferenceInput in{&board, Rack::from_string("ABCDEFG"), 0, 80, 4, &history};
+    std::vector<float> row(Encoder::kInputFloats);
+    Encoder::encode(in, dict, row.data());
+    return row;
+  };
+  EXPECT_EQ(encode_with(0, "QRS"), encode_with(0, "XYZ"));
+  EXPECT_NE(encode_with(1, "QRS"), encode_with(1, "XYZ"));
+  // The count still shows.
+  EXPECT_NE(encode_with(0, "QRS"), encode_with(0, "QR"));
+}
+
+// Each block of a decoded row holds what the header's layout says, at its
+// offset: the current position's planes and scalars, and per history slot its
+// placement plane, pre-move cross-checks and scalars.
+TEST(LeaveInference, RowBlocksMatchLayout) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = long_game(dict);
+  const scribblez::GameLog g = log.view();
+  const int turn = 7;
+  const std::vector<float> row = decode_row(dict, g, turn, /*transpose=*/false);
+  scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
+  LeaveHistory history;
+  const int me = enc.replay_to_sampled(g, turn, /*post_move=*/false, &history);
+  const Board& board = enc.enc().board();
+  board.ensure_movegen_caches(dict);
+  const auto block_eq = [&](int offset, const std::vector<float>& want) {
+    return std::equal(want.begin(), want.end(), row.begin() + offset);
+  };
+
+  std::vector<float> want(kCrossCheckPlanes * kBoardCells);
+  encode_cross_check_planes(board, want.data());
+  EXPECT_TRUE(block_eq(BoardPlanes::kPlanes * kBoardCells, want));
+  for (int s = 0; s < LeaveHistory::kSlots; ++s) {
+    const LeaveHistorySlot& slot = history.slots[s];
+    ASSERT_TRUE(slot.present);
+    const int base = (Encoder::kCurrentPlanes + s * Encoder::kSlotPlanes) * kBoardCells;
+    std::vector<float> placed(kBoardCells), checks(kCrossCheckPlanes * kBoardCells);
+    encode_placement_plane(slot.move, placed.data());
+    encode_cross_check_planes(slot.cross_checks, checks.data());
+    EXPECT_TRUE(block_eq(base, placed)) << s;
+    EXPECT_TRUE(block_eq(base + kBoardCells, checks)) << s;
+  }
+
+  const float* scalars = row.data() + Encoder::kSpatialFloats;
+  std::vector<float> rack(kRackCountFloats);
+  encode_rack_counts(log.turns[turn].rack_before, rack.data());
+  EXPECT_TRUE(block_eq(Encoder::kSpatialFloats, rack));
+  const float* bag = scalars + kRackCountFloats + kUnseenPoolThermoFloats + kScoreDiffInputFloats;
+  EXPECT_EQ(bag[0], float(log.turns[turn].bag_size_before) / Encoder::kCountScale);
+  const int leave_length = kept_at(log.turns[turn - 1]).size();
+  for (int len = 1; len <= Encoder::kMaxLeaveLength; ++len) {
+    EXPECT_EQ(bag[len], len == leave_length ? 1.0f : 0.0f) << len;
+  }
+  for (int s = 0; s < LeaveHistory::kSlots; ++s) {
+    const TurnRecord& rec = log.turns[turn - 1 - s];
+    const float* slot = scalars + Encoder::kCurrentScalars + s * Encoder::kSlotScalars;
+    const bool hidden = rec.player != me && rec.move.type() == MoveType::EXCHANGE;
+    EXPECT_EQ(slot[0], 1.0f) << s;
+    for (int t = 0; t < kMoveMetaTypeFloats; ++t) {
+      EXPECT_EQ(slot[1 + t], t == int(rec.move.type()) ? 1.0f : 0.0f) << s;
+    }
+    std::vector<float> tiles(TILE_KINDS);
+    for (int i = 0; !hidden && i < rec.move.num_glyphs(); ++i) {
+      tiles[rec.move.glyph(i).rack_tile().index()] += 1.0f;
+    }
+    EXPECT_TRUE(std::equal(tiles.begin(), tiles.end(), slot + 1 + kMoveMetaTypeFloats)) << s;
+    const float* tail = slot + 1 + kMoveMetaTypeFloats + TILE_KINDS;
+    EXPECT_EQ(tail[0], float(rec.move.num_glyphs())) << s;
+    EXPECT_EQ(tail[1], float(history.slots[s].score) / kScoreDiffInputScale) << s;
+    EXPECT_EQ(tail[2], float(rec.bag_size_before) / Encoder::kCountScale) << s;
+  }
+}
+
+// OppLeaveTarget::cause on hand-built histories: each cause, whatever the
+// game played.
+TEST(LeaveInference, TargetCauses) {
+  const Rack rack = Rack::from_string("ABCDEFG");
+  scribblez::LeaveHistory history;
+  scribblez::EncodeContext ctx;
+  ctx.leave_history = &history;
+  EXPECT_EQ(OppLeaveTarget::cause(ctx), LeaveRowCause::kNoOpponentMove);
+  history.slots[0].present = true;
+  history.slots[0].move = Move::pass();
+  ctx.opp_known_leave = rack;
+  EXPECT_EQ(OppLeaveTarget::cause(ctx), LeaveRowCause::kPass);
+  history.slots[0].move = Move::exchange(TileCounts::from_string("ABCDEFG"));
+  ctx.opp_known_leave = Rack();
+  EXPECT_EQ(OppLeaveTarget::cause(ctx), LeaveRowCause::kEmptyLeave);
+  history.slots[0].move = Move::exchange(TileCounts::from_string("AB"));
+  ctx.opp_known_leave = Rack::from_string("CDEFG");
+  EXPECT_EQ(OppLeaveTarget::cause(ctx), LeaveRowCause::kValid);
+}
 
 // With opp_leave_input, the row is the base row plus a trailing block of the
 // opponent's known per-tile rack counts.

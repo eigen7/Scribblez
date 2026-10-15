@@ -63,7 +63,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scribblez.dataset import row_layout
-from scribblez.ffi import decode_rows, get_input_shapes, set_opp_leave_input
+from scribblez.ffi import decode_rows, set_opp_leave_input, task_input_shapes
 from scribblez.paths import add_mount_root_argument
 from scribblez.position_eval.model import LossConfig
 from scribblez.sim_evidence.model import NUM_EVIDENCE_PLANES, EvidencePositionEvalModel
@@ -287,7 +287,7 @@ def train_arm(arm: str, cache: Path, args, device) -> dict:
     apply_evidence_mode(train, arm, seed=args.seed)
     apply_evidence_mode(holdout, arm, seed=args.seed + 1)
 
-    input_shapes = {s.name: s.dims for s in get_input_shapes()}
+    input_shapes = {s.name: s.dims for s in task_input_shapes()}
     model = EvidencePositionEvalModel(
         spatial_planes=input_shapes["input_spatial"][0],
         scalar_size=input_shapes["input_scalar"][0],

@@ -46,7 +46,7 @@ from pathlib import Path
 import numpy as np
 import onnx
 import torch
-from scribblez.ffi import get_input_shapes
+from scribblez.ffi import task_input_shapes
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.moves import (
     move_encoding_dims,
@@ -67,7 +67,7 @@ NUM_HEADS = 2
 # the fixture's row always matches the widths the C++ test reads back off the
 # loaded model.
 def input_widths() -> tuple[int, int, int]:
-    dims = {s.name: s.dims for s in get_input_shapes()}
+    dims = {s.name: s.dims for s in task_input_shapes()}
     planes, height, width = dims["input_spatial"]
     assert height == width, "the model assumes a square board"
     return planes, height, dims["input_scalar"][0]

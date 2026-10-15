@@ -8,11 +8,9 @@ import torch
 
 from .ffi import (
     NativeDataLoader,
-    get_input_shapes,
-    get_max_move_per_lane_input_shapes,
-    get_max_move_per_lane_target_shapes,
-    get_target_shapes,
     read_file_header,
+    task_input_shapes,
+    task_target_shapes,
 )
 
 
@@ -25,8 +23,8 @@ def row_layout(input_shapes=None, target_shapes=None):
     the position-evaluation task's; pass explicit lists for another task (e.g.
     max-move-per-lane).
     """
-    input_shapes = get_input_shapes() if input_shapes is None else input_shapes
-    target_shapes = get_target_shapes() if target_shapes is None else target_shapes
+    input_shapes = task_input_shapes() if input_shapes is None else input_shapes
+    target_shapes = task_target_shapes() if target_shapes is None else target_shapes
     input_total = sum(int(np.prod(s.dims)) for s in input_shapes)
     targets: list[tuple[str, int, int, tuple[int, ...]]] = []
     offset = input_total
@@ -95,13 +93,8 @@ class SlogDataset:
         # One row per eligible turn, so the row count exceeds the game count.
         self._total = self._loader.num_positions
         self._row_floats = self._loader.row_floats
-        if task == "max_move_per_lane":
-            self._input_shapes = get_max_move_per_lane_input_shapes()
-            target_shapes = get_max_move_per_lane_target_shapes()
-        else:
-            self._input_shapes = get_input_shapes()
-            target_shapes = get_target_shapes()
-        self._input_layout, self._targets = row_layout(self._input_shapes, target_shapes)
+        self._input_shapes = task_input_shapes(task)
+        self._input_layout, self._targets = row_layout(self._input_shapes, task_target_shapes(task))
 
     @property
     def num_samples(self) -> int:

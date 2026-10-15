@@ -1,6 +1,12 @@
 #pragma once
 
 #include "game/board.h"
+#include "game/move.h"
+#include "game/rack.h"
+#include "game/tile.h"
+
+#include <array>
+#include <cstdint>
 
 namespace scribblez {
 
@@ -20,5 +26,50 @@ struct BoardPlanes {
   // (DLS, TLS, DWS, TWS) mark premium squares whether or not they are covered.
   static void encode(const Board& board, float* planes_out);
 };
+
+// Block writers shared by the input encoders (input_encoder.h documents each
+// block). Each writes into zeroed memory at `out` and returns the number of
+// planes or floats written.
+
+// One plane marking the squares `m` placed tiles on.
+int encode_placement_plane(const Move& m, float* out);
+
+// The cross-check constraint on every square, per play axis: bit L of a
+// square's mask is set iff letter L satisfies the cross-check there for a
+// word along that axis. An occupied square's masks are 0. A value, so a
+// position's cross-checks can be kept after its board moves on (the leave
+// inference encoder's history does).
+struct CrossCheckMasks {
+  static constexpr int kCells = BOARD_SIZE * BOARD_SIZE;
+
+  // Indexed by square, r * BOARD_SIZE + c.
+  std::array<uint32_t, kCells> horizontal{};
+  std::array<uint32_t, kCells> vertical{};
+
+  // Reads the board's move-generation caches, which must be built.
+  static CrossCheckMasks of(const Board& board);
+
+  // The masks of the transposed board (Board::transpose): squares mirror
+  // across the diagonal and the two axes swap.
+  CrossCheckMasks transpose() const;
+
+  bool operator==(const CrossCheckMasks&) const = default;
+};
+
+// The cross-check planes: 26 horizontal, then 26 vertical.
+int encode_cross_check_planes(const CrossCheckMasks& masks, float* out);
+
+// encode_cross_check_planes of the board's masks. Reads the board's
+// move-generation caches, which must be built.
+int encode_cross_check_planes(const Board& board, float* out);
+
+// Per-tile counts of `rack`, unscaled.
+int encode_rack_counts(const Rack& rack, float* out);
+
+// The unseen pool as a thermometer, one slot per physical tile.
+int encode_unseen_pool_thermometer(const uint8_t unseen[TILE_KINDS], float* out);
+
+// The score differential, scaled by kScoreDiffInputScale.
+int encode_score_diff_scalar(int score_diff, float* out);
 
 }  // namespace scribblez

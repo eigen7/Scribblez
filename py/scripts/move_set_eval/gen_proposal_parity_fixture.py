@@ -53,7 +53,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from scribblez.ffi import encode_moves, get_input_shapes
+from scribblez.ffi import encode_moves, task_input_shapes
 from scribblez.footprint_spatial import NUM_CLASSES
 from scribblez.move_set_eval.evidence import build_evidence_inputs
 from scribblez.move_set_eval.model import MoveSetEvalModel
@@ -86,7 +86,7 @@ OBS_DTYPE = RECORD_DTYPE["obs"]
 
 
 def input_widths() -> tuple[int, int, int]:
-    dims = {s.name: s.dims for s in get_input_shapes()}
+    dims = {s.name: s.dims for s in task_input_shapes()}
     planes, height, width = dims["input_spatial"]
     assert height == width, "the model assumes a square board"
     return planes, height, dims["input_scalar"][0]

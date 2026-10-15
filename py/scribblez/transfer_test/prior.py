@@ -26,9 +26,9 @@ import torch
 from scribblez.ffi import (
     decode_rows,
     encode_candidate_rows,
-    get_input_shapes,
-    input_floats,
     set_opp_leave_input,
+    task_input_floats,
+    task_input_shapes,
 )
 from scribblez.paths import TagPaths
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES, PositionEvalModel
@@ -72,7 +72,7 @@ def load_teacher(teacher_tag: str, generation: int, mount_root: Path) -> Positio
         )
     cfg = ckpt["config"]
     set_opp_leave_input(cfg["face_up_leaves"])
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     model = PositionEvalModel(
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],
@@ -86,8 +86,8 @@ def load_teacher(teacher_tag: str, generation: int, mount_root: Path) -> Positio
 
 
 def _split(rows: np.ndarray, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-    """Input rows (N, input_floats) -> the model's spatial and scalar inputs."""
-    planes, side, _ = {s.name: s.dims for s in get_input_shapes()}["input_spatial"]
+    """Input rows (N, task_input_floats) -> the model's spatial and scalar inputs."""
+    planes, side, _ = {s.name: s.dims for s in task_input_shapes()}["input_spatial"]
     n = planes * side * side
     spatial = torch.from_numpy(np.ascontiguousarray(rows[:, :n])).view(-1, planes, side, side)
     return spatial.to(device), torch.from_numpy(np.ascontiguousarray(rows[:, n:])).to(device)
@@ -129,7 +129,7 @@ def root_rows(probes: ProbeFile) -> np.ndarray:
         probes.positions["turn_index"],
         post_move=False,
     )
-    return rows[:, : input_floats()]
+    return rows[:, : task_input_floats()]
 
 
 def candidate_rows(probes: ProbeFile) -> np.ndarray:

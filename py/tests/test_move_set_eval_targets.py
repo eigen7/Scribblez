@@ -47,9 +47,9 @@ def _skip_unless_runnable():
 
 
 def _export_tiny_teacher(onnx_path: Path):
-    from scribblez.ffi import get_input_shapes
+    from scribblez.ffi import task_input_shapes
 
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     torch.manual_seed(0)
     model = PositionEvalModel(
         spatial_planes=shapes["input_spatial"][0],
@@ -295,11 +295,11 @@ def test_generator_labels_face_up_slogs_with_an_open_leaves_teacher(tmp_path):
     # (the test_sim_evidence.py pattern).
     code = (
         "import torch\n"
-        "from scribblez.ffi import set_opp_leave_input, get_input_shapes\n"
+        "from scribblez.ffi import set_opp_leave_input, task_input_shapes\n"
         "from scribblez.position_eval.model import PositionEvalModel\n"
         "from scribblez.position_eval.onnx_export import export_onnx\n"
         "set_opp_leave_input(True)\n"
-        "shapes = {s.name: s.dims for s in get_input_shapes()}\n"
+        "shapes = {s.name: s.dims for s in task_input_shapes()}\n"
         "torch.manual_seed(0)\n"
         "model = PositionEvalModel(spatial_planes=shapes['input_spatial'][0],\n"
         "                          scalar_size=shapes['input_scalar'][0],\n"

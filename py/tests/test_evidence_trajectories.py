@@ -278,7 +278,7 @@ def _write_student_onnx(path: Path, shapes: dict) -> None:
         num_blocks=2,
         num_heads=2,
     ).eval()
-    # The export takes the widths get_input_shapes reported, so the exported
+    # The export takes the widths task_input_shapes reported, so the exported
     # width is the width the generator re-derives.
     export_onnx(
         student,
@@ -321,11 +321,11 @@ def traj_corpus(tmp_path_factory) -> SimpleNamespace:
         pytest.skip("HastyBot leave values not installed")
     if not torch.cuda.is_available():
         pytest.skip("no GPU")
-    from scribblez.ffi import get_input_shapes
+    from scribblez.ffi import task_input_shapes
 
     d = tmp_path_factory.mktemp("evidence_traj")
     subprocess.run([str(SLOG_WRITER), str(d), "8", "4"], check=True, capture_output=True)
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     _write_student_onnx(d / "student.onnx", shapes)
     _write_teacher_onnx(d / "teacher.onnx", shapes)
 
@@ -628,10 +628,10 @@ def _tiny_evidence_checkpoint(trained: bool):
     """A tiny frozen-backbone model under the session's default arm (the
     fixture student's), as either checkpoint kind."""
     from scribblez.evidence.checkpoints import EvidenceCheckpoint
-    from scribblez.ffi import get_input_shapes
+    from scribblez.ffi import task_input_shapes
     from scribblez.move_set_eval.model import MoveSetEvalModel
 
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     torch.manual_seed(3)
     model = MoveSetEvalModel(
         spatial_planes=shapes["input_spatial"][0],

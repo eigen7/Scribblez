@@ -30,7 +30,7 @@ import onnxruntime as ort
 import torch
 from scribblez import workloads
 from scribblez.dashboard import db
-from scribblez.ffi import get_input_shapes, set_opp_leave_input
+from scribblez.ffi import set_opp_leave_input, task_input_shapes
 from scribblez.onnx_export_util import load_onnx_initializers
 from scribblez.paths import TagPaths, add_mount_root_argument
 from scribblez.position_eval import analysis
@@ -58,7 +58,7 @@ def _tag_params(paths: TagPaths):
 def _build_model(params, device) -> tuple[PositionEvalModel, int]:
     """The tag's architecture on `device`, and the encoder's spatial plane count."""
     set_opp_leave_input(params.face_up_leaves)
-    shapes = {s.name: s.dims for s in get_input_shapes()}
+    shapes = {s.name: s.dims for s in task_input_shapes()}
     model = PositionEvalModel(
         spatial_planes=shapes["input_spatial"][0],
         scalar_size=shapes["input_scalar"][0],

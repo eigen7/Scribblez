@@ -27,7 +27,7 @@ import numpy as np
 import onnx
 import pytest
 import torch
-from scribblez.ffi import get_input_shapes
+from scribblez.ffi import task_input_shapes
 from scribblez.move_set_eval.model import MoveSetEvalModel
 from scribblez.move_set_eval.moves import move_encoding_dims, synthetic_cross_checks
 from scribblez.move_set_eval.onnx_export import (
@@ -38,7 +38,7 @@ from scribblez.move_set_eval.onnx_export import (
 )
 from scribblez.transformer_tower import TransformerConfig
 
-_input_shapes = {s.name: s.dims for s in get_input_shapes()}
+_input_shapes = {s.name: s.dims for s in task_input_shapes()}
 SPATIAL_PLANES, BOARD_SIZE, _ = _input_shapes["input_spatial"]
 SCALAR_SIZE = _input_shapes["input_scalar"][0]
 MAX_PLACED, NUM_SCALARS, LETTER_VOCAB, CELLS = move_encoding_dims()
