@@ -101,9 +101,9 @@ def parse_args() -> argparse.Namespace:
         formatter_class=ArgumentDefaultsHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--cpp-only", action="store_true", help="run only the C++ engine tests")
-    group.add_argument("--python-only", action="store_true", help="run only the Python tests")
-    group.add_argument("--web-only", action="store_true", help="run only the web UI tests")
+    group.add_argument("-c", "--cpp-only", action="store_true", help="run only the C++ engine tests")
+    group.add_argument("-p", "--python-only", action="store_true", help="run only the Python tests")
+    group.add_argument("-w", "--web-only", action="store_true", help="run only the web UI tests")
     parser.add_argument("-v", "--verbose", action="store_true", help="enable verbose test output")
     args = parser.parse_args()
     return args
