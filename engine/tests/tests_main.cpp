@@ -32,6 +32,9 @@
 #include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
 #include "sim/slog_position_simmer.h"
+#include "sim/win_table_feature.h"
+#include "synthetic_equity.h"
+#include "temp_dir.h"
 #include "training/cross_check_delta.h"
 #include "training/evidence_trajectory_select.h"
 #include "training/footprint_mask.h"
@@ -1550,6 +1553,64 @@ TEST(BinaryLog, RandomOpeningRegion) {
   ASSERT_EQ(loader.num_positions(), expected_rows);
   std::cout << "  BinaryLogWriter random-opening eligible region OK (" << expected_rows
             << " rows across " << kGames << " games)\n";
+}
+
+// The win table's fitting samples (sim/win_table_feature.h), checked against
+// the games' own turn records: one per pre-move position from the mover's
+// second turn on and after the last random ply, with the spread plus the
+// mover's kept leave, the tiles unseen and the outcome from the mover's side.
+TEST(WinTable, SamplesMatchTurnRecords) {
+  namespace fs = std::filesystem;
+  Dictionary dict = medium_dict();
+  const fs::path dir = scribblez::testing::make_temp_dir("scribblez_win_table");
+  struct DirCleanup {
+    fs::path p;
+    ~DirCleanup() {
+      std::error_code ec;
+      fs::remove_all(p, ec);
+    }
+  } cleanup{dir};
+  scribblez::testing::install_synthetic_hasty_equity(dir);
+
+  constexpr int kPlies = 4;
+  std::vector<scribblez::GameLogStorage> logs;
+  logs.push_back(play_test_game(dict, /*seed=*/900));
+  logs.push_back(play_random_opening_test_game(dict, /*seed=*/901, kPlies));
+  {
+    scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/int(logs.size()));
+    for (const auto& log : logs) writer.append(scribblez::GameLogStorage(log));
+  }
+  std::string raw;
+  for (const auto& ent : fs::directory_iterator(dir)) {
+    if (ent.path().extension() == ".slog") raw = scribblez::util::read_file(ent.path().string());
+  }
+  ASSERT_FALSE(raw.empty());
+  std::vector<scribblez::WinTableSample> samples;
+  scribblez::append_win_table_samples(raw.data(), samples);
+  ASSERT_GT(samples.size(), 20u);
+
+  const HastyEquity& eq = HastyEquity::instance();
+  size_t i = 0;
+  for (const auto& log : logs) {
+    const auto& turns = log.turns;
+    const int n = int(turns.size());
+    const int begin = log.num_random_opening_plies > 0 ? std::max(2, kPlies) : 2;
+    for (int t = begin; t < n; ++t, ++i) {
+      ASSERT_LT(i, samples.size());
+      const int p = turns[t].player;
+      Rack kept = turns[t - 2].rack_before;
+      for (int g = 0; g < turns[t - 2].move.num_glyphs(); ++g) {
+        kept.remove(turns[t - 2].move.glyph(g).rack_tile());
+      }
+      const int spread = turns[t - 1].cumulative_scores[p] - turns[t - 1].cumulative_scores[1 - p];
+      const Rack& opp_rack = t + 1 < n ? turns[t + 1].rack_before : log.final_racks[1 - p];
+      const int diff = log.final_scores[p] - log.final_scores[1 - p];
+      EXPECT_EQ(samples[i].feature.spread, int(std::lround(spread + eq.leave_value(kept))));
+      EXPECT_EQ(samples[i].feature.tiles_unseen, turns[t].bag_size_before + opp_rack.size());
+      EXPECT_EQ(samples[i].outcome, diff > 0 ? 1.0f : diff == 0 ? 0.5f : 0.0f);
+    }
+  }
+  EXPECT_EQ(i, samples.size());
 }
 
 // ===========================================================================

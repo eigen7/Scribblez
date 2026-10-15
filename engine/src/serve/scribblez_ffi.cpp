@@ -16,6 +16,8 @@
 #include "lexicon/lexicon.h"
 #include "sim/reply_blocking.h"
 #include "sim/sim_runner.h"
+#include "sim/win_pct_table.h"
+#include "sim/win_table_feature.h"
 #include "training/footprint_collapse.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
@@ -25,6 +27,7 @@
 #include "training/position_eval_analysis.h"
 #include "training/training_targets.h"
 #include "training/trajectory_position.h"
+#include "util/exception.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -36,7 +39,9 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -59,6 +64,7 @@ struct ScribblezSession {
 
   int decode_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx, int64_t n,
                   bool post_move, float* out) const;
+  int64_t win_table_samples(const char* path, void* out, int64_t cap) const;
   int encode_candidate_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
                             const int64_t* move_counts, int64_t n_positions, const void* moves,
                             float* out) const;
@@ -337,6 +343,73 @@ int ScribblezSession::decode_rows(const char* path, const int64_t* game_idx,
 int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
                           const int64_t* turn_idx, int64_t n, int post_move, float* out) {
   return s->decode_rows(path, game_idx, turn_idx, n, post_move != 0, out);
+}
+
+int64_t ScribblezSession::win_table_samples(const char* path, void* out, int64_t cap) const {
+  std::vector<char> buf;
+  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
+  // Win tables model hidden-leaves play only.
+  if (reinterpret_cast<const FileHeader*>(buf.data())->flags & scribblez::binlog::kFlagFaceUpLeaves)
+    return -2;
+  scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+  std::vector<scribblez::WinTableSample> samples;
+  scribblez::append_win_table_samples(buf.data(), samples);
+  const int64_t n = std::min(int64_t(samples.size()), cap);
+  if (n > 0) std::memcpy(out, samples.data(), size_t(n) * sizeof(scribblez::WinTableSample));
+  return int64_t(samples.size());
+}
+
+int64_t scribblez_win_table_samples(ScribblezSession* s, const char* path, void* out_samples,
+                                    int64_t cap) {
+  return s->win_table_samples(path, out_samples, cap);
+}
+
+namespace {
+
+// "key=value" lines into a map; a line without '=' is an error.
+std::map<std::string, std::string> parse_header_lines(const char* text) {
+  std::map<std::string, std::string> out;
+  std::istringstream in(text ? text : "");
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.empty()) continue;
+    const size_t eq = line.find('=');
+    if (eq == std::string::npos) throw scribblez::util::Exception("bad header line '{}'", line);
+    out[line.substr(0, eq)] = line.substr(eq + 1);
+  }
+  return out;
+}
+
+}  // namespace
+
+int scribblez_win_table_write(const char* path, const float* grid, const char* header,
+                              char* out_err, int err_cap) {
+  try {
+    scribblez::WinPctTable::from_grid(grid, parse_header_lines(header)).write_versioned(path);
+    return 0;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
+}
+
+int scribblez_win_table_eval(const char* path, int macondo_format, const void* features, int64_t n,
+                             float* out, char* out_err, int err_cap) {
+  try {
+    const scribblez::WinPctTable table = macondo_format
+                                           ? scribblez::WinPctTable::load_macondo(path)
+                                           : scribblez::WinPctTable::load_versioned(path);
+    const char* bytes = static_cast<const char*>(features);
+    for (int64_t i = 0; i < n; ++i) {
+      scribblez::WinTableFeature f;
+      std::memcpy(&f, bytes + i * sizeof(f), sizeof(f));
+      out[i] = table.win_prob(f);
+    }
+    return 0;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
 }
 
 void scribblez_move_set_encode_moves(const void* moves, int64_t n,

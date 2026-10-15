@@ -95,6 +95,29 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
 int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
                           const int64_t* turn_idx, int64_t n, int post_move, float* out);
 
+// The win table's fitting samples from one .slog (sim/win_table_feature.h):
+// one WinTableSample record per fittable pre-move position of every game, its
+// layout from scribblez_format_layout_json. Writes the first min(count, cap)
+// records and returns the count, so a call with cap 0 sizes the buffer.
+// Returns -1 on an I/O or header error, and -2 for a face-up-leaves file: win
+// tables model hidden-leaves play only.
+int64_t scribblez_win_table_samples(ScribblezSession* s, const char* path, void* out_samples,
+                                    int64_t cap);
+
+// Writes a scribblez win table (sim/win_pct_table.h) from `grid`, the
+// fitter's kRows x kCols floats in file order, and `header`, its provenance as
+// "key=value" lines separated by '\n'. Returns 0, or -1 with a message in
+// `out_err`.
+int scribblez_win_table_write(const char* path, const float* grid, const char* header,
+                              char* out_err, int err_cap);
+
+// P(win) for each of `n` WinTableFeature records under the table at `path`:
+// a scribblez table, or Macondo's winpct.csv when `macondo_format` is nonzero.
+// Returns 0, or -1 with a message in `out_err` (a malformed file, or a
+// scribblez table of another format version).
+int scribblez_win_table_eval(const char* path, int macondo_format, const void* features, int64_t n,
+                             float* out, char* out_err, int err_cap);
+
 // Encode `n` candidate moves into the move-set model's per-move input arrays
 // (layout owned by training/move_set_encoder.h, which the agent also uses at
 // inference). Needs no session.
