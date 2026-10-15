@@ -160,7 +160,7 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
 // (game_idx[j], turn_idx[j]) of the .slog at `path`. `moves` holds every
 // position's candidates back to back, move_counts[j] for position j; each must
 // be legal on its board. Outputs, cross-checks in `moves` order:
-//   out_rows     float[n_positions * row_size_floats]
+//   out_rows     float[n_positions * scribblez_task_row_floats(s, 0)]
 //   out_cells    int32[n_moves * cross_slots]
 //   out_letters  uint8[n_moves * cross_slots * 26]
 // Returns 0 on success, -1 on an I/O or header error.
@@ -181,7 +181,8 @@ int scribblez_gcg_cross_checks(ScribblezSession* s, const char* gcg_text, int op
 // refill, from the mover's point of view, under the session's arm (as
 // training/move_set_eval_target_generator encodes them). Positions and moves
 // are addressed as in scribblez_move_set_positions; `out` takes one
-// row of scribblez_input_floats() per move. Returns 0 on success, -1 on an I/O
+// position-evaluation input row (task 0's input shapes, see
+// scribblez_task_input_shapes) per move. Returns 0 on success, -1 on an I/O
 // or header error.
 int scribblez_encode_candidate_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
                                     const int64_t* turn_idx, const int64_t* move_counts,
@@ -238,8 +239,8 @@ void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_inde
 // Max-move-per-lane analysis of a GCG's final position (the board after all
 // recorded moves, with the on-move player's #Rack). Writes the lane-analysis
 // JSON (board, ground-truth per-lane targets, maximal plays) to `out_json` and,
-// if `out_input` is non-null, the model input
-// (scribblez_max_move_per_lane_input_floats() floats). Returns the JSON's full
+// if `out_input` is non-null, the model input (task 1's input shapes, see
+// scribblez_task_input_shapes). Returns the JSON's full
 // length, or -1 on a parse error.
 int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg_text,
                                             char* out_json, int out_cap, float* out_input);
