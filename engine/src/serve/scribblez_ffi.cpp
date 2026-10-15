@@ -229,38 +229,39 @@ std::optional<scribblez::binlog::DecodeTask> decode_task(int code) {
   return std::nullopt;
 }
 
+// A task's input and target tensors.
+struct TaskShapes {
+  const ScribblezShape* input;
+  const ScribblezShape* target;
+};
+
+// The tensors of the task a C ABI task code names, or nulls for an unknown
+// code. Position evaluation's inputs follow the session's arm.
+TaskShapes task_shapes(const ScribblezSession* s, int code) {
+  using scribblez::binlog::DecodeTask;
+  const std::optional<DecodeTask> t = decode_task(code);
+  if (!t) return {nullptr, nullptr};
+  switch (*t) {
+    case DecodeTask::kPositionEval:
+      return {s->input_shapes(), kTargetShapesArr.data()};
+    case DecodeTask::kMaxMovePerLane:
+      return {kMaxMovePerLaneInputShapes, kMaxMovePerLaneTargetShapes};
+    case DecodeTask::kLeaveInference:
+      return {kLeaveInferenceInputShapes, kLeaveInferenceTargetShapes};
+  }
+  return {nullptr, nullptr};
+}
+
 }  // namespace
 
 extern "C" {
 
 const ScribblezShape* scribblez_task_input_shapes(ScribblezSession* s, int task) {
-  using scribblez::binlog::DecodeTask;
-  const std::optional<DecodeTask> t = decode_task(task);
-  if (!t) return nullptr;
-  switch (*t) {
-    case DecodeTask::kPositionEval:
-      return s->input_shapes();
-    case DecodeTask::kMaxMovePerLane:
-      return kMaxMovePerLaneInputShapes;
-    case DecodeTask::kLeaveInference:
-      return kLeaveInferenceInputShapes;
-  }
-  return nullptr;
+  return task_shapes(s, task).input;
 }
 
-const ScribblezShape* scribblez_task_target_shapes(int task) {
-  using scribblez::binlog::DecodeTask;
-  const std::optional<DecodeTask> t = decode_task(task);
-  if (!t) return nullptr;
-  switch (*t) {
-    case DecodeTask::kPositionEval:
-      return kTargetShapesArr.data();
-    case DecodeTask::kMaxMovePerLane:
-      return kMaxMovePerLaneTargetShapes;
-    case DecodeTask::kLeaveInference:
-      return kLeaveInferenceTargetShapes;
-  }
-  return nullptr;
+const ScribblezShape* scribblez_task_target_shapes(ScribblezSession* s, int task) {
+  return task_shapes(s, task).target;
 }
 
 int scribblez_task_row_floats(ScribblezSession* s, int task) {

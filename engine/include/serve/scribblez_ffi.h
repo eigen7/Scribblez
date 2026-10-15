@@ -61,7 +61,7 @@ void scribblez_session_delete(ScribblezSession* s);
 // The shape lists are in row order and owned by the library. Each query
 // returns NULL or -1 for an unknown task code.
 const ScribblezShape* scribblez_task_input_shapes(ScribblezSession* s, int task);
-const ScribblezShape* scribblez_task_target_shapes(int task);
+const ScribblezShape* scribblez_task_target_shapes(ScribblezSession* s, int task);
 int scribblez_task_row_floats(ScribblezSession* s, int task);
 
 // Sim the final decision of a GCG: replay to the state before its last

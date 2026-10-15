@@ -79,7 +79,7 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_task_input_shapes.argtypes = [ctypes.c_void_p, ctypes.c_int]  # session, task
 
     lib.scribblez_task_target_shapes.restype = ctypes.POINTER(_ScribblezShape)
-    lib.scribblez_task_target_shapes.argtypes = [ctypes.c_int]  # task
+    lib.scribblez_task_target_shapes.argtypes = [ctypes.c_void_p, ctypes.c_int]  # session, task
 
     lib.scribblez_task_row_floats.restype = ctypes.c_int
     lib.scribblez_task_row_floats.argtypes = [ctypes.c_void_p, ctypes.c_int]  # session, task
@@ -523,7 +523,7 @@ def task_input_shapes(task: str = "position_eval") -> list[ShapeInfo]:
 
 def task_target_shapes(task: str = "position_eval") -> list[ShapeInfo]:
     """A task's target tensors, in row order after the inputs."""
-    return _read_shapes(_lib().scribblez_task_target_shapes(_task_code(task)))
+    return _read_shapes(_lib().scribblez_task_target_shapes(_session(), _task_code(task)))
 
 
 def task_row_floats(task: str = "position_eval") -> int:
