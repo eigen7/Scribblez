@@ -321,6 +321,7 @@ def run(ctx: WorkerContext) -> int:
         scalar_size=in_shapes["input_scalar"][0],
         trunk_channels=params.trunk_channels,
         num_blocks=params.num_blocks,
+        head=params.head,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
