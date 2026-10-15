@@ -278,7 +278,8 @@ TRANSFER_READER_QUALITY = [
         ["val_wld", "val_score", "val_expected", "val_footprint", "val_rank"],
     ),
 ]
-# The leave inference model's read (scribblez/leave_inference/train_loop.py):
+# The leave inference model's read (the record scribblez/leave_inference/
+# trainer.py assembles, its eval metrics from train_loop.py):
 # held-out NLL of the opponent's true leave against the uniform prior (negative
 # is better), broken down by leave length and bag size, the calibration of its
 # implied letter presence and leave value, and the win table it refits each
