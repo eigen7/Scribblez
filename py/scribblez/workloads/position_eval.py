@@ -271,7 +271,9 @@ def run_generate(ctx: WorkerContext) -> int:
     """The generate-role runner: selfplay_gen's, with WeirdBot in both seats
     instead of HastyBot when weirdbot_generation is set."""
     p = ctx.params
-    return generate(ctx, "--type=weirdbot" if p.weirdbot_generation else hasty_spec(p))
+    return generate(
+        ctx, "--type=weirdbot" if p.weirdbot_generation else hasty_spec(p), p.face_up_leaves
+    )
 
 
 SPEC = WorkloadSpec(
