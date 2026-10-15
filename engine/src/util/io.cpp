@@ -1,5 +1,7 @@
 #include "util/io.h"
 
+#include "util/exception.h"
+
 #include <sys/socket.h>
 
 #include <cstdint>
@@ -14,6 +16,16 @@ namespace json = boost::json;
 std::string read_file(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
   return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
+
+std::vector<char> read_file_bytes(const std::string& path) {
+  std::ifstream f(path, std::ios::binary | std::ios::ate);
+  if (!f) throw CleanException("cannot open {}", path);
+  const std::streamsize size = f.tellg();
+  f.seekg(0);
+  std::vector<char> bytes(size);
+  f.read(bytes.data(), size);
+  return bytes;
 }
 
 bool read_n(int fd, void* buf, size_t n) {

@@ -76,9 +76,6 @@ struct PendingSlog {
   }
 };
 
-// Throws util::CleanException naming the file if it cannot be opened.
-std::vector<char> read_file_bytes(const std::filesystem::path& path);
-
 // The sidecar generators' shared input convention: the --slog-file arguments
 // if any, else every .slog in --slog-dir, sorted. Throws util::CleanException
 // if neither is given or no file matches.

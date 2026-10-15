@@ -86,6 +86,7 @@ add_library(scribblez_core STATIC
   src/serve/web_server.cpp
   src/util/string.cpp
   src/util/io.cpp
+  src/util/hash.cpp
   src/util/math.cpp
   src/util/misc.cpp
   src/util/progress.cpp

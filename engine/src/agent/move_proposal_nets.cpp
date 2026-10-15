@@ -5,6 +5,7 @@
 #include "nn/onnx_metadata.h"
 #include "nn/shared_registry.h"
 #include "util/exception.h"
+#include "util/io.h"
 
 #include <algorithm>
 #include <cstring>
@@ -58,7 +59,7 @@ struct PairStamp {
 };
 
 PairStamp read_pair_stamp(const std::string& onnx_path) {
-  const nn::OnnxMetadata meta = nn::parse_onnx_metadata(nn::read_file_bytes(onnx_path));
+  const nn::OnnxMetadata meta = nn::parse_onnx_metadata(util::read_file_bytes(onnx_path));
   const auto it = meta.entries.find("proposal_export_id");
   return {it == meta.entries.end() ? std::string() : it->second,
           meta.int_entry("trained_max_evidence", 0)};

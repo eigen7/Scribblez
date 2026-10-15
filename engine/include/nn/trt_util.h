@@ -21,11 +21,6 @@ const char* precision_to_string(Precision precision);
 // since a serialized plan is loadable only by the version that built it.
 std::string trt_version_tag();
 
-// A hex FNV-1a fingerprint of a model file's exact bytes, for recording which
-// weights produced some output. Unlike the architecture signature, it tells
-// checkpoints apart.
-std::string content_hash(const std::vector<char>& bytes);
-
 // Where a plan is cached, under <mount_root>/TensorRT-cache/. The path
 // encodes everything a plan is only valid for:
 //   - the GPU's compute capability and the TensorRT version;
@@ -40,9 +35,6 @@ std::string content_hash(const std::vector<char>& bytes);
 std::string engine_plan_cache_path(const std::string& model_key, Precision precision,
                                    const std::string& profile_tag, bool fast_build,
                                    const std::string& mount_root);
-
-// Throws if the file cannot be opened.
-std::vector<char> read_file_bytes(const std::string& path);
 
 // Write `bytes` to `path` atomically (temp file + rename), creating parent
 // directories. The temp name carries the pid and a random suffix, so processes

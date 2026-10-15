@@ -48,6 +48,7 @@
 #include "training/move_set_eval_target_log.h"
 #include "util/assert.h"
 #include "util/exception.h"
+#include "util/hash.h"
 #include "util/math.h"
 #include "util/misc.h"
 #include "util/progress.h"
@@ -547,7 +548,7 @@ int main(int argc, char** argv) {
     TeacherService service(params);
     service.load();
     const InputEncodingSpec spec{&dict, service.opp_leave_input()};
-    const std::string model_hash = nn::content_hash(binlog::read_file_bytes(params.onnx_path));
+    const std::string model_hash = util::file_content_hash(params.onnx_path);
     opt.slice_candidates = std::min(kSliceCandidates, params.max_rows);
 
     // Games played face up must be labeled by a teacher that sees the leaves: a

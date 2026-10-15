@@ -2,6 +2,7 @@
 
 #include "game/game_log.h"
 #include "util/exception.h"
+#include "util/io.h"
 #include "util/math.h"
 
 #include <algorithm>
@@ -76,16 +77,6 @@ uint64_t count_sampled_positions(const std::vector<char>& buf, int positions_per
   return total;
 }
 
-std::vector<char> read_file_bytes(const std::filesystem::path& path) {
-  std::ifstream f(path, std::ios::binary | std::ios::ate);
-  if (!f) throw util::CleanException("cannot open {}", path.string());
-  const std::streamsize size = f.tellg();
-  f.seekg(0);
-  std::vector<char> bytes(size);
-  f.read(bytes.data(), size);
-  return bytes;
-}
-
 std::vector<std::filesystem::path> resolve_slog_inputs(const std::string& slog_dir,
                                                        const std::vector<std::string>& slog_files) {
   std::vector<std::filesystem::path> slogs;
@@ -110,7 +101,7 @@ std::vector<PendingSlog> load_pending_slogs(const std::vector<std::filesystem::p
     std::filesystem::path sidecar = slog;
     sidecar.replace_extension(sidecar_ext);
     if (std::filesystem::exists(sidecar)) continue;
-    std::vector<char> buf = read_file_bytes(slog);
+    std::vector<char> buf = util::read_file_bytes(slog);
     const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf.data());
     if (buf.size() < sizeof(FileHeader) || hdr->magic != kMagic || hdr->version != kVersion) {
       std::cerr << "  skip (bad header): " << slog.filename().string() << "\n";
