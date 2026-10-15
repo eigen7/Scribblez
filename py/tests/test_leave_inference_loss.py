@@ -2,6 +2,7 @@
 reference: the streaming log-sum-exp, the implied readouts, the custom
 backward, and the uniform prior it reduces to at eta = 0."""
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -124,3 +125,22 @@ def test_counts_from_tiles():
     counts = loss.counts_from_tiles(tiles)
     assert counts[0, 0] == 2 and counts[0, 4] == 1 and counts[0, 26] == 1
     assert counts[0].sum() == 4 and counts[1].sum() == 0
+
+
+def test_uniform_nll_is_the_hypergeometric_probability():
+    # Hand-built pools, with tiles the pool holds once and tiles it lacks.
+    pool = torch.zeros(3, 27, dtype=torch.long)
+    pool[:, 0], pool[:, 1], pool[:, 4], pool[:, 26] = 3, 1, 2, 1
+    pool[2, 2] = 5
+    leave = torch.zeros(3, 27, dtype=torch.long)
+    leave[0, 0], leave[0, 1] = 2, 1  # AAB
+    leave[1, 4], leave[1, 26] = 1, 1  # E?
+    leave[2, 2], leave[2, 0], leave[2, 4] = 3, 1, 2  # CCCAEE
+    length = leave.sum(dim=1)
+    want = []
+    for p, ell in zip(pool.tolist(), leave.tolist(), strict=True):
+        ways = math.prod(math.comb(n, c) for n, c in zip(p, ell, strict=True))
+        want.append(-math.log(ways / math.comb(sum(p), sum(ell))))
+    torch.testing.assert_close(
+        loss.uniform_nll(leave, length, pool), torch.tensor(want), rtol=1e-5, atol=1e-5
+    )
