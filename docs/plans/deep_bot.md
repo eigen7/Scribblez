@@ -68,8 +68,7 @@ Bob holds `z` and does not know Alice's tiles.*
 *In that subtree, the PSM proposes Bob's set, `b₁`, `b₂`, `b₃` and others.
 Bob samples racks for Alice from his own belief, which reads what `a` reveals
 (`x̂₁`, `x̂₂`, …). For each of his candidates, he sims: Alice plays hasty, Bob
-plays hasty, and the leaf is evaluated by the network, or by the solver once
-the bag is empty. Each candidate scores the mean over Alice's sampled racks,
+plays hasty, and the win table values the leaf. Each candidate scores the mean over Alice's sampled racks,
 and Bob's move is the argmax, here `b₁`.*
 
 *Only that move crosses back. In Alice's evaluation Bob plays `b₁`; Alice
@@ -85,22 +84,30 @@ depend on the opponent's hidden tiles. In the whole design, only two
 decisions search: Alice's at the root and Bob's in his subtree. Each is made
 on its own player's information.
 
-**The leaf.**
+**The leaf: a win table.** After a sim's fixed moves, a fast function turns
+the position into a win probability, as Macondo's simmer does:
 
-- **Bag empty:** if the bag is empty when a player is to move, anywhere in a
-  sim, the sim stops and the endgame solver values the position. Within a
-  sampled world both racks are known, so the endgame is
-  perfect-information. When a candidate and a reply empty the bag between
-  them, every sim of that line ends in a solve, so endgame tactics the
-  mechanical rule would misplay (a block, a two-way out) are valued exactly.
-- **Otherwise,** after the sim's fixed moves, the position evaluation network
-  reads the position from the side that owns the evaluation. Within a sampled
-  world the opponent's leave is known, so today's face-up checkpoints can
-  read it. They value the rest of the game as if leaves were public, a bias
-  that lasts until a standard-Scrabble teacher is trained.
+`P(win) = table(spread + leave value, tiles unseen)`
 
-The solver runs in class mode. A proven class gives 1, ½ or 0. An unproven
-solve falls back to the network's reading of the same position.
+- **The spread** is from the side to move, plus the static leave value of
+  that side's remaining rack, as Macondo adds its "leftover".
+- **Tiles unseen** are the bag plus the opponent's rack, from the side to
+  move.
+- **If the game ends** inside the sim, the outcome is exact.
+
+The probability is then taken from the side that owns the evaluation (Bob in
+his subtree, Alice in hers), as `1 − P` when the other side is to move. The
+leaf never reads the opponent's hidden tiles beyond their count, so it
+fits a game in which neither player sees the other's leave. It is a table
+lookup, so a sim's cost is its mechanical moves.
+
+**The win table is versioned.** It is fitted from `.slog` outcomes of the
+current policy: `P(win | spread + leave value, unseen)`, bucketed, smoothed and
+made monotone in spread, in the CSV format the engine already reads
+([sim/win_pct_table.h](../../engine/include/sim/win_pct_table.h)). The win
+probability at a given spread shifts as play gets stronger, so each policy
+generation gets a new version, and everything it values records the version
+it used. A trained network that reads the board may replace the table later.
 
 **Pairing.** Samples come from variates keyed by `(sample index, draw
 ordinal)`:
@@ -203,17 +210,22 @@ but the first of them light; form 2 makes one.
 
 ### Labels
 
-A labeled position is a pool of its legal moves with values from sims, run
-from the chooser's information set: the opponent's rack is drawn from the
-chooser's belief, and the sims are paired across moves.
+A labeled position is a pool of candidate moves with values from sims, run
+from the chooser's information set: the opponent's leave is drawn from the
+chooser's [LIM](#the-leave-inference-model) belief, with a uniform refill,
+and the sims are paired across moves.
 
-- **Pools need the tail.** A pool must include moves the prior ranks low
+- **Candidates: every legal play and every distinct exchange, plus the pass,
+  including blank plays.** A blank multiplies the moves through its
+  designations, so one prune applies: a blank move (a play that places the
+  blank, or an exchange that returns it) is dropped when its score is 40 or
+  more points below the greedy move's, the highest-scoring play. An exchange
+  scores 0 under this rule.
+- **Pools need the tail.** The pool must include moves the prior ranks low
   (exchanges, short plays, setups), or the PSM never learns that they can
   win. The exhaustive survey recipe of
   [sim_labeled_candidates.md](sim_labeled_candidates.md) (every legal play,
-  screened at 1,000 rollouts, racing) produces this shape of data, with a
-  value for every legal play. Its existing outputs were run face-up and its
-  rollouts are hasty throughout, so PSM labels need a standard-Scrabble mode.
+  screened with racing) produces this shape of data.
 - **The labels can see moves the rollout policy never plays.** Every
   candidate is simmed directly, rather than reached by a rollout policy that
   would have to choose it. A setup that static equity ranks low is labeled by
@@ -222,11 +234,17 @@ chooser's belief, and the sims are paired across moves.
   held-out move `a`, gives a row with target `max(0, v(a) − max_S v)`,
   computed from the paired values. One pool yields many rows.
 - **Form 2's targets: a soft best move.** `q(a)` is the probability that `a`
-  is best under the paired sim statistics, estimated by bootstrapping over
-  the paired samples and counting how often each move comes out on top.
-  Near-equal moves share the mass, so the slots learn that either will do.
-  Racing stops weak moves early, on fewer rollouts; the bootstrap accounts
-  for that, since a move far below the leader rarely wins a draw.
+  is best under the paired sim statistics: by bootstrapping over the paired
+  samples, or by a normal approximation to the paired differences against
+  the leader. Near-equal moves share the mass, so the slots learn that either
+  will do. Racing stops weak moves early, on fewer rollouts, and both
+  estimates account for that, since a move far below the leader rarely comes
+  out on top.
+
+**Label rollouts stop at the win table.** Played to the end of the game, a
+rollout is slow and its outcome noisy. A label rollout instead plays `K`
+plies by the mechanical rule and ends at the [win table](#sims), whose version
+the pool records.
 
 **Generations.** Once DeepBot runs, its own evaluations label positions, and
 each PSM generation trains on the previous agent's labels, as the move
@@ -234,47 +252,135 @@ proposal model's generations do.
 
 ## Beliefs
 
-Two beliefs feed the design: Alice's over Bob's rack (step 2), and Bob's over
-Alice's rack given `a` (his subtree, step 1).
+Two beliefs feed the design: Alice's over Bob's rack (step 2 of the turn), and
+Bob's over Alice's rack given `a` (step 1 of his subtree). Both come from one
+model.
 
-**First version: `RackInferrer`**
-([belief/rack_inference.h](../../engine/include/belief/rack_inference.h)).
-It infers the opponent's leave from their last move under a HastyBot-equity
-model of how they choose, and adds a uniform refill. For Bob's belief, the
-pool depends on Bob's sampled rack, so a naive implementation runs one
-inference per `(a, r)`. It factorizes instead:
+### The leave inference model
 
-- the likelihood of `a` given a leave depends only on the board and the
-  leave, so it is scored once per candidate;
-- the hypergeometric prior depends on the pool, so it is reweighted per rack.
+The **leave inference model** (LIM) predicts the opponent's **leave**, the
+tiles they kept from their last move, from the observer's view of the game.
+The opponent's rack is that leave plus a refill drawn uniformly from the rest
+of the observer's unseen pool, which is exact: the refill is a uniform draw.
+The leave's length is public: the opponent's rack size minus the tiles their
+last move played or exchanged (a pass keeps the whole rack).
 
-**Target: a generational inference network.** A frozen policy `P_k` generates
-games, and those games train an inference network `I_k`.
+**Inputs.** The LIM is a standalone model, with its own encoder and network,
+sharing no trunk or weights with another model. From the observer's view, it
+reads:
+
+- **the current position:** the board, the current cross-checks, the
+  observer's rack, the unseen pool, scores and the bag count;
+- **the last 5 moves:** the opponent's last 3 and the observer's last 2,
+  interleaved in game order. For each move, the squares it placed tiles on;
+  the cross-checks as they stood *before* it was played, so the model sees
+  which hooks and lanes the player had and passed up; and its tiles played,
+  whether it was an exchange or a pass, its score and the bag count then.
+
+**The output: 29 floats.**
+
+- **`θ_l`, one per letter (27):** a log-weight for "the leave contains `l`".
+  Positive means likely has it, negative means likely doesn't, so one number
+  covers both reads.
+- **`a` and `b ≥ 0`:** a tilt on the leave's absolute quality `v(ℓ)`, its
+  static leave value in equity points.
+
+Those numbers define the leave distribution as the pool prior, tilted:
+
+`log p(ℓ) = log P_prior(ℓ | pool) + Σ_{l ∈ ℓ} θ_l + a·v(ℓ) − b·v(ℓ)² − log Z`
+
+over leaves `ℓ` of the public length that the observer's unseen pool can
+supply. `P_prior` is the hypergeometric draw from that pool: `Π_l C(n_l, c_l)`
+up to a constant, where `n_l` is the pool's count of `l` and `c_l` the
+leave's.
+
+- **`a = b = 0` is exactly "no information":** the leave is a uniform draw
+  from the pool. `a > 0` shifts belief toward better leaves, `a < 0` toward
+  worse ones, and `b > 0` concentrates it around a value.
+- **The quality term carries the interactions.** Leave value already folds in
+  balance, synergy, duplication and stems, so one tilt moves a whole class of
+  leaves at once: raising `a` favors well-balanced, bingo-prone leaves and
+  leaves unbalanced ones down. The letter terms stay per-letter, which is all
+  the has-it and doesn't-have-it reads need.
+- **Quality is absolute.** The tilt acts on leave value in points, against
+  whatever the current pool can produce. With both blanks unseen, a positive
+  `a` reaches up to blank leaves; with both played, it favors the best leaves
+  that remain.
+
+**The leave tables.** Static, built once offline, one per length from 1 to 6.
+Each row is a leave: its 27 counts, a 27-bit presence mask, and `v(ℓ)`. The
+6-tile table has 737,311 rows (about 30 MB); the 4-tile table has 25,254. A
+7-tile leave arises only from a pass and is sampled from the prior alone. If
+leave values become board-aware, only the `v(ℓ)` column changes, per position.
+
+**Likelihood and training.** One pass over the table for the leave's length
+gives the exact log-likelihood:
+
+1. **Per-letter prior terms:** `log C(n_l, c)` for each letter and count, at
+   most 27 × 8 values.
+2. **Each row's log-weight:** skip the row if some `c_l > n_l`; otherwise
+   `Σ_l logC[l][c_l] + Σ_{l ∈ mask} θ_l + a·v − b·v²`, about 28 additions.
+3. **`log Z`** is the log-sum-exp of the log-weights, and the loss is
+   `log Z` minus the true leave's log-weight.
+
+Training directly on this likelihood matters. Per-letter has-it classifiers
+and a separate quality regressor, trained independently, would give marginals
+that are not the weights to multiply together. Trained jointly, the outputs
+*are* the weights, and the readable per-letter probabilities ("likely has an
+S") come out of the same pass as marginals, along with the implied mean and
+spread of the opponent's leave value.
+
+**Sampling.**
+
+- **Algorithm 1: enumerate, then inverse CDF.** Compute every row's
+  log-weight, exponentiate against the maximum, and take a running sum in the
+  table's fixed order. For each sample's variate `u ∈ [0, 1)`, binary-search
+  the CDF for `u × total`; that row is the leave. Then add the refill. A
+  6-tile query is about 20M additions, 10–20 ms on one CPU thread, and each
+  sample after that is a binary search. Because the order is fixed and
+  sampling inverts a CDF, one variate gives the same leave whenever two
+  queries have the same distribution, so samples pair across candidates. The
+  same pass computes `log Z`, so training, evaluation and sampling share one
+  implementation.
+- **Algorithm 2: per-letter proposal, then rejection.** Drop the quality
+  factor. What remains, `Π_l C(n_l, c_l) · exp(θ_l [c_l > 0])` at fixed length,
+  factors over letters, so a small table of partial sums over (letter, tiles
+  still to place) gives exact sampling by walking the letters. Accept with
+  probability `exp(a·v − b·v² − M)`, where `M` bounds the quality term over
+  that length's values. Accepted samples are exact. When the tilt is strong
+  the acceptance rate falls, so the sampler estimates it from a few trial
+  draws and falls back to Algorithm 1 below about 5%. Pairing is looser,
+  since a varying number of variates is consumed.
+
+| Use | Volume | Algorithm |
+|---|---|---|
+| PSM label generation | one query per position, ~300 samples | 1, on the CPU |
+| The agent, Bob's beliefs | ~2,000 queries per turn, ~20 samples each | 1, batched on the GPU |
+| Many unbatched CPU queries | — | 2, falling back to 1 |
+
+**Conditioning on Alice's candidate.** Bob's belief about Alice is the LIM
+run from Bob's view, with Alice's candidate `a` as the most recent move of
+its history. That is one forward pass per `(a, r)`, batched on the GPU.
+
+### Generations
+
+A frozen policy `P_k` generates games, and those games train `I_k`, the
+`k`-th LIM.
 
 - **The labels are free.** A `.slog` stores the initial racks and every move
   with the tiles drawn after it, so replay reconstructs every player's true
-  rack at every turn ([architecture.md](../architecture.md)). A row is the
-  observer's view of the public history, and the target is the opponent's
-  true rack.
+  leave at every turn ([architecture.md](../architecture.md)).
 - **Train `I_k` only on `P_k`'s games, warm-started from `I_{k−1}`.** Trained
   on a buffer that mixes generations, an inference network converges to
   Bayes' rule under the *average* policy, not the current one. Games for
   `I_k` are generated cheaply, by playing `P_k`'s PSM top-1 without search.
-- **Letter by letter.** The network predicts the rack autoregressively in
-  canonical sorted order: a 27-way softmax per step, with letters the pool
-  has run out of masked. That gives exact likelihoods, needs no enumeration,
-  and samples by inverse CDF from a supplied variate, which keeps racks
-  paired across candidates.
-- **History as input.** The reads that matter span several moves: a short
-  play after a scoring play can point to a bingo-prone rack, and a play the
-  opponent passed up can show that a tile is still in the bag. The opponent's last few moves enter as tokens (tiles,
-  exchanges, scores), which the transformer trunk takes naturally.
-- **Conditioning on Alice's candidate** is one forward pass per `(a, r)`,
-  batched on the GPU.
 
 `I_k` models opponents who play like `P_k`. Against Macondo or human players
 that is a mismatch. Fine-tuning on recorded games with known racks is the
-later remedy.
+later remedy. `RackInferrer`
+([belief/rack_inference.h](../../engine/include/belief/rack_inference.h)),
+which reads one move under a HastyBot-equity model, is the reference each
+LIM is measured against.
 
 ## Cost and allocation
 
@@ -287,9 +393,10 @@ Per Alice candidate:
 | Alice's sims | `R_A ·` sims per rack: about 400 |
 
 Modeling Bob dominates, at about 40 to 1. With 20 candidates, a turn is
-about 320,000 short sims. Each one is two mechanical moves plus a batched
-network evaluation or a solve, which puts a turn at very roughly 10 to 20
-seconds on the development machine. Four levers:
+about 320,000 short sims. Each one is two mechanical moves plus a table
+lookup, so move generation dominates: about 640,000 HastyBot moves per turn.
+At roughly 0.1 to 0.3 ms each, that is 60 to 200 CPU-seconds, or very roughly
+2 to 7 seconds on 28 threads. Four levers:
 
 - **Successive halving over Alice's candidates.** A cheap first pass models
   Bob as the PSM's top-1. The full subtree runs only for survivors.
@@ -297,42 +404,38 @@ seconds on the development machine. Four levers:
   is clear on the paired samples.
 - **Caching `β(a, r)`.** Every replenishment sim of `(a, r)` reuses Bob's
   choice.
-- **Batching** network evaluations across sims and subtrees, following the
-  `BatchingPositionEvalService` pattern.
+- **Batching** the network calls (the PSM's sets and the LIM's beliefs)
+  across subtrees, following the `BatchingPositionEvalService` pattern.
 
 ## Build order
 
 Each step names what it measures. The measurements guide the next step.
+Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
 
-1. **PSM labels.** A standard-Scrabble mode for the exhaustive survey: the
-   opponent's rack drawn from the chooser's belief, paired sims over every
-   legal play, with solved endgames. Run it as a tag over self-play
-   positions, weighted toward small bags, where the survey found plays
-   outside the top 10 matter most.
-2. **PSM v0, both forms.** The greedy gain head and the slot decoder on the
-   move set architecture. *Measure:* recall, meaning how often the pool's
+1. **The LIM, `I_0`,** from HastyBot games, and the v0 win table.
+   *Measure:* held-out log-likelihood of the true leave against
+   `RackInferrer` and uniform draws.
+2. **PSM labels.** Pools over positions from the whole game except the
+   endgame, with opponent leaves from the LIM and rollouts stopped at the
+   win table.
+3. **PSM v0, both forms.** *Measure:* recall, meaning how often the pool's
    sim-best move is in `S`, against the top `N` by value, by form, bag size
-   and `N`; and each form's time per batch of sets. Recall
-   of setups and exchanges, the moves static equity ranks low, is reported
-   separately.
-3. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
+   and `N`, with setups and exchanges reported separately; and each form's
+   time per batch of sets.
+4. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
    after each of Alice's top candidates: Bob's chosen replies, how often
    each kind (bingo, setup, other) is chosen, and how stable the choice is
    in `R_B`.
-4. **The agent.**
-   - The seeded draw sequence, the sim with solver leaves, pairing,
-     two-level evaluation, `RackInferrer` factorized, and the cache.
+5. **The agent.**
+   - The seeded draw sequence, the sim with win-table leaves, pairing,
+     two-level evaluation with LIM beliefs, and the cache.
    - *Measure:* the picks at the known positions
      (`positions/NWL23/interesting-positions/`, the blind_spots tag), turn
      time, and matches against BestBot and `mset-sim` in standard Scrabble.
-5. **Allocation.** Successive halving and racing. *Measure:* the strength
+6. **Allocation.** Successive halving and racing. *Measure:* the strength
    lost against the time saved.
-6. **The inference network `I_0`,** from `P_0`'s games. *Measure:* held-out
-   log-likelihood of the true rack against `RackInferrer` and uniform
-   draws, by number of history moves. Then swap it into the agent.
 7. **Generations.** DeepBot labels positions for the next PSM, its games
-   train the next `I_k`, and a standard-Scrabble teacher replaces the
-   face-up leaf model.
+   train the next LIM and fit the next win table.
 
 ## Limits
 
@@ -342,15 +445,17 @@ Each step names what it measures. The measurements guide the next step.
   if recall turns out to be the bottleneck.
 - **Depth.** After the two searched decisions, every move is mechanical.
   Setups that pay off later than the sim's horizon are valued only by the
-  leaf network. In Bob's sims, Alice's reply is hasty, so Bob's model of
+  win table. In Bob's sims, Alice's reply is hasty, so Bob's model of
   Alice does not look for blocks.
 - **Bob's argmax.** A deterministic model of Bob, over paired means of about
   20 samples, is slightly biased toward moves that drew lucky samples.
   Scrabble gives little reason for mixed strategies, so v1 keeps the argmax.
   Mixing (a softmax, or sampling between the top two) is the easy change if
   Alice's model of Bob proves brittle.
-- **The face-up leaf model.** It values the rest of the game as if leaves
-  were public, until the standard-Scrabble teacher exists.
+- **The win table is a coarse leaf.** It sees the spread, the side to move's
+  leave value and the tiles unseen, not the board: a wide-open board and a
+  closed one read the same. A trained leaf network is the later
+  replacement.
 
 ## Where this sits
 
