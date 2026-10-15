@@ -2,6 +2,7 @@
 
 #include "game/glyph.h"
 #include "util/exception.h"
+#include "util/hash.h"
 
 #include <boost/json.hpp>
 
@@ -84,9 +85,11 @@ HastyEquity& HastyEquity::instance() {
 void HastyEquity::init(const std::string& klv2_path, const std::string& peg_json_path) {
   // Load both before assigning either, so a throw leaves the singleton as it was.
   LeaveValues leave_values = LeaveValues::load(klv2_path);
+  std::string klv_hash = util::file_content_hash(klv2_path);
   std::vector<double> peg_table = load_peg_table(peg_json_path);
   auto& inst = instance();
   inst.leave_values_ = std::move(leave_values);
+  inst.klv_hash_ = std::move(klv_hash);
   inst.peg_table_ = std::move(peg_table);
   inst.ready_ = true;
 }

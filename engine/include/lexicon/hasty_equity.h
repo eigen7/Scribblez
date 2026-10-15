@@ -93,12 +93,17 @@ class HastyEquity {
 
   // Exposed for LeaveValues' incremental cursor, which prices many leaves
   // more cheaply than one lookup() each.
-  const LeaveValues& leave_table() const { return leave_values_; }
+  const LeaveValues& leave_values() const { return leave_values_; }
+
+  // util::content_hash of the loaded .klv2 file, so an artifact derived from
+  // the leave values (a leave table) can record which values it holds.
+  const std::string& klv_hash() const { return klv_hash_; }
 
  private:
   HastyEquity() = default;
 
   LeaveValues leave_values_;
+  std::string klv_hash_;
   std::vector<double> peg_table_;  // indexed by (bag size after the play) + 7
   bool ready_ = false;
 };
