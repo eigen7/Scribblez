@@ -104,26 +104,26 @@ int scribblez_decode_rows(ScribblezSession* s, const char* path, const int64_t* 
 int64_t scribblez_win_table_samples(ScribblezSession* s, const char* path, void* out_samples,
                                     int64_t cap);
 
-// The leave table (belief/leave_table.h), built from the session lexicon's
-// HastyBot leave values: every leave of each length 1..6 drawable from a full
-// bag, with its tile counts and static leave value. Free with
-// scribblez_leave_table_delete.
-typedef struct LeaveTableHandle LeaveTableHandle;
-LeaveTableHandle* scribblez_leave_table_new(ScribblezSession* s);
-void scribblez_leave_table_delete(LeaveTableHandle* t);
+// The session lexicon's HastyBot leave values laid out for whole-length scans
+// (lexicon/leave_value_arrays.h): every leave of each length 1..6 drawable
+// from a full bag, sorted by value. Free with
+// scribblez_leave_value_arrays_delete.
+typedef struct LeaveValueArraysHandle LeaveValueArraysHandle;
+LeaveValueArraysHandle* scribblez_leave_value_arrays_new(ScribblezSession* s);
+void scribblez_leave_value_arrays_delete(LeaveValueArraysHandle* a);
 
-// The number of length-k rows, or -1 for k outside 1..6.
-int64_t scribblez_leave_table_rows(const LeaveTableHandle* t, int k);
+// The number of length-k leaves, or -1 for k outside 1..6.
+int64_t scribblez_leave_value_arrays_rows(const LeaveValueArraysHandle* a, int k);
 
-// Copies the length-k rows, in the table's order: per-tile counts into
-// out_counts (rows x 27, the blank at 26) and leave values into out_values.
-// Returns 0, or -1 for k outside 1..6.
-int scribblez_leave_table_copy(const LeaveTableHandle* t, int k, uint8_t* out_counts,
-                               float* out_values);
+// Copies the length-k leaves, in order: their tile codes into out_tiles
+// (rows x 6, ascending, 255 past the leave's length) and their values, in
+// points, into out_values. Returns 0, or -1 for k outside 1..6.
+int scribblez_leave_value_arrays_copy(const LeaveValueArraysHandle* a, int k, uint8_t* out_tiles,
+                                      float* out_values);
 
 // The content hash of the .klv2 the values came from: the identity models
-// trained against this table record. Owned by the handle.
-const char* scribblez_leave_table_klv_hash(const LeaveTableHandle* t);
+// trained against them record. Owned by the handle.
+const char* scribblez_leave_value_arrays_content_hash(const LeaveValueArraysHandle* a);
 
 // Writes a scribblez win table (sim/win_pct_table.h) from `grid`, the
 // fitter's kRows x kCols floats in file order, and `header`, its provenance as

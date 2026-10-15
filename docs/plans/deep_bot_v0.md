@@ -86,7 +86,7 @@ recorded beside the format version but never checked as a format.
 
 | Artifact | Format version | Provenance |
 |---|---|---|
-| Leave table | none of its own: it is built in memory by one C++ function and never stored. Its rows are fixed by the leave values (the KLV's content hash, which models record) and by the enumeration, which `leave_inference_format_version` covers | — |
+| Leave table (`LeaveValueArrays`) | none of its own: it is built in memory from the leave values and never stored. Its rows are fixed by the leave values (the KLV's content hash, which models record) and by its layout and order, which `leave_inference_format_version` covers | — |
 | Win table | `kWinTableFormatVersion` in a `#`-prefixed header ahead of the CSV grid. It covers the grid's shape and the feature definition, so a change to `win_table_feature` bumps it | header lines: `tag` and `generation` (or the CLI's corpus), `policy`, `games`, `positions` |
 | Leave inference ONNX | metadata `leave_inference_format_version`, covering the encoder's inputs and the 29-float output layout. `LeaveInferenceSpec::kVersions` gates it and rejects a missing entry. Also stamped: `leave_values`, the content hash of the KLV whose values it was trained against, checked at load | metadata `tag`, `generation`, `policy` (the `hasty_spec` string), `head` |
 | Leave inference checkpoint | `leave_inference_format_version` and the `leave_values` hash in the checkpoint config. Resuming with a different value is refused, as the evidence trainer refuses a mismatched `move_encoding_version` | `GenerationalState` |
@@ -298,33 +298,32 @@ the replay.
   position task's row width. It takes the task too, so the held-out eval can
   decode a fixed list of `(game, turn)` rows.
 
-#### The leave table
+#### The leave table: `LeaveValueArrays`
 
-`belief::LeaveTable` holds every leave drawable from a full bag, for each
-length from 1 to 6, in `walk_multisets` order. Each row has 27 `uint8`
-counts, a 32-bit presence mask, and `v(ℓ)`. The 6-tile table has 737,311
-rows; the 4-tile table has 25,254.
+`LeaveValueArrays` (`lexicon/leave_value_arrays.h`) holds the same leaves and
+values as `LeaveValues`, laid out for a different query. `LeaveValues`
+answers "what is this leave worth?" by lookup. `LeaveValueArrays` holds every
+leave of each length 1–6 in one flat array, for the passes that scan a whole
+length. The 6-tile array has 737,311 rows; the 4-tile array has 25,254.
 
-**It is built in memory, not stored.** One constructor builds it from
-`HastyEquity`: the rows come from `belief::enumerate_leaves(TILE_COUNTS, k)`,
-unchanged, and the values from `HastyEquity::leave_value`. That takes about
-0.3 s. Macondo's KLV already stores the values, but as a lookup structure
-keyed by the leave's letters; the table lays the same values out as rows for
-the passes that scan a whole length.
-
-**Python reaches it through the FFI.** `scribblez_leave_table_new` and its
-accessors copy the rows out, behind the `LeaveTable` class in
-`leave_table.py`. The trainer and the engine's sampler therefore see the
-same rows in the same order, which sampling's pairing and the parity tests
-depend on, and nothing in Python re-derives them.
-
-**Its identity is the KLV's.** `HastyEquity` records a content hash of the
-KLV it loaded. The table's rows are fixed by those values and by the
-enumeration, so the trainer stamps that hash, as `leave_values`, into every
-checkpoint and ONNX. A consumer that loads a model checks it against its own
-`HastyEquity`. A model reads its tilt `a` and `b` on the values it was
-trained against, or not at all. A change to the enumeration is a
-`leave_inference_format_version` bump.
+- **Rows are 8 bytes:** six tile codes, ascending and padded, and the value
+  as an `int16` in hundredths of a point. Each length has its own array, so
+  the length is implicit. Counts and presence are derived from the tiles
+  where a pass needs them.
+- **Built in memory** from `LeaveValues`, by iterating its entries, then
+  sorted by value with ties broken by tiles, so the order is fixed. The
+  constructor refuses leave values that lack a leave drawable from a full
+  bag, since the model normalizes over these rows.
+- **Python reaches it through the FFI**, through the `ffi.LeaveValueArrays`
+  class, which copies a length's rows out. The trainer and the engine's
+  sampler therefore see the same rows in the same order, which sampling's
+  pairing and the parity tests depend on.
+- **Its identity is the KLV's.** `LeaveValues` records the content hash of
+  the KLV it loaded. The trainer stamps that hash, as `leave_values`, into
+  every checkpoint and ONNX. A consumer that loads a model checks it against
+  its own leave values. A model reads its tilt `a` and `b` on the values it
+  was trained against, or not at all. A change to the row layout or order is
+  a `leave_inference_format_version` bump.
 
 #### Sampling: Algorithm 1, on the CPU
 
@@ -356,14 +355,13 @@ parity reference.
 - **`LeaveInferenceNet`** drives `NeuralNet<LeaveInferenceSpec>` directly, as
   `move_proposal_nets` does. TrtEvalService's batching earns nothing at one
   call per position. At load, it checks the model's `leave_values` entry
-  against `HastyEquity`'s KLV hash.
+  against the loaded leave values' KLV hash.
 
 ### Python work: `py/scribblez/leave_inference/`
 
 | File | Contents |
 |---|---|
 | `model.py` | The encoder (a conv tower over the 348 planes, an MLP over the scalars, fused into a context vector) and the heads |
-| `leave_table.py` | The engine's leave table through the FFI, copied into arrays per length |
 | `loss.py` | The tilted-prior NLL ([below](#the-loss)) |
 | `win_table.py` | The win-table fit; the engine writes and evaluates the tables through the FFI |
 | `trainer.py` | The generational loop, the held-out eval, and the win-table refit |
@@ -695,8 +693,8 @@ Each step is a PR with its own tests.
      - the rows: `OppLeaveTarget` with validity, `LeaveInferenceTask`,
        `DecodeTask::kLeaveInference` with its FFI shapes, the task-aware
        `decode_rows`, and `kLeaveInferenceFormatVersion` in `format_layout`;
-     - the leave table: `LeaveTable` built in memory, its FFI class, and
-       `HastyEquity`'s KLV hash.
+     - the leave table: `LeaveValueArrays` built in memory, its FFI class,
+       and the KLV hash on `LeaveValues`.
    - Tests:
      - the history slots line up with the replay;
      - pre-move cross-checks equal the board's cross-checks before the move;

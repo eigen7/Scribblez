@@ -14,4 +14,9 @@ inline uint32_t LeaveValues::klv_step(uint32_t arc_list, uint8_t code, uint32_t*
   }
 }
 
+template <typename F>
+void LeaveValues::for_each(F&& f) const {
+  for (const auto& [leave, value] : values_by_leave_) f(leave, value);
+}
+
 }  // namespace scribblez

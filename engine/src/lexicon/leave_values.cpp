@@ -1,6 +1,7 @@
 #include "lexicon/leave_values.h"
 
 #include "util/exception.h"
+#include "util/hash.h"
 
 #include <cstdint>
 #include <fstream>
@@ -116,6 +117,7 @@ LeaveValues LeaveValues::load(const std::string& path) {
   }
   lv.nodes_ = std::move(nodes);
   lv.values_ = std::move(values);
+  lv.content_hash_ = util::file_content_hash(path);
   return lv;
 }
 

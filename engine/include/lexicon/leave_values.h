@@ -26,6 +26,13 @@ class LeaveValues {
   // 0.0 for an empty leave or one absent from the table.
   float lookup(const Rack& leave) const;
 
+  // Calls f(leave, value) for every leave in the table, in no fixed order.
+  template <typename F>
+  void for_each(F&& f) const;
+
+  // The util::content_hash of the .klv2 file: which leave values these are.
+  const std::string& content_hash() const { return content_hash_; }
+
   // ---- Incremental cursor ----
   // The KWG is minimized, so suffix nodes are shared and a node can't carry a
   // value. Instead a leave's value is indexed by its word index: its position
@@ -57,6 +64,7 @@ class LeaveValues {
   std::vector<float> values_;                        // leave values, indexed by word index
   std::vector<uint32_t> subtree_words_;              // per arc: words at or below it
   uint32_t root_arc_list_ = 0;
+  std::string content_hash_;
 };
 
 }  // namespace scribblez
