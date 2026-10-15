@@ -185,10 +185,11 @@ in position_eval.
   flag and the cause, and the loss masks invalid rows. Batch shapes stay
   fixed, which the compiled trainer needs. `max_rows` counts planned rows, as
   in position_eval. The eval reports the share of each cause.
-- **No random openings.** `random_opening_mean` defaults to 0. A random ply in
-  the history, or as the move that set the target leave, is not the policy
-  the model learns. The eligible region then starts at turn 0, and every move
-  a row reads was played by HastyBot.
+- **No random openings.** The workload passes `random_opening_mean=0` to
+  `selfplay_gen.generate` and has no param for it. A random ply in the
+  history, or as the move that set the target leave, is not the policy the
+  model learns. The eligible region then starts at turn 0, and every move a
+  row reads was played by HastyBot.
 - **Hidden leaves only.** The target is visible in face-up games, so the
   trainer refuses any `.slog` whose header has `kFlagFaceUpLeaves` set. The
   header test is factored out of `binlog::load_pending_slogs`, which already
