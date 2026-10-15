@@ -13,8 +13,10 @@ lookup agree on what a cell means. The fit:
    in spread by weighted isotonic regression;
 4. averages each fitted column with its neighbors along the unseen axis.
 
-Averaging monotone columns keeps them monotone. The table is written in the
-grid format the engine's WinPctTable reads, under a versioned header.
+Averaging monotone columns keeps them monotone. This module only fits: the
+engine's WinPctTable owns the table format and its evaluation, and both are
+reached through the FFI (ffi.win_table_write, ffi.win_table_eval), so a change
+of format needs no second reader here.
 """
 
 from collections.abc import Iterable, Mapping
@@ -47,16 +49,26 @@ DEFAULT_FIT = FitParams()
 
 @dataclass
 class Samples:
-    """Fitting samples, one per position: the cell's spread and tiles unseen,
-    and the side to move's outcome."""
+    """Fitting samples: WinTableSample records (ffi.win_table_samples), one
+    per position, and the number of games they came from."""
 
-    spread: np.ndarray
-    unseen: np.ndarray
-    outcome: np.ndarray
+    records: np.ndarray
     games: int
 
     def __len__(self) -> int:
-        return len(self.outcome)
+        return len(self.records)
+
+    @property
+    def spread(self) -> np.ndarray:
+        return self.records["feature"]["spread"]
+
+    @property
+    def unseen(self) -> np.ndarray:
+        return self.records["feature"]["tiles_unseen"]
+
+    @property
+    def outcome(self) -> np.ndarray:
+        return self.records["outcome"]
 
 
 def _layout() -> dict:
@@ -73,19 +85,14 @@ def max_unseen() -> int:
 
 def read_samples(slog_paths: Iterable[Path]) -> Samples:
     """Every fittable position of every game in `slog_paths`."""
-    spreads, unseens, outcomes = [], [], []
+    parts = []
     games = 0
     for path in slog_paths:
-        spread, unseen, outcome = ffi.win_table_samples(path)
-        spreads.append(spread)
-        unseens.append(unseen)
-        outcomes.append(outcome)
+        parts.append(ffi.win_table_samples(path))
         games += ffi.read_file_header(path)[0]
-    if not outcomes:
+    if not parts:
         raise ValueError("no .slog files to fit from")
-    return Samples(
-        np.concatenate(spreads), np.concatenate(unseens), np.concatenate(outcomes), games
-    )
+    return Samples(np.concatenate(parts), games)
 
 
 def _cell_counts(samples: Samples) -> tuple[np.ndarray, np.ndarray]:
@@ -178,67 +185,19 @@ def fit(samples: Samples, params: FitParams = DEFAULT_FIT) -> np.ndarray:
     return smoothed
 
 
-def lookup(grid: np.ndarray, spread: np.ndarray, unseen: np.ndarray) -> np.ndarray:
-    """P(win) for each (spread, unseen), clamped into the grid as the engine's
-    WinPctTable::win_prob clamps."""
-    ms = (grid.shape[0] - 1) // 2
-    rows = ms - np.clip(spread, -ms, ms)
-    cols = np.clip(unseen, 0, grid.shape[1] - 1)
-    return grid[rows, cols]
+def write(path: Path, grid: np.ndarray, provenance: Mapping[str, object]):
+    """Writes the fitted `grid` as a win table, `provenance` its header."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ffi.win_table_write(path, grid, dict(provenance))
 
 
-def log_loss(grid: np.ndarray, samples: Samples, eps: float = 1e-4) -> float:
-    """Mean binary cross-entropy of the samples' outcomes under `grid`, in
-    nats. A tie counts half a win."""
-    p = np.clip(lookup(grid, samples.spread, samples.unseen), eps, 1 - eps)
+def log_loss(
+    table: Path, samples: Samples, macondo_format: bool = False, eps: float = 1e-4
+) -> float:
+    """Mean binary cross-entropy of the samples' outcomes under the table at
+    `table` (Macondo's winpct.csv if `macondo_format`), in nats. A tie counts
+    half a win."""
+    p = ffi.win_table_eval(table, samples.records["feature"], macondo_format).astype(np.float64)
+    p = np.clip(p, eps, 1 - eps)
     y = samples.outcome
     return float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
-
-
-def write(path: Path, grid: np.ndarray, provenance: Mapping[str, object]):
-    """Writes `grid` under the versioned header. `provenance` becomes one
-    `key=value` header line per entry, after format_version."""
-    layout = _layout()
-    ms = (grid.shape[0] - 1) // 2
-    lines = [layout["magic_line"], f"# format_version={layout['format_version']}"]
-    for key, value in provenance.items():
-        if "=" in key or "\n" in f"{key}{value}":
-            raise ValueError(f"provenance entry {key!r}={value!r} cannot be a header line")
-        lines.append(f"# {key}={value}")
-    lines.append("," + ",".join(str(u) for u in range(grid.shape[1])))
-    for r in range(grid.shape[0]):
-        lines.append(f"{ms - r}," + ",".join(f"{p:.6f}" for p in grid[r]))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text("\n".join(lines) + "\n")
-    tmp.replace(path)
-
-
-def _read_grid(lines: list[str]) -> np.ndarray:
-    return np.array([[float(x) for x in line.split(",")[1:]] for line in lines[1:]])
-
-
-def read(path: Path) -> tuple[np.ndarray, dict[str, str]]:
-    """A versioned table's grid and its header entries. Raises ValueError on
-    a missing magic line or a format version other than the engine's."""
-    layout = _layout()
-    lines = Path(path).read_text().splitlines()
-    if not lines or lines[0] != layout["magic_line"]:
-        raise ValueError(f"{path} is not a scribblez win table")
-    header = {}
-    i = 1
-    while i < len(lines) and lines[i].startswith("#"):
-        key, _, value = lines[i][2:].partition("=")
-        header[key] = value
-        i += 1
-    if header.get("format_version") != str(layout["format_version"]):
-        raise ValueError(
-            f"{path} has format version {header.get('format_version')}, "
-            f"but this build reads {layout['format_version']}"
-        )
-    return _read_grid(lines[i:]), header
-
-
-def read_macondo(path: Path) -> np.ndarray:
-    """Macondo's unversioned winpct.csv, for comparison."""
-    return _read_grid(Path(path).read_text().splitlines())

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sim/win_table_feature.h"
+
 #include <array>
 #include <istream>
 #include <map>
@@ -22,6 +24,11 @@ inline constexpr char kWinTableMagicLine[] = "# scribblez-win-table";
 // rollout's final position into a win probability with Macondo's table
 // (winpct.csv); DeepBot's sims use scribblez tables, fitted from self-play
 // (py/scribblez/leave_inference/win_table.py).
+//
+// This class owns the scribblez format: it writes and reads it, and
+// evaluates a table on win_table_feature.h's cells. The Python fitter only
+// produces the grid and hands it over through the FFI, so a change of format
+// (say, a parametric table, or more inputs per cell) touches C++ alone.
 //
 // Both files hold the same grid: a header row, then one row per spread from
 // +kMaxSpread down to -kMaxSpread, each a spread followed by a probability per
@@ -46,17 +53,27 @@ class WinPctTable {
   // The table bundled with the Macondo checkout, loaded on first use.
   static const WinPctTable& macondo_default();
 
+  // A table from `grid`, kRows x kCols floats in file order (row r spread
+  // kMaxSpread - r, column u tiles unseen), with `header`'s `key=value`
+  // provenance. Throws util::Exception on a key or value that cannot be a
+  // header line, or on a format_version entry, which write_versioned owns.
+  static WinPctTable from_grid(const float* grid, std::map<std::string, std::string> header);
+
+  // Writes the scribblez format, stamping kWinTableFormatVersion.
+  void write_versioned(const std::string& path) const;
+
   // P(win) for the side to move; both arguments are clamped into the table.
   float win_prob(int spread, int tiles_unseen) const;
+  float win_prob(const WinTableFeature& f) const { return win_prob(f.spread, f.tiles_unseen); }
 
   // A scribblez table's `key=value` header lines (format_version and
   // provenance); empty for Macondo's.
   const std::map<std::string, std::string>& header() const { return header_; }
 
- private:
   static constexpr int kRows = 2 * kMaxSpread + 1;
   static constexpr int kCols = kMaxUnseen + 1;
 
+ private:
   // Parses the grid from `in`'s next line on. `path` is for errors only.
   static WinPctTable parse_grid(std::istream& in, const std::string& path);
 

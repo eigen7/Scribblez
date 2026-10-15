@@ -12,14 +12,17 @@
 
 namespace scribblez {
 
-// A WinPctTable cell, from the side to move's point of view.
+// A WinPctTable cell, from the side to move's point of view. It and
+// WinTableSample cross the FFI as packed records whose layout format_layout
+// serves, so a field added here reaches Python with no signature change.
 struct WinTableFeature {
   // The spread plus the static value of the side to move's own leave, rounded
   // to the nearest point.
-  int spread;
+  int32_t spread;
   // The bag plus the opponent's rack.
-  int tiles_unseen;
+  int32_t tiles_unseen;
 };
+static_assert(sizeof(WinTableFeature) == 8, "WinTableFeature must have no padding");
 
 // `own_leave` is what the side to move kept at their last move. Reads leave
 // values from HastyEquity, which must be initialized.
@@ -31,6 +34,7 @@ struct WinTableSample {
   WinTableFeature feature;
   float outcome;  // 1 a win, 0.5 a tie, 0 a loss
 };
+static_assert(sizeof(WinTableSample) == 12, "WinTableSample must have no padding");
 
 // Appends a sample for every fittable pre-move position of every game in a
 // loaded .slog buffer, whose magic and version the caller has checked. A

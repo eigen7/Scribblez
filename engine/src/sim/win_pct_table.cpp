@@ -1,8 +1,10 @@
 #include "sim/win_pct_table.h"
 
+#include "data/sidecar_io.h"
 #include "util/exception.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -86,6 +88,43 @@ WinPctTable WinPctTable::load_versioned(const std::string& path) {
 WinPctTable WinPctTable::load_macondo(const std::string& path) {
   std::ifstream in = open_or_throw(path);
   return parse_grid(in, path);
+}
+
+WinPctTable WinPctTable::from_grid(const float* grid, std::map<std::string, std::string> header) {
+  for (const auto& [key, value] : header) {
+    if (key.empty() || key.find_first_of("=\n") != std::string::npos ||
+        value.find('\n') != std::string::npos || key == "format_version") {
+      throw util::Exception("WinPctTable: '{}={}' cannot be a header entry", key, value);
+    }
+  }
+  WinPctTable table;
+  table.rows_.resize(kRows);
+  for (int r = 0; r < kRows; ++r) {
+    std::copy(grid + r * kCols, grid + (r + 1) * kCols, table.rows_[r].begin());
+  }
+  table.header_ = std::move(header);
+  return table;
+}
+
+void WinPctTable::write_versioned(const std::string& path) const {
+  std::ostringstream out;
+  out << kWinTableMagicLine << "\n# format_version=" << kWinTableFormatVersion << "\n";
+  for (const auto& [key, value] : header_) {
+    if (key != "format_version") out << "# " << key << "=" << value << "\n";
+  }
+  for (int u = 0; u < kCols; ++u) out << "," << u;
+  out << "\n";
+  char cell[16];
+  for (int r = 0; r < kRows; ++r) {
+    out << kMaxSpread - r;
+    for (float p : rows_[r]) {
+      std::snprintf(cell, sizeof(cell), ",%.6f", p);
+      out << cell;
+    }
+    out << "\n";
+  }
+  const std::string text = out.str();
+  write_atomically(path, std::vector<char>(text.begin(), text.end()));
 }
 
 const WinPctTable& WinPctTable::macondo_default() {

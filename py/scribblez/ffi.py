@@ -186,10 +186,28 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_win_table_samples.argtypes = [
         ctypes.c_void_p,  # session
         ctypes.c_char_p,  # path
-        ctypes.POINTER(ctypes.c_int32),  # out_spread
-        ctypes.POINTER(ctypes.c_int32),  # out_tiles_unseen
-        ctypes.POINTER(ctypes.c_float),  # out_outcome
+        ctypes.c_void_p,  # out_samples (WinTableSample records)
         ctypes.c_int64,  # cap
+    ]
+
+    lib.scribblez_win_table_write.restype = ctypes.c_int
+    lib.scribblez_win_table_write.argtypes = [
+        ctypes.c_char_p,  # path
+        ctypes.POINTER(ctypes.c_float),  # grid
+        ctypes.c_char_p,  # header ("key=value" lines)
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
+
+    lib.scribblez_win_table_eval.restype = ctypes.c_int
+    lib.scribblez_win_table_eval.argtypes = [
+        ctypes.c_char_p,  # path
+        ctypes.c_int,  # macondo_format
+        ctypes.c_void_p,  # features (WinTableFeature records)
+        ctypes.c_int64,  # n
+        ctypes.POINTER(ctypes.c_float),  # out
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
     ]
 
     lib.scribblez_move_set_encode_moves.restype = None
@@ -543,30 +561,64 @@ def decode_rows(
     return out
 
 
-def win_table_samples(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def win_table_samples(path: str | Path) -> np.ndarray:
     """The win table's fitting samples from one .slog (engine
-    sim/win_table_feature.h): one per fittable pre-move position, as int32
-    arrays of the feature's spread (spread plus own leave value) and tiles
-    unseen, and a float32 array of the side to move's outcome (1, 0.5 or 0)."""
+    sim/win_table_feature.h): one WinTableSample record per fittable pre-move
+    position, a structured array of struct_dtype("WinTableSample")."""
     lib = _lib()
     encoded = str(path).encode("utf-8")
-    n = lib.scribblez_win_table_samples(_session(), encoded, None, None, None, 0)
+    n = lib.scribblez_win_table_samples(_session(), encoded, None, 0)
     if n == -2:
         raise ValueError(f"{path} is a face-up-leaves corpus; win tables are hidden-leaves only")
     if n < 0:
         raise OSError(f"win_table_samples failed for {path}")
-    spread = np.empty(n, dtype=np.int32)
-    unseen = np.empty(n, dtype=np.int32)
-    outcome = np.empty(n, dtype=np.float32)
-    lib.scribblez_win_table_samples(
-        _session(),
-        encoded,
-        spread.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-        unseen.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-        outcome.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-        n,
+    out = np.empty(n, dtype=struct_dtype("WinTableSample"))
+    lib.scribblez_win_table_samples(_session(), encoded, out.ctypes.data, n)
+    return out
+
+
+_WIN_TABLE_ERR_CAP = 1024
+
+
+def win_table_write(path: str | Path, grid: np.ndarray, header: dict[str, object]):
+    """Write a win table (engine sim/win_pct_table.h, which owns the format)
+    from a fitted `grid`, (rows, cols) in file order, with `header` as its
+    provenance lines. Raises ValueError with the engine's message."""
+    g = np.ascontiguousarray(grid, dtype=np.float32)
+    lines = "".join(f"{k}={v}\n" for k, v in header.items()).encode("utf-8")
+    err = ctypes.create_string_buffer(_WIN_TABLE_ERR_CAP)
+    rc = _lib().scribblez_win_table_write(
+        str(path).encode("utf-8"),
+        g.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        lines,
+        err,
+        _WIN_TABLE_ERR_CAP,
     )
-    return spread, unseen, outcome
+    if rc != 0:
+        raise ValueError(err.value.decode())
+
+
+def win_table_eval(
+    path: str | Path, features: np.ndarray, macondo_format: bool = False
+) -> np.ndarray:
+    """P(win) for each WinTableFeature record in `features` under the table at
+    `path` (Macondo's winpct.csv if `macondo_format`), as float32. Raises
+    ValueError with the engine's message, e.g. for another format version."""
+    f = np.ascontiguousarray(features, dtype=struct_dtype("WinTableFeature"))
+    out = np.empty(len(f), dtype=np.float32)
+    err = ctypes.create_string_buffer(_WIN_TABLE_ERR_CAP)
+    rc = _lib().scribblez_win_table_eval(
+        str(path).encode("utf-8"),
+        int(macondo_format),
+        f.ctypes.data,
+        len(f),
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        err,
+        _WIN_TABLE_ERR_CAP,
+    )
+    if rc != 0:
+        raise ValueError(err.value.decode())
+    return out
 
 
 def move_encoding_dims() -> tuple[int, int, int, int]:

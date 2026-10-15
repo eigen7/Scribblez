@@ -67,10 +67,10 @@ def main() -> int:
 
     if held:
         test = win_table.read_samples(held)
-        macondo = win_table.read_macondo(win_table.MACONDO_WIN_TABLE)
+        macondo = win_table.log_loss(win_table.MACONDO_WIN_TABLE, test, macondo_format=True)
         print(f"held out: {len(test)} positions from {test.games} games")
-        print(f"  log loss, fitted:  {win_table.log_loss(grid, test):.5f}")
-        print(f"  log loss, Macondo: {win_table.log_loss(macondo, test):.5f}")
+        print(f"  log loss, fitted:  {win_table.log_loss(args.out, test):.5f}")
+        print(f"  log loss, Macondo: {macondo:.5f}")
     return 0
 
 

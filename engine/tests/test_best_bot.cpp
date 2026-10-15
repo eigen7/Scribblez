@@ -172,6 +172,25 @@ TEST(WinPctTable, VersionedReaderRejectsMacondoFile) {
   EXPECT_FLOAT_EQ(WinPctTable::load_macondo(path).win_prob(0, 0), 0.5f);
 }
 
+TEST(WinPctTable, WritesWhatItReads) {
+  std::vector<float> grid(WinPctTable::kRows * WinPctTable::kCols);
+  for (size_t i = 0; i < grid.size(); ++i) grid[i] = float(i % 1000) / 1000.0f;
+  const std::string path = ::testing::TempDir() + "written.csv";
+  WinPctTable::from_grid(grid.data(), {{"generation", "7"}, {"policy", "--type=hasty"}})
+    .write_versioned(path);
+  const WinPctTable t = WinPctTable::load_versioned(path);
+  for (int s : {-300, -1, 0, 42, 300}) {
+    for (int u : {0, 50, 93}) {
+      EXPECT_FLOAT_EQ(t.win_prob(s, u), grid[(300 - s) * WinPctTable::kCols + u]) << s << " " << u;
+    }
+  }
+  EXPECT_EQ(t.header().at("generation"), "7");
+  EXPECT_EQ(t.header().at("policy"), "--type=hasty");
+  EXPECT_EQ(t.header().at("format_version"), std::to_string(kWinTableFormatVersion));
+  EXPECT_THROW(WinPctTable::from_grid(grid.data(), {{"format_version", "9"}}), util::Exception);
+  EXPECT_THROW(WinPctTable::from_grid(grid.data(), {{"a=b", "c"}}), util::Exception);
+}
+
 TEST(MacondoAutoStopper, StopsPastTheIterationCap) {
   Board board;
   const MacondoAutoStopper stopper(board);
