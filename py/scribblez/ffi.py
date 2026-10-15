@@ -182,6 +182,16 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),
     ]
 
+    lib.scribblez_win_table_samples.restype = ctypes.c_int64
+    lib.scribblez_win_table_samples.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # path
+        ctypes.POINTER(ctypes.c_int32),  # out_spread
+        ctypes.POINTER(ctypes.c_int32),  # out_tiles_unseen
+        ctypes.POINTER(ctypes.c_float),  # out_outcome
+        ctypes.c_int64,  # cap
+    ]
+
     lib.scribblez_move_set_encode_moves.restype = None
     lib.scribblez_move_set_encode_moves.argtypes = [
         ctypes.c_void_p,  # moves (packed 16-byte Move records)
@@ -531,6 +541,32 @@ def decode_rows(
     if rc != 0:
         raise OSError(f"decode_rows failed (rc={rc}) for {path}")
     return out
+
+
+def win_table_samples(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The win table's fitting samples from one .slog (engine
+    sim/win_table_feature.h): one per fittable pre-move position, as int32
+    arrays of the feature's spread (spread plus own leave value) and tiles
+    unseen, and a float32 array of the side to move's outcome (1, 0.5 or 0)."""
+    lib = _lib()
+    encoded = str(path).encode("utf-8")
+    n = lib.scribblez_win_table_samples(_session(), encoded, None, None, None, 0)
+    if n == -2:
+        raise ValueError(f"{path} is a face-up-leaves corpus; win tables are hidden-leaves only")
+    if n < 0:
+        raise OSError(f"win_table_samples failed for {path}")
+    spread = np.empty(n, dtype=np.int32)
+    unseen = np.empty(n, dtype=np.int32)
+    outcome = np.empty(n, dtype=np.float32)
+    lib.scribblez_win_table_samples(
+        _session(),
+        encoded,
+        spread.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+        unseen.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+        outcome.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        n,
+    )
+    return spread, unseen, outcome
 
 
 def move_encoding_dims() -> tuple[int, int, int, int]:
