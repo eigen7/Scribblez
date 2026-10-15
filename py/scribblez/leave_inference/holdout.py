@@ -23,6 +23,9 @@ from scribblez.ffi import struct_dtype
 from scribblez.selfplay import run_games
 from scribblez.train_common import timed_print
 
+# The held-out games' base seed. Fixed, so every machine plays the same games;
+# nonzero, since seed 0 draws a random base.
+SEED = 1
 # Written last, so a directory without it is a partial set to regenerate.
 DONE_MARKER = "complete"
 
@@ -55,7 +58,7 @@ def ensure(root: Path, games: int, seed: int, player_spec: str) -> HoldoutSet:
     """The held-out set of `games` games at `seed`, under `root`, playing it
     first if it is missing or incomplete."""
     if seed == 0:
-        raise ValueError("holdout_seed must be nonzero; seed 0 draws a random one")
+        raise ValueError("the held-out seed must be nonzero; seed 0 draws a random one")
     out = root / f"seed{seed}-games{games}"
     if not (out / DONE_MARKER).exists():
         shutil.rmtree(out, ignore_errors=True)
