@@ -25,12 +25,21 @@ namespace binlog {
 //   kMaxMovePerLane -- MaxMovePerLaneTask rows; one per turn, always pre-move.
 //                      Its labels come from enumerating legal moves at the
 //                      position, not from the game's outcome.
-enum class DecodeTask { kPositionEval, kMaxMovePerLane };
+//   kLeaveInference -- LeaveInferenceTask rows; one per eligible turn, always
+//                      pre-move. Its labels are the opponent's leave.
+enum class DecodeTask { kPositionEval, kMaxMovePerLane, kLeaveInference };
 
 class BlockDecoder {
  public:
   explicit BlockDecoder(const InputEncodingSpec& spec, DecodeTask task = DecodeTask::kPositionEval)
       : task_(task), row_floats_(row_floats_for(task, spec)), pos_(spec) {}
+
+  // A `task` row's float counts: its input, its labels, and both.
+  static int input_floats_for(DecodeTask task, const InputEncodingSpec& spec);
+  static int label_floats_for(DecodeTask task);
+  static int row_floats_for(DecodeTask task, const InputEncodingSpec& spec) {
+    return input_floats_for(task, spec) + label_floats_for(task);
+  }
 
   // Encodes the sampled_turn of games [local_start, local_start + n_rows) as
   // PositionEvalTask rows, for tests and other one-position-per-game callers.
@@ -56,8 +65,6 @@ class BlockDecoder {
 
  private:
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);
-
-  static int row_floats_for(DecodeTask task, const InputEncodingSpec& spec);
 
   DecodeTask task_;
   int row_floats_;

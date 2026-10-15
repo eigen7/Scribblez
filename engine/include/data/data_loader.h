@@ -14,8 +14,8 @@
 // memory budget where it can, and files the batch does not need are evicted.
 //
 // A kPositionEval row is input_floats(spec) input floats followed by the label
-// block defined in training/training_targets.h; kMaxMovePerLane rows use
-// MaxMovePerLaneTask's layout.
+// block defined in training/training_targets.h; kMaxMovePerLane and
+// kLeaveInference rows use their tasks' layouts (BlockDecoder::row_floats_for).
 //
 // The inner classes follow AlphaZeroArcade's DataLoader design:
 //
@@ -30,8 +30,6 @@
 
 #include "data/block_decoder.h"
 #include "encoding/input_encoder.h"
-#include "training/max_move_per_lane_task.h"
-#include "training/training_targets.h"
 
 #include <condition_variable>
 #include <cstdint>
@@ -105,18 +103,11 @@ class DataLoader {
   // batch_size * row_size_floats() floats. Throws if a file body cannot be read.
   int load_batch(float* output);
 
-  int row_size_floats() const {
-    return params_.task == DecodeTask::kMaxMovePerLane ? MaxMovePerLaneTask::kRowFloats
-                                                       : input_floats(params_.spec) + kLabelFloats;
-  }
+  int row_size_floats() const { return BlockDecoder::row_floats_for(params_.task, params_.spec); }
   int input_size_floats() const {
-    return params_.task == DecodeTask::kMaxMovePerLane ? MaxMovePerLaneTask::kInputFloats
-                                                       : input_floats(params_.spec);
+    return BlockDecoder::input_floats_for(params_.task, params_.spec);
   }
-  int label_size_floats() const {
-    return params_.task == DecodeTask::kMaxMovePerLane ? MaxMovePerLaneTask::kLabelFloats
-                                                       : kLabelFloats;
-  }
+  int label_size_floats() const { return BlockDecoder::label_floats_for(params_.task); }
 
   // One registered .slog file and, while loaded, its in-memory body.
   //

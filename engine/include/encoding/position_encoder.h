@@ -9,6 +9,7 @@
 
 #include "encoding/encode_context.h"
 #include "encoding/game_state_encoder.h"
+#include "encoding/leave_inference_input_encoder.h"
 #include "game/game_log.h"
 #include "game/rack.h"
 
@@ -37,8 +38,11 @@ class PositionEncoder {
   explicit PositionEncoder(const InputEncodingSpec& spec) : spec_(spec), enc_(spec) {}
 
   // Replays `g` up to turn `sampled_turn`'s move, or through it (but not its
-  // draw) when post_move. Returns the POV player, who makes that move.
-  int replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move);
+  // draw) when post_move. Returns the POV player, who makes that move. With a
+  // `history`, a pre-move replay also records the moves before the position
+  // into it.
+  int replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move,
+                        LeaveHistory* history = nullptr);
 
   // Replays, then writes one training row for `Task`. With `transpose`, the
   // replayed state (board, last moves, next moves) is transposed before
@@ -59,9 +63,13 @@ class PositionEncoder {
   // the mover's own next move.
   EncodeContext make_context(const GameLog& g, int sampled_turn, int mover, bool post_move) const;
 
+  // Fills history slot `slot` with turn `k`'s move, before it is applied.
+  void record_history_slot(const GameLog& g, int k, LeaveHistorySlot& slot) const;
+
   InputEncodingSpec spec_;
   GameStateEncoder enc_;
   std::array<Rack, 2> racks_{};
+  LeaveHistory history_{};
 };
 
 // Writes one post-move input row per candidate, input_floats(spec) floats

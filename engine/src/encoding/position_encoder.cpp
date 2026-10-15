@@ -63,12 +63,28 @@ int PositionEncoder::bag_size() const {
   return enc_.board().unseen_count(racks_[0].size() + racks_[1].size());
 }
 
-int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move) {
+void PositionEncoder::record_history_slot(const GameLog& g, int k, LeaveHistorySlot& slot) const {
+  const Move& move = g.records[k].move;
+  slot.present = true;
+  slot.move = move;
+  slot.score = move.type() == MoveType::PLAY ? move.score() : 0;
+  slot.bag_before = bag_size();
+  enc_.board().ensure_movegen_caches(*spec_.dict);
+  slot.cross_checks = CrossCheckMasks::of(enc_.board());
+}
+
+int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move,
+                                       LeaveHistory* history) {
+  DEBUG_ASSERT(history == nullptr || !post_move);
   enc_ = GameStateEncoder{spec_, g.initial_scores};
   racks_[0] = g.initial_racks[0];
   racks_[1] = g.initial_racks[1];
+  if (history) *history = LeaveHistory{};
 
   for (int k = 0; k < sampled_turn; ++k) {
+    // Slot 0 is the move just before the position.
+    const int slot = sampled_turn - 1 - k;
+    if (history && slot < LeaveHistory::kSlots) record_history_slot(g, k, history->slots[slot]);
     const int mover = enc_.active_player();
     const Move& move = g.records[k].move;
     if (move.type() == MoveType::PLAY || move.type() == MoveType::EXCHANGE) {
@@ -104,6 +120,7 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
   ctx.opp_known_leave = opp_leave_from_replay(g, sampled_turn, racks_[1 - mover]);
   ctx.active_player = mover;
   ctx.spec = spec_;
+  ctx.bag_size = bag_size();
 
   // The opponent's next move is turn sampled_turn + 1 either way. The
   // mover's is the sampled turn itself pre-move, or the turn after the
