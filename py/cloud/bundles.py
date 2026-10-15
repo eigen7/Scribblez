@@ -54,6 +54,7 @@ BUNDLE_BINARY_NAMES = [
     "sim_candidate_survey_tool",
     "move_set_eval_target_generator",
     "transfer_test_generator",
+    "leave_table_tool",
     "libscribblez_ffi.so",
 ]
 
