@@ -1,6 +1,7 @@
 #include "serve/scribblez_ffi.h"
 
 #include "agent/agent.h"
+#include "belief/leave_table.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
@@ -381,6 +382,39 @@ std::map<std::string, std::string> parse_header_lines(const char* text) {
 }
 
 }  // namespace
+
+struct LeaveTableHandle {
+  scribblez::belief::LeaveTable table;
+};
+
+LeaveTableHandle* scribblez_leave_table_new(ScribblezSession* /*s*/) {
+  // The session has set the lexicon whose leave values these are.
+  scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+  return new LeaveTableHandle{scribblez::belief::LeaveTable(scribblez::HastyEquity::instance())};
+}
+
+void scribblez_leave_table_delete(LeaveTableHandle* t) { delete t; }
+
+int64_t scribblez_leave_table_rows(const LeaveTableHandle* t, int k) {
+  if (k < 1 || k > scribblez::belief::kLeaveTableMaxLength) return -1;
+  return int64_t(t->table.rows(k).size());
+}
+
+int scribblez_leave_table_copy(const LeaveTableHandle* t, int k, uint8_t* out_counts,
+                               float* out_values) {
+  if (k < 1 || k > scribblez::belief::kLeaveTableMaxLength) return -1;
+  const auto rows = t->table.rows(k);
+  for (size_t i = 0; i < rows.size(); ++i) {
+    std::memcpy(out_counts + i * scribblez::TILE_KINDS, rows[i].counts.data(),
+                scribblez::TILE_KINDS);
+    out_values[i] = rows[i].value;
+  }
+  return 0;
+}
+
+const char* scribblez_leave_table_klv_hash(const LeaveTableHandle* t) {
+  return t->table.klv_hash().c_str();
+}
 
 int scribblez_win_table_write(const char* path, const float* grid, const char* header,
                               char* out_err, int err_cap) {

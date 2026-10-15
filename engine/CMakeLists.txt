@@ -306,16 +306,6 @@ target_link_libraries(sim_candidate_survey_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-# The leave table (.ltab) the leave inference model scores and samples over.
-add_executable(leave_table_tool apps/leave_table_tool.cpp)
-target_link_libraries(leave_table_tool PRIVATE
-  scribblez_core
-  Boost::program_options
-  Boost::json
-  Boost::filesystem
-  Boost::system
-  Threads::Threads)
-
 # Rank every legal placement at one GCG position by the position evaluation
 # model, scored the way NeuralAgent scores them.
 add_executable(neural_rank_tool apps/neural_rank_tool.cpp)

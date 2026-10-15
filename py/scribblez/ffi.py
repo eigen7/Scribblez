@@ -190,6 +190,22 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int64,  # cap
     ]
 
+    lib.scribblez_leave_table_new.restype = ctypes.c_void_p
+    lib.scribblez_leave_table_new.argtypes = [ctypes.c_void_p]  # session
+    lib.scribblez_leave_table_delete.restype = None
+    lib.scribblez_leave_table_delete.argtypes = [ctypes.c_void_p]
+    lib.scribblez_leave_table_rows.restype = ctypes.c_int64
+    lib.scribblez_leave_table_rows.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.scribblez_leave_table_copy.restype = ctypes.c_int
+    lib.scribblez_leave_table_copy.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,  # length
+        ctypes.POINTER(ctypes.c_uint8),  # out_counts
+        ctypes.POINTER(ctypes.c_float),  # out_values
+    ]
+    lib.scribblez_leave_table_klv_hash.restype = ctypes.c_char_p
+    lib.scribblez_leave_table_klv_hash.argtypes = [ctypes.c_void_p]
+
     lib.scribblez_win_table_write.restype = ctypes.c_int
     lib.scribblez_win_table_write.argtypes = [
         ctypes.c_char_p,  # path
@@ -575,6 +591,44 @@ def win_table_samples(path: str | Path) -> np.ndarray:
     out = np.empty(n, dtype=struct_dtype("WinTableSample"))
     lib.scribblez_win_table_samples(_session(), encoded, out.ctypes.data, n)
     return out
+
+
+class LeaveTableHandle:
+    """The engine's leave table (belief/leave_table.h), built for the session's
+    lexicon. Owns the engine object; close() or garbage collection frees it."""
+
+    MAX_LENGTH = 6
+
+    def __init__(self):
+        self._lib = _lib()
+        self._handle = self._lib.scribblez_leave_table_new(_session())
+
+    def __del__(self):
+        self.close()
+
+    def close(self):
+        if getattr(self, "_handle", None):
+            self._lib.scribblez_leave_table_delete(self._handle)
+            self._handle = None
+
+    @property
+    def klv_hash(self) -> str:
+        return self._lib.scribblez_leave_table_klv_hash(self._handle).decode()
+
+    def rows(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+        """The length-k rows: (counts (R, 27) uint8, values (R,) float32)."""
+        n = self._lib.scribblez_leave_table_rows(self._handle, k)
+        if n < 0:
+            raise ValueError(f"no leave table for length {k}")
+        counts = np.empty((n, 27), dtype=np.uint8)
+        values = np.empty(n, dtype=np.float32)
+        self._lib.scribblez_leave_table_copy(
+            self._handle,
+            k,
+            counts.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+            values.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        )
+        return counts, values
 
 
 _WIN_TABLE_ERR_CAP = 1024
