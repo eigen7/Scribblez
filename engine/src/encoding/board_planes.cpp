@@ -22,9 +22,9 @@ int premium_offset(Premium p) {
 // A square with no perpendicular neighbor has an all-ones mask, so it is
 // written as all 26 letters legal. A 1 then means "legal here" on its own; an
 // all-zero encoding would force the network to check the neighbors to read it.
-void write_cross_check(const CrossCheck& cc, int cell, float* planes) {
+void write_cross_check(uint32_t mask, int cell, float* planes) {
   for (int l = 0; l < 26; ++l) {
-    if (cc.mask & (1u << l)) planes[l * kBoardCells + cell] = 1.0f;
+    if (mask & (1u << l)) planes[l * kBoardCells + cell] = 1.0f;
   }
 }
 
@@ -54,26 +54,48 @@ int encode_placement_plane(const Move& m, float* out) {
   return 1;
 }
 
-// Horizontal A..Z, then vertical A..Z. A plane records only the per-square
-// cross-check constraint; whether the main word itself is valid depends on
-// the whole play and is not a per-square fact.
-int encode_cross_check_planes(const Board& board, float* out) {
-  float* h_planes = out;
-  float* v_planes = out + kHorizontalCrossCheckPlanes * kBoardCells;
+CrossCheckMasks CrossCheckMasks::of(const Board& board) {
+  CrossCheckMasks out;
   // A horizontal word's cross words run down the columns, which is the
   // non-transposed cache; a vertical word's run along the rows.
   const auto& horizontal_play_cross = board.cross_checks(/*transposed=*/false);
   const auto& vertical_play_cross = board.cross_checks(/*transposed=*/true);
-
-  for (int r = 0; r < kBoardSide; ++r) {
-    for (int c = 0; c < kBoardSide; ++c) {
+  for (int r = 0; r < BOARD_SIZE; ++r) {
+    for (int c = 0; c < BOARD_SIZE; ++c) {
       if (!board.at(r, c).is_empty()) continue;
-      const int out_ix = r * kBoardSide + c;
-      write_cross_check(horizontal_play_cross[r * kBoardSide + c], out_ix, h_planes);
-      write_cross_check(vertical_play_cross[c * kBoardSide + r], out_ix, v_planes);
+      out.horizontal[r * BOARD_SIZE + c] = horizontal_play_cross[r * BOARD_SIZE + c].mask;
+      out.vertical[r * BOARD_SIZE + c] = vertical_play_cross[c * BOARD_SIZE + r].mask;
     }
   }
+  return out;
+}
+
+CrossCheckMasks CrossCheckMasks::transpose() const {
+  CrossCheckMasks out;
+  for (int r = 0; r < BOARD_SIZE; ++r) {
+    for (int c = 0; c < BOARD_SIZE; ++c) {
+      out.horizontal[c * BOARD_SIZE + r] = vertical[r * BOARD_SIZE + c];
+      out.vertical[c * BOARD_SIZE + r] = horizontal[r * BOARD_SIZE + c];
+    }
+  }
+  return out;
+}
+
+// Horizontal A..Z, then vertical A..Z. A plane records only the per-square
+// cross-check constraint; whether the main word itself is valid depends on
+// the whole play and is not a per-square fact.
+int encode_cross_check_planes(const CrossCheckMasks& masks, float* out) {
+  float* h_planes = out;
+  float* v_planes = out + kHorizontalCrossCheckPlanes * kBoardCells;
+  for (int cell = 0; cell < kBoardCells; ++cell) {
+    write_cross_check(masks.horizontal[cell], cell, h_planes);
+    write_cross_check(masks.vertical[cell], cell, v_planes);
+  }
   return kCrossCheckPlanes;
+}
+
+int encode_cross_check_planes(const Board& board, float* out) {
+  return encode_cross_check_planes(CrossCheckMasks::of(board), out);
 }
 
 int encode_rack_counts(const Rack& rack, float* out) {

@@ -1118,6 +1118,38 @@ void check_movegen_equiv(const scribblez::Dictionary& dict, const scribblez::Boa
 }
 }  // anonymous namespace
 
+// A board's cross-check masks, transposed, are the transposed board's: the
+// leave inference history transposes stored masks rather than re-deriving
+// them from a board.
+TEST(CrossCheckMasks, TransposeMatchesTransposedBoard) {
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = play_test_game(dict, /*seed=*/77);
+  Board board;
+  int plays = 0;
+  for (const auto& turn : log.turns) {
+    if (turn.move.type() != MoveType::PLAY) continue;
+    board.apply(turn.move);
+    ++plays;
+  }
+  ASSERT_GE(plays, 2);
+  board.ensure_movegen_caches(dict);
+  const Board transposed = board.transpose();
+  transposed.ensure_movegen_caches(dict);
+  const CrossCheckMasks masks = CrossCheckMasks::of(board);
+  EXPECT_EQ(CrossCheckMasks::of(transposed), masks.transpose());
+  EXPECT_EQ(masks.transpose().transpose(), masks);
+  // The board constrains some empty square on each axis, so the check is not
+  // vacuous.
+  bool h_constrained = false, v_constrained = false;
+  for (int cell = 0; cell < CrossCheckMasks::kCells; ++cell) {
+    if (!board.at(cell / BOARD_SIZE, cell % BOARD_SIZE).is_empty()) continue;
+    h_constrained |= masks.horizontal[cell] != kAllLettersMask;
+    v_constrained |= masks.vertical[cell] != kAllLettersMask;
+  }
+  EXPECT_TRUE(h_constrained);
+  EXPECT_TRUE(v_constrained);
+}
+
 // With opp_leave_input, the row is the base row plus a trailing block of the
 // opponent's known per-tile rack counts.
 TEST(InputLayout, OpenLeavesAppendsLeaveCounts) {
