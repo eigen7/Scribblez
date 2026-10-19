@@ -7,8 +7,12 @@ length,
     log p(l) = base(l; pool) + eta . T(l) - log Z(eta)
 
 where base is the hypergeometric log prior Sum_c log C(n_c, k_c), eta = (theta,
-a, b) and T(l) = (presence, v, -v^2). That is an exponential family, so the
-NLL's gradient in eta is E_p[T] - T(l_true): one streaming pass over the table,
+a, b) and T(l) = (presence, v, -v^2). Over the engine's tile codes, base and
+theta . presence together are one per-query table summed over a row's codes
+(_scores), so a pass is one matmul against the rows' code one-hot.
+
+That is an exponential family, so the NLL's gradient in eta is
+E_p[T] - T(l_true): one streaming pass over the table,
 in chunks of rows, yields log Z (a running log-sum-exp) and E_p[T] together,
 and the backward needs nothing else. Memory stays at batch x chunk, never
 batch x 737,311 rows.
@@ -22,14 +26,17 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from scribblez.ffi import LeaveValueArrays
+from scribblez.ffi import LeaveValueArrays, format_layout
 
+_LAYOUT = format_layout()["constants"]["leave_value_arrays"]
 TILE_KINDS = 27
-# A leave holds at most this many of one tile.
-MAX_COUNT = LeaveValueArrays.MAX_LENGTH
-# One-hot columns per row: a (tile, count) pair each.
-ONE_HOT_COLUMNS = TILE_KINDS * (MAX_COUNT + 1)
-# log C(n, c) for a count the pool cannot supply: low enough that exp() of any
+MAX_LENGTH = _LAYOUT["max_length"]
+# The engine's tile codes (lexicon/leave_value_arrays.h): letter * COPIES +
+# the copies of that letter earlier in the sorted leave. A leave is the set of
+# its codes; a letter's code letter * COPIES marks its presence.
+COPIES = _LAYOUT["copies_per_tile"]
+CODES = _LAYOUT["codes"]
+# A prior step for a copy the pool cannot supply: low enough that exp() of any
 # row holding it is 0, finite so 0 * it stays 0 in the matmul.
 INFEASIBLE = -1e4
 # The value tilt acts on v / VALUE_SCALE, so a and b train at a sane scale;
@@ -38,66 +45,51 @@ VALUE_SCALE = 10.0
 DEFAULT_CHUNK = 65536
 
 # Random odd 64-bit coefficients for row keys: a leave's key is the wrapping
-# sum of count * coefficient over tiles, so a true leave finds its row by
-# binary search. Fixed, so keys agree across processes.
-_KEY_COEFFS = np.random.default_rng(0x1EAFE).integers(1, 2**62, TILE_KINDS, dtype=np.int64) | 1
+# sum of its codes' coefficients, so a true leave finds its row by binary
+# search. Fixed, so keys agree across processes.
+_KEY_COEFFS = np.random.default_rng(0x1EAFE).integers(1, 2**62, CODES, dtype=np.int64) | 1
 
 
-def _keys(counts: np.ndarray) -> np.ndarray:
-    with np.errstate(over="ignore"):
-        return (counts.astype(np.int64) * _KEY_COEFFS).sum(axis=1)
+def code_sets(counts: torch.Tensor) -> torch.Tensor:
+    """(N, 27) per-tile counts -> (N, CODES) float, 1 at each code of the
+    leave: the first c codes of a letter held c times."""
+    copy = torch.arange(COPIES, device=counts.device)
+    return (copy[None, None, :] < counts.long()[:, :, None]).flatten(1).float()
 
 
 @dataclass
 class LengthRows:
-    """One leave length's table rows on the device. The one-hot and presence
-    matrices a pass multiplies by are expanded from `counts` a chunk at a
-    time: whole, the length-6 one-hot alone would be ~560 MB."""
+    """One leave length's rows on the device: per-slot codes and values. The
+    one-hot over codes a pass multiplies by is expanded a chunk at a time."""
 
-    counts: torch.Tensor  # (R, 27) uint8
+    codes: torch.Tensor  # (k, R) uint8
     value: torch.Tensor  # (R,) float32, in points
     keys: np.ndarray  # (R,) int64, sorted
     order: np.ndarray  # (R,) row index of each sorted key
 
 
-def one_hot_columns(counts: torch.Tensor) -> torch.Tensor:
-    """(R, 27) counts -> (R, 27) indices of their (tile, count) one-hot columns."""
-    return torch.arange(TILE_KINDS, device=counts.device) * (MAX_COUNT + 1) + counts.long()
-
-
-def _one_hot(counts: torch.Tensor) -> torch.Tensor:
-    out = torch.zeros(counts.shape[0], ONE_HOT_COLUMNS, device=counts.device)
-    return out.scatter_(1, one_hot_columns(counts), 1.0)
-
-
-def counts_of(tiles: np.ndarray, k: int) -> np.ndarray:
-    """(R, 6) tile codes of length-k leaves -> (R, 27) uint8 per-tile counts."""
-    rows = np.repeat(np.arange(len(tiles)), k)
-    flat = rows * TILE_KINDS + tiles[:, :k].reshape(-1).astype(np.int64)
-    return (
-        np.bincount(flat, minlength=len(tiles) * TILE_KINDS)
-        .reshape(-1, TILE_KINDS)
-        .astype(np.uint8)
-    )
+def _one_hot(codes: torch.Tensor) -> torch.Tensor:
+    """(k, C) codes -> (C, CODES) one-hot rows."""
+    out = torch.zeros(codes.shape[1], CODES, device=codes.device)
+    return out.scatter_(1, codes.T.long(), 1.0)
 
 
 class TableTensors:
     """The engine's leave value arrays (ffi.LeaveValueArrays) on a device, per
-    length, as per-tile counts and values, with a key index from a leave's
-    counts to its row."""
+    length, with a key index from a leave's codes to its row."""
 
     def __init__(self, arrays: LeaveValueArrays, device):
         self.klv_hash = arrays.content_hash
         self.lengths: dict[int, LengthRows] = {}
-        for k in range(1, LeaveValueArrays.MAX_LENGTH + 1):
-            tiles, values = arrays.of_length(k)
-            counts = counts_of(tiles, k)
-            keys = _keys(counts)
+        for k in range(1, MAX_LENGTH + 1):
+            codes, values = arrays.of_length(k)
+            with np.errstate(over="ignore"):
+                keys = _KEY_COEFFS[codes.astype(np.int64)].sum(axis=0)
             order = np.argsort(keys)
             if np.any(np.diff(keys[order]) == 0):
                 raise ValueError(f"leave table length {k}: colliding row keys")
             self.lengths[k] = LengthRows(
-                counts=torch.from_numpy(counts).to(device),
+                codes=torch.from_numpy(codes).to(device),
                 value=torch.from_numpy(values).to(device),
                 keys=keys[order],
                 order=order,
@@ -106,7 +98,9 @@ class TableTensors:
     def row_index(self, k: int, counts: np.ndarray) -> np.ndarray:
         """The rows of the length-k leaves with tile counts `counts` (B, 27)."""
         rows = self.lengths[k]
-        keys = _keys(counts)
+        sets = code_sets(torch.from_numpy(counts)).numpy().astype(np.int64)
+        with np.errstate(over="ignore"):
+            keys = (sets * _KEY_COEFFS).sum(axis=1)
         pos = np.searchsorted(rows.keys, keys)
         if np.any(pos >= len(rows.keys)) or np.any(
             rows.keys[np.minimum(pos, len(rows.keys) - 1)] != keys
@@ -115,29 +109,37 @@ class TableTensors:
         return rows.order[pos]
 
 
-def log_choose_table(pool: torch.Tensor) -> torch.Tensor:
-    """(B, ONE_HOT_COLUMNS): log C(n_tile, c) at column (tile, c), INFEASIBLE
-    where c > n_tile."""
+def prior_steps(pool: torch.Tensor) -> torch.Tensor:
+    """(B, CODES): each copy's step of the hypergeometric log prior, so a
+    leave's log prior Sum_l log C(n_l, c_l) is the sum over its codes. Copy j
+    of a letter the pool holds n of adds log((n - j) / (j + 1)), INFEASIBLE
+    once j >= n."""
     n = pool.to(torch.float32)[:, :, None]  # (B, 27, 1)
-    c = torch.arange(MAX_COUNT + 1, device=pool.device, dtype=torch.float32)  # (C,)
-    feasible = c <= n
-    nn_ = torch.where(feasible, n, c)  # avoid lgamma of negatives where infeasible
-    log_c = torch.lgamma(nn_ + 1) - torch.lgamma(c + 1) - torch.lgamma(nn_ - c + 1)
-    return torch.where(feasible, log_c, torch.full_like(log_c, INFEASIBLE)).flatten(1)
+    j = torch.arange(COPIES, device=pool.device, dtype=torch.float32)  # (COPIES,)
+    feasible = j < n
+    step = torch.log(torch.where(feasible, n - j, 1.0)) - torch.log(j + 1)
+    return torch.where(feasible, step, torch.full_like(step, INFEASIBLE)).flatten(1)
 
 
-def _tilt(theta, a, b, presence, value):
-    """theta . presence + a v' - b v'^2 for every (batch row, table row), with
-    v' = value / VALUE_SCALE."""
+def _scores(theta: torch.Tensor, steps: torch.Tensor) -> torch.Tensor:
+    """(B, CODES): the per-query table a row sums over its codes, the prior
+    steps plus each letter's weight theta on its first-copy code."""
+    d = steps.clone()
+    d[:, ::COPIES] += theta
+    return d
+
+
+def _tilt(a, b, value):
+    """a v' - b v'^2 for every (batch row, table row), v' = value / VALUE_SCALE."""
     v = value / VALUE_SCALE
-    return theta @ presence.T + a[:, None] * v[None, :] - b[:, None] * (v * v)[None, :]
+    return a[:, None] * v[None, :] - b[:, None] * (v * v)[None, :]
 
 
-def _stream(theta, a, b, log_c, rows: LengthRows, chunk: int):
+def _stream(scores, a, b, rows: LengthRows, chunk: int):
     """log Z and the expectations E[presence], E[v'], E[v'^2] under the tilted
     prior, by a running log-sum-exp over the table's rows in chunks."""
-    batch = theta.shape[0]
-    device = theta.device
+    batch = scores.shape[0]
+    device = scores.device
     m = torch.full((batch,), -torch.inf, device=device)
     s = torch.zeros(batch, device=device)
     e_presence = torch.zeros(batch, TILE_KINDS, device=device)
@@ -145,15 +147,14 @@ def _stream(theta, a, b, log_c, rows: LengthRows, chunk: int):
     e_v2 = torch.zeros(batch, device=device)
     for start in range(0, rows.value.shape[0], chunk):
         sl = slice(start, start + chunk)
-        counts, value = rows.counts[sl], rows.value[sl]
-        presence = (counts > 0).float()
-        lw = log_c @ _one_hot(counts).T + _tilt(theta, a, b, presence, value)  # (B, C)
+        one_hot, value = _one_hot(rows.codes[:, sl]), rows.value[sl]
+        lw = scores @ one_hot.T + _tilt(a, b, value)  # (B, C)
         m_new = torch.maximum(m, lw.max(dim=1).values)
         scale = torch.exp(m - m_new)
         w = torch.exp(lw - m_new[:, None])
         v = value / VALUE_SCALE
         s = s * scale + w.sum(dim=1)
-        e_presence = e_presence * scale[:, None] + w @ presence
+        e_presence = e_presence * scale[:, None] + w @ one_hot[:, ::COPIES]
         e_v = e_v * scale + w @ v
         e_v2 = e_v2 * scale + w @ (v * v)
         m = m_new
@@ -164,11 +165,11 @@ class _TiltedNll(torch.autograd.Function):
     """Per-row NLL of the true leaves, with the exponential-family backward."""
 
     @staticmethod
-    def forward(ctx, theta, a, b, log_c, true_base, true_presence, true_v, rows, chunk):
-        log_z, e_presence, e_v, e_v2 = _stream(theta, a, b, log_c, rows, chunk)
-        true_log_w = (
-            true_base + (theta * true_presence).sum(dim=1) + a * true_v - b * true_v * true_v
-        )
+    def forward(ctx, theta, a, b, steps, true_codes, true_v, rows, chunk):
+        scores = _scores(theta, steps)
+        log_z, e_presence, e_v, e_v2 = _stream(scores, a, b, rows, chunk)
+        true_log_w = (scores * true_codes).sum(dim=1) + a * true_v - b * true_v * true_v
+        true_presence = true_codes[:, ::COPIES]
         ctx.save_for_backward(e_presence, e_v, e_v2, true_presence, true_v)
         ctx.mark_non_differentiable(e_presence, e_v, e_v2)
         return log_z - true_log_w, e_presence, e_v, e_v2
@@ -180,7 +181,7 @@ class _TiltedNll(torch.autograd.Function):
         grad_theta = (e_presence - true_presence) * g[:, None]
         grad_a = (e_v - true_v) * g
         grad_b = (true_v * true_v - e_v2) * g
-        return grad_theta, grad_a, grad_b, None, None, None, None, None, None
+        return grad_theta, grad_a, grad_b, None, None, None, None, None
 
 
 @dataclass
@@ -225,7 +226,8 @@ def _tilted_nll(table, theta, a, b, leave_counts, length, pool, chunk) -> Tilted
         value_var=torch.zeros(n, device=device),
         true_value=torch.zeros(n, device=device),
     )
-    log_c = log_choose_table(pool)
+    steps = prior_steps(pool)
+    true_codes = code_sets(leave_counts)
     counts_np = leave_counts.detach().cpu().numpy().astype(np.int64)
     length_np = length.detach().cpu().numpy().astype(np.int64)
     nll_parts, idx_parts = [], []
@@ -234,19 +236,9 @@ def _tilted_nll(table, theta, a, b, leave_counts, length, pool, chunk) -> Tilted
         idx = torch.from_numpy(idx_np).to(device)
         rows = table.lengths[int(k)]
         row_ids = torch.from_numpy(table.row_index(int(k), counts_np[idx_np])).to(device)
-        true_counts = rows.counts[row_ids]
-        true_base = log_c[idx].gather(1, one_hot_columns(true_counts)).sum(dim=1)
         true_v = rows.value[row_ids] / VALUE_SCALE
         nll, e_presence, e_v, e_v2 = _TiltedNll.apply(
-            theta[idx],
-            a[idx],
-            b[idx],
-            log_c[idx],
-            true_base,
-            (true_counts > 0).float(),
-            true_v,
-            rows,
-            chunk,
+            theta[idx], a[idx], b[idx], steps[idx], true_codes[idx], true_v, rows, chunk
         )
         nll_parts.append(nll)
         idx_parts.append(idx)
@@ -285,8 +277,7 @@ def uniform_nll(
 ) -> torch.Tensor:
     """The NLL of each true leave under the untilted prior: a size-`length`
     hypergeometric draw from `pool`."""
-    log_c = log_choose_table(pool)
-    log_prior = log_c.gather(1, one_hot_columns(leave_counts)).sum(dim=1)
+    log_prior = (prior_steps(pool) * code_sets(leave_counts)).sum(dim=1)
     total = pool.to(torch.float32).sum(dim=1)
     k = length.to(torch.float32)
     log_norm = torch.lgamma(total + 1) - torch.lgamma(k + 1) - torch.lgamma(total - k + 1)

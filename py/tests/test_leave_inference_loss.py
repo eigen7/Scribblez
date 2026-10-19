@@ -43,14 +43,29 @@ def _pools_and_leaves(table, k: int, n: int, rng) -> tuple[torch.Tensor, torch.T
     return torch.tensor(np.array(pools)), torch.tensor(np.array(leaves))
 
 
+def _row_counts(table, k) -> torch.Tensor:
+    """(R, 27) per-tile counts of the length-k rows, decoded from their codes."""
+    letters = table.lengths[k].codes.long() // loss.COPIES  # (k, R)
+    counts = torch.zeros(letters.shape[1], 27, dtype=torch.long)
+    return counts.scatter_add_(1, letters.T, torch.ones_like(letters.T))
+
+
+def _log_choose(n: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    """log C(n, c), -inf where c > n."""
+    n, c = n.double(), c.double()
+    ok = c <= n
+    nn_ = torch.where(ok, n, c)
+    v = torch.lgamma(nn_ + 1) - torch.lgamma(c + 1) - torch.lgamma(nn_ - c + 1)
+    return torch.where(ok, v, torch.full_like(v, -torch.inf))
+
+
 def _reference(table, k, theta, a, b, pool, leave):
-    """Brute-force NLL over every length-k row, differentiable by autograd."""
-    rows = table.lengths[k]
-    log_c = loss.log_choose_table(pool)  # (B, cols)
-    cols = loss.one_hot_columns(rows.counts)  # (R, 27)
-    base = log_c[:, cols].sum(dim=2)  # (B, R)
-    presence = (rows.counts > 0).float()
-    v = rows.value / loss.VALUE_SCALE
+    """Brute-force NLL over every length-k row, differentiable by autograd,
+    from per-tile counts and lgamma rather than the codes' prior steps."""
+    counts = _row_counts(table, k)  # (R, 27)
+    base = _log_choose(pool[:, None, :], counts[None, :, :]).sum(dim=2).float()  # (B, R)
+    presence = (counts > 0).float()
+    v = table.lengths[k].value / loss.VALUE_SCALE
     lw = base + theta @ presence.T + a[:, None] * v - b[:, None] * v * v
     log_z = torch.logsumexp(lw, dim=1)
     row_ids = torch.from_numpy(table.row_index(k, leave.numpy()))
@@ -66,7 +81,7 @@ def test_streaming_matches_brute_force(table, k):
     got = loss.tilted_nll(table, theta, a, b, leave, torch.full((6,), k), pool, chunk=500)
     want, p = _reference(table, k, theta, a, b, pool, leave)
     torch.testing.assert_close(got.nll, want, rtol=1e-5, atol=1e-4)
-    presence = (table.lengths[k].counts > 0).float()
+    presence = (_row_counts(table, k) > 0).float()
     torch.testing.assert_close(got.presence, p @ presence, rtol=1e-4, atol=1e-5)
     value = table.lengths[k].value
     torch.testing.assert_close(got.value_mean, p @ value, rtol=1e-4, atol=1e-3)
@@ -118,6 +133,15 @@ def test_zero_tilt_is_the_uniform_prior(table):
         torch.testing.assert_close(
             got.nll, loss.uniform_nll(leave, length, pool), rtol=1e-5, atol=1e-4
         )
+
+
+def test_code_sets_name_each_copy():
+    counts = torch.zeros(2, 27, dtype=torch.long)
+    counts[0, 0], counts[0, 4] = 2, 1  # AAE
+    sets = loss.code_sets(counts)
+    assert sets.shape == (2, loss.CODES)
+    assert set(torch.nonzero(sets[0]).flatten().tolist()) == {0, 1, 4 * loss.COPIES}
+    assert sets[1].sum() == 0
 
 
 def test_counts_from_tiles():
