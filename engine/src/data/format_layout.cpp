@@ -8,6 +8,7 @@
 #include "game/glyph.h"
 #include "game/move.h"
 #include "game/rack.h"
+#include "lexicon/leave_value_arrays.h"
 #include "sim/sim_runner.h"
 #include "sim/transfer_candidates.h"
 #include "sim/win_pct_table.h"
@@ -193,6 +194,10 @@ json::object build_constants() {
                             {"no_opponent_move", int(LeaveRowCause::kNoOpponentMove)},
                             {"empty_leave", int(LeaveRowCause::kEmptyLeave)},
                             {"pass", int(LeaveRowCause::kPass)}}}};
+  // LeaveValueArrays' tile codes (lexicon/leave_value_arrays.h).
+  c["leave_value_arrays"] = {{"max_length", kLeaveArraysMaxLength},
+                             {"copies_per_tile", LeaveValueArrays::kCopiesPerTile},
+                             {"codes", LeaveValueArrays::kCodes}};
   // The grid a fitter hands to scribblez_win_table_write.
   c["win_table"] = {{"max_spread", WinPctTable::kMaxSpread},
                     {"max_unseen", WinPctTable::kMaxUnseen}};

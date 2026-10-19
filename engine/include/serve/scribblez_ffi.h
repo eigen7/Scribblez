@@ -111,10 +111,11 @@ void scribblez_leave_value_arrays_delete(LeaveValueArraysHandle* a);
 // The number of length-k leaves, or -1 for k outside 1..6.
 int64_t scribblez_leave_value_arrays_rows(const LeaveValueArraysHandle* a, int k);
 
-// Copies the length-k leaves, in order: their tile codes into out_tiles
-// (rows x 6, ascending, 255 past the leave's length) and their values, in
-// points, into out_values. Returns 0, or -1 for k outside 1..6.
-int scribblez_leave_value_arrays_copy(const LeaveValueArraysHandle* a, int k, uint8_t* out_tiles,
+// Copies the length-k leaves, in order: their tiles' codes
+// (LeaveValueArrays::code, letter * 6 + copy) slot by slot into out_codes,
+// k arrays of rows bytes, and their values, in points, into out_values.
+// Returns 0, or -1 for k outside 1..6.
+int scribblez_leave_value_arrays_copy(const LeaveValueArraysHandle* a, int k, uint8_t* out_codes,
                                       float* out_values);
 
 // The content hash of the .klv2 the values came from: the identity models
