@@ -674,8 +674,11 @@ per position.
   truncated at `K` plies instead of played out.
 - **Blank plays push the other way,** by enlarging the candidate set.
 
-A guess is several hundred pools per machine-hour. The real rate is measured
-on the first generation and shown on the Stats tab.
+A first measurement, at 300 rollouts and a 5-ply horizon on 24 threads of a
+machine already busy with a `leave_inference` run, simmed 8 pools in 33 s:
+about 4 s a pool, or roughly 900 pools per machine-hour. Pools ranged from 150
+to 2,500 candidates. The real rate is measured on the first generation and
+shown on the Stats tab.
 
 Generation sets the pace and is embarrassingly parallel, so the `generate`
 role is meant for a fleet: owned ssh machines and rented machines, as
