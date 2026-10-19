@@ -8,6 +8,7 @@
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
+#include "data/forgone_play_log.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
 #include "data/gcg_writer.h"
@@ -1524,6 +1525,94 @@ TEST(ForgonePlays, NoneCases) {
     scribblez::belief::compute_forgone_plays(board, dict, best_play_of(board, dict, "ZA", "ZA"));
   EXPECT_EQ(f.margin[tile('Z')], ForgonePlays::kNone);  // the only Z is on the board
   EXPECT_NE(f.margin[tile('A')], ForgonePlays::kNone);
+}
+
+// ---- The .forgone sidecar (data/forgone_play_log.h) -------------------------
+
+namespace forgone_sidecar_test {
+
+namespace fs = std::filesystem;
+
+// A directory holding one .slog of `games` test games and, unless
+// `with_sidecar` is false, its .forgone sidecar. Removed on destruction.
+struct Corpus {
+  fs::path dir;
+  fs::path slog;
+  std::vector<scribblez::GameLogStorage> logs;
+
+  Corpus(const Dictionary& dict, int games, uint64_t first_seed = 100, bool with_sidecar = true);
+  ~Corpus() { fs::remove_all(dir); }
+
+  std::vector<char> bytes() const { return util::read_file_bytes(slog.string()); }
+};
+
+Corpus::Corpus(const Dictionary& dict, int games, uint64_t first_seed, bool with_sidecar)
+    : dir(scribblez::testing::make_temp_dir("scribblez_forgone")) {
+  {
+    scribblez::binlog::BinaryLogWriter writer(dir.string(), games);
+    for (int i = 0; i < games; ++i) {
+      scribblez::GameLogStorage log = play_test_game(dict, first_seed + i);
+      writer.append(scribblez::GameLogStorage(log));
+      logs.push_back(std::move(log));
+    }
+  }
+  for (const auto& ent : fs::directory_iterator(dir)) {
+    if (ent.path().extension() == ".slog") slog = ent.path();
+  }
+  if (with_sidecar) write_forgone_sidecar(bytes(), dict, forgone_path_of(slog.string()), 2);
+}
+
+}  // namespace forgone_sidecar_test
+
+// Each game's entries are its replay's forgone plays, one per turn a leave
+// inference row can read.
+TEST(ForgoneSidecar, HoldsEachGamesForgonePlays) {
+  using namespace forgone_sidecar_test;
+  Dictionary dict = medium_dict();
+  const Corpus corpus(dict, 4);
+  const std::vector<char> slog = corpus.bytes();
+  const ForgoneSidecar sidecar(forgone_path_of(corpus.slog.string()), slog.data(),
+                               dict.content_hash());
+  std::vector<TurnRecord> scratch;
+  const auto* metas = reinterpret_cast<const scribblez::binlog::GameMetadata*>(
+    slog.data() + sizeof(scribblez::binlog::FileHeader));
+  for (uint32_t g = 0; g < corpus.logs.size(); ++g) {
+    const scribblez::GameLog log =
+      scribblez::binlog::make_game_view(slog.data(), g, scratch, nullptr);
+    const std::vector<scribblez::belief::ForgonePlays> want =
+      forgone_plays_of_game(log, forgone_turns(metas[g]), dict);
+    const auto got = sidecar.game(g);
+    ASSERT_EQ(got.size(), want.size()) << g;
+    ASSERT_GT(got.size(), 0u);
+    for (size_t k = 0; k < want.size(); ++k)
+      EXPECT_EQ(got[k].margin, want[k].margin) << g << " " << k;
+  }
+}
+
+// A sidecar that is missing, from another lexicon, or left over from an
+// earlier .slog of the same name is refused.
+TEST(ForgoneSidecar, RefusesMismatches) {
+  using namespace forgone_sidecar_test;
+  Dictionary dict = medium_dict();
+  const Corpus corpus(dict, 3);
+  const std::string path = forgone_path_of(corpus.slog.string());
+  const std::vector<char> slog = corpus.bytes();
+  const std::string binding = forgone_slog_binding(slog.data());
+  EXPECT_NO_THROW(validate_forgone_file(path, 3, dict.content_hash(), binding));
+  EXPECT_THROW(validate_forgone_file(path, 3, "0123456789abcdef", binding), util::Exception);
+  EXPECT_THROW(ForgoneSidecar(path, slog.data(), "0123456789abcdef"), util::Exception);
+
+  const Corpus other(dict, 3, /*first_seed=*/500);
+  const std::vector<char> other_slog = other.bytes();
+  EXPECT_THROW(
+    validate_forgone_file(path, 3, dict.content_hash(), forgone_slog_binding(other_slog.data())),
+    util::Exception);
+  EXPECT_THROW(ForgoneSidecar(path, other_slog.data(), dict.content_hash()), util::Exception);
+
+  const Corpus bare(dict, 3, /*first_seed=*/100, /*with_sidecar=*/false);
+  EXPECT_THROW(
+    validate_forgone_file(forgone_path_of(bare.slog.string()), 3, dict.content_hash(), binding),
+    util::Exception);
 }
 
 // With opp_leave_input, the row is the base row plus a trailing block of the

@@ -50,6 +50,7 @@ from scribblez.paths import EVAL_POSITIONS_DIRS, REPO_ROOT
 # tarball: the path all Python and C++ tooling expects them at.
 BUNDLE_BINARY_NAMES = [
     "play_game",
+    "forgone_play_tool",
     "sim_obs_tool",
     "sim_candidate_survey_tool",
     "move_set_eval_target_generator",
