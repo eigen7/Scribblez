@@ -36,7 +36,12 @@ class LeaveInferenceParams:
     holdout_games: int = param(2000, "held-out self-play games the trainer evaluates on")
     # Training window.
     window: int = param(4, "generations trained over (sliding window); <=0 keeps all")
-    turns_per_game: int = param(1, "turns trained per game per generation; 0 = every eligible turn")
+    turns_per_game: int = param(
+        5,
+        "turns trained per game per generation; 0 = every eligible turn. A game has about 20 "
+        "eligible turns and stays in the window for `window` generations, each taking the next "
+        "turns of a fixed per-game order, so 5 x 4 trains each turn once: all the data, no reuse",
+    )
     max_rows: int = param(
         -1, "stop the trainer after this many rows (-1 = run until paused)", end=True
     )
