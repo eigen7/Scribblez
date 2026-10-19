@@ -171,7 +171,11 @@ of that set, as the evidence trainer keeps its companions out.
 A row is one turn, seen by the player to move (the **observer**) before they
 move. The target is the opponent's leave, `leave_from_replay` for the
 opponent. `turns_per_game` sets how many turns of each game a pass draws, as
-in position_eval.
+in position_eval. Its default, 5, trains each of a game's ~20 eligible turns
+exactly once over the 4 generations it spends in the window. Unlike
+position_eval, a game's rows have different targets (each turn's leave), so
+drawing several per game does not invite memorizing a shared label; the
+shuffle spreads them across batches.
 
 - **Rows without information.** Some rows' leave distributions do not depend
   on the model, and they carry no loss:
