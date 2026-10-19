@@ -4702,6 +4702,38 @@ TEST(SimRunner, WinTableLeafValidation) {
   ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
 }
 
+// The policy-set model's pool keeps every move except the blank moves (plays
+// placing it, exchanges returning it) scoring 40 or more below the greedy
+// play, an exchange scoring 0, and always offers the pass.
+TEST(PoolSelector, PrunesOnlyLowScoringBlankMoves) {
+  const Glyph a = Glyph::of(Tile::from_char('A'));
+  const Glyph blank_a = Glyph::of_blank(Tile::from_char('A'));
+  const auto play = [](uint16_t score, std::initializer_list<Glyph> glyphs) {
+    const std::vector<Glyph> g(glyphs);
+    return Move::play(/*horizontal=*/true, 7, uint16_t((1u << g.size()) - 1), score, g.data(),
+                      int(g.size()));
+  };
+  const Move greedy = play(60, {a, a});
+  const Move close_blank = play(21, {blank_a, a});  // 21 > 60 - 40: kept
+  const Move far_blank = play(20, {blank_a});       // 20 <= 60 - 40: dropped
+  const Move low_plain = play(2, {a});              // no blank: kept
+  const Move plain_exchange = Move::exchange(TileCounts::from_string("A"));
+  const Move blank_exchange = Move::exchange(TileCounts::from_string("A?"));  // scores 0: dropped
+  const std::vector<Move> ranked = {greedy,    close_blank,    far_blank,
+                                    low_plain, plain_exchange, blank_exchange};
+
+  std::mt19937_64 rng(1);
+  const SimCandidates got = pool_selector(40)({}, SimPosition{}, ranked, greedy, rng);
+  const std::vector<Move> want = {greedy, close_blank, low_plain, plain_exchange, Move::pass()};
+  ASSERT_EQ(got.moves, want);
+  ASSERT_EQ(got.equity_ranks, (std::vector<int32_t>{0, 1, 3, 4, -1}));
+  ASSERT_EQ(got.num_legal_moves, ranked.size());
+
+  // With nothing legal the ranking is a lone pass, which is not offered twice.
+  const SimCandidates stuck = pool_selector(40)({}, SimPosition{}, {Move::pass()}, greedy, rng);
+  ASSERT_EQ(stuck.moves, std::vector<Move>{Move::pass()});
+}
+
 // A horizon and a leaf service must be set together, and the horizon must be at
 // least kMinHorizonPlies.
 TEST(SimRunner, ValidatesTruncationParams) {
