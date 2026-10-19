@@ -4,6 +4,7 @@
 #include "agent/agent.h"
 #include "agent/evidence_staging.h"
 #include "agent/hasty_bot.h"
+#include "belief/forgone_plays.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
@@ -1421,6 +1422,108 @@ TEST(LeaveInference, TargetCauses) {
   history.slots[0].move = Move::exchange(TileCounts::from_string("AB"));
   ctx.opp_known_leave = Rack::from_string("CDEFG");
   EXPECT_EQ(OppLeaveTarget::cause(ctx), LeaveRowCause::kValid);
+}
+
+// ---- Forgone plays (belief/forgone_plays.h) ---------------------------------
+
+namespace forgone_plays_test {
+
+using scribblez::belief::ForgonePlays;
+
+// The highest-scoring play of `rack` on `board` whose main word is `word`.
+Move best_play_of(const Board& board, const Dictionary& dict, const char* rack, const char* word) {
+  Move best;
+  bool found = false;
+  for (const Move& m : MoveGenerator(board, dict).generate(Rack::from_string(rack))) {
+    if (m.main_word(board) == word && (!found || m.score() > best.score())) {
+      best = m;
+      found = true;
+    }
+  }
+  EXPECT_TRUE(found) << word;
+  return best;
+}
+
+// Compares compute_forgone_plays with the reference at every move of `log`,
+// returning how many plays held a blank.
+int expect_matches_reference(const Dictionary& dict, const scribblez::GameLogStorage& log) {
+  Board board;
+  int blank_plays = 0;
+  for (const TurnRecord& rec : log.turns) {
+    const Move& m = rec.move;
+    EXPECT_EQ(scribblez::belief::compute_forgone_plays(board, dict, m).margin,
+              scribblez::belief::compute_forgone_plays_reference(board, dict, m).margin)
+      << m.main_word(board);
+    for (int i = 0; i < m.num_glyphs(); ++i) blank_plays += m.glyph(i).is_blank();
+    if (m.type() == MoveType::PLAY) board.apply(m);
+  }
+  return blank_plays;
+}
+
+int tile(char c) { return Tile::from_char(c).index(); }
+
+}  // namespace forgone_plays_test
+
+// The one-pass search (a blank standing for each tau) agrees with brute force,
+// one generation per tau, over whole games.
+TEST(ForgonePlays, MatchesReference) {
+  using namespace forgone_plays_test;
+  Dictionary dict = medium_dict();
+  for (uint64_t seed = 1; seed <= 6; ++seed)
+    expect_matches_reference(dict, play_test_game(dict, seed));
+}
+
+// The same on the real lexicon, where the blank-in-play cases arise.
+TEST(ForgonePlays, MatchesReferenceRealKwg) {
+  using namespace forgone_plays_test;
+  const char* path = SCRIBBLEZ_DEFAULT_KWG;
+  if (!std::ifstream(path).good()) GTEST_SKIP() << "no lexicon at " << path;
+  Dictionary dict = Dictionary::load_kwg(path);
+  int blank_plays = 0;
+  for (uint64_t seed = 1; seed <= 4; ++seed) {
+    blank_plays += expect_matches_reference(dict, play_test_game(dict, seed));
+  }
+  EXPECT_GT(blank_plays, 0);
+}
+
+// A play counts for tau only when it needs tau: AT played, TAT needs a second
+// T, but no word needs a second A, and AT itself (which the played tiles make
+// alone) never counts.
+TEST(ForgonePlays, OnlyPlaysNeedingTauCount) {
+  using namespace forgone_plays_test;
+  Dictionary dict = Dictionary::build_from_words({"AT", "TA", "TAT"});
+  const Board board;
+  const Move at = best_play_of(board, dict, "AT", "AT");
+  const Move tat = best_play_of(board, dict, "ATT", "TAT");
+  const ForgonePlays f = scribblez::belief::compute_forgone_plays(board, dict, at);
+  EXPECT_EQ(f.margin[tile('T')], tat.score() - at.score());
+  EXPECT_EQ(f.margin[tile('A')], ForgonePlays::kFloor);
+  EXPECT_EQ(f.margin[tile('E')], ForgonePlays::kFloor);
+  // A blank makes TAT too, scoring its blank square 0.
+  EXPECT_EQ(f.margin[BLANK.index()], best_play_of(board, dict, "AT?", "TAT").score() - at.score());
+}
+
+// Moves that are not a play of 1..6 tiles carry no margins, and nor does a
+// tile kind the board holds every copy of once the move is down.
+TEST(ForgonePlays, NoneCases) {
+  using namespace forgone_plays_test;
+  Dictionary dict = Dictionary::build_from_words({"ZA", "AT", "TA"});
+  const Board board;
+  const auto all_none = [](const ForgonePlays& f) {
+    return std::ranges::all_of(f.margin, [](int8_t m) { return m == ForgonePlays::kNone; });
+  };
+  EXPECT_TRUE(all_none(scribblez::belief::compute_forgone_plays(board, dict, Move::pass())));
+  EXPECT_TRUE(all_none(scribblez::belief::compute_forgone_plays(
+    board, dict, Move::exchange(TileCounts::from_string("AT")))));
+  std::array<Glyph, RACK_SIZE> seven;
+  seven.fill(Glyph::of(Tile::from_char('A')));
+  const Move bingo = Move::play(true, 7, 0b1111111, 70, seven.data(), RACK_SIZE);
+  EXPECT_TRUE(all_none(scribblez::belief::compute_forgone_plays(board, dict, bingo)));
+
+  const ForgonePlays f =
+    scribblez::belief::compute_forgone_plays(board, dict, best_play_of(board, dict, "ZA", "ZA"));
+  EXPECT_EQ(f.margin[tile('Z')], ForgonePlays::kNone);  // the only Z is on the board
+  EXPECT_NE(f.margin[tile('A')], ForgonePlays::kNone);
 }
 
 // With opp_leave_input, the row is the base row plus a trailing block of the

@@ -67,6 +67,7 @@ add_library(scribblez_core STATIC
   # unit-tested against a scripted stub.
   src/nn/batching_position_eval_service.cpp
   src/agent/evidence_staging.cpp
+  src/belief/forgone_plays.cpp
   src/belief/leave_prior.cpp
   src/lexicon/leave_value_arrays.cpp
   src/belief/move_likelihood.cpp
