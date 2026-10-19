@@ -486,8 +486,9 @@ comparison measures what it gives up; it does not compete to replace it.
 
 - **Roles:**
   - `generate`: `selfplay_gen.generate` with `hasty_spec`, then
-    `forgone_play_tool` over each chunk; the chunk's `.forgone` sidecars
-    travel with its `.slog`s (the spec's `chunk_sidecar`).
+    `forgone_play_tool` over each chunk (`selfplay_gen.ChunkSidecar`); each
+    `.forgone` is delivered just before its `.slog`, and the scheduler moves
+    the two together (`SchedulerConfig.chunk_sidecar`).
   - `train`: the trainer above, hosting the data home.
 - **`face_up_leaves` is not a param.** `selfplay_gen.generate` takes it as a
   keyword argument instead of reading it off the params. `run_generate` (for

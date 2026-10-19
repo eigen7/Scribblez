@@ -201,7 +201,7 @@ def generate(
     stats = WorkerStats(ctx)
     print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {p}")
 
-    deliverer = Deliverer(ctx.sink, ctx.worker_id, sidecar.suffix if sidecar else "")
+    deliverer = Deliverer(ctx.sink, ctx.worker_id, sidecar.suffix if sidecar is not None else "")
     cycle = 0
     try:
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
@@ -220,7 +220,7 @@ def generate(
             if rc != 0:
                 _publish(stats, deliverer.drain())
                 return rc
-            if sidecar:
+            if sidecar is not None:
                 sidecar.write(chunk_dir, ctx.threads)
             deliverer.submit(chunk_dir, time.monotonic() - t0)
             _publish(stats, deliverer.collect())
