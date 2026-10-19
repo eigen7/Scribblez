@@ -306,10 +306,15 @@ answers "what is this leave worth?" by lookup. `LeaveValueArrays` holds every
 leave of each length 1–6 in one flat array, for the passes that scan a whole
 length. The 6-tile array has 737,311 rows; the 4-tile array has 25,254.
 
-- **Rows are 8 bytes:** six tile codes, ascending and padded, and the value
-  as an `int16` in hundredths of a point. Each length has its own array, so
-  the length is implicit. Counts and presence are derived from the tiles
-  where a pass needs them.
+- **Each length is a structure of arrays:** the values as floats, and, for
+  each of the leave's k tile slots, a byte array of that tile's code, its
+  letter × 6 plus how many copies of the letter precede it. A row is 4 + k
+  bytes. A leave is the set of its codes, so the codes carry the
+  multiplicities the pool prior weighs, and the letter's first-copy code marks
+  its presence, which is all the model's letter weights read. A pass builds
+  one 162-entry table per query, with each copy's step of the pool prior plus
+  `θ_l` on the first-copy entries, and sums k lookups per row before adding
+  the value tilt.
 - **Built in memory** from `LeaveValues`, by iterating its entries in the
   leave values file's own order, so the order is fixed by the file. The
   constructor refuses leave values that lack a leave drawable from a full

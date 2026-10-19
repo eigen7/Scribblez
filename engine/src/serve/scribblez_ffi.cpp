@@ -456,18 +456,17 @@ void scribblez_leave_value_arrays_delete(LeaveValueArraysHandle* a) { delete a; 
 
 int64_t scribblez_leave_value_arrays_rows(const LeaveValueArraysHandle* a, int k) {
   if (k < 1 || k > scribblez::kLeaveArraysMaxLength) return -1;
-  return int64_t(a->arrays.of_length(k).size());
+  return int64_t(a->arrays.rows(k));
 }
 
-int scribblez_leave_value_arrays_copy(const LeaveValueArraysHandle* a, int k, uint8_t* out_tiles,
+int scribblez_leave_value_arrays_copy(const LeaveValueArraysHandle* a, int k, uint8_t* out_codes,
                                       float* out_values) {
   if (k < 1 || k > scribblez::kLeaveArraysMaxLength) return -1;
-  const auto rows = a->arrays.of_length(k);
-  for (size_t i = 0; i < rows.size(); ++i) {
-    std::memcpy(out_tiles + i * scribblez::kLeaveArraysMaxLength, rows[i].tiles.data(),
-                scribblez::kLeaveArraysMaxLength);
-    out_values[i] = rows[i].value();
+  const size_t n = a->arrays.rows(k);
+  for (int slot = 0; slot < k; ++slot) {
+    std::memcpy(out_codes + size_t(slot) * n, a->arrays.codes(k, slot).data(), n);
   }
+  std::memcpy(out_values, a->arrays.values(k).data(), n * sizeof(float));
   return 0;
 }
 

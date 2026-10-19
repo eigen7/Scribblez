@@ -1,5 +1,6 @@
 """The engine's LeaveValueArrays through the FFI (scribblez.ffi): row counts,
-the distinct leaves of each length, and the leave values' identity."""
+per-slot codes that decode to the distinct leaves of each length, and the
+leave values' identity."""
 
 from pathlib import Path
 
@@ -25,21 +26,30 @@ def arrays() -> LeaveValueArrays:
     return LeaveValueArrays()
 
 
-def test_rows_are_distinct_leaves_of_their_length(arrays):
+def test_codes_decode_to_distinct_leaves_of_their_length(arrays):
+    copies = arrays.copies_per_tile
+    assert arrays.num_codes == 27 * copies
     for k, count in ROW_COUNTS.items():
-        tiles, values = arrays.of_length(k)
-        assert tiles.shape == (count, 6) and values.shape == (count,)
-        real = tiles[:, :k]
-        assert (real < 27).all() and (tiles[:, k:] == LeaveValueArrays.NO_TILE).all()
-        assert (np.diff(real.astype(int), axis=1) >= 0).all()
-        assert len(np.unique(real, axis=0)) == count
+        codes, values = arrays.of_length(k)
+        assert codes.shape == (k, count) and values.shape == (count,)
+        assert (codes < arrays.num_codes).all()
+        assert (np.diff(codes.astype(int), axis=0) >= 0).all()
+        letters, copy = codes // copies, codes % copies
+        # A slot's copy number counts the earlier slots with its letter.
+        earlier = (letters[None, :, :] == letters[:, None, :]) & (
+            np.arange(k)[None, :, None] < np.arange(k)[:, None, None]
+        )
+        np.testing.assert_array_equal(copy, earlier.sum(axis=1))
+        assert len(np.unique(codes.T, axis=0)) == count
 
 
 def test_known_values(arrays):
     # A lone blank is the best single tile; a lone Q is among the worst.
-    tiles, values = arrays.of_length(1)
-    by_tile = dict(zip(tiles[:, 0].tolist(), values.tolist(), strict=True))
-    assert by_tile[26] == max(by_tile.values()) > 15 > 0 > by_tile[16]
+    codes, values = arrays.of_length(1)
+    by_letter = dict(
+        zip((codes[0] // arrays.copies_per_tile).tolist(), values.tolist(), strict=True)
+    )
+    assert by_letter[26] == max(by_letter.values()) > 15 > 0 > by_letter[16]
 
 
 def test_identity_is_the_leave_values_file(arrays):
