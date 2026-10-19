@@ -82,8 +82,7 @@ int designation_gain(const Board& board, const Move& play, int along, Tile lette
 // designated L may be the extra tile, now a real L, provided the play also
 // places every L of `k` as a real tile (with fewer, `k` makes it alone).
 void offer_blank_play(const Board& board, const Move& play, const TileCounts& k, BestByTau& best) {
-  TileCounts placed;
-  for (int i = 0; i < play.num_glyphs(); ++i) placed.add(play.glyph(i).rack_tile());
+  const TileCounts placed = rack_tiles_of(play);
   if (placed.blanks() > k.blanks()) best.offer(BLANK, play.score());
 
   const int word_mult = word_multiplier(board, play);

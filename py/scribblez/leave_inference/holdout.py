@@ -11,8 +11,9 @@ the content hash leaves out.
 Generators run at seed 0, which draws a fresh random base per chunk, so the
 two never share games.
 
-Each .slog gets its .forgone sidecar, as the generators' chunks do. The
-sidecars are reproducible as they stand, and the content hash covers them.
+Each .slog gets its .forgone sidecar, as the generators' chunks do. The tool
+is deterministic and its output leaves out sampled_turn, so the content hash
+covers the sidecars as written.
 """
 
 import hashlib

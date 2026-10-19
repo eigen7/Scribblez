@@ -1417,20 +1417,22 @@ TEST(LeaveInference, ForgoneBlockPerOpponentSlot) {
   const scribblez::GameLog g = log.view();
   const int turn = 7;
   const std::vector<float> row = decode_row(dict, g, turn, /*transpose=*/false);
-  const std::vector<ForgonePlays> forgone = forgone_plays_of_game(g, g.num_records, dict);
   const float* block = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars +
                        LeaveHistory::kSlots * Encoder::kSlotScalars;
   int applies = 0;
   for (int s = 0; s < LeaveHistory::kSlots; s += 2, block += Encoder::kForgoneScalars) {
     const int k = turn - 1 - s;
     Board after;
-    for (int i = 0; i <= k; ++i) {
+    for (int i = 0; i < k; ++i) {
       if (log.turns[i].move.type() == MoveType::PLAY) after.apply(log.turns[i].move);
     }
+    const ForgonePlays want =
+      scribblez::belief::compute_forgone_plays(after, dict, log.turns[k].move);
+    if (log.turns[k].move.type() == MoveType::PLAY) after.apply(log.turns[k].move);
     // The observer's rack just after move k is their rack before move k + 1.
     const TileCounts unseen = after.unseen_tiles(log.turns[k + 1].rack_before);
     for (int t = 0; t < TILE_KINDS; ++t) {
-      const int8_t margin = forgone[k].margin[t];
+      const int8_t margin = want.margin[t];
       const bool on = margin != ForgonePlays::kNone && unseen.count(Tile::of(t)) > 0;
       EXPECT_EQ(block[2 * t], on ? 1.0f : 0.0f) << s << " " << t;
       EXPECT_EQ(block[2 * t + 1], on ? float(margin) / kScoreDiffInputScale : 0.0f)

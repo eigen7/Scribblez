@@ -5,7 +5,7 @@
 // accompanies one .slog, with the same stem. Computing the margins means a
 // move generation per move, too slow to redo at every replay, so they are
 // computed once, where the games are generated, and read back
-// (docs/architecture.md, "Replay reconstruction").
+// (docs/architecture.md, "The replay-reconstruction invariant").
 //
 // File layout
 // -----------
