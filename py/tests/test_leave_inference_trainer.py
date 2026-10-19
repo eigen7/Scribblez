@@ -19,6 +19,7 @@ if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
 from scribblez import ffi, workloads  # noqa: E402
 from scribblez.dataset import SlogDataset  # noqa: E402
 from scribblez.leave_inference import holdout, loss, train_loop, trainer  # noqa: E402
+from scribblez.leave_inference.heads import HEAD_TILTED, HEADS  # noqa: E402
 from scribblez.leave_inference.model import LeaveInferenceModel  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.workloads import leave_inference  # noqa: E402
@@ -127,7 +128,12 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
     assert calls == [(False, 0.0)]
 
 
-def test_epoch_and_eval_run_a_model_from_the_uniform_prior(tmp_path):
+# The tilted head's readouts, which the autoregressive head does not report.
+TILTED_ONLY = {"eval_letter_calibration", "eval_value_bias", "eval_value_coverage"}
+
+
+@pytest.mark.parametrize("head", HEADS)
+def test_epoch_and_eval_train_each_head(tmp_path, head):
     binary = _ENGINE_DIR / "test_slog_writer"
     if not binary.is_file():
         pytest.skip("test_slog_writer not built")
@@ -139,16 +145,22 @@ def test_epoch_and_eval_run_a_model_from_the_uniform_prior(tmp_path):
     )
     shapes = {s.name: s.dims for s in ffi.task_input_shapes("leave_inference")}
     torch.manual_seed(0)
-    model = LeaveInferenceModel(shapes["input_spatial"][0], shapes["input_scalar"][0], 8, 1)
+    model = LeaveInferenceModel(
+        shapes["input_spatial"][0], shapes["input_scalar"][0], 8, 1, head=head
+    )
     table = loss.TableTensors(ffi.LeaveValueArrays(), "cpu")
 
     def batches():
         return ds.iter_batches(64, seed=0)
 
     before = train_loop.evaluate(model, table, batches(), "cpu")
-    # The zero-initialized head is the uniform prior, up to b's small start.
-    assert abs(before["eval_nll_vs_uniform"]) < 1e-2
-    assert {"eval_nll", "eval_letter_calibration", "eval_invalid_no_opponent_move"} <= set(before)
+    assert {"eval_nll", "eval_invalid_no_opponent_move"} <= set(before)
+    if head == HEAD_TILTED:
+        # The zero-initialized head is the uniform prior, up to b's small start.
+        assert abs(before["eval_nll_vs_uniform"]) < 1e-2
+        assert TILTED_ONLY <= set(before)
+    else:
+        assert not TILTED_ONLY & set(before)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
     rows = sum(len(b["opp_leave_valid"]) for b in batches())
     for _ in range(3):
