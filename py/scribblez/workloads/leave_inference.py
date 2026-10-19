@@ -16,6 +16,7 @@ from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.generational.scheduler import TICK_FOR_TASK
+from scribblez.leave_inference.heads import HEAD_TILTED, HEADS
 from scribblez.params import param
 from scribblez.workloads.base import RoleSpec, WorkerContext, WorkloadSpec
 from scribblez.workloads.position_eval import TRAINER_STATS
@@ -58,11 +59,11 @@ class LeaveInferenceParams:
     num_blocks: int = param(8, "conv tower residual blocks")
     trunk_channels: int = param(128, "conv tower width")
     head: str = param(
-        "tilted",
+        HEAD_TILTED,
         "output head (leave_inference/model.py): 'tilted' is the design's 29 floats over the "
         "leave table; 'autoregressive' decodes the leave tile by tile, a Python-only comparison "
         "that measures what the compact head gives up",
-        choices=("tilted", "autoregressive"),
+        choices=HEADS,
     )
 
 

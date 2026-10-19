@@ -18,7 +18,7 @@ import torch
 from scribblez.ffi import format_layout
 from scribblez.leave_inference import loss
 from scribblez.leave_inference.autoregressive import sequence_nll
-from scribblez.leave_inference.model import HEAD_AUTOREGRESSIVE
+from scribblez.leave_inference.heads import HEAD_AUTOREGRESSIVE
 
 LAYOUT = format_layout()["constants"]["leave_inference"]
 CAUSES = LAYOUT["cause"]
@@ -52,7 +52,7 @@ def to_device(batch: dict, device) -> Batch:
     )
 
 
-def batch_nll(model, table: loss.TableTensors, b: Batch) -> loss.TiltedResult:
+def batch_nll(model, table: loss.TableTensors, b: Batch) -> loss.LeaveNllResult:
     """The valid rows' NLL under the model's head. The autoregressive head
     has no implied readouts, so its result carries the NLL alone."""
     with torch.autocast(device_type=b.spatial.device.type, dtype=torch.bfloat16):
@@ -60,7 +60,7 @@ def batch_nll(model, table: loss.TableTensors, b: Batch) -> loss.TiltedResult:
     v = b.valid
     if model.head_kind == HEAD_AUTOREGRESSIVE:
         nll = sequence_nll(model.head, out["context"][v], b.tiles, b.length, b.pool)
-        return loss.TiltedResult(nll=nll)
+        return loss.LeaveNllResult(nll=nll)
     return loss.tilted_nll(
         table, out["theta"][v], out["a"][v], out["b"][v], b.leave_counts, b.length, b.pool
     )

@@ -19,8 +19,10 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-TILE_KINDS = 27
-MAX_LEAVE_LENGTH = 6
+from scribblez.ffi import format_layout
+from scribblez.leave_inference.loss import TILE_KINDS
+
+MAX_LEAVE_LENGTH = format_layout()["constants"]["leave_inference"]["max_leave_length"]
 
 
 class AutoregressiveHead(nn.Module):

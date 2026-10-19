@@ -16,13 +16,11 @@ import torch.nn.functional as F
 from torch import nn
 
 from scribblez.leave_inference.autoregressive import AutoregressiveHead
+from scribblez.leave_inference.heads import HEAD_AUTOREGRESSIVE, HEAD_TILTED, HEADS
+from scribblez.leave_inference.loss import TILE_KINDS
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 
-TILE_KINDS = 27
 B_INIT_LOGIT = -8.0
-HEAD_TILTED = "tilted"
-HEAD_AUTOREGRESSIVE = "autoregressive"
-HEADS = (HEAD_TILTED, HEAD_AUTOREGRESSIVE)
 
 
 class LeaveInferenceModel(nn.Module):
