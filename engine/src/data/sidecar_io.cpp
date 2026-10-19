@@ -24,4 +24,12 @@ void write_atomically(const std::string& path, const std::vector<char>& bytes) {
   std::filesystem::rename(tmp, path);
 }
 
+const char* take_bytes(const std::vector<char>& buf, size_t* off, size_t bytes,
+                       const std::string& context) {
+  if (*off + bytes > buf.size()) throw util::Exception("{}: truncated", context);
+  const char* at = buf.data() + *off;
+  *off += bytes;
+  return at;
+}
+
 }  // namespace scribblez
