@@ -7,7 +7,7 @@ leaves):
 
 1. **[The leave inference model](deep_bot.md#the-leave-inference-model),**
    `I_0`.
-2. **[The policy-set model](deep_bot.md#the-policy-set-model) (PSM),** in
+2. **[The policy-set model](deep_bot.md#the-policy-set-model),** in
    both of its forms. Training both on the same data lets the measurements
    choose between them.
 
@@ -25,7 +25,7 @@ Measurements inform the next step; no thresholds are fixed in advance.
 
 The leave inference model comes first. Its labels are free (true leaves from
 replay, no sims), so it is the quick way to prove the workload machinery, and
-the PSM's label generation then draws opponent leaves from it.
+the policy-set model's label generation then draws opponent leaves from it.
 
 Both models train on positions from the whole game except the endgame, with
 no weighting by bag size.
@@ -66,10 +66,10 @@ scheduler and data home read `games_per_generation`, `open_ahead` and
 5. stage the record, delivering its outputs with the record last;
 6. evict generations beyond the window.
 
-**Held-out data** differs between the two workloads. Leave-inference games
-are cheap, so the trainer regenerates its held-out set
-([below](#held-out-data-regenerated)). PSM pools are expensive, so they are
-held out as they are generated ([below](#held-out-pools)).
+**Held-out data** differs between the two workloads. Leave-inference games are
+cheap, so the trainer regenerates its held-out set
+([below](#held-out-data-regenerated)). Policy-set pools are expensive, so they
+are held out as they are generated ([below](#held-out-pools)).
 
 ## Versions
 
@@ -91,7 +91,7 @@ recorded beside the format version but never checked as a format.
 | Leave inference ONNX | metadata `leave_inference_format_version`, covering the encoder's inputs and the 29-float output layout. `LeaveInferenceSpec::kVersions` gates it and rejects a missing entry. Also stamped: `leave_values`, the content hash of the KLV whose values it was trained against, checked at load | metadata `tag`, `generation`, `policy` (the `hasty_spec` string), `head` |
 | Leave inference checkpoint | `leave_inference_format_version` and the `leave_values` hash in the checkpoint config. Resuming with a different value is refused, as the evidence trainer refuses a mismatched `move_encoding_version` | `GenerationalState` |
 | Pool sidecar | `kPoolFormatVersion` in its header, after the magic | header: the win table's and the leave inference model's identities (tag, generation, format version), or uniform beliefs; `horizon_plies` |
-| PSM ONNX and checkpoints | the existing `input_encoding_version` and `move_encoding_version`, plus `psm_format_version` for each form's set-conditioning stage and outputs | `tag`, `generation`, `form` |
+| Policy-set ONNX and checkpoints | the existing `input_encoding_version` and `move_encoding_version`, plus `policy_set_format_version` for each form's set-conditioning stage and outputs | `tag`, `generation`, `form` |
 
 Every format constant is a C++ constant, exported to Python through
 `format_layout()["constants"]` as the `.slog` and `.mset` versions are.
@@ -100,7 +100,8 @@ Python stamps and checks the engine's value and never keeps its own copy.
 
 ## The win table
 
-The PSM's label rollouts stop at a [versioned win table](deep_bot.md#sims).
+The policy-set model's label rollouts stop at a
+[versioned win table](deep_bot.md#sims).
 
 **It is a side product of the `leave_inference` workload.** That workload
 already plays the games the table is fitted from, under the policy the leave
@@ -120,8 +121,8 @@ model:
 - It lands first ([Build order](#build-order)).
 - v0's first table can be fitted on an existing HastyBot hidden-leaves
   corpus.
-- The PSM's survey-tool work, whose uniform-belief mode needs only the table,
-  can start immediately.
+- The policy-set model's survey-tool work, whose uniform-belief mode needs
+  only the table, can start immediately.
 
 **One feature definition.** The leaf is
 `table(spread + v(own leave), tiles unseen)`, from the side to move.
@@ -512,7 +513,7 @@ calibration metrics are left out.
 - `head` (from the comparison head on);
 - the network's and the optimizer's usual parameters, through profiles.
 
-## Workload 2: `psm`
+## Workload 2: `policy_set`
 
 ### Data: labeled pools
 
@@ -751,7 +752,7 @@ it is largest (6-tile leaves in particular), says whether the 29-float
 output is enough for the agent's beliefs or whether the tilt needs more terms
 before serving fixes the layout.
 
-**The PSM:**
+**The policy-set model:**
 
 6. **Engine:** in the survey tool:
    - `--win-table`, `--horizon-plies` and `--leave-inference`;
@@ -761,10 +762,11 @@ before serving fixes the layout.
 
    The uniform-belief path needs only step 1; the leave inference flags need
    step 5.
-7. **Python:** the `psm` workload's generator, the source-tag pin, held-out
-   pools, generations, and the pool reader on `ffi.move_set_positions`.
-8. **The two forms,** their trainers under `forms`, `psm_format_version`, the
-   eval metrics and the figure.
+7. **Python:** the `policy_set` workload's generator, the source-tag pin,
+   held-out pools, generations, and the pool reader on
+   `ffi.move_set_positions`.
+8. **The two forms,** their trainers under `forms`,
+   `policy_set_format_version`, the eval metrics and the figure.
 
 *Measure:* recall, cover, regret and tail recall against `N` for each form,
 and against static equity; time per batch of sets. This decides the form.

@@ -36,9 +36,9 @@ moved on. New plans go here, not in `docs/` proper.
   simulation agent for standard Scrabble. For each candidate and each sampled
   opponent rack, the opponent's reply is chosen in a subtree run on the
   opponent's own beliefs, over a diverse candidate set from a policy-set model
-  (PSM) that picks N moves to maximize the expected best value. Mechanical
+  that picks N moves to maximize the expected best value. Mechanical
   continuations, solved endgames, and a generational rack-inference network.
-  Starts with PSM labels and PSM recall.
+  Starts with policy-set labels and policy-set recall.
 - **[deep_bot_v0.md](deep_bot_v0.md)**: *proposed, not built.* The
   implementation plan for DeepBot's first two models, trained from
   HastyBot-vs-HastyBot games in standard Scrabble. First, a standalone leave
