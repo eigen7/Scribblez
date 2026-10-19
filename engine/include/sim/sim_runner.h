@@ -16,12 +16,12 @@
 // (trt_eval_service.h).
 //
 // Value truncation (docs/roadmap.md item 2): with horizon_plies set, a rollout
-// stops after that many plies, and the position-evaluation model's readout at
-// the horizon stands in for the rest of the game. The rollout then contributes
-// the model's outcome probabilities and predicted final delta instead of a
-// terminal outcome. A rollout whose game ends before the horizon, or whose
-// horizon falls in the endgame (outside the model's domain), contributes its
-// exact terminal outcome instead.
+// stops after that many plies, and a leaf stands in for the rest of the game:
+// either the position-evaluation model's readout at the horizon (its outcome
+// probabilities and predicted final delta), or a win table's P(win) for the
+// horizon's side to move (docs/plans/deep_bot.md, "The leaf: a win table"). A
+// rollout whose game ends before the horizon, or whose horizon falls in the
+// endgame, contributes its exact terminal outcome instead.
 
 #include "game/bag.h"
 #include "game/board.h"
@@ -40,6 +40,7 @@
 namespace scribblez {
 
 class Dictionary;
+class WinPctTable;
 struct MoveRequest;  // agent.h
 
 // The pre-move decision point candidates are simmed from. `opp_leave` is the
@@ -223,6 +224,12 @@ class SimRunner {
     // evaluate() calls itself.
     int horizon_plies = 0;
     nn::PositionEvalService* leaf_service = nullptr;
+    // The other leaf: a win table (sim/win_pct_table.h) read at the horizon on
+    // the side to move's win_table_feature. A truncation horizon takes exactly
+    // one of `leaf_service` and `win_table`. Non-owning, read-only, and shared
+    // freely across threads and runners. A truncated rollout's delta is then
+    // the horizon spread, and its draw probability 0.
+    const WinPctTable* win_table = nullptr;
     // Rollouts are HastyBot vs HastyBot. With this set, both sides hand the
     // endgame to the solver (EndgameAgent<HastyBot>) instead of playing it
     // greedily. Greedy endgames can misjudge a late-game candidate by tens of

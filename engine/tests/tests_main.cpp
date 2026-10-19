@@ -32,6 +32,7 @@
 #include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
 #include "sim/slog_position_simmer.h"
+#include "sim/win_pct_table.h"
 #include "sim/win_table_feature.h"
 #include "synthetic_equity.h"
 #include "temp_dir.h"
@@ -4603,6 +4604,102 @@ TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
   for (size_t c = 0; c < obs_terminal.size(); ++c)
     ASSERT_EQ(std::memcmp(&obs_terminal[c], &obs_truncated[c], sizeof(RolloutStats)), 0);
   fs::remove_all(tmp);
+}
+
+namespace win_table_leaf_test {
+
+// A win table whose cell reads p(spread, unseen) = 0.5 + spread / 1000 +
+// unseen / 10000, so a rollout's value pins down both of its feature's parts.
+WinPctTable linear_table() {
+  std::vector<float> grid(WinPctTable::kRows * WinPctTable::kCols);
+  for (int r = 0; r < WinPctTable::kRows; ++r) {
+    for (int u = 0; u < WinPctTable::kCols; ++u) {
+      grid[r * WinPctTable::kCols + u] =
+        0.5f + float(WinPctTable::kMaxSpread - r) / 1000.0f + float(u) / 10000.0f;
+    }
+  }
+  return WinPctTable::from_grid(grid.data(), {});
+}
+
+SimPosition opening_position() {
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = Rack::from_string("CATSEIQ");
+  return pos;
+}
+
+}  // namespace win_table_leaf_test
+
+// A truncated rollout takes the win table's P(win) for the horizon's side to
+// move, on that side's spread plus own leave value and the tiles it cannot
+// see, read from the root mover's side, with no draw and the horizon spread as
+// its delta.
+TEST(SimRunner, WinTableLeafReadsTheSideToMove) {
+  using namespace win_table_leaf_test;
+  namespace fs = std::filesystem;
+  const fs::path tmp = scribblez::testing::make_temp_dir("scribblez_win_table_leaf");
+  init_synthetic_equity(tmp);
+  const Dictionary d = medium_dict();
+  const SimPosition pos = opening_position();
+  const std::vector<Move> plays = MoveGenerator(pos.board, d).generate(pos.rack);
+  ASSERT_GE(plays.size(), 2);
+  const std::vector<Move> candidates = {plays.front(), Move::pass()};
+  const WinPctTable table = linear_table();
+
+  for (const int horizon : {3, 4}) {
+    SimRunner::Params params;
+    params.rollouts = 12;
+    params.threads = 2;
+    params.horizon_plies = horizon;
+    params.win_table = &table;
+    std::vector<RolloutTrace> traces;
+    const std::vector<Rollout> rollouts =
+      SimRunner(d, params).run_rollouts(pos, candidates, 400, params.rollouts, &traces);
+    int truncated = 0;
+    for (size_t i = 0; i < rollouts.size(); ++i) {
+      if (!traces[i].truncated) continue;
+      ++truncated;
+      const std::vector<TurnRecord>& turns = traces[i].turns;
+      const int n = int(turns.size());
+      ASSERT_EQ(n, horizon);
+      const TurnRecord& last = turns[n - 1];
+      const int to_move = 1 - last.player;
+      // The opponent moves first, so after an odd horizon the root mover is to
+      // move.
+      ASSERT_EQ(to_move == pos.mover, horizon % 2 == 1);
+      const int spread = last.cumulative_scores[to_move] - last.cumulative_scores[1 - to_move];
+      Rack own_leave = turns[n - 2].rack_before;
+      for (int g = 0; g < turns[n - 2].move.num_glyphs(); ++g) {
+        own_leave.remove(turns[n - 2].move.glyph(g).rack_tile());
+      }
+      const int placed = last.move.type() == MoveType::PLAY ? last.move.num_glyphs() : 0;
+      const int unseen = last.bag_size_before + last.rack_before.size() - placed;
+      const float p = table.win_prob(win_table_feature(spread, own_leave, unseen));
+      const double p_root = to_move == pos.mover ? p : 1.0 - p;
+      ASSERT_DOUBLE_EQ(rollouts[i].p_win, p_root) << "horizon " << horizon << " rollout " << i;
+      ASSERT_EQ(rollouts[i].p_draw, 0.0);
+      ASSERT_DOUBLE_EQ(rollouts[i].p_loss, 1.0 - p_root);
+      ASSERT_EQ(rollouts[i].delta, to_move == pos.mover ? spread : -spread);
+    }
+    EXPECT_GT(truncated, 0);
+  }
+  fs::remove_all(tmp);
+}
+
+// A horizon takes exactly one leaf: a model or a win table.
+TEST(SimRunner, WinTableLeafValidation) {
+  const WinPctTable table = win_table_leaf_test::linear_table();
+  SimRunner::Params p;
+  p.horizon_plies = 4;
+  p.win_table = &table;
+  SimRunner::validate(p);
+  ConstantLeafService leaf;
+  p.leaf_service = &leaf;
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
+  p.leaf_service = nullptr;
+  p.horizon_plies = 0;
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
 }
 
 // A horizon and a leaf service must be set together, and the horizon must be at
