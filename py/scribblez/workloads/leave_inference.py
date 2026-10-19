@@ -16,11 +16,18 @@ from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.generational.scheduler import TICK_FOR_TASK
+from scribblez.leave_inference import forgone
 from scribblez.leave_inference.heads import HEAD_TILTED, HEADS
 from scribblez.params import param
 from scribblez.workloads.base import RoleSpec, WorkerContext, WorkloadSpec
 from scribblez.workloads.position_eval import TRAINER_STATS
-from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
+from scribblez.workloads.selfplay_gen import (
+    GENERATOR_STATS,
+    STAGING_DIR,
+    ChunkSidecar,
+    generate,
+    hasty_spec,
+)
 
 
 @dataclass(frozen=True)
@@ -72,10 +79,21 @@ class LeaveInferenceParams:
     )
 
 
+# The sidecar every chunk carries: the forgone plays its rows read.
+FORGONE_SIDECAR = ChunkSidecar(forgone.SUFFIX, forgone.write_sidecars)
+
+
 def run_generate(ctx: WorkerContext) -> int:
     """Hidden-leaves HastyBot self-play without random openings: the leave is
-    what the model infers, from the policy's own moves."""
-    return generate(ctx, hasty_spec(ctx.params), face_up_leaves=False, random_opening_mean=0.0)
+    what the model infers, from the policy's own moves. Each chunk carries its
+    .forgone sidecars."""
+    return generate(
+        ctx,
+        hasty_spec(ctx.params),
+        face_up_leaves=False,
+        random_opening_mean=0.0,
+        sidecar=FORGONE_SIDECAR,
+    )
 
 
 SPEC = WorkloadSpec(

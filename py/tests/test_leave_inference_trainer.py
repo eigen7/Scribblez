@@ -18,7 +18,7 @@ if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
 
 from scribblez import ffi, workloads  # noqa: E402
 from scribblez.dataset import SlogDataset  # noqa: E402
-from scribblez.leave_inference import holdout, loss, train_loop, trainer  # noqa: E402
+from scribblez.leave_inference import forgone, holdout, loss, train_loop, trainer  # noqa: E402
 from scribblez.leave_inference.heads import HEAD_TILTED, HEADS  # noqa: E402
 from scribblez.leave_inference.model import LeaveInferenceModel  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
@@ -116,8 +116,8 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
     monkeypatch.setattr(
         leave_inference,
         "generate",
-        lambda ctx, player, face_up_leaves, random_opening_mean: calls.append(
-            (face_up_leaves, random_opening_mean)
+        lambda ctx, player, face_up_leaves, random_opening_mean, sidecar: calls.append(
+            (face_up_leaves, random_opening_mean, sidecar.suffix)
         ),
     )
 
@@ -125,7 +125,7 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
         params = leave_inference.LeaveInferenceParams()
 
     leave_inference.run_generate(Ctx())
-    assert calls == [(False, 0.0)]
+    assert calls == [(False, 0.0, forgone.SUFFIX)]
 
 
 # The tilted head's readouts, which the autoregressive head does not report.
@@ -140,6 +140,7 @@ def test_epoch_and_eval_train_each_head(tmp_path, head):
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
     subprocess.run([str(binary), str(tmp_path), "12", "6"], check=True, capture_output=True)
+    forgone.write_sidecars(tmp_path, threads=2)
     ds = SlogDataset(
         tmp_path, task="leave_inference", post_move=False, apply_symmetry=False, num_workers=1
     )

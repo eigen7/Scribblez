@@ -32,7 +32,7 @@ from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import CpuController, default_controls, progress_line
 from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.generational.records import TrainRecorder, read_controls
-from scribblez.leave_inference import holdout, loss, win_table
+from scribblez.leave_inference import forgone, holdout, loss, win_table
 from scribblez.leave_inference.model import LeaveInferenceModel
 from scribblez.leave_inference.train_loop import LAYOUT, evaluate, run_epoch
 from scribblez.paths import TagPaths
@@ -357,7 +357,7 @@ def run(ctx: WorkerContext) -> int:
     state = checkpoint.resume(paths, model, optimizer, device)
     ensure_window(paths, ctx.sink, state.generation_index, params.window)
     lifecycle.write_train_state(paths, asdict(state))
-    run_ctx["data_home"] = data_home.start_for(ctx, paths, params)
+    run_ctx["data_home"] = data_home.start_for(ctx, paths, params, chunk_sidecar=forgone.SUFFIX)
     try:
         run_generational_training(
             model, train_model, optimizer, recorder, paths, device, params, state, run_ctx
