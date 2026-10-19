@@ -9,7 +9,7 @@ Write **Alice** for the player to move and **Bob** for the opponent.
 
 ## The turn
 
-1. **Candidates.** The [policy-set model](#the-policy-set-model) (PSM)
+1. **Candidates.** The [policy-set model](#the-policy-set-model)
    proposes `N_A` candidates for Alice from all her legal moves.
 2. **Bob's racks.** Alice samples `R_A` racks for Bob (about 100) from her
    [belief](#beliefs). They are fixed for the turn and shared by every
@@ -35,8 +35,8 @@ holds `r`, what does Bob play?
 1. **Alice's racks, from Bob's side.** Bob samples `R_B` racks for Alice
    (about 20) from *his* belief. That belief conditions on the public history
    *including `a`*, and its pool is the tiles Bob cannot see, given `r`.
-2. **Bob's candidates.** The PSM, evaluated from Bob's information set (`r`
-   plus the public state), proposes `N_B` moves.
+2. **Bob's candidates.** The policy-set model, evaluated from Bob's
+   information set (`r` plus the public state), proposes `N_B` moves.
 3. **Bob's sims.** For each candidate `b` and each of Alice's sampled racks:
    1. Bob plays `b`.
    2. Alice and Bob each play one more move by the mechanical rule.
@@ -59,17 +59,18 @@ on: red for Alice's, blue for Bob's. Each node is colored by whose turn it is,
 and labeled with Alice's tiles, then Bob's, with `?` for tiles unknown to the
 evaluation's owner.*
 
-*Alice starts at `x ?`. She holds `x` and cannot see Bob's rack. The PSM
-proposes `a` among her candidates. Alice samples Bob's rack from her own
-belief, `y` or `z`. At `x z` it is Bob's turn, and Alice cannot choose Bob's
-move with her own values, so she **spawns** Bob's subtree, rooted at `? z`:
-Bob holds `z` and does not know Alice's tiles.*
+*Alice starts at `x ?`. She holds `x` and cannot see Bob's rack. The
+policy-set model proposes `a` among her candidates. Alice samples Bob's rack
+from her own belief, `y` or `z`. At `x z` it is Bob's turn, and Alice cannot
+choose Bob's move with her own values, so she **spawns** Bob's subtree, rooted
+at `? z`: Bob holds `z` and does not know Alice's tiles.*
 
-*In that subtree, the PSM proposes Bob's set, `b₁`, `b₂`, `b₃` and others.
-Bob samples racks for Alice from his own belief, which reads what `a` reveals
-(`x̂₁`, `x̂₂`, …). For each of his candidates, he sims: Alice plays hasty, Bob
-plays hasty, and the win table values the leaf. Each candidate scores the mean over Alice's sampled racks,
-and Bob's move is the argmax, here `b₁`.*
+*In that subtree, the policy-set model proposes Bob's set, `b₁`, `b₂`, `b₃`
+and others. Bob samples racks for Alice from his own belief, which reads what
+`a` reveals (`x̂₁`, `x̂₂`, …). For each of his candidates, he sims: Alice
+plays hasty, Bob plays hasty, and the win table values the leaf. Each
+candidate scores the mean over Alice's sampled racks, and Bob's move is the
+argmax, here `b₁`.*
 
 *Only that move crosses back. In Alice's evaluation Bob plays `b₁`; Alice
 samples replenishments, both players continue with hasty moves, and the leaf
@@ -145,8 +146,8 @@ Which works better is measured.
 
 The expected max of a set of win probabilities is monotone and submodular, so
 greedy construction comes within a factor of `1 − 1/e` of the best set. The
-PSM picks one move at a time, each maximizing its predicted gain over the
-moves already chosen:
+policy-set model picks one move at a time, each maximizing its predicted gain
+over the moves already chosen:
 
 `gain(a | S) = E[max(0, v(a) − max_{s∈S} v(s))]`
 
@@ -222,8 +223,8 @@ uniform refill, and the sims are paired across moves.
   more points below the greedy move's, the highest-scoring play. An exchange
   scores 0 under this rule.
 - **Pools need the tail.** The pool must include moves the prior ranks low
-  (exchanges, short plays, setups), or the PSM never learns that they can
-  win. The exhaustive survey recipe of
+  (exchanges, short plays, setups), or the policy-set model never learns that
+  they can win. The exhaustive survey recipe of
   [sim_labeled_candidates.md](sim_labeled_candidates.md) (every legal play,
   screened with racing) produces this shape of data.
 - **The labels can see moves the rollout policy never plays.** Every
@@ -247,7 +248,7 @@ plies by the mechanical rule and ends at the [win table](#sims), whose version
 the pool records.
 
 **Generations.** Once DeepBot runs, its own evaluations label positions, and
-each PSM generation trains on the previous agent's labels, as the move
+each policy-set generation trains on the previous agent's labels, as the move
 proposal model's generations do.
 
 ## Beliefs
@@ -354,7 +355,7 @@ spread of the opponent's leave value.
 
 | Use | Volume | Algorithm |
 |---|---|---|
-| PSM label generation | one query per position, ~300 samples | 1, on the CPU |
+| Policy-set label generation | one query per position, ~300 samples | 1, on the CPU |
 | The agent, Bob's beliefs | ~2,000 queries per turn, ~20 samples each | 1, batched on the GPU |
 | Many unbatched CPU queries | — | 2, falling back to 1 |
 
@@ -371,9 +372,10 @@ A frozen policy `P_k` generates games, and those games train `I_k`, the
   with the tiles drawn after it, so replay reconstructs every player's true
   leave at every turn ([architecture.md](../architecture.md)).
 - **Train `I_k` only on `P_k`'s games, warm-started from `I_{k−1}`.** Trained
-  on a buffer that mixes generations, an inference network converges to
-  Bayes' rule under the *average* policy, not the current one. Games for
-  `I_k` are generated cheaply, by playing `P_k`'s PSM top-1 without search.
+  on a buffer that mixes generations, an inference network converges to Bayes'
+  rule under the *average* policy, not the current one. Games for `I_k` are
+  generated cheaply, by playing `P_k`'s policy-set model's top-1 without
+  search.
 
 `I_k` models opponents who play like `P_k`. Against Macondo or human players
 that is a mismatch. Fine-tuning on recorded games with known racks is the
@@ -385,7 +387,7 @@ Per Alice candidate:
 
 | Item | Count |
 |---|---|
-| PSM calls for Bob | `R_A`: 100 |
+| Policy-set calls for Bob | `R_A`: 100 |
 | Bob's sims | `R_A · N_B · R_B`: 100 × 8 × 20 = 16,000 |
 | Alice's sims | `R_A ·` sims per rack: about 400 |
 
@@ -396,13 +398,15 @@ At roughly 0.1 to 0.3 ms each, that is 60 to 200 CPU-seconds, or very roughly
 2 to 7 seconds on 28 threads. Four levers:
 
 - **Successive halving over Alice's candidates.** A cheap first pass models
-  Bob as the PSM's top-1. The full subtree runs only for survivors.
+  Bob as the policy-set model's top-1. The full subtree runs only for
+  survivors.
 - **Racing in Bob's subtree.** Stop sampling Alice's racks once Bob's argmax
   is clear on the paired samples.
 - **Caching `β(a, r)`.** Every replenishment sim of `(a, r)` reuses Bob's
   choice.
-- **Batching** the network calls (the PSM's sets and the leave beliefs)
-  across subtrees, following the `BatchingPositionEvalService` pattern.
+- **Batching** the network calls (the policy-set model's sets and the leave
+  beliefs) across subtrees, following the `BatchingPositionEvalService`
+  pattern.
 
 ## Build order
 
@@ -412,13 +416,13 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
 1. **The leave inference model, `I_0`,** from HastyBot games, and the v0
    win table. *Measure:* held-out log-likelihood of the true leave against
    uniform draws.
-2. **PSM labels.** Pools over positions from the whole game except the
-   endgame, with opponent leaves from the leave inference model and rollouts stopped at the
-   win table.
-3. **PSM v0, both forms.** *Measure:* recall, meaning how often the pool's
-   sim-best move is in `S`, against the top `N` by value, by form, bag size
-   and `N`, with setups and exchanges reported separately; and each form's
-   time per batch of sets.
+2. **Policy-set labels.** Pools over positions from the whole game except the
+   endgame, with opponent leaves from the leave inference model and rollouts
+   stopped at the win table.
+3. **Policy-set v0, both forms.** *Measure:* recall, meaning how often the
+   pool's sim-best move is in `S`, against the top `N` by value, by form, bag
+   size and `N`, with setups and exchanges reported separately; and each
+   form's time per batch of sets.
 4. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
    after each of Alice's top candidates: Bob's chosen replies, how often
    each kind (bingo, setup, other) is chosen, and how stable the choice is
@@ -431,15 +435,15 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
      time, and matches against BestBot and `mset-sim` in standard Scrabble.
 6. **Allocation.** Successive halving and racing. *Measure:* the strength
    lost against the time saved.
-7. **Generations.** DeepBot labels positions for the next PSM, its games
-   train the next leave inference model and fit the next win table.
+7. **Generations.** DeepBot labels positions for the next policy-set model,
+   its games train the next leave inference model and fit the next win table.
 
 ## Limits
 
-- **Recall is unrecoverable at search time.** If the PSM omits Bob's best
-  reply, nothing in the search brings it back. PSM recall is therefore the
-  first measurement. Online transfer between Bob's subtrees could be added
-  if recall turns out to be the bottleneck.
+- **Recall is unrecoverable at search time.** If the policy-set model omits
+  Bob's best reply, nothing in the search brings it back. Policy-set recall is
+  therefore the first measurement. Online transfer between Bob's subtrees
+  could be added if recall turns out to be the bottleneck.
 - **Depth.** After the two searched decisions, every move is mechanical.
   Setups that pay off later than the sim's horizon are valued only by the
   win table. In Bob's sims, Alice's reply is hasty, so Bob's model of
@@ -460,9 +464,9 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
   DeepBot's online search is local in that document's vocabulary: each
   candidate and each Bob decision is valued by its own sims. What the
   idealized agent there learns across racks and candidates, DeepBot learns
-  offline into the PSM and the inference network. Recognizing which racks
-  have a setup in a given spot is the PSM's job, trained across many
-  positions, not something rediscovered in each search.
+  offline into the policy-set model and the inference network. Recognizing
+  which racks have a setup in a given spot is the policy-set model's job,
+  trained across many positions, not something rediscovered in each search.
 - **Macondo's BestBot** runs the same outer loop: candidates, sampled
   opponent racks, sims. Its opponent plays the static-equity argmax, so he
   never tries a setup that equity ranks low, and his rack is drawn
@@ -473,9 +477,10 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
   is the source of the rule that each player decides over their own beliefs,
   and that only moves cross between players' evaluations.
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** built the
-  evidence-fusion stage and the proves-best head. The PSM's set conditioning
-  and gain head are the same machinery, conditioned on chosen moves.
+  evidence-fusion stage and the proves-best head. The policy-set model's set
+  conditioning and gain head are the same machinery, conditioned on chosen
+  moves.
 - **[sim_labeled_candidates.md](sim_labeled_candidates.md)** supplies the
-  exhaustive survey recipe the PSM's labels extend.
+  exhaustive survey recipe the policy-set model's labels extend.
 - **[design.md §3](../design.md)** describes a public belief system. The
   generational inference network is a concrete first form of it.

@@ -24,7 +24,7 @@
   <text x="1130" y="228" text-anchor="middle" font-size="12">for rack y</text>
 
   <g stroke="#222" stroke-width="1.6" fill="none">
-    <!-- Alice: candidates from the PSM -->
+    <!-- Alice: candidates from the policy-set model -->
     <line x1="330" y1="109" x2="330" y2="135"/>
     <line x1="330" y1="135" x2="268" y2="198" marker-end="url(#arrow)"/>
     <line x1="330" y1="135" x2="372" y2="182" marker-end="url(#arrow)"/>
@@ -36,7 +36,7 @@
     <line x1="320" y1="359" x2="320" y2="420" marker-end="url(#arrow)"/>
     <!-- Alice's sim continuation -->
     <line x1="320" y1="468" x2="320" y2="540"/>
-    <!-- Bob: candidates from the PSM -->
+    <!-- Bob: candidates from the policy-set model -->
     <line x1="880" y1="164" x2="880" y2="190"/>
     <line x1="880" y1="190" x2="802" y2="258" marker-end="url(#arrow)"/>
     <line x1="880" y1="190" x2="880" y2="252" marker-end="url(#arrow)"/>
@@ -80,7 +80,7 @@
 
   <!-- Labels -->
   <g font-size="13">
-    <text x="338" y="128">PSM picks candidates</text>
+    <text x="338" y="128">Policy-set model picks candidates</text>
     <text x="284" y="168" text-anchor="end">a</text>
     <text x="378" y="174">other candidates</text>
     <text x="258" y="258">SAMPLE Bob's rack (R_A)</text>
@@ -93,7 +93,7 @@
     <text x="320" y="560" text-anchor="middle">leaf: win table</text>
     <text x="320" y="578" text-anchor="middle">→ averaged into q(a)</text>
 
-    <text x="888" y="182">PSM picks Bob's set</text>
+    <text x="888" y="182">Policy-set model picks Bob's set</text>
     <text x="826" y="230" text-anchor="end">b₁</text>
     <text x="884" y="244" text-anchor="middle" dx="18">b₂</text>
     <text x="935" y="230">b₃, …</text>
