@@ -233,6 +233,18 @@ class TagPaths:
     def plain_onnx_path(self, epoch: int) -> Path:
         return self.onnx_dir / "plain" / f"{ONNX_PREFIX}{epoch:04d}.onnx"
 
+    # The leave inference trainer's companion (docs/plans/deep_bot_v0.md): each
+    # generation's win table. A subdirectory, like the evidence trainer's
+    # companions, keeps it out of onnx_sidecars, which ship with every model.
+    def win_table_path(self, epoch: int) -> Path:
+        return self.onnx_dir / "win_table" / f"{ONNX_PREFIX}{epoch:04d}.csv"
+
+    @property
+    def holdout_dir(self) -> Path:
+        """Held-out games a trainer regenerates on its own machine. Not
+        delivered: any machine regenerates the same games."""
+        return self.root / "holdout"
+
     @staticmethod
     def onnx_epoch(path: Path) -> int:
         """The epoch an export's filename encodes -- the inverse of onnx_path."""

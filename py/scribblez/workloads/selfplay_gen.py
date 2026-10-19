@@ -150,13 +150,21 @@ def _publish(stats: WorkerStats, results: list[DeliveryResult]):
 
 
 def run_generate(ctx: WorkerContext) -> int:
-    """The generate-role runner for HastyBot self-play."""
-    return generate(ctx, hasty_spec(ctx.params))
+    """The generate-role runner for HastyBot self-play, in the information
+    condition and with the random openings the tag's params name."""
+    p = ctx.params
+    return generate(ctx, hasty_spec(p), p.face_up_leaves, p.random_opening_mean)
 
 
-def generate(ctx: WorkerContext, player_spec: str) -> int:
+def generate(
+    ctx: WorkerContext, player_spec: str, face_up_leaves: bool, random_opening_mean: float
+) -> int:
     """Play `player_spec` in both seats, one chunk per cycle, delivered to
-    staging in the background."""
+    staging in the background. `face_up_leaves` plays the variant in which
+    retained tiles are public, and `random_opening_mean` opens games with
+    random plies (selfplay.run_games). A workload whose model needs hidden
+    leaves or policy-only games passes False or 0 rather than carrying a param
+    it may not set."""
     p = ctx.params
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     shutil.rmtree(work_dir, ignore_errors=True)
@@ -177,8 +185,8 @@ def generate(ctx: WorkerContext, player_spec: str) -> int:
                 num_games=GAMES_PER_CHUNK,
                 threads=ctx.threads,
                 player_spec=player_spec,
-                random_opening_mean=p.random_opening_mean,
-                face_up_leaves=p.face_up_leaves,
+                random_opening_mean=random_opening_mean,
+                face_up_leaves=face_up_leaves,
             )
             gen_seconds = time.monotonic() - t0
             if rc != 0:
