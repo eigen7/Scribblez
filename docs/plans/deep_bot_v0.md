@@ -246,6 +246,8 @@ That is 348 planes.
   - the number of tiles it played or exchanged;
   - its score;
   - the bag count before it.
+- **Per opponent history move:** its [forgone plays](#forgone-plays), two
+  floats per tile kind.
 
 **Shared helpers.** The position encoder's helpers sit in an anonymous
 namespace in `game_state_encoder.cpp`. A mechanical commit moves every one
@@ -287,6 +289,46 @@ the replay.
   knows about the augmentation.
 - **`EncodeContext`** gains a pointer to the history, which only the leave
   inference task reads.
+
+#### Forgone plays
+
+For an opponent's play of `K` tiles (1 to 6) scoring `s`, and each tile kind
+`τ` (blank included), the **forgone play** is the best-scoring legal play on
+the board before the move that places a sub-multiset of `K + {τ}` and needs
+`τ`: it holds one more `τ` than `K` does. A play `K` alone could make never
+counts. The input is the margin, the forgone play's score minus `s`, clamped
+to [−50, 127]; −50 also stands for "no such play". The margin is a lower
+bound on what holding `τ` offered, since the leave's other tiles are unknown,
+and the model learns how much to read into it. Exchanges, passes and bingos
+have none.
+
+- **Computation** ([belief/forgone_plays.h](../../engine/include/belief/forgone_plays.h)):
+  one exhaustive generation from `K` plus a blank finds every `τ` at once.
+  The plays that place the extra blank give `τ = blank` directly. A blank
+  designated `L` stands for an extra `L` when the play also places all of
+  `K`'s own `L`s, and is rescored with `L`'s value on its square. About
+  0.4 ms per play, so about 6 ms per HastyBot game, against play_game's
+  8.4 ms.
+- **Stored, not replayed.** A `.forgone` sidecar beside each `.slog`
+  ([data/forgone_play_log.h](../../engine/include/data/forgone_play_log.h))
+  holds every move a row can read: turns `[0, eligible_end − 1)` of each
+  game. Its header pins the lexicon and the `.slog`'s game table, and the
+  DataLoader refuses a `.slog` whose sidecar is missing or does not match it
+  ([architecture.md](../architecture.md#the-replay-reconstruction-invariant)).
+- **No leak.** Which tile kinds get a margin depends on the board alone:
+  `τ` gets none once the board after the move holds every copy. Excluding
+  the tiles the mover could see would drop exactly the one-copy tiles they
+  kept, and the gaps would give the leave away.
+- **Applicability**, decided by the encoder: a margin enters the row only if
+  the observer, just after that move, could not see every copy of `τ` (not
+  on the board, not on their own rack then), so the opponent may have kept
+  one. A rule from the current pool would be wrong after the opponent
+  exchanged a tile the observer later drew.
+- **Encoding:** per opponent slot and tile kind, `[applies, margin / 100]`,
+  zero when it does not apply. 162 floats, so the row has 467 scalars, and
+  `kLeaveInferenceFormatVersion` is 2.
+- **Generation:** the workload's generators run `forgone_play_tool` over each
+  chunk before delivering it, and the trainer over its held-out games.
 
 #### The target, the task and the DataLoader mode
 
@@ -443,7 +485,9 @@ comparison measures what it gives up; it does not compete to replace it.
 ### The workload
 
 - **Roles:**
-  - `generate`: `selfplay_gen.generate` with `hasty_spec`.
+  - `generate`: `selfplay_gen.generate` with `hasty_spec`, then
+    `forgone_play_tool` over each chunk; the chunk's `.forgone` sidecars
+    travel with its `.slog`s (the spec's `chunk_sidecar`).
   - `train`: the trainer above, hosting the data home.
 - **`face_up_leaves` is not a param.** `selfplay_gen.generate` takes it as a
   keyword argument instead of reading it off the params. `run_generate` (for

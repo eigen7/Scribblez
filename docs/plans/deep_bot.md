@@ -276,7 +276,12 @@ reads:
   interleaved in game order. For each move, the squares it placed tiles on;
   the cross-checks as they stood *before* it was played, so the model sees
   which hooks and lanes the player had and passed up; and its tiles played,
-  whether it was an exchange or a pass, its score and the bag count then.
+  whether it was an exchange or a pass, its score and the bag count then;
+- **the opponent's forgone plays:** for each of their last 3 moves and each
+  tile kind `τ`, how much more the best play needing `τ` (the move's tiles
+  plus one more `τ`) would have scored. The network cannot search the lexicon
+  for this itself, and a large margin says the leave probably lacks `τ`
+  ([deep_bot_v0.md](deep_bot_v0.md#forgone-plays)).
 
 **The output: 29 floats.**
 

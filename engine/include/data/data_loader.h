@@ -29,11 +29,13 @@
 //   SamplingManager builds the shuffled epoch plan and slices it into batches
 
 #include "data/block_decoder.h"
+#include "data/forgone_play_log.h"
 #include "encoding/input_encoder.h"
 
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -68,7 +70,9 @@ class DataLoader {
 
   // `file_size` must be the file's size on disk. The row count is read from the file's own header;
   // `num_games` serves only as a fallback game count (one row per game) if
-  // that header cannot be read.
+  // that header cannot be read. For a task whose rows read the .forgone
+  // sidecar (BlockDecoder::reads_forgone), throws util::Exception if it is
+  // missing or does not match the file.
   void add_file(const std::string& path, int64_t num_games, int64_t file_size);
 
   // Totals across all registered files.
@@ -118,12 +122,18 @@ class DataLoader {
   // epoch can be planned before any body is loaded.
   class DataFile {
    public:
-    DataFile(const std::string& path, int64_t num_games, int64_t file_size, bool expand_all_turns);
+    // A non-null `forgone_lexicon` (a Dictionary::content_hash) means rows read
+    // the file's .forgone sidecar: its header is checked here, so a missing or
+    // mismatched sidecar throws util::Exception on the registering thread, and
+    // it loads and unloads with the body.
+    DataFile(const std::string& path, int64_t num_games, int64_t file_size, bool expand_all_turns,
+             const std::string* forgone_lexicon);
     ~DataFile();
 
     const std::string& path() const { return path_; }
     int64_t num_positions() const { return num_positions_; }
-    int64_t file_size() const { return file_size_; }
+    // Bytes resident while loaded: the body and any sidecar.
+    int64_t resident_size() const { return file_size_ + forgone_size_; }
     bool is_loaded() const;
 
     // Blocking.
@@ -133,8 +143,12 @@ class DataLoader {
     int64_t unload();
 
     // Blocks until a load attempt resolves, then returns the body, or nullptr
-    // if the file could not be read.
+    // if the file (or its sidecar) could not be read.
     const char* buffer() const;
+
+    // The loaded sidecar, or null if rows do not read one. Valid while
+    // buffer() is non-null.
+    const ForgoneSidecar* forgone() const { return forgone_.get(); }
 
     GameTurn sample_to_game_turn(int64_t sample_index) const;
 
@@ -146,10 +160,18 @@ class DataLoader {
     int64_t game_base(int64_t game) const { return cumulative_turns_[game]; }
 
    private:
+    // Checks the sidecar's header against the file's game table.
+    void check_forgone(const std::vector<GameMetadata>& metas);
+    // Loads the sidecar beside the body just read; false (logged) on failure.
+    bool load_forgone();
+
     std::string path_;
     int64_t num_positions_;
     int64_t file_size_;
     int64_t num_games_ = 0;
+    const std::string* forgone_lexicon_;
+    int64_t forgone_size_ = 0;
+    std::unique_ptr<ForgoneSidecar> forgone_;
 
     // cumulative_turns_[g] is game g's first row index; the extra last entry is
     // num_positions_.
@@ -237,7 +259,9 @@ class DataLoader {
 
   class FileManager {
    public:
-    FileManager(int64_t memory_budget, int num_prefetch_threads, bool expand_all_turns);
+    // `forgone_lexicon` as for DataFile.
+    FileManager(int64_t memory_budget, int num_prefetch_threads, bool expand_all_turns,
+                const std::string* forgone_lexicon);
     ~FileManager();
 
     void append(const std::string& path, int64_t num_games, int64_t file_size);
@@ -267,6 +291,7 @@ class DataLoader {
 
     int64_t memory_budget_;
     bool expand_all_turns_;
+    const std::string* forgone_lexicon_;
 
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;

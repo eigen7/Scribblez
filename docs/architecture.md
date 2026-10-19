@@ -104,6 +104,18 @@ reflects it at every turn; it is also baked into the final scores, so the
 targets stay consistent without further work. Default self-play uses no
 handicap.
 
+**The one exception: the `.forgone` sidecar.** The leave inference model's
+forgone plays ([belief/forgone_plays.h](../engine/include/belief/forgone_plays.h))
+cost a move generation per history move, too slow to redo at every replay.
+`forgone_play_tool` computes them once per `.slog`, where the games are
+generated, and the loader reads them back
+([data/forgone_play_log.h](../engine/include/data/forgone_play_log.h)). They are
+still a deterministic function of the replayed public state, so the sidecar
+is a cache, not a second source of truth. Its header pins the lexicon and the
+`.slog`'s game table: a stale or mismatched sidecar fails loudly at
+registration rather than feeding wrong inputs. A leave inference `.slog`
+without its sidecar cannot be trained on.
+
 ## Random openings
 
 `play_game --random-opening-mean M` (with `M > 0`) plays each game's first

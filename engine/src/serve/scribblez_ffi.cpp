@@ -4,6 +4,7 @@
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
+#include "data/forgone_play_log.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
 #include "data/probe_log.h"
@@ -389,14 +390,23 @@ int ScribblezSession::decode_rows(int task, const char* path, const int64_t* gam
   if (!t || !game_idx || !turn_idx || !out || n < 0) return -1;
   std::vector<char> buf;
   if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
-  scribblez::binlog::BlockDecoder decoder(spec, *t);
-  const int64_t row_floats = scribblez::binlog::BlockDecoder::row_floats_for(*t, spec);
-  for (int64_t j = 0; j < n; ++j) {
-    decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
-                       /*transpose=*/false, post_move,
-                       /*output_row=*/0, out + j * row_floats);
+  try {
+    std::optional<scribblez::ForgoneSidecar> forgone;
+    if (scribblez::binlog::BlockDecoder::reads_forgone(*t)) {
+      forgone.emplace(scribblez::forgone_path_of(path), buf.data(), spec.dict->content_hash());
+    }
+    scribblez::binlog::BlockDecoder decoder(spec, *t);
+    const int64_t row_floats = scribblez::binlog::BlockDecoder::row_floats_for(*t, spec);
+    for (int64_t j = 0; j < n; ++j) {
+      decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
+                         /*transpose=*/false, post_move,
+                         /*output_row=*/0, out + j * row_floats, forgone ? &*forgone : nullptr);
+    }
+    return 0;
+  } catch (const std::exception& e) {
+    std::cerr << "scribblez_decode_rows: " << e.what() << "\n";
+    return -1;
   }
-  return 0;
 }
 
 int scribblez_decode_rows(ScribblezSession* s, int task, const char* path, const int64_t* game_idx,
@@ -1022,10 +1032,16 @@ DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
 
 void scribblez_dl_delete(DataLoaderHandle* h) { delete h; }
 
-void scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_games,
-                           int64_t file_size) {
-  if (!h || !path) return;
-  h->loader.add_file(path, num_games, file_size);
+int scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_games,
+                          int64_t file_size, char* out_err, int err_cap) {
+  if (!h || !path) return -1;
+  try {
+    h->loader.add_file(path, num_games, file_size);
+    return 0;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
 }
 
 int64_t scribblez_dl_num_positions(const DataLoaderHandle* h) {

@@ -11,9 +11,10 @@ concept RecordsLeaveHistory = requires { requires Task::kRecordsLeaveHistory; };
 
 template <typename Task>
 void PositionEncoder::encode_row(const GameLog& g, int sampled_turn, bool post_move, bool transpose,
-                                 float* out_row) {
+                                 float* out_row, std::span<const belief::ForgonePlays> forgone) {
   LeaveHistory* history = RecordsLeaveHistory<Task> ? &history_ : nullptr;
   const int mover = replay_to_sampled(g, sampled_turn, post_move, history);
+  if (history) attach_forgone(sampled_turn, forgone);
   if (transpose) {
     enc_ = enc_.transpose();
     if (history) history_ = history_.transpose();

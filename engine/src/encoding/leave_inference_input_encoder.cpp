@@ -60,6 +60,18 @@ float* encode_slot_scalars(const LeaveHistorySlot& slot, bool opponent, float* o
   return end;
 }
 
+// An opponent slot's forgone-play scalars: per tile kind, whether its margin
+// applies, then the margin.
+float* encode_forgone_scalars(const LeaveHistorySlot& slot, float* out) {
+  for (int t = 0; t < TILE_KINDS; ++t, out += 2) {
+    const int8_t margin = slot.forgone.margin[t];
+    if (margin == belief::ForgonePlays::kNone || !((slot.unseen_by_other >> t) & 1u)) continue;
+    out[0] = 1.0f;
+    out[1] = float(margin) / kScoreDiffInputScale;
+  }
+  return out;
+}
+
 }  // namespace
 
 LeaveHistory LeaveHistory::transpose() const {
@@ -81,6 +93,10 @@ void LeaveInferenceInputEncoder::encode(const LeaveInferenceInput& in, const Dic
   cursor = encode_current_scalars(in, cursor);
   for (int s = 0; s < LeaveHistory::kSlots; ++s) {
     cursor = encode_slot_scalars(in.history->slots[s], LeaveHistory::is_opponent_slot(s), cursor);
+  }
+  for (int s = 0; s < LeaveHistory::kSlots; ++s) {
+    if (LeaveHistory::is_opponent_slot(s))
+      cursor = encode_forgone_scalars(in.history->slots[s], cursor);
   }
   RELEASE_ASSERT(cursor == out + kInputFloats);
 }

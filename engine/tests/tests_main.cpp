@@ -1172,7 +1172,9 @@ std::vector<float> decode_row(const Dictionary& dict, const scribblez::GameLog& 
                               bool transpose) {
   scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
   std::vector<float> row(LeaveInferenceTask::kRowFloats);
-  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, transpose, row.data());
+  const std::vector<scribblez::belief::ForgonePlays> forgone =
+    forgone_plays_of_game(g, g.num_records, dict);
+  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, transpose, row.data(), forgone);
   return row;
 }
 
@@ -1405,6 +1407,52 @@ TEST(LeaveInference, RowBlocksMatchLayout) {
   }
 }
 
+// Each opponent slot's forgone block holds its move's margins, for the tile
+// kinds the observer could not all see just after that move.
+TEST(LeaveInference, ForgoneBlockPerOpponentSlot) {
+  using namespace leave_inference_test;
+  using scribblez::belief::ForgonePlays;
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = long_game(dict);
+  const scribblez::GameLog g = log.view();
+  const int turn = 7;
+  const std::vector<float> row = decode_row(dict, g, turn, /*transpose=*/false);
+  const std::vector<ForgonePlays> forgone = forgone_plays_of_game(g, g.num_records, dict);
+  const float* block = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars +
+                       LeaveHistory::kSlots * Encoder::kSlotScalars;
+  int applies = 0;
+  for (int s = 0; s < LeaveHistory::kSlots; s += 2, block += Encoder::kForgoneScalars) {
+    const int k = turn - 1 - s;
+    Board after;
+    for (int i = 0; i <= k; ++i) {
+      if (log.turns[i].move.type() == MoveType::PLAY) after.apply(log.turns[i].move);
+    }
+    // The observer's rack just after move k is their rack before move k + 1.
+    const TileCounts unseen = after.unseen_tiles(log.turns[k + 1].rack_before);
+    for (int t = 0; t < TILE_KINDS; ++t) {
+      const int8_t margin = forgone[k].margin[t];
+      const bool on = margin != ForgonePlays::kNone && unseen.count(Tile::of(t)) > 0;
+      EXPECT_EQ(block[2 * t], on ? 1.0f : 0.0f) << s << " " << t;
+      EXPECT_EQ(block[2 * t + 1], on ? float(margin) / kScoreDiffInputScale : 0.0f)
+        << s << " " << t;
+      applies += on;
+    }
+  }
+  EXPECT_GT(applies, 0);
+}
+
+// A history slot whose move has no forgone plays to read fails rather than
+// encoding zeros.
+TEST(LeaveInference, MissingForgonePlaysThrow) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = long_game(dict);
+  scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
+  std::vector<float> row(LeaveInferenceTask::kRowFloats);
+  EXPECT_ANY_THROW(
+    enc.encode_row<LeaveInferenceTask>(log.view(), 7, /*post_move=*/false, false, row.data()));
+}
+
 // OppLeaveTarget::cause on hand-built histories: each cause, whatever the
 // game played.
 TEST(LeaveInference, TargetCauses) {
@@ -1587,6 +1635,52 @@ TEST(ForgoneSidecar, HoldsEachGamesForgonePlays) {
     for (size_t k = 0; k < want.size(); ++k)
       EXPECT_EQ(got[k].margin, want[k].margin) << g << " " << k;
   }
+}
+
+// The leave inference DataLoader reads each row's forgone plays from the
+// sidecar, refusing at registration a .slog that has none.
+TEST(ForgoneSidecar, DataLoaderReadsIt) {
+  using namespace forgone_sidecar_test;
+  Dictionary dict = medium_dict();
+  const Corpus corpus(dict, 4);
+  scribblez::binlog::DataLoader::Params params;
+  params.spec = {&dict};
+  params.task = scribblez::binlog::DecodeTask::kLeaveInference;
+  params.num_worker_threads = 2;
+  params.num_prefetch_threads = 1;
+  scribblez::binlog::DataLoader loader(params);
+  loader.add_file(corpus.slog.string(), 4, int64_t(fs::file_size(corpus.slog)));
+  scribblez::binlog::DataLoader::EpochConfig config;
+  config.batch_size = int(loader.num_positions());
+  config.apply_symmetry = false;
+  loader.epoch_start(config);
+  std::vector<float> rows(size_t(config.batch_size) * loader.row_size_floats());
+  ASSERT_EQ(loader.load_batch(rows.data()), config.batch_size);
+
+  // Each row equals a direct decode with the sidecar's entries.
+  const std::vector<char> slog = corpus.bytes();
+  const ForgoneSidecar sidecar(forgone_path_of(corpus.slog.string()), slog.data(),
+                               dict.content_hash());
+  scribblez::binlog::BlockDecoder decoder(params.spec, params.task);
+  std::vector<float> one(loader.row_size_floats());
+  std::set<std::vector<float>> want;
+  const auto* metas = reinterpret_cast<const scribblez::binlog::GameMetadata*>(
+    slog.data() + sizeof(scribblez::binlog::FileHeader));
+  for (uint32_t gi = 0; gi < 4; ++gi) {
+    for (int t = metas[gi].eligible_begin; t < metas[gi].eligible_end; ++t) {
+      decoder.decode_one(slog.data(), corpus.slog.string(), gi, uint32_t(t), false, false, 0,
+                         one.data(), &sidecar);
+      want.insert(one);
+    }
+  }
+  for (int i = 0; i < config.batch_size; ++i) {
+    const auto begin = rows.begin() + int64_t(i) * loader.row_size_floats();
+    EXPECT_TRUE(want.contains(std::vector<float>(begin, begin + loader.row_size_floats()))) << i;
+  }
+
+  const Corpus bare(dict, 2, /*first_seed=*/300, /*with_sidecar=*/false);
+  EXPECT_THROW(loader.add_file(bare.slog.string(), 2, int64_t(fs::file_size(bare.slog))),
+               util::Exception);
 }
 
 // A sidecar that is missing, from another lexicon, or left over from an

@@ -62,8 +62,10 @@ inline int forgone_turns(const binlog::GameMetadata& gm) {
   return std::max(0, gm.eligible_end - 1);
 }
 
-// A fingerprint of a loaded .slog's game metadata, without sampled_turn (a
+// A fingerprint of a .slog's game metadata table, without sampled_turn (a
 // random draw that differs between otherwise identical files).
+std::string forgone_slog_binding(const binlog::GameMetadata* metas, uint32_t num_games);
+// The same, of a loaded .slog.
 std::string forgone_slog_binding(const char* slog);
 
 // The first `turns` entries of game `g`, by replay.

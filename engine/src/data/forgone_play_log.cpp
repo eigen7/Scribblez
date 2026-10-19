@@ -79,12 +79,15 @@ std::vector<std::vector<ForgonePlays>> all_games(const std::vector<char>& slog,
 
 }  // namespace
 
-std::string forgone_slog_binding(const char* slog) {
-  const uint32_t num_games = slog_num_games(slog);
-  std::vector<binlog::GameMetadata> metas(slog_metadata(slog), slog_metadata(slog) + num_games);
-  for (binlog::GameMetadata& m : metas) m.sampled_turn = 0;
+std::string forgone_slog_binding(const binlog::GameMetadata* metas, uint32_t num_games) {
+  std::vector<binlog::GameMetadata> copy(metas, metas + num_games);
+  for (binlog::GameMetadata& m : copy) m.sampled_turn = 0;
   return util::content_hash(
-    {reinterpret_cast<const char*>(metas.data()), metas.size() * sizeof(binlog::GameMetadata)});
+    {reinterpret_cast<const char*>(copy.data()), copy.size() * sizeof(binlog::GameMetadata)});
+}
+
+std::string forgone_slog_binding(const char* slog) {
+  return forgone_slog_binding(slog_metadata(slog), slog_num_games(slog));
 }
 
 std::vector<ForgonePlays> forgone_plays_of_game(const GameLog& g, int turns,

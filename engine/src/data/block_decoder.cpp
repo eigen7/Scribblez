@@ -2,15 +2,26 @@
 
 #include "data/binary_log.h"
 #include "data/data_loader.h"
+#include "data/forgone_play_log.h"
 #include "training/leave_inference_task.h"
 #include "training/max_move_per_lane_task.h"
 #include "training/training_task.h"
+#include "util/assert.h"
+#include "util/exception.h"
 
 #include <cstdlib>
 #include <iostream>
 
 namespace scribblez {
 namespace binlog {
+
+namespace {
+
+int eligible_end(const char* buf, uint32_t game_idx) {
+  return reinterpret_cast<const GameMetadata*>(buf + sizeof(FileHeader))[game_idx].eligible_end;
+}
+
+}  // namespace
 
 int BlockDecoder::input_floats_for(DecodeTask task, const InputEncodingSpec& spec) {
   switch (task) {
@@ -65,7 +76,8 @@ void BlockDecoder::decode(const char* buf, const std::string& path, int64_t loca
 
 void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t game_idx,
                               uint32_t turn_idx, bool transpose, bool post_move, int64_t output_row,
-                              float* output) {
+                              float* output, const ForgoneSidecar* forgone) {
+  RELEASE_ASSERT((forgone != nullptr) == reads_forgone(task_));
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf);
   if (hdr->magic != kMagic) {
     std::cerr << "BlockDecoder: bad magic in " << path << "\n";
@@ -89,7 +101,12 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
       pos_.encode_row<MaxMovePerLaneTask>(g, int(turn_idx), /*post_move=*/false, transpose, out);
       return;
     case DecodeTask::kLeaveInference:
-      pos_.encode_row<LeaveInferenceTask>(g, int(turn_idx), /*post_move=*/false, transpose, out);
+      if (int(turn_idx) >= eligible_end(buf, game_idx)) {
+        throw util::Exception("{}: game {} turn {} is past the eligible region", path, game_idx,
+                              turn_idx);
+      }
+      pos_.encode_row<LeaveInferenceTask>(g, int(turn_idx), /*post_move=*/false, transpose, out,
+                                          forgone->game(game_idx));
       return;
   }
 }

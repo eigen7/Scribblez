@@ -15,6 +15,9 @@
 #include <vector>
 
 namespace scribblez {
+
+class ForgoneSidecar;
+
 namespace binlog {
 
 // Which training task a decoder emits. This fixes the row layout and, in the
@@ -48,9 +51,16 @@ class BlockDecoder {
   void decode(const char* buf, const std::string& path, int64_t local_start, int64_t n_rows,
               const uint8_t* transposes, bool post_move, int64_t output_row_start, float* output);
 
+  // Whether `task` rows read the .slog's .forgone sidecar.
+  static bool reads_forgone(DecodeTask task) { return task == DecodeTask::kLeaveInference; }
+
   // Encodes one row for an explicit turn; the DataLoader's entry point.
+  // `forgone` is the .slog's sidecar, required iff reads_forgone(task). Throws
+  // util::Exception for a kLeaveInference turn outside the game's eligible
+  // region, whose history the sidecar does not cover.
   void decode_one(const char* buf, const std::string& path, uint32_t game_idx, uint32_t turn_idx,
-                  bool transpose, bool post_move, int64_t output_row, float* output);
+                  bool transpose, bool post_move, int64_t output_row, float* output,
+                  const ForgoneSidecar* forgone = nullptr);
 
   // The board decode_one last encoded, after its transpose, with its
   // move-generation caches built: for consumers that derive per-candidate

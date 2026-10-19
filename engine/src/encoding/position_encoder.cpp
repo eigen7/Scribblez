@@ -71,6 +71,31 @@ void PositionEncoder::record_history_slot(const GameLog& g, int k, LeaveHistoryS
   slot.bag_before = bag_size();
   enc_.board().ensure_movegen_caches(*spec_.dict);
   slot.cross_checks = CrossCheckMasks::of(enc_.board());
+  slot.unseen_by_other = unseen_by_other_after(move);
+}
+
+uint32_t PositionEncoder::unseen_by_other_after(const Move& move) const {
+  TileCounts unseen = enc_.board().unseen_tiles(racks_[1 - enc_.active_player()]);
+  if (move.type() == MoveType::PLAY) {
+    for (int i = 0; i < move.num_glyphs(); ++i) unseen.remove(move.glyph(i).rack_tile());
+  }
+  uint32_t mask = 0;
+  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
+    if (unseen.count(t) > 0) mask |= 1u << t.index();
+  }
+  return mask;
+}
+
+void PositionEncoder::attach_forgone(int sampled_turn,
+                                     std::span<const belief::ForgonePlays> forgone) {
+  for (int s = 0; s < LeaveHistory::kSlots; ++s) {
+    LeaveHistorySlot& slot = history_.slots[s];
+    if (!slot.present) continue;
+    const int k = sampled_turn - 1 - s;
+    RELEASE_ASSERT(k < int(forgone.size()), "turn {} has no forgone plays ({} stored)", k,
+                   forgone.size());
+    slot.forgone = forgone[k];
+  }
 }
 
 int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move,

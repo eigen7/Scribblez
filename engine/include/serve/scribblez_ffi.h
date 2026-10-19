@@ -83,7 +83,9 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
 // Training rows of `task` for specific positions: row j is (game_idx[j],
 // turn_idx[j]), encoded exactly as the DataLoader would, minus the symmetry
 // transpose. `out` takes n rows of scribblez_task_row_floats(s, task). Returns 0
-// on success, -1 on an I/O or header error or an unknown task.
+// on success, -1 on an I/O or header error, an unknown task, or, for leave
+// inference, a missing or mismatched .forgone sidecar or a turn past the
+// game's eligible region (the reason goes to stderr).
 //
 // For consumers that pair rows with per-position data (such as .sobs sim
 // observations, or a held-out set's cached results) and so must address
@@ -350,9 +352,11 @@ DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
 void scribblez_dl_delete(DataLoaderHandle* h);
 
 // Add files oldest first. `num_games` and `file_size` are what
-// scribblez_read_file_header reports.
-void scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_games,
-                           int64_t file_size);
+// scribblez_read_file_header reports. Returns 0, or -1 with the reason in
+// `out_err` (NUL-terminated, truncated to err_cap) when the task's rows read a
+// .forgone sidecar that is missing or does not match the file.
+int scribblez_dl_add_file(DataLoaderHandle* h, const char* path, int64_t num_games,
+                          int64_t file_size, char* out_err, int err_cap);
 
 int64_t scribblez_dl_num_positions(const DataLoaderHandle* h);
 
