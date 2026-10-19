@@ -185,15 +185,16 @@ class _TiltedNll(torch.autograd.Function):
 
 
 @dataclass
-class TiltedResult:
-    """Per-row results over the rows passed in: the NLL in nats, and the
-    implied presence probabilities and leave-value mean and variance (points)."""
+class LeaveNllResult:
+    """Per-row results over the rows passed in: the NLL in nats, and for the
+    tilted head its implied presence probabilities and leave-value mean and
+    variance (points). A head without those readouts leaves them None."""
 
     nll: torch.Tensor  # (N,)
-    presence: torch.Tensor  # (N, 27)
-    value_mean: torch.Tensor  # (N,)
-    value_var: torch.Tensor  # (N,)
-    true_value: torch.Tensor  # (N,), the true leave's
+    presence: torch.Tensor | None = None  # (N, 27)
+    value_mean: torch.Tensor | None = None  # (N,)
+    value_var: torch.Tensor | None = None  # (N,)
+    true_value: torch.Tensor | None = None  # (N,), the true leave's
 
 
 def tilted_nll(
@@ -205,7 +206,7 @@ def tilted_nll(
     length: torch.Tensor,
     pool: torch.Tensor,
     chunk: int = DEFAULT_CHUNK,
-) -> TiltedResult:
+) -> LeaveNllResult:
     """The NLL of each row's true leave (`leave_counts` (N, 27), of `length`
     1..6) under the tilted prior over `pool` (N, 27). Rows are grouped by
     length, one table pass per length present. All rows must be valid."""
@@ -216,10 +217,10 @@ def tilted_nll(
             )
 
 
-def _tilted_nll(table, theta, a, b, leave_counts, length, pool, chunk) -> TiltedResult:
+def _tilted_nll(table, theta, a, b, leave_counts, length, pool, chunk) -> LeaveNllResult:
     n = theta.shape[0]
     device = theta.device
-    out = TiltedResult(
+    out = LeaveNllResult(
         nll=torch.zeros(n, device=device),
         presence=torch.zeros(n, TILE_KINDS, device=device),
         value_mean=torch.zeros(n, device=device),

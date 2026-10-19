@@ -369,6 +369,8 @@ parity reference.
 |---|---|
 | `model.py` | The encoder (a conv tower over the 348 planes, an MLP over the scalars, fused into a context vector) and the heads |
 | `loss.py` | The tilted-prior NLL ([below](#the-loss)) |
+| `autoregressive.py` | The comparison head's decoder, step mask and sequence NLL ([below](#the-comparison-head)) |
+| `heads.py` | The heads' names, free of torch for the workload's `head` param |
 | `win_table.py` | The win-table fit; the engine writes and evaluates the tables through the FFI |
 | `trainer.py` | The generational loop and the win-table refit |
 | `train_loop.py` | One epoch, and the held-out eval |
@@ -425,7 +427,7 @@ by score plus exactly the leave value the tilt acts on.
 `head = autoregressive` replaces the 29 floats with a decoder over the sorted
 leave: a 27-way softmax per step, masked by the pool's remaining counts and by
 sort order, on the same encoder. It is trained and evaluated in Python only,
-and never exported. The `head` param arrives with it.
+and never exported. The workload selects it with the `head` param.
 
 It lands before serving. The gap between the two heads says whether the 29
 floats are enough or whether the tilt needs more terms, and that decides the
