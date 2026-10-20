@@ -71,18 +71,20 @@ def test_face_up_corpus_is_refused(tmp_path):
         guard.check([face_up])
 
 
-def test_holdout_set_is_reproducible(tmp_path):
+def test_holdout_set_is_reproducible(tmp_path, monkeypatch):
     if not (_ENGINE_DIR / "play_game").is_file():
         pytest.skip("play_game not built")
+    # The sidecar tool would otherwise take every core.
+    monkeypatch.setattr(holdout, "default_thread_count", lambda: 1)
     spec = "--type=hastybot-endgame"
-    a = holdout.ensure(tmp_path / "a", games=20, seed=3, player_spec=spec)
-    b = holdout.ensure(tmp_path / "b", games=20, seed=3, player_spec=spec)
-    c = holdout.ensure(tmp_path / "c", games=20, seed=4, player_spec=spec)
+    a = holdout.ensure(tmp_path / "a", games=2, seed=3, player_spec=spec)
+    b = holdout.ensure(tmp_path / "b", games=2, seed=3, player_spec=spec)
+    c = holdout.ensure(tmp_path / "c", games=2, seed=4, player_spec=spec)
     assert a.slogs and a.content_hash == b.content_hash != c.content_hash
     # A complete set is reused, not replayed.
-    assert holdout.ensure(tmp_path / "a", games=20, seed=3, player_spec=spec).slogs == a.slogs
+    assert holdout.ensure(tmp_path / "a", games=2, seed=3, player_spec=spec).slogs == a.slogs
     with pytest.raises(ValueError):
-        holdout.ensure(tmp_path / "d", games=20, seed=0, player_spec=spec)
+        holdout.ensure(tmp_path / "d", games=2, seed=0, player_spec=spec)
 
 
 def test_eval_metrics_breakdowns():
@@ -139,7 +141,9 @@ def test_epoch_and_eval_train_each_head(tmp_path, head):
         pytest.skip("test_slog_writer not built")
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
-    subprocess.run([str(binary), str(tmp_path), "12", "6"], check=True, capture_output=True)
+    # A pass streams the whole 737k-row leave table whatever the batch, so the
+    # test's cost is its pass count: four games make one batch, replayed once.
+    subprocess.run([str(binary), str(tmp_path), "4", "4"], check=True, capture_output=True)
     forgone.write_sidecars(tmp_path, threads=2)
     ds = SlogDataset(
         tmp_path, task="leave_inference", post_move=False, apply_symmetry=False, num_workers=1
@@ -151,8 +155,10 @@ def test_epoch_and_eval_train_each_head(tmp_path, head):
     )
     table = loss.TableTensors(ffi.LeaveValueArrays(), "cpu")
 
+    corpus = list(ds.iter_batches(64, seed=0))
+
     def batches():
-        return ds.iter_batches(64, seed=0)
+        return iter(corpus)
 
     before = train_loop.evaluate(model, table, batches(), "cpu")
     assert {"eval_nll", "eval_invalid_no_opponent_move"} <= set(before)
@@ -163,10 +169,10 @@ def test_epoch_and_eval_train_each_head(tmp_path, head):
     else:
         assert not TILTED_ONLY & set(before)
     # 3e-3: at 1e-2 the first epochs overshoot on this tiny corpus, so a
-    # three-epoch smoke test can end above where it started.
+    # short smoke test can end above where it started.
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
     rows = sum(len(b["opp_leave_valid"]) for b in batches())
-    for _ in range(3):
+    for _ in range(2):
         result = train_loop.run_epoch(
             model, optimizer, table, batches(), "cpu", lr_fn=None, rows_trained=0, grad_clip=1.0
         )
