@@ -44,8 +44,8 @@ Scribblez specifics for that workflow:
   flags every include as missing in a worktree that has never been built.
 - Build with `py/build.py --test` while building and testing a change: Release
   optimization minus link-time optimization, whose link step otherwise
-  dominates every incremental rebuild. All build types share one build dir, so
-  switching types recompiles everything.
+  dominates every incremental rebuild. Each build type has its own build tree,
+  and target/engine points at whichever was built last.
 - For Python work, `export PYTHONPATH=<worktree>/py` before running Python or
   tests: the Docker image makes py/ importable via a site-packages .pth file
   baked with the absolute path /workspace/repo/py (see "Python code" below),
@@ -82,9 +82,9 @@ availability.
 Layout -- where data lives and what provisions it:
 
 - /workspace/repo -- this repo (bind mount).
-  - target/archs/\<arch\>/ -- one CMake build tree per CPU microarchitecture
-    (created by py/build.py); target/engine is a symlink to this host's arch
-    build.
+  - target/archs/\<arch\>/\<build type\>/ -- one CMake build tree per CPU
+    microarchitecture and build type (created by py/build.py); target/engine
+    is a symlink to this host's arch build of the most recent type built.
 - /workspace/mount -- large + persistent data (bind mount; survives container
   relaunches):
   - lexica/ -- .kwg lexicon files, installed by setup_wizard.py from the
