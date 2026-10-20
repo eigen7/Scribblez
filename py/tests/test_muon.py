@@ -141,7 +141,7 @@ def test_training_reduces_the_loss():
     x = _inputs(0)
     with torch.no_grad():
         before = model(*x)["wld"].square().mean().item()
-    _step(model, opt, [0] * 20)
+    _step(model, opt, [0] * 5)  # 5 steps reach ~0.03x the start
     with torch.no_grad():
         assert model(*x)["wld"].square().mean().item() < 0.5 * before
 
