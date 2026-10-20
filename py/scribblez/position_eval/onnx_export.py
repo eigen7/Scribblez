@@ -6,8 +6,8 @@ placement head; consumers apply masking and softmax), with a dynamic batch
 dimension.
 """
 
+import functools
 import os
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -15,13 +15,7 @@ import onnx
 import torch
 from onnx import TensorProto, numpy_helper
 
-from scribblez.onnx_export_util import (
-    architecture_signature,
-    atomic_output,
-    common_metadata,
-    undo_initializer_dedup,
-    write_metadata,
-)
+from scribblez.onnx_export_util import common_metadata, export_graph
 
 from .model import PLACEMENT_HEAD_NAMES
 
@@ -87,47 +81,21 @@ def export_onnx(
     opset: int = 17,
 ):
     """Export `model` in eval mode to `path`, atomically."""
-    path = Path(path)
-    was_training = model.training
-    model.eval()
     device = next(model.parameters()).device
     dummy_spatial = torch.zeros(1, spatial_planes, board_size, board_size, device=device)
     dummy_scalar = torch.zeros(1, scalar_size, device=device)
-
-    # The legacy TorchScript exporter (dynamo=False) produces the output names
-    # and order the C++ loader binds to and the parity tests assert. It is
-    # deprecated since PyTorch 2.9; silence the warnings here.
-    with atomic_output(path) as tmp_path, warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        torch.onnx.export(
-            model,
-            (dummy_spatial, dummy_scalar),
-            str(tmp_path),
-            input_names=["input_spatial", "input_scalar"],
-            output_names=["wld", "score_diff", *PLACEMENT_HEAD_NAMES],
-            dynamic_axes={
-                name: {0: "batch"}
-                for name in ("input_spatial", "input_scalar", "wld", "score_diff")
-                + PLACEMENT_HEAD_NAMES
-            },
-            opset_version=opset,
-            dynamo=False,
-            # Folding would turn some weights into derived constants that the
-            # TensorRT refitter cannot map back to initializers
-            # (see onnx_export_util.py).
-            do_constant_folding=False,
-        )
-        undo_initializer_dedup(tmp_path)
+    names = ("input_spatial", "input_scalar", "wld", "score_diff", *PLACEMENT_HEAD_NAMES)
+    frozen = _frozen_lexicon_names(model)
+    export_graph(
+        model,
+        (dummy_spatial, dummy_scalar),
+        path,
+        input_names=names[:2],
+        output_names=names[2:],
+        dynamic_axes={name: {0: "batch"} for name in names},
         # The external-data location is a bare filename, resolved relative to
         # the model's directory, so it stays valid after the rename to `path`.
-        _externalize_frozen_lexicon(tmp_path, _frozen_lexicon_names(model))
-        write_metadata(
-            tmp_path,
-            {
-                **common_metadata(opp_leave_input),
-                "model-architecture-signature": architecture_signature(model, opset),
-                "graph": "position_eval",
-            },
-        )
-    if was_training:
-        model.train()
+        postprocess=functools.partial(_externalize_frozen_lexicon, frozen_names=frozen),
+        metadata={**common_metadata(opp_leave_input), "graph": "position_eval"},
+        opset=opset,
+    )

@@ -1,5 +1,9 @@
 """Shared machinery for the ONNX exporters (position_eval, move_set_eval).
 
+Every exporter traces through export_graph, which owns the steps every export
+needs: the module in eval mode and each submodule's mode restored afterwards,
+the tracer settings, and the metadata.
+
 Every exporter targets the same C++ TensorRT loader, which imposes three
 constraints:
 
@@ -14,6 +18,8 @@ constraints:
 import contextlib
 import hashlib
 import os
+import warnings
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import onnx
@@ -202,3 +208,72 @@ def atomic_output(path: Path):
         tmp_path.unlink(missing_ok=True)
         raise
     os.replace(tmp_path, path)
+
+
+# --- export_graph -----------------------------------------------------------
+
+
+@contextlib.contextmanager
+def eval_mode(module: nn.Module):
+    """Every submodule of `module` in eval mode inside the block, each back in
+    its own mode afterwards, even on error.
+
+    Restoring submodule by submodule, rather than calling train() on the top,
+    keeps a submodule that was deliberately in eval mode (a frozen backbone)
+    in eval mode. torch.onnx.export restores only the module it is given,
+    recursively, so a wrapper left in train mode would put everything it
+    wraps in train mode."""
+    modes = [(m, m.training) for m in module.modules()]
+    module.eval()
+    try:
+        yield
+    finally:
+        for m, training in modes:
+            m.training = training
+
+
+def export_graph(
+    graph: nn.Module,
+    args: tuple[torch.Tensor, ...],
+    path: str | Path,
+    *,
+    input_names: Sequence[str],
+    output_names: Sequence[str],
+    dynamic_axes: dict[str, dict[int, str]],
+    metadata: dict[str, str],
+    opset: int,
+    postprocess: Callable[[Path], None] | None = None,
+):
+    """Trace `graph` on the dummy inputs `args` to `path`, atomically, and
+    stamp `metadata` plus its architecture signature.
+
+    The trace runs in eval mode (eval_mode), with the legacy TorchScript
+    exporter, which produces the output names and order the engine binds to,
+    and without constant folding, which would turn weights into derived
+    constants the TensorRT refitter cannot map back to initializers.
+    `postprocess(tmp_path)` runs after the initializer de-duplication, before
+    the metadata (e.g. to move weights into external data)."""
+    path = Path(path)
+    with atomic_output(path) as tmp_path:
+        with eval_mode(graph), warnings.catch_warnings():
+            # Deprecated since PyTorch 2.9; still the exporter we target.
+            warnings.simplefilter("ignore", DeprecationWarning)
+            torch.onnx.export(
+                graph,
+                args,
+                str(tmp_path),
+                input_names=list(input_names),
+                output_names=list(output_names),
+                dynamic_axes=dynamic_axes,
+                opset_version=opset,
+                training=torch.onnx.TrainingMode.EVAL,
+                dynamo=False,
+                do_constant_folding=False,
+            )
+        undo_initializer_dedup(tmp_path)
+        if postprocess:
+            postprocess(tmp_path)
+        write_metadata(
+            tmp_path,
+            {"model-architecture-signature": architecture_signature(graph, opset), **metadata},
+        )
