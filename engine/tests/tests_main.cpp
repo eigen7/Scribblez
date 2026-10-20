@@ -3765,8 +3765,7 @@ KlvFixture write_synthetic_klv(const std::filesystem::path& dir) {
 
 TEST(LeaveValues, Synthetic) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_klv_XXXXXX";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_klv");
 
   KlvFixture fix = write_synthetic_klv(tmp);
   LeaveValues lv = LeaveValues::load(fix.path.string());
@@ -3817,8 +3816,7 @@ TEST(LeaveValues, RealKwg) {
 // not a silent opt-out of the adjustment.
 TEST(HastyEquity, BadPegFileThrows) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_heq_badpeg";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_heq_badpeg");
   KlvFixture fix = write_synthetic_klv(tmp);
 
   EXPECT_THROW(HastyEquity::init(fix.path.string(), (tmp / "missing.json").string()),
@@ -3833,8 +3831,7 @@ TEST(HastyEquity, Components) {
   // The equity components one at a time, on the synthetic leaves and an empty
   // pre-endgame table (so the PEG term is always 0).
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_heq_XXXXXX";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_heq");
 
   KlvFixture fix = write_synthetic_klv(tmp);
   std::filesystem::path peg_path = tmp / "peg.json";
@@ -3903,8 +3900,7 @@ TEST(HastyEquity, Components) {
 // equity. The single-move and batched paths must both get it right.
 TEST(HastyEquity, ExchangeBlankLeave) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_heq_xch_XXXXXX";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_heq_xch");
 
   KlvFixture fix = write_synthetic_klv(tmp);  // ? = 12.0
   std::filesystem::path peg_path = tmp / "peg.json";
@@ -4344,8 +4340,7 @@ TEST(Util, Helpers) {
 // linking TensorRT.
 TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_topk1_XXXXXX";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_topk1");
   KlvFixture fix = write_synthetic_klv(tmp);
   fs::path peg_path = tmp / "peg.json";
   {
@@ -4391,8 +4386,7 @@ TEST(HastyEquity, TopK1SelectionMatchesHastyBot) {
 // DDGPTWZ has no play on an empty board with tiny_dict().
 TEST(HastyBot, ExchangesInsteadOfPassingWithNoLegalPlay) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_hasty_exchange_XXXXXX";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_hasty_exchange");
   KlvFixture fix = write_synthetic_klv(tmp);
   fs::path peg_path = tmp / "peg.json";
   {
@@ -4568,7 +4562,7 @@ void init_synthetic_equity(const std::filesystem::path& tmp) {
 
 TEST(SimRunner, Basic) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_runner";
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_sim_runner");
   init_synthetic_equity(tmp);
 
   const Dictionary d = medium_dict();
@@ -4638,7 +4632,7 @@ TEST(SimRunner, Basic) {
 // plus the refill, the same for every candidate under common random numbers.
 TEST(SimRunner, RolloutKeepsTheOpponentsRack) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_runner_opp_rack";
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_sim_runner_opp_rack");
   init_synthetic_equity(tmp);
 
   const Dictionary d = medium_dict();
@@ -4806,8 +4800,7 @@ class NonFiniteLeafService : public scribblez::nn::PositionEvalService {
 // of the stub's outputs, flipped to the root mover's POV at an odd horizon.
 TEST(SimRunner, TruncatedPovParity) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_pov";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_sim_trunc_pov");
   KlvFixture fix = write_synthetic_klv(tmp);
   fs::path peg_path = tmp / "peg.json";
   {
@@ -4866,8 +4859,7 @@ TEST(SimRunner, TruncatedPovParity) {
 // threads share one leaf service.
 TEST(SimRunner, TruncatedDeterminismAndCrn) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_crn";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_sim_trunc_crn");
   KlvFixture fix = write_synthetic_klv(tmp);
   fs::path peg_path = tmp / "peg.json";
   {
@@ -4920,8 +4912,7 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
 // never called and the observations are byte-identical to an untruncated run's.
 TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_trunc_term";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_sim_trunc_term");
   KlvFixture fix = write_synthetic_klv(tmp);
   fs::path peg_path = tmp / "peg.json";
   {
@@ -4978,8 +4969,7 @@ TEST(SimRunner, ValidatesTruncationParams) {
 // process.
 TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_nonfinite_leaf";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_sim_nonfinite_leaf");
   KlvFixture fix = write_synthetic_klv(tmp);
   fs::path peg_path = tmp / "peg.json";
   {
@@ -5023,8 +5013,7 @@ TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
 // same in every rollout and each footprint class count is exactly 0 or n.
 TEST(SimRunner, KnownOppRack) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_openrack";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_sim_openrack");
   KlvFixture fix = write_synthetic_klv(tmp);
   fs::path peg_path = tmp / "peg.json";
   {
@@ -5074,8 +5063,7 @@ TEST(SimRunner, KnownOppRack) {
 // only the rest of their rack. The usual observation invariants hold.
 TEST(SimRunner, PartialLeave) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sim_partial";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_sim_partial");
   KlvFixture fix = write_synthetic_klv(tmp);
   fs::path peg_path = tmp / "peg.json";
   {
@@ -5231,8 +5219,7 @@ TEST(Glyph, CodeTablePinnedForCrossLanguageReaders) {
 
 TEST(MoveSetEvalTargetLog, Roundtrip) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_mset";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_mset");
   const std::string path = (tmp / "test.mset").string();
 
   constexpr uint32_t kFloats = move_set_eval::kTargetFloatsV1;
@@ -5288,8 +5275,7 @@ TEST(MoveSetEvalTargetLog, Roundtrip) {
 // blocks per record; the reader steps over them to every record's targets.
 TEST(MoveSetEvalTargetLog, ReadsPastLegacyPlaneBlocks) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_mset_legacy";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_mset_legacy");
   const std::string path = (tmp / "test.mset").string();
 
   constexpr uint32_t kFloats = move_set_eval::kTargetFloatsV1;
@@ -6021,8 +6007,7 @@ TEST(CrossCheckDelta, ModelFeaturesRestateTheEntries) {
 
 TEST(SimObservationLog, Roundtrip) {
   namespace fs = std::filesystem;
-  auto tmp = fs::temp_directory_path() / "scribblez_test_sobs";
-  fs::create_directories(tmp);
+  auto tmp = scribblez::testing::make_temp_dir("scribblez_test_sobs");
   const std::string path = (tmp / "test.sobs").string();
 
   // Synthetic observations with distinct values in every field, so a layout
