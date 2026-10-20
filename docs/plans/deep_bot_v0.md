@@ -211,9 +211,11 @@ position encoder's `InputEncodingSpec` and its version are untouched.
 **Its input is a value, not a replay.** `LeaveInferenceInput` holds:
 - the current position: the board, the observer's rack, the scores and the
   bag count;
-- a `LeaveHistory` of 5 slots. Each slot has a presence flag, the move, its
-  score, the bag count before it, and the cross-check planes as they stood
-  before it was played.
+- a `LeaveHistory` of the opponent's last 3 moves, and the tiles the
+  observer exchanged on their previous turn (empty if they did not). Each
+  slot has a presence flag, the move, its score, the bag count before it, the
+  cross-check planes as they stood before it was played, its forgone plays,
+  and which tile kinds its leave could hold.
 
 The encoder reads only this value. The agent will build the same value for a
 query whose most recent move is Alice's candidate
@@ -226,10 +228,10 @@ so serving needs no second encoder.
 |---|---|
 | Current board (`BoardPlanes`) | 31 |
 | Current cross-checks, horizontal and vertical | 52 |
-| Per history move (×5): squares it placed tiles on | 1 |
-| Per history move (×5): cross-checks before it was played | 52 |
+| Per history move (×3): squares it placed tiles on | 1 |
+| Per history move (×3): cross-checks before it was played | 52 |
 
-That is 348 planes.
+That is 242 planes.
 
 **Scalars:**
 
@@ -237,7 +239,8 @@ That is 348 planes.
   - the observer's rack counts (27);
   - the unseen pool, as a thermometer;
   - the score differential and the bag count;
-  - the length of the leave being predicted, one-hot over 1–6.
+  - the length of the leave being predicted, one-hot over 1–6;
+  - the tiles the observer exchanged on their previous turn (27 counts).
 - **Per history move:**
   - a presence flag (missing early in the game, and then the move's other
     floats are zero);
@@ -245,9 +248,8 @@ That is 348 planes.
   - the tiles it placed (27 counts);
   - the number of tiles it played or exchanged;
   - its score;
-  - the bag count before it.
-- **Per opponent history move:** its [forgone plays](#forgone-plays), two
-  floats per tile kind.
+  - the bag count before it;
+  - its [forgone plays](#forgone-plays), two floats per tile kind.
 
 **Shared helpers.** The position encoder's helpers sit in an anonymous
 namespace in `game_state_encoder.cpp`. A mechanical commit moves every one
@@ -255,14 +257,17 @@ this encoder calls into `encoding/board_planes.h`: the cross-check planes,
 the placement plane, the rack counts, the unseen-pool thermometer and the
 score-differential scalar. The two encoders then share one convention.
 
-**History slots** are in fixed order back from the current turn: the
-opponent's last move, then the observer's, then alternating, for 3 opponent
-moves and 2 of the observer's. Players alternate, so a slot's index fixes
-whose move it is.
+**History slots** are the opponent's last 3 moves, most recent first. The
+observer's own moves are left out: the opponent's rack was drawn before each
+of them, so a play or a pass by the observer tells nothing about it that the
+board does not. An exchange does, for the observer's previous turn only: the
+tiles it returned are unseen but cannot be in the leave. That reaches the
+row twice, as the exchanged tiles' counts and as the [leave
+pool](#the-leave-pool).
 
 **An opponent's exchange shows its count only.** The tiles they returned are
 hidden from the observer, so for an opponent exchange the 27 tile counts stay
-zero. The observer's own exchanges show their tiles. The opponent's drawn
+zero. The observer's own exchange shows its tiles. The opponent's drawn
 tiles never reach the input. One encoder test checks this by encoding the
 same public history with different hidden tiles and requiring identical
 rows.
@@ -275,13 +280,13 @@ the replay.
 
 - **The recorder.** `PositionEncoder::replay_to_sampled` gains an optional
   recorder argument, passed only by the leave inference task, so the other
-  tasks' replay is unchanged. Before applying each of the last 5 moves, the
-  recorder:
+  tasks' replay is unchanged. Before applying each of the opponent's last 3
+  moves, the recorder:
   - encodes the board's cross-check planes (after `ensure_movegen_caches`)
     straight into the slot;
   - stores the move, its score and the bag count.
 
-  That is 5 cross-check computations per row, and no Board copies.
+  That is 3 cross-check computations per row, and no Board copies.
 - **Symmetry.** When the DataLoader transposes the replayed state, the
   history is transposed with it. Each slot's move goes through
   `Move::transpose()`. Its cross-check planes get a spatial transpose that
@@ -289,6 +294,27 @@ the replay.
   knows about the augmentation.
 - **`EncodeContext`** gains a pointer to the history, which only the leave
   inference task reads.
+
+#### The leave pool
+
+The leave was kept from a rack the opponent drew before the observer's
+previous move. If that move was an exchange, its tiles went back to the bag
+afterwards: they are unseen, but cannot be in the leave. So the leave pool,
+the pool the prior is over (the target's `leave_pool`, which the loss and the
+uniform baseline read), is the unseen pool less those tiles (`leave_pool` in
+`leave_inference_input_encoder.h`). The model cannot make this correction
+itself: its letter weights act on presence, and the multiplicities come from
+the pool it is given.
+
+- **The refill differs.** The opponent's draw after their move came from a
+  bag that held the exchanged tiles, so a sampler draws the leave from the
+  leave pool and the refill from the unseen pool less the leave.
+- **Older exchanges are not modeled.** After an exchange two of the
+  observer's turns back, the opponent has drawn since, so its tiles cap the
+  leave (at most as many as they drew) rather than leave its pool. A
+  hypergeometric pool cannot express that, and the case (a large exchange,
+  then small plays) is rare. The exchanged-tile counts are not in the row for
+  it either.
 
 #### Forgone plays
 
@@ -320,20 +346,20 @@ have none.
   the tiles the mover could see would drop exactly the one-copy tiles they
   kept, and the gaps would give the leave away.
 - **Applicability**, decided by the encoder: a margin enters the row only if
-  the observer, just after that move, could not see every copy of `τ` (not
-  on the board, not on their own rack then), so the opponent may have kept
-  one. A rule from the current pool would be wrong after the opponent
+  that move's leave pool, as the observer saw it just after the move, holds
+  `τ`. A rule from the current pool would be wrong after the opponent
   exchanged a tile the observer later drew.
-- **Encoding:** per opponent slot and tile kind, `[applies, margin / 100]`,
-  zero when it does not apply. 162 floats, so the row has 467 scalars, and
-  `kLeaveInferenceFormatVersion` is 2.
+- **Encoding:** per slot and tile kind, `[applies, margin / 100]`, zero when
+  it does not apply. With the slots and the exchange counts, the row has 426
+  scalars, and `kLeaveInferenceFormatVersion` is 2.
 - **Generation:** the workload's generators run `forgone_play_tool` over each
   chunk before delivering it, and the trainer over its held-out games.
 
 #### The target, the task and the DataLoader mode
 
 - **`OppLeaveTarget`:** 7 sorted tile indices (27 letters with the blank at
-  26, padded with −1), the length, the validity flag and the cause.
+  26, padded with −1), the length, the validity flag and the cause, then the
+  [leave pool](#the-leave-pool) and the bag size.
 - **`LeaveInferenceTask`:** `encode_row` writes the input's encoding and the
   target.
 - **`DecodeTask::kLeaveInference`:** a third DataLoader task code, wired as
@@ -380,14 +406,14 @@ length. The 6-tile array has 737,311 rows; the 4-tile array has 25,254.
 
 #### Sampling: Algorithm 1, on the CPU
 
-`belief::LeaveSampler` takes the 29 floats, the leave's length, the
-observer's unseen pool, and the leave table.
+`belief::LeaveSampler` takes the 29 floats, the leave's length, the leave
+pool, the observer's unseen pool, and the leave table.
 
 - **One pass over the table** for that length gives each row's log weight,
   the CDF in table order, and `log Z`. Each row costs about 28 additions, as
   in the design.
 - **`sample(u)`** binary-searches the CDF, then adds a uniform refill from
-  the rest of the pool, drawn from the caller's seeded variates.
+  the unseen pool less the leave, drawn from the caller's seeded variates.
 - **`log_prob(leave)`** returns the leave's log probability, which the parity
   tests use.
 
@@ -414,7 +440,7 @@ parity reference.
 
 | File | Contents |
 |---|---|
-| `model.py` | The encoder (a conv tower over the 348 planes, an MLP over the scalars, fused into a context vector) and the heads |
+| `model.py` | The encoder (a conv tower over the 242 planes, an MLP over the scalars, fused into a context vector) and the heads |
 | `loss.py` | The tilted-prior NLL ([below](#the-loss)) |
 | `autoregressive.py` | The comparison head's decoder, step mask and sequence NLL ([below](#the-comparison-head)) |
 | `heads.py` | The heads' names, free of torch for the workload's `head` param |
@@ -538,7 +564,7 @@ Per generation, on the held-out positions:
 | Metric | Meaning |
 |---|---|
 | `eval_nll` | mean NLL of the true leave over valid rows, in nats |
-| `eval_nll_vs_uniform` | `eval_nll` minus the NLL under the hypergeometric prior over leaves from the unseen pool ([belief/leave_prior.h](../../engine/include/belief/leave_prior.h)) |
+| `eval_nll_vs_uniform` | `eval_nll` minus the NLL under the hypergeometric prior over leaves from the leave pool ([belief/leave_prior.h](../../engine/include/belief/leave_prior.h)) |
 | `eval_nll_bag_*`, `eval_nll_len_*` | `eval_nll` by bag band, and by leave length |
 | `eval_invalid_*` | the share of rows without information, by cause |
 | `eval_letter_calibration` | mean absolute gap between `E_p[mask]` and actual presence, per letter |
@@ -831,7 +857,7 @@ Step 1 depends on nothing else, and step 2 needs only step 1's
   GPU machines for the fleet proves costly. One evaluation per position is
   cheap enough for a CPU runtime, but the engine serves networks only
   through TensorRT today.
-- **The input size.** 348 planes is about 310 KB a row in FP32. If loader
+- **The input size.** 242 planes is about 220 KB a row in FP32. If loader
   bandwidth binds in step 3's throughput report, the history's cross-checks
   can shrink to their delta against the current cross-checks, which is zero
   away from the moves played since. That is a

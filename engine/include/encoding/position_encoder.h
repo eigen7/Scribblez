@@ -67,11 +67,13 @@ class PositionEncoder {
   // the mover's own next move.
   EncodeContext make_context(const GameLog& g, int sampled_turn, int mover, bool post_move) const;
 
-  // Fills history slot `slot` with turn `k`'s move, before it is applied.
+  // Fills history slot `slot` with turn `k`'s move (the opponent's), before it
+  // is applied.
   void record_history_slot(const GameLog& g, int k, LeaveHistorySlot& slot) const;
 
-  // LeaveHistorySlot::unseen_by_other for `move`, about to be applied.
-  uint32_t unseen_by_other_after(const Move& move) const;
+  // LeaveHistorySlot::leave_kinds for `move`, about to be applied, which the
+  // observer's `observer_exchange` just preceded.
+  uint32_t leave_kinds_after(const Move& move, const Rack& observer_exchange) const;
 
   // Copies each present history slot's entry of `forgone` in. Throws if a slot
   // reads past its end.

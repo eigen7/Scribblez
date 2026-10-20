@@ -25,8 +25,10 @@ enum class LeaveRowCause : uint8_t {
 
 // The opponent's leave: its tiles as sorted tile indices padded with -1, its
 // length, whether the row carries loss (1 or 0), and the LeaveRowCause. Then
-// what the loss and the eval read besides the input: the observer's unseen
-// pool as per-tile counts, which the leave's prior is over, and the bag size.
+// what the loss and the eval read besides the input: the leave pool
+// (leave_pool: the observer's unseen pool, less their exchange just before
+// the opponent's move) as per-tile counts, which the leave's prior is over,
+// and the bag size.
 struct OppLeaveTarget {
   static constexpr int kTiles = RACK_SIZE;
   static constexpr int kLengthOffset = kTiles;

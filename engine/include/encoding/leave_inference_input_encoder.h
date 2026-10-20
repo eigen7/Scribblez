@@ -7,7 +7,9 @@
 // model's InputEncodingSpec and version are untouched.
 //
 // A row is kSpatialPlanes 15x15 planes, channel-major, then kScalarFloats
-// scalars.
+// scalars. The history is the opponent's last LeaveHistory::kSlots moves: the
+// observer's own moves tell nothing about the opponent's leave beyond the
+// board, except an exchange on the observer's previous turn (below).
 //
 //   Spatial
 //     current board       BoardPlanes (31)
@@ -17,22 +19,24 @@
 //   Scalars
 //     current             the observer's rack counts (27), the unseen-pool
 //                         thermometer (100), the score differential (1), the
-//                         bag count / kCountScale (1), and the predicted
-//                         leave's length one-hot over 1..kMaxLeaveLength (6)
+//                         bag count / kCountScale (1), the predicted leave's
+//                         length one-hot over 1..kMaxLeaveLength (6), and the
+//                         tiles the observer exchanged on their previous turn
+//                         as counts (27)
 //     per history slot    present (1), move type one-hot (3), the tiles it
-//                         placed or exchanged as counts (27), how many (1), its
-//                         score / kScoreDiffInputScale (1), and the bag count
-//                         before it / kCountScale (1)
-//     per opponent slot   its forgone plays (belief/forgone_plays.h): per tile
+//                         placed as counts (27), how many it played or
+//                         exchanged (1), its score / kScoreDiffInputScale (1),
+//                         the bag count before it / kCountScale (1), then its
+//                         forgone plays (belief/forgone_plays.h): per tile
 //                         kind, whether the margin applies (1) and the margin /
 //                         kScoreDiffInputScale (1), tile kind-major (54)
 //
-// A margin applies when the slot's move has one for the tile kind and the
-// observer, just after that move, could not see every copy of it, so the
-// opponent may have kept one. Otherwise both floats are 0.
+// A margin applies when the slot's move has one for the tile kind and that
+// kind could be in the leave the move kept (LeaveHistorySlot::leave_kinds).
+// Otherwise both floats are 0.
 //
-// Hidden information never reaches a row: for an exchange in an opponent
-// slot, the tile counts stay zero and only the number shows.
+// Hidden information never reaches a row: for an exchange in a slot, the tile
+// counts stay zero and only the number shows.
 
 #include "belief/forgone_plays.h"
 #include "encoding/board_planes.h"
@@ -40,6 +44,7 @@
 #include "game/board.h"
 #include "game/move.h"
 #include "game/rack.h"
+#include "game/tile_counts.h"
 
 #include <array>
 
@@ -52,7 +57,7 @@ class Dictionary;
 // meaning changes; models stamp it and loaders accept only this version.
 inline constexpr int kLeaveInferenceFormatVersion = 2;
 
-// One past move as the observer saw it.
+// One of the opponent's past moves as the observer saw it.
 struct LeaveHistorySlot {
   bool present = false;          // false before the game had this many moves
   Move move;                     // in the position's board frame
@@ -61,24 +66,31 @@ struct LeaveHistorySlot {
   CrossCheckMasks cross_checks;  // the board's, just before it
   // The move's forgone plays, from the .forgone sidecar. Frame-invariant.
   belief::ForgonePlays forgone = belief::ForgonePlays::none();
-  // Bit t set iff the player who did not make the move could not see every
-  // tile of kind t just after it: not on the board, not on their own rack.
-  uint32_t unseen_by_other = 0;
+  // Bit t set iff the leave this move kept may hold a tile of kind t, as the
+  // observer saw it just after the move (leave_pool).
+  uint32_t leave_kinds = 0;
 };
 
-// The kSlots moves before a position, most recent first. Players alternate,
-// so slot 0 is the opponent's last move, slot 1 the observer's, and so on.
+// The opponent's kSlots moves before a position, most recent first, and the
+// tiles the observer exchanged on their previous turn.
 struct LeaveHistory {
-  static constexpr int kSlots = 5;
-  static constexpr int kOpponentSlots = (kSlots + 1) / 2;
-
-  static constexpr bool is_opponent_slot(int slot) { return slot % 2 == 0; }
+  static constexpr int kSlots = 3;
 
   // The history of the transposed position (Board::transpose).
   LeaveHistory transpose() const;
 
   std::array<LeaveHistorySlot, kSlots> slots;
+  Rack observer_exchange;  // empty unless the observer's previous move exchanged
 };
+
+// The tiles the leave an opponent's move kept may hold, as the observer saw it
+// just after that move: those unseen to the observer (`unseen`, which counts
+// the bag and the opponent's rack), less what the observer exchanged just
+// before the move. The opponent's rack was drawn before that exchange, so the
+// returned tiles cannot be in the leave, though they are unseen. An older
+// exchange is not subtracted: the opponent has drawn since, so its tiles cap
+// the leave rather than leave it, which a pool cannot express.
+TileCounts leave_pool(TileCounts unseen, const Rack& observer_exchange);
 
 // Everything the encoder reads, from the observer's side.
 struct LeaveInferenceInput {
@@ -96,14 +108,16 @@ struct LeaveInferenceInputEncoder {
 
   static constexpr int kCurrentPlanes = BoardPlanes::kPlanes + kCrossCheckPlanes;             // 83
   static constexpr int kSlotPlanes = 1 + kCrossCheckPlanes;                                   // 53
-  static constexpr int kSpatialPlanes = kCurrentPlanes + LeaveHistory::kSlots * kSlotPlanes;  // 348
+  static constexpr int kSpatialPlanes = kCurrentPlanes + LeaveHistory::kSlots * kSlotPlanes;  // 242
 
   static constexpr int kCurrentScalars = kRackCountFloats + kUnseenPoolThermoFloats +
-                                         kScoreDiffInputFloats + 1 + kMaxLeaveLength;  // 135
-  static constexpr int kSlotScalars = 1 + kMoveMetaTypeFloats + TILE_KINDS + 3;        // 34
-  static constexpr int kForgoneScalars = 2 * TILE_KINDS;                               // 54
-  static constexpr int kScalarFloats = kCurrentScalars + LeaveHistory::kSlots * kSlotScalars +
-                                       LeaveHistory::kOpponentSlots * kForgoneScalars;  // 467
+                                         kScoreDiffInputFloats + 1 + kMaxLeaveLength +
+                                         TILE_KINDS;      // 162
+  static constexpr int kForgoneScalars = 2 * TILE_KINDS;  // 54
+  static constexpr int kSlotScalars =
+    1 + kMoveMetaTypeFloats + TILE_KINDS + 3 + kForgoneScalars;  // 88
+  static constexpr int kScalarFloats =
+    kCurrentScalars + LeaveHistory::kSlots * kSlotScalars;  // 426
 
   static constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;
   static constexpr int kInputFloats = kSpatialFloats + kScalarFloats;

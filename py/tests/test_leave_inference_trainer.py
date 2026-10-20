@@ -162,7 +162,9 @@ def test_epoch_and_eval_train_each_head(tmp_path, head):
         assert TILTED_ONLY <= set(before)
     else:
         assert not TILTED_ONLY & set(before)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+    # 3e-3: at 1e-2 the first epochs overshoot on this tiny corpus, so a
+    # three-epoch smoke test can end above where it started.
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
     rows = sum(len(b["opp_leave_valid"]) for b in batches())
     for _ in range(3):
         result = train_loop.run_epoch(

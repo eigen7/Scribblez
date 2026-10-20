@@ -211,7 +211,7 @@ const ScribblezShape kLeaveInferenceTargetShapes[] = {
   {"opp_leave_length", kScalarTargetDims, 1, 1},
   {"opp_leave_valid", kScalarTargetDims, 1, 2},
   {"opp_leave_cause", kScalarTargetDims, 1, 3},
-  {"unseen_pool", kPoolTargetDims, 1, 4},
+  {"leave_pool", kPoolTargetDims, 1, 4},
   {"bag_size", kScalarTargetDims, 1, 5},
   {nullptr, nullptr, 0, 0},
 };

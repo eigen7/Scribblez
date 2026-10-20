@@ -1188,9 +1188,9 @@ Rack kept_at(const TurnRecord& rec) {
 
 }  // namespace leave_inference_test
 
-// Each history slot is the move that many turns back, with its score, the bag
-// before it, and the board's cross-checks just before it; slots before the
-// game's first move are absent.
+// Each history slot is the opponent's move that many of their turns back,
+// with its score, the bag before it, and the board's cross-checks just before
+// it; slots before the game's first move are absent.
 TEST(LeaveInference, HistorySlotsMatchReplay) {
   using namespace leave_inference_test;
   Dictionary dict = medium_dict();
@@ -1201,8 +1201,9 @@ TEST(LeaveInference, HistorySlotsMatchReplay) {
   for (int turn : {2, 7}) {
     LeaveHistory history;
     enc.replay_to_sampled(g, turn, /*post_move=*/false, &history);
+    EXPECT_TRUE(history.observer_exchange.empty());  // test agents never exchange
     for (int s = 0; s < LeaveHistory::kSlots; ++s) {
-      const int k = turn - 1 - s;
+      const int k = turn - 1 - 2 * s;
       const LeaveHistorySlot& slot = history.slots[s];
       ASSERT_EQ(slot.present, k >= 0) << turn << " " << s;
       if (k < 0) continue;
@@ -1324,24 +1325,27 @@ TEST(LeaveInference, TransposedRowMirrorsPlanes) {
 }
 
 // An opponent's exchange shows only how many tiles went back; the observer's
-// own exchange shows which.
+// own previous exchange shows which.
 TEST(LeaveInference, OpponentExchangeTilesStayHidden) {
   using namespace leave_inference_test;
   Dictionary dict = medium_dict();
   Board board;
-  const auto encode_with = [&](int slot, const char* tiles) {
+  const auto encode_with = [&](int slot, const char* opponent_tiles, const char* own_tiles) {
     LeaveHistory history;
     history.slots[slot].present = true;
-    history.slots[slot].move = Move::exchange(TileCounts::from_string(tiles));
+    history.slots[slot].move = Move::exchange(TileCounts::from_string(opponent_tiles));
+    history.observer_exchange = Rack::from_string(own_tiles);
     const LeaveInferenceInput in{&board, Rack::from_string("ABCDEFG"), 0, 80, 4, &history};
     std::vector<float> row(Encoder::kInputFloats);
     Encoder::encode(in, dict, row.data());
     return row;
   };
-  EXPECT_EQ(encode_with(0, "QRS"), encode_with(0, "XYZ"));
-  EXPECT_NE(encode_with(1, "QRS"), encode_with(1, "XYZ"));
-  // The count still shows.
-  EXPECT_NE(encode_with(0, "QRS"), encode_with(0, "QR"));
+  for (int slot = 0; slot < LeaveHistory::kSlots; ++slot) {
+    EXPECT_EQ(encode_with(slot, "QRS", ""), encode_with(slot, "XYZ", "")) << slot;
+    // The count still shows.
+    EXPECT_NE(encode_with(slot, "QRS", ""), encode_with(slot, "QR", "")) << slot;
+  }
+  EXPECT_NE(encode_with(0, "QRS", "QRS"), encode_with(0, "QRS", "XYZ"));
 }
 
 // Each block of a decoded row holds what the header's layout says, at its
@@ -1387,10 +1391,14 @@ TEST(LeaveInference, RowBlocksMatchLayout) {
   for (int len = 1; len <= Encoder::kMaxLeaveLength; ++len) {
     EXPECT_EQ(bag[len], len == leave_length ? 1.0f : 0.0f) << len;
   }
+  const float* own_exchange = bag + 1 + Encoder::kMaxLeaveLength;
+  EXPECT_TRUE(std::all_of(own_exchange, own_exchange + TILE_KINDS, [](float v) { return v == 0; }));
+  EXPECT_EQ(own_exchange + TILE_KINDS, scalars + Encoder::kCurrentScalars);
   for (int s = 0; s < LeaveHistory::kSlots; ++s) {
-    const TurnRecord& rec = log.turns[turn - 1 - s];
+    const TurnRecord& rec = log.turns[turn - 1 - 2 * s];
+    ASSERT_NE(rec.player, me);
     const float* slot = scalars + Encoder::kCurrentScalars + s * Encoder::kSlotScalars;
-    const bool hidden = rec.player != me && rec.move.type() == MoveType::EXCHANGE;
+    const bool hidden = rec.move.type() == MoveType::EXCHANGE;
     EXPECT_EQ(slot[0], 1.0f) << s;
     for (int t = 0; t < kMoveMetaTypeFloats; ++t) {
       EXPECT_EQ(slot[1 + t], t == int(rec.move.type()) ? 1.0f : 0.0f) << s;
@@ -1407,8 +1415,8 @@ TEST(LeaveInference, RowBlocksMatchLayout) {
   }
 }
 
-// Each opponent slot's forgone block holds its move's margins, for the tile
-// kinds the observer could not all see just after that move.
+// Each slot's forgone block holds its move's margins, for the tile kinds the
+// observer could not all see just after that move.
 TEST(LeaveInference, ForgoneBlockPerOpponentSlot) {
   using namespace leave_inference_test;
   using scribblez::belief::ForgonePlays;
@@ -1417,11 +1425,11 @@ TEST(LeaveInference, ForgoneBlockPerOpponentSlot) {
   const scribblez::GameLog g = log.view();
   const int turn = 7;
   const std::vector<float> row = decode_row(dict, g, turn, /*transpose=*/false);
-  const float* block = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars +
-                       LeaveHistory::kSlots * Encoder::kSlotScalars;
   int applies = 0;
-  for (int s = 0; s < LeaveHistory::kSlots; s += 2, block += Encoder::kForgoneScalars) {
-    const int k = turn - 1 - s;
+  for (int s = 0; s < LeaveHistory::kSlots; ++s) {
+    const float* block = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars +
+                         (s + 1) * Encoder::kSlotScalars - Encoder::kForgoneScalars;
+    const int k = turn - 1 - 2 * s;
     Board after;
     for (int i = 0; i < k; ++i) {
       if (log.turns[i].move.type() == MoveType::PLAY) after.apply(log.turns[i].move);
@@ -1453,6 +1461,61 @@ TEST(LeaveInference, MissingForgonePlaysThrow) {
   std::vector<float> row(LeaveInferenceTask::kRowFloats);
   EXPECT_ANY_THROW(
     enc.encode_row<LeaveInferenceTask>(log.view(), 7, /*post_move=*/false, false, row.data()));
+}
+
+namespace leave_inference_test {
+
+// A TestAgent that exchanges its first three tiles on its second move.
+class ExchangeOnceAgent : public TestAgent {
+ public:
+  using TestAgent::TestAgent;
+
+  scribblez::MoveDecision make_move(const scribblez::MoveRequest& req) override {
+    if (++moves_ != 2) return TestAgent::make_move(req);
+    TileCounts tiles;
+    for (int i = 0; i < 3; ++i) tiles.add(req.my_rack.tiles()[i]);
+    return Move::exchange(tiles);
+  }
+
+ private:
+  int moves_ = 0;
+};
+
+}  // namespace leave_inference_test
+
+// The observer's exchange on their previous turn reaches the row as tile
+// counts, and leaves the pool the leave's prior is over: the opponent's rack
+// was drawn before those tiles went back. The true leave always fits the pool.
+TEST(LeaveInference, ObserverExchangeLeavesThePool) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  ExchangeOnceAgent a0(0, "A0", 11);
+  TestAgent a1(0, "A1", 12);
+  scribblez::Game game(a0, a1, dict, /*seed=*/13);
+  game.play();
+  const scribblez::GameLogStorage log = game.extract_log();
+  ASSERT_EQ(log.turns[2].move.type(), MoveType::EXCHANGE);  // a0's second move
+  const scribblez::GameLog g = log.view();
+  const std::vector<scribblez::belief::ForgonePlays> forgone =
+    forgone_plays_of_game(g, g.num_records, dict);
+
+  const int turn = 4;  // a0 to move; its previous turn was the exchange
+  scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
+  std::vector<float> row(LeaveInferenceTask::kRowFloats);
+  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, false, row.data(), forgone);
+  TileCounts exchanged;
+  for (int i = 0; i < log.turns[2].move.num_glyphs(); ++i) {
+    exchanged.add(log.turns[2].move.glyph(i).rack_tile());
+  }
+  const float* own = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars - TILE_KINDS;
+  const float* pool = row.data() + LeaveInferenceTask::kInputFloats + OppLeaveTarget::kPoolOffset;
+  const TileCounts unseen = enc.enc().board().unseen_tiles(enc.rack(enc.enc().active_player()));
+  const Rack leave = kept_at(log.turns[turn - 1]);
+  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
+    EXPECT_EQ(own[t.index()], float(exchanged.count(t))) << t.index();
+    EXPECT_EQ(pool[t.index()], float(unseen.count(t) - exchanged.count(t))) << t.index();
+    EXPECT_LE(leave.count(t), int(pool[t.index()])) << t.index();
+  }
 }
 
 // OppLeaveTarget::cause on hand-built histories: each cause, whatever the

@@ -57,7 +57,7 @@ void scribblez_session_delete(ScribblezSession* s);
 //      "lane_mask" (30,)
 //   2  leave inference: training/leave_inference_task.h's input; targets
 //      "opp_leave_tiles" (7,), "opp_leave_length", "opp_leave_valid",
-//      "opp_leave_cause" (1,) each, "unseen_pool" (27,), "bag_size" (1,)
+//      "opp_leave_cause" (1,) each, "leave_pool" (27,), "bag_size" (1,)
 // The shape lists are in row order and owned by the library. Each query
 // returns NULL or -1 for an unknown task code.
 const ScribblezShape* scribblez_task_input_shapes(ScribblezSession* s, int task);

@@ -48,7 +48,7 @@ def to_device(batch: dict, device) -> Batch:
         tiles=batch["opp_leave_tiles"][valid].to(device),
         leave_counts=loss.counts_from_tiles(batch["opp_leave_tiles"][valid]).to(device),
         length=batch["opp_leave_length"][valid, 0].long().to(device),
-        pool=batch["unseen_pool"][valid].long().to(device),
+        pool=batch["leave_pool"][valid].long().to(device),
     )
 
 

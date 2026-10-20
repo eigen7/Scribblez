@@ -27,9 +27,10 @@ void OppLeaveTarget::encode(const EncodeContext& ctx, float* out) {
   const LeaveRowCause c = cause(ctx);
   out[kValidOffset] = c == LeaveRowCause::kValid ? 1.0f : 0.0f;
   out[kCauseOffset] = float(c);
-  uint8_t pool[TILE_KINDS];
-  compute_unseen_pool(pool, ctx.enc->board(), *ctx.pov_rack);
-  for (int l = 0; l < TILE_KINDS; ++l) out[kPoolOffset + l] = float(pool[l]);
+  const TileCounts pool =
+    leave_pool(ctx.enc->board().unseen_tiles(*ctx.pov_rack), ctx.leave_history->observer_exchange);
+  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t)
+    out[kPoolOffset + t.index()] = float(pool.count(t));
   out[kBagOffset] = float(ctx.bag_size);
 }
 

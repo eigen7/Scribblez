@@ -263,6 +263,9 @@ The **leave inference model** predicts the opponent's **leave**, the
 tiles they kept from their last move, from the observer's view of the game.
 The opponent's rack is that leave plus a refill drawn uniformly from the rest
 of the observer's unseen pool, which is exact: the refill is a uniform draw.
+The leave itself is drawn from the **leave pool**: the unseen pool less any
+tiles the observer exchanged just before the opponent's last move. The
+opponent's rack predates that exchange, though the refill may hold its tiles.
 The leave's length is public: the opponent's rack size minus the tiles their
 last move played or exchanged (a pass keeps the whole rack).
 
@@ -271,9 +274,10 @@ encoder and network, sharing no trunk or weights with another model. From the ob
 reads:
 
 - **the current position:** the board, the current cross-checks, the
-  observer's rack, the unseen pool, scores and the bag count;
-- **the last 5 moves:** the opponent's last 3 and the observer's last 2,
-  interleaved in game order. For each move, the squares it placed tiles on;
+  observer's rack, the unseen pool, scores and the bag count, and the tiles
+  the observer exchanged on their previous turn, if they did;
+- **the opponent's last 3 moves.** The observer's own moves say nothing about
+  the opponent's leave beyond the board, except that exchange. For each move, the squares it placed tiles on;
   the cross-checks as they stood *before* it was played, so the model sees
   which hooks and lanes the player had and passed up; and its tiles played,
   whether it was an exchange or a pass, its score and the bag count then;
@@ -295,8 +299,7 @@ Those numbers define the leave distribution as the pool prior, tilted:
 
 `log p(ℓ) = log P_prior(ℓ | pool) + Σ_{l ∈ ℓ} θ_l + a·v(ℓ) − b·v(ℓ)² − log Z`
 
-over leaves `ℓ` of the public length that the observer's unseen pool can
-supply. `P_prior` is the hypergeometric draw from that pool: `Π_l C(n_l, c_l)`
+over leaves `ℓ` of the public length that the leave pool can supply. `P_prior` is the hypergeometric draw from that pool: `Π_l C(n_l, c_l)`
 up to a constant, where `n_l` is the pool's count of `l` and `c_l` the
 leave's.
 

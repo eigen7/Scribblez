@@ -45,7 +45,7 @@ def test_shapes_cover_the_row():
         "opp_leave_length",
         "opp_leave_valid",
         "opp_leave_cause",
-        "unseen_pool",
+        "leave_pool",
         "bag_size",
     ]
     total = sum(int(np.prod(s.dims)) for s in inputs + targets)
@@ -86,7 +86,7 @@ def test_decode_rows_matches_the_task_width(slogs):
     )
     start = {name: begin for name, begin, _, _ in targets}
     assert rows[0, start["opp_leave_cause"]] == _LAYOUT["cause"]["no_opponent_move"]
-    pool = rows[:, start["unseen_pool"] : start["unseen_pool"] + 27]
+    pool = rows[:, start["leave_pool"] : start["leave_pool"] + 27]
     assert (pool.sum(axis=1) >= rows[:, start["bag_size"]] + 7).all()
 
 

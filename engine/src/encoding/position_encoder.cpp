@@ -18,6 +18,21 @@ void remove_played_or_exchanged(Rack& rack, const Move& m) {
   }
 }
 
+// The tiles `m` put back in the bag: empty unless it is an exchange.
+Rack exchanged_tiles(const Move& m) {
+  Rack out;
+  if (m.type() != MoveType::EXCHANGE) return out;
+  for (int i = 0; i < m.num_glyphs(); ++i) out.add(m.glyph(i).rack_tile());
+  return out;
+}
+
+// The history slot turn `k` fills for a position at `sampled_turn`, or -1: the
+// opponent's moves are every second turn back from sampled_turn - 1.
+int history_slot(int sampled_turn, int k) {
+  const int back = sampled_turn - 1 - k;
+  return back % 2 == 0 && back / 2 < LeaveHistory::kSlots ? back / 2 : -1;
+}
+
 // A move from the game log, which is in the untransposed frame, brought into
 // the frame given by `transposed`.
 Move in_frame(const Move& m, bool transposed) { return transposed ? m.transpose() : m; }
@@ -71,17 +86,19 @@ void PositionEncoder::record_history_slot(const GameLog& g, int k, LeaveHistoryS
   slot.bag_before = bag_size();
   enc_.board().ensure_movegen_caches(*spec_.dict);
   slot.cross_checks = CrossCheckMasks::of(enc_.board());
-  slot.unseen_by_other = unseen_by_other_after(move);
+  slot.leave_kinds =
+    leave_kinds_after(move, k > 0 ? exchanged_tiles(g.records[k - 1].move) : Rack{});
 }
 
-uint32_t PositionEncoder::unseen_by_other_after(const Move& move) const {
+uint32_t PositionEncoder::leave_kinds_after(const Move& move, const Rack& observer_exchange) const {
   TileCounts unseen = enc_.board().unseen_tiles(racks_[1 - enc_.active_player()]);
   if (move.type() == MoveType::PLAY) {
     for (int i = 0; i < move.num_glyphs(); ++i) unseen.remove(move.glyph(i).rack_tile());
   }
+  const TileCounts pool = leave_pool(unseen, observer_exchange);
   uint32_t mask = 0;
   for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
-    if (unseen.count(t) > 0) mask |= 1u << t.index();
+    if (pool.count(t) > 0) mask |= 1u << t.index();
   }
   return mask;
 }
@@ -91,7 +108,7 @@ void PositionEncoder::attach_forgone(int sampled_turn,
   for (int s = 0; s < LeaveHistory::kSlots; ++s) {
     LeaveHistorySlot& slot = history_.slots[s];
     if (!slot.present) continue;
-    const int k = sampled_turn - 1 - s;
+    const int k = sampled_turn - 1 - 2 * s;
     RELEASE_ASSERT(k < int(forgone.size()), "turn {} has no forgone plays ({} stored)", k,
                    forgone.size());
     slot.forgone = forgone[k];
@@ -107,9 +124,11 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
   if (history) *history = LeaveHistory{};
 
   for (int k = 0; k < sampled_turn; ++k) {
-    // Slot 0 is the move just before the position.
-    const int slot = sampled_turn - 1 - k;
-    if (history && slot < LeaveHistory::kSlots) record_history_slot(g, k, history->slots[slot]);
+    if (history) {
+      const int slot = history_slot(sampled_turn, k);
+      if (slot >= 0) record_history_slot(g, k, history->slots[slot]);
+      if (k == sampled_turn - 2) history->observer_exchange = exchanged_tiles(g.records[k].move);
+    }
     const int mover = enc_.active_player();
     const Move& move = g.records[k].move;
     if (move.type() == MoveType::PLAY || move.type() == MoveType::EXCHANGE) {
