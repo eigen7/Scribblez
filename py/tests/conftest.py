@@ -1,6 +1,16 @@
-"""Suite-wide pytest setup: one CPU thread per math library and for
+"""Suite-wide pytest setup: no GPU, one CPU thread per math library and for
 torch.compile, seeded RNGs per test, and per-file progress lines for the
 default (non -v/-q) output.
+
+The suite uses no GPU at all. Tests run beside GPU work (the dashboard's
+training and generation), CUDA initialization alone costs seconds and device
+memory per process, and a GPU test cannot run on a machine without one. So
+CUDA_VISIBLE_DEVICES is emptied before torch loads, and SCZ_DEVICE (the device
+the trainers pick) is cpu. Both reach subprocesses, engine binaries included:
+the generators run on the engine's synthetic CPU model
+(--model=synthetic:<variant>, engine/include/nn/synthetic_eval_service.h)
+rather than a TensorRT engine. A test that needs CUDA therefore fails loudly
+here; it must not skip on torch.cuda.is_available(), which would hide it.
 
 Tests are often run beside other CPU work. Torch's CPU ops default to one
 thread per core, and on the tiny tensors tests use those threads spend their
@@ -32,6 +42,8 @@ under -s, whose prints would interleave). -v and -q keep the stock output.
 import os
 
 # Before numpy or torch load (both below), which read them once.
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["SCZ_DEVICE"] = "cpu"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = "1"

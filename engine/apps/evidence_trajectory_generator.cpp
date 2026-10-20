@@ -34,11 +34,12 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "nn/synthetic_eval_service.h"
+#include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "training/evidence_trajectory.h"
 #include "util/assert.h"
 #include "util/exception.h"
-#include "util/hash.h"
 #include "util/misc.h"
 #include "util/progress.h"
 
@@ -479,26 +480,27 @@ int main(int argc, char** argv) {
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
-    StudentService service(params);
-    service.load();
-    if (service.opp_leave_input() != opt.open_leaves) {
+    const std::unique_ptr<StudentService> service = nn::make_loaded_service(params);
+    if (service->opp_leave_input() != opt.open_leaves) {
       throw util::CleanException(
         "the model's input arm (opp_leave_input={}) must match --open-leaves={}: a mismatched "
         "proposer would score moves under an information condition the sims do not share",
-        service.opp_leave_input(), opt.open_leaves);
+        service->opp_leave_input(), opt.open_leaves);
     }
-    const InputEncodingSpec spec{&dict, service.opp_leave_input()};
-    const std::string proposer_hash = util::file_content_hash(params.onnx_path);
+    const InputEncodingSpec spec{&dict, service->opp_leave_input()};
+    const std::string proposer_hash = nn::model_content_hash(params.onnx_path);
 
     std::shared_ptr<nn::PositionEvalService> leaf_eval_service =
       nn::load_leaf_position_service(opt.leaf_model, params.cuda_device_id);
     std::string leaf_hash;
-    if (!opt.leaf_model.empty()) leaf_hash = util::file_content_hash(opt.leaf_model);
+    if (!opt.leaf_model.empty()) leaf_hash = nn::model_content_hash(opt.leaf_model);
 
     if (opt.gcg_mode()) {
-      run_gcg_mode(dict, spec, opt, &service, proposer_hash, leaf_eval_service.get(), leaf_hash);
+      run_gcg_mode(dict, spec, opt, service.get(), proposer_hash, leaf_eval_service.get(),
+                   leaf_hash);
     } else {
-      run_slog_mode(dict, spec, opt, &service, proposer_hash, leaf_eval_service.get(), leaf_hash);
+      run_slog_mode(dict, spec, opt, service.get(), proposer_hash, leaf_eval_service.get(),
+                    leaf_hash);
     }
     return 0;
   } catch (...) {

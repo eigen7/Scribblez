@@ -15,7 +15,7 @@
 
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
-#include "nn/trt_eval_service.h"
+#include "nn/eval_service.h"
 #include "sim/sim_runner.h"
 #include "training/evidence_trajectory_select.h"
 #include "training/move_set_encoder.h"
@@ -30,7 +30,7 @@
 
 namespace scribblez::evidence {
 
-using StudentService = nn::TrtEvalService<nn::MoveSetEvaluationSpec>;
+using StudentService = nn::MoveSetEvalService;
 
 // Throws util::CleanException on an unusable configuration, SimRunner params
 // included. Call before any worker thread exists: TrajectoryRunner builds its

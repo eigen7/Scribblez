@@ -66,6 +66,9 @@ add_library(scribblez_core STATIC
   # A GPU-free decorator over the EvalService interface, so it lives here and is
   # unit-tested against a scripted stub.
   src/nn/batching_position_eval_service.cpp
+  # The deterministic CPU stand-in for a served model that tests run the
+  # generators against (--model=synthetic:<variant>); GPU-free like the above.
+  src/nn/synthetic_eval_service.cpp
   src/agent/evidence_staging.cpp
   src/belief/forgone_plays.cpp
   src/belief/leave_prior.cpp

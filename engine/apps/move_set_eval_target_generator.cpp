@@ -41,6 +41,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "nn/synthetic_eval_service.h"
 #include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "sim/sim_runner.h"
@@ -48,7 +49,6 @@
 #include "training/move_set_eval_target_log.h"
 #include "util/assert.h"
 #include "util/exception.h"
-#include "util/hash.h"
 #include "util/math.h"
 #include "util/misc.h"
 #include "util/progress.h"
@@ -114,9 +114,7 @@ bool all_finite(const float* p, size_t n) {
   return std::all_of(p, p + n, [](float v) { return std::isfinite(v); });
 }
 
-// Held as the concrete service type: its evaluate() takes an aux-output
-// pointer the generator leaves null, and that overload hides the base one.
-using TeacherService = nn::TrtEvalService<nn::PositionEvaluationSpec>;
+using TeacherService = nn::PositionEvalService;
 
 // A contiguous run of one position's candidates with their encoded post-move
 // rows. An encoder worker produces it; the inference thread fills `targets`
@@ -370,7 +368,7 @@ void InferenceLoop::flush() {
     rows += p.candidates.size();
   }
   float* const head_out[] = {wld_buf_.data(), score_diff_buf_.data()};
-  service_->evaluate({inputs_.data(), rows}, head_out, /*aux_out=*/nullptr);
+  service_->evaluate({inputs_.data(), rows}, head_out);
   require_finite_teacher_outputs(rows);
   int cursor = 0;
   for (CandidateSlice& p : pending_) {
@@ -545,10 +543,9 @@ int main(int argc, char** argv) {
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
 
-    TeacherService service(params);
-    service.load();
-    const InputEncodingSpec spec{&dict, service.opp_leave_input()};
-    const std::string model_hash = util::file_content_hash(params.onnx_path);
+    const std::unique_ptr<TeacherService> service = nn::make_loaded_service(params);
+    const InputEncodingSpec spec{&dict, service->opp_leave_input()};
+    const std::string model_hash = nn::model_content_hash(params.onnx_path);
     opt.slice_candidates = std::min(kSliceCandidates, params.max_rows);
 
     // Games played face up must be labeled by a teacher that sees the leaves: a
@@ -590,8 +587,8 @@ int main(int argc, char** argv) {
         }
         forced = load_forced_candidates(sobs);
       }
-      process_file(p.bytes, p.sidecar(".mset"), dict, spec, &service, params.max_rows, model_hash,
-                   opt, opt.use_sobs ? &forced : nullptr, &meter);
+      process_file(p.bytes, p.sidecar(".mset"), dict, spec, service.get(), params.max_rows,
+                   model_hash, opt, opt.use_sobs ? &forced : nullptr, &meter);
     }
     meter.finish("move set eval targets");
     return 0;

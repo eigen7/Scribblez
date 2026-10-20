@@ -1,5 +1,9 @@
 """M1a's reader (scribblez/transfer_test/reader.py, loss.py, trainer.py) and
-its workload (scribblez/workloads/transfer_reader.py), on synthetic corpora."""
+its workload (scribblez/workloads/transfer_reader.py), on synthetic corpora.
+
+Everything runs on the CPU, with the reader's compiled FlexAttention swapped
+for a dense equivalent (tests/reader_dense_attention.py) except in
+test_dense_attention_matches_flex_attention, which holds the two together."""
 
 import dataclasses
 import math
@@ -11,22 +15,29 @@ from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
 from scribblez.transfer_test import loss as loss_mod
+from scribblez.transfer_test import reader as reader_mod
 from scribblez.transfer_test import trainer
 from scribblez.transfer_test.reader import (
     FOOTPRINT_HEADS,
+    Attention,
     Reader,
     ReaderConfig,
     _same_slot_bias,
     mask_mod_of,
     prior_outputs,
+    sequence_layout,
 )
 from scribblez.transfer_test.rows import RowConfig, assemble_row
 from scribblez.transfer_test.tokens import collate
 from scribblez.workloads import transfer_reader
+from tests.reader_dense_attention import dense_flex_attention, use_dense_attention
 from tests.test_transfer_test_reader_data import TEACHER_WIDTH, fake_file
 from torch.nn.attention.flex_attention import create_mask
 
-needs_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="FlexAttention needs CUDA")
+
+@pytest.fixture(autouse=True)
+def _dense_attention(monkeypatch):
+    use_dense_attention(monkeypatch)
 
 
 def _batch(tmp_path, rows: int = 2):
@@ -78,10 +89,9 @@ def _reader(width: int = 64) -> Reader:
     )
 
 
-@needs_cuda
 def test_an_untrained_reader_answers_with_the_prior(tmp_path):
-    b = _batch(tmp_path).to(torch.device("cuda"))
-    out = _reader().cuda()(b)
+    b = _batch(tmp_path)
+    out = _reader()(b)
     prior = prior_outputs(b)
     for name, value in out.items():
         torch.testing.assert_close(value, prior[name])
@@ -164,26 +174,42 @@ def test_rank_loss_weights_pairs_by_their_label_gap():
     assert loss_mod._rank_loss(queries([0.6, 0.0, 0.5]), 0.01) < 0.01
 
 
-@needs_cuda
 def test_the_readout_scores_the_prior_and_an_untrained_reader_alike(tmp_path):
-    b = _batch(tmp_path, rows=4).to(torch.device("cuda"))
-    out = _reader().cuda()(b)
+    b = _batch(tmp_path, rows=4)
+    out = _reader()(b)
     result = loss_mod.finish_readout({k: float(v) for k, v in loss_mod.readout(out, b).items()})
     assert result["heldout_rmse_reader"] == pytest.approx(result["heldout_rmse_prior"], abs=1e-6)
 
 
-@needs_cuda
+def test_dense_attention_matches_flex_attention(tmp_path, monkeypatch):
+    """The real compiled kernels (block mask and attention) agree with the
+    dense stand-in every other test runs on. Forward only: that is all
+    FlexAttention runs on the CPU."""
+    monkeypatch.undo()
+    b = _batch(tmp_path, rows=4)
+    attn = Attention(_reader().cfg).eval()
+    layout = sequence_layout(b, attn.head_dim)
+    x = torch.randn(*b.kind.shape[:1], layout.slots.shape[1], attn.q.in_features)
+    with torch.no_grad():
+        flex = attn(x, layout)
+        monkeypatch.setattr(reader_mod, "_flex_attention", dense_flex_attention)
+        dense = attn(x, layout)
+    torch.testing.assert_close(dense, flex, atol=1e-5, rtol=1e-4)
+
+
+# The trainer autocasts for cuda; on the CPU torch warns and runs in float32.
+@pytest.mark.filterwarnings("ignore:CUDA is not available:UserWarning")
 def test_training_steps_lower_the_loss_on_a_fixed_batch(tmp_path):
     b = _batch(tmp_path, rows=4)
     params = dataclasses.replace(
         transfer_reader.TransferReaderParams(), lr=3e-3, warmup_steps=1, train_steps=30
     )
-    model = _reader().cuda()
+    model = _reader()
     optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr)
     state = trainer.ReaderTrainState()
     batches = iter([b.apply(torch.Tensor.numpy)] * 30)
-    first = trainer.run_steps(model, model.tower, optimizer, batches, "cuda", params, state, 1)
-    last = trainer.run_steps(model, model.tower, optimizer, batches, "cuda", params, state, 29)
+    first = trainer.run_steps(model, model.tower, optimizer, batches, "cpu", params, state, 1)
+    last = trainer.run_steps(model, model.tower, optimizer, batches, "cpu", params, state, 29)
     assert state.steps == 30 and last["total"] < first["total"]
 
 

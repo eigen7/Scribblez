@@ -1,5 +1,6 @@
 """M1a's evaluation harness (scribblez/transfer_test/evaluate.py) and the
-trainer's best checkpoint, on synthetic corpora."""
+trainer's best checkpoint, on synthetic corpora, on the CPU with the reader's
+dense attention stand-in (tests/reader_dense_attention.py)."""
 
 from types import SimpleNamespace
 
@@ -11,10 +12,15 @@ from scribblez.transfer_test import evaluate as ev
 from scribblez.transfer_test import trainer
 from scribblez.transfer_test.reader import Reader, ReaderConfig
 from scribblez.transfer_test.rows import LEAF, RowConfig, assemble_row
+from tests.reader_dense_attention import use_dense_attention
 from tests.test_transfer_test_reader_data import TEACHER_WIDTH, fake_file
 
-needs_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="FlexAttention needs CUDA")
 PARAMS = {"max_held_out": 2, "max_probes": 8, "max_tokens": 2048, "graded_max": 0}
+
+
+@pytest.fixture(autouse=True)
+def _dense_attention(monkeypatch):
+    use_dense_attention(monkeypatch)
 
 
 def _scored(label, prior, probe_sum, probe_count, held) -> ev.Scored:
@@ -97,12 +103,13 @@ def test_the_best_checkpoint_round_trips(tmp_path):
         assert torch.equal(a, b)
 
 
-@needs_cuda
+# evaluate() autocasts for cuda; on the CPU torch warns and runs in float32.
+@pytest.mark.filterwarnings("ignore:CUDA is not available:UserWarning")
 def test_an_untrained_reader_scores_as_the_prior(tmp_path):
     files = [fake_file(tmp_path, k=k, seed=k) for k in (5, 6)]
     for f in files:
         f.labels["wins"] = np.arange(len(f.labels)) % 7  # labels that differ
-    result = ev.evaluate(_reader().cuda().eval(), PARAMS, files, "cuda", replicates=3)
+    result = ev.evaluate(_reader().eval(), PARAMS, files, "cpu", replicates=3)
     reader, prior = result["overall"]["reader"], result["overall"]["prior"]
     assert reader["heldout_rmse"] == pytest.approx(prior["heldout_rmse"], abs=1e-6)
     assert reader["pair_accuracy"] == pytest.approx(prior["pair_accuracy"])

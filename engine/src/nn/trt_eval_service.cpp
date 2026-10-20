@@ -3,6 +3,7 @@
 #include "encoding/input_encoder.h"
 #include "nn/batching_position_eval_service.h"
 #include "nn/shared_registry.h"
+#include "nn/synthetic_eval_service.h"
 
 #include <Eigen/Core>
 
@@ -10,6 +11,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -162,6 +164,9 @@ void TrtEvalService<Spec>::evaluate(const SpecBatch& batch, std::span<float* con
 
 template <typename Spec>
 std::unique_ptr<EvalService<Spec>> make_loaded_service(const NeuralNetParams<Spec>& params) {
+  if (const std::optional<SyntheticModel> synthetic = parse_synthetic_model(params.onnx_path)) {
+    return std::make_unique<SyntheticEvalService<Spec>>(*synthetic);
+  }
   auto svc = std::make_unique<TrtEvalService<Spec>>(params);
   svc->load();
   return svc;

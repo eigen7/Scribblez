@@ -61,7 +61,10 @@ class TrtEvalService : public EvalService<Spec> {
   NeuralNet<Spec> net_;
 };
 
-// A new, unshared service for `params`, already loaded.
+// A new, unshared service for `params`, already loaded. A params.onnx_path
+// naming a synthetic model (synthetic_eval_service.h) gets that test stand-in
+// instead of a TensorRT engine; so does everything served through here, the
+// shared create() and the leaf service below included.
 template <typename Spec>
 std::unique_ptr<EvalService<Spec>> make_loaded_service(const NeuralNetParams<Spec>& params);
 

@@ -1,7 +1,7 @@
 """Tests for the move set evaluation model training side: the move-feature encoder
 (pure CPU) and the end-to-end dataset -> train step -> recall eval path over a
-tiny generated .mset/.slog corpus (GPU, since the target generator builds a
-TensorRT engine).
+tiny generated .mset/.slog corpus, labeled by the engine's synthetic CPU
+teacher (--model=synthetic:hidden, nn/synthetic_eval_service.h).
 """
 
 import functools
@@ -244,53 +244,20 @@ def test_schedule_free_recalibrates_the_mset_trunk_batchnorm():
     assert not torch.equal(bn_at_training, first_bn.running_mean)
 
 
-def _export_teacher(onnx_path: Path, *, poison: bool = False) -> Path:
-    """A tiny randomly-initialized position-eval teacher exported to ONNX;
-    `poison` gives it an inf bias, so every readout is non-finite."""
-    from scribblez.ffi import task_input_shapes
-    from scribblez.position_eval.model import PositionEvalModel
-    from scribblez.position_eval.onnx_export import export_onnx
-
-    shapes = {s.name: s.dims for s in task_input_shapes()}
-    torch.manual_seed(0)
-    teacher = PositionEvalModel(
-        spatial_planes=shapes["input_spatial"][0],
-        scalar_size=shapes["input_scalar"][0],
-        trunk_channels=8,
-        num_blocks=3,
-    ).eval()
-    if poison:
-        with torch.no_grad():
-            teacher.trunk.stem[1].bias.fill_(float("inf"))
-    export_onnx(
-        teacher,
-        onnx_path,
-        spatial_planes=shapes["input_spatial"][0],
-        scalar_size=shapes["input_scalar"][0],
-        opp_leave_input=False,
-    )
-    return onnx_path
-
-
 @pytest.fixture(scope="module")
 def corpus_dir(tmp_path_factory) -> Path:
-    """A tiny .slog corpus labeled with .mset targets from a small teacher."""
+    """A tiny .slog corpus labeled with .mset targets from the synthetic teacher."""
     if not TARGET_GENERATOR.exists() or not SLOG_WRITER.exists():
         pytest.skip("engine binaries not built")
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
-    if not torch.cuda.is_available():
-        pytest.skip("no GPU")
     d = tmp_path_factory.mktemp("move_set_eval_train")
     subprocess.run([str(SLOG_WRITER), str(d), "12", "4"], check=True, capture_output=True)
-
-    onnx_path = _export_teacher(d / "teacher.onnx")
     result = subprocess.run(
         [
             str(TARGET_GENERATOR),
             f"--slog-dir={d}",
-            f"--model={onnx_path}",
-            "--fast-build",
+            "--model=synthetic:hidden",
             f"--quota-top={QUOTAS['top']}",
             f"--quota-mid={QUOTAS['mid']}",
             f"--quota-tail={QUOTAS['tail']}",
@@ -311,14 +278,12 @@ def test_generator_refuses_a_teacher_with_non_finite_readouts(corpus_dir, tmp_pa
     """A teacher whose readouts are non-finite (what FP16 overflow of a value
     model looks like) must stop the generator, not write an unusable corpus
     the trainer would later drop row by row."""
-    onnx_path = _export_teacher(tmp_path / "nan_teacher.onnx", poison=True)
     shutil.copy(sorted(corpus_dir.glob("*.slog"))[0], tmp_path / "g.slog")
     result = subprocess.run(
         [
             str(TARGET_GENERATOR),
             f"--slog-dir={tmp_path}",
-            f"--model={onnx_path}",
-            "--fast-build",
+            "--model=synthetic:non-finite",
             "--positions-per-game=1",
             "--threads=2",
         ],
@@ -344,8 +309,7 @@ def sweep_dir(corpus_dir, tmp_path_factory) -> Path:
         [
             str(TARGET_GENERATOR),
             f"--slog-dir={d}",
-            f"--model={corpus_dir / 'teacher.onnx'}",
-            "--fast-build",
+            "--model=synthetic:hidden",
             "--full-sweep",
             "--sweep-cap=400",
             "--positions-per-game=1",

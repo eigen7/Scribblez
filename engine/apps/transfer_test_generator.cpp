@@ -38,13 +38,13 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "nn/synthetic_eval_service.h"
 #include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "sim/sim_runner.h"
 #include "sim/slog_position_simmer.h"
 #include "sim/transfer_candidates.h"
 #include "util/exception.h"
-#include "util/hash.h"
 #include "util/misc.h"
 #include "util/progress.h"
 
@@ -545,7 +545,7 @@ int main(int argc, char** argv) {
     std::string leaf_hash;
     if (opt.horizon > 0) {
       leaf = nn::load_leaf_position_service(opt.leaf_model);
-      leaf_hash = util::file_content_hash(opt.leaf_model);
+      leaf_hash = nn::model_content_hash(opt.leaf_model);
     }
     util::ProgressMeter meter(total, "positions");
     for (const binlog::PendingSlog& p : pending) {
