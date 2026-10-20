@@ -148,6 +148,36 @@ def test_each_generation_exports_the_served_head_only(tmp_path, head):
     assert paths.onnx_path(3).exists() == (head == HEAD_TILTED)
 
 
+class _OrderRecorder:
+    """Stands in for the output sink and the generation record, logging the
+    order of their deliveries."""
+
+    def __init__(self):
+        self.events = []
+
+    def deliver_output(self, path, rel, keep=False):
+        self.events.append(rel)
+
+    def deliver_staged(self, staged):
+        self.events.append("record")
+
+
+@pytest.mark.parametrize("head", HEADS)
+def test_delivery_ships_the_served_model_before_the_record(tmp_path, monkeypatch, head):
+    monkeypatch.setattr(trainer.state_pair, "deliver", lambda *args: None)
+    paths = _paths(tmp_path)
+    paths.win_table_path(3).parent.mkdir(parents=True, exist_ok=True)
+    paths.win_table_path(3).touch()
+    if head == HEAD_TILTED:
+        paths.onnx_path(3).parent.mkdir(parents=True, exist_ok=True)
+        paths.onnx_path(3).touch()
+    recorder = _OrderRecorder()
+    trainer._deliver_generation(recorder, paths, 3, None, None, recorder, None)
+    model_rel = str(paths.onnx_path(3).relative_to(paths.root))
+    assert (model_rel in recorder.events) == (head == HEAD_TILTED)
+    assert recorder.events[-1] == "record"
+
+
 # The tilted head's readouts, which the autoregressive head does not report.
 TILTED_ONLY = {"eval_letter_calibration", "eval_value_bias", "eval_value_coverage"}
 
