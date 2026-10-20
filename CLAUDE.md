@@ -55,8 +55,10 @@ Scribblez specifics for that workflow:
   building its own: `ln -s /workspace/repo/target <worktree>/target`
   (py/scribblez/paths.py finds the engine at the checkout's target/engine).
   This holds only while the branch's engine sources match what main's build was
-  built from; a test that cannot find an engine binary or FFI symbol means
-  main's build is stale. Remove the link before running py/build.py in the worktree, which
+  built from; a test that cannot find an engine binary or FFI symbol, or whose
+  engine fails TensorRT's CUDA initialization (an engine older than the
+  synthetic models falls through to TensorRT, and the suite hides the GPU),
+  means main's build is stale. Remove the link before running py/build.py in the worktree, which
   would otherwise build into main's tree through it.
 - Before opening a PR: the engine must build, the affected suites must pass
   (py/run_tests.py --cpp-only for C++ changes, --python-only for Python;
@@ -122,9 +124,13 @@ Agents run the suites after nearly every change, often several at once beside
 experiments, so tests stay cheap:
 
 - **No GPU.** Tests run on the CPU only, and a model a test needs is tiny.
-  ctest hides the GPU (CUDA_VISIBLE_DEVICES empty), so a C++ test that needs
-  it fails. The single exception is ctest's `gpu_smoke`, which checks that a
-  TensorRT plan builds and runs at all.
+  Both suites hide the GPU (CUDA_VISIBLE_DEVICES empty: ctest per test,
+  py/tests/conftest.py before torch loads), so a test that needs it fails
+  rather than skipping. An engine binary a Python test drives serves a
+  synthetic model instead of TensorRT (`--model=synthetic:<variant>`,
+  engine/include/nn/synthetic_eval_service.h). The single exception is
+  ctest's `gpu_smoke`, which checks that a TensorRT plan builds and runs at
+  all.
 - **TensorRT parity is a separate check:** `py/tools/gpu_parity.py` (~15 s)
   compares the engine's TensorRT outputs with PyTorch for every model family.
   Run it when a change reaches TensorRT inference or what feeds it: engine/
