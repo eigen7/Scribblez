@@ -300,6 +300,33 @@ SimCandidates select_all_plays(const SimPosition& pos, const Dictionary& dict,
   return out;
 }
 
+// Whether the pool keeps `m`, given the greedy move's score. places_blank
+// also finds the blank among an exchange's surrendered tiles.
+bool in_pool(const Move& m, int greedy_score, int blank_prune_points) {
+  const int score = m.type() == MoveType::PLAY ? m.score() : 0;
+  return !places_blank(m) || score > greedy_score - blank_prune_points;
+}
+
+SimCandidates select_pool(const std::vector<Move>& ranked, int blank_prune_points) {
+  int greedy_score = 0;
+  for (const Move& m : ranked)
+    if (m.type() == MoveType::PLAY) greedy_score = std::max(greedy_score, int(m.score()));
+  SimCandidates out;
+  out.num_legal_moves = ranked.size();
+  for (size_t i = 0; i < ranked.size(); ++i) {
+    if (!in_pool(ranked[i], greedy_score, blank_prune_points)) continue;
+    out.moves.push_back(ranked[i]);
+    out.equity_ranks.push_back(int32_t(i));
+  }
+  // The ranking holds a pass only when nothing else is legal.
+  if (std::find(out.moves.begin(), out.moves.end(), Move::pass()) == out.moves.end()) {
+    out.moves.push_back(Move::pass());
+    out.equity_ranks.push_back(-1);
+  }
+  out.highlighted.assign(out.moves.size(), 0);
+  return out;
+}
+
 std::vector<SimmedPosition> run_job(const std::vector<char>& buf, const Dictionary& dict,
                                     const SlogSimConfig& config,
                                     const std::vector<binlog::GamePositionIndex>& work,
@@ -331,6 +358,12 @@ SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max
                                  const std::vector<Move>& ranked, const Move&, std::mt19937_64&) {
     return select_all_plays(pos, dict, ranked, cut, max_plays);
   };
+}
+
+SimCandidateSelector pool_selector(int blank_prune_points) {
+  return [blank_prune_points](const binlog::GamePositionIndex&, const SimPosition&,
+                              const std::vector<Move>& ranked, const Move&,
+                              std::mt19937_64&) { return select_pool(ranked, blank_prune_points); };
 }
 
 SimCandidateSelector chosen_selector(ChosenMoves chosen) {

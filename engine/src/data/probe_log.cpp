@@ -28,14 +28,6 @@ ProbeRecord record_of(const Rollout& r, const RolloutTrace& t, int mover, int ca
   return rec;
 }
 
-// The next `bytes` of `buf` at `*off`, advancing it.
-const char* take(const std::vector<char>& buf, size_t* off, size_t bytes, const std::string& path) {
-  if (*off + bytes > buf.size()) throw util::Exception("ProbeReader: truncated {}", path);
-  const char* at = buf.data() + *off;
-  *off += bytes;
-  return at;
-}
-
 }  // namespace
 
 ProbeWriter::ProbeWriter(const std::string& path, uint16_t flags,
@@ -115,18 +107,19 @@ ProbeReader::ProbeReader(const std::string& path) {
     throw util::Exception("ProbeReader: version mismatch in {} (file={} code={})", path,
                           header().version, kProbeVersion);
   }
+  const std::string context = "ProbeReader: " + path;
   size_t off = sizeof(ProbeFileHeader);
   for (uint32_t i = 0; i < header().num_positions; ++i) {
     Position pos{};
     pos.header = reinterpret_cast<const ProbePositionHeader*>(
-      take(buffer_, &off, sizeof(ProbePositionHeader), path));
+      take_bytes(buffer_, &off, sizeof(ProbePositionHeader), context));
     const size_t k = pos.header->num_candidates;
     pos.candidates = reinterpret_cast<const ProbeCandidate*>(
-      take(buffer_, &off, k * sizeof(ProbeCandidate), path));
+      take_bytes(buffer_, &off, k * sizeof(ProbeCandidate), context));
     pos.records = reinterpret_cast<const ProbeRecord*>(
-      take(buffer_, &off, k * size_t(probes()) * sizeof(ProbeRecord), path));
+      take_bytes(buffer_, &off, k * size_t(probes()) * sizeof(ProbeRecord), context));
     pos.turns = reinterpret_cast<const binlog::TurnBlob*>(
-      take(buffer_, &off, size_t(pos.header->num_turns) * sizeof(binlog::TurnBlob), path));
+      take_bytes(buffer_, &off, size_t(pos.header->num_turns) * sizeof(binlog::TurnBlob), context));
     positions_.push_back(pos);
   }
 }

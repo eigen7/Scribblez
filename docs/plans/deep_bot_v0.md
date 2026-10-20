@@ -638,14 +638,19 @@ survey's JSON. Its header carries the magic and `kPoolFormatVersion`.
   - the `Move` (16 bytes);
   - mean win probability;
   - rollouts completed (racing stops some early);
-  - the paired standard error against the leader;
+  - the paired standard error against its comparator (below);
   - the static-equity rank;
   - `q(a)`.
 
 v0 computes `q(a)` at generation time by the normal approximation to the
 paired differences against the leader, since the per-rollout outcomes are not
 kept. It treats the non-leader moves as independent of each other, an
-approximation acceptable for v0.
+approximation acceptable for v0. A candidate that racing stopped is compared
+with the leader at the checkpoint that stopped it, over its own rollouts.
+Compared with the final leader's same rollouts instead, stopped candidates
+took 47–83% of a pool's `q` in a 20-rollout test: the final leader is picked
+on all the rollouts, and among a thousand stopped candidates some beat its
+early ones by chance.
 
 **Generations** are `positions_per_generation` pools. The window and
 eviction work as in `leave_inference`. Pools are expensive, so the window
@@ -750,8 +755,11 @@ per position.
   truncated at `K` plies instead of played out.
 - **Blank plays push the other way,** by enlarging the candidate set.
 
-A guess is several hundred pools per machine-hour. The real rate is measured
-on the first generation and shown on the Stats tab.
+A first measurement, at 300 rollouts and a 5-ply horizon on 24 threads of a
+machine already busy with a `leave_inference` run, simmed 8 pools in 33 s:
+about 4 s a pool, or roughly 900 pools per machine-hour. Pools ranged from 150
+to 2,500 candidates. The real rate is measured on the first generation and
+shown on the Stats tab.
 
 Generation sets the pace and is embarrassingly parallel, so the `generate`
 role is meant for a fleet: owned ssh machines and rented machines, as

@@ -18,6 +18,15 @@
 //   - stratified: a per-game sample of turns and a stratified sample of
 //     candidates (ranking head, contention zone, uniform tail, exchanges). What
 //     the cut costs on average.
+//   - pool: the policy-set model's labeled pools (docs/plans/deep_bot_v0.md,
+//     "Workload 2"). --positions-per-game turns per game, each simming its
+//     whole pool (sim/slog_position_simmer.h pool_selector) in the screen
+//     stage alone, raced, with rollouts stopped at --win-table after
+//     --horizon-plies. Each .slog gets a same-stem .pool (data/pool_log.h)
+//     instead of the survey JSON: per candidate its labels (sim/pool_labels.h).
+//
+// --win-table and --horizon-plies truncate any recipe's rollouts at the table;
+// the pool recipe requires them.
 //
 // Each position is simmed in two stages. The screen sims every candidate at
 // --rollouts and picks the best --confirm-picks moves outside the cut. The best
@@ -38,12 +47,16 @@
 
 #include "data/binary_log.h"
 #include "data/gcg_writer.h"
+#include "data/pool_log.h"
 #include "data/slog_sampling.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "sim/pool_labels.h"
 #include "sim/slog_position_simmer.h"
+#include "sim/win_pct_table.h"
 #include "util/exception.h"
+#include "util/hash.h"
 #include "util/misc.h"
 #include "util/progress.h"
 
@@ -58,6 +71,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <optional>
 #include <random>
 #include <string>
 #include <tuple>
@@ -71,7 +85,8 @@ using namespace scribblez;
 namespace json = boost::json;
 
 constexpr const char* kSurveyExt = ".simsurvey.json";
-constexpr int kSurveyVersion = 3;
+constexpr const char* kPoolExt = ".pool";
+constexpr int kSurveyVersion = 4;
 
 struct Options {
   std::string slog_dir;
@@ -94,8 +109,17 @@ struct Options {
   int threads = util::default_thread_count();
   uint64_t seed = 0;
   int limit_games = 0;  // 0 = all games per file
+  // Truncation at a win table: both set, or neither (terminal rollouts).
+  std::string win_table_path;
+  int horizon_plies = 0;
+  const WinPctTable* win_table = nullptr;  // loaded from win_table_path
+  // The pool recipe's blank prune (pool_selector).
+  int blank_prune_points = 40;
 
   bool stratified() const { return recipe == "stratified"; }
+  bool pool() const { return recipe == "pool"; }
+  // The recipes that sample turns per game rather than per file.
+  bool per_game() const { return stratified() || pool(); }
 };
 
 // The screening stage: the recipe's candidates at --rollouts each.
@@ -104,13 +128,19 @@ SlogSimConfig screen_config(const Options& opt, const Dictionary& dict) {
   c.open_leaves = opt.open_leaves;
   if (opt.stratified()) {
     c.selector = recipe_selector({.top_k = 0, .quotas = opt.quotas});
+  } else if (opt.pool()) {
+    c.selector = pool_selector(opt.blank_prune_points);
   } else {
     const int cap = opt.max_plays > 0 ? opt.max_plays : std::numeric_limits<int>::max();
     c.selector = opt.recipe == "setup" ? setup_selector(dict, opt.cut, cap)
                                        : all_plays_selector(dict, opt.cut, opt.max_plays);
   }
-  c.output = SimOutput::kReports;
+  // The pool's labels pair every candidate with the leader, known only once
+  // the sim ends, so it keeps every rollout.
+  c.output = opt.pool() ? SimOutput::kRollouts : SimOutput::kReports;
   c.runner.rollouts = opt.rollouts;
+  c.runner.horizon_plies = opt.horizon_plies;
+  c.runner.win_table = opt.win_table;
   if (opt.race) {
     // Checkpoints at 10%, 20%, 40% and 70% of the screen. At three paired
     // standard errors below the leader over four looks, a candidate truly equal
@@ -118,13 +148,13 @@ SlogSimConfig screen_config(const Options& opt, const Dictionary& dict) {
     // anything stopped was never going to be a pick.
     for (const int pct : {10, 20, 40, 70})
       if (opt.rollouts * pct / 100 > 0) c.race_checkpoints.push_back(opt.rollouts * pct / 100);
-    c.race_protected = opt.cut;
+    c.race_protected = opt.pool() ? 0 : opt.cut;
   }
   // Under the all recipe a position has hundreds of candidates, so one position
   // is a long job and across-position workers would idle behind the last few.
   // There the threads go inside the position instead. Results do not depend on
   // either thread count.
-  const bool wide = opt.recipe == "all";
+  const bool wide = opt.recipe == "all" || opt.pool();
   c.runner.threads = wide ? opt.threads : 1;
   c.seed = opt.seed;
   c.threads = wide ? 1 : opt.threads;
@@ -149,8 +179,14 @@ SlogSimConfig confirm_config(const Options& opt, const Dictionary& dict, ChosenM
 
 void validate(const Options& opt) {
   SimRunner::validate(SimRunner::Params{.rollouts = opt.rollouts});
-  if (opt.recipe != "all" && opt.recipe != "setup" && opt.recipe != "stratified")
-    throw util::CleanException("--recipe must be all, setup or stratified");
+  if (opt.recipe != "all" && opt.recipe != "setup" && opt.recipe != "stratified" && !opt.pool())
+    throw util::CleanException("--recipe must be all, setup, stratified or pool");
+  SimRunner::validate_horizon("sim-survey", opt.horizon_plies, !opt.win_table_path.empty());
+  if (opt.pool() && opt.win_table_path.empty())
+    throw util::CleanException("--recipe pool needs --win-table and --horizon-plies");
+  if (opt.pool() && opt.open_leaves)
+    throw util::CleanException("--recipe pool sims hidden leaves only");
+  if (opt.blank_prune_points < 0) throw util::CleanException("--blank-prune-points must be >= 0");
   SimRunner::validate(SimRunner::Params{.rollouts = opt.confirm_rollouts});
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
   if (opt.confirm_picks < 1) throw util::CleanException("--confirm-picks must be >= 1");
@@ -170,7 +206,7 @@ std::vector<binlog::GamePositionIndex> sample_work(const std::vector<char>& buf,
     reinterpret_cast<const binlog::GameMetadata*>(buf.data() + sizeof(binlog::FileHeader));
   uint32_t num_games = hdr->num_games;
   if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
-  const int per_game = opt.stratified() ? opt.positions_per_game : 0;
+  const int per_game = opt.per_game() ? opt.positions_per_game : 0;
   std::vector<binlog::GamePositionIndex> work;
   for (uint32_t g = 0; g < num_games; ++g)
     binlog::sample_eligible_turns(metas[g], g, opt.seed, per_game, &work);
@@ -210,7 +246,7 @@ std::vector<binlog::GamePositionIndex> setup_turns(
 std::vector<binlog::GamePositionIndex> survey_work(const binlog::PendingSlog& slog,
                                                    const Dictionary& dict, const Options& opt) {
   std::vector<binlog::GamePositionIndex> work = sample_work(slog.bytes, opt);
-  if (opt.stratified()) return work;
+  if (opt.per_game()) return work;
   if (opt.recipe == "setup") work = setup_turns(slog, dict, opt, work);
   return position_sample(std::move(work), opt);
 }
@@ -369,6 +405,34 @@ json::object position_json(const SurveyedPosition& p, const Options& opt) {
           {"confirm", confirm_json(p, opt)}};
 }
 
+// Where a run's labels come from: the win table its rollouts stop at, and
+// the horizon and budget. Needs a loaded win table.
+PoolSources pool_sources(const Options& opt) {
+  const std::map<std::string, std::string>& header = opt.win_table->header();
+  const auto entry = [&](const std::string& key) {
+    const auto it = header.find(key);
+    return it == header.end() ? std::string() : it->second;
+  };
+  PoolSources s;
+  s.win_table_hash = util::file_content_hash(opt.win_table_path);
+  s.win_table_tag = entry("tag");
+  s.win_table_generation = entry("generation").empty() ? -1 : std::stoi(entry("generation"));
+  s.win_table_format_version = std::stoi(entry("format_version"));
+  s.horizon_plies = opt.horizon_plies;
+  s.rollouts = opt.rollouts;
+  return s;
+}
+
+// The survey header's record of a truncation: null for terminal rollouts.
+json::value win_table_json(const Options& opt) {
+  if (opt.win_table == nullptr) return nullptr;
+  const PoolSources s = pool_sources(opt);
+  return json::object{{"hash", s.win_table_hash},
+                      {"tag", s.win_table_tag},
+                      {"generation", s.win_table_generation},
+                      {"format_version", s.win_table_format_version}};
+}
+
 json::object header_json(const Options& opt) {
   return {{"version", kSurveyVersion},
           {"recipe", opt.recipe},
@@ -381,6 +445,8 @@ json::object header_json(const Options& opt) {
           {"max_plays", opt.max_plays},
           {"max_positions", opt.max_positions},
           {"open_leaves", opt.open_leaves},
+          {"horizon_plies", opt.horizon_plies},
+          {"win_table", win_table_json(opt)},
           {"seed", opt.seed},
           {"score_bin_width", kScoreBinWidth},
           {"delta_bin_width", kDeltaBinWidth},
@@ -551,15 +617,63 @@ void survey_file(const binlog::PendingSlog& slog, const Dictionary& dict, const 
   partial.finish();
 }
 
+PoolPosition pool_position(const SimmedPosition& r) {
+  return {r.pos, r.candidates.num_legal_moves, r.candidates.moves, r.candidates.equity_ranks,
+          pool_labels(r.rollouts)};
+}
+
+// Sim each sampled position's pool, one position at a time (a pool is hundreds
+// of candidates, so the threads go inside it), and write the file's .pool at
+// the end. A stopped run writes nothing and redoes the file.
+void pool_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt) {
+  const std::vector<binlog::GamePositionIndex> work = survey_work(slog, dict, opt);
+  PoolWriter writer(slog.sidecar(kPoolExt).string(), pool_sources(opt));
+  util::ProgressMeter meter(work.size(), "positions");
+  for (const binlog::GamePositionIndex& at : work) {
+    for (const SimmedPosition& r :
+         sim_slog_positions(slog.bytes, dict, screen_config(opt, dict), {at}, &meter))
+      writer.add_position(pool_position(r));
+  }
+  meter.finish("sim-survey pools");
+  writer.close();
+}
+
 // Prefix the file name, so a batch run's failure names both file and position.
 void process_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt) {
   try {
-    survey_file(slog, dict, opt);
+    opt.pool() ? pool_file(slog, dict, opt) : survey_file(slog, dict, opt);
   } catch (const util::CleanException& ex) {
     throw util::CleanException("{}: {}", slog.path.stem().string(), ex.what());
   } catch (const util::Exception& ex) {
     throw util::Exception("{}: {}", slog.path.stem().string(), ex.what());
   }
+}
+
+// A finished .pool is skipped, not redone, so it must come from this run's
+// sources: pools of mixed sources in one corpus would pass for one set of
+// labels.
+void check_finished_pools(const std::vector<fs::path>& slogs, const Options& opt) {
+  const PoolSources want = pool_sources(opt);
+  for (const fs::path& slog : slogs) {
+    const fs::path pool = fs::path(slog).replace_extension(kPoolExt);
+    if (!fs::exists(pool)) continue;
+    const char* field = PoolSources::of(PoolReader(pool.string()).header()).first_difference(want);
+    if (field != nullptr) {
+      throw util::CleanException("{} has another {} than this run; move it aside to redo it",
+                                 pool.string(), field);
+    }
+  }
+}
+
+// The run's settings, as the startup line on stderr states them.
+std::string run_summary(const Options& opt, size_t files) {
+  std::string out = std::format("{} file(s), recipe {}; ", files, opt.recipe);
+  out += opt.pool() ? std::format("{} rollouts per candidate", opt.rollouts)
+                    : std::format("{} screening + {} confirming rollouts", opt.rollouts,
+                                  opt.confirm_rollouts);
+  if (opt.win_table != nullptr)
+    out += std::format(", stopped at {} after {} plies", opt.win_table_path, opt.horizon_plies);
+  return out + std::format(", {} threads", opt.threads);
 }
 
 }  // namespace
@@ -577,8 +691,17 @@ int main(int argc, char** argv) {
       "explicit .slog file to process (repeatable; overrides --slog-dir)")(
       "recipe", po::value<std::string>(&opt.recipe)->default_value(opt.recipe),
       "all (every legal play without a blank, plus the top --cut), setup (only positions with a "
-      "high-value setup play outside the cut, simming just those plays plus the cut), or "
-      "stratified (a per-game turn sample and a stratified candidate sample)")(
+      "high-value setup play outside the cut, simming just those plays plus the cut), "
+      "stratified (a per-game turn sample and a stratified candidate sample), or pool (the "
+      "policy-set model's labeled pools, written as .pool files)")(
+      "win-table", po::value<std::string>(&opt.win_table_path),
+      "stop rollouts after --horizon-plies at this scribblez win table's P(win) "
+      "(sim/win_pct_table.h); required by --recipe pool")(
+      "horizon-plies", po::value<int>(&opt.horizon_plies)->default_value(opt.horizon_plies),
+      "plies after the candidate before the win table values a rollout (0 = play to the end)")(
+      "blank-prune-points",
+      po::value<int>(&opt.blank_prune_points)->default_value(opt.blank_prune_points),
+      "pool: drop a blank move scoring this many points or more below the greedy play")(
       "open-leaves", po::bool_switch(&opt.open_leaves),
       "sim with the opponent's retained leave known; required for a face-up-leaves corpus")(
       "rollouts", po::value<int>(&opt.rollouts)->default_value(opt.rollouts),
@@ -609,7 +732,7 @@ int main(int argc, char** argv) {
       "stratified: exclusive rank bound of the contention zone")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
-      "stratified: eligible turns sampled per game")(
+      "stratified, pool: eligible turns sampled per game")(
       "cut", po::value<int>(&opt.cut)->default_value(opt.cut),
       "all/setup: the equity top-K always simmed")(
       "max-plays", po::value<int>(&opt.max_plays)->default_value(opt.max_plays),
@@ -629,13 +752,18 @@ int main(int argc, char** argv) {
 
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
+    std::optional<WinPctTable> win_table;
+    if (!opt.win_table_path.empty()) {
+      win_table = WinPctTable::load_versioned(opt.win_table_path);
+      opt.win_table = &*win_table;
+    }
 
-    const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
-      binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files), kSurveyExt, opt.open_leaves,
-      "{} was played with face-up leaves; pass --open-leaves to sim it");
-    std::cerr << "sim-survey: " << pending.size() << " file(s), recipe " << opt.recipe << "; "
-              << opt.rollouts << " screening + " << opt.confirm_rollouts << " confirming rollouts, "
-              << opt.threads << " threads\n";
+    const std::vector<fs::path> inputs = binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files);
+    if (opt.pool()) check_finished_pools(inputs, opt);
+    const std::vector<binlog::PendingSlog> pending =
+      binlog::load_pending_slogs(inputs, opt.pool() ? kPoolExt : kSurveyExt, opt.open_leaves,
+                                 "{} was played with face-up leaves; pass --open-leaves to sim it");
+    std::cerr << "sim-survey: " << run_summary(opt, pending.size()) << "\n";
     if (!opt.gcg_dir.empty()) fs::create_directories(opt.gcg_dir);
     for (const binlog::PendingSlog& p : pending) process_file(p, dict, opt);
     return 0;

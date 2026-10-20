@@ -1,6 +1,7 @@
 #include "data/format_layout.h"
 
 #include "data/binary_log.h"
+#include "data/pool_log.h"
 #include "data/probe_log.h"
 #include "data/probe_replay.h"
 #include "data/sim_observation_log.h"
@@ -137,6 +138,9 @@ json::object build_structs() {
   s["MsetFileHeader"] = struct_json<move_set_eval::TargetFileHeader>();
   s["MsetPositionHeader"] = struct_json<move_set_eval::TargetPositionHeader>();
   s["SlogFileHeader"] = struct_json<binlog::FileHeader>();
+  s["PoolFileHeader"] = struct_json<PoolFileHeader>();
+  s["PoolPositionHeader"] = struct_json<PoolPositionHeader>();
+  s["PoolCandidate"] = struct_json<PoolCandidate>();
   s["WinTableFeature"] = struct_json<WinTableFeature>();
   s["WinTableSample"] = struct_json<WinTableSample>();
   s["SlogGameMetadata"] = struct_json<binlog::GameMetadata>();
@@ -170,6 +174,9 @@ json::object build_constants() {
                {"role_anchor", static_cast<uint8_t>(SimObsRole::kAnchor)},
                {"role_on_policy", static_cast<uint8_t>(SimObsRole::kOnPolicy)},
                {"role_off_policy", static_cast<uint8_t>(SimObsRole::kOffPolicy)}};
+  c["pool"] = {{"magic", kPoolMagic},
+               {"version", kPoolFormatVersion},
+               {"flag_leave_inference", kPoolFlagLeaveInference}};
   c["sprobe"] = {{"magic", kProbeMagic},
                  {"version", kProbeVersion},
                  {"flag_face_up_leaves", kProbeFlagFaceUpLeaves},

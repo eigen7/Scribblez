@@ -12,6 +12,7 @@
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
 #include "data/gcg_writer.h"
+#include "data/pool_log.h"
 #include "data/sim_observation_log.h"
 #include "data/slog_sampling.h"
 #include "encoding/board_planes.h"
@@ -30,10 +31,12 @@
 #include "lexicon/leave_values.h"
 #include "lexicon/lexicon.h"
 #include "move_key.h"
+#include "sim/pool_labels.h"
 #include "sim/rollout_report.h"
 #include "sim/setup_plays.h"
 #include "sim/sim_runner.h"
 #include "sim/slog_position_simmer.h"
+#include "sim/win_pct_table.h"
 #include "sim/win_table_feature.h"
 #include "synthetic_equity.h"
 #include "temp_dir.h"
@@ -4959,6 +4962,284 @@ TEST(SimRunner, TruncatedFallsBackToTerminalAtGameEnd) {
   for (size_t c = 0; c < obs_terminal.size(); ++c)
     ASSERT_EQ(std::memcmp(&obs_terminal[c], &obs_truncated[c], sizeof(RolloutStats)), 0);
   fs::remove_all(tmp);
+}
+
+namespace win_table_leaf_test {
+
+// A win table whose cell reads p(spread, unseen) = 0.5 + spread / 1000 +
+// unseen / 10000, so a rollout's value pins down both of its feature's parts.
+WinPctTable linear_table() {
+  std::vector<float> grid(WinPctTable::kRows * WinPctTable::kCols);
+  for (int r = 0; r < WinPctTable::kRows; ++r) {
+    for (int u = 0; u < WinPctTable::kCols; ++u) {
+      grid[r * WinPctTable::kCols + u] =
+        0.5f + float(WinPctTable::kMaxSpread - r) / 1000.0f + float(u) / 10000.0f;
+    }
+  }
+  return WinPctTable::from_grid(grid.data(), {});
+}
+
+SimPosition opening_position() {
+  SimPosition pos;
+  pos.scores = {30, 45};
+  pos.mover = 0;
+  pos.rack = Rack::from_string("CATSEIQ");
+  return pos;
+}
+
+}  // namespace win_table_leaf_test
+
+// A truncated rollout takes the win table's P(win) for the horizon's side to
+// move, on that side's spread plus own leave value and the tiles it cannot
+// see, read from the root mover's side, with no draw and the horizon spread as
+// its delta.
+TEST(SimRunner, WinTableLeafReadsTheSideToMove) {
+  using namespace win_table_leaf_test;
+  namespace fs = std::filesystem;
+  const fs::path tmp = scribblez::testing::make_temp_dir("scribblez_win_table_leaf");
+  init_synthetic_equity(tmp);
+  const Dictionary d = medium_dict();
+  const SimPosition pos = opening_position();
+  const std::vector<Move> plays = MoveGenerator(pos.board, d).generate(pos.rack);
+  ASSERT_GE(plays.size(), 2);
+  const std::vector<Move> candidates = {plays.front(), Move::pass()};
+  const WinPctTable table = linear_table();
+
+  for (const int horizon : {3, 4}) {
+    SimRunner::Params params;
+    params.rollouts = 12;
+    params.threads = 2;
+    params.horizon_plies = horizon;
+    params.win_table = &table;
+    std::vector<RolloutTrace> traces;
+    const std::vector<Rollout> rollouts =
+      SimRunner(d, params).run_rollouts(pos, candidates, 400, params.rollouts, &traces);
+    int truncated = 0;
+    for (size_t i = 0; i < rollouts.size(); ++i) {
+      if (!traces[i].truncated) continue;
+      ++truncated;
+      const std::vector<TurnRecord>& turns = traces[i].turns;
+      const int n = int(turns.size());
+      ASSERT_EQ(n, horizon);
+      const TurnRecord& last = turns[n - 1];
+      const int to_move = 1 - last.player;
+      // The opponent moves first, so after an odd horizon the root mover is to
+      // move.
+      ASSERT_EQ(to_move == pos.mover, horizon % 2 == 1);
+      const int spread = last.cumulative_scores[to_move] - last.cumulative_scores[1 - to_move];
+      Rack own_leave = turns[n - 2].rack_before;
+      for (int g = 0; g < turns[n - 2].move.num_glyphs(); ++g) {
+        own_leave.remove(turns[n - 2].move.glyph(g).rack_tile());
+      }
+      const int placed = last.move.type() == MoveType::PLAY ? last.move.num_glyphs() : 0;
+      const int unseen = last.bag_size_before + last.rack_before.size() - placed;
+      const float p = table.win_prob(win_table_feature(spread, own_leave, unseen));
+      const double p_root = to_move == pos.mover ? p : 1.0 - p;
+      ASSERT_DOUBLE_EQ(rollouts[i].p_win, p_root) << "horizon " << horizon << " rollout " << i;
+      ASSERT_EQ(rollouts[i].p_draw, 0.0);
+      ASSERT_DOUBLE_EQ(rollouts[i].p_loss, 1.0 - p_root);
+      ASSERT_EQ(rollouts[i].delta, to_move == pos.mover ? spread : -spread);
+    }
+    EXPECT_GT(truncated, 0);
+  }
+  fs::remove_all(tmp);
+}
+
+// A horizon takes exactly one leaf: a model or a win table.
+TEST(SimRunner, WinTableLeafValidation) {
+  const WinPctTable table = win_table_leaf_test::linear_table();
+  SimRunner::Params p;
+  p.horizon_plies = 4;
+  p.win_table = &table;
+  SimRunner::validate(p);
+  ConstantLeafService leaf;
+  p.leaf_service = &leaf;
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
+  p.leaf_service = nullptr;
+  p.horizon_plies = 0;
+  ASSERT_THROW(SimRunner::validate(p), std::runtime_error);
+}
+
+// The policy-set model's pool keeps every move except the blank moves (plays
+// placing it, exchanges returning it) scoring 40 or more below the greedy
+// play, an exchange scoring 0, and always offers the pass.
+TEST(PoolSelector, PrunesOnlyLowScoringBlankMoves) {
+  const Glyph a = Glyph::of(Tile::from_char('A'));
+  const Glyph blank_a = Glyph::of_blank(Tile::from_char('A'));
+  const auto play = [](uint16_t score, std::initializer_list<Glyph> glyphs) {
+    const std::vector<Glyph> g(glyphs);
+    return Move::play(/*horizontal=*/true, 7, uint16_t((1u << g.size()) - 1), score, g.data(),
+                      int(g.size()));
+  };
+  const Move greedy = play(60, {a, a});
+  const Move close_blank = play(21, {blank_a, a});  // 21 > 60 - 40: kept
+  const Move far_blank = play(20, {blank_a});       // 20 <= 60 - 40: dropped
+  const Move low_plain = play(2, {a});              // no blank: kept
+  const Move plain_exchange = Move::exchange(TileCounts::from_string("A"));
+  const Move blank_exchange = Move::exchange(TileCounts::from_string("A?"));  // scores 0: dropped
+  const std::vector<Move> ranked = {greedy,    close_blank,    far_blank,
+                                    low_plain, plain_exchange, blank_exchange};
+
+  std::mt19937_64 rng(1);
+  const SimCandidates got = pool_selector(40)({}, SimPosition{}, ranked, greedy, rng);
+  const std::vector<Move> want = {greedy, close_blank, low_plain, plain_exchange, Move::pass()};
+  ASSERT_EQ(got.moves, want);
+  ASSERT_EQ(got.equity_ranks, (std::vector<int32_t>{0, 1, 3, 4, -1}));
+  ASSERT_EQ(got.num_legal_moves, ranked.size());
+
+  // With nothing legal the ranking is a lone pass, which is not offered twice.
+  const SimCandidates stuck = pool_selector(40)({}, SimPosition{}, {Move::pass()}, greedy, rng);
+  ASSERT_EQ(stuck.moves, std::vector<Move>{Move::pass()});
+}
+
+namespace pool_test {
+
+// Rollouts whose win values are `wins`, in rollout order.
+std::vector<Rollout> rollouts_of(std::initializer_list<double> wins) {
+  std::vector<Rollout> out;
+  for (const double w : wins) {
+    Rollout r;
+    r.p_win = w;
+    r.p_loss = 1 - w;
+    out.push_back(r);
+  }
+  return out;
+}
+
+// P(beats the comparator), from a mean paired difference over n rollouts and
+// its variance.
+double p_beats(double mean, double var, int n) {
+  return 0.5 * std::erfc(-mean / (std::sqrt(var / n) * std::sqrt(2.0)));
+}
+
+}  // namespace pool_test
+
+// The leader is the best of the candidates that ran every rollout; q sums to
+// 1, favours the leader, and gives a candidate clearly beaten on the paired
+// rollouts almost nothing, a near-tie close to the leader's share.
+TEST(PoolLabels, LeaderOddsAndPairedErrors) {
+  using pool_test::rollouts_of;
+  const std::vector<std::vector<Rollout>> rollouts = {
+    rollouts_of({1, 1, 0, 1, 0, 1, 1, 0}),  // 5/8
+    rollouts_of({1, 1, 0, 1, 0, 1, 0, 0}),  // 4/8: one rollout worse
+    rollouts_of({0, 0}),                    // raced out after two
+    rollouts_of({1, 1, 1, 1, 1, 1, 1, 1}),  // the leader, 8/8
+  };
+  const std::vector<PoolLabel> labels = pool_labels(rollouts);
+  ASSERT_EQ(labels.size(), 4u);
+  EXPECT_DOUBLE_EQ(labels[0].win_prob, 5.0 / 8);
+  EXPECT_EQ(labels[2].rollouts, 2);
+  EXPECT_EQ(labels[3].paired_se, 0.0);
+  double total = 0;
+  for (const PoolLabel& l : labels) total += l.q;
+  EXPECT_NEAR(total, 1.0, 1e-12);
+  EXPECT_GT(labels[3].q, labels[0].q);
+  EXPECT_GT(labels[0].q, labels[1].q);
+  // Candidate 2 lost both of its paired rollouts by a full win, with zero
+  // spread: certain to trail.
+  EXPECT_EQ(labels[2].q, 0.0);
+  // Candidate 0 against the leader: paired differences 0,0,-1,0,-1,0,0,-1, so
+  // mean -3/8 and standard error sqrt((3/8 - 9/64) / 8).
+  EXPECT_NEAR(labels[0].paired_se, std::sqrt((3.0 / 8 - 9.0 / 64) / 8), 1e-12);
+}
+
+TEST(PoolLabels, IdenticalCandidatesSplitEvenly) {
+  using pool_test::rollouts_of;
+  const std::vector<std::vector<Rollout>> rollouts = {rollouts_of({1, 0, 1}),
+                                                      rollouts_of({1, 0, 1})};
+  const std::vector<PoolLabel> labels = pool_labels(rollouts);
+  // The second ties the leader on every rollout: even odds, an even split.
+  EXPECT_NEAR(labels[0].q, 0.5, 1e-12);
+  EXPECT_NEAR(labels[1].q, 0.5, 1e-12);
+}
+
+// A candidate racing stopped is compared with the leader that stopped it, not
+// with the final leader, which it leads on their shared rollouts.
+TEST(PoolLabels, StoppedCandidateFacesItsCheckpointLeader) {
+  using pool_test::p_beats;
+  using pool_test::rollouts_of;
+  const std::vector<std::vector<Rollout>> rollouts = {
+    rollouts_of({0, 0, 1, 1, 1, 1, 1, 1}),  // the final leader, 6/8
+    rollouts_of({1, 1, 1, 1, 0, 0, 0, 0}),  // the leader at 4 rollouts, 4/8
+    rollouts_of({1, 1, 0, 1}),              // stopped at 4, ahead of the final leader there
+  };
+  const std::vector<PoolLabel> labels = pool_labels(rollouts);
+  // Candidate 2 against candidate 1's first four: 0, 0, -1, 0.
+  const double p2 = p_beats(-0.25, 0.25 - 0.0625, 4);
+  // Candidate 1 against the final leader: 1, 1, 0, 0, -1, -1, -1, -1.
+  const double p1 = p_beats(-0.25, 0.75 - 0.0625, 8);
+  const double odds1 = p1 / (1 - p1), odds2 = p2 / (1 - p2);
+  EXPECT_NEAR(labels[2].paired_se, std::sqrt((0.25 - 0.0625) / 4), 1e-12);
+  EXPECT_NEAR(labels[2].q, odds2 / (1 + odds1 + odds2), 1e-12);
+  EXPECT_NEAR(labels[0].q, 1 / (1 + odds1 + odds2), 1e-12);
+  EXPECT_LT(labels[2].q, labels[0].q);
+}
+
+// A written pool reads back exactly, with its sources in the header, and a
+// reader refuses another format version or a truncated file.
+TEST(PoolLog, RoundTripAndVersionGate) {
+  namespace fs = std::filesystem;
+  const fs::path dir = scribblez::testing::make_temp_dir("scribblez_pool_log");
+  const std::string path = (dir / "t.pool").string();
+  PoolSources sources;
+  sources.win_table_hash = "0123456789abcdef";
+  sources.win_table_tag = "tilted";
+  sources.win_table_generation = 12;
+  sources.win_table_format_version = kWinTableFormatVersion;
+  sources.horizon_plies = 5;
+  sources.rollouts = 300;
+  PoolPosition p;
+  p.at = {3, 17};
+  p.num_legal_moves = 42;
+  p.moves = {Move::pass(), Move::exchange(TileCounts::from_string("QU"))};
+  p.equity_ranks = {-1, 7};
+  p.labels = {{.win_prob = 0.25, .paired_se = 0.0, .q = 0.75, .rollouts = 300},
+              {.win_prob = 0.125, .paired_se = 0.5, .q = 0.25, .rollouts = 30}};
+  {
+    PoolWriter w(path, sources);
+    w.add_position(p);
+    w.add_position(p);
+    w.close();
+  }
+  const PoolReader r(path);
+  EXPECT_EQ(r.header().version, kPoolFormatVersion);
+  EXPECT_EQ(r.header().flags, 0);
+  EXPECT_EQ(r.header().horizon_plies, 5);
+  EXPECT_EQ(r.header().rollouts, 300u);
+  EXPECT_EQ(r.header().win_table_generation, 12);
+  EXPECT_EQ(std::string(r.header().win_table_tag), "tilted");
+  ASSERT_EQ(r.num_positions(), 2);
+  const PoolReader::Position pos = r.position(1);
+  EXPECT_EQ(pos.header->game_index, 3u);
+  EXPECT_EQ(pos.header->turn_index, 17u);
+  EXPECT_EQ(pos.header->num_legal_moves, 42u);
+  ASSERT_EQ(pos.header->num_candidates, 2u);
+  for (size_t c = 0; c < 2; ++c) {
+    EXPECT_EQ(pos.candidates[c].move, p.moves[c]);
+    EXPECT_EQ(pos.candidates[c].equity_rank, p.equity_ranks[c]);
+    EXPECT_EQ(pos.candidates[c].rollouts, p.labels[c].rollouts);
+    EXPECT_FLOAT_EQ(pos.candidates[c].win_prob, float(p.labels[c].win_prob));
+    EXPECT_FLOAT_EQ(pos.candidates[c].paired_se, float(p.labels[c].paired_se));
+    EXPECT_FLOAT_EQ(pos.candidates[c].q, float(p.labels[c].q));
+  }
+  // The header's sources read back as written, and a changed one is named.
+  const PoolSources back = PoolSources::of(r.header());
+  EXPECT_EQ(back.first_difference(sources), nullptr);
+  PoolSources other = sources;
+  other.horizon_plies = 4;
+  EXPECT_STREQ(back.first_difference(other), "horizon");
+  other = sources;
+  other.win_table_hash = "fedcba9876543210";
+  EXPECT_STREQ(back.first_difference(other), "win table");
+
+  std::string bytes = scribblez::util::read_file(path);
+  std::ofstream(path, std::ios::binary) << bytes.substr(0, bytes.size() - 1);
+  EXPECT_THROW(PoolReader{path}, util::Exception);
+  const uint16_t stale = kPoolFormatVersion + 1;
+  std::memcpy(bytes.data() + offsetof(PoolFileHeader, version), &stale, sizeof(stale));
+  std::ofstream(path, std::ios::binary) << bytes;
+  EXPECT_THROW(PoolReader{path}, util::Exception);
+  fs::remove_all(dir);
 }
 
 // A horizon and a leaf service must be set together, and the horizon must be at

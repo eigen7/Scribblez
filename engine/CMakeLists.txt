@@ -59,6 +59,7 @@ add_library(scribblez_core STATIC
   src/sim/transfer_candidates.cpp
   src/sim/win_pct_table.cpp
   src/sim/win_table_feature.cpp
+  src/sim/pool_labels.cpp
   src/sim/macondo_autostopper.cpp
   src/sim/macondo_simmer.cpp
   src/agent/best_bot.cpp
@@ -79,6 +80,7 @@ add_library(scribblez_core STATIC
   src/data/sim_observation_log.cpp
   src/data/sidecar_io.cpp
   src/data/probe_log.cpp
+  src/data/pool_log.cpp
   src/data/probe_replay.cpp
   src/data/slog_sampling.cpp
   src/data/format_layout.cpp
