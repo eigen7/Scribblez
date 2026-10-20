@@ -18,6 +18,7 @@
 #include "nn/eval_service.h"
 #include "nn/neural_net.h"
 #include "nn/trt_eval_service.h"
+#include "parity_fixture.h"
 #include "training/move_set_encoder.h"
 
 #include <gtest/gtest.h>
@@ -42,6 +43,10 @@ using MsetParams = scribblez::nn::NeuralNetParams<MoveSetEvaluationSpec>;
 using PositionParams = scribblez::nn::NeuralNetParams<PositionEvaluationSpec>;
 
 namespace {
+
+using scribblez::testing::generate_fixture;
+using scribblez::testing::make_scratch_dir;
+using scribblez::testing::read_binary;
 
 // Fields per row of expected_*.bin: win_prob, p_win, p_draw, p_loss,
 // score_diff_mean, score_diff_std.
@@ -75,44 +80,6 @@ constexpr Tolerance kBf16Tol{1e-2f, 0.5f};  // 8 mantissa bits to FP16's 10
 
 // The fixture directory from the command line; empty means self-generate.
 std::string g_fixture_dir;
-
-template <typename T>
-std::vector<T> read_binary(const std::string& path) {
-  std::ifstream f(path, std::ios::binary | std::ios::ate);
-  if (!f) {
-    ADD_FAILURE() << "cannot open " << path;
-    return {};
-  }
-  const std::streamsize bytes = f.tellg();
-  f.seekg(0);
-  std::vector<T> out(size_t(bytes) / sizeof(T));
-  f.read(reinterpret_cast<char*>(out.data()), bytes);
-  return out;
-}
-
-std::filesystem::path make_scratch_dir(const char* prefix) {
-  std::filesystem::path base =
-    std::filesystem::temp_directory_path() /
-    (prefix + std::to_string(::time(nullptr)) + "_" + std::to_string(std::random_device{}()));
-  std::filesystem::create_directories(base);
-  return base;
-}
-
-// False if the generator is unavailable or fails (for example, torch or onnx
-// is not installed).
-bool generate_fixture(const std::string& out_dir) {
-#ifdef SCRIBBLEZ_PY_DIR
-  const std::string py_dir = SCRIBBLEZ_PY_DIR;
-  const std::string cmd = "cd \"" + py_dir + "\" && PYTHONPATH=\"" + py_dir +
-                          "\" python3 -m scripts.move_set_eval.gen_mset_parity_fixture "
-                          "--out-dir \"" +
-                          out_dir + "\"";
-  return std::system(cmd.c_str()) == 0;
-#else
-  (void)out_dir;
-  return false;
-#endif
-}
 
 // The error message from loading `params`, which must fail. Records a test
 // failure and returns "" if the load succeeds.
@@ -181,7 +148,7 @@ void MsetInferenceParityTest::SetUp() {
   } else {
     generated_ = make_scratch_dir("scribblez_msetparity_");
     dir_ = generated_.string();
-    if (!generate_fixture(dir_)) {
+    if (!generate_fixture("scripts.move_set_eval.gen_mset_parity_fixture", dir_)) {
       GTEST_SKIP() << "could not generate fixture; is torch/onnx installed?";
     }
   }

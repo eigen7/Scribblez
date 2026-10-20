@@ -184,5 +184,13 @@ class NeuralNet : public NeuralNetBase {
     Spec::kOptRows, detail::kTensorSpecs<Spec>, Spec::kChannelsTensor};
 };
 
+// Split one encoder row, [spatial | scalar], across row `dst_row` of the net's
+// two board input buffers. For a spec whose inputs are SpatialInput and
+// ScalarInput, after load().
+template <typename Spec>
+void stage_board_row(NeuralNet<Spec>& net, const float* row, int dst_row);
+
 }  // namespace nn
 }  // namespace scribblez
+
+#include "inlines/nn/neural_net.inl"

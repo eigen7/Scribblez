@@ -28,6 +28,7 @@
 #include "encoding/input_encoder.h"
 #include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
+#include "parity_fixture.h"
 
 #include <gtest/gtest.h>
 
@@ -60,24 +61,15 @@ constexpr float kFp16ScoreDiffTol = 0.2f;  // score-diff mean and std, in points
 constexpr float kBf16ProbTol = 5e-3f;
 constexpr float kBf16ScoreDiffTol = 0.8f;
 
+using scribblez::testing::generate_fixture;
+using scribblez::testing::make_scratch_dir;
+using scribblez::testing::read_binary;
+
 // The fixture root from the command line; empty means self-generate.
 static std::string g_fixture_root;
 
 // Must match gen_parity_fixture.py's TRUNK_FIXTURES.
 constexpr const char* kTrunks[] = {"conv", "transformer"};
-
-static std::vector<float> read_floats(const std::string& path) {
-  std::ifstream f(path, std::ios::binary | std::ios::ate);
-  if (!f) {
-    ADD_FAILURE() << "cannot open " << path;
-    return {};
-  }
-  const std::streamsize bytes = f.tellg();
-  f.seekg(0);
-  std::vector<float> out(size_t(bytes) / sizeof(float));
-  f.read(reinterpret_cast<char*>(out.data()), bytes);
-  return out;
-}
 
 // Packs one row's decoded heads in expected.bin's field order.
 static void pack(const float* wld, const float* sd, float* dst) {
@@ -138,26 +130,6 @@ static void check_precision(const std::string& onnx_path, scribblez::nn::Precisi
   EXPECT_LE(max_sd_err, sd_tol);
 }
 
-#ifdef SCRIBBLEZ_PY_DIR
-static std::filesystem::path make_scratch_dir() {
-  std::filesystem::path base = std::filesystem::temp_directory_path() /
-                               ("scribblez_nnparity_" + std::to_string(::time(nullptr)) + "_" +
-                                std::to_string(std::random_device{}()));
-  std::filesystem::create_directories(base);
-  return base;
-}
-
-// Writes every trunk's fixture under `out_dir`; false if the generator fails
-// (for example, torch or onnx is not installed).
-static bool generate_fixtures(const std::string& out_dir) {
-  const std::string py_dir = SCRIBBLEZ_PY_DIR;
-  const std::string cmd = "cd \"" + py_dir + "\" && PYTHONPATH=\"" + py_dir +
-                          "\" python3 -m scripts.position_eval.gen_parity_fixture --out-dir \"" +
-                          out_dir + "\" --num-rows 8";
-  return std::system(cmd.c_str()) == 0;
-}
-#endif
-
 // Parameterised over the trunk. Each case uses the command-line fixture root
 // if one was given, else generates its own into a scratch dir it removes.
 class NnInferenceParityTest : public ::testing::TestWithParam<const char*> {
@@ -179,22 +151,20 @@ void NnInferenceParityTest::SetUp() {
     }
     return;
   }
-#ifdef SCRIBBLEZ_PY_DIR
-  scratch_ = make_scratch_dir();
+  scratch_ = make_scratch_dir("scribblez_nnparity_");
   dir_ = (scratch_ / GetParam()).string();
-  if (!generate_fixtures(scratch_.string())) {
+  // Writes every trunk's fixture under the scratch dir.
+  if (!generate_fixture("scripts.position_eval.gen_parity_fixture", scratch_.string(),
+                        "--num-rows 8")) {
     GTEST_SKIP() << "could not generate fixtures; is torch/onnx installed?";
   }
-#else
-  GTEST_SKIP() << "built without SCRIBBLEZ_PY_DIR; pass a fixture dir on the command line";
-#endif
 }
 
 // Loads and shape-checks the fixture rows; returns the row count.
 static int load_fixture(const std::string& dir, std::vector<float>* inputs,
                         std::vector<float>* expected) {
-  *inputs = read_floats(dir + "/inputs.bin");
-  *expected = read_floats(dir + "/expected.bin");
+  *inputs = read_binary<float>(dir + "/inputs.bin");
+  *expected = read_binary<float>(dir + "/expected.bin");
   EXPECT_EQ(inputs->size() % kFixtureInputFloats, 0u)
     << "inputs.bin size " << inputs->size() << " not a multiple of the full input width "
     << kFixtureInputFloats;
@@ -246,7 +216,7 @@ TEST_P(NnInferenceParityTest, ExternalDataModelLoadsFromAnyWorkingDirectory) {
   std::vector<float> inputs, own_expected;
   const int n = load_fixture(dir_, &inputs, &own_expected);
   ASSERT_GT(n, 0);
-  const std::vector<float> expected = read_floats(dir_ + "/external/expected.bin");
+  const std::vector<float> expected = read_binary<float>(dir_ + "/external/expected.bin");
   ASSERT_EQ(expected.size(), own_expected.size());
   const std::string model = std::filesystem::absolute(dir_ + "/external/model.onnx").string();
   ScopedWorkingDirectory from_root("/");
