@@ -23,13 +23,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE_LINK = os.path.join(ROOT, "target", "engine")
 WEB_DIR = os.path.join(ROOT, "web")
 PYTHON_DIR = os.path.join(ROOT, "py")
-# pytest-xdist workers for the Python suite. loadfile keeps each file on one
-# worker, so module fixtures (engine-built corpora, compiled graphs) are built
-# once. Measured on 28 cores: 67 s serial -> 25 s at 4 workers for +24% total
-# CPU; 8 workers reach 19 s for +75%, a poor trade when several agents test
-# at once. Each worker stays near one core: py/tests/conftest.py caps the math
-# libraries' threads.
-PYTEST_WORKERS = 4
+# How many test processes one run keeps busy at once: the ctest -j level and
+# the pytest-xdist worker count. Several agents often test at once beside
+# experiments, so this stays well under the 28 hardware threads. Measured on
+# the C++ suite: 50 s serial -> 15 s at 4 -> 12 s at 8; with 22 cores held by
+# busy loops, 109 s -> 33 s -> 25 s, so contention slows every level alike
+# rather than collapsing a parallel run. The Python suite: 67 s serial -> 25 s
+# at 4 workers for +24% total CPU; 8 workers reach 19 s for +75%. Each test
+# process stays near one core: py/tests/conftest.py caps the math libraries'
+# threads. ctest's --test-load is not a usable throttle: it reads the 1-minute
+# load average, which a long experiment holds above any threshold that leaves
+# room for it, and then starts no test at all.
+TEST_PROCESSES = 4
 
 
 def run(cmd, cwd=None):
@@ -57,7 +62,7 @@ def run_cpp_tests(verbose: bool) -> int:
     if shutil.which("ctest") is None:
         print("ERROR: ctest not found on PATH.", file=sys.stderr)
         return 1
-    flags = "--output-on-failure"
+    flags = f"--output-on-failure -j {TEST_PROCESSES}"
     if verbose:
         flags += " -V"
     return run(f"ctest {flags}", cwd=build_dir)
@@ -87,7 +92,9 @@ def run_python_tests(verbose: bool) -> int:
     if not os.path.isdir(test_dir):
         print(f"ERROR: python test directory not found at {test_dir}.", file=sys.stderr)
         return 1
-    flags = f"-n {PYTEST_WORKERS} --dist loadfile" + (" -v" if verbose else "")
+    # loadfile keeps each file on one worker, so module fixtures (engine-built
+    # corpora, compiled graphs) are built once.
+    flags = f"-n {TEST_PROCESSES} --dist loadfile" + (" -v" if verbose else "")
     env = os.environ.copy()
     env["PYTHONPATH"] = PYTHON_DIR
     cmd = f"python3 -m pytest {test_dir} {flags}".strip()
@@ -101,7 +108,9 @@ def parse_args() -> argparse.Namespace:
         formatter_class=ArgumentDefaultsHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("-c", "--cpp-only", action="store_true", help="run only the C++ engine tests")
+    group.add_argument(
+        "-c", "--cpp-only", action="store_true", help="run only the C++ engine tests"
+    )
     group.add_argument("-p", "--python-only", action="store_true", help="run only the Python tests")
     group.add_argument("-w", "--web-only", action="store_true", help="run only the web UI tests")
     parser.add_argument("-v", "--verbose", action="store_true", help="enable verbose test output")

@@ -28,6 +28,7 @@
 #include "stub_eval_service.h"
 #include "stub_move_proposal_service.h"
 #include "synthetic_equity.h"
+#include "temp_dir.h"
 #include "training/evidence_trajectory_select.h"
 #include "training/move_set_encoder.h"
 
@@ -81,8 +82,7 @@ bool same_observation(const RolloutStats& a, const RolloutStats& b) {
 class UltimateBotAgentTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    tmp_ = std::filesystem::temp_directory_path() / "scribblez_test_ultimate_bot_XXXXXX";
-    std::filesystem::create_directories(tmp_);
+    tmp_ = scribblez::testing::make_temp_dir("scribblez_test_ultimate_bot");
     scribblez::testing::install_synthetic_hasty_equity(tmp_);
   }
   void TearDown() override { std::filesystem::remove_all(tmp_); }
