@@ -193,6 +193,22 @@ def _setup_lib(lib: ctypes.CDLL):
     ]
     lib.scribblez_leave_value_arrays_content_hash.restype = ctypes.c_char_p
     lib.scribblez_leave_value_arrays_content_hash.argtypes = [ctypes.c_void_p]
+    lib.scribblez_leave_sampler_query.restype = ctypes.c_int
+    lib.scribblez_leave_sampler_query.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_float),  # params
+        ctypes.c_int,  # length
+        ctypes.POINTER(ctypes.c_int32),  # leave_pool
+        ctypes.POINTER(ctypes.c_int64),  # rows
+        ctypes.c_int64,  # n_rows
+        ctypes.POINTER(ctypes.c_double),  # quantiles
+        ctypes.c_int64,  # n_quantiles
+        ctypes.POINTER(ctypes.c_double),  # out_log_z
+        ctypes.POINTER(ctypes.c_double),  # out_log_probs
+        ctypes.POINTER(ctypes.c_int64),  # out_samples
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
 
     lib.scribblez_win_table_write.restype = ctypes.c_int
     lib.scribblez_win_table_write.argtypes = [
@@ -589,6 +605,10 @@ def win_table_samples(path: str | Path) -> np.ndarray:
     return out
 
 
+# The message buffer of an FFI call that reports errors as text.
+_ERR_CAP = 1024
+
+
 class LeaveValueArrays:
     """The engine's LeaveValueArrays (lexicon/leave_value_arrays.h) for the
     session's lexicon: every leave of each length 1..6 with its HastyBot
@@ -633,8 +653,44 @@ class LeaveValueArrays:
         )
         return codes, values
 
-
-_WIN_TABLE_ERR_CAP = 1024
+    def sampler_query(
+        self,
+        params: np.ndarray,
+        length: int,
+        leave_pool: np.ndarray,
+        rows: np.ndarray = (),
+        quantiles: np.ndarray = (),
+    ) -> tuple[float, np.ndarray, np.ndarray]:
+        """One engine LeaveSampler query (belief/leave_sampler.h) over the
+        length-`length` leaves: `params` the 29 exported floats, `leave_pool`
+        27 tile counts. Returns log Z, the log probability of each row index in
+        `rows`, and the row drawn at each quantile in `quantiles`."""
+        p = np.ascontiguousarray(params, dtype=np.float32)
+        pool = np.ascontiguousarray(leave_pool, dtype=np.int32)
+        r = np.ascontiguousarray(rows, dtype=np.int64)
+        q = np.ascontiguousarray(quantiles, dtype=np.float64)
+        log_z = ctypes.c_double()
+        log_probs = np.empty(len(r), dtype=np.float64)
+        samples = np.empty(len(q), dtype=np.int64)
+        err = ctypes.create_string_buffer(_ERR_CAP)
+        rc = self._lib.scribblez_leave_sampler_query(
+            self._handle,
+            p.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+            length,
+            pool.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            r.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+            len(r),
+            q.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            len(q),
+            ctypes.byref(log_z),
+            log_probs.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            samples.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+            err,
+            _ERR_CAP,
+        )
+        if rc != 0:
+            raise ValueError(err.value.decode())
+        return log_z.value, log_probs, samples
 
 
 def win_table_write(path: str | Path, grid: np.ndarray, header: dict[str, object]):
@@ -643,13 +699,13 @@ def win_table_write(path: str | Path, grid: np.ndarray, header: dict[str, object
     provenance lines. Raises ValueError with the engine's message."""
     g = np.ascontiguousarray(grid, dtype=np.float32)
     lines = "".join(f"{k}={v}\n" for k, v in header.items()).encode("utf-8")
-    err = ctypes.create_string_buffer(_WIN_TABLE_ERR_CAP)
+    err = ctypes.create_string_buffer(_ERR_CAP)
     rc = _lib().scribblez_win_table_write(
         str(path).encode("utf-8"),
         g.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
         lines,
         err,
-        _WIN_TABLE_ERR_CAP,
+        _ERR_CAP,
     )
     if rc != 0:
         raise ValueError(err.value.decode())
@@ -663,7 +719,7 @@ def win_table_eval(
     ValueError with the engine's message, e.g. for another format version."""
     f = np.ascontiguousarray(features, dtype=struct_dtype("WinTableFeature"))
     out = np.empty(len(f), dtype=np.float32)
-    err = ctypes.create_string_buffer(_WIN_TABLE_ERR_CAP)
+    err = ctypes.create_string_buffer(_ERR_CAP)
     rc = _lib().scribblez_win_table_eval(
         str(path).encode("utf-8"),
         int(macondo_format),
@@ -671,7 +727,7 @@ def win_table_eval(
         len(f),
         out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
         err,
-        _WIN_TABLE_ERR_CAP,
+        _ERR_CAP,
     )
     if rc != 0:
         raise ValueError(err.value.decode())

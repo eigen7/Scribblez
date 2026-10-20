@@ -73,6 +73,7 @@ add_library(scribblez_core STATIC
   src/agent/evidence_staging.cpp
   src/belief/forgone_plays.cpp
   src/belief/leave_prior.cpp
+  src/belief/leave_sampler.cpp
   src/lexicon/leave_value_arrays.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
@@ -172,7 +173,9 @@ add_library(scribblez_nn STATIC
   # The move proposal model's two-graph (cache + step) runtime; see
   # docs/roadmap.md item 3. It drives two NeuralNets, so it lives here.
   src/agent/move_proposal_nets.cpp
-  src/agent/move_proposal_session.cpp)
+  src/agent/move_proposal_session.cpp
+  # The leave inference model's runtime (docs/plans/deep_bot_v0.md, "Serving").
+  src/belief/leave_inference_net.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_nn
   PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}
@@ -381,6 +384,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_batching_eval_service.cpp
     tests/test_footprint.cpp
     tests/test_gcg_reader.cpp
+    tests/test_leave_sampler.cpp
     tests/test_leave_value_arrays.cpp
     tests/test_probe_log.cpp
     tests/test_rack_inference.cpp
@@ -463,6 +467,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # The move proposal model's two-graph runtime: cache, evidence staging, then
   # step, over several evidence cases.
   add_parity_binary(test_proposal_inference_parity)
+  # The leave inference model, and its leave values and format version gates.
+  add_parity_binary(test_leave_inference_parity)
 
   # The suite's one GPU test: that this machine can build and run a TensorRT
   # plan at all, on the smallest model.

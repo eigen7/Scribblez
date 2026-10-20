@@ -156,11 +156,7 @@ void MoveProposalNets::run_cache(const float* board_row, const move_set::MoveFea
 
   // The board inputs are staged once; the candidates ride the dynamic axis
   // and are re-staged per chunk.
-  const size_t spatial_floats = size_t(cache_net_.spatial_planes()) * kBoardCells;
-  const size_t scalar_floats = cache_net_.scalar_floats();
-  std::memcpy(cache_net_.host<nn::SpatialInput>(), board_row, sizeof(float) * spatial_floats);
-  std::memcpy(cache_net_.host<nn::ScalarInput>(), board_row + spatial_floats,
-              sizeof(float) * scalar_floats);
+  nn::stage_board_row(cache_net_, board_row, 0);
 
   for (int start = 0; start < m; start += max_rows) {
     const int chunk = std::min(max_rows, m - start);

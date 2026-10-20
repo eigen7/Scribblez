@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check that the engine's TensorRT inference matches PyTorch, for every model
-family: position evaluation, move set evaluation, and move proposal.
+family: position evaluation, move set evaluation, move proposal, and leave
+inference.
 
 py/tools/gpu_parity.py
 
@@ -33,6 +34,7 @@ FAMILIES = [
     ("test_nn_inference_parity", ["scripts.position_eval.gen_parity_fixture", "--num-rows", "8"]),
     ("test_mset_inference_parity", ["scripts.move_set_eval.gen_mset_parity_fixture"]),
     ("test_proposal_inference_parity", ["scripts.move_set_eval.gen_proposal_parity_fixture"]),
+    ("test_leave_inference_parity", ["scripts.leave_inference.gen_parity_fixture"]),
 ]
 
 

@@ -124,6 +124,18 @@ int scribblez_leave_value_arrays_copy(const LeaveValueArraysHandle* a, int k, ui
 // trained against them record. Owned by the handle.
 const char* scribblez_leave_value_arrays_content_hash(const LeaveValueArraysHandle* a);
 
+// One LeaveSampler query (belief/leave_sampler.h) over the handle's length-k
+// leaves: `params` the model's 29 floats (belief/leave_params.h), and
+// `leave_pool` the 27 tile counts the leave is drawn from. Writes log Z to
+// out_log_z, the log probability of each of the n_rows `rows` to
+// out_log_probs, and the row drawn at each of the n_quantiles `quantiles` to
+// out_samples. Returns 0, or -1 with a message in `out_err`.
+int scribblez_leave_sampler_query(const LeaveValueArraysHandle* a, const float* params, int k,
+                                  const int32_t* leave_pool, const int64_t* rows, int64_t n_rows,
+                                  const double* quantiles, int64_t n_quantiles, double* out_log_z,
+                                  double* out_log_probs, int64_t* out_samples, char* out_err,
+                                  int err_cap);
+
 // Writes a scribblez win table (sim/win_pct_table.h) from `grid`, the
 // fitter's kRows x kCols floats in file order, and `header`, its provenance as
 // "key=value" lines separated by '\n'. Returns 0, or -1 with a message in

@@ -27,6 +27,7 @@
 #include "encoding/input_encoder.h"
 #include "game/move.h"
 #include "nn/trt_util.h"
+#include "parity_fixture.h"
 #include "sim/sim_runner.h"
 #include "training/move_set_encoder.h"
 
@@ -53,6 +54,10 @@ using scribblez::agent::MoveProposalSession;
 
 namespace {
 
+using scribblez::testing::generate_fixture;
+using scribblez::testing::make_scratch_dir;
+using scribblez::testing::read_binary;
+
 // Per-candidate reference scalars: p_win, p_draw, p_loss, sd_mean, sd_std,
 // gain.
 constexpr int kScalarFields = 6;
@@ -72,42 +77,6 @@ struct Tolerance {
 constexpr Tolerance kFp32Tol{5e-4f, 5e-3f, 5e-3f};
 
 std::string g_fixture_dir;
-
-template <typename T>
-std::vector<T> read_binary(const std::string& path) {
-  std::ifstream f(path, std::ios::binary | std::ios::ate);
-  if (!f) {
-    ADD_FAILURE() << "cannot open " << path;
-    return {};
-  }
-  const std::streamsize bytes = f.tellg();
-  f.seekg(0);
-  std::vector<T> out(size_t(bytes) / sizeof(T));
-  if (bytes) f.read(reinterpret_cast<char*>(out.data()), bytes);
-  return out;
-}
-
-std::filesystem::path make_scratch_dir(const char* prefix) {
-  std::filesystem::path base =
-    std::filesystem::temp_directory_path() /
-    (prefix + std::to_string(::time(nullptr)) + "_" + std::to_string(std::random_device{}()));
-  std::filesystem::create_directories(base);
-  return base;
-}
-
-bool generate_fixture(const std::string& out_dir) {
-#ifdef SCRIBBLEZ_PY_DIR
-  const std::string py_dir = SCRIBBLEZ_PY_DIR;
-  const std::string cmd = "cd \"" + py_dir + "\" && PYTHONPATH=\"" + py_dir +
-                          "\" python3 -m scripts.move_set_eval.gen_proposal_parity_fixture "
-                          "--out-dir \"" +
-                          out_dir + "\"";
-  return std::system(cmd.c_str()) == 0;
-#else
-  (void)out_dir;
-  return false;
-#endif
-}
 
 struct EvidenceCase {
   std::string name;
@@ -193,7 +162,7 @@ void ProposalInferenceParityTest::SetUp() {
   } else {
     generated_ = make_scratch_dir("scribblez_propparity_");
     dir_ = generated_.string();
-    if (!generate_fixture(dir_)) {
+    if (!generate_fixture("scripts.move_set_eval.gen_proposal_parity_fixture", dir_)) {
       GTEST_SKIP() << "could not generate fixture; is torch/onnx installed?";
     }
   }

@@ -1,6 +1,8 @@
 #include "serve/scribblez_ffi.h"
 
 #include "agent/agent.h"
+#include "belief/leave_params.h"
+#include "belief/leave_sampler.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
@@ -482,6 +484,28 @@ int scribblez_leave_value_arrays_copy(const LeaveValueArraysHandle* a, int k, ui
 
 const char* scribblez_leave_value_arrays_content_hash(const LeaveValueArraysHandle* a) {
   return a->arrays.content_hash().c_str();
+}
+
+int scribblez_leave_sampler_query(const LeaveValueArraysHandle* a, const float* params, int k,
+                                  const int32_t* leave_pool, const int64_t* rows, int64_t n_rows,
+                                  const double* quantiles, int64_t n_quantiles, double* out_log_z,
+                                  double* out_log_probs, int64_t* out_samples, char* out_err,
+                                  int err_cap) {
+  try {
+    scribblez::belief::LeaveParams p;
+    std::memcpy(&p, params, sizeof(p));
+    scribblez::TileCounts pool;
+    for (int t = 0; t < scribblez::TILE_KINDS; ++t) pool.add(scribblez::Tile::of(t), leave_pool[t]);
+    const scribblez::belief::LeaveSampler sampler(p, k, pool, a->arrays);
+    *out_log_z = sampler.log_z();
+    for (int64_t i = 0; i < n_rows; ++i) out_log_probs[i] = sampler.log_prob(size_t(rows[i]));
+    for (int64_t i = 0; i < n_quantiles; ++i)
+      out_samples[i] = int64_t(sampler.sample(quantiles[i]));
+    return 0;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
 }
 
 int scribblez_win_table_write(const char* path, const float* grid, const char* header,
