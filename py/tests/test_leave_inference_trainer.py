@@ -134,28 +134,34 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
 TILTED_ONLY = {"eval_letter_calibration", "eval_value_bias", "eval_value_coverage"}
 
 
-@pytest.mark.parametrize("head", HEADS)
-def test_epoch_and_eval_train_each_head(tmp_path, head):
+@pytest.fixture(scope="module")
+def training_corpus(tmp_path_factory) -> tuple[list[dict], loss.TableTensors]:
+    """The batches of a small corpus with sidecars, and the leave table on the
+    CPU: built once for both heads' runs, which only read them."""
     binary = _ENGINE_DIR / "test_slog_writer"
     if not binary.is_file():
         pytest.skip("test_slog_writer not built")
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
+    root = tmp_path_factory.mktemp("corpus")
     # A pass streams the whole 737k-row leave table whatever the batch, so the
     # test's cost is its pass count: four games make one batch, replayed once.
-    subprocess.run([str(binary), str(tmp_path), "4", "4"], check=True, capture_output=True)
-    forgone.write_sidecars(tmp_path, threads=2)
+    subprocess.run([str(binary), str(root), "4", "4"], check=True, capture_output=True)
+    forgone.write_sidecars(root, threads=2)
     ds = SlogDataset(
-        tmp_path, task="leave_inference", post_move=False, apply_symmetry=False, num_workers=1
+        root, task="leave_inference", post_move=False, apply_symmetry=False, num_workers=1
     )
+    return list(ds.iter_batches(64, seed=0)), loss.TableTensors(ffi.LeaveValueArrays(), "cpu")
+
+
+@pytest.mark.parametrize("head", HEADS)
+def test_epoch_and_eval_train_each_head(training_corpus, head):
+    corpus, table = training_corpus
     shapes = {s.name: s.dims for s in ffi.task_input_shapes("leave_inference")}
     torch.manual_seed(0)
     model = LeaveInferenceModel(
         shapes["input_spatial"][0], shapes["input_scalar"][0], 8, 1, head=head
     )
-    table = loss.TableTensors(ffi.LeaveValueArrays(), "cpu")
-
-    corpus = list(ds.iter_batches(64, seed=0))
 
     def batches():
         return iter(corpus)
