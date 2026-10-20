@@ -9,7 +9,7 @@ by agent/evidence_staging.h. This script records PyTorch ground truth for
 engine/tests/test_proposal_inference_parity.cpp, which checks that the whole
 engine path reproduces `MoveSetEvalModel.forward`: both engine builds, the
 board/g/move_enc handoff between the graphs, the C++ evidence staging and the
-output decode. The build runs it as a ctest fixture; to run it by hand, from py/:
+output decode. py/tools/gpu_parity.py runs it; to run it by hand, from py/:
 
     python3 -m scripts.move_set_eval.gen_proposal_parity_fixture --out-dir /tmp/proposal_fixture
 

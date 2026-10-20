@@ -59,8 +59,10 @@ Scribblez specifics for that workflow:
   main's build is stale. Remove the link before running py/build.py in the worktree, which
   would otherwise build into main's tree through it.
 - Before opening a PR: the engine must build, the affected suites must pass
-  (py/run_tests.py --cpp-only for C++ changes, --python-only for Python), and
-  changed files must be clang-format/ruff clean. Say what was run in the PR body.
+  (py/run_tests.py --cpp-only for C++ changes, --python-only for Python;
+  py/tools/gpu_parity.py too for changes that reach TensorRT inference, see
+  "Tests" below), and changed files must be clang-format/ruff clean. Say what
+  was run in the PR body.
 
 # Human-review-friendly Pull Requests
 
@@ -107,11 +109,31 @@ Layout -- where data lives and what provisions it:
   `cmake --build "$(dirname "$(readlink -f target/engine)")" --target <name> -j`
 - All tests: `py/run_tests.py [--cpp-only | --python-only | --web-only]`
   (C++ tests run through ctest).
-- One C++ test case: `./target/engine/scribblez_tests --gtest_filter=<Suite>.<Name>`
-  (same for the other test binaries under target/engine).
+- One C++ test case: `./target/engine/<binary> --gtest_filter=<Suite>.<Name>`, where
+  the binary is core_tests, search_tests, agent_tests or game_runner_tests
+  (engine/CMakeLists.txt says which sources each holds).
 - Stop a process by its PID, never by a `pkill -f`/`pgrep -f` pattern: the
   dashboard's live workers run as the same user with the same command lines as
   ad-hoc runs, and a pattern can also match your own shell.
+
+# Tests
+
+Agents run the suites after nearly every change, often several at once beside
+experiments, so tests stay cheap:
+
+- **No GPU.** Tests run on the CPU only, and a model a test needs is tiny.
+  ctest hides the GPU (CUDA_VISIBLE_DEVICES empty), so a C++ test that needs
+  it fails. The single exception is ctest's `gpu_smoke`, which checks that a
+  TensorRT plan builds and runs at all.
+- **TensorRT parity is a separate check:** `py/tools/gpu_parity.py` (~15 s)
+  compares the engine's TensorRT outputs with PyTorch for every model family.
+  Run it when a change reaches TensorRT inference or what feeds it: engine/
+  src/nn or engine/include/nn, the agents' model sessions, ONNX export
+  (py/scribblez/onnx_export_util.py, */onnx_export.py, proposal_export.py),
+  a model definition, or the input/move encodings a model consumes.
+- **Small configurations.** Search budgets, game counts, epochs and corpus
+  sizes are the smallest that still exercise what the test asserts; a case
+  over ~0.5 s needs a reason.
 
 # Recording gotchas
 

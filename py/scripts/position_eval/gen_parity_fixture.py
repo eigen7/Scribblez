@@ -6,7 +6,7 @@ TensorRT at reduced precision; training and the dashboard run the PyTorch model
 in FP32. This script records the PyTorch outputs as ground truth for
 engine/tests/test_nn_inference_parity.cpp, which checks that the TensorRT path
 and the C++ output decode (softmax, win_prob, score-diff mean/std) reproduce
-them. The build runs it as a ctest fixture; to run it by hand, from py/:
+them. py/tools/gpu_parity.py runs it; to run it by hand, from py/:
 
     python3 -m scripts.position_eval.gen_parity_fixture --out-dir /tmp/nn_fixture
 

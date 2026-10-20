@@ -188,7 +188,7 @@ void ProposalInferenceParityTest::SetUp() {
   if (!g_fixture_dir.empty()) {
     dir_ = g_fixture_dir;
     if (!std::filesystem::exists(dir_ + "/cache.onnx")) {
-      GTEST_SKIP() << "fixture directory " << dir_ << " is empty; is torch/onnx installed?";
+      GTEST_FAIL() << "no fixture in " << dir_;
     }
   } else {
     generated_ = make_scratch_dir("scribblez_propparity_");

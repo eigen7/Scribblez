@@ -6,8 +6,8 @@ TensorRT; training and the dashboard run the PyTorch model. This script records
 the PyTorch outputs as ground truth for
 engine/tests/test_mset_inference_parity.cpp, which checks that the TensorRT
 path reproduces them: engine build, the dtype-aware bindings, chunking of
-large candidate sets, and the C++ output decode. The build runs it as a ctest
-fixture; to run it by hand, from py/:
+large candidate sets, and the C++ output decode. py/tools/gpu_parity.py
+runs it; to run it by hand, from py/:
 
     python3 -m scripts.move_set_eval.gen_mset_parity_fixture --out-dir /tmp/mset_fixture
 
