@@ -36,7 +36,9 @@ float* encode_current_scalars(const LeaveInferenceInput& in, float* out) {
     out[in.leave_length - 1] = 1.0f;
   }
   out += Encoder::kMaxLeaveLength;
-  return out + encode_rack_counts(in.history->observer_exchange, out);
+  for (const Rack& exchange : in.history->observer_exchanges)
+    out += encode_rack_counts(exchange, out);
+  return out;
 }
 
 // The tiles a play placed, as per-tile counts. An exchange hides which tiles

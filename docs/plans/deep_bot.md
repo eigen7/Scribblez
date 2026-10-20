@@ -275,9 +275,9 @@ reads:
 
 - **the current position:** the board, the current cross-checks, the
   observer's rack, the unseen pool, scores and the bag count, and the tiles
-  the observer exchanged on their previous turn, if they did;
+  the observer exchanged on each of their last two turns, if they did;
 - **the opponent's last 3 moves.** The observer's own moves say nothing about
-  the opponent's leave beyond the board, except that exchange. For each move, the squares it placed tiles on;
+  the opponent's leave beyond the board, except those exchanges. For each move, the squares it placed tiles on;
   the cross-checks as they stood *before* it was played, so the model sees
   which hooks and lanes the player had and passed up; and its tiles played,
   whether it was an exchange or a pass, its score and the bag count then;

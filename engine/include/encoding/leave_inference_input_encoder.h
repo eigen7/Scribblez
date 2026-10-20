@@ -9,7 +9,7 @@
 // A row is kSpatialPlanes 15x15 planes, channel-major, then kScalarFloats
 // scalars. The history is the opponent's last LeaveHistory::kSlots moves: the
 // observer's own moves tell nothing about the opponent's leave beyond the
-// board, except an exchange on the observer's previous turn (below).
+// board, except their exchanges on their last two turns (below).
 //
 //   Spatial
 //     current board       BoardPlanes (31)
@@ -21,8 +21,8 @@
 //                         thermometer (100), the score differential (1), the
 //                         bag count / kCountScale (1), the predicted leave's
 //                         length one-hot over 1..kMaxLeaveLength (6), and the
-//                         tiles the observer exchanged on their previous turn
-//                         as counts (27)
+//                         tiles the observer exchanged on their previous turn,
+//                         then on the turn before, as counts (27 each)
 //     per history slot    present (1), move type one-hot (3), the tiles it
 //                         placed as counts (27), how many it played or
 //                         exchanged (1), its score / kScoreDiffInputScale (1),
@@ -55,7 +55,7 @@ class Dictionary;
 // The format version of the leave inference model's input and output
 // (docs/plans/deep_bot_v0.md, "Versions"). Bump it whenever a row's layout or
 // meaning changes; models stamp it and loaders accept only this version.
-inline constexpr int kLeaveInferenceFormatVersion = 2;
+inline constexpr int kLeaveInferenceFormatVersion = 3;
 
 // One of the opponent's past moves as the observer saw it.
 struct LeaveHistorySlot {
@@ -72,15 +72,20 @@ struct LeaveHistorySlot {
 };
 
 // The opponent's kSlots moves before a position, most recent first, and the
-// tiles the observer exchanged on their previous turn.
+// tiles the observer exchanged on their last two turns.
 struct LeaveHistory {
   static constexpr int kSlots = 3;
+  static constexpr int kObserverExchanges = 2;
 
   // The history of the transposed position (Board::transpose).
   LeaveHistory transpose() const;
 
   std::array<LeaveHistorySlot, kSlots> slots;
-  Rack observer_exchange;  // empty unless the observer's previous move exchanged
+  // The observer's exchanges, most recent turn first; each is empty unless
+  // that move exchanged. The previous turn's exchange shrinks the leave pool
+  // (leave_pool). The one before only caps the leave, at most as many of its
+  // tiles as the opponent drew since, which the row leaves to the network.
+  std::array<Rack, kObserverExchanges> observer_exchanges;
 };
 
 // The tiles the leave an opponent's move kept may hold, as the observer saw it
@@ -112,12 +117,12 @@ struct LeaveInferenceInputEncoder {
 
   static constexpr int kCurrentScalars = kRackCountFloats + kUnseenPoolThermoFloats +
                                          kScoreDiffInputFloats + 1 + kMaxLeaveLength +
-                                         TILE_KINDS;      // 162
-  static constexpr int kForgoneScalars = 2 * TILE_KINDS;  // 54
+                                         LeaveHistory::kObserverExchanges * TILE_KINDS;  // 189
+  static constexpr int kForgoneScalars = 2 * TILE_KINDS;                                 // 54
   static constexpr int kSlotScalars =
     1 + kMoveMetaTypeFloats + TILE_KINDS + 3 + kForgoneScalars;  // 88
   static constexpr int kScalarFloats =
-    kCurrentScalars + LeaveHistory::kSlots * kSlotScalars;  // 426
+    kCurrentScalars + LeaveHistory::kSlots * kSlotScalars;  // 453
 
   static constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;
   static constexpr int kInputFloats = kSpatialFloats + kScalarFloats;
