@@ -20,6 +20,12 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Test: Release's optimization flags without link-time optimization, for
+# build-and-test iteration. Tests exercise the same optimized code that ships,
+# but every rebuild skips the LTO link, which dominates incremental Release
+# builds. (Debug stays unoptimized, for debugging.)
+set(CMAKE_CXX_FLAGS_TEST "${CMAKE_CXX_FLAGS_RELEASE}")
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
   # py/build.py always passes this, set to the target CPU microarchitecture
@@ -30,8 +36,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   endif()
 endif()
 
-# Link-time optimization for optimized builds (no-op where the toolchain lacks
-# IPO support, e.g. some Debug setups).
+# Link-time optimization for the shipped optimized builds; Test deliberately
+# omits it (no-op where the toolchain lacks IPO support).
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
 if(ipo_supported)

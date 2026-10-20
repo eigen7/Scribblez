@@ -9,7 +9,7 @@ pre-endgame data files the engine reads, is cloned or moved to the pinned tag
 as needed. Only its data is used; nothing of Macondo is built.
 
 Usage:
-    py/build.py [--debug] [--clean] [-j N]
+    py/build.py [--debug | --test] [--clean] [-j N]
 
 Then play a human-vs-AI game with:
     ./target/engine/play_game --player "--type=human" --player "--type=greedy"
@@ -356,7 +356,16 @@ def parse_args() -> argparse.Namespace:
         description=__doc__,
         formatter_class=ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--debug", action="store_true", help="debug build (default: Release)")
+    build_type = parser.add_mutually_exclusive_group()
+    build_type.add_argument(
+        "--debug", action="store_true", help="unoptimized debug build (default: Release)"
+    )
+    build_type.add_argument(
+        "--test",
+        action="store_true",
+        help="Release optimization without link-time optimization: for building and running "
+        "tests, where the LTO link would dominate every rebuild (default: Release)",
+    )
     parser.add_argument(
         "--clean", action="store_true", help="remove the target/ directory before configuring"
     )
@@ -406,7 +415,7 @@ def main():
         shutil.rmtree(target_dir)
 
     # 1. The C++ engine, once per requested arch.
-    build_type = "Debug" if args.debug else "Release"
+    build_type = "Debug" if args.debug else "Test" if args.test else "Release"
     jobs = args.jobs or default_thread_count()
     host_arch = detect_host_arch()
 

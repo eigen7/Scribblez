@@ -42,6 +42,10 @@ Scribblez specifics for that workflow:
 - For C++ work, run py/build.py in the worktree before trusting IDE diagnostics:
   .clangd resolves the compile database at the checkout's own target/, so clangd
   flags every include as missing in a worktree that has never been built.
+- Build with `py/build.py --test` while building and testing a change: Release
+  optimization minus link-time optimization, whose link step otherwise
+  dominates every incremental rebuild. All build types share one build dir, so
+  switching types recompiles everything.
 - For Python work, `export PYTHONPATH=<worktree>/py` before running Python or
   tests: the Docker image makes py/ importable via a site-packages .pth file
   baked with the absolute path /workspace/repo/py (see "Python code" below),
@@ -96,7 +100,7 @@ Layout -- where data lives and what provisions it:
 
 # Common commands
 
-- Full build: `py/build.py` (host arch, Release; `--debug`, `--clean`, `-j N`).
+- Full build: `py/build.py` (host arch, Release; `--debug`, `--test`, `--clean`, `-j N`).
 - Rebuild one target:
   `cmake --build "$(dirname "$(readlink -f target/engine)")" --target <name> -j`
 - All tests: `py/run_tests.py [--cpp-only | --python-only | --web-only]`
