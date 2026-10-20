@@ -40,8 +40,6 @@ size_t leader_at(const CandidateRollouts& rollouts, size_t n) {
 // Each candidate's comparator: the final leader for a candidate that ran
 // every rollout, else the leader at the checkpoint that stopped it.
 std::vector<size_t> comparators(const CandidateRollouts& rollouts) {
-  size_t most = 0;
-  for (const auto& rs : rollouts) most = std::max(most, rs.size());
   std::map<size_t, size_t> leader_by_length;
   std::vector<size_t> out;
   for (const auto& rs : rollouts) {

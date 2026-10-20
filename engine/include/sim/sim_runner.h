@@ -245,8 +245,8 @@ class SimRunner {
 
   // The horizon checks of validate(), for a CLI surface to run before it loads
   // its leaf: a horizon comes with a leaf (a model or a win table) and vice
-  // versa, and the horizon respects kMinHorizonPlies. Errors are prefixed with `context`, the
-  // agent or tool name.
+  // versa, and the horizon respects kMinHorizonPlies. Errors are prefixed
+  // with `context`, the agent or tool name.
   static void validate_horizon(std::string_view context, int horizon_plies, bool have_leaf);
 
   // The kMinHorizonPlies check alone, for a surface whose horizon/leaf pairing
