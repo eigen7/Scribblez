@@ -340,142 +340,94 @@ target_link_libraries(harvest_positions_tool PRIVATE
   Threads::Threads)
 
 if(SCRIBBLEZ_BUILD_TESTS)
-  # gtest_discover_tests registers each TEST() in a binary as its own ctest
-  # entry, so ctest reports and filters at single-test granularity.
-  include(GoogleTest)
+  # The suite is a few themed binaries rather than one per source file, and
+  # each registers with ctest as a few processes rather than one per TEST():
+  # every process start reloads the lexicon and leave tables (~40 ms), and
+  # every binary is another link on each rebuild. A binary's shards split its
+  # cases round-robin (gtest's GTEST_TOTAL_SHARDS/GTEST_SHARD_INDEX), so ctest
+  # -j runs them side by side; choose a binary's shard count by its run time.
+  # To run one case: `<binary> --gtest_filter=<Suite>.<Name>`.
+  #
+  # Tests never use the GPU (see CLAUDE.md): the shards run with
+  # CUDA_VISIBLE_DEVICES empty, so a test that reaches for it fails rather than
+  # contending with the experiments and other agents' runs sharing the card.
+  # gpu_smoke below is the one exception.
+  function(add_sharded_gtest target shards)
+    math(EXPR last "${shards} - 1")
+    foreach(index RANGE ${last})
+      add_test(NAME ${target}/${index} COMMAND ${target})
+      set_tests_properties(${target}/${index} PROPERTIES ENVIRONMENT
+        "GTEST_TOTAL_SHARDS=${shards};GTEST_SHARD_INDEX=${index};CUDA_VISIBLE_DEVICES=")
+    endforeach()
+  endfunction()
 
-  add_executable(scribblez_tests
-    tests/tests_main.cpp
-    tests/test_footprint.cpp
-    tests/test_web_server.cpp)
-  target_link_libraries(scribblez_tests PRIVATE
-    scribblez_core scribblez_evidence_select Boost::json GTest::gtest_main)
   # The lexicon mount is populated by setup_wizard.py (the .kwg is never
   # committed); lexicon-dependent cases skip when it is absent. tests/data is
-  # the frozen fixture corpus every data-reading test uses. The other
-  # lexicon-gated binaries below get the same two definitions.
-  target_compile_definitions(scribblez_tests PRIVATE
-    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
-    SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
-  gtest_discover_tests(scribblez_tests)
+  # the frozen fixture corpus every data-reading test uses.
+  function(add_test_data_definitions target)
+    target_compile_definitions(${target} PRIVATE
+      SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
+      SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+  endfunction()
 
-  add_executable(test_gcg_reader tests/test_gcg_reader.cpp)
-  target_link_libraries(test_gcg_reader PRIVATE scribblez_core Boost::json GTest::gtest_main)
-  gtest_discover_tests(test_gcg_reader)
-
-  add_executable(test_monte_carlo_sim tests/test_monte_carlo_sim.cpp)
-  target_link_libraries(test_monte_carlo_sim PRIVATE scribblez_core Boost::json GTest::gtest_main)
-  target_compile_definitions(test_monte_carlo_sim PRIVATE
-    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
-    SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
-  gtest_discover_tests(test_monte_carlo_sim)
-
-  add_executable(test_endgame tests/test_endgame.cpp tests/test_endgame_agent.cpp
-    tests/test_pre_endgame.cpp)
-  target_link_libraries(test_endgame PRIVATE
-    scribblez_core Boost::program_options GTest::gtest_main)
-  target_compile_definitions(test_endgame PRIVATE
-    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
-    SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
-  gtest_discover_tests(test_endgame)
-
-  add_executable(test_best_bot tests/test_best_bot.cpp)
-  target_link_libraries(test_best_bot PRIVATE
-    scribblez_core Boost::program_options Threads::Threads GTest::gtest_main)
-  target_compile_definitions(test_best_bot PRIVATE
-    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
-  gtest_discover_tests(test_best_bot)
-
-  # The model-driven agent tests compile the agent's selection TU without its
-  # factory. The factory is what builds the TensorRT service
-  # (nn::PositionEvalService::create() and friends, defined in scribblez_nn), so
-  # leaving it out lets these binaries skip scribblez_nn and CUDA/TensorRT
-  # entirely: the tests inject scripted stub services and never touch the GPU.
-  add_executable(test_neural_agent
-    tests/test_neural_agent.cpp
-    src/agent/neural_agent.cpp)
-  target_link_libraries(test_neural_agent PRIVATE
-    scribblez_core Boost::json Threads::Threads GTest::gtest_main)
-  gtest_discover_tests(test_neural_agent)
-
-  add_executable(test_batching_eval_service tests/test_batching_eval_service.cpp)
-  target_link_libraries(test_batching_eval_service PRIVATE
-    scribblez_core Threads::Threads GTest::gtest_main)
-  gtest_discover_tests(test_batching_eval_service)
-
-  # Runs off a synthetic leave table, so it needs no lexicon or Macondo data.
-  add_executable(test_rack_inference tests/test_rack_inference.cpp)
-  target_link_libraries(test_rack_inference PRIVATE
-    scribblez_core Boost::json GTest::gtest_main)
-  gtest_discover_tests(test_rack_inference)
-
-  add_executable(test_leave_value_arrays tests/test_leave_value_arrays.cpp)
-  target_link_libraries(test_leave_value_arrays PRIVATE
-    scribblez_core Boost::json GTest::gtest_main)
-  gtest_discover_tests(test_leave_value_arrays)
-
-  add_executable(test_probe_log tests/test_probe_log.cpp)
-  target_link_libraries(test_probe_log PRIVATE
-    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
-  gtest_discover_tests(test_probe_log)
-
-  add_executable(test_transfer_candidates tests/test_transfer_candidates.cpp)
-  target_link_libraries(test_transfer_candidates PRIVATE
-    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
-  gtest_discover_tests(test_transfer_candidates)
-
-  add_executable(test_reply_blocking tests/test_reply_blocking.cpp)
-  target_link_libraries(test_reply_blocking PRIVATE
-    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
-  target_compile_definitions(test_reply_blocking PRIVATE
-    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg")
-  gtest_discover_tests(test_reply_blocking)
-
-  # Runs off a synthetic leave table, so it needs no lexicon or Macondo data.
-  add_executable(test_sim_agent tests/test_sim_agent.cpp)
-  target_link_libraries(test_sim_agent PRIVATE
-    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
-  gtest_discover_tests(test_sim_agent)
-
-  # Factory excluded, like test_neural_agent.
-  add_executable(test_neural_sim_agent
-    tests/test_neural_sim_agent.cpp
-    src/agent/neural_sim_agent.cpp)
-  target_link_libraries(test_neural_sim_agent PRIVATE
-    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
-  gtest_discover_tests(test_neural_sim_agent)
-
-  # Factory excluded, like test_neural_agent.
-  add_executable(test_mset_sim_agent
-    tests/test_mset_sim_agent.cpp
-    src/agent/mset_sim_agent.cpp)
-  target_link_libraries(test_mset_sim_agent PRIVATE
-    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
-  gtest_discover_tests(test_mset_sim_agent)
-
-  # Covers the evidence loop and UltimateBotAgent. Factory excluded, like
-  # test_neural_agent.
-  add_executable(test_ultimate_bot_agent
-    tests/test_ultimate_bot_agent.cpp
-    src/agent/ultimate_bot_agent.cpp)
-  target_link_libraries(test_ultimate_bot_agent PRIVATE
+  # Game rules, lexicon, encodings, data formats, and the tools around them.
+  add_executable(core_tests
+    tests/tests_main.cpp
+    tests/test_batching_eval_service.cpp
+    tests/test_footprint.cpp
+    tests/test_gcg_reader.cpp
+    tests/test_leave_value_arrays.cpp
+    tests/test_probe_log.cpp
+    tests/test_rack_inference.cpp
+    tests/test_reply_blocking.cpp
+    tests/test_transfer_candidates.cpp
+    tests/test_web_server.cpp)
+  target_link_libraries(core_tests PRIVATE
     scribblez_core scribblez_evidence_select Boost::json Boost::program_options Threads::Threads
     GTest::gtest_main)
-  gtest_discover_tests(test_ultimate_bot_agent)
+  add_test_data_definitions(core_tests)
+  add_sharded_gtest(core_tests 2)
 
-  add_executable(test_weird_bot tests/test_weird_bot.cpp)
-  target_link_libraries(test_weird_bot PRIVATE
-    scribblez_core Boost::program_options GTest::gtest_main)
-  target_compile_definitions(test_weird_bot PRIVATE
-    SCRIBBLEZ_DEFAULT_KWG="/workspace/mount/lexica/NWL23.kwg"
-    SCRIBBLEZ_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
-  gtest_discover_tests(test_weird_bot)
+  # Search: the endgame and pre-endgame solvers, simulation, and the agents
+  # built directly on them.
+  add_executable(search_tests
+    tests/test_best_bot.cpp
+    tests/test_endgame.cpp
+    tests/test_endgame_agent.cpp
+    tests/test_monte_carlo_sim.cpp
+    tests/test_pre_endgame.cpp
+    tests/test_sim_agent.cpp
+    tests/test_weird_bot.cpp)
+  target_link_libraries(search_tests PRIVATE
+    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
+  add_test_data_definitions(search_tests)
+  add_sharded_gtest(search_tests 4)
+
+  # The model-driven agents. The binary compiles each agent's selection TU
+  # without its factory. The factory is what builds the TensorRT service
+  # (nn::PositionEvalService::create() and friends, defined in scribblez_nn), so
+  # leaving it out lets this binary skip scribblez_nn and CUDA/TensorRT
+  # entirely: the tests inject scripted stub services. Covers the evidence loop
+  # too, through UltimateBotAgent.
+  add_executable(agent_tests
+    tests/test_mset_sim_agent.cpp
+    tests/test_neural_agent.cpp
+    tests/test_neural_sim_agent.cpp
+    tests/test_ultimate_bot_agent.cpp
+    src/agent/mset_sim_agent.cpp
+    src/agent/neural_agent.cpp
+    src/agent/neural_sim_agent.cpp
+    src/agent/ultimate_bot_agent.cpp)
+  target_link_libraries(agent_tests PRIVATE
+    scribblez_core scribblez_evidence_select Boost::json Boost::program_options Threads::Threads
+    GTest::gtest_main)
+  add_sharded_gtest(agent_tests 2)
 
   # Builds real agents through PlayerFactory, whose dispatch references every
-  # agent type, so it links scribblez_neural_agents like play_game does.
-  add_executable(test_game_runner
-    tests/test_game_runner.cpp)
-  target_link_libraries(test_game_runner PRIVATE
+  # agent type, so it links scribblez_neural_agents like play_game does, which
+  # is why it cannot share agent_tests' binary.
+  add_executable(game_runner_tests tests/test_game_runner.cpp)
+  target_link_libraries(game_runner_tests PRIVATE
     scribblez_core
     scribblez_neural_agents
     Boost::program_options
@@ -484,77 +436,33 @@ if(SCRIBBLEZ_BUILD_TESTS)
     Boost::system
     Threads::Threads
     GTest::gtest_main)
-  gtest_discover_tests(test_game_runner)
+  add_sharded_gtest(game_runner_tests 1)
 
-  # TensorRT-vs-PyTorch parity binaries. Each compares against a fixture built
-  # by a Python generator (torch import + ONNX export, ~1.7 s). Since
-  # gtest_discover_tests runs every TEST() in its own process, a ctest
-  # FIXTURES_SETUP step generates each fixture once per suite run into
-  # PARITY_FIXTURE_ROOT, and EXTRA_ARGS hands that directory to every case. The
-  # fixtures are deterministic (fixed seed), so one copy serves all cases. Run
-  # directly with no directory argument, a binary generates its own fixture;
-  # that argument is why these binaries carry their own main() and link
-  # GTest::gtest rather than gtest_main. All of them need a GPU at run time.
-  #
-  # Without torch/onnx the setup step leaves the directory empty and the cases
-  # skip. When the imports are present, a generator failure fails the setup
-  # and every case that depends on it, so a broken fixture cannot hide behind
-  # a skip.
-  set(PARITY_FIXTURE_ROOT "${CMAKE_CURRENT_BINARY_DIR}/parity_fixtures")
-
-  function(add_parity_fixture fixture_name out_dir generator_module)
-    string(JOIN " " extra_args ${ARGN})  # generator flags, as one space-joined string
-    add_test(NAME ${fixture_name}_setup
-      COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${CMAKE_SOURCE_DIR}/py"
-        bash -c "if python3 -c 'import torch, onnx' 2>/dev/null; then exec python3 -m ${generator_module} --out-dir '${out_dir}' ${extra_args}; else echo 'torch/onnx unavailable; ${fixture_name} not generated (its cases will skip)'; fi")
-    set_tests_properties(${fixture_name}_setup PROPERTIES
-      FIXTURES_SETUP ${fixture_name}
-      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/py")
+  # TensorRT-vs-PyTorch parity, one binary per model family. They are not part
+  # of the suite: py/tools/gpu_parity.py runs them, and CLAUDE.md says when.
+  # Run with no argument, each generates its fixture with a Python generator
+  # (torch import + ONNX export, ~2 s) into a scratch dir; given a directory,
+  # it uses the fixture there instead. That argument is why these binaries
+  # carry their own main() and link GTest::gtest rather than gtest_main.
+  function(add_parity_binary target)
+    add_executable(${target} tests/${target}.cpp)
+    target_link_libraries(${target} PRIVATE
+      scribblez_nn scribblez_core Threads::Threads GTest::gtest)
+    target_compile_definitions(${target} PRIVATE SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
   endfunction()
-
-  # Removes the generated fixtures once every dependent case has finished.
-  add_test(NAME parity_fixtures_cleanup
-    COMMAND ${CMAKE_COMMAND} -E rm -rf "${PARITY_FIXTURE_ROOT}")
-  set_tests_properties(parity_fixtures_cleanup PROPERTIES
-    FIXTURES_CLEANUP "nn_parity_fixture;mset_parity_fixture;proposal_parity_fixture")
-
   # The position evaluation model.
-  add_executable(test_nn_inference_parity tests/test_nn_inference_parity.cpp)
-  target_link_libraries(test_nn_inference_parity PRIVATE
-    scribblez_nn scribblez_core Threads::Threads GTest::gtest)
-  target_compile_definitions(test_nn_inference_parity PRIVATE
-    SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
-  add_parity_fixture(nn_parity_fixture "${PARITY_FIXTURE_ROOT}/nn"
-    scripts.position_eval.gen_parity_fixture --num-rows 8)
-  gtest_discover_tests(test_nn_inference_parity
-    EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/nn"
-    PROPERTIES FIXTURES_REQUIRED nn_parity_fixture)
-
+  add_parity_binary(test_nn_inference_parity)
   # The move set evaluation model, including the plan-cache refit and the
   # service's chunking.
-  add_executable(test_mset_inference_parity tests/test_mset_inference_parity.cpp)
-  target_link_libraries(test_mset_inference_parity PRIVATE
-    scribblez_nn scribblez_core Threads::Threads GTest::gtest)
-  target_compile_definitions(test_mset_inference_parity PRIVATE
-    SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
-  add_parity_fixture(mset_parity_fixture "${PARITY_FIXTURE_ROOT}/mset"
-    scripts.move_set_eval.gen_mset_parity_fixture)
-  gtest_discover_tests(test_mset_inference_parity
-    EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/mset"
-    PROPERTIES FIXTURES_REQUIRED mset_parity_fixture)
-
+  add_parity_binary(test_mset_inference_parity)
   # The move proposal model's two-graph runtime: cache, evidence staging, then
   # step, over several evidence cases.
-  add_executable(test_proposal_inference_parity tests/test_proposal_inference_parity.cpp)
-  target_link_libraries(test_proposal_inference_parity PRIVATE
-    scribblez_nn scribblez_core Threads::Threads GTest::gtest)
-  target_compile_definitions(test_proposal_inference_parity PRIVATE
-    SCRIBBLEZ_PY_DIR="${CMAKE_SOURCE_DIR}/py")
-  add_parity_fixture(proposal_parity_fixture "${PARITY_FIXTURE_ROOT}/proposal"
-    scripts.move_set_eval.gen_proposal_parity_fixture)
-  gtest_discover_tests(test_proposal_inference_parity
-    EXTRA_ARGS "${PARITY_FIXTURE_ROOT}/proposal"
-    PROPERTIES FIXTURES_REQUIRED proposal_parity_fixture)
+  add_parity_binary(test_proposal_inference_parity)
+
+  # The suite's one GPU test: that this machine can build and run a TensorRT
+  # plan at all, on the smallest model.
+  add_test(NAME gpu_smoke COMMAND test_nn_inference_parity
+    --gtest_filter=Trunks/NnInferenceParityTest.Fp16MatchesPyTorchReference/conv)
 
   # Writes small .slog files from an in-memory dictionary, for the Python FFI
   # tests.

@@ -59,13 +59,11 @@ find_package(Boost REQUIRED COMPONENTS program_options json filesystem system)
 find_package(Threads REQUIRED)
 find_package(Eigen3 REQUIRED)
 
-# gtest_discover_tests() enumerates a binary's TEST()s by running it as a build
-# step, so test targets can only be built for an arch this machine can execute:
-# a binary compiled for an arch whose instructions the host lacks (e.g. AVX-512
-# on a CPU without it) dies with SIGILL during discovery and fails the build.
-# py/build.py therefore builds tests for the host's own arch only; the other
-# archs of a multi-arch build exist to be bundled to workers, and no test binary
-# is ever bundled.
+# Test binaries are only useful for an arch this machine can execute: one
+# compiled for an arch whose instructions the host lacks (e.g. AVX-512 on a CPU
+# without it) dies with SIGILL. py/build.py therefore builds tests for the
+# host's own arch only; the other archs of a multi-arch build exist to be
+# bundled to workers, and no test binary is ever bundled.
 option(SCRIBBLEZ_BUILD_TESTS "Build the C++ test binaries" ON)
 
 if(SCRIBBLEZ_BUILD_TESTS)

@@ -19,8 +19,8 @@
 // Run with no arguments, the binary generates fixtures into a temp dir through
 // the Python generator at SCRIBBLEZ_PY_DIR, and skips if that fails (no
 // torch/onnx). Pass a fixture root as the first non-gtest argument to reuse
-// existing fixtures instead; ctest does this so the generator runs once per
-// suite rather than once per case.
+// existing fixtures instead; py/tools/gpu_parity.py does this so the generator
+// runs once per run rather than once per case.
 //   test_nn_inference_parity [<fixture_root>]
 
 #include "encoding/input_encoder.h"
@@ -172,10 +172,8 @@ class NnInferenceParityTest : public ::testing::TestWithParam<const char*> {
 void NnInferenceParityTest::SetUp() {
   if (!g_fixture_root.empty()) {
     dir_ = g_fixture_root + "/" + GetParam();
-    // ctest's fixture-setup step leaves the directory empty when torch/onnx
-    // are unavailable; skip as a self-generating run would.
     if (!std::filesystem::exists(dir_ + "/model.onnx")) {
-      GTEST_SKIP() << "fixture directory " << dir_ << " is empty; is torch/onnx installed?";
+      GTEST_FAIL() << "no fixture in " << dir_;
     }
     return;
   }
