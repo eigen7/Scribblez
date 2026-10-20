@@ -48,7 +48,8 @@ def test_greedy_recovers_valid_longest_after_overfit():
     opt = torch.optim.Adam(model.parameters(), lr=3e-3)
     rack = encode_racks(racks)
     gen_in, target = encode_targets(tgt_words)
-    for _ in range(150):
+    # 5 steps already decode correctly from 20 of 20 seeds (untrained: 6 of 20).
+    for _ in range(30):
         logits = model(rack, gen_in, target)
         loss = F.cross_entropy(logits.reshape(-1, 27), target.reshape(-1), ignore_index=PAD)
         opt.zero_grad()
