@@ -275,20 +275,26 @@ TEST(MacondoAutoStopper, PrunesMateriallySimilarPlaysLate) {
   EXPECT_TRUE(simmed_plays[1].ignored);
 }
 
+// The stopping check after the first batch prunes some candidates here, so the
+// comparison covers a batch over the survivors too.
 TEST(MacondoSimmer, ResultsDoNotDependOnThreadCount) {
   if (!have_macondo_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo data";
   const std::optional<Position> pos = hasty_position(nwl23(), 7, 6);
   ASSERT_TRUE(pos);
   const MoveRequest req = pos->request(nwl23());
-  const std::vector<Move> candidates = equity_top_k(req, 6);
-  MacondoSimmer::Params params{.plies = 2, .threads = 1, .max_iterations = 300};
+  const std::vector<Move> candidates = equity_top_k(req, 4);
+  constexpr int kIterations = MacondoAutoStopper::kCheckInterval + 8;
+  MacondoSimmer::Params params{.plies = 1, .threads = 1, .max_iterations = kIterations};
   const MacondoSimmer::Result one =
     MacondoSimmer::simulate(nwl23(), sim_position_from(req), candidates, 0, params, 99);
   params.threads = 4;
   const MacondoSimmer::Result four =
     MacondoSimmer::simulate(nwl23(), sim_position_from(req), candidates, 0, params, 99);
   expect_same_results(one, four);
-  EXPECT_EQ(one.iterations, 300u);
+  EXPECT_EQ(one.iterations, uint64_t(kIterations));
+  int pruned = 0;
+  for (const SimmedPlay& p : one.plays) pruned += p.ignored;
+  EXPECT_GT(pruned, 0);
 }
 
 TEST(MacondoSimmer, RanksPlaysAndRespectsTheIterationCap) {
@@ -298,13 +304,13 @@ TEST(MacondoSimmer, RanksPlaysAndRespectsTheIterationCap) {
   const MoveRequest req = pos->request(nwl23());
   const std::vector<Move> candidates = equity_top_k(req, 5);
   const MacondoSimmer::Result r = MacondoSimmer::simulate(
-    nwl23(), sim_position_from(req), candidates, 0, {.plies = 3, .max_iterations = 100}, 5);
-  EXPECT_EQ(r.iterations, 100u);
+    nwl23(), sim_position_from(req), candidates, 0, {.plies = 3, .max_iterations = 32}, 5);
+  EXPECT_EQ(r.iterations, 32u);
   ASSERT_EQ(r.plays.size(), candidates.size());
   for (size_t i = 0; i < r.plays.size(); ++i) {
     // No stopping check falls before the cap, so nothing was pruned.
     EXPECT_FALSE(r.plays[i].ignored);
-    EXPECT_EQ(r.plays[i].win_prob.count(), 100);
+    EXPECT_EQ(r.plays[i].win_prob.count(), 32);
     EXPECT_GE(r.plays[i].win_prob.mean(), 0.0);
     EXPECT_LE(r.plays[i].win_prob.mean(), 1.0);
     if (i > 0) {
@@ -348,12 +354,12 @@ TEST(BestBot, SimsTopMovesWithMacondosPhaseParameters) {
     const std::optional<Position> pos = find_position(nwl23(), 3, phase.bag);
     ASSERT_TRUE(pos);
     const MoveRequest req = pos->request(nwl23());
-    BestBot bot({.name = "B", .max_iterations = 8, .seed = 77});
+    BestBot bot({.name = "B", .max_iterations = 2, .seed = 77});
     bot.begin_game({});
     const Move played = bot.make_move(req).move;
     const MacondoSimmer::Result replay = MacondoSimmer::simulate(
       nwl23(), sim_position_from(req), equity_top_k(req, phase.candidates), 0,
-      {.plies = phase.plies(*pos), .max_iterations = 8}, bot.sim_seed(0));
+      {.plies = phase.plies(*pos), .max_iterations = 2}, bot.sim_seed(0));
     EXPECT_EQ(played, replay.plays.front().move) << "bag " << pos->bag_size;
   }
 }
@@ -369,21 +375,25 @@ TEST(BestBot, FromSpecParsing) {
   EXPECT_THROW(BestBot::from_spec({"--endgame-budget=5"}, 0, "B"), std::runtime_error);
 }
 
-// Whole games against HastyBot finish normally, through every phase: sims,
-// pre-endgame, and the solved endgame.
+// A whole game against HastyBot finishes normally, through the sims of both
+// phases and a searched endgame. The sims are as small as BestBot allows (one
+// iteration, two-ply rollouts), since only their wiring is under test. The
+// pre-endgame solver is off: a one-in-the-bag turn would cost it seconds, and
+// the PreEndgameSolver suite covers its wiring into the endgame agents.
 TEST(BestBot, PlaysFullGames) {
   if (!have_macondo_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo data";
-  for (uint64_t seed = 1; seed <= 1; ++seed) {
-    EndgameAgent<BestBot>::Params params;
-    params.base = {.name = "BestBot", .max_iterations = 8, .seed = seed};
-    params.solver.budget = 20000;
-    EndgameAgent<BestBot> best(params);
-    HastyBot hasty({.thread_id = 0, .name = "HastyBot"});
-    Game g(best, hasty, nwl23(), seed);
-    g.play();
-    const GameLog log = g.log();
-    ASSERT_GT(log.num_records, 0);
-    EXPECT_TRUE(std::string(log.end_reason) == "out" || std::string(log.end_reason) == "stalemate")
-      << log.end_reason;
-  }
+  constexpr uint64_t kSeed = 5;
+  EndgameAgent<BestBot>::Params params;
+  params.base = {.name = "BestBot", .min_sim_plies = 2, .max_iterations = 1, .seed = kSeed};
+  params.solver.budget = 2000;
+  params.peg.enabled = false;
+  EndgameAgent<BestBot> best(params);
+  HastyBot hasty({.thread_id = 0, .name = "HastyBot"});
+  Game g(best, hasty, nwl23(), kSeed);
+  g.play();
+  const GameLog log = g.log();
+  ASSERT_GT(log.num_records, 0);
+  EXPECT_TRUE(std::string(log.end_reason) == "out" || std::string(log.end_reason) == "stalemate")
+    << log.end_reason;
+  EXPECT_GT(best.endgame().solve_totals().nodes, 0u);
 }
