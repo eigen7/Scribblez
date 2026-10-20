@@ -113,6 +113,16 @@ RUN python3 -c "import site; \
 #    mechanics. These items should occasionally be moved above.
 RUN pip3 install --no-cache-dir schedulefree pytest-xdist
 
+# ccache, the compiler launcher CMakeLists.txt requires. The cache lives on the
+# mount, so it survives container relaunches and is shared by every checkout;
+# CCACHE_BASEDIR rewrites paths under /workspace relative to the build dir, so
+# a worktree hits on objects the main checkout (or another worktree) compiled.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ccache && \
+    rm -rf /var/lib/apt/lists/*
+ENV CCACHE_DIR=/workspace/mount/ccache
+ENV CCACHE_BASEDIR=/workspace
+
 # gh (GitHub CLI) from GitHub's own apt repo, so coding agents can read PR
 # comments / diffs directly instead of hand-rolling API calls.
 RUN mkdir -p /etc/apt/keyrings && \

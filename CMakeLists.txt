@@ -13,6 +13,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # flag once reflection stops being opt-in.
 add_compile_options(-freflection)
 
+# Compile through ccache, which the dev image installs and configures (see
+# docker-setup/local/Dockerfile).
+find_program(CCACHE_PROGRAM ccache REQUIRED)
+set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
+
 # Emit compile_commands.json so editors (clangd, MS C/C++) can find headers.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 

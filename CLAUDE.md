@@ -84,6 +84,8 @@ Layout -- where data lives and what provisions it:
   - lexica/ -- .kwg lexicon files, installed by setup_wizard.py from the
     public Woogles/liwords repo (copyrighted wordlists; never committed).
     SCRIBBLEZ_DEFAULT_KWG points at NWL23.kwg here.
+  - ccache/ -- the compiler cache every checkout's engine build shares
+    (CCACHE_DIR, set by the dev image).
   - macondo/ -- Macondo checkout, cloned at a pinned tag by py/build.py. It
     bundles the leave values (data/strategy/\<lexicon\>/leaves.klv2) and
     pre-endgame table that `HastyEquity::default_leaves_path()` /
