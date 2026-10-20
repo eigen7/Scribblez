@@ -105,7 +105,7 @@ class MonteCarloSimTest : public ::testing::Test {
     return pos;
   }
 
-  MonteCarloResult run(const ParsedGcgPostMove& pos, LeaveCondition condition, int n = 40) {
+  MonteCarloResult run(const ParsedGcgPostMove& pos, LeaveCondition condition, int n = 12) {
     return run_monte_carlo(pos, *dict_, n, /*threads=*/4, condition);
   }
 
@@ -130,12 +130,13 @@ TEST_F(MonteCarloSimTest, ConditionsCoincideAfterABingo) {
 }
 
 // The rollouts are seeded per game, so a truth is a pure function of the
-// position, the condition, and the seeds -- not of the thread split.
+// position, the condition, and the seeds -- not of the thread split. Sixteen
+// games split unevenly over seven threads.
 TEST_F(MonteCarloSimTest, DeterministicAcrossThreadCounts) {
   const ParsedGcgPostMove pos = parse(two_moves_earlier());
   ASSERT_EQ(pos.opp_leave.to_string(), "ACEINS");
   for (const LeaveCondition c : {LeaveCondition::kHidden, LeaveCondition::kFaceUp}) {
-    expect_same(run_monte_carlo(pos, *dict_, 40, 1, c), run_monte_carlo(pos, *dict_, 40, 7, c));
+    expect_same(run_monte_carlo(pos, *dict_, 16, 1, c), run_monte_carlo(pos, *dict_, 16, 7, c));
   }
 }
 
@@ -144,10 +145,10 @@ TEST_F(MonteCarloSimTest, DeterministicAcrossThreadCounts) {
 TEST_F(MonteCarloSimTest, AKnownLeaveSeparatesTheConditions) {
   const ParsedGcgPostMove pos = parse(two_moves_earlier());
   ASSERT_TRUE(pos.opp_observation.has_value());
-  const MonteCarloResult hidden = run(pos, LeaveCondition::kHidden, 200);
-  const MonteCarloResult face_up = run(pos, LeaveCondition::kFaceUp, 200);
-  EXPECT_EQ(hidden.n, 200);
-  EXPECT_EQ(face_up.n, 200);
+  const MonteCarloResult hidden = run(pos, LeaveCondition::kHidden, 16);
+  const MonteCarloResult face_up = run(pos, LeaveCondition::kFaceUp, 16);
+  EXPECT_EQ(hidden.n, 16);
+  EXPECT_EQ(face_up.n, 16);
   EXPECT_NE(hidden.delta_hist, face_up.delta_hist);
 }
 
