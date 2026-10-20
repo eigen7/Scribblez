@@ -23,12 +23,12 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "nn/synthetic_eval_service.h"
 #include "nn/trt_eval_service.h"
 #include "nn/trt_util.h"
 #include "sim/sim_runner.h"
 #include "sim/slog_position_simmer.h"
 #include "util/exception.h"
-#include "util/hash.h"
 #include "util/math.h"
 #include "util/misc.h"
 #include "util/progress.h"
@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
     std::shared_ptr<nn::PositionEvalService> leaf_eval_service =
       nn::load_leaf_position_service(opt.leaf_model);
     std::string leaf_hash;
-    if (!opt.leaf_model.empty()) leaf_hash = util::file_content_hash(opt.leaf_model);
+    if (!opt.leaf_model.empty()) leaf_hash = nn::model_content_hash(opt.leaf_model);
 
     util::ProgressMeter meter(total_positions, "positions");
     for (const binlog::PendingSlog& p : pending) {

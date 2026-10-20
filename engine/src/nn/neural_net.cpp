@@ -152,7 +152,9 @@ void NeuralNetParamsBase::add_options(boost::program_options::options_descriptio
   namespace po = boost::program_options;
   desc.add_options()  //
     ("model", po::value<std::string>(&onnx_path)->required(),
-     "exported ONNX model to build the TensorRT engine from")  //
+     "exported ONNX model to build the TensorRT engine from, or "
+     "synthetic:<hidden|open-leaves|non-finite> for the deterministic CPU stand-in that "
+     "tests run (nn/synthetic_eval_service.h)")  //
     ("batch-size", po::value<int>(&max_rows)->default_value(max_rows),
      "maximum rows (batch of positions, or candidates of one) per TensorRT call")  //
     ("fast-build", po::bool_switch(&fast_build),
