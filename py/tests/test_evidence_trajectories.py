@@ -3,9 +3,10 @@ slot, per-record roles, header fields, proposer hash), the .mset labeling's forc
 inclusion of simmed candidates, the evidence_trajectories workload's cycle and
 delivery, the .gcg position-set front end, and the dashboard's trajectory pane.
 
-The e2e tests run the real binaries over test_slog_writer games and tiny freshly
-exported models (the same fixture recipe as test_move_set_eval_train). They need
-a GPU: both generators build TensorRT engines.
+The e2e tests run the real binaries over test_slog_writer games with the
+engine's synthetic CPU models standing in for the student and the teacher
+(--model=synthetic:hidden, nn/synthetic_eval_service.h), so no assertion reads
+a model's values: the contracts checked are the formats, roles, and coverage.
 """
 
 import os
@@ -20,7 +21,6 @@ import torch
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.evidence.dataset import assemble_subset, gain_targets
-from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.move_set_eval.targets import read_mset
 from scribblez.sim_evidence.sobs import (
     MOVE_DTYPE,
@@ -263,78 +263,35 @@ def test_match_sim_budget_is_refused_past_the_trained_width():
         EvidenceTrajectoriesParams(match_max_sims=0)
 
 
-# --- the e2e path (GPU) ---
+# --- the e2e path ---
 
 
-def _write_student_onnx(path: Path, shapes: dict) -> None:
-    from scribblez.move_set_eval.model import MoveSetEvalModel
-    from scribblez.move_set_eval.onnx_export import export_onnx
-
-    torch.manual_seed(0)
-    student = MoveSetEvalModel(
-        spatial_planes=shapes["input_spatial"][0],
-        scalar_size=shapes["input_scalar"][0],
-        trunk_channels=8,
-        num_blocks=2,
-        num_heads=2,
-    ).eval()
-    # The export takes the widths task_input_shapes reported, so the exported
-    # width is the width the generator re-derives.
-    export_onnx(
-        student,
-        path,
-        spatial_planes=shapes["input_spatial"][0],
-        scalar_size=shapes["input_scalar"][0],
-        opp_leave_input=False,
-        move_encoding_version=move_encoding_version(),
-    )
-
-
-def _write_teacher_onnx(path: Path, shapes: dict) -> None:
-    from scribblez.position_eval.model import PositionEvalModel
-    from scribblez.position_eval.onnx_export import export_onnx
-
-    torch.manual_seed(1)
-    teacher = PositionEvalModel(
-        spatial_planes=shapes["input_spatial"][0],
-        scalar_size=shapes["input_scalar"][0],
-        trunk_channels=8,
-        num_blocks=3,
-    ).eval()
-    export_onnx(
-        teacher,
-        path,
-        spatial_planes=shapes["input_spatial"][0],
-        scalar_size=shapes["input_scalar"][0],
-        opp_leave_input=False,
-    )
+# The synthetic stand-ins for the proposer (a move-set model) and the labeling
+# teacher (a position model), both on the hidden-leaves arm. The served family
+# is the generator's, so the two names are the same.
+STUDENT = "synthetic:hidden"
+TEACHER = "synthetic:hidden"
 
 
 @pytest.fixture(scope="module")
 def traj_corpus(tmp_path_factory) -> SimpleNamespace:
-    """test_slog_writer games with trajectory .sobs sidecars from a tiny
-    student, then .mset labels (with --sobs) from a tiny teacher."""
+    """test_slog_writer games with trajectory .sobs sidecars from the
+    synthetic student, then .mset labels (with --sobs) from the synthetic
+    teacher."""
     for binary in (TRAJECTORY_GENERATOR, TARGET_GENERATOR, SLOG_WRITER):
         if not binary.exists():
             pytest.skip("engine binaries not built")
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
-    if not torch.cuda.is_available():
-        pytest.skip("no GPU")
-    from scribblez.ffi import task_input_shapes
 
     d = tmp_path_factory.mktemp("evidence_traj")
     subprocess.run([str(SLOG_WRITER), str(d), "8", "4"], check=True, capture_output=True)
-    shapes = {s.name: s.dims for s in task_input_shapes()}
-    _write_student_onnx(d / "student.onnx", shapes)
-    _write_teacher_onnx(d / "teacher.onnx", shapes)
 
     traj = subprocess.run(
         [
             str(TRAJECTORY_GENERATOR),
             f"--slog-dir={d}",
-            f"--model={d / 'student.onnx'}",
-            "--fast-build",
+            f"--model={STUDENT}",
             "--rollouts=8",
             "--on-policy-min=1",
             "--on-policy-max=3",
@@ -351,8 +308,7 @@ def traj_corpus(tmp_path_factory) -> SimpleNamespace:
         [
             str(TARGET_GENERATOR),
             f"--slog-dir={d}",
-            f"--model={d / 'teacher.onnx'}",
-            "--fast-build",
+            f"--model={TEACHER}",
             "--sobs",
             "--positions-per-game=4",
             "--threads=4",
@@ -427,8 +383,7 @@ def test_sobs_positions_outside_the_sample_fail_loudly(traj_corpus, tmp_path):
         [
             str(TARGET_GENERATOR),
             f"--slog-file={tmp_path / src.name}",
-            f"--model={traj_corpus.dir / 'teacher.onnx'}",
-            "--fast-build",
+            f"--model={TEACHER}",
             "--sobs",
             "--positions-per-game=1",  # the trajectory run sampled 2 per game
             "--threads=2",
@@ -450,8 +405,7 @@ def test_sobs_flag_requires_the_sidecar(traj_corpus, tmp_path):
         [
             str(TARGET_GENERATOR),
             f"--slog-file={tmp_path / src.name}",
-            f"--model={traj_corpus.dir / 'teacher.onnx'}",
-            "--fast-build",
+            f"--model={TEACHER}",
             "--sobs",
             "--positions-per-game=4",
             "--threads=2",
@@ -517,8 +471,7 @@ def test_gcg_mode_writes_one_sidecar_per_position(traj_corpus, tmp_path):
         str(TRAJECTORY_GENERATOR),
         f"--gcg-dir={set_dir}",
         f"--out-dir={out}",
-        f"--model={traj_corpus.dir / 'student.onnx'}",
-        "--fast-build",
+        f"--model={STUDENT}",
         "--rollouts=8",
         "--on-policy-min=1",
         "--on-policy-max=3",
@@ -666,8 +619,7 @@ def gcg_set(traj_corpus, tmp_path_factory) -> SimpleNamespace:
             str(TRAJECTORY_GENERATOR),
             f"--gcg-dir={set_dir}",
             f"--out-dir={out}",
-            f"--model={traj_corpus.dir / 'student.onnx'}",
-            "--fast-build",
+            f"--model={STUDENT}",
             "--rollouts=8",
             "--on-policy-min=1",
             "--on-policy-max=3",
