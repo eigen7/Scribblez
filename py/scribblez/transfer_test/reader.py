@@ -66,6 +66,14 @@ _flex_attention = torch.compile(flex_attention, dynamic=False)
 _create_block_mask = torch.compile(create_block_mask)
 
 
+def bf16_autocast(device) -> torch.autocast:
+    """The reader's mixed precision on `device`: bf16 autocast on the GPU, plain
+    FP32 elsewhere. On the CPU, bf16 autocast is slower than FP32 at the tiny
+    shapes tests run (the reader and evaluate tests take 2.3x as long)."""
+    device_type = torch.device(device).type
+    return torch.autocast(device_type, dtype=torch.bfloat16, enabled=device_type == "cuda")
+
+
 @dataclass(frozen=True)
 class ReaderConfig:
     width: int

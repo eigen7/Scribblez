@@ -45,7 +45,7 @@ import numpy as np
 import torch
 
 from scribblez.transfer_test.corpus import CorpusFile
-from scribblez.transfer_test.reader import Reader, ReaderConfig
+from scribblez.transfer_test.reader import Reader, ReaderConfig, bf16_autocast
 from scribblez.transfer_test.rows import LEAF, Row, RowConfig, assemble_row
 from scribblez.transfer_test.tokens import collate
 
@@ -181,7 +181,7 @@ def reader_estimates(reader: Reader, rows: list[Row], device, batch: int = 32) -
     for i in range(0, len(rows), batch):
         chunk = rows[i : i + batch]
         b = collate(chunk, max_tokens, q_len).to(device)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with bf16_autocast(device):
             expected = reader(b)["expected"][..., 0].float().cpu().numpy()
         for j, r in enumerate(chunk):
             out.append(expected[j, : len(r.held_out)].astype(np.float64))

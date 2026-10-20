@@ -52,7 +52,7 @@ from scribblez.transfer_test.loss import (
     losses,
     readout,
 )
-from scribblez.transfer_test.reader import Reader, ReaderConfig
+from scribblez.transfer_test.reader import Reader, ReaderConfig, bf16_autocast
 from scribblez.transfer_test.rows import RowConfig, assemble_row
 from scribblez.transfer_test.tokens import collate
 from scribblez.workloads.base import WorkerContext
@@ -192,7 +192,7 @@ def run_steps(model, tower, optimizer, batches, device, params, state, n: int) -
         b = next(batches).apply(torch.from_numpy).to(device)
         for group in optimizer.param_groups:
             group["lr"] = lr_at(state.steps, params)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with bf16_autocast(device):
             terms = losses(model(b, tower=tower), b, weights)
         optimizer.zero_grad(set_to_none=True)
         terms["total"].backward()
@@ -213,7 +213,7 @@ def validate(model, tower, batches: list, device, params) -> dict:
     avg, sums = Averages(), defaultdict(float)
     for cpu_batch in batches:
         b = cpu_batch.to(device)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with bf16_autocast(device):
             out = model(b, tower=tower)
             terms = losses(out, b, weights)
         avg.add({f"val_{k}": float(v) for k, v in terms.items()})
