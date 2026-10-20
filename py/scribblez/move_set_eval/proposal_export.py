@@ -31,7 +31,6 @@ them from a third graph. That costs little next to the rollouts each step
 schedules; caching per-candidate encodings is left to the engine runtime.
 """
 
-import warnings
 from pathlib import Path
 
 import torch
@@ -40,15 +39,12 @@ import torch.nn.functional as F
 
 from scribblez.evidence_fusion import NUM_EVIDENCE_PLANES, NUM_EVIDENCE_SCALARS, best_so_far
 from scribblez.onnx_export_util import (
-    architecture_signature,
-    atomic_output,
     common_metadata,
     cross_attention_2d,
+    export_graph,
     split_concat_linear,
     split_mha_qkv,
-    undo_initializer_dedup,
     weight_fingerprint,
-    write_metadata,
 )
 from scribblez.spatial_trunk import mean_max_pool
 
@@ -303,7 +299,7 @@ def _export(
     trained_max_evidence: int,
     opset: int,
 ):
-    """Trace `wrapper` to `path` atomically and stamp its metadata.
+    """Trace `wrapper` to `path` (export_graph) and stamp its metadata.
 
     Beyond the keys the plain exporter writes, a proposal graph carries
     proposal_export_id, which ties a cache graph to its step graph, and
@@ -311,31 +307,22 @@ def _export(
     The deployed agent's sim budget must respect the latter: the step graph
     pads to DEFAULT_MAX_EVIDENCE, but a wider set than the model trained on is
     out of distribution."""
-    with atomic_output(path) as tmp_path, warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        torch.onnx.export(
-            wrapper,
-            dummies,
-            str(tmp_path),
-            input_names=list(input_names),
-            output_names=list(output_names),
-            dynamic_axes=dynamic_axes,
-            opset_version=opset,
-            dynamo=False,
-            do_constant_folding=False,
-        )
-        undo_initializer_dedup(tmp_path)
-        write_metadata(
-            tmp_path,
-            {
-                **common_metadata(opp_leave_input),
-                "model-architecture-signature": architecture_signature(wrapper, opset),
-                "graph": graph,
-                "move_encoding_version": str(move_encoding_version),
-                "proposal_export_id": proposal_export_id,
-                "trained_max_evidence": str(trained_max_evidence),
-            },
-        )
+    export_graph(
+        wrapper,
+        dummies,
+        path,
+        input_names=input_names,
+        output_names=output_names,
+        dynamic_axes=dynamic_axes,
+        metadata={
+            **common_metadata(opp_leave_input),
+            "graph": graph,
+            "move_encoding_version": str(move_encoding_version),
+            "proposal_export_id": proposal_export_id,
+            "trained_max_evidence": str(trained_max_evidence),
+        },
+        opset=opset,
+    )
 
 
 def export_proposal_cache(
@@ -352,12 +339,8 @@ def export_proposal_cache(
     opset: int = 17,
 ):
     """Write the `move_proposal_cache` graph."""
-    path = Path(path)
-    was_training = model.training
-    model.eval()
     device = next(model.parameters()).device
     wrapper = ProposalCacheExportModel(model).to(device)
-    wrapper.eval()
     t, _, _, _ = move_encoding_dims()
     k = move_cross_slots()
 
@@ -400,8 +383,6 @@ def export_proposal_cache(
         trained_max_evidence=trained_max_evidence,
         opset=opset,
     )
-    if was_training:
-        model.train()
 
 
 def export_proposal_step(
@@ -417,12 +398,8 @@ def export_proposal_step(
     opset: int = 17,
 ):
     """Write the `move_proposal_step` graph, padded to `max_evidence`."""
-    path = Path(path)
-    was_training = model.training
-    model.eval()
     device = next(model.parameters()).device
     wrapper = ProposalStepExportModel(model).to(device)
-    wrapper.eval()
     c = model.cross_attn.embed_dim
     e = max_evidence
     cells = board_size * board_size
@@ -452,8 +429,6 @@ def export_proposal_step(
         trained_max_evidence=trained_max_evidence,
         opset=opset,
     )
-    if was_training:
-        model.train()
 
 
 def export_proposal_pair(

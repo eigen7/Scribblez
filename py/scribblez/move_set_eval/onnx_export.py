@@ -10,9 +10,10 @@ Move inputs keep move_set_encoder.h's native dtypes (int32 letters/squares,
 uint8 masks) so the engine can feed its buffers without conversion; the casts
 the torch modules need are traced into the graph.
 
-TensorRT-refit rules, shared by every exporter here: `dynamo=False` and
-`do_constant_folding=False` keep every weight a plain named initializer the
-TensorRT refitter can map. Two modules are also rebuilt over the trained
+TensorRT-refit rules, shared by every exporter here: export_graph traces with
+`dynamo=False` and `do_constant_folding=False`, which keep every weight a
+plain named initializer the TensorRT refitter can map. Two modules are also
+rebuilt over the trained
 weights as the wrapper's own parameters, because their traced forms defeat
 the refitter or the tracer:
 
@@ -25,7 +26,6 @@ the refitter or the tracer:
     otherwise bake into a fixed shape.
 """
 
-import warnings
 from pathlib import Path
 
 import torch
@@ -34,14 +34,11 @@ import torch.nn.functional as F
 
 from scribblez.dataset import row_layout
 from scribblez.onnx_export_util import (
-    architecture_signature,
-    atomic_output,
     common_metadata,
     cross_attention_2d,
+    export_graph,
     split_concat_linear,
     split_mha_qkv,
-    undo_initializer_dedup,
-    write_metadata,
 )
 from scribblez.spatial_trunk import mean_max_pool
 
@@ -139,13 +136,9 @@ def export_onnx(
     input-encoding arm, `graph=move_set_eval` and the move-encoding version;
     the engine checks the version so a model never runs against move rows it
     was not trained on."""
-    path = Path(path)
-    was_training = model.training
-    model.eval()
     device = next(model.parameters()).device
     # Moves the wrapper's rebuilt Linears, which are constructed on the CPU.
     wrapper = MoveSetEvalExportModel(model).to(device)
-    wrapper.eval()
     t, _, _, _ = move_encoding_dims()
     k = move_cross_slots()
 
@@ -161,35 +154,20 @@ def export_onnx(
         torch.zeros(dummy_m, k, dtype=torch.int32, device=device),
         torch.zeros(dummy_m, k * 26, dtype=torch.uint8, device=device),
     )
-    input_names = ["input_spatial", "input_scalar", *MOVE_INPUT_NAMES]
-
-    # The TorchScript exporter warns that it is deprecated; see
-    # position_eval/onnx_export.py for why it is still used.
-    with atomic_output(path) as tmp_path, warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        torch.onnx.export(
-            wrapper,
-            dummies,
-            str(tmp_path),
-            input_names=input_names,
-            output_names=list(OUTPUT_NAMES),
-            dynamic_axes={name: {0: "moves"} for name in (*MOVE_INPUT_NAMES, *OUTPUT_NAMES)},
-            opset_version=opset,
-            dynamo=False,
-            do_constant_folding=False,
-        )
-        undo_initializer_dedup(tmp_path)
-        write_metadata(
-            tmp_path,
-            {
-                **common_metadata(opp_leave_input),
-                "model-architecture-signature": architecture_signature(wrapper, opset),
-                "graph": "move_set_eval",
-                "move_encoding_version": str(move_encoding_version),
-            },
-        )
-    if was_training:
-        model.train()
+    export_graph(
+        wrapper,
+        dummies,
+        path,
+        input_names=["input_spatial", "input_scalar", *MOVE_INPUT_NAMES],
+        output_names=OUTPUT_NAMES,
+        dynamic_axes={name: {0: "moves"} for name in (*MOVE_INPUT_NAMES, *OUTPUT_NAMES)},
+        metadata={
+            **common_metadata(opp_leave_input),
+            "graph": "move_set_eval",
+            "move_encoding_version": str(move_encoding_version),
+        },
+        opset=opset,
+    )
 
 
 def legacy_checkpoint_condition(paths) -> dict:
