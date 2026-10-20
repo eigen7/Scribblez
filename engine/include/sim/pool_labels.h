@@ -11,8 +11,13 @@
 // difference and se_a that mean's standard error. Then a is best with
 // probability p_a * Prod_{b != a} (1 - p_b), and the leader with Prod_b
 // (1 - p_b). Normalized, the common product cancels: q_a is proportional to
-// p_a / (1 - p_a), and q_leader to 1. Racing stops weak candidates early, on
-// fewer rollouts; their wider standard errors carry that.
+// p_a / (1 - p_a), and q_leader to 1.
+//
+// Racing stops a weak candidate early, at a checkpoint where it trailed that
+// checkpoint's leader, so its d_a and se_a are against that leader, over its
+// own rollouts. Against the final leader's same rollouts it would often look
+// ahead: the final leader is chosen on all the rollouts, and among hundreds of
+// stopped candidates some beat its early ones by chance.
 
 #include "sim/sim_runner.h"
 
@@ -21,16 +26,21 @@
 namespace scribblez {
 
 struct PoolLabel {
-  double win_prob = 0;   // mean of p_win + p_draw / 2 over the candidate's rollouts
-  double paired_se = 0;  // standard error of its paired difference against the leader; 0 for it
-  double q = 0;          // probability that it is the pool's best move
-  int rollouts = 0;      // completed; racing stops some early
+  double win_prob = 0;  // mean of p_win + p_draw / 2 over the candidate's rollouts
+  // Standard error of its paired difference against its comparator; 0 for
+  // the leader.
+  double paired_se = 0;
+  double q = 0;      // probability that it is the pool's best move
+  int rollouts = 0;  // completed; racing stops some early
 };
 
 // The labels of candidates whose rollouts are `rollouts[c]`, candidate c's
 // rollout i the same deal for every candidate that reached it (common random
 // numbers). The leader is the best mean among the candidates that completed
-// the most rollouts, which racing never stops.
+// the most rollouts, which racing never stops. A candidate's comparator is the
+// leader for one that ran every rollout, and else the leader at the
+// checkpoint that stopped it: the most wins over its n rollouts among the
+// candidates that reached n, the first on ties.
 std::vector<PoolLabel> pool_labels(const std::vector<std::vector<Rollout>>& rollouts);
 
 }  // namespace scribblez
