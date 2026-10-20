@@ -124,6 +124,16 @@ RUN mkdir -p /etc/apt/keyrings && \
     apt-get install -y --no-install-recommends gh && \
     rm -rf /var/lib/apt/lists/*
 
+# ccache, the compiler launcher CMakeLists.txt requires. The cache lives on the
+# mount, so it survives container relaunches and is shared by every checkout;
+# CCACHE_BASEDIR rewrites paths under /workspace relative to the build dir, so
+# a worktree hits on objects the main checkout (or another worktree) compiled.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ccache && \
+    rm -rf /var/lib/apt/lists/*
+ENV CCACHE_DIR=/workspace/mount/ccache
+ENV CCACHE_BASEDIR=/workspace
+
 # 8) Macondo's data-path env var, so it finds its kwg/leaves when the engine
 #    launches it as a subprocess.
 ENV MACONDO_CONFIG_DATA_PATH=/workspace/mount/macondo/data
