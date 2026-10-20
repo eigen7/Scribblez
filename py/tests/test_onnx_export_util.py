@@ -1,5 +1,6 @@
 """export_graph (scribblez.onnx_export_util): it leaves every submodule's
-train/eval mode as it found it."""
+train/eval mode as it found it, and it refuses an export that disagrees with
+the module, writing nothing."""
 
 import pytest
 import torch
@@ -27,6 +28,14 @@ class _Wrapper(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+class _BranchOnData(nn.Module):
+    """A Python branch on the input's values, which the tracer bakes in for
+    the dummy input: an export that disagrees with the module elsewhere."""
+
+    def forward(self, x):
+        return x * 2 if bool((x > 0).any()) else x
 
 
 def _export(graph: nn.Module, path):
@@ -61,3 +70,11 @@ def test_eval_mode_restores_on_error():
         assert not any(_modes(net))
         raise RuntimeError
     assert all(_modes(net))
+
+
+@pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
+def test_a_disagreeing_export_raises_and_writes_nothing(tmp_path):
+    path = tmp_path / "branch.onnx"
+    with pytest.raises(ValueError, match="disagrees"):
+        _export(_BranchOnData(), path)
+    assert list(tmp_path.iterdir()) == []

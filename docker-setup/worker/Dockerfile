@@ -135,5 +135,5 @@ RUN apt-get update && \
 RUN python3 -m venv --system-site-packages /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cu129 "${TORCH_SPEC}" && \
-    /opt/venv/bin/pip install --no-cache-dir onnx onnxscript natsort schedulefree tqdm
+    /opt/venv/bin/pip install --no-cache-dir onnx onnxscript onnxruntime natsort schedulefree tqdm
 ENV PATH=/opt/venv/bin:$PATH

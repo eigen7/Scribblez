@@ -2,7 +2,8 @@
 
 Every exporter traces through export_graph, which owns the steps every export
 needs: the module in eval mode and each submodule's mode restored afterwards,
-the tracer settings, and the metadata.
+the tracer settings, the metadata, and a check of the written file against
+the module itself.
 
 Every exporter targets the same C++ TensorRT loader, which imposes three
 constraints:
@@ -22,7 +23,9 @@ import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+import numpy as np
 import onnx
+import onnxruntime as ort
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -212,6 +215,18 @@ def atomic_output(path: Path):
 
 # --- export_graph -----------------------------------------------------------
 
+# How far the written graph, run by onnxruntime on the CPU, may stray from the
+# module run eagerly at full FP32. Kernel and reduction order alone stay near
+# 1e-5; an export defect (a shape baked in by the tracer, a folded or
+# mis-bound weight, a module traced in the wrong mode) moves outputs by
+# order-one amounts.
+CHECK_RTOL = 1e-3
+CHECK_ATOL = 1e-3
+
+# Rows the check feeds along each dynamic axis: unlike any exporter's dummy
+# count, so a tracer that baked the dummy's size into the graph fails.
+CHECK_DYNAMIC_ROWS = 3
+
 
 @contextlib.contextmanager
 def eval_mode(module: nn.Module):
@@ -230,6 +245,66 @@ def eval_mode(module: nn.Module):
     finally:
         for m, training in modes:
             m.training = training
+
+
+@contextlib.contextmanager
+def _full_fp32():
+    """Eager matmuls and convolutions in full FP32, not TF32, so the check
+    compares the export against the module's exact arithmetic."""
+    matmul = torch.get_float32_matmul_precision()
+    cudnn = torch.backends.cudnn.allow_tf32
+    torch.set_float32_matmul_precision("highest")
+    torch.backends.cudnn.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.set_float32_matmul_precision(matmul)
+        torch.backends.cudnn.allow_tf32 = cudnn
+
+
+def _check_inputs(args, input_names, dynamic_axes, seed: int = 0) -> list[torch.Tensor]:
+    """Fresh inputs shaped like `args`: CHECK_DYNAMIC_ROWS rows along each
+    dynamic axis 0, floats random normal, integer inputs (indices, masks)
+    zero, which every integer input accepts."""
+    gen = torch.Generator().manual_seed(seed)
+    out = []
+    for name, arg in zip(input_names, args, strict=True):
+        shape = list(arg.shape)
+        if 0 in dynamic_axes.get(name, {}):
+            shape[0] = CHECK_DYNAMIC_ROWS
+        if arg.dtype.is_floating_point:
+            t = torch.randn(shape, generator=gen, dtype=arg.dtype)
+        else:
+            t = torch.zeros(shape, dtype=arg.dtype)
+        out.append(t.to(arg.device))
+    return out
+
+
+def _flat_outputs(out) -> list[torch.Tensor]:
+    """A forward's outputs in the order the tracer flattens them into graph
+    outputs: a tensor alone, a tuple in order, a dict by its values."""
+    if isinstance(out, torch.Tensor):
+        return [out]
+    return list(out.values()) if isinstance(out, dict) else list(out)
+
+
+def check_against_module(path: Path, graph: nn.Module, inputs, input_names, output_names):
+    """Raise ValueError unless the ONNX at `path`, run by onnxruntime, gives
+    `graph`'s eager outputs on `inputs`."""
+    with eval_mode(graph), torch.no_grad(), _full_fp32():
+        want = graph(*inputs)
+    want = _flat_outputs(want)
+    session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    feed = {name: t.cpu().numpy() for name, t in zip(input_names, inputs, strict=True)}
+    got = session.run(list(output_names), feed)
+    for name, g, w in zip(output_names, got, want, strict=True):
+        w = w.cpu().numpy()
+        if g.shape != w.shape or not np.allclose(g, w, rtol=CHECK_RTOL, atol=CHECK_ATOL):
+            err = np.abs(g - w).max() if g.shape == w.shape else "shape"
+            raise ValueError(
+                f"{path}: exported output '{name}' disagrees with the module "
+                f"(shape {g.shape} vs {w.shape}, max error {err})"
+            )
 
 
 def export_graph(
@@ -252,7 +327,9 @@ def export_graph(
     and without constant folding, which would turn weights into derived
     constants the TensorRT refitter cannot map back to initializers.
     `postprocess(tmp_path)` runs after the initializer de-duplication, before
-    the metadata (e.g. to move weights into external data)."""
+    the metadata (e.g. to move weights into external data). Before the file
+    lands, check_against_module runs it on fresh inputs; on a mismatch it
+    raises and no file is written."""
     path = Path(path)
     with atomic_output(path) as tmp_path:
         with eval_mode(graph), warnings.catch_warnings():
@@ -277,3 +354,5 @@ def export_graph(
             tmp_path,
             {"model-architecture-signature": architecture_signature(graph, opset), **metadata},
         )
+        inputs = _check_inputs(args, input_names, dynamic_axes)
+        check_against_module(tmp_path, graph, inputs, input_names, output_names)
