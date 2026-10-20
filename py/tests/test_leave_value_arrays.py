@@ -40,7 +40,11 @@ def test_codes_decode_to_distinct_leaves_of_their_length(arrays):
             np.arange(k)[None, :, None] < np.arange(k)[:, None, None]
         )
         np.testing.assert_array_equal(copy, earlier.sum(axis=1))
-        assert len(np.unique(codes.T, axis=0)) == count
+        # Distinct rows: one byte per slot packs a row into an int64 key, and
+        # sorting 1-D keys is far cheaper than np.unique over rows.
+        assert arrays.num_codes <= 256
+        keys = (codes.astype(np.int64) << (8 * np.arange(k, dtype=np.int64))[:, None]).sum(axis=0)
+        assert (np.diff(np.sort(keys)) != 0).all()
 
 
 def test_known_values(arrays):

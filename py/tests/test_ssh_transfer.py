@@ -563,17 +563,34 @@ def test_nothing_to_relay_makes_no_call(tmp_path):
     assert _relay(_NoCalls(), tmp_path, local) == []
 
 
+class _ReplayingMachine(_FakeMachine):
+    """A _FakeMachine that runs each distinct read once and replays its
+    output after, so concurrent pulls spend their time extracting, where they
+    can collide, rather than in the container commands' subprocesses."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.outputs = {}
+
+    def read_from_container(self, container: str, command: list[str], timeout=None) -> bytes:
+        key = command[2]
+        if key not in self.outputs:
+            self.outputs[key] = super().read_from_container(container, command, timeout)
+        return self.outputs[key]
+
+
 def test_concurrent_pulls_of_the_same_record_files_do_not_collide(tmp_path):
     """A data home's slots share a volume, so their pulls, each on its own
     transfer thread, carry the same stats/ files at the same moment."""
     remote = _container(tmp_path, **{f"stats/w{i}.json": "{}" for i in range(20)})
     local = tmp_path / "local"
+    machine = _ReplayingMachine(remote)
     errors = []
 
     def pull():
         try:
             for _ in range(10):
-                _pull(tmp_path, remote, local, machine=_FakeMachine(remote))
+                _pull(tmp_path, remote, local, machine=machine)
         except Exception as e:  # noqa: BLE001 -- reported below
             errors.append(e)
 

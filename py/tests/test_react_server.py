@@ -59,11 +59,11 @@ def test_reclaim_port_kills_listener():
         holder.kill()
 
 
-# A process that answers SIGTERM by finishing what it is doing for a second,
+# A process that answers SIGTERM by finishing what it is doing for a moment,
 # as the API finishes its step in flight, and one that never exits on it.
 _SLOW_TO_STOP = (
     "import signal,sys,time;"
-    "signal.signal(signal.SIGTERM, lambda *a: (time.sleep(1), sys.exit(0)));"
+    "signal.signal(signal.SIGTERM, lambda *a: (time.sleep(0.2), sys.exit(0)));"
     "print('ready',flush=True);time.sleep(30)"
 )
 _DEAF_TO_STOP = (
@@ -85,7 +85,8 @@ def test_a_stop_returns_only_once_the_process_has_exited():
 
 
 def test_a_stop_kills_a_process_that_overstays(monkeypatch):
-    monkeypatch.setattr(react_server, "STOP_SECONDS", 0.5)
+    monkeypatch.setattr(react_server, "STOP_QUIET_SECONDS", 0.1)
+    monkeypatch.setattr(react_server, "STOP_SECONDS", 0.1)
     p = _started(_DEAF_TO_STOP)
     react_server._stop([p], {p.pid: "The API"})
     assert p.returncode == -9
