@@ -71,6 +71,16 @@ EndgameVerdict rack_spread(const EndgameState& s) {
   return {.cls = (v > 0) - (v < 0), .spread = v, .proven = true};
 }
 
+// Seeds of games whose one-in-the-bag position is cheap to solve: the mover
+// has few plays (59 and 82, where a typical such position has hundreds), so a
+// case costs a fraction of a second rather than seconds. In the first the pass
+// is scored over all eight draws; in the second, at kSolverBudget nodes, some
+// leaf solves complete and the rest fall back to the greedy playout.
+constexpr uint64_t kCheapSeed = 257;
+constexpr uint64_t kSolverSeed = 237;
+// Nodes per leaf for the cases that run our solver behind the oracle.
+constexpr uint64_t kSolverBudget = 150;
+
 // A position with one tile in the bag, from the first game at or after seed
 // `from` that reaches one.
 Position one_in_bag(uint64_t from) {
@@ -122,7 +132,7 @@ const PreEndgameSolver::RankedPlay* find_play(const std::vector<PreEndgameSolver
 // exactly the reference's points, and none beats the solver's pick.
 TEST(PreEndgameSolver, ScoresBagEmptyingPlaysOverEveryDraw) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / leaves";
-  const Position p = one_in_bag(3);
+  const Position p = one_in_bag(kCheapSeed);
   ScriptedOracle oracle(rack_spread);
   const std::vector<PreEndgameSolver::RankedPlay> ranked =
     PreEndgameSolver(oracle).solve(peg_position(p), {.max_effort = 1});
@@ -147,7 +157,7 @@ TEST(PreEndgameSolver, SearchesThePass) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / leaves";
   ScriptedOracle oracle(rack_spread);
   const std::vector<PreEndgameSolver::RankedPlay> ranked =
-    PreEndgameSolver(oracle).solve(peg_position(one_in_bag(5)), {.max_effort = 1});
+    PreEndgameSolver(oracle).solve(peg_position(one_in_bag(kCheapSeed)), {.max_effort = 1});
   const PreEndgameSolver::RankedPlay* pass = find_play(ranked, MoveType::PASS);
   ASSERT_NE(pass, nullptr);
   EXPECT_GT(pass->total, 0);
@@ -159,7 +169,7 @@ TEST(PreEndgameSolver, SearchesThePass) {
 // estimate, or as a loss for the mover, as configured.
 TEST(PreEndgameSolver, UnprovenLeavesFollowThePolicy) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / leaves";
-  const Position p = one_in_bag(3);
+  const Position p = one_in_bag(kCheapSeed);
   // Unclassified, and estimated as a loss for whoever is to move: after a
   // bag-emptying play, that is the opponent.
   const auto unknown_loss = [](const EndgameState&) { return EndgameVerdict{.spread = -5}; };
@@ -200,9 +210,9 @@ TEST(PreEndgameSolver, MacondoEffortSchedule) {
 // moves.
 TEST(PreEndgameSolver, RunsOnTheSolverOracle) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / leaves";
-  const Position p = one_in_bag(4);
+  const Position p = one_in_bag(kSolverSeed);
   EndgameSolver solver;
-  SolverEndgameOracle oracle(solver, /*budget=*/500);
+  SolverEndgameOracle oracle(solver, kSolverBudget);
   const std::vector<PreEndgameSolver::RankedPlay> ranked =
     PreEndgameSolver(oracle).solve(peg_position(p), {.max_effort = 1});
   ASSERT_FALSE(ranked.empty());
@@ -220,7 +230,7 @@ TEST(PreEndgameSolver, EndgameAgentsWireItIn) {
   EXPECT_FALSE(EndgameAgent<HastyBot>::Params{}.peg.enabled);
   EXPECT_TRUE(EndgameAgent<BestBot>::Params{}.peg.enabled);
 
-  const Position p = one_in_bag(4);
+  const Position p = one_in_bag(kCheapSeed);
   const MoveRequest req = p.request(nwl23());
   EndgameAgent<HastyBot>::Params params;
   params.base = {.thread_id = 0, .name = "E"};
@@ -229,7 +239,7 @@ TEST(PreEndgameSolver, EndgameAgentsWireItIn) {
 
   params.peg.enabled = true;
   params.peg.solver.max_effort = 1;
-  params.peg.budget = 200;
+  params.peg.budget = kSolverBudget;
   EndgameAgent<HastyBot> on(params);
   const Move m = on.make_move(req).move;
   if (m.type() == MoveType::PLAY) {
