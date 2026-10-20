@@ -360,9 +360,8 @@ void SimRunner::validate(const Params& params) {
                    params.leaf_service != nullptr || params.win_table != nullptr);
 }
 
-void SimRunner::validate_horizon(std::string_view context, int horizon_plies,
-                                 bool have_leaf_service) {
-  if ((horizon_plies > 0) != have_leaf_service) {
+void SimRunner::validate_horizon(std::string_view context, int horizon_plies, bool have_leaf) {
+  if ((horizon_plies > 0) != have_leaf) {
     throw util::CleanException(
       "{}: a truncation horizon and a leaf (a model or a win table) come together (horizon 0 = "
       "terminal rollouts, no leaf)",

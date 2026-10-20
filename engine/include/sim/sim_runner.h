@@ -19,9 +19,9 @@
 // stops after that many plies, and a leaf stands in for the rest of the game:
 // either the position-evaluation model's readout at the horizon (its outcome
 // probabilities and predicted final delta), or a win table's P(win) for the
-// horizon's side to move (docs/plans/deep_bot.md, "The leaf: a win table"). A
-// rollout whose game ends before the horizon, or whose horizon falls in the
-// endgame, contributes its exact terminal outcome instead.
+// horizon's side to move (docs/plans/deep_bot.md, "Sims"). A rollout whose
+// game ends before the horizon, or whose horizon falls in the endgame,
+// contributes its exact terminal outcome instead.
 
 #include "game/bag.h"
 #include "game/board.h"
@@ -244,10 +244,10 @@ class SimRunner {
   static void validate(const Params& params);
 
   // The horizon checks of validate(), for a CLI surface to run before it loads
-  // the leaf model: a horizon comes with a leaf model and vice versa, and the
-  // horizon respects kMinHorizonPlies. Errors are prefixed with `context`, the
+  // its leaf: a horizon comes with a leaf (a model or a win table) and vice
+  // versa, and the horizon respects kMinHorizonPlies. Errors are prefixed with `context`, the
   // agent or tool name.
-  static void validate_horizon(std::string_view context, int horizon_plies, bool have_leaf_service);
+  static void validate_horizon(std::string_view context, int horizon_plies, bool have_leaf);
 
   // The kMinHorizonPlies check alone, for a surface whose horizon/leaf pairing
   // is checked elsewhere.

@@ -20,6 +20,12 @@ void set_field(char (&field)[N], const std::string& s, const char* what) {
   std::memcpy(field, s.data(), s.size());
 }
 
+// A NUL-padded fixed-width field's string.
+template <size_t N>
+std::string get_field(const char (&field)[N]) {
+  return std::string(field, strnlen(field, N));
+}
+
 PoolFileHeader make_header(const PoolSources& s) {
   PoolFileHeader h{};
   h.magic = kPoolMagic;
@@ -36,6 +42,27 @@ PoolFileHeader make_header(const PoolSources& s) {
 }
 
 }  // namespace
+
+PoolSources PoolSources::of(const PoolFileHeader& h) {
+  return {.win_table_hash = get_field(h.win_table_hash),
+          .win_table_tag = get_field(h.win_table_tag),
+          .win_table_generation = h.win_table_generation,
+          .win_table_format_version = h.win_table_format_version,
+          .leave_model_hash = get_field(h.leave_model_hash),
+          .horizon_plies = h.horizon_plies,
+          .rollouts = int(h.rollouts)};
+}
+
+const char* PoolSources::first_difference(const PoolSources& o) const {
+  if (win_table_hash != o.win_table_hash) return "win table";
+  if (win_table_tag != o.win_table_tag) return "win table tag";
+  if (win_table_generation != o.win_table_generation) return "win table generation";
+  if (win_table_format_version != o.win_table_format_version) return "win table format version";
+  if (leave_model_hash != o.leave_model_hash) return "leave model";
+  if (horizon_plies != o.horizon_plies) return "horizon";
+  if (rollouts != o.rollouts) return "rollout budget";
+  return nullptr;
+}
 
 PoolWriter::PoolWriter(const std::string& path, const PoolSources& sources) : path_(path) {
   const PoolFileHeader h = make_header(sources);

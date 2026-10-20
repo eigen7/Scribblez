@@ -85,6 +85,12 @@ struct PoolSources {
   std::string leave_model_hash;  // empty under uniform beliefs
   int horizon_plies = 0;
   int rollouts = 0;
+
+  // The sources a written file's header records.
+  static PoolSources of(const PoolFileHeader& h);
+  // The name of the first field in which this and `other` differ; nullptr if
+  // they agree.
+  const char* first_difference(const PoolSources& other) const;
 };
 
 // One position's pool, as a writer takes it: parallel per-candidate arrays.

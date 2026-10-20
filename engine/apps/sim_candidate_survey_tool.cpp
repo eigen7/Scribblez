@@ -86,7 +86,7 @@ namespace json = boost::json;
 
 constexpr const char* kSurveyExt = ".simsurvey.json";
 constexpr const char* kPoolExt = ".pool";
-constexpr int kSurveyVersion = 3;
+constexpr int kSurveyVersion = 4;
 
 struct Options {
   std::string slog_dir;
@@ -181,13 +181,12 @@ void validate(const Options& opt) {
   SimRunner::validate(SimRunner::Params{.rollouts = opt.rollouts});
   if (opt.recipe != "all" && opt.recipe != "setup" && opt.recipe != "stratified" && !opt.pool())
     throw util::CleanException("--recipe must be all, setup, stratified or pool");
-  if ((opt.horizon_plies > 0) != !opt.win_table_path.empty())
-    throw util::CleanException("--win-table and --horizon-plies come together");
-  SimRunner::validate_min_horizon("sim-survey", opt.horizon_plies);
+  SimRunner::validate_horizon("sim-survey", opt.horizon_plies, !opt.win_table_path.empty());
   if (opt.pool() && opt.win_table_path.empty())
     throw util::CleanException("--recipe pool needs --win-table and --horizon-plies");
   if (opt.pool() && opt.open_leaves)
     throw util::CleanException("--recipe pool sims hidden leaves only");
+  if (opt.blank_prune_points < 0) throw util::CleanException("--blank-prune-points must be >= 0");
   SimRunner::validate(SimRunner::Params{.rollouts = opt.confirm_rollouts});
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
   if (opt.confirm_picks < 1) throw util::CleanException("--confirm-picks must be >= 1");
@@ -406,6 +405,34 @@ json::object position_json(const SurveyedPosition& p, const Options& opt) {
           {"confirm", confirm_json(p, opt)}};
 }
 
+// Where a run's labels come from: the win table its rollouts stop at, and
+// the horizon and budget. Needs a loaded win table.
+PoolSources pool_sources(const Options& opt) {
+  const std::map<std::string, std::string>& header = opt.win_table->header();
+  const auto entry = [&](const std::string& key) {
+    const auto it = header.find(key);
+    return it == header.end() ? std::string() : it->second;
+  };
+  PoolSources s;
+  s.win_table_hash = util::file_content_hash(opt.win_table_path);
+  s.win_table_tag = entry("tag");
+  s.win_table_generation = entry("generation").empty() ? -1 : std::stoi(entry("generation"));
+  s.win_table_format_version = std::stoi(entry("format_version"));
+  s.horizon_plies = opt.horizon_plies;
+  s.rollouts = opt.rollouts;
+  return s;
+}
+
+// The survey header's record of a truncation: null for terminal rollouts.
+json::value win_table_json(const Options& opt) {
+  if (opt.win_table == nullptr) return nullptr;
+  const PoolSources s = pool_sources(opt);
+  return json::object{{"hash", s.win_table_hash},
+                      {"tag", s.win_table_tag},
+                      {"generation", s.win_table_generation},
+                      {"format_version", s.win_table_format_version}};
+}
+
 json::object header_json(const Options& opt) {
   return {{"version", kSurveyVersion},
           {"recipe", opt.recipe},
@@ -418,6 +445,8 @@ json::object header_json(const Options& opt) {
           {"max_plays", opt.max_plays},
           {"max_positions", opt.max_positions},
           {"open_leaves", opt.open_leaves},
+          {"horizon_plies", opt.horizon_plies},
+          {"win_table", win_table_json(opt)},
           {"seed", opt.seed},
           {"score_bin_width", kScoreBinWidth},
           {"delta_bin_width", kDeltaBinWidth},
@@ -588,23 +617,6 @@ void survey_file(const binlog::PendingSlog& slog, const Dictionary& dict, const 
   partial.finish();
 }
 
-// The .pool header's record of where the labels came from.
-PoolSources pool_sources(const Options& opt) {
-  const std::map<std::string, std::string>& header = opt.win_table->header();
-  const auto entry = [&](const std::string& key) {
-    const auto it = header.find(key);
-    return it == header.end() ? std::string() : it->second;
-  };
-  PoolSources s;
-  s.win_table_hash = util::file_content_hash(opt.win_table_path);
-  s.win_table_tag = entry("tag");
-  s.win_table_generation = entry("generation").empty() ? -1 : std::stoi(entry("generation"));
-  s.win_table_format_version = std::stoi(entry("format_version"));
-  s.horizon_plies = opt.horizon_plies;
-  s.rollouts = opt.rollouts;
-  return s;
-}
-
 PoolPosition pool_position(const SimmedPosition& r) {
   return {r.pos, r.candidates.num_legal_moves, r.candidates.moves, r.candidates.equity_ranks,
           pool_labels(r.rollouts)};
@@ -629,16 +641,39 @@ void pool_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Op
 // Prefix the file name, so a batch run's failure names both file and position.
 void process_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt) {
   try {
-    if (opt.pool()) {
-      pool_file(slog, dict, opt);
-      return;
-    }
-    survey_file(slog, dict, opt);
+    opt.pool() ? pool_file(slog, dict, opt) : survey_file(slog, dict, opt);
   } catch (const util::CleanException& ex) {
     throw util::CleanException("{}: {}", slog.path.stem().string(), ex.what());
   } catch (const util::Exception& ex) {
     throw util::Exception("{}: {}", slog.path.stem().string(), ex.what());
   }
+}
+
+// A finished .pool is skipped, not redone, so it must come from this run's
+// sources: pools of mixed sources in one corpus would pass for one set of
+// labels.
+void check_finished_pools(const std::vector<fs::path>& slogs, const Options& opt) {
+  const PoolSources want = pool_sources(opt);
+  for (const fs::path& slog : slogs) {
+    const fs::path pool = fs::path(slog).replace_extension(kPoolExt);
+    if (!fs::exists(pool)) continue;
+    const char* field = PoolSources::of(PoolReader(pool.string()).header()).first_difference(want);
+    if (field != nullptr) {
+      throw util::CleanException("{} has another {} than this run; move it aside to redo it",
+                                 pool.string(), field);
+    }
+  }
+}
+
+// The run's settings, as the startup line on stderr states them.
+std::string run_summary(const Options& opt, size_t files) {
+  std::string out = std::format("{} file(s), recipe {}; ", files, opt.recipe);
+  out += opt.pool() ? std::format("{} rollouts per candidate", opt.rollouts)
+                    : std::format("{} screening + {} confirming rollouts", opt.rollouts,
+                                  opt.confirm_rollouts);
+  if (opt.win_table != nullptr)
+    out += std::format(", stopped at {} after {} plies", opt.win_table_path, opt.horizon_plies);
+  return out + std::format(", {} threads", opt.threads);
 }
 
 }  // namespace
@@ -723,12 +758,12 @@ int main(int argc, char** argv) {
       opt.win_table = &*win_table;
     }
 
-    const std::vector<binlog::PendingSlog> pending = binlog::load_pending_slogs(
-      binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files), opt.pool() ? kPoolExt : kSurveyExt,
-      opt.open_leaves, "{} was played with face-up leaves; pass --open-leaves to sim it");
-    std::cerr << "sim-survey: " << pending.size() << " file(s), recipe " << opt.recipe << "; "
-              << opt.rollouts << " screening + " << opt.confirm_rollouts << " confirming rollouts, "
-              << opt.threads << " threads\n";
+    const std::vector<fs::path> inputs = binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files);
+    if (opt.pool()) check_finished_pools(inputs, opt);
+    const std::vector<binlog::PendingSlog> pending =
+      binlog::load_pending_slogs(inputs, opt.pool() ? kPoolExt : kSurveyExt, opt.open_leaves,
+                                 "{} was played with face-up leaves; pass --open-leaves to sim it");
+    std::cerr << "sim-survey: " << run_summary(opt, pending.size()) << "\n";
     if (!opt.gcg_dir.empty()) fs::create_directories(opt.gcg_dir);
     for (const binlog::PendingSlog& p : pending) process_file(p, dict, opt);
     return 0;
