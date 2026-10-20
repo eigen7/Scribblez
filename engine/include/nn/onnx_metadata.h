@@ -11,8 +11,8 @@
 // "absent" value, so older models stay loadable where that value is accepted.
 //
 // The writers, all under py/scribblez/ and all through onnx_export_util.py:
-// position_eval/onnx_export.py, move_set_eval/onnx_export.py, and
-// move_set_eval/proposal_export.py.
+// position_eval/onnx_export.py, move_set_eval/onnx_export.py,
+// move_set_eval/proposal_export.py, and leave_inference/onnx_export.py.
 
 namespace scribblez {
 namespace nn {
@@ -26,6 +26,8 @@ inline constexpr const char* kGraphMoveSetEval = "move_set_eval";
 // GRAPH_CACHE and GRAPH_STEP.
 inline constexpr const char* kGraphMoveProposalCache = "move_proposal_cache";
 inline constexpr const char* kGraphMoveProposalStep = "move_proposal_step";
+// The leave inference model. Must match leave_inference/onnx_export.py's GRAPH.
+inline constexpr const char* kGraphLeaveInference = "leave_inference";
 
 struct OnnxMetadata {
   // The input-encoding arm: which optional block the board row carries.

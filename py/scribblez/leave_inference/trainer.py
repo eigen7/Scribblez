@@ -4,8 +4,9 @@ inference model, with the win table as its side product.
 
 Per generation it waits for self-play to complete the cursor generation,
 trains one epoch over the window, evaluates on the held-out games, refits the
-win table from the window, checkpoints, and delivers the table, the
-checkpoint, the cursor and last the record.
+win table from the window, exports the model for the engine (the tilted head
+only), checkpoints, and delivers the table, the export, the checkpoint, the
+cursor and last the record.
 
 At startup it builds the leave table (in the engine, through the FFI) and
 plays the held-out games, both on its own machine. The table's identity, the
@@ -33,7 +34,9 @@ from scribblez.generational.controls import CpuController, default_controls, pro
 from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.generational.records import TrainRecorder, read_controls
 from scribblez.leave_inference import forgone, holdout, loss, win_table
+from scribblez.leave_inference.heads import HEAD_TILTED
 from scribblez.leave_inference.model import LeaveInferenceModel
+from scribblez.leave_inference.onnx_export import FORMAT_KEY, TABLE_KEY, export_onnx
 from scribblez.leave_inference.train_loop import LAYOUT, evaluate, run_epoch
 from scribblez.paths import TagPaths
 from scribblez.position_eval.trainer import (
@@ -50,9 +53,6 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 TASK = "leave_inference"
 EVAL_BATCH = 1024
 FACE_UP_FLAG = format_layout()["constants"]["slog"]["flag_face_up_leaves"]
-# The checkpoint-config entries a resume must match.
-FORMAT_KEY = "leave_inference_format_version"
-TABLE_KEY = "leave_values"
 
 
 def _rel(paths: TagPaths, path: Path) -> str:
@@ -129,10 +129,27 @@ def refit_win_table(paths: TagPaths, params, gen: int, window: list[Path], ctx) 
     }
 
 
+def export_generation(paths: TagPaths, params, gen: int, model, ctx):
+    """Export generation `gen`'s model for the engine, if its head is served."""
+    if params.head != HEAD_TILTED:
+        return
+    export_onnx(
+        model,
+        paths.onnx_path(gen),
+        ctx["spatial_planes"],
+        ctx["scalar_size"],
+        leave_values=ctx["config"][TABLE_KEY],
+        provenance={"tag": ctx["tag"], "generation": gen, "policy": hasty_spec(params)},
+    )
+
+
 def _deliver_generation(sink, paths, gen, checkpoint_snap, state_snap, recorder, staged):
     """One generation's deliveries, the record last."""
     win = paths.win_table_path(gen)
     sink.deliver_output(win, _rel(paths, win), keep=True)
+    model = paths.onnx_path(gen)
+    if model.exists():
+        sink.deliver_output(model, _rel(paths, model))
     state_pair.deliver(sink, checkpoint_snap, state_snap, gen)
     recorder.deliver_staged(staged)
 
@@ -153,8 +170,9 @@ def _checkpoint_and_eval(
     cpu,
     ctx,
 ):
-    """Evaluate, refit the win table, checkpoint, publish the cursor, and
-    queue the generation's deliveries. Returns the seconds spent."""
+    """Evaluate, refit the win table, export the model, checkpoint, publish
+    the cursor, and queue the generation's deliveries. Returns the seconds
+    spent."""
     sys.stdout.write("\n")
     t0 = time.time()
     record = {
@@ -176,6 +194,7 @@ def _checkpoint_and_eval(
         f"wintable={record['eval_wintable_logloss']:.4f} "
         f"(macondo {record['eval_wintable_logloss_macondo']:.4f})"
     )
+    export_generation(paths, params, gen, model, ctx)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     lifecycle.write_train_state(paths, asdict(state))
     staged = recorder.stage_generation(gen, state.rows_trained, record)
@@ -337,6 +356,8 @@ def run(ctx: WorkerContext) -> int:
     run_ctx = {
         "tag": ctx.tag,
         "config": config,
+        "spatial_planes": in_shapes["input_spatial"][0],
+        "scalar_size": in_shapes["input_scalar"][0],
         "sink": ctx.sink,
         "read_controls": functools.partial(read_controls, ctx.sink),
         "table": table,

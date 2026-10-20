@@ -1,6 +1,8 @@
 #pragma once
 
+#include "belief/leave_params.h"
 #include "encoding/input_encoder.h"
+#include "encoding/leave_inference_input_encoder.h"
 #include "nn/onnx_metadata.h"
 #include "training/move_set_encoder.h"
 #include "training/training_targets.h"
@@ -286,6 +288,17 @@ struct EvMaskInput {
   static constexpr bool kDynamic = true;  // wrapped Static in the spec
 };
 
+// ---------- leave inference tensors --------------------------------------
+
+// leave_params (N, 29): the tilt of each row's leave prior, belief::LeaveParams'
+// layout. Consumed raw by belief::LeaveSampler, so it carries no RowDecode.
+struct LeaveParamsOutput {
+  static constexpr const char* kName = "leave_params";
+  using Elem = float;
+  static constexpr int kRowElems = belief::LeaveParams::kFloats;
+  static constexpr bool kDynamic = true;
+};
+
 // ---------- type list ----------------------------------------------------
 
 // A type list of tensor descriptors, in the style of training_targets.h's
@@ -470,6 +483,35 @@ class MoveProposalStepSpec {
                Static<EvObsPlanesInput>, Static<EvObsScalarsInput>, Static<EvMaskInput>>;
   using MoveInputs = TensorList<>;
   using Outputs = TensorList<WldOutput, ScoreDiffOutput, GainOutput>;
+  using AuxOutputs = TensorList<>;
+};
+
+// ---------- the leave inference family -----------------------------------
+//
+// The leave inference model (docs/plans/deep_bot_v0.md, "Serving"): N
+// positions' rows (encoding/leave_inference_input_encoder.h), each to its 29
+// tilt floats. belief/leave_inference_net.h drives it through NeuralNet
+// directly: its one output is consumed raw, so TrtEvalService's per-row decode
+// would add nothing.
+class LeaveInferenceSpec {
+ public:
+  static constexpr const char* kGraph = kGraphLeaveInference;
+  static constexpr bool kAcceptUntaggedGraph = false;
+  static constexpr const char* kAxisTag = "batch";
+  static constexpr const char* kChannelsTensor = nullptr;
+
+  // The agent batches ~2,000 queries a turn; v0's one consumer, the survey
+  // tool, submits one position per call, so the plan is tuned for that.
+  static constexpr int kDefaultMaxRows = 256;
+  static constexpr int kOptRows = 1;
+
+  // No absent allowance: every export stamps it.
+  static constexpr VersionRequirement kVersions[] = {
+    {"leave_inference_format_version", kLeaveInferenceFormatVersion, -1}};
+
+  using Inputs = TensorList<SpatialInput, ScalarInput>;
+  using MoveInputs = TensorList<>;
+  using Outputs = TensorList<LeaveParamsOutput>;
   using AuxOutputs = TensorList<>;
 };
 

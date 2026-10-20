@@ -1,6 +1,6 @@
 """The leave_inference workload's trainer pieces: the resume gate, the
-face-up refusal, the held-out set's reproducibility, the eval metrics, and
-the workload's registration."""
+face-up refusal, the held-out set's reproducibility, the eval metrics, the
+per-generation export, and the workload's registration."""
 
 import shutil
 import subprocess
@@ -128,6 +128,24 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
 
     leave_inference.run_generate(Ctx())
     assert calls == [(False, 0.0, forgone.SUFFIX)]
+
+
+@pytest.mark.parametrize("head", HEADS)
+def test_each_generation_exports_the_served_head_only(tmp_path, head):
+    paths = _paths(tmp_path)
+    shapes = {s.name: s.dims for s in ffi.task_input_shapes("leave_inference")}
+    model = LeaveInferenceModel(
+        shapes["input_spatial"][0], shapes["input_scalar"][0], 8, 1, head=head
+    )
+    params = leave_inference.LeaveInferenceParams(head=head)
+    ctx = {
+        "tag": "t",
+        "config": {trainer.TABLE_KEY: "abc"},
+        "spatial_planes": shapes["input_spatial"][0],
+        "scalar_size": shapes["input_scalar"][0],
+    }
+    trainer.export_generation(paths, params, 3, model, ctx)
+    assert paths.onnx_path(3).exists() == (head == HEAD_TILTED)
 
 
 # The tilted head's readouts, which the autoregressive head does not report.

@@ -417,10 +417,11 @@ pool, the observer's unseen pool, and the leave table.
 - **One pass over the table** for that length gives each row's log weight,
   the CDF in table order, and `log Z`. Each row costs about 28 additions, as
   in the design.
-- **`sample(u)`** binary-searches the CDF, then adds a uniform refill from
-  the unseen pool less the leave, drawn from the caller's seeded variates.
-- **`log_prob(leave)`** returns the leave's log probability, which the parity
-  tests use.
+- **`sample(u)`** binary-searches the CDF for the leave's row. The refill, a
+  uniform draw from the unseen pool less the leave, is the sim's: SimRunner
+  already seats a known leave and draws the rest of the rack from the bag.
+- **`log_prob(row)`** returns a row's log probability, which the parity test
+  uses.
 
 v0's only engine consumer is the survey tool: one query per position, about
 300 samples. The GPU-batched sampler and Algorithm 2 serve the agent's
@@ -440,6 +441,8 @@ parity reference.
   `move_proposal_nets` does. TrtEvalService's batching earns nothing at one
   call per position. At load, it checks the model's `leave_values` entry
   against the loaded leave values' KLV hash.
+- **The export.** The trainer exports each generation's tilted-head model to
+  `models/`, beside its win table, so a generation can be pinned.
 
 ### Python work: `py/scribblez/leave_inference/`
 
@@ -824,11 +827,12 @@ Each step is a PR with its own tests.
 5. **Serving.**
    - ONNX export with its metadata, `LeaveInferenceSpec`,
      `LeaveInferenceNet` with the `leave_values` check, and `LeaveSampler`.
-   - Parity fixtures through `add_parity_fixture` (registered in
-     `parity_fixtures_cleanup`): ONNX output against PyTorch, and
-     `LeaveSampler`'s `log Z` and `log_prob` against the PyTorch table pass.
+   - Parity checks: a TensorRT parity binary run by `py/tools/gpu_parity.py`
+     (the served 29 floats against PyTorch), and a Python test of
+     `LeaveSampler`'s log probabilities against the PyTorch table pass.
    - *Reports:* the CPU time per query for 6-tile leaves, which feeds the
-     survey tool's cost estimate.
+     survey tool's cost estimate. Measured: 7.4 ms per query with 300 samples,
+     on a contended machine.
 
 *Measure:* the model's NLL against the uniform prior, by bag band and by
 leave length, for both heads. The gap between the heads, concentrated where
