@@ -103,8 +103,6 @@ def test_the_best_checkpoint_round_trips(tmp_path):
         assert torch.equal(a, b)
 
 
-# evaluate() autocasts for cuda; on the CPU torch warns and runs in float32.
-@pytest.mark.filterwarnings("ignore:CUDA is not available:UserWarning")
 def test_an_untrained_reader_scores_as_the_prior(tmp_path):
     files = [fake_file(tmp_path, k=k, seed=k) for k in (5, 6)]
     for f in files:

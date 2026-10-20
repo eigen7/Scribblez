@@ -197,8 +197,6 @@ def test_dense_attention_matches_flex_attention(tmp_path, monkeypatch):
     torch.testing.assert_close(dense, flex, atol=1e-5, rtol=1e-4)
 
 
-# The trainer autocasts for cuda; on the CPU torch warns and runs in float32.
-@pytest.mark.filterwarnings("ignore:CUDA is not available:UserWarning")
 def test_training_steps_lower_the_loss_on_a_fixed_batch(tmp_path):
     b = _batch(tmp_path, rows=4)
     params = dataclasses.replace(
