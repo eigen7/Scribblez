@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Build Scribblez: the C++ engine and the web UI's npm packages.
 
-The engine builds under target/archs/<arch>/ (this machine's CPU by default;
-see --archs), and target/engine links to this machine's build. play_game
+The engine builds under target/archs/<arch>/<build type>/ (this machine's CPU
+by default, see --archs; Release by default, see --debug and --test), and
+target/engine links to this machine's most recent build. Each build type keeps
+its own tree, so switching back to a type already built recompiles only what
+changed since. play_game
 starts the web UI's dev server itself, so npm never needs running by hand.
 The pinned Macondo checkout under the mount dir, whose leave-value and
 pre-endgame data files the engine reads, is cloned or moved to the pinned tag
@@ -71,12 +74,12 @@ def detect_host_arch() -> str:
     sys.exit("Could not determine host CPU arch via `g++ -march=native -Q --help=target`.")
 
 
-def arch_build_dir(arch: str) -> str:
-    return os.path.join(ARCHS_DIR, arch)
+def arch_build_dir(arch: str, build_type: str) -> str:
+    return os.path.join(ARCHS_DIR, arch, build_type)
 
 
-def arch_build_log(arch: str) -> str:
-    return os.path.join(arch_build_dir(arch), "build.log")
+def arch_build_log(arch: str, build_type: str) -> str:
+    return os.path.join(arch_build_dir(arch, build_type), "build.log")
 
 
 # Strips ANSI escape sequences (colored diagnostics, cursor control) so build
@@ -92,7 +95,7 @@ def configure_engine(arch: str, build_type: str, *, live: bool, tests: bool) -> 
     CMakeLists.txt). Without `live`, output goes to the arch's build.log
     instead of the terminal.
     """
-    build_dir = arch_build_dir(arch)
+    build_dir = arch_build_dir(arch, build_type)
     cmd = (
         f"cmake -S . -B {build_dir} -DCMAKE_BUILD_TYPE={build_type} "
         f"-DSCRIBBLEZ_MARCH={arch} -DSCRIBBLEZ_BUILD_TESTS={'ON' if tests else 'OFF'}"
@@ -101,7 +104,7 @@ def configure_engine(arch: str, build_type: str, *, live: bool, tests: bool) -> 
         print(f"\nConfiguring arch '{arch}' ({build_type}) in {build_dir} ...")
         return run_rc(cmd)
     os.makedirs(build_dir, exist_ok=True)
-    with open(arch_build_log(arch), "w") as f:
+    with open(arch_build_log(arch, build_type), "w") as f:
         f.write(f"$ {cmd}\n")
         f.flush()
         return subprocess.run(
@@ -114,7 +117,7 @@ def build_engine(arch: str, build_type: str, jobs: int) -> int:
     arch: the default build without --archs. Returns the first failing step's
     exit code, or 0.
     """
-    build_dir = arch_build_dir(arch)
+    build_dir = arch_build_dir(arch, build_type)
     rc = configure_engine(arch, build_type, live=True, tests=True)
     if rc:
         return rc
@@ -138,7 +141,7 @@ def build_all_archs(
 
     Only one arch, the "primary" (`host_arch` if present, else the first),
     prints to the terminal. Every arch, the primary included, writes a
-    plain-text target/archs/<arch>/build.log.
+    plain-text target/archs/<arch>/<build type>/build.log.
     """
     primary = host_arch if host_arch in archs else archs[0]
 
@@ -146,7 +149,7 @@ def build_all_archs(
     # non-primary logs, but the primary's live configure never touches its log,
     # and the compile step below appends.
     for arch in archs:
-        log = arch_build_log(arch)
+        log = arch_build_log(arch, build_type)
         if os.path.exists(log):
             os.remove(log)
 
@@ -165,7 +168,7 @@ def build_all_archs(
         )
     failed = [arch for arch, rc in configure_rcs.items() if rc]
     if failed:
-        _print_log_locations(archs)
+        _print_log_locations(archs, build_type)
         return failed
 
     print(
@@ -178,7 +181,9 @@ def build_all_archs(
     # one can't be misread). `|| touch <marker>` also makes every recipe
     # succeed as far as make is concerned, so one arch failing never stops the
     # others; no `-k` needed.
-    fail_markers = {arch: os.path.join(arch_build_dir(arch), ".build_failed") for arch in archs}
+    fail_markers = {
+        arch: os.path.join(arch_build_dir(arch, build_type), ".build_failed") for arch in archs
+    }
     for marker in fail_markers.values():
         if os.path.exists(marker):
             os.remove(marker)
@@ -188,8 +193,8 @@ def build_all_archs(
     # primary tees raw output to the terminal and a filtered copy to its log;
     # the others write only to their filtered logs.
     def recipe(arch: str) -> str:
-        make_cmd = f"+$(MAKE) -C {arch_build_dir(arch)} 2>&1"
-        log = arch_build_log(arch)
+        make_cmd = f"+$(MAKE) -C {arch_build_dir(arch, build_type)} 2>&1"
+        log = arch_build_log(arch, build_type)
         if arch == primary:
             pipeline = f"{make_cmd} | tee >({_STRIP_TTY_SED} >> {log})"
         else:
@@ -211,7 +216,7 @@ def build_all_archs(
         os.unlink(dispatch_path)
 
     print(f"\nAbove output was for arch={primary}.")
-    _print_log_locations(archs)
+    _print_log_locations(archs, build_type)
 
     failed = [arch for arch, marker in fail_markers.items() if os.path.exists(marker)]
     if dispatch_rc and not failed:
@@ -234,11 +239,12 @@ def count_warnings(log_path: str) -> int:
         return sum(1 for line in f if ": warning: " in line)
 
 
-def _print_log_locations(archs: list[str]):
+def _print_log_locations(archs: list[str], build_type: str):
     print("\nTo see output for all archs, see:")
     for arch in archs:
-        rel = os.path.relpath(arch_build_log(arch), ROOT)
-        warnings = count_warnings(arch_build_log(arch))
+        log = arch_build_log(arch, build_type)
+        rel = os.path.relpath(log, ROOT)
+        warnings = count_warnings(log)
         if warnings:
             plural = "" if warnings == 1 else "s"
             print(f"    {rel}  \033[33m<- {warnings} warning{plural}\033[0m")
@@ -258,11 +264,11 @@ def _replace_with_symlink(link_path: str, real_path: str):
     os.symlink(os.path.relpath(real_path, os.path.dirname(link_path)), link_path)
 
 
-def link_host_arch_build(arch: str):
+def link_host_arch_build(arch: str, build_type: str):
     """Point target/engine and target/compile_commands.json at this host
-    arch's build, the fixed paths that tests, scripts, the FFI loader and
-    clangd expect."""
-    build_dir = arch_build_dir(arch)
+    arch's build of `build_type`, the fixed paths that tests, scripts, the FFI
+    loader and clangd expect."""
+    build_dir = arch_build_dir(arch, build_type)
     _replace_with_symlink(os.path.join(TARGET_DIR, "engine"), os.path.join(build_dir, "engine"))
     _replace_with_symlink(
         os.path.join(TARGET_DIR, "compile_commands.json"),
@@ -351,6 +357,19 @@ def sync_macondo_tag():
     run(f"git -c advice.detachedHead=false checkout --quiet {MACONDO_TAG}", cwd=MACONDO_DIR)
 
 
+def remove_single_type_builds():
+    """Remove each target/archs/<arch>/ build tree from before build types got
+    their own subdirectories: it would otherwise sit, gigabytes of stale
+    objects, around the new per-type trees nested inside it."""
+    if not os.path.isdir(ARCHS_DIR):
+        return
+    for arch in sorted(os.listdir(ARCHS_DIR)):
+        old_tree = os.path.join(ARCHS_DIR, arch)
+        if os.path.exists(os.path.join(old_tree, "CMakeCache.txt")):
+            print(f"\nRemoving {old_tree}, a build tree from before per-build-type subdirs.")
+            shutil.rmtree(old_tree)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -377,9 +396,9 @@ def parse_args() -> argparse.Namespace:
         "--archs",
         default="",
         help="comma-separated GCC -march values to build instead of this host's arch, each "
-        "under target/archs/<arch>/ (tests are built only for this host's arch). Useful for "
-        "pushing a bundle by hand for another CPU family; the dashboard builds the archs its "
-        "machines need itself",
+        "under target/archs/<arch>/<build type>/ (tests are built only for this host's arch). "
+        "Useful for pushing a bundle by hand for another CPU family; the dashboard builds the "
+        "archs its machines need itself",
     )
     parser.add_argument(
         "--skip-web", action="store_true", help="skip installing the web UI npm dependencies"
@@ -406,13 +425,8 @@ def main():
     target_dir = TARGET_DIR
     if args.clean and os.path.isdir(target_dir):
         shutil.rmtree(target_dir)
-    elif os.path.exists(os.path.join(target_dir, "CMakeCache.txt")) and not os.path.isdir(
-        ARCHS_DIR
-    ):
-        # A CMake build directly under target/, not under target/archs/<arch>/:
-        # its cache paths can't be reused, so reconfigure from scratch.
-        print(f"\nFound a pre-multi-arch build at {target_dir}; removing it to reconfigure.")
-        shutil.rmtree(target_dir)
+    else:
+        remove_single_type_builds()
 
     # 1. The C++ engine, once per requested arch.
     build_type = "Debug" if args.debug else "Test" if args.test else "Release"
@@ -429,12 +443,12 @@ def main():
         if rc:
             sys.exit(rc)
 
-    if os.path.isdir(arch_build_dir(host_arch)):
-        link_host_arch_build(host_arch)
+    if os.path.isdir(arch_build_dir(host_arch, build_type)):
+        link_host_arch_build(host_arch, build_type)
     else:
         print(
             f"\nNo build found for this host's arch ('{host_arch}') under "
-            f"{arch_build_dir(host_arch)}; target/engine not updated. Run "
+            f"{arch_build_dir(host_arch, build_type)}; target/engine not updated. Run "
             "py/build.py without --archs to build it."
         )
 

@@ -1,7 +1,7 @@
 """Bundles: how compiled engine binaries and the py/ tree reach remote workers.
 
 A bundle holds one tarball per CPU microarchitecture its machines need (the
-engine is compiled per arch under target/archs/<arch>/; see py/build.py).
+engine is compiled per arch under target/archs/<arch>/Release/; see py/build.py).
 Each tarball has that arch's binaries plus the arch-independent py/ tree. The
 dashboard copies the tarball for a container's machine into the container
 before starting it, and the image's bootstrap unpacks it
@@ -58,6 +58,10 @@ BUNDLE_BINARY_NAMES = [
     "libscribblez_ffi.so",
 ]
 
+# The build type workers run. It has its own tree per arch, so a bundle build
+# leaves the controller's --debug or --test tree alone.
+BUNDLE_BUILD_TYPE = "Release"
+
 # The bundle store, relative to the mount root.
 STORE_REL = "cloud/bundles"
 LATEST_NAME = "LATEST"
@@ -100,7 +104,7 @@ def arch_tarball_name(arch: str) -> str:
 
 
 def _create_arch_tarball(arch: str, out_dir: Path) -> Path:
-    engine_dir = Path(arch_build_dir(arch)) / "engine"
+    engine_dir = Path(arch_build_dir(arch, BUNDLE_BUILD_TYPE)) / "engine"
     for name in BUNDLE_BINARY_NAMES:
         assert (engine_dir / name).is_file(), (
             f"{engine_dir / name} not built; run py/build.py --archs {arch} first"
@@ -118,7 +122,7 @@ def _shipped_files(archs: list[str]) -> list[tuple[str, Path]]:
     binaries, the py/ tree, and the eval datasets. The identity is
     "<arch>/<name>" for a binary and the repo-relative path otherwise."""
     files = [
-        (f"{arch}/{name}", Path(arch_build_dir(arch)) / "engine" / name)
+        (f"{arch}/{name}", Path(arch_build_dir(arch, BUNDLE_BUILD_TYPE)) / "engine" / name)
         for arch in archs
         for name in BUNDLE_BINARY_NAMES
     ]
@@ -291,10 +295,10 @@ def prune(store: Path, keep: set[str]):
 
 
 def build_archs(archs: list[str], jobs: int | None = None):
-    """Build `archs` in Release, as py/build.py does by default. Incremental,
-    so an up-to-date tree costs seconds."""
+    """Build `archs` in BUNDLE_BUILD_TYPE. Incremental, so an up-to-date tree
+    costs seconds."""
     failed = build_all_archs(
-        sorted(set(archs)), "Release", jobs or default_thread_count(), detect_host_arch()
+        sorted(set(archs)), BUNDLE_BUILD_TYPE, jobs or default_thread_count(), detect_host_arch()
     )
     assert not failed, f"build failed for arch(s): {', '.join(sorted(failed))}"
 
