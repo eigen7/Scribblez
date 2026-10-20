@@ -1151,8 +1151,12 @@ def test_a_pinned_bundle_the_store_lacks_is_rebuilt(manager, spec, task, monkeyp
     """A pin from before the store (or a pruned bundle) cannot be copied into
     a container, so the slot's start builds the tree afresh and repins."""
     builds = []
+    # Held until the first pass has seen the build pending: a build that won
+    # the race would be consumed by that pass, leaving nothing to wait on.
+    release = threading.Event()
 
     def build(self, archs):
+        release.wait(timeout=5)
         builds.append(archs)
         _in_store(self, "fresh", archs)
         return SimpleNamespace(bundle_id="fresh", source_hash="h", archs=archs)
@@ -1163,6 +1167,7 @@ def test_a_pinned_bundle_the_store_lacks_is_rebuilt(manager, spec, task, monkeyp
     missing = {"observed_running": False, "ssh_probe": "missing"}
 
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)  # kicks off the build
+    release.set()
     manager._pending_builds[f"{spec.name}/t"].result(timeout=5)
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, missing)
     assert builds == [["znver3"]]
