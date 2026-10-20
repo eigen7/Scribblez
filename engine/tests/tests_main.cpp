@@ -4750,6 +4750,12 @@ std::vector<Rollout> rollouts_of(std::initializer_list<double> wins) {
   return out;
 }
 
+// P(beats the comparator), from a mean paired difference over n rollouts and
+// its variance.
+double p_beats(double mean, double var, int n) {
+  return 0.5 * std::erfc(-mean / (std::sqrt(var / n) * std::sqrt(2.0)));
+}
+
 }  // namespace pool_test
 
 // The leader is the best of the candidates that ran every rollout; q sums to
@@ -4791,8 +4797,30 @@ TEST(PoolLabels, IdenticalCandidatesSplitEvenly) {
   EXPECT_NEAR(labels[1].q, 0.5, 1e-12);
 }
 
+// A candidate racing stopped is compared with the leader that stopped it, not
+// with the final leader, which it leads on their shared rollouts.
+TEST(PoolLabels, StoppedCandidateFacesItsCheckpointLeader) {
+  using pool_test::p_beats;
+  using pool_test::rollouts_of;
+  const std::vector<std::vector<Rollout>> rollouts = {
+    rollouts_of({0, 0, 1, 1, 1, 1, 1, 1}),  // the final leader, 6/8
+    rollouts_of({1, 1, 1, 1, 0, 0, 0, 0}),  // the leader at 4 rollouts, 4/8
+    rollouts_of({1, 1, 0, 1}),              // stopped at 4, ahead of the final leader there
+  };
+  const std::vector<PoolLabel> labels = pool_labels(rollouts);
+  // Candidate 2 against candidate 1's first four: 0, 0, -1, 0.
+  const double p2 = p_beats(-0.25, 0.25 - 0.0625, 4);
+  // Candidate 1 against the final leader: 1, 1, 0, 0, -1, -1, -1, -1.
+  const double p1 = p_beats(-0.25, 0.75 - 0.0625, 8);
+  const double odds1 = p1 / (1 - p1), odds2 = p2 / (1 - p2);
+  EXPECT_NEAR(labels[2].paired_se, std::sqrt((0.25 - 0.0625) / 4), 1e-12);
+  EXPECT_NEAR(labels[2].q, odds2 / (1 + odds1 + odds2), 1e-12);
+  EXPECT_NEAR(labels[0].q, 1 / (1 + odds1 + odds2), 1e-12);
+  EXPECT_LT(labels[2].q, labels[0].q);
+}
+
 // A written pool reads back exactly, with its sources in the header, and a
-// reader refuses another format version.
+// reader refuses another format version or a truncated file.
 TEST(PoolLog, RoundTripAndVersionGate) {
   namespace fs = std::filesystem;
   const fs::path dir = scribblez::testing::make_temp_dir("scribblez_pool_log");
@@ -4830,12 +4858,27 @@ TEST(PoolLog, RoundTripAndVersionGate) {
   EXPECT_EQ(pos.header->turn_index, 17u);
   EXPECT_EQ(pos.header->num_legal_moves, 42u);
   ASSERT_EQ(pos.header->num_candidates, 2u);
-  EXPECT_EQ(pos.candidates[1].move, p.moves[1]);
-  EXPECT_EQ(pos.candidates[1].equity_rank, 7);
-  EXPECT_EQ(pos.candidates[1].rollouts, 30);
-  EXPECT_FLOAT_EQ(pos.candidates[0].q, 0.75f);
+  for (size_t c = 0; c < 2; ++c) {
+    EXPECT_EQ(pos.candidates[c].move, p.moves[c]);
+    EXPECT_EQ(pos.candidates[c].equity_rank, p.equity_ranks[c]);
+    EXPECT_EQ(pos.candidates[c].rollouts, p.labels[c].rollouts);
+    EXPECT_FLOAT_EQ(pos.candidates[c].win_prob, float(p.labels[c].win_prob));
+    EXPECT_FLOAT_EQ(pos.candidates[c].paired_se, float(p.labels[c].paired_se));
+    EXPECT_FLOAT_EQ(pos.candidates[c].q, float(p.labels[c].q));
+  }
+  // The header's sources read back as written, and a changed one is named.
+  const PoolSources back = PoolSources::of(r.header());
+  EXPECT_EQ(back.first_difference(sources), nullptr);
+  PoolSources other = sources;
+  other.horizon_plies = 4;
+  EXPECT_STREQ(back.first_difference(other), "horizon");
+  other = sources;
+  other.win_table_hash = "fedcba9876543210";
+  EXPECT_STREQ(back.first_difference(other), "win table");
 
   std::string bytes = scribblez::util::read_file(path);
+  std::ofstream(path, std::ios::binary) << bytes.substr(0, bytes.size() - 1);
+  EXPECT_THROW(PoolReader{path}, util::Exception);
   const uint16_t stale = kPoolFormatVersion + 1;
   std::memcpy(bytes.data() + offsetof(PoolFileHeader, version), &stale, sizeof(stale));
   std::ofstream(path, std::ios::binary) << bytes;
