@@ -1,17 +1,17 @@
 """Tests for the move set evaluation model's distillation targets:
-move_set_eval_target_generator labels .slog fixtures with a tiny teacher ONNX,
-and the .mset reader parses the result. The generator builds a TensorRT engine,
-so this is a GPU test; it skips when the engine binaries, HastyBot leave values,
-or torch/TensorRT are unavailable.
+move_set_eval_target_generator labels .slog fixtures with the engine's
+synthetic teacher (--model=synthetic:<variant>, nn/synthetic_eval_service.h),
+and the .mset reader parses the result. The synthetic teacher runs on the CPU,
+so the labels are checked structurally (shape, range, finiteness), never
+against a real model's values. Skips when the engine binaries or HastyBot leave
+values are unavailable.
 """
 
 import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 from scribblez.ffi import format_layout, struct_dtype
 from scribblez.move_set_eval.targets import (
     MSET_FLAG_OPEN_LEAVES,
@@ -20,8 +20,6 @@ from scribblez.move_set_eval.targets import (
     TARGET_NAMES_V1,
     read_mset,
 )
-from scribblez.position_eval.model import PositionEvalModel
-from scribblez.position_eval.onnx_export import export_onnx
 from scribblez.sim_evidence.slog_meta import game_metas, move_at, read_slog_bytes
 from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -42,55 +40,24 @@ def _skip_unless_runnable():
         pytest.skip("engine binaries not built")
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
-    if not torch.cuda.is_available():
-        pytest.skip("no GPU")
 
 
-def _export_tiny_teacher(onnx_path: Path):
-    from scribblez.ffi import task_input_shapes
-
-    shapes = {s.name: s.dims for s in task_input_shapes()}
-    torch.manual_seed(0)
-    model = PositionEvalModel(
-        spatial_planes=shapes["input_spatial"][0],
-        scalar_size=shapes["input_scalar"][0],
-        trunk_channels=8,
-        num_blocks=3,
-    ).eval()
-    export_onnx(
-        model,
-        onnx_path,
-        spatial_planes=shapes["input_spatial"][0],
-        scalar_size=shapes["input_scalar"][0],
-        opp_leave_input=False,
-    )
+# The blind (hidden-leaves) teacher the tests below label with.
+BLIND_TEACHER = "synthetic:hidden"
 
 
 @pytest.fixture(scope="module")
-def tiny_teacher(tmp_path_factory) -> Path:
-    """The blind teacher every test below labels with. It is the same model in
-    each of them, so exporting it per test only re-pays the export; it lives
-    outside any slog directory so the generator never sees it as corpus."""
-    _skip_unless_runnable()
-    path = tmp_path_factory.mktemp("tiny_teacher") / "teacher.onnx"
-    _export_tiny_teacher(path)
-    return path
-
-
-@pytest.fixture(scope="module")
-def mset_dir(tmp_path_factory, tiny_teacher) -> Path:
-    """A directory of .slog files labeled by the tool with a tiny teacher."""
+def mset_dir(tmp_path_factory) -> Path:
+    """A directory of .slog files labeled by the tool with the blind teacher."""
     _skip_unless_runnable()
     d = tmp_path_factory.mktemp("move_set_eval_targets")
     subprocess.run([str(SLOG_WRITER), str(d), "8", "4"], check=True, capture_output=True)
-    onnx_path = tiny_teacher
 
     result = subprocess.run(
         [
             str(TARGET_GENERATOR),
             f"--slog-dir={d}",
-            f"--model={onnx_path}",
-            "--fast-build",
+            f"--model={BLIND_TEACHER}",
             f"--quota-top={QUOTAS['top']}",
             f"--quota-mid={QUOTAS['mid']}",
             f"--quota-tail={QUOTAS['tail']}",
@@ -110,6 +77,7 @@ def mset_dir(tmp_path_factory, tiny_teacher) -> Path:
 def test_mset_positions_parse_and_hold_invariants(mset_dir):
     max_candidates = 1 + sum(QUOTAS.values())  # the played move + the strata
     total = 0
+    labels = []
     for path in sorted(mset_dir.glob("*.mset")):
         parsed = read_mset(path)
         assert parsed.record_floats == len(TARGET_NAMES_V1)
@@ -124,7 +92,11 @@ def test_mset_positions_parse_and_hold_invariants(mset_dir):
             assert np.allclose(wld.sum(axis=1), 1.0, atol=1e-3)
             # The std head is softplus-floored positive.
             assert np.all(pos.targets[:, 4] > 0)
+            labels.append(pos.targets)
     assert total > 0
+    # The teacher's readouts depend on the candidate's row: a constant label
+    # would mean the rows never reached it.
+    assert len(np.unique(np.concatenate(labels)[:, 3])) > 1
 
 
 def test_mset_includes_the_played_move(mset_dir):
@@ -183,13 +155,12 @@ def test_read_mset_steps_over_legacy_plane_blocks(tmp_path):
         assert pos.moves.base is None and pos.targets.base is None
 
 
-def _run_full_sweep(slog_dir: Path, onnx_path: Path, cap: int):
+def _run_full_sweep(slog_dir: Path, cap: int):
     return subprocess.run(
         [
             str(TARGET_GENERATOR),
             f"--slog-dir={slog_dir}",
-            f"--model={onnx_path}",
-            "--fast-build",
+            f"--model={BLIND_TEACHER}",
             "--full-sweep",
             f"--sweep-cap={cap}",
             "--positions-per-game=2",
@@ -201,7 +172,7 @@ def _run_full_sweep(slog_dir: Path, onnx_path: Path, cap: int):
     )
 
 
-def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path, tiny_teacher):
+def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path):
     """The evaluation slice: an uncapped sweep labels a position's whole legal
     move set -- orders of magnitude past the stratified quota -- and stamps the
     file full-sweep so the trainer holds it out."""
@@ -210,7 +181,7 @@ def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path,
     # asserts nothing new.
     subprocess.run([str(SLOG_WRITER), str(tmp_path), "2", "4"], check=True, capture_output=True)
 
-    result = _run_full_sweep(tmp_path, tiny_teacher, cap=100000)
+    result = _run_full_sweep(tmp_path, cap=100000)
     assert result.returncode == 0, f"full-sweep run failed: {result.stderr}"
     msets = sorted(tmp_path.glob("*.mset"))
     assert msets, "no .mset produced"
@@ -227,14 +198,14 @@ def test_full_sweep_labels_every_candidate_and_records_the_legal_count(tmp_path,
     assert biggest > 1 + sum(QUOTAS.values()), "a sweep should dwarf the stratified sample"
 
 
-def test_full_sweep_cap_truncates_visibly_and_keeps_the_played_move(tmp_path, tiny_teacher):
+def test_full_sweep_cap_truncates_visibly_and_keeps_the_played_move(tmp_path):
     """Under a cap the sweep is a prefix of the equity ranking plus the
     exchanges and the played move, and the shortfall against the recorded legal
     count is what makes the truncation visible."""
     _skip_unless_runnable()
     subprocess.run([str(SLOG_WRITER), str(tmp_path), "2", "4"], check=True, capture_output=True)
 
-    assert _run_full_sweep(tmp_path, tiny_teacher, cap=3).returncode == 0
+    assert _run_full_sweep(tmp_path, cap=3).returncode == 0
     truncated = 0
     for path in sorted(tmp_path.glob("*.mset")):
         buf = read_slog_bytes(path.with_suffix(".slog"))
@@ -247,10 +218,10 @@ def test_full_sweep_cap_truncates_visibly_and_keeps_the_played_move(tmp_path, ti
     assert truncated > 0, "a cap of 3 should truncate some position"
 
 
-def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path, tiny_teacher):
-    """The pre-scan guard: a face-up-leaves .slog paired with a teacher whose
-    ONNX does not declare opp_leave_input must fail before any .mset is
-    written -- a blind teacher's labels would describe games nobody played."""
+def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path):
+    """The pre-scan guard: a face-up-leaves .slog paired with a teacher that
+    does not declare opp_leave_input must fail before any .mset is written -- a
+    blind teacher's labels would describe games nobody played."""
     _skip_unless_runnable()
     subprocess.run(
         [str(SLOG_WRITER), str(tmp_path), "2", "2", "--face-up-leaves"],
@@ -261,8 +232,7 @@ def test_generator_refuses_face_up_slogs_with_a_blind_teacher(tmp_path, tiny_tea
         [
             str(TARGET_GENERATOR),
             f"--slog-dir={tmp_path}",
-            f"--model={tiny_teacher}",  # a blind teacher: opp_leave_input=False
-            "--fast-build",
+            f"--model={BLIND_TEACHER}",  # opp_leave_input=False
             f"--quota-top={QUOTAS['top']}",
             f"--quota-mid={QUOTAS['mid']}",
             f"--quota-tail={QUOTAS['tail']}",
@@ -289,34 +259,11 @@ def test_generator_labels_face_up_slogs_with_an_open_leaves_teacher(tmp_path):
         check=True,
         capture_output=True,
     )
-    onnx_path = tmp_path / "teacher.onnx"
-    # The open-leaves input arm changes the FFI session's row layout, which is
-    # process-wide and fixed at creation -- export this teacher in a subprocess
-    # (the test_sim_evidence.py pattern).
-    code = (
-        "import torch\n"
-        "from scribblez.ffi import set_opp_leave_input, task_input_shapes\n"
-        "from scribblez.position_eval.model import PositionEvalModel\n"
-        "from scribblez.position_eval.onnx_export import export_onnx\n"
-        "set_opp_leave_input(True)\n"
-        "shapes = {s.name: s.dims for s in task_input_shapes()}\n"
-        "torch.manual_seed(0)\n"
-        "model = PositionEvalModel(spatial_planes=shapes['input_spatial'][0],\n"
-        "                          scalar_size=shapes['input_scalar'][0],\n"
-        "                          trunk_channels=8, num_blocks=3).eval()\n"
-        f"export_onnx(model, {str(onnx_path)!r},\n"
-        "            spatial_planes=shapes['input_spatial'][0],\n"
-        "            scalar_size=shapes['input_scalar'][0],\n"
-        "            opp_leave_input=True)\n"
-    )
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    assert out.returncode == 0, out.stderr
     result = subprocess.run(
         [
             str(TARGET_GENERATOR),
             f"--slog-dir={tmp_path}",
-            f"--model={onnx_path}",
-            "--fast-build",
+            "--model=synthetic:open-leaves",
             f"--quota-top={QUOTAS['top']}",
             f"--quota-mid={QUOTAS['mid']}",
             f"--quota-tail={QUOTAS['tail']}",
@@ -332,46 +279,3 @@ def test_generator_labels_face_up_slogs_with_an_open_leaves_teacher(tmp_path):
     msets = sorted(tmp_path.glob("*.mset"))
     assert msets, "no .mset produced"
     assert all(read_mset(p).flags == MSET_FLAG_OPEN_LEAVES for p in msets)
-
-
-def test_generator_loads_a_teacher_with_external_data(tmp_path, tiny_teacher):
-    """A teacher whose initializers live in an external-data blob beside the
-    .onnx must load regardless of the process CWD: TensorRT resolves external
-    references against the model path the engine passes (neural_net.cpp), not
-    the CWD. A regression re-breaks exactly this run, because the CWD here is
-    deliberately far from the model's directory."""
-    import onnx
-
-    _skip_unless_runnable()
-    subprocess.run([str(SLOG_WRITER), str(tmp_path), "2", "2"], check=True, capture_output=True)
-
-    # The generator is pointed at this copy alone, so the only initializers it
-    # can reach are the ones in the blob beside it.
-    ext_dir = tmp_path / "ext"
-    ext_dir.mkdir()
-    model = onnx.load(str(tiny_teacher))
-    onnx.save_model(
-        model,
-        str(ext_dir / "teacher.onnx"),
-        save_as_external_data=True,
-        all_tensors_to_one_file=True,
-        location="teacher_data.bin",
-        size_threshold=0,
-    )
-
-    result = subprocess.run(
-        [
-            str(TARGET_GENERATOR),
-            f"--slog-dir={tmp_path}",
-            f"--model={ext_dir / 'teacher.onnx'}",
-            "--fast-build",
-            "--positions-per-game=1",
-            "--limit-games=2",
-            "--threads=2",
-        ],
-        capture_output=True,
-        text=True,
-        cwd="/",
-    )
-    assert result.returncode == 0, f"generator failed from a foreign CWD: {result.stderr}"
-    assert sorted(tmp_path.glob("*.mset")), "no .mset produced"
