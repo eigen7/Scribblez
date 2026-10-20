@@ -127,7 +127,10 @@ int PositionEncoder::replay_to_sampled(const GameLog& g, int sampled_turn, bool 
     if (history) {
       const int slot = history_slot(sampled_turn, k);
       if (slot >= 0) record_history_slot(g, k, history->slots[slot]);
-      if (k == sampled_turn - 2) history->observer_exchange = exchanged_tiles(g.records[k].move);
+      const int back = sampled_turn - k;  // the observer's moves are 2, 4, ... turns back
+      if (back % 2 == 0 && back / 2 <= LeaveHistory::kObserverExchanges) {
+        history->observer_exchanges[back / 2 - 1] = exchanged_tiles(g.records[k].move);
+      }
     }
     const int mover = enc_.active_player();
     const Move& move = g.records[k].move;

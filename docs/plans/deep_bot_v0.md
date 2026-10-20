@@ -212,7 +212,8 @@ position encoder's `InputEncodingSpec` and its version are untouched.
 - the current position: the board, the observer's rack, the scores and the
   bag count;
 - a `LeaveHistory` of the opponent's last 3 moves, and the tiles the
-  observer exchanged on their previous turn (empty if they did not). Each
+  observer exchanged on each of their last two turns (empty if they did
+  not). Each
   slot has a presence flag, the move, its score, the bag count before it, the
   cross-check planes as they stood before it was played, its forgone plays,
   and which tile kinds its leave could hold.
@@ -240,7 +241,8 @@ That is 242 planes.
   - the unseen pool, as a thermometer;
   - the score differential and the bag count;
   - the length of the leave being predicted, one-hot over 1–6;
-  - the tiles the observer exchanged on their previous turn (27 counts).
+  - the tiles the observer exchanged on their previous turn, then on the
+    turn before (27 counts each).
 - **Per history move:**
   - a presence flag (missing early in the game, and then the move's other
     floats are zero);
@@ -260,10 +262,12 @@ score-differential scalar. The two encoders then share one convention.
 **History slots** are the opponent's last 3 moves, most recent first. The
 observer's own moves are left out: the opponent's rack was drawn before each
 of them, so a play or a pass by the observer tells nothing about it that the
-board does not. An exchange does, for the observer's previous turn only: the
-tiles it returned are unseen but cannot be in the leave. That reaches the
-row twice, as the exchanged tiles' counts and as the [leave
-pool](#the-leave-pool).
+board does not. An exchange does. On the observer's previous turn, the tiles
+it returned are unseen but cannot be in the leave; that reaches the row
+twice, as the exchanged tiles' counts and as the [leave
+pool](#the-leave-pool). On the turn before, the opponent has drawn since, so
+the leave holds at most as many of those tiles as they drew; that reaches
+the row as the second block of counts.
 
 **An opponent's exchange shows its count only.** The tiles they returned are
 hidden from the observer, so for an opponent exchange the 27 tile counts stay
@@ -309,12 +313,13 @@ the pool it is given.
 - **The refill differs.** The opponent's draw after their move came from a
   bag that held the exchanged tiles, so a sampler draws the leave from the
   leave pool and the refill from the unseen pool less the leave.
-- **Older exchanges are not modeled.** After an exchange two of the
+- **Older exchanges cap rather than shrink.** After an exchange two of the
   observer's turns back, the opponent has drawn since, so its tiles cap the
   leave (at most as many as they drew) rather than leave its pool. A
-  hypergeometric pool cannot express that, and the case (a large exchange,
-  then small plays) is rare. The exchanged-tile counts are not in the row for
-  it either.
+  hypergeometric pool cannot express that, so the pool keeps them, and the
+  row's second block of exchange counts leaves the cap to the network, which
+  sees how many tiles each opponent move played. Exchanges further back are
+  not in the row.
 
 #### Forgone plays
 
@@ -350,8 +355,8 @@ have none.
   `τ`. A rule from the current pool would be wrong after the opponent
   exchanged a tile the observer later drew.
 - **Encoding:** per slot and tile kind, `[applies, margin / 100]`, zero when
-  it does not apply. With the slots and the exchange counts, the row has 426
-  scalars, and `kLeaveInferenceFormatVersion` is 2.
+  it does not apply. With the slots and the exchange counts, the row has 453
+  scalars, and `kLeaveInferenceFormatVersion` is 3.
 - **Generation:** the workload's generators run `forgone_play_tool` over each
   chunk before delivering it, and the trainer over its held-out games.
 

@@ -1201,7 +1201,9 @@ TEST(LeaveInference, HistorySlotsMatchReplay) {
   for (int turn : {2, 7}) {
     LeaveHistory history;
     enc.replay_to_sampled(g, turn, /*post_move=*/false, &history);
-    EXPECT_TRUE(history.observer_exchange.empty());  // test agents never exchange
+    for (const Rack& exchange : history.observer_exchanges) {
+      EXPECT_TRUE(exchange.empty());  // test agents never exchange
+    }
     for (int s = 0; s < LeaveHistory::kSlots; ++s) {
       const int k = turn - 1 - 2 * s;
       const LeaveHistorySlot& slot = history.slots[s];
@@ -1334,7 +1336,7 @@ TEST(LeaveInference, OpponentExchangeTilesStayHidden) {
     LeaveHistory history;
     history.slots[slot].present = true;
     history.slots[slot].move = Move::exchange(TileCounts::from_string(opponent_tiles));
-    history.observer_exchange = Rack::from_string(own_tiles);
+    history.observer_exchanges[0] = Rack::from_string(own_tiles);
     const LeaveInferenceInput in{&board, Rack::from_string("ABCDEFG"), 0, 80, 4, &history};
     std::vector<float> row(Encoder::kInputFloats);
     Encoder::encode(in, dict, row.data());
@@ -1392,8 +1394,9 @@ TEST(LeaveInference, RowBlocksMatchLayout) {
     EXPECT_EQ(bag[len], len == leave_length ? 1.0f : 0.0f) << len;
   }
   const float* own_exchange = bag + 1 + Encoder::kMaxLeaveLength;
-  EXPECT_TRUE(std::all_of(own_exchange, own_exchange + TILE_KINDS, [](float v) { return v == 0; }));
-  EXPECT_EQ(own_exchange + TILE_KINDS, scalars + Encoder::kCurrentScalars);
+  const float* own_end = own_exchange + LeaveHistory::kObserverExchanges * TILE_KINDS;
+  EXPECT_TRUE(std::all_of(own_exchange, own_end, [](float v) { return v == 0; }));
+  EXPECT_EQ(own_end, scalars + Encoder::kCurrentScalars);
   for (int s = 0; s < LeaveHistory::kSlots; ++s) {
     const TurnRecord& rec = log.turns[turn - 1 - 2 * s];
     ASSERT_NE(rec.player, me);
@@ -1483,9 +1486,11 @@ class ExchangeOnceAgent : public TestAgent {
 
 }  // namespace leave_inference_test
 
-// The observer's exchange on their previous turn reaches the row as tile
-// counts, and leaves the pool the leave's prior is over: the opponent's rack
-// was drawn before those tiles went back. The true leave always fits the pool.
+// The observer's exchange reaches the row as tile counts: in the first block
+// on their next turn, then in the second. On that next turn it also leaves
+// the pool the leave's prior is over, since the opponent's rack was drawn
+// before those tiles went back; a turn later the opponent has drawn since, so
+// the pool keeps them. The true leave always fits the pool.
 TEST(LeaveInference, ObserverExchangeLeavesThePool) {
   using namespace leave_inference_test;
   Dictionary dict = medium_dict();
@@ -1495,26 +1500,35 @@ TEST(LeaveInference, ObserverExchangeLeavesThePool) {
   game.play();
   const scribblez::GameLogStorage log = game.extract_log();
   ASSERT_EQ(log.turns[2].move.type(), MoveType::EXCHANGE);  // a0's second move
+  ASSERT_NE(log.turns[4].move.type(), MoveType::EXCHANGE);
+  ASSERT_GT(log.turns.size(), 6u);
   const scribblez::GameLog g = log.view();
   const std::vector<scribblez::belief::ForgonePlays> forgone =
     forgone_plays_of_game(g, g.num_records, dict);
-
-  const int turn = 4;  // a0 to move; its previous turn was the exchange
-  scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
-  std::vector<float> row(LeaveInferenceTask::kRowFloats);
-  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, false, row.data(), forgone);
   TileCounts exchanged;
   for (int i = 0; i < log.turns[2].move.num_glyphs(); ++i) {
     exchanged.add(log.turns[2].move.glyph(i).rack_tile());
   }
-  const float* own = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars - TILE_KINDS;
-  const float* pool = row.data() + LeaveInferenceTask::kInputFloats + OppLeaveTarget::kPoolOffset;
-  const TileCounts unseen = enc.enc().board().unseen_tiles(enc.rack(enc.enc().active_player()));
-  const Rack leave = kept_at(log.turns[turn - 1]);
-  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
-    EXPECT_EQ(own[t.index()], float(exchanged.count(t))) << t.index();
-    EXPECT_EQ(pool[t.index()], float(unseen.count(t) - exchanged.count(t))) << t.index();
-    EXPECT_LE(leave.count(t), int(pool[t.index()])) << t.index();
+
+  // a0 to move at both; the exchange is its previous turn at 4, the one before at 6.
+  for (const int turn : {4, 6}) {
+    const int block = turn == 4 ? 0 : 1;
+    scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
+    std::vector<float> row(LeaveInferenceTask::kRowFloats);
+    enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, false, row.data(), forgone);
+    const float* own = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars -
+                       LeaveHistory::kObserverExchanges * TILE_KINDS;
+    const float* pool = row.data() + LeaveInferenceTask::kInputFloats + OppLeaveTarget::kPoolOffset;
+    const TileCounts unseen = enc.enc().board().unseen_tiles(enc.rack(enc.enc().active_player()));
+    const Rack leave = kept_at(log.turns[turn - 1]);
+    for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
+      const int x = exchanged.count(t);
+      EXPECT_EQ(own[block * TILE_KINDS + t.index()], float(x)) << turn << " " << t.index();
+      EXPECT_EQ(own[(1 - block) * TILE_KINDS + t.index()], 0.0f) << turn << " " << t.index();
+      EXPECT_EQ(pool[t.index()], float(unseen.count(t) - (block == 0 ? x : 0)))
+        << turn << " " << t.index();
+      EXPECT_LE(leave.count(t), int(pool[t.index()])) << turn << " " << t.index();
+    }
   }
 }
 
