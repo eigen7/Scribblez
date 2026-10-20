@@ -67,10 +67,12 @@ add_library(scribblez_core STATIC
   # unit-tested against a scripted stub.
   src/nn/batching_position_eval_service.cpp
   src/agent/evidence_staging.cpp
+  src/belief/forgone_plays.cpp
   src/belief/leave_prior.cpp
   src/lexicon/leave_value_arrays.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
+  src/data/forgone_play_log.cpp
   src/data/sim_observation_log.cpp
   src/data/sidecar_io.cpp
   src/data/probe_log.cpp
@@ -284,6 +286,14 @@ target_link_libraries(transfer_test_generator PRIVATE
   Boost::json
   Boost::filesystem
   Boost::system
+  Threads::Threads)
+
+# Forgone-play (.forgone) sidecars for .slog data, the leave inference model's
+# lexical input (docs/plans/deep_bot_v0.md).
+add_executable(forgone_play_tool apps/forgone_play_tool.cpp)
+target_link_libraries(forgone_play_tool PRIVATE
+  scribblez_core
+  Boost::program_options
   Threads::Threads)
 
 # Sim-observation (.sobs) sidecars for .slog data

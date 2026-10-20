@@ -348,12 +348,14 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_dl_delete.restype = None
     lib.scribblez_dl_delete.argtypes = [ctypes.c_void_p]
 
-    lib.scribblez_dl_add_file.restype = None
+    lib.scribblez_dl_add_file.restype = ctypes.c_int
     lib.scribblez_dl_add_file.argtypes = [
         ctypes.c_void_p,
         ctypes.c_char_p,
         ctypes.c_int64,
         ctypes.c_int64,
+        ctypes.c_char_p,
+        ctypes.c_int,
     ]
 
     lib.scribblez_dl_num_positions.restype = ctypes.c_int64
@@ -567,7 +569,7 @@ def decode_rows(
         out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
     )
     if rc != 0:
-        raise OSError(f"decode_rows failed (rc={rc}) for {path}")
+        raise OSError(f"decode_rows failed (rc={rc}) for {path}; see stderr for the reason")
     return out
 
 
@@ -1360,9 +1362,14 @@ class NativeDataLoader:
             self._handle = None
 
     def add_file(self, path: str | Path, num_games: int, file_size: int):
-        self._lib.scribblez_dl_add_file(
-            self._handle, str(path).encode("utf-8"), num_games, file_size
+        """Register a .slog. Raises OSError if the task's rows read a .forgone
+        sidecar that is missing or does not match the file."""
+        err = ctypes.create_string_buffer(1024)
+        rc = self._lib.scribblez_dl_add_file(
+            self._handle, str(path).encode("utf-8"), num_games, file_size, err, len(err)
         )
+        if rc != 0:
+            raise OSError(err.value.decode("utf-8", "replace"))
 
     @property
     def num_positions(self) -> int:

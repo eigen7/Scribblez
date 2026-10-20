@@ -2,10 +2,12 @@
 
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
+#include "lexicon/dictionary.h"
 #include "util/assert.h"
 #include "util/exception.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -53,6 +55,7 @@ bool by_file_idx(const TaggedRow& a, const TaggedRow& b) { return a.file_idx < b
 struct TurnIndex {
   std::vector<int64_t> cum;
   std::vector<uint8_t> first_turn;
+  std::vector<GameMetadata> metas;  // empty if the table was unreadable
 };
 
 // Reads only the header and metadata table. `all_turns` counts every turn of
@@ -78,6 +81,7 @@ TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t n
         idx.cum[g + 1] = idx.cum[g] + int64_t(turns);
         idx.first_turn[g] = all_turns ? 0 : metas[g].eligible_begin;
       }
+      idx.metas = std::move(metas);
       return idx;
     }
     std::cerr << "DataLoader: could not read metadata table of " << path << "\n";
@@ -99,12 +103,23 @@ TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t n
 // ===========================================================================
 
 DataLoader::DataFile::DataFile(const std::string& path, int64_t num_games, int64_t file_size,
-                               bool expand_all_turns)
-    : path_(path), file_size_(file_size) {
+                               bool expand_all_turns, const std::string* forgone_lexicon)
+    : path_(path), file_size_(file_size), forgone_lexicon_(forgone_lexicon) {
   TurnIndex idx = read_turn_index(path_, num_games_, num_games, expand_all_turns);
   cumulative_turns_ = std::move(idx.cum);
   first_turns_ = std::move(idx.first_turn);
   num_positions_ = cumulative_turns_.back();
+  if (forgone_lexicon_) check_forgone(idx.metas);
+}
+
+void DataLoader::DataFile::check_forgone(const std::vector<GameMetadata>& metas) {
+  if (metas.size() != size_t(num_games_)) {
+    throw util::Exception("DataLoader: cannot read the game table of {}", path_);
+  }
+  const std::string sidecar = forgone_path_of(path_);
+  validate_forgone_file(sidecar, uint32_t(num_games_), *forgone_lexicon_,
+                        forgone_slog_binding(metas.data(), uint32_t(num_games_)));
+  forgone_size_ = int64_t(std::filesystem::file_size(sidecar));
 }
 
 DataLoader::DataFile::~DataFile() { unload(); }
@@ -126,6 +141,10 @@ void DataLoader::DataFile::load() {
   std::unique_lock<std::mutex> lock(mutex_);
   if (!buffer_) {
     buffer_ = read_whole_file(path_, file_size_);
+    if (buffer_ && forgone_lexicon_ && !load_forgone()) {
+      delete[] buffer_;
+      buffer_ = nullptr;
+    }
     // A later retry that succeeds clears the flag.
     load_failed_ = buffer_ == nullptr;
   }
@@ -133,14 +152,25 @@ void DataLoader::DataFile::load() {
   cv_.notify_all();
 }
 
+bool DataLoader::DataFile::load_forgone() {
+  try {
+    forgone_ = std::make_unique<ForgoneSidecar>(forgone_path_of(path_), buffer_, *forgone_lexicon_);
+    return true;
+  } catch (const std::exception& e) {
+    std::cerr << "DataLoader: " << e.what() << "\n";
+    return false;
+  }
+}
+
 int64_t DataLoader::DataFile::unload() {
   std::unique_lock<std::mutex> lock(mutex_);
   if (!buffer_) return 0;
   delete[] buffer_;
   buffer_ = nullptr;
+  forgone_.reset();
   lock.unlock();
   cv_.notify_all();
-  return file_size_;
+  return resident_size();
 }
 
 const char* DataLoader::DataFile::buffer() const {
@@ -262,9 +292,10 @@ void DataLoader::PrefetchThread::loop() {
 // ===========================================================================
 
 DataLoader::FileManager::FileManager(int64_t memory_budget, int num_prefetch_threads,
-                                     bool expand_all_turns)
+                                     bool expand_all_turns, const std::string* forgone_lexicon)
     : memory_budget_(memory_budget),
       expand_all_turns_(expand_all_turns),
+      forgone_lexicon_(forgone_lexicon),
       thread_table_(num_prefetch_threads) {
   for (int i = 0; i < num_prefetch_threads; ++i) {
     prefetch_threads_.push_back(new PrefetchThread(&thread_table_, i));
@@ -284,7 +315,7 @@ DataLoader::FileManager::~FileManager() {
 void DataLoader::FileManager::append(const std::string& path, int64_t num_games,
                                      int64_t file_size) {
   // Tally the DataFile's row count, read from the file, not the caller's hint.
-  auto* f = new DataFile(path, num_games, file_size, expand_all_turns_);
+  auto* f = new DataFile(path, num_games, file_size, expand_all_turns_, forgone_lexicon_);
   std::lock_guard<std::mutex> lock(mutex_);
   num_positions_ += f->num_positions();
   all_files_.push_back(f);
@@ -376,7 +407,7 @@ DataLoader::FileManager::Instruction DataLoader::FileManager::get_next_instructi
   DataFile* file = load_queue_.front();
   RELEASE_ASSERT(!file->is_loaded());
 
-  if (memory_usage_ + file->file_size() <= memory_budget_) return kLoad;
+  if (memory_usage_ + file->resident_size() <= memory_budget_) return kLoad;
   if (!unload_queue_.empty()) return kUnload;
   if (active_file_count_ > 0) return kWait;
 
@@ -401,7 +432,7 @@ void DataLoader::FileManager::prefetch_loop() {
       int id = thread_table_.allocate_thread();
       if (id < 0) return;  // quitting
       prefetch_threads_[id]->schedule_prefetch(file);
-      memory_usage_ += file->file_size();
+      memory_usage_ += file->resident_size();
       load_queue_.pop_front();
       active_file_count_++;
     } else if (instr == kUnload) {
@@ -495,7 +526,7 @@ void DataLoader::WorkerThread::do_work() {
     GameTurn game_turn = file->sample_to_game_turn(unit_.local_positions[i]);
     decoder_.decode_one(buf, file->path(), game_turn.game_idx, game_turn.turn_idx,
                         unit_.flips[i] != 0, config_.post_move,
-                        /*output_row=*/unit_.output_indices[i], output_);
+                        /*output_row=*/unit_.output_indices[i], output_, file->forgone());
   }
 }
 
@@ -651,8 +682,10 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
 
 DataLoader::DataLoader(const Params& params)
     : params_(params),
-      file_manager_(params.memory_budget, std::max(params.num_prefetch_threads, 1),
-                    params.task == DecodeTask::kMaxMovePerLane),
+      file_manager_(
+        params.memory_budget, std::max(params.num_prefetch_threads, 1),
+        params.task == DecodeTask::kMaxMovePerLane,
+        BlockDecoder::reads_forgone(params.task) ? &params.spec.dict->content_hash() : nullptr),
       work_manager_(&file_manager_, &load_failure_, std::max(params.num_worker_threads, 1),
                     params.spec, params.task) {}
 

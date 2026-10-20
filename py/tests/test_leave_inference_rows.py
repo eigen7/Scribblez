@@ -16,13 +16,24 @@ _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 _LAYOUT = ffi.format_layout()["constants"]["leave_inference"]
 
 
-@pytest.fixture
-def slogs(tmp_path) -> list[Path]:
+def _write_slogs(out_dir: Path) -> list[Path]:
     binary = _ENGINE_DIR / "test_slog_writer"
     if not binary.is_file():
         pytest.skip("test_slog_writer not built -- run py/build.py first")
-    subprocess.run([str(binary), str(tmp_path), "8", "4"], check=True, capture_output=True)
-    return sorted(tmp_path.glob("*.slog"))
+    subprocess.run([str(binary), str(out_dir), "8", "4"], check=True, capture_output=True)
+    return sorted(out_dir.glob("*.slog"))
+
+
+@pytest.fixture
+def slogs(tmp_path) -> list[Path]:
+    """test_slog_writer games with their .forgone sidecars, which leave
+    inference rows require."""
+    paths = _write_slogs(tmp_path)
+    tool = _ENGINE_DIR / "forgone_play_tool"
+    subprocess.run(
+        [str(tool), "--slog-dir", str(tmp_path), "--threads", "2"], check=True, capture_output=True
+    )
+    return paths
 
 
 def test_shapes_cover_the_row():
@@ -34,7 +45,7 @@ def test_shapes_cover_the_row():
         "opp_leave_length",
         "opp_leave_valid",
         "opp_leave_cause",
-        "unseen_pool",
+        "leave_pool",
         "bag_size",
     ]
     total = sum(int(np.prod(s.dims)) for s in inputs + targets)
@@ -75,5 +86,21 @@ def test_decode_rows_matches_the_task_width(slogs):
     )
     start = {name: begin for name, begin, _, _ in targets}
     assert rows[0, start["opp_leave_cause"]] == _LAYOUT["cause"]["no_opponent_move"]
-    pool = rows[:, start["unseen_pool"] : start["unseen_pool"] + 27]
+    pool = rows[:, start["leave_pool"] : start["leave_pool"] + 27]
     assert (pool.sum(axis=1) >= rows[:, start["bag_size"]] + 7).all()
+
+
+def test_a_slog_without_its_sidecar_is_refused(tmp_path):
+    _write_slogs(tmp_path)
+    with pytest.raises(OSError, match="forgone"):
+        SlogDataset(tmp_path, task="leave_inference", post_move=False)
+
+
+def test_forgone_block_is_populated(slogs):
+    rows = ffi.decode_rows(
+        slogs[0], np.array([2]), np.array([6]), post_move=False, task="leave_inference"
+    )
+    spatial, scalar = ffi.task_input_shapes("leave_inference")
+    begin = int(np.prod(spatial.dims))
+    forgone = rows[0, begin : begin + scalar.dims[0]][-3 * 2 * 27 :]  # the last input block
+    assert forgone[0::2].sum() > 0  # some margins apply

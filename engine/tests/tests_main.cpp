@@ -4,9 +4,11 @@
 #include "agent/agent.h"
 #include "agent/evidence_staging.h"
 #include "agent/hasty_bot.h"
+#include "belief/forgone_plays.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
+#include "data/forgone_play_log.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
 #include "data/gcg_writer.h"
@@ -1170,7 +1172,9 @@ std::vector<float> decode_row(const Dictionary& dict, const scribblez::GameLog& 
                               bool transpose) {
   scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
   std::vector<float> row(LeaveInferenceTask::kRowFloats);
-  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, transpose, row.data());
+  const std::vector<scribblez::belief::ForgonePlays> forgone =
+    forgone_plays_of_game(g, g.num_records, dict);
+  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, transpose, row.data(), forgone);
   return row;
 }
 
@@ -1184,9 +1188,9 @@ Rack kept_at(const TurnRecord& rec) {
 
 }  // namespace leave_inference_test
 
-// Each history slot is the move that many turns back, with its score, the bag
-// before it, and the board's cross-checks just before it; slots before the
-// game's first move are absent.
+// Each history slot is the opponent's move that many of their turns back,
+// with its score, the bag before it, and the board's cross-checks just before
+// it; slots before the game's first move are absent.
 TEST(LeaveInference, HistorySlotsMatchReplay) {
   using namespace leave_inference_test;
   Dictionary dict = medium_dict();
@@ -1197,8 +1201,9 @@ TEST(LeaveInference, HistorySlotsMatchReplay) {
   for (int turn : {2, 7}) {
     LeaveHistory history;
     enc.replay_to_sampled(g, turn, /*post_move=*/false, &history);
+    EXPECT_TRUE(history.observer_exchange.empty());  // test agents never exchange
     for (int s = 0; s < LeaveHistory::kSlots; ++s) {
-      const int k = turn - 1 - s;
+      const int k = turn - 1 - 2 * s;
       const LeaveHistorySlot& slot = history.slots[s];
       ASSERT_EQ(slot.present, k >= 0) << turn << " " << s;
       if (k < 0) continue;
@@ -1320,24 +1325,27 @@ TEST(LeaveInference, TransposedRowMirrorsPlanes) {
 }
 
 // An opponent's exchange shows only how many tiles went back; the observer's
-// own exchange shows which.
+// own previous exchange shows which.
 TEST(LeaveInference, OpponentExchangeTilesStayHidden) {
   using namespace leave_inference_test;
   Dictionary dict = medium_dict();
   Board board;
-  const auto encode_with = [&](int slot, const char* tiles) {
+  const auto encode_with = [&](int slot, const char* opponent_tiles, const char* own_tiles) {
     LeaveHistory history;
     history.slots[slot].present = true;
-    history.slots[slot].move = Move::exchange(TileCounts::from_string(tiles));
+    history.slots[slot].move = Move::exchange(TileCounts::from_string(opponent_tiles));
+    history.observer_exchange = Rack::from_string(own_tiles);
     const LeaveInferenceInput in{&board, Rack::from_string("ABCDEFG"), 0, 80, 4, &history};
     std::vector<float> row(Encoder::kInputFloats);
     Encoder::encode(in, dict, row.data());
     return row;
   };
-  EXPECT_EQ(encode_with(0, "QRS"), encode_with(0, "XYZ"));
-  EXPECT_NE(encode_with(1, "QRS"), encode_with(1, "XYZ"));
-  // The count still shows.
-  EXPECT_NE(encode_with(0, "QRS"), encode_with(0, "QR"));
+  for (int slot = 0; slot < LeaveHistory::kSlots; ++slot) {
+    EXPECT_EQ(encode_with(slot, "QRS", ""), encode_with(slot, "XYZ", "")) << slot;
+    // The count still shows.
+    EXPECT_NE(encode_with(slot, "QRS", ""), encode_with(slot, "QR", "")) << slot;
+  }
+  EXPECT_NE(encode_with(0, "QRS", "QRS"), encode_with(0, "QRS", "XYZ"));
 }
 
 // Each block of a decoded row holds what the header's layout says, at its
@@ -1383,10 +1391,14 @@ TEST(LeaveInference, RowBlocksMatchLayout) {
   for (int len = 1; len <= Encoder::kMaxLeaveLength; ++len) {
     EXPECT_EQ(bag[len], len == leave_length ? 1.0f : 0.0f) << len;
   }
+  const float* own_exchange = bag + 1 + Encoder::kMaxLeaveLength;
+  EXPECT_TRUE(std::all_of(own_exchange, own_exchange + TILE_KINDS, [](float v) { return v == 0; }));
+  EXPECT_EQ(own_exchange + TILE_KINDS, scalars + Encoder::kCurrentScalars);
   for (int s = 0; s < LeaveHistory::kSlots; ++s) {
-    const TurnRecord& rec = log.turns[turn - 1 - s];
+    const TurnRecord& rec = log.turns[turn - 1 - 2 * s];
+    ASSERT_NE(rec.player, me);
     const float* slot = scalars + Encoder::kCurrentScalars + s * Encoder::kSlotScalars;
-    const bool hidden = rec.player != me && rec.move.type() == MoveType::EXCHANGE;
+    const bool hidden = rec.move.type() == MoveType::EXCHANGE;
     EXPECT_EQ(slot[0], 1.0f) << s;
     for (int t = 0; t < kMoveMetaTypeFloats; ++t) {
       EXPECT_EQ(slot[1 + t], t == int(rec.move.type()) ? 1.0f : 0.0f) << s;
@@ -1400,6 +1412,109 @@ TEST(LeaveInference, RowBlocksMatchLayout) {
     EXPECT_EQ(tail[0], float(rec.move.num_glyphs())) << s;
     EXPECT_EQ(tail[1], float(history.slots[s].score) / kScoreDiffInputScale) << s;
     EXPECT_EQ(tail[2], float(rec.bag_size_before) / Encoder::kCountScale) << s;
+  }
+}
+
+// Each slot's forgone block holds its move's margins, for the tile kinds the
+// observer could not all see just after that move.
+TEST(LeaveInference, ForgoneBlockPerOpponentSlot) {
+  using namespace leave_inference_test;
+  using scribblez::belief::ForgonePlays;
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = long_game(dict);
+  const scribblez::GameLog g = log.view();
+  const int turn = 7;
+  const std::vector<float> row = decode_row(dict, g, turn, /*transpose=*/false);
+  int applies = 0;
+  for (int s = 0; s < LeaveHistory::kSlots; ++s) {
+    const float* block = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars +
+                         (s + 1) * Encoder::kSlotScalars - Encoder::kForgoneScalars;
+    const int k = turn - 1 - 2 * s;
+    Board after;
+    for (int i = 0; i < k; ++i) {
+      if (log.turns[i].move.type() == MoveType::PLAY) after.apply(log.turns[i].move);
+    }
+    const ForgonePlays want =
+      scribblez::belief::compute_forgone_plays(after, dict, log.turns[k].move);
+    if (log.turns[k].move.type() == MoveType::PLAY) after.apply(log.turns[k].move);
+    // The observer's rack just after move k is their rack before move k + 1.
+    const TileCounts unseen = after.unseen_tiles(log.turns[k + 1].rack_before);
+    for (int t = 0; t < TILE_KINDS; ++t) {
+      const int8_t margin = want.margin[t];
+      const bool on = margin != ForgonePlays::kNone && unseen.count(Tile::of(t)) > 0;
+      EXPECT_EQ(block[2 * t], on ? 1.0f : 0.0f) << s << " " << t;
+      EXPECT_EQ(block[2 * t + 1], on ? float(margin) / kScoreDiffInputScale : 0.0f)
+        << s << " " << t;
+      applies += on;
+    }
+  }
+  EXPECT_GT(applies, 0);
+}
+
+// A history slot whose move has no forgone plays to read fails rather than
+// encoding zeros.
+TEST(LeaveInference, MissingForgonePlaysThrow) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  const scribblez::GameLogStorage log = long_game(dict);
+  scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
+  std::vector<float> row(LeaveInferenceTask::kRowFloats);
+  EXPECT_ANY_THROW(
+    enc.encode_row<LeaveInferenceTask>(log.view(), 7, /*post_move=*/false, false, row.data()));
+}
+
+namespace leave_inference_test {
+
+// A TestAgent that exchanges its first three tiles on its second move.
+class ExchangeOnceAgent : public TestAgent {
+ public:
+  using TestAgent::TestAgent;
+
+  scribblez::MoveDecision make_move(const scribblez::MoveRequest& req) override {
+    if (++moves_ != 2) return TestAgent::make_move(req);
+    TileCounts tiles;
+    for (int i = 0; i < 3; ++i) tiles.add(req.my_rack.tiles()[i]);
+    return Move::exchange(tiles);
+  }
+
+ private:
+  int moves_ = 0;
+};
+
+}  // namespace leave_inference_test
+
+// The observer's exchange on their previous turn reaches the row as tile
+// counts, and leaves the pool the leave's prior is over: the opponent's rack
+// was drawn before those tiles went back. The true leave always fits the pool.
+TEST(LeaveInference, ObserverExchangeLeavesThePool) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  ExchangeOnceAgent a0(0, "A0", 11);
+  TestAgent a1(0, "A1", 12);
+  scribblez::Game game(a0, a1, dict, /*seed=*/13);
+  game.play();
+  const scribblez::GameLogStorage log = game.extract_log();
+  ASSERT_EQ(log.turns[2].move.type(), MoveType::EXCHANGE);  // a0's second move
+  const scribblez::GameLog g = log.view();
+  const std::vector<scribblez::belief::ForgonePlays> forgone =
+    forgone_plays_of_game(g, g.num_records, dict);
+
+  const int turn = 4;  // a0 to move; its previous turn was the exchange
+  scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
+  std::vector<float> row(LeaveInferenceTask::kRowFloats);
+  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, false, row.data(), forgone);
+  TileCounts exchanged;
+  for (int i = 0; i < log.turns[2].move.num_glyphs(); ++i) {
+    exchanged.add(log.turns[2].move.glyph(i).rack_tile());
+  }
+  const float* own = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars - TILE_KINDS;
+  const float* pool = row.data() + LeaveInferenceTask::kInputFloats + OppLeaveTarget::kPoolOffset;
+  const TileCounts unseen = enc.enc().board().unseen_tiles(enc.rack(enc.enc().active_player()));
+  const Rack leave = kept_at(log.turns[turn - 1]);
+  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
+    EXPECT_EQ(own[t.index()], float(exchanged.count(t))) << t.index();
+    EXPECT_EQ(pool[t.index()], float(unseen.count(t) - exchanged.count(t))) << t.index();
+    EXPECT_LE(leave.count(t), int(pool[t.index()])) << t.index();
   }
 }
 
@@ -1421,6 +1536,242 @@ TEST(LeaveInference, TargetCauses) {
   history.slots[0].move = Move::exchange(TileCounts::from_string("AB"));
   ctx.opp_known_leave = Rack::from_string("CDEFG");
   EXPECT_EQ(OppLeaveTarget::cause(ctx), LeaveRowCause::kValid);
+}
+
+// ---- Forgone plays (belief/forgone_plays.h) ---------------------------------
+
+namespace forgone_plays_test {
+
+using scribblez::belief::ForgonePlays;
+
+// The highest-scoring play of `rack` on `board` whose main word is `word`.
+Move best_play_of(const Board& board, const Dictionary& dict, const char* rack, const char* word) {
+  Move best;
+  bool found = false;
+  for (const Move& m : MoveGenerator(board, dict).generate(Rack::from_string(rack))) {
+    if (m.main_word(board) == word && (!found || m.score() > best.score())) {
+      best = m;
+      found = true;
+    }
+  }
+  EXPECT_TRUE(found) << word;
+  return best;
+}
+
+// Compares compute_forgone_plays with the reference at every move of `log`,
+// returning how many plays held a blank.
+int expect_matches_reference(const Dictionary& dict, const scribblez::GameLogStorage& log) {
+  Board board;
+  int blank_plays = 0;
+  for (const TurnRecord& rec : log.turns) {
+    const Move& m = rec.move;
+    EXPECT_EQ(scribblez::belief::compute_forgone_plays(board, dict, m).margin,
+              scribblez::belief::compute_forgone_plays_reference(board, dict, m).margin)
+      << m.main_word(board);
+    for (int i = 0; i < m.num_glyphs(); ++i) blank_plays += m.glyph(i).is_blank();
+    if (m.type() == MoveType::PLAY) board.apply(m);
+  }
+  return blank_plays;
+}
+
+int tile(char c) { return Tile::from_char(c).index(); }
+
+}  // namespace forgone_plays_test
+
+// The one-pass search (a blank standing for each tau) agrees with brute force,
+// one generation per tau, over whole games.
+TEST(ForgonePlays, MatchesReference) {
+  using namespace forgone_plays_test;
+  Dictionary dict = medium_dict();
+  for (uint64_t seed = 1; seed <= 6; ++seed)
+    expect_matches_reference(dict, play_test_game(dict, seed));
+}
+
+// The same on the real lexicon, where the blank-in-play cases arise.
+TEST(ForgonePlays, MatchesReferenceRealKwg) {
+  using namespace forgone_plays_test;
+  const char* path = SCRIBBLEZ_DEFAULT_KWG;
+  if (!std::ifstream(path).good()) GTEST_SKIP() << "no lexicon at " << path;
+  Dictionary dict = Dictionary::load_kwg(path);
+  int blank_plays = 0;
+  for (uint64_t seed = 1; seed <= 4; ++seed) {
+    blank_plays += expect_matches_reference(dict, play_test_game(dict, seed));
+  }
+  EXPECT_GT(blank_plays, 0);
+}
+
+// A play counts for tau only when it needs tau: AT played, TAT needs a second
+// T, but no word needs a second A, and AT itself (which the played tiles make
+// alone) never counts.
+TEST(ForgonePlays, OnlyPlaysNeedingTauCount) {
+  using namespace forgone_plays_test;
+  Dictionary dict = Dictionary::build_from_words({"AT", "TA", "TAT"});
+  const Board board;
+  const Move at = best_play_of(board, dict, "AT", "AT");
+  const Move tat = best_play_of(board, dict, "ATT", "TAT");
+  const ForgonePlays f = scribblez::belief::compute_forgone_plays(board, dict, at);
+  EXPECT_EQ(f.margin[tile('T')], tat.score() - at.score());
+  EXPECT_EQ(f.margin[tile('A')], ForgonePlays::kFloor);
+  EXPECT_EQ(f.margin[tile('E')], ForgonePlays::kFloor);
+  // A blank makes TAT too, scoring its blank square 0.
+  EXPECT_EQ(f.margin[BLANK.index()], best_play_of(board, dict, "AT?", "TAT").score() - at.score());
+}
+
+// Moves that are not a play of 1..6 tiles carry no margins, and nor does a
+// tile kind the board holds every copy of once the move is down.
+TEST(ForgonePlays, NoneCases) {
+  using namespace forgone_plays_test;
+  Dictionary dict = Dictionary::build_from_words({"ZA", "AT", "TA"});
+  const Board board;
+  const auto all_none = [](const ForgonePlays& f) {
+    return std::ranges::all_of(f.margin, [](int8_t m) { return m == ForgonePlays::kNone; });
+  };
+  EXPECT_TRUE(all_none(scribblez::belief::compute_forgone_plays(board, dict, Move::pass())));
+  EXPECT_TRUE(all_none(scribblez::belief::compute_forgone_plays(
+    board, dict, Move::exchange(TileCounts::from_string("AT")))));
+  std::array<Glyph, RACK_SIZE> seven;
+  seven.fill(Glyph::of(Tile::from_char('A')));
+  const Move bingo = Move::play(true, 7, 0b1111111, 70, seven.data(), RACK_SIZE);
+  EXPECT_TRUE(all_none(scribblez::belief::compute_forgone_plays(board, dict, bingo)));
+
+  const ForgonePlays f =
+    scribblez::belief::compute_forgone_plays(board, dict, best_play_of(board, dict, "ZA", "ZA"));
+  EXPECT_EQ(f.margin[tile('Z')], ForgonePlays::kNone);  // the only Z is on the board
+  EXPECT_NE(f.margin[tile('A')], ForgonePlays::kNone);
+}
+
+// ---- The .forgone sidecar (data/forgone_play_log.h) -------------------------
+
+namespace forgone_sidecar_test {
+
+namespace fs = std::filesystem;
+
+// A directory holding one .slog of `games` test games and, unless
+// `with_sidecar` is false, its .forgone sidecar. Removed on destruction.
+struct Corpus {
+  fs::path dir;
+  fs::path slog;
+  std::vector<scribblez::GameLogStorage> logs;
+
+  Corpus(const Dictionary& dict, int games, uint64_t first_seed = 100, bool with_sidecar = true);
+  ~Corpus() { fs::remove_all(dir); }
+
+  std::vector<char> bytes() const { return util::read_file_bytes(slog.string()); }
+};
+
+Corpus::Corpus(const Dictionary& dict, int games, uint64_t first_seed, bool with_sidecar)
+    : dir(scribblez::testing::make_temp_dir("scribblez_forgone")) {
+  {
+    scribblez::binlog::BinaryLogWriter writer(dir.string(), games);
+    for (int i = 0; i < games; ++i) {
+      scribblez::GameLogStorage log = play_test_game(dict, first_seed + i);
+      writer.append(scribblez::GameLogStorage(log));
+      logs.push_back(std::move(log));
+    }
+  }
+  for (const auto& ent : fs::directory_iterator(dir)) {
+    if (ent.path().extension() == ".slog") slog = ent.path();
+  }
+  if (with_sidecar) write_forgone_sidecar(bytes(), dict, forgone_path_of(slog.string()), 2);
+}
+
+}  // namespace forgone_sidecar_test
+
+// Each game's entries are its replay's forgone plays, one per turn a leave
+// inference row can read.
+TEST(ForgoneSidecar, HoldsEachGamesForgonePlays) {
+  using namespace forgone_sidecar_test;
+  Dictionary dict = medium_dict();
+  const Corpus corpus(dict, 4);
+  const std::vector<char> slog = corpus.bytes();
+  const ForgoneSidecar sidecar(forgone_path_of(corpus.slog.string()), slog.data(),
+                               dict.content_hash());
+  std::vector<TurnRecord> scratch;
+  const auto* metas = reinterpret_cast<const scribblez::binlog::GameMetadata*>(
+    slog.data() + sizeof(scribblez::binlog::FileHeader));
+  for (uint32_t g = 0; g < corpus.logs.size(); ++g) {
+    const scribblez::GameLog log =
+      scribblez::binlog::make_game_view(slog.data(), g, scratch, nullptr);
+    const std::vector<scribblez::belief::ForgonePlays> want =
+      forgone_plays_of_game(log, forgone_turns(metas[g]), dict);
+    const auto got = sidecar.game(g);
+    ASSERT_EQ(got.size(), want.size()) << g;
+    ASSERT_GT(got.size(), 0u);
+    for (size_t k = 0; k < want.size(); ++k)
+      EXPECT_EQ(got[k].margin, want[k].margin) << g << " " << k;
+  }
+}
+
+// The leave inference DataLoader reads each row's forgone plays from the
+// sidecar, refusing at registration a .slog that has none.
+TEST(ForgoneSidecar, DataLoaderReadsIt) {
+  using namespace forgone_sidecar_test;
+  Dictionary dict = medium_dict();
+  const Corpus corpus(dict, 4);
+  scribblez::binlog::DataLoader::Params params;
+  params.spec = {&dict};
+  params.task = scribblez::binlog::DecodeTask::kLeaveInference;
+  params.num_worker_threads = 2;
+  params.num_prefetch_threads = 1;
+  scribblez::binlog::DataLoader loader(params);
+  loader.add_file(corpus.slog.string(), 4, int64_t(fs::file_size(corpus.slog)));
+  scribblez::binlog::DataLoader::EpochConfig config;
+  config.batch_size = int(loader.num_positions());
+  config.apply_symmetry = false;
+  loader.epoch_start(config);
+  std::vector<float> rows(size_t(config.batch_size) * loader.row_size_floats());
+  ASSERT_EQ(loader.load_batch(rows.data()), config.batch_size);
+
+  // Each row equals a direct decode with the sidecar's entries.
+  const std::vector<char> slog = corpus.bytes();
+  const ForgoneSidecar sidecar(forgone_path_of(corpus.slog.string()), slog.data(),
+                               dict.content_hash());
+  scribblez::binlog::BlockDecoder decoder(params.spec, params.task);
+  std::vector<float> one(loader.row_size_floats());
+  std::set<std::vector<float>> want;
+  const auto* metas = reinterpret_cast<const scribblez::binlog::GameMetadata*>(
+    slog.data() + sizeof(scribblez::binlog::FileHeader));
+  for (uint32_t gi = 0; gi < 4; ++gi) {
+    for (int t = metas[gi].eligible_begin; t < metas[gi].eligible_end; ++t) {
+      decoder.decode_one(slog.data(), corpus.slog.string(), gi, uint32_t(t), false, false, 0,
+                         one.data(), &sidecar);
+      want.insert(one);
+    }
+  }
+  for (int i = 0; i < config.batch_size; ++i) {
+    const auto begin = rows.begin() + int64_t(i) * loader.row_size_floats();
+    EXPECT_TRUE(want.contains(std::vector<float>(begin, begin + loader.row_size_floats()))) << i;
+  }
+
+  const Corpus bare(dict, 2, /*first_seed=*/300, /*with_sidecar=*/false);
+  EXPECT_THROW(loader.add_file(bare.slog.string(), 2, int64_t(fs::file_size(bare.slog))),
+               util::Exception);
+}
+
+// A sidecar that is missing, from another lexicon, or left over from an
+// earlier .slog of the same name is refused.
+TEST(ForgoneSidecar, RefusesMismatches) {
+  using namespace forgone_sidecar_test;
+  Dictionary dict = medium_dict();
+  const Corpus corpus(dict, 3);
+  const std::string path = forgone_path_of(corpus.slog.string());
+  const std::vector<char> slog = corpus.bytes();
+  const std::string binding = forgone_slog_binding(slog.data());
+  EXPECT_NO_THROW(validate_forgone_file(path, 3, dict.content_hash(), binding));
+  EXPECT_THROW(validate_forgone_file(path, 3, "0123456789abcdef", binding), util::Exception);
+  EXPECT_THROW(ForgoneSidecar(path, slog.data(), "0123456789abcdef"), util::Exception);
+
+  const Corpus other(dict, 3, /*first_seed=*/500);
+  const std::vector<char> other_slog = other.bytes();
+  EXPECT_THROW(
+    validate_forgone_file(path, 3, dict.content_hash(), forgone_slog_binding(other_slog.data())),
+    util::Exception);
+  EXPECT_THROW(ForgoneSidecar(path, other_slog.data(), dict.content_hash()), util::Exception);
+
+  const Corpus bare(dict, 3, /*first_seed=*/100, /*with_sidecar=*/false);
+  EXPECT_THROW(
+    validate_forgone_file(forgone_path_of(bare.slog.string()), 3, dict.content_hash(), binding),
+    util::Exception);
 }
 
 // With opp_leave_input, the row is the base row plus a trailing block of the

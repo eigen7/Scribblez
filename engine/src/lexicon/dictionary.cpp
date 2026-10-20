@@ -1,6 +1,7 @@
 #include "lexicon/dictionary.h"
 
 #include "util/exception.h"
+#include "util/hash.h"
 
 #include <cstdint>
 #include <fstream>
@@ -99,6 +100,11 @@ bool Dictionary::contains(const std::string& word) const {
   return acc;
 }
 
+void Dictionary::hash_arcs() {
+  content_hash_ = util::content_hash(
+    {reinterpret_cast<const char*>(nodes_.data()), nodes_.size() * sizeof(uint32_t)});
+}
+
 Dictionary Dictionary::load_kwg(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in) throw util::Exception("Failed to open KWG file: {}", path);
@@ -118,6 +124,7 @@ Dictionary Dictionary::load_kwg(const std::string& path) {
   }
   d.root_ = d.nodes_[0] & ARC_MASK;
   d.gaddag_root_ = d.nodes_[1] & ARC_MASK;
+  d.hash_arcs();
   return d;
 }
 
@@ -156,6 +163,7 @@ Dictionary Dictionary::build_from_words(const std::vector<std::string>& words) {
   d.nodes_[1] = gaddag_root & ARC_MASK;
   d.root_ = dawg_root;
   d.gaddag_root_ = gaddag_root;
+  d.hash_arcs();
   return d;
 }
 

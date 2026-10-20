@@ -26,6 +26,13 @@ delivered it again after its delete failed, is deleted. The ledger line is
 written before the rename, so a crash between the two loses that chunk rather
 than duplicating it.
 
+A workload whose rows read a per-.slog sidecar (SchedulerConfig.chunk_sidecar)
+moves each chunk as a set: the sidecar first, the .slog last, and duplicates
+and quarantines take the sidecar along. Generators deliver the sidecar before
+its .slog, so a staged .slog without one is damage, quarantined like an
+unreadable header. A crash mid-move strands at most a sidecar, which nothing
+reads without its .slog.
+
 Since a single process assigns each whole file with one rename, every .slog
 arrives whole and belongs to exactly one generation. The C++ loader relies on
 that, and so does the training design's bound on how often a game is reused
@@ -78,6 +85,8 @@ def _header_games(chunk: Path) -> int:
 class SchedulerConfig:
     games_per_generation: int
     open_ahead: int
+    # The suffix of the sidecar each chunk .slog carries, or "" for none.
+    chunk_sidecar: str = ""
 
 
 def tick_for_task(spec, task, hooks):
@@ -141,7 +150,7 @@ def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn
 
 
 def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn):
-    staged = _staged_chunks(paths)
+    staged = _staged_chunks(paths, cfg.chunk_sidecar)
 
     cursor = lifecycle.read_train_state(paths).get("generation_index", 0)
     while True:
@@ -155,7 +164,9 @@ def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGames
             open_index = next_index
         hooks.gate(GENERATE_ROLE, None)
         gen_dir = paths.generation_dir(open_index)
-        staged = _fill(paths, gen_dir, cfg.games_per_generation, staged, chunk_games)
+        staged = _fill(
+            paths, gen_dir, cfg.games_per_generation, staged, chunk_games, cfg.chunk_sidecar
+        )
         if not lifecycle.is_complete(gen_dir):
             return  # needs more chunks; staging is drained
 
@@ -181,14 +192,33 @@ def _append_ledger(paths: TagPaths, name: str):
         f.write(name + "\n")
 
 
-def _staged_chunks(paths: TagPaths) -> list[Path]:
+def _chunk_files(chunk: Path, sidecar: str) -> list[Path]:
+    """A chunk's files in move order: its sidecar, if any, then its .slog."""
+    return [chunk.with_suffix(sidecar), chunk] if sidecar else [chunk]
+
+
+def _quarantine(chunk: Path, sidecar: str, why: str):
+    """Set a damaged chunk aside, rather than poison a generation or retry it
+    every tick: the .slog as <stem>.bad, its sidecar with .bad appended."""
+    print(f"scheduler: quarantining {why} chunk {chunk.name}")
+    if sidecar and chunk.with_suffix(sidecar).exists():
+        side = chunk.with_suffix(sidecar)
+        os.replace(side, side.with_name(side.name + ".bad"))
+    os.replace(chunk, chunk.with_suffix(".bad"))
+
+
+def _staged_chunks(paths: TagPaths, sidecar: str) -> list[Path]:
     """Staged chunks awaiting assignment, sorted by name. A chunk already in
-    the ledger is a duplicate (see the module docstring) and is deleted."""
+    the ledger is a duplicate (see the module docstring) and is deleted; one
+    missing its sidecar is quarantined."""
     ledger = _read_ledger(paths)
     staged = []
     for f in sorted(paths.staging_dir.glob("*.slog")):
         if f.name in ledger:
-            f.unlink()
+            for part in _chunk_files(f, sidecar):
+                part.unlink(missing_ok=True)
+        elif sidecar and not f.with_suffix(sidecar).exists():
+            _quarantine(f, sidecar, f"{sidecar}-less")
         else:
             staged.append(f)
     return staged
@@ -204,6 +234,7 @@ def _fill(
     target: int,
     staged: list[Path],
     chunk_games: ChunkGamesFn,
+    sidecar: str,
 ) -> list[Path]:
     """Assign staged chunks into `dest_dir` until its target game count is
     reached, then mark it complete. Returns the chunks still unassigned."""
@@ -214,13 +245,12 @@ def _fill(
             games = chunk_games(chunk)
         except OSError:
             # Chunks arrive whole, so an unreadable header means damage, not a
-            # file still in flight. Set it aside rather than poison the
-            # generation or retry it every tick.
-            print(f"scheduler: quarantining unreadable chunk {chunk.name}")
-            os.replace(chunk, chunk.with_suffix(".bad"))
+            # file still in flight.
+            _quarantine(chunk, sidecar, "unreadable")
             continue
         _append_ledger(paths, chunk.name)
-        os.replace(chunk, dest_dir / chunk.name)
+        for part in _chunk_files(chunk, sidecar):
+            os.replace(part, dest_dir / part.name)
         committed += games
     if committed >= target:
         lifecycle.mark_complete(dest_dir, committed)

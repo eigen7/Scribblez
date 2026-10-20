@@ -65,6 +65,10 @@ class Dictionary {
   uint32_t arc(uint32_t i) const { return nodes_[i]; }
   static uint8_t arc_tile(uint32_t a) { return a >> 24; }
 
+  // The util::content_hash of the arcs, which for a loaded file is the
+  // file's: which lexicon this is, for outputs that depend on it.
+  const std::string& content_hash() const { return content_hash_; }
+
   // Built on first call and cached for the dictionary's lifetime. Thread-safe;
   // concurrent first calls build it once.
   const WordMap& word_map() const;
@@ -77,7 +81,10 @@ class Dictionary {
     std::unique_ptr<WordMap> map;
   };
 
+  void hash_arcs();
+
   std::vector<uint32_t> nodes_;
+  std::string content_hash_;
   uint32_t root_ = 0;
   uint32_t gaddag_root_ = 0;
   mutable std::unique_ptr<WordMapCache> word_map_cache_ = std::make_unique<WordMapCache>();

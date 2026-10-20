@@ -14,6 +14,7 @@
 #include "game/rack.h"
 
 #include <array>
+#include <span>
 #include <vector>
 
 namespace scribblez {
@@ -47,9 +48,12 @@ class PositionEncoder {
   // Replays, then writes one training row for `Task`. With `transpose`, the
   // replayed state (board, last moves, next moves) is transposed before
   // encoding, so no encoder or target needs to know about the augmentation.
+  // A task that records the move history also reads `forgone`, the game's
+  // forgone plays by turn (the .forgone sidecar's entries), which must cover
+  // every move the history holds.
   template <typename Task>
   void encode_row(const GameLog& g, int sampled_turn, bool post_move, bool transpose,
-                  float* out_row);
+                  float* out_row, std::span<const belief::ForgonePlays> forgone = {});
 
   // Valid after replay_to_sampled / encode_row.
   const GameStateEncoder& enc() const { return enc_; }
@@ -63,8 +67,17 @@ class PositionEncoder {
   // the mover's own next move.
   EncodeContext make_context(const GameLog& g, int sampled_turn, int mover, bool post_move) const;
 
-  // Fills history slot `slot` with turn `k`'s move, before it is applied.
+  // Fills history slot `slot` with turn `k`'s move (the opponent's), before it
+  // is applied.
   void record_history_slot(const GameLog& g, int k, LeaveHistorySlot& slot) const;
+
+  // LeaveHistorySlot::leave_kinds for `move`, about to be applied, which the
+  // observer's `observer_exchange` just preceded.
+  uint32_t leave_kinds_after(const Move& move, const Rack& observer_exchange) const;
+
+  // Copies each present history slot's entry of `forgone` in. Throws if a slot
+  // reads past its end.
+  void attach_forgone(int sampled_turn, std::span<const belief::ForgonePlays> forgone);
 
   InputEncodingSpec spec_;
   GameStateEncoder enc_;

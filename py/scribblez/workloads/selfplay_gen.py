@@ -17,6 +17,11 @@ std::random_device. Any deterministic seed partition across a fleet would risk
 two workers playing the same games, so the corpus is deliberately not
 reproducible.
 
+A workload whose rows read a per-.slog sidecar (leave_inference's .forgone)
+passes a ChunkSidecar: each chunk gets its sidecars written before delivery,
+and each sidecar is delivered just before its .slog, so the scheduler never
+sees a .slog whose sidecar is not already staged (scheduler.py).
+
 The work dir is wiped on start. A crash mid-cycle can leave a truncated .slog,
 so leftovers are never delivered; a restart loses at most the in-flight chunk
 and any chunks still queued for delivery.
@@ -26,6 +31,7 @@ import queue
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -54,12 +60,27 @@ def hasty_spec(params) -> str:
     return hasty_player_spec(params.hasty_temperature, params.hasty_top_k, endgame=True)
 
 
-def _deliver_chunk_dir(sink, worker_id: str, chunk_dir: Path) -> tuple[int, int]:
+class ChunkSidecar(NamedTuple):
+    """A sidecar every chunk .slog needs: its file suffix, and
+    write(chunk_dir, threads), which writes one beside each .slog there."""
+
+    suffix: str
+    write: Callable[[Path, int], None]
+
+
+def _deliver_chunk_dir(
+    sink, worker_id: str, chunk_dir: Path, sidecar_suffix: str
+) -> tuple[int, int]:
     """Deliver every .slog in `chunk_dir` to staging, with a -<worker_id> stem
-    suffix for global uniqueness. Returns (chunks, bytes)."""
+    suffix for global uniqueness, each preceded by its `sidecar_suffix`
+    sidecar if one is named. Returns (chunks, bytes)."""
     chunks, nbytes = 0, 0
     for f in sorted(chunk_dir.glob("*.slog")):
-        nbytes += sink.deliver(f, f"{STAGING_DIR}/{f.stem}-{worker_id}.slog")
+        suffixes = [sidecar_suffix, ".slog"] if sidecar_suffix else [".slog"]
+        for suffix in suffixes:
+            nbytes += sink.deliver(
+                f.with_suffix(suffix), f"{STAGING_DIR}/{f.stem}-{worker_id}{suffix}"
+            )
         chunks += 1
     return chunks, nbytes
 
@@ -87,9 +108,10 @@ class Deliverer:
     the background.
     """
 
-    def __init__(self, sink, worker_id: str):
+    def __init__(self, sink, worker_id: str, sidecar_suffix: str = ""):
         self._sink = sink
         self._worker_id = worker_id
+        self._sidecar_suffix = sidecar_suffix
         self._pending = queue.Queue()
         self._done = queue.Queue()
         self._error: Exception | None = None
@@ -130,7 +152,9 @@ class Deliverer:
             chunk_dir, gen_seconds = item
             try:
                 t0 = time.monotonic()
-                chunks, nbytes = _deliver_chunk_dir(self._sink, self._worker_id, chunk_dir)
+                chunks, nbytes = _deliver_chunk_dir(
+                    self._sink, self._worker_id, chunk_dir, self._sidecar_suffix
+                )
                 self._done.put(DeliveryResult(gen_seconds, time.monotonic() - t0, chunks, nbytes))
             except Exception as e:  # noqa: BLE001 -- re-raised by collect()/drain(), not lost
                 self._error = e
@@ -157,14 +181,19 @@ def run_generate(ctx: WorkerContext) -> int:
 
 
 def generate(
-    ctx: WorkerContext, player_spec: str, face_up_leaves: bool, random_opening_mean: float
+    ctx: WorkerContext,
+    player_spec: str,
+    face_up_leaves: bool,
+    random_opening_mean: float,
+    sidecar: ChunkSidecar | None = None,
 ) -> int:
     """Play `player_spec` in both seats, one chunk per cycle, delivered to
     staging in the background. `face_up_leaves` plays the variant in which
     retained tiles are public, and `random_opening_mean` opens games with
     random plies (selfplay.run_games). A workload whose model needs hidden
     leaves or policy-only games passes False or 0 rather than carrying a param
-    it may not set."""
+    it may not set. A `sidecar` is written for each chunk, on the cycle's
+    clock, and delivered with it."""
     p = ctx.params
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     shutil.rmtree(work_dir, ignore_errors=True)
@@ -172,7 +201,7 @@ def generate(
     stats = WorkerStats(ctx)
     print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {p}")
 
-    deliverer = Deliverer(ctx.sink, ctx.worker_id)
+    deliverer = Deliverer(ctx.sink, ctx.worker_id, sidecar.suffix if sidecar is not None else "")
     cycle = 0
     try:
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
@@ -188,11 +217,12 @@ def generate(
                 random_opening_mean=random_opening_mean,
                 face_up_leaves=face_up_leaves,
             )
-            gen_seconds = time.monotonic() - t0
             if rc != 0:
                 _publish(stats, deliverer.drain())
                 return rc
-            deliverer.submit(chunk_dir, gen_seconds)
+            if sidecar is not None:
+                sidecar.write(chunk_dir, ctx.threads)
+            deliverer.submit(chunk_dir, time.monotonic() - t0)
             _publish(stats, deliverer.collect())
             print(f"cycle {cycle}: chunk queued for delivery")
     except WorkerStopped:

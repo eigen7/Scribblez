@@ -35,32 +35,54 @@ float* encode_current_scalars(const LeaveInferenceInput& in, float* out) {
   if (in.leave_length >= 1 && in.leave_length <= Encoder::kMaxLeaveLength) {
     out[in.leave_length - 1] = 1.0f;
   }
-  return out + Encoder::kMaxLeaveLength;
+  out += Encoder::kMaxLeaveLength;
+  return out + encode_rack_counts(in.history->observer_exchange, out);
 }
 
-// The tiles a move placed or exchanged, as per-tile counts. An opponent's
-// exchange hides which tiles went back, so it writes none.
-void encode_move_tiles(const Move& m, bool opponent, float* out) {
-  if (opponent && m.type() == MoveType::EXCHANGE) return;
+// The tiles a play placed, as per-tile counts. An exchange hides which tiles
+// went back, so it writes none.
+void encode_played_tiles(const Move& m, float* out) {
+  if (m.type() != MoveType::PLAY) return;
   for (int i = 0; i < m.num_glyphs(); ++i) out[m.glyph(i).rack_tile().index()] += 1.0f;
 }
 
-float* encode_slot_scalars(const LeaveHistorySlot& slot, bool opponent, float* out) {
+// Per tile kind, whether the slot's forgone-play margin applies, then the
+// margin.
+float* encode_forgone_scalars(const LeaveHistorySlot& slot, float* out) {
+  for (int t = 0; t < TILE_KINDS; ++t, out += 2) {
+    const int8_t margin = slot.forgone.margin[t];
+    if (margin == belief::ForgonePlays::kNone || !((slot.leave_kinds >> t) & 1u)) continue;
+    out[0] = 1.0f;
+    out[1] = float(margin) / kScoreDiffInputScale;
+  }
+  return out;
+}
+
+float* encode_slot_scalars(const LeaveHistorySlot& slot, float* out) {
   float* end = out + Encoder::kSlotScalars;
   if (!slot.present) return end;
   *out++ = 1.0f;
   out[int(slot.move.type())] = 1.0f;
   out += kMoveMetaTypeFloats;
-  encode_move_tiles(slot.move, opponent, out);
+  encode_played_tiles(slot.move, out);
   out += TILE_KINDS;
   *out++ = float(slot.move.num_glyphs());
   *out++ = float(slot.score) / kScoreDiffInputScale;
   *out++ = float(slot.bag_before) / Encoder::kCountScale;
+  out = encode_forgone_scalars(slot, out);
   DEBUG_ASSERT(out == end);
   return end;
 }
 
 }  // namespace
+
+TileCounts leave_pool(TileCounts unseen, const Rack& observer_exchange) {
+  for (int i = 0; i < observer_exchange.size(); ++i) {
+    const bool ok = unseen.remove(observer_exchange.tiles()[i]);
+    RELEASE_ASSERT(ok, "the observer's exchanged tiles are not all unseen");
+  }
+  return unseen;
+}
 
 LeaveHistory LeaveHistory::transpose() const {
   LeaveHistory out = *this;
@@ -79,9 +101,7 @@ void LeaveInferenceInputEncoder::encode(const LeaveInferenceInput& in, const Dic
   for (const LeaveHistorySlot& slot : in.history->slots) cursor = encode_slot_planes(slot, cursor);
   RELEASE_ASSERT(cursor == out + kSpatialFloats);
   cursor = encode_current_scalars(in, cursor);
-  for (int s = 0; s < LeaveHistory::kSlots; ++s) {
-    cursor = encode_slot_scalars(in.history->slots[s], LeaveHistory::is_opponent_slot(s), cursor);
-  }
+  for (const LeaveHistorySlot& slot : in.history->slots) cursor = encode_slot_scalars(slot, cursor);
   RELEASE_ASSERT(cursor == out + kInputFloats);
 }
 

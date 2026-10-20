@@ -10,6 +10,10 @@ the content hash leaves out.
 
 Generators run at seed 0, which draws a fresh random base per chunk, so the
 two never share games.
+
+Each .slog gets its .forgone sidecar, as the generators' chunks do. The tool
+is deterministic and its output leaves out sampled_turn, so the content hash
+covers the sidecars as written.
 """
 
 import hashlib
@@ -20,6 +24,8 @@ from pathlib import Path
 import numpy as np
 
 from scribblez.ffi import struct_dtype
+from scribblez.hardware import default_thread_count
+from scribblez.leave_inference import forgone
 from scribblez.selfplay import run_games
 from scribblez.train_common import timed_print
 
@@ -34,7 +40,7 @@ DONE_MARKER = "complete"
 class HoldoutSet:
     dir: Path
     slogs: tuple[Path, ...]
-    content_hash: str  # over the files in name order, sampled_turn zeroed
+    content_hash: str  # over the files and their sidecars in name order, sampled_turn zeroed
 
 
 def _reproducible_bytes(path: Path) -> bytes:
@@ -51,6 +57,7 @@ def _content_hash(slogs: list[Path]) -> str:
     h = hashlib.sha256()
     for path in slogs:
         h.update(_reproducible_bytes(path))
+        h.update(path.with_suffix(forgone.SUFFIX).read_bytes())
     return h.hexdigest()[:16]
 
 
@@ -64,6 +71,7 @@ def ensure(root: Path, games: int, seed: int, player_spec: str) -> HoldoutSet:
         shutil.rmtree(out, ignore_errors=True)
         timed_print(f"playing {games} held-out games at seed {seed} into {out}")
         run_games(out, games, threads=1, player_spec=player_spec, seed=seed)
+        forgone.write_sidecars(out, default_thread_count())
         (out / DONE_MARKER).touch()
     slogs = sorted(out.glob("*.slog"))
     return HoldoutSet(out, tuple(slogs), _content_hash(slogs))

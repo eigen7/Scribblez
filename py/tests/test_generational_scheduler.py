@@ -123,6 +123,56 @@ def test_committed_count_self_heals(paths):
     assert lifecycle.read_manifest(gen0)["committed_games"] == 100
 
 
+def _tick_with_sidecar(paths, hooks, *, games=100):
+    cfg = scheduler.SchedulerConfig(
+        games_per_generation=games, open_ahead=1, chunk_sidecar=".forgone"
+    )
+    scheduler.tick(paths, cfg, hooks, chunk_games=_chunk_games)
+
+
+def _stage_sidecar(paths: TagPaths, name: str):
+    paths.staging_dir.mkdir(parents=True, exist_ok=True)
+    (paths.staging_dir / f"{name}.forgone").write_text("sidecar")
+
+
+def test_chunks_move_with_their_sidecars(paths):
+    hooks = Hooks()
+    _stage_sidecar(paths, "a")
+    _stage(paths, "a", 100)
+    _stage_sidecar(paths, "b")  # its .slog is still in flight
+    _tick_with_sidecar(paths, hooks)
+    gen0 = paths.generation_dir(0)
+    assert lifecycle.is_complete(gen0)
+    assert sorted(f.name for f in gen0.iterdir() if f.suffix != ".json") == [
+        "a.forgone",
+        "a.slog",
+    ]
+    assert (paths.staging_dir / "b.forgone").exists()  # waits for its .slog
+
+
+def test_a_chunk_without_its_sidecar_is_quarantined(paths):
+    hooks = Hooks()
+    _stage(paths, "bare", 100)
+    _stage_sidecar(paths, "ok")
+    _stage(paths, "ok", 100)
+    _tick_with_sidecar(paths, hooks)
+    assert (paths.staging_dir / "bare.bad").exists()
+    assert sorted(f.name for f in paths.generation_dir(0).glob("*.slog")) == ["ok.slog"]
+
+
+def test_duplicates_and_quarantines_take_the_sidecar(paths):
+    hooks = Hooks()
+    _stage_sidecar(paths, "a")
+    _stage(paths, "a", 100)
+    _tick_with_sidecar(paths, hooks)
+    _stage_sidecar(paths, "a")  # re-delivered
+    _stage(paths, "a", 100)
+    _stage_sidecar(paths, "bad")
+    (paths.staging_dir / "bad.slog").write_text("garbage")
+    _tick_with_sidecar(paths, hooks)
+    assert sorted(f.name for f in paths.staging_dir.iterdir()) == ["bad.bad", "bad.forgone.bad"]
+
+
 class _FinishHooks(Hooks):
     def __init__(self, paths: TagPaths):
         super().__init__(paths=paths)

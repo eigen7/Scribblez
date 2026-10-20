@@ -87,6 +87,24 @@ def test_deliveries_happen_in_order(tmp_path, monkeypatch):
     assert [d[1] for d in sink.delivered] == [f"staging/{c.name}-local-0.slog" for c in calls]
 
 
+def test_sidecars_are_written_and_delivered_before_their_slog(tmp_path, monkeypatch):
+    sink = RecordingSink()
+    calls = []
+    monkeypatch.setattr(selfplay_gen, "run_games", _fake_run_games(calls))
+
+    def write(chunk_dir, threads):
+        for slog in chunk_dir.glob("*.slog"):
+            slog.with_suffix(".side").write_bytes(b"side")
+
+    ctx = _ctx(tmp_path, sink, max_cycles=2)
+    sidecar = selfplay_gen.ChunkSidecar(".side", write)
+    assert selfplay_gen.generate(ctx, "--type=greedy", False, 0.0, sidecar=sidecar) == 0
+    want = []
+    for c in calls:
+        want += [f"staging/{c.name}-local-0.side", f"staging/{c.name}-local-0.slog"]
+    assert [d[1] for d in sink.delivered] == want
+
+
 def test_next_cycle_starts_before_the_previous_delivery_completes(tmp_path, monkeypatch):
     sink = RecordingSink(block_call=1)
     calls = []
