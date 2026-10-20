@@ -34,6 +34,8 @@ PORT_RELEASE_SECONDS = 10
 # killed. The API finishes the step in flight (an ssh command, an upload) and
 # SIGTERMs its local workers first; killing it sooner would lose that step.
 STOP_SECONDS = 120
+# How long a stop waits quietly before it says what it is waiting for.
+STOP_QUIET_SECONDS = 2
 
 
 def _listening_pids(port: int) -> list[int]:
@@ -161,13 +163,13 @@ def _interrupt(signum, frame):
 
 def _stop(procs: list[subprocess.Popen], names: dict[int, str]):
     """Terminate each process and wait for it to exit, killing one that takes
-    longer than STOP_SECONDS."""
+    longer than STOP_QUIET_SECONDS + STOP_SECONDS."""
     for p in procs:
         if p.poll() is None:
             p.terminate()
     for p in procs:
         try:
-            p.wait(timeout=2)
+            p.wait(timeout=STOP_QUIET_SECONDS)
         except subprocess.TimeoutExpired:
             print(f"Waiting for {names[p.pid]} (pid {p.pid}) to exit...", file=sys.stderr)
             try:
