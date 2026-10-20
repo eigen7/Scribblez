@@ -15,6 +15,8 @@
 //   inputs.bin    N rows x the base input width, float32
 //   expected.bin  N rows x 6 float32: win_prob, p_win, p_draw, p_loss,
 //                 score_diff_mean, score_diff_std
+//   external/     another model with its initializers in a blob beside it,
+//                 and its expected.bin over the same inputs
 //
 // Run with no arguments, the binary generates fixtures into a temp dir through
 // the Python generator at SCRIBBLEZ_PY_DIR, and skips if that fails (no
@@ -217,6 +219,38 @@ TEST_P(NnInferenceParityTest, Fp16MatchesPyTorchReference) {
   ASSERT_GT(n, 0);
   std::cout << "  " << n << " rows from " << dir_ << "\n";
   check_precision(dir_ + "/model.onnx", scribblez::nn::Precision::kFP16, "FP16", kFp16ProbTol,
+                  kFp16ScoreDiffTol, inputs, expected, n);
+}
+
+// Runs the rest of its scope from another working directory, restoring the
+// original when it ends.
+class ScopedWorkingDirectory {
+ public:
+  explicit ScopedWorkingDirectory(const std::filesystem::path& dir)
+      : saved_(std::filesystem::current_path()) {
+    std::filesystem::current_path(dir);
+  }
+  ~ScopedWorkingDirectory() { std::filesystem::current_path(saved_); }
+
+ private:
+  std::filesystem::path saved_;
+};
+
+// A model whose initializers live in a blob beside the .onnx loads whatever the
+// process's working directory: TensorRT must resolve the blob against the model
+// path the engine passes (neural_net.cpp), both when building a plan and when
+// refitting a cached one. The model runs from "/", far from its directory, and
+// has its own weights and reference, so a load that missed the blob cannot
+// match.
+TEST_P(NnInferenceParityTest, ExternalDataModelLoadsFromAnyWorkingDirectory) {
+  std::vector<float> inputs, own_expected;
+  const int n = load_fixture(dir_, &inputs, &own_expected);
+  ASSERT_GT(n, 0);
+  const std::vector<float> expected = read_floats(dir_ + "/external/expected.bin");
+  ASSERT_EQ(expected.size(), own_expected.size());
+  const std::string model = std::filesystem::absolute(dir_ + "/external/model.onnx").string();
+  ScopedWorkingDirectory from_root("/");
+  check_precision(model, scribblez::nn::Precision::kFP16, "FP16 external data", kFp16ProbTol,
                   kFp16ScoreDiffTol, inputs, expected, n);
 }
 

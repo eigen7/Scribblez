@@ -11,7 +11,7 @@ them. py/tools/gpu_parity.py runs it; to run it by hand, from py/:
     python3 -m scripts.position_eval.gen_parity_fixture --out-dir /tmp/nn_fixture
 
 One fixture per trunk tower (conv and transformer, the two graph shapes the
-engine may be given) is written under --out-dir/<trunk>/, three files each:
+engine may be given) is written under --out-dir/<trunk>/:
   * model.onnx   -- a randomly initialized PositionEvalModel.
   * inputs.bin   -- N rows x kInputFloats float32, laid out exactly as
                     GameStateEncoder::encode_input writes them (spatial floats
@@ -20,6 +20,14 @@ engine may be given) is written under --out-dir/<trunk>/, three files each:
   * expected.bin -- N x 6 float32: [win_prob, p_win, p_draw, p_loss,
                     score_diff_mean, score_diff_std], the PyTorch decode of
                     each row.
+  * external/    -- a second model (another seed) saved with every
+                    initializer in external/model_data.bin, and its
+                    expected.bin over the same inputs. Real exports keep their
+                    frozen lexicon weights as external data, which the engine
+                    must resolve against the model's path, not the process's
+                    working directory. Distinct weights keep a load that skipped
+                    the blob, or refitted a cached plan from the wrong one, from
+                    matching by accident.
 
 The weights are random on purpose: the test checks the numerical fidelity of
 the inference stack, not any trained model, and random weights keep the fixture
@@ -30,6 +38,7 @@ import argparse
 from pathlib import Path
 
 import numpy as np
+import onnx
 import torch
 from scribblez.ffi import task_input_shapes
 from scribblez.position_eval.model import PositionEvalModel
@@ -90,11 +99,7 @@ def reference_evals(model: PositionEvalModel, rows: np.ndarray) -> np.ndarray:
     return np.stack([win_prob, p_win, p_draw, p_loss, sd_mean, sd_std], axis=1).astype(np.float32)
 
 
-def write_fixture(out_dir: Path, transformer: TransformerConfig | None, num_rows: int, seed: int):
-    """Export one tower's model and its reference decode of `num_rows` random rows."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    model = build_model(seed, transformer)
-    onnx_path = out_dir / "model.onnx"
+def export_model(model: PositionEvalModel, onnx_path: Path):
     export_onnx(
         model,
         onnx_path,
@@ -104,12 +109,41 @@ def write_fixture(out_dir: Path, transformer: TransformerConfig | None, num_rows
         board_size=BOARD_SIZE,
     )
 
+
+def write_external_data_model(
+    out_dir: Path, transformer: TransformerConfig | None, rows: np.ndarray, seed: int
+):
+    """Export a `seed` model with all of its initializers in model_data.bin
+    beside model.onnx, and its reference decode of `rows`."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model = build_model(seed, transformer)
+    onnx_path = out_dir / "model.onnx"
+    export_model(model, onnx_path)
+    onnx.save_model(
+        onnx.load(str(onnx_path)),
+        str(onnx_path),
+        save_as_external_data=True,
+        all_tensors_to_one_file=True,
+        location="model_data.bin",
+        size_threshold=0,
+    )
+    (out_dir / "expected.bin").write_bytes(reference_evals(model, rows).tobytes())
+
+
+def write_fixture(out_dir: Path, transformer: TransformerConfig | None, num_rows: int, seed: int):
+    """Export one tower's model and its reference decode of `num_rows` random rows."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model = build_model(seed, transformer)
+    onnx_path = out_dir / "model.onnx"
+    export_model(model, onnx_path)
+
     rng = np.random.default_rng(seed)
     rows = rng.standard_normal((num_rows, INPUT_FLOATS), dtype=np.float32)
     expected = reference_evals(model, rows)
 
     (out_dir / "inputs.bin").write_bytes(rows.tobytes())
     (out_dir / "expected.bin").write_bytes(expected.tobytes())
+    write_external_data_model(out_dir / "external", transformer, rows, seed + 1)
 
     print(f"Wrote fixture to {out_dir}:")
     print(f"  model.onnx   ({onnx_path.stat().st_size} bytes)")
