@@ -1,11 +1,12 @@
 """Tests for the evidence trainer (scribblez.evidence), which trains the move
 proposal model to condition on sim evidence.
 
-CPU tests cover the sim-outcome gain targets, subset assembly (which evidence
+Unit tests cover the sim-outcome gain targets, subset assembly (which evidence
 records a training row may see), the batched evidence builder, the model's
-frozen-backbone surface, and the trainer's store pacing. GPU tests reuse
-test_evidence_trajectories' corpus to run training passes in both modes (frozen
-backbone, and the unfrozen whole-model step) and the train role end to end. The
+frozen-backbone surface, and the trainer's store pacing. The e2e tests reuse
+test_evidence_trajectories' corpus (generated with the engine's synthetic CPU
+models) to run training passes in both modes (frozen backbone, and the
+unfrozen whole-model step) and the train role end to end, all on the CPU. The
 invariant they lean on throughout: with an empty evidence subset, the
 conditioned pass equals the plain one exactly.
 """
@@ -293,7 +294,7 @@ def test_load_student_tolerates_only_the_evidence_modules_missing():
         _tiny_model().load_student(state)
 
 
-# --- e2e over the GPU trajectory corpus ---
+# --- e2e over the trajectory corpus ---
 
 
 @pytest.fixture(scope="module")
@@ -356,7 +357,7 @@ def test_training_pass_moves_only_the_evidence_path(traj_datasets):
     """One pass on the frozen-backbone model leaves the plain outputs unchanged
     and empty-subset rows exact, while the evidence parameters move."""
     train, hold = traj_datasets
-    device = torch.device("cuda")
+    device = torch.device("cpu")
     model = MoveSetEvalModel(
         spatial_planes=train.spatial_planes,
         scalar_size=train.scalar_size,
@@ -422,7 +423,7 @@ def test_unfrozen_pass_moves_the_backbone_and_keeps_prefix_0_exact(traj_datasets
     from scribblez.evidence.train_loop import LOSS_KEYS
 
     train, hold = traj_datasets
-    device = torch.device("cuda")
+    device = torch.device("cpu")
     model = _unfrozen_model(train, device)
     assert not model.backbone_frozen
     before = evaluate(model, hold, device, positions_per_batch=4, max_e=8)
@@ -458,7 +459,7 @@ def test_mset_evaluate_loss_is_the_candidate_weighted_distillation_loss(mset_hol
     from scribblez.move_set_eval import eval as mset_eval
 
     hold = mset_holdout
-    device = torch.device("cuda")
+    device = torch.device("cpu")
     model = MoveSetEvalModel(hold.spatial_planes, hold.scalar_size, 8, 1, 2).to(device).eval()
     cfg = mset_train_loop.LossConfig(0.004, 10.0, 10.0)
     got = mset_eval.evaluate(model, hold, device, positions_per_batch=3, loss_cfg=cfg)
@@ -606,7 +607,7 @@ def test_dataset_refuses_a_mixed_corpus(tmp_path):
         TrajectoryDataset([store / "c.sobs"])
 
 
-# --- the runner, end to end on the GPU corpus ---
+# --- the runner, end to end on the trajectory corpus ---
 
 
 def _student_checkpoint(path, train, *, open_leaves: bool, version=None):
@@ -687,7 +688,7 @@ def test_batched_evidence_builder_matches_the_per_position_one(traj_datasets):
     from scribblez.move_set_eval.evidence import build_evidence_inputs, collate_evidence
 
     train, _ = traj_datasets
-    device = torch.device("cuda")
+    device = torch.device("cpu")
     model = MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device).eval()
     max_e = 8
     # subsets_per_pool > 1 so arbitrary (non-prefix) subsets are exercised: the
@@ -741,7 +742,7 @@ def test_run_trains_to_its_budget_resumes_and_refuses_mismatches(
     traj_datasets,
     tmp_path,
 ):
-    """The train role end to end on the GPU corpus: refuses a student on the
+    """The train role end to end on the trajectory corpus: refuses a student on the
     wrong information-condition arm or move-encoding version, then trains its
     epoch budget, writes per-pass checkpoints and metrics, and a second
     invocation resumes and stops at once."""
@@ -881,7 +882,7 @@ def test_non_finite_batches_are_skipped_without_a_step(traj_datasets, monkeypatc
     from scribblez.evidence import train_loop, trainer
 
     train, _ = traj_datasets
-    device = torch.device("cuda")
+    device = torch.device("cpu")
     model = MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device)
     if frozen:
         model.freeze_backbone()
@@ -930,7 +931,7 @@ def test_gradients_are_clipped_to_the_configured_norm(traj_datasets, frozen):
     from scribblez.evidence import trainer
 
     train, _ = traj_datasets
-    device = torch.device("cuda")
+    device = torch.device("cpu")
     model = MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device)
     if frozen:
         model.freeze_backbone()
@@ -959,7 +960,7 @@ def test_the_staged_best_so_far_is_the_gain_targets_baseline(traj_datasets):
     from scribblez.evidence_fusion import best_so_far
 
     train, _ = traj_datasets
-    device = torch.device("cuda")
+    device = torch.device("cpu")
     model = MoveSetEvalModel(train.spatial_planes, train.scalar_size, 8, 1, 2).to(device).eval()
     max_e = 8
     seen_empty = seen_full = False
