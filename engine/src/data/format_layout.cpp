@@ -16,6 +16,7 @@
 #include "sim/win_table_feature.h"
 #include "training/leave_inference_task.h"
 #include "training/move_set_eval_target_log.h"
+#include "training/policy_set_format.h"
 #include "training/training_targets.h"
 #include "util/metaprogramming.h"
 
@@ -175,6 +176,7 @@ json::object build_constants() {
                {"role_anchor", static_cast<uint8_t>(SimObsRole::kAnchor)},
                {"role_on_policy", static_cast<uint8_t>(SimObsRole::kOnPolicy)},
                {"role_off_policy", static_cast<uint8_t>(SimObsRole::kOffPolicy)}};
+  c["policy_set"] = {{"format_version", kPolicySetFormatVersion}};
   c["pool"] = {{"magic", kPoolMagic},
                {"version", kPoolFormatVersion},
                {"flag_leave_inference", kPoolFlagLeaveInference}};
