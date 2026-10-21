@@ -524,7 +524,12 @@ def _read_shapes(ptr) -> list[ShapeInfo]:
 
 # The training tasks a DataLoader or decode_rows decodes, by their engine
 # codes (scribblez_ffi.h, scribblez_task_input_shapes).
-TASK_CODES = {"position_eval": 0, "max_move_per_lane": 1, "leave_inference": 2}
+TASK_CODES = {
+    "position_eval": 0,
+    "max_move_per_lane": 1,
+    "leave_inference": 2,
+    "public_leave_inference": 3,
+}
 
 
 def _task_code(task: str) -> int:

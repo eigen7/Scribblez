@@ -37,6 +37,12 @@
 //
 // Hidden information never reaches a row: for an exchange in a slot, the tile
 // counts stay zero and only the number shows.
+//
+// A public row (LeaveInferenceView::kPublic) holds only what both players see,
+// for a model that infers the leave from public information alone: the
+// observer's rack counts and exchanges stay zero, the unseen pool is every
+// tile off the board, and a forgone-play margin applies whenever it has one.
+// The layout is the same, so either view's model serves through one engine.
 
 #include "belief/forgone_plays.h"
 #include "encoding/board_planes.h"
@@ -97,6 +103,10 @@ struct LeaveHistory {
 // the leave rather than leave it, which a pool cannot express.
 TileCounts leave_pool(TileCounts unseen, const Rack& observer_exchange);
 
+// Whose information a row holds: the observer's, or only the public part of
+// it (see the layout above).
+enum class LeaveInferenceView : uint8_t { kObserver, kPublic };
+
 // Everything the encoder reads, from the observer's side.
 struct LeaveInferenceInput {
   const Board* board;  // the current position
@@ -105,6 +115,7 @@ struct LeaveInferenceInput {
   int bag_size;
   int leave_length;  // of the opponent's leave; outside 1..kMaxLeaveLength encodes as none
   const LeaveHistory* history;
+  LeaveInferenceView view = LeaveInferenceView::kObserver;
 };
 
 struct LeaveInferenceInputEncoder {

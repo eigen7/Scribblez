@@ -228,6 +228,8 @@ std::optional<scribblez::binlog::DecodeTask> decode_task(int code) {
       return DecodeTask::kMaxMovePerLane;
     case 2:
       return DecodeTask::kLeaveInference;
+    case 3:
+      return DecodeTask::kPublicLeaveInference;
   }
   return std::nullopt;
 }
@@ -250,6 +252,7 @@ TaskShapes task_shapes(const ScribblezSession* s, int code) {
     case DecodeTask::kMaxMovePerLane:
       return {kMaxMovePerLaneInputShapes, kMaxMovePerLaneTargetShapes};
     case DecodeTask::kLeaveInference:
+    case DecodeTask::kPublicLeaveInference:
       return {kLeaveInferenceInputShapes, kLeaveInferenceTargetShapes};
   }
   return {nullptr, nullptr};

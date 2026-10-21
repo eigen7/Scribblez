@@ -34,7 +34,7 @@ void OppLeaveTarget::encode(const EncodeContext& ctx, float* out) {
   out[kBagOffset] = float(ctx.bag_size);
 }
 
-void LeaveInferenceTask::encode_row(const EncodeContext& ctx, float* out_row) {
+void encode_leave_inference_row(const EncodeContext& ctx, LeaveInferenceView view, float* out_row) {
   DEBUG_ASSERT(ctx.leave_history != nullptr);
   const GameStateEncoder& enc = *ctx.enc;
   const int me = ctx.active_player;
@@ -43,9 +43,10 @@ void LeaveInferenceTask::encode_row(const EncodeContext& ctx, float* out_row) {
                                enc.score(me) - enc.score(1 - me),
                                ctx.bag_size,
                                ctx.opp_known_leave.size(),
-                               ctx.leave_history};
+                               ctx.leave_history,
+                               view};
   LeaveInferenceInputEncoder::encode(in, *ctx.spec.dict, out_row);
-  OppLeaveTarget::encode(ctx, out_row + kInputFloats);
+  OppLeaveTarget::encode(ctx, out_row + LeaveInferenceInputEncoder::kInputFloats);
 }
 
 }  // namespace scribblez

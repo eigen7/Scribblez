@@ -15,6 +15,8 @@ Files written into --out-dir:
                          row, stamped with LEAVE_VALUES as its leave values.
   * stale_format.onnx -- the same export stamped with the previous format
                          version, which the loader must refuse.
+  * public.onnx       -- the same export stamped as a public model, which the
+                         loader must refuse too.
   * leave_values.txt  -- LEAVE_VALUES.
   * inputs.bin        -- N rows x kInputFloats float32, spatial then scalar, as
                          LeaveInferenceInputEncoder::encode writes them.
@@ -33,7 +35,12 @@ import onnx
 import torch
 from scribblez.ffi import task_input_shapes
 from scribblez.leave_inference.model import LeaveInferenceModel
-from scribblez.leave_inference.onnx_export import FORMAT_KEY, export_onnx, params_in_points
+from scribblez.leave_inference.onnx_export import (
+    FORMAT_KEY,
+    PUBLIC_KEY,
+    export_onnx,
+    params_in_points,
+)
 
 _shapes = {s.name: s.dims for s in task_input_shapes("leave_inference")}
 SPATIAL_PLANES, BOARD_SIZE, _ = _shapes["input_spatial"]
@@ -60,11 +67,17 @@ def reference(model: LeaveInferenceModel, rows: np.ndarray) -> np.ndarray:
     return params_in_points(out["theta"], out["a"], out["b"]).numpy().astype(np.float32)
 
 
-def write_stale_format(src: Path, dst: Path):
+def onnx_format_version(path: Path) -> int:
+    meta = {p.key: p.value for p in onnx.load(str(path)).metadata_props}
+    return int(meta[FORMAT_KEY])
+
+
+def write_restamped(src: Path, dst: Path, key: str, value: str):
+    """Copy `src` to `dst` with metadata entry `key` set to `value`."""
     m = onnx.load(str(src))
     for entry in m.metadata_props:
-        if entry.key == FORMAT_KEY:
-            entry.value = str(int(entry.value) - 1)
+        if entry.key == key:
+            entry.value = value
     onnx.save(m, str(dst))
 
 
@@ -84,10 +97,14 @@ def main() -> int:
         SPATIAL_PLANES,
         SCALAR_SIZE,
         leave_values=LEAVE_VALUES,
+        public=False,
         provenance={"tag": "parity-fixture", "generation": 0, "policy": "random"},
         board_size=BOARD_SIZE,
     )
-    write_stale_format(out / "model.onnx", out / "stale_format.onnx")
+    model_path = out / "model.onnx"
+    stale_version = str(onnx_format_version(model_path) - 1)
+    write_restamped(model_path, out / "stale_format.onnx", FORMAT_KEY, stale_version)
+    write_restamped(model_path, out / "public.onnx", PUBLIC_KEY, "1")
     (out / "leave_values.txt").write_text(LEAVE_VALUES)
 
     rng = np.random.default_rng(args.seed)

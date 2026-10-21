@@ -25,10 +25,14 @@ float* encode_slot_planes(const LeaveHistorySlot& slot, float* out) {
   return out + Encoder::kSlotPlanes * kBoardCells;
 }
 
+bool is_public(LeaveInferenceView view) { return view == LeaveInferenceView::kPublic; }
+
 float* encode_current_scalars(const LeaveInferenceInput& in, float* out) {
-  out += encode_rack_counts(in.rack, out);
+  // A public row's observer holds no tiles anyone else can't see.
+  const Rack rack = is_public(in.view) ? Rack{} : in.rack;
+  out += encode_rack_counts(rack, out);
   uint8_t unseen[TILE_KINDS];
-  compute_unseen_pool(unseen, *in.board, in.rack);
+  compute_unseen_pool(unseen, *in.board, rack);
   out += encode_unseen_pool_thermometer(unseen, out);
   out += encode_score_diff_scalar(in.score_diff, out);
   *out++ = float(in.bag_size) / Encoder::kCountScale;
@@ -36,6 +40,7 @@ float* encode_current_scalars(const LeaveInferenceInput& in, float* out) {
     out[in.leave_length - 1] = 1.0f;
   }
   out += Encoder::kMaxLeaveLength;
+  if (is_public(in.view)) return out + LeaveHistory::kObserverExchanges * TILE_KINDS;
   for (const Rack& exchange : in.history->observer_exchanges)
     out += encode_rack_counts(exchange, out);
   return out;
@@ -49,18 +54,20 @@ void encode_played_tiles(const Move& m, float* out) {
 }
 
 // Per tile kind, whether the slot's forgone-play margin applies, then the
-// margin.
-float* encode_forgone_scalars(const LeaveHistorySlot& slot, float* out) {
+// margin. A public row skips the observer's leave_kinds: the board alone
+// already withholds a margin from a tile kind it holds every copy of.
+float* encode_forgone_scalars(const LeaveHistorySlot& slot, LeaveInferenceView view, float* out) {
+  const uint32_t kinds = is_public(view) ? ~0u : slot.leave_kinds;
   for (int t = 0; t < TILE_KINDS; ++t, out += 2) {
     const int8_t margin = slot.forgone.margin[t];
-    if (margin == belief::ForgonePlays::kNone || !((slot.leave_kinds >> t) & 1u)) continue;
+    if (margin == belief::ForgonePlays::kNone || !((kinds >> t) & 1u)) continue;
     out[0] = 1.0f;
     out[1] = float(margin) / kScoreDiffInputScale;
   }
   return out;
 }
 
-float* encode_slot_scalars(const LeaveHistorySlot& slot, float* out) {
+float* encode_slot_scalars(const LeaveHistorySlot& slot, LeaveInferenceView view, float* out) {
   float* end = out + Encoder::kSlotScalars;
   if (!slot.present) return end;
   *out++ = 1.0f;
@@ -71,7 +78,7 @@ float* encode_slot_scalars(const LeaveHistorySlot& slot, float* out) {
   *out++ = float(slot.move.num_glyphs());
   *out++ = float(slot.score) / kScoreDiffInputScale;
   *out++ = float(slot.bag_before) / Encoder::kCountScale;
-  out = encode_forgone_scalars(slot, out);
+  out = encode_forgone_scalars(slot, view, out);
   DEBUG_ASSERT(out == end);
   return end;
 }
@@ -103,7 +110,8 @@ void LeaveInferenceInputEncoder::encode(const LeaveInferenceInput& in, const Dic
   for (const LeaveHistorySlot& slot : in.history->slots) cursor = encode_slot_planes(slot, cursor);
   RELEASE_ASSERT(cursor == out + kSpatialFloats);
   cursor = encode_current_scalars(in, cursor);
-  for (const LeaveHistorySlot& slot : in.history->slots) cursor = encode_slot_scalars(slot, cursor);
+  for (const LeaveHistorySlot& slot : in.history->slots)
+    cursor = encode_slot_scalars(slot, in.view, cursor);
   RELEASE_ASSERT(cursor == out + kInputFloats);
 }
 

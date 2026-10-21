@@ -30,6 +30,7 @@ int BlockDecoder::input_floats_for(DecodeTask task, const InputEncodingSpec& spe
     case DecodeTask::kMaxMovePerLane:
       return MaxMovePerLaneTask::kInputFloats;
     case DecodeTask::kLeaveInference:
+    case DecodeTask::kPublicLeaveInference:
       return LeaveInferenceTask::kInputFloats;
   }
   std::abort();  // unreachable: the switch covers every DecodeTask
@@ -42,9 +43,14 @@ int BlockDecoder::label_floats_for(DecodeTask task) {
     case DecodeTask::kMaxMovePerLane:
       return MaxMovePerLaneTask::kLabelFloats;
     case DecodeTask::kLeaveInference:
+    case DecodeTask::kPublicLeaveInference:
       return LeaveInferenceTask::kLabelFloats;
   }
   std::abort();  // unreachable: the switch covers every DecodeTask
+}
+
+bool BlockDecoder::reads_forgone(DecodeTask task) {
+  return task == DecodeTask::kLeaveInference || task == DecodeTask::kPublicLeaveInference;
 }
 
 GameLog BlockDecoder::game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn) {
@@ -101,14 +107,26 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
       pos_.encode_row<MaxMovePerLaneTask>(g, int(turn_idx), /*post_move=*/false, transpose, out);
       return;
     case DecodeTask::kLeaveInference:
-      if (int(turn_idx) >= eligible_end(buf, game_idx)) {
-        throw util::Exception("{}: game {} turn {} is past the eligible region", path, game_idx,
-                              turn_idx);
-      }
-      pos_.encode_row<LeaveInferenceTask>(g, int(turn_idx), /*post_move=*/false, transpose, out,
-                                          forgone->game(game_idx));
+      decode_leave_row<LeaveInferenceTask>(buf, path, g, game_idx, turn_idx, transpose, out,
+                                           *forgone);
+      return;
+    case DecodeTask::kPublicLeaveInference:
+      decode_leave_row<PublicLeaveInferenceTask>(buf, path, g, game_idx, turn_idx, transpose, out,
+                                                 *forgone);
       return;
   }
+}
+
+template <typename Task>
+void BlockDecoder::decode_leave_row(const char* buf, const std::string& path, const GameLog& g,
+                                    uint32_t game_idx, uint32_t turn_idx, bool transpose,
+                                    float* out, const ForgoneSidecar& forgone) {
+  if (int(turn_idx) >= eligible_end(buf, game_idx)) {
+    throw util::Exception("{}: game {} turn {} is past the eligible region", path, game_idx,
+                          turn_idx);
+  }
+  pos_.encode_row<Task>(g, int(turn_idx), /*post_move=*/false, transpose, out,
+                        forgone.game(game_idx));
 }
 
 const Board& BlockDecoder::replay_board(const char* buf, uint32_t game_idx, uint32_t turn_idx) {

@@ -154,6 +154,11 @@ TEST_F(LeaveInferenceParityTest, RefusesOtherFormatVersion) {
   EXPECT_NE(msg.find("leave_inference_format_version"), std::string::npos) << msg;
 }
 
+TEST_F(LeaveInferenceParityTest, RefusesAPublicModel) {
+  const std::string msg = refusal("public.onnx", leave_values_);
+  EXPECT_NE(msg.find("public"), std::string::npos) << msg;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
