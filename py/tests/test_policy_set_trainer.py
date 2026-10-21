@@ -325,10 +325,12 @@ def test_the_greedy_form_overfits_a_pool_and_builds_distinct_sets(chunk):
     m = trainer.build_models(replace(TINY, forms="greedy"))["greedy"]
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     form = forms.FORMS["greedy"]
-    rng = np.random.default_rng(0)
     losses = []
     for _ in range(4):
-        total = sum(form.loss(m, batch, TINY, rng).values())
+        # The same chosen sets every step: a set's targets set its loss's
+        # scale (an empty set's are whole win probabilities), so fresh draws
+        # would not compare.
+        total = sum(form.loss(m, batch, TINY, np.random.default_rng(0)).values())
         opt.zero_grad()
         total.backward()
         opt.step()
