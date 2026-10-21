@@ -25,6 +25,9 @@ OUTPUT = "leave_params"
 # The entries the engine gates on, which checkpoints also record.
 FORMAT_KEY = "leave_inference_format_version"
 TABLE_KEY = "leave_values"
+# 1 for a model trained on public rows (the public_leave_inference task); the
+# engine reads an absent entry as 0.
+PUBLIC_KEY = "leave_inference_public"
 
 
 def params_in_points(theta: torch.Tensor, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -50,13 +53,15 @@ def export_onnx(
     scalar_size: int,
     *,
     leave_values: str,
+    public: bool,
     provenance: dict[str, object],
     board_size: int = 15,
     opset: int = 17,
 ):
     """Export `model` in eval mode to `path`, atomically. `leave_values` is
-    the content hash of the leave values it was trained against;
-    `provenance` (tag, generation, policy) is recorded verbatim."""
+    the content hash of the leave values it was trained against; `public`
+    says it reads public rows; `provenance` (tag, generation, policy) is
+    recorded verbatim."""
     if model.head_kind != HEAD_TILTED:
         raise ValueError(f"only the {HEAD_TILTED} head is served, not {model.head_kind!r}")
     device = next(model.parameters()).device
@@ -74,6 +79,7 @@ def export_onnx(
             "graph": GRAPH,
             FORMAT_KEY: str(format_layout()["constants"]["leave_inference"]["format_version"]),
             TABLE_KEY: leave_values,
+            PUBLIC_KEY: "1" if public else "0",
             "lexicon": DEFAULT_LEXICON,
             "head": model.head_kind,
             **{k: str(v) for k, v in provenance.items()},

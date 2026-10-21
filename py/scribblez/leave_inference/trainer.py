@@ -50,7 +50,12 @@ from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.selfplay_gen import hasty_spec
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
-TASK = "leave_inference"
+
+def _task(params) -> str:
+    """The rows the run trains and evaluates on (ffi.TASK_CODES)."""
+    return "public_leave_inference" if params.public else "leave_inference"
+
+
 EVAL_BATCH = 1024
 FACE_UP_FLAG = format_layout()["constants"]["slog"]["flag_face_up_leaves"]
 
@@ -98,10 +103,10 @@ def _rows_left(params, state: GenerationalState) -> bool:
     return not params_mod.reached(state.rows_trained, params.max_rows)
 
 
-def _holdout_batches(held: holdout.HoldoutSet, cpu):
+def _holdout_batches(held: holdout.HoldoutSet, params, cpu):
     ds = SlogDataset(
         held.dir,
-        task=TASK,
+        task=_task(params),
         post_move=False,
         apply_symmetry=False,
         num_workers=cpu.dataloader_workers,
@@ -139,6 +144,7 @@ def export_generation(paths: TagPaths, params, gen: int, model, ctx):
         ctx["spatial_planes"],
         ctx["scalar_size"],
         leave_values=ctx["config"][TABLE_KEY],
+        public=params.public,
         provenance={"tag": ctx["tag"], "generation": gen, "policy": hasty_spec(params)},
     )
 
@@ -186,7 +192,9 @@ def _checkpoint_and_eval(
         "lr": optim_arm.current,
         **optim_arm.metrics(),
     }
-    record.update(evaluate(model, ctx["table"], _holdout_batches(ctx["holdout"], cpu), device))
+    record.update(
+        evaluate(model, ctx["table"], _holdout_batches(ctx["holdout"], params, cpu), device)
+    )
     record.update(refit_win_table(paths, params, gen, window, ctx))
     timed_print(
         f"[gen {gen}] rows={state.rows_trained} loss={result.loss:.4f} "
@@ -223,7 +231,11 @@ def train_one_generation(
     window = lifecycle.window_dirs(paths, gen, params.window)
     ctx["face_up_guard"].check(window)
     ds = SlogDataset(
-        window, task=TASK, post_move=False, apply_symmetry=True, num_workers=cpu.dataloader_workers
+        window,
+        task=_task(params),
+        post_move=False,
+        apply_symmetry=True,
+        num_workers=cpu.dataloader_workers,
     )
     timed_print(
         f"generation {gen}: window {[d.name for d in window]} "
@@ -328,7 +340,7 @@ def run(ctx: WorkerContext) -> int:
         f"leave values {table.klv_hash}; held-out set {held.content_hash} ({len(held.slogs)} files)"
     )
 
-    in_shapes = {s.name: s.dims for s in task_input_shapes(TASK)}
+    in_shapes = {s.name: s.dims for s in task_input_shapes(_task(params))}
     model = LeaveInferenceModel(
         spatial_planes=in_shapes["input_spatial"][0],
         scalar_size=in_shapes["input_scalar"][0],

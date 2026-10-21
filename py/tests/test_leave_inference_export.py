@@ -23,6 +23,7 @@ from scribblez.leave_inference.model import LeaveInferenceModel  # noqa: E402
 from scribblez.leave_inference.onnx_export import (  # noqa: E402
     FORMAT_KEY,
     GRAPH,
+    PUBLIC_KEY,
     TABLE_KEY,
     export_onnx,
     params_in_points,
@@ -92,12 +93,14 @@ def test_export_stamps_the_gated_entries_and_keeps_the_mode(tmp_path):
         SHAPES["input_spatial"][0],
         SHAPES["input_scalar"][0],
         leave_values="abc",
+        public=True,
         provenance={"tag": "t", "generation": 7, "policy": "hasty"},
     )
     meta = {p.key: p.value for p in onnx.load(str(path)).metadata_props}
     assert meta["graph"] == GRAPH
     assert int(meta[FORMAT_KEY]) >= 1
     assert meta[TABLE_KEY] == "abc"
+    assert meta[PUBLIC_KEY] == "1"
     assert (meta["head"], meta["tag"], meta["generation"]) == (HEAD_TILTED, "t", "7")
     assert model.training
     model.eval()
@@ -107,6 +110,7 @@ def test_export_stamps_the_gated_entries_and_keeps_the_mode(tmp_path):
         SHAPES["input_spatial"][0],
         SHAPES["input_scalar"][0],
         leave_values="abc",
+        public=False,
         provenance={},
     )
     assert not model.training
@@ -120,5 +124,6 @@ def test_only_the_tilted_head_exports(tmp_path):
             SHAPES["input_spatial"][0],
             SHAPES["input_scalar"][0],
             leave_values="abc",
+            public=False,
             provenance={},
         )

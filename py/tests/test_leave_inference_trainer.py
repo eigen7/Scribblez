@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
+import onnx
 import pytest
 import torch
 
@@ -21,6 +22,7 @@ from scribblez.dataset import SlogDataset  # noqa: E402
 from scribblez.leave_inference import forgone, holdout, loss, train_loop, trainer  # noqa: E402
 from scribblez.leave_inference.heads import HEAD_TILTED, HEADS  # noqa: E402
 from scribblez.leave_inference.model import LeaveInferenceModel  # noqa: E402
+from scribblez.leave_inference.onnx_export import PUBLIC_KEY  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.workloads import leave_inference  # noqa: E402
 
@@ -146,6 +148,23 @@ def test_each_generation_exports_the_served_head_only(tmp_path, head):
     }
     trainer.export_generation(paths, params, 3, model, ctx)
     assert paths.onnx_path(3).exists() == (head == HEAD_TILTED)
+
+
+@pytest.mark.parametrize("public", [False, True])
+def test_the_export_says_whether_the_model_is_public(tmp_path, public):
+    paths = _paths(tmp_path)
+    params = leave_inference.LeaveInferenceParams(public=public)
+    shapes = {s.name: s.dims for s in ffi.task_input_shapes(trainer._task(params))}
+    model = LeaveInferenceModel(shapes["input_spatial"][0], shapes["input_scalar"][0], 8, 1)
+    ctx = {
+        "tag": "t",
+        "config": {trainer.TABLE_KEY: "abc"},
+        "spatial_planes": shapes["input_spatial"][0],
+        "scalar_size": shapes["input_scalar"][0],
+    }
+    trainer.export_generation(paths, params, 3, model, ctx)
+    meta = {p.key: p.value for p in onnx.load(str(paths.onnx_path(3))).metadata_props}
+    assert meta[PUBLIC_KEY] == ("1" if public else "0")
 
 
 class _OrderRecorder:

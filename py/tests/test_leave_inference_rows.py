@@ -104,3 +104,22 @@ def test_forgone_block_is_populated(slogs):
     begin = int(np.prod(spatial.dims))
     forgone = rows[0, begin : begin + scalar.dims[0]][-3 * 2 * 27 :]  # the last input block
     assert forgone[0::2].sum() > 0  # some margins apply
+
+
+def test_public_rows_withhold_only_the_observers_tiles(slogs):
+    """A public row is the observer's row with the rack and exchange blocks
+    zeroed and the unseen pool widened by the rack; the planes and the target,
+    the observer's leave pool included, are the same."""
+    games, turns = np.array([1, 2, 3]), np.array([3, 6, 9])
+    seen = ffi.decode_rows(slogs[0], games, turns, post_move=False, task="leave_inference")
+    public = ffi.decode_rows(slogs[0], games, turns, post_move=False, task="public_leave_inference")
+    spatial, scalar = ffi.task_input_shapes("leave_inference")
+    begin = int(np.prod(spatial.dims))
+    end = begin + scalar.dims[0]
+    np.testing.assert_array_equal(public[:, :begin], seen[:, :begin])
+    np.testing.assert_array_equal(public[:, end:], seen[:, end:])
+    rack = slice(begin, begin + 27)
+    assert seen[:, rack].sum() > 0
+    assert (public[:, rack] == 0).all()
+    unseen_thermometer = slice(begin + 27, begin + 127)
+    assert public[:, unseen_thermometer].sum() > seen[:, unseen_thermometer].sum()

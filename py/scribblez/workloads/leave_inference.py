@@ -68,6 +68,12 @@ class LeaveInferenceParams:
     adam_beta2: float = param(0.999, "Adam's second-moment decay rate (beta2)")
     grad_clip: float = param(0.0, "clip each step's gradient to this global norm; 0 = no clipping")
     # Model.
+    public: bool = param(
+        False,
+        "infer the leave from public information alone: the input withholds the observer's "
+        "rack and exchanges, while the loss still conditions on the observer's pool, as "
+        "serving the model to any observer would. Not yet servable",
+    )
     num_blocks: int = param(8, "conv tower residual blocks")
     trunk_channels: int = param(128, "conv tower width")
     head: str = param(
