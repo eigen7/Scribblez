@@ -25,11 +25,11 @@ float* encode_slot_planes(const LeaveHistorySlot& slot, float* out) {
   return out + Encoder::kSlotPlanes * kBoardCells;
 }
 
-bool is_public(const LeaveInferenceInput& in) { return in.view == LeaveInferenceView::kPublic; }
+bool is_public(LeaveInferenceView view) { return view == LeaveInferenceView::kPublic; }
 
 float* encode_current_scalars(const LeaveInferenceInput& in, float* out) {
   // A public row's observer holds no tiles anyone else can't see.
-  const Rack rack = is_public(in) ? Rack{} : in.rack;
+  const Rack rack = is_public(in.view) ? Rack{} : in.rack;
   out += encode_rack_counts(rack, out);
   uint8_t unseen[TILE_KINDS];
   compute_unseen_pool(unseen, *in.board, rack);
@@ -40,7 +40,7 @@ float* encode_current_scalars(const LeaveInferenceInput& in, float* out) {
     out[in.leave_length - 1] = 1.0f;
   }
   out += Encoder::kMaxLeaveLength;
-  if (is_public(in)) return out + LeaveHistory::kObserverExchanges * TILE_KINDS;
+  if (is_public(in.view)) return out + LeaveHistory::kObserverExchanges * TILE_KINDS;
   for (const Rack& exchange : in.history->observer_exchanges)
     out += encode_rack_counts(exchange, out);
   return out;
@@ -57,7 +57,7 @@ void encode_played_tiles(const Move& m, float* out) {
 // margin. A public row skips the observer's leave_kinds: the board alone
 // already withholds a margin from a tile kind it holds every copy of.
 float* encode_forgone_scalars(const LeaveHistorySlot& slot, LeaveInferenceView view, float* out) {
-  const uint32_t kinds = view == LeaveInferenceView::kPublic ? ~0u : slot.leave_kinds;
+  const uint32_t kinds = is_public(view) ? ~0u : slot.leave_kinds;
   for (int t = 0; t < TILE_KINDS; ++t, out += 2) {
     const int8_t margin = slot.forgone.margin[t];
     if (margin == belief::ForgonePlays::kNone || !((kinds >> t) & 1u)) continue;

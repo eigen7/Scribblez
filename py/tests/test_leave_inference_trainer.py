@@ -167,6 +167,24 @@ def test_the_export_says_whether_the_model_is_public(tmp_path, public):
     assert meta[PUBLIC_KEY] == ("1" if public else "0")
 
 
+@pytest.mark.parametrize("public", [False, True])
+def test_holdout_decodes_the_runs_view(monkeypatch, public):
+    tasks = []
+
+    class FakeDataset:
+        def __init__(self, root, task, **kwargs):
+            tasks.append(task)
+
+        def iter_batches(self, *args, **kwargs):
+            return iter(())
+
+    monkeypatch.setattr(trainer, "SlogDataset", FakeDataset)
+    held = holdout.HoldoutSet(dir=Path("unused"), slogs=(), content_hash="")
+    params = leave_inference.LeaveInferenceParams(public=public)
+    trainer._holdout_batches(held, params, cpu=type("Cpu", (), {"dataloader_workers": 0})())
+    assert tasks == ["public_leave_inference" if public else "leave_inference"]
+
+
 class _OrderRecorder:
     """Stands in for the output sink and the generation record, logging the
     order of their deliveries."""

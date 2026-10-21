@@ -37,12 +37,13 @@ void check_leave_values(const nn::OnnxMetadata& meta, const std::string& onnx_pa
   }
 }
 
-// Every consumer encodes the observer's view, which a public model was not
+// The loader serves only observer-view rows, which a public model was not
 // trained on.
 void check_observer_view(const nn::OnnxMetadata& meta, const std::string& onnx_path) {
   if (meta.int_entry("leave_inference_public", 0) != 0) {
     throw util::CleanException(
-      "{} is a public leave inference model, and no consumer encodes its public view yet",
+      "{} is a public leave inference model, which the engine does not serve; use a model "
+      "trained with public off",
       onnx_path);
   }
 }
