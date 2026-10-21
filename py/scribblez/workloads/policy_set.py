@@ -40,7 +40,7 @@ from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
-from scribblez.policy_set import FORM_SLOT, FORMS, POOL_SUFFIX
+from scribblez.policy_set import FORM_BOTH, FORMS, POOL_SUFFIX
 from scribblez.workloads.base import (
     RoleSpec,
     StatsSpec,
@@ -111,12 +111,19 @@ class PolicySetParams:
         -1, "stop the trainer after this many pools (-1 = run until paused)", end=True
     )
     # The model.
-    forms: str = param(FORM_SLOT, "which form of the policy-set model to train", choices=FORMS)
+    forms: str = param(
+        FORM_BOTH,
+        "which forms of the policy-set model to train: 'slot', 'greedy', or 'both' side by side",
+        choices=FORMS,
+    )
     trunk_channels: int = param(128, "board trunk and candidate vector width")
     num_blocks: int = param(8, "board trunk residual blocks")
     num_heads: int = param(4, "attention heads")
     slots: int = param(16, "slot form: query slots, the largest set it builds")
     slot_layers: int = param(2, "slot form: decoder layers")
+    greedy_rows: int = param(
+        4, "greedy form: chosen sets drawn per pool per batch (subset assembly's rows)"
+    )
     # Optimization.
     batch_size: int = param(8, "pools per batch, each with all its candidates")
     optimizer: str = param(

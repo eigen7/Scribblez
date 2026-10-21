@@ -746,9 +746,19 @@ these are v0's choices. Both use the move set model's encoders (the board
 trunk, `MoveEncoder`, `CrossCheckEncoder`), trained from scratch. Today's
 move set checkpoints are face-up and differ in their input blocks.
 
+**The equity input.** Each candidate's HastyBot static equity, less its
+pool's best, joins its embedding, so a form starts from the static-equity
+ranking and learns its correction. The equities are recomputed by the replay
+that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
+
 **Form 1, `greedy`:** a set-conditioning stage plus a gain head.
-- The stage is the evidence-fusion stage with chosen-move tokens and no sim
-  channels ([evidence_fusion.py](../../py/scribblez/evidence_fusion.py)).
+- The stage is the evidence-fusion stage's set half with chosen-move tokens
+  ([evidence_fusion.py](../../py/scribblez/evidence_fusion.py)): the tokens
+  self-attend, the board tokens cross-attend into them, and zero-initialized
+  projections write back, so an empty set leaves the plain model. The
+  fusion's observation channels have no counterpart, since chosen moves are
+  not simmed. The candidates then re-attend to the conditioned board through
+  the encoder's own attention, and the gain head reads them.
 - Rows come by subset assembly. Per position, draw subsets `S` of sizes 0 to
   `N_max − 1`, biased toward high-value moves as deployment sets are. The
   target for a held-out move `a` is `max(0, v(a) − max_S v)`. A batch of
@@ -766,10 +776,12 @@ move set checkpoints are face-up and differ in their input blocks.
 
 The `forms` parameter is `greedy`, `slot` or `both`.
 
-With `both`, one trainer holds two models and two optimizers and alternates
-their steps on the same batches. Records carry the form as a key prefix
-(`greedy_loss`, `slot_eval_recall_8`, ...), so the dashboard plots them side
-by side. Both models are move-set-sized, so one GPU holds them.
+With `both`, one trainer holds the two models, each on its own encoder, and
+trains them on the same batches: one optimizer over both, the summed loss,
+each model's gradient clipped on its own, which updates each as a separate
+optimizer would. Records carry the form as a key prefix (`loss_greedy_gain`,
+`slot_eval_recall_8`, ...), so the dashboard plots them side by side. Both
+models are move-set-sized, so one GPU holds them.
 
 A form per machine needs two trainer roles reading one data home. Eviction
 would then wait for both trainers' pulls, an extension of the `pulled`

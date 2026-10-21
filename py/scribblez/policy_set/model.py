@@ -15,6 +15,8 @@ Its output is one vector per candidate, which a form reads.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch import nn
 
@@ -28,6 +30,15 @@ from scribblez.move_set_eval.model import (
 from scribblez.move_set_eval.moves import move_cross_slots, move_encoding_dims
 from scribblez.policy_set.dataset import OPP_RACK_FLOATS
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
+
+
+@dataclass
+class Encoded:
+    """A batch's encoder outputs before the candidates attend to the board."""
+
+    board: torch.Tensor  # (P, 225, C) board token maps
+    g: torch.Tensor  # (P, 3C) summaries
+    e: torch.Tensor  # (M, C) candidate embeddings
 
 
 def trunk_scalar(batch: dict[str, torch.Tensor]) -> torch.Tensor:
@@ -63,13 +74,12 @@ class PolicySetEncoder(nn.Module):
             nn.Linear(4 * channels, channels), nn.ReLU(inplace=True), nn.Linear(channels, channels)
         )
 
-    def forward(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-        """A batch (dataset.PoolBatcher.build) -> the candidates' vectors
-        (M, C) and the positions' summaries (P, 3C)."""
+    def encode(self, batch: dict[str, torch.Tensor]) -> Encoded:
+        """A batch (dataset.PoolBatcher.build) -> its board token maps,
+        summaries and candidate embeddings."""
         x, s = self.trunk(batch["input_spatial"], trunk_scalar(batch))
         board = x.flatten(2).transpose(1, 2) + self.board_pos_emb  # (P, 225, C)
         g = torch.cat([mean_max_pool(x), s], dim=1)
-        pos_id = batch["move_pos_id"]
         e = encode_moves_on_board(
             self.move_encoder,
             self.cross_check_encoder,
@@ -81,10 +91,24 @@ class PolicySetEncoder(nn.Module):
             batch["move_scalars"],
             batch["move_cross_cells"],
             batch["move_cross_letters"],
-            pos_id,
+            batch["move_pos_id"],
         ) + self.equity(batch["move_equity"].unsqueeze(1))
+        return Encoded(board, g, e)
+
+    def candidate_vectors(
+        self, e: torch.Tensor, board: torch.Tensor, g: torch.Tensor, pos_id: torch.Tensor
+    ) -> torch.Tensor:
+        """Candidate embeddings (M, C) attending into their positions' board
+        maps (P, 225, C), fused with the summaries (P, 3C) -> (M, C). The
+        greedy form passes a conditioned map and summary."""
         attended = attend_by_position(self.cross_attn, e, board, pos_id)
-        return self.fuse(torch.cat([attended, g[pos_id]], dim=1)), g
+        return self.fuse(torch.cat([attended, g[pos_id]], dim=1))
+
+    def forward(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+        """A batch -> the candidates' vectors (M, C) and the positions'
+        summaries (P, 3C)."""
+        enc = self.encode(batch)
+        return self.candidate_vectors(enc.e, enc.board, enc.g, batch["move_pos_id"]), enc.g
 
 
 def to_grid(values: torch.Tensor, pos_id: torch.Tensor, num_positions: int, fill=0.0):

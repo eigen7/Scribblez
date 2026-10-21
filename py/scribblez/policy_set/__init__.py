@@ -8,4 +8,6 @@ POOL_SUFFIX = ".pool"
 # The model's forms (model.py), by name: light, so the workload registry can
 # offer them as a param's choices.
 FORM_SLOT = "slot"
-FORMS = (FORM_SLOT,)
+FORM_GREEDY = "greedy"
+FORM_BOTH = "both"
+FORMS = (FORM_SLOT, FORM_GREEDY, FORM_BOTH)

@@ -24,6 +24,7 @@ import time
 from dataclasses import asdict
 
 import torch
+from torch import nn
 
 from scribblez import params as params_mod
 from scribblez.ffi import format_layout, task_input_shapes
@@ -34,9 +35,8 @@ from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.generational.records import TrainRecorder
 from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.paths import TagPaths
-from scribblez.policy_set import FORM_SLOT, dataset, metrics, pools, train_loop
+from scribblez.policy_set import FORM_GREEDY, FORM_SLOT, dataset, forms, metrics, pools, train_loop
 from scribblez.policy_set.model import PolicySetEncoder, trunk_scalar
-from scribblez.policy_set.slot import SlotModel
 from scribblez.position_eval.trainer import OutputDeliverer, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
@@ -44,7 +44,6 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 # The baseline's record key prefix; each form's records carry its own.
 BASELINE = "equity_"
-SLOT = f"{FORM_SLOT}_"
 # The checkpoint-config entries a resume must match.
 VERSION_KEYS = ("policy_set_format_version", "move_encoding_version", "input_encoding_version")
 # Batches the schedule-free arm recomputes BatchNorm statistics over before
@@ -76,22 +75,32 @@ def check_resumable(paths: TagPaths, config: dict):
             )
 
 
-def build_slot_model(params) -> SlotModel:
+def build_encoder(params) -> PolicySetEncoder:
     shapes = {s.name: s.dims for s in task_input_shapes()}
-    encoder = PolicySetEncoder(
+    return PolicySetEncoder(
         shapes["input_spatial"][0],
         shapes["input_scalar"][0],
         params.trunk_channels,
         params.num_blocks,
         params.num_heads,
     )
-    return SlotModel(encoder, params.slots, params.slot_layers, params.num_heads)
 
 
-def _trunk_forward(model, spatial, scalar):
-    """The pass that reaches the model's BatchNorm layers: its trunk's, on
-    the trunk's scalar input (model.trunk_scalar)."""
-    model.encoder.trunk(spatial, scalar)
+def build_models(params) -> nn.ModuleDict:
+    """The forms `params.forms` names, each on its own encoder."""
+    return nn.ModuleDict(
+        {
+            name: forms.FORMS[name].build(build_encoder(params), params)
+            for name in forms.selected(params.forms)
+        }
+    )
+
+
+def _trunk_forward(models: nn.ModuleDict, spatial, scalar):
+    """The passes that reach the models' BatchNorm layers: each form's trunk,
+    on the trunk's scalar input (model.trunk_scalar)."""
+    for model in models.values():
+        model.encoder.trunk(spatial, scalar)
 
 
 def recalibration_batches(batcher, items, params, gen, device):
@@ -111,18 +120,29 @@ def held_out_items(paths: TagPaths, params) -> list[dataset.PoolItem]:
     ]
 
 
-def eval_record(model, batcher, held: list[dataset.PoolItem], params, device) -> dict:
-    """The held-out pools' statistics, the baseline's metrics and the slot
-    form's, and the slot form's set-building time."""
+def eval_record(models, batcher, held: list[dataset.PoolItem], params, device) -> dict:
+    """The held-out pools' statistics, the baseline's metrics, and each
+    form's metrics and set-building time."""
     if not held:
         return {}
     pool_list = [it.pool for it in held]
     return {
         **metrics.pool_stats(pool_list, "eval_"),
         **metrics.set_metrics(pool_list, metrics.equity_top, BASELINE),
-        **train_loop.evaluate(model, batcher, held, device, params.batch_size, SLOT),
-        f"{SLOT}eval_set_ms": train_loop.set_build_ms(model, batcher, held, device),
+        **train_loop.evaluate(models, batcher, held, device, params),
+        **train_loop.set_build_ms(models, batcher, held, device),
     }
+
+
+def loss_weights(params) -> dict[str, float]:
+    """The training loss's terms, each weighted 1, as the Loss tab stacks
+    them."""
+    keys = []
+    if FORM_SLOT in forms.selected(params.forms):
+        keys += [f"loss_slot_{n}" for n in metrics.SET_SIZES if n <= params.slots]
+    if FORM_GREEDY in forms.selected(params.forms):
+        keys.append("loss_greedy_gain")
+    return dict.fromkeys(keys, 1.0)
 
 
 def _deliver_generation(sink, gen, checkpoint_snap, state_snap, recorder, staged):
@@ -131,7 +151,7 @@ def _deliver_generation(sink, gen, checkpoint_snap, state_snap, recorder, staged
     recorder.deliver_staged(staged)
 
 
-def train_one_generation(model, optimizer, optim_arm, recorder, paths, params, state, ctx):
+def train_one_generation(models, optimizer, optim_arm, recorder, paths, params, state, ctx):
     """Train one epoch over the window ending at the cursor generation, then
     evaluate, checkpoint and queue the generation's deliveries."""
     gen = state.generation_index
@@ -143,16 +163,15 @@ def train_one_generation(model, optimizer, optim_arm, recorder, paths, params, s
     rows_before = state.rows_trained
     optim_arm.train_mode()
     result = train_loop.run_epoch(
-        model,
+        models,
         optimizer,
         batcher,
         items,
         device,
-        batch_size=params.batch_size,
+        params,
         seed=gen * 1000003,
         lr_fn=optim_arm.lr_fn,
         rows_trained=state.rows_trained,
-        grad_clip=params.grad_clip,
         on_batch=functools.partial(progress_line, gen),
     )
     state.rows_trained = result.rows_trained
@@ -160,26 +179,26 @@ def train_one_generation(model, optimizer, optim_arm, recorder, paths, params, s
     elapsed = time.time() - t0
     sys.stdout.write("\n")
     optim_arm.eval_mode(
-        model, recalibration_batches(batcher, items, params, gen, device), _trunk_forward
+        models, recalibration_batches(batcher, items, params, gen, device), _trunk_forward
     )
     t_eval = time.time()
     record = {
         "epoch": gen,
         "loss": result.loss,
-        **{f"loss_{SLOT}{n}": v for n, v in result.loss_by_n.items()},
-        "grad_norm_mean": result.grad_norm,
+        **{f"loss_{key}": v for key, v in result.terms.items()},
+        **{f"grad_norm_{name}": v for name, v in result.grad_norms.items()},
         "lr": optim_arm.current,
         "elapsed_s": elapsed,
         **optim_arm.metrics(),
         **metrics.pool_stats([it.pool for it in items], ""),
-        **eval_record(model, batcher, held_out_items(paths, params), params, device),
+        **eval_record(models, batcher, held_out_items(paths, params), params, device),
     }
-    timed_print(
-        f"[gen {gen}] pools={state.rows_trained} loss={result.loss:.4f} "
-        f"recall@8 slot={record.get(f'{SLOT}eval_recall_8', float('nan')):.3f} "
-        f"equity={record.get(f'{BASELINE}eval_recall_8', float('nan')):.3f}"
+    recalls = " ".join(
+        f"{name}={record.get(f'{name}_eval_recall_8', float('nan')):.3f}"
+        for name in (*models, BASELINE.rstrip("_"))
     )
-    checkpoint.save(paths, model, optimizer, state, ctx["config"])
+    timed_print(f"[gen {gen}] pools={state.rows_trained} loss={result.loss:.4f} recall@8 {recalls}")
+    checkpoint.save(paths, models, optimizer, state, ctx["config"])
     lifecycle.write_train_state(paths, asdict(state))
     staged = recorder.stage_generation(gen, state.rows_trained, record)
     ctx["deliverer"].submit(
@@ -206,12 +225,12 @@ def train_one_generation(model, optimizer, optim_arm, recorder, paths, params, s
     )
 
 
-def run_generations(model, optimizer, recorder, paths, params, state, ctx):
+def run_generations(models, optimizer, recorder, paths, params, state, ctx):
     """The wait->train->advance loop, from the resumed cursor onward."""
     optim_arm = build_optim_arm(recorder, params, optimizer, state.rows_trained)
     while not params_mod.reached(state.rows_trained, params.max_rows):
         wait_for_generation(paths, state.generation_index, ctx["sink"], ctx["data_home"])
-        train_one_generation(model, optimizer, optim_arm, recorder, paths, params, state, ctx)
+        train_one_generation(models, optimizer, optim_arm, recorder, paths, params, state, ctx)
         lifecycle.evict_beyond_window(
             paths, state.generation_index - 1, params.window, keep_unpulled=ctx["data_home"].remote
         )
@@ -226,17 +245,17 @@ def run(ctx: WorkerContext) -> int:
     device = torch.device(os.environ.get("SCZ_DEVICE", "cuda"))
     print(f"Tag root: {paths.root}\nDevice: {device}")
 
-    model = build_slot_model(params).to(device)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"Model ({params.forms}): {n_params:,} parameters")
-    optimizer = build_optimizer(model, params)
+    models = build_models(params).to(device)
+    n_params = sum(p.numel() for p in models.parameters())
+    print(f"Models ({', '.join(models)}): {n_params:,} parameters")
+    optimizer = build_optimizer(models, params)
     config = {**asdict(params), **versions()}
     recorder = TrainRecorder(ctx.sink)
     recorder.publish_run(
         ctx.tag,
         asdict(params),
         n_params,
-        {f"loss_{SLOT}{n}": 1.0 for n in metrics.SET_SIZES if n <= params.slots},
+        loss_weights(params),
         {},
     )
     run_ctx = {
@@ -250,7 +269,7 @@ def run(ctx: WorkerContext) -> int:
     state_pair.install_seed(paths)
     # After the seed, which may be what puts a rolling checkpoint in place.
     check_resumable(paths, config)
-    state: GenerationalState = checkpoint.resume(paths, model, optimizer, device)
+    state: GenerationalState = checkpoint.resume(paths, models, optimizer, device)
     lifecycle.write_train_state(paths, asdict(state))
     run_ctx["data_home"] = data_home.start_for(
         ctx,
@@ -261,7 +280,7 @@ def run(ctx: WorkerContext) -> int:
         holdout_chunks=params.holdout_chunks,
     )
     try:
-        run_generations(model, optimizer, recorder, paths, params, state, run_ctx)
+        run_generations(models, optimizer, recorder, paths, params, state, run_ctx)
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed generation is checkpointed.")
     finally:

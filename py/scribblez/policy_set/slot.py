@@ -117,3 +117,20 @@ def slot_picks(logits: torch.Tensor, pad: torch.Tensor) -> list[list[int]]:
                 break
         picks.append(taken)
     return picks
+
+
+def slot_forward(model: SlotModel, batch: dict[str, torch.Tensor]):
+    """The slot model's pointer logits and padding mask, under autocast."""
+    with torch.autocast(device_type=batch["input_spatial"].device.type, dtype=torch.bfloat16):
+        return model(batch)
+
+
+def slot_loss(
+    logits: torch.Tensor, batch: dict[str, torch.Tensor]
+) -> tuple[torch.Tensor, dict[int, torch.Tensor]]:
+    """The batch's coverage loss summed over the set sizes the slots reach,
+    and per N."""
+    num_positions = batch["input_spatial"].shape[0]
+    q_grid, _ = to_grid(batch["q"].float(), batch["move_pos_id"], num_positions)
+    by_n = coverage_loss(logits, q_grid)
+    return sum(by_n.values()), by_n
