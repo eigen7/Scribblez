@@ -44,8 +44,9 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 # The staging area under the tag's data/ dir.
 STAGING_DIR = "staging"
 
-# Games per generator cycle. play_game writes one .slog per 1000 games (its
-# kGamesPerFile), so one cycle delivers exactly one chunk.
+# Games per generator cycle by default. play_game writes one .slog per 1000
+# games (its kGamesPerFile), so a cycle of at most that many delivers exactly
+# one chunk.
 GAMES_PER_CHUNK = 1000
 
 GENERATOR_STATS = StatsSpec(
@@ -163,14 +164,14 @@ class Deliverer:
                 shutil.rmtree(chunk_dir, ignore_errors=True)
 
 
-def _publish(stats: WorkerStats, results: list[DeliveryResult]):
+def _publish(stats: WorkerStats, results: list[DeliveryResult], games_per_chunk: int):
     for r in results:
         stats.cycle_done(
             {"gen_s": r.gen_seconds, "upload_s": r.upload_seconds},
-            units=r.chunks * GAMES_PER_CHUNK,
+            units=r.chunks * games_per_chunk,
             nbytes=r.nbytes,
         )
-        print(f"delivered chunk: {r.chunks} chunk(s) of {GAMES_PER_CHUNK} games staged")
+        print(f"delivered chunk: {r.chunks} chunk(s) of {games_per_chunk} games staged")
 
 
 def run_generate(ctx: WorkerContext) -> int:
@@ -186,6 +187,7 @@ def generate(
     face_up_leaves: bool,
     random_opening_mean: float,
     sidecar: ChunkSidecar | None = None,
+    games_per_chunk: int = GAMES_PER_CHUNK,
 ) -> int:
     """Play `player_spec` in both seats, one chunk per cycle, delivered to
     staging in the background. `face_up_leaves` plays the variant in which
@@ -193,7 +195,11 @@ def generate(
     random plies (selfplay.run_games). A workload whose model needs hidden
     leaves or policy-only games passes False or 0 rather than carrying a param
     it may not set. A `sidecar` is written for each chunk, on the cycle's
-    clock, and delivered with it."""
+    clock, and delivered with it. A cycle plays `games_per_chunk` games (at
+    most play_game's 1000 per file), smaller where a sidecar costs far more
+    per game than the game itself."""
+    if not 0 < games_per_chunk <= GAMES_PER_CHUNK:
+        raise ValueError(f"games_per_chunk must be in 1..{GAMES_PER_CHUNK}, got {games_per_chunk}")
     p = ctx.params
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     shutil.rmtree(work_dir, ignore_errors=True)
@@ -211,25 +217,25 @@ def generate(
             t0 = time.monotonic()
             rc = run_games(
                 chunk_dir,
-                num_games=GAMES_PER_CHUNK,
+                num_games=games_per_chunk,
                 threads=ctx.threads,
                 player_spec=player_spec,
                 random_opening_mean=random_opening_mean,
                 face_up_leaves=face_up_leaves,
             )
             if rc != 0:
-                _publish(stats, deliverer.drain())
+                _publish(stats, deliverer.drain(), games_per_chunk)
                 return rc
             if sidecar is not None:
                 sidecar.write(chunk_dir, ctx.threads)
             deliverer.submit(chunk_dir, time.monotonic() - t0)
-            _publish(stats, deliverer.collect())
+            _publish(stats, deliverer.collect(), games_per_chunk)
             print(f"cycle {cycle}: chunk queued for delivery")
     except WorkerStopped:
-        _publish(stats, deliverer.drain())
+        _publish(stats, deliverer.drain(), games_per_chunk)
         print("SIGTERM: drained pending deliveries; exiting (any in-flight chunk is discarded)")
         return 0
-    _publish(stats, deliverer.drain())
+    _publish(stats, deliverer.drain(), games_per_chunk)
     return 0
 
 

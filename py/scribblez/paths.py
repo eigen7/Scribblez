@@ -239,6 +239,11 @@ class TagPaths:
     def win_table_path(self, epoch: int) -> Path:
         return self.onnx_dir / "win_table" / f"{ONNX_PREFIX}{epoch:04d}.csv"
 
+    def win_table_generations(self) -> list[int]:
+        """The generations with a win table at win_table_path, ascending."""
+        tables = self.win_table_path(0).parent.glob(f"{ONNX_PREFIX}*.csv")
+        return sorted(self.onnx_epoch(p) for p in tables)
+
     @property
     def holdout_dir(self) -> Path:
         """Held-out games a trainer regenerates on its own machine. Not
