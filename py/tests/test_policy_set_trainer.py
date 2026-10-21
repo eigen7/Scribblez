@@ -218,7 +218,7 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
         assert np.isfinite(record[key]), key
     # The dashboard's figures read the record's keys; only set sizes past the
     # slots are absent.
-    for _, keys in plots.POLICY_SET_QUALITY:
+    for _, keys, *_ in plots.POLICY_SET_QUALITY:
         for key in keys:
             assert key in record or int(key.rsplit("_", 1)[1]) > TINY.slots, key
     assert paths.rolling_checkpoint.exists()
