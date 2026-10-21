@@ -188,7 +188,8 @@ TEST_F(LeaveBeliefSimsTest, SimmerSeatsTheConfiguredBelief) {
   ASSERT_EQ(out.size(), 1u);
   ASSERT_FALSE(out[0].rollouts.empty());
   EXPECT_EQ(calls, 1);
-  EXPECT_EQ(out[0].position.opp_leave_belief, nullptr) << "the simmer must drop the belief from the result";
+  EXPECT_EQ(out[0].position.opp_leave_belief, nullptr)
+    << "the simmer must drop the belief from the result";
   for (const Rollout& r : out[0].rollouts[0]) EXPECT_GE(r.opp_rack.count(favoured), 1);
 }
 
