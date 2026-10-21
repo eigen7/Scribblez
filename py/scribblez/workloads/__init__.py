@@ -14,6 +14,7 @@ from scribblez.workloads import (
     match_arms,
     max_move_per_lane,
     move_set_eval,
+    policy_set,
     position_eval,
     transfer_reader,
     transfer_test,
@@ -40,6 +41,7 @@ WORKLOADS = {
         transfer_test.SPEC,
         transfer_reader.SPEC,
         leave_inference.SPEC,
+        policy_set.SPEC,
     )
 }
 

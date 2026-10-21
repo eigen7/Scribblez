@@ -2591,6 +2591,33 @@ def test_a_new_home_is_seeded_with_the_window_from_here(manager, monkeypatch):
     assert (seeded["remote_root"], seeded["image"]) == ("/mnt/t", "img")
 
 
+def test_the_held_out_set_is_seeded_pulled_and_swept_with_the_generations(manager, monkeypatch):
+    """The held-out set travels as a generation does: seeded (acknowledged
+    once complete), pulled from its own parent, and swept."""
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    task.params = {"window": 2}
+    paths = _generations_here(manager, spec, task, complete=1, open_=False, cursor=1)
+    lifecycle.write_manifest(paths.held_out_chunks_dir, {"status": lifecycle.GENERATING})
+    lifecycle.mark_complete(paths.held_out_chunks_dir, 5)
+    seeded = {}
+    monkeypatch.setattr(workers_mod, "seed_volume", lambda machine, volume, **kw: seeded.update(kw))
+    manager._seed_home("link", "img", ("vol", "/mnt/t"), spec, task)
+    assert seeded["dirs"] == ["data/generations/gen_000000", "data/held_out/chunks"]
+    assert seeded["ack_dirs"] == seeded["dirs"]
+    pulled = []
+    monkeypatch.setattr(
+        workers_mod, "pull_ready_dirs", lambda machine, container, **kw: pulled.append(kw["rel"])
+    )
+    manager._pull_generations("link", spec, task, task.worker("tr"))
+    assert pulled == ["data/generations", "data/held_out"]
+    swept = []
+    monkeypatch.setattr(workers_mod, "sweep_dirs", lambda machine, **kw: swept.append(kw["rel"]))
+    monkeypatch.setattr(workers_mod, "sweep_stopped", lambda machine, **kw: None)
+    manager._sweep_home("link", spec, task, task.worker("tr"))
+    assert swept == ["data/generations", "data/held_out"]
+
+
 def test_a_generation_pull_drops_copies_here_behind_the_window(manager, monkeypatch):
     spec = workloads.get("position_eval")
     task = _rented_home_task(manager, monkeypatch)
@@ -2601,7 +2628,7 @@ def test_a_generation_pull_drops_copies_here_behind_the_window(manager, monkeypa
         workers_mod, "pull_ready_dirs", lambda machine, container, **kw: pulled.append(container)
     )
     manager._pull_generations("link", spec, task, task.worker("tr"))
-    assert pulled == ["scz-position_eval-t-tr"]
+    assert pulled == ["scz-position_eval-t-tr"] * 2  # the generations, then the held-out set
     # Gens 2 and 3 are the window behind cursor 4; gen 4 is ahead of it.
     assert lifecycle.list_generation_indices(paths) == [2, 3, 4]
 

@@ -338,6 +338,13 @@ def _generations_rel(paths) -> str:
     return str(paths.generation_dir(0).parent.relative_to(paths.root))
 
 
+def _held_out_rel(paths) -> str:
+    """The parent of the tag's held-out set (TagPaths.held_out_chunks_dir),
+    relative to its root: what a pull, seed or sweep of the set names, as
+    _generations_rel names the generations."""
+    return str(paths.held_out_chunks_dir.parent.relative_to(paths.root))
+
+
 def _ledger_rel(paths) -> str:
     """The data plane's ingest ledger, relative to the tag's root."""
     return str(scheduler.ledger_path(paths).relative_to(paths.root))
@@ -2274,20 +2281,22 @@ class WorkerManager:
         """Copy a batch of a remote data home's complete generations here and
         acknowledge them there (lifecycle.ACK_NAME), which is what lets its
         trainer evict them: the copy here is the durable one, from which a
-        new home is seeded (_seed_home). Then drop copies here older than the
-        window behind the trainer's cursor, which no seed needs. A failure is
+        new home is seeded (_seed_home). The held-out set, once complete,
+        comes the same way. Then drop copies here older than the window
+        behind the trainer's cursor, which no seed needs. A failure is
         retried with the next pull, and must not fail the one before it."""
         paths = self.tasks.paths(spec, task.tag)
         try:
-            pull_ready_dirs(
-                machine,
-                _container_name(spec, task.tag, home.worker_id),
-                remote_root=str(paths.root),
-                local_root=paths.root,
-                rel=_generations_rel(paths),
-                ready=lifecycle.COMPLETE_MARK,
-                ack_name=lifecycle.ACK_NAME,
-            )
+            for rel in (_generations_rel(paths), _held_out_rel(paths)):
+                pull_ready_dirs(
+                    machine,
+                    _container_name(spec, task.tag, home.worker_id),
+                    remote_root=str(paths.root),
+                    local_root=paths.root,
+                    rel=rel,
+                    ready=lifecycle.COMPLETE_MARK,
+                    ack_name=lifecycle.ACK_NAME,
+                )
         except SshMachineError as e:
             print(f"generations {spec.name}/{task.tag}/{home.worker_id}: {e}")
             return
@@ -2299,11 +2308,12 @@ class WorkerManager:
         """Fill the tag's volume on a remote data home's machine from the copy
         here, before its trainer's container starts and mounts it: the
         generations from the window behind the trainer's cursor onward, and
-        the ingest ledger. Complete generations arrive acknowledged, as the
-        copy here already holds them; an open one goes too, so the home goes
-        on filling it rather than numbering past it. A generation the volume
-        already holds is left alone: on a home restarting in place, the
-        volume's copy is the newer."""
+        the ingest ledger, and the held-out set. Complete generations (and a
+        complete held-out set) arrive acknowledged, as the copy here already
+        holds them; an open one goes too, so the home goes on filling it
+        rather than numbering past it. A directory the volume already holds is
+        left alone: on a home restarting in place, the volume's copy is the
+        newer."""
         paths = self.tasks.paths(spec, task.tag)
         params = params_mod.validate(spec.params_cls, task.params)
         cursor = lifecycle.read_train_state(paths).get("generation_index", 0)
@@ -2312,19 +2322,17 @@ class WorkerManager:
             for i in lifecycle.list_generation_indices(paths)
             if params.window <= 0 or i >= cursor - params.window
         ]
-        rel = _generations_rel(paths)
+        dirs = [paths.generation_dir(i) for i in indices]
+        if paths.held_out_chunks_dir.is_dir():
+            dirs.append(paths.held_out_chunks_dir)
         seed_volume(
             machine,
             volume[0],
             image=image,
             remote_root=volume[1],
             local_root=paths.root,
-            dirs=[f"{rel}/{paths.generation_dir(i).name}" for i in indices],
-            ack_dirs=[
-                f"{rel}/{paths.generation_dir(i).name}"
-                for i in indices
-                if lifecycle.is_complete(paths.generation_dir(i))
-            ],
+            dirs=[str(d.relative_to(paths.root)) for d in dirs],
+            ack_dirs=[str(d.relative_to(paths.root)) for d in dirs if lifecycle.is_complete(d)],
             ack_name=lifecycle.ACK_NAME,
             append_files=[_ledger_rel(paths)],
         )
@@ -2332,10 +2340,10 @@ class WorkerManager:
     def _sweep_home(self, machine, spec, task: tasks.TaskRecord, home: tasks.WorkerRecord):
         """Take a remote data home's whole data plane out of its stopped
         trainer's container before the home moves: its generations, each
-        replacing the copy here (the home's is the newer), the chunks still in
-        its staging, and its ingest ledger. A home that comes here then picks
-        up exactly where the old one stopped, and one elsewhere is seeded from
-        it (_seed_home)."""
+        replacing the copy here (the home's is the newer), its held-out set,
+        the chunks still in its staging, and its ingest ledger. A home that
+        comes here then picks up exactly where the old one stopped, and one
+        elsewhere is seeded from it (_seed_home)."""
         paths = self.tasks.paths(spec, task.tag)
         target = {
             "container": _container_name(spec, task.tag, home.worker_id),
@@ -2343,6 +2351,7 @@ class WorkerManager:
             "local_root": paths.root,
         }
         sweep_dirs(machine, **target, rel=_generations_rel(paths))
+        sweep_dirs(machine, **target, rel=_held_out_rel(paths))
         sweep_stopped(
             machine,
             **target,

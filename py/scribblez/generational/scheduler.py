@@ -33,6 +33,13 @@ its .slog, so a staged .slog without one is damage, quarantined like an
 unreadable header. A crash mid-move strands at most a sidecar, which nothing
 reads without its .slog.
 
+A workload that evaluates on held-out chunks (SchedulerConfig.holdout_every)
+has the scheduler route about one staged chunk in `holdout_every`, chosen by
+a hash of its name as pair_store.split_pair_stems chooses, into the held-out
+set (TagPaths.held_out_chunks_dir) instead of a generation. The set takes the
+first `holdout_chunks` such chunks and is then marked complete, like a
+generation; later ones are ledgered and deleted. The set is never evicted.
+
 Since a single process assigns each whole file with one rename, every .slog
 arrives whole and belongs to exactly one generation. The C++ loader relies on
 that, and so does the training design's bound on how often a game is reused
@@ -44,6 +51,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +95,10 @@ class SchedulerConfig:
     open_ahead: int
     # The suffix of the sidecar each chunk .slog carries, or "" for none.
     chunk_sidecar: str = ""
+    # Held-out chunks (see the module docstring): about one in
+    # `holdout_every` (0: none), into a set of `holdout_chunks`.
+    holdout_every: int = 0
+    holdout_chunks: int = 0
 
 
 def tick_for_task(spec, task, hooks):
@@ -150,7 +162,7 @@ def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn
 
 
 def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn):
-    staged = _staged_chunks(paths, cfg.chunk_sidecar)
+    staged = _route_held_out(paths, cfg, _staged_chunks(paths, cfg.chunk_sidecar), chunk_games)
 
     cursor = lifecycle.read_train_state(paths).get("generation_index", 0)
     while True:
@@ -257,6 +269,38 @@ def _fill(
     else:
         lifecycle.update_committed(dest_dir, committed)
     return staged
+
+
+def is_held_out(stem: str, holdout_every: int) -> bool:
+    """Whether the chunk with this stem belongs to the held-out set: a hash of
+    the name, so the choice survives a restart and a redelivery."""
+    return holdout_every > 0 and zlib.crc32(stem.encode()) % holdout_every == 0
+
+
+def _route_held_out(
+    paths: TagPaths, cfg: SchedulerConfig, staged: list[Path], chunk_games: ChunkGamesFn
+) -> list[Path]:
+    """Move the held-out chunks among `staged` into the held-out set, or delete
+    them once it is complete. Returns the chunks left for the generations."""
+    rest = [c for c in staged if not is_held_out(c.stem, cfg.holdout_every)]
+    held = [c for c in staged if is_held_out(c.stem, cfg.holdout_every)]
+    dest = paths.held_out_chunks_dir
+    for chunk in held:
+        _append_ledger(paths, chunk.name)
+        if lifecycle.is_complete(dest):
+            for part in _chunk_files(chunk, cfg.chunk_sidecar):
+                part.unlink()
+            continue
+        if lifecycle.read_manifest(dest) is None:
+            lifecycle.write_manifest(
+                dest, {"target_chunks": cfg.holdout_chunks, "status": lifecycle.GENERATING}
+            )
+        for part in _chunk_files(chunk, cfg.chunk_sidecar):
+            os.replace(part, dest / part.name)
+        chunks = sorted(dest.glob("*.slog"))
+        if len(chunks) >= cfg.holdout_chunks:
+            lifecycle.mark_complete(dest, sum(chunk_games(c) for c in chunks))
+    return rest
 
 
 # ---------------------------------------------------------------------------

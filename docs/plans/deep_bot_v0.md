@@ -710,15 +710,23 @@ computes it from the same belief its sims sample.
 
 ### Held-out pools
 
-Every staged chunk with `crc32(stem) % holdout_every == 0` goes to a
-`holdout/` directory instead of a generation, the convention
-`pair_store.split_pair_stems` uses. The trainer evaluates on the first
-`holdout_chunks` of them, and later held-out chunks are deleted.
+Every staged chunk with `crc32(stem) % holdout_every == 0` goes to the
+held-out set (`data/held_out/chunks`) instead of a generation, the convention
+`pair_store.split_pair_stems` uses. The set takes the first `holdout_chunks`
+of them; later held-out chunks are deleted. The trainer evaluates on the set.
 
-- **The scheduler.** Its `_fill` gains the routing predicate. Routed chunks
-  still enter the ingest ledger, so they are not staged again.
-- **The controller.** `holdout/` joins its pull, seed and sweep sets, so the
-  pools survive a trainer moving between machines.
+- **The scheduler.** It routes held-out chunks before filling generations.
+  Routed chunks still enter the ingest ledger, so they are not staged again.
+  The set carries a generation's manifest and is marked complete once full,
+  and it is never evicted.
+- **The controller.** The set's parent joins its pull, seed and sweep sets
+  beside the generations, so the pools survive a trainer moving between
+  machines. Being one directory with a manifest, it travels exactly as a
+  generation does: pulled once complete, seeded acknowledged.
+- **The baseline.** Until the forms exist (step 8), the trainer trains
+  nothing: per generation it records the generation's pool statistics and
+  the static-equity top N's metrics on the held-out set, under the `equity_`
+  key prefix.
 
 ### Inputs at train time
 

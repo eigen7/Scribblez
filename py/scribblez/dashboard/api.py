@@ -125,6 +125,13 @@ def _leave_inference_metrics(conn, params, mount_root):
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
+def _policy_set_metrics(conn, params, mount_root):
+    """policy_set's Training tab: the baseline's coverage of the held-out
+    pools and the pools' statistics."""
+    groups = plots.POLICY_SET_QUALITY
+    return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
+
+
 def _match_eval(conn, params, mount_root):
     return plots.match_eval_grid(conn)
 
@@ -144,6 +151,7 @@ FIGURES = {
     "evidence_metrics": _evidence_metrics,
     "transfer_reader_metrics": _transfer_reader_metrics,
     "leave_inference_metrics": _leave_inference_metrics,
+    "policy_set_metrics": _policy_set_metrics,
     "match_eval": _match_eval,
     "match_arms": _match_arms,
 }
