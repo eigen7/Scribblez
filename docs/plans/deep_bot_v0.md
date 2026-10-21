@@ -902,10 +902,13 @@ before serving fixes the layout.
    home (the generation scheduler runs only beside a trainer), held-out
    pools through the scheduler and the controller's pull, seed and sweep,
    and the eval metrics for the static-equity baseline.
-8. **The two forms,** their trainers under `forms`,
-   `policy_set_format_version`, their eval metrics beside the baseline, and
-   the figure. Both read the opponent-rack input, as a scalar block beside
-   the board row's.
+8a. **The shared encoder and the slot form:** pool batches, the move set
+   encoder reading the opponent-rack input as a scalar block beside the
+   board row's, the slot decoder and its coverage loss, trained under
+   `forms`, its eval metrics beside the baseline, `kPolicySetFormatVersion`,
+   and the figure.
+8b. **The greedy form:** the set-conditioning stage and gain head, rows by
+   subset assembly, and `forms = both`.
 
 *Measure:* recall, cover, regret and tail recall against `N` for each form,
 and against static equity; time per batch of sets. This decides the form.

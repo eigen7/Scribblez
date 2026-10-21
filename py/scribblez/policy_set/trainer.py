@@ -34,7 +34,7 @@ from scribblez.generational.records import TrainRecorder
 from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.paths import TagPaths
 from scribblez.policy_set import FORM_SLOT, dataset, metrics, pools, train_loop
-from scribblez.policy_set.model import SET_SIZES, PolicySetEncoder, SlotModel
+from scribblez.policy_set.model import SET_SIZES, PolicySetEncoder, SlotModel, trunk_scalar
 from scribblez.position_eval.trainer import OutputDeliverer, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
@@ -87,7 +87,8 @@ def build_slot_model(params) -> SlotModel:
 
 
 def _trunk_forward(model, spatial, scalar):
-    """The pass that reaches the model's BatchNorm layers: its trunk's."""
+    """The pass that reaches the model's BatchNorm layers: its trunk's, on
+    the trunk's scalar input (model.trunk_scalar)."""
     model.encoder.trunk(spatial, scalar)
 
 
@@ -97,7 +98,7 @@ def recalibration_batches(batcher, items, params, gen, device):
     order = dataset.batch_order(len(items), params.batch_size, seed=gen * 1000003 + 1)
     for idx in order[:BN_RECALIBRATION_BATCHES]:
         b = batcher.build([items[i] for i in idx])
-        yield b["input_spatial"].to(device), b["input_scalar"].to(device)
+        yield b["input_spatial"].to(device), trunk_scalar(b).to(device)
 
 
 def held_out_items(paths: TagPaths, params) -> list[dataset.PoolItem]:
