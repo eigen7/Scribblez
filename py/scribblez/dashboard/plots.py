@@ -304,6 +304,32 @@ LEAVE_INFERENCE_QUALITY = [
         ["eval_invalid_no_opponent_move", "eval_invalid_empty_leave", "eval_invalid_pass"],
     ),
 ]
+# The policy-set read (scribblez/policy_set/trainer.py's record, its metrics
+# from policy_set/metrics.py): each chooser's coverage of the held-out pools'
+# sim-best moves, one curve per set size N, and what the pools are like, the
+# generation's beside the held-out set's. The static-equity baseline carries
+# the "equity_" prefix.
+POLICY_SET_SIZES = (1, 2, 4, 8, 16)
+POLICY_SET_QUALITY = [
+    (
+        f"Static-equity top N: {title} (held-out)",
+        [f"equity_eval_{metric}_{n}" for n in POLICY_SET_SIZES],
+    )
+    for title, metric in (
+        ("recall of the sim-best move", "recall"),
+        ("cover (q in the set)", "cover"),
+        ("regret (win probability)", "regret"),
+        ("recall where the sim-best is outside the top 10", "tail_recall"),
+    )
+] + [
+    ("Pools per generation", ["pools", "eval_pools"]),
+    ("Mean candidates per pool", ["pool_size", "eval_pool_size"]),
+    ("Mean label entropy (nats)", ["label_entropy", "eval_label_entropy"]),
+    (
+        "Share of pools whose sim-best is outside the equity top 10",
+        ["tail_share", "eval_tail_share"],
+    ),
+]
 # Figures per row of every learning-curve grid.
 SERIES_NCOLS = 2
 

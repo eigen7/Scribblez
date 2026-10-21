@@ -16,9 +16,10 @@ from pathlib import Path
 import numpy as np
 
 from scribblez import ffi
+from scribblez.policy_set import POOL_SUFFIX
 
 POOL = ffi.format_layout()["constants"]["pool"]
-SUFFIX = ".pool"
+SUFFIX = POOL_SUFFIX
 
 
 @dataclass

@@ -1,7 +1,12 @@
 """The policy_set workload (docs/plans/deep_bot_v0.md, "Workload 2: policy_set"):
-labeled pools for the policy-set model. This module holds its generate side;
-the trainer and the workload's registration follow (the plan's build order,
-step 7b).
+labeled pools for the policy-set model, and its trainer
+(scribblez/policy_set/trainer.py), which until the model's forms arrive scores
+the static-equity baseline on held-out pools.
+
+It is generational, like leave_inference: any number of generators deliver
+surveyed chunks into staging, and the singleton trainer hosts the tag's data
+home, where the scheduler forms generations of `games_per_generation` games
+(`positions_per_game` pools each) and routes held-out chunks.
 
 A generator cycle plays a chunk of hidden-leaves HastyBot self-play (no random
 openings: the pools are positions of the policy's own play), then surveys
@@ -27,13 +32,28 @@ import zlib
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from cloud.runtime_abi import RUNTIME_TORCH
+
 from scribblez import params as params_mod
+from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
-from scribblez.policy_set import pools
-from scribblez.workloads.base import WorkerContext, resolve_input
-from scribblez.workloads.selfplay_gen import ChunkSidecar, generate, hasty_spec
+from scribblez.policy_set import POOL_SUFFIX
+from scribblez.workloads.base import (
+    RoleSpec,
+    StatsSpec,
+    WorkerContext,
+    WorkloadSpec,
+    resolve_input,
+)
+from scribblez.workloads.selfplay_gen import (
+    GENERATOR_STATS,
+    STAGING_DIR,
+    ChunkSidecar,
+    generate,
+    hasty_spec,
+)
 
 SURVEY_TOOL = ENGINE_DIR / "sim_candidate_survey_tool"
 LEAVE_INFERENCE = "leave_inference"
@@ -76,6 +96,19 @@ class PolicySetParams:
     )
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
+    # Generations and held-out pools.
+    games_per_generation: int = param(1000, "games per generation (positions_per_game pools each)")
+    open_ahead: int = param(
+        4, "generations kept open ahead of the trainer's cursor before generators are parked"
+    )
+    window: int = param(10, "generations kept behind the trainer's cursor; <=0 keeps all")
+    holdout_every: int = param(
+        20, "route about one chunk in this many into the held-out set instead of a generation"
+    )
+    holdout_chunks: int = param(10, "chunks in the held-out set; later held-out chunks are dropped")
+    max_rows: int = param(
+        -1, "stop the trainer after this many pools (-1 = run until paused)", end=True
+    )
 
 
 def _source_paths(params: PolicySetParams, mount_root: Path) -> TagPaths:
@@ -200,6 +233,44 @@ def run_generate(ctx: WorkerContext) -> int:
         hasty_spec(p),
         face_up_leaves=False,
         random_opening_mean=0.0,
-        sidecar=ChunkSidecar(pools.SUFFIX, functools.partial(write_pools, p, table, model)),
+        sidecar=ChunkSidecar(POOL_SUFFIX, functools.partial(write_pools, p, table, model)),
         games_per_chunk=p.games_per_chunk,
     )
+
+
+SPEC = WorkloadSpec(
+    name="policy_set",
+    title="Label policy-set pools",
+    params_cls=PolicySetParams,
+    roles=(
+        RoleSpec(
+            name="generate",
+            title="Generator (GPU)",
+            runner="scribblez.workloads.policy_set:run_generate",
+            deps="scribblez.workloads.selfplay_gen:fetch_deps",
+            inputs="scribblez.workloads.policy_set:inputs",
+            # The leave inference model runs through TensorRT; GPU machines
+            # only, whatever the beliefs.
+            gpu=True,
+            stats=GENERATOR_STATS,
+        ),
+        RoleSpec(
+            name="train",
+            title="Trainer",
+            runner="scribblez.policy_set.trainer:run",
+            deps="scribblez.workloads.selfplay_gen:fetch_deps",
+            runtime=RUNTIME_TORCH,
+            ingest="scribblez.generational.train_ingest:tick",
+            singleton=True,
+            kinds=("local", "ssh"),
+            stats=StatsSpec(unit="pools", phases={"eval_s": "eval"}),
+        ),
+    ),
+    scheduler=TICK_FOR_TASK,
+    progress="scribblez.generational.scheduler:progress",
+    complete="scribblez.generational.scheduler:complete",
+    finalize="scribblez.workloads.policy_set:finalize",
+    pace_role="train",
+    collected_dirs=(STAGING_DIR,),
+    primary_params=("leave_inference_tag", "leave_inference_generation", "leave_beliefs"),
+)

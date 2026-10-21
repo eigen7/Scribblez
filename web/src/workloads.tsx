@@ -60,6 +60,10 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
+  policy_set: [
+    trainingTab('policy_set_metrics', 'metrics', 'No per-generation metrics yet.'),
+    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
+  ],
   transfer_reader: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
     trainingTab('transfer_reader_metrics', 'metrics', 'No validation passes yet.'),
