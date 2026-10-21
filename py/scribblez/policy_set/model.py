@@ -7,7 +7,10 @@ candidate embedded by the move and cross-check encoders against the board
 tokens and cross-attending into them, fused with the position's global
 summary. The trunk reads the opponent-rack input, the chooser's belief about
 the opponent's rack (dataset.opp_rack_input), as a scalar block beside the
-board row's. Its output is one vector per candidate, which a form reads.
+board row's, and each candidate's static equity relative to its pool's best
+(dataset.relative_equity) joins the candidate's embedding, so a form can learn
+the correction to the static-equity ranking rather than the ranking itself.
+Its output is one vector per candidate, which a form reads.
 """
 
 from __future__ import annotations
@@ -52,6 +55,9 @@ class PolicySetEncoder(nn.Module):
         nn.init.normal_(self.board_pos_emb, std=0.02)
         self.move_encoder = MoveEncoder(channels, letter_vocab, num_scalars)
         self.cross_check_encoder = CrossCheckEncoder(channels, move_cross_slots(), cells)
+        self.equity = nn.Sequential(
+            nn.Linear(1, channels), nn.ReLU(inplace=True), nn.Linear(channels, channels)
+        )
         self.cross_attn = nn.MultiheadAttention(channels, num_heads, batch_first=True)
         self.fuse = nn.Sequential(
             nn.Linear(4 * channels, channels), nn.ReLU(inplace=True), nn.Linear(channels, channels)
@@ -76,7 +82,7 @@ class PolicySetEncoder(nn.Module):
             batch["move_cross_cells"],
             batch["move_cross_letters"],
             pos_id,
-        )
+        ) + self.equity(batch["move_equity"].unsqueeze(1))
         attended = attend_by_position(self.cross_attn, e, board, pos_id)
         return self.fuse(torch.cat([attended, g[pos_id]], dim=1)), g
 

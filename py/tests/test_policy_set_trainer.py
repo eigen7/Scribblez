@@ -142,6 +142,19 @@ TINY = PolicySetParams(
 )
 
 
+def test_the_equity_input_is_relative_to_each_pools_best(chunk):
+    items = dataset.read_items([chunk])
+    batch = dataset.PoolBatcher().build(items)
+    eq, pos_id = batch["move_equity"].numpy(), batch["move_pos_id"].numpy()
+    for j in range(len(items)):
+        mine = eq[pos_id == j]
+        assert mine.max() == 0 and mine.min() >= dataset.EQUITY_FLOOR
+        # The best equity is the pool's equity rank 0, where the pool has one.
+        ranks = items[j].pool.equity_rank
+        if (ranks == 0).any():
+            assert mine[ranks == 0][0] == 0
+
+
 def test_the_slot_form_overfits_a_pool(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)
