@@ -642,7 +642,8 @@ survey's JSON. Its header carries the magic and `kPoolFormatVersion`.
 - **Per pool:** the identities of the win table and the leave inference
   model (tag, generation and format version), or uniform beliefs; and
   `horizon_plies`.
-- **Per position:** the `.slog` game and turn.
+- **Per position:** the `.slog` game and turn, and the
+  [opponent-rack input](#the-opponent-rack-input).
 - **Per candidate:**
   - the `Move` (16 bytes);
   - mean win probability;
@@ -681,6 +682,32 @@ pin a generation of a `leave_inference` tag through `finalize`, as
   `holdout_every` and `holdout_chunks`;
 - training: `forms` and `max_rows`.
 
+### The opponent-rack input
+
+The policy-set model reads the chooser's belief about the opponent's rack
+([design](deep_bot.md#the-policy-set-model)) as `OppRackSummary`
+(`belief/opp_rack_summary.h`), which describes the rack the sims draw:
+
+- **Presence, 27 floats:** per tile kind, the probability that the rack holds
+  at least one. With a modelled leave, the rack lacks a kind exactly when
+  both the leave and the refill do, and the refill's chance of missing it is
+  hypergeometric: `C(U − k − u_t, 7 − k) / C(U − k, 7 − k)` for a `k`-tile
+  leave, `U` unseen tiles and `u_t` unseen copies of `t`. The leave's
+  marginals come from one more pass over the sampler's rows
+  (`LeaveSampler::moments`). Without a modelled leave, the rack is a uniform
+  draw of 7.
+- **Whether the leave was modelled,** and the mean and standard deviation of
+  its static value in points (0 when not): how strong the believed leave is.
+
+The summary is at the rack level, not the leave's, so it is defined at every
+position the sims cover: under uniform beliefs, and where the model does not
+apply (turn 0, after a pass, an empty leave). It is what the sims drew from in
+each case.
+
+The survey writes it into each position of the pool record, rebuilding the
+position's belief after its sims, since the simmer drops it. The agent
+computes it from the same belief its sims sample.
+
 ### Held-out pools
 
 Every staged chunk with `crc32(stem) % holdout_every == 0` goes to a
@@ -700,7 +727,9 @@ Inputs are rebuilt by replay, as `move_set_eval`'s trainer does. The pool's
 which returns the board rows and per-move cross-check cells and letters. The
 process runs in the hidden-leaves arm (`ffi.set_opp_leave_input`, adopted
 from a header flag in the pool sidecar). No legal-move enumeration is needed,
-because the pool lists the candidates.
+because the pool lists the candidates. The
+[opponent-rack input](#the-opponent-rack-input) comes from the pool record
+itself (`pools.Pool`), not from replay.
 
 ### The two forms
 
@@ -867,7 +896,8 @@ before serving fixes the layout.
    and the eval metrics for the static-equity baseline.
 8. **The two forms,** their trainers under `forms`,
    `policy_set_format_version`, their eval metrics beside the baseline, and
-   the figure.
+   the figure. Both read the opponent-rack input, as a scalar block beside
+   the board row's.
 
 *Measure:* recall, cover, regret and tail recall against `N` for each form,
 and against static equity; time per batch of sets. This decides the form.

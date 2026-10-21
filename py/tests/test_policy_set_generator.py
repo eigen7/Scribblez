@@ -129,6 +129,10 @@ def test_a_chunk_surveys_into_pools_that_read_back_as_model_inputs(surveyed_chun
     for pool in read:
         assert len(pool.moves) > 1
         np.testing.assert_allclose(pool.q.sum(), 1.0, atol=1e-5)
+        # Uniform beliefs: a full rack drawn uniformly, holding 1 to 7 kinds.
+        assert not pool.opp_leave_modelled and pool.opp_leave_value_mean == 0
+        assert ((pool.opp_rack_presence >= 0) & (pool.opp_rack_presence <= 1)).all()
+        assert 1 <= pool.opp_rack_presence.sum() <= 7
     inputs = pools.pool_inputs(slog, read)
     assert inputs["rows"].shape == (1, ffi.task_row_floats())
     assert len(inputs["cells"]) == len(inputs["letters"]) == sum(len(p.moves) for p in read)

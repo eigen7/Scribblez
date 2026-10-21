@@ -129,6 +129,22 @@ A seeded, indexable draw sequence replaces `Bag::draw()` in sim code.
 **Interface.** Given a position from the chooser's information set, all legal
 moves and a size `N`, return a set `S` of `N` moves.
 
+**The chooser's belief is an input.** The model also reads the chooser's
+belief about the opponent's rack, from the
+[leave inference model](#the-leave-inference-model), summarized per letter.
+The labels are simmed with opponent racks drawn from that belief, so without
+it the model would have to re-infer it from the board alone, with no move
+history and no forgone plays. With it, a setup the opponent's last move left
+can be read as "he likely holds the hook letter", and blocking it valued
+accordingly. The chooser always has this belief: at Alice's root it is hers
+about Bob, and in Bob's subtree it is his about Alice given `a` and his
+sampled rack `r`, the belief his sims already draw from.
+
+The opposite belief, the opponent's about the chooser's rack, is left out:
+at Alice's root it needs a model that infers from public information alone,
+since Alice does not know Bob's rack, and current labels could not teach its
+use, since rollouts never read a belief.
+
 **Objective.** Choose `S` to maximize the expected best value in the set,
 `E[max_{a∈S} v(a)]`, where `v` is the move's value under the chooser's
 uncertainty about it. This differs from taking the `N` moves most likely to

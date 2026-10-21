@@ -74,6 +74,7 @@ add_library(scribblez_core STATIC
   src/belief/forgone_plays.cpp
   src/belief/leave_prior.cpp
   src/belief/leave_sampler.cpp
+  src/belief/opp_rack_summary.cpp
   src/belief/slog_leave_beliefs.cpp
   src/lexicon/leave_value_arrays.cpp
   src/belief/move_likelihood.cpp

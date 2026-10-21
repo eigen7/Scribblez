@@ -140,6 +140,7 @@ json::object build_structs() {
   s["SlogFileHeader"] = struct_json<binlog::FileHeader>();
   s["PoolFileHeader"] = struct_json<PoolFileHeader>();
   s["PoolPositionHeader"] = struct_json<PoolPositionHeader>();
+  s["PoolOppRack"] = struct_json<PoolOppRack>();
   s["PoolCandidate"] = struct_json<PoolCandidate>();
   s["WinTableFeature"] = struct_json<WinTableFeature>();
   s["WinTableSample"] = struct_json<WinTableSample>();

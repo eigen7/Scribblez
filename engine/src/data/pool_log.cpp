@@ -44,6 +44,15 @@ PoolFileHeader make_header(const PoolSources& s) {
   return h;
 }
 
+PoolOppRack pool_opp_rack(const belief::OppRackSummary& s) {
+  PoolOppRack r{};
+  r.presence = s.presence;
+  r.leave_value_mean = s.leave_value_mean;
+  r.leave_value_sd = s.leave_value_sd;
+  r.modelled = s.modelled ? 1 : 0;
+  return r;
+}
+
 }  // namespace
 
 PoolSources PoolSources::of(const PoolFileHeader& h) {
@@ -89,6 +98,8 @@ void PoolWriter::add_position(const PoolPosition& p) {
   RELEASE_ASSERT(p.equity_ranks.size() == k && p.labels.size() == k);
   const PoolPositionHeader h{p.at.game_idx, p.at.turn_idx, uint32_t(k), p.num_legal_moves};
   append_bytes(&buffer_, &h, sizeof(h));
+  const PoolOppRack opp_rack = pool_opp_rack(p.opp_rack);
+  append_bytes(&buffer_, &opp_rack, sizeof(opp_rack));
   for (size_t c = 0; c < k; ++c) {
     const PoolLabel& l = p.labels[c];
     const PoolCandidate cand{p.moves[c], float(l.win_prob), float(l.paired_se),
@@ -124,6 +135,8 @@ PoolReader::PoolReader(const std::string& path) {
     Position pos{};
     pos.header = reinterpret_cast<const PoolPositionHeader*>(
       take_bytes(buffer_, &off, sizeof(PoolPositionHeader), context));
+    pos.opp_rack =
+      reinterpret_cast<const PoolOppRack*>(take_bytes(buffer_, &off, sizeof(PoolOppRack), context));
     pos.candidates = reinterpret_cast<const PoolCandidate*>(
       take_bytes(buffer_, &off, pos.header->num_candidates * sizeof(PoolCandidate), context));
     positions_.push_back(pos);

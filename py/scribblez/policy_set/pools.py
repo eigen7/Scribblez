@@ -23,12 +23,18 @@ SUFFIX = ".pool"
 
 @dataclass
 class Pool:
-    """One position's pool: its address in the .slog and, per candidate
-    (parallel arrays), the move and its labels (engine sim/pool_labels.h)."""
+    """One position's pool: its address in the .slog, the chooser's belief
+    about the opponent's rack as the sims drew it (engine
+    belief/opp_rack_summary.h), and per candidate (parallel arrays) the move
+    and its labels (engine sim/pool_labels.h)."""
 
     game: int
     turn: int
     num_legal_moves: int
+    opp_rack_presence: np.ndarray  # (27,) float32, P(the rack holds at least one), by tile
+    opp_leave_modelled: bool  # the leave came from the leave inference model's belief
+    opp_leave_value_mean: float  # points; 0 unless modelled
+    opp_leave_value_sd: float
     moves: np.ndarray  # (M,) Move records
     win_prob: np.ndarray  # (M,) float32
     paired_se: np.ndarray  # (M,) float32, against the leader
@@ -42,6 +48,7 @@ def read_pools(path: str | Path) -> tuple[np.void, list[Pool]]:
     for another format version or a malformed file."""
     hdr_t = ffi.struct_dtype("PoolFileHeader")
     pos_t = ffi.struct_dtype("PoolPositionHeader")
+    rack_t = ffi.struct_dtype("PoolOppRack")
     cand_t = ffi.struct_dtype("PoolCandidate")
     buf = np.fromfile(path, np.uint8)
     if len(buf) < hdr_t.itemsize:
@@ -55,22 +62,30 @@ def read_pools(path: str | Path) -> tuple[np.void, list[Pool]]:
     for _ in range(int(hdr["num_positions"])):
         ph = np.frombuffer(buf, pos_t, count=1, offset=off)[0]
         off += pos_t.itemsize
+        if off + rack_t.itemsize > len(buf):
+            raise ValueError(f"{path}: truncated at position {len(pools)}")
+        rack = np.frombuffer(buf, rack_t, count=1, offset=off)[0]
+        off += rack_t.itemsize
         n = int(ph["num_candidates"])
         if off + n * cand_t.itemsize > len(buf):
             raise ValueError(f"{path}: truncated at position {len(pools)}")
         c = np.frombuffer(buf, cand_t, count=n, offset=off)
         off += n * cand_t.itemsize
-        pools.append(_pool(ph, c))
+        pools.append(_pool(ph, rack, c))
     if off != len(buf):
         raise ValueError(f"{path}: {len(buf) - off} bytes past the last position")
     return hdr, pools
 
 
-def _pool(ph: np.void, c: np.ndarray) -> Pool:
+def _pool(ph: np.void, rack: np.void, c: np.ndarray) -> Pool:
     return Pool(
         game=int(ph["game_index"]),
         turn=int(ph["turn_index"]),
         num_legal_moves=int(ph["num_legal_moves"]),
+        opp_rack_presence=rack["presence"].copy(),
+        opp_leave_modelled=bool(rack["modelled"]),
+        opp_leave_value_mean=float(rack["leave_value_mean"]),
+        opp_leave_value_sd=float(rack["leave_value_sd"]),
         moves=c["move"].copy(),
         win_prob=c["win_prob"].copy(),
         paired_se=c["paired_se"].copy(),

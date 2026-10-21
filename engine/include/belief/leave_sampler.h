@@ -29,6 +29,13 @@
 
 namespace scribblez::belief {
 
+// A belief's summary over its leaves.
+struct LeaveMoments {
+  std::array<double, TILE_KINDS> presence;  // P(the leave holds at least one), by Tile code
+  double value_mean;                        // of the leave's value, in points
+  double value_sd;
+};
+
 class LeaveSampler {
  public:
   // The belief `params` over the length-`length` leaves drawable from
@@ -51,6 +58,10 @@ class LeaveSampler {
 
   // The leave at `row`.
   Rack leave(size_t row) const;
+
+  // The belief's presence marginals and value moments, from one pass over its
+  // rows.
+  LeaveMoments moments() const;
 
  private:
   // The unnormalized log weight of `row`.

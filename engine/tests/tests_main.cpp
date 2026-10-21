@@ -5230,6 +5230,10 @@ TEST(PoolLog, RoundTripAndVersionGate) {
   p.equity_ranks = {-1, 7};
   p.labels = {{.win_prob = 0.25, .paired_se = 0.0, .q = 0.75, .rollouts = 300},
               {.win_prob = 0.125, .paired_se = 0.5, .q = 0.25, .rollouts = 30}};
+  p.opp_rack.presence[Tile::from_char('S').index()] = 0.625f;
+  p.opp_rack.modelled = true;
+  p.opp_rack.leave_value_mean = 3.5f;
+  p.opp_rack.leave_value_sd = 1.25f;
   {
     PoolWriter w(path, sources);
     w.add_position(p);
@@ -5251,6 +5255,10 @@ TEST(PoolLog, RoundTripAndVersionGate) {
   EXPECT_EQ(pos.header->turn_index, 17u);
   EXPECT_EQ(pos.header->num_legal_moves, 42u);
   ASSERT_EQ(pos.header->num_candidates, 2u);
+  EXPECT_EQ(pos.opp_rack->presence, p.opp_rack.presence);
+  EXPECT_EQ(pos.opp_rack->modelled, 1);
+  EXPECT_EQ(pos.opp_rack->leave_value_mean, 3.5f);
+  EXPECT_EQ(pos.opp_rack->leave_value_sd, 1.25f);
   for (size_t c = 0; c < 2; ++c) {
     EXPECT_EQ(pos.candidates[c].move, p.moves[c]);
     EXPECT_EQ(pos.candidates[c].equity_rank, p.equity_ranks[c]);

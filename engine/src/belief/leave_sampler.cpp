@@ -88,4 +88,24 @@ Rack LeaveSampler::leave(size_t row) const {
   return rack;
 }
 
+LeaveMoments LeaveSampler::moments() const {
+  LeaveMoments m{};
+  double value_sq = 0;
+  const double total = cdf_.back();
+  for (size_t r = 0; r < cdf_.size(); ++r) {
+    const double p = (cdf_[r] - (r > 0 ? cdf_[r - 1] : 0.0)) / total;
+    if (p == 0) continue;
+    // A leave holds a kind iff it holds that kind's first copy.
+    for (int slot = 0; slot < length_; ++slot) {
+      const uint8_t code = codes_[slot][r];
+      if (code % LeaveValueArrays::kCopiesPerTile == 0)
+        m.presence[code / LeaveValueArrays::kCopiesPerTile] += p;
+    }
+    m.value_mean += p * values_[r];
+    value_sq += p * values_[r] * values_[r];
+  }
+  m.value_sd = std::sqrt(std::max(0.0, value_sq - m.value_mean * m.value_mean));
+  return m;
+}
+
 }  // namespace scribblez::belief
