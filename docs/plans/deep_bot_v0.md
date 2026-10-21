@@ -723,10 +723,10 @@ of them; later held-out chunks are deleted. The trainer evaluates on the set.
   beside the generations, so the pools survive a trainer moving between
   machines. Being one directory with a manifest, it travels exactly as a
   generation does: pulled once complete, seeded acknowledged.
-- **The baseline.** Until the forms exist (step 8), the trainer trains
-  nothing: per generation it records the generation's pool statistics and
-  the static-equity top N's metrics on the held-out set, under the `equity_`
-  key prefix.
+- **The baseline.** Beside the forms it trains (steps 8a and 8b), the
+  trainer records per generation the window's pool statistics and the
+  static-equity top N's metrics on the held-out set, under the `equity_` key
+  prefix.
 
 ### Inputs at train time
 
@@ -902,10 +902,13 @@ before serving fixes the layout.
    home (the generation scheduler runs only beside a trainer), held-out
    pools through the scheduler and the controller's pull, seed and sweep,
    and the eval metrics for the static-equity baseline.
-8. **The two forms,** their trainers under `forms`,
-   `policy_set_format_version`, their eval metrics beside the baseline, and
-   the figure. Both read the opponent-rack input, as a scalar block beside
-   the board row's.
+8a. **The shared encoder and the slot form:** pool batches, the move set
+   encoder reading the opponent-rack input as a scalar block beside the
+   board row's, the slot decoder and its coverage loss, trained under
+   `forms`, its eval metrics beside the baseline, `kPolicySetFormatVersion`,
+   and the figure.
+8b. **The greedy form:** the set-conditioning stage and gain head, rows by
+   subset assembly, and `forms = both`.
 
 *Measure:* recall, cover, regret and tail recall against `N` for each form,
 and against static equity; time per batch of sets. This decides the form.

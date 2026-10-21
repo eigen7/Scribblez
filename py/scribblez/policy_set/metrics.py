@@ -3,7 +3,7 @@ chooser of candidate sets covers each pool's best move, at each set size N.
 
 A chooser maps a pool and N to the indices of at most N of its candidates.
 The static-equity top N is the baseline chooser, the set every DeepBot set has
-to beat; the policy-set model's forms are choosers too (step 8).
+to beat; the policy-set model's forms are choosers too (train_loop.evaluate).
 
 Per N, over the pools:
   recall       how often the pool's sim-best move (the leader, the largest q)

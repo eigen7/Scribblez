@@ -156,7 +156,7 @@ class CrossCheckEncoder(nn.Module):
         return self(cells, letters, board[self.squares(cells)])
 
 
-def _rank_within_position(pos_id: torch.Tensor, num_positions: int) -> tuple[torch.Tensor, int]:
+def rank_within_position(pos_id: torch.Tensor, num_positions: int) -> tuple[torch.Tensor, int]:
     """Each move's index within its position's candidate block, plus the
     largest block size: the (row, column) address that packs the flattened move
     set into a padded (P, maxK) grid.
@@ -169,6 +169,54 @@ def _rank_within_position(pos_id: torch.Tensor, num_positions: int) -> tuple[tor
     starts = torch.cumsum(counts, dim=0) - counts  # (P,)
     rank = torch.arange(pos_id.shape[0], device=pos_id.device) - starts[pos_id]  # (M,)
     return rank, int(counts.max())
+
+
+def encode_moves_on_board(
+    move_encoder: MoveEncoder,
+    cross_check_encoder: CrossCheckEncoder,
+    board: torch.Tensor,
+    letters: torch.Tensor,
+    blanks: torch.Tensor,
+    squares: torch.Tensor,
+    tile_mask: torch.Tensor,
+    scalars: torch.Tensor,
+    cross_cells: torch.Tensor,
+    cross_letters: torch.Tensor,
+    pos_id: torch.Tensor,
+) -> torch.Tensor:
+    """Embed M flattened moves against their positions' board token maps
+    (P, 225, C) -> (M, C): the move encoder over the tokens at the tiles'
+    squares, plus the cross-check encoder over the tokens at the entries'."""
+    # Pad slots gather token 0 and are masked out by the encoders.
+    # Exchange tiles carry letters but square 0 (move_set_encoder.h), so the
+    # is_play scalar zeroes their gathered tokens: a surrendered tile
+    # contributes only its letter and blank embeddings.
+    t = squares.shape[1]
+    tile_board = board[pos_id.unsqueeze(1).expand(-1, t), squares]  # (M, T, C)
+    tile_board = tile_board * scalars[:, 2].view(-1, 1, 1)  # scalars[:, 2] = is_play
+    k = cross_cells.shape[1]
+    cross_board = board[pos_id.unsqueeze(1).expand(-1, k), cross_check_encoder.squares(cross_cells)]
+    return move_encoder(letters, blanks, tile_mask, scalars, tile_board) + cross_check_encoder(
+        cross_cells, cross_letters, cross_board
+    )
+
+
+def attend_by_position(
+    attn: nn.MultiheadAttention, e: torch.Tensor, board: torch.Tensor, pos_id: torch.Tensor
+) -> torch.Tensor:
+    """M move queries (M, C) cross-attending into their own positions' board
+    tokens (P, 225, C) -> (M, C)."""
+    # Queries are grouped by position into a padded (P, maxK) grid so the
+    # key/value set is one copy per position. The W_k/W_v projections depend
+    # only on the board and cost ~C times the attention math they feed, so
+    # this amortizes them across candidates the same way the trunk is.
+    rank, max_k = rank_within_position(pos_id, board.shape[0])
+    queries = e.new_zeros(board.shape[0], max_k, board.shape[2])  # (P, maxK, C)
+    queries[pos_id, rank] = e
+    # Returning the weights would materialize a (P, maxK, 225) tensor, the
+    # largest in the grid, and keep the call off the fused kernels.
+    attended, _ = attn(queries, board, board, need_weights=False)
+    return attended[pos_id, rank]  # (P, maxK, C) -> (M, C)
 
 
 class MoveSetEvalModel(nn.Module):
@@ -313,20 +361,19 @@ class MoveSetEvalModel(nn.Module):
         pos_id: torch.Tensor,
     ) -> torch.Tensor:
         """Embed M flattened moves against the plain board token map -> (M, C)."""
-        # Pad slots gather token 0 and are masked out by the encoders.
-        # Exchange tiles carry letters but square 0 (move_set_encoder.h), so the
-        # is_play scalar zeroes their gathered tokens: a surrendered tile
-        # contributes only its letter and blank embeddings.
-        t = squares.shape[1]
-        tile_board = board[pos_id.unsqueeze(1).expand(-1, t), squares]  # (M, T, C)
-        tile_board = tile_board * scalars[:, 2].view(-1, 1, 1)  # scalars[:, 2] = is_play
-        k = cross_cells.shape[1]
-        cross_board = board[
-            pos_id.unsqueeze(1).expand(-1, k), self.cross_check_encoder.squares(cross_cells)
-        ]
-        return self.move_encoder(
-            letters, blanks, tile_mask, scalars, tile_board
-        ) + self.cross_check_encoder(cross_cells, cross_letters, cross_board)
+        return encode_moves_on_board(
+            self.move_encoder,
+            self.cross_check_encoder,
+            board,
+            letters,
+            blanks,
+            squares,
+            tile_mask,
+            scalars,
+            cross_cells,
+            cross_letters,
+            pos_id,
+        )
 
     def encode_evidence(
         self, board: torch.Tensor, evidence: EvidenceInputs
@@ -370,17 +417,7 @@ class MoveSetEvalModel(nn.Module):
           "score_diff": (M, 2) [mean, std > 0]
           "gain":       (M,) proves-best expected gain, >= 0
         """
-        # Queries are grouped by position into a padded (P, maxK) grid so the
-        # key/value set is one copy per position. The W_k/W_v projections depend
-        # only on the board and cost ~C times the attention math they feed, so
-        # this amortizes them across candidates the same way the trunk is.
-        rank, max_k = _rank_within_position(pos_id, board.shape[0])
-        queries = e.new_zeros(board.shape[0], max_k, board.shape[2])  # (P, maxK, C)
-        queries[pos_id, rank] = e
-        # Returning the weights would materialize a (P, maxK, 225) tensor, the
-        # largest in the grid, and keep the call off the fused kernels.
-        attended, _ = self.cross_attn(queries, board, board, need_weights=False)
-        attended = attended[pos_id, rank]  # (P, maxK, C) -> (M, C)
+        attended = attend_by_position(self.cross_attn, e, board, pos_id)
 
         head_in = torch.cat([attended, g[pos_id]], dim=1)  # (M, 4C)
         out = self.head(head_in)  # (M, 5)
