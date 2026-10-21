@@ -7,7 +7,7 @@
 //
 // File layout (little-endian, packed):
 //
-//   [PoolFileHeader                                         96 B]
+//   [PoolFileHeader                                        136 B]
 //   per position:
 //     [PoolPositionHeader                                   16 B]
 //     [PoolCandidate x num_candidates                       36 B each]
@@ -27,7 +27,7 @@ namespace scribblez {
 inline constexpr uint32_t kPoolMagic = 0x4C4F4F50u;
 // The format version (docs/plans/deep_bot_v0.md, "Versions"). Bump it whenever
 // the layout or a field's meaning changes; readers accept only this version.
-inline constexpr uint16_t kPoolFormatVersion = 1;
+inline constexpr uint16_t kPoolFormatVersion = 2;
 
 // PoolFileHeader::flags bits.
 inline constexpr uint16_t kPoolFlagLeaveInference = 1u;  // opponents' leaves came from a model
@@ -46,13 +46,19 @@ struct PoolFileHeader {
   uint16_t reserved0;      // 0
   uint32_t rollouts;       // the budget per candidate; racing stops some early
   int32_t win_table_format_version;
-  int32_t win_table_generation;          // -1 for a table fitted outside a tag
-  char win_table_hash[kPoolHashSize];    // util::file_content_hash of the table file
-  char win_table_tag[kPoolTagSize];      // NUL-padded; empty outside a tag
-  char leave_model_hash[kPoolHashSize];  // all zero under uniform beliefs
-  uint32_t reserved1;                    // 0
+  int32_t win_table_generation;        // -1 for a table fitted outside a tag
+  char win_table_hash[kPoolHashSize];  // util::file_content_hash of the table file
+  char win_table_tag[kPoolTagSize];    // NUL-padded; empty outside a tag
+  // The leave inference model, all zero under uniform beliefs: its ONNX's
+  // util::file_content_hash, its tag (NUL-padded), generation and format
+  // version.
+  char leave_model_hash[kPoolHashSize];
+  char leave_model_tag[kPoolTagSize];
+  int32_t leave_model_generation;
+  int32_t leave_model_format_version;
+  uint32_t reserved1;  // 0
 };
-static_assert(sizeof(PoolFileHeader) == 96, "PoolFileHeader must be 96 bytes");
+static_assert(sizeof(PoolFileHeader) == 136, "PoolFileHeader must be 136 bytes");
 
 struct PoolPositionHeader {
   uint32_t game_index;  // game within the companion .slog file
@@ -82,7 +88,12 @@ struct PoolSources {
   std::string win_table_tag;
   int win_table_generation = -1;
   int win_table_format_version = 0;
-  std::string leave_model_hash;  // empty under uniform beliefs
+  // The leave inference model's; the hash empty, and the rest 0, under
+  // uniform beliefs.
+  std::string leave_model_hash;
+  std::string leave_model_tag;
+  int leave_model_generation = 0;
+  int leave_model_format_version = 0;
   int horizon_plies = 0;
   int rollouts = 0;
 

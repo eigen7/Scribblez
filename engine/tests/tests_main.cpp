@@ -5186,6 +5186,10 @@ TEST(PoolLog, RoundTripAndVersionGate) {
   sources.win_table_tag = "tilted";
   sources.win_table_generation = 12;
   sources.win_table_format_version = kWinTableFormatVersion;
+  sources.leave_model_hash = "00112233aabbccdd";
+  sources.leave_model_tag = "tilted2";
+  sources.leave_model_generation = 40;
+  sources.leave_model_format_version = 3;
   sources.horizon_plies = 5;
   sources.rollouts = 300;
   PoolPosition p;
@@ -5203,7 +5207,9 @@ TEST(PoolLog, RoundTripAndVersionGate) {
   }
   const PoolReader r(path);
   EXPECT_EQ(r.header().version, kPoolFormatVersion);
-  EXPECT_EQ(r.header().flags, 0);
+  EXPECT_EQ(r.header().flags, kPoolFlagLeaveInference);
+  EXPECT_EQ(std::string(r.header().leave_model_tag), "tilted2");
+  EXPECT_EQ(r.header().leave_model_generation, 40);
   EXPECT_EQ(r.header().horizon_plies, 5);
   EXPECT_EQ(r.header().rollouts, 300u);
   EXPECT_EQ(r.header().win_table_generation, 12);
@@ -5231,6 +5237,9 @@ TEST(PoolLog, RoundTripAndVersionGate) {
   other = sources;
   other.win_table_hash = "fedcba9876543210";
   EXPECT_STREQ(back.first_difference(other), "win table");
+  other = sources;
+  other.leave_model_generation = 41;
+  EXPECT_STREQ(back.first_difference(other), "leave model generation");
 
   std::string bytes = scribblez::util::read_file(path);
   std::ofstream(path, std::ios::binary) << bytes.substr(0, bytes.size() - 1);
