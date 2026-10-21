@@ -16,7 +16,8 @@ import torch
 
 from scribblez.policy_set import metrics
 from scribblez.policy_set.dataset import PoolBatcher, PoolItem, batch_order
-from scribblez.policy_set.model import coverage_loss, slot_picks, to_grid
+from scribblez.policy_set.model import to_grid
+from scribblez.policy_set.slot import coverage_loss, slot_picks
 
 # The batch eval_set_ms times: this many sets at this N.
 SET_TIMING_POSITIONS = 256

@@ -35,7 +35,8 @@ from scribblez.generational.records import TrainRecorder
 from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.paths import TagPaths
 from scribblez.policy_set import FORM_SLOT, dataset, metrics, pools, train_loop
-from scribblez.policy_set.model import PolicySetEncoder, SlotModel, trunk_scalar
+from scribblez.policy_set.model import PolicySetEncoder, trunk_scalar
+from scribblez.policy_set.slot import SlotModel
 from scribblez.position_eval.trainer import OutputDeliverer, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext

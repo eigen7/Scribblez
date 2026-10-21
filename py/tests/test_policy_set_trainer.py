@@ -24,7 +24,15 @@ from scribblez.generational.checkpoint import GenerationalState  # noqa: E402
 from scribblez.generational.optim import build_optim_arm, build_optimizer  # noqa: E402
 from scribblez.leave_inference import win_table  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
-from scribblez.policy_set import dataset, metrics, model, pools, train_loop, trainer  # noqa: E402
+from scribblez.policy_set import (  # noqa: E402
+    dataset,
+    metrics,
+    model,
+    pools,
+    slot,
+    train_loop,
+    trainer,
+)
 from scribblez.position_eval.trainer import OutputDeliverer  # noqa: E402
 from scribblez.selfplay import run_games  # noqa: E402
 from scribblez.workloads import policy_set  # noqa: E402
@@ -86,7 +94,7 @@ def test_coverage_loss_is_the_log_probability_the_prefix_covers_the_best_move():
     logits = torch.stack([p1.log(), p2.log()]).unsqueeze(0)
     logits = torch.cat([logits, torch.full((1, 2, 1), float("-inf"))], dim=2)
     q = torch.tensor([[1.0, 0.0, 0.0]])
-    loss = model.coverage_loss(logits, q, sizes=(1, 2))
+    loss = slot.coverage_loss(logits, q, sizes=(1, 2))
     assert loss[1].item() == pytest.approx(-np.log(0.5))
     assert loss[2].item() == pytest.approx(-np.log(1 - 0.5 * 0.75))
 
@@ -96,7 +104,7 @@ def test_the_coverage_loss_keeps_its_gradient_on_a_confidently_missed_move(gap):
     # Both slots put move 0 `gap` logits above move 1, which holds 30% of q.
     logits = torch.tensor([[[gap, 0.0], [gap, 0.0]]], requires_grad=True)
     q = torch.tensor([[0.7, 0.3]])
-    loss = model.coverage_loss(logits, q, sizes=(2,))[2]
+    loss = slot.coverage_loss(logits, q, sizes=(2,))[2]
     loss.backward()
     # The cover of move 1 is about 2 exp(-gap): its loss term is 0.3 * (gap - log 2).
     assert loss.item() == pytest.approx(0.3 * (gap - np.log(2)), rel=1e-3)
@@ -106,9 +114,9 @@ def test_the_coverage_loss_keeps_its_gradient_on_a_confidently_missed_move(gap):
 def test_a_slot_whose_move_is_taken_falls_back_to_its_next_choice():
     logits = torch.tensor([[[3.0, 2.0, 1.0], [3.0, 1.0, 2.0], [3.0, 2.0, 1.0]]])
     pad = torch.tensor([[False, False, False]])
-    assert model.slot_picks(logits, pad) == [[0, 2, 1]]
+    assert slot.slot_picks(logits, pad) == [[0, 2, 1]]
     # Fewer candidates than slots: the set stops at every candidate.
-    assert model.slot_picks(logits[:, :, :2], pad[:, :2]) == [[0, 1]]
+    assert slot.slot_picks(logits[:, :, :2], pad[:, :2]) == [[0, 1]]
 
 
 @pytest.fixture(scope="module")
