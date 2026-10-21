@@ -26,6 +26,10 @@ def _pool(q, win, rank) -> pools.Pool:
         game=0,
         turn=0,
         num_legal_moves=n,
+        opp_rack_presence=np.zeros(27, np.float32),
+        opp_leave_modelled=False,
+        opp_leave_value_mean=0.0,
+        opp_leave_value_sd=0.0,
         moves=np.zeros(n, ffi.struct_dtype("Move")),
         win_prob=np.array(win, np.float32),
         paired_se=np.zeros(n, np.float32),
@@ -72,9 +76,10 @@ def _write_pool_file(path: Path, pool_list: list[pools.Pool]):
     for p in pool_list:
         ph = np.zeros(1, ffi.struct_dtype("PoolPositionHeader"))
         ph["num_candidates"] = len(p.q)
+        rack = np.zeros(1, ffi.struct_dtype("PoolOppRack"))
         c = np.zeros(len(p.q), ffi.struct_dtype("PoolCandidate"))
         c["q"], c["win_prob"], c["equity_rank"] = p.q, p.win_prob, p.equity_rank
-        parts += [ph.tobytes(), c.tobytes()]
+        parts += [ph.tobytes(), rack.tobytes(), c.tobytes()]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"".join(parts))
 
