@@ -598,14 +598,16 @@ calibration metrics are left out.
 
 A generator worker's cycle:
 
-1. **Play** one HastyBot-vs-HastyBot game, `face_up_leaves=False`.
-2. **Pick positions.** `positions_per_game` turns (default 2), uniform over
-   the eligible region.
-3. **Survey each position** with `sim_candidate_survey_tool` in its
-   exhaustive recipe, screen stage only (no confirm stage), over the design's
-   [candidate set](deep_bot.md#labels). Rollouts stop at the win table;
-   racing stays on.
-4. **Write a pool record** per position (below).
+1. **Play** a chunk of `games_per_chunk` (default 50) HastyBot-vs-HastyBot
+   games, `face_up_leaves=False`, without random openings.
+2. **Pick positions.** `positions_per_game` turns (default 2) of each game,
+   uniform over the eligible region, seeded by the chunk's name.
+3. **Survey each position** with `sim_candidate_survey_tool`'s pool recipe,
+   screen stage only (no confirm stage), over the design's
+   [candidate set](deep_bot.md#labels): `rollouts` (default 100) per
+   candidate, stopped at the win table after `horizon_plies` (default 3: the
+   candidate, then Bob, Alice, Bob). Racing stays on.
+4. **Deliver the chunk's pool records** (below) as the `.slog`'s sidecar.
 
 **Survey-tool changes.**
 
@@ -673,7 +675,8 @@ pin a generation of a `leave_inference` tag through `finalize`, as
 - the source: `leave_inference_tag`, `leave_inference_generation` and
   `leave_beliefs` (`inferred` or `uniform`);
 - the survey: `horizon_plies`, `positions_per_game`, `rollouts` (the screen
-  budget, default 300) and `race`;
+  budget, default 100), `race` and `blank_prune_points`;
+- self-play: `games_per_chunk` and the `hasty_*` policy;
 - generations and held-out pools: `positions_per_generation`, `window`,
   `holdout_every` and `holdout_chunks`;
 - training: `forms` and `max_rows`.
@@ -854,11 +857,17 @@ before serving fixes the layout.
 
    The uniform-belief path needs only step 1; the leave inference flags need
    step 5.
-7. **Python:** the `policy_set` workload's generator, the source-tag pin,
-   held-out pools, generations, and the pool reader on
+7a. **The generator side:** the `policy_set` generate runner (chunks of
+   `games_per_chunk` games, each surveyed into a `.pool` before delivery),
+   the source-tag pin and its role inputs, and the pool reader on
    `ffi.move_set_positions`.
+7b. **The workload:** its registration, with a trainer that hosts the data
+   home (the generation scheduler runs only beside a trainer), held-out
+   pools through the scheduler and the controller's pull, seed and sweep,
+   and the eval metrics for the static-equity baseline.
 8. **The two forms,** their trainers under `forms`,
-   `policy_set_format_version`, the eval metrics and the figure.
+   `policy_set_format_version`, their eval metrics beside the baseline, and
+   the figure.
 
 *Measure:* recall, cover, regret and tail recall against `N` for each form,
 and against static equity; time per batch of sets. This decides the form.
