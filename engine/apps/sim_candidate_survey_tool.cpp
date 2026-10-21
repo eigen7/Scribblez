@@ -50,6 +50,7 @@
 // (variance). Results are appended to a partial file as they finish, so an
 // interrupted run resumes where it stopped (see PartialSurvey).
 
+#include "belief/opp_rack_summary.h"
 #include "belief/served_leave_model.h"
 #include "belief/slog_leave_beliefs.h"
 #include "data/binary_log.h"
@@ -651,9 +652,23 @@ void survey_file(const binlog::PendingSlog& slog, const Dictionary& dict, const 
   partial.finish();
 }
 
-PoolPosition pool_position(const SimmedPosition& r) {
-  return {r.pos, r.candidates.num_legal_moves, r.candidates.moves, r.candidates.equity_ranks,
-          pool_labels(r.rollouts)};
+// The opponent's rack as `r`'s sims drew it. The simmer drops each position's
+// belief once its sims finish, so this rebuilds it: the model and its input
+// are fixed, so it is the same belief.
+belief::OppRackSummary opp_rack_summary(const SimmedPosition& r,
+                                        const belief::SlogLeaveBeliefs* beliefs) {
+  const std::shared_ptr<const belief::LeaveSampler> leave =
+    beliefs ? beliefs->belief(r.pos) : nullptr;
+  return belief::summarize_opp_rack(r.position.board.unseen_tiles(r.position.rack), leave.get());
+}
+
+PoolPosition pool_position(const SimmedPosition& r, const belief::SlogLeaveBeliefs* beliefs) {
+  return {r.pos,
+          r.candidates.num_legal_moves,
+          r.candidates.moves,
+          r.candidates.equity_ranks,
+          pool_labels(r.rollouts),
+          opp_rack_summary(r, beliefs)};
 }
 
 // Sim each sampled position's pool, one position at a time (a pool is hundreds
@@ -672,7 +687,7 @@ void pool_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Op
   util::ProgressMeter meter(work.size(), "positions");
   for (const binlog::GamePositionIndex& at : work) {
     for (const SimmedPosition& r : sim_slog_positions(slog.bytes, dict, config, {at}, &meter))
-      writer.add_position(pool_position(r));
+      writer.add_position(pool_position(r, beliefs ? &*beliefs : nullptr));
   }
   meter.finish("sim-survey pools");
   writer.close();

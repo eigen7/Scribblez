@@ -10,12 +10,15 @@
 //   [PoolFileHeader                                        136 B]
 //   per position:
 //     [PoolPositionHeader                                   16 B]
+//     [PoolOppRack                                         120 B]
 //     [PoolCandidate x num_candidates                       36 B each]
 
+#include "belief/opp_rack_summary.h"
 #include "data/slog_sampling.h"
 #include "game/move.h"
 #include "sim/pool_labels.h"
 
+#include <array>
 #include <cstdint>
 #include <exception>
 #include <string>
@@ -27,7 +30,7 @@ namespace scribblez {
 inline constexpr uint32_t kPoolMagic = 0x4C4F4F50u;
 // The format version (docs/plans/deep_bot_v0.md, "Versions"). Bump it whenever
 // the layout or a field's meaning changes; readers accept only this version.
-inline constexpr uint16_t kPoolFormatVersion = 2;
+inline constexpr uint16_t kPoolFormatVersion = 3;
 
 // PoolFileHeader::flags bits.
 inline constexpr uint16_t kPoolFlagLeaveInference = 1u;  // opponents' leaves came from a model
@@ -67,6 +70,17 @@ struct PoolPositionHeader {
   uint32_t num_legal_moves;
 };
 static_assert(sizeof(PoolPositionHeader) == 16, "PoolPositionHeader must be 16 bytes");
+
+// The chooser's belief about the opponent's rack, as the sims drew it
+// (belief::OppRackSummary): the policy-set model's input of it.
+struct PoolOppRack {
+  std::array<float, TILE_KINDS> presence;  // P(the rack holds at least one), by Tile code
+  float leave_value_mean;                  // points; 0 unless modelled
+  float leave_value_sd;
+  uint8_t modelled;  // 1 if the leave came from the leave inference model's belief
+  std::array<uint8_t, 3> reserved;
+};
+static_assert(sizeof(PoolOppRack) == 120, "PoolOppRack must be 120 bytes");
 
 struct PoolCandidate {
   Move move;
@@ -111,6 +125,7 @@ struct PoolPosition {
   std::vector<Move> moves;
   std::vector<int32_t> equity_ranks;
   std::vector<PoolLabel> labels;
+  belief::OppRackSummary opp_rack;
 };
 
 // Accumulates positions in memory and writes the .pool file atomically on
@@ -144,6 +159,7 @@ class PoolReader {
   // Per-position view into the reader's buffer; valid while the reader lives.
   struct Position {
     const PoolPositionHeader* header;
+    const PoolOppRack* opp_rack;
     const PoolCandidate* candidates;  // header->num_candidates
   };
 

@@ -32,13 +32,14 @@ def read_pool(path: Path):
     """The .pool header and, per position, its header and candidates."""
     hdr_t = ffi.struct_dtype("PoolFileHeader")
     pos_t = ffi.struct_dtype("PoolPositionHeader")
+    rack_t = ffi.struct_dtype("PoolOppRack")
     cand_t = ffi.struct_dtype("PoolCandidate")
     buf = np.fromfile(path, np.uint8)
     hdr = np.frombuffer(buf, hdr_t, count=1)[0]
     off, positions = hdr_t.itemsize, []
     for _ in range(int(hdr["num_positions"])):
         ph = np.frombuffer(buf, pos_t, count=1, offset=off)[0]
-        off += pos_t.itemsize
+        off += pos_t.itemsize + rack_t.itemsize
         cands = np.frombuffer(buf, cand_t, count=int(ph["num_candidates"]), offset=off)
         off += cand_t.itemsize * int(ph["num_candidates"])
         positions.append((ph, cands))
