@@ -30,7 +30,9 @@ namespace binlog {
 //                      position, not from the game's outcome.
 //   kLeaveInference -- LeaveInferenceTask rows; one per eligible turn, always
 //                      pre-move. Its labels are the opponent's leave.
-enum class DecodeTask { kPositionEval, kMaxMovePerLane, kLeaveInference };
+//   kPublicLeaveInference -- PublicLeaveInferenceTask rows: kLeaveInference's
+//                      rows and labels, the input in its public view.
+enum class DecodeTask { kPositionEval, kMaxMovePerLane, kLeaveInference, kPublicLeaveInference };
 
 class BlockDecoder {
  public:
@@ -52,11 +54,11 @@ class BlockDecoder {
               const uint8_t* transposes, bool post_move, int64_t output_row_start, float* output);
 
   // Whether `task` rows read the .slog's .forgone sidecar.
-  static bool reads_forgone(DecodeTask task) { return task == DecodeTask::kLeaveInference; }
+  static bool reads_forgone(DecodeTask task);
 
   // Encodes one row for an explicit turn; the DataLoader's entry point.
   // `forgone` is the .slog's sidecar, required iff reads_forgone(task). Throws
-  // util::Exception for a kLeaveInference turn outside the game's eligible
+  // util::Exception for a leave inference turn outside the game's eligible
   // region, whose history the sidecar does not cover.
   void decode_one(const char* buf, const std::string& path, uint32_t game_idx, uint32_t turn_idx,
                   bool transpose, bool post_move, int64_t output_row, float* output,
@@ -75,6 +77,12 @@ class BlockDecoder {
 
  private:
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);
+
+  // decode_one for a leave inference `Task`.
+  template <typename Task>
+  void decode_leave_row(const char* buf, const std::string& path, const GameLog& g,
+                        uint32_t game_idx, uint32_t turn_idx, bool transpose, float* out,
+                        const ForgoneSidecar& forgone);
 
   DecodeTask task_;
   int row_floats_;

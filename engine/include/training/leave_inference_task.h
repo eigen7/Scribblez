@@ -3,6 +3,11 @@
 // The leave inference training task (docs/plans/deep_bot_v0.md, "Rows"): a
 // pre-move row from the observer's side, LeaveInferenceInputEncoder's input,
 // labelled with the opponent's leave from replay.
+//
+// The public task writes the public view of the same input. Its target is
+// unchanged, the observer's leave pool included: a public model's tilt applies
+// on top of the prior over whichever pool its consumer knows, and training it
+// against the observer's pool is that use.
 
 #include "encoding/encode_context.h"
 #include "encoding/leave_inference_input_encoder.h"
@@ -42,7 +47,11 @@ struct OppLeaveTarget {
   static void encode(const EncodeContext& ctx, float* out);
 };
 
-struct LeaveInferenceTask {
+// Writes one row: the input as `view` sees it, then the OppLeaveTarget.
+void encode_leave_inference_row(const EncodeContext& ctx, LeaveInferenceView view, float* out_row);
+
+template <LeaveInferenceView kView>
+struct LeaveInferenceTaskOf {
   // PositionEncoder records the history this task reads.
   static constexpr bool kRecordsLeaveHistory = true;
 
@@ -50,7 +59,12 @@ struct LeaveInferenceTask {
   static constexpr int kLabelFloats = OppLeaveTarget::kFloats;
   static constexpr int kRowFloats = kInputFloats + kLabelFloats;
 
-  static void encode_row(const EncodeContext& ctx, float* out_row);
+  static void encode_row(const EncodeContext& ctx, float* out_row) {
+    encode_leave_inference_row(ctx, kView, out_row);
+  }
 };
+
+using LeaveInferenceTask = LeaveInferenceTaskOf<LeaveInferenceView::kObserver>;
+using PublicLeaveInferenceTask = LeaveInferenceTaskOf<LeaveInferenceView::kPublic>;
 
 }  // namespace scribblez

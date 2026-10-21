@@ -36,8 +36,9 @@ class LeaveInferenceNet {
   };
 
   // Loads params.onnx_path. Throws util::CleanException unless the model's
-  // `leave_values` entry is `leave_values_hash` (LeaveValues::content_hash)
-  // and its input widths are this engine's encoder's.
+  // `leave_values` entry is `leave_values_hash` (LeaveValues::content_hash),
+  // it reads the observer's view (not LeaveInferenceView::kPublic), and its
+  // input widths are this engine's encoder's.
   LeaveInferenceNet(const Params& params, const std::string& leave_values_hash);
 
   int max_rows() const { return net_.max_rows(); }

@@ -1353,6 +1353,37 @@ TEST(LeaveInference, OpponentExchangeTilesStayHidden) {
   EXPECT_NE(encode_with(0, "QRS", "QRS"), encode_with(0, "QRS", "XYZ"));
 }
 
+// A public row reads none of the observer's own tiles: not their rack, their
+// exchanges, nor the leave_kinds their view of the unseen pool sets. An
+// observer row reads each of them.
+TEST(LeaveInference, PublicRowsHideTheObserversTiles) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  Board board;
+  const auto encode_with = [&](LeaveInferenceView view, const char* rack, const char* exchanged,
+                               uint32_t leave_kinds) {
+    LeaveHistory history;
+    LeaveHistorySlot& slot = history.slots[0];
+    slot.present = true;
+    slot.move = Move::exchange(TileCounts::from_string("QRS"));
+    slot.forgone.margin.fill(10);
+    slot.leave_kinds = leave_kinds;
+    history.observer_exchanges[0] = Rack::from_string(exchanged);
+    const LeaveInferenceInput in{&board, Rack::from_string(rack), 0, 80, 4, &history, view};
+    std::vector<float> row(Encoder::kInputFloats);
+    Encoder::encode(in, dict, row.data());
+    return row;
+  };
+  for (const LeaveInferenceView view :
+       {LeaveInferenceView::kObserver, LeaveInferenceView::kPublic}) {
+    const bool hidden = view == LeaveInferenceView::kPublic;
+    const std::vector<float> base = encode_with(view, "ABCDEFG", "", ~0u);
+    EXPECT_EQ(hidden, base == encode_with(view, "HIJKLMN", "", ~0u));
+    EXPECT_EQ(hidden, base == encode_with(view, "ABCDEFG", "XYZ", ~0u));
+    EXPECT_EQ(hidden, base == encode_with(view, "ABCDEFG", "", 1u));
+  }
+}
+
 // Each block of a decoded row holds what the header's layout says, at its
 // offset: the current position's planes and scalars, and per history slot its
 // placement plane, pre-move cross-checks and scalars.

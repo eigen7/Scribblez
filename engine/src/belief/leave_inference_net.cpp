@@ -25,8 +25,8 @@ nn::NeuralNetParams<nn::LeaveInferenceSpec> net_params(const LeaveInferenceNet::
   return np;
 }
 
-void check_leave_values(const std::string& onnx_path, const std::string& expected) {
-  const nn::OnnxMetadata meta = nn::parse_onnx_metadata(util::read_file_bytes(onnx_path));
+void check_leave_values(const nn::OnnxMetadata& meta, const std::string& onnx_path,
+                        const std::string& expected) {
   const auto it = meta.entries.find("leave_values");
   const std::string declared = it == meta.entries.end() ? "(none)" : it->second;
   if (declared != expected) {
@@ -37,11 +37,23 @@ void check_leave_values(const std::string& onnx_path, const std::string& expecte
   }
 }
 
+// Every consumer encodes the observer's view, which a public model was not
+// trained on.
+void check_observer_view(const nn::OnnxMetadata& meta, const std::string& onnx_path) {
+  if (meta.int_entry("leave_inference_public", 0) != 0) {
+    throw util::CleanException(
+      "{} is a public leave inference model, and no consumer encodes its public view yet",
+      onnx_path);
+  }
+}
+
 }  // namespace
 
 LeaveInferenceNet::LeaveInferenceNet(const Params& params, const std::string& leave_values_hash)
     : net_(net_params(params)) {
-  check_leave_values(params.onnx_path, leave_values_hash);
+  const nn::OnnxMetadata meta = nn::parse_onnx_metadata(util::read_file_bytes(params.onnx_path));
+  check_leave_values(meta, params.onnx_path, leave_values_hash);
+  check_observer_view(meta, params.onnx_path);
   net_.load();
   // The format version gate makes these hold for any model it admits; a
   // mismatch would otherwise misread every row.
