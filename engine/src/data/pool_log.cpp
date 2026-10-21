@@ -38,6 +38,9 @@ PoolFileHeader make_header(const PoolSources& s) {
   set_field(h.win_table_hash, s.win_table_hash, "win table hash");
   set_field(h.win_table_tag, s.win_table_tag, "win table tag");
   set_field(h.leave_model_hash, s.leave_model_hash, "leave model hash");
+  set_field(h.leave_model_tag, s.leave_model_tag, "leave model tag");
+  h.leave_model_generation = s.leave_model_generation;
+  h.leave_model_format_version = s.leave_model_format_version;
   return h;
 }
 
@@ -49,6 +52,9 @@ PoolSources PoolSources::of(const PoolFileHeader& h) {
           .win_table_generation = h.win_table_generation,
           .win_table_format_version = h.win_table_format_version,
           .leave_model_hash = get_field(h.leave_model_hash),
+          .leave_model_tag = get_field(h.leave_model_tag),
+          .leave_model_generation = h.leave_model_generation,
+          .leave_model_format_version = h.leave_model_format_version,
           .horizon_plies = h.horizon_plies,
           .rollouts = int(h.rollouts)};
 }
@@ -59,6 +65,10 @@ const char* PoolSources::first_difference(const PoolSources& o) const {
   if (win_table_generation != o.win_table_generation) return "win table generation";
   if (win_table_format_version != o.win_table_format_version) return "win table format version";
   if (leave_model_hash != o.leave_model_hash) return "leave model";
+  if (leave_model_tag != o.leave_model_tag) return "leave model tag";
+  if (leave_model_generation != o.leave_model_generation) return "leave model generation";
+  if (leave_model_format_version != o.leave_model_format_version)
+    return "leave model format version";
   if (horizon_plies != o.horizon_plies) return "horizon";
   if (rollouts != o.rollouts) return "rollout budget";
   return nullptr;

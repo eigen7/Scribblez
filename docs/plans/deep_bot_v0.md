@@ -620,9 +620,13 @@ A generator worker's cycle:
 opponent's leave belief:
 
 - **With the flag,** the tool runs the leave inference model once per
-  position, from the chooser's view. It samples one leave per rollout with
-  `LeaveSampler`, from a seeded variate, and adds a uniform refill from the
-  rest of the unseen pool.
+  position, from the chooser's view. Its input is the training row itself,
+  decoded from the `.slog` and its `.forgone` sidecar
+  (`belief/slog_leave_beliefs.h`), so the generator runs `forgone_play_tool`
+  first. It samples one leave per rollout with `LeaveSampler`, from a seeded
+  variate, and the rollout draws the rest of the rack from the unseen pool.
+  Where the leave is not modelled (turn 0, after a pass, an empty leave, or
+  an empty bag), the whole rack is drawn uniformly.
 - **Without it,** the opponent's whole rack is drawn uniformly from the
   unseen pool, which is today's hidden-leaves behavior.
 

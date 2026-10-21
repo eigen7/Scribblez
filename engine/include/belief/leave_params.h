@@ -14,6 +14,7 @@
 #include "game/tile.h"
 
 #include <array>
+#include <functional>
 
 namespace scribblez::belief {
 
@@ -27,5 +28,11 @@ struct LeaveParams {
 
 // A row of the exported output copies straight in.
 static_assert(sizeof(LeaveParams) == sizeof(float) * LeaveParams::kFloats);
+
+// The model's LeaveParams for `count` input rows of
+// LeaveInferenceInputEncoder::kInputFloats each: the served model
+// (LeaveInferenceNet), or a stub in tests. Called from several threads at
+// once, so it must be thread-safe.
+using LeaveParamsFn = std::function<void(const float* rows, int count, LeaveParams* out)>;
 
 }  // namespace scribblez::belief
