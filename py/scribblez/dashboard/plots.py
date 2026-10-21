@@ -346,6 +346,8 @@ POLICY_SET_QUALITY = (
             ["loss_greedy_gain", "greedy_eval_loss_gain"],
         ),
         ("ms to build 256 sets of 8", ["slot_eval_set_ms", "greedy_eval_set_ms"]),
+        # Per form: each form's gradient is clipped on its own.
+        ("Gradient norm before clipping, by form", ["grad_norm_slot", "grad_norm_greedy"]),
         ("Pools", ["pools", "eval_pools"]),
         ("Mean candidates per pool", ["pool_size", "eval_pool_size"]),
         ("Mean label entropy (nats)", ["label_entropy", "eval_label_entropy"]),

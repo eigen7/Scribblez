@@ -336,3 +336,33 @@ def test_the_greedy_form_overfits_a_pool_and_builds_distinct_sets(chunk):
     assert losses[-1] < losses[0]
     (picks,) = form.sets(m, batch, 8)
     assert len(picks) == min(8, len(items[0].pool.moves)) and len(set(picks)) == len(picks)
+
+
+class _TrueGainModel:
+    """A GreedyModel stand-in whose gains are the true margins over the chosen
+    set, plus a tiebreak toward higher value."""
+
+    def __init__(self, value: torch.Tensor):
+        self.value = value
+
+    def cache(self, batch):
+        return None, None
+
+    def gains(self, enc, h, pos_id, rows):
+        move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
+        target = greedy.gain_targets(self.value, rows, move_idx, row_id)
+        return target + 1e-3 * self.value[move_idx], move_idx, row_id
+
+
+@pytest.mark.parametrize(
+    "n, expected", [(8, [[1, 2, 0], [0], [2, 4, 3, 1, 0]]), (2, [[1, 2], [0], [2, 4]])]
+)
+def test_greedy_picks_are_each_positions_own_local_indices(n, expected):
+    # Pools of 3, 1 and 5 candidates: picks are local to each pool, stop at
+    # its size, and follow the value order.
+    value = torch.tensor([0.3, 0.9, 0.5, 0.2, 0.1, 0.4, 0.8, 0.6, 0.7])
+    batch = {
+        "move_pos_id": torch.tensor([0, 0, 0, 1, 2, 2, 2, 2, 2]),
+        "input_spatial": torch.zeros(3, 1),
+    }
+    assert greedy.greedy_picks(_TrueGainModel(value), batch, n) == expected

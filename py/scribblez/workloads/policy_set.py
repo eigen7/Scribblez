@@ -40,7 +40,7 @@ from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
-from scribblez.policy_set import FORM_BOTH, FORMS, POOL_SUFFIX
+from scribblez.policy_set import FORM_BOTH, FORM_CHOICES, POOL_SUFFIX
 from scribblez.workloads.base import (
     RoleSpec,
     StatsSpec,
@@ -114,7 +114,7 @@ class PolicySetParams:
     forms: str = param(
         FORM_BOTH,
         "which forms of the policy-set model to train: 'slot', 'greedy', or 'both' side by side",
-        choices=FORMS,
+        choices=FORM_CHOICES,
     )
     trunk_channels: int = param(128, "board trunk and candidate vector width")
     num_blocks: int = param(8, "board trunk residual blocks")

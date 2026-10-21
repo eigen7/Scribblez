@@ -4,8 +4,8 @@ and the time each takes to build a batch of sets (docs/plans/deep_bot_v0.md,
 
 The forms train side by side on the same batches (forms.FORMS): one
 optimizer over every form's parameters, the summed loss, each form's
-gradient clipped on its own. Its forward runs under bf16 autocast; the losses
-run in FP32. Record keys carry the form's name: "loss_<form>_<term>" for its
+gradient clipped on its own. Each form's forward runs under bf16 autocast;
+the losses run in FP32. Record keys carry the form's name: "loss_<form>_<term>" for its
 training loss terms, "<form>_eval_..." for its held-out metrics.
 """
 

@@ -91,7 +91,7 @@ recorded beside the format version but never checked as a format.
 | Leave inference ONNX | metadata `leave_inference_format_version`, covering the encoder's inputs and the 29-float output layout. `LeaveInferenceSpec::kVersions` gates it and rejects a missing entry. Also stamped: `leave_values`, the content hash of the KLV whose values it was trained against, checked at load; `leave_inference_public`, stamped by public-task exports (absent reads as 0) and refused at load when 1 | metadata `tag`, `generation`, `policy` (the `hasty_spec` string), `head` |
 | Leave inference checkpoint | `leave_inference_format_version` and the `leave_values` hash in the checkpoint config. Resuming with a different value is refused, as the evidence trainer refuses a mismatched `move_encoding_version` | `GenerationalState` |
 | Pool sidecar | `kPoolFormatVersion` in its header, after the magic | header: the win table's and the leave inference model's identities (tag, generation, format version), or uniform beliefs; `horizon_plies` |
-| Policy-set ONNX and checkpoints | the existing `input_encoding_version` and `move_encoding_version`, plus `policy_set_format_version` for each form's set-conditioning stage and outputs | `tag`, `generation`, `form` |
+| Policy-set ONNX and checkpoints | the existing `input_encoding_version` and `move_encoding_version`, plus `policy_set_format_version` (`kPolicySetFormatVersion`) for the opponent-rack and equity inputs and each form's set-conditioning stage and outputs | `tag`, `generation`, `form` |
 
 Every format constant is a C++ constant, exported to Python through
 `format_layout()["constants"]` as the `.slog` and `.mset` versions are.
