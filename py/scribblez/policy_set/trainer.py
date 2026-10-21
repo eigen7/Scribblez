@@ -9,7 +9,8 @@ holds `holdout_chunks`. Per generation, once the cursor generation is
 complete, it trains each form one epoch over the window's pools, evaluates
 the forms and the baseline on the held-out pools (policy_set/metrics.py),
 checkpoints, and delivers the checkpoint, the cursor and last the record.
-Each form's record keys carry its name as a prefix, the baseline's "equity_".
+Each form's eval keys carry its name as a prefix, the baseline's "equity_";
+its training losses are "loss_<form>_<N>", the Loss tab's naming.
 
 The checkpoint config records the policy-set format version and the board-row
 and move encoding versions; a checkpoint written under others is refused
@@ -34,7 +35,7 @@ from scribblez.generational.records import TrainRecorder
 from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.paths import TagPaths
 from scribblez.policy_set import FORM_SLOT, dataset, metrics, pools, train_loop
-from scribblez.policy_set.model import SET_SIZES, PolicySetEncoder, SlotModel, trunk_scalar
+from scribblez.policy_set.model import PolicySetEncoder, SlotModel, trunk_scalar
 from scribblez.position_eval.trainer import OutputDeliverer, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
@@ -164,7 +165,7 @@ def train_one_generation(model, optimizer, optim_arm, recorder, paths, params, s
     record = {
         "epoch": gen,
         "loss": result.loss,
-        **{f"{SLOT}loss_{n}": v for n, v in result.loss_by_n.items()},
+        **{f"loss_{SLOT}{n}": v for n, v in result.loss_by_n.items()},
         "grad_norm_mean": result.grad_norm,
         "lr": optim_arm.current,
         "elapsed_s": elapsed,
@@ -234,7 +235,7 @@ def run(ctx: WorkerContext) -> int:
         ctx.tag,
         asdict(params),
         n_params,
-        {f"{SLOT}loss_{n}": 1.0 for n in SET_SIZES if n <= params.slots},
+        {f"loss_{SLOT}{n}": 1.0 for n in metrics.SET_SIZES if n <= params.slots},
         {},
     )
     run_ctx = {

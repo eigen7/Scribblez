@@ -723,10 +723,10 @@ of them; later held-out chunks are deleted. The trainer evaluates on the set.
   beside the generations, so the pools survive a trainer moving between
   machines. Being one directory with a manifest, it travels exactly as a
   generation does: pulled once complete, seeded acknowledged.
-- **The baseline.** Until the forms exist (step 8), the trainer trains
-  nothing: per generation it records the generation's pool statistics and
-  the static-equity top N's metrics on the held-out set, under the `equity_`
-  key prefix.
+- **The baseline.** Beside the forms it trains (steps 8a and 8b), the
+  trainer records per generation the window's pool statistics and the
+  static-equity top N's metrics on the held-out set, under the `equity_` key
+  prefix.
 
 ### Inputs at train time
 

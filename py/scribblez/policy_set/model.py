@@ -32,10 +32,14 @@ from scribblez.move_set_eval.model import (
 )
 from scribblez.move_set_eval.moves import move_cross_slots, move_encoding_dims
 from scribblez.policy_set.dataset import OPP_RACK_FLOATS
+from scribblez.policy_set.metrics import SET_SIZES
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 
-# The set sizes the coverage loss sums over and the eval reads.
-SET_SIZES = (1, 2, 4, 8, 16)
+# Below this cover probability the coverage loss uses its first-order form.
+NEARLY_MISSED = 1e-4
+# log p floor in the coverage loss: finite at padding, and far below any
+# real candidate's log-probability.
+LOG_P_FLOOR = -1e4
 
 
 def trunk_scalar(batch: dict[str, torch.Tensor]) -> torch.Tensor:
@@ -155,15 +159,29 @@ def coverage_loss(
     (P, slots, maxK), `q_grid` (P, maxK) with 0 at padding."""
     if sizes is None:
         sizes = tuple(n for n in SET_SIZES if n <= logits.shape[1])
-    p = F.softmax(logits.float(), dim=-1)
-    # log prod (1 - p_k), accumulated over slots; clamped below 0 so that a
+    # Floored so padding (-inf) stays finite; q is 0 there.
+    log_p = F.log_softmax(logits.float(), dim=-1).clamp(min=LOG_P_FLOOR)
+    # log prod (1 - p_k), accumulated over slots; p clamped below 1 so that a
     # move no slot can miss stays finite.
-    miss = torch.cumsum(torch.log1p(-p.clamp(max=1 - 1e-6)), dim=1)  # (P, slots, maxK)
+    miss = torch.cumsum(torch.log1p(-log_p.exp().clamp(max=1 - 1e-6)), dim=1)
+    cum_log_p = torch.logcumsumexp(log_p, dim=1)  # log sum_{k<=n} p_k
     out = {}
     for n in sizes:
-        log_cover = torch.log(-torch.expm1(miss[:, n - 1].clamp(max=-1e-7)))  # (P, maxK)
+        log_cover = _log_cover(miss[:, n - 1], cum_log_p[:, n - 1])  # (P, maxK)
         out[n] = -(q_grid * log_cover).sum(dim=1).mean()
     return out
+
+
+def _log_cover(miss: torch.Tensor, log_p_sum: torch.Tensor) -> torch.Tensor:
+    """log(1 - exp(miss)), the log-probability some slot of the prefix picks
+    the move. Where the prefix nearly misses it, log(-expm1(miss)) loses its
+    gradient to rounding, so the first-order form log sum p_k stands in, off
+    by a relative O(sum p_k) there."""
+    nearly_missed = miss > -NEARLY_MISSED
+    # The unused branch's input is kept finite: torch.where would otherwise
+    # pass its NaN gradient through.
+    exact = torch.log(-torch.expm1(torch.where(nearly_missed, -1.0, miss)))
+    return torch.where(nearly_missed, log_p_sum, exact)
 
 
 def slot_picks(logits: torch.Tensor, pad: torch.Tensor) -> list[list[int]]:
@@ -173,8 +191,10 @@ def slot_picks(logits: torch.Tensor, pad: torch.Tensor) -> list[list[int]]:
     for pos_logits, pos_pad in zip(logits.float().cpu(), pad.cpu(), strict=True):
         n_moves = int((~pos_pad).sum())
         taken: list[int] = []
-        for slot in pos_logits[:, :n_moves]:
-            order = torch.argsort(slot, descending=True).tolist()
+        # A slot passes over at most the earlier slots' picks, so its top
+        # `slots` candidates hold its choice.
+        k = min(pos_logits.shape[0], n_moves)
+        for order in torch.topk(pos_logits[:, :n_moves], k, dim=1).indices.tolist():
             taken.append(next(m for m in order if m not in taken))
             if len(taken) == n_moves:
                 break

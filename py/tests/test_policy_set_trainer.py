@@ -18,6 +18,7 @@ if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
 import torch  # noqa: E402
 from cloud.sinks import LocalSink  # noqa: E402
 from scribblez import ffi, workloads  # noqa: E402
+from scribblez.dashboard import plots  # noqa: E402
 from scribblez.generational import lifecycle  # noqa: E402
 from scribblez.generational.checkpoint import GenerationalState  # noqa: E402
 from scribblez.generational.optim import build_optim_arm, build_optimizer  # noqa: E402
@@ -88,6 +89,18 @@ def test_coverage_loss_is_the_log_probability_the_prefix_covers_the_best_move():
     loss = model.coverage_loss(logits, q, sizes=(1, 2))
     assert loss[1].item() == pytest.approx(-np.log(0.5))
     assert loss[2].item() == pytest.approx(-np.log(1 - 0.5 * 0.75))
+
+
+@pytest.mark.parametrize("gap", [20.0, 200.0])
+def test_the_coverage_loss_keeps_its_gradient_on_a_confidently_missed_move(gap):
+    # Both slots put move 0 `gap` logits above move 1, which holds 30% of q.
+    logits = torch.tensor([[[gap, 0.0], [gap, 0.0]]], requires_grad=True)
+    q = torch.tensor([[0.7, 0.3]])
+    loss = model.coverage_loss(logits, q, sizes=(2,))[2]
+    loss.backward()
+    # The cover of move 1 is about 2 exp(-gap): its loss term is 0.3 * (gap - log 2).
+    assert loss.item() == pytest.approx(0.3 * (gap - np.log(2)), rel=1e-3)
+    assert logits.grad[0, :, 1].min() < -0.1
 
 
 def test_a_slot_whose_move_is_taken_falls_back_to_its_next_choice():
@@ -172,8 +185,44 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
     assert (state.generation_index, state.rows_trained) == (1, 2)
     for key in ("loss", "slot_eval_recall_8", "equity_eval_recall_8", "slot_eval_set_ms"):
         assert np.isfinite(record[key]), key
+    # The dashboard's figures read the record's keys; only set sizes past the
+    # slots are absent.
+    for _, keys in plots.POLICY_SET_QUALITY:
+        for key in keys:
+            assert key in record or int(key.rsplit("_", 1)[1]) > TINY.slots, key
     assert paths.rolling_checkpoint.exists()
     assert lifecycle.read_train_state(paths) == {"generation_index": 1, "rows_trained": 2}
+
+
+class _BestFirstModel(torch.nn.Module):
+    """Every slot ranks a position's candidates by their q."""
+
+    def forward(self, batch):
+        num_positions = batch["input_spatial"].shape[0]
+        grid, pad = model.to_grid(batch["q"], batch["move_pos_id"], num_positions)
+        logits = grid.masked_fill(pad, float("-inf")).unsqueeze(1).expand(-1, 2, -1)
+        return logits, pad
+
+
+class _LabelBatcher:
+    """A PoolBatcher stand-in carrying only what evaluate reads."""
+
+    def build(self, items):
+        q = [torch.from_numpy(it.pool.q) for it in items]
+        return {
+            "input_spatial": torch.zeros(len(items), 1),
+            "q": torch.cat(q),
+            "move_pos_id": torch.cat([torch.full((len(x),), j) for j, x in enumerate(q)]),
+        }
+
+
+def test_evaluate_scores_each_pool_by_its_own_slots():
+    # The leaders sit at different indices, and 3 pools span 2 batches, so a
+    # pick read against the wrong pool misses.
+    pool_c = _pool([0.1, 0.2, 0.7], [0.40, 0.45, 0.50], [0, 1, 2])
+    items = [dataset.PoolItem(Path("x.slog"), p) for p in (POOL_A, POOL_B, pool_c)]
+    m = train_loop.evaluate(_BestFirstModel(), _LabelBatcher(), items, torch.device("cpu"), 2, "s_")
+    assert (m["s_eval_recall_1"], m["s_eval_regret_1"]) == (1, 0)
 
 
 def test_a_checkpoint_from_another_version_is_refused(tmp_path):
@@ -190,3 +239,12 @@ def test_the_workload_registers_gpu_generators_and_a_gpu_data_home_trainer():
     assert spec.role("generate").gpu and spec.role("train").gpu
     assert spec.role("train").singleton and spec.role("train").ingest
     assert spec.finalize and spec.role("generate").inputs
+
+
+def test_a_checkpoint_from_this_version_or_none_resumes(tmp_path):
+    paths = TagPaths("t", "policy_set", tmp_path)
+    config = trainer.versions()
+    trainer.check_resumable(paths, config)  # no checkpoint
+    paths.rolling_checkpoint.parent.mkdir(parents=True)
+    torch.save({"config": dict(config)}, paths.rolling_checkpoint)
+    trainer.check_resumable(paths, config)
