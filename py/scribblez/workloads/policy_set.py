@@ -35,11 +35,12 @@ from pathlib import Path
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez import params as params_mod
+from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
-from scribblez.policy_set import POOL_SUFFIX
+from scribblez.policy_set import FORM_SLOT, FORMS, POOL_SUFFIX
 from scribblez.workloads.base import (
     RoleSpec,
     StatsSpec,
@@ -109,6 +110,28 @@ class PolicySetParams:
     max_rows: int = param(
         -1, "stop the trainer after this many pools (-1 = run until paused)", end=True
     )
+    # The model.
+    forms: str = param(FORM_SLOT, "which form of the policy-set model to train", choices=FORMS)
+    trunk_channels: int = param(128, "board trunk and candidate vector width")
+    num_blocks: int = param(8, "board trunk residual blocks")
+    num_heads: int = param(4, "attention heads")
+    slots: int = param(16, "slot form: query slots, the largest set it builds")
+    slot_layers: int = param(2, "slot form: decoder layers")
+    # Optimization.
+    batch_size: int = param(8, "pools per batch, each with all its candidates")
+    optimizer: str = param(
+        OPTIMIZER_SCHEDULE_FREE,
+        "optimizer arm (scribblez/generational/optim.py): 'wsd', 'muon' or 'schedule_free'",
+        choices=OPTIMIZERS,
+    )
+    lr: float = param(0.0, "learning rate; 0 = the arm's own default")
+    lr_warmup_rows: int = param(20_000, "linear LR warmup length, in pools trained")
+    lr_cycle_rows: int = param(
+        200_000, "period of the WSD schedule's cycle, in pools trained; unused by schedule_free"
+    )
+    weight_decay: float = param(1e-4, "AdamW weight decay on weight matrices and conv kernels")
+    adam_beta2: float = param(0.999, "Adam's second-moment decay rate (beta2)")
+    grad_clip: float = param(1.0, "clip each step's gradient to this global norm; 0 = no clipping")
 
 
 def _source_paths(params: PolicySetParams, mount_root: Path) -> TagPaths:
@@ -256,14 +279,19 @@ SPEC = WorkloadSpec(
         ),
         RoleSpec(
             name="train",
-            title="Trainer",
+            title="Trainer (GPU)",
             runner="scribblez.policy_set.trainer:run",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
             runtime=RUNTIME_TORCH,
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
             kinds=("local", "ssh"),
-            stats=StatsSpec(unit="pools", phases={"eval_s": "eval"}),
+            gpu=True,
+            stats=StatsSpec(
+                unit="pools",
+                phases={"train_s": "train", "eval_s": "eval", "upload_s": "upload"},
+                background=frozenset({"upload_s"}),  # the trainer's OutputDeliverer thread
+            ),
         ),
     ),
     scheduler=TICK_FOR_TASK,

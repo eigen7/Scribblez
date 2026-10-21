@@ -126,9 +126,9 @@ def _leave_inference_metrics(conn, params, mount_root):
 
 
 def _policy_set_metrics(conn, params, mount_root):
-    """policy_set's Training tab: the baseline's coverage of the held-out
-    pools and the pools' statistics."""
-    groups = plots.POLICY_SET_QUALITY
+    """policy_set's Training tab: the generic curves, the forms' coverage of
+    the held-out pools beside the baseline's, and the pools' statistics."""
+    groups = plots.TRAINING + plots.POLICY_SET_QUALITY
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 

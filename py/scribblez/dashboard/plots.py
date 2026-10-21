@@ -305,31 +305,50 @@ LEAVE_INFERENCE_QUALITY = [
     ),
 ]
 # The policy-set read (scribblez/policy_set/trainer.py's record, its metrics
-# from policy_set/metrics.py): each chooser's coverage of the held-out pools'
-# sim-best moves, one curve per set size N, and what the pools are like, the
-# generation's beside the held-out set's. The static-equity baseline carries
-# the "equity_" prefix.
+# from policy_set/metrics.py): on the held-out pools, each form's sets against
+# the static-equity top N (the "equity_" prefix) at each set size N, the slot
+# form's coverage loss per N, and what the pools are like, the window's beside
+# the held-out set's.
 POLICY_SET_SIZES = (1, 2, 4, 8, 16)
-POLICY_SET_QUALITY = [
-    (
-        f"Static-equity top N: {title} (held-out)",
-        [f"equity_eval_{metric}_{n}" for n in POLICY_SET_SIZES],
-    )
-    for title, metric in (
-        ("recall of the sim-best move", "recall"),
-        ("cover (q in the set)", "cover"),
-        ("regret (win probability)", "regret"),
-        ("recall where the sim-best is outside the top 10", "tail_recall"),
-    )
-] + [
-    ("Pools per generation", ["pools", "eval_pools"]),
-    ("Mean candidates per pool", ["pool_size", "eval_pool_size"]),
-    ("Mean label entropy (nats)", ["label_entropy", "eval_label_entropy"]),
-    (
-        "Share of pools whose sim-best is outside the equity top 10",
-        ["tail_share", "eval_tail_share"],
-    ),
-]
+POLICY_SET_FORMS = ("slot", "equity")
+POLICY_SET_QUALITY = (
+    [
+        (
+            f"{title} at N={n} (held-out)",
+            [f"{form}_eval_{metric}_{n}" for form in POLICY_SET_FORMS],
+        )
+        for title, metric in (
+            ("Recall of the sim-best move", "recall"),
+            ("Regret (win probability)", "regret"),
+        )
+        for n in POLICY_SET_SIZES
+    ]
+    + [
+        (
+            f"Slot form: {title} by N (held-out)",
+            [f"slot_eval_{metric}_{n}" for n in POLICY_SET_SIZES],
+        )
+        for title, metric in (
+            ("cover (q in the set)", "cover"),
+            ("recall where the sim-best is outside the equity top 10", "tail_recall"),
+        )
+    ]
+    + [
+        ("Slot form: coverage loss by N (training)", [f"slot_loss_{n}" for n in POLICY_SET_SIZES]),
+        (
+            "Slot form: coverage loss by N (held-out)",
+            [f"slot_eval_loss_{n}" for n in POLICY_SET_SIZES],
+        ),
+        ("Slot form: ms to build 256 sets of 8", ["slot_eval_set_ms"]),
+        ("Pools", ["pools", "eval_pools"]),
+        ("Mean candidates per pool", ["pool_size", "eval_pool_size"]),
+        ("Mean label entropy (nats)", ["label_entropy", "eval_label_entropy"]),
+        (
+            "Share of pools whose sim-best is outside the equity top 10",
+            ["tail_share", "eval_tail_share"],
+        ),
+    ]
+)
 # Figures per row of every learning-curve grid.
 SERIES_NCOLS = 2
 

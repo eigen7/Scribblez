@@ -1,9 +1,11 @@
 """The policy_set workload's trainer side: the set metrics
-(scribblez.policy_set.metrics), the baseline-scoring generation loop
+(scribblez.policy_set.metrics), the slot form and its coverage loss
+(scribblez.policy_set.model), a generation's training and eval end to end
 (scribblez.policy_set.trainer), and the workload's registration."""
 
+import shutil
+from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -13,11 +15,21 @@ _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
     pytest.skip("libscribblez_ffi.so not built -- run py/build.py first", allow_module_level=True)
 
+import torch  # noqa: E402
+from cloud.sinks import LocalSink  # noqa: E402
 from scribblez import ffi, workloads  # noqa: E402
 from scribblez.generational import lifecycle  # noqa: E402
+from scribblez.generational.checkpoint import GenerationalState  # noqa: E402
+from scribblez.generational.optim import build_optim_arm, build_optimizer  # noqa: E402
+from scribblez.leave_inference import win_table  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
-from scribblez.policy_set import metrics, pools, trainer  # noqa: E402
-from scribblez.workloads.policy_set import PolicySetParams  # noqa: E402
+from scribblez.policy_set import dataset, metrics, model, pools, train_loop, trainer  # noqa: E402
+from scribblez.position_eval.trainer import OutputDeliverer  # noqa: E402
+from scribblez.selfplay import run_games  # noqa: E402
+from scribblez.workloads import policy_set  # noqa: E402
+from scribblez.workloads.policy_set import BELIEFS_UNIFORM, PolicySetParams  # noqa: E402
+
+LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
 
 def _pool(q, win, rank) -> pools.Pool:
@@ -67,50 +79,114 @@ def test_pool_stats():
     assert s["eval_label_entropy"] > 0
 
 
-def _write_pool_file(path: Path, pool_list: list[pools.Pool]):
-    """A .pool file of `pool_list`, laid out as the engine writes one."""
-    hdr = np.zeros(1, ffi.struct_dtype("PoolFileHeader"))
-    hdr["magic"], hdr["version"] = pools.POOL["magic"], pools.POOL["version"]
-    hdr["num_positions"] = len(pool_list)
-    parts = [hdr.tobytes()]
-    for p in pool_list:
-        ph = np.zeros(1, ffi.struct_dtype("PoolPositionHeader"))
-        ph["num_candidates"] = len(p.q)
-        rack = np.zeros(1, ffi.struct_dtype("PoolOppRack"))
-        c = np.zeros(len(p.q), ffi.struct_dtype("PoolCandidate"))
-        c["q"], c["win_prob"], c["equity_rank"] = p.q, p.win_prob, p.equity_rank
-        parts += [ph.tobytes(), rack.tobytes(), c.tobytes()]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"".join(parts))
+def test_coverage_loss_is_the_log_probability_the_prefix_covers_the_best_move():
+    # One position, 2 slots over 3 moves (the third padding); the best is move 0.
+    p1, p2 = torch.tensor([0.5, 0.5]), torch.tensor([0.25, 0.75])
+    logits = torch.stack([p1.log(), p2.log()]).unsqueeze(0)
+    logits = torch.cat([logits, torch.full((1, 2, 1), float("-inf"))], dim=2)
+    q = torch.tensor([[1.0, 0.0, 0.0]])
+    loss = model.coverage_loss(logits, q, sizes=(1, 2))
+    assert loss[1].item() == pytest.approx(-np.log(0.5))
+    assert loss[2].item() == pytest.approx(-np.log(1 - 0.5 * 0.75))
 
 
-def _complete(dir_: Path):
-    lifecycle.write_manifest(dir_, {"status": lifecycle.GENERATING})
-    lifecycle.mark_complete(dir_, 1)
+def test_a_slot_whose_move_is_taken_falls_back_to_its_next_choice():
+    logits = torch.tensor([[[3.0, 2.0, 1.0], [3.0, 1.0, 2.0], [3.0, 2.0, 1.0]]])
+    pad = torch.tensor([[False, False, False]])
+    assert model.slot_picks(logits, pad) == [[0, 2, 1]]
+    # Fewer candidates than slots: the set stops at every candidate.
+    assert model.slot_picks(logits[:, :, :2], pad[:, :2]) == [[0, 1]]
 
 
-def test_each_generation_records_the_baseline_and_advances_the_cursor(tmp_path):
+@pytest.fixture(scope="module")
+def chunk(tmp_path_factory) -> Path:
+    """A one-game chunk surveyed into 2 pools under uniform beliefs."""
+    if not LEAVES.exists():
+        pytest.skip("HastyBot leave values not installed")
+    tmp = tmp_path_factory.mktemp("chunk")
+    chunk = tmp / "chunk"
+    assert run_games(chunk, num_games=1, threads=2, player_spec="--type=hastybot-endgame") == 0
+    table = tmp / "table.csv"
+    spread = np.arange(-win_table.max_spread(), win_table.max_spread() + 1)
+    grid = np.repeat(1 / (1 + np.exp(-spread / 30))[:, None], win_table.max_unseen() + 1, axis=1)
+    win_table.write(table, grid, {"tag": "li", "generation": 3})
+    p = PolicySetParams(leave_beliefs=BELIEFS_UNIFORM, rollouts=4, positions_per_game=2)
+    policy_set.write_pools(p, table, None, chunk, threads=4)
+    return chunk
+
+
+# The smallest model that exercises every layer, on the CPU.
+TINY = PolicySetParams(
+    trunk_channels=16, num_blocks=1, num_heads=2, slots=4, slot_layers=1, batch_size=2
+)
+
+
+def test_the_slot_form_overfits_a_pool(chunk):
+    items = dataset.read_items([chunk])[:1]
+    batch = dataset.PoolBatcher().build(items)
+    assert batch["opp_rack"].shape == (len(items), dataset.OPP_RACK_FLOATS)
+    torch.manual_seed(0)
+    m = trainer.build_slot_model(replace(TINY, slots=16))
+    logits, pad = train_loop.slot_forward(m, batch)
+    assert logits.shape == (len(items), 16, pad.shape[1])
+    opt = torch.optim.Adam(m.parameters(), lr=3e-3)
+    first = None
+    for _ in range(4):
+        total, _ = train_loop.slot_loss(train_loop.slot_forward(m, batch)[0], batch)
+        opt.zero_grad()
+        total.backward()
+        opt.step()
+        first = first if first is not None else total.item()
+    assert total.item() < first
+
+
+def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypatch):
     paths = TagPaths("t", "policy_set", tmp_path)
-    _write_pool_file(paths.generation_dir(0) / "a.pool", [POOL_A, POOL_B, POOL_A])
-    _complete(paths.generation_dir(0))
-    _write_pool_file(paths.held_out_chunks_dir / "h.pool", [POOL_A, POOL_B])
-    committed = []
-    recorder = SimpleNamespace(
-        commit_generation=lambda g, rows, rec: committed.append((g, rows, rec))
-    )
-    home = SimpleNamespace(remote=False, check=lambda: None)
-    stats = SimpleNamespace(cycle_done=lambda phases, units, nbytes: None)
-    params = PolicySetParams(max_rows=1)
-    trainer.run_generations(paths, params, recorder, home, sink=None, stats=stats)
-    ((gen, rows, record),) = committed
-    assert (gen, rows) == (0, 3)
-    assert (record["pools"], record["eval_pools"]) == (3, 2)
-    assert record["equity_eval_recall_16"] == 1
-    assert lifecycle.read_train_state(paths) == {"generation_index": 1, "rows_trained": 3}
+    (slog,) = chunk.glob("*.slog")
+    for dest in (paths.generation_dir(0), paths.held_out_chunks_dir):
+        dest.mkdir(parents=True)
+        for f in (slog, slog.with_suffix(pools.SUFFIX)):
+            shutil.copy(f, dest / f.name)
+    lifecycle.write_manifest(paths.generation_dir(0), {"status": lifecycle.GENERATING})
+    lifecycle.mark_complete(paths.generation_dir(0), 1)
+    device = torch.device("cpu")
+    torch.manual_seed(0)
+    m = trainer.build_slot_model(TINY)
+    opt = build_optimizer(m, TINY)
+    recorder = trainer.TrainRecorder(LocalSink(paths.root))
+    staged = []
+    monkeypatch.setattr(recorder, "deliver_staged", staged.append)
+    ctx = {
+        "config": {**trainer.versions()},
+        "sink": LocalSink(paths.root),
+        "device": device,
+        "batcher": dataset.PoolBatcher(),
+        "stats": type("S", (), {"cycle_done": lambda self, phases, units, nbytes: None})(),
+        "deliverer": OutputDeliverer(),
+    }
+    state = GenerationalState()
+    arm = build_optim_arm(recorder, TINY, opt, 0)
+    trainer.train_one_generation(m, opt, arm, recorder, paths, TINY, state, ctx)
+    ctx["deliverer"].drain()
+    (record,) = [s.record["metrics"] for s in staged]
+    assert (state.generation_index, state.rows_trained) == (1, 2)
+    for key in ("loss", "slot_eval_recall_8", "equity_eval_recall_8", "slot_eval_set_ms"):
+        assert np.isfinite(record[key]), key
+    assert paths.rolling_checkpoint.exists()
+    assert lifecycle.read_train_state(paths) == {"generation_index": 1, "rows_trained": 2}
 
 
-def test_the_workload_registers_a_gpu_generator_and_a_data_home_trainer():
+def test_a_checkpoint_from_another_version_is_refused(tmp_path):
+    paths = TagPaths("t", "policy_set", tmp_path)
+    paths.rolling_checkpoint.parent.mkdir(parents=True)
+    config = trainer.versions()
+    torch.save({"config": {**config, "policy_set_format_version": -1}}, paths.rolling_checkpoint)
+    with pytest.raises(RuntimeError, match="policy_set_format_version"):
+        trainer.check_resumable(paths, config)
+
+
+def test_the_workload_registers_gpu_generators_and_a_gpu_data_home_trainer():
     spec = workloads.get("policy_set")
-    assert spec.role("generate").gpu
+    assert spec.role("generate").gpu and spec.role("train").gpu
     assert spec.role("train").singleton and spec.role("train").ingest
     assert spec.finalize and spec.role("generate").inputs
