@@ -205,7 +205,12 @@ void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
   res->unseen = pos.board.unseen_tiles(pos.rack).size();
   res->solved_endgames = runners.solving && res->unseen <= job->config.solve_endgames_max_unseen;
   const SimRunner& runner = res->solved_endgames ? *runners.solving : runners.standard;
-  if (job->run_sims) reduce_rollouts(job->config, runner, res);
+  if (!job->run_sims) return;
+  if (job->config.opp_leave_belief)
+    res->position.opp_leave_belief = job->config.opp_leave_belief(w);
+  reduce_rollouts(job->config, runner, res);
+  // The belief holds a whole table pass; the result does not need it.
+  res->position.opp_leave_belief.reset();
 }
 
 // Claims positions off the shared index and fills their result slots.

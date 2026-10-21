@@ -12,6 +12,7 @@
 #include "sim/win_table_feature.h"
 #include "util/assert.h"
 #include "util/exception.h"
+#include "util/math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -113,6 +114,18 @@ bool passed(const GameLog& log, int player) {
   return false;
 }
 
+// Salts the rollout seed for the leave quantile, so the quantile is not
+// correlated with the bag's draws, which the same seed drives.
+constexpr uint64_t kLeaveQuantileSalt = 0x1EAFE5EEDull;
+
+// The opponent's known leave in the rollout seeded `seed`: the face-up leave,
+// or one drawn from the leave belief at the seed's quantile.
+Rack seated_opp_leave(const SimPosition& pos, uint64_t seed) {
+  if (!pos.opp_leave_belief) return pos.opp_leave;
+  const double u = double(util::splitmix64(seed ^ kLeaveQuantileSalt) >> 11) * 0x1.0p-53;
+  return pos.opp_leave_belief->leave(pos.opp_leave_belief->sample(u));
+}
+
 // Plays one rollout of candidate `a`. A finished game fills `out` completely;
 // a truncated one stages its horizon leaf, and the batcher completes `out`
 // when it flushes.
@@ -127,9 +140,10 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
   // the correct conditional given the mover's information.
   Bag pool(seed, pos.board.unseen_tiles(pos.rack));
   std::array<Rack, 2> known_racks = a.known_racks;
-  if (pos.opp_leave.size() > 0) {
-    known_racks[opponent] = pos.opp_leave;
-    for (int i = 0; i < pos.opp_leave.size(); ++i) pool.remove(pos.opp_leave.tiles()[i]);
+  const Rack opp_leave = seated_opp_leave(pos, seed);
+  if (opp_leave.size() > 0) {
+    known_racks[opponent] = opp_leave;
+    for (int i = 0; i < opp_leave.size(); ++i) pool.remove(opp_leave.tiles()[i]);
   }
   Game game(a0, a1, dict, seed);
   if (params.horizon_plies > 0) game.set_max_plies(params.horizon_plies);
@@ -405,6 +419,8 @@ std::vector<Rollout> SimRunner::run_rollouts(const SimPosition& pos,
   // A non-empty bag: the pool holds the bag plus the opponent's (up to
   // RACK_SIZE) tiles, known or not.
   DEBUG_ASSERT(pos.board.unseen_tiles(pos.rack).size() > RACK_SIZE);
+  if (pos.opp_leave_belief && pos.opp_leave.size() > 0)
+    throw util::Exception("SimRunner: a position has a known leave or a leave belief, not both");
 
   std::vector<AppliedCandidate> applied;
   applied.reserve(candidates.size());

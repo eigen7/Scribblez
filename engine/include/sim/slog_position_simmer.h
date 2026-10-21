@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <random>
 #include <vector>
@@ -99,10 +100,20 @@ enum class SimOutput {
   kTraces,    // every Rollout and its RolloutTrace, unraced
 };
 
+// The opponent's leave belief at a position (SimPosition::opp_leave_belief),
+// or null to draw their whole rack from the unseen pool.
+using OppLeaveBelief =
+  std::function<std::shared_ptr<const belief::LeaveSampler>(const binlog::GamePositionIndex&)>;
+
 struct SlogSimConfig {
   // Sim under face-up leaves: the opponent's kept tiles are known, to the
   // rollouts and to the candidate ranking.
   bool open_leaves = false;
+  // Under hidden leaves, the opponent's leave belief at each simmed position;
+  // unset, their whole rack is drawn from the unseen pool. Called from the
+  // position workers, once per position that is simmed, so it must be
+  // thread-safe.
+  OppLeaveBelief opp_leave_belief;
   SimCandidateSelector selector = recipe_selector({});
   // Per-position runner params. runner.threads parallelizes within a position
   // and `threads` below across positions; the two multiply, so keep one at 1.

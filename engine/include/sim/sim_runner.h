@@ -23,6 +23,7 @@
 // game ends before the horizon, or whose horizon falls in the endgame,
 // contributes its exact terminal outcome instead.
 
+#include "belief/leave_sampler.h"
 #include "game/bag.h"
 #include "game/board.h"
 #include "game/game_log.h"
@@ -33,6 +34,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -48,12 +50,20 @@ struct MoveRequest;  // agent.h
 // from their last move. Every rollout seats the opponent with it and draws the
 // rest of their rack from the unseen pool. Empty means the whole rack is
 // hidden.
+//
+// `opp_leave_belief`, set only while `opp_leave` is empty, is a belief about
+// the hidden leave (belief/leave_sampler.h): each rollout seats a leave drawn
+// from it at a quantile of the rollout's seed, then draws the rest of the rack
+// as above. Rollout i of every candidate draws the same leave, so the
+// candidates stay paired. Null means the whole rack is drawn from the unseen
+// pool.
 struct SimPosition {
   Board board;
   std::array<int, 2> scores{0, 0};
   int mover = 0;
   Rack rack;  // the mover's full pre-move rack
   Rack opp_leave;
+  std::shared_ptr<const belief::LeaveSampler> opp_leave_belief;
 };
 
 // Aggregate observations from `n` rollouts of one candidate, from the mover's
