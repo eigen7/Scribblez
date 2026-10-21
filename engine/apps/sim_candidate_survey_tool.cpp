@@ -28,6 +28,11 @@
 // --win-table and --horizon-plies truncate any recipe's rollouts at the table;
 // the pool recipe requires them.
 //
+// --leave-inference (pool only) draws each rollout's opponent leave from the
+// leave inference model's belief (belief/slog_leave_beliefs.h), instead of
+// drawing the opponent's whole rack uniformly. Each .slog then needs its
+// .forgone sidecar (forgone_play_tool), which the model's input reads.
+//
 // Each position is simmed in two stages. The screen sims every candidate at
 // --rollouts and picks the best --confirm-picks moves outside the cut. The best
 // of hundreds of noisy estimates is biased upward (the winner's curse), so the
@@ -45,12 +50,16 @@
 // (variance). Results are appended to a partial file as they finish, so an
 // interrupted run resumes where it stopped (see PartialSurvey).
 
+#include "belief/served_leave_model.h"
+#include "belief/slog_leave_beliefs.h"
 #include "data/binary_log.h"
+#include "data/forgone_play_log.h"
 #include "data/gcg_writer.h"
 #include "data/pool_log.h"
 #include "data/slog_sampling.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "lexicon/leave_value_arrays.h"
 #include "lexicon/lexicon.h"
 #include "sim/pool_labels.h"
 #include "sim/slog_position_simmer.h"
@@ -68,9 +77,11 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <random>
 #include <string>
@@ -87,6 +98,15 @@ namespace json = boost::json;
 constexpr const char* kSurveyExt = ".simsurvey.json";
 constexpr const char* kPoolExt = ".pool";
 constexpr int kSurveyVersion = 4;
+
+// The --leave-inference model and the leave table its beliefs are over.
+struct LeaveModel {
+  LeaveValueArrays table;
+  belief::ServedLeaveModel served;
+
+  LeaveModel(const std::string& onnx_path, const LeaveValues& values)
+      : table(values), served(onnx_path, values.content_hash()) {}
+};
 
 struct Options {
   std::string slog_dir;
@@ -115,6 +135,10 @@ struct Options {
   const WinPctTable* win_table = nullptr;  // loaded from win_table_path
   // The pool recipe's blank prune (pool_selector).
   int blank_prune_points = 40;
+  // The pool recipe's opponent leaves: from this leave inference model, or
+  // uniform when empty.
+  std::string leave_inference_path;
+  LeaveModel* leave_model = nullptr;  // loaded from leave_inference_path
 
   bool stratified() const { return recipe == "stratified"; }
   bool pool() const { return recipe == "pool"; }
@@ -186,6 +210,8 @@ void validate(const Options& opt) {
     throw util::CleanException("--recipe pool needs --win-table and --horizon-plies");
   if (opt.pool() && opt.open_leaves)
     throw util::CleanException("--recipe pool sims hidden leaves only");
+  if (!opt.leave_inference_path.empty() && !opt.pool())
+    throw util::CleanException("--leave-inference needs --recipe pool");
   if (opt.blank_prune_points < 0) throw util::CleanException("--blank-prune-points must be >= 0");
   SimRunner::validate(SimRunner::Params{.rollouts = opt.confirm_rollouts});
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
@@ -420,6 +446,13 @@ PoolSources pool_sources(const Options& opt) {
   s.win_table_format_version = std::stoi(entry("format_version"));
   s.horizon_plies = opt.horizon_plies;
   s.rollouts = opt.rollouts;
+  if (opt.leave_model != nullptr) {
+    const belief::ServedLeaveModel::Identity& id = opt.leave_model->served.identity();
+    s.leave_model_hash = id.hash;
+    s.leave_model_tag = id.tag;
+    s.leave_model_generation = id.generation;
+    s.leave_model_format_version = id.format_version;
+  }
   return s;
 }
 
@@ -628,10 +661,16 @@ PoolPosition pool_position(const SimmedPosition& r) {
 void pool_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt) {
   const std::vector<binlog::GamePositionIndex> work = survey_work(slog, dict, opt);
   PoolWriter writer(slog.sidecar(kPoolExt).string(), pool_sources(opt));
+  SlogSimConfig config = screen_config(opt, dict);
+  std::optional<belief::SlogLeaveBeliefs> beliefs;
+  if (opt.leave_model != nullptr) {
+    beliefs.emplace(slog.bytes, slog.path.string(), dict, opt.leave_model->table,
+                    opt.leave_model->served.predict_fn());
+    config.opp_leave_belief = std::bind_front(&belief::SlogLeaveBeliefs::belief, &*beliefs);
+  }
   util::ProgressMeter meter(work.size(), "positions");
   for (const binlog::GamePositionIndex& at : work) {
-    for (const SimmedPosition& r :
-         sim_slog_positions(slog.bytes, dict, screen_config(opt, dict), {at}, &meter))
+    for (const SimmedPosition& r : sim_slog_positions(slog.bytes, dict, config, {at}, &meter))
       writer.add_position(pool_position(r));
   }
   meter.finish("sim-survey pools");
@@ -665,6 +704,16 @@ void check_finished_pools(const std::vector<fs::path>& slogs, const Options& opt
   }
 }
 
+// Under --leave-inference every .slog needs the .forgone sidecar the model's
+// input reads; say so before any work rather than at the first such file.
+void check_forgone_sidecars(const std::vector<fs::path>& slogs) {
+  for (const fs::path& slog : slogs) {
+    if (!fs::exists(forgone_path_of(slog.string())))
+      throw util::CleanException("{} has no .forgone sidecar; run forgone_play_tool over it first",
+                                 slog.string());
+  }
+}
+
 // The run's settings, as the startup line on stderr states them.
 std::string run_summary(const Options& opt, size_t files) {
   std::string out = std::format("{} file(s), recipe {}; ", files, opt.recipe);
@@ -673,6 +722,8 @@ std::string run_summary(const Options& opt, size_t files) {
                                   opt.confirm_rollouts);
   if (opt.win_table != nullptr)
     out += std::format(", stopped at {} after {} plies", opt.win_table_path, opt.horizon_plies);
+  if (opt.leave_model != nullptr)
+    out += std::format(", opponent leaves from {}", opt.leave_inference_path);
   return out + std::format(", {} threads", opt.threads);
 }
 
@@ -699,6 +750,9 @@ int main(int argc, char** argv) {
       "(sim/win_pct_table.h); required by --recipe pool")(
       "horizon-plies", po::value<int>(&opt.horizon_plies)->default_value(opt.horizon_plies),
       "plies after the candidate before the win table values a rollout (0 = play to the end)")(
+      "leave-inference", po::value<std::string>(&opt.leave_inference_path),
+      "pool: draw opponents' leaves from this leave inference model (ONNX) instead of "
+      "uniformly; each .slog needs its .forgone sidecar")(
       "blank-prune-points",
       po::value<int>(&opt.blank_prune_points)->default_value(opt.blank_prune_points),
       "pool: drop a blank move scoring this many points or more below the greedy play")(
@@ -757,8 +811,14 @@ int main(int argc, char** argv) {
       win_table = WinPctTable::load_versioned(opt.win_table_path);
       opt.win_table = &*win_table;
     }
-
     const std::vector<fs::path> inputs = binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files);
+    std::unique_ptr<LeaveModel> leave_model;
+    if (!opt.leave_inference_path.empty()) {
+      check_forgone_sidecars(inputs);
+      leave_model = std::make_unique<LeaveModel>(opt.leave_inference_path,
+                                                 HastyEquity::instance().leave_values());
+      opt.leave_model = leave_model.get();
+    }
     if (opt.pool()) check_finished_pools(inputs, opt);
     const std::vector<binlog::PendingSlog> pending =
       binlog::load_pending_slogs(inputs, opt.pool() ? kPoolExt : kSurveyExt, opt.open_leaves,

@@ -1,7 +1,8 @@
 """sim_candidate_survey_tool's pool recipe end to end (docs/plans/deep_bot_v0.md,
 "Workload 2"): HastyBot games in, a .pool sidecar out, whose labels form a
 distribution over each position's pool and whose header names the win table
-the rollouts stopped at."""
+the rollouts stopped at. The leave inference path needs a GPU, so only its
+refusals are checked here."""
 
 import subprocess
 from pathlib import Path
@@ -146,3 +147,23 @@ def test_bad_flag_combinations_are_refused(pooled, flags):
         [str(TOOL), "--slog-file", str(slog), *flags], capture_output=True, text=True
     )
     assert run.returncode != 0 and run.stderr
+
+
+def test_leave_inference_needs_the_pool_recipe_and_forgone_sidecars(pooled, tmp_path):
+    """Both refusals come before the model loads, so no GPU or model is needed."""
+    slog, table = pooled
+    model = tmp_path / "model.onnx"  # never read
+    other_recipe = subprocess.run(
+        [str(TOOL), "--slog-file", str(slog), "--recipe", "stratified"]
+        + ["--leave-inference", str(model)],
+        capture_output=True,
+        text=True,
+    )
+    assert other_recipe.returncode != 0 and "needs --recipe pool" in other_recipe.stderr
+    no_sidecar = subprocess.run(
+        [str(TOOL), "--slog-file", str(slog), "--recipe", "pool", "--rollouts", "4"]
+        + ["--win-table", str(table), "--horizon-plies", "4", "--leave-inference", str(model)],
+        capture_output=True,
+        text=True,
+    )
+    assert no_sidecar.returncode != 0 and "forgone_play_tool" in no_sidecar.stderr

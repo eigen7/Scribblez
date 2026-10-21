@@ -74,6 +74,7 @@ add_library(scribblez_core STATIC
   src/belief/forgone_plays.cpp
   src/belief/leave_prior.cpp
   src/belief/leave_sampler.cpp
+  src/belief/slog_leave_beliefs.cpp
   src/lexicon/leave_value_arrays.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
@@ -175,7 +176,8 @@ add_library(scribblez_nn STATIC
   src/agent/move_proposal_nets.cpp
   src/agent/move_proposal_session.cpp
   # The leave inference model's runtime (docs/plans/deep_bot_v0.md, "Serving").
-  src/belief/leave_inference_net.cpp)
+  src/belief/leave_inference_net.cpp
+  src/belief/served_leave_model.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(scribblez_nn
   PUBLIC include ${CMAKE_CURRENT_SOURCE_DIR}
@@ -320,6 +322,8 @@ target_link_libraries(sim_obs_tool PRIVATE
 add_executable(sim_candidate_survey_tool apps/sim_candidate_survey_tool.cpp)
 target_link_libraries(sim_candidate_survey_tool PRIVATE
   scribblez_core
+  # --leave-inference serves the leave inference model through TensorRT.
+  scribblez_nn
   Boost::program_options
   Boost::json
   Boost::filesystem
@@ -403,6 +407,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_best_bot.cpp
     tests/test_endgame.cpp
     tests/test_endgame_agent.cpp
+    tests/test_leave_belief_sims.cpp
     tests/test_monte_carlo_sim.cpp
     tests/test_pre_endgame.cpp
     tests/test_sim_agent.cpp
