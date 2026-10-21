@@ -209,7 +209,8 @@ void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
   if (job->config.opp_leave_belief)
     res->position.opp_leave_belief = job->config.opp_leave_belief(w);
   reduce_rollouts(job->config, runner, res);
-  // The belief holds a whole table pass; the result does not need it.
+  // Drop the belief (a LeaveSampler holding per-leave tables): the result
+  // outlives the sims and nothing reads it afterwards.
   res->position.opp_leave_belief.reset();
 }
 

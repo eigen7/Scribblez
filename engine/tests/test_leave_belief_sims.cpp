@@ -19,15 +19,19 @@
 #include "lexicon/leave_value_arrays.h"
 #include "lexicon/leave_values.h"
 #include "sim/sim_runner.h"
+#include "sim/slog_position_simmer.h"
 #include "temp_dir.h"
 #include "training/leave_inference_task.h"
 #include "util/exception.h"
 #include "util/io.h"
+#include "util/progress.h"
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -144,6 +148,48 @@ TEST_F(LeaveBeliefSimsTest, RefusesAKnownLeaveWithABelief) {
   pos.opp_leave = Rack::from_string("E");
   const SimRunner runner(dict_, {.rollouts = 2});
   EXPECT_THROW(runner.run_rollouts(pos, {Move::pass()}, 0), util::Exception);
+}
+
+// The simmer attaches the config's belief to the position it sims: the
+// callback runs once, for the position asked about, and the rollouts seat its
+// leave. The belief is the game's own at its first modelled turn, tilted
+// toward a tile the leave pool holds.
+TEST_F(LeaveBeliefSimsTest, SimmerSeatsTheConfiguredBelief) {
+  const std::string path = write_game();
+  const std::vector<char> slog = util::read_file_bytes(path);
+  const auto* meta =
+    reinterpret_cast<const binlog::GameMetadata*>(slog.data() + sizeof(binlog::FileHeader));
+  Tile favoured = kQ;
+  LeaveParams params{};
+  const belief::LeaveParamsFn stub = [&](const float*, int, LeaveParams* out) { out[0] = params; };
+  const belief::SlogLeaveBeliefs beliefs(slog, path, dict_, *table_, stub);
+  std::optional<binlog::GamePositionIndex> at;
+  for (uint32_t t = meta->eligible_begin; t < meta->eligible_end && !at; ++t) {
+    const LeaveQuery q = beliefs.query({0, t});
+    if (!q.modelled()) continue;
+    for (int k = 0; k < TILE_KINDS - 1; ++k)
+      if (q.leave_pool.count(Tile::of(k)) > 0) favoured = Tile::of(k);
+    at = binlog::GamePositionIndex{0, t};
+  }
+  ASSERT_TRUE(at.has_value());
+  params.theta[favoured] = 40.0f;
+
+  std::atomic<int> calls = 0;
+  SlogSimConfig config;
+  config.runner.rollouts = 4;
+  config.output = SimOutput::kRollouts;
+  config.opp_leave_belief = [&](const binlog::GamePositionIndex& w) {
+    EXPECT_TRUE(w == *at);
+    ++calls;
+    return beliefs.belief(w);
+  };
+  util::ProgressMeter meter(1, "positions");
+  const std::vector<SimmedPosition> out = sim_slog_positions(slog, dict_, config, {*at}, &meter);
+  ASSERT_EQ(out.size(), 1u);
+  ASSERT_FALSE(out[0].rollouts.empty());
+  EXPECT_EQ(calls, 1);
+  EXPECT_EQ(out[0].position.opp_leave_belief, nullptr) << "the result keeps the belief";
+  for (const Rollout& r : out[0].rollouts[0]) EXPECT_GE(r.opp_rack.count(favoured), 1);
 }
 
 // Every eligible turn's query reads the observer-visible target fields, and a

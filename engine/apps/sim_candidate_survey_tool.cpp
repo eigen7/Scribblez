@@ -136,9 +136,10 @@ struct Options {
   // The pool recipe's blank prune (pool_selector).
   int blank_prune_points = 40;
   // The pool recipe's opponent leaves: from this leave inference model, or
-  // uniform when empty.
+  // uniform when empty. leave_model is non-owning: main() loads it from
+  // leave_inference_path, so it is null exactly when the path is empty.
   std::string leave_inference_path;
-  LeaveModel* leave_model = nullptr;  // loaded from leave_inference_path
+  LeaveModel* leave_model = nullptr;
 
   bool stratified() const { return recipe == "stratified"; }
   bool pool() const { return recipe == "pool"; }
@@ -705,7 +706,9 @@ void check_finished_pools(const std::vector<fs::path>& slogs, const Options& opt
 }
 
 // Under --leave-inference every .slog needs the .forgone sidecar the model's
-// input reads; say so before any work rather than at the first such file.
+// input reads; say so before any work rather than at the first such file. Only
+// its existence is checked here; a truncated or stale sidecar is rejected when
+// its file is simmed, and a rerun resumes past the finished pools.
 void check_forgone_sidecars(const std::vector<fs::path>& slogs) {
   for (const fs::path& slog : slogs) {
     if (!fs::exists(forgone_path_of(slog.string())))

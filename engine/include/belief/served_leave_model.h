@@ -5,7 +5,7 @@
 // consumer records as provenance.
 
 #include "belief/leave_inference_net.h"
-#include "belief/slog_leave_beliefs.h"
+#include "belief/leave_params.h"
 
 #include <mutex>
 #include <string>

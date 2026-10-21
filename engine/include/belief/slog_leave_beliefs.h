@@ -27,12 +27,6 @@ class Dictionary;
 
 namespace belief {
 
-// The model's LeaveParams for `count` input rows of
-// LeaveInferenceInputEncoder::kInputFloats each: the served model
-// (LeaveInferenceNet), or a stub in tests. Called from several threads at
-// once, so it must be thread-safe.
-using LeaveParamsFn = std::function<void(const float* rows, int count, LeaveParams* out)>;
-
 // What a position's decoded row says about the opponent's leave.
 struct LeaveQuery {
   std::vector<float> input;  // the model's input row
