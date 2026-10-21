@@ -47,14 +47,17 @@ __all__ = [
 
 
 def batch_move_set_positions(
-    slogs: list[Path], positions: list[tuple[int, int, int]], moves: list[np.ndarray]
+    slogs: list[Path],
+    positions: list[tuple[int, int, int]],
+    moves: list[np.ndarray],
+    equities: bool = False,
 ) -> dict[str, np.ndarray]:
     """move_set_positions for a batch whose positions span several .slog files.
 
     Position j is `positions[j]` = (file_id, game_index, turn_index), its
     .slog `slogs[file_id]`, and its candidates `moves[j]`. One call per file;
     "rows" follow the batch's position order, and "cells" / "letters" its
-    flattened moves, position-major."""
+    flattened moves, position-major, as do "equities" when asked for."""
     counts = np.array([len(m) for m in moves], dtype=np.int64)
     starts = np.cumsum(counts) - counts
     total = int(counts.sum())
@@ -64,6 +67,8 @@ def batch_move_set_positions(
         "cells": np.zeros((total, slots), dtype=np.int64),
         "letters": np.zeros((total, slots * 26), dtype=np.uint8),
     }
+    if equities:
+        out["equities"] = np.zeros(total, dtype=np.float32)
     by_file: dict[int, list[int]] = defaultdict(list)
     for j, (file_id, _, _) in enumerate(positions):
         by_file[file_id].append(j)
@@ -74,11 +79,14 @@ def batch_move_set_positions(
             np.array([positions[j][2] for j in js], dtype=np.int64),
             counts[js],
             np.concatenate([moves[j] for j in js]),
+            equities=equities,
         )
         out["rows"][js] = got["rows"]
         move_rows = np.concatenate([np.arange(starts[j], starts[j] + counts[j]) for j in js])
         out["cells"][move_rows] = got["cells"]
         out["letters"][move_rows] = got["letters"]
+        if equities:
+            out["equities"][move_rows] = got["equities"]
     return out
 
 

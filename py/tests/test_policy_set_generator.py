@@ -158,3 +158,18 @@ def test_survey_failure_fails_the_cycle(tmp_path):
     p = PolicySetParams(leave_beliefs=BELIEFS_UNIFORM)
     with pytest.raises(subprocess.CalledProcessError):
         policy_set.write_pools(p, tmp_path / "no-table.csv", None, tmp_path, threads=1)
+
+
+def test_replayed_equities_order_the_pool_as_its_equity_ranks_do(surveyed_chunk):
+    """ffi.move_set_positions' equities are the survey's static equities: along
+    each pool's equity ranks they never increase."""
+    (slog,) = surveyed_chunk.glob("*.slog")
+    _, read = pools.read_pools(slog.with_suffix(pools.SUFFIX))
+    for pool in read:
+        got = ffi.move_set_positions(
+            slog, np.array([pool.game]), np.array([pool.turn]), np.array([len(pool.moves)]),
+            pool.moves, equities=True,
+        )["equities"]  # fmt: skip
+        ranked = pool.equity_rank >= 0
+        along = got[ranked][np.argsort(pool.equity_rank[ranked])]
+        assert (np.diff(along) <= 1e-4).all()

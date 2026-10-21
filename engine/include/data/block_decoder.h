@@ -70,6 +70,11 @@ class BlockDecoder {
   // this decoder is next used.
   const Board& board() const { return pos_.enc().board(); }
 
+  // The replay decode_one last ran, for consumers that read its racks or bag
+  // as well (e.g. static equities at the decision point). Valid until this
+  // decoder is next used.
+  const PositionEncoder& position() const { return pos_; }
+
   // The board just before turn `turn_idx`'s move, replayed without encoding a
   // row, for consumers that need only the board (e.g. reply blocking). Valid
   // until this decoder is next used.
