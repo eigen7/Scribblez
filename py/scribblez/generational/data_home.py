@@ -44,15 +44,25 @@ POLL_SECONDS = 5
 LOCK_NAME = "scheduler.lock"
 
 
-def start_for(ctx, paths: TagPaths, params, chunk_sidecar: str = "") -> "DataHome":
+def start_for(
+    ctx,
+    paths: TagPaths,
+    params,
+    chunk_sidecar: str = "",
+    holdout_every: int = 0,
+    holdout_chunks: int = 0,
+) -> "DataHome":
     """Start the data home beside trainer `ctx`. It is remote when the
     controller says so (SCZ_REMOTE_HOME): on an ssh machine, whose
     generations the controller pulls. `chunk_sidecar` is the suffix of the
-    sidecar each chunk .slog carries (scheduler.SchedulerConfig)."""
+    sidecar each chunk .slog carries, and `holdout_every` and
+    `holdout_chunks` shape the held-out set (scheduler.SchedulerConfig)."""
     cfg = scheduler.SchedulerConfig(
         games_per_generation=params.games_per_generation,
         open_ahead=params.open_ahead,
         chunk_sidecar=chunk_sidecar,
+        holdout_every=holdout_every,
+        holdout_chunks=holdout_chunks,
     )
     remote = os.environ.get("SCZ_REMOTE_HOME") == "1"
     home = DataHome(paths, cfg, ctx.sink, remote=remote)

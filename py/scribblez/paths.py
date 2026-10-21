@@ -164,6 +164,14 @@ class TagPaths:
         return self.generations_dir / f"gen_{index:06d}"
 
     @property
+    def held_out_chunks_dir(self) -> Path:
+        """Staged chunks the generation scheduler held out of every generation
+        (scheduler.SchedulerConfig.holdout_every). One directory with a
+        generation's manifest, so the controller pulls, seeds and sweeps it as
+        it does a generation, from its parent."""
+        return self.data_dir / "held_out" / "chunks"
+
+    @property
     def logs_dir(self) -> Path:
         return self.root / "logs"
 

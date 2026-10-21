@@ -201,6 +201,48 @@ def _task_tick(
     return hooks
 
 
+def _names(held: bool, n: int, every: int) -> list[str]:
+    """`n` chunk names the scheduler does (or does not) hold out at `every`."""
+    names = (f"c{i}" for i in range(1000))
+    return [x for x in names if scheduler.is_held_out(x, every) == held][:n]
+
+
+def test_held_out_chunks_fill_the_set_then_are_dropped(paths):
+    every = 3
+    held, kept = _names(True, 3, every), _names(False, 2, every)
+    for name in held + kept:
+        _stage(paths, name, 60)
+        _stage_sidecar(paths, name)
+    cfg = scheduler.SchedulerConfig(
+        games_per_generation=100,
+        open_ahead=1,
+        chunk_sidecar=".forgone",
+        holdout_every=every,
+        holdout_chunks=2,
+    )
+    scheduler.tick(paths, cfg, Hooks(), chunk_games=_chunk_games)
+    held_dir = paths.held_out_chunks_dir
+    # The first two held-out chunks, with their sidecars, make the set
+    # complete; the third is ledgered and dropped.
+    assert sorted(f.stem for f in held_dir.glob("*.slog")) == sorted(held[:2])
+    assert sorted(f.stem for f in held_dir.glob("*.forgone")) == sorted(held[:2])
+    assert lifecycle.is_complete(held_dir)
+    assert lifecycle.read_manifest(held_dir)["committed_games"] == 120
+    assert not list(paths.staging_dir.iterdir())
+    assert set(scheduler._read_ledger(paths)) >= {f"{x}.slog" for x in held}
+    # Only the rest fill generations.
+    gen0 = paths.generation_dir(0)
+    assert sorted(f.stem for f in gen0.glob("*.slog")) == sorted(kept)
+
+
+def test_without_holdout_every_nothing_is_held_out(paths):
+    for name in _names(True, 2, 3):
+        _stage(paths, name, 60)
+    _tick(paths, Hooks())
+    assert not paths.held_out_chunks_dir.exists()
+    assert len(list(paths.generation_dir(0).glob("*.slog"))) == 2
+
+
 def test_finishes_the_generators_once_the_trainer_reaches_max_rows(tmp_path):
     hooks = _task_tick(tmp_path, max_rows=1000, rows_trained=1000)
     assert hooks.finished == ["generate"]
