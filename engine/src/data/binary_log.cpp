@@ -2,9 +2,11 @@
 
 #include "game/bag.h"
 #include "game/game_log.h"
+#include "util/math.h"
 #include "util/misc.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -32,9 +34,22 @@ InitialRacks initial_racks_of(const GameLog& log) {
   return ir;
 }
 
-std::mt19937_64& sampler_rng() {
-  thread_local std::mt19937_64 rng(std::random_device{}());
-  return rng;
+// `h` with `bytes` of `data` mixed in, a 64-bit word at a time.
+uint64_t mix_bytes(uint64_t h, const void* data, size_t bytes) {
+  const char* p = static_cast<const char*>(data);
+  for (size_t i = 0; i < bytes; i += sizeof(uint64_t)) {
+    uint64_t word = 0;
+    std::memcpy(&word, p + i, std::min(sizeof(word), bytes - i));
+    h = util::splitmix64(h ^ word);
+  }
+  return h;
+}
+
+// A seed for the game's sampled turn, from its on-disk record: the same game
+// always samples the same turn, so a seeded run's files reproduce.
+uint64_t game_seed(const InitialRacks& initial, const std::vector<TurnBlob>& turns) {
+  return mix_bytes(mix_bytes(0, &initial, sizeof(initial)), turns.data(),
+                   turns.size() * sizeof(TurnBlob));
 }
 
 }  // namespace
@@ -178,7 +193,6 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
   p.sampled_turn.reserve(games.size());
   p.eligible.reserve(games.size());
   p.games.reserve(games.size());
-  std::mt19937_64& rng = sampler_rng();
   for (const GameLogStorage& gs : games) {
     const GameLog g = gs.view();
     const EligibleSpan span = eligible_span(g);
@@ -186,13 +200,13 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
       std::cerr << "BinaryLogWriter: skipping game with no eligible sampling turn\n";
       continue;
     }
-    const int sampled = pick_sampled_turn(g, rng);
     p.initial.push_back(initial_racks_of(g));
     std::vector<TurnBlob> turns;
     turns.reserve(size_t(g.num_records));
     for (int k = 0; k < g.num_records; ++k) turns.push_back(to_blob(g.records[k]));
+    std::mt19937_64 rng(game_seed(p.initial.back(), turns));
+    p.sampled_turn.push_back(pick_sampled_turn(g, rng));
     p.turns.push_back(std::move(turns));
-    p.sampled_turn.push_back(sampled);
     p.eligible.push_back(span);
     p.games.push_back(g);
   }
