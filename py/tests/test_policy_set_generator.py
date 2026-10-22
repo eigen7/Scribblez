@@ -16,11 +16,10 @@ LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
     pytest.skip("libscribblez_ffi.so not built -- run py/build.py first", allow_module_level=True)
 
+import policy_set_chunk  # noqa: E402
 from scribblez import ffi, params  # noqa: E402
-from scribblez.leave_inference import win_table  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.policy_set import pools  # noqa: E402
-from scribblez.selfplay import run_games  # noqa: E402
 from scribblez.workloads import policy_set, selfplay_gen  # noqa: E402
 from scribblez.workloads.policy_set import (  # noqa: E402
     BELIEFS_INFERRED,
@@ -109,16 +108,9 @@ def surveyed_chunk(tmp_path_factory) -> Path:
     pool sims every candidate of a position, the bulk of this module's time."""
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
-    tmp = tmp_path_factory.mktemp("chunk")
-    chunk = tmp / "chunk"
-    assert run_games(chunk, num_games=1, threads=2, player_spec="--type=hastybot-endgame") == 0
-    table = tmp / "table.csv"
-    spread = np.arange(-win_table.max_spread(), win_table.max_spread() + 1)
-    grid = np.repeat(1 / (1 + np.exp(-spread / 30))[:, None], win_table.max_unseen() + 1, axis=1)
-    win_table.write(table, grid, {"tag": "li", "generation": 3})
-    p = PolicySetParams(leave_beliefs=BELIEFS_UNIFORM, rollouts=8, positions_per_game=1)
-    policy_set.write_pools(p, table, None, chunk, threads=4)
-    return chunk
+    return policy_set_chunk.surveyed_chunk(
+        tmp_path_factory.mktemp("chunk"), rollouts=8, positions_per_game=1
+    )
 
 
 def test_a_chunk_surveys_into_pools_that_read_back_as_model_inputs(surveyed_chunk):
