@@ -84,27 +84,29 @@ So the record keeps every rollout's value, from which any pair's error follows.
 ## PR 2: the experiment
 
 **Pools.** Fresh positions from HastyBot games, surveyed as the 8b check's
-were (opponent leaves inferred by `tilted2`'s latest generation, rollouts
-stopped at its win table after 3 plies), but with **racing off** and 100
-rollouts per candidate. Racing off is for the scoring below, which needs every
-candidate's later rollouts. Racing would stop clearly beaten moves at 10 to 70
-rollouts. A rule that picked one would leave its set's regret undefined, and
-the seed itself is sometimes stopped. Treating stopped moves as never best is
-close, since racing stops only moves three standard errors behind. But at
-k = 10 the stops at 20, 40 and 70 rollouts are decided partly on the
-rollouts the scoring reads, so the truth would be filtered by the data that
-grades it. Production pools stay raced. There, **ei** would take each move's
-error from the rollouts it has, so a stopped move gets a wider one. Racing
-averaged 34 rollouts per
-candidate on the 8b pools. Without it, a position costs about 3 times as much,
-roughly 0.37 positions/s on 28 threads. That makes 300 positions about 13
-minutes and about 76 MB, both estimates to be measured on the first chunk. The
-pools go under `/workspace/mount`, outside any worktree.
+were and as production surveys them: opponent leaves inferred by `tilted2`'s
+latest generation, rollouts stopped at its win table after 3 plies, 100
+rollouts per candidate, raced. On the 8b pools that came to about 1.1
+positions/s on 28 threads, so 300 positions take about 5 minutes, and their
+rollout values about 26 MB at the 34 rollouts per candidate racing averaged
+there. Both figures are estimates until the first chunk is measured. The pools go under
+`/workspace/mount`, outside any worktree.
 
 **A split, so the scoring is not the rules' own data.** Each rule sees only
 rollouts `[0, k)`, the A part. The truth is the means over `[k, 100)`, the B
 part. Scored on the same rollouts it chose by, any rule that tracks the
 sample mean would look best.
+
+**Moves racing stopped.** Racing stops a move once it is three paired
+standard errors behind the leader at a checkpoint (10, 20, 40 or 70
+rollouts). The survey's design note puts the chance of stopping a move truly
+equal to the leader well under once per hundred positions. So a stopped move
+counts as never best: the B leader is the best B mean among the moves that
+ran all 100 rollouts, and a stopped member of a set never counts as the set's
+best. A move stopped before k rollouts gives the rules the rollouts it has,
+with a correspondingly wider `se`, as production's **ei** would compute it.
+On the 8b pools racing stopped the seed in 6.6% of positions, each a position
+where the static-equity top move was itself clearly beaten.
 
 **The rules.** Each builds sets of up to 16, starting from the seed, using only
 the A part. After each step, `s*` is the best member of the set by its A mean.
