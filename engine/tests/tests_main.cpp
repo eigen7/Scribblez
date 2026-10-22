@@ -1947,6 +1947,27 @@ TEST(Encoder, ExtractPositionsMovegenRoundtrip) {
             << " positions across " << seeds.size() << " games)\n";
 }
 
+// The same games written twice give the same file: each game's sampled turn
+// comes from its own record, not from an unseeded generator.
+TEST(BinaryLog, SameGamesWriteTheSameFile) {
+  namespace fs = std::filesystem;
+  Dictionary dict = medium_dict();
+  constexpr int kGames = 4;
+  std::vector<std::string> files;
+  for (int copy = 0; copy < 2; ++copy) {
+    const fs::path dir = scribblez::testing::make_temp_dir("scribblez_test_same_games");
+    {
+      scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/kGames);
+      for (int i = 0; i < kGames; ++i) writer.append(play_test_game(dict, /*seed=*/300ULL + i));
+    }
+    for (const auto& ent : fs::directory_iterator(dir))
+      if (ent.path().extension() == ".slog") files.push_back(util::read_file(ent.path().string()));
+    fs::remove_all(dir);
+  }
+  ASSERT_EQ(files.size(), 2u);
+  EXPECT_EQ(files[0], files[1]);
+}
+
 // End to end: write games through BinaryLogWriter, load the .slog with
 // DataLoader, and check that (a) every row's labels match some (game, POV) and
 // (b) replaying the raw on-disk turns reproduces every live position.

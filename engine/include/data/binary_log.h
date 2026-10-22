@@ -61,7 +61,8 @@ struct GameMetadata {
   uint64_t start_offset;  // file offset of this game's InitialRacks blob
   uint32_t num_turns;     // length of the TurnBlob array
   // One turn drawn uniformly from the eligible region, for eval-only callers
-  // (probes, position dumps) that want a single position per game.
+  // (probes, position dumps) that want a single position per game. Seeded by
+  // the game's own record, so the same game always draws the same turn.
   uint16_t sampled_turn;
   int16_t final_score_p0;
   int16_t final_score_p1;
