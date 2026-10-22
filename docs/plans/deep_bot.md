@@ -279,8 +279,9 @@ uniform refill, and the sims are paired across moves.
   would have to choose it. A setup that static equity ranks low is labeled by
   its own outcome, provided its payoff arrives within the sim's horizon.
 - **Form 1's targets: subset assembly.** Any subset `S` of the pool, plus a
-  held-out move `a`, gives a row with target `max(0, v(a) − max_S v)`,
-  computed from the paired values. One pool yields many rows.
+  held-out move `a`, gives a row whose target is the least expected
+  improvement of `a` over a member of `S`, computed from the paired rollout
+  values (see Form 1). One pool yields many rows.
 - **Form 2's targets: a soft best move.** `q(a)` is the probability that `a`
   is best under the paired sim statistics: by bootstrapping over the paired
   samples, or by a normal approximation to the paired differences against

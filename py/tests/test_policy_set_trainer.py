@@ -164,8 +164,8 @@ def test_the_slot_form_overfits_a_pool(chunk):
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     first = None
     # The loss sits on a plateau for the first few steps (moving by under
-    # 0.05, either way), then falls: by step 12 it was at least 23% lower on
-    # every pool tried.
+    # 0.05, either way), then falls: 12 steps clear the plateau, and 10% is
+    # well inside the fall.
     for _ in range(12):
         total, _ = slot.slot_loss(slot.slot_forward(m, batch)[0], batch)
         opt.zero_grad()
@@ -336,6 +336,38 @@ def test_gain_targets_are_expected_improvement_over_a_member():
     ]
     np.testing.assert_allclose(target.numpy(), expected, rtol=1e-5, atol=1e-7)
     assert 0 < expected[3] < expected[1]
+
+
+def test_gain_targets_read_the_right_pool_across_a_batch():
+    # Two pools with different candidate and rollout counts: a wrong offset in
+    # rollout_grid or the global move indices would read pool 0's values.
+    first = _pool([0.5] * 2, [0.5, 0.5], [0, 1], values=[[1, 0, 1], [0, 1, 1]])
+    a, b, c = [1, 1, 0, 1, 0], [0, 1, 1, 0, 0], [1, 1, 1, 1, 0]
+    second = _pool([0.25] * 3, [0.6, 0.4, 0.8], [0, 1, 2], values=[a, b, c])
+    grid = dataset.rollout_grid([first, second])
+    assert grid["rollouts"].tolist() == [3, 3, 5, 5, 5]
+    assert grid["rollout_values"][3].tolist() == b
+    assert grid["rollout_values"][1].tolist() == [0, 1, 1, 0, 0]
+    rows = greedy.make_rows([1], [[2]])
+    pos_id = torch.tensor([0, 0, 1, 1, 1])
+    move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
+    assert move_idx.tolist() == [2, 3, 4]
+    target = greedy.gain_targets(grid, rows, move_idx, row_id).numpy()
+    expected = [
+        0,
+        _expected_improvement(np.subtract(b, a)),
+        _expected_improvement(np.subtract(c, a)),
+    ]
+    np.testing.assert_allclose(target, expected, rtol=1e-5, atol=1e-7)
+
+
+def test_a_single_shared_rollout_gives_the_hard_difference():
+    pool = _pool([0.5, 0.5], [0.5, 0.5], [0, 1], values=[[0, 1, 1], [1]])
+    grid = dataset.rollout_grid([pool])
+    rows = greedy.make_rows([0], [[0]])
+    move_idx, row_id = greedy.row_candidates(torch.zeros(2, dtype=torch.int64), rows.position)
+    target = greedy.gain_targets(grid, rows, move_idx, row_id)
+    assert target.tolist() == [0.0, 1.0]  # 1 - 0 on the one shared rollout
 
 
 def test_a_move_that_sims_as_a_member_does_gains_nothing():

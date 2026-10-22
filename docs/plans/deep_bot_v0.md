@@ -657,8 +657,8 @@ survey's JSON. Its header carries the magic and `kPoolFormatVersion`.
     that for pairs the labels above do not cover.
 
 v0 computes `q(a)` at generation time by the normal approximation to the
-paired differences against the leader. It treats the non-leader moves as independent of each other, an
-approximation acceptable for v0. A candidate that racing stopped is compared
+paired differences against the leader. It treats the non-leader moves as
+independent of each other, an approximation acceptable for v0. A candidate that racing stopped is compared
 with the leader at the checkpoint that stopped it, over its own rollouts.
 Compared with the final leader's same rollouts instead, stopped candidates
 took 47–83% of a pool's `q` in a 20-rollout test: the final leader is picked

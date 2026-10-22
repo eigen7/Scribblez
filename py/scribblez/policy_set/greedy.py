@@ -31,9 +31,7 @@ ran, with that mean's standard error. Each is an upper bound on the
 improvement over the set's best, so the least is the tightest of them: a
 move that sims as a member does gets about 0, however unlike the set's best
 it is. A near-tie the sims left unresolved gets a target in proportion to how
-unresolved it is; a clearly worse move about 0. The sample margin over the
-set's best would instead be 0 for nearly every move, and a coin flip for the
-near-ties.
+unresolved it is; a clearly worse move about 0.
 """
 
 from __future__ import annotations
