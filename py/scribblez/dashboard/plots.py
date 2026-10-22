@@ -306,13 +306,13 @@ LEAVE_INFERENCE_QUALITY = [
 ]
 # The policy-set read (scribblez/policy_set/trainer.py's record, its metrics
 # from policy_set/metrics.py): on the held-out pools, each form's sets against
-# the static-equity top N (the "equity_" prefix) at each set size N, the slot
-# form's coverage loss per N, and what the pools are like, the window's beside
-# the held-out set's.
+# the static-equity top N (the "equity_" prefix) at each set size N, each
+# form's training loss, and what the pools are like, the window's beside the
+# held-out set's.
 # policy_set/metrics.py's SET_SIZES, copied: importing it would load the engine
 # library (policy_set/pools.py reads format_layout at import).
 POLICY_SET_SIZES = (1, 2, 4, 8, 16)
-POLICY_SET_FORMS = ("slot", "equity")
+POLICY_SET_FORMS = ("slot", "greedy", "equity")
 POLICY_SET_QUALITY = (
     [
         (
@@ -327,12 +327,12 @@ POLICY_SET_QUALITY = (
     ]
     + [
         (
-            f"Slot form: {title} by N (held-out)",
-            [f"slot_eval_{metric}_{n}" for n in POLICY_SET_SIZES],
+            f"{title} at N=8 (held-out)",
+            [f"{form}_eval_{metric}_8" for form in POLICY_SET_FORMS],
         )
         for title, metric in (
-            ("cover (q in the set)", "cover"),
-            ("recall where the sim-best is outside the equity top 10", "tail_recall"),
+            ("Cover (q in the set)", "cover"),
+            ("Recall where the sim-best is outside the equity top 10", "tail_recall"),
         )
     ]
     + [
@@ -341,7 +341,17 @@ POLICY_SET_QUALITY = (
             "Slot form: coverage loss by N (held-out)",
             [f"slot_eval_loss_{n}" for n in POLICY_SET_SIZES],
         ),
-        ("Slot form: ms to build 256 sets of 8", ["slot_eval_set_ms"]),
+        (
+            "Greedy form: gain loss (training, held-out)",
+            ["loss_greedy_gain", "greedy_eval_loss_gain"],
+        ),
+        ("ms to build 256 sets of 8", ["slot_eval_set_ms", "greedy_eval_set_ms"]),
+        # Per form: each form's gradient is clipped on its own.
+        (
+            "Gradient norm before clipping, by form",
+            ["grad_norm_slot", "grad_norm_greedy"],
+            {"log": True},
+        ),
         ("Pools", ["pools", "eval_pools"]),
         ("Mean candidates per pool", ["pool_size", "eval_pool_size"]),
         ("Mean label entropy (nats)", ["label_entropy", "eval_label_entropy"]),

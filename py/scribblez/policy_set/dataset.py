@@ -5,7 +5,8 @@ model's batches are (move_set_eval/dataset.py): the positions' board inputs,
 rebuilt by replay through ffi.move_set_positions in the hidden-leaves arm,
 then the M candidates concatenated position by position, each with a pos_id
 into [0, P). Per position it also carries the opponent-rack input (the pool's
-OppRackSummary) and, per candidate, the pool's labels.
+OppRackSummary) and, per candidate, the equity input (relative_equity) and the
+pool's labels.
 """
 
 from dataclasses import dataclass
@@ -22,6 +23,9 @@ from scribblez.policy_set import pools
 # was modelled, and its value's mean and sd in units of VALUE_SCALE points.
 OPP_RACK_FLOATS = 30
 VALUE_SCALE = 10.0
+# The equity input: each candidate's static equity less its pool's best, in
+# units of VALUE_SCALE points, floored at EQUITY_FLOOR (100 points below).
+EQUITY_FLOOR = -10.0
 
 
 @dataclass
@@ -74,6 +78,7 @@ class PoolBatcher:
             slogs,
             [(file_id[it.slog], it.pool.game, it.pool.turn) for it in items],
             [it.pool.moves for it in items],
+            equities=True,
         )
         rows = inputs["rows"]
         spatial = rows[:, : self.spatial_floats].reshape(len(items), *self.spatial_shape)
@@ -103,8 +108,19 @@ class PoolBatcher:
             "move_cross_cells": torch.from_numpy(inputs["cells"]),
             "move_cross_letters": torch.from_numpy(inputs["letters"]),
             "move_pos_id": torch.from_numpy(pos_id),
+            "move_equity": torch.from_numpy(
+                relative_equity(inputs["equities"], pos_id, len(items))
+            ),
             **labels,
         }
+
+
+def relative_equity(equities: np.ndarray, pos_id: np.ndarray, num_positions: int) -> np.ndarray:
+    """The equity input: each candidate's static equity less the best of its
+    position's, in VALUE_SCALE points, floored at EQUITY_FLOOR."""
+    best = np.full(num_positions, -np.inf, dtype=np.float32)
+    np.maximum.at(best, pos_id, equities)
+    return np.maximum((equities - best[pos_id]) / VALUE_SCALE, EQUITY_FLOOR).astype(np.float32)
 
 
 def batch_order(n: int, batch_size: int, seed: int) -> list[np.ndarray]:

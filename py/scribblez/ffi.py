@@ -262,6 +262,7 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),  # out_rows
         ctypes.POINTER(ctypes.c_int32),  # out_cells
         ctypes.POINTER(ctypes.c_uint8),  # out_letters
+        ctypes.POINTER(ctypes.c_float),  # out_equities, nullable
     ]
 
     lib.scribblez_gcg_cross_checks.restype = ctypes.c_int
@@ -836,6 +837,7 @@ def move_set_positions(
     turn_idx: np.ndarray,
     move_counts: np.ndarray,
     moves: np.ndarray,
+    equities: bool = False,
 ) -> dict[str, np.ndarray]:
     """A move set batch's inputs from one .slog, one replay per position: each
     position's pre-move training row, and the cross-check features of its
@@ -848,7 +850,8 @@ def move_set_positions(
     (P, task_row_floats()) float32, as decode_rows(post_move=False) decodes
     them; "cells" (M, slots) int64 -- 1 + axis * 225 + square per entry, 0 in
     empty slots; and "letters" (M, slots * 26) uint8, each entry's post-move
-    legal letters.
+    legal letters. With `equities`, also "equities" (M,) float32, each move's
+    HastyBot static equity at its decision point, the opponent's leave hidden.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -862,6 +865,7 @@ def move_set_positions(
         raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
     rows = np.empty((len(games), task_row_floats()), dtype=np.float32)
     cells, letters = _cross_check_arrays(len(moves))
+    equity = np.empty(len(moves), dtype=np.float32) if equities else None
     rc = _lib().scribblez_move_set_positions(
         _session(),
         str(path).encode("utf-8"),
@@ -873,10 +877,14 @@ def move_set_positions(
         rows.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
         cells.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
         letters.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        None if equity is None else equity.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
     )
     if rc != 0:
         raise OSError(f"move_set_positions failed (rc={rc}) for {path}")
-    return {"rows": rows, **_cross_check_result(cells, letters)}
+    out = {"rows": rows, **_cross_check_result(cells, letters)}
+    if equity is not None:
+        out["equities"] = equity
+    return out
 
 
 def gcg_cross_checks(

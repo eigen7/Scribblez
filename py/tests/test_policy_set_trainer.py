@@ -24,7 +24,17 @@ from scribblez.generational.checkpoint import GenerationalState  # noqa: E402
 from scribblez.generational.optim import build_optim_arm, build_optimizer  # noqa: E402
 from scribblez.leave_inference import win_table  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
-from scribblez.policy_set import dataset, metrics, model, pools, train_loop, trainer  # noqa: E402
+from scribblez.policy_set import (  # noqa: E402
+    dataset,
+    forms,
+    greedy,
+    metrics,
+    model,
+    pools,
+    slot,
+    train_loop,
+    trainer,
+)
 from scribblez.position_eval.trainer import OutputDeliverer  # noqa: E402
 from scribblez.selfplay import run_games  # noqa: E402
 from scribblez.workloads import policy_set  # noqa: E402
@@ -86,7 +96,7 @@ def test_coverage_loss_is_the_log_probability_the_prefix_covers_the_best_move():
     logits = torch.stack([p1.log(), p2.log()]).unsqueeze(0)
     logits = torch.cat([logits, torch.full((1, 2, 1), float("-inf"))], dim=2)
     q = torch.tensor([[1.0, 0.0, 0.0]])
-    loss = model.coverage_loss(logits, q, sizes=(1, 2))
+    loss = slot.coverage_loss(logits, q, sizes=(1, 2))
     assert loss[1].item() == pytest.approx(-np.log(0.5))
     assert loss[2].item() == pytest.approx(-np.log(1 - 0.5 * 0.75))
 
@@ -96,7 +106,7 @@ def test_the_coverage_loss_keeps_its_gradient_on_a_confidently_missed_move(gap):
     # Both slots put move 0 `gap` logits above move 1, which holds 30% of q.
     logits = torch.tensor([[[gap, 0.0], [gap, 0.0]]], requires_grad=True)
     q = torch.tensor([[0.7, 0.3]])
-    loss = model.coverage_loss(logits, q, sizes=(2,))[2]
+    loss = slot.coverage_loss(logits, q, sizes=(2,))[2]
     loss.backward()
     # The cover of move 1 is about 2 exp(-gap): its loss term is 0.3 * (gap - log 2).
     assert loss.item() == pytest.approx(0.3 * (gap - np.log(2)), rel=1e-3)
@@ -106,9 +116,9 @@ def test_the_coverage_loss_keeps_its_gradient_on_a_confidently_missed_move(gap):
 def test_a_slot_whose_move_is_taken_falls_back_to_its_next_choice():
     logits = torch.tensor([[[3.0, 2.0, 1.0], [3.0, 1.0, 2.0], [3.0, 2.0, 1.0]]])
     pad = torch.tensor([[False, False, False]])
-    assert model.slot_picks(logits, pad) == [[0, 2, 1]]
+    assert slot.slot_picks(logits, pad) == [[0, 2, 1]]
     # Fewer candidates than slots: the set stops at every candidate.
-    assert model.slot_picks(logits[:, :, :2], pad[:, :2]) == [[0, 1]]
+    assert slot.slot_picks(logits[:, :, :2], pad[:, :2]) == [[0, 1]]
 
 
 @pytest.fixture(scope="module")
@@ -134,18 +144,31 @@ TINY = PolicySetParams(
 )
 
 
+def test_the_equity_input_is_relative_to_each_pools_best(chunk):
+    items = dataset.read_items([chunk])
+    batch = dataset.PoolBatcher().build(items)
+    eq, pos_id = batch["move_equity"].numpy(), batch["move_pos_id"].numpy()
+    for j in range(len(items)):
+        mine = eq[pos_id == j]
+        assert mine.max() == 0 and mine.min() >= dataset.EQUITY_FLOOR
+        # The best equity is the pool's equity rank 0, where the pool has one.
+        ranks = items[j].pool.equity_rank
+        if (ranks == 0).any():
+            assert mine[ranks == 0][0] == 0
+
+
 def test_the_slot_form_overfits_a_pool(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)
     assert batch["opp_rack"].shape == (len(items), dataset.OPP_RACK_FLOATS)
     torch.manual_seed(0)
-    m = trainer.build_slot_model(replace(TINY, slots=16))
-    logits, pad = train_loop.slot_forward(m, batch)
+    m = trainer.build_models(replace(TINY, forms="slot", slots=16))["slot"]
+    logits, pad = slot.slot_forward(m, batch)
     assert logits.shape == (len(items), 16, pad.shape[1])
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     first = None
     for _ in range(4):
-        total, _ = train_loop.slot_loss(train_loop.slot_forward(m, batch)[0], batch)
+        total, _ = slot.slot_loss(slot.slot_forward(m, batch)[0], batch)
         opt.zero_grad()
         total.backward()
         opt.step()
@@ -164,7 +187,7 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
     lifecycle.mark_complete(paths.generation_dir(0), 1)
     device = torch.device("cpu")
     torch.manual_seed(0)
-    m = trainer.build_slot_model(TINY)
+    m = trainer.build_models(TINY)  # both forms
     opt = build_optimizer(m, TINY)
     recorder = trainer.TrainRecorder(LocalSink(paths.root))
     staged = []
@@ -183,11 +206,19 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
     ctx["deliverer"].drain()
     (record,) = [s.record["metrics"] for s in staged]
     assert (state.generation_index, state.rows_trained) == (1, 2)
-    for key in ("loss", "slot_eval_recall_8", "equity_eval_recall_8", "slot_eval_set_ms"):
+    for key in (
+        "loss",
+        "loss_greedy_gain",
+        "slot_eval_recall_8",
+        "greedy_eval_recall_8",
+        "equity_eval_recall_8",
+        "slot_eval_set_ms",
+        "greedy_eval_set_ms",
+    ):
         assert np.isfinite(record[key]), key
     # The dashboard's figures read the record's keys; only set sizes past the
     # slots are absent.
-    for _, keys in plots.POLICY_SET_QUALITY:
+    for _, keys, *_ in plots.POLICY_SET_QUALITY:
         for key in keys:
             assert key in record or int(key.rsplit("_", 1)[1]) > TINY.slots, key
     assert paths.rolling_checkpoint.exists()
@@ -221,8 +252,9 @@ def test_evaluate_scores_each_pool_by_its_own_slots():
     # pick read against the wrong pool misses.
     pool_c = _pool([0.1, 0.2, 0.7], [0.40, 0.45, 0.50], [0, 1, 2])
     items = [dataset.PoolItem(Path("x.slog"), p) for p in (POOL_A, POOL_B, pool_c)]
-    m = train_loop.evaluate(_BestFirstModel(), _LabelBatcher(), items, torch.device("cpu"), 2, "s_")
-    assert (m["s_eval_recall_1"], m["s_eval_regret_1"]) == (1, 0)
+    models = torch.nn.ModuleDict({"slot": _BestFirstModel()})
+    m = train_loop.evaluate(models, _LabelBatcher(), items, torch.device("cpu"), TINY)
+    assert (m["slot_eval_recall_1"], m["slot_eval_regret_1"]) == (1, 0)
 
 
 def test_a_checkpoint_from_another_version_is_refused(tmp_path):
@@ -248,3 +280,99 @@ def test_a_checkpoint_from_this_version_or_none_resumes(tmp_path):
     paths.rolling_checkpoint.parent.mkdir(parents=True)
     torch.save({"config": dict(config)}, paths.rolling_checkpoint)
     trainer.check_resumable(paths, config)
+
+
+def test_an_empty_chosen_set_leaves_the_board_unchanged():
+    torch.manual_seed(0)
+    stage = greedy.SetStage(16, 2)
+    for p in stage.parameters():  # off the zero init, so a set would change it
+        p.data.add_(0.1 * torch.randn_like(p))
+    board, g, tokens = torch.randn(2, 225, 16), torch.randn(2, 48), torch.randn(2, 3, 16)
+    mask = torch.tensor([[False] * 3, [True, True, False]])
+    out_board, out_g = stage(board, g, tokens, mask)
+    assert torch.equal(out_board[0], board[0]) and torch.equal(out_g[0], g[0])
+    assert not torch.allclose(out_board[1], board[1])
+
+
+def test_gain_targets_are_the_margin_over_the_chosen_sets_best():
+    win = torch.tensor([0.5, 0.4, 0.45, 0.3, 0.35])  # position 0: 0..2, position 1: 3..4
+    rows = greedy.make_rows([0, 0, 1], [[], [1], [4]])
+    pos_id = torch.tensor([0, 0, 0, 1, 1])
+    move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
+    assert move_idx.tolist() == [0, 1, 2, 0, 1, 2, 3, 4]
+    assert row_id.tolist() == [0, 0, 0, 1, 1, 1, 2, 2]
+    target = greedy.gain_targets(win, rows, move_idx, row_id)
+    # Empty set: the value itself; else the margin over the set's best, or 0.
+    assert torch.allclose(target, torch.tensor([0.5, 0.4, 0.45, 0.1, 0, 0.05, 0, 0]))
+
+
+def test_subset_assembly_draws_proper_subsets_holding_each_pools_seed():
+    # Position 0's seed (the top equity) is move 2; position 2 has one candidate.
+    win = np.array([0.5, 0.49, 0.1, 0.05, 0.6, 0.2, 0.3])
+    equity = np.array([-1.0, -2.0, 0.0, -3.0, 0.0, -1.0, 0.0])
+    pos_id = np.array([0, 0, 0, 0, 1, 1, 2])
+    seeds = {0: 2, 1: 4, 2: 6}
+    position, chosen = greedy.sample_rows(win, equity, pos_id, 50, np.random.default_rng(0))
+    for p, c in zip(position, chosen, strict=True):
+        members = np.flatnonzero(pos_id == p)
+        assert c[0] == seeds[p] and len(set(c)) == len(c)
+        assert set(c) <= set(members) and (len(c) < len(members) or len(members) == 1)
+    # Toward high value: of position 0's sets of the seed and two more, most
+    # add both near-best moves.
+    triples = [
+        frozenset(c) for p, c in zip(position, chosen, strict=True) if p == 0 and len(c) == 3
+    ]
+    assert triples.count(frozenset({2, 0, 1})) > len(triples) / 2
+
+
+def test_the_greedy_form_overfits_a_pool_and_builds_distinct_sets(chunk):
+    items = dataset.read_items([chunk])[:1]
+    batch = dataset.PoolBatcher().build(items)
+    torch.manual_seed(0)
+    m = trainer.build_models(replace(TINY, forms="greedy"))["greedy"]
+    opt = torch.optim.Adam(m.parameters(), lr=3e-3)
+    form = forms.FORMS["greedy"]
+    losses = []
+    for _ in range(4):
+        # The same chosen sets every step: a set's targets set its loss's
+        # scale, so fresh draws would not compare.
+        total = sum(form.loss(m, batch, TINY, np.random.default_rng(0)).values())
+        opt.zero_grad()
+        total.backward()
+        opt.step()
+        losses.append(total.item())
+    assert losses[-1] < losses[0]
+    (picks,) = form.sets(m, batch, 8)
+    assert len(picks) == min(8, len(items[0].pool.moves)) and len(set(picks)) == len(picks)
+
+
+class _TrueGainModel:
+    """A GreedyModel stand-in whose gains are the true margins over the chosen
+    set, plus a tiebreak toward higher value."""
+
+    def __init__(self, value: torch.Tensor):
+        self.value = value
+
+    def cache(self, batch):
+        return None, None
+
+    def gains(self, enc, h, pos_id, rows):
+        move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
+        target = greedy.gain_targets(self.value, rows, move_idx, row_id)
+        return target + 1e-3 * self.value[move_idx], move_idx, row_id
+
+
+@pytest.mark.parametrize(
+    "n, expected", [(8, [[2, 1, 0], [0], [0, 2, 4, 3, 1]]), (2, [[2, 1], [0], [0, 2]])]
+)
+def test_greedy_picks_are_each_positions_own_local_indices(n, expected):
+    # Pools of 3, 1 and 5 candidates: each set starts from the pool's seed
+    # (its top equity), then follows the value order; picks are local to each
+    # pool and stop at its size.
+    value = torch.tensor([0.3, 0.9, 0.5, 0.2, 0.1, 0.4, 0.8, 0.6, 0.7])
+    batch = {
+        "move_pos_id": torch.tensor([0, 0, 0, 1, 2, 2, 2, 2, 2]),
+        "move_equity": torch.tensor([-1.0, -2.0, 0.0, 0.0, 0.0, -1.0, -2.0, -3.0, -4.0]),
+        "input_spatial": torch.zeros(3, 1),
+    }
+    assert greedy.greedy_picks(_TrueGainModel(value), batch, n) == expected

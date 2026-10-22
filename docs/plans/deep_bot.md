@@ -167,7 +167,13 @@ over the moves already chosen:
 
 `gain(a | S) = E[max(0, v(a) − max_{s∈S} v(s))]`
 
-At `S = ∅` this reduces to ranking by value. A stage conditions each move's
+`S` starts from the seed, the static-equity top move, rather than empty. At
+`S = ∅` the gain would be the value itself: a whole win probability, where
+every later step's is a margin of a few points, so that one step would set
+the gain loss's scale. Seeded, every step asks which move most improves on a
+real one; the seed is the sim-best move about half the time, so a set of two
+or more would hold it anyway. Greedy from a fixed seed keeps the guarantee
+for the moves it adds. A stage conditions each move's
 query on the tokens of the moves already chosen. The evidence-fusion stage
 built for [sim_residual_feedback.md](sim_residual_feedback.md) already
 conditions on a set of move tokens. There the tokens carried sim results;
