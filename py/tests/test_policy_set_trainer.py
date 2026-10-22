@@ -172,13 +172,16 @@ def test_the_slot_form_overfits_a_pool(chunk):
     assert logits.shape == (len(items), 16, pad.shape[1])
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     first = None
-    for _ in range(4):
+    # The loss sits on a plateau for the first few steps (moving by under
+    # 0.05, either way), then falls: by step 12 it was at least 23% lower on
+    # every pool tried.
+    for _ in range(12):
         total, _ = slot.slot_loss(slot.slot_forward(m, batch)[0], batch)
         opt.zero_grad()
         total.backward()
         opt.step()
         first = first if first is not None else total.item()
-    assert total.item() < first
+    assert total.item() < 0.9 * first
 
 
 def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypatch):
