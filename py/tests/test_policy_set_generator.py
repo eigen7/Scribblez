@@ -133,6 +133,11 @@ def test_a_chunk_surveys_into_pools_that_read_back_as_model_inputs(surveyed_chun
         assert not pool.opp_leave_modelled and pool.opp_leave_value_mean == 0
         assert ((pool.opp_rack_presence >= 0) & (pool.opp_rack_presence <= 1)).all()
         assert 1 <= pool.opp_rack_presence.sum() <= 7
+        # The stored rollout values are what each candidate's win_prob averages.
+        assert len(pool.rollout_values) == pool.rollouts.sum()
+        n = pool.rollouts.astype(np.int64)
+        means = np.add.reduceat(pool.rollout_values, np.cumsum(n) - n) / n
+        np.testing.assert_allclose(means, pool.win_prob, atol=1e-5)
     inputs = pools.pool_inputs(slog, read)
     assert inputs["rows"].shape == (1, ffi.task_row_floats())
     assert len(inputs["cells"]) == len(inputs["letters"]) == sum(len(p.moves) for p in read)

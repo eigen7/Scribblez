@@ -43,8 +43,11 @@ from scribblez.workloads.policy_set import BELIEFS_UNIFORM, PolicySetParams  # n
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
 
-def _pool(q, win, rank) -> pools.Pool:
+def _pool(q, win, rank, values=None) -> pools.Pool:
+    """A pool of len(q) candidates, each with `values` as its rollout values
+    (default: 8 rollouts at its win probability)."""
     n = len(q)
+    values = values or [[w] * 8 for w in win]
     return pools.Pool(
         game=0,
         turn=0,
@@ -58,7 +61,8 @@ def _pool(q, win, rank) -> pools.Pool:
         paired_se=np.zeros(n, np.float32),
         q=np.array(q, np.float32),
         equity_rank=np.array(rank, np.int32),
-        rollouts=np.full(n, 8, np.uint16),
+        rollouts=np.array([len(v) for v in values], np.uint16),
+        rollout_values=np.array([x for v in values for x in v], np.float32),
     )
 
 

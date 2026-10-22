@@ -43,4 +43,9 @@ struct PoolLabel {
 // candidates that reached n, the first on ties.
 std::vector<PoolLabel> pool_labels(const std::vector<std::vector<Rollout>>& rollouts);
 
+// Every candidate's rollout win values (Rollout::win_value), candidate by
+// candidate, each in rollout order: what the pool record keeps, so that any two
+// candidates can be compared on their shared rollouts.
+std::vector<float> rollout_values(const std::vector<std::vector<Rollout>>& rollouts);
+
 }  // namespace scribblez

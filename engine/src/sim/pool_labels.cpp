@@ -91,4 +91,11 @@ std::vector<PoolLabel> pool_labels(const std::vector<std::vector<Rollout>>& roll
   return out;
 }
 
+std::vector<float> rollout_values(const std::vector<std::vector<Rollout>>& rollouts) {
+  std::vector<float> out;
+  for (const auto& rs : rollouts)
+    for (const Rollout& r : rs) out.push_back(float(r.win_value()));
+  return out;
+}
+
 }  // namespace scribblez

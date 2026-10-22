@@ -5184,6 +5184,16 @@ TEST(PoolLabels, IdenticalCandidatesSplitEvenly) {
   EXPECT_NEAR(labels[1].q, 0.5, 1e-12);
 }
 
+// The rollout values the pool record keeps: each candidate's win values in
+// turn, a draw counting half, however many rollouts racing left it.
+TEST(PoolLabels, RolloutValuesRunCandidateByCandidate) {
+  using pool_test::rollouts_of;
+  std::vector<std::vector<Rollout>> rollouts = {rollouts_of({1, 0, 0.25}), rollouts_of({0.5})};
+  rollouts[1][0].p_win = 0.25;
+  rollouts[1][0].p_draw = 0.5;
+  EXPECT_EQ(rollout_values(rollouts), (std::vector<float>{1, 0, 0.25, 0.5}));
+}
+
 // A candidate racing stopped is compared with the leader that stopped it, not
 // with the final leader, which it leads on their shared rollouts.
 TEST(PoolLabels, StoppedCandidateFacesItsCheckpointLeader) {
@@ -5228,8 +5238,9 @@ TEST(PoolLog, RoundTripAndVersionGate) {
   p.num_legal_moves = 42;
   p.moves = {Move::pass(), Move::exchange(TileCounts::from_string("QU"))};
   p.equity_ranks = {-1, 7};
-  p.labels = {{.win_prob = 0.25, .paired_se = 0.0, .q = 0.75, .rollouts = 300},
-              {.win_prob = 0.125, .paired_se = 0.5, .q = 0.25, .rollouts = 30}};
+  p.labels = {{.win_prob = 0.25, .paired_se = 0.0, .q = 0.75, .rollouts = 3},
+              {.win_prob = 0.125, .paired_se = 0.5, .q = 0.25, .rollouts = 2}};
+  p.rollout_values = {0.5f, 0.25f, 0.0f, 0.125f, 0.125f};
   p.opp_rack.presence[Tile::from_char('S').index()] = 0.625f;
   p.opp_rack.modelled = true;
   p.opp_rack.leave_value_mean = 3.5f;
@@ -5267,6 +5278,7 @@ TEST(PoolLog, RoundTripAndVersionGate) {
     EXPECT_FLOAT_EQ(pos.candidates[c].paired_se, float(p.labels[c].paired_se));
     EXPECT_FLOAT_EQ(pos.candidates[c].q, float(p.labels[c].q));
   }
+  EXPECT_EQ(std::vector<float>(pos.rollout_values, pos.rollout_values + 5), p.rollout_values);
   // The header's sources read back as written, and a changed one is named.
   const PoolSources back = PoolSources::of(r.header());
   EXPECT_EQ(back.first_difference(sources), nullptr);

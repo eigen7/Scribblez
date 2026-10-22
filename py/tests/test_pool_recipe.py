@@ -21,30 +21,12 @@ if not LEAVES.exists():
 
 from scribblez import ffi  # noqa: E402
 from scribblez.leave_inference import win_table  # noqa: E402
+from scribblez.policy_set.pools import read_pools  # noqa: E402
 from scribblez.selfplay import run_games  # noqa: E402
 
 ROLLOUTS = 20
 MOVE_TYPES = ffi.format_layout()["constants"]["move_type"]
 POOL = ffi.format_layout()["constants"]["pool"]
-
-
-def read_pool(path: Path):
-    """The .pool header and, per position, its header and candidates."""
-    hdr_t = ffi.struct_dtype("PoolFileHeader")
-    pos_t = ffi.struct_dtype("PoolPositionHeader")
-    rack_t = ffi.struct_dtype("PoolOppRack")
-    cand_t = ffi.struct_dtype("PoolCandidate")
-    buf = np.fromfile(path, np.uint8)
-    hdr = np.frombuffer(buf, hdr_t, count=1)[0]
-    off, positions = hdr_t.itemsize, []
-    for _ in range(int(hdr["num_positions"])):
-        ph = np.frombuffer(buf, pos_t, count=1, offset=off)[0]
-        off += pos_t.itemsize + rack_t.itemsize
-        cands = np.frombuffer(buf, cand_t, count=int(ph["num_candidates"]), offset=off)
-        off += cand_t.itemsize * int(ph["num_candidates"])
-        positions.append((ph, cands))
-    assert off == len(buf)
-    return hdr, positions
 
 
 @pytest.fixture(scope="module")
@@ -71,7 +53,7 @@ def pooled(tmp_path_factory) -> tuple[Path, Path]:
 
 def test_header_names_the_sources(pooled):
     slog, table = pooled
-    hdr, positions = read_pool(slog.with_suffix(".pool"))
+    hdr, positions = read_pools(slog.with_suffix(".pool"))
     assert hdr["magic"] == POOL["magic"] and hdr["version"] == POOL["version"]
     assert hdr["flags"] == 0  # uniform opponent leaves
     assert (hdr["horizon_plies"], hdr["rollouts"]) == (4, ROLLOUTS)
@@ -82,28 +64,28 @@ def test_header_names_the_sources(pooled):
 
 def test_labels_are_a_distribution_over_each_pool(pooled):
     slog, _ = pooled
-    _, positions = read_pool(slog.with_suffix(".pool"))
-    for ph, c in positions:
-        assert len(c) == ph["num_candidates"] > 1
-        np.testing.assert_allclose(c["q"].sum(), 1.0, atol=1e-5)
-        assert ((c["win_prob"] >= 0) & (c["win_prob"] <= 1)).all()
-        assert (c["move"]["type"] == MOVE_TYPES["pass"]).sum() == 1
-        assert ((c["rollouts"] >= 1) & (c["rollouts"] <= ROLLOUTS)).all()
-        leader = int(np.argmax(c["q"]))
-        assert c["rollouts"][leader] == ROLLOUTS and c["paired_se"][leader] == 0
-        full = c["rollouts"] == ROLLOUTS
-        assert c["win_prob"][leader] == c["win_prob"][full].max()
+    _, positions = read_pools(slog.with_suffix(".pool"))
+    for p in positions:
+        assert len(p.moves) > 1
+        np.testing.assert_allclose(p.q.sum(), 1.0, atol=1e-5)
+        assert ((p.win_prob >= 0) & (p.win_prob <= 1)).all()
+        assert (p.moves["type"] == MOVE_TYPES["pass"]).sum() == 1
+        assert ((p.rollouts >= 1) & (p.rollouts <= ROLLOUTS)).all()
+        leader = int(np.argmax(p.q))
+        assert p.rollouts[leader] == ROLLOUTS and p.paired_se[leader] == 0
+        full = p.rollouts == ROLLOUTS
+        assert p.win_prob[leader] == p.win_prob[full].max()
 
 
 def test_labels_come_from_the_table_and_racing(pooled):
     slog, _ = pooled
-    _, positions = read_pool(slog.with_suffix(".pool"))
-    win = np.concatenate([c["win_prob"] for _, c in positions])
+    _, positions = read_pools(slog.with_suffix(".pool"))
+    win = np.concatenate([p.win_prob for p in positions])
     # Rollouts stopped at the table: neither one constant nor terminal 0s and 1s.
     assert win.std() > 0 and ((win > 0) & (win < 1)).mean() > 0.5
-    assert all(c["q"].max() < 1 and c["q"].std() > 0 for _, c in positions)
+    assert all(p.q.max() < 1 and p.q.std() > 0 for p in positions)
     # Racing protects no candidate in a pool, so some stop early.
-    assert any((c["rollouts"] < ROLLOUTS).any() for _, c in positions)
+    assert any((p.rollouts < ROLLOUTS).any() for p in positions)
 
 
 def _rerun(slog: Path, table: Path, horizon: int) -> subprocess.CompletedProcess:
