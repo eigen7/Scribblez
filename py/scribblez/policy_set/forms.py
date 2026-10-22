@@ -49,8 +49,8 @@ def _greedy_build(encoder: PolicySetEncoder, params) -> nn.Module:
 
 def _greedy_loss(model, batch: Batch, params, rng) -> dict[str, torch.Tensor]:
     position, chosen = greedy.sample_rows(
-        batch["win_prob"].numpy(force=True), batch["move_pos_id"].numpy(force=True),
-        params.greedy_rows, rng,
+        batch["win_prob"].numpy(force=True), batch["move_equity"].numpy(force=True),
+        batch["move_pos_id"].numpy(force=True), params.greedy_rows, rng,
     )  # fmt: skip
     rows = greedy.make_rows(position, chosen).to(batch["move_pos_id"].device)
     return {"gain": greedy.gain_loss(model, batch, rows)}

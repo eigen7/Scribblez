@@ -306,16 +306,23 @@ def test_gain_targets_are_the_margin_over_the_chosen_sets_best():
     assert torch.allclose(target, torch.tensor([0.5, 0.4, 0.45, 0.1, 0, 0.05, 0, 0]))
 
 
-def test_subset_assembly_draws_proper_subsets_of_each_pool():
-    win = np.array([0.5, 0.49, 0.1, 0.6, 0.2])
-    pos_id = np.array([0, 0, 0, 1, 1])
-    position, chosen = greedy.sample_rows(win, pos_id, 50, np.random.default_rng(0))
+def test_subset_assembly_draws_proper_subsets_holding_each_pools_seed():
+    # Position 0's seed (the top equity) is move 2; position 2 has one candidate.
+    win = np.array([0.5, 0.49, 0.1, 0.05, 0.6, 0.2, 0.3])
+    equity = np.array([-1.0, -2.0, 0.0, -3.0, 0.0, -1.0, 0.0])
+    pos_id = np.array([0, 0, 0, 0, 1, 1, 2])
+    seeds = {0: 2, 1: 4, 2: 6}
+    position, chosen = greedy.sample_rows(win, equity, pos_id, 50, np.random.default_rng(0))
     for p, c in zip(position, chosen, strict=True):
         members = np.flatnonzero(pos_id == p)
-        assert set(c) <= set(members) and len(c) < len(members) and len(set(c)) == len(c)
-    # Toward high value: of the pairs from position 0, most hold both near-best moves.
-    pairs = [frozenset(c) for p, c in zip(position, chosen, strict=True) if p == 0 and len(c) == 2]
-    assert pairs.count(frozenset({0, 1})) > len(pairs) / 2
+        assert c[0] == seeds[p] and len(set(c)) == len(c)
+        assert set(c) <= set(members) and (len(c) < len(members) or len(members) == 1)
+    # Toward high value: of position 0's sets of the seed and two more, most
+    # add both near-best moves.
+    triples = [
+        frozenset(c) for p, c in zip(position, chosen, strict=True) if p == 0 and len(c) == 3
+    ]
+    assert triples.count(frozenset({2, 0, 1})) > len(triples) / 2
 
 
 def test_the_greedy_form_overfits_a_pool_and_builds_distinct_sets(chunk):
@@ -328,8 +335,7 @@ def test_the_greedy_form_overfits_a_pool_and_builds_distinct_sets(chunk):
     losses = []
     for _ in range(4):
         # The same chosen sets every step: a set's targets set its loss's
-        # scale (an empty set's are whole win probabilities), so fresh draws
-        # would not compare.
+        # scale, so fresh draws would not compare.
         total = sum(form.loss(m, batch, TINY, np.random.default_rng(0)).values())
         opt.zero_grad()
         total.backward()
@@ -357,14 +363,16 @@ class _TrueGainModel:
 
 
 @pytest.mark.parametrize(
-    "n, expected", [(8, [[1, 2, 0], [0], [2, 4, 3, 1, 0]]), (2, [[1, 2], [0], [2, 4]])]
+    "n, expected", [(8, [[2, 1, 0], [0], [0, 2, 4, 3, 1]]), (2, [[2, 1], [0], [0, 2]])]
 )
 def test_greedy_picks_are_each_positions_own_local_indices(n, expected):
-    # Pools of 3, 1 and 5 candidates: picks are local to each pool, stop at
-    # its size, and follow the value order.
+    # Pools of 3, 1 and 5 candidates: each set starts from the pool's seed
+    # (its top equity), then follows the value order; picks are local to each
+    # pool and stop at its size.
     value = torch.tensor([0.3, 0.9, 0.5, 0.2, 0.1, 0.4, 0.8, 0.6, 0.7])
     batch = {
         "move_pos_id": torch.tensor([0, 0, 0, 1, 2, 2, 2, 2, 2]),
+        "move_equity": torch.tensor([-1.0, -2.0, 0.0, 0.0, 0.0, -1.0, -2.0, -3.0, -4.0]),
         "input_spatial": torch.zeros(3, 1),
     }
     assert greedy.greedy_picks(_TrueGainModel(value), batch, n) == expected

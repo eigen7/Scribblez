@@ -759,9 +759,13 @@ that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
   fusion's observation channels have no counterpart, since chosen moves are
   not simmed. The candidates then re-attend to the conditioned board through
   the encoder's own attention, and the gain head reads them.
-- Rows come by subset assembly. Per position, draw subsets `S` of sizes 0 to
-  `N_max − 1`, biased toward high-value moves as deployment sets are. The
-  target for a held-out move `a` is `max(0, v(a) − max_S v)`. A batch of
+- Every set starts from the seed, the position's static-equity top move
+  (the largest equity input), so no target is a gain over an empty set
+  ([deep_bot.md](deep_bot.md#form-1-greedy-selection-with-cached-steps)).
+- Rows come by subset assembly. Per position, draw subsets `S`: the seed
+  plus 0 to `N_max − 2` more moves, biased toward high-value moves as
+  deployment sets are. The target for a held-out move `a` is
+  `max(0, v(a) − max_S v)`. A batch of
   subsets per position shares one trunk pass, which is the training-side form
   of the cached steps.
 - The loss is Huber on the gain.

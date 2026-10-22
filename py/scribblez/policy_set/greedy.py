@@ -1,7 +1,10 @@
 """Form 1 of the policy-set model (docs/plans/deep_bot.md, "Form 1: greedy
 selection, with cached steps"): a set is built one move at a time, each step
 taking the candidate with the largest predicted gain over the moves already
-chosen, gain(a | S) = E[max(0, v(a) - max_{s in S} v(s))].
+chosen, gain(a | S) = E[max(0, v(a) - max_{s in S} v(s))]. Every set starts
+from the seed, the position's static-equity top move: the steps add the moves
+most likely to beat it, so every gain is a margin over a real move, never a
+whole win probability (as the gain over an empty set would be).
 
 A step conditions the board on the chosen moves and re-scores every
 candidate. The chosen moves become tokens (their plain candidate vectors,
@@ -20,9 +23,9 @@ the candidate embeddings, and the plain candidate vectors the tokens come
 from. A step reruns only the stage, the re-scoring and the gain head.
 
 Training rows come by subset assembly: per position, `rows` random chosen
-sets, drawn toward high-value moves as deployment sets are, each giving every
-candidate the target max(0, v(a) - max_S v), with v the pool's win
-probabilities and max over the empty set 0.
+sets, each the seed plus moves drawn toward high value as deployment sets
+are, giving every candidate the target max(0, v(a) - max_S v), with v the
+pool's win probabilities.
 """
 
 from __future__ import annotations
@@ -50,8 +53,8 @@ SUBSET_FLOOR = 1e-3
 # a couple of points, where most targets sit. At 0 a fresh head would predict
 # 0.69 (69 points) for every candidate.
 GAIN_BIAS_INIT = -4.0
-# The largest chosen set a training row holds: one less than the largest set
-# the eval builds.
+# The largest chosen set a training row holds, the seed included: one less
+# than the largest set the eval builds.
 MAX_CHOSEN = max(SET_SIZES) - 1
 
 
@@ -189,28 +192,38 @@ class GreedyModel(nn.Module):
 
 
 def sample_rows(
-    win_prob: np.ndarray, pos_id: np.ndarray, rows_per_position: int, rng: np.random.Generator
+    win_prob: np.ndarray,
+    equity: np.ndarray,
+    pos_id: np.ndarray,
+    rows_per_position: int,
+    rng: np.random.Generator,
 ) -> tuple[list[int], list[list[int]]]:
-    """Subset assembly's chosen sets: per position, `rows_per_position` sets
-    of 0..MAX_CHOSEN of its candidates (never all of them), drawn without
-    replacement toward high win probability."""
+    """Subset assembly's chosen sets: per position, `rows_per_position` sets,
+    each its seed (the largest `equity`) and 0..MAX_CHOSEN-1 more of its
+    candidates (never all of them), drawn without replacement toward high win
+    probability."""
     positions, chosen = [], []
     starts = np.flatnonzero(np.r_[True, pos_id[1:] != pos_id[:-1]])
     ends = np.r_[starts[1:], len(pos_id)]
     for p, (lo, hi) in enumerate(zip(starts, ends, strict=True)):
+        seed = int(np.argmax(equity[lo:hi]))
         v = win_prob[lo:hi].astype(np.float64)
         w = np.exp((v - v.max()) / SUBSET_TEMPERATURE) + SUBSET_FLOOR
+        w[seed] = 0.0
+        # Beside the seed, at most all but one of the other candidates.
+        most = max(min(MAX_CHOSEN - 1, hi - lo - 2), 0)
         for _ in range(rows_per_position):
-            size = int(rng.integers(0, min(MAX_CHOSEN, hi - lo - 1) + 1))
-            picked = rng.choice(hi - lo, size=size, replace=False, p=w / w.sum())
+            size = int(rng.integers(0, most + 1))
+            picked = rng.choice(hi - lo, size=size, replace=False, p=w / w.sum()) if size else []
             positions.append(p)
-            chosen.append([int(lo + i) for i in picked])
+            chosen.append([int(lo + seed)] + [int(lo + i) for i in picked])
     return positions, chosen
 
 
 def gain_targets(win_prob: torch.Tensor, rows: SetRows, move_idx, row_id) -> torch.Tensor:
-    """max(0, v(a) - max_S v) for each row's candidates; max over an empty set
-    is 0, so the target there is v(a) itself."""
+    """max(0, v(a) - max_S v) for each row's candidates. Max over an empty
+    set is 0, so the target there would be v(a) itself; training sets always
+    hold the seed."""
     chosen_v = torch.where(rows.mask, win_prob[rows.chosen], 0.0)
     best = chosen_v.max(dim=1).values  # (R,)
     return (win_prob[move_idx] - best[row_id]).clamp(min=0)
@@ -230,8 +243,8 @@ def gain_loss(model: GreedyModel, batch: dict[str, torch.Tensor], rows: SetRows)
 @torch.no_grad()
 def greedy_picks(model: GreedyModel, batch: dict[str, torch.Tensor], n: int) -> list[list[int]]:
     """Each position's set of up to `n`, as candidate indices within the
-    position, built greedily: each step takes the unchosen candidate with the
-    largest predicted gain."""
+    position, built greedily: the seed, then at each step the unchosen
+    candidate with the largest predicted gain."""
     pos_id = batch["move_pos_id"]
     device = pos_id.device
     num_positions = batch["input_spatial"].shape[0]
@@ -240,17 +253,17 @@ def greedy_picks(model: GreedyModel, batch: dict[str, torch.Tensor], n: int) -> 
     sizes = sizes.tolist()
     with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
         enc, h = model.cache(batch)
-    chosen: list[list[int]] = [[] for _ in range(num_positions)]
-    for _ in range(min(n, max(sizes))):
+    equity, _ = to_grid(batch["move_equity"].float(), pos_id, num_positions, -torch.inf)
+    seeds = equity.argmax(dim=1).tolist()
+    chosen = [[starts[p] + seeds[p]] for p in range(num_positions)]
+    for _ in range(min(n, max(sizes)) - 1):
         # One row per position, in order, so the rows' candidates are the
         # batch's own, in its order.
         rows = make_rows(list(range(num_positions)), chosen).to(device)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
             gains, _, _ = model.gains(enc, h, pos_id, rows)
         gains = gains.float()
-        taken = [i for c in chosen for i in c]
-        if taken:
-            gains[torch.tensor(taken, device=device)] = -torch.inf
+        gains[torch.tensor([i for c in chosen for i in c], device=device)] = -torch.inf
         grid, _ = to_grid(gains, pos_id, num_positions, -torch.inf)
         best = grid.argmax(dim=1).tolist()
         for p in range(num_positions):
