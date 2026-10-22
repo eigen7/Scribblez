@@ -53,10 +53,10 @@ moved on. New plans go here, not in `docs/` proper.
   inference workload also refits each generation, and every artifact carries
   a format version distinct from its generation.
 - **[gain_target_experiment.md](gain_target_experiment.md)**: *proposed,
-  not built.* Which gain target the greedy form trains on: the point margin
-  today, expected improvement over the means' uncertainty, or the optimistic
-  per-rollout expectation. Per-rollout values in the pool record, then the
-  rules compared as selection rules on split rollouts.
+  not built.* Whether the greedy form should train on expected improvement
+  over the means' uncertainty instead of today's point margin. Per-rollout
+  values in the pool record, then the two compared as selection rules on
+  split rollouts.
 - **[supreme_bot_m1a.md](supreme_bot_m1a.md)**: *proposed, not built.*
   The build plan for M1a, SupremeBot's held-out transfer test: probe traces
   in the sim runner, a generator workload writing labels and a new `.sprobe`

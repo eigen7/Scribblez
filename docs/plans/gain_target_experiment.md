@@ -13,8 +13,7 @@ Measurements inform the next step; no thresholds are fixed in advance.
 
 The greedy form builds a set from the seed (the static-equity top move),
 adding at each step the move with the largest predicted gain over the best
-move chosen so far, `s*`. Three candidate definitions of that gain, for a
-move `a`:
+move chosen so far, `s*`. Two definitions of that gain, for a move `a`:
 
 - **point**, the target today: `max(0, v̂(a) − v̂(s*))`, with `v̂` the pool's
   mean win probability.
@@ -22,15 +21,11 @@ move `a`:
   `E[max(0, μ_a − μ_s*)]` with `μ_a − μ_s* ~ N(Δ̂, se²)`, where `Δ̂` is the
   mean paired difference against `s*` and `se` its standard error. In closed
   form, `Δ̂·Φ(Δ̂/se) + se·φ(Δ̂/se)`.
-- **optimistic**, the expectation over rollouts: `E_r[max(0, v_r(a) −
-  v_r(s*))]`, with `v_r` a rollout's value (`p_win + p_draw/2`) and the
-  rollouts paired: rollout `r` deals every candidate the same draw.
 
-Each one puts the max inside an expectation, so each rewards a move that
-might overturn `s*`, not only one whose point estimate beats it. They differ
-in what the expectation is over. **ei** is over what the sim has not yet
-resolved about the two means. **optimistic** is over how the two moves play
-out deal by deal, which includes the game's own luck.
+**ei** rewards a move that might overturn `s*`, not only one whose estimate
+beats it: an unresolved near-tie gets a target in proportion to how
+unresolved it is, and a clearly worse move gets about 0. As the sim resolves
+the means, `se` goes to 0 and **ei** becomes **point**.
 
 ## Why now
 
@@ -46,31 +41,34 @@ statistics below from its 100 held-out pools.
 - The greedy form ends level with the static-equity baseline: recall@8 0.80
   against 0.80, regret@8 0.0023 against 0.0021.
 
-## What we expect, and why it needs measuring
+## Considered and dropped: the expectation over rollouts
 
-For any random variable, `E[max(0, D)] = (E[D] + E|D|) / 2`. So
-**optimistic** is half the mean margin plus half the mean absolute per-rollout
-difference. From the pools' paired standard errors, that spread is about 11 to
-16 points per rollout, against margins of about 1 point. A normal-approximation
-example: a move 5 points worse than `s*` with a per-rollout spread of 20 scores
-5.7, and a move 2 points better with a spread of 3 scores 2.5. The final sim
-picks by the mean, so only the second could change the decision. The concern
-is that **optimistic** ranks moves by volatility.
-
-The case for it: moves that play out differently from `s*` are where the
-sim's verdict is least predictable from `s*` alone, and a set that covers them
-may hold the sim-best move more often than a set of near-copies. Which
-effect dominates is the experiment's question. **ei** is the middle option.
-It credits a move's spread only while the spread leaves the mean unresolved,
-and that credit shrinks as more rollouts come in.
+`E_r[max(0, v_r(a) − v_r(s*))]`, with `v_r` a rollout's value and the rollouts
+paired, also puts the max inside an expectation, but over how the two moves
+play out deal by deal: the game's own luck, not what is unresolved about the
+means. For any random variable, `E[max(0, D)] = (E[D] + E|D|) / 2`, so it is
+half the mean margin plus half the mean absolute per-rollout difference. From
+the pools' paired standard errors that spread is about 11 to 16 points per
+rollout, against margins of about 1 point, so it ranks moves mostly by
+volatility. A normal-approximation example: a move 5 points worse than `s*`
+with a per-rollout spread of 20 scores 5.7, and a move 2 points better with a
+spread of 3 scores 2.5. The final sim picks by the mean, so only the second
+could change the decision.
 
 ## PR 1: per-rollout values in the pool record
+
+**ei** needs the paired standard error of each move against `s*`, and `s*` is
+whichever member of a sampled set is best, so it changes with every set. The
+pools keep the paired standard error against the leader only. Pairing matters:
+unpaired, the error would include the luck two moves share and be far larger.
+So the record keeps every rollout's value, from which any pair's error follows.
 
 - **The record.** `kPoolFormatVersion` 4. A header flag,
   `kPoolFlagRolloutValues`, marks a file that keeps them. Such a file follows
   each position's candidates with every candidate's rollout values, as
-  float32 in candidate order, `rollouts` of them per candidate. Rollout `i` of
-  every candidate is the same deal, as `pool_labels` already assumes.
+  float32 in candidate order, `rollouts` of them per candidate: each
+  rollout's `p_win + p_draw/2`. Rollout `i` of every candidate is the same
+  deal, as `pool_labels` already assumes.
 - **The survey.** `sim_candidate_survey_tool --pool-rollout-values` writes
   them. Off by default; the `policy_set` workload does not set it until a
   trainer reads them.
@@ -88,8 +86,16 @@ and that credit shrinks as more rollouts come in.
 **Pools.** Fresh positions from HastyBot games, surveyed as the 8b check's
 were (opponent leaves inferred by `tilted2`'s latest generation, rollouts
 stopped at its win table after 3 plies), but with **racing off** and 100
-rollouts per candidate. Racing would leave the clearly beaten candidates
-without the later rollouts the scoring uses. Racing averaged 34 rollouts per
+rollouts per candidate. Racing off is for the scoring below, which needs every
+candidate's later rollouts. Racing would stop clearly beaten moves at 10 to 70
+rollouts. A rule that picked one would leave its set's regret undefined, and
+the seed itself is sometimes stopped. Treating stopped moves as never best is
+close, since racing stops only moves three standard errors behind. But at
+k = 10 the stops at 20, 40 and 70 rollouts are decided partly on the
+rollouts the scoring reads, so the truth would be filtered by the data that
+grades it. Production pools stay raced. There, **ei** would take each move's
+error from the rollouts it has, so a stopped move gets a wider one. Racing
+averaged 34 rollouts per
 candidate on the 8b pools. Without it, a position costs about 3 times as much,
 roughly 0.37 positions/s on 28 threads. That makes 300 positions about 13
 minutes and about 76 MB, both estimates to be measured on the first chunk. The
@@ -108,37 +114,34 @@ the A part. After each step, `s*` is the best member of the set by its A mean.
 | equity | the next in the static-equity ranking (no sim information; the reference) |
 | point | the largest **point** gain, ties at 0 broken by A mean. This is the seed, then the top 15 by A mean |
 | ei | the largest **ei** gain, with `Δ̂` and `se` from the paired A differences against `s*` |
-| optimistic | the largest **optimistic** gain over the A rollouts |
 
 **What is reported**, for each rule at N = 2, 4, 8, 16 and k = 10, 20, 40:
 - Recall of the B leader.
 - Regret: the B leader's mean minus the set's best B mean. It is less
-  sensitive than recall to near-ties flipping between halves.
-- Each rule's difference from **point**, paired by position, with 95%
-  bootstrap intervals over positions. A pairwise comparison on the same
-  positions is tighter than the ±0.02 to 0.03 standard error of one recall.
-- For **optimistic** and **ei**: how often a pick is below `s*` on its A mean,
-  and the picks' mean per-rollout spread against `s*`. These test the
-  volatility concern directly.
+  sensitive than recall to near-ties flipping between the parts.
+- **ei**'s difference from **point**, and each from **equity**, paired by
+  position, with 95% bootstrap intervals over positions. A pairwise
+  comparison on the same positions is tighter than the ±0.02 to 0.03
+  standard error of one recall.
+- For **ei**: how often a pick is below `s*` on its A mean, and whether such
+  picks are the B leader more often than **point**'s picks at the same step.
 
 Small k matters most. A model reads features, not sims, so it knows less about
 a pool than even a short sim, and that low-information regime is where
-optimism should matter most. As k grows, **ei** converges on **point**
-(`se` goes to 0); **optimistic** does not, since its limit still weighs each
-move's per-rollout spread.
+crediting unresolved near-ties should matter most. As k grows, **ei**
+converges on **point**.
 
 The tool is `py/tools/gain_target_experiment.py`, which reads pools through
 `policy_set.pools`. Its unit tests check each rule's gain against hand-worked
-cases, including the closed form for **ei** and the identity above for
-**optimistic**.
+cases, including the closed form for **ei**.
 
 ## What it does and does not settle
 
-It compares the targets as selection rules on sim data. That is what a
+It compares the two targets as selection rules on sim data. That is what a
 greedy model trained on each target would try to reproduce from the board
 alone. It does not train the models: what a model can learn from each target
-is the next step if the rules separate. The greedy trainer would then take
-the chosen target, so `policy_set` pools would keep rollout values in
+is the next step if **ei** separates from **point**. The greedy trainer would
+then take it, so `policy_set` pools would keep rollout values in
 production. Racing keeps that to about 34 values per candidate, about 86 KB
 per position against today's 23 KB. The comparison would then run on a real
 tag's data.
