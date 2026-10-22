@@ -190,8 +190,13 @@ void sim_ranked_moves(const Dictionary& dict, const ParsedGcgPosition& pos,
   std::cout << "simming " << candidates.size() << " moves x " << opt.sim_params.rollouts
             << " rollouts on " << opt.sim_params.threads << " threads...\n";
   const SimRunner runner(dict, opt.sim_params);
-  const std::vector<RolloutStats> observations = runner.run(
-    {pos.board, pos.scores, pos.mover, pos.rack, pos.opp_leave}, candidates, opt.sim_seed);
+  const SimPosition sim_pos{.board = pos.board,
+                            .scores = pos.scores,
+                            .mover = pos.mover,
+                            .rack = pos.rack,
+                            .opp_leave = pos.opp_leave,
+                            .opp_leave_belief = nullptr};
+  const std::vector<RolloutStats> observations = runner.run(sim_pos, candidates, opt.sim_seed);
   for (size_t i = 0; i < ranked.size(); ++i) {
     ranked[i].sim_win_rate = sim_objective_value(observations[i], SimObjective::kWinRate);
   }
