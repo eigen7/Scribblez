@@ -16,7 +16,7 @@ using CandidateRollouts = std::vector<std::vector<Rollout>>;
 // Wins over the first n rollouts, a draw counting half.
 double prefix_wins(const std::vector<Rollout>& rs, size_t n) {
   double sum = 0;
-  for (size_t i = 0; i < n; ++i) sum += rs[i].p_win + 0.5 * rs[i].p_draw;
+  for (size_t i = 0; i < n; ++i) sum += rs[i].win_value();
   return sum;
 }
 

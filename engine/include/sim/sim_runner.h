@@ -148,6 +148,9 @@ struct Rollout {
   // side with no play left, stuck with the Q.
   bool self_passed = false;
   bool opp_passed = false;
+
+  // The rollout's win value for the root mover, a draw counting half.
+  double win_value() const { return p_win + 0.5 * p_draw; }
 };
 
 // One rollout step by step, beside its Rollout: the racks each side held when

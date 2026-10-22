@@ -298,7 +298,7 @@ json::object position_json(const SimmedPosition& r, const Dictionary& dict, cons
 void append_rollouts(const SimmedPosition& r, std::vector<float>* floats) {
   for (const std::vector<Rollout>& rollouts : r.rollouts) {
     for (const Rollout& o : rollouts) {
-      floats->push_back(float(o.p_win + 0.5 * o.p_draw));
+      floats->push_back(float(o.win_value()));
       floats->push_back(float(o.delta));
     }
   }

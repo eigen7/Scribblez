@@ -90,7 +90,7 @@ std::string bingo_spot_name(uint16_t spot) {
 PairedWinDiff paired_win_diff(std::span<const Rollout> a, std::span<const Rollout> b) {
   PairedWinDiff out;
   for (size_t i = 0; i < a.size(); ++i) {
-    const double d = (a[i].p_win + 0.5 * a[i].p_draw) - (b[i].p_win + 0.5 * b[i].p_draw);
+    const double d = a[i].win_value() - b[i].win_value();
     out.sum += d;
     out.sq_sum += d * d;
   }
