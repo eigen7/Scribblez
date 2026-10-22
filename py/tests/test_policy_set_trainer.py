@@ -319,7 +319,7 @@ def _expected_improvement(diffs) -> float:
     )
 
 
-def test_gain_targets_are_expected_improvement_over_the_sets_best():
+def test_gain_targets_are_expected_improvement_over_a_member():
     # Move 1 beats move 0 on one rollout of four; move 2 plays out exactly as
     # move 0; racing stopped move 3 after two rollouts.
     pool = _pool(
@@ -331,23 +331,37 @@ def test_gain_targets_are_expected_improvement_over_the_sets_best():
     grid = dataset.rollout_grid([pool])
     assert grid["rollout_values"][3].tolist() == [0, 0, 0, 0]
     assert grid["rollouts"].tolist() == [4, 4, 4, 2]
-    batch = {"win_prob": torch.from_numpy(pool.win_prob), **grid}
-    # Row 0 holds move 0; row 1 holds moves 0 and 1, so its s* is move 1.
-    rows = greedy.make_rows([0, 0], [[0], [0, 1]])
+    rows = greedy.make_rows([0], [[0]])
     move_idx, row_id = greedy.row_candidates(torch.zeros(4, dtype=torch.int64), rows.position)
-    target = greedy.gain_targets(batch, rows, move_idx, row_id)
+    target = greedy.gain_targets(grid, rows, move_idx, row_id)
     expected = [
         0,  # chosen
         _expected_improvement([0, 1, 0, 0]),
         0,  # identical outcomes on every rollout
         _expected_improvement([-1, 0]),  # over the two rollouts both ran
-        0,  # chosen
-        0,  # chosen
-        _expected_improvement([0, -1, 0, 0]),
-        0,  # lost both shared rollouts by a full win: no doubt left
     ]
     np.testing.assert_allclose(target.numpy(), expected, rtol=1e-5, atol=1e-7)
-    assert 0 < expected[3] < expected[6] < expected[1]
+    assert 0 < expected[3] < expected[1]
+
+
+def test_a_move_that_sims_as_a_member_does_gains_nothing():
+    # A is the set's best. C plays out exactly as B, a weaker member, and D
+    # plays out unlike either; against A alone, C and D look alike.
+    a, b = [1, 1, 0, 1, 0, 1, 1, 0], [0, 1, 1, 0, 1, 0, 1, 0]
+    d = [1, 0, 1, 0, 1, 0, 1, 0]
+    pool = _pool([0.25] * 4, [0.625, 0.5, 0.5, 0.5], [0, 1, 2, 3], values=[a, b, b, d])
+    grid = dataset.rollout_grid([pool])
+    rows = greedy.make_rows([0, 0], [[0], [0, 1]])
+    move_idx, row_id = greedy.row_candidates(torch.zeros(4, dtype=torch.int64), rows.position)
+    target = greedy.gain_targets(grid, rows, move_idx, row_id).numpy()
+    c_vs_a = _expected_improvement(np.subtract(b, a))
+    d_vs_a = _expected_improvement(np.subtract(d, a))
+    # The set {A}: C and D are each measured against A.
+    np.testing.assert_allclose(target[[2, 3]], [c_vs_a, d_vs_a], rtol=1e-5)
+    # The set {A, B}: B covers C entirely; D keeps the lesser of its two.
+    d_vs_b = _expected_improvement(np.subtract(d, b))
+    np.testing.assert_allclose(target[[4, 5, 6, 7]], [0, 0, 0, min(d_vs_a, d_vs_b)], atol=1e-7)
+    assert target[2] > 0.05 and target[7] > 0.05
 
 
 def test_subset_assembly_draws_proper_subsets_holding_each_pools_seed():

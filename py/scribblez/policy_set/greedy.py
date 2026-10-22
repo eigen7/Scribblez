@@ -24,13 +24,16 @@ from. A step reruns only the stage, the re-scoring and the gain head.
 
 Training rows come by subset assembly: per position, `rows` random chosen
 sets, each the seed plus moves drawn toward high value as deployment sets
-are. Each candidate's target is its expected improvement over the set's best
-move s* (by the pool's win probability): E[max(0, mu_a - mu_s*)], with
-mu_a - mu_s* taken as normal about the two moves' mean paired difference over
-the rollouts both ran, with that mean's standard error. A near-tie the sims
-left unresolved gets a target in proportion to how unresolved it is; a
-clearly worse move about 0. The sample margin max(0, v(a) - v(s*)) would
-instead be 0 for nearly every move, and a coin flip for the near-ties.
+are. A candidate's target is the least, over the set's members s, of its
+expected improvement over s: E[max(0, mu_a - mu_s)], with mu_a - mu_s taken
+as normal about the two moves' mean paired difference over the rollouts both
+ran, with that mean's standard error. Each is an upper bound on the
+improvement over the set's best, so the least is the tightest of them: a
+move that sims as a member does gets about 0, however unlike the set's best
+it is. A near-tie the sims left unresolved gets a target in proportion to how
+unresolved it is; a clearly worse move about 0. The sample margin over the
+set's best would instead be 0 for nearly every move, and a coin flip for the
+near-ties.
 """
 
 from __future__ import annotations
@@ -225,13 +228,6 @@ def sample_rows(
     return positions, chosen
 
 
-def best_chosen(win_prob: torch.Tensor, rows: SetRows) -> torch.Tensor:
-    """Each row's s*: the global index of its chosen move with the largest
-    win probability, (R,)."""
-    chosen_v = torch.where(rows.mask, win_prob[rows.chosen], -torch.inf)
-    return rows.chosen.gather(1, chosen_v.argmax(dim=1, keepdim=True)).squeeze(1)
-
-
 def paired_difference(
     values: torch.Tensor, rollouts: torch.Tensor, a: torch.Tensor, b: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -255,14 +251,17 @@ def expected_improvement(mean: torch.Tensor, se: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def gain_targets(batch: dict[str, torch.Tensor], rows: SetRows, move_idx, row_id) -> torch.Tensor:
-    """Each row's candidates' expected improvement over the row's s*, from
-    their paired rollouts; 0 for the row's own chosen moves."""
-    s_star = best_chosen(batch["win_prob"].float(), rows)[row_id]
-    mean, se = paired_difference(
-        batch["rollout_values"].float(), batch["rollouts"], move_idx, s_star
-    )
-    chosen = ((rows.chosen[row_id] == move_idx.unsqueeze(1)) & rows.mask[row_id]).any(dim=1)
-    return torch.where(chosen, 0.0, expected_improvement(mean, se))
+    """Each row's candidates' least expected improvement over a member of
+    the row's set, from their paired rollouts; 0 for the members themselves.
+    Every row holds at least its seed."""
+    values, rollouts = batch["rollout_values"].float(), batch["rollouts"]
+    members, in_set = rows.chosen[row_id], rows.mask[row_id]  # (Mr, E)
+    gain = torch.full(move_idx.shape, torch.inf, device=values.device)
+    for e in range(members.shape[1]):
+        ei = expected_improvement(*paired_difference(values, rollouts, move_idx, members[:, e]))
+        gain = torch.where(in_set[:, e], torch.minimum(gain, ei), gain)
+    chosen = ((members == move_idx.unsqueeze(1)) & in_set).any(dim=1)
+    return torch.where(chosen, 0.0, gain)
 
 
 def gain_loss(model: GreedyModel, batch: dict[str, torch.Tensor], rows: SetRows) -> torch.Tensor:

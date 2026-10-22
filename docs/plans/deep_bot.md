@@ -177,14 +177,26 @@ for the moves it adds.
 
 The expectation is over what the sims have not resolved about the values,
 not over the game's own luck. A training pool's sims leave each pair of
-moves a mean difference with a standard error, and the target is the
-expected improvement under that uncertainty,
-`E[max(0, μ_a − μ_s*)]`, with `s*` the best member of `S`. An expectation
-over rollouts instead, `E_r[max(0, v_r(a) − v_r(s*))]`, was considered and
-rejected. It is half the mean margin plus half the mean absolute per-rollout
-difference, and that per-rollout spread (11 to 16 points, inferred from the
-pools' paired standard errors) dwarfs typical margins (about 1 point), so it would rank moves by volatility: a move 5
-points worse than `s*` but volatile would outrank one 2 points better.
+moves a mean difference with a standard error, so each member `s` of `S`
+gives `a` an expected improvement under that uncertainty,
+`E[max(0, μ_a − μ_s)]`. The target is the least of them. Since
+`max_S μ ≥ μ_s` for every member, each is an upper bound on the gain over the
+set's best, and the least is the tightest. It matters when `a` sims as a
+member does: if `A` is the set's best and `B` a member `a` duplicates, then
+`a` beats `A` only where `B` already does. Against `A` alone `a` would look
+promising; against `B` its improvement is 0. The bound is loose only when the
+set covers `a` jointly and no single member does, and then it errs toward
+crediting `a`. The exact value (resampling the paired rollouts and comparing
+`a` with the set's best on each resample) is the alternative if that proves
+to matter.
+
+An expectation over rollouts instead, `E_r[max(0, v_r(a) − v_r(s))]`, was
+considered and rejected. It is half the mean margin plus half the mean
+absolute per-rollout difference, and that per-rollout spread (11 to 16
+points, inferred from the pools' paired standard errors) dwarfs typical
+margins (about 1 point), so it would rank moves by volatility: a move 5
+points worse than the set's best but volatile would outrank one 2 points
+better.
 
 A stage conditions each move's
 query on the tokens of the moves already chosen. The evidence-fusion stage
