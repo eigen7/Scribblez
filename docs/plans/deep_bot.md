@@ -173,7 +173,20 @@ every later step's is a margin of a few points, so that one step would set
 the gain loss's scale. Seeded, every step asks which move most improves on a
 real one; the seed is the sim-best move about half the time, so a set of two
 or more would hold it anyway. Greedy from a fixed seed keeps the guarantee
-for the moves it adds. A stage conditions each move's
+for the moves it adds.
+
+The expectation is over what the sims have not resolved about the values,
+not over the game's own luck. A training pool's sims leave each pair of
+moves a mean difference with a standard error, and the target is the
+expected improvement under that uncertainty,
+`E[max(0, μ_a − μ_s*)]`, with `s*` the best member of `S`. An expectation
+over rollouts instead, `E_r[max(0, v_r(a) − v_r(s*))]`, was considered and
+rejected. It is half the mean margin plus half the mean absolute per-rollout
+difference, and that per-rollout spread (11 to 16 points, inferred from the
+pools' paired standard errors) dwarfs typical margins (about 1 point), so it would rank moves by volatility: a move 5
+points worse than `s*` but volatile would outrank one 2 points better.
+
+A stage conditions each move's
 query on the tokens of the moves already chosen. The evidence-fusion stage
 built for [sim_residual_feedback.md](sim_residual_feedback.md) already
 conditions on a set of move tokens. There the tokens carried sim results;

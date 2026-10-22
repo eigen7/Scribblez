@@ -24,8 +24,13 @@ from. A step reruns only the stage, the re-scoring and the gain head.
 
 Training rows come by subset assembly: per position, `rows` random chosen
 sets, each the seed plus moves drawn toward high value as deployment sets
-are, giving every candidate the target max(0, v(a) - max_S v), with v the
-pool's win probabilities.
+are. Each candidate's target is its expected improvement over the set's best
+move s* (by the pool's win probability): E[max(0, mu_a - mu_s*)], with
+mu_a - mu_s* taken as normal about the two moves' mean paired difference over
+the rollouts both ran, with that mean's standard error. A near-tie the sims
+left unresolved gets a target in proportion to how unresolved it is; a
+clearly worse move about 0. The sample margin max(0, v(a) - v(s*)) would
+instead be 0 for nearly every move, and a coin flip for the near-ties.
 """
 
 from __future__ import annotations
@@ -220,13 +225,44 @@ def sample_rows(
     return positions, chosen
 
 
-def gain_targets(win_prob: torch.Tensor, rows: SetRows, move_idx, row_id) -> torch.Tensor:
-    """max(0, v(a) - max_S v) for each row's candidates. Max over an empty
-    set is 0, so the target there would be v(a) itself; training sets always
-    hold the seed."""
-    chosen_v = torch.where(rows.mask, win_prob[rows.chosen], 0.0)
-    best = chosen_v.max(dim=1).values  # (R,)
-    return (win_prob[move_idx] - best[row_id]).clamp(min=0)
+def best_chosen(win_prob: torch.Tensor, rows: SetRows) -> torch.Tensor:
+    """Each row's s*: the global index of its chosen move with the largest
+    win probability, (R,)."""
+    chosen_v = torch.where(rows.mask, win_prob[rows.chosen], -torch.inf)
+    return rows.chosen.gather(1, chosen_v.argmax(dim=1, keepdim=True)).squeeze(1)
+
+
+def paired_difference(
+    values: torch.Tensor, rollouts: torch.Tensor, a: torch.Tensor, b: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The mean of a's rollout values less b's over the rollouts both ran,
+    and that mean's standard error, per pair: `values` (M, R) and `rollouts`
+    (M,) as dataset.rollout_grid gives them, `a` and `b` candidate indices."""
+    n = torch.minimum(rollouts[a], rollouts[b])
+    shared = torch.arange(values.shape[1], device=values.device) < n.unsqueeze(1)
+    diff = (values[a] - values[b]) * shared
+    k = n.clamp(min=1).to(values.dtype)
+    mean = diff.sum(dim=1) / k
+    var = (diff.square().sum(dim=1) / k - mean.square()).clamp(min=0)
+    return mean, (var / k).sqrt()
+
+
+def expected_improvement(mean: torch.Tensor, se: torch.Tensor) -> torch.Tensor:
+    """E[max(0, X)] for X ~ N(mean, se^2); max(0, mean) where se is 0."""
+    z = mean / se.clamp(min=1e-12)
+    return mean * torch.special.ndtr(z) + se * torch.exp(-0.5 * z.square()) / math.sqrt(2 * math.pi)
+
+
+@torch.no_grad()
+def gain_targets(batch: dict[str, torch.Tensor], rows: SetRows, move_idx, row_id) -> torch.Tensor:
+    """Each row's candidates' expected improvement over the row's s*, from
+    their paired rollouts; 0 for the row's own chosen moves."""
+    s_star = best_chosen(batch["win_prob"].float(), rows)[row_id]
+    mean, se = paired_difference(
+        batch["rollout_values"].float(), batch["rollouts"], move_idx, s_star
+    )
+    chosen = ((rows.chosen[row_id] == move_idx.unsqueeze(1)) & rows.mask[row_id]).any(dim=1)
+    return torch.where(chosen, 0.0, expected_improvement(mean, se))
 
 
 def gain_loss(model: GreedyModel, batch: dict[str, torch.Tensor], rows: SetRows) -> torch.Tensor:
@@ -234,7 +270,7 @@ def gain_loss(model: GreedyModel, batch: dict[str, torch.Tensor], rows: SetRows)
     with torch.autocast(device_type=batch["input_spatial"].device.type, dtype=torch.bfloat16):
         enc, h = model.cache(batch)
         gains, move_idx, row_id = model.gains(enc, h, batch["move_pos_id"], rows)
-    target = gain_targets(batch["win_prob"].float(), rows, move_idx, row_id)
+    target = gain_targets(batch, rows, move_idx, row_id)
     return F.huber_loss(
         gains.float() * GAIN_SCALE, target * GAIN_SCALE, delta=GAIN_HUBER, reduction="mean"
     )

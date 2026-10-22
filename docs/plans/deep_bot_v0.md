@@ -650,11 +650,14 @@ survey's JSON. Its header carries the magic and `kPoolFormatVersion`.
   - rollouts completed (racing stops some early);
   - the paired standard error against its comparator (below);
   - the static-equity rank;
-  - `q(a)`.
+  - `q(a)`;
+  - every rollout's win value (`p_win + p_draw/2`), after the position's
+    candidates. Rollout `i` is the same deal for every candidate, so any two
+    can be compared on the rollouts both ran; the greedy form's targets need
+    that for pairs the labels above do not cover.
 
 v0 computes `q(a)` at generation time by the normal approximation to the
-paired differences against the leader, since the per-rollout outcomes are not
-kept. It treats the non-leader moves as independent of each other, an
+paired differences against the leader. It treats the non-leader moves as independent of each other, an
 approximation acceptable for v0. A candidate that racing stopped is compared
 with the leader at the checkpoint that stopped it, over its own rollouts.
 Compared with the final leader's same rollouts instead, stopped candidates
@@ -764,10 +767,18 @@ that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
   ([deep_bot.md](deep_bot.md#form-1-greedy-selection-with-cached-steps)).
 - Rows come by subset assembly. Per position, draw subsets `S`: the seed
   plus 0 to `N_max − 2` more moves, biased toward high-value moves as
-  deployment sets are. The target for a held-out move `a` is
-  `max(0, v(a) − max_S v)`. A batch of
-  subsets per position shares one trunk pass, which is the training-side form
-  of the cached steps.
+  deployment sets are. A batch of subsets per position shares one trunk
+  pass, which is the training-side form of the cached steps.
+- The target for a move `a` outside `S` is its expected improvement over
+  `s*`, the member of `S` with the best mean:
+  `E[max(0, μ_a − μ_s*)] = Δ̂·Φ(Δ̂/se) + se·φ(Δ̂/se)`, with `Δ̂` the two
+  moves' mean paired difference over the rollouts both ran and `se` its
+  standard error. The sample margin `max(0, v(a) − v(s*))` is 0 for about
+  98% of moves once the seed is in `S`, and the pools' paired standard
+  errors (median 3.5 points) exceed the margins they label (median 1 point),
+  so its near-ties are coin flips. The expected improvement gives an
+  unresolved near-tie a target in proportion to how unresolved it is, and a
+  clearly worse move about 0.
 - The loss is Huber on the gain.
 
 **Form 2, `slot`:** a slot decoder with `N_max` slots (default 16).

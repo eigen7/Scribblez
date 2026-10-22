@@ -3,6 +3,7 @@
 (scribblez.policy_set.model), a generation's training and eval end to end
 (scribblez.policy_set.trainer), and the workload's registration."""
 
+import math
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -298,16 +299,55 @@ def test_an_empty_chosen_set_leaves_the_board_unchanged():
     assert not torch.allclose(out_board[1], board[1])
 
 
-def test_gain_targets_are_the_margin_over_the_chosen_sets_best():
-    win = torch.tensor([0.5, 0.4, 0.45, 0.3, 0.35])  # position 0: 0..2, position 1: 3..4
-    rows = greedy.make_rows([0, 0, 1], [[], [1], [4]])
+def test_rows_list_every_candidate_of_their_position():
+    rows = greedy.make_rows([0, 0, 1], [[0], [1], [4]])
     pos_id = torch.tensor([0, 0, 0, 1, 1])
     move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
     assert move_idx.tolist() == [0, 1, 2, 0, 1, 2, 3, 4]
     assert row_id.tolist() == [0, 0, 0, 1, 1, 1, 2, 2]
-    target = greedy.gain_targets(win, rows, move_idx, row_id)
-    # Empty set: the value itself; else the margin over the set's best, or 0.
-    assert torch.allclose(target, torch.tensor([0.5, 0.4, 0.45, 0.1, 0, 0.05, 0, 0]))
+
+
+def _expected_improvement(diffs) -> float:
+    """E[max(0, X)], X normal about the mean of `diffs` with its standard error."""
+    d = np.array(diffs, np.float64)
+    mean, se = d.mean(), np.sqrt(d.var() / len(d))
+    if se == 0:
+        return max(0.0, mean)
+    z = mean / se
+    return mean * 0.5 * (1 + math.erf(z / math.sqrt(2))) + se * math.exp(-z * z / 2) / math.sqrt(
+        2 * math.pi
+    )
+
+
+def test_gain_targets_are_expected_improvement_over_the_sets_best():
+    # Move 1 beats move 0 on one rollout of four; move 2 plays out exactly as
+    # move 0; racing stopped move 3 after two rollouts.
+    pool = _pool(
+        [0.25] * 4,
+        [0.5, 0.75, 0.5, 0.0],
+        [0, 1, 2, 3],
+        values=[[1, 0, 1, 0], [1, 1, 1, 0], [1, 0, 1, 0], [0, 0]],
+    )
+    grid = dataset.rollout_grid([pool])
+    assert grid["rollout_values"][3].tolist() == [0, 0, 0, 0]
+    assert grid["rollouts"].tolist() == [4, 4, 4, 2]
+    batch = {"win_prob": torch.from_numpy(pool.win_prob), **grid}
+    # Row 0 holds move 0; row 1 holds moves 0 and 1, so its s* is move 1.
+    rows = greedy.make_rows([0, 0], [[0], [0, 1]])
+    move_idx, row_id = greedy.row_candidates(torch.zeros(4, dtype=torch.int64), rows.position)
+    target = greedy.gain_targets(batch, rows, move_idx, row_id)
+    expected = [
+        0,  # chosen
+        _expected_improvement([0, 1, 0, 0]),
+        0,  # identical outcomes on every rollout
+        _expected_improvement([-1, 0]),  # over the two rollouts both ran
+        0,  # chosen
+        0,  # chosen
+        _expected_improvement([0, -1, 0, 0]),
+        0,  # lost both shared rollouts by a full win: no doubt left
+    ]
+    np.testing.assert_allclose(target.numpy(), expected, rtol=1e-5, atol=1e-7)
+    assert 0 < expected[3] < expected[6] < expected[1]
 
 
 def test_subset_assembly_draws_proper_subsets_holding_each_pools_seed():
@@ -362,8 +402,9 @@ class _TrueGainModel:
 
     def gains(self, enc, h, pos_id, rows):
         move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
-        target = greedy.gain_targets(self.value, rows, move_idx, row_id)
-        return target + 1e-3 * self.value[move_idx], move_idx, row_id
+        chosen_v = torch.where(rows.mask, self.value[rows.chosen], -torch.inf)
+        margin = (self.value[move_idx] - chosen_v.max(dim=1).values[row_id]).clamp(min=0)
+        return margin + 1e-3 * self.value[move_idx], move_idx, row_id
 
 
 @pytest.mark.parametrize(
