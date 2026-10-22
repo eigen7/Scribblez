@@ -42,6 +42,9 @@ class Pool:
     q: np.ndarray  # (M,) float32, P(the move is best); sums to 1
     equity_rank: np.ndarray  # (M,) int32, -1 for a pass outside the ranking
     rollouts: np.ndarray  # (M,) uint16, completed
+    # (sum of rollouts,) float32: each candidate's rollout win values in turn,
+    # rollout i of every candidate the same deal.
+    rollout_values: np.ndarray
 
 
 def read_pools(path: str | Path) -> tuple[np.void, list[Pool]]:
@@ -72,13 +75,18 @@ def read_pools(path: str | Path) -> tuple[np.void, list[Pool]]:
             raise ValueError(f"{path}: truncated at position {len(pools)}")
         c = np.frombuffer(buf, cand_t, count=n, offset=off)
         off += n * cand_t.itemsize
-        pools.append(_pool(ph, rack, c))
+        k = int(c["rollouts"].sum())
+        if off + 4 * k > len(buf):
+            raise ValueError(f"{path}: truncated at position {len(pools)}")
+        values = np.frombuffer(buf, np.float32, count=k, offset=off)
+        off += 4 * k
+        pools.append(_pool(ph, rack, c, values))
     if off != len(buf):
         raise ValueError(f"{path}: {len(buf) - off} bytes past the last position")
     return hdr, pools
 
 
-def _pool(ph: np.void, rack: np.void, c: np.ndarray) -> Pool:
+def _pool(ph: np.void, rack: np.void, c: np.ndarray, values: np.ndarray) -> Pool:
     return Pool(
         game=int(ph["game_index"]),
         turn=int(ph["turn_index"]),
@@ -93,6 +101,7 @@ def _pool(ph: np.void, rack: np.void, c: np.ndarray) -> Pool:
         q=c["q"].copy(),
         equity_rank=c["equity_rank"].copy(),
         rollouts=c["rollouts"].copy(),
+        rollout_values=values.copy(),
     )
 
 

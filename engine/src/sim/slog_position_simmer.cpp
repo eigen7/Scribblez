@@ -83,7 +83,7 @@ size_t race_leader(const std::vector<size_t>& alive, const CandidateRollouts& ro
   double best = -1;
   for (const size_t c : alive) {
     double wins = 0;
-    for (const Rollout& r : rollouts[c]) wins += r.p_win + 0.5 * r.p_draw;
+    for (const Rollout& r : rollouts[c]) wins += r.win_value();
     if (wins > best) {
       best = wins;
       leader = c;

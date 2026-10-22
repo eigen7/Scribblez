@@ -3,6 +3,7 @@
 (scribblez.policy_set.model), a generation's training and eval end to end
 (scribblez.policy_set.trainer), and the workload's registration."""
 
+import math
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +16,7 @@ _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
     pytest.skip("libscribblez_ffi.so not built -- run py/build.py first", allow_module_level=True)
 
+import policy_set_chunk  # noqa: E402
 import torch  # noqa: E402
 from cloud.sinks import LocalSink  # noqa: E402
 from scribblez import ffi, workloads  # noqa: E402
@@ -22,7 +24,6 @@ from scribblez.dashboard import plots  # noqa: E402
 from scribblez.generational import lifecycle  # noqa: E402
 from scribblez.generational.checkpoint import GenerationalState  # noqa: E402
 from scribblez.generational.optim import build_optim_arm, build_optimizer  # noqa: E402
-from scribblez.leave_inference import win_table  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.policy_set import (  # noqa: E402
     dataset,
@@ -36,15 +37,16 @@ from scribblez.policy_set import (  # noqa: E402
     trainer,
 )
 from scribblez.position_eval.trainer import OutputDeliverer  # noqa: E402
-from scribblez.selfplay import run_games  # noqa: E402
-from scribblez.workloads import policy_set  # noqa: E402
-from scribblez.workloads.policy_set import BELIEFS_UNIFORM, PolicySetParams  # noqa: E402
+from scribblez.workloads.policy_set import PolicySetParams  # noqa: E402
 
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
 
-def _pool(q, win, rank) -> pools.Pool:
+def _pool(q, win, rank, values=None) -> pools.Pool:
+    """A pool of len(q) candidates, each with `values` as its rollout values
+    (default: 8 rollouts at its win probability)."""
     n = len(q)
+    values = values or [[w] * 8 for w in win]
     return pools.Pool(
         game=0,
         turn=0,
@@ -58,7 +60,8 @@ def _pool(q, win, rank) -> pools.Pool:
         paired_se=np.zeros(n, np.float32),
         q=np.array(q, np.float32),
         equity_rank=np.array(rank, np.int32),
-        rollouts=np.full(n, 8, np.uint16),
+        rollouts=np.array([len(v) for v in values], np.uint16),
+        rollout_values=np.array([x for v in values for x in v], np.float32),
     )
 
 
@@ -126,16 +129,9 @@ def chunk(tmp_path_factory) -> Path:
     """A one-game chunk surveyed into 2 pools under uniform beliefs."""
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
-    tmp = tmp_path_factory.mktemp("chunk")
-    chunk = tmp / "chunk"
-    assert run_games(chunk, num_games=1, threads=2, player_spec="--type=hastybot-endgame") == 0
-    table = tmp / "table.csv"
-    spread = np.arange(-win_table.max_spread(), win_table.max_spread() + 1)
-    grid = np.repeat(1 / (1 + np.exp(-spread / 30))[:, None], win_table.max_unseen() + 1, axis=1)
-    win_table.write(table, grid, {"tag": "li", "generation": 3})
-    p = PolicySetParams(leave_beliefs=BELIEFS_UNIFORM, rollouts=4, positions_per_game=2)
-    policy_set.write_pools(p, table, None, chunk, threads=4)
-    return chunk
+    return policy_set_chunk.surveyed_chunk(
+        tmp_path_factory.mktemp("chunk"), rollouts=4, positions_per_game=2
+    )
 
 
 # The smallest model that exercises every layer, on the CPU.
@@ -167,13 +163,16 @@ def test_the_slot_form_overfits_a_pool(chunk):
     assert logits.shape == (len(items), 16, pad.shape[1])
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     first = None
-    for _ in range(4):
+    # The loss sits on a plateau for the first few steps (moving by under
+    # 0.05, either way), then falls: 12 steps clear the plateau, and 10% is
+    # well inside the fall.
+    for _ in range(12):
         total, _ = slot.slot_loss(slot.slot_forward(m, batch)[0], batch)
         opt.zero_grad()
         total.backward()
         opt.step()
         first = first if first is not None else total.item()
-    assert total.item() < first
+    assert total.item() < 0.9 * first
 
 
 def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypatch):
@@ -294,16 +293,101 @@ def test_an_empty_chosen_set_leaves_the_board_unchanged():
     assert not torch.allclose(out_board[1], board[1])
 
 
-def test_gain_targets_are_the_margin_over_the_chosen_sets_best():
-    win = torch.tensor([0.5, 0.4, 0.45, 0.3, 0.35])  # position 0: 0..2, position 1: 3..4
-    rows = greedy.make_rows([0, 0, 1], [[], [1], [4]])
+def test_rows_list_every_candidate_of_their_position():
+    rows = greedy.make_rows([0, 0, 1], [[0], [1], [4]])
     pos_id = torch.tensor([0, 0, 0, 1, 1])
     move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
     assert move_idx.tolist() == [0, 1, 2, 0, 1, 2, 3, 4]
     assert row_id.tolist() == [0, 0, 0, 1, 1, 1, 2, 2]
-    target = greedy.gain_targets(win, rows, move_idx, row_id)
-    # Empty set: the value itself; else the margin over the set's best, or 0.
-    assert torch.allclose(target, torch.tensor([0.5, 0.4, 0.45, 0.1, 0, 0.05, 0, 0]))
+
+
+def _expected_improvement(diffs) -> float:
+    """E[max(0, X)], X normal about the mean of `diffs` with its standard error."""
+    d = np.array(diffs, np.float64)
+    mean, se = d.mean(), np.sqrt(d.var() / len(d))
+    if se == 0:
+        return max(0.0, mean)
+    z = mean / se
+    return mean * 0.5 * (1 + math.erf(z / math.sqrt(2))) + se * math.exp(-z * z / 2) / math.sqrt(
+        2 * math.pi
+    )
+
+
+def test_gain_targets_are_expected_improvement_over_a_member():
+    # Move 1 beats move 0 on one rollout of four; move 2 plays out exactly as
+    # move 0; racing stopped move 3 after two rollouts.
+    pool = _pool(
+        [0.25] * 4,
+        [0.5, 0.75, 0.5, 0.0],
+        [0, 1, 2, 3],
+        values=[[1, 0, 1, 0], [1, 1, 1, 0], [1, 0, 1, 0], [0, 0]],
+    )
+    grid = dataset.rollout_grid([pool])
+    assert grid["rollout_values"][3].tolist() == [0, 0, 0, 0]
+    assert grid["rollouts"].tolist() == [4, 4, 4, 2]
+    rows = greedy.make_rows([0], [[0]])
+    move_idx, row_id = greedy.row_candidates(torch.zeros(4, dtype=torch.int64), rows.position)
+    target = greedy.gain_targets(grid, rows, move_idx, row_id)
+    expected = [
+        0,  # chosen
+        _expected_improvement([0, 1, 0, 0]),
+        0,  # identical outcomes on every rollout
+        _expected_improvement([-1, 0]),  # over the two rollouts both ran
+    ]
+    np.testing.assert_allclose(target.numpy(), expected, rtol=1e-5, atol=1e-7)
+    assert 0 < expected[3] < expected[1]
+
+
+def test_gain_targets_read_the_right_pool_across_a_batch():
+    # Two pools with different candidate and rollout counts: a wrong offset in
+    # rollout_grid or the global move indices would read pool 0's values.
+    first = _pool([0.5] * 2, [0.5, 0.5], [0, 1], values=[[1, 0, 1], [0, 1, 1]])
+    a, b, c = [1, 1, 0, 1, 0], [0, 1, 1, 0, 0], [1, 1, 1, 1, 0]
+    second = _pool([0.25] * 3, [0.6, 0.4, 0.8], [0, 1, 2], values=[a, b, c])
+    grid = dataset.rollout_grid([first, second])
+    assert grid["rollouts"].tolist() == [3, 3, 5, 5, 5]
+    assert grid["rollout_values"][3].tolist() == b
+    assert grid["rollout_values"][1].tolist() == [0, 1, 1, 0, 0]
+    rows = greedy.make_rows([1], [[2]])
+    pos_id = torch.tensor([0, 0, 1, 1, 1])
+    move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
+    assert move_idx.tolist() == [2, 3, 4]
+    target = greedy.gain_targets(grid, rows, move_idx, row_id).numpy()
+    expected = [
+        0,
+        _expected_improvement(np.subtract(b, a)),
+        _expected_improvement(np.subtract(c, a)),
+    ]
+    np.testing.assert_allclose(target, expected, rtol=1e-5, atol=1e-7)
+
+
+def test_a_single_shared_rollout_gives_the_hard_difference():
+    pool = _pool([0.5, 0.5], [0.5, 0.5], [0, 1], values=[[0, 1, 1], [1]])
+    grid = dataset.rollout_grid([pool])
+    rows = greedy.make_rows([0], [[0]])
+    move_idx, row_id = greedy.row_candidates(torch.zeros(2, dtype=torch.int64), rows.position)
+    target = greedy.gain_targets(grid, rows, move_idx, row_id)
+    assert target.tolist() == [0.0, 1.0]  # 1 - 0 on the one shared rollout
+
+
+def test_a_move_that_sims_as_a_member_does_gains_nothing():
+    # A is the set's best. C plays out exactly as B, a weaker member, and D
+    # plays out unlike either; against A alone, C and D look alike.
+    a, b = [1, 1, 0, 1, 0, 1, 1, 0], [0, 1, 1, 0, 1, 0, 1, 0]
+    d = [1, 0, 1, 0, 1, 0, 1, 0]
+    pool = _pool([0.25] * 4, [0.625, 0.5, 0.5, 0.5], [0, 1, 2, 3], values=[a, b, b, d])
+    grid = dataset.rollout_grid([pool])
+    rows = greedy.make_rows([0, 0], [[0], [0, 1]])
+    move_idx, row_id = greedy.row_candidates(torch.zeros(4, dtype=torch.int64), rows.position)
+    target = greedy.gain_targets(grid, rows, move_idx, row_id).numpy()
+    c_vs_a = _expected_improvement(np.subtract(b, a))
+    d_vs_a = _expected_improvement(np.subtract(d, a))
+    # The set {A}: C and D are each measured against A.
+    np.testing.assert_allclose(target[[2, 3]], [c_vs_a, d_vs_a], rtol=1e-5)
+    # The set {A, B}: B covers C entirely; D keeps the lesser of its two.
+    d_vs_b = _expected_improvement(np.subtract(d, b))
+    np.testing.assert_allclose(target[[4, 5, 6, 7]], [0, 0, 0, min(d_vs_a, d_vs_b)], atol=1e-7)
+    assert target[2] > 0.05 and target[7] > 0.05
 
 
 def test_subset_assembly_draws_proper_subsets_holding_each_pools_seed():
@@ -358,8 +442,9 @@ class _TrueGainModel:
 
     def gains(self, enc, h, pos_id, rows):
         move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
-        target = greedy.gain_targets(self.value, rows, move_idx, row_id)
-        return target + 1e-3 * self.value[move_idx], move_idx, row_id
+        chosen_v = torch.where(rows.mask, self.value[rows.chosen], -torch.inf)
+        margin = (self.value[move_idx] - chosen_v.max(dim=1).values[row_id]).clamp(min=0)
+        return margin + 1e-3 * self.value[move_idx], move_idx, row_id
 
 
 @pytest.mark.parametrize(

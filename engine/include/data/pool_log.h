@@ -3,7 +3,7 @@
 // The .pool sidecar: the policy-set model's labeled pools
 // (docs/plans/deep_bot_v0.md, "The pool record"). A companion of a .slog,
 // whose (game_index, turn_index) names each position. Per candidate it keeps
-// the move and its labels (sim/pool_labels.h), not the rollouts.
+// the move, its labels (sim/pool_labels.h) and its rollouts' win values.
 //
 // File layout (little-endian, packed):
 //
@@ -12,6 +12,8 @@
 //     [PoolPositionHeader                                   16 B]
 //     [PoolOppRack                                         120 B]
 //     [PoolCandidate x num_candidates                       36 B each]
+//     [float32 x the sum of the candidates' rollouts: each candidate's
+//      rollout win values in turn (rollout_values)]
 
 #include "belief/opp_rack_summary.h"
 #include "data/slog_sampling.h"
@@ -30,7 +32,7 @@ namespace scribblez {
 inline constexpr uint32_t kPoolMagic = 0x4C4F4F50u;
 // The format version (docs/plans/deep_bot_v0.md, "Versions"). Bump it whenever
 // the layout or a field's meaning changes; readers accept only this version.
-inline constexpr uint16_t kPoolFormatVersion = 3;
+inline constexpr uint16_t kPoolFormatVersion = 4;
 
 // PoolFileHeader::flags bits.
 inline constexpr uint16_t kPoolFlagLeaveInference = 1u;  // opponents' leaves came from a model
@@ -125,6 +127,7 @@ struct PoolPosition {
   std::vector<Move> moves;
   std::vector<int32_t> equity_ranks;
   std::vector<PoolLabel> labels;
+  std::vector<float> rollout_values;  // rollout_values(): labels[c].rollouts per candidate
   belief::OppRackSummary opp_rack;
 };
 
@@ -161,6 +164,9 @@ class PoolReader {
     const PoolPositionHeader* header;
     const PoolOppRack* opp_rack;
     const PoolCandidate* candidates;  // header->num_candidates
+    // Each candidate's rollout win values in turn, candidates[c].rollouts of
+    // them.
+    const float* rollout_values;
   };
 
   explicit PoolReader(const std::string& path);

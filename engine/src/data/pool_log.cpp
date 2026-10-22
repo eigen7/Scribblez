@@ -96,6 +96,9 @@ void PoolWriter::add_position(const PoolPosition& p) {
   RELEASE_ASSERT(!closed_);
   const size_t k = p.moves.size();
   RELEASE_ASSERT(p.equity_ranks.size() == k && p.labels.size() == k);
+  size_t values = 0;
+  for (const PoolLabel& l : p.labels) values += size_t(l.rollouts);
+  RELEASE_ASSERT(p.rollout_values.size() == values);
   const PoolPositionHeader h{p.at.game_idx, p.at.turn_idx, uint32_t(k), p.num_legal_moves};
   append_bytes(&buffer_, &h, sizeof(h));
   const PoolOppRack opp_rack = pool_opp_rack(p.opp_rack);
@@ -107,6 +110,7 @@ void PoolWriter::add_position(const PoolPosition& p) {
                              0};
     append_bytes(&buffer_, &cand, sizeof(cand));
   }
+  append_bytes(&buffer_, p.rollout_values.data(), p.rollout_values.size() * sizeof(float));
   ++num_positions_;
 }
 
@@ -139,6 +143,10 @@ PoolReader::PoolReader(const std::string& path) {
       reinterpret_cast<const PoolOppRack*>(take_bytes(buffer_, &off, sizeof(PoolOppRack), context));
     pos.candidates = reinterpret_cast<const PoolCandidate*>(
       take_bytes(buffer_, &off, pos.header->num_candidates * sizeof(PoolCandidate), context));
+    size_t values = 0;
+    for (uint32_t c = 0; c < pos.header->num_candidates; ++c) values += pos.candidates[c].rollouts;
+    pos.rollout_values =
+      reinterpret_cast<const float*>(take_bytes(buffer_, &off, values * sizeof(float), context));
     positions_.push_back(pos);
   }
 }

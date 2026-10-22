@@ -5,8 +5,8 @@ model's batches are (move_set_eval/dataset.py): the positions' board inputs,
 rebuilt by replay through ffi.move_set_positions in the hidden-leaves arm,
 then the M candidates concatenated position by position, each with a pos_id
 into [0, P). Per position it also carries the opponent-rack input (the pool's
-OppRackSummary) and, per candidate, the equity input (relative_equity) and the
-pool's labels.
+OppRackSummary) and, per candidate, the equity input (relative_equity), the
+pool's labels, and its rollout values as a grid (rollout_grid).
 """
 
 from dataclasses import dataclass
@@ -112,7 +112,20 @@ class PoolBatcher:
                 relative_equity(inputs["equities"], pos_id, len(items))
             ),
             **labels,
+            **rollout_grid([it.pool for it in items]),
         }
+
+
+def rollout_grid(pool_list: list[pools.Pool]) -> dict[str, torch.Tensor]:
+    """The candidates' rollout values, position by position, as a grid:
+    "rollout_values" (M, R), R the most rollouts any candidate ran, row c
+    candidate c's values then zeros; and "rollouts" (M,), how many are its."""
+    n = np.concatenate([p.rollouts for p in pool_list]).astype(np.int64)
+    values = np.concatenate([p.rollout_values for p in pool_list])
+    grid = np.zeros((len(n), int(n.max(initial=0))), dtype=np.float32)
+    row = np.repeat(np.arange(len(n)), n)
+    grid[row, np.arange(len(values)) - (np.cumsum(n) - n)[row]] = values
+    return {"rollout_values": torch.from_numpy(grid), "rollouts": torch.from_numpy(n)}
 
 
 def relative_equity(equities: np.ndarray, pos_id: np.ndarray, num_positions: int) -> np.ndarray:

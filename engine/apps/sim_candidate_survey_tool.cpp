@@ -668,6 +668,7 @@ PoolPosition pool_position(const SimmedPosition& r, const belief::SlogLeaveBelie
           r.candidates.moves,
           r.candidates.equity_ranks,
           pool_labels(r.rollouts),
+          rollout_values(r.rollouts),
           opp_rack_summary(r, beliefs)};
 }
 

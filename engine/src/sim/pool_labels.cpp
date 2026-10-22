@@ -16,7 +16,7 @@ using CandidateRollouts = std::vector<std::vector<Rollout>>;
 // Wins over the first n rollouts, a draw counting half.
 double prefix_wins(const std::vector<Rollout>& rs, size_t n) {
   double sum = 0;
-  for (size_t i = 0; i < n; ++i) sum += rs[i].p_win + 0.5 * rs[i].p_draw;
+  for (size_t i = 0; i < n; ++i) sum += rs[i].win_value();
   return sum;
 }
 
@@ -88,6 +88,13 @@ std::vector<PoolLabel> pool_labels(const std::vector<std::vector<Rollout>>& roll
   }
   odds[leader] = 1;
   for (size_t c = 0; c < rollouts.size(); ++c) out[c].q = odds[c] / total;
+  return out;
+}
+
+std::vector<float> rollout_values(const std::vector<std::vector<Rollout>>& rollouts) {
+  std::vector<float> out;
+  for (const auto& rs : rollouts)
+    for (const Rollout& r : rs) out.push_back(float(r.win_value()));
   return out;
 }
 
