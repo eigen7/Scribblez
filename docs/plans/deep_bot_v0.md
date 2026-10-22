@@ -768,7 +768,8 @@ that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
   `max(0, v(a) − max_S v)`. A batch of
   subsets per position shares one trunk pass, which is the training-side form
   of the cached steps.
-- The loss is Huber on the gain.
+- The loss is Huber on the gain. Which gain to target is open:
+  [gain_target_experiment.md](gain_target_experiment.md).
 
 **Form 2, `slot`:** a slot decoder with `N_max` slots (default 16).
 - The slots cross-attend to the move embeddings and self-attend to each
