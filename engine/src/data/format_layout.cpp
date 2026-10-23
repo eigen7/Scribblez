@@ -6,6 +6,7 @@
 #include "data/probe_replay.h"
 #include "data/sim_observation_log.h"
 #include "encoding/input_encoder.h"
+#include "encoding/leaf_eval_input_encoder.h"
 #include "game/glyph.h"
 #include "game/move.h"
 #include "game/rack.h"
@@ -204,6 +205,21 @@ json::object build_constants() {
                             {"no_opponent_move", int(LeaveRowCause::kNoOpponentMove)},
                             {"empty_leave", int(LeaveRowCause::kEmptyLeave)},
                             {"pass", int(LeaveRowCause::kPass)}}}};
+  // The leaf eval row (encoding/leaf_eval_input_encoder.h): its version, and
+  // where the model finds each block.
+  using LeafEval = LeafEvalInputEncoder;
+  c["deep_bot_leaf_eval"] = {{"format_version", kLeafEvalFormatVersion},
+                             {"join_plane0", LeafEval::kJoinPlane0},
+                             {"join_planes", LeafEval::kJoinPlanes},
+                             {"my_leave0", LeafEval::kMyLeave0},
+                             {"opp_leave0", LeafEval::kOppLeave0},
+                             {"pool0", LeafEval::kPool0},
+                             {"score_diff", LeafEval::kScoreDiff},
+                             {"my_leave_value", LeafEval::kMyLeaveValue},
+                             {"opp_leave_value", LeafEval::kOppLeaveValue},
+                             {"pool_size", LeafEval::kPoolSize},
+                             {"leave_value_scale", LeafEval::kLeaveValueScale},
+                             {"count_scale", LeafEval::kCountScale}};
   // LeaveValueArrays' tile codes (lexicon/leave_value_arrays.h).
   c["leave_value_arrays"] = {{"max_length", kLeaveArraysMaxLength},
                              {"copies_per_tile", LeaveValueArrays::kCopiesPerTile},

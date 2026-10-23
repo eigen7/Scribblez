@@ -59,6 +59,8 @@ void scribblez_session_delete(ScribblezSession* s);
 //      "opp_leave_tiles" (7,), "opp_leave_length", "opp_leave_valid",
 //      "opp_leave_cause" (1,) each, "leave_pool" (27,), "bag_size" (1,)
 //   3  public leave inference: task 2's tensors, the input in its public view
+//   4  DeepBot leaf evaluation: training/leaf_eval_task.h's input; targets
+//      "wld" (3,), "score_diff" (1,). Loads HastyBot's leave values.
 // The shape lists are in row order and owned by the library. Each query
 // returns NULL or -1 for an unknown task code.
 const ScribblezShape* scribblez_task_input_shapes(ScribblezSession* s, int task);
@@ -361,7 +363,8 @@ typedef struct DataLoaderHandle DataLoaderHandle;
 // `task` selects the training row the loader decodes (see
 // scribblez_task_input_shapes), and which turns become rows: every turn for
 // max-move-per-lane, each game's turns while the bag is non-empty otherwise.
-// Returns NULL for an unknown task.
+// Returns NULL for an unknown task, or one whose data (e.g. leave values)
+// fails to load.
 DataLoaderHandle* scribblez_dl_new(ScribblezSession* s, int64_t memory_budget,
                                    int num_worker_threads, int num_prefetch_threads, int task);
 
