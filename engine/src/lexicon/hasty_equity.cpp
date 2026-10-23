@@ -104,6 +104,11 @@ std::string HastyEquity::default_peg_path() {
   return std::string(kStrategyRoot) + "/default/preendgame.json";
 }
 
+const LeaveValues& HastyEquity::leave_values() const {
+  if (!ready_) throw util::Exception("HastyEquity::init() was not called");
+  return leave_values_;
+}
+
 double HastyEquity::equity(const Move& move, const Board& board, int bag_size, const Rack& opp_rack,
                            const Rack& my_rack) const {
   if (!ready_) throw util::Exception("HastyEquity::init() was not called");
