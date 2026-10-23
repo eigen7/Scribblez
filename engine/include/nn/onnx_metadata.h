@@ -53,6 +53,18 @@ struct OnnxMetadata {
 // Throws on unparseable bytes, or on a model with no architecture signature.
 OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes);
 
+// A served model's provenance: its file's util::file_content_hash, and the
+// tag, generation and format version (the integer entry `format_key`) its
+// export recorded; -1 and 0 for an export without them.
+struct ModelIdentity {
+  std::string hash;
+  std::string tag;
+  int generation = -1;
+  int format_version = 0;
+};
+
+ModelIdentity read_model_identity(const std::string& onnx_path, const std::string& format_key);
+
 // A model whose input rows carry static leave values records the
 // LeaveValues::content_hash they were priced with as `leave_values`. Throws
 // util::CleanException unless that entry is `expected`.

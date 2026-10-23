@@ -18,20 +18,10 @@
 //   - stratified: a per-game sample of turns and a stratified sample of
 //     candidates (ranking head, contention zone, uniform tail, exchanges). What
 //     the cut costs on average.
-//   - pool: the policy-set model's labeled pools (docs/plans/deep_bot_v0.md,
-//     "Workload 2"). --positions-per-game turns per game, each simming its
-//     whole pool (sim/slog_position_simmer.h pool_selector) in the screen
-//     stage alone, raced, with rollouts stopped at --win-table after
-//     --horizon-plies. Each .slog gets a same-stem .pool (data/pool_log.h)
-//     instead of the survey JSON: per candidate its labels (sim/pool_labels.h).
 //
-// --win-table and --horizon-plies truncate any recipe's rollouts at the table;
-// the pool recipe requires them.
-//
-// --leave-inference (pool only) draws each rollout's opponent leave from the
-// leave inference model's belief (belief/slog_leave_beliefs.h), instead of
-// drawing the opponent's whole rack uniformly. Each .slog then needs its
-// .forgone sidecar (forgone_play_tool), which the model's input reads.
+// --win-table and --horizon-plies truncate any recipe's rollouts at the
+// table. (The policy-set model's labeled pools have their own tool, on the
+// GPU: policy_set_pool_tool.)
 //
 // Each position is simmed in two stages. The screen sims every candidate at
 // --rollouts and picks the best --confirm-picks moves outside the cut. The best
@@ -50,20 +40,13 @@
 // (variance). Results are appended to a partial file as they finish, so an
 // interrupted run resumes where it stopped (see PartialSurvey).
 
-#include "belief/opp_rack_summary.h"
-#include "belief/served_leave_model.h"
-#include "belief/slog_leave_beliefs.h"
 #include "data/binary_log.h"
-#include "data/forgone_play_log.h"
 #include "data/gcg_writer.h"
-#include "data/pool_log.h"
 #include "data/slog_sampling.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
-#include "lexicon/leave_value_arrays.h"
 #include "lexicon/lexicon.h"
 #include "sim/candidate_race.h"
-#include "sim/pool_labels.h"
 #include "sim/slog_position_simmer.h"
 #include "sim/win_pct_table.h"
 #include "util/exception.h"
@@ -98,17 +81,7 @@ using namespace scribblez;
 namespace json = boost::json;
 
 constexpr const char* kSurveyExt = ".simsurvey.json";
-constexpr const char* kPoolExt = ".pool";
 constexpr int kSurveyVersion = 4;
-
-// The --leave-inference model and the leave table its beliefs are over.
-struct LeaveModel {
-  LeaveValueArrays table;
-  belief::ServedLeaveModel served;
-
-  LeaveModel(const std::string& onnx_path, const LeaveValues& values)
-      : table(values), served(onnx_path, values.content_hash()) {}
-};
 
 struct Options {
   std::string slog_dir;
@@ -135,18 +108,8 @@ struct Options {
   std::string win_table_path;
   int horizon_plies = 0;
   const WinPctTable* win_table = nullptr;  // loaded from win_table_path
-  // The pool recipe's blank prune (pool_selector).
-  int blank_prune_points = 40;
-  // The pool recipe's opponent leaves: from this leave inference model, or
-  // uniform when empty. leave_model is non-owning: main() loads it from
-  // leave_inference_path, so it is null exactly when the path is empty.
-  std::string leave_inference_path;
-  LeaveModel* leave_model = nullptr;
 
   bool stratified() const { return recipe == "stratified"; }
-  bool pool() const { return recipe == "pool"; }
-  // The recipes that sample turns per game rather than per file.
-  bool per_game() const { return stratified() || pool(); }
 };
 
 // The screening stage: the recipe's candidates at --rollouts each.
@@ -155,28 +118,24 @@ SlogSimConfig screen_config(const Options& opt, const Dictionary& dict) {
   c.open_leaves = opt.open_leaves;
   if (opt.stratified()) {
     c.selector = recipe_selector({.top_k = 0, .quotas = opt.quotas});
-  } else if (opt.pool()) {
-    c.selector = pool_selector(opt.blank_prune_points);
   } else {
     const int cap = opt.max_plays > 0 ? opt.max_plays : std::numeric_limits<int>::max();
     c.selector = opt.recipe == "setup" ? setup_selector(dict, opt.cut, cap)
                                        : all_plays_selector(dict, opt.cut, opt.max_plays);
   }
-  // The pool's labels pair every candidate with the leader, known only once
-  // the sim ends, so it keeps every rollout.
-  c.output = opt.pool() ? SimOutput::kRollouts : SimOutput::kReports;
+  c.output = SimOutput::kReports;
   c.runner.rollouts = opt.rollouts;
   c.runner.horizon_plies = opt.horizon_plies;
   c.runner.win_table = opt.win_table;
   if (opt.race) {
     c.race_checkpoints = race_checkpoints(opt.rollouts);
-    c.race_protected = opt.pool() ? 0 : opt.cut;
+    c.race_protected = opt.cut;
   }
   // Under the all recipe a position has hundreds of candidates, so one position
   // is a long job and across-position workers would idle behind the last few.
   // There the threads go inside the position instead. Results do not depend on
   // either thread count.
-  const bool wide = opt.recipe == "all" || opt.pool();
+  const bool wide = opt.recipe == "all";
   c.runner.threads = wide ? opt.threads : 1;
   c.seed = opt.seed;
   c.threads = wide ? 1 : opt.threads;
@@ -201,16 +160,9 @@ SlogSimConfig confirm_config(const Options& opt, const Dictionary& dict, ChosenM
 
 void validate(const Options& opt) {
   SimRunner::validate(SimRunner::Params{.rollouts = opt.rollouts});
-  if (opt.recipe != "all" && opt.recipe != "setup" && opt.recipe != "stratified" && !opt.pool())
-    throw util::CleanException("--recipe must be all, setup, stratified or pool");
+  if (opt.recipe != "all" && opt.recipe != "setup" && opt.recipe != "stratified")
+    throw util::CleanException("--recipe must be all, setup or stratified");
   SimRunner::validate_horizon("sim-survey", opt.horizon_plies, !opt.win_table_path.empty());
-  if (opt.pool() && opt.win_table_path.empty())
-    throw util::CleanException("--recipe pool needs --win-table and --horizon-plies");
-  if (opt.pool() && opt.open_leaves)
-    throw util::CleanException("--recipe pool sims hidden leaves only");
-  if (!opt.leave_inference_path.empty() && !opt.pool())
-    throw util::CleanException("--leave-inference needs --recipe pool");
-  if (opt.blank_prune_points < 0) throw util::CleanException("--blank-prune-points must be >= 0");
   SimRunner::validate(SimRunner::Params{.rollouts = opt.confirm_rollouts});
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
   if (opt.confirm_picks < 1) throw util::CleanException("--confirm-picks must be >= 1");
@@ -230,7 +182,7 @@ std::vector<binlog::GamePositionIndex> sample_work(const std::vector<char>& buf,
     reinterpret_cast<const binlog::GameMetadata*>(buf.data() + sizeof(binlog::FileHeader));
   uint32_t num_games = hdr->num_games;
   if (opt.limit_games > 0) num_games = std::min<uint32_t>(num_games, opt.limit_games);
-  const int per_game = opt.per_game() ? opt.positions_per_game : 0;
+  const int per_game = opt.stratified() ? opt.positions_per_game : 0;
   std::vector<binlog::GamePositionIndex> work;
   for (uint32_t g = 0; g < num_games; ++g)
     binlog::sample_eligible_turns(metas[g], g, opt.seed, per_game, &work);
@@ -270,7 +222,7 @@ std::vector<binlog::GamePositionIndex> setup_turns(
 std::vector<binlog::GamePositionIndex> survey_work(const binlog::PendingSlog& slog,
                                                    const Dictionary& dict, const Options& opt) {
   std::vector<binlog::GamePositionIndex> work = sample_work(slog.bytes, opt);
-  if (opt.per_game()) return work;
+  if (opt.stratified()) return work;
   if (opt.recipe == "setup") work = setup_turns(slog, dict, opt, work);
   return position_sample(std::move(work), opt);
 }
@@ -429,39 +381,19 @@ json::object position_json(const SurveyedPosition& p, const Options& opt) {
           {"confirm", confirm_json(p, opt)}};
 }
 
-// Where a run's labels come from: the win table its rollouts stop at, and
-// the horizon and budget. Needs a loaded win table.
-PoolSources pool_sources(const Options& opt) {
+// The survey header's record of a truncation: null for terminal rollouts.
+json::value win_table_json(const Options& opt) {
+  if (opt.win_table == nullptr) return nullptr;
   const std::map<std::string, std::string>& header = opt.win_table->header();
   const auto entry = [&](const std::string& key) {
     const auto it = header.find(key);
     return it == header.end() ? std::string() : it->second;
   };
-  PoolSources s;
-  s.win_table_hash = util::file_content_hash(opt.win_table_path);
-  s.win_table_tag = entry("tag");
-  s.win_table_generation = entry("generation").empty() ? -1 : std::stoi(entry("generation"));
-  s.win_table_format_version = std::stoi(entry("format_version"));
-  s.horizon_plies = opt.horizon_plies;
-  s.rollouts = opt.rollouts;
-  if (opt.leave_model != nullptr) {
-    const belief::ServedLeaveModel::Identity& id = opt.leave_model->served.identity();
-    s.leave_model_hash = id.hash;
-    s.leave_model_tag = id.tag;
-    s.leave_model_generation = id.generation;
-    s.leave_model_format_version = id.format_version;
-  }
-  return s;
-}
-
-// The survey header's record of a truncation: null for terminal rollouts.
-json::value win_table_json(const Options& opt) {
-  if (opt.win_table == nullptr) return nullptr;
-  const PoolSources s = pool_sources(opt);
-  return json::object{{"hash", s.win_table_hash},
-                      {"tag", s.win_table_tag},
-                      {"generation", s.win_table_generation},
-                      {"format_version", s.win_table_format_version}};
+  return json::object{
+    {"hash", util::file_content_hash(opt.win_table_path)},
+    {"tag", entry("tag")},
+    {"generation", entry("generation").empty() ? -1 : std::stoi(entry("generation"))},
+    {"format_version", std::stoi(entry("format_version"))}};
 }
 
 json::object header_json(const Options& opt) {
@@ -648,52 +580,10 @@ void survey_file(const binlog::PendingSlog& slog, const Dictionary& dict, const 
   partial.finish();
 }
 
-// The opponent's rack as `r`'s sims drew it. The simmer drops each position's
-// belief once its sims finish, so this rebuilds it: the model and its input
-// are fixed, so it is the same belief.
-belief::OppRackSummary opp_rack_summary(const SimmedPosition& r,
-                                        const belief::SlogLeaveBeliefs* beliefs) {
-  const std::shared_ptr<const belief::LeaveSampler> leave =
-    beliefs ? beliefs->belief(r.pos) : nullptr;
-  return belief::summarize_opp_rack(r.position.board.unseen_tiles(r.position.rack), leave.get());
-}
-
-PoolPosition pool_position(const SimmedPosition& r, const belief::SlogLeaveBeliefs* beliefs) {
-  return {r.pos,
-          r.candidates.num_legal_moves,
-          r.candidates.moves,
-          r.candidates.equity_ranks,
-          pool_labels(r.rollouts),
-          rollout_values(r.rollouts),
-          opp_rack_summary(r, beliefs)};
-}
-
-// Sim each sampled position's pool, one position at a time (a pool is hundreds
-// of candidates, so the threads go inside it), and write the file's .pool at
-// the end. A stopped run writes nothing and redoes the file.
-void pool_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt) {
-  const std::vector<binlog::GamePositionIndex> work = survey_work(slog, dict, opt);
-  PoolWriter writer(slog.sidecar(kPoolExt).string(), pool_sources(opt));
-  SlogSimConfig config = screen_config(opt, dict);
-  std::optional<belief::SlogLeaveBeliefs> beliefs;
-  if (opt.leave_model != nullptr) {
-    beliefs.emplace(slog.bytes, slog.path.string(), dict, opt.leave_model->table,
-                    opt.leave_model->served.predict_fn());
-    config.opp_leave_belief = std::bind_front(&belief::SlogLeaveBeliefs::belief, &*beliefs);
-  }
-  util::ProgressMeter meter(work.size(), "positions");
-  for (const binlog::GamePositionIndex& at : work) {
-    for (const SimmedPosition& r : sim_slog_positions(slog.bytes, dict, config, {at}, &meter))
-      writer.add_position(pool_position(r, beliefs ? &*beliefs : nullptr));
-  }
-  meter.finish("sim-survey pools");
-  writer.close();
-}
-
 // Prefix the file name, so a batch run's failure names both file and position.
 void process_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt) {
   try {
-    opt.pool() ? pool_file(slog, dict, opt) : survey_file(slog, dict, opt);
+    survey_file(slog, dict, opt);
   } catch (const util::CleanException& ex) {
     throw util::CleanException("{}: {}", slog.path.stem().string(), ex.what());
   } catch (const util::Exception& ex) {
@@ -701,44 +591,12 @@ void process_file(const binlog::PendingSlog& slog, const Dictionary& dict, const
   }
 }
 
-// A finished .pool is skipped, not redone, so it must come from this run's
-// sources: pools of mixed sources in one corpus would pass for one set of
-// labels.
-void check_finished_pools(const std::vector<fs::path>& slogs, const Options& opt) {
-  const PoolSources want = pool_sources(opt);
-  for (const fs::path& slog : slogs) {
-    const fs::path pool = fs::path(slog).replace_extension(kPoolExt);
-    if (!fs::exists(pool)) continue;
-    const char* field = PoolSources::of(PoolReader(pool.string()).header()).first_difference(want);
-    if (field != nullptr) {
-      throw util::CleanException("{} has another {} than this run; move it aside to redo it",
-                                 pool.string(), field);
-    }
-  }
-}
-
-// Under --leave-inference every .slog needs the .forgone sidecar the model's
-// input reads; say so before any work rather than at the first such file. Only
-// its existence is checked here; a truncated or stale sidecar is rejected when
-// its file is simmed, and a rerun resumes past the finished pools.
-void check_forgone_sidecars(const std::vector<fs::path>& slogs) {
-  for (const fs::path& slog : slogs) {
-    if (!fs::exists(forgone_path_of(slog.string())))
-      throw util::CleanException("{} has no .forgone sidecar; run forgone_play_tool over it first",
-                                 slog.string());
-  }
-}
-
 // The run's settings, as the startup line on stderr states them.
 std::string run_summary(const Options& opt, size_t files) {
   std::string out = std::format("{} file(s), recipe {}; ", files, opt.recipe);
-  out += opt.pool() ? std::format("{} rollouts per candidate", opt.rollouts)
-                    : std::format("{} screening + {} confirming rollouts", opt.rollouts,
-                                  opt.confirm_rollouts);
+  out += std::format("{} screening + {} confirming rollouts", opt.rollouts, opt.confirm_rollouts);
   if (opt.win_table != nullptr)
     out += std::format(", stopped at {} after {} plies", opt.win_table_path, opt.horizon_plies);
-  if (opt.leave_model != nullptr)
-    out += std::format(", opponent leaves from {}", opt.leave_inference_path);
   return out + std::format(", {} threads", opt.threads);
 }
 
@@ -758,19 +616,12 @@ int main(int argc, char** argv) {
       "recipe", po::value<std::string>(&opt.recipe)->default_value(opt.recipe),
       "all (every legal play without a blank, plus the top --cut), setup (only positions with a "
       "high-value setup play outside the cut, simming just those plays plus the cut), "
-      "stratified (a per-game turn sample and a stratified candidate sample), or pool (the "
-      "policy-set model's labeled pools, written as .pool files)")(
+      "or stratified (a per-game turn sample and a stratified candidate sample)")(
       "win-table", po::value<std::string>(&opt.win_table_path),
       "stop rollouts after --horizon-plies at this scribblez win table's P(win) "
-      "(sim/win_pct_table.h); required by --recipe pool")(
+      "(sim/win_pct_table.h)")(
       "horizon-plies", po::value<int>(&opt.horizon_plies)->default_value(opt.horizon_plies),
       "plies after the candidate before the win table values a rollout (0 = play to the end)")(
-      "leave-inference", po::value<std::string>(&opt.leave_inference_path),
-      "pool: draw opponents' leaves from this leave inference model (ONNX) instead of "
-      "uniformly; each .slog needs its .forgone sidecar")(
-      "blank-prune-points",
-      po::value<int>(&opt.blank_prune_points)->default_value(opt.blank_prune_points),
-      "pool: drop a blank move scoring this many points or more below the greedy play")(
       "open-leaves", po::bool_switch(&opt.open_leaves),
       "sim with the opponent's retained leave known; required for a face-up-leaves corpus")(
       "rollouts", po::value<int>(&opt.rollouts)->default_value(opt.rollouts),
@@ -801,7 +652,7 @@ int main(int argc, char** argv) {
       "stratified: exclusive rank bound of the contention zone")(
       "positions-per-game",
       po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
-      "stratified, pool: eligible turns sampled per game")(
+      "stratified: eligible turns sampled per game")(
       "cut", po::value<int>(&opt.cut)->default_value(opt.cut),
       "all/setup: the equity top-K always simmed")(
       "max-plays", po::value<int>(&opt.max_plays)->default_value(opt.max_plays),
@@ -827,16 +678,8 @@ int main(int argc, char** argv) {
       opt.win_table = &*win_table;
     }
     const std::vector<fs::path> inputs = binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files);
-    std::unique_ptr<LeaveModel> leave_model;
-    if (!opt.leave_inference_path.empty()) {
-      check_forgone_sidecars(inputs);
-      leave_model = std::make_unique<LeaveModel>(opt.leave_inference_path,
-                                                 HastyEquity::instance().leave_values());
-      opt.leave_model = leave_model.get();
-    }
-    if (opt.pool()) check_finished_pools(inputs, opt);
     const std::vector<binlog::PendingSlog> pending =
-      binlog::load_pending_slogs(inputs, opt.pool() ? kPoolExt : kSurveyExt, opt.open_leaves,
+      binlog::load_pending_slogs(inputs, kSurveyExt, opt.open_leaves,
                                  "{} was played with face-up leaves; pass --open-leaves to sim it");
     std::cerr << "sim-survey: " << run_summary(opt, pending.size()) << "\n";
     if (!opt.gcg_dir.empty()) fs::create_directories(opt.gcg_dir);

@@ -6,6 +6,7 @@
 
 #include "belief/leave_inference_net.h"
 #include "belief/leave_params.h"
+#include "nn/onnx_metadata.h"
 
 #include <mutex>
 #include <string>
@@ -16,12 +17,7 @@ class ServedLeaveModel {
  public:
   // The model's provenance, from its file and its ONNX metadata
   // (leave_inference/onnx_export.py).
-  struct Identity {
-    std::string hash;  // util::file_content_hash of the ONNX
-    std::string tag;
-    int generation = -1;
-    int format_version = 0;
-  };
+  using Identity = nn::ModelIdentity;
 
   // Loads `onnx_path`, refusing a model trained against other leave values
   // than `leave_values_hash` (LeaveInferenceNet).
