@@ -148,6 +148,9 @@ has landed.
   on rented GPUs, several tags in parallel.
 - **[plans/cloud_machines.md](plans/cloud_machines.md)**: rented AWS instances
   as task-scoped ssh machines the dashboard launches, idles and terminates.
+- **[plans/gpu_hasty_rollouts.md](plans/gpu_hasty_rollouts.md)**: whether
+  batches of HastyBot rollouts can run on the GPU faster than the
+  multithreaded CPU engine, and the plan to build it.
 
 ## The lexical-NN experiment track
 
