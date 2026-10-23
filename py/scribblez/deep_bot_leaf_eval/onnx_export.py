@@ -9,9 +9,11 @@ carries the format version, the leave values the row's scalars were priced
 with (which the engine checks before loading: nn::check_leave_values), and
 the generation's provenance.
 
-As a script: export a tag's rolling checkpoint, whose weights are the served
-ones (the trainer checkpoints in eval mode: the averaged iterate with
-recalibrated batch norm).
+The trainer exports every generation into its tag's models/, where a
+policy_set task pins one. As a script: export a tag's rolling checkpoint, whose
+weights are the served ones (the trainer checkpoints in eval mode: the
+averaged iterate with recalibrated batch norm), for a generation trained
+before the trainer exported.
 
     python -m scribblez.deep_bot_leaf_eval.onnx_export --tag leaf-conv-nojoin
 """
@@ -25,7 +27,7 @@ from torch import nn
 from scribblez.deep_bot_leaf_eval.model import LAYOUT, LeafEvalModel, LeafEvalShape
 from scribblez.ffi import DEFAULT_LEXICON
 from scribblez.onnx_export_util import export_graph
-from scribblez.paths import DEFAULT_MOUNT_ROOT
+from scribblez.paths import DEFAULT_MOUNT_ROOT, TagPaths
 
 # Must match the engine's nn::kGraphDeepBotLeafEval and LeafEvalSpec.
 GRAPH = "deep_bot_leaf_eval"
@@ -115,13 +117,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--tag", required=True, help=f"a {WORKLOAD} tag name")
     parser.add_argument(
-        "--out", help="output .onnx (default: the tag's models/leaf_eval_gen<N>.onnx)"
+        "--out", help="output .onnx (default: the tag's export of that generation, in models/)"
     )
     args = parser.parse_args()
-    tag_dir = DEFAULT_MOUNT_ROOT / "tags" / WORKLOAD / args.tag
-    ckpt = torch.load(tag_dir / "checkpoints" / "model.pt", map_location="cpu", weights_only=False)
+    paths = TagPaths(args.tag, WORKLOAD, DEFAULT_MOUNT_ROOT)
+    ckpt = torch.load(paths.rolling_checkpoint, map_location="cpu", weights_only=False)
     generation = int(ckpt["generation_index"]) - 1
-    out = Path(args.out) if args.out else tag_dir / "models" / f"leaf_eval_gen{generation}.onnx"
+    out = Path(args.out) if args.out else paths.onnx_path(generation)
     provenance = export_checkpoint(ckpt, out, args.tag)
     print(f"exported {out} ({provenance})")
 

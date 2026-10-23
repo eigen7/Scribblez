@@ -27,6 +27,7 @@ from scribblez import params as params_mod
 from scribblez.dataset import SlogDataset
 from scribblez.deep_bot_leaf_eval.evaluation import evaluate
 from scribblez.deep_bot_leaf_eval.model import LAYOUT, LeafEvalModel, LeafEvalShape
+from scribblez.deep_bot_leaf_eval.onnx_export import export_onnx
 from scribblez.ffi import LeaveValueArrays
 from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
@@ -119,10 +120,23 @@ def fit_win_table(paths: TagPaths, params, gen: int, window: list[Path], tag: st
     return path
 
 
+def export_generation(paths: TagPaths, gen: int, model, ctx):
+    """Export generation `gen`'s model for the engine (GPU rollouts' leaf), so
+    a policy_set task can pin it."""
+    export_onnx(
+        model,
+        paths.onnx_path(gen),
+        leave_values=ctx["config"][LEAVE_VALUES_KEY],
+        provenance={"tag": ctx["tag"], "generation": gen},
+    )
+
+
 def _deliver_generation(sink, paths, gen, checkpoint_snap, state_snap, recorder, staged):
     """One generation's deliveries, the record last."""
     table = paths.win_table_path(gen)
     sink.deliver_output(table, _rel(paths, table), keep=True)
+    model = paths.onnx_path(gen)
+    sink.deliver_output(model, _rel(paths, model))
     state_pair.deliver(sink, checkpoint_snap, state_snap, gen)
     recorder.deliver_staged(staged)
 
@@ -148,8 +162,8 @@ def _record(state, gen, result, elapsed, optim_arm) -> dict:
 def _checkpoint_and_eval(
     model, optimizer, recorder, paths, device, params, state, gen, result, elapsed, window, ctx
 ):
-    """Fit the win table, evaluate, checkpoint, publish the cursor, and queue
-    the generation's deliveries. Returns the seconds spent."""
+    """Fit the win table, evaluate, export, checkpoint, publish the cursor,
+    and queue the generation's deliveries. Returns the seconds spent."""
     sys.stdout.write("\n")
     t0 = time.time()
     record = _record(state, gen, result, elapsed, ctx["optim_arm"])
@@ -162,6 +176,7 @@ def _checkpoint_and_eval(
         f"wintable={record['eval_wintable_logloss']:.4f} "
         f"macondo={record['eval_wintable_macondo_logloss']:.4f}"
     )
+    export_generation(paths, gen, model, ctx)
     checkpoint.save(paths, model, optimizer, state, ctx["config"])
     lifecycle.write_train_state(paths, asdict(state))
     staged = recorder.stage_generation(gen, state.rows_trained, record)

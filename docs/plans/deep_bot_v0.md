@@ -1,7 +1,7 @@
 # DeepBot v0: the leave inference model and the policy-set model
 
-**Status: proposed 2026-10-14, build plan added 2026-10-15; steps 1-8b
-built, GPU label generation (steps 9-11) planned 2026-10-23.** The
+**Status: proposed 2026-10-14, build plan added 2026-10-15; steps 1-11
+built, the last three (GPU label generation) on 2026-10-23.** The
 implementation plan for the first two models of [deep_bot.md](deep_bot.md),
 each trained from HastyBot-vs-HastyBot games in standard Scrabble (hidden
 leaves):
@@ -861,7 +861,16 @@ depending on blanks
 which is 0.1 to 0.2 seconds for the average pool: 5 to 9 times the CPU
 recipe's rate on the same machine, which ran one more mechanical ply and the
 win table. The CPU stays free for self-play and the leave inference model.
-The real rate is measured on the first generation and shown on the Stats tab.
+Measured 2026-10-23 with `policy_set_pool_tool` on one `tilted2` chunk (50
+games, 100 pools, 838 candidates on average), the `leaf-conv-nojoin`
+generation 77 leaf in FP16 and `tilted2`'s generation 1188 leave model, on the
+idle dev laptop: 100 pools in 14.6 seconds, 6.9 pools a second, about 7 times
+the CPU recipe. Racing ran 20% of the full matrix (1.7M rollouts). The time is
+all on the GPU: the rollout kernel 7.9 seconds (216,000 rollouts a second) and
+the leaf network 6.3 seconds (270,000 a second); the CPU's preparation runs
+ahead on its own thread. Launches of 8,192 to 131,072 rollouts ran within 3%
+of each other, so the default of 32,768 is not a lever. The real rate on the
+fleet is shown on the Stats tab.
 
 Generation sets the pace and is embarrassingly parallel, so the `generate`
 role is meant for a fleet of GPU machines: owned ssh machines and rented
