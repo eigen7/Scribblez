@@ -60,6 +60,12 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
+  deep_bot_leaf_eval: [
+    { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
+    trainingTab('leaf_eval_metrics', 'metrics', 'No per-generation metrics yet.'),
+    { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
+    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
+  ],
   policy_set: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
     trainingTab('policy_set_metrics', 'metrics', 'No per-generation metrics yet.'),

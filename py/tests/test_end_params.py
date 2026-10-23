@@ -65,6 +65,7 @@ END_PARAMS = {
     "transfer_reader": {"train_steps"},
     "leave_inference": {"max_rows"},
     "policy_set": {"max_rows"},
+    "deep_bot_leaf_eval": {"max_rows"},
 }
 
 
