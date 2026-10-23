@@ -99,6 +99,7 @@ __constant__ Tables c_tables;
 __constant__ uint8_t c_letter_mult[kSquares];
 __constant__ uint8_t c_word_mult[kSquares];
 __constant__ int c_tile_values[26];
+__constant__ int c_tile_distribution[kTileKinds];
 
 // Cycle counters per kernel phase, summed over blocks by thread 0, and the
 // work counters, summed per warp then over warps.
@@ -141,6 +142,7 @@ struct Smem {
   int16_t xscore[2][kSquares];
   uint8_t xnb[2][kSquares];
   uint8_t rack[2][kTileKinds];
+  uint8_t leave[2][kTileKinds];  // each player's rack after its last move, before its draw
   Bag bag;
   int scores[2];
   int num_tiles;
@@ -854,12 +856,21 @@ __device__ inline int rack_total(const Smem& s, int p) {
   return n;
 }
 
+// Records `player`'s rack as its leave: called after its move takes its
+// tiles, before it draws.
+__device__ inline void record_leave(Smem& s, int player) {
+  for (int t = 0; t < kTileKinds; ++t) s.leave[player][t] = s.rack[player][t];
+}
+
 // Applies s.chosen for the mover: tiles, score, draw, play-out bonus. One
 // thread; the cross-check update follows in parallel.
 __device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout) {
   const Cand& c = s.chosen;
   const int mover = s.mover;
-  if (!c.valid) return;
+  if (!c.valid) {
+    record_leave(s, mover);
+    return;
+  }
   if (c.type == 0) {
     int gi = 0;
     for (int col = 0; col < kBoardSize; ++col) {
@@ -874,6 +885,7 @@ __device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout) {
     }
     s.num_tiles += c.n;
     s.scores[mover] += c.score;
+    record_leave(s, mover);
     const int draws = min(int(c.n), s.bag.remaining());
     for (int i = 0; i < draws; ++i) ++s.rack[mover][s.bag.draw(seed, rollout)];
     if (rack_total(s, mover) == 0) {
@@ -884,6 +896,7 @@ __device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout) {
     for (int i = 0; i < c.n; ++i) {
       --s.rack[mover][c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1];
     }
+    record_leave(s, mover);
     for (int i = 0; i < c.n; ++i) ++s.rack[mover][s.bag.draw(seed, rollout)];
     for (int i = 0; i < c.n; ++i)
       s.bag.put_back(uint8_t(c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1));
@@ -1035,6 +1048,9 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
     for (int i = 0; i < opp_draw; ++i) ++s.rack[1][s.bag.draw(pos->seed, rollout)];
     const int my_draw = our_refill_draw(pos->pool_size, leave_size);
     for (int i = 0; i < my_draw; ++i) ++s.rack[0][s.bag.draw(pos->seed, rollout)];
+    // A player who never moves keeps its full rack as its leave.
+    record_leave(s, 0);
+    record_leave(s, 1);
   }
   __syncthreads();
   Scratch& sc = c_tables.scratch[s.slot];
@@ -1062,9 +1078,15 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
   }
   // The leaf: the end state, left on the device for a leaf evaluator.
   LeafState& leaf = leaves[rollout];
-  for (int i = tid; i < kSquares; i += kThreads) leaf.squares[i] = s.sq[i];
-  if (tid < 2 * kTileKinds)
+  for (int i = tid; i < kSquares; i += kThreads) {
+    leaf.squares[i] = s.sq[i];
+    leaf.cross_mask[0][i] = s.xmask[0][i];
+    leaf.cross_mask[1][i] = s.xmask[1][i];
+  }
+  if (tid < 2 * kTileKinds) {
     leaf.racks[tid / kTileKinds][tid % kTileKinds] = s.rack[tid / kTileKinds][tid % kTileKinds];
+    leaf.leaves[tid / kTileKinds][tid % kTileKinds] = s.leave[tid / kTileKinds][tid % kTileKinds];
+  }
   if (tid == 0) {
     leaf.scores[0] = s.scores[0];
     leaf.scores[1] = s.scores[1];
@@ -1078,6 +1100,170 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
     __threadfence();
     atomicExch(&c_tables.scratch_busy[s.slot], 0);
   }
+}
+
+// ---- The leaf encoder ----
+// LeafEvalInputEncoder on the device: one block per leaf, writing its row
+// of kLeafSpatialPlanes x 225 floats and kLeafScalars floats, from player
+// 0's side (the player who moved last). It follows
+// encoding/leaf_eval_input_encoder.cpp and board_planes.cpp plane for plane.
+
+constexpr int kEncodeThreads = 256;
+
+// LeaveValues::lookup of the leave `counts` holds: 0 for an empty leave or
+// one too long for the table.
+__device__ float leave_value_of_counts(const uint8_t* counts) {
+  uint32_t key = 0;
+  int n = 0;
+  for (int t = 0; t < kTileKinds; ++t) {
+    for (int c = 0; c < counts[t]; ++c) {
+      if (n < 6) key |= uint32_t(t) << (5 * n);
+      ++n;
+    }
+  }
+  if (n == 0 || n > 6) return 0.0f;
+  for (int i = n; i < 6; ++i) key |= 31u << (5 * i);
+  return leave_lookup(key);
+}
+
+// The join planes' seat fit (leaf_eval_input_encoder.cpp's seat_fit): how
+// many of the seat's tiles satisfy the cross-check `mask`, and the highest
+// face value among them. A blank fits any square that allows some letter.
+struct SeatFit {
+  int fitting;
+  int max_value;
+};
+
+__device__ SeatFit seat_fit(const int* counts, uint32_t mask) {
+  SeatFit fit{0, 0};
+  for (int t = 0; t < kTileKinds; ++t) {
+    const int n = counts[t];
+    if (n == 0) continue;
+    const bool fits = t == kBlankTile ? mask != 0 : ((mask >> t) & 1u) != 0;
+    if (!fits) continue;
+    fit.fitting += n;
+    const int value = t == kBlankTile ? 0 : c_tile_values[t];
+    fit.max_value = max(fit.max_value, value);
+  }
+  return fit;
+}
+
+// BoardPlanes::encode's premium plane for a cell, or -1.
+__device__ inline int premium_plane_offset(int cell) {
+  const int lm = c_letter_mult[cell], wm = c_word_mult[cell];
+  if (lm == 2) return 0;
+  if (lm == 3) return 1;
+  if (wm == 2) return 2;
+  if (wm == 3) return 3;
+  return -1;
+}
+
+// What a block shares while encoding one leaf.
+struct LeafSmem {
+  uint8_t sq[kSquares];
+  int board_counts[kTileKinds];
+  int seat_counts[3][kTileKinds];  // my leave, the opponent's, the pool
+  int pool_size;
+};
+
+// Fills `s` from `leaf`, the whole block taking part.
+__device__ void load_leaf(const LeafState& leaf, LeafSmem& s) {
+  for (int t = threadIdx.x; t < kTileKinds; t += blockDim.x) s.board_counts[t] = 0;
+  __syncthreads();
+  for (int cell = threadIdx.x; cell < kSquares; cell += blockDim.x) {
+    const uint8_t g = leaf.squares[cell];
+    s.sq[cell] = g;
+    if (g) atomicAdd(&s.board_counts[glyph_is_blank(g) ? kBlankTile : glyph_letter(g)], 1);
+  }
+  __syncthreads();
+  if (threadIdx.x < kTileKinds) {
+    const int t = threadIdx.x;
+    s.seat_counts[0][t] = leaf.leaves[0][t];
+    s.seat_counts[1][t] = leaf.leaves[1][t];
+    s.seat_counts[2][t] =
+      c_tile_distribution[t] - s.board_counts[t] - leaf.leaves[0][t] - leaf.leaves[1][t];
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    int pool = 0;
+    for (int t = 0; t < kTileKinds; ++t) pool += s.seat_counts[2][t];
+    s.pool_size = pool;
+  }
+  __syncthreads();
+}
+
+// The cross-check mask of `cell` for plays along `axis`: view 0 for
+// horizontal plays, view 1 (indexed by its own row, the natural column) for
+// vertical ones.
+__device__ inline uint32_t cross_mask_at(const LeafState& leaf, int axis, int cell) {
+  const int r = cell / kBoardSize, c = cell % kBoardSize;
+  return axis == 0 ? leaf.cross_mask[0][cell] : leaf.cross_mask[1][c * kBoardSize + r];
+}
+
+// Whether `cell` has a tile beside it across the play axis.
+__device__ inline bool has_cross_neighbor(const uint8_t* sq, int axis, int cell) {
+  const int r = cell / kBoardSize, c = cell % kBoardSize;
+  const int dr = axis == 0 ? 1 : 0, dc = 1 - dr;
+  return (r - dr >= 0 && c - dc >= 0 && sq[(r - dr) * kBoardSize + (c - dc)] != 0) ||
+         (r + dr < kBoardSize && c + dc < kBoardSize && sq[(r + dr) * kBoardSize + (c + dc)] != 0);
+}
+
+// Join plane `j` (seat-major, then axis, then fit / face value) at empty
+// `cell`: set only on hook squares.
+__device__ float join_plane_value(const LeafState& leaf, const LeafSmem& s, int j, int cell) {
+  const int seat = j / 4, axis = (j / 2) % 2, kind = j % 2;
+  if (!has_cross_neighbor(s.sq, axis, cell)) return 0.0f;
+  const SeatFit fit = seat_fit(s.seat_counts[seat], cross_mask_at(leaf, axis, cell));
+  if (fit.fitting == 0) return 0.0f;
+  if (kind == 1) return float(fit.max_value) / kLeafFaceValueScale;
+  return seat == 2 ? float(fit.fitting) / float(s.pool_size) : 1.0f;
+}
+
+// Spatial plane `plane` at `cell`: the board planes, then (on empty squares
+// only) the cross-check and join planes.
+__device__ float plane_value(const LeafState& leaf, const LeafSmem& s, int plane, int cell) {
+  const uint8_t g = s.sq[cell];
+  if (plane < kLeafBlankPlane) return (g != 0 && glyph_letter(g) == plane) ? 1.0f : 0.0f;
+  if (plane == kLeafBlankPlane) return (g != 0 && glyph_is_blank(g)) ? 1.0f : 0.0f;
+  if (plane < kLeafCrossPlane0) {
+    return premium_plane_offset(cell) == plane - kLeafPremiumPlane0 ? 1.0f : 0.0f;
+  }
+  if (g != 0) return 0.0f;
+  if (plane < kLeafJoinPlane0) {
+    const int l = (plane - kLeafCrossPlane0) % 26, axis = (plane - kLeafCrossPlane0) / 26;
+    return float((cross_mask_at(leaf, axis, cell) >> l) & 1u);
+  }
+  return join_plane_value(leaf, s, plane - kLeafJoinPlane0, cell);
+}
+
+// The row's scalars: the three seats' tile counts, then the score
+// differential, both leave values and the pool size.
+__device__ void write_leaf_scalars(const LeafState& leaf, const LeafSmem& s, float* sc) {
+  if (threadIdx.x < kTileKinds) {
+    for (int seat = 0; seat < 3; ++seat) {
+      sc[seat * kTileKinds + threadIdx.x] = float(s.seat_counts[seat][threadIdx.x]);
+    }
+  }
+  if (threadIdx.x == 0) {
+    sc[kLeafScoreDiff] = float(leaf.scores[0] - leaf.scores[1]) / kLeafScoreScale;
+    sc[kLeafScoreDiff + 1] = leave_value_of_counts(leaf.leaves[0]) / kLeafLeaveValueScale;
+    sc[kLeafScoreDiff + 2] = leave_value_of_counts(leaf.leaves[1]) / kLeafLeaveValueScale;
+    sc[kLeafScoreDiff + 3] = float(s.pool_size) / kLeafCountScale;
+  }
+}
+
+__global__ void __launch_bounds__(kEncodeThreads)
+  leaf_encode_kernel(const LeafState* leaves, int count, float* spatial, float* scalar) {
+  const int b = blockIdx.x;
+  if (b >= count) return;
+  const LeafState& leaf = leaves[b];
+  __shared__ LeafSmem s;
+  load_leaf(leaf, s);
+  float* row = spatial + size_t(b) * kLeafSpatialPlanes * kSquares;
+  for (int idx = threadIdx.x; idx < kLeafSpatialPlanes * kSquares; idx += blockDim.x) {
+    row[idx] = plane_value(leaf, s, idx / kSquares, idx % kSquares);
+  }
+  write_leaf_scalars(leaf, s, scalar + size_t(b) * kLeafScalars);
 }
 
 template <typename T>
@@ -1162,6 +1348,9 @@ DeviceTables* upload_tables(const HostTables& host, size_t* bytes) {
              "word mult symbol");
   cuda_check(cudaMemcpyToSymbol(c_tile_values, host.tile_values, sizeof(host.tile_values)),
              "tile values symbol");
+  cuda_check(
+    cudaMemcpyToSymbol(c_tile_distribution, host.tile_distribution, sizeof(host.tile_distribution)),
+    "tile distribution symbol");
   cuda_check(cudaDeviceSynchronize(), "table upload");
   return d;
 }
@@ -1222,5 +1411,27 @@ void run_rollouts(DeviceTables* d, const PositionAbi& pos, int n, RolloutResult*
 }
 
 const LeafState* device_leaves(const DeviceTables* d) { return d->leaves; }
+
+void encode_leaves(DeviceTables* d, int first, int count, float* spatial, float* scalar) {
+  if (count <= 0) return;
+  leaf_encode_kernel<<<count, kEncodeThreads>>>(d->leaves + first, count, spatial, scalar);
+  cuda_check(cudaGetLastError(), "leaf encoder launch");
+  cuda_check(cudaDeviceSynchronize(), "leaf encoder");
+}
+
+void encode_leaves_to_host(DeviceTables* d, int first, int count, float* spatial, float* scalar) {
+  const size_t spatial_bytes = sizeof(float) * size_t(count) * kLeafSpatialPlanes * kSquares;
+  const size_t scalar_bytes = sizeof(float) * size_t(count) * kLeafScalars;
+  float *d_spatial = nullptr, *d_scalar = nullptr;
+  cuda_check(cudaMalloc(&d_spatial, spatial_bytes), "malloc rows");
+  cuda_check(cudaMalloc(&d_scalar, scalar_bytes), "malloc scalars");
+  encode_leaves(d, first, count, d_spatial, d_scalar);
+  cuda_check(cudaMemcpy(spatial, d_spatial, spatial_bytes, cudaMemcpyDeviceToHost),
+             "rows download");
+  cuda_check(cudaMemcpy(scalar, d_scalar, scalar_bytes, cudaMemcpyDeviceToHost),
+             "scalars download");
+  cudaFree(d_spatial);
+  cudaFree(d_scalar);
+}
 
 }  // namespace scribblez::rollout_gpu

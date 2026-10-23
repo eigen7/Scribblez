@@ -49,6 +49,12 @@ class GpuHastyRollouts {
   // The last run's end states, in device memory: what a leaf evaluator on
   // the device would read.
   const rollout_abi::LeafState* device_leaves() const;
+  // The leaf eval model's input rows (LeafEvalInputEncoder's layout) for
+  // leaves [first, first + count) of the last run, built on the device into
+  // the given device buffers, e.g. a NeuralNet<LeafEvalSpec>'s inputs.
+  void encode_leaves(int first, int count, float* spatial, float* scalar);
+  // encode_leaves, with the rows copied back to the host (for checks).
+  void encode_leaves_to_host(int first, int count, float* spatial, float* scalar);
   double table_upload_seconds() const { return table_upload_seconds_; }
   size_t table_bytes() const { return table_bytes_; }
 

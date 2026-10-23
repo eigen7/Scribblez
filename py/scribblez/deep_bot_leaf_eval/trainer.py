@@ -5,7 +5,8 @@ Per generation it waits for self-play to complete the cursor generation,
 trains one epoch over the window, fits a win table from the window, evaluates
 the model and both win tables (the fitted one and Macondo's) on the held-out
 games, checkpoints, and delivers the table, the checkpoint, the cursor and
-last the record. There is no export yet: serving is a later step.
+last the record. onnx_export.py exports a checkpoint for the engine's
+TensorRT loader (nn::LeafEvalSpec).
 
 The held-out games are leave inference's (leave_inference/holdout.py),
 played by the trainer itself at a fixed seed. The rows' format version and

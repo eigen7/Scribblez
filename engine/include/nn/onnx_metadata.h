@@ -28,6 +28,7 @@ inline constexpr const char* kGraphMoveProposalCache = "move_proposal_cache";
 inline constexpr const char* kGraphMoveProposalStep = "move_proposal_step";
 // The leave inference model. Must match leave_inference/onnx_export.py's GRAPH.
 inline constexpr const char* kGraphLeaveInference = "leave_inference";
+inline constexpr const char* kGraphDeepBotLeafEval = "deep_bot_leaf_eval";
 
 struct OnnxMetadata {
   // The input-encoding arm: which optional block the board row carries.
@@ -51,6 +52,12 @@ struct OnnxMetadata {
 
 // Throws on unparseable bytes, or on a model with no architecture signature.
 OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes);
+
+// A model whose input rows carry static leave values records the
+// LeaveValues::content_hash they were priced with as `leave_values`. Throws
+// util::CleanException unless that entry is `expected`.
+void check_leave_values(const OnnxMetadata& meta, const std::string& onnx_path,
+                        const std::string& expected);
 
 }  // namespace nn
 }  // namespace scribblez

@@ -102,7 +102,23 @@ struct HostTables {
   uint8_t letter_mult[rollout_abi::kSquares] = {};
   uint8_t word_mult[rollout_abi::kSquares] = {};
   int tile_values[26] = {};
+  int tile_distribution[rollout_abi::kTileKinds] = {};
 };
+
+// The leaf eval row as the device encoder writes it:
+// encoding/leaf_eval_input_encoder.h's layout, which hasty_rollouts_gpu.cpp
+// asserts these match.
+constexpr int kLeafSpatialPlanes = 95;
+constexpr int kLeafBlankPlane = 26;
+constexpr int kLeafPremiumPlane0 = 27;
+constexpr int kLeafCrossPlane0 = 31;
+constexpr int kLeafJoinPlane0 = 83;
+constexpr int kLeafScalars = 85;
+constexpr int kLeafScoreDiff = 3 * rollout_abi::kTileKinds;  // after the three seats' counts
+constexpr float kLeafScoreScale = 100.0f;
+constexpr float kLeafFaceValueScale = 10.0f;
+constexpr float kLeafLeaveValueScale = 25.0f;
+constexpr float kLeafCountScale = 100.0f;
 
 struct DeviceTables;
 
@@ -119,5 +135,15 @@ void run_rollouts(DeviceTables* tables, const rollout_abi::PositionAbi& pos, int
 
 // The last run's leaf states, a device pointer (n entries).
 const rollout_abi::LeafState* device_leaves(const DeviceTables* tables);
+
+// LeafEvalInputEncoder rows for leaves [first, first + count) of the last
+// run, written to device buffers: `spatial` (count x kLeafSpatialPlanes x
+// 225 floats) and `scalar` (count x kLeafScalars). Synchronous.
+void encode_leaves(DeviceTables* tables, int first, int count, float* spatial, float* scalar);
+
+// encode_leaves into device scratch, copied back to host buffers of the
+// same sizes.
+void encode_leaves_to_host(DeviceTables* tables, int first, int count, float* spatial,
+                           float* scalar);
 
 }  // namespace scribblez::rollout_gpu

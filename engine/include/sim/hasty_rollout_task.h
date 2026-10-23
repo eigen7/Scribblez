@@ -11,6 +11,7 @@
 #include "gpu/rollout_abi.h"
 #include "lexicon/dictionary.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -49,10 +50,20 @@ struct RolloutRacks {
 };
 RolloutRacks rollout_racks(const HastyRolloutPosition& pos, uint32_t rollout);
 
+// A rollout's end state as the leaf eval model reads it (rollout_abi's
+// LeafState on the host): the board, each player's rack after its last move
+// before its draw, and the scores. Player 0 is us.
+struct CpuLeaf {
+  Board board;
+  std::array<Rack, 2> leaves;
+  std::array<int, 2> scores;
+};
+
 // `n` rollouts of `pos` on `threads` threads, rollout i under seed-derived
-// draw i on whichever thread runs it.
-std::vector<rollout_abi::RolloutResult> run_hasty_rollouts_cpu(const HastyRolloutPosition& pos,
-                                                               const Dictionary& dict, int n,
-                                                               int threads);
+// draw i on whichever thread runs it. A non-null `leaves_out` receives the
+// leaves of the first leaves_out->size() rollouts.
+std::vector<rollout_abi::RolloutResult> run_hasty_rollouts_cpu(
+  const HastyRolloutPosition& pos, const Dictionary& dict, int n, int threads,
+  std::vector<CpuLeaf>* leaves_out = nullptr);
 
 }  // namespace scribblez

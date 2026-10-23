@@ -457,8 +457,12 @@ int NeuralNetBase::channels() const { return impl_->channels; }
 bool NeuralNetBase::opp_leave_input() const { return impl_->opp_leave_input; }
 
 void* NeuralNetBase::host_ptr(const char* name) const { return impl_->binding(name).host; }
+void* NeuralNetBase::device_ptr(const char* name) const { return impl_->binding(name).device; }
 
-void NeuralNetBase::predict(int num_rows) {
+void NeuralNetBase::predict(int num_rows) { run(num_rows, /*copy_inputs=*/true); }
+void NeuralNetBase::predict_device_inputs(int num_rows) { run(num_rows, /*copy_inputs=*/false); }
+
+void NeuralNetBase::run(int num_rows, bool copy_inputs) {
   Impl& m = *impl_;
   if (num_rows < 1 || num_rows > m.params.max_rows) {
     throw util::Exception("NeuralNet::predict: num_rows out of range");
@@ -473,8 +477,10 @@ void NeuralNetBase::predict(int num_rows) {
     m.last_rows = num_rows;
   }
 
-  for (const Binding& b : m.bindings) {
-    if (b.input) host_to_device_async(m.stream, b.device, b.host, b.bytes(num_rows));
+  if (copy_inputs) {
+    for (const Binding& b : m.bindings) {
+      if (b.input) host_to_device_async(m.stream, b.device, b.host, b.bytes(num_rows));
+    }
   }
 
   if (!m.context->enqueueV3(m.stream)) throw util::Exception("TensorRT inference failed");

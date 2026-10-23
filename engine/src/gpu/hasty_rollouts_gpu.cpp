@@ -1,5 +1,8 @@
 #include "gpu/hasty_rollouts_gpu.h"
 
+#include "encoding/board_planes.h"
+#include "encoding/input_encoder.h"
+#include "encoding/leaf_eval_input_encoder.h"
 #include "game/board.h"
 #include "game/rack.h"
 #include "game/tile.h"
@@ -21,6 +24,21 @@ namespace scribblez {
 namespace {
 
 using rollout_gpu::HostTables;
+
+// The device leaf encoder writes LeafEvalInputEncoder's row.
+using LeafEncoder = LeafEvalInputEncoder;
+static_assert(rollout_gpu::kLeafSpatialPlanes == LeafEncoder::kSpatialPlanes);
+static_assert(rollout_gpu::kLeafBlankPlane == BoardPlanes::kBlankMarkerPlane);
+static_assert(rollout_gpu::kLeafPremiumPlane0 == BoardPlanes::kPremiumPlane0);
+static_assert(rollout_gpu::kLeafCrossPlane0 == BoardPlanes::kPlanes);
+static_assert(rollout_gpu::kLeafJoinPlane0 == LeafEncoder::kJoinPlane0);
+static_assert(rollout_gpu::kLeafScalars == LeafEncoder::kScalarFloats);
+static_assert(rollout_gpu::kLeafScoreDiff == LeafEncoder::kScoreDiff);
+static_assert(LeafEncoder::kPoolSize == LeafEncoder::kScoreDiff + 3);
+static_assert(rollout_gpu::kLeafScoreScale == kScoreDiffInputScale);
+static_assert(rollout_gpu::kLeafFaceValueScale == LeafEncoder::kFaceValueScale);
+static_assert(rollout_gpu::kLeafLeaveValueScale == LeafEncoder::kLeaveValueScale);
+static_assert(rollout_gpu::kLeafCountScale == LeafEncoder::kCountScale);
 
 // The leave's key: its tiles ascending, five bits each, 31 past the end.
 uint32_t leave_key(const Rack& leave) {
@@ -160,6 +178,7 @@ HostTables build_tables(const Dictionary& dict, const HastyEquity& eq) {
     h.word_mult[i] = uint8_t(Board::PREMIUM[size_t(i)].word_mult());
   }
   for (int L = 0; L < 26; ++L) h.tile_values[L] = TILE_VALUES[size_t(L)];
+  for (int t = 0; t < TILE_KINDS; ++t) h.tile_distribution[t] = TILE_COUNTS[size_t(t)];
   return h;
 }
 
@@ -206,6 +225,14 @@ std::vector<GpuHastyRollouts::PhaseShare> GpuHastyRollouts::last_phase_shares() 
 
 const rollout_abi::LeafState* GpuHastyRollouts::device_leaves() const {
   return rollout_gpu::device_leaves(impl_->tables);
+}
+
+void GpuHastyRollouts::encode_leaves(int first, int count, float* spatial, float* scalar) {
+  rollout_gpu::encode_leaves(impl_->tables, first, count, spatial, scalar);
+}
+
+void GpuHastyRollouts::encode_leaves_to_host(int first, int count, float* spatial, float* scalar) {
+  rollout_gpu::encode_leaves_to_host(impl_->tables, first, count, spatial, scalar);
 }
 
 std::vector<GpuHastyRollouts::CountValue> GpuHastyRollouts::last_counts() const {

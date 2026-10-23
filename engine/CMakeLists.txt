@@ -290,6 +290,7 @@ target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_core ${CUDA_CUDART
 add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)
 target_link_libraries(gpu_rollout_demo PRIVATE
   scribblez_gpu_rollouts
+  scribblez_nn
   scribblez_core
   Boost::program_options
   Boost::json
@@ -423,6 +424,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_batching_eval_service.cpp
     tests/test_footprint.cpp
     tests/test_gcg_reader.cpp
+    tests/test_hasty_rollout_task.cpp
     tests/test_leave_sampler.cpp
     tests/test_leave_value_arrays.cpp
     tests/test_probe_log.cpp
