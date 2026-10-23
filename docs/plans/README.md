@@ -52,6 +52,13 @@ moved on. New plans go here, not in `docs/` proper.
   publishes eval metrics. The win table is a standalone fit that the leave
   inference workload also refits each generation, and every artifact carries
   a format version distinct from its generation.
+- **[gpu_hasty_rollouts.md](gpu_hasty_rollouts.md)**: *feasibility analysis
+  and build plan, not built.* Running batches of HastyBot rollouts on the
+  GPU: a block per rollout, exhaustive word-map probing reduced to an argmax
+  (no move lists, no best-first search), L2-resident lexicon tables, and the
+  cross-check updates on the device. Measured CPU baseline, a throughput
+  model with its break-even point, and a go/no-go microbenchmark as the
+  second PR.
 - **[supreme_bot_m1a.md](supreme_bot_m1a.md)**: *proposed, not built.*
   The build plan for M1a, SupremeBot's held-out transfer test: probe traces
   in the sim runner, a generator workload writing labels and a new `.sprobe`
