@@ -5,6 +5,7 @@
 #include "encoding/position_encoder.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "sim/candidate_race.h"
 #include "sim/setup_plays.h"
 #include "util/exception.h"
 
@@ -60,9 +61,6 @@ struct SimJob {
   util::ProgressMeter* meter;
 };
 
-// Each candidate's rollouts, in rollout-index order.
-using CandidateRollouts = std::vector<std::vector<Rollout>>;
-
 // Append rollouts [done, upto) of the `alive` candidates.
 void run_instalment(const SimRunner& runner, const SimmedPosition& res,
                     const std::vector<size_t>& alive, int done, int upto,
@@ -77,32 +75,6 @@ void run_instalment(const SimRunner& runner, const SimmedPosition& res,
                                  flat.begin() + (k + 1) * size_t(count));
 }
 
-// The alive candidate with the best win rate so far.
-size_t race_leader(const std::vector<size_t>& alive, const CandidateRollouts& rollouts) {
-  size_t leader = alive.front();
-  double best = -1;
-  for (const size_t c : alive) {
-    double wins = 0;
-    for (const Rollout& r : rollouts[c]) wins += r.win_value();
-    if (wins > best) {
-      best = wins;
-      leader = c;
-    }
-  }
-  return leader;
-}
-
-// Drop the unprotected candidates clearly below the leader (see
-// SlogSimConfig::race_checkpoints).
-void stop_the_beaten(const SlogSimConfig& config, const CandidateRollouts& rollouts,
-                     std::vector<size_t>* alive) {
-  const std::vector<Rollout>& lead = rollouts[race_leader(*alive, rollouts)];
-  std::erase_if(*alive, [&](size_t c) {
-    if (c < size_t(config.race_protected)) return false;
-    return clearly_below(paired_win_diff(rollouts[c], lead), lead.size(), config.race_sigmas);
-  });
-}
-
 // Sim the position's candidates to runner.rollouts(), racing them when the
 // config sets checkpoints.
 CandidateRollouts sim_candidates(const SlogSimConfig& config, const SimRunner& runner,
@@ -114,7 +86,8 @@ CandidateRollouts sim_candidates(const SlogSimConfig& config, const SimRunner& r
   for (const int upto : config.race_checkpoints) {
     run_instalment(runner, res, alive, done, upto, &rollouts);
     done = upto;
-    if (done < runner.rollouts()) stop_the_beaten(config, rollouts, &alive);
+    if (done < runner.rollouts())
+      stop_the_beaten(rollouts, config.race_sigmas, config.race_protected, &alive);
   }
   if (done < runner.rollouts())
     run_instalment(runner, res, alive, done, runner.rollouts(), &rollouts);

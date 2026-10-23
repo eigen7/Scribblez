@@ -64,6 +64,7 @@ add_library(scribblez_core STATIC
   src/sim/pool_labels.cpp
   src/sim/macondo_autostopper.cpp
   src/sim/macondo_simmer.cpp
+  src/sim/candidate_race.cpp
   src/sim/hasty_rollout_task.cpp
   src/sim/rollout_values.cpp
   src/agent/best_bot.cpp
