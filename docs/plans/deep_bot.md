@@ -120,19 +120,38 @@ every mechanical move, leaves each rollout's end state in device memory, and
 a second kernel writes the leaf network's input rows straight into the
 TensorRT engine's input buffers. Only three floats per rollout come back. A
 CPU reference implements the same sim move for move, and the kernel matches
-it rollout for rollout. The demo runs two plies of one position; one launch
-is to take ([deep_bot_v0.md](deep_bot_v0.md#build-order) steps 9-11, the
-forced reply with the agent):
+it rollout for rollout.
+
+Every sim in the design has the kernel's shape: a position in which one
+player has just moved, then the two mechanical moves, then the leaf from that
+player's side.
+
+- **Bob's sims** start after his candidate `b`; Alice and Bob reply hastily.
+- **Alice's sims** start after Bob's reply `β(a, r)`, which the host applies
+  to the board, since it is a fixed move. The position is then one in which
+  Bob has just moved and Alice's leave is known, and the value is flipped to
+  Alice's side.
+- **Label sims** start after the candidate; the opponent and the chooser
+  reply hastily.
+
+The demo runs one position at a time. One launch is to take
+([deep_bot_v0.md](deep_bot_v0.md#build-order), step 9):
 
 - **many positions, in groups that share an unseen pool:** a group is the
   candidates of one chooser at one position, each applied to the board (a
-  pool's candidates, or Bob's set at one `(a, r)`), and a launch holds as
-  many groups as fill it;
-- **per-rollout opponent leaves,** sampled on the host from the chooser's
-  belief; the kernel draws the rest of the rack;
-- **`K` mechanical plies** after the candidate, then the leaf;
-- **an optional forced first reply** per rollout, for Alice's sims, in which
-  Bob plays `β(a, r)` before the mechanical plies.
+  pool's candidates, Bob's set at one `(a, r)`, or Alice's sims of one
+  `(a, r)`), and a launch holds as many groups as fill it;
+- **per-rollout opponent leaves,** sampled on the host from the mover's
+  belief, or known (Alice's own leave, in her sims); the kernel draws the
+  rest of the rack;
+- **a range of rollout indices** per group, so racing can run in rounds.
+
+**Racing runs in rounds.** A round is one launch: a slice of the rollouts
+for every candidate still in the race, then the host compares the candidates
+on their paired samples and drops the clearly beaten ones before the next
+round. Rollout `i` is the same deal in whichever round it runs. Rounds from
+many positions and subtrees share each launch, so a launch stays large while
+each race is narrow.
 
 **Pairing.** Samples come from variates keyed by `(sample index, draw
 ordinal)`:
@@ -313,16 +332,14 @@ uniform refill, and the sims are paired across moves.
   is best under the paired sim statistics: by bootstrapping over the paired
   samples, or by a normal approximation to the paired differences against
   the leader. Near-equal moves share the mass, so the slots learn that either
-  will do.
-- **Every candidate gets every rollout.** On the GPU a pool is one batch of
-  candidates times rollouts, so no candidate is stopped early: every pair of
-  candidates is compared on the same deals, and the labels carry no
-  early-stopping bias.
+  will do. Racing stops weak moves early, on fewer rollouts, and both
+  estimates account for that, since a move far below the leader rarely comes
+  out on top.
 
 **Label rollouts stop at the leaf network.** Played to the end of the game,
-a rollout is slow and its outcome noisy. A label rollout instead plays `K`
-plies by the mechanical rule on the GPU and ends at the
-[leaf network](#sims), whose identity the pool records.
+a rollout is slow and its outcome noisy. A label rollout instead plays the
+two mechanical replies on the GPU and ends at the [leaf network](#sims),
+whose identity the pool records.
 
 **Generations.** Once DeepBot runs, its own evaluations label positions, and
 each policy-set generation trains on the previous agent's labels, as the move
@@ -486,7 +503,14 @@ second in FP16; together, 90,000 to 170,000 sims a second
 That is roughly 2 to 4 seconds a turn. The same sims on the 28-thread CPU,
 with the win table as the leaf, ran 20,000 to 164,000 rollouts a second in the
 same measurement, so 2 to 16 seconds a turn; with the leaf network fed from
-the host, the input upload bounds them at about 48,000 evaluations a second. Four levers:
+the host, the input upload bounds them at about 48,000 evaluations a second.
+
+**The counts are CPU-sized.** On the GPU a launch wants 10,000 rollouts or
+more to fill the device, and a turn's time is its number of racing rounds
+times a round's launch, since every subtree's round shares the launch. Width
+(`N_A`, `N_B`, `R_A`, `R_B`) costs throughput, not rounds, so the GPU may
+favor wider sets and more racks than the counts above, with fewer rounds.
+The counts and the round schedule are re-tuned there by measurement. Four levers:
 
 - **Successive halving over Alice's candidates.** A cheap first pass models
   Bob as the policy-set model's top-1. The full subtree runs only for
@@ -519,9 +543,9 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
    each kind (bingo, setup, other) is chosen, and how stable the choice is
    in `R_B`.
 5. **The agent.**
-   - The GPU sims with groups and forced first replies, the leaf network,
-     pairing, two-level evaluation with inferred-leave beliefs batched on the
-     GPU, and the cache.
+   - The GPU sims with groups and racing rounds, the leaf network, pairing,
+     two-level evaluation with inferred-leave beliefs batched on the GPU, and
+     the cache.
    - *Measure:* the picks at the known positions
      (`positions/NWL23/interesting-positions/`, the blind_spots tag), turn
      time, and matches against BestBot and `mset-sim` in standard Scrabble.

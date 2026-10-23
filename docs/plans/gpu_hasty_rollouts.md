@@ -299,9 +299,9 @@ tool keep their CPU path; a backend selector routes batches to the device.
    batching across candidates, host-side leave inference feeding per-rollout
    opponent leaves.
 
-Deferred: the opponent-ply table. The `K`-ply horizon, now with the leaf
-network on the device instead of the win table, and PR 5's integration are
-steps 9-11 of [deep_bot_v0.md](deep_bot_v0.md#build-order).
+Deferred: the opponent-ply table. PR 5's integration, with the leaf network
+on the device instead of a `K`-ply horizon to the win table, is steps 9-11 of
+[deep_bot_v0.md](deep_bot_v0.md#build-order).
 
 ## Demo results
 

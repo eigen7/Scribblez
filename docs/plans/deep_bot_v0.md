@@ -92,7 +92,7 @@ recorded beside the format version but never checked as a format.
 | Leave inference ONNX | metadata `leave_inference_format_version`, covering the encoder's inputs and the 29-float output layout. `LeaveInferenceSpec::kVersions` gates it and rejects a missing entry. Also stamped: `leave_values`, the content hash of the KLV whose values it was trained against, checked at load; `leave_inference_public`, stamped by public-task exports (absent reads as 0) and refused at load when 1 | metadata `tag`, `generation`, `policy` (the `hasty_spec` string), `head` |
 | Leave inference checkpoint | `leave_inference_format_version` and the `leave_values` hash in the checkpoint config. Resuming with a different value is refused, as the evidence trainer refuses a mismatched `move_encoding_version` | `GenerationalState` |
 | Leaf eval ONNX | metadata `leaf_eval_format_version`, covering `LeafEvalInputEncoder`'s row (which the GPU encoder kernel matches) and the win/draw/loss output. `LeafEvalSpec` gates it. Also stamped: `leave_values`, checked at load | metadata `tag`, `generation` |
-| Pool sidecar | `kPoolFormatVersion` in its header, after the magic | header: the leaf network's and the leave inference model's identities (ONNX hash, tag, generation, format version), or uniform beliefs; `horizon_plies`; `rollouts` |
+| Pool sidecar | `kPoolFormatVersion` in its header, after the magic | header: the leaf network's and the leave inference model's identities (ONNX hash, tag, generation, format version), or uniform beliefs; `rollouts` |
 | Policy-set ONNX and checkpoints | the existing `input_encoding_version` and `move_encoding_version`, plus `policy_set_format_version` (`kPolicySetFormatVersion`) for the opponent-rack and equity inputs and each form's set-conditioning stage and outputs | `tag`, `generation`, `form` |
 
 Every format constant is a C++ constant, exported to Python through
@@ -607,10 +607,11 @@ A generator worker's cycle:
 3. **Record forgone plays** with `forgone_play_tool`, which the leave
    inference model's input needs.
 4. **Label each position** with `policy_set_pool_tool`, on the GPU, over the
-   design's [candidate set](deep_bot.md#labels): `rollouts` (default 100) per
-   candidate, each `horizon_plies` (default 3: after the candidate, Bob,
-   Alice, Bob) mechanical plies and then the
-   [leaf network](deep_bot.md#sims). Every candidate gets every rollout.
+   design's [candidate set](deep_bot.md#labels): up to `rollouts` (default
+   100) per candidate, raced. A rollout is the candidate, Bob's and Alice's
+   mechanical replies, and the [leaf network](deep_bot.md#sims), the form
+   the network is trained on. (The CPU recipe ran three mechanical plies to
+   the win table.)
 5. **Deliver the chunk's pool records** (below) as the `.slog`'s sidecar.
 
 **`policy_set_pool_tool`** (engine/apps) labels a `.slog`'s picked positions
@@ -631,15 +632,20 @@ into its `.pool`. Per position:
   it returns to the bag. The candidates are one group of the
   [GPU sims](deep_bot.md#sims): they share the unseen pool and the
   per-rollout opponent leaves, so rollout `i` holds the same opponent rack
-  and draws from the same shuffled bag under every candidate. A large pool
-  spans several launches, and a launch holds several positions' groups.
+  and draws from the same shuffled bag under every candidate.
+- **Racing, in rounds.** The rounds end at the CPU recipe's checkpoints, 10%,
+  20%, 40% and 70% of `rollouts`, and the race rule is the same: after each
+  round, a candidate more than three paired standard errors below the leader
+  stops. Each round is one launch over the surviving candidates' next slice of
+  rollout indices. The tool keeps many positions in flight, and a launch takes
+  the pending rounds of as many as fill it (10,000 rollouts or more), so the
+  GPU stays busy while each pool's race narrows.
 - **The leaf** is `--leaf-model <ONNX path>`, a `deep_bot_leaf_eval` export,
   evaluated on the device from the rows the encoder kernel writes. A rollout
   that ends the game takes its exact outcome. Values are win probabilities
   (`p_win + p_draw/2`) from the chooser's side.
 - **Labels** (`sim/pool_labels.h`): per candidate the mean, the paired
-  standard error against the leader, and `q(a)`, over the full matrix of
-  rollouts; and the [opponent-rack input](#the-opponent-rack-input) from the
+  standard error against its comparator, and `q(a)`; and the [opponent-rack input](#the-opponent-rack-input) from the
   position's belief.
 
 The batch runs on one of two backends behind one interface: the CUDA kernel,
@@ -657,23 +663,29 @@ carries the magic and `kPoolFormatVersion`.
 
 - **Per pool:** the identities of the leaf network and the leave inference
   model (ONNX hash, tag, generation and format version), or uniform beliefs;
-  `horizon_plies`; and `rollouts`.
+  and `rollouts`, the budget per candidate.
 - **Per position:** the `.slog` game and turn, and the
   [opponent-rack input](#the-opponent-rack-input).
 - **Per candidate:**
   - the `Move` (16 bytes);
   - mean win probability;
-  - the paired standard error against the leader;
+  - rollouts completed (racing stops some early);
+  - the paired standard error against its comparator (below);
   - the static-equity rank;
   - `q(a)`;
   - every rollout's win value, after the position's candidates. Rollout `i`
-    is the same deal for every candidate, so any two can be compared on their
-    paired differences; the greedy form's targets need that for pairs the
+    is the same deal for every candidate, so any two can be compared on the
+    rollouts both ran; the greedy form's targets need that for pairs the
     labels above do not cover.
 
 v0 computes `q(a)` at generation time by the normal approximation to the
 paired differences against the leader. It treats the non-leader moves as
-independent of each other, an approximation acceptable for v0.
+independent of each other, an approximation acceptable for v0. A candidate
+that racing stopped is compared with the leader at the checkpoint that stopped
+it, over its own rollouts. Compared with the final leader's same rollouts
+instead, stopped candidates took 47–83% of a pool's `q` in a 20-rollout test:
+the final leader is picked on all the rollouts, and among a thousand stopped
+candidates some beat its early ones by chance.
 
 **Generations** are `positions_per_generation` pools. The window and
 eviction work as in `leave_inference`. Pools are expensive, so the window
@@ -692,8 +704,8 @@ pins its teacher:
 - the sources: `leaf_eval_tag`, `leaf_eval_generation`,
   `leave_inference_tag`, `leave_inference_generation` and `leave_beliefs`
   (`inferred` or `uniform`);
-- the labels: `horizon_plies`, `positions_per_game`, `rollouts` (default
-  100) and `blank_prune_points`;
+- the labels: `positions_per_game`, `rollouts` (default 100), `race` and
+  `blank_prune_points`;
 - self-play: `games_per_chunk` and the `hasty_*` policy;
 - generations and held-out pools: `positions_per_generation`, `window`,
   `holdout_every` and `holdout_chunks`;
@@ -785,7 +797,7 @@ that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
 - The target for a move `a` outside `S` is the least, over the members `s`
   of `S`, of its expected improvement over `s`:
   `E[max(0, μ_a − μ_s)] = Δ̂·Φ(Δ̂/se) + se·φ(Δ̂/se)`, with `Δ̂` the two
-  moves' mean paired difference over the pool's rollouts and `se` its
+  moves' mean paired difference over the rollouts both ran and `se` its
   standard error ([deep_bot.md](deep_bot.md#form-1-greedy-selection-with-cached-steps)
   says why the least). The sample margin over the set's best is 0 for about
   98% of moves once the seed is in `S`, and the pools' paired standard
@@ -841,17 +853,15 @@ candidates at the median and 682 on average (90th percentile 1,168, largest
 15,893), over 22,800 pools. Racing ran 27% of the full matrix's rollouts, and
 a 28-thread machine labelled about one pool a second.
 
-On the GPU every candidate gets every rollout: 68,000 rollouts for the
-average pool at 100 each. The demo's rates
-([gpu_hasty_rollouts.md](gpu_hasty_rollouts.md#the-leaf-network-on-the-device))
-are for two plies after the position; scaled to three, the kernel runs
-roughly 90,000 to 360,000 rollouts a second on the dev laptop's GPU,
-depending on blanks, and the leaf network 270,000 evaluations a second, so
-about 70,000 to 150,000 labelled rollouts a second, or 0.5 to 1 second for
-the average pool. That is one to two times the CPU's pool rate on the same
-machine, for 3.6 times the rollouts, unraced labels and the leaf network, and
-it leaves the CPU free for self-play and the leave inference model. The real
-rate is measured on the first generation and shown on the Stats tab.
+The GPU races at the same checkpoints, so it should run about the same 27%:
+some 18,700 rollouts for the average pool. The demo measured 88,000 to
+171,000 rollouts a second with the leaf network on the dev laptop's GPU,
+depending on blanks
+([gpu_hasty_rollouts.md](gpu_hasty_rollouts.md#the-leaf-network-on-the-device)),
+which is 0.1 to 0.2 seconds for the average pool: 5 to 9 times the CPU
+recipe's rate on the same machine, which ran one more mechanical ply and the
+win table. The CPU stays free for self-play and the leave inference model.
+The real rate is measured on the first generation and shown on the Stats tab.
 
 Generation sets the pace and is embarrassingly parallel, so the `generate`
 role is meant for a fleet of GPU machines: owned ssh machines and rented
@@ -964,29 +974,29 @@ checked rollout for rollout by `gpu_rollout_demo`:
 
 9. **The sim task, generalized.**
    - Groups of positions that share an unseen pool, several groups a launch,
-     with rollout `i` keyed by its index within the group, not its block.
+     each with its own range of rollout indices; rollout `i` is keyed by its
+     index, not its block.
    - Per-rollout opponent leaves; the kernel draws the rest of the rack from
      the pool less that leave.
    - An exchange candidate's returned tiles, put back after the chooser's
      refill.
-   - `K` plies after the position, the leaf from the side of the player who
-     moved last, and each rollout's value from the group's chooser: the leaf
-     network's, or the exact outcome when the game ended.
+   - Each rollout's value from the chooser's side: the leaf network's, or
+     the exact outcome when the game ended.
    - A library class around it (the device tables, the leaf network, a batch
      in, per-rollout values out), so the demo and the pool tool share it.
    - A TensorRT-versus-PyTorch parity family for the leaf network, and the
      device-versus-reference rollout check, in `py/tools/gpu_parity.py`.
-   - *Reports:* rollouts per second at `K` = 3, with the leaf, for the demo's
-     positions and for whole pools.
+   - *Reports:* rollouts per second with the leaf, for the demo's positions
+     and for whole pools' groups.
 10. **The pool tool.** `policy_set_pool_tool` with both backends and the
-    synthetic leaf, `kPoolFormatVersion` 5 (the leaf network's identity
-    replaces the win table's; no per-candidate rollout count), and the survey
-    tool's pool recipe deleted.
+    synthetic leaf, racing in rounds over positions in flight,
+    `kPoolFormatVersion` 5 (the leaf network's identity replaces the win
+    table's and the horizon), and the survey tool's pool recipe deleted.
 11. **The workload.** The `deep_bot_leaf_eval` trainer exports every
     generation to its tag's `models/`, as `leave_inference` does, so a
     generation can be pinned. `policy_set` gains the leaf pin and loses
-    `race` and the win table input, and its generator runs the pool tool.
-    Then a fresh tag.
+    `horizon_plies` and the win table input, and its generator runs the pool
+    tool. Then a fresh tag.
 
 *Measure:* the generator's pools per hour against the CPU recipe's, and
 whether the forms' recall against the static-equity baseline moves with the
@@ -999,13 +1009,9 @@ Step 1 depends on nothing else, and step 2 needs only step 1's
 
 ## Open questions
 
-- **`horizon_plies`.** Fewer plies are faster and less noisy, but lean harder
-  on the leaf network, which reads the board where the win table did not.
-  Macondo uses 5 plies with more than 14 tiles unseen.
-- **Racing on the GPU.** Staged launches (a first slice of the rollouts for
-  every candidate, then the rest for the candidates still in contention)
-  would cut the work toward the CPU recipe's 27%, at the cost of unequal
-  rollout counts in the labels.
+- **The round schedule.** The CPU's four checkpoints carry over unchanged.
+  On the GPU a round costs a launch, not a pause, so more and earlier rounds
+  may pay; the work per pool against the labels' quality decides.
 - **`rollouts` against pool count.** Fewer rollouts per pool means noisier
   `q(a)` but more positions. The soft labels absorb some of the noise.
 - **The input size.** 242 planes is about 220 KB a row in FP32. If loader
