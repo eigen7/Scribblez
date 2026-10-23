@@ -5,8 +5,9 @@ The graph takes a row (`input_spatial`, (batch, 95, 15, 15), and
 `input_scalar`, (batch, 85)) and emits `wld` logits (batch, 3) and
 `score_diff` (batch, 2: mean, std). A model trained without the join planes
 still takes the full row; its graph slices the planes it reads. The metadata
-carries the format version and the leave values the row's scalars were priced
-with, which the engine gates on, and the generation's provenance.
+carries the format version, the leave values the row's scalars were priced
+with (which the engine checks before loading: nn::check_leave_values), and
+the generation's provenance.
 
 As a script: export a tag's rolling checkpoint, whose weights are the served
 ones (the trainer checkpoints in eval mode: the averaged iterate with
@@ -81,10 +82,9 @@ def export_onnx(
     )
 
 
-def export_checkpoint(checkpoint: Path, out: Path, tag: str) -> dict[str, object]:
-    """Export the rolling checkpoint at `checkpoint` to `out`; returns the
+def export_checkpoint(ckpt: dict, out: Path, tag: str) -> dict[str, object]:
+    """Export the loaded rolling checkpoint `ckpt` to `out`; returns the
     provenance recorded."""
-    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
     params = ckpt["config"]
     if int(params[FORMAT_KEY]) != int(LAYOUT["format_version"]):
         raise ValueError(
@@ -119,16 +119,10 @@ def main():
     )
     args = parser.parse_args()
     tag_dir = DEFAULT_MOUNT_ROOT / "tags" / WORKLOAD / args.tag
-    checkpoint = tag_dir / "checkpoints" / "model.pt"
-    if args.out:
-        out = Path(args.out)
-        provenance = export_checkpoint(checkpoint, out, args.tag)
-    else:
-        ckpt_gen = int(
-            torch.load(checkpoint, map_location="cpu", weights_only=False)["generation_index"]
-        )
-        out = tag_dir / "models" / f"leaf_eval_gen{ckpt_gen - 1}.onnx"
-        provenance = export_checkpoint(checkpoint, out, args.tag)
+    ckpt = torch.load(tag_dir / "checkpoints" / "model.pt", map_location="cpu", weights_only=False)
+    generation = int(ckpt["generation_index"]) - 1
+    out = Path(args.out) if args.out else tag_dir / "models" / f"leaf_eval_gen{generation}.onnx"
+    provenance = export_checkpoint(ckpt, out, args.tag)
     print(f"exported {out} ({provenance})")
 
 

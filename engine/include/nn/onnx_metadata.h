@@ -53,5 +53,11 @@ struct OnnxMetadata {
 // Throws on unparseable bytes, or on a model with no architecture signature.
 OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes);
 
+// A model whose input rows carry static leave values records the
+// LeaveValues::content_hash they were priced with as `leave_values`. Throws
+// util::CleanException unless that entry is `expected`.
+void check_leave_values(const OnnxMetadata& meta, const std::string& onnx_path,
+                        const std::string& expected);
+
 }  // namespace nn
 }  // namespace scribblez

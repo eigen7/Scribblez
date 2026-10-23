@@ -25,18 +25,6 @@ nn::NeuralNetParams<nn::LeaveInferenceSpec> net_params(const LeaveInferenceNet::
   return np;
 }
 
-void check_leave_values(const nn::OnnxMetadata& meta, const std::string& onnx_path,
-                        const std::string& expected) {
-  const auto it = meta.entries.find("leave_values");
-  const std::string declared = it == meta.entries.end() ? "(none)" : it->second;
-  if (declared != expected) {
-    throw util::CleanException(
-      "{} was trained against leave values {}, but these are {}; use a model trained against "
-      "them",
-      onnx_path, declared, expected);
-  }
-}
-
 // The loader serves only observer-view rows, which a public model was not
 // trained on.
 void check_observer_view(const nn::OnnxMetadata& meta, const std::string& onnx_path) {
@@ -53,7 +41,7 @@ void check_observer_view(const nn::OnnxMetadata& meta, const std::string& onnx_p
 LeaveInferenceNet::LeaveInferenceNet(const Params& params, const std::string& leave_values_hash)
     : net_(net_params(params)) {
   const nn::OnnxMetadata meta = nn::parse_onnx_metadata(util::read_file_bytes(params.onnx_path));
-  check_leave_values(meta, params.onnx_path, leave_values_hash);
+  nn::check_leave_values(meta, params.onnx_path, leave_values_hash);
   check_observer_view(meta, params.onnx_path);
   net_.load();
   // The format version gate makes these hold for any model it admits; a

@@ -378,8 +378,8 @@ Measured as above (65,536 rollouts, FP16):
 | seed 2   | 540K/s         | 3.0M rows/s  | 272K/s     | 171K/s            |
 | seed 1   | 138K/s         | 2.9M rows/s  | 267K/s     | 88K/s             |
 
-The model, not the encoder, is the leaf's cost, at the write-up's 256K
-evals/s. The same leaves through the host route, for comparison: the CPU
+The model, not the encoder, is the leaf's cost, near the 256K evals/s the
+[results](../deep_bot_leaf_eval_results.md) measured for this trunk. The same leaves through the host route, for comparison: the CPU
 encoder runs about 71K rows/s per thread (so about 1.5M/s over the machine),
 and `predict()` with the 85 KB rows uploaded from host memory manages 48K
 evals/s: the upload, not the network, bounds it. That is the case for keeping

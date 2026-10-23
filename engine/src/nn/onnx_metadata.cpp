@@ -38,5 +38,17 @@ OnnxMetadata parse_onnx_metadata(const std::vector<char>& onnx_bytes) {
   return meta;
 }
 
+void check_leave_values(const OnnxMetadata& meta, const std::string& onnx_path,
+                        const std::string& expected) {
+  const auto it = meta.entries.find("leave_values");
+  const std::string declared = it == meta.entries.end() ? "(none)" : it->second;
+  if (declared != expected) {
+    throw util::CleanException(
+      "{} was trained against leave values {}, but these are {}; use a model trained against "
+      "them",
+      onnx_path, declared, expected);
+  }
+}
+
 }  // namespace nn
 }  // namespace scribblez

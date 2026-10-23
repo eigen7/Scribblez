@@ -516,7 +516,6 @@ class LeaveInferenceSpec {
   using AuxOutputs = TensorList<>;
 };
 
-// The aux outputs are the placement heads, one per placement target.
 // The DeepBot leaf evaluation model (py/scribblez/deep_bot_leaf_eval): a
 // LeafEvalInputEncoder row to win/draw/loss and score difference, from the
 // side of the player who moved last. Batches are large: a rollout kernel
@@ -537,6 +536,7 @@ class LeafEvalSpec {
   using AuxOutputs = TensorList<>;
 };
 
+// The aux outputs are the placement heads, one per placement target.
 static_assert(PositionEvaluationSpec::AuxOutputs::size == kPlacementHeads);
 
 }  // namespace nn
