@@ -62,6 +62,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_value_arrays.h"
 #include "lexicon/lexicon.h"
+#include "sim/candidate_race.h"
 #include "sim/pool_labels.h"
 #include "sim/slog_position_simmer.h"
 #include "sim/win_pct_table.h"
@@ -168,12 +169,7 @@ SlogSimConfig screen_config(const Options& opt, const Dictionary& dict) {
   c.runner.horizon_plies = opt.horizon_plies;
   c.runner.win_table = opt.win_table;
   if (opt.race) {
-    // Checkpoints at 10%, 20%, 40% and 70% of the screen. At three paired
-    // standard errors below the leader over four looks, a candidate truly equal
-    // to the leader is stopped well under once per hundred positions, and
-    // anything stopped was never going to be a pick.
-    for (const int pct : {10, 20, 40, 70})
-      if (opt.rollouts * pct / 100 > 0) c.race_checkpoints.push_back(opt.rollouts * pct / 100);
+    c.race_checkpoints = race_checkpoints(opt.rollouts);
     c.race_protected = opt.pool() ? 0 : opt.cut;
   }
   // Under the all recipe a position has hundreds of candidates, so one position
