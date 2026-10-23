@@ -530,6 +530,7 @@ TASK_CODES = {
     "max_move_per_lane": 1,
     "leave_inference": 2,
     "public_leave_inference": 3,
+    "deep_bot_leaf_eval": 4,
 }
 
 

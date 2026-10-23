@@ -32,7 +32,9 @@ add_library(scribblez_core STATIC
   src/lexicon/word_map.cpp
   src/training/training_task.cpp
   src/encoding/position_encoder.cpp
+  src/encoding/leaf_eval_input_encoder.cpp
   src/encoding/leave_inference_input_encoder.cpp
+  src/training/leaf_eval_task.cpp
   src/training/leave_inference_task.cpp
   src/data/block_decoder.cpp
   src/serve/position_json.cpp

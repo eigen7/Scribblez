@@ -3,6 +3,7 @@
 #include "data/binary_log.h"
 #include "data/data_loader.h"
 #include "data/forgone_play_log.h"
+#include "training/leaf_eval_task.h"
 #include "training/leave_inference_task.h"
 #include "training/max_move_per_lane_task.h"
 #include "training/training_task.h"
@@ -32,6 +33,8 @@ int BlockDecoder::input_floats_for(DecodeTask task, const InputEncodingSpec& spe
     case DecodeTask::kLeaveInference:
     case DecodeTask::kPublicLeaveInference:
       return LeaveInferenceTask::kInputFloats;
+    case DecodeTask::kLeafEval:
+      return LeafEvalTask::kInputFloats;
   }
   std::abort();  // unreachable: the switch covers every DecodeTask
 }
@@ -45,6 +48,8 @@ int BlockDecoder::label_floats_for(DecodeTask task) {
     case DecodeTask::kLeaveInference:
     case DecodeTask::kPublicLeaveInference:
       return LeaveInferenceTask::kLabelFloats;
+    case DecodeTask::kLeafEval:
+      return LeafEvalTask::kLabelFloats;
   }
   std::abort();  // unreachable: the switch covers every DecodeTask
 }
@@ -98,7 +103,8 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
   float* out = output + output_row * row_floats_;
   // The lane and leave inference tasks encode the pre-move position (the lane
   // labels come from enumerating legal moves there, and the leave is inferred
-  // before the observer moves), so they ignore the caller's post_move flag.
+  // before the observer moves), and the leaf eval task the post-move one (a
+  // rollout leaf follows a move), so they ignore the caller's post_move flag.
   switch (task_) {
     case DecodeTask::kPositionEval:
       pos_.encode_row<PositionEvalTask>(g, int(turn_idx), post_move, transpose, out);
@@ -113,6 +119,9 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
     case DecodeTask::kPublicLeaveInference:
       decode_leave_row<PublicLeaveInferenceTask>(buf, path, g, game_idx, turn_idx, transpose, out,
                                                  *forgone);
+      return;
+    case DecodeTask::kLeafEval:
+      pos_.encode_row<LeafEvalTask>(g, int(turn_idx), /*post_move=*/true, transpose, out);
       return;
   }
 }

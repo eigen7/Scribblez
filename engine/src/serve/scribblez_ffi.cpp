@@ -25,6 +25,7 @@
 #include "training/footprint_collapse.h"
 #include "training/lane_analysis.h"
 #include "training/lane_targets.h"
+#include "training/leaf_eval_task.h"
 #include "training/leave_inference_task.h"
 #include "training/max_move_per_lane_input_encoder.h"
 #include "training/max_move_per_lane_task.h"
@@ -219,6 +220,23 @@ const ScribblezShape kLeaveInferenceTargetShapes[] = {
   {nullptr, nullptr, 0, 0},
 };
 
+// The leaf evaluation task's shapes (training/leaf_eval_task.h).
+constexpr int kLeafEvalSpatialDims[3] = {scribblez::LeafEvalInputEncoder::kSpatialPlanes,
+                                         scribblez::kBoardSide, scribblez::kBoardSide};
+constexpr int kLeafEvalScalarDims[1] = {scribblez::LeafEvalInputEncoder::kScalarFloats};
+
+const ScribblezShape kLeafEvalInputShapes[] = {
+  {"input_spatial", kLeafEvalSpatialDims, 3, -1},
+  {"input_scalar", kLeafEvalScalarDims, 1, -1},
+  {nullptr, nullptr, 0, 0},
+};
+
+const ScribblezShape kLeafEvalTargetShapes[] = {
+  {scribblez::WldTarget::kName, scribblez::WldTarget::kDims, 1, 0},
+  {scribblez::ScoreDiffTarget::kName, scribblez::ScoreDiffTarget::kDims, 1, 1},
+  {nullptr, nullptr, 0, 0},
+};
+
 // The DecodeTask a C ABI task code names, if any.
 std::optional<scribblez::binlog::DecodeTask> decode_task(int code) {
   using scribblez::binlog::DecodeTask;
@@ -231,8 +249,18 @@ std::optional<scribblez::binlog::DecodeTask> decode_task(int code) {
       return DecodeTask::kLeaveInference;
     case 3:
       return DecodeTask::kPublicLeaveInference;
+    case 4:
+      return DecodeTask::kLeafEval;
   }
   return std::nullopt;
+}
+
+// Loads what a task's rows read beyond the session: HastyBot's leave values for
+// the leaf eval task. Throws if they cannot load.
+void prepare_task(scribblez::binlog::DecodeTask task) {
+  if (task == scribblez::binlog::DecodeTask::kLeafEval) {
+    scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+  }
 }
 
 // A task's input and target tensors.
@@ -255,6 +283,8 @@ TaskShapes task_shapes(const ScribblezSession* s, int code) {
     case DecodeTask::kLeaveInference:
     case DecodeTask::kPublicLeaveInference:
       return {kLeaveInferenceInputShapes, kLeaveInferenceTargetShapes};
+    case DecodeTask::kLeafEval:
+      return {kLeafEvalInputShapes, kLeafEvalTargetShapes};
   }
   return {nullptr, nullptr};
 }
@@ -409,6 +439,7 @@ int ScribblezSession::decode_rows(int task, const char* path, const int64_t* gam
   std::vector<char> buf;
   if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
   try {
+    prepare_task(*t);
     std::optional<scribblez::ForgoneSidecar> forgone;
     if (scribblez::binlog::BlockDecoder::reads_forgone(*t)) {
       forgone.emplace(scribblez::forgone_path_of(path), buf.data(), spec.dict->content_hash());
@@ -1060,6 +1091,12 @@ DataLoaderHandle* ScribblezSession::dl_new(int64_t memory_budget, int num_worker
                                            int num_prefetch_threads, int task) const {
   const std::optional<scribblez::binlog::DecodeTask> t = decode_task(task);
   if (!t) return nullptr;
+  try {
+    prepare_task(*t);
+  } catch (const std::exception& e) {
+    std::cerr << "scribblez_dl_new: " << e.what() << "\n";
+    return nullptr;
+  }
   DataLoader::Params p;
   p.spec = spec;
   p.task = *t;

@@ -32,7 +32,15 @@ namespace binlog {
 //                      pre-move. Its labels are the opponent's leave.
 //   kPublicLeaveInference -- PublicLeaveInferenceTask rows: kLeaveInference's
 //                      rows and labels, the input in its public view.
-enum class DecodeTask { kPositionEval, kMaxMovePerLane, kLeaveInference, kPublicLeaveInference };
+//   kLeafEval       -- LeafEvalTask rows; one per eligible turn, always
+//                      post-move. Its labels are the game's outcome.
+enum class DecodeTask {
+  kPositionEval,
+  kMaxMovePerLane,
+  kLeaveInference,
+  kPublicLeaveInference,
+  kLeafEval
+};
 
 class BlockDecoder {
  public:
