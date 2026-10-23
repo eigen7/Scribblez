@@ -88,6 +88,11 @@ Dashboard and compute:
   closed roadmap item 1. The first corpus with per-candidate placement planes
   and the student trained on them, against the v1 curves and the static-equity
   shortlist.
+- **[deep_bot_leaf_eval_results.md](deep_bot_leaf_eval_results.md)**: the
+  DeepBot rollout-leaf model's first runs. Transformer against conv trunk,
+  with and without the join planes, against the win table. The TensorRT
+  throughput sweep behind the model's size, and why the conv trunk is the one
+  to serve.
 - **[sim_obs_experiment_results.md](sim_obs_experiment_results.md)**: the
   sim-evidence kill-test. Its numbers, controls and verdict (pass).
 - **[film_conditioning_results.md](film_conditioning_results.md)**: the
