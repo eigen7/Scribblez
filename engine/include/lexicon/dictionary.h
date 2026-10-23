@@ -63,6 +63,8 @@ class Dictionary {
   // (which runs from its first index through the arc with IS_END_BIT set):
   // one scan instead of a step() per letter.
   uint32_t arc(uint32_t i) const { return nodes_[i]; }
+  // Every arc, for a copy onto another device (gpu/).
+  const std::vector<uint32_t>& arcs() const { return nodes_; }
   static uint8_t arc_tile(uint32_t a) { return a >> 24; }
 
   // The util::content_hash of the arcs, which for a loaded file is the

@@ -52,7 +52,6 @@ class WordMap {
   };
   WordList lookup(int length, const BitRack& key) const;
 
- private:
   static constexpr int kMaxLen = 15;
 
   // Linear-probing slot; count == 0 marks it empty.
@@ -66,6 +65,10 @@ class WordMap {
     std::vector<Slot> slots;  // open-addressing table, power-of-two size
     uint64_t mask = 0;        // slots.size() - 1
   };
+  // The tables themselves, for a copy onto another device (gpu/).
+  const PerLength& per_length(int length) const { return by_len_[length]; }
+
+ private:
   std::array<PerLength, kMaxLen + 1> by_len_;  // indexed by word length (2..15)
 };
 

@@ -1,6 +1,7 @@
 # Hasty rollouts on the GPU
 
-**Status: feasibility analysis and build plan, 2026-10-23; not built.** Whether
+**Status: feasibility analysis and build plan, 2026-10-23; a standalone demo
+is built (see [Demo results](#demo-results)), nothing is integrated.** Whether
 batches of HastyBot rollouts can run on the GPU with substantially better
 throughput than the multithreaded CPU engine, and how to build it if so.
 
@@ -297,3 +298,72 @@ tool keep their CPU path; a backend selector routes batches to the device.
 
 Deferred: the `K`-ply horizon with the win-table leaf (DeepBot's form), MAGPIE
 blank tables, the opponent-ply table.
+
+## Demo results
+
+`gpu_rollout_demo` (engine/apps) is PRs 1-4 of the list above in one
+standalone binary: it reaches a position by HastyBot self-play, runs the same
+N rollouts through the CPU reference (`sim/hasty_rollout_task.h`, HastyBot on
+every ply) and through the kernel (`src/gpu/rollout_kernel.cu`), and checks
+them rollout by rollout. Both draw with the same counter-based generator, so
+a rollout holds the same racks on either side and its two moves and its
+outcome compare exactly. On every position tried, all 65,536 rollouts were
+identical, blanks included.
+
+Measured 2026-10-23 on the dev laptop (RTX 5000 Ada, 28 CPU threads), NWL23,
+65,536 rollouts per run, three self-play positions after 10 plies:
+
+| Position (our leave)        | Racks with a blank | CPU rollouts/s | GPU rollouts/s | GPU / CPU |
+|-----------------------------|--------------------|----------------|----------------|-----------|
+| seed 2 (no blanks unseen)   | 0%                 | 164,000        | 607,000        | 3.7x      |
+| seed 3 (leave CIOT?)        | 50%                | 34,000         | 243,000        | 7.1x      |
+| seed 1 (leave ENT?)         | 57%                | 20,000         | 153,000        | 7.5x      |
+
+The CPU falls off on blank racks because they take the GADDAG path; the
+device handles them through MAGPIE-style blank tables (a subrack with blanks
+probes a table keyed by its letters and gets the words containing them plus
+one or two more, each tagged with the blanks' letters), so its cost per ply
+rises less.
+
+What the demo settled about the design:
+
+- **One probe per item, with the blanks in the table.** Enumerating a
+  blank's designations at probe time (26 probes per one-blank subrack) was
+  the first version, and it ran below CPU parity on blank-heavy positions.
+- **A whole ply is one work queue.** Chunking the spans through shared memory
+  (8 chunks per ply, a barrier each) left the block waiting on its slowest
+  thread at every barrier. The spans now go to a per-block slot of global
+  scratch (L2-resident while hot), the items of the ply are handed out
+  through a shared counter, and a warp takes 32 blank items at once and
+  streams their words across its lanes, so it keeps 32 loads in flight
+  instead of walking one hit list at a time. Each of these steps was worth
+  1.3-2x.
+- **The blank-heavy plies are memory-bound.** The blank tables (~300 MB)
+  live in device memory, not L2; a 65,536-rollout batch on seed 1 moves
+  about 200 GB of 32-byte sectors in under half a second, close to this
+  GPU's memory bandwidth. Packing each list entry as a 16-byte word (one
+  sequential load per word instead of an index and a random fetch) was the
+  last gain. Blank-free plies are not bandwidth-bound; their tables sit in
+  L2.
+- **Occupancy is register-bound** at 64 registers (`__launch_bounds__`),
+  4 blocks of 256 threads per SM. Shared memory is 17 KB per block.
+- A cheaper span validation (a per-span board pattern compared as vectors)
+  cost more than it saved, through the larger span record. Instruction count
+  is not the limit.
+- `nvcc` 12.9 refuses gcc 16 as host compiler; the CUDA library compiles
+  through the image's gcc 13, and the engine's C++26-only flags are scoped to
+  CXX in the root CMakeLists.txt. The Nsight profilers are not usable in the
+  container (no performance-counter permission), so the kernel carries its
+  own per-phase cycle counters and work counters, which the demo prints.
+
+The kernel also leaves every rollout's end state (board, racks, scores, bag)
+in device memory (`rollout_abi::LeafState`): the input a leaf encoder kernel
+would read for a leaf network, with nothing crossing back to the host.
+
+Not done, in the order they look worth trying: an L2 persistence window for
+the word map and leave table so the blank traffic does not evict them; the
+opponent-ply table; a loose per-span equity bound against the best exchange
+to skip spans before probing; dropping the two-blank table (rare, ~200 MB)
+in favor of designation enumeration for those items; 128-thread blocks for
+occupancy.
+

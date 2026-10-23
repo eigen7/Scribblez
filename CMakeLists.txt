@@ -11,7 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # P2996 reflection, which GCC 16 gates behind a flag (data/format_layout.cpp
 # derives the sidecar-format document from the structs themselves). Drop the
 # flag once reflection stops being opt-in.
-add_compile_options(-freflection)
+add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-freflection>)
 
 # Compile through ccache, which the dev image installs and configures (see
 # docker-setup/local/Dockerfile).
@@ -32,12 +32,14 @@ endif()
 set(CMAKE_CXX_FLAGS_TEST "${CMAKE_CXX_FLAGS_RELEASE}")
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+                      $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+                      $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>)
   # py/build.py always passes this, set to the target CPU microarchitecture
   # (e.g. "alderlake", "x86-64-v3") so every translation unit is compiled for
   # that arch's instruction set instead of the generic x86-64 baseline.
   if(SCRIBBLEZ_MARCH)
-    add_compile_options(-march=${SCRIBBLEZ_MARCH})
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-march=${SCRIBBLEZ_MARCH}>)
   endif()
 endif()
 
