@@ -126,14 +126,22 @@ struct DeviceTables;
 DeviceTables* upload_tables(const HostTables& host, size_t* bytes);
 void free_tables(DeviceTables* tables);
 
-// `n` rollouts of `pos` into results[0, n). `seconds` receives the position
-// upload, the kernel and the result download; `phase_cycles` the summed
-// per-block cycles of each Phase.
-void run_rollouts(DeviceTables* tables, const rollout_abi::PositionAbi& pos, int n,
-                  rollout_abi::RolloutResult* results, double seconds[3],
-                  unsigned long long phase_cycles[kPhases], unsigned long long counts[kCounts]);
+// A batch in the device's layouts (sim/hasty_rollout_task.h's RolloutBatch).
+struct BatchAbi {
+  std::vector<rollout_abi::RolloutTask> tasks;
+  std::vector<rollout_abi::PositionAbi> positions;
+  std::vector<rollout_abi::GroupAbi> groups;
+  std::vector<rollout_abi::OppLeaveAbi> opp_leaves;
+};
 
-// The last run's leaf states, a device pointer (n entries).
+// The batch's tasks into results[0, tasks), one block each. `seconds`
+// receives the batch upload, the kernel and the result download;
+// `phase_cycles` the summed per-block cycles of each Phase.
+void run_rollouts(DeviceTables* tables, const BatchAbi& batch, rollout_abi::RolloutResult* results,
+                  double seconds[3], unsigned long long phase_cycles[kPhases],
+                  unsigned long long counts[kCounts]);
+
+// The last run's leaf states, a device pointer (one per task).
 const rollout_abi::LeafState* device_leaves(const DeviceTables* tables);
 
 // LeafEvalInputEncoder rows for leaves [first, first + count) of the last

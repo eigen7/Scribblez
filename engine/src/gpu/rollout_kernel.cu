@@ -1010,47 +1010,73 @@ __device__ int acquire_scratch(uint32_t rollout) {
   }
 }
 
+// Copies the start's board and cross-checks into shared memory, the whole
+// block taking part.
+__device__ void load_start(const PositionAbi& pos, Smem& s) {
+  for (int i = threadIdx.x; i < kSquares; i += kThreads) {
+    s.sq[i] = pos.squares[i];
+    for (int v = 0; v < 2; ++v) {
+      s.xmask[v][i] = pos.cross_mask[v][i];
+      s.xscore[v][i] = pos.cross_score[v][i];
+      s.xnb[v][i] = pos.cross_has_neighbor[v][i];
+    }
+  }
+}
+
+// The racks and the bag (hasty_rollout_task.cpp's start_rollout): seat the
+// opponent's known leave, taken out of the pool first, draw the rest of
+// their rack and then our refill, and put back an exchange's tiles. Thread 0.
+__device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLeaveAbi* leaves,
+                     uint32_t rollout, Smem& s) {
+  for (int t = 0; t < kTileKinds; ++t) {
+    s.rack[0][t] = pos.leave[t];
+    s.rack[1][t] = 0;
+  }
+  for (int i = 0; i < group.pool_size; ++i) s.bag.tiles[i] = group.pool[i];
+  s.bag.len = group.pool_size;
+  s.bag.cursor = 0;
+  s.bag.next_rand = 0;
+  if (rollout < group.num_leaves) {
+    const OppLeaveAbi& leave = leaves[group.leave_base + rollout];
+    for (int i = 0; i < leave.n; ++i) {
+      ++s.rack[1][leave.tiles[i]];
+      remove_from_bag(s.bag, leave.tiles[i]);
+    }
+  }
+  for (int k = 0; k < 2; ++k) {
+    const int p = 1 - k;  // the opponent first
+    const int draws = refill_draw(s.bag.remaining(), rack_total(s, p));
+    for (int i = 0; i < draws; ++i) ++s.rack[p][s.bag.draw(group.seed, rollout)];
+  }
+  for (int i = 0; i < pos.num_returned; ++i) s.bag.put_back(pos.returned[i]);
+  // A player who never moves keeps its full rack as its leave.
+  record_leave(s, 0);
+  record_leave(s, 1);
+}
+
 __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
-  rollout_kernel(const PositionAbi* pos, RolloutResult* out, LeafState* leaves) {
+  rollout_kernel(const RolloutTask* tasks, const PositionAbi* positions, const GroupAbi* groups,
+                 const OppLeaveAbi* opp_leaves, RolloutResult* out, LeafState* leaves) {
   __shared__ Smem s;
   const int tid = threadIdx.x;
-  const uint32_t rollout = blockIdx.x;
+  const RolloutTask task = tasks[blockIdx.x];
+  const PositionAbi& pos = positions[task.position];
+  const GroupAbi& group = groups[pos.group];
+  const uint32_t rollout = task.rollout;
+  const uint64_t seed = group.seed;
   PhaseClock pc;
   WorkCounts wc;
   for (int p = 0; p < kPhases; ++p) pc.acc[p] = 0;
   if (tid == 0) pc.start();
-  for (int i = tid; i < kSquares; i += kThreads) {
-    s.sq[i] = pos->squares[i];
-    for (int v = 0; v < 2; ++v) {
-      s.xmask[v][i] = pos->cross_mask[v][i];
-      s.xscore[v][i] = pos->cross_score[v][i];
-      s.xnb[v][i] = pos->cross_has_neighbor[v][i];
-    }
-  }
+  load_start(pos, s);
   if (tid == 0) {
-    s.slot = acquire_scratch(rollout);
-    for (int t = 0; t < kTileKinds; ++t) {
-      s.rack[0][t] = pos->leave[t];
-      s.rack[1][t] = 0;
-    }
-    for (int i = 0; i < pos->pool_size; ++i) s.bag.tiles[i] = pos->pool[i];
-    s.bag.len = pos->pool_size;
-    s.bag.cursor = 0;
-    s.bag.next_rand = 0;
-    s.scores[0] = pos->scores[0];
-    s.scores[1] = pos->scores[1];
-    s.num_tiles = pos->num_tiles;
+    s.slot = acquire_scratch(blockIdx.x);
+    s.scores[0] = pos.scores[0];
+    s.scores[1] = pos.scores[1];
+    s.num_tiles = pos.num_tiles;
     s.game_over = 0;
     s.overflow = 0;
-    int leave_size = 0;
-    for (int t = 0; t < kTileKinds; ++t) leave_size += pos->leave[t];
-    const int opp_draw = opp_rack_draw(pos->pool_size);
-    for (int i = 0; i < opp_draw; ++i) ++s.rack[1][s.bag.draw(pos->seed, rollout)];
-    const int my_draw = our_refill_draw(pos->pool_size, leave_size);
-    for (int i = 0; i < my_draw; ++i) ++s.rack[0][s.bag.draw(pos->seed, rollout)];
-    // A player who never moves keeps its full rack as its leave.
-    record_leave(s, 0);
-    record_leave(s, 1);
+    deal(pos, group, opp_leaves, rollout, s);
   }
   __syncthreads();
   Scratch& sc = c_tables.scratch[s.slot];
@@ -1060,7 +1086,7 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
     if (s.game_over) break;
     if (tid == 0) s.mover = ply == 0 ? 1 : 0;
     __syncthreads();
-    play_ply(s, sc, tid, pos->seed, rollout, res.moves[ply], pc, wc);
+    play_ply(s, sc, tid, seed, rollout, res.moves[ply], pc, wc);
     __syncthreads();
     if (tid == 0) atomicAdd(&g_counts[kCountPlies], 1ull);
   }
@@ -1077,7 +1103,7 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
     atomicAdd(&g_counts[kCountPlays], (unsigned long long)sums[3]);
   }
   // The leaf: the end state, left on the device for a leaf evaluator.
-  LeafState& leaf = leaves[rollout];
+  LeafState& leaf = leaves[blockIdx.x];
   for (int i = tid; i < kSquares; i += kThreads) {
     leaf.squares[i] = s.sq[i];
     leaf.cross_mask[0][i] = s.xmask[0][i];
@@ -1095,7 +1121,7 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
     res.game_over = uint8_t(s.game_over);
     res.pad = uint8_t(s.overflow);
     res.diff = int16_t(s.scores[0] - s.scores[1]);
-    out[rollout] = res;
+    out[blockIdx.x] = res;
     for (int p = 0; p < kPhases; ++p) atomicAdd(&g_phase_cycles[p], pc.acc[p]);
     __threadfence();
     atomicExch(&c_tables.scratch_busy[s.slot], 0);
@@ -1276,6 +1302,26 @@ T* upload(const std::vector<T>& v, size_t* bytes) {
   return d;
 }
 
+// A device array that only grows.
+template <typename T>
+struct DeviceBuffer {
+  T* data = nullptr;
+  size_t cap = 0;
+
+  void reserve(size_t n) {
+    if (n <= cap) return;
+    cudaFree(data);
+    cuda_check(cudaMalloc(&data, sizeof(T) * n), "malloc batch buffer");
+    cap = n;
+  }
+  // Copies v to the device, growing as needed.
+  void upload(const T* v, size_t n) {
+    reserve(n == 0 ? 1 : n);
+    if (n) cuda_check(cudaMemcpy(data, v, sizeof(T) * n, cudaMemcpyHostToDevice), "batch upload");
+  }
+  ~DeviceBuffer() { cudaFree(data); }
+};
+
 }  // namespace
 
 struct DeviceTables {
@@ -1289,10 +1335,13 @@ struct DeviceTables {
   double* peg = nullptr;
   Scratch* scratch = nullptr;
   int* scratch_busy = nullptr;
-  PositionAbi* pos = nullptr;
-  RolloutResult* results = nullptr;
-  LeafState* leaves = nullptr;
-  int results_cap = 0;
+  // The batch's inputs and outputs, grown to the largest batch so far.
+  DeviceBuffer<RolloutTask> tasks;
+  DeviceBuffer<PositionAbi> positions;
+  DeviceBuffer<GroupAbi> groups;
+  DeviceBuffer<OppLeaveAbi> opp_leaves;
+  DeviceBuffer<RolloutResult> results;
+  DeviceBuffer<LeafState> leaves;
 };
 
 DeviceTables* upload_tables(const HostTables& host, size_t* bytes) {
@@ -1314,7 +1363,6 @@ DeviceTables* upload_tables(const HostTables& host, size_t* bytes) {
   cuda_check(cudaMalloc(&d->scratch, sizeof(Scratch) * kScratchSlots), "malloc scratch");
   cuda_check(cudaMalloc(&d->scratch_busy, sizeof(int) * kScratchSlots), "malloc scratch flags");
   cuda_check(cudaMemset(d->scratch_busy, 0, sizeof(int) * kScratchSlots), "clear scratch flags");
-  cuda_check(cudaMalloc(&d->pos, sizeof(PositionAbi)), "malloc position");
 
   Tables t;
   t.slots = d->slots;
@@ -1369,52 +1417,52 @@ void free_tables(DeviceTables* d) {
   cudaFree(d->peg);
   cudaFree(d->scratch);
   cudaFree(d->scratch_busy);
-  cudaFree(d->pos);
-  cudaFree(d->results);
-  cudaFree(d->leaves);
   delete d;
 }
 
-void run_rollouts(DeviceTables* d, const PositionAbi& pos, int n, RolloutResult* results,
-                  double seconds[3], unsigned long long phase_cycles[kPhases],
-                  unsigned long long counts[kCounts]) {
+void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results, double seconds[3],
+                  unsigned long long phase_cycles[kPhases], unsigned long long counts[kCounts]) {
   using Clock = std::chrono::steady_clock;
   const auto since = [](Clock::time_point t0) {
     return std::chrono::duration<double>(Clock::now() - t0).count();
   };
-  if (d->results_cap < n) {
-    cudaFree(d->results);
-    cudaFree(d->leaves);
-    cuda_check(cudaMalloc(&d->results, sizeof(RolloutResult) * size_t(n)), "malloc results");
-    cuda_check(cudaMalloc(&d->leaves, sizeof(LeafState) * size_t(n)), "malloc leaves");
-    d->results_cap = n;
-  }
+  const size_t n = batch.tasks.size();
+  d->results.reserve(n);
+  d->leaves.reserve(n);
   const unsigned long long zero[kPhases] = {};
   cuda_check(cudaMemcpyToSymbol(g_phase_cycles, zero, sizeof(zero)), "phase counters");
   const unsigned long long zero_counts[kCounts] = {};
   cuda_check(cudaMemcpyToSymbol(g_counts, zero_counts, sizeof(zero_counts)), "work counters");
   auto t0 = Clock::now();
-  cuda_check(cudaMemcpy(d->pos, &pos, sizeof(pos), cudaMemcpyHostToDevice), "position upload");
+  d->tasks.upload(batch.tasks.data(), n);
+  d->positions.upload(batch.positions.data(), batch.positions.size());
+  d->groups.upload(batch.groups.data(), batch.groups.size());
+  d->opp_leaves.upload(batch.opp_leaves.data(), batch.opp_leaves.size());
   seconds[0] = since(t0);
   t0 = Clock::now();
-  rollout_kernel<<<n, kThreads>>>(d->pos, d->results, d->leaves);
-  cuda_check(cudaGetLastError(), "launch");
+  if (n > 0) {
+    rollout_kernel<<<unsigned(n), kThreads>>>(d->tasks.data, d->positions.data, d->groups.data,
+                                              d->opp_leaves.data, d->results.data, d->leaves.data);
+    cuda_check(cudaGetLastError(), "launch");
+  }
   cuda_check(cudaDeviceSynchronize(), "kernel");
   seconds[1] = since(t0);
   t0 = Clock::now();
-  cuda_check(
-    cudaMemcpy(results, d->results, sizeof(RolloutResult) * size_t(n), cudaMemcpyDeviceToHost),
-    "results download");
+  if (n > 0) {
+    cuda_check(
+      cudaMemcpy(results, d->results.data, sizeof(RolloutResult) * n, cudaMemcpyDeviceToHost),
+      "results download");
+  }
   seconds[2] = since(t0);
   cuda_check(cudaMemcpyFromSymbol(phase_cycles, g_phase_cycles, sizeof(zero)), "phase readback");
   cuda_check(cudaMemcpyFromSymbol(counts, g_counts, sizeof(zero_counts)), "count readback");
 }
 
-const LeafState* device_leaves(const DeviceTables* d) { return d->leaves; }
+const LeafState* device_leaves(const DeviceTables* d) { return d->leaves.data; }
 
 void encode_leaves(DeviceTables* d, int first, int count, float* spatial, float* scalar) {
   if (count <= 0) return;
-  leaf_encode_kernel<<<count, kEncodeThreads>>>(d->leaves + first, count, spatial, scalar);
+  leaf_encode_kernel<<<count, kEncodeThreads>>>(d->leaves.data + first, count, spatial, scalar);
   cuda_check(cudaGetLastError(), "leaf encoder launch");
   cuda_check(cudaDeviceSynchronize(), "leaf encoder");
 }

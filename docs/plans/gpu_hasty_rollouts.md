@@ -390,9 +390,42 @@ evals/s: the upload, not the network, bounds it. That is the case for keeping
 the leaf on the device: at parity on the rollouts alone, the leaf network
 would already run 5-6x faster fed from the kernel than from the host.
 
-Not done, in the order they look worth trying: a TensorRT-versus-PyTorch
-parity family for the leaf model (`py/tools/gpu_parity.py`, as the other
-families have); an L2 persistence window for
+### Batches of candidates
+
+A launch now takes a batch (`sim/hasty_rollout_task.h`'s `RolloutBatch`):
+groups, which are what one chooser's candidates at one position share (the
+unseen pool, the seed, and the opponent's known leave per rollout index);
+starts, one per candidate applied to the board; and tasks, one per (start,
+rollout index), one block each. Rollout `i` of every start in a group draws
+the same opponent rack and the same bag order, and a task's outcome depends
+only on its start and rollout index, so a batch can mix any rounds of any
+positions. An exchange's tiles go back into the bag after the chooser's
+refill. `GpuRolloutValues` (`gpu/gpu_rollout_values.h`) runs a batch through
+the kernel, the device encoder and the leaf network and returns each task's
+win/draw/loss from the chooser's side (exact when the game ended);
+`CpuRolloutValues` is the same interface over the CPU reference, with a leaf
+function, for the test suites.
+
+`gpu_rollout_demo` now makes the mover's top 15 moves plus the best exchange
+one group, and every other rollout seats a known opponent leave. Measured
+2026-10-23 on the dev laptop at 4,096 rollouts per candidate (65,536 tasks),
+with another process holding about 30% of the GPU, so the rates are a floor:
+
+| Position (rack) | CPU rollouts/s | Kernel rollouts/s | With the leaf network |
+|-----------------|----------------|-------------------|-----------------------|
+| seed 1 (AAGLNOR) | 41,000        | 249,000           | 116,000               |
+| seed 2 (AEILSTT) | 119,000       | 444,000           |                       |
+| seed 3 (AHILUVY) | 77,000        | 367,000           |                       |
+
+All 65,536 tasks matched the CPU reference on all three, and so did the
+device's leaf rows and win values on the first 2,048. Rows per leaf network
+call (512 to 8,192) made no difference beyond the contention's noise.
+
+`py/tools/gpu_parity.py` now runs a leaf eval TensorRT-versus-PyTorch family
+(`test_leaf_eval_parity`) and the demo on 7 candidates x 256 rollouts with
+that family's random model, rows and values compared.
+
+Not done, in the order they look worth trying: an L2 persistence window for
 the word map and leave table so the blank traffic does not evict them; the
 opponent-ply table; a loose per-span equity bound against the best exchange
 to skip spans before probing; dropping the two-blank table (rare, ~200 MB)

@@ -2,11 +2,13 @@
 
 // The hasty-rollout task as both the CPU reference and the CUDA kernel see
 // it: plain structs with no engine dependencies, so one header compiles under
-// g++ (C++26) and nvcc alike. A rollout from a position: draw the opponent's
-// rack and our refill from the unseen pool, the opponent plays its top-equity
-// move, we play ours, and the outcome is the score differential with the
-// play-out bonus. Both sides draw with the same counter-based generator, so
-// rollout i holds the same racks on either, and the outcomes compare exactly.
+// g++ (C++26) and nvcc alike. A rollout from a start (a candidate applied to
+// the board): seat the opponent's known leave if the group has one, draw the
+// rest of their rack and then our refill from the unseen pool, put back the
+// tiles an exchange returned, the opponent plays its top-equity move, we play
+// ours, and the outcome is the score differential with the play-out bonus.
+// Both sides draw with the same counter-based generator, so rollout i holds
+// the same racks on either, and the outcomes compare exactly.
 // docs/plans/gpu_hasty_rollouts.md is the design.
 
 #include <cstdint>
@@ -73,19 +75,49 @@ struct LeafState {
   uint32_t cross_mask[2][kSquares];  // per view, as the rollout left them
 };
 
-// The position, flattened. Cross-check arrays are per view (0 = the natural
-// frame's rows, 1 = its columns), in view coordinates, as Board keeps them.
+// A rollout's start, flattened: a candidate applied to the board, so we
+// (player 0, the chooser) have just moved and hold `leave`; the opponent
+// moves next. Cross-check arrays are per view (0 = the natural frame's rows,
+// 1 = its columns), in view coordinates, as Board keeps them.
 struct PositionAbi {
   uint8_t squares[kSquares] = {};
   uint32_t cross_mask[2][kSquares] = {};
   int16_t cross_score[2][kSquares] = {};
   uint8_t cross_has_neighbor[2][kSquares] = {};
-  uint8_t leave[kTileKinds] = {};  // our leave, as counts
-  uint8_t pool[kBagCap] = {};      // the unseen tiles, ascending by tile
-  int pool_size = 0;
+  uint8_t leave[kTileKinds] = {};    // our leave, as counts
+  uint8_t returned[kRackSize] = {};  // an exchange's tiles, back in the bag after our refill
+  uint8_t num_returned = 0;
   int num_tiles = 0;  // tiles on the board
   int scores[2] = {0, 0};
+  uint32_t group = 0;
+};
+
+// What a group of starts shares: the unseen pool as the chooser saw it before
+// moving, the seed, and the opponents' known leaves, one per rollout index.
+// Rollout i of every start in the group draws the same opponent rack and the
+// same bag order, so the starts' outcomes are paired.
+struct GroupAbi {
+  uint8_t pool[kBagCap] = {};  // ascending by tile
+  int pool_size = 0;
   uint64_t seed = 0;
+  // Rollout i's opponent leave is leaves[leave_base + i] for i < num_leaves;
+  // without one, the opponent's whole rack is drawn.
+  uint32_t leave_base = 0;
+  uint32_t num_leaves = 0;
+};
+
+// An opponent's known leave: `n` tile codes, ascending.
+struct OppLeaveAbi {
+  uint8_t tiles[kRackSize - 1] = {};
+  uint8_t n = 0;
+  uint8_t pad = 0;
+};
+
+// One rollout of a batch: start `position`, rollout index `rollout` (which
+// keys its draws).
+struct RolloutTask {
+  uint32_t position = 0;
+  uint32_t rollout = 0;
 };
 
 // ---- The draw ----
@@ -145,14 +177,21 @@ struct Bag {
   SCRIBBLEZ_HD void put_back(uint8_t t) { tiles[len++] = t; }
 };
 
-// The rack sizes the draw produces: the opponent's rack, then our refill.
-SCRIBBLEZ_HD inline int opp_rack_draw(int pool_size) {
-  return pool_size < kRackSize ? pool_size : kRackSize;
+// Removes one `tile` from the undrawn bag, keeping the rest in order: how
+// the opponent's known leave leaves the pool before any draw.
+SCRIBBLEZ_HD inline void remove_from_bag(Bag& bag, uint8_t tile) {
+  for (int i = bag.cursor; i < bag.len; ++i) {
+    if (bag.tiles[i] != tile) continue;
+    for (int j = i + 1; j < bag.len; ++j) bag.tiles[j - 1] = bag.tiles[j];
+    --bag.len;
+    return;
+  }
 }
-SCRIBBLEZ_HD inline int our_refill_draw(int pool_size, int leave_size) {
-  const int bag = pool_size - opp_rack_draw(pool_size);
-  const int want = kRackSize - leave_size;
-  return bag < want ? bag : want;
+
+// How many tiles a rack of `held` tiles draws from a bag of `remaining`.
+SCRIBBLEZ_HD inline int refill_draw(int remaining, int held) {
+  const int want = kRackSize - held;
+  return remaining < want ? remaining : want;
 }
 
 }  // namespace scribblez::rollout_abi

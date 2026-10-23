@@ -23,12 +23,12 @@ class GpuHastyRollouts {
   GpuHastyRollouts(const Dictionary& dict, const HastyEquity& eq);
   ~GpuHastyRollouts();
 
-  // `n` rollouts of `pos`, rollout i drawn as the CPU reference draws it.
-  std::vector<rollout_abi::RolloutResult> run(const HastyRolloutPosition& pos,
-                                              const Dictionary& dict, int n);
+  // The batch's tasks, results[k] for tasks[k], each drawn as the CPU
+  // reference draws it. The end states stay on the device, one per task.
+  std::vector<rollout_abi::RolloutResult> run(const RolloutBatch& batch, const Dictionary& dict);
 
   struct Timings {
-    double upload_seconds = 0;    // the position
+    double upload_seconds = 0;    // the batch
     double kernel_seconds = 0;    // launch to completion
     double download_seconds = 0;  // the results
   };

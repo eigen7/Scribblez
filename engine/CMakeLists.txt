@@ -65,6 +65,7 @@ add_library(scribblez_core STATIC
   src/sim/macondo_autostopper.cpp
   src/sim/macondo_simmer.cpp
   src/sim/hasty_rollout_task.cpp
+  src/sim/rollout_values.cpp
   src/agent/best_bot.cpp
   src/agent/candidate_evaluator.cpp
   # A GPU-free decorator over the EvalService interface, so it lives here and is
@@ -270,10 +271,11 @@ target_link_libraries(endgame_tool PRIVATE
 # The hasty-rollout kernel (docs/plans/gpu_hasty_rollouts.md): the project's
 # one CUDA translation unit. nvcc 12.9 refuses gcc 16 as its host compiler, so
 # it compiles through the image's gcc 13; the engine's C++26-only flags are
-# scoped to CXX in the root CMakeLists.txt for the same reason. Built for this
-# host's GPU only (native).
+# scoped to CXX in the root CMakeLists.txt for the same reason. Built for every
+# GPU a generator may rent (Ampere A100/A10G, Ada L4/RTX, Hopper), with Hopper's
+# PTX for anything newer, since the worker bundles are built on this host.
 set(CMAKE_CUDA_HOST_COMPILER /usr/bin/gcc-13)
-set(CMAKE_CUDA_ARCHITECTURES native)
+set(CMAKE_CUDA_ARCHITECTURES 80-real 86-real 89-real 90)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
@@ -281,11 +283,12 @@ enable_language(CUDA)
 set(CMAKE_CUDA_FLAGS_TEST "${CMAKE_CUDA_FLAGS_RELEASE}")
 add_library(scribblez_gpu_rollouts STATIC
   src/gpu/rollout_kernel.cu
-  src/gpu/hasty_rollouts_gpu.cpp)
+  src/gpu/hasty_rollouts_gpu.cpp
+  src/gpu/gpu_rollout_values.cpp)
 set_target_properties(scribblez_gpu_rollouts PROPERTIES
   INTERPROCEDURAL_OPTIMIZATION OFF
   CUDA_RUNTIME_LIBRARY Shared)
-target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_core ${CUDA_CUDART})
+target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_core scribblez_nn ${CUDA_CUDART})
 
 add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)
 target_link_libraries(gpu_rollout_demo PRIVATE
@@ -511,6 +514,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_parity_binary(test_proposal_inference_parity)
   # The leave inference model, and its leave values and format version gates.
   add_parity_binary(test_leave_inference_parity)
+  # The DeepBot leaf eval model, and its leave values gate.
+  add_parity_binary(test_leaf_eval_parity)
 
   # The suite's one GPU test: that this machine can build and run a TensorRT
   # plan at all, on the smallest model.
