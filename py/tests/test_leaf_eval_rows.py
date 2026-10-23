@@ -190,3 +190,18 @@ def test_leave_values_are_hastybots(batch):
         expected = _expected_leave_values(counts)
         np.testing.assert_allclose(scalar[:, value_index] * 25.0, expected, atol=1e-4)
     assert (scalar[:, MY_LEAVE_VALUE] != 0).any()
+
+
+def test_format_layout_serves_the_offsets_these_tests_assume():
+    layout = ffi.format_layout()["constants"][_TASK]
+    assert layout["format_version"] >= 1
+    assert (layout["join_plane0"], layout["join_planes"]) == (JOIN0, SPATIAL_PLANES - JOIN0)
+    offsets = ("my_leave0", "opp_leave0", "pool0", "score_diff", "my_leave_value")
+    assert tuple(layout[k] for k in offsets) == (
+        MY_LEAVE0,
+        OPP_LEAVE0,
+        POOL0,
+        SCORE_DIFF,
+        MY_LEAVE_VALUE,
+    )
+    assert (layout["opp_leave_value"], layout["pool_size"]) == (OPP_LEAVE_VALUE, POOL_SIZE)

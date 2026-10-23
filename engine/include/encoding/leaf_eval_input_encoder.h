@@ -40,6 +40,10 @@ namespace scribblez {
 class Dictionary;
 class LeaveValues;
 
+// The format version of the leaf eval model's input. Bump it whenever a row's
+// layout or meaning changes; checkpoints and models stamp it.
+inline constexpr int kLeafEvalFormatVersion = 1;
+
 // Everything the encoder reads, from the side of the player who just moved.
 struct LeafEvalInput {
   const Board* board;
