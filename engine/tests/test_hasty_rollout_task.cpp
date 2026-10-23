@@ -146,7 +146,9 @@ TEST(HastyRolloutCpu, AKnownLeaveIsSeatedAndTheRestDrawn) {
   for (uint32_t i = 0; i < 4; ++i) {
     const RolloutRacks racks = rollout_racks(batch, {0, i});
     EXPECT_EQ(racks.opp.size(), RACK_SIZE) << "rollout " << i;
-    if (i == 0 || i == 2) EXPECT_TRUE(contains(racks.opp, leave)) << "rollout " << i;
+    if (i == 0 || i == 2) {
+      EXPECT_TRUE(contains(racks.opp, leave)) << "rollout " << i;
+    }
   }
 }
 
