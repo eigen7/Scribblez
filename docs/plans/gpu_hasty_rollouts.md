@@ -1,7 +1,10 @@
 # Hasty rollouts on the GPU
 
 **Status: feasibility analysis and build plan, 2026-10-23; a standalone demo
-is built (see [Demo results](#demo-results)), nothing is integrated.** Whether
+is built (see [Demo results](#demo-results)). The first integration, the
+policy-set model's label generation, is planned as steps 9-11 of
+[deep_bot_v0.md](deep_bot_v0.md#build-order); DeepBot's sims run on it
+([deep_bot.md](deep_bot.md#sims)).** Whether
 batches of HastyBot rollouts can run on the GPU with substantially better
 throughput than the multithreaded CPU engine, and how to build it if so.
 
@@ -296,8 +299,9 @@ tool keep their CPU path; a backend selector routes batches to the device.
    batching across candidates, host-side leave inference feeding per-rollout
    opponent leaves.
 
-Deferred: the `K`-ply horizon with the win-table leaf (DeepBot's form), MAGPIE
-blank tables, the opponent-ply table.
+Deferred: the opponent-ply table. PR 5's integration, with the leaf network
+on the device instead of a `K`-ply horizon to the win table, is steps 9-11 of
+[deep_bot_v0.md](deep_bot_v0.md#build-order).
 
 ## Demo results
 
