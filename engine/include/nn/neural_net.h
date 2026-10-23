@@ -128,14 +128,24 @@ class NeuralNetBase {
   // tensors always carry one row.
   void predict(int num_rows);
 
+  // predict() for inputs a kernel wrote into the device buffers
+  // (device_ptr()) on this device: no host-to-device copy. The writer must
+  // have synchronized before the call.
+  void predict_device_inputs(int num_rows);
+
   // The host buffer bound to `name`; NeuralNet<Spec>::host() is the typed way
   // in. Null for an aux output without params.copy_aux.
   void* host_ptr(const char* name) const;
+  // The device buffer bound to `name`, for a kernel on this device to write
+  // an input or read an output in place.
+  void* device_ptr(const char* name) const;
 
  protected:
   NeuralNetBase(const NeuralNetParamsBase& params, const RuntimeSpec& spec);
 
  private:
+  void run(int num_rows, bool copy_inputs);
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

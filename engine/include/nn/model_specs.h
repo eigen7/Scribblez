@@ -2,6 +2,7 @@
 
 #include "belief/leave_params.h"
 #include "encoding/input_encoder.h"
+#include "encoding/leaf_eval_input_encoder.h"
 #include "encoding/leave_inference_input_encoder.h"
 #include "nn/onnx_metadata.h"
 #include "training/move_set_encoder.h"
@@ -516,6 +517,26 @@ class LeaveInferenceSpec {
 };
 
 // The aux outputs are the placement heads, one per placement target.
+// The DeepBot leaf evaluation model (py/scribblez/deep_bot_leaf_eval): a
+// LeafEvalInputEncoder row to win/draw/loss and score difference, from the
+// side of the player who moved last. Batches are large: a rollout kernel
+// hands it every leaf of a batch at once.
+class LeafEvalSpec {
+ public:
+  static constexpr const char* kGraph = kGraphDeepBotLeafEval;
+  static constexpr bool kAcceptUntaggedGraph = false;
+  static constexpr const char* kAxisTag = "batch";
+  static constexpr const char* kChannelsTensor = nullptr;
+  static constexpr int kDefaultMaxRows = 1024;
+  static constexpr int kOptRows = 1024;
+  static constexpr VersionRequirement kVersions[] = {
+    {"leaf_eval_format_version", kLeafEvalFormatVersion, -1}};
+  using Inputs = TensorList<SpatialInput, ScalarInput>;
+  using MoveInputs = TensorList<>;
+  using Outputs = TensorList<WldOutput, ScoreDiffOutput>;
+  using AuxOutputs = TensorList<>;
+};
+
 static_assert(PositionEvaluationSpec::AuxOutputs::size == kPlacementHeads);
 
 }  // namespace nn

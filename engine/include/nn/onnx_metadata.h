@@ -28,6 +28,7 @@ inline constexpr const char* kGraphMoveProposalCache = "move_proposal_cache";
 inline constexpr const char* kGraphMoveProposalStep = "move_proposal_step";
 // The leave inference model. Must match leave_inference/onnx_export.py's GRAPH.
 inline constexpr const char* kGraphLeaveInference = "leave_inference";
+inline constexpr const char* kGraphDeepBotLeafEval = "deep_bot_leaf_eval";
 
 struct OnnxMetadata {
   // The input-encoding arm: which optional block the board row carries.
