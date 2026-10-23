@@ -62,6 +62,7 @@ add_library(scribblez_core STATIC
   src/sim/pool_labels.cpp
   src/sim/macondo_autostopper.cpp
   src/sim/macondo_simmer.cpp
+  src/sim/hasty_rollout_task.cpp
   src/agent/best_bot.cpp
   src/agent/candidate_evaluator.cpp
   # A GPU-free decorator over the EvalService interface, so it lives here and is
@@ -263,6 +264,37 @@ target_link_libraries(endgame_tool PRIVATE
 
 # Endgame solver cost and whole-game throughput benchmark
 # (docs/endgame_bench_results.md). CPU-only.
+# --- GPU rollouts (CUDA) -----------------------------------------------------
+# The hasty-rollout kernel (docs/plans/gpu_hasty_rollouts.md): the project's
+# one CUDA translation unit. nvcc 12.9 refuses gcc 16 as its host compiler, so
+# it compiles through the image's gcc 13; the engine's C++26-only flags are
+# scoped to CXX in the root CMakeLists.txt for the same reason. Built for this
+# host's GPU only (native).
+set(CMAKE_CUDA_HOST_COMPILER /usr/bin/gcc-13)
+set(CMAKE_CUDA_ARCHITECTURES native)
+set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
+enable_language(CUDA)
+set(CMAKE_CUDA_FLAGS_TEST "${CMAKE_CUDA_FLAGS_RELEASE}")
+add_library(scribblez_gpu_rollouts STATIC
+  src/gpu/rollout_kernel.cu
+  src/gpu/hasty_rollouts_gpu.cpp)
+set_target_properties(scribblez_gpu_rollouts PROPERTIES
+  INTERPROCEDURAL_OPTIMIZATION OFF
+  CUDA_RUNTIME_LIBRARY Shared)
+target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_core ${CUDA_CUDART})
+
+add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)
+target_link_libraries(gpu_rollout_demo PRIVATE
+  scribblez_gpu_rollouts
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
 add_executable(endgame_bench apps/endgame_bench.cpp)
 target_link_libraries(endgame_bench PRIVATE
   scribblez_core
