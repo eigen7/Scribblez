@@ -424,6 +424,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_batching_eval_service.cpp
     tests/test_footprint.cpp
     tests/test_gcg_reader.cpp
+    tests/test_hasty_rollout_task.cpp
     tests/test_leave_sampler.cpp
     tests/test_leave_value_arrays.cpp
     tests/test_probe_log.cpp
