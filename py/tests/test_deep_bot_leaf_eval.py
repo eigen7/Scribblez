@@ -2,6 +2,7 @@
 features against the engine's own, the epoch and the held-out eval, the resume
 gate, and the workload's registration."""
 
+import dataclasses
 import subprocess
 from pathlib import Path
 
@@ -181,3 +182,16 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
 
     deep_bot_leaf_eval.run_generate(Ctx())
     assert seen == {"face_up_leaves": False, "random_opening_mean": 0.0}
+
+
+def test_the_layout_and_gpu_table_make_the_default_arms_queueable():
+    params = deep_bot_leaf_eval.DeepBotLeafEvalParams()
+    plan = deep_bot_leaf_eval.layout(params, 28, None)
+    assert [(p.role, p.threads) for p in plan] == [("train", None), ("generate", 28)]
+    headroom = deep_bot_leaf_eval.TRAINER_GPU_HEADROOM_GB
+    for trunk, peak in (("transformer", 1.76), ("conv", 1.01)):
+        arm = dataclasses.replace(params, trunk=trunk, join_planes=False)
+        assert deep_bot_leaf_eval.gpu_need(arm, "train") == peak + headroom
+    assert deep_bot_leaf_eval.gpu_need(params, "generate") == 0.0
+    # Unmeasured: a wider model.
+    assert deep_bot_leaf_eval.gpu_need(dataclasses.replace(params, width=128), "train") is None
