@@ -16,8 +16,8 @@ from cloud.runtime_abi import RUNTIME_TORCH
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.params import param
-from scribblez.trunk_arms import TRUNK_TRANSFORMER, TRUNKS
-from scribblez.workloads.base import RoleSpec, WorkerContext, WorkloadSpec
+from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
+from scribblez.workloads.base import RoleSpec, SlotPlan, WorkerContext, WorkloadSpec
 from scribblez.workloads.position_eval import TRAINER_STATS
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
 
@@ -81,6 +81,40 @@ class DeepBotLeafEvalParams:
     num_heads: int = param(2, "transformer attention heads (head dim = width / heads)")
 
 
+# The trainer's peak GPU memory in GiB, measured 2026-10-23 on the RTX 5000 Ada
+# as position_eval's figures are (workloads/position_eval.py): the process as
+# nvidia-smi sees it, CUDA context included, over generations of training
+# (compiled, bf16) and the held-out eval that follows each, join planes on.
+#
+#   transformer  1.76 GiB  (torch peak reserved 1.50)
+#   conv         1.01 GiB  (torch peak reserved 0.71)
+#
+# Measured at the default architecture and batch size only (TRAINER_GPU_KEY);
+# any other configuration has no figure, and the queue refuses to place it.
+# The table holds each peak plus TRAINER_GPU_HEADROOM_GB.
+TRAINER_GPU_HEADROOM_GB = 0.5
+_MEASURED_GB = {TRUNK_TRANSFORMER: 1.76, TRUNK_CONV: 1.01}
+# The params the measurements held fixed, at their defaults.
+TRAINER_GPU_KEY = ("batch_size", "width", "depth", "num_heads")
+
+
+def gpu_need(params, role: str) -> float | None:
+    """The WorkloadSpec.gpu_need hook: GiB one slot of `role` needs."""
+    if role == "generate":
+        return 0.0
+    defaults = DeepBotLeafEvalParams()
+    if any(getattr(params, k) != getattr(defaults, k) for k in TRAINER_GPU_KEY):
+        return None
+    return _MEASURED_GB[params.trunk] + TRAINER_GPU_HEADROOM_GB
+
+
+def layout(params, vcpus: int, generator_threads: int | None) -> list[SlotPlan]:
+    """The WorkloadSpec.layout hook: a trainer and a generator per machine, the
+    generator on every vCPU (see position_eval's layout)."""
+    threads = {"generate": generator_threads or vcpus}
+    return [SlotPlan(r, threads.get(r), gpu_need(params, r)) for r in ("train", "generate")]
+
+
 def run_generate(ctx: WorkerContext) -> int:
     """Hidden-leaves HastyBot self-play without random openings."""
     return generate(ctx, hasty_spec(ctx.params), face_up_leaves=False, random_opening_mean=0.0)
@@ -116,4 +150,6 @@ SPEC = WorkloadSpec(
     complete="scribblez.generational.scheduler:complete",
     pace_role="train",
     collected_dirs=(STAGING_DIR,),
+    layout="scribblez.workloads.deep_bot_leaf_eval:layout",
+    gpu_need="scribblez.workloads.deep_bot_leaf_eval:gpu_need",
 )
