@@ -290,6 +290,7 @@ target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_core ${CUDA_CUDART
 add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)
 target_link_libraries(gpu_rollout_demo PRIVATE
   scribblez_gpu_rollouts
+  scribblez_nn
   scribblez_core
   Boost::program_options
   Boost::json

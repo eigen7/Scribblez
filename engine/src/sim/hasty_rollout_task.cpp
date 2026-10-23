@@ -118,7 +118,8 @@ namespace {
 // One rollout's mutable state, mirroring what the device keeps per block.
 struct RolloutState {
   Board board;
-  std::array<Rack, 2> racks;  // 0 us, 1 the opponent
+  std::array<Rack, 2> racks;   // 0 us, 1 the opponent
+  std::array<Rack, 2> leaves;  // each player's rack after its last move, before its draw
   std::array<int, 2> scores;
   rollout_abi::Bag bag;
   bool game_over = false;
@@ -134,6 +135,7 @@ RolloutState start_rollout(const HastyRolloutPosition& pos, uint32_t rollout) {
   draw_into(st.racks[1], st.bag, rollout_abi::opp_rack_draw(pool_size), pos.seed, rollout);
   draw_into(st.racks[0], st.bag, rollout_abi::our_refill_draw(pool_size, pos.leave.size()),
             pos.seed, rollout);
+  st.leaves = st.racks;  // a player who never moves keeps its full rack as its leave
   return st;
 }
 
@@ -151,6 +153,7 @@ Move play_ply(RolloutState& st, int mover, const Dictionary& dict, uint64_t seed
     bag_size};
   const Move m = hasty_best_move_wmp(req);
   for (int i = 0; i < m.num_glyphs(); ++i) rack.remove(m.glyph(i).rack_tile());
+  st.leaves[mover] = rack;
   if (m.type() == MoveType::PLAY) {
     st.board.apply(m);
     st.scores[mover] += m.score();
@@ -166,7 +169,8 @@ Move play_ply(RolloutState& st, int mover, const Dictionary& dict, uint64_t seed
   return m;
 }
 
-RolloutResult run_one(const HastyRolloutPosition& pos, const Dictionary& dict, uint32_t rollout) {
+RolloutResult run_one(const HastyRolloutPosition& pos, const Dictionary& dict, uint32_t rollout,
+                      CpuLeaf* leaf) {
   RolloutState st = start_rollout(pos, rollout);
   RolloutResult out;
   for (int ply = 0; ply < 2; ++ply) {
@@ -176,6 +180,7 @@ RolloutResult run_one(const HastyRolloutPosition& pos, const Dictionary& dict, u
   }
   out.game_over = st.game_over ? 1 : 0;
   out.diff = int16_t(st.scores[0] - st.scores[1]);
+  if (leaf) *leaf = CpuLeaf{.board = st.board, .leaves = st.leaves, .scores = st.scores};
   return out;
 }
 
@@ -187,13 +192,18 @@ RolloutRacks rollout_racks(const HastyRolloutPosition& pos, uint32_t rollout) {
 }
 
 std::vector<RolloutResult> run_hasty_rollouts_cpu(const HastyRolloutPosition& pos,
-                                                  const Dictionary& dict, int n, int threads) {
+                                                  const Dictionary& dict, int n, int threads,
+                                                  std::vector<CpuLeaf>* leaves_out) {
   pos.board.ensure_movegen_caches(dict);
   std::vector<RolloutResult> results(static_cast<size_t>(n));
+  const size_t leaves = leaves_out ? leaves_out->size() : 0;
   std::vector<std::thread> workers;
   for (int t = 0; t < threads; ++t) {
     workers.emplace_back([&, t] {
-      for (int i = t; i < n; i += threads) results[size_t(i)] = run_one(pos, dict, uint32_t(i));
+      for (int i = t; i < n; i += threads) {
+        CpuLeaf* leaf = size_t(i) < leaves ? &(*leaves_out)[size_t(i)] : nullptr;
+        results[size_t(i)] = run_one(pos, dict, uint32_t(i), leaf);
+      }
     });
   }
   for (std::thread& w : workers) w.join();

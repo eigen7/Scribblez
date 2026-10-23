@@ -356,11 +356,39 @@ What the demo settled about the design:
   container (no performance-counter permission), so the kernel carries its
   own per-phase cycle counters and work counters, which the demo prints.
 
-The kernel also leaves every rollout's end state (board, racks, scores, bag)
-in device memory (`rollout_abi::LeafState`): the input a leaf encoder kernel
-would read for a leaf network, with nothing crossing back to the host.
+### The leaf network on the device
 
-Not done, in the order they look worth trying: an L2 persistence window for
+The kernel leaves every rollout's end state (board, both players' leaves
+before their draws, cross-checks, scores, bag) in device memory
+(`rollout_abi::LeafState`). `--leaf-model` evaluates every leaf with a
+[DeepBot leaf eval](../deep_bot_leaf_eval_results.md) export: a second kernel
+builds each leaf's `LeafEvalInputEncoder` row straight into the TensorRT
+net's input buffers (`NeuralNet::device_ptr`, `predict_device_inputs`), in
+batches of the net's maximum rows, and nothing but the three win/draw/loss
+floats per leaf comes back to the host. The device-built rows are checked
+against the CPU encoder on the CPU reference's end states (`CpuLeaf`), and
+they are identical, join planes included. The model is the conv trunk from
+the `leaf-conv-nojoin` run (generation 77, exported by
+`python -m scribblez.deep_bot_leaf_eval.onnx_export`).
+
+Measured as above (65,536 rollouts, FP16):
+
+| Position | Rollout kernel | Leaf encoder | Leaf model | Rollouts + leaves |
+|----------|----------------|--------------|------------|-------------------|
+| seed 2   | 540K/s         | 3.0M rows/s  | 272K/s     | 171K/s            |
+| seed 1   | 138K/s         | 2.9M rows/s  | 267K/s     | 88K/s             |
+
+The model, not the encoder, is the leaf's cost, at the write-up's 256K
+evals/s. The same leaves through the host route, for comparison: the CPU
+encoder runs about 71K rows/s per thread (so about 1.5M/s over the machine),
+and `predict()` with the 85 KB rows uploaded from host memory manages 48K
+evals/s: the upload, not the network, bounds it. That is the case for keeping
+the leaf on the device: at parity on the rollouts alone, the leaf network
+would already run 5-6x faster fed from the kernel than from the host.
+
+Not done, in the order they look worth trying: a TensorRT-versus-PyTorch
+parity family for the leaf model (`py/tools/gpu_parity.py`, as the other
+families have); an L2 persistence window for
 the word map and leave table so the blank traffic does not evict them; the
 opponent-ply table; a loose per-span equity bound against the best exchange
 to skip spans before probing; dropping the two-blank table (rare, ~200 MB)

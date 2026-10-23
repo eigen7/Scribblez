@@ -64,11 +64,13 @@ struct RolloutResult {
 // to the host). Player 0 is us, 1 the opponent.
 struct LeafState {
   uint8_t squares[kSquares];
-  uint8_t racks[2][kTileKinds];
+  uint8_t racks[2][kTileKinds];   // after the refills
+  uint8_t leaves[2][kTileKinds];  // after each player's last move, before its draw
   int scores[2];
   uint8_t bag_size;
   uint8_t game_over;
   uint8_t pad[2];
+  uint32_t cross_mask[2][kSquares];  // per view, as the rollout left them
 };
 
 // The position, flattened. Cross-check arrays are per view (0 = the natural
