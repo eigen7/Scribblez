@@ -59,9 +59,9 @@ struct RolloutResult {
   PackedMove moves[2];
 };
 
-// A rollout's end state, left in device memory for a leaf evaluator (an
-// encoder kernel feeding a leaf network reads it there; nothing comes back
-// to the host). Player 0 is us, 1 the opponent.
+// A rollout's end state, left in device memory for the leaf encoder kernel,
+// which builds the leaf eval model's input rows from it there; nothing comes
+// back to the host. Player 0 is us, 1 the opponent.
 struct LeafState {
   uint8_t squares[kSquares];
   uint8_t racks[2][kTileKinds];   // after the refills

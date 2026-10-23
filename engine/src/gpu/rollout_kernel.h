@@ -105,10 +105,20 @@ struct HostTables {
   int tile_distribution[rollout_abi::kTileKinds] = {};
 };
 
-// The leaf eval row as the device encoder writes it
-// (encoding/leaf_eval_input_encoder.h's layout).
+// The leaf eval row as the device encoder writes it:
+// encoding/leaf_eval_input_encoder.h's layout, which hasty_rollouts_gpu.cpp
+// asserts these match.
 constexpr int kLeafSpatialPlanes = 95;
+constexpr int kLeafBlankPlane = 26;
+constexpr int kLeafPremiumPlane0 = 27;
+constexpr int kLeafCrossPlane0 = 31;
+constexpr int kLeafJoinPlane0 = 83;
 constexpr int kLeafScalars = 85;
+constexpr int kLeafScoreDiff = 3 * rollout_abi::kTileKinds;  // after the three seats' counts
+constexpr float kLeafScoreScale = 100.0f;
+constexpr float kLeafFaceValueScale = 10.0f;
+constexpr float kLeafLeaveValueScale = 25.0f;
+constexpr float kLeafCountScale = 100.0f;
 
 struct DeviceTables;
 

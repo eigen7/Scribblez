@@ -1,5 +1,8 @@
 #include "gpu/hasty_rollouts_gpu.h"
 
+#include "encoding/board_planes.h"
+#include "encoding/input_encoder.h"
+#include "encoding/leaf_eval_input_encoder.h"
 #include "game/board.h"
 #include "game/rack.h"
 #include "game/tile.h"
@@ -21,6 +24,21 @@ namespace scribblez {
 namespace {
 
 using rollout_gpu::HostTables;
+
+// The device leaf encoder writes LeafEvalInputEncoder's row.
+using LeafEncoder = LeafEvalInputEncoder;
+static_assert(rollout_gpu::kLeafSpatialPlanes == LeafEncoder::kSpatialPlanes);
+static_assert(rollout_gpu::kLeafBlankPlane == BoardPlanes::kBlankMarkerPlane);
+static_assert(rollout_gpu::kLeafPremiumPlane0 == BoardPlanes::kPremiumPlane0);
+static_assert(rollout_gpu::kLeafCrossPlane0 == BoardPlanes::kPlanes);
+static_assert(rollout_gpu::kLeafJoinPlane0 == LeafEncoder::kJoinPlane0);
+static_assert(rollout_gpu::kLeafScalars == LeafEncoder::kScalarFloats);
+static_assert(rollout_gpu::kLeafScoreDiff == LeafEncoder::kScoreDiff);
+static_assert(LeafEncoder::kPoolSize == LeafEncoder::kScoreDiff + 3);
+static_assert(rollout_gpu::kLeafScoreScale == kScoreDiffInputScale);
+static_assert(rollout_gpu::kLeafFaceValueScale == LeafEncoder::kFaceValueScale);
+static_assert(rollout_gpu::kLeafLeaveValueScale == LeafEncoder::kLeaveValueScale);
+static_assert(rollout_gpu::kLeafCountScale == LeafEncoder::kCountScale);
 
 // The leave's key: its tiles ascending, five bits each, 31 past the end.
 uint32_t leave_key(const Rack& leave) {
