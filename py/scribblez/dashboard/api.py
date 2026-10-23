@@ -132,6 +132,13 @@ def _policy_set_metrics(conn, params, mount_root):
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
+def _leaf_eval_metrics(conn, params, mount_root):
+    """deep_bot_leaf_eval's Training tab: the generic curves plus the model's
+    held-out read beside the win tables'."""
+    groups = plots.TRAINING + plots.LEAF_EVAL_QUALITY
+    return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
+
+
 def _match_eval(conn, params, mount_root):
     return plots.match_eval_grid(conn)
 
@@ -152,6 +159,7 @@ FIGURES = {
     "transfer_reader_metrics": _transfer_reader_metrics,
     "leave_inference_metrics": _leave_inference_metrics,
     "policy_set_metrics": _policy_set_metrics,
+    "leaf_eval_metrics": _leaf_eval_metrics,
     "match_eval": _match_eval,
     "match_arms": _match_arms,
 }

@@ -8,6 +8,7 @@ runs.
 
 from scribblez.workloads import (
     blind_spots,
+    deep_bot_leaf_eval,
     evidence_trajectories,
     kill_test,
     leave_inference,
@@ -42,6 +43,7 @@ WORKLOADS = {
         transfer_reader.SPEC,
         leave_inference.SPEC,
         policy_set.SPEC,
+        deep_bot_leaf_eval.SPEC,
     )
 }
 

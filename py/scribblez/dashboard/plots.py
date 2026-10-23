@@ -304,6 +304,27 @@ LEAVE_INFERENCE_QUALITY = [
         ["eval_invalid_no_opponent_move", "eval_invalid_empty_leave", "eval_invalid_pass"],
     ),
 ]
+# The leaf eval read (deep_bot_leaf_eval/evaluation.py): on the held-out games'
+# rows, the model's log loss of the mover's expected score beside the win
+# tables' (the one fitted from the window, and Macondo's), overall and by pool
+# size, and the model's own WLD and score-differential errors.
+LEAF_EVAL_POOL_BANDS = ("0_20", "21_40", "41_60", "61_100")
+LEAF_EVAL_SOURCES = ("model", "wintable", "wintable_macondo")
+LEAF_EVAL_QUALITY = [
+    (
+        "Held-out log loss of the expected score: model vs win tables",
+        [f"eval_{source}_logloss" for source in LEAF_EVAL_SOURCES],
+    ),
+    *(
+        (
+            f"Held-out log loss, pool of {band.replace('_', '-')} tiles",
+            [f"eval_{source}_logloss_pool_{band}" for source in LEAF_EVAL_SOURCES],
+        )
+        for band in LEAF_EVAL_POOL_BANDS
+    ),
+    ("Held-out WLD cross-entropy", ["eval_wld_nll"]),
+    ("Held-out score-differential MAE (points)", ["eval_sd_mean_mae"]),
+]
 # The policy-set read (scribblez/policy_set/trainer.py's record, its metrics
 # from policy_set/metrics.py): on the held-out pools, each form's sets against
 # the static-equity top N (the "equity_" prefix) at each set size N, each

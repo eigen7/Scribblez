@@ -238,7 +238,45 @@ def _build_heads(trunk_channels: int, value_in: int) -> list[Head]:
     ]
 
 
-class PositionEvalModel(nn.Module):
+class HeadedModel(nn.Module):
+    """A model whose outputs are a registry of Heads (self.heads, a ModuleDict
+    in output order): the loss and its key sets iterate the registry."""
+
+    heads: nn.ModuleDict
+
+    def loss_keys(self) -> tuple[str, ...]:
+        """ "total" (the optimized objective) plus every head's reported loss keys."""
+        return ("total", *(key for head in self.heads.values() for key in head.loss_keys))
+
+    def target_keys(self) -> tuple[str, ...]:
+        """The batch keys the heads' losses read, deduplicated."""
+        return tuple(dict.fromkeys(key for head in self.heads.values() for key in head.target_keys))
+
+    def compute_loss(
+        self,
+        outputs: dict[str, torch.Tensor],
+        targets: dict[str, torch.Tensor],
+        cfg: LossConfig,
+    ) -> dict[str, torch.Tensor]:
+        """The weighted total ("total") plus every head's reported losses.
+
+        targets (those the model's heads read):
+            wld                   (B, 3)            one-hot outcome
+            score_diff            (B, 1)            final score differential
+            <placement head>      (B, 1)            footprint class index
+            opp_placement_mask,
+            self_placement_mask   (B, num_classes)  1 = legal footprint
+        """
+        total: torch.Tensor | None = None
+        reported: dict[str, torch.Tensor] = {}
+        for head in self.heads.values():
+            head_loss = head.loss(outputs, targets, cfg)
+            total = head_loss.weighted if total is None else total + head_loss.weighted
+            reported.update(head_loss.reported)
+        return {"total": total, **reported}
+
+
+class PositionEvalModel(HeadedModel):
     """Position evaluation network; see the module docstring."""
 
     def __init__(
@@ -276,14 +314,6 @@ class PositionEvalModel(nn.Module):
             {head.name: head for head in _build_heads(trunk_channels, value_in)}
         )
 
-    def loss_keys(self) -> tuple[str, ...]:
-        """ "total" (the optimized objective) plus every head's reported loss keys."""
-        return ("total", *(key for head in self.heads.values() for key in head.loss_keys))
-
-    def target_keys(self) -> tuple[str, ...]:
-        """The batch keys the heads' losses read, deduplicated."""
-        return tuple(dict.fromkeys(key for head in self.heads.values() for key in head.target_keys))
-
     def _run_heads(self, x: torch.Tensor, value_in: torch.Tensor) -> dict[str, torch.Tensor]:
         """The output dict, in head order. A separate method so subclasses that
         condition `x` / `value_in` can reuse it."""
@@ -297,29 +327,6 @@ class PositionEvalModel(nn.Module):
         x, s = self.trunk(input_spatial, input_scalar)
         value_in = torch.cat([mean_max_pool(x), s], dim=1)  # (B, 3C)
         return self._run_heads(x, value_in)
-
-    def compute_loss(
-        self,
-        outputs: dict[str, torch.Tensor],
-        targets: dict[str, torch.Tensor],
-        cfg: LossConfig,
-    ) -> dict[str, torch.Tensor]:
-        """The weighted total ("total") plus every head's reported losses.
-
-        targets:
-            wld                   (B, 3)            one-hot outcome
-            score_diff            (B, 1)            final score differential
-            <placement head>      (B, 1)            footprint class index
-            opp_placement_mask,
-            self_placement_mask   (B, num_classes)  1 = legal footprint
-        """
-        total: torch.Tensor | None = None
-        reported: dict[str, torch.Tensor] = {}
-        for head in self.heads.values():
-            head_loss = head.loss(outputs, targets, cfg)
-            total = head_loss.weighted if total is None else total + head_loss.weighted
-            reported.update(head_loss.reported)
-        return {"total": total, **reported}
 
 
 def _head_legal_mask(head: str, targets: dict[str, torch.Tensor]) -> torch.Tensor:

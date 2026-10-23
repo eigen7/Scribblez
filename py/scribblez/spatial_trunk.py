@@ -26,8 +26,14 @@ N_LETTERS = 26
 
 
 def mean_max_pool(x: torch.Tensor) -> torch.Tensor:
-    """Channel-wise mean and max over the spatial dims: (B, C, H, W) -> (B, 2C)."""
-    return torch.cat([x.mean(dim=(2, 3)), x.amax(dim=(2, 3))], dim=1)
+    """Channel-wise mean and max over the spatial dims: (B, C, H, W) -> (B, 2C).
+
+    The max is max(dim).values, not amax: compiled (torch.compile, bf16
+    autocast), amax's backward came out non-finite for every trunk gradient
+    from the first step on, and max's did not. amax splits the gradient among
+    tied maxima; max sends it to one recorded index. Both are valid
+    subgradients, and the forward is the same."""
+    return torch.cat([x.mean(dim=(2, 3)), x.flatten(2).max(dim=-1).values], dim=1)
 
 
 class ResBlock(nn.Module):
