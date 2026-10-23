@@ -869,7 +869,10 @@ the CPU recipe. Racing ran 20% of the full matrix (1.7M rollouts). The time is
 all on the GPU: the rollout kernel 7.9 seconds (216,000 rollouts a second) and
 the leaf network 6.3 seconds (270,000 a second); the CPU's preparation runs
 ahead on its own thread. Launches of 8,192 to 131,072 rollouts ran within 3%
-of each other, so the default of 32,768 is not a lever. The real rate on the
+of each other, so the default of 32,768 is not a lever. An exact equity bound
+in the kernel then took the chunk to 12.9 seconds (7.7 pools a second);
+a smaller leaf network is the next lever
+([gpu_hasty_rollouts.md](gpu_hasty_rollouts.md#tuning-on-the-pool-workload)). The real rate on the
 fleet is shown on the Stats tab.
 
 Generation sets the pace and is embarrassingly parallel, so the `generate`
