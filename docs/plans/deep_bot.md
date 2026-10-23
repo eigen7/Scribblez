@@ -68,7 +68,7 @@ at `? z`: Bob holds `z` and does not know Alice's tiles.*
 *In that subtree, the policy-set model proposes Bob's set, `b₁`, `b₂`, `b₃`
 and others. Bob samples racks for Alice from his own belief, which reads what
 `a` reveals (`x̂₁`, `x̂₂`, …). For each of his candidates, he sims: Alice
-plays hasty, Bob plays hasty, and the win table values the leaf. Each
+plays hasty, Bob plays hasty, and the leaf network values the leaf. Each
 candidate scores the mean over Alice's sampled racks, and Bob's move is the
 argmax, here `b₁`.*
 
@@ -85,30 +85,54 @@ depend on the opponent's hidden tiles. In the whole design, only two
 decisions search: Alice's at the root and Bob's in his subtree. Each is made
 on its own player's information.
 
-**The leaf: a win table.** After a sim's fixed moves, a fast function turns
-the position into a win probability, as Macondo's simmer does:
+**The leaf: a network.** After a sim's fixed moves, a small network turns
+the leaf position into a win probability: the
+[leaf eval model](../deep_bot_leaf_eval_results.md), a conv trunk over the
+board, the cross-checks, both players' leaves, the pool, the spread and the
+pool size.
 
-`P(win) = table(spread + leave value, tiles unseen)`
-
-- **The spread** is from the side to move, plus the static leave value of
-  that side's remaining rack, as Macondo adds its "leftover".
-- **Tiles unseen** are the bag plus the opponent's rack, from the side to
-  move.
+- **Both leaves are known to the leaf,** because the sim holds both racks:
+  the mover's own, and the opponent's as sampled from the mover's belief. The
+  network's value at one sampled leaf is not the value of the position as the
+  mover sees it; the mean over the sampled leaves is.
+- **The value is from the player who just moved.** It is taken from the side
+  that owns the evaluation (Bob in his subtree, Alice in hers), as `1 − P`
+  when the other side moved last.
 - **If the game ends** inside the sim, the outcome is exact.
 
-The probability is then taken from the side that owns the evaluation (Bob in
-his subtree, Alice in hers), as `1 − P` when the other side is to move. The
-leaf never reads the opponent's hidden tiles beyond their count, so it
-fits a game in which neither player sees the other's leave. It is a table
-lookup, so a sim's cost is its mechanical moves.
+**The leaf network is versioned.** It is trained on `.slog` outcomes of the
+current policy by the `deep_bot_leaf_eval` workload, which exports each
+generation as an ONNX file stamped with its format version and the leave
+values it read. The win probability of a leaf shifts as play gets stronger,
+so each policy generation gets a new network, and everything it values
+records the network's tag, generation and format version.
 
-**The win table is versioned.** It is fitted from `.slog` outcomes of the
-current policy: `P(win | spread + leave value, unseen)`, bucketed, smoothed and
-made monotone in spread, in the CSV format the engine already reads
-([sim/win_pct_table.h](../../engine/include/sim/win_pct_table.h)). The win
-probability at a given spread shifts as play gets stronger, so each policy
-generation gets a new version, and everything it values records the version
-it used. A trained network that reads the board may replace the table later.
+**A win table stays as a reference.** `P(win | spread + leave value, tiles
+unseen)`, fitted from the same outcomes in the CSV format the engine reads
+([sim/win_pct_table.h](../../engine/include/sim/win_pct_table.h)), is the
+baseline the leaf network is measured against, and the leaf of the CPU sims
+that predate the GPU path. It sees neither the board nor the opponent's leave.
+
+**Sims run on the GPU.** A batch of sims is one kernel launch over thousands
+of rollouts, one thread block each, with the lexicon tables resident on the
+device ([gpu_hasty_rollouts.md](gpu_hasty_rollouts.md)). The kernel plays
+every mechanical move, leaves each rollout's end state in device memory, and
+a second kernel writes the leaf network's input rows straight into the
+TensorRT engine's input buffers. Only three floats per rollout come back. A
+CPU reference implements the same sim move for move, and the kernel matches
+it rollout for rollout. The demo runs two plies of one position; one launch
+is to take ([deep_bot_v0.md](deep_bot_v0.md#build-order) steps 9-11, the
+forced reply with the agent):
+
+- **many positions, in groups that share an unseen pool:** a group is the
+  candidates of one chooser at one position, each applied to the board (a
+  pool's candidates, or Bob's set at one `(a, r)`), and a launch holds as
+  many groups as fill it;
+- **per-rollout opponent leaves,** sampled on the host from the chooser's
+  belief; the kernel draws the rest of the rack;
+- **`K` mechanical plies** after the candidate, then the leaf;
+- **an optional forced first reply** per rollout, for Alice's sims, in which
+  Bob plays `β(a, r)` before the mechanical plies.
 
 **Pairing.** Samples come from variates keyed by `(sample index, draw
 ordinal)`:
@@ -122,7 +146,10 @@ ordinal)`:
   Candidates whose pools coincide share draws exactly; where the pools
   differ (because different tiles were played) the pairing is approximate.
 
-A seeded, indexable draw sequence replaces `Bag::draw()` in sim code.
+A seeded, indexable draw sequence replaces `Bag::draw()` in sim code: the
+GPU kernel's counter-based generator (Philox, keyed by the batch seed and
+counted by rollout index and draw ordinal), which the CPU reference shares.
+Rollout `i` reads the same variates in every position of a batch.
 
 ## The policy-set model
 
@@ -272,8 +299,8 @@ uniform refill, and the sims are paired across moves.
 - **Pools need the tail.** The pool must include moves the prior ranks low
   (exchanges, short plays, setups), or the policy-set model never learns that
   they can win. The exhaustive survey recipe of
-  [sim_labeled_candidates.md](sim_labeled_candidates.md) (every legal play,
-  screened with racing) produces this shape of data.
+  [sim_labeled_candidates.md](sim_labeled_candidates.md) (every legal play)
+  produces this shape of data.
 - **The labels can see moves the rollout policy never plays.** Every
   candidate is simmed directly, rather than reached by a rollout policy that
   would have to choose it. A setup that static equity ranks low is labeled by
@@ -286,14 +313,16 @@ uniform refill, and the sims are paired across moves.
   is best under the paired sim statistics: by bootstrapping over the paired
   samples, or by a normal approximation to the paired differences against
   the leader. Near-equal moves share the mass, so the slots learn that either
-  will do. Racing stops weak moves early, on fewer rollouts, and both
-  estimates account for that, since a move far below the leader rarely comes
-  out on top.
+  will do.
+- **Every candidate gets every rollout.** On the GPU a pool is one batch of
+  candidates times rollouts, so no candidate is stopped early: every pair of
+  candidates is compared on the same deals, and the labels carry no
+  early-stopping bias.
 
-**Label rollouts stop at the win table.** Played to the end of the game, a
-rollout is slow and its outcome noisy. A label rollout instead plays `K`
-plies by the mechanical rule and ends at the [win table](#sims), whose version
-the pool records.
+**Label rollouts stop at the leaf network.** Played to the end of the game,
+a rollout is slow and its outcome noisy. A label rollout instead plays `K`
+plies by the mechanical rule on the GPU and ends at the
+[leaf network](#sims), whose identity the pool records.
 
 **Generations.** Once DeepBot runs, its own evaluations label positions, and
 each policy-set generation trains on the previous agent's labels, as the move
@@ -448,10 +477,16 @@ Per Alice candidate:
 | Alice's sims | `R_A ·` sims per rack: about 400 |
 
 Modeling Bob dominates, at about 40 to 1. With 20 candidates, a turn is
-about 320,000 short sims. Each one is two mechanical moves plus a table
-lookup, so move generation dominates: about 640,000 HastyBot moves per turn.
-At roughly 0.1 to 0.3 ms each, that is 60 to 200 CPU-seconds, or very roughly
-2 to 7 seconds on 28 threads. Four levers:
+about 320,000 short sims, each two mechanical moves after a fixed one, and a
+leaf network evaluation. On the dev laptop's GPU (RTX 5000 Ada), the rollout
+kernel runs 140,000 to 540,000 two-ply rollouts a second, depending on how
+many racks hold a blank, and the leaf network about 270,000 evaluations a
+second in FP16; together, 90,000 to 170,000 sims a second
+([gpu_hasty_rollouts.md](gpu_hasty_rollouts.md#the-leaf-network-on-the-device)).
+That is roughly 2 to 4 seconds a turn. The same sims on the 28-thread CPU,
+with the win table as the leaf, ran 20,000 to 164,000 rollouts a second in the
+same measurement, so 2 to 16 seconds a turn; with the leaf network fed from
+the host, the input upload bounds them at about 48,000 evaluations a second. Four levers:
 
 - **Successive halving over Alice's candidates.** A cheap first pass models
   Bob as the policy-set model's top-1. The full subtree runs only for
@@ -474,7 +509,7 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
    uniform draws.
 2. **Policy-set labels.** Pools over positions from the whole game except the
    endgame, with opponent leaves from the leave inference model and rollouts
-   stopped at the win table.
+   run on the GPU, stopped at the leaf network.
 3. **Policy-set v0, both forms.** *Measure:* recall, meaning how often the
    pool's sim-best move is in `S`, against the top `N` by value, by form, bag
    size and `N`, with setups and exchanges reported separately; and each
@@ -484,15 +519,16 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
    each kind (bingo, setup, other) is chosen, and how stable the choice is
    in `R_B`.
 5. **The agent.**
-   - The seeded draw sequence, the sim with win-table leaves, pairing,
-     two-level evaluation with inferred-leave beliefs, and the cache.
+   - The GPU sims with groups and forced first replies, the leaf network,
+     pairing, two-level evaluation with inferred-leave beliefs batched on the
+     GPU, and the cache.
    - *Measure:* the picks at the known positions
      (`positions/NWL23/interesting-positions/`, the blind_spots tag), turn
      time, and matches against BestBot and `mset-sim` in standard Scrabble.
 6. **Allocation.** Successive halving and racing. *Measure:* the strength
    lost against the time saved.
 7. **Generations.** DeepBot labels positions for the next policy-set model,
-   its games train the next leave inference model and fit the next win table.
+   its games train the next leave inference model and the next leaf network.
 
 ## Limits
 
@@ -502,17 +538,18 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
   could be added if recall turns out to be the bottleneck.
 - **Depth.** After the two searched decisions, every move is mechanical.
   Setups that pay off later than the sim's horizon are valued only by the
-  win table. In Bob's sims, Alice's reply is hasty, so Bob's model of
+  leaf network. In Bob's sims, Alice's reply is hasty, so Bob's model of
   Alice does not look for blocks.
 - **Bob's argmax.** A deterministic model of Bob, over paired means of about
   20 samples, is slightly biased toward moves that drew lucky samples.
   Scrabble gives little reason for mixed strategies, so v1 keeps the argmax.
   Mixing (a softmax, or sampling between the top two) is the easy change if
   Alice's model of Bob proves brittle.
-- **The win table is a coarse leaf.** It sees the spread, the side to move's
-  leave value and the tiles unseen, not the board: a wide-open board and a
-  closed one read the same. A trained leaf network is the later
-  replacement.
+- **The leaf network values the policy of its training games.** v0's
+  targets are outcomes of games HastyBot finished, so it values a leaf as
+  HastyBot would play it out: a position that only stronger play would
+  exploit reads as HastyBot leaves it. Each generation retrains it on the
+  current policy's games.
 
 ## Where this sits
 
