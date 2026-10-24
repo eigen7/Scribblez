@@ -44,9 +44,12 @@ FAMILIES = [
     ("test_leaf_eval_parity", ["scripts.deep_bot_leaf_eval.gen_parity_fixture"]),
 ]
 # The rollout check: gpu_rollout_demo over a few candidates, with the leaf
-# family's fixture model.
+# family's fixture model, at an early, a middle and a late position (with
+# tiles still in the bag), so the kernel's equity-bound pruning meets varied
+# boards.
 ROLLOUT_CHECK = "gpu_rollout_demo"
 ROLLOUT_FLAGS = ["--candidates", "6", "--rollouts", "256", "--leaf-check", "1792"]
+ROLLOUT_PLIES = [2, 10, 16]
 ROLLOUT_LEAF_FAMILY = "test_leaf_eval_parity"
 
 
@@ -73,7 +76,8 @@ def check_rollouts(scratch: Path) -> bool:
         print(f"ERROR: {binary} not found. Run py/build.py first.", file=sys.stderr)
         return False
     model = scratch / ROLLOUT_LEAF_FAMILY / "real.onnx"
-    return run([str(binary), *ROLLOUT_FLAGS, "--leaf-model", str(model)])
+    flags = [*ROLLOUT_FLAGS, "--leaf-model", str(model)]
+    return all([run([str(binary), *flags, "--plies", str(plies)]) for plies in ROLLOUT_PLIES])
 
 
 def main():
