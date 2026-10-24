@@ -90,6 +90,21 @@ def test_inputs_ship_the_leave_model_only_under_inferred_beliefs(tmp_path):
     assert policy_set.inputs(uniform, tmp_path) == {LEAF_INPUT: leaf.onnx_path(4)}
 
 
+def test_pinned_inputs_resolve_on_a_mount_without_the_exports(tmp_path):
+    """A remote worker's mount has only the staged inputs."""
+    p = PolicySetParams(**SOURCES, leaf_eval_generation=4, leave_inference_generation=3)
+    assert policy_set.inputs(p, tmp_path) == {
+        LEAF_INPUT: TagPaths("leaf", policy_set.LEAF_EVAL, tmp_path).onnx_path(4),
+        MODEL_INPUT: TagPaths("li", policy_set.LEAVE_INFERENCE, tmp_path).onnx_path(3),
+    }
+
+
+def test_a_leaf_tag_without_exports_names_the_export_command(tmp_path):
+    _exports(tmp_path, policy_set.LEAF_EVAL, "leaf", [])
+    with pytest.raises(params.ParamsError, match="deep_bot_leaf_eval.onnx_export --tag leaf"):
+        policy_set.finalize(None, _pool_tag(tmp_path), PolicySetParams(**SOURCES))
+
+
 def test_inferred_beliefs_write_forgone_sidecars_and_pass_the_model(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(policy_set.forgone, "write_sidecars", lambda d, t: calls.append(("fg", d)))

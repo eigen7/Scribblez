@@ -158,10 +158,11 @@ def _leaf_paths(params: PolicySetParams, mount_root: Path) -> TagPaths:
     return TagPaths(params.leaf_eval_tag, LEAF_EVAL, mount_root)
 
 
-def _pinned(paths: TagPaths, generation: int, name: str) -> int:
+def _generation(paths: TagPaths, generation: int, name: str) -> int:
     """`generation` of the source at `paths`, or (-1) its latest export.
-    Raises ParamsError if the tag is unset, the index invalid, or the
-    generation (or every generation) lacks an export."""
+    Raises ParamsError if the tag is unset, the index invalid, or (-1) the tag
+    has no export. A generation already pinned is taken as is: a remote worker's
+    mount has none of the source's exports, only the staged input."""
     if not paths.tag:
         raise params_mod.ParamsError(f"{name}_tag is required")
     if generation < -1:
@@ -169,26 +170,45 @@ def _pinned(paths: TagPaths, generation: int, name: str) -> int:
             f"{name}_generation must be a generation index (>= 0) or -1 for the latest, "
             f"got {generation}"
         )
+    if generation >= 0:
+        return generation
     exported = paths.exported_generations()
-    if generation == -1:
-        if not exported:
-            raise params_mod.ParamsError(f"{paths.task} tag '{paths.tag}' has no export")
-        return exported[-1]
-    if generation not in exported:
+    if not exported:
+        raise params_mod.ParamsError(
+            f"{paths.task} tag '{paths.tag}' has no export{_export_hint(paths)}"
+        )
+    return exported[-1]
+
+
+def _pinned(paths: TagPaths, generation: int, name: str) -> int:
+    """_generation, failing also if that generation has no export."""
+    generation = _generation(paths, generation, name)
+    if generation not in paths.exported_generations():
         raise params_mod.ParamsError(
             f"{paths.task} tag '{paths.tag}' generation {generation} has no export"
+            f"{_export_hint(paths)}"
         )
     return generation
 
 
+def _export_hint(paths: TagPaths) -> str:
+    """For a leaf eval tag: the command that exports its latest generation."""
+    if paths.task != LEAF_EVAL:
+        return ""
+    return (
+        f"; python -m scribblez.deep_bot_leaf_eval.onnx_export --tag {paths.tag} exports "
+        "its latest generation"
+    )
+
+
 def leaf_path(params: PolicySetParams, mount_root: Path) -> Path:
     paths = _leaf_paths(params, mount_root)
-    return paths.onnx_path(_pinned(paths, params.leaf_eval_generation, "leaf_eval"))
+    return paths.onnx_path(_generation(paths, params.leaf_eval_generation, "leaf_eval"))
 
 
 def model_path(params: PolicySetParams, mount_root: Path) -> Path:
     paths = _leave_paths(params, mount_root)
-    return paths.onnx_path(_pinned(paths, params.leave_inference_generation, "leave_inference"))
+    return paths.onnx_path(_generation(paths, params.leave_inference_generation, "leave_inference"))
 
 
 def finalize(spec, paths: TagPaths, params: PolicySetParams) -> PolicySetParams:
