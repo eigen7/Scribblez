@@ -33,13 +33,16 @@ class GpuRolloutValues : public RolloutValues {
 
   std::vector<RolloutOutcome> run(const RolloutBatch& batch) override;
 
-  // The last run's seconds in the rollout kernel (with its transfers) and in
-  // the leaf (encoding and the network).
+  // Seconds in the rollout kernel (with the batch's conversion and
+  // transfers) and in the leaf (encoding and the network): the last run's,
+  // and the sums over every run.
   struct Timings {
     double rollout_seconds = 0;
+    double kernel_seconds = 0;  // of rollout_seconds, the kernel alone
     double leaf_seconds = 0;
   };
   const Timings& last_timings() const { return timings_; }
+  const Timings& total_timings() const { return totals_; }
   // The parts, for checks against the CPU reference (gpu_rollout_demo).
   GpuHastyRollouts& rollouts() { return rollouts_; }
   nn::NeuralNet<nn::LeafEvalSpec>& net() { return net_; }
@@ -52,6 +55,7 @@ class GpuRolloutValues : public RolloutValues {
   GpuHastyRollouts rollouts_;
   nn::NeuralNet<nn::LeafEvalSpec> net_;
   Timings timings_;
+  Timings totals_;
 };
 
 }  // namespace scribblez

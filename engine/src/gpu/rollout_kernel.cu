@@ -6,7 +6,9 @@
 // play changed. It replicates movegen.cpp's WordMap generator
 // (wmp_emit_leftmost_anchor / wmp_try_word / build_play), HastyEquity::equity
 // and Board::cross_check_at; where a line here has a counterpart there, the
-// names match.
+// names match. With tiles in the bag, a ply runs in two passes and skips the
+// spans and items whose equity bound cannot reach the best move found so far
+// (see "The span bound"); the bound is exact, so the moves are unchanged.
 //
 // Per-block state lives in shared memory, except the ply's span list, which
 // goes to a per-block slot of global scratch (L2-resident while hot): one
@@ -66,12 +68,33 @@ __device__ inline int span_wl(const Span& s) { return (s.packed >> 5) & 15; }
 __device__ inline int span_wr(const Span& s) { return (s.packed >> 9) & 15; }
 __device__ inline int span_placed(const Span& s) { return (s.packed >> 13) & 7; }
 
-// One block's global scratch: the ply's spans and the two item-space
-// offsets over them (blank-free subracks, subracks with blanks).
+// A span's score bound parts (span_parts): the fixed score (playthrough sum
+// times the word multiplier, the cross words' fixed scores, the bingo) and
+// the placed squares' coefficients, highest first, packed a byte each.
+struct SpanParts {
+  int fixed;
+  uint64_t coef;
+};
+
+// A span with its score bound parts and equity bound, as bound_spans
+// partitions them.
+struct BoundedSpan {
+  Span span;
+  SpanParts parts;
+  double bound;
+};
+
+// One block's global scratch: the ply's spans, their score bound parts, and
+// the two item-space offsets over them (blank-free subracks, subracks with
+// blanks); then each span's equity bound, and the spans partitioned by it:
+// the first pass's, then the rest (see bound_spans).
 struct Scratch {
   Span spans[kMaxSpans];
+  SpanParts parts[kMaxSpans];
   uint32_t off[kMaxSpans + 1];
   uint32_t offb[kMaxSpans + 1];
+  double bound[kMaxSpans];
+  BoundedSpan parted[kMaxSpans];
 };
 
 struct Tables {
@@ -156,6 +179,8 @@ struct Smem {
   int other_pv;
   uint32_t rack_letters;  // letters the rack can place (all, with a blank)
   uint8_t sorted_rack[kRackSize];
+  float leave_bound[kRackSize + 1];  // per tiles played, the best leave value left
+  uint32_t sub_values[128];          // per subrack mask, its face values highest first, 4 bits each
   // Per subrack mask over sorted_rack: the leave's value and point value
   // (the mask's tiles taken), and the subrack's own letters.
   float sub_lv[128];
@@ -166,10 +191,14 @@ struct Smem {
   uint8_t masks[kRackSize + 1][kMaxBlanks + 1][35];
   uint8_t n_masks[kRackSize + 1][kMaxBlanks + 1];
   int nspans;
+  int nfront, nrest;  // bound_spans' partition: the first pass's spans, the rest
+  double best_bound;  // the highest span bound
+  double bar;         // items whose bound falls below it are skipped
   int nitems, nitemsb;
   int next_item, next_itemb;  // the work queues' heads
   int overflow;
   Cand warp_best[kWarps];
+  double warp_max[kWarps];
   int warp_sum[kWarps], warp_sumb[kWarps];
   // A warp's 32 blank items in flight: their spans, subracks and hit lists.
   struct WarpItems {
@@ -540,6 +569,13 @@ __device__ void try_blank_word(const Smem& s, const Span& sp, int m, int nb, con
   }
 }
 
+// Inserts `x` into the `n` values of `a`, kept highest first.
+__device__ inline void insert_descending(int* a, int& n, int x) {
+  int j = n++;
+  for (; j > 0 && a[j - 1] < x; --j) a[j] = a[j - 1];
+  a[j] = x;
+}
+
 // ---- Ply phases ----
 
 // The face value of player `p`'s rack (blanks count 0).
@@ -598,6 +634,15 @@ __device__ void price_subracks(Smem& s, int m, int bag, Cand& best) {
   }
   for (int i = n_leave; i < 6; ++i) key |= 31u << (5 * i);
   s.sub_lv[m] = n_leave > 0 ? leave_lookup(key) : 0.0f;
+  int vals[kRackSize], nv = 0;
+  for (int i = 0; i < s.rack_size; ++i) {
+    if (((m >> i) & 1) == 0) continue;
+    const int t = s.sorted_rack[i];
+    insert_descending(vals, nv, t == kBlankTile ? 0 : c_tile_values[t]);
+  }
+  uint32_t packed_vals = 0;
+  for (int i = 0; i < nv; ++i) packed_vals |= uint32_t(vals[i]) << (4 * i);
+  s.sub_values[m] = packed_vals;
   s.sub_pv[m] = int16_t(pv);
   s.sub_lo[m] = lo;
   s.sub_hi[m] = hi;
@@ -686,16 +731,6 @@ __device__ void enumerate_spans(Smem& s, Scratch& sc, int warp, int lane) {
   }
 }
 
-// Items of a span: its blank-free subracks of `placed` tiles, and those with
-// blanks.
-__device__ inline int span_items(const Smem& s, const Span& sp) {
-  return s.n_masks[span_placed(sp)][0];
-}
-__device__ inline int span_items_blank(const Smem& s, const Span& sp) {
-  const int k = span_placed(sp);
-  return s.n_masks[k][1] + s.n_masks[k][2];
-}
-
 // A block exclusive scan of per-thread values: warp shuffles, then the warp
 // totals through `warp_sum`. Returns the thread's exclusive prefix.
 __device__ int block_exclusive_scan(int value, int tid, int* warp_sum) {
@@ -754,6 +789,169 @@ __device__ int find_span(int nspans, const uint32_t* off, uint32_t item) {
   return lo;
 }
 
+// ---- The span bound ----
+// An upper bound on the equity of any play on a span, so the second pass can
+// skip spans that cannot beat a play or exchange already found. Every play on
+// the span places its `placed` squares from a subrack of that many tiles:
+// its score is the playthrough tiles' sum times the word multiplier, the
+// cross words' fixed scores, the bingo, and each placed tile's value times
+// its square's coefficient (letter multiplier times the word multiplier,
+// plus the cross word's multiplier where it has one), which the rack's
+// highest values on the highest coefficients bound (the rearrangement
+// inequality). Its leave is at best leave_bound, and the pre-endgame term is
+// fixed by the tiles played; the opening penalty only lowers it. Bounds are
+// used only with tiles in the bag (no endgame terms).
+
+// A margin under which a bound counts as tying the bar: a play whose equity
+// equals the bar could still win on the tiebreaks, and the bound and the
+// equity sum their terms in different orders.
+constexpr double kBoundSlack = 1e-6;
+// The first pass takes the spans whose bound is within this of the best
+// bound, to find a strong play to prune the rest against.
+constexpr double kFirstPassMargin = 20.0;
+
+// leave_bound[k]: the best leave value among subracks of k tiles. Threads
+// 0..rack_size.
+__device__ void bound_leaves(Smem& s, int tid) {
+  if (tid > s.rack_size) return;
+  float best = tid == s.rack_size ? 0.0f : -1e30f;
+  for (int b = 0; b <= kMaxBlanks; ++b)
+    for (int j = 0; j < s.n_masks[tid][b]; ++j) best = fmaxf(best, s.sub_lv[s.masks[tid][b][j]]);
+  s.leave_bound[tid] = best;
+}
+
+__device__ SpanParts span_parts(const Smem& s, const Span& sp) {
+  const int v = span_view(sp), row = span_row(sp), wl = span_wl(sp), wr = span_wr(sp);
+  int playthrough = 0, word_mult = 1;
+  for (int c = wl; c <= wr; ++c) {
+    const uint8_t g = sq_view(s, v, row, c);
+    if (g != 0)
+      playthrough += tile_value_of_glyph(g);
+    else
+      word_mult *= c_word_mult[nat_idx(v, row, c)];
+  }
+  int coef[kRackSize];
+  int n = 0, fixed = 0;
+  for (int c = wl; c <= wr; ++c) {
+    if (sq_view(s, v, row, c) != 0) continue;
+    const int ni = nat_idx(v, row, c), vi = row * kBoardSize + c;
+    const int lm = c_letter_mult[ni], wm = c_word_mult[ni];
+    const bool cross = s.xnb[v][vi] != 0;
+    if (cross) fixed += s.xscore[v][vi] * wm;
+    insert_descending(coef, n, lm * (word_mult + (cross ? wm : 0)));
+  }
+  SpanParts p{playthrough * word_mult + fixed + (n == kRackSize ? 50 : 0), 0};
+  for (int i = 0; i < n; ++i) p.coef |= uint64_t(coef[i]) << (8 * i);
+  return p;
+}
+
+// The score bound of the `k` highest face values of `values` (4 bits each,
+// highest first) on a span with parts `p`.
+__device__ inline int score_bound(const SpanParts& p, uint32_t values, int k) {
+  int score = p.fixed;
+  for (int i = 0; i < k; ++i)
+    score += int((p.coef >> (8 * i)) & 0xFF) * int((values >> (4 * i)) & 0xF);
+  return score;
+}
+
+// The bound of any play of subrack `m` on a span: its score bound, its leave,
+// and the pre-endgame term.
+__device__ inline double item_bound(const Smem& s, const SpanParts& p, int m, int k, int bag) {
+  return double(score_bound(p, s.sub_values[m], k)) + double(s.sub_lv[m]) + peg_for_tiles(k, bag);
+}
+
+// The bound of any play on a span of `k` placed squares: the rack's highest
+// values on its highest coefficients, and the best leave of `k` tiles played.
+__device__ inline double span_bound(const Smem& s, const SpanParts& p, int k, int bag) {
+  const uint32_t rack_values = s.sub_values[(1 << s.rack_size) - 1];
+  return double(score_bound(p, rack_values, k)) + double(s.leave_bound[k]) + peg_for_tiles(k, bag);
+}
+
+// The block's maximum of `value` into `out` (all threads take part).
+__device__ void block_max(double value, int tid, double* warp_max, double* out) {
+  for (int offset = 16; offset > 0; offset >>= 1)
+    value = fmax(value, __shfl_down_sync(0xffffffffu, value, offset));
+  if ((tid & 31) == 0) warp_max[tid >> 5] = value;
+  __syncthreads();
+  if (tid == 0) {
+    double m = warp_max[0];
+    for (int w = 1; w < kWarps; ++w) m = fmax(m, warp_max[w]);
+    *out = m;
+  }
+  __syncthreads();
+}
+
+// The block's best equity found so far into `out`.
+__device__ inline void best_equity(Smem& s, int tid, const Cand& local, double* out) {
+  block_max(local.valid ? local.eq : -1e300, tid, s.warp_max, out);
+}
+
+// Bounds every span and partitions them into Scratch::parted: the first
+// pass's (bound within kFirstPassMargin of the best) at the front, which
+// then replace the span list; the rest, counted in s.nrest, after them.
+__device__ void bound_spans(Smem& s, Scratch& sc, int tid, int bag) {
+  const int n = s.nspans;
+  double top = -1e300;
+  for (int i = tid; i < n; i += kThreads) {
+    sc.parts[i] = span_parts(s, sc.spans[i]);
+    sc.bound[i] = span_bound(s, sc.parts[i], span_placed(sc.spans[i]), bag);
+    top = fmax(top, sc.bound[i]);
+  }
+  block_max(top, tid, s.warp_max, &s.best_bound);
+  if (tid == 0) s.nfront = s.nrest = 0;
+  __syncthreads();
+  const double cut = s.best_bound - kFirstPassMargin;
+  for (int i = tid; i < n; i += kThreads) {
+    const bool first = sc.bound[i] >= cut;
+    const int j = first ? atomicAdd(&s.nfront, 1) : n - 1 - atomicAdd(&s.nrest, 1);
+    sc.parted[j] = BoundedSpan{sc.spans[i], sc.parts[i], sc.bound[i]};
+  }
+  __syncthreads();
+  for (int i = tid; i < s.nfront; i += kThreads) {
+    sc.spans[i] = sc.parted[i].span;
+    sc.parts[i] = sc.parted[i].parts;
+  }
+  __syncthreads();  // every thread has read the count
+  if (tid == 0) s.nspans = s.nfront;
+  __syncthreads();
+}
+
+// The rest of the spans whose bound reaches `bar` (the best equity found so
+// far) become the span list; the others cannot hold the ply's best move.
+__device__ void keep_reachable(Smem& s, Scratch& sc, int tid, double bar) {
+  const int n = s.nfront + s.nrest;
+  __syncthreads();  // every thread has read the counts
+  if (tid == 0) s.nspans = 0;
+  __syncthreads();
+  for (int i = s.nfront + tid; i < n; i += kThreads) {
+    const BoundedSpan& b = sc.parted[i];
+    if (b.bound + kBoundSlack < bar) continue;
+    const int j = atomicAdd(&s.nspans, 1);
+    sc.spans[j] = b.span;
+    sc.parts[j] = b.parts;
+  }
+  if (tid == 0) {
+    s.next_item = 0;
+    s.next_itemb = 0;
+  }
+  __syncthreads();
+}
+
+// With tiles in the bag: the span bounds, the first pass's spans as the span
+// list, and the best exchange as its bar.
+__device__ void start_bounded_ply(Smem& s, Scratch& sc, int tid, int bag, const Cand& local) {
+  bound_leaves(s, tid);
+  best_equity(s, tid, local, &s.bar);
+  bound_spans(s, sc, tid, bag);
+}
+
+// After the first pass: the best equity it found becomes the bar, and the
+// rest of the spans that can still reach it the span list.
+__device__ void start_second_pass(Smem& s, Scratch& sc, int tid, const Cand& local) {
+  best_equity(s, tid, local, &s.bar);
+  keep_reachable(s, sc, tid, s.bar);
+}
+
 // The ply's blank-free items, a thread per item off the shared queue.
 __device__ void process_items(Smem& s, const Scratch& sc, int bag, Cand& best, WorkCounts& wc) {
   for (;;) {
@@ -761,7 +959,9 @@ __device__ void process_items(Smem& s, const Scratch& sc, int bag, Cand& best, W
     if (item >= uint32_t(s.nitems)) break;
     const int si = find_span(s.nspans, sc.off, item);
     const Span sp = sc.spans[si];
-    process_item(s, sp, s.masks[span_placed(sp)][0][item - sc.off[si]], bag, best, wc);
+    const int k = span_placed(sp), m = s.masks[k][0][item - sc.off[si]];
+    if (item_bound(s, sc.parts[si], m, k, bag) + kBoundSlack < s.bar) continue;
+    process_item(s, sp, m, bag, best, wc);
   }
 }
 
@@ -793,12 +993,15 @@ __device__ void process_blank_items(Smem& s, const Scratch& sc, int tid, int bag
       }
       const int m = s.masks[k][nb][j];
       const int len = span_wr(sp) - span_wl(sp) + 1;
-      wi.list[lane] = blank_lookup(nb, len, sp.pt_lo + s.sub_lo[m], sp.pt_hi + s.sub_hi[m], &count);
+      if (item_bound(s, sc.parts[si], m, k, bag) + kBoundSlack >= s.bar) {
+        wi.list[lane] =
+          blank_lookup(nb, len, sp.pt_lo + s.sub_lo[m], sp.pt_hi + s.sub_hi[m], &count);
+        ++wc.items;
+        wc.hits += count > 0 ? 1u : 0u;
+      }
       wi.span[lane] = sp;
       wi.m[lane] = uint8_t(m);
       wi.nb[lane] = uint8_t(nb);
-      ++wc.items;
-      wc.hits += count > 0 ? 1u : 0u;
     }
     // Exclusive scan of the counts across the lanes.
     int incl = count;
@@ -979,6 +1182,19 @@ struct PhaseClock {
   }
 };
 
+// One pass over the span list's items: the item scan, then the probes of the
+// items whose bound reaches s.bar.
+__device__ void run_items_pass(Smem& s, Scratch& sc, int tid, int bag, Cand& local, PhaseClock& pc,
+                               WorkCounts& wc) {
+  scan_items(s, sc, tid);
+  __syncthreads();
+  if (tid == 0) pc.lap(kPhaseSpans);
+  process_items(s, sc, bag, local, wc);
+  process_blank_items(s, sc, tid, bag, local, wc);
+  __syncthreads();
+  if (tid == 0) pc.lap(kPhaseItems);
+}
+
 // One ply by s.mover.
 __device__ void play_ply(Smem& s, Scratch& sc, int tid, uint64_t seed, uint32_t rollout,
                          PackedMove& out, PhaseClock& pc, WorkCounts& wc) {
@@ -999,17 +1215,23 @@ __device__ void play_ply(Smem& s, Scratch& sc, int tid, uint64_t seed, uint32_t 
   if (tid < 128) price_subracks(s, tid, bag, local);
   enumerate_spans(s, sc, warp, lane);
   __syncthreads();
-  if (tid == 0) pc.lap(kPhaseLeaves);
-  scan_items(s, sc, tid);
-  __syncthreads();
   if (tid == 0) {
-    pc.lap(kPhaseSpans);
+    pc.lap(kPhaseLeaves);
     atomicAdd(&g_counts[kCountSpans], (unsigned long long)s.nspans);
   }
-  process_items(s, sc, bag, local, wc);
-  process_blank_items(s, sc, tid, bag, local, wc);
-  __syncthreads();
-  if (tid == 0) pc.lap(kPhaseItems);
+  // With tiles in the bag, two passes: the spans most likely to hold the
+  // best move, then the rest that can still beat what the first found.
+  const bool bounded = bag > 0;
+  if (bounded) {
+    start_bounded_ply(s, sc, tid, bag, local);
+  } else if (tid == 0) {
+    s.bar = -1e300;
+  }
+  run_items_pass(s, sc, tid, bag, local, pc, wc);
+  if (bounded) {
+    start_second_pass(s, sc, tid, local);
+    run_items_pass(s, sc, tid, bag, local, pc, wc);
+  }
   reduce_best(s, tid, local);
   if (tid == 0) {
     write_move(s.chosen, out);

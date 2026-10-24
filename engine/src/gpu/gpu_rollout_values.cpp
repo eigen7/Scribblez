@@ -42,6 +42,7 @@ std::vector<RolloutOutcome> GpuRolloutValues::run(const RolloutBatch& batch) {
   auto t0 = Clock::now();
   const std::vector<rollout_abi::RolloutResult> results = rollouts_.run(batch, dict_);
   timings_.rollout_seconds = seconds_since(t0);
+  timings_.kernel_seconds = rollouts_.last_timings().kernel_seconds;
   t0 = Clock::now();
   std::vector<RolloutOutcome> outcomes(results.size());
   for (size_t k = 0; k < results.size(); ++k) outcomes[k].result = results[k];
@@ -49,6 +50,9 @@ std::vector<RolloutOutcome> GpuRolloutValues::run(const RolloutBatch& batch) {
   for (int first = 0; first < n; first += net_.max_rows())
     evaluate_leaves(first, std::min(net_.max_rows(), n - first), &outcomes);
   timings_.leaf_seconds = seconds_since(t0);
+  totals_.rollout_seconds += timings_.rollout_seconds;
+  totals_.kernel_seconds += timings_.kernel_seconds;
+  totals_.leaf_seconds += timings_.leaf_seconds;
   return outcomes;
 }
 

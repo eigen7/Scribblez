@@ -249,8 +249,8 @@ checked against HastyBot through the CPU reference below.
   order-dependent, and its purpose, stopping early, has no parallel
   equivalent. A one-pass, loose per-span bound against a cheap lower bound on
   the best equity (the best exchange, or the best single-tile play) can prune
-  spans before probing; it is an optimization to try in PR 3, not a
-  prerequisite.
+  spans before probing. It was built after PR 3 as a two-pass span and item
+  bound (see [Tuning on the pool workload](#tuning-on-the-pool-workload)).
 - **Thread per rollout.** Rejected above: the state does not fit, and the
   control flow diverges everywhere.
 - **Overflow to the CPU on large move sets.** Unnecessary once no list is
@@ -440,10 +440,56 @@ call (512 to 8,192) made no difference beyond the contention's noise.
 (`test_leaf_eval_parity`) and the demo on 7 candidates x 256 rollouts with
 that family's random model, rows and values compared.
 
-Not done, in the order they look worth trying: an L2 persistence window for
-the word map and leave table so the blank traffic does not evict them; the
-opponent-ply table; a loose per-span equity bound against the best exchange
-to skip spans before probing; dropping the two-blank table (rare, ~200 MB)
-in favor of designation enumeration for those items; 128-thread blocks for
-occupancy.
+### Tuning on the pool workload
+
+Measured 2026-10-23 on the idle dev laptop with `policy_set_pool_tool` over one
+`tilted2` chunk (100 pools, 1.7M raced rollouts, the leaf network after every
+rollout), where all the time is on the GPU: the rollout kernel 7.9 s and the
+leaf network 6.3 s before this section's change.
+
+- **A span and item equity bound** (kept): with tiles in the bag, a ply runs
+  in two passes. Each span gets a score bound (the playthrough and cross-word
+  fixed scores, and the rack's highest face values on the span's highest
+  square coefficients) and the first pass takes the spans whose bound, with
+  the best leave for that many tiles, is within 20 points of the best. The
+  first pass's best play (or the best exchange, if higher) is then a bar:
+  the second pass drops every span, and before its probe every item (a span
+  and subrack), whose bound falls short of it. An item's bound uses its own
+  subrack's face values and leave, which is what makes it tight; a span-level
+  bound alone pruned 2-10% of probes and lost time. The bound only discards
+  moves that cannot be the argmax, so the moves are unchanged: every task of
+  15 demo positions (2 to 22 plies in) matched the CPU reference. Words tried
+  per ply fell 4-9x; the kernel ran 1.22-1.53x faster on the demo's three
+  positions, and the chunk took 12.9 s instead of 14.6 s (the kernel 5.8 s).
+  The first pass's margin (5 to 40 points) made no difference.
+- **Overlapping the kernel with the leaf network** (dropped): the kernel on its
+  own stream, chunked, so chunk k + 1 rolled out while chunk k's leaves were
+  evaluated. The overlap happened, but the network slowed from 5.7 s to 10 s
+  beside the kernel and the total did not move: the GPU is saturated, so only
+  less work helps.
+- **128-thread blocks** (dropped): 5-7% slower at 6 or 8 blocks per SM; 256 x 3
+  blocks (more registers) within noise of 256 x 4.
+- **An L2 persistence window** (dropped): the word map, the leave table and the
+  KWG in one 36 MB arena under a persisting access window (this GPU persists up
+  to 46 MB): no change, so they already stay resident.
+- **Launch size** (no lever): 8,192 to 131,072 tasks per launch within 3%.
+- **Leaf network size** (the next lever, needs training): the leaf is now the
+  larger half. Random-weight conv exports, evaluated in the same pipeline:
+
+  | Trunk | Evaluations/s |
+  |-------|---------------|
+  | conv 64 x 4 (the current leaf) | 265,000 |
+  | conv 48 x 4 | 330,000 |
+  | conv 64 x 2 | 378,000 |
+  | conv 32 x 4 | 540,000 |
+  | conv 32 x 2 | 690,000 |
+
+  A conv 32 x 4 leaf would take the chunk to about 9 seconds (11 pools a
+  second), if it labels as well; the [leaf eval results](../deep_bot_leaf_eval_results.md)
+  found every arm tied, which suggests capacity is not what the leaf needs, but
+  only a training run says.
+
+Not done: the opponent-ply table; dropping the two-blank table (rare,
+~200 MB) in favor of designation enumeration for those items, which matters
+less now that the bound skips most blank items before their probe.
 

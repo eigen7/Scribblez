@@ -1,6 +1,7 @@
 """The DeepBot leaf eval model's ONNX export: the graph takes the full row
 (join planes included, whether or not the model reads them), emits the two
-heads, and carries the metadata the engine's LeafEvalSpec gates on."""
+heads, and carries the metadata the engine's LeafEvalSpec gates on; and the
+trainer's per-generation export, where a policy_set task pins it."""
 
 from pathlib import Path
 
@@ -19,8 +20,11 @@ from scribblez.deep_bot_leaf_eval.onnx_export import (  # noqa: E402
     GRAPH,
     OUTPUTS,
     TABLE_KEY,
+    WORKLOAD,
     export_onnx,
 )
+from scribblez.deep_bot_leaf_eval.trainer import LEAVE_VALUES_KEY, export_generation  # noqa: E402
+from scribblez.paths import TagPaths  # noqa: E402
 
 SPATIAL_PLANES = LAYOUT["join_plane0"] + LAYOUT["join_planes"]
 SCALARS = LAYOUT["pool_size"] + 1
@@ -52,3 +56,17 @@ def test_export_carries_the_row_and_the_metadata(tmp_path, join_planes):
     assert list(outputs) == list(OUTPUTS)
     assert outputs["wld"] == ["batch", 3]
     assert outputs["score_diff"] == ["batch", 2]
+
+
+def test_each_generation_exports_where_a_policy_set_task_pins_it(tmp_path):
+    torch.manual_seed(0)
+    model = LeafEvalModel(
+        LeafEvalShape(trunk="conv", join_planes=True, width=8, depth=1, num_heads=1)
+    )
+    paths = TagPaths("leaf", WORKLOAD, tmp_path)
+    paths.onnx_dir.mkdir(parents=True)
+    ctx = {"config": {LEAVE_VALUES_KEY: "abc123"}, "tag": "leaf"}
+    export_generation(paths, 7, model, ctx)
+    assert paths.exported_generations() == [7]
+    meta = {p.key: p.value for p in onnx.load(str(paths.onnx_path(7))).metadata_props}
+    assert meta["tag"] == "leaf" and meta["generation"] == "7" and meta[TABLE_KEY] == "abc123"

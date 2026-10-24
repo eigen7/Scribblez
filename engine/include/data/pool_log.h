@@ -7,7 +7,7 @@
 //
 // File layout (little-endian, packed):
 //
-//   [PoolFileHeader                                        136 B]
+//   [PoolFileHeader                                        128 B]
 //   per position:
 //     [PoolPositionHeader                                   16 B]
 //     [PoolOppRack                                         120 B]
@@ -32,7 +32,7 @@ namespace scribblez {
 inline constexpr uint32_t kPoolMagic = 0x4C4F4F50u;
 // The format version (docs/plans/deep_bot_v0.md, "Versions"). Bump it whenever
 // the layout or a field's meaning changes; readers accept only this version.
-inline constexpr uint16_t kPoolFormatVersion = 4;
+inline constexpr uint16_t kPoolFormatVersion = 5;
 
 // PoolFileHeader::flags bits.
 inline constexpr uint16_t kPoolFlagLeaveInference = 1u;  // opponents' leaves came from a model
@@ -47,23 +47,22 @@ struct PoolFileHeader {
   uint16_t version;  // kPoolFormatVersion
   uint16_t flags;    // kPoolFlag* bits
   uint32_t num_positions;
-  uint16_t horizon_plies;  // rollouts stopped at the win table after this many plies
-  uint16_t reserved0;      // 0
-  uint32_t rollouts;       // the budget per candidate; racing stops some early
-  int32_t win_table_format_version;
-  int32_t win_table_generation;        // -1 for a table fitted outside a tag
-  char win_table_hash[kPoolHashSize];  // util::file_content_hash of the table file
-  char win_table_tag[kPoolTagSize];    // NUL-padded; empty outside a tag
-  // The leave inference model, all zero under uniform beliefs: its ONNX's
-  // util::file_content_hash, its tag (NUL-padded), generation and format
-  // version.
+  uint32_t rollouts;  // the budget per candidate; racing stops some early
+  // The leaf network every unfinished rollout ended at, after the candidate
+  // and two mechanical replies: its ONNX's util::file_content_hash, its tag
+  // (NUL-padded), generation and format version. A test's synthetic leaf
+  // has no hash.
+  char leaf_model_hash[kPoolHashSize];
+  char leaf_model_tag[kPoolTagSize];
+  int32_t leaf_model_generation;
+  int32_t leaf_model_format_version;
+  // The leave inference model, all zero under uniform beliefs, likewise.
   char leave_model_hash[kPoolHashSize];
   char leave_model_tag[kPoolTagSize];
   int32_t leave_model_generation;
   int32_t leave_model_format_version;
-  uint32_t reserved1;  // 0
 };
-static_assert(sizeof(PoolFileHeader) == 136, "PoolFileHeader must be 136 bytes");
+static_assert(sizeof(PoolFileHeader) == 128, "PoolFileHeader must be 128 bytes");
 
 struct PoolPositionHeader {
   uint32_t game_index;  // game within the companion .slog file
@@ -97,20 +96,22 @@ static_assert(sizeof(PoolCandidate) == 36, "PoolCandidate must be 36 bytes");
 
 #pragma pack(pop)
 
-// Where a file's labels came from: the win table its rollouts stopped at, and
-// the leave inference model the opponents' leaves came from (none: uniform).
+// A model's provenance, as a pool header records it.
+struct PoolModel {
+  std::string hash;
+  std::string tag;
+  int generation = 0;
+  int format_version = 0;
+
+  bool operator==(const PoolModel&) const = default;
+};
+
+// Where a file's labels came from: the leaf network its rollouts ended at,
+// and the leave inference model the opponents' leaves came from (empty:
+// uniform).
 struct PoolSources {
-  std::string win_table_hash;
-  std::string win_table_tag;
-  int win_table_generation = -1;
-  int win_table_format_version = 0;
-  // The leave inference model's; the hash empty, and the rest 0, under
-  // uniform beliefs.
-  std::string leave_model_hash;
-  std::string leave_model_tag;
-  int leave_model_generation = 0;
-  int leave_model_format_version = 0;
-  int horizon_plies = 0;
+  PoolModel leaf_model;
+  PoolModel leave_model;
   int rollouts = 0;
 
   // The sources a written file's header records.

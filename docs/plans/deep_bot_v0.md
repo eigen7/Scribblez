@@ -1,7 +1,7 @@
 # DeepBot v0: the leave inference model and the policy-set model
 
-**Status: proposed 2026-10-14, build plan added 2026-10-15; steps 1-8b
-built, GPU label generation (steps 9-11) planned 2026-10-23.** The
+**Status: proposed 2026-10-14, build plan added 2026-10-15; steps 1-11
+built, the last three (GPU label generation) on 2026-10-23.** The
 implementation plan for the first two models of [deep_bot.md](deep_bot.md),
 each trained from HastyBot-vs-HastyBot games in standard Scrabble (hidden
 leaves):
@@ -610,8 +610,7 @@ A generator worker's cycle:
    design's [candidate set](deep_bot.md#labels): up to `rollouts` (default
    100) per candidate, raced. A rollout is the candidate, Bob's and Alice's
    mechanical replies, and the [leaf network](deep_bot.md#sims), the form
-   the network is trained on. (The CPU recipe ran three mechanical plies to
-   the win table.)
+   the network is trained on.
 5. **Deliver the chunk's pool records** (below) as the `.slog`'s sidecar.
 
 **`policy_set_pool_tool`** (engine/apps) labels a `.slog`'s picked positions
@@ -633,12 +632,13 @@ into its `.pool`. Per position:
   [GPU sims](deep_bot.md#sims): they share the unseen pool and the
   per-rollout opponent leaves, so rollout `i` holds the same opponent rack
   and draws from the same shuffled bag under every candidate.
-- **Racing, in rounds.** The rounds end at the CPU recipe's checkpoints, 10%,
-  20%, 40% and 70% of `rollouts`, and the race rule is the same: after each
-  round, a candidate more than three paired standard errors below the leader
-  stops. Each round is one launch over the surviving candidates' next slice of
+- **Racing, in rounds.** The rounds end at the checkpoints in
+  `sim/candidate_race.h`, 10%, 20%, 40% and 70% of `rollouts`, which the CPU
+  simmer races at too: after each round, a candidate more than three paired
+  standard errors below the leader stops. Each round is one launch over the surviving candidates' next slice of
   rollout indices. The tool keeps many positions in flight, and a launch takes
-  the pending rounds of as many as fill it (10,000 rollouts or more), so the
+  the pending rounds of as many as fill it (`--launch-tasks`, 32,768
+  rollouts by default), so the
   GPU stays busy while each pool's race narrows.
 - **The leaf** is `--leaf-model <ONNX path>`, a `deep_bot_leaf_eval` export,
   evaluated on the device from the rows the encoder kernel writes. A rollout
@@ -654,9 +654,6 @@ kernel. The test suites hide the GPU, so they run the tool on the CPU
 reference with a synthetic leaf (a fixed function of the spread), which
 exercises everything but the device; `py/tools/gpu_parity.py` checks the
 device against the reference.
-
-The survey tool's pool recipe, the CPU path that labelled pools before, is
-deleted with it.
 
 **The pool record** is a compact sidecar beside the `.slog`. Its header
 carries the magic and `kPoolFormatVersion`.
@@ -861,7 +858,19 @@ depending on blanks
 which is 0.1 to 0.2 seconds for the average pool: 5 to 9 times the CPU
 recipe's rate on the same machine, which ran one more mechanical ply and the
 win table. The CPU stays free for self-play and the leave inference model.
-The real rate is measured on the first generation and shown on the Stats tab.
+Measured 2026-10-23 with `policy_set_pool_tool` on one `tilted2` chunk (50
+games, 100 pools, 838 candidates on average), the `leaf-conv-nojoin`
+generation 77 leaf in FP16 and `tilted2`'s generation 1188 leave model, on the
+idle dev laptop: 100 pools in 14.6 seconds, 6.9 pools a second, about 7 times
+the CPU recipe. Racing ran 20% of the full matrix (1.7M rollouts). The time is
+all on the GPU: the rollout kernel 7.9 seconds (216,000 rollouts a second) and
+the leaf network 6.3 seconds (270,000 a second); the CPU's preparation runs
+ahead on its own thread. Launches of 8,192 to 131,072 rollouts ran within 3%
+of each other, so the default of 32,768 is not a lever. An exact equity bound
+in the kernel then took the chunk to 12.9 seconds (7.7 pools a second); a
+smaller leaf network is the next lever
+([gpu_hasty_rollouts.md](gpu_hasty_rollouts.md#tuning-on-the-pool-workload)).
+The real rate on the fleet is shown on the Stats tab.
 
 Generation sets the pace and is embarrassingly parallel, so the `generate`
 role is meant for a fleet of GPU machines: owned ssh machines and rented

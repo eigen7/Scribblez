@@ -1,6 +1,8 @@
 #include "nn/onnx_metadata.h"
 
 #include "util/exception.h"
+#include "util/hash.h"
+#include "util/io.h"
 
 #include <onnx/onnx_pb.h>
 
@@ -48,6 +50,15 @@ void check_leave_values(const OnnxMetadata& meta, const std::string& onnx_path,
       "them",
       onnx_path, declared, expected);
   }
+}
+
+ModelIdentity read_model_identity(const std::string& onnx_path, const std::string& format_key) {
+  const OnnxMetadata meta = parse_onnx_metadata(util::read_file_bytes(onnx_path));
+  const auto it = meta.entries.find("tag");
+  return {.hash = util::file_content_hash(onnx_path),
+          .tag = it == meta.entries.end() ? std::string() : it->second,
+          .generation = meta.int_entry("generation", -1),
+          .format_version = meta.int_entry(format_key, 0)};
 }
 
 }  // namespace nn

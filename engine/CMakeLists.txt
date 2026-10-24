@@ -64,7 +64,9 @@ add_library(scribblez_core STATIC
   src/sim/pool_labels.cpp
   src/sim/macondo_autostopper.cpp
   src/sim/macondo_simmer.cpp
+  src/sim/candidate_race.cpp
   src/sim/hasty_rollout_task.cpp
+  src/sim/pool_labeler.cpp
   src/sim/rollout_values.cpp
   src/agent/best_bot.cpp
   src/agent/candidate_evaluator.cpp
@@ -289,6 +291,15 @@ set_target_properties(scribblez_gpu_rollouts PROPERTIES
   INTERPROCEDURAL_OPTIMIZATION OFF
   CUDA_RUNTIME_LIBRARY Shared)
 target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_core scribblez_nn ${CUDA_CUDART})
+
+# The policy-set model's labeled pools on the GPU (docs/plans/deep_bot_v0.md).
+add_executable(policy_set_pool_tool apps/policy_set_pool_tool.cpp)
+target_link_libraries(policy_set_pool_tool PRIVATE
+  scribblez_gpu_rollouts
+  scribblez_nn
+  scribblez_core
+  Boost::program_options
+  Threads::Threads)
 
 add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)
 target_link_libraries(gpu_rollout_demo PRIVATE
