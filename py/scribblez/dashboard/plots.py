@@ -308,15 +308,10 @@ LEAVE_INFERENCE_QUALITY = [
 # rows, the model's log loss of the mover's expected score beside the win
 # tables' (the one fitted from the window, and Macondo's), overall and by pool
 # size, and the model's own WLD and score-differential errors.
-# (metric key, title). A leaf's pool is never empty, since its bag outlasts
-# both refills, so the first band's title starts at 1; its key keeps the 0_20
-# that every tag's records use.
-LEAF_EVAL_POOL_BANDS = (
-    ("0_20", "1-20"),
-    ("21_40", "21-40"),
-    ("41_60", "41-60"),
-    ("61_100", "61-100"),
-)
+# deep_bot_leaf_eval/evaluation.py's POOL_BANDS, copied: importing it would
+# load the engine library. A leaf's pool is never empty (its bag outlasts both
+# refills), so the first band starts at 1.
+LEAF_EVAL_POOL_BANDS = ("1_20", "21_40", "41_60", "61_100")
 LEAF_EVAL_SOURCES = ("model", "wintable", "wintable_macondo")
 LEAF_EVAL_QUALITY = [
     (
@@ -325,10 +320,10 @@ LEAF_EVAL_QUALITY = [
     ),
     *(
         (
-            f"Held-out log loss, pool of {title} tiles",
+            f"Held-out log loss, pool of {band.replace('_', '-')} tiles",
             [f"eval_{source}_logloss_pool_{band}" for source in LEAF_EVAL_SOURCES],
         )
-        for band, title in LEAF_EVAL_POOL_BANDS
+        for band in LEAF_EVAL_POOL_BANDS
     ),
     ("Held-out WLD cross-entropy", ["eval_wld_nll"]),
     ("Held-out score-differential MAE (points)", ["eval_sd_mean_mae"]),
