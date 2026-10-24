@@ -48,13 +48,14 @@ from scribblez.policy_set.metrics import SET_SIZES
 from scribblez.policy_set.model import Encoded, PolicySetEncoder, mean_spread, to_grid
 
 # The head predicts the gain in percentage points of win probability, and the
-# loss is Huber with this delta, so all but the rarest gains fall in its
-# quadratic range and the head estimates the mean gain. Predicting in points
+# loss is squared error, so the head estimates the mean gain, which greedy's
+# pick wants. A target is already an expectation given the sims' evidence, not
+# a noisy sample, and near the best move the rare large ones (5-17 points)
+# carry a band's mean, so a robust loss would bias it low. Predicting in points
 # matters: a head predicting win probability, scaled by GAIN_SCALE for the
 # loss, started with ~50-point noise and gradients in the thousands, and
 # collapsed.
 GAIN_SCALE = 100.0
-GAIN_HUBER = 5.0
 # Chosen sets are drawn with weights exp((v - v_best) / TEMPERATURE), plus
 # FLOOR, so they favour moves within a few points of the best.
 SUBSET_TEMPERATURE = 0.05
@@ -268,12 +269,13 @@ def gain_targets(batch: dict[str, torch.Tensor], rows: SetRows, move_idx, row_id
 
 
 def gain_loss(model: GreedyModel, batch: dict[str, torch.Tensor], rows: SetRows) -> torch.Tensor:
-    """Huber on the gains, in percentage points, over every row's candidates."""
+    """Squared error on the gains, in percentage points, over every row's
+    candidates."""
     with torch.autocast(device_type=batch["input_spatial"].device.type, dtype=torch.bfloat16):
         enc, h = model.cache(batch)
         gains, move_idx, row_id = model.gains(enc, h, batch["move_pos_id"], rows)
     target = gain_targets(batch, rows, move_idx, row_id)
-    return F.huber_loss(gains.float(), target * GAIN_SCALE, delta=GAIN_HUBER, reduction="mean")
+    return F.mse_loss(gains.float(), target * GAIN_SCALE)
 
 
 @torch.no_grad()

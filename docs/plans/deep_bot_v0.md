@@ -803,11 +803,13 @@ that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
   unresolved near-tie a target in proportion to how unresolved it is, and a
   clearly worse move about 0.
 - The head is linear and predicts the gain in percentage points; the loss is
-  Huber with a 5-point delta, so it estimates the mean gain. A softplus head,
-  which the many zero targets pushed far negative, stopped passing gradient in
-  the first run. Predicting in points matters too: a head predicting win
-  probability (scaled by 100 for the loss) started with ~50-point noise and
-  collapsed to a constant.
+  squared error, so it estimates the mean gain. Huber would bias it low near
+  the best move, where rare large gains carry a band's mean, and a target is
+  already an expectation, not a noisy sample. A softplus head, which the many
+  zero targets pushed far negative, stopped passing gradient in the first run.
+  Predicting in points matters too: a head predicting win probability (scaled
+  by 100 for the loss) started with ~50-point noise and collapsed to a
+  constant.
 
 **Form 2, `slot`:** a slot decoder with `N_max` slots (default 16).
 - The slots cross-attend to the move embeddings and self-attend to each
