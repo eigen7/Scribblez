@@ -12,6 +12,9 @@ The arms:
               candidate vectors, trained on every (candidate, member) target;
               a set's gain is the least g over its members
   pair_mixed  pair, with mixed seeds
+  direct      base, with the candidate's equity input and the set's size
+              fed straight to the gain head: whether the head can match the
+              targets' means by equity gap and set size once it sees both
 
 The report scores every arm on deployment-style rows (the seed always the
 top-equity move): mean target against mean prediction by equity band and set
@@ -44,7 +47,7 @@ from scribblez.policy_set.model import to_grid
 from scribblez.workloads.policy_set import PolicySetParams
 from torch import nn
 
-ARMS = ("base", "mixed", "pair", "pair_mixed")
+ARMS = ("base", "mixed", "pair", "pair_mixed", "direct")
 # The mixed arms' share of training rows whose seed is drawn.
 DRAWN_SEED_SHARE = 0.5
 # Short: the shakeout pools are a few thousand, not a tag's stream.
@@ -99,6 +102,32 @@ class PairModel(nn.Module):
         g = self.pair_gains(h, equity, move_idx.unsqueeze(1).expand_as(members), members)
         least = g.float().masked_fill(~rows.mask[row_id], torch.inf).min(dim=1).values
         return least, g, move_idx, row_id
+
+
+class DirectGreedyModel(greedy.GreedyModel):
+    """greedy.GreedyModel whose gain head also reads each candidate's equity
+    input and its row's set size (as a share of the largest)."""
+
+    def __init__(self, encoder, num_heads):
+        super().__init__(encoder, num_heads)
+        c = encoder.board_pos_emb.shape[1]
+        self.gain[0] = nn.Linear(c + 2, c)
+
+    def cache(self, batch):
+        """The base cache, its candidate vectors paired with the equity input."""
+        enc, h = super().cache(batch)
+        return enc, (h, batch["move_equity"])
+
+    def gains(self, enc, cached, pos_id, rows):
+        h, equity = cached
+        tokens = self.token(h[rows.chosen]) * rows.mask.unsqueeze(-1)
+        board, g = self.stage(enc.board[rows.position], enc.g[rows.position], tokens, rows.mask)
+        move_idx, row_id = greedy.row_candidates(pos_id, rows.position)
+        vectors = self.encoder.candidate_vectors(enc.e[move_idx], board, g, row_id)
+        size = rows.mask.sum(dim=1)[row_id] / (greedy.MAX_CHOSEN + 1)
+        extra = torch.stack([equity[move_idx], size], dim=1).to(vectors.dtype)
+        gains = self.gain(torch.cat([vectors, extra], dim=1)).squeeze(1)
+        return gains, move_idx, row_id
 
 
 def pair_targets(batch, rows, move_idx, row_id):
@@ -177,9 +206,14 @@ def arm_form(arm: str) -> forms.Form:
             pair_picks,
             lambda model, batch: {},
         )
-    return replace(
+    base = replace(
         forms.FORMS[forms.FORM_GREEDY], loss=functools.partial(greedy_loss, drawn_seed_share=share)
     )
+    if arm == "direct":
+        return replace(
+            base, build=lambda encoder, params: DirectGreedyModel(encoder, params.num_heads)
+        )
+    return base
 
 
 def train(arm, items, params, epochs, device):
