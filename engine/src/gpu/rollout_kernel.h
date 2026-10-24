@@ -18,8 +18,8 @@ constexpr int kPegBags = 101;  // bag size 0..100
 // The kernel's phases, for the per-phase cycle counters thread 0 keeps.
 enum Phase : int {
   kPhaseInit = 0,  // the position copy and the draw
-  kPhaseLeaves,    // rack preparation, leave pricing, exchanges
-  kPhaseSpans,     // span enumeration and the item scan
+  kPhaseLeaves,    // rack preparation, leave pricing, exchanges, span enumeration
+  kPhaseSpans,     // span bounds and the item scan, per pass
   kPhaseItems,     // word-map probes, validation, scoring
   kPhaseApply,     // the reduction and the apply
   kPhaseCross,     // cross-check recomputation
