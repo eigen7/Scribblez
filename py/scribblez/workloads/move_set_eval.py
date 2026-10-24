@@ -203,6 +203,11 @@ class MoveSetEvalParams:
         "(~10 reference passes; the last fifth of each cycle decays); "
         "unused by schedule_free",
     )
+    averaging_window_rows: int = param(
+        1_500_000_000,
+        "schedule_free: the deployed average covers at most the last this many candidate "
+        "moves trained (uniform before then); unused by wsd and muon",
+    )
     weight_decay: float = param(
         1e-4,
         "AdamW weight decay, applied to weight matrices and conv kernels only (not to norm "

@@ -136,6 +136,11 @@ class PolicySetParams:
     lr_cycle_rows: int = param(
         200_000, "period of the WSD schedule's cycle, in pools trained; unused by schedule_free"
     )
+    averaging_window_rows: int = param(
+        2_000_000,
+        "schedule_free: the deployed average covers at most the last this many pools trained "
+        "(uniform before then); unused by wsd and muon",
+    )
     weight_decay: float = param(1e-4, "AdamW weight decay on weight matrices and conv kernels")
     adam_beta2: float = param(0.999, "Adam's second-moment decay rate (beta2)")
     grad_clip: float = param(1.0, "clip each step's gradient to this global norm; 0 = no clipping")

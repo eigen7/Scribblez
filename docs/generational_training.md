@@ -81,7 +81,10 @@ param (`scribblez/generational/optim.py`):
 
 - `schedule_free`: AdamWScheduleFree, which replaces the schedule with an
   averaged iterate, so every generation's export is equally deployable. The
-  default for position_eval and move_set_eval.
+  average is uniform for the first `averaging_window_rows` rows and covers only
+  the most recent that many after, since a whole-run average of a long run mixes
+  weights that have drifted apart (generational/optim.py). The default for
+  position_eval and move_set_eval.
 - `wsd`: AdamW on a cyclic warmup-stable-decay schedule over the rows-clock,
   which leaves a well-annealed checkpoint at the end of every cycle. The only
   schedule for max_move_per_lane and evidence_trajectories.

@@ -204,6 +204,7 @@ def test_schedule_free_recalibrates_the_mset_trunk_batchnorm():
         weight_decay=1e-4,
         adam_beta2=0.999,
         lr_warmup_rows=0,
+        averaging_window_rows=1_000_000,
     )
     opt = build_optimizer(model, params, rows_per_step=64)
     arm = ScheduleFreeArm(params, opt)

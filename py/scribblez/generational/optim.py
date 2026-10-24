@@ -25,6 +25,17 @@ position-evaluation large test set, a schedule-free export evaluated that way
 had badly under-confident placement heads (calibration slope 1.44 instead of
 ~1.05) and a 10% worse win MAE. So eval_mode also recomputes every BatchNorm
 layer's statistics at `x` over a few training batches, which restores both.
+The average also has to forget. With a constant rate, AdamWScheduleFree's
+average is uniform over the whole run, and on long open-ended runs the weights
+drift in directions the loss leaves free (a never-drawn draw logit pushed
+toward minus infinity, the scale of a conv kernel ahead of BatchNorm). At 250M
+rows a deep_bot_leaf_eval model's average had become a mix of weights from
+very different points of that drift, 0.0033 nats worse than the iterate it
+was trained at and 5 points biased on its mid-range win probabilities, while
+at 30M rows another run's average beat its iterate. WindowedAdamWScheduleFree
+therefore averages uniformly for the first `averaging_window_rows` rows and
+over the most recent that many after (docs/deep_bot_leaf_eval_results.md).
+
 The trainer brackets its phases with train_mode / eval_mode without knowing
 which arm needs them; under the scheduled arms they do nothing, because the live
 weights are the only weights and the statistics already match them.
@@ -117,8 +128,9 @@ def build_optimizer(model, params, rows_per_step: int | None = None):
     if params.optimizer == OPTIMIZER_SCHEDULE_FREE:
         if rows_per_step is None:
             rows_per_step = params.batch_size
-        return AdamWScheduleFree(
+        return WindowedAdamWScheduleFree(
             groups,
+            window_steps=max(1, int(params.averaging_window_rows // max(rows_per_step, 1))),
             lr=lr,
             betas=betas,
             warmup_steps=int(params.lr_warmup_rows // max(rows_per_step, 1)),
@@ -140,6 +152,40 @@ def _muon_optimizer(model, params, lr: float, betas: tuple[float, float]) -> Muo
         *({**group, "muon": False} for group in decay_groups(rest, params.weight_decay)),
     ]
     return MuonAdamW(groups, lr=lr, betas=betas)
+
+
+class WindowedAdamWScheduleFree(AdamWScheduleFree):
+    """AdamWScheduleFree whose averaged iterate covers at most the last
+    `window_steps` steps (see the module docstring for why).
+
+    The library gives step k's base iterate the share weight_k / weight_sum of
+    the average, which falls off as 1/k. Capping the running weight_sum just
+    before each step at (window_steps - 1) times the weight that step is about
+    to add floors that share at 1 / window_steps: the average is uniform until
+    then and an exponential moving average over about window_steps steps after.
+    The cap recomputes the step's weight with the library's own formula
+    (schedulefree 1.4's step()), so it stays exact through the warmup ramp."""
+
+    def __init__(self, params, *, window_steps: int, **kwargs):
+        super().__init__(params, **kwargs)
+        if window_steps < 1:
+            raise ValueError(f"window_steps must be >= 1, got {window_steps}")
+        self.window_steps = window_steps
+
+    @staticmethod
+    def _next_weight(group) -> float:
+        """The weight the coming step adds to weight_sum."""
+        k, warmup = group["k"], group["warmup_steps"]
+        lr = group["lr"] * ((k + 1) / warmup if k < warmup else 1.0)
+        lr_max = max(lr, group["lr_max"])
+        return ((k + 1) ** group["r"]) * (lr_max ** group["weight_lr_power"])
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        for group in self.param_groups:
+            cap = (self.window_steps - 1) * self._next_weight(group)
+            group["weight_sum"] = min(group["weight_sum"], cap)
+        return super().step(closure)
 
 
 def _model_forward(model, spatial, scalar):
@@ -179,7 +225,8 @@ def _averaging_weight(group) -> float:
     This is where a schedule-free run does its annealing: the rate never moves,
     but each new base iterate enters the average with a smaller share of it, so
     the deployed weights settle the way a decaying step size would settle them.
-    With the default `r`, the share falls off as 1/k.
+    With the default `r`, the share falls off as 1/k until it reaches
+    WindowedAdamWScheduleFree's floor of 1 / window_steps.
 
     schedulefree computes the weight inside step() and does not keep it, so it
     is recomputed here from the group -- `k` has already been incremented past
