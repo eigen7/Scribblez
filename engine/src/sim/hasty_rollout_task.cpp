@@ -155,6 +155,7 @@ struct RolloutState {
   std::array<Rack, 2> leaves;  // each player's rack after its last move, before its draw
   std::array<int, 2> scores;
   rollout_abi::Bag bag;
+  int scoreless = 0;  // consecutive passes and exchanges
   bool game_over = false;
 };
 
@@ -186,24 +187,43 @@ RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::Rollout
   return st;
 }
 
-// One ply by `mover`: HastyBot's move, applied with the draw and the play-out
-// bonus. Returns the move.
+// With the bag empty, a second scoreless turn in a row ends the game
+// (rollout_abi.h): each player loses its rack's value.
+void end_if_stalemate(RolloutState& st) {
+  if (st.bag.remaining() > 0 || st.scoreless < 2) return;
+  for (int p = 0; p < 2; ++p) st.scores[p] -= st.racks[p].point_value();
+  st.game_over = true;
+}
+
+// HastyBot's move for `mover`, or a pass from an empty rack.
+Move hasty_move(const RolloutState& st, int mover, const Dictionary& dict) {
+  const Rack& rack = st.racks[mover];
+  if (rack.empty()) return Move::pass();
+  const int bag_size = st.bag.remaining();
+  const Rack hidden;
+  const MoveRequest req{st.board,
+                        dict,
+                        rack,
+                        bag_size == 0 ? st.racks[1 - mover] : hidden,
+                        st.scores[mover],
+                        st.scores[1 - mover],
+                        bag_size};
+  return hasty_best_move_wmp(req);
+}
+
+// One ply by `mover`: HastyBot's move, applied with the draw, the play-out
+// bonus and the stalemate rule. Returns the move.
 Move play_ply(RolloutState& st, int mover, const Dictionary& dict, uint64_t seed,
               uint32_t rollout) {
   Rack& rack = st.racks[mover];
   const Rack& other = st.racks[1 - mover];
-  const int bag_size = st.bag.remaining();
-  const Rack hidden;
-  if (rack.empty()) return Move::pass();
-  const MoveRequest req{
-    st.board, dict, rack, bag_size == 0 ? other : hidden, st.scores[mover], st.scores[1 - mover],
-    bag_size};
-  const Move m = hasty_best_move_wmp(req);
+  const Move m = hasty_move(st, mover, dict);
   for (int i = 0; i < m.num_glyphs(); ++i) rack.remove(m.glyph(i).rack_tile());
   st.leaves[mover] = rack;
   if (m.type() == MoveType::PLAY) {
     st.board.apply(m);
     st.scores[mover] += m.score();
+    st.scoreless = 0;
     draw_into(rack, st.bag, std::min(m.num_glyphs(), st.bag.remaining()), seed, rollout);
     if (rack.empty()) {
       st.scores[mover] += 2 * other.point_value();
@@ -212,7 +232,11 @@ Move play_ply(RolloutState& st, int mover, const Dictionary& dict, uint64_t seed
   } else if (m.type() == MoveType::EXCHANGE) {
     draw_into(rack, st.bag, m.num_glyphs(), seed, rollout);
     for (int i = 0; i < m.num_glyphs(); ++i) st.bag.put_back(uint8_t(m.glyph(i).rack_tile()));
+    ++st.scoreless;
+  } else {
+    ++st.scoreless;
   }
+  end_if_stalemate(st);
   return m;
 }
 
@@ -221,10 +245,13 @@ RolloutResult run_one(const RolloutBatch& batch, const rollout_abi::RolloutTask&
   RolloutState st = start_rollout(batch, task);
   const uint64_t seed = batch.groups[batch.starts[task.position].group].seed;
   RolloutResult out;
-  for (int ply = 0; ply < 2; ++ply) {
-    if (st.game_over) break;
-    const int mover = ply == 0 ? 1 : 0;
-    out.moves[ply] = pack_move(play_ply(st, mover, dict, seed, task.rollout));
+  // Two plies, then to the game's end if the bag is empty (rollout_abi.h).
+  for (int ply = 0;
+       ply < rollout_abi::kMaxRolloutPlies && !st.game_over && (ply < 2 || st.bag.remaining() == 0);
+       ++ply) {
+    const int mover = ply % 2 == 0 ? 1 : 0;
+    const Move m = play_ply(st, mover, dict, seed, task.rollout);
+    if (ply < 2) out.moves[ply] = pack_move(m);
   }
   out.game_over = st.game_over ? 1 : 0;
   out.diff = int16_t(st.scores[0] - st.scores[1]);

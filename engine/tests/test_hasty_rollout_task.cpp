@@ -283,3 +283,29 @@ TEST(HastyRolloutCpu, AMoveThatGoesOutWithTheBagEmptyEndsTheGame) {
     EXPECT_EQ(o.wld, terminal_wld(diff)) << "rollout " << i;
   }
 }
+
+TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesIsPlayedToTheEnd) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
+  const Dictionary& dict = nwl23();
+  // A play that draws the bag's last tiles without going out: the opponent
+  // then moves with the bag empty, so no rollout may stop at a leaf.
+  for (uint64_t seed = 1; seed < 64; ++seed) {
+    const Decision d = decision_after(dict, seed, /*plies=*/20);
+    const int bag = d.board.pov_bag_size(d.rack.size());
+    if (bag < 1 || bag >= d.rack.size()) continue;
+    const std::vector<Move> ranked = ranked_moves(d, dict);
+    const auto it = std::ranges::find_if(ranked, [&](const Move& m) {
+      return m.type() == MoveType::PLAY && m.num_glyphs() >= bag && m.num_glyphs() < d.rack.size();
+    });
+    if (it == ranked.end()) continue;
+    const RolloutBatch batch = batch_of(d, {*it}, /*rollouts=*/8);
+    const std::vector<RolloutOutcome> outcomes =
+      CpuRolloutValues(dict, /*threads=*/1, synthetic_leaf()).run(batch);
+    for (size_t i = 0; i < outcomes.size(); ++i) {
+      EXPECT_EQ(outcomes[i].result.game_over, 1) << "seed " << seed << " rollout " << i;
+      EXPECT_EQ(outcomes[i].wld, terminal_wld(outcomes[i].result.diff)) << "rollout " << i;
+    }
+    return;
+  }
+  FAIL() << "no game reached a play that empties the bag";
+}
