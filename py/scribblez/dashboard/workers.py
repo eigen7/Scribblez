@@ -58,7 +58,7 @@ from cloud.ssh_transfer import (
     sweep_dirs,
     sweep_stopped,
 )
-from cloud.worker_entrypoint import EXIT_INTERRUPTED
+from cloud.worker_entrypoint import EXIT_FATAL, EXIT_INTERRUPTED
 from cloud.worker_env import bundle_worker_env
 from tornado.ioloop import IOLoop
 
@@ -310,6 +310,30 @@ def _note_finished(w: tasks.WorkerRecord) -> bool:
     w.desired_state = "paused"
     w.finished = True
     return True
+
+
+def _note_fatal(w: tasks.WorkerRecord, why: str) -> bool:
+    """Record that slot `w`'s worker exited with EXIT_FATAL, its state unusable
+    (a trainer whose model went non-finite): restarting it would only repeat
+    the failure, so the slot is paused as failed, `why` its reason, until an
+    operator's Start. Returns whether the slot changed."""
+    if w.desired_state != "running":
+        return False
+    w.desired_state = "paused"
+    w.failed = f"{w.worker_id}: {why}"
+    return True
+
+
+def _last_log_line(path: Path) -> str:
+    """The last non-empty line of the log at `path`, or "" if it has none."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 4096))
+            lines = f.read().decode(errors="replace").splitlines()
+    except OSError:
+        return ""
+    return next((line.strip() for line in reversed(lines) if line.strip()), "")
 
 
 def _trainer_finished(spec: workloads.WorkloadSpec, task: tasks.TaskRecord) -> bool:
@@ -855,6 +879,8 @@ class WorkerManager:
                 spec, task, w
             ):
                 _note_finished(w)
+            elif self._exits[key].startswith(f"exit {EXIT_FATAL}:"):
+                _note_fatal(w, self._exits[key])
         elif probe in ("running", "paused"):
             self._exits.pop(key, None)
         # Finding no container clears nothing: that is usually a slot whose
@@ -1935,7 +1961,7 @@ class WorkerManager:
                 if reason and not alive:
                     info["exit_reason"] = reason
             if w.failed and not alive:
-                info["exit_reason"] = w.failed  # why the tag queue gave up on it
+                info["exit_reason"] = w.failed  # why the slot was given up on
             # Real liveness, for reconcile's desired-vs-observed enforcement.
             info["observed_running"] = alive
             out.append(info)
@@ -1959,8 +1985,12 @@ class WorkerManager:
                 if proc is not None:
                     proc.poll()  # reap our own exited child, so it is not seen alive
                 seen[w.worker_id] = self._local_alive(spec, task, w)
-                if not seen[w.worker_id] and self._local_exit_code(spec, task, w) == 0:
+                code = None if seen[w.worker_id] else self._local_exit_code(spec, task, w)
+                if code == 0:
                     _note_finished(w)
+                elif code == EXIT_FATAL:
+                    log = self.tasks.paths(spec, task.tag).logs_dir / f"{w.worker_id}.log"
+                    _note_fatal(w, f"exit {code}: {_last_log_line(log)}")
         for w in task.workers:
             self._note_down(spec, task, w)
         if task.workers:
