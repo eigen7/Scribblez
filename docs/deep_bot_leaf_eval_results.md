@@ -186,12 +186,12 @@ Each arm's log loss minus its fitted table's, mean of the last 5 generations:
 
 | Tiles in the pool | transformer + join | transformer | conv + join | conv |
 |---|---|---|---|---|
-| 0–20 | −0.0230 | −0.0210 | −0.0217 | −0.0217 |
+| 1–20 | −0.0230 | −0.0210 | −0.0217 | −0.0217 |
 | 21–40 | −0.0094 | −0.0093 | −0.0096 | −0.0095 |
 | 41–60 | −0.0066 | −0.0067 | −0.0075 | −0.0072 |
 | 61–100 | −0.0072 | −0.0066 | −0.0069 | −0.0074 |
 
-In absolute terms, the 0–20 band falls from about 0.294 for the table to
+In absolute terms, the 1–20 band falls from about 0.294 for the table to
 0.271 for the models, about 7% relative. The other bands improve by 1–2%.
 Near the end of the game, the board and the exact tiles left matter more than
 spread plus leave value, and those are what the table cannot see.
@@ -274,7 +274,7 @@ was never ahead.
 | Tiles in the pool | 32 ch, join planes | 32 ch, no join planes | Difference | 64 ch, no join planes |
 |---|---|---|---|---|
 | overall | 0.4673 | 0.4682 | −0.0009 | 0.4669 |
-| 0–20 | 0.2686 | 0.2711 | −0.0025 | 0.2666 |
+| 1–20 | 0.2686 | 0.2711 | −0.0025 | 0.2666 |
 | 21–40 | 0.3852 | 0.3860 | −0.0009 | 0.3845 |
 | 41–60 | 0.4912 | 0.4917 | −0.0005 | 0.4917 |
 | 61–100 | 0.6161 | 0.6164 | −0.0003 | 0.6161 |

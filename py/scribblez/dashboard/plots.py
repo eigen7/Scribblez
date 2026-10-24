@@ -308,7 +308,10 @@ LEAVE_INFERENCE_QUALITY = [
 # rows, the model's log loss of the mover's expected score beside the win
 # tables' (the one fitted from the window, and Macondo's), overall and by pool
 # size, and the model's own WLD and score-differential errors.
-LEAF_EVAL_POOL_BANDS = ("0_20", "21_40", "41_60", "61_100")
+# deep_bot_leaf_eval/evaluation.py's POOL_BANDS, copied: importing it would
+# load the engine library. A leaf's pool is never empty (its bag outlasts both
+# refills), so the first band starts at 1.
+LEAF_EVAL_POOL_BANDS = ("1_20", "21_40", "41_60", "61_100")
 LEAF_EVAL_SOURCES = ("model", "wintable", "wintable_macondo")
 LEAF_EVAL_QUALITY = [
     (

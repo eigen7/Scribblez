@@ -24,8 +24,9 @@ from scribblez.deep_bot_leaf_eval.model import LAYOUT
 
 RACK_SIZE = 7
 SCORE_DIFF_SCALE = 100.0  # the row's score differential scale (input_encoder.h)
-# Pool-size bands the log loss is broken down by: (name, lowest, highest).
-POOL_BANDS = (("0_20", 0, 20), ("21_40", 21, 40), ("41_60", 41, 60), ("61_100", 61, 100))
+# Pool-size bands the log loss is broken down by: (name, lowest, highest). A
+# leaf's pool is never empty: its bag outlasts both refills.
+POOL_BANDS = (("1_20", 1, 20), ("21_40", 21, 40), ("41_60", 41, 60), ("61_100", 61, 100))
 EPS = 1e-6
 
 
