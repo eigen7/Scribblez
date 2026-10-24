@@ -34,10 +34,12 @@ class GpuRolloutValues : public RolloutValues {
   std::vector<RolloutOutcome> run(const RolloutBatch& batch) override;
 
   // The last run's seconds in the rollout kernel (with its transfers) and in
-  // the leaf (encoding and the network).
+  // the leaf (encoding and the network), and the leaves the network valued:
+  // the unfinished rollouts', since a finished game's outcome is exact.
   struct Timings {
     double rollout_seconds = 0;
     double leaf_seconds = 0;
+    int leaves = 0;
   };
   const Timings& last_timings() const { return timings_; }
   // The parts, for checks against the CPU reference (gpu_rollout_demo).
@@ -45,8 +47,8 @@ class GpuRolloutValues : public RolloutValues {
   nn::NeuralNet<nn::LeafEvalSpec>& net() { return net_; }
 
  private:
-  // Fills outcomes[first, first + count) from the leaf network.
-  void evaluate_leaves(int first, int count, std::vector<RolloutOutcome>* outcomes);
+  // Fills the outcomes of tasks[0, count) from the leaf network.
+  void evaluate_leaves(const uint32_t* tasks, int count, std::vector<RolloutOutcome>* outcomes);
 
   const Dictionary& dict_;
   GpuHastyRollouts rollouts_;
