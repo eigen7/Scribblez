@@ -249,8 +249,8 @@ checked against HastyBot through the CPU reference below.
   order-dependent, and its purpose, stopping early, has no parallel
   equivalent. A one-pass, loose per-span bound against a cheap lower bound on
   the best equity (the best exchange, or the best single-tile play) can prune
-  spans before probing; it is an optimization to try in PR 3, not a
-  prerequisite.
+  spans before probing. It was built after PR 3 as a two-pass span and item
+  bound (see [Tuning on the pool workload](#tuning-on-the-pool-workload)).
 - **Thread per rollout.** Rejected above: the state does not fit, and the
   control flow diverges everywhere.
 - **Overflow to the CPU on large move sets.** Unnecessary once no list is
