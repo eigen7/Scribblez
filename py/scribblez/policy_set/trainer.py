@@ -31,6 +31,7 @@ from scribblez.ffi import format_layout, task_input_shapes
 from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import progress_line
+from scribblez.generational.finite_guard import check_parameters
 from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.generational.records import TrainRecorder
 from scribblez.move_set_eval.moves import move_encoding_version
@@ -151,6 +152,13 @@ def _deliver_generation(sink, gen, checkpoint_snap, state_snap, recorder, staged
     recorder.deliver_staged(staged)
 
 
+@torch.no_grad()
+def parameter_norm(model: nn.Module) -> float:
+    """The global L2 norm of `model`'s parameters: a slow divergence shows as
+    its growth well before anything goes non-finite."""
+    return float(torch.stack([p.float().norm() for p in model.parameters()]).norm())
+
+
 def train_one_generation(models, optimizer, optim_arm, recorder, paths, params, state, ctx):
     """Train one epoch over the window ending at the cursor generation, then
     evaluate, checkpoint and queue the generation's deliveries."""
@@ -187,6 +195,7 @@ def train_one_generation(models, optimizer, optim_arm, recorder, paths, params, 
         "loss": result.loss,
         **{f"loss_{key}": v for key, v in result.terms.items()},
         **{f"grad_norm_{name}": v for name, v in result.grad_norms.items()},
+        **{f"param_norm_{name}": parameter_norm(model) for name, model in models.items()},
         "lr": optim_arm.current,
         "elapsed_s": elapsed,
         **optim_arm.metrics(),
@@ -198,6 +207,7 @@ def train_one_generation(models, optimizer, optim_arm, recorder, paths, params, 
         for name in (*models, BASELINE.rstrip("_"))
     )
     timed_print(f"[gen {gen}] pools={state.rows_trained} loss={result.loss:.4f} recall@8 {recalls}")
+    check_parameters(models.items(), f"after generation {gen}")
     checkpoint.save(paths, models, optimizer, state, ctx["config"])
     lifecycle.write_train_state(paths, asdict(state))
     staged = recorder.stage_generation(gen, state.rows_trained, record)

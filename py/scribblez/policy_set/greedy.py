@@ -45,20 +45,26 @@ import torch.nn.functional as F
 from torch import nn
 
 from scribblez.policy_set.metrics import SET_SIZES
-from scribblez.policy_set.model import Encoded, PolicySetEncoder, to_grid
+from scribblez.policy_set.model import Encoded, PolicySetEncoder, mean_spread, to_grid
 
-# The gain loss reads win probabilities in percentage points: Huber with this
-# delta, so typical gains (a few points) fall in its quadratic range.
+# The head predicts the gain in percentage points of win probability, and the
+# loss is squared error, so the head estimates the mean gain, which greedy's
+# pick wants. A target is already an expectation given the sims' evidence, not
+# a noisy sample, and near the best move the rare large ones (5-17 points)
+# carry a band's mean, so a robust loss would bias it low. Predicting in points
+# matters: a head predicting win probability, scaled by GAIN_SCALE for the
+# loss, started with ~50-point noise and gradients in the thousands, and
+# collapsed.
 GAIN_SCALE = 100.0
-GAIN_HUBER = 5.0
 # Chosen sets are drawn with weights exp((v - v_best) / TEMPERATURE), plus
 # FLOOR, so they favour moves within a few points of the best.
 SUBSET_TEMPERATURE = 0.05
 SUBSET_FLOOR = 1e-3
-# The gain head's starting output bias: softplus(-4) is about 0.018, a gain of
-# a couple of points, where most targets sit. At 0 a fresh head would predict
-# 0.69 (69 points) for every candidate.
-GAIN_BIAS_INIT = -4.0
+# The gain head's starting output bias, in points: most targets are about 0
+# (on fresh pools the median is 0, the 99th percentile 0.24 points). The head is
+# linear, not softplus, whose output the many zero targets pushed far negative
+# until it passed no gradient (the first run's head went dead there).
+GAIN_BIAS_INIT = 0.0
 # The largest chosen set a training row holds, the seed included: one less
 # than the largest set the eval builds.
 MAX_CHOSEN = max(SET_SIZES) - 1
@@ -188,13 +194,13 @@ class GreedyModel(nn.Module):
         self, enc: Encoded, h: torch.Tensor, pos_id: torch.Tensor, rows: SetRows
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Each row's predicted gain for every candidate of its position, in
-        win probability: (gains, global candidate indices, row ids), (Mr,)
-        each."""
+        percentage points of win probability: (gains, global candidate
+        indices, row ids), (Mr,) each."""
         tokens = self.token(h[rows.chosen]) * rows.mask.unsqueeze(-1)
         board, g = self.stage(enc.board[rows.position], enc.g[rows.position], tokens, rows.mask)
         move_idx, row_id = row_candidates(pos_id, rows.position)
         vectors = self.encoder.candidate_vectors(enc.e[move_idx], board, g, row_id)
-        return F.softplus(self.gain(vectors)).squeeze(1), move_idx, row_id
+        return self.gain(vectors).squeeze(1), move_idx, row_id
 
 
 def sample_rows(
@@ -263,14 +269,32 @@ def gain_targets(batch: dict[str, torch.Tensor], rows: SetRows, move_idx, row_id
 
 
 def gain_loss(model: GreedyModel, batch: dict[str, torch.Tensor], rows: SetRows) -> torch.Tensor:
-    """Huber on the gains, in percentage points, over every row's candidates."""
+    """Squared error on the gains, in percentage points, over every row's
+    candidates."""
     with torch.autocast(device_type=batch["input_spatial"].device.type, dtype=torch.bfloat16):
         enc, h = model.cache(batch)
         gains, move_idx, row_id = model.gains(enc, h, batch["move_pos_id"], rows)
     target = gain_targets(batch, rows, move_idx, row_id)
-    return F.huber_loss(
-        gains.float() * GAIN_SCALE, target * GAIN_SCALE, delta=GAIN_HUBER, reduction="mean"
-    )
+    return F.mse_loss(gains.float(), target * GAIN_SCALE)
+
+
+@torch.no_grad()
+def greedy_diagnostics(
+    model: GreedyModel, batch: dict[str, torch.Tensor]
+) -> dict[str, torch.Tensor]:
+    """The first step's gains' spread over each position's candidates (the set
+    its seed alone), in percentage points."""
+    pos_id = batch["move_pos_id"]
+    num_positions = batch["input_spatial"].shape[0]
+    equity, _ = to_grid(batch["move_equity"].float(), pos_id, num_positions, -torch.inf)
+    sizes = torch.bincount(pos_id, minlength=num_positions)
+    seeds = (torch.cumsum(sizes, 0) - sizes + equity.argmax(dim=1)).tolist()
+    rows = make_rows(list(range(num_positions)), [[s] for s in seeds]).to(pos_id.device)
+    with torch.autocast(device_type=pos_id.device.type, dtype=torch.bfloat16):
+        enc, h = model.cache(batch)
+        gains, _, _ = model.gains(enc, h, pos_id, rows)
+    grid, pad = to_grid(gains.float(), pos_id, num_positions)
+    return {"spread": mean_spread(grid, pad)}
 
 
 @torch.no_grad()

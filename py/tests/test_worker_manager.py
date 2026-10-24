@@ -22,6 +22,7 @@ from cloud.bundles import BundleManifest
 from cloud.credentials import RegistryConfig
 from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
+from cloud.worker_entrypoint import EXIT_FATAL
 from scribblez import workloads
 from scribblez.dashboard import db, tasks
 from scribblez.dashboard import workers as workers_mod
@@ -994,6 +995,42 @@ def test_an_ssh_worker_that_died_is_exited_and_restarted(manager, spec, task, mo
     (info,) = manager.worker_status(spec, task, observe=True)
     assert info["state"] == "exited"
     assert w.desired_state == "running" and not w.finished
+
+
+def test_an_ssh_worker_that_exits_fatally_is_failed_not_restarted(manager, spec, task, monkeypatch):
+    """A trainer whose model went non-finite would resume into the same
+    failure: the slot is paused as failed, its log's last line the reason,
+    until Start."""
+    _fake_ssh(monkeypatch, state="stopped")
+    reason = f"exit {EXIT_FATAL}: fatal: non-finite slot loss at batch 3"
+    monkeypatch.setattr(_FakeSshMachine, "exit_reason", reason)
+    w = manager.add_ssh(spec, task, "generate", host="u@h", threads=None)
+    w.desired_state, w.launched = "running", True
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert info["state"] == "failed" and "non-finite slot loss" in info["exit_reason"]
+    assert w.desired_state == "paused" and w.failed == f"{w.worker_id}: {reason}"
+    monkeypatch.setattr(WorkerManager, "_run_ssh_container", lambda *a: None)
+    manager._probes.clear()
+    monkeypatch.setattr(_FakeSshMachine, "state", "missing")
+    manager.set_worker_state(spec, task, w.worker_id, run=True)
+    assert w.failed is None and w.desired_state == "running"
+
+
+def test_a_local_worker_that_exits_fatally_is_failed_with_its_last_log_line(
+    manager, spec, task, monkeypatch
+):
+    w = manager.add_local(spec, task, "generate", threads=1)
+    w.desired_state = "running"
+    log = manager.tasks.paths(spec, "t").logs_dir / f"{w.worker_id}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("generation 4: window [...]\nfatal: non-finite greedy loss at batch 0\n\n")
+    manager._local[_key(spec, "t", w.worker_id)] = SimpleNamespace(
+        poll=lambda: EXIT_FATAL, returncode=EXIT_FATAL
+    )
+    (info,) = manager.worker_status(spec, task, observe=True)
+    assert info["state"] == "failed"
+    assert w.desired_state == "paused"
+    assert w.failed == f"{w.worker_id}: exit {EXIT_FATAL}: fatal: non-finite greedy loss at batch 0"
 
 
 def test_a_new_container_resumes_its_slots_stats(manager, spec, task):

@@ -2,9 +2,10 @@
 
 The worker entrypoint (py/cloud/worker_entrypoint.py) owns process concerns
 (env parsing, sink construction, the SIGTERM handler) and hands a
-WorkerContext to the role's runner. Runners use two helpers from here:
-WorkerStopped, which the SIGTERM handler raises to unwind any loop, and
-WorkerStats, the per-worker record behind the dashboard's Stats tab.
+WorkerContext to the role's runner. Runners use three helpers from here:
+WorkerStopped, which the SIGTERM handler raises to unwind any loop;
+WorkerFatal, which a runner raises when a restart would fail the same way;
+and WorkerStats, the per-worker record behind the dashboard's Stats tab.
 """
 
 import time
@@ -12,6 +13,14 @@ import time
 
 class WorkerStopped(Exception):
     """Raised out of a runner's loop by the entrypoint's SIGTERM handler."""
+
+
+class WorkerFatal(Exception):
+    """Raised by a runner whose own state is unusable, such as a trainer whose
+    model went non-finite: restarted, it would resume into the same failure.
+    The entrypoint exits with EXIT_FATAL, and the dashboard pauses the slot as
+    failed, with the message as the reason, until an operator starts it
+    again. The message is printed as the worker's last log line."""
 
 
 # Per-cycle timing samples retained in the published stats record; enough for

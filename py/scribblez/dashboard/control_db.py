@@ -248,7 +248,9 @@ def _slot_state(task, w) -> tuple[str, str | None, str | None]:
     """(wanted, outcome, outcome source) from today's slot fields."""
     wanted = "stop" if w.desired_state != "running" else "park" if w.role in task.gates else "run"
     if w.failed:
-        return wanted, "failed", "queue"
+        # The queue records its failure on the task too; a fatal exit fails
+        # only the slot.
+        return wanted, "failed", "queue" if task.failure else "exited"
     if w.finished:
         return wanted, "finished", "exited"
     return wanted, None, None

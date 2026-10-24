@@ -10,7 +10,9 @@ the opponent's rack (dataset.opp_rack_input), as a scalar block beside the
 board row's, and each candidate's static equity relative to its pool's best
 (dataset.relative_equity) joins the candidate's embedding, so a form can learn
 the correction to the static-equity ranking rather than the ranking itself.
-Its output is one vector per candidate, which a form reads.
+Its output is one vector per candidate, layer-normalized, which a form reads:
+unnormalized, the vectors' scale ran away in training, driving the slot form's
+pointer logits to divergence and the greedy form's gain head into saturation.
 """
 
 from __future__ import annotations
@@ -73,6 +75,7 @@ class PolicySetEncoder(nn.Module):
         self.fuse = nn.Sequential(
             nn.Linear(4 * channels, channels), nn.ReLU(inplace=True), nn.Linear(channels, channels)
         )
+        self.vector_norm = nn.LayerNorm(channels)
 
     def encode(self, batch: dict[str, torch.Tensor]) -> Encoded:
         """A batch (dataset.PoolBatcher.build) -> its board token maps,
@@ -99,16 +102,28 @@ class PolicySetEncoder(nn.Module):
         self, e: torch.Tensor, board: torch.Tensor, g: torch.Tensor, pos_id: torch.Tensor
     ) -> torch.Tensor:
         """Candidate embeddings (M, C) attending into their positions' board
-        maps (P, 225, C), fused with the summaries (P, 3C) -> (M, C). The
-        greedy form passes a conditioned map and summary."""
+        maps (P, 225, C), fused with the summaries (P, 3C) and normalized ->
+        (M, C). The greedy form passes a conditioned map and summary."""
         attended = attend_by_position(self.cross_attn, e, board, pos_id)
-        return self.fuse(torch.cat([attended, g[pos_id]], dim=1))
+        return self.vector_norm(self.fuse(torch.cat([attended, g[pos_id]], dim=1)))
 
     def forward(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """A batch -> the candidates' vectors (M, C) and the positions'
         summaries (P, 3C)."""
         enc = self.encode(batch)
         return self.candidate_vectors(enc.e, enc.board, enc.g, batch["move_pos_id"]), enc.g
+
+
+def mean_spread(grid: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
+    """The mean over positions of the standard deviation of a padded grid's
+    values (P, maxK) across each position's candidates: about 0 for a head
+    that scores every candidate alike."""
+    valid = (~pad).to(grid.dtype)
+    n = valid.sum(dim=1).clamp(min=1)
+    values = torch.where(pad, 0.0, grid)
+    mean = values.sum(dim=1) / n
+    var = (((values - mean.unsqueeze(1)) * valid) ** 2).sum(dim=1) / n
+    return var.sqrt().mean()
 
 
 def to_grid(values: torch.Tensor, pos_id: torch.Tensor, num_positions: int, fill=0.0):
