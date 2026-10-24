@@ -10,6 +10,7 @@
 #include "util/assert.h"
 #include "util/exception.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
@@ -50,6 +51,21 @@ int BlockDecoder::label_floats_for(DecodeTask task) {
       return LeaveInferenceTask::kLabelFloats;
     case DecodeTask::kLeafEval:
       return LeafEvalTask::kLabelFloats;
+  }
+  std::abort();  // unreachable: the switch covers every DecodeTask
+}
+
+EligibleSpan BlockDecoder::row_turns(DecodeTask task, const GameMetadata& meta) {
+  switch (task) {
+    case DecodeTask::kMaxMovePerLane:
+      return {0, int(meta.num_turns)};
+    case DecodeTask::kLeafEval:
+      // Turn t's draw leaves tiles in the bag iff turn t + 1 began with some.
+      return {meta.eligible_begin, std::max(int(meta.eligible_begin), meta.eligible_end - 1)};
+    case DecodeTask::kPositionEval:
+    case DecodeTask::kLeaveInference:
+    case DecodeTask::kPublicLeaveInference:
+      return {meta.eligible_begin, meta.eligible_end};
   }
   std::abort();  // unreachable: the switch covers every DecodeTask
 }

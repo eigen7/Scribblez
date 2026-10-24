@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from scribblez import ffi
 from scribblez.dataset import SlogDataset
+from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.supply_registers import TILE_COUNTS
 
 # This checkout's own binaries, not the primary checkout's -- see the note in
@@ -205,3 +206,42 @@ def test_format_layout_serves_the_offsets_these_tests_assume():
         MY_LEAVE_VALUE,
     )
     assert (layout["opp_leave_value"], layout["pool_size"]) == (OPP_LEAVE_VALUE, POOL_SIZE)
+
+
+@pytest.fixture(scope="module")
+def played_games(tmp_path_factory) -> Path:
+    """Real HastyBot self-play, whose bags run out (test_slog_writer's short
+    games never empty theirs)."""
+    if not (_ENGINE_DIR / "play_game").is_file():
+        pytest.skip("play_game not built")
+    out = tmp_path_factory.mktemp("played")
+    run_games(out, 6, threads=1, player_spec=hasty_player_spec(0.0, 10, endgame=True), seed=7)
+    return out
+
+
+def test_every_row_keeps_tiles_in_the_bag_after_both_refills(played_games):
+    """DeepBot values a leaf only if the bag still holds tiles after both
+    players refill (rollouts that empty it play to the end), so every row must
+    be such a leaf: the pool outlasts both refills to 7."""
+    ds = SlogDataset(played_games, task=_TASK, apply_symmetry=False, num_workers=1)
+    scalar = np.concatenate([b["input_scalar"].numpy() for b in ds.iter_batches(256, seed=0)])
+    my = scalar[:, MY_LEAVE0:OPP_LEAVE0].sum(axis=1)
+    opp = scalar[:, OPP_LEAVE0:POOL0].sum(axis=1)
+    pool = scalar[:, POOL0 : POOL0 + TILE_KINDS].sum(axis=1)
+    assert (pool > (7 - opp) + (7 - my)).all()
+    assert (pool <= 14).any()  # the late rows this guards are present
+
+
+def test_each_game_drops_its_last_eligible_turn(played_games):
+    """The leaf rows are the eligible turns but the last, whose draw empties
+    the bag."""
+    header = ffi.struct_dtype("SlogFileHeader")
+    expected = 0
+    for path in sorted(played_games.glob("*.slog")):
+        num_games = int(np.fromfile(path, header, count=1)[0]["num_games"])
+        metas = np.fromfile(
+            path, ffi.struct_dtype("SlogGameMetadata"), count=num_games, offset=header.itemsize
+        )
+        begin, end = metas["eligible_begin"].astype(int), metas["eligible_end"].astype(int)
+        expected += int(np.maximum(end - 1 - begin, 0).sum())
+    assert SlogDataset(played_games, task=_TASK).num_samples == expected

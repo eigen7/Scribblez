@@ -6,6 +6,7 @@
 // A decoder keeps its encoder and scratch turn buffer across calls to avoid
 // reallocating them, so each DataLoader worker thread owns one.
 
+#include "data/binary_log.h"
 #include "encoding/input_encoder.h"
 #include "encoding/position_encoder.h"
 #include "game/game_log.h"
@@ -32,8 +33,9 @@ namespace binlog {
 //                      pre-move. Its labels are the opponent's leave.
 //   kPublicLeaveInference -- PublicLeaveInferenceTask rows: kLeaveInference's
 //                      rows and labels, the input in its public view.
-//   kLeafEval       -- LeafEvalTask rows; one per eligible turn, always
-//                      post-move. Its labels are the game's outcome.
+//   kLeafEval       -- LeafEvalTask rows; one per eligible turn after which
+//                      the bag still holds tiles, always post-move. Its
+//                      labels are the game's outcome.
 enum class DecodeTask {
   kPositionEval,
   kMaxMovePerLane,
@@ -60,6 +62,13 @@ class BlockDecoder {
   // is used only in error messages.
   void decode(const char* buf, const std::string& path, int64_t local_start, int64_t n_rows,
               const uint8_t* transposes, bool post_move, int64_t output_row_start, float* output);
+
+  // The turns of a game that become `task` rows, [begin, end): every turn for
+  // kMaxMovePerLane; for kLeafEval, the eligible turns after which the bag
+  // still holds tiles, since a DeepBot rollout whose two plies empty the bag
+  // plays to the game's end instead of stopping at a leaf; the eligible region
+  // (GameMetadata) otherwise.
+  static EligibleSpan row_turns(DecodeTask task, const GameMetadata& meta);
 
   // Whether `task` rows read the .slog's .forgone sidecar.
   static bool reads_forgone(DecodeTask task);
