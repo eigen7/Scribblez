@@ -27,6 +27,9 @@ class Form:
     # (model, batch, n) -> each position's set of up to n, as candidate
     # indices within the position.
     sets: Callable[[nn.Module, Batch, int], list[list[int]]]
+    # (model, batch) -> health scalars keyed by their record suffix, such as
+    # the spread of its scores over a position's candidates.
+    diagnose: Callable[[nn.Module, Batch], dict[str, torch.Tensor]]
 
 
 def _slot_build(encoder: PolicySetEncoder, params) -> nn.Module:
@@ -57,8 +60,8 @@ def _greedy_loss(model, batch: Batch, params, rng) -> dict[str, torch.Tensor]:
 
 
 FORMS = {
-    FORM_SLOT: Form(_slot_build, _slot_loss, _slot_sets),
-    FORM_GREEDY: Form(_greedy_build, _greedy_loss, greedy.greedy_picks),
+    FORM_SLOT: Form(_slot_build, _slot_loss, _slot_sets, slot.slot_diagnostics),
+    FORM_GREEDY: Form(_greedy_build, _greedy_loss, greedy.greedy_picks, greedy.greedy_diagnostics),
 }
 
 

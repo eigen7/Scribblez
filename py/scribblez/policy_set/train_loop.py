@@ -20,6 +20,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from scribblez.generational.finite_guard import FiniteGuard
 from scribblez.policy_set import metrics
 from scribblez.policy_set.dataset import PoolBatcher, PoolItem, batch_order
 from scribblez.policy_set.forms import FORMS
@@ -65,7 +66,9 @@ def run_epoch(
     on_batch: Callable[[int, int, float, int], None] | None = None,
 ) -> EpochResult:
     """One pass over `items` in shuffled batches of `params.batch_size`
-    pools. A pool is the rows-clock's unit."""
+    pools. A pool is the rows-clock's unit. Raises WorkerFatal
+    (generational.finite_guard) if a step's loss or a form's gradient norm is
+    non-finite, by the epoch's end at the latest."""
     models.train()
     rng = np.random.default_rng(seed)
     clip = params.grad_clip if params.grad_clip > 0 else float("inf")
@@ -75,9 +78,11 @@ def run_epoch(
     sums: dict[str, torch.Tensor] = {}
     norms: dict[str, torch.Tensor] = {}
     n_batches = n_rows = 0
+    guard = FiniteGuard()
     t0 = last = time.time()
     for idx in batch_order(len(items), params.batch_size, seed):
-        batch = to_device(batcher.build([items[i] for i in idx]), device)
+        chosen = [items[i] for i in idx]
+        batch = to_device(batcher.build(chosen), device)
         rows_trained += len(idx)
         n_rows += len(idx)
         if lr_fn is not None:
@@ -87,9 +92,17 @@ def run_epoch(
         total = sum(v for terms in losses.values() for v in terms.values())
         optimizer.zero_grad(set_to_none=True)
         total.backward()
+        step_norms = {}
         for name, model in models.items():
-            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip).detach()
-            norms[name] = norms.get(name, 0.0) + norm
+            step_norms[name] = torch.nn.utils.clip_grad_norm_(model.parameters(), clip).detach()
+            norms[name] = norms.get(name, 0.0) + step_norms[name]
+        guard.observe(
+            f"batch {n_batches} ({_batch_names(chosen)})",
+            {
+                **{f"{name} loss": sum(terms.values()) for name, terms in losses.items()},
+                **{f"{name} gradient norm": norm for name, norm in step_norms.items()},
+            },
+        )
         optimizer.step()
         n_batches += 1
         sums["total"] = sums.get("total", 0.0) + total.detach()
@@ -98,8 +111,10 @@ def run_epoch(
                 key = f"{name}_{term}"
                 sums[key] = sums.get(key, 0.0) + v.detach()
         if on_batch is not None and time.time() - last > 1.0:
+            guard.check()  # the progress line syncs anyway
             on_batch(n_batches, n_rows, time.time() - t0, rows_trained)
             last = time.time()
+    guard.check()
     nb = max(n_batches, 1)
     return EpochResult(
         loss=float(sums.get("total", 0.0)) / nb,
@@ -107,6 +122,11 @@ def run_epoch(
         grad_norms={k: float(v) / nb for k, v in norms.items()},
         rows_trained=rows_trained,
     )
+
+
+def _batch_names(items: list[PoolItem]) -> str:
+    """A batch's pools as "<.slog stem> game G turn T", for an error."""
+    return ", ".join(f"{it.slog.stem} game {it.pool.game} turn {it.pool.turn}" for it in items)
 
 
 def precomputed_pick(by_pool: dict[int, list[int]], pool, n: int) -> np.ndarray:
@@ -119,8 +139,9 @@ def precomputed_pick(by_pool: dict[int, list[int]], pool, n: int) -> np.ndarray:
 def evaluate(
     models: nn.ModuleDict, batcher: PoolBatcher, items: list[PoolItem], device, params
 ) -> dict[str, float]:
-    """Per form: its held-out loss terms and the set metrics of its sets
-    (metrics.set_metrics), keyed under "<form>_"."""
+    """Per form: its held-out loss terms, its diagnostics (forms.Form.diagnose)
+    and the set metrics of its sets (metrics.set_metrics), keyed under
+    "<form>_eval_"."""
     models.eval()
     rng = np.random.default_rng(EVAL_SEED)
     n_max = max(metrics.SET_SIZES)
@@ -135,6 +156,8 @@ def evaluate(
                 sums[key] = sums.get(key, 0.0) + v.item()
         for name, model in models.items():
             picks[name] += FORMS[name].sets(model, batch, n_max)
+            for key, v in FORMS[name].diagnose(model, batch).items():
+                sums[f"{name}_eval_{key}"] = sums.get(f"{name}_eval_{key}", 0.0) + v.item()
         n_batches += 1
     out = {k: v / max(n_batches, 1) for k, v in sums.items()}
     pool_list = [it.pool for it in items]

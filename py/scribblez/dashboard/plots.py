@@ -373,6 +373,14 @@ POLICY_SET_QUALITY = (
             ["grad_norm_slot", "grad_norm_greedy"],
             {"log": True},
         ),
+        # Health: a divergence shows as a growing norm, a dead or collapsed
+        # head as a spread near 0.
+        ("Parameter norm, by form", ["param_norm_slot", "param_norm_greedy"], {"log": True}),
+        (
+            "Score spread over a position's candidates (held-out)",
+            ["slot_eval_spread", "greedy_eval_spread"],
+        ),
+        ("Slot form: pointer scale", ["slot_eval_pointer_scale"]),
         ("Pools", ["pools", "eval_pools"]),
         ("Mean candidates per pool", ["pool_size", "eval_pool_size"]),
         ("Mean label entropy (nats)", ["label_entropy", "eval_label_entropy"]),
