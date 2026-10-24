@@ -802,11 +802,19 @@ that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
   so its near-ties are coin flips. The expected improvement gives an
   unresolved near-tie a target in proportion to how unresolved it is, and a
   clearly worse move about 0.
-- The loss is Huber on the gain.
+- The head predicts `log(gain + 0.01)`, the gain in percentage points, and the
+  loss is Huber in that log space. Nearly every target is about 0 (on fresh
+  pools the median is 0 and the 99th percentile 0.24 points), so on a linear
+  scale a constant is almost optimal, and a head trained there collapsed to
+  one; the log keeps the order the sets read. The head is linear: a softplus
+  head, which the zero targets pushed far negative, stopped passing gradient
+  in the first run.
 
 **Form 2, `slot`:** a slot decoder with `N_max` slots (default 16).
 - The slots cross-attend to the move embeddings and self-attend to each
-  other, and each points to a move by softmax.
+  other, and each points to a move by softmax over its cosine similarity to
+  each move times a learned scale, capped at 50, in FP32. The unbounded dot
+  products of the first run diverged.
 - The loss is the coverage loss over slot prefixes, with the pool's `q(a)` as
   the label distribution, summed over `N` in {1, 2, 4, 8, 16}.
 
@@ -819,7 +827,19 @@ trains them on the same batches: one optimizer over both, the summed loss,
 each model's gradient clipped on its own, which updates each as a separate
 optimizer would. Records carry the form as a key prefix (`loss_greedy_gain`,
 `slot_eval_recall_8`, ...), so the dashboard plots them side by side. Both
-models are move-set-sized, so one GPU holds them.
+models are move-set-sized, so one GPU holds them. The encoder's candidate
+vectors are layer-normalized; unnormalized, their scale ran away in the first
+run and drove both forms' failures.
+
+**A non-finite step stops the trainer.** Under bf16 autocast with no loss
+scaler, a non-finite loss or gradient norm is never a transient to step past,
+so the trainer raises before the step reaches a checkpoint
+(`generational/finite_guard.py`), naming the step's pools, and checks every
+weight before each checkpoint. The worker exits fatally
+(`cloud/worker_entrypoint.py`'s `EXIT_FATAL`), and the dashboard pauses the
+slot as failed instead of restarting it into the same failure. Each form's
+parameter norm and the spread of its scores over a position's candidates are
+recorded every generation, so a slow divergence or a collapse shows early.
 
 A form per machine needs two trainer roles reading one data home. Eviction
 would then wait for both trainers' pulls, an extension of the `pulled`

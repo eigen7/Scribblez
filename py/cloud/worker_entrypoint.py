@@ -59,7 +59,7 @@ from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.hardware import default_thread_count
 from scribblez.paths import DEFAULT_MOUNT_ROOT
-from scribblez.workloads.worker import WorkerStopped
+from scribblez.workloads.worker import WorkerFatal, WorkerStopped
 
 from cloud.sinks import make_sink
 
@@ -89,6 +89,10 @@ WORKER_ENV_VARS = (
 # is finished and not restarted), so an interrupted worker must not return it.
 # 143 is the conventional code for death by SIGTERM (128 + 15).
 EXIT_INTERRUPTED = 143
+# The exit code of a runner that raised WorkerFatal: its state is unusable and a
+# restart would fail the same way, so the dashboard marks the slot failed
+# rather than restarting it. 70 is sysexits.h's EX_SOFTWARE.
+EXIT_FATAL = 70
 _interrupted = False
 
 
@@ -173,6 +177,10 @@ def main() -> int:
     except WorkerStopped:
         print("SIGTERM during startup; exiting")
         return EXIT_INTERRUPTED
+    except WorkerFatal as e:
+        # The last log line: the dashboard shows it as the slot's reason.
+        print(f"fatal: {e}", flush=True)
+        return EXIT_FATAL
     return EXIT_INTERRUPTED if _interrupted else code
 
 

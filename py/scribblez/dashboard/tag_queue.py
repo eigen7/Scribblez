@@ -629,9 +629,12 @@ class TagQueue:
             print(f"tag queue: {m.name}'s instance is gone ({who}); not requeued")
 
     def _failure(self, spec, task) -> str | None:
-        """The first slot that crashed FAIL_AFTER times within the window, as
-        "<worker_id>: <last exit reason>", or None."""
+        """The first slot that exited fatally (its failed reason) or crashed
+        FAIL_AFTER times within the window, as "<worker_id>: <last exit
+        reason>", or None."""
         for w in task.workers:
+            if w.failed is not None:
+                return w.failed
             crashes = self._m.recent_crashes(spec, task.tag, w.worker_id, FAIL_WINDOW_SECONDS)
             if len(crashes) >= FAIL_AFTER:
                 return f"{w.worker_id}: {crashes[-1]}"

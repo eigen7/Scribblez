@@ -2,8 +2,10 @@
 slot decoder"). `slots` learned query slots, conditioned on the position's
 summary, self-attend and cross-attend to the position's candidate vectors
 (model.PolicySetEncoder), and each points to one candidate through a softmax
-over the dot products. Trained with the coverage loss over slot prefixes, the
-first N slots serve as the set for any N up to `slots`.
+over its cosine similarities to them, times a learned scale. Bounded logits
+keep the pointer's softmax, and its gradient, from running away as the
+unscaled dot products did. Trained with the coverage loss over slot prefixes,
+the first N slots serve as the set for any N up to `slots`.
 """
 
 from __future__ import annotations
@@ -15,13 +17,18 @@ import torch.nn.functional as F
 from torch import nn
 
 from scribblez.policy_set.metrics import SET_SIZES
-from scribblez.policy_set.model import PolicySetEncoder, to_grid
+from scribblez.policy_set.model import PolicySetEncoder, mean_spread, to_grid
 
 # Below this cover probability the coverage loss uses its first-order form.
 NEARLY_MISSED = 1e-4
 # log p floor in the coverage loss: finite at padding, and far below any
 # real candidate's log-probability.
 LOG_P_FLOOR = -1e4
+# The pointer's logit scale: its start, and its cap. A logit is the scale times
+# a cosine, so 10 spreads the candidates over 20 nats at the start, and the cap
+# bounds the logits at +-50 however the scale is trained.
+POINTER_SCALE_INIT = 10.0
+POINTER_SCALE_MAX = 50.0
 
 
 class SlotDecoder(nn.Module):
@@ -40,15 +47,21 @@ class SlotDecoder(nn.Module):
         self.decoder = nn.TransformerDecoder(layer, layers)
         self.query = nn.Linear(channels, channels)
         self.key = nn.Linear(channels, channels)
+        self.log_scale = nn.Parameter(torch.tensor(math.log(POINTER_SCALE_INIT)))
+
+    def scale(self) -> torch.Tensor:
+        return self.log_scale.exp().clamp(max=POINTER_SCALE_MAX)
 
     def forward(self, h: torch.Tensor, g: torch.Tensor, pos_id: torch.Tensor):
         """Candidate vectors (M, C), summaries (P, 3C) -> pointer logits
-        (P, slots, maxK), -inf at padding, and the padding mask (P, maxK)."""
+        (P, slots, maxK) in FP32, -inf at padding, and the padding mask
+        (P, maxK)."""
         memory, pad = to_grid(h, pos_id, g.shape[0])
         tgt = self.slots.unsqueeze(0) + self.g_proj(g).unsqueeze(1)  # (P, slots, C)
         out = self.decoder(tgt, memory, memory_key_padding_mask=pad)
-        logits = torch.einsum("psc,pkc->psk", self.query(out), self.key(memory))
-        logits = logits / math.sqrt(h.shape[1])
+        q = F.normalize(self.query(out).float(), dim=-1)
+        k = F.normalize(self.key(memory).float(), dim=-1)
+        logits = self.scale() * torch.einsum("psc,pkc->psk", q, k)
         return logits.masked_fill(pad.unsqueeze(1), float("-inf")), pad
 
 
@@ -123,6 +136,14 @@ def slot_forward(model: SlotModel, batch: dict[str, torch.Tensor]):
     """The slot model's pointer logits and padding mask, under autocast."""
     with torch.autocast(device_type=batch["input_spatial"].device.type, dtype=torch.bfloat16):
         return model(batch)
+
+
+@torch.no_grad()
+def slot_diagnostics(model: SlotModel, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """The first slot's logits' spread over each position's candidates, and the
+    pointer's scale."""
+    logits, pad = slot_forward(model, batch)
+    return {"spread": mean_spread(logits[:, 0], pad), "pointer_scale": model.decoder.scale()}
 
 
 def slot_loss(

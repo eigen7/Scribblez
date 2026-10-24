@@ -229,6 +229,22 @@ def test_a_crash_looping_tag_fails_and_holds_its_machine(queued):
     assert manager.tasks.state(SPEC, manager.tasks.load(SPEC, "a"), entry) == tasks.QUEUED
 
 
+def test_a_fatal_exit_fails_the_tag_at_once(queued):
+    """A worker that exits fatally would fail the same way on every restart:
+    one such exit fails the tag, without waiting for FAIL_AFTER crashes."""
+    q, manager, make = queued
+    make("a")
+    q.enqueue("position_eval", "a", confirm=True)
+    q.tick()
+    a = manager.tasks.load(SPEC, "a")
+    workers_mod._note_fatal(a.worker("local-0"), "exit 70: fatal: non-finite slot loss")
+    manager.tasks.save(SPEC, a)
+    q.tick()
+    lease = _lease(manager)
+    assert lease.phase == HELD and "non-finite slot loss" in lease.reason
+    assert all(w.desired_state == "paused" for w in manager.tasks.load(SPEC, "a").workers)
+
+
 def test_a_failed_tag_hands_over_at_once_when_a_tag_is_waiting(queued):
     q, manager, make = queued
     make("a")

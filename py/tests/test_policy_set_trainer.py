@@ -7,6 +7,7 @@ import math
 import shutil
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -38,6 +39,7 @@ from scribblez.policy_set import (  # noqa: E402
 )
 from scribblez.position_eval.trainer import OutputDeliverer  # noqa: E402
 from scribblez.workloads.policy_set import PolicySetParams  # noqa: E402
+from scribblez.workloads.worker import WorkerFatal  # noqa: E402
 
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
@@ -175,7 +177,9 @@ def test_the_slot_form_overfits_a_pool(chunk):
     assert total.item() < 0.9 * first
 
 
-def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypatch):
+def _one_generation_setup(chunk, tmp_path, monkeypatch):
+    """A tag with the chunk as generation 0 and the held-out set, tiny models
+    of both forms, and a trainer context: what train_one_generation takes."""
     paths = TagPaths("t", "policy_set", tmp_path)
     (slog,) = chunk.glob("*.slog")
     for dest in (paths.generation_dir(0), paths.held_out_chunks_dir):
@@ -201,6 +205,13 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
     }
     state = GenerationalState()
     arm = build_optim_arm(recorder, TINY, opt, 0)
+    return paths, m, opt, arm, recorder, state, ctx, staged
+
+
+def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypatch):
+    paths, m, opt, arm, recorder, state, ctx, staged = _one_generation_setup(
+        chunk, tmp_path, monkeypatch
+    )
     trainer.train_one_generation(m, opt, arm, recorder, paths, TINY, state, ctx)
     ctx["deliverer"].drain()
     (record,) = [s.record["metrics"] for s in staged]
@@ -213,8 +224,12 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
         "equity_eval_recall_8",
         "slot_eval_set_ms",
         "greedy_eval_set_ms",
+        "param_norm_slot",
+        "slot_eval_spread",
+        "greedy_eval_spread",
     ):
         assert np.isfinite(record[key]), key
+    assert record["slot_eval_pointer_scale"] == pytest.approx(slot.POINTER_SCALE_INIT, rel=0.1)
     # The dashboard's figures read the record's keys; only set sizes past the
     # slots are absent.
     for _, keys, *_ in plots.POLICY_SET_QUALITY:
@@ -224,8 +239,57 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
     assert lifecycle.read_train_state(paths) == {"generation_index": 1, "rows_trained": 2}
 
 
+def test_a_non_finite_step_stops_the_trainer_before_its_checkpoint(chunk, tmp_path, monkeypatch):
+    """A NaN weight makes the first step's loss non-finite: the trainer stops
+    fatally, naming the form and the batch's pools, and writes no checkpoint,
+    so the last good one stays the one to resume from."""
+    paths, m, opt, arm, recorder, state, ctx, _ = _one_generation_setup(
+        chunk, tmp_path, monkeypatch
+    )
+    with torch.no_grad():
+        next(m["greedy"].gain.parameters()).view(-1)[0] = math.nan
+    with pytest.raises(WorkerFatal, match=r"non-finite greedy loss.*at batch 0 \(chunk game"):
+        trainer.train_one_generation(m, opt, arm, recorder, paths, TINY, state, ctx)
+    ctx["deliverer"].drain()
+    assert not paths.rolling_checkpoint.exists()
+
+
+def test_the_pointer_logits_are_bounded_by_the_scale_cap():
+    """However large the candidate vectors and however the scale trains, a
+    logit is the capped scale times a cosine."""
+    torch.manual_seed(0)
+    dec = slot.SlotDecoder(channels=8, slots=3, layers=1, num_heads=2)
+    with torch.no_grad():
+        dec.log_scale.fill_(10.0)  # far past the cap
+    h = 1e4 * torch.randn(5, 8)
+    logits, pad = dec(h, torch.randn(2, 24), torch.tensor([0, 0, 0, 1, 1]))
+    assert logits.dtype == torch.float32
+    assert logits[~pad.unsqueeze(1).expand_as(logits)].abs().max() <= slot.POINTER_SCALE_MAX + 1e-3
+
+
+def test_the_gain_head_passes_gradient_far_below_zero():
+    """The softplus head the first run had stopped learning once the zero
+    targets pushed it far negative; the linear head always passes gradient."""
+    torch.manual_seed(0)
+    enc = model.PolicySetEncoder(4, 2, 8, 1, 2)
+    head = greedy.GreedyModel(enc, num_heads=2).gain
+    with torch.no_grad():
+        head[-1].bias.fill_(-400.0)
+    out = head(torch.randn(6, 8))
+    (out - 0.05).square().sum().backward()
+    assert out.max() < 0 and head[-1].bias.grad.abs() > 1.0
+
+
+def test_mean_spread_is_each_positions_deviation_over_its_candidates():
+    grid = torch.tensor([[1.0, 3.0, 0.0], [5.0, 5.0, 5.0]])
+    pad = torch.tensor([[False, False, True], [False, False, False]])
+    assert model.mean_spread(grid, pad).item() == pytest.approx(0.5)
+
+
 class _BestFirstModel(torch.nn.Module):
     """Every slot ranks a position's candidates by their q."""
+
+    decoder = SimpleNamespace(scale=lambda: torch.tensor(1.0))  # what the diagnostics read
 
     def forward(self, batch):
         num_positions = batch["input_spatial"].shape[0]
