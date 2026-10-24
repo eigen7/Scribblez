@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Check that the engine's TensorRT inference matches PyTorch, for every model
-family: position evaluation, move set evaluation, move proposal, and leave
-inference.
+family: position evaluation, move set evaluation, move proposal, leave
+inference, and the DeepBot leaf eval; and that the GPU rollout kernel matches
+its CPU reference rollout for rollout, with the leaf eval rows it builds on
+the device.
 
 py/tools/gpu_parity.py
 
@@ -13,6 +15,10 @@ generates each fixture once into a scratch dir and hands it to the binary,
 which builds TensorRT plans and compares; a binary run by hand with no
 argument generates its own fixture for every case instead. The binaries run
 one after another, so the check holds the GPU for one plan build at a time.
+
+The rollout check runs gpu_rollout_demo small, with the leaf eval fixture's
+model restamped with the engine's own leave values (real.onnx), so it
+compares the device's leaf rows and values with the CPU's too.
 """
 
 import os
@@ -35,7 +41,13 @@ FAMILIES = [
     ("test_mset_inference_parity", ["scripts.move_set_eval.gen_mset_parity_fixture"]),
     ("test_proposal_inference_parity", ["scripts.move_set_eval.gen_proposal_parity_fixture"]),
     ("test_leave_inference_parity", ["scripts.leave_inference.gen_parity_fixture"]),
+    ("test_leaf_eval_parity", ["scripts.deep_bot_leaf_eval.gen_parity_fixture"]),
 ]
+# The rollout check: gpu_rollout_demo over a few candidates, with the leaf
+# family's fixture model.
+ROLLOUT_CHECK = "gpu_rollout_demo"
+ROLLOUT_FLAGS = ["--candidates", "6", "--rollouts", "256", "--leaf-check", "1792"]
+ROLLOUT_LEAF_FAMILY = "test_leaf_eval_parity"
 
 
 def run(cmd: list[str]) -> bool:
@@ -55,9 +67,25 @@ def check_family(binary_name: str, generator: list[str], scratch: Path) -> bool:
     return run([str(binary), str(fixture)])
 
 
+def check_rollouts(scratch: Path) -> bool:
+    binary = ENGINE_DIR / ROLLOUT_CHECK
+    if not binary.is_file():
+        print(f"ERROR: {binary} not found. Run py/build.py first.", file=sys.stderr)
+        return False
+    model = scratch / ROLLOUT_LEAF_FAMILY / "real.onnx"
+    if not model.is_file():
+        print(
+            f"ERROR: {model} missing: the {ROLLOUT_LEAF_FAMILY} family's fixture failed",
+            file=sys.stderr,
+        )
+        return False
+    return run([str(binary), *ROLLOUT_FLAGS, "--leaf-model", str(model)])
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="scribblez_gpu_parity_") as scratch:
         results = [(name, check_family(name, gen, Path(scratch))) for name, gen in FAMILIES]
+        results.append((ROLLOUT_CHECK, check_rollouts(Path(scratch))))
     print("\nSummary")
     for name, ok in results:
         print(f"  {name}: {'PASS' if ok else 'FAIL'}")

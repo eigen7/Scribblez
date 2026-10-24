@@ -199,14 +199,32 @@ GpuHastyRollouts::GpuHastyRollouts(const Dictionary& dict, const HastyEquity& eq
 
 GpuHastyRollouts::~GpuHastyRollouts() { rollout_gpu::free_tables(impl_->tables); }
 
-std::vector<rollout_abi::RolloutResult> GpuHastyRollouts::run(const HastyRolloutPosition& pos,
-                                                              const Dictionary& dict, int n) {
-  const rollout_abi::PositionAbi abi = to_abi(pos, dict);
-  std::vector<rollout_abi::RolloutResult> results(static_cast<size_t>(n));
+namespace {
+
+// The batch in the device's layouts: each group's opponent leaves appended
+// to one array.
+rollout_gpu::BatchAbi batch_abi(const RolloutBatch& batch, const Dictionary& dict) {
+  rollout_gpu::BatchAbi abi;
+  abi.tasks = batch.tasks;
+  abi.positions.reserve(batch.starts.size());
+  for (const RolloutStart& s : batch.starts) abi.positions.push_back(to_abi(s, dict));
+  for (const RolloutGroup& g : batch.groups) {
+    abi.groups.push_back(to_abi(g, uint32_t(abi.opp_leaves.size())));
+    for (const Rack& leave : g.opp_leaves) abi.opp_leaves.push_back(to_abi(leave));
+  }
+  return abi;
+}
+
+}  // namespace
+
+std::vector<rollout_abi::RolloutResult> GpuHastyRollouts::run(const RolloutBatch& batch,
+                                                              const Dictionary& dict) {
+  const rollout_gpu::BatchAbi abi = batch_abi(batch, dict);
+  std::vector<rollout_abi::RolloutResult> results(batch.tasks.size());
   double seconds[3];
   phase_cycles_.assign(rollout_gpu::kPhases, 0);
   counts_.assign(rollout_gpu::kCounts, 0);
-  rollout_gpu::run_rollouts(impl_->tables, abi, n, results.data(), seconds, phase_cycles_.data(),
+  rollout_gpu::run_rollouts(impl_->tables, abi, results.data(), seconds, phase_cycles_.data(),
                             counts_.data());
   timings_ = Timings{seconds[0], seconds[1], seconds[2]};
   return results;

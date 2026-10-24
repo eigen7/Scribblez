@@ -295,15 +295,20 @@ tool keep their CPU path; a backend selector routes batches to the device.
    probes dominate.
 4. **Blanks** by designation enumeration, with the parity check extended to
    blank racks; exchanges and the endgame adjustments if PR 3 left them out.
-5. **Integration:** the backend selector in SimRunner and the survey tool,
-   batching across candidates, host-side leave inference feeding per-rollout
-   opponent leaves.
+5. **Integration:** the backend selector in SimRunner and the survey tool.
+   Batching across candidates and per-rollout opponent leaves are in place
+   (see [Batches of candidates](#batches-of-candidates)); host-side leave
+   inference to supply those leaves is not.
 
-Deferred: the opponent-ply table. PR 5's integration, with the leaf network
-on the device instead of a `K`-ply horizon to the win table, is steps 9-11 of
-[deep_bot_v0.md](deep_bot_v0.md#build-order).
+Deferred: the opponent-ply table. The rest of PR 5's integration, with the
+leaf network on the device instead of a `K`-ply horizon to the win table, is
+steps 9-11 of [deep_bot_v0.md](deep_bot_v0.md#build-order).
 
 ## Demo results
+
+The tables in this section and the next were measured with the
+single-position demo that preceded batches; [Batches of
+candidates](#batches-of-candidates) describes the current one.
 
 `gpu_rollout_demo` (engine/apps) is PRs 1-4 of the list above in one
 standalone binary: it reaches a position by HastyBot self-play, runs the same
@@ -364,7 +369,8 @@ What the demo settled about the design:
 
 The kernel leaves every rollout's end state (board, both players' leaves
 before their draws, cross-checks, scores, bag) in device memory
-(`rollout_abi::LeafState`). `--leaf-model` evaluates every leaf with a
+(`rollout_abi::LeafState`). `GpuRolloutValues` (the demo's `--leaf-model`)
+evaluates every leaf with a
 [DeepBot leaf eval](../deep_bot_leaf_eval_results.md) export: a second kernel
 builds each leaf's `LeafEvalInputEncoder` row straight into the TensorRT
 net's input buffers (`NeuralNet::device_ptr`, `predict_device_inputs`), in
@@ -383,16 +389,58 @@ Measured as above (65,536 rollouts, FP16):
 | seed 1   | 138K/s         | 2.9M rows/s  | 267K/s     | 88K/s             |
 
 The model, not the encoder, is the leaf's cost, near the 256K evals/s the
-[results](../deep_bot_leaf_eval_results.md) measured for this trunk. The same leaves through the host route, for comparison: the CPU
-encoder runs about 71K rows/s per thread (so about 1.5M/s over the machine),
+[results](../deep_bot_leaf_eval_results.md) measured for this trunk. The same
+leaves through the host route, for comparison: the CPU encoder runs about 71K rows/s per thread (so about 1.5M/s over the machine),
 and `predict()` with the 85 KB rows uploaded from host memory manages 48K
 evals/s: the upload, not the network, bounds it. That is the case for keeping
 the leaf on the device: at parity on the rollouts alone, the leaf network
 would already run 5-6x faster fed from the kernel than from the host.
 
-Not done, in the order they look worth trying: a TensorRT-versus-PyTorch
-parity family for the leaf model (`py/tools/gpu_parity.py`, as the other
-families have); an L2 persistence window for
+### Batches of candidates
+
+A launch takes a batch (`sim/hasty_rollout_task.h`'s `RolloutBatch`):
+groups, which are what one chooser's candidates at one position share (the
+unseen pool, the seed, and the opponent's known leave per rollout index);
+starts, one per candidate applied to the board; and tasks, one per (start,
+rollout index), one block each. Rollout `i` of every start in a group draws
+the same opponent rack and the same bag order, and a task's outcome depends
+only on its start and rollout index, so a batch can mix any rounds of any
+positions. An exchange's tiles go back into the bag after the chooser's
+refill, and a candidate that goes out with the bag empty ends the game at the
+start (exact, no plies). A rollout whose bag is empty after its two plies
+keeps playing hasty moves to the game's end instead of stopping at a leaf:
+the leaf network trains only on turns that began with tiles in the bag, and
+with both racks known and nothing left to draw, the hasty playout is the
+exact value it would only approximate. Two scoreless turns in a row end such
+a game as six would, since the position can no longer change. At seed 6
+after 16 plies, where most rollouts empty the bag, that took the kernel from
+0.50 s to 0.77 s for 65,536 tasks; on positions with a fuller bag nothing
+changes. `GpuRolloutValues` (`gpu/gpu_rollout_values.h`) runs a batch through
+the kernel, the device encoder and the leaf network and returns each task's
+win/draw/loss from the chooser's side (exact when the game ended);
+`CpuRolloutValues` is the same interface over the CPU reference, with a leaf
+function, for the test suites.
+
+`gpu_rollout_demo` makes the mover's top 15 moves plus the best exchange
+one group, and every other rollout seats a known opponent leave. Measured
+2026-10-23 on the dev laptop at 4,096 rollouts per candidate (65,536 tasks),
+with another process holding about 30% of the GPU, so the rates are a floor:
+
+| Position (rack) | CPU rollouts/s | Kernel rollouts/s | With the leaf network |
+|-----------------|----------------|-------------------|-----------------------|
+| seed 1 (AAGLNOR) | 41,000        | 249,000           | 116,000               |
+| seed 2 (AEILSTT) | 119,000       | 444,000           |                       |
+| seed 3 (AHILUVY) | 77,000        | 367,000           |                       |
+
+All 65,536 tasks matched the CPU reference on all three, and so did the
+device's leaf rows and win values on the first 2,048. Rows per leaf network
+call (512 to 8,192) made no difference beyond the contention's noise.
+
+`py/tools/gpu_parity.py` runs a leaf eval TensorRT-versus-PyTorch family
+(`test_leaf_eval_parity`) and the demo on 7 candidates x 256 rollouts with
+that family's random model, rows and values compared.
+
+Not done, in the order they look worth trying: an L2 persistence window for
 the word map and leave table so the blank traffic does not evict them; the
 opponent-ply table; a loose per-span equity bound against the best exchange
 to skip spans before probing; dropping the two-blank table (rare, ~200 MB)

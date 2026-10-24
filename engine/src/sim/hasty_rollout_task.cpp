@@ -17,14 +17,29 @@ using rollout_abi::PackedMove;
 using rollout_abi::PositionAbi;
 using rollout_abi::RolloutResult;
 
-HastyRolloutPosition make_rollout_position(const Board& board, const Rack& leave, int my_score,
-                                           int opp_score, uint64_t seed) {
-  return HastyRolloutPosition{.board = board,
-                              .leave = leave,
-                              .my_score = my_score,
-                              .opp_score = opp_score,
-                              .pool = board.unseen_tiles(leave),
-                              .seed = seed};
+void RolloutBatch::add_rollouts(uint32_t start, uint32_t first, uint32_t count) {
+  for (uint32_t i = first; i < first + count; ++i) tasks.push_back({start, i});
+}
+
+RolloutGroup make_rollout_group(const Board& board, const Rack& rack, uint64_t seed) {
+  return RolloutGroup{.pool = board.unseen_tiles(rack), .seed = seed, .opp_leaves = {}};
+}
+
+RolloutStart make_rollout_start(const Board& board, const Rack& rack, int my_score, int opp_score,
+                                const Move& move, uint32_t group) {
+  RolloutStart s{.board = board,
+                 .leave = rack,
+                 .returned = {},
+                 .my_score = my_score + move.score(),
+                 .opp_score = opp_score,
+                 .group = group};
+  for (int i = 0; i < move.num_glyphs(); ++i) s.leave.remove(move.glyph(i).rack_tile());
+  if (move.type() == MoveType::PLAY) {
+    s.board.apply(move);
+  } else if (move.type() == MoveType::EXCHANGE) {
+    for (int i = 0; i < move.num_glyphs(); ++i) s.returned.add(move.glyph(i).rack_tile());
+  }
+  return s;
 }
 
 namespace {
@@ -45,29 +60,47 @@ void draw_into(Rack& rack, rollout_abi::Bag& bag, int n, uint64_t seed, uint32_t
 
 }  // namespace
 
-PositionAbi to_abi(const HastyRolloutPosition& pos, const Dictionary& dict) {
-  pos.board.ensure_movegen_caches(dict);
+PositionAbi to_abi(const RolloutStart& start, const Dictionary& dict) {
+  start.board.ensure_movegen_caches(dict);
   PositionAbi abi;
   for (int i = 0; i < rollout_abi::kSquares; ++i) {
-    abi.squares[i] = pos.board.at(i / BOARD_SIZE, i % BOARD_SIZE).code();
+    abi.squares[i] = start.board.at(i / BOARD_SIZE, i % BOARD_SIZE).code();
   }
   for (int t = 0; t < 2; ++t) {
-    const auto& cross = pos.board.cross_checks(t == 1);
+    const auto& cross = start.board.cross_checks(t == 1);
     for (int i = 0; i < rollout_abi::kSquares; ++i) {
       abi.cross_mask[t][i] = cross[i].mask;
       abi.cross_score[t][i] = int16_t(cross[i].score);
       abi.cross_has_neighbor[t][i] = cross[i].has_neighbor ? 1 : 0;
     }
   }
-  for (int k = 0; k < TILE_KINDS; ++k) abi.leave[k] = uint8_t(pos.leave.count(Tile::of(k)));
+  for (int k = 0; k < TILE_KINDS; ++k) abi.leave[k] = uint8_t(start.leave.count(Tile::of(k)));
+  for (int i = 0; i < start.returned.size(); ++i)
+    abi.returned[i] = uint8_t(start.returned.tiles()[size_t(i)].index());
+  abi.num_returned = uint8_t(start.returned.size());
+  abi.num_tiles = start.board.num_tiles();
+  abi.scores[0] = start.my_score;
+  abi.scores[1] = start.opp_score;
+  abi.group = start.group;
+  return abi;
+}
+
+rollout_abi::GroupAbi to_abi(const RolloutGroup& group, uint32_t leave_base) {
+  rollout_abi::GroupAbi abi;
   rollout_abi::Bag bag{};
-  fill_bag(pos.pool, bag);
+  fill_bag(group.pool, bag);
   for (int i = 0; i < bag.len; ++i) abi.pool[i] = bag.tiles[i];
   abi.pool_size = bag.len;
-  abi.num_tiles = pos.board.num_tiles();
-  abi.scores[0] = pos.my_score;
-  abi.scores[1] = pos.opp_score;
-  abi.seed = pos.seed;
+  abi.seed = group.seed;
+  abi.leave_base = leave_base;
+  abi.num_leaves = uint32_t(group.opp_leaves.size());
+  return abi;
+}
+
+rollout_abi::OppLeaveAbi to_abi(const Rack& leave) {
+  rollout_abi::OppLeaveAbi abi;
+  for (int i = 0; i < leave.size(); ++i) abi.tiles[i] = uint8_t(leave.tiles()[size_t(i)].index());
+  abi.n = uint8_t(leave.size());
   return abi;
 }
 
@@ -122,41 +155,75 @@ struct RolloutState {
   std::array<Rack, 2> leaves;  // each player's rack after its last move, before its draw
   std::array<int, 2> scores;
   rollout_abi::Bag bag;
+  int scoreless = 0;  // consecutive passes and exchanges
   bool game_over = false;
 };
 
-RolloutState start_rollout(const HastyRolloutPosition& pos, uint32_t rollout) {
-  RolloutState st{.board = pos.board,
-                  .racks = {pos.leave, Rack{}},
-                  .scores = {pos.my_score, pos.opp_score},
+// The racks and the bag, in rollout_abi.h's order.
+RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::RolloutTask& task) {
+  const RolloutStart& start = batch.starts[task.position];
+  const RolloutGroup& group = batch.groups[start.group];
+  const Rack opp_leave =
+    task.rollout < group.opp_leaves.size() ? group.opp_leaves[task.rollout] : Rack{};
+  RolloutState st{.board = start.board,
+                  .racks = {start.leave, opp_leave},
+                  .scores = {start.my_score, start.opp_score},
                   .bag = {}};
-  fill_bag(pos.pool, st.bag);
-  const int pool_size = st.bag.len;
-  draw_into(st.racks[1], st.bag, rollout_abi::opp_rack_draw(pool_size), pos.seed, rollout);
-  draw_into(st.racks[0], st.bag, rollout_abi::our_refill_draw(pool_size, pos.leave.size()),
-            pos.seed, rollout);
+  fill_bag(group.pool, st.bag);
+  for (int i = 0; i < opp_leave.size(); ++i)
+    rollout_abi::remove_from_bag(st.bag, uint8_t(opp_leave.tiles()[size_t(i)].index()));
+  for (int p : {1, 0}) {
+    draw_into(st.racks[p], st.bag, rollout_abi::refill_draw(st.bag.remaining(), st.racks[p].size()),
+              group.seed, task.rollout);
+  }
+  for (int i = 0; i < start.returned.size(); ++i)
+    st.bag.put_back(uint8_t(start.returned.tiles()[size_t(i)].index()));
   st.leaves = st.racks;  // a player who never moves keeps its full rack as its leave
+  // Our move went out with the bag empty: the game ended with it.
+  if (st.racks[0].empty()) {
+    st.scores[0] += 2 * st.racks[1].point_value();
+    st.game_over = true;
+  }
   return st;
 }
 
-// One ply by `mover`: HastyBot's move, applied with the draw and the play-out
-// bonus. Returns the move.
+// With the bag empty, a second scoreless turn in a row ends the game
+// (rollout_abi.h): each player loses its rack's value.
+void end_if_stalemate(RolloutState& st) {
+  if (st.bag.remaining() > 0 || st.scoreless < 2) return;
+  for (int p = 0; p < 2; ++p) st.scores[p] -= st.racks[p].point_value();
+  st.game_over = true;
+}
+
+// HastyBot's move for `mover`, or a pass from an empty rack.
+Move hasty_move(const RolloutState& st, int mover, const Dictionary& dict) {
+  const Rack& rack = st.racks[mover];
+  if (rack.empty()) return Move::pass();
+  const int bag_size = st.bag.remaining();
+  const Rack hidden;
+  const MoveRequest req{st.board,
+                        dict,
+                        rack,
+                        bag_size == 0 ? st.racks[1 - mover] : hidden,
+                        st.scores[mover],
+                        st.scores[1 - mover],
+                        bag_size};
+  return hasty_best_move_wmp(req);
+}
+
+// One ply by `mover`: HastyBot's move, applied with the draw, the play-out
+// bonus and the stalemate rule. Returns the move.
 Move play_ply(RolloutState& st, int mover, const Dictionary& dict, uint64_t seed,
               uint32_t rollout) {
   Rack& rack = st.racks[mover];
   const Rack& other = st.racks[1 - mover];
-  const int bag_size = st.bag.remaining();
-  const Rack hidden;
-  if (rack.empty()) return Move::pass();
-  const MoveRequest req{
-    st.board, dict, rack, bag_size == 0 ? other : hidden, st.scores[mover], st.scores[1 - mover],
-    bag_size};
-  const Move m = hasty_best_move_wmp(req);
+  const Move m = hasty_move(st, mover, dict);
   for (int i = 0; i < m.num_glyphs(); ++i) rack.remove(m.glyph(i).rack_tile());
   st.leaves[mover] = rack;
   if (m.type() == MoveType::PLAY) {
     st.board.apply(m);
     st.scores[mover] += m.score();
+    st.scoreless = 0;
     draw_into(rack, st.bag, std::min(m.num_glyphs(), st.bag.remaining()), seed, rollout);
     if (rack.empty()) {
       st.scores[mover] += 2 * other.point_value();
@@ -165,18 +232,26 @@ Move play_ply(RolloutState& st, int mover, const Dictionary& dict, uint64_t seed
   } else if (m.type() == MoveType::EXCHANGE) {
     draw_into(rack, st.bag, m.num_glyphs(), seed, rollout);
     for (int i = 0; i < m.num_glyphs(); ++i) st.bag.put_back(uint8_t(m.glyph(i).rack_tile()));
+    ++st.scoreless;
+  } else {
+    ++st.scoreless;
   }
+  end_if_stalemate(st);
   return m;
 }
 
-RolloutResult run_one(const HastyRolloutPosition& pos, const Dictionary& dict, uint32_t rollout,
-                      CpuLeaf* leaf) {
-  RolloutState st = start_rollout(pos, rollout);
+RolloutResult run_one(const RolloutBatch& batch, const rollout_abi::RolloutTask& task,
+                      const Dictionary& dict, CpuLeaf* leaf) {
+  RolloutState st = start_rollout(batch, task);
+  const uint64_t seed = batch.groups[batch.starts[task.position].group].seed;
   RolloutResult out;
-  for (int ply = 0; ply < 2; ++ply) {
-    if (st.game_over) break;
-    const int mover = ply == 0 ? 1 : 0;
-    out.moves[ply] = pack_move(play_ply(st, mover, dict, pos.seed, rollout));
+  // Two plies, then to the game's end if the bag is empty (rollout_abi.h).
+  for (int ply = 0;
+       ply < rollout_abi::kMaxRolloutPlies && !st.game_over && (ply < 2 || st.bag.remaining() == 0);
+       ++ply) {
+    const int mover = ply % 2 == 0 ? 1 : 0;
+    const Move m = play_ply(st, mover, dict, seed, task.rollout);
+    if (ply < 2) out.moves[ply] = pack_move(m);
   }
   out.game_over = st.game_over ? 1 : 0;
   out.diff = int16_t(st.scores[0] - st.scores[1]);
@@ -186,27 +261,37 @@ RolloutResult run_one(const HastyRolloutPosition& pos, const Dictionary& dict, u
 
 }  // namespace
 
-RolloutRacks rollout_racks(const HastyRolloutPosition& pos, uint32_t rollout) {
-  const RolloutState st = start_rollout(pos, rollout);
+RolloutRacks rollout_racks(const RolloutBatch& batch, const rollout_abi::RolloutTask& task) {
+  const RolloutState st = start_rollout(batch, task);
   return RolloutRacks{.opp = st.racks[1], .mine = st.racks[0]};
 }
 
-std::vector<RolloutResult> run_hasty_rollouts_cpu(const HastyRolloutPosition& pos,
-                                                  const Dictionary& dict, int n, int threads,
-                                                  std::vector<CpuLeaf>* leaves_out) {
-  pos.board.ensure_movegen_caches(dict);
-  std::vector<RolloutResult> results(static_cast<size_t>(n));
-  const size_t leaves = leaves_out ? leaves_out->size() : 0;
+void for_each_hasty_rollout_cpu(const RolloutBatch& batch, const Dictionary& dict, int threads,
+                                const RolloutVisitor& each) {
+  for (const RolloutStart& s : batch.starts) s.board.ensure_movegen_caches(dict);
+  const size_t n = batch.tasks.size();
   std::vector<std::thread> workers;
   for (int t = 0; t < threads; ++t) {
     workers.emplace_back([&, t] {
-      for (int i = t; i < n; i += threads) {
-        CpuLeaf* leaf = size_t(i) < leaves ? &(*leaves_out)[size_t(i)] : nullptr;
-        results[size_t(i)] = run_one(pos, dict, uint32_t(i), leaf);
+      CpuLeaf leaf;
+      for (size_t i = size_t(t); i < n; i += size_t(threads)) {
+        const RolloutResult result = run_one(batch, batch.tasks[i], dict, &leaf);
+        each(i, result, leaf);
       }
     });
   }
   for (std::thread& w : workers) w.join();
+}
+
+std::vector<RolloutResult> run_hasty_rollouts_cpu(const RolloutBatch& batch, const Dictionary& dict,
+                                                  int threads, std::vector<CpuLeaf>* leaves_out) {
+  std::vector<RolloutResult> results(batch.tasks.size());
+  const size_t leaves = leaves_out ? leaves_out->size() : 0;
+  for_each_hasty_rollout_cpu(batch, dict, threads,
+                             [&](size_t k, const RolloutResult& result, const CpuLeaf& leaf) {
+                               results[k] = result;
+                               if (k < leaves) (*leaves_out)[k] = leaf;
+                             });
   return results;
 }
 
