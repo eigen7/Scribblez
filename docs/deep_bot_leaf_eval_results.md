@@ -253,6 +253,75 @@ Two measurements would settle the join planes:
 2. **Replicates:** a second seed per arm, to measure the run-to-run spread the
    averages above cannot.
 
+## Follow-up runs: longer training, size, and the averaging artifact
+
+Run 2026-10-23 to 2026-10-24, with no row limit (`max_rows = -1`):
+
+- `leaf-conv-nojoin`, continued from 30M rows;
+- `leaf-tf-m-join`: a transformer of width 128, 6 layers, 4 heads (1.26M
+  parameters, 27K evals/s under TensorRT);
+- `leaf-conv-nojoin-32-4` and `leaf-conv-really-nojoin-32-4`: conv trunks of
+  32 channels × 4 blocks (654K evals/s), with and without the join planes. The
+  first's name is wrong: it has the join planes.
+
+**A bigger transformer does not beat the conv trunk.** It levelled off at
+0.4674 by about 60M rows. The 64-channel conv trunk levelled off at
+0.4670–0.4671 and stayed there to 164M rows. At equal rows the transformer
+was never ahead.
+
+**At 32 channels the join planes help.** Held-out log loss at 126M rows:
+
+| Tiles in the pool | 32 ch, join planes | 32 ch, no join planes | Difference | 64 ch, no join planes |
+|---|---|---|---|---|
+| overall | 0.4673 | 0.4682 | −0.0009 | 0.4669 |
+| 0–20 | 0.2686 | 0.2711 | −0.0025 | 0.2666 |
+| 21–40 | 0.3852 | 0.3860 | −0.0009 | 0.3845 |
+| 41–60 | 0.4912 | 0.4917 | −0.0005 | 0.4917 |
+| 61–100 | 0.6161 | 0.6164 | −0.0003 | 0.6161 |
+
+The gap is about twice the between-run noise, and it grows toward the end of
+the game, where hook knowledge matters most. At 64 channels and 30M rows the
+planes made no difference, which fits the planes standing in for capacity the
+narrower trunk lacks. With them, 32 channels matched 64: its best was 0.4665
+at 169M rows.
+
+**The "degradation" was the optimizer's average, not the model.** After
+200M rows, `leaf-conv-nojoin-32-4`'s held-out loss rose to 0.4704, with
+predictions biased against the mover. With a constant rate,
+AdamWScheduleFree's deployed weights are a uniform average of every iterate
+since the start. Scoring the iterate the optimizer actually trains at (its
+gradient point, 0.9 × average + 0.1 × z), with batch norm recalibrated for it,
+separates the two:
+
+| Run | Rows | Average: log loss / bias | Gradient point: log loss / bias |
+|---|---|---|---|
+| 32 ch, join planes | 248M | 0.4700 / −0.048 | **0.4667 / +0.001** |
+| 32 ch, no join planes | 130M | 0.4683 / −0.011 | 0.4678 / +0.008 |
+| 64 ch, no join planes | 164M | 0.4671 / +0.010 | 0.4668 / +0.004 |
+| 64 ch, join planes | 30M | **0.4679** / +0.001 | 0.4687 / +0.007 |
+
+Bias is the predicted minus the actual win rate on rows predicted between 0.3
+and 0.7. At 30M rows the average helps, as intended. On long runs it mixes
+weights from points on the trajectory that have drifted far apart.
+
+The weights do drift in directions the loss leaves free:
+- Draws are 0.5% of outcomes, and on rows where a draw basically never happens
+  the draw logit keeps falling: log p(draw) at the 1st percentile went from −16
+  at 30M rows to −69 at 246M. That drift makes up almost all of the gradient
+  norm's growth, and grows the head weights (RMS 0.26 to 1.39).
+- The conv kernels ahead of batch norm grow too, from 7 to 19 at RMS × √fan-in
+  for 64 channels.
+
+Ruled out along the way: bf16 precision (bf16 and fp32 forwards score
+identically) and batch-norm recalibration noise (recalibrating on 800 batches
+instead of 32 left the bias unchanged).
+
+The fix (`WindowedAdamWScheduleFree`, generational/optim.py) caps the average
+at the last `averaging_window_rows` rows, uniform before then, for every
+workload on the schedule-free arm. It bounds how far apart the averaged
+weights can be; it does not stop the draw logit's drift itself. When this was
+written, no run had trained with the window yet.
+
 ## Found along the way
 
 **`amax` under `torch.compile` with bf16.** The conv arm first trained to NaN.
