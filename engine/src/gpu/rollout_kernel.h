@@ -144,14 +144,16 @@ void run_rollouts(DeviceTables* tables, const BatchAbi& batch, rollout_abi::Roll
 // The last run's leaf states, a device pointer (one per task).
 const rollout_abi::LeafState* device_leaves(const DeviceTables* tables);
 
-// LeafEvalInputEncoder rows for leaves [first, first + count) of the last
-// run, written to device buffers: `spatial` (count x kLeafSpatialPlanes x
-// 225 floats) and `scalar` (count x kLeafScalars). Synchronous.
-void encode_leaves(DeviceTables* tables, int first, int count, float* spatial, float* scalar);
+// LeafEvalInputEncoder rows for the leaves of the last run's tasks
+// tasks[0, count) (a host array), row i for tasks[i], written to device
+// buffers: `spatial` (count x kLeafSpatialPlanes x 225 floats) and `scalar`
+// (count x kLeafScalars). Synchronous.
+void encode_leaves(DeviceTables* tables, const uint32_t* tasks, int count, float* spatial,
+                   float* scalar);
 
 // encode_leaves into device scratch, copied back to host buffers of the
 // same sizes.
-void encode_leaves_to_host(DeviceTables* tables, int first, int count, float* spatial,
+void encode_leaves_to_host(DeviceTables* tables, const uint32_t* tasks, int count, float* spatial,
                            float* scalar);
 
 }  // namespace scribblez::rollout_gpu

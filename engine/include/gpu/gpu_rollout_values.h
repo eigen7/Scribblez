@@ -11,6 +11,7 @@
 #include "nn/trt_util.h"
 #include "sim/rollout_values.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -34,12 +35,14 @@ class GpuRolloutValues : public RolloutValues {
   std::vector<RolloutOutcome> run(const RolloutBatch& batch) override;
 
   // Seconds in the rollout kernel (with the batch's conversion and
-  // transfers) and in the leaf (encoding and the network): the last run's,
-  // and the sums over every run.
+  // transfers) and in the leaf (encoding and the network), and the leaves
+  // the network valued (the unfinished rollouts', since a finished game's
+  // outcome is exact): the last run's, and the sums over every run.
   struct Timings {
     double rollout_seconds = 0;
     double kernel_seconds = 0;  // of rollout_seconds, the kernel alone
     double leaf_seconds = 0;
+    int64_t leaves = 0;
   };
   const Timings& last_timings() const { return timings_; }
   const Timings& total_timings() const { return totals_; }
@@ -48,8 +51,8 @@ class GpuRolloutValues : public RolloutValues {
   nn::NeuralNet<nn::LeafEvalSpec>& net() { return net_; }
 
  private:
-  // Fills outcomes[first, first + count) from the leaf network.
-  void evaluate_leaves(int first, int count, std::vector<RolloutOutcome>* outcomes);
+  // Fills the outcomes of tasks[0, count) from the leaf network.
+  void evaluate_leaves(const uint32_t* tasks, int count, std::vector<RolloutOutcome>* outcomes);
 
   const Dictionary& dict_;
   GpuHastyRollouts rollouts_;

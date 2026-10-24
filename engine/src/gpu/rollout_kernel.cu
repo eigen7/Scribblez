@@ -1528,10 +1528,11 @@ __device__ void write_leaf_scalars(const LeafState& leaf, const LeafSmem& s, flo
 }
 
 __global__ void __launch_bounds__(kEncodeThreads)
-  leaf_encode_kernel(const LeafState* leaves, int count, float* spatial, float* scalar) {
+  leaf_encode_kernel(const LeafState* leaves, const uint32_t* tasks, int count, float* spatial,
+                     float* scalar) {
   const int b = blockIdx.x;
   if (b >= count) return;
-  const LeafState& leaf = leaves[b];
+  const LeafState& leaf = leaves[tasks[b]];
   __shared__ LeafSmem s;
   load_leaf(leaf, s);
   float* row = spatial + size_t(b) * kLeafSpatialPlanes * kSquares;
@@ -1591,6 +1592,7 @@ struct DeviceTables {
   DeviceBuffer<OppLeaveAbi> opp_leaves;
   DeviceBuffer<RolloutResult> results;
   DeviceBuffer<LeafState> leaves;
+  DeviceBuffer<uint32_t> leaf_tasks;  // the tasks encode_leaves was given
 };
 
 DeviceTables* upload_tables(const HostTables& host, size_t* bytes) {
@@ -1709,20 +1711,24 @@ void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results
 
 const LeafState* device_leaves(const DeviceTables* d) { return d->leaves.data; }
 
-void encode_leaves(DeviceTables* d, int first, int count, float* spatial, float* scalar) {
+void encode_leaves(DeviceTables* d, const uint32_t* tasks, int count, float* spatial,
+                   float* scalar) {
   if (count <= 0) return;
-  leaf_encode_kernel<<<count, kEncodeThreads>>>(d->leaves.data + first, count, spatial, scalar);
+  d->leaf_tasks.upload(tasks, size_t(count));
+  leaf_encode_kernel<<<count, kEncodeThreads>>>(d->leaves.data, d->leaf_tasks.data, count, spatial,
+                                                scalar);
   cuda_check(cudaGetLastError(), "leaf encoder launch");
   cuda_check(cudaDeviceSynchronize(), "leaf encoder");
 }
 
-void encode_leaves_to_host(DeviceTables* d, int first, int count, float* spatial, float* scalar) {
+void encode_leaves_to_host(DeviceTables* d, const uint32_t* tasks, int count, float* spatial,
+                           float* scalar) {
   const size_t spatial_bytes = sizeof(float) * size_t(count) * kLeafSpatialPlanes * kSquares;
   const size_t scalar_bytes = sizeof(float) * size_t(count) * kLeafScalars;
   float *d_spatial = nullptr, *d_scalar = nullptr;
   cuda_check(cudaMalloc(&d_spatial, spatial_bytes), "malloc rows");
   cuda_check(cudaMalloc(&d_scalar, scalar_bytes), "malloc scalars");
-  encode_leaves(d, first, count, d_spatial, d_scalar);
+  encode_leaves(d, tasks, count, d_spatial, d_scalar);
   cuda_check(cudaMemcpy(spatial, d_spatial, spatial_bytes, cudaMemcpyDeviceToHost),
              "rows download");
   cuda_check(cudaMemcpy(scalar, d_scalar, scalar_bytes, cudaMemcpyDeviceToHost),

@@ -33,6 +33,7 @@
 #include <format>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <string>
 #include <thread>
@@ -167,8 +168,10 @@ CpuRows encode_on_cpu(const std::vector<CpuLeaf>& leaves, const Dictionary& dict
 std::vector<float> device_rows(GpuHastyRollouts& gpu, int n, int batch) {
   std::vector<float> spatial(size_t(n) * LeafEncoder::kSpatialFloats);
   std::vector<float> scalar(size_t(n) * LeafEncoder::kScalarFloats);
+  std::vector<uint32_t> tasks(static_cast<size_t>(n));
+  std::iota(tasks.begin(), tasks.end(), 0u);
   for (int first = 0; first < n; first += batch) {
-    gpu.encode_leaves_to_host(first, std::min(batch, n - first),
+    gpu.encode_leaves_to_host(&tasks[size_t(first)], std::min(batch, n - first),
                               &spatial[size_t(first) * LeafEncoder::kSpatialFloats],
                               &scalar[size_t(first) * LeafEncoder::kScalarFloats]);
   }
@@ -270,7 +273,7 @@ int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const D
     "  device rows vs CPU encoder: {} of {} identical, max |diff| {}\n"
     "  win values vs the host route on those leaves: max |diff| {:.2g}\n",
     onnx_path, mean_win / n, tm.rollout_seconds, tm.leaf_seconds,
-    n / (tm.rollout_seconds + tm.leaf_seconds), n / tm.leaf_seconds, check.rows_identical,
+    n / (tm.rollout_seconds + tm.leaf_seconds), tm.leaves / tm.leaf_seconds, check.rows_identical,
     check.checked, check.max_abs_diff, max_value_diff);
   std::cout << std::format(
     "  the host route: CPU encoder {:.0f} rows/s per thread, predict with upload {:.0f} evals/s\n",
