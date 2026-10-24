@@ -209,22 +209,30 @@ def sample_rows(
     pos_id: np.ndarray,
     rows_per_position: int,
     rng: np.random.Generator,
+    drawn_seed_share: float = 0.0,
 ) -> tuple[list[int], list[list[int]]]:
     """Subset assembly's chosen sets: per position, `rows_per_position` sets,
     each its seed (the largest `equity`) and 0..MAX_CHOSEN-1 more of its
     candidates (never all of them), drawn without replacement toward high win
-    probability."""
+    probability. With `drawn_seed_share`, that share of the rows draw their
+    seed the same way instead, so the seed is not always the candidate whose
+    equity input is 0."""
     positions, chosen = [], []
     starts = np.flatnonzero(np.r_[True, pos_id[1:] != pos_id[:-1]])
     ends = np.r_[starts[1:], len(pos_id)]
     for p, (lo, hi) in enumerate(zip(starts, ends, strict=True)):
-        seed = int(np.argmax(equity[lo:hi]))
         v = win_prob[lo:hi].astype(np.float64)
-        w = np.exp((v - v.max()) / SUBSET_TEMPERATURE) + SUBSET_FLOOR
-        w[seed] = 0.0
+        weights = np.exp((v - v.max()) / SUBSET_TEMPERATURE) + SUBSET_FLOOR
         # Beside the seed, at most all but one of the other candidates.
         most = max(min(MAX_CHOSEN - 1, hi - lo - 2), 0)
         for _ in range(rows_per_position):
+            # Only a positive share draws, so the default keeps its random stream.
+            if drawn_seed_share > 0 and rng.random() < drawn_seed_share:
+                seed = int(rng.choice(hi - lo, p=weights / weights.sum()))
+            else:
+                seed = int(np.argmax(equity[lo:hi]))
+            w = weights.copy()
+            w[seed] = 0.0
             size = int(rng.integers(0, most + 1))
             picked = rng.choice(hi - lo, size=size, replace=False, p=w / w.sum()) if size else []
             positions.append(p)

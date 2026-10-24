@@ -473,6 +473,18 @@ def test_subset_assembly_draws_proper_subsets_holding_each_pools_seed():
     assert triples.count(frozenset({2, 0, 1})) > len(triples) / 2
 
 
+def test_a_drawn_seed_share_draws_some_seeds_toward_high_value():
+    # The top equity is move 2, but moves 0 and 1 hold the high win probability.
+    win = np.array([0.5, 0.49, 0.1, 0.05])
+    equity = np.array([-1.0, -2.0, 0.0, -3.0])
+    pos_id = np.zeros(4, dtype=np.int64)
+    _, chosen = greedy.sample_rows(win, equity, pos_id, 200, np.random.default_rng(0), 0.5)
+    seeds = [c[0] for c in chosen]
+    drawn = sum(s in (0, 1) for s in seeds)
+    assert 60 < drawn < 140 and seeds.count(2) > 60
+    assert all(len(set(c)) == len(c) and len(c) < 4 for c in chosen)
+
+
 def test_the_greedy_form_overfits_a_pool_and_builds_distinct_sets(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)
