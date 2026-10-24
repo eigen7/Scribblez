@@ -541,6 +541,13 @@ __device__ void try_blank_word(const Smem& s, const Span& sp, int m, int nb, con
 
 // ---- Ply phases ----
 
+// The face value of player `p`'s rack (blanks count 0).
+__device__ inline int rack_value(const Smem& s, int p) {
+  int pv = 0;
+  for (int t = 0; t < 26; ++t) pv += s.rack[p][t] * c_tile_values[t];
+  return pv;
+}
+
 // The mover's rack sorted ascending by tile (blanks last), and the subrack
 // masks grouped by size and blank count. One thread.
 __device__ void prepare_rack(Smem& s) {
@@ -557,9 +564,7 @@ __device__ void prepare_rack(Smem& s) {
     const int k = __popc(m), b = __popc(m & blank_bits);
     s.masks[k][b][s.n_masks[k][b]++] = uint8_t(m);
   }
-  int pv = 0;
-  for (int t = 0; t < 26; ++t) pv += s.rack[1 - s.mover][t] * c_tile_values[t];
-  s.other_pv = pv;
+  s.other_pv = rack_value(s, 1 - s.mover);
   uint32_t letters = s.rack_blanks > 0 ? kAllLetters : 0u;
   for (int t = 0; t < 26; ++t) {
     if (s.rack[s.mover][t] > 0) letters |= 1u << t;
@@ -1023,9 +1028,8 @@ __device__ void load_start(const PositionAbi& pos, Smem& s) {
   }
 }
 
-// The racks and the bag (hasty_rollout_task.cpp's start_rollout): seat the
-// opponent's known leave, taken out of the pool first, draw the rest of
-// their rack and then our refill, and put back an exchange's tiles. Thread 0.
+// The racks and the bag, in rollout_abi.h's order (hasty_rollout_task.cpp's
+// start_rollout). Thread 0, after the scores are set.
 __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLeaveAbi* leaves,
                      uint32_t rollout, Smem& s) {
   for (int t = 0; t < kTileKinds; ++t) {
@@ -1052,6 +1056,11 @@ __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLea
   // A player who never moves keeps its full rack as its leave.
   record_leave(s, 0);
   record_leave(s, 1);
+  // Our move went out with the bag empty: the game ended with it.
+  if (rack_total(s, 0) == 0) {
+    s.scores[0] += 2 * rack_value(s, 1);
+    s.game_over = 1;
+  }
 }
 
 __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)

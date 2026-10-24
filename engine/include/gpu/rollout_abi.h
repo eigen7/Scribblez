@@ -5,8 +5,9 @@
 // g++ (C++26) and nvcc alike. A rollout from a start (a candidate applied to
 // the board): seat the opponent's known leave if the group has one, draw the
 // rest of their rack and then our refill from the unseen pool, put back the
-// tiles an exchange returned, the opponent plays its top-equity move, we play
-// ours, and the outcome is the score differential with the play-out bonus.
+// tiles an exchange returned (if our move went out with the bag empty, the
+// game is over here), the opponent plays its top-equity move, we play ours,
+// and the outcome is the score differential with the play-out bonus.
 // Both sides draw with the same counter-based generator, so rollout i holds
 // the same racks on either, and the outcomes compare exactly.
 // docs/plans/gpu_hasty_rollouts.md is the design.

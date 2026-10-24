@@ -34,8 +34,9 @@ RolloutStart make_rollout_start(const Board& board, const Rack& rack, int my_sco
                  .opp_score = opp_score,
                  .group = group};
   for (int i = 0; i < move.num_glyphs(); ++i) s.leave.remove(move.glyph(i).rack_tile());
-  if (move.type() == MoveType::PLAY) s.board.apply(move);
-  if (move.type() == MoveType::EXCHANGE) {
+  if (move.type() == MoveType::PLAY) {
+    s.board.apply(move);
+  } else if (move.type() == MoveType::EXCHANGE) {
     for (int i = 0; i < move.num_glyphs(); ++i) s.returned.add(move.glyph(i).rack_tile());
   }
   return s;
@@ -157,8 +158,7 @@ struct RolloutState {
   bool game_over = false;
 };
 
-// Seats the opponent's known leave (taken out of the pool first), draws the
-// rest of their rack and then our refill, and puts back an exchange's tiles.
+// The racks and the bag, in rollout_abi.h's order.
 RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::RolloutTask& task) {
   const RolloutStart& start = batch.starts[task.position];
   const RolloutGroup& group = batch.groups[start.group];
@@ -178,6 +178,11 @@ RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::Rollout
   for (int i = 0; i < start.returned.size(); ++i)
     st.bag.put_back(uint8_t(start.returned.tiles()[size_t(i)].index()));
   st.leaves = st.racks;  // a player who never moves keeps its full rack as its leave
+  // Our move went out with the bag empty: the game ended with it.
+  if (st.racks[0].empty()) {
+    st.scores[0] += 2 * st.racks[1].point_value();
+    st.game_over = true;
+  }
   return st;
 }
 
