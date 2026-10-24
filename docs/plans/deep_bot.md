@@ -17,7 +17,8 @@ Write **Alice** for the player to move and **Bob** for the opponent.
 3. **Bob's move.** For each candidate `a` and each Bob rack `r`, Alice
    predicts Bob's reply `β(a, r)` by building [Bob's
    subtree](#bobs-subtree), which models Bob's decision on Bob's
-   information.
+   information. A candidate that [empties the
+   bag](#when-alices-move-empties-the-bag) skips the subtree.
 4. **Alice's sims.** For each `(a, r)`, Alice runs several
    [sims](#sims), each with different replenishment draws:
    1. Bob plays `β(a, r)`.
@@ -77,6 +78,39 @@ samples replenishments, both players continue with hasty moves, and the leaf
 values average into `q(a)`. Every sampled rack gets its own subtree for Bob
 (`y` at right).*
 
+### When Alice's move empties the bag
+
+If `a` draws the bag's last tiles, Bob's turn is an endgame. The tiles he
+cannot see are exactly Alice's rack, and his subtree does not apply:
+
+- the policy-set model trains on the whole game except the endgame, so its
+  set at an empty bag is outside its training;
+- Bob needs no belief about Alice's rack, since he can deduce it, and Alice
+  needs no replenishment draws, since there are none.
+
+So for each sampled rack `r`, Alice skips the subtree and plays one sim to
+the game's end: Bob and Alice alternate moves by the mechanical rule until
+someone goes out or the game stalls, and the exact outcome enters `q(a)`.
+This is the play-to-the-end rule of [the sims](#sims), started one move
+earlier.
+
+That makes Bob's empty-bag move the one decision in the design that he does
+not search. The endgame solver (`EndgameSolver`) could choose it instead.
+Measured 2026-10-24 on the first empty-bag position of 200 HastyBot games,
+against a reference solve at budget 51,200 (which proved 131 of them):
+
+| On the 131 proven positions | Matches the reference's class |
+|-----------------------------|-------------------------------|
+| Hasty to the end | 123 |
+| The budget-400 solve's move, then hasty to the end | 126 |
+| The budget-400 solve's own value, where it proved nothing (103) | 24 |
+
+A budget-400 solve takes 2.4 ms on one thread, a hasty playout 0.34 ms. A
+solve that proves nothing gives a usable move but not a usable value. The
+solver's move is a later upgrade, worth what an A/B of the agent shows; the
+positions above are mostly decided endgames, and the solver's gains in the
+[endgame benchmark](../endgame_bench_results.md) sit in close ones.
+
 ## Sims
 
 **The mechanical rule** is HastyBot's: static equity over the mover's own
@@ -99,6 +133,11 @@ pool size.
   that owns the evaluation (Bob in his subtree, Alice in hers), as `1 − P`
   when the other side moved last.
 - **If the game ends** inside the sim, the outcome is exact.
+- **If the bag is empty** after the two mechanical moves, both players keep
+  moving by the mechanical rule to the game's end, and the outcome is exact.
+  The leaf network trains only on turns that began with tiles in the bag,
+  and with both racks known and nothing to draw, the playout is the exact
+  value a network would only approximate.
 
 **The leaf network is versioned.** It is trained on `.slog` outcomes of the
 current policy by the `deep_bot_leaf_eval` workload, which exports each
@@ -124,7 +163,7 @@ it rollout for rollout.
 
 Every sim in the design has the kernel's shape: a position in which one
 player has just moved, then the two mechanical moves, then the leaf from that
-player's side.
+player's side (or, with the bag empty, the game played to its end).
 
 - **Bob's sims** start after his candidate `b`; Alice and Bob reply hastily.
 - **Alice's sims** start after Bob's reply `β(a, r)`, which the host applies
