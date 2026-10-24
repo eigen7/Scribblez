@@ -245,12 +245,14 @@ const rollout_abi::LeafState* GpuHastyRollouts::device_leaves() const {
   return rollout_gpu::device_leaves(impl_->tables);
 }
 
-void GpuHastyRollouts::encode_leaves(int first, int count, float* spatial, float* scalar) {
-  rollout_gpu::encode_leaves(impl_->tables, first, count, spatial, scalar);
+void GpuHastyRollouts::encode_leaves(const uint32_t* tasks, int count, float* spatial,
+                                     float* scalar) {
+  rollout_gpu::encode_leaves(impl_->tables, tasks, count, spatial, scalar);
 }
 
-void GpuHastyRollouts::encode_leaves_to_host(int first, int count, float* spatial, float* scalar) {
-  rollout_gpu::encode_leaves_to_host(impl_->tables, first, count, spatial, scalar);
+void GpuHastyRollouts::encode_leaves_to_host(const uint32_t* tasks, int count, float* spatial,
+                                             float* scalar) {
+  rollout_gpu::encode_leaves_to_host(impl_->tables, tasks, count, spatial, scalar);
 }
 
 std::vector<GpuHastyRollouts::CountValue> GpuHastyRollouts::last_counts() const {

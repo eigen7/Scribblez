@@ -354,8 +354,9 @@ void pool_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Op
     double(st.tasks) / seconds);
   if (const auto* gpu = dynamic_cast<const GpuRolloutValues*>(&values)) {
     const GpuRolloutValues::Timings& t = gpu->total_timings();
-    std::cerr << std::format("  GPU: rollouts {:.1f} s (the kernel {:.1f} s), leaves {:.1f} s\n",
-                             t.rollout_seconds, t.kernel_seconds, t.leaf_seconds);
+    std::cerr << std::format(
+      "  GPU: rollouts {:.1f} s (the kernel {:.1f} s), leaves {:.1f} s ({} unfinished rollouts)\n",
+      t.rollout_seconds, t.kernel_seconds, t.leaf_seconds, t.leaves);
   }
 }
 

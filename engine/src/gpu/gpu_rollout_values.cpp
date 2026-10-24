@@ -45,30 +45,35 @@ std::vector<RolloutOutcome> GpuRolloutValues::run(const RolloutBatch& batch) {
   timings_.kernel_seconds = rollouts_.last_timings().kernel_seconds;
   t0 = Clock::now();
   std::vector<RolloutOutcome> outcomes(results.size());
-  for (size_t k = 0; k < results.size(); ++k) outcomes[k].result = results[k];
-  const int n = int(results.size());
+  std::vector<uint32_t> unfinished;
+  for (size_t k = 0; k < results.size(); ++k) {
+    outcomes[k].result = results[k];
+    if (results[k].game_over)
+      outcomes[k].wld = terminal_wld(results[k].diff);
+    else
+      unfinished.push_back(uint32_t(k));
+  }
+  const int n = int(unfinished.size());
   for (int first = 0; first < n; first += net_.max_rows())
-    evaluate_leaves(first, std::min(net_.max_rows(), n - first), &outcomes);
+    evaluate_leaves(&unfinished[size_t(first)], std::min(net_.max_rows(), n - first), &outcomes);
   timings_.leaf_seconds = seconds_since(t0);
+  timings_.leaves = int64_t(n);
   totals_.rollout_seconds += timings_.rollout_seconds;
   totals_.kernel_seconds += timings_.kernel_seconds;
   totals_.leaf_seconds += timings_.leaf_seconds;
+  totals_.leaves += timings_.leaves;
   return outcomes;
 }
 
-void GpuRolloutValues::evaluate_leaves(int first, int count,
+void GpuRolloutValues::evaluate_leaves(const uint32_t* tasks, int count,
                                        std::vector<RolloutOutcome>* outcomes) {
-  rollouts_.encode_leaves(first, count,
+  rollouts_.encode_leaves(tasks, count,
                           static_cast<float*>(net_.device_ptr(nn::SpatialInput::kName)),
                           static_cast<float*>(net_.device_ptr(nn::ScalarInput::kName)));
   net_.predict_device_inputs(count);
   const float* logits = net_.host<nn::WldOutput>();
   for (int i = 0; i < count; ++i) {
-    RolloutOutcome& o = (*outcomes)[size_t(first + i)];
-    if (o.result.game_over) {
-      o.wld = terminal_wld(o.result.diff);
-      continue;
-    }
+    RolloutOutcome& o = (*outcomes)[tasks[i]];
     o.wld = wld_from_logits(logits + 3 * i);
     if (!std::isfinite(o.wld[0]) || !std::isfinite(o.wld[2]))
       throw util::Exception("the leaf network gave a non-finite value (precision too narrow?)");
