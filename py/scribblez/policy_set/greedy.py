@@ -47,25 +47,23 @@ from torch import nn
 from scribblez.policy_set.metrics import SET_SIZES
 from scribblez.policy_set.model import Encoded, PolicySetEncoder, mean_spread, to_grid
 
-# The head predicts log(gain + GAIN_FLOOR), the gain in percentage points of
-# win probability, and the loss is Huber in that log space. Nearly every target
-# is about 0 (on fresh pools the median is 0 and the 99th percentile 0.24
-# points), so on a linear scale a constant near 0 is almost optimal, and a head
-# trained there collapsed to one. The log keeps the order the sets read, and
-# spreads the near-zero mass out: 0.01 points is the floor, below anything a
-# pool's rollouts resolve.
+# The head predicts the gain in percentage points of win probability, and the
+# loss is Huber with this delta, so all but the rarest gains fall in its
+# quadratic range and the head estimates the mean gain. Predicting in points
+# matters: a head predicting win probability, scaled by GAIN_SCALE for the
+# loss, started with ~50-point noise and gradients in the thousands, and
+# collapsed.
 GAIN_SCALE = 100.0
-GAIN_FLOOR = 0.01
-GAIN_HUBER = 1.0
+GAIN_HUBER = 5.0
 # Chosen sets are drawn with weights exp((v - v_best) / TEMPERATURE), plus
 # FLOOR, so they favour moves within a few points of the best.
 SUBSET_TEMPERATURE = 0.05
 SUBSET_FLOOR = 1e-3
-# The gain head's starting output bias: the floor's log, where most targets
-# sit. The head is linear, not softplus, whose output the many zero targets
-# pushed far negative until it passed no gradient (the first run's head went
-# dead there).
-GAIN_BIAS_INIT = math.log(GAIN_FLOOR)
+# The gain head's starting output bias, in points: most targets are about 0
+# (on fresh pools the median is 0, the 99th percentile 0.24 points). The head is
+# linear, not softplus, whose output the many zero targets pushed far negative
+# until it passed no gradient (the first run's head went dead there).
+GAIN_BIAS_INIT = 0.0
 # The largest chosen set a training row holds, the seed included: one less
 # than the largest set the eval builds.
 MAX_CHOSEN = max(SET_SIZES) - 1
@@ -194,9 +192,9 @@ class GreedyModel(nn.Module):
     def gains(
         self, enc: Encoded, h: torch.Tensor, pos_id: torch.Tensor, rows: SetRows
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Each row's predicted log gain for every candidate of its position
-        (log(gain + GAIN_FLOOR), the gain in percentage points): (log gains,
-        global candidate indices, row ids), (Mr,) each."""
+        """Each row's predicted gain for every candidate of its position, in
+        percentage points of win probability: (gains, global candidate
+        indices, row ids), (Mr,) each."""
         tokens = self.token(h[rows.chosen]) * rows.mask.unsqueeze(-1)
         board, g = self.stage(enc.board[rows.position], enc.g[rows.position], tokens, rows.mask)
         move_idx, row_id = row_candidates(pos_id, rows.position)
@@ -270,25 +268,20 @@ def gain_targets(batch: dict[str, torch.Tensor], rows: SetRows, move_idx, row_id
 
 
 def gain_loss(model: GreedyModel, batch: dict[str, torch.Tensor], rows: SetRows) -> torch.Tensor:
-    """Huber on the log gains (GAIN_FLOOR), over every row's candidates."""
+    """Huber on the gains, in percentage points, over every row's candidates."""
     with torch.autocast(device_type=batch["input_spatial"].device.type, dtype=torch.bfloat16):
         enc, h = model.cache(batch)
         gains, move_idx, row_id = model.gains(enc, h, batch["move_pos_id"], rows)
     target = gain_targets(batch, rows, move_idx, row_id)
-    return F.huber_loss(gains.float(), log_gain(target), delta=GAIN_HUBER, reduction="mean")
-
-
-def log_gain(gain: torch.Tensor) -> torch.Tensor:
-    """A gain in win probability as the head predicts it: log(points + floor)."""
-    return torch.log(gain * GAIN_SCALE + GAIN_FLOOR)
+    return F.huber_loss(gains.float(), target * GAIN_SCALE, delta=GAIN_HUBER, reduction="mean")
 
 
 @torch.no_grad()
 def greedy_diagnostics(
     model: GreedyModel, batch: dict[str, torch.Tensor]
 ) -> dict[str, torch.Tensor]:
-    """The first step's log gains' spread over each position's candidates (the
-    set its seed alone)."""
+    """The first step's gains' spread over each position's candidates (the set
+    its seed alone), in percentage points."""
     pos_id = batch["move_pos_id"]
     num_positions = batch["input_spatial"].shape[0]
     equity, _ = to_grid(batch["move_equity"].float(), pos_id, num_positions, -torch.inf)

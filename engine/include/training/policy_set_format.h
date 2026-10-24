@@ -11,7 +11,7 @@ namespace scribblez {
 
 // 2: the equity input.
 // 3: normalized candidate vectors, the slot form's cosine pointer with a learned
-//    scale, and the greedy form's linear head on the log gain.
+//    scale, and the greedy form's linear gain head, in percentage points.
 inline constexpr int kPolicySetFormatVersion = 3;
 
 }  // namespace scribblez

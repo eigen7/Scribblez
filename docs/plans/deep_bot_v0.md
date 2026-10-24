@@ -802,13 +802,12 @@ that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
   so its near-ties are coin flips. The expected improvement gives an
   unresolved near-tie a target in proportion to how unresolved it is, and a
   clearly worse move about 0.
-- The head predicts `log(gain + 0.01)`, the gain in percentage points, and the
-  loss is Huber in that log space. Nearly every target is about 0 (on fresh
-  pools the median is 0 and the 99th percentile 0.24 points), so on a linear
-  scale a constant is almost optimal, and a head trained there collapsed to
-  one; the log keeps the order the sets read. The head is linear: a softplus
-  head, which the zero targets pushed far negative, stopped passing gradient
-  in the first run.
+- The head is linear and predicts the gain in percentage points; the loss is
+  Huber with a 5-point delta, so it estimates the mean gain. A softplus head,
+  which the many zero targets pushed far negative, stopped passing gradient in
+  the first run. Predicting in points matters too: a head predicting win
+  probability (scaled by 100 for the loss) started with ~50-point noise and
+  collapsed to a constant.
 
 **Form 2, `slot`:** a slot decoder with `N_max` slots (default 16).
 - The slots cross-attend to the move embeddings and self-attend to each
