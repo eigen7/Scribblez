@@ -70,6 +70,7 @@ def test_labels_are_a_distribution_over_each_pool(pooled):
     for p in positions:
         assert len(p.moves) > 1
         np.testing.assert_allclose(p.q.sum(), 1.0, atol=1e-5)
+        assert p.q.max() < 1 and p.q.std() > 0
         assert ((p.win_prob >= 0) & (p.win_prob <= 1)).all()
         assert (p.moves["type"] == MOVE_TYPES["pass"]).sum() == 1
         assert ((p.rollouts >= 1) & (p.rollouts <= ROLLOUTS)).all()
@@ -127,20 +128,20 @@ def test_a_finished_file_from_other_settings_is_refused(pooled):
 
 
 @pytest.mark.parametrize(
-    "flags",
+    ("flags", "error"),
     [
-        ["--leaf-model", "synthetic"],  # synthetic on the gpu backend
-        ["--backend", "cpu", "--leaf-model", "leaf.onnx"],  # a network on the cpu backend
-        ["--backend", "cpu"],  # no leaf
-        [*CPU, "--rollouts", "0"],
-        [*CPU, "--blank-prune-points", "-1"],
+        (["--leaf-model", "synthetic"], "needs --backend cpu"),
+        (["--backend", "cpu", "--leaf-model", "leaf.onnx"], "needs --leaf-model synthetic"),
+        (["--backend", "cpu"], "--leaf-model is required"),
+        ([*CPU, "--rollouts", "0"], "--rollouts must be"),
+        ([*CPU, "--blank-prune-points", "-1"], "--blank-prune-points must be"),
     ],
 )
-def test_bad_flag_combinations_are_refused(pooled, flags):
+def test_bad_flag_combinations_are_refused(pooled, flags, error):
     run = subprocess.run(
         [str(TOOL), "--slog-file", str(pooled), *flags], capture_output=True, text=True, check=False
     )
-    assert run.returncode != 0 and run.stderr
+    assert run.returncode != 0 and error in run.stderr
 
 
 def test_leave_inference_needs_forgone_sidecars(pooled, tmp_path):

@@ -115,9 +115,10 @@ void validate(const Options& opt) {
   if (opt.backend != "gpu" && opt.backend != "cpu")
     throw util::CleanException("--backend must be gpu or cpu");
   if (opt.leaf_model.empty()) throw util::CleanException("--leaf-model is required");
-  if (opt.gpu() == (opt.leaf_model == kSyntheticLeaf))
-    throw util::CleanException("--leaf-model is an ONNX path on the gpu backend, {} on the cpu",
-                               kSyntheticLeaf);
+  if (opt.gpu() && opt.leaf_model == kSyntheticLeaf)
+    throw util::CleanException("--leaf-model {} needs --backend cpu", kSyntheticLeaf);
+  if (!opt.gpu() && opt.leaf_model != kSyntheticLeaf)
+    throw util::CleanException("--backend cpu needs --leaf-model {}", kSyntheticLeaf);
   if (opt.labeler.rollouts < 1) throw util::CleanException("--rollouts must be >= 1");
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
   if (opt.blank_prune_points < 0) throw util::CleanException("--blank-prune-points must be >= 0");
@@ -218,12 +219,13 @@ PoolJob make_job(const SimmedPosition& r, const belief::SlogLeaveBeliefs* belief
 
 // Prepares a file's jobs on its own thread, kPrepBatch positions at a time
 // (candidate selection and job building each spread over the threads), and
-// hands them out in work order. A producer failure rethrows from next().
+// hands them out in work order. A producer failure rethrows from next(); a
+// labeler failure stops the producer on destruction.
 class JobProducer {
  public:
   JobProducer(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt,
               const belief::SlogLeaveBeliefs* beliefs, std::vector<binlog::GamePositionIndex> work);
-  ~JobProducer() { thread_.join(); }
+  ~JobProducer();
 
   std::optional<PoolJob> next();
 
@@ -240,6 +242,7 @@ class JobProducer {
   std::condition_variable cv_;
   std::deque<PoolJob> ready_;
   bool finished_ = false;
+  bool stopping_ = false;  // the labeler is gone; nothing will pop ready_
   std::exception_ptr error_;
   std::thread thread_;
 };
@@ -253,6 +256,15 @@ JobProducer::JobProducer(const binlog::PendingSlog& slog, const Dictionary& dict
       beliefs_(beliefs),
       work_(std::move(work)),
       thread_(&JobProducer::produce, this) {}
+
+JobProducer::~JobProducer() {
+  {
+    const std::lock_guard lock(mutex_);
+    stopping_ = true;
+  }
+  cv_.notify_all();
+  thread_.join();
+}
 
 std::vector<PoolJob> JobProducer::prepare(const std::vector<binlog::GamePositionIndex>& batch) {
   SlogSimConfig config;
@@ -282,7 +294,9 @@ void JobProducer::produce() {
       std::unique_lock lock(mutex_);
       // Stay about one flight ahead of the labeler: positions hold their
       // candidates' boards.
-      cv_.wait(lock, [&] { return ready_.size() < size_t(opt_.labeler.max_in_flight); });
+      cv_.wait(lock,
+               [&] { return stopping_ || ready_.size() < size_t(opt_.labeler.max_in_flight); });
+      if (stopping_) break;
       for (PoolJob& j : jobs) ready_.push_back(std::move(j));
       cv_.notify_all();
     }
