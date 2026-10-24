@@ -415,7 +415,10 @@ exact value it would only approximate. Two scoreless turns in a row end such
 a game as six would, since the position can no longer change. At seed 6
 after 16 plies, where most rollouts empty the bag, that took the kernel from
 0.50 s to 0.77 s for 65,536 tasks; on positions with a fuller bag nothing
-changes. `GpuRolloutValues` (`gpu/gpu_rollout_values.h`) runs a batch through
+changes. The leaf network values only the rollouts that did not finish,
+since a finished game's outcome is exact: on one `tilted2` chunk, where a
+quarter of the raced rollouts finish, that took the pool tool from 9.0 to
+10.4 pools/s, with identical pools. `GpuRolloutValues` (`gpu/gpu_rollout_values.h`) runs a batch through
 the kernel, the device encoder and the leaf network and returns each task's
 win/draw/loss from the chooser's side (exact when the game ended);
 `CpuRolloutValues` is the same interface over the CPU reference, with a leaf
