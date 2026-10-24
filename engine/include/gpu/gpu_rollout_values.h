@@ -40,6 +40,7 @@ class GpuRolloutValues : public RolloutValues {
     double leaf_seconds = 0;
   };
   const Timings& last_timings() const { return timings_; }
+  // The parts, for checks against the CPU reference (gpu_rollout_demo).
   GpuHastyRollouts& rollouts() { return rollouts_; }
   nn::NeuralNet<nn::LeafEvalSpec>& net() { return net_; }
 

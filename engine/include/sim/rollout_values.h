@@ -27,11 +27,14 @@ Wld terminal_wld(int diff);
 // The probabilities of a win/draw/loss logit triple.
 Wld wld_from_logits(const float* z);
 
+// P(win) + P(draw) / 2.
+inline double win_value(const Wld& w) { return w[0] + 0.5 * w[1]; }
+
 struct RolloutOutcome {
   rollout_abi::RolloutResult result;
   Wld wld{};
 
-  double win_value() const { return wld[0] + 0.5 * wld[1]; }
+  double win_value() const { return scribblez::win_value(wld); }
 };
 
 class RolloutValues {

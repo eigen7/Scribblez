@@ -73,6 +73,12 @@ def check_rollouts(scratch: Path) -> bool:
         print(f"ERROR: {binary} not found. Run py/build.py first.", file=sys.stderr)
         return False
     model = scratch / ROLLOUT_LEAF_FAMILY / "real.onnx"
+    if not model.is_file():
+        print(
+            f"ERROR: {model} missing: the {ROLLOUT_LEAF_FAMILY} family's fixture failed",
+            file=sys.stderr,
+        )
+        return False
     return run([str(binary), *ROLLOUT_FLAGS, "--leaf-model", str(model)])
 
 

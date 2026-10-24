@@ -36,6 +36,7 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace scribblez {
@@ -236,10 +237,7 @@ HostRoute run_host_route(nn::NeuralNet<nn::LeafEvalSpec>& net, const std::vector
     net.predict(count);
     out.seconds += seconds_since(t0);
     const float* z = net.host<nn::WldOutput>();
-    for (int i = 0; i < count; ++i) {
-      const Wld w = wld_from_logits(z + 3 * i);
-      out.win_values.push_back(w[0] + 0.5 * w[1]);
-    }
+    for (int i = 0; i < count; ++i) out.win_values.push_back(win_value(wld_from_logits(z + 3 * i)));
   }
   return out;
 }
@@ -363,7 +361,13 @@ int run(int argc, char** argv) {
     return 0;
   }
   po::notify(vm);
-  if (leaf_check < 1) throw po::error("--leaf-check must be at least 1");
+  for (const auto& [name, value] : {std::pair{"rollouts", rollouts},
+                                    {"candidates", num_candidates},
+                                    {"threads", threads},
+                                    {"leaf-check", leaf_check},
+                                    {"leaf-rows", leaf_rows}}) {
+    if (value < 1) throw po::error(std::format("--{} must be at least 1", name));
+  }
 
   const Dictionary& dict = Lexicon::instance().dict();
   HastyEquity::ensure_initialized(Lexicon::instance().name());
