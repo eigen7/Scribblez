@@ -58,12 +58,12 @@ struct TurnIndex {
   std::vector<GameMetadata> metas;  // empty if the table was unreadable
 };
 
-// Reads only the header and metadata table. `all_turns` counts every turn of
-// each game, otherwise only its eligible region. If the header is unreadable,
+// Reads only the header and metadata table, counting each game's `task` rows
+// (BlockDecoder::row_turns). If the header is unreadable,
 // falls back to `num_games_fallback` games of one row each; if only the
 // metadata table is unreadable, to one row per game.
 TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t num_games_fallback,
-                          bool all_turns) {
+                          DecodeTask task) {
   std::ifstream f(path, std::ios::binary);
   FileHeader hdr{};
   if (f && f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr)) && hdr.magic == kMagic) {
@@ -76,10 +76,9 @@ TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t n
       idx.first_turn.resize(size_t(num_games));
       idx.cum[0] = 0;
       for (int64_t g = 0; g < num_games; ++g) {
-        const uint32_t turns =
-          all_turns ? metas[g].num_turns : metas[g].eligible_end - metas[g].eligible_begin;
-        idx.cum[g + 1] = idx.cum[g] + int64_t(turns);
-        idx.first_turn[g] = all_turns ? 0 : metas[g].eligible_begin;
+        const EligibleSpan rows = BlockDecoder::row_turns(task, metas[g]);
+        idx.cum[g + 1] = idx.cum[g] + int64_t(std::max(rows.end - rows.begin, 0));
+        idx.first_turn[g] = uint8_t(rows.begin);
       }
       idx.metas = std::move(metas);
       return idx;
@@ -103,9 +102,9 @@ TurnIndex read_turn_index(const std::string& path, int64_t& num_games, int64_t n
 // ===========================================================================
 
 DataLoader::DataFile::DataFile(const std::string& path, int64_t num_games, int64_t file_size,
-                               bool expand_all_turns, const std::string* forgone_lexicon)
+                               DecodeTask task, const std::string* forgone_lexicon)
     : path_(path), file_size_(file_size), forgone_lexicon_(forgone_lexicon) {
-  TurnIndex idx = read_turn_index(path_, num_games_, num_games, expand_all_turns);
+  TurnIndex idx = read_turn_index(path_, num_games_, num_games, task);
   cumulative_turns_ = std::move(idx.cum);
   first_turns_ = std::move(idx.first_turn);
   num_positions_ = cumulative_turns_.back();
@@ -292,9 +291,9 @@ void DataLoader::PrefetchThread::loop() {
 // ===========================================================================
 
 DataLoader::FileManager::FileManager(int64_t memory_budget, int num_prefetch_threads,
-                                     bool expand_all_turns, const std::string* forgone_lexicon)
+                                     DecodeTask task, const std::string* forgone_lexicon)
     : memory_budget_(memory_budget),
-      expand_all_turns_(expand_all_turns),
+      task_(task),
       forgone_lexicon_(forgone_lexicon),
       thread_table_(num_prefetch_threads) {
   for (int i = 0; i < num_prefetch_threads; ++i) {
@@ -315,7 +314,7 @@ DataLoader::FileManager::~FileManager() {
 void DataLoader::FileManager::append(const std::string& path, int64_t num_games,
                                      int64_t file_size) {
   // Tally the DataFile's row count, read from the file, not the caller's hint.
-  auto* f = new DataFile(path, num_games, file_size, expand_all_turns_, forgone_lexicon_);
+  auto* f = new DataFile(path, num_games, file_size, task_, forgone_lexicon_);
   std::lock_guard<std::mutex> lock(mutex_);
   num_positions_ += f->num_positions();
   all_files_.push_back(f);
@@ -683,8 +682,7 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
 DataLoader::DataLoader(const Params& params)
     : params_(params),
       file_manager_(
-        params.memory_budget, std::max(params.num_prefetch_threads, 1),
-        params.task == DecodeTask::kMaxMovePerLane,
+        params.memory_budget, std::max(params.num_prefetch_threads, 1), params.task,
         BlockDecoder::reads_forgone(params.task) ? &params.spec.dict->content_hash() : nullptr),
       work_manager_(&file_manager_, &load_failure_, std::max(params.num_worker_threads, 1),
                     params.spec, params.task) {}

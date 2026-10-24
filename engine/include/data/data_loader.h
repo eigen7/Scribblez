@@ -116,8 +116,7 @@ class DataLoader {
   // One registered .slog file and, while loaded, its in-memory body.
   //
   // A file's "positions" are its training rows, one per included turn of each
-  // game. `expand_all_turns` includes every turn (kMaxMovePerLane); otherwise
-  // only each game's eligible region is included (kPositionEval). The row
+  // game: BlockDecoder::row_turns says which turns `task` includes. The row
   // index is built at construction from the header and metadata table, so an
   // epoch can be planned before any body is loaded.
   class DataFile {
@@ -126,7 +125,7 @@ class DataLoader {
     // the file's .forgone sidecar: its header is checked here, so a missing or
     // mismatched sidecar throws util::Exception on the registering thread, and
     // it loads and unloads with the body.
-    DataFile(const std::string& path, int64_t num_games, int64_t file_size, bool expand_all_turns,
+    DataFile(const std::string& path, int64_t num_games, int64_t file_size, DecodeTask task,
              const std::string* forgone_lexicon);
     ~DataFile();
 
@@ -177,8 +176,7 @@ class DataLoader {
     // num_positions_.
     std::vector<int64_t> cumulative_turns_;
 
-    // The turn that game g's first row stands for: eligible_begin, or 0 when
-    // expanding all turns.
+    // The turn that game g's first row stands for: its row_turns begin.
     std::vector<uint8_t> first_turns_;
 
     mutable std::mutex mutex_;
@@ -260,7 +258,7 @@ class DataLoader {
   class FileManager {
    public:
     // `forgone_lexicon` as for DataFile.
-    FileManager(int64_t memory_budget, int num_prefetch_threads, bool expand_all_turns,
+    FileManager(int64_t memory_budget, int num_prefetch_threads, DecodeTask task,
                 const std::string* forgone_lexicon);
     ~FileManager();
 
@@ -290,7 +288,7 @@ class DataLoader {
     void exit_prefetch_loop();
 
     int64_t memory_budget_;
-    bool expand_all_turns_;
+    DecodeTask task_;
     const std::string* forgone_lexicon_;
 
     mutable std::mutex mutex_;
