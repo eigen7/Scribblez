@@ -610,8 +610,7 @@ A generator worker's cycle:
    design's [candidate set](deep_bot.md#labels): up to `rollouts` (default
    100) per candidate, raced. A rollout is the candidate, Bob's and Alice's
    mechanical replies, and the [leaf network](deep_bot.md#sims), the form
-   the network is trained on. (The CPU recipe ran three mechanical plies to
-   the win table.)
+   the network is trained on.
 5. **Deliver the chunk's pool records** (below) as the `.slog`'s sidecar.
 
 **`policy_set_pool_tool`** (engine/apps) labels a `.slog`'s picked positions
@@ -633,12 +632,13 @@ into its `.pool`. Per position:
   [GPU sims](deep_bot.md#sims): they share the unseen pool and the
   per-rollout opponent leaves, so rollout `i` holds the same opponent rack
   and draws from the same shuffled bag under every candidate.
-- **Racing, in rounds.** The rounds end at the CPU recipe's checkpoints, 10%,
-  20%, 40% and 70% of `rollouts`, and the race rule is the same: after each
-  round, a candidate more than three paired standard errors below the leader
-  stops. Each round is one launch over the surviving candidates' next slice of
+- **Racing, in rounds.** The rounds end at the checkpoints in
+  `sim/candidate_race.h`, 10%, 20%, 40% and 70% of `rollouts`, which the CPU
+  simmer races at too: after each round, a candidate more than three paired
+  standard errors below the leader stops. Each round is one launch over the surviving candidates' next slice of
   rollout indices. The tool keeps many positions in flight, and a launch takes
-  the pending rounds of as many as fill it (10,000 rollouts or more), so the
+  the pending rounds of as many as fill it (`--launch-tasks`, 32,768
+  rollouts by default), so the
   GPU stays busy while each pool's race narrows.
 - **The leaf** is `--leaf-model <ONNX path>`, a `deep_bot_leaf_eval` export,
   evaluated on the device from the rows the encoder kernel writes. A rollout
@@ -654,9 +654,6 @@ kernel. The test suites hide the GPU, so they run the tool on the CPU
 reference with a synthetic leaf (a fixed function of the spread), which
 exercises everything but the device; `py/tools/gpu_parity.py` checks the
 device against the reference.
-
-The survey tool's pool recipe, the CPU path that labelled pools before, is
-deleted with it.
 
 **The pool record** is a compact sidecar beside the `.slog`. Its header
 carries the magic and `kPoolFormatVersion`.

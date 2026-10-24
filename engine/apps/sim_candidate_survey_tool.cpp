@@ -20,8 +20,7 @@
 //     the cut costs on average.
 //
 // --win-table and --horizon-plies truncate any recipe's rollouts at the
-// table. (The policy-set model's labeled pools have their own tool, on the
-// GPU: policy_set_pool_tool.)
+// table.
 //
 // Each position is simmed in two stages. The screen sims every candidate at
 // --rollouts and picks the best --confirm-picks moves outside the cut. The best

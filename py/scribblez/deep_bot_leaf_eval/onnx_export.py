@@ -10,10 +10,9 @@ with (which the engine checks before loading: nn::check_leave_values), and
 the generation's provenance.
 
 The trainer exports every generation into its tag's models/, where a
-policy_set task pins one. As a script: export a tag's rolling checkpoint, whose
-weights are the served ones (the trainer checkpoints in eval mode: the
-averaged iterate with recalibrated batch norm), for a generation trained
-before the trainer exported.
+policy_set task pins one. As a script: export a tag's rolling checkpoint as
+its latest generation. The checkpoint holds the served weights: the trainer
+checkpoints in eval mode, the averaged iterate with recalibrated batch norm.
 
     python -m scribblez.deep_bot_leaf_eval.onnx_export --tag leaf-conv-nojoin
 """
