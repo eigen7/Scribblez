@@ -21,6 +21,7 @@ from scribblez.generational.checkpoint import (
 )
 from scribblez.generational.optim import (
     ScheduleFreeArm,
+    WindowedAdamWScheduleFree,
     WsdArm,
     arm_lr,
     build_optim_arm,
@@ -53,6 +54,7 @@ class _Params:
     batch_size: int = 8
     lr_warmup_rows: int = 80
     lr_cycle_rows: int = 800
+    averaging_window_rows: int = 8_000_000  # far past any test's horizon
 
 
 def _model() -> torch.nn.Module:
@@ -70,7 +72,7 @@ def _step(model, opt, n: int = 3):
 def test_build_optimizer_picks_the_arm():
     model = _model()
     sf = build_optimizer(model, _Params(optimizer=OPTIMIZER_SCHEDULE_FREE))
-    assert type(sf).__name__ == "AdamWScheduleFree"
+    assert isinstance(sf, WindowedAdamWScheduleFree)
     # Warmup is expressed in rows by the params and in steps by the optimizer.
     assert sf.param_groups[0]["warmup_steps"] == 10
     assert isinstance(build_optimizer(model, _Params(optimizer=OPTIMIZER_WSD)), torch.optim.AdamW)
@@ -295,6 +297,42 @@ def test_the_averaging_weight_falls_off_as_training_proceeds():
     assert first == 1.0  # the first base iterate is the whole average
     assert tenth == pytest.approx(0.1)  # ... and the tenth is a tenth of it
     assert tenth < first
+
+
+def test_the_averaging_window_floors_the_averaging_weight():
+    """Uniform averaging until the window fills, then each new base iterate
+    keeps a 1 / window share, so the average forgets the early weights."""
+    model = _model()
+    params = _Params(lr_warmup_rows=0, averaging_window_rows=32)  # 4 steps of 8 rows
+    opt = build_optimizer(model, params)
+    assert opt.window_steps == 4
+    arm = ScheduleFreeArm(params, opt)
+    arm.train_mode()
+    shares = []
+    for _ in range(10):
+        _step(model, opt, n=1)
+        shares.append(arm.metrics()["averaging_weight"])
+    assert shares[:4] == pytest.approx([1.0, 1 / 2, 1 / 3, 1 / 4])
+    assert shares[4:] == pytest.approx([1 / 4] * 6)
+
+
+def test_the_averaging_window_holds_through_the_warmup_ramp():
+    """The floor is computed from the weight the step is about to add, so a
+    rising warmup rate cannot slip a step's share below it."""
+    model = _model()
+    params = _Params(lr_warmup_rows=160, averaging_window_rows=24)  # 20 warmup steps, window 3
+    opt = build_optimizer(model, params)
+    arm = ScheduleFreeArm(params, opt)
+    arm.train_mode()
+    for _ in range(12):
+        _step(model, opt, n=1)
+        assert arm.metrics()["averaging_weight"] >= 1 / 3 - 1e-12
+
+
+def test_the_window_counts_rows_per_step():
+    params = _Params(averaging_window_rows=800)
+    assert build_optimizer(_model(), params, rows_per_step=200).window_steps == 4
+    assert build_optimizer(_model(), _Params(averaging_window_rows=1)).window_steps == 1
 
 
 def test_the_reported_rate_is_the_one_the_optimizer_applied():
