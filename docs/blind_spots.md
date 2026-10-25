@@ -62,3 +62,40 @@ worker, or collected over ssh from a remote one's container:
 survey (every legal play's screening summary, megabytes per game) never leaves
 the worker and is discarded. To keep full surveys, run
 `py/scripts/sim_candidate_survey.py` on one machine instead.
+
+## Hidden-leaves blind spots on the GPU
+
+The workload above sims on the CPU, with face-up leaves by default and the
+win table or the endgame solver at its leaves. DeepBot's Alice evaluates
+differently: hidden leaves, the opponent's leave drawn from the leave
+inference model, two HastyBot replies, then the leaf network
+([plans/deep_bot.md](plans/deep_bot.md#sims)). `blind_spot_confirm_tool`
+finds blind spots under that evaluation, from pools
+`policy_set_pool_tool` already labeled:
+
+```
+blind_spot_confirm_tool --slog-dir chunk/ --leaf-model <leaf_eval .onnx> \
+  --leave-inference <leave_inference .onnx> --gcg-dir found/
+```
+
+- **The screen is the pool.** A pool sims every legal move, so a pool whose
+  leader (the largest `q`) is outside the static-equity top `--cut` is a
+  candidate.
+- **The confirmation** re-sims the cut's moves and the pool's best `--picks`
+  outside moves at `--rollouts` each (5000), unraced, on rollouts independent
+  of the screen's, under the leaf network and leave inference model the
+  pool's header names; the tool refuses others. A position is kept when the
+  best outside move beats the best cut move by `--min-gain` points of win
+  percentage (5) and by `--sigmas` paired standard errors (2).
+- **Output:** `<stem>.blindspots.json` beside each `.slog`, holding every
+  confirmed position, kept or not, and the number of pools screened; and a
+  `.gcg` per kept position in `--gcg-dir`, named as the workload's are. The
+  survey viewer does not read this JSON: the GPU returns only each rollout's
+  outcome and its two moves, not the survey's rollout summaries.
+
+On the 2,000 pools of a `tilted2`-gen-1188 / `leaf-conv-join-32-4b`-gen-730
+chunk set (2026-10-25), 238 pools had a leader outside the top 10, 51 of those
+gained at least 2 points on confirmation, and 28 at least 5: one blind spot
+per 71 pools, in 95 seconds on the dev laptop's GPU. 22 of the 28 had 7 or
+fewer tiles in the bag, where the rollouts play out to the end by HastyBot
+rather than stop at the leaf network.

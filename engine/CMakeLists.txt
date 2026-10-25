@@ -23,6 +23,7 @@ add_library(scribblez_core STATIC
   src/data/gcg_reader.cpp
   src/data/gcg_post_move.cpp
   src/data/gcg_writer.cpp
+  src/data/slog_position_gcg.cpp
   src/data/binary_log.cpp
   src/encoding/game_state_encoder.cpp
   src/training/training_targets.cpp
@@ -67,6 +68,7 @@ add_library(scribblez_core STATIC
   src/sim/candidate_race.cpp
   src/sim/hasty_rollout_task.cpp
   src/sim/pool_labeler.cpp
+  src/sim/pool_jobs.cpp
   src/sim/rollout_values.cpp
   src/agent/best_bot.cpp
   src/agent/candidate_evaluator.cpp
@@ -286,7 +288,8 @@ set(CMAKE_CUDA_FLAGS_TEST "${CMAKE_CUDA_FLAGS_RELEASE}")
 add_library(scribblez_gpu_rollouts STATIC
   src/gpu/rollout_kernel.cu
   src/gpu/hasty_rollouts_gpu.cpp
-  src/gpu/gpu_rollout_values.cpp)
+  src/gpu/gpu_rollout_values.cpp
+  src/gpu/rollout_backend.cpp)
 set_target_properties(scribblez_gpu_rollouts PROPERTIES
   INTERPROCEDURAL_OPTIMIZATION OFF
   CUDA_RUNTIME_LIBRARY Shared)
@@ -299,6 +302,16 @@ target_link_libraries(policy_set_pool_tool PRIVATE
   scribblez_nn
   scribblez_core
   Boost::program_options
+  Threads::Threads)
+
+# Hidden-leaves blind spots confirmed from labeled pools (docs/blind_spots.md).
+add_executable(blind_spot_confirm_tool apps/blind_spot_confirm_tool.cpp)
+target_link_libraries(blind_spot_confirm_tool PRIVATE
+  scribblez_gpu_rollouts
+  scribblez_nn
+  scribblez_core
+  Boost::program_options
+  Boost::json
   Threads::Threads)
 
 add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)

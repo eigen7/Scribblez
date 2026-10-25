@@ -83,4 +83,10 @@ class LeaveSampler {
   double log_z_ = 0;
 };
 
+// The quantile at which the rollout seeded `seed` samples the opponent's
+// leave. The seed is salted, so the quantile is not correlated with the bag's
+// draws, which the same seed drives. Rollout i of every candidate shares its
+// seed, so it shares its quantile and the candidates meet matched leaves.
+double rollout_leave_quantile(uint64_t seed);
+
 }  // namespace scribblez::belief

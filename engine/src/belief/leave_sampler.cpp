@@ -1,6 +1,7 @@
 #include "belief/leave_sampler.h"
 
 #include "util/exception.h"
+#include "util/math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,6 +12,7 @@ namespace scribblez::belief {
 namespace {
 
 constexpr double kInfeasible = -std::numeric_limits<double>::infinity();
+constexpr uint64_t kLeaveQuantileSalt = 0x1EAFE5EEDull;
 
 // The per-code table a row sums over its codes: copy j of a tile kind the
 // pool holds n of adds log((n - j) / (j + 1)), so a leave's sum is its log
@@ -106,6 +108,10 @@ LeaveMoments LeaveSampler::moments() const {
   }
   m.value_sd = std::sqrt(std::max(0.0, value_sq - m.value_mean * m.value_mean));
   return m;
+}
+
+double rollout_leave_quantile(uint64_t seed) {
+  return double(util::splitmix64(seed ^ kLeaveQuantileSalt) >> 11) * 0x1.0p-53;
 }
 
 }  // namespace scribblez::belief
