@@ -80,14 +80,9 @@ int PositionEncoder::bag_size() const {
 
 void PositionEncoder::record_history_slot(const GameLog& g, int k, LeaveHistorySlot& slot) const {
   const Move& move = g.records[k].move;
-  slot.present = true;
-  slot.move = move;
-  slot.score = move.type() == MoveType::PLAY ? move.score() : 0;
-  slot.bag_before = bag_size();
-  enc_.board().ensure_movegen_caches(*spec_.dict);
-  slot.cross_checks = CrossCheckMasks::of(enc_.board());
-  slot.leave_kinds =
-    leave_kinds_after(move, k > 0 ? exchanged_tiles(g.records[k - 1].move) : Rack{});
+  slot =
+    history_slot(enc_.board(), *spec_.dict, move, bag_size(),
+                 leave_kinds_after(move, k > 0 ? exchanged_tiles(g.records[k - 1].move) : Rack{}));
 }
 
 uint32_t PositionEncoder::leave_kinds_after(const Move& move, const Rack& observer_exchange) const {
@@ -95,12 +90,7 @@ uint32_t PositionEncoder::leave_kinds_after(const Move& move, const Rack& observ
   if (move.type() == MoveType::PLAY) {
     for (int i = 0; i < move.num_glyphs(); ++i) unseen.remove(move.glyph(i).rack_tile());
   }
-  const TileCounts pool = leave_pool(unseen, observer_exchange);
-  uint32_t mask = 0;
-  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
-    if (pool.count(t) > 0) mask |= 1u << t.index();
-  }
-  return mask;
+  return leave_kinds_of(leave_pool(unseen, observer_exchange));
 }
 
 void PositionEncoder::attach_forgone(int sampled_turn,

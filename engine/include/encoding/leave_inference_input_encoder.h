@@ -103,6 +103,20 @@ struct LeaveHistory {
 // the leave rather than leave it, which a pool cannot express.
 TileCounts leave_pool(TileCounts unseen, const Rack& observer_exchange);
 
+// LeaveHistorySlot::leave_kinds for a leave drawn from `pool`: the kinds it
+// holds at least one of.
+uint32_t leave_kinds_of(const TileCounts& pool);
+
+// LeaveHistorySlot::leave_kinds that reads nothing of the observer's rack: every
+// kind may be in the leave, as a public row has it.
+inline constexpr uint32_t kAnyLeaveKind = ~0u;
+
+// A present history slot for `move`, about to be played on `before` with
+// `bag_before` tiles in the bag; its forgone plays are attached separately.
+// Builds `before`'s move-generation caches from `dict` if needed.
+LeaveHistorySlot history_slot(const Board& before, const Dictionary& dict, const Move& move,
+                              int bag_before, uint32_t leave_kinds);
+
 // Whose information a row holds: the observer's, or only the public part of
 // it (see the layout above).
 enum class LeaveInferenceView : uint8_t { kObserver, kPublic };

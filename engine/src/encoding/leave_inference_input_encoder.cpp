@@ -57,7 +57,7 @@ void encode_played_tiles(const Move& m, float* out) {
 // margin. A public row skips the observer's leave_kinds: the board alone
 // already withholds a margin from a tile kind it holds every copy of.
 float* encode_forgone_scalars(const LeaveHistorySlot& slot, LeaveInferenceView view, float* out) {
-  const uint32_t kinds = is_public(view) ? ~0u : slot.leave_kinds;
+  const uint32_t kinds = is_public(view) ? kAnyLeaveKind : slot.leave_kinds;
   for (int t = 0; t < TILE_KINDS; ++t, out += 2) {
     const int8_t margin = slot.forgone.margin[t];
     if (margin == belief::ForgonePlays::kNone || !((kinds >> t) & 1u)) continue;
@@ -91,6 +91,27 @@ TileCounts leave_pool(TileCounts unseen, const Rack& observer_exchange) {
     RELEASE_ASSERT(ok, "the observer's exchanged tiles are not all unseen");
   }
   return unseen;
+}
+
+uint32_t leave_kinds_of(const TileCounts& pool) {
+  uint32_t mask = 0;
+  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t) {
+    if (pool.count(t) > 0) mask |= 1u << t.index();
+  }
+  return mask;
+}
+
+LeaveHistorySlot history_slot(const Board& before, const Dictionary& dict, const Move& move,
+                              int bag_before, uint32_t leave_kinds) {
+  LeaveHistorySlot slot;
+  slot.present = true;
+  slot.move = move;
+  slot.score = move.type() == MoveType::PLAY ? move.score() : 0;
+  slot.bag_before = bag_before;
+  before.ensure_movegen_caches(dict);
+  slot.cross_checks = CrossCheckMasks::of(before);
+  slot.leave_kinds = leave_kinds;
+  return slot;
 }
 
 LeaveHistory LeaveHistory::transpose() const {

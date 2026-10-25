@@ -48,10 +48,7 @@ LeaveQuery SlogLeaveBeliefs::query(const binlog::GamePositionIndex& at) const {
 std::shared_ptr<const LeaveSampler> SlogLeaveBeliefs::belief(
   const binlog::GamePositionIndex& at) const {
   const LeaveQuery q = query(at);
-  if (!q.modelled()) return nullptr;
-  LeaveParams params;
-  predict_(q.input.data(), 1, &params);
-  return std::make_shared<const LeaveSampler>(params, q.length, q.leave_pool, table_);
+  return beliefs_of({&q, 1}, predict_, table_)[0];
 }
 
 }  // namespace scribblez::belief
