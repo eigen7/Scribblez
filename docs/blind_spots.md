@@ -91,9 +91,7 @@ blind_spot_confirm_tool --slog-dir chunk/ --leaf-model <leaf_eval .onnx> \
   no standard-error bar beside it; the report records the error.
 - **Output:** `<stem>.blindspots.json` beside each `.slog`, holding every
   confirmed position, kept or not, and the number of pools screened; and a
-  `.gcg` per kept position in `--gcg-dir`, named as the workload's are. The
-  survey viewer does not read this JSON: the GPU returns only each rollout's
-  outcome and its two moves, not the survey's rollout summaries.
+  `.gcg` per kept position in `--gcg-dir`, named as the workload's are.
 
 **From the dashboard**, the workload **Collect hidden-leaves blind spots
 (GPU)** (`hidden_blind_spots`) runs the whole chain per cycle: a 200-game
@@ -112,6 +110,19 @@ chunk delivers into `/workspace/mount/tags/hidden_blind_spots/<tag>/data/`
   forgone plays, which step 4's tools replay; the pools are dropped;
 - `found/<stem>.blindspots.json`: the confirmation's report;
 - `gcg/<stem>-g<G>-turn<N>.gcg`: each kept position.
+
+Browse a tag's kept positions in the sim-survey viewer:
+
+```
+./py/scripts/blind_spots_viewer.py --tag <tag> [--min-bag 8]
+```
+
+It lists each position's outside moves above the top moves, with their
+confirming and screening win rates and the pool's `q`. The GPU sims keep no
+per-rollout summaries, so the survey's margin and next-move panels do not
+appear, and only the best outside move, whose paired standard error the
+report records, shows its sigmas. It uses the sim-survey viewer's ports, so it
+replaces a running `sim_survey_viewer.py`.
 
 On the 2,000 pools of a `tilted2`-gen-1188 / `leaf-conv-join-32-4b`-gen-730
 chunk set (2026-10-25), 238 pools had a leader outside the top 10, 51 of those

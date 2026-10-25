@@ -1,5 +1,6 @@
 // The sim-survey viewer's data, as py/scribblez/sim_survey_viewer.py builds it
-// and py/scripts/sim_survey_viewer.py serves it at /api/survey.
+// from a CPU survey and py/scribblez/blind_spots_viewer.py from a
+// hidden_blind_spots tag; each script of the same name serves it at /api/survey.
 import { PlacedTile } from '../types';
 
 // One side's next move after the candidate, over the confirming sim's rollouts.
@@ -33,15 +34,23 @@ export interface SurveyMoveStats {
 export interface SurveyMove {
   move: string; // GCG notation
   display: string; // the same with played-through tiles spelled out: "A4 (mO)u(N)T"
-  hasty_rank: number; // 1-based
-  equity: number;
+  hasty_rank: number; // 1-based; 0 for a pass outside the static-equity ranking
+  equity?: number; // absent from blind spots, which do not record it
   score: number;
   leave: string;
   is_setup: boolean;
   tiles: PlacedTile[];
-  stats: SurveyMoveStats;
+  outside: boolean; // from outside HastyBot's top moves
+  win_pct: number; // in the confirming sim
+  rollouts: number; // the confirming sim's
+  // The CPU survey's rollout summaries; blind spots' GPU sims keep none.
+  stats?: SurveyMoveStats;
+  // Blind spots only: the screen's (the pool's raced sim) reading of the move.
+  screen_win_pct?: number;
+  screen_q?: number; // P(the move is the pool's best)
   // Only on a play from outside the top moves: how it fared against the best of
-  // them (`versus`) in the confirming sim.
+  // them (`versus`) in the confirming sim. A blind spot's `sigmas` is on its
+  // best outside move alone, the only pair whose standard error it records.
   gain_pct?: number;
   sigmas?: number;
   beats_cut?: boolean;
@@ -59,17 +68,17 @@ export interface SurveyPosition {
   scores: [number, number];
   bag_size: number;
   solved_endgames: boolean; // the confirming sim's rollouts solved their endgames
-  num_legal_moves: number;
+  num_legal_moves?: number; // absent from blind spots
   played: string;
   board: (string | null)[][];
   moves: SurveyMove[]; // the outside plays, best first, then the top moves by hasty rank
 }
 
 export interface SurveyData {
-  survey: { cut: number; rollouts: number; confirm_rollouts: number; recipe: string };
+  survey: { cut: number }; // the source file's header, which the viewer only passes through
   bonuses: (string | null)[][];
   tile_scores: Record<string, number>;
   positions: SurveyPosition[];
 }
 
-export const isOutsidePlay = (m: SurveyMove) => m.sigmas !== undefined;
+export const isOutsidePlay = (m: SurveyMove) => m.outside;

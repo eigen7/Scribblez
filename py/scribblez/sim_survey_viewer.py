@@ -99,6 +99,13 @@ def board_before(gcg_text: str, turn: int) -> list[list[str | None]]:
     return board
 
 
+def opp_rack_count(board: list[list[str | None]], rack: str, bag_size: int) -> int:
+    """The opponent's rack size: every tile is on the board, on a rack, or in
+    the bag."""
+    on_board = sum(cell is not None for row in board for cell in row)
+    return TOTAL_TILES - on_board - len(rack) - bag_size
+
+
 def per_rollout(stats: dict, key: str, n: int) -> float:
     return stats[key] / n
 
@@ -136,8 +143,17 @@ def move_stats(summary: dict) -> dict:
     return out
 
 
+def tiles_json(notation: str) -> list[dict]:
+    """placed_tiles in the web viewer's PlacedTile shape."""
+    return [
+        {"row": t.row, "col": t.col, "letter": t.letter, "isBlank": t.is_blank}
+        for t in placed_tiles(notation)
+    ]
+
+
 def move_entry(position: dict, entry: dict, finding: Finding | None) -> dict:
     c = position["candidates"][entry["candidate"]]
+    stats = move_stats(entry["summary"])
     out = {
         "move": c["move"],
         "display": c["display"],
@@ -146,11 +162,11 @@ def move_entry(position: dict, entry: dict, finding: Finding | None) -> dict:
         "score": c["score"],
         "leave": c["leave"],
         "is_setup": c["is_setup"],
-        "tiles": [
-            {"row": t.row, "col": t.col, "letter": t.letter, "isBlank": t.is_blank}
-            for t in placed_tiles(c["move"])
-        ],
-        "stats": move_stats(entry["summary"]),
+        "tiles": tiles_json(c["move"]),
+        "outside": finding is not None,
+        "stats": stats,
+        "win_pct": stats["win_pct"],
+        "rollouts": stats["rollouts"],
     }
     if finding:  # an outside play: how it fared against the best top move
         out |= {
@@ -179,7 +195,6 @@ def position_entry(
     inside = sorted((m for m in moves if "sigmas" not in m), key=lambda m: m["hasty_rank"])
     gcg = gcg_name(key)
     board = board_before((gcg_dir / gcg).read_text(), position["turn"])
-    on_board = sum(cell is not None for row in board for cell in row)
     return {
         "name": gcg.removesuffix(".gcg"),
         "gcg": gcg,
@@ -193,8 +208,7 @@ def position_entry(
         "num_legal_moves": position["num_legal_moves"],
         "played": position["played"],
         "board": board,
-        # Every tile is on the board, on a rack, or in the bag.
-        "opp_rack_count": TOTAL_TILES - on_board - len(position["rack"]) - position["bag_size"],
+        "opp_rack_count": opp_rack_count(board, position["rack"], position["bag_size"]),
         "moves": outside + inside,
     }
 

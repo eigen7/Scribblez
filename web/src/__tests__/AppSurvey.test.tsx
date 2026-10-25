@@ -18,6 +18,9 @@ function move(name: string, rank: number, win: number, outside: boolean, col = 7
     leave: 'AB',
     is_setup: false,
     tiles: [{ row: 7, col, letter: name[name.length - 1], isBlank: false }],
+    outside,
+    win_pct: win,
+    rollouts: 5000,
     stats: {
       rollouts: 5000, win_pct: win, spread: 3, spread_sd: 80, delta_hist: [0, 3, 1],
       end_swing: 2, opp_stranded: 4, self_stranded: 1, self_passed_pct: 7.5,
@@ -39,7 +42,7 @@ function position(name: string, moves: SurveyMove[]): SurveyPosition {
 }
 
 const DATA: SurveyData = {
-  survey: { cut: 10, rollouts: 1000, confirm_rollouts: 5000, recipe: 'all' },
+  survey: { cut: 10 },
   bonuses: Array.from({ length: 15 }, () => Array<string | null>(15).fill(null)),
   tile_scores: { A: 1, Z: 10 },
   positions: [
@@ -171,5 +174,69 @@ describe('AppSurvey', () => {
     expect(screen.getByRole('button', { name: 'next position' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'previous position' }));
     expect(statsMoves()).toEqual(['C3 F(I)ND', 'J1 MUD']); // a revisited position reopens afresh
+  });
+});
+
+// A blind spot's moves: win rates from the GPU sims and the screen, no
+// rollout summaries, no equity; a pass outside the ranking has rank 0.
+function blindSpotMove(name: string, rank: number, win: number, outside: boolean, col: number): SurveyMove {
+  const { stats: _stats, equity: _equity, sigmas: _sigmas, ...rest } = move(name, rank, win, outside, col);
+  return {
+    ...rest,
+    screen_win_pct: win + 1,
+    screen_q: 0.25,
+    ...(outside ? { gain_pct: 7.3, beats_cut: true, versus: 'K9 NATURES' } : {}),
+    ...(outside && rank === 0 ? { sigmas: 8.8 } : {}),
+  };
+}
+
+const BLIND_SPOTS: SurveyData = {
+  ...DATA,
+  positions: [
+    {
+      ...position('spot', [
+        blindSpotMove('pass', 0, 63.6, true, 3),
+        blindSpotMove('E2 RAG', 221, 27.3, true, 5),
+        blindSpotMove('K9 NATURES', 1, 22.2, false, 7),
+      ]),
+      num_legal_moves: undefined,
+      solved_endgames: false,
+    },
+  ],
+};
+
+describe('AppSurvey on blind spots', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve(BLIND_SPOTS) })),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('shows the compact panels, row for row, without the survey-only rows', async () => {
+    render(<AppSurvey />);
+    await waitFor(() => expect(screen.getByText(/1 \/ 1 · spot/)).toBeInTheDocument());
+    expect(statsMoves()).toEqual(['pass', 'K9 NATURES']);
+    const [outside, hasty] = [...document.querySelectorAll('.survey-stats')];
+    const labels = (panel: Element) =>
+      [...panel.querySelectorAll('.survey-stat-row, .survey-stat-title')].map((el) => el.className);
+    expect(labels(hasty)).toEqual(labels(outside));
+    expect(screen.getByText('+7.3 pts, +8.8σ')).toBeInTheDocument();
+    expect(screen.getAllByText('Screen')).toHaveLength(2);
+    expect(screen.getAllByText('25.0%')).toHaveLength(2); // P(best)
+    expect(screen.getAllByText('unranked')).toHaveLength(2); // the pass, in its row and its panel
+    expect(document.querySelectorAll('.survey-hist')).toHaveLength(0);
+    expect(screen.queryByText(/legal moves/)).not.toBeInTheDocument();
+    expect(screen.getByText(/greedy endgames/)).toBeInTheDocument();
+  });
+
+  it('shows the gain without sigmas on an outside move whose error is unrecorded', async () => {
+    render(<AppSurvey />);
+    fireEvent.click(await screen.findByRole('button', { name: /E2 RAG/ }));
+    expect(statsMoves()).toEqual(['E2 RAG', 'K9 NATURES']);
+    expect(screen.getByText('+7.3 pts')).toBeInTheDocument();
   });
 });

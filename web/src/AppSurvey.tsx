@@ -4,7 +4,13 @@ import Rack from './components/Rack';
 import UnseenTiles from './components/UnseenTiles';
 import { oppRackTiles } from './lib/oppRack';
 import { TileInfo } from './types';
-import { SurveyData, SurveyMove, SurveyPosition, isOutsidePlay } from './lib/surveyTypes';
+import {
+  SurveyData,
+  SurveyMove,
+  SurveyMoveStats,
+  SurveyPosition,
+  isOutsidePlay,
+} from './lib/surveyTypes';
 
 const NOOP = () => {};
 const DIM = 15;
@@ -28,6 +34,8 @@ const SECTION_TITLE: Record<Section, string> = {
 
 const sectionOf = (m: SurveyMove): Section => (isOutsidePlay(m) ? 'outside' : 'hasty');
 const signed = (v: number, digits = 1) => `${v >= 0 ? '+' : ''}${v.toFixed(digits)}`;
+// A pass outside the static-equity ranking has rank 0.
+const rankLabel = (rank: number) => (rank > 0 ? `#${rank}` : 'unranked');
 
 function rackTiles(rack: string, tileScores: Record<string, number>): TileInfo[] {
   return [...rack].map((ch) =>
@@ -110,11 +118,13 @@ function peakShare(bins: number[]): number {
 }
 
 function histPeaks(moves: SurveyMove[]): HistPeaks {
-  const over = (pick: (m: SurveyMove) => number[]) => Math.max(0, ...moves.map((m) => peakShare(pick(m))));
+  const all = moves.flatMap((m) => (m.stats ? [m.stats] : []));
+  const over = (pick: (s: SurveyMoveStats) => number[]) =>
+    Math.max(0, ...all.map((s) => peakShare(pick(s))));
   return {
-    margin: over((m) => m.stats.delta_hist),
-    oppReply: over((m) => m.stats.opp_reply.score_hist),
-    selfNext: over((m) => m.stats.self_next.score_hist),
+    margin: over((s) => s.delta_hist),
+    oppReply: over((s) => s.opp_reply.score_hist),
+    selfNext: over((s) => s.self_next.score_hist),
   };
 }
 
@@ -129,7 +139,7 @@ function StatRow({ label, value, hint }: { label: string; value: string; hint?: 
 
 function NextMovePanel({
   title, stats, peak,
-}: { title: string; stats: SurveyMove['stats']['opp_reply']; peak: number }) {
+}: { title: string; stats: SurveyMoveStats['opp_reply']; peak: number }) {
   return (
     <div className="survey-stat-group">
       <div className="survey-stat-title">{title}</div>
@@ -154,33 +164,72 @@ function NextMovePanel({
   );
 }
 
+// The comparison row: an outside move's win% over the best top move. Kept,
+// blank, on a top move, so two panels line up row for row.
+function VersusRow({ move }: { move: SurveyMove }) {
+  if (move.gain_pct === undefined) return <StatRow label={'\u00a0'} value="" />;
+  const sigmas = move.sigmas !== undefined ? `, ${signed(move.sigmas)}σ` : '';
+  return (
+    <StatRow
+      label={`vs ${move.versus}`}
+      value={`${signed(move.gain_pct)} pts${sigmas}`}
+      hint="win% against the best of the hasty top moves, over the same rollouts"
+    />
+  );
+}
+
+function MoveFacts({ move }: { move: SurveyMove }) {
+  const equity = move.equity !== undefined ? ` / ${move.equity.toFixed(1)}` : '';
+  return (
+    <div className="survey-stat-group">
+      <StatRow label="hasty rank" value={rankLabel(move.hasty_rank)} />
+      <StatRow label={move.equity !== undefined ? 'score / equity' : 'score'} value={`${move.score}${equity}`} />
+      <StatRow label="leave" value={move.leave || '—'} />
+    </div>
+  );
+}
+
+// A blind spot's move: its confirming and screening sims, which keep only
+// win rates.
+function CompactStatsPanel({ move, section }: { move: SurveyMove; section: Section }) {
+  return (
+    <div className={`survey-stats survey-tint-${section}`}>
+      <div className="survey-stats-move">{move.display}</div>
+      <MoveFacts move={move} />
+      <div className="survey-stat-group">
+        <div className="survey-stat-title">Confirming sim ({move.rollouts})</div>
+        <StatRow label="win" value={`${move.win_pct.toFixed(1)}%`} />
+        <VersusRow move={move} />
+      </div>
+      <div className="survey-stat-group">
+        <div className="survey-stat-title">Screen</div>
+        <StatRow label="win" value={`${(move.screen_win_pct ?? 0).toFixed(1)}%`} hint="the pool's raced sim" />
+        <StatRow
+          label="P(best)"
+          value={`${(100 * (move.screen_q ?? 0)).toFixed(1)}%`}
+          hint="the pool's label: the probability that this move is the position's best"
+        />
+      </div>
+    </div>
+  );
+}
+
 // Every panel has the same rows in the same order -- a row that does not apply
 // to a move is kept, blank -- so two panels side by side line up row for row.
 function StatsPanel({
   move, section, peaks,
 }: { move: SurveyMove; section: Section; peaks: HistPeaks }) {
   const s = move.stats;
+  if (!s) return <CompactStatsPanel move={move} section={section} />;
   return (
     <div className={`survey-stats survey-tint-${section}`}>
       <div className="survey-stats-move">{move.display}</div>
-      <div className="survey-stat-group">
-        <StatRow label="hasty rank" value={`#${move.hasty_rank}`} />
-        <StatRow label="score / equity" value={`${move.score} / ${move.equity.toFixed(1)}`} />
-        <StatRow label="leave" value={move.leave || '—'} />
-      </div>
+      <MoveFacts move={move} />
       <div className="survey-stat-group">
         <div className="survey-stat-title">Confirming sim ({s.rollouts})</div>
         <StatRow label="win" value={`${s.win_pct.toFixed(1)}%`} />
         <StatRow label="spread" value={`${signed(s.spread)} ± ${s.spread_sd.toFixed(0)} sd`} />
-        {move.sigmas !== undefined ? (
-          <StatRow
-            label={`vs ${move.versus}`}
-            value={`${signed(move.gain_pct ?? 0)} pts, ${signed(move.sigmas)}σ`}
-            hint="win% against the best of the hasty top moves, paired over the same rollouts"
-          />
-        ) : (
-          <StatRow label={'\u00a0'} value="" />
-        )}
+        <VersusRow move={move} />
         {/* bin 9 of the tool's 18 holds margins in [0, 25) */}
         <Histogram
           bins={s.delta_hist}
@@ -213,14 +262,14 @@ function MoveRow({
     .join(' ');
   return (
     <button type="button" className={classes} aria-pressed={selected} onClick={onSelect}>
-      <span className="survey-move-rank">#{move.hasty_rank}</span>
+      <span className="survey-move-rank">{rankLabel(move.hasty_rank)}</span>
       <span className="survey-move-name">
         {move.display}
         {played && <span className="survey-move-played" title="the move the game played"> ●</span>}
       </span>
       <span className="survey-move-score" title="points the move scores">{move.score}</span>
       <span className="survey-move-win" title="confirming-sim win%">
-        {move.stats.win_pct.toFixed(1)}%
+        {move.win_pct.toFixed(1)}%
       </span>
       <span className="survey-move-sigma">
         {move.sigmas !== undefined ? `${signed(move.sigmas)}σ` : ''}
@@ -270,7 +319,8 @@ function PositionHeader({
         </div>
         <div className="survey-header-sub">
           turn {position.turn} · to move {mine}–{theirs} ({signed(mine - theirs, 0)}) · bag{' '}
-          {position.bag_size} · {position.num_legal_moves} legal moves ·{' '}
+          {position.bag_size} ·{' '}
+          {position.num_legal_moves !== undefined && `${position.num_legal_moves} legal moves · `}
           {position.solved_endgames ? 'endgames solved' : 'greedy endgames'}
         </div>
       </div>
