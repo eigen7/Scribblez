@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getJSON, postJSON } from '../../lib/api';
 import BurnStrip from './BurnStrip';
 import PoolView, { enqueueTag } from './PoolView';
@@ -36,9 +36,11 @@ export type Workload = {
 type TagRow = {
   tag: string; has_task: boolean; created_at: number | null;
   workers: number; active_workers: number;
-  // complete | failed | running | queued | paused | idle, common to every
-  // workload (TaskStore.state).
+  // invalid params | complete | failed | running | queued | paused | idle,
+  // common to every workload (TaskStore.state).
   state: string;
+  // Why the tag's stored params no longer validate, or null (TaskStore.params_error).
+  params_error: string | null;
   progress: [string, string | number][]; last_active: number;
   disk_bytes: number;  // the tag's tree on the controller's disk
   // The workload's pace role's live fleet rate (WorkloadSpec.pace_role): the
@@ -400,16 +402,27 @@ export function NewTagForm({ workload, onCreated }: { workload: Workload; onCrea
   );
 }
 
+// One workload's tag list as last fetched: its rows, or why the fetch failed.
+type Listing = { workload: string; tags: TagRow[]; error: string };
+
 export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (tag: string) => void }) {
-  const [rows, setRows] = useState<TagRow[]>([]);
+  const [listing, setListing] = useState<Listing | null>(null);
   const [sortBy, setSortBy] = useState<TagSort>('last-ran');
   const [error, setError] = useState('');
+  // The workload shown now, so a fetch for one switched away from lands nowhere.
+  const shown = useRef(workload.name);
+  shown.current = workload.name;
 
   const refresh = useCallback(() => {
-    getJSON(`/api/workload_tags?workload=${workload.name}`)
-      .then((d) => setRows(d.tags))
-      .catch(() => {});
+    const name = workload.name;
+    const land = (l: Listing) => { if (shown.current === name) setListing(l); };
+    getJSON(`/api/workload_tags?workload=${name}`)
+      .then((d) => land({ workload: name, tags: d.tags, error: '' }))
+      .catch((e) => land({ workload: name, tags: [], error: String(e) }));
   }, [workload]);
+  // Another workload's rows are never shown under this one's heading.
+  const current = listing?.workload === workload.name ? listing : null;
+  const rows = current?.tags ?? [];
   useEffect(() => {
     refresh();
     const id = setInterval(refresh, 5000);
@@ -450,7 +463,11 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
             </select>
           </label>
         </div>
-        {sorted.length === 0 ? (
+        {current === null ? (
+          <div style={{ color: '#556070', fontStyle: 'italic' }}>Loading tags…</div>
+        ) : current.error ? (
+          <div style={{ color: '#b23b3b', fontSize: 13 }}>Could not list tags: {current.error}</div>
+        ) : sorted.length === 0 ? (
           <div style={{ color: '#556070', fontStyle: 'italic' }}>No tags yet — create one below.</div>
         ) : (
           <table style={{ borderCollapse: 'collapse', fontSize: 14, width: '100%' }}>
@@ -485,9 +502,13 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
                   <td style={{ padding: '6px 14px 6px 0' }}>{r.workers}</td>
                   <td style={{ padding: '6px 14px 6px 0', whiteSpace: 'nowrap' }}>{fmtBytes(r.disk_bytes)}</td>
                   <td style={{ padding: '6px 14px 6px 0' }}>{relTime(r.last_active)}</td>
-                  <td style={{ padding: '6px 14px 6px 0', fontSize: 12, color: '#8494a5' }}>
-                    {r.has_task ? '' : 'pre-dashboard tag (read-only)'}
-                  </td>
+                  {r.params_error ? (
+                    <td style={{ padding: '6px 14px 6px 0', fontSize: 12, color: '#b23b3b' }}>{r.params_error}</td>
+                  ) : (
+                    <td style={{ padding: '6px 14px 6px 0', fontSize: 12, color: '#8494a5' }}>
+                      {r.has_task ? '' : 'pre-dashboard tag (read-only)'}
+                    </td>
+                  )}
                   <td style={{ padding: '6px 0' }} onClick={(e) => e.stopPropagation()}>
                     <span title={r.active_workers > 0 ? 'pause the tag’s workers first' : undefined}>
                       <Button
