@@ -36,7 +36,10 @@ function position(name: string, moves: SurveyMove[]): SurveyPosition {
     name, gcg: `${name}.gcg`, turn: 12, mover: 1, rack: 'ABCDEF?', opp_known_leave: 'QU',
     opp_rack_count: 7, solved_endgames: true,
     scores: [200, 180], bag_size: 9, num_legal_moves: 300, played: 'H8 TOP',
-    board: Array.from({ length: 15 }, () => Array<string | null>(15).fill(null)),
+    board: Array.from({ length: 15 }, (_, r) =>
+      Array.from({ length: 15 }, (_, c) => (r === 0 && c < 2 ? 'HI'[c] : null)),
+    ),
+    last_move: { text: 'A1 HI +5', squares: [[0, 0], [0, 1]] },
     moves,
   };
 }
@@ -102,7 +105,11 @@ describe('AppSurvey', () => {
     expect(screen.getByText('To move · 180 points')).toBeInTheDocument();
     expect(screen.getByText(/Opponent · 200 points/)).toBeInTheDocument();
     expect(document.querySelectorAll('.rack-tile.drawn-tile')).toHaveLength(5);
+    expect(screen.getByText(/green: drawn since their last move/)).toBeInTheDocument();
     expect(screen.getByText(/Unseen tiles \(14\)/)).toBeInTheDocument();
+    // The opponent's last move: its squares highlighted, its text under the board.
+    expect(document.querySelectorAll('.board-cell.last-move')).toHaveLength(2);
+    expect(screen.getByText('Last move: A1 HI +5')).toBeInTheDocument();
   });
 
   it('lines the two stats panels up row for row', async () => {
@@ -186,7 +193,6 @@ function blindSpotMove(name: string, rank: number, win: number, outside: boolean
     screen_win_pct: win + 1,
     screen_q: 0.25,
     ...(outside ? { gain_pct: 7.3, beats_cut: true, versus: 'K9 NATURES' } : {}),
-    ...(outside && rank === 0 ? { sigmas: 8.8 } : {}),
   };
 }
 
@@ -201,6 +207,7 @@ const BLIND_SPOTS: SurveyData = {
       ]),
       num_legal_moves: undefined,
       solved_endgames: false,
+      opp_known_leave: '',
     },
   ],
 };
@@ -224,19 +231,18 @@ describe('AppSurvey on blind spots', () => {
     const labels = (panel: Element) =>
       [...panel.querySelectorAll('.survey-stat-row, .survey-stat-title')].map((el) => el.className);
     expect(labels(hasty)).toEqual(labels(outside));
-    expect(screen.getByText('+7.3 pts, +8.8σ')).toBeInTheDocument();
+    expect(screen.getByText('+7.3 pts')).toBeInTheDocument();
+    expect(screen.queryByText(/σ/)).not.toBeInTheDocument();
     expect(screen.getAllByText('Screen')).toHaveLength(2);
     expect(screen.getAllByText('25.0%')).toHaveLength(2); // P(best)
-    expect(screen.getAllByText('unranked')).toHaveLength(2); // the pass, in its row and its panel
+    expect(screen.getAllByText('unranked')).toHaveLength(1); // the pass's panel; its row has a dash
+    expect(screen.getByRole('button', { name: /pass/ })).toHaveTextContent('—');
+    // Hidden leaves: unknown tiles, none shaded as drawn, and no note about it.
+    expect(document.querySelectorAll('.rack-tile.drawn-tile')).toHaveLength(0);
+    expect(screen.queryByText(/green: drawn/)).not.toBeInTheDocument();
     expect(document.querySelectorAll('.survey-hist')).toHaveLength(0);
     expect(screen.queryByText(/legal moves/)).not.toBeInTheDocument();
     expect(screen.getByText(/greedy endgames/)).toBeInTheDocument();
   });
 
-  it('shows the gain without sigmas on an outside move whose error is unrecorded', async () => {
-    render(<AppSurvey />);
-    fireEvent.click(await screen.findByRole('button', { name: /E2 RAG/ }));
-    expect(statsMoves()).toEqual(['E2 RAG', 'K9 NATURES']);
-    expect(screen.getByText('+7.3 pts')).toBeInTheDocument();
-  });
 });

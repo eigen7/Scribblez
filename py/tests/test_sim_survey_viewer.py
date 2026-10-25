@@ -7,6 +7,7 @@ from scribblez.sim_survey_viewer import (
     Tile,
     board_before,
     bonuses,
+    last_move,
     placed_tiles,
     position_entry,
     viewer_data,
@@ -39,6 +40,23 @@ def test_board_before_replays_only_the_earlier_turns():
     assert "".join(board[7][7:12]) == "GREEK"
     assert board[8][6] is None  # turn 2 (0-based) itself is not applied
     assert board_before(gcg, 3)[8][6:8] == ["Z", "o"]
+
+
+def test_last_move_spells_played_through_letters_and_hides_exchanged_tiles():
+    gcg = "\n".join(
+        [
+            ">a: EEEFGKR 8H GREEK +30 30",
+            ">b: AACITTZ -AC +0 0",
+            ">a: AEFNOOU H8 .ofA +27 57",
+            ">b: AACITTZ - +0 0",
+        ]
+    )
+    assert last_move(gcg, 0) is None
+    assert last_move(gcg, 1) == {"text": "8H GREEK +30", "squares": [[7, c] for c in range(7, 12)]}
+    assert last_move(gcg, 2) == {"text": "exch 2", "squares": []}
+    # Down column H from row 8, through GREEK's G; the blank stays lowercase.
+    assert last_move(gcg, 3) == {"text": "H8 GofA +27", "squares": [[8, 7], [9, 7], [10, 7]]}
+    assert last_move(gcg, 4) == {"text": "pass", "squares": []}
 
 
 def test_bonuses_is_the_standard_symmetric_layout():
@@ -78,7 +96,9 @@ def found_position(turn: int = 1) -> dict:
 def test_position_entry_counts_the_opponents_rack(tmp_path):
     # 5 tiles on the board, 7 on the mover's rack, 81 in the bag: the other 7 are
     # the opponent's.
-    (tmp_path / "chunk-g0-turn2.gcg").write_text(">a: EEEFGKR 8H GREEK +30 30\n")
+    (tmp_path / "chunk-g0-turn2.gcg").write_text(
+        ">a: EEEFGKR 8H GREEK +30 30\n>b: AACITTZ K6 AC.TA +12 12\n"
+    )
     entry = position_entry("chunk", found_position(), 10, tmp_path, min_sigmas=2.0)
     assert entry["opp_rack_count"] == 7
     assert [m["move"] for m in entry["moves"]] == ["K6 AC.TA", "9K TIZ"]  # outside play first
@@ -94,7 +114,7 @@ def test_viewer_data_lists_positions_in_name_order_with_numeric_turns(tmp_path):
         positions = [found_position(t) for t in turns]
         survey = {"version": 3, "cut": 10, "positions": positions}
         (tmp_path / f"{stem}{SURVEY_SUFFIX}").write_text(json.dumps(survey))
-        for t in turns:
-            (tmp_path / f"{stem}-g0-turn{t + 1}.gcg").write_text("")
+        for t in turns:  # an export runs through the position's own turn
+            (tmp_path / f"{stem}-g0-turn{t + 1}.gcg").write_text(">a: A - +0 0\n" * (t + 1))
     names = [p["name"] for p in viewer_data(tmp_path, gcg_dir=tmp_path)["positions"]]
     assert names == ["a-g0-turn9", "a-g0-turn10", "b-g0-turn2"]

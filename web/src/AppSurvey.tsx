@@ -34,8 +34,10 @@ const SECTION_TITLE: Record<Section, string> = {
 
 const sectionOf = (m: SurveyMove): Section => (isOutsidePlay(m) ? 'outside' : 'hasty');
 const signed = (v: number, digits = 1) => `${v >= 0 ? '+' : ''}${v.toFixed(digits)}`;
-// A pass outside the static-equity ranking has rank 0.
+// A pass outside the static-equity ranking has rank 0: "unranked" in a stats
+// panel, a dash in the narrow list column.
 const rankLabel = (rank: number) => (rank > 0 ? `#${rank}` : 'unranked');
+const rankCell = (rank: number) => (rank > 0 ? `#${rank}` : '—');
 
 function rackTiles(rack: string, tileScores: Record<string, number>): TileInfo[] {
   return [...rack].map((ch) =>
@@ -262,7 +264,7 @@ function MoveRow({
     .join(' ');
   return (
     <button type="button" className={classes} aria-pressed={selected} onClick={onSelect}>
-      <span className="survey-move-rank">{rankLabel(move.hasty_rank)}</span>
+      <span className="survey-move-rank">{rankCell(move.hasty_rank)}</span>
       <span className="survey-move-name">
         {move.display}
         {played && <span className="survey-move-played" title="the move the game played"> ●</span>}
@@ -373,27 +375,37 @@ function moveTints(position: SurveyPosition, selection: Selection, shown: Sectio
   return grid;
 }
 
+// The opponent's rack: under face-up leaves their kept tiles, then the tiles
+// drawn since, shaded apart; under hidden leaves, unknown tiles alone.
+function OppRack({ data, position }: { data: SurveyData; position: SurveyPosition }) {
+  const known = position.opp_known_leave;
+  const theirs = position.scores[1 - position.mover];
+  const tiles = known
+    ? oppRackTiles(known, known.length, position.opp_rack_count, data.tile_scores)
+    : Array.from({ length: position.opp_rack_count }, () => ({ letter: '?', score: 0, isUnknown: true }));
+  const note = known ? ' (green: drawn since their last move)' : '';
+  return (
+    <Rack
+      tiles={tiles}
+      usedIndices={new Set()}
+      label={`Opponent · ${theirs} points${note}`}
+      interactive={false}
+      hideScoreForQuestion
+    />
+  );
+}
+
 function BoardColumn({
   data, position, selection,
 }: { data: SurveyData; position: SurveyPosition; selection: Selection }) {
   const shown = useShownSections(position, selection);
   const moves = shown.map((section) => position.moves[selection[section]!]);
   const alternating = shown.length === 1 && selection.outside !== null && selection.hasty !== null;
-  const [mine, theirs] = [position.scores[position.mover], position.scores[1 - position.mover]];
+  const mine = position.scores[position.mover];
+  const lastMove = position.last_move;
   return (
     <div className={`survey-board${alternating ? ' alternating' : ''}`}>
-      <Rack
-        tiles={oppRackTiles(
-          position.opp_known_leave,
-          position.opp_known_leave.length,
-          position.opp_rack_count,
-          data.tile_scores,
-        )}
-        usedIndices={new Set()}
-        label={`Opponent · ${theirs} points (green: drawn since their last move)`}
-        interactive={false}
-        hideScoreForQuestion
-      />
+      <OppRack data={data} position={position} />
       {/* Keyed by what is shown, so an alternating move's tiles mount afresh and
           the fade-in restarts even on the squares both moves use. */}
       <div key={moves.map((m) => m.move).join('|')}>
@@ -409,8 +421,10 @@ function BoardColumn({
           onCellClick={NOOP}
           onCellDrop={NOOP}
           cellHighlights={moveTints(position, selection, shown)}
+          lastMoveCells={new Set(lastMove?.squares.map(([r, c]) => `${r},${c}`))}
         />
       </div>
+      {lastMove && <div className="survey-last-move">Last move: {lastMove.text}</div>}
       {/* With one move on the board the rack shows its leave; with two, whole. */}
       <Rack
         tiles={rackTiles(position.rack, data.tile_scores)}
