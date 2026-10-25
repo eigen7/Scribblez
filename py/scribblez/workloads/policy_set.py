@@ -354,5 +354,11 @@ SPEC = WorkloadSpec(
     finalize="scribblez.workloads.policy_set:finalize",
     pace_role="train",
     collected_dirs=(STAGING_DIR,),
-    primary_params=("leave_inference_tag", "leave_inference_generation", "leave_beliefs"),
+    primary_params=(
+        "leaf_eval_tag",
+        "leaf_eval_generation",
+        "leave_inference_tag",
+        "leave_inference_generation",
+        "leave_beliefs",
+    ),
 )

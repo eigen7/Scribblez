@@ -221,6 +221,12 @@ SPEC = WorkloadSpec(
     complete="scribblez.workloads.blind_spots:complete",
     finalize="scribblez.workloads.policy_set:finalize",
     pace_role="generate",
-    primary_params=("target_positions", "leave_inference_tag", "leave_inference_generation"),
+    primary_params=(
+        "target_positions",
+        "leaf_eval_tag",
+        "leaf_eval_generation",
+        "leave_inference_tag",
+        "leave_inference_generation",
+    ),
     collected_dirs=(FOUND_DIR, GCG_DIR),
 )
