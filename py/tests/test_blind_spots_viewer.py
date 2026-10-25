@@ -2,10 +2,17 @@
 exports turned into the sim-survey viewer's payload."""
 
 import json
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
+from types import SimpleNamespace
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
+import numpy as np
 import pytest
-from scribblez.blind_spots_viewer import played_move, readable, viewer_data
+from scribblez.blind_spots_viewer import BeliefPanel, played_move, readable, viewer_data
+from scribblez.survey_viewer_server import survey_handler
 
 GCG = """#character-encoding UTF-8
 #lexicon NWL23
@@ -111,3 +118,63 @@ def test_played_move_reads_plays_exchanges_and_passes():
     assert played_move(GCG) == "9D AB"
     assert played_move(">a: QV -QV +0 0\n") == "-QV"
     assert played_move(">a: QV - +0 0\n") == "-"
+
+
+class StubBeliefs:
+    """LeaveBeliefs' surface BeliefPanel calls, recording what it was asked."""
+
+    def __init__(self):
+        self.calls = []
+
+    def beliefs(self, slog, positions, unseen, rack_sizes):
+        self.calls.append((slog.name, positions, [int(u.sum()) for u in unseen], rack_sizes))
+        return [SimpleNamespace(modelled=True, leave_length=3, refill=s - 3) for s in rack_sizes]
+
+    def rack_presence(self, b, uniform=False):
+        return np.full(27, 0.25 if uniform else 0.5)
+
+    def sample_racks(self, b, n, rng):
+        return [{"leave": "ABC", "refill": "D" * b.refill}][:n]
+
+
+def test_the_belief_panel_charts_each_position_and_serves_samples(tag):
+    found, gcg = tag
+    data = viewer_data(found, gcg)
+    model = StubBeliefs()
+    panel = BeliefPanel(data, found, model)
+    # One query per .slog, at each position's 0-based turn, with its unseen
+    # pool (everything off the board and the mover's rack) and the opponent's
+    # rack size.
+    entries = data["positions"]
+    on_board = [sum(c is not None for row in e["board"] for c in row) for e in entries]
+    assert model.calls == [
+        (
+            "s.slog",
+            [(0, 2), (2, 9)],
+            [100 - n - 7 for n in on_board],
+            [e["opp_rack_count"] for e in entries],
+        )
+    ]
+    chart = entries[0]["belief"]
+    assert (chart["modelled"], chart["leave_length"]) == (True, 3)
+    assert chart["refill"] == entries[0]["opp_rack_count"] - 3
+    assert chart["presence"][26] == {"tile": "?", "inferred": 0.5, "uniform": 0.25}
+    racks = panel.samples({"position": ["1"], "seed": ["5"]})["racks"]
+    assert racks == [{"leave": "ABC", "refill": "D" * (entries[1]["opp_rack_count"] - 3)}]
+
+
+def test_the_server_answers_routes_and_refuses_bad_queries():
+    def route(query):
+        return {"echo": int(query["x"][0])}
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), survey_handler(b"{}", {"/api/r": route}))
+    Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        assert json.loads(urlopen(f"{base}/api/r?x=4").read()) == {"echo": 4}
+        assert urlopen(f"{base}/api/survey").read() == b"{}"
+        for bad in ("/api/r?x=no", "/api/r", "/api/nothing"):
+            with pytest.raises(HTTPError):
+                urlopen(base + bad)
+    finally:
+        server.shutdown()

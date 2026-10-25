@@ -1611,6 +1611,103 @@ h1 {
     opacity: 0;
   }
 }
+.survey-right {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* The opponent-rack panel (OppRackBelief.tsx): its own darker surface, which
+   its two series colors are validated against. */
+.belief-panel {
+  --belief-surface: #243342;
+  width: 510px;
+  box-sizing: content-box;
+  background: var(--belief-surface);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 6px 8px 8px;
+  font-size: 13px;
+}
+.belief-sub {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-bottom: 4px;
+}
+.belief-legend {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 12px;
+  min-height: 18px;
+}
+.belief-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+.belief-readout {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.belief-chart {
+  display: block;
+  margin-top: 4px;
+}
+.belief-grid {
+  stroke: rgba(255, 255, 255, 0.1);
+  stroke-width: 1;
+}
+.belief-baseline {
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 1;
+}
+.belief-axis {
+  fill: currentColor;
+  opacity: 0.75;
+  font-size: 10px;
+}
+.belief-samples-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 8px 0 4px;
+  font-size: 12px;
+}
+.belief-samples-head button {
+  background: #34495e;
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.belief-samples {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: 4px 16px;
+}
+.belief-sample {
+  display: flex;
+  gap: 2px;
+}
+.belief-tile {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 3px;
+  text-align: center;
+  border-radius: 3px;
+  font-weight: 600;
+  color: #222;
+}
+.belief-tile.kept {
+  background: #f5deb3;
+}
+.belief-tile.drawn {
+  background: #a8d8a0;
+}
 .survey-stats-columns {
   display: flex;
   gap: 10px;

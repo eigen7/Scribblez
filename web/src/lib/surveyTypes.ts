@@ -56,6 +56,18 @@ export interface SurveyMove {
   versus?: string;
 }
 
+// What the mover believes about the opponent's rack (blind spots only): per
+// tile, the chance the rack holds at least one, under the leave inference
+// model and under no information. `modelled` is false where the model says
+// nothing (turn 0, after a pass or an empty leave, an empty bag): the rack is
+// then a uniform draw and `inferred` equals `uniform`.
+export interface RackBeliefChart {
+  modelled: boolean;
+  leave_length: number; // tiles the opponent kept at their last move
+  refill: number; // tiles drawn since
+  presence: { tile: string; inferred: number; uniform: number }[]; // A..Z, then '?'
+}
+
 export interface SurveyPosition {
   name: string;
   gcg: string;
@@ -73,6 +85,7 @@ export interface SurveyPosition {
   // The opponent's move before this one ("O7 FLUNG +34", "exch 3", "pass") and
   // the squares it placed tiles on; null at the game's first turn.
   last_move: { text: string; squares: [number, number][] } | null;
+  belief?: RackBeliefChart; // blind spots only, when the tag's pools used the model
   moves: SurveyMove[]; // the outside plays, best first, then the top moves by hasty rank
 }
 

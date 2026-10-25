@@ -118,10 +118,14 @@ Browse a tag's kept positions in the sim-survey viewer:
 ```
 
 It lists each position's outside moves above the top moves, with their
-confirming and screening win rates and the pool's `q`. The GPU sims keep no
-per-rollout summaries, so the survey's margin and next-move panels do not
-appear, and only the best outside move, whose paired standard error the
-report records, shows its sigmas. It uses the sim-survey viewer's ports, so it
+confirming and screening win rates and the pool's `q`, and highlights the
+opponent's last move. The GPU sims keep no per-rollout summaries, so the
+survey's margin and next-move panels do not appear. Under the panels, what the
+mover believes about the opponent's rack, from the leave inference model the
+tag's pools were labeled with (`leave_inference/beliefs.py`, on the CPU): per
+tile, the chance the rack holds one under the model beside the same under no
+information, and ten distinct sample racks, the kept leave apart from the
+refill, redrawn on demand. It uses the sim-survey viewer's ports, so it
 replaces a running `sim_survey_viewer.py`.
 
 On the 2,000 pools of a `tilted2`-gen-1188 / `leaf-conv-join-32-4b`-gen-730
