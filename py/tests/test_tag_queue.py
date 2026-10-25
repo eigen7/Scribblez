@@ -64,6 +64,13 @@ def _lease(manager: WorkerManager, name="localhost") -> Lease | None:
     return manager.pool_store.load().machine(name).lease
 
 
+def _crash_loop(manager: WorkerManager, tag: str, worker_id: str, why: str = "exit 1"):
+    """Crash slot `worker_id` of position_eval tag `tag` until it fails."""
+    task = manager.tasks.load(SPEC, tag)
+    for _ in range(workers_mod.FAIL_AFTER):
+        manager._note_crash(SPEC, task, task.worker(worker_id), why)
+
+
 def _drain_then_tick(q: TagQueue):
     """Let the in-flight drains finish, then run the pass that acts on them."""
     for future in list(q._drains.values()):
@@ -196,8 +203,7 @@ def test_a_crash_looping_tag_fails_and_holds_its_machine(queued):
     make("a")
     q.enqueue("position_eval", "a", confirm=True)
     q.tick()
-    for _ in range(tq_mod.FAIL_AFTER):
-        manager._note_crash("position_eval/a/local-0", "exit 1: CUDA out of memory")
+    _crash_loop(manager, "a", "local-0", "exit 1: CUDA out of memory")
     q.tick()
     lease = _lease(manager)
     assert lease.phase == HELD and "CUDA out of memory" in lease.reason
@@ -231,13 +237,13 @@ def test_a_crash_looping_tag_fails_and_holds_its_machine(queued):
 
 def test_a_fatal_exit_fails_the_tag_at_once(queued):
     """A worker that exits fatally would fail the same way on every restart:
-    one such exit fails the tag, without waiting for FAIL_AFTER crashes."""
+    one such exit fails the tag, without waiting for workers.FAIL_AFTER crashes."""
     q, manager, make = queued
     make("a")
     q.enqueue("position_eval", "a", confirm=True)
     q.tick()
     a = manager.tasks.load(SPEC, "a")
-    workers_mod._note_fatal(a.worker("local-0"), "exit 70: fatal: non-finite slot loss")
+    workers_mod._note_failed(a.worker("local-0"), "exit 70: fatal: non-finite slot loss")
     manager.tasks.save(SPEC, a)
     q.tick()
     lease = _lease(manager)
@@ -252,8 +258,7 @@ def test_a_failed_tag_hands_over_at_once_when_a_tag_is_waiting(queued):
     q.enqueue("position_eval", "a", confirm=True)
     q.enqueue("position_eval", "b", confirm=True)
     q.tick()
-    for _ in range(tq_mod.FAIL_AFTER):
-        manager._note_crash("position_eval/a/local-0", "exit 1")
+    _crash_loop(manager, "a", "local-0")
     q.tick()
     assert _lease(manager).phase == RELEASING
 
@@ -265,8 +270,7 @@ def test_requeuing_a_held_failed_tag_clears_its_failure(queued):
     make("a")
     q.enqueue("position_eval", "a", confirm=True)
     q.tick()
-    for _ in range(tq_mod.FAIL_AFTER):
-        manager._note_crash("position_eval/a/local-0", "exit 1")
+    _crash_loop(manager, "a", "local-0")
     q.tick()
     assert _lease(manager).phase == HELD
     q.requeue("position_eval", "a")

@@ -76,7 +76,11 @@ can stall the dashboard. States worth knowing:
 
 A container that is not running shows its reason in the workers table: the
 exit code and last log line, or why its creation failed. One that keeps dying
-is retried with a growing delay rather than on every pass.
+is retried with a growing delay rather than on every pass. A slot that crashes
+three times within half an hour, however it was placed, is paused as `failed`
+with its last exit reason until Start: a trainer failing on one corrupt chunk
+fails on every restart. A tag-queue placement then fails its whole tag (see
+Release).
 
 **Finished workers.** A worker that exits 0 has reached its role's terminal
 condition (a trainer's `max_rows`, a generator's cycle cap). Its slot flips to
