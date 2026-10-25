@@ -5,6 +5,7 @@ loop, must change nothing; either mistake trips the writer check, which a
 handler answers with a 400."""
 
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import tornado.testing
 from cloud.bundles import BundleManifest
+from scribblez import workloads
 from scribblez.dashboard import api
 from scribblez.dashboard.tag_queue import TagQueue
 from scribblez.dashboard.workers import WorkerManager
@@ -59,6 +61,23 @@ class WriterRuleTest(tornado.testing.AsyncHTTPTestCase):
         self.get("/api/queue/plan?workload=position_eval&tag=t")
         self.get("/api/cloud/stop_all")
         self.get("/api/workload_tags?workload=position_eval")
+
+    def test_a_tag_whose_params_went_stale_still_reads(self):
+        """A param removed from the schema after the tag was created (task.json
+        still names it) leaves the tag readable, as invalid, in the list and
+        on its own page."""
+        self.post("/api/tasks", {**_TAG, "params": {}})
+        path = self.manager.tasks.task_path(workloads.get("position_eval"), "t")
+        raw = json.loads(path.read_text())
+        raw["params"]["horizon_plies"] = 2
+        path.write_text(json.dumps(raw))
+        stamp = path.stat().st_mtime_ns + 1_000_000
+        os.utime(path, ns=(stamp, stamp))
+        (row,) = self.get("/api/workload_tags?workload=position_eval")["tags"]
+        assert row["state"] == "invalid params"
+        task = self.get("/api/task?workload=position_eval&tag=t")
+        assert task["state"] == "invalid params"
+        assert "horizon_plies" in task["failure"]
 
     def test_acting_on_every_slot_tries_each_and_reports_each_refusal(self):
         """One slot on an unreachable machine must not leave the rest of a
