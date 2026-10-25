@@ -18,7 +18,7 @@ dashboard collects over ssh.
 
 All configuration comes from environment variables:
 
-    SCZ_WORKLOAD                          workload name (default "kill_test")
+    SCZ_WORKLOAD                          workload name (required)
     SCZ_ROLE                              role name (default: the workload's first)
     SCZ_TAG                               run tag (required)
     SCZ_<PARAM>                           workload params (scribblez/params.py
@@ -134,7 +134,7 @@ def provenance() -> dict:
 
 def main() -> int:
     signal.signal(signal.SIGTERM, _on_sigterm)
-    spec = workloads.get(os.environ.get("SCZ_WORKLOAD", "kill_test"))
+    spec = workloads.get(os.environ["SCZ_WORKLOAD"])
     role = spec.role(os.environ.get("SCZ_ROLE", spec.roles[0].name))
     check_params_understood(spec, os.environ)
     try:

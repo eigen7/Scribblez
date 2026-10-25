@@ -4,8 +4,7 @@ for the student model, and the student's trainer.
 A generate cycle plays a HastyBot self-play batch into a fresh .slog, runs
 move_set_eval_target_generator over every .slog still missing its .mset
 sidecar (so an interrupted run's backlog is picked up), and delivers every
-complete pair to the tag's slogs/ store. It is the kill_test cycle with the
-distillation target generator in place of the sim tool.
+complete pair to the tag's slogs/ store (workloads/pair_store.py).
 
 The teacher is a position_eval tag's export, named by `teacher_tag` and pinned
 at task creation (`finalize`) to a concrete `teacher_generation`: the tag's

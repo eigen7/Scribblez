@@ -1,6 +1,6 @@
 """Pair stores: the shared generate loop and store readers of the workloads
-whose unit of output is a .slog plus a same-stem sidecar (.sobs for kill_test,
-.mset for move_set_eval, .mset plus .sobs for evidence_trajectories).
+whose unit of output is a .slog plus a same-stem sidecar (.mset for
+move_set_eval, .mset plus .sobs for evidence_trajectories).
 
 Every member of a pair gets the same -<worker_id> stem suffix on delivery, so
 names are unique across workers and readers can still match pairs by stem.
