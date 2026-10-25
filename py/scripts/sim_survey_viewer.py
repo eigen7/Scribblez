@@ -15,24 +15,15 @@ Usage:
 """
 
 import argparse
-import json
-import os
-import subprocess
 import sys
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
 
-from scribblez.dashboard.react_server import WEB_DIR, reclaim_port
 from scribblez.paths import add_mount_root_argument
-from scribblez.service_urls import service_url
 from scribblez.sim_candidate_survey import MIN_SIGMA
 from scribblez.sim_survey_viewer import viewer_data
+from scribblez.survey_viewer_server import DEFAULT_API_PORT, DEFAULT_DEV_PORT, serve
 from scribblez.workloads import blind_spots
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
-
-DEFAULT_API_PORT = 8091
-DEFAULT_DEV_PORT = 5181
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,26 +47,6 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def survey_handler(payload: bytes) -> type[BaseHTTPRequestHandler]:
-    """A request handler answering GET /api/survey with `payload`."""
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path != "/api/survey":
-                self.send_error(404)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, format, *args):
-            pass  # one line per request is noise under the viewer's banner
-
-    return Handler
-
-
 def main() -> int:
     args = parse_args()
     if args.tag:
@@ -86,35 +57,8 @@ def main() -> int:
     if not data["positions"]:
         print(f"no position in {args.survey_dir} clears {args.min_sigmas} sigma", file=sys.stderr)
         return 1
-    reclaim_port(args.api_port)
-    reclaim_port(args.dev_port)
-    # Loopback only: the browser reaches it through Vite's /api proxy.
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", args.api_port), survey_handler(json.dumps(data).encode())
-    )
-    Thread(target=server.serve_forever, daemon=True).start()
-    env = {
-        **os.environ,
-        "VITE_TOOL": "survey",
-        "VITE_DEV_PORT": str(args.dev_port),
-        "VITE_API_PORT": str(args.api_port),
-    }
-    vite = subprocess.Popen(
-        ["npm", "run", "dev"],
-        cwd=WEB_DIR,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    url = service_url("survey", args.dev_port, DEFAULT_DEV_PORT)
-    print(f"\n{len(data['positions'])} positions. Survey viewer: {url}\n", file=sys.stderr)
-    try:
-        vite.wait()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        vite.terminate()
-    return 0
+    banner = f"{len(data['positions'])} positions."
+    return serve(data, args.api_port, args.dev_port, banner)
 
 
 if __name__ == "__main__":
