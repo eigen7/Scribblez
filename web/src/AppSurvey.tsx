@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import Board from './components/Board';
+import OppRackBelief from './components/OppRackBelief';
 import Rack from './components/Rack';
 import UnseenTiles from './components/UnseenTiles';
 import { oppRackTiles } from './lib/oppRack';
@@ -463,7 +464,9 @@ function UnseenPane({ data, position }: { data: SurveyData; position: SurveyPosi
 // One position's view. Mounted afresh per position (keyed by the caller), so the
 // selection always opens on that position's own comparison. ↑/↓ move the
 // selection within the section last clicked.
-function PositionView({ data, position }: { data: SurveyData; position: SurveyPosition }) {
+function PositionView({
+  data, position, index,
+}: { data: SurveyData; position: SurveyPosition; index: number }) {
   const [selection, setSelection] = useState<Selection>(() => openingSelection(position));
   const [active, setActive] = useState<Section>('outside');
 
@@ -504,15 +507,18 @@ function PositionView({ data, position }: { data: SurveyData; position: SurveyPo
         <UnseenPane data={data} position={position} />
       </div>
       <BoardColumn data={data} position={position} selection={selection} />
-      <div className="survey-stats-columns">
-        {selectedSections.map((section) => (
-          <StatsPanel
-            key={section}
-            section={section}
-            move={position.moves[selection[section]!]}
-            peaks={peaks}
-          />
-        ))}
+      <div className="survey-right">
+        <div className="survey-stats-columns">
+          {selectedSections.map((section) => (
+            <StatsPanel
+              key={section}
+              section={section}
+              move={position.moves[selection[section]!]}
+              peaks={peaks}
+            />
+          ))}
+        </div>
+        {position.belief && <OppRackBelief chart={position.belief} position={index} />}
       </div>
     </div>
   );
@@ -558,7 +564,7 @@ export default function AppSurvey() {
   return (
     <div className="survey-root">
       <PositionHeader position={position} index={index} total={total} onStep={step} />
-      <PositionView key={position.name} data={data} position={position} />
+      <PositionView key={position.name} data={data} position={position} index={index} />
     </div>
   );
 }

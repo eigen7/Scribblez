@@ -8,11 +8,20 @@ the confirmed moves, outside moves first. The GPU sims keep only win rates, so
 a move carries its confirming and screening win% and the pool's q instead of a
 CPU survey's rollout summaries. Every outside move is compared with the best
 top move on the same rollouts.
+
+BeliefPanel adds what the mover believes about the opponent's rack, from the
+leave inference model the reports name (leave_inference/beliefs.py): per tile,
+the chance the rack holds one under the model and under no information, and
+sample racks on request.
 """
 
 import json
 from pathlib import Path
 
+import numpy as np
+
+from scribblez.leave_inference.beliefs import LeaveBeliefs, RackBelief, unseen_pool
+from scribblez.paths import TagPaths
 from scribblez.sim_survey_viewer import (
     TILE_SCORES,
     board_before,
@@ -78,6 +87,8 @@ def position_entry(stem: str, position: dict, header: dict, gcg_dir: Path) -> di
     return {
         "name": gcg.removesuffix(".gcg"),
         "gcg": gcg,
+        "stem": stem,
+        "game": position["game"],
         "turn": position["turn"] + 1,
         "mover": position["mover"],
         "rack": position["rack"],
@@ -115,3 +126,73 @@ def viewer_data(found_dir: Path, gcg_dir: Path, min_bag: int = 0) -> dict:
         "tile_scores": TILE_SCORES,
         "positions": positions,
     }
+
+
+TILE_NAMES = [chr(ord("A") + i) for i in range(26)] + ["?"]
+
+
+def report_header(found_dir: Path) -> dict:
+    """The first report's header; every report of a tag has the same."""
+    path = next(iter(sorted(found_dir.glob(f"*{REPORT_SUFFIX}"))), None)
+    if path is None:
+        return {}
+    return {k: v for k, v in json.loads(path.read_text()).items() if k != "positions"}
+
+
+def leave_model_path(header: dict, mount_root: Path) -> Path | None:
+    """The leave inference export the reports' pools were labeled under, or
+    None for uniform beliefs."""
+    model = header.get("leave_model", {})
+    if not model.get("tag"):
+        return None
+    return TagPaths(model["tag"], "leave_inference", mount_root).onnx_path(model["generation"])
+
+
+class BeliefPanel:
+    """The viewer's opponent-rack panel for `data`'s positions, from `model`:
+    each position's letter chart, added to its entry as "belief", and sample
+    racks on request (samples)."""
+
+    def __init__(self, data: dict, found_dir: Path, model: LeaveBeliefs):
+        self.model = model
+        self.beliefs = self._beliefs(data["positions"], found_dir)
+        for entry, belief in zip(data["positions"], self.beliefs, strict=True):
+            entry["belief"] = self._chart(belief)
+
+    def _beliefs(self, entries: list[dict], found_dir: Path) -> list[RackBelief]:
+        by_stem: dict[str, list[int]] = {}
+        for i, e in enumerate(entries):
+            by_stem.setdefault(e["stem"], []).append(i)
+        out: list[RackBelief | None] = [None] * len(entries)
+        for stem, indices in by_stem.items():
+            es = [entries[i] for i in indices]
+            beliefs = self.model.beliefs(
+                found_dir / f"{stem}.slog",
+                [(e["game"], e["turn"] - 1) for e in es],
+                [unseen_pool(e["board"], e["rack"]) for e in es],
+                [e["opp_rack_count"] for e in es],
+            )
+            for i, b in zip(indices, beliefs, strict=True):
+                out[i] = b
+        return out
+
+    def _chart(self, b: RackBelief) -> dict:
+        inferred = self.model.rack_presence(b)
+        uniform = self.model.rack_presence(b, uniform=True)
+        return {
+            "modelled": b.modelled,
+            "leave_length": b.leave_length,
+            "refill": b.refill,
+            "presence": [
+                {"tile": name, "inferred": float(i), "uniform": float(u)}
+                for name, i, u in zip(TILE_NAMES, inferred, uniform, strict=True)
+            ],
+        }
+
+    def samples(self, query: dict[str, list[str]]) -> dict:
+        """GET /api/leave_samples?position=<index>&seed=<int>[&n=<count>]: up
+        to n (10) distinct racks from the position's belief."""
+        index = int(query["position"][0])
+        rng = np.random.default_rng(int(query["seed"][0]))
+        n = int(query.get("n", ["10"])[0])
+        return {"racks": self.model.sample_racks(self.beliefs[index], n, rng)}

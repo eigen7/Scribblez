@@ -6,9 +6,11 @@ The sim-survey viewer, fed from the tag's .blindspots.json reports and .gcg
 exports (scribblez/blind_spots_viewer.py): one position at a time, the plays
 from outside HastyBot's top moves that out-simmed them listed above those top
 moves, the selected move previewed on the board beside its confirming and
-screening win rates. The left and right arrow keys step through the positions
-in name order. It serves on the sim-survey viewer's ports, so it replaces a
-running sim_survey_viewer.py.
+screening win rates, and what the mover believes about the opponent's rack
+under the leave inference model the pools were labeled with: a per-tile chart
+against no information, and sample racks. The left and right arrow keys step
+through the positions in name order. It serves on the sim-survey viewer's
+ports, so it replaces a running sim_survey_viewer.py.
 
 Usage:
     ./py/scripts/blind_spots_viewer.py --tag v1
@@ -20,7 +22,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from scribblez.blind_spots_viewer import viewer_data
+from scribblez.blind_spots_viewer import BeliefPanel, leave_model_path, report_header, viewer_data
+from scribblez.leave_inference.beliefs import LeaveBeliefs
 from scribblez.paths import add_mount_root_argument
 from scribblez.survey_viewer_server import DEFAULT_API_PORT, DEFAULT_DEV_PORT, serve
 from scribblez.workloads import hidden_blind_spots
@@ -51,7 +54,13 @@ def main() -> int:
     if not data["positions"]:
         print(f"no kept position in {args.found_dir} with bag >= {args.min_bag}", file=sys.stderr)
         return 1
-    return serve(data, args.api_port, args.dev_port, f"{len(data['positions'])} blind spots.")
+    routes = {}
+    model = leave_model_path(report_header(args.found_dir), args.mount_root)
+    if model is not None:  # the opponent-rack panel, under the pools' own beliefs
+        panel = BeliefPanel(data, args.found_dir, LeaveBeliefs(model))
+        routes["/api/leave_samples"] = panel.samples
+    banner = f"{len(data['positions'])} blind spots."
+    return serve(data, args.api_port, args.dev_port, banner, routes)
 
 
 if __name__ == "__main__":
