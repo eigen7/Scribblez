@@ -1,7 +1,6 @@
 // sim_obs_tool: writes Monte-Carlo sim observations (.sobs sidecars) for .slog
 // self-play data. These are the sim-evidence inputs of
-// docs/plans/sim_residual_feedback.md; the kill_test workload and
-// py/scripts/generate_kill_test_data.py drive it.
+// docs/plans/sim_residual_feedback.md, whose kill-test it generated data for.
 //
 //   sim_obs_tool --slog-dir data/slogs --top-k 10 --rollouts 200 --threads 16
 //   sim_obs_tool --slog-file a.slog --slog-file b.slog --horizon 4 --leaf-model teacher.onnx

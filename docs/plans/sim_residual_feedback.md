@@ -550,58 +550,35 @@ controls. The magnitude is bounded by saturation of the root readout, and an
 8× late-versus-early phase gradient supports the mechanism. Full numbers and
 conclusions: [sim_obs_experiment_results.md](../sim_obs_experiment_results.md).
 
-The pipeline is [sim_obs_tool](../../engine/apps/sim_obs_tool.cpp)
+The pipeline was [sim_obs_tool](../../engine/apps/sim_obs_tool.cpp)
 (candidates are the HastyBot-equity top K, so each position's evidence
-contains the played move's own sim) feeding
-[kill_test.py](../../py/scripts/kill_test.py). The evidence-conditioned model
-is [sim_evidence/model.py](../../py/scribblez/sim_evidence/model.py), a
-zero-initialized fusion stage on the regular post-move model, so the arms are
-parameter-identical and differ only in their inputs.
+contains the played move's own sim) feeding a four-armed trainer. The
+evidence-conditioned model was a zero-initialized fusion stage on the regular
+post-move model, so the arms were parameter-identical and differed only in
+their inputs. The arms were `none` (no evidence, the baseline), `shuffled`
+(real evidence permuted across positions, the falsification control),
+`scalar` (sim summaries only) and `full` (spatial planes plus summaries).
+Evidence arms were leave-one-out: the played move's own sim was masked,
+because deployment only re-scores *unsimmed* moves.
 
-```
-# Generates self-play data + sim observations until stopped; resumable.
-./py/scripts/generate_kill_test_data.py -t apple
-
-# 4-armed test; can run (and rerun) while generation continues.
-./py/scripts/kill_test.py -t apple
-```
-
-Data accumulates under `<mount>/tags/kill_test/<tag>/data/slogs` (`.slog`
-batches plus `.sobs` sidecars, written atomically). Per-arm history is in
-`<mount>/tags/kill_test/<tag>/cache/results/<arm>.json`, and the decision
-metric is the best held-out `wld_ce`. Reading the arms:
-
-- **`full` < `none`** by a margin that dwarfs seed noise: the hypothesis
-  survives.
-- **`shuffled` ≈ `none`** is the validity check (shuffled evidence has the
-  same marginals but belongs to other positions). Measure `full`'s gain
-  against `shuffled`.
-- **`scalar` against `full`** locates how much of the gain needs the spatial
-  planes.
-- Evidence arms are **leave-one-out** by default: the played move's own sim is
-  masked, because deployment only re-scores *unsimmed* moves, so leave-one-out
-  gains are the transfer gains that matter. The optional `ownsim` arm
-  (`--arms ownsim`) prices that shortcut.
+The experiment's code (the `kill_test` workload, `py/scripts/kill_test.py`,
+`py/scripts/generate_kill_test_data.py` and the model,
+`py/scribblez/sim_evidence/model.py`) was deleted once the test had passed;
+it is recoverable from git at commit `bae1226c`. `sim_obs_tool` remains.
 
 ### Face-up leaves
 
-`--open-leaves` on both commands (under a dedicated tag) runs the same
-experiment in **face-up-leaves Scrabble**: the tiles a player kept from their
-last move are public, and replenishment draws stay hidden. This is the
-variant the project develops in ([roadmap.md](../roadmap.md)), so it is the
-main mode, not an instrument; the hidden-leaves arm remains runnable, and the
-gap between the two is what belief inference would have to close. Compare arm
-deltas only within a mode.
+The test also ran in **face-up-leaves Scrabble** (under a dedicated tag): the
+tiles a player kept from their last move are public, and replenishment draws
+stay hidden. This is the variant the project develops in
+([roadmap.md](../roadmap.md)), so it was the main mode, not an instrument; the
+gap between the two modes is what belief inference would have to close.
 
 Mechanics: the model input gains the opponent-leave counts block
 (`kOppLeaveCounts`, `input_encoder.h`); the leave is derived at replay time
 from the `.slog` draws, with no game-runner changes; the `.sobs` header
-records the condition, so mixing modes within a tag fails loudly.
-
-```
-./py/scripts/generate_kill_test_data.py -t apple-open --open-leaves
-./py/scripts/kill_test.py -t apple-open --open-leaves
-```
+records the condition (`sim_obs_tool --open-leaves`), so mixing modes within
+a tag fails loudly.
 
 ## Implementation roadmap
 
