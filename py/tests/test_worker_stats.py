@@ -9,7 +9,7 @@ from scribblez.workloads.worker import HISTORY_POINTS, WorkerStats, stats_rel_pa
 
 
 def _ctx(tmp_path, **overrides):
-    spec = workloads.get("kill_test")
+    spec = workloads.get("blind_spots")
     fields = dict(
         spec=spec,
         role=spec.role("generate"),

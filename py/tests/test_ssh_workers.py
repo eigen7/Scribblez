@@ -105,7 +105,7 @@ def test_env_file_format():
 
 def _task(*worker_ids: str) -> TaskRecord:
     return TaskRecord(
-        workload="kill_test",
+        workload="blind_spots",
         tag="t",
         params={},
         created_at=0.0,
@@ -123,19 +123,19 @@ def test_next_worker_id_skips_taken():
 
 
 def test_container_name_qualified_by_workload_and_tag():
-    spec = workloads.get("kill_test")
-    assert _container_name(spec, "run1", "ssh-0") == "scz-kill_test-run1-ssh-0"
+    spec = workloads.get("blind_spots")
+    assert _container_name(spec, "run1", "ssh-0") == "scz-blind_spots-run1-ssh-0"
 
 
 def test_bundle_worker_env_composition():
-    spec = workloads.get("kill_test")
+    spec = workloads.get("blind_spots")
     params = params_mod.validate(spec.params_cls, {})
     env = bundle_worker_env(
         spec, "run1", params,
         role="generate", bundle_id="bid", worker_id="ssh-0",
     )  # fmt: skip
     assert not any(k.startswith("R2_") for k in env)  # no worker reads the bucket
-    assert env["SCZ_WORKLOAD"] == "kill_test"
+    assert env["SCZ_WORKLOAD"] == "blind_spots"
     assert env["SCZ_ROLE"] == "generate"
     assert env["SCZ_TAG"] == "run1"
     assert env["SCZ_BUNDLE_ID"] == "bid"

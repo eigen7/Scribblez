@@ -12,7 +12,7 @@ from cloud.runtime_abi import RUNTIME_ENGINE, RUNTIME_TORCH
 from cloud.worker_entrypoint import WORKER_ENV_VARS
 from scribblez import workloads
 from scribblez.workloads.base import RoleSpec, WorkloadSpec
-from scribblez.workloads.kill_test import KillTestParams
+from scribblez.workloads.transfer_test import TransferTestParams
 
 
 @pytest.mark.parametrize(
@@ -44,7 +44,7 @@ def test_a_role_naming_no_such_runtime_is_refused():
         WorkloadSpec(
             name="x",
             title="x",
-            params_cls=KillTestParams,
+            params_cls=TransferTestParams,
             roles=(RoleSpec(name="r", title="r", runner="a:b", runtime="cuda"),),
         )
 

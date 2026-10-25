@@ -50,12 +50,12 @@ def _fail(*args, **kwargs):
 
 @pytest.fixture
 def spec():
-    return workloads.get("kill_test")
+    return workloads.get("blind_spots")
 
 
 @pytest.fixture
 def task() -> tasks.TaskRecord:
-    return tasks.TaskRecord(workload="kill_test", tag="t", params={}, created_at=0.0)
+    return tasks.TaskRecord(workload="blind_spots", tag="t", params={}, created_at=0.0)
 
 
 @pytest.fixture
@@ -695,7 +695,7 @@ def test_finishing_a_role_releases_its_machine(rented, manager, spec, task, monk
 
 
 def test_finish_role_leaves_other_roles_and_paused_slots():
-    task = tasks.TaskRecord(workload="kill_test", tag="t", params={}, created_at=0.0)
+    task = tasks.TaskRecord(workload="blind_spots", tag="t", params={}, created_at=0.0)
     gen = tasks.WorkerRecord(worker_id="a", role="generate", kind="ssh", desired_state="running")
     paused = tasks.WorkerRecord(worker_id="b", role="generate", kind="ssh", desired_state="paused")
     train = tasks.WorkerRecord(worker_id="c", role="train", kind="ssh", desired_state="running")
@@ -1341,7 +1341,8 @@ def test_a_redeployed_task_replaces_its_ssh_container(manager, spec, task, monke
     w.undelivered = 0
     stopped = {"observed_running": False, "ssh_probe": "stopped"}
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
-    assert [op for op, _ in _RecordingSshMachine.ops] == ["copy", "remove"]  # swept first
+    swept = ["copy"] * len(spec.collected_dirs)  # one copy per collected dir
+    assert [op for op, _ in _RecordingSshMachine.ops] == [*swept, "remove"]
     assert recreated == [w.worker_id]
 
 
@@ -1373,7 +1374,7 @@ def test_a_container_of_unknown_backlog_is_not_replaced_either(manager, spec, ta
 def test_intent_separates_a_gate_from_an_operator_pause():
     """Both mean not-working, but a gate flips many times an hour and an
     operator pause is a deliberate stop -- ssh slots treat them differently."""
-    task = tasks.TaskRecord(workload="kill_test", tag="t", params={}, created_at=0.0)
+    task = tasks.TaskRecord(workload="blind_spots", tag="t", params={}, created_at=0.0)
     w = tasks.WorkerRecord(worker_id="ssh-0", role="generate", kind="ssh", desired_state="running")
     assert workers_mod._intent(w, task) == workers_mod.RUN
     task.gates["generate"] = "ahead of trainer"
@@ -1823,7 +1824,8 @@ def test_a_container_that_never_came_up_is_replaced_by_a_redeploy(manager, spec,
     w.undelivered = 0  # what _run_ssh_container records when it creates one
     stopped = {"observed_running": False, "ssh_probe": "stopped"}
     manager._reconcile_worker(spec, task, w, workers_mod.RUN, stopped)
-    assert [op for op, _ in _RecordingSshMachine.ops] == ["copy", "remove"]  # swept first
+    swept = ["copy"] * len(spec.collected_dirs)  # one copy per collected dir
+    assert [op for op, _ in _RecordingSshMachine.ops] == [*swept, "remove"]
     assert recreated == [w.worker_id]
 
 
