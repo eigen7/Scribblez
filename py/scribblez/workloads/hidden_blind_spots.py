@@ -230,3 +230,10 @@ SPEC = WorkloadSpec(
     ),
     collected_dirs=(FOUND_DIR, GCG_DIR),
 )
+
+
+def report_dirs(tag: str, mount_root: Path) -> tuple[Path, Path]:
+    """The tag's (.blindspots.json reports, .gcg exports) directories, for the
+    viewer."""
+    data_dir = SPEC.paths(tag, mount_root).data_dir
+    return data_dir / FOUND_DIR, data_dir / GCG_DIR
