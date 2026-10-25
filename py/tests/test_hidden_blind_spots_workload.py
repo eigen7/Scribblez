@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 from scribblez.paths import ENGINE_DIR
+from scribblez.selfplay import run_games
 from scribblez.workloads import hidden_blind_spots as hbs
 from scribblez.workloads.policy_set import BELIEFS_UNIFORM, LEAF_SYNTHETIC
+from scribblez.workloads.selfplay_gen import hasty_spec
 from tests.test_blind_spots_workload import RecordingSink, StubPaths
 
 if not hbs.CONFIRM_TOOL.is_file() or not (ENGINE_DIR / "policy_set_pool_tool").is_file():
@@ -27,15 +29,25 @@ PARAMS = hbs.HiddenBlindSpotsParams(
 
 @pytest.fixture(scope="module")
 def confirmed_chunk(tmp_path_factory) -> Path:
+    """A chunk confirmed as a cycle confirms it, deterministically: play_chunk
+    plays clock-seeded games under a clock-named stem, which seeds the tools,
+    so the fixture plays seeded games under a fixed stem instead."""
     chunk = tmp_path_factory.mktemp("cycle")
-    hbs.play_chunk(chunk, "w1", PARAMS, threads=2)
+    assert run_games(chunk, num_games=2, threads=2, player_spec=hasty_spec(PARAMS), seed=5) == 0
+    (slog,) = chunk.glob("*.slog")
+    slog.rename(chunk / "chunk-w1.slog")
     hbs.confirm_chunk(PARAMS, LEAF_SYNTHETIC, None, chunk, threads=4)
     return chunk
 
 
-def test_a_chunk_is_named_for_its_worker(confirmed_chunk):
-    (slog,) = confirmed_chunk.glob("*.slog")
+def test_a_chunk_is_named_for_its_worker(tmp_path):
+    hbs.play_chunk(tmp_path, "w1", replace(PARAMS, games_per_chunk=1), threads=1)
+    (slog,) = tmp_path.glob("*.slog")
     assert slog.stem.endswith("-w1")
+
+
+def test_confirming_writes_the_pool_and_the_report(confirmed_chunk):
+    slog = confirmed_chunk / "chunk-w1.slog"
     assert slog.with_suffix(".pool").exists()
     assert slog.with_name(f"{slog.stem}{hbs.FOUND_SUFFIX}").exists()
 
