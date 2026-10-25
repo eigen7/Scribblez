@@ -83,6 +83,7 @@ add_library(scribblez_core STATIC
   src/belief/leave_prior.cpp
   src/belief/leave_sampler.cpp
   src/belief/leave_query.cpp
+  src/belief/reply_query.cpp
   src/belief/opp_rack_summary.cpp
   src/belief/slog_leave_beliefs.cpp
   src/lexicon/leave_value_arrays.cpp
