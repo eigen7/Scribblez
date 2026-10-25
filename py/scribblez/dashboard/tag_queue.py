@@ -49,11 +49,6 @@ EMPTY_POOL = "no machines or rental capacity; add one above"
 # and cannot be overwritten by a drain error's reason.
 REQUEUED = "requeued"
 
-# A queue-placed slot that crashes this many times within the window is
-# failed rather than restarted forever.
-FAIL_AFTER = 3
-FAIL_WINDOW_SECONDS = 1800.0
-
 # After the provider refuses a rental (quota, capacity), how long before the
 # queue asks again under that capacity entry.
 RENT_RETRY_SECONDS = 300.0
@@ -589,7 +584,7 @@ class TagQueue:
         if phase == RESERVED:
             self._start_slots(m, pool)
         elif phase == RUNNING:
-            failure = self._failure(spec, task)
+            failure = self._failure(task)
             if failure is not None:
                 self._fail(m, pool, queue, spec, task, failure)
             elif all(w.finished for w in task.workers):
@@ -628,17 +623,10 @@ class TagQueue:
             who = f"{lease.workload}/{lease.tag}, {lease.phase}"
             print(f"tag queue: {m.name}'s instance is gone ({who}); not requeued")
 
-    def _failure(self, spec, task) -> str | None:
-        """The first slot that exited fatally (its failed reason) or crashed
-        FAIL_AFTER times within the window, as "<worker_id>: <last exit
-        reason>", or None."""
-        for w in task.workers:
-            if w.failed is not None:
-                return w.failed
-            crashes = self._m.recent_crashes(spec, task.tag, w.worker_id, FAIL_WINDOW_SECONDS)
-            if len(crashes) >= FAIL_AFTER:
-                return f"{w.worker_id}: {crashes[-1]}"
-        return None
+    def _failure(self, task) -> str | None:
+        """The first failed slot's reason, "<worker_id>: <last exit reason>"
+        (workers._note_failed), or None."""
+        return next((w.failed for w in task.workers if w.failed is not None), None)
 
     def _fail(self, m: PoolMachine, pool: Pool, queue: Queue, spec, task, failure: str):
         """Fail the tag: mark the crashing slot, pause every slot, then hand the

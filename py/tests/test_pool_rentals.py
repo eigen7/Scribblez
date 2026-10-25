@@ -12,7 +12,6 @@ from cloud.providers.base import Instance, MachineType, ProviderError
 from scribblez.dashboard import pool as pool_mod
 from scribblez.dashboard import pool_rentals as rentals_mod
 from scribblez.dashboard import queue as queue_mod
-from scribblez.dashboard import tag_queue as tq_mod
 from scribblez.dashboard import tasks
 from scribblez.dashboard import workers as workers_mod
 from scribblez.dashboard.pool import Lease
@@ -199,8 +198,9 @@ def test_a_held_rental_is_stopped_and_an_idle_one_terminated(renting, monkeypatc
     enqueue("a")
     q.tick()
     provider.instances["i-1"].state = "running"
-    for _ in range(tq_mod.FAIL_AFTER):
-        manager._note_crash("position_eval/a/ssh-0", "exit 1")
+    a = manager.tasks.load(SPEC, "a")
+    for _ in range(workers_mod.FAIL_AFTER):
+        manager._note_crash(SPEC, a, a.worker("ssh-0"), "exit 1")
     q.tick()  # failed with nothing queued: held
     assert _pool_machine(manager, "g6-1").lease.phase == HELD
     manager._instances = ({}, 0.0)

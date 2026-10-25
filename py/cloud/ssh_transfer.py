@@ -48,6 +48,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import IO
 
+from cloud import durable
 from cloud.ssh_machine import COPY_TIMEOUT
 
 # Records the worker rewrites and reads back: copied, never removed.
@@ -350,8 +351,8 @@ def _extract(
     archive: bytes | IO[bytes], root: Path, mode: str = "r:gz", prefix: str = ""
 ) -> list[str]:
     """Unpack `archive` (bytes, or a file object) under `root`, each file
-    atomically, and return the paths written relative to `root`. `prefix` is
-    prepended to every member name.
+    atomically and durably (cloud/durable.py), and return the paths written
+    relative to `root`. `prefix` is prepended to every member name.
 
     Each call stages under a directory of its own: the slots of a data home
     share one volume, so their concurrent pulls carry the same record files
@@ -377,7 +378,7 @@ def _extract(
                 staged.write_bytes(tar.extractfile(member).read())
                 dest = root / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                staged.replace(dest)
+                durable.replace(staged, dest)
                 names.append(name)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
@@ -501,9 +502,9 @@ def ready_dirs_command(
 
 def _install_dirs(stage: Path, root: Path, rel: str) -> list[str]:
     """Move each directory unpacked under `stage`/`rel` to `root`/`rel`,
-    replacing what is there: a directory's copy arrives whole, as one rename,
-    and nothing of an older copy survives in it. Returns the paths installed,
-    relative to `root`."""
+    replacing what is there: a directory's copy arrives whole, as one durable
+    rename (cloud/durable.py), and nothing of an older copy survives in it.
+    Returns the paths installed, relative to `root`."""
     src = stage / rel
     if not src.is_dir():
         return []
@@ -515,7 +516,7 @@ def _install_dirs(stage: Path, root: Path, rel: str) -> list[str]:
         old = dest_parent / f".{d.name}.old-{uuid.uuid4().hex[:12]}"
         if dest.exists():
             dest.rename(old)
-        d.rename(dest)
+        durable.replace(d, dest)
         shutil.rmtree(old, ignore_errors=True)
         installed.append(f"{rel}/{d.name}")
     return installed

@@ -2475,6 +2475,46 @@ def test_a_container_interrupted_with_its_host_is_not_a_crash(manager, spec, tas
     assert len(manager.recent_crashes(spec, "t", ssh.worker_id, 60)) == 3
 
 
+def test_a_crash_looping_local_slot_fails_rather_than_restarting(manager, spec, task, monkeypatch):
+    """A hand-placed slot gets no tag-queue supervision: a trainer crashing on
+    a truncated chunk was restarted 12,000 times overnight. The FAIL_AFTER-th
+    crash in the window fails the slot instead, with its last log line, until
+    an operator's Start."""
+    w = manager.add_local(spec, task, "generate", 4)
+    w.desired_state = "running"
+    log = manager.tasks.paths(spec, "t").logs_dir / f"{w.worker_id}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("Traceback ...\nValueError: x.pool: truncated at position 95\n")
+    spawns = []
+    monkeypatch.setattr(manager, "_spawn_local", lambda *a: spawns.append(1))
+    monkeypatch.setattr(manager, "_local_exit_code", lambda *a: 1)
+    for _ in range(workers_mod.FAIL_AFTER):
+        manager._reconcile_worker(spec, task, w, workers_mod.RUN, {"observed_running": False})
+    assert len(spawns) == workers_mod.FAIL_AFTER - 1
+    saved = manager.tasks.load(spec, "t").worker(w.worker_id)
+    assert saved.desired_state == "paused"
+    assert saved.failed == f"{w.worker_id}: exit 1: ValueError: x.pool: truncated at position 95"
+
+    manager.set_worker_state(spec, task, w.worker_id, run=True)
+    assert task.worker(w.worker_id).failed is None
+    assert manager.recent_crashes(spec, "t", w.worker_id, 60) == []
+
+
+def test_a_crash_looping_ssh_slot_fails_rather_than_restarting(manager, spec, task, monkeypatch):
+    ssh = manager.add_ssh(spec, task, "generate", host="h", threads=None)
+    ssh.desired_state = "running"
+    starts = []
+    monkeypatch.setattr(manager, "_start_or_replace", lambda *a: starts.append(1))
+    manager._exits[_key(spec, "t", ssh.worker_id)] = "exit 1: CUDA out of memory"
+    for _ in range(workers_mod.FAIL_AFTER):
+        manager._restarts.clear()
+        manager._reconcile_ssh(spec, task, ssh, workers_mod.RUN, "stopped")
+    assert len(starts) == workers_mod.FAIL_AFTER - 1
+    saved = manager.tasks.load(spec, "t").worker(ssh.worker_id)
+    assert saved.desired_state == "paused"
+    assert saved.failed == f"{ssh.worker_id}: exit 1: CUDA out of memory"
+
+
 def test_a_removed_slots_memory_does_not_pass_to_the_next_slot_with_its_id(manager, spec, task):
     """A requeued tag gets its layout's worker ids back. The old container's
     last probe, read as the new slot's, was a phantom crash and a start of a

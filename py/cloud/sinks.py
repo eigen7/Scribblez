@@ -24,9 +24,10 @@ Its calls take paths relative to the tag root (or, where the argument is
 """
 
 import json
-import os
 import shutil
 from pathlib import Path
+
+from cloud import durable
 
 
 class LocalSink:
@@ -37,12 +38,12 @@ class LocalSink:
 
     def push_json(self, rel_path: str, obj: dict):
         """Written atomically, since the dashboard's ingest may read it at
-        any moment."""
+        any moment, and durably (cloud/durable.py)."""
         path = self._root / rel_path
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(obj, indent=2) + "\n")
-        os.replace(tmp, path)
+        durable.replace(tmp, path)
 
     def read_json(self, rel_path: str) -> dict | None:
         try:
@@ -51,21 +52,25 @@ class LocalSink:
             return None
 
     def deliver(self, src: Path, data_rel: str) -> int:
-        """Move `src` to <tag>/data/<data_rel> by atomic rename. Returns the
-        bytes uploaded, always 0 here."""
+        """Move `src` to <tag>/data/<data_rel> by atomic, durable rename
+        (cloud/durable.py). Returns the bytes uploaded, always 0 here."""
         dest = self._root / "data" / data_rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(src, dest)
+        durable.replace(src, dest)
         return 0
 
     def push_file(self, src: Path, rel_path: str) -> int:
         """Move `src` to <tag>/<rel_path>. This may be a copy rather than a
         rename when `src` is on another filesystem; that is safe because the
-        record naming the file is pushed only after this returns. Returns 0,
-        as deliver does."""
+        record naming the file is pushed only after this returns. The file is
+        flushed before the move, for a rename, and after it, for a copy
+        (cloud/durable.py). Returns 0, as deliver does."""
         dest = self._root / rel_path
         dest.parent.mkdir(parents=True, exist_ok=True)
+        durable.flush(src)
         shutil.move(src, dest)
+        durable.flush(dest)
+        durable.flush(dest.parent)
         return 0
 
     def fetch_data_dir(self, data_rel: str, dest: Path) -> bool:

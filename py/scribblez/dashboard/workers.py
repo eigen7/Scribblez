@@ -93,6 +93,11 @@ SSH_REPROBE_SECONDS = 30.0
 # once the container is observed running.
 MAX_RESTART_BACKOFF_SECONDS = 300.0
 
+# A slot that crashes this many times within the window is failed rather than
+# restarted forever (_note_crash).
+FAIL_AFTER = 3
+FAIL_WINDOW_SECONDS = 1800.0
+
 # How long an observation of a container or machine stands in for a fresh one.
 # Only the reconcile pass observes; status requests read what it left, so a
 # browser polling every 3 seconds costs no ssh round trips at all.
@@ -312,11 +317,12 @@ def _note_finished(w: tasks.WorkerRecord) -> bool:
     return True
 
 
-def _note_fatal(w: tasks.WorkerRecord, why: str) -> bool:
-    """Record that slot `w`'s worker exited with EXIT_FATAL, its state unusable
-    (a trainer whose model went non-finite): restarting it would only repeat
-    the failure, so the slot is paused as failed, `why` its reason, until an
-    operator's Start. Returns whether the slot changed."""
+def _note_failed(w: tasks.WorkerRecord, why: str) -> bool:
+    """Record that restarting slot `w`'s worker would only repeat its failure:
+    it exited with EXIT_FATAL, its state unusable (a trainer whose model went
+    non-finite), or it keeps crashing (_note_crash). The slot is paused as
+    failed, `why` its reason, until an operator's Start. Returns whether the
+    slot changed."""
     if w.desired_state != "running":
         return False
     w.desired_state = "paused"
@@ -880,7 +886,7 @@ class WorkerManager:
             ):
                 _note_finished(w)
             elif self._exits[key].startswith(f"exit {EXIT_FATAL}:"):
-                _note_fatal(w, self._exits[key])
+                _note_failed(w, self._exits[key])
         elif probe in ("running", "paused"):
             self._exits.pop(key, None)
         # Finding no container clears nothing: that is usually a slot whose
@@ -934,9 +940,25 @@ class WorkerManager:
             return "missing"
         return probe
 
-    def _note_crash(self, key: str, why: str):
-        """Record that slot `key` is being restarted after exiting non-zero."""
-        self._crashes.setdefault(key, []).append((time.time(), why))
+    def _note_crash(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, why: str) -> bool:
+        """Record that slot `w` exited non-zero, `why` its exit reason, and is
+        due a restart. The FAIL_AFTER-th crash within FAIL_WINDOW_SECONDS fails
+        it instead (_note_failed): one bad input, such as a chunk a power loss
+        truncated, crashes every restart. Returns whether the slot failed."""
+        self._crashes.setdefault(_key(spec, task.tag, w.worker_id), []).append((time.time(), why))
+        if len(self.recent_crashes(spec, task.tag, w.worker_id, FAIL_WINDOW_SECONDS)) < FAIL_AFTER:
+            return False
+        _note_failed(w, why)
+        self.tasks.save(spec, task)
+        return True
+
+    def _local_exit_reason(
+        self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, code: int
+    ) -> str:
+        """Local slot `w`'s exit reason: its exit code, and its log's last line
+        if it has one."""
+        line = _last_log_line(self.tasks.paths(spec, task.tag).logs_dir / f"{w.worker_id}.log")
+        return f"exit {code}: {line}" if line else f"exit {code}"
 
     def _forget_slot(self, key: str):
         """Drop everything remembered about removed slot `key`. A later slot
@@ -1989,8 +2011,7 @@ class WorkerManager:
                 if code == 0:
                     _note_finished(w)
                 elif code == EXIT_FATAL:
-                    log = self.tasks.paths(spec, task.tag).logs_dir / f"{w.worker_id}.log"
-                    _note_fatal(w, f"exit {code}: {_last_log_line(log)}")
+                    _note_failed(w, self._local_exit_reason(spec, task, w, code))
         for w in task.workers:
             self._note_down(spec, task, w)
         if task.workers:
@@ -2471,8 +2492,10 @@ class WorkerManager:
             # the look would start a second worker beside the one it spawned.
             if intent == RUN and not alive and not self._local_alive(spec, task, w):
                 code = self._local_exit_code(spec, task, w)
-                if _is_crash(code):
-                    self._note_crash(_key(spec, task.tag, w.worker_id), f"exit {code}")
+                if _is_crash(code) and self._note_crash(
+                    spec, task, w, self._local_exit_reason(spec, task, w, code)
+                ):
+                    return
                 self._spawn_local(spec, task, w)
             elif intent != RUN and alive:
                 self._stop_local(spec, task, w)
@@ -2505,10 +2528,14 @@ class WorkerManager:
                     machine.stop_container(name)
             elif probe in ("missing", "stopped") and self._restart_allowed(key):
                 # Unreachable or unobserved: nothing this pass can act on.
-                self._note_restart(key)
                 why = self._exits.get(key, "")
-                if probe == "stopped" and _is_ssh_crash(why):
-                    self._note_crash(key, why)
+                if (
+                    probe == "stopped"
+                    and _is_ssh_crash(why)
+                    and self._note_crash(spec, task, w, why)
+                ):
+                    return
+                self._note_restart(key)
                 self._expire_probe(key)
                 self._start_or_replace(machine, name, spec, task, w, probe)
         elif intent == PARK and probe == "running" and not self._pulling(key):
