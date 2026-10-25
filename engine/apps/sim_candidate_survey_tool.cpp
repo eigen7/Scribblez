@@ -41,6 +41,7 @@
 
 #include "data/binary_log.h"
 #include "data/gcg_writer.h"
+#include "data/slog_position_gcg.h"
 #include "data/slog_sampling.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
@@ -499,31 +500,20 @@ std::string setup_plays_note(const SimmedPosition& r, int cut) {
   return note;
 }
 
-// Write the game through the surveyed turn's played move as
-// <stem>-g<game>-turn<N>.gcg, where N is the turn's 1-based number (what
-// neural_rank_tool --turn takes). Setting final_scores to the running scores
-// keeps the writer from emitting end-of-game rack lines for an unfinished game.
+// Write the game through the surveyed turn's played move
+// (data/slog_position_gcg.h).
 void write_position_gcg(const binlog::PendingSlog& slog, const SimmedPosition& r,
                         const Options& opt) {
-  std::vector<TurnRecord> scratch;
-  GameLog g = binlog::make_game_view(slog.bytes.data(), r.pos.game_idx, scratch, nullptr);
-  g.num_records = int(r.pos.turn_idx) + 1;
-  binlog::complete_turn_records(g, g.num_records, scratch);
-  g.final_scores = scratch[r.pos.turn_idx].cumulative_scores;
-  g.player_names = {"hasty0", "hasty1"};
-  GcgWriteOptions gcg;
-  gcg.lexicon_name = Lexicon::instance().name();
-  gcg.notes = {
+  std::vector<std::string> notes = {
     std::format("setup survey: turn {} (neural_rank_tool --turn {}); hasty{} to move with {}",
                 r.pos.turn_idx + 1, r.pos.turn_idx + 1, r.position.mover,
                 r.position.rack.to_string()),
     std::format("high-value setup plays outside the hasty top {} (hasty rank): {}", opt.cut,
                 setup_plays_note(r, opt.cut))};
-  const std::string name =
-    std::format("{}-g{}-turn{}.gcg", slog.path.stem().string(), r.pos.game_idx, r.pos.turn_idx + 1);
+  const std::string name = slog_position_gcg_name(slog.path.stem().string(), r.pos);
   std::ofstream out(fs::path(opt.gcg_dir) / name);
   if (!out) throw util::CleanException("cannot write {} in {}", name, opt.gcg_dir);
-  write_game_log_gcg(g, out, gcg);
+  write_slog_position_gcg(slog.bytes, r.pos, std::move(notes), out);
 }
 
 // Pair each screened position with its confirming sim. Both lists are in work

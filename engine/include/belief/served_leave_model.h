@@ -6,6 +6,8 @@
 
 #include "belief/leave_inference_net.h"
 #include "belief/leave_params.h"
+#include "lexicon/leave_value_arrays.h"
+#include "lexicon/leave_values.h"
 #include "nn/onnx_metadata.h"
 
 #include <mutex>
@@ -36,6 +38,16 @@ class ServedLeaveModel {
   LeaveInferenceNet net_;
   std::mutex mutex_;
   Identity identity_;
+};
+
+// A served model and the leave table its beliefs are over: what a tool that
+// serves beliefs at .slog positions (belief/slog_leave_beliefs.h) loads.
+struct ServedLeaveTable {
+  LeaveValueArrays table;
+  ServedLeaveModel served;
+
+  ServedLeaveTable(const std::string& onnx_path, const LeaveValues& values)
+      : table(values), served(onnx_path, values.content_hash()) {}
 };
 
 }  // namespace scribblez::belief

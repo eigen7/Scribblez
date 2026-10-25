@@ -12,7 +12,6 @@
 #include "sim/win_table_feature.h"
 #include "util/assert.h"
 #include "util/exception.h"
-#include "util/math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -114,15 +113,11 @@ bool passed(const GameLog& log, int player) {
   return false;
 }
 
-// Salts the rollout seed for the leave quantile, so the quantile is not
-// correlated with the bag's draws, which the same seed drives.
-constexpr uint64_t kLeaveQuantileSalt = 0x1EAFE5EEDull;
-
 // The opponent's known leave in the rollout seeded `seed`: the face-up leave,
 // or one drawn from the leave belief at the seed's quantile.
 Rack seated_opp_leave(const SimPosition& pos, uint64_t seed) {
   if (!pos.opp_leave_belief) return pos.opp_leave;
-  const double u = double(util::splitmix64(seed ^ kLeaveQuantileSalt) >> 11) * 0x1.0p-53;
+  const double u = belief::rollout_leave_quantile(seed);
   return pos.opp_leave_belief->leave(pos.opp_leave_belief->sample(u));
 }
 

@@ -23,6 +23,7 @@ add_library(scribblez_core STATIC
   src/data/gcg_reader.cpp
   src/data/gcg_post_move.cpp
   src/data/gcg_writer.cpp
+  src/data/slog_position_gcg.cpp
   src/data/binary_log.cpp
   src/encoding/game_state_encoder.cpp
   src/training/training_targets.cpp
@@ -67,6 +68,7 @@ add_library(scribblez_core STATIC
   src/sim/candidate_race.cpp
   src/sim/hasty_rollout_task.cpp
   src/sim/pool_labeler.cpp
+  src/sim/pool_jobs.cpp
   src/sim/rollout_values.cpp
   src/agent/best_bot.cpp
   src/agent/candidate_evaluator.cpp
@@ -286,7 +288,8 @@ set(CMAKE_CUDA_FLAGS_TEST "${CMAKE_CUDA_FLAGS_RELEASE}")
 add_library(scribblez_gpu_rollouts STATIC
   src/gpu/rollout_kernel.cu
   src/gpu/hasty_rollouts_gpu.cpp
-  src/gpu/gpu_rollout_values.cpp)
+  src/gpu/gpu_rollout_values.cpp
+  src/gpu/rollout_backend.cpp)
 set_target_properties(scribblez_gpu_rollouts PROPERTIES
   INTERPROCEDURAL_OPTIMIZATION OFF
   CUDA_RUNTIME_LIBRARY Shared)

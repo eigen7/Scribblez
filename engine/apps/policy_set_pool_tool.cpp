@@ -31,22 +31,18 @@
 #include "belief/opp_rack_summary.h"
 #include "belief/served_leave_model.h"
 #include "belief/slog_leave_beliefs.h"
-#include "data/forgone_play_log.h"
 #include "data/pool_log.h"
 #include "data/slog_sampling.h"
 #include "gpu/gpu_rollout_values.h"
+#include "gpu/rollout_backend.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
-#include "lexicon/leave_value_arrays.h"
 #include "lexicon/lexicon.h"
-#include "nn/onnx_metadata.h"
-#include "nn/trt_util.h"
-#include "sim/hasty_rollout_task.h"
+#include "sim/pool_jobs.h"
 #include "sim/pool_labeler.h"
 #include "sim/rollout_values.h"
 #include "sim/slog_position_simmer.h"
 #include "util/exception.h"
-#include "util/math.h"
 #include "util/misc.h"
 #include "util/progress.h"
 
@@ -74,32 +70,15 @@ namespace fs = std::filesystem;
 using namespace scribblez;
 
 constexpr const char* kPoolExt = ".pool";
-constexpr const char* kSyntheticLeaf = "synthetic";
-constexpr const char* kLeafFormatKey = "leaf_eval_format_version";
-constexpr const char* kLeaveFormatKey = "leave_inference_format_version";
-// Salts a rollout's seed for its leave quantile, so the quantile is not
-// correlated with the bag's draws, which the same seed drives (as SimRunner
-// does).
-constexpr uint64_t kLeaveQuantileSalt = 0x1EAFE5EEDull;
 // Positions the producer prepares per batch, ahead of the labeler.
 constexpr int kPrepBatch = 16;
 
-// The --leave-inference model and the leave table its beliefs are over.
-struct LeaveModel {
-  LeaveValueArrays table;
-  belief::ServedLeaveModel served;
-
-  LeaveModel(const std::string& onnx_path, const LeaveValues& values)
-      : table(values), served(onnx_path, values.content_hash()) {}
-};
+using LeaveModel = belief::ServedLeaveTable;
 
 struct Options {
   std::string slog_dir;
   std::vector<std::string> slog_files;
-  std::string backend = "gpu";
-  std::string leaf_model;  // an ONNX path, or "synthetic" with --backend cpu
-  std::string leaf_precision = "fp16";
-  int leaf_rows = nn::LeafEvalSpec::kDefaultMaxRows;
+  RolloutBackend rollouts;
   std::string leave_inference_path;
   int positions_per_game = 2;
   PoolLabeler::Params labeler;
@@ -107,18 +86,10 @@ struct Options {
   int threads = util::default_thread_count();
   uint64_t seed = 0;
   int limit_games = 0;
-
-  bool gpu() const { return backend == "gpu"; }
 };
 
 void validate(const Options& opt) {
-  if (opt.backend != "gpu" && opt.backend != "cpu")
-    throw util::CleanException("--backend must be gpu or cpu");
-  if (opt.leaf_model.empty()) throw util::CleanException("--leaf-model is required");
-  if (opt.gpu() && opt.leaf_model == kSyntheticLeaf)
-    throw util::CleanException("--leaf-model {} needs --backend cpu", kSyntheticLeaf);
-  if (!opt.gpu() && opt.leaf_model != kSyntheticLeaf)
-    throw util::CleanException("--backend cpu needs --leaf-model {}", kSyntheticLeaf);
+  opt.rollouts.validate();
   if (opt.labeler.rollouts < 1) throw util::CleanException("--rollouts must be >= 1");
   if (opt.positions_per_game < 1) throw util::CleanException("--positions-per-game must be >= 1");
   if (opt.blank_prune_points < 0) throw util::CleanException("--blank-prune-points must be >= 0");
@@ -126,15 +97,10 @@ void validate(const Options& opt) {
     throw util::CleanException("--launch-tasks and --max-in-flight must be >= 1");
 }
 
-PoolModel pool_model(const nn::ModelIdentity& id) {
-  return {id.hash, id.tag, id.generation, id.format_version};
-}
-
 // Where this run's labels come from.
 PoolSources pool_sources(const Options& opt, const LeaveModel* leave_model) {
   PoolSources s;
-  s.leaf_model = opt.gpu() ? pool_model(nn::read_model_identity(opt.leaf_model, kLeafFormatKey))
-                           : PoolModel{"", kSyntheticLeaf, -1, 0};
+  s.leaf_model = opt.rollouts.leaf_identity();
   if (leave_model) s.leave_model = pool_model(leave_model->served.identity());
   s.rollouts = opt.labeler.rollouts;
   return s;
@@ -155,16 +121,6 @@ void check_finished_pools(const std::vector<fs::path>& slogs, const PoolSources&
   }
 }
 
-// Under --leave-inference every .slog needs the .forgone sidecar the model's
-// input reads; say so before any work rather than at the first such file.
-void check_forgone_sidecars(const std::vector<fs::path>& slogs) {
-  for (const fs::path& slog : slogs) {
-    if (!fs::exists(forgone_path_of(slog.string())))
-      throw util::CleanException("{} has no .forgone sidecar; run forgone_play_tool over it first",
-                                 slog.string());
-  }
-}
-
 // --positions-per-game eligible turns of each game, in canonical order.
 std::vector<binlog::GamePositionIndex> sample_work(const std::vector<char>& buf,
                                                    const Options& opt) {
@@ -178,43 +134,6 @@ std::vector<binlog::GamePositionIndex> sample_work(const std::vector<char>& buf,
     binlog::sample_eligible_turns(metas[g], g, opt.seed, opt.positions_per_game, &work);
   std::sort(work.begin(), work.end());
   return work;
-}
-
-// Rollout i's opponent leave from `belief`, at a quantile of the rollout's
-// seed, for every rollout index of the budget.
-std::vector<Rack> belief_leaves(const belief::LeaveSampler& belief, uint64_t seed, int rollouts) {
-  std::vector<Rack> out;
-  out.reserve(size_t(rollouts));
-  for (int i = 0; i < rollouts; ++i) {
-    const uint64_t s = (seed + uint64_t(i)) ^ kLeaveQuantileSalt;
-    const double u = double(util::splitmix64(s) >> 11) * 0x1.0p-53;
-    out.push_back(belief.leave(belief.sample(u)));
-  }
-  return out;
-}
-
-// The labeler's job for a selected position: its record but the labels, its
-// group (pool, seed, per-rollout opponent leaves) and its candidates applied.
-PoolJob make_job(const SimmedPosition& r, const belief::SlogLeaveBeliefs* beliefs,
-                 const Dictionary& dict, int rollouts) {
-  const SimPosition& p = r.position;
-  PoolJob job;
-  job.group = make_rollout_group(p.board, p.rack, r.base_seed);
-  const std::shared_ptr<const belief::LeaveSampler> leave =
-    beliefs ? beliefs->belief(r.pos) : nullptr;
-  if (leave) job.group.opp_leaves = belief_leaves(*leave, r.base_seed, rollouts);
-  job.record.at = r.pos;
-  job.record.num_legal_moves = r.candidates.num_legal_moves;
-  job.record.moves = r.candidates.moves;
-  job.record.equity_ranks = r.candidates.equity_ranks;
-  job.record.opp_rack = belief::summarize_opp_rack(job.group.pool, leave.get());
-  Board board = p.board;
-  board.ensure_movegen_caches(dict);
-  for (const Move& m : r.candidates.moves) {
-    job.starts.push_back(
-      make_rollout_start(board, p.rack, p.scores[p.mover], p.scores[1 - p.mover], m, /*group=*/0));
-  }
-  return job;
 }
 
 // Prepares a file's jobs on its own thread, kPrepBatch positions at a time
@@ -274,16 +193,7 @@ std::vector<PoolJob> JobProducer::prepare(const std::vector<binlog::GamePosition
   util::ProgressMeter quiet(0, "");
   const std::vector<SimmedPosition> selected =
     select_slog_candidates(slog_.bytes, dict_, config, batch, &quiet);
-  std::vector<PoolJob> jobs(selected.size());
-  std::vector<std::thread> workers;
-  for (int t = 0; t < opt_.threads; ++t) {
-    workers.emplace_back([&, t] {
-      for (size_t i = size_t(t); i < selected.size(); i += size_t(opt_.threads))
-        jobs[i] = make_job(selected[i], beliefs_, dict_, opt_.labeler.rollouts);
-    });
-  }
-  for (std::thread& w : workers) w.join();
-  return jobs;
+  return make_pool_jobs(selected, beliefs_, dict_, opt_.labeler.rollouts, opt_.threads);
 }
 
 void JobProducer::produce() {
@@ -360,15 +270,6 @@ void pool_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Op
   }
 }
 
-std::unique_ptr<RolloutValues> make_values(const Options& opt, const Dictionary& dict) {
-  if (!opt.gpu()) return std::make_unique<CpuRolloutValues>(dict, opt.threads, synthetic_leaf());
-  return std::make_unique<GpuRolloutValues>(
-    dict, HastyEquity::instance(),
-    GpuRolloutValues::Params{.leaf_onnx = opt.leaf_model,
-                             .precision = nn::parse_precision(opt.leaf_precision),
-                             .leaf_rows = opt.leaf_rows});
-}
-
 void add_options(boost::program_options::options_description& desc, Options& opt) {
   namespace po = boost::program_options;
   PoolLabeler::Params& l = opt.labeler;
@@ -377,13 +278,9 @@ void add_options(boost::program_options::options_description& desc, Options& opt
     "directory of .slog files; each without a .pool gets one")(
     "slog-file", po::value<std::vector<std::string>>(&opt.slog_files),
     "explicit .slog file to process (repeatable; overrides --slog-dir)")(
-    "leaf-model", po::value<std::string>(&opt.leaf_model),
-    "the leaf network (a deep_bot_leaf_eval ONNX export); 'synthetic' with --backend cpu")(
     "leave-inference", po::value<std::string>(&opt.leave_inference_path),
     "seat opponents' leaves from this leave inference model (ONNX) instead of drawing their "
     "racks uniformly; each .slog needs its .forgone sidecar")(
-    "backend", po::value<std::string>(&opt.backend)->default_value(opt.backend),
-    "gpu, or cpu (the CPU reference with the synthetic leaf, for tests)")(
     "positions-per-game",
     po::value<int>(&opt.positions_per_game)->default_value(opt.positions_per_game),
     "eligible turns sampled per game")("rollouts",
@@ -399,17 +296,13 @@ void add_options(boost::program_options::options_description& desc, Options& opt
     "rollouts per GPU launch the labeler fills toward from the positions in flight")(
     "max-in-flight", po::value<int>(&l.max_in_flight)->default_value(l.max_in_flight),
     "positions in flight at most (each holds its candidates' boards)")(
-    "leaf-precision",
-    po::value<std::string>(&opt.leaf_precision)->default_value(opt.leaf_precision),
-    "TensorRT precision for the leaf network: fp32, fp16 or bf16")(
-    "leaf-rows", po::value<int>(&opt.leaf_rows)->default_value(opt.leaf_rows),
-    "rows per leaf network call")(
     "threads", po::value<int>(&opt.threads)->default_value(opt.threads),
     "CPU threads: position preparation, and the cpu backend's rollouts")(
     "seed", po::value<uint64_t>(&opt.seed)->default_value(opt.seed),
     "run seed (drives the turn sample and the rollout seeds)")(
     "limit-games", po::value<int>(&opt.limit_games)->default_value(opt.limit_games),
     "process only the first N games of each file (0 = all)");
+  opt.rollouts.add_options(desc);
 }
 
 }  // namespace
@@ -441,10 +334,10 @@ int main(int argc, char** argv) {
     std::cerr << std::format(
       "policy-set pools: {} file(s), {} backend, leaf {}, {} rollouts per "
       "candidate{}, opponent leaves {}\n",
-      pending.size(), opt.backend, opt.leaf_model, opt.labeler.rollouts,
+      pending.size(), opt.rollouts.backend, opt.rollouts.leaf_model, opt.labeler.rollouts,
       opt.labeler.race ? " (raced)" : "", leave_model ? opt.leave_inference_path : "uniform");
     if (pending.empty()) return 0;
-    const std::unique_ptr<RolloutValues> values = make_values(opt, dict);
+    const std::unique_ptr<RolloutValues> values = opt.rollouts.make(dict, opt.threads);
     for (const binlog::PendingSlog& p : pending) {
       try {
         pool_file(p, dict, opt, *values, sources, leave_model.get());
