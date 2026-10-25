@@ -304,6 +304,16 @@ target_link_libraries(policy_set_pool_tool PRIVATE
   Boost::program_options
   Threads::Threads)
 
+# Hidden-leaves blind spots confirmed from labeled pools (docs/blind_spots.md).
+add_executable(blind_spot_confirm_tool apps/blind_spot_confirm_tool.cpp)
+target_link_libraries(blind_spot_confirm_tool PRIVATE
+  scribblez_gpu_rollouts
+  scribblez_nn
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Threads::Threads)
+
 add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)
 target_link_libraries(gpu_rollout_demo PRIVATE
   scribblez_gpu_rollouts

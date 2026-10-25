@@ -70,8 +70,9 @@ Dashboard and compute:
   results back to the local mount so analysis runs unchanged.
 - **[blind_spots.md](blind_spots.md)**: collecting positions where a play from
   outside HastyBot's top moves out-sims all of them. Running the `blind_spots`
-  workload across a fleet, what workers deliver, and turning a tag into a
-  committed examples directory.
+  workload across a fleet, what workers deliver, turning a tag into a
+  committed examples directory, and confirming hidden-leaves blind spots from
+  labeled pools on the GPU (`blind_spot_confirm_tool`).
 
 ## Results
 
