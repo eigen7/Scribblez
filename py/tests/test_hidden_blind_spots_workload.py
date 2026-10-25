@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 from scribblez.paths import ENGINE_DIR
+from scribblez.selfplay import run_games
 from scribblez.workloads import hidden_blind_spots as hbs
 from scribblez.workloads.policy_set import BELIEFS_UNIFORM, LEAF_SYNTHETIC
+from scribblez.workloads.selfplay_gen import hasty_spec
 from tests.test_blind_spots_workload import RecordingSink, StubPaths
 
 if not hbs.CONFIRM_TOOL.is_file() or not (ENGINE_DIR / "policy_set_pool_tool").is_file():
@@ -22,21 +24,30 @@ PARAMS = hbs.HiddenBlindSpotsParams(
     cut=3,
     confirm_rollouts=40,
     min_gain=0.0,
-    sigmas=0.0,
 )
 
 
 @pytest.fixture(scope="module")
 def confirmed_chunk(tmp_path_factory) -> Path:
+    """A chunk confirmed as a cycle confirms it, deterministically: play_chunk
+    plays clock-seeded games under a clock-named stem, which seeds the tools,
+    so the fixture plays seeded games under a fixed stem instead."""
     chunk = tmp_path_factory.mktemp("cycle")
-    hbs.play_chunk(chunk, "w1", PARAMS, threads=2)
+    assert run_games(chunk, num_games=2, threads=2, player_spec=hasty_spec(PARAMS), seed=5) == 0
+    (slog,) = chunk.glob("*.slog")
+    slog.rename(chunk / "chunk-w1.slog")
     hbs.confirm_chunk(PARAMS, LEAF_SYNTHETIC, None, chunk, threads=4)
     return chunk
 
 
-def test_a_chunk_is_named_for_its_worker(confirmed_chunk):
-    (slog,) = confirmed_chunk.glob("*.slog")
+def test_a_chunk_is_named_for_its_worker(tmp_path):
+    hbs.play_chunk(tmp_path, "w1", replace(PARAMS, games_per_chunk=1), threads=1)
+    (slog,) = tmp_path.glob("*.slog")
     assert slog.stem.endswith("-w1")
+
+
+def test_confirming_writes_the_pool_and_the_report(confirmed_chunk):
+    slog = confirmed_chunk / "chunk-w1.slog"
     assert slog.with_suffix(".pool").exists()
     assert slog.with_name(f"{slog.stem}{hbs.FOUND_SUFFIX}").exists()
 
@@ -66,11 +77,11 @@ def test_a_cycle_delivers_the_games_the_report_and_the_kept_positions(confirmed_
 
 
 def test_the_confirm_command_carries_the_params(tmp_path):
-    p = replace(PARAMS, cut=7, picks=3, confirm_rollouts=900, min_gain=4.5, sigmas=1.5)
+    p = replace(PARAMS, cut=7, picks=3, confirm_rollouts=900, min_gain=4.5)
     cmd = hbs.confirm_command(p, tmp_path, "leaf.onnx", Path("li.onnx"), seed=9, threads=3)
     flags = dict(zip(cmd[1::2], cmd[2::2], strict=False))
     assert flags["--cut"] == "7" and flags["--picks"] == "3" and flags["--rollouts"] == "900"
-    assert flags["--min-gain"] == "4.5" and flags["--sigmas"] == "1.5"
+    assert flags["--min-gain"] == "4.5"
     assert flags["--leave-inference"] == "li.onnx" and "--backend" not in flags
     assert flags["--gcg-dir"] == str(tmp_path / hbs.GCG_DIR)
 

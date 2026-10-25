@@ -61,7 +61,7 @@ def confirmed(pooled, tmp_path_factory) -> tuple[Path, dict]:
     """With no bars, so every confirmed position whose outside move is no
     worse is kept."""
     gcg = tmp_path_factory.mktemp("gcg")
-    run = _confirm(pooled.parent, gcg, "--min-gain", "0", "--sigmas", "0")
+    run = _confirm(pooled.parent, gcg, "--min-gain", "0")
     assert run.returncode == 0, run.stderr
     return gcg, json.loads(pooled.with_name(f"{pooled.stem}.blindspots.json").read_text())
 

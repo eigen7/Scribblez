@@ -12,8 +12,10 @@
 // at --rollouts each, unraced, on rollouts independent of the screen's, and
 // under the pool's own leaf network and leave inference model, which the
 // pool's header must name. A position is kept when the best confirmed outside
-// move beats the best cut move by at least --min-gain points of win percentage
-// and by --sigmas paired standard errors.
+// move beats the best cut move by at least --min-gain points of win percentage.
+// There is no standard-error bar besides: at the default 5000 rollouts a
+// paired gain's standard error stays under a point, so the 5-point bar is
+// several of them already. The report records it per position.
 //
 // Each .slog gets <stem>.blindspots.json: every confirmed position, kept or
 // not, and how many pools the screen read, so rates stay computable. Each kept
@@ -79,7 +81,6 @@ struct Options {
   int cut = 10;
   int picks = 5;
   double min_gain = 5.0;  // points of win percentage
-  double sigmas = 2.0;
   PoolLabeler::Params labeler{.rollouts = 5000, .race = false};
   int threads = util::default_thread_count();
   uint64_t seed = 0;
@@ -90,8 +91,7 @@ void validate(const Options& opt) {
   if (opt.cut < 1) throw util::CleanException("--cut must be >= 1");
   if (opt.picks < 1) throw util::CleanException("--picks must be >= 1");
   if (opt.labeler.rollouts < 2) throw util::CleanException("--rollouts must be >= 2");
-  if (opt.min_gain < 0 || opt.sigmas < 0)
-    throw util::CleanException("--min-gain and --sigmas must be >= 0");
+  if (opt.min_gain < 0) throw util::CleanException("--min-gain must be >= 0");
   if (opt.labeler.launch_tasks < 1 || opt.labeler.max_in_flight < 1)
     throw util::CleanException("--launch-tasks and --max-in-flight must be >= 1");
 }
@@ -197,7 +197,7 @@ Verdict judge(const PoolPosition& r, int num_cut, const Options& opt) {
   }
   v.gain = sum / double(n);
   v.se = std::sqrt(std::max(0.0, sq / double(n) - v.gain * v.gain) / double(n - 1));
-  v.kept = 100 * v.gain >= opt.min_gain && v.gain >= opt.sigmas * v.se;
+  v.kept = 100 * v.gain >= opt.min_gain;
   return v;
 }
 
@@ -254,7 +254,6 @@ json::object header_json(const Options& opt, const PoolSources& sources, int scr
           {"picks", opt.picks},
           {"rollouts", opt.labeler.rollouts},
           {"min_gain", opt.min_gain},
-          {"sigmas", opt.sigmas},
           {"seed", opt.seed},
           {"leaf_model", model_json(sources.leaf_model)},
           {"leave_model", model_json(sources.leave_model)},
@@ -390,8 +389,7 @@ void add_options(boost::program_options::options_description& desc, Options& opt
     "confirming rollouts per move, unraced")(
     "min-gain", po::value<double>(&opt.min_gain)->default_value(opt.min_gain),
     "keep a position whose best outside move beats the best cut move by at least this many "
-    "points of win percentage")("sigmas", po::value<double>(&opt.sigmas)->default_value(opt.sigmas),
-                                "... and by at least this many paired standard errors")(
+    "points of win percentage")(
     "launch-tasks", po::value<int>(&l.launch_tasks)->default_value(l.launch_tasks),
     "rollouts per GPU launch the labeler fills toward from the positions in flight")(
     "max-in-flight", po::value<int>(&l.max_in_flight)->default_value(l.max_in_flight),

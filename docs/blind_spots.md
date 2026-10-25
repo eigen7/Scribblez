@@ -86,7 +86,9 @@ blind_spot_confirm_tool --slog-dir chunk/ --leaf-model <leaf_eval .onnx> \
   of the screen's, under the leaf network and leave inference model the
   pool's header names; the tool refuses others. A position is kept when the
   best outside move beats the best cut move by `--min-gain` points of win
-  percentage (5) and by `--sigmas` paired standard errors (2).
+  percentage (5). At 5000 rollouts the gain's paired standard error stays
+  under a point (at most 0.9 on the first run below), so the point bar needs
+  no standard-error bar beside it; the report records the error.
 - **Output:** `<stem>.blindspots.json` beside each `.slog`, holding every
   confirmed position, kept or not, and the number of pools screened; and a
   `.gcg` per kept position in `--gcg-dir`, named as the workload's are. The
@@ -98,11 +100,13 @@ blind_spot_confirm_tool --slog-dir chunk/ --leaf-model <leaf_eval .onnx> \
 chunk of hidden-leaves HastyBot self-play, its `.forgone` sidecar, its pools
 (`policy_set_pool_tool`, as `policy_set`'s generators label them), then the
 confirmation. Create a tag naming the leaf eval and leave inference
-generations (as for a `policy_set` tag; -1 pins the latest export), add a
-local **Generator (GPU)** worker, and start it. The controller finishes the
-generators once the tag holds `target_positions` kept positions (1000 by
-default). The tools are not in the worker bundle, so the role runs on local
-workers only. Each chunk delivers into `/workspace/mount/tags/hidden_blind_spots/<tag>/data/`:
+generations (as for a `policy_set` tag; -1 pins the latest export), add
+**Generator (GPU)** workers, local or on GPU ssh machines (rented ones
+included), and start them. A remote worker builds its own TensorRT plans for
+its GPU on first use, about a minute. The controller finishes the generators
+once the tag holds `target_positions` kept positions (1000 by default). Each
+chunk delivers into `/workspace/mount/tags/hidden_blind_spots/<tag>/data/`
+(collected over ssh from a remote worker):
 
 - `found/<stem>.slog`, `found/<stem>.forgone`: the chunk's games and their
   forgone plays, which step 4's tools replay; the pools are dropped;
