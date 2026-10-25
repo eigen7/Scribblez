@@ -1,7 +1,8 @@
 # DeepBot: two-level simulation with a policy-set model
 
-**Status: proposed 2026-10-14; not built, and not yet placed in the
-[roadmap](../roadmap.md).** DeepBot plays standard Scrabble, with hidden
+**Status: proposed 2026-10-14; revised 2026-10-25 to build the agent first
+on static-equity candidates ([Candidates](#candidates)); not yet placed in
+the [roadmap](../roadmap.md).** DeepBot plays standard Scrabble, with hidden
 leaves. This document is a design to guide development. Its measurements
 inform the next step; no pass or kill thresholds are fixed in advance.
 
@@ -9,8 +10,8 @@ Write **Alice** for the player to move and **Bob** for the opponent.
 
 ## The turn
 
-1. **Candidates.** The [policy-set model](#the-policy-set-model)
-   proposes `N_A` candidates for Alice from all her legal moves.
+1. **Candidates.** The [proposer](#candidates) proposes `N_A` candidates
+   for Alice from all her legal moves.
 2. **Bob's racks.** Alice samples `R_A` racks for Bob (about 100) from her
    [belief](#beliefs). They are fixed for the turn and shared by every
    candidate.
@@ -36,7 +37,7 @@ holds `r`, what does Bob play?
 1. **Alice's racks, from Bob's side.** Bob samples `R_B` racks for Alice
    (about 20) from *his* belief. That belief conditions on the public history
    *including `a`*, and its pool is the tiles Bob cannot see, given `r`.
-2. **Bob's candidates.** The policy-set model, evaluated from Bob's
+2. **Bob's candidates.** The [proposer](#candidates), evaluated from Bob's
    information set (`r` plus the public state), proposes `N_B` moves.
 3. **Bob's sims.** For each candidate `b` and each of Alice's sampled racks:
    1. Bob plays `b`.
@@ -61,12 +62,12 @@ and labeled with Alice's tiles, then Bob's, with `?` for tiles unknown to the
 evaluation's owner.*
 
 *Alice starts at `x ?`. She holds `x` and cannot see Bob's rack. The
-policy-set model proposes `a` among her candidates. Alice samples Bob's rack
+proposer proposes `a` among her candidates. Alice samples Bob's rack
 from her own belief, `y` or `z`. At `x z` it is Bob's turn, and Alice cannot
 choose Bob's move with her own values, so she **spawns** Bob's subtree, rooted
 at `? z`: Bob holds `z` and does not know Alice's tiles.*
 
-*In that subtree, the policy-set model proposes Bob's set, `b₁`, `b₂`, `b₃`
+*In that subtree, the proposer proposes Bob's set, `b₁`, `b₂`, `b₃`
 and others. Bob samples racks for Alice from his own belief, which reads what
 `a` reveals (`x̂₁`, `x̂₂`, …). For each of his candidates, he sims: Alice
 plays hasty, Bob plays hasty, and the leaf network values the leaf. Each
@@ -84,7 +85,8 @@ If `a` draws the bag's last tiles, Bob's turn is an endgame. The tiles he
 cannot see are exactly Alice's rack, and his subtree does not apply:
 
 - the policy-set model trains on the whole game except the endgame, so its
-  set at an empty bag is outside its training;
+  set at an empty bag is outside its training, and the equity proposer's
+  recall was measured on the same positions;
 - Bob needs no belief about Alice's rack, since he can deduce it, and Alice
   needs no replenishment draws, since there are none.
 
@@ -208,6 +210,52 @@ A seeded, indexable draw sequence replaces `Bag::draw()` in sim code: the
 GPU kernel's counter-based generator (Philox, keyed by the batch seed and
 counted by rollout index and draw ordinal), which the CPU reference shares.
 Rollout `i` reads the same variates in every position of a batch.
+
+## Candidates
+
+**The proposer.** Given a position from the chooser's information set and a
+size `N`, the proposer returns `N` of the chooser's legal moves. Alice's
+`N_A` candidates and Bob's `N_B` both come from it.
+
+**v0 proposes the static-equity top `N`.** The learned forms of the
+[policy-set model](#the-policy-set-model) so far match that baseline and do
+not beat it, so the agent is built on it, and the policy-set model replaces it
+once it beats equity at the same `N`. The equity proposer needs no network:
+one move generation per set, on the CPU. Bob needs a set per `(a, r)`, about
+2,000 per turn, each well under a millisecond.
+
+**`N` depends on the stage of the game.** Measured 2026-10-25 on 2,000 pools
+labeled on the GPU ([Labels](#labels): every legal move, Bob's reply hasty,
+the leaf network at the end). A pool's best move is its largest `q`. Regret
+is the best move's win probability minus that of the set's own best-`q`
+move, in points of win probability:
+
+| `N` | Recall, all | Regret, turns 0–5 | Regret, turns 6–11 | Recall, turns ≥ 12 | Regret, turns ≥ 12 | 95th-percentile regret, turns ≥ 12 |
+|---|---|---|---|---|---|---|
+| 4 | 0.800 | 0.13 | 0.14 | 0.679 | 1.35 | 6.5 |
+| 8 | 0.866 | 0.06 | 0.06 | 0.750 | 0.98 | 4.9 |
+| 16 | 0.905 | 0.03 | 0.05 | 0.815 | 0.79 | 3.8 |
+| 24 | 0.928 | 0.02 | 0.01 | 0.852 | 0.58 | 2.7 |
+| 40 | 0.944 | 0.01 | 0.01 | 0.878 | 0.42 | 1.6 |
+
+Turn counts both players' moves; the pools record no bag size. Each turn
+bucket holds 600 to 800 pools. Through turn 11 the top 8 lose almost nothing.
+From turn 12 on, the top 8 miss the best move a quarter of the time, and even
+the top 40 lose 0.4 points on average. So `N` grows with the stage, about 8
+early and 24 to 40 late, which makes late turns several times dearer in Bob's
+subtree. The late game is also where a learned proposer has room to beat
+equity.
+
+**The reply model.** How Alice models Bob's move is a knob:
+
+- **`subtree`:** Bob's subtree, as designed.
+- **`hasty`:** Bob plays the static-equity argmax for `r`, which is Macondo
+  BestBot's model of the opponent, here with the leave inference beliefs and
+  the leaf network. The subtree is skipped, which makes a turn about 40 times
+  cheaper ([Cost and allocation](#cost-and-allocation)).
+
+`hasty` is the first pass of successive halving, and the two settings at
+equal time measure what modeling Bob on his own information is worth.
 
 ## The policy-set model
 
@@ -514,9 +562,11 @@ A frozen policy `P_k` generates games, and those games train `I_k`, the
   leave at every turn ([architecture.md](../architecture.md)).
 - **Train `I_k` only on `P_k`'s games, warm-started from `I_{k−1}`.** Trained
   on a buffer that mixes generations, an inference network converges to Bayes'
-  rule under the *average* policy, not the current one. Games for `I_k` are
-  generated cheaply, by playing `P_k`'s policy-set model's top-1 without
-  search.
+  rule under the *average* policy, not the current one. Once a policy-set
+  model serves, games for `I_k` are generated cheaply, by playing `P_k`'s
+  policy-set model's top-1 without search. Under the equity proposer that
+  top-1 is HastyBot, the policy `I_0` already models, so games come from the
+  agent itself at a reduced budget.
 
 `I_k` models opponents who play like `P_k`. Against Macondo or human players
 that is a mismatch. Fine-tuning on recorded games with known racks is the
@@ -528,11 +578,13 @@ Per Alice candidate:
 
 | Item | Count |
 |---|---|
-| Policy-set calls for Bob | `R_A`: 100 |
+| Candidate sets for Bob | `R_A`: 100 |
 | Bob's sims | `R_A · N_B · R_B`: 100 × 8 × 20 = 16,000 |
 | Alice's sims | `R_A ·` sims per rack: about 400 |
 
-Modeling Bob dominates, at about 40 to 1. With 20 candidates, a turn is
+Modeling Bob dominates, at about 40 to 1, and scales with `N_B`, which the
+equity proposer needs larger late in the game ([Candidates](#candidates)).
+With 20 candidates, a turn is
 about 320,000 short sims, each two mechanical moves after a fixed one, and a
 leaf network evaluation. On the dev laptop's GPU (RTX 5000 Ada), the rollout
 kernel runs 140,000 to 540,000 two-ply rollouts a second, depending on how
@@ -552,20 +604,21 @@ favor wider sets and more racks than the counts above, with fewer rounds.
 The counts and the round schedule are re-tuned there by measurement. Four levers:
 
 - **Successive halving over Alice's candidates.** A cheap first pass models
-  Bob as the policy-set model's top-1. The full subtree runs only for
-  survivors.
+  Bob as the proposer's top-1 (the `hasty` reply model). The full subtree
+  runs only for survivors.
 - **Racing in Bob's subtree.** Stop sampling Alice's racks once Bob's argmax
   is clear on the paired samples.
 - **Caching `β(a, r)`.** Every replenishment sim of `(a, r)` reuses Bob's
   choice.
-- **Batching** the network calls (the policy-set model's sets and the leave
-  beliefs) across subtrees, following the `BatchingPositionEvalService`
+- **Batching** the network calls (the leave beliefs, and the policy-set
+  model's sets once it serves) across subtrees, following the `BatchingPositionEvalService`
   pattern.
 
 ## Build order
 
 Each step names what it measures. The measurements guide the next step.
 Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
+Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
 
 1. **The leave inference model, `I_0`,** from HastyBot games, and the v0
    win table. *Measure:* held-out log-likelihood of the true leave against
@@ -573,10 +626,12 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
 2. **Policy-set labels.** Pools over positions from the whole game except the
    endgame, with opponent leaves from the leave inference model and rollouts
    run on the GPU, stopped at the leaf network.
-3. **Policy-set v0, both forms.** *Measure:* recall, meaning how often the
+3. **Policy-set v0, both forms,** in parallel with steps 4 to 6. It
+   replaces the equity proposer once it beats it. *Measure:* recall, meaning how often the
    pool's sim-best move is in `S`, against the top `N` by value, by form, bag
    size and `N`, with setups and exchanges reported separately; and each
-   form's time per batch of sets.
+   form's time per batch of sets. The equity baseline's curve is in
+   [Candidates](#candidates).
 4. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
    after each of Alice's top candidates: Bob's chosen replies, how often
    each kind (bingo, setup, other) is chosen, and how stable the choice is
@@ -585,19 +640,23 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
    - The GPU sims with groups and racing rounds, the leaf network, pairing,
      two-level evaluation with inferred-leave beliefs batched on the GPU, and
      the cache.
+   - The proposer's `N` by stage of the game, and the reply-model knob.
    - *Measure:* the picks at the known positions
      (`positions/NWL23/interesting-positions/`, the blind_spots tag), turn
-     time, and matches against BestBot and `mset-sim` in standard Scrabble.
+     time, and matches against BestBot and `mset-sim` in standard Scrabble,
+     with each reply model, and with each reply model against the other at
+     equal time.
 6. **Allocation.** Successive halving and racing. *Measure:* the strength
    lost against the time saved.
-7. **Generations.** DeepBot labels positions for the next policy-set model,
+7. **Generations.** DeepBot labels positions for the policy-set model,
    its games train the next leave inference model and the next leaf network.
 
 ## Limits
 
-- **Recall is unrecoverable at search time.** If the policy-set model omits
-  Bob's best reply, nothing in the search brings it back. Policy-set recall is
-  therefore the first measurement. Online transfer between Bob's subtrees
+- **Recall is unrecoverable at search time.** If the proposer omits Bob's
+  best reply, nothing in the search brings it back. The equity proposer's
+  recall is measured ([Candidates](#candidates)), and it is weakest late in
+  the game. Online transfer between Bob's subtrees
   could be added if recall turns out to be the bottleneck.
 - **Depth.** After the two searched decisions, every move is mechanical.
   Setups that pay off later than the sim's horizon are valued only by the
@@ -626,9 +685,9 @@ Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
 - **Macondo's BestBot** runs the same outer loop: candidates, sampled
   opponent racks, sims. Its opponent plays the static-equity argmax, so he
   never tries a setup that equity ranks low, and his rack is drawn
-  uniformly. DeepBot replaces that
-  opponent with a decision made on the opponent's own information, over a
-  diverse candidate set.
+  uniformly. DeepBot with the `hasty` reply model is that loop with inferred
+  racks and the leaf network. With `subtree`, it replaces that opponent with
+  a decision made on the opponent's own information.
 - **Many-tree information-set search** (Cowling, Powley & Whitehouse, 2015)
   is the source of the rule that each player decides over their own beliefs,
   and that only moves cross between players' evaluations.
