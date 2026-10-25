@@ -219,7 +219,11 @@ class TaskHandler(_MasterBase):
                 "profile_diff": spec.profile_diff(task.profile, task.params) if task else [],
                 "created_at": task.created_at if task else None,
                 "state": self.manager.tasks.state(spec, task, entry),
-                "failure": tasks.failure_reason(task, entry) if task else None,
+                "failure": (
+                    tasks.failure_reason(task, entry) or self.manager.tasks.params_error(spec, task)
+                    if task
+                    else None
+                ),
                 "progress": self.manager.tasks.progress(spec, task) if task else [],
                 "gates": task.gates if task else {},
                 "data_dir": str(self.manager.tasks.paths(spec, tag).root),

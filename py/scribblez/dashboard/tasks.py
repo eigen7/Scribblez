@@ -41,6 +41,7 @@ RUNNING = "running"
 QUEUED = "queued"
 PAUSED = "paused"
 IDLE = "idle"
+INVALID = "invalid params"
 
 
 @dataclass
@@ -509,6 +510,8 @@ class TaskStore:
         """The tag's state, common to every workload; `entry` is its place in
         the tag queue, or None. The first that holds:
 
+        invalid params  its stored params no longer validate against the
+                  workload's schema (params_error)
         complete  the workload's end condition holds (WorkloadSpec.complete),
                   or, for a workload without one, every slot is finished
         failed    it is stuck on a failure (failure_reason)
@@ -522,6 +525,8 @@ class TaskStore:
         list_tags."""
         if task is None:
             return IDLE
+        if self.params_error(spec, task) is not None:
+            return INVALID
         if self._complete(spec, task):
             return COMPLETE
         if failure_reason(task, entry) is not None:
@@ -538,9 +543,21 @@ class TaskStore:
         params = params_mod.validate(spec.params_cls, task.params)
         return resolve(spec.complete)(spec, self.paths(spec, task.tag), params)
 
+    def params_error(self, spec: WorkloadSpec, task: TaskRecord) -> str | None:
+        """Why the task's stored params no longer validate against the
+        workload's schema (a param renamed or dropped since the tag was
+        created), or None. Such a tag is listed as invalid rather than taking
+        its workload's listing down."""
+        try:
+            params_mod.validate(spec.params_cls, task.params)
+        except params_mod.ParamsError as e:
+            return "; ".join(e.args) + " (bring them forward with py/scripts/migrate_tag_params.py)"
+        return None
+
     def progress(self, spec: WorkloadSpec, task: TaskRecord) -> list:
-        """The workload's [label, value] progress counters for the task."""
-        if not spec.progress:
+        """The workload's [label, value] progress counters for the task, none
+        while its params are invalid."""
+        if not spec.progress or self.params_error(spec, task) is not None:
             return []
         params = params_mod.validate(spec.params_cls, task.params)
         paths = self.paths(spec, task.tag)
@@ -580,6 +597,7 @@ class TaskStore:
                     # round trips.
                     "active_workers": sum(w.desired_state == "running" for w in workers),
                     "state": self.state(spec, task, queue.find(spec.name, tag_dir.name)),
+                    "params_error": self.params_error(spec, task) if task else None,
                     "progress": self.progress(spec, task) if task else [],
                     "disk_bytes": _disk_bytes(tag_dir),
                     "pace": _pace(spec, tag_dir),

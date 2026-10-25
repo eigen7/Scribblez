@@ -209,6 +209,21 @@ def test_state_is_complete_from_the_data_once_the_slots_are_gone(store):
     assert store.state(spec, task, None) == tasks.COMPLETE
 
 
+def test_a_tag_with_stale_params_is_listed_invalid_beside_the_rest(store):
+    """A param dropped from the schema since a tag was created must not take
+    its workload's whole tag list down: that tag is listed invalid, naming
+    the bad param and the migration tool, and the others list as usual."""
+    spec = workloads.get("position_eval")
+    store.save(spec, tasks.TaskRecord(spec.name, "good", {}, 0.0))
+    store.save(spec, tasks.TaskRecord(spec.name, "stale", {"horizon_plies": 2}, 0.0))
+    rows = {r["tag"]: r for r in store.list_tags(spec, queue_mod.Queue())}
+    assert rows["good"]["state"] == tasks.IDLE and rows["good"]["params_error"] is None
+    stale = rows["stale"]
+    assert stale["state"] == tasks.INVALID and stale["progress"] == []
+    assert "unknown parameter 'horizon_plies'" in stale["params_error"]
+    assert "migrate_tag_params.py" in stale["params_error"]
+
+
 def test_disk_bytes_counts_a_hard_linked_file_once(tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "a").write_bytes(b"x" * 100_000)
