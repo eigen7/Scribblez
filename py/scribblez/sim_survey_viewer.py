@@ -67,9 +67,10 @@ class Tile:
     is_blank: bool
 
 
-def placed_tiles(notation: str) -> list[Tile]:
-    """The tiles a move in GCG notation lays on the board; none for an exchange
-    ("-ABC") or a pass ("-")."""
+def word_squares(notation: str) -> list[tuple[int, int, str]]:
+    """(row, col, character) for each square of a play's word in GCG notation,
+    '.' where a tile was already on the board; none for an exchange ("-ABC")
+    or a pass ("-")."""
     match = PLAY_NOTATION.match(notation)
     if not match:
         return []
@@ -77,26 +78,53 @@ def placed_tiles(notation: str) -> list[Tile]:
     vertical = down_col is not None
     row = int(down_row if vertical else across_row) - 1
     col = ord(down_col if vertical else across_col) - ord("A")
-    tiles = []
-    for i, ch in enumerate(word):
-        if ch == ".":
-            continue
-        r, c = (row + i, col) if vertical else (row, col + i)
-        tiles.append(Tile(r, c, ch.upper(), ch.islower()))
-    return tiles
+    return [(row + i, col, ch) if vertical else (row, col + i, ch) for i, ch in enumerate(word)]
+
+
+def placed_tiles(notation: str) -> list[Tile]:
+    """The tiles a move in GCG notation lays on the board; none for an exchange
+    or a pass."""
+    return [
+        Tile(r, c, ch.upper(), ch.islower()) for r, c, ch in word_squares(notation) if ch != "."
+    ]
+
+
+def gcg_events(gcg_text: str) -> list[list[str]]:
+    """A .gcg's event lines, split into fields: ">nick: RACK POS WORD +score
+    total" for a play, ">nick: RACK -TILES +0 total" for an exchange and
+    ">nick: RACK - +0 total" for a pass."""
+    return [line.split() for line in gcg_text.splitlines() if line.startswith(">")]
 
 
 def board_before(gcg_text: str, turn: int) -> list[list[str | None]]:
     """The board before 0-based `turn` of a .gcg, in the web Board's encoding: a
     letter per tile, lowercase for a blank."""
     board: list[list[str | None]] = [[None] * BOARD_SIZE for _ in range(BOARD_SIZE)]
-    events = [line for line in gcg_text.splitlines() if line.startswith(">")]
-    for line in events[:turn]:
-        # ">nick: RACK POS WORD +score total"; an exchange or pass has no WORD.
-        fields = line.split()
+    for fields in gcg_events(gcg_text)[:turn]:
         for t in placed_tiles(" ".join(fields[2:4])):
             board[t.row][t.col] = t.letter.lower() if t.is_blank else t.letter
     return board
+
+
+def last_move(gcg_text: str, turn: int) -> dict | None:
+    """The opponent's move just before 0-based `turn`, as the viewer shows it,
+    or None at the first turn: its text ("O7 FLUNG +34", played-through letters
+    spelled out; "exch 3", whose tiles the mover never sees; or "pass") and the
+    squares it placed tiles on."""
+    if turn == 0:
+        return None
+    fields = gcg_events(gcg_text)[turn - 1]
+    if fields[2] == "-":
+        return {"text": "pass", "squares": []}
+    if fields[2].startswith("-"):
+        return {"text": f"exch {len(fields[2]) - 1}", "squares": []}
+    board = board_before(gcg_text, turn - 1)
+    squares = word_squares(" ".join(fields[2:4]))
+    word = "".join(board[r][c] if ch == "." else ch for r, c, ch in squares)
+    return {
+        "text": f"{fields[2]} {word} {fields[4]}",
+        "squares": [[r, c] for r, c, ch in squares if ch != "."],
+    }
 
 
 def opp_rack_count(board: list[list[str | None]], rack: str, bag_size: int) -> int:
@@ -194,7 +222,8 @@ def position_entry(
     outside = sorted((m for m in moves if "sigmas" in m), key=lambda m: -m["stats"]["win_pct"])
     inside = sorted((m for m in moves if "sigmas" not in m), key=lambda m: m["hasty_rank"])
     gcg = gcg_name(key)
-    board = board_before((gcg_dir / gcg).read_text(), position["turn"])
+    text = (gcg_dir / gcg).read_text()
+    board = board_before(text, position["turn"])
     return {
         "name": gcg.removesuffix(".gcg"),
         "gcg": gcg,
@@ -208,6 +237,7 @@ def position_entry(
         "num_legal_moves": position["num_legal_moves"],
         "played": position["played"],
         "board": board,
+        "last_move": last_move(text, position["turn"]),
         "opp_rack_count": opp_rack_count(board, position["rack"], position["bag_size"]),
         "moves": outside + inside,
     }

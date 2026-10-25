@@ -7,8 +7,7 @@ rack, rebuilt from the position's exported .gcg as sim_survey_viewer does, and
 the confirmed moves, outside moves first. The GPU sims keep only win rates, so
 a move carries its confirming and screening win% and the pool's q instead of a
 CPU survey's rollout summaries. Every outside move is compared with the best
-top move on the same rollouts; only the best outside move's comparison has a
-recorded standard error, so only it carries sigmas.
+top move on the same rollouts.
 """
 
 import json
@@ -18,6 +17,8 @@ from scribblez.sim_survey_viewer import (
     TILE_SCORES,
     board_before,
     bonuses,
+    gcg_events,
+    last_move,
     opp_rack_count,
     tiles_json,
 )
@@ -28,10 +29,7 @@ REPORT_SUFFIX = ".blindspots.json"
 def played_move(gcg_text: str) -> str:
     """The move the game played at a position, in GCG notation: the last event
     of its export, which runs through that move."""
-    (*_, last) = (line for line in gcg_text.splitlines() if line.startswith(">"))
-    # ">nick: RACK POS WORD +score total", ">nick: RACK -TILES +0 total" or
-    # ">nick: RACK - +0 total".
-    fields = last.split()
+    fields = gcg_events(gcg_text)[-1]
     return fields[2] if fields[2].startswith("-") else " ".join(fields[2:4])
 
 
@@ -66,8 +64,6 @@ def move_entry(position: dict, c: int, header: dict) -> dict:
             "beats_cut": gain >= header["min_gain"],
             "versus": readable(best_cut["display"]),
         }
-        if c == position["best_outside"] and position["gain_se"] > 0:
-            out["sigmas"] = position["gain"] / position["gain_se"]
     return out
 
 
@@ -91,6 +87,7 @@ def position_entry(stem: str, position: dict, header: dict, gcg_dir: Path) -> di
         "solved_endgames": False,  # the pool tool's rollouts play endgames out by HastyBot
         "played": played_move(text),
         "board": board,
+        "last_move": last_move(text, position["turn"]),
         "opp_rack_count": opp_rack_count(board, position["rack"], position["bag_size"]),
         "moves": outside + inside,
     }

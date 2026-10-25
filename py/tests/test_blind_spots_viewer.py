@@ -62,8 +62,9 @@ def tag(tmp_path) -> tuple[Path, Path]:
     report = {"version": 1, "cut": 10, "rollouts": 5000, "min_gain": 5.0}
     report["positions"] = [position(0, 2, True), position(1, 2, False), position(2, 9, True, bag=3)]
     (found / "s.blindspots.json").write_text(json.dumps(report))
-    for g, t in ((0, 2), (2, 9)):  # only the kept positions have games
-        (gcg / f"s-g{g}-turn{t + 1}.gcg").write_text(GCG)
+    # Only the kept positions have games, each running through its own turn.
+    (gcg / "s-g0-turn3.gcg").write_text(GCG)
+    (gcg / "s-g2-turn10.gcg").write_text(GCG + ">hasty1: AB - +0 0\n" * 7)
     return found, gcg
 
 
@@ -82,6 +83,8 @@ def test_a_position_is_the_board_before_its_turn(tag):
     assert p["turn"] == 3 and p["played"] == "9D AB"
     assert "".join(p["board"][7][3:10]) == "RETAINS" and p["board"][8][3] is None
     assert p["opp_rack_count"] == 100 - 7 - 7 - 40 and p["opp_known_leave"] == ""
+    # The opponent's exchange before it, its tiles hidden.
+    assert p["last_move"] == {"text": "exch 2", "squares": []}
 
 
 def test_moves_list_the_outside_plays_first_against_the_best_top_move(tag):
@@ -92,8 +95,8 @@ def test_moves_list_the_outside_plays_first_against_the_best_top_move(tag):
     assert (
         fade["gain_pct"] == pytest.approx(8.0) and fade["beats_cut"] and fade["versus"] == "9E BA"
     )
-    assert fade["sigmas"] == pytest.approx(20.0)  # the best outside move's recorded error
-    assert cab["gain_pct"] == pytest.approx(3.0) and not cab["beats_cut"] and "sigmas" not in cab
+    assert cab["gain_pct"] == pytest.approx(3.0) and not cab["beats_cut"]
+    assert "sigmas" not in fade and "sigmas" not in cab
     assert "gain_pct" not in top and top["hasty_rank"] == 1
     assert fade["win_pct"] == pytest.approx(50.0) and fade["screen_win_pct"] == pytest.approx(51.0)
     assert fade["rollouts"] == 5000 and "stats" not in fade

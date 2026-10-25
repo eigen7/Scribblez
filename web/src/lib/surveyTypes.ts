@@ -49,8 +49,7 @@ export interface SurveyMove {
   screen_win_pct?: number;
   screen_q?: number; // P(the move is the pool's best)
   // Only on a play from outside the top moves: how it fared against the best of
-  // them (`versus`) in the confirming sim. A blind spot's `sigmas` is on its
-  // best outside move alone, the only pair whose standard error it records.
+  // them (`versus`) in the confirming sim; blind spots carry no sigmas.
   gain_pct?: number;
   sigmas?: number;
   beats_cut?: boolean;
@@ -71,6 +70,9 @@ export interface SurveyPosition {
   num_legal_moves?: number; // absent from blind spots
   played: string;
   board: (string | null)[][];
+  // The opponent's move before this one ("O7 FLUNG +34", "exch 3", "pass") and
+  // the squares it placed tiles on; null at the game's first turn.
+  last_move: { text: string; squares: [number, number][] } | null;
   moves: SurveyMove[]; // the outside plays, best first, then the top moves by hasty rank
 }
 

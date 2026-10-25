@@ -1584,6 +1584,16 @@ h1 {
 .survey-board .board-cell.has-candidate .tile-letter {
   opacity: 1;
 }
+/* The opponent's last move, in yellow: the board's own last-move orange is the
+   outside section's tint here. */
+.survey-board .board-cell.has-tile.last-move {
+  background: #f5e27a;
+  border-color: #c9a227;
+}
+.survey-last-move {
+  font-size: 14px;
+  opacity: 0.85;
+}
 /* ...and two selected moves that share a square take the board in turn, each
    fading in and out over its turn (SHOW_MS in AppSurvey.tsx). */
 .survey-board.alternating .board-cell.has-candidate {
