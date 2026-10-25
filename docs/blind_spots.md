@@ -86,7 +86,9 @@ blind_spot_confirm_tool --slog-dir chunk/ --leaf-model <leaf_eval .onnx> \
   of the screen's, under the leaf network and leave inference model the
   pool's header names; the tool refuses others. A position is kept when the
   best outside move beats the best cut move by `--min-gain` points of win
-  percentage (5) and by `--sigmas` paired standard errors (2).
+  percentage (5). At 5000 rollouts the gain's paired standard error stays
+  under a point (at most 0.9 on the first run below), so the point bar needs
+  no standard-error bar beside it; the report records the error.
 - **Output:** `<stem>.blindspots.json` beside each `.slog`, holding every
   confirmed position, kept or not, and the number of pools screened; and a
   `.gcg` per kept position in `--gcg-dir`, named as the workload's are. The

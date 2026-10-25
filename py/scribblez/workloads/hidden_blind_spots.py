@@ -69,7 +69,6 @@ class HiddenBlindSpotsParams(PoolLabelParams):
         "keep a position whose best outside move beats the best cut move by at least this many "
         "points of win percentage",
     )
-    sigmas: float = param(2.0, "... and by at least this many paired standard errors")
 
 
 def confirm_command(
@@ -88,7 +87,7 @@ def confirm_command(
         "--gcg-dir", str(chunk_dir / GCG_DIR),
         "--cut", str(params.cut), "--picks", str(params.picks),
         "--rollouts", str(params.confirm_rollouts),
-        "--min-gain", str(params.min_gain), "--sigmas", str(params.sigmas),
+        "--min-gain", str(params.min_gain),
         "--seed", str(seed), "--threads", str(threads),
     ]  # fmt: skip
     if leaf == LEAF_SYNTHETIC:

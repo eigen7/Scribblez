@@ -22,7 +22,6 @@ PARAMS = hbs.HiddenBlindSpotsParams(
     cut=3,
     confirm_rollouts=40,
     min_gain=0.0,
-    sigmas=0.0,
 )
 
 
@@ -66,11 +65,11 @@ def test_a_cycle_delivers_the_games_the_report_and_the_kept_positions(confirmed_
 
 
 def test_the_confirm_command_carries_the_params(tmp_path):
-    p = replace(PARAMS, cut=7, picks=3, confirm_rollouts=900, min_gain=4.5, sigmas=1.5)
+    p = replace(PARAMS, cut=7, picks=3, confirm_rollouts=900, min_gain=4.5)
     cmd = hbs.confirm_command(p, tmp_path, "leaf.onnx", Path("li.onnx"), seed=9, threads=3)
     flags = dict(zip(cmd[1::2], cmd[2::2], strict=False))
     assert flags["--cut"] == "7" and flags["--picks"] == "3" and flags["--rollouts"] == "900"
-    assert flags["--min-gain"] == "4.5" and flags["--sigmas"] == "1.5"
+    assert flags["--min-gain"] == "4.5"
     assert flags["--leave-inference"] == "li.onnx" and "--backend" not in flags
     assert flags["--gcg-dir"] == str(tmp_path / hbs.GCG_DIR)
 
