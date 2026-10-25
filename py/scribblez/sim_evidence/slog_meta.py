@@ -1,5 +1,5 @@
-"""Position-level metadata read directly from .slog bytes, for the kill test's
-analyses: per-game turn counts and each position's preceding move.
+"""Game metadata and moves read directly from .slog bytes: per-game turn counts
+and the move played at any turn.
 
 engine/include/data/binary_log.h owns the layout; the dtypes come from the
 engine's format-layout document (scribblez.ffi.format_layout), so they cannot
@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from scribblez.ffi import format_layout, struct_dtype
-from scribblez.sim_evidence.sobs import MOVE_DTYPE, MOVE_PLAY, SobsPosition
+from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
 SLOG_MAGIC = format_layout()["constants"]["slog"]["magic"]
 
@@ -43,32 +43,3 @@ def move_at(buf: np.ndarray, meta: np.void, turn: int) -> np.void:
     """The Move of `turn` within the game described by `meta`."""
     off = int(meta["start_offset"]) + _INITIAL_RACKS.itemsize + _TURN_BLOB.itemsize * turn
     return np.frombuffer(buf[off : off + MOVE_DTYPE.itemsize].tobytes(), MOVE_DTYPE)[0]
-
-
-def position_meta(slog_path: str | Path, positions: list[SobsPosition]) -> dict[str, np.ndarray]:
-    """Per-position metadata arrays, aligned with `positions` (read_sobs
-    order):
-
-      meta_turn          the pre-move turn index
-      meta_remaining     moves left in the original game, a rollout-depth proxy
-      meta_opp_unbiased  whether the sim's uniform opponent-rack sampling is
-                         exactly the true conditional: the opponent has not
-                         moved yet, or just played all 7 tiles, so their rack
-                         is a fresh uniform draw from the unseen pool
-    """
-    buf = read_slog_bytes(slog_path)
-    metas = game_metas(buf)
-    n = len(positions)
-    turn = np.zeros(n, dtype=np.int32)
-    remaining = np.zeros(n, dtype=np.int32)
-    unbiased = np.zeros(n, dtype=bool)
-    for i, pos in enumerate(positions):
-        meta = metas[pos.game_index]
-        turn[i] = pos.turn_index
-        remaining[i] = int(meta["num_turns"]) - pos.turn_index
-        if pos.turn_index == 0:
-            unbiased[i] = True
-        else:
-            prev = move_at(buf, meta, pos.turn_index - 1)
-            unbiased[i] = int(prev["type"]) == MOVE_PLAY and int(prev["num_played"]) == 7
-    return {"meta_turn": turn, "meta_remaining": remaining, "meta_opp_unbiased": unbiased}

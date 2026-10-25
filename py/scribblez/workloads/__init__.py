@@ -10,7 +10,6 @@ from scribblez.workloads import (
     blind_spots,
     deep_bot_leaf_eval,
     evidence_trajectories,
-    kill_test,
     leave_inference,
     match_arms,
     max_move_per_lane,
@@ -32,7 +31,6 @@ from scribblez.workloads.base import (
 WORKLOADS = {
     spec.name: spec
     for spec in (
-        kill_test.SPEC,
         position_eval.SPEC,
         max_move_per_lane.SPEC,
         move_set_eval.SPEC,

@@ -24,8 +24,8 @@ artifact tied to a tag lives under one root, `<mount_root>/tags/<task>/<tag>/`:
       models/                     model_epoch_XXXX.onnx
       dashboard.db                metrics + eval data (rendered by the dashboard)
 
-Workloads use the subset of this tree they need (kill_test keeps its pairs under
-data/slogs/; only the training workloads have checkpoints or a dashboard DB).
+Workloads use the subset of this tree they need (move_set_eval keeps its pairs
+under data/slogs/; only the training workloads have checkpoints or a dashboard DB).
 Code derives every path from a `TagPaths` rather than reassembling
 subdirectories.
 
@@ -70,7 +70,6 @@ EVAL_POSITIONS_DIRS = (
 # registry keys, and the dashboard's task slugs.
 POSITION_EVAL = "position_eval"
 MAX_MOVE_PER_LANE = "max_move_per_lane"
-KILL_TEST = "kill_test"
 MOVE_SET_EVAL = "move_set_eval"
 EVIDENCE_TRAJECTORIES = "evidence_trajectories"
 MATCH_ARMS = "match_arms"

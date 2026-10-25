@@ -16,7 +16,7 @@ from scribblez.generational import lifecycle
 
 @pytest.fixture
 def spec():
-    return workloads.get("kill_test")
+    return workloads.get("transfer_test")
 
 
 @pytest.fixture
@@ -158,13 +158,13 @@ def _failed_slot() -> tasks.WorkerRecord:
     ],
 )
 def test_state_of_a_workload_without_an_end_condition(store, spec, slots, expected):
-    """kill_test has no WorkloadSpec.complete: it is complete while every slot
+    """transfer_test has no WorkloadSpec.complete: it is complete while every slot
     is finished."""
     assert store.state(spec, _save(store, spec, workers=slots), None) == expected
 
 
 def _entry(bundle: str = queue_mod.BUNDLE_NONE) -> QueueEntry:
-    return QueueEntry("kill_test", "t", 0.0, bundle=bundle)
+    return QueueEntry("transfer_test", "t", 0.0, bundle=bundle)
 
 
 @pytest.mark.parametrize(

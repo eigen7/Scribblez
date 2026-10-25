@@ -5,6 +5,10 @@ the go/no-go gate for the sim-evidence loop. It tests the loop's
 load-bearing hypothesis in isolation: *does conditioning the position
 evaluation model on Monte-Carlo sim evidence improve its outcome prediction?*
 
+The experiment's code (the `kill_test` workload and the scripts and model named
+below) was deleted after the verdict; it is recoverable from git at commit
+`bae1226c`.
+
 **Verdict: pass.** The evidence effect is real and statistically unambiguous
 (5.7 standard errors on 10k paired holdout positions), and the falsification
 controls are clean. The effect's *size* is bounded by an identified ceiling,

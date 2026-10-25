@@ -1,8 +1,8 @@
 """Tests for the sim-evidence data path: sim_obs_tool -> .sobs parsing ->
-row decoding by identity -> evidence features -> the evidence-conditioned
-model. The end-to-end pieces run the real C++ tool on freshly generated
-.slog fixtures and are skipped when the binary or the HastyBot leave values
-(mount macondo strategy data) are unavailable.
+row decoding by identity -> per-candidate footprint planes. The end-to-end
+pieces run the real C++ tool on freshly generated .slog fixtures and are
+skipped when the binary or the HastyBot leave values (mount macondo strategy
+data) are unavailable.
 """
 
 import subprocess
@@ -10,25 +10,23 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 from scribblez.dataset import row_layout
 from scribblez.evidence.dataset import TrajectoryDataset
 from scribblez.ffi import decode_rows, task_input_shapes, task_row_floats
 from scribblez.footprint_spatial import MAX_K, PASS_CLASS, SLOTS_PER_CELL
-from scribblez.sim_evidence.model import NUM_EVIDENCE_PLANES, EvidencePositionEvalModel
 from scribblez.sim_evidence.sobs import (
     _FILE_HEADER,
     MOVE_EXCHANGE,
     MOVE_PASS,
     MOVE_PLAY,
-    NUM_EVIDENCE_SCALARS,
     RECORD_DTYPE,
     SOBS_FLAG_TRAJECTORY,
     SOBS_MAGIC,
     SOBS_VERSION,
-    evidence_features,
+    candidate_slot_planes,
     move_footprint,
     move_footprint_class,
+    observed_slot_planes,
     read_sobs,
 )
 
@@ -174,15 +172,13 @@ def test_move_footprint_class_matches_the_footprint_layout():
         assert move_footprint_class(move) == PASS_CLASS
 
 
-def test_move_footprint_and_features(sobs_dir):
+def test_move_footprint_and_slot_planes(sobs_dir):
     slog = sorted(sobs_dir.glob("*.slog"))[0]
-    positions = read_sobs(slog.with_suffix(".sobs"))
-    pos = positions[0]
-    obs_channels = 4 * SLOTS_PER_CELL
-    planes, scalars, mask = evidence_features(pos, max_k=TOP_K + 2)
-    assert planes.shape == (TOP_K + 2, 5 * SLOTS_PER_CELL, 15, 15)
-    assert scalars.shape == (TOP_K + 2, NUM_EVIDENCE_SCALARS)
-    assert mask.sum() == len(pos.moves)
+    pos = read_sobs(slog.with_suffix(".sobs"))[0]
+    observed = observed_slot_planes(pos.obs)
+    candidates = candidate_slot_planes(pos.moves)
+    assert observed.shape == (len(pos.moves), 4 * SLOTS_PER_CELL, 15, 15)
+    assert candidates.shape == (len(pos.moves), SLOTS_PER_CELL, 15, 15)
     for i, move in enumerate(pos.moves):
         # The per-cell mirror of visit_placed_squares still walks the squares.
         foot = move_footprint(move)
@@ -190,9 +186,9 @@ def test_move_footprint_and_features(sobs_dir):
             assert foot.sum() == int(move["num_played"])
         else:
             assert foot.sum() == 0
-        # The candidate block is a one-hot at (footprint slot, anchor cell)
+        # A candidate's planes are a one-hot at (footprint slot, anchor cell)
         # for a play, all zeros for a pass/exchange (dropped catch-all).
-        cand = planes[i, obs_channels:].astype(np.float32)
+        cand = candidates[i]
         if int(move["type"]) == MOVE_PLAY:
             cls = move_footprint_class(move)
             cell, slot = divmod(cls, SLOTS_PER_CELL)
@@ -203,10 +199,8 @@ def test_move_footprint_and_features(sobs_dir):
             assert cand.sum() == 0
         # Frequencies are per-rollout fractions in [0, 1]; each observed head's
         # anchored mass is at most its rollout total.
-        assert float(planes[i, :obs_channels].max()) <= 1.0
-        assert float(planes[i, :SLOTS_PER_CELL].astype(np.float32).sum()) <= 1.0 + 1e-3
-    # W/D/L frequencies sum to 1 for real candidates.
-    assert np.allclose(scalars[mask][:, :3].sum(axis=1), 1.0)
+        assert float(observed[i].max()) <= 1.0
+        assert float(observed[i, :SLOTS_PER_CELL].sum()) <= 1.0 + 1e-3
 
 
 def test_gcg_sim_evidence_on_dataset_position():
@@ -282,103 +276,6 @@ def test_open_leaves_sobs_and_input_arm(sobs_dir, tmp_path):
     assert out.returncode == 0, out.stderr
     base = {s.name: s.dims for s in task_input_shapes()}["input_scalar"][0]
     assert int(out.stdout.strip()) == base + 27
-
-
-def test_position_meta_flags(sobs_dir):
-    from scribblez.sim_evidence.slog_meta import game_metas, move_at, position_meta, read_slog_bytes
-
-    slog = sorted(sobs_dir.glob("*.slog"))[0]
-    positions = read_sobs(slog.with_suffix(".sobs"))
-    meta = position_meta(slog, positions)
-    assert len(meta["meta_turn"]) == len(positions)
-    buf = read_slog_bytes(slog)
-    metas = game_metas(buf)
-    for i, pos in enumerate(positions):
-        assert meta["meta_turn"][i] == pos.turn_index
-        num_turns = int(metas[pos.game_index]["num_turns"])
-        assert meta["meta_remaining"][i] == num_turns - pos.turn_index
-        if pos.turn_index == 0:
-            assert meta["meta_opp_unbiased"][i]
-        else:
-            prev = move_at(buf, metas[pos.game_index], pos.turn_index - 1)
-            expect = int(prev["type"]) == MOVE_PLAY and int(prev["num_played"]) == 7
-            assert meta["meta_opp_unbiased"][i] == expect
-
-
-def _tiny_model() -> EvidencePositionEvalModel:
-    shapes = {s.name: s.dims for s in task_input_shapes()}
-    torch.manual_seed(0)
-    return EvidencePositionEvalModel(
-        spatial_planes=shapes["input_spatial"][0],
-        scalar_size=shapes["input_scalar"][0],
-        trunk_channels=16,
-        num_blocks=2,
-    )
-
-
-def test_model_ignores_masked_evidence():
-    model = _tiny_model().eval()
-    shapes = {s.name: s.dims for s in task_input_shapes()}
-    b, k = 2, 4
-    spatial = torch.randn(b, *shapes["input_spatial"])
-    scalar = torch.randn(b, shapes["input_scalar"][0])
-    mask = torch.zeros(b, k, dtype=torch.bool)
-    with torch.no_grad():
-        out_zero = model(
-            spatial,
-            scalar,
-            torch.zeros(b, k, NUM_EVIDENCE_PLANES, 15, 15),
-            torch.zeros(b, k, NUM_EVIDENCE_SCALARS),
-            mask,
-        )
-        out_junk = model(
-            spatial,
-            scalar,
-            torch.randn(b, k, NUM_EVIDENCE_PLANES, 15, 15),
-            torch.randn(b, k, NUM_EVIDENCE_SCALARS),
-            mask,
-        )
-    for key in out_zero:
-        assert torch.equal(out_zero[key], out_junk[key]), key
-
-
-def test_model_trains_on_evidence():
-    model = _tiny_model()
-    shapes = {s.name: s.dims for s in task_input_shapes()}
-    b, k = 3, 4
-    spatial = torch.randn(b, *shapes["input_spatial"])
-    scalar = torch.randn(b, shapes["input_scalar"][0])
-    planes = torch.rand(b, k, NUM_EVIDENCE_PLANES, 15, 15)
-    scalars = torch.randn(b, k, NUM_EVIDENCE_SCALARS)
-    mask = torch.ones(b, k, dtype=torch.bool)
-    mask[0, 2:] = False  # a padded set in the batch
-    out = model(spatial, scalar, planes, scalars, mask)
-    out["wld"].sum().backward()
-    # The fusion projections are zero-initialized, so at init they (not the
-    # encoder behind them) are the learning conduits: their weight gradients
-    # must be nonzero, which is what pulls them off zero and opens gradient
-    # flow into the rest of the evidence encoder.
-    for param in (model.evidence.spatial_out.weight, model.value_proj.weight):
-        assert param.grad is not None and param.grad.abs().sum() > 0
-
-
-def test_empty_evidence_is_finite():
-    # An all-padding evidence set exercises the empty-attention guard.
-    model = _tiny_model().eval()
-    shapes = {s.name: s.dims for s in task_input_shapes()}
-    spatial = torch.randn(1, *shapes["input_spatial"])
-    scalar = torch.randn(1, shapes["input_scalar"][0])
-    mask = torch.zeros(1, 3, dtype=torch.bool)
-    with torch.no_grad():
-        out = model(
-            spatial,
-            scalar,
-            torch.zeros(1, 3, NUM_EVIDENCE_PLANES, 15, 15),
-            torch.zeros(1, 3, NUM_EVIDENCE_SCALARS),
-            mask,
-        )
-    for value in out.values():
-        assert torch.isfinite(value).all()
 
 
 def _write_header_only_sobs(path: Path, *, proposer: str, leaf_hash: str, horizon: int) -> Path:

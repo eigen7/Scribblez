@@ -511,7 +511,7 @@ export function HomePage({ workload, onOpen }: { workload: Workload; onOpen: (ta
 export default function MasterApp() {
   const initial = new URLSearchParams(window.location.search);
   const [workloads, setWorkloads] = useState<Workload[]>([]);
-  const [workloadName, setWorkloadName] = useState(initial.get('workload') ?? 'kill_test');
+  const [workloadName, setWorkloadName] = useState(initial.get('workload') ?? 'position_eval');
   const [openTag, setOpenTag] = useState<string | null>(initial.get('tag'));
   // The machine pool page, in place of the workload's tags (?view=pool).
   const [poolOpen, setPoolOpen] = useState(initial.get('view') === 'pool');
