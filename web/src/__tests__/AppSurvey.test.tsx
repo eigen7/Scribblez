@@ -81,6 +81,7 @@ async function renderOnFakeClock() {
 
 describe('AppSurvey', () => {
   beforeEach(() => {
+    window.history.replaceState(null, '', '#');
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve(DATA) })));
   });
   afterEach(() => {
@@ -214,6 +215,7 @@ const BLIND_SPOTS: SurveyData = {
 
 describe('AppSurvey on blind spots', () => {
   beforeEach(() => {
+    window.history.replaceState(null, '', '#');
     vi.stubGlobal(
       'fetch',
       vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve(BLIND_SPOTS) })),
@@ -245,4 +247,61 @@ describe('AppSurvey on blind spots', () => {
     expect(screen.getByText(/greedy endgames/)).toBeInTheDocument();
   });
 
+});
+
+describe('AppSurvey navigation', () => {
+  // 'first' has bag 9 (the fixture's), 'third' bag 2, 'second' bag 9.
+  const NAV_DATA: SurveyData = {
+    ...DATA,
+    positions: [DATA.positions[0], { ...DATA.positions[1], name: 'third', bag_size: 2 }, DATA.positions[1]],
+  };
+  beforeEach(() => {
+    window.history.replaceState(null, '', '#');
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve(NAV_DATA) })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the position in the URL, so a refresh reopens it', async () => {
+    const { unmount } = render(<AppSurvey />);
+    await screen.findByText(/1 \/ 3 · first/);
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(window.location.hash).toBe('#pos=third');
+    unmount();
+    render(<AppSurvey />); // a refresh: the same hash, a fresh app
+    expect(await screen.findByText(/2 \/ 3 · third/)).toBeInTheDocument();
+  });
+
+  it('steps only through the positions the bag filter passes, and keeps the filter', async () => {
+    const { unmount } = render(<AppSurvey />);
+    await screen.findByText(/1 \/ 3 · first/);
+    fireEvent.change(screen.getByLabelText('minimum bag'), { target: { value: '8' } });
+    expect(screen.getByText(/1 \/ 2 \(of 3\) · first/)).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'ArrowRight' }); // skips 'third', bag 2
+    expect(screen.getByText(/2 \/ 2 \(of 3\) · second/)).toBeInTheDocument();
+    expect(window.location.hash).toBe('#pos=second&bag=8-');
+    unmount();
+    render(<AppSurvey />);
+    expect(await screen.findByText(/2 \/ 2 \(of 3\) · second/)).toBeInTheDocument();
+    expect(screen.getByLabelText('minimum bag')).toHaveValue(8);
+  });
+
+  it('moves to the first passing position when the filter drops the current one', async () => {
+    window.history.replaceState(null, '', '#pos=third');
+    render(<AppSurvey />);
+    await screen.findByText(/2 \/ 3 · third/);
+    fireEvent.change(screen.getByLabelText('maximum bag'), { target: { value: '100' } });
+    fireEvent.change(screen.getByLabelText('minimum bag'), { target: { value: '5' } });
+    expect(screen.getByText(/1 \/ 2 \(of 3\) · first/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('minimum bag'), { target: { value: '50' } });
+    expect(screen.getByText('no position passes the bag filter', { exact: false })).toBeInTheDocument();
+  });
+
+  it('leaves the arrow keys to a bag field being edited', async () => {
+    render(<AppSurvey />);
+    await screen.findByText(/1 \/ 3 · first/);
+    fireEvent.keyDown(screen.getByLabelText('minimum bag'), { key: 'ArrowRight' });
+    expect(screen.getByText(/1 \/ 3 · first/)).toBeInTheDocument();
+  });
 });

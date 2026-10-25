@@ -60,7 +60,7 @@ export interface SurveyMove {
 // tile, the chance the rack holds at least one, under the leave inference
 // model and under no information. `modelled` is false where the model says
 // nothing (turn 0, after a pass or an empty leave, an empty bag): the rack is
-// then a uniform draw and `inferred` equals `uniform`.
+// then a uniform draw, and `inferred` equals `uniform` and is drawn as such.
 export interface RackBeliefChart {
   modelled: boolean;
   leave_length: number; // tiles the opponent kept at their last move

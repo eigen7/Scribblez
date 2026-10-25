@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Board from './components/Board';
 import OppRackBelief from './components/OppRackBelief';
+import { BagFilter, NavState, formatNav, parseNav, passesBag } from './lib/surveyNav';
 import Rack from './components/Rack';
 import UnseenTiles from './components/UnseenTiles';
 import { oppRackTiles } from './lib/oppRack';
@@ -307,30 +308,77 @@ function MoveSection({
   );
 }
 
-function PositionHeader({
-  position, index, total, onStep,
-}: { position: SurveyPosition; index: number; total: number; onStep: (d: number) => void }) {
+function BagInput({
+  label, value, onChange,
+}: { label: string; value: number | null; onChange: (v: number | null) => void }) {
+  return (
+    <input
+      type="number"
+      min={0}
+      max={100}
+      aria-label={label}
+      placeholder={label === 'minimum bag' ? 'min' : 'max'}
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+    />
+  );
+}
+
+// The bag filter: positions with a bag size in [min, max], either bound open.
+function BagFilterControl({ bag, onChange }: { bag: BagFilter; onChange: (b: BagFilter) => void }) {
+  return (
+    <span className="survey-bag-filter">
+      bag <BagInput label="minimum bag" value={bag.min} onChange={(min) => onChange({ ...bag, min })} />
+      –<BagInput label="maximum bag" value={bag.max} onChange={(max) => onChange({ ...bag, max })} />
+    </span>
+  );
+}
+
+function PositionSummary({ position }: { position: SurveyPosition }) {
   const [mine, theirs] = [position.scores[position.mover], position.scores[1 - position.mover]];
   return (
+    <>
+      turn {position.turn} · to move {mine}–{theirs} ({signed(mine - theirs, 0)}) · bag{' '}
+      {position.bag_size} ·{' '}
+      {position.num_legal_moves !== undefined && `${position.num_legal_moves} legal moves · `}
+      {position.solved_endgames ? 'endgames solved' : 'greedy endgames'}
+    </>
+  );
+}
+
+// `position` is null when the bag filter passes none of the `all` positions.
+function PositionHeader({
+  position, index, total, all, bag, onBag, onStep,
+}: {
+  position: SurveyPosition | null;
+  index: number;
+  total: number;
+  all: number;
+  bag: BagFilter;
+  onBag: (b: BagFilter) => void;
+  onStep: (d: number) => void;
+}) {
+  return (
     <div className="survey-header">
-      <button type="button" onClick={() => onStep(-1)} disabled={index === 0} aria-label="previous position">
+      <button type="button" onClick={() => onStep(-1)} disabled={index <= 0} aria-label="previous position">
         ←
       </button>
       <div className="survey-header-text">
         <div className="survey-header-title">
-          {index + 1} / {total} · {position.name}
+          {position ? `${index + 1} / ${total}` : `0 / 0`}
+          {total < all && ` (of ${all})`}
+          {position && ` · ${position.name}`}
         </div>
         <div className="survey-header-sub">
-          turn {position.turn} · to move {mine}–{theirs} ({signed(mine - theirs, 0)}) · bag{' '}
-          {position.bag_size} ·{' '}
-          {position.num_legal_moves !== undefined && `${position.num_legal_moves} legal moves · `}
-          {position.solved_endgames ? 'endgames solved' : 'greedy endgames'}
+          {position ? <PositionSummary position={position} /> : 'no position passes the bag filter'}
+          {' · '}
+          <BagFilterControl bag={bag} onChange={onBag} />
         </div>
       </div>
       <button
         type="button"
         onClick={() => onStep(1)}
-        disabled={index === total - 1}
+        disabled={index >= total - 1}
         aria-label="next position"
       >
         →
@@ -530,10 +578,34 @@ function PositionView({
 // confirming-sim statistics sit side by side, row for row, and the board shows
 // the selected moves -- together, or in turn, fading, when they share a square.
 // ←/→ change position.
+// The navigation state, read from the URL's hash on load and written back to
+// it (without a history entry) on every change, so a refresh keeps both.
+function useNav(): [NavState, (update: (n: NavState) => NavState) => void] {
+  const [nav, setNav] = useState<NavState>(() => parseNav(window.location.hash));
+  useEffect(() => {
+    window.history.replaceState(null, '', formatNav(nav));
+  }, [nav]);
+  return [nav, setNav];
+}
+
+// ←/→ step `step`, except while typing in a field (the bag filter's).
+function useArrowKeys(step: (d: number) => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (e.target instanceof HTMLInputElement) return;
+      step(e.key === 'ArrowLeft' ? -1 : 1);
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [step]);
+}
+
 export default function AppSurvey() {
   const [data, setData] = useState<SurveyData | null>(null);
   const [error, setError] = useState('');
-  const [index, setIndex] = useState(0);
+  const [nav, setNav] = useNav();
 
   useEffect(() => {
     fetch('/api/survey')
@@ -542,29 +614,37 @@ export default function AppSurvey() {
       .catch((e) => setError(String(e)));
   }, []);
 
-  const total = data?.positions.length ?? 0;
+  // The positions the filter passes, as indices into data.positions; the
+  // current one is the named position, or the first that passes.
+  const shown = (data?.positions ?? []).flatMap((p, i) => (passesBag(p, nav.bag) ? [i] : []));
+  const at = Math.max(0, shown.findIndex((i) => data!.positions[i].name === nav.pos));
   const step = useCallback(
-    (d: number) => setIndex((i) => Math.min(Math.max(i + d, 0), Math.max(total - 1, 0))),
-    [total],
+    (d: number) => {
+      if (!shown.length) return;
+      const next = shown[Math.min(Math.max(at + d, 0), shown.length - 1)];
+      setNav((n) => ({ ...n, pos: data!.positions[next].name }));
+    },
+    [shown, at, data, setNav],
   );
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      step(e.key === 'ArrowLeft' ? -1 : 1);
-      e.preventDefault();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [step]);
+  useArrowKeys(step);
 
   if (error) return <div className="survey-message">Could not load the survey: {error}</div>;
   if (!data) return <div className="survey-message">Loading…</div>;
 
-  const position = data.positions[index];
+  const index = shown.length ? shown[at] : -1;
+  const position = index >= 0 ? data.positions[index] : null;
   return (
     <div className="survey-root">
-      <PositionHeader position={position} index={index} total={total} onStep={step} />
-      <PositionView key={position.name} data={data} position={position} index={index} />
+      <PositionHeader
+        position={position}
+        index={at}
+        total={shown.length}
+        all={data.positions.length}
+        bag={nav.bag}
+        onBag={(bag) => setNav((n) => ({ ...n, bag }))}
+        onStep={step}
+      />
+      {position && <PositionView key={position.name} data={data} position={position} index={index} />}
     </div>
   );
 }

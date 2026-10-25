@@ -58,10 +58,15 @@ describe('OppRackBelief', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('shows the uniform series alone where the model has nothing to say', () => {
-    render(<OppRackBelief chart={chart(false)} position={0} />);
-    expect(screen.getByText(/no leave inference here: a uniform rack of 7/)).toBeInTheDocument();
-    expect(screen.queryByText('inferred')).not.toBeInTheDocument();
-    expect(document.querySelectorAll('.belief-chart g')[26].querySelectorAll('path[d^="M"]')).toHaveLength(1);
+  it('draws inferred bars equal to the uniform ones where the model has nothing to say', () => {
+    const flat = chart(false);
+    flat.presence = flat.presence.map((t) => ({ ...t, inferred: t.uniform }));
+    render(<OppRackBelief chart={flat} position={0} />);
+    expect(screen.getByText(/no leave inference here, so inferred is uniform: a uniform rack of 7/)).toBeInTheDocument();
+    expect(screen.getByText('inferred')).toBeInTheDocument();
+    const [inferred, uniform] = document.querySelectorAll('.belief-chart g')[26].querySelectorAll('path[d^="M"]');
+    // The same height: only the x offset differs.
+    const ys = (p: Element) => p.getAttribute('d')!.match(/V([\d.]+)/)![1];
+    expect(ys(inferred)).toBe(ys(uniform));
   });
 });

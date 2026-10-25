@@ -53,18 +53,13 @@ function Chart({ chart, onHover }: { chart: RackBeliefChart; onHover: (i: number
       ))}
       <line className="belief-baseline" x1={0} x2={WIDTH} y1={y(0)} y2={y(0)} />
       {chart.presence.map((t, i) => {
-        const left = i * group + (group - (chart.modelled ? 2 * BAR + GAP : BAR)) / 2;
+        const left = i * group + (group - (2 * BAR + GAP)) / 2;
         return (
           <g key={t.tile} onMouseEnter={() => onHover(i)}>
             {/* The hit target: the whole column, bigger than either bar. */}
             <rect x={i * group} y={0} width={group} height={HEIGHT} fill="transparent" />
-            {chart.modelled && (
-              <path d={barPath(left, y(t.inferred), plot * t.inferred)} fill={INFERRED} />
-            )}
-            <path
-              d={barPath(left + (chart.modelled ? BAR + GAP : 0), y(t.uniform), plot * t.uniform)}
-              fill={UNIFORM}
-            />
+            <path d={barPath(left, y(t.inferred), plot * t.inferred)} fill={INFERRED} />
+            <path d={barPath(left + BAR + GAP, y(t.uniform), plot * t.uniform)} fill={UNIFORM} />
             <text className="belief-axis" x={i * group + group / 2} y={HEIGHT - 3} textAnchor="middle">
               {t.tile}
             </text>
@@ -113,22 +108,17 @@ export default function OppRackBelief({ chart, position }: { chart: RackBeliefCh
       <div className="belief-sub">
         {chart.modelled
           ? `kept ${chart.leave_length} at their last move, drew ${chart.refill} · P(holds at least one)`
-          : `no leave inference here: a uniform rack of ${chart.refill} · P(holds at least one)`}
+          : `no leave inference here, so inferred is uniform: a uniform rack of ${chart.refill} · P(holds at least one)`}
       </div>
       <div className="belief-legend">
-        {chart.modelled && (
-          <span>
-            <i style={{ background: INFERRED }} /> inferred
-          </span>
-        )}
+        <span>
+          <i style={{ background: INFERRED }} /> inferred
+        </span>
         <span>
           <i style={{ background: UNIFORM }} /> uniform
         </span>
         <span className="belief-readout">
-          {shown &&
-            (chart.modelled
-              ? `${shown.tile}: inferred ${pct(shown.inferred)}, uniform ${pct(shown.uniform)}`
-              : `${shown.tile}: ${pct(shown.uniform)}`)}
+          {shown && `${shown.tile}: inferred ${pct(shown.inferred)}, uniform ${pct(shown.uniform)}`}
         </span>
       </div>
       <Chart chart={chart} onHover={setHover} />
