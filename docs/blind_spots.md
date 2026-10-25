@@ -93,6 +93,22 @@ blind_spot_confirm_tool --slog-dir chunk/ --leaf-model <leaf_eval .onnx> \
   survey viewer does not read this JSON: the GPU returns only each rollout's
   outcome and its two moves, not the survey's rollout summaries.
 
+**From the dashboard**, the workload **Collect hidden-leaves blind spots
+(GPU)** (`hidden_blind_spots`) runs the whole chain per cycle: a 200-game
+chunk of hidden-leaves HastyBot self-play, its `.forgone` sidecar, its pools
+(`policy_set_pool_tool`, as `policy_set`'s generators label them), then the
+confirmation. Create a tag naming the leaf eval and leave inference
+generations (as for a `policy_set` tag; -1 pins the latest export), add a
+local **Generator (GPU)** worker, and start it. The controller finishes the
+generators once the tag holds `target_positions` kept positions (1000 by
+default). The tools are not in the worker bundle, so the role runs on local
+workers only. Each chunk delivers into `/workspace/mount/tags/hidden_blind_spots/<tag>/data/`:
+
+- `found/<stem>.slog`, `found/<stem>.forgone`: the chunk's games and their
+  forgone plays, which step 4's tools replay; the pools are dropped;
+- `found/<stem>.blindspots.json`: the confirmation's report;
+- `gcg/<stem>-g<G>-turn<N>.gcg`: each kept position.
+
 On the 2,000 pools of a `tilted2`-gen-1188 / `leaf-conv-join-32-4b`-gen-730
 chunk set (2026-10-25), 238 pools had a leader outside the top 10, 51 of those
 gained at least 2 points on confirmation, and 28 at least 5: one blind spot

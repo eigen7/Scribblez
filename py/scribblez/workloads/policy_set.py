@@ -71,7 +71,11 @@ LEAF_SYNTHETIC = "synthetic"
 
 
 @dataclass(frozen=True)
-class PolicySetParams:
+class PoolLabelParams:
+    """What labels a chunk's pools: the pinned sources, the labeling and the
+    self-play it labels. Shared with hidden_blind_spots, whose generators label
+    pools the same way before confirming blind spots in them."""
+
     # The sources.
     leaf_eval_tag: str = param(
         "", "the deep_bot_leaf_eval tag whose exported network values every rollout's end state"
@@ -106,6 +110,10 @@ class PolicySetParams:
     )
     hasty_temperature: float = param(0.0, "HastyBot softmax temperature (0 = greedy)")
     hasty_top_k: int = param(10, "HastyBot candidate count when the temperature is > 0")
+
+
+@dataclass(frozen=True)
+class PolicySetParams(PoolLabelParams):
     # Generations and held-out pools.
     games_per_generation: int = param(1000, "games per generation (positions_per_game pools each)")
     open_ahead: int = param(
@@ -155,11 +163,11 @@ class PolicySetParams:
     grad_clip: float = param(1.0, "clip each step's gradient to this global norm; 0 = no clipping")
 
 
-def _leave_paths(params: PolicySetParams, mount_root: Path) -> TagPaths:
+def _leave_paths(params: PoolLabelParams, mount_root: Path) -> TagPaths:
     return TagPaths(params.leave_inference_tag, LEAVE_INFERENCE, mount_root)
 
 
-def _leaf_paths(params: PolicySetParams, mount_root: Path) -> TagPaths:
+def _leaf_paths(params: PoolLabelParams, mount_root: Path) -> TagPaths:
     return TagPaths(params.leaf_eval_tag, LEAF_EVAL, mount_root)
 
 
@@ -206,17 +214,17 @@ def _export_hint(paths: TagPaths) -> str:
     )
 
 
-def leaf_path(params: PolicySetParams, mount_root: Path) -> Path:
+def leaf_path(params: PoolLabelParams, mount_root: Path) -> Path:
     paths = _leaf_paths(params, mount_root)
     return paths.onnx_path(_generation(paths, params.leaf_eval_generation, "leaf_eval"))
 
 
-def model_path(params: PolicySetParams, mount_root: Path) -> Path:
+def model_path(params: PoolLabelParams, mount_root: Path) -> Path:
     paths = _leave_paths(params, mount_root)
     return paths.onnx_path(_generation(paths, params.leave_inference_generation, "leave_inference"))
 
 
-def finalize(spec, paths: TagPaths, params: PolicySetParams) -> PolicySetParams:
+def finalize(spec, paths: TagPaths, params: PoolLabelParams) -> PoolLabelParams:
     """Pin the sources to concrete generations at task creation, failing here,
     where the operator sees it, if a pinned generation has no export."""
     mount = paths.mount_root
@@ -230,7 +238,7 @@ def finalize(spec, paths: TagPaths, params: PolicySetParams) -> PolicySetParams:
     return replace(params, leave_inference_generation=leave)
 
 
-def inputs(params: PolicySetParams, mount_root: Path) -> dict[str, Path]:
+def inputs(params: PoolLabelParams, mount_root: Path) -> dict[str, Path]:
     """The generate role's out-of-tag inputs: the pinned leaf network and,
     under inferred beliefs, the pinned leave inference model."""
     out = {LEAF_INPUT: leaf_path(params, mount_root)}
@@ -240,7 +248,7 @@ def inputs(params: PolicySetParams, mount_root: Path) -> dict[str, Path]:
 
 
 def pool_command(
-    params: PolicySetParams,
+    params: PoolLabelParams,
     slog_dir: Path,
     leaf: Path | str,
     model: Path | None,
@@ -264,7 +272,7 @@ def pool_command(
 
 
 def write_pools(
-    params: PolicySetParams, leaf: Path | str, model: Path | None, chunk_dir: Path, threads: int
+    params: PoolLabelParams, leaf: Path | str, model: Path | None, chunk_dir: Path, threads: int
 ):
     """Label the chunk in `chunk_dir`: its .forgone sidecar first when the
     model seats the leaves, then its .pool. The seed is the chunk stem's hash,
@@ -277,15 +285,23 @@ def write_pools(
     subprocess.run(pool_command(params, chunk_dir, leaf, model, seed, threads), check=True)
 
 
+def resolve_sources(ctx: WorkerContext) -> tuple[Path, Path | None]:
+    """The pinned (leaf network, leave inference model or None) for this
+    worker. Raises FileNotFoundError or ParamsError if one is missing."""
+    p = ctx.params
+    leaf = resolve_input(ctx, LEAF_INPUT, leaf_path(p, ctx.mount_root))
+    model = None
+    if p.leave_beliefs == BELIEFS_INFERRED:
+        model = resolve_input(ctx, MODEL_INPUT, model_path(p, ctx.mount_root))
+    return leaf, model
+
+
 def run_generate(ctx: WorkerContext) -> int:
     """The generate-role runner. The pinned inputs are resolved once, before
     the first cycle."""
     p = ctx.params
     try:
-        leaf = resolve_input(ctx, LEAF_INPUT, leaf_path(p, ctx.mount_root))
-        model = None
-        if p.leave_beliefs == BELIEFS_INFERRED:
-            model = resolve_input(ctx, MODEL_INPUT, model_path(p, ctx.mount_root))
+        leaf, model = resolve_sources(ctx)
     except (FileNotFoundError, params_mod.ParamsError) as e:
         print(f"error: policy_set source: {e}", file=sys.stderr)
         return 1

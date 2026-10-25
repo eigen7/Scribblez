@@ -59,6 +59,7 @@ END_PARAMS = {
     "move_set_eval": {"target_pairs", "train_epochs"},
     "evidence_trajectories": {"target_pairs", "train_epochs"},
     "blind_spots": {"target_positions"},
+    "hidden_blind_spots": {"target_positions"},
     "match_arms": set(),
     "transfer_test": {"target_positions"},
     "transfer_reader": {"train_steps"},
