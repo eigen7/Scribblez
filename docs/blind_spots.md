@@ -98,11 +98,13 @@ blind_spot_confirm_tool --slog-dir chunk/ --leaf-model <leaf_eval .onnx> \
 chunk of hidden-leaves HastyBot self-play, its `.forgone` sidecar, its pools
 (`policy_set_pool_tool`, as `policy_set`'s generators label them), then the
 confirmation. Create a tag naming the leaf eval and leave inference
-generations (as for a `policy_set` tag; -1 pins the latest export), add a
-local **Generator (GPU)** worker, and start it. The controller finishes the
-generators once the tag holds `target_positions` kept positions (1000 by
-default). The tools are not in the worker bundle, so the role runs on local
-workers only. Each chunk delivers into `/workspace/mount/tags/hidden_blind_spots/<tag>/data/`:
+generations (as for a `policy_set` tag; -1 pins the latest export), add
+**Generator (GPU)** workers, local or on GPU ssh machines (rented ones
+included), and start them. A remote worker builds its own TensorRT plans for
+its GPU on first use, about a minute. The controller finishes the generators
+once the tag holds `target_positions` kept positions (1000 by default). Each
+chunk delivers into `/workspace/mount/tags/hidden_blind_spots/<tag>/data/`
+(collected over ssh from a remote worker):
 
 - `found/<stem>.slog`, `found/<stem>.forgone`: the chunk's games and their
   forgone plays, which step 4's tools replay; the pools are dropped;

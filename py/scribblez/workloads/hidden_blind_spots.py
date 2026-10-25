@@ -4,7 +4,7 @@ evaluation of Alice's candidates (docs/blind_spots.md, "Hidden-leaves blind
 spots on the GPU"): hidden leaves, the opponent's leave from the leave
 inference model, two HastyBot replies, then the leaf network.
 
-Its one role, a GPU generator, runs on local workers. A cycle plays a chunk of
+Its one role, a GPU generator, runs on local or ssh workers. A cycle plays a chunk of
 hidden-leaves HastyBot self-play, labels `positions_per_game` turns of each
 game into pools as policy_set's generators do (policy_set.write_pools: the
 .forgone sidecar, then policy_set_pool_tool), and confirms every pool whose
@@ -18,9 +18,6 @@ what the step-4 tools read and drops the pools, megabytes per chunk:
 
 The controller counts the .gcg files and finishes the generators once the tag
 holds target_positions, as blind_spots does (its tick and complete).
-
-The tools are not in the worker bundle, so the role runs on local workers
-only.
 """
 
 import shutil
@@ -213,7 +210,6 @@ SPEC = WorkloadSpec(
             runner="scribblez.workloads.hidden_blind_spots:run_generate",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
             inputs="scribblez.workloads.policy_set:inputs",
-            kinds=("local",),
             gpu=True,
             stats=StatsSpec(
                 unit="positions",
