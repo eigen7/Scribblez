@@ -92,9 +92,11 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
 //
 // For consumers that pair rows with per-position data (such as .sobs sim
 // observations, or a held-out set's cached results) and so must address
-// positions directly.
+// positions directly. `hide_private` hides a leave inference row's observer's
+// private history (LeaveHistory::hide_private); other tasks ignore it.
 int scribblez_decode_rows(ScribblezSession* s, int task, const char* path, const int64_t* game_idx,
-                          const int64_t* turn_idx, int64_t n, int post_move, float* out);
+                          const int64_t* turn_idx, int64_t n, int post_move, int hide_private,
+                          float* out);
 
 // The win table's fitting samples from one .slog (sim/win_table_feature.h):
 // one WinTableSample record per fittable pre-move position of every game, its
@@ -385,9 +387,12 @@ int64_t scribblez_dl_num_positions(const DataLoaderHandle* h);
 //
 // `turns_per_game` subsamples turns: 0 uses every eligible turn, and k > 0
 // draws k per game, with `epoch_index` choosing which so that successive
-// epochs cover different turns (DataLoader::EpochConfig).
+// epochs cover different turns (DataLoader::EpochConfig). A leave inference
+// loader hides the observer's private history in each row with probability
+// `hide_private_fraction`.
 int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move, int apply_symmetry,
-                             uint64_t seed, int turns_per_game, int epoch_index);
+                             uint64_t seed, int turns_per_game, int epoch_index,
+                             double hide_private_fraction);
 
 // Returns the rows written, 0 once the epoch is exhausted, or -1 if a file
 // became unreadable mid-epoch. `output` needs room for batch_size rows.

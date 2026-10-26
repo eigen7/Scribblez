@@ -103,15 +103,28 @@ def _rows_left(params, state: GenerationalState) -> bool:
     return not params_mod.reached(state.rows_trained, params.max_rows)
 
 
-def _holdout_batches(held: holdout.HoldoutSet, params, cpu):
+def _holdout_batches(held: holdout.HoldoutSet, params, cpu, hide_private: bool = False):
+    """The held-out rows, every observer's private history hidden or none."""
     ds = SlogDataset(
         held.dir,
         task=_task(params),
         post_move=False,
         apply_symmetry=False,
+        hide_private_fraction=1.0 if hide_private else 0.0,
         num_workers=cpu.dataloader_workers,
     )
     return ds.iter_batches(EVAL_BATCH, seed=0)
+
+
+def hidden_metrics(own: dict[str, float], hidden: dict[str, float]) -> dict[str, float]:
+    """The held-out NLL with every observer's private history hidden, as the
+    model is served for an opponent, and its gap to the observer's own view
+    over the same rows."""
+    return {
+        "eval_hidden_nll": hidden["eval_nll"],
+        "eval_hidden_nll_vs_uniform": hidden["eval_nll_vs_uniform"],
+        "eval_hidden_gap": hidden["eval_nll"] - own["eval_nll"],
+    }
 
 
 def refit_win_table(paths: TagPaths, params, gen: int, window: list[Path], ctx) -> dict:
@@ -192,13 +205,16 @@ def _checkpoint_and_eval(
         "lr": optim_arm.current,
         **optim_arm.metrics(),
     }
-    record.update(
-        evaluate(model, ctx["table"], _holdout_batches(ctx["holdout"], params, cpu), device)
+    own = evaluate(model, ctx["table"], _holdout_batches(ctx["holdout"], params, cpu), device)
+    hidden = evaluate(
+        model, ctx["table"], _holdout_batches(ctx["holdout"], params, cpu, True), device
     )
+    record.update(own | hidden_metrics(own, hidden))
     record.update(refit_win_table(paths, params, gen, window, ctx))
     timed_print(
         f"[gen {gen}] rows={state.rows_trained} loss={result.loss:.4f} "
         f"eval_nll={record['eval_nll']:.4f} vs_uniform={record['eval_nll_vs_uniform']:+.4f} "
+        f"hidden_gap={record['eval_hidden_gap']:+.4f} "
         f"wintable={record['eval_wintable_logloss']:.4f} "
         f"(macondo {record['eval_wintable_logloss_macondo']:.4f})"
     )
@@ -235,6 +251,7 @@ def train_one_generation(
         task=_task(params),
         post_move=False,
         apply_symmetry=True,
+        hide_private_fraction=params.hide_private_fraction,
         num_workers=cpu.dataloader_workers,
     )
     timed_print(

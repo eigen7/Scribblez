@@ -27,7 +27,7 @@ LeaveRowCause reply_cause(const Move& candidate, int leave_length) {
 }
 
 // The opponent's history: the candidate, its mask left to each query, then the
-// chooser's earlier moves under the public mask.
+// chooser's earlier moves, the opponent's private past hidden.
 LeaveHistory reply_history(const ReplyPosition& pos, const Move& candidate,
                            const Dictionary& dict) {
   LeaveHistory h;
@@ -39,6 +39,7 @@ LeaveHistory reply_history(const ReplyPosition& pos, const Move& candidate,
     h.slots[i + 1] = history_slot(e.board_before, dict, e.move, e.bag_before, kAnyLeaveKind);
     h.slots[i + 1].forgone = e.forgone;
   }
+  h.hide_private();
   return h;
 }
 

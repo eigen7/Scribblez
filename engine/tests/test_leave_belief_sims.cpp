@@ -3,7 +3,7 @@
 // SlogLeaveBeliefs builds a position's belief from its training row, only
 // where the leave is modelled (belief/slog_leave_beliefs.h); and the
 // opponent's view of a candidate (belief/reply_query.h) is the training row with
-// its private fields in their public form. Reads HastyBot's NWL23 leave values
+// the observer's private history hidden. Reads HastyBot's NWL23 leave values
 // and skips without the Macondo checkout.
 
 #include "agent/agent.h"
@@ -251,41 +251,25 @@ TEST(LeaveQuery, NotModelledWithTheBagEmpty) {
 
 namespace {
 
-using Encoder = LeaveInferenceInputEncoder;
-
-// Turn `turn`'s training row of game 0 for `task`, input then target.
-std::vector<float> training_row(const std::vector<char>& slog, const std::string& path,
-                                const ForgoneSidecar& forgone, const Dictionary& dict, int turn,
-                                binlog::DecodeTask task) {
+// Turn `turn`'s leave inference training row of game 0, input then target,
+// with the observer's private history hidden.
+std::vector<float> hidden_training_row(const std::vector<char>& slog, const std::string& path,
+                                       const ForgoneSidecar& forgone, const Dictionary& dict,
+                                       int turn) {
   const InputEncodingSpec spec{&dict};
+  const auto task = binlog::DecodeTask::kLeaveInference;
   binlog::BlockDecoder decoder(spec, task);
   std::vector<float> row(binlog::BlockDecoder::row_floats_for(task, spec));
-  decoder.decode_one(slog.data(), path, 0, turn, /*transpose=*/false, /*post_move=*/false,
+  decoder.decode_one(slog.data(), path, 0, turn, {.hide_private = true}, /*post_move=*/false,
                      /*output_row=*/0, row.data(), &forgone);
   return row;
-}
-
-// The training row's input with ReplyView's substitutions: no observer
-// exchanges, and the older slots' forgone blocks as the public row has them.
-std::vector<float> substituted(std::vector<float> observer, const std::vector<float>& pub) {
-  observer.resize(Encoder::kInputFloats);
-  float* scalars = observer.data() + Encoder::kSpatialFloats;
-  const int exchanges = Encoder::kCurrentScalars - LeaveHistory::kObserverExchanges * TILE_KINDS;
-  std::fill(scalars + exchanges, scalars + Encoder::kCurrentScalars, 0.0f);
-  const int forgone_in_slot = Encoder::kSlotScalars - Encoder::kForgoneScalars;
-  for (int s = 1; s < LeaveHistory::kSlots; ++s) {
-    const int at = Encoder::kSpatialFloats + Encoder::kCurrentScalars + s * Encoder::kSlotScalars +
-                   forgone_in_slot;
-    std::copy_n(pub.begin() + at, Encoder::kForgoneScalars, observer.begin() + at);
-  }
-  return observer;
 }
 
 }  // namespace
 
 // At turn t, the candidate the game played and the opponent's real rack give
-// exactly the opponent's training row at t + 1, substituted.
-TEST_F(LeaveBeliefSimsTest, ReplyQueryIsTheOpponentsRowWithPublicSubstitutes) {
+// exactly the opponent's training row at t + 1, its private history hidden.
+TEST_F(LeaveBeliefSimsTest, ReplyQueryIsTheOpponentsRowWithItsPrivateHistoryHidden) {
   const std::string path = write_game();
   const std::vector<char> slog = util::read_file_bytes(path);
   const ForgoneSidecar forgone(forgone_path_of(path), slog.data(), dict_.content_hash());
@@ -293,6 +277,7 @@ TEST_F(LeaveBeliefSimsTest, ReplyQueryIsTheOpponentsRowWithPublicSubstitutes) {
   GameLog g = binlog::make_game_view(slog.data(), 0, scratch, nullptr);
   binlog::complete_turn_records(g, g.num_records, scratch);
   binlog::PositionEncoder encoder(InputEncodingSpec{&dict_});
+  constexpr int kInput = LeaveInferenceInputEncoder::kInputFloats;
   int checked = 0;
   for (int t = 1; t + 1 < g.num_records; ++t) {
     const int mover = encoder.replay_to_sampled(g, t, /*post_move=*/false);
@@ -303,20 +288,14 @@ TEST_F(LeaveBeliefSimsTest, ReplyQueryIsTheOpponentsRowWithPublicSubstitutes) {
                                     encoder.bag_size(),         earlier};
     const LeaveQuery q =
       belief::ReplyView(pos, g.records[t].move, dict_).query(encoder.rack(1 - mover));
-    const std::vector<float> obs =
-      training_row(slog, path, forgone, dict_, t + 1, binlog::DecodeTask::kLeaveInference);
-    const std::vector<float> pub =
-      training_row(slog, path, forgone, dict_, t + 1, binlog::DecodeTask::kPublicLeaveInference);
-    const float* target = obs.data() + Encoder::kInputFloats;
-    ASSERT_EQ(q.input, substituted(obs, pub)) << "turn " << t;
+    const std::vector<float> row = hidden_training_row(slog, path, forgone, dict_, t + 1);
+    const float* target = row.data() + kInput;
+    ASSERT_EQ(q.input, std::vector<float>(row.begin(), row.begin() + kInput)) << "turn " << t;
     EXPECT_EQ(q.length, int(target[OppLeaveTarget::kLengthOffset])) << "turn " << t;
     EXPECT_EQ(int(q.cause), int(target[OppLeaveTarget::kCauseOffset])) << "turn " << t;
     EXPECT_EQ(q.bag, int(target[OppLeaveTarget::kBagOffset])) << "turn " << t;
-    // The training pool subtracts an exchange the opponent made just before.
-    if (g.records[t - 1].move.type() != MoveType::EXCHANGE) {
-      for (Tile k = Tile::of(0); k < TILE_KINDS; ++k)
-        EXPECT_EQ(q.leave_pool.count(k), int(target[OppLeaveTarget::kPoolOffset + k.index()]));
-    }
+    for (Tile k = Tile::of(0); k < TILE_KINDS; ++k)
+      EXPECT_EQ(q.leave_pool.count(k), int(target[OppLeaveTarget::kPoolOffset + k.index()]));
     checked += q.modelled();
   }
   EXPECT_GE(checked, 2);  // the rows compare at every turn; these are the modelled ones

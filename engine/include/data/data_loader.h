@@ -96,6 +96,10 @@ class DataLoader {
     // ordering wraps.
     int turns_per_game = 0;
     int epoch_index = 0;
+    // Leave inference: hide the observer's private history
+    // (LeaveHistory::hide_private) in each row with this probability, so the
+    // model also learns to read a row whose observer's past is unknown.
+    double hide_private_fraction = 0.0;
   };
 
   // Returns the number of full batches in the epoch. A final partial batch, if
@@ -208,8 +212,8 @@ class DataLoader {
   struct WorkUnit {
     DataFile* file;
     std::vector<int64_t> local_positions;  // row index within the file
-    std::vector<uint8_t> flips;            // nonzero: transpose the board
-    std::vector<int> output_indices;       // row index within the batch
+    std::vector<RowAugment> augments;
+    std::vector<int> output_indices;  // row index within the batch
   };
 
   class ThreadTable {
@@ -376,10 +380,12 @@ class DataLoader {
     void append_game_turns(int file_idx, int64_t game, int n, int64_t base, uint64_t file_key,
                            int turns_per_game, int epoch_index);
 
-    void build_flips(const EpochConfig& config);
+    // Each row's augmentation: a transpose with probability 1/2 under
+    // apply_symmetry, and a hidden private history at hide_private_fraction.
+    void build_augments(const EpochConfig& config);
 
     std::vector<EpochPosition> order_;
-    std::vector<uint8_t> flips_;
+    std::vector<RowAugment> augments_;
     int64_t cursor_ = 0;
     int batch_size_ = 0;
     int64_t total_positions_ = 0;

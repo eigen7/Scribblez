@@ -6,18 +6,14 @@
 // keeps. DeepBot's Alice makes one per (candidate, rack she samples for Bob)
 // to model Bob's belief about her rack.
 //
-// It is the row training would encode at the opponent's turn, except where
-// that row reads the opponent's real past, which inside the chooser's model is
-// not the chooser's to see. Those fields take their public form:
-//   - the opponent's own last two exchanges: none;
-//   - the older history slots' leave-kind masks, which read the opponent's
-//     racks at the time: none, as a public row has them;
-//   - the leave pool: the unseen pool, with nothing subtracted for an exchange
-//     the opponent made just before the candidate.
-// The newest slot, the candidate itself, keeps its exact mask, read from the
-// sampled rack. Against tilted2 generation 1188's held-out rows (15,576
-// modelled), the substitution changes 65% of the rows and the true leave's NLL
-// by +0.0001 ± 0.0006 nats.
+// It is the row training would encode at the opponent's turn with the
+// observer's private history hidden (LeaveHistory::hide_private): inside the
+// chooser's model, the opponent's past racks and exchanges are not the
+// chooser's to see. So the opponent's exchanges are none, the older history
+// slots' leave-kind masks read no rack, and the leave pool subtracts no
+// exchange; the newest slot, the candidate itself, keeps its exact mask, read
+// from the sampled rack. Training hides it in a fraction of rows, and the
+// row's indicator tells the model which reading it is in.
 
 #include "belief/forgone_plays.h"
 #include "belief/leave_query.h"

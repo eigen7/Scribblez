@@ -925,7 +925,7 @@ TEST(PositionEncoder, CrossCheckPlanesLexical) {
   PositionEncoder enc(InputEncodingSpec{&d});
   std::vector<float> row(kRowFloats, 0.0f);
   enc.encode_row<PositionEvalTask>(storage.view(), /*sampled_turn=*/0, /*post_move=*/true,
-                                   /*transpose=*/false, row.data());
+                                   /*augment=*/{}, row.data());
 
   auto v_cross_check = [&row](char ch, int r, int c) {
     return row[(kVerticalCrossCheckPlane0 + Tile::from_char(ch).index()) * 225 + r * 15 + c];
@@ -1177,7 +1177,8 @@ std::vector<float> decode_row(const Dictionary& dict, const scribblez::GameLog& 
   std::vector<float> row(LeaveInferenceTask::kRowFloats);
   const std::vector<scribblez::belief::ForgonePlays> forgone =
     forgone_plays_of_game(g, g.num_records, dict);
-  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, transpose, row.data(), forgone);
+  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, {.transpose = transpose},
+                                     row.data(), forgone);
   return row;
 }
 
@@ -1430,7 +1431,8 @@ TEST(LeaveInference, RowBlocksMatchLayout) {
   const float* own_exchange = bag + 1 + Encoder::kMaxLeaveLength;
   const float* own_end = own_exchange + LeaveHistory::kObserverExchanges * TILE_KINDS;
   EXPECT_TRUE(std::all_of(own_exchange, own_end, [](float v) { return v == 0; }));
-  EXPECT_EQ(own_end, scalars + Encoder::kCurrentScalars);
+  EXPECT_EQ(own_end[0], 0.0f);  // the observer's private history is not hidden
+  EXPECT_EQ(own_end + 1, scalars + Encoder::kCurrentScalars);
   for (int s = 0; s < LeaveHistory::kSlots; ++s) {
     const TurnRecord& rec = log.turns[turn - 1 - 2 * s];
     ASSERT_NE(rec.player, me);
@@ -1497,7 +1499,7 @@ TEST(LeaveInference, MissingForgonePlaysThrow) {
   scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
   std::vector<float> row(LeaveInferenceTask::kRowFloats);
   EXPECT_ANY_THROW(
-    enc.encode_row<LeaveInferenceTask>(log.view(), 7, /*post_move=*/false, false, row.data()));
+    enc.encode_row<LeaveInferenceTask>(log.view(), 7, /*post_move=*/false, {}, row.data()));
 }
 
 namespace leave_inference_test {
@@ -1549,8 +1551,8 @@ TEST(LeaveInference, ObserverExchangeLeavesThePool) {
     const int block = turn == 4 ? 0 : 1;
     scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
     std::vector<float> row(LeaveInferenceTask::kRowFloats);
-    enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, false, row.data(), forgone);
-    const float* own = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars -
+    enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, {}, row.data(), forgone);
+    const float* own = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars - 1 -
                        LeaveHistory::kObserverExchanges * TILE_KINDS;
     const float* pool = row.data() + LeaveInferenceTask::kInputFloats + OppLeaveTarget::kPoolOffset;
     const TileCounts unseen = enc.enc().board().unseen_tiles(enc.rack(enc.enc().active_player()));
@@ -1564,6 +1566,47 @@ TEST(LeaveInference, ObserverExchangeLeavesThePool) {
       EXPECT_LE(leave.count(t), int(pool[t.index()])) << turn << " " << t.index();
     }
   }
+}
+
+// Hiding the observer's private history (LeaveHistory::hide_private) drops
+// their exchange from the row and from the leave pool, sets the indicator, and
+// opens the older slots' masks; the newest slot's mask stays.
+TEST(LeaveInference, HiddenPrivateHistoryDropsTheObserversExchange) {
+  using namespace leave_inference_test;
+  Dictionary dict = medium_dict();
+  ExchangeOnceAgent a0(0, "A0", 11);
+  TestAgent a1(0, "A1", 12);
+  scribblez::Game game(a0, a1, dict, /*seed=*/13);
+  game.play();
+  const scribblez::GameLogStorage log = game.extract_log();
+  ASSERT_EQ(log.turns[2].move.type(), MoveType::EXCHANGE);
+  const scribblez::GameLog g = log.view();
+  const std::vector<scribblez::belief::ForgonePlays> forgone =
+    forgone_plays_of_game(g, g.num_records, dict);
+  const int turn = 4;  // a0 to move; its previous turn exchanged
+  scribblez::binlog::PositionEncoder enc(InputEncodingSpec{&dict});
+  std::vector<float> row(LeaveInferenceTask::kRowFloats);
+  enc.encode_row<LeaveInferenceTask>(g, turn, /*post_move=*/false, {.hide_private = true},
+                                     row.data(), forgone);
+  const float* indicator = row.data() + Encoder::kSpatialFloats + Encoder::kCurrentScalars - 1;
+  const float* own = indicator - LeaveHistory::kObserverExchanges * TILE_KINDS;
+  EXPECT_TRUE(std::all_of(own, indicator, [](float v) { return v == 0; }));
+  EXPECT_EQ(*indicator, 1.0f);
+  const float* pool = row.data() + LeaveInferenceTask::kInputFloats + OppLeaveTarget::kPoolOffset;
+  const TileCounts unseen = enc.enc().board().unseen_tiles(enc.rack(enc.enc().active_player()));
+  for (Tile t = Tile::of(0); t < TILE_KINDS; ++t)
+    EXPECT_EQ(pool[t.index()], float(unseen.count(t))) << t.index();
+
+  LeaveHistory history;
+  history.slots[0].leave_kinds = 0b101;
+  history.slots[1].leave_kinds = 0b1;
+  history.observer_exchanges[0] = Rack::from_string("AB");
+  history.hide_private();
+  EXPECT_TRUE(history.private_hidden);
+  EXPECT_EQ(history.slots[0].leave_kinds, 0b101u);
+  EXPECT_EQ(history.slots[1].leave_kinds, kAnyLeaveKind);
+  EXPECT_EQ(history.slots[2].leave_kinds, kAnyLeaveKind);
+  EXPECT_EQ(history.observer_exchanges[0].size(), 0);
 }
 
 // OppLeaveTarget::cause on hand-built histories: each cause, whatever the
@@ -1781,7 +1824,7 @@ TEST(ForgoneSidecar, DataLoaderReadsIt) {
     slog.data() + sizeof(scribblez::binlog::FileHeader));
   for (uint32_t gi = 0; gi < 4; ++gi) {
     for (int t = metas[gi].eligible_begin; t < metas[gi].eligible_end; ++t) {
-      decoder.decode_one(slog.data(), corpus.slog.string(), gi, uint32_t(t), false, false, 0,
+      decoder.decode_one(slog.data(), corpus.slog.string(), gi, uint32_t(t), {}, false, 0,
                          one.data(), &sidecar);
       want.insert(one);
     }
@@ -4058,7 +4101,7 @@ TEST(PositionEncoder, LiveLogMatchesDecodedSlog) {
 
       std::vector<float> row_live(row_floats, 0.0f);
       PositionEncoder enc(InputEncodingSpec{&dict});
-      enc.encode_row<PositionEvalTask>(storage.view(), sampled, post_move, /*transpose=*/false,
+      enc.encode_row<PositionEvalTask>(storage.view(), sampled, post_move, /*augment=*/{},
                                        row_live.data());
 
       for (int i = 0; i < row_floats; ++i) ASSERT_EQ(row_disk[i], row_live[i]);

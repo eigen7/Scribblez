@@ -64,6 +64,7 @@ class SlogDataset:
         task: str = "position_eval",
         post_move: bool = True,
         apply_symmetry: bool = True,
+        hide_private_fraction: float = 0.0,
         memory_budget: int = 512 * 1024 * 1024,
         num_workers: int = 4,
         num_prefetch: int = 2,
@@ -77,6 +78,9 @@ class SlogDataset:
         self.task = task
         self.post_move = post_move
         self.apply_symmetry = apply_symmetry
+        # Leave inference: the fraction of rows whose observer's private history
+        # is hidden (the engine's LeaveHistory::hide_private).
+        self.hide_private_fraction = hide_private_fraction
 
         slog_files = sorted(f for d in self.data_dirs for f in d.glob("*.slog"))
         if not slog_files:
@@ -131,7 +135,9 @@ class SlogDataset:
         """
         pm = post_move if post_move is not None else self.post_move
         sym = apply_symmetry if apply_symmetry is not None else self.apply_symmetry
-        self._loader.epoch_start(batch_size, pm, sym, seed, turns_per_game, epoch_index)
+        self._loader.epoch_start(
+            batch_size, pm, sym, seed, turns_per_game, epoch_index, self.hide_private_fraction
+        )
         while True:
             batch_data = self._loader.load_batch()
             if batch_data is None:

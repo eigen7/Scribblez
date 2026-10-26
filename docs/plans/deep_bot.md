@@ -550,7 +550,27 @@ spread of the opponent's leave value.
 
 **Conditioning on Alice's candidate.** Bob's belief about Alice is the leave inference
 model run from Bob's view, with Alice's candidate `a` as the most recent move of
-its history. That is one forward pass per `(a, r)`, batched on the GPU.
+its history. That is one forward pass per `(a, r)`, batched on the GPU
+(`belief::ReplyView`).
+
+**Bob's private past is hidden.** The row reads the observer's own past: the
+tiles they exchanged on their last two turns, and their racks at the time of
+the older history moves, through those slots' leave-kind masks. Inside Alice's
+model, Bob's real past is not hers to see, and it would contradict the rack `r`
+she sampled for him. So Bob's row hides it (`LeaveHistory::hide_private`): no
+exchanges, the older slots' masks open to every kind, nothing subtracted from
+the leave pool for his exchange, and an input flag that says so. The newest
+slot, `a` itself, keeps its exact mask, read from `r`.
+
+Training hides it too, in a fraction of rows (`hide_private_fraction`, 0.25 by
+default), so the model learns both readings rather than meeting the hidden one
+only at serving time, as KataGo trains on positions with their history removed
+for analysis without a game record. Each generation's held-out eval scores the
+same rows both ways and charts the gap (`eval_hidden_gap`), so a model that
+learns to lean on the private past shows it. Before the flag existed, a model
+trained without hidden rows lost +0.0001 ± 0.0006 nats to the hidden form on
+tilted2's held-out rows, and on the 2% of rows whose observer had just
+exchanged, zeroing the exchange alone improved the NLL by 0.048 ± 0.014 nats.
 
 ### Generations
 
