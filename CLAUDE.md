@@ -60,6 +60,10 @@ Scribblez specifics for that workflow:
   synthetic models falls through to TensorRT, and the suite hides the GPU),
   means main's build is stale. Remove the link before running py/build.py in the worktree, which
   would otherwise build into main's tree through it.
+- Builds are warning-free: a warning from py/build.py is fixed in the code, not
+  left for later or silenced with a flag. Where gcc is provably wrong, rewrite so
+  the compiler sees it (a comment says why); a `#pragma GCC diagnostic` is the
+  last resort. Check the build output for `warning:` before opening a PR.
 - Before opening a PR: the engine must build, the affected suites must pass
   (py/run_tests.py --cpp-only for C++ changes, --python-only for Python;
   py/tools/gpu_parity.py too for changes that reach TensorRT inference, see
