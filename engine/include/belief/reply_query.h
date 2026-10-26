@@ -11,8 +11,8 @@
 // chooser's model, the opponent's past racks and exchanges are not the
 // chooser's to see. So the opponent's exchanges are none, the older history
 // slots' leave-kind masks read no rack, and the leave pool subtracts no
-// exchange; the newest slot, the candidate itself, keeps its exact mask, read
-// from the sampled rack. Training hides it in a fraction of rows, and the
+// exchange; the newest slot, the candidate itself, keeps a mask read from the
+// sampled rack and that pool. Training hides it in a fraction of rows, and the
 // row's indicator tells the model which reading it is in.
 
 #include "belief/forgone_plays.h"

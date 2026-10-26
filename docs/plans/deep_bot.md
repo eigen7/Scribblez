@@ -560,7 +560,7 @@ model, Bob's real past is not hers to see, and it would contradict the rack `r`
 she sampled for him. So Bob's row hides it (`LeaveHistory::hide_private`): no
 exchanges, the older slots' masks open to every kind, nothing subtracted from
 the leave pool for his exchange, and an input flag that says so. The newest
-slot, `a` itself, keeps its exact mask, read from `r`.
+slot, `a` itself, keeps a mask read from `r` and that pool.
 
 Training hides it too, in a fraction of rows (`hide_private_fraction`, 0.25 by
 default), so the model learns both readings rather than meeting the hidden one

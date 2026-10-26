@@ -1570,7 +1570,8 @@ TEST(LeaveInference, ObserverExchangeLeavesThePool) {
 
 // Hiding the observer's private history (LeaveHistory::hide_private) drops
 // their exchange from the row and from the leave pool, sets the indicator, and
-// opens the older slots' masks; the newest slot's mask stays.
+// opens the older slots' masks; the newest slot's mask reopens to the exchanged
+// kinds.
 TEST(LeaveInference, HiddenPrivateHistoryDropsTheObserversExchange) {
   using namespace leave_inference_test;
   Dictionary dict = medium_dict();
