@@ -71,6 +71,7 @@ add_library(scribblez_core STATIC
   src/sim/pool_jobs.cpp
   src/sim/rollout_values.cpp
   src/agent/best_bot.cpp
+  src/agent/deep_bot.cpp
   src/agent/candidate_evaluator.cpp
   # A GPU-free decorator over the EvalService interface, so it lives here and is
   # unit-tested against a scripted stub.
@@ -225,11 +226,13 @@ add_library(scribblez_neural_agents STATIC
   src/agent/neural_sim_agent.cpp
   src/agent/neural_sim_agent_factory.cpp
   src/agent/ultimate_bot_agent.cpp
-  src/agent/ultimate_bot_agent_factory.cpp)
+  src/agent/ultimate_bot_agent_factory.cpp
+  src/agent/deep_bot_factory.cpp)
 set_target_properties(scribblez_neural_agents PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_neural_agents PUBLIC
   scribblez_core
   scribblez_nn
+  scribblez_gpu_rollouts
   scribblez_evidence_select
   Boost::program_options)
 
@@ -472,6 +475,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # built directly on them.
   add_executable(search_tests
     tests/test_best_bot.cpp
+    tests/test_deep_bot.cpp
     tests/test_endgame.cpp
     tests/test_endgame_agent.cpp
     tests/test_leave_belief_sims.cpp
