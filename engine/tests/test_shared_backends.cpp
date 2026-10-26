@@ -30,24 +30,30 @@ nn::NeuralNetParams<nn::MoveSetEvaluationSpec> synthetic_move_set(int cuda_devic
   return p;
 }
 
+class SharedRolloutBackend : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    if (!std::ifstream(SCRIBBLEZ_DEFAULT_KWG).good()) GTEST_SKIP() << "no lexicon";
+    dict_ = std::make_unique<Dictionary>(Dictionary::load_kwg(SCRIBBLEZ_DEFAULT_KWG));
+  }
+
+  std::unique_ptr<Dictionary> dict_;
+};
+
 }  // namespace
 
-TEST(SharedBackends, RolloutBackendIsSharedForEqualSettings) {
-  if (!std::ifstream(SCRIBBLEZ_DEFAULT_KWG).good()) GTEST_SKIP() << "no lexicon";
-  const Dictionary dict = Dictionary::load_kwg(SCRIBBLEZ_DEFAULT_KWG);
-  const std::shared_ptr<RolloutValues> a = cpu_backend().shared(dict, 2);
-  EXPECT_EQ(a, cpu_backend().shared(dict, 2));
-  EXPECT_NE(a, cpu_backend().shared(dict, 3));
+TEST_F(SharedRolloutBackend, IsSharedForEqualSettings) {
+  const std::shared_ptr<RolloutValues> a = cpu_backend().shared(*dict_, 2);
+  EXPECT_EQ(a, cpu_backend().shared(*dict_, 2));
+  EXPECT_NE(a, cpu_backend().shared(*dict_, 3));
 }
 
-TEST(SharedBackends, RolloutBackendIsRebuiltOnceEveryHolderDropsIt) {
-  if (!std::ifstream(SCRIBBLEZ_DEFAULT_KWG).good()) GTEST_SKIP() << "no lexicon";
-  const Dictionary dict = Dictionary::load_kwg(SCRIBBLEZ_DEFAULT_KWG);
-  std::shared_ptr<RolloutValues> first = cpu_backend().shared(dict, 2);
+TEST_F(SharedRolloutBackend, IsRebuiltOnceEveryHolderDropsIt) {
+  std::shared_ptr<RolloutValues> first = cpu_backend().shared(*dict_, 2);
   const std::weak_ptr<RolloutValues> weak = first;
   first.reset();
   EXPECT_TRUE(weak.expired());
-  EXPECT_NE(cpu_backend().shared(dict, 2), nullptr);
+  EXPECT_NE(cpu_backend().shared(*dict_, 2), nullptr);
 }
 
 TEST(SharedBackends, MoveSetServiceIsSharedForEqualParams) {
