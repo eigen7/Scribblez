@@ -18,11 +18,14 @@ LeaveRowCause OppLeaveTarget::cause(const EncodeContext& ctx) {
 
 void OppLeaveTarget::encode(const EncodeContext& ctx, float* out) {
   const Rack& leave = ctx.opp_known_leave;
-  std::array<int, kTiles> tiles;
-  tiles.fill(-1);
-  for (int i = 0; i < leave.size(); ++i) tiles[i] = leave.tiles()[i].index();
-  std::sort(tiles.begin(), tiles.begin() + leave.size());
-  for (int i = 0; i < kTiles; ++i) out[i] = float(tiles[i]);
+  // Unsigned, so the -1 padding sorts after the tiles and the whole fixed-size
+  // array can be sorted (a sort of a variable-length prefix draws a false
+  // -Warray-bounds from gcc).
+  std::array<unsigned, kTiles> tiles;
+  tiles.fill(unsigned(-1));
+  for (int i = 0; i < leave.size(); ++i) tiles[i] = unsigned(leave.tiles()[i].index());
+  std::sort(tiles.begin(), tiles.end());
+  for (int i = 0; i < kTiles; ++i) out[i] = float(int(tiles[i]));
   out[kLengthOffset] = float(leave.size());
   const LeaveRowCause c = cause(ctx);
   out[kValidOffset] = c == LeaveRowCause::kValid ? 1.0f : 0.0f;

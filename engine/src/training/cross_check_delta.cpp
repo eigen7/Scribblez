@@ -3,6 +3,7 @@
 #include "util/assert.h"
 
 #include <algorithm>
+#include <array>
 #include <compare>
 
 namespace scribblez {
@@ -17,6 +18,11 @@ struct Entry {
 
   auto operator<=>(const Entry&) const = default;
 };
+
+// Fills the unused tail of the entry array, so it sorts after every real entry
+// and the whole fixed-size array can be sorted (a sort of a variable-length
+// prefix draws a false -Warray-bounds from gcc).
+constexpr Entry kPadding{0xFF, INT32_MAX, UINT32_MAX, UINT32_MAX};
 
 // The cross-check caches index squares in view coordinates (the transposed view
 // swaps row and column); an entry's square is in the board's own frame.
@@ -55,12 +61,13 @@ void encode_cross_check_deltas(Board& board, const Move& m, BoardUndo& undo, uin
   std::fill_n(new_masks, kMoveMaxCrossDeltas, 0u);
   std::fill_n(delta_mask, kMoveMaxCrossDeltas, uint8_t(0));
 
-  Entry entries[kMoveMaxCrossDeltas];
+  std::array<Entry, kMoveMaxCrossDeltas> entries;
+  entries.fill(kPadding);
   board.apply(m, &undo);
-  const int n = collect_entries(board, undo, entries);
+  const int n = collect_entries(board, undo, entries.data());
   board.unapply(undo);
 
-  std::sort(entries, entries + n);
+  std::sort(entries.begin(), entries.end());
   for (int i = 0; i < n; ++i) {
     axes[i] = entries[i].axis;
     squares[i] = entries[i].square;
