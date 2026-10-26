@@ -39,11 +39,11 @@ class DeepBot : public Agent {
     std::string name;
     // The leaf network (a deep_bot_leaf_eval ONNX export), or "synthetic" for
     // the CPU reference with a logistic leaf (tests). Read by the factory.
-    std::string leaf_model;
+    std::string leaf_model{};
     std::string leaf_precision = "fp16";
     // The leave inference model (ONNX) Bob's leaves are drawn from; empty draws
     // his whole rack uniformly. Read by the factory.
-    std::string leave_inference;
+    std::string leave_inference{};
     int candidates = 10;       // Alice's, by static equity
     int late_candidates = 32;  // ... with late_bag or fewer tiles in the bag
     int late_bag = 40;

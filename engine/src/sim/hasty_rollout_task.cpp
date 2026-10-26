@@ -151,8 +151,8 @@ namespace {
 // One rollout's mutable state, mirroring what the device keeps per block.
 struct RolloutState {
   Board board;
-  std::array<Rack, 2> racks;   // 0 us, 1 the opponent
-  std::array<Rack, 2> leaves;  // each player's rack after its last move, before its draw
+  std::array<Rack, 2> racks;     // 0 us, 1 the opponent
+  std::array<Rack, 2> leaves{};  // each player's rack after its last move, before its draw
   std::array<int, 2> scores;
   rollout_abi::Bag bag;
   int scoreless = 0;  // consecutive passes and exchanges
