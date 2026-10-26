@@ -133,8 +133,10 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
                                            *forgone);
       return;
     case DecodeTask::kPublicLeaveInference:
-      decode_leave_row<PublicLeaveInferenceTask>(buf, path, g, game_idx, turn_idx, augment, out,
-                                                 *forgone);
+      // A public row already withholds the private history; hiding it would
+      // only widen the target's leave pool, with no input to say so.
+      decode_leave_row<PublicLeaveInferenceTask>(buf, path, g, game_idx, turn_idx,
+                                                 {.transpose = augment.transpose}, out, *forgone);
       return;
     case DecodeTask::kLeafEval:
       pos_.encode_row<LeafEvalTask>(g, int(turn_idx), /*post_move=*/true, augment, out);

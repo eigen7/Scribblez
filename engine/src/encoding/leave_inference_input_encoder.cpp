@@ -120,6 +120,9 @@ LeaveHistorySlot history_slot(const Board& before, const Dictionary& dict, const
 }
 
 void LeaveHistory::hide_private() {
+  // The exchange is a subset of the newest move's unseen pool (leave_pool), so
+  // adding its kinds back gives the mask of the pool without the subtraction.
+  slots[0].leave_kinds |= leave_kinds_of(observer_exchanges[0].counts());
   for (Rack& exchange : observer_exchanges) exchange = Rack{};
   for (int s = 1; s < kSlots; ++s) slots[s].leave_kinds = kAnyLeaveKind;
   private_hidden = true;

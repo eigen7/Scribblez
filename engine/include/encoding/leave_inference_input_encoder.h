@@ -99,7 +99,8 @@ struct LeaveHistory {
   // Hides what only the observer could know of their own past: their
   // exchanges, and the leave-kind masks of the slots before the newest, which
   // read their racks at the time. The newest slot's mask reads the observer's
-  // current rack, which the row holds anyway.
+  // current rack, which the row holds anyway, but no longer subtracts their
+  // previous turn's exchange, as the leave pool no longer does.
   void hide_private();
 
   std::array<LeaveHistorySlot, kSlots> slots;

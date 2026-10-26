@@ -1603,7 +1603,7 @@ TEST(LeaveInference, HiddenPrivateHistoryDropsTheObserversExchange) {
   history.observer_exchanges[0] = Rack::from_string("AB");
   history.hide_private();
   EXPECT_TRUE(history.private_hidden);
-  EXPECT_EQ(history.slots[0].leave_kinds, 0b101u);
+  EXPECT_EQ(history.slots[0].leave_kinds, 0b111u);  // the exchanged B is back in the pool
   EXPECT_EQ(history.slots[1].leave_kinds, kAnyLeaveKind);
   EXPECT_EQ(history.slots[2].leave_kinds, kAnyLeaveKind);
   EXPECT_EQ(history.observer_exchanges[0].size(), 0);

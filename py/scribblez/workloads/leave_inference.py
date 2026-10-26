@@ -76,7 +76,8 @@ class LeaveInferenceParams:
     hide_private_fraction: float = param(
         0.25,
         "fraction of training rows whose observer's private history (their exchanges and past "
-        "racks) is hidden, as DeepBot's model of its opponent encodes the opponent's view",
+        "racks) is hidden, as DeepBot's model of its opponent encodes the opponent's view; "
+        "no effect when public, whose rows withhold it anyway",
     )
     public: bool = param(
         False,

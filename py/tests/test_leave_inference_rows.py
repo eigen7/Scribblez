@@ -108,6 +108,14 @@ def test_forgone_block_is_populated(slogs):
     assert forgone[0::2].sum() > 0  # some margins apply
 
 
+# The current scalars (engine encoding/leave_inference_input_encoder.h): the
+# observer's rack (27), the unseen pool (100), the score (1), the bag (1) and
+# the leave's length (6), then the observer's two exchanges (2 x 27), then
+# whether their private history is hidden.
+_EXCHANGES = slice(27 + 100 + 1 + 1 + 6, 27 + 100 + 1 + 1 + 6 + 54)
+_HIDDEN = 27 + 100 + 1 + 1 + 6 + 54
+
+
 def test_public_rows_withhold_only_the_observers_tiles(slogs):
     """A public row is the observer's row with the rack and exchange blocks
     zeroed and the unseen pool widened by the rack; the planes and the target,
@@ -125,14 +133,7 @@ def test_public_rows_withhold_only_the_observers_tiles(slogs):
     assert (public[:, rack] == 0).all()
     unseen_thermometer = slice(begin + 27, begin + 127)
     assert public[:, unseen_thermometer].sum() > seen[:, unseen_thermometer].sum()
-
-
-# The current scalars (engine encoding/leave_inference_input_encoder.h): the
-# observer's rack (27), the unseen pool (100), the score (1), the bag (1) and
-# the leave's length (6), then the observer's two exchanges (2 x 27), then
-# whether their private history is hidden.
-_EXCHANGES = slice(27 + 100 + 1 + 1 + 6, 27 + 100 + 1 + 1 + 6 + 54)
-_HIDDEN = 27 + 100 + 1 + 1 + 6 + 54
+    assert (public[:, begin + _HIDDEN] == 1).all()  # a public row hides everything private
 
 
 def _scalars(batch):
