@@ -219,7 +219,8 @@ TensorRT services, GPU rollout backends and large tables exist once per
 process and are shared by every game thread, never built per agent or thread.
 Expose them through a `create()`/`shared()` factory over `nn::SharedRegistry`
 (engine/include/nn/shared_registry.h); the raw constructors are
-factory-internal. (EndgameSolver is the exception: its transposition table is
+factory-internal, called directly only by tools that build one instance per
+process. (EndgameSolver is the exception: its transposition table is
 thread-exclusive by design.)
 
 ## Clang-format

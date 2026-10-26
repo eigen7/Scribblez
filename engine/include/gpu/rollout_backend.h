@@ -45,11 +45,13 @@ struct RolloutBackend {
   // asks while one holds it (SharedRegistry): the GPU one carries a leaf
   // engine and the lexicon tables on the device. Its run() is serialized, so
   // game threads may call it concurrently. The cpu one runs its rollouts on
-  // `threads` threads; the gpu one ignores `threads`.
+  // `threads` threads; the gpu one ignores `threads`. `dict` is not part of the
+  // key, so every caller must pass the same (process-lifetime) dictionary.
   std::shared_ptr<RolloutValues> shared(const Dictionary& dict, int threads) const;
 
-  // An unshared backend. Factory-internal: agents go through shared() so that
-  // heavy device state is paid once per process, not once per agent.
+  // An unshared backend. Factory-internal, and for a tool that runs one backend
+  // per process: agents go through shared() so that heavy device state is paid
+  // once per process, not once per agent.
   std::unique_ptr<RolloutValues> make(const Dictionary& dict, int threads) const;
 };
 

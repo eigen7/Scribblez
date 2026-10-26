@@ -1,9 +1,9 @@
 #pragma once
 
 // A process-wide registry of live instances, keyed on the params that determine
-// them. It backs the `create()` factories (PositionEvalService::create(),
-// MoveProposalNets::create()) so that all the game threads of a run share one
-// loaded model rather than each loading its own.
+// them. It backs the process-singleton factories (each heavy resource's
+// `create()` or `shared()`) so that all the game threads of a run share one
+// instance rather than each building its own.
 //
 // Entries are held weakly: an instance is freed when its last holder drops it,
 // and the next request for the same params builds a fresh one.
