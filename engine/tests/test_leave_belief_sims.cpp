@@ -333,8 +333,8 @@ namespace {
 // earlier moves a LeaveHistoryRecorder gives it, and exchanges on one turn.
 class RecordingAgent : public TopScoreAgent {
  public:
-  RecordingAgent(int tid, std::string name, const Dictionary& dict, int exchange_turn)
-      : TopScoreAgent(tid, std::move(name)), recorder_(dict), exchange_turn_(exchange_turn) {}
+  RecordingAgent(int tid, std::string name, int exchange_turn)
+      : TopScoreAgent(tid, std::move(name)), exchange_turn_(exchange_turn) {}
 
   void begin_game(const BeginGameRequest&) override { recorder_.begin_game(); }
   void observe_move(const Move& move) override {
@@ -354,7 +354,7 @@ class RecordingAgent : public TopScoreAgent {
 
 MoveDecision RecordingAgent::make_move(const MoveRequest& req) {
   queries[turn_] = recorder_.own_query(req);
-  own_moves[turn_] = recorder_.own_moves();
+  own_moves[turn_] = recorder_.own_moves(req.dict);
   if (turn_ == exchange_turn_) {
     const std::vector<Move> exchanges = generate_legal_exchanges(req);
     if (!exchanges.empty()) return exchanges[exchanges.size() / 2];
@@ -367,7 +367,7 @@ MoveDecision RecordingAgent::make_move(const MoveRequest& req) {
 // Each seat's live query is its training row at the same turn, and its
 // earlier moves are the replay's; both seats exchange once.
 TEST_F(LeaveBeliefSimsTest, RecordedQueriesAreTheTrainingRows) {
-  RecordingAgent a0(0, "A0", dict_, /*exchange_turn=*/2), a1(1, "A1", dict_, /*exchange_turn=*/5);
+  RecordingAgent a0(0, "A0", /*exchange_turn=*/2), a1(1, "A1", /*exchange_turn=*/5);
   const std::string path = write_game(a0, a1);
   const std::vector<char> slog = util::read_file_bytes(path);
   const ForgoneSidecar forgone(forgone_path_of(path), slog.data(), dict_.content_hash());

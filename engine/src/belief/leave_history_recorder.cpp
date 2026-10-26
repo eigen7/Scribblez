@@ -39,8 +39,7 @@ void LeaveHistoryRecorder::begin_game() {
 
 void LeaveHistoryRecorder::observe(const Move& move) {
   const int mover = int(seen_.size() % 2);
-  seen_.push_back(
-    {move, board_, bag_, rack_sizes_[mover], compute_forgone_plays(board_, dict_, move)});
+  seen_.push_back({move, board_, bag_, rack_sizes_[mover], std::nullopt});
   if (move.type() != MoveType::PLAY) return;
   board_.apply(move);
   const int drawn = std::min(bag_, move.num_glyphs());
@@ -48,12 +47,18 @@ void LeaveHistoryRecorder::observe(const Move& move) {
   bag_ -= drawn;
 }
 
+const ForgonePlays& LeaveHistoryRecorder::forgone(int k, const Dictionary& dict) {
+  Seen& s = seen_[size_t(k)];
+  if (!s.forgone) s.forgone = compute_forgone_plays(s.before, dict, s.move);
+  return *s.forgone;
+}
+
 Rack LeaveHistoryRecorder::own_exchange(int k) const {
   if (k < 0) return Rack{};
   return returned_tiles(seen_[size_t(k)].move);
 }
 
-LeaveHistorySlot LeaveHistoryRecorder::opponent_slot(int k) const {
+LeaveHistorySlot LeaveHistoryRecorder::opponent_slot(int k, const Dictionary& dict) {
   const Seen& s = seen_[size_t(k)];
   const auto rack = own_racks_.find(k + 1);
   RELEASE_ASSERT(rack != own_racks_.end(), "no rack recorded at turn {}", k + 1);
@@ -61,16 +66,16 @@ LeaveHistorySlot LeaveHistoryRecorder::opponent_slot(int k) const {
   if (s.move.type() == MoveType::PLAY) {
     for (int i = 0; i < s.move.num_glyphs(); ++i) unseen.remove(s.move.glyph(i).rack_tile());
   }
-  LeaveHistorySlot slot = history_slot(s.before, dict_, s.move, s.bag_before,
+  LeaveHistorySlot slot = history_slot(s.before, dict, s.move, s.bag_before,
                                        leave_kinds_of(leave_pool(unseen, own_exchange(k - 1))));
-  slot.forgone = s.forgone;
+  slot.forgone = forgone(k, dict);
   return slot;
 }
 
-LeaveHistory LeaveHistoryRecorder::history(int turn) const {
+LeaveHistory LeaveHistoryRecorder::history(int turn, const Dictionary& dict) {
   LeaveHistory h;
   for (int s = 0; s < LeaveHistory::kSlots && turn - 1 - 2 * s >= 0; ++s)
-    h.slots[s] = opponent_slot(turn - 1 - 2 * s);
+    h.slots[s] = opponent_slot(turn - 1 - 2 * s, dict);
   for (int e = 0; e < LeaveHistory::kObserverExchanges; ++e)
     h.observer_exchanges[e] = own_exchange(turn - 2 - 2 * e);
   return h;
@@ -79,7 +84,7 @@ LeaveHistory LeaveHistoryRecorder::history(int turn) const {
 LeaveQuery LeaveHistoryRecorder::own_query(const MoveRequest& req) {
   const int turn = int(seen_.size());
   own_racks_[turn] = req.my_rack;
-  const LeaveHistory h = history(turn);
+  const LeaveHistory h = history(turn, req.dict);
   const Move* last = turn > 0 ? &seen_.back().move : nullptr;
   LeaveQuery q;
   q.length = last ? seen_.back().mover_rack_before - tiles_off_rack(*last) : 0;
@@ -89,16 +94,16 @@ LeaveQuery LeaveHistoryRecorder::own_query(const MoveRequest& req) {
   const LeaveInferenceInput in{&req.board, req.my_rack, req.my_score - req.opp_score, req.bag_size,
                                q.length,   &h,          LeaveInferenceView::kObserver};
   q.input.resize(LeaveInferenceInputEncoder::kInputFloats);
-  LeaveInferenceInputEncoder::encode(in, dict_, q.input.data());
+  LeaveInferenceInputEncoder::encode(in, req.dict, q.input.data());
   return q;
 }
 
-std::vector<ChooserMove> LeaveHistoryRecorder::own_moves() const {
+std::vector<ChooserMove> LeaveHistoryRecorder::own_moves(const Dictionary& dict) {
   std::vector<ChooserMove> out;
   const int turn = int(seen_.size());
   for (int k = turn - 2; k >= 0 && out.size() < LeaveHistory::kSlots - 1; k -= 2) {
     const Seen& s = seen_[size_t(k)];
-    out.push_back({s.move, s.before, s.bag_before, s.forgone});
+    out.push_back({s.move, s.before, s.bag_before, forgone(k, dict)});
   }
   return out;
 }

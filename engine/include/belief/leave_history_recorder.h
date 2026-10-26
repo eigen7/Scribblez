@@ -5,8 +5,8 @@
 // each of their turns (Agent::make_move). It is the agent's mirror of what
 // PositionEncoder's replay records from a .slog, so a query made in play is the
 // training row of the same position: the opponent's last moves with the
-// cross-checks before them, their forgone plays (computed as each move is seen)
-// and the leave-kind masks the observer's racks give them, and the observer's
+// cross-checks before them, their forgone plays (computed when a query first
+// needs them) and the leave-kind masks the observer's racks give them, and the observer's
 // own last two exchanges. It never reads which tiles an opponent's exchange
 // returned, which only the game knows.
 //
@@ -21,6 +21,7 @@
 #include "game/rack.h"
 
 #include <map>
+#include <optional>
 #include <vector>
 
 namespace scribblez {
@@ -32,8 +33,6 @@ namespace belief {
 
 class LeaveHistoryRecorder {
  public:
-  explicit LeaveHistoryRecorder(const Dictionary& dict) : dict_(dict) {}
-
   // Forgets the game so far.
   void begin_game();
 
@@ -47,26 +46,26 @@ class LeaveHistoryRecorder {
 
   // The owner's last two moves before now, most recent first: what ReplyView
   // reads as the chooser's earlier moves.
-  std::vector<ChooserMove> own_moves() const;
+  std::vector<ChooserMove> own_moves(const Dictionary& dict);
 
  private:
   struct Seen {
     Move move;
     Board before;
     int bag_before = 0;
-    int mover_rack_before = 0;  // tiles on the mover's rack before it
-    ForgonePlays forgone = ForgonePlays::none();
+    int mover_rack_before = 0;            // tiles on the mover's rack before it
+    std::optional<ForgonePlays> forgone;  // computed on first use
   };
 
+  const ForgonePlays& forgone(int k, const Dictionary& dict);
   // The history slot for the opponent's move `k`, its mask read from the
   // owner's rack at their next turn.
-  LeaveHistorySlot opponent_slot(int k) const;
-  LeaveHistory history(int turn) const;
+  LeaveHistorySlot opponent_slot(int k, const Dictionary& dict);
+  LeaveHistory history(int turn, const Dictionary& dict);
   // The tiles the move at `k` returned to the bag, if it is the owner's
   // exchange; empty otherwise or before the game.
   Rack own_exchange(int k) const;
 
-  const Dictionary& dict_;
   std::vector<Seen> seen_;
   std::map<int, Rack> own_racks_;  // by turn
   Board board_;
