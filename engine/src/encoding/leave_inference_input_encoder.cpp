@@ -40,9 +40,14 @@ float* encode_current_scalars(const LeaveInferenceInput& in, float* out) {
     out[in.leave_length - 1] = 1.0f;
   }
   out += Encoder::kMaxLeaveLength;
-  if (is_public(in.view)) return out + LeaveHistory::kObserverExchanges * TILE_KINDS;
-  for (const Rack& exchange : in.history->observer_exchanges)
-    out += encode_rack_counts(exchange, out);
+  if (is_public(in.view)) {
+    out += LeaveHistory::kObserverExchanges * TILE_KINDS;
+  } else {
+    for (const Rack& exchange : in.history->observer_exchanges)
+      out += encode_rack_counts(exchange, out);
+  }
+  // A public row hides everything private.
+  *out++ = is_public(in.view) || in.history->private_hidden ? 1.0f : 0.0f;
   return out;
 }
 
@@ -112,6 +117,15 @@ LeaveHistorySlot history_slot(const Board& before, const Dictionary& dict, const
   slot.cross_checks = CrossCheckMasks::of(before);
   slot.leave_kinds = leave_kinds;
   return slot;
+}
+
+void LeaveHistory::hide_private() {
+  // The exchange is a subset of the newest move's unseen pool (leave_pool), so
+  // adding its kinds back gives the mask of the pool without the subtraction.
+  slots[0].leave_kinds |= leave_kinds_of(observer_exchanges[0].counts());
+  for (Rack& exchange : observer_exchanges) exchange = Rack{};
+  for (int s = 1; s < kSlots; ++s) slots[s].leave_kinds = kAnyLeaveKind;
+  private_hidden = true;
 }
 
 LeaveHistory LeaveHistory::transpose() const {

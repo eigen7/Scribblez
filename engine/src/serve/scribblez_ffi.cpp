@@ -68,7 +68,7 @@ struct ScribblezSession {
   int input_floats() const { return scribblez::input_floats(spec); }
 
   int decode_rows(int task, const char* path, const int64_t* game_idx, const int64_t* turn_idx,
-                  int64_t n, bool post_move, float* out) const;
+                  int64_t n, bool post_move, bool hide_private, float* out) const;
   int64_t win_table_samples(const char* path, void* out, int64_t cap) const;
   int encode_candidate_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
                             const int64_t* move_counts, int64_t n_positions, const void* moves,
@@ -433,7 +433,7 @@ int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int to
 
 int ScribblezSession::decode_rows(int task, const char* path, const int64_t* game_idx,
                                   const int64_t* turn_idx, int64_t n, bool post_move,
-                                  float* out) const {
+                                  bool hide_private, float* out) const {
   const std::optional<scribblez::binlog::DecodeTask> t = decode_task(task);
   if (!t || !game_idx || !turn_idx || !out || n < 0) return -1;
   std::vector<char> buf;
@@ -448,7 +448,7 @@ int ScribblezSession::decode_rows(int task, const char* path, const int64_t* gam
     const int64_t row_floats = scribblez::binlog::BlockDecoder::row_floats_for(*t, spec);
     for (int64_t j = 0; j < n; ++j) {
       decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
-                         /*transpose=*/false, post_move,
+                         {.hide_private = hide_private}, post_move,
                          /*output_row=*/0, out + j * row_floats, forgone ? &*forgone : nullptr);
     }
     return 0;
@@ -459,8 +459,9 @@ int ScribblezSession::decode_rows(int task, const char* path, const int64_t* gam
 }
 
 int scribblez_decode_rows(ScribblezSession* s, int task, const char* path, const int64_t* game_idx,
-                          const int64_t* turn_idx, int64_t n, int post_move, float* out) {
-  return s->decode_rows(task, path, game_idx, turn_idx, n, post_move != 0, out);
+                          const int64_t* turn_idx, int64_t n, int post_move, int hide_private,
+                          float* out) {
+  return s->decode_rows(task, path, game_idx, turn_idx, n, post_move != 0, hide_private != 0, out);
 }
 
 int64_t ScribblezSession::win_table_samples(const char* path, void* out, int64_t cap) const {
@@ -618,7 +619,7 @@ int ScribblezSession::move_set_positions(const char* path, const int64_t* game_i
   int64_t done = 0;
   for (int64_t j = 0; j < n_positions; ++j) {
     decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
-                       /*transpose=*/false, /*post_move=*/false, /*output_row=*/j, out_rows);
+                       /*augment=*/{}, /*post_move=*/false, /*output_row=*/j, out_rows);
     const std::vector<scribblez::Move> candidates = copy_moves(moves, done, move_counts[j]);
     mset::encode_moves_cross_checks(decoder.board(), *spec.dict, candidates.data(), move_counts[j],
                                     out_cells + done * mset::kMoveCrossSlots,
@@ -1131,7 +1132,8 @@ int64_t scribblez_dl_num_positions(const DataLoaderHandle* h) {
 }
 
 int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move, int apply_symmetry,
-                             uint64_t seed, int turns_per_game, int epoch_index) {
+                             uint64_t seed, int turns_per_game, int epoch_index,
+                             double hide_private_fraction) {
   if (!h) return 0;
   DataLoader::EpochConfig cfg;
   cfg.batch_size = batch_size;
@@ -1140,6 +1142,7 @@ int scribblez_dl_epoch_start(DataLoaderHandle* h, int batch_size, int post_move,
   cfg.seed = seed;
   cfg.turns_per_game = turns_per_game;
   cfg.epoch_index = epoch_index;
+  cfg.hide_private_fraction = hide_private_fraction;
   return h->loader.epoch_start(cfg);
 }
 

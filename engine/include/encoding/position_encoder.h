@@ -34,6 +34,14 @@ Rack leave_from_replay(const GameLog& g, int move_turn, const Rack& rack_now);
 // positions.
 Rack opp_leave_from_replay(const GameLog& g, int sampled_turn, const Rack& opp_rack_now);
 
+// How a training row is augmented.
+struct RowAugment {
+  bool transpose = false;  // encode the transposed position (Board::transpose)
+  // Leave inference: hide the observer's private history
+  // (LeaveHistory::hide_private). Only tasks that record the history read it.
+  bool hide_private = false;
+};
+
 class PositionEncoder {
  public:
   explicit PositionEncoder(const InputEncodingSpec& spec) : spec_(spec), enc_(spec) {}
@@ -45,14 +53,15 @@ class PositionEncoder {
   int replay_to_sampled(const GameLog& g, int sampled_turn, bool post_move,
                         LeaveHistory* history = nullptr);
 
-  // Replays, then writes one training row for `Task`. With `transpose`, the
-  // replayed state (board, last moves, next moves) is transposed before
-  // encoding, so no encoder or target needs to know about the augmentation.
+  // Replays, then writes one training row for `Task`, augmented by `augment`.
+  // A transposed row's replayed state (board, last moves, next moves) is
+  // transposed before encoding, so no encoder or target needs to know about
+  // that augmentation.
   // A task that records the move history also reads `forgone`, the game's
   // forgone plays by turn (the .forgone sidecar's entries), which must cover
   // every move the history holds.
   template <typename Task>
-  void encode_row(const GameLog& g, int sampled_turn, bool post_move, bool transpose,
+  void encode_row(const GameLog& g, int sampled_turn, bool post_move, RowAugment augment,
                   float* out_row, std::span<const belief::ForgonePlays> forgone = {});
 
   // Valid after replay_to_sampled / encode_row.

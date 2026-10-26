@@ -282,11 +282,13 @@ TRANSFER_READER_QUALITY = [
 # trainer.py assembles, its eval metrics from train_loop.py):
 # held-out NLL of the opponent's true leave against the uniform prior (negative
 # is better), broken down by leave length and bag size, the calibration of its
-# implied letter presence and leave value, and the win table it refits each
-# generation against Macondo's.
+# implied letter presence and leave value, the same rows with every observer's
+# private history hidden (as served for an opponent's view), and the win table
+# it refits each generation against Macondo's.
 LEAVE_INFERENCE_QUALITY = [
     ("NLL vs the uniform prior (nats per leave)", ["eval_nll_vs_uniform", "train_nll_vs_uniform"]),
-    ("Held-out NLL (nats per leave)", ["eval_nll", "eval_nll_uniform"]),
+    ("Held-out NLL (nats per leave)", ["eval_nll", "eval_hidden_nll", "eval_nll_uniform"]),
+    ("Private history hidden: NLL gap to the own view (nats per leave)", ["eval_hidden_gap"]),
     (
         "Held-out NLL vs uniform, by leave length",
         [f"eval_nll_vs_uniform_len_{k}" for k in range(1, 7)],

@@ -96,14 +96,14 @@ void BlockDecoder::decode(const char* buf, const std::string& path, int64_t loca
     const uint32_t game_idx = local_start + i;
     uint32_t sampled = 0;
     const GameLog g = game_view(buf, game_idx, &sampled);
-    pos_.encode_row<PositionEvalTask>(g, int(sampled), post_move, transposes[i] != 0,
+    pos_.encode_row<PositionEvalTask>(g, int(sampled), post_move, {.transpose = transposes[i] != 0},
                                       output + (output_row_start + i) * row_floats_);
   }
 }
 
 void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t game_idx,
-                              uint32_t turn_idx, bool transpose, bool post_move, int64_t output_row,
-                              float* output, const ForgoneSidecar* forgone) {
+                              uint32_t turn_idx, RowAugment augment, bool post_move,
+                              int64_t output_row, float* output, const ForgoneSidecar* forgone) {
   RELEASE_ASSERT((forgone != nullptr) == reads_forgone(task_));
   const FileHeader* hdr = reinterpret_cast<const FileHeader*>(buf);
   if (hdr->magic != kMagic) {
@@ -123,34 +123,36 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
   // rollout leaf follows a move), so they ignore the caller's post_move flag.
   switch (task_) {
     case DecodeTask::kPositionEval:
-      pos_.encode_row<PositionEvalTask>(g, int(turn_idx), post_move, transpose, out);
+      pos_.encode_row<PositionEvalTask>(g, int(turn_idx), post_move, augment, out);
       return;
     case DecodeTask::kMaxMovePerLane:
-      pos_.encode_row<MaxMovePerLaneTask>(g, int(turn_idx), /*post_move=*/false, transpose, out);
+      pos_.encode_row<MaxMovePerLaneTask>(g, int(turn_idx), /*post_move=*/false, augment, out);
       return;
     case DecodeTask::kLeaveInference:
-      decode_leave_row<LeaveInferenceTask>(buf, path, g, game_idx, turn_idx, transpose, out,
+      decode_leave_row<LeaveInferenceTask>(buf, path, g, game_idx, turn_idx, augment, out,
                                            *forgone);
       return;
     case DecodeTask::kPublicLeaveInference:
-      decode_leave_row<PublicLeaveInferenceTask>(buf, path, g, game_idx, turn_idx, transpose, out,
-                                                 *forgone);
+      // A public row already withholds the private history; hiding it would
+      // only widen the target's leave pool, with no input to say so.
+      decode_leave_row<PublicLeaveInferenceTask>(buf, path, g, game_idx, turn_idx,
+                                                 {.transpose = augment.transpose}, out, *forgone);
       return;
     case DecodeTask::kLeafEval:
-      pos_.encode_row<LeafEvalTask>(g, int(turn_idx), /*post_move=*/true, transpose, out);
+      pos_.encode_row<LeafEvalTask>(g, int(turn_idx), /*post_move=*/true, augment, out);
       return;
   }
 }
 
 template <typename Task>
 void BlockDecoder::decode_leave_row(const char* buf, const std::string& path, const GameLog& g,
-                                    uint32_t game_idx, uint32_t turn_idx, bool transpose,
+                                    uint32_t game_idx, uint32_t turn_idx, RowAugment augment,
                                     float* out, const ForgoneSidecar& forgone) {
   if (int(turn_idx) >= eligible_end(buf, game_idx)) {
     throw util::Exception("{}: game {} turn {} is past the eligible region", path, game_idx,
                           turn_idx);
   }
-  pos_.encode_row<Task>(g, int(turn_idx), /*post_move=*/false, transpose, out,
+  pos_.encode_row<Task>(g, int(turn_idx), /*post_move=*/false, augment, out,
                         forgone.game(game_idx));
 }
 

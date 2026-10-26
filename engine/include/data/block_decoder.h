@@ -78,7 +78,7 @@ class BlockDecoder {
   // util::Exception for a leave inference turn outside the game's eligible
   // region, whose history the sidecar does not cover.
   void decode_one(const char* buf, const std::string& path, uint32_t game_idx, uint32_t turn_idx,
-                  bool transpose, bool post_move, int64_t output_row, float* output,
+                  RowAugment augment, bool post_move, int64_t output_row, float* output,
                   const ForgoneSidecar* forgone = nullptr);
 
   // The board decode_one last encoded, after its transpose, with its
@@ -103,7 +103,7 @@ class BlockDecoder {
   // decode_one for a leave inference `Task`.
   template <typename Task>
   void decode_leave_row(const char* buf, const std::string& path, const GameLog& g,
-                        uint32_t game_idx, uint32_t turn_idx, bool transpose, float* out,
+                        uint32_t game_idx, uint32_t turn_idx, RowAugment augment, float* out,
                         const ForgoneSidecar& forgone);
 
   DecodeTask task_;
