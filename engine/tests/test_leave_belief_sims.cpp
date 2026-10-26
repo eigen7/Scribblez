@@ -7,6 +7,7 @@
 // and skips without the Macondo checkout.
 
 #include "agent/agent.h"
+#include "belief/leave_history_recorder.h"
 #include "belief/leave_params.h"
 #include "belief/leave_sampler.h"
 #include "belief/reply_query.h"
@@ -37,6 +38,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -97,6 +99,8 @@ class LeaveBeliefSimsTest : public ::testing::Test {
 
   // One played game as a .slog with its .forgone sidecar; returns its path.
   std::string write_game() const;
+  // The same, played by `a0` and `a1`.
+  std::string write_game(Agent& a0, Agent& a1) const;
 
   static std::unique_ptr<LeaveValueArrays> table_;
   Dictionary dict_ = small_dict();
@@ -105,9 +109,13 @@ class LeaveBeliefSimsTest : public ::testing::Test {
 std::unique_ptr<LeaveValueArrays> LeaveBeliefSimsTest::table_;
 
 std::string LeaveBeliefSimsTest::write_game() const {
+  TopScoreAgent a0(0, "A0"), a1(1, "A1");
+  return write_game(a0, a1);
+}
+
+std::string LeaveBeliefSimsTest::write_game(Agent& a0, Agent& a1) const {
   {
     binlog::BinaryLogWriter writer(tmp_.string(), /*games_per_file=*/1);
-    TopScoreAgent a0(0, "A0"), a1(1, "A1");
     Game g(a0, a1, dict_, /*seed=*/11);
     g.play();
     writer.append(g.extract_log());
@@ -317,4 +325,119 @@ TEST_F(LeaveBeliefSimsTest, ChooserMovesAreTheMoversOwnMostRecentFirst) {
   EXPECT_EQ(m[0].move, g.records[3].move);
   EXPECT_EQ(m[1].move, g.records[1].move);
   EXPECT_EQ(m[1].bag_before, 100 - 14 - g.records[0].move.num_glyphs());
+}
+
+namespace {
+
+// TopScoreAgent that records, at each of its turns, the leave query and
+// earlier moves a LeaveHistoryRecorder gives it, and exchanges on one turn.
+class RecordingAgent : public TopScoreAgent {
+ public:
+  RecordingAgent(int tid, std::string name, const Dictionary& dict, int exchange_turn)
+      : TopScoreAgent(tid, std::move(name)), recorder_(dict), exchange_turn_(exchange_turn) {}
+
+  void begin_game(const BeginGameRequest&) override { recorder_.begin_game(); }
+  void observe_move(const Move& move) override {
+    recorder_.observe(move);
+    ++turn_;
+  }
+  MoveDecision make_move(const MoveRequest& req) override;
+
+  std::map<int, LeaveQuery> queries;
+  std::map<int, std::vector<belief::ChooserMove>> own_moves;
+
+ private:
+  belief::LeaveHistoryRecorder recorder_;
+  int exchange_turn_;
+  int turn_ = 0;
+};
+
+MoveDecision RecordingAgent::make_move(const MoveRequest& req) {
+  queries[turn_] = recorder_.own_query(req);
+  own_moves[turn_] = recorder_.own_moves();
+  if (turn_ == exchange_turn_) {
+    const std::vector<Move> exchanges = generate_legal_exchanges(req);
+    if (!exchanges.empty()) return exchanges[exchanges.size() / 2];
+  }
+  return TopScoreAgent::make_move(req);
+}
+
+}  // namespace
+
+// Each seat's live query is its training row at the same turn, and its
+// earlier moves are the replay's; both seats exchange once.
+TEST_F(LeaveBeliefSimsTest, RecordedQueriesAreTheTrainingRows) {
+  RecordingAgent a0(0, "A0", dict_, /*exchange_turn=*/2), a1(1, "A1", dict_, /*exchange_turn=*/5);
+  const std::string path = write_game(a0, a1);
+  const std::vector<char> slog = util::read_file_bytes(path);
+  const ForgoneSidecar forgone(forgone_path_of(path), slog.data(), dict_.content_hash());
+  std::vector<TurnRecord> scratch;
+  GameLog g = binlog::make_game_view(slog.data(), 0, scratch, nullptr);
+  binlog::complete_turn_records(g, g.num_records, scratch);
+  ASSERT_EQ(g.records[2].move.type(), MoveType::EXCHANGE);
+  ASSERT_EQ(g.records[5].move.type(), MoveType::EXCHANGE);
+  const InputEncodingSpec spec{&dict_};
+  const auto task = binlog::DecodeTask::kLeaveInference;
+  binlog::BlockDecoder decoder(spec, task);
+  std::vector<float> row(binlog::BlockDecoder::row_floats_for(task, spec));
+  constexpr int kInput = LeaveInferenceInputEncoder::kInputFloats;
+  int checked = 0;
+  for (const RecordingAgent* a : {&a0, &a1}) {
+    for (const auto& [turn, q] : a->queries) {
+      if (turn + 1 >= g.num_records) continue;  // past the eligible region
+      decoder.decode_one(slog.data(), path, 0, turn, /*augment=*/{}, /*post_move=*/false,
+                         /*output_row=*/0, row.data(), &forgone);
+      const float* target = row.data() + kInput;
+      ASSERT_EQ(q.input, std::vector<float>(row.begin(), row.begin() + kInput)) << "turn " << turn;
+      EXPECT_EQ(q.length, int(target[OppLeaveTarget::kLengthOffset])) << "turn " << turn;
+      EXPECT_EQ(int(q.cause), int(target[OppLeaveTarget::kCauseOffset])) << "turn " << turn;
+      EXPECT_EQ(q.bag, int(target[OppLeaveTarget::kBagOffset])) << "turn " << turn;
+      for (Tile k = Tile::of(0); k < TILE_KINDS; ++k)
+        EXPECT_EQ(q.leave_pool.count(k), int(target[OppLeaveTarget::kPoolOffset + k.index()]));
+      const std::vector<belief::ChooserMove> want =
+        belief::chooser_moves_from_replay(g, turn, forgone.game(0), dict_);
+      const std::vector<belief::ChooserMove>& got = a->own_moves.at(turn);
+      ASSERT_EQ(got.size(), want.size()) << "turn " << turn;
+      for (size_t i = 0; i < got.size(); ++i) {
+        EXPECT_EQ(got[i].move, want[i].move) << "turn " << turn;
+        EXPECT_EQ(got[i].bag_before, want[i].bag_before) << "turn " << turn;
+        EXPECT_EQ(got[i].forgone.margin, want[i].forgone.margin) << "turn " << turn;
+      }
+      ++checked;
+    }
+  }
+  EXPECT_GT(checked, 6);
+}
+
+// beliefs_of makes one model call for the modelled queries, in order, and
+// builds the same samplers on any number of threads.
+TEST_F(LeaveBeliefSimsTest, BeliefsOfBatchesTheModelledQueries) {
+  const std::string path = write_game();
+  const std::vector<char> slog = util::read_file_bytes(path);
+  int calls = 0;
+  belief::LeaveParamsFn stub = [&](const float* rows, int count, LeaveParams* out) {
+    ++calls;
+    for (int i = 0; i < count; ++i) {
+      out[i] = LeaveParams{};
+      out[i].theta[i % TILE_KINDS] = 2.0f;  // a different belief per row
+    }
+  };
+  const belief::SlogLeaveBeliefs beliefs(slog, path, dict_, *table_, stub);
+  const auto* meta =
+    reinterpret_cast<const binlog::GameMetadata*>(slog.data() + sizeof(binlog::FileHeader));
+  std::vector<LeaveQuery> queries;
+  for (uint32_t t = meta->eligible_begin; t < meta->eligible_end; ++t)
+    queries.push_back(beliefs.query({0, t}));
+  const auto one = belief::beliefs_of(queries, stub, *table_, 1);
+  const auto many = belief::beliefs_of(queries, stub, *table_, 3);
+  EXPECT_EQ(calls, 2);
+  int modelled = 0;
+  for (size_t i = 0; i < queries.size(); ++i) {
+    ASSERT_EQ(one[i] != nullptr, queries[i].modelled());
+    ASSERT_EQ(many[i] != nullptr, queries[i].modelled());
+    if (!one[i]) continue;
+    ++modelled;
+    EXPECT_EQ(one[i]->log_z(), many[i]->log_z());
+  }
+  EXPECT_GE(modelled, 2);
 }
