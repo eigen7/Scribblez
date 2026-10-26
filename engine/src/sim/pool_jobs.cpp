@@ -19,23 +19,28 @@ std::vector<Rack> belief_leaves(const belief::LeaveSampler& belief, uint64_t see
   return out;
 }
 
+PoolJob position_job(const SimPosition& pos, const std::vector<Move>& moves, uint64_t seed,
+                     const belief::LeaveSampler* leave, const Dictionary& dict, int rollouts) {
+  PoolJob job;
+  job.group = make_rollout_group(pos.board, pos.rack, seed);
+  if (leave) job.group.opp_leaves = belief_leaves(*leave, seed, rollouts);
+  job.record.moves = moves;
+  Board board = pos.board;
+  board.ensure_movegen_caches(dict);
+  for (const Move& m : moves) {
+    job.starts.push_back(make_rollout_start(board, pos.rack, pos.scores[pos.mover],
+                                            pos.scores[1 - pos.mover], m, /*group=*/0));
+  }
+  return job;
+}
+
 PoolJob make_pool_job(const SimmedPosition& r, const belief::LeaveSampler* leave,
                       const Dictionary& dict, int rollouts) {
-  const SimPosition& p = r.position;
-  PoolJob job;
-  job.group = make_rollout_group(p.board, p.rack, r.base_seed);
-  if (leave) job.group.opp_leaves = belief_leaves(*leave, r.base_seed, rollouts);
+  PoolJob job = position_job(r.position, r.candidates.moves, r.base_seed, leave, dict, rollouts);
   job.record.at = r.pos;
   job.record.num_legal_moves = r.candidates.num_legal_moves;
-  job.record.moves = r.candidates.moves;
   job.record.equity_ranks = r.candidates.equity_ranks;
   job.record.opp_rack = belief::summarize_opp_rack(job.group.pool, leave);
-  Board board = p.board;
-  board.ensure_movegen_caches(dict);
-  for (const Move& m : r.candidates.moves) {
-    job.starts.push_back(
-      make_rollout_start(board, p.rack, p.scores[p.mover], p.scores[1 - p.mover], m, /*group=*/0));
-  }
   return job;
 }
 

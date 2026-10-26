@@ -24,6 +24,12 @@ class Dictionary;
 // rollout's seed `seed + i`, for every rollout index below `rollouts`.
 std::vector<Rack> belief_leaves(const belief::LeaveSampler& belief, uint64_t seed, int rollouts);
 
+// A labeler job for the mover of `pos` choosing among `moves`: the group
+// (the pool, `seed`, and rollout i's opponent leave from `leave`, or none for
+// a null `leave`) and each move applied. The record holds only the moves.
+PoolJob position_job(const SimPosition& pos, const std::vector<Move>& moves, uint64_t seed,
+                     const belief::LeaveSampler* leave, const Dictionary& dict, int rollouts);
+
 // The labeler's job for a selected position: its record but the labels, its
 // group (pool, seed, per-rollout opponent leaves from `leave`, or none for a
 // null `leave`) and its candidates applied.
