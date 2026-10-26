@@ -44,7 +44,7 @@ char* read_whole_file(const std::string& path, int64_t expected_size) {
 struct TaggedRow {
   int file_idx;
   int64_t local_pos;
-  uint8_t flip;
+  RowAugment augment;
   int output_idx;
 };
 
@@ -524,7 +524,7 @@ void DataLoader::WorkerThread::do_work() {
   for (size_t i = 0; i < unit_.local_positions.size(); ++i) {
     GameTurn game_turn = file->sample_to_game_turn(unit_.local_positions[i]);
     decoder_.decode_one(buf, file->path(), game_turn.game_idx, game_turn.turn_idx,
-                        unit_.flips[i] != 0, config_.post_move,
+                        unit_.augments[i], config_.post_move,
                         /*output_row=*/unit_.output_indices[i], output_, file->forgone());
   }
 }
@@ -581,7 +581,7 @@ void DataLoader::SamplingManager::build_epoch(const std::vector<DataFile*>& file
   std::shuffle(order_.begin(), order_.end(), rng);
 
   total_positions_ = order_.size();
-  build_flips(config);
+  build_augments(config);
 }
 
 void DataLoader::SamplingManager::collect_full_order(const std::vector<DataFile*>& files) {
@@ -628,16 +628,18 @@ void DataLoader::SamplingManager::append_game_turns(int file_idx, int64_t game, 
   }
 }
 
-void DataLoader::SamplingManager::build_flips(const EpochConfig& config) {
-  flips_.resize(size_t(total_positions_));
+void DataLoader::SamplingManager::build_augments(const EpochConfig& config) {
+  augments_.assign(size_t(total_positions_), RowAugment{});
+  // Separate streams, so a fraction does not move the transposes.
   if (config.apply_symmetry) {
     std::mt19937_64 flip_rng(config.seed ^ 0xDEADBEEFCAFEF00DULL);
     std::bernoulli_distribution coin(0.5);
-    for (size_t i = 0; i < flips_.size(); ++i) {
-      flips_[i] = coin(flip_rng) ? 1u : 0u;
-    }
-  } else {
-    std::fill(flips_.begin(), flips_.end(), 0u);
+    for (RowAugment& a : augments_) a.transpose = coin(flip_rng);
+  }
+  if (config.hide_private_fraction > 0) {
+    std::mt19937_64 hide_rng(config.seed ^ 0x51DE5EC2E7ULL);
+    std::bernoulli_distribution coin(config.hide_private_fraction);
+    for (RowAugment& a : augments_) a.hide_private = coin(hide_rng);
   }
 }
 
@@ -654,7 +656,7 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
   std::vector<TaggedRow> rows(n_rows);
   for (int i = 0; i < n_rows; ++i) {
     const auto& ep = order_[batch_start + i];
-    rows[i] = {ep.file_idx, ep.local_pos, flips_[batch_start + i], i};
+    rows[i] = {ep.file_idx, ep.local_pos, augments_[batch_start + i], i};
   }
   std::sort(rows.begin(), rows.end(), by_file_idx);
 
@@ -665,7 +667,7 @@ int DataLoader::SamplingManager::next_batch(std::deque<WorkUnit>& work_units,
     unit.file = files[fi];
     while (i < n_rows && rows[i].file_idx == fi) {
       unit.local_positions.push_back(rows[i].local_pos);
-      unit.flips.push_back(rows[i].flip);
+      unit.augments.push_back(rows[i].augment);
       unit.output_indices.push_back(rows[i].output_idx);
       ++i;
     }

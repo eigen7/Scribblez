@@ -357,8 +357,9 @@ have none.
   `τ`. A rule from the current pool would be wrong after the opponent
   exchanged a tile the observer later drew.
 - **Encoding:** per slot and tile kind, `[applies, margin / 100]`, zero when
-  it does not apply. With the slots and the exchange counts, the row has 453
-  scalars, and `kLeaveInferenceFormatVersion` is 3.
+  it does not apply. With the slots, the exchange counts and the hidden-history
+  indicator ([deep_bot.md](deep_bot.md#beliefs)'s "Bob's private past is
+  hidden"), the row has 454 scalars, and `kLeaveInferenceFormatVersion` is 4.
 - **Generation:** the workload's generators run `forgone_play_tool` over each
   chunk before delivering it, and the trainer over its held-out games.
 

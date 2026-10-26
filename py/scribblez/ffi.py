@@ -166,7 +166,8 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int64),
         ctypes.POINTER(ctypes.c_int64),
         ctypes.c_int64,
-        ctypes.c_int,
+        ctypes.c_int,  # post_move
+        ctypes.c_int,  # hide_private
         ctypes.POINTER(ctypes.c_float),
     ]
 
@@ -387,6 +388,7 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_uint64,
         ctypes.c_int,
         ctypes.c_int,
+        ctypes.c_double,  # hide_private_fraction
     ]
 
     lib.scribblez_dl_load_batch.restype = ctypes.c_int
@@ -567,6 +569,7 @@ def decode_rows(
     turn_idx: np.ndarray,
     post_move: bool = True,
     task: str = "position_eval",
+    hide_private: bool = False,
 ) -> np.ndarray:
     """Decode specific training rows of `task` from one .slog, addressed by
     (game_idx[j], turn_idx[j]).
@@ -575,6 +578,8 @@ def decode_rows(
     augmentation: (n, task_row_floats(task)) float32. For consumers that pair
     rows with per-position data such as .sobs sim observations. The
     max-move-per-lane and leave inference tasks are always pre-move.
+    `hide_private` hides a leave inference row's observer's private history
+    (the engine's LeaveHistory::hide_private).
     """
     games = np.ascontiguousarray(game_idx, dtype=np.int64)
     turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
@@ -589,6 +594,7 @@ def decode_rows(
         turns.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
         len(games),
         int(post_move),
+        int(hide_private),
         out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
     )
     if rc != 0:
@@ -1457,9 +1463,11 @@ class NativeDataLoader:
         seed: int = 42,
         turns_per_game: int = 0,
         epoch_index: int = 0,
+        hide_private_fraction: float = 0.0,
     ) -> int:
         """Begin an epoch; returns the number of complete batches. See
-        SlogDataset.iter_batches for turns_per_game and epoch_index."""
+        SlogDataset.iter_batches for turns_per_game, epoch_index and
+        hide_private_fraction."""
         self._batch_size = batch_size
         return self._lib.scribblez_dl_epoch_start(
             self._handle,
@@ -1469,6 +1477,7 @@ class NativeDataLoader:
             seed,
             turns_per_game,
             epoch_index,
+            hide_private_fraction,
         )
 
     def load_batch(self) -> np.ndarray | None:

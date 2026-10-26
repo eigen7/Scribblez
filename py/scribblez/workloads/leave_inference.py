@@ -18,7 +18,7 @@ from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIM
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.leave_inference.heads import HEAD_TILTED, HEADS
-from scribblez.params import param
+from scribblez.params import ParamsError, param
 from scribblez.workloads.base import RoleSpec, WorkerContext, WorkloadSpec
 from scribblez.workloads.position_eval import TRAINER_STATS
 from scribblez.workloads.selfplay_gen import (
@@ -73,6 +73,12 @@ class LeaveInferenceParams:
     adam_beta2: float = param(0.999, "Adam's second-moment decay rate (beta2)")
     grad_clip: float = param(0.0, "clip each step's gradient to this global norm; 0 = no clipping")
     # Model.
+    hide_private_fraction: float = param(
+        0.25,
+        "fraction of training rows whose observer's private history (their exchanges and past "
+        "racks) is hidden, as DeepBot's model of its opponent encodes the opponent's view; "
+        "no effect when public, whose rows withhold it anyway",
+    )
     public: bool = param(
         False,
         "infer the leave from public information alone: the input withholds the observer's "
@@ -88,6 +94,12 @@ class LeaveInferenceParams:
         "that measures what the compact head gives up",
         choices=HEADS,
     )
+
+    def __post_init__(self):
+        if not 0 <= self.hide_private_fraction <= 1:
+            raise ParamsError(
+                f"hide_private_fraction must be in [0, 1], got {self.hide_private_fraction}"
+            )
 
 
 # The sidecar every chunk carries: the forgone plays its rows read.

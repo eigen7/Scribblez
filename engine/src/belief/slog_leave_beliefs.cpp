@@ -36,7 +36,7 @@ LeaveQuery SlogLeaveBeliefs::query(const binlog::GamePositionIndex& at) const {
   const InputEncodingSpec spec{&dict_};
   BlockDecoder decoder(spec, DecodeTask::kLeaveInference);
   std::vector<float> row(BlockDecoder::row_floats_for(DecodeTask::kLeaveInference, spec));
-  decoder.decode_one(slog_.data(), slog_path_, at.game_idx, at.turn_idx, /*transpose=*/false,
+  decoder.decode_one(slog_.data(), slog_path_, at.game_idx, at.turn_idx, /*augment=*/{},
                      /*post_move=*/false, /*output_row=*/0, row.data(), &forgone_);
   LeaveQuery q;
   read_target(row.data() + LeaveInferenceTask::kInputFloats, &q);
@@ -48,10 +48,7 @@ LeaveQuery SlogLeaveBeliefs::query(const binlog::GamePositionIndex& at) const {
 std::shared_ptr<const LeaveSampler> SlogLeaveBeliefs::belief(
   const binlog::GamePositionIndex& at) const {
   const LeaveQuery q = query(at);
-  if (!q.modelled()) return nullptr;
-  LeaveParams params;
-  predict_(q.input.data(), 1, &params);
-  return std::make_shared<const LeaveSampler>(params, q.length, q.leave_pool, table_);
+  return beliefs_of({&q, 1}, predict_, table_)[0];
 }
 
 }  // namespace scribblez::belief

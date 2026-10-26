@@ -1,15 +1,22 @@
 // Sims under a leave belief: SimRunner seats rollout i's opponent leave from
 // the belief, the same for every candidate (sim/sim_runner.h); and
 // SlogLeaveBeliefs builds a position's belief from its training row, only
-// where the leave is modelled (belief/slog_leave_beliefs.h). Reads HastyBot's
-// NWL23 leave values and skips without the Macondo checkout.
+// where the leave is modelled (belief/slog_leave_beliefs.h); and the
+// opponent's view of a candidate (belief/reply_query.h) is the training row with
+// the observer's private history hidden. Reads HastyBot's NWL23 leave values
+// and skips without the Macondo checkout.
 
 #include "agent/agent.h"
 #include "belief/leave_params.h"
 #include "belief/leave_sampler.h"
+#include "belief/reply_query.h"
 #include "belief/slog_leave_beliefs.h"
 #include "data/binary_log.h"
+#include "data/block_decoder.h"
 #include "data/forgone_play_log.h"
+#include "encoding/input_encoder.h"
+#include "encoding/leave_inference_input_encoder.h"
+#include "encoding/position_encoder.h"
 #include "game/board.h"
 #include "game/game.h"
 #include "game/rack.h"
@@ -241,3 +248,73 @@ TEST(LeaveQuery, NotModelledWithTheBagEmpty) {
 }
 
 }  // namespace
+
+namespace {
+
+// Turn `turn`'s leave inference training row of game 0, input then target,
+// with the observer's private history hidden.
+std::vector<float> hidden_training_row(const std::vector<char>& slog, const std::string& path,
+                                       const ForgoneSidecar& forgone, const Dictionary& dict,
+                                       int turn) {
+  const InputEncodingSpec spec{&dict};
+  const auto task = binlog::DecodeTask::kLeaveInference;
+  binlog::BlockDecoder decoder(spec, task);
+  std::vector<float> row(binlog::BlockDecoder::row_floats_for(task, spec));
+  decoder.decode_one(slog.data(), path, 0, turn, {.hide_private = true}, /*post_move=*/false,
+                     /*output_row=*/0, row.data(), &forgone);
+  return row;
+}
+
+}  // namespace
+
+// At turn t, the candidate the game played and the opponent's real rack give
+// exactly the opponent's training row at t + 1, its private history hidden.
+TEST_F(LeaveBeliefSimsTest, ReplyQueryIsTheOpponentsRowWithItsPrivateHistoryHidden) {
+  const std::string path = write_game();
+  const std::vector<char> slog = util::read_file_bytes(path);
+  const ForgoneSidecar forgone(forgone_path_of(path), slog.data(), dict_.content_hash());
+  std::vector<TurnRecord> scratch;
+  GameLog g = binlog::make_game_view(slog.data(), 0, scratch, nullptr);
+  binlog::complete_turn_records(g, g.num_records, scratch);
+  binlog::PositionEncoder encoder(InputEncodingSpec{&dict_});
+  constexpr int kInput = LeaveInferenceInputEncoder::kInputFloats;
+  int checked = 0;
+  for (int t = 1; t + 1 < g.num_records; ++t) {
+    const int mover = encoder.replay_to_sampled(g, t, /*post_move=*/false);
+    const std::vector<belief::ChooserMove> earlier =
+      belief::chooser_moves_from_replay(g, t, forgone.game(0), dict_);
+    const belief::ReplyPosition pos{encoder.enc().board(),      encoder.rack(mover),
+                                    encoder.enc().score(mover), encoder.enc().score(1 - mover),
+                                    encoder.bag_size(),         earlier};
+    const LeaveQuery q =
+      belief::ReplyView(pos, g.records[t].move, dict_).query(encoder.rack(1 - mover));
+    const std::vector<float> row = hidden_training_row(slog, path, forgone, dict_, t + 1);
+    const float* target = row.data() + kInput;
+    ASSERT_EQ(q.input, std::vector<float>(row.begin(), row.begin() + kInput)) << "turn " << t;
+    EXPECT_EQ(q.length, int(target[OppLeaveTarget::kLengthOffset])) << "turn " << t;
+    EXPECT_EQ(int(q.cause), int(target[OppLeaveTarget::kCauseOffset])) << "turn " << t;
+    EXPECT_EQ(q.bag, int(target[OppLeaveTarget::kBagOffset])) << "turn " << t;
+    for (Tile k = Tile::of(0); k < TILE_KINDS; ++k)
+      EXPECT_EQ(q.leave_pool.count(k), int(target[OppLeaveTarget::kPoolOffset + k.index()]));
+    checked += q.modelled();
+  }
+  EXPECT_GE(checked, 2);  // the rows compare at every turn; these are the modelled ones
+}
+
+// The earlier moves are the mover's, two turns apart, most recent first.
+TEST_F(LeaveBeliefSimsTest, ChooserMovesAreTheMoversOwnMostRecentFirst) {
+  const std::string path = write_game();
+  const std::vector<char> slog = util::read_file_bytes(path);
+  const ForgoneSidecar forgone(forgone_path_of(path), slog.data(), dict_.content_hash());
+  std::vector<TurnRecord> scratch;
+  GameLog g = binlog::make_game_view(slog.data(), 0, scratch, nullptr);
+  binlog::complete_turn_records(g, g.num_records, scratch);
+  ASSERT_GE(g.num_records, 6);
+  EXPECT_TRUE(belief::chooser_moves_from_replay(g, 1, forgone.game(0), dict_).empty());
+  const std::vector<belief::ChooserMove> m =
+    belief::chooser_moves_from_replay(g, 5, forgone.game(0), dict_);
+  ASSERT_EQ(m.size(), 2u);
+  EXPECT_EQ(m[0].move, g.records[3].move);
+  EXPECT_EQ(m[1].move, g.records[1].move);
+  EXPECT_EQ(m[1].bag_before, 100 - 14 - g.records[0].move.num_glyphs());
+}

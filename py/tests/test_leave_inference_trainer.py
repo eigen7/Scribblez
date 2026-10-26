@@ -185,6 +185,35 @@ def test_holdout_decodes_the_runs_view(monkeypatch, public):
     assert tasks == ["public_leave_inference" if public else "leave_inference"]
 
 
+@pytest.mark.parametrize("hide", [False, True])
+def test_holdout_hides_every_rows_private_history_or_none(monkeypatch, hide):
+    fractions = []
+
+    class FakeDataset:
+        def __init__(self, root, task, hide_private_fraction, **kwargs):
+            fractions.append(hide_private_fraction)
+
+        def iter_batches(self, *args, **kwargs):
+            return iter(())
+
+    monkeypatch.setattr(trainer, "SlogDataset", FakeDataset)
+    held = holdout.HoldoutSet(dir=Path("unused"), slogs=(), content_hash="")
+    params = leave_inference.LeaveInferenceParams()
+    cpu = type("Cpu", (), {"dataloader_workers": 0})()
+    trainer._holdout_batches(held, params, cpu, hide_private=hide)
+    assert fractions == [1.0 if hide else 0.0]
+
+
+def test_hidden_metrics_report_the_gap_to_the_own_view():
+    own = {"eval_nll": 5.0, "eval_nll_vs_uniform": -0.4, "eval_value_bias": 0.1}
+    hidden = {"eval_nll": 5.25, "eval_nll_vs_uniform": -0.15, "eval_value_bias": 0.3}
+    assert trainer.hidden_metrics(own, hidden) == {
+        "eval_hidden_nll": 5.25,
+        "eval_hidden_nll_vs_uniform": -0.15,
+        "eval_hidden_gap": 0.25,
+    }
+
+
 class _OrderRecorder:
     """Stands in for the output sink and the generation record, logging the
     order of their deliveries."""
