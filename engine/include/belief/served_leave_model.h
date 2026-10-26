@@ -10,6 +10,7 @@
 #include "lexicon/leave_values.h"
 #include "nn/onnx_metadata.h"
 
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -46,6 +47,14 @@ struct ServedLeaveTable {
   LeaveValueArrays table;
   ServedLeaveModel served;
 
+  // The process-wide table for this model file and these leave values, shared
+  // by every caller that asks while one holds it (nn::SharedRegistry): it owns
+  // a TensorRT engine and the table's arrays. Agents use this, not the
+  // constructor, so that game threads share one copy.
+  static std::shared_ptr<ServedLeaveTable> shared(const std::string& onnx_path,
+                                                  const LeaveValues& values);
+
+  // Factory-internal, and for a tool that serves one table per process.
   ServedLeaveTable(const std::string& onnx_path, const LeaveValues& values)
       : table(values), served(onnx_path, values.content_hash()) {}
 };

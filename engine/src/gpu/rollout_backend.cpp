@@ -2,14 +2,35 @@
 
 #include "gpu/gpu_rollout_values.h"
 #include "lexicon/hasty_equity.h"
+#include "nn/shared_registry.h"
 #include "nn/trt_util.h"
 #include "util/exception.h"
+
+#include <mutex>
+#include <utility>
 
 namespace scribblez {
 
 namespace {
 
 constexpr const char* kLeafFormatKey = "leaf_eval_format_version";
+
+// Serializes a backend's run(): GpuRolloutValues is not thread-safe, and one
+// DeepBot turn already fills a launch with ~10K rollouts, so concurrent games
+// queue rather than batch together.
+class LockedRolloutValues : public RolloutValues {
+ public:
+  explicit LockedRolloutValues(std::unique_ptr<RolloutValues> inner) : inner_(std::move(inner)) {}
+
+  std::vector<RolloutOutcome> run(const RolloutBatch& batch) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return inner_->run(batch);
+  }
+
+ private:
+  std::unique_ptr<RolloutValues> inner_;
+  std::mutex mutex_;
+};
 
 }  // namespace
 
@@ -52,6 +73,15 @@ std::unique_ptr<RolloutValues> RolloutBackend::make(const Dictionary& dict, int 
     GpuRolloutValues::Params{.leaf_onnx = leaf_model,
                              .precision = nn::parse_precision(leaf_precision),
                              .leaf_rows = leaf_rows});
+}
+
+std::shared_ptr<RolloutValues> RolloutBackend::shared(const Dictionary& dict, int threads) const {
+  // Only the cpu backend's behavior depends on `threads`.
+  using Key = std::pair<RolloutBackend, int>;
+  static nn::SharedRegistry<Key, RolloutValues> registry;
+  return registry.get_or_create(Key{*this, gpu() ? 0 : threads}, [&] {
+    return std::make_shared<LockedRolloutValues>(make(dict, threads));
+  });
 }
 
 }  // namespace scribblez

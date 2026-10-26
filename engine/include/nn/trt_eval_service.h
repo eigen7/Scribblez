@@ -65,6 +65,9 @@ class TrtEvalService : public EvalService<Spec> {
 // naming a synthetic model (synthetic_eval_service.h) gets that test stand-in
 // instead of a TensorRT engine; so does everything served through here, the
 // shared create() and the leaf service below included.
+//
+// Factory-internal: agents get a service from EvalService::create(), which
+// shares one engine across the run's threads.
 template <typename Spec>
 std::unique_ptr<EvalService<Spec>> make_loaded_service(const NeuralNetParams<Spec>& params);
 

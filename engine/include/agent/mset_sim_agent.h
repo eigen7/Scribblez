@@ -66,7 +66,7 @@ class MsetSimAgent : public Agent {
 
   // Takes already-loaded services (real or scripted stubs). `leaf_service` is
   // the rollout leaf evaluator; give it iff params.sim_horizon is set.
-  MsetSimAgent(const Params& params, std::unique_ptr<nn::MoveSetEvalService> service,
+  MsetSimAgent(const Params& params, std::shared_ptr<nn::MoveSetEvalService> service,
                std::shared_ptr<nn::PositionEvalService> leaf_service = nullptr);
 
   MoveDecision make_move(const MoveRequest& req) override;
@@ -108,7 +108,7 @@ class MsetSimAgent : public Agent {
   EvalObjective rank_objective_;
   SimObjective sim_objective_;
   uint64_t seed_;
-  std::unique_ptr<nn::MoveSetEvalService> service_;
+  std::shared_ptr<nn::MoveSetEvalService> service_;
   InputEncodingSpec spec_;
   GameStateEncoder encoder_;  // mirrors the live game, both seats' moves
   std::shared_ptr<nn::PositionEvalService> leaf_service_;  // null = terminal sims

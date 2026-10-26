@@ -53,7 +53,7 @@ class EvalService : public ServedModelInputs {
   // A loaded service for `params`, shared: while an instance for equal params
   // is alive, every call returns it. The game threads of a run thus share one
   // engine and one execution context, whose activation memory would otherwise
-  // be paid once per thread. Only the position family defines this (below).
+  // be paid once per thread. Both families define this (below).
   static std::shared_ptr<EvalService> create(const NeuralNetParams<Spec>& params);
 
   // Score `batch`. head_out holds one destination per Outputs entry, in list
@@ -78,12 +78,15 @@ class EvalService : public ServedModelInputs {
 using PositionEvalService = EvalService<PositionEvaluationSpec>;
 using MoveSetEvalService = EvalService<MoveSetEvaluationSpec>;
 
-// Defined in trt_eval_service.cpp, where it also wraps the shared engine in
-// BatchingPositionEvalService. Declared here so callers see the explicit
+// Defined in trt_eval_service.cpp, where the position one also wraps the shared
+// engine in BatchingPositionEvalService. Declared here so callers see the explicit
 // specialization rather than implicitly instantiating the primary template.
 template <>
 std::shared_ptr<PositionEvalService> PositionEvalService::create(
   const NeuralNetParams<PositionEvaluationSpec>& params);
+template <>
+std::shared_ptr<MoveSetEvalService> MoveSetEvalService::create(
+  const NeuralNetParams<MoveSetEvaluationSpec>& params);
 
 }  // namespace nn
 }  // namespace scribblez
