@@ -82,6 +82,13 @@ std::vector<double> values_after_replies(const AliceTurn& turn, const std::vecto
                                          RolloutValues& values, int sims, const Dictionary& dict,
                                          uint64_t seed);
 
+// Alice's full rack in one of her sims after Bob's reply, Bob holding
+// `bob_rack` after her candidate `applied`: her leave and her replenishment,
+// drawn from the bag as she found it. That bag holds neither her leave nor the
+// tiles of an exchange, which went back only after she drew; Bob's draw after
+// his reply, made by the sim, can take them.
+Rack alice_rack_after_reply(const RolloutStart& applied, const Rack& bob_rack, uint64_t seed);
+
 // The racks Alice's rollouts seat for Bob: rollout i's for i < count, from the
 // group her candidates share (any of `starts`, all in `group`).
 std::vector<Rack> bob_racks(const RolloutGroup& group, const RolloutStart& start, int count);

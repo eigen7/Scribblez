@@ -5,6 +5,7 @@
 // from his own equity top N; and --subtree-dump writes a line per turn. Skips
 // without the NWL23 lexicon and HastyBot's leave values.
 
+#include "agent/bob_subtree.h"
 #include "agent/deep_bot.h"
 #include "agent/hasty_bot.h"
 #include "belief/leave_params.h"
@@ -153,4 +154,24 @@ TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
   }
   EXPECT_GT(lines, 5);
   std::filesystem::remove_all(dir);
+}
+
+// Alice's replenishment in her sims after Bob's reply comes from the bag as
+// she found it: an exchange's tiles went back only after she drew. Here she
+// exchanges the only J, K, Q, X and Z, so no rack of hers may hold one.
+TEST(DeepBot, AliceNeverRedrawsTheTilesSheExchanged) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  Board board;
+  board.ensure_movegen_caches(nwl23());
+  const Rack alice = Rack::from_string("JKQXZAE");
+  const RolloutStart exchanged = make_rollout_start(
+    board, alice, 0, 0, Move::exchange(Rack::from_string("JKQXZ").counts()), /*group=*/0);
+  const Rack bob = Rack::from_string("BCDFGHI");
+  for (uint64_t seed = 0; seed < 200; ++seed) {
+    const TileCounts rack = alice_rack_after_reply(exchanged, bob, seed).counts();
+    ASSERT_EQ(rack.size(), RACK_SIZE);
+    EXPECT_GE(rack.count(Tile::from_char('A')), 1);
+    EXPECT_GE(rack.count(Tile::from_char('E')), 1);
+    for (const char c : std::string("JKQXZ")) EXPECT_EQ(rack.count(Tile::from_char(c)), 0) << c;
+  }
 }

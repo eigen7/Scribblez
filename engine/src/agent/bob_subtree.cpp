@@ -3,10 +3,12 @@
 #include "agent/agent.h"
 #include "belief/leave_query.h"
 #include "belief/leave_sampler.h"
+#include "game/bag.h"
 #include "lexicon/dictionary.h"
 #include "sim/pool_jobs.h"
 #include "sim/pool_labeler.h"
 #include "sim/sim_runner.h"
+#include "util/assert.h"
 #include "util/math.h"
 #include "util/work_pool.h"
 
@@ -140,19 +142,32 @@ CandidateSubtrees candidate_subtrees(const AliceTurn& turn, size_t c, const Beli
   return out;
 }
 
-// Alice's sims of (c, rack i) after Bob's reply: Bob has just moved, her leave
-// is known, and the sims draw her replenishment. An exchange's tiles went back
-// to the bag after her draw, but here they sit in the pool her draw comes from.
+// Alice's sims of (c, rack i) after Bob's reply: Bob has just moved, and each
+// sim seats her full rack, so the sim draws only Bob's replenishment.
 PoolJob after_reply_job(const AliceTurn& turn, size_t c, size_t i, const Move& reply, int sims,
                         const Dictionary& dict, uint64_t seed) {
   const RolloutStart& applied = turn.applied[c];
-  PoolJob job = position_job(bob_position(applied, turn.bob_racks[i]), {reply},
-                             rack_seed(seed, kAfterReplyDomain, i), nullptr, dict, sims);
-  job.group.opp_leaves.assign(size_t(sims), applied.leave);
+  const uint64_t rack_draws = rack_seed(seed, kAfterReplyDomain, i);
+  PoolJob job = position_job(bob_position(applied, turn.bob_racks[i]), {reply}, rack_draws, nullptr,
+                             dict, sims);
+  for (int k = 0; k < sims; ++k) {
+    job.group.opp_leaves.push_back(alice_rack_after_reply(
+      applied, turn.bob_racks[i], util::splitmix64(rack_draws ^ uint64_t(k))));
+  }
   return job;
 }
 
 }  // namespace
+
+Rack alice_rack_after_reply(const RolloutStart& applied, const Rack& bob_rack, uint64_t seed) {
+  TileCounts bag = applied.board.unseen_tiles(bob_rack);
+  const bool held = bag.remove(applied.leave.counts()) && bag.remove(applied.returned.counts());
+  DEBUG_ASSERT(held, "Alice's leave and exchanged tiles are unseen to Bob");
+  Bag draws(seed, bag);
+  Rack rack = applied.leave;
+  while (rack.size() < RACK_SIZE && draws.size() > 0) rack.add(draws.draw());
+  return rack;
+}
 
 std::vector<Rack> bob_racks(const RolloutGroup& group, const RolloutStart& start, int count) {
   RolloutBatch batch{.groups = {group}, .starts = {start}, .tasks = {}};
