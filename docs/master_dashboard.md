@@ -275,7 +275,9 @@ nothing queued for it. What a lease costs goes to its tag's spend.
 A tag with no slots can be **enqueued** (Enqueue on its Workers card, or
 Create & enqueue on the new-tag form); the queue is listed on the Machine pool
 page, in order, with ↑/↓ and Dequeue. Only workloads with a layout are
-queueable (position_eval, transfer_test and transfer_reader so far). Every reconcile pass first matches queued
+queueable (position_eval, deep_bot_leaf_eval, transfer_test, transfer_reader
+and match_arms so far). A match_arms tag's GPU need depends on its arms, so it
+is enqueued with a memory override. Every reconcile pass first matches queued
 tags to free pool machines, in queue order: an earlier tag may move to another
 machine it fits when that lets a later one start, but never loses its place.
 A placed tag gets its workload's layout as slots (for position_eval: a
