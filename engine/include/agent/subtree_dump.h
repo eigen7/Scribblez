@@ -11,8 +11,8 @@
 //     the racks drew;
 //   - how often a second run of the subtrees, on fresh samples and draws, picks
 //     the same reply: β's stability in R_B and the seed;
-//   - Alice's value of each candidate under each reply model, and each model's
-//     pick.
+//   - Alice's value of each candidate under each reply model (null for the
+//     subtree's where the hasty first pass pruned it), and each model's pick.
 
 #include "agent/bob_subtree.h"
 #include "game/move.h"
@@ -26,7 +26,7 @@ struct SubtreeTurn {
   int ply = 0;
   int bag = 0;
   const AliceTurn* turn = nullptr;
-  std::vector<bool> searched;  // by candidate: Bob's subtree ran (the bag did not empty)
+  std::vector<bool> searched;  // by candidate: Bob's subtree ran
   std::vector<double> subtree_values;
   std::vector<double> hasty_values;
   const std::vector<std::vector<BobReply>>* replies = nullptr;

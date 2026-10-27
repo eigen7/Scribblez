@@ -24,7 +24,9 @@
 #include "sim/hasty_rollout_task.h"
 #include "sim/rollout_values.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace scribblez {
@@ -88,6 +90,12 @@ std::vector<double> values_after_replies(const AliceTurn& turn, const std::vecto
 // tiles of an exchange, which went back only after she drew; Bob's draw after
 // his reply, made by the sim, can take them.
 Rack alice_rack_after_reply(const RolloutStart& applied, const Rack& bob_rack, uint64_t seed);
+
+// The value of a candidate Alice did not search: it has none.
+inline constexpr double kPruned = std::numeric_limits<double>::quiet_NaN();
+
+// The index of the largest of `values`, skipping kPruned.
+size_t best_candidate(const std::vector<double>& values);
 
 // The racks Alice's rollouts seat for Bob: rollout i's for i < count, from the
 // group her candidates share (any of `starts`, all in `group`).

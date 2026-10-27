@@ -64,6 +64,9 @@ class DeepBot : public Agent {
     bool race = true;  // stop a clearly beaten candidate between rounds
     // subtree: R_A racks for Bob, each with Bob's subtree and Alice's sims.
     int bob_racks = 100;
+    // How many of Alice's candidates, the best by a first pass of hasty sims,
+    // get Bob's subtree; 0: all.
+    int subtree_candidates = 8;
     int sims_per_rack = 4;
     SubtreeParams subtree{};
     // A file to append a JSON line per turn to (agent/subtree_dump.h); costs
@@ -112,13 +115,18 @@ class DeepBot : public Agent {
                                       bool race) const;
   Move subtree_move(const MoveRequest& req, const std::vector<Move>& moves,
                     const belief::LeaveSampler* belief);
-  // Alice's value of each candidate: after Bob's subtree replies, or, for a
-  // candidate that empties the bag, from the hasty sims to the game's end.
+  // The candidates whose hasty first pass (`hasty`) ranks them among the best
+  // subtree_candidates that do not empty the bag, in candidate order.
+  std::vector<size_t> survivors(const std::vector<Move>& moves, const std::vector<PoolLabel>& hasty,
+                                int bag) const;
+  // Alice's value of each candidate: after Bob's subtree replies for the
+  // `searched`, the first pass's for a candidate that empties the bag (its
+  // hasty sims play the game to its end), and kPruned for the rest.
   std::vector<double> subtree_values(const MoveRequest& req, const AliceTurn& turn,
-                                     const belief::LeaveSampler* belief,
+                                     const std::vector<PoolLabel>& hasty,
                                      const std::vector<size_t>& searched,
                                      const std::vector<std::vector<BobReply>>& replies) const;
-  void dump_turn(const MoveRequest& req, const AliceTurn& turn, const belief::LeaveSampler* belief,
+  void dump_turn(const MoveRequest& req, const AliceTurn& turn, const std::vector<PoolLabel>& hasty,
                  const std::vector<size_t>& searched,
                  const std::vector<std::vector<BobReply>>& replies,
                  const std::vector<double>& values) const;

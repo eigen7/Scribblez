@@ -141,9 +141,9 @@ TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
     const boost::json::object turn = boost::json::parse(line).as_object();
     for (const boost::json::value& v : turn.at("candidates").as_array()) {
       const boost::json::object& c = v.as_object();
+      if (!c.at("searched").as_bool()) continue;
       const double value = c.at("subtree_value").as_double();
       EXPECT_TRUE(value >= 0.0 && value <= 1.0);
-      if (!c.at("searched").as_bool()) continue;
       const boost::json::object& r = c.at("replies").as_object();
       const boost::json::array& ranks = r.at("rank_hist").as_array();
       EXPECT_LE(ranks.size(), size_t(p.subtree.late_candidates));
@@ -153,6 +153,38 @@ TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
     }
   }
   EXPECT_GT(lines, 5);
+  std::filesystem::remove_all(dir);
+}
+
+// With --subtree-candidates 1, a first pass of hasty sims leaves one
+// candidate for Bob's subtree; the others have no subtree value, and the pick
+// is the searched one or one that empties the bag.
+TEST(DeepBot, OnlyTheFirstPassesBestGetBobsSubtree) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const auto dir = scribblez::testing::make_temp_dir("scribblez_test_subtree_halving");
+  DeepBot::Params p = small_params(8);
+  p.candidates = 3;
+  p.subtree_candidates = 1;
+  p.subtree_dump = (dir / "dump.jsonl").string();
+  DeepBot bot(p, cpu_backend());
+  play(bot);
+  std::ifstream in(p.subtree_dump);
+  int turns = 0;
+  for (std::string line; std::getline(in, line); ++turns) {
+    const boost::json::object turn = boost::json::parse(line).as_object();
+    const boost::json::array& candidates = turn.at("candidates").as_array();
+    int searched = 0;
+    for (const boost::json::value& v : candidates) {
+      const boost::json::object& c = v.as_object();
+      searched += c.at("searched").as_bool();
+      if (!c.at("searched").as_bool() && c.at("subtree_value").is_null()) continue;
+      EXPECT_TRUE(c.at("subtree_value").is_double());
+    }
+    EXPECT_LE(searched, 1);
+    const auto pick = size_t(turn.at("subtree_pick").as_int64());
+    EXPECT_FALSE(candidates[pick].as_object().at("subtree_value").is_null());
+  }
+  EXPECT_GT(turns, 5);
   std::filesystem::remove_all(dir);
 }
 

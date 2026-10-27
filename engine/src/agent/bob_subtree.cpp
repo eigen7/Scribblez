@@ -13,6 +13,7 @@
 #include "util/work_pool.h"
 
 #include <algorithm>
+#include <cmath>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -167,6 +168,13 @@ Rack alice_rack_after_reply(const RolloutStart& applied, const Rack& bob_rack, u
   Rack rack = applied.leave;
   while (rack.size() < RACK_SIZE && draws.size() > 0) rack.add(draws.draw());
   return rack;
+}
+
+size_t best_candidate(const std::vector<double>& values) {
+  size_t best = values.size();
+  for (size_t c = 0; c < values.size(); ++c)
+    if (!std::isnan(values[c]) && (best == values.size() || values[c] > values[best])) best = c;
+  return best;
 }
 
 std::vector<Rack> bob_racks(const RolloutGroup& group, const RolloutStart& start, int count) {

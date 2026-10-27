@@ -5,6 +5,7 @@
 #include <boost/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -17,8 +18,10 @@ namespace {
 
 constexpr size_t kTopReplies = 3;
 
-size_t argmax(const std::vector<double>& v) {
-  return size_t(std::max_element(v.begin(), v.end()) - v.begin());
+// A candidate's subtree value, null where Alice pruned it.
+json::value subtree_value(double v) {
+  if (std::isnan(v)) return nullptr;
+  return v;
 }
 
 // Bob's most frequent replies over the racks, most frequent first.
@@ -71,7 +74,7 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
   json::array candidates;
   for (size_t c = 0; c < turn.candidates.size(); ++c) {
     json::object o{{"move", describe_move(turn.candidates[c], turn.position.board)},
-                   {"subtree_value", t.subtree_values[c]},
+                   {"subtree_value", subtree_value(t.subtree_values[c])},
                    {"hasty_value", t.hasty_values[c]},
                    {"searched", bool(t.searched[c])}};
     if (t.searched[c])
@@ -81,8 +84,8 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
   const json::object out{{"ply", t.ply},
                          {"bag", t.bag},
                          {"bob_racks", turn.bob_racks.size()},
-                         {"subtree_pick", argmax(t.subtree_values)},
-                         {"hasty_pick", argmax(t.hasty_values)},
+                         {"subtree_pick", best_candidate(t.subtree_values)},
+                         {"hasty_pick", best_candidate(t.hasty_values)},
                          {"candidates", std::move(candidates)}};
   return json::serialize(out);
 }
