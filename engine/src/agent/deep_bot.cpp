@@ -51,6 +51,10 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "hasty: stop a candidate once it sits three paired standard errors below the leader")  //
     ("bob-racks", po::value<int>(&p.bob_racks)->default_value(p.bob_racks),
      "subtree: racks Alice samples for Bob, each with its own subtree")  //
+    ("subtree-candidates",
+     po::value<int>(&p.subtree_candidates)->default_value(p.subtree_candidates),
+     "subtree: how many candidates, the best by a first pass of hasty sims, get Bob's subtree; "
+     "0 = all")  //
     ("sims-per-rack", po::value<int>(&p.sims_per_rack)->default_value(p.sims_per_rack),
      "subtree: Alice's sims after Bob's reply at each rack, each drawing her replenishment")  //
     ("alice-racks", po::value<int>(&p.subtree.alice_racks)->default_value(p.subtree.alice_racks),
@@ -59,7 +63,9 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "subtree: Bob's candidates by static equity")  //
     ("bob-late-candidates",
      po::value<int>(&p.subtree.late_candidates)->default_value(p.subtree.late_candidates),
-     "subtree: Bob's candidates with --late-bag or fewer tiles in the bag")  //
+     "subtree: Bob's candidates with --bob-late-bag or fewer tiles in the bag")  //
+    ("bob-late-bag", po::value<int>(&p.subtree.late_bag)->default_value(p.subtree.late_bag),
+     "subtree: the bag size Bob sees from which --bob-late-candidates applies")  //
     ("bob-race", po::value<bool>(&p.subtree.race)->default_value(p.subtree.race),
      "subtree: stop Bob's clearly beaten candidates between rounds")  //
     ("subtree-dump", po::value<std::string>(&p.subtree_dump),
@@ -75,10 +81,6 @@ constexpr uint64_t kRerunSeed = 0x2E2D2E2D2E2D2E2DULL;
 // A candidate after which Alice's draw empties the bag.
 bool empties_bag(const Move& m, int bag) {
   return m.type() == MoveType::PLAY && m.num_glyphs() >= bag;
-}
-
-size_t argmax(const std::vector<double>& v) {
-  return size_t(std::max_element(v.begin(), v.end()) - v.begin());
 }
 
 // The labels of one job, run alone through `labeler`.
@@ -100,6 +102,10 @@ void validate(const DeepBot::Params& p) {
   if (p.bob_racks < 1 || p.sims_per_rack < 1 || p.subtree.alice_racks < 1)
     throw util::CleanException(
       "deepbot: --bob-racks, --sims-per-rack and --alice-racks must be >= 1");
+  if (!p.subtree_dump.empty() && p.reply != "subtree")
+    throw util::CleanException("deepbot: --subtree-dump needs --reply subtree");
+  if (p.subtree_candidates < 0)
+    throw util::CleanException("deepbot: --subtree-candidates must be >= 0");
   if (p.subtree.candidates < 1 || p.subtree.late_candidates < 1)
     throw util::CleanException("deepbot: --bob-candidates and --bob-late-candidates must be >= 1");
 }
@@ -114,6 +120,7 @@ DeepBot::DeepBot(const Params& params, Backend backend)
 void DeepBot::begin_game(const BeginGameRequest& /*req*/) {
   recorder_.begin_game();
   ply_ = 0;
+  ++games_;
 }
 
 void DeepBot::observe_move(const Move& move) {
@@ -177,44 +184,52 @@ Move DeepBot::subtree_move(const MoveRequest& req, const std::vector<Move>& move
                                        .bag = req.bag_size,
                                        .earlier = earlier};
   const AliceTurn turn{position, moves, root.starts, racks};
-  std::vector<size_t> searched;
-  for (size_t c = 0; c < moves.size(); ++c)
-    if (!empties_bag(moves[c], req.bag_size)) searched.push_back(c);
+  // The first pass: every candidate's hasty sims, on the same racks.
+  const std::vector<PoolLabel> hasty =
+    hasty_labels(req, moves, belief, params_.bob_racks, /*race=*/false);
+  const std::vector<size_t> searched = survivors(moves, hasty, req.bag_size);
   const auto replies = bob_replies(turn, searched, bob_belief_model(), *backend_.values,
                                    params_.subtree, req.dict, turn_seed());
-  const std::vector<double> values = subtree_values(req, turn, belief, searched, replies);
-  if (!params_.subtree_dump.empty()) dump_turn(req, turn, belief, searched, replies, values);
-  return moves[argmax(values)];
+  const std::vector<double> values = subtree_values(req, turn, hasty, searched, replies);
+  if (!params_.subtree_dump.empty()) dump_turn(req, turn, hasty, searched, replies, values);
+  return moves[best_candidate(values)];
+}
+
+std::vector<size_t> DeepBot::survivors(const std::vector<Move>& moves,
+                                       const std::vector<PoolLabel>& hasty, int bag) const {
+  std::vector<size_t> out;
+  for (size_t c = 0; c < moves.size(); ++c)
+    if (!empties_bag(moves[c], bag)) out.push_back(c);
+  const size_t keep =
+    params_.subtree_candidates == 0 ? out.size() : size_t(params_.subtree_candidates);
+  if (out.size() <= keep) return out;
+  std::stable_sort(out.begin(), out.end(),
+                   [&](size_t a, size_t b) { return hasty[a].win_prob > hasty[b].win_prob; });
+  out.resize(keep);
+  std::sort(out.begin(), out.end());
+  return out;
 }
 
 std::vector<double> DeepBot::subtree_values(
-  const MoveRequest& req, const AliceTurn& turn, const belief::LeaveSampler* belief,
+  const MoveRequest& req, const AliceTurn& turn, const std::vector<PoolLabel>& hasty,
   const std::vector<size_t>& searched, const std::vector<std::vector<BobReply>>& replies) const {
   std::vector<double> values = values_after_replies(turn, searched, replies, *backend_.values,
                                                     params_.sims_per_rack, req.dict, turn_seed());
-  std::vector<size_t> emptying;
-  std::vector<Move> to_end;
-  for (size_t c = 0; c < turn.candidates.size(); ++c) {
-    if (!empties_bag(turn.candidates[c], req.bag_size)) continue;
-    emptying.push_back(c);
-    to_end.push_back(turn.candidates[c]);
-  }
-  if (emptying.empty()) return values;
-  const std::vector<PoolLabel> labels =
-    hasty_labels(req, to_end, belief, params_.bob_racks, /*race=*/false);
-  for (size_t k = 0; k < emptying.size(); ++k) values[emptying[k]] = labels[k].win_prob;
+  for (size_t c = 0; c < turn.candidates.size(); ++c)
+    if (empties_bag(turn.candidates[c], req.bag_size)) values[c] = hasty[c].win_prob;
   return values;
 }
 
 void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn,
-                        const belief::LeaveSampler* belief, const std::vector<size_t>& searched,
+                        const std::vector<PoolLabel>& hasty, const std::vector<size_t>& searched,
                         const std::vector<std::vector<BobReply>>& replies,
                         const std::vector<double>& values) const {
-  const std::vector<PoolLabel> hasty =
-    hasty_labels(req, turn.candidates, belief, params_.bob_racks, /*race=*/false);
   const auto rerun = bob_replies(turn, searched, bob_belief_model(), *backend_.values,
                                  params_.subtree, req.dict, turn_seed() ^ kRerunSeed);
-  SubtreeTurn t{.ply = ply_,
+  SubtreeTurn t{.agent = name(),
+                .thread = params_.thread_id,
+                .game = games_,
+                .ply = ply_,
                 .bag = req.bag_size,
                 .turn = &turn,
                 .searched = std::vector<bool>(turn.candidates.size(), false),

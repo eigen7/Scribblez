@@ -294,15 +294,25 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
 enable_language(CUDA)
 set(CMAKE_CUDA_FLAGS_TEST "${CMAKE_CUDA_FLAGS_RELEASE}")
-add_library(scribblez_gpu_rollouts STATIC
+# The kernel and its host side, without TensorRT, so gpu_kernel_tests can link
+# it alone.
+add_library(scribblez_gpu_kernels STATIC
   src/gpu/rollout_kernel.cu
-  src/gpu/hasty_rollouts_gpu.cpp
-  src/gpu/gpu_rollout_values.cpp
-  src/gpu/rollout_backend.cpp)
-set_target_properties(scribblez_gpu_rollouts PROPERTIES
+  src/gpu/hasty_rollouts_gpu.cpp)
+set_target_properties(scribblez_gpu_kernels PROPERTIES
   INTERPROCEDURAL_OPTIMIZATION OFF
   CUDA_RUNTIME_LIBRARY Shared)
-target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_core scribblez_nn ${CUDA_CUDART})
+target_link_libraries(scribblez_gpu_kernels PUBLIC scribblez_core ${CUDA_CUDART})
+# The rollouts valued by the leaf network on the device.
+add_library(scribblez_gpu_rollouts STATIC
+  src/gpu/gpu_rollout_values.cpp
+  src/gpu/rollout_backend.cpp)
+set_target_properties(scribblez_gpu_rollouts PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_gpu_kernels scribblez_nn)
+# The kernel's checks against its CPU reference, for gpu_kernel_tests and
+# gpu_rollout_demo.
+add_library(scribblez_gpu_rollout_check STATIC src/gpu/rollout_check.cpp)
+target_link_libraries(scribblez_gpu_rollout_check PUBLIC scribblez_gpu_kernels)
 
 # The policy-set model's labeled pools on the GPU (docs/plans/deep_bot_v0.md).
 add_executable(policy_set_pool_tool apps/policy_set_pool_tool.cpp)
@@ -325,6 +335,7 @@ target_link_libraries(blind_spot_confirm_tool PRIVATE
 
 add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)
 target_link_libraries(gpu_rollout_demo PRIVATE
+  scribblez_gpu_rollout_check
   scribblez_gpu_rollouts
   scribblez_nn
   scribblez_core
@@ -432,10 +443,11 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # -j runs them side by side; choose a binary's shard count by its run time.
   # To run one case: `<binary> --gtest_filter=<Suite>.<Name>`.
   #
-  # Tests never use the GPU (see CLAUDE.md): the shards run with
-  # CUDA_VISIBLE_DEVICES empty, so a test that reaches for it fails rather than
-  # contending with the experiments and other agents' runs sharing the card.
-  # gpu_smoke below is the one exception.
+  # Tests never build a TensorRT plan (see CLAUDE.md). These binaries have no
+  # use for the GPU, so their shards run with CUDA_VISIBLE_DEVICES empty: a test
+  # that strays into CUDA (an engine falling through to TensorRT) fails at once
+  # rather than building a plan beside the experiments sharing the card.
+  # gpu_kernel_tests and gpu_smoke below see the GPU.
   function(add_sharded_gtest target shards)
     math(EXPR last "${shards} - 1")
     foreach(index RANGE ${last})
@@ -534,6 +546,17 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_test_data_definitions(game_runner_tests)
   add_sharded_gtest(game_runner_tests 1)
 
+  # The CUDA kernels on the GPU, against their CPU references. The binary
+  # links the kernels without scribblez_nn, so it cannot build a TensorRT plan.
+  add_executable(gpu_kernel_tests
+    tests/test_gpu_kernels.cpp
+    tests/small_worker_budget.cpp)
+  target_link_libraries(gpu_kernel_tests PRIVATE
+    scribblez_gpu_rollout_check scribblez_gpu_kernels scribblez_core Threads::Threads
+    GTest::gtest_main)
+  add_test_data_definitions(gpu_kernel_tests)
+  add_test(NAME gpu_kernel_tests COMMAND gpu_kernel_tests)
+
   # TensorRT-vs-PyTorch parity, one binary per model family. They are not part
   # of the suite: py/tools/gpu_parity.py runs them, and CLAUDE.md says when.
   # Run with no argument, each generates its fixture with a Python generator
@@ -559,8 +582,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # The DeepBot leaf eval model, and its leave values gate.
   add_parity_binary(test_leaf_eval_parity)
 
-  # The suite's one GPU test: that this machine can build and run a TensorRT
-  # plan at all, on the smallest model.
+  # The suite's one TensorRT test: that this machine can build and run a
+  # TensorRT plan at all, on the smallest model.
   add_test(NAME gpu_smoke COMMAND test_nn_inference_parity
     --gtest_filter=Trunks/NnInferenceParityTest.Fp16MatchesPyTorchReference/conv)
 

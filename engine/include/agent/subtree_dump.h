@@ -11,8 +11,8 @@
 //     the racks drew;
 //   - how often a second run of the subtrees, on fresh samples and draws, picks
 //     the same reply: β's stability in R_B and the seed;
-//   - Alice's value of each candidate under each reply model, and each model's
-//     pick.
+//   - Alice's value of each candidate under each reply model (null for the
+//     subtree's where the hasty first pass pruned it), and each model's pick.
 
 #include "agent/bob_subtree.h"
 #include "game/move.h"
@@ -23,10 +23,16 @@
 namespace scribblez {
 
 struct SubtreeTurn {
+  // Which game: DeepBot `agent` on game thread `thread` plays its games in
+  // turn, and `game` counts them, so lines from concurrent games sharing the
+  // file group by (agent, thread, game).
+  std::string agent;
+  int thread = 0;
+  int game = 0;
   int ply = 0;
   int bag = 0;
   const AliceTurn* turn = nullptr;
-  std::vector<bool> searched;  // by candidate: Bob's subtree ran (the bag did not empty)
+  std::vector<bool> searched;  // by candidate: Bob's subtree ran
   std::vector<double> subtree_values;
   std::vector<double> hasty_values;
   const std::vector<std::vector<BobReply>>* replies = nullptr;
@@ -35,7 +41,8 @@ struct SubtreeTurn {
 
 std::string subtree_turn_json(const SubtreeTurn& t);
 
-// Appends `line` and a newline to `path`. Safe from concurrent game threads.
+// Appends `line` and a newline to `path`. Safe from concurrent game threads;
+// throws util::CleanException when the write fails.
 void append_dump_line(const std::string& path, const std::string& line);
 
 }  // namespace scribblez

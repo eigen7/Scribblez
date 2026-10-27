@@ -17,10 +17,12 @@
 #include "lexicon/leave_values.h"
 #include "sim/rollout_values.h"
 #include "temp_dir.h"
+#include "util/exception.h"
 
 #include <boost/json.hpp>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -127,23 +129,35 @@ TEST(DeepBot, AsksTheModelForBobsBeliefWithAlicesPastHidden) {
 }
 
 // Bob's reply at each rack is one of his own static-equity top N, chosen by
-// his sims; the dump reports it per turn as one JSON line.
+// his sims; the dump reports it per turn as one JSON line, naming its game.
+// With --subtree-candidates 0 every candidate that leaves tiles in the bag is
+// searched.
 TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const auto dir = scribblez::testing::make_temp_dir("scribblez_test_subtree_dump");
   DeepBot::Params p = small_params(6);
+  p.subtree_candidates = 0;
   p.subtree_dump = (dir / "dump.jsonl").string();
   DeepBot bot(p, cpu_backend());
   play(bot);
   std::ifstream in(p.subtree_dump);
   int lines = 0;
+  int emptying = 0;
   for (std::string line; std::getline(in, line); ++lines) {
     const boost::json::object turn = boost::json::parse(line).as_object();
+    EXPECT_EQ(turn.at("agent").as_string(), "DeepBot");
+    EXPECT_EQ(turn.at("game").as_int64(), 1);
     for (const boost::json::value& v : turn.at("candidates").as_array()) {
       const boost::json::object& c = v.as_object();
+      if (!c.at("searched").as_bool()) {
+        // Only a candidate that empties the bag goes unsearched: it keeps its
+        // hasty value.
+        EXPECT_EQ(c.at("subtree_value").as_double(), c.at("hasty_value").as_double());
+        ++emptying;
+        continue;
+      }
       const double value = c.at("subtree_value").as_double();
       EXPECT_TRUE(value >= 0.0 && value <= 1.0);
-      if (!c.at("searched").as_bool()) continue;
       const boost::json::object& r = c.at("replies").as_object();
       const boost::json::array& ranks = r.at("rank_hist").as_array();
       EXPECT_LE(ranks.size(), size_t(p.subtree.late_candidates));
@@ -153,7 +167,61 @@ TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
     }
   }
   EXPECT_GT(lines, 5);
+  EXPECT_GT(emptying, 0);  // this seed's game reaches one
   std::filesystem::remove_all(dir);
+}
+
+// With --subtree-candidates 1, a first pass of hasty sims leaves one
+// candidate for Bob's subtree, the best by its hasty value of those that do
+// not empty the bag; those others have no subtree value, one that empties the
+// bag keeps its hasty value, and the pick is the searched one or one that
+// empties the bag.
+TEST(DeepBot, OnlyTheFirstPassesBestGetBobsSubtree) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const auto dir = scribblez::testing::make_temp_dir("scribblez_test_subtree_halving");
+  DeepBot::Params p = small_params(8);
+  p.candidates = 3;
+  p.subtree_candidates = 1;
+  p.subtree_dump = (dir / "dump.jsonl").string();
+  DeepBot bot(p, cpu_backend());
+  play(bot);
+  std::ifstream in(p.subtree_dump);
+  int turns = 0;
+  for (std::string line; std::getline(in, line); ++turns) {
+    const boost::json::object turn = boost::json::parse(line).as_object();
+    const boost::json::array& candidates = turn.at("candidates").as_array();
+    int searched = 0;
+    double searched_hasty = 0;
+    double best_pruned_hasty = 0;
+    for (const boost::json::value& v : candidates) {
+      const boost::json::object& c = v.as_object();
+      const double hasty = c.at("hasty_value").as_double();
+      if (c.at("searched").as_bool()) {
+        ++searched;
+        searched_hasty = hasty;
+      } else if (c.at("subtree_value").is_null()) {
+        best_pruned_hasty = std::max(best_pruned_hasty, hasty);
+      } else {
+        EXPECT_EQ(c.at("subtree_value").as_double(), hasty);
+      }
+    }
+    EXPECT_LE(searched, 1);
+    if (searched == 1) {
+      EXPECT_GE(searched_hasty, best_pruned_hasty);
+    }
+    const auto pick = size_t(turn.at("subtree_pick").as_int64());
+    EXPECT_FALSE(candidates[pick].as_object().at("subtree_value").is_null());
+  }
+  EXPECT_GT(turns, 5);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(DeepBot, RefusesAnUnknownReplyModelAndADumpWithoutSubtrees) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  EXPECT_THROW(DeepBot(small_params(1, "bogus"), cpu_backend()), util::CleanException);
+  DeepBot::Params p = small_params(1, "hasty");
+  p.subtree_dump = "dump.jsonl";
+  EXPECT_THROW(DeepBot(p, cpu_backend()), util::CleanException);
 }
 
 // Alice's replenishment in her sims after Bob's reply comes from the bag as

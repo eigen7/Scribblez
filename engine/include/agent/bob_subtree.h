@@ -24,7 +24,9 @@
 #include "sim/hasty_rollout_task.h"
 #include "sim/rollout_values.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace scribblez {
@@ -34,7 +36,7 @@ class Dictionary;
 struct SubtreeParams {
   int alice_racks = 20;      // R_B: Alice's leaves Bob samples, one rollout each
   int candidates = 8;        // N_B, Bob's, by static equity
-  int late_candidates = 24;  // ... with late_bag or fewer tiles in the bag
+  int late_candidates = 12;  // ... with late_bag or fewer tiles in the bag
   int late_bag = 40;
   bool race = true;  // stop Bob's clearly beaten candidates between rounds
 };
@@ -65,6 +67,9 @@ struct BeliefModel {
   const LeaveValueArrays* table = nullptr;
 };
 
+// The value of a candidate Alice did not search: it has none.
+inline constexpr double kPruned = std::numeric_limits<double>::quiet_NaN();
+
 // replies[c][i] = β(candidates[c], bob_racks[i]), for each c in `which`; the
 // other rows stay empty. `seed` keys Bob's samples and draws, by rack index.
 std::vector<std::vector<BobReply>> bob_replies(const AliceTurn& turn,
@@ -76,7 +81,7 @@ std::vector<std::vector<BobReply>> bob_replies(const AliceTurn& turn,
 // Alice's value of each candidate c in `which` from her sims after Bob's
 // replies: the mean over racks i of her win probability (a draw counting
 // half) over `sims` rollouts after β(c, i), each drawing her replenishment.
-// Other entries are 0.
+// Other entries are kPruned.
 std::vector<double> values_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
                                          const std::vector<std::vector<BobReply>>& replies,
                                          RolloutValues& values, int sims, const Dictionary& dict,
@@ -88,6 +93,9 @@ std::vector<double> values_after_replies(const AliceTurn& turn, const std::vecto
 // tiles of an exchange, which went back only after she drew; Bob's draw after
 // his reply, made by the sim, can take them.
 Rack alice_rack_after_reply(const RolloutStart& applied, const Rack& bob_rack, uint64_t seed);
+
+// The index of the largest of `values`, skipping kPruned.
+size_t best_candidate(const std::vector<double>& values);
 
 // The racks Alice's rollouts seat for Bob: rollout i's for i < count, from the
 // group her candidates share (any of `starts`, all in `group`).
