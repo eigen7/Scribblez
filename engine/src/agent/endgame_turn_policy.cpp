@@ -7,22 +7,15 @@
 
 #include <algorithm>
 #include <chrono>
-#include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 
 namespace scribblez {
 
 namespace {
 
-// Both seats of a game thread draw the same instance.
-std::shared_ptr<EndgameSolver> pooled_solver(int thread_id) {
-  static std::mutex mutex;
-  static std::map<int, std::shared_ptr<EndgameSolver>> pool;
-  const std::lock_guard<std::mutex> lock(mutex);
-  std::shared_ptr<EndgameSolver>& solver = pool[thread_id];
-  if (!solver) solver = std::make_shared<EndgameSolver>();
+EndgameSolver& thread_solver() {
+  thread_local EndgameSolver solver;
   return solver;
 }
 
@@ -39,14 +32,18 @@ void PreEndgameTurnParams::add_options(boost::program_options::options_descripti
   solver.add_options(desc, prefix + "-");
 }
 
-EndgameTurnPolicy::EndgameTurnPolicy(int thread_id, const EndgameSolver::Params& params,
+EndgameTurnPolicy::EndgameTurnPolicy(const EndgameSolver::Params& params,
                                      const PreEndgameTurnParams& peg)
-    : params_(params), peg_(peg), solver_(pooled_solver(thread_id)) {
-  solver_->clear();
+    : params_(params), peg_(peg) {}
+
+EndgameSolver& EndgameTurnPolicy::solver() const {
+  EndgameSolver& s = thread_solver();
+  s.set_incremental_movegen(incremental_movegen_);
+  return s;
 }
 
 MoveDecision EndgameTurnPolicy::solve_pre_endgame(const MoveRequest& req) {
-  SolverEndgameOracle oracle(*solver_, peg_.budget);
+  SolverEndgameOracle oracle(solver(), peg_.budget);
   const PreEndgamePosition pos{&req.dict,    req.board,     req.my_rack,     req.opp_rack,
                                req.my_score, req.opp_score, scoreless_turns_};
   return PreEndgameSolver(oracle).solve(pos, peg_.solver).front().move;
@@ -57,7 +54,7 @@ std::optional<MoveDecision> EndgameTurnPolicy::try_solve(const MoveRequest& req)
   if (req.bag_size != 0 || params_.budget == 0) return std::nullopt;
 
   const auto t0 = std::chrono::steady_clock::now();
-  const EndgameResult r = solver_->solve({&req.dict, req.board, req.my_rack, req.opp_rack,
+  const EndgameResult r = solver().solve({&req.dict, req.board, req.my_rack, req.opp_rack,
                                           req.my_score, req.opp_score, scoreless_turns_},
                                          params_);
   // Every solve counts toward the totals, whether or not its move is used.
@@ -92,7 +89,7 @@ void EndgameTurnPolicy::observe_move(const Move& move) {
 void EndgameTurnPolicy::begin_game() {
   scoreless_turns_ = 0;
   solve_totals_ = {};
-  solver_->clear();
+  thread_solver().clear();
 }
 
 }  // namespace scribblez

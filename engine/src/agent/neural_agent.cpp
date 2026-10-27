@@ -19,7 +19,7 @@ NeuralAgent::NeuralAgent(const Params& params, std::shared_ptr<nn::PositionEvalS
       objective_(params.objective),
       temperature_(params.temperature),
       evaluator_(*params.dict, std::move(service), max_batch),
-      endgame_(params.thread_id, params.endgame),
+      endgame_(params.endgame),
       rng_(params.seed) {
   init();
 }

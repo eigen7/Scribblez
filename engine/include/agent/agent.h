@@ -81,9 +81,9 @@ class Agent {
 
   const std::string& name() const { return name_; }
 
-  // Index of the game thread this agent runs on (0..threads-1). Both seats of
-  // a thread share it, so an agent keys per-thread resources off it (e.g. the
-  // pooled EndgameSolver): seat-mates share one, and threads never contend.
+  // Index of the game loop this agent plays in (0..threads-1); both seats of a
+  // loop share it. Not an OS thread: a loop may run on any of the process's
+  // threads, so per-thread resources key off the OS thread, not this.
   int thread_id() const { return thread_id_; }
 
   virtual MoveDecision make_move(const MoveRequest& req) = 0;

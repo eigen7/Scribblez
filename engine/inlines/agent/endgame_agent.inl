@@ -15,7 +15,7 @@ namespace scribblez {
 
 template <class Base>
 EndgameAgent<Base>::EndgameAgent(const Params& params)
-    : Base(params.base), endgame_(params.base.thread_id, params.solver, params.peg) {}
+    : Base(params.base), endgame_(params.solver, params.peg) {}
 
 template <class Base>
 MoveDecision EndgameAgent<Base>::make_move(const MoveRequest& req) {

@@ -40,7 +40,7 @@ NeuralSimAgent::NeuralSimAgent(const Params& params,
       runner_(*params.dict,
               make_runner_params(params.sim, params.sim_horizon,
                                  params.sim_horizon > 0 ? &evaluator_.service() : nullptr)),
-      endgame_(params.thread_id, params.endgame) {
+      endgame_(params.endgame) {
   validate(params);
 }
 

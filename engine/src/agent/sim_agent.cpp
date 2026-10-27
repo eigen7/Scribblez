@@ -29,7 +29,7 @@ SimAgent::SimAgent(const Params& params, std::shared_ptr<nn::PositionEvalService
       leaf_service_(std::move(leaf_service)),
       runner_(require_dict(params.dict),
               make_runner_params(params.sim, params.sim_horizon, leaf_service_.get())),
-      endgame_(params.thread_id, params.endgame) {
+      endgame_(params.endgame) {
   if (top_k_ < 1) throw util::CleanException("sim agent: --top-k must be >= 1");
 }
 
