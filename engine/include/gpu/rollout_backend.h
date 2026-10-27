@@ -31,6 +31,8 @@ struct RolloutBackend {
   std::string leaf_precision = "fp16";
   int leaf_rows = nn::LeafEvalSpec::kDefaultMaxRows;
 
+  bool operator==(const RolloutBackend&) const = default;
+
   bool gpu() const { return backend == "gpu"; }
 
   // --backend, --leaf-model, --leaf-precision and --leaf-rows.
@@ -39,7 +41,17 @@ struct RolloutBackend {
   void validate() const;
   // The leaf's provenance: the ONNX file's, or the synthetic leaf's.
   PoolModel leaf_identity() const;
-  // The backend; the cpu one runs its rollouts on `threads` threads.
+  // The process-wide backend for these settings, shared by every caller that
+  // asks while one holds it (SharedRegistry): the GPU one carries a leaf
+  // engine and the lexicon tables on the device. Its run() is serialized, so
+  // game threads may call it concurrently. The cpu one runs its rollouts on
+  // `threads` threads; the gpu one ignores `threads`. `dict` is not part of the
+  // key, so every caller must pass the same (process-lifetime) dictionary.
+  std::shared_ptr<RolloutValues> shared(const Dictionary& dict, int threads) const;
+
+  // An unshared backend. Factory-internal, and for a tool that runs one backend
+  // per process: agents go through shared() so that heavy device state is paid
+  // once per process, not once per agent.
   std::unique_ptr<RolloutValues> make(const Dictionary& dict, int threads) const;
 };
 

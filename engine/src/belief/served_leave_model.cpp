@@ -1,6 +1,9 @@
 #include "belief/served_leave_model.h"
 
 #include "nn/onnx_metadata.h"
+#include "nn/shared_registry.h"
+
+#include <utility>
 
 namespace scribblez::belief {
 
@@ -24,6 +27,17 @@ LeaveParamsFn ServedLeaveModel::predict_fn() {
     const std::lock_guard lock(mutex_);
     net_.predict(rows, count, out);
   };
+}
+
+std::shared_ptr<ServedLeaveTable> ServedLeaveTable::shared(const std::string& onnx_path,
+                                                           const LeaveValues& values) {
+  // The leave values' hash is part of the key: the net refuses a model trained
+  // against other values (LeaveInferenceNet).
+  using Key = std::pair<std::string, std::string>;
+  static nn::SharedRegistry<Key, ServedLeaveTable> registry;
+  return registry.get_or_create(Key{onnx_path, values.content_hash()}, [&] {
+    return std::make_shared<ServedLeaveTable>(onnx_path, values);
+  });
 }
 
 }  // namespace scribblez::belief

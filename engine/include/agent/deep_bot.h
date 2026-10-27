@@ -57,7 +57,7 @@ class DeepBot : public Agent {
   // forward pass with the leave table its beliefs are over (an empty `predict`
   // draws Bob's racks uniformly).
   struct Backend {
-    std::unique_ptr<RolloutValues> values;
+    std::shared_ptr<RolloutValues> values;
     belief::LeaveParamsFn predict;
     std::shared_ptr<const LeaveValueArrays> table;
   };

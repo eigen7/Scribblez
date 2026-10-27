@@ -217,6 +217,16 @@ Build by running py/build.py
   components built on top of them. If you ever spot code that would permit this sort of separation,
   suggest a change.
 
+## Heavy resources are process singletons
+
+TensorRT services, GPU rollout backends and large tables exist once per
+process and are shared by every game thread, never built per agent or thread.
+Expose them through a `create()`/`shared()` factory over `nn::SharedRegistry`
+(engine/include/nn/shared_registry.h); the raw constructors are
+factory-internal, called directly only by tools that build one instance per
+process. (EndgameSolver is the exception: its transposition table is
+thread-exclusive by design.)
+
 ## Clang-format
 
 After editing any file, make sure to sanitize it with clang-format. Alternatively, you can run

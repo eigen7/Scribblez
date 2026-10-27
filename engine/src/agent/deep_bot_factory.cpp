@@ -25,11 +25,11 @@ DeepBot::Backend make_backend(const DeepBot::Params& p) {
   rollouts.leaf_precision = p.leaf_precision;
   rollouts.validate();
   DeepBot::Backend b;
-  b.values = rollouts.make(load_dictionary_or_throw(),
-                           p.threads > 0 ? p.threads : util::default_thread_count());
+  b.values = rollouts.shared(load_dictionary_or_throw(),
+                             p.threads > 0 ? p.threads : util::default_thread_count());
   if (p.leave_inference.empty()) return b;
   const LeaveValues& values = HastyEquity::instance().leave_values();
-  auto served = std::make_shared<belief::ServedLeaveTable>(p.leave_inference, values);
+  auto served = belief::ServedLeaveTable::shared(p.leave_inference, values);
   b.table = std::shared_ptr<const LeaveValueArrays>(served, &served->table);
   b.predict = [served, predict = served->served.predict_fn()](const float* rows, int count,
                                                               belief::LeaveParams* out) {

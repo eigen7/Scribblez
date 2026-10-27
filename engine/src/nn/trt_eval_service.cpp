@@ -165,9 +165,11 @@ template std::unique_ptr<EvalService<PositionEvaluationSpec>> make_loaded_servic
 template std::unique_ptr<EvalService<MoveSetEvaluationSpec>> make_loaded_service(
   const NeuralNetParams<MoveSetEvaluationSpec>& params);
 
-// The shared engine is wrapped in the batching decorator, so the threads
-// sharing it also coalesce their requests. The move-set family has no create():
-// its agents each load their own service through make_loaded_service().
+// Agents load services through create(), not make_loaded_service(), so that
+// the game threads of a run share one engine.
+//
+// The shared position engine is wrapped in the batching decorator, so the
+// threads sharing it also coalesce their requests.
 template <>
 std::shared_ptr<PositionEvalService> EvalService<PositionEvaluationSpec>::create(
   const NeuralNetParams<PositionEvaluationSpec>& params) {
@@ -176,6 +178,17 @@ std::shared_ptr<PositionEvalService> EvalService<PositionEvaluationSpec>::create
   return registry.get_or_create(params, [&] {
     return std::make_shared<BatchingPositionEvalService>(
       make_loaded_service<PositionEvaluationSpec>(params));
+  });
+}
+
+// One move-set evaluation is a whole turn's candidates in one pass, so threads
+// sharing the engine just queue on EvalService's mutex; no batching decorator.
+template <>
+std::shared_ptr<MoveSetEvalService> EvalService<MoveSetEvaluationSpec>::create(
+  const NeuralNetParams<MoveSetEvaluationSpec>& params) {
+  static SharedRegistry<NeuralNetParamsBase, MoveSetEvalService> registry;
+  return registry.get_or_create(params, [&]() -> std::shared_ptr<MoveSetEvalService> {
+    return make_loaded_service<MoveSetEvaluationSpec>(params);
   });
 }
 

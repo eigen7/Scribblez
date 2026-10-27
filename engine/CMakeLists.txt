@@ -511,7 +511,9 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # Builds real agents through PlayerFactory, whose dispatch references every
   # agent type, so it links scribblez_neural_agents like play_game does, which
   # is why it cannot share agent_tests' binary.
-  add_executable(game_runner_tests tests/test_game_runner.cpp)
+  add_executable(game_runner_tests
+    tests/test_game_runner.cpp
+    tests/test_shared_backends.cpp)
   target_link_libraries(game_runner_tests PRIVATE
     scribblez_core
     scribblez_neural_agents
@@ -521,6 +523,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     Boost::system
     Threads::Threads
     GTest::gtest_main)
+  add_test_data_definitions(game_runner_tests)
   add_sharded_gtest(game_runner_tests 1)
 
   # TensorRT-vs-PyTorch parity, one binary per model family. They are not part

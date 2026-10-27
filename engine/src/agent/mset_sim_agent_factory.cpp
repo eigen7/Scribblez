@@ -80,7 +80,7 @@ po::options_description make_options_description(MsetSimOptions& o) {
 }  // namespace
 
 MsetSimAgent::MsetSimAgent(const Params& params, const NetParams& net_params)
-    : MsetSimAgent(params, nn::make_loaded_service(net_params)) {}
+    : MsetSimAgent(params, nn::MoveSetEvalService::create(net_params)) {}
 
 std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::string>& tokens,
                                                       int thread_id, const std::string& name) {
@@ -124,7 +124,8 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
   // With shortlist == 0 (all moves) the service chunks to batch_size.
   return std::make_unique<MsetSimAgent>(
     params,
-    nn::make_loaded_service(opts.service.net_params<nn::MoveSetEvaluationSpec>(opts.shortlist)),
+    nn::MoveSetEvalService::create(
+      opts.service.net_params<nn::MoveSetEvaluationSpec>(opts.shortlist)),
     std::move(leaf));
 }
 
