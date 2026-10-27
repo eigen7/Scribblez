@@ -3,10 +3,11 @@
 // The hasty-rollout task as both the CPU reference and the CUDA kernel see
 // it: plain structs with no engine dependencies, so one header compiles under
 // g++ (C++26) and nvcc alike. A rollout from a start (a candidate applied to
-// the board): seat the opponent's known leave if the group has one, draw the
-// rest of their rack and then our refill from the unseen pool, put back the
-// tiles an exchange returned (if our move went out with the bag empty, the
-// game is over here), the opponent plays its top-equity move, we play ours,
+// the board): seat the opponent's known leave if the group has one, shuffle
+// the rest of the unseen pool, draw the rest of the opponent's rack and then
+// our refill, put back the tiles an exchange returned (if our move went out
+// with the bag empty, the game is over here), the opponent plays its
+// top-equity move, we play ours,
 // and the outcome is the score differential with the play-out bonus. If the
 // bag is empty after those two plies, both keep playing top-equity moves to
 // the game's end, so the outcome is exact rather than a leaf. With the bag
@@ -32,9 +33,9 @@ constexpr int kSquares = kBoardSize * kBoardSize;
 constexpr int kRackSize = 7;
 constexpr int kTileKinds = 27;  // A..Z, then the blank (26)
 constexpr int kBlankTile = 26;
-// The unseen pool (at most 100 - 1 tiles) plus the tiles two exchanges can
-// return to it.
-constexpr int kBagCap = 100 + 2 * kRackSize;
+// The unseen pool (at most 100 - 1 tiles). An exchange's tiles go back into
+// the slots its draw freed, so the bag never outgrows it.
+constexpr int kBagCap = 100;
 // A bound the rollout never reaches: two plies, then with the bag empty
 // every play takes a tile from the racks (2 x kRackSize at most), with at
 // most one pass between plays.
@@ -133,8 +134,9 @@ struct RolloutTask {
 
 // ---- The draw ----
 // Philox4x32-10 (Salmon et al.), keyed by the batch seed and counted by
-// (rollout, block): random number k of rollout i is output k % 4 of block
-// k / 4.
+// (rollout, block, stream): random number k of a rollout's stream is output
+// k % 4 of block k / 4. The deal's shuffle and exchanges' put-backs read
+// separate streams, so an exchange shifts no shuffle's numbers.
 
 SCRIBBLEZ_HD inline uint32_t philox_mulhi(uint32_t a, uint32_t b) {
   return uint32_t((uint64_t(a) * uint64_t(b)) >> 32);
@@ -159,42 +161,65 @@ SCRIBBLEZ_HD inline void philox4x32_10(uint32_t c0, uint32_t c1, uint32_t c2, ui
   out[3] = c3;
 }
 
-SCRIBBLEZ_HD inline uint32_t rollout_rand(uint64_t seed, uint32_t rollout, uint32_t k) {
+constexpr uint32_t kShuffleStream = 0;
+constexpr uint32_t kPutBackStream = 1;
+
+SCRIBBLEZ_HD inline uint32_t rollout_rand(uint64_t seed, uint32_t rollout, uint32_t stream,
+                                          uint32_t k) {
   uint32_t out[4];
-  philox4x32_10(rollout, k >> 2, 0u, 0u, uint32_t(seed), uint32_t(seed >> 32), out);
+  philox4x32_10(rollout, k >> 2, stream, 0u, uint32_t(seed), uint32_t(seed >> 32), out);
   return out[k & 3u];
 }
 
-// The bag as a rollout sees it: the pool's tiles, drawn from the front by a
-// partial Fisher-Yates shuffle, with exchanged tiles appended at the back.
+// The bag as a rollout sees it: the pool's tiles, shuffled once the deal has
+// seated the opponent's known leave, then drawn from both ends, ours (player
+// 0) from the front and the opponent's from the back. A player's k-th tile so
+// sits at a fixed position however many tiles the other player draws, and
+// rollout i of every start in a group shuffles the same pool the same way:
+// the starts' draws stay paired after their moves draw different counts.
 struct Bag {
   uint8_t tiles[kBagCap];
-  int len = 0;
-  int cursor = 0;  // tiles[0, cursor) have been drawn
-  int next_rand = 0;
+  int front = 0;  // tiles[front, back) are in the bag
+  int back = 0;
+  int put_backs = 0;  // the put-back stream's numbers used
 
-  SCRIBBLEZ_HD int remaining() const { return len - cursor; }
+  SCRIBBLEZ_HD int remaining() const { return back - front; }
 
-  SCRIBBLEZ_HD uint8_t draw(uint64_t seed, uint32_t rollout) {
-    const int k = cursor;
-    const int r = k + int(rollout_rand(seed, rollout, uint32_t(next_rand++)) % uint32_t(len - k));
-    const uint8_t t = tiles[r];
-    tiles[r] = tiles[k];
-    tiles[k] = t;
-    ++cursor;
-    return t;
+  // Fisher-Yates over the bag.
+  SCRIBBLEZ_HD void shuffle(uint64_t seed, uint32_t rollout) {
+    for (int i = back - 1; i > front; --i) {
+      const uint32_t span = uint32_t(i - front + 1);
+      const int j = front + int(rollout_rand(seed, rollout, kShuffleStream, uint32_t(i)) % span);
+      const uint8_t t = tiles[i];
+      tiles[i] = tiles[j];
+      tiles[j] = t;
+    }
   }
 
-  SCRIBBLEZ_HD void put_back(uint8_t t) { tiles[len++] = t; }
+  SCRIBBLEZ_HD uint8_t draw(int player) { return player == 0 ? tiles[front++] : tiles[--back]; }
+
+  // Returns `t` for `player`, who drew at least as many tiles as it returns
+  // since its last put-back: into the slot at its end that a draw freed, then
+  // swapped with a uniformly random tile of the bag. Every order stays equally
+  // likely, and the other player's tiles keep their positions, one of them
+  // replaced by `t`.
+  SCRIBBLEZ_HD void put_back(uint8_t t, int player, uint64_t seed, uint32_t rollout) {
+    const int end = player == 0 ? --front : back++;
+    const uint32_t k = uint32_t(put_backs++);
+    const int r =
+      front + int(rollout_rand(seed, rollout, kPutBackStream, k) % uint32_t(remaining()));
+    tiles[end] = tiles[r];
+    tiles[r] = t;
+  }
 };
 
-// Removes one `tile` from the undrawn bag, keeping the rest in order: how
-// the opponent's known leave leaves the pool before any draw.
+// Removes one `tile` from the bag before its shuffle, keeping the rest in
+// order: how the opponent's known leave leaves the pool.
 SCRIBBLEZ_HD inline void remove_from_bag(Bag& bag, uint8_t tile) {
-  for (int i = bag.cursor; i < bag.len; ++i) {
+  for (int i = bag.front; i < bag.back; ++i) {
     if (bag.tiles[i] != tile) continue;
-    for (int j = i + 1; j < bag.len; ++j) bag.tiles[j - 1] = bag.tiles[j];
-    --bag.len;
+    for (int j = i + 1; j < bag.back; ++j) bag.tiles[j - 1] = bag.tiles[j];
+    --bag.back;
     return;
   }
 }

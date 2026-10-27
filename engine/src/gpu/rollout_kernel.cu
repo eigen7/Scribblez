@@ -1109,7 +1109,7 @@ __device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout) {
     s.scoreless = 0;
     record_leave(s, mover);
     const int draws = min(int(c.n), s.bag.remaining());
-    for (int i = 0; i < draws; ++i) ++s.rack[mover][s.bag.draw(seed, rollout)];
+    for (int i = 0; i < draws; ++i) ++s.rack[mover][s.bag.draw(mover)];
     if (rack_total(s, mover) == 0) {
       s.scores[mover] += 2 * s.other_pv;
       s.game_over = 1;
@@ -1119,9 +1119,11 @@ __device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout) {
       --s.rack[mover][c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1];
     }
     record_leave(s, mover);
-    for (int i = 0; i < c.n; ++i) ++s.rack[mover][s.bag.draw(seed, rollout)];
-    for (int i = 0; i < c.n; ++i)
-      s.bag.put_back(uint8_t(c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1));
+    for (int i = 0; i < c.n; ++i) ++s.rack[mover][s.bag.draw(mover)];
+    for (int i = 0; i < c.n; ++i) {
+      s.bag.put_back(uint8_t(c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1), mover, seed,
+                     rollout);
+    }
     ++s.scoreless;
   }
 }
@@ -1274,9 +1276,9 @@ __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLea
     s.rack[1][t] = 0;
   }
   for (int i = 0; i < group.pool_size; ++i) s.bag.tiles[i] = group.pool[i];
-  s.bag.len = group.pool_size;
-  s.bag.cursor = 0;
-  s.bag.next_rand = 0;
+  s.bag.front = 0;
+  s.bag.back = group.pool_size;
+  s.bag.put_backs = 0;
   if (rollout < group.num_leaves) {
     const OppLeaveAbi& leave = leaves[group.leave_base + rollout];
     for (int i = 0; i < leave.n; ++i) {
@@ -1284,12 +1286,14 @@ __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLea
       remove_from_bag(s.bag, leave.tiles[i]);
     }
   }
+  s.bag.shuffle(group.seed, rollout);
   for (int k = 0; k < 2; ++k) {
     const int p = 1 - k;  // the opponent first
     const int draws = refill_draw(s.bag.remaining(), rack_total(s, p));
-    for (int i = 0; i < draws; ++i) ++s.rack[p][s.bag.draw(group.seed, rollout)];
+    for (int i = 0; i < draws; ++i) ++s.rack[p][s.bag.draw(p)];
   }
-  for (int i = 0; i < pos.num_returned; ++i) s.bag.put_back(pos.returned[i]);
+  for (int i = 0; i < pos.num_returned; ++i)
+    s.bag.put_back(pos.returned[i], 0, group.seed, rollout);
   // A player who never moves keeps its full rack as its leave.
   record_leave(s, 0);
   record_leave(s, 1);

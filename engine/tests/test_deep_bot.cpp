@@ -135,7 +135,7 @@ TEST(DeepBot, AsksTheModelForBobsBeliefWithAlicesPastHidden) {
 TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const auto dir = scribblez::testing::make_temp_dir("scribblez_test_subtree_dump");
-  DeepBot::Params p = small_params(6);
+  DeepBot::Params p = small_params(7);
   p.subtree_candidates = 0;
   p.subtree_dump = (dir / "dump.jsonl").string();
   DeepBot bot(p, cpu_backend());

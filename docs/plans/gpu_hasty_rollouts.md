@@ -174,9 +174,14 @@ bag size, the two subrack leave arrays, the span list, the running best.
 ### The kernel pipeline, per batch
 
 1. **Draw.** A counter-based generator (Philox) keyed by the batch seed and
-   the rollout index drives a partial Fisher-Yates shuffle of the pool: the
-   opponent's 7, then our refill. The CPU reference uses the same generator,
-   so every rollout's racks, and so its outcome, can be compared exactly.
+   the rollout index shuffles the pool once the opponent's known leave is
+   seated. The opponent then draws from the back and we draw from the front,
+   at the deal and after every move, so a player's k-th tile is the same
+   however many tiles the other draws: candidates that play different
+   numbers of tiles still deal both players the same tiles. An exchange's
+   tiles go into the slots its draw freed, each swapped with a random tile
+   of the bag. The CPU reference uses the same generator, so every
+   rollout's racks, and so its outcome, can be compared exactly.
 2. **Ply** (the opponent's, then ours; one routine):
    1. *Leaves:* 127 lanes each build one subrack of the mover's rack (a 7-bit
       mask over the sorted rack, as `TurnLeaves` does) and probe the leave
