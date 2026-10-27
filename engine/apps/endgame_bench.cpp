@@ -30,11 +30,11 @@
 #include "agent/endgame_turn_policy.h"
 #include "agent/hasty_bot.h"
 #include "endgame/endgame_solver.h"
-#include "game/bag.h"
 #include "game/board.h"
 #include "game/game.h"
 #include "game/move.h"
 #include "game/rack.h"
+#include "game/tile_counts.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
@@ -183,9 +183,9 @@ std::vector<CapturedEndgame> capture_endgames(const Dictionary& dict, uint64_t b
 
 // The captured endgame's bag, which is empty: the board and both racks account
 // for every tile. play_from then draws nothing, so the racks stay as captured.
-Bag empty_pool(const CapturedEndgame& cap) {
-  Bag pool(/*seed=*/1, cap.board.unseen_tiles(cap.my_rack));
-  for (int i = 0; i < cap.opp_rack.size(); ++i) pool.remove(cap.opp_rack.tiles()[i]);
+TileCounts empty_pool(const CapturedEndgame& cap) {
+  TileCounts pool = cap.board.unseen_tiles(cap.my_rack);
+  pool.remove(cap.opp_rack.counts());
   return pool;
 }
 
@@ -242,7 +242,7 @@ SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& 
   eg.endgame().set_incremental_movegen(incremental);
   HastyBot opp(HastyBot::Params{.thread_id = thread_id, .name = "HastyBot"});
 
-  const Bag pool = empty_pool(cap);
+  const TileCounts pool = empty_pool(cap);
   Game g(eg, opp, dict, /*seed=*/1);
   g.set_respect_projections(projections);
   g.play_from(cap.board, {margin, 0}, {cap.my_rack, cap.opp_rack}, pool, /*to_move=*/0);
@@ -259,7 +259,7 @@ SolverPlayout run_solver_playout(const Dictionary& dict, const CapturedEndgame& 
 int baseline_delta(const Dictionary& dict, const CapturedEndgame& cap, int thread_id) {
   HastyBot a0(HastyBot::Params{.thread_id = thread_id, .name = "A"});
   HastyBot a1(HastyBot::Params{.thread_id = thread_id, .name = "B"});
-  const Bag pool = empty_pool(cap);
+  const TileCounts pool = empty_pool(cap);
   Game g(a0, a1, dict, /*seed=*/1);
   g.play_from(cap.board, {0, 0}, {cap.my_rack, cap.opp_rack}, pool, /*to_move=*/0);
   return g.score(0) - g.score(1);

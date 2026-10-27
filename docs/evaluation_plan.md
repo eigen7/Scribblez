@@ -41,12 +41,15 @@ the match level) and a fixed pair count per match. The `match_arms` workload
 runs N named player specs against one fixed opponent under a shared base
 seed.
 
-Two gaps in that machinery are worth closing before the final readouts:
+A game's bag (`TwoEndedBag`) is shuffled once from the seed, and each seat
+draws from its own end, so a seat's tiles do not depend on how many the other
+has drawn. Two arms given the same seed therefore deal each seat largely the
+same tiles even after their play diverges. They part only where the two ends
+meet late in the game, or where an exchanged tile lands at a random position
+in the bag.
 
-- **Full tile-order common random numbers.** `Bag` draws from a seeded RNG
-  stream, so two arms given the same seed diverge as soon as their
-  replenishment counts differ. Reshaping it into a seeded permutation of the
-  tiles would keep the tile order shared.
+One gap in that machinery is worth closing before the final readouts:
+
 - **Per-pair result storage in `match_arms`.** Each arm's result stores a
   5-bin pentanomial histogram (`pair_counts`), which discards which pair is
   which. Arms share a base seed, so arm-vs-arm comparisons could be paired,

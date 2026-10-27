@@ -133,12 +133,13 @@ void run_rollout(const SimPosition& pos, const AppliedCandidate& a, const Move& 
   // opponent's sampled tiles, is the same for every candidate (CRN). A known
   // opp_leave is seated directly and the refill draws only the rest, which is
   // the correct conditional given the mover's information.
-  Bag pool(seed, pos.board.unseen_tiles(pos.rack));
+  TileCounts pool = pos.board.unseen_tiles(pos.rack);
   std::array<Rack, 2> known_racks = a.known_racks;
   const Rack opp_leave = seated_opp_leave(pos, seed);
   if (opp_leave.size() > 0) {
     known_racks[opponent] = opp_leave;
-    for (int i = 0; i < opp_leave.size(); ++i) pool.remove(opp_leave.tiles()[i]);
+    const bool seated = pool.remove(opp_leave.counts());
+    DEBUG_ASSERT(seated, "the opponent's leave is not in the unseen pool");
   }
   Game game(a0, a1, dict, seed);
   if (params.horizon_plies > 0) game.set_max_plies(params.horizon_plies);

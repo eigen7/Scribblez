@@ -1,11 +1,12 @@
 #pragma once
 
 #include "agent/agent.h"
-#include "game/bag.h"
 #include "game/board.h"
 #include "game/game_log.h"
 #include "game/move.h"
 #include "game/rack.h"
+#include "game/tile_counts.h"
+#include "game/two_ended_bag.h"
 #include "lexicon/dictionary.h"
 
 #include <array>
@@ -56,12 +57,13 @@ class Game {
 
   // Play out from a mid-game position, e.g. a Monte-Carlo rollout. `board` and
   // `scores` are the position; `known_racks[p]` are the tiles each player is
-  // known to hold (empty to deal fresh), topped up from `pool` in turn order
-  // starting with `to_move`, who plays first. `returned_to_bag` joins the bag
-  // only after those refills: it is what a just-made exchange gave up, which
-  // later draws may see but neither initial refill may.
+  // known to hold (empty to deal fresh), topped up in turn order starting with
+  // `to_move`, who plays first, from a bag of the tiles in `pool` shuffled by
+  // the Game's seed. `returned_to_bag` joins the bag only after those refills:
+  // it is what a just-made exchange gave up, which later draws may see but
+  // neither initial refill may.
   void play_from(const Board& board, std::array<int, 2> scores,
-                 const std::array<Rack, 2>& known_racks, const Bag& pool, int to_move,
+                 const std::array<Rack, 2>& known_racks, const TileCounts& pool, int to_move,
                  const Rack& returned_to_bag = Rack{});
 
   // Valid while the Game lives and extract_log() has not been called.
@@ -88,7 +90,7 @@ class Game {
   Agent* players_[2];
   const Dictionary& dict_;
   uint64_t seed_;
-  Bag bag_;
+  TwoEndedBag bag_;
   Board board_;
   Rack racks_[2];
   std::array<int, 2> scores_{0, 0};

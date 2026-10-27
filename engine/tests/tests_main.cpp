@@ -26,6 +26,7 @@
 #include "game/movegen.h"
 #include "game/rack.h"
 #include "game/tile_counts.h"
+#include "game/two_ended_bag.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_values.h"
@@ -2528,6 +2529,54 @@ TEST(Bag, Basics) {
   b4.put_back(Tile::from_char('Q'));
   ASSERT_EQ(b4.size(), 1);
   ASSERT_EQ(b4.draw(), Tile::from_char('Q'));
+
+  // Bag::remove takes known tiles out of a pool.
+  Bag b5(/*seed=*/123);
+  const Tile a = Tile::from_char('A');
+  for (int i = b5.counts().count(a); i > 0; --i) b5.remove(a);
+  ASSERT_EQ(b5.counts().count(a), 0);
+  while (b5.size() > 0) ASSERT_NE(b5.draw(), a);
+}
+
+// Draining a TwoEndedBag from both ends yields exactly its tiles, the same
+// sequence for a seed.
+TEST(TwoEndedBag, DrainsItsTilesReproducibly) {
+  std::array<std::vector<Tile>, 2> runs;
+  for (auto& run : runs) {
+    TwoEndedBag bag(/*seed=*/42);
+    ASSERT_EQ(bag.size(), Bag::kTotalTiles);
+    for (int i = 0; bag.size() > 0; ++i) run.push_back(bag.draw(i % 2));
+  }
+  ASSERT_EQ(runs[0], runs[1]);
+  TileCounts drained;
+  for (Tile t : runs[0]) drained.add(t);
+  ASSERT_EQ(drained.to_string(), TileCounts::full_distribution().to_string());
+}
+
+// A seat's draws do not depend on how many tiles the other seat has drawn.
+TEST(TwoEndedBag, ASeatsDrawsIgnoreTheOtherSeat) {
+  for (int seat = 0; seat < 2; ++seat) {
+    TwoEndedBag alone(/*seed=*/7), shared(/*seed=*/7);
+    for (int i = 0; i < 20; ++i) shared.draw(1 - seat);
+    for (int i = 0; i < 30; ++i) ASSERT_EQ(alone.draw(seat), shared.draw(seat)) << seat;
+  }
+}
+
+// A returned tile lands at a uniformly random position: of 4000 bags of AAA
+// with a Z put back, Z comes out first, second, third and last about equally
+// often.
+TEST(TwoEndedBag, PutBackLandsUniformly) {
+  constexpr int kBags = 4000;
+  std::array<int, 4> position{};
+  for (uint64_t seed = 0; seed < kBags; ++seed) {
+    TwoEndedBag bag(seed, TileCounts::from_string("AAA"));
+    bag.put_back(Tile::from_char('Z'));
+    int k = 0;
+    while (bag.draw(0) != Tile::from_char('Z')) ++k;
+    ++position[k];
+  }
+  // Each count is Binomial(4000, 1/4): mean 1000, sd about 27.
+  for (int count : position) EXPECT_NEAR(count, kBags / 4, 150);
 }
 
 // Board::apply places glyphs only on the square mask's cells, skipping tiles
@@ -2802,7 +2851,7 @@ TEST(FaceUpLeaves, AnEmptyBagShowsTheWholeRackInEitherVariant) {
     // faces an empty bag and a fully deducible opponent.
     scribblez::Bag pool(/*seed=*/7ULL);
     while (pool.size() > 2 * RACK_SIZE) pool.draw();
-    g.play_from(Board{}, {0, 0}, {Rack{}, Rack{}}, pool, /*to_move=*/0);
+    g.play_from(Board{}, {0, 0}, {Rack{}, Rack{}}, pool.counts(), /*to_move=*/0);
     const scribblez::GameLogStorage log = g.extract_log();
 
     ASSERT_FALSE(seen.empty());
@@ -2914,17 +2963,8 @@ static bool rack_contains(const Rack& r, Tile want) {
 
 // Game::play_from, which starts a rollout from a mid-game position: it keeps
 // the known leave, fills both racks from the given pool, plays to a natural
-// end, and is deterministic per seed. Also checks Bag::remove, which callers
-// use to take known tiles out of the pool.
+// end, and is deterministic per seed.
 TEST(Game, PlayFrom) {
-  {
-    Bag bag(123);
-    const Tile a = Tile::from_char('A');
-    for (int i = bag.counts().count(a); i > 0; --i) bag.remove(a);
-    ASSERT_EQ(bag.counts().count(a), 0);
-    while (bag.size() > 0) ASSERT_NE(bag.draw(), a);
-  }
-
   const Dictionary d = medium_dict();
   const Board board;
   const Rack leave = Rack::from_string("ING");  // seat 0 just moved and kept ING
@@ -2934,8 +2974,8 @@ TEST(Game, PlayFrom) {
   GameLogStorage logs[2];
   for (int run = 0; run < 2; ++run) {  // the same seed twice
     const uint64_t seed = 7;
-    Bag pool(seed);
-    for (int i = 0; i < leave.size(); ++i) pool.remove(leave.tiles()[i]);
+    TileCounts pool = TileCounts::full_distribution();
+    pool.remove(leave.counts());
     TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
     TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
     scribblez::Game g(a0, a1, d, seed);
@@ -2964,8 +3004,8 @@ TEST(Game, MaxPliesTruncation) {
   constexpr int kPlies = 3;
 
   const uint64_t seed = 7;
-  Bag pool(seed);
-  for (int i = 0; i < leave.size(); ++i) pool.remove(leave.tiles()[i]);
+  TileCounts pool = TileCounts::full_distribution();
+  pool.remove(leave.counts());
   TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
   TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
   scribblez::Game g(a0, a1, d, seed);
@@ -2989,8 +3029,8 @@ TEST(Game, MaxPliesTruncation) {
   // A game reaching its natural end under a generous cap is not truncated.
   TestAgent b0(0, "B0", seed ^ 0x1111111111111111ULL);
   TestAgent b1(0, "B1", seed ^ 0x2222222222222222ULL);
-  Bag pool2(seed);
-  for (int i = 0; i < leave.size(); ++i) pool2.remove(leave.tiles()[i]);
+  TileCounts pool2 = TileCounts::full_distribution();
+  pool2.remove(leave.counts());
   scribblez::Game g2(b0, b1, d, seed);
   g2.set_max_plies(399);
   g2.play_from(board, scores, known, pool2, /*to_move=*/1);
@@ -3007,12 +3047,7 @@ TEST(Game, MaxPliesSparesTheEndgame) {
   // first couple of plies.
   const std::array<Rack, 2> known = {Rack::from_string("CATSEIQ"), Rack::from_string("RATESIN")};
   const uint64_t seed = 7;
-  Bag pool(seed);
-  {
-    Bag two(seed);
-    while (two.size() > 2) two.draw();
-    pool = two;
-  }
+  const TileCounts pool = TileCounts::from_string("AE");
   TestAgent a0(0, "A0", seed ^ 0x1111111111111111ULL);
   TestAgent a1(0, "A1", seed ^ 0x2222222222222222ULL);
   scribblez::Game g(a0, a1, d, seed);
@@ -4634,11 +4669,8 @@ TEST(Game, PlayFromReturnedToBag) {
   returned.add(Tile::from_char('Q'));
   returned.add(Tile::from_char('Z'));
   const uint64_t seed = 11;
-  Bag pool(seed);
-  pool.remove(Tile::from_char('A'));
-  pool.remove(Tile::from_char('B'));
-  pool.remove(Tile::from_char('Q'));
-  pool.remove(Tile::from_char('Z'));
+  TileCounts pool = TileCounts::full_distribution();
+  pool.remove(TileCounts::from_string("ABQZ"));
   const int in_circulation = pool.size() + leave.size() + returned.size();
 
   TestAgent a0(0, "A0", 1), a1(0, "A1", 2);
