@@ -34,7 +34,7 @@ class Dictionary;
 struct SubtreeParams {
   int alice_racks = 20;      // R_B: Alice's leaves Bob samples, one rollout each
   int candidates = 8;        // N_B, Bob's, by static equity
-  int late_candidates = 24;  // ... with late_bag or fewer tiles in the bag
+  int late_candidates = 12;  // ... with late_bag or fewer tiles in the bag
   int late_bag = 40;
   bool race = true;  // stop Bob's clearly beaten candidates between rounds
 };
