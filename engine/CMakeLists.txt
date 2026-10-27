@@ -390,6 +390,12 @@ target_link_libraries(forgone_play_tool PRIVATE
   Boost::program_options
   Threads::Threads)
 
+# One-shot: v10 .slog corpora to v11 (apps/slog_migrate_v11.cpp says when to delete it).
+add_executable(slog_migrate_v11 apps/slog_migrate_v11.cpp)
+target_link_libraries(slog_migrate_v11 PRIVATE
+  scribblez_core
+  Threads::Threads)
+
 # Sim-observation (.sobs) sidecars for .slog data
 # (docs/plans/sim_residual_feedback.md).
 add_executable(sim_obs_tool apps/sim_obs_tool.cpp)

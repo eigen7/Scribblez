@@ -6,6 +6,7 @@ GameLog GameLogStorage::view() const {
   GameLog v;
   v.seed = seed;
   v.player_names = {player_names[0].c_str(), player_names[1].c_str()};
+  v.seat_players = seat_players;
   v.initial_scores = initial_scores;
   v.initial_racks = initial_racks;
   v.records = turns.data();

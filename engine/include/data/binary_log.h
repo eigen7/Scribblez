@@ -11,7 +11,7 @@
 // File layout
 // -----------
 //   [FileHeader                            16 B]
-//   [GameMetadata  x num_games             24 B each]
+//   [GameMetadata  x num_games             34 B each]
 //   For each game g in [0, num_games):
 //     [InitialRacks                        16 B]  <- GameMetadata::start_offset
 //     [TurnBlob      x num_turns(g)        24 B each]
@@ -40,7 +40,7 @@ namespace binlog {
 
 // "SLOG" in little-endian (bytes 'S','L','O','G' on disk).
 inline constexpr uint32_t kMagic = 0x474F4C53u;
-inline constexpr uint16_t kVersion = 10;
+inline constexpr uint16_t kVersion = 11;
 
 // FileHeader::flags bits record the rules the games were played under, so a
 // consumer can refuse a corpus that does not suit it.
@@ -83,8 +83,13 @@ struct GameMetadata {
   //     move ahead of it, which would pollute its final-score target.
   uint8_t eligible_begin;
   uint8_t eligible_end;
+  // GameLog::seed (0 if unrecorded): a paired match plays each seed twice.
+  uint64_t seed;
+  // GameLog::seat_players: the run's player in each seat, -1 if unrecorded.
+  int8_t seat0_player;
+  int8_t seat1_player;
 };
-static_assert(sizeof(GameMetadata) == 24, "GameMetadata must be 24 bytes");
+static_assert(sizeof(GameMetadata) == 34, "GameMetadata must be 34 bytes");
 
 struct InitialRacks {
   Rack p0;  // 8 B

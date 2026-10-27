@@ -56,10 +56,12 @@ def play_round(
     seed: int,
     results_file: Path,
     face_up_leaves: bool = False,
+    slog_dir: Path | None = None,
 ) -> RoundResult:
-    """Play `num_pairs` mirrored pairs of player0 vs player1. `seed` must be
-    nonzero: play_game treats 0 as "pick a random seed", which would break the
-    fixed deals comparisons rely on."""
+    """Play `num_pairs` mirrored pairs of player0 vs player1, writing the games
+    as .slog files into `slog_dir` if given. `seed` must be nonzero: play_game
+    treats 0 as "pick a random seed", which would break the fixed deals
+    comparisons rely on."""
     if seed == 0:
         raise ValueError("seed 0 means 'random' to play_game; matches need fixed seeds")
     results_file.parent.mkdir(parents=True, exist_ok=True)
@@ -76,6 +78,9 @@ def play_round(
     # fmt: on
     if face_up_leaves:
         args.append("--face-up-leaves")
+    if slog_dir is not None:
+        slog_dir.mkdir(parents=True, exist_ok=True)
+        args += ["--binary-log-dir", str(slog_dir)]
     rc = run_play_game(args)
     if rc != 0:
         raise RuntimeError(f"play_game failed with exit code {rc}")

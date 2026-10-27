@@ -286,6 +286,12 @@ class TagPaths:
         into dashboard.db (match_eval/dispatch.py)."""
         return self.data_dir / MATCH_RESULTS_DIR
 
+    def arm_games_dir(self, arm: str) -> Path:
+        """A match_arms arm's games as .slog files, kept for later analysis.
+        Each game records its seed and which player held each seat, and the
+        arm is player 0."""
+        return self.data_dir / "arm_games" / arm
+
     def match_inbox_dir(self, worker_id: str) -> Path:
         """Where a match-eval slot receives the model it is to play
         (match_eval/dispatch.py)."""

@@ -2,8 +2,6 @@
 
 #include "game/game_log.h"
 
-#include <array>
-
 namespace scribblez {
 
 // Destination for finished games. GameEngine moves each game's log storage in,
@@ -14,8 +12,8 @@ class GameSink {
  public:
   virtual ~GameSink() = default;
 
-  // `seats[s]` is the persistent player index seated at seat s.
-  virtual void on_game(GameLogStorage&& log, const std::array<int, 2>& seats) = 0;
+  // GameLog::seat_players says which player sat in each seat.
+  virtual void on_game(GameLogStorage&& log) = 0;
 };
 
 }  // namespace scribblez

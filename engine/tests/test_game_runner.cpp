@@ -7,6 +7,8 @@
 
 #include "agent/player_factory.h"
 #include "arena/game_runner.h"
+#include "data/binary_log.h"
+#include "game/game_log.h"
 #include "lexicon/lexicon.h"
 #include "synthetic_equity.h"
 #include "util/exception.h"
@@ -19,9 +21,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
+#include <set>
 #include <string>
 #include <system_error>
+#include <tuple>
 #include <unistd.h>
 #include <vector>
 
@@ -120,6 +125,44 @@ TEST_F(GameRunnerTest, PairedGamesShareSeedsAndMirrorSeats) {
     EXPECT_EQ(pair[0].seat_scores, pair[1].seat_scores);
     EXPECT_EQ(pair[0].turns, pair[1].turns);
   }
+}
+
+// Each .slog game records its seed and which player sat in each seat, as the
+// results lines do, so a paired match's games can be credited from the .slog
+// alone.
+TEST_F(GameRunnerTest, SlogGamesRecordTheirSeedAndSeats) {
+  const std::filesystem::path results = tmp_ / "results.jsonl";
+  const std::filesystem::path slogs = tmp_ / "slogs";
+  std::filesystem::create_directories(slogs);
+  SeedProducer::Params seed_params;
+  seed_params.seed = 7;
+  SeedProducer::instance().seed(seed_params);
+  GameRunner::Params rp = paired_params(/*games=*/4);
+  rp.results_file = results.string();
+  rp.binary_log_dir = slogs.string();
+  {
+    GameRunner runner(rp, hasty_players());
+    runner.run();
+  }  // the runner's writer flushes on destruction
+
+  using Key = std::tuple<uint64_t, int, int>;
+  std::set<Key> expected;
+  for (const ResultLine& r : read_result_lines(results))
+    expected.insert({r.seed, r.seat_players[0], r.seat_players[1]});
+  ASSERT_EQ(expected.size(), 4u);
+
+  std::set<Key> recorded;
+  for (const auto& entry : std::filesystem::directory_iterator(slogs)) {
+    std::ifstream f(entry.path(), std::ios::binary);
+    const std::vector<char> buf{std::istreambuf_iterator<char>(f), {}};
+    const auto* header = reinterpret_cast<const binlog::FileHeader*>(buf.data());
+    std::vector<TurnRecord> scratch;
+    for (uint32_t g = 0; g < header->num_games; ++g) {
+      const GameLog log = binlog::make_game_view(buf.data(), g, scratch, nullptr);
+      recorded.insert({log.seed, log.seat_players[0], log.seat_players[1]});
+    }
+  }
+  EXPECT_EQ(recorded, expected);
 }
 
 // An odd --games cannot form pairs; construction must reject it rather than
