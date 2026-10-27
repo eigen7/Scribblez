@@ -127,14 +127,21 @@ Layout -- where data lives and what provisions it:
 Agents run the suites after nearly every change, often several at once beside
 experiments, so tests stay cheap:
 
-- **No GPU.** Tests run on the CPU only, and a model a test needs is tiny.
-  Both suites hide the GPU (CUDA_VISIBLE_DEVICES empty: ctest per test,
-  py/tests/conftest.py before torch loads), so a test that needs it fails
-  rather than skipping. An engine binary a Python test drives serves a
-  synthetic model instead of TensorRT (`--model=synthetic:<variant>`,
-  engine/include/nn/synthetic_eval_service.h). The single exception is
-  ctest's `gpu_smoke`, which checks that a TensorRT plan builds and runs at
-  all.
+- **No TensorRT building.** No test builds a TensorRT plan, and a model a
+  test needs is tiny. An engine binary a Python test drives serves a
+  synthetic model instead (`--model=synthetic:<variant>`,
+  engine/include/nn/synthetic_eval_service.h); C++ tests inject stub
+  services. The suites that have no use for the GPU hide it
+  (CUDA_VISIBLE_DEVICES empty: ctest per shard, py/tests/conftest.py before
+  torch loads), so a stray path into TensorRT fails rather than skipping or
+  building. The single exception is ctest's `gpu_smoke`, which checks that a
+  TensorRT plan builds and runs at all.
+- **GPU kernels are tested on the GPU.** A CUDA kernel is checked against its
+  CPU reference in ctest's `gpu_kernel_tests`
+  (engine/tests/test_gpu_kernels.cpp), which sees the GPU and links the
+  kernels without TensorRT; the CPU reference alone can't catch a bug that
+  lives only on the device. A change to a kernel, its host side or the ABI
+  between them (engine/src/gpu, engine/include/gpu) adds a case there.
 - **TensorRT parity is a separate check:** `py/tools/gpu_parity.py` (~15 s)
   compares the engine's TensorRT outputs with PyTorch for every model family.
   Run it when a change reaches TensorRT inference or what feeds it: engine/
