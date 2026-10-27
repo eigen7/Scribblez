@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from scribblez.dashboard import db
 from scribblez.params import ParamsError, param
 from scribblez.paths import TagPaths
-from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
+from scribblez.workloads.base import RoleSpec, SlotPlan, StatsSpec, WorkloadSpec
 
 
 @dataclass(frozen=True)
@@ -113,6 +113,13 @@ def complete(spec: WorkloadSpec, paths: TagPaths, params) -> bool:
     return done >= total
 
 
+def layout(params, vcpus: int, generator_threads: int | None) -> list[SlotPlan]:
+    """One arms runner on the machine's default threads. Its GPU need is the
+    arms' agents', which their specs decide, so it is unmeasured: queue a tag
+    with a memory override."""
+    return [SlotPlan("arms", None, None)]
+
+
 SPEC = WorkloadSpec(
     name="match_arms",
     title="Match arms (agent comparison)",
@@ -130,5 +137,6 @@ SPEC = WorkloadSpec(
     ),
     progress="scribblez.workloads.match_arms:progress",
     complete="scribblez.workloads.match_arms:complete",
+    layout="scribblez.workloads.match_arms:layout",
     pace_role="arms",
 )

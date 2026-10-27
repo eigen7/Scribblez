@@ -7,6 +7,7 @@ from scribblez.dashboard import api, db
 from scribblez.match_eval import arms as arms_runner
 from scribblez.match_eval.harness import RoundResult
 from scribblez.params import ParamsError
+from scribblez.workloads import resolve
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.match_arms import SPEC, MatchArmsParams, complete, parse_arms
 
@@ -73,6 +74,17 @@ def test_params_validate_accepts_a_good_experiment():
 def test_params_validate_rejects_bad_experiments(raw):
     with pytest.raises(ParamsError):
         params_mod.validate(MatchArmsParams, raw)
+
+
+# ---------------------------------------------------------------------------
+# Queue layout
+# ---------------------------------------------------------------------------
+
+
+def test_layout_is_one_arms_slot_with_an_unmeasured_gpu_need():
+    # Unmeasured, so placement asks for the queue entry's memory override.
+    plan = resolve(SPEC.layout)(MatchArmsParams(arms="a=--type=greedy"), 28, None)
+    assert [(p.role, p.threads, p.gpu_gb) for p in plan] == [("arms", None, None)]
 
 
 # ---------------------------------------------------------------------------
