@@ -52,18 +52,33 @@ std::vector<Move> bob_candidates(const SimPosition& pos, const SubtreeParams& pa
   return equity_top_k(req, bag <= params.late_bag ? params.late_candidates : params.candidates);
 }
 
-// Bob's beliefs about Alice's leave after `candidate`, one per rack.
-std::vector<std::shared_ptr<const belief::LeaveSampler>> bob_beliefs(const AliceTurn& turn,
-                                                                     const Move& candidate,
-                                                                     const BeliefModel& model,
-                                                                     const Dictionary& dict) {
-  if (!model.predict)
-    return std::vector<std::shared_ptr<const belief::LeaveSampler>>(turn.bob_racks.size());
-  const belief::ReplyView view(turn.position, candidate, dict);
+// Bob's belief inputs after `candidate`, one query per rack, and the model's
+// parameters for them; both empty without a model. Each rack's sampler is
+// built only where it is used, so a turn never holds a candidate's hundred
+// table passes at once.
+struct BobBeliefs {
   std::vector<belief::LeaveQuery> queries;
-  queries.reserve(turn.bob_racks.size());
-  for (const Rack& rack : turn.bob_racks) queries.push_back(view.query(rack));
-  return belief::beliefs_of(queries, model.predict, *model.table);
+  std::vector<belief::LeaveParams> params;
+
+  std::shared_ptr<const belief::LeaveSampler> sampler(size_t rack,
+                                                      const LeaveValueArrays& table) const;
+};
+
+std::shared_ptr<const belief::LeaveSampler> BobBeliefs::sampler(
+  size_t rack, const LeaveValueArrays& table) const {
+  if (queries.empty()) return nullptr;
+  return belief::belief_of(queries[rack], params[rack], table);
+}
+
+BobBeliefs bob_beliefs(const AliceTurn& turn, const Move& candidate, const BeliefModel& model,
+                       const Dictionary& dict) {
+  if (!model.predict) return {};
+  const belief::ReplyView view(turn.position, candidate, dict);
+  BobBeliefs out{.queries = std::vector<belief::LeaveQuery>(turn.bob_racks.size()), .params = {}};
+  util::parallel_for(turn.bob_racks.size(),
+                     [&](size_t i) { out.queries[i] = view.query(turn.bob_racks[i]); });
+  out.params = belief::predict_beliefs(out.queries, model.predict);
+  return out;
 }
 
 // Hands a labeler jobs built a chunk at a time (one of Alice's candidates),
@@ -135,7 +150,8 @@ CandidateSubtrees candidate_subtrees(const AliceTurn& turn, size_t c, const Beli
       replies[i] = {.move = out.moves[i].empty() ? Move::pass() : out.moves[i].front()};
       return;
     }
-    jobs[i] = position_job(pos, out.moves[i], rack_seed(seed, kSubtreeDomain, i), beliefs[i].get(),
+    const auto belief = beliefs.sampler(i, *model.table);
+    jobs[i] = position_job(pos, out.moves[i], rack_seed(seed, kSubtreeDomain, i), belief.get(),
                            dict, params.alice_racks);
   });
   for (size_t i = 0; i < racks; ++i)

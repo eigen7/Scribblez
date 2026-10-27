@@ -30,9 +30,18 @@ struct LeaveQuery {
   bool modelled() const { return cause == LeaveRowCause::kValid && bag > 0; }
 };
 
-// Each query's belief, null where it is not modelled: one `predict` call over
-// the modelled queries' rows together, then the samplers' table passes in
-// parallel (util/work_pool.h). `table` must outlive the samplers.
+// The model's parameters for each query, from one `predict` call over the
+// modelled queries' rows together; an unmodelled query's entry is unused.
+std::vector<LeaveParams> predict_beliefs(std::span<const LeaveQuery> queries,
+                                         const LeaveParamsFn& predict);
+
+// The query's belief under `params`, null where it is not modelled. `table`
+// must outlive the sampler.
+std::shared_ptr<const LeaveSampler> belief_of(const LeaveQuery& q, const LeaveParams& params,
+                                              const LeaveValueArrays& table);
+
+// Each query's belief: predict_beliefs, then the samplers' table passes in
+// parallel (util/work_pool.h).
 std::vector<std::shared_ptr<const LeaveSampler>> beliefs_of(std::span<const LeaveQuery> queries,
                                                             const LeaveParamsFn& predict,
                                                             const LeaveValueArrays& table);
