@@ -184,12 +184,12 @@ void run_sim_lane(const SimPosition& pos, const std::vector<AppliedCandidate>& a
                   const SimRunner::Params& params, const InputEncodingSpec* leaf_spec,
                   util::LaneCursor& cursor, uint64_t base_seed, std::vector<Rollout>* results,
                   std::vector<RolloutTrace>* traces) {
-  const int t = int(cursor.lane());
+  const int lane = int(cursor.lane());
   HastyBot::Params p0;
-  p0.thread_id = t;
+  p0.thread_id = lane;
   p0.name = "H0";
   HastyBot::Params p1;
-  p1.thread_id = t;
+  p1.thread_id = lane;
   p1.name = "H1";
   // Default temperature 0: deterministic greedy play.
   EndgameAgent<HastyBot>::Params e0, e1;
