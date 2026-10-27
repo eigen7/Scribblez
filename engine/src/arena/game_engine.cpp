@@ -2,6 +2,7 @@
 
 #include "game/game.h"
 #include "lexicon/lexicon.h"
+#include "util/assert.h"
 #include "util/exception.h"
 
 #include <cmath>
@@ -62,6 +63,7 @@ std::pair<EndGameAction, EndGameAction> GameEngine::play(int thread_idx,
   Agent& seat0 = *agents_[thread_idx][seats[0]];
   Agent& seat1 = *agents_[thread_idx][seats[1]];
   const uint64_t game_seed = params_.seed + game_idx;
+  RELEASE_ASSERT(game_seed != 0, "seed 0 marks an unrecorded seed (GameLog::seed)");
   Game game(seat0, seat1, Lexicon::instance().dict(), game_seed);
   game.set_initial_scores(pick_handicap(game_seed, params_.handicap_max));
   game.set_random_opening(pick_random_opening_plies(game_seed, params_.random_opening_mean));

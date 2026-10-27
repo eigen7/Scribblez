@@ -27,6 +27,8 @@ struct TurnRecord {
 // decoder's buffer) must outlive it. Both self-play and on-disk replay produce
 // this type, so one encoder serves both.
 struct GameLog {
+  // The seed the game was played with; 0 where the producer did not record it
+  // (a GCG import, a .slog migrated from v10), so GameEngine never plays seed 0.
   uint64_t seed = 0;
   std::array<const char*, 2> player_names = {nullptr, nullptr};
   // Which of the run's players sat in each seat (play_game's --player order),

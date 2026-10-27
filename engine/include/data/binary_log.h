@@ -83,7 +83,8 @@ struct GameMetadata {
   //     move ahead of it, which would pollute its final-score target.
   uint8_t eligible_begin;
   uint8_t eligible_end;
-  uint64_t seed;  // the game's seed: a paired match plays each seed twice
+  // GameLog::seed (0 if unrecorded): a paired match plays each seed twice.
+  uint64_t seed;
   // GameLog::seat_players: the run's player in each seat, -1 if unrecorded.
   int8_t seat0_player;
   int8_t seat1_player;
