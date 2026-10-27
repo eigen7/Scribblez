@@ -294,15 +294,25 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
 enable_language(CUDA)
 set(CMAKE_CUDA_FLAGS_TEST "${CMAKE_CUDA_FLAGS_RELEASE}")
-add_library(scribblez_gpu_rollouts STATIC
+# The kernel and its host side, without TensorRT, so gpu_kernel_tests can link
+# it alone.
+add_library(scribblez_gpu_kernels STATIC
   src/gpu/rollout_kernel.cu
-  src/gpu/hasty_rollouts_gpu.cpp
-  src/gpu/gpu_rollout_values.cpp
-  src/gpu/rollout_backend.cpp)
-set_target_properties(scribblez_gpu_rollouts PROPERTIES
+  src/gpu/hasty_rollouts_gpu.cpp)
+set_target_properties(scribblez_gpu_kernels PROPERTIES
   INTERPROCEDURAL_OPTIMIZATION OFF
   CUDA_RUNTIME_LIBRARY Shared)
-target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_core scribblez_nn ${CUDA_CUDART})
+target_link_libraries(scribblez_gpu_kernels PUBLIC scribblez_core ${CUDA_CUDART})
+# The rollouts valued by the leaf network on the device.
+add_library(scribblez_gpu_rollouts STATIC
+  src/gpu/gpu_rollout_values.cpp
+  src/gpu/rollout_backend.cpp)
+set_target_properties(scribblez_gpu_rollouts PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_gpu_kernels scribblez_nn)
+# The kernel's checks against its CPU reference, for gpu_kernel_tests and
+# gpu_rollout_demo.
+add_library(scribblez_gpu_rollout_check STATIC src/gpu/rollout_check.cpp)
+target_link_libraries(scribblez_gpu_rollout_check PUBLIC scribblez_gpu_kernels)
 
 # The policy-set model's labeled pools on the GPU (docs/plans/deep_bot_v0.md).
 add_executable(policy_set_pool_tool apps/policy_set_pool_tool.cpp)
@@ -325,6 +335,7 @@ target_link_libraries(blind_spot_confirm_tool PRIVATE
 
 add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)
 target_link_libraries(gpu_rollout_demo PRIVATE
+  scribblez_gpu_rollout_check
   scribblez_gpu_rollouts
   scribblez_nn
   scribblez_core

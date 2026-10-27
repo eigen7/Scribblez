@@ -1,18 +1,17 @@
 // Demo of the hasty-rollout task on the GPU against the CPU reference:
 // reaches a position by HastyBot self-play, makes the mover's top candidates
-// one group (every other rollout seating a known opponent leave), runs N
-// rollouts of each candidate on both, checks them task by task (same draws,
-// so same moves and outcomes), and prints the throughput of each.
+// one group (its rollouts seating known opponent leaves of every length), runs
+// N rollouts of each candidate on both, checks them task by task (same draws,
+// so same moves and outcomes), and prints the throughput of each. With
+// --leaf-model it also checks the leaf model's TensorRT values; the kernel's
+// own checks run in the test suite (gpu_kernel_tests, gpu/rollout_check.h).
 // docs/plans/gpu_hasty_rollouts.md.
 
-#include "agent/hasty_bot.h"
 #include "encoding/leaf_eval_input_encoder.h"
-#include "game/board.h"
-#include "game/game.h"
-#include "game/game_log.h"
 #include "game/move.h"
 #include "gpu/gpu_rollout_values.h"
 #include "gpu/hasty_rollouts_gpu.h"
+#include "gpu/rollout_check.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "nn/model_specs.h"
@@ -29,13 +28,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
-#include <cstring>
 #include <format>
 #include <iostream>
-#include <limits>
-#include <numeric>
-#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -50,177 +44,7 @@ double seconds_since(Clock::time_point t0) {
   return std::chrono::duration<double>(Clock::now() - t0).count();
 }
 
-// The decision point after `plies` plies of HastyBot self-play: the board,
-// the mover's rack and the scores from the mover's side.
-struct DecisionPoint {
-  Board board;
-  Rack rack;
-  int my_score = 0, opp_score = 0;
-};
-
-DecisionPoint self_play_position(const Dictionary& dict, uint64_t seed, int plies) {
-  HastyBot p0({.thread_id = 0, .name = "p0"});
-  HastyBot p1({.thread_id = 0, .name = "p1"});
-  Game game(p0, p1, dict, seed);
-  game.set_max_plies(plies);
-  game.play();
-  const GameLog log = game.log();
-  if (!game.truncated() || log.num_records < 1) {
-    throw std::runtime_error(std::format("the game ended before {} plies", plies));
-  }
-  const int mover = 1 - log.records[log.num_records - 1].player;
-  return {game.board(), game.rack(mover), game.score(mover), game.score(1 - mover)};
-}
-
-// The mover's top `count` moves by static equity, plus the best exchange if
-// the cut has none.
-std::vector<Move> candidates(const DecisionPoint& at, const Dictionary& dict, int count) {
-  const MoveRequest req{at.board,
-                        dict,
-                        at.rack,
-                        Rack{},
-                        at.my_score,
-                        at.opp_score,
-                        at.board.pov_bag_size(at.rack.size())};
-  const std::vector<Move> ranked = equity_top_k(req, std::numeric_limits<int>::max());
-  std::vector<Move> out(ranked.begin(), ranked.begin() + std::min<size_t>(ranked.size(), count));
-  const auto is_exchange = [](const Move& m) { return m.type() == MoveType::EXCHANGE; };
-  if (std::none_of(out.begin(), out.end(), is_exchange)) {
-    const auto it = std::find_if(ranked.begin(), ranked.end(), is_exchange);
-    if (it != ranked.end()) out.push_back(*it);
-  }
-  return out;
-}
-
-// Every other rollout seats a known opponent leave of 1 to 7 tiles from the
-// pool; the rest draw the opponent's whole rack.
-std::vector<Rack> known_leaves(const TileCounts& pool, int rollouts, uint64_t seed) {
-  std::vector<Tile> tiles;
-  for (int k = 0; k < TILE_KINDS; ++k)
-    for (int c = 0; c < pool.count(Tile::of(k)); ++c) tiles.push_back(Tile::of(k));
-  std::mt19937_64 rng(seed);
-  std::vector<Rack> out(static_cast<size_t>(rollouts));
-  for (int i = 0; i < rollouts; i += 2) {
-    std::shuffle(tiles.begin(), tiles.end(), rng);
-    const int n = std::min<int>(int(tiles.size()) - RACK_SIZE, 1 + int(rng() % RACK_SIZE));
-    for (int j = 0; j < n; ++j) out[size_t(i)].add(tiles[size_t(j)]);
-  }
-  return out;
-}
-
-RolloutBatch candidate_batch(const DecisionPoint& at, const std::vector<Move>& moves, int rollouts,
-                             uint64_t seed) {
-  RolloutBatch batch;
-  batch.groups.push_back(make_rollout_group(at.board, at.rack, seed));
-  batch.groups[0].opp_leaves = known_leaves(batch.groups[0].pool, rollouts, seed);
-  for (const Move& m : moves) {
-    batch.starts.push_back(make_rollout_start(at.board, at.rack, at.my_score, at.opp_score, m, 0));
-    batch.add_rollouts(uint32_t(batch.starts.size() - 1), 0, uint32_t(rollouts));
-  }
-  return batch;
-}
-
-bool same_move(const rollout_abi::PackedMove& a, const rollout_abi::PackedMove& b) {
-  return std::memcmp(&a, &b, sizeof(a)) == 0;
-}
-
-void print_mismatch(const RolloutBatch& batch, size_t k, const rollout_abi::RolloutResult& cpu,
-                    const rollout_abi::RolloutResult& gpu) {
-  const rollout_abi::RolloutTask& task = batch.tasks[k];
-  const RolloutRacks racks = rollout_racks(batch, task);
-  std::cout << std::format(
-    "  candidate {} rollout {}: opp rack {} our rack {} | diff cpu {} gpu {}\n", task.position,
-    task.rollout, racks.opp.to_string(), racks.mine.to_string(), cpu.diff, gpu.diff);
-  Board board = batch.starts[task.position].board;
-  for (int ply = 0; ply < 2; ++ply) {
-    const Move mc = unpack_move(cpu.moves[ply]), mg = unpack_move(gpu.moves[ply]);
-    std::cout << std::format("    ply {}: cpu [{}] gpu [{}]{}\n", ply, describe_move(mc, board),
-                             describe_move(mg, board),
-                             same_move(cpu.moves[ply], gpu.moves[ply]) ? "" : "  <-- differs");
-    if (mc.type() == MoveType::PLAY) board.apply(mc);
-  }
-}
-
 using LeafEncoder = LeafEvalInputEncoder;
-
-// The CPU encoder's rows for `leaves`, kInputFloats each.
-struct CpuRows {
-  std::vector<float> rows;
-  double seconds = 0;  // encoding alone, one thread
-};
-
-CpuRows encode_on_cpu(const std::vector<CpuLeaf>& leaves, const Dictionary& dict) {
-  CpuRows out;
-  out.rows.resize(leaves.size() * LeafEncoder::kInputFloats);
-  const LeaveValues& lv = HastyEquity::instance().leave_values();
-  for (size_t i = 0; i < leaves.size(); ++i) {
-    const CpuLeaf& leaf = leaves[i];
-    const LeafEvalInput in{&leaf.board, leaf.leaves[0], leaf.leaves[1],
-                           leaf.scores[0] - leaf.scores[1]};
-    const auto t0 = Clock::now();
-    LeafEncoder::encode(in, dict, lv, &out.rows[i * LeafEncoder::kInputFloats]);
-    out.seconds += seconds_since(t0);
-  }
-  return out;
-}
-
-// The device encoder's rows for leaves [0, n) of the last run, laid out as
-// the CPU writes them.
-std::vector<float> device_rows(GpuHastyRollouts& gpu, int n, int batch) {
-  std::vector<float> spatial(size_t(n) * LeafEncoder::kSpatialFloats);
-  std::vector<float> scalar(size_t(n) * LeafEncoder::kScalarFloats);
-  std::vector<uint32_t> tasks(static_cast<size_t>(n));
-  std::iota(tasks.begin(), tasks.end(), 0u);
-  for (int first = 0; first < n; first += batch) {
-    gpu.encode_leaves_to_host(&tasks[size_t(first)], std::min(batch, n - first),
-                              &spatial[size_t(first) * LeafEncoder::kSpatialFloats],
-                              &scalar[size_t(first) * LeafEncoder::kScalarFloats]);
-  }
-  std::vector<float> rows(size_t(n) * LeafEncoder::kInputFloats);
-  for (size_t i = 0; i < size_t(n); ++i) {
-    float* row = &rows[i * LeafEncoder::kInputFloats];
-    std::copy_n(&spatial[i * LeafEncoder::kSpatialFloats], LeafEncoder::kSpatialFloats, row);
-    std::copy_n(&scalar[i * LeafEncoder::kScalarFloats], LeafEncoder::kScalarFloats,
-                row + LeafEncoder::kSpatialFloats);
-  }
-  return rows;
-}
-
-std::string describe_element(size_t row, int k, float cpu, float gpu) {
-  if (k < LeafEncoder::kSpatialFloats) {
-    return std::format(" [row {} plane {} cell {}: cpu {} gpu {}]", row, k / kBoardCells,
-                       k % kBoardCells, cpu, gpu);
-  }
-  return std::format(" [row {} scalar {}: cpu {} gpu {}]", row, k - LeafEncoder::kSpatialFloats,
-                     cpu, gpu);
-}
-
-struct RowCheck {
-  int checked = 0, rows_identical = 0;
-  float max_abs_diff = 0;
-  std::string first_diffs;  // up to 8 elements of the first differing row
-};
-
-RowCheck compare_rows(const std::vector<float>& cpu, const std::vector<float>& gpu) {
-  RowCheck check;
-  check.checked = int(cpu.size() / LeafEncoder::kInputFloats);
-  for (size_t i = 0; i < size_t(check.checked); ++i) {
-    const float* c = &cpu[i * LeafEncoder::kInputFloats];
-    const float* g = &gpu[i * LeafEncoder::kInputFloats];
-    const bool first_differing = check.first_diffs.empty();
-    bool same = true;
-    int shown = 0;
-    for (int k = 0; k < LeafEncoder::kInputFloats; ++k) {
-      const float d = std::fabs(c[k] - g[k]);
-      if (d == 0) continue;
-      same = false;
-      check.max_abs_diff = std::max(check.max_abs_diff, d);
-      if (first_differing && shown++ < 8) check.first_diffs += describe_element(i, k, c[k], g[k]);
-    }
-    check.rows_identical += same ? 1 : 0;
-  }
-  return check;
-}
 
 // The host route over `rows`: staged from host memory, predicted, timed.
 // Returns each row's win value.
@@ -256,10 +80,12 @@ int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const D
   values.run(batch);  // the first run builds the TensorRT context's buffers
   const std::vector<RolloutOutcome> outcomes = values.run(batch);
   const GpuRolloutValues::Timings& tm = values.last_timings();
-  const CpuRows cpu = encode_on_cpu(cpu_leaves, dict);
-  const RowCheck check = compare_rows(
-    cpu.rows, device_rows(values.rollouts(), int(cpu_leaves.size()), values.net().max_rows()));
-  const HostRoute host = run_host_route(values.net(), cpu.rows);
+  const auto t0 = Clock::now();
+  const std::vector<float> cpu_rows = cpu_leaf_rows(cpu_leaves, dict);
+  const double cpu_seconds = seconds_since(t0);
+  const RowCheck check = compare_leaf_rows(
+    cpu_rows, device_leaf_rows(values.rollouts(), int(cpu_leaves.size()), values.net().max_rows()));
+  const HostRoute host = run_host_route(values.net(), cpu_rows);
   double max_value_diff = 0, mean_win = 0;
   for (size_t i = 0; i < outcomes.size(); ++i) mean_win += outcomes[i].win_value();
   for (size_t i = 0; i < cpu_leaves.size(); ++i) {
@@ -278,7 +104,7 @@ int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const D
     check.checked, check.max_abs_diff, max_value_diff);
   std::cout << std::format(
     "  the host route: CPU encoder {:.0f} rows/s per thread, predict with upload {:.0f} evals/s\n",
-    check.checked / cpu.seconds, check.checked / host.seconds);
+    check.checked / cpu_seconds, check.checked / host.seconds);
   if (check.rows_identical != check.checked)
     std::cout << "  first differences:" << check.first_diffs << "\n";
   // FP16 runs of one engine at different batch sizes may pick different
@@ -306,7 +132,7 @@ Agreement compare_results(const RolloutBatch& batch,
     a.move_mismatch += bad_move;
     if ((bad_diff || bad_move) && shown < 8) {
       if (shown == 0) std::cout << "mismatches:\n";
-      print_mismatch(batch, k, cpu[k], gpu[k]);
+      std::cout << describe_mismatch(batch, k, cpu[k], gpu[k]);
       ++shown;
     }
   }
@@ -378,8 +204,7 @@ int run(int argc, char** argv) {
   HastyEquity::ensure_initialized(Lexicon::instance().name());
 
   const DecisionPoint at = self_play_position(dict, seed, plies);
-  at.board.ensure_movegen_caches(dict);
-  const std::vector<Move> moves = candidates(at, dict, num_candidates);
+  const std::vector<Move> moves = rollout_candidates(at, dict, num_candidates);
   const RolloutBatch batch = candidate_batch(at, moves, rollouts, seed);
   std::cout << at.board.to_string();
   std::cout << std::format("to move: rack {} | scores {} to {} | unseen {}\n", at.rack.to_string(),
@@ -390,7 +215,7 @@ int run(int argc, char** argv) {
     blank_racks += (r.opp.blanks() > 0 ? 1 : 0) + (r.mine.blanks() > 0 ? 1 : 0);
   }
   std::cout << std::format(
-    "{} candidates x {} rollouts (every other one seats a known opponent leave); {:.1f}% of the "
+    "{} candidates x {} rollouts (seating known opponent leaves of 0 to 7 tiles); {:.1f}% of the "
     "drawn racks hold a blank\n\n",
     moves.size(), rollouts, 100.0 * blank_racks / (2.0 * double(batch.tasks.size())));
 
