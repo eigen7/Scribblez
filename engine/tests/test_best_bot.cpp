@@ -20,6 +20,7 @@
 #include "sim/win_pct_table.h"
 #include "util/exception.h"
 #include "util/running_stat.h"
+#include "worker_budget.h"
 
 #include <gtest/gtest.h>
 
@@ -284,12 +285,13 @@ TEST(MacondoSimmer, ResultsDoNotDependOnThreadCount) {
   const MoveRequest req = pos->request(nwl23());
   const std::vector<Move> candidates = equity_top_k(req, 4);
   constexpr int kIterations = MacondoAutoStopper::kCheckInterval + 8;
-  MacondoSimmer::Params params{.plies = 1, .threads = 1, .max_iterations = kIterations};
-  const MacondoSimmer::Result one =
-    MacondoSimmer::simulate(nwl23(), sim_position_from(req), candidates, 0, params, 99);
-  params.threads = 4;
-  const MacondoSimmer::Result four =
-    MacondoSimmer::simulate(nwl23(), sim_position_from(req), candidates, 0, params, 99);
+  const MacondoSimmer::Params params{.plies = 1, .max_iterations = kIterations};
+  const auto simulate = [&](int threads) {
+    const WorkerBudget budget(threads);
+    return MacondoSimmer::simulate(nwl23(), sim_position_from(req), candidates, 0, params, 99);
+  };
+  const MacondoSimmer::Result one = simulate(1);
+  const MacondoSimmer::Result four = simulate(4);
   expect_same_results(one, four);
   EXPECT_EQ(one.iterations, uint64_t(kIterations));
   int pruned = 0;
@@ -368,8 +370,7 @@ TEST(BestBot, FromSpecParsing) {
   if (!have_macondo_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo data";
   EXPECT_NE(BestBot::from_spec({"--min-sim-plies=3", "--max-iterations=500", "--seed=4"}, 0, "B"),
             nullptr);
-  EXPECT_NE(EndgameAgent<BestBot>::from_spec({"--sim-threads=2", "--endgame-budget=5000"}, 0, "E"),
-            nullptr);
+  EXPECT_NE(EndgameAgent<BestBot>::from_spec({"--endgame-budget=5000"}, 0, "E"), nullptr);
   EXPECT_THROW(BestBot::from_spec({"--bogus=1"}, 0, "B"), std::runtime_error);
   EXPECT_THROW(BestBot::from_spec({"--min-sim-plies=0"}, 0, "B"), std::runtime_error);
   EXPECT_THROW(BestBot::from_spec({"--endgame-budget=5"}, 0, "B"), std::runtime_error);

@@ -36,9 +36,6 @@ boost::program_options::options_description bestbot_options(BestBot::Params& p) 
   desc.add_options()                                                                     //
     ("min-sim-plies", po::value<int>(&p.min_sim_plies)->default_value(p.min_sim_plies),  //
      "rollout plies while more than 14 tiles are unseen (Macondo uses at least 2)")      //
-    ("sim-threads", po::value<int>(&p.sim_threads)->default_value(p.sim_threads),
-     "threads within one move's sim; leave at 1 when the game loop already runs games in "
-     "parallel. Results do not depend on it")  //
     ("max-iterations", po::value<int>(&p.max_iterations)->default_value(p.max_iterations),
      "cap on sim iterations per move; 0 leaves it to Macondo's stopping rule")  //
     ("seed", po::value<uint64_t>(&p.seed), "sim PRNG seed (default: SeedProducer)");
@@ -50,11 +47,9 @@ boost::program_options::options_description bestbot_options(BestBot::Params& p) 
 BestBot::BestBot(const Params& params)
     : Agent(params.thread_id, params.name),
       min_sim_plies_(params.min_sim_plies),
-      sim_threads_(params.sim_threads),
       max_iterations_(params.max_iterations),
       seed_(params.seed) {
   if (min_sim_plies_ < 1) throw util::CleanException("bestbot: --min-sim-plies must be >= 1");
-  if (sim_threads_ < 1) throw util::CleanException("bestbot: --sim-threads must be >= 1");
   if (max_iterations_ < 0) throw util::CleanException("bestbot: --max-iterations must be >= 0");
 }
 
@@ -82,7 +77,6 @@ MoveDecision BestBot::make_move(const MoveRequest& req) {
 
   const MacondoSimmer::Params params{
     .plies = late ? unseen : std::max(min_sim_plies_, 2),
-    .threads = sim_threads_,
     .max_iterations = max_iterations_,
   };
   const MacondoSimmer::Result result = MacondoSimmer::simulate(

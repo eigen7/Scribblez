@@ -36,11 +36,11 @@ PoolJob position_job(const SimPosition& pos, const std::vector<Move>& moves, uin
 PoolJob make_pool_job(const SimmedPosition& r, const belief::LeaveSampler* leave,
                       const Dictionary& dict, int rollouts);
 
-// make_pool_job for each of `selected`, on `threads` threads, the leaves from
+// make_pool_job for each of `selected`, in parallel, the leaves from
 // `beliefs` (null: the opponent's whole rack is drawn uniformly).
 std::vector<PoolJob> make_pool_jobs(const std::vector<SimmedPosition>& selected,
                                     const belief::SlogLeaveBeliefs* beliefs, const Dictionary& dict,
-                                    int rollouts, int threads);
+                                    int rollouts);
 
 // Throws util::CleanException naming the first of `slogs` without the .forgone
 // sidecar the leave inference model's input reads, before any work starts.

@@ -59,6 +59,7 @@
 #include "util/math.h"
 #include "util/metaprogramming.h"
 #include "util/string.h"
+#include "worker_budget.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -1764,7 +1765,7 @@ Corpus::Corpus(const Dictionary& dict, int games, uint64_t first_seed, bool with
   for (const auto& ent : fs::directory_iterator(dir)) {
     if (ent.path().extension() == ".slog") slog = ent.path();
   }
-  if (with_sidecar) write_forgone_sidecar(bytes(), dict, forgone_path_of(slog.string()), 2);
+  if (with_sidecar) write_forgone_sidecar(bytes(), dict, forgone_path_of(slog.string()));
 }
 
 }  // namespace forgone_sidecar_test
@@ -4695,7 +4696,6 @@ TEST(SimRunner, Basic) {
 
   SimRunner::Params params;
   params.rollouts = 16;
-  params.threads = 3;
   const SimRunner runner(d, params);
   const uint64_t base_seed = 400;
   const std::vector<RolloutStats> obs = runner.run(pos, candidates, base_seed);
@@ -4722,9 +4722,8 @@ TEST(SimRunner, Basic) {
 
   // Results do not depend on the thread count.
   {
-    SimRunner::Params p1 = params;
-    p1.threads = 1;
-    const std::vector<RolloutStats> obs1 = SimRunner(d, p1).run(pos, candidates, base_seed);
+    const WorkerBudget one(1);
+    const std::vector<RolloutStats> obs1 = SimRunner(d, params).run(pos, candidates, base_seed);
     ASSERT_EQ(obs1.size(), obs.size());
     for (size_t c = 0; c < obs.size(); ++c)
       ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(RolloutStats)), 0);
@@ -4936,7 +4935,6 @@ TEST(SimRunner, TruncatedPovParity) {
     ConstantLeafService leaf;
     SimRunner::Params params;
     params.rollouts = 16;
-    params.threads = 2;
     params.horizon_plies = horizon;
     params.leaf_service = &leaf;
     const std::vector<RolloutStats> obs = SimRunner(d, params).run(pos, candidates, 400);
@@ -4994,7 +4992,6 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
   RowLeafService leaf;
   SimRunner::Params params;
   params.rollouts = 16;
-  params.threads = 3;
   params.horizon_plies = 4;
   params.leaf_service = &leaf;
   const uint64_t base_seed = 400;
@@ -5007,9 +5004,8 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
   ASSERT_EQ(std::memcmp(&obs[0], &obs[1], sizeof(RolloutStats)), 0);
 
   {
-    SimRunner::Params p1 = params;
-    p1.threads = 1;
-    const std::vector<RolloutStats> obs1 = SimRunner(d, p1).run(pos, candidates, base_seed);
+    const WorkerBudget one(1);
+    const std::vector<RolloutStats> obs1 = SimRunner(d, params).run(pos, candidates, base_seed);
     for (size_t c = 0; c < obs.size(); ++c)
       ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(RolloutStats)), 0);
   }
@@ -5104,7 +5100,6 @@ TEST(SimRunner, WinTableLeafReadsTheSideToMove) {
   for (const int horizon : {3, 4}) {
     SimRunner::Params params;
     params.rollouts = 12;
-    params.threads = 2;
     params.horizon_plies = horizon;
     params.win_table = &table;
     std::vector<RolloutTrace> traces;
@@ -5412,7 +5407,6 @@ TEST(SimRunner, NonFiniteLeafReadoutIsRejected) {
     NonFiniteLeafService leaf(c);
     SimRunner::Params params;
     params.rollouts = 8;
-    params.threads = 2;
     params.horizon_plies = 4;
     params.leaf_service = &leaf;
     EXPECT_THROW(SimRunner(d, params).run(pos, candidates, 400), std::runtime_error);
@@ -5448,7 +5442,6 @@ TEST(SimRunner, KnownOppRack) {
 
   SimRunner::Params params;
   params.rollouts = 12;
-  params.threads = 3;
   const SimRunner runner(d, params);
   const std::vector<RolloutStats> obs = runner.run(pos, candidates, /*base_seed=*/9);
   bool any_reply = false;
@@ -5462,9 +5455,8 @@ TEST(SimRunner, KnownOppRack) {
   }
   ASSERT_TRUE(any_reply);
 
-  SimRunner::Params p1 = params;
-  p1.threads = 1;
-  const std::vector<RolloutStats> obs1 = SimRunner(d, p1).run(pos, candidates, /*base_seed=*/9);
+  const WorkerBudget one(1);
+  const std::vector<RolloutStats> obs1 = SimRunner(d, params).run(pos, candidates, /*base_seed=*/9);
   for (size_t c = 0; c < obs.size(); ++c)
     ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(RolloutStats)), 0);
 
@@ -5498,7 +5490,6 @@ TEST(SimRunner, PartialLeave) {
   ASSERT_FALSE(plays.empty());
   SimRunner::Params params;
   params.rollouts = 10;
-  params.threads = 2;
   const std::vector<RolloutStats> obs =
     SimRunner(d, params).run(pos, {plays.front()}, /*base_seed=*/4);
   ASSERT_EQ(int(obs[0].n), params.rollouts);

@@ -11,6 +11,7 @@
 #include "lexicon/hasty_equity.h"
 #include "sim/monte_carlo_sim.h"
 #include "util/io.h"
+#include "worker_budget.h"
 
 #include <gtest/gtest.h>
 
@@ -106,7 +107,7 @@ class MonteCarloSimTest : public ::testing::Test {
   }
 
   MonteCarloResult run(const ParsedGcgPostMove& pos, LeaveCondition condition, int n = 12) {
-    return run_monte_carlo(pos, *dict_, n, /*threads=*/4, condition);
+    return run_monte_carlo(pos, *dict_, n, condition);
   }
 
   std::unique_ptr<Dictionary> dict_;
@@ -135,9 +136,12 @@ TEST_F(MonteCarloSimTest, ConditionsCoincideAfterABingo) {
 TEST_F(MonteCarloSimTest, DeterministicAcrossThreadCounts) {
   const ParsedGcgPostMove pos = parse(two_moves_earlier());
   ASSERT_EQ(pos.opp_leave.to_string(), "ACEINS");
-  for (const LeaveCondition c : {LeaveCondition::kHidden, LeaveCondition::kFaceUp}) {
-    expect_same(run_monte_carlo(pos, *dict_, 16, 1, c), run_monte_carlo(pos, *dict_, 16, 7, c));
-  }
+  const auto run_on = [&](int threads, LeaveCondition c) {
+    const WorkerBudget budget(threads);
+    return run_monte_carlo(pos, *dict_, 16, c);
+  };
+  for (const LeaveCondition c : {LeaveCondition::kHidden, LeaveCondition::kFaceUp})
+    expect_same(run_on(1, c), run_on(7, c));
 }
 
 // With a known leave the conditions see different opponents: face-up seats

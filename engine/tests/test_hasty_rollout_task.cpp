@@ -14,6 +14,7 @@
 #include "sim/hasty_rollout_task.h"
 #include "sim/rollout_values.h"
 #include "sim/sim_runner.h"
+#include "worker_budget.h"
 
 #include <gtest/gtest.h>
 
@@ -132,7 +133,7 @@ TEST(HastyRolloutCpu, LeavesAreTheRacksAfterEachMoveBeforeItsDraw) {
   const RolloutBatch batch = batch_of(d, {ranked_moves(d, dict).front()}, /*rollouts=*/32);
   std::vector<CpuLeaf> leaves(16);
   const std::vector<rollout_abi::RolloutResult> results =
-    run_hasty_rollouts_cpu(batch, dict, /*threads=*/2, &leaves);
+    run_hasty_rollouts_cpu(batch, dict, &leaves);
   for (size_t i = 0; i < leaves.size(); ++i) {
     const RolloutRacks racks = rollout_racks(batch, batch.tasks[i]);
     const rollout_abi::RolloutResult& r = results[i];
@@ -216,8 +217,9 @@ TEST(HastyRolloutCpu, ATasksOutcomeDoesNotDependOnItsBatch) {
   part.tasks = {{1, 9}, {0, 3}};
   static_assert(std::has_unique_object_representations_v<rollout_abi::RolloutResult>,
                 "memcmp compares results field by field only without padding");
-  const auto all = run_hasty_rollouts_cpu(whole, dict, /*threads=*/3);
-  const auto some = run_hasty_rollouts_cpu(part, dict, /*threads=*/1);
+  const auto all = run_hasty_rollouts_cpu(whole, dict);
+  const WorkerBudget one(1);
+  const auto some = run_hasty_rollouts_cpu(part, dict);
   EXPECT_EQ(std::memcmp(&some[0], &all[12 + 9], sizeof(some[0])), 0);
   EXPECT_EQ(std::memcmp(&some[1], &all[3], sizeof(some[1])), 0);
 }
@@ -227,10 +229,9 @@ TEST(RolloutValues, TheCpuBackendValuesLeavesAndFinishedGames) {
   const Dictionary& dict = nwl23();
   const Decision d = decision_after(dict, /*seed=*/6, /*plies=*/10);
   const RolloutBatch batch = batch_of(d, {ranked_moves(d, dict).front()}, /*rollouts=*/8);
-  CpuRolloutValues values(dict, /*threads=*/2, synthetic_leaf());
+  CpuRolloutValues values(dict, synthetic_leaf());
   const std::vector<RolloutOutcome> outcomes = values.run(batch);
-  const std::vector<rollout_abi::RolloutResult> results =
-    run_hasty_rollouts_cpu(batch, dict, /*threads=*/1);
+  const std::vector<rollout_abi::RolloutResult> results = run_hasty_rollouts_cpu(batch, dict);
   ASSERT_EQ(outcomes.size(), results.size());
   for (size_t k = 0; k < outcomes.size(); ++k) {
     EXPECT_EQ(outcomes[k].result.diff, results[k].diff);
@@ -269,8 +270,7 @@ TEST(HastyRolloutCpu, AMoveThatGoesOutWithTheBagEmptyEndsTheGame) {
   });
   ASSERT_NE(out, ranked.end()) << "no move plays out";
   const RolloutBatch batch = batch_of(d, {*out}, /*rollouts=*/4);
-  const std::vector<RolloutOutcome> outcomes =
-    CpuRolloutValues(dict, /*threads=*/1, synthetic_leaf()).run(batch);
+  const std::vector<RolloutOutcome> outcomes = CpuRolloutValues(dict, synthetic_leaf()).run(batch);
   for (size_t i = 0; i < outcomes.size(); ++i) {
     const RolloutOutcome& o = outcomes[i];
     const Rack opp = rollout_racks(batch, batch.tasks[i]).opp;
@@ -300,7 +300,7 @@ TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesIsPlayedToTheEnd) {
     if (it == ranked.end()) continue;
     const RolloutBatch batch = batch_of(d, {*it}, /*rollouts=*/8);
     const std::vector<RolloutOutcome> outcomes =
-      CpuRolloutValues(dict, /*threads=*/1, synthetic_leaf()).run(batch);
+      CpuRolloutValues(dict, synthetic_leaf()).run(batch);
     for (size_t i = 0; i < outcomes.size(); ++i) {
       EXPECT_EQ(outcomes[i].result.game_over, 1) << "seed " << seed << " rollout " << i;
       EXPECT_EQ(outcomes[i].wld, terminal_wld(outcomes[i].result.diff)) << "rollout " << i;

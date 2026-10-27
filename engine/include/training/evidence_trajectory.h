@@ -91,11 +91,10 @@ class StudentScorer {
   bool stopping_ = false;
 };
 
-// One per worker thread: owns the scoring buffers, a single-threaded SimRunner
-// and the proposal sampler, and sends student evaluations through the shared
-// scorer. spec.opp_leave_input sets the information condition. When it is on,
-// the equity ranking and the student both see the position's opp_leave; when
-// off, they see no opponent tiles at all, since in hidden mode the replayed
+// One per lane: owns the scoring buffers, a SimRunner and the proposal
+// sampler, and sends student evaluations through the shared scorer. spec.opp_leave_input sets the
+// information condition. When it is on, the equity ranking and the student both see the position's
+// opp_leave; when off, they see no opponent tiles at all, since in hidden mode the replayed
 // opponent rack is ground truth the mover cannot see.
 class TrajectoryRunner {
  public:

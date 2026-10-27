@@ -21,6 +21,7 @@
 #include "sim/hasty_rollout_task.h"
 #include "sim/rollout_values.h"
 #include "sim/sim_runner.h"
+#include "util/work_pool.h"
 
 #include <boost/program_options.hpp>
 
@@ -371,6 +372,7 @@ int run(int argc, char** argv) {
                                     {"leaf-rows", leaf_rows}}) {
     if (value < 1) throw po::error(std::format("--{} must be at least 1", name));
   }
+  util::set_worker_count(threads);
 
   const Dictionary& dict = Lexicon::instance().dict();
   HastyEquity::ensure_initialized(Lexicon::instance().name());
@@ -396,7 +398,7 @@ int run(int argc, char** argv) {
   std::vector<CpuLeaf> cpu_leaves(
     leaf_model.empty() ? 0 : std::min(size_t(leaf_check), batch.tasks.size()));
   const std::vector<rollout_abi::RolloutResult> cpu =
-    run_hasty_rollouts_cpu(batch, dict, threads, &cpu_leaves);
+    run_hasty_rollouts_cpu(batch, dict, &cpu_leaves);
   const double cpu_seconds = seconds_since(t0);
 
   t0 = Clock::now();

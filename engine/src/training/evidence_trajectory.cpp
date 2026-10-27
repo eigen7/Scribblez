@@ -11,7 +11,6 @@ namespace scribblez::evidence {
 SimRunner::Params sim_params(const TrajectoryOptions& opt, nn::PositionEvalService* leaf) {
   SimRunner::Params p;
   p.rollouts = opt.rollouts;
-  p.threads = 1;
   p.horizon_plies = opt.horizon;
   p.leaf_service = leaf;
   return p;

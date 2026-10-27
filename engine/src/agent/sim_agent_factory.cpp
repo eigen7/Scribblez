@@ -29,7 +29,6 @@ namespace po = boost::program_options;
 struct SimOptions {
   int top_k = 10;
   int rollouts = 400;
-  int sim_threads = 1;
   int sim_horizon = 0;
   std::string leaf_model;
   std::string objective = "winrate";
@@ -45,9 +44,6 @@ po::options_description make_options_description(SimOptions& o) {
     ("rollouts", po::value<int>(&o.rollouts)->default_value(o.rollouts),
      "rollouts per candidate; every candidate shares the same rollout seeds, so "
      "rack and draw luck cancels when they are compared")  //
-    ("sim-threads", po::value<int>(&o.sim_threads)->default_value(o.sim_threads),
-     "threads within one turn's simulation; leave at 1 when the game loop is "
-     "already running games in parallel")  //
     ("sim-horizon", po::value<int>(&o.sim_horizon)->default_value(o.sim_horizon),
      "value truncation: rollouts stop after this many plies and --leaf-model scores the "
      "horizon; 0 rolls out to a natural game end")  //
@@ -89,7 +85,6 @@ std::unique_ptr<SimAgent> SimAgent::from_spec(const std::vector<std::string>& to
   params.dict = &Lexicon::instance().dict();
   params.top_k = opts.top_k;
   params.sim.rollouts = opts.rollouts;
-  params.sim.threads = opts.sim_threads;
   params.sim_horizon = opts.sim_horizon;
   params.objective = parse_sim_objective(opts.objective, "--objective");
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();

@@ -41,6 +41,7 @@
 #include "util/assert.h"
 #include "util/exception.h"
 #include "util/misc.h"
+#include "util/work_pool.h"
 
 #include <boost/program_options.hpp>
 
@@ -66,7 +67,7 @@ struct Options {
   std::string objective = "winprob";
   bool exchanges = true;
   bool sim = false;
-  SimRunner::Params sim_params{.rollouts = 300, .threads = util::default_thread_count()};
+  SimRunner::Params sim_params{.rollouts = 300};
   uint64_t sim_seed = 1;
   NeuralServiceOptions service;
 };
@@ -188,7 +189,7 @@ void sim_ranked_moves(const Dictionary& dict, const ParsedGcgPosition& pos,
   for (const RankedMove& r : ranked) candidates.push_back(moves[size_t(r.index)]);
 
   std::cout << "simming " << candidates.size() << " moves x " << opt.sim_params.rollouts
-            << " rollouts on " << opt.sim_params.threads << " threads...\n";
+            << " rollouts on " << util::worker_count() << " threads...\n";
   const SimRunner runner(dict, opt.sim_params);
   const SimPosition sim_pos{.board = pos.board,
                             .scores = pos.scores,
@@ -311,9 +312,6 @@ int main(int argc, char** argv) {
       "sim-rollouts",
       po::value<int>(&opt.sim_params.rollouts)->default_value(opt.sim_params.rollouts),
       "--sim: rollouts per scored move");
-    desc.add_options()(
-      "sim-threads", po::value<int>(&opt.sim_params.threads)->default_value(opt.sim_params.threads),
-      "--sim: rollout worker threads");
     desc.add_options()("sim-seed", po::value<uint64_t>(&opt.sim_seed)->default_value(opt.sim_seed),
                        "--sim: base seed of the common random numbers");
     opt.service.add_options(desc);

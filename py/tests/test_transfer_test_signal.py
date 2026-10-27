@@ -140,8 +140,8 @@ def test_reply_blocking_places_each_positions_rows_at_its_records(tmp_path):
 
     two_slog, two = _generate(tmp_path / "two", slog, picks)
     one_slog, one = _generate(tmp_path / "one", slog, picks[1:])
-    both = reply_blocking(two_slog, two.path, len(two.records), stride=3, threads=2)
-    alone = reply_blocking(one_slog, one.path, len(one.records), stride=3, threads=1)
+    both = reply_blocking(two_slog, two.path, len(two.records), stride=3)
+    alone = reply_blocking(one_slog, one.path, len(one.records), stride=3)
     assert both.shape == (2 * 4 + 3 * 4, 3)
     np.testing.assert_array_equal(both[8:], alone)
     assert both[:8, 2].sum() == 0

@@ -14,6 +14,7 @@ import os
 import sys
 import time
 
+from scribblez.ffi import set_worker_count
 from scribblez.paths import TagPaths, add_mount_root_argument
 from scribblez.transfer_test.corpus import load_corpus
 from scribblez.transfer_test.signal import collect, report
@@ -50,6 +51,7 @@ def main():
     parser.add_argument("--threads", type=int, default=os.cpu_count())
     add_mount_root_argument(parser)
     args = parser.parse_args()
+    set_worker_count(args.threads)
 
     paths = TagPaths(args.tag, CORPUS_SPEC.name, args.mount_root)
     corpus_dir = paths.data_dir / CORPUS_DIR
@@ -61,7 +63,7 @@ def main():
     def progress(done: int, total: int):
         print(f"\r{done}/{total} files, {time.time() - t0:.0f} s", end="", flush=True)
 
-    candidates = collect(files, args.threads, progress)
+    candidates = collect(files, progress)
     print()
     result = {"tag": args.tag, **report(candidates)}
     print_report(result)

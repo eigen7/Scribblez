@@ -48,6 +48,10 @@ typedef struct ScribblezSession ScribblezSession;
 ScribblezSession* scribblez_session_new(const char* lexicon_name, int opp_leave_input);
 void scribblez_session_delete(ScribblezSession* s);
 
+// The process's CPU budget for the library's parallel steps (util/work_pool.h);
+// by default, every core available to the process.
+void scribblez_set_worker_count(int n);
+
 // Training tasks, by code: the row a DataLoader (scribblez_dl_new) or
 // scribblez_decode_rows decodes.
 //   0  position evaluation: the session's input arm (spatial + scalar), then
@@ -80,7 +84,7 @@ int scribblez_task_row_floats(ScribblezSession* s, int task);
 // or -1 on a parse error or an endgame position (SimRunner needs tiles in the
 // bag).
 int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
-                               int threads, uint64_t seed, int open_leaves, int solve_endgames,
+                               uint64_t seed, int open_leaves, int solve_endgames,
                                char* out_records, int* played_rank);
 
 // Training rows of `task` for specific positions: row j is (game_idx[j],
@@ -230,12 +234,11 @@ int scribblez_probe_replay(const char* slog_path, const char* sprobe_path, int64
 // For every record of a .sprobe file and every candidate of its position:
 // whether the candidate blocks the record's opponent reply (sim/reply_blocking.h).
 // `out` takes n_records rows of `stride` bytes, the records in file order;
-// stride must be at least every position's candidate count. Positions are
-// split across `threads`. Returns 0 on success, -1 on failure with the reason
-// in out_err.
+// stride must be at least every position's candidate count. Positions run in
+// parallel. Returns 0 on success, -1 on failure with the reason in out_err.
 int scribblez_reply_blocking(ScribblezSession* s, const char* slog_path, const char* sprobe_path,
-                             int64_t n_records, int stride, int threads, uint8_t* out,
-                             char* out_err, int err_cap);
+                             int64_t n_records, int stride, uint8_t* out, char* out_err,
+                             int err_cap);
 
 // Cross-check slots per move (move_set_encoder.h kMoveCrossSlots).
 int32_t scribblez_move_set_cross_slots(void);

@@ -7,13 +7,12 @@
 #include "util/assert.h"
 #include "util/exception.h"
 #include "util/hash.h"
+#include "util/work_pool.h"
 
-#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <thread>
 
 namespace scribblez {
 
@@ -57,23 +56,19 @@ void check_header(const std::string& path, const ForgoneFileHeader& h, uint32_t 
   }
 }
 
-// Every game's entries, `threads` games at a time.
+// Every game's entries.
 std::vector<std::vector<ForgonePlays>> all_games(const std::vector<char>& slog,
-                                                 const Dictionary& dict, int threads) {
+                                                 const Dictionary& dict) {
   const uint32_t num_games = slog_num_games(slog.data());
   const binlog::GameMetadata* metas = slog_metadata(slog.data());
   std::vector<std::vector<ForgonePlays>> out(num_games);
-  std::atomic<uint32_t> next{0};
-  const auto work = [&] {
+  util::parallel_lanes(num_games, [&](util::LaneCursor& cursor) {
     std::vector<TurnRecord> scratch;
-    for (uint32_t g; (g = next++) < num_games;) {
-      const GameLog log = binlog::make_game_view(slog.data(), g, scratch, nullptr);
+    for (size_t g; cursor.next(g);) {
+      const GameLog log = binlog::make_game_view(slog.data(), uint32_t(g), scratch, nullptr);
       out[g] = forgone_plays_of_game(log, forgone_turns(metas[g]), dict);
     }
-  };
-  std::vector<std::jthread> pool;
-  for (int i = 1; i < threads; ++i) pool.emplace_back(work);
-  work();
+  });
   return out;
 }
 
@@ -104,8 +99,8 @@ std::vector<ForgonePlays> forgone_plays_of_game(const GameLog& g, int turns,
 }
 
 void write_forgone_sidecar(const std::vector<char>& slog, const Dictionary& dict,
-                           const std::string& path, int threads) {
-  const std::vector<std::vector<ForgonePlays>> games = all_games(slog, dict, threads);
+                           const std::string& path) {
+  const std::vector<std::vector<ForgonePlays>> games = all_games(slog, dict);
   ForgoneFileHeader h{};
   h.magic = kForgoneMagic;
   h.version = kForgoneVersion;

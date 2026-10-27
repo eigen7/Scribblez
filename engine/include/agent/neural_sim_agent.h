@@ -49,7 +49,7 @@ class NeuralSimAgent : public Agent {
     // Rollouts per candidate, and their threading. SimAgent's default (see
     // there for why 400), so equal-budget comparisons need no configuration.
     // Leave the truncation fields alone; sim_horizon is the knob.
-    SimRunner::Params sim = {400, 1};
+    SimRunner::Params sim = {.rollouts = 400};
     // Value truncation; see SimRunner::Params::horizon_plies. The agent's own
     // model scores the horizon.
     int sim_horizon = 0;

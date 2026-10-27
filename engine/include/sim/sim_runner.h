@@ -228,7 +228,6 @@ class SimRunner {
 
   struct Params {
     int rollouts = 300;  // per candidate; at most kMaxRollouts
-    int threads = 1;
     // Value truncation: 0 plays every rollout to the end of the game with no
     // leaf service. Otherwise rollouts stop after this many plies (at least
     // kMinHorizonPlies) and `leaf_service`, a served position-evaluation

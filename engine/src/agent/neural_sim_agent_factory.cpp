@@ -36,7 +36,6 @@ struct NeuralSimOptions {
   std::string sim_objective = "winrate";
   double drop_best_prob = 0.0;
   int rollouts = 400;
-  int sim_threads = 1;
   int sim_horizon = 0;
   uint64_t seed = 0;
   EndgameSolver::Params endgame;
@@ -60,9 +59,6 @@ po::options_description make_options_description(NeuralSimOptions& o) {
     ("rollouts", po::value<int>(&o.rollouts)->default_value(o.rollouts),
      "rollouts per simmed candidate; every candidate shares the same rollout seeds, so "
      "rack and draw luck cancels when they are compared")  //
-    ("sim-threads", po::value<int>(&o.sim_threads)->default_value(o.sim_threads),
-     "threads within one turn's simulation; leave at 1 when the game loop is "
-     "already running games in parallel")  //
     ("sim-horizon", po::value<int>(&o.sim_horizon)->default_value(o.sim_horizon),
      "value truncation: rollouts stop after this many plies and this agent's own model scores "
      "the horizon; 0 rolls out to a natural game end")  //
@@ -101,7 +97,6 @@ std::unique_ptr<NeuralSimAgent> NeuralSimAgent::from_spec(const std::vector<std:
   params.sim_objective = parse_sim_objective(opts.sim_objective, "--sim-objective");
   params.drop_best_prob = opts.drop_best_prob;
   params.sim.rollouts = opts.rollouts;
-  params.sim.threads = opts.sim_threads;
   params.sim_horizon = opts.sim_horizon;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;

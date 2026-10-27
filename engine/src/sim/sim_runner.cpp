@@ -12,6 +12,7 @@
 #include "sim/win_table_feature.h"
 #include "util/assert.h"
 #include "util/exception.h"
+#include "util/work_pool.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +21,6 @@
 #include <memory>
 #include <numeric>
 #include <optional>
-#include <thread>
 #include <vector>
 
 namespace scribblez {
@@ -176,14 +176,15 @@ std::unique_ptr<HastyBot> make_rollout_agent(bool solve_endgames,
   return std::make_unique<HastyBot>(params.base);
 }
 
-// Worker t plays slots t, t+threads, ... of `results`, candidate-major, so the
-// load splits evenly however few rollouts there are per candidate. Workers
-// write disjoint slots, so they need no synchronization.
-void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
-                    const std::vector<Move>& candidates, const Dictionary& dict,
-                    SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
-                    uint64_t base_seed, std::vector<Rollout>* results,
-                    std::vector<RolloutTrace>* traces) {
+// A lane plays the slots of `results` it claims, candidate-major, so the load
+// splits evenly however few rollouts there are per candidate. Lanes write
+// disjoint slots, so they need no synchronization.
+void run_sim_lane(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
+                  const std::vector<Move>& candidates, const Dictionary& dict,
+                  const SimRunner::Params& params, const InputEncodingSpec* leaf_spec,
+                  util::LaneCursor& cursor, uint64_t base_seed, std::vector<Rollout>* results,
+                  std::vector<RolloutTrace>* traces) {
+  const int t = int(cursor.lane());
   HastyBot::Params p0;
   p0.thread_id = t;
   p0.name = "H0";
@@ -201,7 +202,7 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
   std::optional<LeafBatcher> batcher;
   if (params.leaf_service) batcher.emplace(params.leaf_service, *leaf_spec, results);
   const size_t rollouts = size_t(params.rollouts);
-  for (size_t slot = size_t(t); slot < applied.size() * rollouts; slot += size_t(params.threads)) {
+  for (size_t slot; cursor.next(slot);) {
     const size_t c = slot / rollouts;
     const uint64_t seed = base_seed + uint64_t(slot % rollouts);
     run_rollout(pos, applied[c], candidates[c], dict, a0, a1, seed, params, leaf_spec,
@@ -209,22 +210,6 @@ void run_sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>&
                 traces ? &(*traces)[slot] : nullptr);
   }
   if (batcher) batcher->flush();
-}
-
-// Thread entry: captures any exception into *err for the joining thread to
-// rethrow. LeafBatcher::flush throws on a non-finite readout, and an exception
-// escaping a std::thread calls std::terminate.
-void sim_worker(const SimPosition& pos, const std::vector<AppliedCandidate>& applied,
-                const std::vector<Move>& candidates, const Dictionary& dict,
-                SimRunner::Params params, const InputEncodingSpec* leaf_spec, int t,
-                uint64_t base_seed, std::vector<Rollout>* results,
-                std::vector<RolloutTrace>* traces, std::exception_ptr* err) {
-  try {
-    run_sim_worker(pos, applied, candidates, dict, params, leaf_spec, t, base_seed, results,
-                   traces);
-  } catch (...) {
-    *err = std::current_exception();
-  }
 }
 
 }  // namespace
@@ -362,7 +347,6 @@ void SimRunner::validate(const Params& params) {
   if (params.rollouts < 1 || params.rollouts > kMaxRollouts) {
     throw util::CleanException("sim runner: rollouts must be in [1, {}]", kMaxRollouts);
   }
-  if (params.threads < 1) throw util::CleanException("sim runner: threads must be >= 1");
   if (params.leaf_service && params.win_table)
     throw util::CleanException("sim runner: a horizon takes one leaf, a model or a win table");
   validate_horizon("sim runner", params.horizon_plies,
@@ -423,19 +407,13 @@ std::vector<Rollout> SimRunner::run_rollouts(const SimPosition& pos,
 
   Params params = params_;
   params.rollouts = rollouts;
-  params.threads = std::clamp(params_.threads, 1, std::max(1, int(candidates.size()) * rollouts));
   const InputEncodingSpec* leaf_spec = params.leaf_service ? &leaf_spec_ : nullptr;
   std::vector<Rollout> results(candidates.size() * size_t(params.rollouts));
   if (traces) traces->assign(results.size(), {});
-  std::vector<std::thread> workers;
-  std::vector<std::exception_ptr> errors(params.threads);
-  for (int t = 0; t < params.threads; ++t)
-    workers.emplace_back(sim_worker, std::cref(pos), std::cref(applied), std::cref(candidates),
-                         std::cref(dict_), params, leaf_spec, t, base_seed, &results, traces,
-                         &errors[t]);
-  for (auto& w : workers) w.join();
-  for (const std::exception_ptr& e : errors)
-    if (e) std::rethrow_exception(e);
+  util::parallel_lanes(results.size(), [&](util::LaneCursor& cursor) {
+    run_sim_lane(pos, applied, candidates, dict_, params, leaf_spec, cursor, base_seed, &results,
+                 traces);
+  });
   return results;
 }
 

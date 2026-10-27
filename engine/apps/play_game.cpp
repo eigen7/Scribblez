@@ -18,6 +18,7 @@
 #include "lexicon/lexicon.h"
 #include "util/misc.h"
 #include "util/seed_producer.h"
+#include "util/work_pool.h"
 
 #include <boost/program_options.hpp>
 
@@ -55,6 +56,7 @@ int main(int argc, char** argv) {
     }
 
     scribblez::SeedProducer::instance().seed(seed_params);
+    scribblez::util::set_worker_count(runner_params.threads);
 
     scribblez::GameRunner runner(runner_params, player_params);
     runner.run();

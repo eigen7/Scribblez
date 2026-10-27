@@ -49,7 +49,6 @@ class DeepBot : public Agent {
     int late_bag = 40;
     int rollouts = 1000;  // per candidate, each with its own rack for Bob
     bool race = true;     // stop a clearly beaten candidate between rounds
-    int threads = 0;      // CPU threads (the samplers, the cpu backend); 0: all
     uint64_t seed = 0;
   };
 

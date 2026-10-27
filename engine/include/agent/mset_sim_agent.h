@@ -52,7 +52,7 @@ class MsetSimAgent : public Agent {
     SimObjective sim_objective = SimObjective::kWinRate;
     // Rollouts per candidate, and their threading. SimAgent's default (see
     // there for why 400), so equal-budget comparisons need no configuration.
-    SimRunner::Params sim = {400, 1};
+    SimRunner::Params sim = {.rollouts = 400};
     // Value truncation; see SimRunner::Params::horizon_plies for the full
     // semantics. The leaf service handed to the constructor scores the horizon.
     int sim_horizon = 0;

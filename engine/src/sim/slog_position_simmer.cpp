@@ -8,13 +8,12 @@
 #include "sim/candidate_race.h"
 #include "sim/setup_plays.h"
 #include "util/exception.h"
+#include "util/work_pool.h"
 
 #include <algorithm>
 #include <atomic>
-#include <exception>
 #include <limits>
 #include <numeric>
-#include <thread>
 
 namespace scribblez {
 
@@ -56,7 +55,6 @@ struct SimJob {
   const SlogSimConfig& config;
   const std::vector<binlog::GamePositionIndex>& work;
   bool run_sims;
-  std::atomic<size_t> next{0};
   std::vector<SimmedPosition> results;
   util::ProgressMeter* meter;
 };
@@ -187,13 +185,12 @@ void sim_one_position(const binlog::GamePositionIndex& w, SimJob* job,
   res->position.opp_leave_belief.reset();
 }
 
-// Claims positions off the shared index and fills their result slots.
-void run_position_worker(SimJob* job) {
+// Claims positions and fills their result slots.
+void run_position_lane(SimJob* job, util::LaneCursor& cursor) {
   std::vector<TurnRecord> scratch;
   binlog::PositionEncoder encoder(InputEncodingSpec{&job->dict});
   const PositionRunners runners(job->dict, job->config);
-  const size_t n = job->work.size();
-  for (size_t i = job->next.fetch_add(1); i < n; i = job->next.fetch_add(1)) {
+  for (size_t i; cursor.next(i);) {
     const binlog::GamePositionIndex& w = job->work[i];
     // Name the failing position, so an unattended run leaves a lead.
     try {
@@ -202,16 +199,6 @@ void run_position_worker(SimJob* job) {
       throw util::Exception("game {} turn {}: {}", w.game_idx, w.turn_idx, e.what());
     }
     job->meter->add_done();
-  }
-}
-
-// Thread entry: captures any exception into *err for the joining thread to
-// rethrow, since one escaping a std::thread terminates the process.
-void position_worker(SimJob* job, std::exception_ptr* err) {
-  try {
-    run_position_worker(job);
-  } catch (...) {
-    *err = std::current_exception();
   }
 }
 
@@ -310,16 +297,10 @@ std::vector<SimmedPosition> run_job(const std::vector<char>& buf, const Dictiona
                                     const SlogSimConfig& config,
                                     const std::vector<binlog::GamePositionIndex>& work,
                                     util::ProgressMeter* meter, bool run_sims) {
-  SimJob job{buf.data(), dict, config, work, run_sims, {}, std::vector<SimmedPosition>(work.size()),
+  SimJob job{buf.data(), dict, config, work, run_sims, std::vector<SimmedPosition>(work.size()),
              meter};
-  const int threads = std::clamp<int>(config.threads, 1, std::max<size_t>(1, work.size()));
-  std::vector<std::exception_ptr> errors(threads);
-  std::vector<std::thread> workers;
-  for (int t = 0; t < threads; ++t) workers.emplace_back(position_worker, &job, &errors[t]);
-  for (std::thread& w : workers) w.join();
-  for (const std::exception_ptr& e : errors) {
-    if (e) std::rethrow_exception(e);
-  }
+  util::parallel_lanes(work.size(),
+                       [&](util::LaneCursor& cursor) { run_position_lane(&job, cursor); });
   return std::move(job.results);
 }
 

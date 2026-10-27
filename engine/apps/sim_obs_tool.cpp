@@ -31,6 +31,7 @@
 #include "util/math.h"
 #include "util/misc.h"
 #include "util/progress.h"
+#include "util/work_pool.h"
 
 #include <boost/program_options.hpp>
 
@@ -71,18 +72,16 @@ struct Options {
 };
 
 // The simmer config for `opt`. `leaf_eval_service` is the value-truncation leaf
-// model shared by all workers (EvalService serializes its callers), or null for
+// model shared by all threads (EvalService serializes its callers), or null for
 // rollouts to the end of the game.
 SlogSimConfig sim_config(const Options& opt, nn::PositionEvalService* leaf_eval_service) {
   SlogSimConfig c;
   c.open_leaves = opt.open_leaves;
   c.selector = recipe_selector({.top_k = opt.top_k, .quotas = {}});
   c.runner.rollouts = opt.rollouts;
-  c.runner.threads = 1;
   c.runner.horizon_plies = opt.horizon;
   c.runner.leaf_service = leaf_eval_service;
   c.seed = opt.seed;
-  c.threads = opt.threads;
   return c;
 }
 
@@ -176,6 +175,7 @@ int main(int argc, char** argv) {
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
     validate(opt);
+    util::set_worker_count(opt.threads);
 
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());

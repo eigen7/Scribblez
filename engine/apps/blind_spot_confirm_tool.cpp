@@ -39,6 +39,7 @@
 #include "util/exception.h"
 #include "util/misc.h"
 #include "util/progress.h"
+#include "util/work_pool.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -293,7 +294,6 @@ std::vector<SimmedPosition> select_confirm(const binlog::PendingSlog& slog, cons
   config.selector = chosen_selector(std::move(chosen));
   config.seed = opt.seed;
   config.rollout_seed_offset = kConfirmSeedOffset;
-  config.threads = opt.threads;
   util::ProgressMeter quiet(0, "");
   return select_slog_candidates(slog.bytes, dict, config, work, &quiet);
 }
@@ -349,8 +349,7 @@ void confirm_file(const binlog::PendingSlog& slog, const Dictionary& dict, const
                     leave_model->served.predict_fn());
   }
   const std::vector<PoolPosition> records =
-    confirm(make_pool_jobs(selected, beliefs ? &*beliefs : nullptr, dict, opt.labeler.rollouts,
-                           opt.threads),
+    confirm(make_pool_jobs(selected, beliefs ? &*beliefs : nullptr, dict, opt.labeler.rollouts),
             values, opt);
 
   json::object out = header_json(opt, PoolSources::of(pools.header()), pools.num_positions());
@@ -393,11 +392,11 @@ void add_options(boost::program_options::options_description& desc, Options& opt
     "launch-tasks", po::value<int>(&l.launch_tasks)->default_value(l.launch_tasks),
     "rollouts per GPU launch the labeler fills toward from the positions in flight")(
     "max-in-flight", po::value<int>(&l.max_in_flight)->default_value(l.max_in_flight),
-    "positions in flight at most")(
-    "threads", po::value<int>(&opt.threads)->default_value(opt.threads),
-    "CPU threads: position preparation, and the cpu backend's "
-    "rollouts")("seed", po::value<uint64_t>(&opt.seed)->default_value(opt.seed),
-                "run seed (drives the confirming rollouts)");
+    "positions in flight at most")("threads",
+                                   po::value<int>(&opt.threads)->default_value(opt.threads),
+                                   "CPU threads, the process's budget for every parallel step")(
+    "seed", po::value<uint64_t>(&opt.seed)->default_value(opt.seed),
+    "run seed (drives the confirming rollouts)");
   opt.rollouts.add_options(desc);
 }
 
@@ -412,6 +411,7 @@ int main(int argc, char** argv) {
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
     validate(opt);
+    util::set_worker_count(opt.threads);
 
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
@@ -433,7 +433,7 @@ int main(int argc, char** argv) {
       pending.size(), opt.rollouts.backend, opt.rollouts.leaf_model, opt.cut, opt.picks,
       opt.labeler.rollouts, leave_model ? opt.leave_inference_path : "uniform");
     if (pending.empty()) return 0;
-    const std::unique_ptr<RolloutValues> values = opt.rollouts.make(dict, opt.threads);
+    const std::unique_ptr<RolloutValues> values = opt.rollouts.make(dict);
     for (const binlog::PendingSlog& p : pending) {
       try {
         confirm_file(p, dict, opt, *values, leave_model.get());

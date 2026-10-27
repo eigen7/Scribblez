@@ -45,6 +45,7 @@
 #include "util/exception.h"
 #include "util/misc.h"
 #include "util/progress.h"
+#include "util/work_pool.h"
 
 #include <boost/program_options.hpp>
 
@@ -137,7 +138,7 @@ std::vector<binlog::GamePositionIndex> sample_work(const std::vector<char>& buf,
 }
 
 // Prepares a file's jobs on its own thread, kPrepBatch positions at a time
-// (candidate selection and job building each spread over the threads), and
+// (candidate selection and job building each in parallel), and
 // hands them out in work order. A producer failure rethrows from next(); a
 // labeler failure stops the producer on destruction.
 class JobProducer {
@@ -189,11 +190,10 @@ std::vector<PoolJob> JobProducer::prepare(const std::vector<binlog::GamePosition
   SlogSimConfig config;
   config.selector = pool_selector(opt_.blank_prune_points);
   config.seed = opt_.seed;
-  config.threads = opt_.threads;
   util::ProgressMeter quiet(0, "");
   const std::vector<SimmedPosition> selected =
     select_slog_candidates(slog_.bytes, dict_, config, batch, &quiet);
-  return make_pool_jobs(selected, beliefs_, dict_, opt_.labeler.rollouts, opt_.threads);
+  return make_pool_jobs(selected, beliefs_, dict_, opt_.labeler.rollouts);
 }
 
 void JobProducer::produce() {
@@ -297,7 +297,7 @@ void add_options(boost::program_options::options_description& desc, Options& opt
     "max-in-flight", po::value<int>(&l.max_in_flight)->default_value(l.max_in_flight),
     "positions in flight at most (each holds its candidates' boards)")(
     "threads", po::value<int>(&opt.threads)->default_value(opt.threads),
-    "CPU threads: position preparation, and the cpu backend's rollouts")(
+    "CPU threads, the process's budget for every parallel step")(
     "seed", po::value<uint64_t>(&opt.seed)->default_value(opt.seed),
     "run seed (drives the turn sample and the rollout seeds)")(
     "limit-games", po::value<int>(&opt.limit_games)->default_value(opt.limit_games),
@@ -316,6 +316,7 @@ int main(int argc, char** argv) {
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
     validate(opt);
+    util::set_worker_count(opt.threads);
 
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());
@@ -337,7 +338,7 @@ int main(int argc, char** argv) {
       pending.size(), opt.rollouts.backend, opt.rollouts.leaf_model, opt.labeler.rollouts,
       opt.labeler.race ? " (raced)" : "", leave_model ? opt.leave_inference_path : "uniform");
     if (pending.empty()) return 0;
-    const std::unique_ptr<RolloutValues> values = opt.rollouts.make(dict, opt.threads);
+    const std::unique_ptr<RolloutValues> values = opt.rollouts.make(dict);
     for (const binlog::PendingSlog& p : pending) {
       try {
         pool_file(p, dict, opt, *values, sources, leave_model.get());

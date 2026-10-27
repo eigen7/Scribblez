@@ -9,6 +9,7 @@
 #include "util/misc.h"
 #include "util/seed_producer.h"
 #include "util/string.h"
+#include "util/work_pool.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -131,9 +132,9 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "kGamesPerFile games; every eligible position is written -- "
      "train-time sampling is done by the DataLoader)")               //
     ("threads,t", po::value<int>(&threads)->default_value(threads),  //
-     "number of parallel game threads (default: all logical processors; "
-     "downgraded to 1 when a player does not support parallelism, e.g. a "
-     "human seat)")  //
+     "the CPU budget: parallel games, and the threads the agents' own parallel "
+     "steps share (default: all logical processors). Games run one at a time "
+     "when a player does not support parallelism, e.g. a human seat")  //
     ("random-handicap-max",
      po::value<int>(&random_handicap_max)->default_value(random_handicap_max),
      "if > 0, each game gifts a randomly chosen player a head-start of P "
@@ -282,20 +283,18 @@ void GameRunner::run() {
       monitor = std::thread(&GameRunner::run_progress_monitor, this, std::ref(done), t0, total);
     }
 
-    std::vector<std::thread> workers;
-    workers.reserve(size_t(engine_.num_threads()));
-    for (int t = 0; t < engine_.num_threads(); ++t) {
-      workers.emplace_back([&, t]() {
-        while (true) {
-          uint64_t idx = next_game.fetch_add(1, std::memory_order_acq_rel);
-          if (idx >= total) break;
-          int seat0_player = (seed_ + idx) & 1ULL;
-          std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
-          engine_.play(t, seats, seed_index(idx), *this);
-        }
-      });
-    }
-    for (auto& w : workers) w.join();
+    // The game loops run on the process's work pool (util/work_pool.h), so a
+    // loop that runs out of games frees its thread for the parallel steps of
+    // the agents still playing.
+    util::parallel_for(size_t(engine_.num_threads()), [&](size_t t) {
+      while (true) {
+        uint64_t idx = next_game.fetch_add(1, std::memory_order_acq_rel);
+        if (idx >= total) break;
+        int seat0_player = (seed_ + idx) & 1ULL;
+        std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
+        engine_.play(int(t), seats, seed_index(idx), *this);
+      }
+    });
 
     done.store(true, std::memory_order_release);
     if (monitor.joinable()) monitor.join();

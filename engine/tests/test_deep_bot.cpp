@@ -44,13 +44,12 @@ DeepBot::Params small_params(uint64_t seed) {
           .candidates = 3,
           .late_candidates = 4,
           .rollouts = 8,
-          .threads = 4,
           .seed = seed};
 }
 
 DeepBot::Backend cpu_backend(belief::LeaveParamsFn predict = {},
                              std::shared_ptr<const LeaveValueArrays> table = {}) {
-  return {std::make_unique<CpuRolloutValues>(nwl23(), 4, synthetic_leaf()), std::move(predict),
+  return {std::make_unique<CpuRolloutValues>(nwl23(), synthetic_leaf()), std::move(predict),
           std::move(table)};
 }
 

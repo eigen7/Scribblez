@@ -10,12 +10,12 @@
 #include "game/tile.h"
 #include "sim/sim_runner.h"
 #include "training/footprint.h"
+#include "util/work_pool.h"
 
 #include <algorithm>
 #include <array>
 #include <functional>
 #include <random>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -122,9 +122,11 @@ void accumulate_rollout(const Board& board, const Rollout& r, MonteCarloResult* 
 }
 
 // Plays games t+1, t+1+threads, ...
-void monte_carlo_worker(const ParsedGcgPostMove& pos, const Dictionary& dict, int n, int threads,
-                        int t, const OppLeaveSampler& sampler, bool face_up,
-                        MonteCarloResult* out) {
+// A lane plays the rollouts it claims; rollout item i is seeded by i + 1.
+void monte_carlo_lane(const ParsedGcgPostMove& pos, const Dictionary& dict,
+                      util::LaneCursor& cursor, const OppLeaveSampler& sampler, bool face_up,
+                      MonteCarloResult* out) {
+  const int t = int(cursor.lane());
   // Default solver params, as in self-play generation (py/scribblez/selfplay.py):
   // the ground truth must come from the policy the training targets come from.
   EndgameAgent<HastyBot>::Params p0;
@@ -133,8 +135,9 @@ void monte_carlo_worker(const ParsedGcgPostMove& pos, const Dictionary& dict, in
   EndgameAgent<HastyBot>::Params p1 = p0;
   p1.base.name = "H1";
   EndgameAgent<HastyBot> a0(p0), a1(p1);  // temperature 0 -> deterministic greedy argmax
-  for (int g = t + 1; g <= n; g += threads)
-    accumulate_rollout(pos.board, rollout(pos, dict, a0, a1, sampler, face_up, uint64_t(g)), out);
+  for (size_t i; cursor.next(i);)
+    accumulate_rollout(pos.board, rollout(pos, dict, a0, a1, sampler, face_up, uint64_t(i + 1)),
+                       out);
 }
 
 // A row-major count plane as a nested [row][col] JSON array, in board frame.
@@ -178,17 +181,15 @@ const char* leave_condition_name(LeaveCondition condition) {
 }
 
 MonteCarloResult run_monte_carlo(const ParsedGcgPostMove& pos, const Dictionary& dict, int n,
-                                 int threads, LeaveCondition condition,
+                                 LeaveCondition condition,
                                  const belief::RackInferrer::Params& infer) {
-  threads = std::clamp(threads, 1, std::max(1, n));
   const OppLeaveSampler sampler(pos, dict, condition, infer);
   const bool face_up = condition == LeaveCondition::kFaceUp;
-  std::vector<MonteCarloResult> partials(threads);
-  std::vector<std::thread> workers;
-  for (int t = 0; t < threads; ++t)
-    workers.emplace_back(monte_carlo_worker, std::cref(pos), std::cref(dict), n, threads, t,
-                         std::cref(sampler), face_up, &partials[t]);
-  for (auto& w : workers) w.join();
+  const size_t rollouts = size_t(std::max(n, 0));
+  std::vector<MonteCarloResult> partials(util::lane_count(rollouts));
+  util::parallel_lanes(rollouts, [&](util::LaneCursor& cursor) {
+    monte_carlo_lane(pos, dict, cursor, sampler, face_up, &partials[cursor.lane()]);
+  });
 
   MonteCarloResult total;
   total.start_player = pos.start_player;

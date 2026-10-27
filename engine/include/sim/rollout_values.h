@@ -54,13 +54,12 @@ CpuLeafFn synthetic_leaf();
 
 class CpuRolloutValues : public RolloutValues {
  public:
-  CpuRolloutValues(const Dictionary& dict, int threads, CpuLeafFn leaf);
+  CpuRolloutValues(const Dictionary& dict, CpuLeafFn leaf);
 
   std::vector<RolloutOutcome> run(const RolloutBatch& batch) override;
 
  private:
   const Dictionary& dict_;
-  int threads_;
   CpuLeafFn leaf_;
 };
 

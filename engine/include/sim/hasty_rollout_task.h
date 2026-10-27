@@ -93,17 +93,16 @@ struct CpuLeaf {
   std::array<int, 2> scores;
 };
 
-// Runs every task of the batch on `threads` threads, calling `each(k, result,
-// leaf)` for task k from the thread that ran it.
+// Runs every task of the batch in parallel, calling `each(k, result, leaf)`
+// for task k from the thread that ran it.
 using RolloutVisitor =
   std::function<void(size_t, const rollout_abi::RolloutResult&, const CpuLeaf&)>;
-void for_each_hasty_rollout_cpu(const RolloutBatch& batch, const Dictionary& dict, int threads,
+void for_each_hasty_rollout_cpu(const RolloutBatch& batch, const Dictionary& dict,
                                 const RolloutVisitor& each);
 
-// The batch's tasks on `threads` threads, results[k] for tasks[k]. A non-null
+// The batch's tasks in parallel, results[k] for tasks[k]. A non-null
 // `leaves_out` receives the leaves of the first leaves_out->size() tasks.
 std::vector<rollout_abi::RolloutResult> run_hasty_rollouts_cpu(
-  const RolloutBatch& batch, const Dictionary& dict, int threads,
-  std::vector<CpuLeaf>* leaves_out = nullptr);
+  const RolloutBatch& batch, const Dictionary& dict, std::vector<CpuLeaf>* leaves_out = nullptr);
 
 }  // namespace scribblez

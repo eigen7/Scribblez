@@ -51,7 +51,6 @@ class NeuralSimAgentTest : public ::testing::Test {
     p.shortlist = 0;  // every legal candidate, so tests can script them all
     p.sim_top_k = 2;
     p.sim.rollouts = 8;
-    p.sim.threads = 1;
     p.seed = 12345;
     p.endgame.budget = 0;  // the endgame is not what these tests are about
     return p;

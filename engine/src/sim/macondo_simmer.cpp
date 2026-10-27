@@ -8,12 +8,11 @@
 #include "lexicon/hasty_equity.h"
 #include "sim/win_pct_table.h"
 #include "util/assert.h"
+#include "util/work_pool.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <exception>
-#include <thread>
 
 namespace scribblez {
 
@@ -159,44 +158,17 @@ struct Batch {
   int iterations;
 };
 
-// Worker t runs iterations t, t + threads, ... of the batch into `out`, where
-// iteration i's rollout of active play j lands at [i * active.size() + j].
-// Workers write disjoint slots, so they need no synchronization.
-void run_batch_worker(const Batch& b, int t, int threads, std::vector<RolloutOutcome>& out) {
-  for (int i = t; i < b.iterations; i += threads) {
+// Iteration i's rollout of active play j lands at [i * active.size() + j] of
+// the result.
+std::vector<RolloutOutcome> run_batch(const Batch& b) {
+  std::vector<RolloutOutcome> out(size_t(b.iterations) * b.active.size());
+  util::parallel_for(size_t(b.iterations), [&](size_t i) {
     const Deal d = deal(b.pos, b.pool, b.first_seed + uint64_t(i));
     for (size_t j = 0; j < b.active.size(); ++j) {
-      out[size_t(i) * b.active.size() + j] =
+      out[i * b.active.size() + j] =
         rollout(b.dict, b.pos, b.plays[size_t(b.active[j])].move, d, b.scoreless_turns, b.plies);
     }
-  }
-}
-
-// Thread entry: captures any exception into `err` for the joining thread to
-// rethrow, since one escaping a std::thread calls std::terminate.
-void batch_worker(const Batch& b, int t, int threads, std::vector<RolloutOutcome>* out,
-                  std::exception_ptr* err) {
-  try {
-    run_batch_worker(b, t, threads, *out);
-  } catch (...) {
-    *err = std::current_exception();
-  }
-}
-
-std::vector<RolloutOutcome> run_batch(const Batch& b, int threads) {
-  std::vector<RolloutOutcome> out(size_t(b.iterations) * b.active.size());
-  threads = std::clamp(threads, 1, b.iterations);
-  if (threads == 1) {
-    run_batch_worker(b, 0, 1, out);
-    return out;
-  }
-  std::vector<std::thread> workers;
-  std::vector<std::exception_ptr> errors(threads);
-  for (int t = 0; t < threads; ++t)
-    workers.emplace_back(batch_worker, std::cref(b), t, threads, &out, &errors[t]);
-  for (std::thread& w : workers) w.join();
-  for (const std::exception_ptr& e : errors)
-    if (e) std::rethrow_exception(e);
+  });
   return out;
 }
 
@@ -243,7 +215,7 @@ MacondoSimmer::Result MacondoSimmer::simulate(const Dictionary& dict, const SimP
                   active,       scoreless_turns,
                   params.plies, seed + result.iterations,
                   batch};
-    accumulate(run_batch(b, params.threads), active, result.plays);
+    accumulate(run_batch(b), active, result.plays);
     result.iterations += uint64_t(batch);
     if (params.max_iterations > 0 && result.iterations >= uint64_t(params.max_iterations)) break;
     if (stopper.should_stop(result.iterations, result.plays, params.plies)) break;
