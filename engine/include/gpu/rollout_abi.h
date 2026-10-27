@@ -5,9 +5,9 @@
 // g++ (C++26) and nvcc alike. A rollout from a start (a candidate applied to
 // the board): seat the opponent's known leave if the group has one, shuffle
 // the rest of the unseen pool, draw the rest of the opponent's rack and then
-// our refill, put back the tiles an exchange returned (if our move went out
-// with the bag empty, the game is over here), the opponent plays its
-// top-equity move, we play ours,
+// our refill, each player's exchanged tiles going back after its own refill
+// (if our move went out with the bag empty, the game is over here), the
+// opponent plays its top-equity move, we play ours,
 // and the outcome is the score differential with the play-out bonus. If the
 // bag is empty after those two plies, both keep playing top-equity moves to
 // the game's end, so the outcome is exact rather than a leaf. With the bag
@@ -99,6 +99,10 @@ struct PositionAbi {
   uint8_t leave[kTileKinds] = {};    // our leave, as counts
   uint8_t returned[kRackSize] = {};  // an exchange's tiles, back in the bag after our refill
   uint8_t num_returned = 0;
+  // The opponent's exchanged tiles when its last move was an exchange, back in
+  // the bag after its refill (its known leave seated, the rest drawn).
+  uint8_t opp_returned[kRackSize] = {};
+  uint8_t num_opp_returned = 0;
   int num_tiles = 0;  // tiles on the board
   int scores[2] = {0, 0};
   uint32_t group = 0;

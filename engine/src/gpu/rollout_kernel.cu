@@ -1267,6 +1267,14 @@ __device__ void load_start(const PositionAbi& pos, Smem& s) {
   }
 }
 
+// Player `p`'s refill at the deal, then the tiles its exchange returned.
+__device__ void refill_at_deal(Smem& s, int p, const uint8_t* returned, int num_returned,
+                               uint64_t seed, uint32_t rollout) {
+  const int draws = refill_draw(s.bag.remaining(), rack_total(s, p));
+  for (int i = 0; i < draws; ++i) ++s.rack[p][s.bag.draw(p)];
+  for (int i = 0; i < num_returned; ++i) s.bag.put_back(returned[i], p, seed, rollout);
+}
+
 // The racks and the bag, in rollout_abi.h's order (hasty_rollout_task.cpp's
 // start_rollout). Thread 0, after the scores are set.
 __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLeaveAbi* leaves,
@@ -1287,13 +1295,8 @@ __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLea
     }
   }
   s.bag.shuffle(group.seed, rollout);
-  for (int k = 0; k < 2; ++k) {
-    const int p = 1 - k;  // the opponent first
-    const int draws = refill_draw(s.bag.remaining(), rack_total(s, p));
-    for (int i = 0; i < draws; ++i) ++s.rack[p][s.bag.draw(p)];
-  }
-  for (int i = 0; i < pos.num_returned; ++i)
-    s.bag.put_back(pos.returned[i], 0, group.seed, rollout);
+  refill_at_deal(s, 1, pos.opp_returned, pos.num_opp_returned, group.seed, rollout);
+  refill_at_deal(s, 0, pos.returned, pos.num_returned, group.seed, rollout);
   // A player who never moves keeps its full rack as its leave.
   record_leave(s, 0);
   record_leave(s, 1);

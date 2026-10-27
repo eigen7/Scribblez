@@ -411,7 +411,8 @@ rollout index), one block each. Rollout `i` of every start in a group draws
 the same opponent rack and the same bag order, and a task's outcome depends
 only on its start and rollout index, so a batch can mix any rounds of any
 positions. An exchange's tiles go back into the bag after the chooser's
-refill, and a candidate that goes out with the bag empty ends the game at the
+refill (a start the opponent reached by exchanging returns its tiles after
+the opponent's refill), and a candidate that goes out with the bag empty ends the game at the
 start (exact, no plies). A rollout whose bag is empty after its two plies
 keeps playing hasty moves to the game's end instead of stopping at a leaf:
 the leaf network trains only on turns that began with tiles in the bag, and

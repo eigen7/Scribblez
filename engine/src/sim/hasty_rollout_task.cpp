@@ -30,6 +30,7 @@ RolloutStart make_rollout_start(const Board& board, const Rack& rack, int my_sco
   RolloutStart s{.board = board,
                  .leave = rack,
                  .returned = {},
+                 .opp_returned = {},
                  .my_score = my_score + move.score(),
                  .opp_score = opp_score,
                  .group = group};
@@ -85,6 +86,9 @@ PositionAbi to_abi(const RolloutStart& start, const Dictionary& dict) {
   for (int i = 0; i < start.returned.size(); ++i)
     abi.returned[i] = uint8_t(start.returned.tiles()[size_t(i)].index());
   abi.num_returned = uint8_t(start.returned.size());
+  for (int i = 0; i < start.opp_returned.size(); ++i)
+    abi.opp_returned[i] = uint8_t(start.opp_returned.tiles()[size_t(i)].index());
+  abi.num_opp_returned = uint8_t(start.opp_returned.size());
   abi.num_tiles = start.board.num_tiles();
   abi.scores[0] = start.my_score;
   abi.scores[1] = start.opp_score;
@@ -183,8 +187,8 @@ RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::Rollout
   for (int p : {1, 0}) {
     draw_into(st.racks[p], st.bag, rollout_abi::refill_draw(st.bag.remaining(), st.racks[p].size()),
               p);
+    put_back_all(p == 0 ? start.returned : start.opp_returned, st.bag, p, group.seed, task.rollout);
   }
-  put_back_all(start.returned, st.bag, 0, group.seed, task.rollout);
   st.leaves = st.racks;  // a player who never moves keeps its full rack as its leave
   // Our move went out with the bag empty: the game ended with it.
   if (st.racks[0].empty()) {
