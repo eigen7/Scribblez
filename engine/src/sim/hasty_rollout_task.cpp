@@ -30,6 +30,7 @@ RolloutStart make_rollout_start(const Board& board, const Rack& rack, int my_sco
   RolloutStart s{.board = board,
                  .leave = rack,
                  .returned = {},
+                 .opp_returned = {},
                  .my_score = my_score + move.score(),
                  .opp_score = opp_score,
                  .group = group};
@@ -46,16 +47,23 @@ namespace {
 
 // The pool as the bag's initial contents: its tiles ascending by tile.
 void fill_bag(const TileCounts& pool, rollout_abi::Bag& bag) {
-  bag.len = 0;
-  bag.cursor = 0;
-  bag.next_rand = 0;
+  bag.front = 0;
+  bag.back = 0;
+  bag.put_backs = 0;
   for (int k = 0; k < TILE_KINDS; ++k) {
-    for (int c = 0; c < pool.count(Tile::of(k)); ++c) bag.tiles[bag.len++] = uint8_t(k);
+    for (int c = 0; c < pool.count(Tile::of(k)); ++c) bag.tiles[bag.back++] = uint8_t(k);
   }
 }
 
-void draw_into(Rack& rack, rollout_abi::Bag& bag, int n, uint64_t seed, uint32_t rollout) {
-  for (int i = 0; i < n; ++i) rack.add(Tile::of(bag.draw(seed, rollout)));
+// `n` tiles from player `p`'s end of the bag into its rack.
+void draw_into(Rack& rack, rollout_abi::Bag& bag, int n, int p) {
+  for (int i = 0; i < n; ++i) rack.add(Tile::of(bag.draw(p)));
+}
+
+void put_back_all(const Rack& tiles, rollout_abi::Bag& bag, int p, uint64_t seed,
+                  uint32_t rollout) {
+  for (int i = 0; i < tiles.size(); ++i)
+    bag.put_back(uint8_t(tiles.tiles()[size_t(i)].index()), p, seed, rollout);
 }
 
 }  // namespace
@@ -78,6 +86,9 @@ PositionAbi to_abi(const RolloutStart& start, const Dictionary& dict) {
   for (int i = 0; i < start.returned.size(); ++i)
     abi.returned[i] = uint8_t(start.returned.tiles()[size_t(i)].index());
   abi.num_returned = uint8_t(start.returned.size());
+  for (int i = 0; i < start.opp_returned.size(); ++i)
+    abi.opp_returned[i] = uint8_t(start.opp_returned.tiles()[size_t(i)].index());
+  abi.num_opp_returned = uint8_t(start.opp_returned.size());
   abi.num_tiles = start.board.num_tiles();
   abi.scores[0] = start.my_score;
   abi.scores[1] = start.opp_score;
@@ -89,8 +100,8 @@ rollout_abi::GroupAbi to_abi(const RolloutGroup& group, uint32_t leave_base) {
   rollout_abi::GroupAbi abi;
   rollout_abi::Bag bag{};
   fill_bag(group.pool, bag);
-  for (int i = 0; i < bag.len; ++i) abi.pool[i] = bag.tiles[i];
-  abi.pool_size = bag.len;
+  for (int i = 0; i < bag.back; ++i) abi.pool[i] = bag.tiles[i];
+  abi.pool_size = bag.back;
   abi.seed = group.seed;
   abi.leave_base = leave_base;
   abi.num_leaves = uint32_t(group.opp_leaves.size());
@@ -172,12 +183,12 @@ RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::Rollout
   fill_bag(group.pool, st.bag);
   for (int i = 0; i < opp_leave.size(); ++i)
     rollout_abi::remove_from_bag(st.bag, uint8_t(opp_leave.tiles()[size_t(i)].index()));
+  st.bag.shuffle(group.seed, task.rollout);
   for (int p : {1, 0}) {
     draw_into(st.racks[p], st.bag, rollout_abi::refill_draw(st.bag.remaining(), st.racks[p].size()),
-              group.seed, task.rollout);
+              p);
+    put_back_all(p == 0 ? start.returned : start.opp_returned, st.bag, p, group.seed, task.rollout);
   }
-  for (int i = 0; i < start.returned.size(); ++i)
-    st.bag.put_back(uint8_t(start.returned.tiles()[size_t(i)].index()));
   st.leaves = st.racks;  // a player who never moves keeps its full rack as its leave
   // Our move went out with the bag empty: the game ended with it.
   if (st.racks[0].empty()) {
@@ -224,14 +235,15 @@ Move play_ply(RolloutState& st, int mover, const Dictionary& dict, uint64_t seed
     st.board.apply(m);
     st.scores[mover] += m.score();
     st.scoreless = 0;
-    draw_into(rack, st.bag, std::min(m.num_glyphs(), st.bag.remaining()), seed, rollout);
+    draw_into(rack, st.bag, std::min(m.num_glyphs(), st.bag.remaining()), mover);
     if (rack.empty()) {
       st.scores[mover] += 2 * other.point_value();
       st.game_over = true;
     }
   } else if (m.type() == MoveType::EXCHANGE) {
-    draw_into(rack, st.bag, m.num_glyphs(), seed, rollout);
-    for (int i = 0; i < m.num_glyphs(); ++i) st.bag.put_back(uint8_t(m.glyph(i).rack_tile()));
+    draw_into(rack, st.bag, m.num_glyphs(), mover);
+    for (int i = 0; i < m.num_glyphs(); ++i)
+      st.bag.put_back(uint8_t(m.glyph(i).rack_tile()), mover, seed, rollout);
     ++st.scoreless;
   } else {
     ++st.scoreless;

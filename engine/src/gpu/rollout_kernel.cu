@@ -1109,7 +1109,7 @@ __device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout) {
     s.scoreless = 0;
     record_leave(s, mover);
     const int draws = min(int(c.n), s.bag.remaining());
-    for (int i = 0; i < draws; ++i) ++s.rack[mover][s.bag.draw(seed, rollout)];
+    for (int i = 0; i < draws; ++i) ++s.rack[mover][s.bag.draw(mover)];
     if (rack_total(s, mover) == 0) {
       s.scores[mover] += 2 * s.other_pv;
       s.game_over = 1;
@@ -1119,9 +1119,11 @@ __device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout) {
       --s.rack[mover][c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1];
     }
     record_leave(s, mover);
-    for (int i = 0; i < c.n; ++i) ++s.rack[mover][s.bag.draw(seed, rollout)];
-    for (int i = 0; i < c.n; ++i)
-      s.bag.put_back(uint8_t(c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1));
+    for (int i = 0; i < c.n; ++i) ++s.rack[mover][s.bag.draw(mover)];
+    for (int i = 0; i < c.n; ++i) {
+      s.bag.put_back(uint8_t(c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1), mover, seed,
+                     rollout);
+    }
     ++s.scoreless;
   }
 }
@@ -1265,6 +1267,14 @@ __device__ void load_start(const PositionAbi& pos, Smem& s) {
   }
 }
 
+// Player `p`'s refill at the deal, then the tiles its exchange returned.
+__device__ void refill_at_deal(Smem& s, int p, const uint8_t* returned, int num_returned,
+                               uint64_t seed, uint32_t rollout) {
+  const int draws = refill_draw(s.bag.remaining(), rack_total(s, p));
+  for (int i = 0; i < draws; ++i) ++s.rack[p][s.bag.draw(p)];
+  for (int i = 0; i < num_returned; ++i) s.bag.put_back(returned[i], p, seed, rollout);
+}
+
 // The racks and the bag, in rollout_abi.h's order (hasty_rollout_task.cpp's
 // start_rollout). Thread 0, after the scores are set.
 __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLeaveAbi* leaves,
@@ -1274,9 +1284,9 @@ __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLea
     s.rack[1][t] = 0;
   }
   for (int i = 0; i < group.pool_size; ++i) s.bag.tiles[i] = group.pool[i];
-  s.bag.len = group.pool_size;
-  s.bag.cursor = 0;
-  s.bag.next_rand = 0;
+  s.bag.front = 0;
+  s.bag.back = group.pool_size;
+  s.bag.put_backs = 0;
   if (rollout < group.num_leaves) {
     const OppLeaveAbi& leave = leaves[group.leave_base + rollout];
     for (int i = 0; i < leave.n; ++i) {
@@ -1284,12 +1294,9 @@ __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLea
       remove_from_bag(s.bag, leave.tiles[i]);
     }
   }
-  for (int k = 0; k < 2; ++k) {
-    const int p = 1 - k;  // the opponent first
-    const int draws = refill_draw(s.bag.remaining(), rack_total(s, p));
-    for (int i = 0; i < draws; ++i) ++s.rack[p][s.bag.draw(group.seed, rollout)];
-  }
-  for (int i = 0; i < pos.num_returned; ++i) s.bag.put_back(pos.returned[i]);
+  s.bag.shuffle(group.seed, rollout);
+  refill_at_deal(s, 1, pos.opp_returned, pos.num_opp_returned, group.seed, rollout);
+  refill_at_deal(s, 0, pos.returned, pos.num_returned, group.seed, rollout);
   // A player who never moves keeps its full rack as its leave.
   record_leave(s, 0);
   record_leave(s, 1);

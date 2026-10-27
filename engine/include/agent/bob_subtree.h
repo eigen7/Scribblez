@@ -22,6 +22,7 @@
 #include "game/rack.h"
 #include "lexicon/leave_value_arrays.h"
 #include "sim/hasty_rollout_task.h"
+#include "sim/pool_labeler.h"
 #include "sim/rollout_values.h"
 
 #include <cstddef>
@@ -87,12 +88,14 @@ std::vector<double> values_after_replies(const AliceTurn& turn, const std::vecto
                                          RolloutValues& values, int sims, const Dictionary& dict,
                                          uint64_t seed);
 
-// Alice's full rack in one of her sims after Bob's reply, Bob holding
-// `bob_rack` after her candidate `applied`: her leave and her replenishment,
-// drawn from the bag as she found it. That bag holds neither her leave nor the
-// tiles of an exchange, which went back only after she drew; Bob's draw after
-// his reply, made by the sim, can take them.
-Rack alice_rack_after_reply(const RolloutStart& applied, const Rack& bob_rack, uint64_t seed);
+// Alice's sims of her candidate `applied` after Bob, holding `bob_rack`,
+// replies `reply`: her leave is seated, and each sim draws her replenishment,
+// returns the tiles of an exchange of hers, and draws Bob's, all from the bag
+// as she found it. That bag is the same whichever candidate she played, so
+// under one `seed` her candidates' sims deal each player the same tiles, as
+// far as the counts they draw allow.
+PoolJob after_reply_job(const RolloutStart& applied, const Rack& bob_rack, const Move& reply,
+                        int sims, const Dictionary& dict, uint64_t seed);
 
 // The index of the largest of `values`, skipping kPruned.
 size_t best_candidate(const std::vector<double>& values);

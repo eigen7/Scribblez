@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -135,7 +136,7 @@ TEST(DeepBot, AsksTheModelForBobsBeliefWithAlicesPastHidden) {
 TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const auto dir = scribblez::testing::make_temp_dir("scribblez_test_subtree_dump");
-  DeepBot::Params p = small_params(6);
+  DeepBot::Params p = small_params(7);
   p.subtree_candidates = 0;
   p.subtree_dump = (dir / "dump.jsonl").string();
   DeepBot bot(p, cpu_backend());
@@ -224,6 +225,28 @@ TEST(DeepBot, RefusesAnUnknownReplyModelAndADumpWithoutSubtrees) {
   EXPECT_THROW(DeepBot(p, cpu_backend()), util::CleanException);
 }
 
+namespace {
+
+// The racks rollout k of `job` deals: Alice's, then Bob's.
+RolloutRacks after_reply_racks(const PoolJob& job, uint32_t k) {
+  const RolloutBatch batch{.groups = {job.group}, .starts = job.starts, .tasks = {}};
+  return rollout_racks(batch, {.position = 0, .rollout = k});
+}
+
+// `rack` less `part`, which it must hold.
+Rack without(Rack rack, const Rack& part) {
+  for (int i = 0; i < part.size(); ++i) EXPECT_TRUE(rack.remove(part.tiles()[size_t(i)]));
+  return rack;
+}
+
+bool holds(const Rack& rack, const Rack& part) {
+  for (int k = 0; k < TILE_KINDS; ++k)
+    if (rack.count(Tile::of(k)) < part.count(Tile::of(k))) return false;
+  return true;
+}
+
+}  // namespace
+
 // Alice's replenishment in her sims after Bob's reply comes from the bag as
 // she found it: an exchange's tiles went back only after she drew. Here she
 // exchanges the only J, K, Q, X and Z, so no rack of hers may hold one.
@@ -235,11 +258,48 @@ TEST(DeepBot, AliceNeverRedrawsTheTilesSheExchanged) {
   const RolloutStart exchanged = make_rollout_start(
     board, alice, 0, 0, Move::exchange(Rack::from_string("JKQXZ").counts()), /*group=*/0);
   const Rack bob = Rack::from_string("BCDFGHI");
-  for (uint64_t seed = 0; seed < 200; ++seed) {
-    const TileCounts rack = alice_rack_after_reply(exchanged, bob, seed).counts();
+  const PoolJob job = after_reply_job(exchanged, bob, Move::pass(), /*sims=*/200, nwl23(), 1);
+  for (uint32_t k = 0; k < 200; ++k) {
+    const TileCounts rack = after_reply_racks(job, k).opp.counts();
     ASSERT_EQ(rack.size(), RACK_SIZE);
     EXPECT_GE(rack.count(Tile::from_char('A')), 1);
     EXPECT_GE(rack.count(Tile::from_char('E')), 1);
     for (const char c : std::string("JKQXZ")) EXPECT_EQ(rack.count(Tile::from_char(c)), 0) << c;
+  }
+}
+
+// Alice's candidates play different numbers of tiles, and Bob replies to each
+// by exchanging the same three. Under one seed, sim k of every candidate draws
+// Bob the same three tiles, and the candidate that plays fewer tiles draws
+// Alice part of what the other draws her.
+TEST(DeepBot, AlicesCandidatesArePairedOnBothPlayersDrawsAfterBobsReply) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  Board board;
+  board.ensure_movegen_caches(nwl23());
+  const Rack alice = Rack::from_string("AEINRST");
+  const MoveRequest req{board, nwl23(), alice, Rack{}, 0, 0, 100 - 2 * RACK_SIZE};
+  std::vector<RolloutStart> applied;
+  for (const Move& m : equity_top_k(req, std::numeric_limits<int>::max())) {
+    const bool fewer = applied.empty() || m.num_glyphs() < RACK_SIZE - applied.back().leave.size();
+    if (m.type() == MoveType::PLAY && fewer)
+      applied.push_back(make_rollout_start(board, alice, 0, 0, m, /*group=*/0));
+  }
+  ASSERT_GE(applied.size(), 2u);
+  const Rack bob = Rack::from_string("BCDFGHI");
+  const Move reply = Move::exchange(Rack::from_string("BCD").counts());
+  constexpr int kSims = 16;
+  std::vector<PoolJob> jobs;
+  for (const RolloutStart& a : applied)
+    jobs.push_back(after_reply_job(a, bob, reply, kSims, nwl23(), /*seed=*/5));
+  for (uint32_t k = 0; k < kSims; ++k) {
+    const RolloutRacks first = after_reply_racks(jobs[0], k);
+    const Rack bob_drew = without(first.mine, Rack::from_string("FGHI"));
+    for (size_t c = 1; c < jobs.size(); ++c) {
+      const RolloutRacks racks = after_reply_racks(jobs[c], k);
+      EXPECT_EQ(without(racks.mine, Rack::from_string("FGHI")), bob_drew) << "candidate " << c;
+      const Rack more = without(after_reply_racks(jobs[c - 1], k).opp, applied[c - 1].leave);
+      const Rack fewer = without(racks.opp, applied[c].leave);
+      EXPECT_TRUE(holds(more, fewer)) << "candidate " << c;
+    }
   }
 }

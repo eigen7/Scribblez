@@ -22,7 +22,9 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <limits>
+#include <map>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -95,6 +97,14 @@ bool contains(const Rack& rack, const Rack& part) {
   return true;
 }
 
+// The tiles a task's deal drew for us: our rack less our leave.
+Rack our_refill(const RolloutBatch& batch, const rollout_abi::RolloutTask& task) {
+  Rack drawn = rollout_racks(batch, task).mine;
+  const Rack& leave = batch.starts[task.position].leave;
+  for (int j = 0; j < leave.size(); ++j) EXPECT_TRUE(drawn.remove(leave.tiles()[size_t(j)]));
+  return drawn;
+}
+
 // Every tile a task dealt (both racks, less our leave) came out of its
 // group's pool: none is dealt twice, and no returned tile is redrawn.
 void expect_dealt_from_pool(const RolloutBatch& batch, const rollout_abi::RolloutTask& task) {
@@ -124,7 +134,79 @@ std::pair<Decision, Tile> decision_with_last_copy(const Dictionary& dict, uint64
   }
 }
 
+constexpr uint64_t kBagSeed = 11;
+
+// A bag of `n` tiles, tile i of kind i % kTileKinds, shuffled for `rollout`.
+rollout_abi::Bag shuffled_bag(int n, uint32_t rollout) {
+  rollout_abi::Bag bag{};
+  for (int i = 0; i < n; ++i) bag.tiles[bag.back++] = uint8_t(i % rollout_abi::kTileKinds);
+  bag.shuffle(kBagSeed, rollout);
+  return bag;
+}
+
+std::vector<uint8_t> draw_n(rollout_abi::Bag& bag, int player, int n) {
+  std::vector<uint8_t> out;
+  for (int i = 0; i < n; ++i) out.push_back(bag.draw(player));
+  return out;
+}
+
+std::vector<uint8_t> contents(const rollout_abi::Bag& bag) {
+  return {bag.tiles + bag.front, bag.tiles + bag.back};
+}
+
 }  // namespace
+
+// The opponent draws 2 then 3 tiles in one copy of a bag and 6 then 1 in the
+// other, around a refill of ours: our tiles are the same, and the opponent's
+// five are the first five of its seven.
+TEST(RolloutBag, EachPlayersDrawsIgnoreTheOthers) {
+  for (uint32_t rollout = 0; rollout < 16; ++rollout) {
+    rollout_abi::Bag a = shuffled_bag(60, rollout);
+    rollout_abi::Bag b = a;
+    std::vector<uint8_t> a_opp = draw_n(a, 1, 2);
+    const std::vector<uint8_t> a_us = draw_n(a, 0, 7);
+    std::ranges::copy(draw_n(a, 1, 3), std::back_inserter(a_opp));
+    std::vector<uint8_t> b_opp = draw_n(b, 1, 6);
+    const std::vector<uint8_t> b_us = draw_n(b, 0, 7);
+    std::ranges::copy(draw_n(b, 1, 1), std::back_inserter(b_opp));
+    EXPECT_EQ(a_us, b_us) << "rollout " << rollout;
+    EXPECT_TRUE(std::equal(a_opp.begin(), a_opp.end(), b_opp.begin())) << "rollout " << rollout;
+  }
+}
+
+TEST(RolloutBag, APutBackChangesAtMostOneOfTheOtherPlayersTiles) {
+  for (uint32_t rollout = 0; rollout < 16; ++rollout) {
+    rollout_abi::Bag bag = shuffled_bag(60, rollout);
+    rollout_abi::Bag untouched = bag;
+    const std::vector<uint8_t> before = draw_n(untouched, 1, 20);
+    for (uint8_t t : draw_n(bag, 0, 3)) bag.put_back(t, 0, kBagSeed, rollout);
+    const std::vector<uint8_t> after = draw_n(bag, 1, 20);
+    int changed = 0;
+    for (size_t i = 0; i < before.size(); ++i) changed += before[i] != after[i];
+    EXPECT_LE(changed, 3) << "rollout " << rollout;
+  }
+}
+
+// Over 48000 rollouts of four distinct tiles: every shuffled order, and every
+// order after we draw one and put back a fifth, about equally often (2000 per
+// shuffled order and 500 per put-back order, standard deviations of about 44
+// and 22, bounded here at four or more; the seed fixes the draws, so this
+// cannot flake).
+TEST(RolloutBag, ShufflesAndPutBacksLeaveEveryOrderEquallyLikely) {
+  constexpr int kTrials = 48000;
+  std::map<std::vector<uint8_t>, int> shuffled, put_back;
+  for (uint32_t rollout = 0; rollout < kTrials; ++rollout) {
+    rollout_abi::Bag bag = shuffled_bag(4, rollout);
+    ++shuffled[contents(bag)];
+    bag.draw(0);
+    bag.put_back(4, 0, kBagSeed, rollout);
+    ++put_back[contents(bag)];
+  }
+  ASSERT_EQ(shuffled.size(), 24u);
+  for (const auto& [order, n] : shuffled) EXPECT_NEAR(n, kTrials / 24, 180);
+  ASSERT_EQ(put_back.size(), 96u);
+  for (const auto& [order, n] : put_back) EXPECT_NEAR(n, kTrials / 96, 100);
+}
 
 TEST(HastyRolloutCpu, LeavesAreTheRacksAfterEachMoveBeforeItsDraw) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
@@ -162,6 +244,27 @@ TEST(HastyRolloutCpu, AGroupsStartsDrawTheSameOpponentRack) {
     EXPECT_EQ(opp.size(), RACK_SIZE);
     for (uint32_t s = 1; s < moves.size(); ++s)
       EXPECT_EQ(rollout_racks(batch, {s, i}).opp, opp) << "start " << s << " rollout " << i;
+  }
+}
+
+// Rollout i's opponent rack is dealt first and our refill after it, from the
+// other end: a start that plays more tiles draws more of the same sequence.
+TEST(HastyRolloutCpu, AGroupsStartsDrawOurRefillFromOneSequence) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
+  const Dictionary& dict = nwl23();
+  const Decision d = decision_after(dict, /*seed=*/2, /*plies=*/8);
+  std::vector<Move> moves;
+  for (const Move& m : ranked_moves(d, dict)) {
+    const bool longer = moves.empty() || m.num_glyphs() > moves.back().num_glyphs();
+    if (m.type() == MoveType::PLAY && longer) moves.push_back(m);
+  }
+  ASSERT_GE(moves.size(), 2u);
+  const RolloutBatch batch = batch_of(d, moves, /*rollouts=*/8);
+  for (uint32_t i = 0; i < 8; ++i) {
+    for (uint32_t s = 1; s < moves.size(); ++s) {
+      EXPECT_TRUE(contains(our_refill(batch, {s, i}), our_refill(batch, {s - 1, i})))
+        << "start " << s << " rollout " << i;
+    }
   }
 }
 

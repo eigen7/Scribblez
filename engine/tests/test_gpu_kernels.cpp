@@ -87,9 +87,8 @@ TEST_P(GpuRolloutKernelTest, RolloutsMatchTheCpuReference) {
 
 INSTANTIATE_TEST_SUITE_P(Plies, GpuRolloutKernelTest, ::testing::Values(2, 10, 16));
 
-// Every rollout seating a full rack as the opponent's known leave: what Bob's
-// subtree seats for Alice after his reply, or as her leave after a pass
-// (agent/bob_subtree.h).
+// Every rollout seating a full rack as the opponent's known leave: its leave
+// after a pass, as Alice's after-reply sims seat it (agent/bob_subtree.h).
 TEST(GpuRolloutKernel, SeatsAFullRackAsTheOpponentsLeave) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   RolloutBatch batch = batch_at(10);
@@ -99,6 +98,23 @@ TEST(GpuRolloutKernel, SeatsAFullRackAsTheOpponentsLeave) {
     if (leave.size() == RACK_SIZE) full.push_back(leave);
   ASSERT_FALSE(full.empty());
   for (size_t i = 0; i < leaves.size(); ++i) leaves[i] = full[i % full.size()];
+  const auto cpu = run_hasty_rollouts_cpu(batch, nwl23());
+  EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23())), "");
+}
+
+// The opponent's exchanged tiles going back after its refill, as in Alice's
+// sims after Bob's reply when her candidate was an exchange: three tiles out
+// of the pool, returned by every start.
+TEST(GpuRolloutKernel, PutsTheOpponentsExchangeBackAfterItsRefill) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  RolloutBatch batch = batch_at(10);
+  RolloutGroup& group = batch.groups[0];
+  group.opp_leaves.clear();
+  Rack returned;
+  for (int k = 0; k < TILE_KINDS && returned.size() < 3; ++k)
+    if (group.pool.count(Tile::of(k)) > 0) returned.add(Tile::of(k));
+  ASSERT_TRUE(group.pool.remove(returned.counts()));
+  for (RolloutStart& start : batch.starts) start.opp_returned = returned;
   const auto cpu = run_hasty_rollouts_cpu(batch, nwl23());
   EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23())), "");
 }

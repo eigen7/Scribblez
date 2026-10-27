@@ -41,6 +41,9 @@ struct RolloutStart {
   Board board;    // natural frame, after the move
   Rack leave;     // ours
   Rack returned;  // the tiles an exchange put back in the bag
+  // The opponent's, when it reached `board` by exchanging: back in the bag
+  // after its refill.
+  Rack opp_returned;
   int my_score = 0;
   int opp_score = 0;
   uint32_t group = 0;

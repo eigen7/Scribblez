@@ -202,14 +202,18 @@ ordinal)`:
   comparisons between candidates are paired.
 - **Within Bob's subtree,** all of his candidates share the same `R_B` racks
   for Alice and the same draws.
-- **Replenishments** map a variate to an index in a canonical sorted pool.
-  Candidates whose pools coincide share draws exactly; where the pools
-  differ (because different tiles were played) the pairing is approximate.
+- **Replenishments** come from each player's own end of one bag per sample,
+  shuffled once: Alice draws from one end and Bob from the other, so each
+  player's k-th tile is the same whichever candidate she played and however
+  many tiles either of them draws. In Alice's sims after Bob's reply, that
+  bag is the bag as she found it (her leave seated, her exchanged tiles
+  returned after her draw), the same for every candidate, so her candidates
+  stay paired on Bob's draws too.
 
 A seeded, indexable draw sequence replaces the `Game`'s bag in sim code: the
 GPU kernel's counter-based generator (Philox, keyed by the batch seed and
-counted by rollout index and draw ordinal), which the CPU reference shares.
-Rollout `i` reads the same variates in every position of a batch.
+counted by rollout index), which the CPU reference shares. Rollout `i`
+shuffles the same pool the same way in every start of a group.
 
 ## Candidates
 

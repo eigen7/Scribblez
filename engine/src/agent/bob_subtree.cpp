@@ -3,7 +3,6 @@
 #include "agent/agent.h"
 #include "belief/leave_query.h"
 #include "belief/leave_sampler.h"
-#include "game/bag.h"
 #include "lexicon/dictionary.h"
 #include "sim/pool_jobs.h"
 #include "sim/pool_labeler.h"
@@ -159,31 +158,18 @@ CandidateSubtrees candidate_subtrees(const AliceTurn& turn, size_t c, const Beli
   return out;
 }
 
-// Alice's sims of (c, rack i) after Bob's reply: Bob has just moved, and each
-// sim seats her full rack, so the sim draws only Bob's replenishment.
-PoolJob after_reply_job(const AliceTurn& turn, size_t c, size_t i, const Move& reply, int sims,
-                        const Dictionary& dict, uint64_t seed) {
-  const RolloutStart& applied = turn.applied[c];
-  const uint64_t rack_draws = rack_seed(seed, kAfterReplyDomain, i);
-  PoolJob job = position_job(bob_position(applied, turn.bob_racks[i]), {reply}, rack_draws, nullptr,
-                             dict, sims);
-  for (int k = 0; k < sims; ++k) {
-    job.group.opp_leaves.push_back(alice_rack_after_reply(
-      applied, turn.bob_racks[i], util::splitmix64(rack_draws ^ uint64_t(k))));
-  }
-  return job;
-}
-
 }  // namespace
 
-Rack alice_rack_after_reply(const RolloutStart& applied, const Rack& bob_rack, uint64_t seed) {
-  TileCounts bag = applied.board.unseen_tiles(bob_rack);
-  const bool held = bag.remove(applied.leave.counts()) && bag.remove(applied.returned.counts());
-  DEBUG_ASSERT(held, "Alice's leave and exchanged tiles are unseen to Bob");
-  Bag draws(seed, bag);
-  Rack rack = applied.leave;
-  while (rack.size() < RACK_SIZE && draws.size() > 0) rack.add(draws.draw());
-  return rack;
+PoolJob after_reply_job(const RolloutStart& applied, const Rack& bob_rack, const Move& reply,
+                        int sims, const Dictionary& dict, uint64_t seed) {
+  PoolJob job = position_job(bob_position(applied, bob_rack), {reply}, seed, nullptr, dict, sims);
+  // Bob's unseen pool less her leave, which the sims seat, and her exchanged
+  // tiles, which went back only after she drew: the bag as she found it.
+  const bool unseen = job.group.pool.remove(applied.returned.counts());
+  DEBUG_ASSERT(unseen, "Alice's exchanged tiles are unseen to Bob");
+  job.group.opp_leaves.assign(size_t(sims), applied.leave);
+  job.starts[0].opp_returned = applied.returned;
+  return job;
 }
 
 size_t best_candidate(const std::vector<double>& values) {
@@ -239,7 +225,9 @@ std::vector<double> values_after_replies(const AliceTurn& turn, const std::vecto
     const size_t c = which[chunk];
     std::vector<std::pair<size_t, PoolJob>> made(racks);
     util::parallel_for(racks, [&](size_t i) {
-      made[i] = {c * racks + i, after_reply_job(turn, c, i, replies[c][i].move, sims, dict, seed)};
+      made[i] = {c * racks + i,
+                 after_reply_job(turn.applied[c], turn.bob_racks[i], replies[c][i].move, sims, dict,
+                                 rack_seed(seed, kAfterReplyDomain, i))};
     });
     return made;
   });
