@@ -19,4 +19,11 @@ class WorkerBudget {
   int saved_;
 };
 
+// f(), run under a budget of n threads.
+template <class F>
+auto with_worker_budget(int n, F&& f) {
+  const WorkerBudget budget(n);
+  return f();
+}
+
 }  // namespace scribblez

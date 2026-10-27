@@ -1,12 +1,14 @@
 // util::parallel_for and util::parallel_lanes (util/work_pool.h): every item
-// runs exactly once, nested loops finish, a body's exception reaches the
-// caller, and a budget of one runs everything on the calling thread.
+// runs exactly once, an idle pool thread joins the caller, nested loops finish,
+// a body's exception reaches the caller, and a budget of one runs everything on
+// the calling thread.
 
 #include "util/work_pool.h"
 
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <set>
 #include <stdexcept>
 #include <thread>
@@ -31,6 +33,22 @@ TEST_F(WorkPoolTest, ParallelForRunsEveryItemOnce) {
   for (const std::atomic<int>& r : runs) EXPECT_EQ(r.load(), 1);
 }
 
+// Each of two items waits for the other to start, which only a second thread
+// can satisfy: the caller alone would run them one after the other.
+TEST_F(WorkPoolTest, AnIdlePoolThreadJoinsTheCaller) {
+  util::set_worker_count(2);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  std::atomic<int> started{0};
+  std::atomic<int> met{0};
+  util::parallel_for(2, [&](size_t) {
+    ++started;
+    while (started.load() < 2 && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    met += started.load() == 2;
+  });
+  EXPECT_EQ(met.load(), 2);
+}
+
 TEST_F(WorkPoolTest, NestedLoopsFinish) {
   util::set_worker_count(3);
   std::atomic<int> total{0};
@@ -49,7 +67,10 @@ TEST_F(WorkPoolTest, ExceptionReachesCaller) {
   EXPECT_EQ(finished.load(), 19);
 }
 
+// Shrinking the budget parks pool threads an earlier, wider loop spawned.
 TEST_F(WorkPoolTest, BudgetOfOneRunsOnCaller) {
+  util::set_worker_count(4);
+  util::parallel_for(100, [](size_t) {});
   util::set_worker_count(1);
   const std::thread::id caller = std::this_thread::get_id();
   std::atomic<int> elsewhere{0};
@@ -75,6 +96,15 @@ TEST_F(WorkPoolTest, LanesClaimEveryItemOnce) {
   for (const std::atomic<int>& r : runs) EXPECT_EQ(r.load(), 1);
   for (const std::atomic<int>& c : per_lane) total += c.load();
   EXPECT_EQ(total, int(n));
+}
+
+TEST_F(WorkPoolTest, ALanesExceptionReachesCaller) {
+  util::set_worker_count(4);
+  const auto lane = [](util::LaneCursor& cursor) {
+    for (size_t i; cursor.next(i);)
+      if (i == 7) throw std::runtime_error("item 7");
+  };
+  EXPECT_THROW(util::parallel_lanes(20, lane), std::runtime_error);
 }
 
 }  // namespace

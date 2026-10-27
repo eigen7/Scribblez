@@ -466,7 +466,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_reply_blocking.cpp
     tests/test_transfer_candidates.cpp
     tests/test_web_server.cpp
-    tests/test_work_pool.cpp)
+    tests/test_work_pool.cpp
+    tests/small_worker_budget.cpp)
   target_link_libraries(core_tests PRIVATE
     scribblez_core scribblez_evidence_select Boost::json Boost::program_options Threads::Threads
     GTest::gtest_main)
@@ -484,7 +485,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_monte_carlo_sim.cpp
     tests/test_pre_endgame.cpp
     tests/test_sim_agent.cpp
-    tests/test_weird_bot.cpp)
+    tests/test_weird_bot.cpp
+    tests/small_worker_budget.cpp)
   target_link_libraries(search_tests PRIVATE
     scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   add_test_data_definitions(search_tests)
@@ -504,7 +506,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     src/agent/mset_sim_agent.cpp
     src/agent/neural_agent.cpp
     src/agent/neural_sim_agent.cpp
-    src/agent/ultimate_bot_agent.cpp)
+    src/agent/ultimate_bot_agent.cpp
+    tests/small_worker_budget.cpp)
   target_link_libraries(agent_tests PRIVATE
     scribblez_core scribblez_evidence_select Boost::json Boost::program_options Threads::Threads
     GTest::gtest_main)
@@ -515,7 +518,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # is why it cannot share agent_tests' binary.
   add_executable(game_runner_tests
     tests/test_game_runner.cpp
-    tests/test_shared_backends.cpp)
+    tests/test_shared_backends.cpp
+    tests/small_worker_budget.cpp)
   target_link_libraries(game_runner_tests PRIVATE
     scribblez_core
     scribblez_neural_agents

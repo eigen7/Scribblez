@@ -429,12 +429,9 @@ TEST_F(LeaveBeliefSimsTest, BeliefsOfBatchesTheModelledQueries) {
   std::vector<LeaveQuery> queries;
   for (uint32_t t = meta->eligible_begin; t < meta->eligible_end; ++t)
     queries.push_back(beliefs.query({0, t}));
-  const auto built_on = [&](int threads) {
-    const WorkerBudget budget(threads);
-    return belief::beliefs_of(queries, stub, *table_);
-  };
-  const auto one = built_on(1);
-  const auto many = built_on(3);
+  const auto build = [&] { return belief::beliefs_of(queries, stub, *table_); };
+  const auto one = with_worker_budget(1, build);
+  const auto many = with_worker_budget(3, build);
   EXPECT_EQ(calls, 2);
   int modelled = 0;
   for (size_t i = 0; i < queries.size(); ++i) {

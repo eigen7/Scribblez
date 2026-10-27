@@ -286,12 +286,11 @@ TEST(MacondoSimmer, ResultsDoNotDependOnThreadCount) {
   const std::vector<Move> candidates = equity_top_k(req, 4);
   constexpr int kIterations = MacondoAutoStopper::kCheckInterval + 8;
   const MacondoSimmer::Params params{.plies = 1, .max_iterations = kIterations};
-  const auto simulate = [&](int threads) {
-    const WorkerBudget budget(threads);
+  const auto simulate = [&] {
     return MacondoSimmer::simulate(nwl23(), sim_position_from(req), candidates, 0, params, 99);
   };
-  const MacondoSimmer::Result one = simulate(1);
-  const MacondoSimmer::Result four = simulate(4);
+  const MacondoSimmer::Result one = with_worker_budget(1, simulate);
+  const MacondoSimmer::Result four = with_worker_budget(4, simulate);
   expect_same_results(one, four);
   EXPECT_EQ(one.iterations, uint64_t(kIterations));
   int pruned = 0;

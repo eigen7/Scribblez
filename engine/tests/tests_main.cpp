@@ -4698,7 +4698,8 @@ TEST(SimRunner, Basic) {
   params.rollouts = 16;
   const SimRunner runner(d, params);
   const uint64_t base_seed = 400;
-  const std::vector<RolloutStats> obs = runner.run(pos, candidates, base_seed);
+  const std::vector<RolloutStats> obs =
+    with_worker_budget(3, [&] { return runner.run(pos, candidates, base_seed); });
   ASSERT_EQ(obs.size(), candidates.size());
 
   for (const RolloutStats& o : obs) {
@@ -4722,8 +4723,8 @@ TEST(SimRunner, Basic) {
 
   // Results do not depend on the thread count.
   {
-    const WorkerBudget one(1);
-    const std::vector<RolloutStats> obs1 = SimRunner(d, params).run(pos, candidates, base_seed);
+    const std::vector<RolloutStats> obs1 =
+      with_worker_budget(1, [&] { return runner.run(pos, candidates, base_seed); });
     ASSERT_EQ(obs1.size(), obs.size());
     for (size_t c = 0; c < obs.size(); ++c)
       ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(RolloutStats)), 0);
@@ -4995,7 +4996,9 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
   params.horizon_plies = 4;
   params.leaf_service = &leaf;
   const uint64_t base_seed = 400;
-  const std::vector<RolloutStats> obs = SimRunner(d, params).run(pos, candidates, base_seed);
+  const SimRunner runner(d, params);
+  const std::vector<RolloutStats> obs =
+    with_worker_budget(3, [&] { return runner.run(pos, candidates, base_seed); });
 
   for (const RolloutStats& o : obs) {
     ASSERT_EQ(int(o.n), params.rollouts);
@@ -5004,8 +5007,8 @@ TEST(SimRunner, TruncatedDeterminismAndCrn) {
   ASSERT_EQ(std::memcmp(&obs[0], &obs[1], sizeof(RolloutStats)), 0);
 
   {
-    const WorkerBudget one(1);
-    const std::vector<RolloutStats> obs1 = SimRunner(d, params).run(pos, candidates, base_seed);
+    const std::vector<RolloutStats> obs1 =
+      with_worker_budget(1, [&] { return runner.run(pos, candidates, base_seed); });
     for (size_t c = 0; c < obs.size(); ++c)
       ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(RolloutStats)), 0);
   }
@@ -5443,7 +5446,8 @@ TEST(SimRunner, KnownOppRack) {
   SimRunner::Params params;
   params.rollouts = 12;
   const SimRunner runner(d, params);
-  const std::vector<RolloutStats> obs = runner.run(pos, candidates, /*base_seed=*/9);
+  const std::vector<RolloutStats> obs =
+    with_worker_budget(3, [&] { return runner.run(pos, candidates, /*base_seed=*/9); });
   bool any_reply = false;
   for (const RolloutStats& o : obs) {
     ASSERT_EQ(int(o.n), params.rollouts);
@@ -5455,8 +5459,8 @@ TEST(SimRunner, KnownOppRack) {
   }
   ASSERT_TRUE(any_reply);
 
-  const WorkerBudget one(1);
-  const std::vector<RolloutStats> obs1 = SimRunner(d, params).run(pos, candidates, /*base_seed=*/9);
+  const std::vector<RolloutStats> obs1 =
+    with_worker_budget(1, [&] { return runner.run(pos, candidates, /*base_seed=*/9); });
   for (size_t c = 0; c < obs.size(); ++c)
     ASSERT_EQ(std::memcmp(&obs[c], &obs1[c], sizeof(RolloutStats)), 0);
 

@@ -136,12 +136,10 @@ TEST_F(MonteCarloSimTest, ConditionsCoincideAfterABingo) {
 TEST_F(MonteCarloSimTest, DeterministicAcrossThreadCounts) {
   const ParsedGcgPostMove pos = parse(two_moves_earlier());
   ASSERT_EQ(pos.opp_leave.to_string(), "ACEINS");
-  const auto run_on = [&](int threads, LeaveCondition c) {
-    const WorkerBudget budget(threads);
-    return run_monte_carlo(pos, *dict_, 16, c);
-  };
-  for (const LeaveCondition c : {LeaveCondition::kHidden, LeaveCondition::kFaceUp})
-    expect_same(run_on(1, c), run_on(7, c));
+  for (const LeaveCondition c : {LeaveCondition::kHidden, LeaveCondition::kFaceUp}) {
+    const auto run = [&] { return run_monte_carlo(pos, *dict_, 16, c); };
+    expect_same(with_worker_budget(1, run), with_worker_budget(7, run));
+  }
 }
 
 // With a known leave the conditions see different opponents: face-up seats

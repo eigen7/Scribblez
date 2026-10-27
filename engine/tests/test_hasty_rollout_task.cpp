@@ -217,9 +217,8 @@ TEST(HastyRolloutCpu, ATasksOutcomeDoesNotDependOnItsBatch) {
   part.tasks = {{1, 9}, {0, 3}};
   static_assert(std::has_unique_object_representations_v<rollout_abi::RolloutResult>,
                 "memcmp compares results field by field only without padding");
-  const auto all = run_hasty_rollouts_cpu(whole, dict);
-  const WorkerBudget one(1);
-  const auto some = run_hasty_rollouts_cpu(part, dict);
+  const auto all = with_worker_budget(3, [&] { return run_hasty_rollouts_cpu(whole, dict); });
+  const auto some = with_worker_budget(1, [&] { return run_hasty_rollouts_cpu(part, dict); });
   EXPECT_EQ(std::memcmp(&some[0], &all[12 + 9], sizeof(some[0])), 0);
   EXPECT_EQ(std::memcmp(&some[1], &all[3], sizeof(some[1])), 0);
 }
