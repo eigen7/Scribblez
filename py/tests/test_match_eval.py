@@ -10,6 +10,7 @@ from scribblez.dashboard import api, db
 from scribblez.match_eval import harness, runner
 from scribblez.match_eval.harness import RoundResult
 from scribblez.paths import DONE_SUFFIX, POSITION_EVAL, TagPaths
+from scribblez.sim_evidence.slog_meta import game_metas, read_slog_bytes
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.evidence_trajectories import EvidenceTrajectoriesParams
 from scribblez.workloads.position_eval import SPEC, PositionEvalParams
@@ -92,6 +93,28 @@ def test_play_round_raises_on_missing_game_records(tmp_path, monkeypatch):
     monkeypatch.setattr(selfplay.subprocess, "run", _fake_play_game(results, lines, expect_games=4))
     with pytest.raises(RuntimeError, match="expected 4 game records"):
         harness.play_round("a", "b", 2, threads=1, seed=1, results_file=results)
+
+
+def test_play_round_keeps_the_games_as_slogs_naming_each_seats_player(tmp_path):
+    games = tmp_path / "games"
+    harness.play_round(
+        "--type=greedy",
+        "--type=greedy",
+        1,
+        threads=1,
+        seed=5,
+        results_file=tmp_path / "r.jsonl",
+        slog_dir=games,
+    )
+    metas = [m for path in games.glob("*.slog") for m in game_metas(read_slog_bytes(path))]
+    recorded = sorted(
+        (int(m["seed"]), int(m["seat0_player"]), int(m["seat1_player"])) for m in metas
+    )
+    lines = [json.loads(ln) for ln in (tmp_path / "r.jsonl").read_text().splitlines()]
+    assert recorded == sorted((ln["seed"], *ln["seat_players"]) for ln in lines)
+    # The pair's two games: one seed, the seats swapped.
+    assert recorded[0][0] == recorded[1][0]
+    assert [r[1:] for r in recorded] == [(0, 1), (1, 0)]
 
 
 def _match_record(**overrides):

@@ -3,14 +3,16 @@ against one opponent, one arm per cycle.
 
 Each cycle takes the first arm without a match_arm row, plays its full pair
 budget through the match harness, and writes the row the dashboard's Arms tab
-reads. Every arm starts from the same base seed, so all arms face the same
+reads. The arm's games are kept as .slog files (TagPaths.arm_games_dir) for
+later analysis. Every arm starts from the same base seed, so all arms face the same
 deals pair for pair (common random numbers) and their scores compare directly.
 
 Once every arm has a row the runner exits; when the dashboard respawns it, it
 finds nothing to do and exits again. A stop mid-arm discards that arm's
-partial results, and the next start replays it from the same seeds.
+partial results and games, and the next start replays it from the same seeds.
 """
 
+import shutil
 import time
 
 from scribblez import stats
@@ -35,6 +37,8 @@ def _play_arm(ctx: WorkerContext, arm: Arm) -> dict:
     without elapsed_s, which the caller adds."""
     p = ctx.params
     results_file = ctx.tag_paths().work_dir(ctx.worker_id) / "match_results.jsonl"
+    games_dir = ctx.tag_paths().arm_games_dir(arm.name)
+    shutil.rmtree(games_dir, ignore_errors=True)  # a discarded earlier attempt's
     counts = [0] * 5
     wins = draws = losses = 0
     pairs_done = 0
@@ -48,6 +52,7 @@ def _play_arm(ctx: WorkerContext, arm: Arm) -> dict:
             seed=p.seed + pairs_done,
             results_file=results_file,
             face_up_leaves=p.face_up_leaves,
+            slog_dir=games_dir,
         )
         for i, c in enumerate(stats.pair_score_counts(round_result.pair_scores)):
             counts[i] += c

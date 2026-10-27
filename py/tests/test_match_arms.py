@@ -106,8 +106,10 @@ def _scripted_round(calls, score_by_spec):
     """A play_round stand-in recording (player0_spec, seed) and returning each
     pair at a fixed score for that spec."""
 
-    def fake_round(spec0, spec1, num_pairs, threads, seed, results_file, face_up_leaves):
+    def fake_round(spec0, spec1, num_pairs, threads, seed, results_file, face_up_leaves, slog_dir):
         calls.append((spec0, seed))
+        slog_dir.mkdir(parents=True, exist_ok=True)
+        (slog_dir / f"{seed}.slog").write_text("")
         score = score_by_spec[spec0]
         wins = num_pairs * 2 if score == 1.0 else 0
         losses = num_pairs * 2 if score == 0.0 else 0
@@ -157,6 +159,23 @@ def test_runner_skips_measured_arms_and_exits_when_done(tmp_path, monkeypatch):
     before = len(calls)
     assert arms_runner.run(_ctx(tmp_path, monkeypatch)) == 0
     assert len(calls) == before  # nothing left: no matches played
+
+
+def test_runner_keeps_each_arms_games_and_drops_a_discarded_attempts(tmp_path, monkeypatch):
+    calls = []
+    scores = {"--type=greedy --name=A": 1.0, "--type=sim --top-k=4": 0.5}
+    monkeypatch.setattr(arms_runner.harness, "play_round", _scripted_round(calls, scores))
+    ctx = _ctx(tmp_path, monkeypatch)
+    # A file left by an attempt at 'a' that was stopped before its row landed.
+    stale = ctx.tag_paths().arm_games_dir("a") / "stale.slog"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("")
+
+    assert arms_runner.run(ctx) == 0
+
+    for arm in ("a", "b"):
+        games = sorted(p.name for p in ctx.tag_paths().arm_games_dir(arm).iterdir())
+        assert games == ["1.slog", "3.slog"]  # one file per round in the fake
 
 
 # ---------------------------------------------------------------------------
