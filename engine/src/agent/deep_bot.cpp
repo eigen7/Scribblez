@@ -213,10 +213,8 @@ std::vector<size_t> DeepBot::survivors(const std::vector<Move>& moves,
 std::vector<double> DeepBot::subtree_values(
   const MoveRequest& req, const AliceTurn& turn, const std::vector<PoolLabel>& hasty,
   const std::vector<size_t>& searched, const std::vector<std::vector<BobReply>>& replies) const {
-  const std::vector<double> after = values_after_replies(
-    turn, searched, replies, *backend_.values, params_.sims_per_rack, req.dict, turn_seed());
-  std::vector<double> values(turn.candidates.size(), kPruned);
-  for (size_t c : searched) values[c] = after[c];
+  std::vector<double> values = values_after_replies(turn, searched, replies, *backend_.values,
+                                                    params_.sims_per_rack, req.dict, turn_seed());
   for (size_t c = 0; c < turn.candidates.size(); ++c)
     if (empties_bag(turn.candidates[c], req.bag_size)) values[c] = hasty[c].win_prob;
   return values;

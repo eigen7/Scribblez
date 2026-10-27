@@ -67,6 +67,9 @@ struct BeliefModel {
   const LeaveValueArrays* table = nullptr;
 };
 
+// The value of a candidate Alice did not search: it has none.
+inline constexpr double kPruned = std::numeric_limits<double>::quiet_NaN();
+
 // replies[c][i] = β(candidates[c], bob_racks[i]), for each c in `which`; the
 // other rows stay empty. `seed` keys Bob's samples and draws, by rack index.
 std::vector<std::vector<BobReply>> bob_replies(const AliceTurn& turn,
@@ -78,7 +81,7 @@ std::vector<std::vector<BobReply>> bob_replies(const AliceTurn& turn,
 // Alice's value of each candidate c in `which` from her sims after Bob's
 // replies: the mean over racks i of her win probability (a draw counting
 // half) over `sims` rollouts after β(c, i), each drawing her replenishment.
-// Other entries are 0.
+// Other entries are kPruned.
 std::vector<double> values_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
                                          const std::vector<std::vector<BobReply>>& replies,
                                          RolloutValues& values, int sims, const Dictionary& dict,
@@ -90,9 +93,6 @@ std::vector<double> values_after_replies(const AliceTurn& turn, const std::vecto
 // tiles of an exchange, which went back only after she drew; Bob's draw after
 // his reply, made by the sim, can take them.
 Rack alice_rack_after_reply(const RolloutStart& applied, const Rack& bob_rack, uint64_t seed);
-
-// The value of a candidate Alice did not search: it has none.
-inline constexpr double kPruned = std::numeric_limits<double>::quiet_NaN();
 
 // The index of the largest of `values`, skipping kPruned.
 size_t best_candidate(const std::vector<double>& values);

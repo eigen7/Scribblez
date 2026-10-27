@@ -233,7 +233,8 @@ std::vector<double> values_after_replies(const AliceTurn& turn, const std::vecto
                                          RolloutValues& values, int sims, const Dictionary& dict,
                                          uint64_t seed) {
   const size_t racks = turn.bob_racks.size();
-  std::vector<double> out(turn.candidates.size(), 0.0);
+  std::vector<double> out(turn.candidates.size(), kPruned);
+  for (size_t c : which) out[c] = 0.0;
   ChunkedJobs jobs(which.size(), [&](size_t chunk) {
     const size_t c = which[chunk];
     std::vector<std::pair<size_t, PoolJob>> made(racks);
