@@ -116,6 +116,7 @@ add_library(scribblez_core STATIC
   src/util/math.cpp
   src/util/misc.cpp
   src/util/progress.cpp
+  src/util/work_pool.cpp
 )
 # Compiled with PIC so the shared `scribblez_ffi` library can statically link
 # in the core engine on Linux.
@@ -464,7 +465,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_rack_inference.cpp
     tests/test_reply_blocking.cpp
     tests/test_transfer_candidates.cpp
-    tests/test_web_server.cpp)
+    tests/test_web_server.cpp
+    tests/test_work_pool.cpp)
   target_link_libraries(core_tests PRIVATE
     scribblez_core scribblez_evidence_select Boost::json Boost::program_options Threads::Threads
     GTest::gtest_main)
