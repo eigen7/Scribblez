@@ -58,7 +58,7 @@ const Rack& Game::visible_opp_rack(int mover) const {
 
 void Game::refill_rack(int p, Rack* drawn_out) {
   while (racks_[p].size() < RACK_SIZE && bag_.size() > 0) {
-    const Tile t = bag_.draw();
+    const Tile t = bag_.draw(p);
     racks_[p].add(t);
     if (drawn_out) drawn_out->add(t);
   }
@@ -80,7 +80,7 @@ void Game::play() {
 }
 
 void Game::play_from(const Board& board, std::array<int, 2> scores,
-                     const std::array<Rack, 2>& known_racks, const Bag& pool, int to_move,
+                     const std::array<Rack, 2>& known_racks, const TileCounts& pool, int to_move,
                      const Rack& returned_to_bag) {
   board_ = board;
   scores_ = scores;
@@ -89,7 +89,7 @@ void Game::play_from(const Board& board, std::array<int, 2> scores,
   // A rollout's known racks are exactly the leaves the simulating player can
   // see, so they seed the face-up-leaves view.
   leaves_ = known_racks;
-  bag_ = pool;
+  bag_ = TwoEndedBag(seed_, pool);
   refill_rack(to_move, /*drawn_out=*/nullptr);
   refill_rack(1 - to_move, /*drawn_out=*/nullptr);
   for (int i = 0; i < returned_to_bag.size(); ++i) bag_.put_back(returned_to_bag.tiles()[i]);

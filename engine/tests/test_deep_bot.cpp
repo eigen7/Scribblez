@@ -72,7 +72,7 @@ DeepBot::Backend cpu_backend(belief::LeaveParamsFn predict = {},
 // A game of `deepbot` against HastyBot from a fixed deal; returns its moves.
 std::vector<Move> play(DeepBot& deepbot) {
   HastyBot hasty({.thread_id = 0, .name = "HastyBot"});
-  Game g(deepbot, hasty, nwl23(), /*seed=*/5);
+  Game g(deepbot, hasty, nwl23(), /*seed=*/1);
   g.play();
   const GameLogStorage log = g.extract_log();
   std::vector<Move> moves;

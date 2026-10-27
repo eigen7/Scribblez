@@ -3,6 +3,7 @@ add_library(scribblez_core STATIC
   src/game/tile_counts.cpp
   src/game/rack.cpp
   src/game/bag.cpp
+  src/game/two_ended_bag.cpp
   src/game/board.cpp
   src/game/move.cpp
   src/lexicon/dictionary.cpp

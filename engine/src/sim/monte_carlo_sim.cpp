@@ -3,13 +3,14 @@
 #include "agent/agent.h"
 #include "agent/endgame_agent.h"
 #include "agent/hasty_bot.h"
-#include "game/bag.h"
 #include "game/game.h"
 #include "game/glyph.h"
 #include "game/move.h"
 #include "game/tile.h"
+#include "game/tile_counts.h"
 #include "sim/sim_runner.h"
 #include "training/footprint.h"
+#include "util/assert.h"
 #include "util/work_pool.h"
 
 #include <algorithm>
@@ -72,8 +73,9 @@ Rollout rollout(const ParsedGcgPostMove& pos, const Dictionary& dict, Agent& a0,
   std::array<Rack, 2> known;
   known[pos.start_player] = pos.leave;
   known[opponent] = sampler.leave(seed);
-  Bag pool(seed, pos.board.unseen_tiles(pos.leave));
-  for (int i = 0; i < known[opponent].size(); ++i) pool.remove(known[opponent].tiles()[i]);
+  TileCounts pool = pos.board.unseen_tiles(pos.leave);
+  const bool seated = pool.remove(known[opponent].counts());
+  DEBUG_ASSERT(seated, "the sampled leave is not in the unseen pool");
   Game game(a0, a1, dict, seed);
   game.set_face_up_leaves(face_up);
   game.play_from(pos.board, pos.scores, known, pool, /*to_move=*/opponent);

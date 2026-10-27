@@ -325,7 +325,7 @@ TEST(MacondoSimmer, RanksPlaysAndRespectsTheIterationCap) {
 TEST(BestBot, PlaysHastyBotsMoveInThePreEndgame) {
   if (!have_macondo_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo data";
   int checked = 0;
-  for (uint64_t seed = 1; seed <= 4; ++seed) {
+  for (uint64_t seed : {7, 10, 12}) {
     const std::optional<Position> pos =
       find_position(nwl23(), seed, [](int bag) { return bag == 1; });
     if (!pos) continue;

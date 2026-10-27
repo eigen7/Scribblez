@@ -206,7 +206,7 @@ ordinal)`:
   Candidates whose pools coincide share draws exactly; where the pools
   differ (because different tiles were played) the pairing is approximate.
 
-A seeded, indexable draw sequence replaces `Bag::draw()` in sim code: the
+A seeded, indexable draw sequence replaces the `Game`'s bag in sim code: the
 GPU kernel's counter-based generator (Philox, keyed by the batch seed and
 counted by rollout index and draw ordinal), which the CPU reference shares.
 Rollout `i` reads the same variates in every position of a batch.
