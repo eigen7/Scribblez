@@ -138,10 +138,11 @@ random opening has an empty eligible region and is dropped.
   source. `GameRunner` draws one base seed, and game *g* is played with seed
   `base + g`, or `base + g/2` under `--paired`, where games 2k and 2k+1 share a
   seed with the seats swapped so per-seed tile luck cancels. The game seed
-  seeds that game's [Bag](../engine/src/game/bag.cpp), and derivations
-  of it pick the handicap and the random-opening length.
-- Nothing relies on a seed reproducing a specific bag, so auxiliary per-game
-  randomness may draw from the game seed freely.
+  shuffles that game's [TwoEndedBag](../engine/src/game/two_ended_bag.cpp),
+  from which each seat draws at its own end, and derivations of it pick the
+  handicap and the random-opening length.
+- Auxiliary per-game randomness draws from its own streams derived from the
+  game seed, so it never shifts the bag's order.
 - The generate role runs every chunk with seed 0, which makes `play_game` draw
   a fresh seed per chunk: a fleet splitting a generation under any
   deterministic seed partition would duplicate games, so distributed corpora

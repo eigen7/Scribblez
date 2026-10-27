@@ -2992,6 +2992,31 @@ TEST(Game, PlayFrom) {
   ASSERT_EQ(logs[0].end_reason, logs[1].end_reason);
 }
 
+// A Game deals seat 0 from its bag's front and seat 1 from the back: after
+// every refill, a seat's tiles so far are a prefix of a fresh bag drained from
+// that seat's end. TestAgents never exchange, so no tile is put back.
+TEST(Game, EachSeatDrawsFromItsOwnEnd) {
+  const Dictionary d = medium_dict();
+  for (uint64_t seed = 1; seed <= 3; ++seed) {
+    const GameLogStorage log = play_test_game(d, seed);
+    for (int seat = 0; seat < 2; ++seat) {
+      std::vector<Rack> refills = {log.initial_racks[seat]};
+      for (const auto& t : log.turns) {
+        if (t.player == seat) refills.push_back(t.drawn);
+      }
+      TwoEndedBag reference(seed);
+      TileCounts expected, drawn;
+      for (const Rack& r : refills) {
+        for (int i = 0; i < r.size(); ++i) {
+          expected.add(reference.draw(seat));
+          drawn.add(r.tiles()[i]);
+        }
+        ASSERT_EQ(drawn.to_string(), expected.to_string()) << "seed " << seed << " seat " << seat;
+      }
+    }
+  }
+}
+
 // Game::set_max_plies sets a truncated rollout's horizon. Play stops after
 // exactly the cap with no end-of-game score adjustment, and leave() gives the
 // last mover's rack after the move but before drawing.
