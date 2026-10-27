@@ -537,10 +537,17 @@ def match_eval_grid(conn):
 
 def match_arms_grid(conn):
     """The Arms tab: each arm's mean pair score against the fixed opponent, with
-    its CI whisker, in declared arm order. None when no arm has been measured."""
+    its CI whisker, and under it the arm's throughput, in declared arm order.
+    None when no arm has been measured."""
     rows = db.read_all_match_arms(conn)
     if not rows:
         return None
+    scores = _arm_scores(rows)
+    return column(scores, _arm_throughput(rows, scores.x_range), sizing_mode="stretch_width")
+
+
+def _arm_scores(rows: list[dict]):
+    """Each arm's mean pair score, with its CI whisker."""
     names = [r["arm"] for r in rows]
     src = ColumnDataSource(
         {
@@ -578,6 +585,44 @@ def match_arms_grid(conn):
         )
     )
     _dashed_hline(fig, 0.5)
+    return fig
+
+
+def _arm_throughput(rows: list[dict], x_range):
+    """Each arm's games per minute: its games over the wall time of its whole
+    match, both players' moves and each round's play_game start included. The
+    opponent's share is the same for every arm, so differences are the arm's."""
+    src = ColumnDataSource(
+        {
+            "x": [r["arm"] for r in rows],
+            "rate": [60.0 * r["games"] / r["elapsed_s"] for r in rows],
+            "per_game": [r["elapsed_s"] / r["games"] for r in rows],
+            "minutes": [r["elapsed_s"] / 60.0 for r in rows],
+            "games": [r["games"] for r in rows],
+        }
+    )
+    fig = figure(
+        sizing_mode="scale_width",
+        aspect_ratio=WIDE,
+        x_range=x_range,
+        title="Arm throughput",
+        x_axis_label="arm",
+        y_axis_label="games per minute",
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
+    bars = fig.vbar(x="x", top="rate", source=src, width=0.6)
+    fig.y_range.start = 0
+    fig.add_tools(
+        HoverTool(
+            tooltips=[
+                ("arm", "@x"),
+                ("games/min", "@rate{0.0}"),
+                ("s/game", "@per_game{0.00}"),
+                ("match", "@games games in @minutes{0.0} min"),
+            ],
+            renderers=[bars],
+        )
+    )
     return fig
 
 
