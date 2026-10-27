@@ -76,9 +76,9 @@ struct MonteCarloResult {
 // training games use. `infer` configures leave inference under kHidden.
 //
 // Rollout g is seeded by g, so the result is deterministic and independent of
-// `threads`.
+// how the rollouts spread over threads.
 MonteCarloResult run_monte_carlo(const ParsedGcgPostMove& pos, const Dictionary& dict, int n,
-                                 int threads, LeaveCondition condition,
+                                 LeaveCondition condition,
                                  const belief::RackInferrer::Params& infer = {});
 
 }  // namespace scribblez

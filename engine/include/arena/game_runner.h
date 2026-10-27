@@ -7,10 +7,10 @@
 #include "util/misc.h"
 
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <stop_token>
 #include <string>
 
 namespace boost::program_options {
@@ -80,9 +80,11 @@ class GameRunner : public GameSink {
   // one seed in paired mode.
   uint64_t seed_index(uint64_t game_idx) const { return params_.paired ? game_idx / 2 : game_idx; }
 
-  // Prints a progress line every progress_secs until `done` is set.
-  void run_progress_monitor(const std::atomic<bool>& done, std::chrono::steady_clock::time_point t0,
+  // Prints a progress line every progress_secs until `stop` is requested.
+  void run_progress_monitor(std::stop_token stop, std::chrono::steady_clock::time_point t0,
                             uint64_t total) const;
+  // The batch on engine_.num_threads() game loops.
+  void play_parallel(std::chrono::steady_clock::time_point t0);
 
   Params params_;
   uint64_t seed_;

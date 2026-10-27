@@ -38,7 +38,7 @@ MsetSimAgent::MsetSimAgent(const Params& params, std::shared_ptr<nn::MoveSetEval
       leaf_service_(std::move(leaf_service)),
       runner_(*params.dict,
               make_runner_params(params.sim, params.sim_horizon, leaf_service_.get())),
-      endgame_(params.thread_id, params.endgame) {
+      endgame_(params.endgame) {
   validate(params);
   board_row_.resize(size_t(input_floats(spec_)));
 }

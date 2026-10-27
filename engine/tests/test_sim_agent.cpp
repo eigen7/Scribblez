@@ -16,6 +16,7 @@
 #include "sim/sim_runner.h"
 #include "synthetic_equity.h"
 #include "temp_dir.h"
+#include "worker_budget.h"
 
 #include <gtest/gtest.h>
 
@@ -54,7 +55,6 @@ class SimAgentTest : public ::testing::Test {
     p.dict = &dict_;
     p.top_k = 4;
     p.sim.rollouts = 8;
-    p.sim.threads = 1;
     p.seed = 12345;
     p.endgame.budget = 0;  // the endgame is not what these tests are about
     return p;
@@ -333,9 +333,9 @@ TEST_F(SimAgentTest, RolloutTracesDoNotDependOnTheThreadCount) {
   const std::vector<Move> candidates = equity_top_k(request(), 3);
   LeafStub leaf;
   auto traces_with = [&](int threads) {
+    const WorkerBudget budget(threads);
     SimRunner::Params sp;
     sp.rollouts = 8;
-    sp.threads = threads;
     sp.horizon_plies = SimRunner::kMinHorizonPlies;
     sp.leaf_service = &leaf;
     std::vector<RolloutTrace> traces;

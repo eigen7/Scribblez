@@ -39,7 +39,7 @@ class SimAgent : public Agent {
     // of every ply in it, so below a few hundred the ranking is swamped and
     // the agent plays worse than the static equity it started from: 35%
     // against HastyBot at 50 rollouts, 48% at 200, 57% at 400, 58% at 800.
-    SimRunner::Params sim = {400, 1};
+    SimRunner::Params sim = {.rollouts = 400};
     // Value truncation; see SimRunner::Params::horizon_plies. The leaf service
     // handed to the constructor scores the horizon.
     int sim_horizon = 0;

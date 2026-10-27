@@ -53,6 +53,7 @@
 #include "util/hash.h"
 #include "util/misc.h"
 #include "util/progress.h"
+#include "util/work_pool.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -131,14 +132,7 @@ SlogSimConfig screen_config(const Options& opt, const Dictionary& dict) {
     c.race_checkpoints = race_checkpoints(opt.rollouts);
     c.race_protected = opt.cut;
   }
-  // Under the all recipe a position has hundreds of candidates, so one position
-  // is a long job and across-position workers would idle behind the last few.
-  // There the threads go inside the position instead. Results do not depend on
-  // either thread count.
-  const bool wide = opt.recipe == "all";
-  c.runner.threads = wide ? opt.threads : 1;
   c.seed = opt.seed;
-  c.threads = wide ? 1 : opt.threads;
   return c;
 }
 
@@ -152,8 +146,6 @@ SlogSimConfig confirm_config(const Options& opt, const Dictionary& dict, ChosenM
   c.race_checkpoints.clear();
   c.solve_endgames_max_unseen = opt.solve_max_unseen;
   c.runner.rollouts = opt.confirm_rollouts;
-  c.runner.threads = opt.threads;
-  c.threads = 1;
   c.rollout_seed_offset = uint64_t(opt.rollouts);
   return c;
 }
@@ -549,9 +541,9 @@ void survey_batch(const binlog::PendingSlog& slog, const Dictionary& dict, const
 }
 
 // Survey in batches, appending each batch to the partial file, so a stopped run
-// loses at most one batch. The all recipe threads inside a position, so its
-// batch is one position; the others thread across positions and need batches
-// wide enough to keep every worker busy.
+// loses at most one batch. Under the all recipe a position has hundreds of
+// candidates, enough to keep every thread busy on its own, so its batch is one
+// position; the others need batches wide enough to keep every thread busy.
 void survey_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt) {
   PartialSurvey partial(slog.sidecar(kSurveyExt), opt);
   std::vector<binlog::GamePositionIndex> work = survey_work(slog, dict, opt);
@@ -658,6 +650,7 @@ int main(int argc, char** argv) {
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
     validate(opt);
+    util::set_worker_count(opt.threads);
 
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());

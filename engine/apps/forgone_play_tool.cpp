@@ -17,6 +17,7 @@
 #include "util/exception.h"
 #include "util/io.h"
 #include "util/misc.h"
+#include "util/work_pool.h"
 
 #include <boost/program_options.hpp>
 
@@ -62,6 +63,7 @@ int main(int argc, char** argv) {
       "threads", po::value<int>(&opt.threads)->default_value(opt.threads), "parallel workers");
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
+    util::set_worker_count(opt.threads);
 
     const Dictionary& dict = load_dictionary_or_throw();
     const auto t0 = std::chrono::steady_clock::now();
@@ -69,7 +71,7 @@ int main(int argc, char** argv) {
     for (const std::filesystem::path& path :
          binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files)) {
       const std::vector<char> slog = load_slog(path);
-      write_forgone_sidecar(slog, dict, forgone_path_of(path.string()), opt.threads);
+      write_forgone_sidecar(slog, dict, forgone_path_of(path.string()));
       games += reinterpret_cast<const binlog::FileHeader*>(slog.data())->num_games;
     }
     const double secs =

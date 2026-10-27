@@ -93,7 +93,6 @@ class UltimateBotAgentTest : public ::testing::Test {
     p.dict = &dict_;
     p.max_sims = 3;
     p.sim.rollouts = 8;
-    p.sim.threads = 1;
     p.seed = 12345;
     p.endgame.budget = 0;  // the endgame is not what these tests are about
     return p;
@@ -480,7 +479,7 @@ TEST_F(UltimateBotAgentTest, OneAtATimeSimsEqualOneBatchedRun) {
   const int n = int(cands.size());
   const int anchor = int(evidence::anchor_index(cands));
   const std::vector<int> picks = picks_avoiding(anchor, n, 3);
-  const SimRunner::Params sim{64, 1};
+  const SimRunner::Params sim{.rollouts = 64};
   const SimRunner runner(dict_, sim);
   const SimPosition pos = sim_position_from(request());
   const uint64_t seed = 777;
@@ -507,7 +506,7 @@ TEST_F(UltimateBotAgentTest, OneAtATimeSimsEqualOneBatchedRun) {
       << "sim " << j;
   }
 
-  const SimRunner one(dict_, SimRunner::Params{1, 1});
+  const SimRunner one(dict_, SimRunner::Params{.rollouts = 1});
   const auto t2 = std::chrono::steady_clock::now();
   one.run(pos, {evidence.moves.front()}, seed);
   const auto t3 = std::chrono::steady_clock::now();

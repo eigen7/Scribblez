@@ -49,7 +49,7 @@ class UltimateBotAgent : public Agent {
     // gain (in win probability) is below this. 0 never stops early.
     float gain_threshold = 0.0f;
     // Rollouts per candidate, and their threading; MsetSimAgent's defaults.
-    SimRunner::Params sim = {400, 1};
+    SimRunner::Params sim = {.rollouts = 400};
     // Value truncation; see SimRunner::Params::horizon_plies. The leaf service
     // handed to the constructor scores the horizon.
     int sim_horizon = 0;

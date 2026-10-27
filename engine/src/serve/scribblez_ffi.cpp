@@ -34,6 +34,7 @@
 #include "training/training_targets.h"
 #include "training/trajectory_position.h"
 #include "util/exception.h"
+#include "util/work_pool.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -49,7 +50,6 @@
 #include <optional>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <vector>
 
 using scribblez::binlog::DataLoader;
@@ -79,7 +79,7 @@ struct ScribblezSession {
                          float* out_equities) const;
   int gcg_cross_checks(const char* gcg_text, bool open_leaves, const void* moves, int64_t n,
                        int32_t* out_cells, uint8_t* out_letters, char* out_err, int err_cap) const;
-  int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads, uint64_t seed,
+  int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, uint64_t seed,
                        bool open_leaves, bool solve_endgames, char* out_records,
                        int* played_rank) const;
   int max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
@@ -141,6 +141,8 @@ ScribblezSession* scribblez_session_new(const char* lexicon_name, int opp_leave_
 }
 
 void scribblez_session_delete(ScribblezSession* s) { delete s; }
+
+void scribblez_set_worker_count(int n) { scribblez::util::set_worker_count(n); }
 
 namespace {
 
@@ -366,9 +368,9 @@ bool emit_exact(const void* data, size_t count, size_t size, int64_t expected, v
 
 }  // namespace
 
-int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, int threads,
-                                       uint64_t seed, bool open_leaves, bool solve_endgames,
-                                       char* out_records, int* played_rank) const {
+int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, uint64_t seed,
+                                       bool open_leaves, bool solve_endgames, char* out_records,
+                                       int* played_rank) const {
   if (!gcg_text || !out_records || top_k < 1) return -1;
   scribblez::ParsedGcgGame game;
   std::string error;
@@ -409,7 +411,6 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
 
   scribblez::SimRunner::Params params;
   params.rollouts = rollouts;
-  params.threads = threads;
   params.solve_endgames = solve_endgames;
   const scribblez::SimRunner runner(*spec.dict, params);
   const std::vector<scribblez::RolloutStats> obs = runner.run(pos, candidates, seed);
@@ -425,10 +426,10 @@ int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int roll
 }
 
 int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
-                               int threads, uint64_t seed, int open_leaves, int solve_endgames,
+                               uint64_t seed, int open_leaves, int solve_endgames,
                                char* out_records, int* played_rank) {
-  return s->gcg_sim_evidence(gcg_text, top_k, rollouts, threads, seed, open_leaves != 0,
-                             solve_endgames != 0, out_records, played_rank);
+  return s->gcg_sim_evidence(gcg_text, top_k, rollouts, seed, open_leaves != 0, solve_endgames != 0,
+                             out_records, played_rank);
 }
 
 int ScribblezSession::decode_rows(int task, const char* path, const int64_t* game_idx,
@@ -708,13 +709,13 @@ std::vector<int64_t> record_offsets(const scribblez::ProbeReader& probes) {
   return first;
 }
 
-// One worker of scribblez_reply_blocking: positions t, t + threads, ...
-void reply_blocking_stripe(const scribblez::InputEncodingSpec& spec, const char* slog,
-                           const scribblez::ProbeReader& probes, const std::vector<int64_t>& first,
-                           int stride, uint8_t* out, int t, int threads) {
+// One lane of scribblez_reply_blocking: the positions it claims.
+void reply_blocking_lane(const scribblez::InputEncodingSpec& spec, const char* slog,
+                         const scribblez::ProbeReader& probes, const std::vector<int64_t>& first,
+                         int stride, uint8_t* out, scribblez::util::LaneCursor& cursor) {
   scribblez::binlog::BlockDecoder decoder(spec);
-  for (int p = t; p < probes.num_positions(); p += threads) {
-    const scribblez::ProbeReader::Position pos = probes.position(p);
+  for (size_t p; cursor.next(p);) {
+    const scribblez::ProbeReader::Position pos = probes.position(int(p));
     const scribblez::Board& root =
       decoder.replay_board(slog, pos.header->game_index, pos.header->turn_index);
     scribblez::reply_blocking(*spec.dict, root, pos, probes.probes(), stride,
@@ -725,8 +726,8 @@ void reply_blocking_stripe(const scribblez::InputEncodingSpec& spec, const char*
 }  // namespace
 
 int scribblez_reply_blocking(ScribblezSession* s, const char* slog_path, const char* sprobe_path,
-                             int64_t n_records, int stride, int threads, uint8_t* out,
-                             char* out_err, int err_cap) {
+                             int64_t n_records, int stride, uint8_t* out, char* out_err,
+                             int err_cap) {
   try {
     std::vector<char> buf;
     if (load_slog(slog_path, /*game_idx=*/0, buf) != 0) {
@@ -741,12 +742,10 @@ int scribblez_reply_blocking(ScribblezSession* s, const char* slog_path, const c
                   out_err, err_cap);
       return -1;
     }
-    threads = std::max(threads, 1);
-    std::vector<std::thread> pool;
-    for (int t = 0; t < threads; ++t)
-      pool.emplace_back(reply_blocking_stripe, std::cref(s->spec), buf.data(), std::cref(probes),
-                        std::cref(first), stride, out, t, threads);
-    for (std::thread& t : pool) t.join();
+    scribblez::util::parallel_lanes(
+      size_t(probes.num_positions()), [&](scribblez::util::LaneCursor& cursor) {
+        reply_blocking_lane(s->spec, buf.data(), probes, first, stride, out, cursor);
+      });
     return 0;
   } catch (const std::exception& e) {
     emit_string(e.what(), out_err, err_cap);

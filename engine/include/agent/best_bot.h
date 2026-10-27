@@ -26,9 +26,8 @@ namespace scribblez {
 // The sim is MacondoSimmer, stopped by Macondo's Stop99 rule.
 //
 // Not ported: Woogles' wall-clock budget per move (a deterministic iteration
-// cap, max_iterations, stands in for it), the multi-threaded default (sims run
-// on sim_threads threads), and opponent-rack inference, which is a different
-// Macondo bot (SIMMING_INFER_BOT). Tiles of the opponent's rack that the game
+// cap, max_iterations, stands in for it) and opponent-rack inference, which is
+// a different Macondo bot (SIMMING_INFER_BOT). Tiles of the opponent's rack that the game
 // shows (face-up leaves) seed every rollout, as Macondo's known-opponent-rack
 // setting does.
 class BestBot : public Agent {
@@ -42,7 +41,6 @@ class BestBot : public Agent {
     std::string name;
     // Rollout plies while more than 14 tiles are unseen. Woogles runs 5.
     int min_sim_plies = 5;
-    int sim_threads = 1;
     // Cap on sim iterations per move; 0 leaves it to the stopping rule.
     int max_iterations = 0;
     uint64_t seed = 0;
@@ -74,7 +72,6 @@ class BestBot : public Agent {
 
  private:
   int min_sim_plies_;
-  int sim_threads_;
   int max_iterations_;
   uint64_t seed_;
   int ply_ = 0;              // moves observed this game, by either seat

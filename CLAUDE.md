@@ -227,6 +227,17 @@ factory-internal, called directly only by tools that build one instance per
 process. (EndgameSolver is the exception: its transposition table is
 thread-exclusive by design.)
 
+## Parallel work runs on the process's work pool
+
+Parallel loops in agents and libraries go through `util::parallel_for` /
+`util::parallel_lanes` (engine/include/util/work_pool.h), never their own
+threads, and take no thread-count parameter: the pool is the process's CPU
+budget, set once from play_game's or a tool's `--threads`, so an agent uses
+every core when it plays alone and its own thread when every core is busy with
+other games. Per-thread state keys off the OS thread (`thread_local`), not an
+agent's `thread_id` or a lane index. Tools may keep dedicated threads for
+pipeline stages (a GPU feeder, a progress monitor).
+
 ## Clang-format
 
 After editing any file, make sure to sanitize it with clang-format. Alternatively, you can run

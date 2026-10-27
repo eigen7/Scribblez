@@ -35,7 +35,6 @@ struct MsetSimOptions {
   std::string rank_objective = "winprob";
   std::string sim_objective = "winrate";
   int rollouts = 400;
-  int sim_threads = 1;
   int sim_horizon = 0;
   std::string leaf_model;
   uint64_t seed = 0;
@@ -62,9 +61,6 @@ po::options_description make_options_description(MsetSimOptions& o) {
     ("rollouts", po::value<int>(&o.rollouts)->default_value(o.rollouts),
      "rollouts per simmed candidate; every candidate shares the same rollout seeds, so "
      "rack and draw luck cancels when they are compared")  //
-    ("sim-threads", po::value<int>(&o.sim_threads)->default_value(o.sim_threads),
-     "threads within one turn's simulation; leave at 1 when the game loop is "
-     "already running games in parallel")  //
     ("sim-horizon", po::value<int>(&o.sim_horizon)->default_value(o.sim_horizon),
      "value truncation: rollouts stop after this many plies and --leaf-model scores the "
      "horizon; 0 rolls out to a natural game end")  //
@@ -108,7 +104,6 @@ std::unique_ptr<MsetSimAgent> MsetSimAgent::from_spec(const std::vector<std::str
   params.rank_objective = parse_eval_objective(opts.rank_objective, "--rank-objective");
   params.sim_objective = parse_sim_objective(opts.sim_objective, "--sim-objective");
   params.sim.rollouts = opts.rollouts;
-  params.sim.threads = opts.sim_threads;
   params.sim_horizon = opts.sim_horizon;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;

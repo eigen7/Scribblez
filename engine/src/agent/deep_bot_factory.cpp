@@ -8,7 +8,6 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
-#include "util/misc.h"
 
 #include <boost/program_options.hpp>
 
@@ -25,8 +24,7 @@ DeepBot::Backend make_backend(const DeepBot::Params& p) {
   rollouts.leaf_precision = p.leaf_precision;
   rollouts.validate();
   DeepBot::Backend b;
-  b.values = rollouts.shared(load_dictionary_or_throw(),
-                             p.threads > 0 ? p.threads : util::default_thread_count());
+  b.values = rollouts.shared(load_dictionary_or_throw());
   if (p.leave_inference.empty()) return b;
   const LeaveValues& values = HastyEquity::instance().leave_values();
   auto served = belief::ServedLeaveTable::shared(p.leave_inference, values);

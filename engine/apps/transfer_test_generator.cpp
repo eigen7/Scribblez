@@ -47,6 +47,7 @@
 #include "util/exception.h"
 #include "util/misc.h"
 #include "util/progress.h"
+#include "util/work_pool.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -135,9 +136,6 @@ const char* pending_ext(const Options& opt) { return corpus_mode(opt) ? kProbeEx
 SimRunner::Params runner_params(const Options& opt, nn::PositionEvalService* leaf, int rollouts) {
   SimRunner::Params p;
   p.rollouts = rollouts;
-  // A file holds fewer positions than a machine has cores, and their costs
-  // vary, so the threads go to one position's rollouts, not across positions.
-  p.threads = opt.threads;
   p.horizon_plies = opt.horizon;
   p.leaf_service = leaf;
   return p;
@@ -151,7 +149,6 @@ SlogSimConfig sim_config(const Options& opt, nn::PositionEvalService* leaf, SimO
   c.runner = runner_params(opt, leaf, rollouts);
   c.solve_endgames_max_unseen = opt.solve_max_unseen;
   c.seed = opt.seed;
-  c.threads = 1;
   c.output = output;
   return c;
 }
@@ -261,19 +258,12 @@ json::object offered_json(const SimmedPosition& r, const Dictionary& dict) {
   return out;
 }
 
-// Every candidate's saturation curve, parallel to the candidates, spread over
-// up to opt.threads workers: the costly part of a position's record.
+// Every candidate's saturation curve, parallel to the candidates, computed in
+// parallel: the costly part of a position's record.
 json::array saturation_curves(const SimmedPosition& r, const Dictionary& dict, const Options& opt) {
   std::vector<json::array> curves(r.candidates.moves.size());
-  std::atomic<size_t> next{0};
-  std::vector<std::thread> workers;
-  for (size_t w = 0; w < std::min(curves.size(), size_t(opt.threads)); ++w) {
-    workers.emplace_back([&] {
-      for (size_t c; (c = next++) < curves.size();)
-        curves[c] = saturation_curve(r, dict, int(c), opt);
-    });
-  }
-  for (std::thread& t : workers) t.join();
+  util::parallel_for(curves.size(),
+                     [&](size_t c) { curves[c] = saturation_curve(r, dict, int(c), opt); });
   json::array out;
   for (json::array& curve : curves) out.push_back(std::move(curve));
   return out;
@@ -523,6 +513,7 @@ int main(int argc, char** argv) {
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
     validate(opt);
+    util::set_worker_count(opt.threads);
     if (!opt.chosen_moves.empty()) opt.chosen = read_chosen_moves(opt.chosen_moves);
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());

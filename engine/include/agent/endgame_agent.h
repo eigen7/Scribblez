@@ -16,7 +16,7 @@ namespace scribblez {
 // as a rollout agent.
 //
 // Base supplies the command-line surface the endgame variant extends:
-//   - Params, carrying the thread_id the pooled solver is keyed by;
+//   - Params, carrying the game loop index the agent is built for (thread_id);
 //   - kType, its --type value (the variant's is kType + "-endgame");
 //   - kPreEndgameByDefault, whether the variant also solves the turn with one
 //     tile in the bag unless --peg says otherwise;

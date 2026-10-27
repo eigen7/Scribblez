@@ -5,9 +5,9 @@
 #include "lexicon/dictionary.h"
 #include "sim/hasty_rollout_task.h"
 #include "util/exception.h"
+#include "util/work_pool.h"
 
 #include <memory>
-#include <thread>
 
 namespace scribblez {
 
@@ -46,19 +46,13 @@ PoolJob make_pool_job(const SimmedPosition& r, const belief::LeaveSampler* leave
 
 std::vector<PoolJob> make_pool_jobs(const std::vector<SimmedPosition>& selected,
                                     const belief::SlogLeaveBeliefs* beliefs, const Dictionary& dict,
-                                    int rollouts, int threads) {
+                                    int rollouts) {
   std::vector<PoolJob> jobs(selected.size());
-  std::vector<std::thread> workers;
-  for (int t = 0; t < threads; ++t) {
-    workers.emplace_back([&, t] {
-      for (size_t i = size_t(t); i < selected.size(); i += size_t(threads)) {
-        const std::shared_ptr<const belief::LeaveSampler> leave =
-          beliefs ? beliefs->belief(selected[i].pos) : nullptr;
-        jobs[i] = make_pool_job(selected[i], leave.get(), dict, rollouts);
-      }
-    });
-  }
-  for (std::thread& w : workers) w.join();
+  util::parallel_for(selected.size(), [&](size_t i) {
+    const std::shared_ptr<const belief::LeaveSampler> leave =
+      beliefs ? beliefs->belief(selected[i].pos) : nullptr;
+    jobs[i] = make_pool_job(selected[i], leave.get(), dict, rollouts);
+  });
   return jobs;
 }
 

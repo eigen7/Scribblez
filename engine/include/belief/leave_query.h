@@ -31,11 +31,10 @@ struct LeaveQuery {
 };
 
 // Each query's belief, null where it is not modelled: one `predict` call over
-// the modelled queries' rows together, then the samplers' table passes on
-// `threads` threads. `table` must outlive the samplers.
+// the modelled queries' rows together, then the samplers' table passes in
+// parallel (util/work_pool.h). `table` must outlive the samplers.
 std::vector<std::shared_ptr<const LeaveSampler>> beliefs_of(std::span<const LeaveQuery> queries,
                                                             const LeaveParamsFn& predict,
-                                                            const LeaveValueArrays& table,
-                                                            int threads = 1);
+                                                            const LeaveValueArrays& table);
 
 }  // namespace scribblez::belief

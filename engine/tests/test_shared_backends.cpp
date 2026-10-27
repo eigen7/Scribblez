@@ -16,10 +16,11 @@ using namespace scribblez;
 
 namespace {
 
-RolloutBackend cpu_backend() {
+RolloutBackend cpu_backend(int leaf_rows = RolloutBackend{}.leaf_rows) {
   RolloutBackend b;
   b.backend = "cpu";
   b.leaf_model = RolloutBackend::kSyntheticLeaf;
+  b.leaf_rows = leaf_rows;
   return b;
 }
 
@@ -43,17 +44,17 @@ class SharedRolloutBackend : public ::testing::Test {
 }  // namespace
 
 TEST_F(SharedRolloutBackend, IsSharedForEqualSettings) {
-  const std::shared_ptr<RolloutValues> a = cpu_backend().shared(*dict_, 2);
-  EXPECT_EQ(a, cpu_backend().shared(*dict_, 2));
-  EXPECT_NE(a, cpu_backend().shared(*dict_, 3));
+  const std::shared_ptr<RolloutValues> a = cpu_backend().shared(*dict_);
+  EXPECT_EQ(a, cpu_backend().shared(*dict_));
+  EXPECT_NE(a, cpu_backend(cpu_backend().leaf_rows + 1).shared(*dict_));
 }
 
 TEST_F(SharedRolloutBackend, IsRebuiltOnceEveryHolderDropsIt) {
-  std::shared_ptr<RolloutValues> first = cpu_backend().shared(*dict_, 2);
+  std::shared_ptr<RolloutValues> first = cpu_backend().shared(*dict_);
   const std::weak_ptr<RolloutValues> weak = first;
   first.reset();
   EXPECT_TRUE(weak.expired());
-  EXPECT_NE(cpu_backend().shared(*dict_, 2), nullptr);
+  EXPECT_NE(cpu_backend().shared(*dict_), nullptr);
 }
 
 TEST(SharedBackends, MoveSetServiceIsSharedForEqualParams) {

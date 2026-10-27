@@ -42,6 +42,7 @@
 #include "util/exception.h"
 #include "util/misc.h"
 #include "util/progress.h"
+#include "util/work_pool.h"
 
 #include <boost/program_options.hpp>
 
@@ -131,19 +132,19 @@ void add_result(SimObsWriter* writer, const Options& opt, uint32_t game_idx, uin
                        uint32_t(opt.traj.rollouts), base_seed, t.num_legal_moves, t.roles);
 }
 
-// One worker thread's loop over a front-end's work items. A front-end (SlogFront,
+// One lane's loop over a front-end's work items. A front-end (SlogFront,
 // GcgFront) declares an `Item` type, a static describe(item), and a `Worker`
-// constructible from the front-end with run(index, item, runner). Each thread
-// owns one Worker and one TrajectoryRunner and claims items off a shared index.
-// Results are stored by index, so the output is byte-stable across thread
-// counts. The student model runs on the StudentScorer's own thread.
+// constructible from the front-end with run(index, item, runner). Each lane
+// owns one Worker and one TrajectoryRunner and claims items. Results are stored
+// by index, so the output is byte-stable across thread counts. The student
+// model runs on the StudentScorer's own thread.
 template <typename Front>
-void run_worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
-                       util::ProgressMeter* meter) {
+void run_lane(const Shared& sh, const Front& front, util::LaneCursor& cursor,
+              util::ProgressMeter* meter) {
   typename Front::Worker worker(front);
   TrajectoryRunner runner(sh.dict, sh.spec, sh.opt.traj, sh.scorer, sh.leaf_eval_service);
   const std::vector<typename Front::Item>& work = front.work;
-  for (size_t i = next->fetch_add(1); i < work.size(); i = next->fetch_add(1)) {
+  for (size_t i; cursor.next(i);) {
     // Name the failing item (e.g. for the leaf-model NaN guard), so an unattended
     // run leaves a lead instead of a bare message.
     try {
@@ -155,35 +156,20 @@ void run_worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>
   }
 }
 
-// Thread entry: captures any exception into *err for the joining thread to
-// rethrow, since one escaping a std::thread would terminate the process.
-template <typename Front>
-void worker_thread(const Shared& sh, const Front& front, std::atomic<size_t>* next,
-                   util::ProgressMeter* meter, std::exception_ptr* err) {
-  try {
-    run_worker_thread(sh, front, next, meter);
-  } catch (...) {
-    *err = std::current_exception();
-  }
-}
-
 template <typename Front>
 void run_positions(const Shared& sh, const Front& front, util::ProgressMeter* meter) {
-  std::atomic<size_t> next{0};
   std::thread gpu(&StudentScorer::run, sh.scorer);
-  std::vector<std::thread> workers;
-  const int threads = std::clamp<int>(sh.opt.threads, 1, std::max<size_t>(1, front.work.size()));
-  std::vector<std::exception_ptr> errors(threads);
-  for (int t = 0; t < threads; ++t) {
-    workers.emplace_back(worker_thread<Front>, std::cref(sh), std::cref(front), &next, meter,
-                         &errors[t]);
+  std::exception_ptr error;
+  try {
+    util::parallel_lanes(front.work.size(),
+                         [&](util::LaneCursor& cursor) { run_lane(sh, front, cursor, meter); });
+  } catch (...) {
+    error = std::current_exception();
   }
-  for (auto& w : workers) w.join();
   sh.scorer->stop();
   gpu.join();
-  // Surface the first worker failure only after the scorer thread is stopped.
-  for (const std::exception_ptr& e : errors)
-    if (e) std::rethrow_exception(e);
+  // Surface a lane's failure only after the scorer thread is stopped.
+  if (error) std::rethrow_exception(error);
 }
 
 // --- the .slog front-end ---
@@ -476,6 +462,7 @@ int main(int argc, char** argv) {
     Lexicon::instance().add_options(desc);
     util::parse_command_line(argc, argv, desc);
     validate(opt);
+    util::set_worker_count(opt.threads);
 
     const Dictionary& dict = load_dictionary_or_throw();
     HastyEquity::ensure_initialized(Lexicon::instance().name());

@@ -41,7 +41,6 @@ struct UltimateBotOptions {
   int max_sims = 10;
   float gain_threshold = 0.0f;
   int rollouts = 400;
-  int sim_threads = 1;
   int sim_horizon = 0;
   std::string leaf_model;
   uint64_t seed = 0;
@@ -74,9 +73,6 @@ po::options_description make_options_description(UltimateBotOptions& o) {
     ("rollouts", po::value<int>(&o.rollouts)->default_value(o.rollouts),
      "rollouts per simmed candidate; every sim of a turn shares the same rollout seeds, so "
      "rack and draw luck cancels when they are compared")  //
-    ("sim-threads", po::value<int>(&o.sim_threads)->default_value(o.sim_threads),
-     "threads within one sim; leave at 1 when the game loop is already running games in "
-     "parallel")  //
     ("sim-horizon", po::value<int>(&o.sim_horizon)->default_value(o.sim_horizon),
      "value truncation: rollouts stop after this many plies and --leaf-model scores the "
      "horizon; 0 rolls out to a natural game end")  //
@@ -130,7 +126,6 @@ std::unique_ptr<UltimateBotAgent> UltimateBotAgent::from_spec(
   params.max_sims = opts.max_sims;
   params.gain_threshold = opts.gain_threshold;
   params.sim.rollouts = opts.rollouts;
-  params.sim.threads = opts.sim_threads;
   params.sim_horizon = opts.sim_horizon;
   params.seed = have_seed ? opts.seed : SeedProducer::instance().next();
   params.endgame = opts.endgame;

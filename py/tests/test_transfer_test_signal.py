@@ -6,7 +6,7 @@ import shutil
 import subprocess
 
 import numpy as np
-from scribblez.ffi import reply_blocking
+from scribblez.ffi import reply_blocking, set_worker_count
 from scribblez.transfer_test import exhibits as ex
 from scribblez.transfer_test import signal as sg
 from scribblez.transfer_test.probes import read_sprobe
@@ -140,8 +140,10 @@ def test_reply_blocking_places_each_positions_rows_at_its_records(tmp_path):
 
     two_slog, two = _generate(tmp_path / "two", slog, picks)
     one_slog, one = _generate(tmp_path / "one", slog, picks[1:])
-    both = reply_blocking(two_slog, two.path, len(two.records), stride=3, threads=2)
-    alone = reply_blocking(one_slog, one.path, len(one.records), stride=3, threads=1)
+    set_worker_count(2)
+    both = reply_blocking(two_slog, two.path, len(two.records), stride=3)
+    set_worker_count(1)
+    alone = reply_blocking(one_slog, one.path, len(one.records), stride=3)
     assert both.shape == (2 * 4 + 3 * 4, 3)
     np.testing.assert_array_equal(both[8:], alone)
     assert both[:8, 2].sum() == 0

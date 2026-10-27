@@ -33,6 +33,7 @@
 #include "util/exception.h"
 #include "util/io.h"
 #include "util/progress.h"
+#include "worker_budget.h"
 
 #include <gtest/gtest.h>
 
@@ -123,7 +124,7 @@ std::string LeaveBeliefSimsTest::write_game(Agent& a0, Agent& a1) const {
   std::string path;
   for (const auto& e : std::filesystem::directory_iterator(tmp_))
     if (e.path().extension() == ".slog") path = e.path().string();
-  write_forgone_sidecar(util::read_file_bytes(path), dict_, forgone_path_of(path), 1);
+  write_forgone_sidecar(util::read_file_bytes(path), dict_, forgone_path_of(path));
   return path;
 }
 
@@ -410,7 +411,7 @@ TEST_F(LeaveBeliefSimsTest, RecordedQueriesAreTheTrainingRows) {
 }
 
 // beliefs_of makes one model call for the modelled queries, in order, and
-// builds the same samplers on any number of threads.
+// builds the same samplers however many threads build them.
 TEST_F(LeaveBeliefSimsTest, BeliefsOfBatchesTheModelledQueries) {
   const std::string path = write_game();
   const std::vector<char> slog = util::read_file_bytes(path);
@@ -428,8 +429,9 @@ TEST_F(LeaveBeliefSimsTest, BeliefsOfBatchesTheModelledQueries) {
   std::vector<LeaveQuery> queries;
   for (uint32_t t = meta->eligible_begin; t < meta->eligible_end; ++t)
     queries.push_back(beliefs.query({0, t}));
-  const auto one = belief::beliefs_of(queries, stub, *table_, 1);
-  const auto many = belief::beliefs_of(queries, stub, *table_, 3);
+  const auto build = [&] { return belief::beliefs_of(queries, stub, *table_); };
+  const auto one = with_worker_budget(1, build);
+  const auto many = with_worker_budget(3, build);
   EXPECT_EQ(calls, 2);
   int modelled = 0;
   for (size_t i = 0; i < queries.size(); ++i) {

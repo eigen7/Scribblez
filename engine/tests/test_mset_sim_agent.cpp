@@ -64,7 +64,6 @@ class MsetSimAgentTest : public ::testing::Test {
     p.dict = &dict_;
     p.sim_top_k = 2;
     p.sim.rollouts = 8;
-    p.sim.threads = 1;
     p.seed = 12345;
     p.endgame.budget = 0;  // the endgame is not what these tests are about
     return p;

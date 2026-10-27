@@ -9,6 +9,7 @@
 #include "util/misc.h"
 #include "util/seed_producer.h"
 #include "util/string.h"
+#include "util/work_pool.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -23,6 +24,7 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
@@ -131,9 +133,9 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "kGamesPerFile games; every eligible position is written -- "
      "train-time sampling is done by the DataLoader)")               //
     ("threads,t", po::value<int>(&threads)->default_value(threads),  //
-     "number of parallel game threads (default: all logical processors; "
-     "downgraded to 1 when a player does not support parallelism, e.g. a "
-     "human seat)")  //
+     "the CPU budget: parallel games, and the threads the agents' own parallel "
+     "steps share (default: all logical processors). Games run one at a time "
+     "when a player does not support parallelism, e.g. a human seat")  //
     ("random-handicap-max",
      po::value<int>(&random_handicap_max)->default_value(random_handicap_max),
      "if > 0, each game gifts a randomly chosen player a head-start of P "
@@ -168,14 +170,14 @@ void GameRunner::Params::add_options(boost::program_options::options_description
 
 // --------------------------- monitor -------------------------------------
 
-void GameRunner::run_progress_monitor(const std::atomic<bool>& done,
+void GameRunner::run_progress_monitor(std::stop_token stop,
                                       std::chrono::steady_clock::time_point t0,
                                       uint64_t total) const {
-  const int ticks = params_.progress_secs * 10;  // poll the stop flag at 10 Hz
-  while (!done.load(std::memory_order_acquire)) {
-    for (int i = 0; i < ticks && !done.load(std::memory_order_acquire); ++i)
+  const int ticks = params_.progress_secs * 10;  // poll the stop request at 10 Hz
+  while (!stop.stop_requested()) {
+    for (int i = 0; i < ticks && !stop.stop_requested(); ++i)
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    if (done.load(std::memory_order_acquire)) break;
+    if (stop.stop_requested()) break;
     const double secs =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     results_->print_progress(std::cerr, secs, total);
@@ -269,40 +271,46 @@ void GameRunner::run() {
       ++game_idx;
     }
   } else {
-    // Parallel mode: exactly params_.games games. Seats follow the game index,
-    // so they stay balanced however the threads interleave.
-    std::atomic<uint64_t> next_game{0};
-    const uint64_t total = params_.games;
-
-    // In a long batch no .slog file appears until a full chunk completes, so
-    // the progress line is the only sign of life.
-    std::atomic<bool> done{false};
-    std::thread monitor;
-    if (params_.progress_secs > 0) {
-      monitor = std::thread(&GameRunner::run_progress_monitor, this, std::ref(done), t0, total);
-    }
-
-    std::vector<std::thread> workers;
-    workers.reserve(size_t(engine_.num_threads()));
-    for (int t = 0; t < engine_.num_threads(); ++t) {
-      workers.emplace_back([&, t]() {
-        while (true) {
-          uint64_t idx = next_game.fetch_add(1, std::memory_order_acq_rel);
-          if (idx >= total) break;
-          int seat0_player = (seed_ + idx) & 1ULL;
-          std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
-          engine_.play(t, seats, seed_index(idx), *this);
-        }
-      });
-    }
-    for (auto& w : workers) w.join();
-
-    done.store(true, std::memory_order_release);
-    if (monitor.joinable()) monitor.join();
+    play_parallel(t0);
   }
 
   double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
   results_->print_batch_summary(std::cerr, secs);
+}
+
+// Exactly params_.games games. Seats follow the game index, so they stay
+// balanced however the loops interleave. A game that throws ends the batch: the
+// other loops stop claiming games, and the exception leaves once they finish
+// the games they hold.
+void GameRunner::play_parallel(std::chrono::steady_clock::time_point t0) {
+  std::atomic<uint64_t> next_game{0};
+  const uint64_t total = params_.games;
+
+  // In a long batch no .slog file appears until a full chunk completes, so the
+  // progress line is the only sign of life. Stopped and joined on every exit.
+  std::jthread monitor;
+  if (params_.progress_secs > 0) {
+    monitor = std::jthread(
+      [this, t0, total](std::stop_token stop) { run_progress_monitor(stop, t0, total); });
+  }
+
+  // The game loops run on the process's work pool (util/work_pool.h), so a loop
+  // that runs out of games frees its thread for the parallel steps of the
+  // agents still playing.
+  util::parallel_for(size_t(engine_.num_threads()), [&](size_t t) {
+    while (true) {
+      uint64_t idx = next_game.fetch_add(1, std::memory_order_acq_rel);
+      if (idx >= total) break;
+      int seat0_player = (seed_ + idx) & 1ULL;
+      std::array<int, 2> seats = {seat0_player, 1 - seat0_player};
+      try {
+        engine_.play(int(t), seats, seed_index(idx), *this);
+      } catch (...) {
+        next_game.store(total, std::memory_order_relaxed);
+        throw;
+      }
+    }
+  });
 }
 
 }  // namespace scribblez

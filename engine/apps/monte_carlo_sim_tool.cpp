@@ -28,6 +28,7 @@
 #include "util/io.h"
 #include "util/misc.h"
 #include "util/string.h"
+#include "util/work_pool.h"
 
 #include <boost/json.hpp>
 #include <boost/program_options.hpp>
@@ -90,6 +91,7 @@ int main(int argc, char** argv) {
     scribblez::Lexicon::instance().add_options(desc);
 
     scribblez::util::parse_command_line(argc, argv, desc);
+    scribblez::util::set_worker_count(threads);
     const std::array<bool, 2> selected = parse_conditions(condition);
 
     const scribblez::Dictionary& dict = scribblez::load_dictionary_or_throw();
@@ -123,7 +125,7 @@ int main(int argc, char** argv) {
           continue;
         }
         const scribblez::MonteCarloResult r =
-          scribblez::run_monte_carlo(pos, dict, games, threads, kConditions[c], infer);
+          scribblez::run_monte_carlo(pos, dict, games, kConditions[c], infer);
         out[c][stem] = r.to_json();
         std::cerr << "  " << stem << " [" << scribblez::leave_condition_name(kConditions[c])
                   << "]: W/L/D = " << r.wins << "/" << r.losses << "/" << r.draws << " over "

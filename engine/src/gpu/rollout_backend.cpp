@@ -66,8 +66,8 @@ PoolModel RolloutBackend::leaf_identity() const {
   return pool_model(nn::read_model_identity(leaf_model, kLeafFormatKey));
 }
 
-std::unique_ptr<RolloutValues> RolloutBackend::make(const Dictionary& dict, int threads) const {
-  if (!gpu()) return std::make_unique<CpuRolloutValues>(dict, threads, synthetic_leaf());
+std::unique_ptr<RolloutValues> RolloutBackend::make(const Dictionary& dict) const {
+  if (!gpu()) return std::make_unique<CpuRolloutValues>(dict, synthetic_leaf());
   return std::make_unique<GpuRolloutValues>(
     dict, HastyEquity::instance(),
     GpuRolloutValues::Params{.leaf_onnx = leaf_model,
@@ -75,13 +75,10 @@ std::unique_ptr<RolloutValues> RolloutBackend::make(const Dictionary& dict, int 
                              .leaf_rows = leaf_rows});
 }
 
-std::shared_ptr<RolloutValues> RolloutBackend::shared(const Dictionary& dict, int threads) const {
-  // Only the cpu backend's behavior depends on `threads`.
-  using Key = std::pair<RolloutBackend, int>;
-  static nn::SharedRegistry<Key, RolloutValues> registry;
-  return registry.get_or_create(Key{*this, gpu() ? 0 : threads}, [&] {
-    return std::make_shared<LockedRolloutValues>(make(dict, threads));
-  });
+std::shared_ptr<RolloutValues> RolloutBackend::shared(const Dictionary& dict) const {
+  static nn::SharedRegistry<RolloutBackend, RolloutValues> registry;
+  return registry.get_or_create(*this,
+                                [&] { return std::make_shared<LockedRolloutValues>(make(dict)); });
 }
 
 }  // namespace scribblez

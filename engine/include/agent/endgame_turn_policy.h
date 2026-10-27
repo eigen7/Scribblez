@@ -38,10 +38,11 @@ struct PreEndgameTurnParams {
 // PreEndgameSolver solves (as Macondo's BestBot does), evaluating its endgames
 // through the same solver.
 //
-// The two seats of a game thread share one pooled EndgameSolver, keyed by
-// thread id. The solver's hash is seat-agnostic, so one seat's solves reuse
-// the transposition entries the other just wrote; a thread runs its two agents
-// sequentially, so the solver never sees concurrent use.
+// Every policy solves on its OS thread's own EndgameSolver, looked up at each
+// use, so the solver never sees concurrent use however agents and their
+// rollouts spread over threads. The two seats of a game share it, and the
+// solver's hash is seat-agnostic, so one seat's solves reuse the transposition
+// entries the other just wrote.
 class EndgameTurnPolicy {
  public:
   // A budget of 0 in `params` disables solving: try_solve() always declines.
@@ -50,8 +51,8 @@ class EndgameTurnPolicy {
   // the win/draw/loss proof and relies on a projection-respecting game loop to
   // end the game there. Set it for games played to the end, where points still
   // matter.
-  EndgameTurnPolicy(int thread_id, const EndgameSolver::Params& params,
-                    const PreEndgameTurnParams& peg = {});
+  explicit EndgameTurnPolicy(const EndgameSolver::Params& params,
+                             const PreEndgameTurnParams& peg = {});
 
   // The solver's move, with its proof certificate (if any) as the decision's
   // projection, or with one tile in the bag the pre-endgame solver's move.
@@ -59,7 +60,7 @@ class EndgameTurnPolicy {
   // applies or is enabled, or the endgame solve is untrusted.
   std::optional<MoveDecision> try_solve(const MoveRequest& req);
 
-  // Clears the per-game state and the shared transposition table.
+  // Clears the per-game state and the thread's transposition table.
   void begin_game();
   // Tracks the consecutive-scoreless-turn count the solver needs, which no
   // MoveRequest carries.
@@ -82,17 +83,18 @@ class EndgameTurnPolicy {
   };
   const SolveTotals& solve_totals() const { return solve_totals_; }
 
-  // Also applies to the seat-mate, which shares the solver.
-  void set_incremental_movegen(bool on) { solver_->set_incremental_movegen(on); }
+  void set_incremental_movegen(bool on) { incremental_movegen_ = on; }
 
  private:
   // The pre-endgame solver's best play.
   MoveDecision solve_pre_endgame(const MoveRequest& req);
+  // The calling thread's solver, set up with this policy's settings.
+  EndgameSolver& solver() const;
 
   EndgameSolver::Params params_;
   PreEndgameTurnParams peg_;
   int scoreless_turns_ = 0;
-  std::shared_ptr<EndgameSolver> solver_;  // shared with the seat-mate
+  bool incremental_movegen_ = true;
   SolveTotals solve_totals_;
 };
 

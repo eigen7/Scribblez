@@ -4,11 +4,11 @@
 #include "agent/hasty_bot.h"
 #include "game/glyph.h"
 #include "game/tile.h"
+#include "util/work_pool.h"
 
 #include <algorithm>
 #include <array>
 #include <format>
-#include <thread>
 #include <utility>
 
 namespace scribblez {
@@ -266,28 +266,20 @@ RolloutRacks rollout_racks(const RolloutBatch& batch, const rollout_abi::Rollout
   return RolloutRacks{.opp = st.racks[1], .mine = st.racks[0]};
 }
 
-void for_each_hasty_rollout_cpu(const RolloutBatch& batch, const Dictionary& dict, int threads,
+void for_each_hasty_rollout_cpu(const RolloutBatch& batch, const Dictionary& dict,
                                 const RolloutVisitor& each) {
   for (const RolloutStart& s : batch.starts) s.board.ensure_movegen_caches(dict);
-  const size_t n = batch.tasks.size();
-  std::vector<std::thread> workers;
-  for (int t = 0; t < threads; ++t) {
-    workers.emplace_back([&, t] {
-      CpuLeaf leaf;
-      for (size_t i = size_t(t); i < n; i += size_t(threads)) {
-        const RolloutResult result = run_one(batch, batch.tasks[i], dict, &leaf);
-        each(i, result, leaf);
-      }
-    });
-  }
-  for (std::thread& w : workers) w.join();
+  util::parallel_lanes(batch.tasks.size(), [&](util::LaneCursor& cursor) {
+    CpuLeaf leaf;
+    for (size_t i; cursor.next(i);) each(i, run_one(batch, batch.tasks[i], dict, &leaf), leaf);
+  });
 }
 
 std::vector<RolloutResult> run_hasty_rollouts_cpu(const RolloutBatch& batch, const Dictionary& dict,
-                                                  int threads, std::vector<CpuLeaf>* leaves_out) {
+                                                  std::vector<CpuLeaf>* leaves_out) {
   std::vector<RolloutResult> results(batch.tasks.size());
   const size_t leaves = leaves_out ? leaves_out->size() : 0;
-  for_each_hasty_rollout_cpu(batch, dict, threads,
+  for_each_hasty_rollout_cpu(batch, dict,
                              [&](size_t k, const RolloutResult& result, const CpuLeaf& leaf) {
                                results[k] = result;
                                if (k < leaves) (*leaves_out)[k] = leaf;

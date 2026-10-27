@@ -31,7 +31,8 @@ PYTHON_DIR = os.path.join(ROOT, "py")
 # rather than collapsing a parallel run. The Python suite: 67 s serial -> 25 s
 # at 4 workers for +24% total CPU; 8 workers reach 19 s for +75%. Each test
 # process stays near one core: py/tests/conftest.py caps the math libraries'
-# threads. ctest's --test-load is not a usable throttle: it reads the 1-minute
+# threads, and engine/tests/small_worker_budget.cpp the test binaries' work
+# pool. ctest's --test-load is not a usable throttle: it reads the 1-minute
 # load average, which a long experiment holds above any threshold that leaves
 # room for it, and then starts no test at all.
 TEST_PROCESSES = 4

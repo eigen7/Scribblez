@@ -94,19 +94,19 @@ def position_columns(f: CorpusFile, blocked: np.ndarray, p: int) -> dict[str, np
     }
 
 
-def file_blocking(f: CorpusFile, threads: int) -> np.ndarray:
+def file_blocking(f: CorpusFile) -> np.ndarray:
     """(records, max candidates) blocking matrix of a corpus file."""
     pr = f.probes
     stride = int(np.diff(pr.candidate_start).max())
-    return reply_blocking(pr.path.with_suffix(".slog"), pr.path, len(pr.records), stride, threads)
+    return reply_blocking(pr.path.with_suffix(".slog"), pr.path, len(pr.records), stride)
 
 
-def collect(files: list[CorpusFile], threads: int, progress=None) -> Candidates:
+def collect(files: list[CorpusFile], progress=None) -> Candidates:
     """The scored candidates of every file. `progress(done, total)` is called
     after each file."""
     columns: list[dict[str, np.ndarray]] = []
     for i, f in enumerate(files):
-        blocked = file_blocking(f, threads)
+        blocked = file_blocking(f)
         for p in range(f.num_positions):
             cols = position_columns(f, blocked, p)
             if cols is not None:

@@ -45,8 +45,6 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "rollouts per candidate, each with its own rack for Bob")  //
     ("race", po::value<bool>(&p.race)->default_value(p.race),
      "stop a candidate once it sits three paired standard errors below the leader")  //
-    ("threads", po::value<int>(&p.threads)->default_value(p.threads),
-     "CPU threads for the belief samplers and the cpu backend; 0 uses all")  //
     ("seed", po::value<uint64_t>(&p.seed), "sim PRNG seed (default: SeedProducer)");
   return desc;
 }
@@ -65,7 +63,6 @@ void validate(const DeepBot::Params& p) {
   if (p.candidates < 1 || p.late_candidates < 1)
     throw util::CleanException("deepbot: --candidates and --late-candidates must be >= 1");
   if (p.rollouts < 1) throw util::CleanException("deepbot: --rollouts must be >= 1");
-  if (p.threads < 0) throw util::CleanException("deepbot: --threads must be >= 0");
 }
 
 }  // namespace
@@ -73,7 +70,6 @@ void validate(const DeepBot::Params& p) {
 DeepBot::DeepBot(const Params& params, Backend backend)
     : Agent(params.thread_id, params.name), params_(params), backend_(std::move(backend)) {
   validate(params_);
-  if (params_.threads == 0) params_.threads = util::default_thread_count();
 }
 
 void DeepBot::begin_game(const BeginGameRequest& /*req*/) {
@@ -98,7 +94,7 @@ std::vector<Move> DeepBot::candidates(const MoveRequest& req) const {
 std::shared_ptr<const belief::LeaveSampler> DeepBot::root_belief(
   const belief::LeaveQuery& q) const {
   if (!backend_.predict) return nullptr;
-  return belief::beliefs_of({&q, 1}, backend_.predict, *backend_.table, params_.threads)[0];
+  return belief::beliefs_of({&q, 1}, backend_.predict, *backend_.table)[0];
 }
 
 MoveDecision DeepBot::make_move(const MoveRequest& req) {

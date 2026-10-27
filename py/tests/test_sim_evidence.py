@@ -206,10 +206,11 @@ def test_move_footprint_and_slot_planes(sobs_dir):
 def test_gcg_sim_evidence_on_dataset_position():
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")
-    from scribblez.ffi import gcg_sim_evidence
+    from scribblez.ffi import gcg_sim_evidence, set_worker_count
 
     gcg = TEST_DATA / "postbingo-gave.gcg"
-    records, played_rank = gcg_sim_evidence(gcg.read_text(), top_k=4, rollouts=8, threads=4, seed=3)
+    set_worker_count(4)
+    records, played_rank = gcg_sim_evidence(gcg.read_text(), top_k=4, rollouts=8, seed=3)
     assert 1 <= len(records) <= 4
     assert -1 <= played_rank < len(records)
     for rec in records:
@@ -217,8 +218,10 @@ def test_gcg_sim_evidence_on_dataset_position():
         assert int(obs["n"]) == 8
         assert int(obs["wins"]) + int(obs["draws"]) + int(obs["losses"]) == 8
         assert (obs["opp_win_count"] <= obs["opp_next_count"]).all()
-    # Determinism: the same seed reproduces the records byte for byte.
-    records2, rank2 = gcg_sim_evidence(gcg.read_text(), top_k=4, rollouts=8, threads=2, seed=3)
+    # Determinism: the same seed reproduces the records byte for byte, on any
+    # number of threads.
+    set_worker_count(2)
+    records2, rank2 = gcg_sim_evidence(gcg.read_text(), top_k=4, rollouts=8, seed=3)
     assert rank2 == played_rank
     assert records2.tobytes() == records.tobytes()
 

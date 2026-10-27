@@ -34,14 +34,13 @@ CpuLeafFn synthetic_leaf() {
   };
 }
 
-CpuRolloutValues::CpuRolloutValues(const Dictionary& dict, int threads, CpuLeafFn leaf)
-    : dict_(dict), threads_(threads), leaf_(std::move(leaf)) {}
+CpuRolloutValues::CpuRolloutValues(const Dictionary& dict, CpuLeafFn leaf)
+    : dict_(dict), leaf_(std::move(leaf)) {}
 
 std::vector<RolloutOutcome> CpuRolloutValues::run(const RolloutBatch& batch) {
   std::vector<RolloutOutcome> out(batch.tasks.size());
   for_each_hasty_rollout_cpu(
-    batch, dict_, threads_,
-    [&](size_t k, const rollout_abi::RolloutResult& result, const CpuLeaf& leaf) {
+    batch, dict_, [&](size_t k, const rollout_abi::RolloutResult& result, const CpuLeaf& leaf) {
       out[k].result = result;
       out[k].wld = result.game_over ? terminal_wld(result.diff) : leaf_(leaf);
     });

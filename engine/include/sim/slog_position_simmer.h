@@ -110,16 +110,12 @@ struct SlogSimConfig {
   // rollouts and to the candidate ranking.
   bool open_leaves = false;
   // Under hidden leaves, the opponent's leave belief at each simmed position;
-  // unset, their whole rack is drawn from the unseen pool. Called from the
-  // position workers, once per position that is simmed, so it must be
-  // thread-safe.
+  // unset, their whole rack is drawn from the unseen pool. Called in
+  // parallel, once per position that is simmed, so it must be thread-safe.
   OppLeaveBelief opp_leave_belief;
   SimCandidateSelector selector = recipe_selector({});
-  // Per-position runner params. runner.threads parallelizes within a position
-  // and `threads` below across positions; the two multiply, so keep one at 1.
-  // Across positions uses cores better, unless a position has hundreds of
-  // candidates and workers would idle behind the last few. Results depend on
-  // neither.
+  // Per-position runner params. Positions run in parallel, and so do each
+  // position's rollouts (util/work_pool.h); results do not depend on either.
   SimRunner::Params runner;
   // Positions with at most this many unseen tiles (the bag plus the opponent's
   // rack) sim with runner.solve_endgames on; -1 = none. Solving costs several
@@ -132,7 +128,6 @@ struct SlogSimConfig {
   // held-out estimate of a sim pick's value needs. Rollout i uses seed
   // base + i, so offsets must be at least a rollout count apart.
   uint64_t rollout_seed_offset = 0;
-  int threads = 1;  // position workers
   SimOutput output = SimOutput::kStats;
   // With kReports: the first this-many candidates are references, and every
   // candidate gets its paired win difference against each of them.

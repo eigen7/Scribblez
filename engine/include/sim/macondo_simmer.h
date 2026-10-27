@@ -31,7 +31,6 @@ class MacondoSimmer {
  public:
   struct Params {
     int plies = 2;  // rollout plies after the candidate itself
-    int threads = 1;
     // Stop after this many iterations even if the stopping rule would go on;
     // 0 leaves it to the stopping rule alone, as in Macondo.
     int max_iterations = 0;

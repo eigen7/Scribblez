@@ -73,9 +73,9 @@ std::vector<belief::ForgonePlays> forgone_plays_of_game(const GameLog& g, int tu
                                                         const Dictionary& dict);
 
 // Computes the sidecar of the loaded, validated .slog `slog` and writes it
-// atomically to `path`, using `threads` threads over games.
+// atomically to `path`, its games in parallel.
 void write_forgone_sidecar(const std::vector<char>& slog, const Dictionary& dict,
-                           const std::string& path, int threads);
+                           const std::string& path);
 
 // The sidecar path of a .slog path.
 std::string forgone_path_of(const std::string& slog_path);

@@ -75,6 +75,9 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_session_delete.restype = None
     lib.scribblez_session_delete.argtypes = [ctypes.c_void_p]
 
+    lib.scribblez_set_worker_count.restype = None
+    lib.scribblez_set_worker_count.argtypes = [ctypes.c_int]
+
     lib.scribblez_task_input_shapes.restype = ctypes.POINTER(_ScribblezShape)
     lib.scribblez_task_input_shapes.argtypes = [ctypes.c_void_p, ctypes.c_int]  # session, task
 
@@ -298,7 +301,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_char_p,
         ctypes.c_int,
         ctypes.c_int,
-        ctypes.c_int,
         ctypes.c_uint64,
         ctypes.c_int,  # open_leaves
         ctypes.c_int,  # solve_endgames
@@ -341,7 +343,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_char_p,  # .sprobe path
         ctypes.c_int64,  # n_records
         ctypes.c_int,  # stride
-        ctypes.c_int,  # threads
         ctypes.POINTER(ctypes.c_uint8),  # out
         ctypes.c_char_p,  # out_err
         ctypes.c_int,  # err_cap
@@ -506,6 +507,12 @@ def _session() -> int:
             DEFAULT_LEXICON.encode("utf-8"), int(_OPP_LEAVE_INPUT)
         )
     return _SESSION_HANDLE
+
+
+def set_worker_count(n: int):
+    """Caps the threads the library's parallel steps use, process-wide
+    (engine util/work_pool.h); by default every core the process may use."""
+    _lib().scribblez_set_worker_count(int(n))
 
 
 # ---------------------------------------------------------------------------
@@ -998,7 +1005,7 @@ def probe_replay(
 
 
 def reply_blocking(
-    slog_path: str | Path, sprobe_path: str | Path, n_records: int, stride: int, threads: int = 8
+    slog_path: str | Path, sprobe_path: str | Path, n_records: int, stride: int
 ) -> np.ndarray:
     """(n_records, stride) uint8: for each record of a .sprobe file and each
     candidate of its position, 1 when the candidate blocks the record's
@@ -1011,7 +1018,6 @@ def reply_blocking(
         str(sprobe_path).encode("utf-8"),
         n_records,
         stride,
-        threads,
         out.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
         err,
         len(err),
@@ -1025,7 +1031,6 @@ def gcg_sim_evidence(
     gcg_text: str,
     top_k: int = 10,
     rollouts: int = 200,
-    threads: int = 8,
     seed: int = 0,
     open_leaves: bool = False,
     solve_endgames: bool = False,
@@ -1049,7 +1054,6 @@ def gcg_sim_evidence(
         gcg_text.encode("utf-8"),
         int(top_k),
         int(rollouts),
-        int(threads),
         int(seed),
         int(open_leaves),
         int(solve_endgames),
