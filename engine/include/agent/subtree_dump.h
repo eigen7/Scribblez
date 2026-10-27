@@ -23,6 +23,12 @@
 namespace scribblez {
 
 struct SubtreeTurn {
+  // Which game: DeepBot `agent` on game thread `thread` plays its games in
+  // turn, and `game` counts them, so lines from concurrent games sharing the
+  // file group by (agent, thread, game).
+  std::string agent;
+  int thread = 0;
+  int game = 0;
   int ply = 0;
   int bag = 0;
   const AliceTurn* turn = nullptr;
@@ -35,7 +41,8 @@ struct SubtreeTurn {
 
 std::string subtree_turn_json(const SubtreeTurn& t);
 
-// Appends `line` and a newline to `path`. Safe from concurrent game threads.
+// Appends `line` and a newline to `path`. Safe from concurrent game threads;
+// throws util::CleanException when the write fails.
 void append_dump_line(const std::string& path, const std::string& line);
 
 }  // namespace scribblez

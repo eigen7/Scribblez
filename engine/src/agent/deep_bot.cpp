@@ -63,7 +63,9 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "subtree: Bob's candidates by static equity")  //
     ("bob-late-candidates",
      po::value<int>(&p.subtree.late_candidates)->default_value(p.subtree.late_candidates),
-     "subtree: Bob's candidates with --late-bag or fewer tiles in the bag")  //
+     "subtree: Bob's candidates with --bob-late-bag or fewer tiles in the bag")  //
+    ("bob-late-bag", po::value<int>(&p.subtree.late_bag)->default_value(p.subtree.late_bag),
+     "subtree: the bag size Bob sees from which --bob-late-candidates applies")  //
     ("bob-race", po::value<bool>(&p.subtree.race)->default_value(p.subtree.race),
      "subtree: stop Bob's clearly beaten candidates between rounds")  //
     ("subtree-dump", po::value<std::string>(&p.subtree_dump),
@@ -100,6 +102,8 @@ void validate(const DeepBot::Params& p) {
   if (p.bob_racks < 1 || p.sims_per_rack < 1 || p.subtree.alice_racks < 1)
     throw util::CleanException(
       "deepbot: --bob-racks, --sims-per-rack and --alice-racks must be >= 1");
+  if (!p.subtree_dump.empty() && p.reply != "subtree")
+    throw util::CleanException("deepbot: --subtree-dump needs --reply subtree");
   if (p.subtree_candidates < 0)
     throw util::CleanException("deepbot: --subtree-candidates must be >= 0");
   if (p.subtree.candidates < 1 || p.subtree.late_candidates < 1)
@@ -116,6 +120,7 @@ DeepBot::DeepBot(const Params& params, Backend backend)
 void DeepBot::begin_game(const BeginGameRequest& /*req*/) {
   recorder_.begin_game();
   ply_ = 0;
+  ++games_;
 }
 
 void DeepBot::observe_move(const Move& move) {
@@ -223,7 +228,10 @@ void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn,
                         const std::vector<double>& values) const {
   const auto rerun = bob_replies(turn, searched, bob_belief_model(), *backend_.values,
                                  params_.subtree, req.dict, turn_seed() ^ kRerunSeed);
-  SubtreeTurn t{.ply = ply_,
+  SubtreeTurn t{.agent = name(),
+                .thread = params_.thread_id,
+                .game = games_,
+                .ply = ply_,
                 .bag = req.bag_size,
                 .turn = &turn,
                 .searched = std::vector<bool>(turn.candidates.size(), false),

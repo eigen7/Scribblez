@@ -1,6 +1,7 @@
 #include "agent/subtree_dump.h"
 
 #include "sim/hasty_rollout_task.h"
+#include "util/exception.h"
 
 #include <boost/json.hpp>
 
@@ -81,7 +82,10 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
       o["replies"] = reply_summary((*t.replies)[c], (*t.rerun)[c], turn.applied[c].board);
     candidates.push_back(std::move(o));
   }
-  const json::object out{{"ply", t.ply},
+  const json::object out{{"agent", t.agent},
+                         {"thread", t.thread},
+                         {"game", t.game},
+                         {"ply", t.ply},
                          {"bag", t.bag},
                          {"bob_racks", turn.bob_racks.size()},
                          {"subtree_pick", best_candidate(t.subtree_values)},
@@ -93,7 +97,9 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
 void append_dump_line(const std::string& path, const std::string& line) {
   static std::mutex mutex;
   const std::lock_guard<std::mutex> lock(mutex);
-  std::ofstream(path, std::ios::app) << line << '\n';
+  std::ofstream out(path, std::ios::app);
+  if (!(out << line << '\n' << std::flush))
+    throw util::CleanException("deepbot: cannot write --subtree-dump {}", path);
 }
 
 }  // namespace scribblez

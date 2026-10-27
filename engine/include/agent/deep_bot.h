@@ -135,7 +135,8 @@ class DeepBot : public Agent {
   Params params_;
   Backend backend_;
   belief::LeaveHistoryRecorder recorder_;
-  int ply_ = 0;  // moves observed this game
+  int ply_ = 0;    // moves observed this game
+  int games_ = 0;  // games begun, this one included
 };
 
 }  // namespace scribblez
