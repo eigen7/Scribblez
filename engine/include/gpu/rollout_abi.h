@@ -117,11 +117,11 @@ struct GroupAbi {
   uint32_t num_leaves = 0;
 };
 
-// An opponent's known leave: `n` tile codes, ascending.
+// An opponent's known leave, up to a full rack (a pass keeps all seven):
+// `n` tile codes, ascending.
 struct OppLeaveAbi {
-  uint8_t tiles[kRackSize - 1] = {};
+  uint8_t tiles[kRackSize] = {};
   uint8_t n = 0;
-  uint8_t pad = 0;
 };
 
 // One rollout of a batch: start `position`, rollout index `rollout` (which

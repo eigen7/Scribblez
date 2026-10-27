@@ -92,7 +92,7 @@ std::vector<Move> candidates(const DecisionPoint& at, const Dictionary& dict, in
   return out;
 }
 
-// Every other rollout seats a known opponent leave of 1 to 6 tiles from the
+// Every other rollout seats a known opponent leave of 1 to 7 tiles from the
 // pool; the rest draw the opponent's whole rack.
 std::vector<Rack> known_leaves(const TileCounts& pool, int rollouts, uint64_t seed) {
   std::vector<Tile> tiles;
@@ -102,7 +102,7 @@ std::vector<Rack> known_leaves(const TileCounts& pool, int rollouts, uint64_t se
   std::vector<Rack> out(static_cast<size_t>(rollouts));
   for (int i = 0; i < rollouts; i += 2) {
     std::shuffle(tiles.begin(), tiles.end(), rng);
-    const int n = std::min<int>(int(tiles.size()) - RACK_SIZE, 1 + int(rng() % 6));
+    const int n = std::min<int>(int(tiles.size()) - RACK_SIZE, 1 + int(rng() % RACK_SIZE));
     for (int j = 0; j < n; ++j) out[size_t(i)].add(tiles[size_t(j)]);
   }
   return out;
