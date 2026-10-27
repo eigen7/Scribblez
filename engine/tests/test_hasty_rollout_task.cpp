@@ -261,7 +261,7 @@ TEST(RolloutValues, LogitsBecomeWinDrawLossProbabilities) {
 TEST(HastyRolloutCpu, AMoveThatGoesOutWithTheBagEmptyEndsTheGame) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
   const Dictionary& dict = nwl23();
-  const Decision d = decision_after(dict, /*seed=*/6, /*plies=*/18);
+  const Decision d = decision_after(dict, /*seed=*/6, /*plies=*/21);
   ASSERT_LE(d.board.unseen_tiles(d.rack).size(), RACK_SIZE) << "the bag should be empty";
   const std::vector<Move> ranked = ranked_moves(d, dict);
   const auto out = std::ranges::find_if(ranked, [&](const Move& m) {

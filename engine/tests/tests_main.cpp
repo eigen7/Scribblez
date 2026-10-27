@@ -2345,8 +2345,8 @@ TEST(WinTable, SamplesMatchTurnRecords) {
 
   constexpr int kPlies = 4;
   std::vector<scribblez::GameLogStorage> logs;
-  logs.push_back(play_test_game(dict, /*seed=*/900));
-  logs.push_back(play_random_opening_test_game(dict, /*seed=*/901, kPlies));
+  logs.push_back(play_test_game(dict, /*seed=*/898));
+  logs.push_back(play_random_opening_test_game(dict, /*seed=*/899, kPlies));
   {
     scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/int(logs.size()));
     for (const auto& log : logs) writer.append(scribblez::GameLogStorage(log));
