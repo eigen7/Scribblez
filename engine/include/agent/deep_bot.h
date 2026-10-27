@@ -1,24 +1,35 @@
 #pragma once
 
-// DeepBot (docs/plans/deep_bot.md), with the `hasty` reply model: Alice values
-// each of her candidates (the static-equity top N, N by the bag) by short sims
-// on the GPU. Rollout i seats a leave for Bob drawn from her leave inference
-// belief (belief::LeaveHistoryRecorder's query, the training row of her
-// position) and draws the rest of both racks; Bob and then Alice reply by
-// HastyBot, and the leaf network values the end state. The sims race the
-// candidates in rounds (sim/pool_labeler.h), and she plays the one most likely
-// best. This is BestBot's loop with inferred racks and the leaf network; the
-// `subtree` reply model, Bob deciding on his own information, comes next.
+// DeepBot (docs/plans/deep_bot.md): Alice values each of her candidates (the
+// static-equity top N, N by the bag) by short sims on the GPU. Rollout i seats
+// a leave for Bob drawn from her leave inference belief
+// (belief::LeaveHistoryRecorder's query, the training row of her position) and
+// draws the rest of both racks. How Bob replies is the reply model:
+//
+//   - `subtree`: Bob decides on his own information (agent/bob_subtree.h).
+//     For rack i, his own sims choose β, and Alice's sims after β, with her
+//     replenishment drawn, value the candidate. She plays the best mean.
+//   - `hasty`: Bob and then Alice reply by HastyBot and the leaf network values
+//     the end state, BestBot's loop with inferred racks and the leaf network.
+//     The sims race the candidates in rounds (sim/pool_labeler.h), and she
+//     plays the one most likely best.
+//
+// Under either, a candidate that empties the bag gets the hasty sims, which
+// then play the game to its end: Bob, holding every unseen tile, has nothing
+// to infer.
 //
 // Hidden leaves only, before the endgame: EndgameAgent<DeepBot> solves the turns
 // with the bag empty, and DeepBot alone plays HastyBot's move there.
 
 #include "agent/agent.h"
+#include "agent/bob_subtree.h"
 #include "belief/leave_history_recorder.h"
 #include "belief/leave_params.h"
 #include "belief/leave_sampler.h"
 #include "lexicon/leave_value_arrays.h"
+#include "sim/pool_labels.h"
 #include "sim/rollout_values.h"
+#include "sim/sim_runner.h"
 
 #include <boost/program_options/options_description.hpp>
 
@@ -47,8 +58,17 @@ class DeepBot : public Agent {
     int candidates = 10;       // Alice's, by static equity
     int late_candidates = 32;  // ... with late_bag or fewer tiles in the bag
     int late_bag = 40;
-    int rollouts = 1000;  // per candidate, each with its own rack for Bob
-    bool race = true;     // stop a clearly beaten candidate between rounds
+    std::string reply = "subtree";  // the reply model: subtree or hasty
+    // hasty: rollouts per candidate, each with its own rack for Bob, raced.
+    int rollouts = 1000;
+    bool race = true;  // stop a clearly beaten candidate between rounds
+    // subtree: R_A racks for Bob, each with Bob's subtree and Alice's sims.
+    int bob_racks = 100;
+    int sims_per_rack = 4;
+    SubtreeParams subtree{};
+    // A file to append a JSON line per turn to (agent/subtree_dump.h); costs
+    // the hasty sims and a second run of the subtrees.
+    std::string subtree_dump{};
     uint64_t seed = 0;
   };
 
@@ -86,6 +106,23 @@ class DeepBot : public Agent {
   // Alice's belief about Bob's leave, null where the model has none to give.
   std::shared_ptr<const belief::LeaveSampler> root_belief(const belief::LeaveQuery& q) const;
   uint64_t turn_seed() const;
+  // The hasty sims of `moves` over `rollouts` racks for Bob.
+  std::vector<PoolLabel> hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
+                                      const belief::LeaveSampler* belief, int rollouts,
+                                      bool race) const;
+  Move subtree_move(const MoveRequest& req, const std::vector<Move>& moves,
+                    const belief::LeaveSampler* belief);
+  // Alice's value of each candidate: after Bob's subtree replies, or, for a
+  // candidate that empties the bag, from the hasty sims to the game's end.
+  std::vector<double> subtree_values(const MoveRequest& req, const AliceTurn& turn,
+                                     const belief::LeaveSampler* belief,
+                                     const std::vector<size_t>& searched,
+                                     const std::vector<std::vector<BobReply>>& replies) const;
+  void dump_turn(const MoveRequest& req, const AliceTurn& turn, const belief::LeaveSampler* belief,
+                 const std::vector<size_t>& searched,
+                 const std::vector<std::vector<BobReply>>& replies,
+                 const std::vector<double>& values) const;
+  BeliefModel bob_belief_model() const { return {backend_.predict, backend_.table.get()}; }
 
   Params params_;
   Backend backend_;

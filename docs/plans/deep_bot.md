@@ -655,7 +655,8 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
 4. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
    after each of Alice's top candidates: Bob's chosen replies, how often
    each kind (bingo, setup, other) is chosen, and how stable the choice is
-   in `R_B`.
+   in `R_B`. DeepBot's `--subtree-dump` records these per turn in play
+   (agent/subtree_dump.h), in place of a separate tool.
 5. **The agent.**
    - The GPU sims with groups and racing rounds, the leaf network, pairing,
      two-level evaluation with inferred-leave beliefs batched on the GPU, and
