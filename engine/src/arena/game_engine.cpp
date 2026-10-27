@@ -7,6 +7,7 @@
 #include <cmath>
 #include <iostream>
 #include <random>
+#include <utility>
 
 namespace scribblez {
 
@@ -69,7 +70,9 @@ std::pair<EndGameAction, EndGameAction> GameEngine::play(int thread_idx,
   game.play();
 
   // The Game stays valid for end_game, which reads only live game state.
-  sink.on_game(game.extract_log(), seats);
+  GameLogStorage log = game.extract_log();
+  log.seat_players = seats;
+  sink.on_game(std::move(log));
 
   auto r0 = seat0.end_game(game, 0);
   auto r1 = seat1.end_game(game, 1);

@@ -69,7 +69,7 @@ class GameRunner : public GameSink {
   void run();
 
   // Called from every game thread; thread-safe.
-  void on_game(GameLogStorage&& log, const std::array<int, 2>& seats) override;
+  void on_game(GameLogStorage&& log) override;
 
  private:
   // The tally, by player rather than seat, plus the optional per-game JSON

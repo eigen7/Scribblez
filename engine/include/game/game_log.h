@@ -29,6 +29,10 @@ struct TurnRecord {
 struct GameLog {
   uint64_t seed = 0;
   std::array<const char*, 2> player_names = {nullptr, nullptr};
+  // Which of the run's players sat in each seat (play_game's --player order),
+  // so a game credits the right player whichever seat it held; -1 where the
+  // producer did not record it (a GCG import, a .slog migrated from v10).
+  std::array<int, 2> seat_players = {-1, -1};
   std::array<int, 2> initial_scores = {0, 0};  // head-start handicap, if any
   std::array<Rack, 2> initial_racks;           // tiles dealt to each player at game start
   const TurnRecord* records = nullptr;         // backing store owned elsewhere
@@ -48,6 +52,7 @@ struct GameLog {
 struct GameLogStorage {
   uint64_t seed = 0;
   std::array<std::string, 2> player_names;
+  std::array<int, 2> seat_players = {-1, -1};
   std::array<int, 2> initial_scores = {0, 0};
   std::array<Rack, 2> initial_racks;
   std::vector<TurnRecord> turns;

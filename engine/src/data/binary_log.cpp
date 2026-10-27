@@ -71,6 +71,8 @@ GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecor
   GameLog g;
   g.initial_racks[0] = ir->p0;
   g.initial_racks[1] = ir->p1;
+  g.seed = gm.seed;
+  g.seat_players = {gm.seat0_player, gm.seat1_player};
   g.initial_scores = {gm.initial_score_p0, gm.initial_score_p1};
   g.final_scores = {gm.final_score_p0, gm.final_score_p1};
   g.records = scratch.data();
@@ -228,6 +230,9 @@ std::vector<GameMetadata> build_metadata_table(const PreparedBatch& p) {
     gm.initial_score_p1 = p.games[i].initial_scores[1];
     gm.eligible_begin = p.eligible[i].begin;
     gm.eligible_end = p.eligible[i].end;
+    gm.seed = p.games[i].seed;
+    gm.seat0_player = int8_t(p.games[i].seat_players[0]);
+    gm.seat1_player = int8_t(p.games[i].seat_players[1]);
     cursor += sizeof(InitialRacks) + uint64_t(gm.num_turns) * sizeof(TurnBlob);
     meta.push_back(gm);
   }

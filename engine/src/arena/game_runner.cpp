@@ -44,8 +44,8 @@ class GameRunner::Results {
   Results(std::array<std::string, 2> names, std::ofstream out)
       : names_(std::move(names)), out_(std::move(out)) {}
 
-  // `seats[s]` is the persistent player index that sat at seat s. Thread-safe.
-  void record(const GameLog& log, const std::array<int, 2>& seats, bool verbose) {
+  // Thread-safe.
+  void record(const GameLog& log, bool verbose) {
     int winning_seat = -1;
     if (log.final_scores[0] != log.final_scores[1])
       winning_seat = log.final_scores[0] > log.final_scores[1] ? 0 : 1;
@@ -56,9 +56,9 @@ class GameRunner::Results {
     if (winning_seat < 0) {
       ++draws_;
     } else {
-      ++wins_[seats[winning_seat]];
+      ++wins_[log.seat_players[winning_seat]];
     }
-    if (out_.is_open()) write_result_line(log, seats);
+    if (out_.is_open()) write_result_line(log);
     if (verbose) {
       std::cerr << "Final scores: " << log.final_scores[0] << " - " << log.final_scores[1] << "  ("
                 << log.end_reason << ")\n"
@@ -99,10 +99,10 @@ class GameRunner::Results {
  private:
   // Flushed so a supervising process can read results as they stream. Caller
   // holds `mutex_`.
-  void write_result_line(const GameLog& log, const std::array<int, 2>& seats) {
+  void write_result_line(const GameLog& log) {
     boost::json::object o;
     o["seed"] = log.seed;
-    o["seat_players"] = boost::json::array{seats[0], seats[1]};
+    o["seat_players"] = boost::json::array{log.seat_players[0], log.seat_players[1]};
     o["seat_scores"] = boost::json::array{log.final_scores[0], log.final_scores[1]};
     o["turns"] = log.num_records;
     o["end_reason"] = log.end_reason;
@@ -232,7 +232,7 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
 
 GameRunner::~GameRunner() = default;
 
-void GameRunner::on_game(GameLogStorage&& storage, const std::array<int, 2>& seats) {
+void GameRunner::on_game(GameLogStorage&& storage) {
   // The view dangles once `storage` moves into the binary writer below.
   const GameLog log = storage.view();
 
@@ -246,7 +246,7 @@ void GameRunner::on_game(GameLogStorage&& storage, const std::array<int, 2>& sea
     }
   }
 
-  results_->record(log, seats, params_.verbose);
+  results_->record(log, params_.verbose);
 
   if (binary_writer_) {
     binary_writer_->append(std::move(storage));
