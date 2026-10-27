@@ -51,6 +51,8 @@ from scribblez.paths import EVAL_POSITIONS_DIRS, REPO_ROOT
 BUNDLE_BINARY_NAMES = [
     "play_game",
     "forgone_play_tool",
+    # One-shot: migrates a worker's v10 .slog corpora (apps/slog_migrate_v11.cpp).
+    "slog_migrate_v11",
     # The GPU labeling tools (policy_set and hidden_blind_spots generators).
     # They need no library play_game does not.
     "policy_set_pool_tool",
