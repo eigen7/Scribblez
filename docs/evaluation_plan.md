@@ -48,15 +48,14 @@ same tiles even after their play diverges. They part only where the two ends
 meet late in the game, or where an exchanged tile lands at a random position
 in the bag.
 
-One gap in that machinery is worth closing before the final readouts:
-
-- **Per-pair result storage in `match_arms`.** Each arm's result stores a
-  5-bin pentanomial histogram (`pair_counts`), which discards which pair is
-  which. Arms share a base seed, so arm-vs-arm comparisons could be paired,
-  but the stored aggregate throws the pairing away and every cross-arm
-  comparison is unpaired. Storing the per-pair score vector would sharpen
-  those comparisons at no extra compute. (Within-arm confidence intervals are
-  already pentanomial and do exploit the pairing.)
+Each arm keeps its games as .slog files (`TagPaths.arm_games_dir`), every
+game carrying its seed and which seat the arm took, so two arms compare pair
+by pair: `py/tools/arms_report.py --baseline <arm>` tabulates the arms and
+each one's difference from the baseline over the pairs both played. That
+difference cancels the deal's luck that the two arms' separate intervals both
+carry. How much it cancels depends on how long the arms play alike: an arm
+that changes only the endgame repeats most of the baseline's games exactly,
+while one that changes every decision diverges from the first move.
 
 ## Benchmark comparability
 
