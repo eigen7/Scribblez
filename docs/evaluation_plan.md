@@ -50,7 +50,7 @@ in the bag.
 
 Each arm keeps its games as .slog files (`TagPaths.arm_games_dir`), every
 game carrying its seed and which seat the arm took, so two arms compare pair
-by pair: `py/tools/arms_report.py --baseline <arm>` tabulates the arms and
+by pair: `py/tools/arms_report.py --baseline <tag>` tabulates the arms and
 each one's difference from the baseline over the pairs both played. That
 difference cancels the deal's luck that the two arms' separate intervals both
 carry. How much it cancels depends on how long the arms play alike: an arm
