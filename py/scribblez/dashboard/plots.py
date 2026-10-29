@@ -373,12 +373,18 @@ POLICY_SET_QUALITY = (
         ),
         # The labels' entropy is the floor no policy's cross-entropy goes below.
         (
-            "Policy form: cross-entropy against q (training, held-out) and the labels' entropy",
-            ["loss_policy_ce", "policy_eval_loss_ce", "eval_label_entropy"],
+            "Policy form: cross-entropy against q (held-out) and the labels' entropy",
+            ["policy_eval_ce", "eval_label_entropy"],
         ),
+        # Stakes-weighted when policy_stakes_weighting is set.
+        ("Policy form: loss (training, held-out)", ["loss_policy_ce", "policy_eval_loss_ce"]),
         (
             "Policy form: the policy's entropy and the labels' (held-out, nats)",
             ["policy_eval_entropy", "eval_label_entropy"],
+        ),
+        (
+            "Policy form: stakes-weighted cross-entropy against q (held-out)",
+            ["policy_eval_stakes_ce"],
         ),
         (
             "ms to build 256 sets of 8",
@@ -405,6 +411,12 @@ POLICY_SET_QUALITY = (
         ("Pools", ["pools", "eval_pools"]),
         ("Mean candidates per pool", ["pool_size", "eval_pool_size"]),
         ("Mean label entropy (nats)", ["label_entropy", "eval_label_entropy"]),
+        # A pool's stakes: its leader's win probability over the pass's.
+        ("Mean stakes (win probability)", ["stakes", "eval_stakes"]),
+        (
+            "Stakes' effective sample size, as a share of the pools",
+            ["stakes_ess_share", "eval_stakes_ess_share"],
+        ),
         (
             "Share of pools whose sim-best is outside the equity top 10",
             ["tail_share", "eval_tail_share"],

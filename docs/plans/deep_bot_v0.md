@@ -822,8 +822,23 @@ that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
 
 **Form 3, `policy`:** a linear logit per candidate vector, softmaxed over the
 position's candidates. The loss is the cross-entropy against `q`, recorded as
-`loss_policy_ce`; its held-out value reads against the labels' mean entropy
-(`eval_label_entropy`), the floor it cannot go below.
+`loss_policy_ce`. The held-out `policy_eval_ce`, unweighted whatever the loss,
+reads against the labels' mean entropy (`eval_label_entropy`), the floor it
+cannot go below.
+
+With `policy_stakes_weighting`, each pool's cross-entropy is weighted by its
+stakes, what the turn is worth: the leader's win probability over the
+pass's (`pools.stakes`), about 0 in a decided game. Cross-entropy weights
+every pool alike, and a decided game's labels are its flattest (q entropy
+2.9 to 4.4 nats where the leader's win probability is under 2% or over 98%,
+1.2 in contested pools), so it put several times a contested pool's
+irreducible loss on choices that barely matter. The race never stops the
+pass, so its win probability is a full-budget estimate. The weights are
+unbounded (stakes lie in [0, 1]) and not renormalized: Adam's updates are
+nearly invariant to the loss's scale, and a per-batch renormalization would
+undo the weighting for a batch of decided games. Its eval is regret, already
+stakes-aware, beside `policy_eval_stakes_ce`; `stakes_ess_share` records
+what the weighting keeps of the pools' worth of data.
 
 ### Training the forms together
 

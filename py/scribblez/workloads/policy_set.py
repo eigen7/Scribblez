@@ -132,6 +132,11 @@ class PolicySetParams(PoolLabelParams):
     train_slot: bool = param(False, "train the slot form (a one-shot slot decoder)")
     train_greedy: bool = param(False, "train the greedy form (a gain head over a growing set)")
     train_policy: bool = param(True, "train the policy form (a softmax over the candidates)")
+    policy_stakes_weighting: bool = param(
+        False,
+        "policy form: weight each pool's cross-entropy by its stakes, the leader's win "
+        "probability over the pass's",
+    )
     trunk_channels: int = param(128, "board trunk and candidate vector width")
     num_blocks: int = param(8, "board trunk residual blocks")
     num_heads: int = param(4, "attention heads")

@@ -102,6 +102,9 @@ class PoolBatcher:
             name: torch.from_numpy(np.concatenate([getattr(it.pool, name) for it in items]))
             for name in ("q", "win_prob", "equity_rank")
         }
+        labels["stakes"] = torch.tensor(
+            [pools.stakes(it.pool) for it in items], dtype=torch.float32
+        )
         return {
             "input_spatial": torch.from_numpy(spatial),
             "input_scalar": torch.from_numpy(scalar),
