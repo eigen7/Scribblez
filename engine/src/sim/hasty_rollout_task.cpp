@@ -275,7 +275,7 @@ RolloutResult run_one(const RolloutBatch& batch, const rollout_abi::RolloutTask&
 
 RolloutRacks rollout_racks(const RolloutBatch& batch, const rollout_abi::RolloutTask& task) {
   const RolloutState st = start_rollout(batch, task);
-  return RolloutRacks{.opp = st.racks[1], .mine = st.racks[0]};
+  return RolloutRacks{.opp = st.racks[1], .mine = st.racks[0], .bag = st.bag.remaining()};
 }
 
 void for_each_hasty_rollout_cpu(const RolloutBatch& batch, const Dictionary& dict,
