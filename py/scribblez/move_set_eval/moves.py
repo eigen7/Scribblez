@@ -51,13 +51,16 @@ def batch_move_set_positions(
     positions: list[tuple[int, int, int]],
     moves: list[np.ndarray],
     equities: bool = False,
+    transposes: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """move_set_positions for a batch whose positions span several .slog files.
 
     Position j is `positions[j]` = (file_id, game_index, turn_index), its
     .slog `slogs[file_id]`, and its candidates `moves[j]`. One call per file;
     "rows" follow the batch's position order, and "cells" / "letters" its
-    flattened moves, position-major, as do "equities" when asked for."""
+    flattened moves, position-major, as do "equities" when asked for and
+    "moves", each position's candidates in its frame (transposed where
+    `transposes` is set)."""
     counts = np.array([len(m) for m in moves], dtype=np.int64)
     starts = np.cumsum(counts) - counts
     total = int(counts.sum())
@@ -69,6 +72,8 @@ def batch_move_set_positions(
     }
     if equities:
         out["equities"] = np.zeros(total, dtype=np.float32)
+    out["moves"] = np.concatenate(moves)
+    flips = None if transposes is None else np.asarray(transposes)
     by_file: dict[int, list[int]] = defaultdict(list)
     for j, (file_id, _, _) in enumerate(positions):
         by_file[file_id].append(j)
@@ -80,6 +85,7 @@ def batch_move_set_positions(
             counts[js],
             np.concatenate([moves[j] for j in js]),
             equities=equities,
+            transposes=None if flips is None else flips[js],
         )
         out["rows"][js] = got["rows"]
         move_rows = np.concatenate([np.arange(starts[j], starts[j] + counts[j]) for j in js])
@@ -87,6 +93,8 @@ def batch_move_set_positions(
         out["letters"][move_rows] = got["letters"]
         if equities:
             out["equities"][move_rows] = got["equities"]
+        if flips is not None:
+            out["moves"][move_rows] = got["moves"]
     return out
 
 

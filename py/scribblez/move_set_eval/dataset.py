@@ -309,7 +309,6 @@ class MsetDataset:
             rows[:, self._spatial_floats : self._spatial_floats + self._scalar_width]
         )
 
-        all_moves = np.concatenate([pos.moves for pos in batch])
         all_targets = np.concatenate([pos.targets for pos in batch]).astype(np.float32)
         pos_id = np.concatenate(
             [np.full(len(pos.moves), local_p, dtype=np.int64) for local_p, pos in enumerate(batch)]
@@ -317,7 +316,7 @@ class MsetDataset:
         # Pre-move score differential in points, one per candidate.
         pre_diff_points = np.rint(scalar[:, self._sd_index] * self._sd_scale).astype(np.int32)
         move_pre_diffs = pre_diff_points[pos_id]
-        enc = move_enc.encode_moves(all_moves, move_pre_diffs)
+        enc = move_enc.encode_moves(inputs["moves"], move_pre_diffs)
 
         batch_out = {
             "input_spatial": torch.from_numpy(spatial),

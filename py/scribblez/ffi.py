@@ -267,6 +267,8 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_int32),  # out_cells
         ctypes.POINTER(ctypes.c_uint8),  # out_letters
         ctypes.POINTER(ctypes.c_float),  # out_equities, nullable
+        ctypes.POINTER(ctypes.c_uint8),  # transposes, nullable with out_moves
+        ctypes.c_void_p,  # out_moves, nullable with transposes
     ]
 
     lib.scribblez_gcg_cross_checks.restype = ctypes.c_int
@@ -852,6 +854,7 @@ def move_set_positions(
     move_counts: np.ndarray,
     moves: np.ndarray,
     equities: bool = False,
+    transposes: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """A move set batch's inputs from one .slog, one replay per position: each
     position's pre-move training row, and the cross-check features of its
@@ -866,6 +869,10 @@ def move_set_positions(
     empty slots; and "letters" (M, slots * 26) uint8, each entry's post-move
     legal letters. With `equities`, also "equities" (M,) float32, each move's
     HastyBot static equity at its decision point, the opponent's leave hidden.
+    With `transposes` (P,) bool, position j where it is set is encoded as the
+    transposed position (the board's diagonal symmetry), cross-checks and equities
+    included, and "moves" (M,) MOVE_DTYPE returns every candidate in its
+    position's frame: transposed there, as given elsewhere.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -880,6 +887,10 @@ def move_set_positions(
     rows = np.empty((len(games), task_row_floats()), dtype=np.float32)
     cells, letters = _cross_check_arrays(len(moves))
     equity = np.empty(len(moves), dtype=np.float32) if equities else None
+    flips = None if transposes is None else np.ascontiguousarray(transposes, dtype=np.uint8)
+    if flips is not None and flips.shape != games.shape:
+        raise ValueError(f"transposes shape {flips.shape} != positions {games.shape}")
+    framed = None if flips is None else np.empty_like(moves)
     rc = _lib().scribblez_move_set_positions(
         _session(),
         str(path).encode("utf-8"),
@@ -892,12 +903,16 @@ def move_set_positions(
         cells.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
         letters.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
         None if equity is None else equity.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        None if flips is None else flips.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        None if framed is None else framed.ctypes.data_as(ctypes.c_void_p),
     )
     if rc != 0:
         raise OSError(f"move_set_positions failed (rc={rc}) for {path}")
     out = {"rows": rows, **_cross_check_result(cells, letters)}
     if equity is not None:
         out["equities"] = equity
+    if framed is not None:
+        out["moves"] = framed
     return out
 
 

@@ -171,6 +171,69 @@ def test_the_equity_input_is_relative_to_each_pools_best(chunk):
             assert mine[ranks == 0][0] == 0
 
 
+def _transposed_square(sq: np.ndarray) -> np.ndarray:
+    return (sq % 15) * 15 + sq // 15
+
+
+def _cross_entries(cells: np.ndarray, letters: np.ndarray) -> set:
+    """One move's cross-check entries as {(axis, square, legal letters)}."""
+    out = set()
+    for k, cell in enumerate(cells):
+        if cell:
+            axis, sq = divmod(int(cell) - 1, 225)
+            out.add((axis, sq, letters[k * 26 : (k + 1) * 26].tobytes()))
+    return out
+
+
+def test_a_transposed_batch_is_the_same_position_in_the_transposed_frame(chunk):
+    """Transposing a position transposes its board planes, its candidates'
+    squares and cross-check entries (whose axes swap), and nothing else: the
+    scalars, the equity input and the labels are the same game's."""
+    items = dataset.read_items([chunk])
+    batcher = dataset.PoolBatcher()
+    plain = batcher.build(items)
+    flipped = batcher.build(items, np.ones(len(items), dtype=bool))
+    letters = slice(0, 26)  # the board block's letter planes, which name no axis
+    assert torch.equal(
+        flipped["input_spatial"][:, letters], plain["input_spatial"][:, letters].transpose(2, 3)
+    )
+    assert not torch.equal(flipped["input_spatial"], plain["input_spatial"])
+    for key in ("input_scalar", "opp_rack", "move_equity", "move_letters", "move_scalars", "q"):
+        assert torch.equal(flipped[key], plain[key]), key
+    mask = (
+        plain["move_tile_mask"].numpy().astype(bool) & (plain["move_scalars"][:, 2:3] > 0).numpy()
+    )
+    sq = plain["move_squares"].numpy()
+    assert np.array_equal(flipped["move_squares"].numpy()[mask], _transposed_square(sq[mask]))
+    assert plain["move_cross_cells"].count_nonzero() > 0
+    for m in range(len(sq)):
+        mine = _cross_entries(
+            plain["move_cross_cells"][m].numpy(), plain["move_cross_letters"][m].numpy()
+        )
+        theirs = _cross_entries(
+            flipped["move_cross_cells"][m].numpy(), flipped["move_cross_letters"][m].numpy()
+        )
+        assert theirs == {(1 - a, int(_transposed_square(np.int64(s))), L) for a, s, L in mine}
+
+
+def test_a_partly_transposed_batch_transposes_only_its_flagged_positions(chunk):
+    """Each position of a mixed batch, and each of its candidates, is encoded
+    as in the plain batch or the all-transposed one, by its own flag."""
+    items = dataset.read_items([chunk])
+    batcher = dataset.PoolBatcher()
+    plain = batcher.build(items)
+    flipped = batcher.build(items, np.ones(len(items), dtype=bool))
+    flags = np.arange(len(items)) % 2 == 0
+    assert flags.any() and not flags.all()
+    mixed = batcher.build(items, flags)
+    per_position = {"input_spatial", "input_scalar", "opp_rack"}
+    pos_id = plain["move_pos_id"].numpy()
+    for key, got in mixed.items():
+        rows = flags if key in per_position else flags[pos_id]
+        assert torch.equal(got[rows], flipped[key][rows]), key
+        assert torch.equal(got[~rows], plain[key][~rows]), key
+
+
 def test_the_slot_form_overfits_a_pool(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)

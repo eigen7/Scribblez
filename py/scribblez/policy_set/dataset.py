@@ -71,7 +71,14 @@ class PoolBatcher:
         self.spatial_floats = int(np.prod(self.spatial_shape))
         self.sd_index, self.sd_scale = move_enc.score_diff_input_layout()
 
-    def build(self, items: list[PoolItem]) -> dict[str, torch.Tensor]:
+    def build(
+        self, items: list[PoolItem], transposes: np.ndarray | None = None
+    ) -> dict[str, torch.Tensor]:
+        """The batch of `items`; with `transposes` (len(items),) bool, the
+        positions where it is set as their transposed positions (the board's
+        diagonal symmetry), the candidates' tiles and cross-checks in the
+        same frame. Labels are unchanged: the transposed position is the same
+        game."""
         slogs = sorted({it.slog for it in items})
         file_id = {s: i for i, s in enumerate(slogs)}
         inputs = move_enc.batch_move_set_positions(
@@ -79,6 +86,7 @@ class PoolBatcher:
             [(file_id[it.slog], it.pool.game, it.pool.turn) for it in items],
             [it.pool.moves for it in items],
             equities=True,
+            transposes=transposes,
         )
         rows = inputs["rows"]
         spatial = rows[:, : self.spatial_floats].reshape(len(items), *self.spatial_shape)
@@ -89,9 +97,7 @@ class PoolBatcher:
             [np.full(len(it.pool.moves), j, dtype=np.int64) for j, it in enumerate(items)]
         )
         pre_diff = np.rint(scalar[:, self.sd_index] * self.sd_scale).astype(np.int32)
-        enc = move_enc.encode_moves(
-            np.concatenate([it.pool.moves for it in items]), pre_diff[pos_id]
-        )
+        enc = move_enc.encode_moves(inputs["moves"], pre_diff[pos_id])
         labels = {
             name: torch.from_numpy(np.concatenate([getattr(it.pool, name) for it in items]))
             for name in ("q", "win_prob", "equity_rank")
