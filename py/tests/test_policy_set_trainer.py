@@ -216,6 +216,24 @@ def test_a_transposed_batch_is_the_same_position_in_the_transposed_frame(chunk):
         assert theirs == {(1 - a, int(_transposed_square(np.int64(s))), L) for a, s, L in mine}
 
 
+def test_a_partly_transposed_batch_transposes_only_its_flagged_positions(chunk):
+    """Each position of a mixed batch, and each of its candidates, is encoded
+    as in the plain batch or the all-transposed one, by its own flag."""
+    items = dataset.read_items([chunk])
+    batcher = dataset.PoolBatcher()
+    plain = batcher.build(items)
+    flipped = batcher.build(items, np.ones(len(items), dtype=bool))
+    flags = np.arange(len(items)) % 2 == 0
+    assert flags.any() and not flags.all()
+    mixed = batcher.build(items, flags)
+    per_position = {"input_spatial", "input_scalar", "opp_rack"}
+    pos_id = plain["move_pos_id"].numpy()
+    for key, got in mixed.items():
+        rows = flags if key in per_position else flags[pos_id]
+        assert torch.equal(got[rows], flipped[key][rows]), key
+        assert torch.equal(got[~rows], plain[key][~rows]), key
+
+
 def test_the_slot_form_overfits_a_pool(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)
