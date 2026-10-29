@@ -9,8 +9,10 @@
 // A subtree's jobs are built a chunk at a time (one of the root's candidates),
 // as its labeler asks for them, so a turn never holds them all.
 
+#include "belief/leave_params.h"
 #include "game/move.h"
 #include "game/rack.h"
+#include "lexicon/leave_value_arrays.h"
 #include "sim/hasty_rollout_task.h"
 #include "sim/pool_labeler.h"
 #include "sim/rollout_values.h"
@@ -44,6 +46,13 @@ struct SubtreeMove {
   int equity_rank = 0;  // among the candidates; 0 is HastyBot's move
   int candidates = 1;   // how many were simmed (1: no sims)
   double q = 1;         // the probability the sims gave that it is the best
+};
+
+// The leave inference model a subtree's beliefs come from; an empty `predict`
+// draws the other player's whole rack uniformly.
+struct BeliefModel {
+  belief::LeaveParamsFn predict;
+  const LeaveValueArrays* table = nullptr;
 };
 
 // The value of a candidate Alice did not search: it has none.

@@ -5,6 +5,7 @@
 // from his own equity top N; and --subtree-dump writes a line per turn. Skips
 // without the NWL23 lexicon and HastyBot's leave values.
 
+#include "agent/alice_subtree.h"
 #include "agent/bob_subtree.h"
 #include "agent/deep_bot.h"
 #include "agent/hasty_bot.h"
@@ -15,6 +16,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_value_arrays.h"
 #include "lexicon/leave_values.h"
+#include "sim/pool_jobs.h"
 #include "sim/rollout_values.h"
 #include "temp_dir.h"
 #include "util/exception.h"
@@ -58,6 +60,7 @@ DeepBot::Params small_params(uint64_t seed, const std::string& reply = "subtree"
                     .sims_per_rack = 2,
                     .seed = seed};
   p.subtree = {.opp_racks = 3, .candidates = 2, .late_candidates = 2};
+  p.second = {.opp_racks = 3, .candidates = 2, .late_candidates = 2};
   return p;
 }
 
@@ -223,6 +226,40 @@ TEST(DeepBot, RefusesAnUnknownReplyModelAndADumpWithoutSubtrees) {
   DeepBot::Params p = small_params(1, "hasty");
   p.subtree_dump = "dump.jsonl";
   EXPECT_THROW(DeepBot(p, cpu_backend()), util::CleanException);
+  p = small_params(1, "alice-subtree");
+  p.subtree_dump = "dump.jsonl";
+  EXPECT_THROW(DeepBot(p, cpu_backend()), util::CleanException);
+  p = small_params(1, "alice-subtree");
+  p.second.candidates = 0;
+  EXPECT_THROW(DeepBot(p, cpu_backend()), util::CleanException);
+}
+
+TEST(DeepBot, PlaysWholeGamesTheSameForASeedUnderAliceSubtree) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  DeepBot a(small_params(3, "alice-subtree"), cpu_backend());
+  DeepBot b(small_params(3, "alice-subtree"), cpu_backend());
+  const std::vector<Move> first = play(a);
+  EXPECT_GT(first.size(), 10u);
+  EXPECT_EQ(play(b), first);
+}
+
+// At her second turns Alice asks the model about Bob's leave after his reply,
+// a row per rack where the bag hides it, each with Bob's private past hidden:
+// her view of a move of his she did not see him choose.
+TEST(DeepBot, AsksTheModelForAlicesSecondTurnBeliefWithBobsPastHidden) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  auto table = std::make_shared<const LeaveValueArrays>(
+    LeaveValues::load(HastyEquity::default_leaves_path("NWL23")));
+  int hidden_rows = 0;
+  belief::LeaveParamsFn predict = [&](const float* rows, int count, belief::LeaveParams* out) {
+    for (int k = 0; k < count; ++k) {
+      hidden_rows += rows[size_t(k) * Encoder::kInputFloats + kHiddenFlag] == 1.0f;
+      out[k] = belief::LeaveParams{};
+    }
+  };
+  DeepBot bot(small_params(4, "alice-subtree"), cpu_backend(predict, table));
+  play(bot);
+  EXPECT_GT(hidden_rows, 10);
 }
 
 namespace {
@@ -300,6 +337,70 @@ TEST(DeepBot, AlicesCandidatesArePairedOnBothPlayersDrawsAfterBobsReply) {
       const Rack more = without(after_reply_racks(jobs[c - 1], k).opp, applied[c - 1].leave);
       const Rack fewer = without(racks.opp, applied[c].leave);
       EXPECT_TRUE(holds(more, fewer)) << "candidate " << c;
+    }
+  }
+}
+
+namespace {
+
+// Alice to move after `plies` moves of HastyBot self-play from `seed`'s deal.
+struct Midgame {
+  Board board;
+  Rack rack;
+  int my_score = 0;
+  int opp_score = 0;
+};
+
+Midgame midgame(uint64_t seed, int plies) {
+  HastyBot p0({.thread_id = 0, .name = "p0"});
+  HastyBot p1({.thread_id = 0, .name = "p1"});
+  Game game(p0, p1, nwl23(), seed);
+  game.set_max_plies(plies);
+  game.play();
+  EXPECT_TRUE(game.truncated());
+  const int mover = plies % 2;
+  Midgame out{game.board(), game.rack(mover), game.score(mover), game.score(1 - mover)};
+  out.board.ensure_movegen_caches(nwl23());
+  return out;
+}
+
+}  // namespace
+
+// Bob's reply at a second turn is the move the rollouts' HastyBot plays on the
+// same deal, and Alice holds the rack that deal refilled: the alice-subtree's
+// model of a HastyBot opponent is the rollouts' own first ply.
+TEST(DeepBot, TheSecondTurnIsTheRolloutsFirstPly) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const Midgame at = midgame(/*seed=*/3, /*plies=*/6);
+  const MoveRequest req{at.board,
+                        nwl23(),
+                        at.rack,
+                        Rack{},
+                        at.my_score,
+                        at.opp_score,
+                        at.board.pov_bag_size(at.rack.size())};
+  const std::vector<Move> moves = equity_top_k(req, 3);
+  constexpr int kRacks = 24;
+  const PoolJob root =
+    position_job(sim_position_from(req), moves, /*seed=*/9, nullptr, nwl23(), kRacks);
+  const std::vector<Rack> racks = bob_racks(root.group, root.starts[0], kRacks);
+  const belief::ReplyPosition position{.board = at.board,
+                                       .chooser_rack = at.rack,
+                                       .chooser_score = at.my_score,
+                                       .opp_score = at.opp_score,
+                                       .bag = req.bag_size,
+                                       .earlier = {}};
+  const AliceTurn turn{position, moves, root.starts, racks, root.group};
+  for (size_t c = 0; c < moves.size(); ++c) {
+    const std::vector<SecondTurn> second = second_turns(turn, c, nwl23());
+    RolloutBatch batch{.groups = {root.group}, .starts = {root.starts[c]}, .tasks = {}};
+    batch.starts[0].group = 0;
+    batch.add_rollouts(0, 0, kRacks);
+    const auto results = run_hasty_rollouts_cpu(batch, nwl23());
+    for (size_t i = 0; i < second.size(); ++i) {
+      EXPECT_EQ(second[i].bob_rack, racks[i]);
+      EXPECT_EQ(second[i].reply, unpack_move(results[i].moves[0])) << c << " " << i;
+      EXPECT_EQ(second[i].alice_rack, rollout_racks(batch, batch.tasks[i]).mine);
     }
   }
 }

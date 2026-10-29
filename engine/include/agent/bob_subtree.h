@@ -35,20 +35,14 @@ class Dictionary;
 
 // What the subtrees read of Alice's turn. `applied` is parallel to
 // `candidates`: each applied to the board as its sims' start
-// (make_rollout_start). Rack i of `bob_racks` is the rack Alice's rollout i
-// seats for Bob.
+// (make_rollout_start), all in `group`. Rack i of `bob_racks` is the rack
+// Alice's rollout i seats for Bob, the group's rollout i dealing it.
 struct AliceTurn {
   const belief::ReplyPosition& position;
   const std::vector<Move>& candidates;
   const std::vector<RolloutStart>& applied;
   const std::vector<Rack>& bob_racks;
-};
-
-// The leave inference model Bob's beliefs come from; an empty `predict` draws
-// Alice's whole rack uniformly.
-struct BeliefModel {
-  belief::LeaveParamsFn predict;
-  const LeaveValueArrays* table = nullptr;
+  const RolloutGroup& group;
 };
 
 // replies[c][i] = β(candidates[c], bob_racks[i]), for each c in `which`; the

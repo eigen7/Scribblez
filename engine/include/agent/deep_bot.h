@@ -13,8 +13,12 @@
 //     the end state, BestBot's loop with inferred racks and the leaf network.
 //     The sims race the candidates in rounds (sim/pool_labeler.h), and she
 //     plays the one most likely best.
+//   - `alice-subtree`: Bob replies by HastyBot, and Alice's own sims on her
+//     information choose her second move (agent/alice_subtree.h); two hasty
+//     plies after it value the candidate. For a HastyBot opponent.
 //
-// Under either, a candidate that empties the bag gets the hasty sims, which
+// Under the subtrees, the candidates are a first pass of hasty sims' best;
+// under any model, a candidate that empties the bag gets the hasty sims, which
 // then play the game to its end: Bob, holding every unseen tile, has nothing
 // to infer.
 //
@@ -23,6 +27,7 @@
 
 #include "agent/agent.h"
 #include "agent/bob_subtree.h"
+#include "agent/subtree_search.h"
 #include "belief/leave_history_recorder.h"
 #include "belief/leave_params.h"
 #include "belief/leave_sampler.h"
@@ -58,17 +63,18 @@ class DeepBot : public Agent {
     int candidates = 10;       // Alice's, by static equity
     int late_candidates = 32;  // ... with late_bag or fewer tiles in the bag
     int late_bag = 40;
-    std::string reply = "subtree";  // the reply model: subtree or hasty
+    std::string reply = "subtree";  // the reply model: subtree, hasty or alice-subtree
     // hasty: rollouts per candidate, each with its own rack for Bob, raced.
     int rollouts = 1000;
     bool race = true;  // stop a clearly beaten candidate between rounds
-    // subtree: R_A racks for Bob, each with Bob's subtree and Alice's sims.
+    // The subtrees: R_A racks for Bob, each with a subtree and Alice's sims.
     int bob_racks = 100;
     // How many of Alice's candidates, the best by a first pass of hasty sims,
-    // get Bob's subtree; 0: all.
+    // get the subtree; 0: all.
     int subtree_candidates = 8;
     int sims_per_rack = 4;
-    SubtreeParams subtree{};
+    SubtreeParams subtree{};  // Bob's, under `subtree`
+    SubtreeParams second{};   // Alice's second turn's, under `alice-subtree`
     // A file to append a JSON line per turn to (agent/subtree_dump.h); costs
     // the hasty sims and a second run of the subtrees.
     std::string subtree_dump{};
@@ -116,21 +122,23 @@ class DeepBot : public Agent {
   Move subtree_move(const MoveRequest& req, const std::vector<Move>& moves,
                     const belief::LeaveSampler* belief);
   // The candidates whose hasty first pass (`hasty`) ranks them among the best
-  // subtree_candidates that do not empty the bag, in candidate order.
+  // subtree_candidates that do not empty the bag, in candidate order: the ones
+  // the subtree searches.
   std::vector<size_t> survivors(const std::vector<Move>& moves, const std::vector<PoolLabel>& hasty,
                                 int bag) const;
-  // Alice's value of each candidate: after Bob's subtree replies for the
-  // `searched`, the first pass's for a candidate that empties the bag (its
-  // hasty sims play the game to its end), and kPruned for the rest.
-  std::vector<double> subtree_values(const MoveRequest& req, const AliceTurn& turn,
-                                     const std::vector<PoolLabel>& hasty,
-                                     const std::vector<size_t>& searched,
-                                     const std::vector<std::vector<SubtreeMove>>& replies) const;
+  // Alice's value of each candidate under the reply model's subtree, for the
+  // `searched`; kPruned for the rest.
+  std::vector<double> bob_subtree_values(const MoveRequest& req, const AliceTurn& turn,
+                                         const std::vector<PoolLabel>& hasty,
+                                         const std::vector<size_t>& searched);
+  std::vector<double> second_turn_values(const MoveRequest& req, const AliceTurn& turn,
+                                         const std::vector<size_t>& searched);
   void dump_turn(const MoveRequest& req, const AliceTurn& turn, const std::vector<PoolLabel>& hasty,
                  const std::vector<size_t>& searched,
                  const std::vector<std::vector<SubtreeMove>>& replies,
                  const std::vector<double>& values) const;
-  BeliefModel bob_belief_model() const { return {backend_.predict, backend_.table.get()}; }
+  // What Alice's and her model of Bob's beliefs come from.
+  BeliefModel belief_model() const { return {backend_.predict, backend_.table.get()}; }
 
   Params params_;
   Backend backend_;

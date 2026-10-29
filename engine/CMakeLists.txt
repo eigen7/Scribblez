@@ -73,6 +73,7 @@ add_library(scribblez_core STATIC
   src/sim/rollout_values.cpp
   src/agent/best_bot.cpp
   src/agent/deep_bot.cpp
+  src/agent/alice_subtree.cpp
   src/agent/bob_subtree.cpp
   src/agent/subtree_search.cpp
   src/agent/subtree_dump.cpp
