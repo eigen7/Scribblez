@@ -6,12 +6,9 @@ it without the engine."""
 POOL_SUFFIX = ".pool"
 
 # The model's forms (slot.py, greedy.py, policy.py; forms.py registers them),
-# by name: light, so the workload registry can offer them as the `forms`
-# param's choices. "both" trains the slot and greedy forms side by side, "all"
-# every form.
+# by name. Light, so the workload's params can name a `train_<form>` flag for
+# each without loading the engine.
 FORM_SLOT = "slot"
 FORM_GREEDY = "greedy"
 FORM_POLICY = "policy"
-FORM_BOTH = "both"
-FORM_ALL = "all"
-FORM_CHOICES = (FORM_SLOT, FORM_GREEDY, FORM_POLICY, FORM_BOTH, FORM_ALL)
+FORM_NAMES = (FORM_SLOT, FORM_GREEDY, FORM_POLICY)

@@ -707,7 +707,7 @@ pins its teacher:
 - self-play: `games_per_chunk` and the `hasty_*` policy;
 - generations and held-out pools: `positions_per_generation`, `window`,
   `holdout_every` and `holdout_chunks`;
-- training: `forms` and `max_rows`.
+- training: the `train_<form>` flags and `max_rows`.
 
 ### The opponent-rack input
 
@@ -827,8 +827,8 @@ position's candidates. The loss is the cross-entropy against `q`, recorded as
 
 ### Training the forms together
 
-The `forms` parameter is `greedy`, `slot`, `policy`, `both` (`slot` and
-`greedy`) or `all`.
+Each form has a flag, `train_slot`, `train_greedy` and `train_policy`; a tag
+sets at least one, and a new tag trains the policy alone by default.
 
 With more than one, one trainer holds the models, each on its own encoder, and
 trains them on the same batches: one optimizer over all of them, the summed
@@ -997,10 +997,10 @@ before serving fixes the layout.
 8a. **The shared encoder and the slot form:** pool batches, the move set
    encoder reading the opponent-rack input as a scalar block beside the
    board row's, the slot decoder and its coverage loss, trained under
-   `forms`, its eval metrics beside the baseline, `kPolicySetFormatVersion`,
+   its `train_slot` flag, its eval metrics beside the baseline, `kPolicySetFormatVersion`,
    and the figure.
 8b. **The greedy form:** the set-conditioning stage and gain head, rows by
-   subset assembly, and `forms = both`.
+   subset assembly, and the two forms trained side by side.
 
 *Measure:* recall, cover, regret and tail recall against `N` for each form,
 and against static equity; time per batch of sets. This decides the form.

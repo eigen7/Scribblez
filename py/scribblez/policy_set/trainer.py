@@ -97,11 +97,11 @@ def build_encoder(params) -> PolicySetEncoder:
 
 
 def build_models(params) -> nn.ModuleDict:
-    """The forms `params.forms` names, each on its own encoder."""
+    """The forms `params` selects (forms.selected), each on its own encoder."""
     return nn.ModuleDict(
         {
             name: forms.FORMS[name].build(build_encoder(params), params)
-            for name in forms.selected(params.forms)
+            for name in forms.selected(params)
         }
     )
 
@@ -148,11 +148,11 @@ def loss_weights(params) -> dict[str, float]:
     """The training loss's terms, each weighted 1, as the Loss tab stacks
     them."""
     keys = []
-    if FORM_SLOT in forms.selected(params.forms):
+    if FORM_SLOT in forms.selected(params):
         keys += [f"loss_slot_{n}" for n in metrics.SET_SIZES if n <= params.slots]
-    if FORM_GREEDY in forms.selected(params.forms):
+    if FORM_GREEDY in forms.selected(params):
         keys.append("loss_greedy_gain")
-    if FORM_POLICY in forms.selected(params.forms):
+    if FORM_POLICY in forms.selected(params):
         keys.append("loss_policy_ce")
     return dict.fromkeys(keys, 1.0)
 

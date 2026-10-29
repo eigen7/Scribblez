@@ -1,7 +1,7 @@
 """The policy-set model's forms as the trainer drives them
 (docs/plans/deep_bot_v0.md, "Training the forms together"): each builds its model on
 its own encoder, computes its training loss terms on a batch, and builds sets.
-The `forms` param picks one, "both" (slot and greedy) or "all".
+The `train_<form>` params pick which train, side by side.
 """
 
 from collections.abc import Callable
@@ -12,8 +12,6 @@ import torch
 from torch import nn
 
 from scribblez.policy_set import (
-    FORM_ALL,
-    FORM_BOTH,
     FORM_GREEDY,
     FORM_POLICY,
     FORM_SLOT,
@@ -83,10 +81,6 @@ FORMS = {
 }
 
 
-def selected(forms: str) -> tuple[str, ...]:
-    """The forms the `forms` param names."""
-    if forms == FORM_BOTH:
-        return (FORM_SLOT, FORM_GREEDY)
-    if forms == FORM_ALL:
-        return tuple(FORMS)
-    return (forms,)
+def selected(params) -> tuple[str, ...]:
+    """The forms whose `train_<form>` param is set."""
+    return tuple(name for name in FORMS if getattr(params, f"train_{name}"))
