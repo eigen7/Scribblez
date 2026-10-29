@@ -290,10 +290,10 @@ best member, so the objective rewards diversity. Of a strong play and four
 near-copies of it, the set is better with one copy replaced by a different
 kind of move, such as a setup that wins in other worlds.
 
-Two forms of the model meet this objective. Both build on the move set
-model's architecture (the board trunk, the move encoder and the cross-check
-encoder), and both train on the same labeled pools ([Labels](#labels)).
-Which works better is measured.
+Two forms of the model meet this objective, and a third, a policy, sets
+diversity aside. All build on the move set model's architecture (the board
+trunk, the move encoder and the cross-check encoder), and all train on the
+same labeled pools ([Labels](#labels)). Which works better is measured.
 
 ### Form 1: greedy selection, with cached steps
 
@@ -386,12 +386,27 @@ best pair, and so on, so the first `N` slots serve any `N ≤ N_max`: Alice's
 `N_A` and Bob's `N_B` come from the same pass. At inference, a slot whose
 move an earlier slot already took falls back to its next choice.
 
+### Form 3: a policy
+
+The network gives each legal move one logit, and a softmax over the
+position's moves, however many it has, makes a policy `π`. The loss is the
+cross-entropy against `q`, `−Σ_a q(a) log π(a)`, and the set of `N` is the
+policy's top `N`.
+
+The events "`a` is the best move" are disjoint, so `Σ_{a∈S} q(a)` is the
+probability that `S` holds the best move. A policy that matched `q` would
+therefore make the best set for recall and cover at every `N`, from one
+pass. What it gives up is the objective's diversity term, which only
+regret rewards. Measured on stored pools, that term is small in Scrabble:
+skipping a member whose rollouts track an earlier member's deal for deal
+left regret unchanged (0.721 vs. 0.722 points at `N = 8`).
+
 ### Many sets at once
 
 DeepBot builds many sets per turn. Bob's subtrees alone need one per
 `(a, r)`, about 100 per candidate. With either form, each network call is one
 batched call over all the sets in progress. Form 1 makes `N` such calls, all
-but the first of them light; form 2 makes one.
+but the first of them light; forms 2 and 3 make one.
 
 ### Labels
 

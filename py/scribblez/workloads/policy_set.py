@@ -40,7 +40,7 @@ from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
-from scribblez.policy_set import FORM_BOTH, FORM_CHOICES, POOL_SUFFIX
+from scribblez.policy_set import FORM_NAMES, POOL_SUFFIX
 from scribblez.workloads.base import (
     RoleSpec,
     StatsSpec,
@@ -128,11 +128,10 @@ class PolicySetParams(PoolLabelParams):
         -1, "stop the trainer after this many pools (-1 = run until paused)", end=True
     )
     # The model.
-    forms: str = param(
-        FORM_BOTH,
-        "which forms of the policy-set model to train: 'slot', 'greedy', or 'both' side by side",
-        choices=FORM_CHOICES,
-    )
+    # The forms to train, side by side; at least one.
+    train_slot: bool = param(False, "train the slot form (a one-shot slot decoder)")
+    train_greedy: bool = param(False, "train the greedy form (a gain head over a growing set)")
+    train_policy: bool = param(True, "train the policy form (a softmax over the candidates)")
     trunk_channels: int = param(128, "board trunk and candidate vector width")
     num_blocks: int = param(8, "board trunk residual blocks")
     num_heads: int = param(4, "attention heads")
@@ -161,6 +160,12 @@ class PolicySetParams(PoolLabelParams):
     weight_decay: float = param(1e-4, "AdamW weight decay on weight matrices and conv kernels")
     adam_beta2: float = param(0.999, "Adam's second-moment decay rate (beta2)")
     grad_clip: float = param(1.0, "clip each step's gradient to this global norm; 0 = no clipping")
+
+    def __post_init__(self):
+        if not any(getattr(self, f"train_{name}") for name in FORM_NAMES):
+            raise params_mod.ParamsError(
+                "no form to train: set one of " + ", ".join(f"train_{n}" for n in FORM_NAMES)
+            )
 
 
 def _leave_paths(params: PoolLabelParams, mount_root: Path) -> TagPaths:

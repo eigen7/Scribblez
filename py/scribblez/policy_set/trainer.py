@@ -36,7 +36,16 @@ from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.generational.records import TrainRecorder
 from scribblez.move_set_eval.moves import move_encoding_version
 from scribblez.paths import TagPaths
-from scribblez.policy_set import FORM_GREEDY, FORM_SLOT, dataset, forms, metrics, pools, train_loop
+from scribblez.policy_set import (
+    FORM_GREEDY,
+    FORM_POLICY,
+    FORM_SLOT,
+    dataset,
+    forms,
+    metrics,
+    pools,
+    train_loop,
+)
 from scribblez.policy_set.model import PolicySetEncoder, trunk_scalar
 from scribblez.position_eval.trainer import OutputDeliverer, wait_for_generation
 from scribblez.train_common import timed_print
@@ -88,11 +97,11 @@ def build_encoder(params) -> PolicySetEncoder:
 
 
 def build_models(params) -> nn.ModuleDict:
-    """The forms `params.forms` names, each on its own encoder."""
+    """The forms `params` selects (forms.selected), each on its own encoder."""
     return nn.ModuleDict(
         {
             name: forms.FORMS[name].build(build_encoder(params), params)
-            for name in forms.selected(params.forms)
+            for name in forms.selected(params)
         }
     )
 
@@ -139,10 +148,12 @@ def loss_weights(params) -> dict[str, float]:
     """The training loss's terms, each weighted 1, as the Loss tab stacks
     them."""
     keys = []
-    if FORM_SLOT in forms.selected(params.forms):
+    if FORM_SLOT in forms.selected(params):
         keys += [f"loss_slot_{n}" for n in metrics.SET_SIZES if n <= params.slots]
-    if FORM_GREEDY in forms.selected(params.forms):
+    if FORM_GREEDY in forms.selected(params):
         keys.append("loss_greedy_gain")
+    if FORM_POLICY in forms.selected(params):
+        keys.append("loss_policy_ce")
     return dict.fromkeys(keys, 1.0)
 
 

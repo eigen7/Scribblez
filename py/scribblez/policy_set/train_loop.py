@@ -1,6 +1,6 @@
 """One training epoch of the policy-set model's forms, their held-out eval,
 and the time each takes to build a batch of sets (docs/plans/deep_bot_v0.md,
-"Training both forms" and "Eval metrics").
+"Training the forms together" and "Eval metrics").
 
 The forms train side by side on the same batches (forms.FORMS): one
 optimizer over every form's parameters, the summed loss, each form's

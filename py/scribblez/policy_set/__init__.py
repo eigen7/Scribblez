@@ -5,9 +5,10 @@ it without the engine."""
 # The suffix of a .pool sidecar (pools.py reads them).
 POOL_SUFFIX = ".pool"
 
-# The model's forms (slot.py, greedy.py; forms.py registers them), by name:
-# light, so the workload registry can offer them as the `forms` param's choices.
+# The model's forms (slot.py, greedy.py, policy.py; forms.py registers them),
+# by name. Light, so the workload's params can name a `train_<form>` flag for
+# each without loading the engine.
 FORM_SLOT = "slot"
 FORM_GREEDY = "greedy"
-FORM_BOTH = "both"
-FORM_CHOICES = (FORM_SLOT, FORM_GREEDY, FORM_BOTH)
+FORM_POLICY = "policy"
+FORM_NAMES = (FORM_SLOT, FORM_GREEDY, FORM_POLICY)

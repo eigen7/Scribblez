@@ -337,7 +337,9 @@ def main():
     chunks = sorted(p for p in args.pools.iterdir() if p.is_dir() and any(p.glob("*.pool")))
     items = dataset.read_items(chunks[: -args.held_out])
     held = dataset.read_items(chunks[-args.held_out :])
-    params = replace(PolicySetParams(), forms=forms.FORM_GREEDY, lr_warmup_rows=WARMUP_POOLS)
+    params = replace(
+        PolicySetParams(), train_greedy=True, train_policy=False, lr_warmup_rows=WARMUP_POOLS
+    )
     device = torch.device("cuda")
     torch.manual_seed(0)
     print(f"arm {args.arm}: {len(items)} training pools, {len(held)} held out", flush=True)

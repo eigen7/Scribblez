@@ -21,6 +21,7 @@ import policy_set_chunk  # noqa: E402
 import torch  # noqa: E402
 from cloud.sinks import LocalSink  # noqa: E402
 from scribblez import ffi, workloads  # noqa: E402
+from scribblez import params as params_mod  # noqa: E402
 from scribblez.dashboard import plots  # noqa: E402
 from scribblez.generational import lifecycle  # noqa: E402
 from scribblez.generational.checkpoint import GenerationalState  # noqa: E402
@@ -32,6 +33,7 @@ from scribblez.policy_set import (  # noqa: E402
     greedy,
     metrics,
     model,
+    policy,
     pools,
     slot,
     train_loop,
@@ -138,8 +140,22 @@ def chunk(tmp_path_factory) -> Path:
 
 # The smallest model that exercises every layer, on the CPU.
 TINY = PolicySetParams(
-    trunk_channels=16, num_blocks=1, num_heads=2, slots=4, slot_layers=1, batch_size=2
+    train_slot=True,
+    train_greedy=True,
+    train_policy=True,
+    trunk_channels=16,
+    num_blocks=1,
+    num_heads=2,
+    slots=4,
+    slot_layers=1,
+    batch_size=2,
 )
+
+
+def only(form: str, **changes) -> PolicySetParams:
+    """TINY training `form` alone."""
+    flags = {f"train_{name}": name == form for name in forms.FORMS}
+    return replace(TINY, **flags, **changes)
 
 
 def test_the_equity_input_is_relative_to_each_pools_best(chunk):
@@ -160,7 +176,7 @@ def test_the_slot_form_overfits_a_pool(chunk):
     batch = dataset.PoolBatcher().build(items)
     assert batch["opp_rack"].shape == (len(items), dataset.OPP_RACK_FLOATS)
     torch.manual_seed(0)
-    m = trainer.build_models(replace(TINY, forms="slot", slots=16))["slot"]
+    m = trainer.build_models(only("slot", slots=16))["slot"]
     logits, pad = slot.slot_forward(m, batch)
     assert logits.shape == (len(items), 16, pad.shape[1])
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
@@ -177,9 +193,39 @@ def test_the_slot_form_overfits_a_pool(chunk):
     assert total.item() < 0.9 * first
 
 
+def test_the_policy_form_overfits_a_pool_and_ranks_its_top_n(chunk):
+    items = dataset.read_items([chunk])[:1]
+    batch = dataset.PoolBatcher().build(items)
+    torch.manual_seed(0)
+    m = trainer.build_models(only("policy"))["policy"]
+    opt = torch.optim.Adam(m.parameters(), lr=3e-3)
+    losses = []
+    # As for the slot form: a plateau for the first ~7 steps (5.73 to 5.62),
+    # then the fall (3.17 at step 12).
+    for _ in range(12):
+        loss = policy.policy_loss(m, batch)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        losses.append(loss.item())
+    assert losses[-1] < 0.9 * losses[0]
+    (picks,) = forms.FORMS["policy"].sets(m, batch, 8)
+    logits, _ = policy.policy_forward(m, batch)
+    assert len(picks) == min(8, len(items[0].pool.moves)) and len(set(picks)) == len(picks)
+    assert torch.equal(logits[0, picks], logits[0, picks].sort(descending=True).values)
+
+
+def test_the_train_flags_select_the_forms_and_one_is_required():
+    assert forms.selected(TINY) == ("slot", "greedy", "policy")
+    assert forms.selected(replace(TINY, train_greedy=False)) == ("slot", "policy")
+    assert forms.selected(PolicySetParams()) == ("policy",)
+    with pytest.raises(params_mod.ParamsError, match="no form to train"):
+        replace(TINY, train_slot=False, train_greedy=False, train_policy=False)
+
+
 def _one_generation_setup(chunk, tmp_path, monkeypatch):
     """A tag with the chunk as generation 0 and the held-out set, tiny models
-    of both forms, and a trainer context: what train_one_generation takes."""
+    of every form, and a trainer context: what train_one_generation takes."""
     paths = TagPaths("t", "policy_set", tmp_path)
     (slog,) = chunk.glob("*.slog")
     for dest in (paths.generation_dir(0), paths.held_out_chunks_dir):
@@ -190,7 +236,7 @@ def _one_generation_setup(chunk, tmp_path, monkeypatch):
     lifecycle.mark_complete(paths.generation_dir(0), 1)
     device = torch.device("cpu")
     torch.manual_seed(0)
-    m = trainer.build_models(TINY)  # both forms
+    m = trainer.build_models(TINY)  # every form
     opt = build_optimizer(m, TINY)
     recorder = trainer.TrainRecorder(LocalSink(paths.root))
     staged = []
@@ -227,6 +273,10 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
         "param_norm_slot",
         "slot_eval_spread",
         "greedy_eval_spread",
+        "loss_policy_ce",
+        "policy_eval_loss_ce",
+        "policy_eval_recall_8",
+        "policy_eval_entropy",
     ):
         assert np.isfinite(record[key]), key
     assert record["slot_eval_pointer_scale"] == pytest.approx(slot.POINTER_SCALE_INIT, rel=0.1)
@@ -489,7 +539,7 @@ def test_the_greedy_form_overfits_a_pool_and_builds_distinct_sets(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)
     torch.manual_seed(0)
-    m = trainer.build_models(replace(TINY, forms="greedy"))["greedy"]
+    m = trainer.build_models(only("greedy"))["greedy"]
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     form = forms.FORMS["greedy"]
     losses = []

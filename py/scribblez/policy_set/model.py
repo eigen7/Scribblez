@@ -1,6 +1,6 @@
 """The policy-set model's shared encoder (docs/plans/deep_bot.md, "The
-policy-set model"), which both forms build on: slot.py's slot decoder and
-greedy.py's set stage.
+policy-set model"), which every form builds on: slot.py's slot decoder,
+greedy.py's set stage and policy.py's logit.
 
 The encoder is the move set model's: the board trunk once per position, each
 candidate embedded by the move and cross-check encoders against the board

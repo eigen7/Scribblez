@@ -707,7 +707,7 @@ pins its teacher:
 - self-play: `games_per_chunk` and the `hasty_*` policy;
 - generations and held-out pools: `positions_per_generation`, `window`,
   `holdout_every` and `holdout_chunks`;
-- training: `forms` and `max_rows`.
+- training: the `train_<form>` flags and `max_rows`.
 
 ### The opponent-rack input
 
@@ -765,7 +765,7 @@ because the pool lists the candidates. The
 [opponent-rack input](#the-opponent-rack-input) comes from the pool record
 itself (`pools.Pool`), not from replay.
 
-### The two forms
+### The forms
 
 The forms are defined in the [design](deep_bot.md#the-policy-set-model);
 these are v0's choices. Both use the move set model's encoders (the board
@@ -820,18 +820,24 @@ that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
 - The loss is the coverage loss over slot prefixes, with the pool's `q(a)` as
   the label distribution, summed over `N` in {1, 2, 4, 8, 16}.
 
-### Training both forms
+**Form 3, `policy`:** a linear logit per candidate vector, softmaxed over the
+position's candidates. The loss is the cross-entropy against `q`, recorded as
+`loss_policy_ce`; its held-out value reads against the labels' mean entropy
+(`eval_label_entropy`), the floor it cannot go below.
 
-The `forms` parameter is `greedy`, `slot` or `both`.
+### Training the forms together
 
-With `both`, one trainer holds the two models, each on its own encoder, and
-trains them on the same batches: one optimizer over both, the summed loss,
-each model's gradient clipped on its own, which updates each as a separate
-optimizer would. Records carry the form as a key prefix (`loss_greedy_gain`,
-`slot_eval_recall_8`, ...), so the dashboard plots them side by side. Both
-models are move-set-sized, so one GPU holds them. The encoder's candidate
-vectors are layer-normalized; unnormalized, their scale ran away in the first
-run and drove both forms' failures.
+Each form has a flag, `train_slot`, `train_greedy` and `train_policy`; a tag
+sets at least one, and a new tag trains the policy alone by default.
+
+With more than one, one trainer holds the models, each on its own encoder, and
+trains them on the same batches: one optimizer over all of them, the summed
+loss, each model's gradient clipped on its own, which updates each as a
+separate optimizer would. Records carry the form as a key prefix
+(`loss_greedy_gain`, `slot_eval_recall_8`, ...), so the dashboard plots them
+side by side. The models are move-set-sized, so one GPU holds them all. The
+encoder's candidate vectors are layer-normalized; unnormalized, their scale
+ran away in the first run and drove the slot and greedy forms' failures.
 
 **A non-finite step stops the trainer.** Under bf16 autocast with no loss
 scaler, a non-finite loss or gradient norm is never a transient to step past,
@@ -991,10 +997,10 @@ before serving fixes the layout.
 8a. **The shared encoder and the slot form:** pool batches, the move set
    encoder reading the opponent-rack input as a scalar block beside the
    board row's, the slot decoder and its coverage loss, trained under
-   `forms`, its eval metrics beside the baseline, `kPolicySetFormatVersion`,
+   its `train_slot` flag, its eval metrics beside the baseline, `kPolicySetFormatVersion`,
    and the figure.
 8b. **The greedy form:** the set-conditioning stage and gain head, rows by
-   subset assembly, and `forms = both`.
+   subset assembly, and the two forms trained side by side.
 
 *Measure:* recall, cover, regret and tail recall against `N` for each form,
 and against static equity; time per batch of sets. This decides the form.
