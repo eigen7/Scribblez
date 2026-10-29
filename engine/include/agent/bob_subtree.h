@@ -14,41 +14,24 @@
 //
 // Every subtree of a turn races through one PoolLabeler, so their rounds share
 // launches; so do Alice's sims. Jobs are built a candidate at a time, in
-// parallel, as the labeler asks for them, so a turn never holds them all.
+// parallel (agent/subtree_search.h).
 
+#include "agent/subtree_search.h"
 #include "belief/leave_params.h"
 #include "belief/reply_query.h"
 #include "game/move.h"
 #include "game/rack.h"
 #include "lexicon/leave_value_arrays.h"
 #include "sim/hasty_rollout_task.h"
-#include "sim/pool_labeler.h"
 #include "sim/rollout_values.h"
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <vector>
 
 namespace scribblez {
 
 class Dictionary;
-
-struct SubtreeParams {
-  int alice_racks = 20;      // R_B: Alice's leaves Bob samples, one rollout each
-  int candidates = 8;        // N_B, Bob's, by static equity
-  int late_candidates = 12;  // ... with late_bag or fewer tiles in the bag
-  int late_bag = 40;
-  bool race = true;  // stop Bob's clearly beaten candidates between rounds
-};
-
-// Bob's reply at one (candidate, rack), with what the diagnostics read.
-struct BobReply {
-  Move move;
-  int equity_rank = 0;  // among Bob's candidates; 0 is HastyBot's move
-  int candidates = 1;   // how many Bob simmed (1: no sims)
-  double q = 1;         // the probability his sims gave that it is his best
-};
 
 // What the subtrees read of Alice's turn. `applied` is parallel to
 // `candidates`: each applied to the board as its sims' start
@@ -68,37 +51,22 @@ struct BeliefModel {
   const LeaveValueArrays* table = nullptr;
 };
 
-// The value of a candidate Alice did not search: it has none.
-inline constexpr double kPruned = std::numeric_limits<double>::quiet_NaN();
-
 // replies[c][i] = β(candidates[c], bob_racks[i]), for each c in `which`; the
 // other rows stay empty. `seed` keys Bob's samples and draws, by rack index.
-std::vector<std::vector<BobReply>> bob_replies(const AliceTurn& turn,
-                                               const std::vector<size_t>& which,
-                                               const BeliefModel& model, RolloutValues& values,
-                                               const SubtreeParams& params, const Dictionary& dict,
-                                               uint64_t seed);
+std::vector<std::vector<SubtreeMove>> bob_replies(const AliceTurn& turn,
+                                                  const std::vector<size_t>& which,
+                                                  const BeliefModel& model, RolloutValues& values,
+                                                  const SubtreeParams& params,
+                                                  const Dictionary& dict, uint64_t seed);
 
 // Alice's value of each candidate c in `which` from her sims after Bob's
 // replies: the mean over racks i of her win probability (a draw counting
 // half) over `sims` rollouts after β(c, i), each drawing her replenishment.
 // Other entries are kPruned.
 std::vector<double> values_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
-                                         const std::vector<std::vector<BobReply>>& replies,
+                                         const std::vector<std::vector<SubtreeMove>>& replies,
                                          RolloutValues& values, int sims, const Dictionary& dict,
                                          uint64_t seed);
-
-// Alice's sims of her candidate `applied` after Bob, holding `bob_rack`,
-// replies `reply`: her leave is seated, and each sim draws her replenishment,
-// returns the tiles of an exchange of hers, and draws Bob's, all from the bag
-// as she found it. That bag is the same whichever candidate she played, so
-// under one `seed` her candidates' sims deal each player the same tiles, as
-// far as the counts they draw allow.
-PoolJob after_reply_job(const RolloutStart& applied, const Rack& bob_rack, const Move& reply,
-                        int sims, const Dictionary& dict, uint64_t seed);
-
-// The index of the largest of `values`, skipping kPruned.
-size_t best_candidate(const std::vector<double>& values);
 
 // The racks Alice's rollouts seat for Bob: rollout i's for i < count, from the
 // group her candidates share (any of `starts`, all in `group`).

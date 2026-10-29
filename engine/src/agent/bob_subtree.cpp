@@ -1,20 +1,13 @@
 #include "agent/bob_subtree.h"
 
-#include "agent/agent.h"
 #include "belief/leave_query.h"
 #include "belief/leave_sampler.h"
 #include "lexicon/dictionary.h"
 #include "sim/pool_jobs.h"
 #include "sim/pool_labeler.h"
 #include "sim/sim_runner.h"
-#include "util/assert.h"
-#include "util/math.h"
 #include "util/work_pool.h"
 
-#include <algorithm>
-#include <cmath>
-#include <deque>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -23,33 +16,8 @@ namespace scribblez {
 
 namespace {
 
-// Seeds by rack index, one domain per use, so every candidate of Alice's meets
-// rack i's samples and draws: her candidates are compared on paired samples.
 constexpr uint64_t kSubtreeDomain = 0x5B0B5B0B5B0B5B0BULL;
 constexpr uint64_t kAfterReplyDomain = 0xA11CEA11CEA11CEULL;
-
-uint64_t rack_seed(uint64_t seed, uint64_t domain, size_t rack) {
-  return util::splitmix64(seed ^ domain ^ util::splitmix64(uint64_t(rack)));
-}
-
-// Bob to move after Alice's candidate, holding `rack`; player 0 is Bob.
-SimPosition bob_position(const RolloutStart& applied, const Rack& rack) {
-  return {.board = applied.board,
-          .scores = {applied.opp_score, applied.my_score},
-          .mover = 0,
-          .rack = rack,
-          .opp_leave = {},
-          .opp_leave_belief = nullptr};
-}
-
-// Bob's static-equity top moves at `pos`, N by the bag he sees.
-std::vector<Move> bob_candidates(const SimPosition& pos, const SubtreeParams& params,
-                                 const Dictionary& dict) {
-  const Rack hidden;
-  const int bag = pos.board.pov_bag_size(pos.rack.size());
-  const MoveRequest req{pos.board, dict, pos.rack, hidden, pos.scores[0], pos.scores[1], bag};
-  return equity_top_k(req, bag <= params.late_bag ? params.late_candidates : params.candidates);
-}
 
 // Bob's belief inputs after `candidate`, one query per rack, and the model's
 // parameters for them; both empty without a model. Each rack's sampler is
@@ -80,54 +48,6 @@ BobBeliefs bob_beliefs(const AliceTurn& turn, const Move& candidate, const Belie
   return out;
 }
 
-// Hands a labeler jobs built a chunk at a time (one of Alice's candidates),
-// remembering the order they went out in.
-class ChunkedJobs {
- public:
-  using Maker = std::function<std::vector<std::pair<size_t, PoolJob>>(size_t chunk)>;
-
-  ChunkedJobs(size_t chunks, Maker make) : chunks_(chunks), make_(std::move(make)) {}
-
-  std::optional<PoolJob> next();
-  // The keys of the jobs handed out, in order.
-  const std::vector<size_t>& keys() const { return keys_; }
-
- private:
-  size_t chunks_;
-  size_t chunk_ = 0;
-  Maker make_;
-  std::deque<std::pair<size_t, PoolJob>> buffered_;
-  std::vector<size_t> keys_;
-};
-
-std::optional<PoolJob> ChunkedJobs::next() {
-  while (buffered_.empty() && chunk_ < chunks_) {
-    for (auto& job : make_(chunk_++)) buffered_.push_back(std::move(job));
-  }
-  if (buffered_.empty()) return std::nullopt;
-  auto [key, job] = std::move(buffered_.front());
-  buffered_.pop_front();
-  keys_.push_back(key);
-  return std::move(job);
-}
-
-// Labels every job `jobs` hands out, calling done(key, record) in order.
-void label_all(RolloutValues& values, const PoolLabeler::Params& params, ChunkedJobs& jobs,
-               const std::function<void(size_t, const PoolPosition&)>& done) {
-  PoolLabeler labeler(values, params);
-  size_t emitted = 0;
-  labeler.run([&] { return jobs.next(); },
-              [&](PoolPosition&& p) { done(jobs.keys()[emitted++], p); });
-}
-
-BobReply reply_from(const std::vector<Move>& moves, const PoolPosition& labeled) {
-  const std::vector<PoolLabel>& labels = labeled.labels;
-  const auto best = std::max_element(
-    labels.begin(), labels.end(), [](const PoolLabel& a, const PoolLabel& b) { return a.q < b.q; });
-  const size_t k = size_t(best - labels.begin());
-  return {.move = moves[k], .equity_rank = int(k), .candidates = int(moves.size()), .q = best->q};
-}
-
 // One of Alice's candidates' subtrees: the jobs of the racks where Bob has a
 // choice to sim, keyed by rack index, and the replies of the others in place.
 struct CandidateSubtrees {
@@ -137,21 +57,21 @@ struct CandidateSubtrees {
 
 CandidateSubtrees candidate_subtrees(const AliceTurn& turn, size_t c, const BeliefModel& model,
                                      const SubtreeParams& params, const Dictionary& dict,
-                                     uint64_t seed, std::vector<BobReply>& replies) {
+                                     uint64_t seed, std::vector<SubtreeMove>& replies) {
   const auto beliefs = bob_beliefs(turn, turn.candidates[c], model, dict);
   const size_t racks = turn.bob_racks.size();
   CandidateSubtrees out{.jobs = {}, .moves = std::vector<std::vector<Move>>(racks)};
   std::vector<std::optional<PoolJob>> jobs(racks);
   util::parallel_for(racks, [&](size_t i) {
-    const SimPosition pos = bob_position(turn.applied[c], turn.bob_racks[i]);
-    out.moves[i] = bob_candidates(pos, params, dict);
+    const SimPosition pos = mover_position(turn.applied[c], turn.bob_racks[i]);
+    out.moves[i] = mover_candidates(pos, params, dict);
     if (out.moves[i].size() <= 1) {
       replies[i] = {.move = out.moves[i].empty() ? Move::pass() : out.moves[i].front()};
       return;
     }
     const auto belief = beliefs.sampler(i, *model.table);
     jobs[i] = position_job(pos, out.moves[i], rack_seed(seed, kSubtreeDomain, i), belief.get(),
-                           dict, params.alice_racks);
+                           dict, params.opp_racks);
   });
   for (size_t i = 0; i < racks; ++i)
     if (jobs[i]) out.jobs.emplace_back(i, std::move(*jobs[i]));
@@ -159,25 +79,6 @@ CandidateSubtrees candidate_subtrees(const AliceTurn& turn, size_t c, const Beli
 }
 
 }  // namespace
-
-PoolJob after_reply_job(const RolloutStart& applied, const Rack& bob_rack, const Move& reply,
-                        int sims, const Dictionary& dict, uint64_t seed) {
-  PoolJob job = position_job(bob_position(applied, bob_rack), {reply}, seed, nullptr, dict, sims);
-  // Bob's unseen pool less her leave, which the sims seat, and her exchanged
-  // tiles, which went back only after she drew: the bag as she found it.
-  const bool unseen = job.group.pool.remove(applied.returned.counts());
-  DEBUG_ASSERT(unseen, "Alice's exchanged tiles are unseen to Bob");
-  job.group.opp_leaves.assign(size_t(sims), applied.leave);
-  job.starts[0].opp_returned = applied.returned;
-  return job;
-}
-
-size_t best_candidate(const std::vector<double>& values) {
-  size_t best = values.size();
-  for (size_t c = 0; c < values.size(); ++c)
-    if (!std::isnan(values[c]) && (best == values.size() || values[c] > values[best])) best = c;
-  return best;
-}
 
 std::vector<Rack> bob_racks(const RolloutGroup& group, const RolloutStart& start, int count) {
   RolloutBatch batch{.groups = {group}, .starts = {start}, .tasks = {}};
@@ -189,12 +90,12 @@ std::vector<Rack> bob_racks(const RolloutGroup& group, const RolloutStart& start
   return out;
 }
 
-std::vector<std::vector<BobReply>> bob_replies(const AliceTurn& turn,
-                                               const std::vector<size_t>& which,
-                                               const BeliefModel& model, RolloutValues& values,
-                                               const SubtreeParams& params, const Dictionary& dict,
-                                               uint64_t seed) {
-  std::vector<std::vector<BobReply>> replies(turn.candidates.size());
+std::vector<std::vector<SubtreeMove>> bob_replies(const AliceTurn& turn,
+                                                  const std::vector<size_t>& which,
+                                                  const BeliefModel& model, RolloutValues& values,
+                                                  const SubtreeParams& params,
+                                                  const Dictionary& dict, uint64_t seed) {
+  std::vector<std::vector<SubtreeMove>> replies(turn.candidates.size());
   for (size_t c : which) replies[c].resize(turn.bob_racks.size());
   // Bob's candidates by (candidate, rack), kept until the labels come back.
   std::vector<std::vector<std::vector<Move>>> moves(turn.candidates.size());
@@ -205,17 +106,17 @@ std::vector<std::vector<BobReply>> bob_replies(const AliceTurn& turn,
     for (auto& [i, job] : made.jobs) i += c * turn.bob_racks.size();
     return std::move(made.jobs);
   });
-  label_all(values, {.rollouts = params.alice_racks, .race = params.race}, jobs,
+  label_all(values, {.rollouts = params.opp_racks, .race = params.race}, jobs,
             [&](size_t key, const PoolPosition& p) {
               const size_t c = key / turn.bob_racks.size();
               const size_t i = key % turn.bob_racks.size();
-              replies[c][i] = reply_from(moves[c][i], p);
+              replies[c][i] = chosen_move(moves[c][i], p);
             });
   return replies;
 }
 
 std::vector<double> values_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
-                                         const std::vector<std::vector<BobReply>>& replies,
+                                         const std::vector<std::vector<SubtreeMove>>& replies,
                                          RolloutValues& values, int sims, const Dictionary& dict,
                                          uint64_t seed) {
   const size_t racks = turn.bob_racks.size();

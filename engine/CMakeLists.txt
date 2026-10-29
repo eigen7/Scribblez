@@ -74,6 +74,7 @@ add_library(scribblez_core STATIC
   src/agent/best_bot.cpp
   src/agent/deep_bot.cpp
   src/agent/bob_subtree.cpp
+  src/agent/subtree_search.cpp
   src/agent/subtree_dump.cpp
   src/agent/candidate_evaluator.cpp
   # A GPU-free decorator over the EvalService interface, so it lives here and is

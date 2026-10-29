@@ -57,7 +57,7 @@ DeepBot::Params small_params(uint64_t seed, const std::string& reply = "subtree"
                     .bob_racks = 3,
                     .sims_per_rack = 2,
                     .seed = seed};
-  p.subtree = {.alice_racks = 3, .candidates = 2, .late_candidates = 2};
+  p.subtree = {.opp_racks = 3, .candidates = 2, .late_candidates = 2};
   return p;
 }
 

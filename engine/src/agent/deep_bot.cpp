@@ -57,7 +57,7 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "0 = all")  //
     ("sims-per-rack", po::value<int>(&p.sims_per_rack)->default_value(p.sims_per_rack),
      "subtree: Alice's sims after Bob's reply at each rack, each drawing her replenishment")  //
-    ("alice-racks", po::value<int>(&p.subtree.alice_racks)->default_value(p.subtree.alice_racks),
+    ("alice-racks", po::value<int>(&p.subtree.opp_racks)->default_value(p.subtree.opp_racks),
      "subtree: leaves Bob samples for Alice, one sim of each of his candidates per leave")  //
     ("bob-candidates", po::value<int>(&p.subtree.candidates)->default_value(p.subtree.candidates),
      "subtree: Bob's candidates by static equity")  //
@@ -99,7 +99,7 @@ void validate(const DeepBot::Params& p) {
   if (p.rollouts < 1) throw util::CleanException("deepbot: --rollouts must be >= 1");
   if (p.reply != "subtree" && p.reply != "hasty")
     throw util::CleanException("deepbot: --reply must be subtree or hasty");
-  if (p.bob_racks < 1 || p.sims_per_rack < 1 || p.subtree.alice_racks < 1)
+  if (p.bob_racks < 1 || p.sims_per_rack < 1 || p.subtree.opp_racks < 1)
     throw util::CleanException(
       "deepbot: --bob-racks, --sims-per-rack and --alice-racks must be >= 1");
   if (!p.subtree_dump.empty() && p.reply != "subtree")
@@ -212,7 +212,7 @@ std::vector<size_t> DeepBot::survivors(const std::vector<Move>& moves,
 
 std::vector<double> DeepBot::subtree_values(
   const MoveRequest& req, const AliceTurn& turn, const std::vector<PoolLabel>& hasty,
-  const std::vector<size_t>& searched, const std::vector<std::vector<BobReply>>& replies) const {
+  const std::vector<size_t>& searched, const std::vector<std::vector<SubtreeMove>>& replies) const {
   std::vector<double> values = values_after_replies(turn, searched, replies, *backend_.values,
                                                     params_.sims_per_rack, req.dict, turn_seed());
   for (size_t c = 0; c < turn.candidates.size(); ++c)
@@ -222,7 +222,7 @@ std::vector<double> DeepBot::subtree_values(
 
 void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn,
                         const std::vector<PoolLabel>& hasty, const std::vector<size_t>& searched,
-                        const std::vector<std::vector<BobReply>>& replies,
+                        const std::vector<std::vector<SubtreeMove>>& replies,
                         const std::vector<double>& values) const {
   const auto rerun = bob_replies(turn, searched, bob_belief_model(), *backend_.values,
                                  params_.subtree, req.dict, turn_seed() ^ kRerunSeed);

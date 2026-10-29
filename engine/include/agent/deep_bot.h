@@ -125,10 +125,10 @@ class DeepBot : public Agent {
   std::vector<double> subtree_values(const MoveRequest& req, const AliceTurn& turn,
                                      const std::vector<PoolLabel>& hasty,
                                      const std::vector<size_t>& searched,
-                                     const std::vector<std::vector<BobReply>>& replies) const;
+                                     const std::vector<std::vector<SubtreeMove>>& replies) const;
   void dump_turn(const MoveRequest& req, const AliceTurn& turn, const std::vector<PoolLabel>& hasty,
                  const std::vector<size_t>& searched,
-                 const std::vector<std::vector<BobReply>>& replies,
+                 const std::vector<std::vector<SubtreeMove>>& replies,
                  const std::vector<double>& values) const;
   BeliefModel bob_belief_model() const { return {backend_.predict, backend_.table.get()}; }
 

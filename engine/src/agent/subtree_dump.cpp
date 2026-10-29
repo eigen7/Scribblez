@@ -26,9 +26,9 @@ json::value subtree_value(double v) {
 }
 
 // Bob's most frequent replies over the racks, most frequent first.
-json::array top_replies(const std::vector<BobReply>& replies, const Board& board) {
+json::array top_replies(const std::vector<SubtreeMove>& replies, const Board& board) {
   std::map<std::string, std::pair<int, int>> seen;  // move -> (count, equity rank)
-  for (const BobReply& r : replies) {
+  for (const SubtreeMove& r : replies) {
     auto& [count, rank] = seen[describe_move(r.move, board)];
     ++count;
     rank = r.equity_rank;
@@ -46,14 +46,14 @@ json::array top_replies(const std::vector<BobReply>& replies, const Board& board
 }
 
 // What Bob's replies to one of Alice's candidates looked like.
-json::object reply_summary(const std::vector<BobReply>& replies, const std::vector<BobReply>& rerun,
-                           const Board& board) {
+json::object reply_summary(const std::vector<SubtreeMove>& replies,
+                           const std::vector<SubtreeMove>& rerun, const Board& board) {
   json::array rank_hist;
   double mean_q = 0;
   int hasty = 0;
   int agree = 0;
   for (size_t i = 0; i < replies.size(); ++i) {
-    const BobReply& r = replies[i];
+    const SubtreeMove& r = replies[i];
     if (size_t(r.equity_rank) >= rank_hist.size()) rank_hist.resize(size_t(r.equity_rank) + 1, 0);
     rank_hist[size_t(r.equity_rank)] = rank_hist[size_t(r.equity_rank)].as_int64() + 1;
     mean_q += r.q / double(replies.size());
