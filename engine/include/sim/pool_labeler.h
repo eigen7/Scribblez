@@ -7,11 +7,12 @@
 //
 // A round is a slice of rollout indices for every candidate still in the
 // race; the race rule runs between rounds, at the CPU simmer's checkpoints
-// (sim/candidate_race.h). Many positions are in flight at once, and each
-// launch takes the pending rounds of as many as fill it, so the device stays
-// busy while each race narrows. A task's outcome depends only on its start
-// and rollout index, so the labels do not depend on how rounds share
-// launches.
+// (sim/candidate_race.h). The pass is never stopped: its win probability is
+// the baseline of the pool's stakes (the best move's over the pass's, which
+// the policy-set trainer weights its loss by), so it runs every rollout. Many positions are in
+// flight at once, and each launch takes the pending rounds of as many as fill it, so the device
+// stays busy while each race narrows. A task's outcome depends only on its start and rollout index,
+// so the labels do not depend on how rounds share launches.
 
 #include "data/pool_log.h"
 #include "sim/candidate_race.h"
@@ -71,8 +72,9 @@ class PoolLabeler {
     PoolJob job;
     CandidateRollouts rollouts;
     std::vector<size_t> alive;
-    size_t round = 0;                              // index into checkpoints_ of the round running
-    int done = 0;                                  // rollouts every alive candidate has
+    std::vector<char> keep;  // parallel to rollouts: candidates the race never stops
+    size_t round = 0;        // index into checkpoints_ of the round running
+    int done = 0;            // rollouts every alive candidate has
     std::deque<rollout_abi::RolloutTask> pending;  // position = the candidate
     int outstanding = 0;                           // launched, not yet back
     bool finished = false;
