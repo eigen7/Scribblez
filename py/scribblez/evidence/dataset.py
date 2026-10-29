@@ -330,7 +330,7 @@ class TrajectoryDataset:
         scalar = np.ascontiguousarray(
             rows[:, self._spatial_floats : self._spatial_floats + self._scalar_width]
         )
-        all_moves = np.concatenate([pos.sobs.moves for pos in positions])
+        all_moves = inputs["moves"]
         dense_obs = [pos.obs.densify() for pos in positions]
         all_obs = np.concatenate(dense_obs)
         counts = [len(pos.sobs.moves) for pos in positions]

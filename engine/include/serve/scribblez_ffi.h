@@ -196,7 +196,8 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
 // and equities, are those of the transposed position, and out_moves holds its
 // candidates transposed (Move::transpose), for the caller to encode their tiles
 // in the same frame. Other positions' moves are copied through unchanged.
-// Returns 0 on success, -1 on an I/O or header error or a missing out_moves.
+// Returns 0 on success, -1 on an I/O or header error or on only one of
+// transposes / out_moves given.
 int scribblez_move_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
                                  const int64_t* turn_idx, const int64_t* move_counts,
                                  int64_t n_positions, const void* moves, float* out_rows,

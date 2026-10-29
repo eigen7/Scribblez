@@ -88,11 +88,6 @@ class PoolBatcher:
             equities=True,
             transposes=transposes,
         )
-        moves = (
-            inputs["moves"]
-            if transposes is not None
-            else np.concatenate([it.pool.moves for it in items])
-        )
         rows = inputs["rows"]
         spatial = rows[:, : self.spatial_floats].reshape(len(items), *self.spatial_shape)
         scalar = np.ascontiguousarray(
@@ -102,7 +97,7 @@ class PoolBatcher:
             [np.full(len(it.pool.moves), j, dtype=np.int64) for j, it in enumerate(items)]
         )
         pre_diff = np.rint(scalar[:, self.sd_index] * self.sd_scale).astype(np.int32)
-        enc = move_enc.encode_moves(moves, pre_diff[pos_id])
+        enc = move_enc.encode_moves(inputs["moves"], pre_diff[pos_id])
         labels = {
             name: torch.from_numpy(np.concatenate([getattr(it.pool, name) for it in items]))
             for name in ("q", "win_prob", "equity_rank")

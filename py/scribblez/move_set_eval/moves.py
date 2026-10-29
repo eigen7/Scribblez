@@ -59,7 +59,8 @@ def batch_move_set_positions(
     .slog `slogs[file_id]`, and its candidates `moves[j]`. One call per file;
     "rows" follow the batch's position order, and "cells" / "letters" its
     flattened moves, position-major, as do "equities" when asked for and
-    "moves" (each position's candidates in its frame) with `transposes`."""
+    "moves", each position's candidates in its frame (transposed where
+    `transposes` is set)."""
     counts = np.array([len(m) for m in moves], dtype=np.int64)
     starts = np.cumsum(counts) - counts
     total = int(counts.sum())
@@ -71,8 +72,8 @@ def batch_move_set_positions(
     }
     if equities:
         out["equities"] = np.zeros(total, dtype=np.float32)
-    if transposes is not None:
-        out["moves"] = np.concatenate(moves)
+    out["moves"] = np.concatenate(moves)
+    flips = None if transposes is None else np.asarray(transposes)
     by_file: dict[int, list[int]] = defaultdict(list)
     for j, (file_id, _, _) in enumerate(positions):
         by_file[file_id].append(j)
@@ -84,7 +85,7 @@ def batch_move_set_positions(
             counts[js],
             np.concatenate([moves[j] for j in js]),
             equities=equities,
-            transposes=None if transposes is None else np.asarray(transposes)[js],
+            transposes=None if flips is None else flips[js],
         )
         out["rows"][js] = got["rows"]
         move_rows = np.concatenate([np.arange(starts[j], starts[j] + counts[j]) for j in js])
@@ -92,7 +93,7 @@ def batch_move_set_positions(
         out["letters"][move_rows] = got["letters"]
         if equities:
             out["equities"][move_rows] = got["equities"]
-        if transposes is not None:
+        if flips is not None:
             out["moves"][move_rows] = got["moves"]
     return out
 

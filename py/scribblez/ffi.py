@@ -870,7 +870,7 @@ def move_set_positions(
     legal letters. With `equities`, also "equities" (M,) float32, each move's
     HastyBot static equity at its decision point, the opponent's leave hidden.
     With `transposes` (P,) bool, position j where it is set is encoded as the
-    transposed position (Board::transpose), cross-checks and equities
+    transposed position (the board's diagonal symmetry), cross-checks and equities
     included, and "moves" (M,) MOVE_DTYPE returns every candidate in its
     position's frame: transposed there, as given elsewhere.
     """
