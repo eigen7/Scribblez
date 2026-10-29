@@ -338,7 +338,7 @@ LEAF_EVAL_QUALITY = [
 # policy_set/metrics.py's SET_SIZES, copied: importing it would load the engine
 # library (policy_set/pools.py reads format_layout at import).
 POLICY_SET_SIZES = (1, 2, 4, 8, 16)
-POLICY_SET_FORMS = ("slot", "greedy", "equity")
+POLICY_SET_FORMS = ("slot", "greedy", "policy", "equity")
 POLICY_SET_QUALITY = (
     [
         (
@@ -371,19 +371,35 @@ POLICY_SET_QUALITY = (
             "Greedy form: gain loss (training, held-out)",
             ["loss_greedy_gain", "greedy_eval_loss_gain"],
         ),
-        ("ms to build 256 sets of 8", ["slot_eval_set_ms", "greedy_eval_set_ms"]),
+        # The labels' entropy is the floor no policy's cross-entropy goes below.
+        (
+            "Policy form: cross-entropy against q (training, held-out) and the labels' entropy",
+            ["loss_policy_ce", "policy_eval_loss_ce", "eval_label_entropy"],
+        ),
+        (
+            "Policy form: the policy's entropy and the labels' (held-out, nats)",
+            ["policy_eval_entropy", "eval_label_entropy"],
+        ),
+        (
+            "ms to build 256 sets of 8",
+            ["slot_eval_set_ms", "greedy_eval_set_ms", "policy_eval_set_ms"],
+        ),
         # Per form: each form's gradient is clipped on its own.
         (
             "Gradient norm before clipping, by form",
-            ["grad_norm_slot", "grad_norm_greedy"],
+            ["grad_norm_slot", "grad_norm_greedy", "grad_norm_policy"],
             {"log": True},
         ),
         # Health: a divergence shows as a growing norm, a dead or collapsed
         # head as a spread near 0.
-        ("Parameter norm, by form", ["param_norm_slot", "param_norm_greedy"], {"log": True}),
+        (
+            "Parameter norm, by form",
+            ["param_norm_slot", "param_norm_greedy", "param_norm_policy"],
+            {"log": True},
+        ),
         (
             "Score spread over a position's candidates (held-out)",
-            ["slot_eval_spread", "greedy_eval_spread"],
+            ["slot_eval_spread", "greedy_eval_spread", "policy_eval_spread"],
         ),
         ("Slot form: pointer scale", ["slot_eval_pointer_scale"]),
         ("Pools", ["pools", "eval_pools"]),

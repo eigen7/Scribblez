@@ -1,7 +1,7 @@
 """The policy-set model's forms as the trainer drives them
-(docs/plans/deep_bot_v0.md, "Training both forms"): each builds its model on
+(docs/plans/deep_bot_v0.md, "Training the forms together"): each builds its model on
 its own encoder, computes its training loss terms on a batch, and builds sets.
-The `forms` param picks one, or "both".
+The `forms` param picks one, "both" (slot and greedy) or "all".
 """
 
 from collections.abc import Callable
@@ -11,7 +11,16 @@ import numpy as np
 import torch
 from torch import nn
 
-from scribblez.policy_set import FORM_BOTH, FORM_GREEDY, FORM_SLOT, greedy, slot
+from scribblez.policy_set import (
+    FORM_ALL,
+    FORM_BOTH,
+    FORM_GREEDY,
+    FORM_POLICY,
+    FORM_SLOT,
+    greedy,
+    policy,
+    slot,
+)
 from scribblez.policy_set.model import PolicySetEncoder
 
 Batch = dict[str, torch.Tensor]
@@ -59,12 +68,25 @@ def _greedy_loss(model, batch: Batch, params, rng) -> dict[str, torch.Tensor]:
     return {"gain": greedy.gain_loss(model, batch, rows)}
 
 
+def _policy_build(encoder: PolicySetEncoder, params) -> nn.Module:
+    return policy.PolicyModel(encoder)
+
+
+def _policy_loss(model, batch: Batch, params, rng) -> dict[str, torch.Tensor]:
+    return {"ce": policy.policy_loss(model, batch)}
+
+
 FORMS = {
     FORM_SLOT: Form(_slot_build, _slot_loss, _slot_sets, slot.slot_diagnostics),
     FORM_GREEDY: Form(_greedy_build, _greedy_loss, greedy.greedy_picks, greedy.greedy_diagnostics),
+    FORM_POLICY: Form(_policy_build, _policy_loss, policy.policy_picks, policy.policy_diagnostics),
 }
 
 
 def selected(forms: str) -> tuple[str, ...]:
     """The forms the `forms` param names."""
-    return (FORM_SLOT, FORM_GREEDY) if forms == FORM_BOTH else (forms,)
+    if forms == FORM_BOTH:
+        return (FORM_SLOT, FORM_GREEDY)
+    if forms == FORM_ALL:
+        return tuple(FORMS)
+    return (forms,)

@@ -130,7 +130,8 @@ class PolicySetParams(PoolLabelParams):
     # The model.
     forms: str = param(
         FORM_BOTH,
-        "which forms of the policy-set model to train: 'slot', 'greedy', or 'both' side by side",
+        "which forms of the policy-set model to train: 'slot', 'greedy', 'policy', 'both' (slot "
+        "and greedy side by side) or 'all'",
         choices=FORM_CHOICES,
     )
     trunk_channels: int = param(128, "board trunk and candidate vector width")
