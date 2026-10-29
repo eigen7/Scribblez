@@ -190,11 +190,18 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
 //   out_equities float[n_moves], or null to skip: each move's HastyBot static
 //                equity at its decision point, with the opponent's leave
 //                hidden
-// Returns 0 on success, -1 on an I/O or header error.
+// `transposes` (uint8[n_positions]) and `out_moves` (Move[n_moves]) come
+// together or are both null. Position j with transposes[j] != 0 is encoded
+// transposed (RowAugment::transpose): its row, and its candidates' cross-checks
+// and equities, are those of the transposed position, and out_moves holds its
+// candidates transposed (Move::transpose), for the caller to encode their tiles
+// in the same frame. Other positions' moves are copied through unchanged.
+// Returns 0 on success, -1 on an I/O or header error or a missing out_moves.
 int scribblez_move_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
                                  const int64_t* turn_idx, const int64_t* move_counts,
                                  int64_t n_positions, const void* moves, float* out_rows,
-                                 int32_t* out_cells, uint8_t* out_letters, float* out_equities);
+                                 int32_t* out_cells, uint8_t* out_letters, float* out_equities,
+                                 const uint8_t* transposes, void* out_moves);
 
 // The cross-check outputs of scribblez_move_set_positions for the `n` moves of
 // one position-set GCG's decision point (read as scribblez_gcg_position_inputs

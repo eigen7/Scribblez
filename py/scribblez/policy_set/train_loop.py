@@ -28,6 +28,11 @@ from scribblez.policy_set.forms import FORMS
 # The batch eval_set_ms times: this many sets at this N.
 SET_TIMING_POSITIONS = 256
 SET_TIMING_N = 8
+# The share of training positions encoded transposed: the board is symmetric
+# under the diagonal transpose, so a transposed position is another, equally
+# real one, and half of each batch doubles the positions the model sees. The
+# held-out eval reads positions as they were played.
+TRANSPOSE_SHARE = 0.5
 # Seeds the held-out loss's random parts (the greedy form's chosen sets), so
 # generations are compared on the same rows.
 EVAL_SEED = 0
@@ -82,7 +87,8 @@ def run_epoch(
     t0 = last = time.time()
     for idx in batch_order(len(items), params.batch_size, seed):
         chosen = [items[i] for i in idx]
-        batch = to_device(batcher.build(chosen), device)
+        transposes = rng.random(len(chosen)) < TRANSPOSE_SHARE
+        batch = to_device(batcher.build(chosen, transposes), device)
         rows_trained += len(idx)
         n_rows += len(idx)
         if lr_fn is not None:
