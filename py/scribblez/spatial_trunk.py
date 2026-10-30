@@ -131,7 +131,7 @@ class SpatialTrunk(nn.Module):
     small-batch steps its two weight matrices can grow until it outweighs the
     batch-normalized stem by orders of magnitude, and the board's features drown
     in the sum (a policy_set run went from 1x to 8e4x and collapsed to a uniform
-    policy). Off, the trunk keeps the parameter set existing checkpoints hold.
+    policy). Tags trained before it existed run with it off.
     """
 
     def __init__(
@@ -145,7 +145,7 @@ class SpatialTrunk(nn.Module):
         transformer: TransformerConfig | None = None,
         registers: nn.Module | None = None,
         board_size: int = 15,
-        normalize_scalar: bool = False,
+        normalize_scalar: bool = True,
     ):
         super().__init__()
         self.use_film = use_film

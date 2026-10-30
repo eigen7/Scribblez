@@ -232,6 +232,7 @@ class MoveSetEvalModel(nn.Module):
         board_size: int = 15,
         lexicon_module: nn.Module | None = None,
         transformer: TransformerConfig | None = None,
+        normalize_scalar: bool = True,
     ):
         super().__init__()
         self.board_size = board_size
@@ -249,6 +250,7 @@ class MoveSetEvalModel(nn.Module):
             transformer=transformer,
             registers=(TileSupplyRegisters(trunk_channels, scalar_size) if transformer else None),
             board_size=board_size,
+            normalize_scalar=normalize_scalar,
         )
         _, num_scalars, letter_vocab, cells = move_encoding_dims()
         # Flattening the board map loses grid identity. A learned per-square

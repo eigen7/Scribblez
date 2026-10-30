@@ -93,6 +93,7 @@ def build_encoder(params) -> PolicySetEncoder:
         params.trunk_channels,
         params.num_blocks,
         params.num_heads,
+        params.normalize_scalar,
     )
 
 

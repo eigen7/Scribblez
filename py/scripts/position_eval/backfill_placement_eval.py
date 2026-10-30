@@ -66,6 +66,7 @@ def _build_model(params, device) -> tuple[PositionEvalModel, int]:
         trunk_channels=params.trunk_channels,
         use_film=params.use_film,
         transformer=transformer_config(dataclasses.asdict(params)),
+        normalize_scalar=params.normalize_scalar,
     ).to(device)
     return model, shapes["input_spatial"][0]
 

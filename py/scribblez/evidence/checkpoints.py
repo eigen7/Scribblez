@@ -28,6 +28,7 @@ STUDENT_CONFIG_KEYS = (
     "num_blocks",
     "num_heads",
     "trunk",
+    "normalize_scalar",
     "transformer_mid_channels",
     "transformer_heads",
     "transformer_ffn_channels",
@@ -57,6 +58,7 @@ def build_model(student_cfg: dict) -> MoveSetEvalModel:
         num_blocks=student_cfg["num_blocks"],
         num_heads=student_cfg["num_heads"],
         transformer=transformer_config(student_cfg),
+        normalize_scalar=student_cfg["normalize_scalar"],
     )
 
 

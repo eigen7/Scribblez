@@ -60,6 +60,7 @@ class PolicySetEncoder(nn.Module):
         channels: int,
         num_blocks: int,
         num_heads: int,
+        normalize_scalar: bool = True,
     ):
         super().__init__()
         # The opponent-rack input rides beside the board row's scalars.
@@ -68,7 +69,7 @@ class PolicySetEncoder(nn.Module):
             scalar_size + OPP_RACK_FLOATS,
             channels,
             num_blocks,
-            normalize_scalar=True,
+            normalize_scalar=normalize_scalar,
         )
         _, num_scalars, letter_vocab, cells = move_encoding_dims()
         self.board_pos_emb = nn.Parameter(torch.zeros(cells, channels))

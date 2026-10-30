@@ -63,6 +63,7 @@ class LeafEvalShape:
     width: int  # channels
     depth: int  # transformer layers, or conv residual blocks
     num_heads: int  # transformer only
+    normalize_scalar: bool = True  # conv only (SpatialTrunk's)
 
     def spatial_planes_used(self) -> int:
         return LAYOUT["join_plane0"] + (LAYOUT["join_planes"] if self.join_planes else 0)
@@ -150,7 +151,11 @@ class ConvTrunk(nn.Module):
     def __init__(self, shape: LeafEvalShape):
         super().__init__()
         self.tower = SpatialTrunk(
-            shape.spatial_planes_used(), SCALAR_FEATURES, shape.width, shape.depth
+            shape.spatial_planes_used(),
+            SCALAR_FEATURES,
+            shape.width,
+            shape.depth,
+            normalize_scalar=shape.normalize_scalar,
         )
 
     def forward(self, spatial: torch.Tensor, features: torch.Tensor) -> torch.Tensor:

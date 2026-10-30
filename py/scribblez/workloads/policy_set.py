@@ -41,6 +41,7 @@ from scribblez.leave_inference import forgone
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
 from scribblez.policy_set import FORM_NAMES, POOL_SUFFIX
+from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP
 from scribblez.workloads.base import (
     RoleSpec,
     StatsSpec,
@@ -139,6 +140,7 @@ class PolicySetParams(PoolLabelParams):
     )
     trunk_channels: int = param(128, "board trunk and candidate vector width")
     num_blocks: int = param(8, "board trunk residual blocks")
+    normalize_scalar: bool = param(True, NORMALIZE_SCALAR_HELP)
     num_heads: int = param(4, "attention heads")
     slots: int = param(16, "slot form: query slots, the largest set it builds")
     slot_layers: int = param(2, "slot form: decoder layers")

@@ -55,7 +55,7 @@ from scribblez.move_set_eval.targets import complete_pairs, partition_full_sweep
 from scribblez.params import param
 from scribblez.paths import POSITION_EVAL, TagPaths
 from scribblez.selfplay import hasty_player_spec, run_games
-from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
+from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP, TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
 from scribblez.workloads import mset_targets, pair_store
 from scribblez.workloads.base import (
     RoleSpec,
@@ -222,6 +222,7 @@ class MoveSetEvalParams:
     )
     num_blocks: int = param(10, "board-trunk residual blocks")
     trunk_channels: int = param(192, "board-trunk width")
+    normalize_scalar: bool = param(True, NORMALIZE_SCALAR_HELP)
     trunk: str = param(
         TRUNK_CONV,
         "board-trunk tower (scribblez/spatial_trunk.py): 'conv' is a residual conv tower; "

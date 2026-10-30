@@ -99,12 +99,19 @@ class MaxMovePerLaneModel(nn.Module):
         n_score_bins: int = N_SCORE_BINS,
         lexicon_module: LexiconModule | None = None,
         lane_ffn_mult: int | None = None,
+        normalize_scalar: bool = True,
     ):
         super().__init__()
         self.n_rack_tokens = n_rack_tokens
         self.n_score_bins = n_score_bins
 
-        self.trunk = SpatialTrunk(spatial_planes, scalar_size, trunk_channels, num_blocks)
+        self.trunk = SpatialTrunk(
+            spatial_planes,
+            scalar_size,
+            trunk_channels,
+            num_blocks,
+            normalize_scalar=normalize_scalar,
+        )
 
         # Rack tokens, prepended to every lane. They read the raw per-tile rack
         # counts (the whole scalar input) because exact counts matter: "can I play

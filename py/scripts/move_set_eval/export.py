@@ -54,6 +54,7 @@ def main() -> int:
         num_blocks=config["num_blocks"],
         num_heads=config["num_heads"],
         transformer=transformer_config(config),
+        normalize_scalar=config["normalize_scalar"],
     )
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()

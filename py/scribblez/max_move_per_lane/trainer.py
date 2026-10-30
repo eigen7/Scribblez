@@ -241,6 +241,7 @@ def run(ctx: WorkerContext) -> int:
         n_rack_tokens=params.rack_tokens,
         lexicon_module=lexicon_module,
         lane_ffn_mult=lane_ffn_mult,
+        normalize_scalar=params.normalize_scalar,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
