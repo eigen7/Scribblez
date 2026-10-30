@@ -47,6 +47,9 @@ class LeaveHistoryRecorder {
   // The owner's last two moves before now, most recent first: what ReplyView
   // reads as the chooser's earlier moves.
   std::vector<ChooserMove> own_moves(const Dictionary& dict);
+  // The opponent's last two moves, most recent first: ReplyView's earlier
+  // moves when the opponent is the chooser.
+  std::vector<ChooserMove> opponent_moves(const Dictionary& dict);
 
  private:
   struct Seen {
@@ -58,6 +61,9 @@ class LeaveHistoryRecorder {
   };
 
   const ForgonePlays& forgone(int k, const Dictionary& dict);
+  // Move `first` and its mover's moves before it, most recent first, as many
+  // as ReplyView reads.
+  std::vector<ChooserMove> moves_from(int first, const Dictionary& dict);
   // The history slot for the opponent's move `k`, its mask read from the
   // owner's rack at their next turn.
   LeaveHistorySlot opponent_slot(int k, const Dictionary& dict);

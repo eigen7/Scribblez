@@ -80,10 +80,12 @@ Move unpack_move(const rollout_abi::PackedMove& p);
 // "8H ACROSS word 32", "exch ABC", or "pass"; `board` as before the move.
 std::string describe_move(const Move& m, const Board& board);
 
-// The racks a task draws, in the ABI's order: the opponent's, then ours.
+// The racks a task draws, in the ABI's order: the opponent's, then ours, and
+// the tiles left in the bag after both.
 struct RolloutRacks {
   Rack opp;
   Rack mine;
+  int bag = 0;
 };
 RolloutRacks rollout_racks(const RolloutBatch& batch, const rollout_abi::RolloutTask& task);
 

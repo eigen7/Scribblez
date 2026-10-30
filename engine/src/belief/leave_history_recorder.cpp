@@ -99,9 +99,16 @@ LeaveQuery LeaveHistoryRecorder::own_query(const MoveRequest& req) {
 }
 
 std::vector<ChooserMove> LeaveHistoryRecorder::own_moves(const Dictionary& dict) {
+  return moves_from(int(seen_.size()) - 2, dict);
+}
+
+std::vector<ChooserMove> LeaveHistoryRecorder::opponent_moves(const Dictionary& dict) {
+  return moves_from(int(seen_.size()) - 1, dict);
+}
+
+std::vector<ChooserMove> LeaveHistoryRecorder::moves_from(int first, const Dictionary& dict) {
   std::vector<ChooserMove> out;
-  const int turn = int(seen_.size());
-  for (int k = turn - 2; k >= 0 && out.size() < LeaveHistory::kSlots - 1; k -= 2) {
+  for (int k = first; k >= 0 && out.size() < LeaveHistory::kSlots - 1; k -= 2) {
     const Seen& s = seen_[size_t(k)];
     out.push_back({s.move, s.before, s.bag_before, forgone(k, dict)});
   }

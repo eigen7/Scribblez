@@ -35,8 +35,8 @@ struct SubtreeTurn {
   std::vector<bool> searched;  // by candidate: Bob's subtree ran
   std::vector<double> subtree_values;
   std::vector<double> hasty_values;
-  const std::vector<std::vector<BobReply>>* replies = nullptr;
-  const std::vector<std::vector<BobReply>>* rerun = nullptr;  // the second seed's
+  const std::vector<std::vector<SubtreeMove>>* replies = nullptr;
+  const std::vector<std::vector<SubtreeMove>>* rerun = nullptr;  // the second seed's
 };
 
 std::string subtree_turn_json(const SubtreeTurn& t);

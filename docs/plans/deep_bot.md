@@ -258,8 +258,20 @@ equity.
   the leaf network. The subtree is skipped, which makes a turn about 40 times
   cheaper ([Cost and allocation](#cost-and-allocation)).
 
+- **`alice-subtree`:** Bob plays HastyBot's move, and the search moves to
+  Alice's second turn. At each `(a, r)` she holds the rack her refill drew,
+  samples Bob's leave from her belief after his reply, and sims her own
+  static-equity top moves. The move she picks then gets two hasty plies and
+  the leaf network, which value `a`. Against a HastyBot opponent the reply
+  model is exact, so what this setting measures is Alice modeling her own
+  later play as a searcher rather than as HastyBot. `--second-candidates 1`
+  keeps the depth (four hasty plies to the leaf) without her search: the
+  control for what depth alone is worth.
+
 `hasty` is the first pass of successive halving, and the two settings at
 equal time measure what modeling Bob on his own information is worth.
+Against HastyBot itself that comparison cannot favor the subtree, since
+`hasty` is then Bob's exact model. That is the case `alice-subtree` is for.
 
 ## The policy-set model
 
