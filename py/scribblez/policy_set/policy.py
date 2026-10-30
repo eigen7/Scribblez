@@ -40,11 +40,23 @@ def policy_forward(model: PolicyModel, batch: dict[str, torch.Tensor]):
         return model(batch)
 
 
-def policy_loss(model: PolicyModel, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-    """The mean over positions of -sum_a q(a) log pi(a)."""
+def cross_entropies(model: PolicyModel, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    """Each position's -sum_a q(a) log pi(a): (P,)."""
     logits, pad = policy_forward(model, batch)
     q, _ = to_grid(batch["q"].float(), batch["move_pos_id"], logits.shape[0])
-    return -torch.where(pad, 0.0, q * F.log_softmax(logits, dim=1)).sum(dim=1).mean()
+    return -torch.where(pad, 0.0, q * F.log_softmax(logits, dim=1)).sum(dim=1)
+
+
+def policy_loss(
+    model: PolicyModel, batch: dict[str, torch.Tensor], weighted: bool = False
+) -> torch.Tensor:
+    """The mean over positions of the cross-entropy against q; `weighted`,
+    each position's times its stakes (pools.stakes), so a decided game, where
+    the move barely matters, barely trains. Not renormalized: Adam's updates
+    are nearly invariant to the loss's scale, and a per-batch renormalization
+    would undo the weighting for a batch of decided games."""
+    ce = cross_entropies(model, batch)
+    return (batch["stakes"] * ce).mean() if weighted else ce.mean()
 
 
 @torch.no_grad()
@@ -61,9 +73,17 @@ def policy_picks(model: PolicyModel, batch: dict[str, torch.Tensor], n: int) -> 
 def policy_diagnostics(
     model: PolicyModel, batch: dict[str, torch.Tensor]
 ) -> dict[str, torch.Tensor]:
-    """The logits' spread over each position's candidates, and the policy's
-    mean entropy (nats), to read against the labels' (metrics.pool_stats)."""
+    """The logits' spread over each position's candidates, the policy's mean
+    entropy (nats), to read against the labels' (metrics.pool_stats), and the
+    cross-entropy against q, plain and in the stakes' weighted mean
+    (sum s*ce / sum s): both read the same with the loss weighted or not."""
     logits, pad = policy_forward(model, batch)
     logp = F.log_softmax(logits, dim=1)
     entropy = -torch.where(pad, 0.0, logp.exp() * logp).sum(dim=1).mean()
-    return {"spread": mean_spread(logits, pad), "entropy": entropy}
+    s, ce = batch["stakes"], cross_entropies(model, batch)
+    return {
+        "spread": mean_spread(logits, pad),
+        "entropy": entropy,
+        "ce": ce.mean(),
+        "stakes_ce": (s * ce).sum() / s.sum().clamp(min=1e-9),
+    }

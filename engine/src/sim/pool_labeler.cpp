@@ -59,6 +59,7 @@ void PoolLabeler::top_up(const std::function<std::optional<PoolJob>()>& next) {
     f.rollouts.resize(f.job.record.moves.size());
     f.alive.resize(f.rollouts.size());
     std::iota(f.alive.begin(), f.alive.end(), size_t(0));
+    for (const Move& m : f.job.record.moves) f.keep.push_back(m.type() == MoveType::PASS);
     stats_.full_tasks += (long long)(f.rollouts.size()) * params_.rollouts;
     begin_round(f);
     flight_.push_back(std::move(f));
@@ -115,7 +116,7 @@ void PoolLabeler::settle() {
     if (f.outstanding > 0 || !f.pending.empty()) continue;
     f.done = checkpoints_[f.round];
     if (f.done < params_.rollouts) {
-      stop_the_beaten(f.rollouts, params_.race_sigmas, /*protected_count=*/0, &f.alive);
+      stop_the_beaten(f.rollouts, params_.race_sigmas, f.keep, &f.alive);
       ++f.round;
       begin_round(f);
       continue;

@@ -81,10 +81,12 @@ def test_labels_are_a_distribution_over_each_pool(pooled):
 
 def test_rounds_race_the_candidates(pooled):
     _, positions = read_pools(pooled.with_suffix(".pool"))
-    # Rounds end at 2, 4, 8 and 14 of 20 rollouts; racing protects no
-    # candidate, so some stop at a round's end.
+    # Rounds end at 2, 4, 8 and 14 of 20 rollouts, and some candidates stop at
+    # a round's end; never the pass, the baseline of the pool's stakes.
     counts = np.concatenate([p.rollouts for p in positions])
     assert (counts < ROLLOUTS).any()
+    for p in positions:
+        assert p.rollouts[p.moves["type"] == MOVE_TYPES["pass"]] == ROLLOUTS
     assert set(np.unique(counts)) <= {2, 4, 8, 14, ROLLOUTS}
     win = np.concatenate([p.win_prob for p in positions])
     assert win.std() > 0 and ((win > 0) & (win < 1)).mean() > 0.5

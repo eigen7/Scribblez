@@ -80,12 +80,13 @@ CandidateRollouts sim_candidates(const SlogSimConfig& config, const SimRunner& r
   CandidateRollouts rollouts(res.candidates.moves.size());
   std::vector<size_t> alive(rollouts.size());
   std::iota(alive.begin(), alive.end(), size_t(0));
+  std::vector<char> keep(rollouts.size(), 0);
+  std::fill_n(keep.begin(), std::min(keep.size(), size_t(std::max(config.race_protected, 0))), 1);
   int done = 0;
   for (const int upto : config.race_checkpoints) {
     run_instalment(runner, res, alive, done, upto, &rollouts);
     done = upto;
-    if (done < runner.rollouts())
-      stop_the_beaten(rollouts, config.race_sigmas, config.race_protected, &alive);
+    if (done < runner.rollouts()) stop_the_beaten(rollouts, config.race_sigmas, keep, &alive);
   }
   if (done < runner.rollouts())
     run_instalment(runner, res, alive, done, runner.rollouts(), &rollouts);

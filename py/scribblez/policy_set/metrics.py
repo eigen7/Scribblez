@@ -18,7 +18,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from scribblez.policy_set.pools import Pool
+from scribblez.policy_set.pools import Pool, stakes
 
 SET_SIZES = (1, 2, 4, 8, 16)
 TAIL_RANK = 10
@@ -67,10 +67,16 @@ def set_metrics(pools: list[Pool], choose: Chooser, prefix: str) -> dict[str, fl
 def pool_stats(pools: list[Pool], prefix: str) -> dict[str, float]:
     """What a set of pools is like: how many, their mean size, the mean
     entropy of their labels (nats; higher is noisier or more evenly
-    contested), and the share whose leader is outside the static-equity top
-    TAIL_RANK."""
+    contested), the share whose leader is outside the static-equity top
+    TAIL_RANK, their mean stakes (pools.stakes), and the stakes' effective
+    sample size as a share of the pools, (sum s)^2 / (n sum s^2): what
+    weighting a loss by stakes keeps of the pools' worth of data."""
     entropy = [float(-(p.q * np.log(np.clip(p.q, 1e-12, None))).sum()) for p in pools]
+    s = np.array([stakes(p) for p in pools])
+    ess = float(s.sum() ** 2 / (len(s) * (s**2).sum())) if (s**2).sum() > 0 else 0.0
     return {
+        f"{prefix}stakes": float(s.mean()),
+        f"{prefix}stakes_ess_share": ess,
         f"{prefix}pools": len(pools),
         f"{prefix}pool_size": float(np.mean([len(p.moves) for p in pools])),
         f"{prefix}label_entropy": float(np.mean(entropy)),

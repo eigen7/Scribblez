@@ -27,11 +27,11 @@ size_t race_leader(const std::vector<size_t>& alive, const CandidateRollouts& ro
   return leader;
 }
 
-void stop_the_beaten(const CandidateRollouts& rollouts, double sigmas, int protected_count,
-                     std::vector<size_t>* alive) {
+void stop_the_beaten(const CandidateRollouts& rollouts, double sigmas,
+                     const std::vector<char>& keep, std::vector<size_t>* alive) {
   const std::vector<Rollout>& lead = rollouts[race_leader(*alive, rollouts)];
   std::erase_if(*alive, [&](size_t c) {
-    if (c < size_t(protected_count)) return false;
+    if (keep[c]) return false;
     return clearly_below(paired_win_diff(rollouts[c], lead), lead.size(), sigmas);
   });
 }

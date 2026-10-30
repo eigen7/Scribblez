@@ -48,9 +48,12 @@ LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
 
 def _pool(q, win, rank, values=None) -> pools.Pool:
     """A pool of len(q) candidates, each with `values` as its rollout values
-    (default: 8 rollouts at its win probability)."""
+    (default: 8 rollouts at its win probability), the last a pass, as every
+    pool's is."""
     n = len(q)
     values = values or [[w] * 8 for w in win]
+    moves = np.zeros(n, ffi.struct_dtype("Move"))
+    moves["type"][-1] = pools.PASS
     return pools.Pool(
         game=0,
         turn=0,
@@ -59,7 +62,7 @@ def _pool(q, win, rank, values=None) -> pools.Pool:
         opp_leave_modelled=False,
         opp_leave_value_mean=0.0,
         opp_leave_value_sd=0.0,
-        moves=np.zeros(n, ffi.struct_dtype("Move")),
+        moves=moves,
         win_prob=np.array(win, np.float32),
         paired_se=np.zeros(n, np.float32),
         q=np.array(q, np.float32),
@@ -95,6 +98,20 @@ def test_pool_stats():
     s = metrics.pool_stats([POOL_A, POOL_B], "eval_")
     assert (s["eval_pools"], s["eval_pool_size"], s["eval_tail_share"]) == (2, 2.5, 0.5)
     assert s["eval_label_entropy"] > 0
+    # Each leader is 5 points of win probability over its pool's pass.
+    assert s["eval_stakes"] == pytest.approx(0.05)
+    assert s["eval_stakes_ess_share"] == pytest.approx(1.0)
+
+
+def test_stakes_are_the_leaders_win_probability_over_the_pass():
+    assert pools.stakes(_pool([0.2, 0.8, 0.0], [0.30, 0.70, 0.40], [0, 1, -1])) == pytest.approx(
+        0.30
+    )
+    # A pass that out-sims the leader (the leader's noise) has no stakes, not negative ones.
+    assert pools.stakes(_pool([0.9, 0.1], [0.50, 0.55], [0, -1])) == 0.0
+    s = metrics.pool_stats([_pool([1.0, 0.0], [0.6, 0.2], [0, -1]), POOL_A], "")
+    # Stakes 0.4 and 0.05: (0.45)^2 / (2 (0.16 + 0.0025)).
+    assert s["stakes_ess_share"] == pytest.approx(0.45**2 / (2 * 0.1625))
 
 
 def test_coverage_loss_is_the_log_probability_the_prefix_covers_the_best_move():
@@ -226,7 +243,7 @@ def test_a_partly_transposed_batch_transposes_only_its_flagged_positions(chunk):
     flags = np.arange(len(items)) % 2 == 0
     assert flags.any() and not flags.all()
     mixed = batcher.build(items, flags)
-    per_position = {"input_spatial", "input_scalar", "opp_rack"}
+    per_position = {"input_spatial", "input_scalar", "opp_rack", "stakes"}
     pos_id = plain["move_pos_id"].numpy()
     for key, got in mixed.items():
         rows = flags if key in per_position else flags[pos_id]
@@ -276,6 +293,21 @@ def test_the_policy_form_overfits_a_pool_and_ranks_its_top_n(chunk):
     logits, _ = policy.policy_forward(m, batch)
     assert len(picks) == min(8, len(items[0].pool.moves)) and len(set(picks)) == len(picks)
     assert torch.equal(logits[0, picks], logits[0, picks].sort(descending=True).values)
+
+
+def test_the_stakes_weighted_policy_loss_scales_each_positions_cross_entropy(chunk):
+    items = dataset.read_items([chunk])
+    batch = dataset.PoolBatcher().build(items)
+    assert batch["stakes"].shape == (len(items),) and (batch["stakes"] >= 0).all()
+    torch.manual_seed(0)
+    m = trainer.build_models(only("policy"))["policy"]
+    ce = policy.cross_entropies(m, batch)
+    assert policy.policy_loss(m, batch).item() == pytest.approx(ce.mean().item(), rel=1e-5)
+    assert policy.policy_loss(m, batch, weighted=True).item() == pytest.approx(
+        (batch["stakes"] * ce).mean().item(), rel=1e-5
+    )
+    batch["stakes"] = torch.zeros_like(batch["stakes"])
+    assert policy.policy_loss(m, batch, weighted=True).item() == 0.0
 
 
 def test_the_train_flags_select_the_forms_and_one_is_required():
@@ -340,6 +372,8 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
         "policy_eval_loss_ce",
         "policy_eval_recall_8",
         "policy_eval_entropy",
+        "policy_eval_ce",
+        "policy_eval_stakes_ce",
     ):
         assert np.isfinite(record[key]), key
     assert record["slot_eval_pointer_scale"] == pytest.approx(slot.POINTER_SCALE_INIT, rel=0.1)

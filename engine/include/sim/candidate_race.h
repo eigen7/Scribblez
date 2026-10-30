@@ -27,8 +27,8 @@ std::vector<int> race_checkpoints(int rollouts);
 size_t race_leader(const std::vector<size_t>& alive, const CandidateRollouts& rollouts);
 
 // Drops from `alive` the candidates more than `sigmas` paired standard errors
-// below the leader, except the first `protected_count` candidates.
-void stop_the_beaten(const CandidateRollouts& rollouts, double sigmas, int protected_count,
-                     std::vector<size_t>* alive);
+// below the leader, except those `keep` marks (parallel to `rollouts`).
+void stop_the_beaten(const CandidateRollouts& rollouts, double sigmas,
+                     const std::vector<char>& keep, std::vector<size_t>* alive);
 
 }  // namespace scribblez

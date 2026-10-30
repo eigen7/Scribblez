@@ -20,6 +20,7 @@ from scribblez.policy_set import POOL_SUFFIX
 
 POOL = ffi.format_layout()["constants"]["pool"]
 SUFFIX = POOL_SUFFIX
+PASS = ffi.format_layout()["constants"]["move_type"]["pass"]
 
 
 @dataclass
@@ -45,6 +46,17 @@ class Pool:
     # (sum of rollouts,) float32: each candidate's rollout win values in turn,
     # rollout i of every candidate the same deal.
     rollout_values: np.ndarray
+
+
+def stakes(pool: Pool) -> float:
+    """What the turn is worth: the leader's win probability (the largest q,
+    a candidate that ran every rollout) over the pass's, which the race never
+    stops (engine sim/pool_labeler.h). About 0 in a decided game, where no
+    move changes the outcome; floored at 0, since a pass that out-sims the
+    leader is one the leader's noise hid."""
+    leader = int(np.argmax(pool.q))
+    (pass_index,) = np.flatnonzero(pool.moves["type"] == PASS)
+    return max(0.0, float(pool.win_prob[leader] - pool.win_prob[pass_index]))
 
 
 def read_pools(path: str | Path) -> tuple[np.void, list[Pool]]:
