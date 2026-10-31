@@ -208,7 +208,11 @@ def main():
     )
     args = parser.parse_args()
     paths = TagPaths(args.tag, WORKLOAD, DEFAULT_MOUNT_ROOT)
+    if not paths.rolling_checkpoint.exists():
+        parser.error(f"tag {args.tag} has no checkpoint at {paths.rolling_checkpoint}")
     ckpt = torch.load(paths.rolling_checkpoint, map_location="cpu", weights_only=False)
+    if not ckpt["config"]["train_policy"]:
+        parser.error(f"tag {args.tag} trains no policy form")
     # generation_index is the next generation to train; the weights are the
     # previous one's.
     generation = int(ckpt["generation_index"]) - 1
