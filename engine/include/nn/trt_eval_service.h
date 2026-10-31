@@ -11,8 +11,8 @@
 // interface. It lives apart from eval_service.h so that agents and stub-driven
 // tests depend on the interface alone, without CUDA or TensorRT.
 //
-// One class template serves both the position and the move-set families. The
-// only family-specific part, how a Batch's rows reach the engine's staging
+// One class template serves the position, move-set and policy-set families.
+// The only family-specific part, how a Batch's rows reach the engine's staging
 // buffers, is overloaded on the spec's Batch type in the .cpp.
 //
 // Every call is synchronous: it stages, runs, and decodes on the calling thread
@@ -82,6 +82,7 @@ std::shared_ptr<PositionEvalService> load_leaf_position_service(const std::strin
 
 extern template class TrtEvalService<PositionEvaluationSpec>;
 extern template class TrtEvalService<MoveSetEvaluationSpec>;
+extern template class TrtEvalService<PolicySetSpec>;
 
 }  // namespace nn
 }  // namespace scribblez

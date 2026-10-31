@@ -591,6 +591,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_parity_binary(test_leave_inference_parity)
   # The DeepBot leaf eval model, and its leave values gate.
   add_parity_binary(test_leaf_eval_parity)
+  # The policy-set model's policy form, which PolicyBot plays from.
+  add_parity_binary(test_policy_set_inference_parity)
 
   # The suite's one TensorRT test: that this machine can build and run a
   # TensorRT plan at all, on the smallest model.

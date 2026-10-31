@@ -8,7 +8,8 @@ generations form and its held-out set fills: about one chunk in
 holds `holdout_chunks`. Per generation, once the cursor generation is
 complete, it trains each form one epoch over the window's pools, evaluates
 the forms and the baseline on the held-out pools (policy_set/metrics.py),
-checkpoints, and delivers the checkpoint, the cursor and last the record.
+checkpoints, exports the policy form for PolicyBot (onnx_export.py), and
+delivers the export, the checkpoint, the cursor and last the record.
 Each form's eval keys carry its name as a prefix, the baseline's "equity_";
 its training losses are "loss_<form>_<N>", the Loss tab's naming.
 
@@ -22,6 +23,7 @@ import os
 import sys
 import time
 from dataclasses import asdict
+from pathlib import Path
 
 import torch
 from torch import nn
@@ -47,6 +49,7 @@ from scribblez.policy_set import (
     train_loop,
 )
 from scribblez.policy_set.model import PolicySetEncoder, trunk_scalar
+from scribblez.policy_set.onnx_export import export_onnx
 from scribblez.position_eval.trainer import OutputDeliverer, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
@@ -161,8 +164,20 @@ def loss_weights(params) -> dict[str, float]:
     return dict.fromkeys(keys, 1.0)
 
 
-def _deliver_generation(sink, gen, checkpoint_snap, state_snap, recorder, staged):
+def export_generation(paths: TagPaths, gen: int, models: nn.ModuleDict, ctx) -> Path | None:
+    """Export generation `gen`'s policy form for PolicyBot, if it trains one;
+    the export's path."""
+    if FORM_POLICY not in models:
+        return None
+    path = paths.onnx_path(gen)
+    export_onnx(models[FORM_POLICY], path, ctx["config"], {"tag": ctx["tag"], "generation": gen})
+    return path
+
+
+def _deliver_generation(sink, paths, gen, export, checkpoint_snap, state_snap, recorder, staged):
     """One generation's deliveries, the record last."""
+    if export is not None:
+        sink.deliver_output(export, str(export.relative_to(paths.root)))
     state_pair.deliver(sink, checkpoint_snap, state_snap, gen)
     recorder.deliver_staged(staged)
 
@@ -223,6 +238,7 @@ def train_one_generation(models, optimizer, optim_arm, recorder, paths, params, 
     )
     timed_print(f"[gen {gen}] pools={state.rows_trained} loss={result.loss:.4f} recall@8 {recalls}")
     check_parameters(models.items(), f"after generation {gen}")
+    export = export_generation(paths, gen, models, ctx)
     checkpoint.save(paths, models, optimizer, state, ctx["config"])
     lifecycle.write_train_state(paths, asdict(state))
     staged = recorder.stage_generation(gen, state.rows_trained, record)
@@ -231,7 +247,9 @@ def train_one_generation(models, optimizer, optim_arm, recorder, paths, params, 
         functools.partial(
             _deliver_generation,
             ctx["sink"],
+            paths,
             gen,
+            export,
             state_pair.snapshot(paths.rolling_checkpoint, gen),
             state_pair.snapshot(paths.train_state_path, gen),
             recorder,
@@ -285,6 +303,7 @@ def run(ctx: WorkerContext) -> int:
     )
     run_ctx = {
         "config": config,
+        "tag": ctx.tag,
         "sink": ctx.sink,
         "device": device,
         "batcher": dataset.PoolBatcher(),

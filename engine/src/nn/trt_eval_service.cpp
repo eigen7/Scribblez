@@ -26,12 +26,17 @@ namespace {
 
 int batch_rows(const PositionEvaluationSpec::Batch& batch) { return batch.count; }
 int batch_rows(const MoveSetEvaluationSpec::Batch& batch) { return batch.moves->count; }
+int batch_rows(const PolicySetSpec::Batch& batch) { return batch.candidates->count(); }
 
 // Staging done once per call rather than per chunk. The move-set board input
 // is static, so it is staged once and re-sent with every chunk.
 void stage_call(NeuralNet<PositionEvaluationSpec>&, const PositionEvaluationSpec::Batch&) {}
 void stage_call(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationSpec::Batch& batch) {
   stage_board_row(net, batch.board_row, 0);
+}
+void stage_call(NeuralNet<PolicySetSpec>& net, const PolicySetSpec::Batch& batch) {
+  stage_board_row(net, batch.board_row, 0);
+  std::memcpy(net.host<OppRackInput>(), batch.opp_rack, sizeof(float) * OppRackInput::kRowElems);
 }
 
 // Stage rows [start, start + chunk) of the batch.
@@ -45,6 +50,12 @@ void stage_chunk(NeuralNet<PositionEvaluationSpec>& net, const PositionEvaluatio
 void stage_chunk(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationSpec::Batch& batch,
                  int start, int chunk) {
   stage_move_tensors(net, *batch.moves, start, chunk, MoveSetEvaluationSpec::MoveInputs{});
+}
+void stage_chunk(NeuralNet<PolicySetSpec>& net, const PolicySetSpec::Batch& batch, int start,
+                 int chunk) {
+  const policy_set::CandidateInputs& c = *batch.candidates;
+  stage_move_tensors(net, c.features, start, chunk, PolicySetSpec::MoveInputs{});
+  std::memcpy(net.host<MoveEquityInput>(), c.equity.data() + start, sizeof(float) * chunk);
 }
 
 // Decode `rows` rows of one head's raw output per its RowDecode. Each row is
@@ -174,6 +185,19 @@ std::shared_ptr<MoveSetEvalService> EvalService<MoveSetEvaluationSpec>::create(
   });
 }
 
+// Like the move-set model, one call is a whole turn's candidates, so callers
+// queue on EvalService's mutex. No synthetic stand-in serves this family.
+template <>
+std::shared_ptr<PolicySetEvalService> EvalService<PolicySetSpec>::create(
+  const NeuralNetParams<PolicySetSpec>& params) {
+  static SharedRegistry<NeuralNetParamsBase, PolicySetEvalService> registry;
+  return registry.get_or_create(params, [&]() -> std::shared_ptr<PolicySetEvalService> {
+    auto service = std::make_shared<TrtEvalService<PolicySetSpec>>(params);
+    service->load();
+    return service;
+  });
+}
+
 std::shared_ptr<PositionEvalService> load_leaf_position_service(const std::string& onnx_path,
                                                                 int cuda_device_id) {
   if (onnx_path.empty()) return nullptr;
@@ -189,6 +213,7 @@ std::shared_ptr<PositionEvalService> load_leaf_position_service(const std::strin
 
 template class TrtEvalService<PositionEvaluationSpec>;
 template class TrtEvalService<MoveSetEvaluationSpec>;
+template class TrtEvalService<PolicySetSpec>;
 
 }  // namespace nn
 }  // namespace scribblez
