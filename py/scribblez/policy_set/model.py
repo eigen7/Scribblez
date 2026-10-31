@@ -6,10 +6,11 @@ The encoder is the move set model's: the board trunk once per position, each
 candidate embedded by the move and cross-check encoders against the board
 tokens and cross-attending into them, fused with the position's global
 summary. The trunk reads the opponent-rack input, the chooser's belief about
-the opponent's rack (dataset.opp_rack_input), as a scalar block beside the
-board row's, and each candidate's static equity relative to its pool's best
-(dataset.relative_equity) joins the candidate's embedding, so a form can learn
-the correction to the static-equity ranking rather than the ranking itself.
+the opponent's rack, as a scalar block beside the board row's, and each
+candidate's static equity relative to its pool's best joins the candidate's
+embedding, so a form can learn the correction to the static-equity ranking
+rather than the ranking itself. The engine encodes both (training/
+policy_set_inputs.h).
 Its output is one vector per candidate, layer-normalized, which a form reads:
 unnormalized, the vectors' scale ran away in training, driving the slot form's
 pointer logits to divergence and the greedy form's gain head into saturation.
@@ -46,10 +47,10 @@ class Encoded:
     e: torch.Tensor  # (M, C) candidate embeddings
 
 
-def trunk_scalar(batch: dict[str, torch.Tensor]) -> torch.Tensor:
+def trunk_scalar(input_scalar: torch.Tensor, opp_rack: torch.Tensor) -> torch.Tensor:
     """The trunk's scalar input: the board row's scalars, then the
     opponent-rack block."""
-    return torch.cat([batch["input_scalar"], batch["opp_rack"]], dim=1)
+    return torch.cat([input_scalar, opp_rack], dim=1)
 
 
 class PolicySetEncoder(nn.Module):
@@ -88,7 +89,9 @@ class PolicySetEncoder(nn.Module):
     def encode(self, batch: dict[str, torch.Tensor]) -> Encoded:
         """A batch (dataset.PoolBatcher.build) -> its board token maps,
         summaries and candidate embeddings."""
-        x, s = self.trunk(batch["input_spatial"], trunk_scalar(batch))
+        x, s = self.trunk(
+            batch["input_spatial"], trunk_scalar(batch["input_scalar"], batch["opp_rack"])
+        )
         board = x.flatten(2).transpose(1, 2) + self.board_pos_emb  # (P, 225, C)
         g = torch.cat([mean_max_pool(x), s], dim=1)
         e = encode_moves_on_board(

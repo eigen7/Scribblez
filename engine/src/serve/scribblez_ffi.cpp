@@ -9,6 +9,7 @@
 #include "data/forgone_play_log.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
+#include "data/pool_log.h"
 #include "data/probe_log.h"
 #include "data/probe_replay.h"
 #include "data/sim_observation_log.h"
@@ -30,6 +31,7 @@
 #include "training/max_move_per_lane_input_encoder.h"
 #include "training/max_move_per_lane_task.h"
 #include "training/move_set_encoder.h"
+#include "training/policy_set_inputs.h"
 #include "training/position_eval_analysis.h"
 #include "training/training_targets.h"
 #include "training/trajectory_position.h"
@@ -37,6 +39,7 @@
 #include "util/work_pool.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -76,7 +79,11 @@ struct ScribblezSession {
   int move_set_positions(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
                          const int64_t* move_counts, int64_t n_positions, const void* moves,
                          float* out_rows, int32_t* out_cells, uint8_t* out_letters,
-                         float* out_equities, const uint8_t* transposes, void* out_moves) const;
+                         const uint8_t* transposes, void* out_moves) const;
+  int policy_set_positions(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
+                           const int64_t* move_counts, int64_t n_positions, const void* moves,
+                           const void* opp_racks, const uint8_t* transposes,
+                           const ScribblezPolicySetOutputs& out) const;
   int gcg_cross_checks(const char* gcg_text, bool open_leaves, const void* moves, int64_t n,
                        int32_t* out_cells, uint8_t* out_letters, char* out_err, int err_cap) const;
   int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, uint64_t seed,
@@ -355,18 +362,6 @@ std::vector<scribblez::Move> copy_moves_in_frame(const void* moves, int64_t firs
   return out;
 }
 
-// The HastyBot static equity of each of `candidates` at the pre-move decision
-// point `decoder` last replayed, the opponent's leave hidden, into
-// out[0..n).
-void write_equities(const scribblez::binlog::BlockDecoder& decoder,
-                    const std::vector<scribblez::Move>& candidates, float* out) {
-  const scribblez::binlog::PositionEncoder& pos = decoder.position();
-  const int mover = pos.enc().active_player();
-  const std::vector<double> equities = scribblez::HastyEquity::instance().equities(
-    candidates, decoder.board(), pos.bag_size(), scribblez::Rack{}, pos.rack(mover));
-  for (size_t i = 0; i < equities.size(); ++i) out[i] = float(equities[i]);
-}
-
 // Copies `count` elements of `size` bytes from `data` to `out` if `count` is
 // `expected`. Not a template: this file's helpers sit in the C ABI's linkage.
 bool emit_exact(const void* data, size_t count, size_t size, int64_t expected, void* out) {
@@ -618,15 +613,12 @@ int ScribblezSession::move_set_positions(const char* path, const int64_t* game_i
                                          const int64_t* turn_idx, const int64_t* move_counts,
                                          int64_t n_positions, const void* moves, float* out_rows,
                                          int32_t* out_cells, uint8_t* out_letters,
-                                         float* out_equities, const uint8_t* transposes,
-                                         void* out_moves) const {
+                                         const uint8_t* transposes, void* out_moves) const {
   namespace mset = scribblez::move_set;
   if (!game_idx || !turn_idx || !move_counts || !out_rows || n_positions < 0) return -1;
   if (bool(transposes) != bool(out_moves)) return -1;
   std::vector<char> buf;
   if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
-  if (out_equities)
-    scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
   scribblez::binlog::BlockDecoder decoder(spec);
   int64_t done = 0;
   for (int64_t j = 0; j < n_positions; ++j) {
@@ -642,7 +634,6 @@ int ScribblezSession::move_set_positions(const char* path, const int64_t* game_i
     mset::encode_moves_cross_checks(decoder.board(), *spec.dict, candidates.data(), move_counts[j],
                                     out_cells + done * mset::kMoveCrossSlots,
                                     out_letters + done * mset::kMoveCrossLetters);
-    if (out_equities) write_equities(decoder, candidates, out_equities + done);
     done += move_counts[j];
   }
   return 0;
@@ -651,10 +642,87 @@ int ScribblezSession::move_set_positions(const char* path, const int64_t* game_i
 int scribblez_move_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
                                  const int64_t* turn_idx, const int64_t* move_counts,
                                  int64_t n_positions, const void* moves, float* out_rows,
-                                 int32_t* out_cells, uint8_t* out_letters, float* out_equities,
+                                 int32_t* out_cells, uint8_t* out_letters,
                                  const uint8_t* transposes, void* out_moves) {
   return s->move_set_positions(path, game_idx, turn_idx, move_counts, n_positions, moves, out_rows,
-                               out_cells, out_letters, out_equities, transposes, out_moves);
+                               out_cells, out_letters, transposes, out_moves);
+}
+
+namespace {
+
+// Copies `n` rows of `width` elements of `elem_size` bytes from `src` to row
+// `first` of `dst`. Not a template: this file's helpers sit in the C ABI's
+// linkage.
+void copy_rows(const void* src, size_t elem_size, int64_t first, int64_t n, int width, void* dst) {
+  const size_t row_bytes = elem_size * size_t(width);
+  std::memcpy(static_cast<char*>(dst) + size_t(first) * row_bytes, src, size_t(n) * row_bytes);
+}
+
+// One position's candidate inputs into the outputs' rows from `first`.
+void write_candidate_inputs(const scribblez::policy_set::CandidateInputs& in, int64_t first,
+                            const ScribblezPolicySetOutputs& out) {
+  namespace mset = scribblez::move_set;
+  const mset::MoveFeatureArrays& f = in.features;
+  const int64_t n = in.count();
+  copy_rows(f.letters.data(), sizeof(f.letters[0]), first, n, mset::kMoveMaxPlaced, out.letters);
+  copy_rows(f.blanks.data(), sizeof(f.blanks[0]), first, n, mset::kMoveMaxPlaced, out.blanks);
+  copy_rows(f.squares.data(), sizeof(f.squares[0]), first, n, mset::kMoveMaxPlaced, out.squares);
+  copy_rows(f.tile_mask.data(), sizeof(f.tile_mask[0]), first, n, mset::kMoveMaxPlaced,
+            out.tile_mask);
+  copy_rows(f.scalars.data(), sizeof(f.scalars[0]), first, n, mset::kMoveScalars, out.scalars);
+  copy_rows(f.cross_cells.data(), sizeof(f.cross_cells[0]), first, n, mset::kMoveCrossSlots,
+            out.cross_cells);
+  copy_rows(f.cross_letters.data(), sizeof(f.cross_letters[0]), first, n, mset::kMoveCrossLetters,
+            out.cross_letters);
+  copy_rows(in.equity.data(), sizeof(in.equity[0]), first, n, 1, out.equity);
+}
+
+// Position j's opponent-rack input, from its pool record.
+void write_opp_rack(const void* opp_racks, int64_t j, float* out) {
+  namespace ps = scribblez::policy_set;
+  scribblez::PoolOppRack record;
+  std::memcpy(&record, static_cast<const char*>(opp_racks) + j * sizeof(record), sizeof(record));
+  const std::array<float, ps::kOppRackFloats> in =
+    ps::encode_opp_rack(scribblez::opp_rack_summary(record));
+  std::copy(in.begin(), in.end(), out + j * ps::kOppRackFloats);
+}
+
+}  // namespace
+
+int ScribblezSession::policy_set_positions(const char* path, const int64_t* game_idx,
+                                           const int64_t* turn_idx, const int64_t* move_counts,
+                                           int64_t n_positions, const void* moves,
+                                           const void* opp_racks, const uint8_t* transposes,
+                                           const ScribblezPolicySetOutputs& out) const {
+  if (!game_idx || !turn_idx || !move_counts || !moves || !opp_racks || !out.rows ||
+      n_positions < 0 || spec.opp_leave_input)
+    return -1;
+  std::vector<char> buf;
+  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
+  scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+  scribblez::binlog::BlockDecoder decoder(spec);
+  scribblez::policy_set::CandidateInputs inputs;
+  int64_t done = 0;
+  for (int64_t j = 0; j < n_positions; ++j) {
+    const bool transpose = transposes && transposes[j];
+    scribblez::policy_set::replay_candidate_inputs(
+      decoder, *spec.dict, buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
+      transpose, copy_moves_in_frame(moves, done, move_counts[j], transpose), out.rows, j, &inputs);
+    write_candidate_inputs(inputs, done, out);
+    write_opp_rack(opp_racks, j, out.opp_rack);
+    done += move_counts[j];
+  }
+  return 0;
+}
+
+int scribblez_policy_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                                   const int64_t* turn_idx, const int64_t* move_counts,
+                                   int64_t n_positions, const void* moves, const void* opp_racks,
+                                   const uint8_t* transposes,
+                                   const ScribblezPolicySetOutputs* out) {
+  if (!out) return -1;
+  return s->policy_set_positions(path, game_idx, turn_idx, move_counts, n_positions, moves,
+                                 opp_racks, transposes, *out);
 }
 
 int ScribblezSession::encode_candidate_rows(const char* path, const int64_t* game_idx,

@@ -6,6 +6,8 @@
 #include "encoding/leave_inference_input_encoder.h"
 #include "nn/onnx_metadata.h"
 #include "training/move_set_encoder.h"
+#include "training/policy_set_format.h"
+#include "training/policy_set_inputs.h"
 #include "training/training_targets.h"
 
 #include <array>
@@ -330,7 +332,7 @@ struct VersionRequirement {
   int absent_value;
 };
 
-// Both families consume board rows, so both gate on the board-row encoding
+// Every family that consumes board rows gates on the board-row encoding
 // version. Absent reads as 0.
 inline constexpr VersionRequirement kInputEncodingRequirement = {"input_encoding_version",
                                                                  kInputEncodingVersion, 0};
@@ -534,6 +536,76 @@ class LeafEvalSpec {
   using MoveInputs = TensorList<>;
   using Outputs = TensorList<WldOutput, ScoreDiffOutput>;
   using AuxOutputs = TensorList<>;
+};
+
+// ---------- the policy-set family ----------------------------------------
+//
+// The policy-set model's policy form (py/scribblez/policy_set/onnx_export.py),
+// which PolicyBot plays from: one position's board row and opponent-rack input
+// plus M candidates (training/policy_set_inputs.h) per call, M the only
+// dynamic axis, to each candidate's logit. A candidate's logit reads only its
+// own row and the position, so the service may chunk a set.
+
+// opp_rack (1, kOppRackFloats): the chooser's belief about the opponent's rack.
+struct OppRackInput {
+  static constexpr const char* kName = "opp_rack";
+  using Elem = float;
+  static constexpr int kRowElems = policy_set::kOppRackFloats;
+  static constexpr bool kDynamic = true;  // wrapped Static in the spec
+};
+
+// move_equity (M, 1): each candidate's equity input.
+struct MoveEquityInput {
+  static constexpr const char* kName = "move_equity";
+  using Elem = float;
+  static constexpr int kRowElems = 1;
+  static constexpr bool kDynamic = true;
+};
+
+// logit (M, 1): each candidate's policy logit, raw: the softmax is over the
+// position's candidates, not within a row.
+struct PolicyLogitOutput {
+  static constexpr const char* kName = "logit";
+  using Elem = float;
+  static constexpr int kRowElems = 1;
+  static constexpr bool kDynamic = true;
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
+};
+
+class PolicySetSpec {
+ public:
+  static constexpr const char* kGraph = kGraphPolicySet;
+  static constexpr bool kAcceptUntaggedGraph = false;
+  static constexpr const char* kAxisTag = "moves";
+  static constexpr const char* kChannelsTensor = nullptr;
+  // A whole pool in one chunk, as for the move-set graph.
+  static constexpr int kDefaultMaxRows = 4096;
+  static constexpr int kOptRows = 512;
+
+  static constexpr VersionRequirement kVersions[] = {
+    kInputEncodingRequirement,
+    kMoveEncodingRequirement,
+    {"policy_set_format_version", kPolicySetFormatVersion, -1}};
+
+  using Inputs =
+    TensorList<Static<SpatialInput>, Static<ScalarInput>, Static<OppRackInput>, MoveLettersInput,
+               MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput, MoveScalarsInput,
+               MoveCrossCellsInput, MoveCrossLettersInput, MoveEquityInput>;
+  // The per-move inputs staged from the candidates' MoveFeatureArrays; the
+  // equity input is staged on its own.
+  using MoveInputs =
+    TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput,
+               MoveScalarsInput, MoveCrossCellsInput, MoveCrossLettersInput>;
+  using Outputs = TensorList<PolicyLogitOutput>;
+  using AuxOutputs = TensorList<>;
+
+  // One position's board row (as GameStateEncoder::encode_input() writes it),
+  // its opponent-rack input (kOppRackFloats), and its candidates.
+  struct Batch {
+    const float* board_row;
+    const float* opp_rack;
+    const policy_set::CandidateInputs* candidates;
+  };
 };
 
 // The aux outputs are the placement heads, one per placement target.

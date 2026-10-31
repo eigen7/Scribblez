@@ -1,12 +1,14 @@
 """Batches of labeled pools for the policy-set model's trainers.
 
 A batch is P pools with all their candidates, flattened as the move set
-model's batches are (move_set_eval/dataset.py): the positions' board inputs,
-rebuilt by replay through ffi.move_set_positions in the hidden-leaves arm,
-then the M candidates concatenated position by position, each with a pos_id
-into [0, P). Per position it also carries the opponent-rack input (the pool's
-OppRackSummary) and, per candidate, the equity input (relative_equity), the
-pool's labels, and its rollout values as a grid (rollout_grid).
+model's batches are (move_set_eval/dataset.py): the M candidates concatenated
+position by position, each with a pos_id into [0, P). Every model input comes
+from ffi.policy_set_positions, which rebuilds the positions by replay in the
+hidden-leaves arm and encodes them with the engine code PolicyBot plays with
+(engine training/policy_set_inputs.h): per position the board row and the
+opponent-rack input (from the pool's record of the belief), per candidate the
+move features and the equity input. A batch also carries the pool's labels,
+and its rollout values as a grid (rollout_grid).
 """
 
 from dataclasses import dataclass
@@ -15,17 +17,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from scribblez.ffi import task_input_shapes
+from scribblez.ffi import format_layout, policy_set_positions, task_input_shapes
 from scribblez.move_set_eval import moves as move_enc
 from scribblez.policy_set import pools
 
-# The opponent-rack input: the 27 presence probabilities, whether the leave
-# was modelled, and its value's mean and sd in units of VALUE_SCALE points.
-OPP_RACK_FLOATS = 30
-VALUE_SCALE = 10.0
-# The equity input: each candidate's static equity less its pool's best, in
-# units of VALUE_SCALE points, floored at EQUITY_FLOOR (100 points below).
-EQUITY_FLOOR = -10.0
+# The opponent-rack input's width (engine policy_set::kOppRackFloats).
+OPP_RACK_FLOATS = format_layout()["constants"]["policy_set"]["opp_rack_floats"]
 
 
 @dataclass
@@ -46,20 +43,6 @@ def read_items(directories: list[Path]) -> list[PoolItem]:
     return items
 
 
-def opp_rack_input(pool: pools.Pool) -> np.ndarray:
-    """The pool's OppRackSummary as the model reads it: (OPP_RACK_FLOATS,)."""
-    return np.concatenate(
-        [
-            pool.opp_rack_presence,
-            [
-                float(pool.opp_leave_modelled),
-                pool.opp_leave_value_mean / VALUE_SCALE,
-                pool.opp_leave_value_sd / VALUE_SCALE,
-            ],
-        ]
-    ).astype(np.float32)
-
-
 class PoolBatcher:
     """Builds batches from PoolItems, with the board layout of the session's
     (hidden-leaves) arm."""
@@ -69,7 +52,6 @@ class PoolBatcher:
         self.spatial_shape = tuple(dims["input_spatial"])
         self.scalar_width = dims["input_scalar"][0]
         self.spatial_floats = int(np.prod(self.spatial_shape))
-        self.sd_index, self.sd_scale = move_enc.score_diff_input_layout()
 
     def build(
         self, items: list[PoolItem], transposes: np.ndarray | None = None
@@ -81,12 +63,13 @@ class PoolBatcher:
         game."""
         slogs = sorted({it.slog for it in items})
         file_id = {s: i for i, s in enumerate(slogs)}
-        inputs = move_enc.batch_move_set_positions(
+        inputs = move_enc.batch_by_file(
+            policy_set_positions,
             slogs,
             [(file_id[it.slog], it.pool.game, it.pool.turn) for it in items],
             [it.pool.moves for it in items],
-            equities=True,
-            transposes=transposes,
+            {"opp_racks": np.array([it.pool.opp_rack for it in items]), "transposes": transposes},
+            {"rows", "opp_rack"},
         )
         rows = inputs["rows"]
         spatial = rows[:, : self.spatial_floats].reshape(len(items), *self.spatial_shape)
@@ -96,8 +79,6 @@ class PoolBatcher:
         pos_id = np.concatenate(
             [np.full(len(it.pool.moves), j, dtype=np.int64) for j, it in enumerate(items)]
         )
-        pre_diff = np.rint(scalar[:, self.sd_index] * self.sd_scale).astype(np.int32)
-        enc = move_enc.encode_moves(inputs["moves"], pre_diff[pos_id])
         labels = {
             name: torch.from_numpy(np.concatenate([getattr(it.pool, name) for it in items]))
             for name in ("q", "win_prob", "equity_rank")
@@ -108,18 +89,16 @@ class PoolBatcher:
         return {
             "input_spatial": torch.from_numpy(spatial),
             "input_scalar": torch.from_numpy(scalar),
-            "opp_rack": torch.from_numpy(np.stack([opp_rack_input(it.pool) for it in items])),
-            "move_letters": torch.from_numpy(enc["letters"]),
-            "move_blanks": torch.from_numpy(enc["blanks"]),
-            "move_squares": torch.from_numpy(enc["squares"]),
-            "move_tile_mask": torch.from_numpy(enc["tile_mask"]),
-            "move_scalars": torch.from_numpy(enc["scalars"]),
+            "opp_rack": torch.from_numpy(inputs["opp_rack"]),
+            "move_letters": torch.from_numpy(inputs["letters"]),
+            "move_blanks": torch.from_numpy(inputs["blanks"]),
+            "move_squares": torch.from_numpy(inputs["squares"]),
+            "move_tile_mask": torch.from_numpy(inputs["tile_mask"]),
+            "move_scalars": torch.from_numpy(inputs["scalars"]),
             "move_cross_cells": torch.from_numpy(inputs["cells"]),
-            "move_cross_letters": torch.from_numpy(inputs["letters"]),
+            "move_cross_letters": torch.from_numpy(inputs["letters_cross"]),
             "move_pos_id": torch.from_numpy(pos_id),
-            "move_equity": torch.from_numpy(
-                relative_equity(inputs["equities"], pos_id, len(items))
-            ),
+            "move_equity": torch.from_numpy(inputs["equity"]),
             **labels,
             **rollout_grid([it.pool for it in items]),
         }
@@ -135,14 +114,6 @@ def rollout_grid(pool_list: list[pools.Pool]) -> dict[str, torch.Tensor]:
     row = np.repeat(np.arange(len(n)), n)
     grid[row, np.arange(len(values)) - (np.cumsum(n) - n)[row]] = values
     return {"rollout_values": torch.from_numpy(grid), "rollouts": torch.from_numpy(n)}
-
-
-def relative_equity(equities: np.ndarray, pos_id: np.ndarray, num_positions: int) -> np.ndarray:
-    """The equity input: each candidate's static equity less the best of its
-    position's, in VALUE_SCALE points, floored at EQUITY_FLOOR."""
-    best = np.full(num_positions, -np.inf, dtype=np.float32)
-    np.maximum.at(best, pos_id, equities)
-    return np.maximum((equities - best[pos_id]) / VALUE_SCALE, EQUITY_FLOOR).astype(np.float32)
 
 
 def batch_order(n: int, batch_size: int, seed: int) -> list[np.ndarray]:

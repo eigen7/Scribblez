@@ -1,9 +1,9 @@
 #include "sim/pool_jobs.h"
 
-#include "belief/opp_rack_summary.h"
 #include "data/forgone_play_log.h"
 #include "lexicon/dictionary.h"
 #include "sim/hasty_rollout_task.h"
+#include "training/policy_set_inputs.h"
 #include "util/exception.h"
 #include "util/work_pool.h"
 
@@ -40,7 +40,7 @@ PoolJob make_pool_job(const SimmedPosition& r, const belief::LeaveSampler* leave
   job.record.at = r.pos;
   job.record.num_legal_moves = r.candidates.num_legal_moves;
   job.record.equity_ranks = r.candidates.equity_ranks;
-  job.record.opp_rack = belief::summarize_opp_rack(job.group.pool, leave);
+  job.record.opp_rack = policy_set::opp_rack_summary(r.position.board, r.position.rack, leave);
   return job;
 }
 

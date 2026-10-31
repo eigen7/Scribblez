@@ -73,6 +73,7 @@ add_library(scribblez_core STATIC
   src/sim/rollout_values.cpp
   src/agent/best_bot.cpp
   src/agent/deep_bot.cpp
+  src/agent/policy_bot.cpp
   src/agent/alice_subtree.cpp
   src/agent/bob_subtree.cpp
   src/agent/subtree_search.cpp
@@ -107,6 +108,7 @@ add_library(scribblez_core STATIC
   src/training/move_set_eval_target_log.cpp
   src/training/move_set_eval_candidates.cpp
   src/training/move_set_encoder.cpp
+  src/training/policy_set_inputs.cpp
   src/training/cross_check_delta.cpp
   src/agent/sim_agent.cpp
   src/agent/weird_bot.cpp
@@ -216,9 +218,10 @@ target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
 target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
 # The model-driven agents (NeuralAgent, NeuralSimAgent, MsetSimAgent,
-# UltimateBotAgent) plus SimAgent's factory, which can load a leaf model: every
-# agent source that reaches TensorRT, kept out of scribblez_core for the same
-# reason as scribblez_nn. Every consumer that parses --player specs links it.
+# UltimateBotAgent), DeepBot's and PolicyBot's factories, and SimAgent's
+# factory, which can load a leaf model: every agent source that reaches
+# TensorRT, kept out of scribblez_core for the same reason as scribblez_nn.
+# Every consumer that parses --player specs links it.
 # The factories are the only TUs that construct a TensorRT service; the agent
 # unit tests below compile the other TUs directly and inject stubs, so they
 # never link TensorRT.
@@ -233,7 +236,8 @@ add_library(scribblez_neural_agents STATIC
   src/agent/neural_sim_agent_factory.cpp
   src/agent/ultimate_bot_agent.cpp
   src/agent/ultimate_bot_agent_factory.cpp
-  src/agent/deep_bot_factory.cpp)
+  src/agent/deep_bot_factory.cpp
+  src/agent/policy_bot_factory.cpp)
 set_target_properties(scribblez_neural_agents PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_neural_agents PUBLIC
   scribblez_core
@@ -525,6 +529,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_mset_sim_agent.cpp
     tests/test_neural_agent.cpp
     tests/test_neural_sim_agent.cpp
+    tests/test_policy_bot.cpp
     tests/test_ultimate_bot_agent.cpp
     src/agent/mset_sim_agent.cpp
     src/agent/neural_agent.cpp
@@ -590,6 +595,8 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_parity_binary(test_leave_inference_parity)
   # The DeepBot leaf eval model, and its leave values gate.
   add_parity_binary(test_leaf_eval_parity)
+  # The policy-set model's policy form, which PolicyBot plays from.
+  add_parity_binary(test_policy_set_inference_parity)
 
   # The suite's one TensorRT test: that this machine can build and run a
   # TensorRT plan at all, on the smallest model.

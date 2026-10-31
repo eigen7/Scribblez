@@ -200,6 +200,13 @@ class NeuralNet : public NeuralNetBase {
 template <typename Spec>
 void stage_board_row(NeuralNet<Spec>& net, const float* row, int dst_row);
 
+// Copy rows [start, start + rows) of each per-move tensor Ts (descriptors
+// naming a kBatchSource) from that MoveFeatureArrays field into the net's host
+// buffer: how every move-set family stages its candidates.
+template <typename Spec, typename... Ts>
+void stage_move_tensors(NeuralNet<Spec>& net, const move_set::MoveFeatureArrays& moves, int start,
+                        int rows, TensorList<Ts...>);
+
 }  // namespace nn
 }  // namespace scribblez
 

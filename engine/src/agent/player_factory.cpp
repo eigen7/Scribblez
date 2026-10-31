@@ -10,6 +10,7 @@
 #include "agent/mset_sim_agent.h"
 #include "agent/neural_agent.h"
 #include "agent/neural_sim_agent.h"
+#include "agent/policy_bot.h"
 #include "agent/sim_agent.h"
 #include "agent/ultimate_bot_agent.h"
 #include "agent/weird_bot.h"
@@ -52,7 +53,7 @@ std::unique_ptr<Agent> build_human(const std::vector<std::string>& tokens, int t
 }
 
 // Adding a player type takes only a new row here.
-constexpr std::array<PlayerType, 14> kPlayerTypes{{
+constexpr std::array<PlayerType, 16> kPlayerTypes{{
   {"bestbot", "BestBot", &BestBot::options_help, &build_agent<&BestBot::from_spec>},
   {"bestbot-endgame", "EndgameBestBot", &EndgameAgent<BestBot>::options_help,
    &build_agent<&EndgameAgent<BestBot>::from_spec>},
@@ -68,6 +69,9 @@ constexpr std::array<PlayerType, 14> kPlayerTypes{{
   {"neural", "Neural", &NeuralAgent::options_help, &build_agent<&NeuralAgent::from_spec>},
   {"neural-sim", "NeuralSim", &NeuralSimAgent::options_help,
    &build_agent<&NeuralSimAgent::from_spec>},
+  {"policybot", "PolicyBot", &PolicyBot::options_help, &build_agent<&PolicyBot::from_spec>},
+  {"policybot-endgame", "EndgamePolicyBot", &EndgameAgent<PolicyBot>::options_help,
+   &build_agent<&EndgameAgent<PolicyBot>::from_spec>},
   {"sim", "SimBot", &SimAgent::options_help, &build_agent<&SimAgent::from_spec>},
   {"ultimatebot", "UltimateBot", &UltimateBotAgent::options_help,
    &build_agent<&UltimateBotAgent::from_spec>},

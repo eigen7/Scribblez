@@ -28,24 +28,6 @@ using nn::MoveProposalStepSpec;
 using nn::ScoreDiffOutput;
 using nn::WldOutput;
 
-// Copy one chunk of a per-move input tensor from the MoveFeatureArrays field
-// its descriptor names, as the move-set graph stages its candidates.
-template <typename Tensor>
-void stage_move_rows(nn::NeuralNet<MoveProposalCacheSpec>& net,
-                     const move_set::MoveFeatureArrays& moves, int start, int rows) {
-  using Elem = typename Tensor::Elem;
-  const std::vector<Elem>& src = moves.*Tensor::kBatchSource;
-  std::memcpy(net.host<Tensor>(), src.data() + size_t(start) * Tensor::kRowElems,
-              sizeof(Elem) * size_t(rows) * Tensor::kRowElems);
-}
-
-template <typename... Ts>
-void stage_move_tensors(nn::NeuralNet<MoveProposalCacheSpec>& net,
-                        const move_set::MoveFeatureArrays& moves, int start, int rows,
-                        nn::TensorList<Ts...>) {
-  (stage_move_rows<Ts>(net, moves, start, rows), ...);
-}
-
 void copy_rows(const float* src, int rows, int width, float* dst) {
   std::memcpy(dst, src, sizeof(float) * size_t(rows) * width);
 }
@@ -160,7 +142,7 @@ void MoveProposalNets::run_cache(const float* board_row, const move_set::MoveFea
 
   for (int start = 0; start < m; start += max_rows) {
     const int chunk = std::min(max_rows, m - start);
-    stage_move_tensors(cache_net_, moves, start, chunk, MoveProposalCacheSpec::MoveInputs{});
+    nn::stage_move_tensors(cache_net_, moves, start, chunk, MoveProposalCacheSpec::MoveInputs{});
     cache_net_.predict(chunk);
 
     // board/g are position-level and identical for every chunk.
