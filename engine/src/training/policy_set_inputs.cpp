@@ -20,7 +20,8 @@ bool in_pool(const Move& m, int greedy_score, int blank_prune_points) {
 }
 
 // Each equity less the best of them, in kValueScale points, floored at
-// kEquityFloor. In float, as the inputs have always been computed.
+// kEquityFloor. The float arithmetic is part of the input definition: trained
+// models saw these exact values, so widening it changes their inputs.
 void write_equity_inputs(const std::vector<double>& equities, std::vector<float>* out) {
   out->resize(equities.size());
   float best = -std::numeric_limits<float>::infinity();
@@ -58,7 +59,8 @@ std::array<float, kOppRackFloats> encode_opp_rack(const belief::OppRackSummary& 
   std::array<float, kOppRackFloats> out{};
   std::copy(summary.presence.begin(), summary.presence.end(), out.begin());
   out[TILE_KINDS] = summary.modelled ? 1.0f : 0.0f;
-  // Divided in double, as the inputs have always been computed.
+  // Divided in double: part of the input definition, as in
+  // write_equity_inputs.
   out[TILE_KINDS + 1] = float(double(summary.leave_value_mean) / kValueScale);
   out[TILE_KINDS + 2] = float(double(summary.leave_value_sd) / kValueScale);
   return out;

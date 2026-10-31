@@ -3,10 +3,12 @@ data/pool_log.h, which owns the format) and the model inputs its positions
 replay to.
 
 A pool names its position by (game, turn) in the companion .slog, so the
-inputs are rebuilt by replay, as move_set_eval's are: ffi.move_set_positions
-returns each position's pre-move board row and its candidates' cross-check
-features. The pool lists the candidates, so no legal-move enumeration is
-needed. Pools are hidden-leaves only, so the FFI session must be in that arm
+inputs are rebuilt by replay, as move_set_eval's are. Training reads every
+input through ffi.policy_set_positions (dataset.py, over the engine's
+training/policy_set_inputs.h); pool_inputs here covers only the board row and
+the candidates' cross-check features, through ffi.move_set_positions. The pool
+lists the candidates, so no legal-move enumeration is needed. Pools are
+hidden-leaves only, so the FFI session must be in that arm
 (ffi.set_opp_leave_input(False), the default).
 """
 

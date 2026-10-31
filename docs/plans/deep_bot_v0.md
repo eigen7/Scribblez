@@ -859,7 +859,7 @@ ran away in the first run and drove the slot and greedy forms' failures.
 **Half of each training batch is transposed.** The board is symmetric under
 the diagonal transpose, so the trainer encodes a random half of each batch's
 positions as their transposed positions (the board row, the candidates' tiles
-and cross-checks, their equities; `ffi.move_set_positions`' `transposes`),
+and cross-checks, their equities; `ffi.policy_set_positions`' `transposes`),
 with the same labels. The held-out eval reads positions as played. Offline,
 on 1,800 pools over 16 epochs, it left the best held-out cross-entropy
 unchanged (2.58 vs. 2.57) but held it at 2.66 where the unaugmented model

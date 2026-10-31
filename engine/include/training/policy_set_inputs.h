@@ -81,11 +81,10 @@ struct CandidateInputs {
 };
 
 // The training side's inputs at a pool position: `decoder`'s (on `dict`)
-// pre-move replay
-// of turn `turn_idx` of game `game_idx` in the loaded .slog `buf` (`path`
-// names it in errors), transposed with `transpose`, as the board row at row
-// `output_row` of `rows`, and `moves` (in that frame) encoded into `out`.
-// What the dataset's FFI replay runs per position.
+// pre-move replay of turn `turn_idx` of game `game_idx` in the loaded .slog
+// `buf` (`path` names it in errors), transposed with `transpose`, as the board
+// row at row `output_row` of `rows`, and `moves` (in that frame) encoded into
+// `out`. What the dataset's FFI replay runs per position.
 void replay_candidate_inputs(binlog::BlockDecoder& decoder, const Dictionary& dict, const char* buf,
                              const std::string& path, uint32_t game_idx, uint32_t turn_idx,
                              bool transpose, const std::vector<Move>& moves, float* rows,
