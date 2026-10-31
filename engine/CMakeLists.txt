@@ -107,6 +107,7 @@ add_library(scribblez_core STATIC
   src/training/move_set_eval_target_log.cpp
   src/training/move_set_eval_candidates.cpp
   src/training/move_set_encoder.cpp
+  src/training/policy_set_inputs.cpp
   src/training/cross_check_delta.cpp
   src/agent/sim_agent.cpp
   src/agent/weird_bot.cpp

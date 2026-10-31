@@ -7,6 +7,7 @@
 #include "lexicon/hasty_equity.h"
 #include "sim/candidate_race.h"
 #include "sim/setup_plays.h"
+#include "training/policy_set_inputs.h"
 #include "util/exception.h"
 #include "util/work_pool.h"
 
@@ -267,29 +268,12 @@ SimCandidates select_all_plays(const SimPosition& pos, const Dictionary& dict,
   return out;
 }
 
-// Whether the pool keeps `m`, given the greedy move's score. places_blank
-// also finds the blank among an exchange's surrendered tiles.
-bool in_pool(const Move& m, int greedy_score, int blank_prune_points) {
-  const int score = m.type() == MoveType::PLAY ? m.score() : 0;
-  return !places_blank(m) || score > greedy_score - blank_prune_points;
-}
-
 SimCandidates select_pool(const std::vector<Move>& ranked, int blank_prune_points) {
-  int greedy_score = 0;
-  for (const Move& m : ranked)
-    if (m.type() == MoveType::PLAY) greedy_score = std::max(greedy_score, int(m.score()));
+  policy_set::PoolCandidates pool = policy_set::pool_candidates(ranked, blank_prune_points);
   SimCandidates out;
   out.num_legal_moves = ranked.size();
-  for (size_t i = 0; i < ranked.size(); ++i) {
-    if (!in_pool(ranked[i], greedy_score, blank_prune_points)) continue;
-    out.moves.push_back(ranked[i]);
-    out.equity_ranks.push_back(int32_t(i));
-  }
-  // The ranking holds a pass only when nothing else is legal.
-  if (std::find(out.moves.begin(), out.moves.end(), Move::pass()) == out.moves.end()) {
-    out.moves.push_back(Move::pass());
-    out.equity_ranks.push_back(-1);
-  }
+  out.moves = std::move(pool.moves);
+  out.equity_ranks = std::move(pool.equity_ranks);
   out.highlighted.assign(out.moves.size(), 0);
   return out;
 }

@@ -187,13 +187,10 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
 //   out_rows     float[n_positions * scribblez_task_row_floats(s, 0)]
 //   out_cells    int32[n_moves * cross_slots]
 //   out_letters  uint8[n_moves * cross_slots * 26]
-//   out_equities float[n_moves], or null to skip: each move's HastyBot static
-//                equity at its decision point, with the opponent's leave
-//                hidden
 // `transposes` (uint8[n_positions]) and `out_moves` (Move[n_moves]) come
 // together or are both null. Position j with transposes[j] != 0 is encoded
-// transposed (RowAugment::transpose): its row, and its candidates' cross-checks
-// and equities, are those of the transposed position, and out_moves holds its
+// transposed (RowAugment::transpose): its row, and its candidates' cross-checks,
+// are those of the transposed position, and out_moves holds its
 // candidates transposed (Move::transpose), for the caller to encode their tiles
 // in the same frame. Other positions' moves are copied through unchanged.
 // Returns 0 on success, -1 on an I/O or header error or on only one of
@@ -201,8 +198,45 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
 int scribblez_move_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
                                  const int64_t* turn_idx, const int64_t* move_counts,
                                  int64_t n_positions, const void* moves, float* out_rows,
-                                 int32_t* out_cells, uint8_t* out_letters, float* out_equities,
+                                 int32_t* out_cells, uint8_t* out_letters,
                                  const uint8_t* transposes, void* out_moves);
+
+// Where scribblez_policy_set_positions writes, with max_placed and num_scalars
+// from scribblez_move_set_move_dims and opp_rack_floats from the format
+// layout's policy_set constants:
+//   rows                          float[n_positions * scribblez_task_row_floats(s, 0)]
+//   opp_rack                      float[n_positions * opp_rack_floats]
+//   letters, squares              int32[n_moves * max_placed]
+//   blanks, tile_mask             uint8[n_moves * max_placed]
+//   scalars                       float[n_moves * num_scalars]
+//   cross_cells                   int32[n_moves * cross_slots]
+//   cross_letters                 uint8[n_moves * cross_slots * 26]
+//   equity                        float[n_moves]
+struct ScribblezPolicySetOutputs {
+  float* rows;
+  float* opp_rack;
+  int32_t* letters;
+  uint8_t* blanks;
+  int32_t* squares;
+  uint8_t* tile_mask;
+  float* scalars;
+  int32_t* cross_cells;
+  uint8_t* cross_letters;
+  float* equity;
+};
+
+// The policy-set model's inputs at pool positions of one .slog: each
+// position's pre-move training row and its opponent-rack input, and its
+// candidates' inputs (training/policy_set_inputs.h, what PolicyBot computes at
+// play). Positions, moves and transposes are addressed as in
+// scribblez_move_set_positions, every candidate encoded in its position's
+// frame; opp_racks is PoolOppRack[n_positions], each position's pool record.
+// The session must be in the hidden-leaves arm. Returns 0 on success, -1 on an
+// I/O or header error.
+int scribblez_policy_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
+                                   const int64_t* turn_idx, const int64_t* move_counts,
+                                   int64_t n_positions, const void* moves, const void* opp_racks,
+                                   const uint8_t* transposes, const ScribblezPolicySetOutputs* out);
 
 // The cross-check outputs of scribblez_move_set_positions for the `n` moves of
 // one position-set GCG's decision point (read as scribblez_gcg_position_inputs

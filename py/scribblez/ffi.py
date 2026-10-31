@@ -44,6 +44,28 @@ class _ScribblezShape(ctypes.Structure):
     ]
 
 
+def _pointer(array: np.ndarray, ctype):
+    """A ctypes pointer to `array`'s (C-contiguous) data as `ctype`."""
+    return array.ctypes.data_as(ctypes.POINTER(ctype))
+
+
+class _PolicySetOutputs(ctypes.Structure):
+    """ScribblezPolicySetOutputs (scribblez_ffi.h)."""
+
+    _fields_ = [
+        ("rows", ctypes.POINTER(ctypes.c_float)),
+        ("opp_rack", ctypes.POINTER(ctypes.c_float)),
+        ("letters", ctypes.POINTER(ctypes.c_int32)),
+        ("blanks", ctypes.POINTER(ctypes.c_uint8)),
+        ("squares", ctypes.POINTER(ctypes.c_int32)),
+        ("tile_mask", ctypes.POINTER(ctypes.c_uint8)),
+        ("scalars", ctypes.POINTER(ctypes.c_float)),
+        ("cross_cells", ctypes.POINTER(ctypes.c_int32)),
+        ("cross_letters", ctypes.POINTER(ctypes.c_uint8)),
+        ("equity", ctypes.POINTER(ctypes.c_float)),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Public data classes
 # ---------------------------------------------------------------------------
@@ -266,9 +288,22 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.POINTER(ctypes.c_float),  # out_rows
         ctypes.POINTER(ctypes.c_int32),  # out_cells
         ctypes.POINTER(ctypes.c_uint8),  # out_letters
-        ctypes.POINTER(ctypes.c_float),  # out_equities, nullable
         ctypes.POINTER(ctypes.c_uint8),  # transposes, nullable with out_moves
         ctypes.c_void_p,  # out_moves, nullable with transposes
+    ]
+
+    lib.scribblez_policy_set_positions.restype = ctypes.c_int
+    lib.scribblez_policy_set_positions.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # .slog path
+        ctypes.POINTER(ctypes.c_int64),  # game_idx
+        ctypes.POINTER(ctypes.c_int64),  # turn_idx
+        ctypes.POINTER(ctypes.c_int64),  # move_counts
+        ctypes.c_int64,  # n_positions
+        ctypes.c_void_p,  # moves
+        ctypes.c_void_p,  # opp_racks (PoolOppRack[n_positions])
+        ctypes.POINTER(ctypes.c_uint8),  # transposes, nullable
+        ctypes.POINTER(_PolicySetOutputs),  # out
     ]
 
     lib.scribblez_gcg_cross_checks.restype = ctypes.c_int
@@ -853,7 +888,6 @@ def move_set_positions(
     turn_idx: np.ndarray,
     move_counts: np.ndarray,
     moves: np.ndarray,
-    equities: bool = False,
     transposes: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """A move set batch's inputs from one .slog, one replay per position: each
@@ -867,11 +901,9 @@ def move_set_positions(
     (P, task_row_floats()) float32, as decode_rows(post_move=False) decodes
     them; "cells" (M, slots) int64 -- 1 + axis * 225 + square per entry, 0 in
     empty slots; and "letters" (M, slots * 26) uint8, each entry's post-move
-    legal letters. With `equities`, also "equities" (M,) float32, each move's
-    HastyBot static equity at its decision point, the opponent's leave hidden.
-    With `transposes` (P,) bool, position j where it is set is encoded as the
-    transposed position (the board's diagonal symmetry), cross-checks and equities
-    included, and "moves" (M,) MOVE_DTYPE returns every candidate in its
+    legal letters. With `transposes` (P,) bool, position j where it is set is
+    encoded as the transposed position (the board's diagonal symmetry),
+    cross-checks included, and "moves" (M,) MOVE_DTYPE returns every candidate in its
     position's frame: transposed there, as given elsewhere.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
@@ -886,7 +918,6 @@ def move_set_positions(
         raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
     rows = np.empty((len(games), task_row_floats()), dtype=np.float32)
     cells, letters = _cross_check_arrays(len(moves))
-    equity = np.empty(len(moves), dtype=np.float32) if equities else None
     flips = None if transposes is None else np.ascontiguousarray(transposes, dtype=np.uint8)
     if flips is not None and flips.shape != games.shape:
         raise ValueError(f"transposes shape {flips.shape} != positions {games.shape}")
@@ -902,18 +933,106 @@ def move_set_positions(
         rows.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
         cells.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
         letters.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-        None if equity is None else equity.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
         None if flips is None else flips.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
         None if framed is None else framed.ctypes.data_as(ctypes.c_void_p),
     )
     if rc != 0:
         raise OSError(f"move_set_positions failed (rc={rc}) for {path}")
     out = {"rows": rows, **_cross_check_result(cells, letters)}
-    if equity is not None:
-        out["equities"] = equity
     if framed is not None:
         out["moves"] = framed
     return out
+
+
+def policy_set_positions(
+    path: str | Path,
+    game_idx: np.ndarray,
+    turn_idx: np.ndarray,
+    move_counts: np.ndarray,
+    moves: np.ndarray,
+    opp_racks: np.ndarray,
+    transposes: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    """The policy-set model's inputs at pool positions of one .slog, from the
+    engine code PolicyBot computes them with at play (training/
+    policy_set_inputs.h). Positions, moves and `transposes` are addressed as in
+    move_set_positions; `opp_racks` (P,) is each position's PoolOppRack record.
+    The session must be in the hidden-leaves arm. Returns "rows" (P,
+    task_row_floats()) and "opp_rack" (P, opp_rack_floats) float32, and per
+    candidate, in its position's frame, encode_moves' arrays (letters,
+    blanks, squares, tile_mask, scalars), "cells" and "letters_cross" as
+    move_set_positions' "cells" and "letters", and "equity" (M,) float32.
+    """
+    from scribblez.sim_evidence.sobs import MOVE_DTYPE
+
+    games = np.ascontiguousarray(game_idx, dtype=np.int64)
+    turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
+    counts = np.ascontiguousarray(move_counts, dtype=np.int64)
+    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
+    racks = np.ascontiguousarray(opp_racks, dtype=struct_dtype("PoolOppRack"))
+    if not (games.shape == turns.shape == counts.shape == racks.shape) or games.ndim != 1:
+        raise ValueError(
+            f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape} {racks.shape}"
+        )
+    if counts.sum() != len(moves):
+        raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
+    flips = None if transposes is None else np.ascontiguousarray(transposes, dtype=np.uint8)
+    if flips is not None and flips.shape != games.shape:
+        raise ValueError(f"transposes shape {flips.shape} != positions {games.shape}")
+    n = len(moves)
+    max_placed, num_scalars, _, _ = move_encoding_dims()
+    cells, cross_letters = _cross_check_arrays(n)
+    out = {
+        "rows": np.empty((len(games), task_row_floats()), dtype=np.float32),
+        "opp_rack": np.empty(
+            (len(games), format_layout()["constants"]["policy_set"]["opp_rack_floats"]),
+            dtype=np.float32,
+        ),
+        "letters": np.zeros((n, max_placed), dtype=np.int32),
+        "blanks": np.zeros((n, max_placed), dtype=np.uint8),
+        "squares": np.zeros((n, max_placed), dtype=np.int32),
+        "tile_mask": np.zeros((n, max_placed), dtype=np.uint8),
+        "scalars": np.zeros((n, num_scalars), dtype=np.float32),
+        "equity": np.zeros(n, dtype=np.float32),
+    }
+    c_float, c_int32, c_uint8 = ctypes.c_float, ctypes.c_int32, ctypes.c_uint8
+    targets = _PolicySetOutputs(
+        rows=_pointer(out["rows"], c_float),
+        opp_rack=_pointer(out["opp_rack"], c_float),
+        letters=_pointer(out["letters"], c_int32),
+        blanks=_pointer(out["blanks"], c_uint8),
+        squares=_pointer(out["squares"], c_int32),
+        tile_mask=_pointer(out["tile_mask"], c_uint8),
+        scalars=_pointer(out["scalars"], c_float),
+        cross_cells=_pointer(cells, c_int32),
+        cross_letters=_pointer(cross_letters, c_uint8),
+        equity=_pointer(out["equity"], c_float),
+    )
+    rc = _lib().scribblez_policy_set_positions(
+        _session(),
+        str(path).encode("utf-8"),
+        games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        turns.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        len(games),
+        moves.ctypes.data_as(ctypes.c_void_p),
+        racks.ctypes.data_as(ctypes.c_void_p),
+        None if flips is None else flips.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        ctypes.byref(targets),
+    )
+    if rc != 0:
+        raise OSError(f"policy_set_positions failed (rc={rc}) for {path}")
+    cross = _cross_check_result(cells, cross_letters)
+    return {
+        **out,
+        # encode_moves' dtypes.
+        "letters": out["letters"].astype(np.int64),
+        "blanks": out["blanks"].astype(bool),
+        "squares": out["squares"].astype(np.int64),
+        "tile_mask": out["tile_mask"].astype(bool),
+        "cells": cross["cells"],
+        "letters_cross": cross["letters"],
+    }
 
 
 def gcg_cross_checks(

@@ -44,6 +44,7 @@ from scribblez.workloads.policy_set import PolicySetParams  # noqa: E402
 from scribblez.workloads.worker import WorkerFatal  # noqa: E402
 
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
+EQUITY_FLOOR = ffi.format_layout()["constants"]["policy_set"]["equity_floor"]
 
 
 def _pool(q, win, rank, values=None) -> pools.Pool:
@@ -58,10 +59,7 @@ def _pool(q, win, rank, values=None) -> pools.Pool:
         game=0,
         turn=0,
         num_legal_moves=n,
-        opp_rack_presence=np.zeros(27, np.float32),
-        opp_leave_modelled=False,
-        opp_leave_value_mean=0.0,
-        opp_leave_value_sd=0.0,
+        opp_rack=np.zeros((), ffi.struct_dtype("PoolOppRack"))[()],
         moves=moves,
         win_prob=np.array(win, np.float32),
         paired_se=np.zeros(n, np.float32),
@@ -181,7 +179,7 @@ def test_the_equity_input_is_relative_to_each_pools_best(chunk):
     eq, pos_id = batch["move_equity"].numpy(), batch["move_pos_id"].numpy()
     for j in range(len(items)):
         mine = eq[pos_id == j]
-        assert mine.max() == 0 and mine.min() >= dataset.EQUITY_FLOOR
+        assert mine.max() == 0 and mine.min() >= EQUITY_FLOOR
         # The best equity is the pool's equity rank 0, where the pool has one.
         ranks = items[j].pool.equity_rank
         if (ranks == 0).any():

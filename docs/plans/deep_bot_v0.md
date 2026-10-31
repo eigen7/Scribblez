@@ -757,13 +757,15 @@ of them; later held-out chunks are deleted. The trainer evaluates on the set.
 ### Inputs at train time
 
 Inputs are rebuilt by replay, as `move_set_eval`'s trainer does. The pool's
-`.slog` reference and its candidate moves go to `ffi.move_set_positions`,
-which returns the board rows and per-move cross-check cells and letters. The
-process runs in the hidden-leaves arm (`ffi.set_opp_leave_input`, adopted
+`.slog` reference, its candidate moves and its opponent-rack record go to
+`ffi.policy_set_positions`, which returns the board rows, the
+[opponent-rack input](#the-opponent-rack-input) and every per-move input,
+encoded by the engine code PolicyBot plays with
+([policy_set_inputs.h](../../engine/include/training/policy_set_inputs.h)).
+The process runs in the hidden-leaves arm (`ffi.set_opp_leave_input`, adopted
 from a header flag in the pool sidecar). No legal-move enumeration is needed,
-because the pool lists the candidates. The
-[opponent-rack input](#the-opponent-rack-input) comes from the pool record
-itself (`pools.Pool`), not from replay.
+because the pool lists the candidates. The opponent-rack belief comes from
+the pool record itself (`pools.Pool`), not from replay.
 
 ### The forms
 
@@ -775,7 +777,7 @@ move set checkpoints are face-up and differ in their input blocks.
 **The equity input.** Each candidate's HastyBot static equity, less its
 pool's best, joins its embedding, so a form starts from the static-equity
 ranking and learns its correction. The equities are recomputed by the replay
-that builds the board rows (`ffi.move_set_positions(..., equities=True)`).
+that builds the board rows (`ffi.policy_set_positions`).
 
 **Form 1, `greedy`:** a set-conditioning stage plus a gain head.
 - The stage is the evidence-fusion stage's set half with chosen-move tokens

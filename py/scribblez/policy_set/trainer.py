@@ -120,7 +120,10 @@ def recalibration_batches(batcher, items, params, gen, device):
     order = dataset.batch_order(len(items), params.batch_size, seed=gen * 1000003 + 1)
     for idx in order[:BN_RECALIBRATION_BATCHES]:
         b = batcher.build([items[i] for i in idx])
-        yield b["input_spatial"].to(device), trunk_scalar(b).to(device)
+        yield (
+            b["input_spatial"].to(device),
+            trunk_scalar(b["input_scalar"], b["opp_rack"]).to(device),
+        )
 
 
 def held_out_items(paths: TagPaths, params) -> list[dataset.PoolItem]:
