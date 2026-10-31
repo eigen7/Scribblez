@@ -13,6 +13,9 @@ the correction to the static-equity ranking rather than the ranking itself.
 Its output is one vector per candidate, layer-normalized, which a form reads:
 unnormalized, the vectors' scale ran away in training, driving the slot form's
 pointer logits to divergence and the greedy form's gain head into saturation.
+The trunk's scalar projection is normalized for the same reason at the
+encoder's input end (SpatialTrunk's normalize_scalar): unnormalized, it outgrew
+the board's features until every candidate's vector was the same.
 """
 
 from __future__ import annotations
@@ -57,11 +60,16 @@ class PolicySetEncoder(nn.Module):
         channels: int,
         num_blocks: int,
         num_heads: int,
+        normalize_scalar: bool = True,
     ):
         super().__init__()
         # The opponent-rack input rides beside the board row's scalars.
         self.trunk = SpatialTrunk(
-            spatial_planes, scalar_size + OPP_RACK_FLOATS, channels, num_blocks
+            spatial_planes,
+            scalar_size + OPP_RACK_FLOATS,
+            channels,
+            num_blocks,
+            normalize_scalar=normalize_scalar,
         )
         _, num_scalars, letter_vocab, cells = move_encoding_dims()
         self.board_pos_emb = nn.Parameter(torch.zeros(cells, channels))

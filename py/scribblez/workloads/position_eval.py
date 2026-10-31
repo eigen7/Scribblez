@@ -35,7 +35,7 @@ from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIM
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR
-from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
+from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP, TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
 from scribblez.workloads.base import RoleSpec, SlotPlan, StatsSpec, WorkerContext, WorkloadSpec
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
 
@@ -153,6 +153,7 @@ class PositionEvalParams:
     # Model.
     num_blocks: int = param(10, "residual blocks")
     trunk_channels: int = param(192, "trunk width")
+    normalize_scalar: bool = param(True, NORMALIZE_SCALAR_HELP)
     use_film: bool = param(
         False,
         "FiLM conditioning where the trunk injects scalar and global context: the scalars "

@@ -125,6 +125,13 @@ class SpatialTrunk(nn.Module):
     gate a board feature, such as that letter's cross-check plane, rather than
     only shift it. The gamma projections are zero-initialized, so a FiLM trunk
     starts out identical to the additive one.
+
+    normalize_scalar layer-normalizes the scalar projection. Unnormalized, it is
+    the one branch into the tower whose scale nothing bounds: over a long run of
+    small-batch steps its two weight matrices can grow until it outweighs the
+    batch-normalized stem by orders of magnitude, and the board's features drown
+    in the sum (a policy_set run went from 1x to 8e4x and collapsed to a uniform
+    policy). Tags trained before it existed run with it off.
     """
 
     def __init__(
@@ -138,6 +145,7 @@ class SpatialTrunk(nn.Module):
         transformer: TransformerConfig | None = None,
         registers: nn.Module | None = None,
         board_size: int = 15,
+        normalize_scalar: bool = True,
     ):
         super().__init__()
         self.use_film = use_film
@@ -151,6 +159,7 @@ class SpatialTrunk(nn.Module):
             nn.Linear(scalar_size, trunk_channels),
             nn.ReLU(inplace=True),
             nn.Linear(trunk_channels, trunk_channels),
+            *([nn.LayerNorm(trunk_channels)] if normalize_scalar else []),
         )
         if use_film:
             self.stem_gamma = nn.Linear(scalar_size, trunk_channels)

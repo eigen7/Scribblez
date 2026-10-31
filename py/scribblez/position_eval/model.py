@@ -289,6 +289,7 @@ class PositionEvalModel(HeadedModel):
         lexicon_module: nn.Module | None = None,
         use_film: bool = False,
         transformer: TransformerConfig | None = None,
+        normalize_scalar: bool = True,
     ):
         super().__init__()
         self.board_size = board_size
@@ -304,6 +305,7 @@ class PositionEvalModel(HeadedModel):
             transformer=transformer,
             registers=(TileSupplyRegisters(trunk_channels, scalar_size) if transformer else None),
             board_size=board_size,
+            normalize_scalar=normalize_scalar,
         )
 
         # The value summary (see forward) is mean+max board pooling (2C) plus

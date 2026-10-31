@@ -13,6 +13,7 @@ from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.params import param
+from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP
 from scribblez.workloads.base import RoleSpec, WorkloadSpec
 from scribblez.workloads.position_eval import TRAINER_STATS
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR
@@ -54,6 +55,7 @@ class MaxMovePerLaneParams:
     # Model.
     trunk_channels: int = param(128, "CNN trunk width")
     num_blocks: int = param(8, "trunk residual blocks")
+    normalize_scalar: bool = param(True, NORMALIZE_SCALAR_HELP)
     lane_layers: int = param(4, "lane transformer layers")
     lane_heads: int = param(4, "lane transformer attention heads")
     ffn_mult: int = param(4, "lane transformer FFN width multiple")

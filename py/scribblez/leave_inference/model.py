@@ -31,12 +31,19 @@ class LeaveInferenceModel(nn.Module):
         trunk_channels: int,
         num_blocks: int,
         head: str = HEAD_TILTED,
+        normalize_scalar: bool = True,
     ):
         super().__init__()
         if head not in HEADS:
             raise ValueError(f"unknown head {head!r}; expected one of {HEADS}")
         self.head_kind = head
-        self.trunk = SpatialTrunk(spatial_planes, scalar_size, trunk_channels, num_blocks)
+        self.trunk = SpatialTrunk(
+            spatial_planes,
+            scalar_size,
+            trunk_channels,
+            num_blocks,
+            normalize_scalar=normalize_scalar,
+        )
         # Pooled board features (mean and max) plus the scalar projection.
         self.context = nn.Sequential(
             nn.Linear(3 * trunk_channels, trunk_channels), nn.ReLU(inplace=True)

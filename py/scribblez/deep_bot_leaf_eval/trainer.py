@@ -62,6 +62,7 @@ def model_shape(params) -> LeafEvalShape:
         width=params.width,
         depth=params.depth,
         num_heads=params.num_heads,
+        normalize_scalar=params.normalize_scalar,
     )
 
 

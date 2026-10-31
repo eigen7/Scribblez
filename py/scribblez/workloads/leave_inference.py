@@ -19,6 +19,7 @@ from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.leave_inference.heads import HEAD_TILTED, HEADS
 from scribblez.params import ParamsError, param
+from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP
 from scribblez.workloads.base import RoleSpec, WorkerContext, WorkloadSpec
 from scribblez.workloads.position_eval import TRAINER_STATS
 from scribblez.workloads.selfplay_gen import (
@@ -87,6 +88,7 @@ class LeaveInferenceParams:
     )
     num_blocks: int = param(8, "conv tower residual blocks")
     trunk_channels: int = param(128, "conv tower width")
+    normalize_scalar: bool = param(True, NORMALIZE_SCALAR_HELP)
     head: str = param(
         HEAD_TILTED,
         "output head (leave_inference/model.py): 'tilted' is the design's 29 floats over the "

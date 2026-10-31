@@ -4,13 +4,17 @@
 When a workload param is renamed, dropped, or added-without-a-default, every stored
 copy of a live tag's params stops validating and the scheduler wedges with
 "unknown parameter 'X'" (or a missing-field error) on each reconcile / dispatch.
-The params are snapshotted in more than one place -- the tag's task.json and one
-per-worker provenance manifest under params/<worker_id>.json -- so hand-editing
-task.json alone leaves the tag broken.
+The params are snapshotted in more than one place -- the tag's task.json, one
+per-worker provenance manifest under params/<worker_id>.json, and the config each
+stored checkpoint carries (the rolling one and the delivered state snapshots) --
+so hand-editing task.json alone leaves the tag broken, and a tool that rebuilds a
+model from a checkpoint's config (an exporter, a teacher loader) builds the wrong
+one.
 
 This applies --rename / --drop / --set to the params in ALL of a tag's stored
-files, validates the result against the workload's CURRENT schema, and writes each
-back atomically (tmp + os.replace). Operations apply in that order per file, so a
+files, validates the params files' result against the workload's CURRENT schema
+(a checkpoint config holds more than the params, so it is only rewritten), and
+writes each back atomically (tmp + os.replace). Operations apply in that order per file, so a
 rename can feed a later set. A file already matching the target schema is left
 untouched and reported.
 
@@ -33,9 +37,11 @@ import os
 import sys
 from pathlib import Path
 
+import torch
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard.control_store import ControlStore
+from scribblez.generational.state_pair import STATE_DIR
 from scribblez.paths import TagPaths, add_mount_root_argument
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
@@ -88,6 +94,33 @@ def param_files(root: Path) -> list[Path]:
     return files
 
 
+def checkpoint_files(root: Path) -> list[Path]:
+    """Every stored checkpoint under a tag, whose ["config"] holds the params
+    beside its format versions: the rolling checkpoint, then each delivered
+    state snapshot."""
+    return sorted((root / "checkpoints").glob("*.pt")) + sorted(
+        (root / STATE_DIR).glob("gen_*/*.pt")
+    )
+
+
+def migrate_checkpoint(path: Path, rel: Path, renames, drops, sets, dry_run) -> bool:
+    """Apply the ops to one checkpoint's config; return whether it changed."""
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    new_config, changed = apply_ops(ckpt["config"], renames, drops, sets)
+    if not changed:
+        print(f"  {rel}: already clean")
+        return False
+    if dry_run:
+        print(f"  {rel}: would migrate")
+        return True
+    ckpt["config"] = new_config
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(ckpt, tmp)
+    os.replace(tmp, path)
+    print(f"  {rel}: migrated")
+    return True
+
+
 def alive_workers(spec, tag: str, mount_root: str) -> list[str]:
     """The tag's slots whose worker process is alive. The slots are in the
     dashboard's control store, or, before the dashboard first moved them
@@ -118,8 +151,9 @@ def migrate_tag(spec, tag, mount_root, renames, drops, sets, dry_run) -> int:
         )
 
     files = param_files(root)
-    if not files:
-        print(f"{tag}: no param files")
+    checkpoints = checkpoint_files(root)
+    if not files and not checkpoints:
+        print(f"{tag}: no param files or checkpoints")
         return 0
 
     print(f"{tag}:")
@@ -150,6 +184,9 @@ def migrate_tag(spec, tag, mount_root, renames, drops, sets, dry_run) -> int:
         doc["params"] = new_params
         _write_json(f, doc)
         print(f"  {rel}: migrated")
+    for path in checkpoints:
+        rel = path.relative_to(root)
+        changed_count += migrate_checkpoint(path, rel, renames, drops, sets, dry_run)
     return changed_count
 
 

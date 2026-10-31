@@ -633,6 +633,7 @@ def _student_checkpoint(path, train, *, open_leaves: bool, version=None):
                 "num_blocks": 1,
                 "num_heads": 2,
                 "trunk": "conv",
+                "normalize_scalar": True,
                 "transformer_mid_channels": 8,
                 "transformer_heads": 2,
                 "transformer_ffn_channels": 16,

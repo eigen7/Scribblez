@@ -6,6 +6,7 @@ import json
 import os
 
 import pytest
+import torch
 from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard.control_store import ControlStore
@@ -82,6 +83,25 @@ def test_already_clean_is_idempotent(tmp_path):
     _tag_dir(tmp_path, "t", extra_params={"num_blocks": 8})
     spec = workloads.get(_WORKLOAD)
     assert mig.migrate_tag(spec, "t", str(tmp_path), {}, ["mask_placement"], {}, dry_run=False) == 0
+
+
+def test_checkpoint_configs_are_migrated_with_the_params(tmp_path):
+    """The rolling checkpoint's and each state snapshot's config get the same
+    ops, and their weights come through untouched."""
+    root = _tag_dir(tmp_path, "t")
+    paths = [root / "checkpoints" / "model.pt", root / "state" / "gen_000003" / "model.pt"]
+    weights = {"w": torch.arange(3.0)}
+    for path in paths:
+        path.parent.mkdir(parents=True)
+        torch.save({"config": {"num_blocks": 10}, "model_state_dict": weights}, path)
+    spec = workloads.get(_WORKLOAD)
+    sets = {"normalize_scalar": False}
+    changed = mig.migrate_tag(spec, "t", str(tmp_path), {}, [], sets, dry_run=False)
+    assert changed == 4  # task.json + one snapshot + two checkpoints
+    for path in paths:
+        ckpt = torch.load(path, weights_only=False)
+        assert ckpt["config"] == {"num_blocks": 10, "normalize_scalar": False}
+        assert torch.equal(ckpt["model_state_dict"]["w"], weights["w"])
 
 
 def test_set_value_is_json_typed_then_coerced(tmp_path):

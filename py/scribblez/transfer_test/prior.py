@@ -80,6 +80,7 @@ def load_teacher(teacher_tag: str, generation: int, mount_root: Path) -> Positio
         num_blocks=cfg["num_blocks"],
         use_film=cfg["use_film"],
         transformer=transformer_config(cfg),
+        normalize_scalar=cfg["normalize_scalar"],
     )
     model.load_state_dict(ckpt["model_state_dict"])
     return model.eval()

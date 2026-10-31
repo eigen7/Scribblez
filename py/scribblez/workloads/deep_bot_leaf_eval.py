@@ -16,7 +16,7 @@ from cloud.runtime_abi import RUNTIME_TORCH
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.params import param
-from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
+from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP, TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
 from scribblez.workloads.base import RoleSpec, SlotPlan, WorkerContext, WorkloadSpec
 from scribblez.workloads.position_eval import TRAINER_STATS
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
@@ -84,6 +84,7 @@ class DeepBotLeafEvalParams:
     width: int = param(64, "trunk width (channels)")
     depth: int = param(4, "transformer layers, or conv residual blocks")
     num_heads: int = param(2, "transformer attention heads (head dim = width / heads)")
+    normalize_scalar: bool = param(True, f"conv trunk: {NORMALIZE_SCALAR_HELP}")
 
 
 # The trainer's peak GPU memory in GiB, measured 2026-10-23 on the RTX 5000 Ada

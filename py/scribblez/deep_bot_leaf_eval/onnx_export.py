@@ -97,6 +97,7 @@ def export_checkpoint(ckpt: dict, out: Path, tag: str) -> dict[str, object]:
         width=int(params["width"]),
         depth=int(params["depth"]),
         num_heads=int(params["num_heads"]),
+        normalize_scalar=bool(params["normalize_scalar"]),
     )
     model = LeafEvalModel(shape)
     model.load_state_dict(ckpt["model_state_dict"])

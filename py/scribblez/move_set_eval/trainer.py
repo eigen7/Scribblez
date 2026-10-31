@@ -467,6 +467,7 @@ def run(ctx: WorkerContext) -> int:
         num_blocks=params.num_blocks,
         num_heads=params.num_heads,
         transformer=transformer_config(asdict(params)),
+        normalize_scalar=params.normalize_scalar,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} parameters")
