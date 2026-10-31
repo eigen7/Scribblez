@@ -67,11 +67,12 @@ std::array<float, kOppRackFloats> encode_opp_rack(const belief::OppRackSummary& 
 }
 
 void CandidateInputs::encode(const GameStateEncoder& position, const Dictionary& dict,
-                             const Rack& rack, int bag_size, const std::vector<Move>& moves) {
+                             const Rack& rack, int bag_size, const std::vector<Move>& moves,
+                             move_set::CrossCheckDeltaSource& cross_checks) {
   RELEASE_ASSERT(!moves.empty(), "a policy-set position has at least one candidate");
   const int mover = position.active_player();
   features.encode(position.board(), dict, moves.data(), int(moves.size()),
-                  position.score(mover) - position.score(1 - mover));
+                  position.score(mover) - position.score(1 - mover), cross_checks);
   write_equity_inputs(
     HastyEquity::instance().equities(moves, position.board(), bag_size, Rack{}, rack), &equity);
 }

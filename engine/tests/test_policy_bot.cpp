@@ -144,7 +144,8 @@ class PolicyBotTest : public ::testing::Test {
                      {.policy = stub,
                       .blank_prune_points = kBlankPrune,
                       .predict = std::move(predict),
-                      .table = std::move(table)});
+                      .table = std::move(table),
+                      .cross_checks = nullptr});
   }
 
   // A game of `bot` (seat 0) against TopScoreAgent, as a .slog with its

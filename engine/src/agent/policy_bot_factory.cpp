@@ -5,6 +5,7 @@
 #include "agent/agent_options.h"
 #include "agent/policy_bot.h"
 #include "belief/served_leave_model.h"
+#include "gpu/cross_check_deltas_gpu.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "nn/onnx_metadata.h"
@@ -70,6 +71,7 @@ PolicyBot::Backend make_backend(const PolicyBot::Params& p) {
     b.table = std::move(model.table);
   }
   b.policy = nn::PolicySetEvalService::create(p.service.net_params<nn::PolicySetSpec>(0));
+  b.cross_checks = GpuCrossCheckDeltas::shared(*p.dict);
   return b;
 }
 
