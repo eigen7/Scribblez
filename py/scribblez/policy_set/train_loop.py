@@ -1,6 +1,6 @@
-"""One training epoch of the policy-set model's forms, their held-out eval,
-and the time each takes to build a batch of sets (docs/plans/deep_bot_v0.md,
-"Training the forms together" and "Eval metrics").
+"""One training epoch of the policy-set model's forms and their held-out
+eval (docs/plans/deep_bot_v0.md, "Training the forms together" and "Eval
+metrics").
 
 The forms train side by side on the same batches (forms.FORMS): one
 optimizer over every form's parameters, the summed loss, each form's
@@ -25,9 +25,6 @@ from scribblez.policy_set import metrics
 from scribblez.policy_set.dataset import PoolBatcher, PoolItem, batch_order
 from scribblez.policy_set.forms import FORMS
 
-# The batch eval_set_ms times: this many sets at this N.
-SET_TIMING_POSITIONS = 256
-SET_TIMING_N = 8
 # The share of training positions encoded transposed: the board is symmetric
 # under the diagonal transpose, so a transposed position is another, equally
 # real one, and half of each batch doubles the positions the model sees. The
@@ -171,26 +168,4 @@ def evaluate(
         by_pool = {id(it.pool): p for it, p in zip(items, form_picks, strict=True)}
         chooser = functools.partial(precomputed_pick, by_pool)
         out.update(metrics.set_metrics(pool_list, chooser, f"{name}_"))
-    return out
-
-
-@torch.no_grad()
-def set_build_ms(
-    models: nn.ModuleDict, batcher: PoolBatcher, items: list[PoolItem], device
-) -> dict[str, float]:
-    """Per form, milliseconds to build SET_TIMING_POSITIONS sets of
-    SET_TIMING_N from inputs already on the device, the sets back on the
-    host, the faster of three runs; keyed "<form>_eval_set_ms"."""
-    models.eval()
-    batch = to_device(batcher.build(items[:SET_TIMING_POSITIONS]), device)
-    out = {}
-    for name, model in models.items():
-        best = float("inf")
-        for _ in range(3):
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            t0 = time.perf_counter()
-            FORMS[name].sets(model, batch, SET_TIMING_N)
-            best = min(best, (time.perf_counter() - t0) * 1000)
-        out[f"{name}_eval_set_ms"] = best
     return out

@@ -889,7 +889,6 @@ Per generation and form, on held-out pools, for `N` in {1, 2, 4, 8, 16}:
 | `eval_cover_N` | `Σ_{a∈S} q(a)`, the soft form of recall, P(best ∈ S) |
 | `eval_regret_N` | mean `v(a*) − max_{a∈S} v(a)`, in win probability |
 | `eval_tail_recall_N` | recall on pools whose sim-best move is outside the static-equity top 10 |
-| `eval_set_ms` | time to build one batch of 256 sets at `N = 8` |
 
 Each metric is reported beside the same metric for the static-equity top `N`,
 the baseline every DeepBot set has to beat. The figure plots recall and

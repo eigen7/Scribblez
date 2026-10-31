@@ -363,8 +363,6 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
         "slot_eval_recall_8",
         "greedy_eval_recall_8",
         "equity_eval_recall_8",
-        "slot_eval_set_ms",
-        "greedy_eval_set_ms",
         "param_norm_slot",
         "slot_eval_spread",
         "greedy_eval_spread",

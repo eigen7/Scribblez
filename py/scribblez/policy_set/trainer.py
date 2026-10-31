@@ -133,7 +133,7 @@ def held_out_items(paths: TagPaths, params) -> list[dataset.PoolItem]:
 
 def eval_record(models, batcher, held: list[dataset.PoolItem], params, device) -> dict:
     """The held-out pools' statistics, the baseline's metrics, and each
-    form's metrics and set-building time."""
+    form's metrics."""
     if not held:
         return {}
     pool_list = [it.pool for it in held]
@@ -141,7 +141,6 @@ def eval_record(models, batcher, held: list[dataset.PoolItem], params, device) -
         **metrics.pool_stats(pool_list, "eval_"),
         **metrics.set_metrics(pool_list, metrics.equity_top, BASELINE),
         **train_loop.evaluate(models, batcher, held, device, params),
-        **train_loop.set_build_ms(models, batcher, held, device),
     }
 
 
