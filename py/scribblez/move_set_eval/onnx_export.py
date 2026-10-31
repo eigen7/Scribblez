@@ -59,6 +59,38 @@ MOVE_INPUT_NAMES = (
 OUTPUT_NAMES = ("wld", "score_diff")
 
 
+def board_and_summary(
+    board_pos_emb: torch.Tensor, x: torch.Tensor, s: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The trunk's outputs at P=1, x (1, C, 15, 15) and s (1, C), as the board
+    token map (1, 225, C) and the global summary (1, 3C)."""
+    board = x.flatten(2).transpose(1, 2) + board_pos_emb
+    return board, torch.cat([mean_max_pool(x), s], dim=1)
+
+
+def encode_moves_at_position(
+    move_encoder: nn.Module,
+    cross_check_encoder: nn.Module,
+    board0: torch.Tensor,
+    move_letters: torch.Tensor,
+    move_blanks: torch.Tensor,
+    move_squares: torch.Tensor,
+    move_tile_mask: torch.Tensor,
+    move_scalars: torch.Tensor,
+    move_cross_cells: torch.Tensor,
+    move_cross_letters: torch.Tensor,
+) -> torch.Tensor:
+    """model.encode_moves_on_board for M moves of the one position whose board
+    tokens are board0 (225, C), from the engine's native dtypes -> (M, C):
+    the single-position exports' form, with no pos_id gather."""
+    tile_board = board0[move_squares.long()]  # (M, T, C)
+    tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)  # is_play gate
+    e = move_encoder(
+        move_letters.long(), move_blanks, move_tile_mask.float(), move_scalars, tile_board
+    )
+    return e + cross_check_encoder.on_position(move_cross_cells, move_cross_letters, board0)
+
+
 class MoveSetEvalExportModel(nn.Module):
     """MoveSetEvalModel.forward at P=1, without evidence, sharing
     the trained model's submodules. Returns (wld (M, 3) logits, score_diff
@@ -99,19 +131,12 @@ class MoveSetEvalExportModel(nn.Module):
         move_cross_cells: torch.Tensor,  # (M, K) i32
         move_cross_letters: torch.Tensor,  # (M, K * 26) u8
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        letters = move_letters.long()
-        squares = move_squares.long()
-        tile_mask = move_tile_mask.float()
-
         x, s = self.trunk(input_spatial, input_scalar)  # (1,C,15,15), (1,C)
-        board = x.flatten(2).transpose(1, 2) + self.board_pos_emb  # (1, 225, C)
-        g = torch.cat([mean_max_pool(x), s], dim=1)  # (1, 3C)
-
-        # is_play gate, as in MoveSetEvalModel.encode_moves.
-        tile_board = board[0][squares]  # (M, T, C)
-        tile_board = tile_board * move_scalars[:, 2].view(-1, 1, 1)
-        e = self.move_encoder(letters, move_blanks, tile_mask, move_scalars, tile_board)
-        e = e + self.cross_check_encoder.on_position(move_cross_cells, move_cross_letters, board[0])
+        board, g = board_and_summary(self.board_pos_emb, x, s)
+        e = encode_moves_at_position(
+            self.move_encoder, self.cross_check_encoder, board[0], move_letters, move_blanks,
+            move_squares, move_tile_mask, move_scalars, move_cross_cells, move_cross_letters,
+        )  # fmt: skip
 
         attended = self._cross_attention(e, board[0])
         h = F.relu(self.head_attended(attended) + self.head_g(g))
