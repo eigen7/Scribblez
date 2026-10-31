@@ -179,7 +179,7 @@ void scribblez_move_set_encode_moves(const void* moves, int64_t n,
 // A move set training batch's inputs from one .slog: each position's pre-move
 // training row, as scribblez_decode_rows(post_move=0) writes it, and the
 // cross-check features of its candidate moves on that board, in the move set
-// model's layout (training/move_set_encoder.h encode_move_cross_checks). One
+// model's layout (training/move_set_encoder.h encode_moves_cross_checks). One
 // replay per position serves both. Position j is the decision point
 // (game_idx[j], turn_idx[j]) of the .slog at `path`. `moves` holds every
 // position's candidates back to back, move_counts[j] for position j; each must

@@ -126,7 +126,11 @@ void PolicyBot::encode(const MoveRequest& req, const std::vector<Move>& moves,
   // agent's seat.
   encoder_.encode_input(encoder_.active_player(), req.my_rack, req.opp_rack, board_row_.data());
   opp_rack_ = policy_set::encode_opp_rack(opp_rack);
-  candidates_.encode(encoder_, dict_, req.my_rack, req.bag_size, moves);
+  candidates_.encode(encoder_, dict_, req.my_rack, req.bag_size, moves, cross_checks());
+}
+
+move_set::CrossCheckDeltaSource& PolicyBot::cross_checks() const {
+  return backend_.cross_checks ? *backend_.cross_checks : move_set::cpu_cross_check_deltas();
 }
 
 size_t PolicyBot::best_candidate() {

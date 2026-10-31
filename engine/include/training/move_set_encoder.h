@@ -86,8 +86,7 @@ void encode_moves(const Move* moves, int64_t n, const int32_t* pre_move_score_di
                   int32_t* letters, uint8_t* blanks, int32_t* squares, uint8_t* tile_mask,
                   float* scalars);
 
-// The cross-check entries `m` changes on `board` (whose move-generation caches
-// must be valid; it is played on and restored, so unchanged on return):
+// The model-layout cross-check features of one move's entries:
 //   cells    int32[kMoveCrossSlots]    1 + axis*kMoveCells + square per entry,
 //                                       axis 0 for the horizontal-play
 //                                       cross-check block and 1 for the
@@ -96,18 +95,34 @@ void encode_moves(const Move* moves, int64_t n, const int32_t* pre_move_score_di
 //                                       letter is legal at the entry's square
 //                                       after the move (0 in empty slots)
 // Empty and "no letter legal" differ -- a move can kill a square outright --
-// which is why emptiness lives in `cells`. `undo` is scratch, passed in so a
-// batch reuses its allocations. EXCHANGE and PASS have no entries.
-void encode_move_cross_checks(Board& board, const Move& m, BoardUndo& undo, int32_t* cells,
-                              uint8_t* letters);
+// which is why emptiness lives in `cells`.
+void write_cross_check_features(const cross_check_abi::MoveDeltas& deltas, int32_t* cells,
+                                uint8_t* letters);
 
-// The batch form over one position's candidate set, candidate-major. Works on a
-// copy of `board`, building its move-generation caches from `dict`.
+// Where a candidate set's cross-check entries come from: the CPU reference
+// (cpu_cross_check_deltas()), or the CUDA kernel
+// (gpu/cross_check_deltas_gpu.h), which matches it entry for entry.
+class CrossCheckDeltaSource {
+ public:
+  virtual ~CrossCheckDeltaSource() = default;
+  // out[i], for moves[i], is cross_check_deltas of that move on `board`, the
+  // position all n candidates share, its caches built from `dict`.
+  virtual void deltas(const Board& board, const Dictionary& dict, const Move* moves, int64_t n,
+                      cross_check_abi::MoveDeltas* out) = 0;
+};
+
+// cross_check_deltas on a copy of the board. Stateless, so one instance serves
+// every thread.
+CrossCheckDeltaSource& cpu_cross_check_deltas();
+
+// The cross-check features of one position's candidate set, candidate-major,
+// from `source`'s entries.
 void encode_moves_cross_checks(const Board& board, const Dictionary& dict, const Move* moves,
-                               int64_t n, int32_t* cells, uint8_t* letters);
+                               int64_t n, int32_t* cells, uint8_t* letters,
+                               CrossCheckDeltaSource& source = cpu_cross_check_deltas());
 
 // One encoded candidate set, owning the buffers encode_move and
-// encode_move_cross_checks fill, so it crosses an API boundary as one object
+// encode_moves_cross_checks fill, so it crosses an API boundary as one object
 // (inference services take it). `count` rows of each field's per-move width.
 // The training path writes its own tensors through the pointer forms above.
 struct MoveFeatureArrays {
@@ -120,10 +135,12 @@ struct MoveFeatureArrays {
   std::vector<uint8_t> cross_letters;
   int count = 0;
 
-  // Size the buffers for `n` moves and encode them. All candidates start from
-  // the same position: one board, one differential.
+  // Size the buffers for `n` moves and encode them, the cross-checks from
+  // `cross_checks`. All candidates start from the same position: one board,
+  // one differential.
   void encode(const Board& board, const Dictionary& dict, const Move* moves, int n,
-              int pre_move_score_diff);
+              int pre_move_score_diff,
+              CrossCheckDeltaSource& cross_checks = cpu_cross_check_deltas());
 
   // Size every buffer for `n` moves, zero-filled.
   void resize(int n);

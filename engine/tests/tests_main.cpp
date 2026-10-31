@@ -6310,58 +6310,31 @@ TEST(MoveSetEncoder, Basic) {
   ASSERT_EQ(scalars[2 * mset::kMoveScalars + 2], 0.0f);
 }
 
-// encode_cross_check_deltas over a candidate set, candidate-major, on a copy
-// of `board`.
-struct CrossDeltas {
-  std::vector<uint8_t> axes;
-  std::vector<int32_t> squares;
-  std::vector<uint32_t> old_masks;
-  std::vector<uint32_t> new_masks;
-  std::vector<uint8_t> delta_mask;
-};
-
-CrossDeltas encode_candidates_cross_check_deltas(const Board& board, const Dictionary& dict,
-                                                 const std::vector<Move>& moves) {
-  const size_t w = move_set::kMoveMaxCrossDeltas, n = moves.size();
-  CrossDeltas d{std::vector<uint8_t>(n * w), std::vector<int32_t>(n * w),
-                std::vector<uint32_t>(n * w), std::vector<uint32_t>(n * w),
-                std::vector<uint8_t>(n * w)};
-  Board scratch = board;
-  scratch.ensure_movegen_caches(dict);
-  BoardUndo undo;
-  for (size_t i = 0; i < n; ++i) {
-    move_set::encode_cross_check_deltas(scratch, moves[i], undo, d.axes.data() + i * w,
-                                        d.squares.data() + i * w, d.old_masks.data() + i * w,
-                                        d.new_masks.data() + i * w, d.delta_mask.data() + i * w);
-  }
+// The CPU reference's entries for a candidate set, candidate-major.
+std::vector<cross_check_abi::MoveDeltas> candidates_cross_check_deltas(
+  const Board& board, const Dictionary& dict, const std::vector<Move>& moves) {
+  std::vector<cross_check_abi::MoveDeltas> d(moves.size());
+  move_set::cpu_cross_check_deltas().deltas(board, dict, moves.data(), int64_t(moves.size()),
+                                            d.data());
   return d;
 }
-
-// One move's slice of a CrossDeltas.
-struct CrossDeltaView {
-  const uint8_t* axes;
-  const int32_t* squares;
-  const uint32_t* old_masks;
-  const uint32_t* new_masks;
-  const uint8_t* delta_mask;
-};
 
 // The pre-move cross-check planes as the delta entries say `m` leaves them:
 // zeroed on the squares it fills, and rewritten to the new mask on each entry.
 // Checks each entry's old mask against the planes it overwrites on the way.
 std::vector<float> patch_cross_check_planes(const float* pre_planes, const Move& m,
-                                            const CrossDeltaView& d) {
+                                            const cross_check_abi::MoveDeltas& d) {
   std::vector<float> planes(pre_planes, pre_planes + kCrossCheckPlanes * kBoardCells);
   visit_placed_squares(m, [&](int r, int c) {
     for (int l = 0; l < kCrossCheckPlanes; ++l) planes[l * kBoardCells + r * kBoardSide + c] = 0.0f;
   });
-  for (int i = 0; i < move_set::kMoveMaxCrossDeltas; ++i) {
-    if (!d.delta_mask[i]) continue;
-    float* block = planes.data() + d.axes[i] * kHorizontalCrossCheckPlanes * kBoardCells;
+  for (int i = 0; i < d.count; ++i) {
+    const cross_check_abi::Delta& e = d.deltas[i];
+    float* block = planes.data() + e.axis * kHorizontalCrossCheckPlanes * kBoardCells;
     for (int l = 0; l < 26; ++l) {
-      float& cell = block[l * kBoardCells + d.squares[i]];
-      EXPECT_EQ(cell, float((d.old_masks[i] >> l) & 1u));
-      cell = float((d.new_masks[i] >> l) & 1u);
+      float& cell = block[l * kBoardCells + e.square];
+      EXPECT_EQ(cell, float((e.old_mask >> l) & 1u));
+      cell = float((e.new_mask >> l) & 1u);
     }
   }
   return planes;
@@ -6397,34 +6370,29 @@ TEST(CrossCheckDelta, PatchedPreMovePlanesEqualTheTeachersPostMovePlanes) {
     std::vector<float> rows(n * row_floats);
     binlog::encode_candidate_rows(pos, g, turn, mover, candidates, rows.data());
 
-    const size_t width = mset::kMoveMaxCrossDeltas;
-    const CrossDeltas deltas = encode_candidates_cross_check_deltas(board, dict, candidates);
+    const std::vector<cross_check_abi::MoveDeltas> deltas =
+      candidates_cross_check_deltas(board, dict, candidates);
 
     for (size_t c = 0; c < n; ++c) {
-      const size_t at = c * width;
-      const CrossDeltaView d{deltas.axes.data() + at, deltas.squares.data() + at,
-                             deltas.old_masks.data() + at, deltas.new_masks.data() + at,
-                             deltas.delta_mask.data() + at};
+      const cross_check_abi::MoveDeltas& d = deltas[c];
       const std::vector<float> patched =
         patch_cross_check_planes(rows.data() + cross0, candidates[c], d);
       ASSERT_EQ(std::memcmp(patched.data(), rows.data() + c * row_floats + cross0, cross_bytes), 0)
         << "turn " << turn << ", candidate " << c;
 
       // Real entries lead, strictly ordered by (axis, square); pads are zero.
-      const int entries = int(std::count(d.delta_mask, d.delta_mask + width, uint8_t(1)));
-      for (int i = 0; i < int(width); ++i) {
-        ASSERT_EQ(d.delta_mask[i], i < entries ? 1 : 0);
-        if (i >= entries) {
-          ASSERT_EQ(d.axes[i] + d.squares[i] + d.old_masks[i] + d.new_masks[i], 0u);
-        }
-        if (i > 0 && i < entries) {
-          ASSERT_LT(std::pair(d.axes[i - 1], d.squares[i - 1]), std::pair(d.axes[i], d.squares[i]));
+      for (int i = 0; i < mset::kMoveMaxCrossDeltas; ++i) {
+        const cross_check_abi::Delta& e = d.deltas[i];
+        if (i >= d.count) {
+          ASSERT_EQ(e, cross_check_abi::Delta{});
+        } else if (i > 0) {
+          const cross_check_abi::Delta& prev = d.deltas[i - 1];
+          ASSERT_LT(std::pair(prev.axis, prev.square), std::pair(e.axis, e.square));
         }
       }
-      max_entries = std::max(max_entries, entries);
+      max_entries = std::max(max_entries, d.count);
     }
-    ASSERT_EQ(std::count(deltas.delta_mask.begin(), deltas.delta_mask.begin() + width, uint8_t(1)),
-              0);
+    ASSERT_EQ(deltas[0].count, 0);
   }
   ASSERT_GT(max_entries, 4) << "no multi-tile play was exercised";
 }
@@ -6449,21 +6417,26 @@ TEST(CrossCheckDelta, ModelFeaturesRestateTheEntries) {
     moves.push_back(Move::pass());
     const size_t n = moves.size(), w = mset::kMoveCrossSlots;
 
-    const CrossDeltas d = encode_candidates_cross_check_deltas(board, dict, moves);
+    const std::vector<cross_check_abi::MoveDeltas> d =
+      candidates_cross_check_deltas(board, dict, moves);
     std::vector<int32_t> cells(n * w);
     std::vector<uint8_t> letters(n * mset::kMoveCrossLetters);
     mset::encode_moves_cross_checks(board, dict, moves.data(), int64_t(n), cells.data(),
                                     letters.data());
 
-    for (size_t k = 0; k < n * w; ++k) {
-      const bool real = d.delta_mask[k];
-      const int32_t want = real ? 1 + d.axes[k] * mset::kMoveCells + d.squares[k] : 0;
-      ASSERT_EQ(cells[k], want) << "turn " << turn << " slot " << k;
-      for (int l = 0; l < 26; ++l) {
-        ASSERT_EQ(letters[k * 26 + l], real ? (d.new_masks[k] >> l) & 1u : 0u)
-          << "turn " << turn << " slot " << k << " letter " << l;
+    for (size_t m = 0; m < n; ++m) {
+      for (size_t i = 0; i < w; ++i) {
+        const size_t k = m * w + i;
+        const bool real = int(i) < d[m].count;
+        const cross_check_abi::Delta& e = d[m].deltas[i];
+        const int32_t want = real ? 1 + e.axis * mset::kMoveCells + e.square : 0;
+        ASSERT_EQ(cells[k], want) << "turn " << turn << " slot " << k;
+        for (int l = 0; l < 26; ++l) {
+          ASSERT_EQ(letters[k * 26 + l], real ? (e.new_mask >> l) & 1u : 0u)
+            << "turn " << turn << " slot " << k << " letter " << l;
+        }
+        real_entries += real;
       }
-      real_entries += real;
     }
   }
   ASSERT_GT(real_entries, 0);

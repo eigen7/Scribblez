@@ -58,14 +58,17 @@ class PolicyBot : public Agent {
   };
 
   // What PolicyBot plays from: the served model, the blank prune its pools
-  // were cut with (its export's metadata), and the leave inference model's
+  // were cut with (its export's metadata), the leave inference model's
   // forward pass with the leave table its beliefs are over (an empty
-  // `predict` for a model trained on uniform beliefs).
+  // `predict` for a model trained on uniform beliefs), and where its
+  // candidates' cross-check entries come from (null: the CPU reference; the
+  // factory's is the GPU kernel, which matches it).
   struct Backend {
     std::shared_ptr<nn::PolicySetEvalService> policy;
     int blank_prune_points = 0;
     belief::LeaveParamsFn predict;
     std::shared_ptr<const LeaveValueArrays> table;
+    std::shared_ptr<move_set::CrossCheckDeltaSource> cross_checks;
   };
 
   // What the model's export metadata says its pools were built with: the
@@ -123,6 +126,7 @@ class PolicyBot : public Agent {
               const belief::OppRackSummary& opp_rack);
   // The index of the highest logit the model gives the encoded candidates.
   size_t best_candidate();
+  move_set::CrossCheckDeltaSource& cross_checks() const;
 
   Backend backend_;
   const Dictionary& dict_;

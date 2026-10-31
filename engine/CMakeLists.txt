@@ -288,8 +288,8 @@ target_link_libraries(endgame_tool PRIVATE
 # Endgame solver cost and whole-game throughput benchmark
 # (docs/endgame_bench_results.md). CPU-only.
 # --- GPU rollouts (CUDA) -----------------------------------------------------
-# The hasty-rollout kernel (docs/plans/gpu_hasty_rollouts.md): the project's
-# one CUDA translation unit. nvcc 12.9 refuses gcc 16 as its host compiler, so
+# The CUDA kernels: the hasty rollouts (docs/plans/gpu_hasty_rollouts.md) and
+# the candidates' cross-check deltas. nvcc 12.9 refuses gcc 16 as its host compiler, so
 # it compiles through the image's gcc 13; the engine's C++26-only flags are
 # scoped to CXX in the root CMakeLists.txt for the same reason. Built for every
 # GPU a generator may rent (Ampere A100/A10G, Ada L4/RTX, Hopper), with Hopper's
@@ -301,11 +301,13 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
 enable_language(CUDA)
 set(CMAKE_CUDA_FLAGS_TEST "${CMAKE_CUDA_FLAGS_RELEASE}")
-# The kernel and its host side, without TensorRT, so gpu_kernel_tests can link
-# it alone.
+# The kernels and their host sides, without TensorRT, so gpu_kernel_tests can
+# link them alone.
 add_library(scribblez_gpu_kernels STATIC
   src/gpu/rollout_kernel.cu
-  src/gpu/hasty_rollouts_gpu.cpp)
+  src/gpu/hasty_rollouts_gpu.cpp
+  src/gpu/cross_check_delta_kernel.cu
+  src/gpu/cross_check_deltas_gpu.cpp)
 set_target_properties(scribblez_gpu_kernels PROPERTIES
   INTERPROCEDURAL_OPTIMIZATION OFF
   CUDA_RUNTIME_LIBRARY Shared)
