@@ -1,7 +1,8 @@
 #pragma once
 
-// Device memory for the CUDA translation units: error checks, a table's
-// one-time upload, and the per-call buffers that grow to the largest call.
+// Memory for the CUDA translation units: error checks, a table's one-time
+// upload, and the per-call buffers, device and page-locked host, that grow to
+// the largest call.
 
 #include <cstddef>
 #include <cuda_runtime.h>
@@ -41,6 +42,17 @@ struct DeviceBuffer {
   ~DeviceBuffer() { cudaFree(data); }
 };
 
+// Page-locked host memory that only grows: what cudaMemcpyAsync needs to run
+// asynchronously.
+template <typename T>
+struct PinnedBuffer {
+  T* data = nullptr;
+  size_t cap = 0;
+
+  void reserve(size_t n);
+  ~PinnedBuffer() { cudaFreeHost(data); }
+};
+
 template <typename T>
 void DeviceBuffer<T>::reserve(size_t n) {
   if (n <= cap) return;
@@ -53,6 +65,14 @@ template <typename T>
 void DeviceBuffer<T>::upload(const T* v, size_t n) {
   reserve(n == 0 ? 1 : n);
   if (n) cuda_check(cudaMemcpy(data, v, sizeof(T) * n, cudaMemcpyHostToDevice), "batch upload");
+}
+
+template <typename T>
+void PinnedBuffer<T>::reserve(size_t n) {
+  if (n <= cap) return;
+  cudaFreeHost(data);
+  cuda_check(cudaMallocHost(&data, sizeof(T) * n), "pinned malloc");
+  cap = n;
 }
 
 }  // namespace scribblez::gpu

@@ -73,6 +73,11 @@ RolloutStart make_rollout_start(const Board& board, const Rack& rack, int my_sco
 rollout_abi::PositionAbi to_abi(const RolloutStart& start, const Dictionary& dict);
 rollout_abi::GroupAbi to_abi(const RolloutGroup& group, uint32_t leave_base);
 rollout_abi::OppLeaveAbi to_abi(const Rack& leave);
+// A board as the kernels read it, its cross-checks built here if it lacks
+// them: its glyph codes in its own frame, and its cross-check masks per view
+// (view 1 transposed, in view coordinates), as Board keeps them.
+void board_abi(const Board& board, const Dictionary& dict, uint8_t* squares,
+               uint32_t (*cross_mask)[rollout_abi::kSquares]);
 
 rollout_abi::PackedMove pack_move(const Move& m);
 Move unpack_move(const rollout_abi::PackedMove& p);
