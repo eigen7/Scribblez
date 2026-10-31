@@ -12,6 +12,7 @@
 #include <boost/program_options.hpp>
 
 #include <memory>
+#include <utility>
 
 namespace scribblez {
 
@@ -26,13 +27,10 @@ DeepBot::Backend make_backend(const DeepBot::Params& p) {
   DeepBot::Backend b;
   b.values = rollouts.shared(load_dictionary_or_throw());
   if (p.leave_inference.empty()) return b;
-  const LeaveValues& values = HastyEquity::instance().leave_values();
-  auto served = belief::ServedLeaveTable::shared(p.leave_inference, values);
-  b.table = std::shared_ptr<const LeaveValueArrays>(served, &served->table);
-  b.predict = [served, predict = served->served.predict_fn()](const float* rows, int count,
-                                                              belief::LeaveParams* out) {
-    predict(rows, count, out);
-  };
+  belief::AgentLeaveModel leave =
+    belief::agent_leave_model(p.leave_inference, HastyEquity::instance().leave_values());
+  b.table = std::move(leave.table);
+  b.predict = std::move(leave.predict);
   return b;
 }
 

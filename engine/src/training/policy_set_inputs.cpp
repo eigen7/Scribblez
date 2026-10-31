@@ -1,5 +1,6 @@
 #include "training/policy_set_inputs.h"
 
+#include "data/block_decoder.h"
 #include "lexicon/hasty_equity.h"
 #include "sim/setup_plays.h"
 #include "util/assert.h"
@@ -71,6 +72,16 @@ void CandidateInputs::encode(const GameStateEncoder& position, const Dictionary&
                   position.score(mover) - position.score(1 - mover));
   write_equity_inputs(
     HastyEquity::instance().equities(moves, position.board(), bag_size, Rack{}, rack), &equity);
+}
+
+void replay_candidate_inputs(binlog::BlockDecoder& decoder, const Dictionary& dict, const char* buf,
+                             const std::string& path, uint32_t game_idx, uint32_t turn_idx,
+                             bool transpose, const std::vector<Move>& moves, float* rows,
+                             int64_t output_row, CandidateInputs* out) {
+  decoder.decode_one(buf, path, game_idx, turn_idx, {.transpose = transpose},
+                     /*post_move=*/false, output_row, rows);
+  const binlog::PositionEncoder& pos = decoder.position();
+  out->encode(pos.enc(), dict, pos.rack(pos.enc().active_player()), pos.bag_size(), moves);
 }
 
 }  // namespace scribblez::policy_set

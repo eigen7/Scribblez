@@ -59,4 +59,16 @@ struct ServedLeaveTable {
       : table(values), served(onnx_path, values.content_hash()) {}
 };
 
+// A leave inference model as an agent draws beliefs from it: the thread-safe
+// forward pass over the process's shared table (ServedLeaveTable::shared) and
+// the leave table its beliefs are over, each keeping the shared table alive,
+// and the model's identity. What DeepBot and PolicyBot load.
+struct AgentLeaveModel {
+  LeaveParamsFn predict;
+  std::shared_ptr<const LeaveValueArrays> table;
+  ServedLeaveModel::Identity identity;
+};
+
+AgentLeaveModel agent_leave_model(const std::string& onnx_path, const LeaveValues& values);
+
 }  // namespace scribblez::belief

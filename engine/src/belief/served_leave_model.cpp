@@ -40,4 +40,13 @@ std::shared_ptr<ServedLeaveTable> ServedLeaveTable::shared(const std::string& on
   });
 }
 
+AgentLeaveModel agent_leave_model(const std::string& onnx_path, const LeaveValues& values) {
+  const std::shared_ptr<ServedLeaveTable> served = ServedLeaveTable::shared(onnx_path, values);
+  return {
+    .predict = [served, predict = served->served.predict_fn()](
+                 const float* rows, int count, LeaveParams* out) { predict(rows, count, out); },
+    .table = std::shared_ptr<const LeaveValueArrays>(served, &served->table),
+    .identity = served->served.identity()};
+}
+
 }  // namespace scribblez::belief

@@ -705,11 +705,9 @@ int ScribblezSession::policy_set_positions(const char* path, const int64_t* game
   int64_t done = 0;
   for (int64_t j = 0; j < n_positions; ++j) {
     const bool transpose = transposes && transposes[j];
-    decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
-                       {.transpose = transpose}, /*post_move=*/false, /*output_row=*/j, out.rows);
-    const scribblez::binlog::PositionEncoder& pos = decoder.position();
-    inputs.encode(pos.enc(), *spec.dict, pos.rack(pos.enc().active_player()), pos.bag_size(),
-                  copy_moves_in_frame(moves, done, move_counts[j], transpose));
+    scribblez::policy_set::replay_candidate_inputs(
+      decoder, *spec.dict, buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
+      transpose, copy_moves_in_frame(moves, done, move_counts[j], transpose), out.rows, j, &inputs);
     write_candidate_inputs(inputs, done, out);
     write_opp_rack(opp_racks, j, out.opp_rack);
     done += move_counts[j];
