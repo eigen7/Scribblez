@@ -1,7 +1,9 @@
 """export_graph (scribblez.onnx_export_util): it leaves every submodule's
-train/eval mode as it found it, and it refuses an export that disagrees with
-the module, writing nothing."""
+train/eval mode as it found it, it refuses an export that disagrees with the
+module, writing nothing, and its architecture signature follows the graph,
+not the weights."""
 
+import onnx
 import pytest
 import torch
 from scribblez.onnx_export_util import eval_mode, export_graph
@@ -78,3 +80,39 @@ def test_a_disagreeing_export_raises_and_writes_nothing(tmp_path):
     with pytest.raises(ValueError, match="disagrees"):
         _export(_BranchOnData(), path)
     assert list(tmp_path.iterdir()) == []
+
+
+class _Doubled(_Net):
+    """_Net with the same modules and another forward: a different graph."""
+
+    def forward(self, x):
+        return self.head(self.body(x)) * 2
+
+
+def _signature(path) -> str:
+    return {p.key: p.value for p in onnx.load(str(path)).metadata_props}[
+        "model-architecture-signature"
+    ]
+
+
+def test_one_architecture_has_one_signature_whatever_its_weights(tmp_path):
+    """The engine refits one cached plan per signature, so checkpoints of one
+    architecture must share it, fresh or trained."""
+    fresh, trained = _Net(), _Net()
+    with torch.no_grad():
+        for v in trained.state_dict().values():
+            if v.dtype.is_floating_point:
+                v.add_(torch.rand_like(v))
+    _export(fresh, tmp_path / "fresh.onnx")
+    _export(trained, tmp_path / "trained.onnx")
+    assert _signature(tmp_path / "fresh.onnx") == _signature(tmp_path / "trained.onnx")
+
+
+def test_a_changed_forward_changes_the_signature(tmp_path):
+    """Same modules, another graph: a plan from one would take the other's
+    weights and constants under the wrong names."""
+    torch.manual_seed(0)
+    _export(_Net(), tmp_path / "net.onnx")
+    torch.manual_seed(0)
+    _export(_Doubled(), tmp_path / "doubled.onnx")
+    assert _signature(tmp_path / "net.onnx") != _signature(tmp_path / "doubled.onnx")
